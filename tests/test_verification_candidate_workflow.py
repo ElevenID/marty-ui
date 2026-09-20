@@ -480,6 +480,12 @@ def test_supported_containerd_candidate_contract_is_a_required_ci_lane() -> None
 
     assert job["name"] == "Release Contract Tests"
     assert job["runs-on"] == "ubuntu-latest"
+    setup_python = next(
+        step
+        for step in job["steps"]
+        if str(step.get("uses", "")).startswith("actions/setup-python@")
+    )
+    assert setup_python["with"]["python-version"] == "3.12.10"
     assert_supported_backend(job)
     steps = job["steps"]
     commands = "\n".join(str(step.get("run", "")) for step in steps)

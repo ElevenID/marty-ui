@@ -7,6 +7,8 @@ param(
 
     [switch]$EnablePortableCanvas,
 
+    [switch]$EnableDidcommAuthcrypt,
+
     [string]$CanvasOrigin = "https://canvas-test.elevenidllc.com",
 
     [string]$PilotOrganizationId = "00000000-0000-0000-0000-000000000001",
@@ -31,6 +33,9 @@ if (Get-Variable PSNativeCommandUseErrorActionPreference -ErrorAction SilentlyCo
 }
 
 $script:RepoRoot = (Resolve-Path (Join-Path $PSScriptRoot "..")).Path
+. (Join-Path $PSScriptRoot "beta-worker-launch-contract.ps1")
+. (Join-Path $PSScriptRoot "beta-application-image-plan.ps1")
+. (Join-Path $PSScriptRoot "beta-didcomm-configuration.ps1")
 $script:WorkspaceRoot = (Resolve-Path (Join-Path $script:RepoRoot "..")).Path
 $script:ArtifactRoot = (Resolve-Path (Join-Path $script:RepoRoot "tests\artifacts")).Path
 $script:ArtifactDir = (Resolve-Path $ArtifactDir).Path
@@ -58,6 +63,10 @@ $script:ComposeFiles = @(
     (Join-Path $script:RepoRoot "docker-compose.profile.canvas-real.yml"),
     (Join-Path $script:RepoRoot "docker-compose.profile.canvas-sandbox.yml")
 )
+$didcommProfiles = @(Get-BetaDidcommProfiles -Enabled ([bool]$EnableDidcommAuthcrypt))
+foreach ($profile in $didcommProfiles) {
+    $script:ComposeFiles += (Join-Path $script:RepoRoot $profile)
+}
 $script:ApplicationServices = @(
     "auth",
     "organization",
@@ -78,9 +87,6 @@ $script:ApplicationServices = @(
     "issuance-native",
     "canvas-sync-worker",
     "gateway"
-)
-$script:ApplicationBuildServices = @(
-    $script:ApplicationServices | Where-Object { $_ -notin @("issuance", "canvas-sync-worker") }
 )
 $script:InfrastructureWriterServices = @("keycloak")
 
@@ -448,7 +454,7 @@ function Get-ServiceRecords([string[]]$Services, [switch]$IncludeUi) {
                 $rollbackEnvironment["DATABASE_DRIVER"] = $Matches[1]
             }
         }
-        $records += [ordered]@{
+        $record = [ordered]@{
             container_id = $container
             container = $inspect.Name.TrimStart('/')
             service = $target.service
@@ -463,6 +469,10 @@ function Get-ServiceRecords([string[]]$Services, [switch]$IncludeUi) {
             runtime_marker_environment = $markerEnvironment
             rollback_environment = $rollbackEnvironment
         }
+        if ($target.service -eq "canvas-sync-worker") {
+            $record["rollback_launch"] = New-BetaWorkerRollbackLaunch -ContainerConfig $inspect.Config
+        }
+        $records += $record
     }
     return $records
 }
@@ -705,6 +715,7 @@ Write-Host "Origin: $BetaOrigin"
 Write-Host "Artifact directory: $script:ArtifactDir"
 Write-Host "Promotion eligible: $promotionEligible"
 Write-Host "Portable Canvas enabled: $([bool]$EnablePortableCanvas)"
+Write-Host "DIDComm authcrypt enabled: $([bool]$EnableDidcommAuthcrypt)"
 Write-Host "Compose project: $script:BetaProject"
 Write-Host "UI Compose project: $script:BetaUiProject"
 Write-Host "Network: $script:BetaNetwork"
@@ -718,6 +729,9 @@ if ($PlanOnly) {
         promotion_eligible = $promotionEligible
         beta_origin = $BetaOrigin
         portable_canvas_enabled = [bool]$EnablePortableCanvas
+        didcomm_authcrypt_enabled = [bool]$EnableDidcommAuthcrypt
+        didcomm_profiles = $didcommProfiles
+        didcomm_configuration_validated = $false
         canvas_origin = if ($EnablePortableCanvas) { $CanvasOrigin } else { $null }
         pilot_organization_id = if ($EnablePortableCanvas) { $PilotOrganizationId } else { $null }
         compose_project = $script:BetaProject
@@ -742,22 +756,20 @@ if ($OfficialStackRelease) {
     Write-Utf8Text -Path $sourceManifestPath -Content (($sourceManifest | ConvertTo-Json -Depth 8) + "`n")
 }
 $releaseComposeFile = Join-Path $script:ArtifactDir "local-release-images.yml"
-$releaseCompose = @("services:")
-foreach ($service in $script:ApplicationServices) {
-    $releaseCompose += "  ${service}:"
-    if ($service -in @("issuance", "canvas-sync-worker")) {
-        $releaseCompose += '    image: ${MARTY_ISSUANCE_IMAGE}'
-    }
-    elseif ($OfficialStackRelease) {
-        $releaseCompose += '    image: ${MARTY_SERVICES_IMAGE}'
-        $runtimeServiceName = $service -replace '-', '_'
-        $releaseCompose += "    environment:"
-        $releaseCompose += "      SERVICE_NAME: $runtimeServiceName"
-    }
-    else {
-        $releaseCompose += "    image: elevenid-local/${service}:${releaseVersion}"
-    }
+$applicationImageArguments = @{
+    Services = $script:ApplicationServices
+    ReleaseVersion = $releaseVersion
+    OfficialStackRelease = [bool]$OfficialStackRelease
+    IssuanceReference = "$($martyIssuance.Uri)@$($martyIssuance.Digest)"
+    IssuanceDigest = [string]$martyIssuance.Digest
 }
+if ($OfficialStackRelease) {
+    $applicationImageArguments.IssuanceDigest = [string]$officialPlan.images.issuance.digest
+    $applicationImageArguments.ServicesReference = [string]$officialPlan.images.services.reference
+    $applicationImageArguments.ServicesDigest = [string]$officialPlan.images.services.digest
+}
+$applicationImagePlan = @(New-BetaApplicationImagePlan @applicationImageArguments)
+$releaseCompose = @(ConvertTo-BetaApplicationImageLines -Plan $applicationImagePlan)
 $releaseCompose -join "`n" | Set-Content -LiteralPath $releaseComposeFile -Encoding utf8
 $script:ComposeFiles += $releaseComposeFile
 
@@ -791,6 +803,17 @@ $env:MARTY_ISO18013_DIGEST = $martyIso18013.Digest
 $env:MARTY_ISSUANCE_IMAGE = "$($martyIssuance.Uri)@$($martyIssuance.Digest)"
 if ($OfficialStackRelease) {
     $env:MARTY_SERVICES_IMAGE = [string]$officialPlan.images.services.reference
+}
+$docsIds = @(& docker ps -a --filter "label=com.docker.compose.project=$script:BetaProject" --filter "label=com.docker.compose.service=docs" --format '{{.ID}}')
+if ($LASTEXITCODE -ne 0 -or $docsIds.Count -ne 1) { throw "Expected one existing beta docs container" }
+$env:MARTY_DOCS_IMAGE = & docker inspect $docsIds[0] --format '{{.Config.Image}}'
+if ($LASTEXITCODE -ne 0 -or $env:MARTY_DOCS_IMAGE -notmatch '^sha256:[0-9a-f]{64}$') {
+    throw "Existing beta docs image is not immutable"
+}
+Write-Step "Validate paired DIDComm configuration before image or service mutations"
+Assert-BetaDidcommConfiguration -RepoRoot $script:RepoRoot -EnvFiles $script:EnvFiles `
+    -ComposeFiles $script:ComposeFiles -AuthcryptEnabled ([bool]$EnableDidcommAuthcrypt)
+if ($OfficialStackRelease) {
     $migrationImage = [string]$officialPlan.images.migrations.reference
     $uiImage = [string]$officialPlan.images.ui.reference
     foreach ($image in @($env:MARTY_SERVICES_IMAGE, $migrationImage, $uiImage, $env:MARTY_ISSUANCE_IMAGE)) {
@@ -803,12 +826,6 @@ if ($OfficialStackRelease) {
 }
 else {
     Invoke-Checked -FilePath docker -Arguments @("pull", $env:MARTY_ISSUANCE_IMAGE)
-}
-$docsIds = @(& docker ps -a --filter "label=com.docker.compose.project=$script:BetaProject" --filter "label=com.docker.compose.service=docs" --format '{{.ID}}')
-if ($LASTEXITCODE -ne 0 -or $docsIds.Count -ne 1) { throw "Expected one existing beta docs container" }
-$env:MARTY_DOCS_IMAGE = & docker inspect $docsIds[0] --format '{{.Config.Image}}'
-if ($LASTEXITCODE -ne 0 -or $env:MARTY_DOCS_IMAGE -notmatch '^sha256:[0-9a-f]{64}$') {
-    throw "Existing beta docs image is not immutable"
 }
 foreach ($service in @("postgres", "redis", "openbao", "keycloak", "applicant", "gateway")) {
     $container = Get-ComposeContainerId -Service $service
@@ -860,7 +877,8 @@ if (-not $OfficialStackRelease) {
     )
     # Build serially before rehearsal so the actual local verifier runtime,
     # not a separately built migration artifact, owns the rehearsal schema.
-    foreach ($service in $script:ApplicationBuildServices) {
+    foreach ($entry in @($applicationImagePlan | Where-Object { $_.build_eligible })) {
+        $service = [string]$entry.service
         Write-Host "Building release image: $service"
         Invoke-Compose -Arguments ($applicationBuildArguments + @($service))
     }
@@ -870,13 +888,16 @@ if ($OfficialStackRelease) {
     $verificationMigrationImage = $env:MARTY_SERVICES_IMAGE
 }
 else {
-    $verificationMigrationImage = & docker image inspect "elevenid-local/verification:$releaseVersion" --format '{{.Id}}'
+    $verificationEntry = @($applicationImagePlan | Where-Object { $_.service -eq "verification" })[0]
+    $verificationMigrationImage = & docker image inspect $verificationEntry.effective_reference --format '{{.Id}}'
     if ($LASTEXITCODE -ne 0 -or $verificationMigrationImage -notmatch '^sha256:[0-9a-f]{64}$') {
         throw "Could not pin the local verification runtime image before rehearsal"
     }
     # Keep the exact rehearsed local image even if another process retags it.
+    $applicationImagePlan = @(Set-BetaApplicationVerificationImage -Plan $applicationImagePlan -ImageId $verificationMigrationImage)
     $verificationImageOverride = Join-Path $script:ArtifactDir "verification-runtime-image.yml"
-    Write-Utf8Text -Path $verificationImageOverride -Content "services:`n  verification:`n    image: $verificationMigrationImage`n"
+    $verificationImageLines = @(ConvertTo-BetaApplicationImageLines -Plan @($applicationImagePlan | Where-Object { $_.service -eq "verification" }))
+    Write-Utf8Text -Path $verificationImageOverride -Content (($verificationImageLines -join "`n") + "`n")
     $script:ComposeFiles += $verificationImageOverride
 }
 
@@ -1015,22 +1036,13 @@ if ($stackVersion -notmatch '^\d{4}\.\d{2}\.\d+$') {
     throw "VERSION must contain an ElevenID LLC platform YYYY.MM.PATCH identifier"
 }
 $runtimeImageDigests = [ordered]@{}
-foreach ($service in $script:ApplicationServices) {
-    if ($OfficialStackRelease) {
-        $runtimeImageDigests[$service] = if ($service -in @("issuance", "canvas-sync-worker")) {
-            [string]$officialPlan.images.issuance.digest
-        }
-        else {
-            [string]$officialPlan.images.services.digest
-        }
+foreach ($imageEvidence in @(Get-BetaApplicationImageEvidence -Plan $applicationImagePlan)) {
+    $service = [string]$imageEvidence.service
+    if ($null -ne $imageEvidence.digest) {
+        $runtimeImageDigests[$service] = [string]$imageEvidence.digest
     }
     else {
-        $imageRef = if ($service -in @("issuance", "canvas-sync-worker")) {
-            $env:MARTY_ISSUANCE_IMAGE
-        }
-        else {
-            "elevenid-local/${service}:${releaseVersion}"
-        }
+        $imageRef = [string]$imageEvidence.inspect_reference
         $imageId = docker image inspect $imageRef --format '{{.Id}}'
         if ($LASTEXITCODE -ne 0 -or $imageId -notmatch '^sha256:[0-9a-f]{64}$') {
             throw "Could not resolve immutable image ID for $imageRef"
@@ -1055,6 +1067,8 @@ $imageDigestsPath = Join-Path $script:ArtifactDir "image-digests.json"
 Write-Utf8Text -Path $imageDigestsPath -Content ($env:ELEVENID_IMAGE_DIGESTS_JSON + "`n")
 
 Write-Step "Enter maintenance window and apply live migration"
+Assert-BetaDidcommConfiguration -RepoRoot $script:RepoRoot -EnvFiles $script:EnvFiles `
+    -ComposeFiles $script:ComposeFiles -AuthcryptEnabled ([bool]$EnableDidcommAuthcrypt)
 $canvasLtiIssuerDid = $null
 $maintenanceServices = $script:ApplicationServices + $script:InfrastructureWriterServices + @("ui-prod")
 $maintenanceContainers = @($preDeployContainers | Where-Object { $_.running -and $_.service -in $maintenanceServices } | ForEach-Object { $_.container_id })

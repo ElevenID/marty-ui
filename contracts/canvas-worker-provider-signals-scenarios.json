@@ -1,0 +1,6 @@
+{
+  "schema": "marty.canvas-worker-provider-signals-scenarios/v1",
+  "reference_scenario": "canvas-worker-rest-scenarios.json",
+  "signals": ["SIGINT", "SIGTERM", "SIGKILL"],
+  "scope": "Actual published worker interrupted while a real HTTPS response is held, after durable leasing and token read; not host-crash recovery or proof of finally execution"
+}

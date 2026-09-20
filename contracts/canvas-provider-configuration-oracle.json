@@ -1,0 +1,263 @@
+{
+  "boundary": "exact selected published AST helper bodies and ordered timeout assignments; synthetic environment, tenant resolver and file reader; no full module import or network timeout consumer",
+  "secrets": [
+    {
+      "files": [],
+      "name": "absent",
+      "secrets": [],
+      "value": ""
+    },
+    {
+      "files": [],
+      "name": "direct_raw",
+      "secrets": [],
+      "value": " synthetic-direct "
+    },
+    {
+      "files": [],
+      "name": "direct_skips_bad_file",
+      "secrets": [],
+      "value": "synthetic-direct"
+    },
+    {
+      "files": [
+        "operator-token"
+      ],
+      "name": "file_value",
+      "secrets": [],
+      "value": "synthetic-file"
+    },
+    {
+      "files": [
+        "operator-token"
+      ],
+      "name": "file_universal_newlines",
+      "secrets": [],
+      "value": "synthetic-first\nsecond\nthird"
+    },
+    {
+      "files": [],
+      "name": "direct_preserves_newlines",
+      "secrets": [],
+      "value": "synthetic-first\r\nsecond\rthird"
+    },
+    {
+      "files": [
+        "operator-token"
+      ],
+      "name": "empty_direct_uses_file",
+      "secrets": [],
+      "value": "synthetic-file"
+    },
+    {
+      "files": [],
+      "name": "whitespace_direct_is_truthy",
+      "secrets": [],
+      "value": "  "
+    },
+    {
+      "files": [
+        "operator-token"
+      ],
+      "name": "empty_file",
+      "secrets": [],
+      "value": ""
+    },
+    {
+      "files": [
+        "operator-token"
+      ],
+      "name": "unicode_whitespace_file",
+      "secrets": [],
+      "value": ""
+    },
+    {
+      "files": [
+        "operator-token"
+      ],
+      "name": "unicode_strip_file",
+      "secrets": [],
+      "value": "synthetic-file"
+    },
+    {
+      "files": [
+        "operator-token"
+      ],
+      "name": "missing_file",
+      "secrets": [],
+      "value": ""
+    },
+    {
+      "files": [
+        "operator-token"
+      ],
+      "name": "permission_error_file",
+      "secrets": [],
+      "value": ""
+    },
+    {
+      "files": [
+        "operator-token"
+      ],
+      "name": "directory_file",
+      "secrets": [],
+      "value": ""
+    },
+    {
+      "error_class": "UnicodeDecodeError",
+      "files": [
+        "operator-token"
+      ],
+      "name": "invalid_utf8_file",
+      "secrets": []
+    },
+    {
+      "files": [],
+      "name": "tenant_skips_bad_file",
+      "secrets": [
+        {
+          "organization_id": "org-review",
+          "secret_id": "tenant-key"
+        }
+      ],
+      "value": "synthetic-tenant"
+    },
+    {
+      "files": [
+        "operator-token"
+      ],
+      "name": "tenant_miss_uses_file",
+      "secrets": [
+        {
+          "organization_id": "org-review",
+          "secret_id": "tenant-key"
+        }
+      ],
+      "value": "synthetic-file"
+    },
+    {
+      "files": [
+        "operator-token"
+      ],
+      "name": "tenant_empty_uses_file",
+      "secrets": [
+        {
+          "organization_id": "org-review",
+          "secret_id": "tenant-key"
+        }
+      ],
+      "value": "synthetic-file"
+    },
+    {
+      "files": [],
+      "name": "tenant_raw_whitespace_wins",
+      "secrets": [
+        {
+          "organization_id": "org-review",
+          "secret_id": "tenant-key"
+        }
+      ],
+      "value": " "
+    },
+    {
+      "files": [],
+      "name": "inline_selectors_ignored",
+      "secrets": [],
+      "value": ""
+    }
+  ],
+  "source_sha256": "24f5c0f22c075af3a11abbb48be52bcc6535e0d4fc31e446f7fb218bfe40d679",
+  "timeouts": [
+    {
+      "name": "defaults",
+      "publish": "0x1.4000000000000p+4",
+      "status": "0x1.4000000000000p+4"
+    },
+    {
+      "name": "publish_fallback",
+      "publish": "0x1.6000000000000p+1",
+      "status": "0x1.6000000000000p+1"
+    },
+    {
+      "name": "status_precedence",
+      "publish": "0x1.6000000000000p+1",
+      "status": "0x1.a000000000000p+1"
+    },
+    {
+      "error_class": "ValueError",
+      "name": "malformed_publish_not_hidden"
+    },
+    {
+      "error_class": "ValueError",
+      "name": "blank_publish"
+    },
+    {
+      "error_class": "ValueError",
+      "name": "blank_status"
+    },
+    {
+      "name": "whitespace",
+      "publish": "0x1.4000000000000p+4",
+      "status": "0x1.4000000000000p+1"
+    },
+    {
+      "name": "unicode_digits",
+      "publish": "0x1.4000000000000p+4",
+      "status": "0x1.4000000000000p+1"
+    },
+    {
+      "name": "digit_separators",
+      "publish": "0x1.4000000000000p+4",
+      "status": "0x1.5000000000000p+3"
+    },
+    {
+      "name": "zero",
+      "publish": "0x1.4000000000000p+4",
+      "status": "0x0.0p+0"
+    },
+    {
+      "name": "negative_zero",
+      "publish": "0x1.4000000000000p+4",
+      "status": "-0x0.0p+0"
+    },
+    {
+      "name": "negative",
+      "publish": "0x1.4000000000000p+4",
+      "status": "-0x1.0000000000000p+0"
+    },
+    {
+      "name": "nan",
+      "publish": "0x1.4000000000000p+4",
+      "status": "nan"
+    },
+    {
+      "name": "infinity",
+      "publish": "0x1.4000000000000p+4",
+      "status": "inf"
+    },
+    {
+      "name": "negative_infinity",
+      "publish": "0x1.4000000000000p+4",
+      "status": "-inf"
+    },
+    {
+      "name": "huge_finite",
+      "publish": "0x1.4000000000000p+4",
+      "status": "0x1.93e5939a08ceap+99"
+    },
+    {
+      "name": "overflow_to_infinity",
+      "publish": "0x1.4000000000000p+4",
+      "status": "inf"
+    },
+    {
+      "name": "tiny_positive",
+      "publish": "0x1.4000000000000p+4",
+      "status": "0x1.4484bfeebc2a0p-100"
+    },
+    {
+      "error_class": "ValueError",
+      "name": "malformed_separator"
+    }
+  ]
+}

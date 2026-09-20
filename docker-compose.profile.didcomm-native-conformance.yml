@@ -1,0 +1,18 @@
+# Disposable native DIDComm qualification only; never a production overlay.
+# Requires issuance-native plus the existing project-scoped conformance isolation
+# overlay. This file supplies neither a standalone service nor project isolation.
+# Trust only the generated CA file, retaining certificate/hostname verification.
+services:
+  issuance-native:
+    environment:
+      DIDCOMM_TLS_CA_FILE: /run/secrets/didcomm-conformance-root-ca.pem
+      DIDCOMM_ALLOW_PRIVATE_IPS: "true"
+    volumes:
+      - type: bind
+        source: ${OIDF_TLS_CERT_DIR:?set OIDF_TLS_CERT_DIR to generated conformance material}/root-ca.pem
+        target: /run/secrets/didcomm-conformance-root-ca.pem
+        read_only: true
+        bind:
+          create_host_path: false
+    extra_hosts:
+      - "host.docker.internal:host-gateway"

@@ -23,7 +23,8 @@ use marty_issuance_service::{
     canvas_binding_domain::{CanvasApplicationTemplateProjection, CanvasProgramBindingRecord},
     canvas_catalog::{CanvasCatalogOAuth, CanvasCatalogProvider, CanvasCatalogProviderError},
     canvas_credentials_validation::{
-        CanvasCredentialsValidationResult, CanvasCredentialsValidator,
+        CanvasCredentialsValidationError, CanvasCredentialsValidationResult,
+        CanvasCredentialsValidator,
     },
     canvas_event_status::{
         CanvasEventReceipt, CanvasEventStatusRepository, CanvasEventStatusRepositoryError,
@@ -55,6 +56,11 @@ use marty_oid4vci::{discovery::StaticDiscoveryDocuments, lti::CanvasLtiPlatformP
 use serde_json::{json, Map, Value};
 use tower::ServiceExt;
 
+#[path = "support/canvas_json_depth_replay.rs"]
+mod canvas_json_depth_replay;
+#[path = "support/canvas_observation_values.rs"]
+mod canvas_observation_values;
+
 #[derive(Default)]
 struct MemoryRepository {
     platforms: Mutex<Vec<CanvasPlatformRecord>>,
@@ -69,6 +75,8 @@ struct MemoryRepository {
     secrets: Mutex<Vec<ManagedIntegrationSecret>>,
     secret_update_plaintexts: Mutex<Vec<Option<String>>>,
     canvas_credentials_secret_checks: AtomicUsize,
+    validation_secret: Mutex<Option<(String, String)>>,
+    validation_lookups: Option<Arc<Mutex<Vec<Value>>>>,
 }
 
 type ApprovalReservation = (CredentialTransaction, String, String, DateTime<Utc>);
@@ -314,12 +322,12 @@ impl CanvasCredentialsValidator for SuccessfulCanvasCredentialsValidator {
         &self,
         organization_id: &str,
         canvas_credentials: &Map<String, Value>,
-    ) -> CanvasCredentialsValidationResult {
+    ) -> Result<CanvasCredentialsValidationResult, CanvasCredentialsValidationError> {
         assert_eq!(organization_id, "org-1");
         if !canvas_credentials.is_empty() {
             assert_eq!(canvas_credentials["api_token_secret_id"], "secret-1");
         }
-        CanvasCredentialsValidationResult {
+        Ok(CanvasCredentialsValidationResult {
             ok: true,
             provider: canvas_credentials
                 .get("provider")
@@ -337,7 +345,7 @@ impl CanvasCredentialsValidator for SuccessfulCanvasCredentialsValidator {
             error: None,
             response_excerpt: None,
             validated_at: "2026-08-30T00:00:00+00:00".to_owned(),
-        }
+        })
     }
 }
 
@@ -775,6 +783,15 @@ impl CanvasPlatformManagementRepository for MemoryRepository {
     ) -> Result<bool, CanvasManagementRepositoryError> {
         self.canvas_credentials_secret_checks
             .fetch_add(1, Ordering::SeqCst);
+        if let Some((owner, id)) = self.validation_secret.lock().unwrap().as_ref() {
+            assert_eq!(secret_id, id);
+            if let Some(log) = &self.validation_lookups {
+                log.lock()
+                    .unwrap()
+                    .push(json!({"kind":"metadata", "secret_id":secret_id}));
+            }
+            return Ok(organization_id == owner);
+        }
         Ok(organization_id == "org-1" && secret_id == "secret-1")
     }
 
@@ -1050,6 +1067,18 @@ fn app_with_probe(
     repository: Arc<MemoryRepository>,
     probe_client: Arc<dyn CanvasLtiProbeClient>,
 ) -> axum::Router {
+    app_with_validator(
+        repository,
+        probe_client,
+        Arc::new(SuccessfulCanvasCredentialsValidator),
+    )
+}
+
+fn app_with_validator(
+    repository: Arc<MemoryRepository>,
+    probe_client: Arc<dyn CanvasLtiProbeClient>,
+    validator: Arc<dyn CanvasCredentialsValidator>,
+) -> axum::Router {
     let config = IssuanceServiceConfig::from_values(std::iter::empty::<(String, String)>())
         .expect("configuration");
     let runtime = IssuanceRuntime::new(&config).expect("runtime");
@@ -1069,7 +1098,7 @@ fn app_with_probe(
             probe_client,
         )
         .with_integration_secret_repository(repository)
-        .with_canvas_credentials_validator(Arc::new(SuccessfulCanvasCredentialsValidator)),
+        .with_canvas_credentials_validator(validator),
     );
     router_with_canvas_management(
         runtime.state(),
@@ -1078,6 +1107,9 @@ fn app_with_probe(
         service,
     )
 }
+
+#[path = "support/canvas_validation_boundary_replay.rs"]
+mod canvas_validation_boundary_replay;
 
 fn app_with_approval(
     approval_repository: Arc<ApprovalRepository>,

@@ -954,9 +954,14 @@ services:
   # Portable Canvas synchronization runs out-of-process. The worker leases
   # PostgreSQL jobs and records a database heartbeat consumed by readiness.
   canvas-sync-worker:
-    image: ${MARTY_ISSUANCE_IMAGE:?set MARTY_ISSUANCE_IMAGE to an immutable issuance image digest}
-    command: ["python", "-m", "issuance.canvas_worker"]
+    build:
+      context: .
+      dockerfile: services/Dockerfile
+      args:
+        SERVICE_NAME: canvas-sync-worker
+    command: ["/usr/local/bin/marty-canvas-sync-worker"]
     environment:
+      SERVICE_NAME: canvas_sync_worker
       DATABASE_URL: postgresql+asyncpg://marty:${MARTY_DB_PASSWORD:-marty_dev_password}@postgres:5432/marty
       LOG_LEVEL: ${LOG_LEVEL:-INFO}
       # Repository initialization verifies opaque OAuth/session material.
@@ -982,7 +987,6 @@ services:
       CANVAS_ALLOW_HTTP_LOCALHOST_BASE_URLS: ${CANVAS_ALLOW_HTTP_LOCALHOST_BASE_URLS:-false}
       CANVAS_BACKGROUND_ROSTER_BATCH_SIZE: ${CANVAS_BACKGROUND_ROSTER_BATCH_SIZE:-500}
       CANVAS_BACKGROUND_ROSTER_MAX_SIZE: ${CANVAS_BACKGROUND_ROSTER_MAX_SIZE:-5000}
-      CANVAS_SYNC_PROCESSOR: ${CANVAS_SYNC_PROCESSOR:-issuance.infrastructure.api.canvas_routes:process_authoritative_canvas_sync_target}
       CANVAS_SYNC_WORKER_BATCH_SIZE: ${CANVAS_SYNC_WORKER_BATCH_SIZE:-10}
       CANVAS_SYNC_WORKER_LEASE_SECONDS: ${CANVAS_SYNC_WORKER_LEASE_SECONDS:-120}
       CANVAS_SYNC_WORKER_JOB_TIMEOUT_SECONDS: ${CANVAS_SYNC_WORKER_JOB_TIMEOUT_SECONDS:-600}
@@ -994,8 +998,8 @@ services:
         condition: service_completed_successfully
       issuance-migrations:
         condition: service_completed_successfully
-    # The shared issuance image has an HTTP health check, while this process
-    # is deliberately headless. Its database heartbeat is the health signal.
+    # This process is deliberately headless: disable inherited image HTTP
+    # health checks. Its database heartbeat is the health signal.
     healthcheck:
       disable: true
     networks:

@@ -2,7 +2,7 @@ use std::{sync::Arc, time::Duration};
 
 use async_trait::async_trait;
 use marty_oid4vci::discovery::{KeyAttestationRequirements, ProofPolicyRequest};
-use reqwest::{Client, StatusCode};
+use reqwest::Client;
 use serde_json::Value;
 use tracing::error;
 use url::Url;
@@ -83,17 +83,28 @@ impl ProofPolicyResolver for HttpProofPolicyResolver {
             error!(%cause, "proof policy request failed");
             TenantDiscoveryError::ProofPolicyUnavailable
         })?;
-        if response.status() == StatusCode::NOT_FOUND {
-            return Ok(KeyAttestationRequirements::default());
-        }
-        if !response.status().is_success() {
-            error!(status = %response.status(), "proof policy request was rejected");
-            return Err(TenantDiscoveryError::ProofPolicyUnavailable);
-        }
-        let payload: Value = response.json().await.map_err(|cause| {
-            error!(%cause, "proof policy response was invalid JSON");
-            TenantDiscoveryError::ProofPolicyUnavailable
-        })?;
+        let status = response.status();
+        let operation = crate::signing_error_detail::SigningOperation::Context;
+        let response = match crate::signing_http_response::classify(response, operation).await {
+            Ok(crate::signing_http_response::SigningHttpResponse::NotFound) => {
+                return Ok(KeyAttestationRequirements::default())
+            }
+            Ok(crate::signing_http_response::SigningHttpResponse::Continue(response)) => response,
+            Err(cause) => {
+                error!(%status, "proof policy request was rejected");
+                return Err(if cause.is_runtime() {
+                    TenantDiscoveryError::ProofPolicyUnavailable
+                } else {
+                    TenantDiscoveryError::ProofPolicyResponseInvalid
+                });
+            }
+        };
+        let payload: Value = crate::signing_http_response::success_json(response, operation)
+            .await
+            .map_err(|_| {
+                error!(%status, "proof policy response was invalid JSON");
+                TenantDiscoveryError::ProofPolicyResponseInvalid
+            })?;
         let Some(payload) = payload.as_object() else {
             return Ok(KeyAttestationRequirements::default());
         };

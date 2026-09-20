@@ -1,0 +1,11 @@
+{
+  "schema": "marty.canvas-worker-final-completion-race-scenarios/v1",
+  "normative_requirement": "issuance-canvas-sync-worker.json#/executable_fixtures/postgres_lease_recovery/3",
+  "initial_history": "canvas-worker-provider-final-scenarios.json#/initial_job_seed",
+  "lease_seconds": 30,
+  "cases": [
+    {"winner": "completion", "status": "succeeded", "completion_return": true, "target_enabled": true, "terminal_winners": 1, "stale_writes": 0},
+    {"winner": "recovery", "status": "dead_letter", "completion_return": false, "target_enabled": false, "terminal_winners": 1, "stale_writes": 0}
+  ],
+  "scope": "Normative native repository concurrency on the published schema, not a captured Python process reference. Hold the target row to observe the real winner owning the job row; use actual lease expiry, never rewrite a running lease or clock. Preserve complete committed rows after stale completion/failure/recovery calls. Earlier attempts are seeded history. Whole-worker/provider composition remains separately required."
+}

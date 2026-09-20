@@ -78,6 +78,30 @@ impl HttpIssuerContextResolver {
         key_purpose: &str,
         algorithm: &str,
     ) -> Result<Value, CredentialIssuanceError> {
+        self.resolve_raw_for(
+            crate::signing_error_detail::SigningOperation::Context,
+            organization_id,
+            issuer_did,
+            issuer_mode,
+            credential_format,
+            key_purpose,
+            algorithm,
+        )
+        .await
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) async fn resolve_raw_for(
+        &self,
+        operation: crate::signing_error_detail::SigningOperation,
+        organization_id: &str,
+        issuer_did: &str,
+        issuer_mode: Option<&str>,
+        credential_format: &str,
+        key_purpose: &str,
+        algorithm: &str,
+    ) -> Result<Value, CredentialIssuanceError> {
+        assert!(operation != crate::signing_error_detail::SigningOperation::Sign);
         let mut query = vec![
             ("organization_id", organization_id),
             ("issuer_did", issuer_did),
@@ -95,21 +119,22 @@ impl HttpIssuerContextResolver {
         let response = request.send().await.map_err(|error| {
             issuer_error(format!("DID issuer context resolution failed: {error}"))
         })?;
-        if response.status() == reqwest::StatusCode::UNAUTHORIZED {
-            return Err(issuer_error(
-                "Internal signing API rejected the service API key",
-            ));
-        }
-        if response.status() == reqwest::StatusCode::NOT_FOUND {
-            return Err(issuer_error(
-                "Unable to resolve the remote DID issuer profile for this organization",
-            ));
-        }
+        let response = match crate::signing_http_response::classify(response, operation)
+            .await
+            .map_err(CredentialIssuanceError::SigningResponse)?
+        {
+            crate::signing_http_response::SigningHttpResponse::Continue(response) => response,
+            crate::signing_http_response::SigningHttpResponse::NotFound => {
+                return Err(issuer_error(
+                    "Unable to resolve the remote DID issuer profile for this organization",
+                ))
+            }
+        };
         let status = response.status();
-        let context: Value = response.json().await.map_err(|error| {
-            issuer_error(format!("DID issuer context returned invalid JSON: {error}"))
-        })?;
-        if !status.is_success() || context.get("ok").and_then(Value::as_bool) != Some(true) {
+        let context: Value = crate::signing_http_response::success_json(response, operation)
+            .await
+            .map_err(CredentialIssuanceError::SigningResponse)?;
+        if context.get("ok").and_then(Value::as_bool) != Some(true) {
             return Err(issuer_error(format!(
                 "DID issuer context resolution failed (HTTP {status})"
             )));

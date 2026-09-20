@@ -1,0 +1,15 @@
+{
+  "schema": "marty.canvas-worker-oauth-revocation-retry-after-scenarios/v1",
+  "base_scenario": "canvas-worker-oauth-revocation-scenarios.json",
+  "scope": "Actual remote revocation 429 responses carried through stored retry deadlines; dates generated at response time, no clock or running-state mutation; all encrypted secrets retained",
+  "cases": [
+    {"name": "missing", "status": 429, "body": {}, "timing": "bounds", "delay_bounds": [30, 37]},
+    {"name": "http_date_future", "status": 429, "body": {}, "retry_after_offset_seconds": 60, "timing": "http_date"},
+    {"name": "http_date_past", "status": 429, "body": {}, "retry_after_offset_seconds": -60, "timing": "bounds", "delay_bounds": [30, 37]},
+    {"name": "malformed", "status": 429, "body": {}, "headers": {"Retry-After": "not-a-delay"}, "timing": "bounds", "delay_bounds": [30, 37]},
+    {"name": "negative", "status": 429, "body": {}, "headers": {"Retry-After": "-9"}, "timing": "bounds", "delay_bounds": [30, 37]},
+    {"name": "zero", "status": 429, "body": {}, "headers": {"Retry-After": "0"}, "timing": "bounds", "delay_bounds": [30, 37]},
+    {"name": "clamped", "status": 429, "body": {}, "headers": {"Retry-After": "86401"}, "timing": "bounds", "delay_bounds": [86400, 86400]},
+    {"name": "huge_integer", "status": 429, "body": {}, "headers": {"Retry-After": "184467440737095516160000"}, "timing": "bounds", "delay_bounds": [86400, 86400]}
+  ]
+}

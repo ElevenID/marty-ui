@@ -1,0 +1,798 @@
+{
+  "absent": {
+    "str_instance": [
+      {
+        "message": "'str' object has no attribute 'missing'",
+        "name": "missing"
+      },
+      {
+        "message": "'str' object has no attribute '\u96ea'",
+        "name": "\u96ea"
+      },
+      {
+        "message": "'str' object has no attribute 'a'b'",
+        "name": "a'b"
+      },
+      {
+        "message": "'str' object has no attribute '\ud800'",
+        "name": "\ud800"
+      },
+      {
+        "message": "'str' object has no attribute 'a\u0000b'",
+        "name": "a\u0000b"
+      },
+      {
+        "message": "'str' object has no attribute 'xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx'",
+        "name": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+      }
+    ],
+    "str_type": [
+      {
+        "message": "type object 'str' has no attribute 'missing'",
+        "name": "missing"
+      },
+      {
+        "message": "type object 'str' has no attribute '\u96ea'",
+        "name": "\u96ea"
+      },
+      {
+        "message": "type object 'str' has no attribute 'a'b'",
+        "name": "a'b"
+      },
+      {
+        "message": "type object 'str' has no attribute '\ud800'",
+        "name": "\ud800"
+      },
+      {
+        "message": "type object 'str' has no attribute 'a\u0000b'",
+        "name": "a\u0000b"
+      },
+      {
+        "message": "type object 'str' has no attribute 'xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx'",
+        "name": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+      }
+    ],
+    "type_type": [
+      {
+        "message": "type object 'type' has no attribute 'missing'",
+        "name": "missing"
+      },
+      {
+        "message": "type object 'type' has no attribute '\u96ea'",
+        "name": "\u96ea"
+      },
+      {
+        "message": "type object 'type' has no attribute 'a'b'",
+        "name": "a'b"
+      },
+      {
+        "message": "type object 'type' has no attribute '\ud800'",
+        "name": "\ud800"
+      },
+      {
+        "message": "type object 'type' has no attribute 'a\u0000b'",
+        "name": "a\u0000b"
+      },
+      {
+        "message": "type object 'type' has no attribute 'xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx'",
+        "name": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+      }
+    ]
+  },
+  "owners": {
+    "str_instance": {
+      "__add__": {
+        "value_type": "method-wrapper"
+      },
+      "__class__": {
+        "value_type": "type"
+      },
+      "__contains__": {
+        "value_type": "method-wrapper"
+      },
+      "__delattr__": {
+        "value_type": "method-wrapper"
+      },
+      "__dir__": {
+        "value_type": "builtin_function_or_method"
+      },
+      "__doc__": {
+        "value_type": "str"
+      },
+      "__eq__": {
+        "value_type": "method-wrapper"
+      },
+      "__format__": {
+        "value_type": "builtin_function_or_method"
+      },
+      "__ge__": {
+        "value_type": "method-wrapper"
+      },
+      "__getattribute__": {
+        "value_type": "method-wrapper"
+      },
+      "__getitem__": {
+        "value_type": "method-wrapper"
+      },
+      "__getnewargs__": {
+        "value_type": "builtin_function_or_method"
+      },
+      "__getstate__": {
+        "value_type": "builtin_function_or_method"
+      },
+      "__gt__": {
+        "value_type": "method-wrapper"
+      },
+      "__hash__": {
+        "value_type": "method-wrapper"
+      },
+      "__init__": {
+        "value_type": "method-wrapper"
+      },
+      "__init_subclass__": {
+        "value_type": "builtin_function_or_method"
+      },
+      "__iter__": {
+        "value_type": "method-wrapper"
+      },
+      "__le__": {
+        "value_type": "method-wrapper"
+      },
+      "__len__": {
+        "value_type": "method-wrapper"
+      },
+      "__lt__": {
+        "value_type": "method-wrapper"
+      },
+      "__mod__": {
+        "value_type": "method-wrapper"
+      },
+      "__mul__": {
+        "value_type": "method-wrapper"
+      },
+      "__ne__": {
+        "value_type": "method-wrapper"
+      },
+      "__new__": {
+        "value_type": "builtin_function_or_method"
+      },
+      "__reduce__": {
+        "value_type": "builtin_function_or_method"
+      },
+      "__reduce_ex__": {
+        "value_type": "builtin_function_or_method"
+      },
+      "__repr__": {
+        "value_type": "method-wrapper"
+      },
+      "__rmod__": {
+        "value_type": "method-wrapper"
+      },
+      "__rmul__": {
+        "value_type": "method-wrapper"
+      },
+      "__setattr__": {
+        "value_type": "method-wrapper"
+      },
+      "__sizeof__": {
+        "value_type": "builtin_function_or_method"
+      },
+      "__str__": {
+        "value_type": "method-wrapper"
+      },
+      "__subclasshook__": {
+        "value_type": "builtin_function_or_method"
+      },
+      "capitalize": {
+        "value_type": "builtin_function_or_method"
+      },
+      "casefold": {
+        "value_type": "builtin_function_or_method"
+      },
+      "center": {
+        "value_type": "builtin_function_or_method"
+      },
+      "count": {
+        "value_type": "builtin_function_or_method"
+      },
+      "encode": {
+        "value_type": "builtin_function_or_method"
+      },
+      "endswith": {
+        "value_type": "builtin_function_or_method"
+      },
+      "expandtabs": {
+        "value_type": "builtin_function_or_method"
+      },
+      "find": {
+        "value_type": "builtin_function_or_method"
+      },
+      "format": {
+        "value_type": "builtin_function_or_method"
+      },
+      "format_map": {
+        "value_type": "builtin_function_or_method"
+      },
+      "index": {
+        "value_type": "builtin_function_or_method"
+      },
+      "isalnum": {
+        "value_type": "builtin_function_or_method"
+      },
+      "isalpha": {
+        "value_type": "builtin_function_or_method"
+      },
+      "isascii": {
+        "value_type": "builtin_function_or_method"
+      },
+      "isdecimal": {
+        "value_type": "builtin_function_or_method"
+      },
+      "isdigit": {
+        "value_type": "builtin_function_or_method"
+      },
+      "isidentifier": {
+        "value_type": "builtin_function_or_method"
+      },
+      "islower": {
+        "value_type": "builtin_function_or_method"
+      },
+      "isnumeric": {
+        "value_type": "builtin_function_or_method"
+      },
+      "isprintable": {
+        "value_type": "builtin_function_or_method"
+      },
+      "isspace": {
+        "value_type": "builtin_function_or_method"
+      },
+      "istitle": {
+        "value_type": "builtin_function_or_method"
+      },
+      "isupper": {
+        "value_type": "builtin_function_or_method"
+      },
+      "join": {
+        "value_type": "builtin_function_or_method"
+      },
+      "ljust": {
+        "value_type": "builtin_function_or_method"
+      },
+      "lower": {
+        "value_type": "builtin_function_or_method"
+      },
+      "lstrip": {
+        "value_type": "builtin_function_or_method"
+      },
+      "maketrans": {
+        "value_type": "builtin_function_or_method"
+      },
+      "partition": {
+        "value_type": "builtin_function_or_method"
+      },
+      "removeprefix": {
+        "value_type": "builtin_function_or_method"
+      },
+      "removesuffix": {
+        "value_type": "builtin_function_or_method"
+      },
+      "replace": {
+        "value_type": "builtin_function_or_method"
+      },
+      "rfind": {
+        "value_type": "builtin_function_or_method"
+      },
+      "rindex": {
+        "value_type": "builtin_function_or_method"
+      },
+      "rjust": {
+        "value_type": "builtin_function_or_method"
+      },
+      "rpartition": {
+        "value_type": "builtin_function_or_method"
+      },
+      "rsplit": {
+        "value_type": "builtin_function_or_method"
+      },
+      "rstrip": {
+        "value_type": "builtin_function_or_method"
+      },
+      "split": {
+        "value_type": "builtin_function_or_method"
+      },
+      "splitlines": {
+        "value_type": "builtin_function_or_method"
+      },
+      "startswith": {
+        "value_type": "builtin_function_or_method"
+      },
+      "strip": {
+        "value_type": "builtin_function_or_method"
+      },
+      "swapcase": {
+        "value_type": "builtin_function_or_method"
+      },
+      "title": {
+        "value_type": "builtin_function_or_method"
+      },
+      "translate": {
+        "value_type": "builtin_function_or_method"
+      },
+      "upper": {
+        "value_type": "builtin_function_or_method"
+      },
+      "zfill": {
+        "value_type": "builtin_function_or_method"
+      }
+    },
+    "str_type": {
+      "__abstractmethods__": {
+        "error_type": "AttributeError",
+        "message": "__abstractmethods__"
+      },
+      "__add__": {
+        "value_type": "wrapper_descriptor"
+      },
+      "__annotations__": {
+        "error_type": "AttributeError",
+        "message": "type object 'str' has no attribute '__annotations__'"
+      },
+      "__base__": {
+        "value_type": "type"
+      },
+      "__bases__": {
+        "value_type": "tuple"
+      },
+      "__basicsize__": {
+        "value_type": "int"
+      },
+      "__call__": {
+        "value_type": "method-wrapper"
+      },
+      "__class__": {
+        "value_type": "type"
+      },
+      "__contains__": {
+        "value_type": "wrapper_descriptor"
+      },
+      "__delattr__": {
+        "value_type": "wrapper_descriptor"
+      },
+      "__dict__": {
+        "value_type": "mappingproxy"
+      },
+      "__dictoffset__": {
+        "value_type": "int"
+      },
+      "__dir__": {
+        "value_type": "method_descriptor"
+      },
+      "__doc__": {
+        "value_type": "str"
+      },
+      "__eq__": {
+        "value_type": "wrapper_descriptor"
+      },
+      "__flags__": {
+        "value_type": "int"
+      },
+      "__format__": {
+        "value_type": "method_descriptor"
+      },
+      "__ge__": {
+        "value_type": "wrapper_descriptor"
+      },
+      "__getattribute__": {
+        "value_type": "wrapper_descriptor"
+      },
+      "__getitem__": {
+        "value_type": "wrapper_descriptor"
+      },
+      "__getnewargs__": {
+        "value_type": "method_descriptor"
+      },
+      "__getstate__": {
+        "value_type": "method_descriptor"
+      },
+      "__gt__": {
+        "value_type": "wrapper_descriptor"
+      },
+      "__hash__": {
+        "value_type": "wrapper_descriptor"
+      },
+      "__init__": {
+        "value_type": "wrapper_descriptor"
+      },
+      "__init_subclass__": {
+        "value_type": "builtin_function_or_method"
+      },
+      "__instancecheck__": {
+        "value_type": "builtin_function_or_method"
+      },
+      "__itemsize__": {
+        "value_type": "int"
+      },
+      "__iter__": {
+        "value_type": "wrapper_descriptor"
+      },
+      "__le__": {
+        "value_type": "wrapper_descriptor"
+      },
+      "__len__": {
+        "value_type": "wrapper_descriptor"
+      },
+      "__lt__": {
+        "value_type": "wrapper_descriptor"
+      },
+      "__mod__": {
+        "value_type": "wrapper_descriptor"
+      },
+      "__module__": {
+        "value_type": "str"
+      },
+      "__mro__": {
+        "value_type": "tuple"
+      },
+      "__mul__": {
+        "value_type": "wrapper_descriptor"
+      },
+      "__name__": {
+        "value_type": "str"
+      },
+      "__ne__": {
+        "value_type": "wrapper_descriptor"
+      },
+      "__new__": {
+        "value_type": "builtin_function_or_method"
+      },
+      "__or__": {
+        "value_type": "method-wrapper"
+      },
+      "__prepare__": {
+        "value_type": "builtin_function_or_method"
+      },
+      "__qualname__": {
+        "value_type": "str"
+      },
+      "__reduce__": {
+        "value_type": "method_descriptor"
+      },
+      "__reduce_ex__": {
+        "value_type": "method_descriptor"
+      },
+      "__repr__": {
+        "value_type": "wrapper_descriptor"
+      },
+      "__rmod__": {
+        "value_type": "wrapper_descriptor"
+      },
+      "__rmul__": {
+        "value_type": "wrapper_descriptor"
+      },
+      "__ror__": {
+        "value_type": "method-wrapper"
+      },
+      "__setattr__": {
+        "value_type": "wrapper_descriptor"
+      },
+      "__sizeof__": {
+        "value_type": "method_descriptor"
+      },
+      "__str__": {
+        "value_type": "wrapper_descriptor"
+      },
+      "__subclasscheck__": {
+        "value_type": "builtin_function_or_method"
+      },
+      "__subclasses__": {
+        "value_type": "builtin_function_or_method"
+      },
+      "__subclasshook__": {
+        "value_type": "builtin_function_or_method"
+      },
+      "__text_signature__": {
+        "value_type": "NoneType"
+      },
+      "__type_params__": {
+        "value_type": "tuple"
+      },
+      "__weakrefoffset__": {
+        "value_type": "int"
+      },
+      "capitalize": {
+        "value_type": "method_descriptor"
+      },
+      "casefold": {
+        "value_type": "method_descriptor"
+      },
+      "center": {
+        "value_type": "method_descriptor"
+      },
+      "count": {
+        "value_type": "method_descriptor"
+      },
+      "encode": {
+        "value_type": "method_descriptor"
+      },
+      "endswith": {
+        "value_type": "method_descriptor"
+      },
+      "expandtabs": {
+        "value_type": "method_descriptor"
+      },
+      "find": {
+        "value_type": "method_descriptor"
+      },
+      "format": {
+        "value_type": "method_descriptor"
+      },
+      "format_map": {
+        "value_type": "method_descriptor"
+      },
+      "index": {
+        "value_type": "method_descriptor"
+      },
+      "isalnum": {
+        "value_type": "method_descriptor"
+      },
+      "isalpha": {
+        "value_type": "method_descriptor"
+      },
+      "isascii": {
+        "value_type": "method_descriptor"
+      },
+      "isdecimal": {
+        "value_type": "method_descriptor"
+      },
+      "isdigit": {
+        "value_type": "method_descriptor"
+      },
+      "isidentifier": {
+        "value_type": "method_descriptor"
+      },
+      "islower": {
+        "value_type": "method_descriptor"
+      },
+      "isnumeric": {
+        "value_type": "method_descriptor"
+      },
+      "isprintable": {
+        "value_type": "method_descriptor"
+      },
+      "isspace": {
+        "value_type": "method_descriptor"
+      },
+      "istitle": {
+        "value_type": "method_descriptor"
+      },
+      "isupper": {
+        "value_type": "method_descriptor"
+      },
+      "join": {
+        "value_type": "method_descriptor"
+      },
+      "ljust": {
+        "value_type": "method_descriptor"
+      },
+      "lower": {
+        "value_type": "method_descriptor"
+      },
+      "lstrip": {
+        "value_type": "method_descriptor"
+      },
+      "maketrans": {
+        "value_type": "builtin_function_or_method"
+      },
+      "mro": {
+        "value_type": "builtin_function_or_method"
+      },
+      "partition": {
+        "value_type": "method_descriptor"
+      },
+      "removeprefix": {
+        "value_type": "method_descriptor"
+      },
+      "removesuffix": {
+        "value_type": "method_descriptor"
+      },
+      "replace": {
+        "value_type": "method_descriptor"
+      },
+      "rfind": {
+        "value_type": "method_descriptor"
+      },
+      "rindex": {
+        "value_type": "method_descriptor"
+      },
+      "rjust": {
+        "value_type": "method_descriptor"
+      },
+      "rpartition": {
+        "value_type": "method_descriptor"
+      },
+      "rsplit": {
+        "value_type": "method_descriptor"
+      },
+      "rstrip": {
+        "value_type": "method_descriptor"
+      },
+      "split": {
+        "value_type": "method_descriptor"
+      },
+      "splitlines": {
+        "value_type": "method_descriptor"
+      },
+      "startswith": {
+        "value_type": "method_descriptor"
+      },
+      "strip": {
+        "value_type": "method_descriptor"
+      },
+      "swapcase": {
+        "value_type": "method_descriptor"
+      },
+      "title": {
+        "value_type": "method_descriptor"
+      },
+      "translate": {
+        "value_type": "method_descriptor"
+      },
+      "upper": {
+        "value_type": "method_descriptor"
+      },
+      "zfill": {
+        "value_type": "method_descriptor"
+      }
+    },
+    "type_type": {
+      "__abstractmethods__": {
+        "error_type": "AttributeError",
+        "message": "__abstractmethods__"
+      },
+      "__annotations__": {
+        "error_type": "AttributeError",
+        "message": "type object 'type' has no attribute '__annotations__'"
+      },
+      "__base__": {
+        "value_type": "type"
+      },
+      "__bases__": {
+        "value_type": "tuple"
+      },
+      "__basicsize__": {
+        "value_type": "int"
+      },
+      "__call__": {
+        "value_type": "wrapper_descriptor"
+      },
+      "__class__": {
+        "value_type": "type"
+      },
+      "__delattr__": {
+        "value_type": "wrapper_descriptor"
+      },
+      "__dict__": {
+        "value_type": "mappingproxy"
+      },
+      "__dictoffset__": {
+        "value_type": "int"
+      },
+      "__dir__": {
+        "value_type": "method_descriptor"
+      },
+      "__doc__": {
+        "value_type": "str"
+      },
+      "__eq__": {
+        "value_type": "wrapper_descriptor"
+      },
+      "__flags__": {
+        "value_type": "int"
+      },
+      "__format__": {
+        "value_type": "method_descriptor"
+      },
+      "__ge__": {
+        "value_type": "wrapper_descriptor"
+      },
+      "__getattribute__": {
+        "value_type": "wrapper_descriptor"
+      },
+      "__getstate__": {
+        "value_type": "method_descriptor"
+      },
+      "__gt__": {
+        "value_type": "wrapper_descriptor"
+      },
+      "__hash__": {
+        "value_type": "wrapper_descriptor"
+      },
+      "__init__": {
+        "value_type": "wrapper_descriptor"
+      },
+      "__init_subclass__": {
+        "value_type": "builtin_function_or_method"
+      },
+      "__instancecheck__": {
+        "value_type": "method_descriptor"
+      },
+      "__itemsize__": {
+        "value_type": "int"
+      },
+      "__le__": {
+        "value_type": "wrapper_descriptor"
+      },
+      "__lt__": {
+        "value_type": "wrapper_descriptor"
+      },
+      "__module__": {
+        "value_type": "str"
+      },
+      "__mro__": {
+        "value_type": "tuple"
+      },
+      "__name__": {
+        "value_type": "str"
+      },
+      "__ne__": {
+        "value_type": "wrapper_descriptor"
+      },
+      "__new__": {
+        "value_type": "builtin_function_or_method"
+      },
+      "__or__": {
+        "value_type": "wrapper_descriptor"
+      },
+      "__prepare__": {
+        "value_type": "builtin_function_or_method"
+      },
+      "__qualname__": {
+        "value_type": "str"
+      },
+      "__reduce__": {
+        "value_type": "method_descriptor"
+      },
+      "__reduce_ex__": {
+        "value_type": "method_descriptor"
+      },
+      "__repr__": {
+        "value_type": "wrapper_descriptor"
+      },
+      "__ror__": {
+        "value_type": "wrapper_descriptor"
+      },
+      "__setattr__": {
+        "value_type": "wrapper_descriptor"
+      },
+      "__sizeof__": {
+        "value_type": "method_descriptor"
+      },
+      "__str__": {
+        "value_type": "wrapper_descriptor"
+      },
+      "__subclasscheck__": {
+        "value_type": "method_descriptor"
+      },
+      "__subclasses__": {
+        "value_type": "method_descriptor"
+      },
+      "__subclasshook__": {
+        "value_type": "builtin_function_or_method"
+      },
+      "__text_signature__": {
+        "value_type": "NoneType"
+      },
+      "__type_params__": {
+        "value_type": "tuple"
+      },
+      "__weakrefoffset__": {
+        "value_type": "int"
+      },
+      "mro": {
+        "value_type": "method_descriptor"
+      }
+    }
+  },
+  "python_version": "3.12.10",
+  "schema": "marty.python-string-attribute-inventory/v1"
+}

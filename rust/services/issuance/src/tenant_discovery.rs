@@ -13,6 +13,8 @@ pub enum TenantDiscoveryError {
     RepositoryUnavailable,
     #[error("issuer proof policy is unavailable")]
     ProofPolicyUnavailable,
+    #[error("issuer proof policy response is invalid")]
+    ProofPolicyResponseInvalid,
     #[error("tenant discovery plan is incomplete")]
     IncompletePlan,
 }

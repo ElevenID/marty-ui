@@ -2,8 +2,8 @@ use std::collections::BTreeMap;
 
 use chrono::{DateTime, Utc};
 use marty_issuance_service::canvas_sync_worker::{
-    canvas_sync_result, job_retry_delay_seconds, retry_after_seconds, roster_cursor_window,
-    safe_result, CanvasSyncWorkerConfig,
+    canvas_sync_result, job_retry_delay_seconds, oauth_revocation_delay_seconds,
+    retry_after_seconds, roster_cursor_window, safe_result, CanvasSyncWorkerConfig,
 };
 use serde_json::{Map, Value};
 
@@ -12,6 +12,54 @@ fn contract() -> Value {
         "../../../../contracts/issuance-canvas-sync-worker.json"
     ))
     .expect("Canvas worker contract")
+}
+
+#[test]
+fn revocation_backoff_preserves_captured_later_attempt_bounds_and_hint_cap() {
+    let matrix: Value = serde_json::from_str(include_str!(
+        "../../../../contracts/canvas-worker-oauth-revocation-backoff-scenarios.json"
+    ))
+    .unwrap();
+    let cap = contract()["retry_and_backoff"]["maximum_retry_after_seconds"]
+        .as_u64()
+        .unwrap();
+    for case in matrix["cases"].as_array().unwrap() {
+        let count = i32::try_from(case["retry_count"].as_i64().unwrap()).unwrap();
+        let minimum = case["delay_bounds"][0].as_u64().unwrap();
+        let maximum = case["delay_bounds"][1].as_u64().unwrap();
+        for hint in [None, Some(0), Some(cap), Some(u64::MAX)] {
+            for _ in 0..16 {
+                let observed = oauth_revocation_delay_seconds(count, hint);
+                if hint.is_some_and(|seconds| seconds >= cap) {
+                    assert_eq!(observed, cap);
+                } else {
+                    assert!(
+                        (minimum..=maximum).contains(&observed),
+                        "{}: {observed}",
+                        case["name"]
+                    );
+                }
+            }
+        }
+    }
+}
+
+#[test]
+fn worker_retry_after_preserves_frozen_oversized_day_clamp() {
+    let scenarios: Value = serde_json::from_str(include_str!(
+        "../../../../contracts/canvas-worker-retry-after-scenarios.json"
+    ))
+    .unwrap();
+    let case = scenarios["cases"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|case| case["name"] == "huge_integer")
+        .unwrap();
+    assert_eq!(
+        retry_after_seconds(case["headers"]["Retry-After"].as_str().unwrap(), Utc::now()),
+        case["delay_bounds"][0].as_u64(),
+    );
 }
 
 #[test]

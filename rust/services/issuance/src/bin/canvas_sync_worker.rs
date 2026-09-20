@@ -9,18 +9,19 @@ use marty_issuance_service::{
     canvas_oauth_http::HttpCanvasOAuthProvider,
     canvas_oauth_postgres::{PostgresCanvasOAuthRepository, PostgresIntegrationSecretVault},
     canvas_provider_http::CanvasHttpClientPolicy,
-    canvas_sync_processor::NativeCanvasSyncProcessor,
+    canvas_sync_processor::{CanvasRosterBounds, NativeCanvasSyncProcessor},
     canvas_sync_processor_postgres::PostgresCanvasSyncProcessorRepository,
     canvas_sync_provider_http::HttpCanvasAuthoritativeProvider,
     canvas_sync_worker::{CanvasSyncWorker, CanvasSyncWorkerConfig},
     canvas_sync_worker_lifecycle::{
-        finish_on_shutdown, spawn_with_postgres_cleanup, WorkerShutdown,
+        finish_on_shutdown, spawn_with_postgres_cleanup, worker_connect_options,
+        worker_pool_options, WorkerShutdown,
     },
     canvas_sync_worker_postgres::PostgresCanvasSyncWorkerRepository,
     integration_secret::IntegrationSecretCipher,
 };
 use mmf_runtime::managed_task::{CleanupOutcome, TaskCompletion, TaskOutcome};
-use sqlx::{postgres::PgPoolOptions, PgPool};
+use sqlx::PgPool;
 use tokio::sync::watch;
 use tracing::{error, info};
 use tracing_subscriber::EnvFilter;
@@ -29,9 +30,10 @@ use tracing_subscriber::EnvFilter;
 async fn main() -> Result<ExitCode, Box<dyn Error + Send + Sync>> {
     tracing_subscriber::fmt()
         .json()
-        .with_env_filter(
-            EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info")),
-        )
+        .with_env_filter(worker_log_filter(
+            env::var("RUST_LOG").ok().as_deref(),
+            env::var("LOG_LEVEL").ok().as_deref(),
+        )?)
         .init();
     let config = CanvasSyncWorkerConfig::from_env().inspect_err(|_error| {
         error!(
@@ -44,11 +46,11 @@ async fn main() -> Result<ExitCode, Box<dyn Error + Send + Sync>> {
     });
     let master_key = integration_master_key()?;
     let cipher = IntegrationSecretCipher::from_base64(&master_key)?;
-    let pool = PgPoolOptions::new()
+    let pool = worker_pool_options()
         .min_connections(1)
         .max_connections(10)
         .acquire_timeout(Duration::from_secs(10))
-        .connect_lazy(&database_url)?;
+        .connect_lazy_with(worker_connect_options(&database_url)?);
     let (stop, receiver) = watch::channel(false);
     // Register Unix handlers before worker tasks can report database readiness.
     let shutdown = shutdown_signal();
@@ -139,8 +141,10 @@ async fn run_initialized_worker(
     let signing_key =
         required_secret_with_fallback("SIGNING_KEYS_INTERNAL_API_KEY", "ISSUANCE_API_KEY")?;
     let signer = Arc::new(IssuerDidCanvasLtiToolJwtSigner::new(
-        required_env("CANVAS_LTI_TOOL_SIGNING_ORGANIZATION_ID")?,
-        required_env("CANVAS_LTI_TOOL_ISSUER_DID")?,
+        // Published startup does not require an LTI identity. The shared signer
+        // validates it before resolving or signing, without blocking idle work.
+        env::var("CANVAS_LTI_TOOL_SIGNING_ORGANIZATION_ID").unwrap_or_default(),
+        env::var("CANVAS_LTI_TOOL_ISSUER_DID").unwrap_or_default(),
         true,
         Arc::new(HttpCanvasLtiToolIdentityResolver::new(
             signing_url.clone(),
@@ -165,12 +169,18 @@ async fn run_initialized_worker(
         },
         self_managed_origins,
     ));
-    let processor = Arc::new(NativeCanvasSyncProcessor::new(
+    let processor = Arc::new(NativeCanvasSyncProcessor::new_with_roster_configuration(
         Arc::new(PostgresCanvasSyncProcessorRepository::new(pool.clone())),
         authoritative_provider,
         config.clone(),
-        bounded_usize("CANVAS_BACKGROUND_ROSTER_BATCH_SIZE", 500, 1, 2_000)?,
-        bounded_usize("CANVAS_BACKGROUND_ROSTER_MAX_SIZE", 5_000, 1, 10_000)?,
+        CanvasRosterBounds::from_values(
+            env::var("CANVAS_BACKGROUND_ROSTER_BATCH_SIZE")
+                .ok()
+                .as_deref(),
+            env::var("CANVAS_BACKGROUND_ROSTER_MAX_SIZE")
+                .ok()
+                .as_deref(),
+        ),
     ));
     let worker = CanvasSyncWorker::new(
         worker_repository,
@@ -183,14 +193,6 @@ async fn run_initialized_worker(
     info!(worker = ?worker, "starting standalone Rust Canvas sync worker candidate");
     worker.run_loop(stop).await?;
     Ok(())
-}
-
-fn required_env(name: &str) -> Result<String, Box<dyn Error + Send + Sync>> {
-    env::var(name)
-        .ok()
-        .map(|value| value.trim().to_owned())
-        .filter(|value| !value.is_empty())
-        .ok_or_else(|| format!("{name} is required").into())
 }
 
 fn optional_secret(name: &str) -> Result<Option<String>, Box<dyn Error + Send + Sync>> {
@@ -232,22 +234,6 @@ fn first_present_or_else<T, E>(
     }
 }
 
-fn bounded_usize(
-    name: &str,
-    default: usize,
-    minimum: usize,
-    maximum: usize,
-) -> Result<usize, Box<dyn Error + Send + Sync>> {
-    let value = env::var(name)
-        .ok()
-        .map(|value| value.trim().parse::<i64>())
-        .transpose()?
-        .unwrap_or(i64::try_from(default)?);
-    Ok(usize::try_from(
-        value.clamp(i64::try_from(minimum)?, i64::try_from(maximum)?),
-    )?)
-}
-
 fn env_bool(name: &str) -> bool {
     env::var(name).is_ok_and(|value| {
         matches!(
@@ -255,6 +241,29 @@ fn env_bool(name: &str) -> bool {
             "1" | "true" | "yes" | "on"
         )
     })
+}
+
+fn worker_log_filter(
+    rust_log: Option<&str>,
+    log_level: Option<&str>,
+) -> Result<EnvFilter, &'static str> {
+    if let Some(filter) = rust_log.and_then(|value| EnvFilter::try_new(value).ok()) {
+        return Ok(filter);
+    }
+    // Preserve the published, case-sensitive operator setting. Rust directives
+    // remain an explicit override; invalid directives retain fallback behavior.
+    let level = match log_level.unwrap_or("INFO") {
+        "NOTSET" => "trace",
+        "DEBUG" => "debug",
+        "INFO" => "info",
+        "WARNING" | "WARN" => "warn",
+        "ERROR" => "error",
+        // The worker emits no CRITICAL/FATAL events and tracing has no such
+        // severity. These thresholds suppress all of its ordinary events.
+        "CRITICAL" | "FATAL" => "off",
+        _ => return Err("invalid Canvas worker LOG_LEVEL"),
+    };
+    Ok(EnvFilter::new(level))
 }
 
 #[cfg(unix)]
@@ -324,6 +333,78 @@ fn comma_values(name: &str) -> Vec<String> {
 mod tests {
     use super::{completion_result, first_present_or_else, ExitCode};
     use mmf_runtime::managed_task::{CleanupOutcome, TaskCompletion, TaskOutcome};
+
+    #[test]
+    fn deployed_log_level_matches_frozen_published_thresholds() {
+        let reference: serde_json::Value = serde_json::from_str(include_str!(
+            "../../../../../contracts/canvas-worker-logging-oracle.json"
+        ))
+        .unwrap();
+        assert_eq!(
+            reference["source_sha256"],
+            "c5a7a692af7a808486b0a42d379699222bdf01f3995181c16da9d3466666e90a"
+        );
+        for case in reference["cases"].as_array().unwrap() {
+            let filter = super::worker_log_filter(None, case["input"].as_str());
+            let observed = match filter {
+                Err(error) => {
+                    assert_eq!(error, "invalid Canvas worker LOG_LEVEL");
+                    serde_json::json!({"error_class": "ValueError"})
+                }
+                Ok(filter) => {
+                    let subscriber = tracing_subscriber::fmt()
+                        .with_env_filter(filter)
+                        .with_writer(std::io::sink)
+                        .finish();
+                    let enabled: Vec<_> = tracing::subscriber::with_default(subscriber, || {
+                        [
+                            ("debug", tracing::enabled!(tracing::Level::DEBUG)),
+                            ("info", tracing::enabled!(tracing::Level::INFO)),
+                            ("warn", tracing::enabled!(tracing::Level::WARN)),
+                            ("error", tracing::enabled!(tracing::Level::ERROR)),
+                        ]
+                        .into_iter()
+                        .filter_map(|(name, enabled)| enabled.then_some(name))
+                        .collect()
+                    });
+                    serde_json::json!({"enabled": enabled})
+                }
+            };
+            assert_eq!(observed, case["observed"], "LOG_LEVEL={:?}", case["input"]);
+        }
+    }
+
+    #[test]
+    fn rust_log_override_and_invalid_directive_fallback_are_retained() {
+        assert_eq!(
+            super::worker_log_filter(Some("warn"), Some("invalid"))
+                .unwrap()
+                .to_string(),
+            "warn"
+        );
+        assert_eq!(
+            super::worker_log_filter(Some("marty_canvas_sync_worker=debug"), Some("ERROR"))
+                .unwrap()
+                .to_string(),
+            "marty_canvas_sync_worker=debug"
+        );
+        assert_eq!(
+            super::worker_log_filter(Some("["), Some("ERROR"))
+                .unwrap()
+                .to_string(),
+            "error"
+        );
+        assert_eq!(
+            super::worker_log_filter(Some("["), None)
+                .unwrap()
+                .to_string(),
+            "info"
+        );
+        assert_eq!(
+            super::worker_log_filter(Some("["), Some("invalid")).unwrap_err(),
+            "invalid Canvas worker LOG_LEVEL"
+        );
+    }
 
     #[test]
     fn cancelled_process_matches_published_python_sigint_exit_code() {

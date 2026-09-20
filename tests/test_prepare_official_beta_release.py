@@ -6,7 +6,11 @@ from pathlib import Path
 
 import pytest
 
-from scripts.prepare_official_beta_release import OfficialReleaseError, prepare_release
+from scripts.prepare_official_beta_release import (
+    OfficialReleaseError,
+    prepare_release,
+    validate_release_inputs,
+)
 
 
 UI_SHA = "1" * 40
@@ -132,9 +136,89 @@ def test_prepares_digest_only_official_beta_inputs(tmp_path: Path) -> None:
     assert repositories["marty-demo-recorder"]["revision"] == RECORDER_SHA
     assert all(
         record["source"] == "official-stack-manifest"
-        for name, record in repositories.items() if name != "marty-demo-recorder"
+        for name, record in repositories.items()
+        if name != "marty-demo-recorder"
     )
     assert "protected-recorder-main" not in json.dumps(plan)
+    shared = validate_release_inputs(
+        manifest_path, checksums, expected_ui_revision=UI_SHA
+    )
+    assert shared == {
+        key: plan[key]
+        for key in (
+            "release_version",
+            "marty_ui_sha",
+            "stack_manifest_sha256",
+            "images",
+        )
+    }
+
+
+def test_conformance_reuses_manifest_binding_and_verifies_its_source_floor(
+    tmp_path: Path,
+) -> None:
+    from types import SimpleNamespace
+    from scripts.conformance_native import verify_release
+
+    manifest, checksums = _write_release(tmp_path, _manifest())
+    calls = []
+    coverage = {
+        "schema": "marty.issuance-native-coverage/v1",
+        "native_http": [
+            {
+                "method": "POST",
+                "path": "/v1/issuance/initiate",
+                "operation": "initiate_issuance",
+                "initiation_behavior_contract": True,
+            },
+            {
+                "method": "POST",
+                "path": "/v1/issuance/didcomm/deliver",
+                "operation": "didcomm_deliver",
+                "didcomm_behavior_contract": True,
+            },
+            {
+                "method": "POST",
+                "path": "/v1/issued-credentials/{credential_id}/renew",
+                "operation": "renew_issued_credential",
+                "renewal_behavior_contract": True,
+            },
+        ],
+    }
+
+    def runner(command, **_):
+        calls.append(command)
+        return SimpleNamespace(returncode=0, stdout=json.dumps(coverage))
+
+    image = "ghcr.io/elevenid/marty-ui-oss/services@" + SERVICES_DIGEST
+    plan = verify_release(manifest, checksums, UI_SHA, image, runner=runner)
+    assert plan == validate_release_inputs(
+        manifest, checksums, expected_ui_revision=UI_SHA
+    )
+    assert calls == [
+        [
+            "gh",
+            "attestation",
+            "verify",
+            str(manifest.resolve()),
+            "--repo",
+            "ElevenID/marty-ui",
+        ],
+        ["git", "show", f"{UI_SHA}:contracts/issuance-native-coverage.json"],
+    ]
+    with pytest.raises(ValueError):
+        verify_release(manifest, checksums, UI_SHA, image[:-1] + "a", runner=runner)
+    coverage["native_http"].pop()
+    with pytest.raises(ValueError):
+        verify_release(manifest, checksums, UI_SHA, image, runner=runner)
+    with pytest.raises(ValueError):
+        verify_release(
+            manifest,
+            checksums,
+            UI_SHA,
+            image,
+            runner=lambda *_, **__: SimpleNamespace(returncode=1, stdout=""),
+        )
 
 
 def test_rejects_tampered_or_mismatched_release_inputs(tmp_path: Path) -> None:

@@ -1,0 +1,471 @@
+{
+  "schema": "marty.canvas-mirror-adapter-scenarios/v1",
+  "source_commit": "578e86ef43166be79add2d812e92ef650535edaa",
+  "boundary": "Additive direct original adapter calls, not ASGI or filesystem-secret proof",
+  "adapter": [
+    {
+      "id": "bridge_base"
+    },
+    {
+      "id": "badgr_base",
+      "provider": "badgr_api"
+    },
+    {
+      "id": "badgr_issuer_scope",
+      "provider": "badgr_api",
+      "env": {
+        "CANVAS_CREDENTIALS_ASSERTION_SCOPE": "issuers",
+        "CANVAS_CREDENTIALS_ISSUER_ID": "issuer / ü"
+      }
+    },
+    {
+      "id": "badgr_expiry_ob3",
+      "provider": "badgr_api",
+      "inputs": {
+        "credential": {
+          "expires_at": "2027-01-02T03:04:05+00:00"
+        },
+        "transaction": {
+          "claims": {
+            "email": "learner@example.edu",
+            "ob3AwardProperties": {
+              "level": "advanced",
+              "custom": 9007199254740991
+            },
+            "description": "From claim"
+          }
+        }
+      }
+    },
+    {
+      "id": "badgr_env_payload",
+      "provider": "badgr_api",
+      "env": {
+        "CANVAS_CREDENTIALS_ASSERTION_NARRATIVE": "Operator narrative",
+        "CANVAS_CREDENTIALS_RECIPIENT_HASHED": "no",
+        "CANVAS_CREDENTIALS_ALLOW_DUPLICATE_AWARDS": "yes"
+      }
+    },
+    {
+      "id": "bridge_credential_fallbacks",
+      "inputs": {
+        "credential": {
+          "issuer_did": null,
+          "applicant_id": null,
+          "subject_did": null
+        },
+        "transaction": {
+          "issuer_did_override": "did:web:override.example",
+          "credential_payload_format": "",
+          "applicant_id": "fallback-applicant",
+          "subject_did": "did:example:subject"
+        }
+      }
+    },
+    {
+      "id": "badgr_recipient_metadata_precedence",
+      "provider": "badgr_api",
+      "inputs": {
+        "delivery": {
+          "metadata": {
+            "provider": "badgr_api",
+            "badgeclass_id": "badge-1",
+            "recipient_email": "first@example.edu",
+            "learner_email": "second@example.edu",
+            "canvas_learner_email": "third@example.edu"
+          }
+        },
+        "transaction": {
+          "claims": {
+            "email": "fourth@example.edu"
+          }
+        }
+      }
+    },
+    {
+      "id": "badgr_recipient_email",
+      "provider": "badgr_api",
+      "inputs": {
+        "transaction": {
+          "claims": {
+            "email": "selected@example.edu"
+          }
+        }
+      }
+    },
+    {
+      "id": "badgr_recipient_learner_email",
+      "provider": "badgr_api",
+      "inputs": {
+        "transaction": {
+          "claims": {
+            "learner_email": "selected@example.edu"
+          }
+        }
+      }
+    },
+    {
+      "id": "badgr_recipient_recipient_email",
+      "provider": "badgr_api",
+      "inputs": {
+        "transaction": {
+          "claims": {
+            "recipient_email": "selected@example.edu"
+          }
+        }
+      }
+    },
+    {
+      "id": "badgr_recipient_holder_email",
+      "provider": "badgr_api",
+      "inputs": {
+        "transaction": {
+          "claims": {
+            "holder_email": "selected@example.edu"
+          }
+        }
+      }
+    },
+    {
+      "id": "badgr_recipient_lis_person_contact_email_primary",
+      "provider": "badgr_api",
+      "inputs": {
+        "transaction": {
+          "claims": {
+            "lis_person_contact_email_primary": "selected@example.edu"
+          }
+        }
+      }
+    },
+    {
+      "id": "badgr_recipient_missing",
+      "provider": "badgr_api",
+      "missing_recipient": true,
+      "expected_exception": "RuntimeError"
+    },
+    {
+      "id": "ownership_credential_organization_id",
+      "inputs": {
+        "credential": {
+          "organization_id": "foreign"
+        }
+      },
+      "expected_exception": "RuntimeError"
+    },
+    {
+      "id": "ownership_transaction_organization_id",
+      "inputs": {
+        "transaction": {
+          "organization_id": "foreign"
+        }
+      },
+      "expected_exception": "RuntimeError"
+    },
+    {
+      "id": "ownership_platform_organization_id",
+      "inputs": {
+        "platform": {
+          "organization_id": "foreign"
+        }
+      },
+      "expected_exception": "RuntimeError"
+    },
+    {
+      "id": "ownership_delivery_organization_id",
+      "env": {"CANVAS_PILOT_ORGANIZATION_IDS": "org-1,foreign"},
+      "inputs": {
+        "delivery": {
+          "organization_id": "foreign"
+        }
+      },
+      "expected_exception": "RuntimeError"
+    },
+    {
+      "id": "portable_foreign_organization",
+      "inputs": {
+        "delivery": {
+          "organization_id": "foreign"
+        }
+      },
+      "expected_exception": "RuntimeError"
+    },
+    {
+      "id": "ownership_delivery_credential_id",
+      "inputs": {
+        "delivery": {
+          "credential_id": "foreign"
+        }
+      },
+      "expected_exception": "RuntimeError"
+    },
+    {
+      "id": "ownership_delivery_transaction_id",
+      "inputs": {
+        "delivery": {
+          "transaction_id": "foreign"
+        }
+      },
+      "expected_exception": "RuntimeError"
+    },
+    {
+      "id": "ownership_credential_transaction_id",
+      "inputs": {
+        "credential": {
+          "transaction_id": "foreign"
+        }
+      },
+      "expected_exception": "RuntimeError"
+    },
+    {
+      "id": "ownership_transaction_id",
+      "inputs": {
+        "transaction": {
+          "id": "foreign"
+        }
+      },
+      "expected_exception": "RuntimeError"
+    },
+    {
+      "id": "bridge_metadata_sanitization",
+      "inputs": {
+        "delivery": {
+          "metadata": {
+            "api_token": "never-outbound-inline",
+            "api_token_file": "never-open",
+            "canvas_credentials": {
+              "api_token": "nested-never-outbound",
+              "api_token_secret_id": "missing",
+              "issuer_id": "metadata-issuer"
+            },
+            "public_custom": {
+              "value": "kept"
+            }
+          }
+        }
+      }
+    },
+    {
+      "id": "secret_alias_api_token_secret_id",
+      "inputs": {
+        "delivery": {
+          "metadata": {
+            "api_token_secret_id": "org_secret://foreign-org/selected-secret/"
+          }
+        }
+      },
+      "secrets": {
+        "selected-secret": "synthetic-selected-token"
+      }
+    },
+    {
+      "id": "secret_alias_api_token_secret_ref",
+      "inputs": {
+        "delivery": {
+          "metadata": {
+            "api_token_secret_ref": "org_secret://foreign-org/selected-secret/"
+          }
+        }
+      },
+      "secrets": {
+        "selected-secret": "synthetic-selected-token"
+      }
+    },
+    {
+      "id": "secret_alias_api_token_ref",
+      "inputs": {
+        "delivery": {
+          "metadata": {
+            "api_token_ref": "org_secret://foreign-org/selected-secret/"
+          }
+        }
+      },
+      "secrets": {
+        "selected-secret": "synthetic-selected-token"
+      }
+    },
+    {
+      "id": "secret_alias_canvas_credentials_api_token_secret_id",
+      "inputs": {
+        "delivery": {
+          "metadata": {
+            "canvas_credentials_api_token_secret_id": "org_secret://foreign-org/selected-secret/"
+          }
+        }
+      },
+      "secrets": {
+        "selected-secret": "synthetic-selected-token"
+      }
+    },
+    {
+      "id": "secret_alias_canvas_credentials_api_token_secret_ref",
+      "inputs": {
+        "delivery": {
+          "metadata": {
+            "canvas_credentials_api_token_secret_ref": "org_secret://foreign-org/selected-secret/"
+          }
+        }
+      },
+      "secrets": {
+        "selected-secret": "synthetic-selected-token"
+      }
+    },
+    {
+      "id": "secret_ordered_sources",
+      "inputs": {
+        "delivery": {
+          "metadata": {
+            "canvas_credentials": {
+              "api_token_secret_id": "empty"
+            },
+            "canvas_credentials_config": {
+              "api_token_secret_id": "selected"
+            },
+            "provider_config": {
+              "api_token_secret_id": "later"
+            }
+          }
+        }
+      },
+      "secrets": {
+        "empty": "",
+        "selected": "synthetic-selected-token",
+        "later": "synthetic-later-token"
+      }
+    },
+    {
+      "id": "secret_operator_fallback",
+      "inputs": {
+        "delivery": {
+          "metadata": {
+            "canvas_credentials": {
+              "api_token_secret_id": "missing"
+            }
+          }
+        }
+      }
+    },
+    {
+      "id": "secret_lookup_failure",
+      "inputs": {
+        "delivery": {
+          "metadata": {
+            "api_token_secret_id": "failure"
+          }
+        }
+      },
+      "secret_failure": true,
+      "expected_exception": "RuntimeError"
+    },
+    {
+      "id": "badgr_token_required",
+      "provider": "badgr_api",
+      "env": {
+        "CANVAS_CREDENTIALS_API_TOKEN": ""
+      },
+      "expected_exception": "RuntimeError"
+    },
+    {
+      "id": "bridge_http_302",
+      "provider_status": 302,
+      "provider_body": "synthetic provider error",
+      "expected_exception": "RuntimeError"
+    },
+    {
+      "id": "badgr_api_http_302",
+      "provider": "badgr_api",
+      "provider_status": 302,
+      "provider_body": "synthetic provider error",
+      "expected_exception": "RuntimeError"
+    },
+    {
+      "id": "bridge_http_400",
+      "provider_status": 400,
+      "provider_body": "synthetic provider error",
+      "expected_exception": "RuntimeError"
+    },
+    {
+      "id": "badgr_api_http_400",
+      "provider": "badgr_api",
+      "provider_status": 400,
+      "provider_body": "synthetic provider error",
+      "expected_exception": "RuntimeError"
+    },
+    {
+      "id": "bridge_http_401",
+      "provider_status": 401,
+      "provider_body": "synthetic provider error",
+      "expected_exception": "RuntimeError"
+    },
+    {
+      "id": "badgr_api_http_401",
+      "provider": "badgr_api",
+      "provider_status": 401,
+      "provider_body": "synthetic provider error",
+      "expected_exception": "RuntimeError"
+    },
+    {
+      "id": "bridge_http_503",
+      "provider_status": 503,
+      "provider_body": "synthetic provider error",
+      "expected_exception": "RuntimeError"
+    },
+    {
+      "id": "badgr_api_http_503",
+      "provider": "badgr_api",
+      "provider_status": 503,
+      "provider_body": "synthetic provider error",
+      "expected_exception": "RuntimeError"
+    },
+    {
+      "id": "bridge_response_falsey_ids",
+      "provider_body": "{\"credential_id\":0,\"id\":false,\"credential\":{\"id\":\"nested-id\"},\"issuer\":{\"id\":\"nested-issuer\"}}"
+    },
+    {
+      "id": "bridge_response_scalar_id",
+      "provider_body": "{\"id\":17,\"issuer_id\":false}"
+    },
+    {
+      "id": "bridge_response_container_id",
+      "provider_body": "{\"id\":{\"z\":[1,true,null]},\"issuer_id\":[\"issuer\"]}"
+    },
+    {
+      "id": "bridge_response_surrogate_id",
+      "provider_body": "{\"id\":\"\\ud800\",\"issuer_id\":\"issuer\"}"
+    },
+    {
+      "id": "bridge_response_nonfinite_id",
+      "provider_body": "{\"id\":NaN}"
+    },
+    {
+      "id": "bridge_response_string_nan_id",
+      "provider_body": "{\"id\":\"NaN\"}"
+    },
+    {
+      "id": "bridge_response_invalid_json",
+      "provider_body": "not JSON"
+    },
+    {
+      "id": "bridge_response_unicode_excerpt",
+      "provider_body": "éééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééé"
+    },
+    {
+      "id": "badgr_missing_id",
+      "provider": "badgr_api",
+      "provider_body": "{}",
+      "expected_exception": "RuntimeError"
+    },
+    {
+      "id": "bridge_utf16_json",
+      "provider_body": "{\"id\":\"encoded-id\"}",
+      "provider_encoding": "utf-16",
+      "provider_content_type": "application/json; charset=utf-16"
+    },
+    {
+      "id": "bridge_unknown_codec_error",
+      "provider_status": 503,
+      "provider_body": "error",
+      "provider_content_type": "text/plain; charset=not-a-codec",
+      "expected_exception": "RuntimeError"
+    }
+  ]
+}

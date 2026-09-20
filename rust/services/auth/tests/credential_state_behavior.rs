@@ -8,7 +8,7 @@ use marty_auth::{
     CredentialVerifiedPayload, PendingCredentialLogin, AUTH_CALLBACK_AUDIENCE,
 };
 use mmf_data::MemoryCache;
-use mmf_push::{payload_digest, sign_event};
+use mmf_push::{canonical_event_bytes, payload_digest, sign_event, verify_event_signature};
 use serde_json::{json, Value};
 
 fn fixture() -> Value {
@@ -17,6 +17,103 @@ fn fixture() -> Value {
         "/../../../contracts/auth-login-state-behavior.json"
     )))
     .expect("auth login-state fixture")
+}
+
+fn webhook_helper_reference() -> Value {
+    let reference: Value = serde_json::from_str(include_str!(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/../../../contracts/auth-webhook-helper-ascii-reference.json"
+    )))
+    .expect("captured Python ASCII webhook helper contract");
+    assert_eq!(
+        reference["schema"],
+        "marty.auth-webhook-helper-ascii-reference/v1"
+    );
+    reference
+}
+
+fn verify_reference_event(signature: &str, secret: &str, event: &Value) -> bool {
+    verify_event_signature(
+        signature,
+        secret,
+        event["audience"].as_str().unwrap(),
+        event["event"].as_str().unwrap(),
+        event["event_id"].as_str().unwrap(),
+        event["timestamp"].as_str().unwrap(),
+        &event["payload"],
+    )
+}
+
+#[test]
+fn callback_signature_matches_retired_python_ascii_contract() {
+    let reference = webhook_helper_reference();
+    let case = &reference["signed_event"];
+    let event = &case["event"];
+    let secret = case["secret"].as_str().unwrap();
+    assert_eq!(event["audience"], AUTH_CALLBACK_AUDIENCE);
+    let canonical = canonical_event_bytes(
+        event["audience"].as_str().unwrap(),
+        event["event"].as_str().unwrap(),
+        event["event_id"].as_str().unwrap(),
+        event["timestamp"].as_str().unwrap(),
+        &event["payload"],
+    )
+    .unwrap();
+    assert_eq!(
+        canonical,
+        case["canonical_event_utf8"].as_str().unwrap().as_bytes()
+    );
+    let signature = sign_event(
+        secret,
+        event["audience"].as_str().unwrap(),
+        event["event"].as_str().unwrap(),
+        event["event_id"].as_str().unwrap(),
+        event["timestamp"].as_str().unwrap(),
+        &event["payload"],
+    )
+    .unwrap();
+    assert_eq!(signature, case["signature"].as_str().unwrap());
+    assert_eq!(case["valid"], true);
+    assert!(verify_reference_event(&signature, secret, event));
+    let tampered = case["tampered"].as_array().unwrap();
+    assert_eq!(tampered.len(), 2);
+    for (mutation, field) in tampered.iter().zip(["event_id", "audience"]) {
+        assert_eq!(mutation["field"], field);
+        assert_eq!(mutation["valid"], false);
+        let mut changed = event.clone();
+        changed[field] = mutation["value"].clone();
+        assert_ne!(changed[field], event[field]);
+        assert!(!verify_reference_event(&signature, secret, &changed));
+    }
+}
+
+#[test]
+fn callback_signature_preserves_retired_python_weak_secret_rejection() {
+    let reference = webhook_helper_reference();
+    let case = &reference["weak_event"];
+    let event = &case["event"];
+    let secret = case["secret"].as_str().unwrap();
+    let error = sign_event(
+        secret,
+        event["audience"].as_str().unwrap(),
+        event["event"].as_str().unwrap(),
+        event["event_id"].as_str().unwrap(),
+        event["timestamp"].as_str().unwrap(),
+        &event["payload"],
+    )
+    .expect_err("the Python reference rejects weak signing secrets");
+    // Match the original test's diagnostic substring, not Python exception
+    // identity or native error wrapping. All cryptography stays in mmf-push.
+    let detail = case["sign_error_contains"].as_str().unwrap();
+    assert_eq!(detail, "at least 32 bytes");
+    assert!(case["sign_error"].as_str().unwrap().contains(detail));
+    assert!(error.to_string().contains(detail));
+    assert_eq!(case["valid"], false);
+    assert!(!verify_reference_event(
+        case["signature"].as_str().unwrap(),
+        secret,
+        event,
+    ));
 }
 
 fn policy() -> CredentialCallbackPolicy {

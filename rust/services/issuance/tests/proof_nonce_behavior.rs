@@ -178,12 +178,22 @@ async fn proof_nonce_reuses_the_legacy_oauth_rate_limit_boundary() {
 
 #[tokio::test]
 async fn token_and_nonce_share_one_oauth_rate_limit_budget() {
+    assert_shared_budget(TokenRateLimiter::new(1, Duration::from_secs(60))).await;
+}
+
+#[tokio::test]
+async fn python_configured_token_and_nonce_share_one_oauth_rate_limit_budget() {
+    assert_shared_budget(TokenRateLimiter::from_python_config(
+        "+1".parse().unwrap(),
+        "6_0".parse().unwrap(),
+    ))
+    .await;
+}
+
+async fn assert_shared_budget(limiter: TokenRateLimiter) {
     let contract = contract();
     let repository = ContractRepository::new("stored");
-    let app = app(
-        repository.clone(),
-        TokenRateLimiter::new(1, Duration::from_secs(60)),
-    );
+    let app = app(repository.clone(), limiter);
     let token = Request::post("/v1/issuance/token")
         .header("content-type", "application/x-www-form-urlencoded")
         .body(Body::from(

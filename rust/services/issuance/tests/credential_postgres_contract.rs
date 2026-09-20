@@ -217,6 +217,11 @@ async fn credential_repository_is_hmac_compatible_atomic_and_canvas_safe() {
     .unwrap();
 
     seed_canvas_guard_contract(&pool).await;
+    // The renewal source has real persisted original-transaction/application history.
+    sqlx::query("INSERT INTO issuance_service.issuance_transactions
+        (id, organization_id, credential_template_id, application_id, status, pre_auth_code)
+        VALUES ('source-transaction', 'org-a', 'template-a', 'application-a', 'issued', 'source-pre-auth')")
+        .execute(&pool).await.unwrap();
     sqlx::query(
         "INSERT INTO issuance_service.issued_credentials
              (id, transaction_id, organization_id, credential_template_id,

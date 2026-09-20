@@ -1,0 +1,13 @@
+{
+  "schema": "marty.canvas-worker-oauth-revocation-counters-scenarios/v1",
+  "base_scenario": "canvas-worker-oauth-revocation-fence-scenarios.json",
+  "scope": "Actual cycle API return values with real repository, encrypted vault and HTTPS; not a standalone-loop or job-processor acceptance claim",
+  "cases": [
+    {"name": "cycle_success", "status": 200, "body": {}},
+    {"name": "cycle_retry", "status": 429, "headers": {"Retry-After": "37"}, "body": {}, "delay_bounds": [37,37]},
+    {"name": "cycle_owner_lost_success", "status": 200, "body": {}, "hold_response": true, "replace_owner": true},
+    {"name": "cycle_owner_lost_retry", "status": 429, "headers": {"Retry-After": "37"}, "body": {}, "hold_response": true, "replace_owner": true}
+  ],
+  "before_start_sql": ["CREATE TABLE issuance_service.synthetic_revocation_cycle_result (id boolean PRIMARY KEY DEFAULT true CHECK(id),result jsonb NOT NULL)"],
+  "cycle_result_sql": "SELECT result FROM issuance_service.synthetic_revocation_cycle_result"
+}

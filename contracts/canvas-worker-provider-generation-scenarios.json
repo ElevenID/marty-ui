@@ -1,0 +1,11 @@
+{
+  "schema": "marty.canvas-worker-provider-generation-scenarios/v1",
+  "extends": "canvas-worker-provider-final-scenarios.json",
+  "scope": "Actual attempt-eight renewal/crash and real expiry, with a committed target/binding generation change after the old process exits. Preserve Rust's stronger generation fence; never mutate running job/lease/clock state or substitute Python's weaker target disable behavior.",
+  "generation_change_sql": [
+    "UPDATE issuance_service.canvas_evidence_sync_targets SET config_version=2,next_run_at=clock_timestamp()+interval '1 day',updated_at=clock_timestamp() WHERE id='target-review' AND config_version=1 AND enabled=true",
+    "UPDATE issuance_service.canvas_program_bindings SET config_version=2,validated_config_version=2 WHERE id='binding-review' AND config_version=1 AND validated_config_version=1"
+  ],
+  "target_row_sql": "SELECT to_jsonb(t) FROM issuance_service.canvas_evidence_sync_targets t WHERE id='target-review'",
+  "job_row_sql": "SELECT to_jsonb(j) FROM issuance_service.canvas_evidence_sync_jobs j WHERE id='worker-final-job'"
+}

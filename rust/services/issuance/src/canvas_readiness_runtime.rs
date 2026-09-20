@@ -113,7 +113,8 @@ impl CanvasReadinessIssuerResolver for HttpIssuerContextResolver {
         organization_id: &str,
         configuration: &CanvasReadinessIssuerConfiguration,
     ) -> Result<Value, CanvasReadinessDependencyError> {
-        self.resolve_raw(
+        self.resolve_raw_for(
+            crate::signing_error_detail::SigningOperation::Resolve,
             organization_id,
             &configuration.issuer_did,
             None,

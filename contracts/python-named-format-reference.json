@@ -1,0 +1,5854 @@
+{
+  "coverage": "fixed pairwise string format axes and targeted precedence; not full object grammar",
+  "fields": {
+    "empty": "",
+    "precision": "2",
+    "value": "a\u00e9\ud83d\ude00\ud800",
+    "width": "6"
+  },
+  "observations": [
+    {
+      "error": {
+        "message": "Single '{' encountered in format string",
+        "type": "ValueError"
+      },
+      "id": "format-0000",
+      "template": "{"
+    },
+    {
+      "error": {
+        "message": "'0\\x00'",
+        "type": "KeyError"
+      },
+      "id": "format-0001",
+      "template": "{0\u0000}"
+    },
+    {
+      "error": {
+        "message": "'0x'",
+        "type": "KeyError"
+      },
+      "id": "format-0002",
+      "template": "{0x}"
+    },
+    {
+      "error": {
+        "message": "Replacement index 0 out of range for positional args tuple",
+        "type": "IndexError"
+      },
+      "id": "format-0003",
+      "template": "{0}"
+    },
+    {
+      "error": {
+        "message": "'0\u96ea'",
+        "type": "KeyError"
+      },
+      "id": "format-0004",
+      "template": "{0\u96ea}"
+    },
+    {
+      "error": {
+        "message": "'2\\x00'",
+        "type": "KeyError"
+      },
+      "id": "format-0005",
+      "template": "{2\u0000}"
+    },
+    {
+      "error": {
+        "message": "'2x'",
+        "type": "KeyError"
+      },
+      "id": "format-0006",
+      "template": "{2x}"
+    },
+    {
+      "error": {
+        "message": "Replacement index 2 out of range for positional args tuple",
+        "type": "IndexError"
+      },
+      "id": "format-0007",
+      "template": "{2}"
+    },
+    {
+      "error": {
+        "message": "'2\u96ea'",
+        "type": "KeyError"
+      },
+      "id": "format-0008",
+      "template": "{2\u96ea}"
+    },
+    {
+      "error": {
+        "message": "Too many decimal digits in format string",
+        "type": "ValueError"
+      },
+      "id": "format-0009",
+      "template": "{999999999999999999999999999999\u0000}"
+    },
+    {
+      "error": {
+        "message": "Too many decimal digits in format string",
+        "type": "ValueError"
+      },
+      "id": "format-0010",
+      "template": "{999999999999999999999999999999x}"
+    },
+    {
+      "error": {
+        "message": "Too many decimal digits in format string",
+        "type": "ValueError"
+      },
+      "id": "format-0011",
+      "template": "{999999999999999999999999999999}"
+    },
+    {
+      "error": {
+        "message": "Too many decimal digits in format string",
+        "type": "ValueError"
+      },
+      "id": "format-0012",
+      "template": "{999999999999999999999999999999\u96ea}"
+    },
+    {
+      "error": {
+        "message": "'missing'",
+        "type": "KeyError"
+      },
+      "id": "format-0013",
+      "template": "{missing:{width:{precision}}}"
+    },
+    {
+      "error": {
+        "message": "end of string while looking for conversion specifier",
+        "type": "ValueError"
+      },
+      "id": "format-0014",
+      "template": "{value!"
+    },
+    {
+      "id": "format-0015",
+      "template": "{value!\u0000:>8}",
+      "value": "    a\u00e9\ud83d\ude00\ud800"
+    },
+    {
+      "error": {
+        "message": "'missing'",
+        "type": "KeyError"
+      },
+      "id": "format-0016",
+      "template": "{value!\u0000:{missing}}"
+    },
+    {
+      "error": {
+        "message": "Max string recursion exceeded",
+        "type": "ValueError"
+      },
+      "id": "format-0017",
+      "template": "{value!\u0000:{width:{precision}}}"
+    },
+    {
+      "error": {
+        "message": "expected ':' after conversion specifier",
+        "type": "ValueError"
+      },
+      "id": "format-0018",
+      "template": "{value!\u0000x}"
+    },
+    {
+      "id": "format-0019",
+      "template": "{value!\u0000}",
+      "value": "a\u00e9\ud83d\ude00\ud800"
+    },
+    {
+      "error": {
+        "message": "Unknown conversion specifier \\x1",
+        "type": "ValueError"
+      },
+      "id": "format-0020",
+      "template": "{value!\u0001:>8}"
+    },
+    {
+      "error": {
+        "message": "Unknown conversion specifier \\x1",
+        "type": "ValueError"
+      },
+      "id": "format-0021",
+      "template": "{value!\u0001:{missing}}"
+    },
+    {
+      "error": {
+        "message": "Unknown conversion specifier \\x1",
+        "type": "ValueError"
+      },
+      "id": "format-0022",
+      "template": "{value!\u0001:{width:{precision}}}"
+    },
+    {
+      "error": {
+        "message": "expected ':' after conversion specifier",
+        "type": "ValueError"
+      },
+      "id": "format-0023",
+      "template": "{value!\u0001x}"
+    },
+    {
+      "error": {
+        "message": "Unknown conversion specifier \\x1",
+        "type": "ValueError"
+      },
+      "id": "format-0024",
+      "template": "{value!\u0001}"
+    },
+    {
+      "id": "format-0025",
+      "template": "{value!a:>8}",
+      "value": "'a\\xe9\\U0001f600\\ud800'"
+    },
+    {
+      "error": {
+        "message": "'missing'",
+        "type": "KeyError"
+      },
+      "id": "format-0026",
+      "template": "{value!a:{missing}}"
+    },
+    {
+      "error": {
+        "message": "Max string recursion exceeded",
+        "type": "ValueError"
+      },
+      "id": "format-0027",
+      "template": "{value!a:{width:{precision}}}"
+    },
+    {
+      "error": {
+        "message": "expected ':' after conversion specifier",
+        "type": "ValueError"
+      },
+      "id": "format-0028",
+      "template": "{value!ax}"
+    },
+    {
+      "id": "format-0029",
+      "template": "{value!a}",
+      "value": "'a\\xe9\\U0001f600\\ud800'"
+    },
+    {
+      "error": {
+        "message": "Unknown conversion specifier q",
+        "type": "ValueError"
+      },
+      "id": "format-0030",
+      "template": "{value!q:{width:{precision}}}"
+    },
+    {
+      "id": "format-0031",
+      "template": "{value!r:>8}",
+      "value": "'a\u00e9\ud83d\ude00\\ud800'"
+    },
+    {
+      "error": {
+        "message": "'missing'",
+        "type": "KeyError"
+      },
+      "id": "format-0032",
+      "template": "{value!r:{missing}}"
+    },
+    {
+      "error": {
+        "message": "Max string recursion exceeded",
+        "type": "ValueError"
+      },
+      "id": "format-0033",
+      "template": "{value!r:{width:{precision}}}"
+    },
+    {
+      "error": {
+        "message": "expected ':' after conversion specifier",
+        "type": "ValueError"
+      },
+      "id": "format-0034",
+      "template": "{value!rx}"
+    },
+    {
+      "id": "format-0035",
+      "template": "{value!r}",
+      "value": "'a\u00e9\ud83d\ude00\\ud800'"
+    },
+    {
+      "id": "format-0036",
+      "template": "{value!s:>8}",
+      "value": "    a\u00e9\ud83d\ude00\ud800"
+    },
+    {
+      "error": {
+        "message": "'missing'",
+        "type": "KeyError"
+      },
+      "id": "format-0037",
+      "template": "{value!s:{missing}}"
+    },
+    {
+      "error": {
+        "message": "Max string recursion exceeded",
+        "type": "ValueError"
+      },
+      "id": "format-0038",
+      "template": "{value!s:{width:{precision}}}"
+    },
+    {
+      "error": {
+        "message": "expected ':' after conversion specifier",
+        "type": "ValueError"
+      },
+      "id": "format-0039",
+      "template": "{value!sx}"
+    },
+    {
+      "id": "format-0040",
+      "template": "{value!s}",
+      "value": "a\u00e9\ud83d\ude00\ud800"
+    },
+    {
+      "error": {
+        "message": "unmatched '{' in format spec",
+        "type": "ValueError"
+      },
+      "id": "format-0041",
+      "template": "{value!}"
+    },
+    {
+      "error": {
+        "message": "Unknown conversion specifier \\x7f",
+        "type": "ValueError"
+      },
+      "id": "format-0042",
+      "template": "{value!\u007f:>8}"
+    },
+    {
+      "error": {
+        "message": "Unknown conversion specifier \\x7f",
+        "type": "ValueError"
+      },
+      "id": "format-0043",
+      "template": "{value!\u007f:{missing}}"
+    },
+    {
+      "error": {
+        "message": "Unknown conversion specifier \\x7f",
+        "type": "ValueError"
+      },
+      "id": "format-0044",
+      "template": "{value!\u007f:{width:{precision}}}"
+    },
+    {
+      "error": {
+        "message": "expected ':' after conversion specifier",
+        "type": "ValueError"
+      },
+      "id": "format-0045",
+      "template": "{value!\u007fx}"
+    },
+    {
+      "error": {
+        "message": "Unknown conversion specifier \\x7f",
+        "type": "ValueError"
+      },
+      "id": "format-0046",
+      "template": "{value!\u007f}"
+    },
+    {
+      "error": {
+        "message": "Unknown conversion specifier \\xe9",
+        "type": "ValueError"
+      },
+      "id": "format-0047",
+      "template": "{value!\u00e9:>8}"
+    },
+    {
+      "error": {
+        "message": "Unknown conversion specifier \\xe9",
+        "type": "ValueError"
+      },
+      "id": "format-0048",
+      "template": "{value!\u00e9:{missing}}"
+    },
+    {
+      "error": {
+        "message": "Unknown conversion specifier \\xe9",
+        "type": "ValueError"
+      },
+      "id": "format-0049",
+      "template": "{value!\u00e9:{width:{precision}}}"
+    },
+    {
+      "error": {
+        "message": "expected ':' after conversion specifier",
+        "type": "ValueError"
+      },
+      "id": "format-0050",
+      "template": "{value!\u00e9x}"
+    },
+    {
+      "error": {
+        "message": "Unknown conversion specifier \\xe9",
+        "type": "ValueError"
+      },
+      "id": "format-0051",
+      "template": "{value!\u00e9}"
+    },
+    {
+      "error": {
+        "message": "Unknown conversion specifier \\x96ea",
+        "type": "ValueError"
+      },
+      "id": "format-0052",
+      "template": "{value!\u96ea:>8}"
+    },
+    {
+      "error": {
+        "message": "Unknown conversion specifier \\x96ea",
+        "type": "ValueError"
+      },
+      "id": "format-0053",
+      "template": "{value!\u96ea:{missing}}"
+    },
+    {
+      "error": {
+        "message": "Unknown conversion specifier \\x96ea",
+        "type": "ValueError"
+      },
+      "id": "format-0054",
+      "template": "{value!\u96ea:{width:{precision}}}"
+    },
+    {
+      "error": {
+        "message": "expected ':' after conversion specifier",
+        "type": "ValueError"
+      },
+      "id": "format-0055",
+      "template": "{value!\u96eax}"
+    },
+    {
+      "error": {
+        "message": "Unknown conversion specifier \\x96ea",
+        "type": "ValueError"
+      },
+      "id": "format-0056",
+      "template": "{value!\u96ea}"
+    },
+    {
+      "error": {
+        "message": "Unknown conversion specifier \\xd800",
+        "type": "ValueError"
+      },
+      "id": "format-0057",
+      "template": "{value!\ud800:>8}"
+    },
+    {
+      "error": {
+        "message": "Unknown conversion specifier \\xd800",
+        "type": "ValueError"
+      },
+      "id": "format-0058",
+      "template": "{value!\ud800:{missing}}"
+    },
+    {
+      "error": {
+        "message": "Unknown conversion specifier \\xd800",
+        "type": "ValueError"
+      },
+      "id": "format-0059",
+      "template": "{value!\ud800:{width:{precision}}}"
+    },
+    {
+      "error": {
+        "message": "expected ':' after conversion specifier",
+        "type": "ValueError"
+      },
+      "id": "format-0060",
+      "template": "{value!\ud800x}"
+    },
+    {
+      "error": {
+        "message": "Unknown conversion specifier \\xd800",
+        "type": "ValueError"
+      },
+      "id": "format-0061",
+      "template": "{value!\ud800}"
+    },
+    {
+      "error": {
+        "message": "Empty attribute in format string",
+        "type": "ValueError"
+      },
+      "id": "format-0062",
+      "template": "{value..missing}"
+    },
+    {
+      "error": {
+        "message": "Unknown format code '\\x0' for object of type 'str'",
+        "type": "ValueError"
+      },
+      "id": "format-0063",
+      "template": "{value:\u0000}"
+    },
+    {
+      "error": {
+        "message": "Unknown format code '\\x0' for object of type 'str'",
+        "type": "ValueError"
+      },
+      "id": "format-0064",
+      "template": "{value: \u0000}"
+    },
+    {
+      "error": {
+        "message": "Space not allowed in string format specifier",
+        "type": "ValueError"
+      },
+      "id": "format-0065",
+      "template": "{value: #}"
+    },
+    {
+      "error": {
+        "message": "Unknown format code '%' for object of type 'str'",
+        "type": "ValueError"
+      },
+      "id": "format-0066",
+      "template": "{value: %}"
+    },
+    {
+      "error": {
+        "message": "Cannot specify both ',' and '_'.",
+        "type": "ValueError"
+      },
+      "id": "format-0067",
+      "template": "{value: ,_}"
+    },
+    {
+      "error": {
+        "message": "Cannot specify ',' with 's'.",
+        "type": "ValueError"
+      },
+      "id": "format-0068",
+      "template": "{value: ,}"
+    },
+    {
+      "error": {
+        "message": "Space not allowed in string format specifier",
+        "type": "ValueError"
+      },
+      "id": "format-0069",
+      "template": "{value: .0}"
+    },
+    {
+      "error": {
+        "message": "Space not allowed in string format specifier",
+        "type": "ValueError"
+      },
+      "id": "format-0070",
+      "template": "{value: .2}"
+    },
+    {
+      "error": {
+        "message": "Format specifier missing precision",
+        "type": "ValueError"
+      },
+      "id": "format-0071",
+      "template": "{value: .}"
+    },
+    {
+      "error": {
+        "message": "Space not allowed in string format specifier",
+        "type": "ValueError"
+      },
+      "id": "format-0072",
+      "template": "{value: .\u0662}"
+    },
+    {
+      "error": {
+        "message": "Space not allowed in string format specifier",
+        "type": "ValueError"
+      },
+      "id": "format-0073",
+      "template": "{value: 04}"
+    },
+    {
+      "error": {
+        "message": "Space not allowed in string format specifier",
+        "type": "ValueError"
+      },
+      "id": "format-0074",
+      "template": "{value: 0}"
+    },
+    {
+      "error": {
+        "message": "Space not allowed in string format specifier",
+        "type": "ValueError"
+      },
+      "id": "format-0075",
+      "template": "{value: 4}"
+    },
+    {
+      "error": {
+        "message": "Unknown format code 'd' for object of type 'str'",
+        "type": "ValueError"
+      },
+      "id": "format-0076",
+      "template": "{value: =04,.2d}"
+    },
+    {
+      "error": {
+        "message": "Cannot specify ',' with 'n'.",
+        "type": "ValueError"
+      },
+      "id": "format-0077",
+      "template": "{value: =04,.2n}"
+    },
+    {
+      "error": {
+        "message": "Cannot specify ',' with 's'.",
+        "type": "ValueError"
+      },
+      "id": "format-0078",
+      "template": "{value: =04,.2s}"
+    },
+    {
+      "error": {
+        "message": "Cannot specify ',' with 'x'.",
+        "type": "ValueError"
+      },
+      "id": "format-0079",
+      "template": "{value: =04,.2x}"
+    },
+    {
+      "error": {
+        "message": "Cannot specify ',' with 's'.",
+        "type": "ValueError"
+      },
+      "id": "format-0080",
+      "template": "{value: =04,.2}"
+    },
+    {
+      "error": {
+        "message": "Cannot specify both ',' and '_'.",
+        "type": "ValueError"
+      },
+      "id": "format-0081",
+      "template": "{value: =04,_.2d}"
+    },
+    {
+      "error": {
+        "message": "Cannot specify both ',' and '_'.",
+        "type": "ValueError"
+      },
+      "id": "format-0082",
+      "template": "{value: =04,_.2n}"
+    },
+    {
+      "error": {
+        "message": "Cannot specify both ',' and '_'.",
+        "type": "ValueError"
+      },
+      "id": "format-0083",
+      "template": "{value: =04,_.2s}"
+    },
+    {
+      "error": {
+        "message": "Cannot specify both ',' and '_'.",
+        "type": "ValueError"
+      },
+      "id": "format-0084",
+      "template": "{value: =04,_.2x}"
+    },
+    {
+      "error": {
+        "message": "Cannot specify both ',' and '_'.",
+        "type": "ValueError"
+      },
+      "id": "format-0085",
+      "template": "{value: =04,_.2}"
+    },
+    {
+      "error": {
+        "message": "Unknown format code 'd' for object of type 'str'",
+        "type": "ValueError"
+      },
+      "id": "format-0086",
+      "template": "{value: =04.2d}"
+    },
+    {
+      "error": {
+        "message": "Unknown format code 'n' for object of type 'str'",
+        "type": "ValueError"
+      },
+      "id": "format-0087",
+      "template": "{value: =04.2n}"
+    },
+    {
+      "error": {
+        "message": "'=' alignment not allowed in string format specifier",
+        "type": "ValueError"
+      },
+      "id": "format-0088",
+      "template": "{value: =04.2s}"
+    },
+    {
+      "error": {
+        "message": "Unknown format code 'x' for object of type 'str'",
+        "type": "ValueError"
+      },
+      "id": "format-0089",
+      "template": "{value: =04.2x}"
+    },
+    {
+      "error": {
+        "message": "'=' alignment not allowed in string format specifier",
+        "type": "ValueError"
+      },
+      "id": "format-0090",
+      "template": "{value: =04.2}"
+    },
+    {
+      "error": {
+        "message": "Unknown format code 'd' for object of type 'str'",
+        "type": "ValueError"
+      },
+      "id": "format-0091",
+      "template": "{value: =04_.2d}"
+    },
+    {
+      "error": {
+        "message": "Cannot specify '_' with 'n'.",
+        "type": "ValueError"
+      },
+      "id": "format-0092",
+      "template": "{value: =04_.2n}"
+    },
+    {
+      "error": {
+        "message": "Cannot specify '_' with 's'.",
+        "type": "ValueError"
+      },
+      "id": "format-0093",
+      "template": "{value: =04_.2s}"
+    },
+    {
+      "error": {
+        "message": "Unknown format code 'x' for object of type 'str'",
+        "type": "ValueError"
+      },
+      "id": "format-0094",
+      "template": "{value: =04_.2x}"
+    },
+    {
+      "error": {
+        "message": "Cannot specify '_' with 's'.",
+        "type": "ValueError"
+      },
+      "id": "format-0095",
+      "template": "{value: =04_.2}"
+    },
+    {
+      "error": {
+        "message": "Cannot specify both ',' and '_'.",
+        "type": "ValueError"
+      },
+      "id": "format-0096",
+      "template": "{value: _,}"
+    },
+    {
+      "error": {
+        "message": "Cannot specify '_' with 's'.",
+        "type": "ValueError"
+      },
+      "id": "format-0097",
+      "template": "{value: _}"
+    },
+    {
+      "error": {
+        "message": "Unknown format code 'd' for object of type 'str'",
+        "type": "ValueError"
+      },
+      "id": "format-0098",
+      "template": "{value: d}"
+    },
+    {
+      "error": {
+        "message": "Unknown format code 'n' for object of type 'str'",
+        "type": "ValueError"
+      },
+      "id": "format-0099",
+      "template": "{value: n}"
+    },
+    {
+      "error": {
+        "message": "Space not allowed in string format specifier",
+        "type": "ValueError"
+      },
+      "id": "format-0100",
+      "template": "{value: s}"
+    },
+    {
+      "error": {
+        "message": "Unknown format code 'x' for object of type 'str'",
+        "type": "ValueError"
+      },
+      "id": "format-0101",
+      "template": "{value: x}"
+    },
+    {
+      "error": {
+        "message": "Space not allowed in string format specifier",
+        "type": "ValueError"
+      },
+      "id": "format-0102",
+      "template": "{value: z#}"
+    },
+    {
+      "error": {
+        "message": "Space not allowed in string format specifier",
+        "type": "ValueError"
+      },
+      "id": "format-0103",
+      "template": "{value: z}"
+    },
+    {
+      "error": {
+        "message": "Space not allowed in string format specifier",
+        "type": "ValueError"
+      },
+      "id": "format-0104",
+      "template": "{value: }"
+    },
+    {
+      "error": {
+        "message": "Unknown format code '\u007f' for object of type 'str'",
+        "type": "ValueError"
+      },
+      "id": "format-0105",
+      "template": "{value: \u007f}"
+    },
+    {
+      "error": {
+        "message": "Space not allowed in string format specifier",
+        "type": "ValueError"
+      },
+      "id": "format-0106",
+      "template": "{value: \u0664}"
+    },
+    {
+      "error": {
+        "message": "Unknown format code '\\x96ea' for object of type 'str'",
+        "type": "ValueError"
+      },
+      "id": "format-0107",
+      "template": "{value: \u96ea}"
+    },
+    {
+      "error": {
+        "message": "Unknown format code '\\xd800' for object of type 'str'",
+        "type": "ValueError"
+      },
+      "id": "format-0108",
+      "template": "{value: \ud800}"
+    },
+    {
+      "error": {
+        "message": "Space not allowed in string format specifier",
+        "type": "ValueError"
+      },
+      "id": "format-0109",
+      "template": "{value: \uff14}"
+    },
+    {
+      "error": {
+        "message": "Unknown format code '\\x0' for object of type 'str'",
+        "type": "ValueError"
+      },
+      "id": "format-0110",
+      "template": "{value:#\u0000}"
+    },
+    {
+      "error": {
+        "message": "Unknown format code '%' for object of type 'str'",
+        "type": "ValueError"
+      },
+      "id": "format-0111",
+      "template": "{value:#%}"
+    },
+    {
+      "error": {
+        "message": "Cannot specify both ',' and '_'.",
+        "type": "ValueError"
+      },
+      "id": "format-0112",
+      "template": "{value:#,_}"
+    },
+    {
+      "error": {
+        "message": "Cannot specify ',' with 's'.",
+        "type": "ValueError"
+      },
+      "id": "format-0113",
+      "template": "{value:#,}"
+    },
+    {
+      "error": {
+        "message": "Alternate form (#) not allowed in string format specifier",
+        "type": "ValueError"
+      },
+      "id": "format-0114",
+      "template": "{value:#.0}"
+    },
+    {
+      "error": {
+        "message": "Alternate form (#) not allowed in string format specifier",
+        "type": "ValueError"
+      },
+      "id": "format-0115",
+      "template": "{value:#.2}"
+    },
+    {
+      "error": {
+        "message": "Format specifier missing precision",
+        "type": "ValueError"
+      },
+      "id": "format-0116",
+      "template": "{value:#.}"
+    },
+    {
+      "error": {
+        "message": "Alternate form (#) not allowed in string format specifier",
+        "type": "ValueError"
+      },
+      "id": "format-0117",
+      "template": "{value:#.\u0662}"
+    },
+    {
+      "error": {
+        "message": "Alternate form (#) not allowed in string format specifier",
+        "type": "ValueError"
+      },
+      "id": "format-0118",
+      "template": "{value:#04}"
+    },
+    {
+      "error": {
+        "message": "Alternate form (#) not allowed in string format specifier",
+        "type": "ValueError"
+      },
+      "id": "format-0119",
+      "template": "{value:#0}"
+    },
+    {
+      "error": {
+        "message": "Alternate form (#) not allowed in string format specifier",
+        "type": "ValueError"
+      },
+      "id": "format-0120",
+      "template": "{value:#4}"
+    },
+    {
+      "error": {
+        "message": "Cannot specify both ',' and '_'.",
+        "type": "ValueError"
+      },
+      "id": "format-0121",
+      "template": "{value:#_,}"
+    },
+    {
+      "error": {
+        "message": "Cannot specify '_' with 's'.",
+        "type": "ValueError"
+      },
+      "id": "format-0122",
+      "template": "{value:#_}"
+    },
+    {
+      "error": {
+        "message": "Unknown format code 'd' for object of type 'str'",
+        "type": "ValueError"
+      },
+      "id": "format-0123",
+      "template": "{value:#d}"
+    },
+    {
+      "error": {
+        "message": "Unknown format code 'n' for object of type 'str'",
+        "type": "ValueError"
+      },
+      "id": "format-0124",
+      "template": "{value:#n}"
+    },
+    {
+      "error": {
+        "message": "Alternate form (#) not allowed in string format specifier",
+        "type": "ValueError"
+      },
+      "id": "format-0125",
+      "template": "{value:#s}"
+    },
+    {
+      "error": {
+        "message": "Unknown format code 'x' for object of type 'str'",
+        "type": "ValueError"
+      },
+      "id": "format-0126",
+      "template": "{value:#x}"
+    },
+    {
+      "error": {
+        "message": "Alternate form (#) not allowed in string format specifier",
+        "type": "ValueError"
+      },
+      "id": "format-0127",
+      "template": "{value:#}"
+    },
+    {
+      "error": {
+        "message": "Unknown format code '\u007f' for object of type 'str'",
+        "type": "ValueError"
+      },
+      "id": "format-0128",
+      "template": "{value:#\u007f}"
+    },
+    {
+      "error": {
+        "message": "Alternate form (#) not allowed in string format specifier",
+        "type": "ValueError"
+      },
+      "id": "format-0129",
+      "template": "{value:#\u0664}"
+    },
+    {
+      "error": {
+        "message": "Unknown format code '\\x96ea' for object of type 'str'",
+        "type": "ValueError"
+      },
+      "id": "format-0130",
+      "template": "{value:#\u96ea}"
+    },
+    {
+      "error": {
+        "message": "Unknown format code '\\xd800' for object of type 'str'",
+        "type": "ValueError"
+      },
+      "id": "format-0131",
+      "template": "{value:#\ud800}"
+    },
+    {
+      "error": {
+        "message": "Alternate form (#) not allowed in string format specifier",
+        "type": "ValueError"
+      },
+      "id": "format-0132",
+      "template": "{value:#\uff14}"
+    },
+    {
+      "error": {
+        "message": "Unknown format code '%' for object of type 'str'",
+        "type": "ValueError"
+      },
+      "id": "format-0133",
+      "template": "{value:%}"
+    },
+    {
+      "error": {
+        "message": "Unknown format code '\\x0' for object of type 'str'",
+        "type": "ValueError"
+      },
+      "id": "format-0134",
+      "template": "{value:*<\u0000}"
+    },
+    {
+      "error": {
+        "message": "Space not allowed in string format specifier",
+        "type": "ValueError"
+      },
+      "id": "format-0135",
+      "template": "{value:*< }"
+    },
+    {
+      "error": {
+        "message": "Alternate form (#) not allowed in string format specifier",
+        "type": "ValueError"
+      },
+      "id": "format-0136",
+      "template": "{value:*<#}"
+    },
+    {
+      "error": {
+        "message": "Unknown format code '%' for object of type 'str'",
+        "type": "ValueError"
+      },
+      "id": "format-0137",
+      "template": "{value:*<%}"
+    },
+    {
+      "error": {
+        "message": "Sign not allowed in string format specifier",
+        "type": "ValueError"
+      },
+      "id": "format-0138",
+      "template": "{value:*<+}"
+    },
+    {
+      "error": {
+        "message": "Cannot specify both ',' and '_'.",
+        "type": "ValueError"
+      },
+      "id": "format-0139",
+      "template": "{value:*<,_}"
+    },
+    {
+      "error": {
+        "message": "Cannot specify ',' with 's'.",
+        "type": "ValueError"
+      },
+      "id": "format-0140",
+      "template": "{value:*<,}"
+    },
+    {
+      "error": {
+        "message": "Sign not allowed in string format specifier",
+        "type": "ValueError"
+      },
+      "id": "format-0141",
+      "template": "{value:*<-}"
+    },
+    {
+      "id": "format-0142",
+      "template": "{value:*<.0}",
+      "value": ""
+    },
+    {
+      "id": "format-0143",
+      "template": "{value:*<.2}",
+      "value": "a\u00e9"
+    },
+    {
+      "error": {
+        "message": "Format specifier missing precision",
+        "type": "ValueError"
+      },
+      "id": "format-0144",
+      "template": "{value:*<.}"
+    },
+    {
+      "id": "format-0145",
+      "template": "{value:*<.\u0662}",
+      "value": "a\u00e9"
+    },
+    {
+      "id": "format-0146",
+      "template": "{value:*<04}",
+      "value": "a\u00e9\ud83d\ude00\ud800"
+    },
+    {
+      "id": "format-0147",
+      "template": "{value:*<0}",
+      "value": "a\u00e9\ud83d\ude00\ud800"
+    },
+    {
+      "id": "format-0148",
+      "template": "{value:*<4}",
+      "value": "a\u00e9\ud83d\ude00\ud800"
+    },
+    {
+      "error": {
+        "message": "Cannot specify both ',' and '_'.",
+        "type": "ValueError"
+      },
+      "id": "format-0149",
+      "template": "{value:*<_,}"
+    },
+    {
+      "error": {
+        "message": "Cannot specify '_' with 's'.",
+        "type": "ValueError"
+      },
+      "id": "format-0150",
+      "template": "{value:*<_}"
+    },
+    {
+      "error": {
+        "message": "Unknown format code 'd' for object of type 'str'",
+        "type": "ValueError"
+      },
+      "id": "format-0151",
+      "template": "{value:*<d}"
+    },
+    {
+      "error": {
+        "message": "Unknown format code 'n' for object of type 'str'",
+        "type": "ValueError"
+      },
+      "id": "format-0152",
+      "template": "{value:*<n}"
+    },
+    {
+      "id": "format-0153",
+      "template": "{value:*<s}",
+      "value": "a\u00e9\ud83d\ude00\ud800"
+    },
+    {
+      "error": {
+        "message": "Unknown format code 'x' for object of type 'str'",
+        "type": "ValueError"
+      },
+      "id": "format-0154",
+      "template": "{value:*<x}"
+    },
+    {
+      "error": {
+        "message": "Negative zero coercion (z) not allowed in string format specifier",
+        "type": "ValueError"
+      },
+      "id": "format-0155",
+      "template": "{value:*<z#}"
+    },
+    {
+      "error": {
+        "message": "Negative zero coercion (z) not allowed in string format specifier",
+        "type": "ValueError"
+      },
+      "id": "format-0156",
+      "template": "{value:*<z}"
+    },
+    {
+      "id": "format-0157",
+      "template": "{value:*<}",
+      "value": "a\u00e9\ud83d\ude00\ud800"
+    },
+    {
+      "error": {
+        "message": "Unknown format code '\u007f' for object of type 'str'",
+        "type": "ValueError"
+      },
+      "id": "format-0158",
+      "template": "{value:*<\u007f}"
+    },
+    {
+      "id": "format-0159",
+      "template": "{value:*<\u0664}",
+      "value": "a\u00e9\ud83d\ude00\ud800"
+    },
+    {
+      "error": {
+        "message": "Unknown format code '\\x96ea' for object of type 'str'",
+        "type": "ValueError"
+      },
+      "id": "format-0160",
+      "template": "{value:*<\u96ea}"
+    },
+    {
+      "error": {
+        "message": "Unknown format code '\\xd800' for object of type 'str'",
+        "type": "ValueError"
+      },
+      "id": "format-0161",
+      "template": "{value:*<\ud800}"
+    },
+    {
+      "id": "format-0162",
+      "template": "{value:*<\uff14}",
+      "value": "a\u00e9\ud83d\ude00\ud800"
+    },
+    {
+      "error": {
+        "message": "Unknown format code 'd' for object of type 'str'",
+        "type": "ValueError"
+      },
+      "id": "format-0163",
+      "template": "{value:*^04,.2d}"
+    },
+    {
+      "error": {
+        "message": "Cannot specify ',' with 'n'.",
+        "type": "ValueError"
+      },
+      "id": "format-0164",
+      "template": "{value:*^04,.2n}"
+    },
+    {
+      "error": {
+        "message": "Cannot specify ',' with 's'.",
+        "type": "ValueError"
+      },
+      "id": "format-0165",
+      "template": "{value:*^04,.2s}"
+    },
+    {
+      "error": {
+        "message": "Cannot specify ',' with 'x'.",
+        "type": "ValueError"
+      },
+      "id": "format-0166",
+      "template": "{value:*^04,.2x}"
+    },
+    {
+      "error": {
+        "message": "Cannot specify ',' with 's'.",
+        "type": "ValueError"
+      },
+      "id": "format-0167",
+      "template": "{value:*^04,.2}"
+    },
+    {
+      "error": {
+        "message": "Cannot specify both ',' and '_'.",
+        "type": "ValueError"
+      },
+      "id": "format-0168",
+      "template": "{value:*^04,_.2d}"
+    },
+    {
+      "error": {
+        "message": "Cannot specify both ',' and '_'.",
+        "type": "ValueError"
+      },
+      "id": "format-0169",
+      "template": "{value:*^04,_.2n}"
+    },
+    {
+      "error": {
+        "message": "Cannot specify both ',' and '_'.",
+        "type": "ValueError"
+      },
+      "id": "format-0170",
+      "template": "{value:*^04,_.2s}"
+    },
+    {
+      "error": {
+        "message": "Cannot specify both ',' and '_'.",
+        "type": "ValueError"
+      },
+      "id": "format-0171",
+      "template": "{value:*^04,_.2x}"
+    },
+    {
+      "error": {
+        "message": "Cannot specify both ',' and '_'.",
+        "type": "ValueError"
+      },
+      "id": "format-0172",
+      "template": "{value:*^04,_.2}"
+    },
+    {
+      "error": {
+        "message": "Unknown format code 'd' for object of type 'str'",
+        "type": "ValueError"
+      },
+      "id": "format-0173",
+      "template": "{value:*^04.2d}"
+    },
+    {
+      "error": {
+        "message": "Unknown format code 'n' for object of type 'str'",
+        "type": "ValueError"
+      },
+      "id": "format-0174",
+      "template": "{value:*^04.2n}"
+    },
+    {
+      "id": "format-0175",
+      "template": "{value:*^04.2s}",
+      "value": "*a\u00e9*"
+    },
+    {
+      "error": {
+        "message": "Unknown format code 'x' for object of type 'str'",
+        "type": "ValueError"
+      },
+      "id": "format-0176",
+      "template": "{value:*^04.2x}"
+    },
+    {
+      "id": "format-0177",
+      "template": "{value:*^04.2}",
+      "value": "*a\u00e9*"
+    },
+    {
+      "error": {
+        "message": "Unknown format code 'd' for object of type 'str'",
+        "type": "ValueError"
+      },
+      "id": "format-0178",
+      "template": "{value:*^04_.2d}"
+    },
+    {
+      "error": {
+        "message": "Cannot specify '_' with 'n'.",
+        "type": "ValueError"
+      },
+      "id": "format-0179",
+      "template": "{value:*^04_.2n}"
+    },
+    {
+      "error": {
+        "message": "Cannot specify '_' with 's'.",
+        "type": "ValueError"
+      },
+      "id": "format-0180",
+      "template": "{value:*^04_.2s}"
+    },
+    {
+      "error": {
+        "message": "Unknown format code 'x' for object of type 'str'",
+        "type": "ValueError"
+      },
+      "id": "format-0181",
+      "template": "{value:*^04_.2x}"
+    },
+    {
+      "error": {
+        "message": "Cannot specify '_' with 's'.",
+        "type": "ValueError"
+      },
+      "id": "format-0182",
+      "template": "{value:*^04_.2}"
+    },
+    {
+      "error": {
+        "message": "Unknown format code '\\x0' for object of type 'str'",
+        "type": "ValueError"
+      },
+      "id": "format-0183",
+      "template": "{value:+\u0000}"
+    },
+    {
+      "error": {
+        "message": "Sign not allowed in string format specifier",
+        "type": "ValueError"
+      },
+      "id": "format-0184",
+      "template": "{value:+#}"
+    },
+    {
+      "error": {
+        "message": "Unknown format code '%' for object of type 'str'",
+        "type": "ValueError"
+      },
+      "id": "format-0185",
+      "template": "{value:+%}"
+    },
+    {
+      "error": {
+        "message": "Cannot specify both ',' and '_'.",
+        "type": "ValueError"
+      },
+      "id": "format-0186",
+      "template": "{value:+,_}"
+    },
+    {
+      "error": {
+        "message": "Cannot specify ',' with 's'.",
+        "type": "ValueError"
+      },
+      "id": "format-0187",
+      "template": "{value:+,}"
+    },
+    {
+      "error": {
+        "message": "Sign not allowed in string format specifier",
+        "type": "ValueError"
+      },
+      "id": "format-0188",
+      "template": "{value:+.0}"
+    },
+    {
+      "error": {
+        "message": "Sign not allowed in string format specifier",
+        "type": "ValueError"
+      },
+      "id": "format-0189",
+      "template": "{value:+.2}"
+    },
+    {
+      "error": {
+        "message": "Format specifier missing precision",
+        "type": "ValueError"
+      },
+      "id": "format-0190",
+      "template": "{value:+.}"
+    },
+    {
+      "error": {
+        "message": "Sign not allowed in string format specifier",
+        "type": "ValueError"
+      },
+      "id": "format-0191",
+      "template": "{value:+.\u0662}"
+    },
+    {
+      "error": {
+        "message": "Sign not allowed in string format specifier",
+        "type": "ValueError"
+      },
+      "id": "format-0192",
+      "template": "{value:+04}"
+    },
+    {
+      "error": {
+        "message": "Sign not allowed in string format specifier",
+        "type": "ValueError"
+      },
+      "id": "format-0193",
+      "template": "{value:+0}"
+    },
+    {
+      "error": {
+        "message": "Sign not allowed in string format specifier",
+        "type": "ValueError"
+      },
+      "id": "format-0194",
+      "template": "{value:+4}"
+    },
+    {
+      "error": {
+        "message": "Cannot specify both ',' and '_'.",
+        "type": "ValueError"
+      },
+      "id": "format-0195",
+      "template": "{value:+_,}"
+    },
+    {
+      "error": {
+        "message": "Cannot specify '_' with 's'.",
+        "type": "ValueError"
+      },
+      "id": "format-0196",
+      "template": "{value:+_}"
+    },
+    {
+      "error": {
+        "message": "Unknown format code 'd' for object of type 'str'",
+        "type": "ValueError"
+      },
+      "id": "format-0197",
+      "template": "{value:+d}"
+    },
+    {
+      "error": {
+        "message": "Unknown format code 'n' for object of type 'str'",
+        "type": "ValueError"
+      },
+      "id": "format-0198",
+      "template": "{value:+n}"
+    },
+    {
+      "error": {
+        "message": "Sign not allowed in string format specifier",
+        "type": "ValueError"
+      },
+      "id": "format-0199",
+      "template": "{value:+s}"
+    },
+    {
+      "error": {
+        "message": "Unknown format code 'x' for object of type 'str'",
+        "type": "ValueError"
+      },
+      "id": "format-0200",
+      "template": "{value:+x}"
+    },
+    {
+      "error": {
+        "message": "Unknown format code 'd' for object of type 'str'",
+        "type": "ValueError"
+      },
+      "id": "format-0201",
+      "template": "{value:+z#04,.2d}"
+    },
+    {
+      "error": {
+        "message": "Cannot specify ',' with 'n'.",
+        "type": "ValueError"
+      },
+      "id": "format-0202",
+      "template": "{value:+z#04,.2n}"
+    },
+    {
+      "error": {
+        "message": "Cannot specify ',' with 's'.",
+        "type": "ValueError"
+      },
+      "id": "format-0203",
+      "template": "{value:+z#04,.2s}"
+    },
+    {
+      "error": {
+        "message": "Cannot specify ',' with 'x'.",
+        "type": "ValueError"
+      },
+      "id": "format-0204",
+      "template": "{value:+z#04,.2x}"
+    },
+    {
+      "error": {
+        "message": "Cannot specify ',' with 's'.",
+        "type": "ValueError"
+      },
+      "id": "format-0205",
+      "template": "{value:+z#04,.2}"
+    },
+    {
+      "error": {
+        "message": "Cannot specify both ',' and '_'.",
+        "type": "ValueError"
+      },
+      "id": "format-0206",
+      "template": "{value:+z#04,_.2d}"
+    },
+    {
+      "error": {
+        "message": "Cannot specify both ',' and '_'.",
+        "type": "ValueError"
+      },
+      "id": "format-0207",
+      "template": "{value:+z#04,_.2n}"
+    },
+    {
+      "error": {
+        "message": "Cannot specify both ',' and '_'.",
+        "type": "ValueError"
+      },
+      "id": "format-0208",
+      "template": "{value:+z#04,_.2s}"
+    },
+    {
+      "error": {
+        "message": "Cannot specify both ',' and '_'.",
+        "type": "ValueError"
+      },
+      "id": "format-0209",
+      "template": "{value:+z#04,_.2x}"
+    },
+    {
+      "error": {
+        "message": "Cannot specify both ',' and '_'.",
+        "type": "ValueError"
+      },
+      "id": "format-0210",
+      "template": "{value:+z#04,_.2}"
+    },
+    {
+      "error": {
+        "message": "Unknown format code 'd' for object of type 'str'",
+        "type": "ValueError"
+      },
+      "id": "format-0211",
+      "template": "{value:+z#04.2d}"
+    },
+    {
+      "error": {
+        "message": "Unknown format code 'n' for object of type 'str'",
+        "type": "ValueError"
+      },
+      "id": "format-0212",
+      "template": "{value:+z#04.2n}"
+    },
+    {
+      "error": {
+        "message": "Sign not allowed in string format specifier",
+        "type": "ValueError"
+      },
+      "id": "format-0213",
+      "template": "{value:+z#04.2s}"
+    },
+    {
+      "error": {
+        "message": "Unknown format code 'x' for object of type 'str'",
+        "type": "ValueError"
+      },
+      "id": "format-0214",
+      "template": "{value:+z#04.2x}"
+    },
+    {
+      "error": {
+        "message": "Sign not allowed in string format specifier",
+        "type": "ValueError"
+      },
+      "id": "format-0215",
+      "template": "{value:+z#04.2}"
+    },
+    {
+      "error": {
+        "message": "Unknown format code 'd' for object of type 'str'",
+        "type": "ValueError"
+      },
+      "id": "format-0216",
+      "template": "{value:+z#04_.2d}"
+    },
+    {
+      "error": {
+        "message": "Cannot specify '_' with 'n'.",
+        "type": "ValueError"
+      },
+      "id": "format-0217",
+      "template": "{value:+z#04_.2n}"
+    },
+    {
+      "error": {
+        "message": "Cannot specify '_' with 's'.",
+        "type": "ValueError"
+      },
+      "id": "format-0218",
+      "template": "{value:+z#04_.2s}"
+    },
+    {
+      "error": {
+        "message": "Unknown format code 'x' for object of type 'str'",
+        "type": "ValueError"
+      },
+      "id": "format-0219",
+      "template": "{value:+z#04_.2x}"
+    },
+    {
+      "error": {
+        "message": "Cannot specify '_' with 's'.",
+        "type": "ValueError"
+      },
+      "id": "format-0220",
+      "template": "{value:+z#04_.2}"
+    },
+    {
+      "error": {
+        "message": "Sign not allowed in string format specifier",
+        "type": "ValueError"
+      },
+      "id": "format-0221",
+      "template": "{value:+z#}"
+    },
+    {
+      "error": {
+        "message": "Sign not allowed in string format specifier",
+        "type": "ValueError"
+      },
+      "id": "format-0222",
+      "template": "{value:+z}"
+    },
+    {
+      "error": {
+        "message": "Sign not allowed in string format specifier",
+        "type": "ValueError"
+      },
+      "id": "format-0223",
+      "template": "{value:+}"
+    },
+    {
+      "error": {
+        "message": "Unknown format code '\u007f' for object of type 'str'",
+        "type": "ValueError"
+      },
+      "id": "format-0224",
+      "template": "{value:+\u007f}"
+    },
+    {
+      "error": {
+        "message": "Sign not allowed in string format specifier",
+        "type": "ValueError"
+      },
+      "id": "format-0225",
+      "template": "{value:+\u0664}"
+    },
+    {
+      "error": {
+        "message": "Unknown format code '\\x96ea' for object of type 'str'",
+        "type": "ValueError"
+      },
+      "id": "format-0226",
+      "template": "{value:+\u96ea}"
+    },
+    {
+      "error": {
+        "message": "Unknown format code '\\xd800' for object of type 'str'",
+        "type": "ValueError"
+      },
+      "id": "format-0227",
+      "template": "{value:+\ud800}"
+    },
+    {
+      "error": {
+        "message": "Sign not allowed in string format specifier",
+        "type": "ValueError"
+      },
+      "id": "format-0228",
+      "template": "{value:+\uff14}"
+    },
+    {
+      "error": {
+        "message": "Unknown format code '\\x0' for object of type 'str'",
+        "type": "ValueError"
+      },
+      "id": "format-0229",
+      "template": "{value:,\u0000}"
+    },
+    {
+      "error": {
+        "message": "Unknown format code '%' for object of type 'str'",
+        "type": "ValueError"
+      },
+      "id": "format-0230",
+      "template": "{value:,%}"
+    },
+    {
+      "error": {
+        "message": "Cannot specify ',' with 's'.",
+        "type": "ValueError"
+      },
+      "id": "format-0231",
+      "template": "{value:,.0}"
+    },
+    {
+      "error": {
+        "message": "Cannot specify ',' with 's'.",
+        "type": "ValueError"
+      },
+      "id": "format-0232",
+      "template": "{value:,.2}"
+    },
+    {
+      "error": {
+        "message": "Format specifier missing precision",
+        "type": "ValueError"
+      },
+      "id": "format-0233",
+      "template": "{value:,.}"
+    },
+    {
+      "error": {
+        "message": "Cannot specify ',' with 's'.",
+        "type": "ValueError"
+      },
+      "id": "format-0234",
+      "template": "{value:,.\u0662}"
+    },
+    {
+      "error": {
+        "message": "Cannot specify both ',' and '_'.",
+        "type": "ValueError"
+      },
+      "id": "format-0235",
+      "template": "{value:,_\u0000}"
+    },
+    {
+      "error": {
+        "message": "Cannot specify both ',' and '_'.",
+        "type": "ValueError"
+      },
+      "id": "format-0236",
+      "template": "{value:,_%}"
+    },
+    {
+      "error": {
+        "message": "Cannot specify both ',' and '_'.",
+        "type": "ValueError"
+      },
+      "id": "format-0237",
+      "template": "{value:,_.0}"
+    },
+    {
+      "error": {
+        "message": "Cannot specify both ',' and '_'.",
+        "type": "ValueError"
+      },
+      "id": "format-0238",
+      "template": "{value:,_.2}"
+    },
+    {
+      "error": {
+        "message": "Cannot specify both ',' and '_'.",
+        "type": "ValueError"
+      },
+      "id": "format-0239",
+      "template": "{value:,_.}"
+    },
+    {
+      "error": {
+        "message": "Cannot specify both ',' and '_'.",
+        "type": "ValueError"
+      },
+      "id": "format-0240",
+      "template": "{value:,_.\u0662}"
+    },
+    {
+      "error": {
+        "message": "Cannot specify both ',' and '_'.",
+        "type": "ValueError"
+      },
+      "id": "format-0241",
+      "template": "{value:,_d}"
+    },
+    {
+      "error": {
+        "message": "Cannot specify both ',' and '_'.",
+        "type": "ValueError"
+      },
+      "id": "format-0242",
+      "template": "{value:,_n}"
+    },
+    {
+      "error": {
+        "message": "Cannot specify both ',' and '_'.",
+        "type": "ValueError"
+      },
+      "id": "format-0243",
+      "template": "{value:,_s}"
+    },
+    {
+      "error": {
+        "message": "Cannot specify both ',' and '_'.",
+        "type": "ValueError"
+      },
+      "id": "format-0244",
+      "template": "{value:,_x}"
+    },
+    {
+      "error": {
+        "message": "Cannot specify both ',' and '_'.",
+        "type": "ValueError"
+      },
+      "id": "format-0245",
+      "template": "{value:,_}"
+    },
+    {
+      "error": {
+        "message": "Cannot specify both ',' and '_'.",
+        "type": "ValueError"
+      },
+      "id": "format-0246",
+      "template": "{value:,_\u007f}"
+    },
+    {
+      "error": {
+        "message": "Cannot specify both ',' and '_'.",
+        "type": "ValueError"
+      },
+      "id": "format-0247",
+      "template": "{value:,_\u96ea}"
+    },
+    {
+      "error": {
+        "message": "Cannot specify both ',' and '_'.",
+        "type": "ValueError"
+      },
+      "id": "format-0248",
+      "template": "{value:,_\ud800}"
+    },
+    {
+      "error": {
+        "message": "Unknown format code 'd' for object of type 'str'",
+        "type": "ValueError"
+      },
+      "id": "format-0249",
+      "template": "{value:,d}"
+    },
+    {
+      "error": {
+        "message": "Cannot specify ',' with 'n'.",
+        "type": "ValueError"
+      },
+      "id": "format-0250",
+      "template": "{value:,n}"
+    },
+    {
+      "error": {
+        "message": "Cannot specify ',' with 's'.",
+        "type": "ValueError"
+      },
+      "id": "format-0251",
+      "template": "{value:,s}"
+    },
+    {
+      "error": {
+        "message": "Cannot specify ',' with 'x'.",
+        "type": "ValueError"
+      },
+      "id": "format-0252",
+      "template": "{value:,x}"
+    },
+    {
+      "error": {
+        "message": "Cannot specify ',' with 's'.",
+        "type": "ValueError"
+      },
+      "id": "format-0253",
+      "template": "{value:,}"
+    },
+    {
+      "error": {
+        "message": "Cannot specify ',' with '\u007f'.",
+        "type": "ValueError"
+      },
+      "id": "format-0254",
+      "template": "{value:,\u007f}"
+    },
+    {
+      "error": {
+        "message": "Cannot specify ',' with '\\x96ea'.",
+        "type": "ValueError"
+      },
+      "id": "format-0255",
+      "template": "{value:,\u96ea}"
+    },
+    {
+      "error": {
+        "message": "Cannot specify ',' with '\\xd800'.",
+        "type": "ValueError"
+      },
+      "id": "format-0256",
+      "template": "{value:,\ud800}"
+    },
+    {
+      "error": {
+        "message": "Unknown format code '\\x0' for object of type 'str'",
+        "type": "ValueError"
+      },
+      "id": "format-0257",
+      "template": "{value:-\u0000}"
+    },
+    {
+      "error": {
+        "message": "Sign not allowed in string format specifier",
+        "type": "ValueError"
+      },
+      "id": "format-0258",
+      "template": "{value:-#}"
+    },
+    {
+      "error": {
+        "message": "Unknown format code '%' for object of type 'str'",
+        "type": "ValueError"
+      },
+      "id": "format-0259",
+      "template": "{value:-%}"
+    },
+    {
+      "error": {
+        "message": "Cannot specify both ',' and '_'.",
+        "type": "ValueError"
+      },
+      "id": "format-0260",
+      "template": "{value:-,_}"
+    },
+    {
+      "error": {
+        "message": "Cannot specify ',' with 's'.",
+        "type": "ValueError"
+      },
+      "id": "format-0261",
+      "template": "{value:-,}"
+    },
+    {
+      "error": {
+        "message": "Sign not allowed in string format specifier",
+        "type": "ValueError"
+      },
+      "id": "format-0262",
+      "template": "{value:-.0}"
+    },
+    {
+      "error": {
+        "message": "Sign not allowed in string format specifier",
+        "type": "ValueError"
+      },
+      "id": "format-0263",
+      "template": "{value:-.2}"
+    },
+    {
+      "error": {
+        "message": "Format specifier missing precision",
+        "type": "ValueError"
+      },
+      "id": "format-0264",
+      "template": "{value:-.}"
+    },
+    {
+      "error": {
+        "message": "Sign not allowed in string format specifier",
+        "type": "ValueError"
+      },
+      "id": "format-0265",
+      "template": "{value:-.\u0662}"
+    },
+    {
+      "error": {
+        "message": "Sign not allowed in string format specifier",
+        "type": "ValueError"
+      },
+      "id": "format-0266",
+      "template": "{value:-04}"
+    },
+    {
+      "error": {
+        "message": "Sign not allowed in string format specifier",
+        "type": "ValueError"
+      },
+      "id": "format-0267",
+      "template": "{value:-0}"
+    },
+    {
+      "error": {
+        "message": "Sign not allowed in string format specifier",
+        "type": "ValueError"
+      },
+      "id": "format-0268",
+      "template": "{value:-4}"
+    },
+    {
+      "error": {
+        "message": "Cannot specify both ',' and '_'.",
+        "type": "ValueError"
+      },
+      "id": "format-0269",
+      "template": "{value:-_,}"
+    },
+    {
+      "error": {
+        "message": "Cannot specify '_' with 's'.",
+        "type": "ValueError"
+      },
+      "id": "format-0270",
+      "template": "{value:-_}"
+    },
+    {
+      "error": {
+        "message": "Unknown format code 'd' for object of type 'str'",
+        "type": "ValueError"
+      },
+      "id": "format-0271",
+      "template": "{value:-d}"
+    },
+    {
+      "error": {
+        "message": "Unknown format code 'n' for object of type 'str'",
+        "type": "ValueError"
+      },
+      "id": "format-0272",
+      "template": "{value:-n}"
+    },
+    {
+      "error": {
+        "message": "Sign not allowed in string format specifier",
+        "type": "ValueError"
+      },
+      "id": "format-0273",
+      "template": "{value:-s}"
+    },
+    {
+      "error": {
+        "message": "Unknown format code 'x' for object of type 'str'",
+        "type": "ValueError"
+      },
+      "id": "format-0274",
+      "template": "{value:-x}"
+    },
+    {
+      "error": {
+        "message": "Sign not allowed in string format specifier",
+        "type": "ValueError"
+      },
+      "id": "format-0275",
+      "template": "{value:-z#}"
+    },
+    {
+      "error": {
+        "message": "Sign not allowed in string format specifier",
+        "type": "ValueError"
+      },
+      "id": "format-0276",
+      "template": "{value:-z}"
+    },
+    {
+      "error": {
+        "message": "Sign not allowed in string format specifier",
+        "type": "ValueError"
+      },
+      "id": "format-0277",
+      "template": "{value:-}"
+    },
+    {
+      "error": {
+        "message": "Unknown format code '\u007f' for object of type 'str'",
+        "type": "ValueError"
+      },
+      "id": "format-0278",
+      "template": "{value:-\u007f}"
+    },
+    {
+      "error": {
+        "message": "Sign not allowed in string format specifier",
+        "type": "ValueError"
+      },
+      "id": "format-0279",
+      "template": "{value:-\u0664}"
+    },
+    {
+      "error": {
+        "message": "Unknown format code '\\x96ea' for object of type 'str'",
+        "type": "ValueError"
+      },
+      "id": "format-0280",
+      "template": "{value:-\u96ea}"
+    },
+    {
+      "error": {
+        "message": "Unknown format code '\\xd800' for object of type 'str'",
+        "type": "ValueError"
+      },
+      "id": "format-0281",
+      "template": "{value:-\ud800}"
+    },
+    {
+      "error": {
+        "message": "Sign not allowed in string format specifier",
+        "type": "ValueError"
+      },
+      "id": "format-0282",
+      "template": "{value:-\uff14}"
+    },
+    {
+      "error": {
+        "message": "Format specifier missing precision",
+        "type": "ValueError"
+      },
+      "id": "format-0283",
+      "template": "{value:.\u0000}"
+    },
+    {
+      "error": {
+        "message": "Format specifier missing precision",
+        "type": "ValueError"
+      },
+      "id": "format-0284",
+      "template": "{value:.%}"
+    },
+    {
+      "error": {
+        "message": "Unknown format code '\\x0' for object of type 'str'",
+        "type": "ValueError"
+      },
+      "id": "format-0285",
+      "template": "{value:.0\u0000}"
+    },
+    {
+      "error": {
+        "message": "Unknown format code '%' for object of type 'str'",
+        "type": "ValueError"
+      },
+      "id": "format-0286",
+      "template": "{value:.0%}"
+    },
+    {
+      "error": {
+        "message": "Unknown format code 'd' for object of type 'str'",
+        "type": "ValueError"
+      },
+      "id": "format-0287",
+      "template": "{value:.0d}"
+    },
+    {
+      "error": {
+        "message": "Unknown format code 'n' for object of type 'str'",
+        "type": "ValueError"
+      },
+      "id": "format-0288",
+      "template": "{value:.0n}"
+    },
+    {
+      "id": "format-0289",
+      "template": "{value:.0s}",
+      "value": ""
+    },
+    {
+      "error": {
+        "message": "Unknown format code 'x' for object of type 'str'",
+        "type": "ValueError"
+      },
+      "id": "format-0290",
+      "template": "{value:.0x}"
+    },
+    {
+      "id": "format-0291",
+      "template": "{value:.0}",
+      "value": ""
+    },
+    {
+      "error": {
+        "message": "Unknown format code '\u007f' for object of type 'str'",
+        "type": "ValueError"
+      },
+      "id": "format-0292",
+      "template": "{value:.0\u007f}"
+    },
+    {
+      "error": {
+        "message": "Unknown format code '\\x96ea' for object of type 'str'",
+        "type": "ValueError"
+      },
+      "id": "format-0293",
+      "template": "{value:.0\u96ea}"
+    },
+    {
+      "error": {
+        "message": "Unknown format code '\\xd800' for object of type 'str'",
+        "type": "ValueError"
+      },
+      "id": "format-0294",
+      "template": "{value:.0\ud800}"
+    },
+    {
+      "error": {
+        "message": "Unknown format code '\\x0' for object of type 'str'",
+        "type": "ValueError"
+      },
+      "id": "format-0295",
+      "template": "{value:.2\u0000}"
+    },
+    {
+      "error": {
+        "message": "Unknown format code '%' for object of type 'str'",
+        "type": "ValueError"
+      },
+      "id": "format-0296",
+      "template": "{value:.2%}"
+    },
+    {
+      "error": {
+        "message": "Unknown format code 'd' for object of type 'str'",
+        "type": "ValueError"
+      },
+      "id": "format-0297",
+      "template": "{value:.2d}"
+    },
+    {
+      "error": {
+        "message": "Unknown format code 'n' for object of type 'str'",
+        "type": "ValueError"
+      },
+      "id": "format-0298",
+      "template": "{value:.2n}"
+    },
+    {
+      "id": "format-0299",
+      "template": "{value:.2s}",
+      "value": "a\u00e9"
+    },
+    {
+      "error": {
+        "message": "Unknown format code 'x' for object of type 'str'",
+        "type": "ValueError"
+      },
+      "id": "format-0300",
+      "template": "{value:.2x}"
+    },
+    {
+      "id": "format-0301",
+      "template": "{value:.2}",
+      "value": "a\u00e9"
+    },
+    {
+      "error": {
+        "message": "Unknown format code '\u007f' for object of type 'str'",
+        "type": "ValueError"
+      },
+      "id": "format-0302",
+      "template": "{value:.2\u007f}"
+    },
+    {
+      "error": {
+        "message": "Unknown format code '\\x96ea' for object of type 'str'",
+        "type": "ValueError"
+      },
+      "id": "format-0303",
+      "template": "{value:.2\u96ea}"
+    },
+    {
+      "error": {
+        "message": "Unknown format code '\\xd800' for object of type 'str'",
+        "type": "ValueError"
+      },
+      "id": "format-0304",
+      "template": "{value:.2\ud800}"
+    },
+    {
+      "error": {
+        "message": "Format specifier missing precision",
+        "type": "ValueError"
+      },
+      "id": "format-0305",
+      "template": "{value:.d}"
+    },
+    {
+      "error": {
+        "message": "Format specifier missing precision",
+        "type": "ValueError"
+      },
+      "id": "format-0306",
+      "template": "{value:.n}"
+    },
+    {
+      "error": {
+        "message": "Format specifier missing precision",
+        "type": "ValueError"
+      },
+      "id": "format-0307",
+      "template": "{value:.s}"
+    },
+    {
+      "error": {
+        "message": "Format specifier missing precision",
+        "type": "ValueError"
+      },
+      "id": "format-0308",
+      "template": "{value:.x}"
+    },
+    {
+      "error": {
+        "message": "Format specifier missing precision",
+        "type": "ValueError"
+      },
+      "id": "format-0309",
+      "template": "{value:.}"
+    },
+    {
+      "error": {
+        "message": "Format specifier missing precision",
+        "type": "ValueError"
+      },
+      "id": "format-0310",
+      "template": "{value:.\u007f}"
+    },
+    {
+      "error": {
+        "message": "Unknown format code '\\x0' for object of type 'str'",
+        "type": "ValueError"
+      },
+      "id": "format-0311",
+      "template": "{value:.\u0662\u0000}"
+    },
+    {
+      "error": {
+        "message": "Unknown format code '%' for object of type 'str'",
+        "type": "ValueError"
+      },
+      "id": "format-0312",
+      "template": "{value:.\u0662%}"
+    },
+    {
+      "error": {
+        "message": "Unknown format code 'd' for object of type 'str'",
+        "type": "ValueError"
+      },
+      "id": "format-0313",
+      "template": "{value:.\u0662d}"
+    },
+    {
+      "error": {
+        "message": "Unknown format code 'n' for object of type 'str'",
+        "type": "ValueError"
+      },
+      "id": "format-0314",
+      "template": "{value:.\u0662n}"
+    },
+    {
+      "id": "format-0315",
+      "template": "{value:.\u0662s}",
+      "value": "a\u00e9"
+    },
+    {
+      "error": {
+        "message": "Unknown format code 'x' for object of type 'str'",
+        "type": "ValueError"
+      },
+      "id": "format-0316",
+      "template": "{value:.\u0662x}"
+    },
+    {
+      "id": "format-0317",
+      "template": "{value:.\u0662}",
+      "value": "a\u00e9"
+    },
+    {
+      "error": {
+        "message": "Unknown format code '\u007f' for object of type 'str'",
+        "type": "ValueError"
+      },
+      "id": "format-0318",
+      "template": "{value:.\u0662\u007f}"
+    },
+    {
+      "error": {
+        "message": "Unknown format code '\\x96ea' for object of type 'str'",
+        "type": "ValueError"
+      },
+      "id": "format-0319",
+      "template": "{value:.\u0662\u96ea}"
+    },
+    {
+      "error": {
+        "message": "Unknown format code '\\xd800' for object of type 'str'",
+        "type": "ValueError"
+      },
+      "id": "format-0320",
+      "template": "{value:.\u0662\ud800}"
+    },
+    {
+      "error": {
+        "message": "Format specifier missing precision",
+        "type": "ValueError"
+      },
+      "id": "format-0321",
+      "template": "{value:.\u96ea}"
+    },
+    {
+      "error": {
+        "message": "Format specifier missing precision",
+        "type": "ValueError"
+      },
+      "id": "format-0322",
+      "template": "{value:.\ud800}"
+    },
+    {
+      "error": {
+        "message": "Unknown format code '\\x0' for object of type 'str'",
+        "type": "ValueError"
+      },
+      "id": "format-0323",
+      "template": "{value:0\u0000}"
+    },
+    {
+      "error": {
+        "message": "Unknown format code '%' for object of type 'str'",
+        "type": "ValueError"
+      },
+      "id": "format-0324",
+      "template": "{value:0%}"
+    },
+    {
+      "error": {
+        "message": "Cannot specify both ',' and '_'.",
+        "type": "ValueError"
+      },
+      "id": "format-0325",
+      "template": "{value:0,_}"
+    },
+    {
+      "error": {
+        "message": "Cannot specify ',' with 's'.",
+        "type": "ValueError"
+      },
+      "id": "format-0326",
+      "template": "{value:0,}"
+    },
+    {
+      "id": "format-0327",
+      "template": "{value:0.0}",
+      "value": ""
+    },
+    {
+      "id": "format-0328",
+      "template": "{value:0.2}",
+      "value": "a\u00e9"
+    },
+    {
+      "error": {
+        "message": "Format specifier missing precision",
+        "type": "ValueError"
+      },
+      "id": "format-0329",
+      "template": "{value:0.}"
+    },
+    {
+      "id": "format-0330",
+      "template": "{value:0.\u0662}",
+      "value": "a\u00e9"
+    },
+    {
+      "id": "format-0331",
+      "template": "{value:004}",
+      "value": "a\u00e9\ud83d\ude00\ud800"
+    },
+    {
+      "error": {
+        "message": "Unknown format code '\\x0' for object of type 'str'",
+        "type": "ValueError"
+      },
+      "id": "format-0332",
+      "template": "{value:04\u0000}"
+    },
+    {
+      "error": {
+        "message": "Unknown format code '%' for object of type 'str'",
+        "type": "ValueError"
+      },
+      "id": "format-0333",
+      "template": "{value:04%}"
+    },
+    {
+      "error": {
+        "message": "Cannot specify both ',' and '_'.",
+        "type": "ValueError"
+      },
+      "id": "format-0334",
+      "template": "{value:04,_}"
+    },
+    {
+      "error": {
+        "message": "Cannot specify ',' with 's'.",
+        "type": "ValueError"
+      },
+      "id": "format-0335",
+      "template": "{value:04,}"
+    },
+    {
+      "id": "format-0336",
+      "template": "{value:04.0}",
+      "value": "0000"
+    },
+    {
+      "id": "format-0337",
+      "template": "{value:04.2}",
+      "value": "a\u00e900"
+    },
+    {
+      "error": {
+        "message": "Format specifier missing precision",
+        "type": "ValueError"
+      },
+      "id": "format-0338",
+      "template": "{value:04.}"
+    },
+    {
+      "id": "format-0339",
+      "template": "{value:04.\u0662}",
+      "value": "a\u00e900"
+    },
+    {
+      "error": {
+        "message": "Cannot specify both ',' and '_'.",
+        "type": "ValueError"
+      },
+      "id": "format-0340",
+      "template": "{value:04_,}"
+    },
+    {
+      "error": {
+        "message": "Cannot specify '_' with 's'.",
+        "type": "ValueError"
+      },
+      "id": "format-0341",
+      "template": "{value:04_}"
+    },
+    {
+      "error": {
+        "message": "Unknown format code 'd' for object of type 'str'",
+        "type": "ValueError"
+      },
+      "id": "format-0342",
+      "template": "{value:04d}"
+    },
+    {
+      "error": {
+        "message": "Unknown format code 'n' for object of type 'str'",
+        "type": "ValueError"
+      },
+      "id": "format-0343",
+      "template": "{value:04n}"
+    },
+    {
+      "id": "format-0344",
+      "template": "{value:04s}",
+      "value": "a\u00e9\ud83d\ude00\ud800"
+    },
+    {
+      "error": {
+        "message": "Unknown format code 'x' for object of type 'str'",
+        "type": "ValueError"
+      },
+      "id": "format-0345",
+      "template": "{value:04x}"
+    },
+    {
+      "id": "format-0346",
+      "template": "{value:04}",
+      "value": "a\u00e9\ud83d\ude00\ud800"
+    },
+    {
+      "error": {
+        "message": "Unknown format code '\u007f' for object of type 'str'",
+        "type": "ValueError"
+      },
+      "id": "format-0347",
+      "template": "{value:04\u007f}"
+    },
+    {
+      "error": {
+        "message": "Unknown format code '\\x96ea' for object of type 'str'",
+        "type": "ValueError"
+      },
+      "id": "format-0348",
+      "template": "{value:04\u96ea}"
+    },
+    {
+      "error": {
+        "message": "Unknown format code '\\xd800' for object of type 'str'",
+        "type": "ValueError"
+      },
+      "id": "format-0349",
+      "template": "{value:04\ud800}"
+    },
+    {
+      "error": {
+        "message": "Unknown format code '\\x0' for object of type 'str'",
+        "type": "ValueError"
+      },
+      "id": "format-0350",
+      "template": "{value:0>\u0000}"
+    },
+    {
+      "error": {
+        "message": "Space not allowed in string format specifier",
+        "type": "ValueError"
+      },
+      "id": "format-0351",
+      "template": "{value:0> }"
+    },
+    {
+      "error": {
+        "message": "Alternate form (#) not allowed in string format specifier",
+        "type": "ValueError"
+      },
+      "id": "format-0352",
+      "template": "{value:0>#}"
+    },
+    {
+      "error": {
+        "message": "Unknown format code '%' for object of type 'str'",
+        "type": "ValueError"
+      },
+      "id": "format-0353",
+      "template": "{value:0>%}"
+    },
+    {
+      "error": {
+        "message": "Sign not allowed in string format specifier",
+        "type": "ValueError"
+      },
+      "id": "format-0354",
+      "template": "{value:0>+}"
+    },
+    {
+      "error": {
+        "message": "Cannot specify both ',' and '_'.",
+        "type": "ValueError"
+      },
+      "id": "format-0355",
+      "template": "{value:0>,_}"
+    },
+    {
+      "error": {
+        "message": "Cannot specify ',' with 's'.",
+        "type": "ValueError"
+      },
+      "id": "format-0356",
+      "template": "{value:0>,}"
+    },
+    {
+      "error": {
+        "message": "Sign not allowed in string format specifier",
+        "type": "ValueError"
+      },
+      "id": "format-0357",
+      "template": "{value:0>-}"
+    },
+    {
+      "id": "format-0358",
+      "template": "{value:0>.0}",
+      "value": ""
+    },
+    {
+      "id": "format-0359",
+      "template": "{value:0>.2}",
+      "value": "a\u00e9"
+    },
+    {
+      "error": {
+        "message": "Format specifier missing precision",
+        "type": "ValueError"
+      },
+      "id": "format-0360",
+      "template": "{value:0>.}"
+    },
+    {
+      "id": "format-0361",
+      "template": "{value:0>.\u0662}",
+      "value": "a\u00e9"
+    },
+    {
+      "error": {
+        "message": "Unknown format code 'd' for object of type 'str'",
+        "type": "ValueError"
+      },
+      "id": "format-0362",
+      "template": "{value:0>04,.2d}"
+    },
+    {
+      "error": {
+        "message": "Cannot specify ',' with 'n'.",
+        "type": "ValueError"
+      },
+      "id": "format-0363",
+      "template": "{value:0>04,.2n}"
+    },
+    {
+      "error": {
+        "message": "Cannot specify ',' with 's'.",
+        "type": "ValueError"
+      },
+      "id": "format-0364",
+      "template": "{value:0>04,.2s}"
+    },
+    {
+      "error": {
+        "message": "Cannot specify ',' with 'x'.",
+        "type": "ValueError"
+      },
+      "id": "format-0365",
+      "template": "{value:0>04,.2x}"
+    },
+    {
+      "error": {
+        "message": "Cannot specify ',' with 's'.",
+        "type": "ValueError"
+      },
+      "id": "format-0366",
+      "template": "{value:0>04,.2}"
+    },
+    {
+      "error": {
+        "message": "Cannot specify both ',' and '_'.",
+        "type": "ValueError"
+      },
+      "id": "format-0367",
+      "template": "{value:0>04,_.2d}"
+    },
+    {
+      "error": {
+        "message": "Cannot specify both ',' and '_'.",
+        "type": "ValueError"
+      },
+      "id": "format-0368",
+      "template": "{value:0>04,_.2n}"
+    },
+    {
+      "error": {
+        "message": "Cannot specify both ',' and '_'.",
+        "type": "ValueError"
+      },
+      "id": "format-0369",
+      "template": "{value:0>04,_.2s}"
+    },
+    {
+      "error": {
+        "message": "Cannot specify both ',' and '_'.",
+        "type": "ValueError"
+      },
+      "id": "format-0370",
+      "template": "{value:0>04,_.2x}"
+    },
+    {
+      "error": {
+        "message": "Cannot specify both ',' and '_'.",
+        "type": "ValueError"
+      },
+      "id": "format-0371",
+      "template": "{value:0>04,_.2}"
+    },
+    {
+      "error": {
+        "message": "Unknown format code 'd' for object of type 'str'",
+        "type": "ValueError"
+      },
+      "id": "format-0372",
+      "template": "{value:0>04.2d}"
+    },
+    {
+      "error": {
+        "message": "Unknown format code 'n' for object of type 'str'",
+        "type": "ValueError"
+      },
+      "id": "format-0373",
+      "template": "{value:0>04.2n}"
+    },
+    {
+      "id": "format-0374",
+      "template": "{value:0>04.2s}",
+      "value": "00a\u00e9"
+    },
+    {
+      "error": {
+        "message": "Unknown format code 'x' for object of type 'str'",
+        "type": "ValueError"
+      },
+      "id": "format-0375",
+      "template": "{value:0>04.2x}"
+    },
+    {
+      "id": "format-0376",
+      "template": "{value:0>04.2}",
+      "value": "00a\u00e9"
+    },
+    {
+      "error": {
+        "message": "Unknown format code 'd' for object of type 'str'",
+        "type": "ValueError"
+      },
+      "id": "format-0377",
+      "template": "{value:0>04_.2d}"
+    },
+    {
+      "error": {
+        "message": "Cannot specify '_' with 'n'.",
+        "type": "ValueError"
+      },
+      "id": "format-0378",
+      "template": "{value:0>04_.2n}"
+    },
+    {
+      "error": {
+        "message": "Cannot specify '_' with 's'.",
+        "type": "ValueError"
+      },
+      "id": "format-0379",
+      "template": "{value:0>04_.2s}"
+    },
+    {
+      "error": {
+        "message": "Unknown format code 'x' for object of type 'str'",
+        "type": "ValueError"
+      },
+      "id": "format-0380",
+      "template": "{value:0>04_.2x}"
+    },
+    {
+      "error": {
+        "message": "Cannot specify '_' with 's'.",
+        "type": "ValueError"
+      },
+      "id": "format-0381",
+      "template": "{value:0>04_.2}"
+    },
+    {
+      "id": "format-0382",
+      "template": "{value:0>04}",
+      "value": "a\u00e9\ud83d\ude00\ud800"
+    },
+    {
+      "id": "format-0383",
+      "template": "{value:0>0}",
+      "value": "a\u00e9\ud83d\ude00\ud800"
+    },
+    {
+      "id": "format-0384",
+      "template": "{value:0>4}",
+      "value": "a\u00e9\ud83d\ude00\ud800"
+    },
+    {
+      "error": {
+        "message": "Cannot specify both ',' and '_'.",
+        "type": "ValueError"
+      },
+      "id": "format-0385",
+      "template": "{value:0>_,}"
+    },
+    {
+      "error": {
+        "message": "Cannot specify '_' with 's'.",
+        "type": "ValueError"
+      },
+      "id": "format-0386",
+      "template": "{value:0>_}"
+    },
+    {
+      "error": {
+        "message": "Unknown format code 'd' for object of type 'str'",
+        "type": "ValueError"
+      },
+      "id": "format-0387",
+      "template": "{value:0>d}"
+    },
+    {
+      "error": {
+        "message": "Unknown format code 'n' for object of type 'str'",
+        "type": "ValueError"
+      },
+      "id": "format-0388",
+      "template": "{value:0>n}"
+    },
+    {
+      "id": "format-0389",
+      "template": "{value:0>s}",
+      "value": "a\u00e9\ud83d\ude00\ud800"
+    },
+    {
+      "error": {
+        "message": "Unknown format code 'x' for object of type 'str'",
+        "type": "ValueError"
+      },
+      "id": "format-0390",
+      "template": "{value:0>x}"
+    },
+    {
+      "error": {
+        "message": "Negative zero coercion (z) not allowed in string format specifier",
+        "type": "ValueError"
+      },
+      "id": "format-0391",
+      "template": "{value:0>z#}"
+    },
+    {
+      "error": {
+        "message": "Negative zero coercion (z) not allowed in string format specifier",
+        "type": "ValueError"
+      },
+      "id": "format-0392",
+      "template": "{value:0>z}"
+    },
+    {
+      "id": "format-0393",
+      "template": "{value:0>}",
+      "value": "a\u00e9\ud83d\ude00\ud800"
+    },
+    {
+      "error": {
+        "message": "Unknown format code '\u007f' for object of type 'str'",
+        "type": "ValueError"
+      },
+      "id": "format-0394",
+      "template": "{value:0>\u007f}"
+    },
+    {
+      "id": "format-0395",
+      "template": "{value:0>\u0664}",
+      "value": "a\u00e9\ud83d\ude00\ud800"
+    },
+    {
+      "error": {
+        "message": "Unknown format code '\\x96ea' for object of type 'str'",
+        "type": "ValueError"
+      },
+      "id": "format-0396",
+      "template": "{value:0>\u96ea}"
+    },
+    {
+      "error": {
+        "message": "Unknown format code '\\xd800' for object of type 'str'",
+        "type": "ValueError"
+      },
+      "id": "format-0397",
+      "template": "{value:0>\ud800}"
+    },
+    {
+      "id": "format-0398",
+      "template": "{value:0>\uff14}",
+      "value": "a\u00e9\ud83d\ude00\ud800"
+    },
+    {
+      "error": {
+        "message": "Cannot specify both ',' and '_'.",
+        "type": "ValueError"
+      },
+      "id": "format-0399",
+      "template": "{value:0_,}"
+    },
+    {
+      "error": {
+        "message": "Cannot specify '_' with 's'.",
+        "type": "ValueError"
+      },
+      "id": "format-0400",
+      "template": "{value:0_}"
+    },
+    {
+      "error": {
+        "message": "Unknown format code 'd' for object of type 'str'",
+        "type": "ValueError"
+      },
+      "id": "format-0401",
+      "template": "{value:0d}"
+    },
+    {
+      "error": {
+        "message": "Unknown format code 'n' for object of type 'str'",
+        "type": "ValueError"
+      },
+      "id": "format-0402",
+      "template": "{value:0n}"
+    },
+    {
+      "id": "format-0403",
+      "template": "{value:0s}",
+      "value": "a\u00e9\ud83d\ude00\ud800"
+    },
+    {
+      "error": {
+        "message": "Unknown format code 'x' for object of type 'str'",
+        "type": "ValueError"
+      },
+      "id": "format-0404",
+      "template": "{value:0x}"
+    },
+    {
+      "id": "format-0405",
+      "template": "{value:0}",
+      "value": "a\u00e9\ud83d\ude00\ud800"
+    },
+    {
+      "error": {
+        "message": "Unknown format code '\u007f' for object of type 'str'",
+        "type": "ValueError"
+      },
+      "id": "format-0406",
+      "template": "{value:0\u007f}"
+    },
+    {
+      "id": "format-0407",
+      "template": "{value:0\u0664}",
+      "value": "a\u00e9\ud83d\ude00\ud800"
+    },
+    {
+      "error": {
+        "message": "Unknown format code '\\x96ea' for object of type 'str'",
+        "type": "ValueError"
+      },
+      "id": "format-0408",
+      "template": "{value:0\u96ea}"
+    },
+    {
+      "error": {
+        "message": "Unknown format code '\\xd800' for object of type 'str'",
+        "type": "ValueError"
+      },
+      "id": "format-0409",
+      "template": "{value:0\ud800}"
+    },
+    {
+      "id": "format-0410",
+      "template": "{value:0\uff14}",
+      "value": "a\u00e9\ud83d\ude00\ud800"
+    },
+    {
+      "error": {
+        "message": "Unknown format code '\\x0' for object of type 'str'",
+        "type": "ValueError"
+      },
+      "id": "format-0411",
+      "template": "{value:4\u0000}"
+    },
+    {
+      "error": {
+        "message": "Unknown format code '%' for object of type 'str'",
+        "type": "ValueError"
+      },
+      "id": "format-0412",
+      "template": "{value:4%}"
+    },
+    {
+      "error": {
+        "message": "Cannot specify both ',' and '_'.",
+        "type": "ValueError"
+      },
+      "id": "format-0413",
+      "template": "{value:4,_}"
+    },
+    {
+      "error": {
+        "message": "Cannot specify ',' with 's'.",
+        "type": "ValueError"
+      },
+      "id": "format-0414",
+      "template": "{value:4,}"
+    },
+    {
+      "id": "format-0415",
+      "template": "{value:4.0}",
+      "value": "    "
+    },
+    {
+      "id": "format-0416",
+      "template": "{value:4.2}",
+      "value": "a\u00e9  "
+    },
+    {
+      "error": {
+        "message": "Format specifier missing precision",
+        "type": "ValueError"
+      },
+      "id": "format-0417",
+      "template": "{value:4.}"
+    },
+    {
+      "id": "format-0418",
+      "template": "{value:4.\u0662}",
+      "value": "a\u00e9  "
+    },
+    {
+      "error": {
+        "message": "Cannot specify both ',' and '_'.",
+        "type": "ValueError"
+      },
+      "id": "format-0419",
+      "template": "{value:4_,}"
+    },
+    {
+      "error": {
+        "message": "Cannot specify '_' with 's'.",
+        "type": "ValueError"
+      },
+      "id": "format-0420",
+      "template": "{value:4_}"
+    },
+    {
+      "error": {
+        "message": "Unknown format code 'd' for object of type 'str'",
+        "type": "ValueError"
+      },
+      "id": "format-0421",
+      "template": "{value:4d}"
+    },
+    {
+      "error": {
+        "message": "Unknown format code 'n' for object of type 'str'",
+        "type": "ValueError"
+      },
+      "id": "format-0422",
+      "template": "{value:4n}"
+    },
+    {
+      "id": "format-0423",
+      "template": "{value:4s}",
+      "value": "a\u00e9\ud83d\ude00\ud800"
+    },
+    {
+      "error": {
+        "message": "Unknown format code 'x' for object of type 'str'",
+        "type": "ValueError"
+      },
+      "id": "format-0424",
+      "template": "{value:4x}"
+    },
+    {
+      "id": "format-0425",
+      "template": "{value:4}",
+      "value": "a\u00e9\ud83d\ude00\ud800"
+    },
+    {
+      "error": {
+        "message": "Unknown format code '\u007f' for object of type 'str'",
+        "type": "ValueError"
+      },
+      "id": "format-0426",
+      "template": "{value:4\u007f}"
+    },
+    {
+      "error": {
+        "message": "Unknown format code '\\x96ea' for object of type 'str'",
+        "type": "ValueError"
+      },
+      "id": "format-0427",
+      "template": "{value:4\u96ea}"
+    },
+    {
+      "error": {
+        "message": "Unknown format code '\\xd800' for object of type 'str'",
+        "type": "ValueError"
+      },
+      "id": "format-0428",
+      "template": "{value:4\ud800}"
+    },
+    {
+      "error": {
+        "message": "Unknown format code '\\x0' for object of type 'str'",
+        "type": "ValueError"
+      },
+      "id": "format-0429",
+      "template": "{value:<\u0000}"
+    },
+    {
+      "error": {
+        "message": "Space not allowed in string format specifier",
+        "type": "ValueError"
+      },
+      "id": "format-0430",
+      "template": "{value:< }"
+    },
+    {
+      "error": {
+        "message": "Alternate form (#) not allowed in string format specifier",
+        "type": "ValueError"
+      },
+      "id": "format-0431",
+      "template": "{value:<#}"
+    },
+    {
+      "error": {
+        "message": "Unknown format code '%' for object of type 'str'",
+        "type": "ValueError"
+      },
+      "id": "format-0432",
+      "template": "{value:<%}"
+    },
+    {
+      "error": {
+        "message": "Sign not allowed in string format specifier",
+        "type": "ValueError"
+      },
+      "id": "format-0433",
+      "template": "{value:<+}"
+    },
+    {
+      "error": {
+        "message": "Cannot specify both ',' and '_'.",
+        "type": "ValueError"
+      },
+      "id": "format-0434",
+      "template": "{value:<,_}"
+    },
+    {
+      "error": {
+        "message": "Cannot specify ',' with 's'.",
+        "type": "ValueError"
+      },
+      "id": "format-0435",
+      "template": "{value:<,}"
+    },
+    {
+      "error": {
+        "message": "Sign not allowed in string format specifier",
+        "type": "ValueError"
+      },
+      "id": "format-0436",
+      "template": "{value:<-}"
+    },
+    {
+      "id": "format-0437",
+      "template": "{value:<.0}",
+      "value": ""
+    },
+    {
+      "id": "format-0438",
+      "template": "{value:<.2}",
+      "value": "a\u00e9"
+    },
+    {
+      "error": {
+        "message": "Format specifier missing precision",
+        "type": "ValueError"
+      },
+      "id": "format-0439",
+      "template": "{value:<.}"
+    },
+    {
+      "id": "format-0440",
+      "template": "{value:<.\u0662}",
+      "value": "a\u00e9"
+    },
+    {
+      "id": "format-0441",
+      "template": "{value:<04}",
+      "value": "a\u00e9\ud83d\ude00\ud800"
+    },
+    {
+      "id": "format-0442",
+      "template": "{value:<0}",
+      "value": "a\u00e9\ud83d\ude00\ud800"
+    },
+    {
+      "id": "format-0443",
+      "template": "{value:<4}",
+      "value": "a\u00e9\ud83d\ude00\ud800"
+    },
+    {
+      "error": {
+        "message": "Cannot specify both ',' and '_'.",
+        "type": "ValueError"
+      },
+      "id": "format-0444",
+      "template": "{value:<_,}"
+    },
+    {
+      "error": {
+        "message": "Cannot specify '_' with 's'.",
+        "type": "ValueError"
+      },
+      "id": "format-0445",
+      "template": "{value:<_}"
+    },
+    {
+      "error": {
+        "message": "Unknown format code 'd' for object of type 'str'",
+        "type": "ValueError"
+      },
+      "id": "format-0446",
+      "template": "{value:<d}"
+    },
+    {
+      "error": {
+        "message": "Unknown format code 'n' for object of type 'str'",
+        "type": "ValueError"
+      },
+      "id": "format-0447",
+      "template": "{value:<n}"
+    },
+    {
+      "id": "format-0448",
+      "template": "{value:<s}",
+      "value": "a\u00e9\ud83d\ude00\ud800"
+    },
+    {
+      "error": {
+        "message": "Unknown format code 'x' for object of type 'str'",
+        "type": "ValueError"
+      },
+      "id": "format-0449",
+      "template": "{value:<x}"
+    },
+    {
+      "error": {
+        "message": "Negative zero coercion (z) not allowed in string format specifier",
+        "type": "ValueError"
+      },
+      "id": "format-0450",
+      "template": "{value:<z#}"
+    },
+    {
+      "error": {
+        "message": "Negative zero coercion (z) not allowed in string format specifier",
+        "type": "ValueError"
+      },
+      "id": "format-0451",
+      "template": "{value:<z}"
+    },
+    {
+      "id": "format-0452",
+      "template": "{value:<}",
+      "value": "a\u00e9\ud83d\ude00\ud800"
+    },
+    {
+      "error": {
+        "message": "Unknown format code '\u007f' for object of type 'str'",
+        "type": "ValueError"
+      },
+      "id": "format-0453",
+      "template": "{value:<\u007f}"
+    },
+    {
+      "id": "format-0454",
+      "template": "{value:<\u0664}",
+      "value": "a\u00e9\ud83d\ude00\ud800"
+    },
+    {
+      "error": {
+        "message": "Unknown format code '\\x96ea' for object of type 'str'",
+        "type": "ValueError"
+      },
+      "id": "format-0455",
+      "template": "{value:<\u96ea}"
+    },
+    {
+      "error": {
+        "message": "Unknown format code '\\xd800' for object of type 'str'",
+        "type": "ValueError"
+      },
+      "id": "format-0456",
+      "template": "{value:<\ud800}"
+    },
+    {
+      "id": "format-0457",
+      "template": "{value:<\uff14}",
+      "value": "a\u00e9\ud83d\ude00\ud800"
+    },
+    {
+      "error": {
+        "message": "Unknown format code '\\x0' for object of type 'str'",
+        "type": "ValueError"
+      },
+      "id": "format-0458",
+      "template": "{value:=\u0000}"
+    },
+    {
+      "error": {
+        "message": "Space not allowed in string format specifier",
+        "type": "ValueError"
+      },
+      "id": "format-0459",
+      "template": "{value:= }"
+    },
+    {
+      "error": {
+        "message": "Alternate form (#) not allowed in string format specifier",
+        "type": "ValueError"
+      },
+      "id": "format-0460",
+      "template": "{value:=#}"
+    },
+    {
+      "error": {
+        "message": "Unknown format code '%' for object of type 'str'",
+        "type": "ValueError"
+      },
+      "id": "format-0461",
+      "template": "{value:=%}"
+    },
+    {
+      "error": {
+        "message": "Sign not allowed in string format specifier",
+        "type": "ValueError"
+      },
+      "id": "format-0462",
+      "template": "{value:=+}"
+    },
+    {
+      "error": {
+        "message": "Cannot specify both ',' and '_'.",
+        "type": "ValueError"
+      },
+      "id": "format-0463",
+      "template": "{value:=,_}"
+    },
+    {
+      "error": {
+        "message": "Cannot specify ',' with 's'.",
+        "type": "ValueError"
+      },
+      "id": "format-0464",
+      "template": "{value:=,}"
+    },
+    {
+      "error": {
+        "message": "Sign not allowed in string format specifier",
+        "type": "ValueError"
+      },
+      "id": "format-0465",
+      "template": "{value:=-}"
+    },
+    {
+      "error": {
+        "message": "'=' alignment not allowed in string format specifier",
+        "type": "ValueError"
+      },
+      "id": "format-0466",
+      "template": "{value:=.0}"
+    },
+    {
+      "error": {
+        "message": "'=' alignment not allowed in string format specifier",
+        "type": "ValueError"
+      },
+      "id": "format-0467",
+      "template": "{value:=.2}"
+    },
+    {
+      "error": {
+        "message": "Format specifier missing precision",
+        "type": "ValueError"
+      },
+      "id": "format-0468",
+      "template": "{value:=.}"
+    },
+    {
+      "error": {
+        "message": "'=' alignment not allowed in string format specifier",
+        "type": "ValueError"
+      },
+      "id": "format-0469",
+      "template": "{value:=.\u0662}"
+    },
+    {
+      "error": {
+        "message": "'=' alignment not allowed in string format specifier",
+        "type": "ValueError"
+      },
+      "id": "format-0470",
+      "template": "{value:=04}"
+    },
+    {
+      "error": {
+        "message": "'=' alignment not allowed in string format specifier",
+        "type": "ValueError"
+      },
+      "id": "format-0471",
+      "template": "{value:=0}"
+    },
+    {
+      "error": {
+        "message": "'=' alignment not allowed in string format specifier",
+        "type": "ValueError"
+      },
+      "id": "format-0472",
+      "template": "{value:=4}"
+    },
+    {
+      "error": {
+        "message": "Cannot specify both ',' and '_'.",
+        "type": "ValueError"
+      },
+      "id": "format-0473",
+      "template": "{value:=_,}"
+    },
+    {
+      "error": {
+        "message": "Cannot specify '_' with 's'.",
+        "type": "ValueError"
+      },
+      "id": "format-0474",
+      "template": "{value:=_}"
+    },
+    {
+      "error": {
+        "message": "Unknown format code 'd' for object of type 'str'",
+        "type": "ValueError"
+      },
+      "id": "format-0475",
+      "template": "{value:=d}"
+    },
+    {
+      "error": {
+        "message": "Unknown format code 'n' for object of type 'str'",
+        "type": "ValueError"
+      },
+      "id": "format-0476",
+      "template": "{value:=n}"
+    },
+    {
+      "error": {
+        "message": "'=' alignment not allowed in string format specifier",
+        "type": "ValueError"
+      },
+      "id": "format-0477",
+      "template": "{value:=s}"
+    },
+    {
+      "error": {
+        "message": "Unknown format code 'x' for object of type 'str'",
+        "type": "ValueError"
+      },
+      "id": "format-0478",
+      "template": "{value:=x}"
+    },
+    {
+      "error": {
+        "message": "Negative zero coercion (z) not allowed in string format specifier",
+        "type": "ValueError"
+      },
+      "id": "format-0479",
+      "template": "{value:=z#}"
+    },
+    {
+      "error": {
+        "message": "Negative zero coercion (z) not allowed in string format specifier",
+        "type": "ValueError"
+      },
+      "id": "format-0480",
+      "template": "{value:=z}"
+    },
+    {
+      "error": {
+        "message": "'=' alignment not allowed in string format specifier",
+        "type": "ValueError"
+      },
+      "id": "format-0481",
+      "template": "{value:=}"
+    },
+    {
+      "error": {
+        "message": "Unknown format code '\u007f' for object of type 'str'",
+        "type": "ValueError"
+      },
+      "id": "format-0482",
+      "template": "{value:=\u007f}"
+    },
+    {
+      "error": {
+        "message": "'=' alignment not allowed in string format specifier",
+        "type": "ValueError"
+      },
+      "id": "format-0483",
+      "template": "{value:=\u0664}"
+    },
+    {
+      "error": {
+        "message": "Unknown format code '\\x96ea' for object of type 'str'",
+        "type": "ValueError"
+      },
+      "id": "format-0484",
+      "template": "{value:=\u96ea}"
+    },
+    {
+      "error": {
+        "message": "Unknown format code '\\xd800' for object of type 'str'",
+        "type": "ValueError"
+      },
+      "id": "format-0485",
+      "template": "{value:=\ud800}"
+    },
+    {
+      "error": {
+        "message": "'=' alignment not allowed in string format specifier",
+        "type": "ValueError"
+      },
+      "id": "format-0486",
+      "template": "{value:=\uff14}"
+    },
+    {
+      "error": {
+        "message": "Unknown format code '\\x0' for object of type 'str'",
+        "type": "ValueError"
+      },
+      "id": "format-0487",
+      "template": "{value:>\u0000}"
+    },
+    {
+      "error": {
+        "message": "Space not allowed in string format specifier",
+        "type": "ValueError"
+      },
+      "id": "format-0488",
+      "template": "{value:> }"
+    },
+    {
+      "error": {
+        "message": "Alternate form (#) not allowed in string format specifier",
+        "type": "ValueError"
+      },
+      "id": "format-0489",
+      "template": "{value:>#}"
+    },
+    {
+      "error": {
+        "message": "Unknown format code '%' for object of type 'str'",
+        "type": "ValueError"
+      },
+      "id": "format-0490",
+      "template": "{value:>%}"
+    },
+    {
+      "error": {
+        "message": "Sign not allowed in string format specifier",
+        "type": "ValueError"
+      },
+      "id": "format-0491",
+      "template": "{value:>+}"
+    },
+    {
+      "error": {
+        "message": "Cannot specify both ',' and '_'.",
+        "type": "ValueError"
+      },
+      "id": "format-0492",
+      "template": "{value:>,_}"
+    },
+    {
+      "error": {
+        "message": "Cannot specify ',' with 's'.",
+        "type": "ValueError"
+      },
+      "id": "format-0493",
+      "template": "{value:>,}"
+    },
+    {
+      "error": {
+        "message": "Sign not allowed in string format specifier",
+        "type": "ValueError"
+      },
+      "id": "format-0494",
+      "template": "{value:>-}"
+    },
+    {
+      "id": "format-0495",
+      "template": "{value:>.0}",
+      "value": ""
+    },
+    {
+      "id": "format-0496",
+      "template": "{value:>.2}",
+      "value": "a\u00e9"
+    },
+    {
+      "error": {
+        "message": "Format specifier missing precision",
+        "type": "ValueError"
+      },
+      "id": "format-0497",
+      "template": "{value:>.}"
+    },
+    {
+      "id": "format-0498",
+      "template": "{value:>.\u0662}",
+      "value": "a\u00e9"
+    },
+    {
+      "id": "format-0499",
+      "template": "{value:>04}",
+      "value": "a\u00e9\ud83d\ude00\ud800"
+    },
+    {
+      "id": "format-0500",
+      "template": "{value:>0}",
+      "value": "a\u00e9\ud83d\ude00\ud800"
+    },
+    {
+      "id": "format-0501",
+      "template": "{value:>4}",
+      "value": "a\u00e9\ud83d\ude00\ud800"
+    },
+    {
+      "error": {
+        "message": "Cannot specify both ',' and '_'.",
+        "type": "ValueError"
+      },
+      "id": "format-0502",
+      "template": "{value:>_,}"
+    },
+    {
+      "error": {
+        "message": "Cannot specify '_' with 's'.",
+        "type": "ValueError"
+      },
+      "id": "format-0503",
+      "template": "{value:>_}"
+    },
+    {
+      "error": {
+        "message": "Unknown format code 'd' for object of type 'str'",
+        "type": "ValueError"
+      },
+      "id": "format-0504",
+      "template": "{value:>d}"
+    },
+    {
+      "error": {
+        "message": "Unknown format code 'n' for object of type 'str'",
+        "type": "ValueError"
+      },
+      "id": "format-0505",
+      "template": "{value:>n}"
+    },
+    {
+      "id": "format-0506",
+      "template": "{value:>s}",
+      "value": "a\u00e9\ud83d\ude00\ud800"
+    },
+    {
+      "error": {
+        "message": "Unknown format code 'x' for object of type 'str'",
+        "type": "ValueError"
+      },
+      "id": "format-0507",
+      "template": "{value:>x}"
+    },
+    {
+      "error": {
+        "message": "Negative zero coercion (z) not allowed in string format specifier",
+        "type": "ValueError"
+      },
+      "id": "format-0508",
+      "template": "{value:>z#}"
+    },
+    {
+      "error": {
+        "message": "Negative zero coercion (z) not allowed in string format specifier",
+        "type": "ValueError"
+      },
+      "id": "format-0509",
+      "template": "{value:>z}"
+    },
+    {
+      "id": "format-0510",
+      "template": "{value:>}",
+      "value": "a\u00e9\ud83d\ude00\ud800"
+    },
+    {
+      "error": {
+        "message": "Unknown format code '\u007f' for object of type 'str'",
+        "type": "ValueError"
+      },
+      "id": "format-0511",
+      "template": "{value:>\u007f}"
+    },
+    {
+      "id": "format-0512",
+      "template": "{value:>\u0664}",
+      "value": "a\u00e9\ud83d\ude00\ud800"
+    },
+    {
+      "error": {
+        "message": "Unknown format code '\\x96ea' for object of type 'str'",
+        "type": "ValueError"
+      },
+      "id": "format-0513",
+      "template": "{value:>\u96ea}"
+    },
+    {
+      "error": {
+        "message": "Unknown format code '\\xd800' for object of type 'str'",
+        "type": "ValueError"
+      },
+      "id": "format-0514",
+      "template": "{value:>\ud800}"
+    },
+    {
+      "id": "format-0515",
+      "template": "{value:>\uff14}",
+      "value": "a\u00e9\ud83d\ude00\ud800"
+    },
+    {
+      "error": {
+        "message": "Unknown format code '\\x0' for object of type 'str'",
+        "type": "ValueError"
+      },
+      "id": "format-0516",
+      "template": "{value:^\u0000}"
+    },
+    {
+      "error": {
+        "message": "Space not allowed in string format specifier",
+        "type": "ValueError"
+      },
+      "id": "format-0517",
+      "template": "{value:^ }"
+    },
+    {
+      "error": {
+        "message": "Alternate form (#) not allowed in string format specifier",
+        "type": "ValueError"
+      },
+      "id": "format-0518",
+      "template": "{value:^#}"
+    },
+    {
+      "error": {
+        "message": "Unknown format code '%' for object of type 'str'",
+        "type": "ValueError"
+      },
+      "id": "format-0519",
+      "template": "{value:^%}"
+    },
+    {
+      "error": {
+        "message": "Sign not allowed in string format specifier",
+        "type": "ValueError"
+      },
+      "id": "format-0520",
+      "template": "{value:^+}"
+    },
+    {
+      "error": {
+        "message": "Cannot specify both ',' and '_'.",
+        "type": "ValueError"
+      },
+      "id": "format-0521",
+      "template": "{value:^,_}"
+    },
+    {
+      "error": {
+        "message": "Cannot specify ',' with 's'.",
+        "type": "ValueError"
+      },
+      "id": "format-0522",
+      "template": "{value:^,}"
+    },
+    {
+      "error": {
+        "message": "Sign not allowed in string format specifier",
+        "type": "ValueError"
+      },
+      "id": "format-0523",
+      "template": "{value:^-}"
+    },
+    {
+      "id": "format-0524",
+      "template": "{value:^.0}",
+      "value": ""
+    },
+    {
+      "id": "format-0525",
+      "template": "{value:^.2}",
+      "value": "a\u00e9"
+    },
+    {
+      "error": {
+        "message": "Format specifier missing precision",
+        "type": "ValueError"
+      },
+      "id": "format-0526",
+      "template": "{value:^.}"
+    },
+    {
+      "id": "format-0527",
+      "template": "{value:^.\u0662}",
+      "value": "a\u00e9"
+    },
+    {
+      "id": "format-0528",
+      "template": "{value:^04}",
+      "value": "a\u00e9\ud83d\ude00\ud800"
+    },
+    {
+      "id": "format-0529",
+      "template": "{value:^0}",
+      "value": "a\u00e9\ud83d\ude00\ud800"
+    },
+    {
+      "id": "format-0530",
+      "template": "{value:^4}",
+      "value": "a\u00e9\ud83d\ude00\ud800"
+    },
+    {
+      "error": {
+        "message": "Cannot specify both ',' and '_'.",
+        "type": "ValueError"
+      },
+      "id": "format-0531",
+      "template": "{value:^_,}"
+    },
+    {
+      "error": {
+        "message": "Cannot specify '_' with 's'.",
+        "type": "ValueError"
+      },
+      "id": "format-0532",
+      "template": "{value:^_}"
+    },
+    {
+      "error": {
+        "message": "Unknown format code 'd' for object of type 'str'",
+        "type": "ValueError"
+      },
+      "id": "format-0533",
+      "template": "{value:^d}"
+    },
+    {
+      "error": {
+        "message": "Unknown format code 'n' for object of type 'str'",
+        "type": "ValueError"
+      },
+      "id": "format-0534",
+      "template": "{value:^n}"
+    },
+    {
+      "id": "format-0535",
+      "template": "{value:^s}",
+      "value": "a\u00e9\ud83d\ude00\ud800"
+    },
+    {
+      "error": {
+        "message": "Unknown format code 'x' for object of type 'str'",
+        "type": "ValueError"
+      },
+      "id": "format-0536",
+      "template": "{value:^x}"
+    },
+    {
+      "error": {
+        "message": "Negative zero coercion (z) not allowed in string format specifier",
+        "type": "ValueError"
+      },
+      "id": "format-0537",
+      "template": "{value:^z#}"
+    },
+    {
+      "error": {
+        "message": "Negative zero coercion (z) not allowed in string format specifier",
+        "type": "ValueError"
+      },
+      "id": "format-0538",
+      "template": "{value:^z}"
+    },
+    {
+      "id": "format-0539",
+      "template": "{value:^}",
+      "value": "a\u00e9\ud83d\ude00\ud800"
+    },
+    {
+      "error": {
+        "message": "Unknown format code '\u007f' for object of type 'str'",
+        "type": "ValueError"
+      },
+      "id": "format-0540",
+      "template": "{value:^\u007f}"
+    },
+    {
+      "id": "format-0541",
+      "template": "{value:^\u0664}",
+      "value": "a\u00e9\ud83d\ude00\ud800"
+    },
+    {
+      "error": {
+        "message": "Unknown format code '\\x96ea' for object of type 'str'",
+        "type": "ValueError"
+      },
+      "id": "format-0542",
+      "template": "{value:^\u96ea}"
+    },
+    {
+      "error": {
+        "message": "Unknown format code '\\xd800' for object of type 'str'",
+        "type": "ValueError"
+      },
+      "id": "format-0543",
+      "template": "{value:^\ud800}"
+    },
+    {
+      "id": "format-0544",
+      "template": "{value:^\uff14}",
+      "value": "a\u00e9\ud83d\ude00\ud800"
+    },
+    {
+      "error": {
+        "message": "Unknown format code '\\x0' for object of type 'str'",
+        "type": "ValueError"
+      },
+      "id": "format-0545",
+      "template": "{value:_\u0000}"
+    },
+    {
+      "error": {
+        "message": "Unknown format code '%' for object of type 'str'",
+        "type": "ValueError"
+      },
+      "id": "format-0546",
+      "template": "{value:_%}"
+    },
+    {
+      "error": {
+        "message": "Cannot specify both ',' and '_'.",
+        "type": "ValueError"
+      },
+      "id": "format-0547",
+      "template": "{value:_,\u0000}"
+    },
+    {
+      "error": {
+        "message": "Cannot specify both ',' and '_'.",
+        "type": "ValueError"
+      },
+      "id": "format-0548",
+      "template": "{value:_,%}"
+    },
+    {
+      "error": {
+        "message": "Cannot specify both ',' and '_'.",
+        "type": "ValueError"
+      },
+      "id": "format-0549",
+      "template": "{value:_,.0}"
+    },
+    {
+      "error": {
+        "message": "Cannot specify both ',' and '_'.",
+        "type": "ValueError"
+      },
+      "id": "format-0550",
+      "template": "{value:_,.2}"
+    },
+    {
+      "error": {
+        "message": "Cannot specify both ',' and '_'.",
+        "type": "ValueError"
+      },
+      "id": "format-0551",
+      "template": "{value:_,.}"
+    },
+    {
+      "error": {
+        "message": "Cannot specify both ',' and '_'.",
+        "type": "ValueError"
+      },
+      "id": "format-0552",
+      "template": "{value:_,.\u0662}"
+    },
+    {
+      "error": {
+        "message": "Cannot specify both ',' and '_'.",
+        "type": "ValueError"
+      },
+      "id": "format-0553",
+      "template": "{value:_,d}"
+    },
+    {
+      "error": {
+        "message": "Cannot specify both ',' and '_'.",
+        "type": "ValueError"
+      },
+      "id": "format-0554",
+      "template": "{value:_,n}"
+    },
+    {
+      "error": {
+        "message": "Cannot specify both ',' and '_'.",
+        "type": "ValueError"
+      },
+      "id": "format-0555",
+      "template": "{value:_,s}"
+    },
+    {
+      "error": {
+        "message": "Cannot specify both ',' and '_'.",
+        "type": "ValueError"
+      },
+      "id": "format-0556",
+      "template": "{value:_,x}"
+    },
+    {
+      "error": {
+        "message": "Cannot specify both ',' and '_'.",
+        "type": "ValueError"
+      },
+      "id": "format-0557",
+      "template": "{value:_,}"
+    },
+    {
+      "error": {
+        "message": "Cannot specify both ',' and '_'.",
+        "type": "ValueError"
+      },
+      "id": "format-0558",
+      "template": "{value:_,\u007f}"
+    },
+    {
+      "error": {
+        "message": "Cannot specify both ',' and '_'.",
+        "type": "ValueError"
+      },
+      "id": "format-0559",
+      "template": "{value:_,\u96ea}"
+    },
+    {
+      "error": {
+        "message": "Cannot specify both ',' and '_'.",
+        "type": "ValueError"
+      },
+      "id": "format-0560",
+      "template": "{value:_,\ud800}"
+    },
+    {
+      "error": {
+        "message": "Cannot specify '_' with 's'.",
+        "type": "ValueError"
+      },
+      "id": "format-0561",
+      "template": "{value:_.0}"
+    },
+    {
+      "error": {
+        "message": "Cannot specify '_' with 's'.",
+        "type": "ValueError"
+      },
+      "id": "format-0562",
+      "template": "{value:_.2}"
+    },
+    {
+      "error": {
+        "message": "Format specifier missing precision",
+        "type": "ValueError"
+      },
+      "id": "format-0563",
+      "template": "{value:_.}"
+    },
+    {
+      "error": {
+        "message": "Cannot specify '_' with 's'.",
+        "type": "ValueError"
+      },
+      "id": "format-0564",
+      "template": "{value:_.\u0662}"
+    },
+    {
+      "error": {
+        "message": "Unknown format code 'd' for object of type 'str'",
+        "type": "ValueError"
+      },
+      "id": "format-0565",
+      "template": "{value:_d}"
+    },
+    {
+      "error": {
+        "message": "Cannot specify '_' with 'n'.",
+        "type": "ValueError"
+      },
+      "id": "format-0566",
+      "template": "{value:_n}"
+    },
+    {
+      "error": {
+        "message": "Cannot specify '_' with 's'.",
+        "type": "ValueError"
+      },
+      "id": "format-0567",
+      "template": "{value:_s}"
+    },
+    {
+      "error": {
+        "message": "Unknown format code 'x' for object of type 'str'",
+        "type": "ValueError"
+      },
+      "id": "format-0568",
+      "template": "{value:_x}"
+    },
+    {
+      "error": {
+        "message": "Cannot specify '_' with 's'.",
+        "type": "ValueError"
+      },
+      "id": "format-0569",
+      "template": "{value:_}"
+    },
+    {
+      "error": {
+        "message": "Cannot specify '_' with '\u007f'.",
+        "type": "ValueError"
+      },
+      "id": "format-0570",
+      "template": "{value:_\u007f}"
+    },
+    {
+      "error": {
+        "message": "Cannot specify '_' with '\\x96ea'.",
+        "type": "ValueError"
+      },
+      "id": "format-0571",
+      "template": "{value:_\u96ea}"
+    },
+    {
+      "error": {
+        "message": "Cannot specify '_' with '\\xd800'.",
+        "type": "ValueError"
+      },
+      "id": "format-0572",
+      "template": "{value:_\ud800}"
+    },
+    {
+      "error": {
+        "message": "Unknown format code 'd' for object of type 'str'",
+        "type": "ValueError"
+      },
+      "id": "format-0573",
+      "template": "{value:d}"
+    },
+    {
+      "error": {
+        "message": "Unknown format code 'n' for object of type 'str'",
+        "type": "ValueError"
+      },
+      "id": "format-0574",
+      "template": "{value:n}"
+    },
+    {
+      "id": "format-0575",
+      "template": "{value:s}",
+      "value": "a\u00e9\ud83d\ude00\ud800"
+    },
+    {
+      "error": {
+        "message": "Unknown format code 'x' for object of type 'str'",
+        "type": "ValueError"
+      },
+      "id": "format-0576",
+      "template": "{value:x}"
+    },
+    {
+      "error": {
+        "message": "Unknown format code '\\x0' for object of type 'str'",
+        "type": "ValueError"
+      },
+      "id": "format-0577",
+      "template": "{value:z\u0000}"
+    },
+    {
+      "error": {
+        "message": "Unknown format code '\\x0' for object of type 'str'",
+        "type": "ValueError"
+      },
+      "id": "format-0578",
+      "template": "{value:z#\u0000}"
+    },
+    {
+      "error": {
+        "message": "Unknown format code '%' for object of type 'str'",
+        "type": "ValueError"
+      },
+      "id": "format-0579",
+      "template": "{value:z#%}"
+    },
+    {
+      "error": {
+        "message": "Cannot specify both ',' and '_'.",
+        "type": "ValueError"
+      },
+      "id": "format-0580",
+      "template": "{value:z#,_}"
+    },
+    {
+      "error": {
+        "message": "Cannot specify ',' with 's'.",
+        "type": "ValueError"
+      },
+      "id": "format-0581",
+      "template": "{value:z#,}"
+    },
+    {
+      "error": {
+        "message": "Negative zero coercion (z) not allowed in string format specifier",
+        "type": "ValueError"
+      },
+      "id": "format-0582",
+      "template": "{value:z#.0}"
+    },
+    {
+      "error": {
+        "message": "Negative zero coercion (z) not allowed in string format specifier",
+        "type": "ValueError"
+      },
+      "id": "format-0583",
+      "template": "{value:z#.2}"
+    },
+    {
+      "error": {
+        "message": "Format specifier missing precision",
+        "type": "ValueError"
+      },
+      "id": "format-0584",
+      "template": "{value:z#.}"
+    },
+    {
+      "error": {
+        "message": "Negative zero coercion (z) not allowed in string format specifier",
+        "type": "ValueError"
+      },
+      "id": "format-0585",
+      "template": "{value:z#.\u0662}"
+    },
+    {
+      "error": {
+        "message": "Negative zero coercion (z) not allowed in string format specifier",
+        "type": "ValueError"
+      },
+      "id": "format-0586",
+      "template": "{value:z#04}"
+    },
+    {
+      "error": {
+        "message": "Negative zero coercion (z) not allowed in string format specifier",
+        "type": "ValueError"
+      },
+      "id": "format-0587",
+      "template": "{value:z#0}"
+    },
+    {
+      "error": {
+        "message": "Negative zero coercion (z) not allowed in string format specifier",
+        "type": "ValueError"
+      },
+      "id": "format-0588",
+      "template": "{value:z#4}"
+    },
+    {
+      "error": {
+        "message": "Cannot specify both ',' and '_'.",
+        "type": "ValueError"
+      },
+      "id": "format-0589",
+      "template": "{value:z#_,}"
+    },
+    {
+      "error": {
+        "message": "Cannot specify '_' with 's'.",
+        "type": "ValueError"
+      },
+      "id": "format-0590",
+      "template": "{value:z#_}"
+    },
+    {
+      "error": {
+        "message": "Unknown format code 'd' for object of type 'str'",
+        "type": "ValueError"
+      },
+      "id": "format-0591",
+      "template": "{value:z#d}"
+    },
+    {
+      "error": {
+        "message": "Unknown format code 'n' for object of type 'str'",
+        "type": "ValueError"
+      },
+      "id": "format-0592",
+      "template": "{value:z#n}"
+    },
+    {
+      "error": {
+        "message": "Negative zero coercion (z) not allowed in string format specifier",
+        "type": "ValueError"
+      },
+      "id": "format-0593",
+      "template": "{value:z#s}"
+    },
+    {
+      "error": {
+        "message": "Unknown format code 'x' for object of type 'str'",
+        "type": "ValueError"
+      },
+      "id": "format-0594",
+      "template": "{value:z#x}"
+    },
+    {
+      "error": {
+        "message": "Negative zero coercion (z) not allowed in string format specifier",
+        "type": "ValueError"
+      },
+      "id": "format-0595",
+      "template": "{value:z#}"
+    },
+    {
+      "error": {
+        "message": "Unknown format code '\u007f' for object of type 'str'",
+        "type": "ValueError"
+      },
+      "id": "format-0596",
+      "template": "{value:z#\u007f}"
+    },
+    {
+      "error": {
+        "message": "Negative zero coercion (z) not allowed in string format specifier",
+        "type": "ValueError"
+      },
+      "id": "format-0597",
+      "template": "{value:z#\u0664}"
+    },
+    {
+      "error": {
+        "message": "Unknown format code '\\x96ea' for object of type 'str'",
+        "type": "ValueError"
+      },
+      "id": "format-0598",
+      "template": "{value:z#\u96ea}"
+    },
+    {
+      "error": {
+        "message": "Unknown format code '\\xd800' for object of type 'str'",
+        "type": "ValueError"
+      },
+      "id": "format-0599",
+      "template": "{value:z#\ud800}"
+    },
+    {
+      "error": {
+        "message": "Negative zero coercion (z) not allowed in string format specifier",
+        "type": "ValueError"
+      },
+      "id": "format-0600",
+      "template": "{value:z#\uff14}"
+    },
+    {
+      "error": {
+        "message": "Unknown format code '%' for object of type 'str'",
+        "type": "ValueError"
+      },
+      "id": "format-0601",
+      "template": "{value:z%}"
+    },
+    {
+      "error": {
+        "message": "Cannot specify both ',' and '_'.",
+        "type": "ValueError"
+      },
+      "id": "format-0602",
+      "template": "{value:z,_}"
+    },
+    {
+      "error": {
+        "message": "Cannot specify ',' with 's'.",
+        "type": "ValueError"
+      },
+      "id": "format-0603",
+      "template": "{value:z,}"
+    },
+    {
+      "error": {
+        "message": "Negative zero coercion (z) not allowed in string format specifier",
+        "type": "ValueError"
+      },
+      "id": "format-0604",
+      "template": "{value:z.0}"
+    },
+    {
+      "error": {
+        "message": "Negative zero coercion (z) not allowed in string format specifier",
+        "type": "ValueError"
+      },
+      "id": "format-0605",
+      "template": "{value:z.2}"
+    },
+    {
+      "error": {
+        "message": "Format specifier missing precision",
+        "type": "ValueError"
+      },
+      "id": "format-0606",
+      "template": "{value:z.}"
+    },
+    {
+      "error": {
+        "message": "Negative zero coercion (z) not allowed in string format specifier",
+        "type": "ValueError"
+      },
+      "id": "format-0607",
+      "template": "{value:z.\u0662}"
+    },
+    {
+      "error": {
+        "message": "Negative zero coercion (z) not allowed in string format specifier",
+        "type": "ValueError"
+      },
+      "id": "format-0608",
+      "template": "{value:z04}"
+    },
+    {
+      "error": {
+        "message": "Negative zero coercion (z) not allowed in string format specifier",
+        "type": "ValueError"
+      },
+      "id": "format-0609",
+      "template": "{value:z0}"
+    },
+    {
+      "error": {
+        "message": "Negative zero coercion (z) not allowed in string format specifier",
+        "type": "ValueError"
+      },
+      "id": "format-0610",
+      "template": "{value:z4}"
+    },
+    {
+      "error": {
+        "message": "Cannot specify both ',' and '_'.",
+        "type": "ValueError"
+      },
+      "id": "format-0611",
+      "template": "{value:z_,}"
+    },
+    {
+      "error": {
+        "message": "Cannot specify '_' with 's'.",
+        "type": "ValueError"
+      },
+      "id": "format-0612",
+      "template": "{value:z_}"
+    },
+    {
+      "error": {
+        "message": "Unknown format code 'd' for object of type 'str'",
+        "type": "ValueError"
+      },
+      "id": "format-0613",
+      "template": "{value:zd}"
+    },
+    {
+      "error": {
+        "message": "Unknown format code 'n' for object of type 'str'",
+        "type": "ValueError"
+      },
+      "id": "format-0614",
+      "template": "{value:zn}"
+    },
+    {
+      "error": {
+        "message": "Negative zero coercion (z) not allowed in string format specifier",
+        "type": "ValueError"
+      },
+      "id": "format-0615",
+      "template": "{value:zs}"
+    },
+    {
+      "error": {
+        "message": "Unknown format code 'x' for object of type 'str'",
+        "type": "ValueError"
+      },
+      "id": "format-0616",
+      "template": "{value:zx}"
+    },
+    {
+      "error": {
+        "message": "Negative zero coercion (z) not allowed in string format specifier",
+        "type": "ValueError"
+      },
+      "id": "format-0617",
+      "template": "{value:z}"
+    },
+    {
+      "error": {
+        "message": "Unknown format code '\u007f' for object of type 'str'",
+        "type": "ValueError"
+      },
+      "id": "format-0618",
+      "template": "{value:z\u007f}"
+    },
+    {
+      "error": {
+        "message": "Negative zero coercion (z) not allowed in string format specifier",
+        "type": "ValueError"
+      },
+      "id": "format-0619",
+      "template": "{value:z\u0664}"
+    },
+    {
+      "error": {
+        "message": "Unknown format code '\\x96ea' for object of type 'str'",
+        "type": "ValueError"
+      },
+      "id": "format-0620",
+      "template": "{value:z\u96ea}"
+    },
+    {
+      "error": {
+        "message": "Unknown format code '\\xd800' for object of type 'str'",
+        "type": "ValueError"
+      },
+      "id": "format-0621",
+      "template": "{value:z\ud800}"
+    },
+    {
+      "error": {
+        "message": "Negative zero coercion (z) not allowed in string format specifier",
+        "type": "ValueError"
+      },
+      "id": "format-0622",
+      "template": "{value:z\uff14}"
+    },
+    {
+      "id": "format-0623",
+      "template": "{value:{empty}}",
+      "value": "a\u00e9\ud83d\ude00\ud800"
+    },
+    {
+      "error": {
+        "message": "'missing'",
+        "type": "KeyError"
+      },
+      "id": "format-0624",
+      "template": "{value:{missing!q}}"
+    },
+    {
+      "error": {
+        "message": "Max string recursion exceeded",
+        "type": "ValueError"
+      },
+      "id": "format-0625",
+      "template": "{value:{value:{value}}}"
+    },
+    {
+      "error": {
+        "message": "unmatched '{' in format spec",
+        "type": "ValueError"
+      },
+      "id": "format-0626",
+      "template": "{value:{width"
+    },
+    {
+      "error": {
+        "message": "Unknown conversion specifier q",
+        "type": "ValueError"
+      },
+      "id": "format-0627",
+      "template": "{value:{width!q}}"
+    },
+    {
+      "error": {
+        "message": "Max string recursion exceeded",
+        "type": "ValueError"
+      },
+      "id": "format-0628",
+      "template": "{value:{width:{precision}}}"
+    },
+    {
+      "id": "format-0629",
+      "template": "{value:{width}.{precision}}",
+      "value": "a\u00e9    "
+    },
+    {
+      "error": {
+        "message": "Invalid format specifier '{}' for object of type 'str'",
+        "type": "ValueError"
+      },
+      "id": "format-0630",
+      "template": "{value:{{}}}"
+    },
+    {
+      "id": "format-0631",
+      "template": "{value:}",
+      "value": "a\u00e9\ud83d\ude00\ud800"
+    },
+    {
+      "error": {
+        "message": "Unknown format code '\u007f' for object of type 'str'",
+        "type": "ValueError"
+      },
+      "id": "format-0632",
+      "template": "{value:\u007f}"
+    },
+    {
+      "error": {
+        "message": "Unknown format code '\\x0' for object of type 'str'",
+        "type": "ValueError"
+      },
+      "id": "format-0633",
+      "template": "{value:\u0664\u0000}"
+    },
+    {
+      "error": {
+        "message": "Unknown format code '%' for object of type 'str'",
+        "type": "ValueError"
+      },
+      "id": "format-0634",
+      "template": "{value:\u0664%}"
+    },
+    {
+      "error": {
+        "message": "Cannot specify both ',' and '_'.",
+        "type": "ValueError"
+      },
+      "id": "format-0635",
+      "template": "{value:\u0664,_}"
+    },
+    {
+      "error": {
+        "message": "Cannot specify ',' with 's'.",
+        "type": "ValueError"
+      },
+      "id": "format-0636",
+      "template": "{value:\u0664,}"
+    },
+    {
+      "id": "format-0637",
+      "template": "{value:\u0664.0}",
+      "value": "    "
+    },
+    {
+      "id": "format-0638",
+      "template": "{value:\u0664.2}",
+      "value": "a\u00e9  "
+    },
+    {
+      "error": {
+        "message": "Format specifier missing precision",
+        "type": "ValueError"
+      },
+      "id": "format-0639",
+      "template": "{value:\u0664.}"
+    },
+    {
+      "id": "format-0640",
+      "template": "{value:\u0664.\u0662}",
+      "value": "a\u00e9  "
+    },
+    {
+      "error": {
+        "message": "Cannot specify both ',' and '_'.",
+        "type": "ValueError"
+      },
+      "id": "format-0641",
+      "template": "{value:\u0664_,}"
+    },
+    {
+      "error": {
+        "message": "Cannot specify '_' with 's'.",
+        "type": "ValueError"
+      },
+      "id": "format-0642",
+      "template": "{value:\u0664_}"
+    },
+    {
+      "error": {
+        "message": "Unknown format code 'd' for object of type 'str'",
+        "type": "ValueError"
+      },
+      "id": "format-0643",
+      "template": "{value:\u0664d}"
+    },
+    {
+      "error": {
+        "message": "Unknown format code 'n' for object of type 'str'",
+        "type": "ValueError"
+      },
+      "id": "format-0644",
+      "template": "{value:\u0664n}"
+    },
+    {
+      "id": "format-0645",
+      "template": "{value:\u0664s}",
+      "value": "a\u00e9\ud83d\ude00\ud800"
+    },
+    {
+      "error": {
+        "message": "Unknown format code 'x' for object of type 'str'",
+        "type": "ValueError"
+      },
+      "id": "format-0646",
+      "template": "{value:\u0664x}"
+    },
+    {
+      "id": "format-0647",
+      "template": "{value:\u0664}",
+      "value": "a\u00e9\ud83d\ude00\ud800"
+    },
+    {
+      "error": {
+        "message": "Unknown format code '\u007f' for object of type 'str'",
+        "type": "ValueError"
+      },
+      "id": "format-0648",
+      "template": "{value:\u0664\u007f}"
+    },
+    {
+      "error": {
+        "message": "Unknown format code '\\x96ea' for object of type 'str'",
+        "type": "ValueError"
+      },
+      "id": "format-0649",
+      "template": "{value:\u0664\u96ea}"
+    },
+    {
+      "error": {
+        "message": "Unknown format code '\\xd800' for object of type 'str'",
+        "type": "ValueError"
+      },
+      "id": "format-0650",
+      "template": "{value:\u0664\ud800}"
+    },
+    {
+      "error": {
+        "message": "Unknown format code '\\x0' for object of type 'str'",
+        "type": "ValueError"
+      },
+      "id": "format-0651",
+      "template": "{value:\u96ea^\u0000}"
+    },
+    {
+      "error": {
+        "message": "Space not allowed in string format specifier",
+        "type": "ValueError"
+      },
+      "id": "format-0652",
+      "template": "{value:\u96ea^ }"
+    },
+    {
+      "error": {
+        "message": "Alternate form (#) not allowed in string format specifier",
+        "type": "ValueError"
+      },
+      "id": "format-0653",
+      "template": "{value:\u96ea^#}"
+    },
+    {
+      "error": {
+        "message": "Unknown format code '%' for object of type 'str'",
+        "type": "ValueError"
+      },
+      "id": "format-0654",
+      "template": "{value:\u96ea^%}"
+    },
+    {
+      "error": {
+        "message": "Sign not allowed in string format specifier",
+        "type": "ValueError"
+      },
+      "id": "format-0655",
+      "template": "{value:\u96ea^+}"
+    },
+    {
+      "error": {
+        "message": "Cannot specify both ',' and '_'.",
+        "type": "ValueError"
+      },
+      "id": "format-0656",
+      "template": "{value:\u96ea^,_}"
+    },
+    {
+      "error": {
+        "message": "Cannot specify ',' with 's'.",
+        "type": "ValueError"
+      },
+      "id": "format-0657",
+      "template": "{value:\u96ea^,}"
+    },
+    {
+      "error": {
+        "message": "Sign not allowed in string format specifier",
+        "type": "ValueError"
+      },
+      "id": "format-0658",
+      "template": "{value:\u96ea^-}"
+    },
+    {
+      "id": "format-0659",
+      "template": "{value:\u96ea^.0}",
+      "value": ""
+    },
+    {
+      "id": "format-0660",
+      "template": "{value:\u96ea^.2}",
+      "value": "a\u00e9"
+    },
+    {
+      "error": {
+        "message": "Format specifier missing precision",
+        "type": "ValueError"
+      },
+      "id": "format-0661",
+      "template": "{value:\u96ea^.}"
+    },
+    {
+      "id": "format-0662",
+      "template": "{value:\u96ea^.\u0662}",
+      "value": "a\u00e9"
+    },
+    {
+      "id": "format-0663",
+      "template": "{value:\u96ea^04}",
+      "value": "a\u00e9\ud83d\ude00\ud800"
+    },
+    {
+      "id": "format-0664",
+      "template": "{value:\u96ea^0}",
+      "value": "a\u00e9\ud83d\ude00\ud800"
+    },
+    {
+      "id": "format-0665",
+      "template": "{value:\u96ea^4}",
+      "value": "a\u00e9\ud83d\ude00\ud800"
+    },
+    {
+      "error": {
+        "message": "Cannot specify both ',' and '_'.",
+        "type": "ValueError"
+      },
+      "id": "format-0666",
+      "template": "{value:\u96ea^_,}"
+    },
+    {
+      "error": {
+        "message": "Cannot specify '_' with 's'.",
+        "type": "ValueError"
+      },
+      "id": "format-0667",
+      "template": "{value:\u96ea^_}"
+    },
+    {
+      "error": {
+        "message": "Unknown format code 'd' for object of type 'str'",
+        "type": "ValueError"
+      },
+      "id": "format-0668",
+      "template": "{value:\u96ea^d}"
+    },
+    {
+      "error": {
+        "message": "Unknown format code 'n' for object of type 'str'",
+        "type": "ValueError"
+      },
+      "id": "format-0669",
+      "template": "{value:\u96ea^n}"
+    },
+    {
+      "id": "format-0670",
+      "template": "{value:\u96ea^s}",
+      "value": "a\u00e9\ud83d\ude00\ud800"
+    },
+    {
+      "error": {
+        "message": "Unknown format code 'x' for object of type 'str'",
+        "type": "ValueError"
+      },
+      "id": "format-0671",
+      "template": "{value:\u96ea^x}"
+    },
+    {
+      "error": {
+        "message": "Negative zero coercion (z) not allowed in string format specifier",
+        "type": "ValueError"
+      },
+      "id": "format-0672",
+      "template": "{value:\u96ea^z#}"
+    },
+    {
+      "error": {
+        "message": "Negative zero coercion (z) not allowed in string format specifier",
+        "type": "ValueError"
+      },
+      "id": "format-0673",
+      "template": "{value:\u96ea^z}"
+    },
+    {
+      "id": "format-0674",
+      "template": "{value:\u96ea^}",
+      "value": "a\u00e9\ud83d\ude00\ud800"
+    },
+    {
+      "error": {
+        "message": "Unknown format code '\u007f' for object of type 'str'",
+        "type": "ValueError"
+      },
+      "id": "format-0675",
+      "template": "{value:\u96ea^\u007f}"
+    },
+    {
+      "id": "format-0676",
+      "template": "{value:\u96ea^\u0664}",
+      "value": "a\u00e9\ud83d\ude00\ud800"
+    },
+    {
+      "error": {
+        "message": "Unknown format code '\\x96ea' for object of type 'str'",
+        "type": "ValueError"
+      },
+      "id": "format-0677",
+      "template": "{value:\u96ea^\u96ea}"
+    },
+    {
+      "error": {
+        "message": "Unknown format code '\\xd800' for object of type 'str'",
+        "type": "ValueError"
+      },
+      "id": "format-0678",
+      "template": "{value:\u96ea^\ud800}"
+    },
+    {
+      "id": "format-0679",
+      "template": "{value:\u96ea^\uff14}",
+      "value": "a\u00e9\ud83d\ude00\ud800"
+    },
+    {
+      "error": {
+        "message": "Unknown format code '\\x96ea' for object of type 'str'",
+        "type": "ValueError"
+      },
+      "id": "format-0680",
+      "template": "{value:\u96ea}"
+    },
+    {
+      "error": {
+        "message": "Unknown format code '\\x0' for object of type 'str'",
+        "type": "ValueError"
+      },
+      "id": "format-0681",
+      "template": "{value:\ud800>\u0000}"
+    },
+    {
+      "error": {
+        "message": "Space not allowed in string format specifier",
+        "type": "ValueError"
+      },
+      "id": "format-0682",
+      "template": "{value:\ud800> }"
+    },
+    {
+      "error": {
+        "message": "Alternate form (#) not allowed in string format specifier",
+        "type": "ValueError"
+      },
+      "id": "format-0683",
+      "template": "{value:\ud800>#}"
+    },
+    {
+      "error": {
+        "message": "Unknown format code '%' for object of type 'str'",
+        "type": "ValueError"
+      },
+      "id": "format-0684",
+      "template": "{value:\ud800>%}"
+    },
+    {
+      "error": {
+        "message": "Sign not allowed in string format specifier",
+        "type": "ValueError"
+      },
+      "id": "format-0685",
+      "template": "{value:\ud800>+}"
+    },
+    {
+      "error": {
+        "message": "Cannot specify both ',' and '_'.",
+        "type": "ValueError"
+      },
+      "id": "format-0686",
+      "template": "{value:\ud800>,_}"
+    },
+    {
+      "error": {
+        "message": "Cannot specify ',' with 's'.",
+        "type": "ValueError"
+      },
+      "id": "format-0687",
+      "template": "{value:\ud800>,}"
+    },
+    {
+      "error": {
+        "message": "Sign not allowed in string format specifier",
+        "type": "ValueError"
+      },
+      "id": "format-0688",
+      "template": "{value:\ud800>-}"
+    },
+    {
+      "id": "format-0689",
+      "template": "{value:\ud800>.0}",
+      "value": ""
+    },
+    {
+      "id": "format-0690",
+      "template": "{value:\ud800>.2}",
+      "value": "a\u00e9"
+    },
+    {
+      "error": {
+        "message": "Format specifier missing precision",
+        "type": "ValueError"
+      },
+      "id": "format-0691",
+      "template": "{value:\ud800>.}"
+    },
+    {
+      "id": "format-0692",
+      "template": "{value:\ud800>.\u0662}",
+      "value": "a\u00e9"
+    },
+    {
+      "id": "format-0693",
+      "template": "{value:\ud800>04}",
+      "value": "a\u00e9\ud83d\ude00\ud800"
+    },
+    {
+      "id": "format-0694",
+      "template": "{value:\ud800>0}",
+      "value": "a\u00e9\ud83d\ude00\ud800"
+    },
+    {
+      "id": "format-0695",
+      "template": "{value:\ud800>4}",
+      "value": "a\u00e9\ud83d\ude00\ud800"
+    },
+    {
+      "error": {
+        "message": "Cannot specify both ',' and '_'.",
+        "type": "ValueError"
+      },
+      "id": "format-0696",
+      "template": "{value:\ud800>_,}"
+    },
+    {
+      "error": {
+        "message": "Cannot specify '_' with 's'.",
+        "type": "ValueError"
+      },
+      "id": "format-0697",
+      "template": "{value:\ud800>_}"
+    },
+    {
+      "error": {
+        "message": "Unknown format code 'd' for object of type 'str'",
+        "type": "ValueError"
+      },
+      "id": "format-0698",
+      "template": "{value:\ud800>d}"
+    },
+    {
+      "error": {
+        "message": "Unknown format code 'n' for object of type 'str'",
+        "type": "ValueError"
+      },
+      "id": "format-0699",
+      "template": "{value:\ud800>n}"
+    },
+    {
+      "id": "format-0700",
+      "template": "{value:\ud800>s}",
+      "value": "a\u00e9\ud83d\ude00\ud800"
+    },
+    {
+      "error": {
+        "message": "Unknown format code 'x' for object of type 'str'",
+        "type": "ValueError"
+      },
+      "id": "format-0701",
+      "template": "{value:\ud800>x}"
+    },
+    {
+      "error": {
+        "message": "Negative zero coercion (z) not allowed in string format specifier",
+        "type": "ValueError"
+      },
+      "id": "format-0702",
+      "template": "{value:\ud800>z#}"
+    },
+    {
+      "error": {
+        "message": "Negative zero coercion (z) not allowed in string format specifier",
+        "type": "ValueError"
+      },
+      "id": "format-0703",
+      "template": "{value:\ud800>z}"
+    },
+    {
+      "id": "format-0704",
+      "template": "{value:\ud800>}",
+      "value": "a\u00e9\ud83d\ude00\ud800"
+    },
+    {
+      "error": {
+        "message": "Unknown format code '\u007f' for object of type 'str'",
+        "type": "ValueError"
+      },
+      "id": "format-0705",
+      "template": "{value:\ud800>\u007f}"
+    },
+    {
+      "id": "format-0706",
+      "template": "{value:\ud800>\u0664}",
+      "value": "a\u00e9\ud83d\ude00\ud800"
+    },
+    {
+      "error": {
+        "message": "Unknown format code '\\x96ea' for object of type 'str'",
+        "type": "ValueError"
+      },
+      "id": "format-0707",
+      "template": "{value:\ud800>\u96ea}"
+    },
+    {
+      "error": {
+        "message": "Unknown format code '\\xd800' for object of type 'str'",
+        "type": "ValueError"
+      },
+      "id": "format-0708",
+      "template": "{value:\ud800>\ud800}"
+    },
+    {
+      "id": "format-0709",
+      "template": "{value:\ud800>\uff14}",
+      "value": "a\u00e9\ud83d\ude00\ud800"
+    },
+    {
+      "error": {
+        "message": "Unknown format code '\\xd800' for object of type 'str'",
+        "type": "ValueError"
+      },
+      "id": "format-0710",
+      "template": "{value:\ud800}"
+    },
+    {
+      "error": {
+        "message": "Unknown format code '\\x0' for object of type 'str'",
+        "type": "ValueError"
+      },
+      "id": "format-0711",
+      "template": "{value:\uff14\u0000}"
+    },
+    {
+      "error": {
+        "message": "Unknown format code '%' for object of type 'str'",
+        "type": "ValueError"
+      },
+      "id": "format-0712",
+      "template": "{value:\uff14%}"
+    },
+    {
+      "error": {
+        "message": "Cannot specify both ',' and '_'.",
+        "type": "ValueError"
+      },
+      "id": "format-0713",
+      "template": "{value:\uff14,_}"
+    },
+    {
+      "error": {
+        "message": "Cannot specify ',' with 's'.",
+        "type": "ValueError"
+      },
+      "id": "format-0714",
+      "template": "{value:\uff14,}"
+    },
+    {
+      "id": "format-0715",
+      "template": "{value:\uff14.0}",
+      "value": "    "
+    },
+    {
+      "id": "format-0716",
+      "template": "{value:\uff14.2}",
+      "value": "a\u00e9  "
+    },
+    {
+      "error": {
+        "message": "Format specifier missing precision",
+        "type": "ValueError"
+      },
+      "id": "format-0717",
+      "template": "{value:\uff14.}"
+    },
+    {
+      "id": "format-0718",
+      "template": "{value:\uff14.\u0662}",
+      "value": "a\u00e9  "
+    },
+    {
+      "error": {
+        "message": "Cannot specify both ',' and '_'.",
+        "type": "ValueError"
+      },
+      "id": "format-0719",
+      "template": "{value:\uff14_,}"
+    },
+    {
+      "error": {
+        "message": "Cannot specify '_' with 's'.",
+        "type": "ValueError"
+      },
+      "id": "format-0720",
+      "template": "{value:\uff14_}"
+    },
+    {
+      "error": {
+        "message": "Unknown format code 'd' for object of type 'str'",
+        "type": "ValueError"
+      },
+      "id": "format-0721",
+      "template": "{value:\uff14d}"
+    },
+    {
+      "error": {
+        "message": "Unknown format code 'n' for object of type 'str'",
+        "type": "ValueError"
+      },
+      "id": "format-0722",
+      "template": "{value:\uff14n}"
+    },
+    {
+      "id": "format-0723",
+      "template": "{value:\uff14s}",
+      "value": "a\u00e9\ud83d\ude00\ud800"
+    },
+    {
+      "error": {
+        "message": "Unknown format code 'x' for object of type 'str'",
+        "type": "ValueError"
+      },
+      "id": "format-0724",
+      "template": "{value:\uff14x}"
+    },
+    {
+      "id": "format-0725",
+      "template": "{value:\uff14}",
+      "value": "a\u00e9\ud83d\ude00\ud800"
+    },
+    {
+      "error": {
+        "message": "Unknown format code '\u007f' for object of type 'str'",
+        "type": "ValueError"
+      },
+      "id": "format-0726",
+      "template": "{value:\uff14\u007f}"
+    },
+    {
+      "error": {
+        "message": "Unknown format code '\\x96ea' for object of type 'str'",
+        "type": "ValueError"
+      },
+      "id": "format-0727",
+      "template": "{value:\uff14\u96ea}"
+    },
+    {
+      "error": {
+        "message": "Unknown format code '\\xd800' for object of type 'str'",
+        "type": "ValueError"
+      },
+      "id": "format-0728",
+      "template": "{value:\uff14\ud800}"
+    },
+    {
+      "error": {
+        "message": "string indices must be integers, not 'str'",
+        "type": "TypeError"
+      },
+      "id": "format-0729",
+      "template": "{value[0\u0000]}"
+    },
+    {
+      "error": {
+        "message": "Only '.' or '[' may follow ']' in format field specifier",
+        "type": "ValueError"
+      },
+      "id": "format-0730",
+      "template": "{value[0]x}"
+    },
+    {
+      "id": "format-0731",
+      "template": "{value[0]}",
+      "value": "a"
+    },
+    {
+      "error": {
+        "message": "string indices must be integers, not 'str'",
+        "type": "TypeError"
+      },
+      "id": "format-0732",
+      "template": "{value[0x]}"
+    },
+    {
+      "error": {
+        "message": "string indices must be integers, not 'str'",
+        "type": "TypeError"
+      },
+      "id": "format-0733",
+      "template": "{value[0\u96ea]}"
+    },
+    {
+      "error": {
+        "message": "string indices must be integers, not 'str'",
+        "type": "TypeError"
+      },
+      "id": "format-0734",
+      "template": "{value[2\u0000]}"
+    },
+    {
+      "id": "format-0735",
+      "template": "{value[2]}",
+      "value": "\ud83d\ude00"
+    },
+    {
+      "error": {
+        "message": "string indices must be integers, not 'str'",
+        "type": "TypeError"
+      },
+      "id": "format-0736",
+      "template": "{value[2x]}"
+    },
+    {
+      "error": {
+        "message": "string indices must be integers, not 'str'",
+        "type": "TypeError"
+      },
+      "id": "format-0737",
+      "template": "{value[2\u96ea]}"
+    },
+    {
+      "error": {
+        "message": "Too many decimal digits in format string",
+        "type": "ValueError"
+      },
+      "id": "format-0738",
+      "template": "{value[999999999999999999999999999999\u0000]}"
+    },
+    {
+      "error": {
+        "message": "Too many decimal digits in format string",
+        "type": "ValueError"
+      },
+      "id": "format-0739",
+      "template": "{value[999999999999999999999999999999]}"
+    },
+    {
+      "error": {
+        "message": "Too many decimal digits in format string",
+        "type": "ValueError"
+      },
+      "id": "format-0740",
+      "template": "{value[999999999999999999999999999999x]}"
+    },
+    {
+      "error": {
+        "message": "Too many decimal digits in format string",
+        "type": "ValueError"
+      },
+      "id": "format-0741",
+      "template": "{value[999999999999999999999999999999\u96ea]}"
+    },
+    {
+      "error": {
+        "message": "string indices must be integers, not 'str'",
+        "type": "TypeError"
+      },
+      "id": "format-0742",
+      "template": "{value[missing].}"
+    },
+    {
+      "error": {
+        "message": "string indices must be integers, not 'str'",
+        "type": "TypeError"
+      },
+      "id": "format-0743",
+      "template": "{value[\u00b2\u0000]}"
+    },
+    {
+      "error": {
+        "message": "string indices must be integers, not 'str'",
+        "type": "TypeError"
+      },
+      "id": "format-0744",
+      "template": "{value[\u00b2]}"
+    },
+    {
+      "error": {
+        "message": "string indices must be integers, not 'str'",
+        "type": "TypeError"
+      },
+      "id": "format-0745",
+      "template": "{value[\u00b2x]}"
+    },
+    {
+      "error": {
+        "message": "string indices must be integers, not 'str'",
+        "type": "TypeError"
+      },
+      "id": "format-0746",
+      "template": "{value[\u00b2\u96ea]}"
+    },
+    {
+      "error": {
+        "message": "string indices must be integers, not 'str'",
+        "type": "TypeError"
+      },
+      "id": "format-0747",
+      "template": "{value[\u0660\u0000]}"
+    },
+    {
+      "id": "format-0748",
+      "template": "{value[\u0660]}",
+      "value": "a"
+    },
+    {
+      "error": {
+        "message": "string indices must be integers, not 'str'",
+        "type": "TypeError"
+      },
+      "id": "format-0749",
+      "template": "{value[\u0660x]}"
+    },
+    {
+      "error": {
+        "message": "string indices must be integers, not 'str'",
+        "type": "TypeError"
+      },
+      "id": "format-0750",
+      "template": "{value[\u0660\u96ea]}"
+    },
+    {
+      "error": {
+        "message": "Too many decimal digits in format string",
+        "type": "ValueError"
+      },
+      "id": "format-0751",
+      "template": "{value[\u0669\u0669\u0669\u0669\u0669\u0669\u0669\u0669\u0669\u0669\u0669\u0669\u0669\u0669\u0669\u0669\u0669\u0669\u0669\u0669\u0669\u0669\u0669\u0669\u0669\u0669\u0669\u0669\u0669\u0669\u0000]}"
+    },
+    {
+      "error": {
+        "message": "Too many decimal digits in format string",
+        "type": "ValueError"
+      },
+      "id": "format-0752",
+      "template": "{value[\u0669\u0669\u0669\u0669\u0669\u0669\u0669\u0669\u0669\u0669\u0669\u0669\u0669\u0669\u0669\u0669\u0669\u0669\u0669\u0669\u0669\u0669\u0669\u0669\u0669\u0669\u0669\u0669\u0669\u0669]}"
+    },
+    {
+      "error": {
+        "message": "Too many decimal digits in format string",
+        "type": "ValueError"
+      },
+      "id": "format-0753",
+      "template": "{value[\u0669\u0669\u0669\u0669\u0669\u0669\u0669\u0669\u0669\u0669\u0669\u0669\u0669\u0669\u0669\u0669\u0669\u0669\u0669\u0669\u0669\u0669\u0669\u0669\u0669\u0669\u0669\u0669\u0669\u0669x]}"
+    },
+    {
+      "error": {
+        "message": "Too many decimal digits in format string",
+        "type": "ValueError"
+      },
+      "id": "format-0754",
+      "template": "{value[\u0669\u0669\u0669\u0669\u0669\u0669\u0669\u0669\u0669\u0669\u0669\u0669\u0669\u0669\u0669\u0669\u0669\u0669\u0669\u0669\u0669\u0669\u0669\u0669\u0669\u0669\u0669\u0669\u0669\u0669\u96ea]}"
+    },
+    {
+      "error": {
+        "message": "string indices must be integers, not 'str'",
+        "type": "TypeError"
+      },
+      "id": "format-0755",
+      "template": "{value[\uff10\u0000]}"
+    },
+    {
+      "id": "format-0756",
+      "template": "{value[\uff10]}",
+      "value": "a"
+    },
+    {
+      "error": {
+        "message": "string indices must be integers, not 'str'",
+        "type": "TypeError"
+      },
+      "id": "format-0757",
+      "template": "{value[\uff10x]}"
+    },
+    {
+      "error": {
+        "message": "string indices must be integers, not 'str'",
+        "type": "TypeError"
+      },
+      "id": "format-0758",
+      "template": "{value[\uff10\u96ea]}"
+    },
+    {
+      "id": "format-0759",
+      "template": "{{}}",
+      "value": "{}"
+    },
+    {
+      "error": {
+        "message": "'\u00b2\\x00'",
+        "type": "KeyError"
+      },
+      "id": "format-0760",
+      "template": "{\u00b2\u0000}"
+    },
+    {
+      "error": {
+        "message": "'\u00b2x'",
+        "type": "KeyError"
+      },
+      "id": "format-0761",
+      "template": "{\u00b2x}"
+    },
+    {
+      "error": {
+        "message": "'\u00b2'",
+        "type": "KeyError"
+      },
+      "id": "format-0762",
+      "template": "{\u00b2}"
+    },
+    {
+      "error": {
+        "message": "'\u00b2\u96ea'",
+        "type": "KeyError"
+      },
+      "id": "format-0763",
+      "template": "{\u00b2\u96ea}"
+    },
+    {
+      "error": {
+        "message": "'\u0660\\x00'",
+        "type": "KeyError"
+      },
+      "id": "format-0764",
+      "template": "{\u0660\u0000}"
+    },
+    {
+      "error": {
+        "message": "'\u0660x'",
+        "type": "KeyError"
+      },
+      "id": "format-0765",
+      "template": "{\u0660x}"
+    },
+    {
+      "error": {
+        "message": "Replacement index 0 out of range for positional args tuple",
+        "type": "IndexError"
+      },
+      "id": "format-0766",
+      "template": "{\u0660}"
+    },
+    {
+      "error": {
+        "message": "'\u0660\u96ea'",
+        "type": "KeyError"
+      },
+      "id": "format-0767",
+      "template": "{\u0660\u96ea}"
+    },
+    {
+      "error": {
+        "message": "Too many decimal digits in format string",
+        "type": "ValueError"
+      },
+      "id": "format-0768",
+      "template": "{\u0669\u0669\u0669\u0669\u0669\u0669\u0669\u0669\u0669\u0669\u0669\u0669\u0669\u0669\u0669\u0669\u0669\u0669\u0669\u0669\u0669\u0669\u0669\u0669\u0669\u0669\u0669\u0669\u0669\u0669\u0000}"
+    },
+    {
+      "error": {
+        "message": "Too many decimal digits in format string",
+        "type": "ValueError"
+      },
+      "id": "format-0769",
+      "template": "{\u0669\u0669\u0669\u0669\u0669\u0669\u0669\u0669\u0669\u0669\u0669\u0669\u0669\u0669\u0669\u0669\u0669\u0669\u0669\u0669\u0669\u0669\u0669\u0669\u0669\u0669\u0669\u0669\u0669\u0669x}"
+    },
+    {
+      "error": {
+        "message": "Too many decimal digits in format string",
+        "type": "ValueError"
+      },
+      "id": "format-0770",
+      "template": "{\u0669\u0669\u0669\u0669\u0669\u0669\u0669\u0669\u0669\u0669\u0669\u0669\u0669\u0669\u0669\u0669\u0669\u0669\u0669\u0669\u0669\u0669\u0669\u0669\u0669\u0669\u0669\u0669\u0669\u0669}"
+    },
+    {
+      "error": {
+        "message": "Too many decimal digits in format string",
+        "type": "ValueError"
+      },
+      "id": "format-0771",
+      "template": "{\u0669\u0669\u0669\u0669\u0669\u0669\u0669\u0669\u0669\u0669\u0669\u0669\u0669\u0669\u0669\u0669\u0669\u0669\u0669\u0669\u0669\u0669\u0669\u0669\u0669\u0669\u0669\u0669\u0669\u0669\u96ea}"
+    },
+    {
+      "error": {
+        "message": "'\uff10\\x00'",
+        "type": "KeyError"
+      },
+      "id": "format-0772",
+      "template": "{\uff10\u0000}"
+    },
+    {
+      "error": {
+        "message": "'\uff10x'",
+        "type": "KeyError"
+      },
+      "id": "format-0773",
+      "template": "{\uff10x}"
+    },
+    {
+      "error": {
+        "message": "Replacement index 0 out of range for positional args tuple",
+        "type": "IndexError"
+      },
+      "id": "format-0774",
+      "template": "{\uff10}"
+    },
+    {
+      "error": {
+        "message": "'\uff10\u96ea'",
+        "type": "KeyError"
+      },
+      "id": "format-0775",
+      "template": "{\uff10\u96ea}"
+    },
+    {
+      "error": {
+        "message": "Single '}' encountered in format string",
+        "type": "ValueError"
+      },
+      "id": "format-0776",
+      "template": "}"
+    }
+  ],
+  "python_version": "3.12.10",
+  "schema": "marty.python-named-format-reference/v1"
+}

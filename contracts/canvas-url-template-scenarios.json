@@ -1,0 +1,1284 @@
+{
+  "schema": "marty.canvas-url-template-scenarios/v1",
+  "cases": [
+    {
+      "id": "assertion-default",
+      "operation": "assertion",
+      "template": null,
+      "arguments": {
+        "api_base_url": "https://api.example",
+        "scope": "badgeclasses",
+        "badgeclass_id": "badge /雪%",
+        "issuer_id": "issuer /é%"
+      }
+    },
+    {
+      "id": "assertion-empty",
+      "operation": "assertion",
+      "template": "",
+      "arguments": {
+        "api_base_url": "https://api.example",
+        "scope": "badgeclasses",
+        "badgeclass_id": "badge /雪%",
+        "issuer_id": "issuer /é%"
+      }
+    },
+    {
+      "id": "assertion-whitespace",
+      "operation": "assertion",
+      "template": " \t 　\n",
+      "arguments": {
+        "api_base_url": "https://api.example",
+        "scope": "badgeclasses",
+        "badgeclass_id": "badge /雪%",
+        "issuer_id": "issuer /é%"
+      }
+    },
+    {
+      "id": "assertion-raw-base-trailing-slash",
+      "operation": "assertion",
+      "template": null,
+      "arguments": {
+        "api_base_url": "https://api.example/",
+        "scope": "badgeclasses",
+        "badgeclass_id": "badge /雪%",
+        "issuer_id": "issuer /é%"
+      }
+    },
+    {
+      "id": "assertion-all-fields",
+      "operation": "assertion",
+      "template": "{api_base_url}/{scope}/{badgeclass_id}/{issuer_id}",
+      "arguments": {
+        "api_base_url": "https://api.example",
+        "scope": "badgeclasses",
+        "badgeclass_id": "badge /雪%",
+        "issuer_id": "issuer /é%"
+      }
+    },
+    {
+      "id": "assertion-trim-template",
+      "operation": "assertion",
+      "template": " \t/{badgeclass_id}　\n",
+      "arguments": {
+        "api_base_url": "https://api.example",
+        "scope": "badgeclasses",
+        "badgeclass_id": "badge /雪%",
+        "issuer_id": "issuer /é%"
+      }
+    },
+    {
+      "id": "assertion-literal-escaped",
+      "operation": "assertion",
+      "template": "/{{literal}}/{{}}",
+      "arguments": {
+        "api_base_url": "https://api.example",
+        "scope": "badgeclasses",
+        "badgeclass_id": "badge /雪%",
+        "issuer_id": "issuer /é%"
+      }
+    },
+    {
+      "id": "assertion-repeat",
+      "operation": "assertion",
+      "template": "/{badgeclass_id}/{badgeclass_id}",
+      "arguments": {
+        "api_base_url": "https://api.example",
+        "scope": "badgeclasses",
+        "badgeclass_id": "badge /雪%",
+        "issuer_id": "issuer /é%"
+      }
+    },
+    {
+      "id": "assertion-index",
+      "operation": "assertion",
+      "template": "/{badgeclass_id[0]}/{badgeclass_id[1]}",
+      "arguments": {
+        "api_base_url": "https://api.example",
+        "scope": "badgeclasses",
+        "badgeclass_id": "badge /雪%",
+        "issuer_id": "issuer /é%"
+      }
+    },
+    {
+      "id": "assertion-unicode-index",
+      "operation": "assertion",
+      "template": "/{api_base_url[0]}",
+      "arguments": {
+        "api_base_url": "雪abc",
+        "scope": "badgeclasses",
+        "badgeclass_id": "badge /雪%",
+        "issuer_id": "issuer /é%"
+      }
+    },
+    {
+      "id": "assertion-deterministic-attribute",
+      "operation": "assertion",
+      "template": "/{badgeclass_id.__class__.__name__}",
+      "arguments": {
+        "api_base_url": "https://api.example",
+        "scope": "badgeclasses",
+        "badgeclass_id": "badge /雪%",
+        "issuer_id": "issuer /é%"
+      }
+    },
+    {
+      "id": "assertion-string-conversion",
+      "operation": "assertion",
+      "template": "/{badgeclass_id!s}",
+      "arguments": {
+        "api_base_url": "https://api.example",
+        "scope": "badgeclasses",
+        "badgeclass_id": "badge /雪%",
+        "issuer_id": "issuer /é%"
+      }
+    },
+    {
+      "id": "assertion-repr-conversion",
+      "operation": "assertion",
+      "template": "/{api_base_url!r}",
+      "arguments": {
+        "api_base_url": "é'\\\n",
+        "scope": "badgeclasses",
+        "badgeclass_id": "badge /雪%",
+        "issuer_id": "issuer /é%"
+      }
+    },
+    {
+      "id": "assertion-ascii-conversion",
+      "operation": "assertion",
+      "template": "/{api_base_url!a}",
+      "arguments": {
+        "api_base_url": "é雪",
+        "scope": "badgeclasses",
+        "badgeclass_id": "badge /雪%",
+        "issuer_id": "issuer /é%"
+      }
+    },
+    {
+      "id": "assertion-width",
+      "operation": "assertion",
+      "template": "/{badgeclass_id:>32}",
+      "arguments": {
+        "api_base_url": "https://api.example",
+        "scope": "badgeclasses",
+        "badgeclass_id": "badge /雪%",
+        "issuer_id": "issuer /é%"
+      }
+    },
+    {
+      "id": "assertion-fill-center",
+      "operation": "assertion",
+      "template": "/{badgeclass_id:雪^32}",
+      "arguments": {
+        "api_base_url": "https://api.example",
+        "scope": "badgeclasses",
+        "badgeclass_id": "badge /雪%",
+        "issuer_id": "issuer /é%"
+      }
+    },
+    {
+      "id": "assertion-precision",
+      "operation": "assertion",
+      "template": "/{badgeclass_id:.7}",
+      "arguments": {
+        "api_base_url": "https://api.example",
+        "scope": "badgeclasses",
+        "badgeclass_id": "badge /雪%",
+        "issuer_id": "issuer /é%"
+      }
+    },
+    {
+      "id": "assertion-nested-width",
+      "operation": "assertion",
+      "template": "/{badgeclass_id:>{api_base_url}}",
+      "arguments": {
+        "api_base_url": "32",
+        "scope": "badgeclasses",
+        "badgeclass_id": "badge /雪%",
+        "issuer_id": "issuer /é%"
+      }
+    },
+    {
+      "id": "assertion-no-recursive-replace",
+      "operation": "assertion",
+      "template": "/{api_base_url}/{badgeclass_id}",
+      "arguments": {
+        "api_base_url": "{badgeclass_id}",
+        "scope": "badgeclasses",
+        "badgeclass_id": "badge /雪%",
+        "issuer_id": "issuer /é%"
+      }
+    },
+    {
+      "id": "assertion-unmatched-open",
+      "operation": "assertion",
+      "template": "/{",
+      "arguments": {
+        "api_base_url": "https://api.example",
+        "scope": "badgeclasses",
+        "badgeclass_id": "badge /雪%",
+        "issuer_id": "issuer /é%"
+      }
+    },
+    {
+      "id": "assertion-unmatched-close",
+      "operation": "assertion",
+      "template": "/}",
+      "arguments": {
+        "api_base_url": "https://api.example",
+        "scope": "badgeclasses",
+        "badgeclass_id": "badge /雪%",
+        "issuer_id": "issuer /é%"
+      }
+    },
+    {
+      "id": "assertion-missing-name",
+      "operation": "assertion",
+      "template": "/{missing}",
+      "arguments": {
+        "api_base_url": "https://api.example",
+        "scope": "badgeclasses",
+        "badgeclass_id": "badge /雪%",
+        "issuer_id": "issuer /é%"
+      }
+    },
+    {
+      "id": "assertion-position",
+      "operation": "assertion",
+      "template": "/{0}",
+      "arguments": {
+        "api_base_url": "https://api.example",
+        "scope": "badgeclasses",
+        "badgeclass_id": "badge /雪%",
+        "issuer_id": "issuer /é%"
+      }
+    },
+    {
+      "id": "assertion-automatic-position",
+      "operation": "assertion",
+      "template": "/{}",
+      "arguments": {
+        "api_base_url": "https://api.example",
+        "scope": "badgeclasses",
+        "badgeclass_id": "badge /雪%",
+        "issuer_id": "issuer /é%"
+      }
+    },
+    {
+      "id": "assertion-invalid-conversion",
+      "operation": "assertion",
+      "template": "/{badgeclass_id!q}",
+      "arguments": {
+        "api_base_url": "https://api.example",
+        "scope": "badgeclasses",
+        "badgeclass_id": "badge /雪%",
+        "issuer_id": "issuer /é%"
+      }
+    },
+    {
+      "id": "assertion-invalid-string-spec",
+      "operation": "assertion",
+      "template": "/{badgeclass_id:d}",
+      "arguments": {
+        "api_base_url": "https://api.example",
+        "scope": "badgeclasses",
+        "badgeclass_id": "badge /雪%",
+        "issuer_id": "issuer /é%"
+      }
+    },
+    {
+      "id": "assertion-missing-attribute",
+      "operation": "assertion",
+      "template": "/{badgeclass_id.missing}",
+      "arguments": {
+        "api_base_url": "https://api.example",
+        "scope": "badgeclasses",
+        "badgeclass_id": "badge /雪%",
+        "issuer_id": "issuer /é%"
+      }
+    },
+    {
+      "id": "assertion-missing-index",
+      "operation": "assertion",
+      "template": "/{badgeclass_id[9999]}",
+      "arguments": {
+        "api_base_url": "https://api.example",
+        "scope": "badgeclasses",
+        "badgeclass_id": "badge /雪%",
+        "issuer_id": "issuer /é%"
+      }
+    },
+    {
+      "id": "assertion-noninteger-index",
+      "operation": "assertion",
+      "template": "/{badgeclass_id[name]}",
+      "arguments": {
+        "api_base_url": "https://api.example",
+        "scope": "badgeclasses",
+        "badgeclass_id": "badge /雪%",
+        "issuer_id": "issuer /é%"
+      }
+    },
+    {
+      "id": "assertion-negative-index",
+      "operation": "assertion",
+      "template": "/{badgeclass_id[-1]}",
+      "arguments": {
+        "api_base_url": "https://api.example",
+        "scope": "badgeclasses",
+        "badgeclass_id": "badge /雪%",
+        "issuer_id": "issuer /é%"
+      }
+    },
+    {
+      "id": "assertion-nested-recursion",
+      "operation": "assertion",
+      "template": "/{badgeclass_id:{api_base_url:{api_base_url}}}",
+      "arguments": {
+        "api_base_url": "https://api.example",
+        "scope": "badgeclasses",
+        "badgeclass_id": "badge /雪%",
+        "issuer_id": "issuer /é%"
+      }
+    },
+    {
+      "id": "assertion-oversized-width-syntax",
+      "operation": "assertion",
+      "template": "/{badgeclass_id:9999999999999999999999999999999999999}",
+      "arguments": {
+        "api_base_url": "https://api.example",
+        "scope": "badgeclasses",
+        "badgeclass_id": "badge /雪%",
+        "issuer_id": "issuer /é%"
+      }
+    },
+    {
+      "id": "assertion-surrogate-base",
+      "operation": "assertion",
+      "template": "/{api_base_url}",
+      "arguments": {
+        "api_base_url": "\ud800",
+        "scope": "badgeclasses",
+        "badgeclass_id": "badge /雪%",
+        "issuer_id": "issuer /é%"
+      }
+    },
+    {
+      "id": "assertion-surrogate-quoted",
+      "operation": "assertion",
+      "template": "/{badgeclass_id}",
+      "arguments": {
+        "api_base_url": "https://api.example",
+        "scope": "badgeclasses",
+        "badgeclass_id": "\ud800",
+        "issuer_id": "issuer /é%"
+      }
+    },
+    {
+      "id": "assertion-url-quote-reserved",
+      "operation": "assertion",
+      "template": null,
+      "arguments": {
+        "api_base_url": "https://api.example",
+        "scope": "scope /?",
+        "badgeclass_id": "a/b?c#d% e+!~_.-é",
+        "issuer_id": "issuer /é%"
+      }
+    },
+    {
+      "id": "assertion-issuer-default",
+      "operation": "assertion",
+      "template": null,
+      "arguments": {
+        "api_base_url": "https://api.example",
+        "scope": "issuers",
+        "badgeclass_id": "badge /雪%",
+        "issuer_id": "issuer /é%"
+      }
+    },
+    {
+      "id": "assertion-issuer-missing",
+      "operation": "assertion",
+      "template": null,
+      "arguments": {
+        "api_base_url": "https://api.example",
+        "scope": "issuers",
+        "badgeclass_id": "badge /雪%",
+        "issuer_id": null
+      }
+    },
+    {
+      "id": "assertion-issuer-empty",
+      "operation": "assertion",
+      "template": null,
+      "arguments": {
+        "api_base_url": "https://api.example",
+        "scope": "issuers",
+        "badgeclass_id": "badge /雪%",
+        "issuer_id": ""
+      }
+    },
+    {
+      "id": "assertion-badge-missing",
+      "operation": "assertion",
+      "template": null,
+      "arguments": {
+        "api_base_url": "https://api.example",
+        "scope": "badgeclasses",
+        "badgeclass_id": null,
+        "issuer_id": "issuer /é%"
+      }
+    },
+    {
+      "id": "assertion-badge-empty",
+      "operation": "assertion",
+      "template": null,
+      "arguments": {
+        "api_base_url": "https://api.example",
+        "scope": "badgeclasses",
+        "badgeclass_id": "",
+        "issuer_id": "issuer /é%"
+      }
+    },
+    {
+      "id": "assertion-missing-ids-template",
+      "operation": "assertion",
+      "template": "/{issuer_id}/{badgeclass_id}",
+      "arguments": {
+        "api_base_url": "https://api.example",
+        "scope": "badgeclasses",
+        "badgeclass_id": null,
+        "issuer_id": null
+      }
+    },
+    {
+      "id": "assertion-non-issuer-scope",
+      "operation": "assertion",
+      "template": null,
+      "arguments": {
+        "api_base_url": "https://api.example",
+        "scope": "ISSUERS",
+        "badgeclass_id": "badge /雪%",
+        "issuer_id": "issuer /é%"
+      }
+    },
+    {
+      "id": "assertion-quote-before-unused-format",
+      "operation": "assertion",
+      "template": "/literal",
+      "arguments": {
+        "api_base_url": "https://api.example",
+        "scope": "\ud800",
+        "badgeclass_id": "badge /雪%",
+        "issuer_id": "issuer /é%"
+      }
+    },
+    {
+      "id": "validation-default",
+      "operation": "validation",
+      "template": null,
+      "arguments": {
+        "api_base_url": "https://api.example",
+        "scope": "badgeclasses",
+        "badgeclass_id": "badge /雪%",
+        "issuer_id": "issuer /é%"
+      }
+    },
+    {
+      "id": "validation-empty",
+      "operation": "validation",
+      "template": "",
+      "arguments": {
+        "api_base_url": "https://api.example",
+        "scope": "badgeclasses",
+        "badgeclass_id": "badge /雪%",
+        "issuer_id": "issuer /é%"
+      }
+    },
+    {
+      "id": "validation-whitespace",
+      "operation": "validation",
+      "template": " \t 　\n",
+      "arguments": {
+        "api_base_url": "https://api.example",
+        "scope": "badgeclasses",
+        "badgeclass_id": "badge /雪%",
+        "issuer_id": "issuer /é%"
+      }
+    },
+    {
+      "id": "validation-raw-base-trailing-slash",
+      "operation": "validation",
+      "template": null,
+      "arguments": {
+        "api_base_url": "https://api.example/",
+        "scope": "badgeclasses",
+        "badgeclass_id": "badge /雪%",
+        "issuer_id": "issuer /é%"
+      }
+    },
+    {
+      "id": "validation-all-fields",
+      "operation": "validation",
+      "template": "{api_base_url}/{scope}/{badgeclass_id}/{issuer_id}",
+      "arguments": {
+        "api_base_url": "https://api.example",
+        "scope": "badgeclasses",
+        "badgeclass_id": "badge /雪%",
+        "issuer_id": "issuer /é%"
+      }
+    },
+    {
+      "id": "validation-trim-template",
+      "operation": "validation",
+      "template": " \t/{badgeclass_id}　\n",
+      "arguments": {
+        "api_base_url": "https://api.example",
+        "scope": "badgeclasses",
+        "badgeclass_id": "badge /雪%",
+        "issuer_id": "issuer /é%"
+      }
+    },
+    {
+      "id": "validation-literal-escaped",
+      "operation": "validation",
+      "template": "/{{literal}}/{{}}",
+      "arguments": {
+        "api_base_url": "https://api.example",
+        "scope": "badgeclasses",
+        "badgeclass_id": "badge /雪%",
+        "issuer_id": "issuer /é%"
+      }
+    },
+    {
+      "id": "validation-repeat",
+      "operation": "validation",
+      "template": "/{badgeclass_id}/{badgeclass_id}",
+      "arguments": {
+        "api_base_url": "https://api.example",
+        "scope": "badgeclasses",
+        "badgeclass_id": "badge /雪%",
+        "issuer_id": "issuer /é%"
+      }
+    },
+    {
+      "id": "validation-index",
+      "operation": "validation",
+      "template": "/{badgeclass_id[0]}/{badgeclass_id[1]}",
+      "arguments": {
+        "api_base_url": "https://api.example",
+        "scope": "badgeclasses",
+        "badgeclass_id": "badge /雪%",
+        "issuer_id": "issuer /é%"
+      }
+    },
+    {
+      "id": "validation-unicode-index",
+      "operation": "validation",
+      "template": "/{api_base_url[0]}",
+      "arguments": {
+        "api_base_url": "雪abc",
+        "scope": "badgeclasses",
+        "badgeclass_id": "badge /雪%",
+        "issuer_id": "issuer /é%"
+      }
+    },
+    {
+      "id": "validation-deterministic-attribute",
+      "operation": "validation",
+      "template": "/{badgeclass_id.__class__.__name__}",
+      "arguments": {
+        "api_base_url": "https://api.example",
+        "scope": "badgeclasses",
+        "badgeclass_id": "badge /雪%",
+        "issuer_id": "issuer /é%"
+      }
+    },
+    {
+      "id": "validation-string-conversion",
+      "operation": "validation",
+      "template": "/{badgeclass_id!s}",
+      "arguments": {
+        "api_base_url": "https://api.example",
+        "scope": "badgeclasses",
+        "badgeclass_id": "badge /雪%",
+        "issuer_id": "issuer /é%"
+      }
+    },
+    {
+      "id": "validation-repr-conversion",
+      "operation": "validation",
+      "template": "/{api_base_url!r}",
+      "arguments": {
+        "api_base_url": "é'\\\n",
+        "scope": "badgeclasses",
+        "badgeclass_id": "badge /雪%",
+        "issuer_id": "issuer /é%"
+      }
+    },
+    {
+      "id": "validation-ascii-conversion",
+      "operation": "validation",
+      "template": "/{api_base_url!a}",
+      "arguments": {
+        "api_base_url": "é雪",
+        "scope": "badgeclasses",
+        "badgeclass_id": "badge /雪%",
+        "issuer_id": "issuer /é%"
+      }
+    },
+    {
+      "id": "validation-width",
+      "operation": "validation",
+      "template": "/{badgeclass_id:>32}",
+      "arguments": {
+        "api_base_url": "https://api.example",
+        "scope": "badgeclasses",
+        "badgeclass_id": "badge /雪%",
+        "issuer_id": "issuer /é%"
+      }
+    },
+    {
+      "id": "validation-fill-center",
+      "operation": "validation",
+      "template": "/{badgeclass_id:雪^32}",
+      "arguments": {
+        "api_base_url": "https://api.example",
+        "scope": "badgeclasses",
+        "badgeclass_id": "badge /雪%",
+        "issuer_id": "issuer /é%"
+      }
+    },
+    {
+      "id": "validation-precision",
+      "operation": "validation",
+      "template": "/{badgeclass_id:.7}",
+      "arguments": {
+        "api_base_url": "https://api.example",
+        "scope": "badgeclasses",
+        "badgeclass_id": "badge /雪%",
+        "issuer_id": "issuer /é%"
+      }
+    },
+    {
+      "id": "validation-nested-width",
+      "operation": "validation",
+      "template": "/{badgeclass_id:>{api_base_url}}",
+      "arguments": {
+        "api_base_url": "32",
+        "scope": "badgeclasses",
+        "badgeclass_id": "badge /雪%",
+        "issuer_id": "issuer /é%"
+      }
+    },
+    {
+      "id": "validation-no-recursive-replace",
+      "operation": "validation",
+      "template": "/{api_base_url}/{badgeclass_id}",
+      "arguments": {
+        "api_base_url": "{badgeclass_id}",
+        "scope": "badgeclasses",
+        "badgeclass_id": "badge /雪%",
+        "issuer_id": "issuer /é%"
+      }
+    },
+    {
+      "id": "validation-unmatched-open",
+      "operation": "validation",
+      "template": "/{",
+      "arguments": {
+        "api_base_url": "https://api.example",
+        "scope": "badgeclasses",
+        "badgeclass_id": "badge /雪%",
+        "issuer_id": "issuer /é%"
+      }
+    },
+    {
+      "id": "validation-unmatched-close",
+      "operation": "validation",
+      "template": "/}",
+      "arguments": {
+        "api_base_url": "https://api.example",
+        "scope": "badgeclasses",
+        "badgeclass_id": "badge /雪%",
+        "issuer_id": "issuer /é%"
+      }
+    },
+    {
+      "id": "validation-missing-name",
+      "operation": "validation",
+      "template": "/{missing}",
+      "arguments": {
+        "api_base_url": "https://api.example",
+        "scope": "badgeclasses",
+        "badgeclass_id": "badge /雪%",
+        "issuer_id": "issuer /é%"
+      }
+    },
+    {
+      "id": "validation-position",
+      "operation": "validation",
+      "template": "/{0}",
+      "arguments": {
+        "api_base_url": "https://api.example",
+        "scope": "badgeclasses",
+        "badgeclass_id": "badge /雪%",
+        "issuer_id": "issuer /é%"
+      }
+    },
+    {
+      "id": "validation-automatic-position",
+      "operation": "validation",
+      "template": "/{}",
+      "arguments": {
+        "api_base_url": "https://api.example",
+        "scope": "badgeclasses",
+        "badgeclass_id": "badge /雪%",
+        "issuer_id": "issuer /é%"
+      }
+    },
+    {
+      "id": "validation-invalid-conversion",
+      "operation": "validation",
+      "template": "/{badgeclass_id!q}",
+      "arguments": {
+        "api_base_url": "https://api.example",
+        "scope": "badgeclasses",
+        "badgeclass_id": "badge /雪%",
+        "issuer_id": "issuer /é%"
+      }
+    },
+    {
+      "id": "validation-invalid-string-spec",
+      "operation": "validation",
+      "template": "/{badgeclass_id:d}",
+      "arguments": {
+        "api_base_url": "https://api.example",
+        "scope": "badgeclasses",
+        "badgeclass_id": "badge /雪%",
+        "issuer_id": "issuer /é%"
+      }
+    },
+    {
+      "id": "validation-missing-attribute",
+      "operation": "validation",
+      "template": "/{badgeclass_id.missing}",
+      "arguments": {
+        "api_base_url": "https://api.example",
+        "scope": "badgeclasses",
+        "badgeclass_id": "badge /雪%",
+        "issuer_id": "issuer /é%"
+      }
+    },
+    {
+      "id": "validation-missing-index",
+      "operation": "validation",
+      "template": "/{badgeclass_id[9999]}",
+      "arguments": {
+        "api_base_url": "https://api.example",
+        "scope": "badgeclasses",
+        "badgeclass_id": "badge /雪%",
+        "issuer_id": "issuer /é%"
+      }
+    },
+    {
+      "id": "validation-noninteger-index",
+      "operation": "validation",
+      "template": "/{badgeclass_id[name]}",
+      "arguments": {
+        "api_base_url": "https://api.example",
+        "scope": "badgeclasses",
+        "badgeclass_id": "badge /雪%",
+        "issuer_id": "issuer /é%"
+      }
+    },
+    {
+      "id": "validation-negative-index",
+      "operation": "validation",
+      "template": "/{badgeclass_id[-1]}",
+      "arguments": {
+        "api_base_url": "https://api.example",
+        "scope": "badgeclasses",
+        "badgeclass_id": "badge /雪%",
+        "issuer_id": "issuer /é%"
+      }
+    },
+    {
+      "id": "validation-nested-recursion",
+      "operation": "validation",
+      "template": "/{badgeclass_id:{api_base_url:{api_base_url}}}",
+      "arguments": {
+        "api_base_url": "https://api.example",
+        "scope": "badgeclasses",
+        "badgeclass_id": "badge /雪%",
+        "issuer_id": "issuer /é%"
+      }
+    },
+    {
+      "id": "validation-oversized-width-syntax",
+      "operation": "validation",
+      "template": "/{badgeclass_id:9999999999999999999999999999999999999}",
+      "arguments": {
+        "api_base_url": "https://api.example",
+        "scope": "badgeclasses",
+        "badgeclass_id": "badge /雪%",
+        "issuer_id": "issuer /é%"
+      }
+    },
+    {
+      "id": "validation-surrogate-base",
+      "operation": "validation",
+      "template": "/{api_base_url}",
+      "arguments": {
+        "api_base_url": "\ud800",
+        "scope": "badgeclasses",
+        "badgeclass_id": "badge /雪%",
+        "issuer_id": "issuer /é%"
+      }
+    },
+    {
+      "id": "validation-surrogate-quoted",
+      "operation": "validation",
+      "template": "/{badgeclass_id}",
+      "arguments": {
+        "api_base_url": "https://api.example",
+        "scope": "badgeclasses",
+        "badgeclass_id": "\ud800",
+        "issuer_id": "issuer /é%"
+      }
+    },
+    {
+      "id": "validation-url-quote-reserved",
+      "operation": "validation",
+      "template": null,
+      "arguments": {
+        "api_base_url": "https://api.example",
+        "scope": "scope /?",
+        "badgeclass_id": "a/b?c#d% e+!~_.-é",
+        "issuer_id": "issuer /é%"
+      }
+    },
+    {
+      "id": "validation-issuer-default",
+      "operation": "validation",
+      "template": null,
+      "arguments": {
+        "api_base_url": "https://api.example",
+        "scope": "issuers",
+        "badgeclass_id": "badge /雪%",
+        "issuer_id": "issuer /é%"
+      }
+    },
+    {
+      "id": "validation-issuer-missing",
+      "operation": "validation",
+      "template": null,
+      "arguments": {
+        "api_base_url": "https://api.example",
+        "scope": "issuers",
+        "badgeclass_id": "badge /雪%",
+        "issuer_id": null
+      }
+    },
+    {
+      "id": "validation-issuer-empty",
+      "operation": "validation",
+      "template": null,
+      "arguments": {
+        "api_base_url": "https://api.example",
+        "scope": "issuers",
+        "badgeclass_id": "badge /雪%",
+        "issuer_id": ""
+      }
+    },
+    {
+      "id": "validation-badge-missing",
+      "operation": "validation",
+      "template": null,
+      "arguments": {
+        "api_base_url": "https://api.example",
+        "scope": "badgeclasses",
+        "badgeclass_id": null,
+        "issuer_id": "issuer /é%"
+      }
+    },
+    {
+      "id": "validation-badge-empty",
+      "operation": "validation",
+      "template": null,
+      "arguments": {
+        "api_base_url": "https://api.example",
+        "scope": "badgeclasses",
+        "badgeclass_id": "",
+        "issuer_id": "issuer /é%"
+      }
+    },
+    {
+      "id": "validation-missing-ids-template",
+      "operation": "validation",
+      "template": "/{issuer_id}/{badgeclass_id}",
+      "arguments": {
+        "api_base_url": "https://api.example",
+        "scope": "badgeclasses",
+        "badgeclass_id": null,
+        "issuer_id": null
+      }
+    },
+    {
+      "id": "validation-non-issuer-scope",
+      "operation": "validation",
+      "template": null,
+      "arguments": {
+        "api_base_url": "https://api.example",
+        "scope": "ISSUERS",
+        "badgeclass_id": "badge /雪%",
+        "issuer_id": "issuer /é%"
+      }
+    },
+    {
+      "id": "validation-quote-before-unused-format",
+      "operation": "validation",
+      "template": "/literal",
+      "arguments": {
+        "api_base_url": "https://api.example",
+        "scope": "\ud800",
+        "badgeclass_id": "badge /雪%",
+        "issuer_id": "issuer /é%"
+      }
+    },
+    {
+      "id": "revoke-default",
+      "operation": "revoke",
+      "template": null,
+      "arguments": {
+        "api_base_url": "https://api.example",
+        "external_credential_id": "award /雪%"
+      }
+    },
+    {
+      "id": "revoke-empty",
+      "operation": "revoke",
+      "template": "",
+      "arguments": {
+        "api_base_url": "https://api.example",
+        "external_credential_id": "award /雪%"
+      }
+    },
+    {
+      "id": "revoke-whitespace",
+      "operation": "revoke",
+      "template": " \t 　\n",
+      "arguments": {
+        "api_base_url": "https://api.example",
+        "external_credential_id": "award /雪%"
+      }
+    },
+    {
+      "id": "revoke-raw-base-trailing-slash",
+      "operation": "revoke",
+      "template": null,
+      "arguments": {
+        "api_base_url": "https://api.example/",
+        "external_credential_id": "award /雪%"
+      }
+    },
+    {
+      "id": "revoke-all-fields",
+      "operation": "revoke",
+      "template": "{api_base_url}/{external_credential_id}",
+      "arguments": {
+        "api_base_url": "https://api.example",
+        "external_credential_id": "award /雪%"
+      }
+    },
+    {
+      "id": "revoke-trim-template",
+      "operation": "revoke",
+      "template": " \t/{external_credential_id}　\n",
+      "arguments": {
+        "api_base_url": "https://api.example",
+        "external_credential_id": "award /雪%"
+      }
+    },
+    {
+      "id": "revoke-literal-escaped",
+      "operation": "revoke",
+      "template": "/{{literal}}/{{}}",
+      "arguments": {
+        "api_base_url": "https://api.example",
+        "external_credential_id": "award /雪%"
+      }
+    },
+    {
+      "id": "revoke-repeat",
+      "operation": "revoke",
+      "template": "/{external_credential_id}/{external_credential_id}",
+      "arguments": {
+        "api_base_url": "https://api.example",
+        "external_credential_id": "award /雪%"
+      }
+    },
+    {
+      "id": "revoke-index",
+      "operation": "revoke",
+      "template": "/{external_credential_id[0]}/{external_credential_id[1]}",
+      "arguments": {
+        "api_base_url": "https://api.example",
+        "external_credential_id": "award /雪%"
+      }
+    },
+    {
+      "id": "revoke-unicode-index",
+      "operation": "revoke",
+      "template": "/{api_base_url[0]}",
+      "arguments": {
+        "api_base_url": "雪abc",
+        "external_credential_id": "award /雪%"
+      }
+    },
+    {
+      "id": "revoke-deterministic-attribute",
+      "operation": "revoke",
+      "template": "/{external_credential_id.__class__.__name__}",
+      "arguments": {
+        "api_base_url": "https://api.example",
+        "external_credential_id": "award /雪%"
+      }
+    },
+    {
+      "id": "revoke-string-conversion",
+      "operation": "revoke",
+      "template": "/{external_credential_id!s}",
+      "arguments": {
+        "api_base_url": "https://api.example",
+        "external_credential_id": "award /雪%"
+      }
+    },
+    {
+      "id": "revoke-repr-conversion",
+      "operation": "revoke",
+      "template": "/{api_base_url!r}",
+      "arguments": {
+        "api_base_url": "é'\\\n",
+        "external_credential_id": "award /雪%"
+      }
+    },
+    {
+      "id": "revoke-ascii-conversion",
+      "operation": "revoke",
+      "template": "/{api_base_url!a}",
+      "arguments": {
+        "api_base_url": "é雪",
+        "external_credential_id": "award /雪%"
+      }
+    },
+    {
+      "id": "revoke-width",
+      "operation": "revoke",
+      "template": "/{external_credential_id:>32}",
+      "arguments": {
+        "api_base_url": "https://api.example",
+        "external_credential_id": "award /雪%"
+      }
+    },
+    {
+      "id": "revoke-fill-center",
+      "operation": "revoke",
+      "template": "/{external_credential_id:雪^32}",
+      "arguments": {
+        "api_base_url": "https://api.example",
+        "external_credential_id": "award /雪%"
+      }
+    },
+    {
+      "id": "revoke-precision",
+      "operation": "revoke",
+      "template": "/{external_credential_id:.7}",
+      "arguments": {
+        "api_base_url": "https://api.example",
+        "external_credential_id": "award /雪%"
+      }
+    },
+    {
+      "id": "revoke-nested-width",
+      "operation": "revoke",
+      "template": "/{external_credential_id:>{api_base_url}}",
+      "arguments": {
+        "api_base_url": "32",
+        "external_credential_id": "award /雪%"
+      }
+    },
+    {
+      "id": "revoke-no-recursive-replace",
+      "operation": "revoke",
+      "template": "/{api_base_url}/{external_credential_id}",
+      "arguments": {
+        "api_base_url": "{external_credential_id}",
+        "external_credential_id": "award /雪%"
+      }
+    },
+    {
+      "id": "revoke-unmatched-open",
+      "operation": "revoke",
+      "template": "/{",
+      "arguments": {
+        "api_base_url": "https://api.example",
+        "external_credential_id": "award /雪%"
+      }
+    },
+    {
+      "id": "revoke-unmatched-close",
+      "operation": "revoke",
+      "template": "/}",
+      "arguments": {
+        "api_base_url": "https://api.example",
+        "external_credential_id": "award /雪%"
+      }
+    },
+    {
+      "id": "revoke-missing-name",
+      "operation": "revoke",
+      "template": "/{missing}",
+      "arguments": {
+        "api_base_url": "https://api.example",
+        "external_credential_id": "award /雪%"
+      }
+    },
+    {
+      "id": "revoke-position",
+      "operation": "revoke",
+      "template": "/{0}",
+      "arguments": {
+        "api_base_url": "https://api.example",
+        "external_credential_id": "award /雪%"
+      }
+    },
+    {
+      "id": "revoke-automatic-position",
+      "operation": "revoke",
+      "template": "/{}",
+      "arguments": {
+        "api_base_url": "https://api.example",
+        "external_credential_id": "award /雪%"
+      }
+    },
+    {
+      "id": "revoke-invalid-conversion",
+      "operation": "revoke",
+      "template": "/{external_credential_id!q}",
+      "arguments": {
+        "api_base_url": "https://api.example",
+        "external_credential_id": "award /雪%"
+      }
+    },
+    {
+      "id": "revoke-invalid-string-spec",
+      "operation": "revoke",
+      "template": "/{external_credential_id:d}",
+      "arguments": {
+        "api_base_url": "https://api.example",
+        "external_credential_id": "award /雪%"
+      }
+    },
+    {
+      "id": "revoke-missing-attribute",
+      "operation": "revoke",
+      "template": "/{external_credential_id.missing}",
+      "arguments": {
+        "api_base_url": "https://api.example",
+        "external_credential_id": "award /雪%"
+      }
+    },
+    {
+      "id": "revoke-missing-index",
+      "operation": "revoke",
+      "template": "/{external_credential_id[9999]}",
+      "arguments": {
+        "api_base_url": "https://api.example",
+        "external_credential_id": "award /雪%"
+      }
+    },
+    {
+      "id": "revoke-noninteger-index",
+      "operation": "revoke",
+      "template": "/{external_credential_id[name]}",
+      "arguments": {
+        "api_base_url": "https://api.example",
+        "external_credential_id": "award /雪%"
+      }
+    },
+    {
+      "id": "revoke-negative-index",
+      "operation": "revoke",
+      "template": "/{external_credential_id[-1]}",
+      "arguments": {
+        "api_base_url": "https://api.example",
+        "external_credential_id": "award /雪%"
+      }
+    },
+    {
+      "id": "revoke-nested-recursion",
+      "operation": "revoke",
+      "template": "/{external_credential_id:{api_base_url:{api_base_url}}}",
+      "arguments": {
+        "api_base_url": "https://api.example",
+        "external_credential_id": "award /雪%"
+      }
+    },
+    {
+      "id": "revoke-oversized-width-syntax",
+      "operation": "revoke",
+      "template": "/{external_credential_id:9999999999999999999999999999999999999}",
+      "arguments": {
+        "api_base_url": "https://api.example",
+        "external_credential_id": "award /雪%"
+      }
+    },
+    {
+      "id": "revoke-surrogate-base",
+      "operation": "revoke",
+      "template": "/{api_base_url}",
+      "arguments": {
+        "api_base_url": "\ud800",
+        "external_credential_id": "award /雪%"
+      }
+    },
+    {
+      "id": "revoke-surrogate-quoted",
+      "operation": "revoke",
+      "template": "/{external_credential_id}",
+      "arguments": {
+        "api_base_url": "https://api.example",
+        "external_credential_id": "\ud800"
+      }
+    },
+    {
+      "id": "revoke-url-quote-reserved",
+      "operation": "revoke",
+      "template": null,
+      "arguments": {
+        "api_base_url": "https://api.example",
+        "external_credential_id": "a/b?c#d% e+!~_.-é"
+      }
+    },
+    {
+      "id": "revoke-empty-id",
+      "operation": "revoke",
+      "template": null,
+      "arguments": {
+        "api_base_url": "https://api.example",
+        "external_credential_id": ""
+      }
+    },
+    {
+      "id": "revoke-quote-before-unused-format",
+      "operation": "revoke",
+      "template": "/literal",
+      "arguments": {
+        "api_base_url": "https://api.example",
+        "external_credential_id": "\ud800"
+      }
+    }
+  ]
+}

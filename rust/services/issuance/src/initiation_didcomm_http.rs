@@ -10,8 +10,9 @@ use serde::Deserialize;
 use serde_json::json;
 
 use crate::{
+    credential::CredentialTransactionStatus,
     initiation_didcomm::{
-        NativeInitiationDidcommDelivery, NativeInitiationDidcommDeliveryError,
+        NativeDidcommError, NativeInitiationDidcommDelivery, NativeInitiationDidcommDeliveryError,
         NativeInitiationDidcommDeliveryReceipt,
     },
     management_security::ManagementSecurity,
@@ -83,7 +84,7 @@ impl InitiationDidcommHttpService {
         request: &DidcommDeliverRequest,
     ) -> Result<NativeInitiationDidcommDeliveryReceipt, InitiationDidcommHttpError> {
         self.authorize(headers)?;
-        self.deliver_authorized(request).await
+        self.deliver_authorized(headers, request).await
     }
 
     pub fn authorize(&self, headers: &HeaderMap) -> Result<(), InitiationDidcommHttpError> {
@@ -94,8 +95,14 @@ impl InitiationDidcommHttpService {
 
     pub async fn deliver_authorized(
         &self,
+        headers: &HeaderMap,
         request: &DidcommDeliverRequest,
     ) -> Result<NativeInitiationDidcommDeliveryReceipt, InitiationDidcommHttpError> {
+        self.security.require_organization(
+            header(headers, "X-Organization-ID"),
+            &request.organization_id,
+            true,
+        )?;
         self.delivery
             .deliver_for_organization(
                 &request.organization_id,
@@ -145,6 +152,13 @@ impl InitiationDidcommHttpError {
             Self::Security(TransactionReadError::InvalidApiKey) => {
                 (StatusCode::UNAUTHORIZED, "Invalid API Key")
             }
+            Self::Security(TransactionReadError::TrustedOrganizationRequired) => (
+                StatusCode::FORBIDDEN,
+                "Trusted organization context is required",
+            ),
+            Self::Security(TransactionReadError::ResourceNotFound) => {
+                (StatusCode::NOT_FOUND, "Resource not found")
+            }
             Self::Security(_) => (
                 StatusCode::SERVICE_UNAVAILABLE,
                 "Management authentication is unavailable",
@@ -156,10 +170,34 @@ impl InitiationDidcommHttpError {
             Self::Delivery(NativeInitiationDidcommDeliveryError::TransactionNotFound) => {
                 (StatusCode::NOT_FOUND, "Issuance transaction not found")
             }
-            Self::Delivery(
-                NativeInitiationDidcommDeliveryError::InvalidTransactionState
-                | NativeInitiationDidcommDeliveryError::ConcurrentDelivery,
-            ) => (
+            Self::Delivery(NativeInitiationDidcommDeliveryError::InvalidTransactionState(
+                state,
+            )) => {
+                match state {
+                    CredentialTransactionStatus::Issued => {
+                        (StatusCode::CONFLICT, "Credential already issued")
+                    }
+                    CredentialTransactionStatus::Signing => {
+                        (StatusCode::BAD_REQUEST, "Transaction in signing state")
+                    }
+                    CredentialTransactionStatus::Failed => {
+                        (StatusCode::BAD_REQUEST, "Transaction in failed state")
+                    }
+                    CredentialTransactionStatus::Expired => {
+                        (StatusCode::BAD_REQUEST, "Transaction in expired state")
+                    }
+                    CredentialTransactionStatus::Revoked => {
+                        (StatusCode::BAD_REQUEST, "Transaction in revoked state")
+                    }
+                    // The native eligibility check never rejects these states.
+                    CredentialTransactionStatus::Pending
+                    | CredentialTransactionStatus::Authorized => (
+                        StatusCode::CONFLICT,
+                        "Issuance transaction is not available for DIDComm delivery",
+                    ),
+                }
+            }
+            Self::Delivery(NativeInitiationDidcommDeliveryError::ConcurrentDelivery) => (
                 StatusCode::CONFLICT,
                 "Issuance transaction is not available for DIDComm delivery",
             ),
@@ -169,6 +207,47 @@ impl InitiationDidcommHttpError {
             ),
             Self::Delivery(NativeInitiationDidcommDeliveryError::TransportFailed) => {
                 (StatusCode::BAD_GATEWAY, "DIDComm delivery failed")
+            }
+            Self::Delivery(NativeInitiationDidcommDeliveryError::Prerequisite(reason)) => {
+                match reason {
+                    NativeDidcommError::MissingEndpoint => (
+                        StatusCode::UNPROCESSABLE_ENTITY,
+                        "Holder DID has no DIDComm service endpoint",
+                    ),
+                    NativeDidcommError::InvalidEndpoint => (
+                        StatusCode::UNPROCESSABLE_ENTITY,
+                        "DIDComm service endpoint is invalid",
+                    ),
+                    NativeDidcommError::HttpsRequired => (
+                        StatusCode::UNPROCESSABLE_ENTITY,
+                        "DIDComm service endpoint must use HTTPS",
+                    ),
+                    NativeDidcommError::EndpointUnresolvable => (
+                        StatusCode::UNPROCESSABLE_ENTITY,
+                        "DIDComm service endpoint could not be resolved",
+                    ),
+                    NativeDidcommError::EndpointNotPublic => (
+                        StatusCode::UNPROCESSABLE_ENTITY,
+                        "DIDComm service endpoint is not publicly routable",
+                    ),
+                    NativeDidcommError::IncompatibleKeyAgreement => (
+                        StatusCode::UNPROCESSABLE_ENTITY,
+                        "Holder DID does not provide a compatible DIDComm key agreement method",
+                    ),
+                    NativeDidcommError::EncryptionPolicyUnavailable
+                    | NativeDidcommError::SenderAuthenticationUnavailable => (
+                        StatusCode::SERVICE_UNAVAILABLE,
+                        "DIDComm sender-authentication configuration is unavailable",
+                    ),
+                    NativeDidcommError::TlsUnavailable => (
+                        StatusCode::SERVICE_UNAVAILABLE,
+                        "DIDComm TLS trust configuration is unavailable",
+                    ),
+                    _ => (
+                        StatusCode::SERVICE_UNAVAILABLE,
+                        "DIDComm delivery is unavailable",
+                    ),
+                }
             }
             Self::Delivery(
                 NativeInitiationDidcommDeliveryError::InvalidConfiguration

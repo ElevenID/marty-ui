@@ -1,0 +1,105 @@
+# Explicit general-base opt-in; does not replace the partial legacy owner.
+# Runtime acceptance is required before deployment/Python retirement.
+# Existing HTTP URLs, Envoy targets and host publications stay unchanged.
+# Flow initiation selects native gRPC; physical-document HTTP remains legacy.
+x-native-issuance-grpc-auth: &native-issuance-grpc-auth
+  GRPC_SERVICE_TOKEN: ${GRPC_SERVICE_TOKEN:-dev-grpc-service-token-change-before-production}
+
+services:
+  issuance-native:
+    extends:
+      file: docker-compose.service.issuance-native-runtime.yml
+      service: issuance-native
+    entrypoint: ["/app/services/entrypoint.sh"]
+    command: []
+    environment:
+      <<: *native-issuance-grpc-auth
+      SERVICE_NAME: issuance_native
+      ENVIRONMENT: ${ENVIRONMENT:-development}
+      ISSUANCE_SERVICE_PORT: "8005"
+      ISSUANCE_GRPC_ENABLED: "true"
+      ISSUANCE_GRPC_PORT: "9005"
+      DATABASE_URL: postgresql+asyncpg://marty:${MARTY_DB_PASSWORD:-marty_dev_password}@postgres:5432/marty
+      ISSUER_BASE_URL: ${PUBLIC_API_URL:-http://gateway:8000}
+      UI_BASE_URL: ${UI_BASE_URL:-http://localhost:3000}
+      ISSUANCE_API_KEY: ${ISSUANCE_API_KEY:-dev-issuance-api-key}
+      TOKEN_HMAC_KEY: ${TOKEN_HMAC_KEY:-dev-only-token-hmac-key-change-me}
+      INTEGRATION_SECRET_MASTER_KEY: ${INTEGRATION_SECRET_MASTER_KEY:-AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=}
+      SIGNING_KEYS_INTERNAL_URL: http://gateway:8000/internal/signing-keys
+      SIGNING_KEYS_INTERNAL_API_KEY: ${SIGNING_KEYS_INTERNAL_API_KEY:-dev-signing-keys-internal-api-key}
+      ORG_GRPC_TARGET: organization:9002
+      CT_GRPC_TARGET: credential-template:9003
+      RP_GRPC_TARGET: revocation-profile:9013
+      CREDENTIAL_TEMPLATE_SERVICE_URL: http://credential-template:8003
+      REVOCATION_PROFILE_SERVICE_URL: http://revocation-profile:8013
+      ISSUANCE_OFFER_TTL_MINUTES: ${ISSUANCE_OFFER_TTL_MINUTES:-10080}
+      TOKEN_RATE_LIMIT: ${TOKEN_RATE_LIMIT:-30}
+      VCDM_RELATED_RESOURCE_URLS: ${VCDM_RELATED_RESOURCE_URLS:-}
+      UNIVERSAL_RESOLVER_URL: ${UNIVERSAL_RESOLVER_URL:-}
+      DIDCOMM_DID_WEB_INTERNAL_BASE_URL: ${DIDCOMM_DID_WEB_INTERNAL_BASE_URL:-http://gateway:8000}
+      DIDCOMM_ALLOW_PRIVATE_IPS: ${DIDCOMM_ALLOW_PRIVATE_IPS:-false}
+      CANVAS_LTI_EXPERIENCE_BASE_URL: ${CANVAS_LTI_EXPERIENCE_BASE_URL:-}
+      CANVAS_OAUTH_COMPLETION_REDIRECT_URL: ${CANVAS_OAUTH_COMPLETION_REDIRECT_URL:-${CANVAS_LTI_EXPERIENCE_BASE_URL:-http://localhost:3000}/console/org/deploy/canvas}
+      CANVAS_LTI_TOOL_SIGNING_ORGANIZATION_ID: ${CANVAS_LTI_TOOL_SIGNING_ORGANIZATION_ID:-}
+      CANVAS_LTI_TOOL_ISSUER_DID: ${CANVAS_LTI_TOOL_ISSUER_DID:-}
+      CANVAS_PORTABLE_INTEGRATION_ENABLED: ${CANVAS_PORTABLE_INTEGRATION_ENABLED:-false}
+      CANVAS_PILOT_ORGANIZATION_IDS: ${CANVAS_PILOT_ORGANIZATION_IDS:-}
+      CANVAS_LEGACY_EVENT_INGEST_ENABLED: ${CANVAS_LEGACY_EVENT_INGEST_ENABLED:-false}
+      CANVAS_PRIVATE_ORIGIN_ALLOWLIST: ${CANVAS_PRIVATE_ORIGIN_ALLOWLIST:-}
+      CANVAS_SELF_MANAGED_ORIGIN_ALLOWLIST: ${CANVAS_SELF_MANAGED_ORIGIN_ALLOWLIST:-}
+      CANVAS_BINDING_READINESS_MAX_AGE_SECONDS: ${CANVAS_BINDING_READINESS_MAX_AGE_SECONDS:-900}
+      CANVAS_ISSUANCE_EVIDENCE_MAX_AGE_SECONDS: ${CANVAS_ISSUANCE_EVIDENCE_MAX_AGE_SECONDS:-900}
+      CANVAS_LTI_STATE_TTL_MINUTES: ${CANVAS_LTI_STATE_TTL_MINUTES:-10}
+      CANVAS_LTI_JWKS_TTL_MINUTES: ${CANVAS_LTI_JWKS_TTL_MINUTES:-1440}
+      CANVAS_ALLOW_PRIVATE_BASE_URLS: ${CANVAS_ALLOW_PRIVATE_BASE_URLS:-false}
+      CANVAS_ALLOW_HTTP_LOCALHOST_BASE_URLS: ${CANVAS_ALLOW_HTTP_LOCALHOST_BASE_URLS:-false}
+      CANVAS_CREDENTIALS_SHARED_SECRET: ${CANVAS_CREDENTIALS_SHARED_SECRET:-}
+      CANVAS_CREDENTIALS_SIGNATURE_TOLERANCE_SECONDS: ${CANVAS_CREDENTIALS_SIGNATURE_TOLERANCE_SECONDS:-300}
+      CANVAS_CREDENTIALS_PROVIDER: ${CANVAS_CREDENTIALS_PROVIDER:-bridge}
+      CANVAS_CREDENTIALS_PUBLISH_URL: ${CANVAS_CREDENTIALS_PUBLISH_URL:-}
+      CANVAS_CREDENTIALS_STATUS_SYNC_URL: ${CANVAS_CREDENTIALS_STATUS_SYNC_URL:-}
+      CANVAS_CREDENTIALS_API_BASE_URL: ${CANVAS_CREDENTIALS_API_BASE_URL:-https://api.badgr.io}
+      CANVAS_CREDENTIALS_API_ORIGIN_ALLOWLIST: ${CANVAS_CREDENTIALS_API_ORIGIN_ALLOWLIST:-}
+      CANVAS_CREDENTIALS_API_TOKEN: ${CANVAS_CREDENTIALS_API_TOKEN:-}
+      CANVAS_CREDENTIALS_ISSUER_ID: ${CANVAS_CREDENTIALS_ISSUER_ID:-}
+      CANVAS_CREDENTIALS_BADGECLASS_ID: ${CANVAS_CREDENTIALS_BADGECLASS_ID:-}
+      CANVAS_CREDENTIALS_ASSERTION_SCOPE: ${CANVAS_CREDENTIALS_ASSERTION_SCOPE:-badgeclasses}
+      MARTY_RELEASE_VERSION: ${MARTY_RELEASE_VERSION:-development}
+      MARTY_UI_SHA: ${MARTY_UI_SHA:-unknown}
+      RUST_LOG: ${ISSUANCE_NATIVE_RUST_LOG:-info}
+    networks:
+      - marty-network
+  gateway:
+    environment:
+      <<: *native-issuance-grpc-auth
+      ISSUANCE_NATIVE_SERVICE_URL: http://issuance-native:8005
+      GATEWAY_REQUIRED_READY_SERVICES: auth,organizations,credential-templates,trust-profiles,presentation-policies,deployment-profiles,signing-keys,flows,issuance,issuance-native
+    depends_on:
+      issuance-native:
+        condition: service_healthy
+  auth:
+    environment: *native-issuance-grpc-auth
+  organization:
+    environment: *native-issuance-grpc-auth
+  credential-template:
+    environment: *native-issuance-grpc-auth
+  trust-profile:
+    environment: *native-issuance-grpc-auth
+  compliance-profile:
+    environment: *native-issuance-grpc-auth
+  presentation-policy:
+    environment: *native-issuance-grpc-auth
+  deployment-profile:
+    environment: *native-issuance-grpc-auth
+  flow:
+    environment:
+      <<: *native-issuance-grpc-auth
+      ISSUANCE_GRPC_TARGET: issuance-native:9005
+  issuance:
+    environment: *native-issuance-grpc-auth
+  revocation-profile:
+    environment: *native-issuance-grpc-auth
+  device-registration:
+    environment: *native-issuance-grpc-auth
+  verification:
+    environment: *native-issuance-grpc-auth

@@ -217,9 +217,7 @@ def test_frozen_surface_provenance_and_coverage_are_complete() -> None:
         coverage["credential_lifecycle_behavior_contract"]["commit"]
         == "335c8566af4c873a30f960635db2624723008ae3"
     )
-    assert credential_lifecycle["schema"] == (
-        "marty.issuance-credential-lifecycle/v1"
-    )
+    assert credential_lifecycle["schema"] == ("marty.issuance-credential-lifecycle/v1")
     assert len(credential_lifecycle["scope"]["http"]) == 4
     assert len(credential_lifecycle["scope"]["grpc"]) == 4
     assert len(credential_lifecycle["transitions"]) == 3
@@ -250,7 +248,9 @@ def test_frozen_surface_provenance_and_coverage_are_complete() -> None:
     orchestration = canvas_lti["launch"]["orchestration"]
     assert len(orchestration["ordered_stages"]) == 12
     assert orchestration["invariants"]["state_consumed_before_jwt_verification"] is True
-    assert orchestration["invariants"]["state_restored_after_downstream_failure"] is False
+    assert (
+        orchestration["invariants"]["state_restored_after_downstream_failure"] is False
+    )
     experience_callback = canvas_lti["experience"]["callback"]
     assert experience_callback["redirect_only_after_both_persistence_writes"] is True
     assert len(experience_callback["ordered_stages"]) == 7
@@ -284,7 +284,10 @@ def test_frozen_surface_provenance_and_coverage_are_complete() -> None:
     experience_bootstrap = canvas_lti["experience"]["bootstrap"]
     assert len(experience_bootstrap["ordered_stages"]) == 12
     assert len(experience_bootstrap["template"]["failures"]) == 3
-    assert experience_bootstrap["new_application"]["caller_identifier_forbidden_for_join"] is True
+    assert (
+        experience_bootstrap["new_application"]["caller_identifier_forbidden_for_join"]
+        is True
+    )
     assert experience_bootstrap["sync_enqueue"]["canvas-sync-service-errors"] == (
         "ignored-so-learner-can-continue"
     )
@@ -306,12 +309,46 @@ def test_frozen_surface_provenance_and_coverage_are_complete() -> None:
     canvas_management_operations = {
         route["operation"] for route in canvas_management["scope"]["routes"]
     }
+    canvas_operations_cases = {
+        "enqueue_canvas_application_sync_route": "enqueue",
+        "list_canvas_sync_jobs_route": "jobs",
+        "get_canvas_sync_job_route": "job",
+        "retry_canvas_sync_job_route": "retry",
+        "resolve_canvas_sync_job_route": "resolve_job",
+        "list_canvas_award_candidates_route": "candidates",
+        "list_evidence_policy_reviews_route": "reviews",
+        "resolve_evidence_policy_review_route": "resolve_review",
+    }
+    operations_bytes = text("contracts/issuance-canvas-operations.json").encode()
+    assert hashlib.sha256(operations_bytes).hexdigest() == (
+        "73f4ac04e2158f9b84ca69fdfeff74191434d4739cb4252ca0daf98aa3b69120"
+    )
+    operations_contract = json.loads(operations_bytes)
+    renewal_bytes = text("contracts/credential-renewal-python-reference.json").encode()
+    assert coverage["renewal_behavior_contract"] == {
+        "path": "contracts/credential-renewal-python-reference.json",
+        "sha256": "136b046f08c58d2a7fa70982404dabd7265164d91f49ee184cfbc63eb49b3f0f",
+        "intentional_native_corrections": [
+            "RENEWAL-001:links-before-delivery",
+            "RENEWAL-002:pending-uri-on-unsent-delivery",
+            "RENEWAL-003:atomic-canvas-successor-association",
+        ],
+    }
+    assert (
+        hashlib.sha256(renewal_bytes).hexdigest()
+        == coverage["renewal_behavior_contract"]["sha256"]
+    )
+    assert len(coverage["native_http"]) == 74
     assert set(native) == (
         set(discovery_cases)
         | set(tenant_cases)
         | set(transaction_cases)
         | canvas_management_operations
+        | set(canvas_operations_cases)
         | {
+            "didcomm_deliver",
+            "initiate_issuance",
+            "renew_issued_credential",
             "exchange_token",
             "nonce_endpoint",
             "issue_credential",
@@ -332,6 +369,30 @@ def test_frozen_surface_provenance_and_coverage_are_complete() -> None:
         }
     )
     for operation, coverage_entry in native.items():
+        if operation == "renew_issued_credential":
+            assert coverage_entry == {
+                "method": "POST",
+                "path": "/v1/issued-credentials/{credential_id}/renew",
+                "operation": "renew_issued_credential",
+                "renewal_behavior_contract": True,
+            }
+            continue
+        if operation == "initiate_issuance":
+            assert coverage_entry == {
+                "method": "POST",
+                "path": "/v1/issuance/initiate",
+                "operation": "initiate_issuance",
+                "initiation_behavior_contract": True,
+            }
+            continue
+        if operation == "didcomm_deliver":
+            assert coverage_entry == {
+                "method": "POST",
+                "path": "/v1/issuance/didcomm/deliver",
+                "operation": "didcomm_deliver",
+                "didcomm_behavior_contract": True,
+            }
+            continue
         if operation == "exchange_token":
             assert coverage_entry == {
                 "method": "POST",
@@ -439,6 +500,25 @@ def test_frozen_surface_provenance_and_coverage_are_complete() -> None:
                 for route in canvas_oauth["scope"]["routes"]
             )
             continue
+        if operation in canvas_operations_cases:
+            assert (
+                coverage_entry["canvas_operations_behavior_case"]
+                == canvas_operations_cases[operation]
+            )
+            assert any(
+                route["method"] == coverage_entry["method"]
+                and operations_contract["route_prefix"] + route["path"]
+                == coverage_entry["path"]
+                for route in operations_contract["routes"]
+            )
+            assert any(
+                route["method"] == coverage_entry["method"]
+                and route["path"] == coverage_entry["path"]
+                and route["operation"] == operation
+                and route["router"] == "canvas_operations_router"
+                for route in surface["http"]["routes"]
+            )
+            continue
         if operation in canvas_management_operations:
             assert coverage_entry["canvas_management_behavior_case"] == operation
             assert any(
@@ -484,7 +564,7 @@ def test_frozen_surface_provenance_and_coverage_are_complete() -> None:
         )
         assert discovery_cases[operation]["path"] == expected_case_path
     assert coverage["remaining"] == {
-        "http": 68,
+        "http": 57,
         "grpc": 0,
         "runtime_modes": ["api", "canvas-sync-worker"],
         "literal_environment_variables": 56,
@@ -545,6 +625,8 @@ def test_candidate_is_path_split_without_replacing_the_python_runtime() -> None:
     entrypoint = text("services/entrypoint.sh")
     compose = text("docker-compose.base.yml")
     beta = text("docker-compose.beta.yml")
+    assert "file: docker-compose.service.issuance-native.yml" in beta
+    beta += text("docker-compose.service.issuance-native.yml")
     production = text("docker-compose.selfhost.prod.yml")
     assert '"services/issuance"' in workspace
     assert "marty-issuance-service" in dockerfile
@@ -564,6 +646,9 @@ def test_candidate_is_path_split_without_replacing_the_python_runtime() -> None:
     assert "CANVAS_CREDENTIALS_SHARED_SECRET:" in beta
     assert "CANVAS_CREDENTIALS_API_ORIGIN_ALLOWLIST:" in beta
     assert "CANVAS_CREDENTIALS_STATUS_SYNC_TIMEOUT_SECONDS:" in beta
-    assert "issuance-native:" not in production
+    assert "ISSUANCE_NATIVE_SERVICE_URL: http://issuance-native:8005" in production
+    assert "ISSUANCE_SERVICE_URL: http://issuance:8005" in production
+    assert "file: docker-compose.service.issuance-native-runtime.yml" in production
+    assert "MARTY_ISSUANCE_IMAGE" in production
     assert "CANVAS_LTI_EXPERIENCE_SESSION_TTL_MINUTES:" not in production
     assert "MARTY_ISSUANCE_IMAGE" in compose

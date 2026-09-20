@@ -1,0 +1,30 @@
+{
+  "schema": "marty.canvas-worker-resources-unavailable-scenarios/v1",
+  "reference_scenario": "canvas-worker-rest-scenarios.json",
+  "queued_job_scenario": "canvas-worker-validation-scenarios.json",
+  "scope": "Actual published worker on a fresh official-schema database. Alternate existing table-lock barriers through wrapper validation, authoritative-hook validation and its fresh resource lookup; restore only the synthetic target binding reference and delete only its disposable binding before the final binding read. No worker function, live job, lease, clock or schema constraint is changed. Issued rows, transactions and encrypted OAuth material remain intact; no provider request is expected.",
+  "job_row_sql": "SELECT to_jsonb(j) FROM issuance_service.canvas_evidence_sync_jobs j",
+  "resources_sql": "SELECT jsonb_build_object('target',(SELECT jsonb_build_object('binding_id',binding_id,'config_version',config_version,'enabled',enabled) FROM issuance_service.canvas_evidence_sync_targets WHERE id='target-review' AND organization_id='org-review'),'disposable_binding_present',EXISTS(SELECT 1 FROM issuance_service.canvas_program_bindings WHERE id='binding-resources-race' AND organization_id='org-review'))",
+  "protected_rows_sql": "SELECT jsonb_build_object('platform',(SELECT to_jsonb(p) FROM issuance_service.canvas_platforms p WHERE id='platform-review'),'binding',(SELECT to_jsonb(b) FROM issuance_service.canvas_program_bindings b WHERE id='binding-review'),'application',(SELECT to_jsonb(a) FROM issuance_service.applications a WHERE id='application-review'))",
+  "cases": [
+    {
+      "name": "binding_removed_after_hook_validation",
+      "code": "canvas_sync_resources_unavailable",
+      "seed": [
+        "INSERT INTO issuance_service.canvas_program_bindings (id,organization_id,platform_id,application_template_id,credential_template_id,evidence_requirements,enabled,validated_config_version,activated_at) SELECT 'binding-resources-race',organization_id,platform_id,application_template_id,credential_template_id,evidence_requirements,enabled,validated_config_version,activated_at FROM issuance_service.canvas_program_bindings WHERE id='binding-review' AND organization_id='org-review'",
+        "UPDATE issuance_service.canvas_evidence_sync_targets SET binding_id='binding-resources-race' WHERE id='target-review' AND organization_id='org-review' AND binding_id='binding-review'"
+      ],
+      "barriers": [
+        {"name": "wrapper_application", "table": "applications"},
+        {"name": "hook_platform", "table": "canvas_platforms"},
+        {"name": "hook_binding", "table": "canvas_program_bindings"},
+        {"name": "hook_application", "table": "applications"},
+        {"name": "resource_platform", "table": "canvas_platforms"}
+      ],
+      "mutation": [
+        "UPDATE issuance_service.canvas_evidence_sync_targets SET binding_id='binding-review' WHERE id='target-review' AND organization_id='org-review' AND binding_id='binding-resources-race'",
+        "DELETE FROM issuance_service.canvas_program_bindings WHERE id='binding-resources-race' AND organization_id='org-review'"
+      ]
+    }
+  ]
+}

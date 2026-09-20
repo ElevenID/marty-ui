@@ -17,6 +17,7 @@ use crate::{
         ExistingCredential, IssuedCredential,
     },
     credential_lifecycle::delivery_record_id,
+    credential_renewal::{RenewalRepository, RenewalRepositoryError, RenewalSource},
     initiation::{
         IdempotencyBinding, InitiationRepository, InitiationRepositoryError, InitiationReservation,
     },
@@ -53,6 +54,25 @@ macro_rules! transaction_query {
         )
     };
 }
+
+const BIND_RENEWAL_RESERVATION: &str = concat!(
+    "UPDATE issuance_service.issuance_transactions AS candidate
+     SET renewal_of_credential_id = $3, application_id = $4
+     WHERE id = $1 AND organization_id = $2
+       AND ((renewal_of_credential_id = $3 AND application_id IS NOT DISTINCT FROM $4)
+            OR (renewal_of_credential_id IS NULL AND application_id IS NULL
+                AND status = 'pending' AND reserved_credential_id IS NULL
+                AND NOT EXISTS (
+                    SELECT 1 FROM issuance_service.issued_credentials issued
+                    WHERE issued.transaction_id = candidate.id)
+                AND NOT EXISTS (
+                    SELECT 1 FROM issuance_service.credential_delivery_records delivery
+                    WHERE delivery.transaction_id = candidate.id)))
+       AND idempotency_key_hash IS NOT DISTINCT FROM $5
+       AND idempotency_request_hash IS NOT DISTINCT FROM $6
+     RETURNING ",
+    transaction_columns!()
+);
 
 const TRANSACTION_BY_ACCESS_TOKEN: &str = transaction_query!("access_token = $1");
 const TRANSACTION_BY_PRE_AUTH_CODE: &str = transaction_query!("pre_auth_code = $1");
@@ -816,6 +836,7 @@ struct CanvasProjection {
     application_id: String,
     organization_id: String,
     candidate_id: Option<String>,
+    renewal_source: Option<String>,
 }
 
 fn authorization_transaction_id(session_id: &str) -> String {
@@ -908,6 +929,190 @@ pub(crate) fn transaction_row(
         created_at: get(&row, "created_at")?,
         expires_at: get(&row, "expires_at")?,
     })
+}
+
+#[async_trait]
+impl RenewalRepository for PostgresCredentialRepository {
+    async fn source(&self, id: &str) -> Result<Option<RenewalSource>, RenewalRepositoryError> {
+        let row = sqlx::query(
+            "SELECT id, organization_id, transaction_id, credential_template_id,
+                    applicant_id, subject_did, status, renewed_to_credential_id, expires_at
+             FROM issuance_service.issued_credentials WHERE id = $1",
+        )
+        .bind(id)
+        .fetch_optional(&self.pool)
+        .await
+        .map_err(|_| RenewalRepositoryError::Unavailable)?;
+        row.map(|row| {
+            Ok(RenewalSource {
+                id: row.try_get("id")?,
+                organization_id: row.try_get("organization_id")?,
+                transaction_id: row.try_get("transaction_id")?,
+                credential_template_id: row.try_get("credential_template_id")?,
+                applicant_id: row.try_get("applicant_id")?,
+                subject_did: row.try_get("subject_did")?,
+                status: row.try_get("status")?,
+                renewed_to_credential_id: row.try_get("renewed_to_credential_id")?,
+                expires_at: row.try_get("expires_at")?,
+            })
+        })
+        .transpose()
+        .map_err(|_: sqlx::Error| RenewalRepositoryError::Unavailable)
+    }
+
+    async fn source_transaction(
+        &self,
+        source: &RenewalSource,
+    ) -> Result<Option<CredentialTransaction>, RenewalRepositoryError> {
+        sqlx::query(TRANSACTION_BY_ID_AND_ORGANIZATION)
+            .bind(&source.transaction_id)
+            .bind(&source.organization_id)
+            .fetch_optional(&self.pool)
+            .await
+            .map_err(|_| RenewalRepositoryError::Unavailable)?
+            .map(transaction_row)
+            .transpose()
+            .map_err(|_| RenewalRepositoryError::Unavailable)
+    }
+
+    async fn bind_reservation(
+        &self,
+        transaction: &CredentialTransaction,
+        source: &RenewalSource,
+        application_id: Option<&str>,
+    ) -> Result<CredentialTransaction, RenewalRepositoryError> {
+        if transaction.organization_id != source.organization_id {
+            return Err(RenewalRepositoryError::BindingConflict);
+        }
+        let mut database = self
+            .pool
+            .begin()
+            .await
+            .map_err(|_| RenewalRepositoryError::Unavailable)?;
+        let bound = sqlx::query(BIND_RENEWAL_RESERVATION)
+            .bind(&transaction.id)
+            .bind(&source.organization_id)
+            .bind(&source.id)
+            .bind(application_id)
+            .bind(&transaction.idempotency_key_hash)
+            .bind(&transaction.idempotency_request_hash)
+            .fetch_optional(&mut *database)
+            .await
+            .map_err(|_| RenewalRepositoryError::Unavailable)?
+            .map(transaction_row)
+            .transpose()
+            .map_err(|_| RenewalRepositoryError::Unavailable)?;
+        if let Some(bound) = bound {
+            bind_canvas_renewal_application(&mut database, &bound, source, application_id).await?;
+            database
+                .commit()
+                .await
+                .map_err(|_| RenewalRepositoryError::Unavailable)?;
+            return Ok(bound);
+        }
+        let exists: bool = sqlx::query_scalar(
+            "SELECT EXISTS(SELECT 1 FROM issuance_service.issuance_transactions
+             WHERE id = $1 AND organization_id = $2)",
+        )
+        .bind(&transaction.id)
+        .bind(&source.organization_id)
+        .fetch_one(&mut *database)
+        .await
+        .map_err(|_| RenewalRepositoryError::Unavailable)?;
+        Err(if exists {
+            RenewalRepositoryError::BindingConflict
+        } else {
+            RenewalRepositoryError::ReservationMissing
+        })
+    }
+}
+
+/// Only actual Canvas-marked applications need their approved current
+/// transaction moved. Generic applications and absent historical IDs retain
+/// existing behavior. Candidate links and this association commit together.
+async fn bind_canvas_renewal_application(
+    database: &mut Transaction<'_, Postgres>,
+    candidate: &CredentialTransaction,
+    source: &RenewalSource,
+    application_id: Option<&str>,
+) -> Result<(), RenewalRepositoryError> {
+    let Some(application_id) = application_id else {
+        return Ok(());
+    };
+    let application: Option<Value> = sqlx::query_scalar(
+        "SELECT to_jsonb(app) FROM issuance_service.applications app WHERE id=$1 FOR UPDATE",
+    )
+    .bind(application_id)
+    .fetch_optional(&mut **database)
+    .await
+    .map_err(|_| RenewalRepositoryError::Unavailable)?;
+    let Some(application) = application else {
+        return Ok(());
+    };
+    if !application["integration_context"]["canvas"]
+        .as_object()
+        .is_some_and(crate::canvas_issuance_guard::has_canvas_marker)
+    {
+        return Ok(());
+    }
+    let source_bound: bool = sqlx::query_scalar(
+        "SELECT EXISTS(SELECT 1 FROM issuance_service.issued_credentials source
+         JOIN issuance_service.issuance_transactions original
+           ON original.id=source.transaction_id AND original.organization_id=source.organization_id
+         WHERE source.id=$1 AND source.organization_id=$2 AND source.transaction_id=$3
+           AND original.application_id=$4
+           AND (source.status='active' AND (source.renewed_to_credential_id IS NULL OR source.renewed_to_credential_id='')
+                OR source.status='revoked' AND source.revoked=true AND EXISTS(
+                  SELECT 1 FROM issuance_service.issued_credentials successor
+                  WHERE successor.id=source.renewed_to_credential_id AND successor.transaction_id=$5
+                    AND successor.organization_id=$2 AND successor.renewed_from_credential_id=source.id)))",
+    ).bind(&source.id).bind(&source.organization_id).bind(&source.transaction_id)
+      .bind(application_id).bind(&candidate.id).fetch_one(&mut **database).await
+      .map_err(|_| RenewalRepositoryError::Unavailable)?;
+    let current = application["issuance_transaction_id"].as_str();
+    if !source_bound
+        || application["organization_id"] != source.organization_id
+        || !application["status"]
+            .as_str()
+            .is_some_and(|status| status.eq_ignore_ascii_case("approved"))
+        || !matches!(current, Some(id) if id == source.transaction_id || id == candidate.id)
+    {
+        return Err(RenewalRepositoryError::BindingConflict);
+    }
+    if let Some(current_credential) = application["credential_id"].as_str() {
+        if current_credential != source.id {
+            let successor: bool = sqlx::query_scalar(
+                "SELECT EXISTS(SELECT 1 FROM issuance_service.issued_credentials
+                 WHERE id=$1 AND transaction_id=$2 AND organization_id=$3 AND renewed_from_credential_id=$4)",
+            ).bind(current_credential).bind(&candidate.id).bind(&source.organization_id).bind(&source.id)
+              .fetch_one(&mut **database).await.map_err(|_| RenewalRepositoryError::Unavailable)?;
+            if !successor {
+                return Err(RenewalRepositoryError::BindingConflict);
+            }
+        }
+    }
+    if current == Some(candidate.id.as_str()) {
+        return Ok(());
+    }
+    // Do not clear the source credential or award-candidate claim. Their current
+    // pointers advance only with successful credential finalization.
+    let updated = sqlx::query(
+        "UPDATE issuance_service.applications SET issuance_transaction_id=$3
+         WHERE id=$1 AND organization_id=$2 AND issuance_transaction_id=$4
+           AND lower(status)='approved' AND (credential_id IS NULL OR credential_id=$5)",
+    )
+    .bind(application_id)
+    .bind(&source.organization_id)
+    .bind(&candidate.id)
+    .bind(&source.transaction_id)
+    .bind(&source.id)
+    .execute(&mut **database)
+    .await
+    .map_err(|_| RenewalRepositoryError::Unavailable)?;
+    if updated.rows_affected() != 1 {
+        return Err(RenewalRepositoryError::BindingConflict);
+    }
+    Ok(())
 }
 
 #[async_trait]
@@ -1050,7 +1255,7 @@ async fn finalize_credential(
 ) -> Result<(), CredentialIssuanceError> {
     validate_finalization_input(transaction, credential)?;
     let authoritative = sqlx::query(
-        "SELECT organization_id, credential_template_id, application_id, status,
+        "SELECT organization_id, credential_template_id, application_id, renewal_of_credential_id, status,
                 reserved_credential_id
          FROM issuance_service.issuance_transactions WHERE id = $1 FOR UPDATE",
     )
@@ -1060,6 +1265,12 @@ async fn finalize_credential(
     .map_err(repository_error)?
     .ok_or(CredentialIssuanceError::RepositoryUnavailable)?;
     validate_authoritative_finalization(&authoritative, credential)?;
+    if renewal_source_id(
+        get::<Option<String>>(&authoritative, "renewal_of_credential_id")?.as_deref(),
+    ) != renewal_source_id(credential.renewed_from_credential_id.as_deref())
+    {
+        return Err(CredentialIssuanceError::RepositoryUnavailable);
+    }
     if credential_exists(database, &transaction.id).await? {
         return Err(CredentialIssuanceError::RepositoryUnavailable);
     }
@@ -1068,6 +1279,8 @@ async fn finalize_credential(
         get::<Option<String>>(&authoritative, "application_id")?.as_deref(),
         &credential.organization_id,
         &credential.id,
+        &transaction.id,
+        get::<Option<String>>(&authoritative, "renewal_of_credential_id")?.as_deref(),
     )
     .await?;
     insert_credential(database, credential).await?;
@@ -1256,12 +1469,15 @@ async fn prepare_canvas_projection(
     application_id: Option<&str>,
     organization_id: &str,
     credential_id: &str,
+    transaction_id: &str,
+    renewal_source: Option<&str>,
 ) -> Result<Option<CanvasProjection>, CredentialIssuanceError> {
+    let renewal_source = renewal_source_id(renewal_source);
     let Some(application_id) = application_id.filter(|value| !value.is_empty()) else {
         return Ok(None);
     };
     let application = sqlx::query(
-        "SELECT id, organization_id, credential_id, integration_context
+        "SELECT id, organization_id, credential_id, integration_context, issuance_transaction_id
          FROM issuance_service.applications
          WHERE id = $1 AND organization_id = $2 FOR UPDATE",
     )
@@ -1277,10 +1493,28 @@ async fn prepare_canvas_projection(
     let Some(canvas) = canvas_context(&integration) else {
         return Ok(None);
     };
+    if let Some(source_id) = renewal_source {
+        let lineage: bool = sqlx::query_scalar(
+            "SELECT EXISTS(SELECT 1 FROM issuance_service.issued_credentials source
+             JOIN issuance_service.issuance_transactions original
+               ON original.id=source.transaction_id AND original.organization_id=source.organization_id
+             JOIN issuance_service.issuance_transactions successor
+               ON successor.id=$3 AND successor.organization_id=source.organization_id
+              AND successor.renewal_of_credential_id=source.id AND successor.application_id=$4
+             WHERE source.id=$1 AND source.organization_id=$2 AND original.application_id=$4)",
+        ).bind(source_id).bind(organization_id).bind(transaction_id).bind(application_id)
+          .fetch_one(&mut **database).await.map_err(repository_error)?;
+        if !lineage
+            || get::<Option<String>>(&application, "issuance_transaction_id")?.as_deref()
+                != Some(transaction_id)
+        {
+            return Err(CredentialIssuanceError::RepositoryUnavailable);
+        }
+    }
     let current_credential = get::<Option<String>>(&application, "credential_id")?;
     if current_credential
         .as_deref()
-        .is_some_and(|value| value != credential_id)
+        .is_some_and(|value| value != credential_id && Some(value) != renewal_source)
     {
         return Err(CredentialIssuanceError::RepositoryUnavailable);
     }
@@ -1312,7 +1546,7 @@ async fn prepare_canvas_projection(
                     && get::<String>(&candidate, "platform_id")? != expected_platform)
                 || claimed
                     .as_deref()
-                    .is_some_and(|value| value != credential_id)
+                    .is_some_and(|value| value != credential_id && Some(value) != renewal_source)
             {
                 return Err(CredentialIssuanceError::RepositoryUnavailable);
             }
@@ -1321,6 +1555,7 @@ async fn prepare_canvas_projection(
                 application_id: application_id.to_owned(),
                 organization_id: organization_id.to_owned(),
                 candidate_id: None,
+                renewal_source: renewal_source.map(str::to_owned),
             }));
         }
     }
@@ -1328,6 +1563,7 @@ async fn prepare_canvas_projection(
         application_id: application_id.to_owned(),
         organization_id: organization_id.to_owned(),
         candidate_id,
+        renewal_source: renewal_source.map(str::to_owned),
     }))
 }
 
@@ -1342,12 +1578,13 @@ async fn apply_canvas_projection(
     let application = sqlx::query(
         "UPDATE issuance_service.applications SET credential_id = $3, updated_at = $4
          WHERE id = $1 AND organization_id = $2
-           AND (credential_id IS NULL OR credential_id = $3)",
+           AND (credential_id IS NULL OR credential_id = $3 OR credential_id = $5)",
     )
     .bind(&projection.application_id)
     .bind(&projection.organization_id)
     .bind(&credential.id)
     .bind(credential.issued_at)
+    .bind(&projection.renewal_source)
     .execute(&mut **database)
     .await
     .map_err(repository_error)?;
@@ -1359,12 +1596,13 @@ async fn apply_canvas_projection(
             "UPDATE issuance_service.canvas_award_candidates
              SET state = 'claimed', claimed_credential_id = $3, updated_at = $4
              WHERE id = $1 AND organization_id = $2
-               AND (claimed_credential_id IS NULL OR claimed_credential_id = $3)",
+               AND (claimed_credential_id IS NULL OR claimed_credential_id = $3 OR claimed_credential_id = $5)",
         )
         .bind(candidate_id)
         .bind(&projection.organization_id)
         .bind(&credential.id)
         .bind(credential.issued_at)
+        .bind(&projection.renewal_source)
         .execute(&mut **database)
         .await
         .map_err(repository_error)?;
@@ -1387,6 +1625,12 @@ fn canvas_context(integration: &Value) -> Option<&Map<String, Value>> {
     .any(|name| !canvas_string(canvas, name).is_empty())
     .then_some(canvas)
     .or_else(|| source.starts_with("canvas").then_some(canvas))
+}
+
+fn renewal_source_id(value: Option<&str>) -> Option<&str> {
+    // Historical ordinary rows can contain blank links. Meaningful identity
+    // bytes are not trimmed or otherwise rewritten by this consistency guard.
+    value.filter(|id| !id.trim().is_empty())
 }
 
 fn canvas_string(canvas: &Map<String, Value>, name: &str) -> String {
@@ -1435,8 +1679,22 @@ fn repository_error(cause: sqlx::Error) -> CredentialIssuanceError {
 
 #[cfg(test)]
 mod tests {
-    use super::{authorization_transaction_id, canvas_context};
+    use super::{authorization_transaction_id, canvas_context, renewal_source_id};
     use serde_json::json;
+
+    #[test]
+    fn renewal_lineage_treats_only_absent_or_blank_links_as_absent() {
+        for value in [None, Some(""), Some(" \t\n")] {
+            assert_eq!(renewal_source_id(value), None);
+        }
+        for value in ["source", " source", "source ", "other-source"] {
+            assert_eq!(renewal_source_id(Some(value)), Some(value));
+        }
+        assert_ne!(
+            renewal_source_id(Some(" source")),
+            renewal_source_id(Some("source"))
+        );
+    }
 
     #[test]
     fn authorization_transaction_identity_matches_the_python_contract() {

@@ -1,0 +1,45 @@
+{
+  "schema": "marty.auth-webhook-helper-ascii-reference/v1",
+  "scope": "The two retained Python webhook helper tests only; not universal Unicode or numeric JSON canonicalization parity.",
+  "reference": {
+    "source_commit": "9a292d9cdce4673d151edf7d11fb63c6d6e1fd3e",
+    "source": "services/common/webhook_signatures.py",
+    "tests": "services/common/tests/test_webhook_signatures.py",
+    "source_git_blob": "b5beba703f7bada5609970b4c1bbff70a8801403",
+    "tests_git_blob": "f807a8e253ec7d8ba29a70a2b72622a491d42a43",
+    "capture": "Executed the unmodified Python helper with both existing test inputs before adding this fixture. Hashes identify raw Windows checkout bytes.",
+    "source_sha256": "fda2ed5fe29351bd375023c8a3593db80568c5c45ce55a55c25d027ff40174e9",
+    "tests_sha256": "0105ffe8273c6970813681fa8da7f54b5c3fe5fc58884425bdd2272f874191e5"
+  },
+  "signed_event": {
+    "secret": "shared-secret-at-least-32-bytes-long",
+    "event": {
+      "audience": "marty-auth-service",
+      "event": "flow.verification_completed",
+      "event_id": "flow-1",
+      "timestamp": "2026-08-08T16:00:00+00:00",
+      "payload": {"flow_instance_id": "flow-1", "decision": "allow"}
+    },
+    "canonical_event_utf8": "{\"audience\":\"marty-auth-service\",\"event\":\"flow.verification_completed\",\"event_id\":\"flow-1\",\"payload\":{\"decision\":\"allow\",\"flow_instance_id\":\"flow-1\"},\"timestamp\":\"2026-08-08T16:00:00+00:00\"}",
+    "signature": "sha256=88b639fb886e49f1e1d7e6723b380163f13255fa9156daeaaa426f8190f26539",
+    "valid": true,
+    "tampered": [
+      {"field": "event_id", "value": "flow-2", "valid": false},
+      {"field": "audience", "value": "another-service", "valid": false}
+    ]
+  },
+  "weak_event": {
+    "secret": "weak-secret",
+    "event": {
+      "audience": "marty-auth-service",
+      "event": "flow.verification_completed",
+      "event_id": "flow-1",
+      "timestamp": "2026-08-08T16:00:00+00:00",
+      "payload": {"flow_instance_id": "flow-1"}
+    },
+    "sign_error": "Event signing secrets must be at least 32 bytes",
+    "sign_error_contains": "at least 32 bytes",
+    "signature": "sha256=invalid",
+    "valid": false
+  }
+}

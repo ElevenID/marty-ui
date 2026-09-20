@@ -1,0 +1,22 @@
+{
+  "schema": "marty.canvas-publication-boundary-scenarios/v1",
+  "source_commit": "578e86ef43166be79add2d812e92ef650535edaa",
+  "boundary": "Additive exact publication datetime and provider-held cancellation; filesystem rotation remains a separate pending section",
+  "adapter": [
+    {"id": "bridge_milliseconds", "inputs": {"credential": {"issued_at": "2026-08-31T23:59:58.123+00:00", "expires_at": "2027-08-31T23:59:58.456+00:00"}}},
+    {"id": "badgr_milliseconds", "provider": "badgr_api", "inputs": {"credential": {"issued_at": "2026-08-31T23:59:58.123+00:00", "expires_at": "2027-08-31T23:59:58.456+00:00"}}},
+    {"id": "bridge_microseconds", "inputs": {"credential": {"issued_at": "2026-08-31T23:59:58.123456+00:00", "expires_at": "2027-08-31T23:59:58.654321+00:00"}}},
+    {"id": "badgr_microseconds", "provider": "badgr_api", "inputs": {"credential": {"issued_at": "2026-08-31T23:59:58.123456+00:00", "expires_at": "2027-08-31T23:59:58.654321+00:00"}}},
+    {"id": "bridge_offset", "inputs": {"credential": {"issued_at": "2026-08-31T23:59:58.123000-06:00", "expires_at": "2027-08-31T23:59:58+05:30"}}},
+    {"id": "badgr_offset", "provider": "badgr_api", "inputs": {"credential": {"issued_at": "2026-08-31T23:59:58.123000-06:00", "expires_at": "2027-08-31T23:59:58+05:30"}}},
+    {"id": "bridge_expiry_absent", "inputs": {"credential": {"expires_at": null}}},
+    {"id": "badgr_expiry_absent", "provider": "badgr_api", "inputs": {"credential": {"expires_at": null}}},
+    {"id": "bridge_provider_cancel", "cancel_provider": true},
+    {"id": "badgr_provider_cancel", "provider": "badgr_api", "cancel_provider": true},
+    {"id": "badgr_empty_result_data_fallback", "provider": "badgr_api", "provider_body": "{\"result\":[],\"data\":[{\"entityId\":\"data-id\",\"openBadgeId\":\"https://badges.example/data-id\"}]}"},
+    {"id": "badgr_first_nonobject_no_fallback", "provider": "badgr_api", "provider_body": "{\"result\":[false,{\"entityId\":\"later-id\"}],\"data\":[{\"entityId\":\"data-id\"}]}", "expected_exception": "RuntimeError"},
+    {"id": "badgr_empty_result_object_no_fallback", "provider": "badgr_api", "provider_body": "{\"result\":{},\"data\":[{\"entityId\":\"data-id\"}]}", "expected_exception": "RuntimeError"},
+    {"id": "bridge_naive_datetime", "inputs": {"credential": {"issued_at": "2026-08-31T23:59:58.123", "expires_at": "2027-08-31T23:59:58.123456"}}},
+    {"id": "badgr_naive_datetime", "provider": "badgr_api", "inputs": {"credential": {"issued_at": "2026-08-31T23:59:58.123", "expires_at": "2027-08-31T23:59:58.123456"}}}
+  ]
+}

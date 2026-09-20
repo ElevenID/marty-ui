@@ -1,0 +1,8 @@
+{
+  "schema": "marty.canvas-worker-provider-final-scenarios/v1",
+  "reference_scenario": "canvas-worker-rest-scenarios.json",
+  "cases": ["final"],
+  "lease_seconds": 30,
+  "initial_job_seed": "INSERT INTO issuance_service.canvas_evidence_sync_jobs (id,organization_id,target_id,status,attempt_count,max_attempts,available_at,result,created_at,updated_at,started_at) VALUES ('worker-final-job','org-review','target-review','queued',7,8,'2026-09-01T00:00:00Z','{}','2026-09-01T00:00:00Z','2026-09-01T00:00:00Z','2026-09-01T00:00:00Z')",
+  "scope": "Historical queued attempt-count 7 is fixture input, not seven executed attempts. Actual worker leases attempt 8, renews during held HTTPS, is killed, and after real lease expiry another process must dead-letter it and disable the target without another provider read. No concurrent reclaimer or changed-target fence claim."
+}

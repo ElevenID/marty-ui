@@ -160,17 +160,50 @@ async fn signer_uses_only_the_organization_did_and_exact_rs256_method() {
 async fn signer_fails_closed_for_configuration_and_resolver_key_drift() {
     let resolver = Arc::new(Resolver::default());
     let signatures = Arc::new(Signatures::default());
-    let incomplete = IssuerDidCanvasLtiToolJwtSigner::new(
-        "",
-        "did:web:issuer.example:canvas",
-        true,
-        resolver.clone(),
-        signatures.clone(),
-    );
-    assert_eq!(
-        incomplete.sign_jwt(&json!({})).await.unwrap_err(),
-        CanvasLtiToolSigningError::ConfigurationIncomplete
-    );
+    for (organization, did, configured, expected) in [
+        (
+            "",
+            "did:web:issuer.example:canvas",
+            true,
+            CanvasLtiToolSigningError::ConfigurationIncomplete,
+        ),
+        (
+            "org",
+            "",
+            true,
+            CanvasLtiToolSigningError::ConfigurationIncomplete,
+        ),
+        (
+            "  ",
+            "  ",
+            true,
+            CanvasLtiToolSigningError::ConfigurationIncomplete,
+        ),
+        (
+            "org",
+            "did:web:issuer.example:canvas",
+            false,
+            CanvasLtiToolSigningError::ConfigurationIncomplete,
+        ),
+        (
+            "org",
+            "not-a-did",
+            true,
+            CanvasLtiToolSigningError::IssuerIdentityNotDid,
+        ),
+    ] {
+        let incomplete = IssuerDidCanvasLtiToolJwtSigner::new(
+            organization,
+            did,
+            configured,
+            resolver.clone(),
+            signatures.clone(),
+        );
+        assert_eq!(incomplete.sign_jwt(&json!({})).await.unwrap_err(), expected);
+        assert_eq!(incomplete.public_jwks().await.unwrap_err(), expected);
+        assert!(resolver.requests.lock().unwrap().is_empty());
+        assert!(signatures.requests.lock().unwrap().is_empty());
+    }
 
     let issuer_did = "did:web:issuer.example:canvas";
     *resolver.response.lock().unwrap() = identity(issuer_did, "did:web:other.example#key-1");

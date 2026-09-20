@@ -78,7 +78,34 @@
     "commit": "4b6ab986f65a9300c1755fde0c8d377eab89057f",
     "sha256": "4895c90c2b0185edb6de60cab94e89c9d3416505a4dde1b0ea94b191602ab262"
   },
+  "renewal_behavior_contract": {
+    "path": "contracts/credential-renewal-python-reference.json",
+    "sha256": "136b046f08c58d2a7fa70982404dabd7265164d91f49ee184cfbc63eb49b3f0f",
+    "intentional_native_corrections": [
+      "RENEWAL-001:links-before-delivery",
+      "RENEWAL-002:pending-uri-on-unsent-delivery",
+      "RENEWAL-003:atomic-canvas-successor-association"
+    ]
+  },
   "native_http": [
+    {
+      "method": "POST",
+      "path": "/v1/issued-credentials/{credential_id}/renew",
+      "operation": "renew_issued_credential",
+      "renewal_behavior_contract": true
+    },
+    {
+      "method": "POST",
+      "path": "/v1/issuance/initiate",
+      "operation": "initiate_issuance",
+      "initiation_behavior_contract": true
+    },
+    {
+      "method": "POST",
+      "path": "/v1/issuance/didcomm/deliver",
+      "operation": "didcomm_deliver",
+      "didcomm_behavior_contract": true
+    },
     {
       "method": "GET",
       "path": "/health",
@@ -459,6 +486,54 @@
       "path": "/v1/integrations/canvas/evidence-events/{canvas_account_id}/{provider_event_id}",
       "operation": "get_canvas_evidence_event_status",
       "canvas_management_behavior_case": "get_canvas_evidence_event_status"
+    },
+    {
+      "method": "POST",
+      "path": "/v1/integrations/canvas/applications/{application_id}/canvas-sync",
+      "operation": "enqueue_canvas_application_sync_route",
+      "canvas_operations_behavior_case": "enqueue"
+    },
+    {
+      "method": "GET",
+      "path": "/v1/integrations/canvas/canvas-sync-jobs",
+      "operation": "list_canvas_sync_jobs_route",
+      "canvas_operations_behavior_case": "jobs"
+    },
+    {
+      "method": "GET",
+      "path": "/v1/integrations/canvas/canvas-sync-jobs/{job_id}",
+      "operation": "get_canvas_sync_job_route",
+      "canvas_operations_behavior_case": "job"
+    },
+    {
+      "method": "POST",
+      "path": "/v1/integrations/canvas/canvas-sync-jobs/{job_id}/retry",
+      "operation": "retry_canvas_sync_job_route",
+      "canvas_operations_behavior_case": "retry"
+    },
+    {
+      "method": "POST",
+      "path": "/v1/integrations/canvas/canvas-sync-jobs/{job_id}/resolve",
+      "operation": "resolve_canvas_sync_job_route",
+      "canvas_operations_behavior_case": "resolve_job"
+    },
+    {
+      "method": "GET",
+      "path": "/v1/integrations/canvas/canvas-award-candidates",
+      "operation": "list_canvas_award_candidates_route",
+      "canvas_operations_behavior_case": "candidates"
+    },
+    {
+      "method": "GET",
+      "path": "/v1/integrations/canvas/evidence-policy-reviews",
+      "operation": "list_evidence_policy_reviews_route",
+      "canvas_operations_behavior_case": "reviews"
+    },
+    {
+      "method": "POST",
+      "path": "/v1/integrations/canvas/evidence-policy-reviews/{review_id}/resolve",
+      "operation": "resolve_evidence_policy_review_route",
+      "canvas_operations_behavior_case": "resolve_review"
     }
   ],
   "native_grpc": [
@@ -480,7 +555,7 @@
     {"method": "GET", "path": "/version", "owner": "mmf-runtime"}
   ],
   "remaining": {
-    "http": 68,
+    "http": 57,
     "grpc": 0,
     "runtime_modes": ["api", "canvas-sync-worker"],
     "literal_environment_variables": 56,

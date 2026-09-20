@@ -13,6 +13,7 @@ use marty_issuance_service::{
         UuidCanvasEvidenceFactIdGenerator,
     },
     canvas_catalog::HttpCanvasCatalogProvider,
+    canvas_credentials_status::CanvasCredentialsStatusService,
     canvas_credentials_validation::{
         CanvasCredentialsValidationService, HttpCanvasCredentialsValidationTransport,
     },
@@ -59,7 +60,8 @@ use marty_issuance_service::{
     canvas_oauth::{CanvasOAuthService, CanvasOAuthServiceConfig},
     canvas_oauth_http::HttpCanvasOAuthProvider,
     canvas_oauth_postgres::{PostgresCanvasOAuthRepository, PostgresIntegrationSecretVault},
-    canvas_provider_http::CanvasHttpClientPolicy,
+    canvas_operations::CanvasOperationsService,
+    canvas_provider_http::CanvasOriginPolicy as CanvasProviderOriginPolicy,
     canvas_readiness_runtime::{
         CanvasReadinessRuntime, HttpCanvasReadinessDocumentProvider,
         LiveCanvasReadinessChallengeProvider, PostgresCanvasReadinessStateProvider,
@@ -75,6 +77,7 @@ use marty_issuance_service::{
     credential_management_http::CredentialManagementHttpService,
     credential_management_postgres::PostgresCredentialManagementRepository,
     credential_postgres::PostgresCredentialRepository,
+    credential_renewal::CredentialRenewalService,
     dpop::MartyDpopProofVerifier,
     ephemeral_postgres::PostgresProofNonceRepository,
     http::{
@@ -185,14 +188,16 @@ async fn main() -> Result<(), Box<dyn Error>> {
     let canvas_credentials_validator = Arc::new(CanvasCredentialsValidationService::new(
         config.canvas_credentials_validation.clone(),
         integration_secret_vault.clone(),
-        Arc::new(HttpCanvasCredentialsValidationTransport::new(
-            CanvasHttpClientPolicy {
-                timeout: config.canvas_credentials_validation_timeout,
-                private_origin_allowlist: config.canvas_private_origin_allowlist.clone(),
-                allow_private_networks: config.canvas_allow_private_base_urls,
-                allow_http_localhost: false,
-            },
-        )),
+        Arc::new(
+            HttpCanvasCredentialsValidationTransport::with_operation_timeout(
+                CanvasProviderOriginPolicy {
+                    private_origin_allowlist: config.canvas_private_origin_allowlist.clone(),
+                    allow_private_networks: config.canvas_allow_private_base_urls,
+                    allow_http_localhost: false,
+                },
+                config.canvas_credentials_validation_timeout,
+            ),
+        ),
     ));
     let canvas_oauth = CanvasOAuthService::new(
         Arc::new(PostgresCanvasOAuthRepository::new(pool.clone())),
@@ -237,7 +242,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
         config.canvas_pilot_organizations.clone(),
         config.canvas_readiness_max_age,
     )
-    .with_integration_secret_repository(integration_secret_vault)
+    .with_integration_secret_repository(integration_secret_vault.clone())
     .with_canvas_credentials_validator(canvas_credentials_validator);
     let canvas_lti_login = CanvasLtiLoginService::new(
         canvas_lti_repository.clone(),
@@ -470,6 +475,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
         config.internal_service_token.as_deref(),
         config.dependency_timeout,
     )?);
+    let initiation_clock = Arc::new(SystemInitiationClock);
     let initiation = InitiationService::new(
         InitiationPorts {
             repository: credential_repository.clone(),
@@ -487,16 +493,23 @@ async fn main() -> Result<(), Box<dyn Error>> {
             )?),
             issuer_resolver: issuer_resolver.clone(),
             seeds: Arc::new(SecureInitiationSeedGenerator),
-            clock: Arc::new(SystemInitiationClock),
+            clock: initiation_clock.clone(),
         },
         config.issuer_base_url.clone(),
-    )?;
+    )?
+    .with_offer_ttl_minutes(config.issuance_offer_ttl_minutes.clone());
     let initiation_projector =
         InitiationOfferProjector::new(config.issuer_base_url.clone(), didcomm_delivery)?;
     let initiation_http = InitiationHttpService::new(
         initiation.clone(),
         initiation_projector.clone(),
         config.issuance_api_key.as_deref(),
+    );
+    let renewal = CredentialRenewalService::new(
+        credential_repository.clone(),
+        initiation_http.clone(),
+        config.issuance_api_key.as_deref(),
+        initiation_clock,
     );
     let credential = CredentialIssuanceService::new(
         CredentialPorts {
@@ -512,11 +525,27 @@ async fn main() -> Result<(), Box<dyn Error>> {
         &config.issuer_base_url,
     );
     let lifecycle_events = CredentialLifecycleEventBus::default();
+    let canvas_status = Arc::new(CanvasCredentialsStatusService::from_runtime(
+        &config,
+        integration_secret_vault.clone(),
+    ));
     let credential_management = CredentialManagementService::new(
-        Arc::new(PostgresCredentialManagementRepository::new(pool.clone())),
+        Arc::new(
+            PostgresCredentialManagementRepository::new(pool.clone())
+                .with_canvas_lifecycle(canvas_status),
+        ),
         Arc::new(credential_lifecycle.status_publisher()),
         Arc::new(lifecycle_events.clone()),
     );
+    // All three consumers share the same lifecycle policy, repository, status
+    // publisher and event bus. Gateway adoption of operations remains separate.
+    let canvas_operations =
+        CanvasOperationsService::new(pool.clone(), config.issuance_api_key.as_deref())
+            .with_job_operations(
+                config.canvas_portable_enabled,
+                config.canvas_pilot_organizations.clone(),
+            )
+            .with_review_operations(Some(Arc::new(credential_management.clone())));
     let credential_management_http = CredentialManagementHttpService::new(
         credential_management.clone(),
         config.issuance_api_key.as_deref(),
@@ -559,7 +588,8 @@ async fn main() -> Result<(), Box<dyn Error>> {
                 credential,
                 initiation_http,
                 didcomm_http,
-            ),
+            )
+            .with_renewal(renewal),
             credential_management_http,
             CanvasServices::new(
                 canvas_oauth,
@@ -579,8 +609,9 @@ async fn main() -> Result<(), Box<dyn Error>> {
                     ),
                     canvas_lti_tool_signer,
                 ),
-            ),
-            TokenRateLimiter::new(config.token_rate_limit, config.token_rate_window),
+            )
+            .with_operations(canvas_operations),
+            TokenRateLimiter::from_python_config(config.token_rate_limit, config.token_rate_window),
         ),
     );
     let (health_reporter, health_service) = tonic_health::server::health_reporter();

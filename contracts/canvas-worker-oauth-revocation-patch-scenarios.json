@@ -1,0 +1,14 @@
+{
+  "schema": "marty.canvas-worker-oauth-revocation-patch-scenarios/v1",
+  "base_scenario": "canvas-worker-oauth-revocation-scenarios.json",
+  "scope": "Observe the actual post-revocation platform UPDATE at a fixture-owned database barrier, then reject only the synthetic disconnected projection and observe complete worker cleanup",
+  "cases": [
+    {"name": "disconnect_marker_write_failure", "status": 200, "body": {}}
+  ],
+  "before_start_sql": [
+    "CREATE FUNCTION issuance_service.synthetic_reject_disconnect_marker() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN RAISE EXCEPTION 'synthetic disconnect marker write failure' USING ERRCODE='P0001'; END $$",
+    "CREATE TRIGGER synthetic_reject_disconnect_marker BEFORE UPDATE OF connection_config ON issuance_service.canvas_platforms FOR EACH ROW WHEN (OLD.id='platform-review' AND NEW.connection_config->>'oauth_status'='disconnected') EXECUTE FUNCTION issuance_service.synthetic_reject_disconnect_marker()"
+  ],
+  "barrier_sql": "LOCK TABLE issuance_service.canvas_platforms IN SHARE MODE",
+  "blocked_sql": "SELECT count(*) FROM pg_stat_activity WHERE datname=current_database() AND pid<>pg_backend_pid() AND state='active' AND wait_event_type='Lock' AND query ILIKE '%UPDATE%canvas_platforms%'"
+}

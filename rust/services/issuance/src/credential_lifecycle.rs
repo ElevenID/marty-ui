@@ -404,11 +404,34 @@ impl PostgresCredentialLifecycle {
         else {
             return Ok(());
         };
+        if transaction.organization_id != credential.organization_id
+            || transaction.id != credential.transaction_id
+            || source_id == credential.id
+        {
+            return Err(lifecycle_error("Renewal successor binding mismatch"));
+        }
         let source = sqlx::query(
-            "SELECT organization_id, status, revocation_profile_id, status_list_entries
-             FROM issuance_service.issued_credentials WHERE id = $1",
+            "SELECT source.organization_id, source.status, source.revocation_profile_id,
+                    source.status_list_entries, source.renewed_to_credential_id,
+                    (COALESCE(tx.renewal_of_credential_id = source.id, false)
+                     AND (successor.renewed_from_credential_id IS NULL
+                          OR successor.renewed_from_credential_id = source.id)) AS successor_bound,
+                    (source.status = 'revoked' AND source.revoked = true
+                     AND source.renewed_to_credential_id = $2
+                     AND successor.renewed_from_credential_id = source.id
+                     AND tx.renewal_of_credential_id = source.id) AS same_successor_complete
+             FROM issuance_service.issued_credentials source
+             LEFT JOIN issuance_service.issued_credentials successor
+               ON successor.id = $2 AND successor.organization_id = $3
+              AND successor.transaction_id = $4
+             LEFT JOIN issuance_service.issuance_transactions tx
+               ON tx.id = successor.transaction_id AND tx.organization_id = $3
+             WHERE source.id = $1",
         )
         .bind(source_id)
+        .bind(&credential.id)
+        .bind(&credential.organization_id)
+        .bind(&transaction.id)
         .fetch_optional(&self.pool)
         .await
         .map_err(database_error)?
@@ -418,8 +441,31 @@ impl PostgresCredentialLifecycle {
         if source_organization != credential.organization_id {
             return Err(lifecycle_error("Renewal source organization mismatch"));
         }
+        if !source
+            .try_get::<bool, _>("successor_bound")
+            .map_err(database_error)?
+        {
+            return Err(lifecycle_error("Renewal successor binding mismatch"));
+        }
+        if source
+            .try_get::<Option<bool>, _>("same_successor_complete")
+            .map_err(database_error)?
+            .unwrap_or(false)
+        {
+            // The prior local transaction committed both links. Resume later
+            // projections without publishing another revocation. This says
+            // nothing about publication count across pre-commit failures/races.
+            return Ok(());
+        }
         let status: String = source.try_get("status").map_err(database_error)?;
-        if status != "active" {
+        let existing_successor: Option<String> = source
+            .try_get("renewed_to_credential_id")
+            .map_err(database_error)?;
+        if status != "active"
+            || existing_successor
+                .as_deref()
+                .is_some_and(|value| !value.is_empty())
+        {
             return Err(lifecycle_error(
                 "Only an active credential can complete renewal",
             ));
@@ -458,7 +504,8 @@ impl PostgresCredentialLifecycle {
              SET status = 'revoked', status_updated_at = clock_timestamp(),
                  revoked = true, revoked_at = clock_timestamp(),
                  revocation_reason = $1, renewed_to_credential_id = $2
-             WHERE id = $3 AND organization_id = $4 AND status = 'active'",
+             WHERE id = $3 AND organization_id = $4 AND status = 'active'
+               AND (renewed_to_credential_id IS NULL OR renewed_to_credential_id = '')",
         )
         .bind(REASON)
         .bind(&credential.id)
@@ -472,16 +519,22 @@ impl PostgresCredentialLifecycle {
                 "Only an active credential can complete renewal",
             ));
         }
-        sqlx::query(
+        let successor_updated = sqlx::query(
             "UPDATE issuance_service.issued_credentials
-             SET renewed_from_credential_id = $1 WHERE id = $2 AND organization_id = $3",
+             SET renewed_from_credential_id = $1
+             WHERE id = $2 AND organization_id = $3 AND transaction_id = $4
+               AND (renewed_from_credential_id IS NULL OR renewed_from_credential_id = $1)",
         )
         .bind(source_id)
         .bind(&credential.id)
         .bind(&credential.organization_id)
+        .bind(&transaction.id)
         .execute(&mut *database)
         .await
         .map_err(database_error)?;
+        if successor_updated.rows_affected() != 1 {
+            return Err(lifecycle_error("Renewal successor binding mismatch"));
+        }
         database.commit().await.map_err(database_error)?;
         Ok(())
     }

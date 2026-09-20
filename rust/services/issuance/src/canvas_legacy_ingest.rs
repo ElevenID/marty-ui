@@ -7,7 +7,7 @@
 use std::{collections::BTreeMap, fmt, path::PathBuf, sync::Arc};
 
 use async_trait::async_trait;
-use chrono::{DateTime, SecondsFormat, Timelike, Utc};
+use chrono::{DateTime, NaiveDateTime, SecondsFormat, TimeZone, Timelike, Utc};
 use hmac::{Hmac, Mac};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Map, Value};
@@ -1837,7 +1837,23 @@ fn response_from_stored(
         .map_err(|_| CanvasLegacyIngestError::MalformedStoredResponse)
 }
 
-fn timestamp_string(now: DateTime<Utc>) -> String {
+pub(crate) fn timestamp_string(now: DateTime<Utc>) -> String {
+    timestamp_with_offset(now)
+}
+
+fn timestamp_local(value: NaiveDateTime) -> String {
+    let micros = value.nanosecond() / 1_000;
+    let mut text = value.format("%Y-%m-%dT%H:%M:%S").to_string();
+    if micros != 0 {
+        use std::fmt::Write;
+        write!(text, ".{micros:06}").expect("String formatting cannot fail");
+    }
+    text
+}
+
+fn timestamp_with_offset<T: TimeZone>(now: DateTime<T>) -> String {
+    // The existing UTC wrapper's implementation and precision remain unchanged;
+    // only the timezone parameter is generalized for publication projections.
     let micros = now.nanosecond() / 1_000;
     let truncated = now.with_nanosecond(micros * 1_000).unwrap_or(now);
     truncated.to_rfc3339_opts(
@@ -1848,6 +1864,18 @@ fn timestamp_string(now: DateTime<Utc>) -> String {
         },
         false,
     )
+}
+
+/// Complete persisted timestamp projection, not a public request date parser.
+/// Preserve naive values without inventing UTC; aware values retain their offset.
+pub(crate) fn timestamp_projection(value: &str) -> Option<String> {
+    if let Ok(value) = DateTime::parse_from_rfc3339(value) {
+        Some(timestamp_with_offset(value))
+    } else {
+        NaiveDateTime::parse_from_str(value, "%Y-%m-%dT%H:%M:%S%.f")
+            .ok()
+            .map(timestamp_local)
+    }
 }
 
 fn python_application_status(status: &str) -> String {
@@ -2185,5 +2213,53 @@ mod tests {
             timestamp_string(base.with_nanosecond(120_000_999).expect("nanos")),
             "2026-08-31T12:00:00.120000+00:00"
         );
+    }
+
+    #[test]
+    fn projected_datetimes_match_all_ten_original_adapter_datetime_cases() {
+        let cases: Value = serde_json::from_str(include_str!(
+            "../../../../contracts/canvas-publication-boundary-scenarios.json"
+        ))
+        .unwrap();
+        let reference: Value = serde_json::from_str(include_str!(
+            "../../../../contracts/canvas-publication-boundary-reference.json"
+        ))
+        .unwrap();
+        let mut checked = 0;
+        for case in cases["adapter"].as_array().unwrap() {
+            let Some(inputs) = case["inputs"]["credential"].as_object() else {
+                continue;
+            };
+            let observed = reference["adapter"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .find(|value| value["id"] == case["id"])
+                .unwrap();
+            let request = observed["trace"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .find(|value| value["kind"] == "http")
+                .unwrap();
+            let body: Value = serde_json::from_str(request["body"].as_str().unwrap()).unwrap();
+            for (field, alias) in [("issued_at", "issuedOn"), ("expires_at", "expires")] {
+                if let Some(value) = inputs.get(field).and_then(Value::as_str) {
+                    let expected = if case["provider"] == "badgr_api" {
+                        &body[alias]
+                    } else {
+                        &body["credential"][field]
+                    };
+                    assert_eq!(
+                        timestamp_projection(value).as_deref(),
+                        expected.as_str(),
+                        "{} {field}",
+                        case["id"]
+                    );
+                }
+            }
+            checked += 1;
+        }
+        assert_eq!(checked, 10);
     }
 }
