@@ -4,7 +4,7 @@
   "artifact_identity": "UTF-8; CRLF normalized to LF only",
   "source_repository": "ElevenID/marty-credentials",
   "source_commit": "578e86ef43166be79add2d812e92ef650535edaa",
-  "upstream_surface_sha256": "2ebc803454da1df3fd38c585ebeeaf540d13bbe41be7b70093f0394df6de66e3",
+  "upstream_surface_sha256": "b161a8aa7be187f0b8123325b1708f39f29e09b83f231016b0f4431e20d79829",
   "reference": {
     "path": "contracts/canvas-mirror-python-reference.json",
     "sha256": "c18b644741bc5560c8751c38df84ce756a52afd736ad8a963265b469aed40269"
