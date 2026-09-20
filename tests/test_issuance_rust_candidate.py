@@ -597,7 +597,7 @@ def test_frozen_surface_provenance_and_coverage_are_complete() -> None:
         "runtime_modes": ["api", "canvas-sync-worker"],
         "literal_environment_variables": 56,
         "dynamic_configuration_lookups": 20,
-        "migration_revisions": 44,
+        "migration_revisions": 46,
         "migration_heads": 1,
     }
     assert coverage["native_environment_variables"] == [
