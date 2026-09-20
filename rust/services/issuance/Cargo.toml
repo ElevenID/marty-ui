@@ -124,6 +124,10 @@ name = "application_template_postgres_contract"
 path = "tests/application_template_postgres_contract.rs"
 
 [[test]]
+name = "internal_application_postgres_contract"
+path = "tests/internal_application_postgres_contract.rs"
+
+[[test]]
 name = "application_template_http_behavior"
 path = "tests/application_template_http_behavior.rs"
 

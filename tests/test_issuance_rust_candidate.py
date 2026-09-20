@@ -44,6 +44,15 @@ def test_canvas_postgres_contracts_are_required_in_ci() -> None:
     assert workflow.count("nine Canvas plus proof nonce") == 2
 
 
+def test_internal_application_postgres_contract_is_required_in_ci() -> None:
+    manifest = text("rust/services/issuance/Cargo.toml")
+    runtime = text("scripts/ci/run-rust-db-contracts.sh")
+    assert 'name = "internal_application_postgres_contract"' in manifest
+    assert 'path = "tests/internal_application_postgres_contract.rs"' in manifest
+    assert "internal_application_postgres_contract-*" in runtime
+    assert "Expected one internal Application PostgreSQL contract executable" in runtime
+
+
 def test_frozen_surface_provenance_and_coverage_are_complete() -> None:
     surface_bytes = (ROOT / "contracts/issuance-runtime-surface.json").read_bytes()
     surface = json.loads(surface_bytes)

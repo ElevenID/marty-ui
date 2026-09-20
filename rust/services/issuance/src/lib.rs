@@ -107,6 +107,7 @@ pub mod initiation_http;
 pub mod initiation_response;
 pub mod integration_secret;
 pub mod internal_application_domain;
+pub mod internal_application_postgres;
 pub mod internal_application_service;
 pub mod management_security;
 mod network_policy;
