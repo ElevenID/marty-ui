@@ -269,7 +269,7 @@ def test_frozen_surface_provenance_and_coverage_are_complete() -> None:
         == coverage["internal_application_behavior_contract"]["sha256"]
     )
     assert coverage["internal_application_behavior_contract"]["commit"] == (
-        "da8ccf8f17dd4a418f6624c1fdabfe7cc4f2b909"
+        "e40c1ce6e807714278ef362d3ed24909dd8686fa"
     )
     assert internal_applications["schema"] == (
         "marty.issuance-internal-applications/v1"

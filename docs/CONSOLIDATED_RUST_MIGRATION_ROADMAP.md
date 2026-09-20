@@ -1,6 +1,32 @@
 # Consolidated Rust Migration Roadmap
 
-**Status:** Waves one through three, the 31-route Rust Canvas cutover, the canonical Rust verifier implementation, and PR #814's native issuance consumer cutover are merged. The last published beta baseline remains aggregate `marty-ui@v1.1.217`, source `4596afaca3724e60a8dadbd4e227b6e765cb495c`; no newer deployment is claimed here. PR #814 landed on protected `main` as merge-queue candidate `ec7780f390b4ae123cf6d0bdf0f5d139000ab544` after full hosted run `35511058319` passed. The eight-route Application Template and 14-route internal-Application cutovers are implemented and locally qualified: PR #826 is rebased onto protected `main` at `e675dcff4c52658a06514461b51c8bd82a0fa728`, including a hosted-release-contract repair that binds the exact eight-route template family without coupling unrelated future native-route totals; PR #827's restacked checkpoint immediately before this documentation refresh is `d28e27fbdca11430b459d94d0831333a1e1415c1`. The staged Rust issuance inventory contains 96 native HTTP operations. Their corresponding Python retirements are independently gated as Credentials PRs #279 and #278, and the required fresh Credentials `0.1.74` release coordinate is staged as draft PR #280. No retirement lands before its Rust owner. Reachable Python features, the independent KMS-hardening work, the dirty crypto/SD-JWT work, and the deferred DIDComm KMS redesign remain preserved. After exact protected-main tree verification, nine superseded clean UI worktrees and local branch names were removed; the only retained `marty-ui` worktrees are local `main`, PR #826, PR #827, and KMS hardening. The aggregate beta deployment, all-demo/device acceptance, and governed soak remain incomplete. No production deployment occurred in this lane.
+**Status:** Waves one through three, the 31-route Rust Canvas cutover, the
+canonical Rust verifier implementation, PR #814's native issuance consumer
+cutover, and PR #826's eight-route Application Template cutover are merged.
+The last published beta baseline remains aggregate `marty-ui@v1.1.217`, source
+`4596afaca3724e60a8dadbd4e227b6e765cb495c`; no newer deployment is claimed
+here. PR #814 landed on protected `main` as merge-queue candidate
+`ec7780f390b4ae123cf6d0bdf0f5d139000ab544` after full hosted run
+`35511058319` passed. PR #826's reviewed head
+`1d94bbbb3c5ef4698eee92240673ae602c289bf1` landed as squash commit
+`0b08704e55f6e2a56a0f6eff625e1c6b9a8c741d`; both commits have exact tree
+`a0d0989a601742171e0da873e2d6bdd1545270e2`. The 14-route
+internal-Application cutover remains open in PR #827. Its 29 PR-only commits
+were restacked directly onto the #826 squash at pre-documentation checkpoint
+`2971f0ce5a92b05c2793614c0dce587cc0856f56`, whose exact tree
+`08b295406aadebb5fd28aaf7b4cdf96c171b56d0` matches prior reviewed head
+`d611ea2484d25a256200473c657cb06e9c3fa55f`. The staged Rust issuance
+inventory contains 96 native HTTP operations. The corresponding Python
+retirements remain independently gated as open Credentials PRs #279 and #278,
+and the required fresh Credentials `0.1.74` release coordinate remains staged
+as draft PR #280. No retirement lands before its Rust owner. Reachable Python
+features, the independent KMS-hardening work, the dirty crypto/SD-JWT work,
+and the deferred DIDComm KMS redesign remain preserved. After exact
+protected-main tree verification, nine superseded clean UI worktrees and local
+branch names were removed; the retained `marty-ui` worktrees are local `main`,
+the landed #826 checkpoint, open PR #827, and KMS hardening. The aggregate beta
+deployment, all-demo/device acceptance, and governed soak remain incomplete.
+No production deployment occurred in this lane.
 
 Prior `v1.1.214` evidence remains retained at source
 `24f5d5dc0bb47d3dadb118b4dbe45191c5cf71b1`, release run `33930593794`.
@@ -40,16 +66,20 @@ candidate `ec7780f390b4ae123cf6d0bdf0f5d139000ab544` completed full hosted run
 candidate tree. This proves hosted qualification and landing, not beta or
 production deployment.
 
-Application Template PR #826 is open at exact head
-`e675dcff4c52658a06514461b51c8bd82a0fa728`, rebased directly onto protected `main`. Rebase checkpoint
+Application Template PR #826 merged on 2026-09-20. Its reviewed exact head
+`1d94bbbb3c5ef4698eee92240673ae602c289bf1` landed on protected `main` as
+squash commit `0b08704e55f6e2a56a0f6eff625e1c6b9a8c741d`. Both commits have exact tree
+`a0d0989a601742171e0da873e2d6bdd1545270e2`, proving that the squash preserved
+the reviewed content. Earlier rebase checkpoint
 `3fb7ed8baae44e9ab767a3875b561c3036de2301` had a complete tree identical to
 reviewed pre-rebase head `6b16533638e5e9b51366fbdae5915405a64a51f8`.
 Fresh hosted CI then found two stale release-contract assertions: the native
 surface count still excluded the eight template routes, and the Canvas mirror
-contract still pinned the preceding upstream-surface hash. Current head
+contract still pinned the preceding upstream-surface hash. Reviewed checkpoint
 `e675dcff4c52658a06514461b51c8bd82a0fa728` proves the selected Application Template route family exactly equals all eight frozen method/path pairs,
 retains the legacy publication exclusions, synchronizes the current upstream
-hash, and has started a fresh full hosted matrix. It owns
+hash, and preceded the final gateway ownership assertion at the reviewed head.
+The landed implementation owns
 all eight frozen management routes in the shared Rust issuance service with
 typed validation, tenant-safe PostgreSQL persistence, lifecycle transitions,
 authenticated dependency lookup, idempotent create, and compare-and-set
@@ -63,16 +93,22 @@ boundary; six focused domain tests, all four language-neutral HTTP tests,
 package formatting, diff checks, and strict targeted Clippy pass under Rust
 1.95. Credentials PR #279 at
 `de52f2147b18696fff128c19bf71fa0fca2e069b` removes only those eight superseded
-Python management routes after #826 lands; its exact-head hosted run
-`35502472242` is fully green.
+Python management routes. Its Rust-owner ordering gate is now satisfied, but
+the retirement remains independently gated and unlanded; its exact-head hosted
+run `35502472242` is fully green.
 
-Internal-Application PR #827 is open and restacked on #826. Its current
-pre-documentation checkpoint is `d28e27fbdca11430b459d94d0831333a1e1415c1`
-and includes #826's forward-compatible release-contract repair. Previous
-tree-identical checkpoint `94b82668325a03ea76e6ed4fba34c288a1f9688f`
-and pre-rebase head `21ab465cd5f6fed2f15b0e3f4d4ddf7527f621db`
-remain the proof that the internal-Application implementation did not change
-during the protected-main restack. Reviewed code checkpoint
+Internal-Application PR #827 remains open. After #826 squash-merged, exactly
+the 29 linear PR-only commits after stacked #826 tip
+`1d94bbbb3c5ef4698eee92240673ae602c289bf1` were restacked onto protected
+`main` commit `0b08704e55f6e2a56a0f6eff625e1c6b9a8c741d`. The resulting
+pre-documentation checkpoint `2971f0ce5a92b05c2793614c0dce587cc0856f56`
+has exact tree `08b295406aadebb5fd28aaf7b4cdf96c171b56d0`, identical to prior
+reviewed head `d611ea2484d25a256200473c657cb06e9c3fa55f`; the restack therefore
+changed ancestry without changing content. Earlier checkpoint
+`d28e27fbdca11430b459d94d0831333a1e1415c1`, tree-identical checkpoint
+`94b82668325a03ea76e6ed4fba34c288a1f9688f`, and pre-rebase head
+`21ab465cd5f6fed2f15b0e3f4d4ddf7527f621db` remain historical evidence for
+the preceding protected-main restack. Reviewed code checkpoint
 `f36d56f358edbc9dfaf1380fcc56b68b1a5e8ea9` and later documentation-only
 commits remain the underlying evidence. Its latest reviewed implementation checkpoint,
 `ac6bbe884`, removes the remaining
@@ -92,12 +128,17 @@ formatting, diff checks, and strict all-target Clippy under Rust 1.95. The
 latest panic-free base restack additionally passes all four language-neutral
 Application Template HTTP tests, all ten internal-Application HTTP tests, all
 five reconciliation tests, package formatting, diff checks, and strict
-targeted Clippy. Credentials PR #278 at
-`ab70b3139c279a7e8cad7da3691788964aacf92f` retires only those 14 Python route
-owners after #827 lands while retaining shared storage and live Canvas/evidence
-consumers. Its Canvas atomic auto-approval repair passed 111 focused
+targeted Clippy. The latest reviewed head also preserves secret-safe structured
+failure diagnostics and the issuance-specific Canvas offer readiness response.
+Credentials PR #278 is open at
+`e40c1ce6e807714278ef362d3ed24909dd8686fa`; it retires only those 14 Python
+route owners after #827 lands while retaining shared storage and live
+Canvas/evidence consumers, and adds the frozen diagnostics provenance consumed
+by this Rust candidate. Its earlier Canvas atomic auto-approval checkpoint
+`ab70b3139c279a7e8cad7da3691788964aacf92f` passed 111 focused
 Canvas/approval tests, 54 retirement/surface tests, collection of all 1,718
-remaining tests, and the complete exact-head hosted run `35502944118`.
+remaining tests, and hosted run `35502944118`. That earlier run is not claimed
+as exact-head qualification for `e40c1ce6e807714278ef362d3ed24909dd8686fa`.
 
 Credentials PR #280 is a draft stacked on #278 at
 `a237a57c5fc5d3c4f3695192093b2e9c97a38247`. It changes only `Cargo.toml` and
@@ -6065,23 +6106,27 @@ released/deployed acceptance remain outstanding. See
 and [the next aggregate acceptance checklist](rust-migrations/next-aggregate-beta-acceptance.md).
 
 PR #814's reviewed exact head contains the resolved Kubernetes, Flow, Envoy,
-self-host and Canvas integrations described above and reports **74 native / 57
-remaining / 131 total** issuance HTTP operations. Its hosted Linux Rust gate and
-protected merge are still in progress. The staged Application Template slice
-adds eight native operations and, once landed, reports **82 native / 49 remaining
-/ 131 total** without removing the entity, storage or downstream consumer
-surface. Its separately tested Python management retirement remains ordered
-after that Rust landing.
+self-host and Canvas integrations described above and reported **74 native / 57
+remaining / 131 total** issuance HTTP operations. Its hosted Linux Rust gate
+passed and its final merge-group candidate
+`ec7780f390b4ae123cf6d0bdf0f5d139000ab544` landed. Application Template PR
+#826 subsequently added eight native operations and landed as protected-main
+squash `0b08704e55f6e2a56a0f6eff625e1c6b9a8c741d`, yielding **82 native / 49
+remaining / 131 total** without removing the entity, storage, or downstream
+consumer surface. Its separately tested Python management retirement remains
+open and independently gated.
 
-The stacked internal-Application slice adds the next 14 exact frozen operations
-and reports **96 native / 35 remaining / 131 total**. Its separately tested
-Python retirement remains ordered after the Rust owner lands and retains shared
-storage plus active Canvas and evidence consumers.
+Open PR #827 adds the next 14 exact frozen internal-Application operations and
+reports **96 native / 35 remaining / 131 total**. Its 29 PR-only commits are
+restacked directly on the landed #826 squash with exact reviewed-tree parity.
+Its separately tested Python retirement remains ordered after the Rust owner
+lands and retains shared storage plus active Canvas and evidence consumers.
 
-Remaining work includes completion and protected landing of the exact PR #814
-head, the Application Template Rust and Python-retirement PRs, release-image /
-gateway / callback / self-host TLS acceptance, intended-consumer review for the
-remaining 35 issuance HTTP entries, branch and worktree reconciliation, and one
+Remaining work includes qualification and protected landing of PR #827,
+independently gated Python retirements #279 and #278, the fresh Credentials
+`0.1.74` release coordinate in draft PR #280, release-image / gateway / callback
+/ self-host TLS acceptance, intended-consumer review for the remaining 35
+issuance HTTP entries, remaining branch and worktree reconciliation, and one
 aggregate beta recording/device acceptance soak. Local qualification is not
 deployed acceptance. Active Python remains until its retirement gates pass.
 DIDComm KMS corrections remain deferred; production is unchanged.
