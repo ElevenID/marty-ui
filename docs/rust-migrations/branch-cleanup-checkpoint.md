@@ -2,24 +2,25 @@
 
 ## Current follow-up — 2026-09-20
 
-A fresh `git worktree list` plus per-worktree status audit reports 13
-`marty-ui` worktrees, 13 local branches, and zero dirty entries. Nine clean
-worktrees remain intentionally gated on PR #814: its active
-`feat/canvas-review-resolution-v1` worktree plus the eight historical branches
-mapped in the consolidated roadmap. GitHub squash integration rewrote those
-commits, so ancestry is not the deletion gate. The reviewed #814 source and
-merge-group candidate have identical tree `eeaa080d5ddc342b1e70fdf3680e7d838712289c`;
-the nine worktrees and local branch names are removed only after protected
-`origin/main` is fetched and proven to contain that exact landed tree.
+PR #814 merged through the protected queue as
+`ec7780f390b4ae123cf6d0bdf0f5d139000ab544`. A fetch of protected
+`origin/main` proved that its landed tree and the reviewed candidate tree are
+both `eeaa080d5ddc342b1e70fdf3680e7d838712289c`. Each of the nine gated
+worktrees was then rechecked for an empty porcelain status and a path beneath
+the intended `_codex-worktrees` root. The #814 source worktree and all eight
+historical mapped worktrees were removed, followed by their nine superseded
+local branch names.
 
-The four retained worktrees after that cleanup are local `main`, the active
-Application Template PR #826 branch, the active internal-Application PR #827
-branch, and the separately owned `security/kms-boundary-hardening-v1` branch.
-PRs #826 and #827 are clean and synchronized with their remotes. Local `main`
-and the KMS branch remain untouched because their preserved KMS work is outside
-this migration landing. The separate workspace-wide inventory still records
-five dirty worktrees owned by the crypto/SD-JWT effort; none is a `marty-ui`
-worktree and none is authorized for cleanup here.
+A post-cleanup `git worktree list` reports exactly four `marty-ui` worktrees
+and four local branches: local `main`, Application Template PR #826, internal-
+Application PR #827, and separately owned
+`security/kms-boundary-hardening-v1`. All four were clean at the checkpoint.
+PR #826 was then rebased onto protected `main` with an identical complete tree,
+and PR #827 was restacked on that head with an identical complete tree. Local
+`main` and the KMS branch remain otherwise untouched because their preserved
+KMS work is outside this migration landing. The separate workspace-wide
+inventory still records five dirty worktrees owned by the crypto/SD-JWT effort;
+none is a `marty-ui` worktree and none is authorized for cleanup here.
 
 The dated sections below are retained as historical audit evidence. Their
 then-current counts are not the present inventory.

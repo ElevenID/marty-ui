@@ -1,6 +1,6 @@
 # Consolidated Rust Migration Roadmap
 
-**Status:** Waves one through three, the 31-route Rust Canvas cutover, and the canonical Rust verifier implementation are merged. The last published beta baseline remains aggregate `marty-ui@v1.1.217`, source `4596afaca3724e60a8dadbd4e227b6e765cb495c`; no newer deployment is claimed here. PR #814 is maintainer-reviewed at exact head `458823962b00ab614060b5420f7a7caa44d2712e`. Its current merge-group candidate `ec7780f390b4ae123cf6d0bdf0f5d139000ab544` is running the full hosted matrix in run `35511058319`, with every completed job green. The eight-route Application Template and 14-route internal-Application cutovers are implemented, locally qualified, and stacked as PRs #826 at `6b16533638e5e9b51366fbdae5915405a64a51f8` and #827 with reviewed code checkpoint `f36d56f358edbc9dfaf1380fcc56b68b1a5e8ea9`; the staged Rust issuance inventory now contains 96 native HTTP operations. Their corresponding Python retirements are independently gated as Credentials PRs #279 and #278, and the required fresh Credentials `0.1.74` release coordinate is staged as draft PR #280. No retirement lands before its Rust owner. Reachable Python features, the independent KMS-hardening work, the dirty crypto/SD-JWT work, and the deferred DIDComm KMS redesign remain preserved. A workspace-wide audit removed three stale non-code artifacts and left only five dirty worktrees, all owned by the active crypto/SD-JWT effort; eight clean rebased historical UI worktrees remain only until #814 reaches `main`. The aggregate beta deployment, all-demo/device acceptance, and governed soak remain incomplete. No production deployment occurred in this lane.
+**Status:** Waves one through three, the 31-route Rust Canvas cutover, the canonical Rust verifier implementation, and PR #814's native issuance consumer cutover are merged. The last published beta baseline remains aggregate `marty-ui@v1.1.217`, source `4596afaca3724e60a8dadbd4e227b6e765cb495c`; no newer deployment is claimed here. PR #814 landed on protected `main` as merge-queue candidate `ec7780f390b4ae123cf6d0bdf0f5d139000ab544` after full hosted run `35511058319` passed. The eight-route Application Template and 14-route internal-Application cutovers are implemented and locally qualified: PR #826 is rebased onto protected `main` at `e675dcff4c52658a06514461b51c8bd82a0fa728`, including a hosted-release-contract repair that binds the exact eight-route template family without coupling unrelated future native-route totals; PR #827's restacked checkpoint immediately before this documentation refresh is `d28e27fbdca11430b459d94d0831333a1e1415c1`. The staged Rust issuance inventory contains 96 native HTTP operations. Their corresponding Python retirements are independently gated as Credentials PRs #279 and #278, and the required fresh Credentials `0.1.74` release coordinate is staged as draft PR #280. No retirement lands before its Rust owner. Reachable Python features, the independent KMS-hardening work, the dirty crypto/SD-JWT work, and the deferred DIDComm KMS redesign remain preserved. After exact protected-main tree verification, nine superseded clean UI worktrees and local branch names were removed; the only retained `marty-ui` worktrees are local `main`, PR #826, PR #827, and KMS hardening. The aggregate beta deployment, all-demo/device acceptance, and governed soak remain incomplete. No production deployment occurred in this lane.
 
 Prior `v1.1.214` evidence remains retained at source
 `24f5d5dc0bb47d3dadb118b4dbe45191c5cf71b1`, release run `33930593794`.
@@ -31,21 +31,25 @@ The immediate deployment boundary is beta. Production and persistent self-host e
 
 ## Current execution snapshot — 2026-09-20
 
-PR #814 remains open at reviewed head
-`458823962b00ab614060b5420f7a7caa44d2712e`. Its first merge-group candidate
-passed after GitHub's 60-minute status-check timeout had already removed the PR
-from the queue. The queue timeout is now 240 minutes, while squash merging,
-`ALLGREEN`, concurrency two, and the absence of bypass actors are unchanged.
-The orphaned follow-up run was canceled and the exact reviewed head was
-re-enqueued. Current candidate
-`ec7780f390b4ae123cf6d0bdf0f5d139000ab544` has the reviewed PR tree in run
-`35511058319`; every completed CI job is green and the long Rust and image jobs
-remain live. It must finish successfully and
-the PR must reach protected `main` before any dependent cutover is treated as
-landed. This is hosted qualification, not beta or production deployment.
+PR #814's reviewed head
+`458823962b00ab614060b5420f7a7caa44d2712e` is merged. Its final merge-group
+candidate `ec7780f390b4ae123cf6d0bdf0f5d139000ab544` completed full hosted run
+`35511058319` successfully and became protected `origin/main` on
+2026-09-20. The landed tree
+`eeaa080d5ddc342b1e70fdf3680e7d838712289c` exactly matches the reviewed
+candidate tree. This proves hosted qualification and landing, not beta or
+production deployment.
 
 Application Template PR #826 is open at exact head
-`6b16533638e5e9b51366fbdae5915405a64a51f8`, stacked directly on #814. It owns
+`e675dcff4c52658a06514461b51c8bd82a0fa728`, rebased directly onto protected `main`. Rebase checkpoint
+`3fb7ed8baae44e9ab767a3875b561c3036de2301` had a complete tree identical to
+reviewed pre-rebase head `6b16533638e5e9b51366fbdae5915405a64a51f8`.
+Fresh hosted CI then found two stale release-contract assertions: the native
+surface count still excluded the eight template routes, and the Canvas mirror
+contract still pinned the preceding upstream-surface hash. Current head
+`e675dcff4c52658a06514461b51c8bd82a0fa728` proves the selected Application Template route family exactly equals all eight frozen method/path pairs,
+retains the legacy publication exclusions, synchronizes the current upstream
+hash, and has started a fresh full hosted matrix. It owns
 all eight frozen management routes in the shared Rust issuance service with
 typed validation, tenant-safe PostgreSQL persistence, lifecycle transitions,
 authenticated dependency lookup, idempotent create, and compare-and-set
@@ -62,9 +66,15 @@ package formatting, diff checks, and strict targeted Clippy pass under Rust
 Python management routes after #826 lands; its exact-head hosted run
 `35502472242` is fully green.
 
-Internal-Application PR #827 is open and stacked on #826. Its reviewed code
-tree checkpoint is `f36d56f358edbc9dfaf1380fcc56b68b1a5e8ea9`; later documentation-only
-commits record this evidence. Its latest reviewed implementation checkpoint,
+Internal-Application PR #827 is open and restacked on #826. Its current
+pre-documentation checkpoint is `d28e27fbdca11430b459d94d0831333a1e1415c1`
+and includes #826's forward-compatible release-contract repair. Previous
+tree-identical checkpoint `94b82668325a03ea76e6ed4fba34c288a1f9688f`
+and pre-rebase head `21ab465cd5f6fed2f15b0e3f4d4ddf7527f621db`
+remain the proof that the internal-Application implementation did not change
+during the protected-main restack. Reviewed code checkpoint
+`f36d56f358edbc9dfaf1380fcc56b68b1a5e8ea9` and later documentation-only
+commits remain the underlying evidence. Its latest reviewed implementation checkpoint,
 `ac6bbe884`, removes the remaining
 avoidable panic paths found by maintainer review; code checkpoint `172479c22`
 implements and mounts all 14 frozen routes, including ordinary and Canvas approval, issuance
@@ -113,17 +123,19 @@ Python native-inventory guard also pass.
 Verified obsolete branch cleanup removed the patch-equivalent historical UI
 worktrees, stale Credentials worktrees, detached tagged-release worktrees, one
 obsolete detached Core v0.1.60 worktree, and two stale generated/editor files.
-Eight rebased UI worktrees remain temporarily because their reviewed
-replacement commits are inside #814 but not yet on `main`; they are removed
-only after the exact #814 merge-queue candidate tree is proven to be the tree
-landed on `origin/main`. GitHub squash merging intentionally does not preserve
-the replacement commits as ancestors, so commit ancestry is not a valid cleanup
-gate here. A fresh
+After #814 merged, protected `origin/main` and the merge-queue candidate were
+proven to have identical tree
+`eeaa080d5ddc342b1e70fdf3680e7d838712289c`. The eight mapped historical UI
+worktrees plus #814's source worktree were then rechecked clean and removed
+together with their nine local branch names. GitHub squash merging
+intentionally does not preserve the replacement commits as ancestors, so the
+exact landed-tree proof, reviewed mappings, and behavior gates were used instead.
+A fresh
 workspace-wide audit reports five dirty worktrees, all belonging to the active
 crypto/SD-JWT effort; they remain untouched. The active KMS worktrees likewise
 remain preserved.
 
-The eight clean historical UI branches are local-only and have no remote branch
+The eight removed historical UI branches were local-only and had no remote branch
 or PR. Their rebased/folded replacements in #814 are recorded below. These are
 same-purpose mappings established by subject, range-diff, and touched-path
 review; they are not claims that the rewritten commit objects are identical.
@@ -132,9 +144,9 @@ other seven have reviewed range-diffs limited to expected stack-composition
 changes: formatter ordering, expanded qualification documentation, accumulated
 Cargo workspace/module wiring, consolidated CI image setup, and owned failure
 diagnostics. Their behavior-bearing tests and runtime changes remain in the
-#814 candidate. After the queue merges, candidate-tree equality with protected
-`origin/main` is the final preservation proof before deleting these worktrees
-and local branch names.
+landed #814 tree. Candidate-tree equality with protected `origin/main` supplied
+the final preservation proof before their worktrees and local branch names were
+deleted.
 
 | Local branch | Local commit(s) | Reviewed replacement commit(s) in #814 |
 |---|---|---|
