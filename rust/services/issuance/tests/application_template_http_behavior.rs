@@ -5,7 +5,10 @@ use std::{
 };
 
 use async_trait::async_trait;
-use axum::{body::Body, http::Request};
+use axum::{
+    body::Body,
+    http::{Method, Request, StatusCode},
+};
 use chrono::{TimeZone, Utc};
 use http_body_util::BodyExt;
 use marty_issuance_service::{
@@ -178,6 +181,25 @@ impl ApplicationTemplateCatalog for NoCatalogCalls {
     }
 }
 
+struct ValidCatalog;
+
+#[async_trait]
+impl ApplicationTemplateCatalog for ValidCatalog {
+    async fn get_strict(
+        &self,
+        template_id: &str,
+    ) -> Result<Option<CredentialTemplateValidationView>, ApplicationTemplateCatalogError> {
+        Ok(
+            (template_id == "credential-template-1").then(|| CredentialTemplateValidationView {
+                organization_id: "org-123".to_owned(),
+                status: "ACTIVE".to_owned(),
+                revocation_profile_id: Some("revocation-profile-1".to_owned()),
+                claims: ["membership_number".to_owned()].into_iter().collect(),
+            }),
+        )
+    }
+}
+
 struct FixedClock;
 
 impl ApplicationTemplateClock for FixedClock {
@@ -278,6 +300,46 @@ fn arranged_template(contract: &Value, value: &Value) -> ApplicationTemplateReco
     }
 }
 
+async fn management_request(
+    service: &ApplicationTemplateService,
+    method: Method,
+    uri: &str,
+    body: Option<Value>,
+    idempotency_key: Option<&str>,
+) -> (StatusCode, Vec<u8>) {
+    let mut builder = Request::builder()
+        .method(method)
+        .uri(uri)
+        .header("x-api-key", "valid")
+        .header("x-organization-id", "org-123");
+    if body.is_some() {
+        builder = builder.header("content-type", "application/json");
+    }
+    if let Some(idempotency_key) = idempotency_key {
+        builder = builder.header("idempotency-key", idempotency_key);
+    }
+    let response = application_template_http::router(service.clone())
+        .oneshot(
+            builder
+                .body(Body::from(
+                    body.map(|value| serde_json::to_vec(&value).expect("request JSON"))
+                        .unwrap_or_default(),
+                ))
+                .expect("management request"),
+        )
+        .await
+        .expect("management response");
+    let status = response.status();
+    let body = response
+        .into_body()
+        .collect()
+        .await
+        .expect("management response body")
+        .to_bytes()
+        .to_vec();
+    (status, body)
+}
+
 #[tokio::test]
 async fn rust_http_boundary_passes_every_shared_language_neutral_case() {
     let contract = contract();
@@ -374,6 +436,120 @@ async fn rust_http_boundary_passes_every_shared_language_neutral_case() {
             assert_eq!(repository.count(), before, "{}", case["name"]);
         }
     }
+}
+
+#[tokio::test]
+async fn every_management_route_completes_the_full_http_lifecycle() {
+    let service = ApplicationTemplateService::new(
+        Arc::new(MemoryRepository::default()),
+        Arc::new(ValidCatalog),
+        Arc::new(FixedClock),
+        Some("valid"),
+    );
+    let create = json!({
+        "organization_id": "org-123",
+        "name": "Membership application",
+        "credential_template_id": "credential-template-1",
+        "form_fields": [{
+            "field_id": "membership_number",
+            "label": "Membership number",
+            "field_type": "TEXT",
+            "required": true
+        }]
+    });
+
+    let (status, body) = management_request(
+        &service,
+        Method::POST,
+        "/v1/application-templates",
+        Some(create.clone()),
+        Some("lifecycle-template"),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    let created: Value = serde_json::from_slice(&body).expect("created template JSON");
+    let template_id = created["id"].as_str().expect("created template id");
+    assert_eq!(created["status"], "DRAFT");
+
+    let (status, body) = management_request(
+        &service,
+        Method::GET,
+        "/v1/application-templates?organization_id=org-123",
+        None,
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    let listed: Value = serde_json::from_slice(&body).expect("template list JSON");
+    assert_eq!(listed.as_array().expect("template list").len(), 1);
+    assert_eq!(listed[0]["id"], template_id);
+
+    let item_path = format!("/v1/application-templates/{template_id}");
+    let (status, body) = management_request(&service, Method::GET, &item_path, None, None).await;
+    assert_eq!(status, StatusCode::OK);
+    let fetched: Value = serde_json::from_slice(&body).expect("fetched template JSON");
+    assert_eq!(fetched["id"], template_id);
+
+    let (status, body) = management_request(
+        &service,
+        Method::PATCH,
+        &item_path,
+        Some(json!({"name": "Updated membership application"})),
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    let patched: Value = serde_json::from_slice(&body).expect("patched template JSON");
+    assert_eq!(patched["name"], "Updated membership application");
+    assert_eq!(patched["status"], "DRAFT");
+
+    let validate_path = format!("{item_path}/validate");
+    let (status, body) =
+        management_request(&service, Method::POST, &validate_path, None, None).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(
+        serde_json::from_slice::<Value>(&body).expect("validation JSON"),
+        json!({"valid": true, "errors": []})
+    );
+
+    let activate_path = format!("{item_path}/activate");
+    let (status, body) =
+        management_request(&service, Method::POST, &activate_path, None, None).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(
+        serde_json::from_slice::<Value>(&body).expect("activation JSON")["status"],
+        "ACTIVE"
+    );
+
+    let deprecate_path = format!("{item_path}/deprecate");
+    let (status, body) =
+        management_request(&service, Method::POST, &deprecate_path, None, None).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(
+        serde_json::from_slice::<Value>(&body).expect("deprecation JSON")["status"],
+        "DEPRECATED"
+    );
+
+    let mut deletable = create;
+    deletable["name"] = json!("Disposable draft");
+    let (status, body) = management_request(
+        &service,
+        Method::POST,
+        "/v1/application-templates",
+        Some(deletable),
+        Some("deletable-template"),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    let deletable: Value = serde_json::from_slice(&body).expect("deletable template JSON");
+    let delete_path = format!(
+        "/v1/application-templates/{}",
+        deletable["id"].as_str().expect("deletable template id")
+    );
+    let (status, body) =
+        management_request(&service, Method::DELETE, &delete_path, None, None).await;
+    assert_eq!(status, StatusCode::NO_CONTENT);
+    assert!(body.is_empty());
 }
 
 #[tokio::test]
