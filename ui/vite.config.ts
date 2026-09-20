@@ -329,8 +329,11 @@ export default defineConfig(async ({ mode }) => {
             }
           },
         }),
-        
-        // Sitemap generation
+      ] : []),
+
+      // Crawler files do not require a browser. Dockerfile.prod deliberately
+      // disables prerendering, but public builds still need sitemap and robots.
+      ...(!isDev && !isSelfhostBuild ? [
         Sitemap({
           hostname: 'https://elevenidllc.com',
           dynamicRoutes: [
@@ -428,8 +431,8 @@ export default defineConfig(async ({ mode }) => {
             { userAgent: 'Cohere-AI', allow: '/' },
           ],
         }),
-        promotePrerenderedRootPlugin(),
       ] : []),
+      ...(!disablePrerender ? [promotePrerenderedRootPlugin()] : []),
 
       ...(!isDev && enableBundleAnalysis ? [
         visualizer({
@@ -444,6 +447,7 @@ export default defineConfig(async ({ mode }) => {
           template: 'raw-data',
           gzipSize: true,
           brotliSize: true,
+          open: false,
         }),
       ] : []),
     ],
