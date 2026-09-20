@@ -223,19 +223,19 @@ fn result_json<T: serde::Serialize>(
 }
 
 fn service_error(error: ApplicationTemplateServiceError) -> Response {
-    if let ApplicationTemplateServiceError::Validation(errors) = error {
-        return (
-            StatusCode::UNPROCESSABLE_ENTITY,
-            Json(json!({
-                "detail": {
-                    "error": "APPLICATION_TEMPLATE_INVALID",
-                    "errors": errors,
-                }
-            })),
-        )
-            .into_response();
-    }
     let (status, detail) = match error {
+        ApplicationTemplateServiceError::Validation(errors) => {
+            return (
+                StatusCode::UNPROCESSABLE_ENTITY,
+                Json(json!({
+                    "detail": {
+                        "error": "APPLICATION_TEMPLATE_INVALID",
+                        "errors": errors,
+                    }
+                })),
+            )
+                .into_response();
+        }
         ApplicationTemplateServiceError::Security(error) => security_error(error),
         ApplicationTemplateServiceError::Request(error) => request_error(error),
         ApplicationTemplateServiceError::Lifecycle(error) => lifecycle_error(error),
@@ -254,7 +254,6 @@ fn service_error(error: ApplicationTemplateServiceError) -> Response {
             StatusCode::INTERNAL_SERVER_ERROR,
             "Application Template request could not be canonicalized",
         ),
-        ApplicationTemplateServiceError::Validation(_) => unreachable!("handled above"),
     };
     (status, Json(json!({"detail": detail}))).into_response()
 }

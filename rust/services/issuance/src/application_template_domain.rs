@@ -893,21 +893,25 @@ pub fn validate_application_template(
             );
             continue;
         }
-        let order = check.get("order").and_then(Value::as_i64);
-        if order.is_none_or(|value| value < 1) {
-            add(
-                "required_checks",
-                format!("required_checks.{index}.order"),
-                "INVALID",
-                "Check order must be a positive integer.",
-            );
-        } else if !seen_orders.insert(order.expect("positive order")) {
-            add(
-                "required_checks",
-                format!("required_checks.{index}.order"),
-                "DUPLICATE",
-                "Check order values must be unique.",
-            );
+        match check.get("order").and_then(Value::as_i64) {
+            Some(order) if order >= 1 => {
+                if !seen_orders.insert(order) {
+                    add(
+                        "required_checks",
+                        format!("required_checks.{index}.order"),
+                        "DUPLICATE",
+                        "Check order values must be unique.",
+                    );
+                }
+            }
+            _ => {
+                add(
+                    "required_checks",
+                    format!("required_checks.{index}.order"),
+                    "INVALID",
+                    "Check order must be a positive integer.",
+                );
+            }
         }
     }
 
