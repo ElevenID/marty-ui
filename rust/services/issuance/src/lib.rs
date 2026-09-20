@@ -106,6 +106,7 @@ pub mod initiation_didcomm_http;
 pub mod initiation_http;
 pub mod initiation_response;
 pub mod integration_secret;
+pub mod internal_application_domain;
 pub mod management_security;
 mod network_policy;
 pub mod proof_nonce;
