@@ -15,12 +15,12 @@ use serde_json::json;
 
 use crate::{
     internal_application_domain::{
-        ApplicationCreate, ApplicationDomainError, ApplicationRejection, ApplicationResponse,
-        EvidenceFactResponse, EvidenceSubmission, IssuanceEventResponse,
+        ApplicationApproval, ApplicationCreate, ApplicationDomainError, ApplicationRejection,
+        ApplicationResponse, EvidenceFactResponse, EvidenceSubmission, IssuanceEventResponse,
     },
     internal_application_service::{
-        InternalApplicationRepositoryError, InternalApplicationService,
-        InternalApplicationServiceError,
+        InternalApplicationApprovalError, InternalApplicationRepositoryError,
+        InternalApplicationService, InternalApplicationServiceError,
     },
     management_http::{header, malformed_json, missing_organization_query, security_error},
 };
@@ -49,6 +49,10 @@ pub fn router(service: InternalApplicationService) -> Router {
         .route(
             "/internal/applications/{application_id}/submit-evidence",
             post(submit_evidence),
+        )
+        .route(
+            "/internal/applications/{application_id}/approve",
+            post(approve_application),
         )
         .route(
             "/internal/applications/{application_id}/reject",
@@ -249,6 +253,34 @@ async fn reject_application(
     )
 }
 
+async fn approve_application(
+    State(service): State<InternalApplicationService>,
+    Path(application_id): Path<String>,
+    headers: HeaderMap,
+    body: Result<Json<ApplicationApproval>, JsonRejection>,
+) -> Response {
+    if let Err(error) = service.preflight_json_request(
+        header(&headers, API_KEY_HEADER),
+        header(&headers, ORGANIZATION_HEADER),
+    ) {
+        return service_error(error);
+    }
+    let Json(approval) = match body {
+        Ok(approval) => approval,
+        Err(error) => return malformed_json(error),
+    };
+    result_application(
+        service
+            .approve(
+                header(&headers, API_KEY_HEADER),
+                header(&headers, ORGANIZATION_HEADER),
+                &application_id,
+                approval,
+            )
+            .await,
+    )
+}
+
 async fn list_issuance_events(
     State(service): State<InternalApplicationService>,
     Path(application_id): Path<String>,
@@ -301,6 +333,26 @@ fn service_error(error: InternalApplicationServiceError) -> Response {
             };
             return (status, Json(json!({"detail": error.to_string()}))).into_response();
         }
+        InternalApplicationServiceError::Approval(error) => {
+            let status = match &error {
+                InternalApplicationApprovalError::Unavailable
+                | InternalApplicationApprovalError::CredentialTemplateUnavailable
+                | InternalApplicationApprovalError::RevocationProfileUnavailable
+                | InternalApplicationApprovalError::IssuerContextUnavailable => {
+                    StatusCode::SERVICE_UNAVAILABLE
+                }
+                InternalApplicationApprovalError::CredentialTemplateNotFound
+                | InternalApplicationApprovalError::CredentialTemplateInvalid(_)
+                | InternalApplicationApprovalError::RevocationProfileNotFound
+                | InternalApplicationApprovalError::RevocationProfileForeign
+                | InternalApplicationApprovalError::RevocationProfileInactive => {
+                    StatusCode::UNPROCESSABLE_ENTITY
+                }
+                InternalApplicationApprovalError::CanvasNotReady
+                | InternalApplicationApprovalError::ConcurrentChange => StatusCode::CONFLICT,
+            };
+            return (status, Json(json!({"detail": error.to_string()}))).into_response();
+        }
         error => error,
     };
     let (status, detail) = match error {
@@ -309,6 +361,7 @@ fn service_error(error: InternalApplicationServiceError) -> Response {
         }
         InternalApplicationServiceError::Repository(error) => repository_error(error),
         InternalApplicationServiceError::Domain(_) => unreachable!("handled above"),
+        InternalApplicationServiceError::Approval(_) => unreachable!("handled above"),
         InternalApplicationServiceError::InvalidStatus => (
             StatusCode::UNPROCESSABLE_ENTITY,
             "Invalid application status",
@@ -323,6 +376,10 @@ fn service_error(error: InternalApplicationServiceError) -> Response {
         InternalApplicationServiceError::ApplicationNotFound => {
             (StatusCode::NOT_FOUND, "Application not found")
         }
+        InternalApplicationServiceError::MissingApprovalTemplateBinding => (
+            StatusCode::BAD_REQUEST,
+            "Application template missing credential template ID",
+        ),
         InternalApplicationServiceError::EvidenceConflict => (
             StatusCode::CONFLICT,
             "Application lifecycle changed during evidence submission",

@@ -203,6 +203,27 @@ impl ApplicationRecord {
         Ok(())
     }
 
+    pub fn ensure_approvable(&self) -> Result<(), ApplicationDomainError> {
+        self.require_pending("approve")
+    }
+
+    pub fn approve_reserved(
+        &mut self,
+        issuance_transaction_id: String,
+        review_notes: Option<String>,
+        reviewer_id: &str,
+        now: DateTime<Utc>,
+    ) -> Result<(), ApplicationDomainError> {
+        self.ensure_approvable()?;
+        self.status = ApplicationStatus::Approved;
+        self.review_notes = review_notes;
+        self.reviewer_id = Some(reviewer_id.to_owned());
+        self.reviewed_at = Some(now);
+        self.updated_at = now;
+        self.issuance_transaction_id = Some(issuance_transaction_id);
+        Ok(())
+    }
+
     fn require_pending(&self, operation: &'static str) -> Result<(), ApplicationDomainError> {
         if self.status == ApplicationStatus::Pending {
             Ok(())
@@ -640,6 +661,25 @@ mod tests {
         )
         .expect("application");
         let later = now + Duration::minutes(1);
+        let mut approved = record.clone();
+        approved
+            .approve_reserved(
+                "transaction-1".to_owned(),
+                Some("Reviewed".to_owned()),
+                "issuance-management-api",
+                later,
+            )
+            .expect("pending approval");
+        assert_eq!(approved.status, ApplicationStatus::Approved);
+        assert_eq!(approved.review_notes.as_deref(), Some("Reviewed"));
+        assert_eq!(
+            approved.reviewer_id.as_deref(),
+            Some("issuance-management-api")
+        );
+        assert_eq!(
+            approved.issuance_transaction_id.as_deref(),
+            Some("transaction-1")
+        );
         record
             .submit_evidence(
                 EvidenceSubmission {

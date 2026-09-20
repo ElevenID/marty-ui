@@ -23,7 +23,8 @@ use marty_issuance_service::{
     },
     internal_application_http,
     internal_application_service::{
-        InternalApplicationClock, InternalApplicationIdGenerator, InternalApplicationRepository,
+        InternalApplicationApprovalError, InternalApplicationApprover, InternalApplicationClock,
+        InternalApplicationIdGenerator, InternalApplicationRepository,
         InternalApplicationRepositoryError, InternalApplicationService,
     },
 };
@@ -212,6 +213,37 @@ impl InternalApplicationIdGenerator for FixedRuntime {
     }
 }
 
+struct FixedApprover {
+    repository: Arc<MemoryRepository>,
+    error: Option<InternalApplicationApprovalError>,
+}
+
+#[async_trait]
+impl InternalApplicationApprover for FixedApprover {
+    async fn approve(
+        &self,
+        application: &ApplicationRecord,
+        _template: &ApplicationTemplateRecord,
+        reviewer_id: &str,
+        review_notes: Option<&str>,
+    ) -> Result<ApplicationRecord, InternalApplicationApprovalError> {
+        if let Some(error) = &self.error {
+            return Err(error.clone());
+        }
+        let mut approved = application.clone();
+        approved
+            .approve_reserved(
+                "transaction-1".to_owned(),
+                review_notes.map(str::to_owned),
+                reviewer_id,
+                fixed_time(),
+            )
+            .expect("pending application approval");
+        self.repository.seed_application(approved.clone());
+        Ok(approved)
+    }
+}
+
 fn fixed_time() -> DateTime<Utc> {
     Utc.with_ymd_and_hms(2026, 9, 19, 12, 34, 56)
         .single()
@@ -296,6 +328,14 @@ fn service(
         Arc::new(FixedRuntime),
         management_api_key,
     )
+}
+
+fn service_with_approver(
+    repository: Arc<MemoryRepository>,
+    error: Option<InternalApplicationApprovalError>,
+) -> InternalApplicationService {
+    service(repository.clone(), Some("secret"))
+        .with_approver(Arc::new(FixedApprover { repository, error }))
 }
 
 async fn request(
@@ -770,12 +810,173 @@ async fn evidence_and_event_reads_match_the_frozen_typed_projections() {
 }
 
 #[tokio::test]
+async fn approval_boundary_preserves_server_identity_validation_and_dependency_errors() {
+    let repository = Arc::new(MemoryRepository::default());
+    let mut owned_template = template("org-123", ApplicationTemplateStatus::Active);
+    owned_template.credential_template_id = Some("credential-template-1".to_owned());
+    repository.seed_template(owned_template);
+    repository.seed_application(application(
+        "application-approval",
+        "org-123",
+        ApplicationStatus::Pending,
+    ));
+    let service = service_with_approver(repository, None);
+    let (status, approved) = request(
+        &service,
+        Method::POST,
+        "/internal/applications/application-approval/approve",
+        Some(json!({"review_notes": "Reviewed"})),
+        Some("secret"),
+        Some("org-123"),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(approved["status"], "approved");
+    assert_eq!(approved["reviewer_id"], "issuance-management-api");
+    assert_eq!(approved["review_notes"], "Reviewed");
+    assert_eq!(approved["issuance_transaction_id"], "transaction-1");
+
+    let (status, stored) = request(
+        &service,
+        Method::GET,
+        "/internal/applications/application-approval",
+        None,
+        Some("secret"),
+        Some("org-123"),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(stored, approved);
+
+    let (status, _) = request(
+        &service,
+        Method::POST,
+        "/internal/applications/application-approval/approve",
+        Some(json!({"reviewer_id": "caller"})),
+        Some("secret"),
+        Some("org-123"),
+    )
+    .await;
+    assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY);
+
+    for (error, expected_status, detail) in [
+        (
+            InternalApplicationApprovalError::Unavailable,
+            StatusCode::SERVICE_UNAVAILABLE,
+            "Application approval is temporarily unavailable",
+        ),
+        (
+            InternalApplicationApprovalError::CredentialTemplateUnavailable,
+            StatusCode::SERVICE_UNAVAILABLE,
+            "Credential Template validation is unavailable.",
+        ),
+        (
+            InternalApplicationApprovalError::CredentialTemplateNotFound,
+            StatusCode::UNPROCESSABLE_ENTITY,
+            "Credential Template not found.",
+        ),
+        (
+            InternalApplicationApprovalError::CredentialTemplateInvalid(
+                "Credential Template must be active".to_owned(),
+            ),
+            StatusCode::UNPROCESSABLE_ENTITY,
+            "Credential Template must be active",
+        ),
+        (
+            InternalApplicationApprovalError::RevocationProfileUnavailable,
+            StatusCode::SERVICE_UNAVAILABLE,
+            "Revocation Profile validation is unavailable.",
+        ),
+        (
+            InternalApplicationApprovalError::RevocationProfileNotFound,
+            StatusCode::UNPROCESSABLE_ENTITY,
+            "Revocation Profile not found.",
+        ),
+        (
+            InternalApplicationApprovalError::RevocationProfileForeign,
+            StatusCode::UNPROCESSABLE_ENTITY,
+            "The Revocation Profile belongs to another organization.",
+        ),
+        (
+            InternalApplicationApprovalError::RevocationProfileInactive,
+            StatusCode::UNPROCESSABLE_ENTITY,
+            "Credential Templates must reference an active Revocation Profile before issuance.",
+        ),
+        (
+            InternalApplicationApprovalError::IssuerContextUnavailable,
+            StatusCode::SERVICE_UNAVAILABLE,
+            "Issuer signing context is unavailable.",
+        ),
+        (
+            InternalApplicationApprovalError::CanvasNotReady,
+            StatusCode::CONFLICT,
+            "Canvas application is not ready for approval",
+        ),
+        (
+            InternalApplicationApprovalError::ConcurrentChange,
+            StatusCode::CONFLICT,
+            "Application lifecycle changed during approval",
+        ),
+    ] {
+        let repository = Arc::new(MemoryRepository::default());
+        let mut owned_template = template("org-123", ApplicationTemplateStatus::Active);
+        owned_template.credential_template_id = Some("credential-template-1".to_owned());
+        repository.seed_template(owned_template);
+        repository.seed_application(application(
+            "application-failure",
+            "org-123",
+            ApplicationStatus::Pending,
+        ));
+        let service = service_with_approver(repository, Some(error));
+        let (status, response) = request(
+            &service,
+            Method::POST,
+            "/internal/applications/application-failure/approve",
+            Some(json!({})),
+            Some("secret"),
+            Some("org-123"),
+        )
+        .await;
+        assert_eq!(status, expected_status);
+        assert_eq!(response, json!({"detail": detail}));
+    }
+
+    let repository = Arc::new(MemoryRepository::default());
+    repository.seed_template(template("org-123", ApplicationTemplateStatus::Active));
+    repository.seed_application(application(
+        "application-unbound",
+        "org-123",
+        ApplicationStatus::Pending,
+    ));
+    let service = service_with_approver(repository, None);
+    let (status, response) = request(
+        &service,
+        Method::POST,
+        "/internal/applications/application-unbound/approve",
+        Some(json!({})),
+        Some("secret"),
+        Some("org-123"),
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+    assert_eq!(
+        response,
+        json!({"detail": "Application template missing credential template ID"})
+    );
+}
+
+#[tokio::test]
 async fn lifecycle_and_revision_conflicts_preserve_exact_public_details() {
     for (operation, status, detail) in [
         (
             "submit-evidence",
             ApplicationStatus::Approved,
             "Cannot submit evidence for application in ApplicationStatus.APPROVED status",
+        ),
+        (
+            "approve",
+            ApplicationStatus::Rejected,
+            "Cannot approve application in ApplicationStatus.REJECTED status",
         ),
         (
             "reject",
@@ -786,10 +987,12 @@ async fn lifecycle_and_revision_conflicts_preserve_exact_public_details() {
         let repository = Arc::new(MemoryRepository::default());
         repository.seed_application(application("application-state", "org-123", status));
         let service = service(repository, Some("secret"));
-        let body = if operation == "submit-evidence" {
-            json!({"evidence_type": "DOCUMENT_SCAN", "evidence_data": {}})
-        } else {
-            json!({"review_notes": "Rejected"})
+        let body = match operation {
+            "submit-evidence" => {
+                json!({"evidence_type": "DOCUMENT_SCAN", "evidence_data": {}})
+            }
+            "approve" => json!({}),
+            _ => json!({"review_notes": "Rejected"}),
         };
         let (status, response) = request(
             &service,
@@ -865,6 +1068,11 @@ async fn auth_preflight_precedes_json_validation_and_siblings_remain_closed() {
             Method::POST,
             "/internal/applications/application-1/submit-evidence",
             Some(json!({"evidence_type": "DOCUMENT_SCAN", "evidence_data": {}})),
+        ),
+        (
+            Method::POST,
+            "/internal/applications/application-1/approve",
+            Some(json!({})),
         ),
         (
             Method::POST,

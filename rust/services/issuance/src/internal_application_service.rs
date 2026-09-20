@@ -15,10 +15,10 @@ use uuid::Uuid;
 use crate::{
     application_template_domain::{ApplicationTemplateRecord, ApplicationTemplateStatus},
     internal_application_domain::{
-        derive_applicant_identifier, ApplicationCreate, ApplicationDomainError,
-        ApplicationEvidenceSummaryResponse, ApplicationRecord, ApplicationRejection,
-        ApplicationStatus, EvidenceFactRecord, EvidenceFactResponse, EvidenceSubmission,
-        IssuanceEventRecord,
+        derive_applicant_identifier, ApplicationApproval, ApplicationCreate,
+        ApplicationDomainError, ApplicationEvidenceSummaryResponse, ApplicationRecord,
+        ApplicationRejection, ApplicationStatus, EvidenceFactRecord, EvidenceFactResponse,
+        EvidenceSubmission, IssuanceEventRecord,
     },
     management_security::ManagementSecurity,
     transaction_reads::TransactionReadError,
@@ -30,6 +30,43 @@ const INTERNAL_REVIEWER_ID: &str = "issuance-management-api";
 pub enum InternalApplicationRepositoryError {
     #[error("Application repository is unavailable")]
     Unavailable,
+}
+
+#[derive(Clone, Debug, Error, Eq, PartialEq)]
+pub enum InternalApplicationApprovalError {
+    #[error("Application approval is temporarily unavailable")]
+    Unavailable,
+    #[error("Credential Template validation is unavailable.")]
+    CredentialTemplateUnavailable,
+    #[error("Credential Template not found.")]
+    CredentialTemplateNotFound,
+    #[error("{0}")]
+    CredentialTemplateInvalid(String),
+    #[error("Revocation Profile validation is unavailable.")]
+    RevocationProfileUnavailable,
+    #[error("Revocation Profile not found.")]
+    RevocationProfileNotFound,
+    #[error("The Revocation Profile belongs to another organization.")]
+    RevocationProfileForeign,
+    #[error("Credential Templates must reference an active Revocation Profile before issuance.")]
+    RevocationProfileInactive,
+    #[error("Issuer signing context is unavailable.")]
+    IssuerContextUnavailable,
+    #[error("Canvas application is not ready for approval")]
+    CanvasNotReady,
+    #[error("Application lifecycle changed during approval")]
+    ConcurrentChange,
+}
+
+#[async_trait]
+pub trait InternalApplicationApprover: Send + Sync {
+    async fn approve(
+        &self,
+        application: &ApplicationRecord,
+        template: &ApplicationTemplateRecord,
+        reviewer_id: &str,
+        review_notes: Option<&str>,
+    ) -> Result<ApplicationRecord, InternalApplicationApprovalError>;
 }
 
 #[async_trait]
@@ -117,6 +154,7 @@ pub struct InternalApplicationService {
     repository: Arc<dyn InternalApplicationRepository>,
     clock: Arc<dyn InternalApplicationClock>,
     ids: Arc<dyn InternalApplicationIdGenerator>,
+    approver: Option<Arc<dyn InternalApplicationApprover>>,
     security: ManagementSecurity,
 }
 
@@ -125,6 +163,7 @@ impl std::fmt::Debug for InternalApplicationService {
         formatter
             .debug_struct("InternalApplicationService")
             .field("security", &self.security)
+            .field("approval_configured", &self.approver.is_some())
             .finish_non_exhaustive()
     }
 }
@@ -141,8 +180,15 @@ impl InternalApplicationService {
             repository,
             clock,
             ids,
+            approver: None,
             security: ManagementSecurity::new(management_api_key),
         }
+    }
+
+    #[must_use]
+    pub fn with_approver(mut self, approver: Arc<dyn InternalApplicationApprover>) -> Self {
+        self.approver = Some(approver);
+        self
     }
 
     pub async fn create(
@@ -369,6 +415,46 @@ impl InternalApplicationService {
         Ok(application)
     }
 
+    pub async fn approve(
+        &self,
+        api_key: Option<&str>,
+        trusted_organization: Option<&str>,
+        application_id: &str,
+        approval: ApplicationApproval,
+    ) -> Result<ApplicationRecord, InternalApplicationServiceError> {
+        self.security.authorize(api_key)?;
+        let trusted_organization = required_organization(trusted_organization)?;
+        let application = self
+            .load_managed(application_id, trusted_organization)
+            .await?;
+        application.ensure_approvable()?;
+        let template = self
+            .repository
+            .get_application_template(&application.application_template_id)
+            .await?
+            .filter(|template| template.organization_id == application.organization_id)
+            .ok_or(InternalApplicationServiceError::MissingApprovalTemplateBinding)?;
+        if template
+            .credential_template_id
+            .as_deref()
+            .map(str::trim)
+            .is_none_or(str::is_empty)
+        {
+            return Err(InternalApplicationServiceError::MissingApprovalTemplateBinding);
+        }
+        self.approver
+            .as_ref()
+            .ok_or(InternalApplicationApprovalError::Unavailable)?
+            .approve(
+                &application,
+                &template,
+                INTERNAL_REVIEWER_ID,
+                approval.review_notes.as_deref(),
+            )
+            .await
+            .map_err(Into::into)
+    }
+
     async fn load_managed(
         &self,
         application_id: &str,
@@ -464,6 +550,8 @@ pub enum InternalApplicationServiceError {
     #[error(transparent)]
     Repository(#[from] InternalApplicationRepositoryError),
     #[error(transparent)]
+    Approval(#[from] InternalApplicationApprovalError),
+    #[error(transparent)]
     Domain(#[from] ApplicationDomainError),
     #[error("Invalid application status")]
     InvalidStatus,
@@ -473,6 +561,8 @@ pub enum InternalApplicationServiceError {
     TemplateInactive,
     #[error("Application not found")]
     ApplicationNotFound,
+    #[error("Application template missing credential template ID")]
+    MissingApprovalTemplateBinding,
     #[error("Application lifecycle changed during evidence submission")]
     EvidenceConflict,
     #[error("Application lifecycle changed during rejection")]
