@@ -244,7 +244,21 @@ def test_shared_images_are_not_duplicated_and_packaging_paths_resolve():
 def test_publication_exclusions_remain_on_legacy_not_selected_native_operations():
     document = json.loads((ROOT / GATE["NATIVE"]["CAPABILITY_PATH"]).read_text())
     selected = {(item["method"], item["path"]) for item in document["native_http"]}
-    assert len(selected) == 74
+    template_contract = json.loads(
+        (ROOT / "contracts/issuance-application-templates.json").read_text()
+    )
+    template_routes = {
+        (item["method"], item["path"])
+        for item in template_contract["surface"]["routes"]
+    }
+    template_base = template_contract["surface"]["base_path"]
+    selected_template_routes = {
+        (method, path)
+        for method, path in selected
+        if path == template_base or path.startswith(f"{template_base}/")
+    }
+    assert len(template_routes) == 8
+    assert selected_template_routes == template_routes
     for path in (
         "/v1/issued-credentials/{credential_id}/deliveries/canvas-credentials/publish",
         "/v1/issuance/delivery-records/canvas-credentials/process-pending",

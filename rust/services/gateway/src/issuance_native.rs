@@ -79,6 +79,38 @@ mod tests {
     use super::*;
 
     #[test]
+    fn application_templates_select_only_the_eight_frozen_methods_and_paths() {
+        for (method, suffix) in [
+            (HttpMethod::Post, ""),
+            (HttpMethod::Get, ""),
+            (HttpMethod::Get, "/template-1"),
+            (HttpMethod::Patch, "/template-1"),
+            (HttpMethod::Post, "/template-1/validate"),
+            (HttpMethod::Post, "/template-1/activate"),
+            (HttpMethod::Post, "/template-1/deprecate"),
+            (HttpMethod::Delete, "/template-1"),
+        ] {
+            let path = format!("/v1/application-templates{suffix}");
+            assert_eq!(upstream_service(method, &path), NATIVE_SERVICE);
+        }
+        for (method, path) in [
+            (HttpMethod::Put, "/v1/application-templates/template-1"),
+            (HttpMethod::Post, "/v1/application-templates/template-1"),
+            (
+                HttpMethod::Get,
+                "/v1/application-templates/template-1/validate",
+            ),
+            (HttpMethod::Delete, "/v1/application-templates"),
+            (
+                HttpMethod::Get,
+                "/v1/application-templates/template-1/extra",
+            ),
+        ] {
+            assert_eq!(upstream_service(method, path), LEGACY_SERVICE);
+        }
+    }
+
+    #[test]
     fn canvas_operations_select_only_the_eight_exact_methods_and_paths() {
         for (method, suffix) in [
             (HttpMethod::Post, "/applications/app-1/canvas-sync"),

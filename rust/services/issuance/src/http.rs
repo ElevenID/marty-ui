@@ -23,6 +23,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::{json, Map, Value};
 
 use crate::{
+    application_template_service::ApplicationTemplateService,
     canvas_event_status::CanvasEvidenceEventStatusResponse,
     canvas_legacy_ingest::{
         CanvasLegacyEventKind, CanvasLegacyIngestError, CanvasLegacyIngestService, EVIDENCE_LINK,
@@ -126,6 +127,7 @@ pub struct IssuanceServices {
     didcomm_delivery: InitiationDidcommHttpService,
     renewal: Option<CredentialRenewalService>,
     credential_management: CredentialManagementHttpService,
+    application_templates: ApplicationTemplateService,
     canvas: CanvasServices,
     token_rate_limiter: TokenRateLimiter,
 }
@@ -278,6 +280,7 @@ impl IssuanceServices {
     pub fn new(
         core: IssuanceCoreServices,
         credential_management: CredentialManagementHttpService,
+        application_templates: ApplicationTemplateService,
         canvas: CanvasServices,
         token_rate_limiter: TokenRateLimiter,
     ) -> Self {
@@ -291,6 +294,7 @@ impl IssuanceServices {
             didcomm_delivery: core.didcomm_delivery,
             renewal: core.renewal,
             credential_management,
+            application_templates,
             canvas,
             token_rate_limiter,
         }
@@ -308,6 +312,7 @@ struct OptionalServices {
     didcomm_delivery: Option<InitiationDidcommHttpService>,
     renewal: Option<CredentialRenewalService>,
     credential_management: Option<CredentialManagementHttpService>,
+    application_templates: Option<ApplicationTemplateService>,
     canvas_lti_login: Option<CanvasLtiLoginService>,
     canvas_lti_launch: Option<CanvasLtiLaunchService>,
     canvas_lti_experience: Option<CanvasLtiExperienceService>,
@@ -393,6 +398,7 @@ pub fn router_with_all_services(
             didcomm_delivery: Some(services.didcomm_delivery),
             renewal: services.renewal,
             credential_management: Some(services.credential_management),
+            application_templates: Some(services.application_templates),
             canvas_oauth: Some(services.canvas.oauth),
             canvas_management: Some(services.canvas.management),
             canvas_legacy_ingest: Some(services.canvas.legacy_ingest),
@@ -1090,6 +1096,13 @@ fn router_with_optional_services(
     });
     let api = if let Some(operations) = services.canvas_operations {
         api.merge(crate::canvas_operations::candidate_router(operations))
+    } else {
+        api
+    };
+    let api = if let Some(application_templates) = services.application_templates {
+        api.merge(crate::application_template_http::router(
+            application_templates,
+        ))
     } else {
         api
     };

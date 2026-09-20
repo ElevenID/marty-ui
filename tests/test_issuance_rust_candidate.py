@@ -78,6 +78,10 @@ def test_frozen_surface_provenance_and_coverage_are_complete() -> None:
         ROOT / "contracts/issuance-credential-lifecycle.json"
     ).read_bytes()
     credential_lifecycle = json.loads(credential_lifecycle_bytes)
+    application_template_bytes = (
+        ROOT / "contracts/issuance-application-templates.json"
+    ).read_bytes()
+    application_templates = json.loads(application_template_bytes)
     assert surface["schema"] == "marty.issuance-runtime-surface/v1"
     assert surface["http"]["route_count"] == len(surface["http"]["routes"]) == 131
     assert surface["grpc"]["method_count"] == len(surface["grpc"]["methods"]) == 12
@@ -85,7 +89,9 @@ def test_frozen_surface_provenance_and_coverage_are_complete() -> None:
     assert (
         hashlib.sha256(canonical_surface).hexdigest() == coverage["upstream"]["sha256"]
     )
-    assert coverage["upstream"]["commit"] == "578e86ef43166be79add2d812e92ef650535edaa"
+    assert coverage["upstream"]["commit"] == (
+        "f127f55ecfb113ebcdfee55a79e6bae937114dfa"
+    )
     assert (
         hashlib.sha256(discovery_bytes.replace(b"\r\n", b"\n")).hexdigest()
         == (coverage["behavior_contract"]["sha256"])
@@ -236,6 +242,15 @@ def test_frozen_surface_provenance_and_coverage_are_complete() -> None:
     )
     assert len(credential_lifecycle["failures"]) == 7
     assert len(credential_lifecycle["security_invariants"]) == 4
+    assert (
+        hashlib.sha256(application_template_bytes.replace(b"\r\n", b"\n")).hexdigest()
+        == coverage["application_template_behavior_contract"]["sha256"]
+    )
+    assert coverage["application_template_behavior_contract"]["commit"] == (
+        "f127f55ecfb113ebcdfee55a79e6bae937114dfa"
+    )
+    assert application_templates["schema"] == "marty.issuance-application-templates/v1"
+    assert len(application_templates["surface"]["routes"]) == 8
     capability_policy = canvas_lti["launch"]["capability_snapshot_persistence"]
     assert capability_policy["authority"] == "verified-signed-launch-claims"
     assert capability_policy["authorization_index"] == "verified_binding_launches"
@@ -309,6 +324,9 @@ def test_frozen_surface_provenance_and_coverage_are_complete() -> None:
     canvas_management_operations = {
         route["operation"] for route in canvas_management["scope"]["routes"]
     }
+    application_template_operations = {
+        route["operation"] for route in application_templates["surface"]["routes"]
+    }
     canvas_operations_cases = {
         "enqueue_canvas_application_sync_route": "enqueue",
         "list_canvas_sync_jobs_route": "jobs",
@@ -338,12 +356,13 @@ def test_frozen_surface_provenance_and_coverage_are_complete() -> None:
         hashlib.sha256(renewal_bytes).hexdigest()
         == coverage["renewal_behavior_contract"]["sha256"]
     )
-    assert len(coverage["native_http"]) == 74
+    assert len(coverage["native_http"]) == 82
     assert set(native) == (
         set(discovery_cases)
         | set(tenant_cases)
         | set(transaction_cases)
         | canvas_management_operations
+        | application_template_operations
         | set(canvas_operations_cases)
         | {
             "didcomm_deliver",
@@ -528,6 +547,15 @@ def test_frozen_surface_provenance_and_coverage_are_complete() -> None:
                 for route in canvas_management["scope"]["routes"]
             )
             continue
+        if operation in application_template_operations:
+            assert coverage_entry["application_template_behavior_case"] == operation
+            assert any(
+                route["method"] == coverage_entry["method"]
+                and route["path"] == coverage_entry["path"]
+                and route["operation"] == operation
+                for route in application_templates["surface"]["routes"]
+            )
+            continue
         if operation in tenant_cases:
             assert coverage_entry["tenant_behavior_case"] == operation
             assert coverage_entry["method"] == "GET"
@@ -564,12 +592,12 @@ def test_frozen_surface_provenance_and_coverage_are_complete() -> None:
         )
         assert discovery_cases[operation]["path"] == expected_case_path
     assert coverage["remaining"] == {
-        "http": 57,
+        "http": 49,
         "grpc": 0,
         "runtime_modes": ["api", "canvas-sync-worker"],
         "literal_environment_variables": 56,
         "dynamic_configuration_lookups": 20,
-        "migration_revisions": 44,
+        "migration_revisions": 46,
         "migration_heads": 1,
     }
     assert coverage["native_environment_variables"] == [
