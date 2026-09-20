@@ -42,13 +42,15 @@ final isolated Rust database-contract suite. It must finish successfully and
 the PR must reach protected `main` before any dependent cutover is treated as
 landed. This is hosted qualification, not beta or production deployment.
 
-Application Template PR #826 is open, clean, and mergeable at
-`52b09bbe348a3c162d1af7b75ab5c82e26623b01`, stacked directly on #814. It owns
+Application Template PR #826 is open at exact head
+`aa4c84326f15aea0cde6354125cdb48e0ba252f6`, stacked directly on #814. It owns
 all eight frozen management routes in the shared Rust issuance service with
 typed validation, tenant-safe PostgreSQL persistence, lifecycle transitions,
 authenticated dependency lookup, idempotent create, and compare-and-set
 updates. Eighteen focused unit tests and four full HTTP lifecycle/parity tests
-pass. Credentials PR #279 at
+pass. Maintainer replay also passes strict all-target Clippy, package
+formatting, and all three native-coverage guards after correcting their stale
+44-revision expectation to the contract's actual 46 revisions. Credentials PR #279 at
 `de52f2147b18696fff128c19bf71fa0fca2e069b` removes only those eight superseded
 Python management routes after #826 lands; its exact-head hosted run
 `35502472242` is fully green.
