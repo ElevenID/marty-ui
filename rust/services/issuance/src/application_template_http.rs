@@ -17,7 +17,7 @@ use crate::{
         ApplicationTemplateRepositoryError, ApplicationTemplateService,
         ApplicationTemplateServiceError,
     },
-    transaction_reads::TransactionReadError,
+    management_http::{header, malformed_json, missing_organization_query, security_error},
 };
 
 const API_KEY_HEADER: &str = "x-api-key";
@@ -89,6 +89,12 @@ async fn list_templates(
     headers: HeaderMap,
     Query(query): Query<ListQuery>,
 ) -> Response {
+    if let Err(error) = service.preflight_json_request(
+        header(&headers, API_KEY_HEADER),
+        header(&headers, ORGANIZATION_HEADER),
+    ) {
+        return service_error(error);
+    }
     let Some(organization_id) = query.organization_id.as_deref() else {
         return missing_organization_query();
     };
@@ -236,7 +242,10 @@ fn service_error(error: ApplicationTemplateServiceError) -> Response {
             )
                 .into_response();
         }
-        ApplicationTemplateServiceError::Security(error) => security_error(error),
+        ApplicationTemplateServiceError::Security(error) => security_error(
+            error,
+            "Application Template management is temporarily unavailable",
+        ),
         ApplicationTemplateServiceError::Request(error) => request_error(error),
         ApplicationTemplateServiceError::Lifecycle(error) => lifecycle_error(error),
         ApplicationTemplateServiceError::Repository(error) => repository_error(error),
@@ -256,34 +265,6 @@ fn service_error(error: ApplicationTemplateServiceError) -> Response {
         ),
     };
     (status, Json(json!({"detail": detail}))).into_response()
-}
-
-fn security_error(error: TransactionReadError) -> (StatusCode, &'static str) {
-    match error {
-        TransactionReadError::ApiKeyNotConfigured => (
-            StatusCode::SERVICE_UNAVAILABLE,
-            "ISSUANCE_API_KEY not configured on server",
-        ),
-        TransactionReadError::ApiKeyMissing => {
-            (StatusCode::UNAUTHORIZED, "X-API-Key header is missing")
-        }
-        TransactionReadError::InvalidApiKey => (StatusCode::UNAUTHORIZED, "Invalid API Key"),
-        TransactionReadError::TrustedOrganizationRequired => (
-            StatusCode::BAD_REQUEST,
-            "X-Organization-ID is required for application management",
-        ),
-        TransactionReadError::OrganizationMismatch | TransactionReadError::ResourceNotFound => {
-            (StatusCode::NOT_FOUND, "Application resource not found")
-        }
-        TransactionReadError::OrganizationIdRequired => (
-            StatusCode::UNPROCESSABLE_ENTITY,
-            "organization_id query parameter is required",
-        ),
-        _ => (
-            StatusCode::SERVICE_UNAVAILABLE,
-            "Application Template management is temporarily unavailable",
-        ),
-    }
 }
 
 fn request_error(error: ApplicationTemplateRequestError) -> (StatusCode, &'static str) {
@@ -349,33 +330,6 @@ fn repository_error(error: ApplicationTemplateRepositoryError) -> (StatusCode, &
             "Application Template repository is unavailable",
         ),
     }
-}
-
-fn malformed_json(error: JsonRejection) -> Response {
-    (
-        StatusCode::UNPROCESSABLE_ENTITY,
-        Json(json!({"detail": error.body_text()})),
-    )
-        .into_response()
-}
-
-fn missing_organization_query() -> Response {
-    (
-        StatusCode::UNPROCESSABLE_ENTITY,
-        Json(json!({
-            "detail": [{
-                "type": "missing",
-                "loc": ["query", "organization_id"],
-                "msg": "Field required",
-                "input": null,
-            }]
-        })),
-    )
-        .into_response()
-}
-
-fn header<'a>(headers: &'a HeaderMap, name: &str) -> Option<&'a str> {
-    headers.get(name).and_then(|value| value.to_str().ok())
 }
 
 #[cfg(test)]

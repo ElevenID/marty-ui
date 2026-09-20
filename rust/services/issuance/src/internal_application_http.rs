@@ -1,0 +1,261 @@
+//! HTTP adapter for the completed internal Application management slice.
+//!
+//! The router is not attached to the runtime until every route in the frozen
+//! 14-route contract is implemented and accepted as one atomic cutover.
+
+use axum::{
+    extract::{rejection::JsonRejection, Path, Query, State},
+    http::{HeaderMap, StatusCode},
+    response::{IntoResponse, Response},
+    routing::{get, post},
+    Json, Router,
+};
+use serde::Deserialize;
+use serde_json::json;
+
+use crate::{
+    internal_application_domain::{
+        ApplicationCreate, ApplicationDomainError, ApplicationRejection, ApplicationResponse,
+        EvidenceSubmission,
+    },
+    internal_application_service::{
+        InternalApplicationRepositoryError, InternalApplicationService,
+        InternalApplicationServiceError,
+    },
+    management_http::{header, malformed_json, missing_organization_query, security_error},
+};
+
+const API_KEY_HEADER: &str = "x-api-key";
+const ORGANIZATION_HEADER: &str = "x-organization-id";
+
+pub fn router(service: InternalApplicationService) -> Router {
+    Router::new()
+        .route(
+            "/internal/applications",
+            get(list_applications).post(create_application),
+        )
+        .route(
+            "/internal/applications/{application_id}",
+            get(get_application),
+        )
+        .route(
+            "/internal/applications/{application_id}/submit-evidence",
+            post(submit_evidence),
+        )
+        .route(
+            "/internal/applications/{application_id}/reject",
+            post(reject_application),
+        )
+        .with_state(service)
+}
+
+#[derive(Deserialize)]
+struct ListQuery {
+    organization_id: Option<String>,
+    status: Option<String>,
+    application_template_id: Option<String>,
+}
+
+async fn create_application(
+    State(service): State<InternalApplicationService>,
+    headers: HeaderMap,
+    body: Result<Json<ApplicationCreate>, JsonRejection>,
+) -> Response {
+    if let Err(error) = service.preflight_json_request(
+        header(&headers, API_KEY_HEADER),
+        header(&headers, ORGANIZATION_HEADER),
+    ) {
+        return service_error(error);
+    }
+    let Json(request) = match body {
+        Ok(request) => request,
+        Err(error) => return malformed_json(error),
+    };
+    result_application(
+        service
+            .create(
+                header(&headers, API_KEY_HEADER),
+                header(&headers, ORGANIZATION_HEADER),
+                request,
+            )
+            .await,
+    )
+}
+
+async fn list_applications(
+    State(service): State<InternalApplicationService>,
+    headers: HeaderMap,
+    Query(query): Query<ListQuery>,
+) -> Response {
+    if let Err(error) = service.preflight_json_request(
+        header(&headers, API_KEY_HEADER),
+        header(&headers, ORGANIZATION_HEADER),
+    ) {
+        return service_error(error);
+    }
+    let Some(organization_id) = query.organization_id.as_deref() else {
+        return missing_organization_query();
+    };
+    match service
+        .list(
+            header(&headers, API_KEY_HEADER),
+            header(&headers, ORGANIZATION_HEADER),
+            organization_id,
+            query.status.as_deref(),
+            query.application_template_id.as_deref(),
+        )
+        .await
+    {
+        Ok(applications) => (
+            StatusCode::OK,
+            Json(
+                applications
+                    .iter()
+                    .map(ApplicationResponse::from)
+                    .collect::<Vec<_>>(),
+            ),
+        )
+            .into_response(),
+        Err(error) => service_error(error),
+    }
+}
+
+async fn get_application(
+    State(service): State<InternalApplicationService>,
+    Path(application_id): Path<String>,
+    headers: HeaderMap,
+) -> Response {
+    result_application(
+        service
+            .get(
+                header(&headers, API_KEY_HEADER),
+                header(&headers, ORGANIZATION_HEADER),
+                &application_id,
+            )
+            .await,
+    )
+}
+
+async fn submit_evidence(
+    State(service): State<InternalApplicationService>,
+    Path(application_id): Path<String>,
+    headers: HeaderMap,
+    body: Result<Json<EvidenceSubmission>, JsonRejection>,
+) -> Response {
+    if let Err(error) = service.preflight_json_request(
+        header(&headers, API_KEY_HEADER),
+        header(&headers, ORGANIZATION_HEADER),
+    ) {
+        return service_error(error);
+    }
+    let Json(evidence) = match body {
+        Ok(evidence) => evidence,
+        Err(error) => return malformed_json(error),
+    };
+    result_application(
+        service
+            .submit_evidence(
+                header(&headers, API_KEY_HEADER),
+                header(&headers, ORGANIZATION_HEADER),
+                &application_id,
+                evidence,
+            )
+            .await,
+    )
+}
+
+async fn reject_application(
+    State(service): State<InternalApplicationService>,
+    Path(application_id): Path<String>,
+    headers: HeaderMap,
+    body: Result<Json<ApplicationRejection>, JsonRejection>,
+) -> Response {
+    if let Err(error) = service.preflight_json_request(
+        header(&headers, API_KEY_HEADER),
+        header(&headers, ORGANIZATION_HEADER),
+    ) {
+        return service_error(error);
+    }
+    let Json(rejection) = match body {
+        Ok(rejection) => rejection,
+        Err(error) => return malformed_json(error),
+    };
+    result_application(
+        service
+            .reject(
+                header(&headers, API_KEY_HEADER),
+                header(&headers, ORGANIZATION_HEADER),
+                &application_id,
+                rejection,
+            )
+            .await,
+    )
+}
+
+fn result_application(
+    result: Result<
+        crate::internal_application_domain::ApplicationRecord,
+        InternalApplicationServiceError,
+    >,
+) -> Response {
+    match result {
+        Ok(application) => (
+            StatusCode::OK,
+            Json(ApplicationResponse::from(&application)),
+        )
+            .into_response(),
+        Err(error) => service_error(error),
+    }
+}
+
+fn service_error(error: InternalApplicationServiceError) -> Response {
+    let error = match error {
+        InternalApplicationServiceError::Domain(error) => {
+            let status = match &error {
+                ApplicationDomainError::InvalidTransition { .. } => StatusCode::BAD_REQUEST,
+                ApplicationDomainError::TimestampOverflow => StatusCode::INTERNAL_SERVER_ERROR,
+            };
+            return (status, Json(json!({"detail": error.to_string()}))).into_response();
+        }
+        error => error,
+    };
+    let (status, detail) = match error {
+        InternalApplicationServiceError::Security(error) => {
+            security_error(error, "Application management is temporarily unavailable")
+        }
+        InternalApplicationServiceError::Repository(error) => repository_error(error),
+        InternalApplicationServiceError::Domain(_) => unreachable!("handled above"),
+        InternalApplicationServiceError::InvalidStatus => (
+            StatusCode::UNPROCESSABLE_ENTITY,
+            "Invalid application status",
+        ),
+        InternalApplicationServiceError::TemplateNotFound => {
+            (StatusCode::NOT_FOUND, "Application template not found")
+        }
+        InternalApplicationServiceError::TemplateInactive => (
+            StatusCode::UNPROCESSABLE_ENTITY,
+            "Application template must be active",
+        ),
+        InternalApplicationServiceError::ApplicationNotFound => {
+            (StatusCode::NOT_FOUND, "Application not found")
+        }
+        InternalApplicationServiceError::EvidenceConflict => (
+            StatusCode::CONFLICT,
+            "Application lifecycle changed during evidence submission",
+        ),
+        InternalApplicationServiceError::RejectionConflict => (
+            StatusCode::CONFLICT,
+            "Application lifecycle changed during rejection",
+        ),
+    };
+    (status, Json(json!({"detail": detail}))).into_response()
+}
+
+fn repository_error(error: InternalApplicationRepositoryError) -> (StatusCode, &'static str) {
+    match error {
+        InternalApplicationRepositoryError::Unavailable => (
+            StatusCode::SERVICE_UNAVAILABLE,
+            "Application repository is unavailable",
+        ),
+    }
+}

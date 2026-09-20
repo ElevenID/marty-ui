@@ -174,6 +174,16 @@ impl InternalApplicationService {
         Ok(application)
     }
 
+    pub fn preflight_json_request(
+        &self,
+        api_key: Option<&str>,
+        trusted_organization: Option<&str>,
+    ) -> Result<(), InternalApplicationServiceError> {
+        self.security.authorize(api_key)?;
+        required_organization(trusted_organization)?;
+        Ok(())
+    }
+
     pub async fn list(
         &self,
         api_key: Option<&str>,
