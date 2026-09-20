@@ -912,7 +912,11 @@ pub fn validate_application_template(
     }
 
     if template.approval_strategy == "RULES_BASED" {
-        if template.approval_policy_set_id.is_none() {
+        if template
+            .approval_policy_set_id
+            .as_deref()
+            .is_none_or(str::is_empty)
+        {
             add(
                 "approval",
                 "approval_policy_set_id".to_owned(),
@@ -1214,6 +1218,33 @@ mod tests {
                 },
             ]
         );
+    }
+
+    #[test]
+    fn empty_rules_based_policy_reference_is_missing_not_not_found() {
+        let mut request = canonical_request();
+        request.approval_strategy = "RULES_BASED".to_owned();
+        request.approval_policy_set_id = Some(String::new());
+        let record = request
+            .into_record("template-1".to_owned(), now())
+            .expect("record");
+
+        let errors = validate_application_template(
+            &record,
+            &CredentialTemplateValidationState::NotFound,
+            &ApprovalPolicyValidationState::NotRequested,
+        );
+
+        assert!(errors.iter().any(|error| {
+            error.section == "approval"
+                && error.field == "approval_policy_set_id"
+                && error.code == "REQUIRED"
+        }));
+        assert!(!errors.iter().any(|error| {
+            error.section == "approval"
+                && error.field == "approval_policy_set_id"
+                && error.code == "NOT_FOUND"
+        }));
     }
 
     #[test]

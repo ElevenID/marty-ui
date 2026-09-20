@@ -553,6 +553,58 @@ async fn every_management_route_completes_the_full_http_lifecycle() {
 }
 
 #[tokio::test]
+async fn empty_rules_based_policy_reference_preserves_missing_validation_error() {
+    let service = ApplicationTemplateService::new(
+        Arc::new(MemoryRepository::default()),
+        Arc::new(ValidCatalog),
+        Arc::new(FixedClock),
+        Some("valid"),
+    );
+    let (status, body) = management_request(
+        &service,
+        Method::POST,
+        "/v1/application-templates",
+        Some(json!({
+            "organization_id": "org-123",
+            "name": "Rules-based application",
+            "credential_template_id": "credential-template-1",
+            "form_fields": [{
+                "field_id": "membership_number",
+                "label": "Membership number",
+                "field_type": "TEXT",
+                "required": true
+            }],
+            "approval_strategy": "RULES_BASED",
+            "approval_policy_set_id": ""
+        })),
+        Some("empty-policy-reference"),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    let created: Value = serde_json::from_slice(&body).expect("created template JSON");
+    let validate_path = format!(
+        "/v1/application-templates/{}/validate",
+        created["id"].as_str().expect("created template id")
+    );
+
+    let (status, body) =
+        management_request(&service, Method::POST, &validate_path, None, None).await;
+
+    assert_eq!(status, StatusCode::OK);
+    let validation: Value = serde_json::from_slice(&body).expect("validation JSON");
+    assert_eq!(validation["valid"], false);
+    assert!(validation["errors"]
+        .as_array()
+        .expect("validation errors")
+        .iter()
+        .any(|error| {
+            error["section"] == "approval"
+                && error["field"] == "approval_policy_set_id"
+                && error["code"] == "REQUIRED"
+        }));
+}
+
+#[tokio::test]
 async fn missing_query_and_security_failures_match_the_frozen_boundary() {
     let service = ApplicationTemplateService::new(
         Arc::new(MemoryRepository::default()),
