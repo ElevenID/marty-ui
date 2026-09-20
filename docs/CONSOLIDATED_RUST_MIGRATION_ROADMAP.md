@@ -1,6 +1,6 @@
 # Consolidated Rust Migration Roadmap
 
-**Status:** Waves one through three, the 31-route Rust Canvas cutover, and the canonical Rust verifier implementation are merged. The recorded published beta baseline is aggregate `marty-ui@v1.1.217`, source `4596afaca3724e60a8dadbd4e227b6e765cb495c`; its hosted lifecycle and first-party KMS switching recording pass. All-demo/device evidence and the governed soak remain incomplete. PR #814 is maintainer-reviewed at exact head `458823962b00ab614060b5420f7a7caa44d2712e`, has squash auto-merge enabled, and is waiting only for its exact-head Rust database-contract job; it is not deployed. The next eight-route Application Template cutover is implemented and locally qualified in Rust on `integration/application-template-after-814-v1`, raising the staged issuance inventory from 74 native / 57 remaining to 82 native / 49 remaining. Its corresponding Python management retirement is separately gated and unlanded. Reachable Python features and the independent KMS-hardening work remain preserved until their retirement or ownership gates pass. Feature-preserving branch cleanup remains open. No production deployment occurred in this lane.
+**Status:** Waves one through three, the 31-route Rust Canvas cutover, and the canonical Rust verifier implementation are merged. The live published beta baseline remains aggregate `marty-ui@v1.1.217`, source `4596afaca3724e60a8dadbd4e227b6e765cb495c`; its service and UI markers agree and its beta containers are healthy. PR #814 is maintainer-reviewed at exact head `458823962b00ab614060b5420f7a7caa44d2712e`. Its replacement merge-group candidate `e52572b462275cdbe7acbadc8aa688169733216d` has every completed gate green in run `35501502340` and is waiting only for the long isolated Rust database-contract step. The eight-route Application Template and 14-route internal-Application cutovers are implemented, locally qualified, and stacked as PRs #826 and #827; the staged Rust issuance inventory now contains 96 native HTTP operations. Their corresponding Python retirements are independently gated as Credentials PRs #279 and #278, and the required fresh Credentials `0.1.74` release coordinate is staged as draft PR #280. No retirement lands before its Rust owner. Reachable Python features, the independent KMS-hardening work, the dirty SD-JWT work, and the deferred DIDComm KMS redesign remain preserved. Most verified-obsolete worktrees are removed; eight rebased historical UI worktrees remain only until #814 reaches `main`. The aggregate beta deployment, all-demo/device acceptance, and governed soak remain incomplete. No production deployment occurred in this lane.
 
 Prior `v1.1.214` evidence remains retained at source
 `24f5d5dc0bb47d3dadb118b4dbe45191c5cf71b1`, release run `33930593794`.
@@ -19,7 +19,7 @@ only; and `v1.2.78` is preliminary, non-activating evidence.
 
 **Initial rollout environment:** Beta only
 
-**Last updated:** 2026-09-19
+**Last updated:** 2026-09-20
 
 ## Objective
 
@@ -29,41 +29,60 @@ This is not a line-for-line translation project. Rust owns deterministic protoco
 
 The immediate deployment boundary is beta. Production and persistent self-host environments are not changed by this roadmap without a separate approval and promotion decision.
 
-## Current execution snapshot — 2026-09-19
+## Current execution snapshot — 2026-09-20
 
-PR #814 is open with squash auto-merge enabled at exact head
-`458823962b00ab614060b5420f7a7caa44d2712e`. Every completed hosted check is
-green. The only live gate is the isolated Rust database-contract step in CI run
-`35482275103`; it must complete successfully on this exact head before the
-reviewed tree is treated as landed. This is hosted qualification, not beta or
-production deployment.
+PR #814 remains open at reviewed head
+`458823962b00ab614060b5420f7a7caa44d2712e`. Its first merge-group candidate
+passed, and GitHub generated replacement candidate
+`e52572b462275cdbe7acbadc8aa688169733216d` after `main` changed. In replacement
+run `35501502340`, every completed CI job is green; the only live gate is the
+isolated Rust database-contract step. It must finish successfully and the PR
+must reach protected `main` before any dependent cutover is treated as landed.
+This is hosted qualification, not beta or production deployment.
 
-The follow-on Application Template slice is staged at `d24771214` with all
-eight management routes implemented in the shared Rust issuance service. Its
-language-neutral contract freezes transport models, tenant isolation, lifecycle
-transitions, validation ordering, authenticated credential-template lookup,
-idempotent create and compare-and-set persistence. Focused unit and full HTTP
-lifecycle tests, an isolated PostgreSQL contract, candidate ownership checks,
-strict Clippy, formatting and dependency-policy checks pass. The first five
-commits are patch-identical to the reviewed source branch; the sixth adds
-complete eight-route HTTP lifecycle coverage. The branch remains unpushed until
-#814 lands and can be rebased onto protected `main` without ambiguous ancestry.
+Application Template PR #826 is open, clean, and mergeable at
+`52b09bbe348a3c162d1af7b75ab5c82e26623b01`, stacked directly on #814. It owns
+all eight frozen management routes in the shared Rust issuance service with
+typed validation, tenant-safe PostgreSQL persistence, lifecycle transitions,
+authenticated dependency lookup, idempotent create, and compare-and-set
+updates. Eighteen focused unit tests and four full HTTP lifecycle/parity tests
+pass. Credentials PR #279 at
+`de52f2147b18696fff128c19bf71fa0fca2e069b` removes only those eight superseded
+Python management routes after #826 lands; its exact-head hosted run
+`35502472242` is fully green.
 
-The corresponding `marty-credentials` retirement is staged separately at
-`de52f21`. It removes only the superseded Python management router, eight
-handlers, request models and their implementation-specific tests. The entity,
-repository, schema, migrations and application/offer/evidence/Canvas consumers
-remain. Its complete unit suite passes 1,552 tests and 200 subtests. It must not
-land before the Rust routes land.
+Internal-Application PR #827 is open, clean, and mergeable at
+`95fab51c94be796bf9c6d865f6264e77e5c0d9dc`, stacked on #826. It implements and
+mounts all 14 frozen routes, including ordinary and Canvas approval, issuance
+offer projection, external evidence, reconciliation, atomic PostgreSQL
+transitions, stale-receipt reporting, lifecycle races, and KMS issuer
+resolution. Local maintainer gates passed 465 library tests, ten HTTP tests,
+four reconciliation tests, six executable smokes, a disposable PostgreSQL
+contract, strict Clippy, and diff checks. Credentials PR #278 at
+`ab70b3139c279a7e8cad7da3691788964aacf92f` retires only those 14 Python route
+owners after #827 lands while retaining shared storage and live Canvas/evidence
+consumers. Its Canvas atomic auto-approval repair passed 111 focused
+Canvas/approval tests, 54 retirement/surface tests, collection of all 1,718
+remaining tests, and the complete exact-head hosted run `35502944118`.
 
-All 85 audited `marty-ui` worktrees were clean. Seventy historical branches are
-patch-equivalent to #814. Seven older non-identical patches were individually
-compared with their integrated commits; the changed versions preserve the old
-feature blobs or add stronger adjacent gates, with no deleted capability found.
-The duplicate clean Application Template source branch/worktree was removed
-after exact patch-equivalence verification. Remaining superseded branches and
-worktrees are deleted only after #814 is merged; the active Application Template
-and independent KMS-hardening work are retained.
+Credentials PR #280 is a draft stacked on #278 at
+`a237a57c5fc5d3c4f3695192093b2e9c97a38247`. It changes only `Cargo.toml` and
+`Cargo.lock` from `0.1.73` to the fresh `0.1.74` release coordinate. The failed
+immutable `v0.1.73` tag remains preserved rather than retargeted. Locked Cargo
+metadata, a full locked Rust check, and all 37 stable-tag/release-contract tests
+pass. After #279 and #278 land, #280 must land and publish successfully before
+the new Credentials artifact is pinned into the next aggregate UI coordinate,
+`1.1.218`.
+
+Verified obsolete branch cleanup removed the patch-equivalent historical UI
+worktrees, stale Credentials worktrees, and detached tagged-release worktrees.
+Eight rebased UI worktrees remain temporarily because their reviewed
+replacement commits are inside #814 but not yet on `main`; they are removed
+only after those replacement commits are ancestors of `origin/main`. The active
+KMS worktrees and dirty SD-JWT worktree remain untouched. The aggregate
+beta-only runner, release-documentation, production-entrypoint, evidence
+collector, deployment-check, and soak-verifier audit passes 58 focused tests.
+The live beta baseline remains `1.1.217`; production is unchanged.
 
 ## Historical execution snapshot — 2026-09-12
 
