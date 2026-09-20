@@ -57,15 +57,21 @@ formatting, and all three native-coverage guards after correcting their stale
 Python management routes after #826 lands; its exact-head hosted run
 `35502472242` is fully green.
 
-Internal-Application PR #827 is open at reviewed head
-`81aa90567738f33e9120aa1b6fbd75153b4cfde1` and stacked on #826. Code checkpoint
-`428b5a5d1` implements and
+Internal-Application PR #827 is open and stacked on #826. Its latest reviewed
+implementation checkpoint, `5cb9401fc`, removes the remaining avoidable panic
+paths found by maintainer review; code checkpoint `428b5a5d1` implements and
 mounts all 14 frozen routes, including ordinary and Canvas approval, issuance
 offer projection, external evidence, reconciliation, atomic PostgreSQL
 transitions, stale-receipt reporting, lifecycle races, and KMS issuer
-resolution. Local maintainer gates passed 466 library tests, ten HTTP tests,
-four reconciliation tests, six executable smokes, a disposable PostgreSQL
-contract, strict Clippy, and diff checks. Credentials PR #278 at
+resolution. The malformed-Canvas-context path now fails closed through the
+stable readiness error instead of panicking, and already-validated template
+state is passed explicitly rather than recovered with an assertion. Local
+maintainer gates passed 466 library tests, ten HTTP tests, four reconciliation
+tests, six executable smokes, a disposable PostgreSQL contract, strict Clippy,
+and diff checks. A fresh composed #826->#827 replay adds five reconciliation
+tests (including the malformed-context regression), six Application Template
+validation tests, four external-evidence tests, package formatting, and strict
+all-target Clippy under Rust 1.95. Credentials PR #278 at
 `ab70b3139c279a7e8cad7da3691788964aacf92f` retires only those 14 Python route
 owners after #827 lands while retaining shared storage and live Canvas/evidence
 consumers. Its Canvas atomic auto-approval repair passed 111 focused
