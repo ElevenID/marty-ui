@@ -447,7 +447,6 @@ export default defineConfig(async ({ mode }) => {
           template: 'raw-data',
           gzipSize: true,
           brotliSize: true,
-          open: false,
         }),
       ] : []),
     ],
