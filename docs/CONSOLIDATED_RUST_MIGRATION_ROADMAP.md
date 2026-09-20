@@ -1,6 +1,6 @@
 # Consolidated Rust Migration Roadmap
 
-**Status:** Waves one through three, the 31-route Rust Canvas cutover, and the canonical Rust verifier implementation are merged. The last published beta baseline remains aggregate `marty-ui@v1.1.217`, source `4596afaca3724e60a8dadbd4e227b6e765cb495c`; no newer deployment is claimed here. PR #814 is maintainer-reviewed at exact head `458823962b00ab614060b5420f7a7caa44d2712e`. Its current merge-group candidate `ec7780f390b4ae123cf6d0bdf0f5d139000ab544` is running the full hosted matrix in run `35511058319`, with every completed job green. The eight-route Application Template and 14-route internal-Application cutovers are implemented, locally qualified, and stacked as PRs #826 and #827; the staged Rust issuance inventory now contains 96 native HTTP operations. Their corresponding Python retirements are independently gated as Credentials PRs #279 and #278, and the required fresh Credentials `0.1.74` release coordinate is staged as draft PR #280. No retirement lands before its Rust owner. Reachable Python features, the independent KMS-hardening work, the dirty crypto/SD-JWT work, and the deferred DIDComm KMS redesign remain preserved. A workspace-wide audit removed three stale non-code artifacts and left only five dirty worktrees, all owned by the active crypto/SD-JWT effort; eight clean rebased historical UI worktrees remain only until #814 reaches `main`. The aggregate beta deployment, all-demo/device acceptance, and governed soak remain incomplete. No production deployment occurred in this lane.
+**Status:** Waves one through three, the 31-route Rust Canvas cutover, and the canonical Rust verifier implementation are merged. The last published beta baseline remains aggregate `marty-ui@v1.1.217`, source `4596afaca3724e60a8dadbd4e227b6e765cb495c`; no newer deployment is claimed here. PR #814 is maintainer-reviewed at exact head `458823962b00ab614060b5420f7a7caa44d2712e`. Its current merge-group candidate `ec7780f390b4ae123cf6d0bdf0f5d139000ab544` is running the full hosted matrix in run `35511058319`, with every completed job green. The eight-route Application Template and 14-route internal-Application cutovers are implemented, locally qualified, and stacked as PRs #826 at `6b16533638e5e9b51366fbdae5915405a64a51f8` and #827 with reviewed code checkpoint `f36d56f358edbc9dfaf1380fcc56b68b1a5e8ea9`; the staged Rust issuance inventory now contains 96 native HTTP operations. Their corresponding Python retirements are independently gated as Credentials PRs #279 and #278, and the required fresh Credentials `0.1.74` release coordinate is staged as draft PR #280. No retirement lands before its Rust owner. Reachable Python features, the independent KMS-hardening work, the dirty crypto/SD-JWT work, and the deferred DIDComm KMS redesign remain preserved. A workspace-wide audit removed three stale non-code artifacts and left only five dirty worktrees, all owned by the active crypto/SD-JWT effort; eight clean rebased historical UI worktrees remain only until #814 reaches `main`. The aggregate beta deployment, all-demo/device acceptance, and governed soak remain incomplete. No production deployment occurred in this lane.
 
 Prior `v1.1.214` evidence remains retained at source
 `24f5d5dc0bb47d3dadb118b4dbe45191c5cf71b1`, release run `33930593794`.
@@ -45,22 +45,29 @@ the PR must reach protected `main` before any dependent cutover is treated as
 landed. This is hosted qualification, not beta or production deployment.
 
 Application Template PR #826 is open at exact head
-`aa4c84326f15aea0cde6354125cdb48e0ba252f6`, stacked directly on #814. It owns
+`6b16533638e5e9b51366fbdae5915405a64a51f8`, stacked directly on #814. It owns
 all eight frozen management routes in the shared Rust issuance service with
 typed validation, tenant-safe PostgreSQL persistence, lifecycle transitions,
 authenticated dependency lookup, idempotent create, and compare-and-set
 updates. Eighteen focused unit tests and four full HTTP lifecycle/parity tests
 pass. Maintainer replay also passes strict all-target Clippy, package
 formatting, and all three native-coverage guards after correcting their stale
-44-revision expectation to the contract's actual 46 revisions. Credentials PR #279 at
+44-revision expectation to the contract's actual 46 revisions. Follow-up
+maintainer review removed the guarded `order.expect` and the HTTP error
+mapper's early-return/`unreachable!` pair without changing the frozen response
+boundary; six focused domain tests, all four language-neutral HTTP tests,
+package formatting, diff checks, and strict targeted Clippy pass under Rust
+1.95. Credentials PR #279 at
 `de52f2147b18696fff128c19bf71fa0fca2e069b` removes only those eight superseded
 Python management routes after #826 lands; its exact-head hosted run
 `35502472242` is fully green.
 
-Internal-Application PR #827 is open and stacked on #826. Its latest reviewed
-implementation checkpoint, `5cb9401fc`, removes the remaining avoidable panic
-paths found by maintainer review; code checkpoint `428b5a5d1` implements and
-mounts all 14 frozen routes, including ordinary and Canvas approval, issuance
+Internal-Application PR #827 is open and stacked on #826. Its reviewed code
+tree checkpoint is `f36d56f358edbc9dfaf1380fcc56b68b1a5e8ea9`; later documentation-only
+commits record this evidence. Its latest reviewed implementation checkpoint,
+`ac6bbe884`, removes the remaining
+avoidable panic paths found by maintainer review; code checkpoint `172479c22`
+implements and mounts all 14 frozen routes, including ordinary and Canvas approval, issuance
 offer projection, external evidence, reconciliation, atomic PostgreSQL
 transitions, stale-receipt reporting, lifecycle races, and KMS issuer
 resolution. The malformed-Canvas-context path now fails closed through the
@@ -68,10 +75,14 @@ stable readiness error instead of panicking, and already-validated template
 state is passed explicitly rather than recovered with an assertion. Local
 maintainer gates passed 466 library tests, ten HTTP tests, four reconciliation
 tests, six executable smokes, a disposable PostgreSQL contract, strict Clippy,
-and diff checks. A fresh composed #826->#827 replay adds five reconciliation
-tests (including the malformed-context regression), six Application Template
-validation tests, four external-evidence tests, package formatting, and strict
-all-target Clippy under Rust 1.95. Credentials PR #278 at
+and diff checks. A composed #826->#827 replay then passed five
+reconciliation tests (including the malformed-context regression), six
+Application Template validation tests, four external-evidence tests, package
+formatting, diff checks, and strict all-target Clippy under Rust 1.95. The
+latest panic-free base restack additionally passes all four language-neutral
+Application Template HTTP tests, all ten internal-Application HTTP tests, all
+five reconciliation tests, package formatting, diff checks, and strict
+targeted Clippy. Credentials PR #278 at
 `ab70b3139c279a7e8cad7da3691788964aacf92f` retires only those 14 Python route
 owners after #827 lands while retaining shared storage and live Canvas/evidence
 consumers. Its Canvas atomic auto-approval repair passed 111 focused
