@@ -14,11 +14,15 @@ use serde_json::Value;
 use crate::{
     application_template_domain::ApplicationTemplateRecord,
     canvas_award_candidate_approval::{
-        resolve_and_attach_required_issuer, CanvasApplicationApprovalError,
-        CanvasApplicationApprovalService, CanvasAwardApprovalSeedGenerator,
+        issuer_diagnostic_category, resolve_and_attach_required_issuer,
+        CanvasApplicationApprovalError, CanvasApplicationApprovalService,
+        CanvasAwardApprovalSeedGenerator,
     },
     canvas_lti_launch::CanvasLtiClock,
     credential::{CredentialTransaction, CredentialTransactionStatus, IssuerContextResolver},
+    internal_application_diagnostics::{
+        warn_application_failure, InternalApplicationDiagnosticStage,
+    },
     internal_application_domain::ApplicationRecord,
     internal_application_service::{InternalApplicationApprovalError, InternalApplicationApprover},
     python_value::{python_string, python_truthy, strip},
@@ -447,7 +451,14 @@ impl InternalApplicationTransactionPreparer for OrdinaryInternalApplicationAppro
         let mut transaction = self.transaction(application, local_template, &credential, now)?;
         resolve_and_attach_required_issuer(self.issuer_resolver.as_ref(), &mut transaction)
             .await
-            .map_err(|_| InternalApplicationApprovalError::IssuerContextUnavailable)?;
+            .map_err(|error| {
+                warn_application_failure(
+                    InternalApplicationDiagnosticStage::OrdinaryIssuerContext,
+                    issuer_diagnostic_category(&error),
+                    &application.id,
+                );
+                InternalApplicationApprovalError::IssuerContextUnavailable
+            })?;
         Ok(transaction)
     }
 }

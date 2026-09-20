@@ -28,6 +28,10 @@ use crate::{
     internal_application_approval::{
         InternalApplicationApprovalDependencies, InternalApplicationCredentialTemplate,
     },
+    internal_application_diagnostics::{
+        warn_wallet_catalog_failure, InternalApplicationDiagnosticCategory,
+        InternalApplicationDiagnosticStage,
+    },
     internal_application_offer::{InternalApplicationWalletCatalog, RegisteredOfferWallet},
     internal_application_service::InternalApplicationApprovalError,
     organization_proto::{
@@ -354,10 +358,36 @@ impl InternalApplicationWalletCatalog for NativeInitiationControlPlane {
             {
                 response.into_inner()
             }
-            Ok(_) | Err(_) => return Vec::new(),
+            Ok(_) => {
+                warn_wallet_catalog_failure(
+                    InternalApplicationDiagnosticStage::WalletCatalogTemplate,
+                    InternalApplicationDiagnosticCategory::InvalidResponse,
+                    credential_template_id,
+                );
+                return Vec::new();
+            }
+            Err(_) => {
+                warn_wallet_catalog_failure(
+                    InternalApplicationDiagnosticStage::WalletCatalogTemplate,
+                    InternalApplicationDiagnosticCategory::DependencyUnavailable,
+                    credential_template_id,
+                );
+                return Vec::new();
+            }
         };
-        let wallet_ids = serde_json::from_str::<Vec<Value>>(&template.wallet_configs_json)
-            .unwrap_or_default()
+        let wallet_configurations =
+            match serde_json::from_str::<Vec<Value>>(&template.wallet_configs_json) {
+                Ok(configurations) => configurations,
+                Err(_) => {
+                    warn_wallet_catalog_failure(
+                        InternalApplicationDiagnosticStage::WalletCatalogConfiguration,
+                        InternalApplicationDiagnosticCategory::InvalidConfiguration,
+                        credential_template_id,
+                    );
+                    Vec::new()
+                }
+            };
+        let wallet_ids = wallet_configurations
             .into_iter()
             .filter_map(|value| {
                 value
@@ -369,31 +399,54 @@ impl InternalApplicationWalletCatalog for NativeInitiationControlPlane {
             })
             .collect::<Vec<_>>();
         if wallet_ids.is_empty() {
-            return client
+            return match client
                 .list_wallets(self.grpc_request(ListWalletsRequest {
                     active_only: true,
                     organization_id: String::new(),
                 }))
                 .await
-                .map(|response| {
-                    response
-                        .into_inner()
-                        .wallets
-                        .into_iter()
-                        .filter_map(registered_offer_wallet)
-                        .collect()
-                })
-                .unwrap_or_default();
+            {
+                Ok(response) => response
+                    .into_inner()
+                    .wallets
+                    .into_iter()
+                    .filter_map(registered_offer_wallet)
+                    .collect(),
+                Err(_) => {
+                    warn_wallet_catalog_failure(
+                        InternalApplicationDiagnosticStage::WalletCatalogList,
+                        InternalApplicationDiagnosticCategory::DependencyUnavailable,
+                        credential_template_id,
+                    );
+                    Vec::new()
+                }
+            };
         }
 
         let mut wallets = Vec::with_capacity(wallet_ids.len());
         for wallet_id in wallet_ids {
+            let diagnostic_wallet_id = wallet_id.clone();
             let response = client
                 .get_wallet(self.grpc_request(GetWalletRequest { wallet_id }))
                 .await;
-            if let Ok(response) = response {
-                if let Some(wallet) = registered_offer_wallet(response.into_inner()) {
-                    wallets.push(wallet);
+            match response {
+                Ok(response) => {
+                    if let Some(wallet) = registered_offer_wallet(response.into_inner()) {
+                        wallets.push(wallet);
+                    } else {
+                        warn_wallet_catalog_failure(
+                            InternalApplicationDiagnosticStage::WalletCatalogGet,
+                            InternalApplicationDiagnosticCategory::InvalidResponse,
+                            &diagnostic_wallet_id,
+                        );
+                    }
+                }
+                Err(_) => {
+                    warn_wallet_catalog_failure(
+                        InternalApplicationDiagnosticStage::WalletCatalogGet,
+                        InternalApplicationDiagnosticCategory::DependencyUnavailable,
+                        &diagnostic_wallet_id,
+                    );
                 }
             }
         }

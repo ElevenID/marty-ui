@@ -701,8 +701,19 @@ pub fn validate_embedded_contract() -> Result<CoverageSummary, MmfError> {
                 .as_array()
                 .is_some_and(Vec::is_empty)
             && internal_applications["source_revision"]["approved_repairs"]
-                .as_array()
-                .is_some_and(|repairs| repairs.len() == 9),
+                == serde_json::json!([
+                    "9907d99: read issuance state from IssuanceTransaction while applications remain approved",
+                    "843c0e5: restore name, email, then generated applicant identifier precedence",
+                    "073b177: redact provider transport exception details from external evidence API responses",
+                    "877253d: reserve replayed application offers idempotently",
+                    "1dda8ac: map invalid status filters to a stable validation response",
+                    "3bee6f7: fail closed on missing offer dependencies and issuer context",
+                    "validate active tenant-owned revocation bindings before ordinary approval",
+                    "commit manual lifecycle transitions and non-Canvas issuance reservations atomically",
+                    "commit external-evidence and reconciliation application, fact, transaction, and audit write sets atomically",
+                    "preserve issuance-specific Canvas offer readiness errors separately from approval errors",
+                    "retain secret-safe structured diagnostics for provider, Canvas, issuer-context, and wallet-catalog failures"
+                ]),
         "unexpected internal application behavior contract",
     )?;
     require(

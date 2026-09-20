@@ -65,6 +65,8 @@ pub enum InternalApplicationApprovalError {
     IssuerContextUnavailable,
     #[error("Canvas application is not ready for approval")]
     CanvasNotReady,
+    #[error("Canvas application is not ready for issuance")]
+    CanvasOfferNotReady,
     #[error("Application lifecycle changed during approval")]
     ConcurrentChange,
 }

@@ -87,8 +87,8 @@
   "internal_application_behavior_contract": {
     "repository": "ElevenID/marty-credentials",
     "path": "contracts/issuance-internal-applications.json",
-    "commit": "da8ccf8f17dd4a418f6624c1fdabfe7cc4f2b909",
-    "sha256": "51cf4140726a3b81050dcfb4be72a26d2fb9c14a7ab2169956fc6b4f97fea348"
+    "commit": "e40c1ce6e807714278ef362d3ed24909dd8686fa",
+    "sha256": "650f22242055fbd4acbea523749a2d10aa8509a95fad9175d7b134c76433da12"
   },
   "renewal_behavior_contract": {
     "path": "contracts/credential-renewal-python-reference.json",

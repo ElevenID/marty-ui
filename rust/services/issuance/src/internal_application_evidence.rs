@@ -16,6 +16,7 @@ use crate::{
     application_template_domain::ApplicationTemplateRecord,
     credential::CredentialTransaction,
     internal_application_approval::InternalApplicationTransactionPreparer,
+    internal_application_diagnostics::warn_external_evidence_failure,
     internal_application_domain::{
         python_datetime, ApplicationRecord, ApplicationStatus, EvidenceFactRecord,
         EvidenceFactResponse, ExternalEvidenceApiCheckRequest, ExternalEvidenceApiCheckResponse,
@@ -23,9 +24,9 @@ use crate::{
     },
     internal_application_service::InternalApplicationApprovalError,
     internal_external_evidence::{
-        execute_external_evidence_api_check, EnvironmentExternalEvidenceSecrets,
-        ExternalEvidenceApiError, ExternalEvidenceSecrets, ExternalEvidenceTransport,
-        SecureExternalEvidenceTransport,
+        execute_external_evidence_api_check, requirement_check_id,
+        EnvironmentExternalEvidenceSecrets, ExternalEvidenceApiError, ExternalEvidenceSecrets,
+        ExternalEvidenceTransport, SecureExternalEvidenceTransport,
     },
     python_value::python_truthy,
 };
@@ -209,7 +210,8 @@ impl InternalApplicationEvidenceCoordinator for DefaultInternalApplicationEviden
         request: ExternalEvidenceApiCheckRequest,
     ) -> Result<ExternalEvidenceApiCheckResponse, InternalApplicationEvidenceError> {
         let now = Utc::now();
-        let check = execute_external_evidence_api_check(
+        let check_id = requirement_check_id(&requirement);
+        let check = match execute_external_evidence_api_check(
             &application,
             &requirement,
             &request.inputs,
@@ -218,7 +220,16 @@ impl InternalApplicationEvidenceCoordinator for DefaultInternalApplicationEviden
             now,
             Uuid::new_v4().to_string(),
         )
-        .await?;
+        .await
+        {
+            Ok(check) => check,
+            Err(error) => {
+                if error == ExternalEvidenceApiError::Transport {
+                    warn_external_evidence_failure(&application.id, &check_id);
+                }
+                return Err(error.into());
+            }
+        };
         let mut evidence_fact = check.evidence_fact;
         let mut facts = self.repository.list_facts(&application.id).await?;
         if let Some(previous) = facts

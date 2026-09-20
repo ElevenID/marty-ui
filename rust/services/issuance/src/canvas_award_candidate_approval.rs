@@ -22,6 +22,10 @@ use crate::{
         remote_credential_format, CredentialIssuanceError, CredentialTransaction,
         CredentialTransactionStatus, IssuerContext, IssuerContextResolver,
     },
+    internal_application_diagnostics::{
+        warn_application_failure, InternalApplicationDiagnosticCategory,
+        InternalApplicationDiagnosticStage,
+    },
 };
 
 const REDACTED: &str = "[REDACTED]";
@@ -318,21 +322,35 @@ impl CanvasApplicationApprovalService {
             policy_set: None,
         };
         let now = self.clock.now();
-        evaluate_canvas_approval_snapshot(
+        if let Err(code) = evaluate_canvas_approval_snapshot(
             organization_id,
             application_id,
             &guard,
             &self.guard_config,
             now,
-        )
-        .map_err(map_manual_guard_error)?;
+        ) {
+            let (error, category) = classify_manual_guard_error(code);
+            warn_application_failure(
+                InternalApplicationDiagnosticStage::CanvasApprovalReadiness,
+                category,
+                application_id,
+            );
+            return Err(error);
+        }
         let mut transaction = plan_canvas_approval_transaction(
             &snapshot.application,
             &snapshot.binding,
             &self.seeds.generate(),
             now,
         )
-        .ok_or(CanvasApplicationApprovalError::NotReady)?;
+        .ok_or_else(|| {
+            warn_application_failure(
+                InternalApplicationDiagnosticStage::CanvasApprovalReadiness,
+                InternalApplicationDiagnosticCategory::TransactionPlanUnavailable,
+                application_id,
+            );
+            CanvasApplicationApprovalError::NotReady
+        })?;
         if let Some(existing) = snapshot.existing_transaction.as_ref() {
             transaction = reuse_canvas_approval_transaction(existing, &transaction, true);
         }
@@ -344,7 +362,14 @@ impl CanvasApplicationApprovalService {
             &mut transaction,
         )
         .await
-        .map_err(|_| CanvasApplicationApprovalError::NotReady)?;
+        .map_err(|error| {
+            warn_application_failure(
+                InternalApplicationDiagnosticStage::CanvasApprovalIssuerContext,
+                issuer_diagnostic_category(&error),
+                application_id,
+            );
+            CanvasApplicationApprovalError::NotReady
+        })?;
         let issuance_transaction_id = self
             .repository
             .reserve_application_issuance(&transaction, &snapshot, reviewer_id, review_notes, now)
@@ -378,28 +403,49 @@ impl CanvasApplicationApprovalService {
             policy_set: None,
         };
         let now = self.clock.now();
-        evaluate_canvas_offer_snapshot(
+        if let Err(code) = evaluate_canvas_offer_snapshot(
             organization_id,
             application_id,
             &guard,
             &self.guard_config,
             now,
-        )
-        .map_err(map_manual_guard_error)?;
+        ) {
+            let (error, category) = classify_manual_guard_error(code);
+            warn_application_failure(
+                InternalApplicationDiagnosticStage::CanvasOfferReadiness,
+                category,
+                application_id,
+            );
+            return Err(error);
+        }
         let mut transaction = plan_canvas_offer_transaction(
             &snapshot.application,
             &snapshot.binding,
             &self.seeds.generate(),
             now,
         )
-        .ok_or(CanvasApplicationApprovalError::NotReady)?;
+        .ok_or_else(|| {
+            warn_application_failure(
+                InternalApplicationDiagnosticStage::CanvasOfferReadiness,
+                InternalApplicationDiagnosticCategory::TransactionPlanUnavailable,
+                application_id,
+            );
+            CanvasApplicationApprovalError::NotReady
+        })?;
         resolve_and_attach_canvas_issuer(
             self.issuer_resolver.as_ref(),
             &snapshot.binding,
             &mut transaction,
         )
         .await
-        .map_err(|_| CanvasApplicationApprovalError::NotReady)?;
+        .map_err(|error| {
+            warn_application_failure(
+                InternalApplicationDiagnosticStage::CanvasOfferIssuerContext,
+                issuer_diagnostic_category(&error),
+                application_id,
+            );
+            CanvasApplicationApprovalError::NotReady
+        })?;
         Ok(transaction)
     }
 }
@@ -759,12 +805,42 @@ pub(crate) async fn resolve_and_attach_required_issuer(
     Ok(())
 }
 
-fn map_manual_guard_error(code: &'static str) -> CanvasApplicationApprovalError {
+fn classify_manual_guard_error(
+    code: &'static str,
+) -> (
+    CanvasApplicationApprovalError,
+    InternalApplicationDiagnosticCategory,
+) {
     match code {
-        "canvas_application_not_found" => CanvasApplicationApprovalError::NotFound,
-        "canvas_rollout_disabled" => CanvasApplicationApprovalError::RolloutDisabled,
-        "canvas_application_invalid_status" => CanvasApplicationApprovalError::InvalidStatus,
-        _ => CanvasApplicationApprovalError::NotReady,
+        "canvas_application_not_found" => (
+            CanvasApplicationApprovalError::NotFound,
+            InternalApplicationDiagnosticCategory::NotFound,
+        ),
+        "canvas_rollout_disabled" => (
+            CanvasApplicationApprovalError::RolloutDisabled,
+            InternalApplicationDiagnosticCategory::RolloutDisabled,
+        ),
+        "canvas_application_invalid_status" => (
+            CanvasApplicationApprovalError::InvalidStatus,
+            InternalApplicationDiagnosticCategory::InvalidStatus,
+        ),
+        _ => (
+            CanvasApplicationApprovalError::NotReady,
+            InternalApplicationDiagnosticCategory::NotReady,
+        ),
+    }
+}
+
+pub(crate) const fn issuer_diagnostic_category(
+    error: &CanvasAwardCandidateApprovalError,
+) -> InternalApplicationDiagnosticCategory {
+    match error {
+        CanvasAwardCandidateApprovalError::Unavailable => {
+            InternalApplicationDiagnosticCategory::DependencyUnavailable
+        }
+        CanvasAwardCandidateApprovalError::ReadinessDrift => {
+            InternalApplicationDiagnosticCategory::IssuerContextInvalid
+        }
     }
 }
 
@@ -893,6 +969,14 @@ async fn typed_remote_failure_preserves_approval_operation_classification() {
                 CanvasAwardCandidateApprovalError::Unavailable
             } else {
                 CanvasAwardCandidateApprovalError::ReadinessDrift
+            }
+        );
+        assert_eq!(
+            issuer_diagnostic_category(&actual),
+            if operation == SigningOperation::Sign {
+                InternalApplicationDiagnosticCategory::DependencyUnavailable
+            } else {
+                InternalApplicationDiagnosticCategory::IssuerContextInvalid
             }
         );
         peer.close().await;

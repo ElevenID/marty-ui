@@ -1631,6 +1631,30 @@ async fn issuance_offer_routes_preserve_success_shape_state_errors_and_missing_t
         json!({"detail": "No issuance offer available for this application"})
     );
 
+    let canvas_not_ready = service_with_offers(
+        repository.clone(),
+        Err(InternalApplicationOfferError::Approval(
+            InternalApplicationApprovalError::CanvasOfferNotReady,
+        )),
+        Ok(offer_response()),
+    );
+    let (status, response) = request(
+        &canvas_not_ready,
+        Method::POST,
+        "/internal/applications/application-approved/issuance-offer",
+        None,
+        Some("secret"),
+        Some("org-123"),
+    )
+    .await;
+    let contract: Value = serde_json::from_str(include_str!(
+        "../../../../contracts/issuance-internal-applications.json"
+    ))
+    .expect("internal Application contract");
+    let expected = &contract["lifecycle"]["canvas_offer_outcomes"]["stale_readiness"];
+    assert_eq!(status.as_u16(), expected["status"].as_u64().unwrap() as u16);
+    assert_eq!(response, json!({"detail": expected["detail"]}));
+
     let missing = service_with_offers(
         repository,
         Ok(offer_response()),

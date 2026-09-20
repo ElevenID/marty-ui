@@ -613,6 +613,7 @@ fn approval_error_response(error: InternalApplicationApprovalError) -> Response 
             StatusCode::UNPROCESSABLE_ENTITY
         }
         InternalApplicationApprovalError::CanvasNotReady
+        | InternalApplicationApprovalError::CanvasOfferNotReady
         | InternalApplicationApprovalError::ConcurrentChange => StatusCode::CONFLICT,
     };
     (status, Json(json!({"detail": error.to_string()}))).into_response()
