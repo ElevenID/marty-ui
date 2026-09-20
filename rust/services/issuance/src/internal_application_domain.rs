@@ -6,6 +6,7 @@
 
 use std::str::FromStr;
 
+use chrono::{DateTime, Duration, SecondsFormat, Utc};
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 use thiserror::Error;
@@ -104,6 +105,187 @@ pub struct ExternalEvidenceApiCheckRequest {
     pub issue_on_permit: bool,
 }
 
+#[derive(Clone, Debug, PartialEq)]
+pub struct ApplicationRecord {
+    pub id: String,
+    pub organization_id: String,
+    pub application_template_id: String,
+    pub applicant_identifier: String,
+    pub form_data: Map<String, Value>,
+    pub evidence_submissions: Vec<Map<String, Value>>,
+    pub integration_context: Map<String, Value>,
+    pub status: ApplicationStatus,
+    pub review_notes: Option<String>,
+    pub reviewer_id: Option<String>,
+    pub rejection_reason: Option<String>,
+    pub derived_claims: Map<String, Value>,
+    pub created_at: DateTime<Utc>,
+    pub updated_at: DateTime<Utc>,
+    pub submitted_at: DateTime<Utc>,
+    pub reviewed_at: Option<DateTime<Utc>>,
+    pub expires_at: DateTime<Utc>,
+    pub issuance_transaction_id: Option<String>,
+    pub credential_id: Option<String>,
+}
+
+impl ApplicationRecord {
+    pub fn new(
+        id: String,
+        organization_id: String,
+        request: ApplicationCreate,
+        generated_identifier: &str,
+        now: DateTime<Utc>,
+    ) -> Result<Self, ApplicationDomainError> {
+        let applicant_identifier =
+            derive_applicant_identifier(&request.applicant_data, generated_identifier);
+        let expires_at = now
+            .checked_add_signed(Duration::days(30))
+            .ok_or(ApplicationDomainError::TimestampOverflow)?;
+        Ok(Self {
+            id,
+            organization_id,
+            application_template_id: request.application_template_id,
+            applicant_identifier,
+            form_data: request.applicant_data,
+            evidence_submissions: Vec::new(),
+            integration_context: request.integration_context,
+            status: ApplicationStatus::Pending,
+            review_notes: None,
+            reviewer_id: None,
+            rejection_reason: None,
+            derived_claims: Map::new(),
+            created_at: now,
+            updated_at: now,
+            submitted_at: now,
+            reviewed_at: None,
+            expires_at,
+            issuance_transaction_id: None,
+            credential_id: None,
+        })
+    }
+
+    pub fn submit_evidence(
+        &mut self,
+        evidence: EvidenceSubmission,
+        now: DateTime<Utc>,
+    ) -> Result<(), ApplicationDomainError> {
+        self.require_pending("submit evidence for")?;
+        self.evidence_submissions.push(Map::from_iter([
+            (
+                "evidence_type".to_owned(),
+                Value::String(evidence.evidence_type),
+            ),
+            (
+                "evidence_data".to_owned(),
+                Value::Object(evidence.evidence_data),
+            ),
+            (
+                "submitted_at".to_owned(),
+                Value::String(python_datetime(now)),
+            ),
+        ]));
+        self.updated_at = now;
+        Ok(())
+    }
+
+    pub fn reject(
+        &mut self,
+        review_notes: String,
+        reviewer_id: &str,
+        now: DateTime<Utc>,
+    ) -> Result<(), ApplicationDomainError> {
+        self.require_pending("reject")?;
+        self.status = ApplicationStatus::Rejected;
+        self.review_notes = Some(review_notes);
+        self.reviewer_id = Some(reviewer_id.to_owned());
+        self.reviewed_at = Some(now);
+        self.updated_at = now;
+        Ok(())
+    }
+
+    fn require_pending(&self, operation: &'static str) -> Result<(), ApplicationDomainError> {
+        if self.status == ApplicationStatus::Pending {
+            Ok(())
+        } else {
+            Err(ApplicationDomainError::InvalidTransition {
+                operation,
+                status: self.status.into(),
+            })
+        }
+    }
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+pub struct ApplicationResponse {
+    pub id: String,
+    pub organization_id: String,
+    pub application_template_id: String,
+    pub applicant_identifier: String,
+    pub form_data: Map<String, Value>,
+    pub evidence_submissions: Vec<Map<String, Value>>,
+    pub integration_context: Map<String, Value>,
+    pub status: String,
+    pub review_notes: Option<String>,
+    pub reviewer_id: Option<String>,
+    pub submitted_at: String,
+    pub reviewed_at: Option<String>,
+    pub expires_at: String,
+    pub issuance_transaction_id: Option<String>,
+}
+
+impl From<&ApplicationRecord> for ApplicationResponse {
+    fn from(value: &ApplicationRecord) -> Self {
+        Self {
+            id: value.id.clone(),
+            organization_id: value.organization_id.clone(),
+            application_template_id: value.application_template_id.clone(),
+            applicant_identifier: value.applicant_identifier.clone(),
+            form_data: value.form_data.clone(),
+            evidence_submissions: value.evidence_submissions.clone(),
+            integration_context: value.integration_context.clone(),
+            status: value.status.as_str().to_owned(),
+            review_notes: value.review_notes.clone(),
+            reviewer_id: value.reviewer_id.clone(),
+            submitted_at: python_datetime(value.submitted_at),
+            reviewed_at: value.reviewed_at.map(python_datetime),
+            expires_at: python_datetime(value.expires_at),
+            issuance_transaction_id: value.issuance_transaction_id.clone(),
+        }
+    }
+}
+
+#[derive(Clone, Debug, Error, Eq, PartialEq)]
+pub enum ApplicationDomainError {
+    #[error("Cannot {operation} application in ApplicationStatus.{status} status")]
+    InvalidTransition {
+        operation: &'static str,
+        status: ApplicationStatusDebug,
+    },
+    #[error("Application timestamp is out of range")]
+    TimestampOverflow,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct ApplicationStatusDebug(ApplicationStatus);
+
+impl std::fmt::Display for ApplicationStatusDebug {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str(match self.0 {
+            ApplicationStatus::Pending => "PENDING",
+            ApplicationStatus::UnderReview => "UNDER_REVIEW",
+            ApplicationStatus::Approved => "APPROVED",
+            ApplicationStatus::Rejected => "REJECTED",
+            ApplicationStatus::Withdrawn => "WITHDRAWN",
+        })
+    }
+}
+
+impl From<ApplicationStatus> for ApplicationStatusDebug {
+    fn from(value: ApplicationStatus) -> Self {
+        Self(value)
+    }
+}
+
 /// Preserve Python's `str(value or "").strip()` semantics, including truthy
 /// non-string JSON values, before falling back to the caller's generated ID.
 #[must_use]
@@ -129,6 +311,10 @@ fn identifier_component(value: Option<&Value>) -> Option<String> {
     (!rendered.is_empty()).then(|| rendered.to_owned())
 }
 
+fn python_datetime(value: DateTime<Utc>) -> String {
+    value.to_rfc3339_opts(SecondsFormat::AutoSi, false)
+}
+
 fn default_reconciliation_limit() -> i64 {
     100
 }
@@ -139,6 +325,7 @@ fn default_true() -> bool {
 
 #[cfg(test)]
 mod tests {
+    use chrono::TimeZone;
     use serde_json::json;
 
     use super::*;
@@ -269,6 +456,120 @@ mod tests {
                 fallback,
             ),
             fallback
+        );
+    }
+
+    #[test]
+    fn application_projection_matches_the_frozen_response_shape() {
+        let now = Utc
+            .with_ymd_and_hms(2026, 9, 19, 12, 34, 56)
+            .single()
+            .expect("fixed timestamp");
+        let request: ApplicationCreate = serde_json::from_value(json!({
+            "application_template_id": "template-1",
+            "applicant_data": {
+                "given_name": "Ada",
+                "family_name": "Lovelace"
+            },
+            "integration_context": {"source": "contract"}
+        }))
+        .expect("create request");
+        let record = ApplicationRecord::new(
+            "application-1".to_owned(),
+            "org-123".to_owned(),
+            request,
+            "applicant_1234abcd",
+            now,
+        )
+        .expect("application");
+
+        assert_eq!(
+            serde_json::to_value(ApplicationResponse::from(&record)).expect("response JSON"),
+            json!({
+                "id": "application-1",
+                "organization_id": "org-123",
+                "application_template_id": "template-1",
+                "applicant_identifier": "Ada_Lovelace",
+                "form_data": {"given_name": "Ada", "family_name": "Lovelace"},
+                "evidence_submissions": [],
+                "integration_context": {"source": "contract"},
+                "status": "pending",
+                "review_notes": null,
+                "reviewer_id": null,
+                "submitted_at": "2026-09-19T12:34:56+00:00",
+                "reviewed_at": null,
+                "expires_at": "2026-10-19T12:34:56+00:00",
+                "issuance_transaction_id": null
+            })
+        );
+    }
+
+    #[test]
+    fn manual_mutations_require_pending_and_preserve_public_error_text() {
+        let now = Utc
+            .with_ymd_and_hms(2026, 9, 19, 12, 34, 56)
+            .single()
+            .expect("fixed timestamp");
+        let request: ApplicationCreate = serde_json::from_value(json!({
+            "application_template_id": "template-1",
+            "applicant_data": {}
+        }))
+        .expect("create request");
+        let mut record = ApplicationRecord::new(
+            "application-1".to_owned(),
+            "org-123".to_owned(),
+            request,
+            "applicant_1234abcd",
+            now,
+        )
+        .expect("application");
+        let later = now + Duration::minutes(1);
+        record
+            .submit_evidence(
+                EvidenceSubmission {
+                    evidence_type: "DOCUMENT_SCAN".to_owned(),
+                    evidence_data: Map::from_iter([("digest".to_owned(), json!("sha256:1"))]),
+                },
+                later,
+            )
+            .expect("pending evidence submission");
+        assert_eq!(
+            record.evidence_submissions,
+            vec![Map::from_iter([
+                ("evidence_type".to_owned(), json!("DOCUMENT_SCAN")),
+                ("evidence_data".to_owned(), json!({"digest": "sha256:1"})),
+                (
+                    "submitted_at".to_owned(),
+                    json!("2026-09-19T12:35:56+00:00")
+                )
+            ])]
+        );
+        record
+            .reject(
+                "Insufficient evidence".to_owned(),
+                "issuance-management-api",
+                later,
+            )
+            .expect("pending rejection");
+        assert_eq!(record.status, ApplicationStatus::Rejected);
+        assert_eq!(record.reviewed_at, Some(later));
+        assert_eq!(
+            record.reviewer_id.as_deref(),
+            Some("issuance-management-api")
+        );
+
+        let error = record
+            .submit_evidence(
+                EvidenceSubmission {
+                    evidence_type: "DOCUMENT_SCAN".to_owned(),
+                    evidence_data: Map::new(),
+                },
+                later,
+            )
+            .expect_err("rejected application must not accept evidence");
+        assert_eq!(
+            error.to_string(),
+            "Cannot submit evidence for application in ApplicationStatus.REJECTED status"
         );
     }
 }
