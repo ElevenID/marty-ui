@@ -640,12 +640,26 @@ pub fn idempotency_binding(
     };
     let semantic_payload = request.semantic_payload()?;
     Ok(Some(IdempotencyBinding {
-        key_hash: sha256(format!("{IDEMPOTENCY_KEY_PREFIX}{key}")),
-        request_hash: sha256(format!(
-            "{IDEMPOTENCY_REQUEST_PREFIX}{}",
-            canonical_json(&semantic_payload)?
-        )),
+        key_hash: hash_idempotency_key(&key),
+        request_hash: hash_idempotency_request(&semantic_payload)?,
     }))
+}
+
+/// Hash an already-normalized idempotency key without ever persisting the raw
+/// capability. Internal application offers share the same namespace and
+/// storage invariant as public issuance initiation.
+pub(crate) fn hash_idempotency_key(key: &str) -> String {
+    sha256(format!("{IDEMPOTENCY_KEY_PREFIX}{key}"))
+}
+
+/// Hash canonical request semantics using the public issuance namespace.
+/// Keeping this kernel shared prevents internal offer retries from drifting
+/// from the repository's established idempotency contract.
+pub(crate) fn hash_idempotency_request(value: &Value) -> Result<String, InitiationError> {
+    Ok(sha256(format!(
+        "{IDEMPOTENCY_REQUEST_PREFIX}{}",
+        canonical_json(value)?
+    )))
 }
 
 pub fn normalize_idempotency_key(value: Option<&str>) -> Result<Option<String>, InitiationError> {

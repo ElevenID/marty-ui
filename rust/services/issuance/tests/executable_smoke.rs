@@ -338,3 +338,113 @@ async fn executable_canvas_operations_preserve_auth_and_common_transport() {
         "auth-only process must not contact PostgreSQL"
     );
 }
+
+/// Exercise main -> IssuanceServices.with_internal_applications ->
+/// router_with_all_services for every frozen route. Authentication must finish
+/// before PostgreSQL access; lifecycle and persistence are covered separately.
+#[tokio::test]
+async fn executable_mounts_complete_internal_application_contract() {
+    let contract: Value = serde_json::from_str(include_str!(
+        "../../../../contracts/issuance-internal-applications.json"
+    ))
+    .unwrap();
+    let probes = contract["security"]["route_probes"].as_array().unwrap();
+    assert_eq!(probes.len(), 14);
+
+    let (http_reservation, port) = reserve_port();
+    let (_grpc_reservation, grpc_port) = reserve_port();
+    let (database_denied, database_port) = reserve_port();
+    database_denied.set_nonblocking(true).unwrap();
+    let mut command = isolated_smoke_command(port, grpc_port);
+    command
+        .env("ISSUANCE_API_KEY", "synthetic-internal-application-key")
+        .env(
+            "DATABASE_URL",
+            format!(
+                "postgres://synthetic@127.0.0.1:{database_port}/internal_application_auth_test"
+            ),
+        );
+    drop(http_reservation);
+    let child = ChildGuard(
+        command
+            .spawn()
+            .expect("start actual issuance process with internal Applications"),
+    );
+    let client = bounded_http_client(Duration::from_secs(2));
+    assert_eq!(
+        tokio::time::timeout(
+            Duration::from_secs(10),
+            wait_for_health_with_client(port, &client)
+        )
+        .await
+        .expect("bounded native process readiness"),
+        Some(json!({"status":"healthy", "service":"issuance-service"}))
+    );
+
+    let base = format!("http://127.0.0.1:{port}");
+    let mut covered = std::collections::BTreeSet::new();
+    for (index, probe) in probes.iter().enumerate() {
+        let operation = probe["operation"].as_str().unwrap();
+        let method = probe["method"].as_str().unwrap();
+        let path = probe["path"].as_str().unwrap();
+        assert!(covered.insert(operation));
+        for wrong_key in [false, true] {
+            let request_id = format!("internal-application-auth-{index}-{wrong_key}");
+            let mut request = client
+                .request(method.parse().unwrap(), format!("{base}{path}"))
+                .header("origin", "https://wallet.example")
+                .header("x-request-id", &request_id)
+                .header("x-organization-id", "org-123");
+            if let Some(body) = probe.get("json") {
+                request = request.json(body);
+            }
+            if wrong_key {
+                request = request.header("x-api-key", "synthetic-wrong-key");
+            }
+            let response = request.send().await.expect("owned process auth response");
+            assert_eq!(response.status(), 401, "route {operation}");
+            assert_eq!(response.headers()["x-request-id"], request_id.as_str());
+            assert_eq!(
+                response.headers()["access-control-allow-origin"],
+                "https://wallet.example"
+            );
+            assert_eq!(
+                response.headers()["access-control-allow-credentials"],
+                "true"
+            );
+            assert_eq!(response.headers()["vary"], "Origin");
+            assert_eq!(
+                response.json::<Value>().await.unwrap(),
+                json!({"detail": if wrong_key { "Invalid API Key" } else { "X-API-Key header is missing" }})
+            );
+        }
+    }
+    assert_eq!(covered.len(), 14);
+
+    let missing = client
+        .get(format!(
+            "{base}/internal/applications/application-1/unknown"
+        ))
+        .header("x-api-key", "synthetic-internal-application-key")
+        .header("origin", "https://wallet.example")
+        .header("x-request-id", "internal-application-negative-route")
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(missing.status(), 404);
+    assert_eq!(
+        missing.headers()["x-request-id"],
+        "internal-application-negative-route"
+    );
+    assert_eq!(
+        missing.headers()["access-control-allow-origin"],
+        "https://wallet.example"
+    );
+
+    drop(child);
+    assert_eq!(
+        database_denied.accept().unwrap_err().kind(),
+        std::io::ErrorKind::WouldBlock,
+        "auth-only process must not contact PostgreSQL"
+    );
+}

@@ -12,8 +12,8 @@ use crate::{
         CanvasAwardCandidateApprovalError, CanvasAwardCandidateApprover,
     },
     canvas_issuance_guard::{
-        credential_snapshot, evaluate_canvas_approval_snapshot, resolved_issuer_matches,
-        CanvasGuardConfig, CanvasGuardSnapshot,
+        credential_snapshot, evaluate_canvas_approval_snapshot, evaluate_canvas_offer_snapshot,
+        resolved_issuer_matches, CanvasGuardConfig, CanvasGuardSnapshot,
     },
     canvas_lti_bootstrap::CanvasLtiBootstrapApplication,
     canvas_lti_experience::CanvasLtiExperienceSessionContext,
@@ -21,6 +21,10 @@ use crate::{
     credential::{
         remote_credential_format, CredentialIssuanceError, CredentialTransaction,
         CredentialTransactionStatus, IssuerContext, IssuerContextResolver,
+    },
+    internal_application_diagnostics::{
+        warn_application_failure, InternalApplicationDiagnosticCategory,
+        InternalApplicationDiagnosticStage,
     },
 };
 
@@ -145,7 +149,7 @@ pub trait CanvasApplicationApprovalRepository: Send + Sync {
         transaction: &CredentialTransaction,
         snapshot: &CanvasApplicationApprovalSnapshot,
         reviewer_id: &str,
-        review_notes: &str,
+        review_notes: Option<&str>,
         reviewed_at: chrono::DateTime<chrono::Utc>,
     ) -> Result<String, CanvasApplicationApprovalError>;
 }
@@ -282,6 +286,28 @@ impl CanvasApplicationApprovalService {
         application_id: &str,
         review_notes: Option<&str>,
     ) -> Result<CanvasApplicationApprovalResult, CanvasApplicationApprovalError> {
+        self.approve_as(
+            organization_id,
+            application_id,
+            CANVAS_MANAGEMENT_REVIEWER_ID,
+            Some(match review_notes {
+                None | Some("") => DEFAULT_CANVAS_MANAGEMENT_REVIEW_NOTES,
+                Some(notes) => notes,
+            }),
+        )
+        .await
+    }
+
+    /// Approve through the same Canvas readiness and atomic reservation path
+    /// while allowing another authenticated management boundary to retain its
+    /// own server-owned reviewer identity and nullable review note.
+    pub async fn approve_as(
+        &self,
+        organization_id: &str,
+        application_id: &str,
+        reviewer_id: &str,
+        review_notes: Option<&str>,
+    ) -> Result<CanvasApplicationApprovalResult, CanvasApplicationApprovalError> {
         let snapshot = self
             .repository
             .load_application_approval_snapshot(organization_id, application_id)
@@ -296,21 +322,35 @@ impl CanvasApplicationApprovalService {
             policy_set: None,
         };
         let now = self.clock.now();
-        evaluate_canvas_approval_snapshot(
+        if let Err(code) = evaluate_canvas_approval_snapshot(
             organization_id,
             application_id,
             &guard,
             &self.guard_config,
             now,
-        )
-        .map_err(map_manual_guard_error)?;
+        ) {
+            let (error, category) = classify_manual_guard_error(code);
+            warn_application_failure(
+                InternalApplicationDiagnosticStage::CanvasApprovalReadiness,
+                category,
+                application_id,
+            );
+            return Err(error);
+        }
         let mut transaction = plan_canvas_approval_transaction(
             &snapshot.application,
             &snapshot.binding,
             &self.seeds.generate(),
             now,
         )
-        .ok_or(CanvasApplicationApprovalError::NotReady)?;
+        .ok_or_else(|| {
+            warn_application_failure(
+                InternalApplicationDiagnosticStage::CanvasApprovalReadiness,
+                InternalApplicationDiagnosticCategory::TransactionPlanUnavailable,
+                application_id,
+            );
+            CanvasApplicationApprovalError::NotReady
+        })?;
         if let Some(existing) = snapshot.existing_transaction.as_ref() {
             transaction = reuse_canvas_approval_transaction(existing, &transaction, true);
         }
@@ -322,24 +362,91 @@ impl CanvasApplicationApprovalService {
             &mut transaction,
         )
         .await
-        .map_err(|_| CanvasApplicationApprovalError::NotReady)?;
+        .map_err(|error| {
+            warn_application_failure(
+                InternalApplicationDiagnosticStage::CanvasApprovalIssuerContext,
+                issuer_diagnostic_category(&error),
+                application_id,
+            );
+            CanvasApplicationApprovalError::NotReady
+        })?;
         let issuance_transaction_id = self
             .repository
-            .reserve_application_issuance(
-                &transaction,
-                &snapshot,
-                CANVAS_MANAGEMENT_REVIEWER_ID,
-                match review_notes {
-                    None | Some("") => DEFAULT_CANVAS_MANAGEMENT_REVIEW_NOTES,
-                    Some(notes) => notes,
-                },
-                now,
-            )
+            .reserve_application_issuance(&transaction, &snapshot, reviewer_id, review_notes, now)
             .await?;
         Ok(CanvasApplicationApprovalResult {
             application_id: application_id.to_owned(),
             issuance_transaction_id,
         })
+    }
+
+    /// Prepare an already-approved Canvas application for a wallet-offer
+    /// refresh. This replays the same ownership, rollout, binding, snapshot,
+    /// readiness and remote-KMS checks as approval while retaining the
+    /// approved lifecycle state required by the public offer route.
+    pub async fn prepare_offer(
+        &self,
+        organization_id: &str,
+        application_id: &str,
+    ) -> Result<CredentialTransaction, CanvasApplicationApprovalError> {
+        let snapshot = self
+            .repository
+            .load_application_approval_snapshot(organization_id, application_id)
+            .await?
+            .ok_or(CanvasApplicationApprovalError::NotFound)?;
+        let guard = CanvasGuardSnapshot {
+            application: Value::Object(snapshot.application.clone()),
+            application_template: Value::Object(snapshot.application_template.clone()),
+            platform: Value::Object(snapshot.platform.clone()),
+            binding: Value::Object(snapshot.binding.clone()),
+            evidence_facts: Vec::new(),
+            policy_set: None,
+        };
+        let now = self.clock.now();
+        if let Err(code) = evaluate_canvas_offer_snapshot(
+            organization_id,
+            application_id,
+            &guard,
+            &self.guard_config,
+            now,
+        ) {
+            let (error, category) = classify_manual_guard_error(code);
+            warn_application_failure(
+                InternalApplicationDiagnosticStage::CanvasOfferReadiness,
+                category,
+                application_id,
+            );
+            return Err(error);
+        }
+        let mut transaction = plan_canvas_offer_transaction(
+            &snapshot.application,
+            &snapshot.binding,
+            &self.seeds.generate(),
+            now,
+        )
+        .ok_or_else(|| {
+            warn_application_failure(
+                InternalApplicationDiagnosticStage::CanvasOfferReadiness,
+                InternalApplicationDiagnosticCategory::TransactionPlanUnavailable,
+                application_id,
+            );
+            CanvasApplicationApprovalError::NotReady
+        })?;
+        resolve_and_attach_canvas_issuer(
+            self.issuer_resolver.as_ref(),
+            &snapshot.binding,
+            &mut transaction,
+        )
+        .await
+        .map_err(|error| {
+            warn_application_failure(
+                InternalApplicationDiagnosticStage::CanvasOfferIssuerContext,
+                issuer_diagnostic_category(&error),
+                application_id,
+            );
+            CanvasApplicationApprovalError::NotReady
+        })?;
+        Ok(transaction)
     }
 }
 
@@ -401,11 +508,30 @@ pub fn plan_canvas_approval_transaction(
     seed: &CanvasAwardApprovalSeed,
     now: chrono::DateTime<chrono::Utc>,
 ) -> Option<CredentialTransaction> {
+    plan_canvas_management_transaction(application, binding, seed, now, "pending")
+}
+
+pub fn plan_canvas_offer_transaction(
+    application: &Map<String, Value>,
+    binding: &Map<String, Value>,
+    seed: &CanvasAwardApprovalSeed,
+    now: chrono::DateTime<chrono::Utc>,
+) -> Option<CredentialTransaction> {
+    plan_canvas_management_transaction(application, binding, seed, now, "approved")
+}
+
+fn plan_canvas_management_transaction(
+    application: &Map<String, Value>,
+    binding: &Map<String, Value>,
+    seed: &CanvasAwardApprovalSeed,
+    now: chrono::DateTime<chrono::Utc>,
+    required_status: &str,
+) -> Option<CredentialTransaction> {
     let organization_id = text(application.get("organization_id"));
     let application_id = text(application.get("id"));
     if organization_id.is_empty()
         || application_id.is_empty()
-        || !text(application.get("status")).eq_ignore_ascii_case("pending")
+        || !text(application.get("status")).eq_ignore_ascii_case(required_status)
     {
         return None;
     }
@@ -463,6 +589,7 @@ pub fn plan_canvas_approval_transaction(
             issuer_did,
             issuer_algorithm,
         },
+        required_status,
     )
 }
 
@@ -515,6 +642,7 @@ pub(crate) fn plan_legacy_canvas_approval_transaction(
             issuer_did: None,
             issuer_algorithm: None,
         },
+        "pending",
     )
 }
 
@@ -526,6 +654,7 @@ pub(crate) fn reuse_canvas_approval_transaction(
     let mut transaction = existing.clone();
     transaction.delivery_mode = planned.delivery_mode.clone();
     if strict_context {
+        transaction.credential_template_id = planned.credential_template_id.clone();
         transaction.credential_type = planned.credential_type.clone();
         transaction.credential_payload_format = planned.credential_payload_format.clone();
         transaction.revocation_profile_id = planned.revocation_profile_id.clone();
@@ -567,12 +696,13 @@ fn build_canvas_approval_transaction(
     now: chrono::DateTime<chrono::Utc>,
     claims: Map<String, Value>,
     context: CanvasApprovalCredentialContext,
+    required_status: &str,
 ) -> Option<CredentialTransaction> {
     let organization_id = text(application.get("organization_id"));
     let application_id = text(application.get("id"));
     if organization_id.is_empty()
         || application_id.is_empty()
-        || !text(application.get("status")).eq_ignore_ascii_case("pending")
+        || !text(application.get("status")).eq_ignore_ascii_case(required_status)
         || credential_template_id.is_empty()
     {
         return None;
@@ -675,12 +805,42 @@ pub(crate) async fn resolve_and_attach_required_issuer(
     Ok(())
 }
 
-fn map_manual_guard_error(code: &'static str) -> CanvasApplicationApprovalError {
+fn classify_manual_guard_error(
+    code: &'static str,
+) -> (
+    CanvasApplicationApprovalError,
+    InternalApplicationDiagnosticCategory,
+) {
     match code {
-        "canvas_application_not_found" => CanvasApplicationApprovalError::NotFound,
-        "canvas_rollout_disabled" => CanvasApplicationApprovalError::RolloutDisabled,
-        "canvas_application_invalid_status" => CanvasApplicationApprovalError::InvalidStatus,
-        _ => CanvasApplicationApprovalError::NotReady,
+        "canvas_application_not_found" => (
+            CanvasApplicationApprovalError::NotFound,
+            InternalApplicationDiagnosticCategory::NotFound,
+        ),
+        "canvas_rollout_disabled" => (
+            CanvasApplicationApprovalError::RolloutDisabled,
+            InternalApplicationDiagnosticCategory::RolloutDisabled,
+        ),
+        "canvas_application_invalid_status" => (
+            CanvasApplicationApprovalError::InvalidStatus,
+            InternalApplicationDiagnosticCategory::InvalidStatus,
+        ),
+        _ => (
+            CanvasApplicationApprovalError::NotReady,
+            InternalApplicationDiagnosticCategory::NotReady,
+        ),
+    }
+}
+
+pub(crate) const fn issuer_diagnostic_category(
+    error: &CanvasAwardCandidateApprovalError,
+) -> InternalApplicationDiagnosticCategory {
+    match error {
+        CanvasAwardCandidateApprovalError::Unavailable => {
+            InternalApplicationDiagnosticCategory::DependencyUnavailable
+        }
+        CanvasAwardCandidateApprovalError::ReadinessDrift => {
+            InternalApplicationDiagnosticCategory::IssuerContextInvalid
+        }
     }
 }
 
@@ -811,6 +971,14 @@ async fn typed_remote_failure_preserves_approval_operation_classification() {
                 CanvasAwardCandidateApprovalError::ReadinessDrift
             }
         );
+        assert_eq!(
+            issuer_diagnostic_category(&actual),
+            if operation == SigningOperation::Sign {
+                InternalApplicationDiagnosticCategory::DependencyUnavailable
+            } else {
+                InternalApplicationDiagnosticCategory::IssuerContextInvalid
+            }
+        );
         peer.close().await;
     }
 }
@@ -910,5 +1078,87 @@ mod legacy_planner_tests {
         assert_eq!(transaction.revocation_profile_id, None);
         assert_eq!(transaction.validity_days, 365);
         assert!(!transaction.renewable);
+    }
+
+    #[test]
+    fn offer_planner_accepts_only_approved_canvas_snapshot_and_keeps_strict_context() {
+        let application = Map::from_iter([
+            ("id".to_owned(), json!("application-1")),
+            ("organization_id".to_owned(), json!("org-1")),
+            ("status".to_owned(), json!("approved")),
+            (
+                "applicant_identifier".to_owned(),
+                json!("learner@example.test"),
+            ),
+            ("form_data".to_owned(), json!({"name":"Learner"})),
+            (
+                "integration_context".to_owned(),
+                json!({"delivery_mode":"wallet_plus_canvas_mirror"}),
+            ),
+        ]);
+        let binding = Map::from_iter([
+            (
+                "credential_template_id".to_owned(),
+                json!("credential-template-1"),
+            ),
+            (
+                "credential_template_snapshot".to_owned(),
+                json!({
+                    "id":"credential-template-1",
+                    "organization_id":"org-1",
+                    "status":"ACTIVE",
+                    "credential_type":"OpenBadgeCredential",
+                    "credential_payload_format":"w3c_vcdm_v2_sd_jwt",
+                    "revocation_profile_id":"revocation-profile-1",
+                    "issuer_did":"did:web:issuer.example:org-1",
+                    "issuer_algorithm":"ES256",
+                    "wallet_configs":[{"wallet_id":"wallet-1"}],
+                    "selective_disclosure_fields":["email"],
+                    "zk_predicate_claims":["age"],
+                    "validity_rules":{
+                        "default_validity_days":365,
+                        "renewable":true,
+                        "renewal_window_days":30
+                    },
+                    "vct":"https://credentials.example/employee"
+                }),
+            ),
+        ]);
+        let seed = CanvasAwardApprovalSeed {
+            transaction_id: "transaction-1".to_owned(),
+            pre_authorized_code: "code-1".to_owned(),
+        };
+
+        assert!(
+            plan_canvas_approval_transaction(&application, &binding, &seed, Utc::now()).is_none()
+        );
+        let transaction = plan_canvas_offer_transaction(&application, &binding, &seed, Utc::now())
+            .expect("approved Canvas offer snapshot");
+        assert_eq!(
+            transaction.credential_type.as_deref(),
+            Some("OpenBadgeCredential")
+        );
+        assert_eq!(
+            transaction.revocation_profile_id.as_deref(),
+            Some("revocation-profile-1")
+        );
+        assert_eq!(
+            transaction.wallet_configs,
+            vec![json!({"wallet_id":"wallet-1"})]
+        );
+        assert_eq!(transaction.delivery_mode, "wallet_plus_canvas_mirror");
+        assert_eq!(
+            transaction.claims.get("_vct"),
+            Some(&json!("https://credentials.example/employee"))
+        );
+
+        let mut existing = transaction.clone();
+        existing.id = "existing-transaction".to_owned();
+        existing.pre_authorized_code = "existing-code".to_owned();
+        existing.credential_template_id = "superseded-template".to_owned();
+        let reused = reuse_canvas_approval_transaction(&existing, &transaction, true);
+        assert_eq!(reused.id, "existing-transaction");
+        assert_eq!(reused.pre_authorized_code, "existing-code");
+        assert_eq!(reused.credential_template_id, "credential-template-1");
     }
 }

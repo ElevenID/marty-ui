@@ -379,6 +379,43 @@ pub fn evaluate_canvas_approval_snapshot(
     config: &CanvasGuardConfig,
     now: DateTime<Utc>,
 ) -> Result<(), &'static str> {
+    evaluate_canvas_management_snapshot(
+        organization_id,
+        application_id,
+        snapshot,
+        config,
+        now,
+        "pending",
+    )
+}
+
+/// Re-evaluate the same Canvas ownership and readiness snapshot when an
+/// already-approved application refreshes its wallet offer.
+pub fn evaluate_canvas_offer_snapshot(
+    organization_id: &str,
+    application_id: &str,
+    snapshot: &CanvasGuardSnapshot,
+    config: &CanvasGuardConfig,
+    now: DateTime<Utc>,
+) -> Result<(), &'static str> {
+    evaluate_canvas_management_snapshot(
+        organization_id,
+        application_id,
+        snapshot,
+        config,
+        now,
+        "approved",
+    )
+}
+
+fn evaluate_canvas_management_snapshot(
+    organization_id: &str,
+    application_id: &str,
+    snapshot: &CanvasGuardSnapshot,
+    config: &CanvasGuardConfig,
+    now: DateTime<Utc>,
+    required_status: &str,
+) -> Result<(), &'static str> {
     let application = object(&snapshot.application, "canvas_application_not_found")?;
     let canvas = application
         .get("integration_context")
@@ -394,7 +431,7 @@ pub fn evaluate_canvas_approval_snapshot(
     {
         return Err("canvas_application_not_found");
     }
-    if !text(application.get("status")).eq_ignore_ascii_case("pending") {
+    if !text(application.get("status")).eq_ignore_ascii_case(required_status) {
         return Err("canvas_application_invalid_status");
     }
     let platform_id = text(canvas.get("canvas_platform_id"));

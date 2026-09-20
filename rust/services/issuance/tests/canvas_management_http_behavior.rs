@@ -79,7 +79,7 @@ struct MemoryRepository {
     validation_lookups: Option<Arc<Mutex<Vec<Value>>>>,
 }
 
-type ApprovalReservation = (CredentialTransaction, String, String, DateTime<Utc>);
+type ApprovalReservation = (CredentialTransaction, String, Option<String>, DateTime<Utc>);
 
 struct ApprovalRepository {
     snapshot: Mutex<Option<CanvasApplicationApprovalSnapshot>>,
@@ -129,7 +129,7 @@ impl CanvasApplicationApprovalRepository for ApprovalRepository {
         transaction: &CredentialTransaction,
         _snapshot: &CanvasApplicationApprovalSnapshot,
         reviewer_id: &str,
-        review_notes: &str,
+        review_notes: Option<&str>,
         reviewed_at: DateTime<Utc>,
     ) -> Result<String, CanvasApplicationApprovalError> {
         self.reservations
@@ -138,7 +138,7 @@ impl CanvasApplicationApprovalRepository for ApprovalRepository {
             .push((
                 transaction.clone(),
                 reviewer_id.to_owned(),
-                review_notes.to_owned(),
+                review_notes.map(str::to_owned),
                 reviewed_at,
             ));
         self.result.lock().expect("approval result").clone()
@@ -1135,7 +1135,21 @@ fn app_with_approval(
         Arc::new(SuccessfulProbe),
     )
     .with_integration_secret_repository(management_repository);
-    let approval = CanvasApplicationApprovalService::new(
+    let approval = approval_service(approval_repository, issuer_result, rollout_enabled);
+    router_with_canvas_management(
+        runtime.state(),
+        StaticDiscoveryDocuments::new("https://issuer.example.edu", "Issuer"),
+        TransportPolicy::new(Vec::new()),
+        CanvasPlatformManagementHttpService::new(management).with_application_approval(approval),
+    )
+}
+
+fn approval_service(
+    approval_repository: Arc<ApprovalRepository>,
+    issuer_result: Result<IssuerContext, CredentialIssuanceError>,
+    rollout_enabled: bool,
+) -> CanvasApplicationApprovalService {
+    CanvasApplicationApprovalService::new(
         approval_repository,
         Arc::new(ApprovalIssuerResolver {
             result: issuer_result,
@@ -1148,12 +1162,6 @@ fn app_with_approval(
             evidence_max_age: Duration::from_secs(900),
             readiness_max_age: Duration::from_secs(900),
         },
-    );
-    router_with_canvas_management(
-        runtime.state(),
-        StaticDiscoveryDocuments::new("https://issuer.example.edu", "Issuer"),
-        TransportPolicy::new(Vec::new()),
-        CanvasPlatformManagementHttpService::new(management).with_application_approval(approval),
     )
 }
 
@@ -3257,6 +3265,30 @@ async fn canvas_credentials_validation_is_tenant_bound_read_only_and_safely_proj
 }
 
 #[tokio::test]
+async fn shared_canvas_approval_preserves_calling_boundary_attribution() {
+    let repository = Arc::new(ApprovalRepository {
+        snapshot: Mutex::new(Some(approval_snapshot())),
+        reservations: Mutex::new(Vec::new()),
+        result: Mutex::new(Ok("transaction-approval-1".to_owned())),
+    });
+    let result = approval_service(repository.clone(), Ok(approval_issuer()), true)
+        .approve_as(
+            "org-1",
+            "application-approval-1",
+            "issuance-management-api",
+            None,
+        )
+        .await
+        .expect("shared approval boundary");
+
+    assert_eq!(result.issuance_transaction_id, "transaction-approval-1");
+    let reservations = repository.reservations.lock().expect("reservations");
+    assert_eq!(reservations.len(), 1);
+    assert_eq!(reservations[0].1, "issuance-management-api");
+    assert_eq!(reservations[0].2, None);
+}
+
+#[tokio::test]
 async fn application_approval_uses_canonical_snapshot_and_returns_only_safe_fields() {
     let repository = Arc::new(ApprovalRepository {
         snapshot: Mutex::new(Some(approval_snapshot())),
@@ -3311,8 +3343,8 @@ async fn application_approval_uses_canonical_snapshot_and_returns_only_safe_fiel
     );
     assert_eq!(reviewer_id, "canvas-integration-management-api");
     assert_eq!(
-        review_notes,
-        "Approved through Canvas integration operations"
+        review_notes.as_deref(),
+        Some("Approved through Canvas integration operations")
     );
     assert_eq!(*reviewed_at, approval_now());
 }

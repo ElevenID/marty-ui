@@ -1,0 +1,1268 @@
+//! Internal Application management use cases.
+//!
+//! This layer owns authentication, tenant isolation, lifecycle coordination and
+//! optimistic concurrency. HTTP and PostgreSQL adapters remain deliberately
+//! separate so every transport exercises the same decisions.
+
+use std::sync::Arc;
+
+use async_trait::async_trait;
+use chrono::{DateTime, Utc};
+use serde_json::{Map, Value};
+use thiserror::Error;
+use uuid::Uuid;
+
+use crate::{
+    application_template_domain::{ApplicationTemplateRecord, ApplicationTemplateStatus},
+    internal_application_domain::{
+        derive_applicant_identifier, ApplicationApproval, ApplicationCreate,
+        ApplicationDomainError, ApplicationEvidenceSummaryResponse, ApplicationRecord,
+        ApplicationRejection, ApplicationStatus, EvidenceFactRecord, EvidenceFactResponse,
+        EvidenceReconciliationRequest, EvidenceReconciliationResult, EvidenceSubmission,
+        ExternalEvidenceApiCheckRequest, ExternalEvidenceApiCheckResponse, IssuanceEventRecord,
+    },
+    internal_application_evidence::{
+        InternalApplicationEvidenceCoordinator, InternalApplicationEvidenceError,
+    },
+    internal_application_offer::{
+        InternalApplicationOfferCoordinator, InternalApplicationOfferError, IssuanceOfferResponse,
+    },
+    internal_application_reconciliation::{
+        EvidenceReconciliationError, InternalApplicationReconciler,
+    },
+    internal_external_evidence::find_external_api_requirement,
+    management_security::ManagementSecurity,
+    transaction_reads::TransactionReadError,
+};
+
+const INTERNAL_REVIEWER_ID: &str = "issuance-management-api";
+
+#[derive(Clone, Copy, Debug, Error, Eq, PartialEq)]
+pub enum InternalApplicationRepositoryError {
+    #[error("Application repository is unavailable")]
+    Unavailable,
+}
+
+#[derive(Clone, Debug, Error, Eq, PartialEq)]
+pub enum InternalApplicationApprovalError {
+    #[error("Application approval is temporarily unavailable")]
+    Unavailable,
+    #[error("Credential Template validation is unavailable.")]
+    CredentialTemplateUnavailable,
+    #[error("Credential Template not found.")]
+    CredentialTemplateNotFound,
+    #[error("{0}")]
+    CredentialTemplateInvalid(String),
+    #[error("Revocation Profile validation is unavailable.")]
+    RevocationProfileUnavailable,
+    #[error("Revocation Profile not found.")]
+    RevocationProfileNotFound,
+    #[error("The Revocation Profile belongs to another organization.")]
+    RevocationProfileForeign,
+    #[error("Credential Templates must reference an active Revocation Profile before issuance.")]
+    RevocationProfileInactive,
+    #[error("Issuer signing context is unavailable.")]
+    IssuerContextUnavailable,
+    #[error("Canvas application is not ready for approval")]
+    CanvasNotReady,
+    #[error("Canvas application is not ready for issuance")]
+    CanvasOfferNotReady,
+    #[error("Application lifecycle changed during approval")]
+    ConcurrentChange,
+}
+
+#[async_trait]
+pub trait InternalApplicationApprover: Send + Sync {
+    async fn approve(
+        &self,
+        application: &ApplicationRecord,
+        template: &ApplicationTemplateRecord,
+        reviewer_id: &str,
+        review_notes: Option<&str>,
+    ) -> Result<ApplicationRecord, InternalApplicationApprovalError>;
+}
+
+#[async_trait]
+pub trait InternalApplicationRepository: Send + Sync {
+    /// Load by global template ID so the service can preserve the legacy
+    /// distinction between a missing template and a foreign-tenant template.
+    async fn get_application_template(
+        &self,
+        template_id: &str,
+    ) -> Result<Option<ApplicationTemplateRecord>, InternalApplicationRepositoryError>;
+
+    async fn insert_application(
+        &self,
+        application: &ApplicationRecord,
+    ) -> Result<(), InternalApplicationRepositoryError>;
+
+    async fn list_applications(
+        &self,
+        organization_id: &str,
+        status: Option<ApplicationStatus>,
+        template_id: Option<&str>,
+    ) -> Result<Vec<ApplicationRecord>, InternalApplicationRepositoryError>;
+
+    /// Load by global application ID. Tenant hiding is enforced by the service
+    /// after the row is loaded, matching the frozen Python route.
+    async fn get_application(
+        &self,
+        application_id: &str,
+    ) -> Result<Option<ApplicationRecord>, InternalApplicationRepositoryError>;
+
+    async fn list_evidence_facts_for_application(
+        &self,
+        application_id: &str,
+    ) -> Result<Vec<EvidenceFactRecord>, InternalApplicationRepositoryError>;
+
+    async fn list_events_for_application(
+        &self,
+        application_id: &str,
+    ) -> Result<Vec<IssuanceEventRecord>, InternalApplicationRepositoryError>;
+
+    /// Atomically replace one exact lifecycle revision. A false result means
+    /// the status or `updated_at` changed after the service read the row.
+    async fn replace_application_if_revision(
+        &self,
+        application: &ApplicationRecord,
+        expected_status: ApplicationStatus,
+        expected_updated_at: DateTime<Utc>,
+    ) -> Result<bool, InternalApplicationRepositoryError>;
+}
+
+pub trait InternalApplicationClock: Send + Sync {
+    fn now(&self) -> DateTime<Utc>;
+}
+
+#[derive(Clone, Copy, Debug, Default)]
+pub struct SystemInternalApplicationClock;
+
+impl InternalApplicationClock for SystemInternalApplicationClock {
+    fn now(&self) -> DateTime<Utc> {
+        Utc::now()
+    }
+}
+
+pub trait InternalApplicationIdGenerator: Send + Sync {
+    fn application_id(&self) -> String;
+    fn applicant_identifier(&self) -> String;
+}
+
+#[derive(Clone, Copy, Debug, Default)]
+pub struct UuidInternalApplicationIdGenerator;
+
+impl InternalApplicationIdGenerator for UuidInternalApplicationIdGenerator {
+    fn application_id(&self) -> String {
+        Uuid::new_v4().to_string()
+    }
+
+    fn applicant_identifier(&self) -> String {
+        let random = Uuid::new_v4().simple().to_string();
+        format!("applicant_{}", &random[..8])
+    }
+}
+
+#[derive(Clone)]
+pub struct InternalApplicationService {
+    repository: Arc<dyn InternalApplicationRepository>,
+    clock: Arc<dyn InternalApplicationClock>,
+    ids: Arc<dyn InternalApplicationIdGenerator>,
+    approver: Option<Arc<dyn InternalApplicationApprover>>,
+    offers: Option<Arc<dyn InternalApplicationOfferCoordinator>>,
+    evidence: Option<Arc<dyn InternalApplicationEvidenceCoordinator>>,
+    reconciler: Option<Arc<dyn InternalApplicationReconciler>>,
+    security: ManagementSecurity,
+}
+
+impl std::fmt::Debug for InternalApplicationService {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("InternalApplicationService")
+            .field("security", &self.security)
+            .field("approval_configured", &self.approver.is_some())
+            .field("offers_configured", &self.offers.is_some())
+            .field("evidence_configured", &self.evidence.is_some())
+            .field("reconciliation_configured", &self.reconciler.is_some())
+            .finish_non_exhaustive()
+    }
+}
+
+impl InternalApplicationService {
+    #[must_use]
+    pub fn new(
+        repository: Arc<dyn InternalApplicationRepository>,
+        clock: Arc<dyn InternalApplicationClock>,
+        ids: Arc<dyn InternalApplicationIdGenerator>,
+        management_api_key: Option<&str>,
+    ) -> Self {
+        Self {
+            repository,
+            clock,
+            ids,
+            approver: None,
+            offers: None,
+            evidence: None,
+            reconciler: None,
+            security: ManagementSecurity::new(management_api_key),
+        }
+    }
+
+    #[must_use]
+    pub fn with_approver(mut self, approver: Arc<dyn InternalApplicationApprover>) -> Self {
+        self.approver = Some(approver);
+        self
+    }
+
+    #[must_use]
+    pub fn with_offers(mut self, offers: Arc<dyn InternalApplicationOfferCoordinator>) -> Self {
+        self.offers = Some(offers);
+        self
+    }
+
+    #[must_use]
+    pub fn with_evidence(
+        mut self,
+        evidence: Arc<dyn InternalApplicationEvidenceCoordinator>,
+    ) -> Self {
+        self.evidence = Some(evidence);
+        self
+    }
+
+    #[must_use]
+    pub fn with_reconciler(mut self, reconciler: Arc<dyn InternalApplicationReconciler>) -> Self {
+        self.reconciler = Some(reconciler);
+        self
+    }
+
+    pub async fn create(
+        &self,
+        api_key: Option<&str>,
+        trusted_organization: Option<&str>,
+        request: ApplicationCreate,
+    ) -> Result<ApplicationRecord, InternalApplicationServiceError> {
+        self.security.authorize(api_key)?;
+        let trusted_organization = required_organization(trusted_organization)?;
+        let template = self
+            .repository
+            .get_application_template(&request.application_template_id)
+            .await?
+            .ok_or(InternalApplicationServiceError::TemplateNotFound)?;
+        self.security.require_organization(
+            Some(trusted_organization),
+            &template.organization_id,
+            true,
+        )?;
+        if template.status != ApplicationTemplateStatus::Active {
+            return Err(InternalApplicationServiceError::TemplateInactive);
+        }
+
+        // Python only consumes the fallback UUID when neither a name nor an
+        // email produced an identifier. Preserve that laziness for tests and
+        // for deterministic ID sources.
+        let applicant_identifier = derive_applicant_identifier(&request.applicant_data, "");
+        let generated_identifier = if applicant_identifier.is_empty() {
+            self.ids.applicant_identifier()
+        } else {
+            applicant_identifier
+        };
+        let application = ApplicationRecord::new(
+            self.ids.application_id(),
+            template.organization_id,
+            request,
+            &generated_identifier,
+            self.clock.now(),
+        )?;
+        self.repository.insert_application(&application).await?;
+        Ok(application)
+    }
+
+    pub fn preflight_json_request(
+        &self,
+        api_key: Option<&str>,
+        trusted_organization: Option<&str>,
+    ) -> Result<(), InternalApplicationServiceError> {
+        self.security.authorize(api_key)?;
+        required_organization(trusted_organization)?;
+        Ok(())
+    }
+
+    pub async fn list(
+        &self,
+        api_key: Option<&str>,
+        trusted_organization: Option<&str>,
+        claimed_organization: &str,
+        status: Option<&str>,
+        template_id: Option<&str>,
+    ) -> Result<Vec<ApplicationRecord>, InternalApplicationServiceError> {
+        self.security.authorize(api_key)?;
+        let claimed_organization = claimed_organization.trim();
+        self.security
+            .require_organization(trusted_organization, claimed_organization, true)?;
+        let status = status
+            .filter(|value| !value.is_empty())
+            .map(str::parse)
+            .transpose()
+            .map_err(|_| InternalApplicationServiceError::InvalidStatus)?;
+        let template_id = template_id.filter(|value| !value.is_empty());
+        self.repository
+            .list_applications(claimed_organization, status, template_id)
+            .await
+            .map_err(Into::into)
+    }
+
+    pub async fn get(
+        &self,
+        api_key: Option<&str>,
+        trusted_organization: Option<&str>,
+        application_id: &str,
+    ) -> Result<ApplicationRecord, InternalApplicationServiceError> {
+        self.security.authorize(api_key)?;
+        let trusted_organization = required_organization(trusted_organization)?;
+        self.load_managed(application_id, trusted_organization)
+            .await
+    }
+
+    pub async fn list_evidence_facts(
+        &self,
+        api_key: Option<&str>,
+        trusted_organization: Option<&str>,
+        application_id: &str,
+    ) -> Result<Vec<EvidenceFactRecord>, InternalApplicationServiceError> {
+        self.security.authorize(api_key)?;
+        let trusted_organization = required_organization(trusted_organization)?;
+        self.load_managed(application_id, trusted_organization)
+            .await?;
+        self.repository
+            .list_evidence_facts_for_application(application_id)
+            .await
+            .map_err(Into::into)
+    }
+
+    pub async fn evidence_summary(
+        &self,
+        api_key: Option<&str>,
+        trusted_organization: Option<&str>,
+        application_id: &str,
+    ) -> Result<ApplicationEvidenceSummaryResponse, InternalApplicationServiceError> {
+        self.security.authorize(api_key)?;
+        let trusted_organization = required_organization(trusted_organization)?;
+        let application = self
+            .load_managed(application_id, trusted_organization)
+            .await?;
+        let facts = self
+            .repository
+            .list_evidence_facts_for_application(application_id)
+            .await?;
+        let template = self
+            .repository
+            .get_application_template(&application.application_template_id)
+            .await?;
+        let policy_decision = object_member(&application.integration_context, "policy");
+        let policy_source = policy_decision
+            .as_ref()
+            .and_then(|policy| string_member(policy, "policy_source"));
+        let policy_set_id = policy_decision
+            .as_ref()
+            .and_then(|policy| string_member(policy, "policy_set_id"));
+        let canvas = object_member(&application.integration_context, "canvas");
+        Ok(ApplicationEvidenceSummaryResponse {
+            application_id: application.id,
+            organization_id: application.organization_id,
+            status: application.status.as_str().to_owned(),
+            evidence_facts: facts.iter().map(EvidenceFactResponse::from).collect(),
+            policy_decision,
+            policy_source,
+            policy_set_id,
+            issuance_transaction_id: application.issuance_transaction_id,
+            canvas,
+            available_api_checks: template
+                .as_ref()
+                .map(available_external_api_checks)
+                .unwrap_or_default(),
+        })
+    }
+
+    pub async fn list_issuance_events(
+        &self,
+        api_key: Option<&str>,
+        trusted_organization: Option<&str>,
+        application_id: &str,
+    ) -> Result<Vec<IssuanceEventRecord>, InternalApplicationServiceError> {
+        self.security.authorize(api_key)?;
+        let trusted_organization = required_organization(trusted_organization)?;
+        self.load_managed(application_id, trusted_organization)
+            .await?;
+        self.repository
+            .list_events_for_application(application_id)
+            .await
+            .map_err(Into::into)
+    }
+
+    pub async fn submit_evidence(
+        &self,
+        api_key: Option<&str>,
+        trusted_organization: Option<&str>,
+        application_id: &str,
+        evidence: EvidenceSubmission,
+    ) -> Result<ApplicationRecord, InternalApplicationServiceError> {
+        self.security.authorize(api_key)?;
+        let trusted_organization = required_organization(trusted_organization)?;
+        let mut application = self
+            .load_managed(application_id, trusted_organization)
+            .await?;
+        let expected_updated_at = application.updated_at;
+        application.submit_evidence(evidence, self.clock.now())?;
+        if !self
+            .repository
+            .replace_application_if_revision(
+                &application,
+                ApplicationStatus::Pending,
+                expected_updated_at,
+            )
+            .await?
+        {
+            return Err(InternalApplicationServiceError::EvidenceConflict);
+        }
+        Ok(application)
+    }
+
+    pub async fn reject(
+        &self,
+        api_key: Option<&str>,
+        trusted_organization: Option<&str>,
+        application_id: &str,
+        rejection: ApplicationRejection,
+    ) -> Result<ApplicationRecord, InternalApplicationServiceError> {
+        self.security.authorize(api_key)?;
+        let trusted_organization = required_organization(trusted_organization)?;
+        let mut application = self
+            .load_managed(application_id, trusted_organization)
+            .await?;
+        let expected_updated_at = application.updated_at;
+        application.reject(
+            rejection.review_notes,
+            INTERNAL_REVIEWER_ID,
+            self.clock.now(),
+        )?;
+        if !self
+            .repository
+            .replace_application_if_revision(
+                &application,
+                ApplicationStatus::Pending,
+                expected_updated_at,
+            )
+            .await?
+        {
+            return Err(InternalApplicationServiceError::RejectionConflict);
+        }
+        Ok(application)
+    }
+
+    pub async fn approve(
+        &self,
+        api_key: Option<&str>,
+        trusted_organization: Option<&str>,
+        application_id: &str,
+        approval: ApplicationApproval,
+    ) -> Result<ApplicationRecord, InternalApplicationServiceError> {
+        self.security.authorize(api_key)?;
+        let trusted_organization = required_organization(trusted_organization)?;
+        let application = self
+            .load_managed(application_id, trusted_organization)
+            .await?;
+        application.ensure_approvable()?;
+        let template = self
+            .repository
+            .get_application_template(&application.application_template_id)
+            .await?
+            .filter(|template| template.organization_id == application.organization_id)
+            .ok_or(InternalApplicationServiceError::MissingApprovalTemplateBinding)?;
+        if template
+            .credential_template_id
+            .as_deref()
+            .map(str::trim)
+            .is_none_or(str::is_empty)
+        {
+            return Err(InternalApplicationServiceError::MissingApprovalTemplateBinding);
+        }
+        self.approver
+            .as_ref()
+            .ok_or(InternalApplicationApprovalError::Unavailable)?
+            .approve(
+                &application,
+                &template,
+                INTERNAL_REVIEWER_ID,
+                approval.review_notes.as_deref(),
+            )
+            .await
+            .map_err(Into::into)
+    }
+
+    pub async fn generate_issuance_offer(
+        &self,
+        api_key: Option<&str>,
+        trusted_organization: Option<&str>,
+        application_id: &str,
+    ) -> Result<IssuanceOfferResponse, InternalApplicationServiceError> {
+        self.security.authorize(api_key)?;
+        let trusted_organization = required_organization(trusted_organization)?;
+        let application = self
+            .load_managed(application_id, trusted_organization)
+            .await?;
+        if application.status != ApplicationStatus::Approved {
+            return Err(InternalApplicationServiceError::OfferRequiresApproved(
+                application.status.as_str().to_owned(),
+            ));
+        }
+        let template = self
+            .repository
+            .get_application_template(&application.application_template_id)
+            .await?
+            .filter(|template| template.organization_id == application.organization_id);
+        self.offers
+            .as_ref()
+            .ok_or(InternalApplicationOfferError::Unavailable)?
+            .generate(&application, template.as_ref())
+            .await
+            .map_err(Into::into)
+    }
+
+    pub async fn get_issuance_offer(
+        &self,
+        api_key: Option<&str>,
+        trusted_organization: Option<&str>,
+        application_id: &str,
+    ) -> Result<IssuanceOfferResponse, InternalApplicationServiceError> {
+        self.security.authorize(api_key)?;
+        let trusted_organization = required_organization(trusted_organization)?;
+        let application = self
+            .load_managed(application_id, trusted_organization)
+            .await?;
+        if application.status != ApplicationStatus::Approved {
+            return Err(InternalApplicationServiceError::OfferNotAvailable);
+        }
+        let template = self
+            .repository
+            .get_application_template(&application.application_template_id)
+            .await?
+            .filter(|template| template.organization_id == application.organization_id);
+        self.offers
+            .as_ref()
+            .ok_or(InternalApplicationOfferError::Unavailable)?
+            .get(&application, template.as_ref())
+            .await
+            .map_err(Into::into)
+    }
+
+    pub async fn run_external_evidence_api_check(
+        &self,
+        api_key: Option<&str>,
+        trusted_organization: Option<&str>,
+        application_id: &str,
+        check_id: &str,
+        request: ExternalEvidenceApiCheckRequest,
+    ) -> Result<ExternalEvidenceApiCheckResponse, InternalApplicationServiceError> {
+        self.security.authorize(api_key)?;
+        let trusted_organization = required_organization(trusted_organization)?;
+        let application = self
+            .load_managed(application_id, trusted_organization)
+            .await?;
+        if !matches!(
+            application.status,
+            ApplicationStatus::Pending | ApplicationStatus::Approved
+        ) {
+            return Err(InternalApplicationServiceError::ExternalCheckInvalidStatus(
+                application_status_debug(application.status),
+            ));
+        }
+        let template = self
+            .repository
+            .get_application_template(&application.application_template_id)
+            .await?
+            .filter(|template| template.organization_id == application.organization_id)
+            .ok_or(InternalApplicationServiceError::TemplateNotFound)?;
+        let requirement = find_external_api_requirement(&template, check_id)
+            .ok_or(InternalApplicationServiceError::ExternalCheckNotFound)?;
+        self.evidence
+            .as_ref()
+            .ok_or(InternalApplicationEvidenceError::Repository(
+                crate::internal_application_evidence::InternalApplicationEvidenceRepositoryError::Unavailable,
+            ))?
+            .run_external_check(application, template, requirement, request)
+            .await
+            .map_err(Into::into)
+    }
+
+    pub async fn reconcile_evidence(
+        &self,
+        api_key: Option<&str>,
+        trusted_organization: Option<&str>,
+        request: EvidenceReconciliationRequest,
+    ) -> Result<EvidenceReconciliationResult, InternalApplicationServiceError> {
+        self.security.authorize(api_key)?;
+        let trusted_organization = required_organization(trusted_organization)?;
+        let organization_id = request.organization_id.trim();
+        self.security
+            .require_organization(Some(trusted_organization), organization_id, true)?;
+        if let Some(application_id) = request
+            .application_id
+            .as_deref()
+            .filter(|value| !value.is_empty())
+        {
+            self.load_managed(application_id, trusted_organization)
+                .await?;
+        }
+        self.reconciler
+            .as_ref()
+            .ok_or(EvidenceReconciliationError::Repository(
+                crate::internal_application_reconciliation::EvidenceReconciliationRepositoryError::Unavailable,
+            ))?
+            .reconcile(
+                organization_id,
+                request.application_id.as_deref().filter(|value| !value.is_empty()),
+                reconciliation_limit(request.limit),
+                request.dry_run,
+                request.issue_on_permit,
+            )
+            .await
+            .map_err(Into::into)
+    }
+
+    pub async fn evidence_reconciliation_report(
+        &self,
+        api_key: Option<&str>,
+        trusted_organization: Option<&str>,
+        organization_id: &str,
+        limit: i64,
+    ) -> Result<EvidenceReconciliationResult, InternalApplicationServiceError> {
+        self.security.authorize(api_key)?;
+        let organization_id = organization_id.trim();
+        self.security
+            .require_organization(trusted_organization, organization_id, true)?;
+        self.reconciler
+            .as_ref()
+            .ok_or(EvidenceReconciliationError::Repository(
+                crate::internal_application_reconciliation::EvidenceReconciliationRepositoryError::Unavailable,
+            ))?
+            .reconcile(
+                organization_id,
+                None,
+                reconciliation_limit(limit),
+                true,
+                true,
+            )
+            .await
+            .map_err(Into::into)
+    }
+
+    async fn load_managed(
+        &self,
+        application_id: &str,
+        trusted_organization: &str,
+    ) -> Result<ApplicationRecord, InternalApplicationServiceError> {
+        self.repository
+            .get_application(application_id)
+            .await?
+            .filter(|application| application.organization_id == trusted_organization)
+            .ok_or(InternalApplicationServiceError::ApplicationNotFound)
+    }
+}
+
+fn object_member(source: &Map<String, Value>, name: &str) -> Option<Map<String, Value>> {
+    source.get(name).and_then(Value::as_object).cloned()
+}
+
+fn string_member(source: &Map<String, Value>, name: &str) -> Option<String> {
+    source.get(name).and_then(Value::as_str).map(str::to_owned)
+}
+
+fn available_external_api_checks(template: &ApplicationTemplateRecord) -> Vec<Map<String, Value>> {
+    template
+        .evidence_requirements
+        .iter()
+        .filter_map(Value::as_object)
+        .filter_map(|requirement| {
+            let evidence_type = string_member(requirement, "evidence_type")?.to_uppercase();
+            if !matches!(evidence_type.as_str(), "EXTERNAL_API" | "EXTERNAL_FACT") {
+                return None;
+            }
+            let api = requirement.get("api").and_then(Value::as_object);
+            if evidence_type == "EXTERNAL_API" && api.is_none() {
+                return None;
+            }
+            let check_id = ["evidence_id", "check_id", "id", "name"]
+                .into_iter()
+                .find_map(|name| {
+                    string_member(requirement, name).filter(|value| !value.is_empty())
+                })?;
+            let description = string_member(requirement, "description")
+                .filter(|value| !value.is_empty())
+                .or_else(|| string_member(requirement, "label").filter(|value| !value.is_empty()))
+                .unwrap_or_else(|| check_id.clone());
+            let provider = string_member(requirement, "provider")
+                .filter(|value| !value.is_empty())
+                .unwrap_or_else(|| "external_api".to_owned());
+            let fact_type = string_member(requirement, "fact_type").unwrap_or_default();
+            let verification_method = string_member(requirement, "verification_method")
+                .filter(|value| !value.is_empty())
+                .unwrap_or_else(|| "EXTERNAL_API_RESPONSE".to_owned());
+            let api_method = api
+                .and_then(|api| string_member(api, "method"))
+                .filter(|value| !value.is_empty())
+                .unwrap_or_else(|| "POST".to_owned())
+                .to_uppercase();
+            let required = !matches!(requirement.get("required"), Some(Value::Bool(false)));
+            let auto_issue_on_permit = matches!(
+                requirement.get("auto_issue_on_permit"),
+                Some(Value::Bool(true))
+            );
+            let scope = requirement
+                .get("scope")
+                .and_then(Value::as_object)
+                .cloned()
+                .unwrap_or_default();
+            Some(Map::from_iter([
+                ("check_id".to_owned(), Value::String(check_id)),
+                ("evidence_type".to_owned(), Value::String(evidence_type)),
+                ("description".to_owned(), Value::String(description)),
+                ("provider".to_owned(), Value::String(provider)),
+                ("fact_type".to_owned(), Value::String(fact_type)),
+                ("required".to_owned(), Value::Bool(required)),
+                (
+                    "verification_method".to_owned(),
+                    Value::String(verification_method),
+                ),
+                (
+                    "auto_issue_on_permit".to_owned(),
+                    Value::Bool(auto_issue_on_permit),
+                ),
+                ("api_method".to_owned(), Value::String(api_method)),
+                ("scope".to_owned(), Value::Object(scope)),
+            ]))
+        })
+        .collect()
+}
+
+#[derive(Clone, Debug, Error, Eq, PartialEq)]
+pub enum InternalApplicationServiceError {
+    #[error(transparent)]
+    Security(#[from] TransactionReadError),
+    #[error(transparent)]
+    Repository(#[from] InternalApplicationRepositoryError),
+    #[error(transparent)]
+    Approval(#[from] InternalApplicationApprovalError),
+    #[error(transparent)]
+    Offer(#[from] InternalApplicationOfferError),
+    #[error(transparent)]
+    Evidence(#[from] InternalApplicationEvidenceError),
+    #[error(transparent)]
+    Reconciliation(#[from] EvidenceReconciliationError),
+    #[error(transparent)]
+    Domain(#[from] ApplicationDomainError),
+    #[error("Invalid application status")]
+    InvalidStatus,
+    #[error("Application template not found")]
+    TemplateNotFound,
+    #[error("Application template must be active")]
+    TemplateInactive,
+    #[error("Application not found")]
+    ApplicationNotFound,
+    #[error("Application template missing credential template ID")]
+    MissingApprovalTemplateBinding,
+    #[error("Application lifecycle changed during evidence submission")]
+    EvidenceConflict,
+    #[error("Application lifecycle changed during rejection")]
+    RejectionConflict,
+    #[error("Issuance offer requires APPROVED status; current status is {0}")]
+    OfferRequiresApproved(String),
+    #[error("No issuance offer available for this application")]
+    OfferNotAvailable,
+    #[error("External evidence API check not found on application template")]
+    ExternalCheckNotFound,
+    #[error("Cannot run evidence check for application in ApplicationStatus.{0} status")]
+    ExternalCheckInvalidStatus(String),
+}
+
+fn application_status_debug(status: ApplicationStatus) -> String {
+    match status {
+        ApplicationStatus::Pending => "PENDING",
+        ApplicationStatus::UnderReview => "UNDER_REVIEW",
+        ApplicationStatus::Approved => "APPROVED",
+        ApplicationStatus::Rejected => "REJECTED",
+        ApplicationStatus::Withdrawn => "WITHDRAWN",
+    }
+    .to_owned()
+}
+
+fn required_organization(value: Option<&str>) -> Result<&str, TransactionReadError> {
+    value
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .ok_or(TransactionReadError::TrustedOrganizationRequired)
+}
+
+fn reconciliation_limit(limit: i64) -> usize {
+    limit.clamp(1, 1000) as usize
+}
+
+#[cfg(test)]
+mod tests {
+    use std::sync::{
+        atomic::{AtomicBool, AtomicUsize, Ordering},
+        Mutex,
+    };
+
+    use chrono::{Duration, TimeZone};
+    use serde_json::{json, Map};
+
+    use super::*;
+    use crate::application_template_domain::ApplicationTemplateCreate;
+
+    #[derive(Debug)]
+    struct MemoryRepository {
+        template: Mutex<Option<ApplicationTemplateRecord>>,
+        applications: Mutex<Vec<ApplicationRecord>>,
+        reject_compare_and_swap: AtomicBool,
+    }
+
+    #[async_trait]
+    impl InternalApplicationRepository for MemoryRepository {
+        async fn get_application_template(
+            &self,
+            template_id: &str,
+        ) -> Result<Option<ApplicationTemplateRecord>, InternalApplicationRepositoryError> {
+            Ok(self
+                .template
+                .lock()
+                .expect("template lock")
+                .clone()
+                .filter(|template| template.id == template_id))
+        }
+
+        async fn insert_application(
+            &self,
+            application: &ApplicationRecord,
+        ) -> Result<(), InternalApplicationRepositoryError> {
+            self.applications
+                .lock()
+                .expect("applications lock")
+                .push(application.clone());
+            Ok(())
+        }
+
+        async fn list_applications(
+            &self,
+            organization_id: &str,
+            status: Option<ApplicationStatus>,
+            template_id: Option<&str>,
+        ) -> Result<Vec<ApplicationRecord>, InternalApplicationRepositoryError> {
+            Ok(self
+                .applications
+                .lock()
+                .expect("applications lock")
+                .iter()
+                .filter(|application| application.organization_id == organization_id)
+                .filter(|application| status.is_none_or(|status| application.status == status))
+                .filter(|application| {
+                    template_id.is_none_or(|template_id| {
+                        application.application_template_id == template_id
+                    })
+                })
+                .cloned()
+                .collect())
+        }
+
+        async fn get_application(
+            &self,
+            application_id: &str,
+        ) -> Result<Option<ApplicationRecord>, InternalApplicationRepositoryError> {
+            Ok(self
+                .applications
+                .lock()
+                .expect("applications lock")
+                .iter()
+                .find(|application| application.id == application_id)
+                .cloned())
+        }
+
+        async fn list_evidence_facts_for_application(
+            &self,
+            _application_id: &str,
+        ) -> Result<Vec<EvidenceFactRecord>, InternalApplicationRepositoryError> {
+            Ok(Vec::new())
+        }
+
+        async fn list_events_for_application(
+            &self,
+            _application_id: &str,
+        ) -> Result<Vec<IssuanceEventRecord>, InternalApplicationRepositoryError> {
+            Ok(Vec::new())
+        }
+
+        async fn replace_application_if_revision(
+            &self,
+            application: &ApplicationRecord,
+            expected_status: ApplicationStatus,
+            expected_updated_at: DateTime<Utc>,
+        ) -> Result<bool, InternalApplicationRepositoryError> {
+            if self.reject_compare_and_swap.load(Ordering::SeqCst) {
+                return Ok(false);
+            }
+            let mut applications = self.applications.lock().expect("applications lock");
+            let Some(existing) = applications.iter_mut().find(|candidate| {
+                candidate.id == application.id
+                    && candidate.organization_id == application.organization_id
+                    && candidate.status == expected_status
+                    && candidate.updated_at == expected_updated_at
+            }) else {
+                return Ok(false);
+            };
+            *existing = application.clone();
+            Ok(true)
+        }
+    }
+
+    #[derive(Debug)]
+    struct FixedRuntime {
+        now: DateTime<Utc>,
+        applicant_ids: AtomicUsize,
+    }
+
+    impl InternalApplicationClock for FixedRuntime {
+        fn now(&self) -> DateTime<Utc> {
+            self.now
+        }
+    }
+
+    impl InternalApplicationIdGenerator for FixedRuntime {
+        fn application_id(&self) -> String {
+            "application-1".to_owned()
+        }
+
+        fn applicant_identifier(&self) -> String {
+            self.applicant_ids.fetch_add(1, Ordering::SeqCst);
+            "applicant_deadbeef".to_owned()
+        }
+    }
+
+    fn now() -> DateTime<Utc> {
+        Utc.with_ymd_and_hms(2026, 9, 19, 12, 34, 56)
+            .single()
+            .expect("fixed timestamp")
+    }
+
+    fn template(
+        organization_id: &str,
+        status: ApplicationTemplateStatus,
+    ) -> ApplicationTemplateRecord {
+        let request: ApplicationTemplateCreate = serde_json::from_value(json!({
+            "organization_id": organization_id,
+            "name": "Employee application"
+        }))
+        .expect("template request");
+        let mut template = request
+            .into_record("template-1".to_owned(), now())
+            .expect("template record");
+        template.status = status;
+        template
+    }
+
+    fn fixture(
+        template: Option<ApplicationTemplateRecord>,
+    ) -> (
+        Arc<MemoryRepository>,
+        Arc<FixedRuntime>,
+        InternalApplicationService,
+    ) {
+        let repository = Arc::new(MemoryRepository {
+            template: Mutex::new(template),
+            applications: Mutex::new(Vec::new()),
+            reject_compare_and_swap: AtomicBool::new(false),
+        });
+        let runtime = Arc::new(FixedRuntime {
+            now: now(),
+            applicant_ids: AtomicUsize::new(0),
+        });
+        let service = InternalApplicationService::new(
+            repository.clone(),
+            runtime.clone(),
+            runtime.clone(),
+            Some("secret"),
+        );
+        (repository, runtime, service)
+    }
+
+    fn create_request(applicant_data: Map<String, serde_json::Value>) -> ApplicationCreate {
+        ApplicationCreate {
+            application_template_id: "template-1".to_owned(),
+            applicant_data,
+            integration_context: Map::new(),
+        }
+    }
+
+    async fn create_named(service: &InternalApplicationService) -> ApplicationRecord {
+        service
+            .create(
+                Some("secret"),
+                Some("org-123"),
+                create_request(
+                    json!({"given_name": " Ada ", "family_name": " Lovelace "})
+                        .as_object()
+                        .expect("applicant object")
+                        .clone(),
+                ),
+            )
+            .await
+            .expect("application")
+    }
+
+    #[tokio::test]
+    async fn create_requires_auth_tenant_and_an_active_same_tenant_template() {
+        let (_, _, service) = fixture(Some(template("org-123", ApplicationTemplateStatus::Active)));
+        assert_eq!(
+            service
+                .create(None, Some("org-123"), create_request(Map::new()))
+                .await,
+            Err(InternalApplicationServiceError::Security(
+                TransactionReadError::ApiKeyMissing
+            ))
+        );
+        assert_eq!(
+            service
+                .create(Some("secret"), None, create_request(Map::new()))
+                .await,
+            Err(InternalApplicationServiceError::Security(
+                TransactionReadError::TrustedOrganizationRequired
+            ))
+        );
+
+        let (_, _, missing) = fixture(None);
+        assert_eq!(
+            missing
+                .create(Some("secret"), Some("org-123"), create_request(Map::new()))
+                .await,
+            Err(InternalApplicationServiceError::TemplateNotFound)
+        );
+
+        let (_, _, inactive) = fixture(Some(template("org-123", ApplicationTemplateStatus::Draft)));
+        assert_eq!(
+            inactive
+                .create(Some("secret"), Some("org-123"), create_request(Map::new()))
+                .await,
+            Err(InternalApplicationServiceError::TemplateInactive)
+        );
+
+        let (_, _, foreign) = fixture(Some(template(
+            "org-other",
+            ApplicationTemplateStatus::Active,
+        )));
+        assert_eq!(
+            foreign
+                .create(Some("secret"), Some("org-123"), create_request(Map::new()))
+                .await,
+            Err(InternalApplicationServiceError::Security(
+                TransactionReadError::ResourceNotFound
+            ))
+        );
+    }
+
+    #[tokio::test]
+    async fn create_preserves_identifier_precedence_and_lazy_fallback_generation() {
+        let (_, runtime, service) =
+            fixture(Some(template("org-123", ApplicationTemplateStatus::Active)));
+        let application = create_named(&service).await;
+        assert_eq!(application.applicant_identifier, "Ada_Lovelace");
+        assert_eq!(runtime.applicant_ids.load(Ordering::SeqCst), 0);
+
+        let (_, runtime, service) =
+            fixture(Some(template("org-123", ApplicationTemplateStatus::Active)));
+        let application = service
+            .create(Some("secret"), Some("org-123"), create_request(Map::new()))
+            .await
+            .expect("fallback application");
+        assert_eq!(application.applicant_identifier, "applicant_deadbeef");
+        assert_eq!(runtime.applicant_ids.load(Ordering::SeqCst), 1);
+        assert_eq!(application.expires_at, now() + Duration::days(30));
+    }
+
+    #[tokio::test]
+    async fn list_validates_tenant_and_exact_status_then_applies_filters() {
+        let (_, _, service) = fixture(Some(template("org-123", ApplicationTemplateStatus::Active)));
+        create_named(&service).await;
+
+        assert_eq!(
+            service
+                .list(Some("secret"), Some("org-other"), "org-123", None, None)
+                .await,
+            Err(InternalApplicationServiceError::Security(
+                TransactionReadError::ResourceNotFound
+            ))
+        );
+        assert_eq!(
+            service
+                .list(
+                    Some("secret"),
+                    Some("org-123"),
+                    "org-123",
+                    Some("PENDING"),
+                    None
+                )
+                .await,
+            Err(InternalApplicationServiceError::InvalidStatus)
+        );
+        assert_eq!(
+            service
+                .list(
+                    Some("secret"),
+                    Some("org-123"),
+                    "org-123",
+                    Some("pending"),
+                    Some("template-1")
+                )
+                .await
+                .expect("filtered applications")
+                .len(),
+            1
+        );
+        assert!(service
+            .list(
+                Some("secret"),
+                Some("org-123"),
+                "org-123",
+                Some(""),
+                Some("missing")
+            )
+            .await
+            .expect("empty status means no status filter")
+            .is_empty());
+    }
+
+    #[tokio::test]
+    async fn managed_reads_hide_foreign_and_missing_applications_identically() {
+        let (repository, _, service) =
+            fixture(Some(template("org-123", ApplicationTemplateStatus::Active)));
+        let application = create_named(&service).await;
+        assert_eq!(
+            service
+                .get(Some("secret"), Some("org-123"), &application.id)
+                .await,
+            Ok(application)
+        );
+        assert_eq!(
+            service
+                .get(Some("secret"), Some("org-other"), "application-1")
+                .await,
+            Err(InternalApplicationServiceError::ApplicationNotFound)
+        );
+        repository
+            .applications
+            .lock()
+            .expect("applications lock")
+            .clear();
+        assert_eq!(
+            service
+                .get(Some("secret"), Some("org-123"), "application-1")
+                .await,
+            Err(InternalApplicationServiceError::ApplicationNotFound)
+        );
+    }
+
+    #[tokio::test]
+    async fn evidence_submission_is_pending_only_and_uses_revision_cas() {
+        let (repository, _, service) =
+            fixture(Some(template("org-123", ApplicationTemplateStatus::Active)));
+        let application = create_named(&service).await;
+        let updated = service
+            .submit_evidence(
+                Some("secret"),
+                Some("org-123"),
+                &application.id,
+                EvidenceSubmission {
+                    evidence_type: "DOCUMENT_SCAN".to_owned(),
+                    evidence_data: Map::from_iter([("digest".to_owned(), json!("sha256:1"))]),
+                },
+            )
+            .await
+            .expect("evidence submission");
+        assert_eq!(updated.evidence_submissions.len(), 1);
+
+        repository
+            .reject_compare_and_swap
+            .store(true, Ordering::SeqCst);
+        assert_eq!(
+            service
+                .submit_evidence(
+                    Some("secret"),
+                    Some("org-123"),
+                    &application.id,
+                    EvidenceSubmission {
+                        evidence_type: "DOCUMENT_SCAN".to_owned(),
+                        evidence_data: Map::new(),
+                    },
+                )
+                .await,
+            Err(InternalApplicationServiceError::EvidenceConflict)
+        );
+    }
+
+    #[tokio::test]
+    async fn rejection_is_server_attributed_pending_only_and_uses_revision_cas() {
+        let (_, _, service) = fixture(Some(template("org-123", ApplicationTemplateStatus::Active)));
+        let application = create_named(&service).await;
+        let rejected = service
+            .reject(
+                Some("secret"),
+                Some("org-123"),
+                &application.id,
+                ApplicationRejection {
+                    review_notes: "Insufficient evidence".to_owned(),
+                },
+            )
+            .await
+            .expect("rejection");
+        assert_eq!(rejected.status, ApplicationStatus::Rejected);
+        assert_eq!(
+            rejected.reviewer_id.as_deref(),
+            Some("issuance-management-api")
+        );
+        assert_eq!(rejected.reviewed_at, Some(now()));
+
+        let domain_error = service
+            .reject(
+                Some("secret"),
+                Some("org-123"),
+                &application.id,
+                ApplicationRejection {
+                    review_notes: "Again".to_owned(),
+                },
+            )
+            .await
+            .expect_err("rejected application cannot be rejected again");
+        assert!(matches!(
+            domain_error,
+            InternalApplicationServiceError::Domain(
+                ApplicationDomainError::InvalidTransition { .. }
+            )
+        ));
+
+        let (repository, _, service) =
+            fixture(Some(template("org-123", ApplicationTemplateStatus::Active)));
+        let application = create_named(&service).await;
+        repository
+            .reject_compare_and_swap
+            .store(true, Ordering::SeqCst);
+        assert_eq!(
+            service
+                .reject(
+                    Some("secret"),
+                    Some("org-123"),
+                    &application.id,
+                    ApplicationRejection {
+                        review_notes: "Insufficient evidence".to_owned(),
+                    },
+                )
+                .await,
+            Err(InternalApplicationServiceError::RejectionConflict)
+        );
+    }
+}

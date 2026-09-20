@@ -80,6 +80,7 @@ use crate::{
         DidcommDeliverRequest, InitiationDidcommHttpError, InitiationDidcommHttpService,
     },
     initiation_http::{InitiationHttpError, InitiationHttpService},
+    internal_application_service::InternalApplicationService,
     proof_nonce::{ProofNonceError, ProofNonceService},
     tenant_discovery::{TenantDiscoveryError, TenantDiscoveryService},
     token_exchange::{TokenExchangeError, TokenExchangeRequest, TokenExchangeService},
@@ -128,6 +129,7 @@ pub struct IssuanceServices {
     renewal: Option<CredentialRenewalService>,
     credential_management: CredentialManagementHttpService,
     application_templates: ApplicationTemplateService,
+    internal_applications: Option<InternalApplicationService>,
     canvas: CanvasServices,
     token_rate_limiter: TokenRateLimiter,
 }
@@ -295,9 +297,20 @@ impl IssuanceServices {
             renewal: core.renewal,
             credential_management,
             application_templates,
+            internal_applications: None,
             canvas,
             token_rate_limiter,
         }
+    }
+
+    /// Opt in to the complete native internal-Application surface.
+    #[must_use]
+    pub fn with_internal_applications(
+        mut self,
+        internal_applications: InternalApplicationService,
+    ) -> Self {
+        self.internal_applications = Some(internal_applications);
+        self
     }
 }
 
@@ -313,6 +326,7 @@ struct OptionalServices {
     renewal: Option<CredentialRenewalService>,
     credential_management: Option<CredentialManagementHttpService>,
     application_templates: Option<ApplicationTemplateService>,
+    internal_applications: Option<InternalApplicationService>,
     canvas_lti_login: Option<CanvasLtiLoginService>,
     canvas_lti_launch: Option<CanvasLtiLaunchService>,
     canvas_lti_experience: Option<CanvasLtiExperienceService>,
@@ -399,6 +413,7 @@ pub fn router_with_all_services(
             renewal: services.renewal,
             credential_management: Some(services.credential_management),
             application_templates: Some(services.application_templates),
+            internal_applications: services.internal_applications,
             canvas_oauth: Some(services.canvas.oauth),
             canvas_management: Some(services.canvas.management),
             canvas_legacy_ingest: Some(services.canvas.legacy_ingest),
@@ -537,6 +552,25 @@ pub fn router_with_credential_management(
         transport,
         OptionalServices {
             credential_management: Some(credential_management),
+            ..OptionalServices::default()
+        },
+    )
+}
+
+/// Exercise the same internal-Application composition and transport layer as
+/// the full service without requiring unrelated issuance dependencies.
+pub fn router_with_internal_applications(
+    runtime: RuntimeState,
+    discovery: StaticDiscoveryDocuments,
+    transport: TransportPolicy,
+    internal_applications: InternalApplicationService,
+) -> Router {
+    router_with_optional_services(
+        runtime,
+        discovery,
+        transport,
+        OptionalServices {
+            internal_applications: Some(internal_applications),
             ..OptionalServices::default()
         },
     )
@@ -1102,6 +1136,13 @@ fn router_with_optional_services(
     let api = if let Some(application_templates) = services.application_templates {
         api.merge(crate::application_template_http::router(
             application_templates,
+        ))
+    } else {
+        api
+    };
+    let api = if let Some(internal_applications) = services.internal_applications {
+        api.merge(crate::internal_application_http::router(
+            internal_applications,
         ))
     } else {
         api

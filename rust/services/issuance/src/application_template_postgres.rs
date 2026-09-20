@@ -65,6 +65,13 @@ const GET: &str = concat!(
       WHERE organization_id = $1 AND id = $2"
 );
 
+const GET_UNSCOPED: &str = concat!(
+    "SELECT ",
+    template_columns!(),
+    " FROM issuance_service.application_templates
+      WHERE id = $1"
+);
+
 const REPLACE_IF_VERSION: &str = "UPDATE issuance_service.application_templates
     SET name = $1,
         description = $2,
@@ -108,6 +115,22 @@ impl PostgresApplicationTemplateRepository {
     #[must_use]
     pub fn new(pool: PgPool) -> Self {
         Self { pool }
+    }
+
+    /// Internal Application creation must distinguish a missing template from
+    /// a foreign-tenant template before applying tenant hiding. Keep that
+    /// exceptional lookup crate-private and reuse the canonical row decoder.
+    pub(crate) async fn get_unscoped(
+        &self,
+        template_id: &str,
+    ) -> Result<Option<ApplicationTemplateRecord>, ApplicationTemplateRepositoryError> {
+        sqlx::query(GET_UNSCOPED)
+            .bind(template_id)
+            .fetch_optional(&self.pool)
+            .await
+            .map_err(repository_error)?
+            .map(template_row)
+            .transpose()
     }
 }
 

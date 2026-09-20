@@ -1,0 +1,1677 @@
+use std::{
+    collections::{BTreeMap, BTreeSet},
+    sync::{
+        atomic::{AtomicBool, Ordering},
+        Arc, Mutex,
+    },
+};
+
+use async_trait::async_trait;
+use axum::{
+    body::Body,
+    http::{Method, Request, StatusCode},
+};
+use chrono::{DateTime, TimeZone, Utc};
+use http_body_util::BodyExt;
+use marty_issuance_service::{
+    application_template_domain::{
+        ApplicationTemplateCreate, ApplicationTemplateRecord, ApplicationTemplateStatus,
+    },
+    internal_application_domain::{
+        ApplicationCreate, ApplicationRecord, ApplicationStatus, EvidenceFactRecord,
+        EvidenceFactResponse, EvidenceReconciliationMetrics, EvidenceReconciliationRecord,
+        EvidenceReconciliationResult, ExternalEvidenceApiCheckRequest,
+        ExternalEvidenceApiCheckResponse, IssuanceEventRecord, StaleCanvasEvidenceReceipt,
+    },
+    internal_application_evidence::{
+        InternalApplicationEvidenceCoordinator, InternalApplicationEvidenceError,
+    },
+    internal_application_http,
+    internal_application_offer::{
+        InternalApplicationOfferCoordinator, InternalApplicationOfferError, IssuanceOfferResponse,
+        IssuanceOfferWallet,
+    },
+    internal_application_reconciliation::{
+        EvidenceReconciliationError, InternalApplicationReconciler,
+    },
+    internal_application_service::{
+        InternalApplicationApprovalError, InternalApplicationApprover, InternalApplicationClock,
+        InternalApplicationIdGenerator, InternalApplicationRepository,
+        InternalApplicationRepositoryError, InternalApplicationService,
+    },
+    internal_external_evidence::ExternalEvidenceApiError,
+};
+use serde_json::{json, Map, Value};
+use tower::ServiceExt;
+
+#[derive(Default)]
+struct MemoryState {
+    templates: BTreeMap<String, ApplicationTemplateRecord>,
+    applications: BTreeMap<String, ApplicationRecord>,
+    evidence_facts: Vec<EvidenceFactRecord>,
+    issuance_events: Vec<IssuanceEventRecord>,
+}
+
+#[tokio::test]
+async fn external_evidence_route_preserves_shape_lifecycle_and_redacted_transport_errors() {
+    let repository = Arc::new(MemoryRepository::default());
+    let mut configured = template("org-123", ApplicationTemplateStatus::Active);
+    configured.evidence_requirements = vec![json!({
+        "evidence_id": "passport-check",
+        "evidence_type": "EXTERNAL_API",
+        "api": {"url": "https://provider.example/check"}
+    })];
+    repository.seed_template(configured);
+    repository.seed_application(application(
+        "application-pending",
+        "org-123",
+        ApplicationStatus::Pending,
+    ));
+    repository.seed_application(application(
+        "application-rejected",
+        "org-123",
+        ApplicationStatus::Rejected,
+    ));
+    let fact = evidence_fact("application-pending");
+    let response = ExternalEvidenceApiCheckResponse {
+        application_id: "application-pending".to_owned(),
+        organization_id: "org-123".to_owned(),
+        check_id: "passport-check".to_owned(),
+        status: "evidence_received".to_owned(),
+        application_status: "approved".to_owned(),
+        evidence_fact: EvidenceFactResponse::from(&fact),
+        policy_decision: json!({"allowed": true})
+            .as_object()
+            .expect("policy")
+            .clone(),
+        issuance_transaction_id: Some("transaction-1".to_owned()),
+        response_metadata: json!({
+            "http_status_code": 200,
+            "response_hash": "response-hash",
+            "endpoint_host": "provider.example",
+            "endpoint_path": "/check"
+        })
+        .as_object()
+        .expect("metadata")
+        .clone(),
+    };
+    let service = service_with_evidence(repository.clone(), Ok(response));
+    let (status, body) = request(
+        &service,
+        Method::POST,
+        "/internal/applications/application-pending/evidence/api-checks/passport-check/run",
+        Some(json!({"unknown": true})),
+        Some("secret"),
+        Some("org-123"),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(body["application_status"], "approved");
+    assert_eq!(body["evidence_fact"]["id"], "fact-1");
+    assert_eq!(
+        body.as_object()
+            .expect("ExternalEvidenceApiCheckResponse")
+            .keys()
+            .cloned()
+            .collect::<BTreeSet<_>>(),
+        [
+            "application_id",
+            "application_status",
+            "check_id",
+            "evidence_fact",
+            "issuance_transaction_id",
+            "organization_id",
+            "policy_decision",
+            "response_metadata",
+            "status",
+        ]
+        .into_iter()
+        .map(str::to_owned)
+        .collect()
+    );
+
+    let (status, body) = request(
+        &service,
+        Method::POST,
+        "/internal/applications/application-rejected/evidence/api-checks/passport-check/run",
+        Some(json!({})),
+        Some("secret"),
+        Some("org-123"),
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+    assert_eq!(
+        body,
+        json!({
+            "detail": "Cannot run evidence check for application in ApplicationStatus.REJECTED status"
+        })
+    );
+
+    let failed = service_with_evidence(
+        repository,
+        Err(InternalApplicationEvidenceError::External(
+            ExternalEvidenceApiError::Transport,
+        )),
+    );
+    let (status, body) = request(
+        &failed,
+        Method::POST,
+        "/internal/applications/application-pending/evidence/api-checks/passport-check/run",
+        Some(json!({"inputs": {"authorization": "Bearer secret-token"}})),
+        Some("secret"),
+        Some("org-123"),
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_GATEWAY);
+    assert_eq!(
+        body,
+        json!({"detail": "External evidence API request failed"})
+    );
+    assert!(!body.to_string().contains("secret-token"));
+}
+
+#[tokio::test]
+async fn reconciliation_routes_preserve_tenant_scope_clamps_and_response_shape() {
+    let repository = Arc::new(MemoryRepository::default());
+    repository.seed_application(application(
+        "application-1",
+        "org-123",
+        ApplicationStatus::Pending,
+    ));
+    let result = EvidenceReconciliationResult {
+        organization_id: "org-123".to_owned(),
+        dry_run: true,
+        metrics: EvidenceReconciliationMetrics {
+            scanned_applications: 1,
+            evaluated_policies: 1,
+            policy_permits: 1,
+            stale_receipts: 1,
+            ..EvidenceReconciliationMetrics::default()
+        },
+        records: vec![EvidenceReconciliationRecord {
+            application_id: "application-1".to_owned(),
+            status_before: "pending".to_owned(),
+            status_after: "pending".to_owned(),
+            action: "would_create_or_refresh_issuance_transaction".to_owned(),
+            fact_count: 1,
+            policy_decision: Some(
+                json!({"allowed": true})
+                    .as_object()
+                    .expect("policy")
+                    .clone(),
+            ),
+            issuance_transaction_id: None,
+            errors: Vec::new(),
+        }],
+        stale_receipts: vec![StaleCanvasEvidenceReceipt {
+            receipt_id: "receipt-1".to_owned(),
+            provider_event_id: "event-1".to_owned(),
+            canvas_account_id: Some("account-1".to_owned()),
+            application_id: Some("application-1".to_owned()),
+            status: "evidence_received".to_owned(),
+            reasons: vec!["receipt_without_policy_decision".to_owned()],
+            last_seen_at: "2026-09-19T12:34:56+00:00".to_owned(),
+        }],
+        generated_at: "2026-09-19T12:34:56+00:00".to_owned(),
+    };
+    let reconciler = Arc::new(FixedReconciler {
+        calls: Mutex::new(Vec::new()),
+        result: Ok(result),
+    });
+    let service = service_with_reconciler(repository, reconciler.clone());
+
+    let (status, body) = request(
+        &service,
+        Method::POST,
+        "/internal/applications/evidence/reconcile",
+        Some(json!({
+            "organization_id": "org-123",
+            "application_id": "application-1",
+            "limit": 0,
+            "dry_run": true,
+            "issue_on_permit": false,
+            "unknown": true
+        })),
+        Some("secret"),
+        Some("org-123"),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(body["dry_run"], true);
+    assert_eq!(
+        body["records"][0]["action"],
+        "would_create_or_refresh_issuance_transaction"
+    );
+    assert_eq!(
+        body["stale_receipts"][0]["reasons"],
+        json!(["receipt_without_policy_decision"])
+    );
+
+    let (status, report) = request(
+        &service,
+        Method::GET,
+        "/internal/applications/evidence/reconciliation-report?organization_id=org-123&limit=5000",
+        None,
+        Some("secret"),
+        Some("org-123"),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(report["metrics"]["stale_receipts"], 1);
+    assert_eq!(
+        reconciler
+            .calls
+            .lock()
+            .expect("reconciler calls")
+            .as_slice(),
+        [
+            (
+                "org-123".to_owned(),
+                Some("application-1".to_owned()),
+                1,
+                true,
+                false,
+            ),
+            ("org-123".to_owned(), None, 1000, true, true),
+        ]
+    );
+
+    let (status, body) = request(
+        &service,
+        Method::POST,
+        "/internal/applications/evidence/reconcile",
+        Some(json!({
+            "organization_id": "org-123",
+            "application_id": "missing"
+        })),
+        Some("secret"),
+        Some("org-123"),
+    )
+    .await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+    assert_eq!(body, json!({"detail": "Application not found"}));
+}
+
+#[derive(Default)]
+struct MemoryRepository {
+    state: Mutex<MemoryState>,
+    reject_compare_and_swap: AtomicBool,
+}
+
+impl MemoryRepository {
+    fn seed_template(&self, template: ApplicationTemplateRecord) {
+        self.state
+            .lock()
+            .expect("repository state")
+            .templates
+            .insert(template.id.clone(), template);
+    }
+
+    fn seed_application(&self, application: ApplicationRecord) {
+        self.state
+            .lock()
+            .expect("repository state")
+            .applications
+            .insert(application.id.clone(), application);
+    }
+
+    fn seed_evidence_fact(&self, fact: EvidenceFactRecord) {
+        self.state
+            .lock()
+            .expect("repository state")
+            .evidence_facts
+            .push(fact);
+    }
+
+    fn seed_issuance_event(&self, event: IssuanceEventRecord) {
+        self.state
+            .lock()
+            .expect("repository state")
+            .issuance_events
+            .push(event);
+    }
+}
+
+#[async_trait]
+impl InternalApplicationRepository for MemoryRepository {
+    async fn get_application_template(
+        &self,
+        template_id: &str,
+    ) -> Result<Option<ApplicationTemplateRecord>, InternalApplicationRepositoryError> {
+        Ok(self
+            .state
+            .lock()
+            .expect("repository state")
+            .templates
+            .get(template_id)
+            .cloned())
+    }
+
+    async fn insert_application(
+        &self,
+        application: &ApplicationRecord,
+    ) -> Result<(), InternalApplicationRepositoryError> {
+        self.state
+            .lock()
+            .expect("repository state")
+            .applications
+            .insert(application.id.clone(), application.clone());
+        Ok(())
+    }
+
+    async fn list_applications(
+        &self,
+        organization_id: &str,
+        status: Option<ApplicationStatus>,
+        template_id: Option<&str>,
+    ) -> Result<Vec<ApplicationRecord>, InternalApplicationRepositoryError> {
+        Ok(self
+            .state
+            .lock()
+            .expect("repository state")
+            .applications
+            .values()
+            .filter(|application| application.organization_id == organization_id)
+            .filter(|application| status.is_none_or(|status| application.status == status))
+            .filter(|application| {
+                template_id
+                    .is_none_or(|template_id| application.application_template_id == template_id)
+            })
+            .cloned()
+            .collect())
+    }
+
+    async fn get_application(
+        &self,
+        application_id: &str,
+    ) -> Result<Option<ApplicationRecord>, InternalApplicationRepositoryError> {
+        Ok(self
+            .state
+            .lock()
+            .expect("repository state")
+            .applications
+            .get(application_id)
+            .cloned())
+    }
+
+    async fn list_evidence_facts_for_application(
+        &self,
+        application_id: &str,
+    ) -> Result<Vec<EvidenceFactRecord>, InternalApplicationRepositoryError> {
+        Ok(self
+            .state
+            .lock()
+            .expect("repository state")
+            .evidence_facts
+            .iter()
+            .filter(|fact| fact.application_id == application_id)
+            .cloned()
+            .collect())
+    }
+
+    async fn list_events_for_application(
+        &self,
+        application_id: &str,
+    ) -> Result<Vec<IssuanceEventRecord>, InternalApplicationRepositoryError> {
+        Ok(self
+            .state
+            .lock()
+            .expect("repository state")
+            .issuance_events
+            .iter()
+            .filter(|event| event.application_id.as_deref() == Some(application_id))
+            .cloned()
+            .collect())
+    }
+
+    async fn replace_application_if_revision(
+        &self,
+        application: &ApplicationRecord,
+        expected_status: ApplicationStatus,
+        expected_updated_at: DateTime<Utc>,
+    ) -> Result<bool, InternalApplicationRepositoryError> {
+        if self.reject_compare_and_swap.load(Ordering::SeqCst) {
+            return Ok(false);
+        }
+        let mut state = self.state.lock().expect("repository state");
+        let Some(stored) = state.applications.get_mut(&application.id) else {
+            return Ok(false);
+        };
+        if stored.organization_id != application.organization_id
+            || stored.status != expected_status
+            || stored.updated_at != expected_updated_at
+        {
+            return Ok(false);
+        }
+        *stored = application.clone();
+        Ok(true)
+    }
+}
+
+struct FixedRuntime;
+
+impl InternalApplicationClock for FixedRuntime {
+    fn now(&self) -> DateTime<Utc> {
+        fixed_time()
+    }
+}
+
+impl InternalApplicationIdGenerator for FixedRuntime {
+    fn application_id(&self) -> String {
+        "application-1".to_owned()
+    }
+
+    fn applicant_identifier(&self) -> String {
+        "applicant_deadbeef".to_owned()
+    }
+}
+
+struct FixedApprover {
+    repository: Arc<MemoryRepository>,
+    error: Option<InternalApplicationApprovalError>,
+}
+
+struct FixedOffers {
+    generate: Result<IssuanceOfferResponse, InternalApplicationOfferError>,
+    get: Result<IssuanceOfferResponse, InternalApplicationOfferError>,
+}
+
+struct FixedEvidence {
+    result: Result<ExternalEvidenceApiCheckResponse, InternalApplicationEvidenceError>,
+}
+
+type ReconciliationCall = (String, Option<String>, usize, bool, bool);
+
+struct FixedReconciler {
+    calls: Mutex<Vec<ReconciliationCall>>,
+    result: Result<EvidenceReconciliationResult, EvidenceReconciliationError>,
+}
+
+#[async_trait]
+impl InternalApplicationReconciler for FixedReconciler {
+    async fn reconcile(
+        &self,
+        organization_id: &str,
+        application_id: Option<&str>,
+        limit: usize,
+        dry_run: bool,
+        issue_on_permit: bool,
+    ) -> Result<EvidenceReconciliationResult, EvidenceReconciliationError> {
+        self.calls.lock().expect("reconciler calls").push((
+            organization_id.to_owned(),
+            application_id.map(str::to_owned),
+            limit,
+            dry_run,
+            issue_on_permit,
+        ));
+        self.result.clone()
+    }
+}
+
+#[async_trait]
+impl InternalApplicationEvidenceCoordinator for FixedEvidence {
+    async fn run_external_check(
+        &self,
+        _application: ApplicationRecord,
+        _template: ApplicationTemplateRecord,
+        _requirement: Map<String, Value>,
+        _request: ExternalEvidenceApiCheckRequest,
+    ) -> Result<ExternalEvidenceApiCheckResponse, InternalApplicationEvidenceError> {
+        self.result.clone()
+    }
+}
+
+#[async_trait]
+impl InternalApplicationOfferCoordinator for FixedOffers {
+    async fn generate(
+        &self,
+        _application: &ApplicationRecord,
+        _local_template: Option<&ApplicationTemplateRecord>,
+    ) -> Result<IssuanceOfferResponse, InternalApplicationOfferError> {
+        self.generate.clone()
+    }
+
+    async fn get(
+        &self,
+        _application: &ApplicationRecord,
+        _local_template: Option<&ApplicationTemplateRecord>,
+    ) -> Result<IssuanceOfferResponse, InternalApplicationOfferError> {
+        self.get.clone()
+    }
+}
+
+#[async_trait]
+impl InternalApplicationApprover for FixedApprover {
+    async fn approve(
+        &self,
+        application: &ApplicationRecord,
+        _template: &ApplicationTemplateRecord,
+        reviewer_id: &str,
+        review_notes: Option<&str>,
+    ) -> Result<ApplicationRecord, InternalApplicationApprovalError> {
+        if let Some(error) = &self.error {
+            return Err(error.clone());
+        }
+        let mut approved = application.clone();
+        approved
+            .approve_reserved(
+                "transaction-1".to_owned(),
+                review_notes.map(str::to_owned),
+                reviewer_id,
+                fixed_time(),
+            )
+            .expect("pending application approval");
+        self.repository.seed_application(approved.clone());
+        Ok(approved)
+    }
+}
+
+fn fixed_time() -> DateTime<Utc> {
+    Utc.with_ymd_and_hms(2026, 9, 19, 12, 34, 56)
+        .single()
+        .expect("fixed timestamp")
+}
+
+fn template(organization_id: &str, status: ApplicationTemplateStatus) -> ApplicationTemplateRecord {
+    let request: ApplicationTemplateCreate = serde_json::from_value(json!({
+        "organization_id": organization_id,
+        "name": "Employee application"
+    }))
+    .expect("template request");
+    let mut template = request
+        .into_record("template-1".to_owned(), fixed_time())
+        .expect("template record");
+    template.status = status;
+    template
+}
+
+fn application(id: &str, organization_id: &str, status: ApplicationStatus) -> ApplicationRecord {
+    let request = ApplicationCreate {
+        application_template_id: "template-1".to_owned(),
+        applicant_data: Map::new(),
+        integration_context: Map::new(),
+    };
+    let mut application = ApplicationRecord::new(
+        id.to_owned(),
+        organization_id.to_owned(),
+        request,
+        "applicant_deadbeef",
+        fixed_time(),
+    )
+    .expect("application record");
+    application.status = status;
+    application
+}
+
+fn evidence_fact(application_id: &str) -> EvidenceFactRecord {
+    EvidenceFactRecord {
+        id: "fact-1".to_owned(),
+        organization_id: "org-123".to_owned(),
+        application_id: application_id.to_owned(),
+        subject_id: "ada@example.test".to_owned(),
+        provider: "contract-provider".to_owned(),
+        fact_type: "identity.document".to_owned(),
+        scope: Map::from_iter([("document_type".to_owned(), json!("passport"))]),
+        assertion: Map::from_iter([("verified".to_owned(), json!(true))]),
+        verification: Map::from_iter([
+            ("method".to_owned(), json!("CONTRACT")),
+            ("status".to_owned(), json!("VERIFIED")),
+        ]),
+        source: Map::from_iter([("event_id".to_owned(), json!("event-1"))]),
+        requirement_id: Some("requirement-1".to_owned()),
+        logical_key: "logical-key-1".to_owned(),
+        source_revision: "revision-1".to_owned(),
+        payload_hash: "payload-hash-1".to_owned(),
+        observed_at: fixed_time(),
+        effective_at: Some(fixed_time()),
+        superseded_fact_id: Some("fact-0".to_owned()),
+        created_at: fixed_time(),
+    }
+}
+
+fn issuance_event(application_id: &str) -> IssuanceEventRecord {
+    IssuanceEventRecord {
+        id: "issuance-event-1".to_owned(),
+        transaction_id: Some("transaction-1".to_owned()),
+        application_id: Some(application_id.to_owned()),
+        event_type: "offer_viewed".to_owned(),
+        metadata: Map::from_iter([("channel".to_owned(), json!("contract"))]),
+        created_at: fixed_time(),
+    }
+}
+
+fn offer_response() -> IssuanceOfferResponse {
+    IssuanceOfferResponse {
+        offer_url: "openid-credential-offer://?credential_offer=contract".to_owned(),
+        qr_payload: "openid-credential-offer://?credential_offer=contract".to_owned(),
+        wallets: vec![IssuanceOfferWallet {
+            id: "wallet-1".to_owned(),
+            name: "Example Wallet".to_owned(),
+            logo_url: Some("https://wallet.example/logo.svg".to_owned()),
+            deep_link_url: "openid-credential-offer://?credential_offer=contract".to_owned(),
+            platforms: vec!["ios".to_owned(), "android".to_owned()],
+        }],
+        email_payload: Map::from_iter([("subject".to_owned(), json!("Your credential is ready"))]),
+        expires_at: "2026-09-26T12:34:56+00:00".to_owned(),
+        transaction_id: "transaction-1".to_owned(),
+        status: "active".to_owned(),
+        credential_offer_uris: BTreeMap::new(),
+    }
+}
+
+fn service(
+    repository: Arc<MemoryRepository>,
+    management_api_key: Option<&str>,
+) -> InternalApplicationService {
+    InternalApplicationService::new(
+        repository,
+        Arc::new(FixedRuntime),
+        Arc::new(FixedRuntime),
+        management_api_key,
+    )
+}
+
+fn service_with_approver(
+    repository: Arc<MemoryRepository>,
+    error: Option<InternalApplicationApprovalError>,
+) -> InternalApplicationService {
+    service(repository.clone(), Some("secret"))
+        .with_approver(Arc::new(FixedApprover { repository, error }))
+}
+
+fn service_with_offers(
+    repository: Arc<MemoryRepository>,
+    generate: Result<IssuanceOfferResponse, InternalApplicationOfferError>,
+    get: Result<IssuanceOfferResponse, InternalApplicationOfferError>,
+) -> InternalApplicationService {
+    service(repository, Some("secret")).with_offers(Arc::new(FixedOffers { generate, get }))
+}
+
+fn service_with_evidence(
+    repository: Arc<MemoryRepository>,
+    result: Result<ExternalEvidenceApiCheckResponse, InternalApplicationEvidenceError>,
+) -> InternalApplicationService {
+    service(repository, Some("secret")).with_evidence(Arc::new(FixedEvidence { result }))
+}
+
+fn service_with_reconciler(
+    repository: Arc<MemoryRepository>,
+    reconciler: Arc<FixedReconciler>,
+) -> InternalApplicationService {
+    service(repository, Some("secret")).with_reconciler(reconciler)
+}
+
+async fn request(
+    service: &InternalApplicationService,
+    method: Method,
+    uri: &str,
+    body: Option<Value>,
+    api_key: Option<&str>,
+    organization_id: Option<&str>,
+) -> (StatusCode, Value) {
+    let mut builder = Request::builder().method(method).uri(uri);
+    if let Some(api_key) = api_key {
+        builder = builder.header("x-api-key", api_key);
+    }
+    if let Some(organization_id) = organization_id {
+        builder = builder.header("x-organization-id", organization_id);
+    }
+    if body.is_some() {
+        builder = builder.header("content-type", "application/json");
+    }
+    let response = internal_application_http::router(service.clone())
+        .oneshot(
+            builder
+                .body(Body::from(
+                    body.map(|value| serde_json::to_vec(&value).expect("request JSON"))
+                        .unwrap_or_default(),
+                ))
+                .expect("management request"),
+        )
+        .await
+        .expect("management response");
+    let status = response.status();
+    let bytes = response
+        .into_body()
+        .collect()
+        .await
+        .expect("management response body")
+        .to_bytes();
+    let body = if bytes.is_empty() {
+        Value::Null
+    } else {
+        serde_json::from_slice(&bytes).expect("management response JSON")
+    };
+    (status, body)
+}
+
+#[tokio::test]
+async fn completed_http_slice_replays_create_read_evidence_and_rejection() {
+    let repository = Arc::new(MemoryRepository::default());
+    repository.seed_template(template("org-123", ApplicationTemplateStatus::Active));
+    let service = service(repository, Some("secret"));
+
+    let (status, created) = request(
+        &service,
+        Method::POST,
+        "/internal/applications",
+        Some(json!({
+            "application_template_id": "template-1",
+            "applicant_data": {"given_name": "Ada", "family_name": "Lovelace"},
+            "integration_context": {"source": "contract"},
+            "unknown": true
+        })),
+        Some("secret"),
+        Some("org-123"),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(created["id"], "application-1");
+    assert_eq!(created["applicant_identifier"], "Ada_Lovelace");
+    assert_eq!(created["status"], "pending");
+    assert_eq!(
+        created
+            .as_object()
+            .expect("ApplicationResponse")
+            .keys()
+            .cloned()
+            .collect::<std::collections::BTreeSet<_>>(),
+        [
+            "application_template_id",
+            "applicant_identifier",
+            "evidence_submissions",
+            "expires_at",
+            "form_data",
+            "id",
+            "integration_context",
+            "issuance_transaction_id",
+            "organization_id",
+            "review_notes",
+            "reviewed_at",
+            "reviewer_id",
+            "status",
+            "submitted_at"
+        ]
+        .into_iter()
+        .map(str::to_owned)
+        .collect()
+    );
+
+    let (status, listed) = request(
+        &service,
+        Method::GET,
+        "/internal/applications?organization_id=org-123&status=pending&application_template_id=template-1",
+        None,
+        Some("secret"),
+        Some("org-123"),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(listed, json!([created.clone()]));
+
+    let (status, fetched) = request(
+        &service,
+        Method::GET,
+        "/internal/applications/application-1",
+        None,
+        Some("secret"),
+        Some("org-123"),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(fetched, created);
+
+    let (status, evidenced) = request(
+        &service,
+        Method::POST,
+        "/internal/applications/application-1/submit-evidence",
+        Some(json!({
+            "evidence_type": "DOCUMENT_SCAN",
+            "evidence_data": {"digest": "sha256:1"},
+            "unknown": true
+        })),
+        Some("secret"),
+        Some("org-123"),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(
+        evidenced["evidence_submissions"].as_array().unwrap().len(),
+        1
+    );
+
+    let (status, rejected) = request(
+        &service,
+        Method::POST,
+        "/internal/applications/application-1/reject",
+        Some(json!({"review_notes": "Insufficient evidence"})),
+        Some("secret"),
+        Some("org-123"),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(rejected["status"], "rejected");
+    assert_eq!(rejected["review_notes"], "Insufficient evidence");
+    assert_eq!(rejected["reviewer_id"], "issuance-management-api");
+}
+
+#[tokio::test]
+async fn authentication_tenant_and_template_failures_match_the_frozen_boundary() {
+    let repository = Arc::new(MemoryRepository::default());
+    repository.seed_template(template("org-123", ApplicationTemplateStatus::Active));
+    let configured = service(repository.clone(), Some("secret"));
+    let body = json!({"application_template_id": "template-1", "applicant_data": {}});
+
+    for (api_key, organization_id, expected_status, detail) in [
+        (
+            None,
+            Some("org-123"),
+            StatusCode::UNAUTHORIZED,
+            "X-API-Key header is missing",
+        ),
+        (
+            Some("wrong"),
+            Some("org-123"),
+            StatusCode::UNAUTHORIZED,
+            "Invalid API Key",
+        ),
+        (
+            Some("secret"),
+            None,
+            StatusCode::BAD_REQUEST,
+            "X-Organization-ID is required for application management",
+        ),
+    ] {
+        let (status, response) = request(
+            &configured,
+            Method::POST,
+            "/internal/applications",
+            Some(body.clone()),
+            api_key,
+            organization_id,
+        )
+        .await;
+        assert_eq!(status, expected_status);
+        assert_eq!(response, json!({"detail": detail}));
+    }
+
+    let unconfigured = service(repository, None);
+    let (status, response) = request(
+        &unconfigured,
+        Method::POST,
+        "/internal/applications",
+        Some(body.clone()),
+        None,
+        Some("org-123"),
+    )
+    .await;
+    assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE);
+    assert_eq!(
+        response,
+        json!({"detail": "ISSUANCE_API_KEY not configured on server"})
+    );
+
+    let repository = Arc::new(MemoryRepository::default());
+    let missing = service(repository, Some("secret"));
+    let (status, response) = request(
+        &missing,
+        Method::POST,
+        "/internal/applications",
+        Some(body.clone()),
+        Some("secret"),
+        Some("org-123"),
+    )
+    .await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+    assert_eq!(
+        response,
+        json!({"detail": "Application template not found"})
+    );
+
+    for (organization_id, template_status, expected_status, detail) in [
+        (
+            "org-123",
+            ApplicationTemplateStatus::Draft,
+            StatusCode::UNPROCESSABLE_ENTITY,
+            "Application template must be active",
+        ),
+        (
+            "org-other",
+            ApplicationTemplateStatus::Active,
+            StatusCode::NOT_FOUND,
+            "Application resource not found",
+        ),
+    ] {
+        let repository = Arc::new(MemoryRepository::default());
+        repository.seed_template(template(organization_id, template_status));
+        let service = service(repository, Some("secret"));
+        let (status, response) = request(
+            &service,
+            Method::POST,
+            "/internal/applications",
+            Some(body.clone()),
+            Some("secret"),
+            Some("org-123"),
+        )
+        .await;
+        assert_eq!(status, expected_status);
+        assert_eq!(response, json!({"detail": detail}));
+    }
+}
+
+#[tokio::test]
+async fn list_and_item_boundaries_hide_tenants_and_validate_status() {
+    let repository = Arc::new(MemoryRepository::default());
+    repository.seed_application(application(
+        "application-foreign",
+        "org-other",
+        ApplicationStatus::Pending,
+    ));
+    let service = service(repository, Some("secret"));
+
+    let (status, response) = request(
+        &service,
+        Method::GET,
+        "/internal/applications",
+        None,
+        Some("secret"),
+        Some("org-123"),
+    )
+    .await;
+    assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY);
+    assert_eq!(
+        response["detail"][0]["loc"],
+        json!(["query", "organization_id"])
+    );
+
+    let (status, response) = request(
+        &service,
+        Method::GET,
+        "/internal/applications?organization_id=org-other",
+        None,
+        Some("secret"),
+        Some("org-123"),
+    )
+    .await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+    assert_eq!(
+        response,
+        json!({"detail": "Application resource not found"})
+    );
+
+    let (status, response) = request(
+        &service,
+        Method::GET,
+        "/internal/applications?organization_id=org-123&status=not-a-status",
+        None,
+        Some("secret"),
+        Some("org-123"),
+    )
+    .await;
+    assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY);
+    assert_eq!(response, json!({"detail": "Invalid application status"}));
+
+    let (status, response) = request(
+        &service,
+        Method::GET,
+        "/internal/applications/application-foreign",
+        None,
+        Some("secret"),
+        Some("org-123"),
+    )
+    .await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+    assert_eq!(response, json!({"detail": "Application not found"}));
+}
+
+#[tokio::test]
+async fn evidence_and_event_reads_match_the_frozen_typed_projections() {
+    let repository = Arc::new(MemoryRepository::default());
+    let mut template = template("org-123", ApplicationTemplateStatus::Active);
+    template.evidence_requirements = vec![json!({
+        "evidence_id": "check-1",
+        "evidence_type": "EXTERNAL_API",
+        "description": "Contract API check",
+        "provider": "contract-provider",
+        "fact_type": "identity.document",
+        "required": true,
+        "verification_method": "CONTRACT_API",
+        "auto_issue_on_permit": false,
+        "scope": {"document_type": "passport"},
+        "api": {
+            "method": "get",
+            "url": "https://provider.example.test/check",
+            "secret_headers": {"authorization": "Bearer secret-token"}
+        }
+    })];
+    repository.seed_template(template);
+    let mut application = application(
+        "application-read",
+        "org-123",
+        ApplicationStatus::UnderReview,
+    );
+    application.integration_context = json!({
+        "policy": {
+            "allowed": true,
+            "policy_source": "contract",
+            "policy_set_id": "policy-1"
+        },
+        "canvas": {"course_id": "course-1"}
+    })
+    .as_object()
+    .expect("integration context")
+    .clone();
+    application.issuance_transaction_id = Some("transaction-1".to_owned());
+    repository.seed_application(application);
+    repository.seed_evidence_fact(evidence_fact("application-read"));
+    repository.seed_issuance_event(issuance_event("application-read"));
+    let service = service(repository, Some("secret"));
+
+    let (status, facts) = request(
+        &service,
+        Method::GET,
+        "/internal/applications/application-read/evidence-facts",
+        None,
+        Some("secret"),
+        Some("org-123"),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(facts[0]["id"], "fact-1");
+    assert_eq!(facts[0]["effective_at"], "2026-09-19T12:34:56+00:00");
+    assert_eq!(
+        facts[0]
+            .as_object()
+            .expect("EvidenceFactResponse")
+            .keys()
+            .cloned()
+            .collect::<std::collections::BTreeSet<_>>(),
+        [
+            "application_id",
+            "assertion",
+            "created_at",
+            "effective_at",
+            "fact_type",
+            "id",
+            "logical_key",
+            "observed_at",
+            "organization_id",
+            "payload_hash",
+            "provider",
+            "requirement_id",
+            "scope",
+            "source",
+            "source_revision",
+            "subject_id",
+            "superseded_fact_id",
+            "verification"
+        ]
+        .into_iter()
+        .map(str::to_owned)
+        .collect()
+    );
+
+    let (status, summary) = request(
+        &service,
+        Method::GET,
+        "/internal/applications/application-read/evidence-summary",
+        None,
+        Some("secret"),
+        Some("org-123"),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(summary["status"], "under_review");
+    assert_eq!(summary["evidence_facts"], facts);
+    assert_eq!(summary["policy_source"], "contract");
+    assert_eq!(summary["policy_set_id"], "policy-1");
+    assert_eq!(summary["canvas"], json!({"course_id": "course-1"}));
+    assert_eq!(summary["available_api_checks"][0]["check_id"], "check-1");
+    assert_eq!(summary["available_api_checks"][0]["api_method"], "GET");
+    assert!(summary.to_string().find("secret-token").is_none());
+    assert!(summary.to_string().find("provider.example.test").is_none());
+
+    let (status, events) = request(
+        &service,
+        Method::GET,
+        "/internal/applications/application-read/issuance-events",
+        None,
+        Some("secret"),
+        Some("org-123"),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(
+        events,
+        json!([{
+            "id": "issuance-event-1",
+            "transaction_id": "transaction-1",
+            "application_id": "application-read",
+            "event_type": "offer_viewed",
+            "metadata": {"channel": "contract"},
+            "created_at": "2026-09-19T12:34:56+00:00"
+        }])
+    );
+
+    for path in [
+        "/internal/applications/application-read/evidence-facts",
+        "/internal/applications/application-read/evidence-summary",
+        "/internal/applications/application-read/issuance-events",
+    ] {
+        let (status, response) = request(
+            &service,
+            Method::GET,
+            path,
+            None,
+            Some("secret"),
+            Some("org-other"),
+        )
+        .await;
+        assert_eq!(status, StatusCode::NOT_FOUND);
+        assert_eq!(response, json!({"detail": "Application not found"}));
+    }
+}
+
+#[tokio::test]
+async fn approval_boundary_preserves_server_identity_validation_and_dependency_errors() {
+    let repository = Arc::new(MemoryRepository::default());
+    let mut owned_template = template("org-123", ApplicationTemplateStatus::Active);
+    owned_template.credential_template_id = Some("credential-template-1".to_owned());
+    repository.seed_template(owned_template);
+    repository.seed_application(application(
+        "application-approval",
+        "org-123",
+        ApplicationStatus::Pending,
+    ));
+    let service = service_with_approver(repository, None);
+    let (status, approved) = request(
+        &service,
+        Method::POST,
+        "/internal/applications/application-approval/approve",
+        Some(json!({"review_notes": "Reviewed"})),
+        Some("secret"),
+        Some("org-123"),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(approved["status"], "approved");
+    assert_eq!(approved["reviewer_id"], "issuance-management-api");
+    assert_eq!(approved["review_notes"], "Reviewed");
+    assert_eq!(approved["issuance_transaction_id"], "transaction-1");
+
+    let (status, stored) = request(
+        &service,
+        Method::GET,
+        "/internal/applications/application-approval",
+        None,
+        Some("secret"),
+        Some("org-123"),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(stored, approved);
+
+    let (status, _) = request(
+        &service,
+        Method::POST,
+        "/internal/applications/application-approval/approve",
+        Some(json!({"reviewer_id": "caller"})),
+        Some("secret"),
+        Some("org-123"),
+    )
+    .await;
+    assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY);
+
+    for (error, expected_status, detail) in [
+        (
+            InternalApplicationApprovalError::Unavailable,
+            StatusCode::SERVICE_UNAVAILABLE,
+            "Application approval is temporarily unavailable",
+        ),
+        (
+            InternalApplicationApprovalError::CredentialTemplateUnavailable,
+            StatusCode::SERVICE_UNAVAILABLE,
+            "Credential Template validation is unavailable.",
+        ),
+        (
+            InternalApplicationApprovalError::CredentialTemplateNotFound,
+            StatusCode::UNPROCESSABLE_ENTITY,
+            "Credential Template not found.",
+        ),
+        (
+            InternalApplicationApprovalError::CredentialTemplateInvalid(
+                "Credential Template must be active".to_owned(),
+            ),
+            StatusCode::UNPROCESSABLE_ENTITY,
+            "Credential Template must be active",
+        ),
+        (
+            InternalApplicationApprovalError::RevocationProfileUnavailable,
+            StatusCode::SERVICE_UNAVAILABLE,
+            "Revocation Profile validation is unavailable.",
+        ),
+        (
+            InternalApplicationApprovalError::RevocationProfileNotFound,
+            StatusCode::UNPROCESSABLE_ENTITY,
+            "Revocation Profile not found.",
+        ),
+        (
+            InternalApplicationApprovalError::RevocationProfileForeign,
+            StatusCode::UNPROCESSABLE_ENTITY,
+            "The Revocation Profile belongs to another organization.",
+        ),
+        (
+            InternalApplicationApprovalError::RevocationProfileInactive,
+            StatusCode::UNPROCESSABLE_ENTITY,
+            "Credential Templates must reference an active Revocation Profile before issuance.",
+        ),
+        (
+            InternalApplicationApprovalError::IssuerContextUnavailable,
+            StatusCode::SERVICE_UNAVAILABLE,
+            "Issuer signing context is unavailable.",
+        ),
+        (
+            InternalApplicationApprovalError::CanvasNotReady,
+            StatusCode::CONFLICT,
+            "Canvas application is not ready for approval",
+        ),
+        (
+            InternalApplicationApprovalError::ConcurrentChange,
+            StatusCode::CONFLICT,
+            "Application lifecycle changed during approval",
+        ),
+    ] {
+        let repository = Arc::new(MemoryRepository::default());
+        let mut owned_template = template("org-123", ApplicationTemplateStatus::Active);
+        owned_template.credential_template_id = Some("credential-template-1".to_owned());
+        repository.seed_template(owned_template);
+        repository.seed_application(application(
+            "application-failure",
+            "org-123",
+            ApplicationStatus::Pending,
+        ));
+        let service = service_with_approver(repository, Some(error));
+        let (status, response) = request(
+            &service,
+            Method::POST,
+            "/internal/applications/application-failure/approve",
+            Some(json!({})),
+            Some("secret"),
+            Some("org-123"),
+        )
+        .await;
+        assert_eq!(status, expected_status);
+        assert_eq!(response, json!({"detail": detail}));
+    }
+
+    let repository = Arc::new(MemoryRepository::default());
+    repository.seed_template(template("org-123", ApplicationTemplateStatus::Active));
+    repository.seed_application(application(
+        "application-unbound",
+        "org-123",
+        ApplicationStatus::Pending,
+    ));
+    let service = service_with_approver(repository, None);
+    let (status, response) = request(
+        &service,
+        Method::POST,
+        "/internal/applications/application-unbound/approve",
+        Some(json!({})),
+        Some("secret"),
+        Some("org-123"),
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+    assert_eq!(
+        response,
+        json!({"detail": "Application template missing credential template ID"})
+    );
+}
+
+#[tokio::test]
+async fn lifecycle_and_revision_conflicts_preserve_exact_public_details() {
+    for (operation, status, detail) in [
+        (
+            "submit-evidence",
+            ApplicationStatus::Approved,
+            "Cannot submit evidence for application in ApplicationStatus.APPROVED status",
+        ),
+        (
+            "approve",
+            ApplicationStatus::Rejected,
+            "Cannot approve application in ApplicationStatus.REJECTED status",
+        ),
+        (
+            "reject",
+            ApplicationStatus::Withdrawn,
+            "Cannot reject application in ApplicationStatus.WITHDRAWN status",
+        ),
+    ] {
+        let repository = Arc::new(MemoryRepository::default());
+        repository.seed_application(application("application-state", "org-123", status));
+        let service = service(repository, Some("secret"));
+        let body = match operation {
+            "submit-evidence" => {
+                json!({"evidence_type": "DOCUMENT_SCAN", "evidence_data": {}})
+            }
+            "approve" => json!({}),
+            _ => json!({"review_notes": "Rejected"}),
+        };
+        let (status, response) = request(
+            &service,
+            Method::POST,
+            &format!("/internal/applications/application-state/{operation}"),
+            Some(body),
+            Some("secret"),
+            Some("org-123"),
+        )
+        .await;
+        assert_eq!(status, StatusCode::BAD_REQUEST);
+        assert_eq!(response, json!({"detail": detail}));
+    }
+
+    for (operation, detail) in [
+        (
+            "submit-evidence",
+            "Application lifecycle changed during evidence submission",
+        ),
+        ("reject", "Application lifecycle changed during rejection"),
+    ] {
+        let repository = Arc::new(MemoryRepository::default());
+        repository.seed_application(application(
+            "application-conflict",
+            "org-123",
+            ApplicationStatus::Pending,
+        ));
+        repository
+            .reject_compare_and_swap
+            .store(true, Ordering::SeqCst);
+        let service = service(repository, Some("secret"));
+        let body = if operation == "submit-evidence" {
+            json!({"evidence_type": "DOCUMENT_SCAN", "evidence_data": {}})
+        } else {
+            json!({"review_notes": "Rejected"})
+        };
+        let (status, response) = request(
+            &service,
+            Method::POST,
+            &format!("/internal/applications/application-conflict/{operation}"),
+            Some(body),
+            Some("secret"),
+            Some("org-123"),
+        )
+        .await;
+        assert_eq!(status, StatusCode::CONFLICT);
+        assert_eq!(response, json!({"detail": detail}));
+    }
+}
+
+#[tokio::test]
+async fn auth_preflight_precedes_json_validation_and_siblings_remain_closed() {
+    let service = service(Arc::new(MemoryRepository::default()), Some("secret"));
+    for (method, path, body) in [
+        (Method::GET, "/internal/applications", None),
+        (
+            Method::POST,
+            "/internal/applications",
+            Some(json!({"application_template_id": "template-1", "applicant_data": {}})),
+        ),
+        (Method::GET, "/internal/applications/application-1", None),
+        (
+            Method::GET,
+            "/internal/applications/application-1/evidence-facts",
+            None,
+        ),
+        (
+            Method::GET,
+            "/internal/applications/application-1/evidence-summary",
+            None,
+        ),
+        (
+            Method::POST,
+            "/internal/applications/application-1/submit-evidence",
+            Some(json!({"evidence_type": "DOCUMENT_SCAN", "evidence_data": {}})),
+        ),
+        (
+            Method::POST,
+            "/internal/applications/application-1/approve",
+            Some(json!({})),
+        ),
+        (
+            Method::POST,
+            "/internal/applications/application-1/reject",
+            Some(json!({"review_notes": "Rejected"})),
+        ),
+        (
+            Method::GET,
+            "/internal/applications/application-1/issuance-events",
+            None,
+        ),
+        (
+            Method::POST,
+            "/internal/applications/application-1/issuance-offer",
+            None,
+        ),
+        (
+            Method::GET,
+            "/internal/applications/application-1/issuance-offer",
+            None,
+        ),
+    ] {
+        let (status, response) = request(
+            &service,
+            method.clone(),
+            path,
+            body.clone(),
+            None,
+            Some("org-123"),
+        )
+        .await;
+        assert_eq!(status, StatusCode::UNAUTHORIZED, "{method} {path}");
+        assert_eq!(
+            response,
+            json!({"detail": "X-API-Key header is missing"}),
+            "{method} {path}"
+        );
+
+        let (status, response) = request(
+            &service,
+            method.clone(),
+            path,
+            body.clone(),
+            Some("wrong"),
+            Some("org-123"),
+        )
+        .await;
+        assert_eq!(status, StatusCode::UNAUTHORIZED, "{method} {path}");
+        assert_eq!(
+            response,
+            json!({"detail": "Invalid API Key"}),
+            "{method} {path}"
+        );
+
+        let (status, response) =
+            request(&service, method.clone(), path, body, Some("secret"), None).await;
+        assert_eq!(status, StatusCode::BAD_REQUEST, "{method} {path}");
+        assert_eq!(
+            response,
+            json!({"detail": "X-Organization-ID is required for application management"}),
+            "{method} {path}"
+        );
+    }
+
+    let (status, response) = request(
+        &service,
+        Method::POST,
+        "/internal/applications",
+        Some(json!({"applicant_data": {}})),
+        None,
+        Some("org-123"),
+    )
+    .await;
+    assert_eq!(status, StatusCode::UNAUTHORIZED);
+    assert_eq!(response, json!({"detail": "X-API-Key header is missing"}));
+
+    let (status, _) = request(
+        &service,
+        Method::POST,
+        "/internal/applications",
+        Some(json!({"applicant_data": {}})),
+        Some("secret"),
+        Some("org-123"),
+    )
+    .await;
+    assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY);
+
+    let (status, _) = request(
+        &service,
+        Method::GET,
+        "/v1/applications",
+        None,
+        Some("secret"),
+        Some("org-123"),
+    )
+    .await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+
+    let (status, _) = request(
+        &service,
+        Method::DELETE,
+        "/internal/applications/application-1",
+        None,
+        Some("secret"),
+        Some("org-123"),
+    )
+    .await;
+    assert_eq!(status, StatusCode::METHOD_NOT_ALLOWED);
+}
+
+#[tokio::test]
+async fn issuance_offer_routes_preserve_success_shape_state_errors_and_missing_transactions() {
+    let repository = Arc::new(MemoryRepository::default());
+    repository.seed_template(template("org-123", ApplicationTemplateStatus::Active));
+    repository.seed_application(application(
+        "application-approved",
+        "org-123",
+        ApplicationStatus::Approved,
+    ));
+    repository.seed_application(application(
+        "application-pending",
+        "org-123",
+        ApplicationStatus::Pending,
+    ));
+    let service = service_with_offers(
+        repository.clone(),
+        Ok(offer_response()),
+        Ok(offer_response()),
+    );
+
+    for method in [Method::POST, Method::GET] {
+        let (status, response) = request(
+            &service,
+            method,
+            "/internal/applications/application-approved/issuance-offer",
+            None,
+            Some("secret"),
+            Some("org-123"),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(response["transaction_id"], "transaction-1");
+        assert_eq!(response["status"], "active");
+        assert_eq!(
+            response
+                .as_object()
+                .unwrap()
+                .keys()
+                .cloned()
+                .collect::<BTreeSet<_>>(),
+            [
+                "credential_offer_uris",
+                "email_payload",
+                "expires_at",
+                "offer_url",
+                "qr_payload",
+                "status",
+                "transaction_id",
+                "wallets",
+            ]
+            .into_iter()
+            .map(str::to_owned)
+            .collect()
+        );
+    }
+
+    let (status, response) = request(
+        &service,
+        Method::POST,
+        "/internal/applications/application-pending/issuance-offer",
+        None,
+        Some("secret"),
+        Some("org-123"),
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+    assert_eq!(
+        response,
+        json!({"detail": "Issuance offer requires APPROVED status; current status is pending"})
+    );
+    let (status, response) = request(
+        &service,
+        Method::GET,
+        "/internal/applications/application-pending/issuance-offer",
+        None,
+        Some("secret"),
+        Some("org-123"),
+    )
+    .await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+    assert_eq!(
+        response,
+        json!({"detail": "No issuance offer available for this application"})
+    );
+
+    let canvas_not_ready = service_with_offers(
+        repository.clone(),
+        Err(InternalApplicationOfferError::Approval(
+            InternalApplicationApprovalError::CanvasOfferNotReady,
+        )),
+        Ok(offer_response()),
+    );
+    let (status, response) = request(
+        &canvas_not_ready,
+        Method::POST,
+        "/internal/applications/application-approved/issuance-offer",
+        None,
+        Some("secret"),
+        Some("org-123"),
+    )
+    .await;
+    let contract: Value = serde_json::from_str(include_str!(
+        "../../../../contracts/issuance-internal-applications.json"
+    ))
+    .expect("internal Application contract");
+    let expected = &contract["lifecycle"]["canvas_offer_outcomes"]["stale_readiness"];
+    assert_eq!(status.as_u16(), expected["status"].as_u64().unwrap() as u16);
+    assert_eq!(response, json!({"detail": expected["detail"]}));
+
+    let missing = service_with_offers(
+        repository,
+        Ok(offer_response()),
+        Err(InternalApplicationOfferError::MissingTransactionBinding),
+    );
+    let (status, response) = request(
+        &missing,
+        Method::GET,
+        "/internal/applications/application-approved/issuance-offer",
+        None,
+        Some("secret"),
+        Some("org-123"),
+    )
+    .await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+    assert_eq!(
+        response,
+        json!({"detail": "Wallet invite has not been generated yet. Please contact the issuer."})
+    );
+}

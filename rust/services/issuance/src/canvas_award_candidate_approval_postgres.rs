@@ -296,7 +296,7 @@ impl CanvasApplicationApprovalRepository for PostgresCanvasAwardApprovalReposito
         transaction: &CredentialTransaction,
         snapshot: &CanvasApplicationApprovalSnapshot,
         reviewer_id: &str,
-        review_notes: &str,
+        review_notes: Option<&str>,
         reviewed_at: chrono::DateTime<chrono::Utc>,
     ) -> Result<String, CanvasApplicationApprovalError> {
         reserve_management_canvas_issuance(
@@ -316,7 +316,7 @@ async fn reserve_management_canvas_issuance(
     prepared: &CredentialTransaction,
     snapshot: &CanvasApplicationApprovalSnapshot,
     reviewer_id: &str,
-    review_notes: &str,
+    review_notes: Option<&str>,
     reviewed_at: chrono::DateTime<chrono::Utc>,
 ) -> Result<String, CanvasApplicationApprovalError> {
     let mut database = pool
@@ -344,7 +344,7 @@ pub(crate) async fn reserve_management_canvas_issuance_in_transaction(
     prepared: &CredentialTransaction,
     snapshot: &CanvasApplicationApprovalSnapshot,
     reviewer_id: &str,
-    review_notes: &str,
+    review_notes: Option<&str>,
     reviewed_at: chrono::DateTime<chrono::Utc>,
 ) -> Result<String, CanvasApplicationApprovalError> {
     let application_id = prepared
@@ -456,10 +456,15 @@ async fn lock_manual_approval_dependencies(
         .get("integration_context")
         .and_then(Value::as_object)
         .and_then(|integration| integration.get("canvas"))
-        .and_then(Value::as_object)
-        .ok_or(CanvasApplicationApprovalError::NotReady)?;
-    let platform_id = text(canvas.get("canvas_platform_id"));
-    let binding_id = text(canvas.get("canvas_program_binding_id"));
+        .and_then(Value::as_object);
+    let platform_id = canvas
+        .map(|canvas| text(canvas.get("canvas_platform_id")))
+        .filter(|value| !value.is_empty())
+        .unwrap_or_else(|| text(snapshot.platform.get("id")));
+    let binding_id = canvas
+        .map(|canvas| text(canvas.get("canvas_program_binding_id")))
+        .filter(|value| !value.is_empty())
+        .unwrap_or_else(|| text(snapshot.binding.get("id")));
     let template_id = text(snapshot.application.get("application_template_id"));
     let platform = sqlx::query_scalar::<_, Value>(LOCK_APPROVAL_PLATFORM)
         .bind(&platform_id)

@@ -32,6 +32,8 @@ const CREDENTIAL_LIFECYCLE: &[u8] =
 const INITIATION: &[u8] = include_bytes!("../../../../contracts/issuance-initiation.json");
 const APPLICATION_TEMPLATES: &[u8] =
     include_bytes!("../../../../contracts/issuance-application-templates.json");
+const INTERNAL_APPLICATIONS: &[u8] =
+    include_bytes!("../../../../contracts/issuance-internal-applications.json");
 const DIDCOMM: &[u8] =
     include_bytes!("../../../../contracts/gateway-didcomm-delivery-behavior.json");
 const RENEWAL_REFERENCE: &[u8] =
@@ -61,6 +63,7 @@ struct Coverage {
     credential_lifecycle_behavior_contract: Upstream,
     initiation_behavior_contract: Upstream,
     application_template_behavior_contract: Upstream,
+    internal_application_behavior_contract: Upstream,
     renewal_behavior_contract: RenewalBehaviorContract,
     native_http: Vec<HttpOperation>,
     native_grpc: Vec<String>,
@@ -118,6 +121,8 @@ struct HttpOperation {
     canvas_management_behavior_case: Option<String>,
     #[serde(default)]
     application_template_behavior_case: Option<String>,
+    #[serde(default)]
+    internal_application_behavior_case: Option<String>,
     #[serde(default)]
     canvas_operations_behavior_case: Option<CanvasOperationsCase>,
 }
@@ -205,6 +210,7 @@ impl HttpOperation {
             + usize::from(self.canvas_oauth_behavior_case.is_some())
             + usize::from(self.canvas_management_behavior_case.is_some())
             + usize::from(self.application_template_behavior_case.is_some())
+            + usize::from(self.internal_application_behavior_case.is_some())
             + usize::from(self.canvas_operations_behavior_case.is_some())
     }
 }
@@ -375,6 +381,8 @@ pub fn validate_embedded_contract() -> Result<CoverageSummary, MmfError> {
         .map_err(|error| contract_error("invalid credential lifecycle contract", error))?;
     let application_templates: Value = serde_json::from_slice(APPLICATION_TEMPLATES)
         .map_err(|error| contract_error("invalid application template contract", error))?;
+    let internal_applications: Value = serde_json::from_slice(INTERNAL_APPLICATIONS)
+        .map_err(|error| contract_error("invalid internal application contract", error))?;
     require(
         surface["schema"] == "marty.issuance-runtime-surface/v1",
         "unexpected issuance surface schema",
@@ -683,6 +691,32 @@ pub fn validate_embedded_contract() -> Result<CoverageSummary, MmfError> {
         "unexpected application template behavior contract",
     )?;
     require(
+        internal_applications["schema"] == "marty.issuance-internal-applications/v1"
+            && internal_applications["surface"]["base_path"] == "/internal/applications"
+            && internal_applications["surface"]["routes"]
+                .as_array()
+                .is_some_and(|routes| routes.len() == 14)
+            && internal_applications["coverage"]["rust_implementation_authorized"] == true
+            && internal_applications["coverage"]["required_before_rust_implementation"]
+                .as_array()
+                .is_some_and(Vec::is_empty)
+            && internal_applications["source_revision"]["approved_repairs"]
+                == serde_json::json!([
+                    "9907d99: read issuance state from IssuanceTransaction while applications remain approved",
+                    "843c0e5: restore name, email, then generated applicant identifier precedence",
+                    "073b177: redact provider transport exception details from external evidence API responses",
+                    "877253d: reserve replayed application offers idempotently",
+                    "1dda8ac: map invalid status filters to a stable validation response",
+                    "3bee6f7: fail closed on missing offer dependencies and issuer context",
+                    "validate active tenant-owned revocation bindings before ordinary approval",
+                    "commit manual lifecycle transitions and non-Canvas issuance reservations atomically",
+                    "commit external-evidence and reconciliation application, fact, transaction, and audit write sets atomically",
+                    "preserve issuance-specific Canvas offer readiness errors separately from approval errors",
+                    "retain secret-safe structured diagnostics for provider, Canvas, issuer-context, and wallet-catalog failures"
+                ]),
+        "unexpected internal application behavior contract",
+    )?;
+    require(
         coverage.behavior_contract.repository == "ElevenID/marty-credentials"
             && coverage.behavior_contract.path == "contracts/issuance-static-discovery.json"
             && coverage.behavior_contract.commit.len() == 40
@@ -835,6 +869,18 @@ pub fn validate_embedded_contract() -> Result<CoverageSummary, MmfError> {
         "invalid application template provenance",
     )?;
     require(
+        coverage.internal_application_behavior_contract.repository == "ElevenID/marty-credentials"
+            && coverage.internal_application_behavior_contract.path
+                == "contracts/issuance-internal-applications.json"
+            && coverage.internal_application_behavior_contract.commit.len() == 40
+            && coverage
+                .internal_application_behavior_contract
+                .commit
+                .chars()
+                .all(|character| character.is_ascii_hexdigit()),
+        "invalid internal application provenance",
+    )?;
+    require(
         coverage.schema == "marty.issuance-native-coverage/v1",
         "unexpected issuance coverage schema",
     )?;
@@ -936,6 +982,13 @@ pub fn validate_embedded_contract() -> Result<CoverageSummary, MmfError> {
         actual_application_templates == coverage.application_template_behavior_contract.sha256,
         "application template hash does not match provenance",
     )?;
+    let canonical_internal_applications = canonical_lf(INTERNAL_APPLICATIONS);
+    let actual_internal_applications =
+        format!("{:x}", Sha256::digest(&canonical_internal_applications));
+    require(
+        actual_internal_applications == coverage.internal_application_behavior_contract.sha256,
+        "internal application hash does not match provenance",
+    )?;
 
     let routes = surface["http"]["routes"]
         .as_array()
@@ -1005,6 +1058,7 @@ pub fn validate_embedded_contract() -> Result<CoverageSummary, MmfError> {
     let mut native_canvas_oauth_cases = BTreeSet::new();
     let mut native_canvas_management_cases = BTreeSet::new();
     let mut native_application_template_cases = BTreeSet::new();
+    let mut native_internal_application_cases = BTreeSet::new();
     // Freeze the already-qualified source contract; changing its historical
     // limits/status text is not necessary to select the eight exact operations.
     require(
@@ -1301,6 +1355,13 @@ pub fn validate_embedded_contract() -> Result<CoverageSummary, MmfError> {
                 native_application_template_cases.insert(behavior_case),
                 "duplicate native application template behavior case",
             )?;
+        } else if let Some(behavior_case) = operation.internal_application_behavior_case.as_deref()
+        {
+            validate_internal_application_operation(operation, &internal_applications)?;
+            require(
+                native_internal_application_cases.insert(behavior_case),
+                "duplicate native internal application behavior case",
+            )?;
         } else if let Some(behavior_case) = operation.canvas_operations_behavior_case {
             validate_canvas_operations_operation(operation, &canvas_operations)?;
             require(
@@ -1374,6 +1435,16 @@ pub fn validate_embedded_contract() -> Result<CoverageSummary, MmfError> {
     require(
         native_application_template_cases == frozen_application_template_cases,
         "native application template behavior coverage is incomplete",
+    )?;
+    let frozen_internal_application_cases = internal_applications["surface"]["routes"]
+        .as_array()
+        .ok_or_else(|| invalid("internal application routes are missing"))?
+        .iter()
+        .filter_map(|route| route["operation"].as_str())
+        .collect::<BTreeSet<_>>();
+    require(
+        native_internal_application_cases == frozen_internal_application_cases,
+        "native internal application behavior coverage is incomplete",
     )?;
     let frozen_transaction_read_cases = transaction_reads
         .cases
@@ -1544,6 +1615,38 @@ fn validate_application_template_operation(
     )
 }
 
+fn validate_internal_application_operation(
+    operation: &HttpOperation,
+    contract: &Value,
+) -> Result<(), MmfError> {
+    require(
+        operation.behavior_selector_count() == 1
+            && operation.internal_application_behavior_case.as_deref()
+                == Some(operation.operation.as_str())
+            && contract["schema"] == "marty.issuance-internal-applications/v1"
+            && contract["surface"]["base_path"] == "/internal/applications"
+            && contract["coverage"]["rust_implementation_authorized"] == true
+            && contract["coverage"]["required_before_rust_implementation"]
+                .as_array()
+                .is_some_and(Vec::is_empty)
+            && contract["surface"]["routes"]
+                .as_array()
+                .is_some_and(|routes| {
+                    routes.len() == 14
+                        && routes
+                            .iter()
+                            .filter(|route| {
+                                route["method"] == operation.method
+                                    && route["path"] == operation.path
+                                    && route["operation"] == operation.operation
+                            })
+                            .count()
+                            == 1
+                }),
+        "native internal application operation diverges from its exact behavior contract",
+    )
+}
+
 fn validate_canvas_operations_operation(
     operation: &HttpOperation,
     contract: &Value,
@@ -1697,10 +1800,11 @@ mod tests {
     use super::{
         canonical_lf, validate_application_template_operation,
         validate_canvas_operations_operation, validate_didcomm_operation,
-        validate_embedded_contract, validate_initiation_operation, validate_renewal_operation,
-        CanvasOperationsCase, Coverage, HttpOperation, APPLICATION_TEMPLATES, CANVAS_LTI,
-        CANVAS_MANAGEMENT, CANVAS_OPERATIONS, COVERAGE, CREDENTIAL_ADMISSION, CREDENTIAL_LIFECYCLE,
-        CREDENTIAL_SIGNING, DIDCOMM, INITIATION, RENEWAL_REFERENCE,
+        validate_embedded_contract, validate_initiation_operation,
+        validate_internal_application_operation, validate_renewal_operation, CanvasOperationsCase,
+        Coverage, HttpOperation, APPLICATION_TEMPLATES, CANVAS_LTI, CANVAS_MANAGEMENT,
+        CANVAS_OPERATIONS, COVERAGE, CREDENTIAL_ADMISSION, CREDENTIAL_LIFECYCLE,
+        CREDENTIAL_SIGNING, DIDCOMM, INITIATION, INTERNAL_APPLICATIONS, RENEWAL_REFERENCE,
     };
 
     #[test]
@@ -1749,6 +1853,59 @@ mod tests {
                 .unwrap()
                 .push(original.clone());
             assert!(validate_application_template_operation(
+                &parse(original.clone()).unwrap(),
+                &duplicate
+            )
+            .is_err());
+        }
+    }
+
+    #[test]
+    fn internal_application_selectors_are_closed_exact_and_exclusive() {
+        let coverage: Value = serde_json::from_str(COVERAGE).unwrap();
+        let contract: Value = serde_json::from_slice(INTERNAL_APPLICATIONS).unwrap();
+        let selected: Vec<_> = coverage["native_http"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter(|operation| {
+                operation
+                    .get("internal_application_behavior_case")
+                    .is_some()
+            })
+            .collect();
+        assert_eq!(selected.len(), 14);
+        for original in selected {
+            let parse = |value: Value| serde_json::from_value::<HttpOperation>(value);
+            validate_internal_application_operation(&parse(original.clone()).unwrap(), &contract)
+                .unwrap();
+            for (field, value) in [
+                ("method", serde_json::json!("OPTIONS")),
+                (
+                    "path",
+                    serde_json::json!("/internal/applications/sibling/unknown"),
+                ),
+                ("operation", serde_json::json!("unknown_operation")),
+                (
+                    "internal_application_behavior_case",
+                    serde_json::json!("unknown_operation"),
+                ),
+                ("initiation_behavior_contract", serde_json::json!(true)),
+            ] {
+                let mut changed = original.clone();
+                changed[field] = value;
+                assert!(validate_internal_application_operation(
+                    &parse(changed).unwrap(),
+                    &contract
+                )
+                .is_err());
+            }
+            let mut duplicate = contract.clone();
+            duplicate["surface"]["routes"]
+                .as_array_mut()
+                .unwrap()
+                .push(original.clone());
+            assert!(validate_internal_application_operation(
                 &parse(original.clone()).unwrap(),
                 &duplicate
             )
@@ -2068,13 +2225,17 @@ mod tests {
             format!("{:x}", Sha256::digest(canonical_lf(APPLICATION_TEMPLATES))),
             coverage.application_template_behavior_contract.sha256
         );
+        assert_eq!(
+            format!("{:x}", Sha256::digest(canonical_lf(INTERNAL_APPLICATIONS))),
+            coverage.internal_application_behavior_contract.sha256
+        );
     }
 
     #[test]
     fn embedded_surface_and_native_coverage_are_consistent() {
         let summary = validate_embedded_contract().expect("contract");
-        assert_eq!(summary.native_http, 82);
-        assert_eq!(summary.remaining_http, 49);
+        assert_eq!(summary.native_http, 96);
+        assert_eq!(summary.remaining_http, 35);
         assert_eq!(summary.remaining_grpc, 0);
     }
 }
