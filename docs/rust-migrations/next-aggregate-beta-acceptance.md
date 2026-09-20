@@ -7,6 +7,26 @@ deployment authorization for production, or an acceptance claim. Historical
 beta 1.1.217 evidence cannot qualify a new candidate. No candidate coordinate is
 selected here.
 
+## Protected configuration audit — 2026-09-20
+
+- `stack-release` is restricted to protected branches, requires Burdettadam
+  approval, permits self-approval, and satisfies the current protection-only
+  release preflight. The current stack-release workflow requires no environment
+  variable or secret values.
+- `beta-lifecycle` has the required branch policy and Burdettadam reviewer. Its
+  `BETA_ORIGIN` and `BETA_AUDIT_ORG_ID` variables, seeded applicant/vendor/admin
+  secret names, and repository-scoped `DEMO_RECORDER_DISPATCH_TOKEN` are present.
+- `marty-demo-recorder` has the repository-scoped `DEMO_SOURCE_READ_TOKEN`
+  required by private release qualification.
+- `wallet-conformance` has the required branch policy and Burdettadam reviewer.
+  Its bearer token is optional; the required device evidence URL and checksum
+  remain dispatch inputs bound to the final release and lifecycle run.
+- The legacy `beta-migration-rehearsal` environment still exists without
+  values, but no current release, deployment, lifecycle, or conformance workflow
+  reads it. Do not repopulate stale `MIGRATION_REHEARSAL_*` instructions. The
+  current beta deployment wrapper owns backup and isolated rehearsal inputs and
+  must still prove them for the selected release.
+
 1. Land the complete intended source through exact-head maintainer review and
    protected CI, including Linux base/Envoy/Kubernetes consumer gates. Reconcile
    component pins explicitly; do not implicitly select another worker's crypto
