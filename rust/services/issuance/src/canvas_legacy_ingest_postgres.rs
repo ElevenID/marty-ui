@@ -18,6 +18,7 @@ use crate::{
     },
     canvas_lti_bootstrap::CanvasLtiBootstrapApplication,
     credential_postgres::transaction_row,
+    internal_application_reconciliation::canvas_scope_matches,
 };
 
 const LOAD_RECEIPT: &str = "SELECT payload_hash, status, issuance_response
@@ -1004,50 +1005,7 @@ fn event_scope(event: &CanvasEvidenceEvent) -> Map<String, Value> {
 }
 
 fn scope_matches(expected: Option<&Value>, actual: &Map<String, Value>) -> bool {
-    let expected = match expected {
-        None | Some(Value::Null) => return true,
-        Some(Value::Object(expected)) => expected,
-        Some(_) => return false,
-    };
-    expected.iter().all(|(key, expected)| {
-        if matches!(expected, Value::Null) || expected.as_str() == Some("") {
-            return true;
-        }
-        if matches!(
-            expected,
-            Value::Bool(_) | Value::Array(_) | Value::Object(_)
-        ) {
-            return false;
-        }
-        let aliases: &[&str] = match key.as_str() {
-            "canvas_account_id" | "account_id" => &["canvas_account_id", "account_id"],
-            "course_id" => &[
-                "course_id",
-                "canvas_course_id",
-                "canvas_context_id",
-                "context_id",
-            ],
-            "canvas_course_id" | "canvas_context_id" | "context_id" => &[
-                "course_id",
-                "canvas_course_id",
-                "canvas_context_id",
-                "context_id",
-            ],
-            "assignment_id" | "canvas_assignment_id" => {
-                &["assignment_id", "canvas_assignment_id", "resource_link_id"]
-            }
-            "module_id" | "canvas_module_id" => &["module_id", "canvas_module_id"],
-            "quiz_id" | "canvas_quiz_id" => &["quiz_id", "canvas_quiz_id"],
-            "user_id" | "canvas_user_id" => &["user_id", "canvas_user_id"],
-            "subject_id" => &["subject_id", "lti_subject"],
-            "enrollment_id" | "canvas_enrollment_id" => &["enrollment_id", "canvas_enrollment_id"],
-            _ => &[key.as_str()],
-        };
-        aliases
-            .iter()
-            .find_map(|alias| actual.get(*alias))
-            .is_some_and(|value| text(Some(value)) == text(Some(expected)))
-    })
+    canvas_scope_matches(expected, actual)
 }
 
 fn stored_receipt(row: &PgRow) -> Result<CanvasLegacyStoredReceipt, CanvasLegacyRepositoryError> {

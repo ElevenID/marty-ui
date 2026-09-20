@@ -19,8 +19,9 @@ use marty_issuance_service::{
     },
     internal_application_domain::{
         ApplicationCreate, ApplicationRecord, ApplicationStatus, EvidenceFactRecord,
-        EvidenceFactResponse, ExternalEvidenceApiCheckRequest, ExternalEvidenceApiCheckResponse,
-        IssuanceEventRecord,
+        EvidenceFactResponse, EvidenceReconciliationMetrics, EvidenceReconciliationRecord,
+        EvidenceReconciliationResult, ExternalEvidenceApiCheckRequest,
+        ExternalEvidenceApiCheckResponse, IssuanceEventRecord, StaleCanvasEvidenceReceipt,
     },
     internal_application_evidence::{
         InternalApplicationEvidenceCoordinator, InternalApplicationEvidenceError,
@@ -29,6 +30,9 @@ use marty_issuance_service::{
     internal_application_offer::{
         InternalApplicationOfferCoordinator, InternalApplicationOfferError, IssuanceOfferResponse,
         IssuanceOfferWallet,
+    },
+    internal_application_reconciliation::{
+        EvidenceReconciliationError, InternalApplicationReconciler,
     },
     internal_application_service::{
         InternalApplicationApprovalError, InternalApplicationApprover, InternalApplicationClock,
@@ -164,6 +168,128 @@ async fn external_evidence_route_preserves_shape_lifecycle_and_redacted_transpor
         json!({"detail": "External evidence API request failed"})
     );
     assert!(!body.to_string().contains("secret-token"));
+}
+
+#[tokio::test]
+async fn reconciliation_routes_preserve_tenant_scope_clamps_and_response_shape() {
+    let repository = Arc::new(MemoryRepository::default());
+    repository.seed_application(application(
+        "application-1",
+        "org-123",
+        ApplicationStatus::Pending,
+    ));
+    let result = EvidenceReconciliationResult {
+        organization_id: "org-123".to_owned(),
+        dry_run: true,
+        metrics: EvidenceReconciliationMetrics {
+            scanned_applications: 1,
+            evaluated_policies: 1,
+            policy_permits: 1,
+            stale_receipts: 1,
+            ..EvidenceReconciliationMetrics::default()
+        },
+        records: vec![EvidenceReconciliationRecord {
+            application_id: "application-1".to_owned(),
+            status_before: "pending".to_owned(),
+            status_after: "pending".to_owned(),
+            action: "would_create_or_refresh_issuance_transaction".to_owned(),
+            fact_count: 1,
+            policy_decision: Some(
+                json!({"allowed": true})
+                    .as_object()
+                    .expect("policy")
+                    .clone(),
+            ),
+            issuance_transaction_id: None,
+            errors: Vec::new(),
+        }],
+        stale_receipts: vec![StaleCanvasEvidenceReceipt {
+            receipt_id: "receipt-1".to_owned(),
+            provider_event_id: "event-1".to_owned(),
+            canvas_account_id: Some("account-1".to_owned()),
+            application_id: Some("application-1".to_owned()),
+            status: "evidence_received".to_owned(),
+            reasons: vec!["receipt_without_policy_decision".to_owned()],
+            last_seen_at: "2026-09-19T12:34:56+00:00".to_owned(),
+        }],
+        generated_at: "2026-09-19T12:34:56+00:00".to_owned(),
+    };
+    let reconciler = Arc::new(FixedReconciler {
+        calls: Mutex::new(Vec::new()),
+        result: Ok(result),
+    });
+    let service = service_with_reconciler(repository, reconciler.clone());
+
+    let (status, body) = request(
+        &service,
+        Method::POST,
+        "/internal/applications/evidence/reconcile",
+        Some(json!({
+            "organization_id": "org-123",
+            "application_id": "application-1",
+            "limit": 0,
+            "dry_run": true,
+            "issue_on_permit": false,
+            "unknown": true
+        })),
+        Some("secret"),
+        Some("org-123"),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(body["dry_run"], true);
+    assert_eq!(
+        body["records"][0]["action"],
+        "would_create_or_refresh_issuance_transaction"
+    );
+    assert_eq!(
+        body["stale_receipts"][0]["reasons"],
+        json!(["receipt_without_policy_decision"])
+    );
+
+    let (status, report) = request(
+        &service,
+        Method::GET,
+        "/internal/applications/evidence/reconciliation-report?organization_id=org-123&limit=5000",
+        None,
+        Some("secret"),
+        Some("org-123"),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(report["metrics"]["stale_receipts"], 1);
+    assert_eq!(
+        reconciler
+            .calls
+            .lock()
+            .expect("reconciler calls")
+            .as_slice(),
+        [
+            (
+                "org-123".to_owned(),
+                Some("application-1".to_owned()),
+                1,
+                true,
+                false,
+            ),
+            ("org-123".to_owned(), None, 1000, true, true),
+        ]
+    );
+
+    let (status, body) = request(
+        &service,
+        Method::POST,
+        "/internal/applications/evidence/reconcile",
+        Some(json!({
+            "organization_id": "org-123",
+            "application_id": "missing"
+        })),
+        Some("secret"),
+        Some("org-123"),
+    )
+    .await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+    assert_eq!(body, json!({"detail": "Application not found"}));
 }
 
 #[derive(Default)]
@@ -354,6 +480,34 @@ struct FixedEvidence {
     result: Result<ExternalEvidenceApiCheckResponse, InternalApplicationEvidenceError>,
 }
 
+type ReconciliationCall = (String, Option<String>, usize, bool, bool);
+
+struct FixedReconciler {
+    calls: Mutex<Vec<ReconciliationCall>>,
+    result: Result<EvidenceReconciliationResult, EvidenceReconciliationError>,
+}
+
+#[async_trait]
+impl InternalApplicationReconciler for FixedReconciler {
+    async fn reconcile(
+        &self,
+        organization_id: &str,
+        application_id: Option<&str>,
+        limit: usize,
+        dry_run: bool,
+        issue_on_permit: bool,
+    ) -> Result<EvidenceReconciliationResult, EvidenceReconciliationError> {
+        self.calls.lock().expect("reconciler calls").push((
+            organization_id.to_owned(),
+            application_id.map(str::to_owned),
+            limit,
+            dry_run,
+            issue_on_permit,
+        ));
+        self.result.clone()
+    }
+}
+
 #[async_trait]
 impl InternalApplicationEvidenceCoordinator for FixedEvidence {
     async fn run_external_check(
@@ -538,6 +692,13 @@ fn service_with_evidence(
     result: Result<ExternalEvidenceApiCheckResponse, InternalApplicationEvidenceError>,
 ) -> InternalApplicationService {
     service(repository, Some("secret")).with_evidence(Arc::new(FixedEvidence { result }))
+}
+
+fn service_with_reconciler(
+    repository: Arc<MemoryRepository>,
+    reconciler: Arc<FixedReconciler>,
+) -> InternalApplicationService {
+    service(repository, Some("secret")).with_reconciler(reconciler)
 }
 
 async fn request(

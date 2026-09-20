@@ -132,6 +132,10 @@ name = "internal_application_http_behavior"
 path = "tests/internal_application_http_behavior.rs"
 
 [[test]]
+name = "internal_application_reconciliation_behavior"
+path = "tests/internal_application_reconciliation_behavior.rs"
+
+[[test]]
 name = "application_template_http_behavior"
 path = "tests/application_template_http_behavior.rs"
 

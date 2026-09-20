@@ -18,14 +18,17 @@ use crate::{
         derive_applicant_identifier, ApplicationApproval, ApplicationCreate,
         ApplicationDomainError, ApplicationEvidenceSummaryResponse, ApplicationRecord,
         ApplicationRejection, ApplicationStatus, EvidenceFactRecord, EvidenceFactResponse,
-        EvidenceSubmission, ExternalEvidenceApiCheckRequest, ExternalEvidenceApiCheckResponse,
-        IssuanceEventRecord,
+        EvidenceReconciliationRequest, EvidenceReconciliationResult, EvidenceSubmission,
+        ExternalEvidenceApiCheckRequest, ExternalEvidenceApiCheckResponse, IssuanceEventRecord,
     },
     internal_application_evidence::{
         InternalApplicationEvidenceCoordinator, InternalApplicationEvidenceError,
     },
     internal_application_offer::{
         InternalApplicationOfferCoordinator, InternalApplicationOfferError, IssuanceOfferResponse,
+    },
+    internal_application_reconciliation::{
+        EvidenceReconciliationError, InternalApplicationReconciler,
     },
     internal_external_evidence::find_external_api_requirement,
     management_security::ManagementSecurity,
@@ -165,6 +168,7 @@ pub struct InternalApplicationService {
     approver: Option<Arc<dyn InternalApplicationApprover>>,
     offers: Option<Arc<dyn InternalApplicationOfferCoordinator>>,
     evidence: Option<Arc<dyn InternalApplicationEvidenceCoordinator>>,
+    reconciler: Option<Arc<dyn InternalApplicationReconciler>>,
     security: ManagementSecurity,
 }
 
@@ -176,6 +180,7 @@ impl std::fmt::Debug for InternalApplicationService {
             .field("approval_configured", &self.approver.is_some())
             .field("offers_configured", &self.offers.is_some())
             .field("evidence_configured", &self.evidence.is_some())
+            .field("reconciliation_configured", &self.reconciler.is_some())
             .finish_non_exhaustive()
     }
 }
@@ -195,6 +200,7 @@ impl InternalApplicationService {
             approver: None,
             offers: None,
             evidence: None,
+            reconciler: None,
             security: ManagementSecurity::new(management_api_key),
         }
     }
@@ -217,6 +223,12 @@ impl InternalApplicationService {
         evidence: Arc<dyn InternalApplicationEvidenceCoordinator>,
     ) -> Self {
         self.evidence = Some(evidence);
+        self
+    }
+
+    #[must_use]
+    pub fn with_reconciler(mut self, reconciler: Arc<dyn InternalApplicationReconciler>) -> Self {
+        self.reconciler = Some(reconciler);
         self
     }
 
@@ -579,6 +591,68 @@ impl InternalApplicationService {
             .map_err(Into::into)
     }
 
+    pub async fn reconcile_evidence(
+        &self,
+        api_key: Option<&str>,
+        trusted_organization: Option<&str>,
+        request: EvidenceReconciliationRequest,
+    ) -> Result<EvidenceReconciliationResult, InternalApplicationServiceError> {
+        self.security.authorize(api_key)?;
+        let trusted_organization = required_organization(trusted_organization)?;
+        let organization_id = request.organization_id.trim();
+        self.security
+            .require_organization(Some(trusted_organization), organization_id, true)?;
+        if let Some(application_id) = request
+            .application_id
+            .as_deref()
+            .filter(|value| !value.is_empty())
+        {
+            self.load_managed(application_id, trusted_organization)
+                .await?;
+        }
+        self.reconciler
+            .as_ref()
+            .ok_or(EvidenceReconciliationError::Repository(
+                crate::internal_application_reconciliation::EvidenceReconciliationRepositoryError::Unavailable,
+            ))?
+            .reconcile(
+                organization_id,
+                request.application_id.as_deref().filter(|value| !value.is_empty()),
+                reconciliation_limit(request.limit),
+                request.dry_run,
+                request.issue_on_permit,
+            )
+            .await
+            .map_err(Into::into)
+    }
+
+    pub async fn evidence_reconciliation_report(
+        &self,
+        api_key: Option<&str>,
+        trusted_organization: Option<&str>,
+        organization_id: &str,
+        limit: i64,
+    ) -> Result<EvidenceReconciliationResult, InternalApplicationServiceError> {
+        self.security.authorize(api_key)?;
+        let organization_id = organization_id.trim();
+        self.security
+            .require_organization(trusted_organization, organization_id, true)?;
+        self.reconciler
+            .as_ref()
+            .ok_or(EvidenceReconciliationError::Repository(
+                crate::internal_application_reconciliation::EvidenceReconciliationRepositoryError::Unavailable,
+            ))?
+            .reconcile(
+                organization_id,
+                None,
+                reconciliation_limit(limit),
+                true,
+                true,
+            )
+            .await
+            .map_err(Into::into)
+    }
+
     async fn load_managed(
         &self,
         application_id: &str,
@@ -680,6 +754,8 @@ pub enum InternalApplicationServiceError {
     #[error(transparent)]
     Evidence(#[from] InternalApplicationEvidenceError),
     #[error(transparent)]
+    Reconciliation(#[from] EvidenceReconciliationError),
+    #[error(transparent)]
     Domain(#[from] ApplicationDomainError),
     #[error("Invalid application status")]
     InvalidStatus,
@@ -721,6 +797,10 @@ fn required_organization(value: Option<&str>) -> Result<&str, TransactionReadErr
         .map(str::trim)
         .filter(|value| !value.is_empty())
         .ok_or(TransactionReadError::TrustedOrganizationRequired)
+}
+
+fn reconciliation_limit(limit: i64) -> usize {
+    limit.clamp(1, 1000) as usize
 }
 
 #[cfg(test)]

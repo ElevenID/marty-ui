@@ -102,6 +102,22 @@ use marty_issuance_service::{
     initiation_http::InitiationHttpService,
     initiation_response::InitiationOfferProjector,
     integration_secret::IntegrationSecretCipher,
+    internal_application_approval::{
+        CompositeInternalApplicationApprover, CompositeInternalApplicationTransactionPreparer,
+        OrdinaryInternalApplicationApprover,
+    },
+    internal_application_evidence::DefaultInternalApplicationEvidenceCoordinator,
+    internal_application_offer::{
+        InternalApplicationOfferProjector, NativeInternalApplicationOfferCoordinator,
+    },
+    internal_application_postgres::PostgresInternalApplicationRepository,
+    internal_application_reconciliation::{
+        CanvasEvidenceReconciliationPreparer, DefaultInternalApplicationReconciler,
+    },
+    internal_application_service::{
+        InternalApplicationService, SystemInternalApplicationClock,
+        UuidInternalApplicationIdGenerator,
+    },
     proof_nonce::{ProofNonceService, SecureProofNonceGenerator},
     signing_policy::HttpProofPolicyResolver,
     tenant_discovery::TenantDiscoveryService,
@@ -405,7 +421,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
         )),
         config.canvas_local_admin_token.clone(),
     )
-    .with_application_approval(canvas_application_approval)
+    .with_application_approval(canvas_application_approval.clone())
     .with_event_status(CanvasEventStatusService::new(
         config.issuance_api_key.as_deref(),
         Arc::new(PostgresCanvasEventStatusRepository::new(pool.clone())),
@@ -444,7 +460,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
         config.revocation_profile_service_url.clone(),
         config.internal_service_token.as_deref(),
         config.dependency_timeout,
-        canvas_guard_config,
+        canvas_guard_config.clone(),
     )?);
     let didcomm_delivery = Arc::new(NativeInitiationDidcommDelivery::new(
         NativeInitiationDidcommPorts {
@@ -488,6 +504,67 @@ async fn main() -> Result<(), Box<dyn Error>> {
         Arc::new(SystemApplicationTemplateClock),
         config.issuance_api_key.as_deref(),
     );
+    let internal_application_repository =
+        Arc::new(PostgresInternalApplicationRepository::new(pool.clone()));
+    let ordinary_internal_application_approver =
+        Arc::new(OrdinaryInternalApplicationApprover::new(
+            internal_application_repository.clone(),
+            initiation_control_plane.clone(),
+            issuer_resolver.clone(),
+            Arc::new(SecureCanvasAwardApprovalSeedGenerator),
+            canvas_lti_clock.clone(),
+            config.issuer_base_url.clone(),
+            // Python accepts arbitrary-width integer settings and reports an
+            // unusable expiry at request time. Preserve deferred failure for
+            // values outside Rust's i64 range instead of rejecting startup.
+            config
+                .issuance_offer_ttl_minutes
+                .to_i64()
+                .unwrap_or(i64::MAX),
+        ));
+    let internal_application_preparer =
+        Arc::new(CompositeInternalApplicationTransactionPreparer::new(
+            ordinary_internal_application_approver.clone(),
+            Arc::new(canvas_application_approval.clone()),
+        ));
+    let internal_application_approver = Arc::new(CompositeInternalApplicationApprover::new(
+        ordinary_internal_application_approver,
+        Arc::new(canvas_application_approval),
+        internal_application_repository.clone(),
+    ));
+    let internal_application_offers = Arc::new(NativeInternalApplicationOfferCoordinator::new(
+        internal_application_repository.clone(),
+        internal_application_preparer.clone(),
+        InternalApplicationOfferProjector::new(
+            config.issuer_base_url.clone(),
+            initiation_control_plane.clone(),
+            canvas_lti_clock.clone(),
+        )?,
+        canvas_lti_clock.clone(),
+    ));
+    let internal_application_evidence =
+        Arc::new(DefaultInternalApplicationEvidenceCoordinator::new(
+            internal_application_repository.clone(),
+            internal_application_preparer,
+        ));
+    let internal_application_reconciler = Arc::new(DefaultInternalApplicationReconciler::new(
+        internal_application_repository.clone(),
+        Arc::new(CanvasEvidenceReconciliationPreparer::new(
+            issuer_resolver.clone(),
+            Arc::new(SecureCanvasAwardApprovalSeedGenerator),
+            canvas_guard_config,
+        )),
+    ));
+    let internal_applications = InternalApplicationService::new(
+        internal_application_repository,
+        Arc::new(SystemInternalApplicationClock),
+        Arc::new(UuidInternalApplicationIdGenerator),
+        config.issuance_api_key.as_deref(),
+    )
+    .with_approver(internal_application_approver)
+    .with_offers(internal_application_offers)
+    .with_evidence(internal_application_evidence)
+    .with_reconciler(internal_application_reconciler);
     let initiation_clock = Arc::new(SystemInitiationClock);
     let initiation = InitiationService::new(
         InitiationPorts {
@@ -626,7 +703,8 @@ async fn main() -> Result<(), Box<dyn Error>> {
             )
             .with_operations(canvas_operations),
             TokenRateLimiter::from_python_config(config.token_rate_limit, config.token_rate_window),
-        ),
+        )
+        .with_internal_applications(internal_applications),
     );
     let (health_reporter, health_service) = tonic_health::server::health_reporter();
     let grpc_server = IssuanceServiceServer::new(grpc_service);

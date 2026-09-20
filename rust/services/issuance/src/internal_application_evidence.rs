@@ -523,7 +523,7 @@ impl InternalApplicationEvidenceCoordinator for DefaultInternalApplicationEviden
     }
 }
 
-fn fact_policy_json(fact: &EvidenceFactRecord) -> Value {
+pub(crate) fn fact_policy_json(fact: &EvidenceFactRecord) -> Value {
     let mut value = Map::from_iter([
         ("id".to_owned(), Value::String(fact.id.clone())),
         (

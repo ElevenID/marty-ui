@@ -9,6 +9,9 @@ use tracing::error;
 use crate::{
     application_template_domain::ApplicationTemplateRecord,
     application_template_postgres::PostgresApplicationTemplateRepository,
+    canvas_award_candidate_approval::CanvasApplicationApprovalError,
+    canvas_award_candidate_approval_postgres::reserve_management_canvas_issuance_in_transaction,
+    canvas_event_status::CanvasEventReceipt,
     credential::{CredentialTransaction, CredentialTransactionStatus},
     credential_postgres::{
         insert_issuance_transaction, issuance_transaction_by_id, lock_issuance_transaction_by_id,
@@ -27,6 +30,12 @@ use crate::{
     },
     internal_application_offer::{
         InternalApplicationOfferError, InternalApplicationOfferRepository,
+    },
+    internal_application_reconciliation::{
+        canvas_scope_matches, EvidenceReconciliationCommitOutcome,
+        EvidenceReconciliationReceiptSnapshot, EvidenceReconciliationRepositoryError,
+        EvidenceReconciliationSnapshot, EvidenceReconciliationWrite,
+        InternalApplicationReconciliationRepository,
     },
     internal_application_service::{
         InternalApplicationApprovalError, InternalApplicationRepository,
@@ -144,6 +153,78 @@ const GET_APPROVAL_POLICY_SET: &str = "SELECT
         id::text AS id, status, policy_type, cedar_policies
     FROM organization_service.policy_sets
     WHERE organization_id::text = $1 AND id::text = $2";
+
+const GET_RECONCILIATION_PLATFORM_BY_ID: &str = "SELECT jsonb_build_object(
+        'id', id, 'organization_id', organization_id,
+        'canvas_account_id', canvas_account_id,
+        'registration_status', registration_status,
+        'enabled', enabled, 'archived_at', archived_at
+    ) FROM issuance_service.canvas_platforms
+    WHERE id = $1 AND organization_id = $2";
+
+const GET_RECONCILIATION_PLATFORM_BY_ACCOUNT: &str = "SELECT jsonb_build_object(
+        'id', id, 'organization_id', organization_id,
+        'canvas_account_id', canvas_account_id,
+        'registration_status', registration_status,
+        'enabled', enabled, 'archived_at', archived_at
+    ) FROM issuance_service.canvas_platforms
+    WHERE organization_id = $1 AND canvas_account_id = $2";
+
+const GET_RECONCILIATION_BINDING: &str = "SELECT jsonb_build_object(
+        'id', id, 'organization_id', organization_id, 'platform_id', platform_id,
+        'application_template_id', application_template_id,
+        'credential_template_id', credential_template_id,
+        'approval_policy_set_id', approval_policy_set_id,
+        'auto_approve_on_evidence', auto_approve_on_evidence,
+        'evidence_requirements', evidence_requirements,
+        'canvas_scope', canvas_scope, 'delivery_mode', delivery_mode,
+        'deployment_profile_id', deployment_profile_id,
+        'feature_flags', feature_flags, 'enabled', enabled,
+        'config_version', config_version,
+        'validated_config_version', validated_config_version,
+        'readiness_checks', readiness_checks,
+        'readiness_validated_at', readiness_validated_at,
+        'credential_template_snapshot', credential_template_snapshot,
+        'activated_at', activated_at, 'archived_at', archived_at
+    ) FROM issuance_service.canvas_program_bindings
+    WHERE id = $1 AND organization_id = $2
+      AND application_template_id = $3";
+
+const LIST_RECONCILIATION_BINDINGS: &str = "SELECT jsonb_build_object(
+        'id', id, 'organization_id', organization_id, 'platform_id', platform_id,
+        'application_template_id', application_template_id,
+        'credential_template_id', credential_template_id,
+        'approval_policy_set_id', approval_policy_set_id,
+        'auto_approve_on_evidence', auto_approve_on_evidence,
+        'evidence_requirements', evidence_requirements,
+        'canvas_scope', canvas_scope, 'delivery_mode', delivery_mode,
+        'deployment_profile_id', deployment_profile_id,
+        'feature_flags', feature_flags, 'enabled', enabled,
+        'config_version', config_version,
+        'validated_config_version', validated_config_version,
+        'readiness_checks', readiness_checks,
+        'readiness_validated_at', readiness_validated_at,
+        'credential_template_snapshot', credential_template_snapshot,
+        'activated_at', activated_at, 'archived_at', archived_at
+    ) FROM issuance_service.canvas_program_bindings
+    WHERE organization_id = $1 AND platform_id = $2
+      AND application_template_id = $3
+    ORDER BY created_at";
+
+const LIST_RECONCILIATION_RECEIPTS: &str = "SELECT
+        id, provider_event_id, canvas_account_id, organization_id,
+        credential_template_id, payload_hash, issuance_transaction_id,
+        issuance_response, status, error_summary, first_seen_at, last_seen_at
+    FROM issuance_service.canvas_event_receipts
+    WHERE organization_id = $1 AND status = 'evidence_received'
+    ORDER BY last_seen_at DESC
+    LIMIT $2";
+
+const UPDATE_RECONCILIATION_CONTEXT_AFTER_RESERVATION: &str = "UPDATE issuance_service.applications
+     SET integration_context = $3
+     WHERE id = $1 AND organization_id = $2
+       AND status = 'approved' AND issuance_transaction_id = $4
+       AND updated_at = $5";
 
 #[derive(Clone)]
 pub struct PostgresInternalApplicationRepository {
@@ -580,6 +661,376 @@ impl InternalApplicationEvidenceRepository for PostgresInternalApplicationReposi
 }
 
 #[async_trait]
+impl InternalApplicationReconciliationRepository for PostgresInternalApplicationRepository {
+    async fn applications(
+        &self,
+        organization_id: &str,
+        application_id: Option<&str>,
+        limit: usize,
+    ) -> Result<Vec<ApplicationRecord>, EvidenceReconciliationRepositoryError> {
+        let mut applications = if let Some(application_id) = application_id {
+            InternalApplicationRepository::get_application(self, application_id)
+                .await
+                .map_err(|_| EvidenceReconciliationRepositoryError::Unavailable)?
+                .filter(|application| application.organization_id == organization_id)
+                .into_iter()
+                .collect()
+        } else {
+            InternalApplicationRepository::list_applications(self, organization_id, None, None)
+                .await
+                .map_err(|_| EvidenceReconciliationRepositoryError::Unavailable)?
+        };
+        applications.truncate(limit);
+        Ok(applications)
+    }
+
+    async fn snapshot(
+        &self,
+        application: &ApplicationRecord,
+    ) -> Result<EvidenceReconciliationSnapshot, EvidenceReconciliationRepositoryError> {
+        let template = InternalApplicationRepository::get_application_template(
+            self,
+            &application.application_template_id,
+        )
+        .await
+        .map_err(|_| EvidenceReconciliationRepositoryError::Unavailable)?
+        .filter(|template| template.organization_id == application.organization_id);
+        let facts = InternalApplicationRepository::list_evidence_facts_for_application(
+            self,
+            &application.id,
+        )
+        .await
+        .map_err(|_| EvidenceReconciliationRepositoryError::Unavailable)?;
+        let canvas_facts = facts
+            .iter()
+            .filter(|fact| fact.provider == "canvas")
+            .collect::<Vec<_>>();
+        let canvas = application
+            .integration_context
+            .get("canvas")
+            .and_then(Value::as_object);
+        let binding_id = canvas
+            .and_then(|canvas| canvas.get("canvas_program_binding_id"))
+            .and_then(Value::as_str)
+            .filter(|value| !value.is_empty());
+        let expected_platform_id = canvas
+            .and_then(|canvas| canvas.get("canvas_platform_id"))
+            .and_then(Value::as_str)
+            .filter(|value| !value.is_empty());
+
+        let (platform, binding) = if let Some(binding_id) = binding_id {
+            let binding = sqlx::query_scalar::<_, Value>(GET_RECONCILIATION_BINDING)
+                .bind(binding_id)
+                .bind(&application.organization_id)
+                .bind(&application.application_template_id)
+                .fetch_optional(&self.pool)
+                .await
+                .map_err(reconciliation_repository_error)?
+                .and_then(|value| value.as_object().cloned())
+                .filter(active_binding);
+            let platform = if let Some(binding) = binding.as_ref() {
+                let platform_id = binding
+                    .get("platform_id")
+                    .and_then(Value::as_str)
+                    .unwrap_or_default();
+                if expected_platform_id.is_some_and(|expected| expected != platform_id) {
+                    None
+                } else {
+                    sqlx::query_scalar::<_, Value>(GET_RECONCILIATION_PLATFORM_BY_ID)
+                        .bind(platform_id)
+                        .bind(&application.organization_id)
+                        .fetch_optional(&self.pool)
+                        .await
+                        .map_err(reconciliation_repository_error)?
+                        .and_then(|value| value.as_object().cloned())
+                        .filter(active_platform)
+                }
+            } else {
+                None
+            };
+            if platform.is_none() {
+                (None, None)
+            } else {
+                (platform, binding)
+            }
+        } else {
+            let canvas_account_id = canvas
+                .and_then(|canvas| canvas.get("canvas_account_id"))
+                .and_then(Value::as_str)
+                .filter(|value| !value.is_empty())
+                .map(str::to_owned)
+                .or_else(|| canvas_facts.last().and_then(|fact| canvas_account_id(fact)));
+            let platform = match canvas_account_id.as_deref() {
+                Some(canvas_account_id) => {
+                    sqlx::query_scalar::<_, Value>(GET_RECONCILIATION_PLATFORM_BY_ACCOUNT)
+                        .bind(&application.organization_id)
+                        .bind(canvas_account_id)
+                        .fetch_optional(&self.pool)
+                        .await
+                        .map_err(reconciliation_repository_error)?
+                        .and_then(|value| value.as_object().cloned())
+                        .filter(active_platform)
+                }
+                None => None,
+            };
+            let binding = if let Some(platform) = platform.as_ref() {
+                let platform_id = platform
+                    .get("id")
+                    .and_then(Value::as_str)
+                    .unwrap_or_default();
+                let actual_scope = canvas_facts
+                    .last()
+                    .map(|fact| fact.scope.clone())
+                    .unwrap_or_default();
+                sqlx::query_scalar::<_, Value>(LIST_RECONCILIATION_BINDINGS)
+                    .bind(&application.organization_id)
+                    .bind(platform_id)
+                    .bind(&application.application_template_id)
+                    .fetch_all(&self.pool)
+                    .await
+                    .map_err(reconciliation_repository_error)?
+                    .into_iter()
+                    .filter_map(|value| value.as_object().cloned())
+                    .find(|binding| {
+                        active_binding(binding)
+                            && canvas_scope_matches(binding.get("canvas_scope"), &actual_scope)
+                    })
+            } else {
+                None
+            };
+            if binding.is_none() {
+                (None, None)
+            } else {
+                (platform, binding)
+            }
+        };
+
+        let policy_set_id = binding
+            .as_ref()
+            .and_then(|binding| binding.get("approval_policy_set_id"))
+            .and_then(Value::as_str)
+            .filter(|value| !value.is_empty())
+            .or_else(|| {
+                template
+                    .as_ref()
+                    .and_then(|template| template.approval_policy_set_id.as_deref())
+                    .filter(|value| !value.is_empty())
+            });
+        let policy_set = if let Some(policy_set_id) = policy_set_id {
+            InternalApplicationEvidenceRepository::approval_policy_set(
+                self,
+                &application.organization_id,
+                policy_set_id,
+            )
+            .await
+            .map_err(|_| EvidenceReconciliationRepositoryError::Unavailable)?
+        } else {
+            None
+        };
+        let existing_transaction =
+            if let Some(transaction_id) = application.issuance_transaction_id.as_deref() {
+                issuance_transaction_by_id(&self.pool, transaction_id, &application.organization_id)
+                    .await
+                    .map_err(|_| EvidenceReconciliationRepositoryError::Unavailable)?
+                    .filter(|transaction| {
+                        transaction.application_id.as_deref() == Some(&application.id)
+                    })
+            } else {
+                None
+            };
+        Ok(EvidenceReconciliationSnapshot {
+            application: application.clone(),
+            template,
+            platform,
+            binding,
+            facts,
+            policy_set,
+            existing_transaction,
+        })
+    }
+
+    async fn receipts(
+        &self,
+        organization_id: &str,
+        limit: usize,
+    ) -> Result<Vec<EvidenceReconciliationReceiptSnapshot>, EvidenceReconciliationRepositoryError>
+    {
+        let limit =
+            i64::try_from(limit).map_err(|_| EvidenceReconciliationRepositoryError::Unavailable)?;
+        let rows = sqlx::query(LIST_RECONCILIATION_RECEIPTS)
+            .bind(organization_id)
+            .bind(limit)
+            .fetch_all(&self.pool)
+            .await
+            .map_err(reconciliation_repository_error)?;
+        let mut receipts = Vec::with_capacity(rows.len());
+        for row in rows {
+            let receipt = reconciliation_receipt_row(&row)?;
+            let application_id = receipt
+                .issuance_response
+                .as_object()
+                .and_then(|response| response.get("application_id"))
+                .and_then(Value::as_str)
+                .filter(|value| !value.is_empty());
+            let application = if let Some(application_id) = application_id {
+                InternalApplicationRepository::get_application(self, application_id)
+                    .await
+                    .map_err(|_| EvidenceReconciliationRepositoryError::Unavailable)?
+                    .filter(|application| application.organization_id == organization_id)
+            } else {
+                None
+            };
+            receipts.push(EvidenceReconciliationReceiptSnapshot {
+                receipt,
+                application,
+            });
+        }
+        Ok(receipts)
+    }
+
+    async fn commit(
+        &self,
+        write: &EvidenceReconciliationWrite,
+    ) -> Result<EvidenceReconciliationCommitOutcome, EvidenceReconciliationRepositoryError> {
+        validate_reconciliation_write(write)?;
+        let mut database = self
+            .pool
+            .begin()
+            .await
+            .map_err(reconciliation_repository_error)?;
+        let current = sqlx::query(GET_FOR_UPDATE)
+            .bind(&write.application.id)
+            .fetch_optional(&mut *database)
+            .await
+            .map_err(reconciliation_repository_error)?
+            .map(application_row)
+            .transpose()
+            .map_err(|_| EvidenceReconciliationRepositoryError::Unavailable)?;
+        let Some(current) = current else {
+            return Ok(EvidenceReconciliationCommitOutcome::ConcurrentChange { current: None });
+        };
+        if current.organization_id != write.application.organization_id
+            || current.status != write.expected_status
+            || current.updated_at != write.expected_updated_at
+        {
+            return Ok(EvidenceReconciliationCommitOutcome::ConcurrentChange {
+                current: Some(Box::new(current)),
+            });
+        }
+
+        if let Some(transaction) = write.transaction.as_ref() {
+            let snapshot = write
+                .approval_snapshot
+                .as_ref()
+                .ok_or(EvidenceReconciliationRepositoryError::Unavailable)?;
+            let reserved_id = match reserve_management_canvas_issuance_in_transaction(
+                &mut database,
+                transaction,
+                snapshot,
+                write
+                    .application
+                    .reviewer_id
+                    .as_deref()
+                    .ok_or(EvidenceReconciliationRepositoryError::Unavailable)?,
+                write.application.review_notes.as_deref(),
+                write.reconciled_at,
+            )
+            .await
+            {
+                Ok(reserved_id) => reserved_id,
+                Err(CanvasApplicationApprovalError::Unavailable) => {
+                    return Err(EvidenceReconciliationRepositoryError::Unavailable)
+                }
+                Err(_) => {
+                    return Ok(EvidenceReconciliationCommitOutcome::ConcurrentChange {
+                        current: Some(Box::new(current)),
+                    })
+                }
+            };
+            if write.application.issuance_transaction_id.as_deref() != Some(reserved_id.as_str()) {
+                return Err(EvidenceReconciliationRepositoryError::Unavailable);
+            }
+            let updated = sqlx::query(UPDATE_RECONCILIATION_CONTEXT_AFTER_RESERVATION)
+                .bind(&write.application.id)
+                .bind(&write.application.organization_id)
+                .bind(Value::Object(write.application.integration_context.clone()))
+                .bind(&reserved_id)
+                .bind(write.reconciled_at)
+                .execute(&mut *database)
+                .await
+                .map_err(reconciliation_repository_error)?;
+            if updated.rows_affected() != 1 {
+                return Ok(EvidenceReconciliationCommitOutcome::ConcurrentChange {
+                    current: Some(Box::new(current)),
+                });
+            }
+        } else if !replace_application_if_revision_on(
+            &mut *database,
+            &write.application,
+            write.expected_status,
+            write.expected_updated_at,
+        )
+        .await
+        .map_err(|_| EvidenceReconciliationRepositoryError::Unavailable)?
+        {
+            return Ok(EvidenceReconciliationCommitOutcome::ConcurrentChange {
+                current: Some(Box::new(current)),
+            });
+        }
+        for event in &write.events {
+            insert_reconciliation_event(&mut database, event).await?;
+        }
+        database
+            .commit()
+            .await
+            .map_err(reconciliation_repository_error)?;
+        Ok(EvidenceReconciliationCommitOutcome::Committed)
+    }
+
+    async fn commit_conflict_events(
+        &self,
+        application_id: &str,
+        organization_id: &str,
+        events: &[IssuanceEventRecord],
+    ) -> Result<(), EvidenceReconciliationRepositoryError> {
+        if events.iter().any(|event| {
+            event.application_id.as_deref() != Some(application_id)
+                || event
+                    .metadata
+                    .get("organization_id")
+                    .and_then(Value::as_str)
+                    != Some(organization_id)
+        }) {
+            return Err(EvidenceReconciliationRepositoryError::Unavailable);
+        }
+        let mut database = self
+            .pool
+            .begin()
+            .await
+            .map_err(reconciliation_repository_error)?;
+        let current_organization = sqlx::query_scalar::<_, String>(
+            "SELECT organization_id FROM issuance_service.applications
+             WHERE id = $1 FOR UPDATE",
+        )
+        .bind(application_id)
+        .fetch_optional(&mut *database)
+        .await
+        .map_err(reconciliation_repository_error)?;
+        if current_organization.as_deref() != Some(organization_id) {
+            return Err(EvidenceReconciliationRepositoryError::Unavailable);
+        }
+        for event in events {
+            insert_reconciliation_event(&mut database, event).await?;
+        }
+        database
+            .commit()
+            .await
+            .map_err(reconciliation_repository_error)?;
+        Ok(())
+    }
+}
+
+#[async_trait]
 impl InternalApplicationApprovalRepository for PostgresInternalApplicationRepository {
     async fn reserve_ordinary_approval(
         &self,
@@ -861,6 +1312,119 @@ impl InternalApplicationOfferRepository for PostgresInternalApplicationRepositor
 fn offer_repository_error(cause: sqlx::Error) -> InternalApplicationOfferError {
     error!(%cause, "internal Application offer persistence failed");
     InternalApplicationOfferError::Unavailable
+}
+
+fn active_platform(platform: &Map<String, Value>) -> bool {
+    platform.get("enabled").and_then(Value::as_bool) == Some(true)
+        && platform.get("archived_at").is_none_or(Value::is_null)
+}
+
+fn active_binding(binding: &Map<String, Value>) -> bool {
+    binding.get("enabled").and_then(Value::as_bool) == Some(true)
+        && binding.get("archived_at").is_none_or(Value::is_null)
+}
+
+fn canvas_account_id(fact: &EvidenceFactRecord) -> Option<String> {
+    fact.scope
+        .get("canvas_account_id")
+        .and_then(Value::as_str)
+        .filter(|value| !value.is_empty())
+        .map(str::to_owned)
+        .or_else(|| {
+            fact.source
+                .get("mip_receipt")
+                .and_then(Value::as_object)
+                .and_then(|receipt| receipt.get("source"))
+                .and_then(Value::as_object)
+                .and_then(|source| source.get("provider_account_id"))
+                .and_then(Value::as_str)
+                .filter(|value| !value.is_empty())
+                .map(str::to_owned)
+        })
+}
+
+fn validate_reconciliation_write(
+    write: &EvidenceReconciliationWrite,
+) -> Result<(), EvidenceReconciliationRepositoryError> {
+    if write.events.iter().any(|event| {
+        event.application_id.as_deref() != Some(write.application.id.as_str())
+            || event
+                .metadata
+                .get("organization_id")
+                .and_then(Value::as_str)
+                != Some(write.application.organization_id.as_str())
+    }) || write.transaction.as_ref().is_some_and(|transaction| {
+        transaction.application_id.as_deref() != Some(write.application.id.as_str())
+            || transaction.organization_id != write.application.organization_id
+            || transaction.status != CredentialTransactionStatus::Pending
+    }) || write.transaction.is_some() != write.approval_snapshot.is_some()
+    {
+        return Err(EvidenceReconciliationRepositoryError::Unavailable);
+    }
+    Ok(())
+}
+
+async fn insert_reconciliation_event(
+    database: &mut sqlx::Transaction<'_, Postgres>,
+    event: &IssuanceEventRecord,
+) -> Result<(), EvidenceReconciliationRepositoryError> {
+    sqlx::query(INSERT_ISSUANCE_EVENT)
+        .bind(&event.id)
+        .bind(&event.transaction_id)
+        .bind(&event.application_id)
+        .bind(&event.event_type)
+        .bind(Value::Object(event.metadata.clone()))
+        .bind(event.created_at)
+        .execute(&mut **database)
+        .await
+        .map_err(reconciliation_repository_error)?;
+    Ok(())
+}
+
+fn reconciliation_receipt_row(
+    row: &PgRow,
+) -> Result<CanvasEventReceipt, EvidenceReconciliationRepositoryError> {
+    Ok(CanvasEventReceipt {
+        id: row.try_get("id").map_err(reconciliation_repository_error)?,
+        provider_event_id: row
+            .try_get("provider_event_id")
+            .map_err(reconciliation_repository_error)?,
+        canvas_account_id: row
+            .try_get("canvas_account_id")
+            .map_err(reconciliation_repository_error)?,
+        organization_id: row
+            .try_get("organization_id")
+            .map_err(reconciliation_repository_error)?,
+        credential_template_id: row
+            .try_get("credential_template_id")
+            .map_err(reconciliation_repository_error)?,
+        payload_hash: row
+            .try_get("payload_hash")
+            .map_err(reconciliation_repository_error)?,
+        issuance_transaction_id: row
+            .try_get("issuance_transaction_id")
+            .map_err(reconciliation_repository_error)?,
+        issuance_response: row
+            .try_get("issuance_response")
+            .map_err(reconciliation_repository_error)?,
+        status: row
+            .try_get("status")
+            .map_err(reconciliation_repository_error)?,
+        error_summary: row
+            .try_get("error_summary")
+            .map_err(reconciliation_repository_error)?,
+        first_seen_at: row
+            .try_get("first_seen_at")
+            .map_err(reconciliation_repository_error)?,
+        last_seen_at: row
+            .try_get("last_seen_at")
+            .map_err(reconciliation_repository_error)?,
+    })
+}
+
+fn reconciliation_repository_error(_cause: sqlx::Error) -> EvidenceReconciliationRepositoryError {
+    error!("internal Application evidence reconciliation persistence failed");
+    EvidenceReconciliationRepositoryError::Unavailable
 }
 
 fn application_row(row: PgRow) -> Result<ApplicationRecord, InternalApplicationRepositoryError> {
