@@ -6,17 +6,25 @@ use marty_issuance_service::{
     application_template_domain::{
         ApplicationTemplateCreate, ApplicationTemplateRecord, ApplicationTemplateStatus,
     },
-    canvas_award_candidate_approval::CanvasApplicationApprovalSnapshot,
+    canvas_award_candidate_approval::{
+        CanvasApplicationApprovalSnapshot, CanvasAwardApprovalSeed,
+        CanvasAwardApprovalSeedGenerator,
+    },
     canvas_event_status::CanvasEventReceipt,
-    credential::{CredentialTransaction, CredentialTransactionStatus},
+    canvas_issuance_guard::CanvasGuardConfig,
+    credential::{
+        CredentialIssuanceError, CredentialTransaction, CredentialTransactionStatus, IssuerContext,
+        IssuerContextResolver,
+    },
     internal_application_domain::{
         ApplicationCreate, ApplicationRecord, ApplicationStatus, EvidenceFactRecord,
         IssuanceEventRecord,
     },
     internal_application_reconciliation::{
-        DefaultInternalApplicationReconciler, EvidenceReconciliationCommitOutcome,
-        EvidenceReconciliationReceiptSnapshot, EvidenceReconciliationRepositoryError,
-        EvidenceReconciliationSnapshot, EvidenceReconciliationWrite, InternalApplicationReconciler,
+        CanvasEvidenceReconciliationPreparer, DefaultInternalApplicationReconciler,
+        EvidenceReconciliationCommitOutcome, EvidenceReconciliationReceiptSnapshot,
+        EvidenceReconciliationRepositoryError, EvidenceReconciliationSnapshot,
+        EvidenceReconciliationWrite, InternalApplicationReconciler,
         InternalApplicationReconciliationPreparer, InternalApplicationReconciliationRepository,
         PreparedEvidenceReconciliationIssuance,
     },
@@ -115,6 +123,28 @@ impl InternalApplicationReconciliationPreparer for FixedPreparer {
                 existing_transaction: snapshot.existing_transaction.clone(),
             },
         })
+    }
+}
+
+struct NeverResolver;
+
+#[async_trait]
+impl IssuerContextResolver for NeverResolver {
+    async fn resolve(
+        &self,
+        _transaction: &CredentialTransaction,
+        _credential_format: &str,
+        _force: bool,
+    ) -> Result<IssuerContext, CredentialIssuanceError> {
+        panic!("malformed Canvas context must fail before issuer resolution")
+    }
+}
+
+struct NeverSeeds;
+
+impl CanvasAwardApprovalSeedGenerator for NeverSeeds {
+    fn generate(&self) -> CanvasAwardApprovalSeed {
+        panic!("malformed Canvas context must fail before seed generation")
     }
 }
 
@@ -264,6 +294,31 @@ async fn lifecycle_conflict_preserves_winner_and_emits_permit_then_failure_only(
             .collect::<Vec<_>>(),
         ["evidence_policy_permitted", "approval_issuance_failed"]
     );
+}
+
+#[tokio::test]
+async fn canvas_preparer_rejects_non_object_canvas_context_without_panicking() {
+    let mut malformed = application(None);
+    malformed
+        .integration_context
+        .insert("canvas".to_owned(), json!("corrupt"));
+    let preparer = CanvasEvidenceReconciliationPreparer::new(
+        Arc::new(NeverResolver),
+        Arc::new(NeverSeeds),
+        CanvasGuardConfig {
+            enabled: true,
+            pilot_organizations: Default::default(),
+            evidence_max_age: std::time::Duration::from_secs(900),
+            readiness_max_age: std::time::Duration::from_secs(900),
+        },
+    );
+
+    let error = preparer
+        .prepare(&snapshot(malformed), now())
+        .await
+        .expect_err("non-object Canvas context must fail closed");
+
+    assert_eq!(error, "Canvas application is not ready for approval");
 }
 
 fn application(policy: Option<Value>) -> ApplicationRecord {

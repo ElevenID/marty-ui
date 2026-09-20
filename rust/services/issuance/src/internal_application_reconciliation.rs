@@ -178,7 +178,7 @@ impl InternalApplicationReconciliationPreparer for CanvasEvidenceReconciliationP
         let platform = snapshot.platform.as_ref().ok_or_else(readiness_error)?;
         let binding = snapshot.binding.as_ref().ok_or_else(readiness_error)?;
         let template = snapshot.template.as_ref().ok_or_else(readiness_error)?;
-        let projected = projected_canvas_application(&snapshot.application, platform, binding);
+        let projected = projected_canvas_application(&snapshot.application, platform, binding)?;
         let guard = CanvasGuardSnapshot {
             application: Value::Object(projected.clone()),
             application_template: Value::Object(template_policy_json(template)),
@@ -251,7 +251,7 @@ impl InternalApplicationReconciliationPreparer for CanvasEvidenceReconciliationP
         }
         Ok(PreparedEvidenceReconciliationIssuance {
             transaction,
-            approval_snapshot: approval_snapshot(snapshot, platform, binding),
+            approval_snapshot: approval_snapshot(snapshot, template, platform, binding),
         })
     }
 }
@@ -999,18 +999,17 @@ fn projected_canvas_application(
     application: &ApplicationRecord,
     platform: &Map<String, Value>,
     binding: &Map<String, Value>,
-) -> Map<String, Value> {
+) -> Result<Map<String, Value>, String> {
     let mut projected = application_approval_json(application);
     let integration = projected
-        .entry("integration_context".to_owned())
-        .or_insert_with(|| Value::Object(Map::new()))
-        .as_object_mut()
-        .expect("application integration context is an object");
+        .get_mut("integration_context")
+        .and_then(Value::as_object_mut)
+        .ok_or_else(readiness_error)?;
     let canvas = integration
         .entry("canvas".to_owned())
         .or_insert_with(|| Value::Object(Map::new()))
         .as_object_mut()
-        .expect("projected Canvas context is an object");
+        .ok_or_else(readiness_error)?;
     for (name, value) in [
         ("canvas_platform_id", platform.get("id")),
         ("canvas_program_binding_id", binding.get("id")),
@@ -1022,19 +1021,18 @@ fn projected_canvas_application(
             }
         }
     }
-    projected
+    Ok(projected)
 }
 
 fn approval_snapshot(
     snapshot: &EvidenceReconciliationSnapshot,
+    template: &ApplicationTemplateRecord,
     platform: &Map<String, Value>,
     binding: &Map<String, Value>,
 ) -> CanvasApplicationApprovalSnapshot {
     CanvasApplicationApprovalSnapshot {
         application: application_approval_json(&snapshot.application),
-        application_template: approval_template_json(
-            snapshot.template.as_ref().expect("template checked"),
-        ),
+        application_template: approval_template_json(template),
         platform: platform.clone(),
         binding: approval_binding_json(binding),
         existing_transaction: snapshot.existing_transaction.clone(),

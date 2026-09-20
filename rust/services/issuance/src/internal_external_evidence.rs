@@ -324,12 +324,19 @@ pub async fn execute_external_evidence_api_check(
         .get("verification_status_path")
         .and_then(Value::as_str)
         .and_then(|path| path_value(&response_json, path));
-    let default_verified_values = json!(["verified", "valid", "passed", "pass", true]);
-    let verified_values = mapping
+    let default_verified_values = [
+        json!("verified"),
+        json!("valid"),
+        json!("passed"),
+        json!("pass"),
+        Value::Bool(true),
+    ];
+    let verified_values: &[Value] = mapping
         .get("verification_verified_values")
         .filter(|value| python_truthy(value))
         .and_then(Value::as_array)
-        .unwrap_or_else(|| default_verified_values.as_array().expect("array literal"));
+        .map(Vec::as_slice)
+        .unwrap_or(&default_verified_values);
     let verification_status = if let Some(mapped_status) = mapped_status {
         let matches = verified_values.iter().any(|candidate| {
             python_equal(mapped_status, candidate)
