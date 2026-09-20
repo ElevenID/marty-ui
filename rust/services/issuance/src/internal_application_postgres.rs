@@ -9,13 +9,20 @@ use tracing::error;
 use crate::{
     application_template_domain::ApplicationTemplateRecord,
     application_template_postgres::PostgresApplicationTemplateRepository,
-    credential::CredentialTransaction,
-    credential_postgres::insert_issuance_transaction,
+    credential::{CredentialTransaction, CredentialTransactionStatus},
+    credential_postgres::{
+        insert_issuance_transaction, issuance_transaction_by_id, lock_issuance_transaction_by_id,
+        lock_issuance_transaction_by_idempotency, refresh_pending_application_offer,
+    },
     internal_application_approval::{
-        InternalApplicationApprovalReader, InternalApplicationApprovalRepository,
+        canvas_bound_application, InternalApplicationApprovalReader,
+        InternalApplicationApprovalRepository,
     },
     internal_application_domain::{
         ApplicationRecord, ApplicationStatus, EvidenceFactRecord, IssuanceEventRecord,
+    },
+    internal_application_offer::{
+        InternalApplicationOfferError, InternalApplicationOfferRepository,
     },
     internal_application_service::{
         InternalApplicationApprovalError, InternalApplicationRepository,
@@ -101,6 +108,15 @@ const REPLACE_IF_REVISION: &str = "UPDATE issuance_service.applications
       AND organization_id = $18
       AND status = $19
       AND updated_at = $20";
+
+const BIND_OFFER_TRANSACTION: &str = "UPDATE issuance_service.applications
+    SET issuance_transaction_id = $3
+    WHERE id = $1 AND organization_id = $2 AND status = 'approved'
+      AND issuance_transaction_id IS NOT DISTINCT FROM $4";
+
+const INSERT_ISSUANCE_EVENT: &str = "INSERT INTO issuance_service.issuance_events
+    (id, transaction_id, application_id, event_type, metadata, created_at)
+    VALUES ($1, $2, $3, $4, $5, $6)";
 
 #[derive(Clone)]
 pub struct PostgresInternalApplicationRepository {
@@ -338,7 +354,7 @@ impl InternalApplicationApprovalRepository for PostgresInternalApplicationReposi
         if current.organization_id != application.organization_id
             || current.status != ApplicationStatus::Pending
             || current.updated_at != application.updated_at
-            || canvas_context(&current.integration_context)
+            || canvas_bound_application(&current)
         {
             return Ok(None);
         }
@@ -392,25 +408,194 @@ impl InternalApplicationApprovalReader for PostgresInternalApplicationRepository
     }
 }
 
-fn canvas_context(integration_context: &Map<String, Value>) -> bool {
-    let Some(canvas) = integration_context.get("canvas").and_then(Value::as_object) else {
-        return false;
-    };
-    [
-        "canvas_platform_id",
-        "canvas_program_binding_id",
-        "canvas_account_id",
-    ]
-    .into_iter()
-    .any(|name| {
-        canvas
-            .get(name)
-            .and_then(Value::as_str)
-            .is_some_and(|value| !value.trim().is_empty())
-    }) || canvas
-        .get("source")
-        .and_then(Value::as_str)
-        .is_some_and(|value| value.trim().to_ascii_lowercase().starts_with("canvas"))
+#[async_trait]
+impl InternalApplicationOfferRepository for PostgresInternalApplicationRepository {
+    async fn reserve_or_refresh_offer(
+        &self,
+        application: &ApplicationRecord,
+        prepared: &CredentialTransaction,
+        now: DateTime<Utc>,
+    ) -> Result<Option<CredentialTransaction>, InternalApplicationOfferError> {
+        if prepared.organization_id != application.organization_id
+            || prepared.application_id.as_deref() != Some(application.id.as_str())
+            || prepared.status != CredentialTransactionStatus::Pending
+            || prepared
+                .idempotency_key_hash
+                .as_deref()
+                .is_none_or(|value| value.len() != 64)
+            || prepared
+                .idempotency_request_hash
+                .as_deref()
+                .is_none_or(|value| value.len() != 64)
+        {
+            return Err(InternalApplicationOfferError::Unavailable);
+        }
+        let key_hash = prepared
+            .idempotency_key_hash
+            .as_deref()
+            .ok_or(InternalApplicationOfferError::Unavailable)?;
+        let mut expected_binding = application.issuance_transaction_id.clone();
+        for _ in 0..3 {
+            let mut database = self
+                .pool
+                .begin()
+                .await
+                .map_err(|_| InternalApplicationOfferError::Unavailable)?;
+
+            // Credential finalization locks transaction then application. Keep
+            // the same order for existing offers to avoid a cross-flow
+            // deadlock. An unbound generation may have an idempotent
+            // reservation left by an older implementation, so lock that first.
+            let prelocked = match expected_binding.as_deref() {
+                Some(transaction_id) => {
+                    lock_issuance_transaction_by_id(
+                        &mut *database,
+                        transaction_id,
+                        &application.organization_id,
+                    )
+                    .await
+                }
+                None => {
+                    lock_issuance_transaction_by_idempotency(
+                        &mut *database,
+                        &application.organization_id,
+                        key_hash,
+                    )
+                    .await
+                }
+            }
+            .map_err(|_| InternalApplicationOfferError::Unavailable)?;
+            let current = sqlx::query(GET_FOR_UPDATE)
+                .bind(&application.id)
+                .fetch_optional(&mut *database)
+                .await
+                .map_err(offer_repository_error)?
+                .map(application_row)
+                .transpose()
+                .map_err(|_| InternalApplicationOfferError::Unavailable)?;
+            let Some(current) = current else {
+                return Ok(None);
+            };
+            if current.organization_id != application.organization_id
+                || current.status != ApplicationStatus::Approved
+                || current.updated_at != application.updated_at
+            {
+                return Ok(None);
+            }
+            if current.issuance_transaction_id != expected_binding {
+                expected_binding = current.issuance_transaction_id;
+                database
+                    .rollback()
+                    .await
+                    .map_err(|_| InternalApplicationOfferError::Unavailable)?;
+                continue;
+            }
+
+            if let Some(existing) = prelocked.as_ref() {
+                if existing.application_id.as_deref() != Some(current.id.as_str())
+                    || existing.organization_id != current.organization_id
+                {
+                    return Err(InternalApplicationOfferError::Unavailable);
+                }
+                if expected_binding.is_some()
+                    && existing.status == CredentialTransactionStatus::Pending
+                    && now <= existing.expires_at
+                {
+                    let refresh_canvas_context = canvas_bound_application(&current);
+                    let mut refreshed_context = prepared.clone();
+                    if refresh_canvas_context {
+                        refreshed_context.claims = existing.claims.clone();
+                        if let Some(vct) = prepared.claims.get("_vct") {
+                            refreshed_context
+                                .claims
+                                .insert("_vct".to_owned(), vct.clone());
+                        }
+                    }
+                    let refreshed = refresh_pending_application_offer(
+                        &mut *database,
+                        existing,
+                        &refreshed_context,
+                        refresh_canvas_context,
+                    )
+                    .await
+                    .map_err(|_| InternalApplicationOfferError::Unavailable)?
+                    .ok_or(InternalApplicationOfferError::ConcurrentChange)?;
+                    database
+                        .commit()
+                        .await
+                        .map_err(|_| InternalApplicationOfferError::Unavailable)?;
+                    return Ok(Some(refreshed));
+                }
+            }
+
+            // A changed terminal generation needs new hashes derived from its
+            // new anchor; do not silently reserve with stale request semantics.
+            if expected_binding != application.issuance_transaction_id {
+                return Err(InternalApplicationOfferError::ConcurrentChange);
+            }
+            let transaction = match insert_issuance_transaction(&mut *database, prepared)
+                .await
+                .map_err(|_| InternalApplicationOfferError::Unavailable)?
+            {
+                Some(transaction) => transaction,
+                None => prelocked
+                    .filter(|transaction| {
+                        transaction.idempotency_request_hash == prepared.idempotency_request_hash
+                            && transaction.application_id == prepared.application_id
+                    })
+                    .ok_or(InternalApplicationOfferError::Unavailable)?,
+            };
+            let bound = sqlx::query(BIND_OFFER_TRANSACTION)
+                .bind(&current.id)
+                .bind(&current.organization_id)
+                .bind(&transaction.id)
+                .bind(&current.issuance_transaction_id)
+                .execute(&mut *database)
+                .await
+                .map_err(offer_repository_error)?;
+            if bound.rows_affected() != 1 {
+                return Ok(None);
+            }
+            database
+                .commit()
+                .await
+                .map_err(|_| InternalApplicationOfferError::Unavailable)?;
+            return Ok(Some(transaction));
+        }
+        Err(InternalApplicationOfferError::ConcurrentChange)
+    }
+
+    async fn get_offer_transaction(
+        &self,
+        transaction_id: &str,
+        organization_id: &str,
+    ) -> Result<Option<CredentialTransaction>, InternalApplicationOfferError> {
+        issuance_transaction_by_id(&self.pool, transaction_id, organization_id)
+            .await
+            .map_err(|_| InternalApplicationOfferError::Unavailable)
+    }
+
+    async fn append_offer_event(
+        &self,
+        event: &IssuanceEventRecord,
+    ) -> Result<(), InternalApplicationOfferError> {
+        sqlx::query(INSERT_ISSUANCE_EVENT)
+            .bind(&event.id)
+            .bind(&event.transaction_id)
+            .bind(&event.application_id)
+            .bind(&event.event_type)
+            .bind(Value::Object(event.metadata.clone()))
+            .bind(event.created_at)
+            .execute(&self.pool)
+            .await
+            .map_err(offer_repository_error)?;
+        Ok(())
+    }
+}
+
+fn offer_repository_error(cause: sqlx::Error) -> InternalApplicationOfferError {
+    error!(%cause, "internal Application offer persistence failed");
+    InternalApplicationOfferError::Unavailable
 }
 
 fn application_row(row: PgRow) -> Result<ApplicationRecord, InternalApplicationRepositoryError> {

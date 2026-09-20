@@ -20,6 +20,9 @@ use crate::{
         ApplicationRejection, ApplicationStatus, EvidenceFactRecord, EvidenceFactResponse,
         EvidenceSubmission, IssuanceEventRecord,
     },
+    internal_application_offer::{
+        InternalApplicationOfferCoordinator, InternalApplicationOfferError, IssuanceOfferResponse,
+    },
     management_security::ManagementSecurity,
     transaction_reads::TransactionReadError,
 };
@@ -155,6 +158,7 @@ pub struct InternalApplicationService {
     clock: Arc<dyn InternalApplicationClock>,
     ids: Arc<dyn InternalApplicationIdGenerator>,
     approver: Option<Arc<dyn InternalApplicationApprover>>,
+    offers: Option<Arc<dyn InternalApplicationOfferCoordinator>>,
     security: ManagementSecurity,
 }
 
@@ -164,6 +168,7 @@ impl std::fmt::Debug for InternalApplicationService {
             .debug_struct("InternalApplicationService")
             .field("security", &self.security)
             .field("approval_configured", &self.approver.is_some())
+            .field("offers_configured", &self.offers.is_some())
             .finish_non_exhaustive()
     }
 }
@@ -181,6 +186,7 @@ impl InternalApplicationService {
             clock,
             ids,
             approver: None,
+            offers: None,
             security: ManagementSecurity::new(management_api_key),
         }
     }
@@ -188,6 +194,12 @@ impl InternalApplicationService {
     #[must_use]
     pub fn with_approver(mut self, approver: Arc<dyn InternalApplicationApprover>) -> Self {
         self.approver = Some(approver);
+        self
+    }
+
+    #[must_use]
+    pub fn with_offers(mut self, offers: Arc<dyn InternalApplicationOfferCoordinator>) -> Self {
+        self.offers = Some(offers);
         self
     }
 
@@ -455,6 +467,62 @@ impl InternalApplicationService {
             .map_err(Into::into)
     }
 
+    pub async fn generate_issuance_offer(
+        &self,
+        api_key: Option<&str>,
+        trusted_organization: Option<&str>,
+        application_id: &str,
+    ) -> Result<IssuanceOfferResponse, InternalApplicationServiceError> {
+        self.security.authorize(api_key)?;
+        let trusted_organization = required_organization(trusted_organization)?;
+        let application = self
+            .load_managed(application_id, trusted_organization)
+            .await?;
+        if application.status != ApplicationStatus::Approved {
+            return Err(InternalApplicationServiceError::OfferRequiresApproved(
+                application.status.as_str().to_owned(),
+            ));
+        }
+        let template = self
+            .repository
+            .get_application_template(&application.application_template_id)
+            .await?
+            .filter(|template| template.organization_id == application.organization_id);
+        self.offers
+            .as_ref()
+            .ok_or(InternalApplicationOfferError::Unavailable)?
+            .generate(&application, template.as_ref())
+            .await
+            .map_err(Into::into)
+    }
+
+    pub async fn get_issuance_offer(
+        &self,
+        api_key: Option<&str>,
+        trusted_organization: Option<&str>,
+        application_id: &str,
+    ) -> Result<IssuanceOfferResponse, InternalApplicationServiceError> {
+        self.security.authorize(api_key)?;
+        let trusted_organization = required_organization(trusted_organization)?;
+        let application = self
+            .load_managed(application_id, trusted_organization)
+            .await?;
+        if application.status != ApplicationStatus::Approved {
+            return Err(InternalApplicationServiceError::OfferNotAvailable);
+        }
+        let template = self
+            .repository
+            .get_application_template(&application.application_template_id)
+            .await?
+            .filter(|template| template.organization_id == application.organization_id);
+        self.offers
+            .as_ref()
+            .ok_or(InternalApplicationOfferError::Unavailable)?
+            .get(&application, template.as_ref())
+            .await
+            .map_err(Into::into)
+    }
+
     async fn load_managed(
         &self,
         application_id: &str,
@@ -552,6 +620,8 @@ pub enum InternalApplicationServiceError {
     #[error(transparent)]
     Approval(#[from] InternalApplicationApprovalError),
     #[error(transparent)]
+    Offer(#[from] InternalApplicationOfferError),
+    #[error(transparent)]
     Domain(#[from] ApplicationDomainError),
     #[error("Invalid application status")]
     InvalidStatus,
@@ -567,6 +637,10 @@ pub enum InternalApplicationServiceError {
     EvidenceConflict,
     #[error("Application lifecycle changed during rejection")]
     RejectionConflict,
+    #[error("Issuance offer requires APPROVED status; current status is {0}")]
+    OfferRequiresApproved(String),
+    #[error("No issuance offer available for this application")]
+    OfferNotAvailable,
 }
 
 fn required_organization(value: Option<&str>) -> Result<&str, TransactionReadError> {

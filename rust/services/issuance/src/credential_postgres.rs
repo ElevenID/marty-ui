@@ -79,8 +79,45 @@ const TRANSACTION_BY_PRE_AUTH_CODE: &str = transaction_query!("pre_auth_code = $
 const TRANSACTION_BY_ID: &str = transaction_query!("id = $1");
 const TRANSACTION_BY_ID_AND_ORGANIZATION: &str =
     transaction_query!("id = $1 AND organization_id = $2");
+const TRANSACTION_BY_ID_AND_ORGANIZATION_FOR_UPDATE: &str = concat!(
+    "SELECT ",
+    transaction_columns!(),
+    " FROM issuance_service.issuance_transactions
+      WHERE id = $1 AND organization_id = $2 FOR UPDATE"
+);
 const TRANSACTION_BY_IDEMPOTENCY: &str =
     transaction_query!("organization_id = $1 AND idempotency_key_hash = $2");
+const TRANSACTION_BY_IDEMPOTENCY_FOR_UPDATE: &str = concat!(
+    "SELECT ",
+    transaction_columns!(),
+    " FROM issuance_service.issuance_transactions
+      WHERE organization_id = $1 AND idempotency_key_hash = $2 FOR UPDATE"
+);
+const REFRESH_PENDING_APPLICATION_OFFER: &str = concat!(
+    "UPDATE issuance_service.issuance_transactions
+     SET delivery_mode = $3, revocation_profile_id = $4,
+         issuer_profile_id = $5, issuer_mode = $6, issuer_did_override = $7,
+         issuer_algorithm = $8, signing_service_id = $9
+     WHERE id = $1 AND organization_id = $2 AND application_id = $10
+       AND status = 'pending'
+     RETURNING ",
+    transaction_columns!()
+);
+const REFRESH_PENDING_CANVAS_APPLICATION_OFFER: &str = concat!(
+    "UPDATE issuance_service.issuance_transactions
+     SET delivery_mode = $3, revocation_profile_id = $4,
+         issuer_profile_id = $5, issuer_mode = $6, issuer_did_override = $7,
+         issuer_algorithm = $8, signing_service_id = $9,
+         credential_template_id = $10, claims = $11,
+         credential_type = $12, credential_payload_format = $13,
+         wallet_configs = $14, selective_disclosure_claims = $15,
+         zk_predicate_claims = $16, validity_days = $17, renewable = $18,
+         renewal_window_days = $19
+     WHERE id = $1 AND organization_id = $2 AND application_id = $20
+       AND status = 'pending'
+     RETURNING ",
+    transaction_columns!()
+);
 const CLAIM_FOR_SIGNING: &str = concat!(
     "UPDATE issuance_service.issuance_transactions
      SET status = 'signing', reserved_credential_id = $2, credential_type = $3,
@@ -171,6 +208,119 @@ where
         .fetch_optional(executor)
         .await
         .map_err(|_| CredentialIssuanceError::RepositoryUnavailable)?
+        .map(transaction_row)
+        .transpose()
+}
+
+pub(crate) async fn issuance_transaction_by_id<'executor, E>(
+    executor: E,
+    transaction_id: &str,
+    organization_id: &str,
+) -> Result<Option<CredentialTransaction>, CredentialIssuanceError>
+where
+    E: Executor<'executor, Database = Postgres>,
+{
+    sqlx::query(TRANSACTION_BY_ID_AND_ORGANIZATION)
+        .bind(transaction_id)
+        .bind(organization_id)
+        .fetch_optional(executor)
+        .await
+        .map_err(repository_error)?
+        .map(transaction_row)
+        .transpose()
+}
+
+pub(crate) async fn lock_issuance_transaction_by_id<'executor, E>(
+    executor: E,
+    transaction_id: &str,
+    organization_id: &str,
+) -> Result<Option<CredentialTransaction>, CredentialIssuanceError>
+where
+    E: Executor<'executor, Database = Postgres>,
+{
+    sqlx::query(TRANSACTION_BY_ID_AND_ORGANIZATION_FOR_UPDATE)
+        .bind(transaction_id)
+        .bind(organization_id)
+        .fetch_optional(executor)
+        .await
+        .map_err(repository_error)?
+        .map(transaction_row)
+        .transpose()
+}
+
+pub(crate) async fn lock_issuance_transaction_by_idempotency<'executor, E>(
+    executor: E,
+    organization_id: &str,
+    key_hash: &str,
+) -> Result<Option<CredentialTransaction>, CredentialIssuanceError>
+where
+    E: Executor<'executor, Database = Postgres>,
+{
+    sqlx::query(TRANSACTION_BY_IDEMPOTENCY_FOR_UPDATE)
+        .bind(organization_id)
+        .bind(key_hash)
+        .fetch_optional(executor)
+        .await
+        .map_err(repository_error)?
+        .map(transaction_row)
+        .transpose()
+}
+
+pub(crate) async fn refresh_pending_application_offer<'executor, E>(
+    executor: E,
+    current: &CredentialTransaction,
+    prepared: &CredentialTransaction,
+    refresh_canvas_context: bool,
+) -> Result<Option<CredentialTransaction>, CredentialIssuanceError>
+where
+    E: Executor<'executor, Database = Postgres>,
+{
+    let Some(application_id) = current.application_id.as_deref() else {
+        return Ok(None);
+    };
+    let query = if refresh_canvas_context {
+        let validity_days = i32::try_from(prepared.validity_days)
+            .map_err(|_| CredentialIssuanceError::RepositoryUnavailable)?;
+        let renewal_window_days = i32::try_from(prepared.renewal_window_days)
+            .map_err(|_| CredentialIssuanceError::RepositoryUnavailable)?;
+        sqlx::query(REFRESH_PENDING_CANVAS_APPLICATION_OFFER)
+            .bind(&current.id)
+            .bind(&current.organization_id)
+            .bind(&prepared.delivery_mode)
+            .bind(&prepared.revocation_profile_id)
+            .bind(&prepared.issuer_profile_id)
+            .bind(&prepared.issuer_mode)
+            .bind(&prepared.issuer_did)
+            .bind(&prepared.issuer_algorithm)
+            .bind(&prepared.signing_service_id)
+            .bind(&prepared.credential_template_id)
+            .bind(Value::Object(prepared.claims.clone()))
+            .bind(&prepared.credential_type)
+            .bind(&prepared.credential_payload_format)
+            .bind(Value::Array(prepared.wallet_configs.clone()))
+            .bind(json!(prepared.selective_disclosure_claims))
+            .bind(json!(prepared.zk_predicate_claims))
+            .bind(validity_days)
+            .bind(prepared.renewable)
+            .bind(renewal_window_days)
+            .bind(application_id)
+    } else {
+        sqlx::query(REFRESH_PENDING_APPLICATION_OFFER)
+            .bind(&current.id)
+            .bind(&current.organization_id)
+            .bind(&prepared.delivery_mode)
+            .bind(&prepared.revocation_profile_id)
+            .bind(&prepared.issuer_profile_id)
+            .bind(&prepared.issuer_mode)
+            .bind(&prepared.issuer_did)
+            .bind(&prepared.issuer_algorithm)
+            .bind(&prepared.signing_service_id)
+            .bind(application_id)
+    };
+    query
+        .fetch_optional(executor)
+        .await
+        .map_err(repository_error)?
         .map(transaction_row)
         .transpose()
 }

@@ -69,6 +69,15 @@ pub trait InternalApplicationApprovalRepository: Send + Sync {
 }
 
 #[async_trait]
+pub trait InternalApplicationTransactionPreparer: Send + Sync {
+    async fn prepare_transaction(
+        &self,
+        application: &ApplicationRecord,
+        local_template: &ApplicationTemplateRecord,
+    ) -> Result<CredentialTransaction, InternalApplicationApprovalError>;
+}
+
+#[async_trait]
 pub trait InternalApplicationApprovalReader: Send + Sync {
     async fn reload_approved_application(
         &self,
@@ -85,6 +94,15 @@ pub trait InternalCanvasApplicationApprover: Send + Sync {
         reviewer_id: &str,
         review_notes: Option<&str>,
     ) -> Result<String, InternalApplicationApprovalError>;
+}
+
+#[async_trait]
+pub trait InternalCanvasApplicationOfferPreparer: Send + Sync {
+    async fn prepare_canvas_offer(
+        &self,
+        organization_id: &str,
+        application_id: &str,
+    ) -> Result<CredentialTransaction, InternalApplicationApprovalError>;
 }
 
 #[async_trait]
@@ -110,6 +128,72 @@ impl InternalCanvasApplicationApprover for CanvasApplicationApprovalService {
                     InternalApplicationApprovalError::CanvasNotReady
                 }
             })
+    }
+}
+
+#[async_trait]
+impl InternalCanvasApplicationOfferPreparer for CanvasApplicationApprovalService {
+    async fn prepare_canvas_offer(
+        &self,
+        organization_id: &str,
+        application_id: &str,
+    ) -> Result<CredentialTransaction, InternalApplicationApprovalError> {
+        self.prepare_offer(organization_id, application_id)
+            .await
+            .map_err(|error| match error {
+                CanvasApplicationApprovalError::Unavailable => {
+                    InternalApplicationApprovalError::Unavailable
+                }
+                CanvasApplicationApprovalError::NotFound
+                | CanvasApplicationApprovalError::RolloutDisabled
+                | CanvasApplicationApprovalError::InvalidStatus
+                | CanvasApplicationApprovalError::NotReady => {
+                    InternalApplicationApprovalError::CanvasNotReady
+                }
+            })
+    }
+}
+
+#[derive(Clone)]
+pub struct CompositeInternalApplicationTransactionPreparer {
+    ordinary: Arc<dyn InternalApplicationTransactionPreparer>,
+    canvas: Arc<dyn InternalCanvasApplicationOfferPreparer>,
+}
+
+impl std::fmt::Debug for CompositeInternalApplicationTransactionPreparer {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("CompositeInternalApplicationTransactionPreparer")
+            .finish_non_exhaustive()
+    }
+}
+
+impl CompositeInternalApplicationTransactionPreparer {
+    #[must_use]
+    pub fn new(
+        ordinary: Arc<dyn InternalApplicationTransactionPreparer>,
+        canvas: Arc<dyn InternalCanvasApplicationOfferPreparer>,
+    ) -> Self {
+        Self { ordinary, canvas }
+    }
+}
+
+#[async_trait]
+impl InternalApplicationTransactionPreparer for CompositeInternalApplicationTransactionPreparer {
+    async fn prepare_transaction(
+        &self,
+        application: &ApplicationRecord,
+        local_template: &ApplicationTemplateRecord,
+    ) -> Result<CredentialTransaction, InternalApplicationApprovalError> {
+        if !canvas_bound_application(application) {
+            return self
+                .ordinary
+                .prepare_transaction(application, local_template)
+                .await;
+        }
+        self.canvas
+            .prepare_canvas_offer(&application.organization_id, &application.id)
+            .await
     }
 }
 
@@ -333,20 +417,20 @@ impl OrdinaryInternalApplicationApprover {
 }
 
 #[async_trait]
-impl InternalApplicationApprover for OrdinaryInternalApplicationApprover {
-    async fn approve(
+impl InternalApplicationTransactionPreparer for OrdinaryInternalApplicationApprover {
+    async fn prepare_transaction(
         &self,
         application: &ApplicationRecord,
         local_template: &ApplicationTemplateRecord,
-        reviewer_id: &str,
-        review_notes: Option<&str>,
-    ) -> Result<ApplicationRecord, InternalApplicationApprovalError> {
+    ) -> Result<CredentialTransaction, InternalApplicationApprovalError> {
         let credential_template_id = local_template
             .credential_template_id
             .as_deref()
             .map(str::trim)
             .filter(|value| !value.is_empty())
-            .ok_or(InternalApplicationApprovalError::Unavailable)?;
+            .ok_or(InternalApplicationApprovalError::CredentialTemplateInvalid(
+                "Credential Template is required.".to_owned(),
+            ))?;
         let credential = self
             .dependencies
             .credential_template(credential_template_id)
@@ -364,6 +448,23 @@ impl InternalApplicationApprover for OrdinaryInternalApplicationApprover {
         resolve_and_attach_required_issuer(self.issuer_resolver.as_ref(), &mut transaction)
             .await
             .map_err(|_| InternalApplicationApprovalError::IssuerContextUnavailable)?;
+        Ok(transaction)
+    }
+}
+
+#[async_trait]
+impl InternalApplicationApprover for OrdinaryInternalApplicationApprover {
+    async fn approve(
+        &self,
+        application: &ApplicationRecord,
+        local_template: &ApplicationTemplateRecord,
+        reviewer_id: &str,
+        review_notes: Option<&str>,
+    ) -> Result<ApplicationRecord, InternalApplicationApprovalError> {
+        let transaction = self
+            .prepare_transaction(application, local_template)
+            .await?;
+        let now = transaction.created_at;
         self.repository
             .reserve_ordinary_approval(application, &transaction, reviewer_id, review_notes, now)
             .await?
@@ -387,7 +488,7 @@ fn delivery_mode(integration_context: &serde_json::Map<String, Value>) -> String
         .unwrap_or_else(|| "wallet_only".to_owned())
 }
 
-fn canvas_bound_application(application: &ApplicationRecord) -> bool {
+pub(crate) fn canvas_bound_application(application: &ApplicationRecord) -> bool {
     let Some(canvas) = application
         .integration_context
         .get("canvas")

@@ -1,5 +1,5 @@
 use std::{
-    collections::BTreeMap,
+    collections::{BTreeMap, BTreeSet},
     sync::{
         atomic::{AtomicBool, Ordering},
         Arc, Mutex,
@@ -22,6 +22,10 @@ use marty_issuance_service::{
         IssuanceEventRecord,
     },
     internal_application_http,
+    internal_application_offer::{
+        InternalApplicationOfferCoordinator, InternalApplicationOfferError, IssuanceOfferResponse,
+        IssuanceOfferWallet,
+    },
     internal_application_service::{
         InternalApplicationApprovalError, InternalApplicationApprover, InternalApplicationClock,
         InternalApplicationIdGenerator, InternalApplicationRepository,
@@ -218,6 +222,30 @@ struct FixedApprover {
     error: Option<InternalApplicationApprovalError>,
 }
 
+struct FixedOffers {
+    generate: Result<IssuanceOfferResponse, InternalApplicationOfferError>,
+    get: Result<IssuanceOfferResponse, InternalApplicationOfferError>,
+}
+
+#[async_trait]
+impl InternalApplicationOfferCoordinator for FixedOffers {
+    async fn generate(
+        &self,
+        _application: &ApplicationRecord,
+        _local_template: Option<&ApplicationTemplateRecord>,
+    ) -> Result<IssuanceOfferResponse, InternalApplicationOfferError> {
+        self.generate.clone()
+    }
+
+    async fn get(
+        &self,
+        _application: &ApplicationRecord,
+        _local_template: Option<&ApplicationTemplateRecord>,
+    ) -> Result<IssuanceOfferResponse, InternalApplicationOfferError> {
+        self.get.clone()
+    }
+}
+
 #[async_trait]
 impl InternalApplicationApprover for FixedApprover {
     async fn approve(
@@ -318,6 +346,25 @@ fn issuance_event(application_id: &str) -> IssuanceEventRecord {
     }
 }
 
+fn offer_response() -> IssuanceOfferResponse {
+    IssuanceOfferResponse {
+        offer_url: "openid-credential-offer://?credential_offer=contract".to_owned(),
+        qr_payload: "openid-credential-offer://?credential_offer=contract".to_owned(),
+        wallets: vec![IssuanceOfferWallet {
+            id: "wallet-1".to_owned(),
+            name: "Example Wallet".to_owned(),
+            logo_url: Some("https://wallet.example/logo.svg".to_owned()),
+            deep_link_url: "openid-credential-offer://?credential_offer=contract".to_owned(),
+            platforms: vec!["ios".to_owned(), "android".to_owned()],
+        }],
+        email_payload: Map::from_iter([("subject".to_owned(), json!("Your credential is ready"))]),
+        expires_at: "2026-09-26T12:34:56+00:00".to_owned(),
+        transaction_id: "transaction-1".to_owned(),
+        status: "active".to_owned(),
+        credential_offer_uris: BTreeMap::new(),
+    }
+}
+
 fn service(
     repository: Arc<MemoryRepository>,
     management_api_key: Option<&str>,
@@ -336,6 +383,14 @@ fn service_with_approver(
 ) -> InternalApplicationService {
     service(repository.clone(), Some("secret"))
         .with_approver(Arc::new(FixedApprover { repository, error }))
+}
+
+fn service_with_offers(
+    repository: Arc<MemoryRepository>,
+    generate: Result<IssuanceOfferResponse, InternalApplicationOfferError>,
+    get: Result<IssuanceOfferResponse, InternalApplicationOfferError>,
+) -> InternalApplicationService {
+    service(repository, Some("secret")).with_offers(Arc::new(FixedOffers { generate, get }))
 }
 
 async fn request(
@@ -1084,6 +1139,16 @@ async fn auth_preflight_precedes_json_validation_and_siblings_remain_closed() {
             "/internal/applications/application-1/issuance-events",
             None,
         ),
+        (
+            Method::POST,
+            "/internal/applications/application-1/issuance-offer",
+            None,
+        ),
+        (
+            Method::GET,
+            "/internal/applications/application-1/issuance-offer",
+            None,
+        ),
     ] {
         let (status, response) = request(
             &service,
@@ -1171,4 +1236,110 @@ async fn auth_preflight_precedes_json_validation_and_siblings_remain_closed() {
     )
     .await;
     assert_eq!(status, StatusCode::METHOD_NOT_ALLOWED);
+}
+
+#[tokio::test]
+async fn issuance_offer_routes_preserve_success_shape_state_errors_and_missing_transactions() {
+    let repository = Arc::new(MemoryRepository::default());
+    repository.seed_template(template("org-123", ApplicationTemplateStatus::Active));
+    repository.seed_application(application(
+        "application-approved",
+        "org-123",
+        ApplicationStatus::Approved,
+    ));
+    repository.seed_application(application(
+        "application-pending",
+        "org-123",
+        ApplicationStatus::Pending,
+    ));
+    let service = service_with_offers(
+        repository.clone(),
+        Ok(offer_response()),
+        Ok(offer_response()),
+    );
+
+    for method in [Method::POST, Method::GET] {
+        let (status, response) = request(
+            &service,
+            method,
+            "/internal/applications/application-approved/issuance-offer",
+            None,
+            Some("secret"),
+            Some("org-123"),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(response["transaction_id"], "transaction-1");
+        assert_eq!(response["status"], "active");
+        assert_eq!(
+            response
+                .as_object()
+                .unwrap()
+                .keys()
+                .cloned()
+                .collect::<BTreeSet<_>>(),
+            [
+                "credential_offer_uris",
+                "email_payload",
+                "expires_at",
+                "offer_url",
+                "qr_payload",
+                "status",
+                "transaction_id",
+                "wallets",
+            ]
+            .into_iter()
+            .map(str::to_owned)
+            .collect()
+        );
+    }
+
+    let (status, response) = request(
+        &service,
+        Method::POST,
+        "/internal/applications/application-pending/issuance-offer",
+        None,
+        Some("secret"),
+        Some("org-123"),
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+    assert_eq!(
+        response,
+        json!({"detail": "Issuance offer requires APPROVED status; current status is pending"})
+    );
+    let (status, response) = request(
+        &service,
+        Method::GET,
+        "/internal/applications/application-pending/issuance-offer",
+        None,
+        Some("secret"),
+        Some("org-123"),
+    )
+    .await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+    assert_eq!(
+        response,
+        json!({"detail": "No issuance offer available for this application"})
+    );
+
+    let missing = service_with_offers(
+        repository,
+        Ok(offer_response()),
+        Err(InternalApplicationOfferError::MissingTransactionBinding),
+    );
+    let (status, response) = request(
+        &missing,
+        Method::GET,
+        "/internal/applications/application-approved/issuance-offer",
+        None,
+        Some("secret"),
+        Some("org-123"),
+    )
+    .await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+    assert_eq!(
+        response,
+        json!({"detail": "Wallet invite has not been generated yet. Please contact the issuer."})
+    );
 }

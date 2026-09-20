@@ -7,6 +7,7 @@ use marty_issuance_service::{
         ApplicationCreate, ApplicationRecord, ApplicationStatus, EvidenceFactRecord,
         EvidenceSubmission, IssuanceEventRecord,
     },
+    internal_application_offer::InternalApplicationOfferRepository,
     internal_application_postgres::PostgresInternalApplicationRepository,
     internal_application_service::{
         InternalApplicationRepository, InternalApplicationRepositoryError,
@@ -506,6 +507,207 @@ async fn internal_application_repository_round_trips_filters_and_compares_exact_
         .unwrap();
     assert_eq!(rollback_current.status, ApplicationStatus::Pending);
     assert!(rollback_current.issuance_transaction_id.is_none());
+
+    let mut offer_application = application_fixture(&application, "application-offer-race");
+    offer_application.status = ApplicationStatus::Approved;
+    offer_application.reviewer_id = Some("issuance-management-api".to_owned());
+    offer_application.reviewed_at = Some(observed_at);
+    repository
+        .insert_application(&offer_application)
+        .await
+        .expect("offer race fixture must insert");
+    let mut first_offer =
+        approval_transaction("transaction-offer-first", &offer_application, observed_at);
+    first_offer.pre_authorized_code = "pre-offer-first".to_owned();
+    first_offer.idempotency_key_hash = Some("a".repeat(64));
+    first_offer.idempotency_request_hash = Some("b".repeat(64));
+    let mut second_offer =
+        approval_transaction("transaction-offer-second", &offer_application, observed_at);
+    second_offer.pre_authorized_code = "pre-offer-second".to_owned();
+    second_offer.idempotency_key_hash = Some("a".repeat(64));
+    second_offer.idempotency_request_hash = Some("b".repeat(64));
+    let first_repository = repository.clone();
+    let second_repository = repository.clone();
+    let first_snapshot = offer_application.clone();
+    let second_snapshot = offer_application.clone();
+    let (first, second) = tokio::join!(
+        first_repository.reserve_or_refresh_offer(
+            &first_snapshot,
+            &first_offer,
+            observed_at + Duration::minutes(7),
+        ),
+        second_repository.reserve_or_refresh_offer(
+            &second_snapshot,
+            &second_offer,
+            observed_at + Duration::minutes(7),
+        )
+    );
+    let first = first
+        .expect("first offer reservation")
+        .expect("first authoritative offer");
+    let second = second
+        .expect("second offer reservation")
+        .expect("second authoritative offer");
+    assert_eq!(first.id, second.id);
+    assert_eq!(first.pre_authorized_code, second.pre_authorized_code);
+    assert_eq!(transaction_count(&pool, &offer_application.id).await, 1);
+    let offer_current = repository
+        .get_application(&offer_application.id)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(
+        offer_current.issuance_transaction_id.as_deref(),
+        Some(first.id.as_str())
+    );
+    let mut refresh = approval_transaction("unused-refresh-id", &offer_application, observed_at);
+    refresh.idempotency_key_hash = Some("c".repeat(64));
+    refresh.idempotency_request_hash = Some("d".repeat(64));
+    refresh.delivery_mode = "wallet_plus_email".to_owned();
+    let refreshed = repository
+        .reserve_or_refresh_offer(&offer_current, &refresh, observed_at + Duration::minutes(8))
+        .await
+        .expect("offer refresh")
+        .expect("refreshed offer");
+    assert_eq!(refreshed.id, first.id);
+    assert_eq!(refreshed.pre_authorized_code, first.pre_authorized_code);
+    assert_eq!(refreshed.delivery_mode, "wallet_plus_email");
+
+    sqlx::query(
+        "UPDATE issuance_service.issuance_transactions SET status = 'issued' WHERE id = $1",
+    )
+    .bind(&refreshed.id)
+    .execute(&pool)
+    .await
+    .expect("issued offer fixture");
+    let issued = repository
+        .get_offer_transaction(&refreshed.id, &offer_application.organization_id)
+        .await
+        .expect("issued transaction lookup")
+        .expect("issued transaction remains readable");
+    assert_eq!(issued.status, CredentialTransactionStatus::Issued);
+    repository
+        .append_offer_event(&IssuanceEventRecord {
+            id: "event-offer-viewed".to_owned(),
+            transaction_id: Some(issued.id.clone()),
+            application_id: Some(offer_application.id.clone()),
+            event_type: "offer_viewed".to_owned(),
+            metadata: Map::from_iter([("expired".to_owned(), json!(false))]),
+            created_at: observed_at + Duration::minutes(9),
+        })
+        .await
+        .expect("offer event append");
+    assert!(repository
+        .list_events_for_application(&offer_application.id)
+        .await
+        .expect("offer events")
+        .iter()
+        .any(|event| event.event_type == "offer_viewed"));
+
+    let mut canvas_offer = application_fixture(&application, "application-canvas-offer");
+    canvas_offer.status = ApplicationStatus::Approved;
+    canvas_offer.integration_context = Map::from_iter([(
+        "canvas".to_owned(),
+        json!({"source":"Canvas LTI", "canvas_platform_id":"platform-1"}),
+    )]);
+    repository
+        .insert_application(&canvas_offer)
+        .await
+        .expect("Canvas offer fixture must insert");
+    let mut canvas_initial =
+        approval_transaction("transaction-canvas-offer", &canvas_offer, observed_at);
+    canvas_initial.claims = Map::from_iter([
+        ("name".to_owned(), json!("Learner")),
+        ("_vct".to_owned(), json!("https://credentials.example/old")),
+    ]);
+    canvas_initial.idempotency_key_hash = Some("1".repeat(64));
+    canvas_initial.idempotency_request_hash = Some("2".repeat(64));
+    let canvas_reserved = repository
+        .reserve_or_refresh_offer(
+            &canvas_offer,
+            &canvas_initial,
+            observed_at + Duration::minutes(9),
+        )
+        .await
+        .expect("Canvas offer reservation")
+        .expect("Canvas offer transaction");
+    let canvas_current = repository
+        .get_application(&canvas_offer.id)
+        .await
+        .unwrap()
+        .unwrap();
+    let mut canvas_refresh = canvas_initial.clone();
+    canvas_refresh.id = "unused-canvas-refresh".to_owned();
+    canvas_refresh.credential_template_id = "credential-template-canvas-new".to_owned();
+    canvas_refresh.claims = Map::from_iter([
+        ("name".to_owned(), json!("must-not-overwrite")),
+        ("_vct".to_owned(), json!("https://credentials.example/new")),
+    ]);
+    canvas_refresh.credential_type = Some("CanvasCredential".to_owned());
+    canvas_refresh.wallet_configs = vec![json!({"wallet_id":"wallet-canvas"})];
+    canvas_refresh.selective_disclosure_claims = vec!["email".to_owned()];
+    canvas_refresh.zk_predicate_claims = vec!["age".to_owned()];
+    canvas_refresh.validity_days = 730;
+    canvas_refresh.renewable = true;
+    canvas_refresh.renewal_window_days = 60;
+    canvas_refresh.issuer_did = Some("did:web:issuer.example:canvas".to_owned());
+    let canvas_refreshed = repository
+        .reserve_or_refresh_offer(
+            &canvas_current,
+            &canvas_refresh,
+            observed_at + Duration::minutes(10),
+        )
+        .await
+        .expect("Canvas offer refresh")
+        .expect("refreshed Canvas transaction");
+    assert_eq!(canvas_refreshed.id, canvas_reserved.id);
+    assert_eq!(
+        canvas_refreshed.credential_template_id,
+        "credential-template-canvas-new"
+    );
+    assert_eq!(
+        canvas_refreshed.credential_type.as_deref(),
+        Some("CanvasCredential")
+    );
+    assert_eq!(
+        canvas_refreshed.wallet_configs,
+        vec![json!({"wallet_id":"wallet-canvas"})]
+    );
+    assert_eq!(canvas_refreshed.validity_days, 730);
+    assert!(canvas_refreshed.renewable);
+    assert_eq!(canvas_refreshed.claims.get("name"), Some(&json!("Learner")));
+    assert_eq!(
+        canvas_refreshed.claims.get("_vct"),
+        Some(&json!("https://credentials.example/new"))
+    );
+
+    let mut offer_rollback = application_fixture(&application, "application-offer-rollback");
+    offer_rollback.status = ApplicationStatus::Approved;
+    repository
+        .insert_application(&offer_rollback)
+        .await
+        .expect("offer rollback fixture must insert");
+    let mut rejected_offer =
+        approval_transaction("transaction-offer-rollback", &offer_rollback, observed_at);
+    rejected_offer.pre_authorized_code = "reject-me".to_owned();
+    rejected_offer.idempotency_key_hash = Some("e".repeat(64));
+    rejected_offer.idempotency_request_hash = Some("f".repeat(64));
+    assert!(repository
+        .reserve_or_refresh_offer(
+            &offer_rollback,
+            &rejected_offer,
+            observed_at + Duration::minutes(10),
+        )
+        .await
+        .is_err());
+    assert_eq!(transaction_count(&pool, &offer_rollback.id).await, 0);
+    assert!(repository
+        .get_application(&offer_rollback.id)
+        .await
+        .unwrap()
+        .unwrap()
+        .issuance_transaction_id
+        .is_none());
 
     sqlx::query(
         "UPDATE issuance_service.applications

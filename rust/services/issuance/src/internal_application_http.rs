@@ -18,6 +18,7 @@ use crate::{
         ApplicationApproval, ApplicationCreate, ApplicationDomainError, ApplicationRejection,
         ApplicationResponse, EvidenceFactResponse, EvidenceSubmission, IssuanceEventResponse,
     },
+    internal_application_offer::InternalApplicationOfferError,
     internal_application_service::{
         InternalApplicationApprovalError, InternalApplicationRepositoryError,
         InternalApplicationService, InternalApplicationServiceError,
@@ -61,6 +62,10 @@ pub fn router(service: InternalApplicationService) -> Router {
         .route(
             "/internal/applications/{application_id}/issuance-events",
             get(list_issuance_events),
+        )
+        .route(
+            "/internal/applications/{application_id}/issuance-offer",
+            get(get_issuance_offer).post(generate_issuance_offer),
         )
         .with_state(service)
 }
@@ -308,6 +313,42 @@ async fn list_issuance_events(
     }
 }
 
+async fn generate_issuance_offer(
+    State(service): State<InternalApplicationService>,
+    Path(application_id): Path<String>,
+    headers: HeaderMap,
+) -> Response {
+    match service
+        .generate_issuance_offer(
+            header(&headers, API_KEY_HEADER),
+            header(&headers, ORGANIZATION_HEADER),
+            &application_id,
+        )
+        .await
+    {
+        Ok(offer) => (StatusCode::OK, Json(offer)).into_response(),
+        Err(error) => service_error(error),
+    }
+}
+
+async fn get_issuance_offer(
+    State(service): State<InternalApplicationService>,
+    Path(application_id): Path<String>,
+    headers: HeaderMap,
+) -> Response {
+    match service
+        .get_issuance_offer(
+            header(&headers, API_KEY_HEADER),
+            header(&headers, ORGANIZATION_HEADER),
+            &application_id,
+        )
+        .await
+    {
+        Ok(offer) => (StatusCode::OK, Json(offer)).into_response(),
+        Err(error) => service_error(error),
+    }
+}
+
 fn result_application(
     result: Result<
         crate::internal_application_domain::ApplicationRecord,
@@ -334,24 +375,17 @@ fn service_error(error: InternalApplicationServiceError) -> Response {
             return (status, Json(json!({"detail": error.to_string()}))).into_response();
         }
         InternalApplicationServiceError::Approval(error) => {
-            let status = match &error {
-                InternalApplicationApprovalError::Unavailable
-                | InternalApplicationApprovalError::CredentialTemplateUnavailable
-                | InternalApplicationApprovalError::RevocationProfileUnavailable
-                | InternalApplicationApprovalError::IssuerContextUnavailable => {
-                    StatusCode::SERVICE_UNAVAILABLE
-                }
-                InternalApplicationApprovalError::CredentialTemplateNotFound
-                | InternalApplicationApprovalError::CredentialTemplateInvalid(_)
-                | InternalApplicationApprovalError::RevocationProfileNotFound
-                | InternalApplicationApprovalError::RevocationProfileForeign
-                | InternalApplicationApprovalError::RevocationProfileInactive => {
-                    StatusCode::UNPROCESSABLE_ENTITY
-                }
-                InternalApplicationApprovalError::CanvasNotReady
-                | InternalApplicationApprovalError::ConcurrentChange => StatusCode::CONFLICT,
-            };
-            return (status, Json(json!({"detail": error.to_string()}))).into_response();
+            return approval_error_response(error);
+        }
+        InternalApplicationServiceError::Offer(error) => {
+            return offer_error_response(error);
+        }
+        InternalApplicationServiceError::OfferRequiresApproved(_) => {
+            return (
+                StatusCode::BAD_REQUEST,
+                Json(json!({"detail": error.to_string()})),
+            )
+                .into_response();
         }
         error => error,
     };
@@ -362,6 +396,10 @@ fn service_error(error: InternalApplicationServiceError) -> Response {
         InternalApplicationServiceError::Repository(error) => repository_error(error),
         InternalApplicationServiceError::Domain(_) => unreachable!("handled above"),
         InternalApplicationServiceError::Approval(_) => unreachable!("handled above"),
+        InternalApplicationServiceError::Offer(_) => unreachable!("handled above"),
+        InternalApplicationServiceError::OfferRequiresApproved(_) => {
+            unreachable!("handled above")
+        }
         InternalApplicationServiceError::InvalidStatus => (
             StatusCode::UNPROCESSABLE_ENTITY,
             "Invalid application status",
@@ -388,8 +426,60 @@ fn service_error(error: InternalApplicationServiceError) -> Response {
             StatusCode::CONFLICT,
             "Application lifecycle changed during rejection",
         ),
+        InternalApplicationServiceError::OfferNotAvailable => (
+            StatusCode::NOT_FOUND,
+            "No issuance offer available for this application",
+        ),
     };
     (status, Json(json!({"detail": detail}))).into_response()
+}
+
+fn approval_error_response(error: InternalApplicationApprovalError) -> Response {
+    let status = match &error {
+        InternalApplicationApprovalError::Unavailable
+        | InternalApplicationApprovalError::CredentialTemplateUnavailable
+        | InternalApplicationApprovalError::RevocationProfileUnavailable
+        | InternalApplicationApprovalError::IssuerContextUnavailable => {
+            StatusCode::SERVICE_UNAVAILABLE
+        }
+        InternalApplicationApprovalError::CredentialTemplateNotFound
+        | InternalApplicationApprovalError::CredentialTemplateInvalid(_)
+        | InternalApplicationApprovalError::RevocationProfileNotFound
+        | InternalApplicationApprovalError::RevocationProfileForeign
+        | InternalApplicationApprovalError::RevocationProfileInactive => {
+            StatusCode::UNPROCESSABLE_ENTITY
+        }
+        InternalApplicationApprovalError::CanvasNotReady
+        | InternalApplicationApprovalError::ConcurrentChange => StatusCode::CONFLICT,
+    };
+    (status, Json(json!({"detail": error.to_string()}))).into_response()
+}
+
+fn offer_error_response(error: InternalApplicationOfferError) -> Response {
+    match error {
+        InternalApplicationOfferError::Approval(error) => approval_error_response(error),
+        error @ InternalApplicationOfferError::CredentialTemplateRequired => (
+            StatusCode::UNPROCESSABLE_ENTITY,
+            Json(json!({"detail": error.to_string()})),
+        )
+            .into_response(),
+        error @ InternalApplicationOfferError::ConcurrentChange => (
+            StatusCode::CONFLICT,
+            Json(json!({"detail": error.to_string()})),
+        )
+            .into_response(),
+        error @ (InternalApplicationOfferError::MissingTransactionBinding
+        | InternalApplicationOfferError::TransactionNotFound) => (
+            StatusCode::NOT_FOUND,
+            Json(json!({"detail": error.to_string()})),
+        )
+            .into_response(),
+        error @ InternalApplicationOfferError::Unavailable => (
+            StatusCode::SERVICE_UNAVAILABLE,
+            Json(json!({"detail": error.to_string()})),
+        )
+            .into_response(),
+    }
 }
 
 fn repository_error(error: InternalApplicationRepositoryError) -> (StatusCode, &'static str) {
