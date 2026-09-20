@@ -99,12 +99,31 @@ fn read_bounded_ca(path: &Path) -> std::io::Result<Vec<u8>> {
     Ok(bytes)
 }
 
+fn wallet_script() -> PathBuf {
+    // Normalize lexically before touching the filesystem. The Kubernetes
+    // namespace mounts this exact script but intentionally does not mount the
+    // source directories that a `../../../` lookup would have to traverse.
+    let root = super::base_runtime_container::lexical_source_root()
+        .expect("wallet fixture workspace root");
+    let path = root.join("scripts/didcomm_wallet_fixture.py");
+    let metadata = std::fs::symlink_metadata(&path).expect("wallet fixture script metadata");
+    assert!(
+        metadata.is_file() && !metadata.file_type().is_symlink(),
+        "wallet fixture script must be a regular file"
+    );
+    path.canonicalize()
+        .expect("resolve the mounted wallet fixture script")
+}
+
 impl WalletFixture {
     pub(super) fn start(status: u16) -> Self {
         assert!(matches!(status, 200 | 503));
         let directory = OwnedDirectory::new();
-        let script = Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("../../../scripts/didcomm_wallet_fixture.py");
+        // The isolated runtime mounts only exact canonical files. Passing the
+        // source-relative path through Python would fail before `..` can be
+        // resolved because the unmounted intermediate directories do not
+        // exist inside that container.
+        let script = wallet_script();
         let python =
             std::env::var_os("MARTY_DIDCOMM_TEST_PYTHON").unwrap_or_else(|| "python3".into());
         let mut command = Command::new(python);
@@ -248,6 +267,19 @@ fn wallet_readiness_rejects_external_or_ambiguous_resources() {
         serde_json::to_string(&root.join("ca.pem")).unwrap()
     );
     assert!(validated_ready(duplicate.as_bytes(), &root).is_none());
+}
+
+#[test]
+fn wallet_script_is_an_exact_mountable_path() {
+    let script = wallet_script();
+    assert!(script.is_absolute());
+    assert!(script
+        .components()
+        .all(|component| component != std::path::Component::ParentDir));
+    assert_eq!(
+        script.file_name().and_then(|name| name.to_str()),
+        Some("didcomm_wallet_fixture.py")
+    );
 }
 
 #[test]

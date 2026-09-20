@@ -84,18 +84,29 @@ enum Selection {
     Baseline,
 }
 
+fn is_fixture_peer(cluster: &Value) -> bool {
+    matches!(
+        cluster["name"].as_str(),
+        Some(NATIVE_CLUSTER | "auth_grpc" | "issuance_grpc")
+    )
+}
+
 fn fixture_projection(candidate: &Value, selection: Selection) -> Value {
     let mut fixture = candidate.clone();
     for cluster in fixture["static_resources"]["clusters"]
         .as_array_mut()
         .unwrap()
     {
-        let native = cluster["name"] == NATIVE_CLUSTER;
-        let auth = cluster["name"] == "auth_grpc";
-        if native || auth || cluster["name"] == "issuance_grpc" {
+        if is_fixture_peer(cluster) {
+            let native = cluster["name"] == NATIVE_CLUSTER;
+            let auth = cluster["name"] == "auth_grpc";
             let address = &mut cluster["load_assignment"]["endpoints"][0]["lb_endpoints"][0]
                 ["endpoint"]["address"]["socket_address"];
             *address = json!({"address":"127.0.0.1","port_value":if native{9005}else if auth{19001}else{19005}});
+            // Envoy can start before the in-process fixture peers. Its default
+            // no-traffic retry cadence is longer than this bounded integration
+            // test, so normalize only the projected fixture configuration.
+            cluster["health_checks"][0]["no_traffic_interval"] = json!("1s");
         }
     }
     if selection == Selection::Baseline {
@@ -547,7 +558,7 @@ impl Drop for OwnedEnvoy {
 }
 
 #[test]
-fn fixture_projection_preserves_every_field_except_closed_socket_addresses() {
+fn fixture_projection_preserves_every_field_except_fixture_socket_and_cadence() {
     let base = include_bytes!("../../../../../config/envoy/envoy.yaml");
     let candidate = render(base, marty_release_evidence::envoy_config::DESCRIPTOR).unwrap();
     for selection in [Selection::Candidate, Selection::Baseline] {
@@ -561,9 +572,9 @@ fn fixture_projection_preserves_every_field_except_closed_socket_addresses() {
             .as_array_mut()
             .unwrap()
         {
-            let native = cluster["name"] == NATIVE_CLUSTER;
-            let auth = cluster["name"] == "auth_grpc";
-            if native || auth || cluster["name"] == "issuance_grpc" {
+            if is_fixture_peer(cluster) {
+                let native = cluster["name"] == NATIVE_CLUSTER;
+                let auth = cluster["name"] == "auth_grpc";
                 let address = &mut cluster["load_assignment"]["endpoints"][0]["lb_endpoints"][0]
                     ["endpoint"]["address"]["socket_address"];
                 assert_eq!(
@@ -571,6 +582,14 @@ fn fixture_projection_preserves_every_field_except_closed_socket_addresses() {
                     json!({"address":"127.0.0.1","port_value":if native{9005}else if auth{19001}else{19005}})
                 );
                 *address = json!({"address":if native{"issuance-native"}else if auth{"auth"}else{"issuance"},"port_value":if auth{9001}else{9005}});
+                assert_eq!(cluster["health_checks"][0]["no_traffic_interval"], "1s");
+                assert_eq!(
+                    cluster["health_checks"][0]
+                        .as_object_mut()
+                        .unwrap()
+                        .remove("no_traffic_interval"),
+                    Some(json!("1s"))
+                );
             }
         }
         if selection == Selection::Baseline {

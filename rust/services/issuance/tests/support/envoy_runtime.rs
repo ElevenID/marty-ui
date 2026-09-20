@@ -238,12 +238,17 @@ impl EnvoyFixture {
             calls,
         };
         let deadline = Instant::now() + Duration::from_secs(45);
+        let mut last_observed = Vec::new();
         loop {
             assert!(
                 Instant::now() < deadline,
-                "actual Envoy/native/legacy health deadline"
+                "actual Envoy/native/legacy health deadline: {}; legacy health calls={:?}; auth health calls={:?}",
+                last_observed.join(", "),
+                *result.legacy_health.lock().unwrap(),
+                *result.auth_health.lock().unwrap()
             );
             let mut healthy = true;
+            let mut observed = Vec::new();
             for (port, names) in [
                 (
                     9901,
@@ -269,26 +274,44 @@ impl EnvoyFixture {
                     .timeout(deadline.saturating_duration_since(Instant::now()))
                     .send()
                     .await;
-                if let Ok(response) = response {
-                    if response.status().is_success() {
-                        let body: Value = response.json().await.unwrap();
-                        let stats = body["stats"].as_array().unwrap();
-                        if names
-                            .iter()
-                            .all(|name| stats.iter().any(|v| v["name"] == *name && v["value"] == 1))
-                        {
-                            continue;
+                match response {
+                    Ok(response) if response.status().is_success() => {
+                        if let Ok(body) = response.json::<Value>().await {
+                            if let Some(stats) = body["stats"].as_array() {
+                                for name in names {
+                                    let value = stats
+                                        .iter()
+                                        .find(|value| value["name"] == **name)
+                                        .and_then(|value| value["value"].as_u64());
+                                    observed.push(format!(
+                                        "{port}:{name}={}",
+                                        value.map_or_else(
+                                            || "missing".into(),
+                                            |value| value.to_string()
+                                        )
+                                    ));
+                                    healthy &= value == Some(1);
+                                }
+                                continue;
+                            }
                         }
+                        observed.push(format!("{port}:invalid-json"));
                     }
+                    Ok(response) => observed.push(format!("{port}:http-{}", response.status())),
+                    Err(_) => observed.push(format!("{port}:unreachable")),
                 }
                 healthy = false;
             }
+            last_observed = observed;
             if healthy {
                 break;
             }
             assert!(
                 Instant::now() < deadline,
-                "actual Envoy/native/legacy health deadline"
+                "actual Envoy/native/legacy health deadline: {}; legacy health calls={:?}; auth health calls={:?}",
+                last_observed.join(", "),
+                *result.legacy_health.lock().unwrap(),
+                *result.auth_health.lock().unwrap()
             );
             tokio::time::sleep(Duration::from_millis(100)).await;
         }
@@ -538,10 +561,14 @@ impl EnvoyFixture {
             let baseline = self
                 .observe_boundary(19000, method, &path, &alias_body)
                 .await;
+            let decoded_after_baseline = self.legacy_initiations.lock().unwrap().len();
             let candidate = self
                 .observe_boundary(9000, method, &path, &alias_body)
                 .await;
-            if self.legacy_initiations.lock().unwrap().len() == decoded_before + 1 {
+            let decoded_after_candidate = self.legacy_initiations.lock().unwrap().len();
+            let baseline_decodes = decoded_after_baseline - decoded_before;
+            let candidate_decodes = decoded_after_candidate - decoded_after_baseline;
+            if baseline_decodes == 1 && candidate_decodes == 0 {
                 // Actual baseline observation, not a hand-maintained URL alias
                 // list, identifies normalization into the migrated operation.
                 assert_eq!(method, "POST");
@@ -565,8 +592,8 @@ impl EnvoyFixture {
                 assert_eq!(candidate,canonical,"Normalized initiation alias preserves exact native response and no-fallback effects: {path}");
             } else {
                 assert_eq!(
-                    self.legacy_initiations.lock().unwrap().len(),
-                    decoded_before
+                    candidate_decodes, baseline_decodes,
+                    "candidate changed legacy initiation effects for {method} {path}"
                 );
                 assert_eq!(candidate,baseline,"Actual unchanged baseline preserves response bytes, relevant headers and legacy attempts for {method} {path}");
             }
@@ -858,7 +885,28 @@ impl EnvoyFixture {
                 .to_str()
                 .unwrap()
                 .starts_with("application/grpc-web"));
-            let (messages, trailers) = grpc_web_frames(&web.bytes().await.unwrap());
+            let header_trailers: std::collections::BTreeMap<_, _> = ["grpc-status", "grpc-message"]
+                .into_iter()
+                .filter_map(|name| {
+                    web.headers()
+                        .get(name)
+                        .map(|value| (name.to_owned(), value.to_str().unwrap().to_owned()))
+                })
+                .collect();
+            let bytes = web.bytes().await.unwrap();
+            let (messages, trailers) = if bytes.is_empty() {
+                assert!(
+                    header_trailers.contains_key("grpc-status"),
+                    "an empty gRPC-web response must be a trailers-only response"
+                );
+                (Vec::new(), header_trailers)
+            } else {
+                assert!(
+                    header_trailers.is_empty(),
+                    "framed gRPC-web trailers must not be duplicated in response headers"
+                );
+                grpc_web_frames(&bytes)
+            };
             if token == Some(TOKEN) {
                 assert_eq!(trailers.get("grpc-status").map(String::as_str), Some("0"));
                 assert_eq!(messages.len(), 1);

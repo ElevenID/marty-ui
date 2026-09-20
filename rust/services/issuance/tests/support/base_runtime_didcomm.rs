@@ -1,7 +1,7 @@
 //! Fresh automatic HTTP and direct replay on the already-running rendered graph.
 //! The prior renewal gate has independently checked its full signed credential.
 use super::{
-    base_runtime_gateway::GatewayFixture,
+    base_runtime_gateway::{GatewayFixture, PUBLIC_INITIATION_PATH},
     didcomm_wallet_fixture::WalletFixture,
     issuance_named_peers::{PeerState, CLIENT_KEY, FORMAT, HOLDER, ISSUER, ORGANIZATION, TEMPLATE},
     renewal_fresh_main::{assert_offer, stored},
@@ -75,7 +75,7 @@ pub(super) async fn run(input: Input<'_>) {
     } else {
         gateway
             .client
-            .post(format!("{}/v1/issuance/initiate", gateway.origin))
+            .post(format!("{}{PUBLIC_INITIATION_PATH}", gateway.origin))
             .header("x-api-key", CLIENT_KEY)
             .json(&body)
             .send()
@@ -91,14 +91,24 @@ pub(super) async fn run(input: Input<'_>) {
         response["credential_offer_uri"].as_str().unwrap(),
         &state["transaction"]["pre_auth_code"],
     );
-    assert_eq!(
-        response,
-        json!({"id":id,"organization_id":ORGANIZATION,"credential_template_id":TEMPLATE,
+    let mut expected = json!({"id":id,"organization_id":ORGANIZATION,"credential_template_id":TEMPLATE,
         "status":"issued","credential_offer_uri":response["credential_offer_uri"],
         "credential_offer_uris":{"didcomm":format!("didcomm://{endpoint}")},
         "credential_offer_labels":{"didcomm":"Synthetic Wallet"},
-        "pre_auth_code":state["transaction"]["pre_auth_code"],"expires_at":response["expires_at"]})
-    );
+        "expires_at":response["expires_at"]});
+    if envoy.is_some() {
+        assert_eq!(
+            response["pre_auth_code"], state["transaction"]["pre_auth_code"],
+            "the direct Envoy/service compatibility route preserves its existing internal response"
+        );
+        expected["pre_auth_code"] = response["pre_auth_code"].clone();
+    } else {
+        assert!(
+            response.get("pre_auth_code").is_none(),
+            "the public gateway response must not disclose a raw pre-authorization code"
+        );
+    }
+    assert_eq!(response, expected);
     assert_eq!(
         response["expires_at"]
             .as_str()

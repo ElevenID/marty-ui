@@ -74,6 +74,32 @@ enum Ingress {
     KubernetesGateway,
 }
 
+struct CaseDatabaseKeys {
+    mode: &'static str,
+    source_id: String,
+    source_tx_id: String,
+    pre_authorized_code: String,
+}
+
+fn case_database_keys(authenticated: bool, allow_private_ips: bool) -> CaseDatabaseKeys {
+    let mode = if authenticated {
+        "authcrypt"
+    } else {
+        "anoncrypt"
+    };
+    let suffix = if allow_private_ips {
+        ""
+    } else {
+        "-default-refusal"
+    };
+    CaseDatabaseKeys {
+        mode,
+        source_id: format!("fresh-main-source-{mode}{suffix}"),
+        source_tx_id: format!("fresh-main-source-tx-{mode}{suffix}"),
+        pre_authorized_code: format!("historical-{mode}{suffix}"),
+    }
+}
+
 async fn run_with_profile(database_url: &str, rendered_redis: Option<&str>, ingress: Ingress) {
     let gateway = matches!(
         ingress,
@@ -109,18 +135,12 @@ async fn run_with_profile(database_url: &str, rendered_redis: Option<&str>, ingr
         &[(false, true), (true, true)]
     };
     for &(authenticated, allow_private_ips) in cases {
-        let mode = if authenticated {
-            "authcrypt"
-        } else {
-            "anoncrypt"
-        };
-        let suffix = if allow_private_ips {
-            ""
-        } else {
-            "-default-refusal"
-        };
-        let source_id = format!("fresh-main-source-{mode}{suffix}");
-        let source_tx_id = format!("fresh-main-source-tx-{mode}{suffix}");
+        let CaseDatabaseKeys {
+            mode,
+            source_id,
+            source_tx_id,
+            pre_authorized_code,
+        } = case_database_keys(authenticated, allow_private_ips);
         let wallet = WalletFixture::start(200);
         let endpoint = format!("{}/inbox", wallet.origin);
         let (sender, sender_secret, mut recipient, recipient_secret) =
@@ -206,7 +226,7 @@ async fn run_with_profile(database_url: &str, rendered_redis: Option<&str>, ingr
                 .unwrap(),
         );
         source.id = source_tx_id.clone();
-        source.pre_authorized_code = format!("historical-{mode}");
+        source.pre_authorized_code = pre_authorized_code;
         source.organization_id = ORGANIZATION.into();
         source.credential_template_id = TEMPLATE.into();
         source.issuer_did = Some(ISSUER.into());
@@ -619,4 +639,22 @@ async fn run_with_profile(database_url: &str, rendered_redis: Option<&str>, ingr
         wallet.close_verified();
     }
     pool.close().await;
+}
+
+#[test]
+fn composed_gateway_cases_have_unique_database_keys() {
+    let mut source_ids = std::collections::BTreeSet::new();
+    let mut transaction_ids = std::collections::BTreeSet::new();
+    let mut pre_authorized_codes = std::collections::BTreeSet::new();
+    for (authenticated, allow_private_ips) in
+        [(false, false), (true, false), (false, true), (true, true)]
+    {
+        let keys = case_database_keys(authenticated, allow_private_ips);
+        assert!(source_ids.insert(keys.source_id));
+        assert!(transaction_ids.insert(keys.source_tx_id));
+        assert!(pre_authorized_codes.insert(keys.pre_authorized_code));
+    }
+    assert_eq!(source_ids.len(), 4);
+    assert_eq!(transaction_ids.len(), 4);
+    assert_eq!(pre_authorized_codes.len(), 4);
 }

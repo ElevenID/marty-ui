@@ -111,6 +111,22 @@ async fn peer(State(state): State<PeerState>, request: Request<Body>) -> Respons
             assert!(bytes.is_empty());
             Json(json!({"status":"healthy"})).into_response()
         }
+        "/v1/organizations" if state.base_gateway => {
+            // The actual gateway starts its hosted-pilot retention sweep
+            // immediately. Keep that lifecycle enabled and validate its first
+            // bounded page instead of hiding it in this composed-runtime gate.
+            assert_eq!(method, "GET");
+            assert_eq!(headers["x-service-token"], TOKEN);
+            assert_eq!(
+                args,
+                BTreeMap::from([
+                    ("limit".into(), "100".into()),
+                    ("offset".into(), "0".into()),
+                ])
+            );
+            assert!(bytes.is_empty());
+            Json(json!([])).into_response()
+        }
         "/marty.ui.organization.v1.OrganizationService/ValidateApiKey" if state.base_gateway => {
             assert_eq!(method, "POST");
             assert_eq!(headers["x-service-token"], TOKEN);
@@ -197,6 +213,50 @@ async fn peer(State(state): State<PeerState>, request: Request<Body>) -> Respons
                 status: "active".into(),
                 ..Default::default()
             })
+        }
+        "/v1/credential-templates/didcomm%2Dtemplate" if state.base_gateway => {
+            assert_eq!(method, "GET");
+            assert_eq!(headers["x-organization-id"], ORGANIZATION);
+            assert_eq!(headers["x-api-key-id"], "synthetic-base-client");
+            assert!(args.is_empty());
+            assert!(bytes.is_empty());
+            Json(json!({
+                "id": TEMPLATE,
+                "organization_id": ORGANIZATION,
+                "status": "active",
+                "credential_type": "EmployeeCredential",
+                "vct": "https://issuer.example/credentials/EmployeeCredential",
+                "credential_payload_format": FORMAT,
+                "issuer_did": ISSUER
+            }))
+            .into_response()
+        }
+        "/internal/compat/resolve-issuer-did" if state.base_gateway => {
+            assert_eq!(method, "POST");
+            assert_eq!(headers["x-api-key"], SIGNING_KEY);
+            assert!(args.is_empty());
+            assert_eq!(
+                serde_json::from_slice::<Value>(&bytes).unwrap(),
+                json!({
+                    "organization_id": ORGANIZATION,
+                    "issuer_did": ISSUER,
+                    "credential_format": "dc+sd-jwt",
+                    "key_purpose": "vc_jwt_issuer"
+                })
+            );
+            Json(json!({
+                "ok": true,
+                "organization_id": ORGANIZATION,
+                "issuer_did": ISSUER,
+                "verification_method_id": format!("{ISSUER}#signing-1"),
+                "key_purpose": "vc_jwt_issuer",
+                "algorithm": "EdDSA",
+                "public_jwk": {
+                    "kty": "OKP", "crv": "Ed25519",
+                    "x": URL_SAFE_NO_PAD.encode(state.signer.verifying_key().as_bytes())
+                }
+            }))
+            .into_response()
         }
         "/issuer/did.json" | "/holder/did.json" => {
             assert_eq!(method, "GET");

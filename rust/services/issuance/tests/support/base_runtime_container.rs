@@ -214,9 +214,27 @@ fn checked_asset_set(
         .collect()
 }
 
+pub(super) fn lexical_source_root() -> Result<PathBuf, String> {
+    let mut root = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    for expected in ["issuance", "services", "rust"] {
+        require(
+            root.file_name().and_then(|name| name.to_str()) == Some(expected),
+            "Base runtime manifest directory has an unexpected shape",
+        )?;
+        require(
+            root.pop(),
+            "Base runtime manifest directory has no workspace root",
+        )?;
+    }
+    require(
+        root.is_absolute(),
+        "Base runtime source root must be absolute",
+    )?;
+    Ok(root)
+}
+
 fn source_root() -> Result<PathBuf, String> {
-    Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("../../..")
+    lexical_source_root()?
         .canonicalize()
         .map_err(|_| "Base runtime source root is unavailable".into())
 }

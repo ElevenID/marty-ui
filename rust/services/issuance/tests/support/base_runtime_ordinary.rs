@@ -20,7 +20,7 @@ use sha2::{Digest, Sha256};
 use sqlx::PgPool;
 
 use super::{
-    base_runtime_gateway::GatewayFixture,
+    base_runtime_gateway::{GatewayFixture, PUBLIC_INITIATION_PATH},
     issuance_named_peers::{PeerState, CLIENT_KEY, HOLDER, ISSUER, ORGANIZATION, TEMPLATE},
     renewal_fresh_main::{assert_offer, stored},
 };
@@ -91,7 +91,7 @@ pub(super) async fn run(pool: &PgPool, gateway: &GatewayFixture, peers: &PeerSta
     let before = Utc::now();
     let response = gateway
         .client
-        .post(format!("{}/v1/issuance/initiate", gateway.origin))
+        .post(format!("{}{PUBLIC_INITIATION_PATH}", gateway.origin))
         .header("x-api-key", CLIENT_KEY)
         .header("idempotency-key", &key)
         .json(&request)
@@ -136,14 +136,14 @@ pub(super) async fn run(pool: &PgPool, gateway: &GatewayFixture, peers: &PeerSta
         body,
         json!({"id":id,"organization_id":ORGANIZATION,"credential_template_id":TEMPLATE,
         "status":"pending","credential_offer_uri":body["credential_offer_uri"],
-        "credential_offer_uris":{},"credential_offer_labels":{},"pre_auth_code":transaction["pre_auth_code"],
+        "credential_offer_uris":{},"credential_offer_labels":{},
         "expires_at":body["expires_at"]})
     );
     assert_offer(
         body["credential_offer_uri"].as_str().unwrap(),
         &transaction["pre_auth_code"],
     );
-    assert!(!body["pre_auth_code"].as_str().unwrap().is_empty());
+    assert!(body.get("pre_auth_code").is_none());
     for collection in ["credentials", "deliveries", "events"] {
         assert_eq!(reserved[collection], json!([]));
     }
@@ -161,13 +161,11 @@ pub(super) async fn run(pool: &PgPool, gateway: &GatewayFixture, peers: &PeerSta
         .unwrap();
     assert_eq!(vector_binding.key_hash, vector["key_hash"]);
     assert_eq!(vector_binding.request_hash, vector["request_hash"]);
-    let typed: InitiationRequest = serde_json::from_value(request.clone()).unwrap();
-    let binding = idempotency_binding(Some(&key), &typed).unwrap().unwrap();
-    assert_eq!(transaction["idempotency_key_hash"], binding.key_hash);
-    assert_eq!(
-        transaction["idempotency_request_hash"],
-        binding.request_hash
-    );
+    // Public replay is owned by gateway/Redis. The gateway consumes the key
+    // before forwarding, so the native repository must not claim ownership of
+    // the same idempotency record.
+    assert!(transaction["idempotency_key_hash"].is_null());
+    assert!(transaction["idempotency_request_hash"].is_null());
     assert_eq!(transaction_count(pool).await, initial_count + 1);
     assert_eq!(effects(peers), initial_effects);
 
@@ -175,7 +173,7 @@ pub(super) async fn run(pool: &PgPool, gateway: &GatewayFixture, peers: &PeerSta
     // admission; do not label it native repository recovery.
     let replay = gateway
         .client
-        .post(format!("{}/v1/issuance/initiate", gateway.origin))
+        .post(format!("{}{PUBLIC_INITIATION_PATH}", gateway.origin))
         .header("x-api-key", CLIENT_KEY)
         .header("idempotency-key", &key)
         .json(&request)
@@ -189,7 +187,7 @@ pub(super) async fn run(pool: &PgPool, gateway: &GatewayFixture, peers: &PeerSta
     conflicting["claims"]["given_name"] = json!("Changed");
     let conflict = gateway
         .client
-        .post(format!("{}/v1/issuance/initiate", gateway.origin))
+        .post(format!("{}{PUBLIC_INITIATION_PATH}", gateway.origin))
         .header("x-api-key", CLIENT_KEY)
         .header("idempotency-key", &key)
         .json(&conflicting)
@@ -220,7 +218,7 @@ pub(super) async fn run(pool: &PgPool, gateway: &GatewayFixture, peers: &PeerSta
         ),
         (
             "pre-authorized_code",
-            body["pre_auth_code"].as_str().unwrap(),
+            transaction["pre_auth_code"].as_str().unwrap(),
         ),
     ];
     let response = gateway

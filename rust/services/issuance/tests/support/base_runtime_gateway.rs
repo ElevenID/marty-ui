@@ -22,6 +22,8 @@ use super::{
     resolved_runtime::ResolvedRuntime,
 };
 
+pub(super) const PUBLIC_INITIATION_PATH: &str = "/v1/issuance";
+
 #[derive(Clone)]
 struct LegacyState {
     pool: sqlx::PgPool,
@@ -195,7 +197,7 @@ impl GatewayFixture {
             // Exercise the public gateway contract. The gateway rewrites this
             // route to the native service's internal `/initiate` endpoint only
             // after authenticating the caller.
-            .post(format!("{}/v1/issuance", self.origin))
+            .post(format!("{}{PUBLIC_INITIATION_PATH}", self.origin))
             .header("x-api-key", "synthetic-invalid-client-key")
             .json(&json!({}))
             .send()

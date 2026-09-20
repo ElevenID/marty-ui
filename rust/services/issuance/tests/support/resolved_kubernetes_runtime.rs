@@ -68,10 +68,7 @@ fn require(value: bool) -> Result<()> {
     }
 }
 fn root() -> PathBuf {
-    Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("../../..")
-        .canonicalize()
-        .expect("fixture source root")
+    super::base_runtime_container::lexical_source_root().expect("fixture source root")
 }
 fn bytes(path: &Path) -> Result<Vec<u8>> {
     use std::io::Read;
