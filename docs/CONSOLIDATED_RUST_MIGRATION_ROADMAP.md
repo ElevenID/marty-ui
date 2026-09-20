@@ -51,8 +51,8 @@ pass. Credentials PR #279 at
 Python management routes after #826 lands; its exact-head hosted run
 `35502472242` is fully green.
 
-Internal-Application PR #827 is open, clean, and mergeable at
-`95fab51c94be796bf9c6d865f6264e77e5c0d9dc`, stacked on #826. It implements and
+Internal-Application PR #827 is open and stacked on #826. Reviewed code
+checkpoint `428b5a5d1` implements and
 mounts all 14 frozen routes, including ordinary and Canvas approval, issuance
 offer projection, external evidence, reconciliation, atomic PostgreSQL
 transitions, stale-receipt reporting, lifecycle races, and KMS issuer
@@ -73,6 +73,18 @@ metadata, a full locked Rust check, and all 37 stable-tag/release-contract tests
 pass. After #279 and #278 land, #280 must land and publish successfully before
 the new Credentials artifact is pinned into the next aggregate UI coordinate,
 `1.1.218`.
+
+Exact-head maintainer replay found that the 14 internal-Application entries were
+present in the JSON inventory but absent from the embedded Rust contract's
+closed behavior-selector model, and that the inventory still reported 49
+remaining routes after increasing native ownership from 82 to 96. Code
+checkpoint `428b5a5d1` fixes both fail-closed defects: every internal-Application
+route now selects exactly one frozen behavior case, duplicate/missing/sibling
+cases are rejected, and the 131-route ledger is **96 native / 35 remaining**.
+The combined Rust replay passes 466 library tests, four Application Template
+HTTP tests, ten internal-Application HTTP tests, four reconciliation tests, and
+six executable smokes; package formatting, strict all-target Clippy, and the
+Python native-inventory guard also pass.
 
 Verified obsolete branch cleanup removed the patch-equivalent historical UI
 worktrees, stale Credentials worktrees, and detached tagged-release worktrees.
@@ -5993,10 +6005,15 @@ adds eight native operations and, once landed, reports **82 native / 49 remainin
 surface. Its separately tested Python management retirement remains ordered
 after that Rust landing.
 
+The stacked internal-Application slice adds the next 14 exact frozen operations
+and reports **96 native / 35 remaining / 131 total**. Its separately tested
+Python retirement remains ordered after the Rust owner lands and retains shared
+storage plus active Canvas and evidence consumers.
+
 Remaining work includes completion and protected landing of the exact PR #814
 head, the Application Template Rust and Python-retirement PRs, release-image /
 gateway / callback / self-host TLS acceptance, intended-consumer review for the
-remaining 49 issuance HTTP entries, branch and worktree reconciliation, and one
+remaining 35 issuance HTTP entries, branch and worktree reconciliation, and one
 aggregate beta recording/device acceptance soak. Local qualification is not
 deployed acceptance. Active Python remains until its retirement gates pass.
 DIDComm KMS corrections remain deferred; production is unchanged.
