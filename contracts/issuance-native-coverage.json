@@ -167,6 +167,90 @@
       "application_template_behavior_case": "delete_application_template"
     },
     {
+      "method": "POST",
+      "path": "/internal/applications",
+      "operation": "create_application",
+      "internal_application_behavior_case": "create_application"
+    },
+    {
+      "method": "GET",
+      "path": "/internal/applications",
+      "operation": "list_applications",
+      "internal_application_behavior_case": "list_applications"
+    },
+    {
+      "method": "GET",
+      "path": "/internal/applications/{application_id}",
+      "operation": "get_application",
+      "internal_application_behavior_case": "get_application"
+    },
+    {
+      "method": "GET",
+      "path": "/internal/applications/{application_id}/evidence-facts",
+      "operation": "list_application_evidence_facts",
+      "internal_application_behavior_case": "list_application_evidence_facts"
+    },
+    {
+      "method": "GET",
+      "path": "/internal/applications/{application_id}/evidence-summary",
+      "operation": "get_application_evidence_summary",
+      "internal_application_behavior_case": "get_application_evidence_summary"
+    },
+    {
+      "method": "POST",
+      "path": "/internal/applications/{application_id}/evidence/api-checks/{check_id}/run",
+      "operation": "run_external_evidence_api_check",
+      "internal_application_behavior_case": "run_external_evidence_api_check"
+    },
+    {
+      "method": "POST",
+      "path": "/internal/applications/evidence/reconcile",
+      "operation": "reconcile_application_evidence",
+      "internal_application_behavior_case": "reconcile_application_evidence"
+    },
+    {
+      "method": "GET",
+      "path": "/internal/applications/evidence/reconciliation-report",
+      "operation": "get_application_evidence_reconciliation_report",
+      "internal_application_behavior_case": "get_application_evidence_reconciliation_report"
+    },
+    {
+      "method": "POST",
+      "path": "/internal/applications/{application_id}/submit-evidence",
+      "operation": "submit_evidence",
+      "internal_application_behavior_case": "submit_evidence"
+    },
+    {
+      "method": "POST",
+      "path": "/internal/applications/{application_id}/approve",
+      "operation": "approve_application",
+      "internal_application_behavior_case": "approve_application"
+    },
+    {
+      "method": "POST",
+      "path": "/internal/applications/{application_id}/reject",
+      "operation": "reject_application",
+      "internal_application_behavior_case": "reject_application"
+    },
+    {
+      "method": "POST",
+      "path": "/internal/applications/{application_id}/issuance-offer",
+      "operation": "generate_issuance_offer",
+      "internal_application_behavior_case": "generate_issuance_offer"
+    },
+    {
+      "method": "GET",
+      "path": "/internal/applications/{application_id}/issuance-offer",
+      "operation": "get_issuance_offer",
+      "internal_application_behavior_case": "get_issuance_offer"
+    },
+    {
+      "method": "GET",
+      "path": "/internal/applications/{application_id}/issuance-events",
+      "operation": "list_issuance_events",
+      "internal_application_behavior_case": "list_issuance_events"
+    },
+    {
       "method": "GET",
       "path": "/health",
       "operation": "health_check",

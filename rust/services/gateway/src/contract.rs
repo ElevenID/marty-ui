@@ -977,6 +977,16 @@ mod tests {
                 "/v1/organizations/org-1/applicants/application-1/approve",
                 "applicant",
             ),
+            (
+                HttpMethod::Get,
+                "/v1/organizations/org-1/applicants/application-1/evidence-facts",
+                issuance_native::NATIVE_SERVICE,
+            ),
+            (
+                HttpMethod::Post,
+                "/v1/organizations/org-1/applicants/application-1/evidence/api-checks/check-1/run",
+                issuance_native::NATIVE_SERVICE,
+            ),
             (HttpMethod::Post, "/v1/webhooks", "notifications"),
             (HttpMethod::Post, "/v1/subscriptions", "notifications"),
             (

@@ -1304,10 +1304,11 @@ async fn applicant_evidence_summary_handler(
     }
     let headers = request_headers(request.headers());
     let issuance_path = format!("/internal/applications/{application_id}/evidence-summary");
+    let issuance_service = issuance_native::upstream_service(HttpMethod::Get, &issuance_path);
     match composition_proxy_json(
         &state,
         &identity,
-        "issuance",
+        issuance_service,
         HttpMethod::Get,
         &issuance_path,
         BTreeMap::new(),
@@ -1872,14 +1873,18 @@ async fn composition_proxy_json(
     body: Option<Value>,
     mut headers: BTreeMap<String, String>,
 ) -> Result<Value, Response> {
-    if service == "issuance" {
+    let is_issuance = matches!(
+        service,
+        issuance_native::LEGACY_SERVICE | issuance_native::NATIVE_SERVICE
+    );
+    if is_issuance {
         headers.insert("x-api-key".into(), state.issuance_service_api_key.clone());
     }
     if body.is_some() {
         headers.insert("content-type".into(), "application/json".into());
     }
-    let internal_path = if service == "issuance" {
-        format!("/__gateway/issuance{upstream_path}")
+    let internal_path = if is_issuance {
+        format!("/__gateway/{service}{upstream_path}")
     } else {
         format!("/__gateway/composition/{service}{upstream_path}")
     };
@@ -1891,7 +1896,7 @@ async fn composition_proxy_json(
         .transpose()
         .map_err(|_| detail_response(422, "Composition request could not be serialized"))?;
     let mut overrides = proxy_overrides(state, &internal_path, identity);
-    if service == "issuance" {
+    if is_issuance {
         overrides
             .headers
             .insert("x-api-key".into(), state.issuance_service_api_key.clone());
@@ -4627,7 +4632,7 @@ mod tests {
             if request.path.starts_with("/internal/") {
                 let expected = match instance.service_name.as_str() {
                     "signing-keys" => Some("internal-signing-key"),
-                    "issuance" => Some("issuance-service-key"),
+                    "issuance" | "issuance-native" => Some("issuance-service-key"),
                     "organizations" => None,
                     service => panic!("unexpected internal request to {service}"),
                 };
@@ -4664,7 +4669,7 @@ mod tests {
                 assert_eq!(request.header("x-api-key"), None);
             }
             if request.path == "/internal/applications/app-1/evidence-summary" {
-                assert_eq!(instance.service_name, "issuance");
+                assert_eq!(instance.service_name, issuance_native::NATIVE_SERVICE);
                 assert_eq!(request.header("x-api-key"), Some("issuance-service-key"));
                 return Ok(GatewayResponse {
                     status_code: 404,

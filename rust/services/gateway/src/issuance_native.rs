@@ -111,6 +111,53 @@ mod tests {
     }
 
     #[test]
+    fn internal_applications_select_only_the_fourteen_frozen_methods_and_paths() {
+        for (method, suffix) in [
+            (HttpMethod::Post, ""),
+            (HttpMethod::Get, ""),
+            (HttpMethod::Get, "/application-1"),
+            (HttpMethod::Get, "/application-1/evidence-facts"),
+            (HttpMethod::Get, "/application-1/evidence-summary"),
+            (
+                HttpMethod::Post,
+                "/application-1/evidence/api-checks/check-1/run",
+            ),
+            (HttpMethod::Post, "/evidence/reconcile"),
+            (HttpMethod::Get, "/evidence/reconciliation-report"),
+            (HttpMethod::Post, "/application-1/submit-evidence"),
+            (HttpMethod::Post, "/application-1/approve"),
+            (HttpMethod::Post, "/application-1/reject"),
+            (HttpMethod::Post, "/application-1/issuance-offer"),
+            (HttpMethod::Get, "/application-1/issuance-offer"),
+            (HttpMethod::Get, "/application-1/issuance-events"),
+        ] {
+            let path = format!("/internal/applications{suffix}");
+            assert_eq!(upstream_service(method, &path), NATIVE_SERVICE);
+        }
+        for (method, path) in [
+            (HttpMethod::Delete, "/internal/applications/application-1"),
+            (
+                HttpMethod::Put,
+                "/internal/applications/application-1/approve",
+            ),
+            (
+                HttpMethod::Get,
+                "/internal/applications/application-1/approve",
+            ),
+            (
+                HttpMethod::Post,
+                "/internal/applications/application-1/evidence-summary",
+            ),
+            (
+                HttpMethod::Get,
+                "/internal/applications/application-1/extra",
+            ),
+        ] {
+            assert_eq!(upstream_service(method, path), LEGACY_SERVICE);
+        }
+    }
+
+    #[test]
     fn canvas_operations_select_only_the_eight_exact_methods_and_paths() {
         for (method, suffix) in [
             (HttpMethod::Post, "/applications/app-1/canvas-sync"),
