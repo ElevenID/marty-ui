@@ -44,8 +44,12 @@ The native gate currently proves the route/authentication/validation matrix,
 tenant-hidden publish admission, shared batch/automation behavior, provider
 cancellation before persistence, alert/webhook ordering, health/provenance
 output, and real-PostgreSQL tenant/claim/contention/fence behavior. Remaining
-before cutover are the full frozen HTTP/provider corpus comparison, packaged
-gateway/runtime proof, independent maintainer review, and all repository CI.
+before cutover are the full frozen HTTP corpus comparison, independent
+maintainer review, and all repository CI. The packaged-main gate now starts the
+real issuance executable against the owned PostgreSQL/provider fixture, proves
+all six routes are mounted with authentication-first admission, and performs an
+authenticated mirror-health read. The publication adapter's 51-case corpus and
+15 additional timestamp/cancellation/response cases remain required CI gates.
 Only after those gates pass may the superseded Python route/helper/worker code
 be deleted and the aggregate beta deployment proceed.
 

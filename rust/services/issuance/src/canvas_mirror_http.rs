@@ -163,7 +163,7 @@ async fn process_pending(
     if let Err(error) = authorize(&state, &headers) {
         return authentication_error(error);
     }
-    let query = match BatchQuery::parse(raw_query.as_deref(), false) {
+    let query = match BatchQuery::parse(raw_query.as_deref(), Some(false)) {
         Ok(query) => query,
         Err(error) => return error.into_response(),
     };
@@ -188,7 +188,7 @@ async fn process_status_sync_failures(
     if let Err(error) = authorize(&state, &headers) {
         return authentication_error(error);
     }
-    let query = match BatchQuery::parse(raw_query.as_deref(), false) {
+    let query = match BatchQuery::parse(raw_query.as_deref(), None) {
         Ok(query) => query,
         Err(error) => return error.into_response(),
     };
@@ -212,7 +212,7 @@ async fn run_automation_cycle(
     if let Err(error) = authorize(&state, &headers) {
         return authentication_error(error);
     }
-    let query = match BatchQuery::parse(raw_query.as_deref(), true) {
+    let query = match BatchQuery::parse(raw_query.as_deref(), Some(true)) {
         Ok(query) => query,
         Err(error) => return error.into_response(),
     };
@@ -376,15 +376,23 @@ struct BatchQuery {
 }
 
 impl BatchQuery {
-    fn parse(raw_query: Option<&str>, retry_default: bool) -> Result<Self, QueryValidationError> {
+    fn parse(
+        raw_query: Option<&str>,
+        retry_default: Option<bool>,
+    ) -> Result<Self, QueryValidationError> {
         Ok(Self {
             organization_id: query_value(raw_query, "organization_id"),
             limit: parse_limit(query_value(raw_query, "limit"))?,
-            retry_failed: parse_bool(
-                "retry_failed",
-                query_value(raw_query, "retry_failed"),
-                retry_default,
-            )?,
+            retry_failed: retry_default
+                .map(|default| {
+                    parse_bool(
+                        "retry_failed",
+                        query_value(raw_query, "retry_failed"),
+                        default,
+                    )
+                })
+                .transpose()?
+                .unwrap_or(false),
         })
     }
 }
@@ -417,9 +425,9 @@ impl ProvenanceQuery {
         }
         Ok(Self {
             organization_id,
-            delivery_record_id: query_value(raw_query, "delivery_record_id"),
-            external_credential_id: query_value(raw_query, "external_credential_id"),
-            credential_id: query_value(raw_query, "credential_id"),
+            delivery_record_id: truthy_query_value(raw_query, "delivery_record_id"),
+            external_credential_id: truthy_query_value(raw_query, "external_credential_id"),
+            credential_id: truthy_query_value(raw_query, "credential_id"),
             canvas_account_id: query_value(raw_query, "canvas_account_id"),
         })
     }
@@ -472,16 +480,14 @@ fn parse_bool(
     let Some(raw) = raw else {
         return Ok(default);
     };
-    match raw.trim().to_ascii_lowercase().as_str() {
-        "1" | "true" | "yes" | "on" => Ok(true),
-        "0" | "false" | "no" | "off" => Ok(false),
-        _ => Err(query_validation(
+    crate::canvas_management_http::pydantic_bool(&Value::String(raw.clone())).ok_or_else(|| {
+        query_validation(
             "bool_parsing",
             name,
             "Input should be a valid boolean, unable to interpret input",
             json!(raw),
-        )),
-    }
+        )
+    })
 }
 
 #[derive(Debug)]
@@ -530,6 +536,10 @@ fn query_value(raw_query: Option<&str>, expected: &str) -> Option<String> {
         .last()
 }
 
+fn truthy_query_value(raw_query: Option<&str>, expected: &str) -> Option<String> {
+    query_value(raw_query, expected).filter(|value| !value.is_empty())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -538,11 +548,34 @@ mod tests {
     fn query_parsing_uses_python_integer_boolean_and_last_value_rules() {
         let query = BatchQuery::parse(
             Some("limit=1&limit=+%D9%A3_%D9%A0&retry_failed=YeS&organization_id=org-1"),
-            false,
+            Some(false),
         )
         .unwrap();
         assert_eq!(query.limit, 30);
         assert!(query.retry_failed);
         assert_eq!(query.organization_id.as_deref(), Some("org-1"));
+
+        for (raw, expected) in [("t", true), ("Y", true), ("f", false), ("N", false)] {
+            assert_eq!(
+                BatchQuery::parse(Some(&format!("retry_failed={raw}")), Some(false))
+                    .unwrap()
+                    .retry_failed,
+                expected
+            );
+        }
+        assert!(
+            !BatchQuery::parse(Some("retry_failed=invalid"), None)
+                .unwrap()
+                .retry_failed
+        );
+        let provenance = ProvenanceQuery::parse(Some(
+            "organization_id=org-1&delivery_record_id=&external_credential_id=external-1",
+        ))
+        .unwrap();
+        assert!(provenance.delivery_record_id.is_none());
+        assert_eq!(
+            provenance.external_credential_id.as_deref(),
+            Some("external-1")
+        );
     }
 }

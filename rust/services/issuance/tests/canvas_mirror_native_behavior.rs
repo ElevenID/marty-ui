@@ -35,7 +35,7 @@ use marty_issuance_service::{
 };
 use serde_json::{json, Value};
 use std::{
-    collections::BTreeMap,
+    collections::{BTreeMap, BTreeSet},
     sync::{
         atomic::{AtomicU64, AtomicUsize, Ordering},
         Arc, Mutex,
@@ -43,6 +43,99 @@ use std::{
     time::Duration,
 };
 use tower::ServiceExt;
+
+#[test]
+fn frozen_http_observation_inventory_is_exhaustively_owned() {
+    let reference = reference();
+    let actual = reference["http"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|case| case["id"].as_str().unwrap())
+        .collect::<BTreeSet<_>>();
+    let expected = [
+        "bridge_publish",
+        "badgr_publish",
+        "canvas_api_publish",
+        "publish_http_failure",
+        "publish_transport_failure",
+        "publish_repository_failure",
+        "publish_empty_success",
+        "publish_scalar_success",
+        "badgr_missing_assertion",
+        "publish_missing_credential",
+        "publish_missing_transaction",
+        "publish_missing_delivery",
+        "publish_missing_binding",
+        "publish_missing_platform",
+        "publish_disabled_binding",
+        "publish_disabled_platform",
+        "publish_gate_disabled",
+        "publish_operations_disabled",
+        "publish_foreign_context",
+        "publish_missing_context",
+        "pending_default",
+        "pending_repository_failure",
+        "pending_failed_excluded",
+        "pending_failed_retry",
+        "pending_all_organizations",
+        "pending_zero_limit",
+        "pending_excess_limit",
+        "pending_invalid_retry",
+        "pending_failed_alert_webhook",
+        "pending_webhook_refusal",
+        "pending_warning_no_webhook",
+        "status_bridge_revoke",
+        "status_repository_failure",
+        "status_badgr_revoke",
+        "status_badgr_suspend",
+        "status_badgr_reinstate",
+        "status_missing_credential",
+        "status_gate_disabled",
+        "status_no_failure",
+        "automation_both_batches",
+        "automation_repository_failure",
+        "automation_failed_default_retry",
+        "health_pending",
+        "health_repository_failure",
+        "health_mixed_alerts",
+        "health_foreign_context",
+        "provenance_by_record",
+        "provenance_repository_failure",
+        "provenance_by_external",
+        "provenance_by_credential",
+        "provenance_missing_selector",
+        "provenance_missing_context",
+        "provenance_context_mismatch",
+        "provenance_foreign_record",
+        "provenance_missing_credential",
+        "provenance_missing_transaction",
+        "provenance_wrong_account",
+        "badgr_missing_recipient",
+        "auth_publish_missing",
+        "auth_publish_wrong",
+        "auth_pending_missing",
+        "auth_pending_wrong",
+        "auth_resync_missing",
+        "auth_resync_wrong",
+        "auth_cycle_missing",
+        "auth_cycle_wrong",
+        "auth_health_missing",
+        "auth_health_wrong",
+        "auth_provenance_missing",
+        "auth_provenance_wrong",
+        "auth_publish_before_tenant",
+        "auth_pending_before_validation",
+        "auth_provenance_before_tenant",
+    ]
+    .into_iter()
+    .collect::<BTreeSet<_>>();
+    assert_eq!(actual.len(), 73);
+    assert_eq!(
+        actual, expected,
+        "new frozen observations require native ownership proof"
+    );
+}
 
 #[derive(Clone)]
 struct FixedHttpClock(DateTime<Utc>);
@@ -59,6 +152,7 @@ struct Repository {
     credential: Option<Value>,
     transaction: Option<Value>,
     ignore_delivery_query: bool,
+    fail_first_read: bool,
     calls: Mutex<Vec<String>>,
 }
 
@@ -70,6 +164,9 @@ impl CanvasMirrorRepository for Repository {
         organization_id: &str,
     ) -> Result<Option<CanvasMirrorDeliveryRecord>, CanvasMirrorRepositoryError> {
         self.calls.lock().unwrap().push("delivery_record".into());
+        if self.fail_first_read {
+            return Err(CanvasMirrorRepositoryError);
+        }
         Ok(self
             .records
             .iter()
@@ -123,6 +220,9 @@ impl CanvasMirrorRepository for Repository {
         query: CanvasMirrorDeliveryQuery,
     ) -> Result<Vec<CanvasMirrorDeliveryRecord>, CanvasMirrorRepositoryError> {
         self.calls.lock().unwrap().push("canvas_deliveries".into());
+        if self.fail_first_read {
+            return Err(CanvasMirrorRepositoryError);
+        }
         if self.ignore_delivery_query {
             return Ok(self.records.clone());
         }
@@ -166,6 +266,9 @@ impl CanvasMirrorRepository for Repository {
             .lock()
             .unwrap()
             .push("credential_unscoped".into());
+        if self.fail_first_read {
+            return Err(CanvasMirrorRepositoryError);
+        }
         Ok(self.credential.clone().filter(|value| value["id"] == id))
     }
 
@@ -290,6 +393,99 @@ async fn health_and_provenance_match_the_frozen_success_bodies() {
     assert_eq!(
         *provenance_repository.calls.lock().unwrap(),
         ["delivery_record", "credential", "transaction"]
+    );
+}
+
+#[tokio::test]
+async fn mixed_health_and_all_successful_provenance_selectors_match_frozen_bodies() {
+    let reference = reference();
+    let snapshot = before_snapshot(&reference, "health_mixed_alerts");
+    let records = snapshot["delivery_records"]
+        .as_object()
+        .unwrap()
+        .values()
+        .cloned()
+        .map(serde_json::from_value)
+        .collect::<Result<Vec<CanvasMirrorDeliveryRecord>, _>>()
+        .unwrap();
+    let health_repository = Arc::new(Repository {
+        records,
+        ..Default::default()
+    });
+    assert_eq!(
+        service(health_repository).health("org-1").await.unwrap(),
+        response_body(&reference, "health_mixed_alerts")
+    );
+
+    for (observation_id, selector) in [
+        (
+            "provenance_by_external",
+            CanvasMirrorProvenanceSelector {
+                external_credential_id: Some("external-1".into()),
+                ..Default::default()
+            },
+        ),
+        (
+            "provenance_by_credential",
+            CanvasMirrorProvenanceSelector {
+                credential_id: Some("cred-001".into()),
+                ..Default::default()
+            },
+        ),
+    ] {
+        let snapshot = before_snapshot(&reference, observation_id);
+        let records = snapshot["delivery_records"]
+            .as_object()
+            .unwrap()
+            .values()
+            .cloned()
+            .map(serde_json::from_value)
+            .collect::<Result<Vec<CanvasMirrorDeliveryRecord>, _>>()
+            .unwrap();
+        let repository = Arc::new(Repository {
+            records,
+            credential: Some(credential()),
+            transaction: Some(transaction()),
+            ..Default::default()
+        });
+        assert_eq!(
+            service(repository)
+                .provenance("org-1", selector, now())
+                .await
+                .unwrap(),
+            response_body(&reference, observation_id),
+            "{observation_id}"
+        );
+    }
+
+    let missing_transaction_snapshot = before_snapshot(&reference, "provenance_missing_transaction");
+    let missing_transaction_records = missing_transaction_snapshot["delivery_records"]
+        .as_object()
+        .unwrap()
+        .values()
+        .cloned()
+        .map(serde_json::from_value)
+        .collect::<Result<Vec<CanvasMirrorDeliveryRecord>, _>>()
+        .unwrap();
+    let missing_transaction = Arc::new(Repository {
+        records: missing_transaction_records,
+        credential: Some(credential()),
+        transaction: None,
+        ..Default::default()
+    });
+    assert_eq!(
+        service(missing_transaction)
+            .provenance(
+                "org-1",
+                CanvasMirrorProvenanceSelector {
+                    delivery_record_id: Some("delivery-001".into()),
+                    ..Default::default()
+                },
+                now(),
+            )
+            .await
+            .unwrap(),
+        response_body(&reference, "provenance_missing_transaction")
     );
 }
 
@@ -472,6 +668,17 @@ fn response_body(reference: &Value, id: &str) -> Value {
         .find(|observation| observation["id"] == id)
         .unwrap()["responses"][0]["body"]
         .clone()
+}
+
+fn before_snapshot<'a>(reference: &'a Value, id: &str) -> &'a Value {
+    let observation = reference["http"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|observation| observation["id"] == id)
+        .unwrap();
+    let digest = observation["before"]["snapshot_sha256"].as_str().unwrap();
+    &reference["snapshots"][digest]
 }
 
 struct PublishingRepository {
@@ -969,6 +1176,71 @@ async fn native_http_preserves_the_frozen_authentication_and_validation_matrix()
             .unwrap();
         assert_eq!(response.status(), expected, "{method} {uri}");
         assert!(repository.calls.lock().unwrap().is_empty());
+    }
+}
+
+#[tokio::test]
+async fn native_http_preserves_generic_repository_failures_for_every_route() {
+    let cases = [
+        (
+            "POST",
+            "/v1/issued-credentials/cred-001/deliveries/canvas-credentials/publish",
+            Some("org-1"),
+        ),
+        (
+            "POST",
+            "/v1/issuance/delivery-records/canvas-credentials/process-pending",
+            None,
+        ),
+        (
+            "POST",
+            "/v1/issuance/delivery-records/canvas-credentials/process-status-sync-failures",
+            None,
+        ),
+        (
+            "POST",
+            "/v1/issuance/delivery-records/canvas-credentials/run-automation-cycle",
+            None,
+        ),
+        (
+            "GET",
+            "/v1/issuance/organizations/org-1/canvas-mirror-health",
+            None,
+        ),
+        (
+            "GET",
+            "/v1/issuance/delivery-records/canvas-credentials/provenance?organization_id=org-1&delivery_record_id=delivery-001",
+            Some("org-1"),
+        ),
+    ];
+    for (method, uri, organization_id) in cases {
+        let repository = Arc::new(Repository {
+            credential: Some(credential()),
+            fail_first_read: true,
+            ..Default::default()
+        });
+        let app = router_with_clock(
+            service(repository.clone()),
+            Some("management-secret"),
+            Arc::new(FixedHttpClock(now())),
+        );
+        let mut request = Request::builder()
+            .method(method)
+            .uri(uri)
+            .header("x-api-key", "management-secret");
+        if let Some(organization_id) = organization_id {
+            request = request.header("x-organization-id", organization_id);
+        }
+        let response = app
+            .oneshot(request.body(Body::empty()).unwrap())
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::INTERNAL_SERVER_ERROR);
+        assert_eq!(
+            to_bytes(response.into_body(), 1024).await.unwrap(),
+            "Internal Server Error"
+        );
+        assert_eq!(repository.calls.lock().unwrap().len(), 1, "{method} {uri}");
     }
 }
 
