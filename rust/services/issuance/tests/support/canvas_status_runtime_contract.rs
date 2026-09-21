@@ -1790,6 +1790,55 @@ pub(super) async fn run_review_operations_main_with_transport<F>(
         Some(json!({"status":"healthy","service":"issuance-service"}))
     );
     assert!(child.0.try_wait().unwrap().is_none());
+    // Prove the packaged main owns every mirror route, not merely the
+    // route-local test router. Authentication must still win before query,
+    // tenant, repository, or provider work on each operation.
+    for (method, path) in [
+        (
+            reqwest::Method::POST,
+            "/v1/issued-credentials/missing/deliveries/canvas-credentials/publish",
+        ),
+        (
+            reqwest::Method::POST,
+            "/v1/issuance/delivery-records/canvas-credentials/process-pending?limit=bad",
+        ),
+        (
+            reqwest::Method::POST,
+            "/v1/issuance/delivery-records/canvas-credentials/process-status-sync-failures",
+        ),
+        (
+            reqwest::Method::POST,
+            "/v1/issuance/delivery-records/canvas-credentials/run-automation-cycle",
+        ),
+        (
+            reqwest::Method::GET,
+            "/v1/issuance/organizations/org-review/canvas-mirror-health",
+        ),
+        (
+            reqwest::Method::GET,
+            "/v1/issuance/delivery-records/canvas-credentials/provenance?organization_id=org-review",
+        ),
+    ] {
+        let response = client
+            .request(method.clone(), format!("http://127.0.0.1:{http_port}{path}"))
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(response.status(), reqwest::StatusCode::UNAUTHORIZED, "{method} {path}");
+    }
+    let mirror_health = client
+        .get(format!(
+            "http://127.0.0.1:{http_port}/v1/issuance/organizations/org-review/canvas-mirror-health"
+        ))
+        .header("x-api-key", "synthetic-operations-key")
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(mirror_health.status(), reqwest::StatusCode::OK);
+    let mirror_health: Value = mirror_health.json().await.unwrap();
+    assert_eq!(mirror_health["organization_id"], "org-review");
+    assert_eq!(mirror_health["alert_thresholds"]["warning_attempts"], 3);
+    assert_eq!(mirror_health["alert_thresholds"]["critical_attempts"], 5);
     let (transport, expectations) = factory(http_port, client);
     review_cases(
         pool,
