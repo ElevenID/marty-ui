@@ -89,6 +89,7 @@ struct RenewalBehaviorContract {
 }
 
 #[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
 struct HttpOperation {
     method: String,
     path: String,
@@ -107,6 +108,8 @@ struct HttpOperation {
     proof_nonce_behavior_case: Option<String>,
     #[serde(default)]
     credential_behavior_contract: bool,
+    #[serde(default)]
+    credential_lifecycle_behavior_contract: bool,
     #[serde(default)]
     didcomm_behavior_contract: bool,
     #[serde(default)]
@@ -203,6 +206,7 @@ impl HttpOperation {
             + usize::from(self.token_exchange_behavior_case.is_some())
             + usize::from(self.proof_nonce_behavior_case.is_some())
             + usize::from(self.credential_behavior_contract)
+            + usize::from(self.credential_lifecycle_behavior_contract)
             + usize::from(self.didcomm_behavior_contract)
             + usize::from(self.initiation_behavior_contract)
             + usize::from(self.renewal_behavior_contract)
@@ -1032,6 +1036,7 @@ pub fn validate_embedded_contract() -> Result<CoverageSummary, MmfError> {
     let mut native_token_exchange_cases = BTreeSet::new();
     let mut native_proof_nonce_cases = BTreeSet::new();
     let mut native_credential_contract = false;
+    let mut native_credential_lifecycle_operations = BTreeSet::new();
     let mut native_didcomm_contract = false;
     let mut native_initiation_contract = false;
     let mut native_renewal_contract = false;
@@ -1247,6 +1252,12 @@ pub fn validate_embedded_contract() -> Result<CoverageSummary, MmfError> {
                 "native credential endpoint diverges from its admission or signing contract",
             )?;
             native_credential_contract = true;
+        } else if operation.credential_lifecycle_behavior_contract {
+            validate_credential_lifecycle_operation(operation, &credential_lifecycle)?;
+            require(
+                native_credential_lifecycle_operations.insert(operation.operation.as_str()),
+                "duplicate native credential lifecycle operation",
+            )?;
         } else if let Some(behavior_case) = operation.canvas_lti_behavior_case.as_deref() {
             let expected_operation = match behavior_case {
                 "login" => "initiate_canvas_lti_login_route",
@@ -1467,6 +1478,16 @@ pub fn validate_embedded_contract() -> Result<CoverageSummary, MmfError> {
         native_credential_contract,
         "native credential endpoint behavior coverage is incomplete",
     )?;
+    let frozen_credential_lifecycle_operations = credential_lifecycle["scope"]["http"]
+        .as_array()
+        .ok_or_else(|| invalid("credential lifecycle HTTP routes are missing"))?
+        .iter()
+        .filter_map(|route| route["operation"].as_str())
+        .collect::<BTreeSet<_>>();
+    require(
+        native_credential_lifecycle_operations == frozen_credential_lifecycle_operations,
+        "native credential lifecycle behavior coverage is incomplete",
+    )?;
     require(
         native_didcomm_contract,
         "native DIDComm endpoint behavior coverage is incomplete",
@@ -1612,6 +1633,32 @@ fn validate_application_template_operation(
                             == 1
                 }),
         "native application template operation diverges from its exact behavior contract",
+    )
+}
+
+fn validate_credential_lifecycle_operation(
+    operation: &HttpOperation,
+    contract: &Value,
+) -> Result<(), MmfError> {
+    require(
+        operation.behavior_selector_count() == 1
+            && operation.credential_lifecycle_behavior_contract
+            && contract["schema"] == "marty.issuance-credential-lifecycle/v1"
+            && contract["scope"]["authentication"]["http"]
+                == "management-api-key-and-trusted-organization"
+            && contract["scope"]["http"].as_array().is_some_and(|routes| {
+                routes.len() == 4
+                    && routes
+                        .iter()
+                        .filter(|route| {
+                            route["method"] == operation.method
+                                && route["path"] == operation.path
+                                && route["operation"] == operation.operation
+                        })
+                        .count()
+                        == 1
+            }),
+        "native credential lifecycle operation diverges from its exact behavior contract",
     )
 }
 
@@ -1799,8 +1846,8 @@ mod tests {
 
     use super::{
         canonical_lf, validate_application_template_operation,
-        validate_canvas_operations_operation, validate_didcomm_operation,
-        validate_embedded_contract, validate_initiation_operation,
+        validate_canvas_operations_operation, validate_credential_lifecycle_operation,
+        validate_didcomm_operation, validate_embedded_contract, validate_initiation_operation,
         validate_internal_application_operation, validate_renewal_operation, CanvasOperationsCase,
         Coverage, HttpOperation, APPLICATION_TEMPLATES, CANVAS_LTI, CANVAS_MANAGEMENT,
         CANVAS_OPERATIONS, COVERAGE, CREDENTIAL_ADMISSION, CREDENTIAL_LIFECYCLE,
@@ -2006,6 +2053,61 @@ mod tests {
             )
             .is_err());
         }
+    }
+
+    #[test]
+    fn credential_lifecycle_selectors_are_closed_exact_and_exclusive() {
+        let coverage: Value = serde_json::from_str(COVERAGE).unwrap();
+        let contract: Value = serde_json::from_slice(CREDENTIAL_LIFECYCLE).unwrap();
+        let selected: Vec<_> = coverage["native_http"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter(|operation| {
+                operation.get("credential_lifecycle_behavior_contract") == Some(&Value::Bool(true))
+            })
+            .collect();
+        assert_eq!(selected.len(), 4);
+        for original in selected {
+            let parse = |value: Value| serde_json::from_value::<HttpOperation>(value);
+            validate_credential_lifecycle_operation(&parse(original.clone()).unwrap(), &contract)
+                .unwrap();
+            for (field, value) in [
+                ("method", serde_json::json!("OPTIONS")),
+                (
+                    "path",
+                    serde_json::json!("/v1/issued-credentials/{credential_id}/revoke"),
+                ),
+                ("operation", serde_json::json!("unknown_operation")),
+                (
+                    "credential_lifecycle_behavior_contract",
+                    serde_json::json!(false),
+                ),
+                ("credential_behavior_contract", serde_json::json!(true)),
+            ] {
+                let mut changed = original.clone();
+                changed[field] = value;
+                assert!(validate_credential_lifecycle_operation(
+                    &parse(changed).unwrap(),
+                    &contract
+                )
+                .is_err());
+            }
+            let mut duplicate = contract.clone();
+            duplicate["scope"]["http"]
+                .as_array_mut()
+                .unwrap()
+                .push(original.clone());
+            assert!(validate_credential_lifecycle_operation(
+                &parse(original.clone()).unwrap(),
+                &duplicate
+            )
+            .is_err());
+        }
+
+        let mut unknown_selector = coverage["native_http"][0].clone();
+        unknown_selector["future_behavior_contract"] = Value::Bool(true);
+        assert!(serde_json::from_value::<HttpOperation>(unknown_selector).is_err());
     }
 
     #[test]
@@ -2234,8 +2336,8 @@ mod tests {
     #[test]
     fn embedded_surface_and_native_coverage_are_consistent() {
         let summary = validate_embedded_contract().expect("contract");
-        assert_eq!(summary.native_http, 96);
-        assert_eq!(summary.remaining_http, 35);
+        assert_eq!(summary.native_http, 100);
+        assert_eq!(summary.remaining_http, 31);
         assert_eq!(summary.remaining_grpc, 0);
     }
 }
