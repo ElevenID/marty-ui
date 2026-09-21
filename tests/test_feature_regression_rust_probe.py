@@ -13,6 +13,16 @@ PROBE = ROOT / ".github" / "feature-regression" / "rust-probe"
 MANIFEST = PROBE / "Cargo.toml"
 LOCK = PROBE / "Cargo.lock"
 SUBJECT = PROBE / "behavior_subject.rs"
+ISSUANCE_MANIFEST = ROOT / "rust" / "services" / "issuance" / "Cargo.toml"
+ISSUANCE_LIB = ROOT / "rust" / "services" / "issuance" / "src" / "lib.rs"
+ISSUANCE_DIAGNOSTICS = (
+    ROOT
+    / "rust"
+    / "services"
+    / "issuance"
+    / "src"
+    / "internal_application_diagnostics.rs"
+)
 DIAGNOSTIC = (
     "event=internal_application_failure;stage=ordinary_issuer_context;"
     "category=dependency_unavailable;application_correlation_sha256="
@@ -102,7 +112,8 @@ def test_probe_manifest_has_one_fixed_binary_and_real_candidate_dependency() -> 
         }
     ]
     assert manifest["dependencies"]["marty-issuance-service"] == {
-        "path": "../../../rust/services/issuance"
+        "path": "../../../rust/services/issuance",
+        "features": ["feature-regression-observer"],
     }
     assert manifest["patch"]["crates-io"] == {
         "isomdl": {
@@ -132,9 +143,11 @@ def test_probe_manifest_has_one_fixed_binary_and_real_candidate_dependency() -> 
     for production_call in (
         "internal_application_http::router",
         "InternalApplicationService::new",
-        "ordinary_issuer_context_dependency_unavailable_diagnostic",
+        "OrdinaryInternalApplicationApprover::new",
+        "observe_internal_application_diagnostics",
     ):
         assert production_call in subject
+    assert "ordinary_issuer_context_dependency_unavailable_diagnostic" not in subject
     for forbidden_expected_output in (
         "X-API-Key header is missing",
         "Application template not found",
@@ -159,6 +172,26 @@ def test_ci_runs_the_frozen_offline_probe_twice_and_compares_exact_output() -> N
     )
 
 
+def test_observer_is_narrow_feature_gated_and_absent_from_default_api() -> None:
+    issuance_manifest = tomllib.loads(ISSUANCE_MANIFEST.read_text(encoding="utf-8"))
+    assert issuance_manifest["features"] == {
+        "default": [],
+        "feature-regression-observer": [],
+    }
+    library = ISSUANCE_LIB.read_text(encoding="utf-8")
+    assert "mod internal_application_diagnostics;" in library
+    assert "pub mod internal_application_diagnostics;" not in library
+    assert '#[cfg(feature = "feature-regression-observer")]' in library
+    assert (
+        "pub use internal_application_diagnostics::"
+        "observe_internal_application_diagnostics;"
+    ) in library
+    diagnostics = ISSUANCE_DIAGNOSTICS.read_text(encoding="utf-8")
+    assert "tokio::task_local!" in diagnostics
+    assert "internal Application diagnostic observer scopes cannot be nested" in diagnostics
+    assert "pub struct InternalApplicationDiagnosticProjection" not in diagnostics
+
+
 def test_expected_values_cover_every_case_dimension_and_redacted_diagnostic() -> None:
     cases = {case_id for case_id, _ in EXPECTED_OBSERVATIONS}
     assert {
@@ -167,6 +200,39 @@ def test_expected_values_cover_every_case_dimension_and_redacted_diagnostic() ->
     assert len(EXPECTED_OBSERVATIONS) == len(cases) * 3
     assert "application-probe-1" not in DIAGNOSTIC
     assert "probe-management-key" not in DIAGNOSTIC
+
+
+def test_oracle_rejects_a_missing_real_issuer_warning() -> None:
+    observations = []
+    for (case_id, dimension), value in EXPECTED_OBSERVATIONS.items():
+        if (case_id, dimension) == (
+            "issuer-context-unavailable",
+            "safe_server_diagnostic",
+        ):
+            value = ""
+        observations.append(
+            {
+                "id": f"{case_id}.{dimension}",
+                "operation_id": EXPECTED_OPERATIONS[case_id],
+                "case_id": case_id,
+                "dimension": dimension,
+                "value": value,
+            }
+        )
+    raw = json.dumps(
+        {
+            "schema": "elevenid.behavior-subject-output/v2",
+            "observations": observations,
+        },
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+    ).encode()
+    try:
+        assert_expected_probe_output(raw)
+    except AssertionError:
+        return
+    raise AssertionError("oracle accepted a missing real issuer warning")
 
 
 if __name__ == "__main__":

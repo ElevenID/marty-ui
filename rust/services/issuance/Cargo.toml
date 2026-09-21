@@ -9,6 +9,10 @@ rust-version.workspace = true
 publish = false
 autotests = false
 
+[features]
+default = []
+feature-regression-observer = []
+
 [[bin]]
 name = "marty-issuance-service"
 path = "src/main.rs"

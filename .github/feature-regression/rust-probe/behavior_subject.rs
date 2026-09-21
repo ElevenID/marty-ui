@@ -15,16 +15,25 @@ use marty_issuance_service::{
     application_template_domain::{
         ApplicationTemplateCreate, ApplicationTemplateRecord, ApplicationTemplateStatus,
     },
-    internal_application_diagnostics::ordinary_issuer_context_dependency_unavailable_diagnostic,
+    canvas_award_candidate_approval::{CanvasAwardApprovalSeed, CanvasAwardApprovalSeedGenerator},
+    canvas_lti_launch::CanvasLtiClock,
+    credential::{
+        CredentialIssuanceError, CredentialTransaction, IssuerContext, IssuerContextResolver,
+    },
+    internal_application_approval::{
+        InternalApplicationApprovalDependencies, InternalApplicationApprovalRepository,
+        InternalApplicationCredentialTemplate, OrdinaryInternalApplicationApprover,
+    },
     internal_application_domain::{
         ApplicationRecord, ApplicationStatus, EvidenceFactRecord, IssuanceEventRecord,
     },
     internal_application_http,
     internal_application_service::{
-        InternalApplicationApprovalError, InternalApplicationApprover, InternalApplicationClock,
-        InternalApplicationIdGenerator, InternalApplicationRepository,
-        InternalApplicationRepositoryError, InternalApplicationService,
+        InternalApplicationApprovalError, InternalApplicationClock, InternalApplicationIdGenerator,
+        InternalApplicationRepository, InternalApplicationRepositoryError,
+        InternalApplicationService,
     },
+    observe_internal_application_diagnostics,
 };
 use serde_json::{json, Value};
 use tower::ServiceExt;
@@ -152,6 +161,34 @@ impl InternalApplicationRepository for MemoryRepository {
     }
 }
 
+#[async_trait]
+impl InternalApplicationApprovalRepository for MemoryRepository {
+    async fn reserve_ordinary_approval(
+        &self,
+        application: &ApplicationRecord,
+        transaction: &CredentialTransaction,
+        reviewer_id: &str,
+        review_notes: Option<&str>,
+        reviewed_at: DateTime<Utc>,
+    ) -> Result<Option<ApplicationRecord>, InternalApplicationApprovalError> {
+        let mut approved = application.clone();
+        approved
+            .approve_reserved(
+                transaction.id.clone(),
+                review_notes.map(str::to_owned),
+                reviewer_id,
+                reviewed_at,
+            )
+            .map_err(|_| InternalApplicationApprovalError::Unavailable)?;
+        self.state
+            .lock()
+            .expect("repository state")
+            .applications
+            .insert(approved.id.clone(), approved.clone());
+        Ok(Some(approved))
+    }
+}
+
 struct FixedRuntime;
 
 impl InternalApplicationClock for FixedRuntime {
@@ -170,18 +207,70 @@ impl InternalApplicationIdGenerator for FixedRuntime {
     }
 }
 
-struct IssuerUnavailableApprover;
+impl CanvasLtiClock for FixedRuntime {
+    fn now(&self) -> DateTime<Utc> {
+        fixed_time()
+    }
+}
+
+struct FixedApprovalDependencies;
 
 #[async_trait]
-impl InternalApplicationApprover for IssuerUnavailableApprover {
-    async fn approve(
+impl InternalApplicationApprovalDependencies for FixedApprovalDependencies {
+    async fn credential_template(
         &self,
-        _application: &ApplicationRecord,
-        _template: &ApplicationTemplateRecord,
-        _reviewer_id: &str,
-        _review_notes: Option<&str>,
-    ) -> Result<ApplicationRecord, InternalApplicationApprovalError> {
-        Err(InternalApplicationApprovalError::IssuerContextUnavailable)
+        _template_id: &str,
+    ) -> Result<Option<InternalApplicationCredentialTemplate>, InternalApplicationApprovalError>
+    {
+        Ok(Some(InternalApplicationCredentialTemplate {
+            organization_id: ORGANIZATION_ID.to_owned(),
+            status: "ACTIVE".to_owned(),
+            credential_type: "ProbeCredential".to_owned(),
+            vct: Some("https://credentials.probe.invalid/internal-application".to_owned()),
+            credential_payload_format: "w3c_vcdm_v2_sd_jwt".to_owned(),
+            revocation_profile_id: None,
+            wallet_configs: Vec::new(),
+            selective_disclosure_claims: vec!["email".to_owned()],
+            zk_predicate_claims: Vec::new(),
+            validity_days: 30,
+            renewable: false,
+            renewal_window_days: 7,
+            issuer_did: "did:web:issuer.probe.invalid".to_owned(),
+            issuer_algorithm: "ES256".to_owned(),
+        }))
+    }
+
+    async fn validate_revocation_profile(
+        &self,
+        _organization_id: &str,
+        _profile_id: Option<&str>,
+    ) -> Result<(), InternalApplicationApprovalError> {
+        Ok(())
+    }
+}
+
+struct FailingIssuerContextResolver;
+
+#[async_trait]
+impl IssuerContextResolver for FailingIssuerContextResolver {
+    async fn resolve(
+        &self,
+        _transaction: &CredentialTransaction,
+        _credential_format: &str,
+        _force: bool,
+    ) -> Result<IssuerContext, CredentialIssuanceError> {
+        Err(CredentialIssuanceError::RepositoryUnavailable)
+    }
+}
+
+struct FixedApprovalSeeds;
+
+impl CanvasAwardApprovalSeedGenerator for FixedApprovalSeeds {
+    fn generate(&self) -> CanvasAwardApprovalSeed {
+        CanvasAwardApprovalSeed {
+            transaction_id: "transaction-probe-1".to_owned(),
+            pre_authorized_code: "pre-authorized-code-probe-1".to_owned(),
+        }
     }
 }
 
@@ -273,9 +362,20 @@ async fn case(
     uri: &str,
     body: Value,
     api_key: Option<&str>,
-    safe_server_diagnostic: String,
 ) -> CaseResult {
-    let (status, body) = request(service, Method::POST, uri, body, api_key).await;
+    let ((status, body), diagnostics) = observe_internal_application_diagnostics(request(
+        service,
+        Method::POST,
+        uri,
+        body,
+        api_key,
+    ))
+    .await;
+    let safe_server_diagnostic = match diagnostics.as_slice() {
+        [] => String::new(),
+        [diagnostic] => diagnostic.clone(),
+        _ => panic!("one HTTP request emitted multiple operational diagnostics"),
+    };
     CaseResult {
         id,
         operation_id,
@@ -320,7 +420,7 @@ async fn document() -> String {
     });
 
     let repository = Arc::new(MemoryRepository::with_template(active_template()));
-    let base_service = service(repository);
+    let base_service = service(repository.clone());
     let success = case(
         "create-success",
         "internal-application.create",
@@ -328,7 +428,6 @@ async fn document() -> String {
         "/internal/applications",
         create_body.clone(),
         Some(API_KEY),
-        String::new(),
     )
     .await;
     let auth = case(
@@ -338,7 +437,6 @@ async fn document() -> String {
         "/internal/applications",
         create_body.clone(),
         None,
-        String::new(),
     )
     .await;
     let missing_template = case(
@@ -348,7 +446,6 @@ async fn document() -> String {
         "/internal/applications",
         create_body.clone(),
         Some(API_KEY),
-        String::new(),
     )
     .await;
     let repository_failure = case(
@@ -358,14 +455,19 @@ async fn document() -> String {
         "/internal/applications",
         create_body,
         Some(API_KEY),
-        String::new(),
     )
     .await;
 
-    let approval_service = base_service.with_approver(Arc::new(IssuerUnavailableApprover));
-    let diagnostic =
-        ordinary_issuer_context_dependency_unavailable_diagnostic("application-probe-1")
-            .safe_server_diagnostic();
+    let approval_service =
+        base_service.with_approver(Arc::new(OrdinaryInternalApplicationApprover::new(
+            repository,
+            Arc::new(FixedApprovalDependencies),
+            Arc::new(FailingIssuerContextResolver),
+            Arc::new(FixedApprovalSeeds),
+            Arc::new(FixedRuntime),
+            "https://issuer.probe.invalid",
+            30,
+        )));
     let issuer_failure = case(
         "issuer-context-unavailable",
         "internal-application.approve",
@@ -373,7 +475,6 @@ async fn document() -> String {
         "/internal/applications/application-probe-1/approve",
         json!({"review_notes": "feature regression probe"}),
         Some(API_KEY),
-        diagnostic,
     )
     .await;
 
