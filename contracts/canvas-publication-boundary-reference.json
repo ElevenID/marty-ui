@@ -556,9 +556,9 @@
   ],
   "boundary": "Pinned publication adapter and models; original seed helpers with explicit inputs; controlled HTTP/org-secret lookup and clock; no ASGI/PG/filesystem/TLS/deployed proof",
   "dependencies": {
-    "fastapi": "0.135.3",
+    "fastapi": "0.141.1",
     "httpx": "0.28.1",
-    "pydantic": "2.13.0"
+    "pydantic": "2.13.5"
   },
   "http": [],
   "infrastructure_controls": [
@@ -566,7 +566,7 @@
     "caught-unowned-origin-fatal"
   ],
   "provider_cancellation": [],
-  "scenarios_sha256": "a0b975bf5ccb374b180c2f32f5aee8bd0e993d4909bc31596525ab5e65994b1f",
+  "scenarios_sha256": "c736e10b7fc417466e19a9cb6161d518b705bb1f7cf14e1458433199965dbf56",
   "schema": "marty.canvas-publication-boundary-reference/v1",
   "selected_definitions": {
     "issuance.application.canvas_feature_flags": [
@@ -805,7 +805,6 @@
       "CanvasEvidenceSyncTarget",
       "CanvasEvidenceTransitionPlanner",
       "CanvasLearnerIdentity",
-      "CanvasLearnerIdentityStatus",
       "CanvasLtiLaunchState",
       "CanvasOAuthAuthorization",
       "CanvasOAuthConnection",
@@ -2878,7 +2877,7 @@
       }
     }
   },
-  "source_commit": "578e86ef43166be79add2d812e92ef650535edaa",
+  "source_commit": "aaa6a9b8e31e62cd0ab087eef5fc1f4835048e26",
   "sources": {
     "issuance.application.canvas_feature_flags": [
       "services/issuance/application/canvas_feature_flags.py",
@@ -2902,7 +2901,7 @@
     ],
     "issuance.domain.ports": [
       "services/issuance/domain/ports.py",
-      "695a2cdd3f3a5c9d3ce6ef12e282cdca6f086a24"
+      "3454e78deb21af39a1d842ebfed3d8899aa69325"
     ],
     "issuance.infrastructure.adapters.canvas_credentials_adapter": [
       "services/issuance/infrastructure/adapters/canvas_credentials_adapter.py",
@@ -2914,19 +2913,19 @@
     ],
     "issuance.infrastructure.adapters.memory_repository": [
       "services/issuance/infrastructure/adapters/memory_repository.py",
-      "2961bee99877f616512c99704dc5e63ef3b9c4cc"
+      "b9c65f5b35eebe1de9392491b8e3595396ff6565"
     ],
     "issuance.infrastructure.api.routes": [
       "services/issuance/infrastructure/api/routes.py",
-      "1f137c588ffd7ed77ceb297a52d55e9a75ae7b81"
+      "f71dd82163fcb2296209f880fe78d55a130d356b"
     ],
     "mirror_seed": [
       "tests/test_issuance_changes.py",
-      "b47328b334b809b85db2aa67de675342b5ccd8ae"
+      "7ab0a410bd6a4b4507ddd535365fadf7f3dbac03"
     ],
     "startup_evidence": [
       "services/issuance/main.py",
-      "ed30de75eefa16beea1e820dc83fe8607311ed43"
+      "d2c7135bffc8d3ea8184233626b7e573f1fb837d"
     ]
   }
 }

@@ -1,6 +1,6 @@
 {
   "schema": "marty.canvas-mirror-adapter-scenarios/v1",
-  "source_commit": "578e86ef43166be79add2d812e92ef650535edaa",
+  "source_commit": "aaa6a9b8e31e62cd0ab087eef5fc1f4835048e26",
   "boundary": "Additive direct original adapter calls, not ASGI or filesystem-secret proof",
   "adapter": [
     {

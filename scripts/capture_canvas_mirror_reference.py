@@ -33,13 +33,13 @@ from unittest.mock import patch
 import uuid
 
 ROOT = Path(__file__).resolve().parents[1]
-REVISION = "578e86ef43166be79add2d812e92ef650535edaa"
+REVISION = "aaa6a9b8e31e62cd0ab087eef5fc1f4835048e26"
 ROUTES = "issuance.infrastructure.api.routes"
 ADAPTER = "issuance.infrastructure.adapters.canvas_credentials_adapter"
 SOURCES = {
     ROUTES: (
         "services/issuance/infrastructure/api/routes.py",
-        "1f137c588ffd7ed77ceb297a52d55e9a75ae7b81",
+        "f71dd82163fcb2296209f880fe78d55a130d356b",
     ),
     ADAPTER: (
         "services/issuance/infrastructure/adapters/canvas_credentials_adapter.py",
@@ -51,11 +51,11 @@ SOURCES = {
     ),
     "issuance.domain.ports": (
         "services/issuance/domain/ports.py",
-        "695a2cdd3f3a5c9d3ce6ef12e282cdca6f086a24",
+        "3454e78deb21af39a1d842ebfed3d8899aa69325",
     ),
     "issuance.infrastructure.adapters.memory_repository": (
         "services/issuance/infrastructure/adapters/memory_repository.py",
-        "2961bee99877f616512c99704dc5e63ef3b9c4cc",
+        "b9c65f5b35eebe1de9392491b8e3595396ff6565",
     ),
     "issuance.infrastructure.adapters.delivery_records": (
         "services/issuance/infrastructure/adapters/delivery_records.py",
@@ -79,11 +79,11 @@ SOURCES = {
     ),
     "mirror_seed": (
         "tests/test_issuance_changes.py",
-        "b47328b334b809b85db2aa67de675342b5ccd8ae",
+        "7ab0a410bd6a4b4507ddd535365fadf7f3dbac03",
     ),
     "startup_evidence": (
         "services/issuance/main.py",
-        "ed30de75eefa16beea1e820dc83fe8607311ed43",
+        "d2c7135bffc8d3ea8184233626b7e573f1fb837d",
     ),
 }
 OPERATIONS = (
@@ -538,21 +538,23 @@ def intern_snapshots(observed):
     return observed
 
 
-def instrument_repository(repo, trace):
+def instrument_repository(repo, trace, *, failure_method=None):
     for name in dir(type(repo)):
         original = getattr(repo, name)
         if not asyncio.iscoroutinefunction(original):
             continue
 
         async def observed(*args, _name=name, _original=original, **kwargs):
-            trace.append(
-                {
-                    "kind": "repository",
-                    "method": _name,
-                    "args": serial(args),
-                    "kwargs": serial(kwargs),
-                }
-            )
+            call = {
+                "kind": "repository",
+                "method": _name,
+                "args": serial(args),
+                "kwargs": serial(kwargs),
+            }
+            trace.append(call)
+            if _name == failure_method:
+                call["failure"] = "RuntimeError"
+                raise RuntimeError(f"synthetic repository failure: {_name}")
             return await _original(*args, **kwargs)
 
         setattr(repo, name, observed)
@@ -753,7 +755,11 @@ async def observe_http(loader, routes, case):
     repo = await prepare(loader, case)
     before = snapshot(repo)
     trace = []
-    instrument_repository(repo, trace)
+    instrument_repository(
+        repo,
+        trace,
+        failure_method=case.get("repository_failure"),
+    )
     app = FastAPI()
     app.include_router(routes.issuance_router)
     app.include_router(routes.issued_credential_router)
@@ -865,7 +871,10 @@ async def observe_http(loader, routes, case):
         patch.object(socket, "getaddrinfo", controlled_dns),
     ):
         async with original_client(
-            transport=httpx.ASGITransport(app=app, raise_app_exceptions=True),
+            transport=httpx.ASGITransport(
+                app=app,
+                raise_app_exceptions=not bool(case.get("repository_failure")),
+            ),
             base_url="https://capture.example",
         ) as transport:
             if case.get("entrypoint") == "direct_adapter":
@@ -957,9 +966,13 @@ async def observe_http(loader, routes, case):
                         raise AssertionError(
                             f"Scenario {case['id']} did not reach its qualified HTTP outcome: {response.status_code}, {response.text}"
                         )
-                    responses.append(
-                        {"status": response.status_code, "body": response.json()}
+                    content_type = response.headers.get("content-type", "")
+                    body = (
+                        response.json()
+                        if content_type.split(";", 1)[0].strip().endswith("json")
+                        else response.text
                     )
+                    responses.append({"status": response.status_code, "body": body})
     require_clean_capture()
     return {
         "id": case["id"],
@@ -1089,6 +1102,7 @@ async def observe(loader, routes, scenarios):
                     "expected_status": 401,
                 }
             )
+    http_cases.extend(copy.deepcopy(scenarios["authentication"]["order_cases"]))
     observations = []
     with (
         patch.object(socket.socket, "connect", denied_network),
@@ -1298,6 +1312,11 @@ def main():
         action="store_true",
         help="Print losslessly compact JSON instead of indented output",
     )
+    parser.add_argument(
+        "--write-reference",
+        action="store_true",
+        help="Atomically replace only the selected checked-in reference artifact",
+    )
     parser.add_argument("--worker", action="store_true", help=argparse.SUPPRESS)
     args = parser.parse_args()
     if args.worker:
@@ -1312,8 +1331,12 @@ def main():
         return
     if args.credentials_checkout is None:
         parser.error("credentials_checkout is required")
-    if args.check and (args.audit or args.summary or args.compact):
-        parser.error("--check cannot be combined with display/audit modes")
+    if args.check and (
+        args.audit or args.summary or args.compact or args.write_reference
+    ):
+        parser.error("--check cannot be combined with display/audit/write modes")
+    if args.write_reference and (args.audit or args.summary or args.compact):
+        parser.error("--write-reference cannot be combined with display/audit modes")
     if args.adapter_reference and (args.audit or args.summary):
         parser.error("--adapter-reference cannot be combined with audit/summary")
     if args.publication_boundary_reference and (
@@ -1328,14 +1351,14 @@ def main():
         adapter_reference=args.adapter_reference,
         publication_boundary=args.publication_boundary_reference,
     )
+    reference_path = (
+        PUBLICATION_BOUNDARY_REFERENCE
+        if args.publication_boundary_reference
+        else ADAPTER_REFERENCE
+        if args.adapter_reference
+        else REFERENCE
+    )
     if args.check:
-        reference_path = (
-            PUBLICATION_BOUNDARY_REFERENCE
-            if args.publication_boundary_reference
-            else ADAPTER_REFERENCE
-            if args.adapter_reference
-            else REFERENCE
-        )
         if canonical_json_bytes(reference_path.read_bytes()).decode("utf-8") != encoded:
             raise ValueError("Frozen Canvas mirror observations differ")
         if args.publication_boundary_reference:
@@ -1350,6 +1373,26 @@ def main():
             print(
                 f"Canvas mirror reference PASS: {len(result['http'])} HTTP, {len(result['provider_cancellation'])} provider cancellations, {len(result['loop'])} loop, {len(result['configuration'])} configuration cases"
             )
+    elif args.write_reference:
+        reference_path.parent.mkdir(parents=True, exist_ok=True)
+        temporary = None
+        try:
+            with tempfile.NamedTemporaryFile(
+                "w",
+                encoding="utf-8",
+                newline="\n",
+                dir=reference_path.parent,
+                prefix=f".{reference_path.name}.",
+                suffix=".tmp",
+                delete=False,
+            ) as handle:
+                handle.write(encoded)
+                temporary = Path(handle.name)
+            temporary.replace(reference_path)
+        finally:
+            if temporary is not None:
+                temporary.unlink(missing_ok=True)
+        print(f"Wrote {reference_path.relative_to(ROOT)}")
     elif args.summary and not args.audit:
         print(
             json.dumps(

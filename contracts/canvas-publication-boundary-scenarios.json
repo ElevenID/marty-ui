@@ -1,6 +1,6 @@
 {
   "schema": "marty.canvas-publication-boundary-scenarios/v1",
-  "source_commit": "578e86ef43166be79add2d812e92ef650535edaa",
+  "source_commit": "aaa6a9b8e31e62cd0ab087eef5fc1f4835048e26",
   "boundary": "Additive exact publication datetime and provider-held cancellation; filesystem rotation remains a separate pending section",
   "adapter": [
     {"id": "bridge_milliseconds", "inputs": {"credential": {"issued_at": "2026-08-31T23:59:58.123+00:00", "expires_at": "2027-08-31T23:59:58.456+00:00"}}},

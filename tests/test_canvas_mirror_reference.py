@@ -65,11 +65,15 @@ def assert_connected(contract, reference, scenarios, capture):
         "run_canvas_mirror_automation_loop",
         "CanvasMirrorAutomationConfig",
     } <= selected
-    expected_http = [case["id"] for case in scenarios["http"]] + [
-        f"auth_{operation}_{'missing' if key is None else 'wrong'}"
-        for operation in scenarios["authentication"]["operations"]
-        for key in scenarios["authentication"]["keys"]
-    ]
+    expected_http = (
+        [case["id"] for case in scenarios["http"]]
+        + [
+            f"auth_{operation}_{'missing' if key is None else 'wrong'}"
+            for operation in scenarios["authentication"]["operations"]
+            for key in scenarios["authentication"]["keys"]
+        ]
+        + [case["id"] for case in scenarios["authentication"]["order_cases"]]
+    )
     assert [case["id"] for case in reference["http"]] == expected_http
     assert (
         len(expected_http)
@@ -548,6 +552,161 @@ def test_positive_replay_and_denial_side_effects(artifact):
     # Frozen management health/batch handlers do not impose the provenance
     # header restriction. Do not silently turn this into gateway proof.
     assert cases["health_foreign_context"]["responses"][0]["status"] == 200
+
+
+def test_current_release_route_inventory_is_exact(capture):
+    contract = json.loads(CONTRACT.read_text(encoding="utf-8"))
+    assert contract["source_release"] == "v0.1.76"
+    assert contract["source_commit"] == capture.REVISION
+    assert contract["source_tree"] == "819b7458a31c75d28043a4660643b029c5ec4567"
+    assert contract["source_path"] == capture.SOURCES[capture.ROUTES][0]
+    assert contract["source_blob_sha1"] == capture.SOURCES[capture.ROUTES][1]
+    assert [route["operation"] for route in contract["routes"]] == list(
+        capture.OPERATIONS
+    )
+    assert [route["source_line"] for route in contract["routes"]] == [
+        6151,
+        6201,
+        6220,
+        6237,
+        6256,
+        6393,
+    ]
+    assert sum(route["definition_lines"] for route in contract["routes"]) == 237
+    assert contract["route_definition_lines"] == 237
+    assert contract["registered_route_envelope_lines"] == 277
+
+
+def test_all_six_routes_have_success_and_owned_side_effect_contracts(artifact):
+    contract = json.loads(CONTRACT.read_text(encoding="utf-8"))
+    cases = {case["id"]: case for case in artifact["http"]}
+    success = contract["behavior"]["success_cases"]
+    assert set(success) == {
+        "publish",
+        "pending",
+        "resync",
+        "cycle",
+        "health",
+        "provenance",
+    }
+    outbound = {
+        "publish": 1,
+        "pending": 1,
+        "resync": 1,
+        "cycle": 2,
+        "health": 0,
+        "provenance": 0,
+    }
+    mutations = {"publish", "pending", "resync", "cycle"}
+    for operation, case_id in success.items():
+        case = cases[case_id]
+        assert all(response["status"] == 200 for response in case["responses"])
+        assert (
+            sum(call["kind"] == "http" for call in case["trace"]) == outbound[operation]
+        )
+        assert (case["before"] != case["after"]) == (operation in mutations)
+
+
+def test_authentication_precedes_validation_tenant_repository_and_effects(artifact):
+    cases = {case["id"]: case for case in artifact["http"]}
+    auth = [case for case in artifact["http"] if case["id"].startswith("auth_")]
+    assert len(auth) == 15
+    for case in auth:
+        missing = case["id"].endswith("_missing") or case["id"] == (
+            "auth_pending_before_validation"
+        )
+        detail = "X-API-Key header is missing" if missing else "Invalid API Key"
+        assert case["responses"] == [{"status": 401, "body": {"detail": detail}}]
+        assert case["before"] == case["after"]
+        assert case["trace"] == []
+    assert (
+        cases["auth_publish_before_tenant"]["request"]["headers"]["X-Organization-ID"]
+        == "org-other"
+    )
+    assert cases["auth_pending_before_validation"]["request"]["query"]["limit"] == "0"
+    assert (
+        cases["auth_provenance_before_tenant"]["request"]["headers"][
+            "X-Organization-ID"
+        ]
+        == "org-other"
+    )
+
+
+def test_tenant_order_and_management_scope_do_not_regress(artifact):
+    cases = {case["id"]: case for case in artifact["http"]}
+
+    for case_id, status_code in (
+        ("publish_foreign_context", 404),
+        ("publish_missing_context", 403),
+    ):
+        case = cases[case_id]
+        assert case["responses"][0]["status"] == status_code
+        assert [call["method"] for call in case["trace"]] == ["get_credential"]
+        assert case["before"] == case["after"]
+
+    for case_id in ("provenance_missing_context", "provenance_context_mismatch"):
+        case = cases[case_id]
+        assert case["responses"][0]["status"] == 403
+        assert case["trace"] == []
+        assert case["before"] == case["after"]
+
+    health = cases["health_foreign_context"]
+    assert health["responses"][0]["status"] == 200
+    assert [call["method"] for call in health["trace"]] == ["list_delivery_records"]
+    assert health["before"] == health["after"]
+    assert (
+        "organization_id" not in cases["pending_all_organizations"]["request"]["query"]
+    )
+
+
+def test_repository_failures_are_generic_ordered_and_effect_free(artifact):
+    contract = json.loads(CONTRACT.read_text(encoding="utf-8"))
+    cases = {case["id"]: case for case in artifact["http"]}
+    failure_methods = contract["behavior"]["repository_failure"]["cases"]
+    ids = {
+        "publish": "publish_repository_failure",
+        "pending": "pending_repository_failure",
+        "resync": "status_repository_failure",
+        "cycle": "automation_repository_failure",
+        "health": "health_repository_failure",
+        "provenance": "provenance_repository_failure",
+    }
+    assert set(ids) == set(failure_methods)
+    for operation, case_id in ids.items():
+        case = cases[case_id]
+        assert case["responses"] == [{"status": 500, "body": "Internal Server Error"}]
+        assert case["before"] == case["after"]
+        assert len(case["trace"]) == 1
+        failure = case["trace"][0]
+        assert failure["kind"] == "repository"
+        assert failure["method"] == failure_methods[operation]
+        assert failure["failure"] == "RuntimeError"
+        assert not any(call["kind"] in {"http", "secret"} for call in case["trace"])
+        response_text = json.dumps(case["responses"], sort_keys=True)
+        assert "RuntimeError" not in response_text
+        assert "synthetic repository failure" not in response_text
+        assert "private_fixture_marker" not in response_text
+
+
+def test_feature_gate_and_management_regression_cases_are_connected(artifact):
+    contract = json.loads(CONTRACT.read_text(encoding="utf-8"))
+    cases = {case["id"]: case for case in artifact["http"]}
+    assert set(contract["behavior"]["feature_regression_cases"]) <= set(cases)
+
+    expected = {
+        "publish_gate_disabled": (409, "enable_canvas_mirror_publish"),
+        "publish_operations_disabled": (409, "enable_canvas_mirror_ops"),
+        "status_gate_disabled": (200, "enable_canvas_mirror_ops"),
+    }
+    for case_id, (status_code, feature) in expected.items():
+        case = cases[case_id]
+        assert case["responses"][0]["status"] == status_code
+        assert not any(call["kind"] in {"http", "secret"} for call in case["trace"])
+        assert case["before"] != case["after"]
+        snapshot = artifact["snapshots"][case["after"]["snapshot_sha256"]]
+        metadata = snapshot["delivery_records"]["delivery-001"]["metadata"]
+        assert metadata["canvas_feature_gate_blocked"] is True
+        assert metadata["canvas_feature_gate"] == feature
 
 
 def test_provider_cancellation_is_not_only_a_stubbed_loop(artifact):
