@@ -36,6 +36,14 @@ def test_ci_pins_the_reconciled_elevenid_protocol_once() -> None:
     assert "ELEVENID_MARTY_PROTOCOL_REF" not in workflow
     assert "--issued-credential-extension-only" not in workflow
     assert workflow.count("repository: ElevenID/marty-protocol") == 1
+    private_checkout = """\
+          persist-credentials: false
+          token: ${{ secrets.REPO_ACCESS_TOKEN }}
+          repository: ElevenID/marty-protocol
+          ref: ${{ env.MARTY_PROTOCOL_REF }}
+          path: marty-protocol
+"""
+    assert private_checkout in workflow
 
 
 def test_legacy_protocol_version_gate_remains_exact(tmp_path: Path) -> None:
