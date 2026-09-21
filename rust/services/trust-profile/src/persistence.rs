@@ -6,7 +6,7 @@ use uuid::Uuid;
 
 use crate::{
     ComplianceStatus, RevocationPolicy, TimePolicy, TrustProfile, TrustProfileStatus,
-    TrustProfileType, TrustSource, ValidationRules,
+    TrustProfileType, TrustPurpose, TrustSource, TrustedAssertionFormat, ValidationRules,
 };
 
 pub const TRUST_PROFILE_MIGRATION: &str =
@@ -19,12 +19,14 @@ pub struct TrustProfileRecord {
     pub name: String,
     pub description: Option<String>,
     pub status: String,
+    pub trust_purposes: Option<Value>,
     pub trust_sources: Value,
     pub validation_rules: Value,
     pub revocation_policy: Value,
     pub revocation_profile_id: Option<String>,
     pub time_policy: Value,
     pub supported_formats: Value,
+    pub trusted_assertion_formats: Option<Value>,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
 }
@@ -84,12 +86,17 @@ impl TryFrom<&TrustProfile> for TrustProfileRecord {
             name: profile.name.clone(),
             description: profile.description.clone(),
             status: text(&profile.status, "status")?,
+            trust_purposes: optional_json(&profile.trust_purposes, "trust_purposes")?,
             trust_sources: json(&profile.trust_sources, "trust_sources")?,
             validation_rules: Value::Object(validation_rules),
             revocation_policy: json(&profile.revocation_policy, "revocation_policy")?,
             revocation_profile_id: profile.revocation_profile_id.clone(),
             time_policy: json(&profile.time_policy, "time_policy")?,
             supported_formats: json(&profile.supported_formats, "supported_formats")?,
+            trusted_assertion_formats: optional_json(
+                &profile.trusted_assertion_formats,
+                "trusted_assertion_formats",
+            )?,
             created_at: profile.created_at,
             updated_at: profile.updated_at,
         })
@@ -137,6 +144,10 @@ impl TryFrom<TrustProfileRecord> for TrustProfile {
             &ValidationRules::default(),
             "validation_rules",
         )?;
+        let trust_purposes: Option<Vec<TrustPurpose>> = record
+            .trust_purposes
+            .map(|value| parse(value, "trust_purposes"))
+            .transpose()?;
         let trust_sources = trust_sources(record.trust_sources)?;
         let revocation_policy = with_defaults(
             record.revocation_policy,
@@ -144,7 +155,12 @@ impl TryFrom<TrustProfileRecord> for TrustProfile {
             "revocation_policy",
         )?;
         let time_policy = with_defaults(record.time_policy, &TimePolicy::default(), "time_policy")?;
-        let supported_formats = supported_formats(record.supported_formats)?;
+        let supported_formats =
+            supported_formats(record.supported_formats, trust_purposes.as_deref())?;
+        let trusted_assertion_formats: Option<Vec<TrustedAssertionFormat>> = record
+            .trusted_assertion_formats
+            .map(|value| parse(value, "trusted_assertion_formats"))
+            .transpose()?;
 
         Ok(Self {
             id: Uuid::parse_str(&record.id)
@@ -156,6 +172,7 @@ impl TryFrom<TrustProfileRecord> for TrustProfile {
                 .unwrap_or(TrustProfileStatus::Draft),
             profile_type,
             compliance_status,
+            trust_purposes,
             trust_sources,
             validation_rules: parse(Value::Object(validation_rule_fields), "validation_rules")?,
             allowed_issuers: optional(&validation, "allowed_issuers")?,
@@ -169,6 +186,7 @@ impl TryFrom<TrustProfileRecord> for TrustProfile {
             revocation_profile_id: record.revocation_profile_id,
             time_policy,
             supported_formats,
+            trusted_assertion_formats,
             created_at: record.created_at,
             updated_at: record.updated_at,
         })
@@ -247,7 +265,10 @@ fn normalize_legacy_source_type(value: &str) -> Option<&'static str> {
     }
 }
 
-fn supported_formats(value: Value) -> Result<Vec<String>, TrustProfileRecordError> {
+fn supported_formats(
+    value: Value,
+    trust_purposes: Option<&[TrustPurpose]>,
+) -> Result<Vec<String>, TrustProfileRecordError> {
     let values: Vec<String> = parse(value, "supported_formats")?;
     let mut supported: Vec<String> = values
         .into_iter()
@@ -258,7 +279,9 @@ fn supported_formats(value: Value) -> Result<Vec<String>, TrustProfileRecordErro
             )
         })
         .collect();
-    if supported.is_empty() {
+    let credential_purpose =
+        trust_purposes.is_none_or(|purposes| purposes.contains(&TrustPurpose::CredentialIssuer));
+    if supported.is_empty() && credential_purpose {
         supported.push("MDOC".into());
     }
     Ok(supported)
@@ -293,6 +316,13 @@ fn apply_defaults<T: Serialize>(
 
 fn json<T: Serialize>(value: &T, name: &'static str) -> Result<Value, TrustProfileRecordError> {
     serde_json::to_value(value).map_err(|_| TrustProfileRecordError::InvalidField(name))
+}
+
+fn optional_json<T: Serialize>(
+    value: &Option<T>,
+    name: &'static str,
+) -> Result<Option<Value>, TrustProfileRecordError> {
+    value.as_ref().map(|value| json(value, name)).transpose()
 }
 
 fn object<T: Serialize>(

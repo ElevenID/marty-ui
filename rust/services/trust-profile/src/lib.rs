@@ -34,8 +34,8 @@ pub use domain::{
     IssuerEntityType, OrganizationTrustProfile, RegistryImportSource, RegistryImportType,
     RegistryImportedIssuer, RegistryOperation, RegistrySource, RevocationCheckMode,
     RevocationPolicy, TimePolicy, TrustAnchorType, TrustFramework, TrustProfile,
-    TrustProfileIssuer, TrustProfileStatus, TrustProfileType, TrustRegistryEntry,
-    TrustRelationshipStatus, TrustSource, TrustSourceType, ValidationRules,
+    TrustProfileIssuer, TrustProfileStatus, TrustProfileType, TrustPurpose, TrustRegistryEntry,
+    TrustRelationshipStatus, TrustSource, TrustSourceType, TrustedAssertionFormat, ValidationRules,
 };
 pub use http_service::{
     trust_profile_router, TrustProfileHttpState, TrustRegistrySyncError, TrustRegistrySynchronizer,

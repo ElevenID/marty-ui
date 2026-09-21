@@ -105,6 +105,29 @@
       }
     },
     {
+      "name":"machine_trust_profile_preserves_purposes_without_credential_defaults",
+      "method":"POST",
+      "path":"/v1/trust-profiles",
+      "input":{
+        "organization_id":"org-1","name":"Machine identity roots",
+        "trust_purposes":["MACHINE_IDENTITY_CA","ATTESTATION_VERIFIER"],
+        "trusted_assertion_formats":["X509_CERTIFICATE","EAT"],
+        "trust_sources":[{"source_type":"pinned_issuer","issuer_did":"did:web:device-ca.example","purposes":["MACHINE_IDENTITY_CA"]}]
+      },
+      "expected":{
+        "organization_id":"org-1","name":"Machine identity roots","description":null,
+        "profile_type":"CUSTOM","compliance_status":"SETUP_REQUIRED",
+        "trust_purposes":["MACHINE_IDENTITY_CA","ATTESTATION_VERIFIER"],
+        "trusted_assertion_formats":["X509_CERTIFICATE","EAT"],
+        "trust_sources":[{"source_type":"PINNED_ISSUER","url":null,"certificate_pem":null,"issuer_did":"did:web:device-ca.example","description":null,"purposes":["MACHINE_IDENTITY_CA"],"registry_sync":null}],
+        "validation_rules":null,
+        "allowed_algorithms":null,"min_key_size_rsa":null,"min_key_size_ec":null,"require_key_usage":null,"max_chain_depth":null,"allow_self_signed":null,
+        "revocation_policy":null,"revocation_profile_id":null,"time_policy":null,
+        "allowed_issuers":null,"denied_issuers":null,
+        "system_issuer_overrides":{},"compatible_compliance_codes":[],"verification_policy_set_id":null,"auto_generated":false
+      }
+    },
+    {
       "name":"trust_profile_partial_update",
       "method":"PATCH",
       "path":"/v1/trust-profiles/40000000-0000-4000-8000-000000000001",
@@ -152,6 +175,21 @@
       "name":"trust_profile_rejects_fractional_freshness_hours",
       "method":"POST","path":"/v1/trust-profiles",
       "input":{"organization_id":"org-1","name":"Bad time","time_policy":{"require_freshness":true,"freshness_window_seconds":3601}}
+    },
+    {
+      "name":"machine_trust_profile_requires_assertion_formats",
+      "method":"POST","path":"/v1/trust-profiles",
+      "input":{"organization_id":"org-1","name":"Incomplete machine trust","trust_purposes":["MACHINE_IDENTITY_CA"]}
+    },
+    {
+      "name":"trust_profile_rejects_duplicate_purposes",
+      "method":"POST","path":"/v1/trust-profiles",
+      "input":{"organization_id":"org-1","name":"Duplicate purpose","trust_purposes":["EVIDENCE_SIGNER","EVIDENCE_SIGNER"],"trusted_assertion_formats":["JWT"]}
+    },
+    {
+      "name":"trust_source_rejects_unknown_purpose",
+      "method":"POST","path":"/v1/trust-profiles",
+      "input":{"organization_id":"org-1","name":"Bad source purpose","trust_purposes":["MACHINE_IDENTITY_CA"],"trusted_assertion_formats":["X509_CERTIFICATE"],"trust_sources":[{"source_type":"PINNED_ISSUER","issuer_did":"did:web:device-ca.example","purposes":["NOT_A_PURPOSE"]}]}
     }
   ],
   "response_cases": [
@@ -180,8 +218,8 @@
     {
       "name":"trust_profile_strict_public_projection",
       "kind":"trust_profile","many":false,
-      "input":{"id":"40000000-0000-4000-8000-000000000001","organization_id":"org-1","name":"Registry profile","description":null,"status":"active","profile_type":"CUSTOM","compliance_status":"COMPLIANT","trust_sources":[],"allowed_algorithms":["ES256"],"revocation_policy":null,"revocation_services":null,"revocation_profile_id":null,"time_policy":null,"supported_formats":["SD_JWT_VC"],"allowed_issuers":null,"denied_issuers":null,"verification_policy_set_id":null,"created_at":"2026-08-07T00:00:00Z","updated_at":null},
-      "expected":{"id":"40000000-0000-4000-8000-000000000001","organization_id":"org-1","name":"Registry profile","status":"active","profile_type":"CUSTOM","compliance_status":"COMPLIANT","trust_sources":[],"allowed_algorithms":["ES256"],"supported_formats":["SD_JWT_VC"],"system_issuer_overrides":{},"compatible_compliance_codes":[],"auto_generated":false,"created_at":"2026-08-07T00:00:00Z"}
+      "input":{"id":"40000000-0000-4000-8000-000000000001","organization_id":"org-1","name":"Registry profile","description":null,"status":"active","profile_type":"CUSTOM","compliance_status":"COMPLIANT","trust_purposes":["MACHINE_IDENTITY_CA"],"trust_sources":[],"allowed_algorithms":["ES256"],"revocation_policy":null,"revocation_services":null,"revocation_profile_id":null,"time_policy":null,"trusted_assertion_formats":["X509_CERTIFICATE"],"allowed_issuers":null,"denied_issuers":null,"verification_policy_set_id":null,"created_at":"2026-08-07T00:00:00Z","updated_at":null},
+      "expected":{"id":"40000000-0000-4000-8000-000000000001","organization_id":"org-1","name":"Registry profile","status":"active","profile_type":"CUSTOM","compliance_status":"COMPLIANT","trust_purposes":["MACHINE_IDENTITY_CA"],"trust_sources":[],"allowed_algorithms":["ES256"],"trusted_assertion_formats":["X509_CERTIFICATE"],"system_issuer_overrides":{},"compatible_compliance_codes":[],"auto_generated":false,"created_at":"2026-08-07T00:00:00Z"}
     },
     {
       "name":"registry_sync_strict_projection",

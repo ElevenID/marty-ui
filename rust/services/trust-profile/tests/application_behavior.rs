@@ -10,8 +10,8 @@ use marty_trust_profile::{
     RegistryImportType, RegistryImportedIssuer, RevocationPolicy, TimePolicy,
     TrustAuthorizationError, TrustFramework, TrustProfile, TrustProfileApplication,
     TrustProfileApplicationError, TrustProfileControlPlane, TrustProfileIssuer,
-    TrustProfileRepository, TrustProfileStatus, TrustProfileType, TrustRelationshipStatus,
-    TrustSource, TrustSourceType, ValidationRules,
+    TrustProfileRepository, TrustProfileStatus, TrustProfileType, TrustPurpose,
+    TrustRelationshipStatus, TrustSource, TrustSourceType, TrustedAssertionFormat, ValidationRules,
 };
 use serde_json::{json, Map};
 use uuid::Uuid;
@@ -73,6 +73,7 @@ fn profile() -> TrustProfile {
         status: TrustProfileStatus::Draft,
         profile_type: TrustProfileType::Custom,
         compliance_status: ComplianceStatus::SetupRequired,
+        trust_purposes: None,
         trust_sources: Vec::new(),
         validation_rules: ValidationRules::default(),
         allowed_issuers: None,
@@ -85,6 +86,7 @@ fn profile() -> TrustProfile {
         revocation_profile_id: None,
         time_policy: TimePolicy::default(),
         supported_formats: vec!["SD_JWT_VC".into(), "MDOC".into()],
+        trusted_assertion_formats: None,
         created_at: now(),
         updated_at: now(),
     }
@@ -98,6 +100,7 @@ fn registry_source(last_synced_at: Option<chrono::DateTime<Utc>>) -> TrustSource
         url: Some("https://registry.example.test/feed".into()),
         certificate_pem: None,
         issuer_did: None,
+        purposes: None,
         description: None,
         pinned_certificates: Vec::new(),
         refresh_interval_hours: 24,
@@ -294,6 +297,65 @@ async fn create_and_source_removal_default_to_deny_all_without_losing_explicit_i
         .await
         .unwrap();
     assert_eq!(updated.allowed_issuers, Some(Vec::new()));
+}
+
+#[tokio::test]
+async fn machine_identity_purposes_require_assertion_formats_and_scope_sources() {
+    let (_, application) = harness();
+    let mut machine = profile();
+    machine.trust_purposes = Some(vec![
+        TrustPurpose::MachineIdentityCa,
+        TrustPurpose::AttestationVerifier,
+    ]);
+    machine.supported_formats.clear();
+    machine.trusted_assertion_formats = Some(vec![
+        TrustedAssertionFormat::X509Certificate,
+        TrustedAssertionFormat::Eat,
+    ]);
+    let created = application
+        .create_profile(
+            "user-a",
+            CreateProfileInput {
+                profile: machine.clone(),
+                allowed_issuers_was_provided: false,
+            },
+        )
+        .await
+        .unwrap();
+    assert!(created.supported_formats.is_empty());
+
+    machine.trusted_assertion_formats = None;
+    assert_eq!(
+        application
+            .create_profile(
+                "user-a",
+                CreateProfileInput {
+                    profile: machine.clone(),
+                    allowed_issuers_was_provided: false,
+                },
+            )
+            .await
+            .unwrap_err(),
+        TrustProfileApplicationError::Invalid("trusted_assertion_formats")
+    );
+
+    machine.trusted_assertion_formats = Some(vec![TrustedAssertionFormat::X509Certificate]);
+    let mut source = registry_source(Some(now()));
+    source.purposes = Some(vec![TrustPurpose::EvidenceSigner]);
+    machine.trust_sources = vec![source];
+    assert_eq!(
+        application
+            .create_profile(
+                "user-a",
+                CreateProfileInput {
+                    profile: machine,
+                    allowed_issuers_was_provided: false,
+                },
+            )
+            .await
+            .unwrap_err(),
+        TrustProfileApplicationError::Invalid("trust_source_purposes")
+    );
 }
 
 #[tokio::test]

@@ -13,8 +13,8 @@ use crate::{
     IssuerKeyResolutionError, IssuerKeyResolver, OrganizationTrustProfile, RegistryImportSource,
     RegistryImportedIssuer, RegistryStatus, TimePolicy, TrustAnchorType, TrustDomainError,
     TrustFramework, TrustProfile, TrustProfileIssuer, TrustProfileRepository,
-    TrustProfileRepositoryError, TrustRegistryEntry, TrustRelationshipStatus, TrustSource,
-    ValidationRules,
+    TrustProfileRepositoryError, TrustPurpose, TrustRegistryEntry, TrustRelationshipStatus,
+    TrustSource, ValidationRules,
 };
 
 const VALID_ALGORITHMS: &[&str] = &[
@@ -96,11 +96,13 @@ pub struct ProfilePatch {
     pub description: Change<Option<String>>,
     pub profile_type: Change<crate::TrustProfileType>,
     pub compliance_status: Change<ComplianceStatus>,
+    pub trust_purposes: Change<Option<Vec<TrustPurpose>>>,
     pub trust_sources: Change<Vec<TrustSource>>,
     pub validation_rules: Change<ValidationRules>,
     pub revocation_profile_id: Change<Option<String>>,
     pub time_policy: Change<TimePolicy>,
     pub supported_formats: Change<Vec<String>>,
+    pub trusted_assertion_formats: Change<Option<Vec<crate::TrustedAssertionFormat>>>,
     pub allowed_issuers: Change<Option<Vec<String>>>,
     pub denied_issuers: Change<Option<Vec<String>>>,
     pub system_issuer_overrides: Change<serde_json::Map<String, Value>>,
@@ -380,6 +382,7 @@ impl TrustProfileApplication {
         apply(&mut profile.description, patch.description);
         apply(&mut profile.profile_type, patch.profile_type);
         apply(&mut profile.compliance_status, patch.compliance_status);
+        apply(&mut profile.trust_purposes, patch.trust_purposes);
         let trust_sources_changed = matches!(patch.trust_sources, Change::Set(_));
         apply(&mut profile.trust_sources, patch.trust_sources);
         apply(&mut profile.validation_rules, patch.validation_rules);
@@ -389,6 +392,10 @@ impl TrustProfileApplication {
         );
         apply(&mut profile.time_policy, patch.time_policy);
         apply(&mut profile.supported_formats, patch.supported_formats);
+        apply(
+            &mut profile.trusted_assertion_formats,
+            patch.trusted_assertion_formats,
+        );
         let allowed_was_provided = matches!(patch.allowed_issuers, Change::Set(_));
         let requested_allowed = match patch.allowed_issuers {
             Change::Unchanged => None,
@@ -969,13 +976,48 @@ fn validate_profile(profile: &TrustProfile) -> Result<(), TrustProfileApplicatio
     if profile.name.trim().is_empty() || profile.name.chars().count() > 255 {
         return Err(TrustProfileApplicationError::Invalid("name"));
     }
-    if profile.supported_formats.is_empty()
+    if profile.trust_purposes.as_ref().is_some_and(|purposes| {
+        purposes.is_empty()
+            || purposes.iter().copied().collect::<BTreeSet<_>>().len() != purposes.len()
+    }) {
+        return Err(TrustProfileApplicationError::Invalid("trust_purposes"));
+    }
+    let credential_purpose = profile
+        .trust_purposes
+        .as_ref()
+        .is_none_or(|purposes| purposes.contains(&TrustPurpose::CredentialIssuer));
+    let machine_purpose = profile.trust_purposes.as_ref().is_some_and(|purposes| {
+        purposes
+            .iter()
+            .copied()
+            .any(TrustPurpose::is_machine_identity)
+    });
+    if (credential_purpose && profile.supported_formats.is_empty())
         || profile
             .supported_formats
             .iter()
             .any(|value| !VALID_FORMATS.contains(&value.as_str()))
+        || profile
+            .supported_formats
+            .iter()
+            .collect::<BTreeSet<_>>()
+            .len()
+            != profile.supported_formats.len()
     {
         return Err(TrustProfileApplicationError::Invalid("supported_formats"));
+    }
+    if profile
+        .trusted_assertion_formats
+        .as_ref()
+        .is_some_and(|formats| {
+            formats.is_empty()
+                || formats.iter().copied().collect::<BTreeSet<_>>().len() != formats.len()
+        })
+        || (machine_purpose && profile.trusted_assertion_formats.is_none())
+    {
+        return Err(TrustProfileApplicationError::Invalid(
+            "trusted_assertion_formats",
+        ));
     }
     let algorithms = &profile.validation_rules.allowed_algorithms;
     if algorithms.is_empty()
@@ -987,11 +1029,31 @@ fn validate_profile(profile: &TrustProfile) -> Result<(), TrustProfileApplicatio
     }
     for source in &profile.trust_sources {
         validate_trust_source(source)?;
+        if source.purposes.as_ref().is_some_and(|purposes| {
+            purposes.iter().any(|purpose| {
+                profile.trust_purposes.as_ref().map_or(
+                    *purpose != TrustPurpose::CredentialIssuer,
+                    |profile_purposes| !profile_purposes.contains(purpose),
+                )
+            })
+        }) {
+            return Err(TrustProfileApplicationError::Invalid(
+                "trust_source_purposes",
+            ));
+        }
     }
     Ok(())
 }
 
 fn validate_trust_source(source: &TrustSource) -> Result<(), TrustProfileApplicationError> {
+    if source.purposes.as_ref().is_some_and(|purposes| {
+        purposes.is_empty()
+            || purposes.iter().copied().collect::<BTreeSet<_>>().len() != purposes.len()
+    }) {
+        return Err(TrustProfileApplicationError::Invalid(
+            "trust_source_purposes",
+        ));
+    }
     let selector_count = usize::from(source.url.is_some())
         + usize::from(source.certificate_pem.is_some())
         + usize::from(source.issuer_did.is_some());

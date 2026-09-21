@@ -308,21 +308,24 @@ impl TrustProfileRepository for PostgresTrustProfileRepository {
         if let Some(expected) = expected_updated_at {
             return Ok(sqlx::query(
                 "UPDATE trust_profile_service.trust_profiles SET
-                 organization_id=$2,name=$3,description=$4,status=$5,trust_sources=$6,
-                 validation_rules=$7,revocation_policy=$8,revocation_profile_id=$9,time_policy=$10,
-                 supported_formats=$11,updated_at=$12 WHERE id=$1 AND updated_at=$13",
+                 organization_id=$2,name=$3,description=$4,status=$5,trust_purposes=$6,trust_sources=$7,
+                 validation_rules=$8,revocation_policy=$9,revocation_profile_id=$10,time_policy=$11,
+                 supported_formats=$12,trusted_assertion_formats=$13,updated_at=$14
+                 WHERE id=$1 AND updated_at=$15",
             )
             .bind(&record.id)
             .bind(&record.organization_id)
             .bind(&record.name)
             .bind(&record.description)
             .bind(&record.status)
+            .bind(&record.trust_purposes)
             .bind(&record.trust_sources)
             .bind(&record.validation_rules)
             .bind(&record.revocation_policy)
             .bind(&record.revocation_profile_id)
             .bind(&record.time_policy)
             .bind(&record.supported_formats)
+            .bind(&record.trusted_assertion_formats)
             .bind(record.updated_at)
             .bind(expected)
             .execute(&self.pool)
@@ -333,27 +336,33 @@ impl TrustProfileRepository for PostgresTrustProfileRepository {
         }
         sqlx::query(
             "INSERT INTO trust_profile_service.trust_profiles
-             (id,organization_id,name,description,status,trust_sources,validation_rules,
-              revocation_policy,revocation_profile_id,time_policy,supported_formats,created_at,updated_at)
-             VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13)
+             (id,organization_id,name,description,status,trust_purposes,trust_sources,validation_rules,
+              revocation_policy,revocation_profile_id,time_policy,supported_formats,
+              trusted_assertion_formats,created_at,updated_at)
+             VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15)
              ON CONFLICT (id) DO UPDATE SET organization_id=EXCLUDED.organization_id,
               name=EXCLUDED.name,description=EXCLUDED.description,status=EXCLUDED.status,
-              trust_sources=EXCLUDED.trust_sources,validation_rules=EXCLUDED.validation_rules,
+              trust_purposes=EXCLUDED.trust_purposes,trust_sources=EXCLUDED.trust_sources,
+              validation_rules=EXCLUDED.validation_rules,
               revocation_policy=EXCLUDED.revocation_policy,
               revocation_profile_id=EXCLUDED.revocation_profile_id,time_policy=EXCLUDED.time_policy,
-              supported_formats=EXCLUDED.supported_formats,updated_at=EXCLUDED.updated_at",
+              supported_formats=EXCLUDED.supported_formats,
+              trusted_assertion_formats=EXCLUDED.trusted_assertion_formats,
+              updated_at=EXCLUDED.updated_at",
         )
         .bind(&record.id)
         .bind(&record.organization_id)
         .bind(&record.name)
         .bind(&record.description)
         .bind(&record.status)
+        .bind(&record.trust_purposes)
         .bind(&record.trust_sources)
         .bind(&record.validation_rules)
         .bind(&record.revocation_policy)
         .bind(&record.revocation_profile_id)
         .bind(&record.time_policy)
         .bind(&record.supported_formats)
+        .bind(&record.trusted_assertion_formats)
         .bind(record.created_at)
         .bind(record.updated_at)
         .execute(&self.pool)
@@ -880,12 +889,14 @@ fn profile_from_row(row: &PgRow) -> Result<TrustProfile, TrustProfileRepositoryE
         name: get(row, "name")?,
         description: get(row, "description")?,
         status: get(row, "status")?,
+        trust_purposes: get(row, "trust_purposes")?,
         trust_sources: get(row, "trust_sources")?,
         validation_rules: get(row, "validation_rules")?,
         revocation_policy: get(row, "revocation_policy")?,
         revocation_profile_id: get(row, "revocation_profile_id")?,
         time_policy: get(row, "time_policy")?,
         supported_formats: get(row, "supported_formats")?,
+        trusted_assertion_formats: get(row, "trusted_assertion_formats")?,
         created_at: get(row, "created_at")?,
         updated_at: get(row, "updated_at")?,
     })

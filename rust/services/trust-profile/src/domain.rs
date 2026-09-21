@@ -40,6 +40,35 @@ pub enum TrustSourceType {
     LegacyRegistry,
 }
 
+#[derive(Clone, Copy, Debug, Deserialize, Eq, Hash, Ord, PartialEq, PartialOrd, Serialize)]
+#[serde(rename_all = "SCREAMING_SNAKE_CASE")]
+pub enum TrustPurpose {
+    CredentialIssuer,
+    MachineIdentityCa,
+    ManufacturerEndorser,
+    AttestationVerifier,
+    DeploymentAuthority,
+    EvidenceSigner,
+}
+
+impl TrustPurpose {
+    #[must_use]
+    pub const fn is_machine_identity(self) -> bool {
+        !matches!(self, Self::CredentialIssuer)
+    }
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, Eq, Hash, Ord, PartialEq, PartialOrd, Serialize)]
+#[serde(rename_all = "SCREAMING_SNAKE_CASE")]
+pub enum TrustedAssertionFormat {
+    X509Certificate,
+    Eat,
+    TpmQuote,
+    Jwt,
+    Cwt,
+    Custom,
+}
+
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "SCREAMING_SNAKE_CASE")]
 pub enum RevocationCheckMode {
@@ -120,6 +149,7 @@ pub struct TrustSource {
     pub url: Option<String>,
     pub certificate_pem: Option<String>,
     pub issuer_did: Option<String>,
+    pub purposes: Option<Vec<TrustPurpose>>,
     pub description: Option<String>,
     pub pinned_certificates: Vec<String>,
     pub refresh_interval_hours: u16,
@@ -213,6 +243,7 @@ pub struct TrustProfile {
     pub status: TrustProfileStatus,
     pub profile_type: TrustProfileType,
     pub compliance_status: ComplianceStatus,
+    pub trust_purposes: Option<Vec<TrustPurpose>>,
     pub trust_sources: Vec<TrustSource>,
     pub validation_rules: ValidationRules,
     pub allowed_issuers: Option<Vec<String>>,
@@ -225,6 +256,7 @@ pub struct TrustProfile {
     pub revocation_profile_id: Option<String>,
     pub time_policy: TimePolicy,
     pub supported_formats: Vec<String>,
+    pub trusted_assertion_formats: Option<Vec<TrustedAssertionFormat>>,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
 }

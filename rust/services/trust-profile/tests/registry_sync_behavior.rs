@@ -63,6 +63,7 @@ fn profile() -> TrustProfile {
         status: TrustProfileStatus::Draft,
         profile_type: TrustProfileType::Custom,
         compliance_status: marty_trust_profile::ComplianceStatus::SetupRequired,
+        trust_purposes: None,
         trust_sources: vec![TrustSource {
             id: Uuid::new_v4(),
             name: "Registry".into(),
@@ -70,6 +71,7 @@ fn profile() -> TrustProfile {
             url: Some("https://registry.example/sync".into()),
             certificate_pem: None,
             issuer_did: None,
+            purposes: None,
             description: None,
             pinned_certificates: vec![],
             refresh_interval_hours: 24,
@@ -95,6 +97,7 @@ fn profile() -> TrustProfile {
         revocation_profile_id: None,
         time_policy: Default::default(),
         supported_formats: vec!["MDOC".into()],
+        trusted_assertion_formats: None,
         created_at: now,
         updated_at: now,
     }

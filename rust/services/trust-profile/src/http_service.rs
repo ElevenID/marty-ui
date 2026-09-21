@@ -20,8 +20,8 @@ use crate::{
     IssuerEntityPatch, OrganizationProfilePatch, OrganizationTrustProfile, ProfilePatch,
     RelationshipPatch, RevocationPolicy, TimePolicy, TrustAnchorType, TrustProfile,
     TrustProfileApplication, TrustProfileApplicationError, TrustProfileIssuer,
-    TrustProfileRepository, TrustProfileStatus, TrustRegistryEntry, TrustSource, TrustSourceType,
-    ValidationRules,
+    TrustProfileRepository, TrustProfileStatus, TrustPurpose, TrustRegistryEntry, TrustSource,
+    TrustSourceType, TrustedAssertionFormat, ValidationRules,
 };
 
 #[derive(Clone, Debug, thiserror::Error)]
@@ -149,6 +149,7 @@ struct TrustSourceInput {
     url: Option<String>,
     certificate_pem: Option<String>,
     issuer_did: Option<String>,
+    purposes: Option<Vec<TrustPurpose>>,
     description: Option<String>,
     registry_sync: Option<RegistrySyncConfigInput>,
 }
@@ -173,6 +174,7 @@ struct CreateProfileRequest {
     profile_type: String,
     #[serde(default = "default_compliance")]
     compliance_status: String,
+    trust_purposes: Option<Vec<TrustPurpose>>,
     #[serde(default)]
     trust_sources: Vec<TrustSourceInput>,
     validation_rules: Option<ValidationRules>,
@@ -185,8 +187,8 @@ struct CreateProfileRequest {
     revocation_policy: Option<RevocationPolicy>,
     revocation_profile_id: Option<String>,
     time_policy: Option<TimePolicyInput>,
-    #[serde(default = "default_formats")]
-    supported_formats: Vec<String>,
+    supported_formats: Option<Vec<String>>,
+    trusted_assertion_formats: Option<Vec<TrustedAssertionFormat>>,
     allowed_issuers: Option<Vec<String>>,
     denied_issuers: Option<Vec<String>>,
     #[serde(default)]
@@ -281,6 +283,22 @@ async fn create_profile(
     let allowed_was_provided = raw.get("allowed_issuers").is_some();
     let input: CreateProfileRequest = decode(raw)?;
     let now = Utc::now();
+    let trust_purposes = input.trust_purposes;
+    let credential_purpose = trust_purposes
+        .as_ref()
+        .is_none_or(|purposes| purposes.contains(&TrustPurpose::CredentialIssuer));
+    let supported_formats = input
+        .supported_formats
+        .unwrap_or_else(|| {
+            if credential_purpose {
+                default_formats()
+            } else {
+                vec![]
+            }
+        })
+        .into_iter()
+        .map(|value| value.to_ascii_uppercase())
+        .collect();
     let profile = TrustProfile {
         id: Uuid::new_v4(),
         organization_id: input.organization_id,
@@ -289,6 +307,7 @@ async fn create_profile(
         status: TrustProfileStatus::Draft,
         profile_type: parse_enum(&input.profile_type, "profile_type")?,
         compliance_status: parse_enum(&input.compliance_status, "compliance_status")?,
+        trust_purposes,
         trust_sources: input
             .trust_sources
             .into_iter()
@@ -316,11 +335,8 @@ async fn create_profile(
             .map(time_policy)
             .transpose()?
             .unwrap_or_default(),
-        supported_formats: input
-            .supported_formats
-            .into_iter()
-            .map(|value| value.to_ascii_uppercase())
-            .collect(),
+        supported_formats,
+        trusted_assertion_formats: input.trusted_assertion_formats,
         created_at: now,
         updated_at: now,
     };
@@ -398,6 +414,7 @@ async fn update_profile(
             "description",
             "profile_type",
             "compliance_status",
+            "trust_purposes",
             "trust_sources",
             "validation_rules",
             "allowed_algorithms",
@@ -410,6 +427,7 @@ async fn update_profile(
             "revocation_profile_id",
             "time_policy",
             "supported_formats",
+            "trusted_assertion_formats",
             "allowed_issuers",
             "denied_issuers",
             "system_issuer_overrides",
@@ -453,11 +471,13 @@ async fn update_profile(
         description: nullable_change(&object, "description")?,
         profile_type: enum_change(&object, "profile_type")?,
         compliance_status: enum_change(&object, "compliance_status")?,
+        trust_purposes: nullable_change(&object, "trust_purposes")?,
         trust_sources: trust_sources_change(&object)?,
         validation_rules,
         revocation_profile_id: nullable_change(&object, "revocation_profile_id")?,
         time_policy: time_policy_change(&object)?,
         supported_formats: uppercase_change(&object, "supported_formats")?,
+        trusted_assertion_formats: nullable_change(&object, "trusted_assertion_formats")?,
         allowed_issuers: nullable_change(&object, "allowed_issuers")?,
         denied_issuers: nullable_change(&object, "denied_issuers")?,
         system_issuer_overrides: required_change(&object, "system_issuer_overrides")?,
@@ -1189,6 +1209,7 @@ fn profile_response(profile: &TrustProfile) -> Value {
         "status": profile.status,
         "profile_type": profile.profile_type,
         "compliance_status": profile.compliance_status,
+        "trust_purposes": profile.trust_purposes,
         "trust_sources": profile.trust_sources.iter().map(public_trust_source).collect::<Vec<_>>(),
         "allowed_algorithms": profile.validation_rules.allowed_algorithms,
         "revocation_policy": {
@@ -1207,7 +1228,8 @@ fn profile_response(profile: &TrustProfile) -> Value {
             "require_freshness": freshness.is_some(),
             "freshness_window_seconds": freshness,
         },
-        "supported_formats": profile.supported_formats,
+        "supported_formats": (!profile.supported_formats.is_empty()).then_some(&profile.supported_formats),
+        "trusted_assertion_formats": profile.trusted_assertion_formats,
         "allowed_issuers": profile.allowed_issuers,
         "denied_issuers": profile.denied_issuers,
         "system_issuer_overrides": profile.system_issuer_overrides,
@@ -1225,6 +1247,7 @@ fn public_trust_source(source: &TrustSource) -> Value {
         "url": source.url,
         "certificate_pem": source.certificate_pem,
         "issuer_did": source.issuer_did,
+        "purposes": source.purposes,
         "description": source.description,
         "pinned_certificates": source.pinned_certificates,
         "registry_sync": source.registry_sync,
@@ -1333,6 +1356,7 @@ fn trust_source(input: TrustSourceInput) -> Result<TrustSource, TrustProfileHttp
         url: input.url,
         certificate_pem: input.certificate_pem,
         issuer_did: input.issuer_did,
+        purposes: input.purposes,
         description: input.description,
         pinned_certificates: vec![],
         refresh_interval_hours,

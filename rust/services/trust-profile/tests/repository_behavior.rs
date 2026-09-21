@@ -50,6 +50,7 @@ fn profile(profile_id: Uuid) -> TrustProfile {
         status: TrustProfileStatus::Draft,
         profile_type: TrustProfileType::Custom,
         compliance_status: ComplianceStatus::SetupRequired,
+        trust_purposes: None,
         trust_sources: Vec::new(),
         validation_rules: ValidationRules::default(),
         allowed_issuers: Some(Vec::new()),
@@ -62,6 +63,7 @@ fn profile(profile_id: Uuid) -> TrustProfile {
         revocation_profile_id: None,
         time_policy: TimePolicy::default(),
         supported_formats: vec!["MDOC".into()],
+        trusted_assertion_formats: None,
         created_at: now(),
         updated_at: now(),
     }
