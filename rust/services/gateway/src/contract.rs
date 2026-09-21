@@ -915,6 +915,18 @@ mod tests {
             (HttpMethod::Post, "/v1/issuance/deferred-credential"),
             (HttpMethod::Post, "/v1/issuance/par"),
             (HttpMethod::Get, "/v1/issued-credentials/credential-1"),
+            (
+                HttpMethod::Post,
+                "/v1/issued-credentials/credential-1/revoke",
+            ),
+            (
+                HttpMethod::Post,
+                "/v1/issued-credentials/credential-1/suspend",
+            ),
+            (
+                HttpMethod::Post,
+                "/v1/issued-credentials/credential-1/reinstate",
+            ),
         ] {
             assert_eq!(
                 route_for(&proxy, method, path)
@@ -925,6 +937,15 @@ mod tests {
                 "{method:?} {path}"
             );
         }
+        assert!(
+            route_for(
+                &proxy,
+                HttpMethod::Get,
+                "/v1/issued-credentials/credential-1/status"
+            )
+            .is_err(),
+            "internal lifecycle status must not become a public gateway route"
+        );
     }
 
     #[test]

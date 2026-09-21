@@ -105,9 +105,16 @@ services:
   presentation-policy:
     environment:
       <<: *beta-grpc-service-auth
+      # This is the five-field internal status contract. The public
+      # /v1/issued-credentials lifecycle wrappers retain their full-record
+      # response on the legacy service until that distinct DTO is native.
+      MIP_CREDENTIAL_STATUS_URL_TEMPLATE: "http://issuance-native:8005/v1/issuance/credentials/{credential_id}/status"
       GRPC_WORKLOAD_TLS_SERVER_CERT: /run/secrets/pp_workload_server_cert
       GRPC_WORKLOAD_TLS_SERVER_KEY: /run/secrets/pp_workload_server_key
       GRPC_WORKLOAD_TLS_CA_CERT: /run/secrets/workload_identity_ca_cert
+    depends_on:
+      issuance-native:
+        condition: service_healthy
     secrets:
       - pp_workload_server_cert
       - pp_workload_server_key
