@@ -118,6 +118,8 @@ use marty_issuance_service::{
         InternalApplicationService, SystemInternalApplicationClock,
         UuidInternalApplicationIdGenerator,
     },
+    issued_credential_postgres::PostgresIssuedCredentialRecordRepository,
+    issued_credential_records::{IssuedCredentialAdapterService, SystemIssuedCredentialClock},
     proof_nonce::{ProofNonceService, SecureProofNonceGenerator},
     resource_owner::ResourceOwnerService,
     resource_owner_postgres::PostgresResourceOwnerRepository,
@@ -646,6 +648,12 @@ async fn main() -> Result<(), Box<dyn Error>> {
         credential_management.clone(),
         config.issuance_api_key.as_deref(),
     );
+    let issued_credentials = IssuedCredentialAdapterService::new(
+        Arc::new(PostgresIssuedCredentialRecordRepository::new(pool.clone())),
+        credential_management.clone(),
+        config.issuance_api_key.as_deref(),
+        Arc::new(SystemIssuedCredentialClock),
+    );
     let grpc_platform = IssuanceGrpcPlatform::new(
         initiation,
         initiation_projector,
@@ -710,7 +718,8 @@ async fn main() -> Result<(), Box<dyn Error>> {
             .with_operations(canvas_operations),
             TokenRateLimiter::from_python_config(config.token_rate_limit, config.token_rate_window),
         )
-        .with_internal_applications(internal_applications),
+        .with_internal_applications(internal_applications)
+        .with_issued_credentials(issued_credentials),
     );
     let (health_reporter, health_service) = tonic_health::server::health_reporter();
     let grpc_server = IssuanceServiceServer::new(grpc_service);

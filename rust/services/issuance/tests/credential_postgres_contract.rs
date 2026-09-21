@@ -10,7 +10,8 @@ use marty_issuance_service::credential::{
 };
 use marty_issuance_service::credential_lifecycle::PostgresCredentialLifecycle;
 use marty_issuance_service::credential_management::{
-    CredentialLifecycleAction, CredentialManagementRepository, ManagedCredentialStatus,
+    CredentialLifecycleAction, CredentialLifecycleAuditRecord, CredentialManagementRepository,
+    ManagedCredentialStatus,
 };
 use marty_issuance_service::credential_management_postgres::PostgresCredentialManagementRepository;
 use marty_issuance_service::credential_postgres::PostgresCredentialRepository;
@@ -24,6 +25,8 @@ use marty_issuance_service::initiation_didcomm::{
     InitiationDidcommTransportClaimOutcome, StagedInitiationDidcommDelivery,
     DIDCOMM_TRANSPORT_READY_STATUS, DIDCOMM_TRANSPORT_RETRYABLE_STATUS,
 };
+use marty_issuance_service::issued_credential_postgres::PostgresIssuedCredentialRecordRepository;
+use marty_issuance_service::issued_credential_records::IssuedCredentialRecordRepository;
 use marty_issuance_service::token_postgres::PostgresTokenExchangeRepository;
 use serde_json::json;
 use sha2::Sha256;
@@ -59,6 +62,19 @@ async fn credential_management_repository_is_concurrency_safe_and_canvas_durable
         .expect("credential PostgreSQL contract database must connect");
     create_contract_schema(&pool).await;
     sqlx::query(
+        "INSERT INTO issuance_service.issuance_transactions
+             (id, organization_id, credential_template_id, status, pre_auth_code,
+              claims, credential_type, credential_payload_format, renewable,
+              renewal_window_days, subject_did, issuer_did_override)
+         VALUES ('transaction-managed', 'org-managed', 'template-managed', 'issued',
+                 'pre-auth-managed', '{\"given_name\":\"Ada\"}'::jsonb,
+                 'EmployeeCredential', 'vds_nc', true, 7,
+                 'did:example:holder', 'did:web:issuer.example')",
+    )
+    .execute(&pool)
+    .await
+    .unwrap();
+    sqlx::query(
         "INSERT INTO issuance_service.issued_credentials
              (id, transaction_id, organization_id, credential_template_id,
               issuer_did, revocation_profile_id, status_list_entries,
@@ -84,6 +100,34 @@ async fn credential_management_repository_is_concurrency_safe_and_canvas_durable
     .await
     .unwrap();
 
+    let public_repository = PostgresIssuedCredentialRecordRepository::new(pool.clone());
+    let projection = public_repository
+        .get("credential-managed")
+        .await
+        .unwrap()
+        .expect("public issued-credential projection");
+    assert_eq!(projection.organization_id, "org-managed");
+    let transaction = projection
+        .transaction
+        .expect("joined transaction projection");
+    assert_eq!(
+        transaction.credential_type.as_deref(),
+        Some("EmployeeCredential")
+    );
+    assert_eq!(
+        transaction.credential_payload_format.as_deref(),
+        Some("vds_nc")
+    );
+    assert_eq!(transaction.claims, json!({"given_name":"Ada"}));
+    assert_eq!(
+        public_repository
+            .list_by_organization("other-org")
+            .await
+            .unwrap(),
+        Vec::new(),
+        "list projection must remain tenant scoped"
+    );
+
     let repository = PostgresCredentialManagementRepository::new(pool.clone());
     let mut credential = repository
         .get("credential-managed")
@@ -97,14 +141,66 @@ async fn credential_management_repository_is_concurrency_safe_and_canvas_durable
     );
     credential.status = ManagedCredentialStatus::Suspended;
     credential.status_updated_at = Utc::now();
+    sqlx::query(
+        "ALTER TABLE issuance_service.issuance_events
+         ADD CONSTRAINT reject_suspended_audit CHECK (event_type <> 'credential_suspended')",
+    )
+    .execute(&pool)
+    .await
+    .unwrap();
+    assert!(repository
+        .persist(
+            &credential,
+            ManagedCredentialStatus::Active,
+            &audit_record(
+                CredentialLifecycleAction::Suspend,
+                ManagedCredentialStatus::Active,
+                Some("manual review"),
+            ),
+        )
+        .await
+        .is_err());
+    assert_eq!(
+        sqlx::query_scalar::<_, String>(
+            "SELECT status FROM issuance_service.issued_credentials
+             WHERE id = 'credential-managed'",
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap(),
+        "active",
+        "audit insertion failure must roll back the status CAS"
+    );
+    sqlx::query(
+        "ALTER TABLE issuance_service.issuance_events DROP CONSTRAINT reject_suspended_audit",
+    )
+    .execute(&pool)
+    .await
+    .unwrap();
     let credential = repository
-        .persist(&credential, ManagedCredentialStatus::Active)
+        .persist(
+            &credential,
+            ManagedCredentialStatus::Active,
+            &audit_record(
+                CredentialLifecycleAction::Suspend,
+                ManagedCredentialStatus::Active,
+                Some("manual review"),
+            ),
+        )
         .await
         .expect("conditional status persistence");
     assert_eq!(credential.status, ManagedCredentialStatus::Suspended);
     assert!(
         repository
-            .persist(&credential, ManagedCredentialStatus::Active)
+            .persist(
+                &credential,
+                ManagedCredentialStatus::Active,
+                &audit_record(
+                    CredentialLifecycleAction::Suspend,
+                    ManagedCredentialStatus::Active,
+                    Some("manual review"),
+                ),
+            )
             .await
             .is_err(),
         "a stale lifecycle writer must not overwrite the canonical status"
@@ -133,7 +229,15 @@ async fn credential_management_repository_is_concurrency_safe_and_canvas_durable
     credential.status = ManagedCredentialStatus::Active;
     credential.status_updated_at = Utc::now();
     let credential = repository
-        .persist(&credential, ManagedCredentialStatus::Suspended)
+        .persist(
+            &credential,
+            ManagedCredentialStatus::Suspended,
+            &audit_record(
+                CredentialLifecycleAction::Reinstate,
+                ManagedCredentialStatus::Suspended,
+                None,
+            ),
+        )
         .await
         .expect("reinstate projection persistence");
     repository
@@ -150,7 +254,35 @@ async fn credential_management_repository_is_concurrency_safe_and_canvas_durable
     assert_eq!(metadata["requested_credential_status"], "active");
     assert!(metadata["requested_status_sync_reason"].is_null());
 
+    let events: Vec<(String, serde_json::Value)> = sqlx::query_as(
+        "SELECT event_type, metadata FROM issuance_service.issuance_events
+         WHERE transaction_id = 'transaction-managed' ORDER BY created_at, id",
+    )
+    .fetch_all(&pool)
+    .await
+    .unwrap();
+    assert_eq!(events.len(), 2);
+    assert_eq!(events[0].0, "credential_suspended");
+    assert_eq!(events[0].1["comments"], "operator context");
+    assert_eq!(events[0].1["actor_id"], "operator-1");
+    assert_eq!(events[1].0, "credential_reinstated");
+
     drop_contract_schema(&pool).await;
+}
+
+fn audit_record(
+    action: CredentialLifecycleAction,
+    previous_status: ManagedCredentialStatus,
+    reason: Option<&str>,
+) -> CredentialLifecycleAuditRecord {
+    CredentialLifecycleAuditRecord {
+        action,
+        previous_status,
+        reason: reason.map(str::to_owned),
+        comments: Some("operator context".to_owned()),
+        actor_id: Some("operator-1".to_owned()),
+        actor_type: Some("user".to_owned()),
+    }
 }
 
 #[tokio::test]

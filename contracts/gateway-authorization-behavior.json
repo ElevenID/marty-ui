@@ -35,6 +35,8 @@
     {"method":"POST","path":"/v1/credential-templates/t1/new-version","permission":"credential-template:version","resource":"credential-template"},
     {"method":"POST","path":"/v1/revocation-profiles/r1/activate","permission":"revocation-profile:activate","resource":"revocation-profile"},
     {"method":"POST","path":"/v1/issued-credentials/c1/revoke","permission":"issuance:revoke","resource":"issued-credential"},
+    {"method":"POST","path":"/v1/issued-credentials/c1/suspend","permission":"issuance:revoke","resource":"issued-credential"},
+    {"method":"POST","path":"/v1/issued-credentials/c1/reinstate","permission":"issuance:revoke","resource":"issued-credential"},
     {"method":"POST","path":"/v1/issued-credentials/c1/renew","permission":"issuance:initiate","resource":"issued-credential"},
     {"method":"HEAD","path":"/v1/issued-credentials/c1","permission":"issuance:view","resource":"issued-credential"},
     {"method":"POST","path":"/v1/issuance/didcomm/deliver","permission":"issuance:initiate","resource":"issuance"},

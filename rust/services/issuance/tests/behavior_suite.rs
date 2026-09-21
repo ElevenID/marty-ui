@@ -22,3 +22,6 @@ mod proof_nonce_behavior;
 
 #[path = "canvas_lti_tool_signing_behavior.rs"]
 mod canvas_lti_tool_signing_behavior;
+
+#[path = "issued_credential_adapter_behavior.rs"]
+mod issued_credential_adapter_behavior;

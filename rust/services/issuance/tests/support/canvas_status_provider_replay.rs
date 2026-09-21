@@ -188,6 +188,7 @@ async fn replay_cases(cases: &[Value], observations: &[Value], depth: bool) {
         };
         let credential = ManagedCredential {
             id: "credential-review".into(),
+            transaction_id: "transaction-review".into(),
             organization_id: "org-review".into(),
             credential_template_id: "credential-template".into(),
             issuer_did: None,

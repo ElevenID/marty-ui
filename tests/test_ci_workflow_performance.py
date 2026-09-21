@@ -1227,8 +1227,9 @@ def test_every_issuance_integration_test_remains_registered() -> None:
         "canvas_publication_behavior.rs",
         "canvas_sync_worker_behavior.rs",
         "canvas_sync_worker_configuration_oracle.rs",
-        "canvas_worker_result_oracle.rs",
-        "proof_nonce_behavior.rs",
+            "canvas_worker_result_oracle.rs",
+            "issued_credential_adapter_behavior.rs",
+            "proof_nonce_behavior.rs",
     }
     registered.extend(f"tests/{name}" for name in grouped)
     actual = {

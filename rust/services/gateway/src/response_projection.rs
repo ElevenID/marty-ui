@@ -192,6 +192,8 @@ impl PublicModel for IssuedCredentialRecordResponse {
 enum CredentialFormat {
     #[serde(rename = "MDOC")]
     Mdoc,
+    #[serde(rename = "VDS_NC")]
+    VdsNc,
     #[serde(rename = "SD_JWT_VC")]
     SdJwtVc,
     #[serde(rename = "VC_JWT")]

@@ -8,6 +8,8 @@ pub struct IssuanceLifecycleContractError;
 struct LifecycleRequest {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     reason: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    comments: Option<String>,
 }
 
 pub fn canonicalize_request(
@@ -23,7 +25,11 @@ pub fn canonicalize_request(
     if request
         .reason
         .as_ref()
-        .is_some_and(|value| value.len() > 2000)
+        .is_some_and(|value| value.chars().count() > 2000)
+        || request
+            .comments
+            .as_ref()
+            .is_some_and(|value| value.chars().count() > 4000)
     {
         return Err(IssuanceLifecycleContractError);
     }
@@ -89,5 +95,19 @@ mod tests {
             )
             .is_err());
         }
+        let unicode_reason = "\u{1f642}".repeat(2000);
+        assert!(canonicalize_request(
+            "POST",
+            "/v1/issued-credentials/credential-1/revoke",
+            &serde_json::to_vec(&serde_json::json!({"reason": unicode_reason})).unwrap(),
+        )
+        .is_ok());
+        let unicode_comments = "\u{1f642}".repeat(4001);
+        assert!(canonicalize_request(
+            "POST",
+            "/v1/issued-credentials/credential-1/revoke",
+            &serde_json::to_vec(&serde_json::json!({"comments": unicode_comments})).unwrap(),
+        )
+        .is_err());
     }
 }

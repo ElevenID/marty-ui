@@ -8,6 +8,7 @@ use serde_json::Value;
 use thiserror::Error;
 
 const MAX_REASON_CHARACTERS: usize = 2_000;
+const MAX_COMMENTS_CHARACTERS: usize = 4_000;
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "lowercase")]
@@ -67,6 +68,7 @@ impl CredentialLifecycleAction {
 #[derive(Clone, Debug, PartialEq)]
 pub struct ManagedCredential {
     pub id: String,
+    pub transaction_id: String,
     pub organization_id: String,
     pub credential_template_id: String,
     pub issuer_did: Option<String>,
@@ -77,6 +79,28 @@ pub struct ManagedCredential {
     pub revocation_reason: Option<String>,
     pub revocation_profile_id: Option<String>,
     pub status_list_entries: Vec<Value>,
+}
+
+/// Trusted, non-public context retained with a lifecycle transition.
+///
+/// `comments` are operator-authored audit notes. Actor fields are populated
+/// only from gateway-authenticated headers and are never returned in the
+/// public issued-credential projection.
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+pub struct CredentialLifecycleAuditContext {
+    pub comments: Option<String>,
+    pub actor_id: Option<String>,
+    pub actor_type: Option<String>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct CredentialLifecycleAuditRecord {
+    pub action: CredentialLifecycleAction,
+    pub previous_status: ManagedCredentialStatus,
+    pub reason: Option<String>,
+    pub comments: Option<String>,
+    pub actor_id: Option<String>,
+    pub actor_type: Option<String>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
@@ -127,6 +151,8 @@ pub enum CredentialManagementError {
     NotSuspended,
     #[error("Credential lifecycle reason exceeds 2000 characters")]
     ReasonTooLong,
+    #[error("Credential lifecycle comments exceed 4000 characters")]
+    CommentsTooLong,
     #[error("Credential repository unavailable: {0}")]
     RepositoryUnavailable(String),
     #[error("Revocation service unavailable: {0}")]
@@ -148,6 +174,7 @@ pub trait CredentialManagementRepository: Send + Sync {
         &self,
         credential: &ManagedCredential,
         expected_status: ManagedCredentialStatus,
+        audit: &CredentialLifecycleAuditRecord,
     ) -> Result<ManagedCredential, CredentialManagementPortError>;
 
     /// Synchronize Canvas mirrors after local persistence. External failures
@@ -225,9 +252,29 @@ impl CredentialManagementService {
         action: CredentialLifecycleAction,
         reason: Option<&str>,
     ) -> Result<CredentialStatusView, CredentialManagementError> {
+        self.transition_with_context(
+            credential_id,
+            trusted_organization_id,
+            action,
+            reason,
+            &CredentialLifecycleAuditContext::default(),
+        )
+        .await
+    }
+
+    pub async fn transition_with_context(
+        &self,
+        credential_id: &str,
+        trusted_organization_id: Option<&str>,
+        action: CredentialLifecycleAction,
+        reason: Option<&str>,
+        audit_context: &CredentialLifecycleAuditContext,
+    ) -> Result<CredentialStatusView, CredentialManagementError> {
         let credential = self.load(credential_id).await?;
         enforce_organization(&credential, trusted_organization_id)?;
         validate_reason(reason)?;
+        let comments = meaningful_text(audit_context.comments.as_deref());
+        validate_comments(comments)?;
         validate_transition(credential.status, action)?;
 
         self.publisher
@@ -247,7 +294,19 @@ impl CredentialManagementService {
         }
         let updated = self
             .repository
-            .persist(&updated, previous_status)
+            .persist(
+                &updated,
+                previous_status,
+                &CredentialLifecycleAuditRecord {
+                    action,
+                    previous_status,
+                    reason: reason.map(str::to_owned),
+                    comments: comments.map(str::to_owned),
+                    actor_id: meaningful_text(audit_context.actor_id.as_deref()).map(str::to_owned),
+                    actor_type: meaningful_text(audit_context.actor_type.as_deref())
+                        .map(str::to_owned),
+                },
+            )
             .await
             .map_err(|error| CredentialManagementError::RepositoryUnavailable(error.0))?;
 
@@ -267,7 +326,7 @@ impl CredentialManagementService {
             .emit(CredentialLifecycleEvent {
                 event_type: action.event_type().to_owned(),
                 credential_id: updated.id.clone(),
-                transaction_id: String::new(),
+                transaction_id: updated.transaction_id.clone(),
                 organization_id: updated.organization_id.clone(),
                 credential_template_id: updated.credential_template_id.clone(),
                 status: updated.status.as_str().to_owned(),
@@ -288,6 +347,18 @@ impl CredentialManagementService {
             .map_err(|error| CredentialManagementError::RepositoryUnavailable(error.0))?
             .ok_or(CredentialManagementError::NotFound)
     }
+}
+
+fn validate_comments(comments: Option<&str>) -> Result<(), CredentialManagementError> {
+    if comments.is_some_and(|value| value.chars().count() > MAX_COMMENTS_CHARACTERS) {
+        Err(CredentialManagementError::CommentsTooLong)
+    } else {
+        Ok(())
+    }
+}
+
+fn meaningful_text(value: Option<&str>) -> Option<&str> {
+    value.filter(|value| !value.trim().is_empty())
 }
 
 fn validate_reason(reason: Option<&str>) -> Result<(), CredentialManagementError> {
@@ -363,6 +434,7 @@ mod tests {
         publication_failure: Arc<Mutex<Option<String>>>,
         canvas_failure: Arc<Mutex<Option<String>>>,
         events: Arc<Mutex<Vec<CredentialLifecycleEvent>>>,
+        audits: Arc<Mutex<Vec<CredentialLifecycleAuditRecord>>>,
     }
 
     impl Harness {
@@ -370,6 +442,7 @@ mod tests {
             Self {
                 credential: Arc::new(Mutex::new(Some(ManagedCredential {
                     id: "credential-a".to_owned(),
+                    transaction_id: "transaction-a".to_owned(),
                     organization_id: "org-a".to_owned(),
                     credential_template_id: "template-a".to_owned(),
                     issuer_did: Some("did:web:issuer.example".to_owned()),
@@ -393,6 +466,7 @@ mod tests {
                 publication_failure: Arc::new(Mutex::new(None)),
                 canvas_failure: Arc::new(Mutex::new(None)),
                 events: Arc::new(Mutex::new(Vec::new())),
+                audits: Arc::new(Mutex::new(Vec::new())),
             }
         }
 
@@ -424,8 +498,10 @@ mod tests {
             &self,
             credential: &ManagedCredential,
             expected_status: ManagedCredentialStatus,
+            audit: &CredentialLifecycleAuditRecord,
         ) -> Result<ManagedCredential, CredentialManagementPortError> {
             self.calls.lock().expect("calls").push("persist".to_owned());
+            self.audits.lock().expect("audits").push(audit.clone());
             let mut stored = self.credential.lock().expect("credential");
             let current = stored
                 .as_ref()
@@ -688,6 +764,79 @@ mod tests {
             .await
             .expect_err("reason must be bounded");
         assert_eq!(error, CredentialManagementError::ReasonTooLong);
+        assert_eq!(*harness.calls.lock().expect("calls"), ["load"]);
+    }
+
+    #[tokio::test]
+    async fn trusted_comments_and_actor_are_persisted_with_the_transition() {
+        let harness = Harness::new(ManagedCredentialStatus::Active);
+        let context = CredentialLifecycleAuditContext {
+            comments: Some("Verified offboarding ticket HR-42".to_owned()),
+            actor_id: Some("operator-7".to_owned()),
+            actor_type: Some("user".to_owned()),
+        };
+
+        harness
+            .service()
+            .transition_with_context(
+                "credential-a",
+                Some("org-a"),
+                CredentialLifecycleAction::Revoke,
+                Some("affiliationChanged"),
+                &context,
+            )
+            .await
+            .expect("transition");
+
+        assert_eq!(
+            *harness.audits.lock().expect("audits"),
+            [CredentialLifecycleAuditRecord {
+                action: CredentialLifecycleAction::Revoke,
+                previous_status: ManagedCredentialStatus::Active,
+                reason: Some("affiliationChanged".to_owned()),
+                comments: context.comments,
+                actor_id: context.actor_id,
+                actor_type: context.actor_type,
+            }]
+        );
+    }
+
+    #[tokio::test]
+    async fn comments_use_unicode_scalar_limits_before_publication() {
+        let harness = Harness::new(ManagedCredentialStatus::Active);
+        let accepted = "\u{e9}".repeat(MAX_COMMENTS_CHARACTERS);
+        harness
+            .service()
+            .transition_with_context(
+                "credential-a",
+                Some("org-a"),
+                CredentialLifecycleAction::Suspend,
+                None,
+                &CredentialLifecycleAuditContext {
+                    comments: Some(accepted),
+                    ..CredentialLifecycleAuditContext::default()
+                },
+            )
+            .await
+            .expect("4000 Unicode scalars");
+
+        let harness = Harness::new(ManagedCredentialStatus::Active);
+        let rejected = "\u{e9}".repeat(MAX_COMMENTS_CHARACTERS + 1);
+        let error = harness
+            .service()
+            .transition_with_context(
+                "credential-a",
+                Some("org-a"),
+                CredentialLifecycleAction::Suspend,
+                None,
+                &CredentialLifecycleAuditContext {
+                    comments: Some(rejected),
+                    ..CredentialLifecycleAuditContext::default()
+                },
+            )
+            .await
+            .expect_err("4001 Unicode scalars");
+        assert_eq!(error, CredentialManagementError::CommentsTooLong);
         assert_eq!(*harness.calls.lock().expect("calls"), ["load"]);
     }
 }

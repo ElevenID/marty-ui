@@ -97,6 +97,13 @@
     "source_path": "services/issuance/infrastructure/api/routes.py",
     "source_commit": "15af5232df376bb9596b5aed3703110bf890fce5"
   },
+  "issued_credential_adapter_behavior_contract": {
+    "path": "contracts/issuance-issued-credential-adapters.json",
+    "sha256": "05941c84d1d1ab80ef99b5eefe856d522cccc6b6cce719d8b4cc81a7a3b757e2",
+    "source_repository": "ElevenID/marty-credentials",
+    "source_path": "services/issuance/infrastructure/api/routes.py",
+    "source_commit": "15af5232df376bb9596b5aed3703110bf890fce5"
+  },
   "renewal_behavior_contract": {
     "path": "contracts/credential-renewal-python-reference.json",
     "sha256": "136b046f08c58d2a7fa70982404dabd7265164d91f49ee184cfbc63eb49b3f0f",
@@ -361,6 +368,36 @@
       "path": "/internal/v1/resource-owners/issuance-transactions/{transaction_id}",
       "operation": "get_issuance_transaction_owner",
       "resource_owner_behavior_contract": true
+    },
+    {
+      "method": "GET",
+      "path": "/v1/issued-credentials",
+      "operation": "list_issued_credentials",
+      "issued_credential_adapter_behavior_contract": true
+    },
+    {
+      "method": "GET",
+      "path": "/v1/issued-credentials/{credential_id}",
+      "operation": "get_issued_credential",
+      "issued_credential_adapter_behavior_contract": true
+    },
+    {
+      "method": "POST",
+      "path": "/v1/issued-credentials/{credential_id}/revoke",
+      "operation": "revoke_issued_credential",
+      "issued_credential_adapter_behavior_contract": true
+    },
+    {
+      "method": "POST",
+      "path": "/v1/issued-credentials/{credential_id}/suspend",
+      "operation": "suspend_issued_credential",
+      "issued_credential_adapter_behavior_contract": true
+    },
+    {
+      "method": "POST",
+      "path": "/v1/issued-credentials/{credential_id}/reinstate",
+      "operation": "reinstate_issued_credential",
+      "issued_credential_adapter_behavior_contract": true
     },
     {
       "method": "POST",
@@ -742,7 +779,7 @@
     {"method": "GET", "path": "/version", "owner": "mmf-runtime"}
   ],
   "remaining": {
-    "http": 29,
+    "http": 24,
     "grpc": 0,
     "runtime_modes": ["api", "canvas-sync-worker"],
     "literal_environment_variables": 56,

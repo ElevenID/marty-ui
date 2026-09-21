@@ -4653,7 +4653,7 @@ mod tests {
                 assert_eq!(request.header("x-api-key"), Some("issuance-service-key"));
             }
             if request.path == "/v1/issued-credentials/credential-1" {
-                assert_eq!(instance.service_name, issuance_native::LEGACY_SERVICE);
+                assert_eq!(instance.service_name, issuance_native::NATIVE_SERVICE);
                 assert_eq!(request.header("x-api-key"), Some("issuance-service-key"));
             }
             if request.path == "/v1/issuance/didcomm/deliver" {
@@ -5635,6 +5635,7 @@ mod tests {
             instance: &ServiceInstance,
             request: GatewayRequest,
         ) -> Result<GatewayResponse, PlatformError> {
+            let issued_credential = request.path.starts_with("/v1/issued-credentials/");
             self.0
                 .lock()
                 .expect("owned request recorder")
@@ -5642,7 +5643,19 @@ mod tests {
             Ok(GatewayResponse {
                 status_code: 200,
                 headers: BTreeMap::from([("content-type".into(), "application/json".into())]),
-                body: Some(br#"{"keys":[],"ok":true}"#.to_vec()),
+                body: Some(if issued_credential {
+                    serde_json::to_vec(&json!({
+                        "id":"credential-1","organization_id":"org-1",
+                        "credential_id":"credential-1","credential_type":"EmployeeCredential",
+                        "credential_format":"VDS_NC","flow_execution_id":"transaction-1",
+                        "credential_template_id":"template-1","subject_id":"did:example:holder",
+                        "issued_at":"2026-09-01T00:00:00Z","status":"REVOKED",
+                        "status_list_entries":[],"created_at":"2026-09-01T00:00:00Z"
+                    }))
+                    .unwrap()
+                } else {
+                    br#"{"keys":[],"ok":true}"#.to_vec()
+                }),
                 response_time_ms: None,
                 upstream_service: None,
             })
@@ -5687,7 +5700,7 @@ mod tests {
                         scopes: if key == "actor-key-no-scope" {
                             vec![]
                         } else {
-                            vec!["integrations:write".into()]
+                            vec!["integrations:write".into(), "credentials:revoke".into()]
                         },
                     })
                 }
@@ -5710,7 +5723,10 @@ mod tests {
                         organization_id: organization_id.into(),
                         status: "active".into(),
                         role_names: BTreeSet::new(),
-                        permissions: BTreeSet::from(["integration-connector:edit".into()]),
+                        permissions: BTreeSet::from([
+                            "integration-connector:edit".into(),
+                            "issuance:revoke".into(),
+                        ]),
                         is_owner: false,
                     }
                 }),
@@ -5808,6 +5824,45 @@ mod tests {
             assert_eq!(forwarded.header("x-api-key-id"), expected_key);
             assert_eq!(forwarded.header("x-organization-id"), Some("org-1"));
             assert_eq!(forwarded.header("x-api-key"), Some("issuance-service-key"));
+            assert!(forwarded
+                .headers
+                .values()
+                .all(|value| !value.contains("forged-")));
+        }
+    }
+
+    #[tokio::test]
+    async fn issued_credential_lifecycle_forwards_only_trusted_actor_and_comments() {
+        for (authentication, expected_user, expected_key) in [
+            (("cookie", "sessionId=actor-session"), "actor-session", None),
+            (
+                ("x-api-key", "actor-key"),
+                "api_key:trusted-key-id",
+                Some("trusted-key-id"),
+            ),
+        ] {
+            let (router, recorder) = actor_test_router();
+            let mut request = forged_actor_request(Some(authentication), false);
+            *request.uri_mut() = "/v1/issued-credentials/credential-1/revoke"
+                .parse()
+                .unwrap();
+            *request.body_mut() =
+                Body::from(r#"{"reason":"affiliationChanged","comments":"HR ticket 42"}"#);
+            let response = router.oneshot(request).await.unwrap();
+            assert_eq!(response.status(), StatusCode::OK);
+            let calls = recorder.0.lock().unwrap();
+            assert_eq!(calls.len(), 1);
+            let (service, forwarded) = &calls[0];
+            assert_eq!(service, issuance_native::NATIVE_SERVICE);
+            assert_eq!(forwarded.header("x-authenticated-user-id"), None);
+            assert_eq!(forwarded.header("x-user-id"), Some(expected_user));
+            assert_eq!(forwarded.header("x-api-key-id"), expected_key);
+            assert_eq!(forwarded.header("x-organization-id"), Some("org-1"));
+            assert_eq!(forwarded.header("x-api-key"), Some("issuance-service-key"));
+            assert_eq!(
+                serde_json::from_slice::<Value>(forwarded.body.as_deref().unwrap()).unwrap(),
+                json!({"reason":"affiliationChanged","comments":"HR ticket 42"})
+            );
             assert!(forwarded
                 .headers
                 .values()

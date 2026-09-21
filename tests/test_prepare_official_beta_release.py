@@ -183,6 +183,37 @@ def test_conformance_reuses_manifest_binding_and_verifies_its_source_floor(
                 "operation": "renew_issued_credential",
                 "renewal_behavior_contract": True,
             },
+            *[
+                {
+                    "method": method,
+                    "path": path,
+                    "operation": operation,
+                    "issued_credential_adapter_behavior_contract": True,
+                }
+                for method, path, operation in [
+                    ("GET", "/v1/issued-credentials", "list_issued_credentials"),
+                    (
+                        "GET",
+                        "/v1/issued-credentials/{credential_id}",
+                        "get_issued_credential",
+                    ),
+                    (
+                        "POST",
+                        "/v1/issued-credentials/{credential_id}/revoke",
+                        "revoke_issued_credential",
+                    ),
+                    (
+                        "POST",
+                        "/v1/issued-credentials/{credential_id}/suspend",
+                        "suspend_issued_credential",
+                    ),
+                    (
+                        "POST",
+                        "/v1/issued-credentials/{credential_id}/reinstate",
+                        "reinstate_issued_credential",
+                    ),
+                ]
+            ],
         ],
     }
 

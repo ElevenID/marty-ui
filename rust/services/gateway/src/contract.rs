@@ -900,6 +900,24 @@ mod tests {
             (HttpMethod::Get, "/v1/issuance/offers/tx-1"),
             (HttpMethod::Get, "/v1/issuance"),
             (HttpMethod::Get, "/v1/issuance/tx-1"),
+            (HttpMethod::Get, "/v1/issued-credentials"),
+            (HttpMethod::Get, "/v1/issued-credentials/credential-1"),
+            (
+                HttpMethod::Post,
+                "/v1/issued-credentials/credential-1/revoke",
+            ),
+            (
+                HttpMethod::Post,
+                "/v1/issued-credentials/credential-1/suspend",
+            ),
+            (
+                HttpMethod::Post,
+                "/v1/issued-credentials/credential-1/reinstate",
+            ),
+            (
+                HttpMethod::Post,
+                "/v1/issued-credentials/credential-1/renew",
+            ),
         ] {
             assert_eq!(
                 route_for(&proxy, method, path)
@@ -914,19 +932,6 @@ mod tests {
             (HttpMethod::Post, "/v1/issuance/notification"),
             (HttpMethod::Post, "/v1/issuance/deferred-credential"),
             (HttpMethod::Post, "/v1/issuance/par"),
-            (HttpMethod::Get, "/v1/issued-credentials/credential-1"),
-            (
-                HttpMethod::Post,
-                "/v1/issued-credentials/credential-1/revoke",
-            ),
-            (
-                HttpMethod::Post,
-                "/v1/issued-credentials/credential-1/suspend",
-            ),
-            (
-                HttpMethod::Post,
-                "/v1/issued-credentials/credential-1/reinstate",
-            ),
         ] {
             assert_eq!(
                 route_for(&proxy, method, path)
@@ -937,6 +942,13 @@ mod tests {
                 "{method:?} {path}"
             );
         }
+        assert_eq!(
+            route_for(&proxy, HttpMethod::Get, "/v1/issued-credentials/mine")
+                .expect("applicant issued-credential route")
+                .route
+                .upstream_service,
+            "applicant"
+        );
         assert!(
             route_for(
                 &proxy,
