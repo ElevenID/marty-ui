@@ -11,8 +11,7 @@ from scripts.check_gateway_public_protocol_contract import (
 )
 
 
-LEGACY_PROTOCOL_COMMIT = "76c37dc229b328afe002b911a26624543f814a64"
-MERGED_ELEVENID_PROTOCOL_COMMIT = "441a02c24d6e39bdfbe06d2d4d63c1e70a71b6b0"
+CANONICAL_PROTOCOL_COMMIT = "a2de9d45399cfa877ee271485bcc027b565c49ae"
 
 
 def test_gateway_public_dto_shape_manifest_is_unique_and_versioned() -> None:
@@ -29,15 +28,14 @@ def test_every_gateway_behavior_vector_executes_in_rust() -> None:
     _assert_rust_behavior_vectors()
 
 
-def test_ci_pins_both_existing_public_contract_and_merged_elevenid_extension() -> None:
+def test_ci_pins_the_reconciled_elevenid_protocol_once() -> None:
     workflow = Path(".github/workflows/ci.yml").read_text(encoding="utf-8")
-    assert f"MARTY_PROTOCOL_REF: {LEGACY_PROTOCOL_COMMIT}" in workflow
-    assert (
-        f"ELEVENID_MARTY_PROTOCOL_REF: {MERGED_ELEVENID_PROTOCOL_COMMIT}" in workflow
-    )
+    assert f"MARTY_PROTOCOL_REF: {CANONICAL_PROTOCOL_COMMIT}" in workflow
     assert "repository: ElevenID/marty-protocol" in workflow
-    assert "repository: Marty-Protocol/Marty-Protocol" in workflow
-    assert "--issued-credential-extension-only" in workflow
+    assert "repository: Marty-Protocol/Marty-Protocol" not in workflow
+    assert "ELEVENID_MARTY_PROTOCOL_REF" not in workflow
+    assert "--issued-credential-extension-only" not in workflow
+    assert workflow.count("repository: ElevenID/marty-protocol") == 1
 
 
 def test_legacy_protocol_version_gate_remains_exact(tmp_path: Path) -> None:

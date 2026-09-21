@@ -256,6 +256,7 @@ def _assert_rust_behavior_vectors() -> None:
 
 def check_contract(protocol_root: Path) -> None:
     _assert_protocol_version(protocol_root)
+    _assert_issued_credential_extension_contract(protocol_root)
     assert_generated_bindings_current(protocol_root)
     assert_documented_public_boundary()
     _assert_trust_ui_boundary()
@@ -263,23 +264,13 @@ def check_contract(protocol_root: Path) -> None:
     _assert_rust_behavior_vectors()
 
 
-def check_issued_credential_extension(protocol_root: Path) -> None:
-    _assert_issued_credential_extension_contract(protocol_root)
-    assert_generated_bindings_current(protocol_root)
-
-
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--protocol-root", type=Path, required=True)
-    parser.add_argument("--issued-credential-extension-only", action="store_true")
     args = parser.parse_args()
     protocol_root = args.protocol_root.resolve()
-    if args.issued_credential_extension_only:
-        check_issued_credential_extension(protocol_root)
-        print("Issued-credential extensions match the pinned ElevenID protocol schemas.")
-    else:
-        check_contract(protocol_root)
-        print("Rust gateway operations match the pinned marty-protocol schemas.")
+    check_contract(protocol_root)
+    print("Rust gateway operations match the pinned ElevenID marty-protocol schemas.")
     return 0
 
 
