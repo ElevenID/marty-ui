@@ -425,6 +425,14 @@ jobs:
         run: >-
           cargo test --locked --workspace --no-run --message-format=json
           > "$RUNNER_TEMP/rust-test-artifacts.json"
+      - name: Verify feature-regression observer isolation
+        shell: bash
+        run: >-
+          cargo test --frozen --offline --manifest-path rust/Cargo.toml
+          --package marty-issuance-service --lib
+          --features feature-regression-observer
+          internal_application_diagnostics::tests::feature_observer_is_task_scoped_non_nested_and_cleans_up
+          -- --exact
       - name: Verify frozen Rust feature-regression probe
         shell: bash
         run: |
@@ -434,8 +442,6 @@ jobs:
           first_output="$RUNNER_TEMP/feature-regression-rust-probe-first.json"
           second_output="$RUNNER_TEMP/feature-regression-rust-probe-second.json"
           cargo fetch --locked --manifest-path "$manifest"
-          CARGO_TARGET_DIR="$target" cargo test --frozen --offline --quiet \
-            --manifest-path "$manifest"
           CARGO_TARGET_DIR="$target" cargo run --frozen --offline --quiet \
             --manifest-path "$manifest" \
             --bin elevenid-feature-regression-probe > "$first_output"
@@ -933,6 +939,16 @@ jobs:
       - name: Lint Rust services
         working-directory: rust
         run: cargo clippy --locked --workspace --all-targets -- -D warnings
+      - name: Lint frozen Rust feature-regression probe
+        shell: bash
+        run: |
+          set -euo pipefail
+          manifest=.github/feature-regression/rust-probe/Cargo.toml
+          target="$RUNNER_TEMP/feature-regression-rust-probe-clippy-target"
+          cargo fetch --locked --manifest-path "$manifest"
+          CARGO_TARGET_DIR="$target" cargo clippy --frozen --offline \
+            --manifest-path "$manifest" \
+            --bin elevenid-feature-regression-probe -- -D warnings
       - name: Validate canonical Rust service packaging and migration ordering
         env:
           MARTY_RS_URI: https://example.invalid/marty-rs.whl

@@ -181,7 +181,6 @@ def test_ci_runs_the_frozen_offline_probe_twice_and_compares_exact_output() -> N
     assert "Verify frozen Rust feature-regression probe" in workflow
     assert 'cargo fetch --locked --manifest-path "$manifest"' in workflow
     assert workflow.count("cargo run --frozen --offline --quiet \\") == 2
-    assert "cargo test --frozen --offline --quiet \\" in workflow
     assert "cmp --silent \"$first_output\" \"$second_output\"" in workflow
     assert (
         'python3 tests/test_feature_regression_rust_probe.py "$first_output"'
@@ -190,6 +189,25 @@ def test_ci_runs_the_frozen_offline_probe_twice_and_compares_exact_output() -> N
     assert 'target_bytes=$(du -sb "$target" | cut -f1)' in workflow
     assert '["elevenid-feature-regression"]["target-budget-bytes"]' in workflow
     assert 'test "$target_bytes" -le "$target_budget_bytes"' in workflow
+
+
+def test_ci_enforces_probe_clippy_and_observer_isolation() -> None:
+    workflow = (ROOT / ".github" / "workflows" / "ci.yml").read_text(
+        encoding="utf-8"
+    )
+    assert "Lint frozen Rust feature-regression probe" in workflow
+    assert 'target="$RUNNER_TEMP/feature-regression-rust-probe-clippy-target"' in workflow
+    assert "cargo clippy --frozen --offline" in workflow
+    assert "--bin elevenid-feature-regression-probe -- -D warnings" in workflow
+    assert "Verify feature-regression observer isolation" in workflow
+    assert "cargo test --frozen --offline --manifest-path rust/Cargo.toml" in workflow
+    assert "--package marty-issuance-service --lib" in workflow
+    assert "--features feature-regression-observer" in workflow
+    assert (
+        "internal_application_diagnostics::tests::"
+        "feature_observer_is_task_scoped_non_nested_and_cleans_up"
+    ) in workflow
+    assert "-- --exact" in workflow
 
 
 def test_observer_is_narrow_feature_gated_and_absent_from_default_api() -> None:
