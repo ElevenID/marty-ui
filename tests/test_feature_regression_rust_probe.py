@@ -111,6 +111,16 @@ def test_probe_manifest_has_one_fixed_binary_and_real_candidate_dependency() -> 
             "test": False,
         }
     ]
+    build_budget = manifest["package"]["metadata"]["elevenid-feature-regression"]
+    assert build_budget == {
+        "build-storage-cap-bytes": 2_147_483_648,
+        "reserved-non-target-bytes": 134_217_728,
+        "target-budget-bytes": 2_013_265_920,
+    }
+    assert build_budget["target-budget-bytes"] == (
+        build_budget["build-storage-cap-bytes"]
+        - build_budget["reserved-non-target-bytes"]
+    )
     assert manifest["dependencies"]["marty-issuance-service"] == {
         "path": "../../../rust/services/issuance",
         "features": ["feature-regression-observer"],
@@ -121,6 +131,13 @@ def test_probe_manifest_has_one_fixed_binary_and_real_candidate_dependency() -> 
             "rev": "671044c9495aec101bf0cd381669d5ed6f64dd11",
         },
         "ssi-jwt": {"path": "../../../rust/third_party/ssi-jwt"},
+    }
+    assert manifest["profile"]["dev"] == {
+        "opt-level": "z",
+        "debug": 0,
+        "strip": "symbols",
+        "incremental": False,
+        "codegen-units": 1,
     }
 
     lock = tomllib.loads(LOCK.read_text(encoding="utf-8"))
@@ -170,6 +187,9 @@ def test_ci_runs_the_frozen_offline_probe_twice_and_compares_exact_output() -> N
         'python3 tests/test_feature_regression_rust_probe.py "$first_output"'
         in workflow
     )
+    assert 'target_bytes=$(du -sb "$target" | cut -f1)' in workflow
+    assert '["elevenid-feature-regression"]["target-budget-bytes"]' in workflow
+    assert 'test "$target_bytes" -le "$target_budget_bytes"' in workflow
 
 
 def test_observer_is_narrow_feature_gated_and_absent_from_default_api() -> None:
