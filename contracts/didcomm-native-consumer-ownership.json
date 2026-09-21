@@ -40,7 +40,7 @@
   "release_gate": {
     "state": "blocked_pending_credentials_release",
     "minimum_version": "0.1.75",
-    "required_source_checkpoint": "c073e0ffac83602b9ea7e301510e3b4babf95cf3",
+    "required_source_checkpoint": "fc4a1ced70253b89bcfdf184e58d964556935260",
     "qualified_release": null,
     "reason": "No fresh immutable marty-credentials issuance image containing the selector and proxy hardening has been released yet; failed tag v0.1.74 is not reusable",
     "current_incompatible_lock": {

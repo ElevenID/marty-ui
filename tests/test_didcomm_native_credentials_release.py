@@ -70,7 +70,7 @@ def test_current_activation_is_explicitly_unlandable_without_inventing_a_release
     assert gate["state"] == "blocked_pending_credentials_release"
     assert gate["qualified_release"] is None
     assert gate["required_source_checkpoint"] == (
-        "c073e0ffac83602b9ea7e301510e3b4babf95cf3"
+        "fc4a1ced70253b89bcfdf184e58d964556935260"
     )
     assert gate["minimum_version"] == "0.1.75"
     component = _component(LOCK)

@@ -219,6 +219,12 @@ def expected_model(baseline, *, local, authcrypt, inputs, policy_directory):
     )
     for name in NATIVE["TOKEN_CONSUMERS"]:
         expected["services"][name]["environment"]["GRPC_SERVICE_TOKEN"] = token
+    expected["services"]["issuance"]["environment"].update(
+        {
+            "DIDCOMM_DELIVERY_OWNER": "native",
+            "ISSUANCE_NATIVE_SERVICE_URL": NATIVE["NATIVE_URL"],
+        }
+    )
     edge = expected["services"]["gateway"]
     edge["environment"]["ISSUANCE_NATIVE_SERVICE_URL"] = NATIVE["NATIVE_URL"]
     edge["environment"]["GATEWAY_REQUIRED_READY_SERVICES"] = ",".join(
