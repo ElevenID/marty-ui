@@ -81,11 +81,6 @@ pub struct TransactionRevocationStatus {
     pub revocation_reason: Option<String>,
 }
 
-#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
-pub struct ResourceOwner {
-    pub organization_id: String,
-}
-
 #[derive(Clone, Debug, Error, Eq, PartialEq)]
 pub enum TransactionReadError {
     #[error("issuance transaction repository is unavailable")]
@@ -272,22 +267,6 @@ impl TransactionReadService {
             status: transaction.status,
             revoked_at: transaction.revoked_at.map(python_isoformat),
             revocation_reason: transaction.revocation_reason,
-        })
-    }
-
-    pub async fn owner(
-        &self,
-        transaction_id: &str,
-        api_key: Option<&str>,
-    ) -> Result<ResourceOwner, TransactionReadError> {
-        self.security.authorize(api_key)?;
-        let transaction = self
-            .repository
-            .get(transaction_id)
-            .await?
-            .ok_or(TransactionReadError::ResourceNotFound)?;
-        Ok(ResourceOwner {
-            organization_id: transaction.organization_id,
         })
     }
 }

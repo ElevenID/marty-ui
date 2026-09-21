@@ -1,0 +1,57 @@
+{
+  "schema": "marty.issuance-resource-owner-lookups/v1",
+  "source": {
+    "repository": "ElevenID/marty-credentials",
+    "commit": "15af5232df376bb9596b5aed3703110bf890fce5",
+    "route_source": "services/issuance/infrastructure/api/routes.py"
+  },
+  "authentication": {
+    "header": "X-API-Key",
+    "server_setting": "ISSUANCE_API_KEY",
+    "order": ["authenticate", "unscoped_lookup", "not_found", "project_owner"],
+    "trusted_tenant_header": "ignored"
+  },
+  "persistence": {
+    "read_only": true,
+    "projection": ["organization_id"],
+    "id_scope": "unscoped"
+  },
+  "operations": [
+    {
+      "kind": "application_template",
+      "method": "GET",
+      "path": "/internal/v1/resource-owners/application-templates/{template_id}",
+      "operation": "get_application_template_owner",
+      "table": "issuance_service.application_templates"
+    },
+    {
+      "kind": "issued_credential",
+      "method": "GET",
+      "path": "/internal/v1/resource-owners/issued-credentials/{credential_id}",
+      "operation": "get_issued_credential_owner",
+      "table": "issuance_service.issued_credentials"
+    },
+    {
+      "kind": "issuance_transaction",
+      "method": "GET",
+      "path": "/internal/v1/resource-owners/issuance-transactions/{transaction_id}",
+      "operation": "get_issuance_transaction_owner",
+      "table": "issuance_service.issuance_transactions"
+    }
+  ],
+  "responses": {
+    "found": {"status_code": 200, "body": {"organization_id": "org-owner"}},
+    "not_found": {"status_code": 404, "body": {"detail": "Resource not found"}},
+    "api_key_unconfigured": {"status_code": 503, "body": {"detail": "ISSUANCE_API_KEY not configured on server"}},
+    "api_key_missing": {"status_code": 401, "body": {"detail": "X-API-Key header is missing"}},
+    "api_key_invalid": {"status_code": 401, "body": {"detail": "Invalid API Key"}},
+    "repository_unavailable": {"status_code": 500, "body": {"detail": "Issuance transaction data is temporarily unavailable"}, "cause_disclosed": false}
+  },
+  "gateway": {
+    "service": "issuance-native",
+    "api_key_source": "ISSUANCE_API_KEY",
+    "foreign_owner_result": 403,
+    "missing_owner_result": "continue ordinary authorization and upstream 404 semantics",
+    "provider_failure_result": {"status_code": 500, "detail": "Authorization service unavailable"}
+  }
+}

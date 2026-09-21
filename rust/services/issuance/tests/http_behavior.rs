@@ -769,6 +769,30 @@ impl TransactionReadRepository for ContractTransactionRepository {
     }
 }
 
+#[async_trait]
+impl marty_issuance_service::resource_owner::ResourceOwnerRepository
+    for ContractTransactionRepository
+{
+    async fn find_owner(
+        &self,
+        kind: marty_issuance_service::resource_owner::ResourceOwnerKind,
+        resource_id: &str,
+    ) -> Result<Option<String>, TransactionReadError> {
+        assert_eq!(
+            kind,
+            marty_issuance_service::resource_owner::ResourceOwnerKind::IssuanceTransaction
+        );
+        self.calls
+            .lock()
+            .expect("transaction calls")
+            .push(serde_json::json!({"method": "get_transaction", "value": resource_id}));
+        Ok(self
+            .transactions
+            .get(resource_id)
+            .map(|transaction| transaction.organization_id.clone()))
+    }
+}
+
 fn transaction_record(value: &Value) -> IssuanceTransactionRecord {
     let optional_time = |name: &str| {
         value[name]
@@ -823,6 +847,7 @@ fn transaction_app(contract: &Value) -> (axum::Router, Arc<Mutex<Vec<Value>>>) {
     let config =
         IssuanceServiceConfig::from_values(std::iter::empty::<(String, String)>()).expect("config");
     let runtime = IssuanceRuntime::new(&config).expect("runtime");
+    let resource_owner_repository = repository.clone();
     let app = router_with_services(
         runtime.state(),
         documents.clone(),
@@ -843,6 +868,10 @@ fn transaction_app(contract: &Value) -> (axum::Router, Arc<Mutex<Vec<Value>>>) {
             Arc::new(repository),
             inputs["management_api_key"].as_str(),
             inputs["issuer_base_url"].as_str().expect("base URL"),
+        ),
+        marty_issuance_service::resource_owner::ResourceOwnerService::new(
+            Arc::new(resource_owner_repository),
+            inputs["management_api_key"].as_str(),
         ),
     );
     (app, calls)

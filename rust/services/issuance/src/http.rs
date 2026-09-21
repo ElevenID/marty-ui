@@ -82,11 +82,12 @@ use crate::{
     initiation_http::{InitiationHttpError, InitiationHttpService},
     internal_application_service::InternalApplicationService,
     proof_nonce::{ProofNonceError, ProofNonceService},
+    resource_owner::{ResourceOwner, ResourceOwnerKind, ResourceOwnerService},
     tenant_discovery::{TenantDiscoveryError, TenantDiscoveryService},
     token_exchange::{TokenExchangeError, TokenExchangeRequest, TokenExchangeService},
     token_rate_limit::TokenRateLimiter,
     transaction_reads::{
-        IssuanceTransactionResponse, ResourceOwner, TransactionReadError, TransactionReadService,
+        IssuanceTransactionResponse, TransactionReadError, TransactionReadService,
         TransactionRevocationStatus,
     },
     transport::{legacy_transport, TransportPolicy},
@@ -97,6 +98,7 @@ struct IssuanceState {
     documents: StaticDiscoveryDocuments,
     tenant: Option<TenantDiscoveryService>,
     transactions: Option<TransactionReadService>,
+    resource_owners: Option<ResourceOwnerService>,
     token_exchange: Option<TokenExchangeService>,
     proof_nonce: Option<ProofNonceService>,
     credential: Option<CredentialIssuanceService>,
@@ -121,6 +123,7 @@ struct IssuanceState {
 pub struct IssuanceServices {
     tenant: TenantDiscoveryService,
     transactions: TransactionReadService,
+    resource_owners: ResourceOwnerService,
     token_exchange: TokenExchangeService,
     proof_nonce: ProofNonceService,
     credential: CredentialIssuanceService,
@@ -137,6 +140,7 @@ pub struct IssuanceServices {
 pub struct IssuanceCoreServices {
     tenant: TenantDiscoveryService,
     transactions: TransactionReadService,
+    resource_owners: ResourceOwnerService,
     token_exchange: TokenExchangeService,
     proof_nonce: ProofNonceService,
     credential: CredentialIssuanceService,
@@ -145,11 +149,29 @@ pub struct IssuanceCoreServices {
     renewal: Option<CredentialRenewalService>,
 }
 
+pub struct IssuanceReadServices {
+    transactions: TransactionReadService,
+    resource_owners: ResourceOwnerService,
+}
+
+impl IssuanceReadServices {
+    #[must_use]
+    pub fn new(
+        transactions: TransactionReadService,
+        resource_owners: ResourceOwnerService,
+    ) -> Self {
+        Self {
+            transactions,
+            resource_owners,
+        }
+    }
+}
+
 impl IssuanceCoreServices {
     #[must_use]
     pub fn new(
         tenant: TenantDiscoveryService,
-        transactions: TransactionReadService,
+        reads: IssuanceReadServices,
         token_exchange: TokenExchangeService,
         proof_nonce: ProofNonceService,
         credential: CredentialIssuanceService,
@@ -158,7 +180,8 @@ impl IssuanceCoreServices {
     ) -> Self {
         Self {
             tenant,
-            transactions,
+            transactions: reads.transactions,
+            resource_owners: reads.resource_owners,
             token_exchange,
             proof_nonce,
             credential,
@@ -289,6 +312,7 @@ impl IssuanceServices {
         Self {
             tenant: core.tenant,
             transactions: core.transactions,
+            resource_owners: core.resource_owners,
             token_exchange: core.token_exchange,
             proof_nonce: core.proof_nonce,
             credential: core.credential,
@@ -318,6 +342,7 @@ impl IssuanceServices {
 struct OptionalServices {
     tenant: Option<TenantDiscoveryService>,
     transactions: Option<TransactionReadService>,
+    resource_owners: Option<ResourceOwnerService>,
     token_exchange: Option<TokenExchangeService>,
     proof_nonce: Option<ProofNonceService>,
     credential: Option<CredentialIssuanceService>,
@@ -379,6 +404,7 @@ pub fn router_with_services(
     transport: TransportPolicy,
     tenant: TenantDiscoveryService,
     transactions: TransactionReadService,
+    resource_owners: ResourceOwnerService,
 ) -> Router {
     router_with_optional_services(
         runtime,
@@ -387,6 +413,25 @@ pub fn router_with_services(
         OptionalServices {
             tenant: Some(tenant),
             transactions: Some(transactions),
+            resource_owners: Some(resource_owners),
+            ..OptionalServices::default()
+        },
+    )
+}
+
+/// Exercise the production resource-owner transport without unrelated services.
+pub fn router_with_resource_owners(
+    runtime: RuntimeState,
+    discovery: StaticDiscoveryDocuments,
+    transport: TransportPolicy,
+    resource_owners: ResourceOwnerService,
+) -> Router {
+    router_with_optional_services(
+        runtime,
+        discovery,
+        transport,
+        OptionalServices {
+            resource_owners: Some(resource_owners),
             ..OptionalServices::default()
         },
     )
@@ -405,6 +450,7 @@ pub fn router_with_all_services(
         OptionalServices {
             tenant: Some(services.tenant),
             transactions: Some(services.transactions),
+            resource_owners: Some(services.resource_owners),
             token_exchange: Some(services.token_exchange),
             proof_nonce: Some(services.proof_nonce),
             credential: Some(services.credential),
@@ -887,6 +933,17 @@ fn router_with_optional_services(
             "/internal/v1/resource-owners/issuance-transactions/{transaction_id}",
             get(transaction_owner),
         );
+    if services.resource_owners.is_some() {
+        api = api
+            .route(
+                "/internal/v1/resource-owners/application-templates/{template_id}",
+                get(application_template_owner),
+            )
+            .route(
+                "/internal/v1/resource-owners/issued-credentials/{credential_id}",
+                get(issued_credential_owner),
+            );
+    }
     if services.credential.is_some() {
         api = api.route("/v1/issuance/credential", post(issue_credential));
     }
@@ -1108,6 +1165,7 @@ fn router_with_optional_services(
         documents: discovery,
         tenant: services.tenant,
         transactions: services.transactions,
+        resource_owners: services.resource_owners,
         token_exchange: services.token_exchange,
         proof_nonce: services.proof_nonce,
         credential: services.credential,
@@ -2681,11 +2739,63 @@ async fn transaction_owner(
     Path(transaction_id): Path<String>,
     headers: HeaderMap,
 ) -> Result<Json<ResourceOwner>, TransactionReadHttpError> {
-    transactions(&state)?
-        .owner(&transaction_id, header(&headers, "X-API-Key"))
+    resource_owners(&state)?
+        .owner(
+            ResourceOwnerKind::IssuanceTransaction,
+            &transaction_id,
+            header(&headers, "X-API-Key"),
+        )
         .await
         .map(Json)
         .map_err(Into::into)
+}
+
+async fn application_template_owner(
+    State(state): State<IssuanceState>,
+    Path(template_id): Path<String>,
+    headers: HeaderMap,
+) -> Result<Json<ResourceOwner>, TransactionReadHttpError> {
+    owner_response(
+        &state,
+        ResourceOwnerKind::ApplicationTemplate,
+        &template_id,
+        &headers,
+    )
+    .await
+}
+
+async fn issued_credential_owner(
+    State(state): State<IssuanceState>,
+    Path(credential_id): Path<String>,
+    headers: HeaderMap,
+) -> Result<Json<ResourceOwner>, TransactionReadHttpError> {
+    owner_response(
+        &state,
+        ResourceOwnerKind::IssuedCredential,
+        &credential_id,
+        &headers,
+    )
+    .await
+}
+
+async fn owner_response(
+    state: &IssuanceState,
+    kind: ResourceOwnerKind,
+    resource_id: &str,
+    headers: &HeaderMap,
+) -> Result<Json<ResourceOwner>, TransactionReadHttpError> {
+    resource_owners(state)?
+        .owner(kind, resource_id, header(headers, "X-API-Key"))
+        .await
+        .map(Json)
+        .map_err(Into::into)
+}
+
+fn resource_owners(state: &IssuanceState) -> Result<&ResourceOwnerService, TransactionReadError> {
+    state
+        .resource_owners
+        .as_ref()
+        .ok_or(TransactionReadError::RepositoryUnavailable)
 }
 
 fn transactions(state: &IssuanceState) -> Result<&TransactionReadService, TransactionReadError> {

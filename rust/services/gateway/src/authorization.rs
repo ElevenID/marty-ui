@@ -770,17 +770,17 @@ pub fn resolve_resource_lookup(path: &str) -> Option<ResourceLookup> {
             ],
         ),
         "application-templates" => (
-            "issuance",
+            "issuance-native",
             "/internal/v1/resource-owners/application-templates/{id}",
             &["validate-artifacts"],
         ),
         "issued-credentials" => (
-            "issuance",
+            "issuance-native",
             "/internal/v1/resource-owners/issued-credentials/{id}",
             &["mine"],
         ),
         "issuance" => (
-            "issuance",
+            "issuance-native",
             "/internal/v1/resource-owners/issuance-transactions/{id}",
             &[
                 "offers",
