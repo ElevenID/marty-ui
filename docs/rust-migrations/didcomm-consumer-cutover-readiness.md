@@ -52,7 +52,10 @@ rejected otherwise valid non-ASCII endpoint paths before URL canonicalization.
 The shared language-neutral delivery contract now names Unicode scalar values as
 the unit, and `DidcommEndpointValidator` applies that same unit. HTTPS,
 credential rejection, DNS/public-address policy and deployment-only private-IP
-opt-in are unchanged.
+opt-in are unchanged. Literal IPv4 and IPv6 hosts are normalized through the URL
+host type and converted directly to socket addresses; only domain names enter
+DNS resolution. This preserves Python's unbracketed IPv6-host behavior and keeps
+the same global-address check for literals and resolved addresses.
 
 The same checkpoint closes the previously missing policy parser boundary corpus:
 exactly 64 KiB is accepted for an otherwise valid policy and 64 KiB plus one is
@@ -62,8 +65,8 @@ issuer members all fail closed. The existing ten captured Python policy vectors,
 real anoncrypt/authcrypt tests, wrong-sender no-downgrade control, trusted-tenant
 and public-error corpora remain the governing evidence.
 
-Qualification passed 36 native DIDComm unit tests, six language-neutral HTTP
-behavior tests, the legacy-repository atomicity test, all 472 non-ignored
+Qualification passed 37 native DIDComm unit tests, six language-neutral HTTP
+behavior tests, the legacy-repository atomicity test, all 473 non-ignored
 issuance library tests (one diagnostic subprocess test remains intentionally
 ignored), package formatting and strict library/test Clippy. This checkpoint
 does not select another consumer or authorize Python deletion. Canonical Core

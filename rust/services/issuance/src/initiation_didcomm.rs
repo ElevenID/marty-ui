@@ -22,6 +22,7 @@ use serde::{
 };
 use serde_json::json;
 use thiserror::Error;
+use url::Host;
 
 use crate::{
     credential::{
@@ -669,21 +670,25 @@ impl DidcommEndpointValidator {
         if !url.username().is_empty() || url.password().is_some() {
             return Err(NativeDidcommError::InvalidEndpoint);
         }
-        let hostname = url
-            .host_str()
-            .filter(|value| !value.is_empty())
-            .ok_or(NativeDidcommError::InvalidEndpoint)?
-            .trim_end_matches('.')
-            .to_ascii_lowercase();
-        if !self.allow_private_ips && (hostname == "localhost" || hostname.ends_with(".localhost"))
-        {
-            return Err(NativeDidcommError::EndpointNotPublic);
-        }
         let port = url.port().unwrap_or(443);
-        let addresses = tokio::net::lookup_host((hostname.as_str(), port))
-            .await
-            .map_err(|_| NativeDidcommError::EndpointUnresolvable)?
-            .collect::<Vec<_>>();
+        let (dns_name, addresses) = match url.host() {
+            Some(Host::Domain(domain)) if !domain.is_empty() => {
+                let hostname = domain.trim_end_matches('.').to_ascii_lowercase();
+                if !self.allow_private_ips
+                    && (hostname == "localhost" || hostname.ends_with(".localhost"))
+                {
+                    return Err(NativeDidcommError::EndpointNotPublic);
+                }
+                let addresses = tokio::net::lookup_host((hostname.as_str(), port))
+                    .await
+                    .map_err(|_| NativeDidcommError::EndpointUnresolvable)?
+                    .collect::<Vec<_>>();
+                (Some(hostname), addresses)
+            }
+            Some(Host::Ipv4(address)) => (None, vec![SocketAddr::new(address.into(), port)]),
+            Some(Host::Ipv6(address)) => (None, vec![SocketAddr::new(address.into(), port)]),
+            Some(Host::Domain(_)) | None => return Err(NativeDidcommError::InvalidEndpoint),
+        };
         if addresses.is_empty() {
             return Err(NativeDidcommError::EndpointUnresolvable);
         }
@@ -693,7 +698,7 @@ impl DidcommEndpointValidator {
         Ok(ValidatedDidcommEndpoint {
             original: endpoint.to_owned(),
             url,
-            hostname,
+            dns_name,
             addresses,
         })
     }
@@ -712,7 +717,7 @@ impl DidcommEndpointPort for DidcommEndpointValidator {
 pub struct ValidatedDidcommEndpoint {
     original: String,
     url: Url,
-    hostname: String,
+    dns_name: Option<String>,
     addresses: Vec<SocketAddr>,
 }
 
@@ -816,8 +821,10 @@ impl DidcommTransport {
         };
         let mut builder = Client::builder()
             .timeout(self.timeout)
-            .redirect(Policy::none())
-            .resolve_to_addrs(&endpoint.hostname, &endpoint.addresses);
+            .redirect(Policy::none());
+        if let Some(dns_name) = &endpoint.dns_name {
+            builder = builder.resolve_to_addrs(dns_name, &endpoint.addresses);
+        }
         for certificate in certificates {
             builder = builder.add_root_certificate(certificate);
         }
@@ -2289,7 +2296,7 @@ mod tests {
             Ok(ValidatedDidcommEndpoint {
                 original: endpoint.to_owned(),
                 url: Url::parse(endpoint).unwrap(),
-                hostname: "wallet.example".to_owned(),
+                dns_name: Some("wallet.example".to_owned()),
                 addresses: vec!["1.1.1.1:443".parse().unwrap()],
             })
         }
@@ -4077,6 +4084,37 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn endpoint_validation_handles_ipv6_literals_without_dns() {
+        let private_allowed = DidcommEndpointValidator::new(true);
+        let loopback = private_allowed
+            .validate("https://[::1]:18444/inbox")
+            .await
+            .unwrap();
+        assert_eq!(loopback.as_str(), "https://[::1]:18444/inbox");
+        assert_eq!(loopback.dns_name, None);
+        assert_eq!(loopback.addresses, ["[::1]:18444".parse().unwrap()]);
+        assert!(!format!("{loopback:?}").contains("::1"));
+
+        let public_only = DidcommEndpointValidator::new(false);
+        let global = public_only
+            .validate("https://[2606:4700:4700::1111]:18444/inbox")
+            .await
+            .unwrap();
+        assert_eq!(global.dns_name, None);
+        assert_eq!(
+            global.addresses,
+            ["[2606:4700:4700::1111]:18444".parse().unwrap()]
+        );
+        assert_eq!(
+            public_only
+                .validate("https://[::1]:18444/inbox")
+                .await
+                .err(),
+            Some(NativeDidcommError::EndpointNotPublic)
+        );
+    }
+
+    #[tokio::test]
     async fn endpoint_length_matches_the_frozen_unicode_character_boundary() {
         let contract: serde_json::Value = serde_json::from_str(include_str!(
             "../../../../contracts/gateway-didcomm-delivery-behavior.json"
@@ -4085,6 +4123,10 @@ mod tests {
         assert_eq!(
             contract["recipient_endpoint"]["length_unit"],
             "unicode_scalar_values"
+        );
+        assert_eq!(
+            contract["recipient_endpoint"]["literal_addresses"],
+            "validated_without_dns"
         );
         let maximum = contract["recipient_endpoint"]["maximum_characters"]
             .as_u64()
@@ -4144,7 +4186,7 @@ mod tests {
         let endpoint = ValidatedDidcommEndpoint {
             original: format!("http://{address}/didcomm"),
             url: Url::parse(&format!("http://{address}/didcomm")).unwrap(),
-            hostname: address.ip().to_string(),
+            dns_name: None,
             addresses: vec![address],
         };
         let transport = DidcommTransport::with_timeout(None, Duration::from_secs(5)).unwrap();
