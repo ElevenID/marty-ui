@@ -22,6 +22,7 @@ const GET_TRANSACTION: &str =
 // The no-DPoP branch preserves json text instead of normalizing unrelated claims.
 const CLAIM_TRANSACTION: &str = "UPDATE issuance_service.issuance_transactions
      SET access_token = $3,
+         access_token_expires_at = clock_timestamp() + interval '1800 seconds',
          c_nonce = NULL,
          claims = CASE
              WHEN $4::text IS NULL THEN claims::json
@@ -39,7 +40,9 @@ const GET_AUTHORIZATION: &str =
      WHERE code = $1";
 
 const CLAIM_AUTHORIZATION: &str = "UPDATE issuance_service.authorization_sessions
-     SET access_token = $3, c_nonce = NULL, dpop_jkt = $4, status = 'exchanged'
+     SET access_token = $3,
+         access_token_expires_at = clock_timestamp() + interval '1800 seconds',
+         c_nonce = NULL, dpop_jkt = $4, status = 'exchanged'
      WHERE id = $1 AND code = $2 AND status = 'pending' AND expires_at > clock_timestamp()
      RETURNING id";
 

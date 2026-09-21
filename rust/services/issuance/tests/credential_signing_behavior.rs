@@ -5,12 +5,12 @@ use axum::{body::Body, http::Request};
 use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine};
 use marty_issuance_service::{
     credential::{
-        AllocatedCredentialStatus, BuiltCredential, CredentialAuthorizationSession,
-        CredentialBuildRequest, CredentialBuilder, CredentialBuilderKind, CredentialIssuanceError,
-        CredentialIssuanceService, CredentialLifecycle, CredentialPorts, CredentialProofVerifier,
-        CredentialRepository, CredentialTransaction, CredentialTransactionStatus,
-        ExistingCredential, IssuedCredential, IssuerContext, IssuerContextResolver,
-        NotificationIdGenerator, VerifiedCredentialProof,
+        AllocatedCredentialStatus, BuiltCredential, CredentialAccessTokenGrant,
+        CredentialAuthorizationSession, CredentialBuildRequest, CredentialBuilder,
+        CredentialBuilderKind, CredentialIssuanceError, CredentialIssuanceService,
+        CredentialLifecycle, CredentialPorts, CredentialProofVerifier, CredentialRepository,
+        CredentialTransaction, CredentialTransactionStatus, ExistingCredential, IssuedCredential,
+        IssuerContext, IssuerContextResolver, NotificationIdGenerator, VerifiedCredentialProof,
     },
     http::router_with_credential_issuance,
     proof_nonce::{ProofNonceError, ProofNonceRepository},
@@ -38,6 +38,7 @@ struct SigningState {
     build_request: Option<CredentialBuildRequest>,
     builder_count: usize,
     authorization_only: bool,
+    grant_collision: bool,
     ensure_transaction_count: usize,
     block_builder: bool,
     repository_failure_reason: Option<String>,
@@ -118,6 +119,7 @@ impl SigningHarness {
                 build_request: None,
                 builder_count: 0,
                 authorization_only: false,
+                grant_collision: false,
                 ensure_transaction_count: 0,
                 block_builder: false,
                 repository_failure_reason: None,
@@ -146,6 +148,26 @@ impl SigningHarness {
 
 #[async_trait]
 impl CredentialRepository for SigningHarness {
+    async fn resolve_access_token_grant(
+        &self,
+        access_token: &str,
+    ) -> Result<CredentialAccessTokenGrant, CredentialIssuanceError> {
+        if self.state.lock().unwrap().grant_collision {
+            return Err(CredentialIssuanceError::RepositoryUnavailable);
+        }
+        if let Some(transaction) = self.transaction_by_access_token(access_token).await? {
+            return Ok(CredentialAccessTokenGrant::Transaction(Box::new(
+                transaction,
+            )));
+        }
+        Ok(self
+            .authorization_by_access_token(access_token)
+            .await?
+            .map_or(CredentialAccessTokenGrant::Missing, |session| {
+                CredentialAccessTokenGrant::Authorization(session)
+            }))
+    }
+
     async fn transaction_by_access_token(
         &self,
         _access_token: &str,
@@ -164,10 +186,12 @@ impl CredentialRepository for SigningHarness {
         }
         Ok(Some(CredentialAuthorizationSession {
             id: "authorization-session-race".to_owned(),
+            client_id: "wallet-client".to_owned(),
             organization_id: state.transaction.organization_id.clone(),
             issuer_state: None,
             credential_configuration_ids: vec!["OpenBadgeCredential#sd-jwt".to_owned()],
             dpop_jkt: None,
+            access_token_expires_at: chrono::Utc::now() + chrono::Duration::minutes(30),
         }))
     }
 
@@ -216,6 +240,7 @@ impl CredentialRepository for SigningHarness {
         &self,
         _transaction: &CredentialTransaction,
         credential: &IssuedCredential,
+        notification_id: &str,
     ) -> Result<(), CredentialIssuanceError> {
         let mut state = self.state.lock().unwrap();
         state.events.push("finalize_credential_issuance".to_owned());
@@ -224,6 +249,7 @@ impl CredentialRepository for SigningHarness {
         state.existing = Some(ExistingCredential {
             id: credential.id.clone(),
             credential: credential.credential.clone(),
+            notification_id: notification_id.to_owned(),
         });
         Ok(())
     }
@@ -644,6 +670,27 @@ async fn native_credential_signing_matches_every_python_format_contract() {
         assert_eq!(state.transaction.nonce, None);
         assert_eq!(state.existing.as_ref().unwrap().id, expected_id);
     }
+}
+
+#[tokio::test]
+async fn credential_endpoint_fails_closed_on_ambiguous_access_token_grant() {
+    let contract: Value = serde_json::from_str(include_str!(
+        "../../../../contracts/issuance-credential-signing.json"
+    ))
+    .unwrap();
+    let case = &contract["formats"].as_array().unwrap()[0];
+    let harness = SigningHarness::new(case, &contract);
+    harness.state.lock().unwrap().grant_collision = true;
+    let response = app(harness.clone(), &contract)
+        .oneshot(request(case, &contract))
+        .await
+        .unwrap();
+    assert_eq!(response.status().as_u16(), 500);
+    assert_eq!(
+        body(response).await,
+        json!({"detail": "Credential issuance is temporarily unavailable"})
+    );
+    assert!(harness.state.lock().unwrap().events.is_empty());
 }
 
 async fn assert_single_concurrent_signer(harness: SigningHarness, case: &Value, contract: &Value) {

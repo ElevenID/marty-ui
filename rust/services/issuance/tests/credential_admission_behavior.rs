@@ -5,12 +5,12 @@ use axum::{body::Body, http::Request};
 use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine};
 use marty_issuance_service::{
     credential::{
-        AllocatedCredentialStatus, BuiltCredential, CredentialAuthorizationSession,
-        CredentialBuildRequest, CredentialBuilder, CredentialIssuanceError,
-        CredentialIssuanceService, CredentialLifecycle, CredentialPorts, CredentialProofVerifier,
-        CredentialRepository, CredentialTransaction, CredentialTransactionStatus,
-        ExistingCredential, IssuedCredential, IssuerContext, IssuerContextResolver,
-        NotificationIdGenerator, VerifiedCredentialProof,
+        AllocatedCredentialStatus, BuiltCredential, CredentialAccessTokenGrant,
+        CredentialAuthorizationSession, CredentialBuildRequest, CredentialBuilder,
+        CredentialIssuanceError, CredentialIssuanceService, CredentialLifecycle, CredentialPorts,
+        CredentialProofVerifier, CredentialRepository, CredentialTransaction,
+        CredentialTransactionStatus, ExistingCredential, IssuedCredential, IssuerContext,
+        IssuerContextResolver, NotificationIdGenerator, VerifiedCredentialProof,
     },
     http::router_with_credential_issuance,
     proof_nonce::{ProofNonceError, ProofNonceRepository},
@@ -29,6 +29,7 @@ struct ContractRepository {
 
 struct ContractState {
     setup: String,
+    notification_id: String,
     transaction: CredentialTransaction,
     calls: Vec<Value>,
 }
@@ -52,6 +53,7 @@ impl ContractRepository {
         Self {
             state: Arc::new(Mutex::new(ContractState {
                 setup: setup.to_owned(),
+                notification_id: inputs["notification_id"].as_str().unwrap().to_owned(),
                 transaction: CredentialTransaction {
                     id: inputs["transaction_id"].as_str().unwrap().to_owned(),
                     organization_id: inputs["organization_id"].as_str().unwrap().to_owned(),
@@ -98,6 +100,23 @@ impl ContractRepository {
 
 #[async_trait]
 impl CredentialRepository for ContractRepository {
+    async fn resolve_access_token_grant(
+        &self,
+        access_token: &str,
+    ) -> Result<CredentialAccessTokenGrant, CredentialIssuanceError> {
+        if let Some(transaction) = self.transaction_by_access_token(access_token).await? {
+            return Ok(CredentialAccessTokenGrant::Transaction(Box::new(
+                transaction,
+            )));
+        }
+        Ok(self
+            .authorization_by_access_token(access_token)
+            .await?
+            .map_or(CredentialAccessTokenGrant::Missing, |session| {
+                CredentialAccessTokenGrant::Authorization(session)
+            }))
+    }
+
     async fn transaction_by_access_token(
         &self,
         access_token: &str,
@@ -145,6 +164,7 @@ impl CredentialRepository for ContractRepository {
             (state.setup == "issued_with_credential").then(|| ExistingCredential {
                 id: "credential-canonical".to_owned(),
                 credential: "signed-credential".to_owned(),
+                notification_id: state.notification_id.clone(),
             }),
         )
     }
@@ -168,6 +188,7 @@ impl CredentialRepository for ContractRepository {
         &self,
         _transaction: &CredentialTransaction,
         _credential: &IssuedCredential,
+        _notification_id: &str,
     ) -> Result<(), CredentialIssuanceError> {
         unreachable!("admission contract stops before finalization")
     }

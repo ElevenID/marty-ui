@@ -21,6 +21,7 @@ pub struct IssuanceServiceConfig {
     pub release_version: String,
     pub build_revision: String,
     pub issuer_base_url: String,
+    pub allowed_redirect_uris: Vec<String>,
     pub issuance_offer_ttl_minutes: PythonConfigInteger,
     pub issuer_display_name: String,
     pub cors_allowed_origins: Vec<String>,
@@ -88,6 +89,10 @@ impl std::fmt::Debug for IssuanceServiceConfig {
             .field("release_version", &self.release_version)
             .field("build_revision", &self.build_revision)
             .field("issuer_base_url", &self.issuer_base_url)
+            .field(
+                "allowed_redirect_uri_count",
+                &self.allowed_redirect_uris.len(),
+            )
             .field(
                 "issuance_offer_ttl_minutes",
                 &self.issuance_offer_ttl_minutes,
@@ -404,6 +409,7 @@ impl IssuanceServiceConfig {
         let http_addr = SocketAddr::new(settings.server.host, settings.server.port);
         let grpc_addr = SocketAddr::new(settings.server.host, settings.server.grpc_port);
         let issuer_base_url = validate_issuer_base_url(&settings.discovery.issuer_base_url)?;
+        let allowed_redirect_uris = comma_separated_values(&values, "ALLOWED_REDIRECT_URIS");
         // Preserve Python int() grammar and width at startup; calendar limits
         // belong to transaction creation, after existing-reservation recovery.
         let issuance_offer_ttl_minutes = parse_python_integer_setting(
@@ -656,6 +662,7 @@ impl IssuanceServiceConfig {
             release_version: settings.build.release_version,
             build_revision: settings.build.revision,
             issuer_base_url,
+            allowed_redirect_uris,
             issuance_offer_ttl_minutes,
             issuer_display_name: settings.discovery.issuer_display_name,
             cors_allowed_origins: settings.server.cors_allowed_origins,
@@ -1720,6 +1727,10 @@ mod tests {
             ("ISSUER_BASE_URL", "https://legacy.example/"),
             ("ISSUER_DISPLAY_NAME", "Legacy Issuer"),
             (
+                "ALLOWED_REDIRECT_URIS",
+                " https://wallet.example/callback, http://localhost:3000/callback , ,",
+            ),
+            (
                 "CORS_ALLOWED_ORIGINS",
                 " https://wallet.example, https://admin.example ,,",
             ),
@@ -1777,6 +1788,13 @@ mod tests {
         assert_eq!(config.build_revision, "abc123");
         assert_eq!(config.issuer_base_url, "https://issuer.example");
         assert_eq!(config.issuer_display_name, "Example Issuer");
+        assert_eq!(
+            config.allowed_redirect_uris,
+            [
+                "https://wallet.example/callback",
+                "http://localhost:3000/callback"
+            ]
+        );
         assert_eq!(
             config.cors_allowed_origins,
             ["https://wallet.example", "https://admin.example"]
@@ -1844,6 +1862,16 @@ mod tests {
         assert!(!diagnostic.contains("fallback-key"));
         assert!(!diagnostic.contains("token-hmac-contract-key"));
         assert!(!diagnostic.contains("user:pass"));
+        assert!(!diagnostic.contains("wallet.example/callback"));
+        assert!(diagnostic.contains("allowed_redirect_uri_count: 2"));
+    }
+
+    #[test]
+    fn empty_allowed_redirect_uri_input_preserves_unconfigured_semantics() {
+        let config =
+            IssuanceServiceConfig::from_values(values(&[("ALLOWED_REDIRECT_URIS", " , , ")]))
+                .expect("empty redirect allowlist");
+        assert!(config.allowed_redirect_uris.is_empty());
     }
 
     #[test]

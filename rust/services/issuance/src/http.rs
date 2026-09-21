@@ -1,4 +1,4 @@
-use std::{net::SocketAddr, sync::Arc};
+use std::sync::Arc;
 
 #[cfg(test)]
 #[path = "token_rate_limit_http_tests.rs"]
@@ -6,9 +6,9 @@ mod token_rate_limit_http_tests;
 
 use axum::{
     body::to_bytes,
-    extract::{ConnectInfo, FromRequest, Path, RawForm, RawQuery, Request, State},
+    extract::{FromRequest, Path, RawForm, RawQuery, Request, State},
     http::{header as http_header, HeaderMap, HeaderValue, StatusCode},
-    middleware::{self, Next},
+    middleware,
     response::{IntoResponse, Response},
     routing::{delete, get, post, put},
     Json, Router,
@@ -82,11 +82,12 @@ use crate::{
     initiation_http::{InitiationHttpError, InitiationHttpService},
     internal_application_service::InternalApplicationService,
     issued_credential_records::IssuedCredentialAdapterService,
+    oid4vci_authorization::Oid4vciAuthorizationService,
     proof_nonce::{ProofNonceError, ProofNonceService},
     resource_owner::{ResourceOwner, ResourceOwnerKind, ResourceOwnerService},
     tenant_discovery::{TenantDiscoveryError, TenantDiscoveryService},
     token_exchange::{TokenExchangeError, TokenExchangeRequest, TokenExchangeService},
-    token_rate_limit::TokenRateLimiter,
+    token_rate_limit::{token_rate_limit_middleware, TokenRateLimiter},
     transaction_reads::{
         IssuanceTransactionResponse, TransactionReadError, TransactionReadService,
         TransactionRevocationStatus,
@@ -137,6 +138,7 @@ pub struct IssuanceServices {
     internal_applications: Option<InternalApplicationService>,
     canvas: CanvasServices,
     token_rate_limiter: TokenRateLimiter,
+    oid4vci_authorization: Oid4vciAuthorizationService,
 }
 
 pub struct IssuanceCoreServices {
@@ -310,6 +312,7 @@ impl IssuanceServices {
         application_templates: ApplicationTemplateService,
         canvas: CanvasServices,
         token_rate_limiter: TokenRateLimiter,
+        oid4vci_authorization: Oid4vciAuthorizationService,
     ) -> Self {
         Self {
             tenant: core.tenant,
@@ -327,6 +330,7 @@ impl IssuanceServices {
             internal_applications: None,
             canvas,
             token_rate_limiter,
+            oid4vci_authorization,
         }
     }
 
@@ -381,6 +385,7 @@ struct OptionalServices {
     canvas_legacy_ingest: Option<CanvasLegacyIngestService>,
     canvas_operations: Option<CanvasOperationsService>,
     token_rate_limiter: Option<TokenRateLimiter>,
+    oid4vci_authorization: Option<Oid4vciAuthorizationService>,
 }
 
 fn legacy_health(_report: &HealthReport) -> Value {
@@ -490,6 +495,7 @@ pub fn router_with_all_services(
             canvas_lti_evidence_sync: Some(services.canvas.lti.session.evidence_sync),
             canvas_lti_tool_signer: Some(services.canvas.lti.tool_signer),
             token_rate_limiter: Some(services.token_rate_limiter),
+            oid4vci_authorization: Some(services.oid4vci_authorization),
         },
     )
 }
@@ -562,6 +568,26 @@ pub fn router_with_credential_issuance(
         transport,
         OptionalServices {
             credential: Some(credential),
+            ..OptionalServices::default()
+        },
+    )
+}
+
+/// Exercise the production OID4VCI public-protocol composition and transport.
+pub fn router_with_oid4vci_authorization(
+    runtime: RuntimeState,
+    discovery: StaticDiscoveryDocuments,
+    transport: TransportPolicy,
+    service: Oid4vciAuthorizationService,
+    token_rate_limiter: TokenRateLimiter,
+) -> Router {
+    router_with_optional_services(
+        runtime,
+        discovery,
+        transport,
+        OptionalServices {
+            oid4vci_authorization: Some(service),
+            token_rate_limiter: Some(token_rate_limiter),
             ..OptionalServices::default()
         },
     )
@@ -883,6 +909,8 @@ fn router_with_optional_services(
     transport: TransportPolicy,
     services: OptionalServices,
 ) -> Router {
+    let oid4vci_authorization = services.oid4vci_authorization.clone();
+    let oid4vci_rate_limiter = services.token_rate_limiter.clone();
     let system = system_router_with_options(
         runtime,
         SystemRouteOptions::default().with_health_projector(legacy_health),
@@ -1227,6 +1255,16 @@ fn router_with_optional_services(
     };
     let api = if let Some(renewal) = services.renewal {
         api.merge(crate::credential_renewal::router(renewal))
+    } else {
+        api
+    };
+    let api = if let Some(authorization) = oid4vci_authorization {
+        api.merge(
+            crate::oid4vci_authorization::router_with_optional_rate_limit(
+                authorization,
+                oid4vci_rate_limiter,
+            ),
+        )
     } else {
         api
     };
@@ -2513,38 +2551,6 @@ async fn deliver_didcomm_credential(
         Ok(response) => Json(response).into_response(),
         Err(error) => error.into_response(),
     }
-}
-
-async fn token_rate_limit_middleware(
-    State(limiter): State<Option<TokenRateLimiter>>,
-    request: Request,
-    next: Next,
-) -> Response {
-    let Some(limiter) = limiter else {
-        return next.run(request).await;
-    };
-    let client = request
-        .extensions()
-        .get::<ConnectInfo<SocketAddr>>()
-        .map_or("unknown".to_owned(), |ConnectInfo(address)| {
-            address.ip().to_string()
-        });
-    match limiter.check_request(&client) {
-        Ok(true) => return next.run(request).await,
-        Ok(false) => {}
-        Err(_) => return crate::transport::unhandled_http_failure(),
-    }
-    let mut response = (
-        StatusCode::TOO_MANY_REQUESTS,
-        Json(json!({"detail": "Rate limit exceeded"})),
-    )
-        .into_response();
-    if let Ok(value) = HeaderValue::from_str(limiter.retry_after_header()) {
-        response
-            .headers_mut()
-            .insert(http_header::RETRY_AFTER, value);
-    }
-    response
 }
 
 fn token_request(raw_form: &[u8]) -> Result<TokenExchangeRequest, TokenExchangeError> {

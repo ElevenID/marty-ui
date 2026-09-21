@@ -3,7 +3,8 @@
   "purpose": "Language-neutral no-feature-loss floor for the seven-route OID4VCI authorization and tenant-management removal slice",
   "source": {
     "repository": "ElevenID/marty-credentials",
-    "protected_main_commit": "75e2394350185a1b7c0824b25b4016ca40b0174c",
+    "protected_main_commit": "aaa6a9b8e31e62cd0ab087eef5fc1f4835048e26",
+    "protected_main_tree": "819b7458a31c75d28043a4660643b029c5ec4567",
     "route_source": "services/issuance/infrastructure/api/routes.py",
     "route_source_sha256": "daf2f4be1d8043ff237e2b6be36fbd671712a097ca2c0ccee209ae9ab0ef166f",
     "reference": {
@@ -509,6 +510,31 @@
         "management_repository_failure": {
           "status_code": 503,
           "body": {"detail": "OID4VCI management service is temporarily unavailable"}
+        }
+      }
+    },
+    {
+      "id": "SECURITY-ACCESS-TOKEN-001:exact-1800-second-expiry",
+      "legacy": "Access tokens can remain usable without a durable expiry bound when an older issuance transaction or authorization session has no access_token_expires_at value.",
+      "native": "Persist the exact 1800-second token lifetime, require the database clock to report the token as live on every public-protocol and credential lookup, and give pre-migration tokens one bounded transition lifetime.",
+      "preserved_capability": "A valid unexpired wallet access token continues to authorize credential issuance, deferred retrieval, and notification acknowledgment.",
+      "required_errors": {
+        "expired_token": {
+          "status_code": 401,
+          "headers": {"WWW-Authenticate": "Bearer"},
+          "body": {"error": "invalid_token", "error_description": "Client authentication failed"}
+        }
+      }
+    },
+    {
+      "id": "OID4VCI-REDIRECT-002:http-or-https-only-localhost",
+      "legacy": "An exact ALLOWED_REDIRECT_URIS entry can bypass redirect scheme safety and permit a non-HTTPS, non-loopback redirect.",
+      "native": "Validate redirect scheme safety before applying the exact registered redirect allowlist: require HTTPS except for HTTP loopback hosts localhost, 127.0.0.1, and ::1.",
+      "preserved_capability": "Registered HTTPS callbacks and registered HTTP loopback callbacks continue to receive the authorization redirect with the frozen query-preservation behavior.",
+      "required_errors": {
+        "unsafe_redirect_uri": {
+          "status_code": 400,
+          "body": {"error": "invalid_request", "error_description": "redirect_uri must use HTTPS"}
         }
       }
     }

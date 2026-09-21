@@ -32,7 +32,10 @@ async fn ordinary_blank_link_finalization(fixture: &Fixture) {
             .unwrap()
             .unwrap();
         let before = fixture.snapshot().await;
-        let finalized = fixture.repository.finalize(&claimed, &credential).await;
+        let finalized = fixture
+            .repository
+            .finalize(&claimed, &credential, "notification-renewal-canvas")
+            .await;
         if accepted {
             finalized.unwrap();
             let persisted = fixture

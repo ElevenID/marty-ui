@@ -2,7 +2,9 @@
 
 This checkpoint freezes the next descending removable-code target without
 starting its Rust implementation. The authority is `ElevenID/marty-credentials`
-protected `main` at `75e2394350185a1b7c0824b25b4016ca40b0174c`. The capture
+released Credentials v0.1.76 / protected `main` at
+`aaa6a9b8e31e62cd0ab087eef5fc1f4835048e26` (tree
+`819b7458a31c75d28043a4660643b029c5ec4567`). The capture
 executes the unchanged Python route composition through FastAPI's ASGI
 transport with controlled native-engine and downstream revocation/Canvas
 dependencies; it does not copy Python route logic into the production tree.
@@ -12,6 +14,13 @@ The Python route supplied 600 seconds to the Rust response engine, but discarded
 that engine session expiry and persisted a new `AuthorizationSession`. Its
 effective lifetime is `ISSUANCE_AUTH_SESSION_TTL_MINUTES`, defaulting to 60
 minutes. Native ownership must preserve that configurable persisted lifetime.
+
+Implementation status (2026-09-21): the change stacked on this historical
+freeze implements and selects exactly the four public OID4VCI routes natively:
+`authorize`, `pushed_authorization_request`, `deferred_credential`, and
+`notification_endpoint`. The three tenant-management routes remain legacy and
+are outside this implementation PR. This checkpoint has not deleted Python,
+created a release, or deployed the candidate.
 
 The seven selected operations account for approximately 495 Python route-body
 lines:
@@ -112,11 +121,28 @@ The capture found behavior that must be corrected rather than silently copied:
    JSON. Native code should use one DRY structured, sanitized boundary per
    public protocol or management surface and retain every explicit error in the
    frozen corpus.
+5. Legacy access-token rows can lack a durable expiry. Native persistence must
+   apply the exact 1,800-second lifetime, use the database clock for every live
+   lookup, and give pre-migration tokens only one bounded transition lifetime.
+6. An exact `ALLOWED_REDIRECT_URIS` entry can bypass the legacy scheme check.
+   Native code must validate scheme safety first: HTTPS everywhere except HTTP
+   on exactly `localhost`, `127.0.0.1`, or `::1`, then apply the allowlist.
 
 Each correction in the contract names the valid capability that must remain.
 These are security and error-contract corrections, not permission to drop valid
 wallet notification, deferred retrieval, client rotation, listing, or
 revocation behavior.
+
+## Explicit crypto follow-up outside this consumer migration
+
+The shared DPoP verifier currently proves signature, public JWK thumbprint,
+`typ`, algorithm, HTTP method, and exact target URI. It does not yet enforce a
+fresh `iat`, unique/replay-protected `jti`, or access-token hash (`ath`). This
+migration therefore preserves the existing DPoP boundary but does not claim
+complete RFC 9449 replay protection. That hardening belongs to the separately
+owned crypto lane and must update all token, credential, deferred, and
+notification consumers together; this OID4VCI consumer PR must not make an
+overlapping crypto change.
 
 ## Gates before implementation and deletion
 

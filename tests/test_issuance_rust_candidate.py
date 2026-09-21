@@ -55,6 +55,21 @@ def test_internal_application_postgres_contract_is_required_in_ci() -> None:
     assert "Expected one internal Application PostgreSQL contract executable" in runtime
 
 
+def test_oid4vci_migration_postgres_contract_is_required_in_real_database_ci() -> None:
+    manifest = text("rust/services/issuance/Cargo.toml")
+    runtime = text("scripts/ci/run-rust-db-contracts.sh")
+    workflow = text(".github/workflows/ci.yml")
+    assert 'name = "oid4vci_migration_postgres_contract"' in manifest
+    assert 'path = "tests/oid4vci_migration_postgres_contract.rs"' in manifest
+    assert "oid4vci_migration_postgres_contract-*" in runtime
+    assert "Expected one Issuance OID4VCI migration PostgreSQL contract executable" in runtime
+    assert '.target.name == "oid4vci_migration_postgres_contract"' in workflow
+    assert "compiled Issuance OID4VCI migration PostgreSQL contract executable" in workflow
+    assert runtime.index("oid4vci_migration_postgres_contract-*") < runtime.index(
+        "issuance_transaction_postgres_contract-*"
+    ), "the following transaction suite must recreate tables after the rollback fixture"
+
+
 def test_frozen_surface_provenance_and_coverage_are_complete() -> None:
     surface_bytes = (ROOT / "contracts/issuance-runtime-surface.json").read_bytes()
     surface = json.loads(surface_bytes)
@@ -105,6 +120,10 @@ def test_frozen_surface_provenance_and_coverage_are_complete() -> None:
         ROOT / "contracts/issuance-issued-credential-adapters.json"
     ).read_bytes()
     issued_credential_adapters = json.loads(issued_credential_adapter_bytes)
+    oid4vci_authorization_bytes = (
+        ROOT / "contracts/issuance-oid4vci-authorization.json"
+    ).read_bytes()
+    oid4vci_authorization = json.loads(oid4vci_authorization_bytes)
     assert surface["schema"] == "marty.issuance-runtime-surface/v1"
     assert surface["http"]["route_count"] == len(surface["http"]["routes"]) == 131
     assert surface["grpc"]["method_count"] == len(surface["grpc"]["methods"]) == 12
@@ -345,6 +364,24 @@ def test_frozen_surface_provenance_and_coverage_are_complete() -> None:
         "marty.issuance-issued-credential-adapters/v1"
     )
     assert len(issued_credential_adapters["operations"]) == 5
+    assert hashlib.sha256(
+        oid4vci_authorization_bytes.replace(b"\r\n", b"\n")
+    ).hexdigest() == coverage["oid4vci_authorization_behavior_contract"]["sha256"]
+    assert coverage["oid4vci_authorization_behavior_contract"] == {
+        "path": "contracts/issuance-oid4vci-authorization.json",
+        "sha256": "c4b3643bc16c1f75133e69761d3ad5d226432e3a0e05a414a372f3fd3ff7f67f",
+        "source_repository": "ElevenID/marty-credentials",
+        "source_commit": "aaa6a9b8e31e62cd0ab087eef5fc1f4835048e26",
+        "source_tree": "819b7458a31c75d28043a4660643b029c5ec4567",
+        "intentional_native_corrections": [
+            "OID4VCI-AUTH-002:validate-and-bind-bearer",
+            "OID4VCI-ERROR-001:structured-sanitized-internal-errors",
+            "OID4VCI-NOTIFY-001:validate-notification-request",
+            "SECURITY-ACCESS-TOKEN-001:exact-1800-second-expiry",
+            "OID4VCI-REDIRECT-002:http-or-https-only-localhost",
+        ],
+    }
+    assert len(oid4vci_authorization["routes"]) == 7
     assert issued_credential_adapters["projection"]["credential_formats"] == [
         "MDOC",
         "VDS_NC",
@@ -445,6 +482,11 @@ def test_frozen_surface_provenance_and_coverage_are_complete() -> None:
         route["operation"]: route
         for route in issued_credential_adapters["operations"]
     }
+    oid4vci_public_operations = {
+        route["operation"]: route
+        for route in oid4vci_authorization["routes"]
+        if route["component"] == "public-oid4vci-protocol"
+    }
     canvas_operations_cases = {
         "enqueue_canvas_application_sync_route": "enqueue",
         "list_canvas_sync_jobs_route": "jobs",
@@ -474,7 +516,7 @@ def test_frozen_surface_provenance_and_coverage_are_complete() -> None:
         hashlib.sha256(renewal_bytes).hexdigest()
         == coverage["renewal_behavior_contract"]["sha256"]
     )
-    assert len(coverage["native_http"]) == 107
+    assert len(coverage["native_http"]) == 111
     assert set(native) == (
         set(discovery_cases)
         | set(tenant_cases)
@@ -485,6 +527,7 @@ def test_frozen_surface_provenance_and_coverage_are_complete() -> None:
         | internal_application_operations
         | set(resource_owner_operations)
         | set(issued_credential_adapter_operations)
+        | set(oid4vci_public_operations)
         | set(canvas_operations_cases)
         | {
             "didcomm_deliver",
@@ -712,6 +755,15 @@ def test_frozen_surface_provenance_and_coverage_are_complete() -> None:
             }
             assert coverage_entry == expected
             continue
+        if operation in oid4vci_public_operations:
+            frozen = oid4vci_public_operations[operation]
+            assert coverage_entry == {
+                "method": frozen["method"],
+                "path": frozen["path"],
+                "operation": frozen["operation"],
+                "oid4vci_authorization_behavior_contract": True,
+            }
+            continue
         if operation in tenant_cases:
             assert coverage_entry["tenant_behavior_case"] == operation
             assert coverage_entry["method"] == "GET"
@@ -748,10 +800,10 @@ def test_frozen_surface_provenance_and_coverage_are_complete() -> None:
         )
         assert discovery_cases[operation]["path"] == expected_case_path
     assert coverage["remaining"] == {
-        "http": 24,
+        "http": 20,
         "grpc": 0,
         "runtime_modes": ["api", "canvas-sync-worker"],
-        "literal_environment_variables": 56,
+        "literal_environment_variables": 55,
         "dynamic_configuration_lookups": 20,
         "migration_revisions": 46,
         "migration_heads": 1,
@@ -782,6 +834,7 @@ def test_frozen_surface_provenance_and_coverage_are_complete() -> None:
         "ISSUANCE_GRPC_PORT",
         "ISSUANCE_SERVICE_PORT",
         "ISSUANCE_API_KEY",
+        "ALLOWED_REDIRECT_URIS",
         "ISSUER_BASE_URL",
         "ISSUER_DISPLAY_NAME",
         "REVOCATION_PROFILE_SERVICE_URL",
@@ -791,6 +844,51 @@ def test_frozen_surface_provenance_and_coverage_are_complete() -> None:
         "TOKEN_RATE_WINDOW",
         "UI_BASE_URL",
     ]
+
+
+def test_oid4vci_coverage_mutations_break_the_enforced_provenance_or_route_floor() -> None:
+    coverage = json.loads(text("contracts/issuance-native-coverage.json"))
+    contract_bytes = (ROOT / "contracts/issuance-oid4vci-authorization.json").read_bytes()
+    contract = json.loads(contract_bytes)
+    expected_routes = {
+        (route["method"], route["path"], route["operation"])
+        for route in contract["routes"]
+        if route["component"] == "public-oid4vci-protocol"
+    }
+
+    def valid(candidate: dict) -> bool:
+        metadata = candidate.get("oid4vci_authorization_behavior_contract", {})
+        selected = {
+            (route["method"], route["path"], route["operation"])
+            for route in candidate["native_http"]
+            if route.get("oid4vci_authorization_behavior_contract") is True
+        }
+        return (
+            metadata.get("path") == "contracts/issuance-oid4vci-authorization.json"
+            and metadata.get("source_commit")
+            == contract["source"]["protected_main_commit"]
+            and metadata.get("source_tree") == contract["source"]["protected_main_tree"]
+            and metadata.get("sha256")
+            == hashlib.sha256(contract_bytes.replace(b"\r\n", b"\n")).hexdigest()
+            and selected == expected_routes
+        )
+
+    assert valid(coverage)
+    for mutate in [
+        lambda value: value["oid4vci_authorization_behavior_contract"].__setitem__(
+            "sha256", "0" * 64
+        ),
+        lambda value: value["oid4vci_authorization_behavior_contract"].__setitem__(
+            "source_tree", "0" * 40
+        ),
+        lambda value: value["native_http"].__setitem__(
+            0, {**value["native_http"][0], "path": "/v1/issuance/wrong"}
+        ),
+        lambda value: value["native_http"].pop(0),
+    ]:
+        changed = json.loads(json.dumps(coverage))
+        mutate(changed)
+        assert not valid(changed)
 
 
 def test_candidate_is_path_split_without_replacing_the_python_runtime() -> None:

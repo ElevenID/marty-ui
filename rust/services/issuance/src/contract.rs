@@ -38,6 +38,8 @@ const RESOURCE_OWNERS: &[u8] =
     include_bytes!("../../../../contracts/issuance-resource-owner-lookups.json");
 const ISSUED_CREDENTIAL_ADAPTERS: &[u8] =
     include_bytes!("../../../../contracts/issuance-issued-credential-adapters.json");
+const OID4VCI_AUTHORIZATION: &[u8] =
+    include_bytes!("../../../../contracts/issuance-oid4vci-authorization.json");
 const DIDCOMM: &[u8] =
     include_bytes!("../../../../contracts/gateway-didcomm-delivery-behavior.json");
 const RENEWAL_REFERENCE: &[u8] =
@@ -70,6 +72,7 @@ struct Coverage {
     internal_application_behavior_contract: Upstream,
     resource_owner_behavior_contract: SourceBehaviorContract,
     issued_credential_adapter_behavior_contract: SourceBehaviorContract,
+    oid4vci_authorization_behavior_contract: Oid4vciBehaviorContract,
     renewal_behavior_contract: RenewalBehaviorContract,
     native_http: Vec<HttpOperation>,
     native_grpc: Vec<String>,
@@ -101,6 +104,16 @@ struct SourceBehaviorContract {
     source_repository: String,
     source_path: String,
     source_commit: String,
+}
+
+#[derive(Deserialize)]
+struct Oid4vciBehaviorContract {
+    path: String,
+    sha256: String,
+    source_repository: String,
+    source_commit: String,
+    source_tree: String,
+    intentional_native_corrections: Vec<String>,
 }
 
 #[derive(Deserialize)]
@@ -145,6 +158,8 @@ struct HttpOperation {
     resource_owner_behavior_contract: bool,
     #[serde(default)]
     issued_credential_adapter_behavior_contract: bool,
+    #[serde(default)]
+    oid4vci_authorization_behavior_contract: bool,
     #[serde(default)]
     canvas_operations_behavior_case: Option<CanvasOperationsCase>,
 }
@@ -236,6 +251,7 @@ impl HttpOperation {
             + usize::from(self.internal_application_behavior_case.is_some())
             + usize::from(self.resource_owner_behavior_contract)
             + usize::from(self.issued_credential_adapter_behavior_contract)
+            + usize::from(self.oid4vci_authorization_behavior_contract)
             + usize::from(self.canvas_operations_behavior_case.is_some())
     }
 }
@@ -412,6 +428,8 @@ pub fn validate_embedded_contract() -> Result<CoverageSummary, MmfError> {
         .map_err(|error| contract_error("invalid resource-owner contract", error))?;
     let issued_credential_adapters: Value = serde_json::from_slice(ISSUED_CREDENTIAL_ADAPTERS)
         .map_err(|error| contract_error("invalid issued-credential adapter contract", error))?;
+    let oid4vci_authorization: Value = serde_json::from_slice(OID4VCI_AUTHORIZATION)
+        .map_err(|error| contract_error("invalid OID4VCI authorization contract", error))?;
     require(
         surface["schema"] == "marty.issuance-runtime-surface/v1",
         "unexpected issuance surface schema",
@@ -1116,6 +1134,71 @@ pub fn validate_embedded_contract() -> Result<CoverageSummary, MmfError> {
                 .is_some_and(|follow_ups| follow_ups.len() == 2),
         "issued-credential adapter contract or provenance is invalid",
     )?;
+    let actual_oid4vci_authorization =
+        format!("{:x}", Sha256::digest(canonical_lf(OID4VCI_AUTHORIZATION)));
+    let frozen_oid4vci_correction_ids = oid4vci_authorization["intentional_native_corrections"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter_map(|correction| correction["id"].as_str())
+        .collect::<Vec<_>>();
+    require(
+        actual_oid4vci_authorization == coverage.oid4vci_authorization_behavior_contract.sha256,
+        "OID4VCI authorization contract checksum is invalid",
+    )?;
+    require(
+        coverage.oid4vci_authorization_behavior_contract.path
+            == "contracts/issuance-oid4vci-authorization.json",
+        "OID4VCI authorization contract path is invalid",
+    )?;
+    require(
+        coverage
+            .oid4vci_authorization_behavior_contract
+            .source_repository
+            == "ElevenID/marty-credentials"
+            && coverage
+                .oid4vci_authorization_behavior_contract
+                .source_commit
+                == "aaa6a9b8e31e62cd0ab087eef5fc1f4835048e26"
+            && coverage.oid4vci_authorization_behavior_contract.source_tree
+                == "819b7458a31c75d28043a4660643b029c5ec4567",
+        "OID4VCI authorization source provenance is invalid",
+    )?;
+    require(
+        coverage
+            .oid4vci_authorization_behavior_contract
+            .intentional_native_corrections
+            == [
+                "OID4VCI-AUTH-002:validate-and-bind-bearer",
+                "OID4VCI-ERROR-001:structured-sanitized-internal-errors",
+                "OID4VCI-NOTIFY-001:validate-notification-request",
+                "SECURITY-ACCESS-TOKEN-001:exact-1800-second-expiry",
+                "OID4VCI-REDIRECT-002:http-or-https-only-localhost",
+            ]
+            && frozen_oid4vci_correction_ids.contains(&"OID4VCI-AUTH-002:validate-and-bind-bearer")
+            && frozen_oid4vci_correction_ids
+                .contains(&"OID4VCI-ERROR-001:structured-sanitized-internal-errors")
+            && frozen_oid4vci_correction_ids
+                .contains(&"OID4VCI-NOTIFY-001:validate-notification-request")
+            && frozen_oid4vci_correction_ids
+                .contains(&"SECURITY-ACCESS-TOKEN-001:exact-1800-second-expiry")
+            && frozen_oid4vci_correction_ids
+                .contains(&"OID4VCI-REDIRECT-002:http-or-https-only-localhost"),
+        "OID4VCI authorization correction inventory is invalid",
+    )?;
+    require(
+        oid4vci_authorization["schema"] == "marty.issuance-oid4vci-authorization/v1"
+            && oid4vci_authorization["source"]["protected_main_commit"]
+                == coverage
+                    .oid4vci_authorization_behavior_contract
+                    .source_commit
+            && oid4vci_authorization["source"]["protected_main_tree"]
+                == coverage.oid4vci_authorization_behavior_contract.source_tree
+            && oid4vci_authorization["routes"]
+                .as_array()
+                .is_some_and(|routes| routes.len() == 7),
+        "OID4VCI authorization document is invalid",
+    )?;
 
     let routes = surface["http"]["routes"]
         .as_array()
@@ -1189,6 +1272,7 @@ pub fn validate_embedded_contract() -> Result<CoverageSummary, MmfError> {
     let mut native_internal_application_cases = BTreeSet::new();
     let mut native_resource_owner_operations = BTreeSet::new();
     let mut native_issued_credential_adapter_operations = BTreeSet::new();
+    let mut native_oid4vci_authorization_operations = BTreeSet::new();
     // Freeze the already-qualified source contract; changing its historical
     // limits/status text is not necessary to select the eight exact operations.
     require(
@@ -1363,6 +1447,21 @@ pub fn validate_embedded_contract() -> Result<CoverageSummary, MmfError> {
                     && native_issued_credential_adapter_operations
                         .insert(operation.operation.as_str()),
                 "native issued-credential adapter diverges from its behavior contract",
+            )?;
+        } else if operation.oid4vci_authorization_behavior_contract {
+            let frozen = oid4vci_authorization["routes"]
+                .as_array()
+                .ok_or_else(|| invalid("OID4VCI authorization routes are missing"))?;
+            require(
+                operation.response.is_none()
+                    && frozen.iter().any(|candidate| {
+                        candidate["component"] == "public-oid4vci-protocol"
+                            && candidate["method"] == operation.method
+                            && candidate["path"] == operation.path
+                            && candidate["operation"] == operation.operation
+                    })
+                    && native_oid4vci_authorization_operations.insert(operation.operation.as_str()),
+                "native OID4VCI authorization operation diverges from its behavior contract",
             )?;
         } else if operation.renewal_behavior_contract {
             require(
@@ -1631,6 +1730,18 @@ pub fn validate_embedded_contract() -> Result<CoverageSummary, MmfError> {
         native_issued_credential_adapter_operations == frozen_issued_credential_adapter_operations,
         "native issued-credential adapter behavior coverage is incomplete",
     )?;
+    let frozen_oid4vci_authorization_operations = oid4vci_authorization["routes"]
+        .as_array()
+        .ok_or_else(|| invalid("OID4VCI authorization routes are missing"))?
+        .iter()
+        .filter(|route| route["component"] == "public-oid4vci-protocol")
+        .filter_map(|route| route["operation"].as_str())
+        .collect::<BTreeSet<_>>();
+    require(
+        frozen_oid4vci_authorization_operations.len() == 4
+            && native_oid4vci_authorization_operations == frozen_oid4vci_authorization_operations,
+        "native OID4VCI authorization behavior coverage is incomplete",
+    )?;
     let frozen_transaction_read_cases = transaction_reads
         .cases
         .iter()
@@ -1737,6 +1848,7 @@ pub fn validate_embedded_contract() -> Result<CoverageSummary, MmfError> {
                 "ISSUANCE_GRPC_PORT",
                 "ISSUANCE_SERVICE_PORT",
                 "ISSUANCE_API_KEY",
+                "ALLOWED_REDIRECT_URIS",
                 "ISSUER_BASE_URL",
                 "ISSUER_DISPLAY_NAME",
                 "REVOCATION_PROFILE_SERVICE_URL",
@@ -2027,7 +2139,7 @@ mod tests {
         Coverage, HttpOperation, APPLICATION_TEMPLATES, CANVAS_LTI, CANVAS_MANAGEMENT,
         CANVAS_OPERATIONS, COVERAGE, CREDENTIAL_ADMISSION, CREDENTIAL_LIFECYCLE,
         CREDENTIAL_SIGNING, DIDCOMM, INITIATION, INTERNAL_APPLICATIONS, ISSUED_CREDENTIAL_ADAPTERS,
-        RENEWAL_REFERENCE, RESOURCE_OWNERS,
+        OID4VCI_AUTHORIZATION, RENEWAL_REFERENCE, RESOURCE_OWNERS,
     };
 
     #[test]
@@ -2613,13 +2725,17 @@ mod tests {
             ),
             coverage.issued_credential_adapter_behavior_contract.sha256
         );
+        assert_eq!(
+            format!("{:x}", Sha256::digest(canonical_lf(OID4VCI_AUTHORIZATION))),
+            coverage.oid4vci_authorization_behavior_contract.sha256
+        );
     }
 
     #[test]
     fn embedded_surface_and_native_coverage_are_consistent() {
         let summary = validate_embedded_contract().expect("contract");
-        assert_eq!(summary.native_http, 107);
-        assert_eq!(summary.remaining_http, 24);
+        assert_eq!(summary.native_http, 111);
+        assert_eq!(summary.remaining_http, 20);
         assert_eq!(summary.remaining_grpc, 0);
     }
 }

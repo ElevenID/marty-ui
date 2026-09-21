@@ -10,11 +10,13 @@ use sqlx::{postgres::PgRow, Executor, PgPool, Postgres, Row, Transaction};
 use tracing::error;
 use uuid::Uuid;
 
+use crate::oid4vci_authorization::Oid4vciAuthorizationRepository;
+use crate::oid4vci_authorization_postgres::PostgresOid4vciAuthorizationRepository;
 use crate::{
     credential::{
-        reserved_credential_id, CredentialAuthorizationSession, CredentialIssuanceError,
-        CredentialRepository, CredentialTransaction, CredentialTransactionStatus,
-        ExistingCredential, IssuedCredential,
+        reserved_credential_id, CredentialAccessTokenGrant, CredentialAuthorizationSession,
+        CredentialIssuanceError, CredentialRepository, CredentialTransaction,
+        CredentialTransactionStatus, ExistingCredential, IssuedCredential,
     },
     credential_lifecycle::delivery_record_id,
     credential_renewal::{RenewalRepository, RenewalRepositoryError, RenewalSource},
@@ -74,9 +76,40 @@ const BIND_RENEWAL_RESERVATION: &str = concat!(
     transaction_columns!()
 );
 
-const TRANSACTION_BY_ACCESS_TOKEN: &str = transaction_query!("access_token = $1");
+const TRANSACTION_BY_ACCESS_TOKEN: &str =
+    transaction_query!("access_token = $1 AND access_token_expires_at > clock_timestamp()");
+const BIND_AUTHORIZATION_TRANSACTION: &str = concat!(
+    "UPDATE issuance_service.issuance_transactions
+     SET oid4vci_client_id = COALESCE(oid4vci_client_id, $3),
+         access_token = $5,
+         access_token_expires_at = $6,
+         claims = CASE
+             WHEN $4::text IS NULL THEN claims::jsonb
+             ELSE jsonb_set(COALESCE(claims::jsonb, '{}'::jsonb),
+                            '{_dpop_jkt}', to_jsonb($4::text), true)
+         END,
+         status = CASE WHEN status = 'pending' THEN 'authorized' ELSE status END
+     WHERE pre_auth_code = $1
+       AND organization_id = $2
+       AND (oid4vci_client_id IS NULL OR oid4vci_client_id = $3)
+       AND ((access_token IS NULL AND access_token_expires_at IS NULL)
+            OR (access_token = $5 AND access_token_expires_at = $6))
+       AND ((claims::jsonb ->> '_dpop_jkt') IS NULL
+            OR (claims::jsonb ->> '_dpop_jkt') = $4)
+     RETURNING ",
+    transaction_columns!()
+);
 const TRANSACTION_BY_PRE_AUTH_CODE: &str = transaction_query!("pre_auth_code = $1");
 const TRANSACTION_BY_ID: &str = transaction_query!("id = $1");
+const TRANSACTION_BY_AUTHORIZATION_SESSION: &str = transaction_query!(
+    "id = $1
+     AND organization_id = $2
+     AND oid4vci_client_id = $3
+     AND access_token = $4
+     AND access_token_expires_at = $5
+     AND (claims::jsonb ->> '_dpop_jkt') IS NOT DISTINCT FROM $6
+     AND credential_type = $7"
+);
 const TRANSACTION_BY_ID_AND_ORGANIZATION: &str =
     transaction_query!("id = $1 AND organization_id = $2");
 const TRANSACTION_BY_ID_AND_ORGANIZATION_FOR_UPDATE: &str = concat!(
@@ -401,6 +434,35 @@ impl PostgresCredentialRepository {
 
 #[async_trait]
 impl CredentialRepository for PostgresCredentialRepository {
+    async fn resolve_access_token_grant(
+        &self,
+        access_token: &str,
+    ) -> Result<CredentialAccessTokenGrant, CredentialIssuanceError> {
+        let resolver = PostgresOid4vciAuthorizationRepository::new(
+            self.pool.clone(),
+            self.token_hmac_key.as_ref(),
+        );
+        let Some(_) = resolver
+            .access_token_grant(access_token)
+            .await
+            .map_err(|_| CredentialIssuanceError::RepositoryUnavailable)?
+        else {
+            return Ok(CredentialAccessTokenGrant::Missing);
+        };
+        if let Some(transaction) = self.transaction_by_access_token(access_token).await? {
+            return Ok(CredentialAccessTokenGrant::Transaction(Box::new(
+                transaction,
+            )));
+        }
+        self.authorization_by_access_token(access_token)
+            .await
+            .map(|session| {
+                session.map_or(CredentialAccessTokenGrant::Missing, |session| {
+                    CredentialAccessTokenGrant::Authorization(session)
+                })
+            })
+    }
+
     async fn transaction_by_access_token(
         &self,
         access_token: &str,
@@ -417,9 +479,12 @@ impl CredentialRepository for PostgresCredentialRepository {
         access_token: &str,
     ) -> Result<Option<CredentialAuthorizationSession>, CredentialIssuanceError> {
         let row = sqlx::query(
-            "SELECT id, organization_id, issuer_state, credential_configuration_ids, dpop_jkt
+            "SELECT id, client_id, organization_id, issuer_state,
+                    credential_configuration_ids, dpop_jkt,
+                    access_token_expires_at
              FROM issuance_service.authorization_sessions
-             WHERE access_token = $1",
+             WHERE access_token = $1
+               AND access_token_expires_at > clock_timestamp()",
         )
         .bind(hash_access_token(&self.token_hmac_key, access_token))
         .fetch_optional(&self.pool)
@@ -434,11 +499,27 @@ impl CredentialRepository for PostgresCredentialRepository {
         access_token: &str,
     ) -> Result<CredentialTransaction, CredentialIssuanceError> {
         if let Some(issuer_state) = session.issuer_state.as_deref() {
-            if let Some(transaction) = self
-                .transaction_by_query(TRANSACTION_BY_PRE_AUTH_CODE, issuer_state)
-                .await?
+            if let Some(transaction) = sqlx::query(BIND_AUTHORIZATION_TRANSACTION)
+                .bind(issuer_state)
+                .bind(&session.organization_id)
+                .bind(&session.client_id)
+                .bind(&session.dpop_jkt)
+                .bind(hash_access_token(&self.token_hmac_key, access_token))
+                .bind(session.access_token_expires_at)
+                .fetch_optional(&self.pool)
+                .await
+                .map_err(repository_error)?
+                .map(transaction_row)
+                .transpose()?
             {
                 return Ok(transaction);
+            }
+            if self
+                .transaction_by_query(TRANSACTION_BY_PRE_AUTH_CODE, issuer_state)
+                .await?
+                .is_some()
+            {
+                return Err(CredentialIssuanceError::RepositoryUnavailable);
             }
         }
         let selected = session
@@ -451,6 +532,7 @@ impl CredentialRepository for PostgresCredentialRepository {
             .active_issuer_identity(&session.organization_id, credential_type)
             .await?;
         let transaction_id = authorization_transaction_id(&session.id);
+        let access_token_digest = hash_access_token(&self.token_hmac_key, access_token);
         let claims = session
             .dpop_jkt
             .as_ref()
@@ -458,55 +540,115 @@ impl CredentialRepository for PostgresCredentialRepository {
         sqlx::query(
             "INSERT INTO issuance_service.issuance_transactions
                  (id, organization_id, credential_template_id, status, pre_auth_code,
-                  access_token, c_nonce, claims, credential_type, issuer_mode,
+                  access_token, access_token_expires_at, c_nonce, claims, credential_type, issuer_mode,
                   issuer_did_override, issuer_algorithm, credential_payload_format,
                   selective_disclosure_claims, wallet_configs, validity_days,
+                  oid4vci_client_id,
                   created_at, expires_at)
-             VALUES ($1, $2, '', 'authorized', $3, $4, NULL, $5, $6, 'org_managed',
-                     $7, $8, 'w3c_vcdm_v2_sd_jwt', '[]'::jsonb, '[]'::jsonb, 365,
+             VALUES ($1, $2, '', 'authorized', $3, $4, $5, NULL, $6, $7, 'org_managed',
+                     $8, $9, 'w3c_vcdm_v2_sd_jwt', '[]'::jsonb, '[]'::jsonb, 365, $10,
                      clock_timestamp(), clock_timestamp() + interval '15 minutes')
              ON CONFLICT (id) DO NOTHING",
         )
         .bind(&transaction_id)
         .bind(&session.organization_id)
         .bind(random_capability())
-        .bind(hash_access_token(&self.token_hmac_key, access_token))
+        .bind(&access_token_digest)
+        .bind(session.access_token_expires_at)
         .bind(claims)
         .bind(credential_type)
         .bind(issuer_did)
         .bind(algorithm)
+        .bind(&session.client_id)
         .execute(&self.pool)
         .await
         .map_err(repository_error)?;
-        let transaction = self
-            .transaction_by_id(&transaction_id)
-            .await?
-            .ok_or(CredentialIssuanceError::RepositoryUnavailable)?;
-        if transaction.organization_id != session.organization_id {
-            return Err(CredentialIssuanceError::RepositoryUnavailable);
-        }
-        Ok(transaction)
+        sqlx::query(TRANSACTION_BY_AUTHORIZATION_SESSION)
+            .bind(&transaction_id)
+            .bind(&session.organization_id)
+            .bind(&session.client_id)
+            .bind(access_token_digest)
+            .bind(session.access_token_expires_at)
+            .bind(&session.dpop_jkt)
+            .bind(credential_type)
+            .fetch_optional(&self.pool)
+            .await
+            .map_err(repository_error)?
+            .map(transaction_row)
+            .transpose()?
+            .ok_or(CredentialIssuanceError::RepositoryUnavailable)
     }
 
     async fn credential_by_transaction(
         &self,
         transaction_id: &str,
     ) -> Result<Option<ExistingCredential>, CredentialIssuanceError> {
-        sqlx::query(
-            "SELECT id, credential_jwt FROM issuance_service.issued_credentials
-             WHERE transaction_id = $1",
+        let row = sqlx::query(
+            "SELECT credential.id, credential.transaction_id, credential.credential_jwt,
+                    transaction.organization_id AS binding_organization_id,
+                    transaction.application_id AS binding_authoritative_application_id,
+                    binding.application_id AS notification_binding_application_id,
+                    binding.metadata AS notification_binding
+             FROM issuance_service.issued_credentials AS credential
+             JOIN issuance_service.issuance_transactions AS transaction
+               ON transaction.id = credential.transaction_id
+              AND transaction.organization_id = credential.organization_id
+             LEFT JOIN LATERAL (
+                 SELECT event.application_id, event.metadata
+                 FROM issuance_service.issuance_events AS event
+                 WHERE event.id = $2
+                   AND event.transaction_id = credential.transaction_id
+                   AND event.event_type = 'oid4vci_notification_binding'
+                 LIMIT 1
+             ) AS binding ON TRUE
+             WHERE credential.transaction_id = $1",
         )
         .bind(transaction_id)
+        .bind(notification_binding_event_id(transaction_id))
         .fetch_optional(&self.pool)
         .await
-        .map_err(repository_error)?
-        .map(|row| {
-            Ok(ExistingCredential {
-                id: get(&row, "id")?,
-                credential: get(&row, "credential_jwt")?,
-            })
-        })
-        .transpose()
+        .map_err(repository_error)?;
+        let Some(row) = row else {
+            return Ok(None);
+        };
+        let credential_id = get::<String>(&row, "id")?;
+        let transaction_id = get::<String>(&row, "transaction_id")?;
+        let organization_id = get::<String>(&row, "binding_organization_id")?;
+        let application_id = get::<Option<String>>(&row, "binding_authoritative_application_id")?;
+        let notification_id = match get::<Option<Value>>(&row, "notification_binding")? {
+            Some(binding) => {
+                let notification_id = binding
+                    .get("notification_id")
+                    .and_then(Value::as_str)
+                    .filter(|value| !value.trim().is_empty())
+                    .ok_or(CredentialIssuanceError::RepositoryUnavailable)?;
+                if binding.get("credential_id").and_then(Value::as_str)
+                    != Some(credential_id.as_str())
+                    || binding.get("organization_id").and_then(Value::as_str)
+                        != Some(organization_id.as_str())
+                    || get::<Option<String>>(&row, "notification_binding_application_id")?
+                        != application_id
+                {
+                    return Err(CredentialIssuanceError::RepositoryUnavailable);
+                }
+                notification_id.to_owned()
+            }
+            None => {
+                let notification_id = legacy_notification_id(&transaction_id);
+                insert_notification_binding_record(
+                    &self.pool,
+                    &transaction_id,
+                    &credential_id,
+                    &notification_id,
+                )
+                .await?
+            }
+        };
+        Ok(Some(ExistingCredential {
+            id: credential_id,
+            credential: get(&row, "credential_jwt")?,
+            notification_id,
+        }))
     }
 
     async fn transaction_by_id(
@@ -542,9 +684,16 @@ impl CredentialRepository for PostgresCredentialRepository {
         &self,
         transaction: &CredentialTransaction,
         credential: &IssuedCredential,
+        notification_id: &str,
     ) -> Result<(), CredentialIssuanceError> {
         let mut database = self.pool.begin().await.map_err(repository_error)?;
-        finalize_credential(&mut database, transaction, credential).await?;
+        finalize_credential(
+            &mut database,
+            transaction,
+            credential,
+            Some(notification_id),
+        )
+        .await?;
         database.commit().await.map_err(repository_error)
     }
 
@@ -964,7 +1113,9 @@ impl InitiationDidcommRepository for PostgresCredentialRepository {
         transaction: &CredentialTransaction,
         credential: &IssuedCredential,
     ) -> Result<(), CredentialIssuanceError> {
-        CredentialRepository::finalize(self, transaction, credential).await
+        let mut database = self.pool.begin().await.map_err(repository_error)?;
+        finalize_credential(&mut database, transaction, credential, None).await?;
+        database.commit().await.map_err(repository_error)
     }
 
     async fn stage_delivery(
@@ -974,7 +1125,7 @@ impl InitiationDidcommRepository for PostgresCredentialRepository {
         delivery: &StagedInitiationDidcommDelivery,
     ) -> Result<(), CredentialIssuanceError> {
         let mut database = self.pool.begin().await.map_err(repository_error)?;
-        finalize_credential(&mut database, transaction, credential).await?;
+        finalize_credential(&mut database, transaction, credential, None).await?;
         sqlx::query(
             "INSERT INTO issuance_service.credential_delivery_records
                  (id, credential_id, transaction_id, organization_id, delivery_target,
@@ -1391,10 +1542,12 @@ fn authorization_row(
         .ok_or(CredentialIssuanceError::RepositoryUnavailable)?;
     Ok(CredentialAuthorizationSession {
         id: get(&row, "id")?,
+        client_id: get(&row, "client_id")?,
         organization_id,
         issuer_state: get(&row, "issuer_state")?,
         credential_configuration_ids: json_vec(&row, "credential_configuration_ids")?,
         dpop_jkt: get(&row, "dpop_jkt")?,
+        access_token_expires_at: get(&row, "access_token_expires_at")?,
     })
 }
 
@@ -1417,6 +1570,7 @@ async fn finalize_credential(
     database: &mut Transaction<'_, Postgres>,
     transaction: &CredentialTransaction,
     credential: &IssuedCredential,
+    notification_id: Option<&str>,
 ) -> Result<(), CredentialIssuanceError> {
     validate_finalization_input(transaction, credential)?;
     let authoritative = sqlx::query(
@@ -1449,6 +1603,9 @@ async fn finalize_credential(
     )
     .await?;
     insert_credential(database, credential).await?;
+    if let Some(notification_id) = notification_id {
+        insert_notification_binding(database, transaction, credential, notification_id).await?;
+    }
     apply_canvas_projection(database, canvas.as_ref(), credential).await?;
     let finalized = sqlx::query(
         "UPDATE issuance_service.issuance_transactions
@@ -1526,6 +1683,163 @@ async fn insert_credential(
     .await
     .map_err(repository_error)?;
     Ok(())
+}
+
+async fn insert_notification_binding(
+    database: &mut Transaction<'_, Postgres>,
+    transaction: &CredentialTransaction,
+    credential: &IssuedCredential,
+    notification_id: &str,
+) -> Result<(), CredentialIssuanceError> {
+    if notification_id.trim().is_empty() {
+        return Err(CredentialIssuanceError::RepositoryUnavailable);
+    }
+    sqlx::query(INSERT_NOTIFICATION_BINDING)
+        .bind(notification_binding_event_id(&transaction.id))
+        .bind(&transaction.id)
+        .bind(&credential.id)
+        .bind(notification_id)
+        .execute(&mut **database)
+        .await
+        .map_err(repository_error)?;
+    let rows = sqlx::query(
+        "SELECT id, transaction_id, application_id, event_type, metadata
+         FROM issuance_service.issuance_events
+         WHERE id = $1
+            OR (event_type = 'oid4vci_notification_binding'
+                AND metadata ->> 'notification_id' = $2)
+         FOR UPDATE",
+    )
+    .bind(notification_binding_event_id(&transaction.id))
+    .bind(notification_id)
+    .fetch_all(&mut **database)
+    .await
+    .map_err(repository_error)?;
+    if rows.len() != 1 {
+        return Err(CredentialIssuanceError::RepositoryUnavailable);
+    }
+    validate_notification_binding(
+        &rows[0],
+        &transaction.id,
+        &credential.id,
+        &transaction.organization_id,
+        transaction.application_id.as_deref(),
+        notification_id,
+    )?;
+    Ok(())
+}
+
+const INSERT_NOTIFICATION_BINDING: &str = "INSERT INTO issuance_service.issuance_events
+         (id, transaction_id, application_id, event_type, metadata, created_at)
+     SELECT $1, transaction.id, transaction.application_id,
+            'oid4vci_notification_binding',
+            jsonb_build_object(
+                'notification_id', $4::text,
+                'credential_id', credential.id,
+                'organization_id', transaction.organization_id
+            ),
+            clock_timestamp()
+     FROM issuance_service.issuance_transactions AS transaction
+     JOIN issuance_service.issued_credentials AS credential
+       ON credential.transaction_id = transaction.id
+      AND credential.id = $3
+      AND credential.organization_id = transaction.organization_id
+     WHERE transaction.id = $2
+     ON CONFLICT DO NOTHING";
+
+async fn insert_notification_binding_record(
+    pool: &PgPool,
+    transaction_id: &str,
+    credential_id: &str,
+    notification_id: &str,
+) -> Result<String, CredentialIssuanceError> {
+    let event_id = notification_binding_event_id(transaction_id);
+    let authority = sqlx::query(
+        "SELECT transaction.organization_id, transaction.application_id
+         FROM issuance_service.issuance_transactions AS transaction
+         JOIN issuance_service.issued_credentials AS credential
+           ON credential.transaction_id = transaction.id
+          AND credential.id = $2
+          AND credential.organization_id = transaction.organization_id
+         WHERE transaction.id = $1",
+    )
+    .bind(transaction_id)
+    .bind(credential_id)
+    .fetch_optional(pool)
+    .await
+    .map_err(repository_error)?
+    .ok_or(CredentialIssuanceError::RepositoryUnavailable)?;
+    let organization_id = get::<String>(&authority, "organization_id")?;
+    let application_id = get::<Option<String>>(&authority, "application_id")?;
+    sqlx::query(INSERT_NOTIFICATION_BINDING)
+        .bind(&event_id)
+        .bind(transaction_id)
+        .bind(credential_id)
+        .bind(notification_id)
+        .execute(pool)
+        .await
+        .map_err(repository_error)?;
+    let rows = sqlx::query(
+        "SELECT id, transaction_id, application_id, event_type, metadata
+         FROM issuance_service.issuance_events
+         WHERE id = $1
+            OR (event_type = 'oid4vci_notification_binding'
+                AND metadata ->> 'notification_id' = $2)",
+    )
+    .bind(&event_id)
+    .bind(notification_id)
+    .fetch_all(pool)
+    .await
+    .map_err(repository_error)?;
+    if rows.len() != 1 {
+        return Err(CredentialIssuanceError::RepositoryUnavailable);
+    }
+    validate_notification_binding(
+        &rows[0],
+        transaction_id,
+        credential_id,
+        &organization_id,
+        application_id.as_deref(),
+        notification_id,
+    )?;
+    Ok(notification_id.to_owned())
+}
+
+fn validate_notification_binding(
+    row: &PgRow,
+    transaction_id: &str,
+    credential_id: &str,
+    organization_id: &str,
+    application_id: Option<&str>,
+    notification_id: &str,
+) -> Result<(), CredentialIssuanceError> {
+    let metadata = get::<Value>(row, "metadata")?;
+    if get::<Option<String>>(row, "transaction_id")?.as_deref() != Some(transaction_id)
+        || get::<String>(row, "event_type")? != "oid4vci_notification_binding"
+        || get::<Option<String>>(row, "application_id")?.as_deref() != application_id
+        || metadata.get("notification_id").and_then(Value::as_str) != Some(notification_id)
+        || metadata.get("credential_id").and_then(Value::as_str) != Some(credential_id)
+        || metadata.get("organization_id").and_then(Value::as_str) != Some(organization_id)
+    {
+        return Err(CredentialIssuanceError::RepositoryUnavailable);
+    }
+    Ok(())
+}
+
+fn notification_binding_event_id(transaction_id: &str) -> String {
+    Uuid::new_v5(
+        &Uuid::NAMESPACE_URL,
+        format!("marty:oid4vci:notification-binding:{transaction_id}").as_bytes(),
+    )
+    .to_string()
+}
+
+fn legacy_notification_id(transaction_id: &str) -> String {
+    Uuid::new_v5(
+        &Uuid::NAMESPACE_URL,
+        format!("marty:oid4vci:legacy-notification:{transaction_id}").as_bytes(),
+    )
+    .to_string()
 }
 
 fn metadata_required_text(metadata: &Value, name: &str) -> Result<String, CredentialIssuanceError> {

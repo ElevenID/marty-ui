@@ -12,6 +12,20 @@
     "commit": "5b210bde2bee4360a9504e4c360250b54f48f5ba",
     "sha256": "f5a06d71d85dfa1fd75bf7ff1cedd1d9478134697f290267e0b774c812749aa2"
   },
+  "oid4vci_authorization_behavior_contract": {
+    "path": "contracts/issuance-oid4vci-authorization.json",
+    "sha256": "c4b3643bc16c1f75133e69761d3ad5d226432e3a0e05a414a372f3fd3ff7f67f",
+    "source_repository": "ElevenID/marty-credentials",
+    "source_commit": "aaa6a9b8e31e62cd0ab087eef5fc1f4835048e26",
+    "source_tree": "819b7458a31c75d28043a4660643b029c5ec4567",
+    "intentional_native_corrections": [
+      "OID4VCI-AUTH-002:validate-and-bind-bearer",
+      "OID4VCI-ERROR-001:structured-sanitized-internal-errors",
+      "OID4VCI-NOTIFY-001:validate-notification-request",
+      "SECURITY-ACCESS-TOKEN-001:exact-1800-second-expiry",
+      "OID4VCI-REDIRECT-002:http-or-https-only-localhost"
+    ]
+  },
   "tenant_behavior_contract": {
     "repository": "ElevenID/marty-credentials",
     "path": "contracts/issuance-tenant-discovery.json",
@@ -114,6 +128,30 @@
     ]
   },
   "native_http": [
+    {
+      "method": "GET",
+      "path": "/v1/issuance/authorize",
+      "operation": "authorize",
+      "oid4vci_authorization_behavior_contract": true
+    },
+    {
+      "method": "POST",
+      "path": "/v1/issuance/par",
+      "operation": "pushed_authorization_request",
+      "oid4vci_authorization_behavior_contract": true
+    },
+    {
+      "method": "POST",
+      "path": "/v1/issuance/deferred-credential",
+      "operation": "deferred_credential",
+      "oid4vci_authorization_behavior_contract": true
+    },
+    {
+      "method": "POST",
+      "path": "/v1/issuance/notification",
+      "operation": "notification_endpoint",
+      "oid4vci_authorization_behavior_contract": true
+    },
     {
       "method": "POST",
       "path": "/v1/issued-credentials/{credential_id}/renew",
@@ -779,10 +817,10 @@
     {"method": "GET", "path": "/version", "owner": "mmf-runtime"}
   ],
   "remaining": {
-    "http": 24,
+    "http": 20,
     "grpc": 0,
     "runtime_modes": ["api", "canvas-sync-worker"],
-    "literal_environment_variables": 56,
+    "literal_environment_variables": 55,
     "dynamic_configuration_lookups": 20,
     "migration_revisions": 46,
     "migration_heads": 1
@@ -813,6 +851,7 @@
     "ISSUANCE_GRPC_PORT",
     "ISSUANCE_SERVICE_PORT",
     "ISSUANCE_API_KEY",
+    "ALLOWED_REDIRECT_URIS",
     "ISSUER_BASE_URL",
     "ISSUER_DISPLAY_NAME",
     "REVOCATION_PROFILE_SERVICE_URL",

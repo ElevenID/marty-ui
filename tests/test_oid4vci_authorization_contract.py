@@ -33,9 +33,13 @@ def test_frozen_oid4vci_authorization_source_and_reference_are_immutable() -> No
         "marty.issuance-oid4vci-authorization-python-reference/v1"
     )
     assert contract["source"]["protected_main_commit"] == (
-        "75e2394350185a1b7c0824b25b4016ca40b0174c"
+        "aaa6a9b8e31e62cd0ab087eef5fc1f4835048e26"
+    )
+    assert contract["source"]["protected_main_tree"] == (
+        "819b7458a31c75d28043a4660643b029c5ec4567"
     )
     assert reference["source"]["commit"] == contract["source"]["protected_main_commit"]
+    assert reference["source"]["tree"] == contract["source"]["protected_main_tree"]
     assert reference["source"]["repository"] == "ElevenID/marty-credentials"
     assert reference["source"]["files"] == {
         "services/issuance/domain/entities.py": (
@@ -111,14 +115,24 @@ def test_slice_has_all_seven_operations_and_real_authentication_boundaries() -> 
     assert contract["ownership"]["estimated_python_route_body_lines"] >= 490
 
 
-def test_slice_is_still_unimplemented_in_rust_when_the_freeze_lands() -> None:
+def test_public_protocol_is_native_while_management_remains_legacy() -> None:
     contract = _json(CONTRACT_PATH)
     coverage = _json(ROOT / "contracts" / "issuance-native-coverage.json")
     native = {route["operation"] for route in coverage["native_http"]}
     operations = {route["operation"] for route in contract["routes"]}
 
-    assert operations.isdisjoint(native)
-    assert coverage["remaining"]["http"] == 24
+    assert operations & native == {
+        "authorize",
+        "pushed_authorization_request",
+        "deferred_credential",
+        "notification_endpoint",
+    }
+    assert operations - native == {
+        "put_oid4vci_registered_client",
+        "revoke_transaction",
+        "list_credentials",
+    }
+    assert coverage["remaining"]["http"] == 20
 
     surface = _json(ROOT / "contracts" / "issuance-runtime-surface.json")
     frozen_surface = {
@@ -520,6 +534,8 @@ def test_every_intentional_correction_preserves_a_valid_capability() -> None:
         "OID4VCI-NOTIFY-001:validate-notification-request",
         "OID4VCI-MGMT-001:registered-client-tenant-binding",
         "OID4VCI-ERROR-001:structured-sanitized-internal-errors",
+        "SECURITY-ACCESS-TOKEN-001:exact-1800-second-expiry",
+        "OID4VCI-REDIRECT-002:http-or-https-only-localhost",
     }
     for correction in corrections.values():
         assert correction["legacy"]
@@ -536,6 +552,22 @@ def test_every_intentional_correction_preserves_a_valid_capability() -> None:
         "body": {
             "error": "invalid_token",
             "error_description": "Client authentication failed",
+        },
+    }
+
+    expiry_error = corrections["SECURITY-ACCESS-TOKEN-001:exact-1800-second-expiry"][
+        "required_errors"
+    ]["expired_token"]
+    assert expiry_error == bearer_error
+
+    redirect_error = corrections["OID4VCI-REDIRECT-002:http-or-https-only-localhost"][
+        "required_errors"
+    ]["unsafe_redirect_uri"]
+    assert redirect_error == {
+        "status_code": 400,
+        "body": {
+            "error": "invalid_request",
+            "error_description": "redirect_uri must use HTTPS",
         },
     }
     notification = contract["notification"]["native_correction"]
@@ -566,7 +598,8 @@ def test_capture_script_is_replayable_but_not_a_runtime_dependency() -> None:
     script = (
         ROOT / "scripts" / "capture_oid4vci_authorization_reference.py"
     ).read_text(encoding="utf-8")
-    assert 'SOURCE_COMMIT = "75e2394350185a1b7c0824b25b4016ca40b0174c"' in script
+    assert 'SOURCE_COMMIT = "aaa6a9b8e31e62cd0ab087eef5fc1f4835048e26"' in script
+    assert 'SOURCE_TREE = "819b7458a31c75d28043a4660643b029c5ec4567"' in script
     assert "ASGITransport(app=app, raise_app_exceptions=False)" in script
     assert "--verify" in script
     assert (

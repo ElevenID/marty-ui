@@ -743,6 +743,17 @@ jobs:
             echo "Unable to locate the compiled Issuance credential PostgreSQL contract executable." >&2
             exit 1
           fi
+          issuance_oid4vci_migration_executable="$(jq -r '
+            select(.reason == "compiler-artifact")
+            | select(.target.name == "oid4vci_migration_postgres_contract")
+            | select(.package_id | contains("marty-issuance-service"))
+            | select(.executable != null)
+            | .executable
+          ' "$RUNNER_TEMP/rust-test-artifacts.json" | tail -n 1)"
+          if [[ -z "$issuance_oid4vci_migration_executable" || ! -x "$issuance_oid4vci_migration_executable" ]]; then
+            echo "Unable to locate the compiled Issuance OID4VCI migration PostgreSQL contract executable." >&2
+            exit 1
+          fi
           application_template_executable="$(jq -r '
             select(.reason == "compiler-artifact")
             | select(.target.name == "application_template_postgres_contract")

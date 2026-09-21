@@ -3,7 +3,6 @@ use std::{collections::BTreeSet, sync::Arc};
 use async_trait::async_trait;
 use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine};
 use chrono::{DateTime, Duration, Utc};
-use mmf_security::constant_time_secret_eq;
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 use sha2::{Digest, Sha256};
@@ -11,6 +10,7 @@ use thiserror::Error;
 use uuid::Uuid;
 
 use crate::{
+    dpop::{verify_bound_dpop, BoundDpopError},
     proof_nonce::{ProofNonceError, ProofNonceRepository},
     token_exchange::DpopProofVerifier,
 };
@@ -225,10 +225,19 @@ impl std::fmt::Debug for CredentialTransaction {
 #[derive(Clone, Eq, PartialEq)]
 pub struct CredentialAuthorizationSession {
     pub id: String,
+    pub client_id: String,
     pub organization_id: String,
     pub issuer_state: Option<String>,
     pub credential_configuration_ids: Vec<String>,
     pub dpop_jkt: Option<String>,
+    pub access_token_expires_at: DateTime<Utc>,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub enum CredentialAccessTokenGrant {
+    Transaction(Box<CredentialTransaction>),
+    Authorization(CredentialAuthorizationSession),
+    Missing,
 }
 
 impl std::fmt::Debug for CredentialAuthorizationSession {
@@ -244,6 +253,7 @@ impl std::fmt::Debug for CredentialAuthorizationSession {
 pub struct ExistingCredential {
     pub id: String,
     pub credential: String,
+    pub notification_id: String,
 }
 
 impl std::fmt::Debug for ExistingCredential {
@@ -393,6 +403,11 @@ impl std::fmt::Debug for AllocatedCredentialStatus {
 
 #[async_trait]
 pub trait CredentialRepository: Send + Sync {
+    async fn resolve_access_token_grant(
+        &self,
+        access_token: &str,
+    ) -> Result<CredentialAccessTokenGrant, CredentialIssuanceError>;
+
     async fn transaction_by_access_token(
         &self,
         access_token: &str,
@@ -429,6 +444,7 @@ pub trait CredentialRepository: Send + Sync {
         &self,
         transaction: &CredentialTransaction,
         credential: &IssuedCredential,
+        notification_id: &str,
     ) -> Result<(), CredentialIssuanceError>;
 
     async fn mark_failed_if_signing(
@@ -571,7 +587,12 @@ impl CredentialIssuanceService {
     ) -> Result<CredentialIssuanceOutcome, CredentialIssuanceError> {
         let access_token = bearer_token(authorization)?;
         let (mut transaction, authorization_session) = self.transaction(access_token).await?;
-        self.verify_dpop(&transaction, dpop_proof, endpoint_url)?;
+        self.verify_dpop(
+            &transaction,
+            authorization_session.as_ref(),
+            dpop_proof,
+            endpoint_url,
+        )?;
         validate_selector(request)?;
         if transaction.status == CredentialTransactionStatus::Issued {
             return self.existing_response(request, &transaction).await;
@@ -634,52 +655,54 @@ impl CredentialIssuanceService {
         ),
         CredentialIssuanceError,
     > {
-        if let Some(transaction) = self
+        match self
             .ports
             .repository
-            .transaction_by_access_token(access_token)
+            .resolve_access_token_grant(access_token)
             .await?
         {
-            return Ok((transaction, None));
+            CredentialAccessTokenGrant::Transaction(transaction) => Ok((*transaction, None)),
+            CredentialAccessTokenGrant::Authorization(session) => {
+                let transaction = self
+                    .ports
+                    .repository
+                    .ensure_authorization_transaction(&session, access_token)
+                    .await?;
+                Ok((transaction, Some(session)))
+            }
+            CredentialAccessTokenGrant::Missing => Err(CredentialIssuanceError::InvalidAccessToken),
         }
-        let session = self
-            .ports
-            .repository
-            .authorization_by_access_token(access_token)
-            .await?
-            .ok_or(CredentialIssuanceError::InvalidAccessToken)?;
-        let transaction = self
-            .ports
-            .repository
-            .ensure_authorization_transaction(&session, access_token)
-            .await?;
-        Ok((transaction, Some(session)))
     }
 
     fn verify_dpop(
         &self,
         transaction: &CredentialTransaction,
+        session: Option<&CredentialAuthorizationSession>,
         dpop_proof: Option<&str>,
         endpoint_url: &str,
     ) -> Result<(), CredentialIssuanceError> {
-        let Some(expected) = transaction
+        let transaction_jkt = transaction
             .claims
             .get("_dpop_jkt")
             .and_then(Value::as_str)
-            .filter(|value| !value.is_empty())
-        else {
-            return Ok(());
-        };
-        let proof = dpop_proof.ok_or(CredentialIssuanceError::DpopRequired)?;
-        let actual = self
-            .ports
-            .dpop_verifier
-            .verify(proof, "POST", endpoint_url)
-            .map_err(|_| CredentialIssuanceError::InvalidDpopProof)?;
-        if !constant_time_secret_eq(expected.as_bytes(), actual.as_bytes()) {
+            .filter(|value| !value.is_empty());
+        let session_jkt = session.and_then(|session| session.dpop_jkt.as_deref());
+        if transaction_jkt.is_some() && transaction_jkt != session_jkt && session.is_some() {
             return Err(CredentialIssuanceError::DpopMismatch);
         }
-        Ok(())
+        let expected = session_jkt.or(transaction_jkt);
+        match verify_bound_dpop(
+            self.ports.dpop_verifier.as_ref(),
+            expected,
+            dpop_proof,
+            "POST",
+            endpoint_url,
+        ) {
+            Ok(()) => Ok(()),
+            Err(BoundDpopError::Required) => Err(CredentialIssuanceError::DpopRequired),
+            Err(BoundDpopError::Invalid) => Err(CredentialIssuanceError::InvalidDpopProof),
+            Err(BoundDpopError::Mismatch) => Err(CredentialIssuanceError::DpopMismatch),
+        }
     }
 
     async fn existing_response(
@@ -698,7 +721,7 @@ impl CredentialIssuanceService {
             &existing.credential,
             policy.kind,
             &policy.response_format,
-            self.ports.notification_ids.generate(),
+            existing.notification_id,
         )?;
         Ok(CredentialIssuanceOutcome {
             response,
@@ -763,7 +786,7 @@ impl CredentialIssuanceService {
                     &existing.credential,
                     policy.kind,
                     &policy.response_format,
-                    self.ports.notification_ids.generate(),
+                    existing.notification_id,
                 )?;
                 return Ok(CredentialIssuanceOutcome {
                     response,
@@ -796,7 +819,11 @@ impl CredentialIssuanceService {
             proof,
         )
         .await?;
-        self.ports.repository.finalize(transaction, &issued).await?;
+        let notification_id = self.ports.notification_ids.generate();
+        self.ports
+            .repository
+            .finalize(transaction, &issued, &notification_id)
+            .await?;
         self.ports
             .lifecycle
             .after_issued(transaction, &issued, &policy.response_format)
@@ -805,7 +832,7 @@ impl CredentialIssuanceService {
             &issued.credential,
             policy.kind,
             &policy.response_format,
-            self.ports.notification_ids.generate(),
+            notification_id,
         )?;
         Ok(CredentialIssuanceOutcome {
             response,
@@ -1737,14 +1764,17 @@ mod tests {
         ];
         let authorization = CredentialAuthorizationSession {
             id: PERSISTENCE_CANARIES[0].to_owned(),
+            client_id: "client-diagnostic".to_owned(),
             organization_id: PERSISTENCE_CANARIES[1].to_owned(),
             issuer_state: Some(PERSISTENCE_CANARIES[2].to_owned()),
             credential_configuration_ids: vec![PERSISTENCE_CANARIES[3].to_owned()],
             dpop_jkt: Some(PERSISTENCE_CANARIES[4].to_owned()),
+            access_token_expires_at: chrono::Utc::now(),
         };
         let existing = ExistingCredential {
             id: PERSISTENCE_CANARIES[5].to_owned(),
             credential: PERSISTENCE_CANARIES[6].to_owned(),
+            notification_id: TRANSPORT_CANARIES[7].to_owned(),
         };
         let issued_at = chrono::DateTime::parse_from_rfc3339(PERSISTENCE_CANARIES[21])
             .expect("issued-at canary")
