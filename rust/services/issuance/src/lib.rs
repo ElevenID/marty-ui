@@ -122,6 +122,8 @@ mod management_http;
 pub mod management_security;
 mod network_policy;
 pub mod proof_nonce;
+pub mod resource_owner;
+pub mod resource_owner_postgres;
 pub mod runtime;
 pub mod signing_policy;
 pub mod tenant_discovery;

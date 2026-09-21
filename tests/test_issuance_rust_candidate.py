@@ -97,6 +97,10 @@ def test_frozen_surface_provenance_and_coverage_are_complete() -> None:
         ROOT / "contracts/issuance-internal-applications.json"
     ).read_bytes()
     internal_applications = json.loads(internal_application_bytes)
+    resource_owner_bytes = (
+        ROOT / "contracts/issuance-resource-owner-lookups.json"
+    ).read_bytes()
+    resource_owners = json.loads(resource_owner_bytes)
     assert surface["schema"] == "marty.issuance-runtime-surface/v1"
     assert surface["http"]["route_count"] == len(surface["http"]["routes"]) == 131
     assert surface["grpc"]["method_count"] == len(surface["grpc"]["methods"]) == 12
@@ -273,6 +277,53 @@ def test_frozen_surface_provenance_and_coverage_are_complete() -> None:
     assert coverage["internal_application_behavior_contract"]["commit"] == (
         "e40c1ce6e807714278ef362d3ed24909dd8686fa"
     )
+    assert (
+        hashlib.sha256(resource_owner_bytes.replace(b"\r\n", b"\n")).hexdigest()
+        == coverage["resource_owner_behavior_contract"]["sha256"]
+    )
+    assert coverage["resource_owner_behavior_contract"] == {
+        "path": "contracts/issuance-resource-owner-lookups.json",
+        "sha256": "59b3f21107824f85136768545bca8f4a6374d3a4708a0408b1a7769c61c00a06",
+        "source_repository": "ElevenID/marty-credentials",
+        "source_path": "services/issuance/infrastructure/api/routes.py",
+        "source_commit": "15af5232df376bb9596b5aed3703110bf890fce5",
+    }
+    assert resource_owners["schema"] == "marty.issuance-resource-owner-lookups/v1"
+    assert resource_owners["authentication"]["trusted_tenant_header"] == "ignored"
+    assert resource_owners["persistence"] == {
+        "read_only": True,
+        "projection": ["organization_id"],
+        "id_scope": "unscoped",
+    }
+    assert resource_owners["intentional_native_corrections"] == [
+        {
+            "id": "RESOURCE-OWNER-001:sanitized-repository-failure",
+            "legacy": {
+                "status_code": 500,
+                "content_type": "text/plain",
+                "body": "Internal Server Error",
+            },
+            "native": {
+                "status_code": 500,
+                "content_type": "application/json",
+                "body": {
+                    "detail": "Issuance transaction data is temporarily unavailable"
+                },
+            },
+            "rationale": (
+                "Reuse the already-native issuance-transaction owner failure boundary "
+                "so all three owner kinds expose one sanitized, DRY internal error "
+                "without a repository cause."
+            ),
+            "gateway_invariant": {
+                "status_code": 500,
+                "content_type": "application/json",
+                "body": {"detail": "Authorization service unavailable"},
+                "upstream_body_disclosed": False,
+                "proxy_continues": False,
+            },
+        }
+    ]
     assert internal_applications["schema"] == (
         "marty.issuance-internal-applications/v1"
     )
@@ -359,6 +410,9 @@ def test_frozen_surface_provenance_and_coverage_are_complete() -> None:
     internal_application_operations = {
         route["operation"] for route in internal_applications["surface"]["routes"]
     }
+    resource_owner_operations = {
+        route["operation"]: route for route in resource_owners["operations"]
+    }
     canvas_operations_cases = {
         "enqueue_canvas_application_sync_route": "enqueue",
         "list_canvas_sync_jobs_route": "jobs",
@@ -388,7 +442,7 @@ def test_frozen_surface_provenance_and_coverage_are_complete() -> None:
         hashlib.sha256(renewal_bytes).hexdigest()
         == coverage["renewal_behavior_contract"]["sha256"]
     )
-    assert len(coverage["native_http"]) == 100
+    assert len(coverage["native_http"]) == 102
     assert set(native) == (
         set(discovery_cases)
         | set(tenant_cases)
@@ -397,6 +451,7 @@ def test_frozen_surface_provenance_and_coverage_are_complete() -> None:
         | canvas_management_operations
         | application_template_operations
         | internal_application_operations
+        | set(resource_owner_operations)
         | set(canvas_operations_cases)
         | {
             "didcomm_deliver",
@@ -605,6 +660,15 @@ def test_frozen_surface_provenance_and_coverage_are_complete() -> None:
                 for route in internal_applications["surface"]["routes"]
             )
             continue
+        if operation in resource_owner_operations:
+            frozen = resource_owner_operations[operation]
+            assert coverage_entry == {
+                "method": frozen["method"],
+                "path": frozen["path"],
+                "operation": frozen["operation"],
+                "resource_owner_behavior_contract": True,
+            }
+            continue
         if operation in tenant_cases:
             assert coverage_entry["tenant_behavior_case"] == operation
             assert coverage_entry["method"] == "GET"
@@ -641,7 +705,7 @@ def test_frozen_surface_provenance_and_coverage_are_complete() -> None:
         )
         assert discovery_cases[operation]["path"] == expected_case_path
     assert coverage["remaining"] == {
-        "http": 31,
+        "http": 29,
         "grpc": 0,
         "runtime_modes": ["api", "canvas-sync-worker"],
         "literal_environment_variables": 56,

@@ -42,6 +42,7 @@ pub(super) const SIGNING_KEY: &str = "synthetic-renewal-fresh-main-signing-key";
 pub(super) const FORMAT: &str = "w3c_vcdm_v2_sd_jwt";
 pub(super) const CLIENT_KEY: &str = "synthetic-base-gateway-client-key";
 pub(super) const CANVAS_CLIENT_KEY: &str = "synthetic-base-canvas-client-key";
+pub(super) const FOREIGN_CLIENT_KEY: &str = "synthetic-base-foreign-client-key";
 
 #[derive(Clone)]
 pub(super) struct PeerState {
@@ -133,15 +134,21 @@ async fn peer(State(state): State<PeerState>, request: Request<Body>) -> Respons
             let request: organization::ValidateApiKeyRequest = decode_request(&bytes);
             assert!(matches!(
                 request.api_key.as_str(),
-                CLIENT_KEY | CANVAS_CLIENT_KEY | "synthetic-invalid-client-key"
+                CLIENT_KEY
+                    | CANVAS_CLIENT_KEY
+                    | FOREIGN_CLIENT_KEY
+                    | "synthetic-invalid-client-key"
             ));
             grpc_response(organization::ValidateApiKeyResponse {
-                valid: matches!(request.api_key.as_str(), CLIENT_KEY | CANVAS_CLIENT_KEY),
+                valid: matches!(
+                    request.api_key.as_str(),
+                    CLIENT_KEY | CANVAS_CLIENT_KEY | FOREIGN_CLIENT_KEY
+                ),
                 api_key_id: "synthetic-base-client".into(),
-                organization_id: if request.api_key == CANVAS_CLIENT_KEY {
-                    "org-review"
-                } else {
-                    ORGANIZATION
+                organization_id: match request.api_key.as_str() {
+                    CANVAS_CLIENT_KEY => "org-review",
+                    FOREIGN_CLIENT_KEY => "foreign-organization",
+                    _ => ORGANIZATION,
                 }
                 .into(),
                 key_prefix: "synthetic".into(),

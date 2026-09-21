@@ -1,5 +1,5 @@
 //! Executable gateway boundary inside the outer fixture's unpublished namespace.
-//! Legacy owner reads are deliberately available; selected legacy POSTs are traps.
+//! Native owner reads are exercised behaviorally; selected legacy writes remain traps.
 use std::{
     process::Child,
     sync::{Arc, Mutex},
@@ -17,7 +17,7 @@ use serde_json::{json, Value};
 
 use super::{
     didcomm_gateway_replay::OwnedHttp,
-    issuance_named_peers::{API_KEY, CLIENT_KEY, ORGANIZATION, TOKEN},
+    issuance_named_peers::{API_KEY, CLIENT_KEY, FOREIGN_CLIENT_KEY, ORGANIZATION},
     issuance_process::{bounded_http_client, wait_for_health_with_client},
     resolved_runtime::ResolvedRuntime,
 };
@@ -26,7 +26,6 @@ pub(super) const PUBLIC_INITIATION_PATH: &str = "/v1/issuance";
 
 #[derive(Clone)]
 struct LegacyState {
-    pool: sqlx::PgPool,
     attempts: Arc<Mutex<Vec<(String, String)>>>,
     accepted: Arc<Mutex<Vec<(String, String)>>>,
 }
@@ -49,31 +48,6 @@ async fn legacy(
         .push((method.clone(), path.clone()));
     let response = if method == "GET" && matches!(path.as_str(), "/health" | "/health/ready") {
         Json(json!({"status":"healthy"})).into_response()
-    } else if method == "GET"
-        && path.starts_with("/internal/v1/resource-owners/issued-credentials/")
-    {
-        assert_eq!(request.headers()["x-api-key"], API_KEY);
-        assert_eq!(request.headers()["x-service-token"], TOKEN);
-        assert_eq!(request.headers()["x-api-key-id"], "synthetic-base-client");
-        let id = path
-            .strip_prefix("/internal/v1/resource-owners/issued-credentials/")
-            .unwrap();
-        assert!(!id.is_empty() && !id.contains('/'));
-        let organization: Option<String> = sqlx::query_scalar(
-            "SELECT organization_id FROM issuance_service.issued_credentials WHERE id=$1",
-        )
-        .bind(id)
-        .fetch_optional(&state.pool)
-        .await
-        .unwrap();
-        match organization {
-            Some(organization) => Json(json!({"organization_id":organization})).into_response(),
-            None => (
-                StatusCode::NOT_FOUND,
-                Json(json!({"detail":"Resource not found"})),
-            )
-                .into_response(),
-        }
     } else {
         // A positive unselected GET demonstrates the legacy endpoint exists;
         // every other path/method is an observed forbidden fallback.
@@ -95,9 +69,8 @@ fn legacy_control_body() -> Value {
 }
 
 impl LegacyFixture {
-    pub(super) async fn start(pool: sqlx::PgPool) -> Self {
+    pub(super) async fn start() -> Self {
         let state = LegacyState {
-            pool,
             attempts: Arc::default(),
             accepted: Arc::default(),
         };
@@ -114,16 +87,6 @@ impl LegacyFixture {
         let attempts = self.state.attempts.lock().unwrap();
         assert_eq!(*attempts, *self.state.accepted.lock().unwrap());
         assert!(attempts.iter().all(|(method, _)| method == "GET"));
-    }
-
-    pub(super) fn owner_reads(&self) -> usize {
-        self.state
-            .attempts
-            .lock()
-            .unwrap()
-            .iter()
-            .filter(|(_, path)| path.starts_with("/internal/v1/resource-owners/"))
-            .count()
     }
 
     pub(super) async fn close(self) {
@@ -212,6 +175,24 @@ impl GatewayFixture {
         );
     }
 
+    pub(super) async fn deny_foreign_owner(&self, source_id: &str) {
+        let response = self
+            .client
+            .post(format!(
+                "{}/v1/issued-credentials/{source_id}/renew",
+                self.origin
+            ))
+            .header("x-api-key", FOREIGN_CLIENT_KEY)
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::FORBIDDEN);
+        assert_eq!(
+            response.json::<Value>().await.unwrap(),
+            json!({"detail":"API key does not have access to this organization"})
+        );
+    }
+
     pub(super) async fn legacy_control(&self) {
         let response = self
             .client
@@ -230,8 +211,7 @@ impl GatewayFixture {
         );
     }
 
-    pub(super) async fn native_unavailable(&self, source_id: &str, legacy: &LegacyFixture) {
-        let owners = legacy.owner_reads();
+    pub(super) async fn native_owner_unavailable(&self, source_id: &str, legacy: &LegacyFixture) {
         let response = self
             .client
             .post(format!(
@@ -242,14 +222,24 @@ impl GatewayFixture {
             .send()
             .await
             .unwrap();
-        assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
-        let body: Value = response.json().await.unwrap();
-        assert!(uuid::Uuid::parse_str(body["message_id"].as_str().unwrap()).is_ok());
+        let contract: Value = serde_json::from_str(include_str!(
+            "../../../../../contracts/issuance-resource-owner-lookups.json"
+        ))
+        .expect("resource-owner contract");
+        let invariant = &contract["intentional_native_corrections"][0]["gateway_invariant"];
         assert_eq!(
-            body,
-            json!({"error":"service_unavailable","error_description":"Service unavailable","message_id":body["message_id"]})
+            u64::from(response.status().as_u16()),
+            invariant["status_code"].as_u64().expect("status")
         );
-        assert_eq!(legacy.owner_reads(), owners + 1);
+        assert_eq!(
+            response
+                .headers()
+                .get("content-type")
+                .and_then(|value| value.to_str().ok()),
+            invariant["content_type"].as_str()
+        );
+        let body: Value = response.json().await.unwrap();
+        assert_eq!(body, invariant["body"]);
         legacy.assert_no_fallback();
     }
 

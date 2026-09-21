@@ -34,6 +34,8 @@ const APPLICATION_TEMPLATES: &[u8] =
     include_bytes!("../../../../contracts/issuance-application-templates.json");
 const INTERNAL_APPLICATIONS: &[u8] =
     include_bytes!("../../../../contracts/issuance-internal-applications.json");
+const RESOURCE_OWNERS: &[u8] =
+    include_bytes!("../../../../contracts/issuance-resource-owner-lookups.json");
 const DIDCOMM: &[u8] =
     include_bytes!("../../../../contracts/gateway-didcomm-delivery-behavior.json");
 const RENEWAL_REFERENCE: &[u8] =
@@ -64,6 +66,7 @@ struct Coverage {
     initiation_behavior_contract: Upstream,
     application_template_behavior_contract: Upstream,
     internal_application_behavior_contract: Upstream,
+    resource_owner_behavior_contract: ResourceOwnerBehaviorContract,
     renewal_behavior_contract: RenewalBehaviorContract,
     native_http: Vec<HttpOperation>,
     native_grpc: Vec<String>,
@@ -86,6 +89,15 @@ struct RenewalBehaviorContract {
     path: String,
     sha256: String,
     intentional_native_corrections: Vec<String>,
+}
+
+#[derive(Deserialize)]
+struct ResourceOwnerBehaviorContract {
+    path: String,
+    sha256: String,
+    source_repository: String,
+    source_path: String,
+    source_commit: String,
 }
 
 #[derive(Deserialize)]
@@ -126,6 +138,8 @@ struct HttpOperation {
     application_template_behavior_case: Option<String>,
     #[serde(default)]
     internal_application_behavior_case: Option<String>,
+    #[serde(default)]
+    resource_owner_behavior_contract: bool,
     #[serde(default)]
     canvas_operations_behavior_case: Option<CanvasOperationsCase>,
 }
@@ -215,6 +229,7 @@ impl HttpOperation {
             + usize::from(self.canvas_management_behavior_case.is_some())
             + usize::from(self.application_template_behavior_case.is_some())
             + usize::from(self.internal_application_behavior_case.is_some())
+            + usize::from(self.resource_owner_behavior_contract)
             + usize::from(self.canvas_operations_behavior_case.is_some())
     }
 }
@@ -387,6 +402,8 @@ pub fn validate_embedded_contract() -> Result<CoverageSummary, MmfError> {
         .map_err(|error| contract_error("invalid application template contract", error))?;
     let internal_applications: Value = serde_json::from_slice(INTERNAL_APPLICATIONS)
         .map_err(|error| contract_error("invalid internal application contract", error))?;
+    let resource_owners: Value = serde_json::from_slice(RESOURCE_OWNERS)
+        .map_err(|error| contract_error("invalid resource-owner contract", error))?;
     require(
         surface["schema"] == "marty.issuance-runtime-surface/v1",
         "unexpected issuance surface schema",
@@ -993,6 +1010,65 @@ pub fn validate_embedded_contract() -> Result<CoverageSummary, MmfError> {
         actual_internal_applications == coverage.internal_application_behavior_contract.sha256,
         "internal application hash does not match provenance",
     )?;
+    let canonical_resource_owners = canonical_lf(RESOURCE_OWNERS);
+    let actual_resource_owners = format!("{:x}", Sha256::digest(&canonical_resource_owners));
+    require(
+        actual_resource_owners == coverage.resource_owner_behavior_contract.sha256
+            && coverage.resource_owner_behavior_contract.path
+                == "contracts/issuance-resource-owner-lookups.json"
+            && coverage.resource_owner_behavior_contract.source_repository
+                == "ElevenID/marty-credentials"
+            && coverage.resource_owner_behavior_contract.source_path
+                == "services/issuance/infrastructure/api/routes.py"
+            && coverage.resource_owner_behavior_contract.source_commit
+                == "15af5232df376bb9596b5aed3703110bf890fce5"
+            && resource_owners["schema"] == "marty.issuance-resource-owner-lookups/v1"
+            && resource_owners["authentication"]["order"]
+                == serde_json::json!([
+                    "authenticate",
+                    "unscoped_lookup",
+                    "not_found",
+                    "project_owner"
+                ])
+            && resource_owners["authentication"]["trusted_tenant_header"] == "ignored"
+            && resource_owners["authentication"]["header"] == "X-API-Key"
+            && resource_owners["authentication"]["server_setting"] == "ISSUANCE_API_KEY"
+            && resource_owners["persistence"]
+                == serde_json::json!({
+                    "read_only": true,
+                    "projection": ["organization_id"],
+                    "id_scope": "unscoped"
+                })
+            && resource_owners["responses"]
+                == serde_json::json!({
+                    "found": {"status_code": 200, "body": {"organization_id": "org-owner"}},
+                    "not_found": {"status_code": 404, "body": {"detail": "Resource not found"}},
+                    "api_key_unconfigured": {"status_code": 503, "body": {"detail": "ISSUANCE_API_KEY not configured on server"}},
+                    "api_key_missing": {"status_code": 401, "body": {"detail": "X-API-Key header is missing"}},
+                    "api_key_invalid": {"status_code": 401, "body": {"detail": "Invalid API Key"}},
+                    "repository_unavailable": {"status_code": 500, "body": {"detail": "Issuance transaction data is temporarily unavailable"}, "cause_disclosed": false}
+                })
+            && resource_owners["intentional_native_corrections"]
+                == serde_json::json!([{
+                    "id": "RESOURCE-OWNER-001:sanitized-repository-failure",
+                    "legacy": {"status_code": 500, "content_type": "text/plain", "body": "Internal Server Error"},
+                    "native": {"status_code": 500, "content_type": "application/json", "body": {"detail": "Issuance transaction data is temporarily unavailable"}},
+                    "rationale": "Reuse the already-native issuance-transaction owner failure boundary so all three owner kinds expose one sanitized, DRY internal error without a repository cause.",
+                    "gateway_invariant": {"status_code": 500, "content_type": "application/json", "body": {"detail": "Authorization service unavailable"}, "upstream_body_disclosed": false, "proxy_continues": false}
+                }])
+            && resource_owners["gateway"]
+                == serde_json::json!({
+                    "service": "issuance-native",
+                    "api_key_source": "ISSUANCE_API_KEY",
+                    "foreign_owner_result": 403,
+                    "missing_owner_result": "continue ordinary authorization and upstream 404 semantics",
+                    "provider_failure_result": {"status_code": 500, "detail": "Authorization service unavailable"}
+                })
+            && resource_owners["operations"]
+                .as_array()
+                .is_some_and(|operations| operations.len() == 3),
+        "resource-owner contract or provenance is invalid",
+    )?;
 
     let routes = surface["http"]["routes"]
         .as_array()
@@ -1064,6 +1140,7 @@ pub fn validate_embedded_contract() -> Result<CoverageSummary, MmfError> {
     let mut native_canvas_management_cases = BTreeSet::new();
     let mut native_application_template_cases = BTreeSet::new();
     let mut native_internal_application_cases = BTreeSet::new();
+    let mut native_resource_owner_operations = BTreeSet::new();
     // Freeze the already-qualified source contract; changing its historical
     // limits/status text is not necessary to select the eight exact operations.
     require(
@@ -1209,6 +1286,20 @@ pub fn validate_embedded_contract() -> Result<CoverageSummary, MmfError> {
                     && proof_nonce.success["status_code"] == 200
                     && proof_nonce.failures.len() == 2,
                 "native issuance operation diverges from its proof nonce contract",
+            )?;
+        } else if operation.resource_owner_behavior_contract {
+            let frozen = resource_owners["operations"]
+                .as_array()
+                .ok_or_else(|| invalid("resource-owner operations are missing"))?;
+            require(
+                operation.response.is_none()
+                    && frozen.iter().any(|candidate| {
+                        candidate["method"] == operation.method
+                            && candidate["path"] == operation.path
+                            && candidate["operation"] == operation.operation
+                    })
+                    && native_resource_owner_operations.insert(operation.operation.as_str()),
+                "native resource-owner operation diverges from its behavior contract",
             )?;
         } else if operation.renewal_behavior_contract {
             require(
@@ -1457,10 +1548,21 @@ pub fn validate_embedded_contract() -> Result<CoverageSummary, MmfError> {
         native_internal_application_cases == frozen_internal_application_cases,
         "native internal application behavior coverage is incomplete",
     )?;
+    let frozen_resource_owner_operations = resource_owners["operations"]
+        .as_array()
+        .ok_or_else(|| invalid("resource-owner operations are missing"))?
+        .iter()
+        .filter_map(|operation| operation["operation"].as_str())
+        .collect::<BTreeSet<_>>();
+    require(
+        native_resource_owner_operations == frozen_resource_owner_operations,
+        "native resource-owner behavior coverage is incomplete",
+    )?;
     let frozen_transaction_read_cases = transaction_reads
         .cases
         .iter()
         .map(|case| case.operation.as_str())
+        .filter(|operation| *operation != "get_issuance_transaction_owner")
         .collect::<BTreeSet<_>>();
     require(
         native_transaction_read_cases == frozen_transaction_read_cases,
@@ -1852,6 +1954,7 @@ mod tests {
         Coverage, HttpOperation, APPLICATION_TEMPLATES, CANVAS_LTI, CANVAS_MANAGEMENT,
         CANVAS_OPERATIONS, COVERAGE, CREDENTIAL_ADMISSION, CREDENTIAL_LIFECYCLE,
         CREDENTIAL_SIGNING, DIDCOMM, INITIATION, INTERNAL_APPLICATIONS, RENEWAL_REFERENCE,
+        RESOURCE_OWNERS,
     };
 
     #[test]
@@ -2111,6 +2214,51 @@ mod tests {
     }
 
     #[test]
+    fn resource_owner_selectors_are_closed_exact_and_exclusive() {
+        let coverage: Value = serde_json::from_str(COVERAGE).unwrap();
+        let contract: Value = serde_json::from_slice(RESOURCE_OWNERS).unwrap();
+        let selected = coverage["native_http"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter(|operation| {
+                operation.get("resource_owner_behavior_contract") == Some(&Value::Bool(true))
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(selected.len(), 3);
+        for original in selected {
+            let parsed: HttpOperation = serde_json::from_value(original.clone()).unwrap();
+            assert_eq!(parsed.behavior_selector_count(), 1);
+            assert!(contract["operations"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|frozen| {
+                    frozen["method"] == parsed.method
+                        && frozen["path"] == parsed.path
+                        && frozen["operation"] == parsed.operation
+                }));
+
+            let mut missing = original.clone();
+            missing
+                .as_object_mut()
+                .unwrap()
+                .remove("resource_owner_behavior_contract");
+            let missing: HttpOperation = serde_json::from_value(missing).unwrap();
+            assert_eq!(missing.behavior_selector_count(), 0);
+
+            let mut multiple = original.clone();
+            multiple["renewal_behavior_contract"] = Value::Bool(true);
+            let multiple: HttpOperation = serde_json::from_value(multiple).unwrap();
+            assert_eq!(multiple.behavior_selector_count(), 2);
+
+            let mut unknown = original.clone();
+            unknown["future_resource_owner_selector"] = Value::Bool(true);
+            assert!(serde_json::from_value::<HttpOperation>(unknown).is_err());
+        }
+    }
+
+    #[test]
     fn renewal_coverage_is_exact_and_rejects_missing_malformed_or_multiple_selectors() {
         let entry = serde_json::json!({
             "method":"POST", "path":"/v1/issued-credentials/{credential_id}/renew",
@@ -2336,8 +2484,8 @@ mod tests {
     #[test]
     fn embedded_surface_and_native_coverage_are_consistent() {
         let summary = validate_embedded_contract().expect("contract");
-        assert_eq!(summary.native_http, 100);
-        assert_eq!(summary.remaining_http, 31);
+        assert_eq!(summary.native_http, 102);
+        assert_eq!(summary.remaining_http, 29);
         assert_eq!(summary.remaining_grpc, 0);
     }
 }

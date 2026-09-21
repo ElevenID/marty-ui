@@ -187,7 +187,7 @@ async fn run_with_profile(database_url: &str, rendered_redis: Option<&str>, ingr
         };
         let peers = start_peers(state.clone()).await;
         let legacy = if gateway {
-            Some(super::base_runtime_gateway::LegacyFixture::start(pool.clone()).await)
+            Some(super::base_runtime_gateway::LegacyFixture::start().await)
         } else {
             None
         };
@@ -342,7 +342,7 @@ async fn run_with_profile(database_url: &str, rendered_redis: Option<&str>, ingr
             )
             .await;
             fixture.deny_invalid_client().await;
-            assert_eq!(legacy.as_ref().unwrap().owner_reads(), 0);
+            fixture.deny_foreign_owner(&source_id).await;
             Some(fixture)
         } else {
             None
@@ -585,7 +585,6 @@ async fn run_with_profile(database_url: &str, rendered_redis: Option<&str>, ingr
             );
         }
         if let Some(gateway_fixture) = gateway_fixture {
-            assert_eq!(legacy.as_ref().unwrap().owner_reads(), 1);
             let envoy_fixture = if envoy {
                 Some(super::envoy_runtime::EnvoyFixture::start().await)
             } else {
@@ -619,7 +618,7 @@ async fn run_with_profile(database_url: &str, rendered_redis: Option<&str>, ingr
                 fixture.close().await;
             }
             gateway_fixture
-                .native_unavailable(&source_id, legacy.as_ref().unwrap())
+                .native_owner_unavailable(&source_id, legacy.as_ref().unwrap())
                 .await;
             gateway_fixture.close();
         } else {

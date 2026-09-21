@@ -4273,6 +4273,7 @@ mod tests {
     use crate::{
         contract::GatewayContract,
         middleware::{ApiKeyIdentity, SessionIdentity},
+        providers::HttpGatewayProvider,
         registry::StaticServiceRegistry,
     };
 
@@ -5454,6 +5455,142 @@ mod tests {
         assert_eq!(response.status(), StatusCode::OK);
     }
 
+    async fn secret_bearing_owner_failure(request: Request) -> Response {
+        assert_eq!(
+            request.uri().path(),
+            "/internal/v1/resource-owners/issued-credentials/credential-1"
+        );
+        assert_eq!(
+            request.headers().get("x-api-key").unwrap(),
+            "issuance-service-key"
+        );
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(json!({
+                "detail": "repository failed: password=owner-secret database=issuance"
+            })),
+        )
+            .into_response()
+    }
+
+    #[tokio::test]
+    async fn native_owner_failure_is_opaque_and_stops_before_proxy() {
+        let contract: Value = serde_json::from_str(include_str!(
+            "../../../../contracts/issuance-resource-owner-lookups.json"
+        ))
+        .expect("resource-owner contract");
+        let invariant = &contract["intentional_native_corrections"][0]["gateway_invariant"];
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("owner fixture listener");
+        let origin = format!("http://{}", listener.local_addr().expect("fixture address"));
+        tokio::spawn(async move {
+            axum::serve(
+                listener,
+                Router::new().fallback(axum::routing::any(secret_bearing_owner_failure)),
+            )
+            .await
+            .expect("owner fixture server");
+        });
+        let owners = HttpGatewayProvider::new(
+            BTreeMap::from([("issuance-native".into(), origin)]),
+            "internal-signing-key",
+            Some("issuance-service-key".into()),
+            Some("s".repeat(32)),
+            Some(4_096),
+        )
+        .expect("HTTP owner provider");
+        let upstream = Arc::new(ActorRecordingUpstream::default());
+        let mut state = runtime_state_with_upstream(Arc::new(NoOwner), upstream.clone());
+        Arc::get_mut(&mut state)
+            .expect("unique runtime state")
+            .owners = Arc::new(owners);
+
+        let response = gateway_router(state)
+            .oneshot(
+                Request::builder()
+                    .uri("/v1/issued-credentials/credential-1")
+                    .header("cookie", "sessionId=valid")
+                    .body(Body::empty())
+                    .expect("request"),
+            )
+            .await
+            .expect("gateway response");
+        assert_eq!(
+            u64::from(response.status().as_u16()),
+            invariant["status_code"].as_u64().expect("status")
+        );
+        assert_eq!(
+            response
+                .headers()
+                .get("content-type")
+                .and_then(|value| value.to_str().ok()),
+            invariant["content_type"].as_str()
+        );
+        let body = to_bytes(response.into_body(), DEFAULT_MAXIMUM_BODY_BYTES)
+            .await
+            .expect("gateway error body");
+        assert_eq!(
+            serde_json::from_slice::<Value>(&body).expect("gateway JSON"),
+            invariant["body"]
+        );
+        let rendered = String::from_utf8(body.to_vec()).expect("UTF-8 body");
+        assert!(!rendered.contains("owner-secret"));
+        assert!(!rendered.contains("database"));
+        assert_eq!(invariant["upstream_body_disclosed"], false);
+        assert_eq!(invariant["proxy_continues"], false);
+        assert!(upstream.0.lock().expect("upstream calls").is_empty());
+    }
+
+    #[tokio::test]
+    async fn authorized_native_upstream_outage_preserves_opaque_mip_503() {
+        let upstream = Arc::new(FailingActorRecordingUpstream::default());
+        let mut state = runtime_state_with_upstream(Arc::new(NoOwner), upstream.clone());
+        Arc::get_mut(&mut state)
+            .expect("unique runtime state")
+            .owners = Arc::new(ScriptedOwner(Some("org-1".into())));
+
+        let response = gateway_router(state)
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/v1/issued-credentials/credential-1/renew")
+                    .header("cookie", "sessionId=valid")
+                    .body(Body::empty())
+                    .expect("request"),
+            )
+            .await
+            .expect("gateway response");
+        assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
+        assert_eq!(
+            response
+                .headers()
+                .get("content-type")
+                .and_then(|value| value.to_str().ok()),
+            Some("application/json")
+        );
+        let body = to_bytes(response.into_body(), DEFAULT_MAXIMUM_BODY_BYTES)
+            .await
+            .expect("gateway error body");
+        let body: Value = serde_json::from_slice(&body).expect("gateway JSON");
+        let message_id = body["message_id"].as_str().expect("MIP message ID");
+        assert!(uuid::Uuid::parse_str(message_id).is_ok());
+        assert_eq!(
+            body,
+            json!({
+                "error": "service_unavailable",
+                "error_description": "Service unavailable",
+                "message_id": message_id,
+            })
+        );
+        assert!(!body.to_string().contains("private-upstream-failure"));
+
+        let calls = upstream.0.lock().expect("upstream calls");
+        assert_eq!(calls.len(), 1);
+        assert_eq!(calls[0].0, issuance_native::NATIVE_SERVICE);
+        assert_eq!(calls[0].1.path, "/v1/issued-credentials/credential-1/renew");
+    }
+
     fn runtime_state_with_events(
         event_streams: Arc<dyn EventStreamProvider>,
     ) -> Arc<GatewayRuntimeState> {
@@ -5558,6 +5695,26 @@ mod tests {
                 response_time_ms: None,
                 upstream_service: None,
             })
+        }
+    }
+
+    #[derive(Default)]
+    struct FailingActorRecordingUpstream(std::sync::Mutex<Vec<(String, GatewayRequest)>>);
+
+    #[async_trait]
+    impl UpstreamClient for FailingActorRecordingUpstream {
+        async fn send(
+            &self,
+            instance: &ServiceInstance,
+            request: GatewayRequest,
+        ) -> Result<GatewayResponse, PlatformError> {
+            self.0
+                .lock()
+                .expect("owned request recorder")
+                .push((instance.service_name.clone(), request));
+            Err(PlatformError::UpstreamTransport(
+                "private-upstream-failure".into(),
+            ))
         }
     }
 

@@ -152,7 +152,7 @@ impl ResourceOwnerProvider for HttpGatewayProvider {
         if let Some(value) = &self.service_token {
             request = request.header(SERVICE_TOKEN_HEADER, value);
         }
-        if service == "issuance" {
+        if matches!(service, "issuance" | "issuance-native") {
             if let Some(value) = &self.issuance_api_key {
                 request = request.header("x-api-key", value);
             }
@@ -681,6 +681,18 @@ mod tests {
             {
                 (StatusCode::OK, Json(json!({"organization_id": "org-1"})))
             }
+            "/internal/v1/resource-owners/issued-credentials/credential-1"
+                if request
+                    .headers()
+                    .get("x-api-key")
+                    .is_some_and(|value| value == "issuance-secret")
+                    && request
+                        .headers()
+                        .get(SERVICE_TOKEN_HEADER)
+                        .is_some_and(|value| value == "service-secret") =>
+            {
+                (StatusCode::OK, Json(json!({"organization_id": "org-3"})))
+            }
             "/v1/credential-templates/template-1"
                 if request
                     .headers()
@@ -722,6 +734,7 @@ mod tests {
             BTreeMap::from([
                 ("trust-profiles".into(), url.clone()),
                 ("credential-templates".into(), url.clone()),
+                ("issuance-native".into(), url.clone()),
             ]),
             "internal-secret",
             Some("issuance-secret".into()),
@@ -736,6 +749,18 @@ mod tests {
             ]),
         };
 
+        assert_eq!(
+            provider
+                .resolve_organization(
+                    "issuance-native",
+                    "/internal/v1/resource-owners/issued-credentials/credential-1",
+                    &context,
+                )
+                .await
+                .expect("native issuance owner")
+                .as_deref(),
+            Some("org-3")
+        );
         assert_eq!(
             provider
                 .resolve_organization(

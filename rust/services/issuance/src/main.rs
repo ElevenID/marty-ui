@@ -85,7 +85,7 @@ use marty_issuance_service::{
     ephemeral_postgres::PostgresProofNonceRepository,
     http::{
         router_with_all_services, CanvasLtiExperienceSessionServices, CanvasLtiServices,
-        CanvasServices, IssuanceCoreServices, IssuanceServices,
+        CanvasServices, IssuanceCoreServices, IssuanceReadServices, IssuanceServices,
     },
     initiation::{
         InitiationPorts, InitiationService, SecureInitiationSeedGenerator, SystemInitiationClock,
@@ -119,6 +119,8 @@ use marty_issuance_service::{
         UuidInternalApplicationIdGenerator,
     },
     proof_nonce::{ProofNonceService, SecureProofNonceGenerator},
+    resource_owner::ResourceOwnerService,
+    resource_owner_postgres::PostgresResourceOwnerRepository,
     signing_policy::HttpProofPolicyResolver,
     tenant_discovery::TenantDiscoveryService,
     tenant_postgres::PostgresTenantDiscoveryRepository,
@@ -172,6 +174,10 @@ async fn main() -> Result<(), Box<dyn Error>> {
         Arc::new(PostgresTransactionReadRepository::new(pool.clone())),
         config.issuance_api_key.as_deref(),
         &config.issuer_base_url,
+    );
+    let resource_owners = ResourceOwnerService::new(
+        Arc::new(PostgresResourceOwnerRepository::new(pool.clone())),
+        config.issuance_api_key.as_deref(),
     );
     let token_hmac_key = config
         .token_hmac_key
@@ -672,7 +678,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
         IssuanceServices::new(
             IssuanceCoreServices::new(
                 tenant_discovery,
-                transaction_reads,
+                IssuanceReadServices::new(transaction_reads, resource_owners),
                 token_exchange,
                 proof_nonce,
                 credential,
