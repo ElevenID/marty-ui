@@ -5542,6 +5542,55 @@ mod tests {
         assert!(upstream.0.lock().expect("upstream calls").is_empty());
     }
 
+    #[tokio::test]
+    async fn authorized_native_upstream_outage_preserves_opaque_mip_503() {
+        let upstream = Arc::new(FailingActorRecordingUpstream::default());
+        let mut state = runtime_state_with_upstream(Arc::new(NoOwner), upstream.clone());
+        Arc::get_mut(&mut state)
+            .expect("unique runtime state")
+            .owners = Arc::new(ScriptedOwner(Some("org-1".into())));
+
+        let response = gateway_router(state)
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/v1/issued-credentials/credential-1/renew")
+                    .header("cookie", "sessionId=valid")
+                    .body(Body::empty())
+                    .expect("request"),
+            )
+            .await
+            .expect("gateway response");
+        assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
+        assert_eq!(
+            response
+                .headers()
+                .get("content-type")
+                .and_then(|value| value.to_str().ok()),
+            Some("application/json")
+        );
+        let body = to_bytes(response.into_body(), DEFAULT_MAXIMUM_BODY_BYTES)
+            .await
+            .expect("gateway error body");
+        let body: Value = serde_json::from_slice(&body).expect("gateway JSON");
+        let message_id = body["message_id"].as_str().expect("MIP message ID");
+        assert!(uuid::Uuid::parse_str(message_id).is_ok());
+        assert_eq!(
+            body,
+            json!({
+                "error": "service_unavailable",
+                "error_description": "Service unavailable",
+                "message_id": message_id,
+            })
+        );
+        assert!(!body.to_string().contains("private-upstream-failure"));
+
+        let calls = upstream.0.lock().expect("upstream calls");
+        assert_eq!(calls.len(), 1);
+        assert_eq!(calls[0].0, issuance_native::NATIVE_SERVICE);
+        assert_eq!(calls[0].1.path, "/v1/issued-credentials/credential-1/renew");
+    }
+
     fn runtime_state_with_events(
         event_streams: Arc<dyn EventStreamProvider>,
     ) -> Arc<GatewayRuntimeState> {
@@ -5646,6 +5695,26 @@ mod tests {
                 response_time_ms: None,
                 upstream_service: None,
             })
+        }
+    }
+
+    #[derive(Default)]
+    struct FailingActorRecordingUpstream(std::sync::Mutex<Vec<(String, GatewayRequest)>>);
+
+    #[async_trait]
+    impl UpstreamClient for FailingActorRecordingUpstream {
+        async fn send(
+            &self,
+            instance: &ServiceInstance,
+            request: GatewayRequest,
+        ) -> Result<GatewayResponse, PlatformError> {
+            self.0
+                .lock()
+                .expect("owned request recorder")
+                .push((instance.service_name.clone(), request));
+            Err(PlatformError::UpstreamTransport(
+                "private-upstream-failure".into(),
+            ))
         }
     }
 
