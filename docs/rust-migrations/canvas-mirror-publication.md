@@ -40,6 +40,15 @@ intentional safety correction to the Python implementation's unclaimed
 `SELECT ... LIMIT` batches; it preserves successful/error response behavior
 while preventing concurrent duplicate provider effects.
 
+Global automation also keeps alerts tenant-isolated. Durable alert events use
+the organization on their source delivery record, and critical webhook calls
+are deterministically partitioned into one payload per organization. This is an
+intentional security correction to the Python implementation, which labelled a
+multi-organization batch with its first record's organization and could combine
+later tenants' alerts into that webhook payload. The native regression gate
+exercises two organizations in one global batch and proves that neither event
+metadata nor webhook alert arrays cross that boundary.
+
 The native gate currently proves the route/authentication/validation matrix,
 tenant-hidden publish admission, shared batch/automation behavior, provider
 cancellation before persistence, alert/webhook ordering, health/provenance

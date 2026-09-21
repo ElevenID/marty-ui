@@ -154,6 +154,7 @@ struct Repository {
     ignore_delivery_query: bool,
     fail_first_read: bool,
     calls: Mutex<Vec<String>>,
+    events: Mutex<Vec<CanvasMirrorAlertEvent>>,
 }
 
 #[async_trait]
@@ -326,9 +327,10 @@ impl CanvasMirrorRepository for Repository {
 
     async fn save_alert_event(
         &self,
-        _event: &CanvasMirrorAlertEvent,
+        event: &CanvasMirrorAlertEvent,
     ) -> Result<(), CanvasMirrorRepositoryError> {
         self.calls.lock().unwrap().push("save_alert_event".into());
+        self.events.lock().unwrap().push(event.clone());
         Ok(())
     }
 }
@@ -458,7 +460,8 @@ async fn mixed_health_and_all_successful_provenance_selectors_match_frozen_bodie
         );
     }
 
-    let missing_transaction_snapshot = before_snapshot(&reference, "provenance_missing_transaction");
+    let missing_transaction_snapshot =
+        before_snapshot(&reference, "provenance_missing_transaction");
     let missing_transaction_records = missing_transaction_snapshot["delivery_records"]
         .as_object()
         .unwrap()
@@ -1507,6 +1510,56 @@ async fn batch_alert_events_precede_advisory_critical_webhooks() {
     let global_payloads = global_webhook.payloads.lock().unwrap().clone();
     assert_eq!(global_payloads.len(), 1);
     assert_eq!(global_payloads[0]["organization_id"], "org-1");
+}
+
+#[tokio::test]
+async fn global_batch_keeps_alert_events_and_webhooks_tenant_isolated() {
+    let mut org_one = record("pending");
+    org_one.metadata.insert("publish_attempts".into(), json!(4));
+    let mut org_two = org_one.clone();
+    org_two.id = "delivery-002".into();
+    org_two.credential_id = "cred-002".into();
+    org_two.transaction_id = "tx-002".into();
+    org_two.organization_id = "org-2".into();
+    let repository = Arc::new(Repository {
+        records: vec![org_one, org_two],
+        ..Default::default()
+    });
+    let webhook = Arc::new(AlertWebhook {
+        payloads: Mutex::new(Vec::new()),
+        fail: false,
+        effects: Arc::new(Mutex::new(Vec::new())),
+    });
+
+    let result = service(repository.clone())
+        .with_alert_webhook(webhook.clone())
+        .process_pending(None, 25, false, now())
+        .await
+        .unwrap();
+
+    assert_eq!(result["processed_count"], 2);
+    assert_eq!(result["failed_count"], 2);
+    let events = repository.events.lock().unwrap().clone();
+    assert_eq!(events.len(), 2);
+    assert_eq!(events[0].metadata["organization_id"], "org-1");
+    assert_eq!(events[0].metadata["delivery_record_id"], "delivery-001");
+    assert_eq!(events[1].metadata["organization_id"], "org-2");
+    assert_eq!(events[1].metadata["delivery_record_id"], "delivery-002");
+
+    let payloads = webhook.payloads.lock().unwrap().clone();
+    assert_eq!(payloads.len(), 2);
+    assert_eq!(payloads[0]["organization_id"], "org-1");
+    assert_eq!(payloads[0]["alerts"].as_array().unwrap().len(), 1);
+    assert_eq!(
+        payloads[0]["alerts"][0]["delivery_record_id"],
+        "delivery-001"
+    );
+    assert_eq!(payloads[1]["organization_id"], "org-2");
+    assert_eq!(payloads[1]["alerts"].as_array().unwrap().len(), 1);
+    assert_eq!(
+        payloads[1]["alerts"][0]["delivery_record_id"],
+        "delivery-002"
+    );
 }
 
 fn service_for_publication(

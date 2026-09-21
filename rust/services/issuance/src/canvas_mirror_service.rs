@@ -3,7 +3,7 @@
 use chrono::{DateTime, Utc};
 use serde_json::Value;
 use serde_json::{json, Map};
-use std::sync::Arc;
+use std::{collections::BTreeMap, sync::Arc};
 use thiserror::Error;
 
 use crate::{
@@ -243,8 +243,7 @@ impl CanvasMirrorService {
             };
             processed.push(updated);
         }
-        self.emit_alerts(&processed, organization_id, true, now)
-            .await?;
+        self.emit_alerts(&processed, true, now).await?;
         let delivered = processed
             .iter()
             .filter(|record| record.status == "delivered")
@@ -358,8 +357,7 @@ impl CanvasMirrorService {
                 .await?;
             processed.push(updated);
         }
-        self.emit_alerts(&processed, organization_id, false, now)
-            .await?;
+        self.emit_alerts(&processed, false, now).await?;
         let failed = processed
             .iter()
             .filter(|record| {
@@ -921,7 +919,6 @@ impl CanvasMirrorService {
     async fn emit_alerts(
         &self,
         records: &[CanvasMirrorDeliveryRecord],
-        requested_organization_id: Option<&str>,
         publish: bool,
         now: DateTime<Utc>,
     ) -> Result<(), CanvasMirrorServiceError> {
@@ -942,23 +939,12 @@ impl CanvasMirrorService {
                     .map(|alert| (record.organization_id.clone(), alert))
             })
             .collect::<Vec<_>>();
-        let effective_organization_id =
-            requested_organization_id.map(str::to_owned).or_else(|| {
-                alerts
-                    .first()
-                    .map(|(organization_id, _)| organization_id.clone())
-            });
         for (organization_id, alert) in &alerts {
             let mut metadata = serde_json::to_value(alert)
                 .ok()
                 .and_then(|value| value.as_object().cloned())
                 .ok_or(CanvasMirrorServiceError::CanonicalOwnershipMismatch)?;
-            metadata.insert(
-                "organization_id".into(),
-                json!(effective_organization_id
-                    .as_deref()
-                    .unwrap_or(organization_id)),
-            );
+            metadata.insert("organization_id".into(), json!(organization_id));
             self.repository
                 .save_alert_event(&CanvasMirrorAlertEvent {
                     id: uuid::Uuid::new_v4().to_string(),
@@ -970,15 +956,17 @@ impl CanvasMirrorService {
                 })
                 .await?;
         }
-        if let (Some(organization_id), Some(webhook)) = (
-            effective_organization_id.as_deref(),
-            self.alert_webhook.as_ref(),
-        ) {
-            let critical = alerts
-                .iter()
-                .filter_map(|(_, alert)| (alert.severity == "critical").then_some(alert))
-                .collect::<Vec<&CanvasMirrorAlert>>();
-            if !critical.is_empty() {
+        if let Some(webhook) = self.alert_webhook.as_ref() {
+            let mut critical_by_organization = BTreeMap::<&str, Vec<&CanvasMirrorAlert>>::new();
+            for (organization_id, alert) in &alerts {
+                if alert.severity == "critical" {
+                    critical_by_organization
+                        .entry(organization_id)
+                        .or_default()
+                        .push(alert);
+                }
+            }
+            for (organization_id, critical) in critical_by_organization {
                 // Webhook delivery is advisory in the frozen owner. Durable alert
                 // events above remain authoritative if this outbound call fails.
                 if webhook
