@@ -443,26 +443,7 @@ jobs:
             --manifest-path "$manifest" \
             --bin elevenid-feature-regression-probe > "$second_output"
           cmp --silent "$first_output" "$second_output"
-          python3 - "$first_output" <<'PY'
-          import json
-          from pathlib import Path
-          import sys
-
-          raw = Path(sys.argv[1]).read_bytes()
-          document = json.loads(raw)
-          canonical = (
-              json.dumps(document, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
-              + "\n"
-          ).encode()
-          assert raw == canonical
-          assert document["schema"] == "elevenid.behavior-subject-output/v2"
-          observations = document["observations"]
-          assert len(observations) == 3
-          assert all(
-              set(item) == {"id", "operation_id", "case_id", "dimension", "value"}
-              for item in observations
-          )
-          PY
+          python3 tests/test_feature_regression_rust_probe.py "$first_output"
       - name: Compile Bookworm-compatible base runtime acceptance
         shell: bash
         run: |

@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import json
+import sys
 import tomllib
 from pathlib import Path
 
@@ -11,6 +13,72 @@ PROBE = ROOT / ".github" / "feature-regression" / "rust-probe"
 MANIFEST = PROBE / "Cargo.toml"
 LOCK = PROBE / "Cargo.lock"
 SUBJECT = PROBE / "behavior_subject.rs"
+DIAGNOSTIC = (
+    "event=internal_application_failure;stage=ordinary_issuer_context;"
+    "category=dependency_unavailable;application_correlation_sha256="
+    "b5ccfc2fc885903c0727f561fa4586490b661d9d53ec0fd19904ec6a85cfb192;"
+    "check_correlation_sha256=;resource_correlation_sha256="
+)
+EXPECTED_OBSERVATIONS = {
+    ("create-success", "public_status"): 200,
+    ("create-success", "public_message"): "Ada_['Lovelace']",
+    ("create-success", "safe_server_diagnostic"): "",
+    ("auth-missing", "public_status"): 401,
+    ("auth-missing", "public_message"): "X-API-Key header is missing",
+    ("auth-missing", "safe_server_diagnostic"): "",
+    ("template-missing", "public_status"): 404,
+    ("template-missing", "public_message"): "Application template not found",
+    ("template-missing", "safe_server_diagnostic"): "",
+    ("repository-unavailable", "public_status"): 503,
+    (
+        "repository-unavailable",
+        "public_message",
+    ): "Application repository is unavailable",
+    ("repository-unavailable", "safe_server_diagnostic"): "",
+    ("issuer-context-unavailable", "public_status"): 503,
+    (
+        "issuer-context-unavailable",
+        "public_message",
+    ): "Issuer signing context is unavailable.",
+    ("issuer-context-unavailable", "safe_server_diagnostic"): DIAGNOSTIC,
+}
+EXPECTED_OPERATIONS = {
+    "create-success": "internal-application.create",
+    "auth-missing": "internal-application.create",
+    "template-missing": "internal-application.create",
+    "repository-unavailable": "internal-application.create",
+    "issuer-context-unavailable": "internal-application.approve",
+}
+
+
+def assert_expected_probe_output(raw: bytes) -> None:
+    document = json.loads(raw)
+    canonical = json.dumps(
+        document, ensure_ascii=False, sort_keys=True, separators=(",", ":")
+    ).encode()
+    assert raw == canonical, "probe output must be canonical JSON without a trailing newline"
+    assert document["schema"] == "elevenid.behavior-subject-output/v2"
+
+    observations = document["observations"]
+    assert len(observations) == len(EXPECTED_OBSERVATIONS)
+    assert all(
+        set(item) == {"id", "operation_id", "case_id", "dimension", "value"}
+        and item["operation_id"] == EXPECTED_OPERATIONS[item["case_id"]]
+        and item["id"] == f'{item["case_id"]}.{item["dimension"]}'
+        for item in observations
+    )
+    actual = {
+        (item["case_id"], item["dimension"]): item["value"] for item in observations
+    }
+    assert actual == EXPECTED_OBSERVATIONS
+
+    diagnostic = actual[("issuer-context-unavailable", "safe_server_diagnostic")]
+    for forbidden in (
+        "application-probe-1",
+        "probe-management-key",
+        "ignored@example.test",
+    ):
+        assert forbidden not in diagnostic
 
 
 def test_probe_uses_only_the_reserved_regular_files() -> None:
@@ -50,11 +118,30 @@ def test_probe_manifest_has_one_fixed_binary_and_real_candidate_dependency() -> 
         for package in lock["package"]
         if package["name"] == "elevenid-feature-regression-probe"
     )
-    assert "marty-issuance-service" in root_package["dependencies"]
-    assert (
-        "marty_issuance_service::internal_application_domain::"
-        "derive_applicant_identifier"
-    ) in SUBJECT.read_text(encoding="utf-8")
+    assert {
+        "async-trait",
+        "axum",
+        "chrono",
+        "http-body-util",
+        "marty-issuance-service",
+        "serde_json",
+        "tokio",
+        "tower",
+    }.issubset(root_package["dependencies"])
+    subject = SUBJECT.read_text(encoding="utf-8")
+    for production_call in (
+        "internal_application_http::router",
+        "InternalApplicationService::new",
+        "ordinary_issuer_context_dependency_unavailable_diagnostic",
+    ):
+        assert production_call in subject
+    for forbidden_expected_output in (
+        "X-API-Key header is missing",
+        "Application template not found",
+        "Application repository is unavailable",
+        "Issuer signing context is unavailable.",
+    ):
+        assert forbidden_expected_output not in subject
 
 
 def test_ci_runs_the_frozen_offline_probe_twice_and_compares_exact_output() -> None:
@@ -66,4 +153,23 @@ def test_ci_runs_the_frozen_offline_probe_twice_and_compares_exact_output() -> N
     assert workflow.count("cargo run --frozen --offline --quiet \\") == 2
     assert "cargo test --frozen --offline --quiet \\" in workflow
     assert "cmp --silent \"$first_output\" \"$second_output\"" in workflow
-    assert "json.dumps(document, ensure_ascii=False, sort_keys=True" in workflow
+    assert (
+        'python3 tests/test_feature_regression_rust_probe.py "$first_output"'
+        in workflow
+    )
+
+
+def test_expected_values_cover_every_case_dimension_and_redacted_diagnostic() -> None:
+    cases = {case_id for case_id, _ in EXPECTED_OBSERVATIONS}
+    assert {
+        dimension for _, dimension in EXPECTED_OBSERVATIONS
+    } == {"public_status", "public_message", "safe_server_diagnostic"}
+    assert len(EXPECTED_OBSERVATIONS) == len(cases) * 3
+    assert "application-probe-1" not in DIAGNOSTIC
+    assert "probe-management-key" not in DIAGNOSTIC
+
+
+if __name__ == "__main__":
+    if len(sys.argv) != 2:
+        raise SystemExit("usage: test_feature_regression_rust_probe.py OUTPUT.json")
+    assert_expected_probe_output(Path(sys.argv[1]).read_bytes())

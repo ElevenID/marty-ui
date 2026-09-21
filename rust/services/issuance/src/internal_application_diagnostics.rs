@@ -72,8 +72,11 @@ impl InternalApplicationDiagnosticCategory {
     }
 }
 
+/// Immutable, secret-safe projection shared by structured logging and
+/// governed behavior observation. Identifier inputs are retained only as
+/// bounded domain-separated hashes.
 #[derive(Clone, Debug, Eq, PartialEq)]
-struct InternalApplicationDiagnostic {
+pub struct InternalApplicationDiagnosticProjection {
     stage: InternalApplicationDiagnosticStage,
     category: InternalApplicationDiagnosticCategory,
     application_correlation_sha256: Option<String>,
@@ -82,7 +85,8 @@ struct InternalApplicationDiagnostic {
 }
 
 #[cfg(test)]
-type TestObserver = std::sync::Arc<dyn Fn(&InternalApplicationDiagnostic) + Send + Sync>;
+pub(crate) type TestObserver =
+    std::sync::Arc<dyn Fn(&InternalApplicationDiagnosticProjection) + Send + Sync>;
 
 #[cfg(test)]
 std::thread_local! {
@@ -94,7 +98,20 @@ std::thread_local! {
     };
 }
 
-impl InternalApplicationDiagnostic {
+impl InternalApplicationDiagnosticProjection {
+    /// Stable one-line diagnostic containing only enumerated values and hashes.
+    #[must_use]
+    pub fn safe_server_diagnostic(&self) -> String {
+        format!(
+            "event={DIAGNOSTIC_EVENT};stage={};category={};application_correlation_sha256={};check_correlation_sha256={};resource_correlation_sha256={}",
+            self.stage.as_str(),
+            self.category.as_str(),
+            self.application_correlation_sha256.as_deref().unwrap_or(""),
+            self.check_correlation_sha256.as_deref().unwrap_or(""),
+            self.resource_correlation_sha256.as_deref().unwrap_or("")
+        )
+    }
+
     fn emit(self) {
         #[cfg(test)]
         TEST_OBSERVER.with(|slot| {
@@ -130,18 +147,76 @@ pub(crate) fn warn_application_failure(
     category: InternalApplicationDiagnosticCategory,
     application_id: &str,
 ) {
-    InternalApplicationDiagnostic {
+    application_failure_diagnostic(stage, category, application_id).emit();
+}
+
+#[cfg(test)]
+struct TestObserverGuard;
+
+#[cfg(test)]
+impl Drop for TestObserverGuard {
+    fn drop(&mut self) {
+        TEST_OBSERVER.with(|slot| {
+            slot.borrow_mut().take();
+        });
+    }
+}
+
+#[cfg(test)]
+fn install_test_observer(observer: TestObserver) -> TestObserverGuard {
+    TEST_OBSERVER.with(|slot| {
+        assert!(
+            slot.borrow_mut().replace(observer).is_none(),
+            "diagnostic test observer cannot be nested"
+        );
+    });
+    TestObserverGuard
+}
+
+#[cfg(test)]
+fn with_test_observer<T>(observer: TestObserver, run: impl FnOnce() -> T) -> T {
+    let _guard = install_test_observer(observer);
+    run()
+}
+
+#[cfg(test)]
+pub(crate) async fn with_test_observer_async<T>(
+    observer: TestObserver,
+    run: impl std::future::Future<Output = T>,
+) -> T {
+    let _guard = install_test_observer(observer);
+    run.await
+}
+
+/// Project the safe diagnostic paired with an ordinary issuer dependency
+/// failure. The operational warning path uses the same private constructor.
+#[must_use]
+pub fn ordinary_issuer_context_dependency_unavailable_diagnostic(
+    application_id: &str,
+) -> InternalApplicationDiagnosticProjection {
+    application_failure_diagnostic(
+        InternalApplicationDiagnosticStage::OrdinaryIssuerContext,
+        InternalApplicationDiagnosticCategory::DependencyUnavailable,
+        application_id,
+    )
+}
+
+fn application_failure_diagnostic(
+    stage: InternalApplicationDiagnosticStage,
+    category: InternalApplicationDiagnosticCategory,
+    application_id: &str,
+) -> InternalApplicationDiagnosticProjection {
+    InternalApplicationDiagnosticProjection {
         stage,
         category,
         application_correlation_sha256: Some(correlation_sha256("application", application_id)),
         check_correlation_sha256: None,
         resource_correlation_sha256: None,
     }
-    .emit();
 }
 
 pub(crate) fn warn_external_evidence_failure(application_id: &str, check_id: &str) {
-    InternalApplicationDiagnostic {
+    InternalApplicationDiagnosticProjection {
         stage: InternalApplicationDiagnosticStage::ExternalEvidenceTransport,
         category: InternalApplicationDiagnosticCategory::DependencyUnavailable,
         application_correlation_sha256: Some(correlation_sha256("application", application_id)),
@@ -156,7 +231,7 @@ pub(crate) fn warn_wallet_catalog_failure(
     category: InternalApplicationDiagnosticCategory,
     resource_id: &str,
 ) {
-    InternalApplicationDiagnostic {
+    InternalApplicationDiagnosticProjection {
         stage,
         category,
         application_correlation_sha256: None,
@@ -181,25 +256,31 @@ mod tests {
 
     use super::*;
 
-    struct ObserverGuard;
-
-    impl Drop for ObserverGuard {
-        fn drop(&mut self) {
-            TEST_OBSERVER.with(|slot| {
-                slot.borrow_mut().take();
-            });
+    #[test]
+    fn application_projection_is_stable_and_retains_only_a_correlation_hash() {
+        let raw = "application-private-id\nBearer private-token https://provider.example alice@example.test";
+        let projection = application_failure_diagnostic(
+            InternalApplicationDiagnosticStage::OrdinaryIssuerContext,
+            InternalApplicationDiagnosticCategory::DependencyUnavailable,
+            raw,
+        );
+        let safe = projection.safe_server_diagnostic();
+        assert_eq!(
+            safe,
+            format!(
+                "event=internal_application_failure;stage=ordinary_issuer_context;category=dependency_unavailable;application_correlation_sha256={};check_correlation_sha256=;resource_correlation_sha256=",
+                correlation_sha256("application", raw)
+            )
+        );
+        for forbidden in [
+            raw,
+            "application-private-id",
+            "private-token",
+            "https://provider.example",
+            "alice@example.test",
+        ] {
+            assert!(!safe.contains(forbidden), "leaked {forbidden:?}");
         }
-    }
-
-    fn with_observer<T>(observer: TestObserver, run: impl FnOnce() -> T) -> T {
-        TEST_OBSERVER.with(|slot| {
-            assert!(
-                slot.borrow_mut().replace(observer).is_none(),
-                "diagnostic test observer cannot be nested"
-            );
-        });
-        let _guard = ObserverGuard;
-        run()
     }
 
     #[derive(Clone, Default)]
@@ -315,7 +396,7 @@ mod tests {
         let events = Arc::new(Mutex::new(Vec::new()));
         let observed = events.clone();
 
-        with_observer(
+        with_test_observer(
             Arc::new(move |diagnostic| {
                 observed
                     .lock()

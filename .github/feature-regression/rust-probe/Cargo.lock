@@ -1695,8 +1695,14 @@ dependencies = [
 name = "elevenid-feature-regression-probe"
 version = "0.0.0"
 dependencies = [
+ "async-trait",
+ "axum",
+ "chrono",
+ "http-body-util",
  "marty-issuance-service",
  "serde_json",
+ "tokio",
+ "tower",
 ]
 
 [[package]]

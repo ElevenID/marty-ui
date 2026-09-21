@@ -929,37 +929,56 @@ mod tests {
         assert!(repository.transactions.lock().unwrap().is_empty());
     }
 
-    #[tokio::test]
+    #[tokio::test(flavor = "current_thread")]
     async fn issuer_failure_is_redacted_and_never_reserves() {
         let now = Utc.with_ymd_and_hms(2026, 9, 20, 12, 0, 0).unwrap();
         let repository = Arc::new(Repository::default());
-        let error = service(
-            repository.clone(),
-            Dependencies {
-                template: Some(credential_template()),
-                revocation_error: None,
-                revocation_calls: Arc::new(AtomicUsize::new(0)),
+        let diagnostics = Arc::new(Mutex::new(Vec::new()));
+        let observed = diagnostics.clone();
+        let error = crate::internal_application_diagnostics::with_test_observer_async(
+            Arc::new(move |diagnostic| {
+                observed
+                    .lock()
+                    .unwrap()
+                    .push(diagnostic.safe_server_diagnostic());
+            }),
+            async {
+                service(
+                    repository.clone(),
+                    Dependencies {
+                        template: Some(credential_template()),
+                        revocation_error: None,
+                        revocation_calls: Arc::new(AtomicUsize::new(0)),
+                    },
+                    Resolver {
+                        fail: true,
+                        calls: Arc::new(AtomicUsize::new(0)),
+                    },
+                    now,
+                )
+                .approve(
+                    &application(now),
+                    &application_template(now),
+                    "issuance-management-api",
+                    None,
+                )
+                .await
+                .unwrap_err()
             },
-            Resolver {
-                fail: true,
-                calls: Arc::new(AtomicUsize::new(0)),
-            },
-            now,
         )
-        .approve(
-            &application(now),
-            &application_template(now),
-            "issuance-management-api",
-            None,
-        )
-        .await
-        .unwrap_err();
+        .await;
 
         assert_eq!(
             error,
             InternalApplicationApprovalError::IssuerContextUnavailable
         );
         assert!(repository.transactions.lock().unwrap().is_empty());
+        assert_eq!(
+            diagnostics.lock().unwrap().as_slice(),
+            [crate::internal_application_diagnostics::
+                ordinary_issuer_context_dependency_unavailable_diagnostic("application-1")
+                .safe_server_diagnostic()]
+        );
     }
 
     #[test]
