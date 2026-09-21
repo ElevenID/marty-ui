@@ -81,6 +81,9 @@ FORBIDDEN_FLOW_FIELDS = FORBIDDEN_PUBLIC_FIELDS | {
     "refresh_token",
     "session_token",
 }
+ELEVENID_PROTOCOL_RUNTIME_EXTENSIONS = {
+    "issued-credential-lifecycle-request.json": {"comments"},
+}
 
 
 def _load_json(path: Path) -> Any:
@@ -127,6 +130,37 @@ def _assert_protocol_version(protocol_root: Path) -> None:
         )
 
 
+def _assert_issued_credential_extension_contract(protocol_root: Path) -> None:
+    lifecycle = _load_json(
+        protocol_root / "schemas" / "issued-credential-lifecycle-request.json"
+    )
+    properties = lifecycle.get("properties", {})
+    if lifecycle.get("additionalProperties") is not False or set(properties) != {
+        "reason",
+        "comments",
+    }:
+        raise AssertionError(
+            "issued-credential lifecycle request must remain a closed reason/comments schema"
+        )
+    for field, limit in (("reason", 2_000), ("comments", 4_000)):
+        definition = properties.get(field, {})
+        if definition.get("type") != ["string", "null"] or definition.get(
+            "maxLength"
+        ) != limit:
+            raise AssertionError(
+                f"issued-credential lifecycle {field} contract drifted"
+            )
+
+    formats = _load_json(protocol_root / "enums" / "credential-formats.json")
+    definitions = formats.get("$defs", {})
+    if (
+        "VDS_NC" not in formats.get("enum", [])
+        or definitions.get("wire_format_mapping", {}).get("VDS_NC") != "vds_nc"
+        or "VDS_NC" not in definitions.get("values", {})
+    ):
+        raise AssertionError("canonical VDS_NC protocol metadata is incomplete")
+
+
 def _assert_trust_ui_boundary() -> None:
     for relative_path in TRUST_CONFIGURATION_UI_PATHS:
         source = (REPO_ROOT / relative_path).read_text(encoding="utf-8")
@@ -153,11 +187,15 @@ def _assert_dto_shapes(protocol_root: Path) -> None:
         schema = _load_json(schema_path)
         schema_fields = set(schema.get("properties", {}))
         runtime_fields = set(model["fields"])
-        if runtime_fields != schema_fields:
+        extension_fields = ELEVENID_PROTOCOL_RUNTIME_EXTENSIONS.get(
+            model["schema"], set()
+        )
+        if runtime_fields != schema_fields | extension_fields:
             raise AssertionError(
                 f"{name} fields drifted from marty-protocol: "
                 f"schema_only={sorted(schema_fields - runtime_fields)}, "
-                f"runtime_only={sorted(runtime_fields - schema_fields)}"
+                "unapproved_runtime_only="
+                f"{sorted(runtime_fields - schema_fields - extension_fields)}"
             )
         schema_required = set(schema.get("required", []))
         runtime_required = set(model["required"])
@@ -225,12 +263,23 @@ def check_contract(protocol_root: Path) -> None:
     _assert_rust_behavior_vectors()
 
 
+def check_issued_credential_extension(protocol_root: Path) -> None:
+    _assert_issued_credential_extension_contract(protocol_root)
+    assert_generated_bindings_current(protocol_root)
+
+
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--protocol-root", type=Path, required=True)
+    parser.add_argument("--issued-credential-extension-only", action="store_true")
     args = parser.parse_args()
-    check_contract(args.protocol_root.resolve())
-    print("Rust gateway operations match the pinned marty-protocol schemas.")
+    protocol_root = args.protocol_root.resolve()
+    if args.issued_credential_extension_only:
+        check_issued_credential_extension(protocol_root)
+        print("Issued-credential extensions match the pinned ElevenID protocol schemas.")
+    else:
+        check_contract(protocol_root)
+        print("Rust gateway operations match the pinned marty-protocol schemas.")
     return 0
 
 

@@ -41,10 +41,14 @@ impl Harness {
                 revocation_profile_id: Some("profile-1".into()),
                 renewed_from_credential_id: None,
                 renewed_to_credential_id: None,
-                status_list_entries: vec![json!({
-                    "status_list_id":"profile-1","index":7,
-                    "status_list_uri":"https://issuer.example/status/1"
-                })],
+                status_list_entries: vec![
+                    json!({"status_list_id":"skip-null-index","index":null}),
+                    json!({
+                        "status_list_id":"profile-1","index":" 1_0 ",
+                        "status_list_uri":"https://issuer.example/status/1",
+                        "type":null
+                    }),
+                ],
                 credential_hash: Some("public-hash".into()),
                 status: "active".into(),
                 status_updated_at: timestamp(1),
@@ -280,8 +284,22 @@ async fn list_and_detail_preserve_auth_tenant_query_and_full_public_projection()
     assert_eq!(body.as_array().unwrap().len(), 1);
     assert_eq!(body[0]["credential_format"], "VDS_NC");
     assert_eq!(body[0]["status"], "ACTIVE");
+    assert_eq!(body[0]["status_list_entries"].as_array().unwrap().len(), 1);
+    assert_eq!(body[0]["status_list_entries"][0]["index"], 10);
+    assert_eq!(body[0]["status_list_entries"][0]["type"], Value::Null);
     assert!(body[0].get("comments").is_none());
     assert!(body[0].get("claims").is_none());
+
+    let detail = Request::get("/v1/issued-credentials/credential-1")
+        .header("x-api-key", "secret")
+        .header("x-organization-id", "org-1")
+        .body(Body::empty())
+        .unwrap();
+    let (status, body) = response_json(harness.app().oneshot(detail).await.unwrap()).await;
+    assert_eq!(status, 200);
+    assert_eq!(body["status_list_entries"].as_array().unwrap().len(), 1);
+    assert_eq!(body["status_list_entries"][0]["index"], 10);
+    assert_eq!(body["status_list_entries"][0]["type"], Value::Null);
 
     let request = Request::get("/v1/issued-credentials/credential-1")
         .header("x-api-key", "secret")
@@ -310,6 +328,9 @@ async fn lifecycle_preserves_comments_trusted_actor_full_response_and_validation
     assert_eq!(status, 200);
     assert_eq!(body["status"], "REVOKED");
     assert_eq!(body["revocation_reason"], "affiliationChanged");
+    assert_eq!(body["status_list_entries"].as_array().unwrap().len(), 1);
+    assert_eq!(body["status_list_entries"][0]["index"], 10);
+    assert_eq!(body["status_list_entries"][0]["type"], Value::Null);
     assert!(body.get("comments").is_none());
     assert_eq!(
         harness.audits.lock().unwrap()[0].comments.as_deref(),

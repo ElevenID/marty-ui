@@ -1,7 +1,10 @@
 use std::sync::Arc;
 
 use async_trait::async_trait;
-use chrono::{DateTime, Duration, SecondsFormat, Utc};
+use chrono::{DateTime, Duration, Utc};
+use mmf_config::numeric_config::PythonConfigInteger;
+use num_bigint::BigInt;
+use num_traits::FromPrimitive;
 use serde::Serialize;
 use serde_json::{Map, Number, Value};
 use sha2::{Digest, Sha256};
@@ -14,6 +17,7 @@ use crate::{
         CredentialManagementService,
     },
     management_security::ManagementSecurity,
+    python_datetime::isoformat,
     python_value::{python_string, python_truthy},
     transaction_reads::TransactionReadError,
 };
@@ -441,7 +445,7 @@ fn status_list_entries(
                 entry.get("status_list_id"),
                 entry.get("revocation_profile_id"),
             )?;
-            let index = entry.get("index")?;
+            let index = entry.get("index").filter(|value| !value.is_null())?;
             Some((entry, status_list_id, index))
         })
         .map(|(entry, status_list_id, index)| {
@@ -478,38 +482,54 @@ fn python_or<'value>(
 }
 
 fn optional_string(value: Option<&Value>) -> Result<Option<String>, IssuedCredentialAdapterError> {
-    value
-        .map(|value| {
-            value
-                .as_str()
-                .map(str::to_owned)
-                .ok_or(IssuedCredentialAdapterError::RepositoryUnavailable)
-        })
-        .transpose()
+    match value {
+        None | Some(Value::Null) => Ok(None),
+        Some(Value::String(value)) => Ok(Some(value.clone())),
+        Some(_) => Err(IssuedCredentialAdapterError::RepositoryUnavailable),
+    }
 }
 
 fn python_integer(value: &Value) -> Result<Value, IssuedCredentialAdapterError> {
     let number = match value {
         Value::Bool(value) => Number::from(u8::from(*value)),
-        Value::Number(value) if value.is_i64() || value.is_u64() => value.clone(),
-        Value::Number(value) => {
-            let truncated = value
-                .as_f64()
-                .filter(|value| value.is_finite())
-                .map(f64::trunc)
-                .ok_or(IssuedCredentialAdapterError::RepositoryUnavailable)?;
-            if truncated < i64::MIN as f64 || truncated > i64::MAX as f64 {
-                return Err(IssuedCredentialAdapterError::RepositoryUnavailable);
+        Value::Number(value) => match value.to_string().parse::<PythonConfigInteger>() {
+            Ok(value) => python_config_number(&value)?,
+            Err(_) => {
+                let value = value
+                    .as_f64()
+                    .filter(|value| value.is_finite())
+                    .ok_or(IssuedCredentialAdapterError::RepositoryUnavailable)?;
+                python_float_integer(value)?
             }
-            Number::from(truncated as i64)
-        }
-        Value::String(value) => value
-            .parse::<i64>()
-            .map(Number::from)
-            .map_err(|_| IssuedCredentialAdapterError::RepositoryUnavailable)?,
+        },
+        Value::String(value) => python_decimal_integer(value)?,
         _ => return Err(IssuedCredentialAdapterError::RepositoryUnavailable),
     };
     Ok(Value::Number(number))
+}
+
+fn python_decimal_integer(value: &str) -> Result<Number, IssuedCredentialAdapterError> {
+    value
+        .parse::<PythonConfigInteger>()
+        .map_err(|_| IssuedCredentialAdapterError::RepositoryUnavailable)
+        .and_then(|value| python_config_number(&value))
+}
+
+fn python_config_number(
+    value: &PythonConfigInteger,
+) -> Result<Number, IssuedCredentialAdapterError> {
+    value
+        .as_decimal()
+        .parse::<Number>()
+        .map_err(|_| IssuedCredentialAdapterError::RepositoryUnavailable)
+}
+
+fn python_float_integer(value: f64) -> Result<Number, IssuedCredentialAdapterError> {
+    BigInt::from_f64(value.trunc())
+        .ok_or(IssuedCredentialAdapterError::RepositoryUnavailable)?
+        .to_string()
+        .parse::<Number>()
+        .map_err(|_| IssuedCredentialAdapterError::RepositoryUnavailable)
 }
 
 fn first_nonempty<const N: usize>(values: [Option<&str>; N]) -> Option<&str> {
@@ -517,7 +537,7 @@ fn first_nonempty<const N: usize>(values: [Option<&str>; N]) -> Option<&str> {
 }
 
 fn timestamp(value: DateTime<Utc>) -> String {
-    value.to_rfc3339_opts(SecondsFormat::AutoSi, false)
+    isoformat(value)
 }
 
 #[cfg(test)]
@@ -659,6 +679,117 @@ mod tests {
                 .status_list_id,
             "[True, None, 'x']",
             "status-list identifiers retain Python str() compatibility"
+        );
+    }
+
+    #[test]
+    fn status_list_entries_preserve_python_null_and_decimal_compatibility() {
+        let mut value = source("ietf_sd_jwt");
+        value.status_list_entries = vec![
+            json!({"status_list_id": "skip-null-index", "index": null}),
+            json!({
+                "status_list_id": "status-list-10",
+                "index": "\u{2003}1_0\u{2003}",
+                "type": null
+            }),
+            json!({"status_list_id": "arabic-indic", "index": "١_٢"}),
+            json!({"status_list_id": "fullwidth", "index": "１２"}),
+            json!({"status_list_id": "mixed", "index": "1_٢"}),
+            json!({
+                "status_list_id": "unbounded",
+                "index": "184467440737095516160"
+            }),
+        ];
+        let record = project_issued_credential(value, Utc::now()).unwrap();
+        assert_eq!(record.status_list_entries.len(), 5);
+        assert_eq!(record.status_list_entries[0].index, json!(10));
+        assert_eq!(record.status_list_entries[0].entry_type, None);
+        assert_eq!(record.status_list_entries[1].index, json!(12));
+        assert_eq!(record.status_list_entries[2].index, json!(12));
+        assert_eq!(record.status_list_entries[3].index, json!(12));
+        assert_eq!(
+            record.status_list_entries[4].index.to_string(),
+            "184467440737095516160"
+        );
+
+        for invalid in ["²", "Ⅻ"] {
+            assert_eq!(
+                python_integer(&Value::String(invalid.to_owned())),
+                Err(IssuedCredentialAdapterError::RepositoryUnavailable),
+                "non-decimal Unicode numeric characters must remain invalid"
+            );
+        }
+    }
+
+    #[test]
+    fn status_list_float_indices_match_unbounded_python_int_conversion() {
+        let positive = python_integer(&json!(1e100)).unwrap();
+        let negative = python_integer(&json!(-1e100)).unwrap();
+        assert_eq!(
+            positive.to_string(),
+            "10000000000000000159028911097599180468360808563945281389781327557747838772170381060813469985856815104"
+        );
+        assert_eq!(
+            negative.to_string(),
+            "-10000000000000000159028911097599180468360808563945281389781327557747838772170381060813469985856815104"
+        );
+        assert_eq!(python_integer(&json!(123.875)).unwrap(), json!(123));
+        for invalid in ["NaN", "Infinity", "-Infinity"] {
+            assert_eq!(
+                python_integer(&Value::String(invalid.to_owned())),
+                Err(IssuedCredentialAdapterError::RepositoryUnavailable)
+            );
+        }
+    }
+
+    #[test]
+    fn every_projected_timestamp_preserves_python_microsecond_precision() {
+        let mut value = source("ietf_sd_jwt");
+        value.issued_at = DateTime::parse_from_rfc3339("2026-09-01T08:00:00.120000+00:00")
+            .unwrap()
+            .to_utc();
+        value.status_updated_at = DateTime::parse_from_rfc3339("2026-09-20T08:00:00.000001+00:00")
+            .unwrap()
+            .to_utc();
+        value.expires_at = Some(
+            DateTime::parse_from_rfc3339("2026-10-01T08:00:00.120000+00:00")
+                .unwrap()
+                .to_utc(),
+        );
+        value.revoked_at = Some(
+            DateTime::parse_from_rfc3339("2026-09-20T08:00:00.120000+00:00")
+                .unwrap()
+                .to_utc(),
+        );
+        let record = project_issued_credential(
+            value,
+            DateTime::parse_from_rfc3339("2026-09-25T08:00:00+00:00")
+                .unwrap()
+                .to_utc(),
+        )
+        .unwrap();
+
+        assert_eq!(record.issued_at, "2026-09-01T08:00:00.120000+00:00");
+        assert_eq!(
+            record.valid_from.as_deref(),
+            Some("2026-09-01T08:00:00.120000+00:00")
+        );
+        assert_eq!(
+            record.valid_until.as_deref(),
+            Some("2026-10-01T08:00:00.120000+00:00")
+        );
+        assert_eq!(
+            record.renewal_eligible_at.as_deref(),
+            Some("2026-09-24T08:00:00.120000+00:00")
+        );
+        assert_eq!(
+            record.revoked_at.as_deref(),
+            Some("2026-09-20T08:00:00.120000+00:00")
+        );
+        assert_eq!(record.created_at, "2026-09-01T08:00:00.120000+00:00");
+        assert_eq!(
+            record.updated_at.as_deref(),
+            Some("2026-09-20T08:00:00.000001+00:00")
         );
     }
 }

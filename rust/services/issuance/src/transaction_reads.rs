@@ -1,13 +1,13 @@
 use std::sync::Arc;
 
 use async_trait::async_trait;
-use chrono::{DateTime, SecondsFormat, Utc};
+use chrono::{DateTime, Utc};
 use marty_oid4vci::issuer::create_credential_offer;
 use serde::Serialize;
 use serde_json::Value;
 use thiserror::Error;
 
-use crate::management_security::ManagementSecurity;
+use crate::{management_security::ManagementSecurity, python_datetime::isoformat};
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "snake_case")]
@@ -265,7 +265,7 @@ impl TransactionReadService {
             id: transaction.id,
             revoked: transaction.status == TransactionStatus::Revoked,
             status: transaction.status,
-            revoked_at: transaction.revoked_at.map(python_isoformat),
+            revoked_at: transaction.revoked_at.map(isoformat),
             revocation_reason: transaction.revocation_reason,
         })
     }
@@ -281,7 +281,7 @@ impl IssuanceTransactionResponse {
             application_id: transaction.application_id,
             subject_did: transaction.subject_did,
             status: transaction.status,
-            created_at: python_isoformat(transaction.created_at),
+            created_at: isoformat(transaction.created_at),
             expires_at: None,
             issued_at: None,
             revoked_at: None,
@@ -298,32 +298,21 @@ impl IssuanceTransactionResponse {
             application_id: transaction.application_id,
             subject_did: transaction.subject_did,
             status: transaction.status,
-            created_at: python_isoformat(transaction.created_at),
-            expires_at: Some(python_isoformat(transaction.expires_at)),
-            issued_at: transaction.issued_at.map(python_isoformat),
-            revoked_at: transaction.revoked_at.map(python_isoformat),
+            created_at: isoformat(transaction.created_at),
+            expires_at: Some(isoformat(transaction.expires_at)),
+            issued_at: transaction.issued_at.map(isoformat),
+            revoked_at: transaction.revoked_at.map(isoformat),
             revocation_reason: transaction.revocation_reason,
         }
     }
 }
 
-fn python_isoformat(value: DateTime<Utc>) -> String {
-    let precision = if value.timestamp_subsec_micros() == 0 {
-        SecondsFormat::Secs
-    } else {
-        SecondsFormat::Micros
-    };
-    value.to_rfc3339_opts(precision, false)
-}
-
 #[cfg(test)]
 mod tests {
-    use chrono::DateTime;
-
-    use super::{python_isoformat, TransactionReadError, TransactionStatus};
+    use super::{TransactionReadError, TransactionStatus};
 
     #[test]
-    fn status_and_timestamps_fail_closed_and_preserve_python_shapes() {
+    fn statuses_fail_closed() {
         for status in [
             "pending",
             "authorized",
@@ -339,13 +328,5 @@ mod tests {
             TransactionStatus::try_from("unknown"),
             Err(TransactionReadError::RepositoryUnavailable)
         );
-        let time = DateTime::parse_from_rfc3339("2026-08-20T12:34:56.123000+00:00")
-            .expect("time")
-            .to_utc();
-        assert_eq!(python_isoformat(time), "2026-08-20T12:34:56.123000+00:00");
-        let whole_second = DateTime::parse_from_rfc3339("2026-08-20T12:34:56+00:00")
-            .expect("time")
-            .to_utc();
-        assert_eq!(python_isoformat(whole_second), "2026-08-20T12:34:56+00:00");
     }
 }

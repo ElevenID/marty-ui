@@ -12,6 +12,7 @@ pub mod lossless_json;
 pub mod lossless_json_tree;
 mod lossless_json_write;
 pub mod owned_json_value;
+mod python_datetime;
 mod python_format;
 mod python_json_diagnostic;
 pub mod python_text;
