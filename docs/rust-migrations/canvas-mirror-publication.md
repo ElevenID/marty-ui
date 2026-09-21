@@ -20,6 +20,35 @@ separate Canvas evidence `CanvasSyncWorker`. No native implementation, route
 selection, Python deletion, deployment, signing, or KMS change is authorized by
 this reference checkpoint.
 
+## Native implementation checkpoint (2026-09-21)
+
+The follow-on native branch now implements the six frozen routes, shared
+publication/status orchestration, health/provenance projections, alert events
+and optional critical webhooks in the Rust issuance service. The packaged main
+constructs that service from the existing publication/status providers and
+integration-secret vault, mounts the router, starts the optional automation
+worker, and aborts/awaits it during shutdown. Worker configuration, alert
+thresholds, webhook URL and bounded webhook timeout are typed once in
+`IssuanceServiceConfig`.
+
+PostgreSQL batch selection now uses `FOR UPDATE SKIP LOCKED` leases. A durable
+effect-start marker prevents an expired claim from automatically repeating an
+external provider action whose outcome became ambiguous before persistence.
+Normal provider failures remain retryable. Claim metadata is internal and is
+removed from public projections and successful final writes. This is an
+intentional safety correction to the Python implementation's unclaimed
+`SELECT ... LIMIT` batches; it preserves successful/error response behavior
+while preventing concurrent duplicate provider effects.
+
+The native gate currently proves the route/authentication/validation matrix,
+tenant-hidden publish admission, shared batch/automation behavior, provider
+cancellation before persistence, alert/webhook ordering, health/provenance
+output, and real-PostgreSQL tenant/claim/contention/fence behavior. Remaining
+before cutover are the full frozen HTTP/provider corpus comparison, packaged
+gateway/runtime proof, independent maintainer review, and all repository CI.
+Only after those gates pass may the superseded Python route/helper/worker code
+be deleted and the aggregate beta deployment proceed.
+
 ## Ownership and deletion boundary
 
 The frozen `infrastructure/api/routes.py` owns the six route definitions at

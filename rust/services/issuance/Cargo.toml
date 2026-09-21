@@ -206,6 +206,10 @@ name = "canvas_management_postgres_contract"
 path = "tests/canvas_management_postgres_contract.rs"
 
 [[test]]
+name = "canvas_mirror_postgres_contract"
+path = "tests/canvas_mirror_postgres_contract.rs"
+
+[[test]]
 name = "canvas_oauth_behavior"
 path = "tests/canvas_oauth_behavior.rs"
 

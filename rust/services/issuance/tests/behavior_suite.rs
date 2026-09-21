@@ -5,6 +5,9 @@
 #[path = "canvas_publication_behavior.rs"]
 mod canvas_publication_behavior;
 
+#[path = "canvas_mirror_native_behavior.rs"]
+mod canvas_mirror_native_behavior;
+
 #[path = "canvas_management_contract.rs"]
 mod canvas_management_contract;
 

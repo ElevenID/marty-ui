@@ -26,6 +26,7 @@ def test_canvas_postgres_contracts_are_required_in_ci() -> None:
         "canvas_lti_login_postgres_contract",
         "canvas_lti_sync_enqueue_postgres_contract",
         "canvas_management_postgres_contract",
+        "canvas_mirror_postgres_contract",
         "canvas_oauth_postgres_contract",
         "canvas_sync_worker_postgres_contract",
     }
@@ -42,8 +43,11 @@ def test_canvas_postgres_contracts_are_required_in_ci() -> None:
     assert 'startswith("canvas_")' in workflow
     assert 'endswith("_postgres_contract")' in workflow
     assert "canvas_*_postgres_contract-*" in workflow
-    assert workflow.count("Expected ten issuance PostgreSQL contract") == 2
-    assert workflow.count("nine Canvas plus proof nonce") == 2
+    assert workflow.count("Expected eleven issuance PostgreSQL contract") == 2
+    assert workflow.count("ten Canvas plus proof nonce") == 2
+    manifest = text("rust/services/issuance/Cargo.toml")
+    assert 'name = "canvas_mirror_postgres_contract"' in manifest
+    assert 'path = "tests/canvas_mirror_postgres_contract.rs"' in manifest
 
 
 def test_internal_application_postgres_contract_is_required_in_ci() -> None:

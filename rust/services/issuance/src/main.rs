@@ -16,6 +16,7 @@ use marty_issuance_service::{
         UuidCanvasEvidenceFactIdGenerator,
     },
     canvas_catalog::HttpCanvasCatalogProvider,
+    canvas_credentials_publication::CanvasCredentialsPublicationService,
     canvas_credentials_status::CanvasCredentialsStatusService,
     canvas_credentials_validation::{
         CanvasCredentialsValidationService, HttpCanvasCredentialsValidationTransport,
@@ -60,11 +61,18 @@ use marty_issuance_service::{
     canvas_management_http::CanvasPlatformManagementHttpService,
     canvas_management_postgres::PostgresCanvasManagementRepository,
     canvas_management_service::CanvasPlatformManagementService,
+    canvas_mirror_automation::spawn_canvas_mirror_automation,
+    canvas_mirror_http::CanvasMirrorHttpService,
+    canvas_mirror_postgres::PostgresCanvasMirrorRepository,
+    canvas_mirror_provider::TransportCanvasMirrorAlertWebhook,
+    canvas_mirror_service::CanvasMirrorService,
     canvas_oauth::{CanvasOAuthService, CanvasOAuthServiceConfig},
     canvas_oauth_http::HttpCanvasOAuthProvider,
     canvas_oauth_postgres::{PostgresCanvasOAuthRepository, PostgresIntegrationSecretVault},
     canvas_operations::CanvasOperationsService,
-    canvas_provider_http::CanvasOriginPolicy as CanvasProviderOriginPolicy,
+    canvas_provider_http::{
+        CanvasHttpClientPolicy, CanvasOriginPolicy as CanvasProviderOriginPolicy,
+    },
     canvas_readiness_runtime::{
         CanvasReadinessRuntime, HttpCanvasReadinessDocumentProvider,
         LiveCanvasReadinessChallengeProvider, PostgresCanvasReadinessStateProvider,
@@ -660,6 +668,31 @@ async fn main() -> Result<(), Box<dyn Error>> {
         &config,
         integration_secret_vault.clone(),
     ));
+    let canvas_publication = Arc::new(CanvasCredentialsPublicationService::from_runtime(
+        &config,
+        integration_secret_vault.clone(),
+    ));
+    let mut canvas_mirror = CanvasMirrorService::new(
+        Arc::new(PostgresCanvasMirrorRepository::new(pool.clone())),
+        config.issuer_base_url.clone(),
+        config.canvas_mirror_alert_thresholds,
+    )
+    .with_publication_provider(canvas_publication)
+    .with_status_provider(canvas_status.clone());
+    if let Some(url) = config.canvas_mirror_alert_webhook_url.clone() {
+        canvas_mirror =
+            canvas_mirror.with_alert_webhook(Arc::new(TransportCanvasMirrorAlertWebhook::new(
+                CanvasHttpClientPolicy {
+                    timeout: config.canvas_mirror_alert_webhook_timeout,
+                    private_origin_allowlist: config.canvas_private_origin_allowlist.clone(),
+                    allow_private_networks: config.canvas_allow_private_base_urls,
+                    allow_http_localhost: config.canvas_allow_http_localhost_base_urls,
+                },
+                url,
+            )));
+    }
+    let canvas_mirror_http =
+        CanvasMirrorHttpService::new(canvas_mirror.clone(), config.issuance_api_key.as_deref());
     let credential_management = CredentialManagementService::new(
         Arc::new(
             PostgresCredentialManagementRepository::new(pool.clone())
@@ -756,7 +789,8 @@ async fn main() -> Result<(), Box<dyn Error>> {
                     canvas_lti_tool_signer,
                 ),
             )
-            .with_operations(canvas_operations),
+            .with_operations(canvas_operations)
+            .with_mirror(canvas_mirror_http),
             TokenRateLimiter::from_python_config(config.token_rate_limit, config.token_rate_window),
             oid4vci_authorization,
         )
@@ -790,6 +824,10 @@ async fn main() -> Result<(), Box<dyn Error>> {
             .await
     };
     runtime.activate()?;
+    let canvas_mirror_worker = spawn_canvas_mirror_automation(
+        Arc::new(canvas_mirror),
+        config.canvas_mirror_automation.clone(),
+    );
     if grpc_enabled {
         health_reporter
             .set_serving::<IssuanceServiceServer<CredentialManagementGrpcService>>()
@@ -840,6 +878,9 @@ async fn main() -> Result<(), Box<dyn Error>> {
     }
     if !already_draining {
         runtime.drain()?;
+    }
+    if let Some(worker) = canvas_mirror_worker {
+        worker.shutdown().await;
     }
     runtime.stop()?;
     result?;
