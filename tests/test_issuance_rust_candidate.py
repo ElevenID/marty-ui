@@ -345,6 +345,9 @@ def test_frozen_surface_provenance_and_coverage_are_complete() -> None:
     discovery_cases = {case["operation"]: case for case in discovery["cases"]}
     tenant_cases = {case["operation"]: case for case in tenant["variants"]}
     transaction_cases = {case["operation"]: case for case in transaction_reads["cases"]}
+    credential_lifecycle_routes = {
+        route["operation"]: route for route in credential_lifecycle["scope"]["http"]
+    }
     canvas_management_operations = {
         route["operation"] for route in canvas_management["scope"]["routes"]
     }
@@ -383,11 +386,12 @@ def test_frozen_surface_provenance_and_coverage_are_complete() -> None:
         hashlib.sha256(renewal_bytes).hexdigest()
         == coverage["renewal_behavior_contract"]["sha256"]
     )
-    assert len(coverage["native_http"]) == 96
+    assert len(coverage["native_http"]) == 100
     assert set(native) == (
         set(discovery_cases)
         | set(tenant_cases)
         | set(transaction_cases)
+        | set(credential_lifecycle_routes)
         | canvas_management_operations
         | application_template_operations
         | internal_application_operations
@@ -462,6 +466,12 @@ def test_frozen_surface_provenance_and_coverage_are_complete() -> None:
                 "path": "/v1/issuance/credential",
                 "operation": "issue_credential",
                 "credential_behavior_contract": True,
+            }
+            continue
+        if operation in credential_lifecycle_routes:
+            assert coverage_entry == {
+                **credential_lifecycle_routes[operation],
+                "credential_lifecycle_behavior_contract": True,
             }
             continue
         if operation in {
@@ -629,7 +639,7 @@ def test_frozen_surface_provenance_and_coverage_are_complete() -> None:
         )
         assert discovery_cases[operation]["path"] == expected_case_path
     assert coverage["remaining"] == {
-        "http": 35,
+        "http": 31,
         "grpc": 0,
         "runtime_modes": ["api", "canvas-sync-worker"],
         "literal_environment_variables": 56,

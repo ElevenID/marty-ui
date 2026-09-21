@@ -13,6 +13,7 @@ use serde::Deserialize;
 
 pub const LEGACY_SERVICE: &str = "issuance";
 pub const NATIVE_SERVICE: &str = "issuance-native";
+const CREDENTIAL_LIFECYCLE_TAG: &str = "credential-lifecycle";
 
 #[derive(Debug, Deserialize)]
 struct Coverage {
@@ -23,6 +24,8 @@ struct Coverage {
 struct NativeHttpRoute {
     method: HttpMethod,
     path: String,
+    #[serde(default)]
+    credential_lifecycle_behavior_contract: bool,
 }
 
 static NATIVE_ROUTES: LazyLock<RouteTable> = LazyLock::new(|| {
@@ -32,6 +35,10 @@ static NATIVE_ROUTES: LazyLock<RouteTable> = LazyLock::new(|| {
     .expect("embedded issuance native coverage contract must be valid");
     let mut table = RouteTable::default();
     for (index, route) in coverage.native_http.into_iter().enumerate() {
+        let mut tags = BTreeSet::from(["native-migration".into()]);
+        if route.credential_lifecycle_behavior_contract {
+            tags.insert(CREDENTIAL_LIFECYCLE_TAG.into());
+        }
         table
             .add(RouteConfig {
                 name: format!("issuance-native:{index}"),
@@ -51,7 +58,7 @@ static NATIVE_ROUTES: LazyLock<RouteTable> = LazyLock::new(|| {
                 auth_required: false,
                 authentication_type: AuthenticationType::None,
                 priority: 10_000,
-                tags: BTreeSet::from(["native-migration".into()]),
+                tags,
             })
             .expect("issuance native coverage routes must be unique and valid");
     }
@@ -62,7 +69,19 @@ static NATIVE_ROUTES: LazyLock<RouteTable> = LazyLock::new(|| {
 pub fn is_native_http(method: HttpMethod, path: &str) -> bool {
     NATIVE_ROUTES
         .find(&GatewayRequest::new(method, path, 0))
-        .is_ok()
+        .is_ok_and(|matched| {
+            !matched.route.tags.contains(CREDENTIAL_LIFECYCLE_TAG)
+                || is_canonical_absolute_path(path)
+        })
+}
+
+fn is_canonical_absolute_path(path: &str) -> bool {
+    path.strip_prefix('/').is_some_and(|relative| {
+        !relative.is_empty()
+            && !relative.starts_with('/')
+            && !relative.ends_with('/')
+            && !relative.contains("//")
+    })
 }
 
 #[must_use]
@@ -154,6 +173,118 @@ mod tests {
             ),
         ] {
             assert_eq!(upstream_service(method, path), LEGACY_SERVICE);
+        }
+    }
+
+    #[test]
+    fn credential_lifecycle_selects_only_the_four_frozen_methods_and_paths() {
+        let contract: serde_json::Value = serde_json::from_str(include_str!(
+            "../../../../contracts/issuance-credential-lifecycle.json"
+        ))
+        .expect("credential lifecycle contract");
+        let routes = contract["scope"]["http"]
+            .as_array()
+            .expect("credential lifecycle HTTP routes");
+        assert_eq!(routes.len(), 4);
+
+        let methods = [
+            HttpMethod::Get,
+            HttpMethod::Post,
+            HttpMethod::Put,
+            HttpMethod::Delete,
+            HttpMethod::Patch,
+            HttpMethod::Head,
+            HttpMethod::Options,
+            HttpMethod::Trace,
+            HttpMethod::Connect,
+        ];
+        for route in routes {
+            let method: HttpMethod =
+                serde_json::from_value(route["method"].clone()).expect("lifecycle method");
+            let path = route["path"]
+                .as_str()
+                .expect("lifecycle path")
+                .replace("{credential_id}", "credential-1");
+            assert_eq!(upstream_service(method, &path), NATIVE_SERVICE);
+            for candidate in methods {
+                if candidate != method {
+                    assert_eq!(
+                        upstream_service(candidate, &path),
+                        LEGACY_SERVICE,
+                        "{candidate:?} {path}"
+                    );
+                }
+            }
+
+            let empty_id = path.replace("/credential-1/", "//");
+            for near_miss in [
+                path.trim_start_matches('/').to_owned(),
+                format!("/{path}"),
+                format!("{path}/"),
+                format!("{path}/extra"),
+                format!("{path}-extra"),
+                empty_id,
+            ] {
+                assert_eq!(
+                    upstream_service(method, &near_miss),
+                    LEGACY_SERVICE,
+                    "{method:?} {near_miss}"
+                );
+            }
+        }
+        for path in [
+            "/v1/issuance/credentials",
+            "/v1/issuance/credentials/credential-1",
+            "/v1/issuance/credentials/credential-1/status/extra",
+        ] {
+            assert_eq!(upstream_service(HttpMethod::Get, path), LEGACY_SERVICE);
+            assert_eq!(upstream_service(HttpMethod::Post, path), LEGACY_SERVICE);
+        }
+    }
+
+    #[test]
+    fn preexisting_native_routes_keep_route_table_path_matching_semantics() {
+        let coverage: Coverage = serde_json::from_str(include_str!(
+            "../../../../contracts/issuance-native-coverage.json"
+        ))
+        .expect("issuance native coverage contract");
+        let preexisting = coverage
+            .native_http
+            .into_iter()
+            .filter(|route| !route.credential_lifecycle_behavior_contract)
+            .collect::<Vec<_>>();
+        assert_eq!(preexisting.len(), 96);
+
+        for route in preexisting {
+            let canonical = route
+                .path
+                .split('/')
+                .map(|segment| {
+                    if segment.starts_with('{') && segment.ends_with('}') {
+                        "sample"
+                    } else {
+                        segment
+                    }
+                })
+                .collect::<Vec<_>>()
+                .join("/");
+            for candidate in [
+                canonical.clone(),
+                canonical.trim_start_matches('/').to_owned(),
+                format!("/{canonical}"),
+                format!("{canonical}/"),
+            ] {
+                let route_table_match = NATIVE_ROUTES
+                    .find(&GatewayRequest::new(route.method, &candidate, 0))
+                    .is_ok();
+                assert_eq!(
+                    is_native_http(route.method, &candidate),
+                    route_table_match,
+                    "{:?} {}",
+                    route.method,
+                    candidate
+                );
+            }
         }
     }
 
