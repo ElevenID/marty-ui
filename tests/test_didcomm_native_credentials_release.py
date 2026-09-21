@@ -38,8 +38,8 @@ def _component(lock: dict) -> dict:
 def _qualified_models() -> tuple[dict, dict]:
     contract = deepcopy(CONTRACT)
     lock = deepcopy(LOCK)
-    # Test-only values exercise the validator; the checked-in release pin stays null.
-    version = "0.1.75"
+    # Test-only values exercise the validator independently of the published pin.
+    version = "0.1.76"
     commit = contract["release_gate"]["required_source_checkpoint"]
     digest = "sha256:" + "a" * 64
     sbom = f"{RELEASE_BASE}/v{version}/{SBOM_NAME}"
@@ -63,38 +63,67 @@ def _qualified_models() -> tuple[dict, dict]:
     return contract, lock
 
 
-def test_current_activation_is_explicitly_unlandable_without_inventing_a_release() -> (
-    None
-):
+def test_current_activation_is_bound_to_the_exact_published_release() -> None:
     gate = CONTRACT["release_gate"]
-    assert gate["state"] == "blocked_pending_credentials_release"
-    assert gate["qualified_release"] is None
+    assert gate["state"] == "qualified"
     assert gate["required_source_checkpoint"] == (
-        "735a1b390099e2ac81378f99a62570ee36ffdc4b"
+        "aaa6a9b8e31e62cd0ab087eef5fc1f4835048e26"
     )
-    assert gate["minimum_version"] == "0.1.75"
+    assert gate["minimum_version"] == "0.1.76"
+    release = gate["qualified_release"]
+    assert release == {
+        "version": "0.1.76",
+        "commit": "aaa6a9b8e31e62cd0ab087eef5fc1f4835048e26",
+        "digest": (
+            "sha256:815cbba6efc7c91e770a8dd15fe5fa102d252a485073bf60f0e0d5e0a73b28e5"
+        ),
+        "evidence": {
+            "sbom": f"{RELEASE_BASE}/v0.1.76/{SBOM_NAME}",
+            "provenance": PROVENANCE,
+            "provenance_subject": (
+                f"{IMAGE}@sha256:815cbba6efc7c91e770a8dd15fe5fa102d252a485"
+                "073bf60f0e0d5e0a73b28e5"
+            ),
+            "provenance_source_commit": ("aaa6a9b8e31e62cd0ab087eef5fc1f4835048e26"),
+        },
+    }
     component = _component(LOCK)
     assert {
         "version": component["version"],
         "commit": component["commit"],
         "digest": component["artifacts"][0]["digest"],
-    } == gate["current_incompatible_lock"]
+    } == {
+        "version": release["version"],
+        "commit": release["commit"],
+        "digest": release["digest"],
+    }
+    validate_release_gate(CONTRACT, LOCK)
+
+
+def test_pending_gate_still_fails_closed_without_a_release_pin() -> None:
+    contract = deepcopy(CONTRACT)
+    contract["release_gate"].update(
+        state="blocked_pending_credentials_release", qualified_release=None
+    )
     with pytest.raises(NativeDidcommReleaseError, match="activation is blocked"):
-        validate_release_gate(CONTRACT, LOCK)
+        validate_release_gate(contract, LOCK)
 
 
-def test_exact_future_release_pin_can_satisfy_the_closed_gate() -> None:
+def test_exact_synthetic_release_pin_can_satisfy_the_closed_gate() -> None:
     contract, lock = _qualified_models()
     validate_release_gate(contract, lock)
 
 
-def test_stale_v0172_release_and_evidence_fail_closed() -> None:
+@pytest.mark.parametrize("version", ["0.1.72", "0.1.74", "0.1.75"])
+def test_stale_failed_or_quarantined_release_versions_fail_closed(
+    version: str,
+) -> None:
     contract, lock = _qualified_models()
     release = contract["release_gate"]["qualified_release"]
-    release["version"] = "0.1.72"
-    release["evidence"]["sbom"] = f"{RELEASE_BASE}/v0.1.72/{SBOM_NAME}"
+    release["version"] = version
+    release["evidence"]["sbom"] = f"{RELEASE_BASE}/v{version}/{SBOM_NAME}"
     component = _component(lock)
-    component["version"] = "0.1.72"
+    component["version"] = version
     component["artifacts"][0]["sbom"] = release["evidence"]["sbom"]
     with pytest.raises(NativeDidcommReleaseError, match="predates"):
         validate_release_gate(contract, lock)

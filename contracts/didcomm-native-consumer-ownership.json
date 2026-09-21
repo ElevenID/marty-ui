@@ -38,15 +38,19 @@
   "deferred": ["DIDCOMM-KMS-001"],
   "production_deployment": "unchanged",
   "release_gate": {
-    "state": "blocked_pending_credentials_release",
-    "minimum_version": "0.1.75",
-    "required_source_checkpoint": "735a1b390099e2ac81378f99a62570ee36ffdc4b",
-    "qualified_release": null,
-    "reason": "No fresh immutable marty-credentials issuance image containing the selector and proxy hardening has been released yet; failed tag v0.1.74 is not reusable",
-    "current_incompatible_lock": {
-      "version": "0.1.72",
-      "commit": "85b128a85426b3f5aeaf6f948ba5dfa2836e95d8",
-      "digest": "sha256:9f15b64bc0ec7a693339cada3142b2952a575d2b50ee89230aabe078d0026176"
+    "state": "qualified",
+    "minimum_version": "0.1.76",
+    "required_source_checkpoint": "aaa6a9b8e31e62cd0ab087eef5fc1f4835048e26",
+    "qualified_release": {
+      "version": "0.1.76",
+      "commit": "aaa6a9b8e31e62cd0ab087eef5fc1f4835048e26",
+      "digest": "sha256:815cbba6efc7c91e770a8dd15fe5fa102d252a485073bf60f0e0d5e0a73b28e5",
+      "evidence": {
+        "sbom": "https://github.com/ElevenID/marty-credentials/releases/download/v0.1.76/marty-credentials-issuance.spdx.json",
+        "provenance": "https://github.com/ElevenID/marty-credentials/attestations",
+        "provenance_subject": "ghcr.io/elevenid/marty-credentials-issuance@sha256:815cbba6efc7c91e770a8dd15fe5fa102d252a485073bf60f0e0d5e0a73b28e5",
+        "provenance_source_commit": "aaa6a9b8e31e62cd0ab087eef5fc1f4835048e26"
+      }
     }
   }
 }

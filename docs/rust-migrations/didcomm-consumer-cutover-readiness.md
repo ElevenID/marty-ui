@@ -3,10 +3,11 @@
 Status, 2026-09-21: direct-route and automatic-initiation native HTTP selection
 are locally qualified. Selected Compose models and the selected Kubernetes
 renderer also make retained direct Python callers delegate those complete
-requests to the same Rust owner. No deployed DIDComm cutover or reachable Python
-deletion is established by this document. Production is unchanged. This is a
-migration of observable behavior into the existing native owner, not a second
-cryptographic implementation.
+requests to the same Rust owner. Credentials `v0.1.76` now supplies the exact
+immutable issuance image required by the cutover gate. No deployed DIDComm
+cutover or reachable Python deletion is established by this document.
+Production is unchanged. This is a migration of observable behavior into the
+existing native owner, not a second cryptographic implementation.
 
 ## Latest initiation selection checkpoint
 
@@ -68,15 +69,24 @@ delivery requirements. This is an incremental consumer cutover, not permission
 to delete the standalone legacy implementation or a claim that Core 0.2 has a
 KMS-backed authcrypt API. `DIDCOMM-KMS-001` remains deferred.
 
-Activation is intentionally unlandable until an immutable Credentials issuance
-release contains the selector plus proxy and URL hardening. The fail-closed
-release contract records the reviewed source checkpoint but no invented version
-or digest; CI and CD reject the current lock until the later release-pin commit
-supplies an exact version, release source commit and digest at or after the fresh
-`0.1.75` release. The pinned release commit must equal the reviewed protected-main
-checkpoint; its canonical SBOM URL, provenance URL, provenance subject digest and
-provenance source commit must all agree with the exact stack-lock pin. The failed
-immutable `v0.1.74` tag cannot be reused or relabeled.
+The fail-closed activation gate is now qualified by immutable Credentials
+`v0.1.76`, protected-main source
+`aaa6a9b8e31e62cd0ab087eef5fc1f4835048e26`, and issuance image
+`sha256:815cbba6efc7c91e770a8dd15fe5fa102d252a485073bf60f0e0d5e0a73b28e5`.
+Preparation run `35621707546`, stable release run `35621735371`, and image
+finalization run `35624018264` all succeeded. The published SPDX asset has
+SHA-256 `fb5aded96403b2320a8c0ee9aeb3cf0cfe29a4aa7e57dd1708e1ddf2989c50a3`;
+artifact and image provenance, cosign signing, checksum signing, exact remote-tag
+revalidation and stable image-tag promotion all passed. The contract binds the
+canonical SBOM URL, provenance URL, image subject and source commit to the same
+stack-lock coordinate.
+
+This evidence authorizes landing the selected consumer configuration. It is not
+deployment or aggregate acceptance, does not authorize deleting the standalone
+legacy Python owner, and does not resolve `DIDCOMM-KMS-001`. The failed immutable
+`v0.1.74` and quarantined immutable `v0.1.75` coordinates remain historical and
+must not be reused or relabeled; neither is semantically acceptable to the gate,
+whose minimum is `v0.1.76`.
 
 ## Unicode endpoint and complete policy-boundary checkpoint
 

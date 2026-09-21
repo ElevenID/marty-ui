@@ -501,10 +501,10 @@ def test_deletion_release_uses_the_reviewed_integration_suite_and_rust_candidate
         for component in lock["components"]
         if component["name"] == "marty-credentials-issuance"
     )
-    assert issuance["version"] == "0.1.72"
-    assert issuance["commit"] == "85b128a85426b3f5aeaf6f948ba5dfa2836e95d8"
+    assert issuance["version"] == "0.1.76"
+    assert issuance["commit"] == "aaa6a9b8e31e62cd0ab087eef5fc1f4835048e26"
     assert issuance["artifacts"][0]["digest"] == (
-        "sha256:9f15b64bc0ec7a693339cada3142b2952a575d2b50ee89230aabe078d0026176"
+        "sha256:815cbba6efc7c91e770a8dd15fe5fa102d252a485073bf60f0e0d5e0a73b28e5"
     )
 
 
@@ -514,7 +514,7 @@ def test_verifier_release_lineage_is_eligible_and_evidence_bounded() -> None:
 
     assert lock["release"] == "marty-ui@1.1.217"
     assert lock["release_state"] == "eligible"
-    assert components["marty-credentials-issuance"]["version"] == "0.1.72"
+    assert components["marty-credentials-issuance"]["version"] == "0.1.76"
     assert components["marty-integration-tests"]["version"] == "1.2.79"
 
     documents = (
