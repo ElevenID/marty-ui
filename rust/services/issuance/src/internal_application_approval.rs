@@ -933,33 +933,33 @@ mod tests {
     async fn issuer_failure_is_redacted_and_never_reserves() {
         let now = Utc.with_ymd_and_hms(2026, 9, 20, 12, 0, 0).unwrap();
         let repository = Arc::new(Repository::default());
-        let (error, diagnostics) = crate::internal_application_diagnostics::
-            capture_test_internal_application_diagnostics(
-            async {
-                service(
-                    repository.clone(),
-                    Dependencies {
-                        template: Some(credential_template()),
-                        revocation_error: None,
-                        revocation_calls: Arc::new(AtomicUsize::new(0)),
-                    },
-                    Resolver {
-                        fail: true,
-                        calls: Arc::new(AtomicUsize::new(0)),
-                    },
-                    now,
-                )
-                .approve(
-                    &application(now),
-                    &application_template(now),
-                    "issuance-management-api",
-                    None,
-                )
-                .await
-                .unwrap_err()
-            },
-        )
-        .await;
+        let (error, diagnostics) =
+            crate::internal_application_diagnostics::capture_test_internal_application_diagnostics(
+                async {
+                    service(
+                        repository.clone(),
+                        Dependencies {
+                            template: Some(credential_template()),
+                            revocation_error: None,
+                            revocation_calls: Arc::new(AtomicUsize::new(0)),
+                        },
+                        Resolver {
+                            fail: true,
+                            calls: Arc::new(AtomicUsize::new(0)),
+                        },
+                        now,
+                    )
+                    .approve(
+                        &application(now),
+                        &application_template(now),
+                        "issuance-management-api",
+                        None,
+                    )
+                    .await
+                    .unwrap_err()
+                },
+            )
+            .await;
 
         assert_eq!(
             error,

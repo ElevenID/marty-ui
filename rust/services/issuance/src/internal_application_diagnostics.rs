@@ -145,9 +145,7 @@ pub(crate) fn warn_application_failure(
 }
 
 #[cfg(any(test, feature = "feature-regression-observer"))]
-async fn capture_internal_application_diagnostics<F>(
-    run: F,
-) -> (F::Output, Vec<String>)
+async fn capture_internal_application_diagnostics<F>(run: F) -> (F::Output, Vec<String>)
 where
     F: std::future::Future,
 {
@@ -169,9 +167,7 @@ where
 /// behavior invocation. This bootstrap-only API is compiled out unless the
 /// dedicated feature-regression probe opts in.
 #[cfg(feature = "feature-regression-observer")]
-pub async fn observe_internal_application_diagnostics<F>(
-    run: F,
-) -> (F::Output, Vec<String>)
+pub async fn observe_internal_application_diagnostics<F>(run: F) -> (F::Output, Vec<String>)
 where
     F: std::future::Future,
 {
@@ -239,9 +235,9 @@ mod tests {
 
     #[cfg(feature = "feature-regression-observer")]
     use futures_util::FutureExt;
+    use serde_json::Value;
     #[cfg(feature = "feature-regression-observer")]
     use std::panic::AssertUnwindSafe;
-    use serde_json::Value;
     use tracing::{field::Visit, subscriber::Interest, Event, Metadata, Subscriber};
     use tracing_subscriber::{layer::Context, prelude::*, Layer};
 
@@ -301,7 +297,10 @@ mod tests {
             "outside-scope",
         );
         let ((), after_cleanup) = observe_internal_application_diagnostics(async {}).await;
-        assert!(after_cleanup.is_empty(), "observer state leaked across scopes");
+        assert!(
+            after_cleanup.is_empty(),
+            "observer state leaked across scopes"
+        );
     }
 
     #[derive(Clone, Default)]
@@ -423,53 +422,53 @@ mod tests {
         let check = "check\nsecret-token https://check.example/?key=x bob@example.test";
         let resource = "resource\nsecret-token https://wallet.example/?key=x eve@example.test";
         let ((), events) = capture_test_internal_application_diagnostics(async {
-                warn_external_evidence_failure(application, check);
-                for (stage, category) in [
-                    (
-                        InternalApplicationDiagnosticStage::CanvasApprovalReadiness,
-                        InternalApplicationDiagnosticCategory::RolloutDisabled,
-                    ),
-                    (
-                        InternalApplicationDiagnosticStage::CanvasApprovalIssuerContext,
-                        InternalApplicationDiagnosticCategory::DependencyUnavailable,
-                    ),
-                    (
-                        InternalApplicationDiagnosticStage::CanvasOfferReadiness,
-                        InternalApplicationDiagnosticCategory::InvalidStatus,
-                    ),
-                    (
-                        InternalApplicationDiagnosticStage::CanvasOfferIssuerContext,
-                        InternalApplicationDiagnosticCategory::IssuerContextInvalid,
-                    ),
-                    (
-                        InternalApplicationDiagnosticStage::OrdinaryIssuerContext,
-                        InternalApplicationDiagnosticCategory::NotReady,
-                    ),
-                ] {
-                    warn_application_failure(stage, category, application);
-                }
-                for (stage, category) in [
-                    (
-                        InternalApplicationDiagnosticStage::WalletCatalogTemplate,
-                        InternalApplicationDiagnosticCategory::NotFound,
-                    ),
-                    (
-                        InternalApplicationDiagnosticStage::WalletCatalogConfiguration,
-                        InternalApplicationDiagnosticCategory::InvalidConfiguration,
-                    ),
-                    (
-                        InternalApplicationDiagnosticStage::WalletCatalogList,
-                        InternalApplicationDiagnosticCategory::InvalidResponse,
-                    ),
-                    (
-                        InternalApplicationDiagnosticStage::WalletCatalogGet,
-                        InternalApplicationDiagnosticCategory::TransactionPlanUnavailable,
-                    ),
-                ] {
-                    warn_wallet_catalog_failure(stage, category, resource);
-                }
-            })
-            .await;
+            warn_external_evidence_failure(application, check);
+            for (stage, category) in [
+                (
+                    InternalApplicationDiagnosticStage::CanvasApprovalReadiness,
+                    InternalApplicationDiagnosticCategory::RolloutDisabled,
+                ),
+                (
+                    InternalApplicationDiagnosticStage::CanvasApprovalIssuerContext,
+                    InternalApplicationDiagnosticCategory::DependencyUnavailable,
+                ),
+                (
+                    InternalApplicationDiagnosticStage::CanvasOfferReadiness,
+                    InternalApplicationDiagnosticCategory::InvalidStatus,
+                ),
+                (
+                    InternalApplicationDiagnosticStage::CanvasOfferIssuerContext,
+                    InternalApplicationDiagnosticCategory::IssuerContextInvalid,
+                ),
+                (
+                    InternalApplicationDiagnosticStage::OrdinaryIssuerContext,
+                    InternalApplicationDiagnosticCategory::NotReady,
+                ),
+            ] {
+                warn_application_failure(stage, category, application);
+            }
+            for (stage, category) in [
+                (
+                    InternalApplicationDiagnosticStage::WalletCatalogTemplate,
+                    InternalApplicationDiagnosticCategory::NotFound,
+                ),
+                (
+                    InternalApplicationDiagnosticStage::WalletCatalogConfiguration,
+                    InternalApplicationDiagnosticCategory::InvalidConfiguration,
+                ),
+                (
+                    InternalApplicationDiagnosticStage::WalletCatalogList,
+                    InternalApplicationDiagnosticCategory::InvalidResponse,
+                ),
+                (
+                    InternalApplicationDiagnosticStage::WalletCatalogGet,
+                    InternalApplicationDiagnosticCategory::TransactionPlanUnavailable,
+                ),
+            ] {
+                warn_wallet_catalog_failure(stage, category, resource);
+            }
+        })
+        .await;
 
         assert_eq!(events.len(), 10);
         let contract: Value = serde_json::from_str(include_str!(
