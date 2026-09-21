@@ -11,7 +11,7 @@ from scripts.check_gateway_public_protocol_contract import (
 )
 
 
-CANONICAL_PROTOCOL_COMMIT = "a2de9d45399cfa877ee271485bcc027b565c49ae"
+CANONICAL_PROTOCOL_COMMIT = "76c37dc229b328afe002b911a26624543f814a64"
 
 
 def test_gateway_public_dto_shape_manifest_is_unique_and_versioned() -> None:
@@ -28,22 +28,21 @@ def test_every_gateway_behavior_vector_executes_in_rust() -> None:
     _assert_rust_behavior_vectors()
 
 
-def test_ci_pins_the_reconciled_elevenid_protocol_once() -> None:
+def test_ci_pins_the_public_protocol_once_without_repository_secrets() -> None:
     workflow = Path(".github/workflows/ci.yml").read_text(encoding="utf-8")
     assert f"MARTY_PROTOCOL_REF: {CANONICAL_PROTOCOL_COMMIT}" in workflow
-    assert "repository: ElevenID/marty-protocol" in workflow
-    assert "repository: Marty-Protocol/Marty-Protocol" not in workflow
+    assert "repository: Marty-Protocol/Marty-Protocol" in workflow
+    assert "repository: ElevenID/marty-protocol" not in workflow
     assert "ELEVENID_MARTY_PROTOCOL_REF" not in workflow
     assert "--issued-credential-extension-only" not in workflow
-    assert workflow.count("repository: ElevenID/marty-protocol") == 1
-    private_checkout = """\
+    assert workflow.count("repository: Marty-Protocol/Marty-Protocol") == 1
+    public_checkout = """\
           persist-credentials: false
-          token: ${{ secrets.REPO_ACCESS_TOKEN }}
-          repository: ElevenID/marty-protocol
+          repository: Marty-Protocol/Marty-Protocol
           ref: ${{ env.MARTY_PROTOCOL_REF }}
           path: marty-protocol
 """
-    assert private_checkout in workflow
+    assert public_checkout in workflow
 
 
 def test_legacy_protocol_version_gate_remains_exact(tmp_path: Path) -> None:
@@ -79,7 +78,6 @@ def test_issued_credential_protocol_extensions_are_closed_and_canonical(
         "additionalProperties": False,
         "properties": {
             "reason": {"type": ["string", "null"], "maxLength": 2000},
-            "comments": {"type": ["string", "null"], "maxLength": 4000},
         },
     }
     formats = {
@@ -96,11 +94,24 @@ def test_issued_credential_protocol_extensions_are_closed_and_canonical(
     (enums / "credential-formats.json").write_text(
         json.dumps(formats), encoding="utf-8"
     )
-    _assert_issued_credential_extension_contract(tmp_path)
-
-    lifecycle["properties"]["comments"]["maxLength"] = 3999
-    (schemas / "issued-credential-lifecycle-request.json").write_text(
-        json.dumps(lifecycle), encoding="utf-8"
+    adapter_contract = {
+        "lifecycle_request": {
+            "extra_fields": "forbidden",
+            "reason": {"nullable": True, "max_unicode_scalars": 2000},
+            "comments": {
+                "nullable": True,
+                "max_unicode_scalars": 4000,
+                "blank_normalized_to_null": True,
+            },
+        }
+    }
+    adapter_contract_path = tmp_path / "issuance-issued-credential-adapters.json"
+    adapter_contract_path.write_text(
+        json.dumps(adapter_contract), encoding="utf-8"
     )
-    with pytest.raises(AssertionError, match="comments contract drifted"):
-        _assert_issued_credential_extension_contract(tmp_path)
+    _assert_issued_credential_extension_contract(tmp_path, adapter_contract_path)
+
+    adapter_contract["lifecycle_request"]["comments"]["max_unicode_scalars"] = 3999
+    adapter_contract_path.write_text(json.dumps(adapter_contract), encoding="utf-8")
+    with pytest.raises(AssertionError, match="comments extension drifted"):
+        _assert_issued_credential_extension_contract(tmp_path, adapter_contract_path)

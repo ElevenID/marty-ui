@@ -7,7 +7,7 @@ env:
   MARTY_BLOG_DIGEST: sha256:1dda635bd284d9cb254e3c2c51fc09890cfae21b48a4c2095985621ad86cb358
   MARTY_COMMON_URI: https://github.com/ElevenID/Marty/releases/download/marty-common-v0.2.16/marty_common-0.2.16-py3-none-any.whl
   MARTY_COMMON_DIGEST: sha256:e39d77ebcdd47e301fff6933d19929e19bb92f2ef6fb5f3e15d9e10e184f13b4
-  MARTY_PROTOCOL_REF: a2de9d45399cfa877ee271485bcc027b565c49ae
+  MARTY_PROTOCOL_REF: 76c37dc229b328afe002b911a26624543f814a64
 
 on:
   pull_request:
@@ -1528,8 +1528,7 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
           persist-credentials: false
-          token: ${{ secrets.REPO_ACCESS_TOKEN }}
-          repository: ElevenID/marty-protocol
+          repository: Marty-Protocol/Marty-Protocol
           ref: ${{ env.MARTY_PROTOCOL_REF }}
           path: marty-protocol
       - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97
