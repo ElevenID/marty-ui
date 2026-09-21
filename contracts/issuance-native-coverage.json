@@ -363,6 +363,30 @@
     },
     {
       "method": "POST",
+      "path": "/v1/issuance/credentials/{credential_id}/revoke",
+      "operation": "revoke_credential",
+      "credential_lifecycle_behavior_contract": true
+    },
+    {
+      "method": "POST",
+      "path": "/v1/issuance/credentials/{credential_id}/suspend",
+      "operation": "suspend_credential",
+      "credential_lifecycle_behavior_contract": true
+    },
+    {
+      "method": "POST",
+      "path": "/v1/issuance/credentials/{credential_id}/reinstate",
+      "operation": "reinstate_credential",
+      "credential_lifecycle_behavior_contract": true
+    },
+    {
+      "method": "GET",
+      "path": "/v1/issuance/credentials/{credential_id}/status",
+      "operation": "get_credential_status",
+      "credential_lifecycle_behavior_contract": true
+    },
+    {
+      "method": "POST",
       "path": "/v1/integrations/canvas/lti/platforms/{platform_id}/login",
       "operation": "initiate_canvas_lti_login_route",
       "canvas_lti_behavior_case": "login"
@@ -699,7 +723,7 @@
     {"method": "GET", "path": "/version", "owner": "mmf-runtime"}
   ],
   "remaining": {
-    "http": 35,
+    "http": 31,
     "grpc": 0,
     "runtime_modes": ["api", "canvas-sync-worker"],
     "literal_environment_variables": 56,

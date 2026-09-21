@@ -4,6 +4,8 @@ import hashlib
 import json
 from pathlib import Path
 
+import yaml
+
 ROOT = Path(__file__).resolve().parents[1]
 
 
@@ -345,6 +347,9 @@ def test_frozen_surface_provenance_and_coverage_are_complete() -> None:
     discovery_cases = {case["operation"]: case for case in discovery["cases"]}
     tenant_cases = {case["operation"]: case for case in tenant["variants"]}
     transaction_cases = {case["operation"]: case for case in transaction_reads["cases"]}
+    credential_lifecycle_routes = {
+        route["operation"]: route for route in credential_lifecycle["scope"]["http"]
+    }
     canvas_management_operations = {
         route["operation"] for route in canvas_management["scope"]["routes"]
     }
@@ -383,11 +388,12 @@ def test_frozen_surface_provenance_and_coverage_are_complete() -> None:
         hashlib.sha256(renewal_bytes).hexdigest()
         == coverage["renewal_behavior_contract"]["sha256"]
     )
-    assert len(coverage["native_http"]) == 96
+    assert len(coverage["native_http"]) == 100
     assert set(native) == (
         set(discovery_cases)
         | set(tenant_cases)
         | set(transaction_cases)
+        | set(credential_lifecycle_routes)
         | canvas_management_operations
         | application_template_operations
         | internal_application_operations
@@ -462,6 +468,12 @@ def test_frozen_surface_provenance_and_coverage_are_complete() -> None:
                 "path": "/v1/issuance/credential",
                 "operation": "issue_credential",
                 "credential_behavior_contract": True,
+            }
+            continue
+        if operation in credential_lifecycle_routes:
+            assert coverage_entry == {
+                **credential_lifecycle_routes[operation],
+                "credential_lifecycle_behavior_contract": True,
             }
             continue
         if operation in {
@@ -629,7 +641,7 @@ def test_frozen_surface_provenance_and_coverage_are_complete() -> None:
         )
         assert discovery_cases[operation]["path"] == expected_case_path
     assert coverage["remaining"] == {
-        "http": 35,
+        "http": 31,
         "grpc": 0,
         "runtime_modes": ["api", "canvas-sync-worker"],
         "literal_environment_variables": 56,
@@ -717,3 +729,50 @@ def test_candidate_is_path_split_without_replacing_the_python_runtime() -> None:
     assert "MARTY_ISSUANCE_IMAGE" in production
     assert "CANVAS_LTI_EXPERIENCE_SESSION_TTL_MINUTES:" not in production
     assert "MARTY_ISSUANCE_IMAGE" in compose
+
+
+def test_internal_lifecycle_cutover_preserves_public_wrapper_contract() -> None:
+    coverage = json.loads(text("contracts/issuance-native-coverage.json"))
+    gateway = json.loads(text("contracts/gateway-routes.json"))
+    native = {(route["method"], route["path"]) for route in coverage["native_http"]}
+    public = {(route["method"], route["path"]) for route in gateway["routes"]}
+
+    internal_lifecycle = {
+        ("POST", "/v1/issuance/credentials/{credential_id}/revoke"),
+        ("POST", "/v1/issuance/credentials/{credential_id}/suspend"),
+        ("POST", "/v1/issuance/credentials/{credential_id}/reinstate"),
+        ("GET", "/v1/issuance/credentials/{credential_id}/status"),
+    }
+    public_record_wrappers = {
+        ("POST", "/v1/issued-credentials/{credential_id}/revoke"),
+        ("POST", "/v1/issued-credentials/{credential_id}/suspend"),
+        ("POST", "/v1/issued-credentials/{credential_id}/reinstate"),
+    }
+
+    assert internal_lifecycle <= native
+    assert internal_lifecycle.isdisjoint(public)
+    assert public_record_wrappers <= public
+    assert public_record_wrappers.isdisjoint(native)
+    assert (
+        "GET",
+        "/v1/issued-credentials/{credential_id}/status",
+    ) not in public
+
+
+def test_beta_status_consumer_selects_native_without_changing_production() -> None:
+    beta = yaml.safe_load(text("docker-compose.beta.yml"))
+    presentation_policy = beta["services"]["presentation-policy"]
+    assert presentation_policy["environment"]["MIP_CREDENTIAL_STATUS_URL_TEMPLATE"] == (
+        "http://issuance-native:8005/v1/issuance/credentials/{credential_id}/status"
+    )
+    assert presentation_policy["depends_on"]["issuance-native"] == {
+        "condition": "service_healthy"
+    }
+
+    production = yaml.safe_load(text("docker-compose.selfhost.prod.yml"))
+    assert production["services"]["presentation-policy"]["environment"][
+        "MIP_CREDENTIAL_STATUS_URL_TEMPLATE"
+    ] == (
+        "${MIP_CREDENTIAL_STATUS_URL_TEMPLATE:-http://issuance:8005/v1/issuance/"
+        "credentials/{credential_id}/status}"
+    )
