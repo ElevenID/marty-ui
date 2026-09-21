@@ -278,7 +278,7 @@ async fn par_is_single_use_and_authorization_preserves_registered_redirect_queri
             redirect_uris: vec!["https://wallet.example/callback?channel=one".into()],
         },
     );
-    let (status, _, body) = send(
+    let (status, headers, body) = send(
         app(&repository),
         "POST",
         "/v1/issuance/par?issuer_org=org-a",
@@ -288,7 +288,11 @@ async fn par_is_single_use_and_authorization_preserves_registered_redirect_queri
     )
     .await;
     assert_eq!(status, 201);
-    let request_uri = body.unwrap()["request_uri"].as_str().unwrap().to_owned();
+    assert_eq!(headers["content-type"], "application/json");
+    let body = body.unwrap();
+    assert_eq!(body["expires_in"], 90);
+    let request_uri = body["request_uri"].as_str().unwrap().to_owned();
+    assert!(request_uri.starts_with("urn:ietf:params:oauth:request_uri:"));
     assert_eq!(
         repository.inspect(|state| state.pars.values().next().unwrap().organization_id.clone()),
         Some("org-a".into())
@@ -334,7 +338,9 @@ async fn authorization_preserves_json_success_and_sanitizes_protocol_and_reposit
     )
     .await;
     assert_eq!(status, 200);
-    assert!(body.unwrap()["code"].as_str().unwrap().starts_with("ac_"));
+    let body = body.unwrap();
+    assert!(body["code"].as_str().unwrap().starts_with("ac_"));
+    assert_eq!(body["state"], "state-json");
 
     let (status, _, body) = send(
         app(&repository),
@@ -955,6 +961,39 @@ async fn deferred_credentials_require_a_bound_nonempty_token_and_preserve_status
     .await;
     assert_eq!(status, 401, "authentication precedes body parsing");
     assert_eq!(body.unwrap()["error"], "invalid_token");
+
+    let (status, headers, body) = send(
+        app(&repository),
+        "POST",
+        "/v1/issuance/deferred-credential",
+        Some("application/json"),
+        Some("Bearer token-a"),
+        "not-json",
+    )
+    .await;
+    assert_eq!(status, 400);
+    assert_eq!(headers["content-type"], "application/json");
+    assert_eq!(
+        body.unwrap(),
+        json!({"error":"invalid_request","error_description":"Invalid JSON request body"})
+    );
+
+    repository.0.lock().unwrap().fail = true;
+    let (status, headers, body) = send(
+        app(&repository),
+        "POST",
+        "/v1/issuance/deferred-credential",
+        Some("application/json"),
+        Some("Bearer token-a"),
+        r#"{"transaction_id":"tx-a"}"#,
+    )
+    .await;
+    assert_eq!(status, 503);
+    assert_eq!(headers["content-type"], "application/json");
+    assert_eq!(
+        body.unwrap(),
+        json!({"error":"temporarily_unavailable","error_description":"OID4VCI service is temporarily unavailable"})
+    );
 }
 
 #[tokio::test]
@@ -1099,6 +1138,23 @@ async fn notifications_validate_bind_persist_and_idempotently_acknowledge_suppor
     .await;
     assert_eq!(status, 401, "authentication precedes body parsing");
     assert_eq!(body.unwrap()["error"], "invalid_token");
+
+    repository.0.lock().unwrap().fail = true;
+    let (status, headers, body) = send(
+        app(&repository),
+        "POST",
+        "/v1/issuance/notification",
+        Some("application/json"),
+        Some("Bearer token-a"),
+        valid,
+    )
+    .await;
+    assert_eq!(status, 503);
+    assert_eq!(headers["content-type"], "application/json");
+    assert_eq!(
+        body.unwrap(),
+        json!({"error":"temporarily_unavailable","error_description":"OID4VCI service is temporarily unavailable"})
+    );
 }
 
 #[tokio::test]
