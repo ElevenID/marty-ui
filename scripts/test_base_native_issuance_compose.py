@@ -124,7 +124,14 @@ def assert_sources(base, profile, runtime):
             "ISSUANCE_GRPC_TARGET": "issuance-native:9005",
         }
     }
-    for name in set(NATIVE["TOKEN_CONSUMERS"]) - {"gateway", "flow"}:
+    assert profile["services"]["issuance"] == {
+        "environment": {
+            "GRPC_SERVICE_TOKEN": NATIVE_ONLY["GRPC_SERVICE_TOKEN"],
+            "DIDCOMM_DELIVERY_OWNER": "native",
+            "ISSUANCE_NATIVE_SERVICE_URL": NATIVE["NATIVE_URL"],
+        }
+    }
+    for name in set(NATIVE["TOKEN_CONSUMERS"]) - {"gateway", "flow", "issuance"}:
         assert profile["services"][name] == {
             "environment": {"GRPC_SERVICE_TOKEN": NATIVE_ONLY["GRPC_SERVICE_TOKEN"]}
         }

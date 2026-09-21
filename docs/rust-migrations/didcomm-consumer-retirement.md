@@ -21,19 +21,28 @@ runtime adapter is still under qualification. No new deployment is claimed.
 See the [current roadmap](../CONSOLIDATED_RUST_MIGRATION_ROADMAP.md) and each
 linked qualification record for the precise evidence and remaining runtime gates.
 
+Selected consumer compositions now also bind the retained Python service to the
+native owner explicitly. This preserves callers that still reach the legacy
+port: initiation and direct DIDComm delivery are forwarded as whole authenticated
+requests before Python state or crypto work, with no runtime fallback. The
+language-neutral ownership contract is
+`contracts/didcomm-native-consumer-ownership.json`. Standalone Credentials still
+defaults to its legacy owner, so source deletion remains gated on an explicit
+decision about that supported surface; KMS correction remains separate.
+
 The eight Canvas operations and standalone initiation/direct-delivery selection
 do not establish that every supported consumer has left Python. Renewal admission
 is being implemented separately; see [its frozen evidence](credential-renewal-retirement.md).
 
 | Consumer | Remaining retirement gate |
 | --- | --- |
-| Beta gateway | Qualify and select renewal only after native admission, both encryption modes and durable finalization pass. |
-| Base Compose | Add a qualified native service/profile and explicit gateway native URL; inventory direct legacy HTTP/gRPC loopback-port consumers. |
-| Self-hosted | Qualify native image/binary, secret-file loading, database readiness and service configuration without replacing the partial legacy service wholesale. |
-| Kubernetes | Add distinct native Deployment/Service, probes, image, schema, secrets and control-plane configuration before selective routing. |
-| Flow | Beta initiation gRPC is already native. Move base/self-hosted initiation targets only after qualification; retain legacy physical-document HTTP. |
-| Envoy | Qualify exact initiation RPC and annotated HTTP routing, authentication and response projection while retaining eleven sibling RPCs. |
-| Conformance | Select native overlays explicitly with paired policy/CA mounts and rendered-model gates; preserve legacy reference execution. |
+| Beta gateway | Direct delivery and initiation select Rust; remaining gates are coordinated artifacts and aggregate beta deployment/acceptance. |
+| Base Compose | Native remains explicit opt-in and delegates retained direct callers; decide the supported standalone legacy surface before deletion. |
+| Self-hosted | Selected composition delegates retained direct callers; complete artifact/runtime qualification before retiring the legacy service. |
+| Kubernetes | Selected renderer adds the native owner and direct delegation; keep the unselected production source unchanged until deployment approval and acceptance. |
+| Flow | Native compositions select initiation gRPC; retain legacy physical-document HTTP and complete aggregate acceptance. |
+| Envoy | Exact initiation RPC and annotated HTTP routing are selectively native; retain eleven sibling RPCs and complete deployed response/authentication acceptance. |
+| Conformance | Native overlay is explicit with paired policy/CA mounts and direct delegation; preserve legacy reference execution. |
 
 Gateway `config.rs` deliberately aliases the native service URL to legacy when
 `ISSUANCE_NATIVE_SERVICE_URL` is absent. That is static configuration, not a

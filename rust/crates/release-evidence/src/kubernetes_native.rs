@@ -659,6 +659,9 @@ pub fn compose(
         container_mut(&mut additions[native_index], "issuance-native")?,
         values,
     )?;
+    let legacy_owner = container_mut(&mut result[legacy_index], "issuance")?;
+    append_env(legacy_owner, "DIDCOMM_DELIVERY_OWNER", "native")?;
+    append_env(legacy_owner, "ISSUANCE_NATIVE_SERVICE_URL", NATIVE_URL)?;
     let shared_signing_key = (**environment(container(&result[gateway_index], "gateway")?)?
         .get("SIGNING_KEYS_INTERNAL_API_KEY")
         .ok_or(REFUSAL)?)

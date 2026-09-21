@@ -98,7 +98,10 @@ services:
       <<: *native-issuance-grpc-auth
       ISSUANCE_GRPC_TARGET: issuance-native:9005
   issuance:
-    environment: *native-issuance-grpc-auth
+    environment:
+      <<: *native-issuance-grpc-auth
+      DIDCOMM_DELIVERY_OWNER: native
+      ISSUANCE_NATIVE_SERVICE_URL: http://issuance-native:8005
   revocation-profile:
     environment: *native-issuance-grpc-auth
   device-registration:

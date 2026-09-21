@@ -155,6 +155,15 @@ fn whole_model_preserves_legacy_and_all_siblings_with_only_closed_deltas() {
                         &volumes
                     );
                 }
+                let entries = owner_mut(value)["env"].as_array_mut().unwrap();
+                assert_eq!(
+                    entries.pop().unwrap(),
+                    json!({"name":"ISSUANCE_NATIVE_SERVICE_URL","value":"http://issuance-native:8005"})
+                );
+                assert_eq!(
+                    entries.pop().unwrap(),
+                    json!({"name":"DIDCOMM_DELIVERY_OWNER","value":"native"})
+                );
             }
         }
         assert_eq!(

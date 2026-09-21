@@ -1,10 +1,12 @@
 # DIDComm Rust consumer cutover readiness
 
-Status, 2026-09-12: direct-route and automatic-initiation native HTTP selection
-are locally qualified; beta Flow initiation RPC selection is configured. No deployed
-DIDComm cutover or reachable Python deletion is established by this document.
-Production is unchanged. This is a migration of observable behavior into the
-existing native owner, not a second cryptographic implementation.
+Status, 2026-09-21: direct-route and automatic-initiation native HTTP selection
+are locally qualified. Selected Compose models and the selected Kubernetes
+renderer also make retained direct Python callers delegate those complete
+requests to the same Rust owner. No deployed DIDComm cutover or reachable Python
+deletion is established by this document. Production is unchanged. This is a
+migration of observable behavior into the existing native owner, not a second
+cryptographic implementation.
 
 ## Latest initiation selection checkpoint
 
@@ -27,11 +29,12 @@ checks passed without rerunning successful tests. All sixteen owned containers
 were independently absent. These are local results, not new hosted acceptance.
 
 Beta configuration `d36479a79` preserves the legacy related-resource allowlist
-and control-plane bindings, and selects only Flow's initiation gRPC target;
-physical-document HTTP remains legacy. Standalone base/self-host/Kubernetes
-consumer profiles still prevent deleting reachable Python delivery code. KMS
-corrections remain deferred; compatible artifacts and aggregate beta acceptance
-are still required.
+and control-plane bindings, and selects Flow's initiation gRPC target;
+physical-document HTTP remains legacy. The later direct-consumer delegation
+checkpoint below closes the retained-port gap in selected native compositions.
+Standalone Credentials and the unselected base/Kubernetes sources remain legacy,
+so reachable Python delivery code cannot yet be deleted. KMS corrections remain
+deferred; compatible artifacts and aggregate beta acceptance are still required.
 
 ## Explicit scope
 
@@ -42,6 +45,27 @@ merged the outstanding `DIDCOMM-KMS-001` note at
 and opaque key-agreement corrections are outside this slice. Both anoncrypt and
 sender-authenticated authcrypt remain; failure must not select a weaker mode.
 Retained native local-key compatibility is not KMS-only custody.
+
+## Legacy direct-consumer delegation checkpoint
+
+The selected beta, self-host, general native and native-conformance Compose
+models now set `DIDCOMM_DELIVERY_OWNER=native` on the retained Python issuance
+service and pair it with the exact `ISSUANCE_NATIVE_SERVICE_URL`. The selected
+Kubernetes renderer adds the same closed pair; the unselected production source
+model remains unchanged. This closes the direct-port compatibility gap without
+copying crypto back into Python: legacy `POST /v1/issuance/initiate` and
+`POST /v1/issuance/didcomm/deliver` delegate the complete request to the existing
+Rust owner before Python reservation, signing, packing, encryption or transport.
+Only the management key, trusted organization and idempotency headers cross that
+internal boundary. Native unavailability returns a bounded 503 and never retries
+the Python implementation or downgrades authcrypt.
+
+Credentials keeps `legacy` as its standalone default. Legacy startup continues
+to require its existing DIDComm binding capabilities and preserves both modes.
+Only an explicitly paired native composition omits those unreachable Python
+delivery requirements. This is an incremental consumer cutover, not permission
+to delete the standalone legacy implementation or a claim that Core 0.2 has a
+KMS-backed authcrypt API. `DIDCOMM-KMS-001` remains deferred.
 
 ## Unicode endpoint and complete policy-boundary checkpoint
 

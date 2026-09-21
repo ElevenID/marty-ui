@@ -52,6 +52,7 @@ def environment(item):
 
 def target_key(name):
     return name.endswith("_GRPC_TARGET") or name in {
+        "DIDCOMM_DELIVERY_OWNER",
         "ISSUANCE_SERVICE_URL",
         "ISSUANCE_NATIVE_SERVICE_URL",
     }
@@ -220,6 +221,12 @@ def assert_selfhost_bindings(compose):
         "RP_GRPC_TARGET": "revocation-profile:9013",
     }
     expected["gateway"]["ISSUANCE_NATIVE_SERVICE_URL"] = "http://issuance-native:8005"
+    expected["issuance"].update(
+        {
+            "DIDCOMM_DELIVERY_OWNER": "native",
+            "ISSUANCE_NATIVE_SERVICE_URL": "http://issuance-native:8005",
+        }
+    )
     actual = {
         name: {
             key: value
