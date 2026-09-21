@@ -751,8 +751,21 @@ mod tests {
         assert_eq!(view.status, "active");
         assert_eq!(*harness.calls.lock().expect("calls"), ["load"]);
 
-        harness.calls.lock().expect("calls").clear();
-        let reason = "x".repeat(MAX_REASON_CHARACTERS + 1);
+        let harness = Harness::new(ManagedCredentialStatus::Active);
+        let accepted = "\u{1f642}".repeat(MAX_REASON_CHARACTERS);
+        harness
+            .service()
+            .transition(
+                "credential-a",
+                Some("org-a"),
+                CredentialLifecycleAction::Suspend,
+                Some(&accepted),
+            )
+            .await
+            .expect("2000 astral Unicode scalars");
+
+        let harness = Harness::new(ManagedCredentialStatus::Active);
+        let reason = "\u{1f642}".repeat(MAX_REASON_CHARACTERS + 1);
         let error = harness
             .service()
             .transition(
@@ -804,7 +817,7 @@ mod tests {
     #[tokio::test]
     async fn comments_use_unicode_scalar_limits_before_publication() {
         let harness = Harness::new(ManagedCredentialStatus::Active);
-        let accepted = "\u{e9}".repeat(MAX_COMMENTS_CHARACTERS);
+        let accepted = "\u{1f642}".repeat(MAX_COMMENTS_CHARACTERS);
         harness
             .service()
             .transition_with_context(
@@ -818,10 +831,10 @@ mod tests {
                 },
             )
             .await
-            .expect("4000 Unicode scalars");
+            .expect("4000 astral Unicode scalars");
 
         let harness = Harness::new(ManagedCredentialStatus::Active);
-        let rejected = "\u{e9}".repeat(MAX_COMMENTS_CHARACTERS + 1);
+        let rejected = "\u{1f642}".repeat(MAX_COMMENTS_CHARACTERS + 1);
         let error = harness
             .service()
             .transition_with_context(
@@ -835,7 +848,7 @@ mod tests {
                 },
             )
             .await
-            .expect_err("4001 Unicode scalars");
+            .expect_err("4001 astral Unicode scalars");
         assert_eq!(error, CredentialManagementError::CommentsTooLong);
         assert_eq!(*harness.calls.lock().expect("calls"), ["load"]);
     }
