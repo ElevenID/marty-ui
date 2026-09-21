@@ -37,11 +37,8 @@ def _qualified_models() -> tuple[dict, dict]:
     # Test-only values exercise the validator; the checked-in release pin stays null.
     release = {
         "version": "999.999.999",
-        "commit": "d" * 40,
+        "commit": contract["release_gate"]["required_source_checkpoint"],
         "digest": "sha256:" + "a" * 64,
-        "included_source_checkpoint": contract["release_gate"][
-            "required_source_checkpoint"
-        ],
     }
     contract["release_gate"].update(state="qualified", qualified_release=release)
     component = _component(lock)
@@ -59,7 +56,7 @@ def test_current_activation_is_explicitly_unlandable_without_inventing_a_release
     assert gate["required_source_checkpoint"] == (
         "4dbf77f06aa66c9c1bc4fa882d21580782825ec5"
     )
-    assert gate["minimum_version"] == "0.1.74"
+    assert gate["minimum_version"] == "0.1.75"
     component = _component(LOCK)
     assert {
         "version": component["version"],
@@ -77,24 +74,23 @@ def test_exact_future_release_pin_can_satisfy_the_closed_gate() -> None:
 
 @pytest.mark.parametrize(
     "mutation",
-    ["version", "commit", "digest", "checkpoint", "ancestry", "image"],
+    ["version", "commit", "digest", "checkpoint", "release_commit", "image"],
 )
 def test_partial_stale_or_wrong_release_pins_fail_closed(mutation: str) -> None:
     contract, lock = _qualified_models()
     component = _component(lock)
     if mutation == "version":
-        contract["release_gate"]["qualified_release"]["version"] = "0.1.73"
-        component["version"] = "0.1.73"
+        contract["release_gate"]["qualified_release"]["version"] = "0.1.74"
+        component["version"] = "0.1.74"
     elif mutation == "commit":
         component["commit"] = "b" * 40
     elif mutation == "digest":
         component["artifacts"][0]["digest"] = "sha256:" + "b" * 64
     elif mutation == "checkpoint":
         contract["release_gate"]["required_source_checkpoint"] = "c" * 40
-    elif mutation == "ancestry":
-        contract["release_gate"]["qualified_release"]["included_source_checkpoint"] = (
-            "c" * 40
-        )
+    elif mutation == "release_commit":
+        contract["release_gate"]["qualified_release"]["commit"] = "c" * 40
+        component["commit"] = "c" * 40
     else:
         component["artifacts"][0]["uri"] = "ghcr.io/elevenid/unreviewed"
     with pytest.raises(NativeDidcommReleaseError):

@@ -72,8 +72,9 @@ Activation is intentionally unlandable until an immutable Credentials issuance
 release contains the selector plus proxy and URL hardening. The fail-closed
 release contract records the reviewed source checkpoint but no invented version
 or digest; CI and CD reject the current lock until the later release-pin commit
-supplies an exact version, release source commit and digest at or after version
-`0.1.74`, with the reviewed checkpoint recorded as included release ancestry.
+supplies an exact version, release source commit and digest at or after the fresh
+`0.1.75` release. The pinned release commit must equal the reviewed protected-main
+checkpoint; the failed immutable `v0.1.74` tag cannot be reused or relabeled.
 
 ## Unicode endpoint and complete policy-boundary checkpoint
 

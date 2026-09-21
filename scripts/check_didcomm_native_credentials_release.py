@@ -111,7 +111,6 @@ def validate_release_gate(contract: dict[str, Any], lock: dict[str, Any]) -> Non
     version = release.get("version")
     commit = release.get("commit")
     digest = release.get("digest")
-    included_checkpoint = release.get("included_source_checkpoint")
     version_tuple = _version_tuple(version)
     _require(
         version_tuple is not None,
@@ -126,8 +125,8 @@ def validate_release_gate(contract: dict[str, Any], lock: dict[str, Any]) -> Non
         "Qualified Credentials commit is invalid",
     )
     _require(
-        included_checkpoint == checkpoint,
-        "Qualified Credentials release does not include the reviewed checkpoint",
+        commit == checkpoint,
+        "Qualified Credentials release commit is not the reviewed checkpoint",
     )
     _require(
         isinstance(digest, str) and DIGEST.fullmatch(digest) is not None,
