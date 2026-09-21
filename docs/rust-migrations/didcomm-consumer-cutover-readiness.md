@@ -48,11 +48,12 @@ Retained native local-key compatibility is not KMS-only custody.
 
 ## Legacy direct-consumer delegation checkpoint
 
-The selected beta, self-host, general native and native-conformance Compose
-models now set `DIDCOMM_DELIVERY_OWNER=native` on the retained Python issuance
+The selected beta, general native and native-conformance Compose models now set
+`DIDCOMM_DELIVERY_OWNER=native` on the retained Python issuance
 service and pair it with the exact `ISSUANCE_NATIVE_SERVICE_URL`. The selected
 Kubernetes renderer adds the same closed pair; the unselected production source
-model remains unchanged. This closes the direct-port compatibility gap without
+model and self-host production model remain legacy. This closes the direct-port
+compatibility gap for explicitly selected consumers without
 copying crypto back into Python: legacy `POST /v1/issuance/initiate` and
 `POST /v1/issuance/didcomm/deliver` delegate the complete request to the existing
 Rust owner before Python reservation, signing, packing, encryption or transport.
@@ -66,6 +67,13 @@ Only an explicitly paired native composition omits those unreachable Python
 delivery requirements. This is an incremental consumer cutover, not permission
 to delete the standalone legacy implementation or a claim that Core 0.2 has a
 KMS-backed authcrypt API. `DIDCOMM-KMS-001` remains deferred.
+
+Activation is intentionally unlandable until an immutable Credentials issuance
+release contains the selector plus proxy and URL hardening. The fail-closed
+release contract records the reviewed source checkpoint but no invented version
+or digest; CI and CD reject the current lock until the later release-pin commit
+supplies an exact version, release source commit and digest at or after version
+`0.1.74`, with the reviewed checkpoint recorded as included release ancestry.
 
 ## Unicode endpoint and complete policy-boundary checkpoint
 

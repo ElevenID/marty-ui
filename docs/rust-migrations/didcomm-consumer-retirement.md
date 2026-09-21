@@ -21,10 +21,12 @@ runtime adapter is still under qualification. No new deployment is claimed.
 See the [current roadmap](../CONSOLIDATED_RUST_MIGRATION_ROADMAP.md) and each
 linked qualification record for the precise evidence and remaining runtime gates.
 
-Selected consumer compositions now also bind the retained Python service to the
+Selected beta and explicit native consumer compositions now also bind the retained Python service to the
 native owner explicitly. This preserves callers that still reach the legacy
 port: initiation and direct DIDComm delivery are forwarded as whole authenticated
-requests before Python state or crypto work, with no runtime fallback. The
+requests before Python state or crypto work, with no runtime fallback. Self-host
+production remains legacy until a compatible immutable Credentials image is
+released and pinned. The
 language-neutral ownership contract is
 `contracts/didcomm-native-consumer-ownership.json`. Standalone Credentials still
 defaults to its legacy owner, so source deletion remains gated on an explicit
@@ -38,7 +40,7 @@ is being implemented separately; see [its frozen evidence](credential-renewal-re
 | --- | --- |
 | Beta gateway | Direct delivery and initiation select Rust; remaining gates are coordinated artifacts and aggregate beta deployment/acceptance. |
 | Base Compose | Native remains explicit opt-in and delegates retained direct callers; decide the supported standalone legacy surface before deletion. |
-| Self-hosted | Selected composition delegates retained direct callers; complete artifact/runtime qualification before retiring the legacy service. |
+| Self-hosted | Production remains legacy; require a compatible immutable Credentials image and runtime qualification before activation or retirement. |
 | Kubernetes | Selected renderer adds the native owner and direct delegation; keep the unselected production source unchanged until deployment approval and acceptance. |
 | Flow | Native compositions select initiation gRPC; retain legacy physical-document HTTP and complete aggregate acceptance. |
 | Envoy | Exact initiation RPC and annotated HTTP routing are selectively native; retain eleven sibling RPCs and complete deployed response/authentication acceptance. |

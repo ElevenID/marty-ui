@@ -1729,6 +1729,8 @@ jobs:
           python -m pytest -q tests/test_verification_candidate_build.py
           tests/test_verification_candidate_backend.py
           tests/test_verification_candidate_workflow.py
+      - name: Require a compatible Credentials image for native DIDComm consumers
+        run: python scripts/check_didcomm_native_credentials_release.py
 
   test-credential-lifecycle-browser:
     name: MIP 0.5 Credential Lifecycle Browser Gate

@@ -49,11 +49,18 @@ def test_consumer_contract_rejects_partial_or_legacy_selection(path: str, mutati
         _assert_selected(model)
 
 
-def test_default_base_and_kubernetes_sources_do_not_silently_change_production() -> None:
-    base = _model("docker-compose.base.yml")
-    assert CONTRACT["owner_selector"]["name"] not in base["services"]["issuance"][
-        "environment"
+def test_default_and_selfhost_production_models_remain_legacy() -> None:
+    assert CONTRACT["legacy_compose_models"] == [
+        "docker-compose.base.yml",
+        "docker-compose.selfhost.prod.yml",
     ]
+    for path in CONTRACT["legacy_compose_models"]:
+        environment = _model(path)["services"]["issuance"]["environment"]
+        assert CONTRACT["owner_selector"]["name"] not in environment
+        assert CONTRACT["native_origin"]["name"] not in environment
+
+
+def test_kubernetes_source_does_not_silently_change_production() -> None:
     kubernetes = "\n".join(
         path.read_text(encoding="utf-8")
         for path in [

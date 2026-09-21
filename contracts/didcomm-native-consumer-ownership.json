@@ -13,9 +13,12 @@
   },
   "selected_compose_models": [
     "docker-compose.beta.yml",
-    "docker-compose.selfhost.prod.yml",
     "docker-compose.profile.issuance-native.yml",
     "docker-compose.profile.conformance-native.yml"
+  ],
+  "legacy_compose_models": [
+    "docker-compose.base.yml",
+    "docker-compose.selfhost.prod.yml"
   ],
   "kubernetes": {
     "selector": "K8S_ISSUANCE_NATIVE_ENABLED",
@@ -33,5 +36,17 @@
     "native_unavailable": "503-without-legacy-fallback"
   },
   "deferred": ["DIDCOMM-KMS-001"],
-  "production_deployment": "unchanged"
+  "production_deployment": "unchanged",
+  "release_gate": {
+    "state": "blocked_pending_credentials_release",
+    "minimum_version": "0.1.74",
+    "required_source_checkpoint": "4dbf77f06aa66c9c1bc4fa882d21580782825ec5",
+    "qualified_release": null,
+    "reason": "No immutable marty-credentials issuance image containing the selector and proxy hardening has been released yet",
+    "current_incompatible_lock": {
+      "version": "0.1.72",
+      "commit": "85b128a85426b3f5aeaf6f948ba5dfa2836e95d8",
+      "digest": "sha256:9f15b64bc0ec7a693339cada3142b2952a575d2b50ee89230aabe078d0026176"
+    }
+  }
 }

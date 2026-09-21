@@ -539,8 +539,6 @@ services:
     command: ["python", "-m", "uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8005"]
     environment:
       <<: *issuance-application-env
-      DIDCOMM_DELIVERY_OWNER: native
-      ISSUANCE_NATIVE_SERVICE_URL: http://issuance-native:8005
       CANVAS_CREDENTIAL_ISSUER_PROFILE_IDS: ${CANVAS_CREDENTIAL_ISSUER_PROFILE_IDS:-}
       CANVAS_LTI_TOOL_ACTIVE_KID: ${CANVAS_LTI_TOOL_ACTIVE_KID:-}
       CANVAS_LTI_TOOL_PUBLIC_JWKS: ${CANVAS_LTI_TOOL_PUBLIC_JWKS:-}
