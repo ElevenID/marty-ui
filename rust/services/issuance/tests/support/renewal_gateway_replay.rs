@@ -1,10 +1,11 @@
-//! Real gateway proxy and resource-owner HTTP. The legacy owner GET remains a
+//! Real gateway proxy and resource-owner HTTP. The native owner GET remains a
 //! required dependency; only the exact renewal POST is selected natively.
 use super::didcomm_gateway_replay::{OwnedHttp, CLIENT_KEY};
 use async_trait::async_trait;
 use axum::{
     body::{to_bytes, Body},
     http::{Request, StatusCode},
+    routing::get,
     Router,
 };
 use marty_gateway::{
@@ -129,7 +130,7 @@ enum OwnerResponse {
 }
 
 #[derive(Default)]
-struct LegacyCounts {
+struct RequestCounts {
     attempts: AtomicUsize,
     owners: AtomicUsize,
     posts: AtomicUsize,
@@ -192,7 +193,7 @@ pub(super) struct GatewayFixture {
     native: Option<OwnedHttp>,
     legacy: OwnedHttp,
     counted: Arc<CountedHttp>,
-    legacy_counts: Arc<LegacyCounts>,
+    request_counts: Arc<RequestCounts>,
     path: String,
 }
 impl GatewayFixture {
@@ -204,49 +205,91 @@ impl GatewayFixture {
     ) -> Self {
         let path = format!("/v1/issued-credentials/{source_id}/renew");
         let owner_path = format!("/internal/v1/resource-owners/issued-credentials/{source_id}");
-        let native = OwnedHttp::start(native_router).await;
-        let legacy_counts = Arc::new(LegacyCounts::default());
-        let observed = legacy_counts.clone();
+        let request_counts = Arc::new(RequestCounts::default());
+        let observed = request_counts.clone();
+        let expected_owner_path = owner_path.clone();
+        let expected_owner_key = management_key.to_owned();
+        let expected_owner_org = organization.to_owned();
+        let native = OwnedHttp::start(native_router.route(
+            &owner_path,
+            get(move |request: Request<Body>| {
+                let observed = observed.clone();
+                let expected_path = expected_owner_path.clone();
+                let expected_key = expected_owner_key.clone();
+                let expected_org = expected_owner_org.clone();
+                async move {
+                    // Count before inspecting the request so a malformed native
+                    // owner lookup cannot masquerade as no lookup.
+                    observed.attempts.fetch_add(1, Ordering::SeqCst);
+                    assert_eq!(request.method(), axum::http::Method::GET);
+                    assert_eq!(request.uri().path(), expected_path);
+                    assert!(
+                        request
+                            .headers()
+                            .get("x-api-key")
+                            .is_some_and(|value| value == expected_key.as_str()),
+                        "native owner request requires management authentication"
+                    );
+                    assert!(
+                        request
+                            .headers()
+                            .get("x-service-token")
+                            .is_some_and(|value| value == SERVICE_TOKEN),
+                        "native owner provider requires service authentication"
+                    );
+                    assert_eq!(
+                        request.headers()["x-api-key-id"],
+                        "synthetic-renewal-caller"
+                    );
+                    assert!(request
+                        .headers()
+                        .values()
+                        .all(|value| !value.to_str().unwrap().contains("forged-")));
+                    assert!(to_bytes(request.into_body(), LIMIT)
+                        .await
+                        .unwrap()
+                        .is_empty());
+                    observed.owners.fetch_add(1, Ordering::SeqCst);
+                    match observed.owner_response.load(Ordering::SeqCst) {
+                        value if value == OwnerResponse::Found as usize => (
+                            StatusCode::OK,
+                            axum::Json(json!({"organization_id": expected_org})),
+                        ),
+                        value if value == OwnerResponse::NotFound as usize => (
+                            StatusCode::NOT_FOUND,
+                            axum::Json(json!({"detail":"Resource not found"})),
+                        ),
+                        value if value == OwnerResponse::Unavailable as usize => (
+                            StatusCode::SERVICE_UNAVAILABLE,
+                            axum::Json(json!({"detail":"Synthetic owner unavailable"})),
+                        ),
+                        _ => panic!("unknown controlled owner response"),
+                    }
+                }
+            }),
+        ))
+        .await;
+        let observed = request_counts.clone();
         let expected_path = path.clone();
         let expected_key = management_key.to_owned();
-        let expected_org = organization.to_owned();
         let legacy = OwnedHttp::start(Router::new().fallback(move |request: Request<Body>| {
             let observed = observed.clone();
-            let owner_path = owner_path.clone();
             let expected_path = expected_path.clone();
             let expected_key = expected_key.clone();
-            let expected_org = expected_org.clone();
             async move {
                 // Count before inspecting method, path or credentials: malformed
                 // requests must not masquerade as zero network attempts.
                 observed.attempts.fetch_add(1, Ordering::SeqCst);
                 assert!(request.headers().get("x-api-key").is_some_and(|value| value == expected_key.as_str()), "legacy request requires management authentication");
                 assert!(request.headers().values().all(|value| !value.to_str().unwrap().contains("forged-")));
-                if request.method() == axum::http::Method::GET && request.uri().path() == owner_path {
-                    assert!(request.headers().get("x-service-token").is_some_and(|value| value == SERVICE_TOKEN), "owner provider requires service authentication");
-                    assert_eq!(request.headers()["x-api-key-id"], "synthetic-renewal-caller");
-                    observed.owners.fetch_add(1, Ordering::SeqCst);
-                    match observed.owner_response.load(Ordering::SeqCst) {
-                        value if value == OwnerResponse::Found as usize =>
-                            (StatusCode::OK, axum::Json(json!({"organization_id": expected_org}))),
-                        value if value == OwnerResponse::NotFound as usize =>
-                            (StatusCode::NOT_FOUND, axum::Json(json!({"detail":"Resource not found"}))),
-                        value if value == OwnerResponse::Unavailable as usize =>
-                            (StatusCode::SERVICE_UNAVAILABLE, axum::Json(json!({"detail":"Synthetic owner unavailable"}))),
-                        _ => panic!("unknown controlled owner response"),
-                    }
-                } else {
-                    assert_eq!(request.method(), axum::http::Method::POST);
-                    assert_eq!(request.uri().path(), expected_path);
-                    // Ordinary issuance proxy uses its management key; the
-                    // owner provider independently injects its service token.
-                    assert!(request.headers().get("x-service-token").is_none());
-                    observed.posts.fetch_add(1, Ordering::SeqCst);
-                    (StatusCode::IM_A_TEAPOT, axum::Json(json!({
-                        "error":"owned_legacy_trap", "error_description":"Owned renewal legacy selection control",
-                        "message_id":"11111111-1111-4111-8111-111111111111"
-                    })))
-                }
+                assert_eq!(request.method(), axum::http::Method::POST);
+                assert_eq!(request.uri().path(), expected_path);
+                assert!(request.headers().get("x-service-token").is_none());
+                observed.posts.fetch_add(1, Ordering::SeqCst);
+                (StatusCode::IM_A_TEAPOT, axum::Json(json!({
+                    "error":"owned_legacy_trap", "error_description":"Owned renewal legacy selection control",
+                    "message_id":"11111111-1111-4111-8111-111111111111"
+                })))
             }
         })).await;
         assert_ne!(native.port, legacy.port);
@@ -329,7 +372,7 @@ impl GatewayFixture {
             native: Some(native),
             legacy,
             counted,
-            legacy_counts,
+            request_counts,
             path,
         }
     }
@@ -342,16 +385,16 @@ impl GatewayFixture {
         )
     }
     pub(super) fn owner_count(&self) -> usize {
-        self.legacy_counts.owners.load(Ordering::SeqCst)
+        self.request_counts.owners.load(Ordering::SeqCst)
     }
 
     fn assert_no_unexpected_legacy_requests(&self) {
         assert_eq!(
-            self.legacy_counts.attempts.load(Ordering::SeqCst),
-            self.owner_count() + self.legacy_counts.posts.load(Ordering::SeqCst)
+            self.request_counts.attempts.load(Ordering::SeqCst),
+            self.owner_count() + self.request_counts.posts.load(Ordering::SeqCst)
         );
         assert_eq!(
-            self.legacy_counts.posts.load(Ordering::SeqCst),
+            self.request_counts.posts.load(Ordering::SeqCst),
             self.counts().1
         );
     }
@@ -398,7 +441,7 @@ impl GatewayFixture {
             2,
             "foreign tenant is checked against actual owner result"
         );
-        self.legacy_counts
+        self.request_counts
             .owner_response
             .store(OwnerResponse::Unavailable as usize, Ordering::SeqCst);
         assert_eq!(
@@ -414,7 +457,7 @@ impl GatewayFixture {
             "owner outage must fail before either renewal POST"
         );
         assert_eq!(self.owner_count(), 3);
-        self.legacy_counts
+        self.request_counts
             .owner_response
             .store(OwnerResponse::Found as usize, Ordering::SeqCst);
         self.assert_no_unexpected_legacy_requests();
@@ -426,7 +469,7 @@ impl GatewayFixture {
     pub(super) async fn assert_missing_owner_uses_native_source_check(&self) {
         assert_eq!(self.counts(), (0, 0));
         assert_eq!(self.owner_count(), 0);
-        self.legacy_counts
+        self.request_counts
             .owner_response
             .store(OwnerResponse::NotFound as usize, Ordering::SeqCst);
         let (status, body) = request(&self.router, &self.path, Some(CLIENT_KEY)).await;
@@ -445,7 +488,7 @@ impl GatewayFixture {
             self.counted.last_native_response.lock().unwrap().as_ref(),
             Some(&json!({"detail":"Issued credential not found"}))
         );
-        self.legacy_counts
+        self.request_counts
             .owner_response
             .store(OwnerResponse::Found as usize, Ordering::SeqCst);
         self.assert_no_unexpected_legacy_requests();
@@ -497,9 +540,16 @@ impl GatewayFixture {
         let owners = self.owner_count();
         let (status, _) = request(&self.router, &self.path, Some(CLIENT_KEY)).await;
         assert!(status.is_server_error());
-        assert!(self.counts().0 > before.0);
-        assert_eq!(self.counts().1, before.1);
-        assert_eq!(self.owner_count(), owners + 1);
+        assert_eq!(
+            self.counts(),
+            before,
+            "unreachable native owner must stop before either renewal proxy"
+        );
+        assert_eq!(
+            self.owner_count(),
+            owners,
+            "unreachable native owner cannot reach the counted handler"
+        );
         self.assert_no_unexpected_legacy_requests();
     }
 
