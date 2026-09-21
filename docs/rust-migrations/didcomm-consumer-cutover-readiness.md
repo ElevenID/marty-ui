@@ -43,6 +43,33 @@ and opaque key-agreement corrections are outside this slice. Both anoncrypt and
 sender-authenticated authcrypt remain; failure must not select a weaker mode.
 Retained native local-key compatibility is not KMS-only custody.
 
+## Unicode endpoint and complete policy-boundary checkpoint
+
+The Credentials boundary inventory defines the delivery endpoint limit as 2,048
+characters. Python applies that limit with `len(str)`, while the native owner
+previously applied Rust `str::len()` and therefore counted UTF-8 bytes. This
+rejected otherwise valid non-ASCII endpoint paths before URL canonicalization.
+The shared language-neutral delivery contract now names Unicode scalar values as
+the unit, and `DidcommEndpointValidator` applies that same unit. HTTPS,
+credential rejection, DNS/public-address policy and deployment-only private-IP
+opt-in are unchanged.
+
+The same checkpoint closes the previously missing policy parser boundary corpus:
+exactly 64 KiB is accepted for an otherwise valid policy and 64 KiB plus one is
+rejected; 1,000 distinct issuers are accepted and 1,001 are rejected; malformed
+UTF-8, numeric-version drift, non-object issuers/entries and duplicate root or
+issuer members all fail closed. The existing ten captured Python policy vectors,
+real anoncrypt/authcrypt tests, wrong-sender no-downgrade control, trusted-tenant
+and public-error corpora remain the governing evidence.
+
+Qualification passed 36 native DIDComm unit tests, six language-neutral HTTP
+behavior tests, the legacy-repository atomicity test, all 472 non-ignored
+issuance library tests (one diagnostic subprocess test remains intentionally
+ignored), package formatting and strict library/test Clippy. This checkpoint
+does not select another consumer or authorize Python deletion. Canonical Core
+method-0 and abbreviated peer2 support remain `DIDCOMM-PEER-001/002`; opaque KMS
+custody remains `DIDCOMM-KMS-001`.
+
 ## Unkeyed native RPC checkpoint
 
 Reviewed `d7a12bc8d`, integrated locally as `8ae16c026`, qualifies ten unkeyed

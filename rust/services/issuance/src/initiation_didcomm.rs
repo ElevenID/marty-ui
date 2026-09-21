@@ -656,7 +656,10 @@ impl DidcommEndpointValidator {
         &self,
         endpoint: &str,
     ) -> Result<ValidatedDidcommEndpoint, NativeDidcommError> {
-        if endpoint.len() > MAX_ENDPOINT_LENGTH {
+        // The retained Python boundary counts Unicode scalar values with
+        // `len(endpoint)`, not UTF-8 bytes. Keep that observable limit while
+        // `Url` performs the canonical encoding used for transport.
+        if endpoint.chars().count() > MAX_ENDPOINT_LENGTH {
             return Err(NativeDidcommError::InvalidEndpoint);
         }
         let url = Url::parse(endpoint).map_err(|_| NativeDidcommError::InvalidEndpoint)?;
@@ -1636,13 +1639,17 @@ mod tests {
         sync::Notify,
     };
 
-    fn policy_file(contents: &str) -> PathBuf {
+    fn policy_file_bytes(contents: &[u8]) -> PathBuf {
         let path = std::env::temp_dir().join(format!(
             "marty-didcomm-policy-{}.json",
             uuid::Uuid::new_v4()
         ));
         std::fs::write(&path, contents).unwrap();
         path
+    }
+
+    fn policy_file(contents: &str) -> PathBuf {
+        policy_file_bytes(contents.as_bytes())
     }
 
     fn assert_embedded_key_binding(document: &DidDocument, did: &str, expected_key: [u8; 32]) {
@@ -3970,6 +3977,77 @@ mod tests {
         std::fs::remove_file(path).unwrap();
     }
 
+    #[test]
+    fn policy_size_count_utf8_and_type_boundaries_fail_closed() {
+        let active = "did:example:active";
+
+        // Python reads at most 64 KiB plus one byte and accepts trailing JSON
+        // whitespace. Exercise the exact byte boundary rather than only a
+        // representative oversized document.
+        let mut exact_bytes =
+            format!(r#"{{"version":1,"issuers":{{"{active}":{{"mode":"anoncrypt"}}}}}}"#)
+                .into_bytes();
+        exact_bytes.resize(MAX_POLICY_BYTES as usize, b' ');
+        let path = policy_file_bytes(&exact_bytes);
+        assert!(matches!(
+            load_active_policy(Some(&path), active),
+            Ok(ActiveEncryptionPolicy::Anoncrypt)
+        ));
+        std::fs::remove_file(path).unwrap();
+
+        exact_bytes.push(b' ');
+        let path = policy_file_bytes(&exact_bytes);
+        assert_eq!(
+            load_active_policy(Some(&path), active).err(),
+            Some(NativeDidcommError::EncryptionPolicyUnavailable)
+        );
+        std::fs::remove_file(path).unwrap();
+
+        let mut issuers = serde_json::Map::new();
+        issuers.insert(active.to_owned(), json!({"mode":"anoncrypt"}));
+        for index in 1..MAX_POLICY_ISSUERS {
+            issuers.insert(format!("did:{index}"), json!({"mode":"anoncrypt"}));
+        }
+        let encoded = json!({"version":1,"issuers":issuers}).to_string();
+        assert!(encoded.len() < MAX_POLICY_BYTES as usize);
+        let path = policy_file(&encoded);
+        assert!(matches!(
+            load_active_policy(Some(&path), active),
+            Ok(ActiveEncryptionPolicy::Anoncrypt)
+        ));
+        std::fs::remove_file(path).unwrap();
+
+        let mut too_many: serde_json::Value = serde_json::from_str(&encoded).unwrap();
+        too_many["issuers"]
+            .as_object_mut()
+            .unwrap()
+            .insert("did:overflow".to_owned(), json!({"mode":"anoncrypt"}));
+        let encoded = too_many.to_string();
+        assert!(encoded.len() < MAX_POLICY_BYTES as usize);
+        let path = policy_file(&encoded);
+        assert_eq!(
+            load_active_policy(Some(&path), active).err(),
+            Some(NativeDidcommError::EncryptionPolicyUnavailable)
+        );
+        std::fs::remove_file(path).unwrap();
+
+        for invalid in [
+            br#"{"version":1.0,"issuers":{"did:example:active":{"mode":"anoncrypt"}}}"#.as_slice(),
+            br#"{"version":1,"issuers":[]}"#.as_slice(),
+            br#"{"version":1,"issuers":{"did:example:active":null}}"#.as_slice(),
+            br#"{"version":1,"version":1,"issuers":{"did:example:active":{"mode":"anoncrypt"}}}"#.as_slice(),
+            br#"{"version":1,"issuers":{"did:example:active":{"mode":"anoncrypt"},"did:example:active":{"mode":"anoncrypt"}}}"#.as_slice(),
+            &[0xff, 0xfe, 0xfd],
+        ] {
+            let path = policy_file_bytes(invalid);
+            assert_eq!(
+                load_active_policy(Some(&path), active).err(),
+                Some(NativeDidcommError::EncryptionPolicyUnavailable)
+            );
+            std::fs::remove_file(path).unwrap();
+        }
+    }
+
     #[tokio::test]
     async fn endpoint_validation_requires_https_and_public_dns_by_default() {
         let public_only = DidcommEndpointValidator::new(false);
@@ -3996,6 +4074,40 @@ mod tests {
             .unwrap();
         assert_eq!(endpoint.as_str(), "https://127.0.0.1:18444/inbox");
         assert!(!format!("{endpoint:?}").contains("127.0.0.1"));
+    }
+
+    #[tokio::test]
+    async fn endpoint_length_matches_the_frozen_unicode_character_boundary() {
+        let contract: serde_json::Value = serde_json::from_str(include_str!(
+            "../../../../contracts/gateway-didcomm-delivery-behavior.json"
+        ))
+        .unwrap();
+        assert_eq!(
+            contract["recipient_endpoint"]["length_unit"],
+            "unicode_scalar_values"
+        );
+        let maximum = contract["recipient_endpoint"]["maximum_characters"]
+            .as_u64()
+            .unwrap() as usize;
+        assert_eq!(maximum, MAX_ENDPOINT_LENGTH);
+
+        let prefix = "https://127.0.0.1/";
+        let at_limit = format!("{prefix}{}", "é".repeat(maximum - prefix.chars().count()));
+        assert_eq!(at_limit.chars().count(), maximum);
+        assert!(at_limit.len() > maximum, "fixture must distinguish bytes");
+        assert!(DidcommEndpointValidator::new(true)
+            .validate(&at_limit)
+            .await
+            .is_ok());
+
+        let over_limit = format!("{at_limit}é");
+        assert_eq!(
+            DidcommEndpointValidator::new(true)
+                .validate(&over_limit)
+                .await
+                .err(),
+            Some(NativeDidcommError::InvalidEndpoint)
+        );
     }
 
     #[test]
