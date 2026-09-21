@@ -929,37 +929,47 @@ mod tests {
         assert!(repository.transactions.lock().unwrap().is_empty());
     }
 
-    #[tokio::test]
+    #[tokio::test(flavor = "current_thread")]
     async fn issuer_failure_is_redacted_and_never_reserves() {
         let now = Utc.with_ymd_and_hms(2026, 9, 20, 12, 0, 0).unwrap();
         let repository = Arc::new(Repository::default());
-        let error = service(
-            repository.clone(),
-            Dependencies {
-                template: Some(credential_template()),
-                revocation_error: None,
-                revocation_calls: Arc::new(AtomicUsize::new(0)),
-            },
-            Resolver {
-                fail: true,
-                calls: Arc::new(AtomicUsize::new(0)),
-            },
-            now,
-        )
-        .approve(
-            &application(now),
-            &application_template(now),
-            "issuance-management-api",
-            None,
-        )
-        .await
-        .unwrap_err();
+        let (error, diagnostics) =
+            crate::internal_application_diagnostics::capture_test_internal_application_diagnostics(
+                async {
+                    service(
+                        repository.clone(),
+                        Dependencies {
+                            template: Some(credential_template()),
+                            revocation_error: None,
+                            revocation_calls: Arc::new(AtomicUsize::new(0)),
+                        },
+                        Resolver {
+                            fail: true,
+                            calls: Arc::new(AtomicUsize::new(0)),
+                        },
+                        now,
+                    )
+                    .approve(
+                        &application(now),
+                        &application_template(now),
+                        "issuance-management-api",
+                        None,
+                    )
+                    .await
+                    .unwrap_err()
+                },
+            )
+            .await;
 
         assert_eq!(
             error,
             InternalApplicationApprovalError::IssuerContextUnavailable
         );
         assert!(repository.transactions.lock().unwrap().is_empty());
+        assert_eq!(
+            diagnostics,
+            ["event=internal_application_failure;stage=ordinary_issuer_context;category=dependency_unavailable;application_correlation_sha256=50628eaf14873bdb37923059f54d64838adfad3ea3f9c63a39ac3c1a57fbf39a;check_correlation_sha256=;resource_correlation_sha256=".to_owned()]
+        );
     }
 
     #[test]

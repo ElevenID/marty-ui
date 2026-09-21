@@ -108,6 +108,8 @@ pub mod initiation_response;
 pub mod integration_secret;
 pub mod internal_application_approval;
 mod internal_application_diagnostics;
+#[cfg(feature = "feature-regression-observer")]
+pub use internal_application_diagnostics::observe_internal_application_diagnostics;
 pub mod internal_application_domain;
 pub mod internal_application_evidence;
 pub mod internal_application_http;

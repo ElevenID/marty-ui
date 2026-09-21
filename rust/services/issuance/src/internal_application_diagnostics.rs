@@ -72,8 +72,11 @@ impl InternalApplicationDiagnosticCategory {
     }
 }
 
+/// Immutable, secret-safe projection shared by structured logging and
+/// governed behavior observation. Identifier inputs are retained only as
+/// bounded domain-separated hashes.
 #[derive(Clone, Debug, Eq, PartialEq)]
-struct InternalApplicationDiagnostic {
+struct InternalApplicationDiagnosticProjection {
     stage: InternalApplicationDiagnosticStage,
     category: InternalApplicationDiagnosticCategory,
     application_correlation_sha256: Option<String>,
@@ -81,26 +84,34 @@ struct InternalApplicationDiagnostic {
     resource_correlation_sha256: Option<String>,
 }
 
-#[cfg(test)]
-type TestObserver = std::sync::Arc<dyn Fn(&InternalApplicationDiagnostic) + Send + Sync>;
-
-#[cfg(test)]
-std::thread_local! {
-    /// A scoped observer avoids tracing's process-wide callsite-interest cache,
-    /// which is intentionally shared across otherwise independent parallel
-    /// test dispatchers. Production still emits the real tracing event below.
-    static TEST_OBSERVER: std::cell::RefCell<Option<TestObserver>> = const {
-        std::cell::RefCell::new(None)
-    };
+#[cfg(any(test, feature = "feature-regression-observer"))]
+tokio::task_local! {
+    /// The observer is scoped to exactly one async request task. It is absent
+    /// from regular production builds and never changes tracing emission.
+    static FEATURE_REGRESSION_OBSERVATIONS: std::cell::RefCell<Vec<String>>;
 }
 
-impl InternalApplicationDiagnostic {
+impl InternalApplicationDiagnosticProjection {
+    /// Stable one-line diagnostic containing only enumerated values and hashes.
+    #[cfg(any(test, feature = "feature-regression-observer"))]
+    #[must_use]
+    fn safe_server_diagnostic(&self) -> String {
+        format!(
+            "event={DIAGNOSTIC_EVENT};stage={};category={};application_correlation_sha256={};check_correlation_sha256={};resource_correlation_sha256={}",
+            self.stage.as_str(),
+            self.category.as_str(),
+            self.application_correlation_sha256.as_deref().unwrap_or(""),
+            self.check_correlation_sha256.as_deref().unwrap_or(""),
+            self.resource_correlation_sha256.as_deref().unwrap_or("")
+        )
+    }
+
     fn emit(self) {
-        #[cfg(test)]
-        TEST_OBSERVER.with(|slot| {
-            if let Some(observer) = slot.borrow().as_ref() {
-                observer(&self);
-            }
+        #[cfg(any(test, feature = "feature-regression-observer"))]
+        let _ = FEATURE_REGRESSION_OBSERVATIONS.try_with(|observations| {
+            observations
+                .borrow_mut()
+                .push(self.safe_server_diagnostic());
         });
         tracing::warn!(
             target: DIAGNOSTIC_TARGET,
@@ -130,18 +141,65 @@ pub(crate) fn warn_application_failure(
     category: InternalApplicationDiagnosticCategory,
     application_id: &str,
 ) {
-    InternalApplicationDiagnostic {
+    application_failure_diagnostic(stage, category, application_id).emit();
+}
+
+#[cfg(any(test, feature = "feature-regression-observer"))]
+async fn capture_internal_application_diagnostics<F>(run: F) -> (F::Output, Vec<String>)
+where
+    F: std::future::Future,
+{
+    assert!(
+        FEATURE_REGRESSION_OBSERVATIONS.try_with(|_| ()).is_err(),
+        "internal Application diagnostic observer scopes cannot be nested"
+    );
+    FEATURE_REGRESSION_OBSERVATIONS
+        .scope(std::cell::RefCell::new(Vec::new()), async move {
+            let output = run.await;
+            let observations = FEATURE_REGRESSION_OBSERVATIONS
+                .with(|values| std::mem::take(&mut *values.borrow_mut()));
+            (output, observations)
+        })
+        .await
+}
+
+/// Observe the secret-safe diagnostics emitted by exactly one governed async
+/// behavior invocation. This bootstrap-only API is compiled out unless the
+/// dedicated feature-regression probe opts in.
+#[cfg(feature = "feature-regression-observer")]
+pub async fn observe_internal_application_diagnostics<F>(run: F) -> (F::Output, Vec<String>)
+where
+    F: std::future::Future,
+{
+    capture_internal_application_diagnostics(run).await
+}
+
+#[cfg(test)]
+pub(crate) async fn capture_test_internal_application_diagnostics<F>(
+    run: F,
+) -> (F::Output, Vec<String>)
+where
+    F: std::future::Future,
+{
+    capture_internal_application_diagnostics(run).await
+}
+
+fn application_failure_diagnostic(
+    stage: InternalApplicationDiagnosticStage,
+    category: InternalApplicationDiagnosticCategory,
+    application_id: &str,
+) -> InternalApplicationDiagnosticProjection {
+    InternalApplicationDiagnosticProjection {
         stage,
         category,
         application_correlation_sha256: Some(correlation_sha256("application", application_id)),
         check_correlation_sha256: None,
         resource_correlation_sha256: None,
     }
-    .emit();
 }
 
 pub(crate) fn warn_external_evidence_failure(application_id: &str, check_id: &str) {
-    InternalApplicationDiagnostic {
+    InternalApplicationDiagnosticProjection {
         stage: InternalApplicationDiagnosticStage::ExternalEvidenceTransport,
         category: InternalApplicationDiagnosticCategory::DependencyUnavailable,
         application_correlation_sha256: Some(correlation_sha256("application", application_id)),
@@ -156,7 +214,7 @@ pub(crate) fn warn_wallet_catalog_failure(
     category: InternalApplicationDiagnosticCategory,
     resource_id: &str,
 ) {
-    InternalApplicationDiagnostic {
+    InternalApplicationDiagnosticProjection {
         stage,
         category,
         application_correlation_sha256: None,
@@ -175,31 +233,74 @@ mod tests {
         sync::{Arc, Mutex},
     };
 
+    #[cfg(feature = "feature-regression-observer")]
+    use futures_util::FutureExt;
     use serde_json::Value;
+    #[cfg(feature = "feature-regression-observer")]
+    use std::panic::AssertUnwindSafe;
     use tracing::{field::Visit, subscriber::Interest, Event, Metadata, Subscriber};
     use tracing_subscriber::{layer::Context, prelude::*, Layer};
 
     use super::*;
 
-    struct ObserverGuard;
-
-    impl Drop for ObserverGuard {
-        fn drop(&mut self) {
-            TEST_OBSERVER.with(|slot| {
-                slot.borrow_mut().take();
-            });
+    #[test]
+    fn application_projection_is_stable_and_retains_only_a_correlation_hash() {
+        let raw = "application-private-id\nBearer private-token https://provider.example alice@example.test";
+        let projection = application_failure_diagnostic(
+            InternalApplicationDiagnosticStage::OrdinaryIssuerContext,
+            InternalApplicationDiagnosticCategory::DependencyUnavailable,
+            raw,
+        );
+        let safe = projection.safe_server_diagnostic();
+        assert_eq!(
+            safe,
+            format!(
+                "event=internal_application_failure;stage=ordinary_issuer_context;category=dependency_unavailable;application_correlation_sha256={};check_correlation_sha256=;resource_correlation_sha256=",
+                correlation_sha256("application", raw)
+            )
+        );
+        for forbidden in [
+            raw,
+            "application-private-id",
+            "private-token",
+            "https://provider.example",
+            "alice@example.test",
+        ] {
+            assert!(!safe.contains(forbidden), "leaked {forbidden:?}");
         }
     }
 
-    fn with_observer<T>(observer: TestObserver, run: impl FnOnce() -> T) -> T {
-        TEST_OBSERVER.with(|slot| {
-            assert!(
-                slot.borrow_mut().replace(observer).is_none(),
-                "diagnostic test observer cannot be nested"
+    #[cfg(feature = "feature-regression-observer")]
+    #[tokio::test(flavor = "current_thread")]
+    async fn feature_observer_is_task_scoped_non_nested_and_cleans_up() {
+        let application = "scoped-application";
+        let ((), captured) = observe_internal_application_diagnostics(async {
+            warn_application_failure(
+                InternalApplicationDiagnosticStage::OrdinaryIssuerContext,
+                InternalApplicationDiagnosticCategory::DependencyUnavailable,
+                application,
             );
-        });
-        let _guard = ObserverGuard;
-        run()
+        })
+        .await;
+        assert_eq!(captured.len(), 1);
+
+        let nested = AssertUnwindSafe(observe_internal_application_diagnostics(async {
+            let _ = observe_internal_application_diagnostics(async {}).await;
+        }))
+        .catch_unwind()
+        .await;
+        assert!(nested.is_err(), "observer scopes must reject nesting");
+
+        warn_application_failure(
+            InternalApplicationDiagnosticStage::OrdinaryIssuerContext,
+            InternalApplicationDiagnosticCategory::DependencyUnavailable,
+            "outside-scope",
+        );
+        let ((), after_cleanup) = observe_internal_application_diagnostics(async {}).await;
+        assert!(
+            after_cleanup.is_empty(),
+            "observer state leaked across scopes"
+        );
     }
 
     #[derive(Clone, Default)]
@@ -307,71 +408,68 @@ mod tests {
         }
     }
 
-    #[test]
-    fn all_diagnostic_stages_emit_only_hashed_correlations() {
+    fn diagnostic_field<'a>(diagnostic: &'a str, name: &str) -> &'a str {
+        diagnostic
+            .split(';')
+            .filter_map(|field| field.split_once('='))
+            .find_map(|(key, value)| (key == name).then_some(value))
+            .expect("diagnostic field")
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn all_diagnostic_stages_emit_only_hashed_correlations() {
         let application = "application\nBearer secret-token https://provider.example/path?token=x alice@example.test";
         let check = "check\nsecret-token https://check.example/?key=x bob@example.test";
         let resource = "resource\nsecret-token https://wallet.example/?key=x eve@example.test";
-        let events = Arc::new(Mutex::new(Vec::new()));
-        let observed = events.clone();
+        let ((), events) = capture_test_internal_application_diagnostics(async {
+            warn_external_evidence_failure(application, check);
+            for (stage, category) in [
+                (
+                    InternalApplicationDiagnosticStage::CanvasApprovalReadiness,
+                    InternalApplicationDiagnosticCategory::RolloutDisabled,
+                ),
+                (
+                    InternalApplicationDiagnosticStage::CanvasApprovalIssuerContext,
+                    InternalApplicationDiagnosticCategory::DependencyUnavailable,
+                ),
+                (
+                    InternalApplicationDiagnosticStage::CanvasOfferReadiness,
+                    InternalApplicationDiagnosticCategory::InvalidStatus,
+                ),
+                (
+                    InternalApplicationDiagnosticStage::CanvasOfferIssuerContext,
+                    InternalApplicationDiagnosticCategory::IssuerContextInvalid,
+                ),
+                (
+                    InternalApplicationDiagnosticStage::OrdinaryIssuerContext,
+                    InternalApplicationDiagnosticCategory::NotReady,
+                ),
+            ] {
+                warn_application_failure(stage, category, application);
+            }
+            for (stage, category) in [
+                (
+                    InternalApplicationDiagnosticStage::WalletCatalogTemplate,
+                    InternalApplicationDiagnosticCategory::NotFound,
+                ),
+                (
+                    InternalApplicationDiagnosticStage::WalletCatalogConfiguration,
+                    InternalApplicationDiagnosticCategory::InvalidConfiguration,
+                ),
+                (
+                    InternalApplicationDiagnosticStage::WalletCatalogList,
+                    InternalApplicationDiagnosticCategory::InvalidResponse,
+                ),
+                (
+                    InternalApplicationDiagnosticStage::WalletCatalogGet,
+                    InternalApplicationDiagnosticCategory::TransactionPlanUnavailable,
+                ),
+            ] {
+                warn_wallet_catalog_failure(stage, category, resource);
+            }
+        })
+        .await;
 
-        with_observer(
-            Arc::new(move |diagnostic| {
-                observed
-                    .lock()
-                    .expect("observed diagnostics")
-                    .push(diagnostic.clone());
-            }),
-            || {
-                warn_external_evidence_failure(application, check);
-                for (stage, category) in [
-                    (
-                        InternalApplicationDiagnosticStage::CanvasApprovalReadiness,
-                        InternalApplicationDiagnosticCategory::RolloutDisabled,
-                    ),
-                    (
-                        InternalApplicationDiagnosticStage::CanvasApprovalIssuerContext,
-                        InternalApplicationDiagnosticCategory::DependencyUnavailable,
-                    ),
-                    (
-                        InternalApplicationDiagnosticStage::CanvasOfferReadiness,
-                        InternalApplicationDiagnosticCategory::InvalidStatus,
-                    ),
-                    (
-                        InternalApplicationDiagnosticStage::CanvasOfferIssuerContext,
-                        InternalApplicationDiagnosticCategory::IssuerContextInvalid,
-                    ),
-                    (
-                        InternalApplicationDiagnosticStage::OrdinaryIssuerContext,
-                        InternalApplicationDiagnosticCategory::NotReady,
-                    ),
-                ] {
-                    warn_application_failure(stage, category, application);
-                }
-                for (stage, category) in [
-                    (
-                        InternalApplicationDiagnosticStage::WalletCatalogTemplate,
-                        InternalApplicationDiagnosticCategory::NotFound,
-                    ),
-                    (
-                        InternalApplicationDiagnosticStage::WalletCatalogConfiguration,
-                        InternalApplicationDiagnosticCategory::InvalidConfiguration,
-                    ),
-                    (
-                        InternalApplicationDiagnosticStage::WalletCatalogList,
-                        InternalApplicationDiagnosticCategory::InvalidResponse,
-                    ),
-                    (
-                        InternalApplicationDiagnosticStage::WalletCatalogGet,
-                        InternalApplicationDiagnosticCategory::TransactionPlanUnavailable,
-                    ),
-                ] {
-                    warn_wallet_catalog_failure(stage, category, resource);
-                }
-            },
-        );
-
-        let events = events.lock().expect("observed diagnostics");
         assert_eq!(events.len(), 10);
         let contract: Value = serde_json::from_str(include_str!(
             "../../../../contracts/issuance-internal-applications.json"
@@ -386,13 +484,13 @@ mod tests {
             .collect::<Vec<_>>();
         let actual_stages = events
             .iter()
-            .map(|diagnostic| diagnostic.stage.as_str().to_owned())
+            .map(|diagnostic| diagnostic_field(diagnostic, "stage").to_owned())
             .collect::<Vec<_>>();
         assert_eq!(actual_stages, expected_stages);
         assert_eq!(
             events
                 .iter()
-                .map(|diagnostic| diagnostic.category.as_str())
+                .map(|diagnostic| diagnostic_field(diagnostic, "category"))
                 .collect::<BTreeSet<_>>(),
             diagnostics["categories"]
                 .as_array()
@@ -421,21 +519,12 @@ mod tests {
         assert_eq!(DIAGNOSTIC_EVENT, diagnostics["event"]);
         assert_eq!(DIAGNOSTIC_TARGET, "marty.internal_application.diagnostics");
         for diagnostic in events.iter() {
-            for (field, value) in [
-                (
-                    "application_correlation_sha256",
-                    diagnostic.application_correlation_sha256.as_deref(),
-                ),
-                (
-                    "check_correlation_sha256",
-                    diagnostic.check_correlation_sha256.as_deref(),
-                ),
-                (
-                    "resource_correlation_sha256",
-                    diagnostic.resource_correlation_sha256.as_deref(),
-                ),
+            for field in [
+                "application_correlation_sha256",
+                "check_correlation_sha256",
+                "resource_correlation_sha256",
             ] {
-                let value = value.unwrap_or("");
+                let value = diagnostic_field(diagnostic, field);
                 assert!(
                     value.is_empty()
                         || (value.len() == 64
@@ -447,16 +536,16 @@ mod tests {
             }
         }
         assert_eq!(
-            events[0].application_correlation_sha256.as_deref(),
-            Some(correlation_sha256("application", application).as_str())
+            diagnostic_field(&events[0], "application_correlation_sha256"),
+            correlation_sha256("application", application)
         );
         assert_eq!(
-            events[0].check_correlation_sha256.as_deref(),
-            Some(correlation_sha256("check", check).as_str())
+            diagnostic_field(&events[0], "check_correlation_sha256"),
+            correlation_sha256("check", check)
         );
         assert_eq!(
-            events[6].resource_correlation_sha256.as_deref(),
-            Some(correlation_sha256("resource", resource).as_str())
+            diagnostic_field(&events[6], "resource_correlation_sha256"),
+            correlation_sha256("resource", resource)
         );
         assert_eq!(
             diagnostics["fields"],
