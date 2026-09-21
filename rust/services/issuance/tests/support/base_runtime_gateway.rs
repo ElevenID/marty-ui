@@ -211,7 +211,7 @@ impl GatewayFixture {
         );
     }
 
-    pub(super) async fn native_unavailable(&self, source_id: &str, legacy: &LegacyFixture) {
+    pub(super) async fn native_owner_unavailable(&self, source_id: &str, legacy: &LegacyFixture) {
         let response = self
             .client
             .post(format!(
@@ -222,13 +222,24 @@ impl GatewayFixture {
             .send()
             .await
             .unwrap();
-        assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
-        let body: Value = response.json().await.unwrap();
-        assert!(uuid::Uuid::parse_str(body["message_id"].as_str().unwrap()).is_ok());
+        let contract: Value = serde_json::from_str(include_str!(
+            "../../../../../contracts/issuance-resource-owner-lookups.json"
+        ))
+        .expect("resource-owner contract");
+        let invariant = &contract["intentional_native_corrections"][0]["gateway_invariant"];
         assert_eq!(
-            body,
-            json!({"error":"service_unavailable","error_description":"Service unavailable","message_id":body["message_id"]})
+            u64::from(response.status().as_u16()),
+            invariant["status_code"].as_u64().expect("status")
         );
+        assert_eq!(
+            response
+                .headers()
+                .get("content-type")
+                .and_then(|value| value.to_str().ok()),
+            invariant["content_type"].as_str()
+        );
+        let body: Value = response.json().await.unwrap();
+        assert_eq!(body, invariant["body"]);
         legacy.assert_no_fallback();
     }
 

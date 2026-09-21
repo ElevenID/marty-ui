@@ -618,7 +618,7 @@ async fn run_with_profile(database_url: &str, rendered_redis: Option<&str>, ingr
                 fixture.close().await;
             }
             gateway_fixture
-                .native_unavailable(&source_id, legacy.as_ref().unwrap())
+                .native_owner_unavailable(&source_id, legacy.as_ref().unwrap())
                 .await;
             gateway_fixture.close();
         } else {
