@@ -19,6 +19,9 @@ VERSION = re.compile(r"\d+\.\d+\.\d+$")
 COMPONENT = "marty-credentials-issuance"
 REPOSITORY = "ElevenID/marty-credentials"
 IMAGE = "ghcr.io/elevenid/marty-credentials-issuance"
+SBOM_NAME = "marty-credentials-issuance.spdx.json"
+RELEASE_BASE = "https://github.com/ElevenID/marty-credentials/releases/download"
+PROVENANCE = "https://github.com/ElevenID/marty-credentials/attestations"
 
 
 class NativeDidcommReleaseError(RuntimeError):
@@ -75,7 +78,11 @@ def validate_release_gate(contract: dict[str, Any], lock: dict[str, Any]) -> Non
 
     components = lock.get("components")
     _require(isinstance(components, list), "Stack lock components are missing")
-    matches = [item for item in components if item.get("name") == COMPONENT]
+    matches = [
+        item
+        for item in components
+        if isinstance(item, dict) and item.get("name") == COMPONENT
+    ]
     _require(
         len(matches) == 1, "Stack lock must contain one Credentials issuance image"
     )
@@ -90,7 +97,9 @@ def validate_release_gate(contract: dict[str, Any], lock: dict[str, Any]) -> Non
     )
     artifact = artifacts[0]
     _require(
-        artifact.get("type") == "oci" and artifact.get("uri") == IMAGE,
+        isinstance(artifact, dict)
+        and artifact.get("type") == "oci"
+        and artifact.get("uri") == IMAGE,
         "Credentials issuance artifact is not the canonical OCI image",
     )
 
@@ -111,6 +120,7 @@ def validate_release_gate(contract: dict[str, Any], lock: dict[str, Any]) -> Non
     version = release.get("version")
     commit = release.get("commit")
     digest = release.get("digest")
+    evidence = release.get("evidence")
     version_tuple = _version_tuple(version)
     _require(
         version_tuple is not None,
@@ -133,12 +143,41 @@ def validate_release_gate(contract: dict[str, Any], lock: dict[str, Any]) -> Non
         "Qualified Credentials digest is invalid",
     )
     _require(
+        isinstance(evidence, dict),
+        "Qualified Credentials evidence binding is missing",
+    )
+    expected_sbom = f"{RELEASE_BASE}/v{version}/{SBOM_NAME}"
+    expected_subject = f"{IMAGE}@{digest}"
+    _require(
+        evidence.get("sbom") == expected_sbom,
+        "Qualified Credentials SBOM is not bound to the exact release version",
+    )
+    _require(
+        evidence.get("provenance") == PROVENANCE,
+        "Qualified Credentials provenance URL is not canonical",
+    )
+    _require(
+        evidence.get("provenance_subject") == expected_subject,
+        "Qualified Credentials provenance subject is not bound to the image digest",
+    )
+    _require(
+        evidence.get("provenance_source_commit") == commit,
+        "Qualified Credentials provenance source is not bound to the release commit",
+    )
+    _require(
         component.get("version") == version, "Stack lock Credentials version is stale"
     )
     _require(
         component.get("commit") == commit, "Stack lock Credentials commit is stale"
     )
     _require(artifact.get("digest") == digest, "Stack lock Credentials digest is stale")
+    _require(
+        artifact.get("sbom") == expected_sbom, "Stack lock Credentials SBOM is stale"
+    )
+    _require(
+        artifact.get("provenance") == PROVENANCE,
+        "Stack lock Credentials provenance is not canonical",
+    )
 
 
 def check_release_gate(contract_path: Path, lock_path: Path) -> None:

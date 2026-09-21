@@ -7,7 +7,11 @@ from pathlib import Path
 import pytest
 
 from scripts.check_didcomm_native_credentials_release import (
+    IMAGE,
     NativeDidcommReleaseError,
+    PROVENANCE,
+    RELEASE_BASE,
+    SBOM_NAME,
     validate_release_gate,
 )
 
@@ -35,15 +39,27 @@ def _qualified_models() -> tuple[dict, dict]:
     contract = deepcopy(CONTRACT)
     lock = deepcopy(LOCK)
     # Test-only values exercise the validator; the checked-in release pin stays null.
+    version = "0.1.75"
+    commit = contract["release_gate"]["required_source_checkpoint"]
+    digest = "sha256:" + "a" * 64
+    sbom = f"{RELEASE_BASE}/v{version}/{SBOM_NAME}"
     release = {
-        "version": "999.999.999",
+        "version": version,
         "commit": contract["release_gate"]["required_source_checkpoint"],
-        "digest": "sha256:" + "a" * 64,
+        "digest": digest,
+        "evidence": {
+            "sbom": sbom,
+            "provenance": PROVENANCE,
+            "provenance_subject": f"{IMAGE}@{digest}",
+            "provenance_source_commit": commit,
+        },
     }
     contract["release_gate"].update(state="qualified", qualified_release=release)
     component = _component(lock)
     component.update(version=release["version"], commit=release["commit"])
-    component["artifacts"][0]["digest"] = release["digest"]
+    component["artifacts"][0].update(
+        digest=release["digest"], sbom=sbom, provenance=PROVENANCE
+    )
     return contract, lock
 
 
@@ -54,7 +70,7 @@ def test_current_activation_is_explicitly_unlandable_without_inventing_a_release
     assert gate["state"] == "blocked_pending_credentials_release"
     assert gate["qualified_release"] is None
     assert gate["required_source_checkpoint"] == (
-        "4dbf77f06aa66c9c1bc4fa882d21580782825ec5"
+        "c569d0d90276bf27a764d9b7b4b53419a2146283"
     )
     assert gate["minimum_version"] == "0.1.75"
     component = _component(LOCK)
@@ -70,6 +86,18 @@ def test_current_activation_is_explicitly_unlandable_without_inventing_a_release
 def test_exact_future_release_pin_can_satisfy_the_closed_gate() -> None:
     contract, lock = _qualified_models()
     validate_release_gate(contract, lock)
+
+
+def test_stale_v0172_release_and_evidence_fail_closed() -> None:
+    contract, lock = _qualified_models()
+    release = contract["release_gate"]["qualified_release"]
+    release["version"] = "0.1.72"
+    release["evidence"]["sbom"] = f"{RELEASE_BASE}/v0.1.72/{SBOM_NAME}"
+    component = _component(lock)
+    component["version"] = "0.1.72"
+    component["artifacts"][0]["sbom"] = release["evidence"]["sbom"]
+    with pytest.raises(NativeDidcommReleaseError, match="predates"):
+        validate_release_gate(contract, lock)
 
 
 @pytest.mark.parametrize(
@@ -93,6 +121,38 @@ def test_partial_stale_or_wrong_release_pins_fail_closed(mutation: str) -> None:
         component["commit"] = "c" * 40
     else:
         component["artifacts"][0]["uri"] = "ghcr.io/elevenid/unreviewed"
+    with pytest.raises(NativeDidcommReleaseError):
+        validate_release_gate(contract, lock)
+
+
+@pytest.mark.parametrize(
+    "mutation",
+    [
+        "release_sbom",
+        "lock_sbom",
+        "release_provenance",
+        "lock_provenance",
+        "provenance_subject",
+        "provenance_source_commit",
+    ],
+)
+def test_stale_or_wrong_release_evidence_fails_closed(mutation: str) -> None:
+    contract, lock = _qualified_models()
+    release = contract["release_gate"]["qualified_release"]
+    evidence = release["evidence"]
+    artifact = _component(lock)["artifacts"][0]
+    if mutation == "release_sbom":
+        evidence["sbom"] = f"{RELEASE_BASE}/v0.1.72/{SBOM_NAME}"
+    elif mutation == "lock_sbom":
+        artifact["sbom"] = f"{RELEASE_BASE}/v0.1.72/{SBOM_NAME}"
+    elif mutation == "release_provenance":
+        evidence["provenance"] = "https://example.invalid/attestations"
+    elif mutation == "lock_provenance":
+        artifact["provenance"] = "https://example.invalid/attestations"
+    elif mutation == "provenance_subject":
+        evidence["provenance_subject"] = f"{IMAGE}@sha256:{'b' * 64}"
+    else:
+        evidence["provenance_source_commit"] = "b" * 40
     with pytest.raises(NativeDidcommReleaseError):
         validate_release_gate(contract, lock)
 

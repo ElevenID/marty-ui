@@ -74,7 +74,9 @@ release contract records the reviewed source checkpoint but no invented version
 or digest; CI and CD reject the current lock until the later release-pin commit
 supplies an exact version, release source commit and digest at or after the fresh
 `0.1.75` release. The pinned release commit must equal the reviewed protected-main
-checkpoint; the failed immutable `v0.1.74` tag cannot be reused or relabeled.
+checkpoint; its canonical SBOM URL, provenance URL, provenance subject digest and
+provenance source commit must all agree with the exact stack-lock pin. The failed
+immutable `v0.1.74` tag cannot be reused or relabeled.
 
 ## Unicode endpoint and complete policy-boundary checkpoint
 
