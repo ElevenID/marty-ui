@@ -1048,6 +1048,14 @@ pub fn validate_embedded_contract() -> Result<CoverageSummary, MmfError> {
                     "api_key_invalid": {"status_code": 401, "body": {"detail": "Invalid API Key"}},
                     "repository_unavailable": {"status_code": 500, "body": {"detail": "Issuance transaction data is temporarily unavailable"}, "cause_disclosed": false}
                 })
+            && resource_owners["intentional_native_corrections"]
+                == serde_json::json!([{
+                    "id": "RESOURCE-OWNER-001:sanitized-repository-failure",
+                    "legacy": {"status_code": 500, "content_type": "text/plain", "body": "Internal Server Error"},
+                    "native": {"status_code": 500, "content_type": "application/json", "body": {"detail": "Issuance transaction data is temporarily unavailable"}},
+                    "rationale": "Reuse the already-native issuance-transaction owner failure boundary so all three owner kinds expose one sanitized, DRY internal error without a repository cause.",
+                    "gateway_invariant": {"status_code": 500, "content_type": "application/json", "body": {"detail": "Authorization service unavailable"}, "upstream_body_disclosed": false, "proxy_continues": false}
+                }])
             && resource_owners["gateway"]
                 == serde_json::json!({
                     "service": "issuance-native",

@@ -47,6 +47,15 @@
     "api_key_invalid": {"status_code": 401, "body": {"detail": "Invalid API Key"}},
     "repository_unavailable": {"status_code": 500, "body": {"detail": "Issuance transaction data is temporarily unavailable"}, "cause_disclosed": false}
   },
+  "intentional_native_corrections": [
+    {
+      "id": "RESOURCE-OWNER-001:sanitized-repository-failure",
+      "legacy": {"status_code": 500, "content_type": "text/plain", "body": "Internal Server Error"},
+      "native": {"status_code": 500, "content_type": "application/json", "body": {"detail": "Issuance transaction data is temporarily unavailable"}},
+      "rationale": "Reuse the already-native issuance-transaction owner failure boundary so all three owner kinds expose one sanitized, DRY internal error without a repository cause.",
+      "gateway_invariant": {"status_code": 500, "content_type": "application/json", "body": {"detail": "Authorization service unavailable"}, "upstream_body_disclosed": false, "proxy_continues": false}
+    }
+  ],
   "gateway": {
     "service": "issuance-native",
     "api_key_source": "ISSUANCE_API_KEY",

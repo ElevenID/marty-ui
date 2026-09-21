@@ -283,7 +283,7 @@ def test_frozen_surface_provenance_and_coverage_are_complete() -> None:
     )
     assert coverage["resource_owner_behavior_contract"] == {
         "path": "contracts/issuance-resource-owner-lookups.json",
-        "sha256": "466f42da7992b87dce791b8af49301d726c8b60a518f1887a4ae757354a6c24e",
+        "sha256": "59b3f21107824f85136768545bca8f4a6374d3a4708a0408b1a7769c61c00a06",
         "source_repository": "ElevenID/marty-credentials",
         "source_path": "services/issuance/infrastructure/api/routes.py",
         "source_commit": "15af5232df376bb9596b5aed3703110bf890fce5",
@@ -295,6 +295,35 @@ def test_frozen_surface_provenance_and_coverage_are_complete() -> None:
         "projection": ["organization_id"],
         "id_scope": "unscoped",
     }
+    assert resource_owners["intentional_native_corrections"] == [
+        {
+            "id": "RESOURCE-OWNER-001:sanitized-repository-failure",
+            "legacy": {
+                "status_code": 500,
+                "content_type": "text/plain",
+                "body": "Internal Server Error",
+            },
+            "native": {
+                "status_code": 500,
+                "content_type": "application/json",
+                "body": {
+                    "detail": "Issuance transaction data is temporarily unavailable"
+                },
+            },
+            "rationale": (
+                "Reuse the already-native issuance-transaction owner failure boundary "
+                "so all three owner kinds expose one sanitized, DRY internal error "
+                "without a repository cause."
+            ),
+            "gateway_invariant": {
+                "status_code": 500,
+                "content_type": "application/json",
+                "body": {"detail": "Authorization service unavailable"},
+                "upstream_body_disclosed": False,
+                "proxy_continues": False,
+            },
+        }
+    ]
     assert internal_applications["schema"] == (
         "marty.issuance-internal-applications/v1"
     )

@@ -92,7 +92,7 @@
   },
   "resource_owner_behavior_contract": {
     "path": "contracts/issuance-resource-owner-lookups.json",
-    "sha256": "466f42da7992b87dce791b8af49301d726c8b60a518f1887a4ae757354a6c24e",
+    "sha256": "59b3f21107824f85136768545bca8f4a6374d3a4708a0408b1a7769c61c00a06",
     "source_repository": "ElevenID/marty-credentials",
     "source_path": "services/issuance/infrastructure/api/routes.py",
     "source_commit": "15af5232df376bb9596b5aed3703110bf890fce5"

@@ -253,7 +253,7 @@ mod tests {
             .into_iter()
             .filter(|route| !route.credential_lifecycle_behavior_contract)
             .collect::<Vec<_>>();
-        assert_eq!(preexisting.len(), 96);
+        assert_eq!(preexisting.len(), 98);
 
         for route in preexisting {
             let canonical = route
