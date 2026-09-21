@@ -1,0 +1,862 @@
+{
+  "normalization": {
+    "authorization_code": "<authorization-code>",
+    "timestamps": "<timestamp>",
+    "uuid": "<uuid>"
+  },
+  "observations": [
+    {
+      "name": "list_credentials_missing_management_key",
+      "repository_calls": [],
+      "response": {
+        "body": {
+          "detail": "X-API-Key header is missing"
+        },
+        "headers": {
+          "content-length": "40",
+          "content-type": "application/json"
+        },
+        "status_code": 401
+      }
+    },
+    {
+      "name": "put_registered_client_missing_management_key",
+      "repository_calls": [],
+      "response": {
+        "body": {
+          "detail": "X-API-Key header is missing"
+        },
+        "headers": {
+          "content-length": "40",
+          "content-type": "application/json"
+        },
+        "status_code": 401
+      }
+    },
+    {
+      "name": "revoke_transaction_missing_management_key",
+      "repository_calls": [],
+      "response": {
+        "body": {
+          "detail": "X-API-Key header is missing"
+        },
+        "headers": {
+          "content-length": "40",
+          "content-type": "application/json"
+        },
+        "status_code": 401
+      }
+    },
+    {
+      "name": "list_credentials_missing_tenant",
+      "repository_calls": [],
+      "response": {
+        "body": {
+          "detail": "Trusted organization context is required"
+        },
+        "headers": {
+          "content-length": "53",
+          "content-type": "application/json"
+        },
+        "status_code": 403
+      }
+    },
+    {
+      "name": "list_credentials_exact_status_projection",
+      "repository_calls": [
+        {
+          "method": "list_credentials_by_org",
+          "organization_id": "org-a"
+        }
+      ],
+      "response": {
+        "body": [
+          {
+            "applicant_id": "applicant-a",
+            "credential_template_id": "template-a",
+            "id": "cred-active",
+            "issued_at": "2026-09-21T12:34:56+00:00",
+            "status": "active",
+            "status_updated_at": "2026-09-21T12:34:56+00:00",
+            "subject_did": "did:example:holder"
+          }
+        ],
+        "headers": {
+          "content-length": "230",
+          "content-type": "application/json"
+        },
+        "status_code": 200
+      }
+    },
+    {
+      "name": "list_credentials_status_is_case_sensitive",
+      "repository_calls": [
+        {
+          "method": "list_credentials_by_org",
+          "organization_id": "org-a"
+        }
+      ],
+      "response": {
+        "body": [],
+        "headers": {
+          "content-length": "2",
+          "content-type": "application/json"
+        },
+        "status_code": 200
+      }
+    },
+    {
+      "name": "list_credentials_rejects_foreign_tenant_before_read",
+      "repository_calls": [],
+      "response": {
+        "body": {
+          "detail": "Organization context does not match requested organization"
+        },
+        "headers": {
+          "content-length": "71",
+          "content-type": "application/json"
+        },
+        "status_code": 403
+      }
+    },
+    {
+      "name": "list_credentials_repository_failure",
+      "repository_calls": [
+        {
+          "method": "list_credentials_by_org",
+          "organization_id": "org-a"
+        }
+      ],
+      "response": {
+        "body": "Internal Server Error",
+        "headers": {
+          "content-length": "21",
+          "content-type": "text/plain; charset=utf-8"
+        },
+        "status_code": 500
+      }
+    },
+    {
+      "name": "put_registered_client_uses_body_tenant",
+      "repository_calls": [
+        {
+          "active": true,
+          "client_id": "wallet-a",
+          "method": "save_oid4vci_client",
+          "organization_id": "org-a",
+          "redirect_uris": [
+            "https://wallet.example/callback?channel=one"
+          ]
+        },
+        {
+          "client_id": "wallet-a",
+          "method": "get_oid4vci_client",
+          "organization_id": "org-a"
+        }
+      ],
+      "response": {
+        "body": {
+          "active": true,
+          "client_id": "wallet-a",
+          "created_at": "<timestamp>",
+          "jwks": {
+            "keys": [
+              {
+                "alg": "ES256",
+                "crv": "P-256",
+                "kid": "key-1",
+                "kty": "EC",
+                "use": "sig",
+                "x": "axfR8uEsQkf4vOblY6RA8ncDfYEt6zOg9KE5RdiYwpY",
+                "y": "T-NC4v4af5uO5-tKfA-eFivOM1drMV7Oy7ZAaDe_UfU"
+              }
+            ]
+          },
+          "organization_id": "org-a",
+          "redirect_uris": [
+            "https://wallet.example/callback?channel=one"
+          ],
+          "token_endpoint_auth_method": "private_key_jwt",
+          "updated_at": "<timestamp>"
+        },
+        "headers": {
+          "content-length": "456",
+          "content-type": "application/json"
+        },
+        "status_code": 200
+      }
+    },
+    {
+      "name": "put_registered_client_requires_read_after_write",
+      "repository_calls": [
+        {
+          "active": true,
+          "client_id": "wallet-a",
+          "method": "save_oid4vci_client",
+          "organization_id": "org-a",
+          "redirect_uris": []
+        },
+        {
+          "client_id": "wallet-a",
+          "method": "get_oid4vci_client",
+          "organization_id": "org-a"
+        }
+      ],
+      "response": {
+        "body": {
+          "detail": "Registered client was not persisted"
+        },
+        "headers": {
+          "content-length": "48",
+          "content-type": "application/json"
+        },
+        "status_code": 500
+      }
+    },
+    {
+      "name": "put_registered_client_rejects_private_key_material",
+      "repository_calls": [],
+      "response": {
+        "body": {
+          "detail": [
+            {
+              "ctx": {
+                "error": {}
+              },
+              "input": {
+                "client_id": "wallet-a",
+                "jwks": {
+                  "keys": [
+                    {
+                      "d": "private-secret",
+                      "kty": "EC"
+                    }
+                  ]
+                },
+                "organization_id": "org-a"
+              },
+              "loc": [
+                "body"
+              ],
+              "msg": "Value error, jwks.keys[0] contains private key material",
+              "type": "value_error"
+            }
+          ]
+        },
+        "headers": {
+          "content-length": "244",
+          "content-type": "application/json"
+        },
+        "status_code": 422
+      }
+    },
+    {
+      "name": "par_success_issuer_query_precedes_form",
+      "repository_calls": [
+        {
+          "method": "save_pushed_authorization_request",
+          "params": {
+            "authorization_details": null,
+            "client_id": "wallet-a",
+            "code_challenge": "challenge-a",
+            "code_challenge_method": "S256",
+            "issuer_state": null,
+            "organization_id": "org-a",
+            "redirect_uri": "https://wallet.example/callback?channel=one",
+            "response_type": "code",
+            "scope": null,
+            "state": "state-a"
+          },
+          "request_uri": "urn:ietf:params:oauth:request_uri:<uuid>",
+          "ttl_seconds": 90
+        }
+      ],
+      "response": {
+        "body": {
+          "expires_in": 90,
+          "request_uri": "urn:ietf:params:oauth:request_uri:<uuid>"
+        },
+        "headers": {
+          "content-length": "104",
+          "content-type": "application/json"
+        },
+        "status_code": 201
+      }
+    },
+    {
+      "name": "authorize_consumes_par_and_preserves_registered_query",
+      "persistent_authorization_sessions": 1,
+      "repository_calls": [
+        {
+          "method": "consume_pushed_authorization_request",
+          "request_uri": "urn:ietf:params:oauth:request_uri:<uuid>"
+        },
+        {
+          "client_id": "wallet-a",
+          "method": "get_oid4vci_client",
+          "organization_id": "org-a"
+        },
+        {
+          "client_id": "wallet-a",
+          "code": "<authorization-code>",
+          "credential_configuration_ids": [
+            "config-a"
+          ],
+          "method": "save_authorization_session",
+          "organization_id": "org-a",
+          "persisted_lifetime_seconds": 3600,
+          "redirect_uri": "https://wallet.example/callback?channel=one",
+          "state": "state-a"
+        }
+      ],
+      "response": {
+        "body": null,
+        "headers": {
+          "content-length": "0",
+          "location": "https://wallet.example/callback?channel=one&code=<authorization-code>&iss=https%3A%2F%2Fissuer.example%2Forg%2Forg-a&state=state-a"
+        },
+        "status_code": 307
+      }
+    },
+    {
+      "name": "authorize_rejects_replayed_par",
+      "persistent_authorization_sessions": 1,
+      "repository_calls": [
+        {
+          "method": "consume_pushed_authorization_request",
+          "request_uri": "urn:ietf:params:oauth:request_uri:<uuid>"
+        }
+      ],
+      "response": {
+        "body": {
+          "error": "invalid_request",
+          "error_description": "request_uri is invalid or expired"
+        },
+        "headers": {
+          "content-length": "83",
+          "content-type": "application/json"
+        },
+        "status_code": 400
+      }
+    },
+    {
+      "name": "authorize_requires_response_type_and_client_id",
+      "repository_calls": [],
+      "response": {
+        "body": {
+          "error": "invalid_request",
+          "error_description": "response_type and client_id are required"
+        },
+        "headers": {
+          "content-length": "90",
+          "content-type": "application/json"
+        },
+        "status_code": 400
+      }
+    },
+    {
+      "name": "authorize_json_success_persists_session",
+      "persistent_authorization_sessions": 1,
+      "repository_calls": [
+        {
+          "client_id": "public-wallet",
+          "method": "get_oid4vci_client",
+          "organization_id": "org-a"
+        },
+        {
+          "client_id": "public-wallet",
+          "code": "<authorization-code>",
+          "credential_configuration_ids": [
+            "config-a"
+          ],
+          "method": "save_authorization_session",
+          "organization_id": "org-a",
+          "persisted_lifetime_seconds": 3600,
+          "redirect_uri": null,
+          "state": "state-json"
+        }
+      ],
+      "response": {
+        "body": {
+          "code": "<authorization-code>",
+          "state": "state-json"
+        },
+        "headers": {
+          "content-length": "59",
+          "content-type": "application/json"
+        },
+        "status_code": 200
+      }
+    },
+    {
+      "name": "authorize_native_error_redirect_preserves_query_and_state",
+      "repository_calls": [
+        {
+          "client_id": "wallet-a",
+          "method": "get_oid4vci_client",
+          "organization_id": "org-a"
+        }
+      ],
+      "response": {
+        "body": null,
+        "headers": {
+          "content-length": "0",
+          "location": "https://wallet.example/callback?channel=one&error=invalid_request&error_description=response_type+must+be+code&state=state-a"
+        },
+        "status_code": 307
+      }
+    },
+    {
+      "name": "authorize_rejects_inactive_registered_client",
+      "repository_calls": [
+        {
+          "client_id": "wallet-a",
+          "method": "get_oid4vci_client",
+          "organization_id": "org-a"
+        }
+      ],
+      "response": {
+        "body": {
+          "error": "unauthorized_client",
+          "error_description": "Client registration is inactive"
+        },
+        "headers": {
+          "content-length": "85",
+          "content-type": "application/json"
+        },
+        "status_code": 400
+      }
+    },
+    {
+      "name": "authorize_rejects_unregistered_client_redirect",
+      "repository_calls": [
+        {
+          "client_id": "wallet-a",
+          "method": "get_oid4vci_client",
+          "organization_id": "org-a"
+        }
+      ],
+      "response": {
+        "body": {
+          "error": "invalid_request",
+          "error_description": "redirect_uri is not registered for this client"
+        },
+        "headers": {
+          "content-length": "96",
+          "content-type": "application/json"
+        },
+        "status_code": 400
+      }
+    },
+    {
+      "name": "authorize_sanitizes_par_store_failure",
+      "repository_calls": [
+        {
+          "method": "consume_pushed_authorization_request",
+          "request_uri": "urn:ietf:params:oauth:request_uri:secret"
+        }
+      ],
+      "response": {
+        "body": {
+          "error": "temporarily_unavailable",
+          "error_description": "Authorization request storage is unavailable"
+        },
+        "headers": {
+          "content-length": "102",
+          "content-type": "application/json"
+        },
+        "status_code": 503
+      }
+    },
+    {
+      "name": "par_rejects_oversized_encoded_payload_before_store",
+      "repository_calls": [],
+      "response": {
+        "body": {
+          "error": "invalid_request",
+          "error_description": "Pushed authorization request is too large"
+        },
+        "headers": {
+          "content-length": "91",
+          "content-type": "application/json"
+        },
+        "status_code": 400
+      }
+    },
+    {
+      "name": "par_failed_store_is_sanitized",
+      "repository_calls": [
+        {
+          "method": "save_pushed_authorization_request",
+          "params": {
+            "authorization_details": null,
+            "client_id": null,
+            "code_challenge": null,
+            "code_challenge_method": null,
+            "issuer_state": null,
+            "organization_id": "org-a",
+            "redirect_uri": null,
+            "response_type": null,
+            "scope": null,
+            "state": null
+          },
+          "request_uri": "urn:ietf:params:oauth:request_uri:<uuid>",
+          "ttl_seconds": 90
+        }
+      ],
+      "response": {
+        "body": {
+          "error": "temporarily_unavailable",
+          "error_description": "Authorization request storage is unavailable"
+        },
+        "headers": {
+          "content-length": "102",
+          "content-type": "application/json"
+        },
+        "status_code": 503
+      }
+    },
+    {
+      "name": "deferred_requires_bearer_prefix",
+      "repository_calls": [],
+      "response": {
+        "body": {
+          "error": "invalid_token",
+          "error_description": "Bearer token required"
+        },
+        "headers": {
+          "content-length": "69",
+          "content-type": "application/json"
+        },
+        "status_code": 401
+      }
+    },
+    {
+      "name": "deferred_requires_transaction_id",
+      "repository_calls": [],
+      "response": {
+        "body": {
+          "error": "invalid_request",
+          "error_description": "transaction_id is required"
+        },
+        "headers": {
+          "content-length": "76",
+          "content-type": "application/json"
+        },
+        "status_code": 400
+      }
+    },
+    {
+      "name": "deferred_rejects_unknown_transaction",
+      "repository_calls": [
+        {
+          "method": "get_transaction",
+          "tx_id": "tx-missing"
+        }
+      ],
+      "response": {
+        "body": {
+          "error": "invalid_transaction_id",
+          "error_description": "No transaction found for the given ID"
+        },
+        "headers": {
+          "content-length": "94",
+          "content-type": "application/json"
+        },
+        "status_code": 400
+      }
+    },
+    {
+      "name": "deferred_empty_bearer_currently_reaches_pending_transaction",
+      "repository_calls": [
+        {
+          "method": "get_transaction",
+          "tx_id": "tx-a"
+        }
+      ],
+      "response": {
+        "body": {
+          "transaction_id": "tx-a"
+        },
+        "headers": {
+          "content-length": "25",
+          "content-type": "application/json",
+          "retry-after": "5"
+        },
+        "status_code": 202
+      }
+    },
+    {
+      "name": "deferred_unbound_bearer_currently_reads_issued_credential",
+      "repository_calls": [
+        {
+          "method": "get_transaction",
+          "tx_id": "tx-issued"
+        },
+        {
+          "method": "get_credential_by_transaction_id",
+          "transaction_id": "tx-issued"
+        }
+      ],
+      "response": {
+        "body": {
+          "credential": "credential.jwt.value"
+        },
+        "headers": {
+          "content-length": "37",
+          "content-type": "application/json"
+        },
+        "status_code": 200
+      }
+    },
+    {
+      "name": "deferred_issued_without_credential_is_terminal_error",
+      "repository_calls": [
+        {
+          "method": "get_transaction",
+          "tx_id": "tx-issued-without-credential"
+        },
+        {
+          "method": "get_credential_by_transaction_id",
+          "transaction_id": "tx-issued-without-credential"
+        }
+      ],
+      "response": {
+        "body": {
+          "error": "invalid_transaction_id",
+          "error_description": "Transaction is in issued state"
+        },
+        "headers": {
+          "content-length": "87",
+          "content-type": "application/json"
+        },
+        "status_code": 400
+      }
+    },
+    {
+      "name": "deferred_reports_terminal_state",
+      "repository_calls": [
+        {
+          "method": "get_transaction",
+          "tx_id": "tx-failed"
+        }
+      ],
+      "response": {
+        "body": {
+          "error": "invalid_transaction_id",
+          "error_description": "Transaction is in failed state"
+        },
+        "headers": {
+          "content-length": "87",
+          "content-type": "application/json"
+        },
+        "status_code": 400
+      }
+    },
+    {
+      "name": "deferred_malformed_json_is_unhandled",
+      "repository_calls": [],
+      "response": {
+        "body": "Internal Server Error",
+        "headers": {
+          "content-length": "21",
+          "content-type": "text/plain; charset=utf-8"
+        },
+        "status_code": 500
+      }
+    },
+    {
+      "name": "notification_missing_bearer_has_nested_error",
+      "repository_calls": [],
+      "response": {
+        "body": {
+          "detail": {
+            "error": "invalid_token",
+            "error_description": "Bearer token required"
+          }
+        },
+        "headers": {
+          "content-length": "80",
+          "content-type": "application/json"
+        },
+        "status_code": 401
+      }
+    },
+    {
+      "name": "notification_empty_bearer_and_unread_body_currently_acknowledged",
+      "repository_calls": [],
+      "response": {
+        "body": null,
+        "headers": {
+          "content-type": "application/json"
+        },
+        "status_code": 204
+      }
+    },
+    {
+      "name": "notification_valid_shape_has_no_legacy_effect",
+      "repository_calls": [],
+      "response": {
+        "body": null,
+        "headers": {
+          "content-type": "application/json"
+        },
+        "status_code": 204
+      }
+    },
+    {
+      "name": "revoke_transaction_canonical_then_local_order",
+      "operation_trace": [
+        {
+          "method": "get_transaction",
+          "tx_id": "tx-revoke"
+        },
+        {
+          "method": "get_credential_by_transaction_id",
+          "transaction_id": "tx-revoke"
+        },
+        {
+          "action": "revoke",
+          "credential_id": "cred-revoke",
+          "method": "delegate_revocation_profile",
+          "reason": "holder request"
+        },
+        {
+          "credential_id": "cred-revoke",
+          "method": "save_credential",
+          "reason": "holder request",
+          "status": "revoked"
+        },
+        {
+          "action": "revoke",
+          "credential_id": "cred-revoke",
+          "method": "sync_canvas_lifecycle_delivery_records",
+          "reason": "holder request"
+        },
+        {
+          "method": "save_transaction",
+          "reason": "holder request",
+          "status": "revoked",
+          "tx_id": "tx-revoke"
+        }
+      ],
+      "response": {
+        "body": {
+          "id": "tx-revoke",
+          "revocation_reason": "holder request",
+          "revoked_at": "<timestamp>",
+          "status": "revoked"
+        },
+        "headers": {
+          "content-length": "122",
+          "content-type": "application/json"
+        },
+        "status_code": 200
+      }
+    },
+    {
+      "name": "revoke_transaction_missing_transaction",
+      "repository_calls": [
+        {
+          "method": "get_transaction",
+          "tx_id": "tx-missing"
+        }
+      ],
+      "response": {
+        "body": {
+          "detail": "Transaction not found"
+        },
+        "headers": {
+          "content-length": "34",
+          "content-type": "application/json"
+        },
+        "status_code": 404
+      }
+    },
+    {
+      "name": "revoke_transaction_rejects_credential_tenant_mismatch",
+      "repository_calls": [
+        {
+          "method": "get_transaction",
+          "tx_id": "tx-mismatch"
+        },
+        {
+          "method": "get_credential_by_transaction_id",
+          "transaction_id": "tx-mismatch"
+        }
+      ],
+      "response": {
+        "body": {
+          "detail": "Issued credential organization does not match its transaction"
+        },
+        "headers": {
+          "content-length": "74",
+          "content-type": "application/json"
+        },
+        "status_code": 409
+      }
+    },
+    {
+      "name": "revoke_transaction_fails_closed_before_local_mutation",
+      "repository_calls": [
+        {
+          "method": "get_transaction",
+          "tx_id": "tx-reject"
+        },
+        {
+          "method": "get_credential_by_transaction_id",
+          "transaction_id": "tx-reject"
+        },
+        {
+          "method": "get_transaction",
+          "tx_id": "tx-reject"
+        }
+      ],
+      "response": {
+        "body": {
+          "detail": "Revocation service rejected the status change"
+        },
+        "headers": {
+          "content-length": "58",
+          "content-type": "application/json"
+        },
+        "status_code": 503
+      },
+      "stored": {
+        "credential_status": "active",
+        "transaction_status": "issued"
+      }
+    },
+    {
+      "name": "revoke_transaction_hides_foreign_resource_after_lookup",
+      "repository_calls": [
+        {
+          "method": "get_transaction",
+          "tx_id": "tx-foreign"
+        }
+      ],
+      "response": {
+        "body": {
+          "detail": "Resource not found"
+        },
+        "headers": {
+          "content-length": "31",
+          "content-type": "application/json"
+        },
+        "status_code": 404
+      }
+    }
+  ],
+  "schema": "marty.issuance-oid4vci-authorization-python-reference/v1",
+  "source": {
+    "capture": "unchanged route composition executed through FastAPI ASGI transport with controlled native-engine and downstream revocation/canvas dependencies",
+    "commit": "75e2394350185a1b7c0824b25b4016ca40b0174c",
+    "files": {
+      "services/issuance/domain/entities.py": "4c8ed38c8c587d86526400b013fd3254e4099392c4b9ffac07f3a373a77e55b5",
+      "services/issuance/infrastructure/adapters/memory_repository.py": "5ff57d51d8d443ae2b1efd5897fed6ed7ec56f688820e756b04957c80c0beead",
+      "services/issuance/infrastructure/adapters/postgres_repository.py": "9e900c3171863cf8e15e8ab4dc9d82b257d3ad1d7318aab243f97f4039fa7c96",
+      "services/issuance/infrastructure/api/routes.py": "daf2f4be1d8043ff237e2b6be36fbd671712a097ca2c0ccee209ae9ab0ef166f"
+    },
+    "repository": "ElevenID/marty-credentials"
+  }
+}
