@@ -1232,12 +1232,13 @@ def test_every_issuance_integration_test_remains_registered() -> None:
     assert set(grouped) == {
         "canvas_lti_tool_signing_behavior.rs",
         "canvas_management_contract.rs",
+        "canvas_mirror_native_behavior.rs",
         "canvas_publication_behavior.rs",
         "canvas_sync_worker_behavior.rs",
         "canvas_sync_worker_configuration_oracle.rs",
-            "canvas_worker_result_oracle.rs",
-            "issued_credential_adapter_behavior.rs",
-            "proof_nonce_behavior.rs",
+        "canvas_worker_result_oracle.rs",
+        "issued_credential_adapter_behavior.rs",
+        "proof_nonce_behavior.rs",
     }
     registered.extend(f"tests/{name}" for name in grouped)
     actual = {

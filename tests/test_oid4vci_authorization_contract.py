@@ -122,7 +122,7 @@ def test_all_frozen_oid4vci_routes_are_native_after_management_cutover() -> None
     operations = {route["operation"] for route in contract["routes"]}
 
     assert operations <= native
-    assert coverage["remaining"]["http"] == 17
+    assert coverage["remaining"]["http"] == 11
 
     surface = _json(ROOT / "contracts" / "issuance-runtime-surface.json")
     frozen_surface = {
