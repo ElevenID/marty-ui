@@ -9,6 +9,7 @@ import subprocess
 import sys
 
 POLICY_TARGET = "/run/secrets/didcomm-authcrypt"
+NATIVE_URL = "http://issuance-native:8005"
 MAX_MODEL_BYTES = 8 * 1024 * 1024
 
 
@@ -89,6 +90,17 @@ def assert_native_policy_pairing(model):
 
 def validate_model(model, *, authcrypt_enabled):
     try:
+        legacy_environment = environment_mapping(
+            model["services"]["issuance"]["environment"]
+        )
+        if legacy_environment.get("DIDCOMM_DELIVERY_OWNER") != "native":
+            raise DidcommConfigurationError(
+                "Beta DIDComm delivery owner is not native"
+            )
+        if legacy_environment.get("ISSUANCE_NATIVE_SERVICE_URL") != NATIVE_URL:
+            raise DidcommConfigurationError(
+                "Beta DIDComm native service URL is not selected"
+            )
         policies = [
             environment_mapping(model["services"][name]["environment"]).get(
                 "DIDCOMM_ENCRYPTION_POLICY_FILE"

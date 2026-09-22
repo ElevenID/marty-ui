@@ -446,6 +446,8 @@ fn realistic_api_defaults_preserve_update_guard_and_hostile_changes_fail_closed(
     for fault in [
         "shared-map",
         "management-key",
+        "delivery-owner",
+        "native-service-url",
         "policy-volume",
         "policy-mount",
         "policy-path",
@@ -605,16 +607,22 @@ fn legacy_fault(model: &Value, fault: &str) -> Value {
                 .unwrap()
                 .pop();
         }
-        "management-key" | "policy-path" => {
-            let name = if fault == "management-key" {
-                "ISSUANCE_API_KEY"
-            } else {
-                "DIDCOMM_ENCRYPTION_POLICY_FILE"
+        "management-key" | "delivery-owner" | "native-service-url" | "policy-path" => {
+            let name = match fault {
+                "management-key" => "ISSUANCE_API_KEY",
+                "delivery-owner" => "DIDCOMM_DELIVERY_OWNER",
+                "native-service-url" => "ISSUANCE_NATIVE_SERVICE_URL",
+                _ => "DIDCOMM_ENCRYPTION_POLICY_FILE",
             };
-            owner_mut(deployment)["env"]
-                .as_array_mut()
-                .unwrap()
-                .retain(|v| v["name"] != name);
+            let entries = owner_mut(deployment)["env"].as_array_mut().unwrap();
+            if matches!(fault, "delivery-owner" | "native-service-url") {
+                entries
+                    .iter_mut()
+                    .find(|entry| entry["name"] == name)
+                    .unwrap()["value"] = json!("hostile-drift");
+            } else {
+                entries.retain(|v| v["name"] != name);
+            }
         }
         "policy-volume" => deployment["spec"]["template"]["spec"]["volumes"]
             .as_array_mut()

@@ -784,6 +784,7 @@ pub fn check_update(actual: &Value, expected: &Value, namespace: &str) -> Result
                     .chain(INHERITED_SETTINGS)
                     .chain(OPTIONAL_SETTINGS)
                     .chain(SHARED_BINDINGS)
+                    .chain(["DIDCOMM_DELIVERY_OWNER", "ISSUANCE_NATIVE_SERVICE_URL"].iter())
                 {
                     require(observed_env.get(setting) == target_env.get(setting))?;
                 }
