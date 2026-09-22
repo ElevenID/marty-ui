@@ -3,8 +3,8 @@ use std::collections::BTreeMap;
 use marty_trust_profile::{
     CascadeRevocationPolicy, ComplianceStatus, IssuerEntityComplianceStatus, IssuerEntityType,
     RegistryImportType, RegistryOperation, RegistrySource, RevocationCheckMode, TrustAnchorType,
-    TrustProfileStatus, TrustProfileType, TrustRelationshipStatus, TrustSourceType,
-    HTTP_OPERATIONS,
+    TrustProfileStatus, TrustProfileType, TrustPurpose, TrustRelationshipStatus, TrustSourceType,
+    TrustedAssertionFormat, HTTP_OPERATIONS,
 };
 use serde::Serialize;
 use serde_json::Value;
@@ -69,6 +69,28 @@ fn complete_surface_and_domain_inventory_match_the_shared_contract() {
                 TrustSourceType::PinnedIssuer,
                 TrustSourceType::RootCa,
                 TrustSourceType::PkdUrl,
+            ]),
+        ),
+        (
+            "trust_purpose",
+            values(&[
+                TrustPurpose::CredentialIssuer,
+                TrustPurpose::MachineIdentityCa,
+                TrustPurpose::ManufacturerEndorser,
+                TrustPurpose::AttestationVerifier,
+                TrustPurpose::DeploymentAuthority,
+                TrustPurpose::EvidenceSigner,
+            ]),
+        ),
+        (
+            "trusted_assertion_format",
+            values(&[
+                TrustedAssertionFormat::X509Certificate,
+                TrustedAssertionFormat::Eat,
+                TrustedAssertionFormat::TpmQuote,
+                TrustedAssertionFormat::Jwt,
+                TrustedAssertionFormat::Cwt,
+                TrustedAssertionFormat::Custom,
             ]),
         ),
         (

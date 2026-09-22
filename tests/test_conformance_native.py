@@ -39,6 +39,37 @@ def coverage():
                 "operation": "renew_issued_credential",
                 "renewal_behavior_contract": True,
             },
+            *[
+                {
+                    "method": method,
+                    "path": path,
+                    "operation": operation,
+                    "issued_credential_adapter_behavior_contract": True,
+                }
+                for method, path, operation in [
+                    ("GET", "/v1/issued-credentials", "list_issued_credentials"),
+                    (
+                        "GET",
+                        "/v1/issued-credentials/{credential_id}",
+                        "get_issued_credential",
+                    ),
+                    (
+                        "POST",
+                        "/v1/issued-credentials/{credential_id}/revoke",
+                        "revoke_issued_credential",
+                    ),
+                    (
+                        "POST",
+                        "/v1/issued-credentials/{credential_id}/suspend",
+                        "suspend_issued_credential",
+                    ),
+                    (
+                        "POST",
+                        "/v1/issued-credentials/{credential_id}/reinstate",
+                        "reinstate_issued_credential",
+                    ),
+                ]
+            ],
         ],
     }
 
@@ -317,7 +348,7 @@ def test_policy_is_paired_and_confined(mutation):
         native.validate_model(value, project=PROJECT, authcrypt=True, local_build=False)
 
 
-@pytest.mark.parametrize("index", range(3))
+@pytest.mark.parametrize("index", range(8))
 def test_capability_floor_requires_every_real_selected_operation(index):
     value = coverage()
     native.validate_capabilities(value)

@@ -13,6 +13,31 @@ pub enum ResponseKind {
     TrustProfileIssuer,
 }
 
+const TRUST_PURPOSES: &[&str] = &[
+    "CREDENTIAL_ISSUER",
+    "MACHINE_IDENTITY_CA",
+    "MANUFACTURER_ENDORSER",
+    "ATTESTATION_VERIFIER",
+    "DEPLOYMENT_AUTHORITY",
+    "EVIDENCE_SIGNER",
+];
+const MACHINE_TRUST_PURPOSES: &[&str] = &[
+    "MACHINE_IDENTITY_CA",
+    "MANUFACTURER_ENDORSER",
+    "ATTESTATION_VERIFIER",
+    "DEPLOYMENT_AUTHORITY",
+    "EVIDENCE_SIGNER",
+];
+const TRUSTED_ASSERTION_FORMATS: &[&str] = &[
+    "X509_CERTIFICATE",
+    "EAT",
+    "TPM_QUOTE",
+    "JWT",
+    "CWT",
+    "CUSTOM",
+];
+const CREDENTIAL_FORMATS: &[&str] = &["MDOC", "SD_JWT_VC", "VC_JWT", "JSON_LD", "VDS_NC"];
+
 const ISSUER_CREATE_FIELDS: &[&str] = &[
     "organization_id",
     "issuer_id",
@@ -34,6 +59,7 @@ const TRUST_PROFILE_FIELDS: &[&str] = &[
     "description",
     "profile_type",
     "compliance_status",
+    "trust_purposes",
     "trust_sources",
     "validation_rules",
     "allowed_algorithms",
@@ -46,6 +72,7 @@ const TRUST_PROFILE_FIELDS: &[&str] = &[
     "revocation_profile_id",
     "time_policy",
     "supported_formats",
+    "trusted_assertion_formats",
     "allowed_issuers",
     "denied_issuers",
     "system_issuer_overrides",
@@ -58,6 +85,7 @@ const TRUST_PROFILE_UPDATE_FIELDS: &[&str] = &[
     "description",
     "profile_type",
     "compliance_status",
+    "trust_purposes",
     "trust_sources",
     "validation_rules",
     "allowed_algorithms",
@@ -70,6 +98,7 @@ const TRUST_PROFILE_UPDATE_FIELDS: &[&str] = &[
     "revocation_profile_id",
     "time_policy",
     "supported_formats",
+    "trusted_assertion_formats",
     "allowed_issuers",
     "denied_issuers",
     "system_issuer_overrides",
@@ -367,9 +396,6 @@ fn canonicalize_trust_profile(value: Value, update: bool) -> Result<Value, Trust
             value.entry(field).or_insert(Value::Null);
         }
         value
-            .entry("supported_formats")
-            .or_insert_with(|| json!(["SD_JWT_VC", "MDOC"]));
-        value
             .entry("system_issuer_overrides")
             .or_insert_with(|| json!({}));
         value
@@ -385,6 +411,36 @@ fn validate_trust_profile_fields(
     value: &mut Map<String, Value>,
     update: bool,
 ) -> Result<(), TrustContractError> {
+    validate_enum_array(value.get("trust_purposes"), update, TRUST_PURPOSES)?;
+    validate_enum_array(
+        value.get("trusted_assertion_formats"),
+        update,
+        TRUSTED_ASSERTION_FORMATS,
+    )?;
+    if !update {
+        let purposes = value.get("trust_purposes").and_then(Value::as_array);
+        let credential_purpose = purposes.is_none_or(|purposes| {
+            purposes
+                .iter()
+                .any(|purpose| purpose.as_str() == Some("CREDENTIAL_ISSUER"))
+        });
+        let machine_purpose = purposes.is_some_and(|purposes| {
+            purposes.iter().any(|purpose| {
+                purpose
+                    .as_str()
+                    .is_some_and(|purpose| MACHINE_TRUST_PURPOSES.contains(&purpose))
+            })
+        });
+        if credential_purpose {
+            value
+                .entry("supported_formats")
+                .or_insert_with(|| json!(["SD_JWT_VC", "MDOC"]));
+        }
+        if machine_purpose && !value.contains_key("trusted_assertion_formats") {
+            return Err(TrustContractError);
+        }
+    }
+    validate_enum_array(value.get("supported_formats"), false, CREDENTIAL_FORMATS)?;
     for (field, maximum) in [
         ("name", 255),
         ("description", 2000),
@@ -466,6 +522,7 @@ fn canonicalize_trust_source(value: Value) -> Result<Value, TrustContractError> 
             "url",
             "certificate_pem",
             "issuer_did",
+            "purposes",
             "description",
             "registry_sync",
         ],
@@ -485,6 +542,7 @@ fn canonicalize_trust_source(value: Value) -> Result<Value, TrustContractError> 
         value.entry(field).or_insert(Value::Null);
     }
     optional_string(&value, "description", 256, true)?;
+    validate_enum_array(value.get("purposes"), false, TRUST_PURPOSES)?;
     let selectors = ["url", "certificate_pem", "issuer_did"]
         .iter()
         .filter(|field| value.get(**field).is_some_and(|entry| !entry.is_null()))
@@ -785,6 +843,7 @@ fn project_trust_profile(value: Value) -> Result<Value, TrustContractError> {
         "status",
         "profile_type",
         "compliance_status",
+        "trust_purposes",
         "trust_sources",
         "allowed_algorithms",
         "revocation_policy",
@@ -792,6 +851,7 @@ fn project_trust_profile(value: Value) -> Result<Value, TrustContractError> {
         "revocation_profile_id",
         "time_policy",
         "supported_formats",
+        "trusted_assertion_formats",
         "allowed_issuers",
         "denied_issuers",
         "system_issuer_overrides",
@@ -817,11 +877,37 @@ fn project_trust_profile(value: Value) -> Result<Value, TrustContractError> {
         "status",
         &["draft", "active", "suspended", "archived"],
     )?;
-    for field in ["trust_sources", "allowed_algorithms", "supported_formats"] {
+    for field in ["trust_sources", "allowed_algorithms"] {
         if !value.get(field).is_some_and(Value::is_array) {
             return Err(TrustContractError);
         }
     }
+    validate_enum_array(value.get("trust_purposes"), false, TRUST_PURPOSES)?;
+    validate_enum_array(
+        value.get("trusted_assertion_formats"),
+        false,
+        TRUSTED_ASSERTION_FORMATS,
+    )?;
+    let purposes = value.get("trust_purposes").and_then(Value::as_array);
+    let credential_purpose = purposes.is_none_or(|purposes| {
+        purposes
+            .iter()
+            .any(|purpose| purpose.as_str() == Some("CREDENTIAL_ISSUER"))
+    });
+    let machine_purpose = purposes.is_some_and(|purposes| {
+        purposes.iter().any(|purpose| {
+            purpose
+                .as_str()
+                .is_some_and(|purpose| MACHINE_TRUST_PURPOSES.contains(&purpose))
+        })
+    });
+    if credential_purpose && !value.get("supported_formats").is_some_and(Value::is_array) {
+        return Err(TrustContractError);
+    }
+    if machine_purpose && !value.contains_key("trusted_assertion_formats") {
+        return Err(TrustContractError);
+    }
+    validate_enum_array(value.get("supported_formats"), false, CREDENTIAL_FORMATS)?;
     for field in [
         "description",
         "revocation_profile_id",
@@ -1030,6 +1116,31 @@ fn validate_string_array(
         .is_none_or(|values| values.iter().any(|value| !value.is_string()))
     {
         return Err(TrustContractError);
+    }
+    Ok(())
+}
+
+fn validate_enum_array(
+    value: Option<&Value>,
+    allow_null: bool,
+    allowed: &[&str],
+) -> Result<(), TrustContractError> {
+    let Some(value) = value else {
+        return Ok(());
+    };
+    if allow_null && value.is_null() {
+        return Ok(());
+    }
+    let values = value
+        .as_array()
+        .filter(|values| !values.is_empty())
+        .ok_or(TrustContractError)?;
+    let mut seen = BTreeSet::new();
+    for value in values {
+        let value = value.as_str().ok_or(TrustContractError)?;
+        if !allowed.contains(&value) || !seen.insert(value) {
+            return Err(TrustContractError);
+        }
     }
     Ok(())
 }

@@ -1,10 +1,12 @@
 use async_trait::async_trait;
 use serde_json::{json, Value};
 use sqlx::{PgPool, Row};
+use uuid::Uuid;
 
 use crate::credential_management::{
-    CanvasLifecycleSyncError, CredentialLifecycleAction, CredentialManagementPortError,
-    CredentialManagementRepository, ManagedCredential, ManagedCredentialStatus,
+    CanvasLifecycleSyncError, CredentialLifecycleAction, CredentialLifecycleAuditRecord,
+    CredentialManagementPortError, CredentialManagementRepository, ManagedCredential,
+    ManagedCredentialStatus,
 };
 
 #[derive(Clone)]
@@ -54,7 +56,7 @@ impl CredentialManagementRepository for PostgresCredentialManagementRepository {
         credential_id: &str,
     ) -> Result<Option<ManagedCredential>, CredentialManagementPortError> {
         sqlx::query(
-            "SELECT id, organization_id, credential_template_id, issuer_did, status,
+            "SELECT id, transaction_id, organization_id, credential_template_id, issuer_did, status,
                     status_updated_at, revoked, revoked_at, revocation_reason,
                     revocation_profile_id, status_list_entries
              FROM issuance_service.issued_credentials WHERE id = $1",
@@ -71,13 +73,15 @@ impl CredentialManagementRepository for PostgresCredentialManagementRepository {
         &self,
         credential: &ManagedCredential,
         expected_status: ManagedCredentialStatus,
+        audit: &CredentialLifecycleAuditRecord,
     ) -> Result<ManagedCredential, CredentialManagementPortError> {
+        let mut transaction = self.pool.begin().await.map_err(port_error)?;
         let row = sqlx::query(
             "UPDATE issuance_service.issued_credentials
              SET status = $1, status_updated_at = $2, revoked = $3,
                  revoked_at = $4, revocation_reason = $5
              WHERE id = $6 AND status = $7 AND organization_id = $8
-             RETURNING id, organization_id, credential_template_id, issuer_did, status,
+             RETURNING id, transaction_id, organization_id, credential_template_id, issuer_did, status,
                        status_updated_at, revoked, revoked_at, revocation_reason,
                        revocation_profile_id, status_list_entries",
         )
@@ -89,7 +93,7 @@ impl CredentialManagementRepository for PostgresCredentialManagementRepository {
         .bind(&credential.id)
         .bind(expected_status.as_str())
         .bind(&credential.organization_id)
-        .fetch_optional(&self.pool)
+        .fetch_optional(&mut *transaction)
         .await
         .map_err(port_error)?
         .ok_or_else(|| {
@@ -97,7 +101,38 @@ impl CredentialManagementRepository for PostgresCredentialManagementRepository {
                 "Credential status changed concurrently or credential no longer exists".to_owned(),
             )
         })?;
-        managed_credential(&row)
+        let updated = managed_credential(&row)?;
+        let metadata = json!({
+            "schema": "marty.credential-lifecycle-audit/v1",
+            "credential_id": updated.id,
+            "organization_id": updated.organization_id,
+            "credential_template_id": updated.credential_template_id,
+            "action": audit.action.as_str(),
+            "previous_status": audit.previous_status.as_str(),
+            "status": updated.status.as_str(),
+            "reason": audit.reason,
+            "comments": audit.comments,
+            "actor_id": audit.actor_id,
+            "actor_type": audit.actor_type,
+        });
+        sqlx::query(
+            "INSERT INTO issuance_service.issuance_events
+                 (id, transaction_id, application_id, event_type, metadata, created_at)
+             VALUES
+                 ($1, $2,
+                  (SELECT application_id FROM issuance_service.issuance_transactions WHERE id = $2),
+                  $3, $4, $5)",
+        )
+        .bind(Uuid::new_v4().to_string())
+        .bind(&updated.transaction_id)
+        .bind(format!("credential_{}", audit.action.event_type()))
+        .bind(metadata)
+        .bind(updated.status_updated_at)
+        .execute(&mut *transaction)
+        .await
+        .map_err(port_error)?;
+        transaction.commit().await.map_err(port_error)?;
+        Ok(updated)
     }
 
     async fn synchronize_canvas(
@@ -160,6 +195,7 @@ fn managed_credential(
         })?;
     Ok(ManagedCredential {
         id: row.try_get("id").map_err(port_error)?,
+        transaction_id: row.try_get("transaction_id").map_err(port_error)?,
         organization_id: row.try_get("organization_id").map_err(port_error)?,
         credential_template_id: row.try_get("credential_template_id").map_err(port_error)?,
         issuer_did: row.try_get("issuer_did").map_err(port_error)?,

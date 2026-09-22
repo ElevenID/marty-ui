@@ -82,13 +82,46 @@ only JSON bodies.
 MMF-owned readiness, lifecycle, and version diagnostics remain additive. The
 shared service image and entrypoint package the native binary. Beta's source
 configuration uses a separate `issuance-native` sidecar and the gateway's
-contract-owned HTTP path split. The 31-route Canvas management migration brings
-the HTTP ownership inventory to 63. The other 68 HTTP operations, complete API
+contract-owned HTTP path split. The public issued-credential adapter slice brings
+the HTTP ownership inventory to 107. The other 24 HTTP operations, complete API
 runtime cutover, the Canvas synchronization worker, and final packaging and
 schema ownership remain open. All 12 gRPC methods now have native ownership;
 consumer routing and runtime acceptance must be verified separately. These are
 source/contract facts, not a fresh beta health or deployment attestation.
 Production remains unchanged by this migration lane.
+
+## Public issued-credential follow-ups
+
+The five frozen public issued-credential adapters (list, detail, revoke,
+suspend, and reinstate) are the current coherent Rust slice. Lifecycle
+comments are governed private audit data and must be committed atomically with
+the status transition in `issuance_service.issuance_events`; they are not part
+of the public credential projection.
+
+Two existing UI intents are absent from both the frozen Python backend surface
+and the gateway route inventory. They remain supported product work and must
+not be deleted or silently presented as complete:
+
+- `POST /v1/credentials/issued/batch-revoke` needs a governed, tenant-safe,
+  idempotent batch lifecycle design with per-record outcomes.
+- `GET /v1/credentials/revocations` needs a retained-audit history API with
+  `audit:view` authorization, tenant filtering through relational joins,
+  deterministic pagination, and an upstream partial lifecycle-event index.
+
+Until those APIs land, preserve the UI calls and history presentation. Track
+their backend implementation independently from the five-route adapter
+cutover; neither route existed in the language-neutral frozen source surface.
+
+After the selector has soaked and rollback is closed, the consumer cleanup in
+`marty-credentials/services/issuance/infrastructure/api/routes.py` may remove
+only the five public endpoint functions plus the now-exclusive
+`IssuedCredentialRecordResponse`, `_issued_credential_to_protocol`, and
+`_subject_claims_hash` symbols and their matching
+`tests/test_issuance_changes.py` cases. Keep the shared
+`_credential_status_to_protocol`, `_credential_format_to_protocol`, and
+`_status_list_entries_to_protocol` helpers: other Python compatibility routes
+still call them. This symbol-level removal boundary prevents the Rust cutover
+from deleting adjacent issuance and deployment-profile behavior.
 
 ## Dependency and removal order
 

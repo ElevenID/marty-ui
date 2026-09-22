@@ -85,6 +85,7 @@ fn profile(name: &str) -> TrustProfile {
         status: TrustProfileStatus::Draft,
         profile_type: TrustProfileType::Custom,
         compliance_status: ComplianceStatus::SetupRequired,
+        trust_purposes: None,
         trust_sources: vec![],
         validation_rules: Default::default(),
         allowed_issuers: None,
@@ -97,6 +98,7 @@ fn profile(name: &str) -> TrustProfile {
         revocation_profile_id: None,
         time_policy: Default::default(),
         supported_formats: vec!["MDOC".into()],
+        trusted_assertion_formats: None,
         created_at: now,
         updated_at: now,
     }
@@ -163,6 +165,55 @@ async fn profile_http_contract_preserves_defaults_and_response_projection() {
 }
 
 #[tokio::test]
+async fn machine_identity_profile_round_trips_without_credential_defaults() {
+    let response = request(
+        service(),
+        "POST",
+        "/v1/trust-profiles",
+        Some(json!({
+            "organization_id": "org-1",
+            "name": "Machine trust",
+            "trust_purposes": ["MACHINE_IDENTITY_CA", "ATTESTATION_VERIFIER"],
+            "trusted_assertion_formats": ["X509_CERTIFICATE", "EAT"],
+            "trust_sources": [{
+                "source_type": "PINNED_ISSUER",
+                "issuer_did": "did:web:device-ca.example",
+                "purposes": ["MACHINE_IDENTITY_CA"]
+            }]
+        })),
+    )
+    .await;
+    assert_eq!(response.status(), 200);
+    let response = body(response).await;
+    assert_eq!(
+        response["trust_purposes"],
+        json!(["MACHINE_IDENTITY_CA", "ATTESTATION_VERIFIER"])
+    );
+    assert_eq!(
+        response["trusted_assertion_formats"],
+        json!(["X509_CERTIFICATE", "EAT"])
+    );
+    assert_eq!(
+        response["trust_sources"][0]["purposes"],
+        json!(["MACHINE_IDENTITY_CA"])
+    );
+    assert!(response.get("supported_formats").is_none());
+
+    let incomplete = request(
+        service(),
+        "POST",
+        "/v1/trust-profiles",
+        Some(json!({
+            "organization_id": "org-1",
+            "name": "Incomplete machine trust",
+            "trust_purposes": ["MACHINE_IDENTITY_CA"]
+        })),
+    )
+    .await;
+    assert_eq!(incomplete.status(), 422);
+}
+
+#[tokio::test]
 async fn malformed_and_obsolete_public_shapes_fail_closed() {
     let obsolete = request(
         service(),
@@ -211,6 +262,7 @@ async fn internal_decisions_fail_closed_with_the_legacy_service_contract() {
         url: Some("https://registry.example/sync".into()),
         certificate_pem: None,
         issuer_did: None,
+        purposes: None,
         description: None,
         pinned_certificates: vec![],
         refresh_interval_hours: 24,

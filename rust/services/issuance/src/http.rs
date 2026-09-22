@@ -81,6 +81,7 @@ use crate::{
     },
     initiation_http::{InitiationHttpError, InitiationHttpService},
     internal_application_service::InternalApplicationService,
+    issued_credential_records::IssuedCredentialAdapterService,
     proof_nonce::{ProofNonceError, ProofNonceService},
     resource_owner::{ResourceOwner, ResourceOwnerKind, ResourceOwnerService},
     tenant_discovery::{TenantDiscoveryError, TenantDiscoveryService},
@@ -131,6 +132,7 @@ pub struct IssuanceServices {
     didcomm_delivery: InitiationDidcommHttpService,
     renewal: Option<CredentialRenewalService>,
     credential_management: CredentialManagementHttpService,
+    issued_credentials: Option<IssuedCredentialAdapterService>,
     application_templates: ApplicationTemplateService,
     internal_applications: Option<InternalApplicationService>,
     canvas: CanvasServices,
@@ -320,6 +322,7 @@ impl IssuanceServices {
             didcomm_delivery: core.didcomm_delivery,
             renewal: core.renewal,
             credential_management,
+            issued_credentials: None,
             application_templates,
             internal_applications: None,
             canvas,
@@ -336,6 +339,16 @@ impl IssuanceServices {
         self.internal_applications = Some(internal_applications);
         self
     }
+
+    /// Opt in to the public issued-credential read and lifecycle adapters.
+    #[must_use]
+    pub fn with_issued_credentials(
+        mut self,
+        issued_credentials: IssuedCredentialAdapterService,
+    ) -> Self {
+        self.issued_credentials = Some(issued_credentials);
+        self
+    }
 }
 
 #[derive(Default)]
@@ -350,6 +363,7 @@ struct OptionalServices {
     didcomm_delivery: Option<InitiationDidcommHttpService>,
     renewal: Option<CredentialRenewalService>,
     credential_management: Option<CredentialManagementHttpService>,
+    issued_credentials: Option<IssuedCredentialAdapterService>,
     application_templates: Option<ApplicationTemplateService>,
     internal_applications: Option<InternalApplicationService>,
     canvas_lti_login: Option<CanvasLtiLoginService>,
@@ -458,6 +472,7 @@ pub fn router_with_all_services(
             didcomm_delivery: Some(services.didcomm_delivery),
             renewal: services.renewal,
             credential_management: Some(services.credential_management),
+            issued_credentials: services.issued_credentials,
             application_templates: Some(services.application_templates),
             internal_applications: services.internal_applications,
             canvas_oauth: Some(services.canvas.oauth),
@@ -1188,6 +1203,11 @@ fn router_with_optional_services(
     });
     let api = if let Some(operations) = services.canvas_operations {
         api.merge(crate::canvas_operations::candidate_router(operations))
+    } else {
+        api
+    };
+    let api = if let Some(issued_credentials) = services.issued_credentials {
+        api.merge(crate::issued_credential_http::router(issued_credentials))
     } else {
         api
     };
@@ -3690,6 +3710,10 @@ impl IntoResponse for CredentialManagementHttpError {
                 CredentialManagementError::ReasonTooLong => (
                     StatusCode::UNPROCESSABLE_ENTITY,
                     "Credential lifecycle reason exceeds 2000 characters",
+                ),
+                CredentialManagementError::CommentsTooLong => (
+                    StatusCode::UNPROCESSABLE_ENTITY,
+                    "Credential lifecycle comments exceed 4000 characters",
                 ),
                 CredentialManagementError::RepositoryUnavailable(_) => (
                     StatusCode::SERVICE_UNAVAILABLE,

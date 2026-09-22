@@ -4623,6 +4623,8 @@ dependencies = [
  "mmf-platform",
  "mmf-runtime",
  "mmf-security",
+ "num-bigint",
+ "num-traits",
  "p256 0.13.2",
  "percent-encoding",
  "prost",

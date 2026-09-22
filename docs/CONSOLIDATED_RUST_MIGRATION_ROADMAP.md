@@ -57,6 +57,12 @@ The immediate deployment boundary is beta. Production and persistent self-host e
 
 ## Current execution snapshot — 2026-09-20
 
+The current issued-credential adapter candidate preserves the five frozen
+public list/detail/lifecycle routes and restores lifecycle comments as durable,
+private audit metadata. Batch revoke and retained revocation history are
+explicit follow-ups rather than deletions; see
+`docs/rust-migrations/issuance-service-plan.md#public-issued-credential-follow-ups`.
+
 PR #814's reviewed head
 `458823962b00ab614060b5420f7a7caa44d2712e` is merged. Its final merge-group
 candidate `ec7780f390b4ae123cf6d0bdf0f5d139000ab544` completed full hosted run

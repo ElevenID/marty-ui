@@ -812,7 +812,9 @@ fn lifecycle_status(error: CredentialManagementError) -> Status {
         CredentialManagementError::NotFound | CredentialManagementError::ResourceNotFound => {
             Status::not_found(error.to_string())
         }
-        CredentialManagementError::ReasonTooLong => Status::invalid_argument(error.to_string()),
+        CredentialManagementError::ReasonTooLong | CredentialManagementError::CommentsTooLong => {
+            Status::invalid_argument(error.to_string())
+        }
         CredentialManagementError::AlreadyRevoked
         | CredentialManagementError::CannotSuspendRevoked
         | CredentialManagementError::CannotReinstateRevoked
@@ -928,6 +930,7 @@ mod tests {
             &self,
             credential: &ManagedCredential,
             expected_status: ManagedCredentialStatus,
+            _audit: &crate::credential_management::CredentialLifecycleAuditRecord,
         ) -> Result<ManagedCredential, CredentialManagementPortError> {
             self.calls.lock().expect("calls").push("persist".to_owned());
             let mut stored = self.credential.lock().expect("credential");
@@ -973,6 +976,7 @@ mod tests {
         let harness = Harness {
             credential: Arc::new(Mutex::new(Some(ManagedCredential {
                 id: "credential-a".to_owned(),
+                transaction_id: "transaction-a".to_owned(),
                 organization_id: "org-a".to_owned(),
                 credential_template_id: "template-a".to_owned(),
                 issuer_did: None,
@@ -1379,7 +1383,7 @@ mod tests {
         let event = events.next().await.expect("stream item").expect("event");
         assert_eq!(event.event_type, "suspended");
         assert_eq!(event.credential_id, "credential-a");
-        assert_eq!(event.transaction_id, "");
+        assert_eq!(event.transaction_id, "transaction-a");
         assert_eq!(event.organization_id, "org-a");
         assert_eq!(event.credential_template_id, "template-a");
         assert_eq!(event.status, "suspended");

@@ -101,6 +101,10 @@ def test_frozen_surface_provenance_and_coverage_are_complete() -> None:
         ROOT / "contracts/issuance-resource-owner-lookups.json"
     ).read_bytes()
     resource_owners = json.loads(resource_owner_bytes)
+    issued_credential_adapter_bytes = (
+        ROOT / "contracts/issuance-issued-credential-adapters.json"
+    ).read_bytes()
+    issued_credential_adapters = json.loads(issued_credential_adapter_bytes)
     assert surface["schema"] == "marty.issuance-runtime-surface/v1"
     assert surface["http"]["route_count"] == len(surface["http"]["routes"]) == 131
     assert surface["grpc"]["method_count"] == len(surface["grpc"]["methods"]) == 12
@@ -324,6 +328,30 @@ def test_frozen_surface_provenance_and_coverage_are_complete() -> None:
             },
         }
     ]
+    assert (
+        hashlib.sha256(
+            issued_credential_adapter_bytes.replace(b"\r\n", b"\n")
+        ).hexdigest()
+        == coverage["issued_credential_adapter_behavior_contract"]["sha256"]
+    )
+    assert coverage["issued_credential_adapter_behavior_contract"] == {
+        "path": "contracts/issuance-issued-credential-adapters.json",
+        "sha256": "05941c84d1d1ab80ef99b5eefe856d522cccc6b6cce719d8b4cc81a7a3b757e2",
+        "source_repository": "ElevenID/marty-credentials",
+        "source_path": "services/issuance/infrastructure/api/routes.py",
+        "source_commit": "15af5232df376bb9596b5aed3703110bf890fce5",
+    }
+    assert issued_credential_adapters["schema"] == (
+        "marty.issuance-issued-credential-adapters/v1"
+    )
+    assert len(issued_credential_adapters["operations"]) == 5
+    assert issued_credential_adapters["projection"]["credential_formats"] == [
+        "MDOC",
+        "VDS_NC",
+        "SD_JWT_VC",
+        "VC_JWT",
+        "JSON_LD",
+    ]
     assert internal_applications["schema"] == (
         "marty.issuance-internal-applications/v1"
     )
@@ -413,6 +441,10 @@ def test_frozen_surface_provenance_and_coverage_are_complete() -> None:
     resource_owner_operations = {
         route["operation"]: route for route in resource_owners["operations"]
     }
+    issued_credential_adapter_operations = {
+        route["operation"]: route
+        for route in issued_credential_adapters["operations"]
+    }
     canvas_operations_cases = {
         "enqueue_canvas_application_sync_route": "enqueue",
         "list_canvas_sync_jobs_route": "jobs",
@@ -442,7 +474,7 @@ def test_frozen_surface_provenance_and_coverage_are_complete() -> None:
         hashlib.sha256(renewal_bytes).hexdigest()
         == coverage["renewal_behavior_contract"]["sha256"]
     )
-    assert len(coverage["native_http"]) == 102
+    assert len(coverage["native_http"]) == 107
     assert set(native) == (
         set(discovery_cases)
         | set(tenant_cases)
@@ -452,6 +484,7 @@ def test_frozen_surface_provenance_and_coverage_are_complete() -> None:
         | application_template_operations
         | internal_application_operations
         | set(resource_owner_operations)
+        | set(issued_credential_adapter_operations)
         | set(canvas_operations_cases)
         | {
             "didcomm_deliver",
@@ -669,6 +702,16 @@ def test_frozen_surface_provenance_and_coverage_are_complete() -> None:
                 "resource_owner_behavior_contract": True,
             }
             continue
+        if operation in issued_credential_adapter_operations:
+            frozen = issued_credential_adapter_operations[operation]
+            expected = {
+                "method": frozen["method"],
+                "path": frozen["path"],
+                "operation": frozen["operation"],
+                "issued_credential_adapter_behavior_contract": True,
+            }
+            assert coverage_entry == expected
+            continue
         if operation in tenant_cases:
             assert coverage_entry["tenant_behavior_case"] == operation
             assert coverage_entry["method"] == "GET"
@@ -705,7 +748,7 @@ def test_frozen_surface_provenance_and_coverage_are_complete() -> None:
         )
         assert discovery_cases[operation]["path"] == expected_case_path
     assert coverage["remaining"] == {
-        "http": 29,
+        "http": 24,
         "grpc": 0,
         "runtime_modes": ["api", "canvas-sync-worker"],
         "literal_environment_variables": 56,
@@ -795,7 +838,7 @@ def test_candidate_is_path_split_without_replacing_the_python_runtime() -> None:
     assert "MARTY_ISSUANCE_IMAGE" in compose
 
 
-def test_internal_lifecycle_cutover_preserves_public_wrapper_contract() -> None:
+def test_public_issued_credential_adapters_cut_over_without_claiming_siblings() -> None:
     coverage = json.loads(text("contracts/issuance-native-coverage.json"))
     gateway = json.loads(text("contracts/gateway-routes.json"))
     native = {(route["method"], route["path"]) for route in coverage["native_http"]}
@@ -807,16 +850,32 @@ def test_internal_lifecycle_cutover_preserves_public_wrapper_contract() -> None:
         ("POST", "/v1/issuance/credentials/{credential_id}/reinstate"),
         ("GET", "/v1/issuance/credentials/{credential_id}/status"),
     }
-    public_record_wrappers = {
+    public_record_adapters = {
+        ("GET", "/v1/issued-credentials"),
+        ("GET", "/v1/issued-credentials/{credential_id}"),
         ("POST", "/v1/issued-credentials/{credential_id}/revoke"),
         ("POST", "/v1/issued-credentials/{credential_id}/suspend"),
         ("POST", "/v1/issued-credentials/{credential_id}/reinstate"),
     }
+    independently_owned = {
+        ("GET", "/v1/issued-credentials/mine"),
+        (
+            "POST",
+            "/v1/issued-credentials/{credential_id}/deliveries/canvas-credentials/publish",
+        ),
+        ("POST", "/v1/credentials/issued/batch-revoke"),
+        ("GET", "/v1/credentials/revocations"),
+    }
 
     assert internal_lifecycle <= native
     assert internal_lifecycle.isdisjoint(public)
-    assert public_record_wrappers <= public
-    assert public_record_wrappers.isdisjoint(native)
+    assert public_record_adapters <= public
+    assert public_record_adapters <= native
+    assert independently_owned.isdisjoint(native)
+    assert (
+        "POST",
+        "/v1/issued-credentials/{credential_id}/renew",
+    ) in native, "the independently migrated renewal route must remain native"
     assert (
         "GET",
         "/v1/issued-credentials/{credential_id}/status",

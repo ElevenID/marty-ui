@@ -14,6 +14,7 @@ use serde::Deserialize;
 pub const LEGACY_SERVICE: &str = "issuance";
 pub const NATIVE_SERVICE: &str = "issuance-native";
 const CREDENTIAL_LIFECYCLE_TAG: &str = "credential-lifecycle";
+const ISSUED_CREDENTIAL_ADAPTER_TAG: &str = "issued-credential-adapter";
 
 #[derive(Debug, Deserialize)]
 struct Coverage {
@@ -26,6 +27,8 @@ struct NativeHttpRoute {
     path: String,
     #[serde(default)]
     credential_lifecycle_behavior_contract: bool,
+    #[serde(default)]
+    issued_credential_adapter_behavior_contract: bool,
 }
 
 static NATIVE_ROUTES: LazyLock<RouteTable> = LazyLock::new(|| {
@@ -38,6 +41,9 @@ static NATIVE_ROUTES: LazyLock<RouteTable> = LazyLock::new(|| {
         let mut tags = BTreeSet::from(["native-migration".into()]);
         if route.credential_lifecycle_behavior_contract {
             tags.insert(CREDENTIAL_LIFECYCLE_TAG.into());
+        }
+        if route.issued_credential_adapter_behavior_contract {
+            tags.insert(ISSUED_CREDENTIAL_ADAPTER_TAG.into());
         }
         table
             .add(RouteConfig {
@@ -67,12 +73,37 @@ static NATIVE_ROUTES: LazyLock<RouteTable> = LazyLock::new(|| {
 
 #[must_use]
 pub fn is_native_http(method: HttpMethod, path: &str) -> bool {
+    if method == HttpMethod::Get && path == "/v1/issued-credentials/mine" {
+        return false;
+    }
     NATIVE_ROUTES
         .find(&GatewayRequest::new(method, path, 0))
         .is_ok_and(|matched| {
-            !matched.route.tags.contains(CREDENTIAL_LIFECYCLE_TAG)
-                || is_canonical_absolute_path(path)
+            let exact_shape_required = matched.route.tags.contains(CREDENTIAL_LIFECYCLE_TAG)
+                || matched.route.tags.contains(ISSUED_CREDENTIAL_ADAPTER_TAG);
+            !exact_shape_required
+                || (is_canonical_absolute_path(path)
+                    && exact_template_shape(&matched.route.pattern, path))
         })
+}
+
+fn exact_template_shape(pattern: &str, path: &str) -> bool {
+    let mut pattern_segments = pattern.split('/');
+    let mut path_segments = path.split('/');
+    loop {
+        match (pattern_segments.next(), path_segments.next()) {
+            (None, None) => return true,
+            (Some(pattern_segment), Some(path_segment)) => {
+                let parameter = pattern_segment.starts_with('{') && pattern_segment.ends_with('}');
+                if (parameter && path_segment.is_empty())
+                    || (!parameter && pattern_segment != path_segment)
+                {
+                    return false;
+                }
+            }
+            _ => return false,
+        }
+    }
 }
 
 fn is_canonical_absolute_path(path: &str) -> bool {
@@ -243,6 +274,60 @@ mod tests {
     }
 
     #[test]
+    fn issued_credential_adapters_select_only_the_five_frozen_methods_and_paths() {
+        let contract: serde_json::Value = serde_json::from_str(include_str!(
+            "../../../../contracts/issuance-issued-credential-adapters.json"
+        ))
+        .expect("issued-credential adapter contract");
+        let routes = contract["operations"].as_array().expect("operations");
+        assert_eq!(routes.len(), 5);
+        for route in routes {
+            let method: HttpMethod = serde_json::from_value(route["method"].clone()).unwrap();
+            let path = route["path"]
+                .as_str()
+                .unwrap()
+                .replace("{credential_id}", "credential-1");
+            assert_eq!(upstream_service(method, &path), NATIVE_SERVICE);
+            let other = if method == HttpMethod::Get {
+                HttpMethod::Post
+            } else {
+                HttpMethod::Get
+            };
+            assert_eq!(upstream_service(other, &path), LEGACY_SERVICE);
+            let mut near_misses = vec![
+                path.trim_start_matches('/').to_owned(),
+                format!("/{path}"),
+                format!("{path}/"),
+            ];
+            if path != "/v1/issued-credentials" {
+                near_misses.push(format!("{path}/extra"));
+            }
+            for near_miss in near_misses {
+                assert_eq!(upstream_service(method, &near_miss), LEGACY_SERVICE);
+            }
+        }
+        assert_eq!(
+            upstream_service(
+                HttpMethod::Post,
+                "/v1/issued-credentials/credential-1/renew"
+            ),
+            NATIVE_SERVICE,
+            "the previously migrated renewal adapter must remain native"
+        );
+        for (method, path) in [
+            (HttpMethod::Get, "/v1/issued-credentials/mine"),
+            (
+                HttpMethod::Post,
+                "/v1/issued-credentials/credential-1/deliveries/canvas-credentials/publish",
+            ),
+            (HttpMethod::Post, "/v1/credentials/issued/batch-revoke"),
+            (HttpMethod::Get, "/v1/credentials/revocations"),
+        ] {
+            assert_eq!(upstream_service(method, path), LEGACY_SERVICE);
+        }
+    }
+
+    #[test]
     fn preexisting_native_routes_keep_route_table_path_matching_semantics() {
         let coverage: Coverage = serde_json::from_str(include_str!(
             "../../../../contracts/issuance-native-coverage.json"
@@ -251,7 +336,10 @@ mod tests {
         let preexisting = coverage
             .native_http
             .into_iter()
-            .filter(|route| !route.credential_lifecycle_behavior_contract)
+            .filter(|route| {
+                !route.credential_lifecycle_behavior_contract
+                    && !route.issued_credential_adapter_behavior_contract
+            })
             .collect::<Vec<_>>();
         assert_eq!(preexisting.len(), 98);
 
@@ -452,6 +540,20 @@ mod tests {
                 HttpMethod::Delete,
                 "/v1/integrations/canvas/platforms/platform-1/oauth",
             ),
+            (HttpMethod::Get, "/v1/issued-credentials"),
+            (HttpMethod::Get, "/v1/issued-credentials/credential-1"),
+            (
+                HttpMethod::Post,
+                "/v1/issued-credentials/credential-1/revoke",
+            ),
+            (
+                HttpMethod::Post,
+                "/v1/issued-credentials/credential-1/suspend",
+            ),
+            (
+                HttpMethod::Post,
+                "/v1/issued-credentials/credential-1/reinstate",
+            ),
         ] {
             assert!(is_native_http(method, path), "{method:?} {path}");
         }
@@ -460,7 +562,7 @@ mod tests {
             (HttpMethod::Post, "/v1/issuance/notification"),
             (HttpMethod::Post, "/v1/issuance/deferred-credential"),
             (HttpMethod::Get, "/.well-known/jwks.json"),
-            (HttpMethod::Get, "/v1/issued-credentials/credential-1"),
+            (HttpMethod::Get, "/v1/issued-credentials/mine"),
             (
                 HttpMethod::Get,
                 "/v1/integrations/canvas/platforms/platform-1/oauth/authorizations",

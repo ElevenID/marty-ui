@@ -1241,6 +1241,7 @@ mod tests {
         let (allocator, capture, server) = allocator().await;
         let credential = ManagedCredential {
             id: "credential-a".to_owned(),
+            transaction_id: "transaction-a".to_owned(),
             organization_id: "org-a".to_owned(),
             credential_template_id: "template-a".to_owned(),
             issuer_did: Some("did:web:issuer.example".to_owned()),

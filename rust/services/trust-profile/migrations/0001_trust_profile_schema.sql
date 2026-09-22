@@ -11,15 +11,19 @@ CREATE TABLE IF NOT EXISTS trust_profile_service.trust_profiles (
     name TEXT NOT NULL,
     description TEXT,
     status TEXT NOT NULL DEFAULT 'draft',
+    trust_purposes JSONB,
     trust_sources JSONB NOT NULL DEFAULT '[]'::jsonb,
     validation_rules JSONB NOT NULL DEFAULT '{}'::jsonb,
     revocation_policy JSONB NOT NULL DEFAULT '{}'::jsonb,
     revocation_profile_id TEXT,
     time_policy JSONB NOT NULL DEFAULT '{}'::jsonb,
     supported_formats JSONB NOT NULL DEFAULT '[]'::jsonb,
+    trusted_assertion_formats JSONB,
     created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
     updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
+ALTER TABLE trust_profile_service.trust_profiles ADD COLUMN IF NOT EXISTS trust_purposes JSONB;
+ALTER TABLE trust_profile_service.trust_profiles ADD COLUMN IF NOT EXISTS trusted_assertion_formats JSONB;
 CREATE INDEX IF NOT EXISTS ix_trust_profiles_organization_id ON trust_profile_service.trust_profiles (organization_id);
 CREATE INDEX IF NOT EXISTS ix_trust_profiles_status ON trust_profile_service.trust_profiles (status);
 CREATE INDEX IF NOT EXISTS ix_trust_profiles_org_status ON trust_profile_service.trust_profiles (organization_id, status);

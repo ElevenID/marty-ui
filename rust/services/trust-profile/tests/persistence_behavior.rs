@@ -1,8 +1,9 @@
 use chrono::{TimeZone, Utc};
 use marty_trust_profile::{
     ComplianceStatus, RevocationCheckMode, RevocationPolicy, TimePolicy, TrustProfile,
-    TrustProfileRecord, TrustProfileRecordError, TrustProfileStatus, TrustProfileType, TrustSource,
-    TrustSourceType, ValidationRules, TRUST_PROFILE_MIGRATION,
+    TrustProfileRecord, TrustProfileRecordError, TrustProfileStatus, TrustProfileType,
+    TrustPurpose, TrustSource, TrustSourceType, TrustedAssertionFormat, ValidationRules,
+    TRUST_PROFILE_MIGRATION,
 };
 use serde_json::{json, Map, Value};
 use uuid::Uuid;
@@ -20,6 +21,10 @@ fn complete_profile() -> TrustProfile {
         status: TrustProfileStatus::Active,
         profile_type: TrustProfileType::Icao,
         compliance_status: ComplianceStatus::Compliant,
+        trust_purposes: Some(vec![
+            TrustPurpose::CredentialIssuer,
+            TrustPurpose::MachineIdentityCa,
+        ]),
         trust_sources: vec![TrustSource {
             id: Uuid::parse_str("22222222-2222-4222-8222-222222222222").unwrap(),
             name: "ICAO PKD".into(),
@@ -27,6 +32,7 @@ fn complete_profile() -> TrustProfile {
             url: Some("https://pkd.example.test/feed".into()),
             certificate_pem: None,
             issuer_did: Some("did:web:issuer.example".into()),
+            purposes: Some(vec![TrustPurpose::CredentialIssuer]),
             description: Some("Pinned native registry".into()),
             pinned_certificates: vec!["sha256:abc".into()],
             refresh_interval_hours: 12,
@@ -69,6 +75,7 @@ fn complete_profile() -> TrustProfile {
             require_expiration: true,
         },
         supported_formats: vec!["MDOC".into(), "SD_JWT_VC".into()],
+        trusted_assertion_formats: Some(vec![TrustedAssertionFormat::X509Certificate]),
         created_at: timestamp(),
         updated_at: timestamp(),
     }
@@ -85,6 +92,14 @@ fn complete_profile_round_trips_without_feature_loss() {
         "did:web:issuer.example"
     );
     assert_eq!(record.trust_sources[0]["registry_sequence"], 42);
+    assert_eq!(
+        record.trust_purposes.as_ref().unwrap()[1],
+        "MACHINE_IDENTITY_CA"
+    );
+    assert_eq!(
+        record.trusted_assertion_formats.as_ref().unwrap()[0],
+        "X509_CERTIFICATE"
+    );
     assert_eq!(TrustProfile::try_from(record).unwrap(), profile);
 }
 
@@ -96,6 +111,7 @@ fn legacy_rows_receive_the_same_safe_defaults_as_the_python_adapter() {
         name: "Legacy".into(),
         description: None,
         status: "unknown-legacy-status".into(),
+        trust_purposes: None,
         trust_sources: json!([{
             "id": "",
             "name": "",
@@ -113,6 +129,7 @@ fn legacy_rows_receive_the_same_safe_defaults_as_the_python_adapter() {
         revocation_profile_id: None,
         time_policy: json!({}),
         supported_formats: json!(["UNKNOWN"]),
+        trusted_assertion_formats: None,
         created_at: timestamp(),
         updated_at: timestamp(),
     };
@@ -174,6 +191,9 @@ fn native_schema_covers_the_shared_table_contract_without_destructive_changes() 
         );
     }
     assert!(TRUST_PROFILE_MIGRATION.contains("ADD COLUMN IF NOT EXISTS accreditations"));
+    assert!(TRUST_PROFILE_MIGRATION.contains("ADD COLUMN IF NOT EXISTS trust_purposes JSONB"));
+    assert!(TRUST_PROFILE_MIGRATION
+        .contains("ADD COLUMN IF NOT EXISTS trusted_assertion_formats JSONB"));
     assert!(!TRUST_PROFILE_MIGRATION
         .to_ascii_uppercase()
         .contains("DROP "));

@@ -174,6 +174,7 @@ function normalizePublicTrustSource(source = {}) {
   if (source.url) normalized.url = String(source.url).trim();
   if (source.certificate_pem) normalized.certificate_pem = String(source.certificate_pem).trim();
   if (source.issuer_did) normalized.issuer_did = String(source.issuer_did).trim();
+  if (Array.isArray(source.purposes)) normalized.purposes = [...source.purposes];
   if (source.description) normalized.description = String(source.description).trim();
   if (source.registry_sync) {
     normalized.registry_sync = {
@@ -200,6 +201,12 @@ function normalizeValidationRules(data = {}) {
 
 function buildTrustProfilePayload(data = {}) {
   const validation_rules = normalizeValidationRules(data);
+  const trust_purposes = Array.isArray(data.trust_purposes) ? [...data.trust_purposes] : undefined;
+  const credentialPurpose = !trust_purposes
+    || trust_purposes.includes('CREDENTIAL_ISSUER');
+  const supported_formats = Array.isArray(data.supported_formats)
+    ? data.supported_formats.map(normalizeTrustProfileFormat)
+    : (credentialPurpose ? ['SD_JWT_VC', 'MDOC'] : undefined);
   const trust_sources = Array.isArray(data.trust_sources) && data.trust_sources.length > 0
     ? data.trust_sources.map((source) => normalizePublicTrustSource(source))
     : trustSourcesFromTrustedIssuers(data.trusted_issuers || []);
@@ -210,7 +217,11 @@ function buildTrustProfilePayload(data = {}) {
     description: data.description,
     profile_type: normalizeTrustProfileType(data.profile_type || data.framework_type || 'custom'),
     compliance_status: data.compliance_status || 'SETUP_REQUIRED',
-    supported_formats: (data.supported_formats || ['sd_jwt_vc', 'mdoc']).map(normalizeTrustProfileFormat),
+    ...(trust_purposes ? { trust_purposes } : {}),
+    ...(supported_formats ? { supported_formats } : {}),
+    ...(Array.isArray(data.trusted_assertion_formats)
+      ? { trusted_assertion_formats: [...data.trusted_assertion_formats] }
+      : {}),
     trust_sources,
     validation_rules,
     allowed_algorithms: validation_rules.allowed_algorithms,

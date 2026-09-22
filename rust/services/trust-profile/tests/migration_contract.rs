@@ -19,6 +19,15 @@ async fn native_migration_is_additive_idempotent_and_scrubs_private_custody_meta
 
     let first = run_migrations(&pool).await.unwrap();
     assert_eq!(first.metadata_rows_sanitized, 0);
+    assert_eq!(trust_purpose_column_count(&pool).await, 2);
+    sqlx::raw_sql(
+        "ALTER TABLE trust_profile_service.trust_profiles
+         DROP COLUMN trust_purposes,
+         DROP COLUMN trusted_assertion_formats",
+    )
+    .execute(&pool)
+    .await
+    .unwrap();
     sqlx::query(
         "INSERT INTO trust_profile_service.organization_trust_profiles
          (id,organization_id,framework_id,name,compliance_status,metadata)
@@ -35,6 +44,7 @@ async fn native_migration_is_additive_idempotent_and_scrubs_private_custody_meta
 
     let upgraded = run_migrations(&pool).await.unwrap();
     assert_eq!(upgraded.metadata_rows_sanitized, 1);
+    assert_eq!(trust_purpose_column_count(&pool).await, 2);
     let metadata: Value = sqlx::query_scalar(
         "SELECT metadata FROM trust_profile_service.organization_trust_profiles
          WHERE id='11111111-1111-4111-8111-111111111111'",
@@ -66,4 +76,18 @@ async fn native_migration_is_additive_idempotent_and_scrubs_private_custody_meta
         .execute(&pool)
         .await
         .unwrap();
+}
+
+async fn trust_purpose_column_count(pool: &sqlx::PgPool) -> i64 {
+    sqlx::query_scalar(
+        "SELECT count(*)
+         FROM information_schema.columns
+         WHERE table_schema = 'trust_profile_service'
+           AND table_name = 'trust_profiles'
+           AND column_name IN ('trust_purposes', 'trusted_assertion_formats')
+           AND data_type = 'jsonb'",
+    )
+    .fetch_one(pool)
+    .await
+    .unwrap()
 }

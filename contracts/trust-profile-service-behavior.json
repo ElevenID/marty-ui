@@ -49,6 +49,8 @@
     "trust_profile_type": ["ICAO", "AAMVA", "EUDI", "CUSTOM"],
     "compliance_status": ["COMPLIANT", "NEEDS_ATTENTION", "SETUP_REQUIRED"],
     "trust_source_type": ["TRUST_LIST", "PINNED_ISSUER", "ROOT_CA", "PKD_URL"],
+    "trust_purpose": ["CREDENTIAL_ISSUER", "MACHINE_IDENTITY_CA", "MANUFACTURER_ENDORSER", "ATTESTATION_VERIFIER", "DEPLOYMENT_AUTHORITY", "EVIDENCE_SIGNER"],
+    "trusted_assertion_format": ["X509_CERTIFICATE", "EAT", "TPM_QUOTE", "JWT", "CWT", "CUSTOM"],
     "revocation_check_mode": ["HARD_FAIL", "SOFT_FAIL", "SKIP"],
     "issuer_entity_type": ["ORGANIZATION", "GOVERNMENT", "DEVICE"],
     "issuer_compliance_status": ["ACCREDITED", "COMPLIANT", "SUSPENDED", "REVOKED"],

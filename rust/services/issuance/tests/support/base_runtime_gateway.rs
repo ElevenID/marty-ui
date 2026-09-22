@@ -17,7 +17,7 @@ use serde_json::{json, Value};
 
 use super::{
     didcomm_gateway_replay::OwnedHttp,
-    issuance_named_peers::{API_KEY, CLIENT_KEY, FOREIGN_CLIENT_KEY, ORGANIZATION},
+    issuance_named_peers::{API_KEY, CLIENT_KEY, FOREIGN_CLIENT_KEY, HOLDER, ORGANIZATION},
     issuance_process::{bounded_http_client, wait_for_health_with_client},
     resolved_runtime::ResolvedRuntime,
 };
@@ -49,11 +49,12 @@ async fn legacy(
     let response = if method == "GET" && matches!(path.as_str(), "/health" | "/health/ready") {
         Json(json!({"status":"healthy"})).into_response()
     } else {
-        // A positive unselected GET demonstrates the legacy endpoint exists;
-        // every other path/method is an observed forbidden fallback.
+        // A positive unselected GET demonstrates the retained passport
+        // endpoint exists; every other path/method is a forbidden fallback
+        // observed by this trap.
         assert_eq!(request.headers()["x-api-key"], API_KEY);
-        assert_eq!(method, "GET", "selected legacy writes are forbidden");
-        assert_eq!(path, "/v1/issued-credentials");
+        assert_eq!(method, "GET");
+        assert_eq!(path, "/v1/passport/capabilities");
         (StatusCode::IM_A_TEAPOT, Json(legacy_control_body())).into_response()
     };
     assert!(to_bytes(request.into_body(), 65536)
@@ -193,13 +194,35 @@ impl GatewayFixture {
         );
     }
 
-    pub(super) async fn legacy_control(&self) {
+    pub(super) async fn native_issued_credential_control(&self, credential_id: &str) {
         let response = self
             .client
             .get(format!(
                 "{}/v1/issued-credentials?organization_id={ORGANIZATION}",
                 self.origin
             ))
+            .header("x-api-key", CLIENT_KEY)
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = response.json::<Value>().await.unwrap();
+        let records = body.as_array().expect("native issued-credential list");
+        let credential = records
+            .iter()
+            .find(|record| record["id"] == credential_id)
+            .expect("renewed source is visible through the native adapter");
+        assert_eq!(credential["organization_id"], ORGANIZATION);
+        assert_eq!(credential["credential_id"], credential_id);
+        assert_eq!(credential["credential_format"], "SD_JWT_VC");
+        assert_eq!(credential["subject_id"], HOLDER);
+        assert_eq!(credential["status"], "REVOKED");
+    }
+
+    pub(super) async fn legacy_control(&self) {
+        let response = self
+            .client
+            .get(format!("{}/v1/passport/capabilities", self.origin))
             .header("x-api-key", CLIENT_KEY)
             .send()
             .await

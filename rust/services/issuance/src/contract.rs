@@ -36,6 +36,8 @@ const INTERNAL_APPLICATIONS: &[u8] =
     include_bytes!("../../../../contracts/issuance-internal-applications.json");
 const RESOURCE_OWNERS: &[u8] =
     include_bytes!("../../../../contracts/issuance-resource-owner-lookups.json");
+const ISSUED_CREDENTIAL_ADAPTERS: &[u8] =
+    include_bytes!("../../../../contracts/issuance-issued-credential-adapters.json");
 const DIDCOMM: &[u8] =
     include_bytes!("../../../../contracts/gateway-didcomm-delivery-behavior.json");
 const RENEWAL_REFERENCE: &[u8] =
@@ -66,7 +68,8 @@ struct Coverage {
     initiation_behavior_contract: Upstream,
     application_template_behavior_contract: Upstream,
     internal_application_behavior_contract: Upstream,
-    resource_owner_behavior_contract: ResourceOwnerBehaviorContract,
+    resource_owner_behavior_contract: SourceBehaviorContract,
+    issued_credential_adapter_behavior_contract: SourceBehaviorContract,
     renewal_behavior_contract: RenewalBehaviorContract,
     native_http: Vec<HttpOperation>,
     native_grpc: Vec<String>,
@@ -92,7 +95,7 @@ struct RenewalBehaviorContract {
 }
 
 #[derive(Deserialize)]
-struct ResourceOwnerBehaviorContract {
+struct SourceBehaviorContract {
     path: String,
     sha256: String,
     source_repository: String,
@@ -140,6 +143,8 @@ struct HttpOperation {
     internal_application_behavior_case: Option<String>,
     #[serde(default)]
     resource_owner_behavior_contract: bool,
+    #[serde(default)]
+    issued_credential_adapter_behavior_contract: bool,
     #[serde(default)]
     canvas_operations_behavior_case: Option<CanvasOperationsCase>,
 }
@@ -230,6 +235,7 @@ impl HttpOperation {
             + usize::from(self.application_template_behavior_case.is_some())
             + usize::from(self.internal_application_behavior_case.is_some())
             + usize::from(self.resource_owner_behavior_contract)
+            + usize::from(self.issued_credential_adapter_behavior_contract)
             + usize::from(self.canvas_operations_behavior_case.is_some())
     }
 }
@@ -404,6 +410,8 @@ pub fn validate_embedded_contract() -> Result<CoverageSummary, MmfError> {
         .map_err(|error| contract_error("invalid internal application contract", error))?;
     let resource_owners: Value = serde_json::from_slice(RESOURCE_OWNERS)
         .map_err(|error| contract_error("invalid resource-owner contract", error))?;
+    let issued_credential_adapters: Value = serde_json::from_slice(ISSUED_CREDENTIAL_ADAPTERS)
+        .map_err(|error| contract_error("invalid issued-credential adapter contract", error))?;
     require(
         surface["schema"] == "marty.issuance-runtime-surface/v1",
         "unexpected issuance surface schema",
@@ -1069,6 +1077,45 @@ pub fn validate_embedded_contract() -> Result<CoverageSummary, MmfError> {
                 .is_some_and(|operations| operations.len() == 3),
         "resource-owner contract or provenance is invalid",
     )?;
+    let actual_issued_credential_adapters = format!(
+        "{:x}",
+        Sha256::digest(canonical_lf(ISSUED_CREDENTIAL_ADAPTERS))
+    );
+    require(
+        actual_issued_credential_adapters
+            == coverage.issued_credential_adapter_behavior_contract.sha256
+            && coverage.issued_credential_adapter_behavior_contract.path
+                == "contracts/issuance-issued-credential-adapters.json"
+            && coverage
+                .issued_credential_adapter_behavior_contract
+                .source_repository
+                == "ElevenID/marty-credentials"
+            && coverage
+                .issued_credential_adapter_behavior_contract
+                .source_path
+                == "services/issuance/infrastructure/api/routes.py"
+            && coverage
+                .issued_credential_adapter_behavior_contract
+                .source_commit
+                == "15af5232df376bb9596b5aed3703110bf890fce5"
+            && issued_credential_adapters["schema"]
+                == "marty.issuance-issued-credential-adapters/v1"
+            && issued_credential_adapters["operations"]
+                .as_array()
+                .is_some_and(|operations| operations.len() == 5)
+            && issued_credential_adapters["projection"]["credential_formats"]
+                == serde_json::json!(["MDOC", "VDS_NC", "SD_JWT_VC", "VC_JWT", "JSON_LD"])
+            && issued_credential_adapters["lifecycle_request"]["reason"]["max_unicode_scalars"]
+                == 2000
+            && issued_credential_adapters["lifecycle_request"]["comments"]["max_unicode_scalars"]
+                == 4000
+            && issued_credential_adapters["lifecycle_audit"]["atomic_with_status_compare_and_set"]
+                == true
+            && issued_credential_adapters["tracked_follow_ups"]
+                .as_array()
+                .is_some_and(|follow_ups| follow_ups.len() == 2),
+        "issued-credential adapter contract or provenance is invalid",
+    )?;
 
     let routes = surface["http"]["routes"]
         .as_array()
@@ -1141,6 +1188,7 @@ pub fn validate_embedded_contract() -> Result<CoverageSummary, MmfError> {
     let mut native_application_template_cases = BTreeSet::new();
     let mut native_internal_application_cases = BTreeSet::new();
     let mut native_resource_owner_operations = BTreeSet::new();
+    let mut native_issued_credential_adapter_operations = BTreeSet::new();
     // Freeze the already-qualified source contract; changing its historical
     // limits/status text is not necessary to select the eight exact operations.
     require(
@@ -1300,6 +1348,21 @@ pub fn validate_embedded_contract() -> Result<CoverageSummary, MmfError> {
                     })
                     && native_resource_owner_operations.insert(operation.operation.as_str()),
                 "native resource-owner operation diverges from its behavior contract",
+            )?;
+        } else if operation.issued_credential_adapter_behavior_contract {
+            let frozen = issued_credential_adapters["operations"]
+                .as_array()
+                .ok_or_else(|| invalid("issued-credential adapter operations are missing"))?;
+            require(
+                operation.response.is_none()
+                    && frozen.iter().any(|candidate| {
+                        candidate["method"] == operation.method
+                            && candidate["path"] == operation.path
+                            && candidate["operation"] == operation.operation
+                    })
+                    && native_issued_credential_adapter_operations
+                        .insert(operation.operation.as_str()),
+                "native issued-credential adapter diverges from its behavior contract",
             )?;
         } else if operation.renewal_behavior_contract {
             require(
@@ -1557,6 +1620,16 @@ pub fn validate_embedded_contract() -> Result<CoverageSummary, MmfError> {
     require(
         native_resource_owner_operations == frozen_resource_owner_operations,
         "native resource-owner behavior coverage is incomplete",
+    )?;
+    let frozen_issued_credential_adapter_operations = issued_credential_adapters["operations"]
+        .as_array()
+        .ok_or_else(|| invalid("issued-credential adapter operations are missing"))?
+        .iter()
+        .filter_map(|operation| operation["operation"].as_str())
+        .collect::<BTreeSet<_>>();
+    require(
+        native_issued_credential_adapter_operations == frozen_issued_credential_adapter_operations,
+        "native issued-credential adapter behavior coverage is incomplete",
     )?;
     let frozen_transaction_read_cases = transaction_reads
         .cases
@@ -1953,8 +2026,8 @@ mod tests {
         validate_internal_application_operation, validate_renewal_operation, CanvasOperationsCase,
         Coverage, HttpOperation, APPLICATION_TEMPLATES, CANVAS_LTI, CANVAS_MANAGEMENT,
         CANVAS_OPERATIONS, COVERAGE, CREDENTIAL_ADMISSION, CREDENTIAL_LIFECYCLE,
-        CREDENTIAL_SIGNING, DIDCOMM, INITIATION, INTERNAL_APPLICATIONS, RENEWAL_REFERENCE,
-        RESOURCE_OWNERS,
+        CREDENTIAL_SIGNING, DIDCOMM, INITIATION, INTERNAL_APPLICATIONS, ISSUED_CREDENTIAL_ADAPTERS,
+        RENEWAL_REFERENCE, RESOURCE_OWNERS,
     };
 
     #[test]
@@ -2259,6 +2332,60 @@ mod tests {
     }
 
     #[test]
+    fn issued_credential_adapter_selectors_are_closed_exact_and_exclusive() {
+        let coverage: Value = serde_json::from_str(COVERAGE).unwrap();
+        let contract: Value = serde_json::from_slice(ISSUED_CREDENTIAL_ADAPTERS).unwrap();
+        let selected = coverage["native_http"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter(|operation| {
+                operation.get("issued_credential_adapter_behavior_contract")
+                    == Some(&Value::Bool(true))
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(selected.len(), 5);
+        for original in selected {
+            let parsed: HttpOperation = serde_json::from_value(original.clone()).unwrap();
+            assert_eq!(parsed.behavior_selector_count(), 1);
+            assert!(contract["operations"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|frozen| {
+                    frozen["method"] == parsed.method
+                        && frozen["path"] == parsed.path
+                        && frozen["operation"] == parsed.operation
+                }));
+
+            let mut missing = original.clone();
+            missing
+                .as_object_mut()
+                .unwrap()
+                .remove("issued_credential_adapter_behavior_contract");
+            assert_eq!(
+                serde_json::from_value::<HttpOperation>(missing)
+                    .unwrap()
+                    .behavior_selector_count(),
+                0
+            );
+
+            let mut multiple = original.clone();
+            multiple["resource_owner_behavior_contract"] = Value::Bool(true);
+            assert_eq!(
+                serde_json::from_value::<HttpOperation>(multiple)
+                    .unwrap()
+                    .behavior_selector_count(),
+                2
+            );
+
+            let mut unknown = original.clone();
+            unknown["future_issued_credential_selector"] = Value::Bool(true);
+            assert!(serde_json::from_value::<HttpOperation>(unknown).is_err());
+        }
+    }
+
+    #[test]
     fn renewal_coverage_is_exact_and_rejects_missing_malformed_or_multiple_selectors() {
         let entry = serde_json::json!({
             "method":"POST", "path":"/v1/issued-credentials/{credential_id}/renew",
@@ -2479,13 +2606,20 @@ mod tests {
             format!("{:x}", Sha256::digest(canonical_lf(INTERNAL_APPLICATIONS))),
             coverage.internal_application_behavior_contract.sha256
         );
+        assert_eq!(
+            format!(
+                "{:x}",
+                Sha256::digest(canonical_lf(ISSUED_CREDENTIAL_ADAPTERS))
+            ),
+            coverage.issued_credential_adapter_behavior_contract.sha256
+        );
     }
 
     #[test]
     fn embedded_surface_and_native_coverage_are_consistent() {
         let summary = validate_embedded_contract().expect("contract");
-        assert_eq!(summary.native_http, 102);
-        assert_eq!(summary.remaining_http, 29);
+        assert_eq!(summary.native_http, 107);
+        assert_eq!(summary.remaining_http, 24);
         assert_eq!(summary.remaining_grpc, 0);
     }
 }

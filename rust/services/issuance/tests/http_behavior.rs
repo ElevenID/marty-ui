@@ -997,6 +997,7 @@ impl CredentialManagementRepository for CredentialLifecycleHarness {
         &self,
         credential: &ManagedCredential,
         expected_status: ManagedCredentialStatus,
+        _audit: &marty_issuance_service::credential_management::CredentialLifecycleAuditRecord,
     ) -> Result<ManagedCredential, CredentialManagementPortError> {
         self.calls
             .lock()
@@ -1058,6 +1059,7 @@ fn credential_lifecycle_app() -> (axum::Router, Arc<Mutex<Vec<String>>>) {
     let harness = CredentialLifecycleHarness {
         credential: Arc::new(Mutex::new(ManagedCredential {
             id: "credential-1".to_owned(),
+            transaction_id: "transaction-1".to_owned(),
             organization_id: "org-1".to_owned(),
             credential_template_id: "template-1".to_owned(),
             issuer_did: None,

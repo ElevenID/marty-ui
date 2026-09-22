@@ -30,6 +30,26 @@ REQUIRED_OPERATIONS = {
         "renew_issued_credential",
         "renewal_behavior_contract",
     ),
+    ("GET", "/v1/issued-credentials"): (
+        "list_issued_credentials",
+        "issued_credential_adapter_behavior_contract",
+    ),
+    ("GET", "/v1/issued-credentials/{credential_id}"): (
+        "get_issued_credential",
+        "issued_credential_adapter_behavior_contract",
+    ),
+    ("POST", "/v1/issued-credentials/{credential_id}/revoke"): (
+        "revoke_issued_credential",
+        "issued_credential_adapter_behavior_contract",
+    ),
+    ("POST", "/v1/issued-credentials/{credential_id}/suspend"): (
+        "suspend_issued_credential",
+        "issued_credential_adapter_behavior_contract",
+    ),
+    ("POST", "/v1/issued-credentials/{credential_id}/reinstate"): (
+        "reinstate_issued_credential",
+        "issued_credential_adapter_behavior_contract",
+    ),
 }
 REQUIRED_ENVIRONMENT = (
     "TOKEN_RATE_LIMIT",

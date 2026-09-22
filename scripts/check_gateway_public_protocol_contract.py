@@ -22,6 +22,10 @@ except ModuleNotFoundError:  # Direct `python scripts/...` execution.
 REPO_ROOT = Path(__file__).resolve().parents[1]
 DTO_SHAPES = REPO_ROOT / "contracts" / "gateway-public-dto-shapes.json"
 DISCOVERY_CONTRACT = REPO_ROOT / "contracts" / "gateway-discovery-behavior.json"
+TRUST_BEHAVIOR_CONTRACT = REPO_ROOT / "contracts" / "gateway-trust-behavior.json"
+ISSUED_CREDENTIAL_ADAPTERS = (
+    REPO_ROOT / "contracts" / "issuance-issued-credential-adapters.json"
+)
 TRUST_CONFIGURATION_UI_PATHS = (
     "ui/src/components/console/trust/TrustProfileWizard.jsx",
     "ui/src/components/console/trust/steps/TrustSourcesStep.jsx",
@@ -81,6 +85,13 @@ FORBIDDEN_FLOW_FIELDS = FORBIDDEN_PUBLIC_FIELDS | {
     "refresh_token",
     "session_token",
 }
+ELEVENID_PROTOCOL_RUNTIME_EXTENSIONS = {
+    "trust-profile.json": {"trust_purposes", "trusted_assertion_formats"},
+    "issued-credential-lifecycle-request.json": {"comments"},
+}
+ELEVENID_PROTOCOL_RUNTIME_OPTIONAL_FIELDS = {
+    "trust-profile.json": {"supported_formats"},
+}
 
 
 def _load_json(path: Path) -> Any:
@@ -127,6 +138,67 @@ def _assert_protocol_version(protocol_root: Path) -> None:
         )
 
 
+def _assert_issued_credential_extension_contract(
+    protocol_root: Path,
+    adapter_contract_path: Path = ISSUED_CREDENTIAL_ADAPTERS,
+) -> None:
+    lifecycle = _load_json(
+        protocol_root / "schemas" / "issued-credential-lifecycle-request.json"
+    )
+    properties = lifecycle.get("properties", {})
+    if lifecycle.get("additionalProperties") is not False or set(properties) != {"reason"}:
+        raise AssertionError(
+            "public issued-credential lifecycle request must remain a closed reason schema"
+        )
+    reason = properties.get("reason", {})
+    if reason.get("type") != ["string", "null"] or reason.get("maxLength") != 2_000:
+        raise AssertionError("public issued-credential lifecycle reason contract drifted")
+
+    adapter_contract = _load_json(adapter_contract_path)
+    extension = adapter_contract.get("lifecycle_request", {})
+    if extension.get("extra_fields") != "forbidden":
+        raise AssertionError("issued-credential lifecycle extension must remain closed")
+    for field, limit in (("reason", 2_000), ("comments", 4_000)):
+        definition = extension.get(field, {})
+        if definition.get("nullable") is not True or definition.get(
+            "max_unicode_scalars"
+        ) != limit:
+            raise AssertionError(f"issued-credential lifecycle {field} extension drifted")
+    if extension.get("comments", {}).get("blank_normalized_to_null") is not True:
+        raise AssertionError("issued-credential lifecycle comments normalization drifted")
+
+    trust_behavior = _load_json(TRUST_BEHAVIOR_CONTRACT)
+    machine_case = next(
+        (
+            case
+            for case in trust_behavior.get("request_cases", [])
+            if case.get("name")
+            == "machine_trust_profile_preserves_purposes_without_credential_defaults"
+        ),
+        None,
+    )
+    if (
+        machine_case is None
+        or not {"trust_purposes", "trusted_assertion_formats"}.issubset(
+            machine_case.get("input", {})
+        )
+        or not {"trust_purposes", "trusted_assertion_formats"}.issubset(
+            machine_case.get("expected", {})
+        )
+        or "supported_formats" in machine_case.get("expected", {})
+    ):
+        raise AssertionError("machine trust-profile runtime extensions are not frozen")
+
+    formats = _load_json(protocol_root / "enums" / "credential-formats.json")
+    definitions = formats.get("$defs", {})
+    if (
+        "VDS_NC" not in formats.get("enum", [])
+        or definitions.get("wire_format_mapping", {}).get("VDS_NC") != "vds_nc"
+        or "VDS_NC" not in definitions.get("values", {})
+    ):
+        raise AssertionError("canonical VDS_NC protocol metadata is incomplete")
+
+
 def _assert_trust_ui_boundary() -> None:
     for relative_path in TRUST_CONFIGURATION_UI_PATHS:
         source = (REPO_ROOT / relative_path).read_text(encoding="utf-8")
@@ -153,15 +225,22 @@ def _assert_dto_shapes(protocol_root: Path) -> None:
         schema = _load_json(schema_path)
         schema_fields = set(schema.get("properties", {}))
         runtime_fields = set(model["fields"])
-        if runtime_fields != schema_fields:
+        extension_fields = ELEVENID_PROTOCOL_RUNTIME_EXTENSIONS.get(
+            model["schema"], set()
+        )
+        if runtime_fields != schema_fields | extension_fields:
             raise AssertionError(
                 f"{name} fields drifted from marty-protocol: "
                 f"schema_only={sorted(schema_fields - runtime_fields)}, "
-                f"runtime_only={sorted(runtime_fields - schema_fields)}"
+                "unapproved_runtime_only="
+                f"{sorted(runtime_fields - schema_fields - extension_fields)}"
             )
         schema_required = set(schema.get("required", []))
         runtime_required = set(model["required"])
-        if runtime_required != schema_required:
+        optional_fields = ELEVENID_PROTOCOL_RUNTIME_OPTIONAL_FIELDS.get(
+            model["schema"], set()
+        )
+        if runtime_required != schema_required - optional_fields:
             raise AssertionError(
                 f"{name} required fields drifted from marty-protocol: "
                 f"schema_only={sorted(schema_required - runtime_required)}, "
@@ -218,6 +297,7 @@ def _assert_rust_behavior_vectors() -> None:
 
 def check_contract(protocol_root: Path) -> None:
     _assert_protocol_version(protocol_root)
+    _assert_issued_credential_extension_contract(protocol_root)
     assert_generated_bindings_current(protocol_root)
     assert_documented_public_boundary()
     _assert_trust_ui_boundary()
@@ -229,8 +309,9 @@ def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--protocol-root", type=Path, required=True)
     args = parser.parse_args()
-    check_contract(args.protocol_root.resolve())
-    print("Rust gateway operations match the pinned marty-protocol schemas.")
+    protocol_root = args.protocol_root.resolve()
+    check_contract(protocol_root)
+    print("Rust gateway operations match the pinned public marty-protocol schemas.")
     return 0
 
 

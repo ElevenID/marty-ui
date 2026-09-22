@@ -792,6 +792,39 @@ describe('presentationPolicyApi', () => {
       }])
     })
 
+    it('preserves machine trust purposes without inventing credential formats', async () => {
+      let requestBody: any
+      server.use(
+        http.post('http://localhost:8000/v1/trust-profiles', async ({ request }) => {
+          requestBody = await request.json()
+          return HttpResponse.json({ id: 'machine-trust-1', status: 'DRAFT', ...requestBody })
+        })
+      )
+
+      await createTrustProfile({
+        organization_id: 'org-1',
+        name: 'Machine trust',
+        trust_purposes: ['MACHINE_IDENTITY_CA', 'ATTESTATION_VERIFIER'],
+        trusted_assertion_formats: ['X509_CERTIFICATE', 'EAT'],
+        trust_sources: [{
+          source_type: 'PINNED_ISSUER',
+          issuer_did: 'did:web:device-ca.example',
+          purposes: ['MACHINE_IDENTITY_CA'],
+        }],
+      })
+
+      expect(requestBody.trust_purposes).toEqual([
+        'MACHINE_IDENTITY_CA',
+        'ATTESTATION_VERIFIER',
+      ])
+      expect(requestBody.trusted_assertion_formats).toEqual([
+        'X509_CERTIFICATE',
+        'EAT',
+      ])
+      expect(requestBody.trust_sources[0].purposes).toEqual(['MACHINE_IDENTITY_CA'])
+      expect(requestBody).not.toHaveProperty('supported_formats')
+    })
+
     it('synchronizes registries through the trust-profile production API', async () => {
       let synchronizedId: string | undefined
       server.use(
