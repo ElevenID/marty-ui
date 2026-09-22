@@ -13,6 +13,7 @@ services:
       ISSUANCE_GRPC_PORT: "9005"
       DATABASE_URL: postgresql+asyncpg://marty:${MARTY_DB_PASSWORD:?MARTY_DB_PASSWORD must be set for beta}@postgres:5432/marty
       ISSUER_BASE_URL: ${PUBLIC_API_URL:?PUBLIC_API_URL must be set for beta}
+      ALLOWED_REDIRECT_URIS: ${ALLOWED_REDIRECT_URIS:-}
       CORS_ALLOWED_ORIGINS: ${CORS_ORIGINS:?CORS_ORIGINS must be set for beta}
       TOKEN_HMAC_KEY: ${TOKEN_HMAC_KEY:?TOKEN_HMAC_KEY must be set for beta}
       ISSUANCE_API_KEY: ${ISSUANCE_API_KEY:?ISSUANCE_API_KEY must be set for beta}
@@ -30,6 +31,7 @@ services:
       # Match legacy issuance resolution without enabling private wallet endpoints.
       # Authcrypt policy and conformance CA mounts remain separate explicit overlays.
       ISSUANCE_OFFER_TTL_MINUTES: ${ISSUANCE_OFFER_TTL_MINUTES:-10080}
+      ISSUANCE_AUTH_SESSION_TTL_MINUTES: ${ISSUANCE_AUTH_SESSION_TTL_MINUTES:-60}
       # Preserve the legacy Compose token limiter's operator-selected capacity.
       TOKEN_RATE_LIMIT: ${TOKEN_RATE_LIMIT:-30}
       UNIVERSAL_RESOLVER_URL: ${UNIVERSAL_RESOLVER_URL:-}

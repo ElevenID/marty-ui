@@ -32,7 +32,9 @@ def test_source_inventory_is_complete_and_base_profile_is_opt_in():
 @pytest.mark.parametrize(
     "fault",
     [
-        "ttl-precedence",
+        "offer-ttl-precedence",
+        "auth-ttl-precedence",
+        "redirect-precedence",
         "missing-env",
         "extra-secret",
         "flow-target",
@@ -51,9 +53,17 @@ def test_source_guard_rejects_config_drift(fault):
     base, profile, runtime = sources()
     native = profile["services"]["issuance-native"]
     edge = profile["services"]["gateway"]["environment"]
-    if fault == "ttl-precedence":
+    if fault == "offer-ttl-precedence":
         native["environment"]["ISSUANCE_OFFER_TTL_MINUTES"] = (
             "${ISSUANCE_OFFER_TTL_MINUTES-10080}"
+        )
+    elif fault == "auth-ttl-precedence":
+        native["environment"]["ISSUANCE_AUTH_SESSION_TTL_MINUTES"] = (
+            "${ISSUANCE_AUTH_SESSION_TTL_MINUTES-60}"
+        )
+    elif fault == "redirect-precedence":
+        native["environment"]["ALLOWED_REDIRECT_URIS"] = (
+            "${ALLOWED_REDIRECT_URIS:-https://permissive.invalid}"
         )
     elif fault == "missing-env":
         native["environment"].pop("CANVAS_CREDENTIALS_STATUS_SYNC_URL")
@@ -97,7 +107,9 @@ def modeled(tmp_path):
         "volumes": {"preserved": {}},
     }
     baseline["services"]["issuance"]["environment"] = {
+        "ALLOWED_REDIRECT_URIS": "",
         "DIDCOMM_ALLOW_PRIVATE_IPS": "false",
+        "ISSUANCE_AUTH_SESSION_TTL_MINUTES": "60",
         "TOKEN_RATE_LIMIT": "30",
     }
     baseline["services"]["issuance"]["ports"] = [
@@ -134,6 +146,8 @@ def modeled(tmp_path):
         "migration",
         "signing-dependency",
         "database",
+        "redirect-allowlist",
+        "auth-session-ttl",
         "token",
         "management-key",
         "discovery",
@@ -177,6 +191,10 @@ def test_model_guard_rejects_every_unowned_delta(modeled, fault):
         native["depends_on"].pop("signing-keys")
     elif fault == "database":
         native["environment"]["DATABASE_URL"] = "synthetic-foreign"
+    elif fault == "redirect-allowlist":
+        native["environment"]["ALLOWED_REDIRECT_URIS"] = "https://other.invalid"
+    elif fault == "auth-session-ttl":
+        native["environment"]["ISSUANCE_AUTH_SESSION_TTL_MINUTES"] = "600"
     elif fault == "token":
         actual["services"]["organization"]["environment"]["GRPC_SERVICE_TOKEN"] = (
             "unpaired"

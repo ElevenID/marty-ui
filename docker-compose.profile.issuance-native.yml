@@ -21,6 +21,7 @@ services:
       ISSUANCE_GRPC_PORT: "9005"
       DATABASE_URL: postgresql+asyncpg://marty:${MARTY_DB_PASSWORD:-marty_dev_password}@postgres:5432/marty
       ISSUER_BASE_URL: ${PUBLIC_API_URL:-http://gateway:8000}
+      ALLOWED_REDIRECT_URIS: ${ALLOWED_REDIRECT_URIS:-}
       UI_BASE_URL: ${UI_BASE_URL:-http://localhost:3000}
       ISSUANCE_API_KEY: ${ISSUANCE_API_KEY:-dev-issuance-api-key}
       TOKEN_HMAC_KEY: ${TOKEN_HMAC_KEY:-dev-only-token-hmac-key-change-me}
@@ -33,6 +34,7 @@ services:
       CREDENTIAL_TEMPLATE_SERVICE_URL: http://credential-template:8003
       REVOCATION_PROFILE_SERVICE_URL: http://revocation-profile:8013
       ISSUANCE_OFFER_TTL_MINUTES: ${ISSUANCE_OFFER_TTL_MINUTES:-10080}
+      ISSUANCE_AUTH_SESSION_TTL_MINUTES: ${ISSUANCE_AUTH_SESSION_TTL_MINUTES:-60}
       TOKEN_RATE_LIMIT: ${TOKEN_RATE_LIMIT:-30}
       VCDM_RELATED_RESOURCE_URLS: ${VCDM_RELATED_RESOURCE_URLS:-}
       UNIVERSAL_RESOLVER_URL: ${UNIVERSAL_RESOLVER_URL:-}

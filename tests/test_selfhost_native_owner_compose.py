@@ -32,6 +32,7 @@ def models():
         "services": {
             "issuance": {
                 "environment": {
+                    "ISSUANCE_AUTH_SESSION_TTL_MINUTES": "60",
                     "ENVIRONMENT": "production",
                     "BAO_ADDR": "legacy",
                     "TOKEN_HMAC_KEY_FILE": "/run/secrets/token",
@@ -61,7 +62,13 @@ def models():
     after["x-issuance-application-env"] = {
         "ENVIRONMENT": "production",
         "TOKEN_HMAC_KEY_FILE": "/run/secrets/token",
+        "ALLOWED_REDIRECT_URIS": "",
+        "ISSUANCE_AUTH_SESSION_TTL_MINUTES": "60",
     }
+    after["services"]["issuance"]["environment"]["ALLOWED_REDIRECT_URIS"] = ""
+    after["services"]["issuance"]["environment"][
+        "ISSUANCE_AUTH_SESSION_TTL_MINUTES"
+    ] = "60"
     after["services"]["gateway"]["environment"].update(
         ISSUANCE_NATIVE_SERVICE_URL="http://issuance-native:8005",
         GATEWAY_REQUIRED_READY_SERVICES=GATE["READY"],
@@ -82,6 +89,8 @@ def models():
         "environment": {
             "ENVIRONMENT": "production",
             "TOKEN_HMAC_KEY_FILE": "/run/secrets/token",
+            "ALLOWED_REDIRECT_URIS": "",
+            "ISSUANCE_AUTH_SESSION_TTL_MINUTES": "60",
             "SERVICE_NAME": "issuance_native",
             "ISSUANCE_GRPC_ENABLED": "true",
             "RP_GRPC_TARGET": "revocation-profile:9013",
@@ -188,6 +197,24 @@ def test_siblings_resources_and_secret_boundary_are_closed(models, fault):
     else:
         after["x-issuance-application-env"]["BAO_ADDR"] = "legacy"
     with pytest.raises(AssertionError):
+        GATE["assert_models"](before, after)
+
+
+@pytest.mark.parametrize(
+    "setting", ["ALLOWED_REDIRECT_URIS", "ISSUANCE_AUTH_SESSION_TTL_MINUTES"]
+)
+@pytest.mark.parametrize("fault", ["shared", "legacy", "native"])
+def test_authorization_settings_are_shared_without_weakening_model_closure(
+    models, setting, fault
+):
+    before, after = models
+    if fault == "shared":
+        after["x-issuance-application-env"].pop(setting)
+    else:
+        after["services"][
+            "issuance" if fault == "legacy" else "issuance-native"
+        ]["environment"][setting] = "changed"
+    with pytest.raises((AssertionError, KeyError)):
         GATE["assert_models"](before, after)
 
 
