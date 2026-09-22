@@ -888,9 +888,12 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          for database in marty_verification_contract marty_db_contracts_test; do
+          for database in marty_verification_contract marty_db_contracts_test marty_issuance_executable_smoke_test; do
             docker exec "${{ job.services.postgres.id }}" createdb -U postgres "$database"
           done
+          docker exec --interactive "${{ job.services.postgres.id }}" \
+            psql --username postgres --dbname marty_issuance_executable_smoke_test \
+            < rust/services/issuance/tests/fixtures/oid4vci_migration_base.sql
       - name: Run safe Rust contract groups concurrently
         working-directory: rust
         shell: bash
@@ -901,7 +904,8 @@ jobs:
 
           (
             set +e
-            cargo test --locked --workspace >"$RUNNER_TEMP/rust-workspace.log" 2>&1
+            ISSUANCE_EXECUTABLE_SMOKE_DATABASE_URL=postgresql://postgres:postgres@127.0.0.1:5432/marty_issuance_executable_smoke_test \
+              cargo test --locked --workspace >"$RUNNER_TEMP/rust-workspace.log" 2>&1
             printf '%s\n' "$?" >"$RUNNER_TEMP/rust-workspace.status"
           ) &
           pids+=("$!")

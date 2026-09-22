@@ -91,6 +91,22 @@ def test_issuance_image_smoke_uses_the_shared_migration_fixture() -> None:
     assert "ux_issuance_events_oid4vci_notification_id" in smoke
 
 
+def test_issuance_executable_smoke_uses_an_isolated_migrated_database() -> None:
+    workflow = text(".github/workflows/ci.yml")
+    executable = text("rust/services/issuance/tests/executable_smoke.rs")
+    fixture = "rust/services/issuance/tests/fixtures/oid4vci_migration_base.sql"
+
+    assert "marty_issuance_executable_smoke_test" in workflow
+    assert fixture in workflow
+    assert (
+        "ISSUANCE_EXECUTABLE_SMOKE_DATABASE_URL=postgresql://postgres:postgres@127.0.0.1:5432/"
+        "marty_issuance_executable_smoke_test"
+    ) in workflow
+    assert executable.count('.env("DATABASE_URL", &database_url)') == 5
+    assert "ISSUANCE_EXECUTABLE_SMOKE_DATABASE_URL" in executable
+    assert "skipping executable smoke test" in executable
+
+
 def test_frozen_surface_provenance_and_coverage_are_complete() -> None:
     surface_bytes = (ROOT / "contracts/issuance-runtime-surface.json").read_bytes()
     surface = json.loads(surface_bytes)
