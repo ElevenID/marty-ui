@@ -609,6 +609,9 @@ async fn run_with_profile(database_url: &str, rendered_redis: Option<&str>, ingr
             if let Some(fixture) = &envoy_fixture {
                 fixture.ordinary_rpc(&pool, &state).await;
             }
+            gateway_fixture
+                .native_issued_credential_control(&source_id)
+                .await;
             gateway_fixture.legacy_control().await;
             legacy.as_ref().unwrap().assert_no_fallback();
             child.0.kill().unwrap();
