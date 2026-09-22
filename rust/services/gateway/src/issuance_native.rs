@@ -16,6 +16,7 @@ pub const NATIVE_SERVICE: &str = "issuance-native";
 const CREDENTIAL_LIFECYCLE_TAG: &str = "credential-lifecycle";
 const ISSUED_CREDENTIAL_ADAPTER_TAG: &str = "issued-credential-adapter";
 const OID4VCI_AUTHORIZATION_TAG: &str = "oid4vci-authorization";
+const CANVAS_MIRROR_TAG: &str = "canvas-mirror";
 
 #[derive(Debug, Deserialize)]
 struct Coverage {
@@ -32,6 +33,8 @@ struct NativeHttpRoute {
     issued_credential_adapter_behavior_contract: bool,
     #[serde(default)]
     oid4vci_authorization_behavior_contract: bool,
+    #[serde(default)]
+    canvas_mirror_behavior_contract: bool,
 }
 
 static NATIVE_ROUTES: LazyLock<RouteTable> = LazyLock::new(|| {
@@ -50,6 +53,9 @@ static NATIVE_ROUTES: LazyLock<RouteTable> = LazyLock::new(|| {
         }
         if route.oid4vci_authorization_behavior_contract {
             tags.insert(OID4VCI_AUTHORIZATION_TAG.into());
+        }
+        if route.canvas_mirror_behavior_contract {
+            tags.insert(CANVAS_MIRROR_TAG.into());
         }
         table
             .add(RouteConfig {
@@ -87,7 +93,8 @@ pub fn is_native_http(method: HttpMethod, path: &str) -> bool {
         .is_ok_and(|matched| {
             let exact_shape_required = matched.route.tags.contains(CREDENTIAL_LIFECYCLE_TAG)
                 || matched.route.tags.contains(ISSUED_CREDENTIAL_ADAPTER_TAG)
-                || matched.route.tags.contains(OID4VCI_AUTHORIZATION_TAG);
+                || matched.route.tags.contains(OID4VCI_AUTHORIZATION_TAG)
+                || matched.route.tags.contains(CANVAS_MIRROR_TAG);
             !exact_shape_required
                 || (is_canonical_absolute_path(path)
                     && exact_template_shape(&matched.route.pattern, path))
@@ -331,10 +338,6 @@ mod tests {
         );
         for (method, path) in [
             (HttpMethod::Get, "/v1/issued-credentials/mine"),
-            (
-                HttpMethod::Post,
-                "/v1/issued-credentials/credential-1/deliveries/canvas-credentials/publish",
-            ),
             (HttpMethod::Post, "/v1/credentials/issued/batch-revoke"),
             (HttpMethod::Get, "/v1/credentials/revocations"),
         ] {
@@ -355,6 +358,7 @@ mod tests {
                 !route.credential_lifecycle_behavior_contract
                     && !route.issued_credential_adapter_behavior_contract
                     && !route.oid4vci_authorization_behavior_contract
+                    && !route.canvas_mirror_behavior_contract
             })
             .collect::<Vec<_>>();
         assert_eq!(preexisting.len(), 98);
@@ -388,6 +392,56 @@ mod tests {
                     route.method,
                     candidate
                 );
+            }
+        }
+    }
+
+    #[test]
+    fn canvas_mirror_selects_only_the_six_frozen_methods_and_paths() {
+        let contract: serde_json::Value = serde_json::from_str(include_str!(
+            "../../../../contracts/issuance-canvas-mirror.json"
+        ))
+        .expect("Canvas mirror contract");
+        let routes = contract["routes"].as_array().expect("Canvas mirror routes");
+        assert_eq!(routes.len(), 6);
+        let methods = [
+            HttpMethod::Get,
+            HttpMethod::Post,
+            HttpMethod::Put,
+            HttpMethod::Delete,
+            HttpMethod::Patch,
+            HttpMethod::Head,
+            HttpMethod::Options,
+            HttpMethod::Trace,
+            HttpMethod::Connect,
+        ];
+        for route in routes {
+            let method: HttpMethod = serde_json::from_value(route["method"].clone()).unwrap();
+            let path = route["path"]
+                .as_str()
+                .unwrap()
+                .replace("{credential_id}", "credential-1")
+                .replace("{organization_id}", "org-1");
+            assert_eq!(upstream_service(method, &path), NATIVE_SERVICE);
+            for candidate in methods {
+                if candidate != method {
+                    assert_eq!(upstream_service(candidate, &path), LEGACY_SERVICE);
+                }
+            }
+            let mut near_misses = vec![
+                path.trim_start_matches('/').to_owned(),
+                format!("/{path}"),
+                format!("{path}/"),
+                format!("{path}/extra"),
+            ];
+            if path.contains("credential-1") {
+                near_misses.push(path.replace("/credential-1/", "//"));
+            }
+            if path.contains("org-1") {
+                near_misses.push(path.replace("/org-1/", "//"));
+            }
+            for near_miss in near_misses {
+                assert_eq!(upstream_service(method, &near_miss), LEGACY_SERVICE);
             }
         }
     }

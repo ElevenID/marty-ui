@@ -141,6 +141,10 @@ def test_frozen_surface_provenance_and_coverage_are_complete() -> None:
         ROOT / "contracts/issuance-canvas-management.json"
     ).read_bytes()
     canvas_management = json.loads(canvas_management_bytes)
+    canvas_mirror_bytes = (
+        ROOT / "contracts/issuance-canvas-mirror.json"
+    ).read_bytes()
+    canvas_mirror = json.loads(canvas_mirror_bytes)
     credential_lifecycle_bytes = (
         ROOT / "contracts/issuance-credential-lifecycle.json"
     ).read_bytes()
@@ -298,6 +302,19 @@ def test_frozen_surface_provenance_and_coverage_are_complete() -> None:
     )
     assert canvas_management["schema"] == "marty.issuance-canvas-management/v1"
     assert len(canvas_management["scope"]["routes"]) == 31
+    assert (
+        hashlib.sha256(canvas_mirror_bytes.replace(b"\r\n", b"\n")).hexdigest()
+        == coverage["canvas_mirror_behavior_contract"]["sha256"]
+    )
+    assert coverage["canvas_mirror_behavior_contract"] == {
+        "path": "contracts/issuance-canvas-mirror.json",
+        "sha256": "63919909b78e0d0bb053704dc9f0ce4c05476d80aac6a09cbed5a26fd1d8ff62",
+        "source_repository": "ElevenID/marty-credentials",
+        "source_path": "services/issuance/infrastructure/api/routes.py",
+        "source_commit": "aaa6a9b8e31e62cd0ab087eef5fc1f4835048e26",
+    }
+    assert canvas_mirror["schema"] == "marty.issuance-canvas-mirror/v1"
+    assert len(canvas_mirror["routes"]) == 6
     assert (
         hashlib.sha256(credential_lifecycle_bytes.replace(b"\r\n", b"\n")).hexdigest()
         == coverage["credential_lifecycle_behavior_contract"]["sha256"]
@@ -511,6 +528,9 @@ def test_frozen_surface_provenance_and_coverage_are_complete() -> None:
     canvas_management_operations = {
         route["operation"] for route in canvas_management["scope"]["routes"]
     }
+    canvas_mirror_operations = {
+        route["operation"]: route for route in canvas_mirror["routes"]
+    }
     application_template_operations = {
         route["operation"] for route in application_templates["surface"]["routes"]
     }
@@ -557,13 +577,14 @@ def test_frozen_surface_provenance_and_coverage_are_complete() -> None:
         hashlib.sha256(renewal_bytes).hexdigest()
         == coverage["renewal_behavior_contract"]["sha256"]
     )
-    assert len(coverage["native_http"]) == 114
+    assert len(coverage["native_http"]) == 120
     assert set(native) == (
         set(discovery_cases)
         | set(tenant_cases)
         | set(transaction_cases)
         | set(credential_lifecycle_routes)
         | canvas_management_operations
+        | set(canvas_mirror_operations)
         | application_template_operations
         | internal_application_operations
         | set(resource_owner_operations)
@@ -759,6 +780,14 @@ def test_frozen_surface_provenance_and_coverage_are_complete() -> None:
                 for route in canvas_management["scope"]["routes"]
             )
             continue
+        if operation in canvas_mirror_operations:
+            assert coverage_entry == {
+                "method": canvas_mirror_operations[operation]["method"],
+                "path": canvas_mirror_operations[operation]["path"],
+                "operation": operation,
+                "canvas_mirror_behavior_contract": True,
+            }
+            continue
         if operation in application_template_operations:
             assert coverage_entry["application_template_behavior_case"] == operation
             assert any(
@@ -841,19 +870,33 @@ def test_frozen_surface_provenance_and_coverage_are_complete() -> None:
         )
         assert discovery_cases[operation]["path"] == expected_case_path
     assert coverage["remaining"] == {
-        "http": 17,
+        "http": 11,
         "grpc": 0,
         "runtime_modes": ["api", "canvas-sync-worker"],
-        "literal_environment_variables": 54,
+        "literal_environment_variables": 15,
         "dynamic_configuration_lookups": 20,
         "migration_revisions": 46,
         "migration_heads": 1,
     }
     assert coverage["native_environment_variables"] == [
         "CORS_ALLOWED_ORIGINS",
-        "CANVAS_ALLOW_HTTP_LOCALHOST_BASE_URLS",
-        "CANVAS_ALLOW_PRIVATE_BASE_URLS",
-        "CANVAS_BINDING_READINESS_MAX_AGE_SECONDS",
+        "APP_ENV",
+        "CANVAS_ADMIN_API_TOKEN",
+        "CANVAS_ADMIN_API_TOKEN_FILE",
+        "CANVAS_ALLOW_LOCAL_ADMIN_TOKEN_FALLBACK",
+        "CANVAS_BACKGROUND_ROSTER_BATCH_SIZE",
+        "CANVAS_BACKGROUND_ROSTER_MAX_SIZE",
+        "CANVAS_CREDENTIALS_API_BASE_URL",
+        "CANVAS_CREDENTIALS_API_ORIGIN_ALLOWLIST",
+        "CANVAS_CREDENTIALS_ASSERTION_NARRATIVE",
+        "CANVAS_CREDENTIALS_ASSERTION_URL_TEMPLATE",
+        "CANVAS_CREDENTIALS_PUBLISH_TIMEOUT_SECONDS",
+        "CANVAS_CREDENTIALS_PUBLISH_URL",
+        "CANVAS_CREDENTIALS_REVOKE_URL_TEMPLATE",
+        "CANVAS_CREDENTIALS_SIGNATURE_TOLERANCE_SECONDS",
+        "CANVAS_CREDENTIALS_STATUS_SYNC_TIMEOUT_SECONDS",
+        "CANVAS_CREDENTIALS_STATUS_SYNC_URL",
+        "CANVAS_CREDENTIALS_VALIDATE_URL_TEMPLATE",
         "CANVAS_LTI_DEEP_LINKING_ISSUER",
         "CANVAS_LTI_EXPERIENCE_BASE_URL",
         "CANVAS_LTI_EXPERIENCE_CODE_TTL_SECONDS",
@@ -862,14 +905,31 @@ def test_frozen_surface_provenance_and_coverage_are_complete() -> None:
         "CANVAS_LTI_STATE_TTL_MINUTES",
         "CANVAS_LTI_TOOL_ISSUER_DID",
         "CANVAS_LTI_TOOL_SIGNING_ORGANIZATION_ID",
+        "CANVAS_MIRROR_ALERT_WEBHOOK_TIMEOUT_SECONDS",
+        "CANVAS_MIRROR_ALERT_WEBHOOK_URL",
+        "CANVAS_MIRROR_WORKER_ORGANIZATION_ID",
         "CANVAS_OAUTH_COMPLETION_REDIRECT_URL",
-        "CANVAS_ISSUANCE_EVIDENCE_MAX_AGE_SECONDS",
+        "CANVAS_OAUTH_REVOCATION_BATCH_SIZE",
         "CANVAS_PILOT_ORGANIZATION_IDS",
-        "CANVAS_PORTABLE_INTEGRATION_ENABLED",
         "CANVAS_PRIVATE_ORIGIN_ALLOWLIST",
         "CANVAS_SELF_MANAGED_ORIGIN_ALLOWLIST",
+        "CANVAS_SYNC_SCHEDULE_LIMIT",
+        "CANVAS_SYNC_WORKER_BATCH_SIZE",
+        "CANVAS_SYNC_WORKER_ID",
+        "CANVAS_SYNC_WORKER_JOB_TIMEOUT_SECONDS",
+        "CANVAS_SYNC_WORKER_LEASE_SECONDS",
+        "CANVAS_SYNC_WORKER_POLL_SECONDS",
+        "CREDENTIAL_TEMPLATE_SERVICE_URL",
+        "CT_GRPC_TARGET",
         "DATABASE_URL",
+        "DIDCOMM_ALLOW_PRIVATE_IPS",
+        "DIDCOMM_DID_WEB_INTERNAL_BASE_URL",
+        "DIDCOMM_ENCRYPTION_POLICY_FILE",
+        "DIDCOMM_TLS_CA_FILE",
+        "DIDCOMM_UNIVERSAL_RESOLVER_URL",
+        "ENVIRONMENT",
         "GRPC_SERVICE_TOKEN",
+        "GRPC_SERVICE_TOKEN_FILE",
         "INTEGRATION_SECRET_MASTER_KEY_ENV",
         "ISSUANCE_GRPC_ENABLED",
         "ISSUANCE_GRPC_PORT",
@@ -877,15 +937,50 @@ def test_frozen_surface_provenance_and_coverage_are_complete() -> None:
         "ISSUANCE_API_KEY",
         "ISSUANCE_AUTH_SESSION_TTL_MINUTES",
         "ALLOWED_REDIRECT_URIS",
+        "ISSUANCE_OFFER_TTL_MINUTES",
         "ISSUER_BASE_URL",
         "ISSUER_DISPLAY_NAME",
+        "LOG_LEVEL",
+        "ORG_GRPC_TARGET",
         "REVOCATION_PROFILE_SERVICE_URL",
+        "RP_GRPC_TARGET",
         "SIGNING_KEYS_INTERNAL_API_KEY",
         "SIGNING_KEYS_INTERNAL_URL",
         "TOKEN_RATE_LIMIT",
         "TOKEN_RATE_WINDOW",
         "UI_BASE_URL",
+        "UNIVERSAL_RESOLVER_URL",
+        "VCDM_RELATED_RESOURCE_MAX_BYTES",
+        "VCDM_RELATED_RESOURCE_TIMEOUT_SECONDS",
+        "VCDM_RELATED_RESOURCE_URLS",
     ]
+    assert coverage["platform_additive_environment_variables"] == [
+        "CANVAS_ALLOW_HTTP_LOCALHOST_BASE_URLS",
+        "CANVAS_ALLOW_PRIVATE_BASE_URLS",
+        "CANVAS_BINDING_READINESS_MAX_AGE_SECONDS",
+        "CANVAS_ISSUANCE_EVIDENCE_MAX_AGE_SECONDS",
+        "CANVAS_MIRROR_FAILURE_CRITICAL_ATTEMPTS",
+        "CANVAS_MIRROR_FAILURE_WARNING_ATTEMPTS",
+        "CANVAS_MIRROR_PUBLISH_INTERVAL_SECONDS",
+        "CANVAS_MIRROR_STATUS_SYNC_INTERVAL_SECONDS",
+        "CANVAS_MIRROR_WORKER_BATCH_LIMIT",
+        "CANVAS_MIRROR_WORKER_ENABLED",
+        "CANVAS_MIRROR_WORKER_RETRY_FAILED",
+        "CANVAS_MIRROR_WORKER_RUN_ON_STARTUP",
+        "CANVAS_PORTABLE_INTEGRATION_ENABLED",
+    ]
+    frozen_environment_variables = set(
+        surface["configuration"]["environment_variables"]
+    )
+    native_environment_variables = set(coverage["native_environment_variables"])
+    additive_environment_variables = set(
+        coverage["platform_additive_environment_variables"]
+    )
+    assert native_environment_variables <= frozen_environment_variables
+    assert additive_environment_variables.isdisjoint(frozen_environment_variables)
+    assert coverage["remaining"]["literal_environment_variables"] == len(
+        frozen_environment_variables - native_environment_variables
+    )
 
 
 def test_oid4vci_coverage_mutations_break_the_enforced_provenance_or_route_floor() -> None:
@@ -998,18 +1093,19 @@ def test_public_issued_credential_adapters_cut_over_without_claiming_siblings() 
     }
     independently_owned = {
         ("GET", "/v1/issued-credentials/mine"),
-        (
-            "POST",
-            "/v1/issued-credentials/{credential_id}/deliveries/canvas-credentials/publish",
-        ),
         ("POST", "/v1/credentials/issued/batch-revoke"),
         ("GET", "/v1/credentials/revocations"),
     }
+    canvas_mirror_publish = (
+        "POST",
+        "/v1/issued-credentials/{credential_id}/deliveries/canvas-credentials/publish",
+    )
 
     assert internal_lifecycle <= native
     assert internal_lifecycle.isdisjoint(public)
     assert public_record_adapters <= public
     assert public_record_adapters <= native
+    assert canvas_mirror_publish in native
     assert independently_owned.isdisjoint(native)
     assert (
         "POST",

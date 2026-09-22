@@ -31,6 +31,22 @@ worker, and aborts/awaits it during shutdown. Worker configuration, alert
 thresholds, webhook URL and bounded webhook timeout are typed once in
 `IssuanceServiceConfig`.
 
+Maintainer review found that the implementation and gateway router had not
+added these six routes to the canonical native-coverage ledger. That omission
+would have left the deletion gate blind to the actual owner. The reviewed
+branch now binds every exact method/path/operation to this frozen contract,
+rejects sibling and malformed template paths at the gateway, and reports the
+lane-local 131-route ledger as **113 native / 18 remaining**. The separate
+OID4VCI lane adds seven further routes; the combined count is not claimed until
+the branches are restacked together and their exact integrated tree passes CI.
+The same audit binds fourteen frozen Canvas Credentials/mirror environment
+variables to their typed Rust consumers, moving the historical configuration
+ledger from **28 frozen-native / 61 remaining** to **72 frozen-native / 17
+remaining**. Fourteen newly migrated mirror settings and thirty previously
+implemented typed Rust inputs are now accounted for. Five newer Rust-owned
+settings are tracked separately as platform-additive, without claiming the
+still-dynamic Python lookups or unrelated runtime modes.
+
 PostgreSQL batch selection now uses `FOR UPDATE SKIP LOCKED` leases. A durable
 effect-start marker prevents an expired claim from automatically repeating an
 external provider action whose outcome became ambiguous before persistence.
