@@ -49,11 +49,12 @@ async fn legacy(
     let response = if method == "GET" && matches!(path.as_str(), "/health" | "/health/ready") {
         Json(json!({"status":"healthy"})).into_response()
     } else {
-        // A positive unselected GET demonstrates the legacy endpoint exists;
-        // every other path/method is an observed forbidden fallback.
+        // A positive unselected GET demonstrates the retained passport
+        // endpoint exists; every other path/method is a forbidden fallback
+        // observed by this trap.
         assert_eq!(request.headers()["x-api-key"], API_KEY);
-        assert_eq!(method, "GET", "selected legacy writes are forbidden");
-        assert_eq!(path, "/v1/issued-credentials/mine");
+        assert_eq!(method, "GET");
+        assert_eq!(path, "/v1/passport/capabilities");
         (StatusCode::IM_A_TEAPOT, Json(legacy_control_body())).into_response()
     };
     assert!(to_bytes(request.into_body(), 65536)
@@ -221,7 +222,7 @@ impl GatewayFixture {
     pub(super) async fn legacy_control(&self) {
         let response = self
             .client
-            .get(format!("{}/v1/issued-credentials/mine", self.origin))
+            .get(format!("{}/v1/passport/capabilities", self.origin))
             .header("x-api-key", CLIENT_KEY)
             .send()
             .await

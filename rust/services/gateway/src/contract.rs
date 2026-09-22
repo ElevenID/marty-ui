@@ -932,6 +932,7 @@ mod tests {
             (HttpMethod::Post, "/v1/issuance/notification"),
             (HttpMethod::Post, "/v1/issuance/deferred-credential"),
             (HttpMethod::Post, "/v1/issuance/par"),
+            (HttpMethod::Get, "/v1/passport/capabilities"),
         ] {
             assert_eq!(
                 route_for(&proxy, method, path)
