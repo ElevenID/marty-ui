@@ -1,15 +1,22 @@
-# General-base native issuance opt-in: configuration checkpoint
+# General-base native issuance configuration checkpoint
+
+Current status: the opt-in described below was the historical qualification
+stage. The default base now selects Rust for 120 HTTP routes and all twelve gRPC
+methods while retaining Python for the exact eleven-route remainder. See
+[universal ownership](issuance-universal-native-ownership.md). The detailed
+configuration inventory below remains authoritative unless superseded there.
 
 Source base: UI `b7c5d7746317cb01df833159fe2836a581ddbc5b`. This is the
 configuration portion of consumer-retirement Batch 1, **not runtime acceptance,
-a deployment, or permission to remove Python**. The embedded contract selects
-74 exact HTTP operations; the other 57 remain on the legacy owner. The full
-131-operation source contract and all existing behavior gates are unchanged.
+a deployment, or permission to remove Python**. At that historical checkpoint,
+the embedded contract selected 74 exact HTTP operations; the current contract
+selects 120. The full 131-operation source contract remains the accounting
+boundary.
 
 ## Composition and unchanged consumers
 
-`docker-compose.profile.issuance-native.yml` is an explicit overlay on
-`docker-compose.base.yml`; the default base composition is unchanged. It adds a
+`docker-compose.profile.issuance-native.yml` remains a reusable overlay, and the
+default base now imports the same native service definition. It adds a
 distinct internal native owner, gateway `ISSUANCE_NATIVE_SERVICE_URL`, native
 healthy dependency and readiness membership. The readiness list is the gateway's
 actual `DEFAULT_READY_SERVICES` plus `issuance-native`, checked against Rust source,
@@ -18,10 +25,9 @@ not a list guessed from Compose service names. The base's existing auth expressi
 across the native owner and the thirteen existing clients/peers. It is a retained
 development default, **not a new production credential**.
 
-Gateway `ISSUANCE_SERVICE_URL`, Flow `ISSUANCE_SERVICE_URL` and
-`ISSUANCE_GRPC_TARGET=issuance:9005`, Envoy, all sibling-service fields, and the
-legacy loopback 8005/9005 publications are compared unchanged. Native has no host
-port publication. The profile does not move direct legacy consumers or Flow gRPC.
+Gateway and Flow retain `ISSUANCE_SERVICE_URL` for the eleven Python-only HTTP
+routes, while Flow gRPC and canonical Envoy now select native. Legacy loopback
+8005/9005 publications are retained; native has no host-port publication.
 
 The environment/network-neutral `docker-compose.service.issuance-native-runtime.yml`
 contains only the common native build, four readiness dependencies, HTTP health
@@ -30,9 +36,9 @@ environment and network requirements. A closed, single-edge source reconstructio
 and complete rendered beta/conformance comparisons preserve their behavior and
 required-variable errors (including the separately governed token-capacity repair).
 
-For a local-source model, add the new opt-in profile to the base. For released
-images, add the existing `docker-compose.profile.ghcr.yml`, then the opt-in profile,
-then `docker-compose.profile.issuance-native-images.yml`. The latter is the renamed
+The local-source base selects native without an extra profile. Released-image
+compositions add the existing `docker-compose.profile.ghcr.yml` and
+`docker-compose.profile.issuance-native-images.yml`. The latter is the renamed
 existing conformance immutable-image overlay, not duplicate content or a changed
 public conformance CLI. The base and conformance profiles both explicitly bind
 `SERVICE_NAME=issuance_native`, entrypoint `/app/services/entrypoint.sh`, and empty

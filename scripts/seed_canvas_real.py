@@ -2523,7 +2523,7 @@ def main() -> int:
     default_program_delivery_mode = "wallet_plus_canvas_mirror" if open_badge_scenario_enabled else "wallet_only"
 
     connector_cfg = ConnectorSeedConfig(
-        issuance_base_url=os.environ.get("ISSUANCE_API_BASE_URL", "http://localhost:8005"),
+        issuance_base_url=os.environ.get("ISSUANCE_API_BASE_URL", "http://localhost:8000"),
         issuance_api_key=raw_issuance_api_key or "dev-issuance-api-key",
         organization_id=os.environ.get("CANVAS_ORGANIZATION_ID", MARTY_DEFAULT_ORG_ID),
         canvas_account_id=os.environ.get("CANVAS_ACCOUNT_ID", "canvas-real-account-1"),

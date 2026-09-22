@@ -1,6 +1,6 @@
 # Kubernetes native issuance: intermediate source qualification
 
-This is an explicit opt-in composition, not a deployed cutover or permission to
+This is the default future source composition, not a deployed cutover or permission to
 delete Python. No cluster, registry, Secret value, or production state was read
 or changed for this checkpoint. Resolved Kubernetes runtime acceptance and the
 remaining direct consumers in [consumer retirement](didcomm-consumer-retirement.md)
@@ -8,8 +8,9 @@ still gate retirement. DIDComm KMS corrections remain out of scope.
 
 ## Selection and image ownership
 
-`scripts/deploy-kubernetes.sh` retains its disabled/default behavior when
-`K8S_ISSUANCE_NATIVE_ENABLED` is unset or exactly `false`. Selecting exactly `true`
+`scripts/deploy-kubernetes.sh` selects native issuance when
+`K8S_ISSUANCE_NATIVE_ENABLED` is unset or exactly `true`. Selecting exactly
+`false` retains the reviewed legacy recovery path. Native selection
 requires an already-built `kubernetes-native-issuance` executable and
 `MARTY_SERVICES_IMAGE`. No automatic build, image pull or image-source inference
 occurs. Build the host tool from the reviewed source with:
@@ -51,7 +52,7 @@ health only, not database/schema, control-plane, wallet or signing readiness.
 No existing NetworkPolicy is supplied by this manifest set; ClusterIP/selector
 separation is not claimed as network-policy enforcement.
 
-The opt-in gateway gains `ISSUANCE_NATIVE_SERVICE_URL=http://issuance-native:8005`,
+The selected gateway gains `ISSUANCE_NATIVE_SERVICE_URL=http://issuance-native:8005`,
 `SIGNING_KEYS_SERVICE_URL=http://signing-keys:8017`, and its existing source-derived
 readiness roster plus the native member. The common gateway manifest explicitly
 sets `AUTH_GRPC_TARGET=auth:9001`, repairing its prior localhost default across

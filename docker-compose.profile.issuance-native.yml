@@ -1,7 +1,7 @@
-# Explicit general-base opt-in; does not replace the partial legacy owner.
-# Runtime acceptance is required before deployment/Python retirement.
-# Existing HTTP URLs, Envoy targets and host publications stay unchanged.
-# Flow initiation selects native gRPC; physical-document HTTP remains legacy.
+# Compatibility overlay for compositions that predate universal base ownership.
+# The base already selects Rust for migrated HTTP/gRPC and retains Python for
+# the exact eleven-route remainder. Runtime acceptance is still required before
+# deployment/Python retirement; host publications remain unchanged.
 x-native-issuance-grpc-auth: &native-issuance-grpc-auth
   GRPC_SERVICE_TOKEN: ${GRPC_SERVICE_TOKEN:-dev-grpc-service-token-change-before-production}
 

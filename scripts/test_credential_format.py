@@ -1,15 +1,29 @@
-"""Test credential issuance format to diagnose SpruceID parsing error."""
-import httpx, json, uuid, base64
+"""Test credential issuance format through the route-owning gateway."""
+
+import base64
+import json
+import os
+import uuid
+
+import httpx
+
+ISSUANCE_URL = os.environ.get("ISSUANCE_API_BASE_URL", "http://localhost:8000").rstrip(
+    "/"
+)
 
 # Step 1: Initiate issuance to get a pre-auth code
-resp = httpx.post("http://localhost:8005/v1/issuance/initiate", json={
-    "organization_id": "00000000-0000-0000-0000-000000000001",
-    "credential_template_id": "50000000-0000-0000-0000-000000000010",
-    "applicant_id": str(uuid.uuid4()),
-    "subject_did": "",
-    "holder_did": "",
-    "claims": {"email": "test@example.com"},
-}, timeout=10)
+resp = httpx.post(
+    f"{ISSUANCE_URL}/v1/issuance/initiate",
+    json={
+        "organization_id": "00000000-0000-0000-0000-000000000001",
+        "credential_template_id": "50000000-0000-0000-0000-000000000010",
+        "applicant_id": str(uuid.uuid4()),
+        "subject_did": "",
+        "holder_did": "",
+        "claims": {"email": "test@example.com"},
+    },
+    timeout=10,
+)
 data = resp.json()
 print(f"Initiate status: {resp.status_code}")
 print(f"Keys: {list(data.keys())}")
@@ -20,10 +34,14 @@ if not pre_auth:
 print(f"Pre-auth code: {pre_auth[:20]}...")
 
 # Step 2: Get token
-token_resp = httpx.post("http://localhost:8005/v1/issuance/token", data={
-    "grant_type": "urn:ietf:params:oauth:grant-type:pre-authorized_code",
-    "pre-authorized_code": pre_auth,
-}, timeout=10)
+token_resp = httpx.post(
+    f"{ISSUANCE_URL}/v1/issuance/token",
+    data={
+        "grant_type": "urn:ietf:params:oauth:grant-type:pre-authorized_code",
+        "pre-authorized_code": pre_auth,
+    },
+    timeout=10,
+)
 print(f"Token status: {token_resp.status_code}")
 if token_resp.status_code != 200:
     print(f"Token error: {token_resp.text[:300]}")
@@ -33,7 +51,8 @@ token = token_data.get("access_token", "")
 print(f"Got access token: {token[:20]}...")
 
 # Step 3: Request the current OID4VCI SD-JWT credential configuration
-cred_resp = httpx.post("http://localhost:8005/v1/issuance/credential", 
+cred_resp = httpx.post(
+    f"{ISSUANCE_URL}/v1/issuance/credential",
     json={
         "credential_configuration_id": "MemberCredential#sd-jwt",
     },
@@ -47,7 +66,9 @@ if cred_resp.status_code == 200:
     # Decode JWT header
     parts = cred_jwt.split(".")
     if len(parts) >= 1:
-        padded = parts[0] + "=" * (4 - len(parts[0]) % 4) if len(parts[0]) % 4 else parts[0]
+        padded = (
+            parts[0] + "=" * (4 - len(parts[0]) % 4) if len(parts[0]) % 4 else parts[0]
+        )
         try:
             header = json.loads(base64.urlsafe_b64decode(padded))
             print(f"JWT header: {json.dumps(header)}")

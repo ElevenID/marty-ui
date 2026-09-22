@@ -1,4 +1,4 @@
-"""Read-only general-base opt-in configuration gate; never runtime acceptance.
+"""Read-only default-base native configuration gate; never runtime acceptance.
 
 Only actual Compose rendering and synthetic inputs are used. No daemon, policy
 contents, operator env file, image pull, container or deployment is accessed.
@@ -97,15 +97,20 @@ def assert_sources(base, profile, runtime):
     legacy = base["services"]["issuance"]["environment"]
     native = profile["services"]["issuance-native"]
     env = native["environment"]
-    assert set(legacy) - set(env) == LEGACY_ONLY
-    assert set(env) - set(legacy) == set(NATIVE_ONLY)
+    owner_selection = {"DIDCOMM_DELIVERY_OWNER", "ISSUANCE_NATIVE_SERVICE_URL"}
+    assert set(legacy) - set(env) - owner_selection == LEGACY_ONLY
+    assert set(env) - set(legacy) == set(NATIVE_ONLY) - {"GRPC_SERVICE_TOKEN"}
     assert {key: env[key] for key in NATIVE_ONLY} == NATIVE_ONLY
     for key in set(env) & set(legacy):
         assert env[key] == legacy[key], "Native expression changed legacy precedence"
-    assert (
+    for name in NATIVE["TOKEN_CONSUMERS"]:
+        assert (
+            base["services"][name]["environment"].get("GRPC_SERVICE_TOKEN")
+            == (NATIVE_ONLY["GRPC_SERVICE_TOKEN"])
+        ), f"Base token is not paired for {name}"
+    assert base["services"]["gateway"]["environment"][
         "GATEWAY_REQUIRED_READY_SERVICES"
-        not in base["services"]["gateway"]["environment"]
-    )
+    ] == ",".join([*readiness_default(), "issuance-native"])
     edge = profile["services"]["gateway"]
     assert edge["environment"] == {
         "GRPC_SERVICE_TOKEN": base["services"]["auth"]["environment"][
@@ -175,7 +180,12 @@ def expected_model(baseline, *, local, authcrypt, inputs, policy_directory):
         inputs.get("GRPC_SERVICE_TOKEN")
         or "dev-grpc-service-token-change-before-production"
     )
-    env = {key: value for key, value in legacy.items() if key not in LEGACY_ONLY}
+    owner_selection = {"DIDCOMM_DELIVERY_OWNER", "ISSUANCE_NATIVE_SERVICE_URL"}
+    env = {
+        key: value
+        for key, value in legacy.items()
+        if key not in LEGACY_ONLY | owner_selection
+    }
     env.update(
         {
             "GRPC_SERVICE_TOKEN": token,
@@ -288,7 +298,7 @@ def assert_model(baseline, actual, *, local, authcrypt, inputs, policy_directory
         policy_directory=policy_directory,
     )
     assert actual == expected, (
-        "Native opt-in changed an unowned field or required binding"
+        "Native compatibility overlay changed an unowned field or required binding"
     )
     POLICY["validate_model"](actual, authcrypt_enabled=authcrypt)
     assert (
@@ -323,6 +333,16 @@ def files(*, native, local, authcrypt):
         if authcrypt:
             result.append(ROOT / POLICY_PROFILE)
     return result
+
+
+def assert_default_base_token_pairing(model, token):
+    """The universal base owner and every authenticated peer share one token."""
+    for name in ("issuance-native", *NATIVE["TOKEN_CONSUMERS"]):
+        environment = model["services"][name]["environment"]
+        assert environment["GRPC_SERVICE_TOKEN"] == token, (
+            f"Rendered default-base token is not paired for {name}"
+        )
+        assert "GRPC_SERVICE_TOKEN_FILE" not in environment
 
 
 def run(command):
@@ -389,6 +409,11 @@ def run(command):
                     command,
                     *files(native=False, local=local, authcrypt=False),
                     project=PROJECT,
+                )
+                assert_default_base_token_pairing(
+                    baseline,
+                    inputs.get("GRPC_SERVICE_TOKEN")
+                    or "dev-grpc-service-token-change-before-production",
                 )
                 for authcrypt in (False, True):
                     actual = BIND["render_binding"](

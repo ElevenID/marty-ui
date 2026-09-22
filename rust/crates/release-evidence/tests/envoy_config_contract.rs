@@ -13,52 +13,45 @@ fn mutated(change: impl FnOnce(&mut Value)) -> Vec<u8> {
 }
 
 #[test]
-fn complete_model_changes_only_two_routes_and_one_derived_cluster() {
+fn complete_native_model_is_validated_without_rewriting() {
     let original = parse(BASE).unwrap();
-    let mut candidate = render(BASE, DESCRIPTOR).unwrap();
-    let routes = candidate
-        .pointer_mut(ROUTES)
-        .unwrap()
-        .as_array_mut()
-        .unwrap();
-    for (path, prefix) in [
-        (RPC_PATH, "/marty.ui.issuance.v1.IssuanceService/"),
-        (HTTP_PATH, "/v1/issuance/"),
-    ] {
-        let index = routes
-            .iter()
-            .position(|r| r["match"]["path"] == path)
+    assert_eq!(render(BASE, DESCRIPTOR).unwrap(), original);
+}
+
+#[test]
+fn historical_legacy_model_upgrades_both_complete_prefixes() {
+    let input = mutated(|model| {
+        let clusters = model["static_resources"]["clusters"]
+            .as_array_mut()
             .unwrap();
-        assert_eq!(
-            routes[index],
-            json!({"match":{"path":path,"headers":[{"name":":method","string_match":{"exact":"POST"}}]},"route":{"cluster":"issuance_native_grpc","timeout":"60s"}})
-        );
-        assert_eq!(routes[index + 1]["match"]["prefix"], prefix);
-        routes.remove(index);
-    }
-    let clusters = candidate["static_resources"]["clusters"]
-        .as_array_mut()
-        .unwrap();
-    let mut added = clusters.pop().unwrap();
-    assert_eq!(added["name"], NATIVE_CLUSTER);
-    assert_eq!(added["load_assignment"]["cluster_name"], NATIVE_CLUSTER);
-    assert_eq!(
-        added["load_assignment"]["endpoints"][0]["lb_endpoints"][0]["endpoint"]["address"]
-            ["socket_address"]["address"],
-        "issuance-native"
-    );
-    added["name"] = json!("issuance_grpc");
-    added["load_assignment"]["cluster_name"] = json!("issuance_grpc");
-    added["load_assignment"]["endpoints"][0]["lb_endpoints"][0]["endpoint"]["address"]
-        ["socket_address"]["address"] = json!("issuance");
-    assert_eq!(
-        added,
-        *clusters
+        let native = clusters
+            .iter_mut()
+            .find(|cluster| cluster["name"] == NATIVE_CLUSTER)
+            .unwrap();
+        native["name"] = json!("issuance_grpc");
+        native["load_assignment"]["cluster_name"] = json!("issuance_grpc");
+        native["load_assignment"]["endpoints"][0]["lb_endpoints"][0]["endpoint"]["address"]
+            ["socket_address"]["address"] = json!("issuance");
+        for route in model.pointer_mut(ROUTES).unwrap().as_array_mut().unwrap() {
+            if route["route"]["cluster"] == NATIVE_CLUSTER {
+                route["route"]["cluster"] = json!("issuance_grpc");
+            }
+        }
+    });
+
+    let upgraded = render(&input, DESCRIPTOR).unwrap();
+    let routes = upgraded.pointer(ROUTES).unwrap().as_array().unwrap();
+    for prefix in ["/marty.ui.issuance.v1.IssuanceService/", "/v1/issuance/"] {
+        let selected: Vec<_> = routes
             .iter()
-            .find(|c| c["name"] == "issuance_grpc")
-            .unwrap()
-    );
-    assert_eq!(candidate, original, "Every other route, filter, auth setting, cluster, health check and listener must be unchanged");
+            .filter(|route| route["match"]["prefix"] == prefix)
+            .collect();
+        assert_eq!(selected.len(), 1);
+        assert_eq!(selected[0]["route"]["cluster"], NATIVE_CLUSTER);
+    }
+    assert!(routes.iter().all(|route| {
+        route["match"]["path"] != RPC_PATH && route["match"]["path"] != HTTP_PATH
+    }));
 }
 
 #[test]
@@ -71,9 +64,10 @@ fn selected_model_roundtrips_and_unrelated_values_are_preserved() {
         "/tmp/synthetic-admin-access.log"
     );
     assert_eq!(parse(encode(&value).unwrap().as_bytes()).unwrap(), value);
-    assert!(
-        render(encode(&value).unwrap().as_bytes(), DESCRIPTOR).is_err(),
-        "Double activation must not duplicate selectors"
+    assert_eq!(
+        render(encode(&value).unwrap().as_bytes(), DESCRIPTOR).unwrap(),
+        value,
+        "Native validation must be idempotent"
     );
 }
 
@@ -96,11 +90,11 @@ fn descriptor_and_ambiguous_or_incompatible_topology_fail_closed() {
             }
             2 => {
                 let c = m["static_resources"]["clusters"].as_array_mut().unwrap();
-                c.retain(|v| v["name"] != "issuance_grpc");
+                c.retain(|v| v["name"] != NATIVE_CLUSTER);
             }
             3 => {
                 let c = m["static_resources"]["clusters"].as_array_mut().unwrap();
-                let owned = c.iter_mut().find(|v| v["name"] == "issuance_grpc").unwrap();
+                let owned = c.iter_mut().find(|v| v["name"] == NATIVE_CLUSTER).unwrap();
                 owned["typed_extension_protocol_options"] = json!({});
             }
             4 => {
@@ -119,11 +113,11 @@ fn descriptor_and_ambiguous_or_incompatible_topology_fail_closed() {
                     .unwrap()
                     .insert(
                         0,
-                        json!({"match":{"prefix":"/"},"route":{"cluster":"issuance_grpc"}}),
+                        json!({"match":{"prefix":"/"},"route":{"cluster":NATIVE_CLUSTER}}),
                     );
             }
             6 => {
-                m.pointer_mut(ROUTES).unwrap().as_array_mut().unwrap().insert(0,json!({"match":{"safe_regex":{"regex":".*"}},"route":{"cluster":"issuance_grpc"}}));
+                m.pointer_mut(ROUTES).unwrap().as_array_mut().unwrap().insert(0,json!({"match":{"safe_regex":{"regex":".*"}},"route":{"cluster":NATIVE_CLUSTER}}));
             }
             7 => {
                 m.pointer_mut(ROUTES)
@@ -132,7 +126,7 @@ fn descriptor_and_ambiguous_or_incompatible_topology_fail_closed() {
                     .unwrap()
                     .insert(
                         0,
-                        json!({"match":{"path":HTTP_PATH},"route":{"cluster":"issuance_grpc"}}),
+                        json!({"match":{"path":HTTP_PATH},"route":{"cluster":NATIVE_CLUSTER}}),
                     );
             }
             8 => {
@@ -144,10 +138,10 @@ fn descriptor_and_ambiguous_or_incompatible_topology_fail_closed() {
                 owned["route"]["cluster"] = json!("auth_grpc");
             }
             9 => {
-                m.pointer_mut(ROUTES).unwrap().as_array_mut().unwrap().insert(0,json!({"match":{"prefix":"/V1/ISSUANCE/","case_sensitive":false},"route":{"cluster":"issuance_grpc"}}));
+                m.pointer_mut(ROUTES).unwrap().as_array_mut().unwrap().insert(0,json!({"match":{"prefix":"/V1/ISSUANCE/","case_sensitive":false},"route":{"cluster":NATIVE_CLUSTER}}));
             }
             10 => {
-                m.pointer_mut(ROUTES).unwrap().as_array_mut().unwrap().insert(0,json!({"match":{"path":"/V1/ISSUANCE/INITIATE","case_sensitive":false},"route":{"cluster":"issuance_grpc"}}));
+                m.pointer_mut(ROUTES).unwrap().as_array_mut().unwrap().insert(0,json!({"match":{"path":"/V1/ISSUANCE/INITIATE","case_sensitive":false},"route":{"cluster":NATIVE_CLUSTER}}));
             }
             _ => unreachable!(),
         });

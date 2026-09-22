@@ -66,11 +66,11 @@ static_resources:
                             cluster: credential_template_grpc
                             timeout: 30s
 
-                        # Issuance Service → issuance:9005
+                        # Native Issuance Service → issuance-native:9005
                         - match:
                             prefix: "/marty.ui.issuance.v1.IssuanceService/"
                           route:
-                            cluster: issuance_grpc
+                            cluster: issuance_native_grpc
                             timeout: 60s
 
                         # Notification Service → notification:9007
@@ -133,11 +133,11 @@ static_resources:
                             cluster: credential_template_grpc
                             timeout: 30s
 
-                        # Issuance Service REST → issuance:9005
+                        # Native Issuance Service REST → issuance-native:9005
                         - match:
                             prefix: "/v1/issuance/"
                           route:
-                            cluster: issuance_grpc
+                            cluster: issuance_native_grpc
                             timeout: 60s
 
                         # Notification Service REST → notification:9007
@@ -327,8 +327,9 @@ static_resources:
           grpc_health_check:
             service_name: "marty.ui.credential_template.v1.CredentialTemplateService"
 
-    # Issuance Service
-    - name: issuance_grpc
+    # Native issuance owns the complete twelve-method gRPC surface. The eleven
+    # retained Python routes have no gRPC methods and remain gateway-owned.
+    - name: issuance_native_grpc
       connect_timeout: 5s
       type: STRICT_DNS
       lb_policy: ROUND_ROBIN
@@ -338,13 +339,13 @@ static_resources:
           explicit_http_config:
             http2_protocol_options: {}
       load_assignment:
-        cluster_name: issuance_grpc
+        cluster_name: issuance_native_grpc
         endpoints:
           - lb_endpoints:
               - endpoint:
                   address:
                     socket_address:
-                      address: issuance
+                      address: issuance-native
                       port_value: 9005
       health_checks:
         - timeout: 3s

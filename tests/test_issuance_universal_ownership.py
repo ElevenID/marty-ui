@@ -1,0 +1,135 @@
+from __future__ import annotations
+
+import inspect
+import json
+from pathlib import Path
+
+import yaml
+
+from scripts import conformance_stack
+
+
+ROOT = Path(__file__).resolve().parents[1]
+CONTRACT = json.loads(
+    (ROOT / "contracts/issuance-universal-ownership.json").read_text(encoding="utf-8")
+)
+
+
+def _json(path: str) -> dict:
+    return json.loads((ROOT / path).read_text(encoding="utf-8"))
+
+
+def _route_keys(routes: list[dict]) -> set[tuple[str, str]]:
+    return {(route["method"], route["path"]) for route in routes}
+
+
+def test_exact_runtime_remainder_stays_on_python_without_hiding_migrated_routes() -> (
+    None
+):
+    coverage = _json(CONTRACT["native_coverage"])
+    surface = _json(CONTRACT["runtime_surface"])
+    native = _route_keys(coverage["native_http"])
+    complete = _route_keys(surface["http"]["routes"])
+    retained = _route_keys(CONTRACT["retained_legacy_http"])
+
+    assert len(complete) == 131
+    assert len(native) == 120
+    assert retained == complete - native
+    assert len(retained) == coverage["remaining"]["http"] == 11
+    runtime_grpc = {row["method"] for row in surface["grpc"]["methods"]}
+    assert set(coverage["native_grpc"]) == runtime_grpc
+    assert len(coverage["native_grpc"]) == len(surface["grpc"]["methods"]) == 12
+    assert len(runtime_grpc) == surface["grpc"]["method_count"] == 12
+    assert coverage["remaining"]["grpc"] == 0
+
+
+def test_default_compose_selects_native_and_keeps_only_the_explicit_legacy_owner() -> (
+    None
+):
+    model = yaml.safe_load(
+        (ROOT / CONTRACT["default_compositions"]["compose"]).read_text()
+    )
+    services = model["services"]
+    assert {CONTRACT["default_owner"], CONTRACT["retained_legacy_owner"]} <= set(
+        services
+    )
+    assert services["gateway"]["environment"]["ISSUANCE_NATIVE_SERVICE_URL"] == (
+        "http://issuance-native:8005"
+    )
+    assert services["flow"]["environment"]["ISSUANCE_GRPC_TARGET"] == (
+        "issuance-native:9005"
+    )
+    assert services["issuance"]["environment"]["DIDCOMM_DELIVERY_OWNER"] == "native"
+
+
+def test_default_conformance_kubernetes_and_envoy_select_native() -> None:
+    signature = inspect.signature(conformance_stack.compose_command)
+    assert signature.parameters["issuance_owner"].default == "native"
+
+    kubernetes = (ROOT / CONTRACT["default_compositions"]["kubernetes"]).read_text(
+        encoding="utf-8"
+    )
+    assert (
+        'K8S_ISSUANCE_NATIVE_ENABLED="${K8S_ISSUANCE_NATIVE_ENABLED-true}"'
+        in kubernetes
+    )
+
+    envoy = yaml.safe_load(
+        (ROOT / CONTRACT["default_compositions"]["envoy"]).read_text()
+    )
+    clusters = {
+        cluster["name"]: cluster for cluster in envoy["static_resources"]["clusters"]
+    }
+    native = clusters["issuance_native_grpc"]
+    endpoint = native["load_assignment"]["endpoints"][0]["lb_endpoints"][0]["endpoint"]
+    assert endpoint["address"]["socket_address"] == {
+        "address": "issuance-native",
+        "port_value": 9005,
+    }
+    routes = envoy["static_resources"]["listeners"][0]["filter_chains"][0]["filters"][
+        0
+    ]["typed_config"]["route_config"]["virtual_hosts"][0]["routes"]
+    issuance = [
+        route
+        for route in routes
+        if route["match"]
+        .get("prefix", "")
+        .startswith(("/marty.ui.issuance.v1.IssuanceService/", "/v1/issuance/"))
+    ]
+    assert len(issuance) == 2
+    assert {route["route"]["cluster"] for route in issuance} == {"issuance_native_grpc"}
+
+
+def test_direct_first_party_clients_use_gateway_not_a_python_host_port() -> None:
+    for relative in [
+        "scripts/check_template_wallets.py",
+        "scripts/debug_issuance_response.py",
+        "scripts/test_credential_format.py",
+        "scripts/seed_canvas_real.py",
+    ]:
+        source = (ROOT / relative).read_text(encoding="utf-8")
+        assert "localhost:8005" not in source, relative
+    assert CONTRACT["direct_client_boundary"] == "gateway"
+
+
+def test_template_wallet_diagnostic_uses_the_current_gateway_route_and_auth() -> None:
+    source = (ROOT / "scripts/check_template_wallets.py").read_text(encoding="utf-8")
+    gateway_contract = (ROOT / "rust/services/gateway/src/contract.rs").read_text(
+        encoding="utf-8"
+    )
+    assert '("/v1/credential-templates", "credential-templates")' in gateway_contract
+    assert 'f"{API_BASE_URL}/v1/credential-templates/{TEMPLATE_ID}"' in source
+    assert 'params={"organization_id": ORG_ID}' in source
+    assert 'headers={"X-API-Key": API_KEY}' in source
+    assert "MARTY_API_KEY" in source
+    assert "/v1/issuance/templates" not in source
+
+
+def test_production_and_kms_boundaries_remain_explicit() -> None:
+    production = yaml.safe_load((ROOT / CONTRACT["production_composition"]).read_text())
+    environment = production["services"]["issuance"]["environment"]
+    assert "DIDCOMM_DELIVERY_OWNER" not in environment
+    assert "ISSUANCE_NATIVE_SERVICE_URL" not in environment
+    assert CONTRACT["production_unchanged"] is True
+    assert CONTRACT["python_deletion_authorized"] is False
+    assert CONTRACT["deferred"] == ["DIDCOMM-KMS-001"]

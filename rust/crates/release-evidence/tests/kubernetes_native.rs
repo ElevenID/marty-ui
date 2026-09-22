@@ -1164,13 +1164,13 @@ cmd_update_images
             .env("FIXTURE_LEDGER", shell_path(&ledger))
             .env("FIXTURE_SNAPSHOT", shell_path(&snapshot))
             .env("FIXTURE_FAULT", fault);
-        if fault == "missing-binary" || fault == "disabled" || fault == "absent" {
+        if fault == "missing-binary" || fault == "disabled" {
             cmd.env(
                 "K8S_NATIVE_ISSUANCE_BIN",
                 "/nonexistent-required-native-renderer",
             );
         }
-        if fault == "invalid-image" || fault == "disabled" || fault == "absent" {
+        if fault == "invalid-image" || fault == "disabled" {
             cmd.env("MARTY_SERVICES_IMAGE", "private-image-canary");
         }
         if fault == "disabled" {
@@ -1200,7 +1200,7 @@ cmd_update_images
             .filter(|v| v.starts_with("set image "))
             .collect();
         if fault == "none" || fault == "disabled" || fault == "absent" {
-            assert_eq!(writes.len(), if fault == "none" { 5 } else { 3 });
+            assert_eq!(writes.len(), if fault == "disabled" { 3 } else { 5 });
             assert!(!writes
                 .iter()
                 .any(|v| v.starts_with("set image deployment/issuance ")));
@@ -1229,7 +1229,7 @@ cmd_update_images
         {
             assert!(calls.is_empty(), "Preflight before any API read/write");
         }
-        if fault == "none" || fault == "rollout" {
+        if fault == "none" || fault == "absent" || fault == "rollout" {
             assert_eq!(
                 writes[1],
                 format!(
@@ -1247,7 +1247,7 @@ cmd_update_images
                 "rollout status deployment/issuance-native -n marty-prod --timeout=180s\n"
             ));
         }
-        if fault == "disabled" || fault == "absent" {
+        if fault == "disabled" {
             assert!(!calls.contains("issuance-native"));
         }
     }

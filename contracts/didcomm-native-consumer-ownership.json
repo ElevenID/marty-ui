@@ -5,7 +5,8 @@
   "owner_selector": {
     "name": "DIDCOMM_DELIVERY_OWNER",
     "native_value": "native",
-    "legacy_default": "legacy"
+    "default": "native",
+    "legacy_value": "legacy"
   },
   "native_origin": {
     "name": "ISSUANCE_NATIVE_SERVICE_URL",
@@ -20,17 +21,18 @@
     "liveness_path": "/health"
   },
   "selected_compose_models": [
+    "docker-compose.base.yml",
     "docker-compose.beta.yml",
     "docker-compose.profile.issuance-native.yml",
     "docker-compose.profile.conformance-native.yml"
   ],
   "legacy_compose_models": [
-    "docker-compose.base.yml",
     "docker-compose.selfhost.prod.yml"
   ],
   "kubernetes": {
     "selector": "K8S_ISSUANCE_NATIVE_ENABLED",
     "selected_value": "true",
+    "default": "true",
     "legacy_source_unchanged_until_render": true
   },
   "legacy_direct_compatibility": {

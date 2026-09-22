@@ -161,15 +161,16 @@ def test_beta_shared_setting_guard_accepts_only_source_derived_deltas(fault):
     )
     previous = model()
     previous["services"]["issuance"]["environment"]["TOKEN_RATE_LIMIT"] = "1200"
-    for setting in gate["MIRROR_WORKER_SETTINGS"]:
-        previous["services"]["issuance"]["environment"][setting] = "synthetic"
     for setting in gate["SHARED_SETTING_REPAIRS"]:
+        previous["services"]["issuance"]["environment"].setdefault(
+            setting, f"synthetic-{setting.lower()}"
+        )
         previous["services"]["issuance-native"]["environment"].pop(setting, None)
     actual = deepcopy(previous)
     for setting in gate["SHARED_SETTING_REPAIRS"]:
         actual["services"]["issuance-native"]["environment"][setting] = previous[
             "services"
-        ]["issuance"]["environment"][setting]
+        ]["issuance"]["environment"].get(setting, f"synthetic-{setting.lower()}")
     gate["assert_beta_shared_setting_repairs"](previous, actual)
     if fault == "rate":
         actual["services"]["issuance-native"]["environment"]["TOKEN_RATE_LIMIT"] = "30"

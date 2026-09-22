@@ -12,7 +12,7 @@ ROOT = Path(__file__).resolve().parents[1]
 GATE = runpy.run_path(str(ROOT / "scripts/test_envoy_native_compose.py"))
 
 
-def test_opt_in_overrides_only_envoy_and_never_injects_auth_or_publishes_ports():
+def test_generated_override_only_replaces_default_native_envoy_config():
     profile = yaml.safe_load(GATE["PROFILE"].read_text(encoding="utf-8"))
     assert set(profile) == {"services"}
     assert set(profile["services"]) == {"envoy"}
@@ -31,7 +31,7 @@ def test_opt_in_overrides_only_envoy_and_never_injects_auth_or_publishes_ports()
     canonical = yaml.safe_load(
         (ROOT / "config/envoy/envoy.yaml").read_text(encoding="utf-8")
     )
-    assert not any(
+    assert any(
         cluster["name"] == "issuance_native_grpc"
         for cluster in canonical["static_resources"]["clusters"]
     )

@@ -76,7 +76,7 @@ def compose_command(
     include_haip: bool = False,
     include_didcomm_authcrypt: bool = False,
     use_ghcr: bool = True,
-    issuance_owner: str = "legacy",
+    issuance_owner: str = "native",
 ) -> list[str]:
     if issuance_owner not in {"legacy", "native"}:
         raise ValueError("issuance owner must be legacy or native")
@@ -117,7 +117,7 @@ def rendered_config(
     include_haip: bool = False,
     include_didcomm_authcrypt: bool = False,
     use_ghcr: bool = True,
-    issuance_owner: str = "legacy",
+    issuance_owner: str = "native",
 ) -> dict[str, Any]:
     completed = subprocess.run(
         [
@@ -486,8 +486,12 @@ def main() -> int:
     parser.add_argument(
         "--issuance-owner",
         choices=("legacy", "native"),
-        default="legacy",
-        help="explicit gateway HTTP owner; native requires qualified source/artifacts; legacy reference remains the default",
+        default="native",
+        help=(
+            "native is the product default; the historical legacy value only "
+            "omits conformance-specific native overlays and does not reverse "
+            "the base composition's native ownership"
+        ),
     )
     parser.add_argument("--stack-manifest", type=Path)
     parser.add_argument("--stack-checksums", type=Path)

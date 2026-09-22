@@ -6170,3 +6170,20 @@ reconciliation, and one aggregate beta recording/device acceptance soak. The
 published `v0.1.76` artifact is release evidence, not deployed acceptance.
 Reachable unselected Python remains until its own retirement gates pass. DIDComm
 KMS corrections remain deferred; production is unchanged.
+
+### Universal issuance ownership checkpoint
+
+The current post-#842 source inventory is **120 native / 11 retained Python / 131
+total HTTP routes**, with all twelve issuance gRPC operations implemented in
+Rust. The exact language-neutral ownership contract and source-default changes
+are documented in
+[the universal ownership checkpoint](rust-migrations/issuance-universal-native-ownership.md).
+The retained Python remainder is limited to two organization-retention and nine
+physical-passport routes; it is not authorized for deletion by this checkpoint.
+
+Future base Compose, conformance, Kubernetes, canonical Envoy, Flow, and direct
+first-party demo/diagnostic compositions select the Rust owner for migrated
+capabilities. Self-host production stays unchanged, no deployment is performed,
+and `DIDCOMM-KMS-001` remains deferred. Next gates are maintainer review, hosted
+CI, sequential stack landing, aggregate beta deployment/acceptance, and then
+Python retirement only where universal selection and parity evidence permit it.

@@ -19,14 +19,17 @@ def sources():
     )
 
 
-def test_source_inventory_is_complete_and_base_profile_is_opt_in():
+def test_source_inventory_is_complete_and_base_defaults_native():
     GATE["assert_sources"](*sources())
-    assert "issuance-native" not in sources()[0]["services"]
+    assert "issuance-native" in sources()[0]["services"]
     command = GATE["EXTRACTION"]["OWNER"]["compose_command"](
         "marty-conformance-default"
     )
-    assert GATE["PROFILE"] not in command
-    assert GATE["IMAGES"] not in command
+    assert any(
+        str(value).endswith("docker-compose.profile.conformance-native.yml")
+        for value in command
+    )
+    assert any(str(value).endswith(GATE["IMAGES"]) for value in command)
 
 
 @pytest.mark.parametrize(
@@ -46,6 +49,7 @@ def test_source_inventory_is_complete_and_base_profile_is_opt_in():
         "structural-network",
         "extends",
         "token",
+        "base-token",
         "public-port",
     ],
 )
@@ -89,6 +93,8 @@ def test_source_guard_rejects_config_drift(fault):
         native["extends"]["file"] = GATE["EXTRACTION"]["COMMON"]
     elif fault == "token":
         edge["GRPC_SERVICE_TOKEN"] = ""
+    elif fault == "base-token":
+        base["services"]["organization"]["environment"].pop("GRPC_SERVICE_TOKEN")
     else:
         native["ports"] = ["8005:8005"]
     with pytest.raises(AssertionError):
@@ -321,7 +327,7 @@ def test_migrated_canvas_publication_routes_are_selected_without_legacy_signing_
 def assert_ci(workflow):
     job = workflow["jobs"]["test-rust-service-images"]
     assert not job.get("continue-on-error", False)
-    name = "Verify opt-in base native issuance configuration"
+    name = "Verify default-base native issuance configuration"
     matches = [i for i, item in enumerate(job["steps"]) if item.get("name") == name]
     assert len(matches) == 1
     index = matches[0]
@@ -351,7 +357,7 @@ def test_render_ci_cannot_be_disconnected(fault):
     step = next(
         item
         for item in steps
-        if item.get("name") == "Verify opt-in base native issuance configuration"
+        if item.get("name") == "Verify default-base native issuance configuration"
     )
     if fault == "removed":
         steps.remove(step)

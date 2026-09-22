@@ -8,7 +8,7 @@ import logging
 logging.basicConfig(level=logging.INFO, format='%(message)s')
 logger = logging.getLogger(__name__)
 
-ISSUANCE_URL = "http://localhost:8005"
+ISSUANCE_URL = "http://localhost:8000"
 TEMPLATE_ID = "50000000-0000-0000-0000-000000000010"
 ORG_ID = "00000000-0000-0000-0000-000000000001"
 APP_ID = "ca65845a-5ec7-4e1c-bb90-4fce6e429a4f"

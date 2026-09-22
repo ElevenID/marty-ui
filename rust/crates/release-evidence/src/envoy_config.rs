@@ -1,5 +1,5 @@
-//! Closed opt-in Envoy delta. This is configuration generation, not release
-//! attestation or runtime qualification. The canonical legacy owner stays intact.
+//! Closed Envoy native-ownership validation and legacy-source upgrade. This is
+//! configuration generation, not release attestation or runtime qualification.
 use serde_json::{json, Value};
 use std::io::{self, Write};
 
@@ -95,10 +95,75 @@ pub fn render(bytes: &[u8], descriptor: &[u8]) -> Result<Value, &'static str> {
         .pointer_mut("/static_resources/clusters")
         .and_then(Value::as_array_mut)
         .ok_or("Envoy clusters are missing")?;
+    let existing_native: Vec<_> = clusters
+        .iter()
+        .filter(|v| v["name"] == NATIVE_CLUSTER)
+        .collect();
     require(
-        !clusters.iter().any(|v| v["name"] == NATIVE_CLUSTER),
-        "Envoy native cluster already exists",
+        existing_native.len() <= 1,
+        "Envoy native issuance cluster is ambiguous",
     )?;
+    if let Some(native) = existing_native.first() {
+        require(
+            native["typed_extension_protocol_options"][PROTOCOL]["explicit_http_config"]
+                ["http2_protocol_options"]
+                == json!({}),
+            "Envoy issuance requires explicit HTTP2",
+        )?;
+        require(
+            native["load_assignment"]
+                == json!({"cluster_name":NATIVE_CLUSTER,"endpoints":[{"lb_endpoints":[{"endpoint":{"address":{"socket_address":{"address":"issuance-native","port_value":9005}}}}]}]}),
+            "Envoy native issuance endpoint changed",
+        )?;
+        require(
+            native["health_checks"].as_array().is_some_and(|v| {
+                v.len() == 1 && v[0]["grpc_health_check"]["service_name"] == SERVICE
+            }),
+            "Envoy issuance health contract changed",
+        )?;
+        let routes = model
+            .pointer(&format!("{HCM}{ROUTES}"))
+            .and_then(Value::as_array)
+            .ok_or("Envoy routes are missing")?;
+        for (prefix, path) in [(RPC_PREFIX, RPC_PATH), (HTTP_PREFIX, HTTP_PATH)] {
+            let matches: Vec<_> = routes
+                .iter()
+                .enumerate()
+                .filter(|(_, route)| route["match"]["prefix"] == prefix)
+                .map(|(index, _)| index)
+                .collect();
+            require(
+                matches.len() == 1,
+                "Envoy native issuance prefix is ambiguous",
+            )?;
+            let index = matches[0];
+            require(
+                routes[index]
+                    == json!({"match":{"prefix":prefix},"route":{"cluster":NATIVE_CLUSTER,"timeout":"60s"}}),
+                "Envoy native issuance route changed",
+            )?;
+            for previous in &routes[..index] {
+                let matcher = previous["match"]
+                    .as_object()
+                    .ok_or("Envoy preceding route matcher is invalid")?;
+                require(
+                    matcher
+                        .get("case_sensitive")
+                        .is_none_or(|value| *value == true),
+                    "Envoy preceding case-insensitive matcher requires review",
+                )?;
+                let unrelated = if let Some(other) = matcher.get("prefix").and_then(Value::as_str) {
+                    !path.starts_with(other)
+                } else if let Some(other) = matcher.get("path").and_then(Value::as_str) {
+                    path != other
+                } else {
+                    false
+                };
+                require(unrelated, "Envoy selected operation may be shadowed")?;
+            }
+        }
+        return Ok(model);
+    }
     let legacy: Vec<_> = clusters
         .iter()
         .filter(|v| v["name"] == "issuance_grpc")
@@ -181,7 +246,7 @@ pub fn render(bytes: &[u8], descriptor: &[u8]) -> Result<Value, &'static str> {
             };
             require(unrelated, "Envoy selected operation may be shadowed")?;
         }
-        routes.insert(index, json!({"match":{"path":path,"headers":[{"name":":method","string_match":{"exact":"POST"}}]},"route":{"cluster":NATIVE_CLUSTER,"timeout":"60s"}}));
+        routes[index]["route"]["cluster"] = json!(NATIVE_CLUSTER);
     }
     Ok(model)
 }

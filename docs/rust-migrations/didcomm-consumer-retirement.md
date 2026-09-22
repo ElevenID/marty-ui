@@ -28,9 +28,11 @@ requests before Python state or crypto work, with no runtime fallback. Self-host
 production remains legacy until a compatible immutable Credentials image is
 released and pinned. The
 language-neutral ownership contract is
-`contracts/didcomm-native-consumer-ownership.json`. Standalone Credentials still
-defaults to its legacy owner, so source deletion remains gated on an explicit
-decision about that supported surface; KMS correction remains separate.
+`contracts/didcomm-native-consumer-ownership.json`. The default base composition
+now selects Rust while retaining Python for the exact eleven-route remainder, so
+source deletion remains gated on migrating that remainder and aggregate
+acceptance; KMS correction remains separate. See
+[the universal ownership checkpoint](issuance-universal-native-ownership.md).
 
 The eight Canvas operations and standalone initiation/direct-delivery selection
 do not establish that every supported consumer has left Python. Renewal admission
@@ -39,12 +41,12 @@ is being implemented separately; see [its frozen evidence](credential-renewal-re
 | Consumer | Remaining retirement gate |
 | --- | --- |
 | Beta gateway | Direct delivery and initiation select Rust; remaining gates are coordinated artifacts and aggregate beta deployment/acceptance. |
-| Base Compose | Native remains explicit opt-in and delegates retained direct callers; decide the supported standalone legacy surface before deletion. |
+| Base Compose | Native owns migrated routes by default; retain Python for the exact two retention and nine physical-passport routes before deletion. |
 | Self-hosted | Production remains legacy; require a compatible immutable Credentials image and runtime qualification before activation or retirement. |
 | Kubernetes | Selected renderer adds the native owner and direct delegation; keep the unselected production source unchanged until deployment approval and acceptance. |
 | Flow | Native compositions select initiation gRPC; retain legacy physical-document HTTP and complete aggregate acceptance. |
-| Envoy | Exact initiation RPC and annotated HTTP routing are selectively native; retain eleven sibling RPCs and complete deployed response/authentication acceptance. |
-| Conformance | Native overlay is explicit with paired policy/CA mounts and direct delegation; preserve legacy reference execution. |
+| Envoy | All twelve migrated RPCs and annotated HTTP routing select Rust; complete deployed response/authentication acceptance. |
+| Conformance | Native is the default with paired policy/CA mounts and direct delegation; the historical `legacy` selector no longer reverses base native ownership. |
 
 Gateway `config.rs` deliberately aliases the native service URL to legacy when
 `ISSUANCE_NATIVE_SERVICE_URL` is absent. That is static configuration, not a
@@ -54,13 +56,9 @@ Python launch recognizers do not establish an active Python worker.
 
 ## Envoy boundary
 
-The canonical RPC is
-`/marty.ui.issuance.v1.IssuanceService/InitiateIssuance`; its annotation is
-`POST /v1/issuance/initiate`. With the existing transcoder's
-`match_incoming_request_route: true`, both exact routes need qualification before
-their respective legacy prefixes. Use a separate native cluster, not a wholesale
-replacement of `issuance_grpc`. Keep all eleven other methods on their current
-owner until separately qualified.
+The complete twelve-method gRPC contract and its annotated HTTP routes now use
+the separate native cluster. The retained eleven Python routes are HTTP-only and
+continue through the gateway's exact method/path selector.
 
 Native management initiation requires `x-service-token`. Public bearer tokens or
 API keys are not substitutes; do not inject a service token into unauthenticated
@@ -96,13 +94,16 @@ adapter retirement in Credentials PR #275 does not authorize further deletion.
 
 ## Explicit native conformance selection
 
-The conformance launcher retains `--issuance-owner legacy` as its default.
-`--issuance-owner native` adds a distinct native service and gateway URL, paired
+The conformance launcher defaults to `--issuance-owner native`, which adds the
+conformance-specific native image and gateway configuration, paired
 read-only CA mounts, and paired authcrypt policy mounts when `--didcomm-authcrypt`
 is selected. Native mode pairs the service token across the existing thirteen
-Rust/legacy clients and peers; it does not change Flow or Envoy targets. Missing
-required configuration, ambiguous mounts, token mismatches or legacy URL aliases
-fail validation. There is no automatic legacy fallback.
+Rust/legacy clients and peers. Flow and Envoy already select native through the
+base composition. Missing required configuration, ambiguous mounts, token
+mismatches or legacy URL aliases fail validation. There is no automatic legacy
+fallback. The accepted historical `legacy` value only omits these conformance-
+specific overlays; it does not restore full Python ownership now that the base
+composition is native.
 
 Beta and conformance share `docker-compose.service.issuance-native.yml` at the
 repository root. The former beta definition is frozen at `cb1a01656703896ce552bff42c140f154a97026a`
@@ -275,7 +276,10 @@ idempotent recovery/conflict, fresh keyed DIDComm rejection, anoncrypt/authcrypt
 refused wallet delivery and missing holder. Prove full responses, HTTP/2/protobuf
 transport, durable state and no extra sends; retain physical-document HTTP tests.
 
-### Batch 4: Envoy exact initiation routes
+### Historical Batch 4 proposal: Envoy exact initiation routes (superseded)
+
+This source snapshot predates universal gRPC ownership. Canonical Envoy now
+selects Rust for all twelve methods; retain the text below only as audit history.
 
 `config/envoy/envoy.yaml:69-73` and `:136-140` currently send both the entire
 issuance RPC prefix and `/v1/issuance/` to `issuance_grpc`, whose endpoint at
