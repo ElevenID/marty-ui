@@ -275,7 +275,7 @@ def test_shared_images_are_not_duplicated_and_packaging_paths_resolve():
     assert "DIDCOMM" not in image and "ports:" not in image
 
 
-def test_publication_exclusions_remain_on_legacy_not_selected_native_operations():
+def test_migrated_canvas_publication_routes_are_selected_without_legacy_signing_inputs():
     document = json.loads((ROOT / GATE["NATIVE"]["CAPABILITY_PATH"]).read_text())
     selected = {(item["method"], item["path"]) for item in document["native_http"]}
     template_contract = json.loads(
@@ -293,12 +293,14 @@ def test_publication_exclusions_remain_on_legacy_not_selected_native_operations(
     }
     assert len(template_routes) == 8
     assert selected_template_routes == template_routes
-    for path in (
-        "/v1/issued-credentials/{credential_id}/deliveries/canvas-credentials/publish",
-        "/v1/issuance/delivery-records/canvas-credentials/process-pending",
-        "/v1/issuance/delivery-records/canvas-credentials/run-automation-cycle",
-    ):
-        assert ("POST", path) not in selected
+    canvas_contract = json.loads(
+        (ROOT / "contracts/issuance-canvas-mirror.json").read_text()
+    )
+    canvas_routes = {
+        (item["method"], item["path"]) for item in canvas_contract["routes"]
+    }
+    assert len(canvas_routes) == 6
+    assert canvas_routes <= selected
     # Actual native signer consumes the same organization/DID identity, not
     # unreferenced legacy static key/profile-ID environment fields.
     signer = (

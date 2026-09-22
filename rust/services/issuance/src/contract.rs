@@ -1965,6 +1965,14 @@ pub fn validate_embedded_contract() -> Result<CoverageSummary, MmfError> {
                     "CANVAS_ALLOW_PRIVATE_BASE_URLS",
                     "CANVAS_BINDING_READINESS_MAX_AGE_SECONDS",
                     "CANVAS_ISSUANCE_EVIDENCE_MAX_AGE_SECONDS",
+                    "CANVAS_MIRROR_FAILURE_CRITICAL_ATTEMPTS",
+                    "CANVAS_MIRROR_FAILURE_WARNING_ATTEMPTS",
+                    "CANVAS_MIRROR_PUBLISH_INTERVAL_SECONDS",
+                    "CANVAS_MIRROR_STATUS_SYNC_INTERVAL_SECONDS",
+                    "CANVAS_MIRROR_WORKER_BATCH_LIMIT",
+                    "CANVAS_MIRROR_WORKER_ENABLED",
+                    "CANVAS_MIRROR_WORKER_RETRY_FAILED",
+                    "CANVAS_MIRROR_WORKER_RUN_ON_STARTUP",
                     "CANVAS_PORTABLE_INTEGRATION_ENABLED",
                 ]
             && coverage

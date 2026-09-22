@@ -165,11 +165,11 @@ impl GatewayContract {
             tags: BTreeSet::from(["gateway-internal".into()]),
         })?;
         table.add(RouteConfig {
-            name: "internal:issuance-native:public-discovery".into(),
+            name: "internal:issuance-native:composition".into(),
             pattern: "/__gateway/issuance-native/{path:path}".into(),
             match_type: RouteMatchType::Template,
             upstream_service: issuance_native::NATIVE_SERVICE.into(),
-            methods: BTreeSet::from([HttpMethod::Get]),
+            methods: BTreeSet::from([HttpMethod::Get, HttpMethod::Post, HttpMethod::Put]),
             host: None,
             required_headers: BTreeMap::new(),
             rewrite_path: Some("/{path}".into()),
@@ -957,6 +957,15 @@ mod tests {
                 issuance_native::upstream_service(method, path),
                 issuance_native::NATIVE_SERVICE,
                 "migrated management route must remain native-owned: {method:?} {path}"
+            );
+            let internal_path = format!("/__gateway/issuance-native{path}");
+            assert_eq!(
+                route_for(&proxy, method, &internal_path)
+                    .expect("native management helper route")
+                    .route
+                    .upstream_service,
+                issuance_native::NATIVE_SERVICE,
+                "internal management transport must be native-owned: {method:?} {path}"
             );
         }
         let internal_management_path = format!(

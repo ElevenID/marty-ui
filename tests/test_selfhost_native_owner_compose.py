@@ -94,6 +94,7 @@ def models():
             "SERVICE_NAME": "issuance_native",
             "ISSUANCE_GRPC_ENABLED": "true",
             "RP_GRPC_TARGET": "revocation-profile:9013",
+            **GATE["NATIVE_ADDITIVE"],
         },
         "secrets": [{"source": "token"}],
         "depends_on": {
