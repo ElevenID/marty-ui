@@ -83,6 +83,10 @@ def test_issuance_image_smoke_uses_the_shared_migration_fixture() -> None:
     assert 'include_str!("fixtures/oid4vci_migration_base.sql")' in contract
     assert "issuance-postgres" in smoke
     assert "/unused" not in smoke
+    assert smoke.count("--host 127.0.0.1") == 4
+    assert 'POSTGRES_PASSWORD="$postgres_password"' in smoke
+    assert smoke.count('PGPASSWORD="$postgres_password"') == 3
+    assert 'DATABASE_URL="postgresql://marty:${postgres_password}@issuance-postgres/marty"' in smoke
     assert "access_token_expires_at" in smoke
     assert "ux_issuance_events_oid4vci_notification_id" in smoke
 
