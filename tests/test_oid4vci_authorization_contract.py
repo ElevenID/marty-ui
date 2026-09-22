@@ -115,24 +115,14 @@ def test_slice_has_all_seven_operations_and_real_authentication_boundaries() -> 
     assert contract["ownership"]["estimated_python_route_body_lines"] >= 490
 
 
-def test_public_protocol_is_native_while_management_remains_legacy() -> None:
+def test_all_frozen_oid4vci_routes_are_native_after_management_cutover() -> None:
     contract = _json(CONTRACT_PATH)
     coverage = _json(ROOT / "contracts" / "issuance-native-coverage.json")
     native = {route["operation"] for route in coverage["native_http"]}
     operations = {route["operation"] for route in contract["routes"]}
 
-    assert operations & native == {
-        "authorize",
-        "pushed_authorization_request",
-        "deferred_credential",
-        "notification_endpoint",
-    }
-    assert operations - native == {
-        "put_oid4vci_registered_client",
-        "revoke_transaction",
-        "list_credentials",
-    }
-    assert coverage["remaining"]["http"] == 20
+    assert operations <= native
+    assert coverage["remaining"]["http"] == 17
 
     surface = _json(ROOT / "contracts" / "issuance-runtime-surface.json")
     frozen_surface = {
