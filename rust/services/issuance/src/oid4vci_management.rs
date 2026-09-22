@@ -135,12 +135,26 @@ pub trait Oid4vciManagementRepository: Send + Sync {
     ) -> Result<ManagementTransaction, Oid4vciManagementRepositoryError>;
 }
 
+#[derive(Clone, Copy, Debug, Error, Eq, PartialEq)]
+pub enum RegisteredClientValidationError {
+    #[error("organization_id is required")]
+    OrganizationIdRequired,
+    #[error("client_id must contain between 1 and 512 characters")]
+    ClientIdLength,
+    #[error("jwks must contain only public ES256 P-256 verification keys")]
+    Jwks,
+    #[error("redirect_uris must be absolute HTTPS URIs without fragments")]
+    RedirectUriInvalid,
+    #[error("redirect_uris must not contain duplicates")]
+    RedirectUriDuplicate,
+}
+
 #[derive(Clone, Debug, Error, Eq, PartialEq)]
 pub enum Oid4vciManagementError {
     #[error(transparent)]
     Security(#[from] TransactionReadError),
-    #[error("Invalid registered-client field: {0}")]
-    InvalidRegistration(&'static str),
+    #[error("Invalid registered-client request: {0}")]
+    InvalidRegistration(RegisteredClientValidationError),
     #[error("Registered-client JWK {0} contains private key material")]
     PrivateKeyMaterial(usize),
     #[error("Registered client was not persisted")]
@@ -262,6 +276,7 @@ impl Oid4vciManagementService {
             &transaction.organization_id,
             true,
         )?;
+        let mut effective_reason = reason.map(str::to_owned);
         if let Some(credential) = self
             .repository
             .credential_for_transaction(&transaction.id)
@@ -273,15 +288,17 @@ impl Oid4vciManagementService {
             {
                 return Err(Oid4vciManagementError::CredentialTenantMismatch);
             }
-            self.lifecycle
+            let status = self
+                .lifecycle
                 .reconcile_revocation(&credential.id, trusted_organization, reason)
                 .await?;
+            effective_reason = status.reason;
         }
         let transaction = if transaction.status == "revoked" {
             transaction
         } else {
             self.repository
-                .revoke_transaction(&transaction.id, reason)
+                .revoke_transaction(&transaction.id, effective_reason.as_deref())
                 .await
                 .map_err(|_| Oid4vciManagementError::RepositoryUnavailable)?
         };
@@ -295,23 +312,28 @@ fn validate_registration(
     let organization_id = request.organization_id.trim().to_owned();
     if organization_id.is_empty() {
         return Err(Oid4vciManagementError::InvalidRegistration(
-            "organization_id",
+            RegisteredClientValidationError::OrganizationIdRequired,
         ));
     }
     let client_id = request.client_id.trim().to_owned();
     if client_id.is_empty() || client_id.chars().count() > 512 {
-        return Err(Oid4vciManagementError::InvalidRegistration("client_id"));
+        return Err(Oid4vciManagementError::InvalidRegistration(
+            RegisteredClientValidationError::ClientIdLength,
+        ));
     }
     if let Some(index) = registered_client_private_key_index(&request.jwks) {
         return Err(Oid4vciManagementError::PrivateKeyMaterial(index));
     }
-    let jwks = normalize_registered_client_jwks(&request.jwks)
-        .map_err(|_| Oid4vciManagementError::InvalidRegistration("jwks"))?;
+    let jwks = normalize_registered_client_jwks(&request.jwks).map_err(|_| {
+        Oid4vciManagementError::InvalidRegistration(RegisteredClientValidationError::Jwks)
+    })?;
     let mut unique = BTreeSet::new();
     for redirect in &request.redirect_uris {
         validate_redirect_uri(redirect)?;
         if !unique.insert(redirect) {
-            return Err(Oid4vciManagementError::InvalidRegistration("redirect_uris"));
+            return Err(Oid4vciManagementError::InvalidRegistration(
+                RegisteredClientValidationError::RedirectUriDuplicate,
+            ));
         }
     }
     Ok(RegisteredClientWrite {
@@ -324,8 +346,11 @@ fn validate_registration(
 }
 
 fn validate_redirect_uri(value: &str) -> Result<(), Oid4vciManagementError> {
-    let parsed = Url::parse(value)
-        .map_err(|_| Oid4vciManagementError::InvalidRegistration("redirect_uris"))?;
+    let parsed = Url::parse(value).map_err(|_| {
+        Oid4vciManagementError::InvalidRegistration(
+            RegisteredClientValidationError::RedirectUriInvalid,
+        )
+    })?;
     let loopback = match parsed.host() {
         Some(Host::Domain(host)) => host.eq_ignore_ascii_case("localhost"),
         Some(Host::Ipv4(address)) => address.is_loopback(),
@@ -333,11 +358,11 @@ fn validate_redirect_uri(value: &str) -> Result<(), Oid4vciManagementError> {
         None => false,
     };
     if parsed.fragment().is_some()
-        || !parsed.username().is_empty()
-        || parsed.password().is_some()
         || (parsed.scheme() != "https" && !(parsed.scheme() == "http" && loopback))
     {
-        return Err(Oid4vciManagementError::InvalidRegistration("redirect_uris"));
+        return Err(Oid4vciManagementError::InvalidRegistration(
+            RegisteredClientValidationError::RedirectUriInvalid,
+        ));
     }
     Ok(())
 }
@@ -420,15 +445,19 @@ mod tests {
         for redirect in [
             "http://wallet.example/callback",
             "https://wallet.example/callback#fragment",
-            "https://user:pass@wallet.example/callback",
         ] {
             let mut request = valid_request();
             request.redirect_uris = vec![redirect.to_owned()];
             assert_eq!(
                 validate_registration(request),
-                Err(Oid4vciManagementError::InvalidRegistration("redirect_uris"))
+                Err(Oid4vciManagementError::InvalidRegistration(
+                    RegisteredClientValidationError::RedirectUriInvalid
+                ))
             );
         }
+        let mut userinfo = valid_request();
+        userinfo.redirect_uris = vec!["https://user:pass@wallet.example/callback".to_owned()];
+        assert!(validate_registration(userinfo).is_ok());
         let mut loopback = valid_request();
         loopback.redirect_uris = vec!["http://127.0.0.1:8080/callback".to_owned()];
         assert!(validate_registration(loopback).is_ok());

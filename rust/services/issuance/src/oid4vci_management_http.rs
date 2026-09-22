@@ -143,13 +143,11 @@ fn management_error(error: Oid4vciManagementError, input: Option<Value>) -> Resp
     ) {
         return missing_organization_query();
     }
-    if let Oid4vciManagementError::InvalidRegistration(field) = error {
-        let message = if field == "jwks" {
-            "Value error, jwks must contain only public ES256 P-256 verification keys"
-        } else {
-            "Value error, registered client request is invalid"
-        };
-        return validation_error(input.unwrap_or(Value::Null), message);
+    if let Oid4vciManagementError::InvalidRegistration(reason) = error {
+        return validation_error(
+            input.unwrap_or(Value::Null),
+            &format!("Value error, {reason}"),
+        );
     }
     if let Oid4vciManagementError::PrivateKeyMaterial(index) = error {
         return validation_error(

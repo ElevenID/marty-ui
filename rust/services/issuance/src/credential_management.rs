@@ -395,12 +395,21 @@ impl CredentialManagementService {
                 .await;
         }
 
+        let persisted_reason = credential.revocation_reason.as_deref();
         self.publisher
-            .publish(&credential, CredentialLifecycleAction::Revoke, reason)
+            .publish(
+                &credential,
+                CredentialLifecycleAction::Revoke,
+                persisted_reason,
+            )
             .await
             .map_err(|error| CredentialManagementError::PublicationUnavailable(error.0))?;
         self.repository
-            .synchronize_canvas(&credential, CredentialLifecycleAction::Revoke, reason)
+            .synchronize_canvas(
+                &credential,
+                CredentialLifecycleAction::Revoke,
+                persisted_reason,
+            )
             .await
             .map_err(|error| match error {
                 CanvasLifecycleSyncError::Port(error) => {

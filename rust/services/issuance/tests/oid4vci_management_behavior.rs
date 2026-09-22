@@ -399,6 +399,105 @@ async fn registration_rejects_private_material_and_tenant_mismatch_before_save()
 }
 
 #[tokio::test]
+async fn registration_preserves_field_specific_validation_errors_before_repository_access() {
+    let cases = [
+        (
+            json!({
+                "organization_id":" ", "client_id":"wallet-a",
+                "jwks":public_jwks(), "redirect_uris":[]
+            }),
+            "Value error, organization_id is required",
+        ),
+        (
+            json!({
+                "organization_id":"org-a", "client_id":"",
+                "jwks":public_jwks(), "redirect_uris":[]
+            }),
+            "Value error, client_id must contain between 1 and 512 characters",
+        ),
+        (
+            json!({
+                "organization_id":"org-a", "client_id":"x".repeat(513),
+                "jwks":public_jwks(), "redirect_uris":[]
+            }),
+            "Value error, client_id must contain between 1 and 512 characters",
+        ),
+        (
+            json!({
+                "organization_id":"org-a", "client_id":"wallet-a",
+                "jwks":public_jwks(), "redirect_uris":["http://wallet.example/callback"]
+            }),
+            "Value error, redirect_uris must be absolute HTTPS URIs without fragments",
+        ),
+        (
+            json!({
+                "organization_id":"org-a", "client_id":"wallet-a",
+                "jwks":public_jwks(),
+                "redirect_uris":[
+                    "https://wallet.example/callback",
+                    "https://wallet.example/callback"
+                ]
+            }),
+            "Value error, redirect_uris must not contain duplicates",
+        ),
+    ];
+
+    for (request_body, expected_message) in cases {
+        let management = Arc::new(ManagementState::default());
+        let calls = Arc::new(Mutex::new(vec![]));
+        let request = Request::put("/v1/issuance/oid4vci-clients")
+            .header("x-api-key", "management-key")
+            .header("x-organization-id", "org-a")
+            .header("content-type", "application/json")
+            .body(Body::from(request_body.to_string()))
+            .unwrap();
+
+        let (status, body) = response(request, app(management.clone(), calls.clone())).await;
+
+        assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY);
+        assert_eq!(body["detail"][0]["input"], request_body);
+        assert_eq!(body["detail"][0]["msg"], expected_message);
+        assert!(management.calls.lock().unwrap().is_empty());
+        assert!(calls.lock().unwrap().is_empty());
+    }
+}
+
+#[tokio::test]
+async fn registration_preserves_https_userinfo_redirect_uri() {
+    let management = Arc::new(ManagementState::default());
+    *management.persist_registration.lock().unwrap() = true;
+    let calls = Arc::new(Mutex::new(vec![]));
+    let redirect_uri = "https://user:pass@wallet.example/callback";
+    let request = Request::put("/v1/issuance/oid4vci-clients")
+        .header("x-api-key", "management-key")
+        .header("x-organization-id", "org-a")
+        .header("content-type", "application/json")
+        .body(Body::from(
+            json!({
+                "organization_id":"org-a", "client_id":"wallet-a",
+                "jwks":public_jwks(), "redirect_uris":[redirect_uri]
+            })
+            .to_string(),
+        ))
+        .unwrap();
+
+    let (status, body) = response(request, app(management.clone(), calls)).await;
+
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(body["redirect_uris"], json!([redirect_uri]));
+    assert_eq!(
+        management
+            .registered
+            .lock()
+            .unwrap()
+            .as_ref()
+            .unwrap()
+            .redirect_uris,
+        vec![redirect_uri]
+    );
+}
+
+#[tokio::test]
 async fn registration_authenticates_before_parsing_the_body() {
     let management = Arc::new(ManagementState::default());
     let calls = Arc::new(Mutex::new(vec![]));
@@ -483,6 +582,7 @@ async fn registration_persists_and_returns_canonical_jose_defaults() {
 
 struct RevocationManagementRepository {
     order: Arc<Mutex<Vec<&'static str>>>,
+    reasons: Arc<Mutex<Vec<String>>>,
     transaction: Option<ManagementTransaction>,
     binding: Option<TransactionCredentialBinding>,
 }
@@ -526,6 +626,10 @@ impl Oid4vciManagementRepository for RevocationManagementRepository {
         reason: Option<&str>,
     ) -> Result<ManagementTransaction, Oid4vciManagementRepositoryError> {
         self.order.lock().unwrap().push("transaction:save");
+        self.reasons
+            .lock()
+            .unwrap()
+            .push(format!("transaction:{}", reason.unwrap_or("<none>")));
         Ok(ManagementTransaction {
             id: transaction_id.to_owned(),
             organization_id: "org-a".to_owned(),
@@ -538,6 +642,7 @@ impl Oid4vciManagementRepository for RevocationManagementRepository {
 
 struct RevocationLifecycleRepository {
     order: Arc<Mutex<Vec<&'static str>>>,
+    reasons: Arc<Mutex<Vec<String>>>,
     credential: ManagedCredential,
 }
 
@@ -565,15 +670,20 @@ impl CredentialManagementRepository for RevocationLifecycleRepository {
         &self,
         _credential: &ManagedCredential,
         _action: CredentialLifecycleAction,
-        _reason: Option<&str>,
+        reason: Option<&str>,
     ) -> Result<(), CanvasLifecycleSyncError> {
         self.order.lock().unwrap().push("canvas:sync");
+        self.reasons
+            .lock()
+            .unwrap()
+            .push(format!("canvas:{}", reason.unwrap_or("<none>")));
         Ok(())
     }
 }
 
 struct RevocationPublisher {
     order: Arc<Mutex<Vec<&'static str>>>,
+    reasons: Arc<Mutex<Vec<String>>>,
     fail: bool,
 }
 
@@ -583,9 +693,13 @@ impl CredentialStatusPublisher for RevocationPublisher {
         &self,
         _credential: &ManagedCredential,
         _action: CredentialLifecycleAction,
-        _reason: Option<&str>,
+        reason: Option<&str>,
     ) -> Result<(), CredentialManagementPortError> {
         self.order.lock().unwrap().push("canonical:publish");
+        self.reasons
+            .lock()
+            .unwrap()
+            .push(format!("canonical:{}", reason.unwrap_or("<none>")));
         if self.fail {
             Err(CredentialManagementPortError("sensitive cause".to_owned()))
         } else {
@@ -610,27 +724,52 @@ fn revocation_app(
     credential_organization: &str,
     publication_fails: bool,
 ) -> axum::Router {
+    revocation_app_with_credential(
+        order,
+        Arc::default(),
+        transaction,
+        binding,
+        credential_organization,
+        ManagedCredentialStatus::Active,
+        None,
+        publication_fails,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+fn revocation_app_with_credential(
+    order: Arc<Mutex<Vec<&'static str>>>,
+    reasons: Arc<Mutex<Vec<String>>>,
+    transaction: Option<ManagementTransaction>,
+    binding: Option<TransactionCredentialBinding>,
+    credential_organization: &str,
+    credential_status: ManagedCredentialStatus,
+    credential_reason: Option<&str>,
+    publication_fails: bool,
+) -> axum::Router {
     let now = Utc.with_ymd_and_hms(2026, 9, 21, 12, 34, 56).unwrap();
     let lifecycle = CredentialManagementService::new(
         Arc::new(RevocationLifecycleRepository {
             order: order.clone(),
+            reasons: reasons.clone(),
             credential: ManagedCredential {
                 id: "credential-a".to_owned(),
                 transaction_id: "tx-a".to_owned(),
                 organization_id: credential_organization.to_owned(),
                 credential_template_id: "template-a".to_owned(),
                 issuer_did: None,
-                status: ManagedCredentialStatus::Active,
+                status: credential_status,
                 status_updated_at: now,
-                revoked: false,
-                revoked_at: None,
-                revocation_reason: None,
+                revoked: credential_status == ManagedCredentialStatus::Revoked,
+                revoked_at: (credential_status == ManagedCredentialStatus::Revoked).then_some(now),
+                revocation_reason: credential_reason.map(str::to_owned),
                 revocation_profile_id: Some("profile-a".to_owned()),
                 status_list_entries: vec![],
             },
         }),
         Arc::new(RevocationPublisher {
             order: order.clone(),
+            reasons: reasons.clone(),
             fail: publication_fails,
         }),
         Arc::new(RevocationEvents(order.clone())),
@@ -638,6 +777,7 @@ fn revocation_app(
     let service = Oid4vciManagementService::new(
         Arc::new(RevocationManagementRepository {
             order,
+            reasons,
             transaction,
             binding,
         }),
@@ -728,6 +868,50 @@ async fn revocation_orders_canonical_and_local_credential_before_transaction_com
             "credential:persist",
             "canvas:sync",
             "event:emit",
+            "transaction:save"
+        ]
+    );
+}
+
+#[tokio::test]
+async fn revocation_retry_uses_the_persisted_credential_reason_everywhere() {
+    let order = Arc::new(Mutex::new(vec![]));
+    let reasons = Arc::new(Mutex::new(vec![]));
+    let app = revocation_app_with_credential(
+        order.clone(),
+        reasons.clone(),
+        Some(transaction("org-a")),
+        Some(binding("org-a")),
+        "org-a",
+        ManagedCredentialStatus::Revoked,
+        Some("original reason"),
+        false,
+    );
+
+    let (status, body) = response(
+        revoke_request_with_reason("org-a", "replacement reason"),
+        app,
+    )
+    .await;
+
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(body["revocation_reason"], "original reason");
+    assert_eq!(
+        *reasons.lock().unwrap(),
+        vec![
+            "canonical:original reason",
+            "canvas:original reason",
+            "transaction:original reason"
+        ]
+    );
+    assert_eq!(
+        *order.lock().unwrap(),
+        vec![
+            "transaction:get",
+            "credential-binding:get",
+            "credential:get",
+            "canonical:publish",
+            "canvas:sync",
             "transaction:save"
         ]
     );
