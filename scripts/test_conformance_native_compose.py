@@ -87,16 +87,20 @@ def assert_native_delta(legacy, actual):
     assert actual == expected, "Native selection changed an unowned existing field"
 
 
-def assert_beta_token_rate_repair(previous, actual):
-    """One explicit repair, not a rewrite of the frozen original definition."""
+def assert_beta_shared_setting_repairs(previous, actual):
+    """Reviewed shared settings only, not a frozen-definition rewrite."""
     expected = deepcopy(previous)
     before = expected["services"]["issuance-native"]["environment"]
-    assert "TOKEN_RATE_LIMIT" not in before
-    before["TOKEN_RATE_LIMIT"] = previous["services"]["issuance"]["environment"][
-        "TOKEN_RATE_LIMIT"
-    ]
+    legacy = previous["services"]["issuance"]["environment"]
+    for setting in (
+        "ALLOWED_REDIRECT_URIS",
+        "ISSUANCE_AUTH_SESSION_TTL_MINUTES",
+        "TOKEN_RATE_LIMIT",
+    ):
+        assert setting not in before
+        before[setting] = legacy[setting]
     assert actual == expected, (
-        "Beta changed outside the exact token-rate binding repair"
+        "Beta changed outside the reviewed shared-setting repairs"
     )
 
 
@@ -134,20 +138,22 @@ def run(command):
     base_source = yaml.safe_load(
         (ROOT / "docker-compose.base.yml").read_text(encoding="utf-8")
     )
-    token_expression = base_source["services"]["issuance"]["environment"][
-        "TOKEN_RATE_LIMIT"
-    ]
+    legacy_environment = base_source["services"]["issuance"]["environment"]
+    token_expression = legacy_environment["TOKEN_RATE_LIMIT"]
     assert token_expression == "${TOKEN_RATE_LIMIT:-30}"
     expected_common = deepcopy(frozen)
-    assert (
-        "TOKEN_RATE_LIMIT"
-        not in expected_common["services"]["issuance-native"]["environment"]
-    )
-    expected_common["services"]["issuance-native"]["environment"][
-        "TOKEN_RATE_LIMIT"
-    ] = token_expression
+    expected_environment = expected_common["services"]["issuance-native"][
+        "environment"
+    ]
+    for setting in (
+        "ALLOWED_REDIRECT_URIS",
+        "ISSUANCE_AUTH_SESSION_TTL_MINUTES",
+        "TOKEN_RATE_LIMIT",
+    ):
+        assert setting not in expected_environment
+        expected_environment[setting] = legacy_environment[setting]
     assert common == expected_common, (
-        "Shared service changed beyond the governed token-rate repair"
+        "Shared service changed beyond the governed shared-setting repairs"
     )
     assert set(common) == {"services"} and set(common["services"]) == {
         "issuance-native"
@@ -196,7 +202,7 @@ def run(command):
             {key: "synthetic-custom" for key in optional},
         ):
             effective = {**values, **overrides}
-            assert_beta_token_rate_repair(
+            assert_beta_shared_setting_repairs(
                 beta_binding(True, effective), beta_binding(False, effective)
             )
         for configured, expected_rate in TOKEN_RATE_CASES:
@@ -204,7 +210,7 @@ def run(command):
             if configured is not None:
                 effective["TOKEN_RATE_LIMIT"] = configured
             actual = beta_binding(False, effective)
-            assert_beta_token_rate_repair(beta_binding(True, effective), actual)
+            assert_beta_shared_setting_repairs(beta_binding(True, effective), actual)
             assert (
                 actual["services"]["issuance-native"]["environment"]["TOKEN_RATE_LIMIT"]
                 == expected_rate
@@ -281,7 +287,7 @@ def run(command):
                         == expected_rate
                     )
     print(
-        "PASS: beta whole-model preservation with one explicit token-rate repair; four native conformance compositions x five token-rate inputs. Configuration only, not runtime acceptance."
+        "PASS: beta whole-model preservation with reviewed shared-setting repairs; four native conformance compositions x five token-rate inputs. Configuration only, not runtime acceptance."
     )
 
 

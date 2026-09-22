@@ -112,8 +112,10 @@ def test_token_capacity_is_paired_without_rejecting_legacy_zero(rate):
         )
 
 
-@pytest.mark.parametrize("fault", [None, "rate", "other-field", "rewritten-before"])
-def test_beta_token_repair_guard_accepts_only_one_source_derived_delta(fault):
+@pytest.mark.parametrize(
+    "fault", [None, "rate", "authorization", "other-field", "rewritten-before"]
+)
+def test_beta_shared_setting_guard_accepts_only_source_derived_deltas(fault):
     import runpy
 
     gate = runpy.run_path(
@@ -121,21 +123,37 @@ def test_beta_token_repair_guard_accepts_only_one_source_derived_delta(fault):
     )
     previous = model()
     previous["services"]["issuance"]["environment"]["TOKEN_RATE_LIMIT"] = "1200"
-    previous["services"]["issuance-native"]["environment"].pop("TOKEN_RATE_LIMIT")
+    for setting in (
+        "ALLOWED_REDIRECT_URIS",
+        "ISSUANCE_AUTH_SESSION_TTL_MINUTES",
+        "TOKEN_RATE_LIMIT",
+    ):
+        previous["services"]["issuance-native"]["environment"].pop(setting)
     actual = deepcopy(previous)
-    actual["services"]["issuance-native"]["environment"]["TOKEN_RATE_LIMIT"] = "1200"
-    gate["assert_beta_token_rate_repair"](previous, actual)
+    for setting in (
+        "ALLOWED_REDIRECT_URIS",
+        "ISSUANCE_AUTH_SESSION_TTL_MINUTES",
+        "TOKEN_RATE_LIMIT",
+    ):
+        actual["services"]["issuance-native"]["environment"][setting] = previous[
+            "services"
+        ]["issuance"]["environment"][setting]
+    gate["assert_beta_shared_setting_repairs"](previous, actual)
     if fault == "rate":
         actual["services"]["issuance-native"]["environment"]["TOKEN_RATE_LIMIT"] = "30"
+    elif fault == "authorization":
+        actual["services"]["issuance-native"]["environment"][
+            "ISSUANCE_AUTH_SESSION_TTL_MINUTES"
+        ] = "different"
     elif fault == "other-field":
         actual["services"]["gateway"]["environment"]["ISSUANCE_API_KEY"] = "changed"
     elif fault == "rewritten-before":
-        previous["services"]["issuance-native"]["environment"]["TOKEN_RATE_LIMIT"] = (
-            "1200"
-        )
+        previous["services"]["issuance-native"]["environment"][
+            "ALLOWED_REDIRECT_URIS"
+        ] = "already-present"
     if fault:
         with pytest.raises(AssertionError):
-            gate["assert_beta_token_rate_repair"](previous, actual)
+            gate["assert_beta_shared_setting_repairs"](previous, actual)
 
 
 def model(*, local=False, authcrypt=False):
@@ -154,6 +172,8 @@ def model(*, local=False, authcrypt=False):
             "CREDENTIAL_TEMPLATE_SERVICE_URL",
             "REVOCATION_PROFILE_SERVICE_URL",
             "ISSUANCE_OFFER_TTL_MINUTES",
+            "ISSUANCE_AUTH_SESSION_TTL_MINUTES",
+            "ALLOWED_REDIRECT_URIS",
             "VCDM_RELATED_RESOURCE_URLS",
             "UNIVERSAL_RESOLVER_URL",
             "DIDCOMM_DID_WEB_INTERNAL_BASE_URL",
@@ -299,6 +319,12 @@ def test_unknown_owner_never_aliases_legacy(owner):
         ),
         lambda m: m["services"]["issuance-native"]["environment"].update(
             ISSUANCE_OFFER_TTL_MINUTES="1"
+        ),
+        lambda m: m["services"]["issuance-native"]["environment"].update(
+            ISSUANCE_AUTH_SESSION_TTL_MINUTES="1"
+        ),
+        lambda m: m["services"]["issuance-native"]["environment"].update(
+            ALLOWED_REDIRECT_URIS="https://different.example/callback"
         ),
         lambda m: m["services"]["issuance-native"]["environment"].update(
             DIDCOMM_ALLOW_PRIVATE_IPS="false"

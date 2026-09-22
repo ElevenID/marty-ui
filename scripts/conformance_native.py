@@ -163,6 +163,8 @@ def validate_model(
         for key in (
             *REQUIRED_ENVIRONMENT,
             "ISSUANCE_OFFER_TTL_MINUTES",
+            "ISSUANCE_AUTH_SESSION_TTL_MINUTES",
+            "ALLOWED_REDIRECT_URIS",
             "VCDM_RELATED_RESOURCE_URLS",
             "UNIVERSAL_RESOLVER_URL",
             "DIDCOMM_DID_WEB_INTERNAL_BASE_URL",
