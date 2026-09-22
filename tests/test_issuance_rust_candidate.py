@@ -70,6 +70,23 @@ def test_oid4vci_migration_postgres_contract_is_required_in_real_database_ci() -
     ), "the following transaction suite must recreate tables after the rollback fixture"
 
 
+def test_issuance_image_smoke_uses_the_shared_migration_fixture() -> None:
+    workflow = text(".github/workflows/ci.yml")
+    smoke = text("scripts/smoke-issuance-image.sh")
+    contract = text(
+        "rust/services/issuance/tests/oid4vci_migration_postgres_contract.rs"
+    )
+    fixture = "rust/services/issuance/tests/fixtures/oid4vci_migration_base.sql"
+
+    assert "bash scripts/smoke-issuance-image.sh marty-issuance:ci" in workflow
+    assert fixture in smoke
+    assert 'include_str!("fixtures/oid4vci_migration_base.sql")' in contract
+    assert "issuance-postgres" in smoke
+    assert "/unused" not in smoke
+    assert "access_token_expires_at" in smoke
+    assert "ux_issuance_events_oid4vci_notification_id" in smoke
+
+
 def test_frozen_surface_provenance_and_coverage_are_complete() -> None:
     surface_bytes = (ROOT / "contracts/issuance-runtime-surface.json").read_bytes()
     surface = json.loads(surface_bytes)
