@@ -165,6 +165,47 @@ def test_conformance_reuses_manifest_binding_and_verifies_its_source_floor(
     coverage = {
         "schema": "marty.issuance-native-coverage/v1",
         "native_http": [
+            *[
+                {
+                    "method": method,
+                    "path": path,
+                    "operation": operation,
+                    "oid4vci_authorization_behavior_contract": True,
+                }
+                for method, path, operation in [
+                    ("GET", "/v1/issuance/authorize", "authorize"),
+                    (
+                        "POST",
+                        "/v1/issuance/par",
+                        "pushed_authorization_request",
+                    ),
+                    (
+                        "POST",
+                        "/v1/issuance/deferred-credential",
+                        "deferred_credential",
+                    ),
+                    (
+                        "POST",
+                        "/v1/issuance/notification",
+                        "notification_endpoint",
+                    ),
+                    (
+                        "PUT",
+                        "/v1/issuance/oid4vci-clients",
+                        "put_oid4vci_registered_client",
+                    ),
+                    (
+                        "POST",
+                        "/v1/issuance/transactions/{tx_id}/revoke",
+                        "revoke_transaction",
+                    ),
+                    (
+                        "GET",
+                        "/v1/issuance/credentials",
+                        "list_credentials",
+                    ),
+                ]
+            ],
             {
                 "method": "POST",
                 "path": "/v1/issuance/initiate",
