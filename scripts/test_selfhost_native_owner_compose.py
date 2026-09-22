@@ -90,6 +90,7 @@ def assert_input_inventory():
         key: model["x-issuance-application-env"].get(key)
         for key in SHARED_SETTINGS
     } == SHARED_SETTINGS
+    assert {key: native.get(key) for key in NATIVE_ADDITIVE} == NATIVE_ADDITIVE
     expected_omitted = LOADED_INPUTS | EXPLICIT_POLICY | CONFIG_META | UNFORWARDED
     actual_omitted = inputs - set(native)
     assert actual_omitted == expected_omitted, (
@@ -134,13 +135,19 @@ def assert_signing_binding(model):
     assert target != defaults[0], "Separate container must not use loopback fallback"
 
 
-def assert_models(before, after):
+def assert_models(
+    before,
+    after,
+    *,
+    shared_additions=SHARED_ADDITIONS,
+    native_additive=NATIVE_ADDITIVE,
+):
     preserved = deepcopy(after)
     native = GATE["native_dispatcher_model"](
         preserved["services"].pop("issuance-native")
     )
     shared = preserved.pop("x-issuance-application-env")
-    shared_additions = {key: shared[key] for key in SHARED_ADDITIONS}
+    assert {key: shared[key] for key in SHARED_ADDITIONS} == shared_additions
     legacy_after = preserved["services"]["issuance"]["environment"]
     assert {
         key: legacy_after.pop(key) for key in SHARED_ADDITIONS
@@ -183,7 +190,7 @@ def assert_models(before, after):
         SERVICE_NAME="issuance_native",
         ISSUANCE_GRPC_ENABLED="true",
         RP_GRPC_TARGET="revocation-profile:9013",
-        **NATIVE_ADDITIVE,
+        **native_additive,
     )
     expected = {
         "build": {
@@ -227,7 +234,19 @@ def interpolated_models():
     required = set(re.findall(r"\$\{([A-Z0-9_]+):\?", original))
     assert required == set(re.findall(r"\$\{([A-Z0-9_]+):\?", current))
     environment = yaml.safe_load(original)["services"]["issuance"]["environment"]
-    variables = set(re.findall(r"\$\{([A-Z0-9_]+):-", str(environment))) - required
+    variables = (
+        set(re.findall(r"\$\{([A-Z0-9_]+):-", str(environment)))
+        | set(SHARED_ADDITIONS)
+        | set(NATIVE_ADDITIVE)
+    ) - required
+
+    def rendered_additions(templates, values):
+        rendered = {}
+        for key, template in templates.items():
+            match = re.fullmatch(rf"\$\{{{key}:-([^}}]*)\}}", template)
+            assert match, f"Unsupported closed interpolation for {key}"
+            rendered[key] = values.get(key) or match.group(1)
+        return rendered
     with tempfile.TemporaryDirectory(prefix="selfhost-native-config-") as temporary:
         directory = Path(temporary)
         inputs = dict.fromkeys(required, "https://synthetic.example")
@@ -263,7 +282,12 @@ def interpolated_models():
         ):
             values = {**inputs, **overrides}
             after = render(GATE["BASE"], values)
-            assert_models(render(FROZEN, values), after)
+            assert_models(
+                render(FROZEN, values),
+                after,
+                shared_additions=rendered_additions(SHARED_ADDITIONS, values),
+                native_additive=rendered_additions(NATIVE_ADDITIVE, values),
+            )
             assert_signing_binding(after)
             print(f"PASS: self-host {mode} interpolated whole model")
         for name in sorted(required):

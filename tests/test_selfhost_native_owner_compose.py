@@ -32,7 +32,9 @@ def models():
         "services": {
             "issuance": {
                 "environment": {
-                    "ISSUANCE_AUTH_SESSION_TTL_MINUTES": "60",
+                    "ISSUANCE_AUTH_SESSION_TTL_MINUTES": GATE["SHARED_SETTINGS"][
+                        "ISSUANCE_AUTH_SESSION_TTL_MINUTES"
+                    ],
                     "ENVIRONMENT": "production",
                     "BAO_ADDR": "legacy",
                     "TOKEN_HMAC_KEY_FILE": "/run/secrets/token",
@@ -62,13 +64,11 @@ def models():
     after["x-issuance-application-env"] = {
         "ENVIRONMENT": "production",
         "TOKEN_HMAC_KEY_FILE": "/run/secrets/token",
-        "ALLOWED_REDIRECT_URIS": "",
-        "ISSUANCE_AUTH_SESSION_TTL_MINUTES": "60",
+        **GATE["SHARED_SETTINGS"],
     }
-    after["services"]["issuance"]["environment"]["ALLOWED_REDIRECT_URIS"] = ""
-    after["services"]["issuance"]["environment"][
-        "ISSUANCE_AUTH_SESSION_TTL_MINUTES"
-    ] = "60"
+    after["services"]["issuance"]["environment"].update(
+        GATE["SHARED_ADDITIONS"]
+    )
     after["services"]["gateway"]["environment"].update(
         ISSUANCE_NATIVE_SERVICE_URL="http://issuance-native:8005",
         GATEWAY_REQUIRED_READY_SERVICES=GATE["READY"],
@@ -89,8 +89,7 @@ def models():
         "environment": {
             "ENVIRONMENT": "production",
             "TOKEN_HMAC_KEY_FILE": "/run/secrets/token",
-            "ALLOWED_REDIRECT_URIS": "",
-            "ISSUANCE_AUTH_SESSION_TTL_MINUTES": "60",
+            **GATE["SHARED_SETTINGS"],
             "SERVICE_NAME": "issuance_native",
             "ISSUANCE_GRPC_ENABLED": "true",
             "RP_GRPC_TARGET": "revocation-profile:9013",
