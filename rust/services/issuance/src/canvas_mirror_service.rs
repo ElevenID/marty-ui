@@ -243,7 +243,6 @@ impl CanvasMirrorService {
             };
             processed.push(updated);
         }
-        self.emit_alerts(&processed, true, now).await?;
         let delivered = processed
             .iter()
             .filter(|record| record.status == "delivered")
@@ -262,7 +261,7 @@ impl CanvasMirrorService {
             .iter()
             .map(CanvasMirrorDeliveryRecord::public_projection)
             .collect::<Vec<_>>();
-        Ok(json!({
+        let response = json!({
             "delivery_target":"canvas_credentials",
             "organization_id":organization_id,
             "retry_failed":retry_failed,
@@ -277,7 +276,10 @@ impl CanvasMirrorService {
                 "publish.blocked":blocked,
             },
             "records":records,
-        }))
+        });
+        emit_metrics("publish", organization_id, &response["metrics"]);
+        self.emit_alerts(&processed, true, now).await?;
+        Ok(response)
     }
 
     pub async fn process_status_sync_failures(
@@ -357,7 +359,6 @@ impl CanvasMirrorService {
                 .await?;
             processed.push(updated);
         }
-        self.emit_alerts(&processed, false, now).await?;
         let failed = processed
             .iter()
             .filter(|record| {
@@ -378,7 +379,7 @@ impl CanvasMirrorService {
             .iter()
             .map(CanvasMirrorDeliveryRecord::public_projection)
             .collect::<Vec<_>>();
-        Ok(json!({
+        let response = json!({
             "delivery_target":"canvas_credentials",
             "organization_id":organization_id,
             "processed_count":records.len(),
@@ -396,7 +397,10 @@ impl CanvasMirrorService {
                 "status_sync.retry_blocked":blocked,
             },
             "records":records,
-        }))
+        });
+        emit_metrics("status_sync", organization_id, &response["metrics"]);
+        self.emit_alerts(&processed, false, now).await?;
+        Ok(response)
     }
 
     pub async fn run_automation_cycle(
@@ -431,7 +435,7 @@ impl CanvasMirrorService {
         metrics.insert("automation.processed".into(), json!(processed));
         metrics.insert("automation.failed".into(), json!(failed));
         metrics.insert("automation.blocked".into(), json!(blocked));
-        Ok(json!({
+        let response = json!({
             "delivery_target":"canvas_credentials",
             "organization_id":organization_id,
             "retry_failed":retry_failed,
@@ -443,7 +447,9 @@ impl CanvasMirrorService {
             "metrics":metrics,
             "started_at":timestamp(started_at),
             "completed_at":timestamp(completed_at),
-        }))
+        });
+        emit_metrics("automation_cycle", organization_id, &response["metrics"]);
+        Ok(response)
     }
 
     pub async fn health(&self, organization_id: &str) -> Result<Value, CanvasMirrorServiceError> {
@@ -945,6 +951,27 @@ impl CanvasMirrorService {
                 .and_then(|value| value.as_object().cloned())
                 .ok_or(CanvasMirrorServiceError::CanonicalOwnershipMismatch)?;
             metadata.insert("organization_id".into(), json!(organization_id));
+            let alert_projection = Value::Object(metadata.clone());
+            tracing::warn!(
+                mip_event = "canvas_mirror_alert",
+                organization_id,
+                severity = alert.severity.as_str(),
+                alert_type = alert.alert_type.as_str(),
+                delivery_record_id = alert.delivery_record_id.as_str(),
+                credential_id = alert.credential_id.as_str(),
+                transaction_id = alert.transaction_id.as_str(),
+                canvas_account_id = alert.canvas_account_id.as_deref(),
+                attempt_count = alert.attempt_count,
+                last_error = alert.last_error.as_deref(),
+                last_error_at = alert.last_error_at.as_deref(),
+                alert_message = alert.message.as_str(),
+                recommended_action = alert.recommended_action.as_str(),
+                // `tracing`'s stable field API cannot encode nested objects.
+                // Preserve the frozen field name with canonical JSON and also
+                // expose the alert's queryable scalar projection above.
+                canvas_mirror_alert = %alert_projection,
+                "canvas_mirror_alert"
+            );
             self.repository
                 .save_alert_event(&CanvasMirrorAlertEvent {
                     id: uuid::Uuid::new_v4().to_string(),
@@ -969,7 +996,7 @@ impl CanvasMirrorService {
             for (organization_id, critical) in critical_by_organization {
                 // Webhook delivery is advisory in the frozen owner. Durable alert
                 // events above remain authoritative if this outbound call fails.
-                if webhook
+                if let Err(error) = webhook
                     .post(json!({
                         "event":"canvas_mirror_critical_alert",
                         "organization_id":organization_id,
@@ -977,10 +1004,11 @@ impl CanvasMirrorService {
                         "generated_at":timestamp(now),
                     }))
                     .await
-                    .is_err()
                 {
                     tracing::warn!(
+                        mip_event = "canvas_mirror_alert_webhook",
                         organization_id,
+                        failure_cause = error.category(),
                         "Canvas mirror alert webhook delivery failed"
                     );
                 }
@@ -988,6 +1016,34 @@ impl CanvasMirrorService {
         }
         Ok(())
     }
+}
+
+fn emit_metrics(operation: &str, organization_id: Option<&str>, metrics: &Value) {
+    let count = |key: &str| metrics[key].as_u64().unwrap_or_default();
+    let prefix = if operation == "automation_cycle" {
+        "automation"
+    } else {
+        operation
+    };
+    tracing::info!(
+        mip_event = "canvas_mirror_metrics",
+        canvas_mirror_operation = operation,
+        organization_id,
+        processed = count(&format!("{prefix}.processed")),
+        delivered = count("publish.delivered"),
+        synced = count("status_sync.synced"),
+        failed = count(&format!("{prefix}.failed")),
+        blocked = count(&format!("{prefix}.blocked")),
+        retry_outcomes = count("status_sync.retry_outcomes"),
+        retry_succeeded = count("status_sync.retry_succeeded"),
+        retry_failed = count("status_sync.retry_failed"),
+        retry_blocked = count("status_sync.retry_blocked"),
+        // Preserve the frozen field name. The scalar fields above remain
+        // directly queryable when the stable tracing JSON formatter records
+        // this canonical nested projection as a string.
+        metrics = %metrics,
+        "canvas_mirror_metrics"
+    );
 }
 
 fn feature_enabled(metadata: &Map<String, Value>, flag: &str) -> bool {

@@ -91,8 +91,66 @@ impl CanvasMirrorAutomationConfig {
     }
 }
 
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub struct CanvasMirrorAutomationBatchOutcome {
+    pub processed: u64,
+    pub succeeded: u64,
+    pub failed: u64,
+    pub blocked: u64,
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub struct CanvasMirrorAutomationError;
+pub enum CanvasMirrorAutomationError {
+    SelectorRequired,
+    NotFound,
+    CanonicalCredentialMissing,
+    CanonicalOwnershipMismatch,
+    TrustedOrganizationRequired,
+    TransactionNotFound,
+    DeliveryNotFound,
+    DeliveryInProgress,
+    RepositoryUnavailable,
+}
+
+impl CanvasMirrorAutomationError {
+    #[must_use]
+    pub const fn category(self) -> &'static str {
+        match self {
+            Self::SelectorRequired => "selector_required",
+            Self::NotFound => "delivery_record_not_found",
+            Self::CanonicalCredentialMissing => "canonical_credential_missing",
+            Self::CanonicalOwnershipMismatch => "canonical_ownership_mismatch",
+            Self::TrustedOrganizationRequired => "trusted_organization_required",
+            Self::TransactionNotFound => "transaction_not_found",
+            Self::DeliveryNotFound => "delivery_not_found",
+            Self::DeliveryInProgress => "delivery_in_progress",
+            Self::RepositoryUnavailable => "repository_unavailable",
+        }
+    }
+}
+
+impl From<crate::canvas_mirror_service::CanvasMirrorServiceError> for CanvasMirrorAutomationError {
+    fn from(error: crate::canvas_mirror_service::CanvasMirrorServiceError) -> Self {
+        use crate::canvas_mirror_service::CanvasMirrorServiceError;
+        match error {
+            CanvasMirrorServiceError::SelectorRequired => Self::SelectorRequired,
+            CanvasMirrorServiceError::NotFound => Self::NotFound,
+            CanvasMirrorServiceError::CanonicalCredentialMissing => {
+                Self::CanonicalCredentialMissing
+            }
+            CanvasMirrorServiceError::CanonicalOwnershipMismatch => {
+                Self::CanonicalOwnershipMismatch
+            }
+            CanvasMirrorServiceError::TrustedOrganizationRequired => {
+                Self::TrustedOrganizationRequired
+            }
+            CanvasMirrorServiceError::TransactionNotFound => Self::TransactionNotFound,
+            CanvasMirrorServiceError::DeliveryNotFound => Self::DeliveryNotFound,
+            CanvasMirrorServiceError::DeliveryInProgress => Self::DeliveryInProgress,
+            CanvasMirrorServiceError::Repository(_) => Self::RepositoryUnavailable,
+        }
+    }
+}
 
 #[async_trait]
 pub trait CanvasMirrorAutomationPort: Send + Sync {
@@ -101,13 +159,13 @@ pub trait CanvasMirrorAutomationPort: Send + Sync {
         organization_id: Option<&str>,
         limit: u32,
         retry_failed: bool,
-    ) -> Result<(), CanvasMirrorAutomationError>;
+    ) -> Result<CanvasMirrorAutomationBatchOutcome, CanvasMirrorAutomationError>;
 
     async fn status_sync(
         &self,
         organization_id: Option<&str>,
         limit: u32,
-    ) -> Result<(), CanvasMirrorAutomationError>;
+    ) -> Result<CanvasMirrorAutomationBatchOutcome, CanvasMirrorAutomationError>;
 }
 
 #[async_trait]
@@ -117,22 +175,32 @@ impl CanvasMirrorAutomationPort for CanvasMirrorService {
         organization_id: Option<&str>,
         limit: u32,
         retry_failed: bool,
-    ) -> Result<(), CanvasMirrorAutomationError> {
+    ) -> Result<CanvasMirrorAutomationBatchOutcome, CanvasMirrorAutomationError> {
         self.process_pending(organization_id, limit, retry_failed, chrono::Utc::now())
             .await
-            .map(|_| ())
-            .map_err(|_| CanvasMirrorAutomationError)
+            .map(|result| CanvasMirrorAutomationBatchOutcome {
+                processed: result["processed_count"].as_u64().unwrap_or_default(),
+                succeeded: result["delivered_count"].as_u64().unwrap_or_default(),
+                failed: result["failed_count"].as_u64().unwrap_or_default(),
+                blocked: result["blocked_count"].as_u64().unwrap_or_default(),
+            })
+            .map_err(CanvasMirrorAutomationError::from)
     }
 
     async fn status_sync(
         &self,
         organization_id: Option<&str>,
         limit: u32,
-    ) -> Result<(), CanvasMirrorAutomationError> {
+    ) -> Result<CanvasMirrorAutomationBatchOutcome, CanvasMirrorAutomationError> {
         self.process_status_sync_failures(organization_id, limit, chrono::Utc::now())
             .await
-            .map(|_| ())
-            .map_err(|_| CanvasMirrorAutomationError)
+            .map(|result| CanvasMirrorAutomationBatchOutcome {
+                processed: result["processed_count"].as_u64().unwrap_or_default(),
+                succeeded: result["synced_count"].as_u64().unwrap_or_default(),
+                failed: result["failed_count"].as_u64().unwrap_or_default(),
+                blocked: result["blocked_count"].as_u64().unwrap_or_default(),
+            })
+            .map_err(CanvasMirrorAutomationError::from)
     }
 }
 
@@ -227,27 +295,59 @@ pub async fn run_canvas_mirror_automation_loop(
     loop {
         let current = runtime.monotonic_seconds();
         if current >= next_publish {
-            if port
+            match port
                 .publish(
                     config.organization_id.as_deref(),
                     config.batch_limit,
                     config.retry_failed_publish,
                 )
                 .await
-                .is_err()
             {
-                tracing::error!("Canvas mirror publish worker cycle failed");
+                Ok(outcome) if outcome.processed > 0 => tracing::info!(
+                    mip_event = "canvas_mirror_worker_cycle",
+                    canvas_mirror_operation = "publish_worker",
+                    organization_id = config.organization_id.as_deref(),
+                    processed = outcome.processed,
+                    succeeded = outcome.succeeded,
+                    failed = outcome.failed,
+                    blocked = outcome.blocked,
+                    "Canvas mirror publish worker cycle completed"
+                ),
+                Ok(_) => {}
+                Err(error) => tracing::error!(
+                    mip_event = "canvas_mirror_worker_cycle",
+                    canvas_mirror_operation = "publish_worker",
+                    organization_id = config.organization_id.as_deref(),
+                    failure_cause = error.category(),
+                    "Canvas mirror publish worker cycle failed"
+                ),
             }
             next_publish = runtime.monotonic_seconds() + config.publish_interval_seconds as f64;
         }
         let current = runtime.monotonic_seconds();
         if current >= next_status {
-            if port
+            match port
                 .status_sync(config.organization_id.as_deref(), config.batch_limit)
                 .await
-                .is_err()
             {
-                tracing::error!("Canvas mirror status-sync worker cycle failed");
+                Ok(outcome) if outcome.processed > 0 => tracing::info!(
+                    mip_event = "canvas_mirror_worker_cycle",
+                    canvas_mirror_operation = "status_sync_worker",
+                    organization_id = config.organization_id.as_deref(),
+                    processed = outcome.processed,
+                    succeeded = outcome.succeeded,
+                    failed = outcome.failed,
+                    blocked = outcome.blocked,
+                    "Canvas mirror status-sync worker cycle completed"
+                ),
+                Ok(_) => {}
+                Err(error) => tracing::error!(
+                    mip_event = "canvas_mirror_worker_cycle",
+                    canvas_mirror_operation = "status_sync_worker",
+                    organization_id = config.organization_id.as_deref(),
+                    failure_cause = error.category(),
+                    "Canvas mirror status-sync worker cycle failed"
+                ),
             }
             next_status = runtime.monotonic_seconds() + config.status_sync_interval_seconds as f64;
         }

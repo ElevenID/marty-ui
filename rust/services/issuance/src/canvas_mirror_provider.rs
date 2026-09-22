@@ -56,8 +56,32 @@ pub trait CanvasMirrorStatusProvider: Send + Sync {
     ) -> Result<Map<String, Value>, CanvasMirrorProviderError>;
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub struct CanvasMirrorAlertWebhookError;
+#[derive(Clone, Copy, Debug, Error, Eq, PartialEq)]
+pub enum CanvasMirrorAlertWebhookError {
+    #[error("Canvas mirror alert webhook URL is invalid")]
+    InvalidUrl,
+    #[error("Canvas mirror alert webhook URL contains embedded credentials")]
+    EmbeddedCredentials,
+    #[error("Canvas mirror alert webhook payload could not be serialized")]
+    Serialization,
+    #[error("Canvas mirror alert webhook transport failed")]
+    Transport,
+    #[error("Canvas mirror alert webhook returned a non-success response")]
+    HttpStatus,
+}
+
+impl CanvasMirrorAlertWebhookError {
+    #[must_use]
+    pub const fn category(self) -> &'static str {
+        match self {
+            Self::InvalidUrl => "invalid_url",
+            Self::EmbeddedCredentials => "embedded_credentials_refused",
+            Self::Serialization => "serialization_failed",
+            Self::Transport => "transport_failed",
+            Self::HttpStatus => "non_success_status",
+        }
+    }
+}
 
 #[async_trait]
 pub trait CanvasMirrorAlertWebhook: Send + Sync {
@@ -85,9 +109,9 @@ impl TransportCanvasMirrorAlertWebhook {
 #[async_trait]
 impl CanvasMirrorAlertWebhook for TransportCanvasMirrorAlertWebhook {
     async fn post(&self, payload: Value) -> Result<(), CanvasMirrorAlertWebhookError> {
-        let url = Url::parse(&self.url).map_err(|_| CanvasMirrorAlertWebhookError)?;
+        let url = Url::parse(&self.url).map_err(|_| CanvasMirrorAlertWebhookError::InvalidUrl)?;
         if !url.username().is_empty() || url.password().is_some() {
-            return Err(CanvasMirrorAlertWebhookError);
+            return Err(CanvasMirrorAlertWebhookError::EmbeddedCredentials);
         }
         let mut headers = http::HeaderMap::new();
         headers.insert(http::header::ACCEPT, http::HeaderValue::from_static("*/*"));
@@ -95,16 +119,17 @@ impl CanvasMirrorAlertWebhook for TransportCanvasMirrorAlertWebhook {
             http::header::CONTENT_TYPE,
             http::HeaderValue::from_static("application/json"),
         );
-        let body = serde_json::to_vec(&payload).map_err(|_| CanvasMirrorAlertWebhookError)?;
+        let body = serde_json::to_vec(&payload)
+            .map_err(|_| CanvasMirrorAlertWebhookError::Serialization)?;
         let response = self
             .client
             .send(http::Method::POST, url, headers, body)
             .await
-            .map_err(|_| CanvasMirrorAlertWebhookError)?;
+            .map_err(|_| CanvasMirrorAlertWebhookError::Transport)?;
         if response.response.status().is_success() {
             Ok(())
         } else {
-            Err(CanvasMirrorAlertWebhookError)
+            Err(CanvasMirrorAlertWebhookError::HttpStatus)
         }
     }
 }

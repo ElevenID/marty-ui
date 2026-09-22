@@ -12,8 +12,9 @@ use axum::{
 use chrono::{DateTime, Utc};
 use marty_issuance_service::{
     canvas_mirror_automation::{
-        run_canvas_mirror_automation_loop, CanvasMirrorAutomationConfig,
-        CanvasMirrorAutomationError, CanvasMirrorAutomationPort, CanvasMirrorAutomationRuntime,
+        run_canvas_mirror_automation_loop, CanvasMirrorAutomationBatchOutcome,
+        CanvasMirrorAutomationConfig, CanvasMirrorAutomationError, CanvasMirrorAutomationPort,
+        CanvasMirrorAutomationRuntime,
     },
     canvas_mirror_domain::{
         CanvasMirrorAlertEvent, CanvasMirrorAlertThresholds, CanvasMirrorDeliveryRecord,
@@ -22,7 +23,7 @@ use marty_issuance_service::{
     canvas_mirror_provider::{
         CanvasMirrorAlertWebhook, CanvasMirrorAlertWebhookError, CanvasMirrorProviderError,
         CanvasMirrorPublicationOutcome, CanvasMirrorPublicationProvider,
-        CanvasMirrorStatusProvider,
+        CanvasMirrorStatusProvider, TransportCanvasMirrorAlertWebhook,
     },
     canvas_mirror_repository::{
         CanvasMirrorDeliveryQuery, CanvasMirrorRepository, CanvasMirrorRepositoryError,
@@ -30,12 +31,14 @@ use marty_issuance_service::{
     canvas_mirror_service::{
         CanvasMirrorProvenanceSelector, CanvasMirrorService, CanvasMirrorServiceError,
     },
+    canvas_provider_http::CanvasHttpClientPolicy,
     credential::CredentialTransaction,
     credential_management::CredentialLifecycleAction,
 };
 use serde_json::{json, Value};
 use std::{
     collections::{BTreeMap, BTreeSet},
+    fmt,
     sync::{
         atomic::{AtomicU64, AtomicUsize, Ordering},
         Arc, Mutex,
@@ -43,6 +46,66 @@ use std::{
     time::Duration,
 };
 use tower::ServiceExt;
+use tracing::{field::Visit, instrument::WithSubscriber, Event, Metadata, Subscriber};
+use tracing_subscriber::{layer::Context, prelude::*, Layer};
+
+#[derive(Clone, Default)]
+struct TraceCapture(Arc<Mutex<Vec<BTreeMap<String, String>>>>);
+
+#[derive(Default)]
+struct TraceFields(BTreeMap<String, String>);
+
+impl Visit for TraceFields {
+    fn record_str(&mut self, field: &tracing::field::Field, value: &str) {
+        self.0.insert(field.name().to_owned(), value.to_owned());
+    }
+
+    fn record_u64(&mut self, field: &tracing::field::Field, value: u64) {
+        self.0.insert(field.name().to_owned(), value.to_string());
+    }
+
+    fn record_debug(&mut self, field: &tracing::field::Field, value: &dyn fmt::Debug) {
+        self.0.insert(
+            field.name().to_owned(),
+            format!("{value:?}").trim_matches('"').to_owned(),
+        );
+    }
+}
+
+impl<S: Subscriber> Layer<S> for TraceCapture {
+    fn enabled(&self, metadata: &Metadata<'_>, _context: Context<'_, S>) -> bool {
+        metadata
+            .target()
+            .starts_with("marty_issuance_service::canvas_mirror")
+    }
+
+    fn on_event(&self, event: &Event<'_>, _context: Context<'_, S>) {
+        let mut fields = TraceFields::default();
+        event.record(&mut fields);
+        fields
+            .0
+            .insert("level".to_owned(), event.metadata().level().to_string());
+        self.0.lock().unwrap().push(fields.0);
+    }
+}
+
+fn captured_event<'a>(
+    events: &'a [BTreeMap<String, String>],
+    message: &str,
+    operation: Option<&str>,
+) -> &'a BTreeMap<String, String> {
+    events
+        .iter()
+        .find(|event| {
+            event.get("message").is_some_and(|value| value == message)
+                && operation.is_none_or(|expected| {
+                    event
+                        .get("canvas_mirror_operation")
+                        .is_some_and(|value| value == expected)
+                })
+        })
+        .unwrap_or_else(|| panic!("missing {message:?} event for {operation:?}: {events:#?}"))
+}
 
 #[test]
 fn frozen_http_observation_inventory_is_exhaustively_owned() {
@@ -875,7 +938,7 @@ impl CanvasMirrorAlertWebhook for AlertWebhook {
         self.payloads.lock().unwrap().push(payload);
         self.effects.lock().unwrap().push("webhook".into());
         if self.fail {
-            Err(CanvasMirrorAlertWebhookError)
+            Err(CanvasMirrorAlertWebhookError::HttpStatus)
         } else {
             Ok(())
         }
@@ -1513,6 +1576,175 @@ async fn batch_alert_events_precede_advisory_critical_webhooks() {
 }
 
 #[tokio::test]
+async fn structured_observability_preserves_metrics_alerts_and_safe_webhook_causes() {
+    let reference = reference();
+    let capture = TraceCapture::default();
+    let events = capture.0.clone();
+    let subscriber = tracing_subscriber::registry().with(capture);
+
+    async {
+        let (automation_repository, automation_provider) = publishing_fixture(&reference, false);
+        automation_repository.record.lock().unwrap().status = "failed".into();
+        service_for_publication(automation_repository, automation_provider)
+            .run_automation_cycle(Some("org-1"), 25, true, now(), now())
+            .await
+            .unwrap();
+
+        let (alert_repository, mut alert_provider) = publishing_fixture(&reference, false);
+        alert_repository
+            .record
+            .lock()
+            .unwrap()
+            .metadata
+            .insert("publish_attempts".into(), json!(4));
+        Arc::get_mut(&mut alert_provider).unwrap().failure =
+            Some("provider detail retained only in the protected alert projection".into());
+        let webhook = Arc::new(AlertWebhook {
+            payloads: Mutex::new(Vec::new()),
+            fail: true,
+            effects: alert_repository.effects.clone(),
+        });
+        service_for_publication(alert_repository, alert_provider)
+            .with_alert_webhook(webhook)
+            .process_pending(Some("org-1"), 25, false, now())
+            .await
+            .unwrap();
+    }
+    .with_subscriber(subscriber)
+    .await;
+
+    let events = events.lock().unwrap();
+    let publish = captured_event(&events, "canvas_mirror_metrics", Some("publish"));
+    assert_eq!(publish["level"], "INFO");
+    assert_eq!(publish["mip_event"], "canvas_mirror_metrics");
+    assert_eq!(publish["organization_id"], "org-1");
+    assert_eq!(publish["processed"], "1");
+    assert!(serde_json::from_str::<Value>(&publish["metrics"]).is_ok());
+
+    let status = captured_event(&events, "canvas_mirror_metrics", Some("status_sync"));
+    assert_eq!(status["processed"], "0");
+    let automation = captured_event(&events, "canvas_mirror_metrics", Some("automation_cycle"));
+    assert_eq!(automation["processed"], "1");
+    assert_eq!(automation["failed"], "0");
+
+    let alert = captured_event(&events, "canvas_mirror_alert", None);
+    assert_eq!(alert["level"], "WARN");
+    assert_eq!(alert["mip_event"], "canvas_mirror_alert");
+    assert_eq!(alert["severity"], "critical");
+    assert_eq!(alert["alert_type"], "publish_failure");
+    assert_eq!(alert["delivery_record_id"], "delivery-001");
+    assert_eq!(alert["attempt_count"], "5");
+    let alert_json: Value = serde_json::from_str(&alert["canvas_mirror_alert"]).unwrap();
+    assert_eq!(alert_json["organization_id"], "org-1");
+    let alert_index = events
+        .iter()
+        .position(|event| std::ptr::eq(event, alert))
+        .unwrap();
+    assert_eq!(
+        events[alert_index - 1]["canvas_mirror_operation"],
+        "publish"
+    );
+
+    let webhook = captured_event(&events, "Canvas mirror alert webhook delivery failed", None);
+    assert_eq!(webhook["level"], "WARN");
+    assert_eq!(webhook["mip_event"], "canvas_mirror_alert_webhook");
+    assert_eq!(webhook["failure_cause"], "non_success_status");
+    let rendered = format!("{webhook:?}");
+    assert!(!rendered.contains("provider detail"));
+    assert!(!rendered.contains("https://"));
+}
+
+#[test]
+fn webhook_failure_categories_are_stable_and_do_not_echo_inputs() {
+    assert_eq!(
+        CanvasMirrorAlertWebhookError::InvalidUrl.category(),
+        "invalid_url"
+    );
+    assert_eq!(
+        CanvasMirrorAlertWebhookError::EmbeddedCredentials.category(),
+        "embedded_credentials_refused"
+    );
+    assert_eq!(
+        CanvasMirrorAlertWebhookError::Transport.category(),
+        "transport_failed"
+    );
+    assert_eq!(
+        CanvasMirrorAlertWebhookError::Serialization.category(),
+        "serialization_failed"
+    );
+    assert_eq!(
+        CanvasMirrorAlertWebhookError::HttpStatus.category(),
+        "non_success_status"
+    );
+}
+
+#[test]
+fn automation_failure_categories_preserve_safe_service_distinctions() {
+    for (error, expected) in [
+        (
+            CanvasMirrorServiceError::SelectorRequired,
+            "selector_required",
+        ),
+        (
+            CanvasMirrorServiceError::NotFound,
+            "delivery_record_not_found",
+        ),
+        (
+            CanvasMirrorServiceError::CanonicalCredentialMissing,
+            "canonical_credential_missing",
+        ),
+        (
+            CanvasMirrorServiceError::CanonicalOwnershipMismatch,
+            "canonical_ownership_mismatch",
+        ),
+        (
+            CanvasMirrorServiceError::TrustedOrganizationRequired,
+            "trusted_organization_required",
+        ),
+        (
+            CanvasMirrorServiceError::TransactionNotFound,
+            "transaction_not_found",
+        ),
+        (
+            CanvasMirrorServiceError::DeliveryNotFound,
+            "delivery_not_found",
+        ),
+        (
+            CanvasMirrorServiceError::DeliveryInProgress,
+            "delivery_in_progress",
+        ),
+        (
+            CanvasMirrorServiceError::Repository(CanvasMirrorRepositoryError),
+            "repository_unavailable",
+        ),
+    ] {
+        assert_eq!(
+            CanvasMirrorAutomationError::from(error).category(),
+            expected
+        );
+    }
+}
+
+#[tokio::test]
+async fn webhook_transport_refuses_credential_urls_with_a_safe_category() {
+    let policy = CanvasHttpClientPolicy {
+        timeout: Duration::from_secs(1),
+        private_origin_allowlist: Vec::new(),
+        allow_private_networks: false,
+        allow_http_localhost: false,
+    };
+    let webhook = TransportCanvasMirrorAlertWebhook::new(
+        policy,
+        "https://private-user:private-password@alerts.example/hook".into(),
+    );
+    let error = webhook.post(json!({"safe":"payload"})).await.unwrap_err();
+    assert_eq!(error, CanvasMirrorAlertWebhookError::EmbeddedCredentials);
+    assert_eq!(error.category(), "embedded_credentials_refused");
+    assert!(!error.to_string().contains("private-user"));
+    assert!(!error.to_string().contains("private-password"));
+}
+
+#[tokio::test]
 async fn global_batch_keeps_alert_events_and_webhooks_tenant_isolated() {
     let mut org_one = record("pending");
     org_one.metadata.insert("publish_attempts".into(), json!(4));
@@ -1684,6 +1916,8 @@ fn reference() -> Value {
 struct AutomationPort {
     calls: Mutex<Vec<String>>,
     fail_publish: bool,
+    publish_outcome: CanvasMirrorAutomationBatchOutcome,
+    status_outcome: CanvasMirrorAutomationBatchOutcome,
 }
 
 #[async_trait]
@@ -1693,14 +1927,14 @@ impl CanvasMirrorAutomationPort for AutomationPort {
         organization_id: Option<&str>,
         limit: u32,
         retry_failed: bool,
-    ) -> Result<(), CanvasMirrorAutomationError> {
+    ) -> Result<CanvasMirrorAutomationBatchOutcome, CanvasMirrorAutomationError> {
         self.calls.lock().unwrap().push(format!(
             "publish:{organization_id:?}:{limit}:{retry_failed}"
         ));
         if self.fail_publish {
-            Err(CanvasMirrorAutomationError)
+            Err(CanvasMirrorAutomationError::RepositoryUnavailable)
         } else {
-            Ok(())
+            Ok(self.publish_outcome)
         }
     }
 
@@ -1708,12 +1942,12 @@ impl CanvasMirrorAutomationPort for AutomationPort {
         &self,
         organization_id: Option<&str>,
         limit: u32,
-    ) -> Result<(), CanvasMirrorAutomationError> {
+    ) -> Result<CanvasMirrorAutomationBatchOutcome, CanvasMirrorAutomationError> {
         self.calls
             .lock()
             .unwrap()
             .push(format!("status:{organization_id:?}:{limit}"));
-        Ok(())
+        Ok(self.status_outcome)
     }
 }
 
@@ -1825,6 +2059,110 @@ async fn automation_loop_continues_independent_cycles_and_propagates_cancellatio
     assert!(disabled_port.calls.lock().unwrap().is_empty());
 }
 
+#[tokio::test]
+async fn automation_worker_observability_reports_counts_and_categorical_failures() {
+    let capture = TraceCapture::default();
+    let events = capture.0.clone();
+
+    let success_port = Arc::new(AutomationPort {
+        publish_outcome: CanvasMirrorAutomationBatchOutcome {
+            processed: 3,
+            succeeded: 2,
+            failed: 1,
+            blocked: 1,
+        },
+        status_outcome: CanvasMirrorAutomationBatchOutcome {
+            processed: 2,
+            succeeded: 2,
+            failed: 0,
+            blocked: 0,
+        },
+        ..Default::default()
+    });
+    let success_runtime = Arc::new(AutomationRuntime::default());
+    let subscriber = tracing_subscriber::registry().with(capture.clone());
+    let success_task = tokio::spawn(
+        run_canvas_mirror_automation_loop(
+            success_port,
+            success_runtime.clone(),
+            CanvasMirrorAutomationConfig {
+                enabled: true,
+                organization_id: Some("org-1".into()),
+                publish_interval_seconds: 10,
+                status_sync_interval_seconds: 20,
+                batch_limit: 7,
+                retry_failed_publish: true,
+                run_on_startup: true,
+            },
+        )
+        .with_subscriber(subscriber),
+    );
+    tokio::time::timeout(Duration::from_secs(2), success_runtime.sleeping.notified())
+        .await
+        .unwrap();
+    success_task.abort();
+    assert!(success_task.await.unwrap_err().is_cancelled());
+
+    let failed_port = Arc::new(AutomationPort {
+        fail_publish: true,
+        ..Default::default()
+    });
+    let failed_runtime = Arc::new(AutomationRuntime::default());
+    let subscriber = tracing_subscriber::registry().with(capture);
+    let failed_task = tokio::spawn(
+        run_canvas_mirror_automation_loop(
+            failed_port,
+            failed_runtime.clone(),
+            CanvasMirrorAutomationConfig {
+                enabled: true,
+                organization_id: Some("org-1".into()),
+                publish_interval_seconds: 10,
+                status_sync_interval_seconds: 20,
+                batch_limit: 7,
+                retry_failed_publish: true,
+                run_on_startup: true,
+            },
+        )
+        .with_subscriber(subscriber),
+    );
+    tokio::time::timeout(Duration::from_secs(2), failed_runtime.sleeping.notified())
+        .await
+        .unwrap();
+    failed_task.abort();
+    assert!(failed_task.await.unwrap_err().is_cancelled());
+
+    let events = events.lock().unwrap();
+    let publish_success = captured_event(
+        &events,
+        "Canvas mirror publish worker cycle completed",
+        Some("publish_worker"),
+    );
+    assert_eq!(publish_success["level"], "INFO");
+    assert_eq!(publish_success["mip_event"], "canvas_mirror_worker_cycle");
+    assert_eq!(publish_success["processed"], "3");
+    assert_eq!(publish_success["succeeded"], "2");
+    assert_eq!(publish_success["failed"], "1");
+    assert_eq!(publish_success["blocked"], "1");
+
+    let status_success = captured_event(
+        &events,
+        "Canvas mirror status-sync worker cycle completed",
+        Some("status_sync_worker"),
+    );
+    assert_eq!(status_success["processed"], "2");
+    assert_eq!(status_success["succeeded"], "2");
+
+    let publish_failure = captured_event(
+        &events,
+        "Canvas mirror publish worker cycle failed",
+        Some("publish_worker"),
+    );
+    assert_eq!(publish_failure["level"], "ERROR");
+    assert_eq!(publish_failure["mip_event"], "canvas_mirror_worker_cycle");
+    assert_eq!(publish_failure["failure_cause"], "repository_unavailable");
+    assert!(!format!("{publish_failure:?}").contains("secret"));
+}
+
 struct ReferenceLoopRuntime {
     now: AtomicU64,
     trace: Mutex<Vec<String>>,
@@ -1887,7 +2225,7 @@ impl CanvasMirrorAutomationPort for ReferenceLoopPort {
         _organization_id: Option<&str>,
         _limit: u32,
         _retry_failed: bool,
-    ) -> Result<(), CanvasMirrorAutomationError> {
+    ) -> Result<CanvasMirrorAutomationBatchOutcome, CanvasMirrorAutomationError> {
         self.runtime.trace.lock().unwrap().push(format!(
             "publish@{}",
             self.runtime.now.load(Ordering::SeqCst)
@@ -1898,9 +2236,9 @@ impl CanvasMirrorAutomationPort for ReferenceLoopPort {
         }
         self.runtime.advance(self.publish_duration);
         if self.fail_publish {
-            Err(CanvasMirrorAutomationError)
+            Err(CanvasMirrorAutomationError::RepositoryUnavailable)
         } else {
-            Ok(())
+            Ok(CanvasMirrorAutomationBatchOutcome::default())
         }
     }
 
@@ -1908,7 +2246,7 @@ impl CanvasMirrorAutomationPort for ReferenceLoopPort {
         &self,
         _organization_id: Option<&str>,
         _limit: u32,
-    ) -> Result<(), CanvasMirrorAutomationError> {
+    ) -> Result<CanvasMirrorAutomationBatchOutcome, CanvasMirrorAutomationError> {
         self.runtime.trace.lock().unwrap().push(format!(
             "status@{}",
             self.runtime.now.load(Ordering::SeqCst)
@@ -1919,9 +2257,9 @@ impl CanvasMirrorAutomationPort for ReferenceLoopPort {
         }
         self.runtime.advance(self.status_duration);
         if self.fail_status {
-            Err(CanvasMirrorAutomationError)
+            Err(CanvasMirrorAutomationError::RepositoryUnavailable)
         } else {
-            Ok(())
+            Ok(CanvasMirrorAutomationBatchOutcome::default())
         }
     }
 }
