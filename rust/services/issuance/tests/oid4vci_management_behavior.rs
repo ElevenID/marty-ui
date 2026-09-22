@@ -453,6 +453,34 @@ async fn registration_saves_then_reads_and_reports_missing_read_after_write() {
     assert_eq!(body["token_endpoint_auth_method"], "private_key_jwt");
 }
 
+#[tokio::test]
+async fn registration_persists_and_returns_canonical_jose_defaults() {
+    let management = Arc::new(ManagementState::default());
+    *management.persist_registration.lock().unwrap() = true;
+    let calls = Arc::new(Mutex::new(vec![]));
+    let mut jwks = public_jwks();
+    jwks["keys"][0].as_object_mut().unwrap().remove("alg");
+    jwks["keys"][0].as_object_mut().unwrap().remove("use");
+    let request = Request::put("/v1/issuance/oid4vci-clients")
+        .header("x-api-key", "management-key")
+        .header("x-organization-id", "org-a")
+        .header("content-type", "application/json")
+        .body(Body::from(
+            json!({
+                "organization_id":"org-a", "client_id":"wallet-a",
+                "jwks":jwks, "redirect_uris":[]
+            })
+            .to_string(),
+        ))
+        .unwrap();
+
+    let (status, body) = response(request, app(management, calls)).await;
+
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(body["jwks"]["keys"][0]["alg"], "ES256");
+    assert_eq!(body["jwks"]["keys"][0]["use"], "sig");
+}
+
 struct RevocationManagementRepository {
     order: Arc<Mutex<Vec<&'static str>>>,
     transaction: Option<ManagementTransaction>,

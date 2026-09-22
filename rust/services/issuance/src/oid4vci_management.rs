@@ -8,7 +8,7 @@ use thiserror::Error;
 use url::{Host, Url};
 
 use crate::{
-    client_auth::{registered_client_private_key_index, validate_registered_client_jwks},
+    client_auth::{normalize_registered_client_jwks, registered_client_private_key_index},
     credential_management::{CredentialManagementError, CredentialManagementService},
     issued_credential_records::{
         IssuedCredentialProjectionSource, IssuedCredentialRecordRepository,
@@ -305,7 +305,7 @@ fn validate_registration(
     if let Some(index) = registered_client_private_key_index(&request.jwks) {
         return Err(Oid4vciManagementError::PrivateKeyMaterial(index));
     }
-    validate_registered_client_jwks(&request.jwks)
+    let jwks = normalize_registered_client_jwks(&request.jwks)
         .map_err(|_| Oid4vciManagementError::InvalidRegistration("jwks"))?;
     let mut unique = BTreeSet::new();
     for redirect in &request.redirect_uris {
@@ -317,7 +317,7 @@ fn validate_registration(
     Ok(RegisteredClientWrite {
         organization_id,
         client_id,
-        jwks: request.jwks,
+        jwks,
         redirect_uris: request.redirect_uris,
         active: request.active,
     })
