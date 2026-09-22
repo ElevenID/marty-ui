@@ -1,0 +1,525 @@
+{
+  "schema": "marty.issuance-oid4vci-authorization/v1",
+  "purpose": "Language-neutral no-feature-loss floor for the seven-route OID4VCI authorization and tenant-management removal slice",
+  "source": {
+    "repository": "ElevenID/marty-credentials",
+    "protected_main_commit": "75e2394350185a1b7c0824b25b4016ca40b0174c",
+    "route_source": "services/issuance/infrastructure/api/routes.py",
+    "route_source_sha256": "daf2f4be1d8043ff237e2b6be36fbd671712a097ca2c0ccee209ae9ab0ef166f",
+    "reference": {
+      "path": "contracts/issuance-oid4vci-authorization-python-reference.json",
+      "sha256": "e21967f39fd5732e7c33217ade2fe758dd654af52d6c45f3506d40f6540b7c02",
+      "capture_script": "scripts/capture_oid4vci_authorization_reference.py",
+      "capture_kind": "unchanged-python-route-composition-through-asgi-with-controlled-native-and-downstream-dependencies"
+    }
+  },
+  "ownership": {
+    "deletion_slice": "one issuance_router source block and one gateway selection unit",
+    "estimated_python_route_body_lines": 495,
+    "components": [
+      {
+        "id": "public-oid4vci-protocol",
+        "operations": [
+          "authorize",
+          "pushed_authorization_request",
+          "deferred_credential",
+          "notification_endpoint"
+        ],
+        "authentication": "public protocol policy per operation; authorization and PAR are rate-limited, deferred and notification require a bearer token"
+      },
+      {
+        "id": "tenant-oid4vci-management",
+        "operations": [
+          "put_oid4vci_registered_client",
+          "revoke_transaction",
+          "list_credentials"
+        ],
+        "authentication": "management API key plus trusted tenant context where the resource is tenant-scoped"
+      }
+    ],
+    "implementation_rule": "Keep the two authentication components separate while reusing one Rust repository, response-error, tenant-context, and serialization layer.",
+    "cutover_rule": "Do not delete a Python route until its complete component passes direct HTTP, persistence, gateway, and PostgreSQL differential gates."
+  },
+  "routes": [
+    {
+      "operation": "authorize",
+      "method": "GET",
+      "path": "/v1/issuance/authorize",
+      "component": "public-oid4vci-protocol"
+    },
+    {
+      "operation": "pushed_authorization_request",
+      "method": "POST",
+      "path": "/v1/issuance/par",
+      "component": "public-oid4vci-protocol",
+      "request_content_type": "application/x-www-form-urlencoded"
+    },
+    {
+      "operation": "deferred_credential",
+      "method": "POST",
+      "path": "/v1/issuance/deferred-credential",
+      "component": "public-oid4vci-protocol",
+      "request_content_type": "application/json"
+    },
+    {
+      "operation": "notification_endpoint",
+      "method": "POST",
+      "path": "/v1/issuance/notification",
+      "component": "public-oid4vci-protocol",
+      "success_status": 204
+    },
+    {
+      "operation": "put_oid4vci_registered_client",
+      "method": "PUT",
+      "path": "/v1/issuance/oid4vci-clients",
+      "component": "tenant-oid4vci-management",
+      "request_content_type": "application/json"
+    },
+    {
+      "operation": "revoke_transaction",
+      "method": "POST",
+      "path": "/v1/issuance/transactions/{tx_id}/revoke",
+      "component": "tenant-oid4vci-management",
+      "request_content_type": "application/json"
+    },
+    {
+      "operation": "list_credentials",
+      "method": "GET",
+      "path": "/v1/issuance/credentials",
+      "component": "tenant-oid4vci-management"
+    }
+  ],
+  "authentication_and_tenant_order": {
+    "authorize": [
+      "enforce-shared-token-rate-limit",
+      "select-issuer-org-query-before-legacy-organization-query",
+      "consume-request-uri-when-present",
+      "require-response-type-and-client-id",
+      "load-tenant-registered-client-when-tenant-present",
+      "validate-client-active-and-exact-redirect",
+      "validate-global-redirect-policy",
+      "invoke-native-authorization-engine",
+      "persist-authorization-session",
+      "return-redirect-or-json"
+    ],
+    "pushed_authorization_request": [
+      "enforce-shared-token-rate-limit",
+      "select-issuer-org-query-before-form-organization",
+      "serialize-complete-parameter-set",
+      "enforce-encoded-payload-limit",
+      "store-single-use-capability",
+      "return-created-response"
+    ],
+    "deferred_credential_legacy": [
+      "check-bearer-prefix-only",
+      "parse-json-body",
+      "require-transaction-id",
+      "load-unscoped-transaction",
+      "load-credential-for-issued-transaction",
+      "project-issued-pending-or-terminal-response"
+    ],
+    "notification_endpoint_legacy": [
+      "check-bearer-prefix-only",
+      "ignore-body",
+      "return-no-content"
+    ],
+    "put_oid4vci_registered_client_legacy": [
+      "authenticate-management-api-key",
+      "validate-and-normalize-body",
+      "use-body-organization-id-without-trusted-tenant-check",
+      "save-client",
+      "read-client-after-write",
+      "project-response"
+    ],
+    "revoke_transaction": [
+      "authenticate-management-api-key",
+      "load-transaction-by-id",
+      "require-trusted-tenant-match-and-hide-foreign-resource",
+      "load-associated-credential",
+      "require-credential-transaction-tenant-match",
+      "publish-canonical-revocation-status",
+      "persist-local-credential-status",
+      "synchronize-canvas-delivery-records",
+      "persist-transaction-revocation",
+      "project-response"
+    ],
+    "list_credentials": [
+      "authenticate-management-api-key",
+      "require-trusted-tenant-match",
+      "list-organization-credentials",
+      "apply-exact-case-sensitive-status-filter",
+      "project-management-records"
+    ]
+  },
+  "par": {
+    "request_uri_prefix": "urn:ietf:params:oauth:request_uri:",
+    "ttl_seconds": 90,
+    "maximum_encoded_parameter_bytes": 16384,
+    "encoded_shape_in_order": [
+      "response_type",
+      "client_id",
+      "redirect_uri",
+      "scope",
+      "state",
+      "code_challenge",
+      "code_challenge_method",
+      "issuer_state",
+      "authorization_details",
+      "organization_id"
+    ],
+    "nullable_fields_are_stored": true,
+    "required_protocol_parameters_at_par_time": [],
+    "storage": {
+      "key_at_rest": "sha256-digest-only",
+      "payload": "complete-parameter-object",
+      "single_use": true,
+      "atomic_consume": true,
+      "expired_or_replayed": {
+        "status_code": 400,
+        "body": {
+          "error": "invalid_request",
+          "error_description": "request_uri is invalid or expired"
+        }
+      },
+      "unavailable": {
+        "status_code": 503,
+        "body": {
+          "error": "temporarily_unavailable",
+          "error_description": "Authorization request storage is unavailable"
+        },
+        "cause_disclosed": false
+      }
+    },
+    "authorization_override": "Each truthy stored PAR value overrides the corresponding inline value; a stored organization_id overrides both public issuer_org and legacy organization_id.",
+    "consume_timing": "The request URI is consumed before required-field, registered-client, redirect-policy, and native-engine validation and remains consumed after any later error."
+  },
+  "authorization": {
+    "native_engine_lifetime_seconds": 600,
+    "persisted_session_lifetime": {
+      "environment_variable": "ISSUANCE_AUTH_SESSION_TTL_MINUTES",
+      "unit": "minutes",
+      "default_minutes": 60,
+      "default_seconds": 3600,
+      "configuration_read_timing": "process-import",
+      "legacy_composition": "The route asks the native engine for a 600-second session, then creates and persists a Python AuthorizationSession without copying the engine expiry. The entity therefore owns the effective configured lifetime."
+    },
+    "native_engine_inputs": [
+      "response_type",
+      "client_id",
+      "redirect_uri",
+      "state",
+      "code_challenge",
+      "code_challenge_method",
+      "issuer_state",
+      "authorization_details",
+      "scope"
+    ],
+    "authorization_details_invalid_json": "project-null-to-native-engine",
+    "registered_client": {
+      "lookup_scope": ["organization_id", "client_id"],
+      "inactive_error": {
+        "status_code": 400,
+        "body": {
+          "error": "unauthorized_client",
+          "error_description": "Client registration is inactive"
+        }
+      },
+      "redirect_match": "exact-string-membership"
+    },
+    "unregistered_redirect_policy": {
+      "configured_allowlist": "exact-string-membership",
+      "default": "https-required-except-localhost-ipv4-ipv6"
+    },
+    "session_persistence": {
+      "before_success_response": true,
+      "fields": [
+        "native-code",
+        "client-id",
+        "redirect-uri",
+        "scope",
+        "state",
+        "issuer-state",
+        "native-credential-configuration-ids",
+        "organization-id",
+        "code-challenge",
+        "code-challenge-method"
+      ]
+    },
+    "redirect": {
+      "status_code": 307,
+      "existing_query_preserved": true,
+      "success_parameters_in_order": ["code", "iss", "state-when-present"],
+      "error_parameters_in_order": [
+        "error",
+        "error_description",
+        "state-when-present"
+      ],
+      "issuer_parameter": "{ISSUER_BASE_URL}/org/{organization_id}",
+      "native_validation_error_without_redirect": "direct-json-400"
+    }
+  },
+  "registered_client": {
+    "request": {
+      "organization_id": "trimmed-non-empty-string",
+      "client_id": "trimmed-string-1-to-512-characters",
+      "jwks": "non-empty-public-ES256-P256-key-set-with-unique-kids-and-no-private-material",
+      "redirect_uris": "unique-absolute-https-without-fragments; localhost HTTP allowed",
+      "active_default": true,
+      "unknown_fields": "ignored-by-legacy-pydantic-model"
+    },
+    "persistence": {
+      "upsert_key": ["organization_id", "client_id"],
+      "rotation_preserves_created_at": true,
+      "rotation_updates_updated_at": true,
+      "read_after_write_required": true
+    },
+    "response_fields": [
+      "organization_id",
+      "client_id",
+      "jwks",
+      "redirect_uris",
+      "token_endpoint_auth_method",
+      "active",
+      "created_at",
+      "updated_at"
+    ],
+    "token_endpoint_auth_method": "private_key_jwt"
+  },
+  "deferred_credential": {
+    "request_field": "transaction_id",
+    "pending_statuses": ["pending", "authorized"],
+    "pending_response": {
+      "status_code": 202,
+      "headers": {"Retry-After": "5"},
+      "body": {"transaction_id": "request-transaction-id"}
+    },
+    "issued_response": {
+      "status_code": 200,
+      "body": {"credential": "stored-credential-jwt"}
+    },
+    "issued_without_credential": {
+      "status_code": 400,
+      "body": {
+        "error": "invalid_transaction_id",
+        "error_description": "Transaction is in issued state"
+      }
+    },
+    "terminal_response": {
+      "status_code": 400,
+      "body": {
+        "error": "invalid_transaction_id",
+        "error_description_template": "Transaction is in {status} state"
+      }
+    }
+  },
+  "notification": {
+    "legacy_success": {"status_code": 204, "body": null},
+    "legacy_body_effect": "none",
+    "legacy_persistence_effect": "none",
+    "native_correction": {
+      "specification": {
+        "name": "OpenID for Verifiable Credential Issuance 1.0 Final",
+        "published": "2025-09-16",
+        "section": "11 Notification Endpoint",
+        "url": "https://openid.net/specs/openid-4-verifiable-credential-issuance-1_0-final.html#name-notification-endpoint"
+      },
+      "request_content_type": "application/json",
+      "fields": [
+        {"name": "notification_id", "required": true, "type": "non-empty-string"},
+        {
+          "name": "event",
+          "required": true,
+          "type": "case-sensitive-enum",
+          "values": [
+            "credential_accepted",
+            "credential_failure",
+            "credential_deleted"
+          ]
+        },
+        {
+          "name": "event_description",
+          "required": false,
+          "type": "ASCII %x20-21 / %x23-5B / %x5D-7E"
+        }
+      ],
+      "unknown_repeated_or_malformed_parameters": "invalid_notification_request",
+      "authentication": "valid access token bound to the notification identifier's issuance transaction",
+      "persistence": {
+        "notification_binding_committed_with_credential_response": true,
+        "events_are_durable_and_auditable": true,
+        "identical_retries_are_idempotent": true,
+        "multiple_distinct_supported_events_per_notification_id": true
+      },
+      "success": {"status_code": 204, "body": null},
+      "invalid_notification_id": {
+        "status_code": 400,
+        "body": {"error": "invalid_notification_id"}
+      },
+      "invalid_notification_request": {
+        "status_code": 400,
+        "body": {"error": "invalid_notification_request"}
+      }
+    }
+  },
+  "transaction_revocation": {
+    "missing_transaction": {"status_code": 404, "body": {"detail": "Transaction not found"}},
+    "foreign_transaction": {"status_code": 404, "body": {"detail": "Resource not found"}},
+    "credential_tenant_mismatch": {
+      "status_code": 409,
+      "body": {"detail": "Issued credential organization does not match its transaction"}
+    },
+    "canonical_publication_required_before_local_mutation": true,
+    "canonical_publication_retried_for_already_revoked_local_records": true,
+    "already_revoked_transaction_preserves_original_timestamp_and_reason": true,
+    "partial_persistence_recovery": "Retry reconciles the credential before conditionally committing the transaction.",
+    "response_fields": ["id", "status", "revoked_at", "revocation_reason"]
+  },
+  "credential_listing": {
+    "organization_scope": "trusted-X-Organization-ID-must-match-query-organization_id",
+    "status_filter": "optional-exact-case-sensitive-enum-value",
+    "unknown_status": "200-empty-list",
+    "preserve_repository_order": true,
+    "projection_fields": [
+      "id",
+      "credential_template_id",
+      "applicant_id",
+      "subject_did",
+      "status",
+      "issued_at",
+      "status_updated_at"
+    ]
+  },
+  "whole_response_reference_cases": [
+    "list_credentials_missing_management_key",
+    "put_registered_client_missing_management_key",
+    "revoke_transaction_missing_management_key",
+    "list_credentials_missing_tenant",
+    "list_credentials_exact_status_projection",
+    "list_credentials_status_is_case_sensitive",
+    "list_credentials_rejects_foreign_tenant_before_read",
+    "list_credentials_repository_failure",
+    "put_registered_client_uses_body_tenant",
+    "put_registered_client_requires_read_after_write",
+    "put_registered_client_rejects_private_key_material",
+    "par_success_issuer_query_precedes_form",
+    "authorize_consumes_par_and_preserves_registered_query",
+    "authorize_rejects_replayed_par",
+    "authorize_requires_response_type_and_client_id",
+    "authorize_json_success_persists_session",
+    "authorize_native_error_redirect_preserves_query_and_state",
+    "authorize_rejects_inactive_registered_client",
+    "authorize_rejects_unregistered_client_redirect",
+    "authorize_sanitizes_par_store_failure",
+    "par_rejects_oversized_encoded_payload_before_store",
+    "par_failed_store_is_sanitized",
+    "deferred_requires_bearer_prefix",
+    "deferred_requires_transaction_id",
+    "deferred_rejects_unknown_transaction",
+    "deferred_empty_bearer_currently_reaches_pending_transaction",
+    "deferred_unbound_bearer_currently_reads_issued_credential",
+    "deferred_issued_without_credential_is_terminal_error",
+    "deferred_reports_terminal_state",
+    "deferred_malformed_json_is_unhandled",
+    "notification_missing_bearer_has_nested_error",
+    "notification_empty_bearer_and_unread_body_currently_acknowledged",
+    "notification_valid_shape_has_no_legacy_effect",
+    "revoke_transaction_canonical_then_local_order",
+    "revoke_transaction_missing_transaction",
+    "revoke_transaction_rejects_credential_tenant_mismatch",
+    "revoke_transaction_fails_closed_before_local_mutation",
+    "revoke_transaction_hides_foreign_resource_after_lookup"
+  ],
+  "source_corrections_to_preserve": [
+    {
+      "id": "OID4VCI-PAR-001:public-issuer-tenant-precedence",
+      "behavior": "issuer_org wins over a legacy inline organization selector in both PAR and authorization."
+    },
+    {
+      "id": "OID4VCI-REDIRECT-001:registered-query-preservation",
+      "behavior": "Authorization success and error parameters append with ampersand when a registered redirect already has a query."
+    },
+    {
+      "id": "OID4VCI-REVOKE-001:canonical-before-local",
+      "behavior": "Canonical status-list publication and credential persistence precede transaction revocation, with retry reconciliation."
+    },
+    {
+      "id": "OID4VCI-PAR-002:single-use-digest-capability",
+      "behavior": "PAR capabilities are digest-keyed, bounded, atomically consumed, and never stored in plaintext as keys."
+    }
+  ],
+  "intentional_native_corrections": [
+    {
+      "id": "OID4VCI-AUTH-002:validate-and-bind-bearer",
+      "legacy": "Deferred credential and notification accept any Authorization value beginning with 'Bearer ', including an empty token; deferred lookup is not bound to the token or tenant.",
+      "native": "Authenticate a non-empty access token before parsing or resource lookup and require the token's authorization session or issuance transaction to own the requested transaction/notification.",
+      "preserved_capability": "Valid wallet access tokens retain deferred retrieval and notification acknowledgment.",
+      "required_errors": {
+        "missing_invalid_or_unbound_token": {
+          "status_code": 401,
+          "headers": {"WWW-Authenticate": "Bearer"},
+          "body": {"error": "invalid_token", "error_description": "Client authentication failed"}
+        }
+      }
+    },
+    {
+      "id": "OID4VCI-NOTIFY-001:validate-notification-request",
+      "legacy": "Notification ignores the complete request body and returns 204 for malformed or arbitrary content after a prefix-only bearer check.",
+      "native": "Validate the supported OID4VCI notification body, preserve supported notification events as durable/auditable effects, and reject malformed or unsupported requests without acknowledging them.",
+      "preserved_capability": "Valid accepted/deleted/failure wallet notifications receive 204 after their effect is committed.",
+      "required_errors": {
+        "invalid_notification_id": {
+          "status_code": 400,
+          "body": {"error": "invalid_notification_id"}
+        },
+        "invalid_notification_request": {
+          "status_code": 400,
+          "body": {"error": "invalid_notification_request"}
+        }
+      }
+    },
+    {
+      "id": "OID4VCI-MGMT-001:registered-client-tenant-binding",
+      "legacy": "Client registration uses organization_id from the body and ignores a conflicting trusted X-Organization-ID header.",
+      "native": "Require the gateway-authenticated tenant to match organization_id before any save, using the same management tenant guard as list and revoke.",
+      "preserved_capability": "Authorized tenant administrators can still create, rotate, activate, and deactivate their wallet registrations.",
+      "required_errors": {
+        "missing_trusted_tenant": {
+          "status_code": 403,
+          "body": {"detail": "Trusted organization context is required"}
+        },
+        "tenant_mismatch": {
+          "status_code": 403,
+          "body": {"detail": "Organization context does not match requested organization"}
+        }
+      }
+    },
+    {
+      "id": "OID4VCI-ERROR-001:structured-sanitized-internal-errors",
+      "legacy": "Unhandled repository failures can escape as text/plain Internal Server Error while explicit PAR failures are already sanitized OAuth JSON.",
+      "native": "Use one DRY structured and sanitized JSON error boundary per public-protocol or management surface without disclosing dependency causes.",
+      "preserved_capability": "All existing explicit OAuth and management error codes/details remain exact unless another listed correction replaces them.",
+      "required_errors": {
+        "public_protocol_repository_failure": {
+          "status_code": 503,
+          "body": {
+            "error": "temporarily_unavailable",
+            "error_description": "OID4VCI service is temporarily unavailable"
+          }
+        },
+        "management_repository_failure": {
+          "status_code": 503,
+          "body": {"detail": "OID4VCI management service is temporarily unavailable"}
+        }
+      }
+    }
+  ],
+  "gates_before_rust_implementation": [
+    "reference-file-hash-matches-contract",
+    "protected-source-commit-and-normalized-source-hashes-match-capture",
+    "all-seven-routes-have-one-authentication-component-and-complete-order",
+    "every-reference-observation-is-named-exactly-once",
+    "whole-response-status-headers-body-and-side-effects-are-asserted",
+    "intentional-corrections-have-preserved-capability-and-target-error-contracts",
+    "capture-replay-matches-reference-against-protected-source"
+  ]
+}
