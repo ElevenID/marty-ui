@@ -369,7 +369,7 @@ def test_frozen_surface_provenance_and_coverage_are_complete() -> None:
     ).hexdigest() == coverage["oid4vci_authorization_behavior_contract"]["sha256"]
     assert coverage["oid4vci_authorization_behavior_contract"] == {
         "path": "contracts/issuance-oid4vci-authorization.json",
-        "sha256": "c4b3643bc16c1f75133e69761d3ad5d226432e3a0e05a414a372f3fd3ff7f67f",
+        "sha256": "5eda9ba42017691d1b9152b4e9c9cbdbf824eb805b054aa2725b8c919db89511",
         "source_repository": "ElevenID/marty-credentials",
         "source_commit": "aaa6a9b8e31e62cd0ab087eef5fc1f4835048e26",
         "source_tree": "819b7458a31c75d28043a4660643b029c5ec4567",
@@ -803,7 +803,7 @@ def test_frozen_surface_provenance_and_coverage_are_complete() -> None:
         "http": 20,
         "grpc": 0,
         "runtime_modes": ["api", "canvas-sync-worker"],
-        "literal_environment_variables": 55,
+        "literal_environment_variables": 54,
         "dynamic_configuration_lookups": 20,
         "migration_revisions": 46,
         "migration_heads": 1,
@@ -834,6 +834,7 @@ def test_frozen_surface_provenance_and_coverage_are_complete() -> None:
         "ISSUANCE_GRPC_PORT",
         "ISSUANCE_SERVICE_PORT",
         "ISSUANCE_API_KEY",
+        "ISSUANCE_AUTH_SESSION_TTL_MINUTES",
         "ALLOWED_REDIRECT_URIS",
         "ISSUER_BASE_URL",
         "ISSUER_DISPLAY_NAME",

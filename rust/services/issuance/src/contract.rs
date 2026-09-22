@@ -1848,6 +1848,7 @@ pub fn validate_embedded_contract() -> Result<CoverageSummary, MmfError> {
                 "ISSUANCE_GRPC_PORT",
                 "ISSUANCE_SERVICE_PORT",
                 "ISSUANCE_API_KEY",
+                "ISSUANCE_AUTH_SESSION_TTL_MINUTES",
                 "ALLOWED_REDIRECT_URIS",
                 "ISSUER_BASE_URL",
                 "ISSUER_DISPLAY_NAME",

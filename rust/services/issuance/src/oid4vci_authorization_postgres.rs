@@ -167,10 +167,8 @@ impl Oid4vciAuthorizationRepository for PostgresOid4vciAuthorizationRepository {
             0,
         )
         .ok_or_else(|| repository_error("authorization timestamp is invalid"))?;
-        let lifetime = i64::try_from(write.session.expires_in)
-            .map_err(|_| repository_error("authorization lifetime overflow"))?;
         let expires_at = created_at
-            .checked_add_signed(Duration::seconds(lifetime))
+            .checked_add_signed(Duration::seconds(write.persisted_lifetime_seconds))
             .ok_or_else(|| repository_error("authorization expiry overflow"))?;
         sqlx::query(
             "INSERT INTO issuance_service.authorization_sessions

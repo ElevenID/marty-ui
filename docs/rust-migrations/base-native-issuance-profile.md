@@ -139,9 +139,10 @@ The excluded set is exact and guarded; exclusion does not mean feature deletion:
 - `ICAO_DOCUMENT_SIGNER_URL/API_KEY`, `PHYSICAL_DOCUMENT_ALLOW_SELF_SIGNED`,
   `PHYSICAL_DOCUMENT_ARTIFACT_KEY`, `PERSONALIZATION_BUREAU_URL/API_KEY/WEBHOOK_SECRET`:
   physical-document features and consumers remain legacy.
-- `ISSUANCE_AUTH_SESSION_TTL_MINUTES`: the legacy authorization-session creation
-  owner (`domain/entities.py` AuthorizationSession); its route is not selected.
-  Native token exchange consumes the persisted session expiry instead.
+- `ISSUANCE_AUTH_SESSION_TTL_MINUTES`: native authorization preserves the legacy
+  Python entity's configured persisted-session lifetime, including the 60-minute
+  default. The historical 600-second Rust engine input remains distinct because
+  Python discarded the engine expiry before persistence.
 - `CANVAS_CREDENTIALS_PROVENANCE_BASE_URL`, `CANVAS_CREDENTIALS_RECIPIENT_HASHED`,
   `CANVAS_CREDENTIALS_ALLOW_DUPLICATE_AWARDS`: Python
   `canvas_credentials_adapter.py:588,671,673` reads them when building a **new mirror

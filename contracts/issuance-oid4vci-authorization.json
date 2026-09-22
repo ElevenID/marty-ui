@@ -9,7 +9,7 @@
     "route_source_sha256": "daf2f4be1d8043ff237e2b6be36fbd671712a097ca2c0ccee209ae9ab0ef166f",
     "reference": {
       "path": "contracts/issuance-oid4vci-authorization-python-reference.json",
-      "sha256": "e21967f39fd5732e7c33217ade2fe758dd654af52d6c45f3506d40f6540b7c02",
+      "sha256": "057a3fa485eea6c250f9257d6a1e751642e2805b4a397a1d66f19bd072fd46ed",
       "capture_script": "scripts/capture_oid4vci_authorization_reference.py",
       "capture_kind": "unchanged-python-route-composition-through-asgi-with-controlled-native-and-downstream-dependencies"
     }

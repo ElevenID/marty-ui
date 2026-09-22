@@ -515,6 +515,7 @@ async fn transaction_contract(claims_type: &str) {
             organization_id: Some("org-a".into()),
             scope: Some("openid_credential".into()),
             state: Some("state-a".into()),
+            persisted_lifetime_seconds: 3_600,
         })
         .await
         .unwrap();
@@ -563,7 +564,7 @@ async fn transaction_contract(claims_type: &str) {
     assert_eq!(persisted_created_at.timestamp(), authorization_created_at);
     assert_eq!(
         persisted_expires_at - persisted_created_at,
-        chrono::Duration::seconds(600)
+        chrono::Duration::seconds(3_600)
     );
 
     sqlx::query(

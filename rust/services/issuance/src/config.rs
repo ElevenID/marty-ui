@@ -23,6 +23,7 @@ pub struct IssuanceServiceConfig {
     pub issuer_base_url: String,
     pub allowed_redirect_uris: Vec<String>,
     pub issuance_offer_ttl_minutes: PythonConfigInteger,
+    pub authorization_session_ttl_minutes: PythonConfigInteger,
     pub issuer_display_name: String,
     pub cors_allowed_origins: Vec<String>,
     pub database_url: String,
@@ -96,6 +97,10 @@ impl std::fmt::Debug for IssuanceServiceConfig {
             .field(
                 "issuance_offer_ttl_minutes",
                 &self.issuance_offer_ttl_minutes,
+            )
+            .field(
+                "authorization_session_ttl_minutes",
+                &self.authorization_session_ttl_minutes,
             )
             .field("issuer_display_name", &self.issuer_display_name)
             .field("cors_allowed_origins", &self.cors_allowed_origins)
@@ -262,6 +267,7 @@ struct Settings {
     discovery: DiscoverySettings,
     dependencies: DependencySettings,
     initiation: InitiationSettings,
+    authorization: AuthorizationSettings,
     didcomm: DidcommSettings,
     rate_limit: RateLimitSettings,
 }
@@ -304,6 +310,11 @@ struct InitiationSettings {
     related_resource_urls: Vec<String>,
     related_resource_max_bytes: usize,
     related_resource_timeout_seconds: f64,
+}
+
+#[derive(Deserialize)]
+struct AuthorizationSettings {
+    session_ttl_minutes: Value,
 }
 
 #[derive(Deserialize)]
@@ -380,6 +391,9 @@ impl IssuanceServiceConfig {
                     "related_resource_max_bytes": 2000000,
                     "related_resource_timeout_seconds": 10.0
                 },
+                "authorization": {
+                    "session_ttl_minutes": "60"
+                },
                 "didcomm": {
                     "universal_resolver_url": null,
                     "did_web_internal_base_url": null,
@@ -415,6 +429,10 @@ impl IssuanceServiceConfig {
         let issuance_offer_ttl_minutes = parse_python_integer_setting(
             "ISSUANCE_OFFER_TTL_MINUTES",
             &settings.initiation.offer_ttl_minutes,
+        )?;
+        let authorization_session_ttl_minutes = parse_python_integer_setting(
+            "ISSUANCE_AUTH_SESSION_TTL_MINUTES",
+            &settings.authorization.session_ttl_minutes,
         )?;
         let database_url = validate_database_url(&settings.dependencies.database_url)?;
         let signing_keys_internal_url =
@@ -664,6 +682,7 @@ impl IssuanceServiceConfig {
             issuer_base_url,
             allowed_redirect_uris,
             issuance_offer_ttl_minutes,
+            authorization_session_ttl_minutes,
             issuer_display_name: settings.discovery.issuer_display_name,
             cors_allowed_origins: settings.server.cors_allowed_origins,
             database_url,
@@ -801,6 +820,10 @@ fn legacy_environment(values: &BTreeMap<String, String>) -> Result<Value, MmfErr
     if let Some(value) = values.get("ISSUANCE_OFFER_TTL_MINUTES") {
         initiation.insert("offer_ttl_minutes".to_owned(), json!(value));
     }
+    let mut authorization = Map::new();
+    if let Some(value) = values.get("ISSUANCE_AUTH_SESSION_TTL_MINUTES") {
+        authorization.insert("session_ttl_minutes".to_owned(), json!(value));
+    }
     for (environment_name, setting_name) in [
         ("ORG_GRPC_TARGET", "organization_grpc_target"),
         ("CT_GRPC_TARGET", "credential_template_grpc_target"),
@@ -896,6 +919,7 @@ fn legacy_environment(values: &BTreeMap<String, String>) -> Result<Value, MmfErr
         "discovery": discovery,
         "dependencies": dependencies,
         "initiation": initiation,
+        "authorization": authorization,
         "didcomm": didcomm,
         "rate_limit": rate_limit
     }))
@@ -2070,6 +2094,42 @@ mod tests {
         ]))
         .unwrap();
         assert_eq!(layered.issuance_offer_ttl_minutes.to_i64(), Some(90));
+    }
+
+    #[test]
+    fn authorization_session_ttl_preserves_python_configuration() {
+        let default = IssuanceServiceConfig::from_values(values(&[])).unwrap();
+        assert_eq!(default.authorization_session_ttl_minutes.to_i64(), Some(60));
+
+        let legacy = IssuanceServiceConfig::from_values(values(&[(
+            "ISSUANCE_AUTH_SESSION_TTL_MINUTES",
+            "75",
+        )]))
+        .unwrap();
+        assert_eq!(legacy.authorization_session_ttl_minutes.to_i64(), Some(75));
+
+        let layered = IssuanceServiceConfig::from_values(values(&[
+            ("ISSUANCE_AUTH_SESSION_TTL_MINUTES", "75"),
+            ("MARTY_ISSUANCE__AUTHORIZATION__SESSION_TTL_MINUTES", "90"),
+        ]))
+        .unwrap();
+        assert_eq!(layered.authorization_session_ttl_minutes.to_i64(), Some(90));
+
+        let negative = IssuanceServiceConfig::from_values(values(&[(
+            "ISSUANCE_AUTH_SESSION_TTL_MINUTES",
+            "-1",
+        )]))
+        .unwrap();
+        assert_eq!(
+            negative.authorization_session_ttl_minutes.to_i64(),
+            Some(-1)
+        );
+
+        assert!(IssuanceServiceConfig::from_values(values(&[(
+            "ISSUANCE_AUTH_SESSION_TTL_MINUTES",
+            "not-an-integer"
+        ),]))
+        .is_err());
     }
 
     #[test]

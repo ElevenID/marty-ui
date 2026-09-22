@@ -18,6 +18,7 @@ use marty_oid4vci::{
     issuer::IssuanceEngine, AuthorizationDetail, AuthorizationRequest, AuthorizationSession,
     CodeChallengeMethod,
 };
+use mmf_config::numeric_config::PythonConfigInteger;
 use serde::{
     de::{self, MapAccess, Visitor},
     Deserialize, Deserializer, Serialize,
@@ -107,6 +108,7 @@ pub struct AuthorizationSessionWrite {
     pub organization_id: Option<String>,
     pub scope: Option<String>,
     pub state: Option<String>,
+    pub persisted_lifetime_seconds: i64,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -305,6 +307,7 @@ pub struct Oid4vciAuthorizationService {
     engine: Arc<IssuanceEngine>,
     issuer_base_url: Arc<str>,
     allowed_redirect_uris: Arc<BTreeSet<String>>,
+    authorization_session_ttl_minutes: PythonConfigInteger,
 }
 
 impl std::fmt::Debug for Oid4vciAuthorizationService {
@@ -324,6 +327,7 @@ impl Oid4vciAuthorizationService {
         engine: IssuanceEngine,
         issuer_base_url: &str,
         allowed_redirect_uris: impl IntoIterator<Item = String>,
+        authorization_session_ttl_minutes: PythonConfigInteger,
     ) -> Self {
         Self {
             repository,
@@ -331,6 +335,7 @@ impl Oid4vciAuthorizationService {
             engine: Arc::new(engine),
             issuer_base_url: Arc::from(issuer_base_url.trim_end_matches('/')),
             allowed_redirect_uris: Arc::new(allowed_redirect_uris.into_iter().collect()),
+            authorization_session_ttl_minutes,
         }
     }
 
@@ -443,6 +448,11 @@ impl Oid4vciAuthorizationService {
                 return authorization_error_outcome(&query.parameters, error);
             }
         };
+        let persisted_lifetime_seconds = self
+            .authorization_session_ttl_minutes
+            .to_i64()
+            .and_then(|minutes| minutes.checked_mul(60))
+            .ok_or(ProtocolError::Unavailable)?;
         self.repository
             .save_authorization_session(&AuthorizationSessionWrite {
                 id: Uuid::new_v4().to_string(),
@@ -450,6 +460,7 @@ impl Oid4vciAuthorizationService {
                 organization_id: query.parameters.organization_id.clone(),
                 scope: query.parameters.scope.clone(),
                 state: query.parameters.state.clone(),
+                persisted_lifetime_seconds,
             })
             .await
             .map_err(|_| ProtocolError::Unavailable)?;

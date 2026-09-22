@@ -209,6 +209,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
         protocol_engine(),
         &config.issuer_base_url,
         config.allowed_redirect_uris.clone(),
+        config.authorization_session_ttl_minutes.clone(),
     );
     let nonce_repository = Arc::new(PostgresProofNonceRepository::new(pool.clone()));
     let proof_nonce = ProofNonceService::new(

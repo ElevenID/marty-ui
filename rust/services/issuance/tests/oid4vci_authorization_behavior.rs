@@ -209,12 +209,20 @@ fn app(repository: &Repository) -> axum::Router {
 }
 
 fn service(repository: &Repository) -> Oid4vciAuthorizationService {
+    service_with_ttl(repository, 60)
+}
+
+fn service_with_ttl(
+    repository: &Repository,
+    session_ttl_minutes: i64,
+) -> Oid4vciAuthorizationService {
     Oid4vciAuthorizationService::new(
         Arc::new(repository.clone()),
         Arc::new(ContractDpop),
         protocol_engine(),
         "https://issuer.example",
         Vec::new(),
+        session_ttl_minutes.into(),
     )
 }
 
@@ -315,6 +323,8 @@ async fn par_is_single_use_and_authorization_preserves_registered_redirect_queri
             state.sessions[0].session.credential_configuration_ids,
             ["config-a"]
         );
+        assert_eq!(state.sessions[0].session.expires_in, 600);
+        assert_eq!(state.sessions[0].persisted_lifetime_seconds, 3_600);
     });
 
     let (status, _, body) = send(app(&repository), "GET", &authorization_uri, None, None, "").await;
@@ -529,6 +539,7 @@ async fn authorization_preserves_json_success_and_sanitizes_protocol_and_reposit
         protocol_engine(),
         "https://issuer.example",
         vec![unsafe_redirect.to_owned()],
+        60_i64.into(),
     );
     let (status, _, body) = send(
         router(service),
@@ -612,6 +623,26 @@ async fn authorization_preserves_json_success_and_sanitizes_protocol_and_reposit
         body.unwrap(),
         json!({"error":"temporarily_unavailable","error_description":"OID4VCI service is temporarily unavailable"})
     );
+}
+
+#[tokio::test]
+async fn authorization_persists_the_configured_python_session_lifetime() {
+    let repository = Repository::default();
+    let (status, _, _) = send(
+        router(service_with_ttl(&repository, 75)),
+        "GET",
+        "/v1/issuance/authorize?response_type=code&client_id=public-wallet&issuer_org=org-a",
+        None,
+        None,
+        "",
+    )
+    .await;
+    assert_eq!(status, 200);
+    repository.inspect(|state| {
+        assert_eq!(state.sessions.len(), 1);
+        assert_eq!(state.sessions[0].session.expires_in, 600);
+        assert_eq!(state.sessions[0].persisted_lifetime_seconds, 4_500);
+    });
 }
 
 #[tokio::test]
