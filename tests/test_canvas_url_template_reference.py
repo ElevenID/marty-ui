@@ -40,6 +40,8 @@ def test_frozen_artifacts_pin_complete_cases_and_original_source_closure():
         )
     value = reference()
     capture.validate_result(value)
+    assert value["source_commit"] == capture.SOURCE_COMMIT
+    assert capture.SOURCE_COMMIT != capture.pinned.REVISION
     assert len(value["observations"]) == 123
     assert sum("error" in row for row in value["observations"]) == 54
     assert value["selected_definitions"][capture.pinned.ADAPTER] == [
