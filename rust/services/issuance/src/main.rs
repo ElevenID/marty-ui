@@ -123,6 +123,8 @@ use marty_issuance_service::{
     migration,
     oid4vci_authorization::Oid4vciAuthorizationService,
     oid4vci_authorization_postgres::PostgresOid4vciAuthorizationRepository,
+    oid4vci_management::Oid4vciManagementService,
+    oid4vci_management_postgres::PostgresOid4vciManagementRepository,
     proof_nonce::{ProofNonceService, SecureProofNonceGenerator},
     resource_owner::ResourceOwnerService,
     resource_owner_postgres::PostgresResourceOwnerRepository,
@@ -679,11 +681,19 @@ async fn main() -> Result<(), Box<dyn Error>> {
         credential_management.clone(),
         config.issuance_api_key.as_deref(),
     );
+    let issued_credential_repository =
+        Arc::new(PostgresIssuedCredentialRecordRepository::new(pool.clone()));
     let issued_credentials = IssuedCredentialAdapterService::new(
-        Arc::new(PostgresIssuedCredentialRecordRepository::new(pool.clone())),
+        issued_credential_repository.clone(),
         credential_management.clone(),
         config.issuance_api_key.as_deref(),
         Arc::new(SystemIssuedCredentialClock),
+    );
+    let oid4vci_management = Oid4vciManagementService::new(
+        Arc::new(PostgresOid4vciManagementRepository::new(pool.clone())),
+        issued_credential_repository,
+        credential_management.clone(),
+        config.issuance_api_key.as_deref(),
     );
     let grpc_platform = IssuanceGrpcPlatform::new(
         initiation,
@@ -751,7 +761,8 @@ async fn main() -> Result<(), Box<dyn Error>> {
             oid4vci_authorization,
         )
         .with_internal_applications(internal_applications)
-        .with_issued_credentials(issued_credentials),
+        .with_issued_credentials(issued_credentials)
+        .with_oid4vci_management(oid4vci_management),
     );
     let (health_reporter, health_service) = tonic_health::server::health_reporter();
     let grpc_server = IssuanceServiceServer::new(grpc_service);

@@ -15,12 +15,18 @@ that engine session expiry and persisted a new `AuthorizationSession`. Its
 effective lifetime is `ISSUANCE_AUTH_SESSION_TTL_MINUTES`, defaulting to 60
 minutes. Native ownership must preserve that configurable persisted lifetime.
 
-Implementation status (2026-09-21): the change stacked on this historical
-freeze implements and selects exactly the four public OID4VCI routes natively:
+Implementation status (2026-09-21): the stacked candidate implements and
+selects all seven frozen routes natively. The public component owns
 `authorize`, `pushed_authorization_request`, `deferred_credential`, and
-`notification_endpoint`. The three tenant-management routes remain legacy and
-are outside this implementation PR. This checkpoint has not deleted Python,
-created a release, or deployed the candidate.
+`notification_endpoint`; the separate management component owns
+`put_oid4vci_registered_client`, `revoke_transaction`, and `list_credentials`.
+The components share the registered-client validation policy, management
+tenant guard, issued-credential repository, lifecycle transition owner, and
+structured error boundary without merging their trust boundaries. The
+management candidate has passed its focused HTTP, gateway allow-list,
+language-neutral coverage, strict lint, and disposable PostgreSQL gates,
+including concurrent idempotent transaction revocation. It has not yet merged,
+deleted Python, created a release, or deployed the candidate.
 
 The seven selected operations account for approximately 495 Python route-body
 lines:
@@ -165,5 +171,7 @@ candidate split. Before routing or Python deletion, require:
 6. Protected CI, merge, and beta-only aggregate acceptance. Production remains
    unchanged.
 
-This checkpoint changes no Rust route, coverage selection, compose routing,
-Credentials source, KMS boundary, deployment, or Python deletion.
+The historical freeze itself changed no runtime route. The stacked candidates
+now own all seven routes in Rust and select them through the fail-closed native
+coverage manifest. Credentials source deletion, the KMS boundary, release, and
+deployment remain later gates and are not claimed by this checkpoint.

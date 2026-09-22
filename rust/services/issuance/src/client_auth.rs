@@ -11,6 +11,8 @@ use crate::token_exchange::{
     ClientAuthenticationRequest, Oid4vciClientAuthenticator, TokenExchangeError,
 };
 
+const PRIVATE_JWK_FIELDS: [&str; 9] = ["d", "p", "q", "dp", "dq", "qi", "oth", "k", "key"];
+
 pub const JWT_BEARER_ASSERTION_TYPE: &str =
     "urn:ietf:params:oauth:client-assertion-type:jwt-bearer";
 const CLOCK_SKEW_SECONDS: i64 = 60;
@@ -200,6 +202,33 @@ fn verify_assertion(
     })
 }
 
+/// Validate the complete public ES256/P-256 key set accepted for a registered
+/// OID4VCI client.
+///
+/// Registration and assertion verification deliberately share this owner so
+/// a key cannot be accepted at the management boundary and rejected later by
+/// the token endpoint (or vice versa).
+pub fn validate_registered_client_jwks(jwks: &Value) -> Result<(), TokenExchangeError> {
+    normalized_keys(jwks).map(|_| ())
+}
+
+/// Return the first registered-client JWK that exposes private key material.
+///
+/// The management response preserves the legacy index-specific validation
+/// detail while the shared key validator remains the single acceptance owner.
+#[must_use]
+pub fn registered_client_private_key_index(jwks: &Value) -> Option<usize> {
+    jwks.get("keys").and_then(Value::as_array).and_then(|keys| {
+        keys.iter().position(|key| {
+            key.as_object().is_some_and(|key| {
+                PRIVATE_JWK_FIELDS
+                    .iter()
+                    .any(|field| key.contains_key(*field))
+            })
+        })
+    })
+}
+
 fn normalized_keys(jwks: &Value) -> Result<&[Value], TokenExchangeError> {
     let object = jwks.as_object().ok_or(TokenExchangeError::InvalidClient)?;
     if object.len() != 1 {
@@ -228,9 +257,10 @@ fn normalized_keys(jwks: &Value) -> Result<&[Value], TokenExchangeError> {
 
 fn validate_key(key: &Map<String, Value>) -> Result<(), TokenExchangeError> {
     const ALLOWED: [&str; 8] = ["alg", "crv", "key_ops", "kid", "kty", "use", "x", "y"];
-    const PRIVATE: [&str; 9] = ["d", "p", "q", "dp", "dq", "qi", "oth", "k", "key"];
     if key.keys().any(|field| !ALLOWED.contains(&field.as_str()))
-        || PRIVATE.iter().any(|field| key.contains_key(*field))
+        || PRIVATE_JWK_FIELDS
+            .iter()
+            .any(|field| key.contains_key(*field))
         || key.get("kty").and_then(Value::as_str) != Some("EC")
         || key.get("crv").and_then(Value::as_str) != Some("P-256")
         || !matches!(key.get("alg").and_then(Value::as_str), None | Some("ES256"))

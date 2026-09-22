@@ -210,6 +210,12 @@ pub struct CredentialManagementService {
     events: Arc<dyn CredentialLifecycleEventSink>,
 }
 
+#[derive(Clone, Copy)]
+enum ReasonPolicy {
+    PublicLifecycleLimit,
+    PreserveTransactionInput,
+}
+
 impl std::fmt::Debug for CredentialManagementService {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         formatter
@@ -271,8 +277,30 @@ impl CredentialManagementService {
         audit_context: &CredentialLifecycleAuditContext,
     ) -> Result<CredentialStatusView, CredentialManagementError> {
         let credential = self.load(credential_id).await?;
+        self.apply_transition(
+            credential,
+            trusted_organization_id,
+            action,
+            reason,
+            audit_context,
+            ReasonPolicy::PublicLifecycleLimit,
+        )
+        .await
+    }
+
+    async fn apply_transition(
+        &self,
+        credential: ManagedCredential,
+        trusted_organization_id: Option<&str>,
+        action: CredentialLifecycleAction,
+        reason: Option<&str>,
+        audit_context: &CredentialLifecycleAuditContext,
+        reason_policy: ReasonPolicy,
+    ) -> Result<CredentialStatusView, CredentialManagementError> {
         enforce_organization(&credential, trusted_organization_id)?;
-        validate_reason(reason)?;
+        if matches!(reason_policy, ReasonPolicy::PublicLifecycleLimit) {
+            validate_reason(reason)?;
+        }
         let comments = meaningful_text(audit_context.comments.as_deref());
         validate_comments(comments)?;
         validate_transition(credential.status, action)?;
@@ -335,6 +363,57 @@ impl CredentialManagementService {
             .await;
 
         Ok(status_view(&updated, reason.map(str::to_owned)))
+    }
+
+    /// Ensure canonical revocation publication for transaction-level retry
+    /// reconciliation without weakening the public credential endpoint's
+    /// `AlreadyRevoked` behavior.
+    ///
+    /// A transaction revocation can fail after the credential row is written
+    /// but before the transaction row is committed. Retrying must therefore
+    /// republish the idempotent canonical status bit and retry Canvas sync even
+    /// when the local credential is already revoked.
+    pub async fn reconcile_revocation(
+        &self,
+        credential_id: &str,
+        trusted_organization_id: Option<&str>,
+        reason: Option<&str>,
+    ) -> Result<CredentialStatusView, CredentialManagementError> {
+        let credential = self.load(credential_id).await?;
+        enforce_organization(&credential, trusted_organization_id)?;
+        if credential.status != ManagedCredentialStatus::Revoked {
+            let audit_context = CredentialLifecycleAuditContext::default();
+            return self
+                .apply_transition(
+                    credential,
+                    trusted_organization_id,
+                    CredentialLifecycleAction::Revoke,
+                    reason,
+                    &audit_context,
+                    ReasonPolicy::PreserveTransactionInput,
+                )
+                .await;
+        }
+
+        self.publisher
+            .publish(&credential, CredentialLifecycleAction::Revoke, reason)
+            .await
+            .map_err(|error| CredentialManagementError::PublicationUnavailable(error.0))?;
+        self.repository
+            .synchronize_canvas(&credential, CredentialLifecycleAction::Revoke, reason)
+            .await
+            .map_err(|error| match error {
+                CanvasLifecycleSyncError::Port(error) => {
+                    CredentialManagementError::CanvasRetryUnavailable(error.0)
+                }
+                CanvasLifecycleSyncError::TextEncoding => {
+                    CredentialManagementError::CanvasTextEncoding
+                }
+            })?;
+        Ok(status_view(
+            &credential,
+            credential.revocation_reason.clone(),
+        ))
     }
 
     async fn load(

@@ -270,8 +270,16 @@ mod tests {
                 );
             }
         }
+        assert_eq!(
+            upstream_service(HttpMethod::Get, "/v1/issuance/credentials"),
+            NATIVE_SERVICE,
+            "the OID4VCI management list route must remain native"
+        );
+        assert_eq!(
+            upstream_service(HttpMethod::Post, "/v1/issuance/credentials"),
+            LEGACY_SERVICE
+        );
         for path in [
-            "/v1/issuance/credentials",
             "/v1/issuance/credentials/credential-1",
             "/v1/issuance/credentials/credential-1/status/extra",
         ] {
@@ -566,6 +574,9 @@ mod tests {
             (HttpMethod::Post, "/v1/issuance/par"),
             (HttpMethod::Post, "/v1/issuance/deferred-credential"),
             (HttpMethod::Post, "/v1/issuance/notification"),
+            (HttpMethod::Put, "/v1/issuance/oid4vci-clients"),
+            (HttpMethod::Post, "/v1/issuance/transactions/tx-1/revoke"),
+            (HttpMethod::Get, "/v1/issuance/credentials"),
         ] {
             assert!(is_native_http(method, path), "{method:?} {path}");
         }
@@ -588,12 +599,15 @@ mod tests {
     }
 
     #[test]
-    fn oid4vci_public_protocol_selects_only_the_four_frozen_routes() {
+    fn oid4vci_selects_only_the_seven_frozen_routes() {
         let routes = [
             (HttpMethod::Get, "/v1/issuance/authorize"),
             (HttpMethod::Post, "/v1/issuance/par"),
             (HttpMethod::Post, "/v1/issuance/deferred-credential"),
             (HttpMethod::Post, "/v1/issuance/notification"),
+            (HttpMethod::Put, "/v1/issuance/oid4vci-clients"),
+            (HttpMethod::Post, "/v1/issuance/transactions/tx-1/revoke"),
+            (HttpMethod::Get, "/v1/issuance/credentials"),
         ];
         for (method, path) in routes {
             assert_eq!(upstream_service(method, path), NATIVE_SERVICE);
@@ -611,12 +625,12 @@ mod tests {
                 assert_eq!(upstream_service(method, &near_miss), LEGACY_SERVICE);
             }
         }
-        for (method, path) in [
-            (HttpMethod::Put, "/v1/issuance/oid4vci-clients"),
-            (HttpMethod::Post, "/v1/issuance/transactions/tx-1/revoke"),
-            (HttpMethod::Get, "/v1/issuance/credentials"),
+        for path in [
+            "/v1/issuance/transactions//revoke",
+            "/v1/issuance/transactions/tx-1/extra/revoke",
+            "/v1/issuance/transactions/tx-1/revoke/extra",
         ] {
-            assert_eq!(upstream_service(method, path), LEGACY_SERVICE);
+            assert_eq!(upstream_service(HttpMethod::Post, path), LEGACY_SERVICE);
         }
     }
 }

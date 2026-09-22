@@ -1171,6 +1171,7 @@ pub fn validate_embedded_contract() -> Result<CoverageSummary, MmfError> {
             == [
                 "OID4VCI-AUTH-002:validate-and-bind-bearer",
                 "OID4VCI-ERROR-001:structured-sanitized-internal-errors",
+                "OID4VCI-MGMT-001:registered-client-tenant-binding",
                 "OID4VCI-NOTIFY-001:validate-notification-request",
                 "SECURITY-ACCESS-TOKEN-001:exact-1800-second-expiry",
                 "OID4VCI-REDIRECT-002:http-or-https-only-localhost",
@@ -1178,6 +1179,8 @@ pub fn validate_embedded_contract() -> Result<CoverageSummary, MmfError> {
             && frozen_oid4vci_correction_ids.contains(&"OID4VCI-AUTH-002:validate-and-bind-bearer")
             && frozen_oid4vci_correction_ids
                 .contains(&"OID4VCI-ERROR-001:structured-sanitized-internal-errors")
+            && frozen_oid4vci_correction_ids
+                .contains(&"OID4VCI-MGMT-001:registered-client-tenant-binding")
             && frozen_oid4vci_correction_ids
                 .contains(&"OID4VCI-NOTIFY-001:validate-notification-request")
             && frozen_oid4vci_correction_ids
@@ -1272,7 +1275,7 @@ pub fn validate_embedded_contract() -> Result<CoverageSummary, MmfError> {
     let mut native_internal_application_cases = BTreeSet::new();
     let mut native_resource_owner_operations = BTreeSet::new();
     let mut native_issued_credential_adapter_operations = BTreeSet::new();
-    let mut native_oid4vci_authorization_operations = BTreeSet::new();
+    let mut native_oid4vci_operations = BTreeSet::new();
     // Freeze the already-qualified source contract; changing its historical
     // limits/status text is not necessary to select the eight exact operations.
     require(
@@ -1455,13 +1458,12 @@ pub fn validate_embedded_contract() -> Result<CoverageSummary, MmfError> {
             require(
                 operation.response.is_none()
                     && frozen.iter().any(|candidate| {
-                        candidate["component"] == "public-oid4vci-protocol"
-                            && candidate["method"] == operation.method
+                        candidate["method"] == operation.method
                             && candidate["path"] == operation.path
                             && candidate["operation"] == operation.operation
                     })
-                    && native_oid4vci_authorization_operations.insert(operation.operation.as_str()),
-                "native OID4VCI authorization operation diverges from its behavior contract",
+                    && native_oid4vci_operations.insert(operation.operation.as_str()),
+                "native OID4VCI operation diverges from its behavior contract",
             )?;
         } else if operation.renewal_behavior_contract {
             require(
@@ -1730,17 +1732,16 @@ pub fn validate_embedded_contract() -> Result<CoverageSummary, MmfError> {
         native_issued_credential_adapter_operations == frozen_issued_credential_adapter_operations,
         "native issued-credential adapter behavior coverage is incomplete",
     )?;
-    let frozen_oid4vci_authorization_operations = oid4vci_authorization["routes"]
+    let frozen_oid4vci_operations = oid4vci_authorization["routes"]
         .as_array()
         .ok_or_else(|| invalid("OID4VCI authorization routes are missing"))?
         .iter()
-        .filter(|route| route["component"] == "public-oid4vci-protocol")
         .filter_map(|route| route["operation"].as_str())
         .collect::<BTreeSet<_>>();
     require(
-        frozen_oid4vci_authorization_operations.len() == 4
-            && native_oid4vci_authorization_operations == frozen_oid4vci_authorization_operations,
-        "native OID4VCI authorization behavior coverage is incomplete",
+        frozen_oid4vci_operations.len() == 7
+            && native_oid4vci_operations == frozen_oid4vci_operations,
+        "native OID4VCI behavior coverage is incomplete",
     )?;
     let frozen_transaction_read_cases = transaction_reads
         .cases
@@ -2735,8 +2736,8 @@ mod tests {
     #[test]
     fn embedded_surface_and_native_coverage_are_consistent() {
         let summary = validate_embedded_contract().expect("contract");
-        assert_eq!(summary.native_http, 111);
-        assert_eq!(summary.remaining_http, 20);
+        assert_eq!(summary.native_http, 114);
+        assert_eq!(summary.remaining_http, 17);
         assert_eq!(summary.remaining_grpc, 0);
     }
 }

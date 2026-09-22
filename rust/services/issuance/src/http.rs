@@ -83,6 +83,7 @@ use crate::{
     internal_application_service::InternalApplicationService,
     issued_credential_records::IssuedCredentialAdapterService,
     oid4vci_authorization::Oid4vciAuthorizationService,
+    oid4vci_management::Oid4vciManagementService,
     proof_nonce::{ProofNonceError, ProofNonceService},
     resource_owner::{ResourceOwner, ResourceOwnerKind, ResourceOwnerService},
     tenant_discovery::{TenantDiscoveryError, TenantDiscoveryService},
@@ -134,6 +135,7 @@ pub struct IssuanceServices {
     renewal: Option<CredentialRenewalService>,
     credential_management: CredentialManagementHttpService,
     issued_credentials: Option<IssuedCredentialAdapterService>,
+    oid4vci_management: Option<Oid4vciManagementService>,
     application_templates: ApplicationTemplateService,
     internal_applications: Option<InternalApplicationService>,
     canvas: CanvasServices,
@@ -326,6 +328,7 @@ impl IssuanceServices {
             renewal: core.renewal,
             credential_management,
             issued_credentials: None,
+            oid4vci_management: None,
             application_templates,
             internal_applications: None,
             canvas,
@@ -353,6 +356,13 @@ impl IssuanceServices {
         self.issued_credentials = Some(issued_credentials);
         self
     }
+
+    /// Opt in to the tenant-owned OID4VCI management component.
+    #[must_use]
+    pub fn with_oid4vci_management(mut self, oid4vci_management: Oid4vciManagementService) -> Self {
+        self.oid4vci_management = Some(oid4vci_management);
+        self
+    }
 }
 
 #[derive(Default)]
@@ -368,6 +378,7 @@ struct OptionalServices {
     renewal: Option<CredentialRenewalService>,
     credential_management: Option<CredentialManagementHttpService>,
     issued_credentials: Option<IssuedCredentialAdapterService>,
+    oid4vci_management: Option<Oid4vciManagementService>,
     application_templates: Option<ApplicationTemplateService>,
     internal_applications: Option<InternalApplicationService>,
     canvas_lti_login: Option<CanvasLtiLoginService>,
@@ -478,6 +489,7 @@ pub fn router_with_all_services(
             renewal: services.renewal,
             credential_management: Some(services.credential_management),
             issued_credentials: services.issued_credentials,
+            oid4vci_management: services.oid4vci_management,
             application_templates: Some(services.application_templates),
             internal_applications: services.internal_applications,
             canvas_oauth: Some(services.canvas.oauth),
@@ -910,6 +922,7 @@ fn router_with_optional_services(
     services: OptionalServices,
 ) -> Router {
     let oid4vci_authorization = services.oid4vci_authorization.clone();
+    let oid4vci_management = services.oid4vci_management.clone();
     let oid4vci_rate_limiter = services.token_rate_limiter.clone();
     let system = system_router_with_options(
         runtime,
@@ -1236,6 +1249,11 @@ fn router_with_optional_services(
     };
     let api = if let Some(issued_credentials) = services.issued_credentials {
         api.merge(crate::issued_credential_http::router(issued_credentials))
+    } else {
+        api
+    };
+    let api = if let Some(management) = oid4vci_management {
+        api.merge(crate::oid4vci_management_http::router(management))
     } else {
         api
     };
