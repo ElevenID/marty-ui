@@ -64,11 +64,6 @@ def validate_release_gate(contract: dict[str, Any], lock: dict[str, Any]) -> Non
     _require(
         isinstance(gate, dict), "Native DIDComm Credentials release gate is missing"
     )
-    checkpoint = gate.get("required_source_checkpoint")
-    _require(
-        isinstance(checkpoint, str) and COMMIT.fullmatch(checkpoint) is not None,
-        "Native DIDComm Credentials source checkpoint is invalid",
-    )
     minimum_version = gate.get("minimum_version")
     minimum_version_tuple = _version_tuple(minimum_version)
     _require(
@@ -103,16 +98,49 @@ def validate_release_gate(contract: dict[str, Any], lock: dict[str, Any]) -> Non
         "Credentials issuance artifact is not the canonical OCI image",
     )
 
-    if gate.get("state") != "qualified":
+    state = gate.get("state")
+    if state != "qualified":
+        _require(
+            state == "blocked_pending_credentials_release",
+            "Native DIDComm Credentials release gate state is invalid",
+        )
+        _require(
+            gate.get("required_source_checkpoint") is None,
+            "Pending native DIDComm gate must not invent a source checkpoint",
+        )
         _require(
             gate.get("qualified_release") is None,
             "Pending native DIDComm gate must not contain a release pin",
+        )
+        incompatible = gate.get("current_incompatible_lock")
+        _require(
+            isinstance(incompatible, dict),
+            "Pending native DIDComm gate must identify the incompatible lock",
+        )
+        _require(
+            {
+                "version": component.get("version"),
+                "commit": component.get("commit"),
+                "digest": artifact.get("digest"),
+            }
+            == incompatible,
+            "Pending native DIDComm incompatible lock is stale",
+        )
+        locked_version = _version_tuple(incompatible.get("version"))
+        _require(
+            locked_version is not None and locked_version < minimum_version_tuple,
+            "Pending native DIDComm lock is not older than the required release",
         )
         raise NativeDidcommReleaseError(
             "Native DIDComm activation is blocked until a compatible immutable "
             "Credentials release pins its exact version, source commit, and digest"
         )
 
+    checkpoint = gate.get("required_source_checkpoint")
+    _require(
+        isinstance(checkpoint, str) and COMMIT.fullmatch(checkpoint) is not None,
+        "Native DIDComm Credentials source checkpoint is invalid",
+    )
     release = gate.get("qualified_release")
     _require(
         isinstance(release, dict), "Qualified native DIDComm release pin is missing"
