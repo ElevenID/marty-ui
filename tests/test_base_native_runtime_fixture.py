@@ -453,18 +453,73 @@ def test_renewal_fixtures_compare_post_migration_state_and_unique_notifications(
     renewal = (
         ROOT / "rust/services/issuance/tests/support/renewal_fresh_main.rs"
     ).read_text(encoding="utf-8")
-    ready = 'Some(json!({"status":"healthy","service":"issuance-service"}))'
-    pre_start = "let source_before_startup = stored(&pool, &source_tx_id).await;"
-    spawn = "let mut child = ChildGuard(command.spawn().unwrap());"
-    snapshot = "let source_before = stored(&pool, &source_tx_id).await;"
-    gateway = "let gateway_fixture = if gateway {"
-    assert renewal.index(pre_start) < renewal.index(spawn) < renewal.index(ready)
-    assert renewal.index(ready) < renewal.index(snapshot) < renewal.index(gateway)
-    assert (
-        'expected_after_startup["transaction"]["access_token_expires_at"] = Value::Null;'
-        in renewal
-    )
-    assert "startup migration changed seeded renewal domain state" in renewal
+
+    def check(source):
+        ready = 'Some(json!({"status":"healthy","service":"issuance-service"}))'
+        pre_start = "let source_before_startup = stored(&pool, &source_tx_id).await;"
+        not_before = "let startup_migration_not_before: chrono::DateTime<chrono::Utc> ="
+        spawn = "let mut child = ChildGuard(command.spawn().unwrap());"
+        snapshot = "let source_before = stored(&pool, &source_tx_id).await;"
+        not_after = "let startup_migration_not_after: chrono::DateTime<chrono::Utc> ="
+        gateway = "let gateway_fixture = if gateway {"
+        for marker in [pre_start, not_before, spawn, ready, not_after, snapshot, gateway]:
+            assert marker in source
+        assert (
+            source.index(pre_start)
+            < source.index(not_before)
+            < source.index(spawn)
+            < source.index(ready)
+            < source.index(not_after)
+            < source.index(snapshot)
+            < source.index(gateway)
+        )
+        conjunctive_bound = (
+            "backfilled_expiry >= startup_migration_not_before + legacy_token_lifetime\n"
+            "                && backfilled_expiry <= startup_migration_not_after + legacy_token_lifetime"
+        )
+        for required in [
+            '!source_before_startup["transaction"]["access_token"].is_null()',
+            'source_before_startup["transaction"]["access_token_expires_at"].is_null()',
+            'sqlx::query_scalar("SELECT clock_timestamp()")',
+            "let legacy_token_lifetime = chrono::Duration::seconds(1800);",
+            "backfilled_expiry >= startup_migration_not_before + legacy_token_lifetime",
+            "backfilled_expiry <= startup_migration_not_after + legacy_token_lifetime",
+            'expected_after_startup["transaction"]["access_token_expires_at"] =',
+            'source_before["transaction"]["access_token_expires_at"].clone();',
+            "assert_eq!(\n            source_before, expected_after_startup,",
+            "startup migration changed seeded renewal domain state",
+        ]:
+            assert required in source
+        assert conjunctive_bound in source
+        assert source.count('sqlx::query_scalar("SELECT clock_timestamp()")') == 2
+        assert (
+            'expected_after_startup["transaction"]["access_token_expires_at"] = Value::Null;'
+            not in source
+        )
+
+    check(renewal)
+    for weakened in [
+        renewal.replace(
+            "chrono::Duration::seconds(1800)", "chrono::Duration::seconds(3600)"
+        ),
+        renewal.replace(
+            'source_before["transaction"]["access_token_expires_at"].clone()',
+            "Value::Null",
+        ),
+        renewal.replace(
+            "source_before, expected_after_startup", "source_before, source_before"
+        ),
+        renewal.replace(
+            "                && backfilled_expiry <=",
+            "                || backfilled_expiry <=",
+        ),
+        renewal.replace(
+            "let startup_migration_not_before: chrono::DateTime<chrono::Utc> =",
+            "let displaced_startup_migration_not_before: chrono::DateTime<chrono::Utc> =",
+        ),
+    ]:
+        with pytest.raises(AssertionError):
+            check(weakened)
 
     canvas = (
         ROOT / "rust/services/issuance/tests/support/renewal_canvas_binding.rs"

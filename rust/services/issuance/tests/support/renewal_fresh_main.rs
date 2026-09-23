@@ -263,6 +263,19 @@ async fn run_with_profile(database_url: &str, rendered_redis: Option<&str>, ingr
             .bind(PROFILE).bind(json!([{"status_list_id":PROFILE,"index":7}]))
             .bind(source.created_at).bind(source.expires_at).execute(&pool).await.unwrap();
         let source_before_startup = stored(&pool, &source_tx_id).await;
+        assert!(
+            !source_before_startup["transaction"]["access_token"].is_null(),
+            "seeded legacy token must exercise the startup expiry backfill"
+        );
+        assert!(
+            source_before_startup["transaction"]["access_token_expires_at"].is_null(),
+            "seeded legacy token must begin without a bounded lifetime"
+        );
+        let startup_migration_not_before: chrono::DateTime<chrono::Utc> =
+            sqlx::query_scalar("SELECT clock_timestamp()")
+                .fetch_one(&pool)
+                .await
+                .unwrap();
         let (http_listener, http_port) = reserve_port();
         let (grpc_listener, grpc_port) = if envoy {
             (
@@ -335,11 +348,30 @@ async fn run_with_profile(database_url: &str, rendered_redis: Option<&str>, ingr
             .unwrap(),
             Some(json!({"status":"healthy","service":"issuance-service"}))
         );
-        // Startup owns this one additive nullable column. Preserve the
-        // pre-start snapshot so every other source mutation remains visible.
-        let mut expected_after_startup = source_before_startup;
-        expected_after_startup["transaction"]["access_token_expires_at"] = Value::Null;
+        let startup_migration_not_after: chrono::DateTime<chrono::Utc> =
+            sqlx::query_scalar("SELECT clock_timestamp()")
+                .fetch_one(&pool)
+                .await
+                .unwrap();
+        // Startup grants a legacy token one bounded 30-minute lifetime. Prove
+        // that backfill against database time, then preserve the pre-start
+        // snapshot so every other source mutation remains exactly visible.
         let source_before = stored(&pool, &source_tx_id).await;
+        let backfilled_expiry: chrono::DateTime<chrono::Utc> = source_before["transaction"]
+            ["access_token_expires_at"]
+            .as_str()
+            .expect("startup migration must bound the seeded legacy token")
+            .parse()
+            .unwrap();
+        let legacy_token_lifetime = chrono::Duration::seconds(1800);
+        assert!(
+            backfilled_expiry >= startup_migration_not_before + legacy_token_lifetime
+                && backfilled_expiry <= startup_migration_not_after + legacy_token_lifetime,
+            "startup migration must grant exactly one bounded 30-minute legacy-token lifetime"
+        );
+        let mut expected_after_startup = source_before_startup;
+        expected_after_startup["transaction"]["access_token_expires_at"] =
+            source_before["transaction"]["access_token_expires_at"].clone();
         assert_eq!(
             source_before, expected_after_startup,
             "startup migration changed seeded renewal domain state"

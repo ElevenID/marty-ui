@@ -206,7 +206,7 @@ fn valid_stage(value: &str) -> bool {
     let Some((case, stage)) = value.split_once(':') else {
         return false;
     };
-    matches!(
+    let valid_case = matches!(
         case,
         "database"
             | "correct"
@@ -218,7 +218,8 @@ fn valid_stage(value: &str) -> bool {
             | "empty"
             | "placeholder"
             | "raw-and-file"
-    ) && matches!(
+    );
+    let common_stage = matches!(
         stage,
         "provision"
             | "prepare"
@@ -241,7 +242,18 @@ fn valid_stage(value: &str) -> bool {
             | "cleanup"
             | "snapshot-after"
             | "input-integrity"
-    )
+    );
+    let database_stage = case == "database"
+        && matches!(
+            stage,
+            "transfer-ownership"
+                | "inspect-ownership"
+                | "verify-ownership"
+                | "grant"
+                | "authenticate"
+                | "seed"
+        );
+    valid_case && (common_stage || database_stage)
 }
 
 fn case_key(case: SecretCase) -> &'static str {
@@ -261,6 +273,11 @@ fn case_key(case: SecretCase) -> &'static str {
 fn record_stage(case: SecretCase, stage: &'static str) {
     debug_assert!(valid_stage(&format!("{}:{stage}", case_key(case))));
     eprintln!("{STAGE_PREFIX}{}:{stage}", case_key(case));
+}
+
+fn record_database_stage(stage: &'static str) {
+    debug_assert!(valid_stage(&format!("database:{stage}")));
+    eprintln!("{STAGE_PREFIX}database:{stage}");
 }
 
 fn closed_docker(
@@ -359,13 +376,39 @@ async fn provision(database: &PublishedDatabase) -> Result<sqlx::PgPool, String>
     // A database cloned from the frozen oracle template retains the oracle's
     // object ownership. Production self-host databases are owned by the
     // service role, which must be able to apply additive startup migrations.
-    // Make this synthetic clone preserve that ownership boundary as well.
-    sqlx::query("REASSIGN OWNED BY CURRENT_USER TO marty")
-        .execute(&pool)
-        .await
-        .map_err(|_| ERROR)?;
-    let ownership: (bool, bool) = sqlx::query_as(
+    // Transfer only the service schema: REASSIGN OWNED also targets PostgreSQL
+    // system objects owned by the bootstrap superuser and is therefore refused.
+    record_database_stage("transfer-ownership");
+    sqlx::query(
+        "DO $ownership$
+         DECLARE owned_object record;
+         BEGIN
+           ALTER SCHEMA issuance_service OWNER TO marty;
+           FOR owned_object IN
+             SELECT object.relkind, object.relname
+             FROM pg_class AS object
+             JOIN pg_namespace AS namespace ON namespace.oid = object.relnamespace
+             WHERE namespace.nspname = 'issuance_service'
+               AND object.relkind IN ('r', 'p', 'S')
+           LOOP
+             EXECUTE format(
+               'ALTER %s %I.%I OWNER TO marty',
+               CASE WHEN owned_object.relkind = 'S' THEN 'SEQUENCE' ELSE 'TABLE' END,
+               'issuance_service',
+               owned_object.relname
+             );
+           END LOOP;
+         END
+         $ownership$",
+    )
+    .execute(&pool)
+    .await
+    .map_err(|_| "Packaged selfhost qualification failed: database:transfer-ownership")?;
+    record_database_stage("inspect-ownership");
+    let ownership: (bool, bool, bool) = sqlx::query_as(
         "SELECT
+           (SELECT pg_get_userbyid(datdba) = 'marty'
+              FROM pg_database WHERE datname = current_database()),
            (SELECT pg_get_userbyid(nspowner) = 'marty'
               FROM pg_namespace WHERE nspname = 'issuance_service'),
            NOT EXISTS (
@@ -377,8 +420,12 @@ async fn provision(database: &PublishedDatabase) -> Result<sqlx::PgPool, String>
     )
     .fetch_one(&pool)
     .await
-    .map_err(|_| ERROR)?;
-    require(ownership == (true, true))?;
+    .map_err(|_| "Packaged selfhost qualification failed: database:inspect-ownership")?;
+    record_database_stage("verify-ownership");
+    if ownership != (true, true, true) {
+        return Err("Packaged selfhost qualification failed: database:ownership".into());
+    }
+    record_database_stage("grant");
     for statement in [
         "GRANT USAGE ON SCHEMA issuance_service TO marty",
         "GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA issuance_service TO marty",
@@ -394,6 +441,7 @@ async fn provision(database: &PublishedDatabase) -> Result<sqlx::PgPool, String>
     authenticated
         .set_password(Some(PASSWORD))
         .map_err(|_| ERROR)?;
+    record_database_stage("authenticate");
     let check = sqlx::PgPool::connect(authenticated.as_str())
         .await
         .map_err(|_| ERROR)?;
@@ -403,8 +451,9 @@ async fn provision(database: &PublishedDatabase) -> Result<sqlx::PgPool, String>
             .await
             .map_err(|_| ERROR)?;
     require(identity == ("marty".into(), "marty".into()))?;
+    record_database_stage("seed");
+    seed(&check).await?;
     check.close().await;
-    seed(&pool).await?;
     Ok(pool)
 }
 
