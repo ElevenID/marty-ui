@@ -23,7 +23,13 @@ Canonical Envoy source routes the complete migrated issuance gRPC/transcoded
 surface to `issuance-native:9005`. First-party diagnostic and Canvas demo tools
 use the gateway rather than the legacy service's host port.
 
-`docker-compose.selfhost.prod.yml` is unchanged. No live beta or production
+Production HTTP ownership is unchanged. Auth, Applicant, Presentation Policy,
+and Flow continue to select the legacy `ISSUANCE_SERVICE_URL`; their upgraded
+Rust configuration prefers `ISSUANCE_NATIVE_SERVICE_URL` only when that value is
+explicitly present, then falls back to the configured legacy URL. Flow's gRPC
+owner remains `issuance-native`. Shared Canvas publication settings and the
+disabled-by-default native worker controls may be present in the production
+composition without selecting native HTTP ownership. No live beta or production
 deployment is performed by this source checkpoint. `DIDCOMM-KMS-001` remains
 deferred, and the existing Python service/image must remain available until the
 eleven-route remainder is migrated and the aggregate beta acceptance gate passes.

@@ -211,7 +211,9 @@ impl AuthServiceConfig {
                 "APPLICANT_SERVICE_URL",
             )?,
             issuance_native_service_url: origin(
-                get("ISSUANCE_NATIVE_SERVICE_URL").unwrap_or("http://issuance-native:8005"),
+                get("ISSUANCE_NATIVE_SERVICE_URL")
+                    .or_else(|| get("ISSUANCE_SERVICE_URL"))
+                    .unwrap_or("http://issuance-native:8005"),
                 "ISSUANCE_NATIVE_SERVICE_URL",
             )?,
             canvas_lti_session_ttl_seconds: number(

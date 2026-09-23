@@ -26,6 +26,16 @@
   "direct_client_boundary": "gateway",
   "production_composition": "docker-compose.selfhost.prod.yml",
   "production_unchanged": true,
+  "production_http_owner": {
+    "consumers": ["auth", "applicant", "presentation-policy", "flow"],
+    "selected_environment_variable": "ISSUANCE_SERVICE_URL",
+    "runtime_precedence": [
+      "ISSUANCE_NATIVE_SERVICE_URL",
+      "ISSUANCE_SERVICE_URL",
+      "development_native_default"
+    ],
+    "flow_grpc_owner": "issuance-native"
+  },
   "python_deletion_authorized": false,
   "rust_owned_python_retirement": {
     "authorized": true,

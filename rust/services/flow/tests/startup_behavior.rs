@@ -9,6 +9,7 @@ struct Contract {
     deployed_environments: Vec<String>,
     required_always: Vec<String>,
     required_when_deployed: Vec<String>,
+    issuance_http_owner: IssuanceHttpOwner,
     minimum_secret_bytes: usize,
     secret_file_suffix: String,
     listener_port_aliases: Vec<String>,
@@ -23,6 +24,12 @@ struct Contract {
     application_event_auth: ApplicationEventAuth,
     verifier_profiles: VerifierProfiles,
     fail_closed_cases: Vec<String>,
+}
+
+#[derive(Deserialize)]
+struct IssuanceHttpOwner {
+    beta: String,
+    production: String,
 }
 
 #[derive(Deserialize)]
@@ -119,7 +126,15 @@ fn language_neutral_startup_contract_is_frozen() {
     assert_eq!(contract.schema_version, 1);
     assert_eq!(contract.deployed_environments, ["beta", "production"]);
     assert_eq!(contract.required_always, ["DATABASE_URL", "REDIS_URL"]);
-    assert_eq!(contract.required_when_deployed.len(), 23);
+    assert_eq!(contract.required_when_deployed.len(), 22);
+    assert_eq!(
+        contract.issuance_http_owner.beta,
+        "ISSUANCE_NATIVE_SERVICE_URL_required"
+    );
+    assert_eq!(
+        contract.issuance_http_owner.production,
+        "ISSUANCE_NATIVE_SERVICE_URL_or_ISSUANCE_SERVICE_URL_fallback"
+    );
     assert_eq!(contract.minimum_secret_bytes, 32);
     assert_eq!(contract.secret_file_suffix, "_FILE");
     assert_eq!(
@@ -210,6 +225,24 @@ fn deployed_configuration_is_complete_and_normalized() {
 }
 
 #[test]
+fn production_preserves_legacy_http_owner_without_weakening_beta() {
+    let mut production = baseline("production");
+    production.remove("ISSUANCE_NATIVE_SERVICE_URL");
+    let config = FlowServiceConfig::from_values(production).expect("legacy production owner");
+    assert_eq!(config.issuance_url, "http://issuance:8006");
+    assert_eq!(config.issuance_native_url, config.issuance_url);
+
+    let mut beta = baseline("beta");
+    beta.remove("ISSUANCE_NATIVE_SERVICE_URL");
+    assert_eq!(
+        FlowServiceConfig::from_values(beta),
+        Err(FlowConfigError::Missing {
+            name: "ISSUANCE_NATIVE_SERVICE_URL"
+        })
+    );
+}
+
+#[test]
 fn deployed_configuration_fails_closed() {
     for required in [
         "DATABASE_URL",
@@ -225,7 +258,6 @@ fn deployed_configuration_fails_closed() {
         "TRUST_PROFILE_SERVICE_URL",
         "DEPLOYMENT_PROFILE_SERVICE_URL",
         "ISSUANCE_SERVICE_URL",
-        "ISSUANCE_NATIVE_SERVICE_URL",
         "GRPC_SERVICE_TOKEN",
         "FLOW_WEBHOOK_SECRET",
         "SIGNING_KEYS_INTERNAL_API_KEY",

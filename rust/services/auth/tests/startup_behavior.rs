@@ -57,6 +57,45 @@ fn complete_beta_configuration_is_normalized_without_hidden_fallbacks() {
 }
 
 #[test]
+fn issuance_http_owner_prefers_native_and_preserves_legacy_production() {
+    let mut production = baseline("production");
+    production.insert("ISSUANCE_SERVICE_URL".into(), "http://issuance:8005".into());
+    production.extend([
+        ("GRPC_WORKLOAD_TLS_CA_CERT".into(), "/secrets/ca.pem".into()),
+        (
+            "GRPC_WORKLOAD_TLS_CLIENT_CERT".into(),
+            "/secrets/client.pem".into(),
+        ),
+        (
+            "GRPC_WORKLOAD_TLS_CLIENT_KEY".into(),
+            "/secrets/client-key.pem".into(),
+        ),
+        (
+            "GRPC_WORKLOAD_TLS_SERVER_CERT".into(),
+            "/secrets/server.pem".into(),
+        ),
+        (
+            "GRPC_WORKLOAD_TLS_SERVER_KEY".into(),
+            "/secrets/server-key.pem".into(),
+        ),
+    ]);
+    let config = AuthServiceConfig::from_values(production).unwrap();
+    assert_eq!(config.issuance_native_service_url, "http://issuance:8005");
+
+    let mut beta = baseline("beta");
+    beta.insert("ISSUANCE_SERVICE_URL".into(), "http://issuance:8005".into());
+    beta.insert(
+        "ISSUANCE_NATIVE_SERVICE_URL".into(),
+        "http://issuance-native:8005".into(),
+    );
+    let config = AuthServiceConfig::from_values(beta).unwrap();
+    assert_eq!(
+        config.issuance_native_service_url,
+        "http://issuance-native:8005"
+    );
+}
+
+#[test]
 fn required_settings_secrets_and_production_transport_fail_closed() {
     let expected = contract()["required_configuration"]
         .as_array()

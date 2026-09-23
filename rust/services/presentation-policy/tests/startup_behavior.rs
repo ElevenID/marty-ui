@@ -30,6 +30,44 @@ fn compose_compatible_development_configuration_is_normalized() {
 }
 
 #[test]
+fn issuance_http_owner_prefers_native_and_preserves_legacy_production() {
+    let mut production = values("production");
+    production.insert("ISSUANCE_SERVICE_URL".into(), "http://issuance:8005".into());
+    production.extend([
+        ("GRPC_SERVICE_TOKEN".into(), "s".repeat(32)),
+        ("ISSUANCE_API_KEY".into(), "i".repeat(32)),
+        ("GRPC_WORKLOAD_TLS_SERVER_CERT".into(), "/cert.pem".into()),
+        ("GRPC_WORKLOAD_TLS_SERVER_KEY".into(), "/key.pem".into()),
+        ("GRPC_WORKLOAD_TLS_CA_CERT".into(), "/ca.pem".into()),
+    ]);
+    let config = PresentationPolicyServiceConfig::from_values(production).unwrap();
+    assert_eq!(
+        config.credential_status_url_template,
+        "http://issuance:8005/v1/issuance/credentials/{credential_id}/status"
+    );
+
+    let mut development = values("development");
+    development.insert("ISSUANCE_SERVICE_URL".into(), "http://issuance:8005".into());
+    let config = PresentationPolicyServiceConfig::from_values(development).unwrap();
+    assert_eq!(
+        config.credential_status_url_template,
+        "http://issuance:8005/v1/issuance/credentials/{credential_id}/status"
+    );
+
+    let mut beta = values("development");
+    beta.insert("ISSUANCE_SERVICE_URL".into(), "http://issuance:8005".into());
+    beta.insert(
+        "ISSUANCE_NATIVE_SERVICE_URL".into(),
+        "http://issuance-native:8005".into(),
+    );
+    let config = PresentationPolicyServiceConfig::from_values(beta).unwrap();
+    assert_eq!(
+        config.credential_status_url_template,
+        "http://issuance-native:8005/v1/issuance/credentials/{credential_id}/status"
+    );
+}
+
+#[test]
 fn deployed_configuration_requires_secrets_and_complete_mtls() {
     let beta = values("beta");
     assert_eq!(

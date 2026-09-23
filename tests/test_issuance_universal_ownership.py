@@ -163,6 +163,16 @@ def test_production_and_kms_boundaries_remain_explicit() -> None:
     )
 
     assert CONTRACT["production_unchanged"] is True
+    assert CONTRACT["production_http_owner"] == {
+        "consumers": ["auth", "applicant", "presentation-policy", "flow"],
+        "selected_environment_variable": "ISSUANCE_SERVICE_URL",
+        "runtime_precedence": [
+            "ISSUANCE_NATIVE_SERVICE_URL",
+            "ISSUANCE_SERVICE_URL",
+            "development_native_default",
+        ],
+        "flow_grpc_owner": "issuance-native",
+    }
     assert CONTRACT["python_deletion_authorized"] is False
     retirement = CONTRACT["rust_owned_python_retirement"]
     assert retirement == {

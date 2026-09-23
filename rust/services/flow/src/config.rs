@@ -413,12 +413,20 @@ impl FlowServiceConfig {
             Some("http://issuance:8006"),
             environment,
         )?;
-        let issuance_native_url = service_url(
-            &values,
-            "ISSUANCE_NATIVE_SERVICE_URL",
-            Some("http://issuance-native:8005"),
-            environment,
-        )?;
+        let issuance_native_url = if value(&values, "ISSUANCE_NATIVE_SERVICE_URL").is_some() {
+            service_url(&values, "ISSUANCE_NATIVE_SERVICE_URL", None, environment)?
+        } else if environment == Environment::Production {
+            // Production remains on its configured legacy HTTP owner until the
+            // aggregate beta acceptance explicitly authorizes a later cutover.
+            issuance_url.clone()
+        } else {
+            service_url(
+                &values,
+                "ISSUANCE_NATIVE_SERVICE_URL",
+                Some("http://issuance-native:8005"),
+                environment,
+            )?
+        };
 
         let service_token = optional_secret(&values, "GRPC_SERVICE_TOKEN", environment)?;
         let webhook_secret = optional_secret(&values, "FLOW_WEBHOOK_SECRET", environment)?;
