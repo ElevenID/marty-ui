@@ -63,13 +63,17 @@ def assert_dependency_setup(steps):
     assert (
         'assert yaml.safe_load("services: {issuance-native: {command: []}}")' in source
     )
-    preflights = [
-        index
-        for index, step in enumerate(steps)
-        if "run-published-canvas-contracts.sh" in step.get("run", "")
-    ]
-    assert len(preflights) == 4 and all(setup < index for index in preflights)
-    assert setup < names.index("Run isolated database contract suites concurrently")
+    preflight = names.index("Preflight published worker parity in two isolated groups")
+    assert setup < preflight < names.index(
+        "Run isolated database contract suites concurrently"
+    )
+    assert steps[preflight]["run"] == (
+        "python3 ../scripts/ci/run-db-contract-groups.py preflights"
+    )
+    assert steps[preflight]["working-directory"] == "rust"
+    assert steps[preflight]["shell"] == "bash"
+    assert "if" not in steps[preflight]
+    assert not steps[preflight].get("continue-on-error", False)
     interpreter = [
         step
         for step in steps[:setup]
