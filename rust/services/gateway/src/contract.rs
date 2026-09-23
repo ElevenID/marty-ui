@@ -169,7 +169,7 @@ impl GatewayContract {
             pattern: "/__gateway/issuance-native/{path:path}".into(),
             match_type: RouteMatchType::Template,
             upstream_service: issuance_native::NATIVE_SERVICE.into(),
-            methods: BTreeSet::from([HttpMethod::Get, HttpMethod::Post, HttpMethod::Put]),
+            methods: BTreeSet::from([HttpMethod::Get]),
             host: None,
             required_headers: BTreeMap::new(),
             rewrite_path: Some("/{path}".into()),
@@ -958,15 +958,6 @@ mod tests {
                 issuance_native::NATIVE_SERVICE,
                 "migrated management route must remain native-owned: {method:?} {path}"
             );
-            let internal_path = format!("/__gateway/issuance-native{path}");
-            assert_eq!(
-                route_for(&proxy, method, &internal_path)
-                    .expect("native management helper route")
-                    .route
-                    .upstream_service,
-                issuance_native::NATIVE_SERVICE,
-                "internal management transport must be native-owned: {method:?} {path}"
-            );
         }
         let internal_management_path = format!(
             "/__gateway/{}/v1/issuance/oid4vci-clients",
@@ -984,6 +975,17 @@ mod tests {
             route_for(&proxy, HttpMethod::Post, &internal_management_path).is_err(),
             "the native helper must not broaden management access to unsupported methods"
         );
+        for method in [HttpMethod::Post, HttpMethod::Put] {
+            assert!(
+                route_for(
+                    &proxy,
+                    method,
+                    "/__gateway/issuance-native/internal/applications/app-1/evidence-summary"
+                )
+                .is_err(),
+                "native read-only composition must reject {method:?}"
+            );
+        }
         assert_eq!(
             route_for(&proxy, HttpMethod::Get, "/v1/passport/capabilities")
                 .expect("retained legacy issuance route")
