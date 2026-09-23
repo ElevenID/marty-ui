@@ -257,9 +257,8 @@ def assert_selfhost_bindings(compose):
     expected["gateway"]["ISSUANCE_SERVICE_URL"] = LEGACY_URL
     expected["gateway"]["ISSUANCE_NATIVE_SERVICE_URL"] = NATIVE_URL
     for name in ("auth", "applicant", "presentation-policy"):
-        expected[name]["ISSUANCE_NATIVE_SERVICE_URL"] = NATIVE_URL
+        expected[name]["ISSUANCE_SERVICE_URL"] = LEGACY_URL
     expected["flow"]["ISSUANCE_SERVICE_URL"] = LEGACY_URL
-    expected["flow"]["ISSUANCE_NATIVE_SERVICE_URL"] = NATIVE_URL
     expected["gateway"]["AUTH_GRPC_TARGET"] = "auth:9001"
     expected["flow"][TARGET] = "issuance-native:9005"
     expected["issuance-native"] = {
@@ -279,21 +278,34 @@ def assert_selfhost_bindings(compose):
     assert {name: values for name, values in actual.items() if values} == expected
 
 
-def assert_compose_owner_split(compose):
+def assert_compose_owner_split(compose, *, production=False):
     services = compose["services"]
-    expected = {
-        "gateway": {
-            "ISSUANCE_SERVICE_URL": LEGACY_URL,
-            "ISSUANCE_NATIVE_SERVICE_URL": NATIVE_URL,
-        },
-        "auth": {"ISSUANCE_NATIVE_SERVICE_URL": NATIVE_URL},
-        "applicant": {"ISSUANCE_NATIVE_SERVICE_URL": NATIVE_URL},
-        "presentation-policy": {"ISSUANCE_NATIVE_SERVICE_URL": NATIVE_URL},
-        "flow": {
-            "ISSUANCE_SERVICE_URL": LEGACY_URL,
-            "ISSUANCE_NATIVE_SERVICE_URL": NATIVE_URL,
-        },
-    }
+    expected = (
+        {
+            "gateway": {
+                "ISSUANCE_SERVICE_URL": LEGACY_URL,
+                "ISSUANCE_NATIVE_SERVICE_URL": NATIVE_URL,
+            },
+            "auth": {"ISSUANCE_SERVICE_URL": LEGACY_URL},
+            "applicant": {"ISSUANCE_SERVICE_URL": LEGACY_URL},
+            "presentation-policy": {"ISSUANCE_SERVICE_URL": LEGACY_URL},
+            "flow": {"ISSUANCE_SERVICE_URL": LEGACY_URL},
+        }
+        if production
+        else {
+            "gateway": {
+                "ISSUANCE_SERVICE_URL": LEGACY_URL,
+                "ISSUANCE_NATIVE_SERVICE_URL": NATIVE_URL,
+            },
+            "auth": {"ISSUANCE_NATIVE_SERVICE_URL": NATIVE_URL},
+            "applicant": {"ISSUANCE_NATIVE_SERVICE_URL": NATIVE_URL},
+            "presentation-policy": {"ISSUANCE_NATIVE_SERVICE_URL": NATIVE_URL},
+            "flow": {
+                "ISSUANCE_SERVICE_URL": LEGACY_URL,
+                "ISSUANCE_NATIVE_SERVICE_URL": NATIVE_URL,
+            },
+        }
+    )
     actual = {
         name: {
             key: value
@@ -304,12 +316,19 @@ def assert_compose_owner_split(compose):
         if name in expected
     }
     assert {name: values for name, values in actual.items() if values} == expected
-    for name in ("auth", "applicant", "presentation-policy"):
-        assert services[name]["depends_on"].get("issuance-native") == {
-            "condition": "service_healthy"
-        }
-        assert "issuance" not in services[name]["depends_on"]
-    for name in ("gateway", "flow"):
+    if production:
+        for name in ("auth", "applicant", "presentation-policy", "flow"):
+            assert "issuance" not in services[name]["depends_on"]
+            assert "issuance-native" not in services[name]["depends_on"]
+        dependency_owners = ("gateway",)
+    else:
+        for name in ("auth", "applicant", "presentation-policy"):
+            assert services[name]["depends_on"].get("issuance-native") == {
+                "condition": "service_healthy"
+            }
+            assert "issuance" not in services[name]["depends_on"]
+        dependency_owners = ("gateway", "flow")
+    for name in dependency_owners:
         assert services[name]["depends_on"].get("issuance") == {
             "condition": "service_healthy"
         }
@@ -322,7 +341,7 @@ def test_source_bindings_match_actual_service_and_restrictive_policy():
     documents, config, base, selfhost = source_models()
     assert_kubernetes_bindings(documents, config)
     assert_compose_owner_split(base)
-    assert_compose_owner_split(selfhost)
+    assert_compose_owner_split(selfhost, production=True)
     assert_selfhost_bindings(selfhost)
 
 
@@ -460,17 +479,22 @@ def test_selfhost_flow_requires_paired_existing_secret_identity(mutation):
         assert_selfhost_bindings(compose)
 
 
-@pytest.mark.parametrize("family", ["base", "selfhost"])
 @pytest.mark.parametrize(
-    ("service", "setting"),
+    ("family", "service", "setting"),
     [
-        ("auth", "ISSUANCE_NATIVE_SERVICE_URL"),
-        ("applicant", "ISSUANCE_NATIVE_SERVICE_URL"),
-        ("presentation-policy", "ISSUANCE_NATIVE_SERVICE_URL"),
-        ("flow", "ISSUANCE_SERVICE_URL"),
-        ("flow", "ISSUANCE_NATIVE_SERVICE_URL"),
-        ("gateway", "ISSUANCE_SERVICE_URL"),
-        ("gateway", "ISSUANCE_NATIVE_SERVICE_URL"),
+        ("base", "auth", "ISSUANCE_NATIVE_SERVICE_URL"),
+        ("base", "applicant", "ISSUANCE_NATIVE_SERVICE_URL"),
+        ("base", "presentation-policy", "ISSUANCE_NATIVE_SERVICE_URL"),
+        ("base", "flow", "ISSUANCE_SERVICE_URL"),
+        ("base", "flow", "ISSUANCE_NATIVE_SERVICE_URL"),
+        ("base", "gateway", "ISSUANCE_SERVICE_URL"),
+        ("base", "gateway", "ISSUANCE_NATIVE_SERVICE_URL"),
+        ("selfhost", "auth", "ISSUANCE_SERVICE_URL"),
+        ("selfhost", "applicant", "ISSUANCE_SERVICE_URL"),
+        ("selfhost", "presentation-policy", "ISSUANCE_SERVICE_URL"),
+        ("selfhost", "flow", "ISSUANCE_SERVICE_URL"),
+        ("selfhost", "gateway", "ISSUANCE_SERVICE_URL"),
+        ("selfhost", "gateway", "ISSUANCE_NATIVE_SERVICE_URL"),
     ],
 )
 @pytest.mark.parametrize("fault", ["missing", "wrong"])
@@ -487,20 +511,21 @@ def test_compose_owner_split_rejects_missing_or_misbound_urls(
             LEGACY_URL if setting.endswith("NATIVE_SERVICE_URL") else NATIVE_URL
         )
     with pytest.raises(AssertionError):
-        assert_compose_owner_split(compose)
+        assert_compose_owner_split(compose, production=family == "selfhost")
 
 
-@pytest.mark.parametrize("family", ["base", "selfhost"])
 @pytest.mark.parametrize(
-    ("service", "dependency"),
+    ("family", "service", "dependency"),
     [
-        ("auth", "issuance-native"),
-        ("applicant", "issuance-native"),
-        ("presentation-policy", "issuance-native"),
-        ("flow", "issuance"),
-        ("flow", "issuance-native"),
-        ("gateway", "issuance"),
-        ("gateway", "issuance-native"),
+        ("base", "auth", "issuance-native"),
+        ("base", "applicant", "issuance-native"),
+        ("base", "presentation-policy", "issuance-native"),
+        ("base", "flow", "issuance"),
+        ("base", "flow", "issuance-native"),
+        ("base", "gateway", "issuance"),
+        ("base", "gateway", "issuance-native"),
+        ("selfhost", "gateway", "issuance"),
+        ("selfhost", "gateway", "issuance-native"),
     ],
 )
 def test_compose_owner_split_rejects_missing_health_dependency(
@@ -510,7 +535,42 @@ def test_compose_owner_split_rejects_missing_health_dependency(
     compose = base if family == "base" else selfhost
     compose["services"][service]["depends_on"].pop(dependency)
     with pytest.raises(AssertionError):
-        assert_compose_owner_split(compose)
+        assert_compose_owner_split(compose, production=family == "selfhost")
+
+
+@pytest.mark.parametrize(
+    ("service", "setting"),
+    [
+        ("auth", "ISSUANCE_NATIVE_SERVICE_URL"),
+        ("applicant", "ISSUANCE_NATIVE_SERVICE_URL"),
+        ("presentation-policy", "ISSUANCE_NATIVE_SERVICE_URL"),
+        ("flow", "ISSUANCE_NATIVE_SERVICE_URL"),
+    ],
+)
+def test_production_rejects_native_http_consumer_reintroduction(service, setting):
+    _, _, _, selfhost = source_models()
+    selfhost["services"][service]["environment"][setting] = NATIVE_URL
+    with pytest.raises(AssertionError):
+        assert_compose_owner_split(selfhost, production=True)
+
+
+@pytest.mark.parametrize(
+    ("service", "dependency"),
+    [
+        (service, dependency)
+        for service in ("auth", "applicant", "presentation-policy", "flow")
+        for dependency in ("issuance", "issuance-native")
+    ],
+)
+def test_production_rejects_issuance_dependency_reintroduction(
+    service, dependency
+):
+    _, _, _, selfhost = source_models()
+    selfhost["services"][service]["depends_on"][dependency] = {
+        "condition": "service_healthy"
+    }
+    with pytest.raises(AssertionError):
+        assert_compose_owner_split(selfhost, production=True)
 
 
 def test_strict_loader_rejects_duplicate_environment_and_dependency_keys():
