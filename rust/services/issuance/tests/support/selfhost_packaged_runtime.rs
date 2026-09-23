@@ -497,7 +497,13 @@ async fn seed(pool: &sqlx::PgPool) -> Result<(), String> {
 
 async fn snapshot(pool: &sqlx::PgPool) -> Result<Value, String> {
     sqlx::query_scalar("SELECT jsonb_build_object(
-      'transactions',(SELECT COALESCE(jsonb_agg(to_jsonb(t) ORDER BY id),'[]') FROM issuance_service.issuance_transactions t),
+      -- Normalize the legacy schema's absent field to JSON null. Once startup
+      -- creates it, any non-null or otherwise changed value remains visible.
+      'transactions',(SELECT COALESCE(jsonb_agg(
+        to_jsonb(t) || jsonb_build_object(
+          'access_token_expires_at',
+          COALESCE(to_jsonb(t)->'access_token_expires_at', 'null'::jsonb)
+        ) ORDER BY id),'[]') FROM issuance_service.issuance_transactions t),
       'credentials',(SELECT COALESCE(jsonb_agg(to_jsonb(c) ORDER BY id),'[]') FROM issuance_service.issued_credentials c),
       'deliveries',(SELECT COALESCE(jsonb_agg(to_jsonb(d) ORDER BY id),'[]') FROM issuance_service.credential_delivery_records d),
       'events',(SELECT COALESCE(jsonb_agg(to_jsonb(e) ORDER BY id),'[]') FROM issuance_service.issuance_events e))")

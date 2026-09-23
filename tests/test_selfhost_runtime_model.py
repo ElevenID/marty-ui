@@ -107,6 +107,7 @@ def assert_public_image_loader_connected(reader):
         'record_database_stage("inspect-ownership")',
         'record_database_stage("verify-ownership")',
         "seed(&check).await?;",
+        "COALESCE(to_jsonb(t)->'access_token_expires_at', 'null'::jsonb)",
     ]:
         assert required in runtime
     assert "REASSIGN OWNED BY CURRENT_USER TO marty" not in runtime
@@ -166,6 +167,7 @@ def test_public_image_loader_is_a_mandatory_exact_source_image_gate():
         "ownership-proof",
         "ownership-seed",
         "ownership-stage",
+        "migration-owned-projection",
     ],
 )
 def test_public_image_loader_refuses_disconnected_or_weakened_gates(fault):
@@ -206,6 +208,10 @@ def test_public_image_loader_refuses_disconnected_or_weakened_gates(fault):
             "ownership-stage": (
                 "rust/services/issuance/tests/support/selfhost_packaged_runtime.rs",
                 'record_database_stage("transfer-ownership")',
+            ),
+            "migration-owned-projection": (
+                "rust/services/issuance/tests/support/selfhost_packaged_runtime.rs",
+                "COALESCE(to_jsonb(t)->'access_token_expires_at', 'null'::jsonb)",
             ),
         }
         target, value = replacements[fault]
