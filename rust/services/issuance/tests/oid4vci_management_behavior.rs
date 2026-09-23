@@ -299,12 +299,30 @@ async fn list_authenticates_and_binds_tenant_before_repository_access() {
 async fn list_authenticates_before_parsing_the_query() {
     let management = Arc::new(ManagementState::default());
     let calls = Arc::new(Mutex::new(vec![]));
-    let request = Request::get("/v1/issuance/credentials?organization_id=%ZZ")
-        .body(Body::empty())
-        .unwrap();
+    let request =
+        Request::get("/v1/issuance/credentials?organization_id=org-a&organization_id=org-b")
+            .body(Body::empty())
+            .unwrap();
     let (status, body) = response(request, app(management.clone(), calls.clone())).await;
     assert_eq!(status, StatusCode::UNAUTHORIZED);
     assert_eq!(body, json!({"detail":"X-API-Key header is missing"}));
+    assert!(management.calls.lock().unwrap().is_empty());
+    assert!(calls.lock().unwrap().is_empty());
+}
+
+#[tokio::test]
+async fn authenticated_malformed_list_query_is_structured_and_sanitized() {
+    let management = Arc::new(ManagementState::default());
+    let calls = Arc::new(Mutex::new(vec![]));
+    let request =
+        Request::get("/v1/issuance/credentials?organization_id=org-a&organization_id=org-b")
+            .header("x-api-key", "management-key")
+            .header("x-organization-id", "org-a")
+            .body(Body::empty())
+            .unwrap();
+    let (status, body) = response(request, app(management.clone(), calls.clone())).await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+    assert_eq!(body, json!({"detail":"Query parameters are invalid"}));
     assert!(management.calls.lock().unwrap().is_empty());
     assert!(calls.lock().unwrap().is_empty());
 }

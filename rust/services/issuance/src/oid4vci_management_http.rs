@@ -11,7 +11,7 @@ use serde_json::{json, Value};
 
 use crate::{
     credential_management::CredentialManagementError,
-    management_http::{header, missing_organization_query},
+    management_http::{header, malformed_query, missing_organization_query},
     oid4vci_management::{
         Oid4vciManagementError, Oid4vciManagementService, RegisteredClientRequest,
     },
@@ -82,7 +82,7 @@ async fn list_credentials(
     }
     let Query(query) = match Query::<CredentialQuery>::try_from_uri(request.uri()) {
         Ok(query) => query,
-        Err(error) => return error.into_response(),
+        Err(_) => return malformed_query(),
     };
     match service
         .list_credentials(

@@ -1,14 +1,70 @@
+use std::sync::{
+    atomic::{AtomicUsize, Ordering},
+    Arc, Mutex,
+};
+use std::time::Duration;
+
+use async_trait::async_trait;
+use axum::{
+    body::{to_bytes, Body},
+    http::{Request, StatusCode},
+};
 use hmac::{Hmac, Mac};
+use serde_json::{json, Value};
 use sha2::Sha256;
 use sqlx::{postgres::PgPoolOptions, Row};
+use tokio::sync::Barrier;
+use tower::ServiceExt;
 
 use marty_issuance_service::{
+    credential_management::{
+        CredentialLifecycleAction, CredentialLifecycleEvent, CredentialLifecycleEventSink,
+        CredentialManagementPortError, CredentialManagementService, CredentialStatusPublisher,
+        ManagedCredential,
+    },
+    credential_management_postgres::PostgresCredentialManagementRepository,
+    issued_credential_postgres::PostgresIssuedCredentialRecordRepository,
     migration,
     oid4vci_authorization::Oid4vciAuthorizationRepository,
     oid4vci_authorization_postgres::PostgresOid4vciAuthorizationRepository,
-    oid4vci_management::{Oid4vciManagementRepository, RegisteredClientWrite},
+    oid4vci_management::{
+        Oid4vciManagementRepository, Oid4vciManagementService, RegisteredClientWrite,
+    },
+    oid4vci_management_http,
     oid4vci_management_postgres::PostgresOid4vciManagementRepository,
 };
+
+struct ConcurrentPublisher {
+    publications: AtomicUsize,
+    records: Mutex<Vec<(CredentialLifecycleAction, Option<String>)>>,
+    first_pair: Barrier,
+}
+
+#[async_trait]
+impl CredentialStatusPublisher for ConcurrentPublisher {
+    async fn publish(
+        &self,
+        _credential: &ManagedCredential,
+        action: CredentialLifecycleAction,
+        reason: Option<&str>,
+    ) -> Result<(), CredentialManagementPortError> {
+        self.records
+            .lock()
+            .expect("publication records")
+            .push((action, reason.map(str::to_owned)));
+        if self.publications.fetch_add(1, Ordering::SeqCst) < 2 {
+            self.first_pair.wait().await;
+        }
+        Ok(())
+    }
+}
+
+struct NoopLifecycleEvents;
+
+#[async_trait]
+impl CredentialLifecycleEventSink for NoopLifecycleEvents {
+    async fn emit(&self, _event: CredentialLifecycleEvent) {}
+}
 
 #[tokio::test]
 async fn migration_bounds_legacy_tokens_and_backfills_notification_audit_identity() {
@@ -288,6 +344,8 @@ async fn management_repository_preserves_registration_and_idempotent_revocation_
         .unwrap();
     sqlx::raw_sql(
         r#"CREATE SCHEMA IF NOT EXISTS issuance_service;
+         DROP TABLE IF EXISTS issuance_service.credential_delivery_records;
+         DROP TABLE IF EXISTS issuance_service.issuance_events;
          DROP TABLE IF EXISTS issuance_service.issued_credentials;
          DROP TABLE IF EXISTS issuance_service.issuance_transactions;
          DROP TABLE IF EXISTS issuance_service.oid4vci_registered_clients;
@@ -299,15 +357,40 @@ async fn management_repository_preserves_registration_and_idempotent_revocation_
              PRIMARY KEY (organization_id, client_id));
          CREATE TABLE issuance_service.issuance_transactions (
              id text PRIMARY KEY, organization_id text NOT NULL,
-             status text NOT NULL, revoked_at timestamptz, revocation_reason text);
+             application_id text, status text NOT NULL,
+             revoked_at timestamptz, revocation_reason text);
          CREATE TABLE issuance_service.issued_credentials (
              id text PRIMARY KEY, transaction_id text NOT NULL UNIQUE,
-             organization_id text NOT NULL);
+             organization_id text NOT NULL, credential_template_id text NOT NULL,
+             issuer_did text, status text NOT NULL,
+             status_updated_at timestamptz NOT NULL, revoked boolean NOT NULL,
+             revoked_at timestamptz, revocation_reason text,
+             revocation_profile_id text, status_list_entries jsonb NOT NULL);
+         CREATE TABLE issuance_service.issuance_events (
+             id text PRIMARY KEY, transaction_id text NOT NULL,
+             application_id text, event_type text NOT NULL,
+             metadata jsonb NOT NULL, created_at timestamptz NOT NULL);
+         CREATE TABLE issuance_service.credential_delivery_records (
+             id text PRIMARY KEY, credential_id text NOT NULL,
+             organization_id text NOT NULL, delivery_target text NOT NULL,
+             metadata jsonb, updated_at timestamptz NOT NULL);
          INSERT INTO issuance_service.issuance_transactions
-             VALUES ('tx-a', 'org-a', 'issued', NULL, NULL),
-                    ('tx-concurrent', 'org-a', 'issued', NULL, NULL);
+             (id, organization_id, status)
+             VALUES ('tx-a', 'org-a', 'issued'),
+                    ('tx-concurrent', 'org-a', 'issued'),
+                    ('tx-service-concurrent', 'org-a', 'issued');
          INSERT INTO issuance_service.issued_credentials
-             VALUES ('credential-a', 'tx-a', 'org-a');"#,
+             (id, transaction_id, organization_id, credential_template_id,
+              status, status_updated_at, revoked, status_list_entries)
+             VALUES ('credential-a', 'tx-a', 'org-a', 'template-a',
+                     'active', clock_timestamp(), false, '[]'::jsonb),
+                    ('credential-service-concurrent', 'tx-service-concurrent',
+                     'org-a', 'template-a', 'active', clock_timestamp(), false,
+                     '[]'::jsonb);
+         INSERT INTO issuance_service.credential_delivery_records
+             (id, credential_id, organization_id, delivery_target, metadata, updated_at)
+             VALUES ('delivery-service-concurrent', 'credential-service-concurrent',
+                     'org-a', 'canvas_credentials', '{}'::jsonb, clock_timestamp());"#,
     )
     .execute(&pool)
     .await
@@ -393,8 +476,137 @@ async fn management_repository_preserves_registration_and_idempotent_revocation_
         Some("first retry" | "second retry")
     ));
 
+    let publisher = Arc::new(ConcurrentPublisher {
+        publications: AtomicUsize::new(0),
+        records: Mutex::new(Vec::new()),
+        first_pair: Barrier::new(2),
+    });
+    let lifecycle = CredentialManagementService::new(
+        Arc::new(PostgresCredentialManagementRepository::new(pool.clone())),
+        publisher.clone(),
+        Arc::new(NoopLifecycleEvents),
+    );
+    let service = Oid4vciManagementService::new(
+        Arc::new(repository.clone()),
+        Arc::new(PostgresIssuedCredentialRecordRepository::new(pool.clone())),
+        lifecycle,
+        Some("management-key"),
+    );
+    let app = oid4vci_management_http::router(service);
+    let request = |reason: &str| {
+        Request::post("/v1/issuance/transactions/tx-service-concurrent/revoke")
+            .header("x-api-key", "management-key")
+            .header("x-organization-id", "org-a")
+            .header("content-type", "application/json")
+            .body(Body::from(json!({"reason": reason}).to_string()))
+            .unwrap()
+    };
+    let (first_response, second_response) = tokio::time::timeout(Duration::from_secs(10), async {
+        tokio::join!(
+            app.clone().oneshot(request("first service request")),
+            app.oneshot(request("second service request"))
+        )
+    })
+    .await
+    .expect("concurrent revocations must not hang at the publication barrier");
+    let first_response = first_response.unwrap();
+    let second_response = second_response.unwrap();
+    assert_eq!(first_response.status(), StatusCode::OK);
+    assert_eq!(second_response.status(), StatusCode::OK);
+    let first_body: Value = serde_json::from_slice(
+        &to_bytes(first_response.into_body(), usize::MAX)
+            .await
+            .unwrap(),
+    )
+    .unwrap();
+    let second_body: Value = serde_json::from_slice(
+        &to_bytes(second_response.into_body(), usize::MAX)
+            .await
+            .unwrap(),
+    )
+    .unwrap();
+    assert_eq!(first_body["status"], "revoked");
+    assert_eq!(second_body["status"], "revoked");
+    assert_eq!(
+        first_body["revocation_reason"],
+        second_body["revocation_reason"]
+    );
+    let stored: (String, Option<String>) = sqlx::query_as(
+        "SELECT status, revocation_reason
+         FROM issuance_service.issuance_transactions
+         WHERE id = 'tx-service-concurrent'",
+    )
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert_eq!(stored.0, "revoked");
+    let authoritative_reason = stored.1.expect("stored transaction revocation reason");
+    assert_eq!(first_body["revocation_reason"], json!(authoritative_reason));
+    let credential: (String, bool, Option<String>) = sqlx::query_as(
+        "SELECT status, revoked, revocation_reason
+         FROM issuance_service.issued_credentials
+         WHERE id = 'credential-service-concurrent'",
+    )
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert_eq!(credential.0, "revoked");
+    assert!(credential.1);
+    assert_eq!(credential.2.as_deref(), Some(authoritative_reason.as_str()));
+
+    let audit_events: Vec<(String, Value)> = sqlx::query_as(
+        "SELECT event_type, metadata
+         FROM issuance_service.issuance_events
+         WHERE transaction_id = 'tx-service-concurrent'
+         ORDER BY created_at, id",
+    )
+    .fetch_all(&pool)
+    .await
+    .unwrap();
+    assert_eq!(audit_events.len(), 1);
+    assert_eq!(audit_events[0].0, "credential_revoked");
+    assert_eq!(
+        audit_events[0].1["reason"],
+        json!(authoritative_reason),
+        "the single credential audit must retain the winning request reason"
+    );
+
+    let canvas_metadata: Value = sqlx::query_scalar(
+        "SELECT metadata
+         FROM issuance_service.credential_delivery_records
+         WHERE id = 'delivery-service-concurrent'",
+    )
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert_eq!(canvas_metadata["status_sync_state"], "pending");
+    assert_eq!(canvas_metadata["last_status_sync_action"], "revoke");
+    assert_eq!(canvas_metadata["requested_credential_status"], "revoked");
+    assert_eq!(
+        canvas_metadata["requested_status_sync_reason"],
+        json!(authoritative_reason)
+    );
+
+    assert_eq!(publisher.publications.load(Ordering::SeqCst), 3);
+    let publications = publisher
+        .records
+        .lock()
+        .expect("publication records")
+        .clone();
+    assert_eq!(publications.len(), 3);
+    assert!(publications
+        .iter()
+        .all(|(action, _)| *action == CredentialLifecycleAction::Revoke));
+    assert_eq!(
+        publications[2].1.as_deref(),
+        Some(authoritative_reason.as_str()),
+        "the optimistic loser must republish the authoritative winner reason"
+    );
+
     sqlx::raw_sql(
-        r#"DROP TABLE issuance_service.issued_credentials;
+        r#"DROP TABLE issuance_service.credential_delivery_records;
+         DROP TABLE issuance_service.issuance_events;
+         DROP TABLE issuance_service.issued_credentials;
          DROP TABLE issuance_service.issuance_transactions;
          DROP TABLE issuance_service.oid4vci_registered_clients;"#,
     )

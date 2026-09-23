@@ -383,7 +383,7 @@ impl CredentialManagementService {
         enforce_organization(&credential, trusted_organization_id)?;
         if credential.status != ManagedCredentialStatus::Revoked {
             let audit_context = CredentialLifecycleAuditContext::default();
-            return self
+            let transition = self
                 .apply_transition(
                     credential,
                     trusted_organization_id,
@@ -393,12 +393,37 @@ impl CredentialManagementService {
                     ReasonPolicy::PreserveTransactionInput,
                 )
                 .await;
+            return match transition {
+                Ok(status) => Ok(status),
+                Err(error @ CredentialManagementError::RepositoryUnavailable(_)) => {
+                    // A concurrent idempotent transaction revocation can win the
+                    // credential status CAS after both requests loaded `active`.
+                    // Re-read before surfacing the repository error: only an
+                    // authoritative revoked row is safe to reconcile. Genuine
+                    // persistence failures leave the row unchanged and retain
+                    // their original fail-closed error.
+                    let authoritative = self.load(credential_id).await?;
+                    enforce_organization(&authoritative, trusted_organization_id)?;
+                    if authoritative.status != ManagedCredentialStatus::Revoked {
+                        return Err(error);
+                    }
+                    self.reconcile_persisted_revocation(&authoritative).await
+                }
+                Err(error) => Err(error),
+            };
         }
 
+        self.reconcile_persisted_revocation(&credential).await
+    }
+
+    async fn reconcile_persisted_revocation(
+        &self,
+        credential: &ManagedCredential,
+    ) -> Result<CredentialStatusView, CredentialManagementError> {
         let persisted_reason = credential.revocation_reason.as_deref();
         self.publisher
             .publish(
-                &credential,
+                credential,
                 CredentialLifecycleAction::Revoke,
                 persisted_reason,
             )
@@ -406,7 +431,7 @@ impl CredentialManagementService {
             .map_err(|error| CredentialManagementError::PublicationUnavailable(error.0))?;
         self.repository
             .synchronize_canvas(
-                &credential,
+                credential,
                 CredentialLifecycleAction::Revoke,
                 persisted_reason,
             )
@@ -420,7 +445,7 @@ impl CredentialManagementService {
                 }
             })?;
         Ok(status_view(
-            &credential,
+            credential,
             credential.revocation_reason.clone(),
         ))
     }
@@ -521,6 +546,8 @@ mod tests {
         calls: Arc<Mutex<Vec<String>>>,
         publication_failure: Arc<Mutex<Option<String>>>,
         canvas_failure: Arc<Mutex<Option<String>>>,
+        persist_failure: Arc<Mutex<Option<String>>>,
+        persist_race_reason: Arc<Mutex<Option<String>>>,
         events: Arc<Mutex<Vec<CredentialLifecycleEvent>>>,
         audits: Arc<Mutex<Vec<CredentialLifecycleAuditRecord>>>,
     }
@@ -553,6 +580,8 @@ mod tests {
                 calls: Arc::new(Mutex::new(Vec::new())),
                 publication_failure: Arc::new(Mutex::new(None)),
                 canvas_failure: Arc::new(Mutex::new(None)),
+                persist_failure: Arc::new(Mutex::new(None)),
+                persist_race_reason: Arc::new(Mutex::new(None)),
                 events: Arc::new(Mutex::new(Vec::new())),
                 audits: Arc::new(Mutex::new(Vec::new())),
             }
@@ -590,7 +619,34 @@ mod tests {
         ) -> Result<ManagedCredential, CredentialManagementPortError> {
             self.calls.lock().expect("calls").push("persist".to_owned());
             self.audits.lock().expect("audits").push(audit.clone());
+            if let Some(error) = self
+                .persist_failure
+                .lock()
+                .expect("persist failure")
+                .clone()
+            {
+                return Err(CredentialManagementPortError(error));
+            }
             let mut stored = self.credential.lock().expect("credential");
+            if let Some(reason) = self
+                .persist_race_reason
+                .lock()
+                .expect("persist race reason")
+                .take()
+            {
+                let mut winner = stored
+                    .as_ref()
+                    .expect("race winner requires a stored credential")
+                    .clone();
+                winner.status = ManagedCredentialStatus::Revoked;
+                winner.revoked = true;
+                winner.revoked_at = Some(Utc::now());
+                winner.revocation_reason = Some(reason);
+                *stored = Some(winner);
+                return Err(CredentialManagementPortError(
+                    "Credential status changed concurrently".to_owned(),
+                ));
+            }
             let current = stored
                 .as_ref()
                 .ok_or_else(|| CredentialManagementPortError("missing".to_owned()))?;
@@ -617,6 +673,68 @@ mod tests {
                 Ok(())
             }
         }
+    }
+
+    #[tokio::test]
+    async fn transaction_revocation_reconciles_an_authoritative_concurrent_winner() {
+        let harness = Harness::new(ManagedCredentialStatus::Active);
+        *harness
+            .persist_race_reason
+            .lock()
+            .expect("persist race reason") = Some("winning request".to_owned());
+
+        let status = harness
+            .service()
+            .reconcile_revocation("credential-a", Some("org-a"), Some("losing request"))
+            .await
+            .expect("concurrent revocation must converge");
+
+        assert_eq!(status.status, "revoked");
+        assert_eq!(status.reason.as_deref(), Some("winning request"));
+        assert_eq!(
+            *harness.calls.lock().expect("calls"),
+            [
+                "load",
+                "publish:revoke",
+                "persist",
+                "load",
+                "publish:revoke",
+                "canvas:revoke",
+            ]
+        );
+        assert!(harness.events.lock().expect("events").is_empty());
+    }
+
+    #[tokio::test]
+    async fn transaction_revocation_keeps_genuine_persistence_failures_closed() {
+        let harness = Harness::new(ManagedCredentialStatus::Active);
+        *harness.persist_failure.lock().expect("persist failure") =
+            Some("database unavailable".to_owned());
+
+        let error = harness
+            .service()
+            .reconcile_revocation("credential-a", Some("org-a"), Some("request"))
+            .await
+            .expect_err("an unchanged authoritative row must not mask persistence failure");
+
+        assert_eq!(
+            error,
+            CredentialManagementError::RepositoryUnavailable("database unavailable".to_owned())
+        );
+        assert_eq!(
+            *harness.calls.lock().expect("calls"),
+            ["load", "publish:revoke", "persist", "load"]
+        );
+        assert_eq!(
+            harness
+                .credential
+                .lock()
+                .expect("credential")
+                .as_ref()
+                .expect("credential")
+                .status,
+            ManagedCredentialStatus::Active
+        );
     }
 
     #[async_trait]
