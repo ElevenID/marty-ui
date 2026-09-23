@@ -225,6 +225,53 @@ export default defineConfig(async ({ mode }) => {
       }
     })
   }
+
+  const requireUniqueRoutes = (label: string, routes: string[]) => {
+    const duplicates = routes.filter((route, index) => routes.indexOf(route) !== index)
+    if (duplicates.length > 0) {
+      throw new Error(`${label} contains duplicate routes: ${Array.from(new Set(duplicates)).join(', ')}`)
+    }
+    return routes
+  }
+  const prerenderRoutes = requireUniqueRoutes('prerender', [
+    '/',
+    '/product',
+    '/solutions',
+    '/developers',
+    '/architecture',
+    '/security',
+    '/resources',
+    ...demoRoutes,
+    '/verifiable-credential-api',
+    '/eudi-wallet-verification',
+    '/iso-18013-5-mdoc-verification',
+    '/sd-jwt-verification',
+    '/open-badges-verification',
+    '/open-badges-issuance',
+    '/trust-registry-infrastructure',
+    '/identity',
+    '/why-verifiable-identity',
+    '/from-idv-to-verifiable-identity',
+    '/what-is-verifiable-identity',
+    '/standards',
+    '/protocol',
+    '/privacy-policy',
+    '/terms-of-service',
+    ...blogRoutes,
+    ...authorRoutes,
+    '/docs',
+  ])
+  const sitemapOnlyRoutes = requireUniqueRoutes('sitemap-only', [
+    '/ai',
+    '/what-is-credential-verification',
+    '/what-is-open-badge',
+    '/what-is-digital-credential',
+    '/what-is-marty-protocol',
+  ])
+  const sitemapRoutes = requireUniqueRoutes('sitemap', [
+    ...prerenderRoutes,
+    ...sitemapOnlyRoutes,
+  ])
   
   return {
     resolve: {
@@ -262,34 +309,7 @@ export default defineConfig(async ({ mode }) => {
       // Prerendering for SEO - only in production builds
       ...(!disablePrerender ? [
         prerender({
-          routes: [
-            '/',
-            '/product',
-            '/solutions',
-            '/developers',
-            '/architecture',
-            '/security',
-            '/resources',
-            ...demoRoutes,
-            '/verifiable-credential-api',
-            '/eudi-wallet-verification',
-            '/iso-18013-5-mdoc-verification',
-            '/sd-jwt-verification',
-            '/open-badges-verification',
-            '/open-badges-issuance',
-            '/trust-registry-infrastructure',
-            '/identity',
-            '/why-verifiable-identity',
-            '/from-idv-to-verifiable-identity',
-            '/what-is-verifiable-identity',
-            '/standards',
-            '/protocol',
-            '/privacy-policy',
-            '/terms-of-service',
-            ...blogRoutes,
-            ...authorRoutes,
-            '/docs',
-          ],
+          routes: prerenderRoutes,
           renderer: new PuppeteerRenderer({
             maxConcurrentRoutes: prerenderConcurrency,
             renderAfterDocumentEvent: 'app-rendered',
@@ -329,41 +349,19 @@ export default defineConfig(async ({ mode }) => {
             }
           },
         }),
-        
-        // Sitemap generation
+      ] : []),
+
+      // Crawler files do not require a browser. Dockerfile.prod deliberately
+      // disables prerendering, but every public build still needs these files.
+      ...(!isDev && !isSelfhostBuild ? [
         Sitemap({
           hostname: 'https://elevenidllc.com',
-          dynamicRoutes: [
-            '/',
-            '/product',
-            '/solutions',
-            '/developers',
-            '/architecture',
-            '/security',
-            '/resources',
-            ...demoRoutes,
-            '/verifiable-credential-api',
-            '/eudi-wallet-verification',
-            '/iso-18013-5-mdoc-verification',
-            '/sd-jwt-verification',
-            '/open-badges-verification',
-            '/open-badges-issuance',
-            '/trust-registry-infrastructure',
-            '/identity',
-            '/why-verifiable-identity',
-            '/standards',
-            '/protocol',
-            '/ai',
-            '/what-is-credential-verification',
-            '/what-is-open-badge',
-            '/what-is-digital-credential',
-            '/what-is-marty-protocol',
-            '/privacy-policy',
-            '/terms-of-service',
-            ...blogRoutes,
-            ...authorRoutes,
-            '/docs',
-          ],
+          // The plugin also scans emitted HTML. In prerendered builds, submit
+          // only routes without an HTML artifact; in Docker's SPA build, submit
+          // every public route except the root index it always discovers.
+          dynamicRoutes: sitemapRoutes.filter((route) => (
+            route !== '/' && (disablePrerender || !prerenderRoutes.includes(route))
+          )),
           exclude: [
             '/console',
             '/console/*',
@@ -428,8 +426,8 @@ export default defineConfig(async ({ mode }) => {
             { userAgent: 'Cohere-AI', allow: '/' },
           ],
         }),
-        promotePrerenderedRootPlugin(),
       ] : []),
+      ...(!disablePrerender ? [promotePrerenderedRootPlugin()] : []),
 
       ...(!isDev && enableBundleAnalysis ? [
         visualizer({

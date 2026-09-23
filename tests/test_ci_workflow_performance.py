@@ -235,6 +235,8 @@ def test_pull_request_classifier_is_conservative_and_merge_queue_is_complete() -
     conditional_jobs = {
         "fast-feedback",
         "test-ui",
+        "test-ui-crawler-artifacts",
+        "test-ui-crawler-nginx",
         "test-services",
         "test-rust-services",
         "rust-lint-policy",
