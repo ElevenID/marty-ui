@@ -8,10 +8,17 @@
   "source_tree": "819b7458a31c75d28043a4660643b029c5ec4567",
   "source_path": "services/issuance/infrastructure/api/routes.py",
   "source_blob_sha1": "f71dd82163fcb2296209f880fe78d55a130d356b",
+  "release_runtime": {
+    "image": "ghcr.io/elevenid/marty-credentials-issuance",
+    "digest": "sha256:815cbba6efc7c91e770a8dd15fe5fa102d252a485073bf60f0e0d5e0a73b28e5",
+    "dependencies": {"fastapi":"0.109.0","pydantic":"2.11.7","httpx":"0.26.0"},
+    "profile_source_path": "services/Dockerfile",
+    "profile_source_blob_sha1": "13bcb60f46601303b0f524427d9d5aa6bce927d9"
+  },
   "upstream_surface_sha256": "b161a8aa7be187f0b8123325b1708f39f29e09b83f231016b0f4431e20d79829",
   "reference": {
     "path": "contracts/canvas-mirror-python-reference.json",
-    "sha256": "befd6d7e09337f9f8ba97e63497eecaa768b897ee688d61e2b4acbb0564a9a78"
+    "sha256": "470dbd36d609c4cf03058e7787d2c5260274b009bc748f7d621f79b28e04022b"
   },
   "scenarios": {
     "path": "contracts/canvas-mirror-scenarios.json",
@@ -20,7 +27,7 @@
   "capture": "scripts/capture_canvas_mirror_reference.py",
   "adapter_reference": {
     "path": "contracts/canvas-mirror-adapter-reference.json",
-    "sha256": "8efea21afa75ee36501169bb7af321536a8490edb53bd81ea0930fe0a53463b9"
+    "sha256": "8673dd7096a989e6810068334681a4889a8e1e7cd296ccbc3ebac79333497e46"
   },
   "adapter_scenarios": {
     "path": "contracts/canvas-mirror-adapter-scenarios.json",
@@ -30,7 +37,7 @@
   "adapter_result_encoding": "python-json-text",
   "publication_boundary_reference": {
     "path": "contracts/canvas-publication-boundary-reference.json",
-    "sha256": "e114f541998743df3861d95e139944fee0129a043f2f9647db02f1ace9411fe1"
+    "sha256": "74f139702361989ec6754dab712a72b5833b3b9194ca8cc43967be97b9c3f4f3"
   },
   "publication_boundary_scenarios": {
     "path": "contracts/canvas-publication-boundary-scenarios.json",

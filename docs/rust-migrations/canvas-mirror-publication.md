@@ -4,6 +4,14 @@ Baseline UI: `b5d9d5203511159ff38412fc6eaa691cae636ff8`.
 Reference Credentials: published `v0.1.76`, protected-main commit
 `aaa6a9b8e31e62cd0ab087eef5fc1f4835048e26`, tree
 `819b7458a31c75d28043a4660643b029c5ec4567`.
+The behavioral oracle runs only inside immutable issuance image
+`ghcr.io/elevenid/marty-credentials-issuance@sha256:815cbba6efc7c91e770a8dd15fe5fa102d252a485073bf60f0e0d5e0a73b28e5`.
+It verifies the release Dockerfile blob and refuses any runtime other than the
+deployed FastAPI `0.109.0`, Pydantic `2.11.7`, and httpx `0.26.0` profile before
+executing a route. CI executes the complete `--check` capture in that image;
+all three reference modes must pass, so static artifact hashes are not accepted
+as behavioral replay evidence. Artifact checks and writes refuse to run without
+the release-image controller.
 
 This slice covers six HTTP operations, bridge and Badgr publication, mirror
 health/provenance, publication and lifecycle-retry batches, alerts/webhooks, and
@@ -57,7 +65,8 @@ The outer artifact is strict JSON. Decode the tagged text using the existing
 lossless Python-compatible response decoder for native comparison: numeric NaN,
 string `"NaN"`, and escaped unpaired surrogates remain distinct. This is not an
 observation of an ASGI renderer or a production persistence representation.
-Run the same capture command with `--adapter-reference --check` for this corpus.
+Run the same release-image capture command with
+`--release-image --adapter-reference --check` for this corpus.
 Both corpora retain independent hashes and mandatory root-discovered guards.
 
 Checked-in reference and scenario artifact identities use strict UTF-8 with
@@ -99,12 +108,17 @@ complete observation phase has a 30-second parent deadline and 4 MiB per-stream
 capture limits. Deadline, output, pipe-reader, startup, missing-global, or
 unowned-origin failure cannot produce an accepted artifact. Source reads have
 their own per-command bound; the 30 seconds does not include those reads.
+The container controller has its own 45-second streaming bound and runs with no
+network, a read-only root filesystem and repository mount, no Linux capabilities,
+no-new-privileges, and a bounded 16 MiB temporary filesystem.
 
-Reproduce using a Python environment with the dependency versions recorded in
-the artifact:
+Reproduce through the pinned container controller; an ambient Python environment
+is deliberately rejected before route execution:
 
 ```text
-python scripts/capture_canvas_mirror_reference.py <credentials-git-checkout> --check
+python scripts/capture_canvas_mirror_reference.py <credentials-git-checkout> --release-image --check
+python scripts/capture_canvas_mirror_reference.py <credentials-git-checkout> --release-image --adapter-reference --check
+python scripts/capture_canvas_mirror_reference.py <credentials-git-checkout> --release-image --publication-boundary-reference --check
 python -m pytest tests/test_canvas_mirror_reference.py
 ```
 

@@ -10,6 +10,8 @@ import io
 import json
 import math
 from pathlib import Path
+import subprocess
+import sys
 
 import pytest
 
@@ -265,6 +267,11 @@ def test_contract_artifact_hashes_and_source_coverage(capture, artifact):
     )
     assert coverage["upstream"]["sha256"] == contract["upstream_surface_sha256"]
     assert artifact["scenarios_sha256"] == contract["scenarios"]["sha256"]
+    assert artifact["release_image"] == {
+        "uri": capture.RELEASE_IMAGE,
+        "digest": capture.RELEASE_IMAGE_DIGEST,
+    }
+    assert artifact["dependencies"] == capture.RELEASE_DEPENDENCIES
 
 
 @pytest.mark.parametrize("owner", ["reference", "scenarios"])
@@ -561,6 +568,13 @@ def test_current_release_route_inventory_is_exact(capture):
     assert contract["source_tree"] == "819b7458a31c75d28043a4660643b029c5ec4567"
     assert contract["source_path"] == capture.SOURCES[capture.ROUTES][0]
     assert contract["source_blob_sha1"] == capture.SOURCES[capture.ROUTES][1]
+    assert contract["release_runtime"] == {
+        "image": capture.RELEASE_IMAGE,
+        "digest": capture.RELEASE_IMAGE_DIGEST,
+        "dependencies": capture.RELEASE_DEPENDENCIES,
+        "profile_source_path": capture.SOURCES["release_profile"][0],
+        "profile_source_blob_sha1": capture.SOURCES["release_profile"][1],
+    }
     assert [route["operation"] for route in contract["routes"]] == list(
         capture.OPERATIONS
     )
@@ -794,6 +808,147 @@ def test_source_input_hash_mismatch_is_fatal(capture):
     wrong = {name: "" for name in capture.SOURCES}
     with pytest.raises(ValueError, match="Untrusted"):
         capture.verify_sources(wrong)
+
+
+def test_release_dependency_profile_is_source_bound_and_fail_closed(
+    capture, monkeypatch
+):
+    profile = " ".join(
+        f"{package}=={version}"
+        for package, version in capture.RELEASE_DEPENDENCIES.items()
+    )
+    capture.verify_release_profile_source(profile)
+    with pytest.raises(ValueError, match="Pinned release dependency profile"):
+        capture.verify_release_profile_source(
+            profile.replace("fastapi==0.109.0", "fastapi==0.109.1")
+        )
+
+    monkeypatch.setattr(
+        capture.importlib.metadata,
+        "version",
+        lambda package: (
+            "0.109.1"
+            if package == "fastapi"
+            else capture.RELEASE_DEPENDENCIES[package]
+        ),
+    )
+    with pytest.raises(RuntimeError, match="immutable Credentials v0.1.76"):
+        capture.require_release_dependency_profile()
+
+
+def test_pinned_closure_distinguishes_function_locals_from_globals(capture):
+    function = ast.parse(
+        "def capture(repo, *, clock):\n"
+        "    response = repo.read()\n"
+        "    return normalize(response, clock())\n"
+    ).body[0]
+
+    assert capture.referenced_names(function) == {"normalize"}
+
+
+def test_ci_replays_reference_in_exact_release_image():
+    workflow = (ROOT / ".github/workflows/ci.yml").read_text(encoding="utf-8")
+    assert "needs.changes.outputs.rust == 'true'" in workflow
+    assert "repository: ElevenID/marty-credentials" in workflow
+    assert "ref: aaa6a9b8e31e62cd0ab087eef5fc1f4835048e26" in workflow
+    assert "docker pull \"$image@$digest\"" in workflow
+    assert workflow.count("scripts/capture_canvas_mirror_reference.py") >= 3
+    assert "--release-image --check" in workflow
+    assert "--release-image --adapter-reference --check" in workflow
+    assert "--release-image --publication-boundary-reference --check" in workflow
+    assert (
+        "sha256:815cbba6efc7c91e770a8dd15fe5fa102d252a485073bf60f0e0d5e0a73b28e5"
+        in workflow
+    )
+
+
+@pytest.mark.parametrize("operation", ["check", "write_reference"])
+def test_behavioral_artifact_operations_require_release_image(capture, operation):
+    arguments = {operation: True}
+    with pytest.raises(ValueError, match="require --release-image"):
+        capture.require_release_image_controller(**arguments)
+
+    capture.require_release_image_controller(release_image=True, **arguments)
+    capture.require_release_image_controller(audit=True, **arguments)
+
+
+@pytest.mark.parametrize("operation", ["--check", "--write-reference"])
+def test_cli_rejects_ambient_behavioral_artifact_operation(operation):
+    completed = subprocess.run(
+        [sys.executable, str(CAPTURE), str(ROOT), operation],
+        stdin=subprocess.DEVNULL,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        check=False,
+        timeout=5,
+    )
+    assert completed.returncode == 2
+    assert b"require --release-image" in completed.stderr
+
+
+def test_release_image_process_is_isolated_and_profile_checked(
+    capture, artifact, monkeypatch
+):
+    monkeypatch.setattr(capture, "verify_sources", lambda _sources: None)
+    observed = {}
+
+    def bounded(arguments, _source_input, **controls):
+        observed["arguments"] = arguments
+        observed["controls"] = controls
+        return 0, json.dumps(artifact).encode(), b""
+
+    monkeypatch.setattr(capture, "run_bounded_process", bounded)
+    _, actual = capture.release_image_observation({})
+    assert actual == artifact
+    arguments = observed["arguments"]
+    for option, value in (
+        ("--network", "none"),
+        ("--cap-drop", "ALL"),
+        ("--security-opt", "no-new-privileges"),
+        ("--tmpfs", "/tmp:rw,noexec,nosuid,nodev,size=16m"),
+    ):
+        position = arguments.index(option)
+        assert arguments[position + 1] == value
+    assert "--read-only" in arguments
+    assert f"{capture.ROOT}:/review:ro" in arguments
+    assert (
+        f"{capture.RELEASE_IMAGE}@{capture.RELEASE_IMAGE_DIGEST}" in arguments
+    )
+    assert observed["controls"] == {
+        "deadline_seconds": 45,
+        "label": "Immutable release-image observation",
+    }
+
+
+@pytest.mark.parametrize("mode", ["profile", "timeout", "flood", "nonzero", "stderr"])
+def test_release_image_observation_fails_closed(
+    capture, artifact, monkeypatch, mode
+):
+    monkeypatch.setattr(capture, "verify_sources", lambda _sources: None)
+    result = copy.deepcopy(artifact)
+    if mode == "profile":
+        result["dependencies"]["fastapi"] = "0.109.1"
+    outcomes = {
+        "profile": (0, json.dumps(result).encode(), b""),
+        "nonzero": (7, json.dumps(artifact).encode(), b"controlled failure"),
+        "stderr": (0, json.dumps(artifact).encode(), b"unexpected warning"),
+    }
+    if mode in {"timeout", "flood"}:
+        reason = "45-second deadline" if mode == "timeout" else "size limit"
+
+        def fail_bounded(*_args, **_kwargs):
+            raise RuntimeError(reason)
+
+        monkeypatch.setattr(capture, "run_bounded_process", fail_bounded)
+    else:
+        monkeypatch.setattr(
+            capture,
+            "run_bounded_process",
+            lambda *_args, **_kwargs: outcomes[mode],
+        )
+        reason = "profile differs" if mode == "profile" else "observation failed"
+    with pytest.raises(RuntimeError, match=reason):
+        capture.release_image_observation({})
 
 
 @pytest.mark.parametrize(
