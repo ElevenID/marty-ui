@@ -128,7 +128,7 @@ def assert_registration(source, runner, workflow):
         )
         assert matches == ["#[tokio::test]\n"], name
         assert f"'{name}: test'" in runner, name
-    assert '"${executables[0]}" --nocapture --test-threads=1' in runner
+    assert '"${executables[0]}" --nocapture --test-threads=2' in runner
     jobs = workflow["jobs"]
     steps = jobs["test-rust-services"]["steps"]
     builds = [

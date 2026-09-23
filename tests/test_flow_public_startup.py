@@ -14,7 +14,7 @@ def test_public_flow_main_gate_is_registered_and_required():
     assert "run_flow_public_startup(&owned.url, redis.url())" in body
     script = (ROOT / "scripts/ci/run-published-canvas-contracts.sh").read_text()
     assert f"grep -Fx '{NAME}: test'" in script
-    assert '"${executables[0]}" --nocapture --test-threads=1' in script
+    assert '"${executables[0]}" --nocapture --test-threads=2' in script
     workflow = (ROOT / ".github/workflows/ci.yml").read_text()
     assert "test -x rust/target/debug/marty-flow" in workflow
 

@@ -200,4 +200,4 @@ fi
 "${executables[0]}" --list | grep -Fx 'worker_body_timeout_native_child: test'
 "${executables[0]}" --list | grep -Fx 'worker_timeout_matches_frozen_published_process: test'
 "${executables[0]}" --list | grep -Fx 'worker_timeout_native_child: test'
-"${executables[0]}" --nocapture --test-threads=1
+"${executables[0]}" --nocapture --test-threads=2
