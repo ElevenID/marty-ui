@@ -560,3 +560,76 @@ def test_renewal_fixtures_compare_post_migration_state_and_unique_notifications(
         "assert_eq!(persisted.notification_id, notification_id);",
     ]:
         assert required in canvas
+
+
+def test_ordinary_token_snapshot_proves_bounded_expiry_without_ignoring_state():
+    ordinary = (
+        ROOT / "rust/services/issuance/tests/support/base_runtime_ordinary.rs"
+    ).read_text(encoding="utf-8")
+
+    def check(source):
+        before = "let token_expiry_not_before = database_clock(pool).await;"
+        request = "let response = gateway\n        .client"
+        after = "let token_expiry_not_after = database_clock(pool).await;"
+        persisted = "let persisted_authorized = stored(pool, id).await;"
+        expected = (
+            'authorized["transaction"]["access_token_expires_at"] =\n'
+            '        persisted_authorized["transaction"]["access_token_expires_at"].clone();'
+        )
+        equality = "assert_eq!(persisted_authorized, authorized);"
+        for marker in [before, request, after, persisted, expected, equality]:
+            assert marker in source
+        assert (
+            source.index(before)
+            < source.index(request, source.index(before))
+            < source.index(after)
+            < source.index(persisted)
+            < source.index(expected)
+            < source.index(equality)
+        )
+        for required in [
+            'sqlx::query_scalar("SELECT clock_timestamp()")',
+            "let token_lifetime = Duration::seconds(1800);",
+            "token_expiry >= token_expiry_not_before + token_lifetime",
+            "token_expiry <= token_expiry_not_after + token_lifetime",
+            'persisted_authorized["transaction"]\n        ["access_token_expires_at"]',
+            'assert_ne!(authorized["transaction"]["access_token"], clear);',
+        ]:
+            assert required in source
+        assert (
+            "token_expiry >= token_expiry_not_before + token_lifetime\n"
+            "            && token_expiry <= token_expiry_not_after + token_lifetime"
+            in source
+        )
+
+    check(ordinary)
+    for weakened in [
+        ordinary.replace(
+            "Duration::seconds(1800)", "Duration::seconds(3600)", 1
+        ),
+        ordinary.replace(
+            "            && token_expiry <=", "            || token_expiry <=", 1
+        ),
+        ordinary.replace(
+            'persisted_authorized["transaction"]["access_token_expires_at"].clone()',
+            "Value::Null",
+            1,
+        ),
+        ordinary.replace(
+            "assert_eq!(persisted_authorized, authorized);",
+            "assert_eq!(persisted_authorized, persisted_authorized);",
+            1,
+        ),
+        ordinary.replace(
+            'sqlx::query_scalar("SELECT clock_timestamp()")',
+            "Utc::now()",
+            1,
+        ),
+        ordinary.replace(
+            'assert_ne!(authorized["transaction"]["access_token"], clear);',
+            'assert_ne!(authorized["transaction"]["access_token"], "");',
+            1,
+        ),
+    ]:
+        with pytest.raises(AssertionError):
+            check(weakened)

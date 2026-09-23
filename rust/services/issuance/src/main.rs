@@ -166,7 +166,23 @@ async fn main() -> Result<(), Box<dyn Error>> {
     let pool = sqlx::postgres::PgPoolOptions::new()
         .max_connections(5)
         .connect_lazy(&config.database_url)?;
-    migration::migrate(&pool).await?;
+    migration::migrate(&pool).await.map_err(|error| {
+        if error
+            .as_database_error()
+            .and_then(|database| database.code())
+            .is_some_and(|code| code == "28P01")
+        {
+            // Stable, secret-free evidence for operators and the packaged
+            // self-host gate. PostgreSQL 28P01 is invalid_password.
+            error!(
+                database_sqlstate = "28P01",
+                "issuance startup database authentication failed"
+            );
+        } else {
+            error!(%error, "issuance startup database migration failed");
+        }
+        error
+    })?;
     let tenant_discovery = TenantDiscoveryService::new(
         discovery.clone(),
         Arc::new(PostgresTenantDiscoveryRepository::new(pool.clone())),

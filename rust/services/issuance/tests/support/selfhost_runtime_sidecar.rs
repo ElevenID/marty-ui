@@ -212,6 +212,40 @@ pub(super) enum SecretCase {
     RawAndFile,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum LogExpectation<'a> {
+    Contains(&'a str),
+    Structured {
+        message: &'a str,
+        field: &'a str,
+        value: &'a str,
+    },
+}
+
+pub(super) fn log_satisfies_boundary(
+    log: &str,
+    secrets: &[&str],
+    expected: Option<LogExpectation<'_>>,
+) -> bool {
+    let secrets_absent = secrets
+        .iter()
+        .all(|value| !value.is_empty() && !log.contains(value));
+    let expected_present = match expected {
+        None => true,
+        Some(LogExpectation::Contains(value)) => log.contains(value),
+        Some(LogExpectation::Structured {
+            message,
+            field,
+            value,
+        }) => log.lines().any(|line| {
+            serde_json::from_str::<Value>(line).is_ok_and(|event| {
+                event["fields"]["message"] == message && event["fields"][field] == value
+            })
+        }),
+    };
+    secrets_absent && expected_present
+}
+
 pub(super) struct PublicImage {
     id: String,
     environment: BTreeMap<String, String>,
@@ -737,7 +771,7 @@ impl<'a> OwnedNative<'a> {
     pub(super) fn verify_log_boundary(
         &self,
         secrets: &[&str],
-        expected: Option<&str>,
+        expected: Option<LogExpectation<'_>>,
     ) -> Result<(), String> {
         let id = self.id.as_deref().ok_or(ERROR)?;
         self.checked(&inspect(id)?, id)?;
@@ -749,12 +783,7 @@ impl<'a> OwnedNative<'a> {
         let mut bytes = output.stdout;
         bytes.extend(output.stderr);
         let log = String::from_utf8(bytes).map_err(|_| ERROR)?;
-        require(
-            secrets
-                .iter()
-                .all(|value| !value.is_empty() && !log.contains(value)),
-        )?;
-        require(expected.is_none_or(|value| log.contains(value)))
+        require(log_satisfies_boundary(&log, secrets, expected))
     }
     pub(super) fn state(&self) -> Result<Value, String> {
         let id = self.id.as_deref().ok_or(ERROR)?;

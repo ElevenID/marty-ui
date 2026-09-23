@@ -9,8 +9,8 @@ use std::{
 use super::{
     canvas_published_database::PublishedDatabase,
     selfhost_runtime_sidecar::{
-        OwnedNative, PendingKind, PendingOperation, PublicImage, SecretCase, MANAGEMENT_KEY,
-        ORGANIZATION, TRANSACTION_ID,
+        LogExpectation, OwnedNative, PendingKind, PendingOperation, PublicImage, SecretCase,
+        MANAGEMENT_KEY, ORGANIZATION, TRANSACTION_ID,
     },
 };
 
@@ -235,7 +235,6 @@ fn valid_stage(value: &str) -> bool {
             | "transaction"
             | "transaction-status-200"
             | "transaction-status-401"
-            | "transaction-status-500-expected"
             | "transaction-status-500-unexpected"
             | "transaction-status-other"
             | "verify-log-boundary"
@@ -267,6 +266,37 @@ fn case_key(case: SecretCase) -> &'static str {
         SecretCase::Empty => "empty",
         SecretCase::Placeholder => "placeholder",
         SecretCase::RawAndFile => "raw-and-file",
+    }
+}
+
+fn expects_running_service(case: SecretCase) -> bool {
+    // Native startup applies the required OID4VCI schema migration before it
+    // binds the service. Invalid database credentials must therefore fail
+    // closed at startup instead of exposing a healthy process whose first
+    // repository request later fails.
+    matches!(case, SecretCase::Correct | SecretCase::CrLf)
+}
+
+fn expected_log(case: SecretCase) -> Option<LogExpectation<'static>> {
+    match case {
+        SecretCase::WrongPassword => Some(LogExpectation::Structured {
+            message: "issuance startup database authentication failed",
+            field: "database_sqlstate",
+            value: "28P01",
+        }),
+        SecretCase::MissingMount | SecretCase::Directory => Some(LogExpectation::Contains(
+            "Secret file for GRPC_SERVICE_TOKEN is not a regular file",
+        )),
+        SecretCase::Unreadable => Some(LogExpectation::Contains(
+            "Secret file for GRPC_SERVICE_TOKEN is not readable",
+        )),
+        SecretCase::RawAndFile => Some(LogExpectation::Contains(
+            "Both GRPC_SERVICE_TOKEN and GRPC_SERVICE_TOKEN_FILE are set",
+        )),
+        SecretCase::Empty | SecretCase::Placeholder => {
+            Some(LogExpectation::Contains("GRPC_SERVICE_TOKEN"))
+        }
+        SecretCase::Correct | SecretCase::CrLf => None,
     }
 }
 
@@ -587,10 +617,7 @@ fn run_service(
     service.verify_baked_files(repo)?;
     record_stage(case, "start");
     service.start()?;
-    let healthy = matches!(
-        case,
-        SecretCase::Correct | SecretCase::CrLf | SecretCase::WrongPassword
-    );
+    let healthy = expects_running_service(case);
     let deadline = Instant::now() + Duration::from_secs(20);
     record_stage(case, "await-health");
     loop {
@@ -613,40 +640,24 @@ fn run_service(
         require(invalid == (401, json!({"detail":"Invalid API Key"})))?;
         record_stage(case, "transaction");
         let response = service.transaction(true)?;
-        let unavailable = json!({"detail":"Issuance transaction data is temporarily unavailable"});
         record_stage(
             case,
             match (&response.0, &response.1) {
                 (200, _) => "transaction-status-200",
                 (401, _) => "transaction-status-401",
-                (500, body) if body == &unavailable => "transaction-status-500-expected",
                 (500, _) => "transaction-status-500-unexpected",
                 _ => "transaction-status-other",
             },
         );
-        if case == SecretCase::WrongPassword {
-            require(response == (500, unavailable))?;
-        } else {
-            require(
-                response
-                    == (
-                        200,
-                        json!({"id":TRANSACTION_ID,"organization_id":ORGANIZATION,"credential_template_id":"synthetic-loader-template","applicant_id":null,"application_id":null,"subject_did":"did:web:holder.example","status":"pending","created_at":"2026-01-02T03:04:05+00:00","expires_at":"2030-01-02T03:04:05+00:00","issued_at":null,"revoked_at":null,"revocation_reason":null}),
-                    ),
-            )?;
-        }
+        require(
+            response
+                == (
+                    200,
+                    json!({"id":TRANSACTION_ID,"organization_id":ORGANIZATION,"credential_template_id":"synthetic-loader-template","applicant_id":null,"application_id":null,"subject_did":"did:web:holder.example","status":"pending","created_at":"2026-01-02T03:04:05+00:00","expires_at":"2030-01-02T03:04:05+00:00","issued_at":null,"revoked_at":null,"revocation_reason":null}),
+                ),
+        )?;
     }
-    let expected = match case {
-        SecretCase::MissingMount | SecretCase::Directory => {
-            Some("Secret file for GRPC_SERVICE_TOKEN is not a regular file")
-        }
-        SecretCase::Unreadable => Some("Secret file for GRPC_SERVICE_TOKEN is not readable"),
-        SecretCase::RawAndFile => {
-            Some("Both GRPC_SERVICE_TOKEN and GRPC_SERVICE_TOKEN_FILE are set")
-        }
-        SecretCase::Empty | SecretCase::Placeholder => Some("GRPC_SERVICE_TOKEN"),
-        _ => None,
-    };
+    let expected = expected_log(case);
     record_stage(case, "verify-log-boundary");
     service.verify_log_boundary(
         &secrets.iter().map(String::as_str).collect::<Vec<_>>(),
@@ -772,6 +783,46 @@ mod tests {
         assert_eq!(
             last_child_stage(b"SELFHOST_PUBLIC_LOADER_STAGE:unknown:create"),
             None
+        );
+    }
+
+    #[test]
+    fn database_authentication_failure_never_qualifies_as_healthy() {
+        assert!(expects_running_service(SecretCase::Correct));
+        assert!(expects_running_service(SecretCase::CrLf));
+        for case in [
+            SecretCase::WrongPassword,
+            SecretCase::MissingMount,
+            SecretCase::Directory,
+            SecretCase::Unreadable,
+            SecretCase::Empty,
+            SecretCase::Placeholder,
+            SecretCase::RawAndFile,
+        ] {
+            assert!(!expects_running_service(case));
+        }
+        let expected = expected_log(SecretCase::WrongPassword);
+        let message = "issuance startup database authentication failed";
+        assert!(
+            !super::super::selfhost_runtime_sidecar::log_satisfies_boundary(
+                &format!(r#"{{"fields":{{"message":"{message}"}}}}"#),
+                &[],
+                expected,
+            )
+        );
+        assert!(
+            !super::super::selfhost_runtime_sidecar::log_satisfies_boundary(
+                r#"{"fields":{"database_sqlstate":"28P01"}}"#,
+                &[],
+                expected,
+            )
+        );
+        assert!(
+            super::super::selfhost_runtime_sidecar::log_satisfies_boundary(
+                &format!(r#"{{"fields":{{"message":"{message}","database_sqlstate":"28P01"}}}}"#),
+                &[],
+                expected,
+            )
         );
     }
 
