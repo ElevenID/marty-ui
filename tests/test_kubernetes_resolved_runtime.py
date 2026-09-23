@@ -30,7 +30,7 @@ def required(source, runner, workflow):
             r"((?:#\[[^\n]+\]\s*)+)async fn " + name + r"\(\)\s*\{", source
         ) == ["#[tokio::test]\n"]
         assert runner.count(f"'{name}: test'") == 1
-    assert '"${executables[0]}" --nocapture --test-threads=2' in runner
+    assert '"${executables[0]}" --skip "$serial_test" --nocapture --test-threads=2' in runner
     for module in ("resolved_runtime", "resolved_kubernetes_runtime"):
         assert source.count(f'#[path = "support/{module}.rs"]\nmod {module};') == 1
     assert "base_runtime_container::run_kubernetes(&owned, &redis)" in source
@@ -85,7 +85,7 @@ def test_missing_or_disconnected_kubernetes_gates_fail(name, fault):
         runner = runner.replace(f"'{name}: test'", "'removed: test'")
     else:
         runner = runner.replace(
-            '"${executables[0]}" --nocapture --test-threads=2', "echo disconnected"
+            '"${executables[0]}" --skip "$serial_test" --nocapture --test-threads=2', "echo disconnected"
         )
     with pytest.raises(AssertionError):
         required(source, runner, workflow)
