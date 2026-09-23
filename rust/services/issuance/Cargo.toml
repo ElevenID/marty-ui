@@ -268,3 +268,11 @@ path = "tests/proof_nonce_postgres_contract.rs"
 [[test]]
 name = "token_exchange_behavior"
 path = "tests/token_exchange_behavior.rs"
+
+[[test]]
+name = "oid4vci_authorization_behavior"
+path = "tests/oid4vci_authorization_behavior.rs"
+
+[[test]]
+name = "oid4vci_migration_postgres_contract"
+path = "tests/oid4vci_migration_postgres_contract.rs"

@@ -2,10 +2,38 @@ use std::collections::BTreeMap;
 
 use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine};
 use marty_oid4vci::jose::verify_compact_jwt_with_public_jwk;
+use mmf_security::constant_time_secret_eq;
 use serde_json::Value;
 use sha2::{Digest, Sha256};
 
 use crate::token_exchange::{DpopProofVerifier, TokenExchangeError};
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum BoundDpopError {
+    Required,
+    Invalid,
+    Mismatch,
+}
+
+pub fn verify_bound_dpop(
+    verifier: &dyn DpopProofVerifier,
+    expected_jkt: Option<&str>,
+    proof: Option<&str>,
+    method: &str,
+    expected_htu: &str,
+) -> Result<(), BoundDpopError> {
+    let Some(expected_jkt) = expected_jkt.filter(|value| !value.is_empty()) else {
+        return Ok(());
+    };
+    let proof = proof.ok_or(BoundDpopError::Required)?;
+    let actual = verifier
+        .verify(proof, method, expected_htu)
+        .map_err(|_| BoundDpopError::Invalid)?;
+    if !constant_time_secret_eq(expected_jkt.as_bytes(), actual.as_bytes()) {
+        return Err(BoundDpopError::Mismatch);
+    }
+    Ok(())
+}
 
 #[derive(Clone, Debug, Default)]
 pub struct MartyDpopProofVerifier;

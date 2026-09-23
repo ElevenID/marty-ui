@@ -9,8 +9,8 @@ use std::{
 use super::{
     canvas_published_database::PublishedDatabase,
     selfhost_runtime_sidecar::{
-        OwnedNative, PendingKind, PendingOperation, PublicImage, SecretCase, MANAGEMENT_KEY,
-        ORGANIZATION, TRANSACTION_ID,
+        LogExpectation, OwnedNative, PendingKind, PendingOperation, PublicImage, SecretCase,
+        MANAGEMENT_KEY, ORGANIZATION, TRANSACTION_ID,
     },
 };
 
@@ -206,7 +206,7 @@ fn valid_stage(value: &str) -> bool {
     let Some((case, stage)) = value.split_once(':') else {
         return false;
     };
-    matches!(
+    let valid_case = matches!(
         case,
         "database"
             | "correct"
@@ -218,7 +218,8 @@ fn valid_stage(value: &str) -> bool {
             | "empty"
             | "placeholder"
             | "raw-and-file"
-    ) && matches!(
+    );
+    let common_stage = matches!(
         stage,
         "provision"
             | "prepare"
@@ -234,14 +235,24 @@ fn valid_stage(value: &str) -> bool {
             | "transaction"
             | "transaction-status-200"
             | "transaction-status-401"
-            | "transaction-status-500-expected"
             | "transaction-status-500-unexpected"
             | "transaction-status-other"
             | "verify-log-boundary"
             | "cleanup"
             | "snapshot-after"
             | "input-integrity"
-    )
+    );
+    let database_stage = case == "database"
+        && matches!(
+            stage,
+            "transfer-ownership"
+                | "inspect-ownership"
+                | "verify-ownership"
+                | "grant"
+                | "authenticate"
+                | "seed"
+        );
+    valid_case && (common_stage || database_stage)
 }
 
 fn case_key(case: SecretCase) -> &'static str {
@@ -258,9 +269,45 @@ fn case_key(case: SecretCase) -> &'static str {
     }
 }
 
+fn expects_running_service(case: SecretCase) -> bool {
+    // Native startup applies the required OID4VCI schema migration before it
+    // binds the service. Invalid database credentials must therefore fail
+    // closed at startup instead of exposing a healthy process whose first
+    // repository request later fails.
+    matches!(case, SecretCase::Correct | SecretCase::CrLf)
+}
+
+fn expected_log(case: SecretCase) -> Option<LogExpectation<'static>> {
+    match case {
+        SecretCase::WrongPassword => Some(LogExpectation::Structured {
+            message: "issuance startup database authentication failed",
+            field: "database_sqlstate",
+            value: "28P01",
+        }),
+        SecretCase::MissingMount | SecretCase::Directory => Some(LogExpectation::Contains(
+            "Secret file for GRPC_SERVICE_TOKEN is not a regular file",
+        )),
+        SecretCase::Unreadable => Some(LogExpectation::Contains(
+            "Secret file for GRPC_SERVICE_TOKEN is not readable",
+        )),
+        SecretCase::RawAndFile => Some(LogExpectation::Contains(
+            "Both GRPC_SERVICE_TOKEN and GRPC_SERVICE_TOKEN_FILE are set",
+        )),
+        SecretCase::Empty | SecretCase::Placeholder => {
+            Some(LogExpectation::Contains("GRPC_SERVICE_TOKEN"))
+        }
+        SecretCase::Correct | SecretCase::CrLf => None,
+    }
+}
+
 fn record_stage(case: SecretCase, stage: &'static str) {
     debug_assert!(valid_stage(&format!("{}:{stage}", case_key(case))));
     eprintln!("{STAGE_PREFIX}{}:{stage}", case_key(case));
+}
+
+fn record_database_stage(stage: &'static str) {
+    debug_assert!(valid_stage(&format!("database:{stage}")));
+    eprintln!("{STAGE_PREFIX}database:{stage}");
 }
 
 fn closed_docker(
@@ -356,6 +403,59 @@ async fn provision(database: &PublishedDatabase) -> Result<sqlx::PgPool, String>
         .connect(url.as_str())
         .await
         .map_err(|_| ERROR)?;
+    // A database cloned from the frozen oracle template retains the oracle's
+    // object ownership. Production self-host databases are owned by the
+    // service role, which must be able to apply additive startup migrations.
+    // Transfer only the service schema: REASSIGN OWNED also targets PostgreSQL
+    // system objects owned by the bootstrap superuser and is therefore refused.
+    record_database_stage("transfer-ownership");
+    sqlx::query(
+        "DO $ownership$
+         DECLARE owned_object record;
+         BEGIN
+           ALTER SCHEMA issuance_service OWNER TO marty;
+           FOR owned_object IN
+             SELECT object.relkind, object.relname
+             FROM pg_class AS object
+             JOIN pg_namespace AS namespace ON namespace.oid = object.relnamespace
+             WHERE namespace.nspname = 'issuance_service'
+               AND object.relkind IN ('r', 'p', 'S')
+           LOOP
+             EXECUTE format(
+               'ALTER %s %I.%I OWNER TO marty',
+               CASE WHEN owned_object.relkind = 'S' THEN 'SEQUENCE' ELSE 'TABLE' END,
+               'issuance_service',
+               owned_object.relname
+             );
+           END LOOP;
+         END
+         $ownership$",
+    )
+    .execute(&pool)
+    .await
+    .map_err(|_| "Packaged selfhost qualification failed: database:transfer-ownership")?;
+    record_database_stage("inspect-ownership");
+    let ownership: (bool, bool, bool) = sqlx::query_as(
+        "SELECT
+           (SELECT pg_get_userbyid(datdba) = 'marty'
+              FROM pg_database WHERE datname = current_database()),
+           (SELECT pg_get_userbyid(nspowner) = 'marty'
+              FROM pg_namespace WHERE nspname = 'issuance_service'),
+           NOT EXISTS (
+             SELECT 1 FROM pg_class AS object
+             JOIN pg_namespace AS namespace ON namespace.oid = object.relnamespace
+             WHERE namespace.nspname = 'issuance_service'
+               AND object.relkind IN ('r', 'p', 'S')
+               AND pg_get_userbyid(object.relowner) <> 'marty')",
+    )
+    .fetch_one(&pool)
+    .await
+    .map_err(|_| "Packaged selfhost qualification failed: database:inspect-ownership")?;
+    record_database_stage("verify-ownership");
+    if ownership != (true, true, true) {
+        return Err("Packaged selfhost qualification failed: database:ownership".into());
+    }
+    record_database_stage("grant");
     for statement in [
         "GRANT USAGE ON SCHEMA issuance_service TO marty",
         "GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA issuance_service TO marty",
@@ -371,6 +471,7 @@ async fn provision(database: &PublishedDatabase) -> Result<sqlx::PgPool, String>
     authenticated
         .set_password(Some(PASSWORD))
         .map_err(|_| ERROR)?;
+    record_database_stage("authenticate");
     let check = sqlx::PgPool::connect(authenticated.as_str())
         .await
         .map_err(|_| ERROR)?;
@@ -380,8 +481,9 @@ async fn provision(database: &PublishedDatabase) -> Result<sqlx::PgPool, String>
             .await
             .map_err(|_| ERROR)?;
     require(identity == ("marty".into(), "marty".into()))?;
+    record_database_stage("seed");
+    seed(&check).await?;
     check.close().await;
-    seed(&pool).await?;
     Ok(pool)
 }
 
@@ -425,7 +527,13 @@ async fn seed(pool: &sqlx::PgPool) -> Result<(), String> {
 
 async fn snapshot(pool: &sqlx::PgPool) -> Result<Value, String> {
     sqlx::query_scalar("SELECT jsonb_build_object(
-      'transactions',(SELECT COALESCE(jsonb_agg(to_jsonb(t) ORDER BY id),'[]') FROM issuance_service.issuance_transactions t),
+      -- Normalize the legacy schema's absent field to JSON null. Once startup
+      -- creates it, any non-null or otherwise changed value remains visible.
+      'transactions',(SELECT COALESCE(jsonb_agg(
+        to_jsonb(t) || jsonb_build_object(
+          'access_token_expires_at',
+          COALESCE(to_jsonb(t)->'access_token_expires_at', 'null'::jsonb)
+        ) ORDER BY id),'[]') FROM issuance_service.issuance_transactions t),
       'credentials',(SELECT COALESCE(jsonb_agg(to_jsonb(c) ORDER BY id),'[]') FROM issuance_service.issued_credentials c),
       'deliveries',(SELECT COALESCE(jsonb_agg(to_jsonb(d) ORDER BY id),'[]') FROM issuance_service.credential_delivery_records d),
       'events',(SELECT COALESCE(jsonb_agg(to_jsonb(e) ORDER BY id),'[]') FROM issuance_service.issuance_events e))")
@@ -509,10 +617,7 @@ fn run_service(
     service.verify_baked_files(repo)?;
     record_stage(case, "start");
     service.start()?;
-    let healthy = matches!(
-        case,
-        SecretCase::Correct | SecretCase::CrLf | SecretCase::WrongPassword
-    );
+    let healthy = expects_running_service(case);
     let deadline = Instant::now() + Duration::from_secs(20);
     record_stage(case, "await-health");
     loop {
@@ -535,40 +640,24 @@ fn run_service(
         require(invalid == (401, json!({"detail":"Invalid API Key"})))?;
         record_stage(case, "transaction");
         let response = service.transaction(true)?;
-        let unavailable = json!({"detail":"Issuance transaction data is temporarily unavailable"});
         record_stage(
             case,
             match (&response.0, &response.1) {
                 (200, _) => "transaction-status-200",
                 (401, _) => "transaction-status-401",
-                (500, body) if body == &unavailable => "transaction-status-500-expected",
                 (500, _) => "transaction-status-500-unexpected",
                 _ => "transaction-status-other",
             },
         );
-        if case == SecretCase::WrongPassword {
-            require(response == (500, unavailable))?;
-        } else {
-            require(
-                response
-                    == (
-                        200,
-                        json!({"id":TRANSACTION_ID,"organization_id":ORGANIZATION,"credential_template_id":"synthetic-loader-template","applicant_id":null,"application_id":null,"subject_did":"did:web:holder.example","status":"pending","created_at":"2026-01-02T03:04:05+00:00","expires_at":"2030-01-02T03:04:05+00:00","issued_at":null,"revoked_at":null,"revocation_reason":null}),
-                    ),
-            )?;
-        }
+        require(
+            response
+                == (
+                    200,
+                    json!({"id":TRANSACTION_ID,"organization_id":ORGANIZATION,"credential_template_id":"synthetic-loader-template","applicant_id":null,"application_id":null,"subject_did":"did:web:holder.example","status":"pending","created_at":"2026-01-02T03:04:05+00:00","expires_at":"2030-01-02T03:04:05+00:00","issued_at":null,"revoked_at":null,"revocation_reason":null}),
+                ),
+        )?;
     }
-    let expected = match case {
-        SecretCase::MissingMount | SecretCase::Directory => {
-            Some("Secret file for GRPC_SERVICE_TOKEN is not a regular file")
-        }
-        SecretCase::Unreadable => Some("Secret file for GRPC_SERVICE_TOKEN is not readable"),
-        SecretCase::RawAndFile => {
-            Some("Both GRPC_SERVICE_TOKEN and GRPC_SERVICE_TOKEN_FILE are set")
-        }
-        SecretCase::Empty | SecretCase::Placeholder => Some("GRPC_SERVICE_TOKEN"),
-        _ => None,
-    };
+    let expected = expected_log(case);
     record_stage(case, "verify-log-boundary");
     service.verify_log_boundary(
         &secrets.iter().map(String::as_str).collect::<Vec<_>>(),
@@ -694,6 +783,46 @@ mod tests {
         assert_eq!(
             last_child_stage(b"SELFHOST_PUBLIC_LOADER_STAGE:unknown:create"),
             None
+        );
+    }
+
+    #[test]
+    fn database_authentication_failure_never_qualifies_as_healthy() {
+        assert!(expects_running_service(SecretCase::Correct));
+        assert!(expects_running_service(SecretCase::CrLf));
+        for case in [
+            SecretCase::WrongPassword,
+            SecretCase::MissingMount,
+            SecretCase::Directory,
+            SecretCase::Unreadable,
+            SecretCase::Empty,
+            SecretCase::Placeholder,
+            SecretCase::RawAndFile,
+        ] {
+            assert!(!expects_running_service(case));
+        }
+        let expected = expected_log(SecretCase::WrongPassword);
+        let message = "issuance startup database authentication failed";
+        assert!(
+            !super::super::selfhost_runtime_sidecar::log_satisfies_boundary(
+                &format!(r#"{{"fields":{{"message":"{message}"}}}}"#),
+                &[],
+                expected,
+            )
+        );
+        assert!(
+            !super::super::selfhost_runtime_sidecar::log_satisfies_boundary(
+                r#"{"fields":{"database_sqlstate":"28P01"}}"#,
+                &[],
+                expected,
+            )
+        );
+        assert!(
+            super::super::selfhost_runtime_sidecar::log_satisfies_boundary(
+                &format!(r#"{{"fields":{{"message":"{message}","database_sqlstate":"28P01"}}}}"#),
+                &[],
+                expected,
+            )
         );
     }
 

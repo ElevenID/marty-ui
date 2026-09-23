@@ -447,3 +447,189 @@ def test_inner_acceptance_roster_cannot_drop_a_capability(owner):
     check(source)
     with pytest.raises(AssertionError):
         check(source.replace(f"super::{owner}::run(", "disconnected_owner("))
+
+
+def test_renewal_fixtures_compare_post_migration_state_and_unique_notifications():
+    renewal = (
+        ROOT / "rust/services/issuance/tests/support/renewal_fresh_main.rs"
+    ).read_text(encoding="utf-8")
+
+    def check(source):
+        ready = 'Some(json!({"status":"healthy","service":"issuance-service"}))'
+        pre_start = "let source_before_startup = stored(&pool, &source_tx_id).await;"
+        not_before = "let startup_migration_not_before: chrono::DateTime<chrono::Utc> ="
+        spawn = "let mut child = ChildGuard(command.spawn().unwrap());"
+        snapshot = "let source_before = stored(&pool, &source_tx_id).await;"
+        not_after = "let startup_migration_not_after: chrono::DateTime<chrono::Utc> ="
+        gateway = "let gateway_fixture = if gateway {"
+        for marker in [pre_start, not_before, spawn, ready, not_after, snapshot, gateway]:
+            assert marker in source
+        assert (
+            source.index(pre_start)
+            < source.index(not_before)
+            < source.index(spawn)
+            < source.index(ready)
+            < source.index(not_after)
+            < source.index(snapshot)
+            < source.index(gateway)
+        )
+        conjunctive_bound = (
+            "backfilled_expiry >= startup_migration_not_before + legacy_token_lifetime\n"
+            "                && backfilled_expiry <= startup_migration_not_after + legacy_token_lifetime"
+        )
+        for required in [
+            'const LEGACY_ACCESS_TOKEN: &str = "synthetic-legacy-access-token";',
+            "Hmac::<Sha256>::new_from_slice(TOKEN_HMAC_KEY.as_bytes())",
+            "hmac.update(token.as_bytes());",
+            "hex::encode(hmac.finalize().into_bytes())",
+            "let legacy_access_token_digest = access_token_digest(LEGACY_ACCESS_TOKEN);",
+            'SET access_token=$1\n             WHERE id=$2 AND organization_id=$3',
+            ".bind(&legacy_access_token_digest)\n"
+            "        .bind(&source_tx_id)\n"
+            "        .bind(ORGANIZATION)",
+            'assert_eq!(\n            seeded.rows_affected(),\n            1,',
+            'assert_eq!(\n            source_before_startup["transaction"]["access_token"], legacy_access_token_digest,',
+            'assert_ne!(\n            source_before_startup["transaction"]["access_token"], LEGACY_ACCESS_TOKEN,',
+            "legacy access token must remain one-way hashed at rest",
+            'source_before_startup["transaction"]["access_token_expires_at"].is_null()',
+            'sqlx::query_scalar("SELECT clock_timestamp()")',
+            "let legacy_token_lifetime = chrono::Duration::seconds(1800);",
+            "backfilled_expiry >= startup_migration_not_before + legacy_token_lifetime",
+            "backfilled_expiry <= startup_migration_not_after + legacy_token_lifetime",
+            'expected_after_startup["transaction"]["access_token_expires_at"] =',
+            'source_before["transaction"]["access_token_expires_at"].clone();',
+            "assert_eq!(\n            source_before, expected_after_startup,",
+            "startup migration changed seeded renewal domain state",
+        ]:
+            assert required in source
+        assert conjunctive_bound in source
+        assert source.count('sqlx::query_scalar("SELECT clock_timestamp()")') == 2
+        assert (
+            'expected_after_startup["transaction"]["access_token_expires_at"] = Value::Null;'
+            not in source
+        )
+
+    check(renewal)
+    for weakened in [
+        renewal.replace(
+            ".bind(&legacy_access_token_digest)", ".bind(LEGACY_ACCESS_TOKEN)"
+        ),
+        renewal.replace(
+            "WHERE id=$2 AND organization_id=$3", "WHERE id=$2"
+        ),
+        renewal.replace(
+            ".bind(&source_tx_id)\n        .bind(ORGANIZATION)",
+            ".bind(&source_id)\n        .bind(ORGANIZATION)",
+        ),
+        renewal.replace(
+            ".bind(&source_tx_id)\n        .bind(ORGANIZATION)",
+            ".bind(&source_tx_id)\n        .bind(\"foreign-org\")",
+        ),
+        renewal.replace(
+            "seeded.rows_affected(),\n            1,",
+            "seeded.rows_affected(),\n            0,",
+        ),
+        renewal.replace(
+            "chrono::Duration::seconds(1800)", "chrono::Duration::seconds(3600)"
+        ),
+        renewal.replace(
+            'source_before["transaction"]["access_token_expires_at"].clone()',
+            "Value::Null",
+        ),
+        renewal.replace(
+            "source_before, expected_after_startup", "source_before, source_before"
+        ),
+        renewal.replace(
+            "                && backfilled_expiry <=",
+            "                || backfilled_expiry <=",
+        ),
+        renewal.replace(
+            "let startup_migration_not_before: chrono::DateTime<chrono::Utc> =",
+            "let displaced_startup_migration_not_before: chrono::DateTime<chrono::Utc> =",
+        ),
+    ]:
+        with pytest.raises(AssertionError):
+            check(weakened)
+
+    canvas = (
+        ROOT / "rust/services/issuance/tests/support/renewal_canvas_binding.rs"
+    ).read_text(encoding="utf-8")
+    for required in [
+        'format!("notification-renewal-canvas-{}", transaction.id)',
+        ".finalize(&claimed, &credential, &notification_id)",
+        "assert_eq!(persisted.notification_id, notification_id);",
+    ]:
+        assert required in canvas
+
+
+def test_ordinary_token_snapshot_proves_bounded_expiry_without_ignoring_state():
+    ordinary = (
+        ROOT / "rust/services/issuance/tests/support/base_runtime_ordinary.rs"
+    ).read_text(encoding="utf-8")
+
+    def check(source):
+        before = "let token_expiry_not_before = database_clock(pool).await;"
+        request = "let response = gateway\n        .client"
+        after = "let token_expiry_not_after = database_clock(pool).await;"
+        persisted = "let persisted_authorized = stored(pool, id).await;"
+        expected = (
+            'authorized["transaction"]["access_token_expires_at"] =\n'
+            '        persisted_authorized["transaction"]["access_token_expires_at"].clone();'
+        )
+        equality = "assert_eq!(persisted_authorized, authorized);"
+        for marker in [before, request, after, persisted, expected, equality]:
+            assert marker in source
+        assert (
+            source.index(before)
+            < source.index(request, source.index(before))
+            < source.index(after)
+            < source.index(persisted)
+            < source.index(expected)
+            < source.index(equality)
+        )
+        for required in [
+            'sqlx::query_scalar("SELECT clock_timestamp()")',
+            "let token_lifetime = Duration::seconds(1800);",
+            "token_expiry >= token_expiry_not_before + token_lifetime",
+            "token_expiry <= token_expiry_not_after + token_lifetime",
+            'persisted_authorized["transaction"]\n        ["access_token_expires_at"]',
+            'assert_ne!(authorized["transaction"]["access_token"], clear);',
+        ]:
+            assert required in source
+        assert (
+            "token_expiry >= token_expiry_not_before + token_lifetime\n"
+            "            && token_expiry <= token_expiry_not_after + token_lifetime"
+            in source
+        )
+
+    check(ordinary)
+    for weakened in [
+        ordinary.replace(
+            "Duration::seconds(1800)", "Duration::seconds(3600)", 1
+        ),
+        ordinary.replace(
+            "            && token_expiry <=", "            || token_expiry <=", 1
+        ),
+        ordinary.replace(
+            'persisted_authorized["transaction"]["access_token_expires_at"].clone()',
+            "Value::Null",
+            1,
+        ),
+        ordinary.replace(
+            "assert_eq!(persisted_authorized, authorized);",
+            "assert_eq!(persisted_authorized, persisted_authorized);",
+            1,
+        ),
+        ordinary.replace(
+            'sqlx::query_scalar("SELECT clock_timestamp()")',
+            "Utc::now()",
+            1,
+        ),
+        ordinary.replace(
+            'assert_ne!(authorized["transaction"]["access_token"], clear);',
+            'assert_ne!(authorized["transaction"]["access_token"], "");',
+            1,
+        ),
+    ]:
+        with pytest.raises(AssertionError):
+            check(weakened)

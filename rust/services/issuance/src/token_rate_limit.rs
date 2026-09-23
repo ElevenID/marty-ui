@@ -5,7 +5,16 @@ use std::{
     time::Duration,
 };
 
+use axum::{
+    extract::{ConnectInfo, Request, State},
+    http::{header, HeaderValue, StatusCode},
+    middleware::Next,
+    response::{IntoResponse, Response},
+    Json,
+};
 use mmf_config::numeric_config::{parse_python_config_float, PythonConfigInteger};
+use serde_json::json;
+use std::net::SocketAddr;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum TokenRateLimitError {
@@ -141,6 +150,36 @@ impl TokenRateLimiter {
         hits.insert(client.to_owned(), timestamps);
         Ok(true)
     }
+}
+
+pub async fn token_rate_limit_middleware(
+    State(limiter): State<Option<TokenRateLimiter>>,
+    request: Request,
+    next: Next,
+) -> Response {
+    let Some(limiter) = limiter else {
+        return next.run(request).await;
+    };
+    let client = request
+        .extensions()
+        .get::<ConnectInfo<SocketAddr>>()
+        .map_or("unknown".to_owned(), |ConnectInfo(address)| {
+            address.ip().to_string()
+        });
+    match limiter.check_request(&client) {
+        Ok(true) => return next.run(request).await,
+        Ok(false) => {}
+        Err(_) => return crate::transport::unhandled_http_failure(),
+    }
+    let mut response = (
+        StatusCode::TOO_MANY_REQUESTS,
+        Json(json!({"detail": "Rate limit exceeded"})),
+    )
+        .into_response();
+    if let Ok(value) = HeaderValue::from_str(limiter.retry_after_header()) {
+        response.headers_mut().insert(header::RETRY_AFTER, value);
+    }
+    response
 }
 
 #[cfg(test)]

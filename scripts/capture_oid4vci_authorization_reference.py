@@ -22,7 +22,8 @@ from pathlib import Path
 from typing import Any
 
 
-SOURCE_COMMIT = "75e2394350185a1b7c0824b25b4016ca40b0174c"
+SOURCE_COMMIT = "aaa6a9b8e31e62cd0ab087eef5fc1f4835048e26"
+SOURCE_TREE = "819b7458a31c75d28043a4660643b029c5ec4567"
 SOURCE_FILES = (
     "services/issuance/infrastructure/api/routes.py",
     "services/issuance/domain/entities.py",
@@ -873,6 +874,7 @@ async def _capture(credentials_root: Path) -> dict[str, Any]:
         "source": {
             "repository": "ElevenID/marty-credentials",
             "commit": SOURCE_COMMIT,
+            "tree": SOURCE_TREE,
             "files": {
                 relative: _normalized_sha256(credentials_root / relative)
                 for relative in SOURCE_FILES

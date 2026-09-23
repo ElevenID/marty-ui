@@ -13,6 +13,8 @@ pub type Result<T> = std::result::Result<T, &'static str>;
 pub type Environment = BTreeMap<String, String>;
 pub const OPTIONAL_SETTINGS: &[&str] = &[
     "ISSUANCE_OFFER_TTL_MINUTES",
+    "ISSUANCE_AUTH_SESSION_TTL_MINUTES",
+    "ALLOWED_REDIRECT_URIS",
     "TOKEN_RATE_LIMIT",
     "TOKEN_RATE_WINDOW",
     "ISSUER_DISPLAY_NAME",

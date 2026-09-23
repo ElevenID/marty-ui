@@ -23,7 +23,6 @@ LEGACY_ONLY = {
     "CANVAS_CREDENTIALS_PROVENANCE_BASE_URL",
     "CANVAS_CREDENTIALS_RECIPIENT_HASHED",
     "CANVAS_CREDENTIALS_ALLOW_DUPLICATE_AWARDS",
-    "ISSUANCE_AUTH_SESSION_TTL_MINUTES",
 }
 READY = "auth,organizations,credential-templates,trust-profiles,presentation-policies,deployment-profiles,signing-keys,flows,issuance,issuance-native"
 
@@ -39,6 +38,13 @@ LOADED_INPUTS = {
 }
 EXPLICIT_POLICY = {"DIDCOMM_ENCRYPTION_POLICY_FILE", "DIDCOMM_TLS_CA_FILE"}
 CONFIG_META = {"CARGO_PKG_VERSION", "MARTY_ISSUANCE__"}
+SHARED_ADDITIONS = {
+    "ALLOWED_REDIRECT_URIS": "${ALLOWED_REDIRECT_URIS:-}",
+}
+SHARED_SETTINGS = {
+    **SHARED_ADDITIONS,
+    "ISSUANCE_AUTH_SESSION_TTL_MINUTES": "${ISSUANCE_AUTH_SESSION_TTL_MINUTES:-60}",
+}
 UNFORWARDED = set(
     """
 APP_ENV CANVAS_ADMIN_API_TOKEN CANVAS_ALLOW_LOCAL_ADMIN_TOKEN_FALLBACK
@@ -67,9 +73,16 @@ def assert_input_inventory():
     model = yaml.safe_load((ROOT / GATE["BASE"]).read_text())
     native = model["services"]["issuance-native"]["environment"]
     legacy = model["services"]["issuance"]["environment"]
-    assert (
-        inputs - set(native)
-        == LOADED_INPUTS | EXPLICIT_POLICY | CONFIG_META | UNFORWARDED
+    assert {
+        key: model["x-issuance-application-env"].get(key)
+        for key in SHARED_SETTINGS
+    } == SHARED_SETTINGS
+    expected_omitted = LOADED_INPUTS | EXPLICIT_POLICY | CONFIG_META | UNFORWARDED
+    actual_omitted = inputs - set(native)
+    assert actual_omitted == expected_omitted, (
+        "Update the exhaustive self-host native configuration inventory: "
+        f"unexpected={sorted(actual_omitted - expected_omitted)!r}, "
+        f"stale={sorted(expected_omitted - actual_omitted)!r}"
     )
     assert not UNFORWARDED & set(legacy), (
         "Previously bound input must not become unforwarded"
@@ -114,6 +127,11 @@ def assert_models(before, after):
         preserved["services"].pop("issuance-native")
     )
     shared = preserved.pop("x-issuance-application-env")
+    shared_additions = {key: shared[key] for key in SHARED_ADDITIONS}
+    legacy_after = preserved["services"]["issuance"]["environment"]
+    assert {
+        key: legacy_after.pop(key) for key in SHARED_ADDITIONS
+    } == shared_additions
     gateway = preserved["services"]["gateway"]
     # Governed repair: the native signer and readiness need the separate owner,
     # whereas the unchanged frozen model omitted it and fell back to localhost.
@@ -146,6 +164,7 @@ def assert_models(before, after):
         for key, value in legacy["environment"].items()
         if key not in LEGACY_ONLY
     }
+    environment.update(shared_additions)
     assert shared == environment
     environment.update(
         SERVICE_NAME="issuance_native",

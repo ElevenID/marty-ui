@@ -39,6 +39,12 @@ test -x target/debug/credential-template-postgres-contract
 test -x target/debug/presentation-policy-postgres-contract
 target/debug/credential-template-postgres-contract --test-threads=1
 target/debug/presentation-policy-postgres-contract --test-threads=1
+mapfile -t issuance_oid4vci_migration_contracts < <(find target/debug/deps -maxdepth 1 -type f -name 'oid4vci_migration_postgres_contract-*' -perm -u+x)
+if (( ${#issuance_oid4vci_migration_contracts[@]} != 1 )); then
+  printf 'Expected one Issuance OID4VCI migration PostgreSQL contract executable, found %s.\n' "${#issuance_oid4vci_migration_contracts[@]}" >&2
+  exit 1
+fi
+"${issuance_oid4vci_migration_contracts[0]}" --test-threads=1
 mapfile -t issuance_transaction_contracts < <(find target/debug/deps -maxdepth 1 -type f -name 'issuance_transaction_postgres_contract-*' -perm -u+x)
 if (( ${#issuance_transaction_contracts[@]} != 1 )); then
   printf 'Expected one Issuance transaction PostgreSQL contract executable, found %s.\n' "${#issuance_transaction_contracts[@]}" >&2

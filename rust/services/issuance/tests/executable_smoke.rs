@@ -25,8 +25,29 @@ async fn wait_for_health(port: u16) -> Option<Value> {
     wait_for_health_with_client(port, &client).await
 }
 
+/// Return the real, dedicated PostgreSQL fixture required by production
+/// startup migration. Keeping this executable-test policy local prevents other
+/// process fixtures from inheriting or contacting this database accidentally.
+fn smoke_database_url() -> Option<String> {
+    let Ok(database_url) = std::env::var("ISSUANCE_EXECUTABLE_SMOKE_DATABASE_URL") else {
+        eprintln!(
+            "skipping executable smoke test; ISSUANCE_EXECUTABLE_SMOKE_DATABASE_URL is not set"
+        );
+        return None;
+    };
+    let parsed = url::Url::parse(&database_url).expect("valid executable smoke database URL");
+    assert!(
+        parsed.path().trim_start_matches('/').ends_with("_test"),
+        "executable smoke database must be a dedicated *_test database"
+    );
+    Some(database_url)
+}
+
 #[tokio::test]
 async fn executable_serves_unrelated_health_with_missing_or_malformed_didcomm_ca() {
+    let Some(database_url) = smoke_database_url() else {
+        return;
+    };
     use std::io::Write;
     struct OwnedFile(std::path::PathBuf);
     impl Drop for OwnedFile {
@@ -48,13 +69,10 @@ async fn executable_serves_unrelated_health_with_missing_or_malformed_didcomm_ca
         }
         let (http_reservation, port) = reserve_port();
         let (_grpc_reservation, grpc_port) = reserve_port();
-        let (database_denied, database_port) = reserve_port();
-        database_denied.set_nonblocking(true).unwrap();
         let mut command = isolated_smoke_command(port, grpc_port);
-        command.env("DIDCOMM_TLS_CA_FILE", &path).env(
-            "DATABASE_URL",
-            format!("postgres://synthetic@127.0.0.1:{database_port}/didcomm_ca_smoke"),
-        );
+        command
+            .env("DIDCOMM_TLS_CA_FILE", &path)
+            .env("DATABASE_URL", &database_url);
         drop(http_reservation);
         let child = ChildGuard(
             command
@@ -72,10 +90,6 @@ async fn executable_serves_unrelated_health_with_missing_or_malformed_didcomm_ca
             Some(json!({"status":"healthy", "service":"issuance-service"})),
         );
         drop(child);
-        assert_eq!(
-            database_denied.accept().unwrap_err().kind(),
-            std::io::ErrorKind::WouldBlock
-        );
     }
     drop(file_guard);
     assert!(!path.exists(), "owned malformed CA cleanup");
@@ -83,6 +97,9 @@ async fn executable_serves_unrelated_health_with_missing_or_malformed_didcomm_ca
 
 #[tokio::test]
 async fn executable_serves_health_readiness_and_version() {
+    let Some(database_url) = smoke_database_url() else {
+        return;
+    };
     let (listener, port) = reserve_port();
     drop(listener);
     let (grpc_listener, grpc_port) = reserve_port();
@@ -90,6 +107,7 @@ async fn executable_serves_health_readiness_and_version() {
     let mut command = smoke_command(port, grpc_port);
     let _child = ChildGuard(
         command
+            .env("DATABASE_URL", &database_url)
             .env(
                 "GRPC_SERVICE_TOKEN",
                 "executable-smoke-service-token-at-least-32-bytes",
@@ -209,12 +227,16 @@ async fn executable_serves_health_readiness_and_version() {
 
 #[tokio::test]
 async fn executable_does_not_bind_an_explicitly_disabled_grpc_listener() {
+    let Some(database_url) = smoke_database_url() else {
+        return;
+    };
     let (http_listener, http_port) = reserve_port();
     drop(http_listener);
     let (grpc_reservation, grpc_port) = reserve_port();
     let mut command = smoke_command(http_port, grpc_port);
     let _child = ChildGuard(
         command
+            .env("DATABASE_URL", &database_url)
             .env("ISSUANCE_GRPC_ENABLED", "false")
             .spawn()
             .expect("start HTTP-only issuance candidate"),
@@ -228,10 +250,14 @@ async fn executable_does_not_bind_an_explicitly_disabled_grpc_listener() {
 }
 
 /// Exercise main -> CanvasServices.with_operations -> router_with_all_services.
-/// Authentication must finish before database access; this does not qualify the
-/// authenticated lifecycle, provider effects, or gateway cutover.
+/// This does not qualify the authenticated lifecycle, provider effects, or
+/// gateway cutover. Startup uses the real migration database; every operation
+/// probe itself is rejected by authentication middleware.
 #[tokio::test]
 async fn executable_canvas_operations_preserve_auth_and_common_transport() {
+    let Some(database_url) = smoke_database_url() else {
+        return;
+    };
     let contract: Value = serde_json::from_str(include_str!(
         "../../../../contracts/issuance-canvas-operations.json"
     ))
@@ -240,17 +266,10 @@ async fn executable_canvas_operations_preserve_auth_and_common_transport() {
     assert_eq!(routes.len(), 8);
     let (http_reservation, port) = reserve_port();
     let (_grpc_reservation, grpc_port) = reserve_port();
-    // No PostgreSQL instance is needed or contacted. This owned listener never
-    // accepts connections, and its empty accept queue is asserted after exit.
-    let (database_denied, database_port) = reserve_port();
-    database_denied.set_nonblocking(true).unwrap();
     let mut command = isolated_smoke_command(port, grpc_port);
     command
         .env("ISSUANCE_API_KEY", "synthetic-process-operations-key")
-        .env(
-            "DATABASE_URL",
-            format!("postgres://synthetic@127.0.0.1:{database_port}/operations_auth_test"),
-        );
+        .env("DATABASE_URL", &database_url);
     drop(http_reservation);
     let child = ChildGuard(command.spawn().expect("start actual issuance process"));
     let client = bounded_http_client(Duration::from_secs(2));
@@ -332,18 +351,17 @@ async fn executable_canvas_operations_preserve_auth_and_common_transport() {
         "https://wallet.example"
     );
     drop(child);
-    assert_eq!(
-        database_denied.accept().unwrap_err().kind(),
-        std::io::ErrorKind::WouldBlock,
-        "auth-only process must not contact PostgreSQL"
-    );
 }
 
 /// Exercise main -> IssuanceServices.with_internal_applications ->
 /// router_with_all_services for every frozen route. Authentication must finish
-/// before PostgreSQL access; lifecycle and persistence are covered separately.
+/// before repository operations; lifecycle and persistence are covered
+/// separately. Startup itself uses the real migration database.
 #[tokio::test]
 async fn executable_mounts_complete_internal_application_contract() {
+    let Some(database_url) = smoke_database_url() else {
+        return;
+    };
     let contract: Value = serde_json::from_str(include_str!(
         "../../../../contracts/issuance-internal-applications.json"
     ))
@@ -353,17 +371,10 @@ async fn executable_mounts_complete_internal_application_contract() {
 
     let (http_reservation, port) = reserve_port();
     let (_grpc_reservation, grpc_port) = reserve_port();
-    let (database_denied, database_port) = reserve_port();
-    database_denied.set_nonblocking(true).unwrap();
     let mut command = isolated_smoke_command(port, grpc_port);
     command
         .env("ISSUANCE_API_KEY", "synthetic-internal-application-key")
-        .env(
-            "DATABASE_URL",
-            format!(
-                "postgres://synthetic@127.0.0.1:{database_port}/internal_application_auth_test"
-            ),
-        );
+        .env("DATABASE_URL", &database_url);
     drop(http_reservation);
     let child = ChildGuard(
         command
@@ -442,9 +453,4 @@ async fn executable_mounts_complete_internal_application_contract() {
     );
 
     drop(child);
-    assert_eq!(
-        database_denied.accept().unwrap_err().kind(),
-        std::io::ErrorKind::WouldBlock,
-        "auth-only process must not contact PostgreSQL"
-    );
 }

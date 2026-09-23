@@ -103,6 +103,7 @@ not new configuration promises:
 | `CANVAS_CREDENTIALS_BASE_URL`, `CANVAS_CREDENTIALS_VALIDATE_URL_TEMPLATE`, `CANVAS_CREDENTIALS_REVOKE_URL_TEMPLATE` | Legacy provider-base alias and optional provider endpoint templates, consumed by Python `canvas_credentials_adapter.py` and native validation/status config. |
 | `CANVAS_CREDENTIALS_PUBLISH_TIMEOUT_SECONDS`, `CANVAS_CREDENTIALS_STATUS_SYNC_TIMEOUT_SECONDS` | Existing shared provider timeout derivation (20-second default); native `canvas_credentials_protocol::timeout_values`, not a new HTTP timeout implementation. |
 | `INTEGRATION_SECRET_MASTER_KEY_ENV` | Existing alternate secret-variable name, default `INTEGRATION_SECRET_MASTER_KEY`; Python `postgres_repository.py:132`, native config secret resolution. |
+| `ISSUANCE_AUTH_SESSION_TTL_MINUTES`, `ALLOWED_REDIRECT_URIS` | Operator-selected OID4VCI persisted-session lifetime and redirect allowlist. Both legacy and native owners receive the same expressions; native still validates redirect scheme safety before applying the allowlist. The historical 600-second Rust engine lifetime remains distinct from the persisted-session default of 60 minutes. |
 
 ### File inputs, native-only overrides, and fixed settings
 
@@ -139,9 +140,6 @@ The excluded set is exact and guarded; exclusion does not mean feature deletion:
 - `ICAO_DOCUMENT_SIGNER_URL/API_KEY`, `PHYSICAL_DOCUMENT_ALLOW_SELF_SIGNED`,
   `PHYSICAL_DOCUMENT_ARTIFACT_KEY`, `PERSONALIZATION_BUREAU_URL/API_KEY/WEBHOOK_SECRET`:
   physical-document features and consumers remain legacy.
-- `ISSUANCE_AUTH_SESSION_TTL_MINUTES`: the legacy authorization-session creation
-  owner (`domain/entities.py` AuthorizationSession); its route is not selected.
-  Native token exchange consumes the persisted session expiry instead.
 - `CANVAS_CREDENTIALS_PROVENANCE_BASE_URL`, `CANVAS_CREDENTIALS_RECIPIENT_HASHED`,
   `CANVAS_CREDENTIALS_ALLOW_DUPLICATE_AWARDS`: Python
   `canvas_credentials_adapter.py:588,671,673` reads them when building a **new mirror

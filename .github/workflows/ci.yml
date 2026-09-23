@@ -743,6 +743,17 @@ jobs:
             echo "Unable to locate the compiled Issuance credential PostgreSQL contract executable." >&2
             exit 1
           fi
+          issuance_oid4vci_migration_executable="$(jq -r '
+            select(.reason == "compiler-artifact")
+            | select(.target.name == "oid4vci_migration_postgres_contract")
+            | select(.package_id | contains("marty-issuance-service"))
+            | select(.executable != null)
+            | .executable
+          ' "$RUNNER_TEMP/rust-test-artifacts.json" | tail -n 1)"
+          if [[ -z "$issuance_oid4vci_migration_executable" || ! -x "$issuance_oid4vci_migration_executable" ]]; then
+            echo "Unable to locate the compiled Issuance OID4VCI migration PostgreSQL contract executable." >&2
+            exit 1
+          fi
           application_template_executable="$(jq -r '
             select(.reason == "compiler-artifact")
             | select(.target.name == "application_template_postgres_contract")
@@ -877,9 +888,12 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          for database in marty_verification_contract marty_db_contracts_test; do
+          for database in marty_verification_contract marty_db_contracts_test marty_issuance_executable_smoke_test; do
             docker exec "${{ job.services.postgres.id }}" createdb -U postgres "$database"
           done
+          docker exec --interactive "${{ job.services.postgres.id }}" \
+            psql --username postgres --dbname marty_issuance_executable_smoke_test \
+            < rust/services/issuance/tests/fixtures/oid4vci_migration_base.sql
       - name: Run safe Rust contract groups concurrently
         working-directory: rust
         shell: bash
@@ -890,7 +904,8 @@ jobs:
 
           (
             set +e
-            cargo test --locked --workspace >"$RUNNER_TEMP/rust-workspace.log" 2>&1
+            ISSUANCE_EXECUTABLE_SMOKE_DATABASE_URL=postgresql://postgres:postgres@127.0.0.1:5432/marty_issuance_executable_smoke_test \
+              cargo test --locked --workspace >"$RUNNER_TEMP/rust-workspace.log" 2>&1
             printf '%s\n' "$?" >"$RUNNER_TEMP/rust-workspace.status"
           ) &
           pids+=("$!")
@@ -1417,30 +1432,7 @@ jobs:
           docker logs "$container"
           exit 1
       - name: Smoke-test issuance image
-        shell: bash
-        run: |
-          set -euo pipefail
-          container="$(docker run --detach \
-            --env ENVIRONMENT=test \
-            --env TOKEN_HMAC_KEY=ci-only-token-hmac-key \
-            --env GRPC_SERVICE_TOKEN=ci-only-grpc-service-token-at-least-32-bytes \
-            --env INTEGRATION_SECRET_MASTER_KEY=AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8= \
-            --env DATABASE_URL=postgresql://marty:test@127.0.0.1:5432/unused \
-            --publish 127.0.0.1::8005 \
-            marty-issuance:ci)"
-          trap 'docker rm --force "$container" >/dev/null 2>&1 || true' EXIT
-          port="$(docker inspect \
-            --format '{{(index (index .NetworkSettings.Ports "8005/tcp") 0).HostPort}}' \
-            "$container")"
-          for _ in {1..40}; do
-            if curl --fail --silent "http://127.0.0.1:${port}/health" \
-              | grep --fixed-strings --quiet '"service":"issuance-service"'; then
-              exit 0
-            fi
-            sleep 0.25
-          done
-          docker logs "$container"
-          exit 1
+        run: bash scripts/smoke-issuance-image.sh marty-issuance:ci
       - name: Smoke-test Canvas worker image entrypoint and secret preflight
         run: python3 scripts/test_canvas_worker_image_entrypoint.py marty-issuance:ci
       - name: Verify immutable Canvas worker logging configuration reference

@@ -15,6 +15,7 @@ pub const LEGACY_SERVICE: &str = "issuance";
 pub const NATIVE_SERVICE: &str = "issuance-native";
 const CREDENTIAL_LIFECYCLE_TAG: &str = "credential-lifecycle";
 const ISSUED_CREDENTIAL_ADAPTER_TAG: &str = "issued-credential-adapter";
+const OID4VCI_AUTHORIZATION_TAG: &str = "oid4vci-authorization";
 
 #[derive(Debug, Deserialize)]
 struct Coverage {
@@ -29,6 +30,8 @@ struct NativeHttpRoute {
     credential_lifecycle_behavior_contract: bool,
     #[serde(default)]
     issued_credential_adapter_behavior_contract: bool,
+    #[serde(default)]
+    oid4vci_authorization_behavior_contract: bool,
 }
 
 static NATIVE_ROUTES: LazyLock<RouteTable> = LazyLock::new(|| {
@@ -44,6 +47,9 @@ static NATIVE_ROUTES: LazyLock<RouteTable> = LazyLock::new(|| {
         }
         if route.issued_credential_adapter_behavior_contract {
             tags.insert(ISSUED_CREDENTIAL_ADAPTER_TAG.into());
+        }
+        if route.oid4vci_authorization_behavior_contract {
+            tags.insert(OID4VCI_AUTHORIZATION_TAG.into());
         }
         table
             .add(RouteConfig {
@@ -80,7 +86,8 @@ pub fn is_native_http(method: HttpMethod, path: &str) -> bool {
         .find(&GatewayRequest::new(method, path, 0))
         .is_ok_and(|matched| {
             let exact_shape_required = matched.route.tags.contains(CREDENTIAL_LIFECYCLE_TAG)
-                || matched.route.tags.contains(ISSUED_CREDENTIAL_ADAPTER_TAG);
+                || matched.route.tags.contains(ISSUED_CREDENTIAL_ADAPTER_TAG)
+                || matched.route.tags.contains(OID4VCI_AUTHORIZATION_TAG);
             !exact_shape_required
                 || (is_canonical_absolute_path(path)
                     && exact_template_shape(&matched.route.pattern, path))
@@ -339,6 +346,7 @@ mod tests {
             .filter(|route| {
                 !route.credential_lifecycle_behavior_contract
                     && !route.issued_credential_adapter_behavior_contract
+                    && !route.oid4vci_authorization_behavior_contract
             })
             .collect::<Vec<_>>();
         assert_eq!(preexisting.len(), 98);
@@ -554,13 +562,15 @@ mod tests {
                 HttpMethod::Post,
                 "/v1/issued-credentials/credential-1/reinstate",
             ),
+            (HttpMethod::Get, "/v1/issuance/authorize"),
+            (HttpMethod::Post, "/v1/issuance/par"),
+            (HttpMethod::Post, "/v1/issuance/deferred-credential"),
+            (HttpMethod::Post, "/v1/issuance/notification"),
         ] {
             assert!(is_native_http(method, path), "{method:?} {path}");
         }
 
         for (method, path) in [
-            (HttpMethod::Post, "/v1/issuance/notification"),
-            (HttpMethod::Post, "/v1/issuance/deferred-credential"),
             (HttpMethod::Get, "/.well-known/jwks.json"),
             (HttpMethod::Get, "/v1/issued-credentials/mine"),
             (
@@ -574,6 +584,39 @@ mod tests {
             ),
         ] {
             assert!(!is_native_http(method, path), "{method:?} {path}");
+        }
+    }
+
+    #[test]
+    fn oid4vci_public_protocol_selects_only_the_four_frozen_routes() {
+        let routes = [
+            (HttpMethod::Get, "/v1/issuance/authorize"),
+            (HttpMethod::Post, "/v1/issuance/par"),
+            (HttpMethod::Post, "/v1/issuance/deferred-credential"),
+            (HttpMethod::Post, "/v1/issuance/notification"),
+        ];
+        for (method, path) in routes {
+            assert_eq!(upstream_service(method, path), NATIVE_SERVICE);
+            let wrong_method = if method == HttpMethod::Get {
+                HttpMethod::Post
+            } else {
+                HttpMethod::Get
+            };
+            assert_eq!(upstream_service(wrong_method, path), LEGACY_SERVICE);
+            for near_miss in [
+                format!("{path}/"),
+                format!("{path}/extra"),
+                format!("{path}-extra"),
+            ] {
+                assert_eq!(upstream_service(method, &near_miss), LEGACY_SERVICE);
+            }
+        }
+        for (method, path) in [
+            (HttpMethod::Put, "/v1/issuance/oid4vci-clients"),
+            (HttpMethod::Post, "/v1/issuance/transactions/tx-1/revoke"),
+            (HttpMethod::Get, "/v1/issuance/credentials"),
+        ] {
+            assert_eq!(upstream_service(method, path), LEGACY_SERVICE);
         }
     }
 }

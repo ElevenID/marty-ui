@@ -62,6 +62,13 @@ async fn transaction_count(pool: &PgPool) -> i64 {
         .unwrap()
 }
 
+async fn database_clock(pool: &PgPool) -> DateTime<Utc> {
+    sqlx::query_scalar("SELECT clock_timestamp()")
+        .fetch_one(pool)
+        .await
+        .unwrap()
+}
+
 fn frozen_case<'a>(contract: &'a Value, section: &str, name: &str) -> &'a Value {
     contract[section]
         .as_array()
@@ -221,6 +228,7 @@ pub(super) async fn run(pool: &PgPool, gateway: &GatewayFixture, peers: &PeerSta
             transaction["pre_auth_code"].as_str().unwrap(),
         ),
     ];
+    let token_expiry_not_before = database_clock(pool).await;
     let response = gateway
         .client
         .post(format!(
@@ -237,6 +245,7 @@ pub(super) async fn run(pool: &PgPool, gateway: &GatewayFixture, peers: &PeerSta
         token_case["status_code"].as_u64().unwrap() as u16
     );
     let token: Value = response.json().await.unwrap();
+    let token_expiry_not_after = database_clock(pool).await;
     let clear = token["access_token"].as_str().unwrap();
     assert!(!clear.is_empty());
     let mut expected = token_case["body"].clone();
@@ -249,7 +258,25 @@ pub(super) async fn run(pool: &PgPool, gateway: &GatewayFixture, peers: &PeerSta
     authorized["transaction"]["status"] = json!("authorized");
     authorized["transaction"]["access_token"] = json!(digest);
     authorized["transaction"]["c_nonce"] = Value::Null;
-    assert_eq!(stored(pool, id).await, authorized);
+    // The native token exchange grants exactly one bounded 30-minute lifetime.
+    // Bound it against database time, then copy only that proven migration field
+    // into the expected snapshot so every unrelated durable field stays exact.
+    let persisted_authorized = stored(pool, id).await;
+    let token_expiry: DateTime<Utc> = persisted_authorized["transaction"]
+        ["access_token_expires_at"]
+        .as_str()
+        .expect("native token exchange must persist a bounded lifetime")
+        .parse()
+        .unwrap();
+    let token_lifetime = Duration::seconds(1800);
+    assert!(
+        token_expiry >= token_expiry_not_before + token_lifetime
+            && token_expiry <= token_expiry_not_after + token_lifetime,
+        "native token exchange must grant exactly one bounded 30-minute lifetime"
+    );
+    authorized["transaction"]["access_token_expires_at"] =
+        persisted_authorized["transaction"]["access_token_expires_at"].clone();
+    assert_eq!(persisted_authorized, authorized);
     assert_ne!(authorized["transaction"]["access_token"], clear);
     let replay = gateway
         .client

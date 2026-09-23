@@ -326,7 +326,7 @@ impl TokenGenerator for MartyTokenGenerator {
         pre_authorized_code: &str,
         lifetime_seconds: u64,
     ) -> Result<TokenResponse, TokenExchangeError> {
-        engine()
+        protocol_engine()
             .create_token_response(pre_authorized_code, lifetime_seconds)
             .map_err(|error| TokenExchangeError::Protocol(error.to_string()))
     }
@@ -339,7 +339,7 @@ impl TokenGenerator for MartyTokenGenerator {
     ) -> Result<TokenResponse, TokenExchangeError> {
         let created_at = u64::try_from(session.created_at.timestamp())
             .map_err(|_| TokenExchangeError::RepositoryUnavailable)?;
-        engine()
+        protocol_engine()
             .create_token_response_for_auth_code(
                 &AuthorizationCodeTokenRequest {
                     grant_type: AUTHORIZATION_CODE_GRANT.to_owned(),
@@ -369,7 +369,8 @@ impl TokenGenerator for MartyTokenGenerator {
     }
 }
 
-fn engine() -> IssuanceEngine {
+#[must_use]
+pub fn protocol_engine() -> IssuanceEngine {
     IssuanceEngine::new(IssuerConfig {
         credential_issuer_url: String::new(),
         issuer_name: String::new(),

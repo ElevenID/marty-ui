@@ -918,6 +918,10 @@ mod tests {
                 HttpMethod::Post,
                 "/v1/issued-credentials/credential-1/renew",
             ),
+            (HttpMethod::Get, "/v1/issuance/authorize"),
+            (HttpMethod::Post, "/v1/issuance/par"),
+            (HttpMethod::Post, "/v1/issuance/deferred-credential"),
+            (HttpMethod::Post, "/v1/issuance/notification"),
         ] {
             assert_eq!(
                 route_for(&proxy, method, path)
@@ -929,20 +933,32 @@ mod tests {
             );
         }
         for (method, path) in [
-            (HttpMethod::Post, "/v1/issuance/notification"),
-            (HttpMethod::Post, "/v1/issuance/deferred-credential"),
-            (HttpMethod::Post, "/v1/issuance/par"),
-            (HttpMethod::Get, "/v1/passport/capabilities"),
+            (HttpMethod::Put, "/v1/issuance/oid4vci-clients"),
+            (HttpMethod::Post, "/v1/issuance/transactions/tx-1/revoke"),
+            (HttpMethod::Get, "/v1/issuance/credentials"),
         ] {
             assert_eq!(
-                route_for(&proxy, method, path)
-                    .expect("legacy issuance route")
+                issuance_native::upstream_service(method, path),
+                issuance_native::LEGACY_SERVICE,
+                "management-only route must remain legacy-owned: {method:?} {path}"
+            );
+            let internal_path = format!("/__gateway/issuance{path}");
+            assert_eq!(
+                route_for(&proxy, method, &internal_path)
+                    .expect("legacy management helper route")
                     .route
                     .upstream_service,
                 issuance_native::LEGACY_SERVICE,
-                "{method:?} {path}"
+                "management-only transport must remain legacy-owned: {method:?} {path}"
             );
         }
+        assert_eq!(
+            route_for(&proxy, HttpMethod::Get, "/v1/passport/capabilities")
+                .expect("retained legacy issuance route")
+                .route
+                .upstream_service,
+            issuance_native::LEGACY_SERVICE
+        );
         assert_eq!(
             route_for(&proxy, HttpMethod::Get, "/v1/issued-credentials/mine")
                 .expect("applicant issued-credential route")

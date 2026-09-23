@@ -120,13 +120,16 @@ use marty_issuance_service::{
     },
     issued_credential_postgres::PostgresIssuedCredentialRecordRepository,
     issued_credential_records::{IssuedCredentialAdapterService, SystemIssuedCredentialClock},
+    migration,
+    oid4vci_authorization::Oid4vciAuthorizationService,
+    oid4vci_authorization_postgres::PostgresOid4vciAuthorizationRepository,
     proof_nonce::{ProofNonceService, SecureProofNonceGenerator},
     resource_owner::ResourceOwnerService,
     resource_owner_postgres::PostgresResourceOwnerRepository,
     signing_policy::HttpProofPolicyResolver,
     tenant_discovery::TenantDiscoveryService,
     tenant_postgres::PostgresTenantDiscoveryRepository,
-    token_exchange::{MartyTokenGenerator, TokenExchangeService},
+    token_exchange::{protocol_engine, MartyTokenGenerator, TokenExchangeService},
     token_postgres::PostgresTokenExchangeRepository,
     token_rate_limit::TokenRateLimiter,
     transaction_postgres::PostgresTransactionReadRepository,
@@ -163,6 +166,23 @@ async fn main() -> Result<(), Box<dyn Error>> {
     let pool = sqlx::postgres::PgPoolOptions::new()
         .max_connections(5)
         .connect_lazy(&config.database_url)?;
+    migration::migrate(&pool).await.map_err(|error| {
+        if error
+            .as_database_error()
+            .and_then(|database| database.code())
+            .is_some_and(|code| code == "28P01")
+        {
+            // Stable, secret-free evidence for operators and the packaged
+            // self-host gate. PostgreSQL 28P01 is invalid_password.
+            error!(
+                database_sqlstate = "28P01",
+                "issuance startup database authentication failed"
+            );
+        } else {
+            error!(%error, "issuance startup database migration failed");
+        }
+        error
+    })?;
     let tenant_discovery = TenantDiscoveryService::new(
         discovery.clone(),
         Arc::new(PostgresTenantDiscoveryRepository::new(pool.clone())),
@@ -195,6 +215,17 @@ async fn main() -> Result<(), Box<dyn Error>> {
         Arc::new(MartyDpopProofVerifier),
         Arc::new(MartyTokenGenerator),
         &config.issuer_base_url,
+    );
+    let oid4vci_authorization = Oid4vciAuthorizationService::new(
+        Arc::new(PostgresOid4vciAuthorizationRepository::new(
+            pool.clone(),
+            token_hmac_key,
+        )),
+        Arc::new(MartyDpopProofVerifier),
+        protocol_engine(),
+        &config.issuer_base_url,
+        config.allowed_redirect_uris.clone(),
+        config.authorization_session_ttl_minutes.clone(),
     );
     let nonce_repository = Arc::new(PostgresProofNonceRepository::new(pool.clone()));
     let proof_nonce = ProofNonceService::new(
@@ -717,6 +748,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
             )
             .with_operations(canvas_operations),
             TokenRateLimiter::from_python_config(config.token_rate_limit, config.token_rate_window),
+            oid4vci_authorization,
         )
         .with_internal_applications(internal_applications)
         .with_issued_credentials(issued_credentials),

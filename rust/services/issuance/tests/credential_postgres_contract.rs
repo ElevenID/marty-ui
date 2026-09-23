@@ -5,8 +5,8 @@ use marty_issuance_service::canvas_issuance_guard::{
     CanvasGuardConfig, PostgresCanvasIssuanceGuard,
 };
 use marty_issuance_service::credential::{
-    CredentialIssuanceError, CredentialLifecycle, CredentialRepository, CredentialTransaction,
-    CredentialTransactionStatus, IssuedCredential, IssuerContext,
+    CredentialAccessTokenGrant, CredentialIssuanceError, CredentialLifecycle, CredentialRepository,
+    CredentialTransaction, CredentialTransactionStatus, IssuedCredential, IssuerContext,
 };
 use marty_issuance_service::credential_lifecycle::PostgresCredentialLifecycle;
 use marty_issuance_service::credential_management::{
@@ -27,6 +27,10 @@ use marty_issuance_service::initiation_didcomm::{
 };
 use marty_issuance_service::issued_credential_postgres::PostgresIssuedCredentialRecordRepository;
 use marty_issuance_service::issued_credential_records::IssuedCredentialRecordRepository;
+use marty_issuance_service::oid4vci_authorization::{
+    DeferredCredentialLookup, DeferredStatus, NotificationLookup, Oid4vciAuthorizationRepository,
+};
+use marty_issuance_service::oid4vci_authorization_postgres::PostgresOid4vciAuthorizationRepository;
 use marty_issuance_service::token_postgres::PostgresTokenExchangeRepository;
 use serde_json::json;
 use sha2::Sha256;
@@ -34,6 +38,8 @@ use sqlx::{postgres::PgPoolOptions, Row};
 use std::{collections::BTreeSet, time::Duration as StdDuration};
 use url::Url;
 use uuid::Uuid;
+
+static POSTGRES_CONTRACT_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
 
 fn token_digest(key: &[u8], token: &str) -> String {
     let mut mac = Hmac::<Sha256>::new_from_slice(key).unwrap();
@@ -46,6 +52,7 @@ async fn credential_management_repository_is_concurrency_safe_and_canvas_durable
     let Ok(database_url) = std::env::var("ISSUANCE_POSTGRES_TEST_URL") else {
         return;
     };
+    let _database_guard = POSTGRES_CONTRACT_LOCK.lock().await;
     let database_name = url::Url::parse(&database_url)
         .expect("credential PostgreSQL contract URL must parse")
         .path()
@@ -290,6 +297,7 @@ async fn credential_repository_is_hmac_compatible_atomic_and_canvas_safe() {
     let Ok(database_url) = std::env::var("ISSUANCE_POSTGRES_TEST_URL") else {
         return;
     };
+    let _database_guard = POSTGRES_CONTRACT_LOCK.lock().await;
     let database_name = url::Url::parse(&database_url)
         .expect("credential PostgreSQL contract URL must parse")
         .path()
@@ -313,12 +321,12 @@ async fn credential_repository_is_hmac_compatible_atomic_and_canvas_safe() {
         "INSERT INTO issuance_service.issuance_transactions
              (id, organization_id, credential_template_id, revocation_profile_id,
               renewal_of_credential_id, application_id, status, pre_auth_code,
-              access_token, c_nonce, claims,
+              access_token, access_token_expires_at, c_nonce, claims,
               credential_type, issuer_profile_id, issuer_did_override,
               issuer_algorithm, signing_service_id, delivery_mode)
          VALUES ('tx-contract', 'org-a', 'template-a', 'status-profile-a',
                  'credential-source', 'application-a', 'authorized',
-                 'pre-auth-contract', $1, $2,
+                 'pre-auth-contract', $1, clock_timestamp() + interval '30 minutes', $2,
                  '{}'::jsonb, 'OpenBadgeCredential', 'issuer-profile-a',
                  'did:web:issuer.example', 'ES256', 'kms-service-a',
                  'wallet_plus_canvas_mirror')",
@@ -455,7 +463,10 @@ async fn credential_repository_is_hmac_compatible_atomic_and_canvas_safe() {
         issued_at: now,
         expires_at: now + Duration::days(365),
     };
-    repository.finalize(&claimed, &issued).await.unwrap();
+    repository
+        .finalize(&claimed, &issued, "notification-contract")
+        .await
+        .unwrap();
     let (revocation_url, revocation_server) = revocation_server().await;
     let lifecycle = PostgresCredentialLifecycle::new(
         pool.clone(),
@@ -474,7 +485,10 @@ async fn credential_repository_is_hmac_compatible_atomic_and_canvas_safe() {
         .after_issued(&claimed, &issued, "dc+sd-jwt")
         .await
         .unwrap();
-    assert!(repository.finalize(&claimed, &issued).await.is_err());
+    assert!(repository
+        .finalize(&claimed, &issued, "notification-contract")
+        .await
+        .is_err());
     let persisted = repository
         .credential_by_transaction(&claimed.id)
         .await
@@ -482,6 +496,145 @@ async fn credential_repository_is_hmac_compatible_atomic_and_canvas_safe() {
         .unwrap();
     assert_eq!(persisted.id, credential_id);
     assert_eq!(persisted.credential, "signed-credential");
+    assert_eq!(persisted.notification_id, "notification-contract");
+
+    let binding_event_id = Uuid::new_v5(
+        &Uuid::NAMESPACE_URL,
+        format!("marty:oid4vci:notification-binding:{}", claimed.id).as_bytes(),
+    )
+    .to_string();
+    sqlx::query(
+        "UPDATE issuance_service.issuance_events
+         SET metadata = (metadata::jsonb
+             || jsonb_build_object('organization_id', 'org-other'))::json
+         WHERE id = $1",
+    )
+    .bind(&binding_event_id)
+    .execute(&pool)
+    .await
+    .unwrap();
+    assert!(repository
+        .credential_by_transaction(&claimed.id)
+        .await
+        .is_err());
+    sqlx::query(
+        "UPDATE issuance_service.issuance_events
+         SET metadata = (metadata::jsonb
+             || jsonb_build_object('organization_id', 'org-a'))::json,
+             application_id = 'application-other'
+         WHERE id = $1",
+    )
+    .bind(&binding_event_id)
+    .execute(&pool)
+    .await
+    .unwrap();
+    assert!(repository
+        .credential_by_transaction(&claimed.id)
+        .await
+        .is_err());
+    sqlx::query(
+        "UPDATE issuance_service.issuance_events
+         SET application_id = 'application-a'
+         WHERE id = $1",
+    )
+    .bind(&binding_event_id)
+    .execute(&pool)
+    .await
+    .unwrap();
+    assert_eq!(
+        repository
+            .credential_by_transaction(&claimed.id)
+            .await
+            .unwrap()
+            .unwrap()
+            .notification_id,
+        "notification-contract"
+    );
+    sqlx::query(
+        "DELETE FROM issuance_service.issuance_events
+         WHERE id = $1 AND event_type = 'oid4vci_notification_binding'",
+    )
+    .bind(&binding_event_id)
+    .execute(&pool)
+    .await
+    .unwrap();
+    sqlx::query(
+        "INSERT INTO issuance_service.issuance_events
+             (id, transaction_id, application_id, event_type, metadata, created_at)
+         VALUES ($1, 'conflicting-transaction', NULL, 'oid4vci_notification_binding',
+                 '{\"notification_id\":\"conflict\",\"credential_id\":\"conflict\"}'::jsonb,
+                 clock_timestamp())",
+    )
+    .bind(&binding_event_id)
+    .execute(&pool)
+    .await
+    .unwrap();
+    assert!(repository
+        .credential_by_transaction(&claimed.id)
+        .await
+        .is_err());
+    sqlx::query("DELETE FROM issuance_service.issuance_events WHERE id = $1")
+        .bind(&binding_event_id)
+        .execute(&pool)
+        .await
+        .unwrap();
+
+    let legacy_notification_id = Uuid::new_v5(
+        &Uuid::NAMESPACE_URL,
+        format!("marty:oid4vci:legacy-notification:{}", claimed.id).as_bytes(),
+    )
+    .to_string();
+    sqlx::query(
+        "INSERT INTO issuance_service.issuance_events
+             (id, transaction_id, application_id, event_type, metadata, created_at)
+         VALUES ('cross-transaction-notification-binding', 'source-transaction',
+                 'application-a', 'oid4vci_notification_binding',
+                 jsonb_build_object(
+                     'notification_id', $1::text,
+                     'credential_id', 'credential-source',
+                     'organization_id', 'org-a'),
+                 clock_timestamp())",
+    )
+    .bind(&legacy_notification_id)
+    .execute(&pool)
+    .await
+    .unwrap();
+    let (first_collision, second_collision) = tokio::join!(
+        repository.credential_by_transaction(&claimed.id),
+        repository.credential_by_transaction(&claimed.id)
+    );
+    assert!(first_collision.is_err());
+    assert!(second_collision.is_err());
+    sqlx::query(
+        "DELETE FROM issuance_service.issuance_events
+         WHERE id = 'cross-transaction-notification-binding'",
+    )
+    .execute(&pool)
+    .await
+    .unwrap();
+
+    let (first_replay, second_replay) = tokio::join!(
+        repository.credential_by_transaction(&claimed.id),
+        repository.credential_by_transaction(&claimed.id)
+    );
+    let first_replay = first_replay.unwrap().unwrap();
+    let second_replay = second_replay.unwrap().unwrap();
+    assert_eq!(first_replay.notification_id, second_replay.notification_id);
+    assert_eq!(first_replay.notification_id, legacy_notification_id);
+    assert_eq!(
+        sqlx::query_scalar::<_, i64>(
+            "SELECT count(*) FROM issuance_service.issuance_events
+             WHERE id = $1 AND transaction_id = $2
+               AND event_type = 'oid4vci_notification_binding'",
+        )
+        .bind(&binding_event_id)
+        .bind(&claimed.id)
+        .fetch_one(&pool)
+        .await
+        .unwrap(),
+        1,
+        "concurrent legacy replay persists exactly one authoritative binding"
+    );
     let finalized = sqlx::query(
         "SELECT status, c_nonce FROM issuance_service.issuance_transactions
          WHERE id = 'tx-contract'",
@@ -599,6 +752,7 @@ async fn credential_repository_is_hmac_compatible_atomic_and_canvas_safe() {
     );
 
     assert_authorization_only_race(&pool, &repository, key.as_bytes()).await;
+    assert_existing_issuer_state_authorization_binding(&pool, &repository, key.as_bytes()).await;
     assert_initiation_idempotency_race(&repository).await;
     assert_initiation_dependency_reads(&pool, key.as_bytes()).await;
     assert_didcomm_retry_and_lifecycle_contract(&pool, &repository, &lifecycle).await;
@@ -1653,6 +1807,341 @@ async fn seed_canvas_guard_contract(pool: &sqlx::PgPool) {
     }
 }
 
+async fn assert_existing_issuer_state_authorization_binding(
+    pool: &sqlx::PgPool,
+    repository: &PostgresCredentialRepository,
+    key: &[u8],
+) {
+    let access_token = format!("linked-authorization-token-{}", Uuid::new_v4());
+    sqlx::query(
+        "INSERT INTO issuance_service.issuance_transactions
+             (id, organization_id, credential_template_id, status, pre_auth_code,
+              claims, credential_type)
+         VALUES ('tx-authorization-linked', 'org-a', '', 'pending',
+                 'issuer-state-linked', '{}'::jsonb, 'OpenBadgeCredential')",
+    )
+    .execute(pool)
+    .await
+    .unwrap();
+    sqlx::query(
+        "INSERT INTO issuance_service.authorization_sessions
+             (id, client_id, organization_id, issuer_state,
+              credential_configuration_ids, access_token,
+              access_token_expires_at, dpop_jkt)
+         VALUES ('session-authorization-linked', 'wallet-linked', 'org-a',
+                 'issuer-state-linked', '[\"OpenBadgeCredential#sd-jwt\"]'::jsonb,
+                 $1, clock_timestamp() + interval '30 minutes', 'linked-jkt')",
+    )
+    .bind(token_digest(key, &access_token))
+    .execute(pool)
+    .await
+    .unwrap();
+    let session = repository
+        .authorization_by_access_token(&access_token)
+        .await
+        .unwrap()
+        .expect("linked authorization session");
+    let transaction = repository
+        .ensure_authorization_transaction(&session, &access_token)
+        .await
+        .expect("existing issuer-state transaction must materialize atomically");
+    assert_eq!(transaction.id, "tx-authorization-linked");
+    assert_eq!(transaction.status, CredentialTransactionStatus::Authorized);
+    assert_eq!(
+        transaction.oid4vci_client_id.as_deref(),
+        Some("wallet-linked")
+    );
+    assert_eq!(transaction.claims["_dpop_jkt"], "linked-jkt");
+    let persisted = sqlx::query(
+        "SELECT transaction.access_token,
+                transaction.access_token_expires_at = session.access_token_expires_at AS same_expiry,
+                transaction.oid4vci_client_id,
+                transaction.claims ->> '_dpop_jkt' AS dpop_jkt
+         FROM issuance_service.issuance_transactions AS transaction
+         JOIN issuance_service.authorization_sessions AS session
+           ON session.id = 'session-authorization-linked'
+         WHERE transaction.id = 'tx-authorization-linked'",
+    )
+    .fetch_one(pool)
+    .await
+    .unwrap();
+    assert_eq!(
+        persisted.get::<String, _>("access_token"),
+        token_digest(key, &access_token)
+    );
+    assert!(persisted.get::<bool, _>("same_expiry"));
+    assert_eq!(
+        persisted.get::<String, _>("oid4vci_client_id"),
+        "wallet-linked"
+    );
+    assert_eq!(persisted.get::<String, _>("dpop_jkt"), "linked-jkt");
+    assert!(matches!(
+        repository.resolve_access_token_grant(&access_token).await,
+        Ok(CredentialAccessTokenGrant::Transaction(transaction))
+            if transaction.id == "tx-authorization-linked"
+    ));
+    let oid4vci = PostgresOid4vciAuthorizationRepository::new(pool.clone(), key);
+    assert_eq!(
+        oid4vci
+            .access_token_grant(&access_token)
+            .await
+            .unwrap()
+            .unwrap()
+            .dpop_jkt
+            .as_deref(),
+        Some("linked-jkt")
+    );
+    assert_eq!(
+        oid4vci
+            .deferred_credential(&access_token, "tx-authorization-linked")
+            .await
+            .unwrap(),
+        DeferredCredentialLookup::Bound(
+            marty_issuance_service::oid4vci_authorization::DeferredCredentialRecord {
+                status: DeferredStatus::Authorized,
+                credential: None,
+            }
+        )
+    );
+    sqlx::query(
+        "INSERT INTO issuance_service.issued_credentials
+             (id, transaction_id, organization_id, credential_template_id,
+              status_list_entries, credential_jwt, credential_hash, status,
+              status_updated_at, revoked, issued_at)
+         VALUES ('credential-authorization-linked', 'tx-authorization-linked',
+                 'org-a', '', '[]'::jsonb, 'credential.authorization.linked',
+                 'authorization-linked-hash', 'active', clock_timestamp(), false,
+                 clock_timestamp())",
+    )
+    .execute(pool)
+    .await
+    .unwrap();
+    sqlx::query(
+        "UPDATE issuance_service.issued_credentials
+         SET organization_id = 'org-foreign'
+         WHERE id = 'credential-authorization-linked'",
+    )
+    .execute(pool)
+    .await
+    .unwrap();
+    assert!(oid4vci
+        .deferred_credential(&access_token, "tx-authorization-linked")
+        .await
+        .is_err());
+    sqlx::query(
+        "UPDATE issuance_service.issued_credentials
+         SET organization_id = 'org-a'
+         WHERE id = 'credential-authorization-linked'",
+    )
+    .execute(pool)
+    .await
+    .unwrap();
+    sqlx::query(
+        "INSERT INTO issuance_service.issuance_events
+             (id, transaction_id, application_id, event_type, metadata, created_at)
+         VALUES ('binding-authorization-linked', 'tx-authorization-linked', NULL,
+                 'oid4vci_notification_binding',
+                 '{\"notification_id\":\"notification-authorization-linked\",\"credential_id\":\"credential-authorization-linked\",\"organization_id\":\"org-a\"}'::jsonb,
+                 clock_timestamp())",
+    )
+    .execute(pool)
+    .await
+    .unwrap();
+    assert_eq!(
+        oid4vci
+            .notification_transaction(&access_token, "notification-authorization-linked")
+            .await
+            .unwrap(),
+        NotificationLookup::Bound("tx-authorization-linked".into())
+    );
+    for update in [
+        "UPDATE issuance_service.issuance_events
+         SET application_id = 'foreign-application'
+         WHERE id = 'binding-authorization-linked'",
+        "UPDATE issuance_service.issuance_events
+         SET application_id = NULL,
+             metadata = jsonb_set(metadata::jsonb, '{organization_id}', '\"org-foreign\"')::json
+         WHERE id = 'binding-authorization-linked'",
+        "UPDATE issuance_service.issuance_events
+         SET metadata = jsonb_set(
+                 jsonb_set(metadata::jsonb, '{organization_id}', '\"org-a\"'),
+                 '{credential_id}', '\"credential-foreign\"')::json
+         WHERE id = 'binding-authorization-linked'",
+    ] {
+        sqlx::query(update).execute(pool).await.unwrap();
+        assert!(oid4vci
+            .notification_transaction(&access_token, "notification-authorization-linked")
+            .await
+            .is_err());
+    }
+    sqlx::query(
+        "UPDATE issuance_service.issuance_events
+         SET application_id = NULL,
+             metadata = jsonb_set(metadata::jsonb, '{credential_id}',
+                                  '\"credential-authorization-linked\"')::json
+         WHERE id = 'binding-authorization-linked'",
+    )
+    .execute(pool)
+    .await
+    .unwrap();
+    assert_eq!(
+        oid4vci
+            .notification_transaction(&access_token, "notification-authorization-linked")
+            .await
+            .unwrap(),
+        NotificationLookup::Bound("tx-authorization-linked".into())
+    );
+
+    for (
+        suffix,
+        transaction_organization,
+        session_organization,
+        transaction_client,
+        transaction_jkt,
+        conflicting_transaction_token,
+    ) in [
+        (
+            "token-collision",
+            "org-a",
+            "org-a",
+            Some("wallet-adversarial"),
+            Some("adversarial-jkt"),
+            Some("same-digest"),
+        ),
+        (
+            "different-token-binding",
+            "org-a",
+            "org-a",
+            Some("wallet-adversarial"),
+            Some("adversarial-jkt"),
+            Some("different-digest"),
+        ),
+        (
+            "cross-tenant",
+            "org-b",
+            "org-a",
+            Some("wallet-adversarial"),
+            Some("adversarial-jkt"),
+            None,
+        ),
+        (
+            "client-mismatch",
+            "org-a",
+            "org-a",
+            Some("other-wallet"),
+            Some("adversarial-jkt"),
+            None,
+        ),
+        (
+            "dpop-mismatch",
+            "org-a",
+            "org-a",
+            Some("wallet-adversarial"),
+            Some("other-jkt"),
+            None,
+        ),
+    ] {
+        let transaction_id = format!("tx-{suffix}");
+        let issuer_state = format!("issuer-state-{suffix}");
+        let session_id = format!("session-{suffix}");
+        let session_token = format!("session-token-{suffix}-{}", Uuid::new_v4());
+        let notification_id = format!("notification-{suffix}");
+        let transaction_token_digest = match conflicting_transaction_token {
+            Some("same-digest") => Some(token_digest(key, &session_token)),
+            Some("different-digest") => Some(token_digest(key, "other-transaction-token")),
+            _ => None,
+        };
+        let transaction_claims =
+            transaction_jkt.map_or_else(|| json!({}), |jkt| json!({"_dpop_jkt": jkt}));
+        sqlx::query(
+            "INSERT INTO issuance_service.issuance_transactions
+                 (id, organization_id, credential_template_id, status, pre_auth_code,
+                  access_token, access_token_expires_at, claims, credential_type,
+                  oid4vci_client_id)
+             VALUES ($1, $2, '', 'authorized', $3, $4,
+                     CASE WHEN $4::text IS NULL THEN NULL
+                          ELSE clock_timestamp() + interval '20 minutes' END,
+                     $5, 'OpenBadgeCredential', $6)",
+        )
+        .bind(&transaction_id)
+        .bind(transaction_organization)
+        .bind(&issuer_state)
+        .bind(transaction_token_digest)
+        .bind(transaction_claims)
+        .bind(transaction_client)
+        .execute(pool)
+        .await
+        .unwrap();
+        sqlx::query(
+            "INSERT INTO issuance_service.authorization_sessions
+                 (id, client_id, organization_id, issuer_state,
+                  credential_configuration_ids, access_token,
+                  access_token_expires_at, dpop_jkt)
+             VALUES ($1, 'wallet-adversarial', $2, $3,
+                     '[\"OpenBadgeCredential#sd-jwt\"]'::jsonb, $4,
+                     clock_timestamp() + interval '30 minutes', 'adversarial-jkt')",
+        )
+        .bind(&session_id)
+        .bind(session_organization)
+        .bind(&issuer_state)
+        .bind(token_digest(key, &session_token))
+        .execute(pool)
+        .await
+        .unwrap();
+        let session = repository
+            .authorization_by_access_token(&session_token)
+            .await
+            .unwrap()
+            .expect("adversarial session remains independently valid");
+        if suffix == "token-collision" {
+            assert!(matches!(
+                repository.resolve_access_token_grant(&session_token).await,
+                Err(CredentialIssuanceError::RepositoryUnavailable)
+            ));
+        }
+        assert!(
+            repository
+                .ensure_authorization_transaction(&session, &session_token)
+                .await
+                .is_err(),
+            "{suffix} must not steal an issuer-state transaction"
+        );
+        if suffix != "token-collision" {
+            assert_eq!(
+                oid4vci
+                    .deferred_credential(&session_token, &transaction_id)
+                    .await
+                    .unwrap(),
+                DeferredCredentialLookup::Unbound,
+                "{suffix} must fail closed for deferred delivery"
+            );
+        }
+        sqlx::query(
+            "INSERT INTO issuance_service.issuance_events
+                 (id, transaction_id, application_id, event_type, metadata, created_at)
+             VALUES ($1, $2, NULL, 'oid4vci_notification_binding',
+                     jsonb_build_object('notification_id', $3::text),
+                     clock_timestamp())",
+        )
+        .bind(format!("binding-{suffix}"))
+        .bind(&transaction_id)
+        .bind(&notification_id)
+        .execute(pool)
+        .await
+        .unwrap();
+        if suffix != "token-collision" {
+            assert_eq!(
+                oid4vci
+                    .notification_transaction(&session_token, &notification_id)
+                    .await
+                    .unwrap(),
+                NotificationLookup::Unbound,
+                "{suffix} must fail closed for notification delivery"
+            );
+        }
+    }
+}
+
 async fn assert_authorization_only_race(
     pool: &sqlx::PgPool,
     repository: &PostgresCredentialRepository,
@@ -1662,9 +2151,10 @@ async fn assert_authorization_only_race(
     sqlx::query(
         "INSERT INTO issuance_service.authorization_sessions
              (id, organization_id, issuer_state, credential_configuration_ids,
-              access_token, dpop_jkt)
+              access_token, access_token_expires_at, dpop_jkt)
          VALUES ('authorization-session-race', 'org-a', NULL,
-                 '[\"OpenBadgeCredential#sd-jwt\"]'::jsonb, $1, 'dpop-contract')",
+                 '[\"OpenBadgeCredential#sd-jwt\"]'::jsonb, $1,
+                 clock_timestamp() + interval '30 minutes', 'dpop-contract')",
     )
     .bind(token_digest(key, &token))
     .execute(pool)
@@ -1709,6 +2199,119 @@ async fn assert_authorization_only_race(
     assert_ne!(
         first_claim.unwrap().is_some(),
         second_claim.unwrap().is_some()
+    );
+
+    let conflict_token = format!("authorization-conflict-token-{}", Uuid::new_v4());
+    let conflict_session_id = "authorization-session-conflict";
+    sqlx::query(
+        "INSERT INTO issuance_service.authorization_sessions
+             (id, client_id, organization_id, issuer_state,
+              credential_configuration_ids, access_token,
+              access_token_expires_at, dpop_jkt)
+         VALUES ($1, 'wallet-conflict', 'org-a', NULL,
+                 '[\"OpenBadgeCredential#sd-jwt\"]'::jsonb, $2,
+                 clock_timestamp() + interval '30 minutes', 'dpop-conflict')",
+    )
+    .bind(conflict_session_id)
+    .bind(token_digest(key, &conflict_token))
+    .execute(pool)
+    .await
+    .unwrap();
+    let conflict_session = repository
+        .authorization_by_access_token(&conflict_token)
+        .await
+        .unwrap()
+        .unwrap();
+    let conflict_transaction_id = Uuid::new_v5(
+        &Uuid::NAMESPACE_URL,
+        format!("marty:oid4vci:authorization-session:{conflict_session_id}").as_bytes(),
+    )
+    .to_string();
+    sqlx::query(
+        "INSERT INTO issuance_service.issuance_transactions
+             (id, organization_id, credential_template_id, status, pre_auth_code,
+              access_token, access_token_expires_at, claims, credential_type,
+              oid4vci_client_id)
+         VALUES ($1, 'org-a', '', 'authorized', $2, $3, $4,
+                 '{\"_dpop_jkt\":\"dpop-conflict\"}'::jsonb,
+                 'OpenBadgeCredential', 'wrong-wallet')",
+    )
+    .bind(&conflict_transaction_id)
+    .bind(format!("pre-auth-conflict-{}", Uuid::new_v4()))
+    .bind(token_digest(key, &conflict_token))
+    .bind(conflict_session.access_token_expires_at)
+    .execute(pool)
+    .await
+    .unwrap();
+    assert!(matches!(
+        repository
+            .ensure_authorization_transaction(&conflict_session, &conflict_token)
+            .await,
+        Err(CredentialIssuanceError::RepositoryUnavailable)
+    ));
+
+    sqlx::query(
+        "UPDATE issuance_service.issuance_transactions
+         SET oid4vci_client_id = 'wallet-conflict', access_token = 'wrong-token'
+         WHERE id = $1",
+    )
+    .bind(&conflict_transaction_id)
+    .execute(pool)
+    .await
+    .unwrap();
+    assert!(repository
+        .ensure_authorization_transaction(&conflict_session, &conflict_token)
+        .await
+        .is_err());
+
+    sqlx::query(
+        "UPDATE issuance_service.issuance_transactions
+         SET access_token = $2, access_token_expires_at = $3 + interval '1 second'
+         WHERE id = $1",
+    )
+    .bind(&conflict_transaction_id)
+    .bind(token_digest(key, &conflict_token))
+    .bind(conflict_session.access_token_expires_at)
+    .execute(pool)
+    .await
+    .unwrap();
+    assert!(repository
+        .ensure_authorization_transaction(&conflict_session, &conflict_token)
+        .await
+        .is_err());
+
+    sqlx::query(
+        "UPDATE issuance_service.issuance_transactions
+         SET access_token_expires_at = $2,
+             claims = '{\"_dpop_jkt\":\"wrong-jkt\"}'::jsonb
+         WHERE id = $1",
+    )
+    .bind(&conflict_transaction_id)
+    .bind(conflict_session.access_token_expires_at)
+    .execute(pool)
+    .await
+    .unwrap();
+    assert!(repository
+        .ensure_authorization_transaction(&conflict_session, &conflict_token)
+        .await
+        .is_err());
+
+    sqlx::query(
+        "UPDATE issuance_service.issuance_transactions
+         SET claims = '{\"_dpop_jkt\":\"dpop-conflict\"}'::jsonb
+         WHERE id = $1",
+    )
+    .bind(&conflict_transaction_id)
+    .execute(pool)
+    .await
+    .unwrap();
+    assert_eq!(
+        repository
+            .ensure_authorization_transaction(&conflict_session, &conflict_token)
+            .await
+            .unwrap()
+            .id,
+        conflict_transaction_id
     );
 }
 
@@ -1809,7 +2412,8 @@ async fn create_contract_schema(pool: &sqlx::PgPool) {
             renewal_of_credential_id TEXT, applicant_id TEXT, application_id TEXT,
             subject_did TEXT, idempotency_key_hash TEXT, idempotency_request_hash TEXT,
             status TEXT NOT NULL, pre_auth_code TEXT NOT NULL UNIQUE,
-            access_token TEXT, c_nonce TEXT, claims JSONB NOT NULL DEFAULT '{}'::jsonb,
+            access_token TEXT, access_token_expires_at TIMESTAMPTZ,
+            c_nonce TEXT, claims JSONB NOT NULL DEFAULT '{}'::jsonb,
             credential_type TEXT, selective_disclosure_claims JSONB DEFAULT '[]'::jsonb,
             zk_predicate_claims JSONB DEFAULT '[]'::jsonb,
             credential_payload_format TEXT NOT NULL DEFAULT 'w3c_vcdm_v2_sd_jwt',
@@ -1881,7 +2485,10 @@ async fn create_contract_schema(pool: &sqlx::PgPool) {
             updated_at TIMESTAMPTZ NOT NULL, UNIQUE (organization_id, logical_key))",
         "CREATE TABLE issuance_service.issuance_events (
             id TEXT PRIMARY KEY, transaction_id TEXT, application_id TEXT,
-            event_type TEXT NOT NULL, metadata JSONB NOT NULL, created_at TIMESTAMPTZ NOT NULL)",
+            event_type TEXT NOT NULL, metadata JSON NOT NULL, created_at TIMESTAMPTZ NOT NULL)",
+        "CREATE UNIQUE INDEX ux_issuance_events_oid4vci_notification_id
+             ON issuance_service.issuance_events ((metadata ->> 'notification_id'))
+             WHERE event_type = 'oid4vci_notification_binding'",
         "CREATE TABLE issuance_service.credential_delivery_records (
             id TEXT PRIMARY KEY, credential_id TEXT NOT NULL, transaction_id TEXT NOT NULL,
             organization_id TEXT NOT NULL, delivery_target TEXT NOT NULL,
@@ -1894,9 +2501,10 @@ async fn create_contract_schema(pool: &sqlx::PgPool) {
             binding_id TEXT NOT NULL, platform_id TEXT NOT NULL, state TEXT NOT NULL,
             claimed_credential_id TEXT, updated_at TIMESTAMPTZ NOT NULL DEFAULT clock_timestamp())",
         "CREATE TABLE issuance_service.authorization_sessions (
-            id TEXT PRIMARY KEY, organization_id TEXT, issuer_state TEXT,
+            id TEXT PRIMARY KEY, client_id TEXT NOT NULL DEFAULT 'wallet-client',
+            organization_id TEXT, issuer_state TEXT,
             credential_configuration_ids JSONB NOT NULL DEFAULT '[]'::jsonb,
-            access_token TEXT, dpop_jkt TEXT)",
+            access_token TEXT, access_token_expires_at TIMESTAMPTZ, dpop_jkt TEXT)",
         "CREATE TABLE credential_template_service.credential_templates (
             id BIGSERIAL PRIMARY KEY, organization_id TEXT NOT NULL, credential_type TEXT,
             status TEXT NOT NULL, issuer_did TEXT, issuer_algorithm TEXT,

@@ -48,7 +48,7 @@ BAO_ADDR BAO_TOKEN CANVAS_CREDENTIALS_ALLOW_DUPLICATE_AWARDS
 CANVAS_CREDENTIALS_PROVENANCE_BASE_URL CANVAS_CREDENTIALS_RECIPIENT_HASHED
 CANVAS_CREDENTIAL_ISSUER_PROFILE_IDS CANVAS_LTI_TOOL_ACTIVE_KID
 CANVAS_LTI_TOOL_PUBLIC_JWKS ICAO_DOCUMENT_SIGNER_API_KEY ICAO_DOCUMENT_SIGNER_URL
-ISSUANCE_AUTH_SESSION_TTL_MINUTES PERSONALIZATION_BUREAU_API_KEY
+PERSONALIZATION_BUREAU_API_KEY
 PERSONALIZATION_BUREAU_URL PERSONALIZATION_BUREAU_WEBHOOK_SECRET
 PHYSICAL_DOCUMENT_ALLOW_SELF_SIGNED PHYSICAL_DOCUMENT_ARTIFACT_KEY
 """.split()
@@ -144,8 +144,11 @@ def assert_sources(base, profile, runtime):
     )
     inputs = set(re.findall(r'"([A-Z][A-Z0-9_]+)"', text))
     omitted = UNFORWARDED_LEGACY | EXPLICIT_MOUNTS | FILE_SELECTORS | NATIVE_CONFIG_META
-    assert inputs - set(env) == omitted, (
-        "Update the exhaustive native configuration inventory"
+    actual_omitted = inputs - set(env)
+    assert actual_omitted == omitted, (
+        "Update the exhaustive native configuration inventory: "
+        f"unexpected={sorted(actual_omitted - omitted)!r}, "
+        f"stale={sorted(omitted - actual_omitted)!r}"
     )
     assert not any(":?" in str(value) for value in env.values()), (
         "Beta required inputs leaked"

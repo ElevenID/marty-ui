@@ -5,7 +5,9 @@ use std::sync::Arc;
 use axum::http::StatusCode;
 use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine};
 use ed25519_dalek::SigningKey;
+use hmac::{Hmac, Mac};
 use serde_json::{json, Value};
+use sha2::Sha256;
 
 use super::issuance_named_peers::{
     counts, start_peers, PeerState, API_KEY, FORMAT, HOLDER, ISSUER, ORGANIZATION, PROFILE,
@@ -13,6 +15,15 @@ use super::issuance_named_peers::{
 };
 
 use super::renewal_reference_fixture as reference;
+
+const TOKEN_HMAC_KEY: &str = "synthetic-fresh-main-hmac";
+const LEGACY_ACCESS_TOKEN: &str = "synthetic-legacy-access-token";
+
+fn access_token_digest(token: &str) -> String {
+    let mut hmac = Hmac::<Sha256>::new_from_slice(TOKEN_HMAC_KEY.as_bytes()).unwrap();
+    hmac.update(token.as_bytes());
+    hex::encode(hmac.finalize().into_bytes())
+}
 
 pub(super) async fn stored(pool: &sqlx::PgPool, id: &str) -> Value {
     sqlx::query_scalar("SELECT jsonb_build_object(
@@ -246,14 +257,30 @@ async fn run_with_profile(database_url: &str, rendered_redis: Option<&str>, ingr
             .clone();
         source.delivery_mode = "wallet_only".into();
         source.credential_payload_format = FORMAT.into();
-        let repository =
-            PostgresCredentialRepository::new(pool.clone(), b"synthetic-fresh-main-hmac");
+        let repository = PostgresCredentialRepository::new(pool.clone(), TOKEN_HMAC_KEY.as_bytes());
         assert!(
             repository
                 .reserve_idempotently(&source)
                 .await
                 .unwrap()
                 .created
+        );
+        let legacy_access_token_digest = access_token_digest(LEGACY_ACCESS_TOKEN);
+        let seeded = sqlx::query(
+            "UPDATE issuance_service.issuance_transactions
+             SET access_token=$1
+             WHERE id=$2 AND organization_id=$3",
+        )
+        .bind(&legacy_access_token_digest)
+        .bind(&source_tx_id)
+        .bind(ORGANIZATION)
+        .execute(&pool)
+        .await
+        .unwrap();
+        assert_eq!(
+            seeded.rows_affected(),
+            1,
+            "legacy access token fixture must update its owned transaction"
         );
         sqlx::query("INSERT INTO issuance_service.issued_credentials
           (id,transaction_id,organization_id,credential_template_id,subject_did,issuer_did,
@@ -262,7 +289,24 @@ async fn run_with_profile(database_url: &str, rendered_redis: Option<&str>, ingr
             .bind(&source_id).bind(&source_tx_id).bind(ORGANIZATION).bind(TEMPLATE).bind(HOLDER).bind(ISSUER)
             .bind(PROFILE).bind(json!([{"status_list_id":PROFILE,"index":7}]))
             .bind(source.created_at).bind(source.expires_at).execute(&pool).await.unwrap();
-        let source_before = stored(&pool, &source_tx_id).await;
+        let source_before_startup = stored(&pool, &source_tx_id).await;
+        assert_eq!(
+            source_before_startup["transaction"]["access_token"], legacy_access_token_digest,
+            "seeded legacy token digest must exercise the startup expiry backfill"
+        );
+        assert_ne!(
+            source_before_startup["transaction"]["access_token"], LEGACY_ACCESS_TOKEN,
+            "legacy access token must remain one-way hashed at rest"
+        );
+        assert!(
+            source_before_startup["transaction"]["access_token_expires_at"].is_null(),
+            "seeded legacy token must begin without a bounded lifetime"
+        );
+        let startup_migration_not_before: chrono::DateTime<chrono::Utc> =
+            sqlx::query_scalar("SELECT clock_timestamp()")
+                .fetch_one(&pool)
+                .await
+                .unwrap();
         let (http_listener, http_port) = reserve_port();
         let (grpc_listener, grpc_port) = if envoy {
             (
@@ -280,7 +324,7 @@ async fn run_with_profile(database_url: &str, rendered_redis: Option<&str>, ingr
                 "inputs": {
                     "ISSUANCE_API_KEY":API_KEY, "GRPC_SERVICE_TOKEN":TOKEN,
                     "SIGNING_KEYS_INTERNAL_API_KEY":SIGNING_KEY,
-                    "TOKEN_HMAC_KEY":"synthetic-fresh-main-hmac",
+                    "TOKEN_HMAC_KEY":TOKEN_HMAC_KEY,
                     "INTEGRATION_SECRET_MASTER_KEY":"AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8=",
                     "PUBLIC_API_URL":"https://issuer.example", "UI_BASE_URL":"http://localhost:3000",
                     "ISSUANCE_OFFER_TTL_MINUTES":"10080", "TOKEN_RATE_LIMIT":"30",
@@ -309,7 +353,7 @@ async fn run_with_profile(database_url: &str, rendered_redis: Option<&str>, ingr
                 .env("DATABASE_URL", database_url)
                 .env("ISSUANCE_API_KEY", API_KEY)
                 .env("GRPC_SERVICE_TOKEN", TOKEN)
-                .env("TOKEN_HMAC_KEY", "synthetic-fresh-main-hmac")
+                .env("TOKEN_HMAC_KEY", TOKEN_HMAC_KEY)
                 .env("ORG_GRPC_TARGET", &origin)
                 .env("CT_GRPC_TARGET", &origin)
                 .env("RP_GRPC_TARGET", &origin)
@@ -334,6 +378,34 @@ async fn run_with_profile(database_url: &str, rendered_redis: Option<&str>, ingr
             .await
             .unwrap(),
             Some(json!({"status":"healthy","service":"issuance-service"}))
+        );
+        let startup_migration_not_after: chrono::DateTime<chrono::Utc> =
+            sqlx::query_scalar("SELECT clock_timestamp()")
+                .fetch_one(&pool)
+                .await
+                .unwrap();
+        // Startup grants a legacy token one bounded 30-minute lifetime. Prove
+        // that backfill against database time, then preserve the pre-start
+        // snapshot so every other source mutation remains exactly visible.
+        let source_before = stored(&pool, &source_tx_id).await;
+        let backfilled_expiry: chrono::DateTime<chrono::Utc> = source_before["transaction"]
+            ["access_token_expires_at"]
+            .as_str()
+            .expect("startup migration must bound the seeded legacy token")
+            .parse()
+            .unwrap();
+        let legacy_token_lifetime = chrono::Duration::seconds(1800);
+        assert!(
+            backfilled_expiry >= startup_migration_not_before + legacy_token_lifetime
+                && backfilled_expiry <= startup_migration_not_after + legacy_token_lifetime,
+            "startup migration must grant exactly one bounded 30-minute legacy-token lifetime"
+        );
+        let mut expected_after_startup = source_before_startup;
+        expected_after_startup["transaction"]["access_token_expires_at"] =
+            source_before["transaction"]["access_token_expires_at"].clone();
+        assert_eq!(
+            source_before, expected_after_startup,
+            "startup migration changed seeded renewal domain state"
         );
         let gateway_fixture = if gateway {
             let fixture = super::base_runtime_gateway::GatewayFixture::start(

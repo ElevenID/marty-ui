@@ -2,11 +2,18 @@ use chrono::{DateTime, Utc};
 use hmac::{Hmac, Mac};
 use marty_issuance_service::{
     client_auth::RegisteredClientRepository,
+    oid4vci_authorization::{
+        AuthorizationParameters, AuthorizationSessionWrite, DeferredCredentialLookup,
+        DeferredStatus, NotificationEvent, NotificationLookup, NotificationRequest,
+        Oid4vciAuthorizationRepository,
+    },
+    oid4vci_authorization_postgres::PostgresOid4vciAuthorizationRepository,
     token_exchange::TokenExchangeRepository,
     token_postgres::PostgresTokenExchangeRepository,
     transaction_postgres::PostgresTransactionReadRepository,
     transaction_reads::{TransactionReadError, TransactionReadRepository, TransactionStatus},
 };
+use marty_oid4vci::{AuthorizationSession, CodeChallengeMethod};
 use sha2::Sha256;
 use sqlx::postgres::PgPoolOptions;
 use sqlx::Row;
@@ -43,6 +50,21 @@ async fn transaction_contract(claims_type: &str) {
         .execute(&pool)
         .await
         .expect("issuance schema must be available");
+    // A failed assertion must not poison the next diagnostic rerun. Drop the
+    // independently owned test fixtures before rebuilding this contract.
+    for statement in [
+        "DROP TABLE IF EXISTS issuance_service.issuance_events",
+        "DROP TABLE IF EXISTS issuance_service.issued_credentials",
+        "DROP TABLE IF EXISTS issuance_service.oid4vci_ephemeral_capabilities",
+        "DROP TABLE IF EXISTS issuance_service.oid4vci_client_assertions",
+        "DROP TABLE IF EXISTS issuance_service.oid4vci_registered_clients",
+        "DROP TABLE IF EXISTS issuance_service.authorization_sessions",
+    ] {
+        sqlx::query(statement)
+            .execute(&pool)
+            .await
+            .expect("stale issuance contract fixture must be removable");
+    }
     sqlx::query("DROP TABLE IF EXISTS issuance_service.issuance_transactions")
         .execute(&pool)
         .await
@@ -64,6 +86,7 @@ async fn transaction_contract(claims_type: &str) {
             revoked_at TIMESTAMPTZ,
             revocation_reason TEXT,
             access_token TEXT,
+            access_token_expires_at TIMESTAMPTZ,
             c_nonce TEXT,
             claims JSON NOT NULL DEFAULT '{}'::json,
             oid4vci_client_id TEXT
@@ -218,7 +241,7 @@ async fn transaction_contract(claims_type: &str) {
             .await
             .unwrap());
         let persisted = sqlx::query(
-            "SELECT claims, access_token, c_nonce, status
+            "SELECT claims, access_token, access_token_expires_at, c_nonce, status
              FROM issuance_service.issuance_transactions WHERE id = 'tx-a'",
         )
         .fetch_one(&pool)
@@ -250,7 +273,16 @@ async fn transaction_contract(claims_type: &str) {
         );
         assert_eq!(persisted.get::<String, _>("status"), "authorized");
         assert!(persisted.get::<Option<String>, _>("c_nonce").is_none());
+        let remaining: f64 = sqlx::query_scalar(
+            "SELECT extract(epoch FROM access_token_expires_at - clock_timestamp())::double precision
+             FROM issuance_service.issuance_transactions WHERE id = 'tx-a'",
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert!((1798.0..=1800.0).contains(&remaining));
     }
+    let delivery_token = "deferred-delivery-token";
     sqlx::query(
         "UPDATE issuance_service.issuance_transactions
          SET status = 'pending', access_token = NULL, claims = '{}' WHERE id = 'tx-a'",
@@ -309,11 +341,12 @@ async fn transaction_contract(claims_type: &str) {
     sqlx::query(
         "CREATE TABLE issuance_service.authorization_sessions (
             id TEXT PRIMARY KEY, code TEXT NOT NULL UNIQUE, client_id TEXT NOT NULL,
-            organization_id TEXT, redirect_uri TEXT, issuer_state TEXT,
+            organization_id TEXT, redirect_uri TEXT, scope TEXT, state TEXT, issuer_state TEXT,
             credential_configuration_ids JSONB NOT NULL DEFAULT '[]'::jsonb,
             code_challenge TEXT, code_challenge_method TEXT, status TEXT NOT NULL,
             created_at TIMESTAMPTZ NOT NULL, expires_at TIMESTAMPTZ NOT NULL,
-            access_token TEXT, c_nonce TEXT, dpop_jkt TEXT
+            access_token TEXT, access_token_expires_at TIMESTAMPTZ,
+            c_nonce TEXT, dpop_jkt TEXT
         )",
     )
     .execute(&pool)
@@ -337,7 +370,18 @@ async fn transaction_contract(claims_type: &str) {
         token_repository.claim_authorization(&authorization, "auth-token-first", Some("auth-jkt")),
         token_repository.claim_authorization(&authorization, "auth-token-second", None)
     );
-    assert_ne!(first_auth.unwrap(), second_auth.unwrap());
+    let first_auth = first_auth.unwrap();
+    let second_auth = second_auth.unwrap();
+    assert_ne!(first_auth, second_auth);
+    let authorization_remaining: f64 = sqlx::query_scalar(
+        "SELECT extract(epoch FROM access_token_expires_at - clock_timestamp())::double precision
+         FROM issuance_service.authorization_sessions
+         WHERE id = 'auth-a'",
+    )
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert!((1798.0..=1800.0).contains(&authorization_remaining));
 
     sqlx::query("DROP TABLE IF EXISTS issuance_service.oid4vci_client_assertions")
         .execute(&pool)
@@ -350,6 +394,7 @@ async fn transaction_contract(claims_type: &str) {
     sqlx::query(
         "CREATE TABLE issuance_service.oid4vci_registered_clients (
             organization_id TEXT NOT NULL, client_id TEXT NOT NULL, jwks JSONB NOT NULL,
+            redirect_uris JSONB NOT NULL DEFAULT '[]'::jsonb,
             token_endpoint_auth_method TEXT NOT NULL, active BOOLEAN NOT NULL,
             PRIMARY KEY (organization_id, client_id)
         )",
@@ -369,7 +414,9 @@ async fn transaction_contract(claims_type: &str) {
     .unwrap();
     sqlx::query(
         "INSERT INTO issuance_service.oid4vci_registered_clients
-         VALUES ('org-a', 'wallet-a', '{\"keys\": []}'::jsonb, 'private_key_jwt', true)",
+         VALUES ('org-a', 'wallet-a', '{\"keys\": []}'::jsonb,
+                 '[\"https://wallet.example/callback\"]'::jsonb,
+                 'private_key_jwt', true)",
     )
     .execute(&pool)
     .await
@@ -387,6 +434,276 @@ async fn transaction_contract(claims_type: &str) {
     );
     assert_ne!(first_assertion.unwrap(), second_assertion.unwrap());
 
+    sqlx::query(
+        "CREATE TABLE issuance_service.oid4vci_ephemeral_capabilities (
+            purpose TEXT NOT NULL, key_digest TEXT NOT NULL, payload JSONB,
+            created_at TIMESTAMPTZ NOT NULL, expires_at TIMESTAMPTZ NOT NULL,
+            PRIMARY KEY (purpose, key_digest)
+        )",
+    )
+    .execute(&pool)
+    .await
+    .unwrap();
+    sqlx::query(
+        "CREATE TABLE issuance_service.issued_credentials (
+            id TEXT PRIMARY KEY, transaction_id TEXT NOT NULL,
+            organization_id TEXT NOT NULL, credential_jwt TEXT NOT NULL
+        )",
+    )
+    .execute(&pool)
+    .await
+    .unwrap();
+    sqlx::query(
+        "CREATE TABLE issuance_service.issuance_events (
+            id TEXT PRIMARY KEY, transaction_id TEXT, application_id TEXT,
+            event_type TEXT NOT NULL, metadata JSONB NOT NULL, created_at TIMESTAMPTZ NOT NULL
+        )",
+    )
+    .execute(&pool)
+    .await
+    .unwrap();
+    let authorization_repository = PostgresOid4vciAuthorizationRepository::new(
+        pool.clone(),
+        "postgres-contract-token-hmac-key",
+    );
+    let par = AuthorizationParameters {
+        response_type: Some("code".into()),
+        client_id: Some("wallet-a".into()),
+        organization_id: Some("org-a".into()),
+        ..AuthorizationParameters::default()
+    };
+    assert!(authorization_repository
+        .store_par("urn:ietf:params:oauth:request_uri:contract", &par, 90)
+        .await
+        .unwrap());
+    assert_eq!(
+        authorization_repository
+            .consume_par("urn:ietf:params:oauth:request_uri:contract")
+            .await
+            .unwrap(),
+        Some(par)
+    );
+    assert!(authorization_repository
+        .consume_par("urn:ietf:params:oauth:request_uri:contract")
+        .await
+        .unwrap()
+        .is_none());
+    assert_eq!(
+        authorization_repository
+            .registered_client("org-a", "wallet-a")
+            .await
+            .unwrap()
+            .unwrap()
+            .redirect_uris,
+        ["https://wallet.example/callback"]
+    );
+    let authorization_created_at = Utc::now().timestamp();
+    authorization_repository
+        .save_authorization_session(&AuthorizationSessionWrite {
+            id: "auth-native".into(),
+            session: AuthorizationSession {
+                code: "code-native".into(),
+                client_id: "wallet-a".into(),
+                redirect_uri: Some("https://wallet.example/callback".into()),
+                code_challenge: Some("challenge".into()),
+                code_challenge_method: Some(CodeChallengeMethod::S256),
+                issuer_state: Some("issuer-state".into()),
+                credential_configuration_ids: vec!["config-a".into()],
+                created_at: authorization_created_at.try_into().unwrap(),
+                expires_in: 600,
+            },
+            organization_id: Some("org-a".into()),
+            scope: Some("openid_credential".into()),
+            state: Some("state-a".into()),
+            persisted_lifetime_seconds: 3_600,
+        })
+        .await
+        .unwrap();
+    let persisted_session = sqlx::query(
+        "SELECT code, client_id, redirect_uri, scope, state, issuer_state, organization_id,
+                code_challenge, code_challenge_method, credential_configuration_ids,
+                created_at, expires_at
+         FROM issuance_service.authorization_sessions WHERE id = 'auth-native'",
+    )
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert_eq!(
+        persisted_session.get::<String, _>("scope"),
+        "openid_credential"
+    );
+    assert_eq!(persisted_session.get::<String, _>("state"), "state-a");
+    assert_eq!(
+        persisted_session.get::<String, _>("code_challenge_method"),
+        "S256"
+    );
+    assert_eq!(persisted_session.get::<String, _>("code"), "code-native");
+    assert_eq!(persisted_session.get::<String, _>("client_id"), "wallet-a");
+    assert_eq!(
+        persisted_session.get::<String, _>("redirect_uri"),
+        "https://wallet.example/callback"
+    );
+    assert_eq!(
+        persisted_session.get::<String, _>("issuer_state"),
+        "issuer-state"
+    );
+    assert_eq!(
+        persisted_session.get::<String, _>("organization_id"),
+        "org-a"
+    );
+    assert_eq!(
+        persisted_session.get::<String, _>("code_challenge"),
+        "challenge"
+    );
+    assert_eq!(
+        persisted_session.get::<serde_json::Value, _>("credential_configuration_ids"),
+        serde_json::json!(["config-a"])
+    );
+    let persisted_created_at = persisted_session.get::<DateTime<Utc>, _>("created_at");
+    let persisted_expires_at = persisted_session.get::<DateTime<Utc>, _>("expires_at");
+    assert_eq!(persisted_created_at.timestamp(), authorization_created_at);
+    assert_eq!(
+        persisted_expires_at - persisted_created_at,
+        chrono::Duration::seconds(3_600)
+    );
+
+    sqlx::query(
+        "UPDATE issuance_service.issuance_transactions
+         SET status = 'issued', access_token = $1,
+             access_token_expires_at = clock_timestamp() + interval '30 minutes'
+         WHERE id = 'tx-revoked'",
+    )
+    .bind(expected_token_hash(delivery_token))
+    .execute(&pool)
+    .await
+    .unwrap();
+    sqlx::query(
+        "INSERT INTO issuance_service.issued_credentials VALUES
+         ('credential-deferred', 'tx-revoked', 'org-a', 'credential.jwt.value')",
+    )
+    .execute(&pool)
+    .await
+    .unwrap();
+    sqlx::query(
+        "INSERT INTO issuance_service.issuance_events VALUES
+         ('binding-a', 'tx-revoked', 'application-tx-revoked', 'oid4vci_notification_binding',
+          '{\"notification_id\":\"notification-a\",\"credential_id\":\"credential-deferred\",\"organization_id\":\"org-a\"}'::jsonb,
+          clock_timestamp())",
+    )
+    .execute(&pool)
+    .await
+    .unwrap();
+    sqlx::query(
+        "INSERT INTO issuance_service.issuance_events VALUES
+         ('binding-null-token', 'tx-foreign', NULL, 'oid4vci_notification_binding',
+          '{\"notification_id\":\"notification-null-token\"}'::jsonb, clock_timestamp())",
+    )
+    .execute(&pool)
+    .await
+    .unwrap();
+    assert!(authorization_repository
+        .access_token_grant(claimed_token)
+        .await
+        .unwrap()
+        .is_some());
+    assert_eq!(
+        authorization_repository
+            .deferred_credential(delivery_token, "tx-revoked")
+            .await
+            .unwrap(),
+        DeferredCredentialLookup::Bound(
+            marty_issuance_service::oid4vci_authorization::DeferredCredentialRecord {
+                status: DeferredStatus::Issued,
+                credential: Some("credential.jwt.value".into()),
+            }
+        )
+    );
+    assert_eq!(
+        authorization_repository
+            .deferred_credential("different-token", "tx-revoked")
+            .await
+            .unwrap(),
+        DeferredCredentialLookup::Unbound
+    );
+    assert_eq!(
+        authorization_repository
+            .deferred_credential("any-token", "tx-foreign")
+            .await
+            .unwrap(),
+        DeferredCredentialLookup::Unbound,
+        "a known transaction with a NULL token is unbound, not unavailable"
+    );
+    assert_eq!(
+        authorization_repository
+            .notification_transaction(delivery_token, "notification-a")
+            .await
+            .unwrap(),
+        NotificationLookup::Bound("tx-revoked".into())
+    );
+    assert_eq!(
+        authorization_repository
+            .notification_transaction("different-token", "notification-a")
+            .await
+            .unwrap(),
+        NotificationLookup::Unbound
+    );
+    assert_eq!(
+        authorization_repository
+            .notification_transaction("any-token", "notification-null-token")
+            .await
+            .unwrap(),
+        NotificationLookup::Unbound,
+        "a known notification with a NULL transaction token is unbound, not unavailable"
+    );
+    let notification = NotificationRequest {
+        notification_id: "notification-a".into(),
+        event: NotificationEvent::Accepted,
+        event_description: Some("stored by wallet".into()),
+    };
+    authorization_repository
+        .record_notification("tx-revoked", &notification)
+        .await
+        .unwrap();
+    authorization_repository
+        .record_notification("tx-revoked", &notification)
+        .await
+        .unwrap();
+    assert_eq!(
+        sqlx::query_scalar::<_, i64>(
+            "SELECT count(*) FROM issuance_service.issuance_events
+             WHERE event_type = 'oid4vci_wallet_notification'",
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap(),
+        1
+    );
+    assert_eq!(
+        sqlx::query_scalar::<_, Option<String>>(
+            "SELECT application_id
+             FROM issuance_service.issuance_events
+             WHERE transaction_id = 'tx-revoked'
+               AND event_type = 'oid4vci_wallet_notification'",
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap()
+        .as_deref(),
+        Some("application-tx-revoked")
+    );
+
+    sqlx::query("DROP TABLE issuance_service.issuance_events")
+        .execute(&pool)
+        .await
+        .unwrap();
+    sqlx::query("DROP TABLE issuance_service.issued_credentials")
+        .execute(&pool)
+        .await
+        .unwrap();
+    sqlx::query("DROP TABLE issuance_service.oid4vci_ephemeral_capabilities")
+        .execute(&pool)
+        .await
+        .unwrap();
     sqlx::query("DROP TABLE issuance_service.oid4vci_client_assertions")
         .execute(&pool)
         .await

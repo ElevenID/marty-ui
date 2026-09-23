@@ -74,6 +74,7 @@ def assert_public_image_loader_connected(reader):
     source = reader("rust/services/issuance/tests/canvas_published_schema_contract.rs")
     runtime = reader("rust/services/issuance/tests/support/selfhost_packaged_runtime.rs")
     sidecar = reader("rust/services/issuance/tests/support/selfhost_runtime_sidecar.rs")
+    main = reader("rust/services/issuance/src/main.rs")
     runner = reader("scripts/ci/run-published-canvas-contracts.sh")
     workflow = yaml.safe_load(reader(".github/workflows/ci.yml"))
     for name in [
@@ -97,8 +98,38 @@ def assert_public_image_loader_connected(reader):
         "PublishedDatabase::recover_scope",
         "recover_parent_scope",
         "MARTY_SELFHOST_TEST_IMAGE",
+        "ALTER SCHEMA issuance_service OWNER TO marty",
+        "namespace.nspname = 'issuance_service'",
+        "'ALTER %s %I.%I OWNER TO marty'",
+        "pg_get_userbyid(datdba) = 'marty'",
+        "pg_get_userbyid(nspowner) = 'marty'",
+        "object.relkind IN ('r', 'p', 'S')",
+        'record_database_stage("transfer-ownership")',
+        'record_database_stage("inspect-ownership")',
+        'record_database_stage("verify-ownership")',
+        "seed(&check).await?;",
+        "COALESCE(to_jsonb(t)->'access_token_expires_at', 'null'::jsonb)",
+        "matches!(case, SecretCase::Correct | SecretCase::CrLf)",
+        "issuance startup database authentication failed",
+        "LogExpectation::Structured",
+        'field: "database_sqlstate"',
+        'value: "28P01"',
     ]:
-        assert required in runtime
+        assert compact(required) in compact(runtime)
+    for required in [
+        "serde_json::from_str::<Value>(line)",
+        'event["fields"]["message"] == message',
+        'event["fields"][field] == value',
+        "secrets_absent && expected_present",
+    ]:
+        assert compact(required) in compact(sidecar)
+    for required in [
+        'database_sqlstate = "28P01"',
+        'code == "28P01"',
+        "issuance startup database authentication failed",
+    ]:
+        assert required in main
+    assert "REASSIGN OWNED BY CURRENT_USER TO marty" not in runtime
     for required in [
         "create_new(true)",
         "validate_pending_operation",
@@ -143,7 +174,24 @@ def test_public_image_loader_is_a_mandatory_exact_source_image_gate():
 
 @pytest.mark.parametrize(
     "fault",
-    ["source", "runner", "workflow", "dockerfile", "image", "revision", "pending"],
+    [
+        "source",
+        "runner",
+        "workflow",
+        "dockerfile",
+        "image",
+        "revision",
+        "pending",
+        "ownership",
+        "ownership-proof",
+        "ownership-seed",
+        "ownership-stage",
+        "migration-owned-projection",
+        "wrong-password-running",
+        "wrong-password-marker",
+        "wrong-password-sqlstate",
+        "wrong-password-structured",
+    ],
 )
 def test_public_image_loader_refuses_disconnected_or_weakened_gates(fault):
     def changed(name):
@@ -168,8 +216,46 @@ def test_public_image_loader_refuses_disconnected_or_weakened_gates(fault):
                 "rust/services/issuance/tests/support/selfhost_runtime_sidecar.rs",
                 "create_new(true)",
             ),
+            "ownership": (
+                "rust/services/issuance/tests/support/selfhost_packaged_runtime.rs",
+                "ALTER SCHEMA issuance_service OWNER TO marty",
+            ),
+            "ownership-proof": (
+                "rust/services/issuance/tests/support/selfhost_packaged_runtime.rs",
+                "pg_get_userbyid(datdba) = 'marty'",
+            ),
+            "ownership-seed": (
+                "rust/services/issuance/tests/support/selfhost_packaged_runtime.rs",
+                "seed(&check).await?;",
+            ),
+            "ownership-stage": (
+                "rust/services/issuance/tests/support/selfhost_packaged_runtime.rs",
+                'record_database_stage("transfer-ownership")',
+            ),
+            "migration-owned-projection": (
+                "rust/services/issuance/tests/support/selfhost_packaged_runtime.rs",
+                "COALESCE(to_jsonb(t)->'access_token_expires_at', 'null'::jsonb)",
+            ),
+            "wrong-password-running": (
+                "rust/services/issuance/tests/support/selfhost_packaged_runtime.rs",
+                "matches!(case, SecretCase::Correct | SecretCase::CrLf)",
+            ),
+            "wrong-password-marker": (
+                "rust/services/issuance/tests/support/selfhost_packaged_runtime.rs",
+                "issuance startup database authentication failed",
+            ),
+            "wrong-password-sqlstate": (
+                "rust/services/issuance/src/main.rs",
+                'database_sqlstate = "28P01"',
+            ),
+            "wrong-password-structured": (
+                "rust/services/issuance/tests/support/selfhost_packaged_runtime.rs",
+                "LogExpectation::Structured",
+            ),
         }
         target, value = replacements[fault]
+        if fault == "wrong-password-marker" and name == target:
+            return source.replace(value, "ABSENT")
         return source.replace(value, "ABSENT", 1) if name == target else source
 
     with pytest.raises(AssertionError):
