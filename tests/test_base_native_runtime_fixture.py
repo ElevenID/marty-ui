@@ -478,7 +478,19 @@ def test_renewal_fixtures_compare_post_migration_state_and_unique_notifications(
             "                && backfilled_expiry <= startup_migration_not_after + legacy_token_lifetime"
         )
         for required in [
-            '!source_before_startup["transaction"]["access_token"].is_null()',
+            'const LEGACY_ACCESS_TOKEN: &str = "synthetic-legacy-access-token";',
+            "Hmac::<Sha256>::new_from_slice(TOKEN_HMAC_KEY.as_bytes())",
+            "hmac.update(token.as_bytes());",
+            "hex::encode(hmac.finalize().into_bytes())",
+            "let legacy_access_token_digest = access_token_digest(LEGACY_ACCESS_TOKEN);",
+            'SET access_token=$1\n             WHERE id=$2 AND organization_id=$3',
+            ".bind(&legacy_access_token_digest)\n"
+            "        .bind(&source_tx_id)\n"
+            "        .bind(ORGANIZATION)",
+            'assert_eq!(\n            seeded.rows_affected(),\n            1,',
+            'assert_eq!(\n            source_before_startup["transaction"]["access_token"], legacy_access_token_digest,',
+            'assert_ne!(\n            source_before_startup["transaction"]["access_token"], LEGACY_ACCESS_TOKEN,',
+            "legacy access token must remain one-way hashed at rest",
             'source_before_startup["transaction"]["access_token_expires_at"].is_null()',
             'sqlx::query_scalar("SELECT clock_timestamp()")',
             "let legacy_token_lifetime = chrono::Duration::seconds(1800);",
@@ -499,6 +511,24 @@ def test_renewal_fixtures_compare_post_migration_state_and_unique_notifications(
 
     check(renewal)
     for weakened in [
+        renewal.replace(
+            ".bind(&legacy_access_token_digest)", ".bind(LEGACY_ACCESS_TOKEN)"
+        ),
+        renewal.replace(
+            "WHERE id=$2 AND organization_id=$3", "WHERE id=$2"
+        ),
+        renewal.replace(
+            ".bind(&source_tx_id)\n        .bind(ORGANIZATION)",
+            ".bind(&source_id)\n        .bind(ORGANIZATION)",
+        ),
+        renewal.replace(
+            ".bind(&source_tx_id)\n        .bind(ORGANIZATION)",
+            ".bind(&source_tx_id)\n        .bind(\"foreign-org\")",
+        ),
+        renewal.replace(
+            "seeded.rows_affected(),\n            1,",
+            "seeded.rows_affected(),\n            0,",
+        ),
         renewal.replace(
             "chrono::Duration::seconds(1800)", "chrono::Duration::seconds(3600)"
         ),
