@@ -262,7 +262,7 @@ async fn run_with_profile(database_url: &str, rendered_redis: Option<&str>, ingr
             .bind(&source_id).bind(&source_tx_id).bind(ORGANIZATION).bind(TEMPLATE).bind(HOLDER).bind(ISSUER)
             .bind(PROFILE).bind(json!([{"status_list_id":PROFILE,"index":7}]))
             .bind(source.created_at).bind(source.expires_at).execute(&pool).await.unwrap();
-        let source_before = stored(&pool, &source_tx_id).await;
+        let source_before_startup = stored(&pool, &source_tx_id).await;
         let (http_listener, http_port) = reserve_port();
         let (grpc_listener, grpc_port) = if envoy {
             (
@@ -334,6 +334,15 @@ async fn run_with_profile(database_url: &str, rendered_redis: Option<&str>, ingr
             .await
             .unwrap(),
             Some(json!({"status":"healthy","service":"issuance-service"}))
+        );
+        // Startup owns this one additive nullable column. Preserve the
+        // pre-start snapshot so every other source mutation remains visible.
+        let mut expected_after_startup = source_before_startup;
+        expected_after_startup["transaction"]["access_token_expires_at"] = Value::Null;
+        let source_before = stored(&pool, &source_tx_id).await;
+        assert_eq!(
+            source_before, expected_after_startup,
+            "startup migration changed seeded renewal domain state"
         );
         let gateway_fixture = if gateway {
             let fixture = super::base_runtime_gateway::GatewayFixture::start(

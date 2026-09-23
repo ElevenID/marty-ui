@@ -447,3 +447,31 @@ def test_inner_acceptance_roster_cannot_drop_a_capability(owner):
     check(source)
     with pytest.raises(AssertionError):
         check(source.replace(f"super::{owner}::run(", "disconnected_owner("))
+
+
+def test_renewal_fixtures_compare_post_migration_state_and_unique_notifications():
+    renewal = (
+        ROOT / "rust/services/issuance/tests/support/renewal_fresh_main.rs"
+    ).read_text(encoding="utf-8")
+    ready = 'Some(json!({"status":"healthy","service":"issuance-service"}))'
+    pre_start = "let source_before_startup = stored(&pool, &source_tx_id).await;"
+    spawn = "let mut child = ChildGuard(command.spawn().unwrap());"
+    snapshot = "let source_before = stored(&pool, &source_tx_id).await;"
+    gateway = "let gateway_fixture = if gateway {"
+    assert renewal.index(pre_start) < renewal.index(spawn) < renewal.index(ready)
+    assert renewal.index(ready) < renewal.index(snapshot) < renewal.index(gateway)
+    assert (
+        'expected_after_startup["transaction"]["access_token_expires_at"] = Value::Null;'
+        in renewal
+    )
+    assert "startup migration changed seeded renewal domain state" in renewal
+
+    canvas = (
+        ROOT / "rust/services/issuance/tests/support/renewal_canvas_binding.rs"
+    ).read_text(encoding="utf-8")
+    for required in [
+        'format!("notification-renewal-canvas-{}", transaction.id)',
+        ".finalize(&claimed, &credential, &notification_id)",
+        "assert_eq!(persisted.notification_id, notification_id);",
+    ]:
+        assert required in canvas

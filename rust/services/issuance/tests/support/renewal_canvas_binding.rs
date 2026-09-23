@@ -32,9 +32,10 @@ async fn ordinary_blank_link_finalization(fixture: &Fixture) {
             .unwrap()
             .unwrap();
         let before = fixture.snapshot().await;
+        let notification_id = format!("notification-renewal-canvas-{}", transaction.id);
         let finalized = fixture
             .repository
-            .finalize(&claimed, &credential, "notification-renewal-canvas")
+            .finalize(&claimed, &credential, &notification_id)
             .await;
         if accepted {
             finalized.unwrap();
@@ -46,6 +47,7 @@ async fn ordinary_blank_link_finalization(fixture: &Fixture) {
                 .unwrap();
             assert_eq!(persisted.id, credential.id);
             assert_eq!(persisted.credential, credential.credential);
+            assert_eq!(persisted.notification_id, notification_id);
             let persisted_link: Option<String> = sqlx::query_scalar("SELECT renewed_from_credential_id FROM issuance_service.issued_credentials WHERE id=$1")
                 .bind(&credential.id).fetch_one(&fixture.pool).await.unwrap();
             assert_eq!(persisted_link, credential.renewed_from_credential_id);

@@ -356,6 +356,29 @@ async fn provision(database: &PublishedDatabase) -> Result<sqlx::PgPool, String>
         .connect(url.as_str())
         .await
         .map_err(|_| ERROR)?;
+    // A database cloned from the frozen oracle template retains the oracle's
+    // object ownership. Production self-host databases are owned by the
+    // service role, which must be able to apply additive startup migrations.
+    // Make this synthetic clone preserve that ownership boundary as well.
+    sqlx::query("REASSIGN OWNED BY CURRENT_USER TO marty")
+        .execute(&pool)
+        .await
+        .map_err(|_| ERROR)?;
+    let ownership: (bool, bool) = sqlx::query_as(
+        "SELECT
+           (SELECT pg_get_userbyid(nspowner) = 'marty'
+              FROM pg_namespace WHERE nspname = 'issuance_service'),
+           NOT EXISTS (
+             SELECT 1 FROM pg_class AS object
+             JOIN pg_namespace AS namespace ON namespace.oid = object.relnamespace
+             WHERE namespace.nspname = 'issuance_service'
+               AND object.relkind IN ('r', 'p', 'S')
+               AND pg_get_userbyid(object.relowner) <> 'marty')",
+    )
+    .fetch_one(&pool)
+    .await
+    .map_err(|_| ERROR)?;
+    require(ownership == (true, true))?;
     for statement in [
         "GRANT USAGE ON SCHEMA issuance_service TO marty",
         "GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA issuance_service TO marty",

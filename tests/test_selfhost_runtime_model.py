@@ -97,6 +97,9 @@ def assert_public_image_loader_connected(reader):
         "PublishedDatabase::recover_scope",
         "recover_parent_scope",
         "MARTY_SELFHOST_TEST_IMAGE",
+        "REASSIGN OWNED BY CURRENT_USER TO marty",
+        "pg_get_userbyid(nspowner) = 'marty'",
+        "object.relkind IN ('r', 'p', 'S')",
     ]:
         assert required in runtime
     for required in [
