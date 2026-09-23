@@ -327,8 +327,12 @@ def test_didcomm_authcrypt_overlay_is_explicit_and_isolation_is_last() -> None:
     files = [
         command[index + 1] for index, value in enumerate(command) if value == "--file"
     ]
-    assert files[-2].endswith(stack.DIDCOMM_AUTHCRYPT_FILE)
-    assert files[-1].endswith(stack.ISOLATION_FILE)
+    assert [Path(path).name for path in files[-4:]] == [
+        stack.DIDCOMM_AUTHCRYPT_FILE,
+        stack.NATIVE_AUTHCRYPT_FILE,
+        stack.NATIVE_CA_FILE,
+        stack.ISOLATION_FILE,
+    ]
 
 
 def test_didcomm_authcrypt_policy_is_mounted_only_into_issuance() -> None:
@@ -582,10 +586,17 @@ def test_existing_project_requires_explicit_resume(
 def test_reviewer_bootstrap_requires_the_exact_existing_project(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    native_spec = importlib.util.spec_from_file_location(
+        "conformance_native_test_model", ROOT / "tests" / "test_conformance_native.py"
+    )
+    if native_spec is None or native_spec.loader is None:
+        raise RuntimeError("could not load native conformance test model")
+    native_test = importlib.util.module_from_spec(native_spec)
+    native_spec.loader.exec_module(native_test)
     monkeypatch.setattr(
         stack,
         "rendered_config",
-        lambda *_args, **_kwargs: {"services": {}, "networks": {}, "volumes": {}},
+        lambda *_args, **_kwargs: native_test.model(),
     )
     monkeypatch.setattr(stack, "validate_isolation", lambda *_args, **_kwargs: [])
     monkeypatch.setattr(stack, "project_container_ids", lambda _project: [])

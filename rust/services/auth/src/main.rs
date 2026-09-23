@@ -199,7 +199,7 @@ fn assemble_applications(
 
     let canvas_provider = Arc::new(HttpCanvasExperienceSessionProvider::new(
         connections.outbound_http.clone(),
-        &config.issuance_service_url,
+        &config.issuance_native_service_url,
     )?);
     let canvas = Arc::new(CanvasLtiApplication::new(
         canvas_provider,

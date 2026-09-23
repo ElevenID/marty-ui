@@ -294,7 +294,54 @@ impl EventPublisher for GrpcEventPublisher {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use axum::{
+        extract::State,
+        http::{HeaderMap, Uri},
+        routing::get,
+        Json, Router,
+    };
     use chrono::TimeZone;
+    use std::sync::{Arc, Mutex};
+
+    type CapturedRead = Arc<Mutex<Option<(HeaderMap, Uri)>>>;
+
+    async fn application_template(
+        State(captured): State<CapturedRead>,
+        headers: HeaderMap,
+        uri: Uri,
+    ) -> Json<Value> {
+        *captured.lock().unwrap() = Some((headers, uri));
+        Json(json!({
+            "id": "application-template-1",
+            "organization_id": "org-1",
+            "status": "ACTIVE",
+            "credential_template_id": "credential-template-1"
+        }))
+    }
+
+    #[tokio::test]
+    async fn template_lookup_uses_configured_native_owner_and_api_key() {
+        let captured = CapturedRead::default();
+        let app = Router::new()
+            .route("/v1/application-templates/{id}", get(application_template))
+            .with_state(captured.clone());
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let server = tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+        let api_key = "native-owner-api-key";
+        let provider =
+            HttpTemplateProvider::new(format!("http://{address}"), Some(api_key.to_owned()));
+
+        let template = provider.get("application-template-1").await.unwrap();
+        assert_eq!(template.id, "application-template-1");
+        let (headers, uri) = captured.lock().unwrap().take().unwrap();
+        assert_eq!(
+            uri.path(),
+            "/v1/application-templates/application-template-1"
+        );
+        assert_eq!(headers.get("x-api-key").unwrap(), api_key);
+        server.abort();
+    }
 
     #[test]
     fn approval_correlation_is_identical_on_both_event_boundaries() {

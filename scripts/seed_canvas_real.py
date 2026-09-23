@@ -34,13 +34,18 @@ from urllib.request import Request, urlopen
 REPO_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(REPO_ROOT / "packages"))
 
-from marty_common.system_ids import (  # pylint: disable=import-error
+from marty_common.system_ids import (  # noqa: E402  # pylint: disable=import-error
     MARTY_CANVAS_MIP_QUIZ_OPEN_BADGE_APPLICATION_TEMPLATE_ID,
     MARTY_CANVAS_MIP_QUIZ_OPEN_BADGE_TEMPLATE_ID,
     MARTY_DEFAULT_ORG_ID,
     MARTY_VERIFIED_MEMBER_BADGE_APPLICATION_TEMPLATE_ID,
     MARTY_VERIFIED_MEMBER_BADGE_TEMPLATE_ID,
 )
+
+if __package__:
+    from .operator_gateway import GatewayActorConfigurationError, resolve_gateway_actor
+else:
+    from operator_gateway import GatewayActorConfigurationError, resolve_gateway_actor
 
 
 CANVAS_RAILS_RESULT_PREFIX = "__CANVAS_LTI_RESULT__"
@@ -308,6 +313,8 @@ def _lti_experience_launch_url(connector_cfg: "ConnectorSeedConfig", platform_id
 class ConnectorSeedConfig:
     issuance_base_url: str
     issuance_api_key: str
+    internal_issuance_base_url: str
+    internal_issuance_api_key: str
     organization_id: str
     canvas_account_id: str
     credential_template_id: str
@@ -1989,9 +1996,9 @@ def _create_canvas_demo_application(
     }
     result = _json_request(
         "POST",
-        f"{connector_cfg.issuance_base_url.rstrip('/')}/internal/applications",
+        f"{connector_cfg.internal_issuance_base_url.rstrip('/')}/internal/applications",
         payload=payload,
-        headers=_connector_headers(connector_cfg.issuance_api_key),
+        headers=_connector_headers(connector_cfg.internal_issuance_api_key),
     )
     if not isinstance(result, dict) or not result.get("id"):
         raise RuntimeError("Demo application create did not return an application payload")
@@ -2490,7 +2497,13 @@ def main() -> int:
     args = parser.parse_args()
 
     _load_dotenv(Path(args.env_file))
-    raw_issuance_api_key = os.environ.get("ISSUANCE_API_KEY", "").strip()
+    try:
+        gateway = resolve_gateway_actor(
+            required_scopes=("integrations:read", "integrations:write")
+        )
+    except GatewayActorConfigurationError as exc:
+        print(f"ERROR: {exc}")
+        return 2
     raw_canvas_api_base_url = os.environ.get("CANVAS_API_BASE_URL", "http://localhost:8088").strip()
     raw_canvas_connector_base_url = os.environ.get("CANVAS_CONNECTOR_BASE_URL", "").strip()
     raw_lti_tool_base_url = (
@@ -2509,6 +2522,29 @@ def main() -> int:
         or (f"https://{raw_canvas_public_host}" if raw_canvas_public_host else raw_canvas_api_base_url)
     ).rstrip("/")
     open_badge_scenario_enabled = _bool_env("CANVAS_OPEN_BADGE_SCENARIO_ENABLED", True)
+    demo_application_seed_enabled = _bool_env("CANVAS_DEMO_APPLICATION_SEED_ENABLED", True)
+    internal_issuance_base_url = os.environ.get(
+        "ISSUANCE_INTERNAL_API_BASE_URL", ""
+    ).strip().rstrip("/")
+    internal_issuance_api_key = os.environ.get("ISSUANCE_API_KEY", "").strip()
+    if demo_application_seed_enabled and (
+        not internal_issuance_base_url or not internal_issuance_api_key
+    ):
+        print(
+            "ERROR: Canvas demo application seeding requires "
+            "ISSUANCE_INTERNAL_API_BASE_URL and ISSUANCE_API_KEY for the direct "
+            "internal issuance operation."
+        )
+        return 2
+    if (
+        demo_application_seed_enabled
+        and internal_issuance_base_url.rstrip("/") == gateway.base_url
+    ):
+        print(
+            "ERROR: ISSUANCE_INTERNAL_API_BASE_URL must target the issuance service "
+            "directly, not the public gateway."
+        )
+        return 2
     default_credential_template_id = (
         MARTY_CANVAS_MIP_QUIZ_OPEN_BADGE_TEMPLATE_ID
         if open_badge_scenario_enabled
@@ -2523,8 +2559,10 @@ def main() -> int:
     default_program_delivery_mode = "wallet_plus_canvas_mirror" if open_badge_scenario_enabled else "wallet_only"
 
     connector_cfg = ConnectorSeedConfig(
-        issuance_base_url=os.environ.get("ISSUANCE_API_BASE_URL", "http://localhost:8000"),
-        issuance_api_key=raw_issuance_api_key or "dev-issuance-api-key",
+        issuance_base_url=gateway.base_url,
+        issuance_api_key=gateway.api_key,
+        internal_issuance_base_url=internal_issuance_base_url,
+        internal_issuance_api_key=internal_issuance_api_key,
         organization_id=os.environ.get("CANVAS_ORGANIZATION_ID", MARTY_DEFAULT_ORG_ID),
         canvas_account_id=os.environ.get("CANVAS_ACCOUNT_ID", "canvas-real-account-1"),
         credential_template_id=os.environ.get(
@@ -2558,7 +2596,7 @@ def main() -> int:
         program_binding_direct_issue=_bool_env("CANVAS_PROGRAM_BINDING_DIRECT_ISSUE", False),
         program_binding_score_threshold=int(os.environ.get("CANVAS_PROGRAM_BINDING_SCORE_THRESHOLD", "80")),
         open_badge_scenario_enabled=open_badge_scenario_enabled,
-        demo_application_seed_enabled=_bool_env("CANVAS_DEMO_APPLICATION_SEED_ENABLED", True),
+        demo_application_seed_enabled=demo_application_seed_enabled,
         demo_evidence_event_enabled=_bool_env("CANVAS_DEMO_EVIDENCE_EVENT_ENABLED", False),
         demo_wallet_claim_enabled=_bool_env("CANVAS_DEMO_WALLET_CLAIM_ENABLED", True),
         demo_mirror_publish_enabled=_bool_env("CANVAS_DEMO_MIRROR_PUBLISH_ENABLED", True),
@@ -2572,8 +2610,6 @@ def main() -> int:
         ),
     )
 
-    if not raw_issuance_api_key:
-        print("INFO: ISSUANCE_API_KEY not set; using local default dev-issuance-api-key.")
     if not raw_canvas_connector_base_url:
         print(
             "INFO: CANVAS_CONNECTOR_BASE_URL not set; "

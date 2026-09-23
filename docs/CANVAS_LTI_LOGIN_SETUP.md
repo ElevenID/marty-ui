@@ -28,8 +28,9 @@ Canvas AGS/evidence event -> MIP EvidenceFact -> policy approval -> issuance -> 
 Verify the ElevenID-side Canvas platform.
 
 ```bash
-curl -s -H "X-API-Key: dev-issuance-api-key" \
-  "http://localhost:8005/v1/integrations/canvas/platforms?organization_id=00000000-0000-0000-0000-000000000001" | jq
+: "${MARTY_API_KEY:?set an organization API key with integrations:read}"
+curl -s -H "X-API-Key: ${MARTY_API_KEY}" \
+  "${MARTY_API_BASE_URL:-http://localhost:8000}/v1/integrations/canvas/platforms?organization_id=00000000-0000-0000-0000-000000000001" | jq
 ```
 
 Check:
@@ -44,8 +45,9 @@ Check:
 Refresh platform metadata:
 
 ```bash
-curl -s -X POST -H "X-API-Key: dev-issuance-api-key" \
-  "http://localhost:8005/v1/integrations/canvas/platforms/{platform_id}/jwks-refresh" | jq
+: "${MARTY_API_KEY:?set an organization API key with integrations:write}"
+curl -s -X POST -H "X-API-Key: ${MARTY_API_KEY}" \
+  "${MARTY_API_BASE_URL:-http://localhost:8000}/v1/integrations/canvas/platforms/{platform_id}/jwks-refresh" | jq
 ```
 
 ### Feature 2: Canvas Program Binding
@@ -53,8 +55,9 @@ curl -s -X POST -H "X-API-Key: dev-issuance-api-key" \
 Verify at least one enabled binding maps the platform/course activity to an ElevenID credential flow.
 
 ```bash
-curl -s -H "X-API-Key: dev-issuance-api-key" \
-  "http://localhost:8005/v1/integrations/canvas/program-bindings?organization_id=00000000-0000-0000-0000-000000000001" | jq
+: "${MARTY_API_KEY:?set an organization API key with integrations:read}"
+curl -s -H "X-API-Key: ${MARTY_API_KEY}" \
+  "${MARTY_API_BASE_URL:-http://localhost:8000}/v1/integrations/canvas/program-bindings?organization_id=00000000-0000-0000-0000-000000000001" | jq
 ```
 
 Check:
@@ -113,13 +116,16 @@ Expected:
 
 ### Feature 7: Canvas Evidence Event
 
-The preferred demo evidence path is AGS quiz score evidence.
+The preferred demo evidence path is the seeder's signed AGS quiz score event. The
+legacy ingest endpoint is disabled by default; enable it only for the demo and let
+the seeder construct the timestamp, nonce, and HMAC signature without printing the
+shared secret.
 
 ```bash
-curl -s -X POST \
-  -H "Content-Type: application/vnd.canvas.evidence+json" \
-  -d '{"application_id":"{application_id}","canvas_course_id":"1","canvas_user_id":"2","score_percent":92,"evidence_type":"canvas.quiz_score"}' \
-  "http://localhost:8005/v1/integrations/canvas/ags/score-events" | jq
+cd marty-ui
+CANVAS_LEGACY_EVENT_INGEST_ENABLED=true \
+CANVAS_DEMO_EVIDENCE_EVENT_ENABLED=true \
+PYTHONIOENCODING=utf-8 python scripts/seed_canvas_real.py --env-file .env.tunnel.beta.local
 ```
 
 Check:
@@ -176,7 +182,9 @@ The seeder is idempotent and now creates:
 
 Minimum ElevenID values:
 
-- `ISSUANCE_API_KEY`
+- `MARTY_API_KEY` (organization-scoped gateway actor key)
+- `MARTY_API_BASE_URL` (defaults to `http://localhost:8000`)
+- `ISSUANCE_INTERNAL_API_BASE_URL` and `ISSUANCE_API_KEY` when demo application seeding is enabled; the URL must address the issuance service directly, because the gateway rejects `/internal/*`
 - `CANVAS_ORGANIZATION_ID`
 - `CANVAS_CREDENTIAL_TEMPLATE_ID`
 - `CANVAS_APPLICATION_TEMPLATE_ID`

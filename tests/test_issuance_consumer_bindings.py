@@ -11,15 +11,44 @@ ROOT = Path(__file__).resolve().parents[1]
 TARGET = "ISSUANCE_GRPC_TARGET"
 PRIVATE = "DIDCOMM_ALLOW_PRIVATE_IPS"
 UNUSED_PRIVATE = "DIDCOMM_ALLOW_PRIVATE_ENDPOINTS"
+NATIVE_URL = "http://issuance-native:8005"
+LEGACY_URL = "http://issuance:8005"
+
+
+class UniqueKeyLoader(yaml.SafeLoader):
+    pass
+
+
+def unique_mapping(loader, node, deep=False):
+    seen = set()
+    for key_node, _ in node.value:
+        if key_node.tag == "tag:yaml.org,2002:merge":
+            continue
+        key = loader.construct_object(key_node, deep=deep)
+        assert key not in seen, f"Duplicate YAML mapping key: {key}"
+        seen.add(key)
+    return yaml.SafeLoader.construct_mapping(loader, node, deep=deep)
+
+
+UniqueKeyLoader.add_constructor(
+    yaml.resolver.BaseResolver.DEFAULT_MAPPING_TAG, unique_mapping
+)
+
+
+def load(path):
+    return yaml.load((ROOT / path).read_text(), Loader=UniqueKeyLoader)
+
+
+def load_all(path):
+    return list(yaml.load_all((ROOT / path).read_text(), Loader=UniqueKeyLoader))
 
 
 def source_models():
-    documents = list(
-        yaml.safe_load_all((ROOT / "k8s/oracle/07-microservices.yaml").read_text())
-    )
-    config = yaml.safe_load((ROOT / "k8s/oracle/01-configmap.yaml").read_text())
-    compose = yaml.safe_load((ROOT / "docker-compose.selfhost.prod.yml").read_text())
-    return documents, config, compose
+    documents = load_all("k8s/oracle/07-microservices.yaml")
+    config = load("k8s/oracle/01-configmap.yaml")
+    base = load("docker-compose.base.yml")
+    selfhost = load("docker-compose.selfhost.prod.yml")
+    return documents, config, base, selfhost
 
 
 def resource(documents, kind, name):
@@ -75,7 +104,8 @@ def assert_kubernetes_bindings(documents, config):
     assert config["metadata"]["name"] == "marty-config"
     assert config["metadata"]["namespace"] == "marty-prod"
     assert {key: value for key, value in config["data"].items() if target_key(key)} == {
-        "ISSUANCE_SERVICE_URL": "http://issuance:8005",
+        "ISSUANCE_SERVICE_URL": LEGACY_URL,
+        "ISSUANCE_NATIVE_SERVICE_URL": LEGACY_URL,
         "ES_GRPC_TARGET": "event-stream:9015",
     }
     assert environment(flow)[TARGET] == {"value": "issuance:9005"}
@@ -115,14 +145,22 @@ def assert_kubernetes_bindings(documents, config):
                     )
                     assert key not in actual
                     actual[key] = targets
-    http_alias = {
+    legacy_alias = {
         "valueFrom": {
             "configMapKeyRef": {"name": "marty-config", "key": "ISSUANCE_SERVICE_URL"}
         }
     }
+    native_alias = {
+        "valueFrom": {
+            "configMapKeyRef": {
+                "name": "marty-config",
+                "key": "ISSUANCE_NATIVE_SERVICE_URL",
+            }
+        }
+    }
     expected = {
         "gateway": {
-            "ISSUANCE_SERVICE_URL": http_alias,
+            "ISSUANCE_SERVICE_URL": legacy_alias,
             "AUTH_GRPC_TARGET": {"value": "auth:9001"},
         },
         "organization": {"ES_GRPC_TARGET": {"value": "event-stream:9015"}},
@@ -135,10 +173,16 @@ def assert_kubernetes_bindings(documents, config):
             "ORG_GRPC_TARGET": {"value": "organization:9002"},
             "CT_GRPC_TARGET": {"value": "credential-template:9003"},
         },
-        "applicant": {"ISSUANCE_SERVICE_URL": http_alias},
+        "auth": {"ISSUANCE_NATIVE_SERVICE_URL": native_alias},
+        "applicant": {"ISSUANCE_NATIVE_SERVICE_URL": native_alias},
+        "presentation-policy": {"ISSUANCE_NATIVE_SERVICE_URL": native_alias},
         "revocation-profile": {"ORG_GRPC_TARGET": {"value": "organization:9002"}},
         "device-registration": {"ORG_GRPC_TARGET": {"value": "organization:9002"}},
-        "flow": {TARGET: {"value": "issuance:9005"}},
+        "flow": {
+            TARGET: {"value": "issuance:9005"},
+            "ISSUANCE_SERVICE_URL": legacy_alias,
+            "ISSUANCE_NATIVE_SERVICE_URL": native_alias,
+        },
     }
     assert actual == {
         ("Deployment", name, "containers", name): values
@@ -210,8 +254,12 @@ def assert_selfhost_bindings(compose):
         expected[name]["PP_GRPC_TARGET"] = "presentation-policy:9009"
     for name in ("auth", "applicant"):
         expected[name]["FLOW_GRPC_TARGET"] = "flow:9011"
-    for name in ("gateway", "auth", "applicant", "presentation-policy", "flow"):
-        expected[name]["ISSUANCE_SERVICE_URL"] = "http://issuance:8005"
+    expected["gateway"]["ISSUANCE_SERVICE_URL"] = LEGACY_URL
+    expected["gateway"]["ISSUANCE_NATIVE_SERVICE_URL"] = NATIVE_URL
+    for name in ("auth", "applicant", "presentation-policy"):
+        expected[name]["ISSUANCE_NATIVE_SERVICE_URL"] = NATIVE_URL
+    expected["flow"]["ISSUANCE_SERVICE_URL"] = LEGACY_URL
+    expected["flow"]["ISSUANCE_NATIVE_SERVICE_URL"] = NATIVE_URL
     expected["gateway"]["AUTH_GRPC_TARGET"] = "auth:9001"
     expected["flow"][TARGET] = "issuance-native:9005"
     expected["issuance-native"] = {
@@ -220,7 +268,6 @@ def assert_selfhost_bindings(compose):
         "CT_GRPC_TARGET": "credential-template:9003",
         "RP_GRPC_TARGET": "revocation-profile:9013",
     }
-    expected["gateway"]["ISSUANCE_NATIVE_SERVICE_URL"] = "http://issuance-native:8005"
     actual = {
         name: {
             key: value
@@ -232,15 +279,56 @@ def assert_selfhost_bindings(compose):
     assert {name: values for name, values in actual.items() if values} == expected
 
 
-def test_legacy_source_bindings_match_actual_service_and_restrictive_policy():
-    documents, config, compose = source_models()
+def assert_compose_owner_split(compose):
+    services = compose["services"]
+    expected = {
+        "gateway": {
+            "ISSUANCE_SERVICE_URL": LEGACY_URL,
+            "ISSUANCE_NATIVE_SERVICE_URL": NATIVE_URL,
+        },
+        "auth": {"ISSUANCE_NATIVE_SERVICE_URL": NATIVE_URL},
+        "applicant": {"ISSUANCE_NATIVE_SERVICE_URL": NATIVE_URL},
+        "presentation-policy": {"ISSUANCE_NATIVE_SERVICE_URL": NATIVE_URL},
+        "flow": {
+            "ISSUANCE_SERVICE_URL": LEGACY_URL,
+            "ISSUANCE_NATIVE_SERVICE_URL": NATIVE_URL,
+        },
+    }
+    actual = {
+        name: {
+            key: value
+            for key, value in service.get("environment", {}).items()
+            if key in {"ISSUANCE_SERVICE_URL", "ISSUANCE_NATIVE_SERVICE_URL"}
+        }
+        for name, service in services.items()
+        if name in expected
+    }
+    assert {name: values for name, values in actual.items() if values} == expected
+    for name in ("auth", "applicant", "presentation-policy"):
+        assert services[name]["depends_on"].get("issuance-native") == {
+            "condition": "service_healthy"
+        }
+        assert "issuance" not in services[name]["depends_on"]
+    for name in ("gateway", "flow"):
+        assert services[name]["depends_on"].get("issuance") == {
+            "condition": "service_healthy"
+        }
+        assert services[name]["depends_on"].get("issuance-native") == {
+            "condition": "service_healthy"
+        }
+
+
+def test_source_bindings_match_actual_service_and_restrictive_policy():
+    documents, config, base, selfhost = source_models()
     assert_kubernetes_bindings(documents, config)
-    assert_selfhost_bindings(compose)
+    assert_compose_owner_split(base)
+    assert_compose_owner_split(selfhost)
+    assert_selfhost_bindings(selfhost)
 
 
 @pytest.mark.parametrize("mutation", ["duplicate", "other-reference"])
 def test_gateway_retains_exactly_one_unchanged_signing_key_reference(mutation):
-    documents, config, _ = source_models()
+    documents, config, _, _ = source_models()
     gateway = container(documents, "gateway", "gateway")
     entry = next(
         entry
@@ -271,7 +359,7 @@ def test_gateway_retains_exactly_one_unchanged_signing_key_reference(mutation):
     ],
 )
 def test_kubernetes_guard_rejects_misplaced_or_unrelated_target_changes(mutation):
-    documents, config, _ = source_models()
+    documents, config, _, _ = source_models()
     flow = container(documents, "flow", "flow")
     target = next(entry for entry in flow["env"] if entry["name"] == TARGET)
     if mutation == "missing":
@@ -323,7 +411,7 @@ def test_kubernetes_guard_rejects_misplaced_or_unrelated_target_changes(mutation
     ],
 )
 def test_selfhost_guard_rejects_policy_drift_and_unrelated_target_changes(mutation):
-    _, _, compose = source_models()
+    _, _, _, compose = source_models()
     services = compose["services"]
     env = services["issuance"]["environment"]
     if mutation == "typo":
@@ -356,7 +444,7 @@ def test_selfhost_guard_rejects_policy_drift_and_unrelated_target_changes(mutati
     "mutation", ["issuance-key", "signing-key", "mount", "duplicate-mount"]
 )
 def test_selfhost_flow_requires_paired_existing_secret_identity(mutation):
-    _, _, compose = source_models()
+    _, _, _, compose = source_models()
     flow = compose["services"]["flow"]
     if mutation == "issuance-key":
         flow["environment"]["ISSUANCE_API_KEY_FILE"] = "/run/secrets/unowned"
@@ -370,3 +458,65 @@ def test_selfhost_flow_requires_paired_existing_secret_identity(mutation):
         flow["secrets"].append("issuance_api_key")
     with pytest.raises(AssertionError):
         assert_selfhost_bindings(compose)
+
+
+@pytest.mark.parametrize("family", ["base", "selfhost"])
+@pytest.mark.parametrize(
+    ("service", "setting"),
+    [
+        ("auth", "ISSUANCE_NATIVE_SERVICE_URL"),
+        ("applicant", "ISSUANCE_NATIVE_SERVICE_URL"),
+        ("presentation-policy", "ISSUANCE_NATIVE_SERVICE_URL"),
+        ("flow", "ISSUANCE_SERVICE_URL"),
+        ("flow", "ISSUANCE_NATIVE_SERVICE_URL"),
+        ("gateway", "ISSUANCE_SERVICE_URL"),
+        ("gateway", "ISSUANCE_NATIVE_SERVICE_URL"),
+    ],
+)
+@pytest.mark.parametrize("fault", ["missing", "wrong"])
+def test_compose_owner_split_rejects_missing_or_misbound_urls(
+    family, service, setting, fault
+):
+    _, _, base, selfhost = source_models()
+    compose = base if family == "base" else selfhost
+    environment = compose["services"][service]["environment"]
+    if fault == "missing":
+        environment.pop(setting)
+    else:
+        environment[setting] = (
+            LEGACY_URL if setting.endswith("NATIVE_SERVICE_URL") else NATIVE_URL
+        )
+    with pytest.raises(AssertionError):
+        assert_compose_owner_split(compose)
+
+
+@pytest.mark.parametrize("family", ["base", "selfhost"])
+@pytest.mark.parametrize(
+    ("service", "dependency"),
+    [
+        ("auth", "issuance-native"),
+        ("applicant", "issuance-native"),
+        ("presentation-policy", "issuance-native"),
+        ("flow", "issuance"),
+        ("flow", "issuance-native"),
+        ("gateway", "issuance"),
+        ("gateway", "issuance-native"),
+    ],
+)
+def test_compose_owner_split_rejects_missing_health_dependency(
+    family, service, dependency
+):
+    _, _, base, selfhost = source_models()
+    compose = base if family == "base" else selfhost
+    compose["services"][service]["depends_on"].pop(dependency)
+    with pytest.raises(AssertionError):
+        assert_compose_owner_split(compose)
+
+
+def test_strict_loader_rejects_duplicate_environment_and_dependency_keys():
+    for text in [
+        "services:\n  flow:\n    environment:\n      ISSUANCE_SERVICE_URL: one\n      ISSUANCE_SERVICE_URL: two\n",
+        "services:\n  flow:\n    depends_on:\n      issuance-native: {}\n      issuance-native: {}\n",
+    ]:
+        with pytest.raises(AssertionError, match="Duplicate YAML mapping key"):
+            yaml.load(text, Loader=UniqueKeyLoader)

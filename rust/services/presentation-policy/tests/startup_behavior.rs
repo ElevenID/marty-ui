@@ -24,7 +24,7 @@ fn compose_compatible_development_configuration_is_normalized() {
     assert!(config.database_url.starts_with("postgresql://"));
     assert_eq!(
         config.credential_status_url_template,
-        "http://issuance:8005/v1/issuance/credentials/{credential_id}/status"
+        "http://issuance-native:8005/v1/issuance/credentials/{credential_id}/status"
     );
     assert!(config.workload_server_tls.is_none());
 }
@@ -71,7 +71,7 @@ fn deployed_configuration_supports_dynamic_issuers_without_static_scope() {
     let config = PresentationPolicyServiceConfig::from_values(configured).unwrap();
     assert_eq!(
         config.credential_status_url_template,
-        "http://issuance:8005/v1/issuance/credentials/{credential_id}/status"
+        "http://issuance-native:8005/v1/issuance/credentials/{credential_id}/status"
     );
 }
 

@@ -14,7 +14,6 @@ pub const CANVAS_SESSION_RESPONSE_MAX_BYTES: usize = 1024 * 1024;
 
 #[async_trait]
 pub trait CanvasExperienceSessionProvider: Send + Sync {
-    async fn by_state(&self, state: &str) -> Result<Value, PortError>;
     async fn current(&self, bearer_token: &str) -> Result<Value, PortError>;
 }
 
@@ -91,22 +90,6 @@ impl HttpCanvasExperienceSessionProvider {
 
 #[async_trait]
 impl CanvasExperienceSessionProvider for HttpCanvasExperienceSessionProvider {
-    async fn by_state(&self, state: &str) -> Result<Value, PortError> {
-        let state = state.trim();
-        if state.is_empty() {
-            return Err(PortError::new(
-                "canvas_lti_state_required",
-                "Canvas LTI state is required",
-            ));
-        }
-        let encoded: String = url::form_urlencoded::byte_serialize(state.as_bytes()).collect();
-        self.get(
-            &format!("/v1/integrations/canvas/lti/experience-sessions/{encoded}"),
-            None,
-        )
-        .await
-    }
-
     async fn current(&self, bearer_token: &str) -> Result<Value, PortError> {
         let bearer_token = bearer_token.trim();
         if bearer_token.is_empty() {

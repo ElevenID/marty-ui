@@ -313,6 +313,11 @@ spec:
                 configMapKeyRef:
                   name: marty-config
                   key: AUTH_SERVICE_INTERNAL_URL
+            - name: ISSUANCE_NATIVE_SERVICE_URL
+              valueFrom:
+                configMapKeyRef:
+                  name: marty-config
+                  key: ISSUANCE_NATIVE_SERVICE_URL
           volumeMounts:
             - name: auth-workload-tls
               mountPath: /var/run/secrets/marty/workload
@@ -825,6 +830,18 @@ spec:
                   name: marty-config
                   key: CANVAS_CREDENTIALS_ASSERTION_SCOPE
                   optional: true
+            - name: CANVAS_CREDENTIALS_ASSERTION_URL_TEMPLATE
+              valueFrom:
+                configMapKeyRef:
+                  name: marty-config
+                  key: CANVAS_CREDENTIALS_ASSERTION_URL_TEMPLATE
+                  optional: true
+            - name: CANVAS_CREDENTIALS_ASSERTION_NARRATIVE
+              valueFrom:
+                configMapKeyRef:
+                  name: marty-config
+                  key: CANVAS_CREDENTIALS_ASSERTION_NARRATIVE
+                  optional: true
             - name: CANVAS_CREDENTIALS_PROVENANCE_BASE_URL
               valueFrom:
                 configMapKeyRef:
@@ -1139,11 +1156,11 @@ spec:
                   key: RABBITMQ_URL
             - name: APPLICANT_DATA_FILE
               value: "/app/data/applicant_store.json"
-            - name: ISSUANCE_SERVICE_URL
+            - name: ISSUANCE_NATIVE_SERVICE_URL
               valueFrom:
                 configMapKeyRef:
                   name: marty-config
-                  key: ISSUANCE_SERVICE_URL
+                  key: ISSUANCE_NATIVE_SERVICE_URL
           resources:
             requests:
               memory: "256Mi"
@@ -1492,6 +1509,11 @@ spec:
                 secretKeyRef:
                   name: marty-secrets
                   key: RABBITMQ_URL
+            - name: ISSUANCE_NATIVE_SERVICE_URL
+              valueFrom:
+                configMapKeyRef:
+                  name: marty-config
+                  key: ISSUANCE_NATIVE_SERVICE_URL
           volumeMounts:
             - name: presentation-policy-workload-tls
               mountPath: /var/run/secrets/marty/workload
@@ -1698,6 +1720,16 @@ spec:
               value: "8011"
             - name: ISSUANCE_GRPC_TARGET
               value: "issuance:9005"
+            - name: ISSUANCE_SERVICE_URL
+              valueFrom:
+                configMapKeyRef:
+                  name: marty-config
+                  key: ISSUANCE_SERVICE_URL
+            - name: ISSUANCE_NATIVE_SERVICE_URL
+              valueFrom:
+                configMapKeyRef:
+                  name: marty-config
+                  key: ISSUANCE_NATIVE_SERVICE_URL
             - name: DATABASE_URL
               valueFrom:
                 secretKeyRef:

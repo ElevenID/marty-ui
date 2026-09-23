@@ -30,7 +30,7 @@ pub struct AuthServiceConfig {
     pub credential_login_webhook_secret: String,
     pub auth_service_internal_url: String,
     pub applicant_service_url: String,
-    pub issuance_service_url: String,
+    pub issuance_native_service_url: String,
     pub canvas_lti_session_ttl_seconds: u64,
     pub impersonation_handoff_cookie_name: String,
     pub credential_login_require_existing_keycloak_user: bool,
@@ -210,9 +210,9 @@ impl AuthServiceConfig {
                 get("APPLICANT_SERVICE_URL").unwrap_or("http://applicant:8006"),
                 "APPLICANT_SERVICE_URL",
             )?,
-            issuance_service_url: origin(
-                get("ISSUANCE_SERVICE_URL").unwrap_or("http://issuance:8005"),
-                "ISSUANCE_SERVICE_URL",
+            issuance_native_service_url: origin(
+                get("ISSUANCE_NATIVE_SERVICE_URL").unwrap_or("http://issuance-native:8005"),
+                "ISSUANCE_NATIVE_SERVICE_URL",
             )?,
             canvas_lti_session_ttl_seconds: number(
                 get("CANVAS_LTI_SESSION_TTL_SECONDS"),

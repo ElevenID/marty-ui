@@ -77,6 +77,10 @@ fn baseline(environment: &str) -> BTreeMap<String, String> {
             "http://deployment-profile:8010".into(),
         ),
         ("ISSUANCE_SERVICE_URL".into(), "http://issuance:8006".into()),
+        (
+            "ISSUANCE_NATIVE_SERVICE_URL".into(),
+            "http://issuance-native:8005".into(),
+        ),
         ("GRPC_SERVICE_TOKEN".into(), "s".repeat(32)),
         ("FLOW_WEBHOOK_SECRET".into(), "w".repeat(32)),
         ("FLOW_APPLICATION_EVENT_HMAC_KEY".into(), "a".repeat(32)),
@@ -115,7 +119,7 @@ fn language_neutral_startup_contract_is_frozen() {
     assert_eq!(contract.schema_version, 1);
     assert_eq!(contract.deployed_environments, ["beta", "production"]);
     assert_eq!(contract.required_always, ["DATABASE_URL", "REDIS_URL"]);
-    assert_eq!(contract.required_when_deployed.len(), 22);
+    assert_eq!(contract.required_when_deployed.len(), 23);
     assert_eq!(contract.minimum_secret_bytes, 32);
     assert_eq!(contract.secret_file_suffix, "_FILE");
     assert_eq!(
@@ -199,6 +203,8 @@ fn deployed_configuration_is_complete_and_normalized() {
     assert_eq!(config.oid4vp_url_query_maximum_length, 8_192);
     assert_eq!(config.verifier_expected_origins, ["https://issuer.example"]);
     assert_eq!(config.organization_grpc_target, "http://organization:9002");
+    assert_eq!(config.issuance_url, "http://issuance:8006");
+    assert_eq!(config.issuance_native_url, "http://issuance-native:8005");
     assert!(config.workload_client_tls.is_some());
     assert!(config.workload_server_tls.is_some());
 }
@@ -219,6 +225,7 @@ fn deployed_configuration_fails_closed() {
         "TRUST_PROFILE_SERVICE_URL",
         "DEPLOYMENT_PROFILE_SERVICE_URL",
         "ISSUANCE_SERVICE_URL",
+        "ISSUANCE_NATIVE_SERVICE_URL",
         "GRPC_SERVICE_TOKEN",
         "FLOW_WEBHOOK_SECRET",
         "SIGNING_KEYS_INTERNAL_API_KEY",
@@ -263,6 +270,18 @@ fn deployed_configuration_fails_closed() {
         FlowServiceConfig::from_values(credentialed),
         Err(FlowConfigError::Invalid {
             name: "SIGNING_KEYS_INTERNAL_URL"
+        })
+    );
+
+    let mut credentialed_native = baseline("beta");
+    credentialed_native.insert(
+        "ISSUANCE_NATIVE_SERVICE_URL".into(),
+        "https://user:password@issuance-native".into(),
+    );
+    assert_eq!(
+        FlowServiceConfig::from_values(credentialed_native),
+        Err(FlowConfigError::Invalid {
+            name: "ISSUANCE_NATIVE_SERVICE_URL"
         })
     );
 

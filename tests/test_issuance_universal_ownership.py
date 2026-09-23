@@ -112,17 +112,25 @@ def test_direct_first_party_clients_use_gateway_not_a_python_host_port() -> None
     assert CONTRACT["direct_client_boundary"] == "gateway"
 
 
-def test_template_wallet_diagnostic_uses_the_current_gateway_route_and_auth() -> None:
-    source = (ROOT / "scripts/check_template_wallets.py").read_text(encoding="utf-8")
-    gateway_contract = (ROOT / "rust/services/gateway/src/contract.rs").read_text(
-        encoding="utf-8"
-    )
-    assert '("/v1/credential-templates", "credential-templates")' in gateway_contract
-    assert 'f"{API_BASE_URL}/v1/credential-templates/{TEMPLATE_ID}"' in source
-    assert 'params={"organization_id": ORG_ID}' in source
-    assert 'headers={"X-API-Key": API_KEY}' in source
-    assert "MARTY_API_KEY" in source
-    assert "/v1/issuance/templates" not in source
+def test_credential_format_diagnostic_authenticates_gateway_initiation() -> None:
+    source = (ROOT / "scripts/test_credential_format.py").read_text(encoding="utf-8")
+    assert "resolve_gateway_actor" in source
+    assert 'headers={"X-API-Key": api_key}' in source
+    assert 'f"{api_base_url}/v1/issuance/initiate"' in source
+
+
+def test_all_moved_diagnostics_use_the_shared_gateway_actor_boundary() -> None:
+    for relative in [
+        "scripts/test_credential_format.py",
+        "scripts/debug_issuance_response.py",
+        "scripts/seed_canvas_real.py",
+    ]:
+        source = (ROOT / relative).read_text(encoding="utf-8")
+        assert "resolve_gateway_actor" in source, relative
+        assert '"dev-issuance-api-key"' not in source, relative
+    helper = (ROOT / "scripts/operator_gateway.py").read_text(encoding="utf-8")
+    assert 'values.get("MARTY_API_KEY", "").strip()' in helper
+    assert 'values.get("ISSUANCE_API_KEY"' not in helper
 
 
 def test_production_and_kms_boundaries_remain_explicit() -> None:

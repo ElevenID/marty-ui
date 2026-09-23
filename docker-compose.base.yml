@@ -471,7 +471,7 @@ services:
       FLOW_WEBHOOK_SECRET: ${FLOW_WEBHOOK_SECRET:-dev-flow-webhook-secret-change-me}
       KEYCLOAK_TOKEN_EXCHANGE_ENABLED: ${KEYCLOAK_TOKEN_EXCHANGE_ENABLED:-false}
       AUTH_SERVICE_INTERNAL_URL: ${AUTH_SERVICE_INTERNAL_URL:-http://auth:8001}
-      ISSUANCE_SERVICE_URL: ${ISSUANCE_SERVICE_URL:-http://issuance:8005}
+      ISSUANCE_NATIVE_SERVICE_URL: http://issuance-native:8005
       CREDENTIAL_LOGIN_LISSI_DEEP_LINK_TEMPLATE: ${CREDENTIAL_LOGIN_LISSI_DEEP_LINK_TEMPLATE:-}
       CREDENTIAL_LOGIN_LISSI_ANDROID_DEEP_LINK_TEMPLATE: ${CREDENTIAL_LOGIN_LISSI_ANDROID_DEEP_LINK_TEMPLATE:-}
       CREDENTIAL_LOGIN_LISSI_IOS_DEEP_LINK_TEMPLATE: ${CREDENTIAL_LOGIN_LISSI_IOS_DEEP_LINK_TEMPLATE:-}
@@ -496,6 +496,8 @@ services:
       redis:
         condition: service_healthy
       flow:
+        condition: service_healthy
+      issuance-native:
         condition: service_healthy
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8001/health"]
@@ -623,7 +625,7 @@ services:
       FLOW_APPLICATION_EVENT_HMAC_KEY: ${FLOW_APPLICATION_EVENT_HMAC_KEY:-dev-flow-application-event-hmac-key-change-before-production}
       DATABASE_URL: postgresql+asyncpg://marty:${MARTY_DB_PASSWORD:-marty_dev_password}@postgres:5432/marty
       APPLICANT_DATA_FILE: /app/data/applicant_store.json
-      ISSUANCE_SERVICE_URL: http://issuance:8005
+      ISSUANCE_NATIVE_SERVICE_URL: http://issuance-native:8005
       ISSUANCE_API_KEY: ${ISSUANCE_API_KEY:-dev-issuance-api-key}
       APPLICATION_TEMPLATE_MIGRATION_MAP: ${APPLICATION_TEMPLATE_MIGRATION_MAP:-}
       NOTIFICATION_SERVICE_URL: http://notification:8007
@@ -640,6 +642,8 @@ services:
     depends_on:
       db-migrate:
         condition: service_completed_successfully
+      issuance-native:
+        condition: service_healthy
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8006/health"]
       interval: 10s
@@ -731,7 +735,7 @@ services:
       DID_PUBLIC_FALLBACK_ENABLED: ${DID_PUBLIC_FALLBACK_ENABLED:-false}
       DID_WEB_ALLOWED_HOSTS: ${DID_WEB_ALLOWED_HOSTS:-}
       TRUST_PROFILE_SERVICE_URL: http://trust-profile:8004
-      ISSUANCE_SERVICE_URL: http://issuance:8005
+      ISSUANCE_NATIVE_SERVICE_URL: http://issuance-native:8005
       ISSUANCE_API_KEY: ${ISSUANCE_API_KEY:-dev-issuance-api-key}
       PUBLIC_DOMAIN: ${PUBLIC_DOMAIN:-localhost}
       PUBLIC_BASE_URL: ${PUBLIC_API_URL:-http://gateway:8000}
@@ -743,6 +747,8 @@ services:
     depends_on:
       db-migrate:
         condition: service_completed_successfully
+      issuance-native:
+        condition: service_healthy
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8009/health"]
       interval: 10s
@@ -827,6 +833,7 @@ services:
       CT_GRPC_TARGET: credential-template:9003
       ISSUANCE_GRPC_TARGET: issuance-native:9005
       ISSUANCE_SERVICE_URL: http://issuance:8005
+      ISSUANCE_NATIVE_SERVICE_URL: http://issuance-native:8005
       CREDENTIAL_TEMPLATE_SERVICE_URL: http://credential-template:8003
       TRUST_PROFILE_SERVICE_URL: http://trust-profile:8004
       DEPLOYMENT_PROFILE_SERVICE_URL: http://deployment-profile:8010
@@ -863,6 +870,10 @@ services:
       credential-template:
         condition: service_healthy
       presentation-policy:
+        condition: service_healthy
+      issuance:
+        condition: service_healthy
+      issuance-native:
         condition: service_healthy
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8011/health"]

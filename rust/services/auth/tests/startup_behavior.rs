@@ -43,6 +43,10 @@ fn complete_beta_configuration_is_normalized_without_hidden_fallbacks() {
     assert_eq!(config.organization_grpc_target, "http://organization:9002");
     assert_eq!(config.event_stream_grpc_target, "http://event-stream:9015");
     assert_eq!(config.grpc_service_token, "g".repeat(32));
+    assert_eq!(
+        config.issuance_native_service_url,
+        "http://issuance-native:8005"
+    );
     assert_eq!(config.oidc.issuer_url, "http://localhost:8180/realms/marty");
     assert_eq!(
         config.oidc.redirect_uri,

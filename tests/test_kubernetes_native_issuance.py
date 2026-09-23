@@ -49,7 +49,7 @@ def test_duplicate_common_organization_binding_cleanup_preserves_complete_mappin
     assert source.count(binding) == source.count(anchor) == 1
     original = source.replace(anchor, anchor + binding)
     assert hashlib.sha256(original.encode()).hexdigest() == (
-        "0e770f9579987ed58a7ae1896bfa01b9437c56815d616adf63b6995e693c8e4b"
+        "94188015aa6a471d6aba8c8713cd38ede22531676e588dd21da913bf266c3259"
     )
     # This historical parser overwrites the identical duplicate; the actual
     # Rust renderer's separate test still refuses duplicate mappings strictly.
@@ -312,6 +312,15 @@ def test_all_production_native_configuration_inputs_have_a_classification():
         "CANVAS_MIRROR_ALERT_WEBHOOK_URL",
         "CANVAS_MIRROR_ALERT_WEBHOOK_TIMEOUT_SECONDS",
     }
+    publication_controls = {
+        "CANVAS_CREDENTIALS_ASSERTION_URL_TEMPLATE",
+        "CANVAS_CREDENTIALS_ASSERTION_NARRATIVE",
+        "CANVAS_CREDENTIALS_PROVENANCE_BASE_URL",
+        "CANVAS_CREDENTIALS_RECIPIENT_HASHED",
+        "CANVAS_CREDENTIALS_ALLOW_DUPLICATE_AWARDS",
+    }
+    assert constants("INHERITED_SETTINGS") >= publication_controls
+    assert constants("OPTIONAL_SETTINGS").isdisjoint(publication_controls)
 
 
 def test_existing_three_way_management_identity_and_legacy_owner_are_preserved():

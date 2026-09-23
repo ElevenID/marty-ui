@@ -114,7 +114,8 @@ fn synthetic_inputs() -> Result<BTreeMap<String, String>> {
     }
     let expected:BTreeSet<_>="BAO_ADDR CANVAS_CREDENTIAL_ISSUER_PROFILE_IDS
         CANVAS_CREDENTIALS_ALLOW_DUPLICATE_AWARDS CANVAS_CREDENTIALS_API_BASE_URL
-        CANVAS_CREDENTIALS_API_ORIGIN_ALLOWLIST CANVAS_CREDENTIALS_ASSERTION_SCOPE
+        CANVAS_CREDENTIALS_API_ORIGIN_ALLOWLIST CANVAS_CREDENTIALS_ASSERTION_NARRATIVE
+        CANVAS_CREDENTIALS_ASSERTION_SCOPE CANVAS_CREDENTIALS_ASSERTION_URL_TEMPLATE
         CANVAS_CREDENTIALS_BADGECLASS_ID CANVAS_CREDENTIALS_ISSUER_ID
         CANVAS_CREDENTIALS_PROVENANCE_BASE_URL CANVAS_CREDENTIALS_PROVIDER CANVAS_CREDENTIALS_RECIPIENT_HASHED
         CANVAS_LEGACY_EVENT_INGEST_ENABLED CANVAS_LTI_EXPERIENCE_BASE_URL CANVAS_LTI_TOOL_ACTIVE_KID
@@ -141,6 +142,20 @@ fn synthetic_inputs() -> Result<BTreeMap<String, String>> {
         ("CORS_ORIGINS", "http://localhost:3000"),
         ("CANVAS_PORTABLE_INTEGRATION_ENABLED", "false"),
         ("CANVAS_LEGACY_EVENT_INGEST_ENABLED", "false"),
+        (
+            "CANVAS_CREDENTIALS_ASSERTION_URL_TEMPLATE",
+            "https://credentials.example/assertions/{assertion_id}",
+        ),
+        (
+            "CANVAS_CREDENTIALS_ASSERTION_NARRATIVE",
+            "Synthetic configured award narrative",
+        ),
+        (
+            "CANVAS_CREDENTIALS_PROVENANCE_BASE_URL",
+            "https://credentials.example/verify",
+        ),
+        ("CANVAS_CREDENTIALS_RECIPIENT_HASHED", "false"),
+        ("CANVAS_CREDENTIALS_ALLOW_DUPLICATE_AWARDS", "true"),
         ("RATE_LIMIT_RPM", "120"),
         ("BAO_ADDR", "https://vault.example.com"),
         ("UNIVERSAL_RESOLVER_URL", "https://resolver.example"),
@@ -557,6 +572,24 @@ pub(super) fn render(value: &Value) -> Result<ResolvedRuntime> {
             .keys()
             .any(|v| v.starts_with("BAO") || v.starts_with("OPENBAO")),
     )?;
+    for (name, expected) in [
+        (
+            "CANVAS_CREDENTIALS_ASSERTION_URL_TEMPLATE",
+            "https://credentials.example/assertions/{assertion_id}",
+        ),
+        (
+            "CANVAS_CREDENTIALS_ASSERTION_NARRATIVE",
+            "Synthetic configured award narrative",
+        ),
+        (
+            "CANVAS_CREDENTIALS_PROVENANCE_BASE_URL",
+            "https://credentials.example/verify",
+        ),
+        ("CANVAS_CREDENTIALS_RECIPIENT_HASHED", "false"),
+        ("CANVAS_CREDENTIALS_ALLOW_DUPLICATE_AWARDS", "true"),
+    ] {
+        require(native.get(name).map(String::as_str) == Some(expected))?;
+    }
     require(
         native.get("DIDCOMM_ALLOW_PRIVATE_IPS").map(String::as_str)
             == if spec.allow_private_ips {
@@ -733,6 +766,24 @@ fn prepared_model_uses_actual_envsubst_and_rejects_identity_drift() {
         "https://issuer.example"
     );
     assert_eq!(prepared.common["data"]["CANVAS_PILOT_ORGANIZATION_IDS"], "");
+    for (name, expected) in [
+        (
+            "CANVAS_CREDENTIALS_ASSERTION_URL_TEMPLATE",
+            "https://credentials.example/assertions/{assertion_id}",
+        ),
+        (
+            "CANVAS_CREDENTIALS_ASSERTION_NARRATIVE",
+            "Synthetic configured award narrative",
+        ),
+        (
+            "CANVAS_CREDENTIALS_PROVENANCE_BASE_URL",
+            "https://credentials.example/verify",
+        ),
+        ("CANVAS_CREDENTIALS_RECIPIENT_HASHED", "false"),
+        ("CANVAS_CREDENTIALS_ALLOW_DUPLICATE_AWARDS", "true"),
+    ] {
+        assert_eq!(prepared.common["data"][name], expected);
+    }
     assert_eq!(
         prepared.common["data"]["AUTH_SERVICE_URL"],
         "http://auth:8001"

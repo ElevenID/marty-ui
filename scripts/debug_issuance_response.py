@@ -1,82 +1,100 @@
 #!/usr/bin/env python3
-"""Debug issuance service InitiateIssuance response."""
+"""Debug the gateway's InitiateIssuance response without logging secrets."""
 
 import json
-import httpx
 import logging
 
-logging.basicConfig(level=logging.INFO, format='%(message)s')
+import httpx
+
+if __package__:
+    from .operator_gateway import GatewayActorConfigurationError, resolve_gateway_actor
+else:
+    from operator_gateway import GatewayActorConfigurationError, resolve_gateway_actor
+
+
+logging.basicConfig(level=logging.INFO, format="%(message)s")
 logger = logging.getLogger(__name__)
 
-ISSUANCE_URL = "http://localhost:8000"
 TEMPLATE_ID = "50000000-0000-0000-0000-000000000010"
 ORG_ID = "00000000-0000-0000-0000-000000000001"
 APP_ID = "ca65845a-5ec7-4e1c-bb90-4fce6e429a4f"
 
-logger.info("Calling issuance service InitiateIssuance endpoint...\n")
 
-try:
-    with httpx.Client(timeout=15) as client:
-        payload = {
-            "organization_id": ORG_ID,
-            "credential_template_id": TEMPLATE_ID,
-            "applicant_id": APP_ID,
-            "subject_did": "",
-            "holder_did": "",
-            "claims": {},
-        }
-        
-        logger.info(f"POST {ISSUANCE_URL}/v1/issuance/initiate")
-        logger.info(f"Payload: {json.dumps(payload, indent=2)}\n")
-        
-        resp = client.post(
-            f"{ISSUANCE_URL}/v1/issuance/initiate",
-            json=payload,
-            headers={"X-API-Key": "dev-issuance-api-key"},
-            timeout=15
+def main(client_factory=httpx.Client) -> int:
+    try:
+        gateway = resolve_gateway_actor(required_scopes=("credentials:issue",))
+    except GatewayActorConfigurationError as error:
+        logger.error("%s", error)
+        return 2
+
+    payload = {
+        "organization_id": ORG_ID,
+        "credential_template_id": TEMPLATE_ID,
+        "applicant_id": APP_ID,
+        "subject_did": "",
+        "holder_did": "",
+        "claims": {},
+    }
+    logger.info("Calling gateway InitiateIssuance endpoint.")
+    logger.info("POST %s/v1/issuance/initiate", gateway.base_url)
+    logger.info("Payload: %s", json.dumps(payload, indent=2))
+
+    try:
+        with client_factory(timeout=15) as client:
+            response = client.post(
+                f"{gateway.base_url}/v1/issuance/initiate",
+                json=payload,
+                headers={"X-API-Key": gateway.api_key},
+                timeout=15,
+            )
+    except httpx.HTTPError:
+        logger.error("Gateway initiation request failed.")
+        return 1
+
+    logger.info("Status: %s", response.status_code)
+    if response.status_code != 200:
+        logger.error(
+            "Gateway initiation was rejected with status %s.", response.status_code
         )
-        
-        logger.info(f"Status: {resp.status_code}\n")
-        
-        if resp.status_code != 200:
-            logger.error(f"Error: {resp.text}")
-            exit(1)
-        
-        body = resp.json()
-        
-        logger.info("Response:")
-        logger.info(json.dumps(body, indent=2))
-        
-        logger.info("\n" + "="*60)
-        logger.info("Analysis:")
-        logger.info("="*60)
-        
-        # Check key fields
-        credential_offer_uri = body.get("credential_offer_uri", "")
-        credential_offer_uris = body.get("credential_offer_uris", {})
-        credential_offer_labels = body.get("credential_offer_labels", {})
-        
-        if credential_offer_uri:
-            logger.info(f"✓ credential_offer_uri present: {credential_offer_uri[:80]}...")
-        else:
-            logger.warning("✗ credential_offer_uri missing")
-        
-        if credential_offer_uris:
-            logger.info(f"✓ credential_offer_uris present with {len(credential_offer_uris)} wallet(s):")
-            for wallet_id, uri in credential_offer_uris.items():
-                logger.info(f"  - {wallet_id}")
-                if "spruce" in wallet_id.lower():
-                    logger.info(f"    ✓ SpruceID wallet found!")
-        else:
-            logger.warning("✗ credential_offer_uris is empty or missing")
-            logger.info("  This is the root cause of the SpruceID parsing error!")
-            logger.info("  Per-wallet offers are not being generated.")
-        
-        if credential_offer_labels:
-            logger.info(f"✓ credential_offer_labels present: {credential_offer_labels}")
-        else:
-            logger.warning("✗ credential_offer_labels missing")
-        
-except Exception as e:
-    logger.error(f"Error: {e}", exc_info=True)
-    exit(1)
+        return 1
+
+    try:
+        body = response.json()
+    except ValueError:
+        logger.error("Gateway initiation returned malformed JSON.")
+        return 1
+    if not isinstance(body, dict):
+        logger.error("Gateway initiation response must be a JSON object.")
+        return 1
+    logger.info("Response fields: %s", sorted(body))
+    credential_offer_uri = body.get("credential_offer_uri", "")
+    credential_offer_uris = body.get("credential_offer_uris", {})
+    credential_offer_labels = body.get("credential_offer_labels", {})
+
+    if credential_offer_uri:
+        logger.info("credential_offer_uri is present (value redacted).")
+    else:
+        logger.warning("credential_offer_uri is missing.")
+
+    if credential_offer_uris:
+        logger.info(
+            "credential_offer_uris contains %s wallet(s): %s",
+            len(credential_offer_uris),
+            sorted(credential_offer_uris),
+        )
+    else:
+        logger.warning("credential_offer_uris is empty or missing.")
+        logger.info("Per-wallet offers are not being generated.")
+
+    if credential_offer_labels:
+        logger.info(
+            "credential_offer_labels contains %s label(s).",
+            len(credential_offer_labels),
+        )
+    else:
+        logger.warning("credential_offer_labels is missing.")
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
