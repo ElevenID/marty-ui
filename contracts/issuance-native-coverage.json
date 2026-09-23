@@ -21,6 +21,7 @@
     "intentional_native_corrections": [
       "OID4VCI-AUTH-002:validate-and-bind-bearer",
       "OID4VCI-ERROR-001:structured-sanitized-internal-errors",
+      "OID4VCI-MGMT-001:registered-client-tenant-binding",
       "OID4VCI-NOTIFY-001:validate-notification-request",
       "SECURITY-ACCESS-TOKEN-001:exact-1800-second-expiry",
       "OID4VCI-REDIRECT-002:http-or-https-only-localhost"
@@ -150,6 +151,24 @@
       "method": "POST",
       "path": "/v1/issuance/notification",
       "operation": "notification_endpoint",
+      "oid4vci_authorization_behavior_contract": true
+    },
+    {
+      "method": "PUT",
+      "path": "/v1/issuance/oid4vci-clients",
+      "operation": "put_oid4vci_registered_client",
+      "oid4vci_authorization_behavior_contract": true
+    },
+    {
+      "method": "POST",
+      "path": "/v1/issuance/transactions/{tx_id}/revoke",
+      "operation": "revoke_transaction",
+      "oid4vci_authorization_behavior_contract": true
+    },
+    {
+      "method": "GET",
+      "path": "/v1/issuance/credentials",
+      "operation": "list_credentials",
       "oid4vci_authorization_behavior_contract": true
     },
     {
@@ -817,7 +836,7 @@
     {"method": "GET", "path": "/version", "owner": "mmf-runtime"}
   ],
   "remaining": {
-    "http": 20,
+    "http": 17,
     "grpc": 0,
     "runtime_modes": ["api", "canvas-sync-worker"],
     "literal_environment_variables": 54,

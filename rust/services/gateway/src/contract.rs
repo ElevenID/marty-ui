@@ -181,6 +181,22 @@ impl GatewayContract {
             tags: BTreeSet::from(["gateway-internal".into()]),
         })?;
         table.add(RouteConfig {
+            name: "internal:issuance-native:oid4vci-client-management".into(),
+            pattern: "/__gateway/issuance-native/v1/issuance/oid4vci-clients".into(),
+            match_type: RouteMatchType::Exact,
+            upstream_service: issuance_native::NATIVE_SERVICE.into(),
+            methods: BTreeSet::from([HttpMethod::Put]),
+            host: None,
+            required_headers: BTreeMap::new(),
+            rewrite_path: Some("/v1/issuance/oid4vci-clients".into()),
+            timeout_ms: 10_000,
+            retries: 1,
+            auth_required: false,
+            authentication_type: AuthenticationType::None,
+            priority: 20_000,
+            tags: BTreeSet::from(["gateway-internal".into()]),
+        })?;
+        table.add(RouteConfig {
             name: "internal:issuance:public-discovery".into(),
             pattern: "/__gateway/issuance/{path:path}".into(),
             match_type: RouteMatchType::Template,
@@ -873,7 +889,7 @@ mod tests {
             438
         );
         let proxy = contract.proxy_route_table().expect("proxy");
-        assert_eq!(proxy.routes().len(), 450);
+        assert_eq!(proxy.routes().len(), 451);
         assert_eq!(
             route_for(
                 &proxy,
@@ -939,19 +955,26 @@ mod tests {
         ] {
             assert_eq!(
                 issuance_native::upstream_service(method, path),
-                issuance_native::LEGACY_SERVICE,
-                "management-only route must remain legacy-owned: {method:?} {path}"
-            );
-            let internal_path = format!("/__gateway/issuance{path}");
-            assert_eq!(
-                route_for(&proxy, method, &internal_path)
-                    .expect("legacy management helper route")
-                    .route
-                    .upstream_service,
-                issuance_native::LEGACY_SERVICE,
-                "management-only transport must remain legacy-owned: {method:?} {path}"
+                issuance_native::NATIVE_SERVICE,
+                "migrated management route must remain native-owned: {method:?} {path}"
             );
         }
+        let internal_management_path = format!(
+            "/__gateway/{}/v1/issuance/oid4vci-clients",
+            issuance_native::NATIVE_SERVICE
+        );
+        assert_eq!(
+            route_for(&proxy, HttpMethod::Put, &internal_management_path)
+                .expect("native management helper route")
+                .route
+                .upstream_service,
+            issuance_native::NATIVE_SERVICE,
+            "gateway-originated registered-client updates must remain native-owned"
+        );
+        assert!(
+            route_for(&proxy, HttpMethod::Post, &internal_management_path).is_err(),
+            "the native helper must not broaden management access to unsupported methods"
+        );
         assert_eq!(
             route_for(&proxy, HttpMethod::Get, "/v1/passport/capabilities")
                 .expect("retained legacy issuance route")

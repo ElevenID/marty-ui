@@ -413,6 +413,7 @@ def test_frozen_surface_provenance_and_coverage_are_complete() -> None:
         "intentional_native_corrections": [
             "OID4VCI-AUTH-002:validate-and-bind-bearer",
             "OID4VCI-ERROR-001:structured-sanitized-internal-errors",
+            "OID4VCI-MGMT-001:registered-client-tenant-binding",
             "OID4VCI-NOTIFY-001:validate-notification-request",
             "SECURITY-ACCESS-TOKEN-001:exact-1800-second-expiry",
             "OID4VCI-REDIRECT-002:http-or-https-only-localhost",
@@ -522,7 +523,6 @@ def test_frozen_surface_provenance_and_coverage_are_complete() -> None:
     oid4vci_public_operations = {
         route["operation"]: route
         for route in oid4vci_authorization["routes"]
-        if route["component"] == "public-oid4vci-protocol"
     }
     canvas_operations_cases = {
         "enqueue_canvas_application_sync_route": "enqueue",
@@ -553,7 +553,7 @@ def test_frozen_surface_provenance_and_coverage_are_complete() -> None:
         hashlib.sha256(renewal_bytes).hexdigest()
         == coverage["renewal_behavior_contract"]["sha256"]
     )
-    assert len(coverage["native_http"]) == 111
+    assert len(coverage["native_http"]) == 114
     assert set(native) == (
         set(discovery_cases)
         | set(tenant_cases)
@@ -837,7 +837,7 @@ def test_frozen_surface_provenance_and_coverage_are_complete() -> None:
         )
         assert discovery_cases[operation]["path"] == expected_case_path
     assert coverage["remaining"] == {
-        "http": 20,
+        "http": 17,
         "grpc": 0,
         "runtime_modes": ["api", "canvas-sync-worker"],
         "literal_environment_variables": 54,
@@ -891,7 +891,6 @@ def test_oid4vci_coverage_mutations_break_the_enforced_provenance_or_route_floor
     expected_routes = {
         (route["method"], route["path"], route["operation"])
         for route in contract["routes"]
-        if route["component"] == "public-oid4vci-protocol"
     }
 
     def valid(candidate: dict) -> bool:

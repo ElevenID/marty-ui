@@ -274,5 +274,9 @@ name = "oid4vci_authorization_behavior"
 path = "tests/oid4vci_authorization_behavior.rs"
 
 [[test]]
+name = "oid4vci_management_behavior"
+path = "tests/oid4vci_management_behavior.rs"
+
+[[test]]
 name = "oid4vci_migration_postgres_contract"
 path = "tests/oid4vci_migration_postgres_contract.rs"

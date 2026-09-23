@@ -11,6 +11,8 @@ use crate::token_exchange::{
     ClientAuthenticationRequest, Oid4vciClientAuthenticator, TokenExchangeError,
 };
 
+const PRIVATE_JWK_FIELDS: [&str; 9] = ["d", "p", "q", "dp", "dq", "qi", "oth", "k", "key"];
+
 pub const JWT_BEARER_ASSERTION_TYPE: &str =
     "urn:ietf:params:oauth:client-assertion-type:jwt-bearer";
 const CLOCK_SKEW_SECONDS: i64 = 60;
@@ -200,6 +202,66 @@ fn verify_assertion(
     })
 }
 
+/// Validate the complete public ES256/P-256 key set accepted for a registered
+/// OID4VCI client.
+///
+/// Registration and assertion verification deliberately share this owner so
+/// a key cannot be accepted at the management boundary and rejected later by
+/// the token endpoint (or vice versa).
+pub fn validate_registered_client_jwks(jwks: &Value) -> Result<(), TokenExchangeError> {
+    normalized_keys(jwks).map(|_| ())
+}
+
+/// Validate and canonicalize a registered client's public key set for storage.
+///
+/// The legacy registration boundary materialized the optional JOSE defaults so
+/// management reads returned a stable public representation. Assertion
+/// verification intentionally accepts either representation through the same
+/// validator.
+pub fn normalize_registered_client_jwks(jwks: &Value) -> Result<Value, TokenExchangeError> {
+    let keys: Vec<Value> = normalized_keys(jwks)?
+        .iter()
+        .map(|key| {
+            let source = key
+                .as_object()
+                .expect("validated registered-client JWK must be an object");
+            let mut normalized = Map::new();
+            normalized.insert("kty".to_owned(), Value::String("EC".to_owned()));
+            normalized.insert("crv".to_owned(), Value::String("P-256".to_owned()));
+            normalized.insert("kid".to_owned(), source["kid"].clone());
+            normalized.insert("alg".to_owned(), Value::String("ES256".to_owned()));
+            normalized.insert("use".to_owned(), Value::String("sig".to_owned()));
+            normalized.insert("x".to_owned(), source["x"].clone());
+            normalized.insert("y".to_owned(), source["y"].clone());
+            if source.contains_key("key_ops") {
+                normalized.insert(
+                    "key_ops".to_owned(),
+                    Value::Array(vec![Value::String("verify".to_owned())]),
+                );
+            }
+            Value::Object(normalized)
+        })
+        .collect();
+    Ok(serde_json::json!({"keys": keys}))
+}
+
+/// Return the first registered-client JWK that exposes private key material.
+///
+/// The management response preserves the legacy index-specific validation
+/// detail while the shared key validator remains the single acceptance owner.
+#[must_use]
+pub fn registered_client_private_key_index(jwks: &Value) -> Option<usize> {
+    jwks.get("keys").and_then(Value::as_array).and_then(|keys| {
+        keys.iter().position(|key| {
+            key.as_object().is_some_and(|key| {
+                PRIVATE_JWK_FIELDS
+                    .iter()
+                    .any(|field| key.contains_key(*field))
+            })
+        })
+    })
+}
+
 fn normalized_keys(jwks: &Value) -> Result<&[Value], TokenExchangeError> {
     let object = jwks.as_object().ok_or(TokenExchangeError::InvalidClient)?;
     if object.len() != 1 {
@@ -228,9 +290,10 @@ fn normalized_keys(jwks: &Value) -> Result<&[Value], TokenExchangeError> {
 
 fn validate_key(key: &Map<String, Value>) -> Result<(), TokenExchangeError> {
     const ALLOWED: [&str; 8] = ["alg", "crv", "key_ops", "kid", "kty", "use", "x", "y"];
-    const PRIVATE: [&str; 9] = ["d", "p", "q", "dp", "dq", "qi", "oth", "k", "key"];
     if key.keys().any(|field| !ALLOWED.contains(&field.as_str()))
-        || PRIVATE.iter().any(|field| key.contains_key(*field))
+        || PRIVATE_JWK_FIELDS
+            .iter()
+            .any(|field| key.contains_key(*field))
         || key.get("kty").and_then(Value::as_str) != Some("EC")
         || key.get("crv").and_then(Value::as_str) != Some("P-256")
         || !matches!(key.get("alg").and_then(Value::as_str), None | Some("ES256"))
@@ -326,7 +389,10 @@ mod tests {
     use jsonwebtoken::{encode, jwk::Jwk, Algorithm, EncodingKey, Header};
     use p256::{elliptic_curve::sec1::ToEncodedPoint, pkcs8::EncodePrivateKey, SecretKey};
 
-    use super::{audience_matches, json_truthy, normalized_keys, numeric_date, verify_assertion};
+    use super::{
+        audience_matches, json_truthy, normalize_registered_client_jwks, normalized_keys,
+        numeric_date, verify_assertion,
+    };
     use serde_json::json;
 
     #[test]
@@ -459,5 +525,24 @@ mod tests {
         let mut duplicate_verify_operation = jwk;
         duplicate_verify_operation["keys"][0]["key_ops"] = json!(["verify", "verify"]);
         assert!(normalized_keys(&duplicate_verify_operation).is_ok());
+    }
+
+    #[test]
+    fn registered_client_storage_materializes_optional_jose_defaults() {
+        let secret = SecretKey::from_slice(&[7_u8; 32]).expect("P-256 private key");
+        let public = secret.public_key().to_encoded_point(false);
+        let input = json!({"keys": [{
+            "kty": "EC",
+            "crv": "P-256",
+            "kid": "wallet-key-1",
+            "x": URL_SAFE_NO_PAD.encode(public.x().unwrap()),
+            "y": URL_SAFE_NO_PAD.encode(public.y().unwrap())
+        }]});
+
+        let normalized = normalize_registered_client_jwks(&input).expect("valid key set");
+
+        assert_eq!(normalized["keys"][0]["alg"], "ES256");
+        assert_eq!(normalized["keys"][0]["use"], "sig");
+        assert!(normalized["keys"][0].get("key_ops").is_none());
     }
 }

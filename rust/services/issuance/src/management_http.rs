@@ -46,6 +46,14 @@ pub(crate) fn malformed_json(error: JsonRejection) -> Response {
         .into_response()
 }
 
+pub(crate) fn malformed_query() -> Response {
+    (
+        StatusCode::BAD_REQUEST,
+        Json(json!({"detail": "Query parameters are invalid"})),
+    )
+        .into_response()
+}
+
 pub(crate) fn missing_organization_query() -> Response {
     (
         StatusCode::UNPROCESSABLE_ENTITY,

@@ -18,6 +18,34 @@ NATIVE_URL = "http://issuance-native:8005"
 LEGACY_URL = "http://issuance:8005"
 CAPABILITY_PATH = "contracts/issuance-native-coverage.json"
 REQUIRED_OPERATIONS = {
+    ("GET", "/v1/issuance/authorize"): (
+        "authorize",
+        "oid4vci_authorization_behavior_contract",
+    ),
+    ("POST", "/v1/issuance/par"): (
+        "pushed_authorization_request",
+        "oid4vci_authorization_behavior_contract",
+    ),
+    ("POST", "/v1/issuance/deferred-credential"): (
+        "deferred_credential",
+        "oid4vci_authorization_behavior_contract",
+    ),
+    ("POST", "/v1/issuance/notification"): (
+        "notification_endpoint",
+        "oid4vci_authorization_behavior_contract",
+    ),
+    ("PUT", "/v1/issuance/oid4vci-clients"): (
+        "put_oid4vci_registered_client",
+        "oid4vci_authorization_behavior_contract",
+    ),
+    ("POST", "/v1/issuance/transactions/{tx_id}/revoke"): (
+        "revoke_transaction",
+        "oid4vci_authorization_behavior_contract",
+    ),
+    ("GET", "/v1/issuance/credentials"): (
+        "list_credentials",
+        "oid4vci_authorization_behavior_contract",
+    ),
     ("POST", "/v1/issuance/initiate"): (
         "initiate_issuance",
         "initiation_behavior_contract",

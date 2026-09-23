@@ -1862,6 +1862,11 @@ pub async fn run_hosted_pilot_auto_purge_sweep(
     }
 }
 
+fn internal_issuance_proxy_path(method: HttpMethod, upstream_path: &str) -> String {
+    let service = issuance_native::upstream_service(method, upstream_path);
+    format!("/__gateway/{service}{upstream_path}")
+}
+
 #[allow(clippy::too_many_arguments)]
 async fn composition_proxy_json(
     state: &GatewayRuntimeState,
@@ -2724,11 +2729,13 @@ async fn issuance_create_handler(state: Arc<GatewayRuntimeState>, request: Reque
     }
 
     if let Some(registration) = input.registration() {
+        let registration_path =
+            internal_issuance_proxy_path(HttpMethod::Put, "/v1/issuance/oid4vci-clients");
         if let Err(response) = execute_json_proxy(
             &state,
             &identity,
             HttpMethod::Put,
-            "/__gateway/issuance/v1/issuance/oid4vci-clients",
+            &registration_path,
             registration,
             BTreeMap::from([("x-api-key".into(), state.issuance_service_api_key.clone())]),
         )
@@ -4276,6 +4283,18 @@ mod tests {
         providers::HttpGatewayProvider,
         registry::StaticServiceRegistry,
     };
+
+    #[test]
+    fn gateway_originated_management_uses_the_selected_native_owner() {
+        assert_eq!(
+            internal_issuance_proxy_path(HttpMethod::Put, "/v1/issuance/oid4vci-clients"),
+            "/__gateway/issuance-native/v1/issuance/oid4vci-clients"
+        );
+        assert_eq!(
+            internal_issuance_proxy_path(HttpMethod::Post, "/v1/issuance/oid4vci-clients"),
+            "/__gateway/issuance/v1/issuance/oid4vci-clients"
+        );
+    }
 
     struct ScriptedOwner(Option<String>);
 
