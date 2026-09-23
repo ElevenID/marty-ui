@@ -200,4 +200,11 @@ fi
 "${executables[0]}" --list | grep -Fx 'worker_body_timeout_native_child: test'
 "${executables[0]}" --list | grep -Fx 'worker_timeout_matches_frozen_published_process: test'
 "${executables[0]}" --list | grep -Fx 'worker_timeout_native_child: test'
-"${executables[0]}" --nocapture --test-threads=1
+# This diagnostic captures SQLx events through a scoped subscriber. Run it on
+# its own so unrelated test threads cannot affect the positive control.
+serial_test=worker_sql_logging_preserves_debug_diagnostics_and_operational_warnings
+all_tests=$("${executables[0]}" --list | grep -c ': test$')
+parallel_tests=$("${executables[0]}" --list --skip "$serial_test" | grep -c ': test$')
+[[ $((all_tests - parallel_tests)) == 1 ]]
+"${executables[0]}" "$serial_test" --exact --nocapture --test-threads=1
+"${executables[0]}" --skip "$serial_test" --nocapture --test-threads=2
