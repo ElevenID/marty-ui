@@ -1,8 +1,9 @@
-"""Overlap two database owners, preserving serial execution within each suite."""
+"""Overlap independent database owners, preserving serial execution within each suite."""
 
 from concurrent.futures import FIRST_COMPLETED, Future, ThreadPoolExecutor, wait
 from pathlib import Path
 import subprocess
+import sys
 import tempfile
 from time import monotonic
 
@@ -62,16 +63,32 @@ def run_groups(commands: dict[str, list[str]], directory: Path) -> dict[str, int
         return _wait_for_groups(futures, started)
 
 
-def main() -> int:
+def main(mode: str = "database") -> int:
     scripts = Path(__file__).resolve().parent
-    commands = {
-        "published-canvas": [
-            "bash",
-            str(scripts / "run-published-canvas-contracts.sh"),
-        ],
-        "rust-db": ["bash", str(scripts / "run-rust-db-contracts.sh")],
-    }
-    with tempfile.TemporaryDirectory(prefix="marty-db-groups-") as temporary:
+    if mode == "database":
+        commands = {
+            "published-canvas": [
+                "bash",
+                str(scripts / "run-published-canvas-contracts.sh"),
+            ],
+            "rust-db": ["bash", str(scripts / "run-rust-db-contracts.sh")],
+        }
+    elif mode == "preflights":
+        # Longest first keeps the two workers busy. Each exact preflight owns
+        # its disposable Docker database and dynamically allocated HTTPS ports.
+        commands = {
+            name: ["bash", str(scripts / "run-published-canvas-contracts.sh"), name]
+            for name in (
+                "mixed-roster-preflight",
+                "body-timeout-preflight",
+                "timeout-preflight",
+                "lease-expiry-preflight",
+            )
+        }
+    else:
+        raise ValueError("Unsupported contract group mode")
+    prefix = "marty-preflight-groups-" if mode == "preflights" else "marty-db-groups-"
+    with tempfile.TemporaryDirectory(prefix=prefix) as temporary:
         directory = Path(temporary)
         results = run_groups(commands, directory)
         for name, status in results.items():
@@ -81,4 +98,6 @@ def main() -> int:
 
 
 if __name__ == "__main__":
-    raise SystemExit(main())
+    if sys.argv[1:] not in ([], ["preflights"]):
+        raise SystemExit("Usage: run-db-contract-groups.py [preflights]")
+    raise SystemExit(main("preflights" if sys.argv[1:] else "database"))

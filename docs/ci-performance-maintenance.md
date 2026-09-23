@@ -69,6 +69,12 @@ service database. Each suite retains `--test-threads=1`, all executable inventor
 checks, and its original assertions. The runner waits for both suites even on
 failure and emits separate logs before returning a failing status.
 
+The four published worker parity preflights run through the same bounded
+two-worker runner before the full database suites. Every preflight still invokes
+its exact test with one Rust test thread. Each case owns a separate disposable
+Docker database and dynamically allocated HTTPS ports; a failure in one group
+does not prevent the other groups from finishing and reporting their result.
+
 Queue validation exposed a Canvas worker cancellation race: SQLx could start
 return-to-pool validation of a cancelled, lock-blocked query before asynchronous
 cleanup closed the pool. The worker owner now closes pool admission before
