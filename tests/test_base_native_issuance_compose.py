@@ -32,6 +32,20 @@ def test_source_inventory_is_complete_and_base_defaults_native():
     assert any(str(value).endswith(GATE["IMAGES"]) for value in command)
 
 
+@pytest.mark.parametrize("key", sorted(GATE["CANVAS_PUBLICATION_INPUTS"]))
+@pytest.mark.parametrize("owner", ["base", "native"])
+def test_canvas_publication_inputs_cannot_be_dropped_from_either_owner(key, owner):
+    base, profile, runtime = sources()
+    environment = (
+        base["services"]["issuance"]["environment"]
+        if owner == "base"
+        else profile["services"]["issuance-native"]["environment"]
+    )
+    environment.pop(key)
+    with pytest.raises(AssertionError):
+        GATE["assert_sources"](base, profile, runtime)
+
+
 @pytest.mark.parametrize(
     "fault",
     [

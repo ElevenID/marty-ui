@@ -40,13 +40,18 @@ NATIVE_ONLY = {
     "MARTY_UI_SHA": "${MARTY_UI_SHA:-unknown}",
     "RUST_LOG": "${ISSUANCE_NATIVE_RUST_LOG:-info}",
 }
+CANVAS_PUBLICATION_INPUTS = {
+    "CANVAS_CREDENTIALS_ASSERTION_URL_TEMPLATE": "${CANVAS_CREDENTIALS_ASSERTION_URL_TEMPLATE:-}",
+    "CANVAS_CREDENTIALS_ASSERTION_NARRATIVE": "${CANVAS_CREDENTIALS_ASSERTION_NARRATIVE:-}",
+    "CANVAS_CREDENTIALS_PROVENANCE_BASE_URL": "${CANVAS_CREDENTIALS_PROVENANCE_BASE_URL:-}",
+    "CANVAS_CREDENTIALS_RECIPIENT_HASHED": "${CANVAS_CREDENTIALS_RECIPIENT_HASHED:-true}",
+    "CANVAS_CREDENTIALS_ALLOW_DUPLICATE_AWARDS": "${CANVAS_CREDENTIALS_ALLOW_DUPLICATE_AWARDS:-false}",
+}
 # Exact base legacy-only settings remain on the old owner; no wildcard copying
 # of KMS/physical-document/worker secrets into the partial native owner.
 LEGACY_ONLY = frozenset(
     """
-BAO_ADDR BAO_TOKEN CANVAS_CREDENTIALS_ALLOW_DUPLICATE_AWARDS
-CANVAS_CREDENTIALS_PROVENANCE_BASE_URL CANVAS_CREDENTIALS_RECIPIENT_HASHED
-CANVAS_CREDENTIAL_ISSUER_PROFILE_IDS CANVAS_LTI_TOOL_ACTIVE_KID
+BAO_ADDR BAO_TOKEN CANVAS_CREDENTIAL_ISSUER_PROFILE_IDS CANVAS_LTI_TOOL_ACTIVE_KID
 CANVAS_LTI_TOOL_PUBLIC_JWKS ICAO_DOCUMENT_SIGNER_API_KEY ICAO_DOCUMENT_SIGNER_URL
 PERSONALIZATION_BUREAU_API_KEY
 PERSONALIZATION_BUREAU_URL PERSONALIZATION_BUREAU_WEBHOOK_SECRET
@@ -103,6 +108,15 @@ def assert_sources(base, profile, runtime):
     assert {key: env[key] for key in NATIVE_ONLY} == NATIVE_ONLY
     for key in set(env) & set(legacy):
         assert env[key] == legacy[key], "Native expression changed legacy precedence"
+    publication_source = (
+        ROOT / "rust/services/issuance/src/canvas_credentials_publication.rs"
+    ).read_text(encoding="utf-8")
+    for key, expression in CANVAS_PUBLICATION_INPUTS.items():
+        assert key in publication_source, f"Native publication no longer reads {key}"
+        assert env.get(key) == expression, f"Native publication input {key} is unbound"
+        assert legacy.get(key) == expression, (
+            f"Base publication input {key} is unpaired"
+        )
     for name in NATIVE["TOKEN_CONSUMERS"]:
         assert (
             base["services"][name]["environment"].get("GRPC_SERVICE_TOKEN")

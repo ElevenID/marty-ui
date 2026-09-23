@@ -75,6 +75,7 @@ rendered models independently compare every value to the old owner.
 | Canvas origin policy | `CANVAS_PRIVATE_ORIGIN_ALLOWLIST`, `CANVAS_SELF_MANAGED_ORIGIN_ALLOWLIST`, `CANVAS_ALLOW_PRIVATE_BASE_URLS`, `CANVAS_ALLOW_HTTP_LOCALHOST_BASE_URLS` |
 | Canvas webhook authentication | `CANVAS_CREDENTIALS_SHARED_SECRET`, `CANVAS_CREDENTIALS_SIGNATURE_TOLERANCE_SECONDS` |
 | Canvas provider/validation/status | `CANVAS_CREDENTIALS_PROVIDER`, `CANVAS_CREDENTIALS_PUBLISH_URL`, `CANVAS_CREDENTIALS_STATUS_SYNC_URL`, `CANVAS_CREDENTIALS_API_BASE_URL`, `CANVAS_CREDENTIALS_API_ORIGIN_ALLOWLIST`, `CANVAS_CREDENTIALS_API_TOKEN`, `CANVAS_CREDENTIALS_ISSUER_ID`, `CANVAS_CREDENTIALS_BADGECLASS_ID`, `CANVAS_CREDENTIALS_ASSERTION_SCOPE` |
+| Canvas publication projection | `CANVAS_CREDENTIALS_ASSERTION_URL_TEMPLATE`, `CANVAS_CREDENTIALS_ASSERTION_NARRATIVE`, `CANVAS_CREDENTIALS_PROVENANCE_BASE_URL`, `CANVAS_CREDENTIALS_RECIPIENT_HASHED`, `CANVAS_CREDENTIALS_ALLOW_DUPLICATE_AWARDS` |
 
 The base's explicit database `/marty` and public issuer URL prevent the native
 standalone `/marty_credentials`/beta-issuer defaults from leaking into this profile.
@@ -146,15 +147,6 @@ The excluded set is exact and guarded; exclusion does not mean feature deletion:
 - `ICAO_DOCUMENT_SIGNER_URL/API_KEY`, `PHYSICAL_DOCUMENT_ALLOW_SELF_SIGNED`,
   `PHYSICAL_DOCUMENT_ARTIFACT_KEY`, `PERSONALIZATION_BUREAU_URL/API_KEY/WEBHOOK_SECRET`:
   physical-document features and consumers remain legacy.
-- `CANVAS_CREDENTIALS_PROVENANCE_BASE_URL`, `CANVAS_CREDENTIALS_RECIPIENT_HASHED`,
-  `CANVAS_CREDENTIALS_ALLOW_DUPLICATE_AWARDS`: Python
-  `canvas_credentials_adapter.py:588,671,673` reads them when building a **new mirror
-  publication**, called from `routes.py:2714`. That owner remains reachable through
-  the unselected explicit credential mirror-publish route (`:6240`), pending batch
-  (`:6287`) and legacy automation. They do not configure native lifecycle status
-  synchronization, and the Rust Canvas evidence-sync worker is not this mirror
-  publisher. No equivalent persisted replacement is claimed; existing legacy
-  publication and its environment remain intact.
 - `CANVAS_CREDENTIAL_ISSUER_PROFILE_IDS`, `CANVAS_LTI_TOOL_ACTIVE_KID`,
   `CANVAS_LTI_TOOL_PUBLIC_JWKS`: no readers in the audited pinned Credentials Python
   tree or current Rust tree. Both actual tool signers resolve organization-scoped
