@@ -46,15 +46,19 @@
   "deferred": ["DIDCOMM-KMS-001"],
   "production_deployment": "unchanged",
   "release_gate": {
-    "state": "blocked_pending_credentials_release",
+    "state": "qualified",
     "minimum_version": "0.1.77",
-    "required_source_checkpoint": null,
-    "qualified_release": null,
-    "reason": "Credentials PR #284 is merged, but no immutable marty-credentials release containing its native DIDComm delivery-status reader exists yet",
-    "current_incompatible_lock": {
-      "version": "0.1.76",
-      "commit": "aaa6a9b8e31e62cd0ab087eef5fc1f4835048e26",
-      "digest": "sha256:815cbba6efc7c91e770a8dd15fe5fa102d252a485073bf60f0e0d5e0a73b28e5"
+    "required_source_checkpoint": "969cb045c774062c0d058d72283fe65507ca9a44",
+    "qualified_release": {
+      "version": "0.1.77",
+      "commit": "969cb045c774062c0d058d72283fe65507ca9a44",
+      "digest": "sha256:02fe863e9e6c5faf8538c95cfa030e92504b6c4b6ba695bd3656ec30f21f2c3f",
+      "evidence": {
+        "sbom": "https://github.com/ElevenID/marty-credentials/releases/download/v0.1.77/marty-credentials-issuance.spdx.json",
+        "provenance": "https://github.com/ElevenID/marty-credentials/attestations",
+        "provenance_subject": "ghcr.io/elevenid/marty-credentials-issuance@sha256:02fe863e9e6c5faf8538c95cfa030e92504b6c4b6ba695bd3656ec30f21f2c3f",
+        "provenance_source_commit": "969cb045c774062c0d058d72283fe65507ca9a44"
+      }
     }
   }
 }

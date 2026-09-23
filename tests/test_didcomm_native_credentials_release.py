@@ -36,76 +36,62 @@ def _component(lock: dict) -> dict:
 
 
 def _qualified_models() -> tuple[dict, dict]:
-    contract = deepcopy(CONTRACT)
-    lock = deepcopy(LOCK)
-    # Test-only values exercise the future qualified path without inventing a
-    # checked-in source checkpoint or immutable artifact.
-    version = "0.1.77"
-    commit = "d" * 40
-    digest = "sha256:" + "a" * 64
-    sbom = f"{RELEASE_BASE}/v{version}/{SBOM_NAME}"
-    release = {
-        "version": version,
-        "commit": commit,
-        "digest": digest,
-        "evidence": {
-            "sbom": sbom,
-            "provenance": PROVENANCE,
-            "provenance_subject": f"{IMAGE}@{digest}",
-            "provenance_source_commit": commit,
-        },
+    return deepcopy(CONTRACT), deepcopy(LOCK)
+
+
+def _pending_models() -> tuple[dict, dict]:
+    contract, lock = _qualified_models()
+    incompatible = {
+        "version": "0.1.76",
+        "commit": "aaa6a9b8e31e62cd0ab087eef5fc1f4835048e26",
+        "digest": "sha256:815cbba6efc7c91e770a8dd15fe5fa102d252a485073bf60f0e0d5e0a73b28e5",
     }
     contract["release_gate"].update(
-        state="qualified",
-        required_source_checkpoint=commit,
-        qualified_release=release,
+        state="blocked_pending_credentials_release",
+        required_source_checkpoint=None,
+        qualified_release=None,
+        current_incompatible_lock=incompatible,
     )
     component = _component(lock)
-    component.update(version=release["version"], commit=release["commit"])
-    component["artifacts"][0].update(
-        digest=release["digest"], sbom=sbom, provenance=PROVENANCE
-    )
+    component.update(version=incompatible["version"], commit=incompatible["commit"])
+    component["artifacts"][0]["digest"] = incompatible["digest"]
     return contract, lock
 
 
-def test_current_activation_is_blocked_on_a_new_immutable_release() -> None:
+def test_current_activation_is_pinned_to_the_published_immutable_release() -> None:
     gate = CONTRACT["release_gate"]
-    assert gate["state"] == "blocked_pending_credentials_release"
-    assert gate["required_source_checkpoint"] is None
+    assert gate["state"] == "qualified"
+    assert gate["required_source_checkpoint"] == "969cb045c774062c0d058d72283fe65507ca9a44"
     assert gate["minimum_version"] == "0.1.77"
-    assert gate["qualified_release"] is None
-    assert gate["current_incompatible_lock"] == {
-        "version": "0.1.76",
-        "commit": "aaa6a9b8e31e62cd0ab087eef5fc1f4835048e26",
-        "digest": (
-            "sha256:815cbba6efc7c91e770a8dd15fe5fa102d252a485073bf60f0e0d5e0a73b28e5"
-        ),
-    }
+    assert gate["qualified_release"]["digest"] == (
+        "sha256:02fe863e9e6c5faf8538c95cfa030e92504b6c4b6ba695bd3656ec30f21f2c3f"
+    )
     component = _component(LOCK)
     assert {
         "version": component["version"],
         "commit": component["commit"],
         "digest": component["artifacts"][0]["digest"],
-    } == gate["current_incompatible_lock"]
-    with pytest.raises(NativeDidcommReleaseError, match="activation is blocked"):
-        validate_release_gate(CONTRACT, LOCK)
+    } == {
+        key: gate["qualified_release"][key] for key in ("version", "commit", "digest")
+    }
+    validate_release_gate(CONTRACT, LOCK)
 
 
 def test_pending_gate_still_fails_closed_without_a_release_pin() -> None:
-    contract = deepcopy(CONTRACT)
+    contract, lock = _pending_models()
     contract["release_gate"]["current_incompatible_lock"]["commit"] = "b" * 40
     with pytest.raises(NativeDidcommReleaseError, match="incompatible lock is stale"):
-        validate_release_gate(contract, LOCK)
+        validate_release_gate(contract, lock)
 
 
 def test_pending_gate_rejects_an_invented_source_checkpoint() -> None:
-    contract = deepcopy(CONTRACT)
+    contract, lock = _pending_models()
     contract["release_gate"]["required_source_checkpoint"] = "c" * 40
     with pytest.raises(NativeDidcommReleaseError, match="must not invent"):
-        validate_release_gate(contract, LOCK)
+        validate_release_gate(contract, lock)
 
 
-def test_exact_synthetic_release_pin_can_satisfy_the_closed_gate() -> None:
+def test_exact_published_release_pin_satisfies_the_gate() -> None:
     contract, lock = _qualified_models()
     validate_release_gate(contract, lock)
 

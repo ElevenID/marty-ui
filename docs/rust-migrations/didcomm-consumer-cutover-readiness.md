@@ -5,8 +5,10 @@ are locally qualified. Selected Compose models and the selected Kubernetes
 renderer also make retained direct Python callers delegate those complete
 requests to the same Rust owner. Credentials `v0.1.76` supplied the earlier
 consumer-cutover image, but it cannot read all native delivery statuses added by
-this repair. Activation is now blocked pending a new immutable Credentials
-release derived after PR #284. No deployed DIDComm cutover or reachable Python
+this repair. Published Credentials `v0.1.77` now qualifies the release gate at
+source `969cb045c774062c0d058d72283fe65507ca9a44` and issuance image
+`sha256:02fe863e9e6c5faf8538c95cfa030e92504b6c4b6ba695bd3656ec30f21f2c3f`.
+No deployed DIDComm cutover or reachable Python
 deletion is established by this document.
 Production is unchanged. This is a migration of observable behavior into the
 existing native owner, not a second cryptographic implementation.
@@ -88,8 +90,20 @@ not qualify the delivery-status reader added by this repair, authorize a
 deployment or aggregate acceptance, permit deleting the standalone legacy
 Python owner, or resolve `DIDCOMM-KMS-001`. The failed immutable `v0.1.74` and
 quarantined immutable `v0.1.75` coordinates remain historical and must not be
-reused or relabeled. The current gate requires at least `v0.1.77` and remains
-blocked until an exact immutable release containing Credentials PR #284 exists.
+reused or relabeled. The current gate requires at least `v0.1.77` and is now
+qualified by the [published release](https://github.com/ElevenID/marty-credentials/releases/tag/v0.1.77),
+[stable build](https://github.com/ElevenID/marty-credentials/actions/runs/35914366616),
+and [image finalizer](https://github.com/ElevenID/marty-credentials/actions/runs/35916852428).
+The release tag peels to the same protected-main source checkpoint. The release
+asset `marty-credentials-issuance.digest` contains the image digest above; the
+published SPDX SBOM asset has SHA-256
+`c172c8dd3e0e512f4819646b531da4f80019c03d7735f5fde83dc9d17e05a132`.
+The [image attestation](https://github.com/ElevenID/marty-credentials/attestations/49655531)
+was independently verified against the exact image digest, source commit,
+`refs/tags/v0.1.77` and the release-images workflow. Stable tag promotion passed
+in the finalizer.
+This qualification unblocks the consumer release pin; it does not itself establish
+a merged consumer cutover, deployed acceptance or Python retirement.
 
 ## Unicode endpoint and complete policy-boundary checkpoint
 
