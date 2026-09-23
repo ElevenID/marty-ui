@@ -63,7 +63,16 @@ def assert_dependency_setup(steps):
     assert (
         'assert yaml.safe_load("services: {issuance-native: {command: []}}")' in source
     )
-    preflight = names.index("Preflight published worker parity in two isolated groups")
+    preflight_name = "Preflight published worker parity in two isolated groups"
+    assert names.count(preflight_name) == 1
+    preflight = names.index(preflight_name)
+    preflight_steps = [
+        index
+        for index, step in enumerate(steps)
+        if "run-db-contract-groups.py preflights" in step.get("run", "")
+        or "run-published-canvas-contracts.sh" in step.get("run", "")
+    ]
+    assert preflight_steps == [preflight]
     assert setup < preflight < names.index(
         "Run isolated database contract suites concurrently"
     )
@@ -100,6 +109,7 @@ def test_dependency_setup_precedes_compile_and_all_native_preflights():
         "interpreter",
         "import",
         "yaml_parse",
+        "extra_preflight_before_setup",
     ],
 )
 def test_renderer_dependency_guard_rejects_missing_or_ineffective_setup(mutation):
@@ -124,6 +134,14 @@ def test_renderer_dependency_guard_rejects_missing_or_ineffective_setup(mutation
         )
     elif mutation == "import":
         setup["run"] = setup["run"].replace("import yaml", "")
+    elif mutation == "extra_preflight_before_setup":
+        steps.insert(
+            0,
+            {
+                "name": "Unexpected direct Canvas preflight",
+                "run": "bash ../scripts/ci/run-published-canvas-contracts.sh timeout-preflight",
+            },
+        )
     else:
         setup["run"] = setup["run"].replace(
             "assert yaml.safe_load", "assert disabled.safe_load"
