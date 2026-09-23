@@ -21,6 +21,27 @@ def test_manifest_covers_every_release_workflow_environment() -> None:
         "stack-release",
         "wallet-conformance",
     }
+    assert "DEMO_RECORDER_DISPATCH_TOKEN" in (
+        manifest["environments"]["beta-lifecycle"]["required_secrets"]
+    )
+
+
+def test_private_recorder_token_documents_exact_read_only_permissions() -> None:
+    documentation = "\n".join(
+        (
+            _text("tests/TESTING.md"),
+            _text("docs/rust-migrations/private-demo-qualification-lifecycle.md"),
+        )
+    )
+
+    for permission in (
+        "Actions: Read-only",
+        "Pull requests: Read-only",
+        "Metadata: Read-only",
+    ):
+        assert permission in documentation
+    assert "ElevenID/marty-demo-recorder" in documentation
+    assert "collaborator-permission" in documentation
 
 
 def test_release_workflows_fail_closed_before_protected_jobs() -> None:
@@ -70,23 +91,36 @@ def test_beta_lifecycle_requires_completed_release_bound_demo_qualification() ->
     assert 'gh run download "$DEMO_QUALIFICATION_RUN_ID"' in workflow
     assert '--repo ElevenID/marty-demo-recorder' in workflow
     assert 'repos/ElevenID/marty-demo-recorder/actions/runs/$DEMO_QUALIFICATION_RUN_ID' in workflow
+    assert 'repos/ElevenID/marty-demo-recorder/issues/comments/$DEMO_REVIEW_RECORD_ID' in workflow
+    assert 'repos/ElevenID/marty-demo-recorder/collaborators/$review_author/permission' in workflow
     assert '--bin validate-demo-qualification --' in workflow
-    assert '"$MARTY_UI_RELEASE_SHA" "$BETA_SOURCE_ID"' in workflow
+    assert '"$BETA_ORIGIN" "$MARTY_UI_RELEASE_SHA" "$BETA_SOURCE_ID"' in workflow
     assert '"$DEMO_DEPLOYMENT_MANIFEST_SHA256" "$STACK_MANIFEST_SHA256"' in workflow
     assert 'repos/ElevenID/marty-demo-recorder/dispatches' not in workflow
     assert "marty_ui_release_sha: $marty_ui_release_sha" in workflow
     assert "beta_source_id: $beta_source_id" in workflow
+    assert "demo_review_record_id: $demo_review_record_id" in workflow
 
 
 def test_private_qualification_precedes_browser_gates_without_publishing_raw_inputs() -> None:
     workflow = yaml.safe_load(_text(".github/workflows/e2e-tests.yml"))
     inputs = workflow[True]["workflow_dispatch"]["inputs"]
-    assert len(inputs) == 10
-    for name in ("demo_qualification_run_id", "demo_recorder_sha", "demo_deployment_manifest_sha256"):
+    assert len(inputs) == 11
+    for name in (
+        "demo_qualification_run_id",
+        "demo_recorder_sha",
+        "demo_review_record_id",
+        "demo_deployment_manifest_sha256",
+    ):
         assert inputs[name]["required"] is True
     assert "deployment_evidence" not in inputs
     job = workflow["jobs"]["full-stack-credential-lifecycle"]
-    for name in ("DEMO_QUALIFICATION_RUN_ID", "DEMO_RECORDER_SHA", "DEMO_DEPLOYMENT_MANIFEST_SHA256"):
+    for name in (
+        "DEMO_QUALIFICATION_RUN_ID",
+        "DEMO_RECORDER_SHA",
+        "DEMO_REVIEW_RECORD_ID",
+        "DEMO_DEPLOYMENT_MANIFEST_SHA256",
+    ):
         assert f"github.event.client_payload.{name.lower()}" in job["env"][name]
     steps = job["steps"]
     names = [step.get("name") for step in steps]
@@ -97,6 +131,8 @@ def test_private_qualification_precedes_browser_gates_without_publishing_raw_inp
     assert not step.get("continue-on-error", False)
     assert 'mktemp -d "$RUNNER_TEMP/demo-qualification.XXXXXX"' in step["run"]
     assert '> "$private_evidence/run.json"' in step["run"]
+    assert '> "$private_evidence/review-comment.json"' in step["run"]
+    assert '> "$private_evidence/review-permission.json"' in step["run"]
     assert '--dir "$private_evidence/report"' in step["run"]
     assert '> tests/artifacts/demo-qualification.json' in step["run"]
     assert 'DEMO_RECORDER_DISPATCH_TOKEN' in step["env"]["GH_TOKEN"]

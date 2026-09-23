@@ -22,6 +22,7 @@
       "require_reviewers": true,
       "require_branch_policy": true,
       "required_secrets": [
+        "DEMO_RECORDER_DISPATCH_TOKEN",
         "TEST_APPLICANT_EMAIL",
         "TEST_APPLICANT_PASSWORD",
         "TEST_VENDOR_EMAIL",

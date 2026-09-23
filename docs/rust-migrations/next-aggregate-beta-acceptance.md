@@ -16,6 +16,10 @@ selected here.
 - `beta-lifecycle` has the required branch policy and Burdettadam reviewer. Its
   `BETA_ORIGIN` and `BETA_AUDIT_ORG_ID` variables, seeded applicant/vendor/admin
   secret names, and repository-scoped `DEMO_RECORDER_DISPATCH_TOKEN` are present.
+  The recorder token is fine-grained for `ElevenID/marty-demo-recorder` with only
+  **Actions: Read-only**, **Pull requests: Read-only**, and **Metadata: Read-only**
+  so it can read the private run/artifact, PR issue comment, and collaborator
+  permission without write access.
 - `marty-demo-recorder` has the repository-scoped `DEMO_SOURCE_READ_TOKEN`
   required by private release qualification.
 - `wallet-conformance` has the required branch policy and Burdettadam reviewer.

@@ -9,6 +9,7 @@ publish = false
 
 [dependencies]
 base64.workspace = true
+chrono.workspace = true
 flate2 = "1.1.9"
 serde.workspace = true
 serde_json.workspace = true

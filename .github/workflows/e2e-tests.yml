@@ -31,6 +31,9 @@ on:
       demo_recorder_sha:
         description: Exact reviewed recorder main revision used by qualification
         required: true
+      demo_review_record_id:
+        description: Numeric server-side maintainer review comment ID used by qualification
+        required: true
       demo_deployment_manifest_sha256:
         description: SHA-256 of the original verified deployment receipt
         required: true
@@ -73,6 +76,7 @@ jobs:
       MARTY_PROTOCOL_SHA: ${{ inputs.marty_protocol_sha || github.event.client_payload.marty_protocol_sha }}
       DEMO_QUALIFICATION_RUN_ID: ${{ inputs.demo_qualification_run_id || github.event.client_payload.demo_qualification_run_id }}
       DEMO_RECORDER_SHA: ${{ inputs.demo_recorder_sha || github.event.client_payload.demo_recorder_sha }}
+      DEMO_REVIEW_RECORD_ID: ${{ inputs.demo_review_record_id || github.event.client_payload.demo_review_record_id }}
       DEMO_DEPLOYMENT_MANIFEST_SHA256: ${{ inputs.demo_deployment_manifest_sha256 || github.event.client_payload.demo_deployment_manifest_sha256 }}
       EVIDENCE_TOOLING_SHA: ${{ github.sha }}
       GH_TOKEN: ${{ github.token }}
@@ -236,6 +240,7 @@ jobs:
           fi
           [[ "$DEMO_QUALIFICATION_RUN_ID" =~ ^[1-9][0-9]*$ ]]
           [[ "$DEMO_RECORDER_SHA" =~ ^[0-9a-f]{40}$ ]]
+          [[ "$DEMO_REVIEW_RECORD_ID" =~ ^[1-9][0-9]*$ ]]
           [[ "$DEMO_DEPLOYMENT_MANIFEST_SHA256" =~ ^[0-9a-f]{64}$ ]]
           [[ "$RELEASE_VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]
           private_evidence="$(mktemp -d "$RUNNER_TEMP/demo-qualification.XXXXXX")"
@@ -245,11 +250,19 @@ jobs:
             --dir "$private_evidence/report"
           gh api "repos/ElevenID/marty-demo-recorder/actions/runs/$DEMO_QUALIFICATION_RUN_ID" \
             > "$private_evidence/run.json"
+          gh api "repos/ElevenID/marty-demo-recorder/issues/comments/$DEMO_REVIEW_RECORD_ID" \
+            > "$private_evidence/review-comment.json"
+          review_author="$(jq -er '.user.login | select(type == "string")' \
+            "$private_evidence/review-comment.json")"
+          [[ "$review_author" =~ ^[A-Za-z0-9][A-Za-z0-9-]{0,38}$ ]]
+          gh api "repos/ElevenID/marty-demo-recorder/collaborators/$review_author/permission" \
+            > "$private_evidence/review-permission.json"
           cargo run --locked --quiet --manifest-path rust/Cargo.toml \
             -p marty-release-evidence --bin validate-demo-qualification -- \
             "$private_evidence/run.json" "$private_evidence/report/release-qualification.json" \
-            "$DEMO_QUALIFICATION_RUN_ID" "$DEMO_RECORDER_SHA" "$RELEASE_VERSION" \
-            "$MARTY_UI_RELEASE_SHA" "$BETA_SOURCE_ID" \
+            "$private_evidence/review-comment.json" "$private_evidence/review-permission.json" \
+            "$DEMO_QUALIFICATION_RUN_ID" "$DEMO_RECORDER_SHA" "$DEMO_REVIEW_RECORD_ID" "$RELEASE_VERSION" \
+            "$BETA_ORIGIN" "$MARTY_UI_RELEASE_SHA" "$BETA_SOURCE_ID" \
             "$DEMO_DEPLOYMENT_MANIFEST_SHA256" "$STACK_MANIFEST_SHA256" \
             > tests/artifacts/demo-qualification.json
 
@@ -379,6 +392,7 @@ jobs:
             --arg mip_version "0.5.0" \
             --arg demo_qualification_run_id "$DEMO_QUALIFICATION_RUN_ID" \
             --arg demo_recorder_sha "$DEMO_RECORDER_SHA" \
+            --arg demo_review_record_id "$DEMO_REVIEW_RECORD_ID" \
             --arg demo_deployment_manifest_sha256 "$DEMO_DEPLOYMENT_MANIFEST_SHA256" \
             '{
               run_id: $run_id,
@@ -394,6 +408,7 @@ jobs:
               mip_version: $mip_version,
               demo_qualification_run_id: $demo_qualification_run_id,
               demo_recorder_sha: $demo_recorder_sha,
+              demo_review_record_id: $demo_review_record_id,
               demo_deployment_manifest_sha256: $demo_deployment_manifest_sha256
             }' > tests/artifacts/release-context.json
 

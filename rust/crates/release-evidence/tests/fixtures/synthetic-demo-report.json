@@ -1,5 +1,8 @@
 {
   "qualified": true,
+  "lifecycleQualified": true,
+  "qualificationMode": "official-private",
+  "betaOrigin": "https://beta.elevenidllc.com",
   "releaseVersion": "1.1.217",
   "mipVersion": "0.5.0",
   "sourceId": "1111111111111111111111111111111111111111",
@@ -9,6 +12,19 @@
   "deployedDemoManifestSha256": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
   "scenarioCount": 13,
   "freshRecordingRequired": true,
+  "maintainerReviewRecordId": 101,
+  "maintainerReviewRecordSha256": "f2331a44ac0cebd7fe7e62e1dd4855d9f81e55afa1072fef3b2d3e8d630a02f8",
+  "maintainerReviewBodySha256": "330f2bc3ba3ecd785b7c7a23fa4193041564bfd24c327685d6ab583d0d459748",
+  "maintainerReviewRepository": "ElevenID/marty-demo-recorder",
+  "maintainerReviewPullRequest": 42,
+  "maintainerReviewPullRequestHeadSha": "4444444444444444444444444444444444444444",
+  "maintainerReviewRecorderHeadSha": "3333333333333333333333333333333333333333",
+  "maintainerReviewRecorderTreeSha": "5555555555555555555555555555555555555555",
+  "maintainerReviewAuthor": "BurdettAdam",
+  "maintainerReviewAuthorAssociation": "OWNER",
+  "maintainerReviewPermission": "admin",
+  "maintainerReviewCreatedAt": "2026-09-22T12:34:56Z",
+  "maintainerReviewUpdatedAt": "2026-09-22T12:34:56Z",
   "testFixtureOnly": true,
   "privateMetadata": "private-value"
 }

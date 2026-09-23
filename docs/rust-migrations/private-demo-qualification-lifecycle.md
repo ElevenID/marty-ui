@@ -35,6 +35,7 @@ gh workflow run release-qualification.yml \
   -f beta_origin="$BETA_ORIGIN" -f release_version="$RELEASE_VERSION" \
   -f marty_ui_release_sha="$MARTY_UI_RELEASE_SHA" \
   -f beta_source_id="$BETA_SOURCE_ID" \
+  -f review_record_id="$DEMO_REVIEW_RECORD_ID" \
   -F deployment_evidence=@"$NEW_PRIVATE_TRANSPORT_FILE"
 ```
 
@@ -61,17 +62,25 @@ the exact reviewed recorder SHA and does not treat `main` alone as sufficient.
 
 Set `DEMO_DEPLOYMENT_MANIFEST_SHA256` from the **original deployer receipt**, not
 from the downloaded qualification report. Supply the existing seven lifecycle
-inputs plus these three required inputs:
+inputs plus these four required inputs:
 
 - `demo_qualification_run_id`: the completed successful private run above.
 - `demo_recorder_sha`: its exact reviewed 40-character recorder revision.
+- `demo_review_record_id`: the positive numeric GitHub PR comment ID supplied to
+  the recorder intake for its immutable maintainer-review checkpoint.
 - `demo_deployment_manifest_sha256`: the original receipt's lowercase SHA-256.
 
-The existing `DEMO_RECORDER_DISPATCH_TOKEN` secret now reads the private run and
-artifact in the consumer step; it needs private repository Actions read access.
-Its name is retained for configuration compatibility. Do not copy its value into
-logs or command arguments. Environment approval and existing release provenance,
-live-source checks, browser/CSP tests and credential journeys remain mandatory.
+The existing `DEMO_RECORDER_DISPATCH_TOKEN` secret reads the private run,
+artifact, server-side PR issue comment, and collaborator permission. Configure a
+fine-grained token restricted to `ElevenID/marty-demo-recorder` with repository
+permissions **Actions: Read-only**, **Pull requests: Read-only**, and
+**Metadata: Read-only**. GitHub accepts `Issues: Read-only` as an alternative for
+the issue-comment endpoint, but this environment standardizes on Pull requests
+read. Metadata read covers the collaborator-permission endpoint. No write or
+administration permission is needed. The secret name is retained for
+configuration compatibility; never copy its value into logs or command
+arguments. Environment approval and existing release provenance, live-source
+checks, browser/CSP tests and credential journeys remain mandatory.
 
 `marty-release-evidence` shares the authenticated run parser with stack-release
 validation. The new `validate-demo-qualification` binary verifies:
@@ -81,13 +90,27 @@ validation. The new `validate-demo-qualification` binary verifies:
 - Qualified report, release version, MIP 0.5.0, separate UI revision and
   coordinated source ID, original deployment receipt hash, and official stack
   hash independently computed from the signed published stack manifest.
+- `lifecycleQualified: true`, `qualificationMode: official-private`, and the
+  byte-exact canonical beta origin supplied independently by the lifecycle as
+  `BETA_ORIGIN`; local and historical recorder modes cannot qualify this gate.
 - A valid deployed-demo hash, positive scenario count and the recorder's explicit
   `freshRecordingRequired: true` contract. Full scenario semantics are enforced
   by the exact reviewed recorder, not inferred from the count by this consumer.
+- Complete public maintainer-review provenance, including the exact repository,
+  comment record/body hashes, PR and reviewed head/tree, author, association,
+  independently queried `admin` or `maintain` permission, and immutable server
+  timestamps. The reviewed recorder head must equal both the requested recorder
+  revision and the successful run.
+- Independently downloaded GitHub comment and collaborator-permission records.
+  The validator requires the exact recorder PR issue URL and numeric record ID,
+  reconstructs the fixed-order canonical server-record JSON and hashes the exact
+  UTF-8 comment body, validates the structured feature/security/test approval
+  with zero findings, and rejects duplicate JSON members at any depth.
 
 Raw private run metadata and downloaded reports remain under `RUNNER_TEMP`.
-The Rust validator emits only allowlisted, validated fields to public lifecycle
-evidence (`demo-qualification.json`); arbitrary extra report fields are not copied.
+The Rust validator emits only allowlisted, validated release and review provenance
+to public lifecycle evidence (`demo-qualification.json`); arbitrary extra report
+fields are not copied.
 The lifecycle context also records the private run ID, recorder revision and
 deployment receipt hash. Missing/expired artifacts, access failures, unsuccessful
 runs and binding mismatches stop the gate before browser tests.
