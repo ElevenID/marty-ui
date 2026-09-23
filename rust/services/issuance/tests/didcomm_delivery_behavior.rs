@@ -226,6 +226,43 @@ async fn direct_didcomm_route_matches_the_language_neutral_contract() {
 }
 
 #[tokio::test]
+async fn direct_transport_failure_preserves_the_language_neutral_contract() {
+    let contract = contract();
+    let failure = &contract["transport_failure_response"];
+    for expected in [&failure["body"], &failure["http_error_body"]] {
+        let delivery = ContractDelivery {
+            calls: Arc::new(Mutex::new(Vec::new())),
+            receipt: NativeInitiationDidcommDeliveryReceipt {
+                transaction_id: expected["transaction_id"].as_str().unwrap().to_owned(),
+                credential_id: expected["credential_id"].as_str().unwrap().to_owned(),
+                holder_did: expected["holder_did"].as_str().unwrap().to_owned(),
+                service_endpoint: expected["service_endpoint"].as_str().unwrap().to_owned(),
+                didcomm_message_id: expected["didcomm_message_id"].as_str().unwrap().to_owned(),
+                status: NativeDidcommDeliveryStatus::DeliveryFailed,
+                error: Some(expected["error"].as_str().unwrap().to_owned()),
+            },
+        };
+        let response = app(delivery.clone())
+            .oneshot(request(
+                contract["valid_request"].clone(),
+                Some("test-api-key"),
+            ))
+            .await
+            .unwrap();
+
+        assert_eq!(
+            u64::from(response.status().as_u16()),
+            failure["http_status"].as_u64().unwrap()
+        );
+        assert_eq!(body(response).await, *expected);
+        assert_eq!(
+            delivery.calls.lock().unwrap().as_slice(),
+            [contract["expected_request"].clone()]
+        );
+    }
+}
+
+#[tokio::test]
 async fn direct_didcomm_prerequisite_errors_match_captured_python_without_private_details() {
     let frozen: Value = serde_json::from_str(include_str!(
         "../../../../contracts/didcomm-public-error-python-reference.json"

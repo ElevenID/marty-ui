@@ -358,12 +358,17 @@ acceptance test. Its regression first reproduced pending versus issued.
 The combined `29beef466` tree subsequently passed all 372 issuance unit tests,
 eight DIDComm/initiation HTTP and legacy-fence integration tests, and strict
 package Clippy with all test targets. Only documentation changed during that run.
-Seven actual Python observations also expose two differences that must not be
-silently called equivalent: Python maps a failed HTTP transport receipt to an
+Seven actual Python observations also expose two differences that must be
+reconciled deliberately: Python maps a failed HTTP transport receipt to an
 endpoint URI, and multiple DIDComm wallet entries can repeat signing/transport.
-Preserve native pending-failure URI and no-resend safeguards while reconciling
-their public contract explicitly. Do not restore duplicate sends to match a
-legacy observation.
+The native owner now preserves the language-neutral failed receipt and endpoint
+URI while durably recording an ambiguous attempted transport as
+`delivery_unknown`; replay returns the same sanitized failure without sending
+again. The public error remains `HTTP <status>` for an HTTP response at or above
+400 and `DIDComm transport failed` for an exception; response bodies and
+exception text are neither retained nor exposed. As in the Python owner, a
+redirect response below 400 is delivery success, while redirect following stays
+disabled. Do not restore duplicate sends to match a legacy observation.
 
 Direct unsupported-state response specificity is repaired by reviewed source
 `40b06fcc8` (integration `9b4a8b67a`). Five freshly executed unchanged Python

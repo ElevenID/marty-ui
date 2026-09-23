@@ -27,10 +27,14 @@ pub struct InitiationOfferResponse {
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
-/// Successful delivery after durable completion, including an already-delivered
-/// replay. Failed or uncertain delivery must use the error result, not a receipt.
+/// Public projection of a completed attempt. A failed receipt may carry only
+/// the staged endpoint and a fixed status bit; remote diagnostics stay private.
 pub struct InitiationDidcommDeliveryReceipt {
     pub service_endpoint: String,
+    /// True only after durable delivery completion. A false value preserves
+    /// the legacy endpoint projection for a failed attempt without promoting
+    /// the issuance response to `issued`.
+    pub delivered: bool,
 }
 
 #[async_trait]
@@ -208,22 +212,44 @@ impl InitiationOfferProjector {
         if let Some(holder_did) = holder_did {
             match self.didcomm.deliver(transaction, holder_did).await {
                 Ok(receipt) if !receipt.service_endpoint.is_empty() => {
-                    // The shared delivery owner returns success only after
-                    // projection or a durable delivered replay. Reflect that
-                    // completion without mutating/reloading the reservation or
-                    // weakening its transport-claim fences for later wallets.
-                    if matches!(
-                        *response_status,
-                        CredentialTransactionStatus::Pending
-                            | CredentialTransactionStatus::Authorized
-                    ) {
+                    if receipt.delivered {
+                        tracing::info!(
+                            didcomm_owner = "automatic",
+                            didcomm_outcome = "delivered",
+                            "DIDComm automatic delivery completed"
+                        );
+                    } else {
+                        warn!(
+                            didcomm_owner = "automatic",
+                            didcomm_outcome = "delivery_failed",
+                            "DIDComm automatic delivery failed"
+                        );
+                    }
+                    // The shared owner returns both delivered and legacy-compatible
+                    // failed receipts. Only durable delivery completion may promote
+                    // the transaction; either receipt retains the resolved endpoint.
+                    if receipt.delivered
+                        && matches!(
+                            *response_status,
+                            CredentialTransactionStatus::Pending
+                                | CredentialTransactionStatus::Authorized
+                        )
+                    {
                         *response_status = CredentialTransactionStatus::Issued;
                     }
                     return format!("didcomm://{}", receipt.service_endpoint);
                 }
-                Ok(_) | Err(_) => {
+                Ok(_) => {
                     warn!(
-                        didcomm_stage = "auto-delivery",
+                        didcomm_owner = "automatic",
+                        didcomm_outcome = "invalid_receipt",
+                        "DIDComm auto-delivery failed"
+                    );
+                }
+                Err(_) => {
+                    warn!(
+                        didcomm_owner = "automatic",
+                        didcomm_outcome = "unavailable",
                         "DIDComm auto-delivery failed"
                     );
                 }
@@ -346,6 +372,7 @@ mod tests {
             Arc::new(TestDidcomm {
                 receipt: Ok(InitiationDidcommDeliveryReceipt {
                     service_endpoint: "agent.example/inbox".into(),
+                    delivered: true,
                 }),
             }),
         )
@@ -421,6 +448,36 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn failed_transport_receipt_preserves_endpoint_uri_without_promoting_status() {
+        let projector = InitiationOfferProjector::new(
+            "https://issuer.example",
+            Arc::new(TestDidcomm {
+                receipt: Ok(InitiationDidcommDeliveryReceipt {
+                    service_endpoint: "https://agent.example/inbox".into(),
+                    delivered: false,
+                }),
+            }),
+        )
+        .unwrap();
+        let response = projector
+            .project(
+                reservation(vec![json!({
+                    "wallet_id":"didcomm",
+                    "format_variant":"didcomm_v2"
+                })]),
+                &request(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status, "pending");
+        assert_eq!(
+            response.credential_offer_uris["didcomm"],
+            "didcomm://https://agent.example/inbox"
+        );
+    }
+
+    #[tokio::test]
     async fn empty_endpoint_and_missing_holder_never_promote_response_status() {
         for missing_holder in [false, true] {
             let projector = InitiationOfferProjector::new(
@@ -433,6 +490,7 @@ mod tests {
                             ""
                         }
                         .into(),
+                        delivered: false,
                     }),
                 }),
             )

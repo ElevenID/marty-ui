@@ -247,6 +247,7 @@ impl InitiationDidcommDelivery for Harness {
         }
         Ok(InitiationDidcommDeliveryReceipt {
             service_endpoint: "https://wallet.example/renewal-inbox".into(),
+            delivered: true,
         })
     }
 }

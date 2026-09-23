@@ -11,6 +11,19 @@
   ],
   "internal_response": {"transaction_id":"tx-123","credential_id":"credential-123","holder_did":"did:peer:2.EzExample","service_endpoint":"https://holder.example/didcomm","didcomm_message_id":"message-123","status":"delivered","error":null,"provider_delivery_receipt":"must-not-leak"},
   "expected_response": {"transaction_id":"tx-123","credential_id":"credential-123","holder_did":"did:peer:2.EzExample","service_endpoint":"https://holder.example/didcomm","didcomm_message_id":"message-123","status":"delivered","error":null},
+  "transport_failure_response": {
+    "http_status": 200,
+    "body": {"transaction_id":"tx-123","credential_id":"credential-123","holder_did":"did:peer:2.EzExample","service_endpoint":"https://holder.example/didcomm","didcomm_message_id":"message-123","status":"delivery_failed","error":"DIDComm transport failed"},
+    "http_error_body": {"transaction_id":"tx-123","credential_id":"credential-123","holder_did":"did:peer:2.EzExample","service_endpoint":"https://holder.example/didcomm","didcomm_message_id":"message-123","status":"delivery_failed","error":"HTTP 502"},
+    "redirect_status_below_400_is_delivered": true,
+    "automatic_uri": "didcomm://https://holder.example/didcomm",
+    "automatic_transaction_status": "pending",
+    "durable_transport_status": "delivery_unknown",
+    "replay_body_is_stable": true,
+    "automatic_resend": false,
+    "remote_response_body_exposed": false,
+    "remote_exception_exposed": false
+  },
   "transport_claim": {
     "single_active_attempt": true,
     "lease_seconds": 60,

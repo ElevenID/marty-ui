@@ -76,7 +76,9 @@ pub(super) async fn run() {
             transport
                 .deliver(&first_endpoint, "synthetic-old-root".into())
                 .await,
-            DidcommTransportOutcome::OutcomeUnknown
+            DidcommTransportOutcome::OutcomeUnknown(
+                marty_issuance_service::initiation_didcomm::DidcommTransportFailure::Generic,
+            )
         );
         assert_eq!(
             transport
