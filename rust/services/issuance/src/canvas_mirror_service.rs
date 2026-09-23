@@ -24,6 +24,18 @@ use crate::{
 
 const CLAIM_LEASE_MINUTES: i64 = 15;
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum CanvasMirrorFailureOrigin {
+    LocalConflict,
+    Provider,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct CanvasMirrorPublicationResult {
+    pub record: CanvasMirrorDeliveryRecord,
+    pub failure_origin: Option<CanvasMirrorFailureOrigin>,
+}
+
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
 pub struct CanvasMirrorProvenanceSelector {
     pub delivery_record_id: Option<String>,
@@ -108,8 +120,10 @@ impl CanvasMirrorService {
         organization_id: &str,
         now: DateTime<Utc>,
     ) -> Result<CanvasMirrorDeliveryRecord, CanvasMirrorServiceError> {
-        self.publish_admitted(credential_id, Some(organization_id), now)
-            .await
+        Ok(self
+            .publish_admitted(credential_id, Some(organization_id), now)
+            .await?
+            .record)
     }
 
     pub async fn publish_admitted(
@@ -117,7 +131,7 @@ impl CanvasMirrorService {
         credential_id: &str,
         trusted_organization_id: Option<&str>,
         now: DateTime<Utc>,
-    ) -> Result<CanvasMirrorDeliveryRecord, CanvasMirrorServiceError> {
+    ) -> Result<CanvasMirrorPublicationResult, CanvasMirrorServiceError> {
         let credential = self
             .repository
             .credential_unscoped(credential_id)
@@ -171,7 +185,12 @@ impl CanvasMirrorService {
                     .into_iter()
                     .find(|record| record.delivery_target == "canvas_credentials");
                 match existing {
-                    Some(record) if record.status == "delivered" => return Ok(record),
+                    Some(record) if record.status == "delivered" => {
+                        return Ok(CanvasMirrorPublicationResult {
+                            record,
+                            failure_origin: None,
+                        })
+                    }
                     Some(_) => return Err(CanvasMirrorServiceError::DeliveryInProgress),
                     None => return Err(CanvasMirrorServiceError::DeliveryNotFound),
                 }
@@ -225,12 +244,14 @@ impl CanvasMirrorService {
                 (Some(credential), Some(transaction)) => {
                     self.process_publication(record, credential, transaction, now, Some(&claim_id))
                         .await?
+                        .record
                 }
                 (None, _) => {
                     let detail =
                         format!("Issued credential {} was not found", record.credential_id);
                     self.fail_publication(record, detail, now, true, Some(&claim_id))
                         .await?
+                        .record
                 }
                 (_, None) => {
                     let detail = format!(
@@ -239,6 +260,7 @@ impl CanvasMirrorService {
                     );
                     self.fail_publication(record, detail, now, true, Some(&claim_id))
                         .await?
+                        .record
                 }
             };
             processed.push(updated);
@@ -555,9 +577,12 @@ impl CanvasMirrorService {
         transaction: crate::credential::CredentialTransaction,
         now: DateTime<Utc>,
         claim_id: Option<&str>,
-    ) -> Result<CanvasMirrorDeliveryRecord, CanvasMirrorServiceError> {
+    ) -> Result<CanvasMirrorPublicationResult, CanvasMirrorServiceError> {
         if record.status == "delivered" {
-            return Ok(record);
+            return Ok(CanvasMirrorPublicationResult {
+                record,
+                failure_origin: None,
+            });
         }
         if record.organization_id != transaction.organization_id
             || record.credential_id != credential["id"].as_str().unwrap_or_default()
@@ -591,7 +616,10 @@ impl CanvasMirrorService {
                 );
                 record.metadata.insert("retryable".into(), json!(false));
                 self.save_delivery(&record, claim_id).await?;
-                return Ok(record);
+                return Ok(CanvasMirrorPublicationResult {
+                    record,
+                    failure_origin: Some(CanvasMirrorFailureOrigin::LocalConflict),
+                });
             }
         }
         let platform = match self.resolve_target(&mut record).await? {
@@ -629,17 +657,28 @@ impl CanvasMirrorService {
                 record.metadata.extend(outcome.metadata);
                 record.updated_at = timestamp(now);
                 self.save_delivery(&record, claim_id).await?;
-                Ok(record)
+                Ok(CanvasMirrorPublicationResult {
+                    record,
+                    failure_origin: None,
+                })
             }
             Err(failure) => {
                 record.status = "failed".into();
                 record.last_error = Some(failure.0);
+                let failure_origin = if self.publication.is_some() {
+                    CanvasMirrorFailureOrigin::Provider
+                } else {
+                    CanvasMirrorFailureOrigin::LocalConflict
+                };
                 record
                     .metadata
                     .insert("last_error_at".into(), json!(timestamp(now)));
                 record.updated_at = timestamp(now);
                 self.save_delivery(&record, claim_id).await?;
-                Ok(record)
+                Ok(CanvasMirrorPublicationResult {
+                    record,
+                    failure_origin: Some(failure_origin),
+                })
             }
         }
     }
@@ -875,7 +914,7 @@ impl CanvasMirrorService {
         now: DateTime<Utc>,
         increment: bool,
         claim_id: Option<&str>,
-    ) -> Result<CanvasMirrorDeliveryRecord, CanvasMirrorServiceError> {
+    ) -> Result<CanvasMirrorPublicationResult, CanvasMirrorServiceError> {
         if increment {
             increment_attempt(&mut record.metadata, "publish_attempts");
             record
@@ -889,7 +928,10 @@ impl CanvasMirrorService {
             .insert("last_error_at".into(), json!(timestamp(now)));
         record.updated_at = timestamp(now);
         self.save_delivery(&record, claim_id).await?;
-        Ok(record)
+        Ok(CanvasMirrorPublicationResult {
+            record,
+            failure_origin: Some(CanvasMirrorFailureOrigin::LocalConflict),
+        })
     }
 
     async fn save_delivery(

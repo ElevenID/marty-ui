@@ -14,7 +14,8 @@ use std::sync::Arc;
 
 use crate::{
     canvas_mirror_service::{
-        CanvasMirrorProvenanceSelector, CanvasMirrorService, CanvasMirrorServiceError,
+        CanvasMirrorFailureOrigin, CanvasMirrorProvenanceSelector, CanvasMirrorService,
+        CanvasMirrorServiceError,
     },
     management_http::header,
     management_security::ManagementSecurity,
@@ -132,22 +133,18 @@ async fn publish(
         )
         .await
     {
-        Ok(record) if record.status == "delivered" => {
-            (StatusCode::OK, Json(record.public_projection())).into_response()
+        Ok(result) if result.record.status == "delivered" => {
+            (StatusCode::OK, Json(result.record.public_projection())).into_response()
         }
-        Ok(record) => {
-            let detail = record
+        Ok(result) => {
+            let detail = result
+                .record
                 .last_error
                 .as_deref()
                 .unwrap_or("Canvas Credentials publish failed");
-            let normalized = detail.to_ascii_lowercase();
-            let status = if ["missing", "not found", "disabled", "no canvas mirror"]
-                .iter()
-                .any(|token| normalized.contains(token))
-            {
-                StatusCode::CONFLICT
-            } else {
-                StatusCode::BAD_GATEWAY
+            let status = match result.failure_origin {
+                Some(CanvasMirrorFailureOrigin::LocalConflict) => StatusCode::CONFLICT,
+                Some(CanvasMirrorFailureOrigin::Provider) | None => StatusCode::BAD_GATEWAY,
             };
             detail_response(status, detail)
         }
@@ -445,15 +442,7 @@ fn parse_limit(raw: Option<String>) -> Result<u32, QueryValidationError> {
             json!(raw),
         ));
     };
-    let Some(value) = value.to_u64() else {
-        return Err(query_validation(
-            "less_than_equal",
-            "limit",
-            "Input should be less than or equal to 200",
-            json!(raw),
-        ));
-    };
-    if value < 1 {
+    if value < PythonConfigInteger::from(1_u64) {
         return Err(query_validation(
             "greater_than_equal",
             "limit",
@@ -461,7 +450,7 @@ fn parse_limit(raw: Option<String>) -> Result<u32, QueryValidationError> {
             json!(raw),
         ));
     }
-    if value > 200 {
+    if value > PythonConfigInteger::from(200_u64) {
         return Err(query_validation(
             "less_than_equal",
             "limit",
@@ -469,7 +458,9 @@ fn parse_limit(raw: Option<String>) -> Result<u32, QueryValidationError> {
             json!(raw),
         ));
     }
-    Ok(value as u32)
+    Ok(value
+        .to_u64()
+        .expect("bounded positive Canvas mirror limit fits u64") as u32)
 }
 
 fn parse_bool(
@@ -495,21 +486,28 @@ struct QueryValidationError {
     kind: &'static str,
     name: &'static str,
     message: &'static str,
-    input: Value,
+    input: Box<Value>,
+    context: Option<Box<Value>>,
 }
 
 impl IntoResponse for QueryValidationError {
     fn into_response(self) -> Response {
+        let mut detail = serde_json::Map::from_iter([
+            ("type".to_owned(), json!(self.kind)),
+            ("loc".to_owned(), json!(["query", self.name])),
+            ("msg".to_owned(), json!(self.message)),
+            ("input".to_owned(), *self.input),
+            (
+                "url".to_owned(),
+                json!(format!("https://errors.pydantic.dev/2.11/v/{}", self.kind)),
+            ),
+        ]);
+        if let Some(context) = self.context {
+            detail.insert("ctx".to_owned(), *context);
+        }
         (
             StatusCode::UNPROCESSABLE_ENTITY,
-            Json(json!({
-                "detail": [{
-                    "type": self.kind,
-                    "loc": ["query", self.name],
-                    "msg": self.message,
-                    "input": self.input,
-                }]
-            })),
+            Json(json!({"detail": [detail]})),
         )
             .into_response()
     }
@@ -525,7 +523,13 @@ fn query_validation(
         kind,
         name,
         message,
-        input,
+        input: Box::new(input),
+        context: match kind {
+            "greater_than_equal" => Some(Box::new(json!({"ge": 1}))),
+            "less_than_equal" => Some(Box::new(json!({"le": 200}))),
+            "string_too_short" => Some(Box::new(json!({"min_length": 1}))),
+            _ => None,
+        },
     }
 }
 

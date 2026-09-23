@@ -18,6 +18,20 @@ const ISSUED_CREDENTIAL_ADAPTER_TAG: &str = "issued-credential-adapter";
 const OID4VCI_AUTHORIZATION_TAG: &str = "oid4vci-authorization";
 const CANVAS_MIRROR_TAG: &str = "canvas-mirror";
 
+const CANVAS_MIRROR_BATCH_PATHS: [&str; 3] = [
+    "/v1/issuance/delivery-records/canvas-credentials/process-pending",
+    "/v1/issuance/delivery-records/canvas-credentials/process-status-sync-failures",
+    "/v1/issuance/delivery-records/canvas-credentials/run-automation-cycle",
+];
+
+/// Public batch operations are always scoped by the authenticated gateway
+/// tenant. Direct service calls and internal workers deliberately retain the
+/// frozen optional/global organization behavior.
+#[must_use]
+pub fn is_canvas_mirror_public_batch(method: &str, path: &str) -> bool {
+    method == "POST" && CANVAS_MIRROR_BATCH_PATHS.contains(&path)
+}
+
 #[derive(Debug, Deserialize)]
 struct Coverage {
     native_http: Vec<NativeHttpRoute>,
@@ -444,6 +458,24 @@ mod tests {
                 assert_eq!(upstream_service(method, &near_miss), LEGACY_SERVICE);
             }
         }
+    }
+
+    #[test]
+    fn only_the_three_exact_public_canvas_batches_require_trusted_query_scope() {
+        for path in CANVAS_MIRROR_BATCH_PATHS {
+            assert!(is_canvas_mirror_public_batch("POST", path));
+            assert!(!is_canvas_mirror_public_batch("GET", path));
+            assert!(!is_canvas_mirror_public_batch("post", path));
+            assert!(!is_canvas_mirror_public_batch("POST", &format!("{path}/")));
+            assert!(!is_canvas_mirror_public_batch(
+                "POST",
+                &format!("{path}/extra")
+            ));
+        }
+        assert!(!is_canvas_mirror_public_batch(
+            "POST",
+            "/v1/issued-credentials/credential-1/deliveries/canvas-credentials/publish"
+        ));
     }
 
     #[test]

@@ -41,16 +41,45 @@ use std::{
     fmt,
     sync::{
         atomic::{AtomicU64, AtomicUsize, Ordering},
-        Arc, Mutex,
+        Arc, Mutex, OnceLock,
     },
     time::Duration,
 };
 use tower::ServiceExt;
-use tracing::{field::Visit, instrument::WithSubscriber, Event, Metadata, Subscriber};
+use tracing::{
+    field::Visit, instrument::WithSubscriber, subscriber::Interest, Event, Metadata, Subscriber,
+};
 use tracing_subscriber::{layer::Context, prelude::*, Layer};
 
 #[derive(Clone, Default)]
 struct TraceCapture(Arc<Mutex<Vec<BTreeMap<String, String>>>>);
+
+// Tracing callsite interest is cached process-wide even when dispatchers are
+// scoped to individual futures. Only the two capture tests share this narrow
+// lock; the remaining behavior suite retains default parallel execution.
+static TRACE_CAPTURE_TEST: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
+static TRACE_INTEREST_KEEPER: OnceLock<()> = OnceLock::new();
+
+struct TraceInterestKeeper;
+
+impl<S: Subscriber> Layer<S> for TraceInterestKeeper {
+    fn register_callsite(&self, _metadata: &'static Metadata<'static>) -> Interest {
+        Interest::always()
+    }
+}
+
+fn ensure_trace_interest() {
+    TRACE_INTEREST_KEEPER.get_or_init(|| {
+        // A scoped dispatcher is registered only while its future is polled.
+        // Keep one process-wide dispatcher interested for this integration-test
+        // binary so concurrent dispatcher registration/removal cannot transiently
+        // cache a production callsite as disabled beneath the scoped capture.
+        tracing::subscriber::set_global_default(
+            tracing_subscriber::registry().with(TraceInterestKeeper),
+        )
+        .expect("issuance behavior tests must own the global trace dispatcher");
+    });
+}
 
 #[derive(Default)]
 struct TraceFields(BTreeMap<String, String>);
@@ -73,13 +102,29 @@ impl Visit for TraceFields {
 }
 
 impl<S: Subscriber> Layer<S> for TraceCapture {
-    fn enabled(&self, metadata: &Metadata<'_>, _context: Context<'_, S>) -> bool {
-        metadata
-            .target()
-            .starts_with("marty_issuance_service::canvas_mirror")
+    fn register_callsite(&self, _metadata: &'static Metadata<'static>) -> Interest {
+        // Scoped dispatchers still share tracing's process-wide callsite interest
+        // cache. Declare unconditional interest here so a concurrent dispatcher
+        // cannot cache one of this test's callsites as disabled. Target filtering
+        // remains local to `on_event`, where it cannot affect event emission.
+        Interest::always()
     }
 
     fn on_event(&self, event: &Event<'_>, _context: Context<'_, S>) {
+        // Do not use `Layer::enabled` as a per-test target filter. Tracing caches
+        // callsite interest process-wide, while Rust's test harness runs these
+        // independently-dispatched subscribers concurrently in one process.
+        // A concurrent dispatcher can otherwise cache a callsite as disabled
+        // and make a synchronous event disappear from the correct capture.
+        // Keeping callsites enabled and filtering only the captured event is
+        // deterministic without serializing unrelated tests.
+        if !event
+            .metadata()
+            .target()
+            .starts_with("marty_issuance_service::canvas_mirror")
+        {
+            return;
+        }
         let mut fields = TraceFields::default();
         event.record(&mut fields);
         fields
@@ -218,6 +263,7 @@ struct Repository {
     fail_first_read: bool,
     calls: Mutex<Vec<String>>,
     events: Mutex<Vec<CanvasMirrorAlertEvent>>,
+    saves: Mutex<Vec<CanvasMirrorDeliveryRecord>>,
 }
 
 #[async_trait]
@@ -382,9 +428,10 @@ impl CanvasMirrorRepository for Repository {
 
     async fn save_delivery(
         &self,
-        _record: &CanvasMirrorDeliveryRecord,
+        record: &CanvasMirrorDeliveryRecord,
     ) -> Result<(), CanvasMirrorRepositoryError> {
         self.calls.lock().unwrap().push("save_delivery".into());
+        self.saves.lock().unwrap().push(record.clone());
         Ok(())
     }
 
@@ -1246,6 +1293,124 @@ async fn native_http_preserves_the_frozen_authentication_and_validation_matrix()
 }
 
 #[tokio::test]
+async fn batch_validation_preserves_complete_pydantic_2_11_error_bodies() {
+    let cases = [
+        (
+            "limit=-1",
+            json!({"detail":[{
+                "type":"greater_than_equal",
+                "loc":["query","limit"],
+                "msg":"Input should be greater than or equal to 1",
+                "input":"-1",
+                "ctx":{"ge":1},
+                "url":"https://errors.pydantic.dev/2.11/v/greater_than_equal"
+            }]}),
+        ),
+        (
+            "limit=0",
+            json!({"detail":[{
+                "type":"greater_than_equal",
+                "loc":["query","limit"],
+                "msg":"Input should be greater than or equal to 1",
+                "input":"0",
+                "ctx":{"ge":1},
+                "url":"https://errors.pydantic.dev/2.11/v/greater_than_equal"
+            }]}),
+        ),
+        (
+            "limit=201",
+            json!({"detail":[{
+                "type":"less_than_equal",
+                "loc":["query","limit"],
+                "msg":"Input should be less than or equal to 200",
+                "input":"201",
+                "ctx":{"le":200},
+                "url":"https://errors.pydantic.dev/2.11/v/less_than_equal"
+            }]}),
+        ),
+        (
+            "retry_failed=invalid",
+            json!({"detail":[{
+                "type":"bool_parsing",
+                "loc":["query","retry_failed"],
+                "msg":"Input should be a valid boolean, unable to interpret input",
+                "input":"invalid",
+                "url":"https://errors.pydantic.dev/2.11/v/bool_parsing"
+            }]}),
+        ),
+    ];
+    for (query, expected) in cases {
+        let repository = Arc::new(Repository::default());
+        let response = router_with_clock(
+            service(repository.clone()),
+            Some("management-secret"),
+            Arc::new(FixedHttpClock(now())),
+        )
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri(format!(
+                    "/v1/issuance/delivery-records/canvas-credentials/process-pending?{query}"
+                ))
+                .header("x-api-key", "management-secret")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+        assert_eq!(response.status(), StatusCode::UNPROCESSABLE_ENTITY);
+        assert_eq!(response_json(response).await, expected, "{query}");
+        assert!(repository.calls.lock().unwrap().is_empty());
+    }
+
+    for (query, expected) in [
+        (
+            "",
+            json!({"detail":[{
+                "type":"missing",
+                "loc":["query","organization_id"],
+                "msg":"Field required",
+                "input":null,
+                "url":"https://errors.pydantic.dev/2.11/v/missing"
+            }]}),
+        ),
+        (
+            "?organization_id=",
+            json!({"detail":[{
+                "type":"string_too_short",
+                "loc":["query","organization_id"],
+                "msg":"String should have at least 1 character",
+                "input":"",
+                "ctx":{"min_length":1},
+                "url":"https://errors.pydantic.dev/2.11/v/string_too_short"
+            }]}),
+        ),
+    ] {
+        let repository = Arc::new(Repository::default());
+        let response = router_with_clock(
+            service(repository.clone()),
+            Some("management-secret"),
+            Arc::new(FixedHttpClock(now())),
+        )
+        .oneshot(
+            Request::builder()
+                .method("GET")
+                .uri(format!(
+                    "/v1/issuance/delivery-records/canvas-credentials/provenance{query}"
+                ))
+                .header("x-api-key", "management-secret")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+        assert_eq!(response.status(), StatusCode::UNPROCESSABLE_ENTITY);
+        assert_eq!(response_json(response).await, expected, "{query}");
+        assert!(repository.calls.lock().unwrap().is_empty());
+    }
+}
+
+#[tokio::test]
 async fn native_http_preserves_generic_repository_failures_for_every_route() {
     let cases = [
         (
@@ -1340,6 +1505,103 @@ async fn publish_http_hides_foreign_tenants_after_only_the_admission_lookup() {
     assert!(repository.effects.lock().unwrap().is_empty());
 }
 
+async fn publish_http(service: CanvasMirrorService) -> (StatusCode, Value) {
+    let response = router_with_clock(
+        service,
+        Some("management-secret"),
+        Arc::new(FixedHttpClock(now())),
+    )
+    .oneshot(
+        Request::builder()
+            .method("POST")
+            .uri("/v1/issued-credentials/cred-001/deliveries/canvas-credentials/publish")
+            .header("x-api-key", "management-secret")
+            .header("x-organization-id", "org-1")
+            .body(Body::empty())
+            .unwrap(),
+    )
+    .await
+    .unwrap();
+    let status = response.status();
+    (status, response_json(response).await)
+}
+
+#[tokio::test]
+async fn publish_http_uses_closed_failure_origin_instead_of_provider_text() {
+    let reference = reference();
+
+    for (name, configure, expected_detail) in [
+        (
+            "feature gate",
+            "gate",
+            "Canvas mirror publish is disabled by deployment profile",
+        ),
+        (
+            "missing binding",
+            "missing",
+            "Canvas mirror delivery record is missing canvas_program_binding_id",
+        ),
+        (
+            "disabled binding",
+            "disabled",
+            "Canvas program binding binding-1 is disabled",
+        ),
+    ] {
+        let (mut repository, provider) = publishing_fixture(&reference, false);
+        match configure {
+            "gate" => {
+                repository.record.lock().unwrap().metadata.insert(
+                    "canvas_feature_flags".into(),
+                    json!({"enable_canvas_mirror_publish":false,"enable_canvas_mirror_ops":true}),
+                );
+            }
+            "missing" => {
+                repository
+                    .record
+                    .lock()
+                    .unwrap()
+                    .metadata
+                    .remove("canvas_program_binding_id");
+            }
+            "disabled" => {
+                Arc::get_mut(&mut repository).unwrap().binding["enabled"] = json!(false);
+            }
+            _ => unreachable!(),
+        }
+        let (status, body) = publish_http(service_for_publication(repository, provider)).await;
+        assert_eq!(status, StatusCode::CONFLICT, "{name}");
+        assert_eq!(body, json!({"detail":expected_detail}), "{name}");
+    }
+
+    let (repository, _) = publishing_fixture(&reference, false);
+    let service_without_provider = CanvasMirrorService::new(
+        repository,
+        "https://issuer.example".into(),
+        CanvasMirrorAlertThresholds {
+            warning_attempts: 3,
+            critical_attempts: 5,
+        },
+    );
+    let (status, body) = publish_http(service_without_provider).await;
+    assert_eq!(status, StatusCode::CONFLICT);
+    assert_eq!(
+        body,
+        json!({"detail":"Canvas Credentials provider is unavailable"})
+    );
+
+    for detail in [
+        "Canvas Credentials publish failed (HTTP 503): provider not found",
+        "Canvas Credentials publish request failed: transport disabled",
+        "Canvas Credentials publish response was malformed: missing id",
+    ] {
+        let (repository, mut provider) = publishing_fixture(&reference, false);
+        Arc::get_mut(&mut provider).unwrap().failure = Some(detail.into());
+        let (status, body) = publish_http(service_for_publication(repository, provider)).await;
+        assert_eq!(status, StatusCode::BAD_GATEWAY, "{detail}");
+        assert_eq!(body, json!({"detail":detail}));
+    }
+}
+
 async fn response_json(response: axum::response::Response) -> Value {
     serde_json::from_slice(&to_bytes(response.into_body(), 1024 * 1024).await.unwrap()).unwrap()
 }
@@ -1368,6 +1630,70 @@ async fn batch_keeps_optional_organization_and_provider_cancellation_before_save
     held_provider.release.notify_waiters();
     tokio::task::yield_now().await;
     assert!(held_repository.saves.lock().unwrap().is_empty());
+}
+
+#[tokio::test]
+async fn tenant_scoped_batch_effects_never_cross_into_a_second_tenant() {
+    for operation in ["pending", "status", "automation"] {
+        let status = if operation == "status" {
+            "delivered"
+        } else {
+            "pending"
+        };
+        let mut owned = record(status);
+        let mut foreign = record(status);
+        if operation == "status" {
+            owned
+                .metadata
+                .insert("last_status_sync_error".into(), json!("retry"));
+            foreign
+                .metadata
+                .insert("last_status_sync_error".into(), json!("retry"));
+        }
+        foreign.id = "delivery-foreign".into();
+        foreign.credential_id = "credential-foreign".into();
+        foreign.transaction_id = "transaction-foreign".into();
+        foreign.organization_id = "org-foreign".into();
+        let repository = Arc::new(Repository {
+            records: vec![owned, foreign],
+            credential: Some(credential()),
+            transaction: Some(transaction()),
+            ..Default::default()
+        });
+        let scoped = service(repository.clone());
+        let result = match operation {
+            "pending" => {
+                scoped
+                    .process_pending(Some("org-1"), 25, false, now())
+                    .await
+            }
+            "status" => {
+                scoped
+                    .process_status_sync_failures(Some("org-1"), 25, now())
+                    .await
+            }
+            "automation" => {
+                scoped
+                    .run_automation_cycle(Some("org-1"), 25, false, now(), now())
+                    .await
+            }
+            _ => unreachable!(),
+        }
+        .unwrap();
+
+        assert_eq!(result["organization_id"], "org-1", "{operation}");
+        assert_eq!(result["processed_count"], 1, "{operation}");
+        let saves = repository.saves.lock().unwrap();
+        assert_eq!(saves.len(), 1, "{operation}");
+        assert_eq!(saves[0].id, "delivery-001", "{operation}");
+        assert_eq!(saves[0].organization_id, "org-1", "{operation}");
+        assert!(
+            saves
+                .iter()
+                .all(|record| record.organization_id != "org-foreign"),
+            "{operation}"
+        );
+    }
 }
 
 #[tokio::test]
@@ -1577,6 +1903,8 @@ async fn batch_alert_events_precede_advisory_critical_webhooks() {
 
 #[tokio::test]
 async fn structured_observability_preserves_metrics_alerts_and_safe_webhook_causes() {
+    let _capture_guard = TRACE_CAPTURE_TEST.lock().await;
+    ensure_trace_interest();
     let reference = reference();
     let capture = TraceCapture::default();
     let events = capture.0.clone();
@@ -2061,6 +2389,8 @@ async fn automation_loop_continues_independent_cycles_and_propagates_cancellatio
 
 #[tokio::test]
 async fn automation_worker_observability_reports_counts_and_categorical_failures() {
+    let _capture_guard = TRACE_CAPTURE_TEST.lock().await;
+    ensure_trace_interest();
     let capture = TraceCapture::default();
     let events = capture.0.clone();
 

@@ -83,7 +83,7 @@
   },
   "canvas_mirror_behavior_contract": {
     "path": "contracts/issuance-canvas-mirror.json",
-    "sha256": "63919909b78e0d0bb053704dc9f0ce4c05476d80aac6a09cbed5a26fd1d8ff62",
+    "sha256": "26f19ce34b391a2854172acb60d105aee0ebbecbf62226544b994cd36aff130f",
     "source_repository": "ElevenID/marty-credentials",
     "source_path": "services/issuance/infrastructure/api/routes.py",
     "source_commit": "aaa6a9b8e31e62cd0ab087eef5fc1f4835048e26"
