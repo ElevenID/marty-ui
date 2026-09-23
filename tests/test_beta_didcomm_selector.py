@@ -28,6 +28,12 @@ def model(enabled):
         DIDCOMM_DELIVERY_OWNER="native",
         ISSUANCE_NATIVE_SERVICE_URL="http://issuance-native:8005",
     )
+    services["issuance"]["depends_on"] = {
+        "issuance-native": {"condition": "service_healthy", "required": True}
+    }
+    services["issuance"]["healthcheck"] = {
+        "test": ["CMD", "curl", "--fail", "http://localhost:8005/ready"]
+    }
     if enabled:
         for name in ("issuance", "issuance-native"):
             services[name]["environment"]["DIDCOMM_ENCRYPTION_POLICY_FILE"] = (
@@ -60,6 +66,37 @@ def test_validator_requires_exact_native_delivery_selection(validator, setting, 
         candidate["services"]["issuance"]["environment"].pop(setting)
     else:
         candidate["services"]["issuance"]["environment"][setting] = value
+    with pytest.raises(validator["DidcommConfigurationError"]):
+        validator["validate_model"](candidate, authcrypt_enabled=False)
+
+
+@pytest.mark.parametrize(
+    "mutation",
+    (
+        "missing-dependency",
+        "weak-condition",
+        "optional-dependency",
+        "legacy-health",
+    ),
+)
+def test_validator_requires_native_dependency_and_retained_readiness(
+    validator, mutation
+):
+    candidate = model(False)
+    if mutation == "missing-dependency":
+        candidate["services"]["issuance"]["depends_on"].clear()
+    elif mutation == "weak-condition":
+        candidate["services"]["issuance"]["depends_on"]["issuance-native"][
+            "condition"
+        ] = "service_started"
+    elif mutation == "optional-dependency":
+        candidate["services"]["issuance"]["depends_on"]["issuance-native"][
+            "required"
+        ] = False
+    else:
+        candidate["services"]["issuance"]["healthcheck"]["test"][-1] = (
+            "http://localhost:8005/health"
+        )
     with pytest.raises(validator["DidcommConfigurationError"]):
         validator["validate_model"](candidate, authcrypt_enabled=False)
 

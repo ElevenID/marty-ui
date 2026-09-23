@@ -11,6 +11,14 @@
     "name": "ISSUANCE_NATIVE_SERVICE_URL",
     "value": "http://issuance-native:8005"
   },
+  "retained_consumer_readiness": {
+    "service": "issuance",
+    "dependency": "issuance-native",
+    "condition": "service_healthy",
+    "required": true,
+    "path": "/ready",
+    "liveness_path": "/health"
+  },
   "selected_compose_models": [
     "docker-compose.beta.yml",
     "docker-compose.profile.issuance-native.yml",

@@ -662,6 +662,9 @@ pub fn compose(
     let legacy_owner = container_mut(&mut result[legacy_index], "issuance")?;
     append_env(legacy_owner, "DIDCOMM_DELIVERY_OWNER", "native")?;
     append_env(legacy_owner, "ISSUANCE_NATIVE_SERVICE_URL", NATIVE_URL)?;
+    require(legacy_owner["livenessProbe"]["httpGet"]["path"] == "/health")?;
+    require(legacy_owner["readinessProbe"]["httpGet"]["path"] == "/health")?;
+    legacy_owner["readinessProbe"]["httpGet"]["path"] = json!("/ready");
     let shared_signing_key = (**environment(container(&result[gateway_index], "gateway")?)?
         .get("SIGNING_KEYS_INTERNAL_API_KEY")
         .ok_or(REFUSAL)?)
@@ -779,6 +782,16 @@ pub fn check_update(actual: &Value, expected: &Value, namespace: &str) -> Result
                 let observed_env = environment(observed_owner)?;
                 let target_env = environment(target_owner)?;
                 require(observed_owner["envFrom"] == target_owner["envFrom"])?;
+                require(
+                    observed_owner["livenessProbe"]["httpGet"]["path"]
+                        == target_owner["livenessProbe"]["httpGet"]["path"]
+                        && target_owner["livenessProbe"]["httpGet"]["path"] == "/health",
+                )?;
+                require(
+                    observed_owner["readinessProbe"]["httpGet"]["path"]
+                        == target_owner["readinessProbe"]["httpGet"]["path"]
+                        && target_owner["readinessProbe"]["httpGet"]["path"] == "/ready",
+                )?;
                 for &setting in SECRET_SETTINGS
                     .iter()
                     .chain(INHERITED_SETTINGS)

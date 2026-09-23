@@ -101,6 +101,22 @@ def validate_model(model, *, authcrypt_enabled):
             raise DidcommConfigurationError(
                 "Beta DIDComm native service URL is not selected"
             )
+        dependency = model["services"]["issuance"]["depends_on"][
+            "issuance-native"
+        ]
+        if dependency != {"condition": "service_healthy", "required": True}:
+            raise DidcommConfigurationError(
+                "Beta DIDComm native readiness dependency is not enforced"
+            )
+        if model["services"]["issuance"]["healthcheck"]["test"] != [
+            "CMD",
+            "curl",
+            "--fail",
+            "http://localhost:8005/ready",
+        ]:
+            raise DidcommConfigurationError(
+                "Beta DIDComm retained consumer readiness is not enforced"
+            )
         policies = [
             environment_mapping(model["services"][name]["environment"]).get(
                 "DIDCOMM_ENCRYPTION_POLICY_FILE"

@@ -81,6 +81,16 @@ def assert_native_delta(legacy, actual):
         DIDCOMM_DELIVERY_OWNER="native",
         ISSUANCE_NATIVE_SERVICE_URL=NATIVE["NATIVE_URL"],
     )
+    expected["services"]["issuance"]["depends_on"]["issuance-native"] = {
+        "condition": "service_healthy",
+        "required": True,
+    }
+    expected["services"]["issuance"]["healthcheck"]["test"] = [
+        "CMD",
+        "curl",
+        "--fail",
+        "http://localhost:8005/ready",
+    ]
     gateway = expected["services"]["gateway"]
     gateway["environment"]["ISSUANCE_NATIVE_SERVICE_URL"] = NATIVE["NATIVE_URL"]
     gateway["depends_on"]["issuance-native"] = {

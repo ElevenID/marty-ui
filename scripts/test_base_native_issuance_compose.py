@@ -129,7 +129,13 @@ def assert_sources(base, profile, runtime):
             "GRPC_SERVICE_TOKEN": NATIVE_ONLY["GRPC_SERVICE_TOKEN"],
             "DIDCOMM_DELIVERY_OWNER": "native",
             "ISSUANCE_NATIVE_SERVICE_URL": NATIVE["NATIVE_URL"],
-        }
+        },
+        "depends_on": {
+            "issuance-native": {"condition": "service_healthy", "required": True}
+        },
+        "healthcheck": {
+            "test": ["CMD", "curl", "--fail", "http://localhost:8005/ready"]
+        },
     }
     for name in set(NATIVE["TOKEN_CONSUMERS"]) - {"gateway", "flow", "issuance"}:
         assert profile["services"][name] == {
@@ -225,6 +231,15 @@ def expected_model(baseline, *, local, authcrypt, inputs, policy_directory):
             "ISSUANCE_NATIVE_SERVICE_URL": NATIVE["NATIVE_URL"],
         }
     )
+    expected["services"]["issuance"].setdefault("depends_on", {})[
+        "issuance-native"
+    ] = {"condition": "service_healthy", "required": True}
+    expected["services"]["issuance"]["healthcheck"]["test"] = [
+        "CMD",
+        "curl",
+        "--fail",
+        "http://localhost:8005/ready",
+    ]
     edge = expected["services"]["gateway"]
     edge["environment"]["ISSUANCE_NATIVE_SERVICE_URL"] = NATIVE["NATIVE_URL"]
     edge["environment"]["GATEWAY_REQUIRED_READY_SERVICES"] = ",".join(

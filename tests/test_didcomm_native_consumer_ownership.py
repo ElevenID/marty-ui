@@ -19,9 +19,18 @@ def _model(path: str) -> dict:
 
 
 def _assert_selected(model: dict) -> None:
-    issuance = model["services"]["issuance"]["environment"]
+    service = model["services"]["issuance"]
+    issuance = service["environment"]
     assert issuance[CONTRACT["owner_selector"]["name"]] == "native"
     assert issuance[CONTRACT["native_origin"]["name"]] == CONTRACT["native_origin"]["value"]
+    readiness = CONTRACT["retained_consumer_readiness"]
+    assert service["depends_on"][readiness["dependency"]] == {
+        "condition": readiness["condition"],
+        "required": readiness["required"],
+    }
+    assert service["healthcheck"]["test"][-1] == (
+        f"http://localhost:8005{readiness['path']}"
+    )
     assert "issuance-native" in model["services"]
 
 
@@ -33,7 +42,18 @@ def test_every_declared_compose_consumer_selects_native_without_mode_downgrade()
 
 
 @pytest.mark.parametrize("path", CONTRACT["selected_compose_models"])
-@pytest.mark.parametrize("mutation", ["missing-owner", "legacy", "missing-origin", "legacy-origin"])
+@pytest.mark.parametrize(
+    "mutation",
+    [
+        "missing-owner",
+        "legacy",
+        "missing-origin",
+        "legacy-origin",
+        "missing-dependency",
+        "weak-dependency",
+        "legacy-readiness",
+    ],
+)
 def test_consumer_contract_rejects_partial_or_legacy_selection(path: str, mutation: str) -> None:
     model = deepcopy(_model(path))
     environment = model["services"]["issuance"]["environment"]
@@ -43,8 +63,18 @@ def test_consumer_contract_rejects_partial_or_legacy_selection(path: str, mutati
         environment[CONTRACT["owner_selector"]["name"]] = "legacy"
     elif mutation == "missing-origin":
         environment.pop(CONTRACT["native_origin"]["name"])
-    else:
+    elif mutation == "legacy-origin":
         environment[CONTRACT["native_origin"]["name"]] = "http://issuance:8005"
+    elif mutation == "missing-dependency":
+        model["services"]["issuance"]["depends_on"].clear()
+    elif mutation == "weak-dependency":
+        model["services"]["issuance"]["depends_on"]["issuance-native"][
+            "condition"
+        ] = "service_started"
+    else:
+        model["services"]["issuance"]["healthcheck"]["test"][-1] = (
+            "http://localhost:8005/health"
+        )
     with pytest.raises((AssertionError, KeyError)):
         _assert_selected(model)
 

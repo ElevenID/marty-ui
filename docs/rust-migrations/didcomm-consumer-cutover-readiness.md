@@ -42,7 +42,7 @@ deferred; compatible artifacts and aggregate beta acceptance are still required.
 The user directed Rust migration before KMS correction. Credentials PR #273
 merged the outstanding `DIDCOMM-KMS-001` note at
 `501977d0759ccad42b3e55488e65151c3934ef39`, in
-`docs/rust-migrations/didcomm-kms-outstanding.md`. KMS backend design, provisioning
+[Credentials DIDComm KMS outstanding record](https://github.com/ElevenID/marty-credentials/blob/aaa6a9b8e31e62cd0ab087eef5fc1f4835048e26/docs/rust-migrations/didcomm-kms-outstanding.md). KMS backend design, provisioning
 and opaque key-agreement corrections are outside this slice. Both anoncrypt and
 sender-authenticated authcrypt remain; failure must not select a weaker mode.
 Retained native local-key compatibility is not KMS-only custody.

@@ -181,6 +181,12 @@ services:
       <<: *beta-grpc-service-auth
       DIDCOMM_DELIVERY_OWNER: native
       ISSUANCE_NATIVE_SERVICE_URL: http://issuance-native:8005
+    depends_on:
+      issuance-native:
+        condition: service_healthy
+        required: true
+    healthcheck:
+      test: ["CMD", "curl", "--fail", "http://localhost:8005/ready"]
 
   # Only operations enumerated by contracts/issuance-native-coverage.json are
   # sent here. The Python issuance service remains the owner for every unmigrated

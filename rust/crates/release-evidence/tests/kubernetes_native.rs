@@ -111,6 +111,9 @@ fn whole_model_preserves_legacy_and_all_siblings_with_only_closed_deltas() {
                     json!({"name":"ISSUANCE_NATIVE_SERVICE_URL","value":"http://issuance-native:8005"})
                 );
             } else if value["metadata"]["name"] == "issuance" {
+                assert_eq!(owner(value)["livenessProbe"]["httpGet"]["path"], "/health");
+                assert_eq!(owner(value)["readinessProbe"]["httpGet"]["path"], "/ready");
+                owner_mut(value)["readinessProbe"]["httpGet"]["path"] = json!("/health");
                 assert_eq!(
                     owner_mut(value)["envFrom"]
                         .as_array_mut()
@@ -448,6 +451,7 @@ fn realistic_api_defaults_preserve_update_guard_and_hostile_changes_fail_closed(
         "management-key",
         "delivery-owner",
         "native-service-url",
+        "readiness-path",
         "policy-volume",
         "policy-mount",
         "policy-path",
@@ -632,6 +636,9 @@ fn legacy_fault(model: &Value, fault: &str) -> Value {
             .as_array_mut()
             .unwrap()
             .retain(|v| v["mountPath"] != "/run/marty-didcomm-policy"),
+        "readiness-path" => {
+            owner_mut(deployment)["readinessProbe"]["httpGet"]["path"] = json!("/health")
+        }
         _ => panic!("Unknown closed legacy mutation"),
     }
     model
