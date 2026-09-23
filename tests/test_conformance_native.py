@@ -227,6 +227,12 @@ def model(*, local=False, authcrypt=False):
         DIDCOMM_DELIVERY_OWNER="native",
         ISSUANCE_NATIVE_SERVICE_URL=native.NATIVE_URL,
     )
+    legacy["depends_on"] = {
+        "issuance-native": {"condition": "service_healthy", "required": True}
+    }
+    legacy["healthcheck"] = {
+        "test": ["CMD", "curl", "--fail", "http://localhost:8005/ready"]
+    }
     candidate = {
         "environment": {**env, "SERVICE_NAME": "issuance_native"},
         "volumes": [ca],

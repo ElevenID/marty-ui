@@ -115,6 +115,9 @@ def modeled(tmp_path):
     baseline["services"]["issuance"]["ports"] = [
         {"host_ip": "127.0.0.1", "published": "8005", "target": 8005}
     ]
+    baseline["services"]["issuance"]["healthcheck"] = {
+        "test": ["CMD", "curl", "-f", "http://localhost:8005/health"]
+    }
     baseline["services"]["gateway"].update(
         environment={"ISSUANCE_SERVICE_URL": GATE["NATIVE"]["LEGACY_URL"]},
         depends_on={},
