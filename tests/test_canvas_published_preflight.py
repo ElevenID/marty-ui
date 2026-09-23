@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from contextlib import nullcontext
+import hashlib
 import os
 from pathlib import Path
 import re
@@ -31,6 +32,10 @@ PINS = [
     f"registry.invalid/{name}@sha256:{letter * 64}"
     for name, letter in (("postgres", "a"), ("issuance", "b"))
 ]
+MANDATORY_REGISTRATION_COUNT = 165
+MANDATORY_REGISTRATION_SHA256 = (
+    "8161a364b2f639c8eb3b0603487a4931ed639307ff0f5132711dcc8f7d2a792f"
+)
 
 
 def required_registrations():
@@ -40,6 +45,30 @@ def required_registrations():
     assert names and all(target in names for _, target in PREFLIGHTS)
     # Keep each mandatory registration's full-mode place without copying it.
     return [name for index, name in enumerate(names) if name not in names[index + 1 :]]
+
+
+def test_mandatory_full_mode_registration_roster_is_unchanged() -> None:
+    names = required_registrations()
+    assert len(names) == MANDATORY_REGISTRATION_COUNT
+    assert len(names) == len(set(names))
+    assert hashlib.sha256("\n".join(names).encode()).hexdigest() == (
+        MANDATORY_REGISTRATION_SHA256
+    )
+
+
+def test_full_mode_is_exactly_two_way_while_every_preflight_stays_serial() -> None:
+    script = SCRIPT.read_text(encoding="utf-8")
+    preflight = (
+        '"${executables[0]}" "$preflight_target" --exact --nocapture '
+        "--test-threads=1"
+    )
+    serial = '"${executables[0]}" "$serial_test" --exact --nocapture --test-threads=1'
+    full = '"${executables[0]}" --skip "$serial_test" --nocapture --test-threads=2'
+    assert sum(line.strip() == preflight for line in script.splitlines()) == 1
+    assert sum(line.strip() == serial for line in script.splitlines()) == 1
+    assert '[[ $((all_tests - parallel_tests)) == 1 ]]' in script
+    assert script.rstrip().endswith(full)
+    assert sorted(set(re.findall(r"--test-threads=(\d+)", script))) == ["1", "2"]
 
 
 RENEWAL_GATES = [
@@ -184,6 +213,10 @@ printf '%s\n' "$record" >> "$TEST_LOG"
 if [[ "$#" == 1 && "$1" == --list ]]; then
   [[ "$TEST_FAILURE" != list ]] || exit 19
   while IFS= read -r registration; do printf '%s\n' "$registration"; done < registrations
+elif [[ "$#" == 3 && "$1" == --list && "$2" == --skip ]]; then
+  while IFS= read -r registration; do
+    [[ "$registration" == *"$3"* ]] || printf '%s\n' "$registration"
+  done < registrations
 else
   [[ "$TEST_FAILURE" != execute ]] || exit 23
 fi
@@ -236,19 +269,35 @@ source "$CONTRACT_SOURCE" "$@"
 
 
 @pytest.mark.parametrize("arguments", [[], ["full"]])
-def test_default_and_explicit_full_keep_all_registrations_and_unfiltered_run(
+def test_default_and_explicit_full_keep_all_registrations_and_run_every_test(
     shell_case, arguments
 ):
     result, calls = shell_case(arguments)
     assert result.returncode == 0, result.stderr
-    checks = [call[2] for call in calls if call[0] == "grep"]
+    checks = [call[2] for call in calls if call[:2] == ["grep", "-Fx"]]
     assert checks == [f"{name}: test" for name in required_registrations()]
     children = [call for call in calls if call[0] == "child"]
-    assert children[-1] == ["child", "1", "--nocapture", "--test-threads=1"]
-    assert children[:-1] == [["child", "1", "--list"]] * len(checks)
+    serial = "worker_sql_logging_preserves_debug_diagnostics_and_operational_warnings"
+    assert children[-4:] == [
+        ["child", "1", "--list"],
+        ["child", "1", "--list", "--skip", serial],
+        ["child", "1", serial, "--exact", "--nocapture", "--test-threads=1"],
+        ["child", "1", "--skip", serial, "--nocapture", "--test-threads=2"],
+    ]
+    assert children[:-4] == [["child", "1", "--list"]] * len(checks)
     assert [call for call in calls if call[0] == "docker"] == [
         ["docker", "pull", pin] for pin in PINS
     ]
+
+
+def test_full_mode_rejects_a_skip_that_would_drop_another_test(shell_case):
+    registrations = [f"{name}: test" for name in required_registrations()]
+    registrations.append(
+        "worker_sql_logging_preserves_debug_diagnostics_and_operational_warnings_extra: test"
+    )
+    result, calls = shell_case(registrations=registrations)
+    assert result.returncode != 0
+    assert not any("--test-threads=2" in call for call in calls)
 
 
 @pytest.mark.parametrize("mode,target", PREFLIGHTS)

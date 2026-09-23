@@ -643,7 +643,11 @@ def test_published_canvas_schema_gate_is_explicit_and_mandatory() -> None:
         "grep -Fx 'cancelled_pool_release_does_not_wait_for_blocked_query: test'"
         in published
     )
-    assert '"${executables[0]}" --nocapture --test-threads=1' in published
+    assert published.rstrip().endswith(
+        '"${executables[0]}" --skip "$serial_test" --nocapture --test-threads=2'
+    )
+    assert '"${executables[0]}" "$serial_test" --exact --nocapture --test-threads=1' in published
+    assert '"${executables[0]}" --nocapture --test-threads=1' not in published
     assert "[[ ${#executables[@]} == 1" in published
 
 
@@ -692,7 +696,7 @@ def _assert_gateway_operations_registration(
     assert published.splitlines().count(inventory) == 1
     assert 'export MARTY_CANVAS_PUBLISHED_SCHEMA_TEST="1"' in published
     assert published.rstrip().endswith(
-        '"${executables[0]}" --nocapture --test-threads=1'
+        '"${executables[0]}" --skip "$serial_test" --nocapture --test-threads=2'
     )
     assert (f'#[path = "support/{module}.rs"]\nmod {module};') in source
     matches = re.findall(
@@ -785,8 +789,8 @@ def test_gateway_operations_registration_rejects_disabled_or_incomplete_gate(
         )
     elif mutation == "filtered-full-run":
         published = published.replace(
-            '"${executables[0]}" --nocapture --test-threads=1',
-            '"${executables[0]}" unrelated_filter --nocapture --test-threads=1',
+            '"${executables[0]}" --skip "$serial_test" --nocapture --test-threads=2',
+            '"${executables[0]}" unrelated_filter --skip "$serial_test" --nocapture --test-threads=2',
         )
     else:
         start = source.index(f"async fn {name}")
@@ -886,6 +890,8 @@ def test_rust_contracts_reuse_local_executables_without_artifact_transfer() -> N
     )
     assert "run-published-canvas-contracts.sh" in orchestrator
     assert "run-rust-db-contracts.sh" in orchestrator
+    assert "ThreadPoolExecutor(max_workers=2)" in orchestrator
+    assert orchestrator.index('"published-canvas"') < orchestrator.index('"rust-db"')
     assert "test-rust-db-contracts" not in document["jobs"]
     assert "rust-db-test-bundle" not in source
     _assert_no_rust_executable_transfer(rust_job["steps"])

@@ -65,9 +65,16 @@ and process-signal contracts remain serialized and unchanged.
 After the workspace and Flow checks, the published-schema suite and remaining
 database/runtime suite run concurrently. Published-schema tests own UUID-scoped
 Docker databases; the runtime suite uses the dedicated `marty_db_contracts_test`
-service database. Each suite retains `--test-threads=1`, all executable inventory
-checks, and its original assertions. The runner waits for both suites even on
-failure and emits separate logs before returning a failing status.
+service database. The published-schema runner executes the SQL logging diagnostic
+on its own, then runs every other published-schema test with exactly two test
+threads. It checks that the skip removes exactly one registered test. Its four
+early diagnostic preflights and the remaining database/runtime suite stay serial.
+All executable inventory checks and original assertions remain mandatory. The
+runner waits for both suites even on failure and emits separate logs before
+returning a failing status. Two-way execution is the
+reviewed ceiling until a complete exact-head run proves a higher setting safe:
+each database-owning test creates a UUID-scoped database and retains RAII cleanup,
+but process- and image-owning tests still share the CI host.
 
 Queue validation exposed a Canvas worker cancellation race: SQLx could start
 return-to-pool validation of a cancelled, lock-blocked query before asynchronous

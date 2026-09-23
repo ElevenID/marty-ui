@@ -6,6 +6,7 @@ use sqlx::{postgres::PgConnectOptions, Connection, PgConnection};
 use std::{
     io::Write,
     sync::{Arc, Mutex},
+    time::Duration,
 };
 use tracing::instrument::WithSubscriber;
 
@@ -43,9 +44,18 @@ async fn observe(database_url: &str, native: bool, level: &str) -> Vec<Value> {
         let mut connection = PgConnection::connect_with(&options).await.unwrap();
         capture.0.lock().unwrap().clear();
         sqlx::query("SELECT 17").execute(&mut connection).await.unwrap();
-        // Real database execution exceeds the unchanged one-second SQLx
-        // classification threshold; no injected logger or edited clock.
-        sqlx::query("SELECT pg_sleep(1.05)").execute(&mut connection).await.unwrap();
+        // Keep a full second of headroom above the unchanged one-second SQLx
+        // classification threshold. The published-schema suite runs two tests
+        // concurrently, so a 50 ms margin is not a reliable positive control
+        // on a loaded CI host. This remains a real database execution with no
+        // injected logger or edited clock, and the outer timeout bounds failure.
+        tokio::time::timeout(
+            Duration::from_secs(10),
+            sqlx::query("SELECT pg_sleep(2)").execute(&mut connection),
+        )
+        .await
+        .expect("slow-query positive control completed within ten seconds")
+        .unwrap();
         // A server NoticeResponse must remain WARN independently of statement
         // logging policy; this is not a synthetic tracing event.
         sqlx::query("DO $$ BEGIN RAISE WARNING 'synthetic PostgreSQL operational warning'; END $$")
