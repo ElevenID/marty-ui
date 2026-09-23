@@ -403,7 +403,7 @@ services:
       CREDENTIAL_LOGIN_REQUIRE_EXISTING_KEYCLOAK_USER: ${CREDENTIAL_LOGIN_REQUIRE_EXISTING_KEYCLOAK_USER:-true}
       CREDENTIAL_LOGIN_CREATE_USERS: ${CREDENTIAL_LOGIN_CREATE_USERS:-false}
       AUTH_SERVICE_INTERNAL_URL: http://auth:8001
-      ISSUANCE_NATIVE_SERVICE_URL: http://issuance-native:8005
+      ISSUANCE_SERVICE_URL: http://issuance:8005
       CREDENTIAL_LOGIN_LISSI_DEEP_LINK_TEMPLATE: ${CREDENTIAL_LOGIN_LISSI_DEEP_LINK_TEMPLATE:-}
       CREDENTIAL_LOGIN_LISSI_ANDROID_DEEP_LINK_TEMPLATE: ${CREDENTIAL_LOGIN_LISSI_ANDROID_DEEP_LINK_TEMPLATE:-}
       CREDENTIAL_LOGIN_LISSI_IOS_DEEP_LINK_TEMPLATE: ${CREDENTIAL_LOGIN_LISSI_IOS_DEEP_LINK_TEMPLATE:-}
@@ -435,8 +435,6 @@ services:
       redis:
         condition: service_healthy
       flow:
-        condition: service_healthy
-      issuance-native:
         condition: service_healthy
       keycloak-configurator:
         condition: service_completed_successfully
@@ -682,7 +680,7 @@ services:
       MARTY_DB_PASSWORD_FILE: /run/secrets/marty_db_password
       APPLICANT_DATA_FILE: /app/data/applicant_store.json
       APPLICATION_TEMPLATE_MIGRATION_MAP: ${APPLICATION_TEMPLATE_MIGRATION_MAP:-}
-      ISSUANCE_NATIVE_SERVICE_URL: http://issuance-native:8005
+      ISSUANCE_SERVICE_URL: http://issuance:8005
       NOTIFICATION_SERVICE_URL: http://notification:8007
       NOTIFICATION_EVENT_PRODUCER_ID: applicant
       NOTIFICATION_APPLICANT_EVENT_TOKEN_FILE: /run/secrets/notification_applicant_event_token
@@ -708,8 +706,6 @@ services:
     depends_on:
       db-migrate:
         condition: service_completed_successfully
-      issuance-native:
-        condition: service_healthy
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8006/health"]
       interval: 10s
@@ -812,9 +808,9 @@ services:
       DID_WEB_ALLOWED_HOSTS: ${DID_WEB_ALLOWED_HOSTS:-}
       PUBLIC_DOMAIN: ${PUBLIC_DOMAIN:-localhost}
       MARTY_ORG_SLUG: ${MARTY_ORG_SLUG:-marty}
-      MIP_CREDENTIAL_STATUS_URL_TEMPLATE: "${MIP_CREDENTIAL_STATUS_URL_TEMPLATE:-http://issuance-native:8005/v1/issuance/credentials/{credential_id}/status}"
+      MIP_CREDENTIAL_STATUS_URL_TEMPLATE: "${MIP_CREDENTIAL_STATUS_URL_TEMPLATE:-http://issuance:8005/v1/issuance/credentials/{credential_id}/status}"
       TRUST_PROFILE_SERVICE_URL: http://trust-profile:8004
-      ISSUANCE_NATIVE_SERVICE_URL: http://issuance-native:8005
+      ISSUANCE_SERVICE_URL: http://issuance:8005
     secrets:
       - marty_db_password
       - grpc_service_token
@@ -824,8 +820,6 @@ services:
     depends_on:
       db-migrate:
         condition: service_completed_successfully
-      issuance-native:
-        condition: service_healthy
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8009/health"]
       interval: 10s
@@ -920,7 +914,6 @@ services:
       CT_GRPC_TARGET: credential-template:9003
       ISSUANCE_GRPC_TARGET: issuance-native:9005
       ISSUANCE_SERVICE_URL: http://issuance:8005
-      ISSUANCE_NATIVE_SERVICE_URL: http://issuance-native:8005
       ISSUANCE_API_KEY_FILE: /run/secrets/issuance_api_key
       SIGNING_KEYS_INTERNAL_API_KEY_FILE: /run/secrets/issuance_api_key
       CREDENTIAL_TEMPLATE_SERVICE_URL: http://credential-template:8003
@@ -956,10 +949,6 @@ services:
       credential-template:
         condition: service_healthy
       presentation-policy:
-        condition: service_healthy
-      issuance:
-        condition: service_healthy
-      issuance-native:
         condition: service_healthy
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8011/health"]

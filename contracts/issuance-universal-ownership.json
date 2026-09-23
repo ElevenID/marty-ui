@@ -27,5 +27,16 @@
   "production_composition": "docker-compose.selfhost.prod.yml",
   "production_unchanged": true,
   "python_deletion_authorized": false,
+  "rust_owned_python_retirement": {
+    "authorized": true,
+    "scope": [
+      "oid4vci-public-and-management-http",
+      "canvas-mirror-http",
+      "canvas-mirror-automation-loop"
+    ],
+    "retained_http_route_count": 11,
+    "packaged_main_lifecycle_gate": "canvas_mirror_worker_enabled_packaged_main_runs_and_shuts_down_cleanly",
+    "full_python_service_deletion_authorized": false
+  },
   "deferred": ["DIDCOMM-KMS-001"]
 }

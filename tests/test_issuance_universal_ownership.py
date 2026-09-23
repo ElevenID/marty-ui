@@ -135,9 +135,63 @@ def test_all_moved_diagnostics_use_the_shared_gateway_actor_boundary() -> None:
 
 def test_production_and_kms_boundaries_remain_explicit() -> None:
     production = yaml.safe_load((ROOT / CONTRACT["production_composition"]).read_text())
-    environment = production["services"]["issuance"]["environment"]
-    assert "DIDCOMM_DELIVERY_OWNER" not in environment
-    assert "ISSUANCE_NATIVE_SERVICE_URL" not in environment
+    services = production["services"]
+    issuance_environment = services["issuance"]["environment"]
+    assert "DIDCOMM_DELIVERY_OWNER" not in issuance_environment
+    assert "ISSUANCE_NATIVE_SERVICE_URL" not in issuance_environment
+
+    # Universal native ownership is a beta/default-composition change.  Keep
+    # every production HTTP consumer on its previously selected legacy owner;
+    # checking only the issuance service itself would miss a consumer cutover.
+    for service_name in ("auth", "applicant", "presentation-policy", "flow"):
+        environment = services[service_name]["environment"]
+        assert environment["ISSUANCE_SERVICE_URL"] == "http://issuance:8005"
+        assert "ISSUANCE_NATIVE_SERVICE_URL" not in environment
+
+    presentation_environment = services["presentation-policy"]["environment"]
+    assert presentation_environment["MIP_CREDENTIAL_STATUS_URL_TEMPLATE"] == (
+        "${MIP_CREDENTIAL_STATUS_URL_TEMPLATE:-http://issuance:8005/v1/issuance/"
+        "credentials/{credential_id}/status}"
+    )
+    assert services["flow"]["environment"]["ISSUANCE_GRPC_TARGET"] == (
+        "issuance-native:9005"
+    )
+    for service_name in ("auth", "applicant", "presentation-policy"):
+        assert "issuance-native" not in services[service_name].get("depends_on", {})
+    assert {"issuance", "issuance-native"}.isdisjoint(
+        services["flow"].get("depends_on", {})
+    )
+
     assert CONTRACT["production_unchanged"] is True
     assert CONTRACT["python_deletion_authorized"] is False
+    retirement = CONTRACT["rust_owned_python_retirement"]
+    assert retirement == {
+        "authorized": True,
+        "scope": [
+            "oid4vci-public-and-management-http",
+            "canvas-mirror-http",
+            "canvas-mirror-automation-loop",
+        ],
+        "retained_http_route_count": 11,
+        "packaged_main_lifecycle_gate": (
+            "canvas_mirror_worker_enabled_packaged_main_runs_and_shuts_down_cleanly"
+        ),
+        "full_python_service_deletion_authorized": False,
+    }
+    published = (
+        ROOT
+        / "rust/services/issuance/tests/canvas_published_schema_contract.rs"
+    ).read_text(encoding="utf-8")
+    lifecycle = (
+        ROOT
+        / "rust/services/issuance/tests/support/canvas_status_runtime_contract.rs"
+    ).read_text(encoding="utf-8")
+    assert retirement["packaged_main_lifecycle_gate"] in published
+    for evidence in (
+        'env("CANVAS_MIRROR_WORKER_ENABLED", "true")',
+        'args(["-TERM", &child.0.id().to_string()])',
+        'external_credential_id=\'automation-external\'',
+        'stderr.contains("Issuance shutdown requested")',
+    ):
+        assert evidence in lifecycle
     assert CONTRACT["deferred"] == ["DIDCOMM-KMS-001"]
