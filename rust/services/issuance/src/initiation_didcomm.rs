@@ -883,10 +883,10 @@ impl DidcommTransportFailure {
     }
 
     pub(crate) fn from_persisted_error(error: Option<&str>) -> Self {
-        let status = error
-            .and_then(|value| value.strip_prefix("HTTP "))
-            .and_then(|value| value.parse::<u16>().ok())
-            .filter(|status| (100..=999).contains(status));
+        let status = error.and_then(|value| {
+            let status = value.strip_prefix("HTTP ")?.parse::<u16>().ok()?;
+            ((400..=599).contains(&status) && value == format!("HTTP {status}")).then_some(status)
+        });
         status.map_or(Self::Generic, Self::HttpStatus)
     }
 }
@@ -1660,6 +1660,35 @@ fn preflight_plaintext(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn persisted_transport_failures_accept_only_failed_http_statuses() {
+        for status in [400, 502, 599] {
+            assert_eq!(
+                DidcommTransportFailure::from_persisted_error(Some(&format!("HTTP {status}"))),
+                DidcommTransportFailure::HttpStatus(status)
+            );
+        }
+        for corrupt_or_legacy in [
+            None,
+            Some(""),
+            Some("DIDComm transport failed"),
+            Some("didcomm_delivery_failed"),
+            Some("HTTP 399"),
+            Some("HTTP 600"),
+            Some("HTTP 0502"),
+            Some("HTTP +502"),
+            Some("HTTP 502 "),
+            Some("HTTP nope"),
+            Some(" HTTP 502"),
+        ] {
+            assert_eq!(
+                DidcommTransportFailure::from_persisted_error(corrupt_or_legacy),
+                DidcommTransportFailure::Generic
+            );
+        }
+    }
+
     mod shared_fixtures {
         include!(concat!(
             env!("CARGO_MANIFEST_DIR"),

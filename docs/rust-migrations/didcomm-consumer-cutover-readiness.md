@@ -368,7 +368,19 @@ again. The public error remains `HTTP <status>` for an HTTP response at or above
 400 and `DIDComm transport failed` for an exception; response bodies and
 exception text are neither retained nor exposed. As in the Python owner, a
 redirect response below 400 is delivery success, while redirect following stays
-disabled. Do not restore duplicate sends to match a legacy observation.
+disabled. The no-resend rule applies only after an attempted or ambiguous
+transport; `transport_retryable` means the request was definitely not attempted
+and remains eligible for an automatic send. Do not restore duplicate sends to
+match a legacy observation.
+
+This repair cannot be rolled out against the currently pinned Credentials
+release. Credentials PR #284 must first merge and produce a new immutable
+release derived after PRs #283 and #284; that release must then replace the
+Credentials pin before native `transport_ready`, `transporting`,
+`transport_retryable`, `transported`, or `delivery_unknown` rows can be shared
+with the retained Python management reader. The shared delivery contract records
+this as a machine-readable unresolved dependency. No release tag, source SHA, or
+image digest is asserted until that immutable release exists and is qualified.
 
 Direct unsupported-state response specificity is repaired by reviewed source
 `40b06fcc8` (integration `9b4a8b67a`). Five freshly executed unchanged Python

@@ -390,6 +390,15 @@ async fn direct_didcomm_route_replays_the_frozen_transport_claim_failures() {
         "delivery_unknown"
     );
     assert_eq!(
+        contract["transport_failure_response"]
+            ["automatic_resend_after_attempted_or_ambiguous_failure"],
+        false
+    );
+    assert_eq!(
+        contract["transport_claim"]["automatic_resend_from_transport_retryable"],
+        true
+    );
+    assert_eq!(
         contract["transport_claim"]["post_attempt_completion_failure"],
         json!({
             "response": "delivery_outcome_unknown",
@@ -424,4 +433,19 @@ async fn direct_didcomm_route_replays_the_frozen_transport_claim_failures() {
             json!({"detail": failure["detail"].as_str().unwrap()})
         );
     }
+}
+
+#[test]
+fn didcomm_rollout_requires_a_credentials_284_derived_immutable_release() {
+    assert_eq!(
+        contract()["rollout_dependency"],
+        json!({
+            "repository": "ElevenID/marty-credentials",
+            "pull_request": 284,
+            "required_capability": "read-all-native-didcomm-delivery-statuses",
+            "immutable_release_required": true,
+            "immutable_release": null,
+            "state": "awaiting-reviewed-merge-and-release"
+        })
+    );
 }

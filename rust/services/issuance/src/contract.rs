@@ -2094,6 +2094,7 @@ fn validate_didcomm_operation(operation: &HttpOperation, contract: &Value) -> Re
             && contract["expected_response"]["status"] == "delivered"
             && contract["transport_claim"]["single_active_attempt"] == true
             && contract["transport_claim"]["automatic_resend_from_delivery_unknown"] == false
+            && contract["transport_claim"]["automatic_resend_from_transport_retryable"] == true
             && contract["transport_claim"]["completion_fenced_by_attempt_id"] == true,
         "native DIDComm operation diverges from its delivery contract",
     )
@@ -2675,6 +2676,7 @@ mod tests {
         for (field, value) in [
             ("single_active_attempt", false),
             ("automatic_resend_from_delivery_unknown", true),
+            ("automatic_resend_from_transport_retryable", false),
             ("completion_fenced_by_attempt_id", false),
         ] {
             let mut changed = contract.clone();

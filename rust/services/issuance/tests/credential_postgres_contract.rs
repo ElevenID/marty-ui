@@ -1294,6 +1294,84 @@ async fn assert_didcomm_retry_and_lifecycle_contract(
     .execute(pool)
     .await
     .unwrap();
+    let generic_claim = repository
+        .claim_transport("org-a", "tx-didcomm-contract", "did:key:holder")
+        .await
+        .unwrap();
+    let InitiationDidcommTransportClaimOutcome::Claimed(generic_claim) = generic_claim else {
+        panic!("the definitely-unattempted row must remain claimable")
+    };
+    repository
+        .mark_transport_outcome_unknown(&generic_claim, DidcommTransportFailure::Generic)
+        .await
+        .unwrap();
+    assert!(matches!(
+        repository
+            .claim_transport("org-a", "tx-didcomm-contract", "did:key:holder")
+            .await
+            .unwrap(),
+        InitiationDidcommTransportClaimOutcome::OutcomeUnknown(_, DidcommTransportFailure::Generic)
+    ));
+    assert_eq!(
+        sqlx::query_scalar::<_, Option<String>>(
+            "SELECT last_error FROM issuance_service.credential_delivery_records
+             WHERE credential_id = $1 AND delivery_target = 'didcomm_v2'",
+        )
+        .bind(credential_id)
+        .fetch_one(pool)
+        .await
+        .unwrap()
+        .as_deref(),
+        Some("DIDComm transport failed")
+    );
+
+    for corrupt_or_legacy in [
+        None,
+        Some("didcomm_delivery_failed"),
+        Some("didcomm_delivery_outcome_unknown"),
+        Some("HTTP 399"),
+        Some("HTTP 600"),
+        Some("HTTP 0502"),
+        Some("HTTP malformed"),
+    ] {
+        sqlx::query(
+            "UPDATE issuance_service.credential_delivery_records
+             SET status = 'delivery_unknown', last_error = $2,
+                 metadata = metadata
+                     - 'didcomm_transport_attempt_id'
+                     - 'didcomm_transport_lease_expires_at'
+             WHERE credential_id = $1 AND delivery_target = 'didcomm_v2'",
+        )
+        .bind(credential_id)
+        .bind(corrupt_or_legacy)
+        .execute(pool)
+        .await
+        .unwrap();
+        assert!(matches!(
+            repository
+                .claim_transport("org-a", "tx-didcomm-contract", "did:key:holder")
+                .await
+                .unwrap(),
+            InitiationDidcommTransportClaimOutcome::OutcomeUnknown(
+                _,
+                DidcommTransportFailure::Generic
+            )
+        ));
+    }
+
+    sqlx::query(
+        "UPDATE issuance_service.credential_delivery_records
+         SET status = $2, last_error = 'didcomm_delivery_failed',
+             metadata = metadata
+                 - 'didcomm_transport_attempt_id'
+                 - 'didcomm_transport_lease_expires_at'
+         WHERE credential_id = $1 AND delivery_target = 'didcomm_v2'",
+    )
+    .bind(credential_id)
+    .bind(DIDCOMM_TRANSPORT_RETRYABLE_STATUS)
+    .execute(pool)
+    .await
+    .unwrap();
     let expiry_claim = repository
         .claim_transport("org-a", "tx-didcomm-contract", "did:key:holder")
         .await

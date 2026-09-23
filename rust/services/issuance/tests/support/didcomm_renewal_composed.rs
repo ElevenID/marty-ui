@@ -182,7 +182,7 @@ fn assert_renewal_offer(
         (
             "didcomm",
             "Synthetic Wallet",
-            if scenario == Scenario::Automatic {
+            if matches!(scenario, Scenario::Automatic | Scenario::Refused) {
                 format!("didcomm://{endpoint}")
             } else {
                 format!("didcomm://pending?transaction_id={id}")
@@ -397,8 +397,10 @@ async fn run_case(pool: &PgPool, authenticated: bool, scenario: Scenario, gatewa
             )
         } else {
             (
-                StatusCode::CONFLICT,
-                json!({"detail":"DIDComm delivery outcome requires reconciliation"}),
+                StatusCode::OK,
+                json!({"transaction_id":id,"credential_id":state["credentials"][0]["id"],
+                "holder_did":HOLDER,"service_endpoint":graph.endpoint,"didcomm_message_id":message,
+                "status":"delivery_failed","error":"HTTP 503"}),
             )
         };
         for _ in 0..2 {

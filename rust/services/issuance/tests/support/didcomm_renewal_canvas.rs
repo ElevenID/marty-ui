@@ -125,7 +125,7 @@ pub(super) async fn run(pool: &PgPool) {
             assert_eq!(
                 response,
                 json!({"source_credential_id":source,"transaction_id":id,"credential_offer_uri":uri,
-              "credential_offer_uris":if ordinary {json!({})}else{json!({"didcomm":if refused||stale {format!("didcomm://pending?transaction_id={id}")}else{format!("didcomm://{}",graph.endpoint)}})},
+              "credential_offer_uris":if ordinary {json!({})}else{json!({"didcomm":if stale {format!("didcomm://pending?transaction_id={id}")}else{format!("didcomm://{}",graph.endpoint)}})},
               "credential_offer_labels":if ordinary {json!({})}else{json!({"didcomm":"Synthetic Wallet"})},
               "expires_at":(Utc.timestamp_opt(1_700_000_000,0).single().unwrap()+chrono::Duration::days(7)).to_rfc3339()})
             );
@@ -273,7 +273,8 @@ pub(super) async fn run(pool: &PgPool) {
                     source
                 );
                 let captured = graph.wallet.captures().await;
-                assert_captured_message(&graph, &captured, authenticated, &id, &state);
+                let message =
+                    assert_captured_message(&graph, &captured, authenticated, &id, &state);
                 if refused {
                     assert_eq!(state["deliveries"][0]["status"], "delivery_unknown");
                     assert_eq!(state["events"], json!([]));
@@ -306,11 +307,33 @@ pub(super) async fn run(pool: &PgPool) {
                 };
                 for _ in 0..2 {
                     assert_eq!(
-                        direct_response(&direct, &id).await.0,
+                        direct_response(&direct, &id).await,
                         if refused {
-                            StatusCode::CONFLICT
+                            (
+                                StatusCode::OK,
+                                json!({
+                                    "transaction_id":id,
+                                    "credential_id":credential,
+                                    "holder_did":HOLDER,
+                                    "service_endpoint":graph.endpoint,
+                                    "didcomm_message_id":message,
+                                    "status":"delivery_failed",
+                                    "error":"HTTP 503"
+                                }),
+                            )
                         } else {
-                            StatusCode::OK
+                            (
+                                StatusCode::OK,
+                                json!({
+                                    "transaction_id":id,
+                                    "credential_id":credential,
+                                    "holder_did":HOLDER,
+                                    "service_endpoint":graph.endpoint,
+                                    "didcomm_message_id":message,
+                                    "status":"delivered",
+                                    "error":null
+                                }),
+                            )
                         }
                     );
                 }

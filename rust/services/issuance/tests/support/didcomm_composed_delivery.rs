@@ -1186,11 +1186,16 @@ async fn run_case(
     ) {
         let refused = fresh == Some(FreshScenario::WalletRefused);
         let pending_uri = format!("didcomm://pending?transaction_id={id}");
+        let response_uri = if refused {
+            format!("didcomm://{endpoint}")
+        } else {
+            pending_uri.clone()
+        };
         assert_offer_result(
             fresh_response.as_ref().unwrap(),
             &reservation,
             "pending",
-            &pending_uri,
+            &response_uri,
         );
         let state = snapshot(pool, &id).await;
         let captured = wallet.captures().await;
@@ -1234,14 +1239,20 @@ async fn run_case(
                     .unwrap(),
                 SIGNED_CREDENTIAL.as_bytes()
             );
+            let expected_receipt = (
+                StatusCode::OK,
+                json!({
+                    "transaction_id":id,
+                    "credential_id":state["credentials"][0]["id"],
+                    "holder_did":HOLDER,
+                    "service_endpoint":endpoint,
+                    "didcomm_message_id":message.id,
+                    "status":"delivery_failed",
+                    "error":"HTTP 503"
+                }),
+            );
             for _ in 0..2 {
-                assert_eq!(
-                    direct_response(&app, &id).await,
-                    (
-                        StatusCode::CONFLICT,
-                        json!({"detail":"DIDComm delivery outcome requires reconciliation"})
-                    )
-                );
+                assert_eq!(direct_response(&app, &id).await, expected_receipt);
             }
         } else {
             assert_eq!(state["transaction"]["status"], "pending");
@@ -1249,9 +1260,10 @@ async fn run_case(
             assert_eq!(state["deliveries"], json!([]));
             assert!(state["transaction"]["reserved_credential_id"].is_null());
         }
-        // The first initiation response used the pending reservation before delivery.
-        // The reloaded reservation is actually issued after a refused POST; its
-        // projector response retains issued status, but never claims delivery.
+        // The first automatic initiation response remains pending until durable
+        // delivery succeeds and exposes the resolved endpoint on failure. The
+        // reloaded reservation is already issued after materialization, but still
+        // replays the endpoint and never claims delivery or sends again.
         // This is not a second (non-idempotent) HTTP or RPC initiation request.
         for _ in 0..2 {
             let projected = serde_json::to_value(
@@ -1265,7 +1277,7 @@ async fn run_case(
                 &projected,
                 &reservation,
                 if refused { "issued" } else { "pending" },
-                &pending_uri,
+                &response_uri,
             );
         }
         assert_eq!(
@@ -1314,19 +1326,7 @@ async fn run_case(
             !automatic,
             "negative first entrypoint is direct; retry also exercises automatic"
         );
-        let expected = if fault == Fault::WrongSenderKey {
-            assert!(authenticated);
-            (
-                StatusCode::SERVICE_UNAVAILABLE,
-                json!({"detail":"DIDComm sender-authentication configuration is unavailable"}),
-            )
-        } else {
-            (
-                StatusCode::CONFLICT,
-                json!({"detail":"DIDComm delivery outcome requires reconciliation"}),
-            )
-        };
-        assert_eq!(direct_response(&app, &id).await, expected);
+        let first_response = direct_response(&app, &id).await;
         let captured = wallet.captures().await;
         let state = snapshot(pool, &id).await;
         if fault == Fault::WrongSenderKey {
@@ -1373,6 +1373,27 @@ async fn run_case(
                 );
             }
         }
+        let expected = if fault == Fault::WrongSenderKey {
+            assert!(authenticated);
+            (
+                StatusCode::SERVICE_UNAVAILABLE,
+                json!({"detail":"DIDComm sender-authentication configuration is unavailable"}),
+            )
+        } else {
+            (
+                StatusCode::OK,
+                json!({
+                    "transaction_id":id,
+                    "credential_id":state["credentials"][0]["id"],
+                    "holder_did":HOLDER,
+                    "service_endpoint":endpoint,
+                    "didcomm_message_id":state["deliveries"][0]["metadata"]["didcomm_message_id"],
+                    "status":"delivery_failed",
+                    "error":if fault == Fault::HttpRefused { "HTTP 503" } else { "DIDComm transport failed" }
+                }),
+            )
+        };
+        assert_eq!(first_response, expected);
         assert_eq!(direct_response(&app, &id).await, expected);
         let projected = serde_json::to_value(
             projector
@@ -1385,7 +1406,11 @@ async fn run_case(
             &projected,
             &reservation,
             "pending",
-            &format!("didcomm://pending?transaction_id={id}"),
+            &if fault == Fault::WrongSenderKey {
+                format!("didcomm://pending?transaction_id={id}")
+            } else {
+                format!("didcomm://{endpoint}")
+            },
         );
         assert_eq!(
             snapshot(pool, &id).await,
