@@ -6259,28 +6259,18 @@ The draft is not a nine-route cutover. Live signer and bureau qualification
 review and CI, immediate qualified Python retirement, and the one aggregate
 beta-only acceptance soak remain. Production is unchanged; DIDComm KMS
 corrections remain separately deferred.
-Gateway currently routes public `/v1/passport` requests to Python. Before
-switching those routes, it must derive the trusted organization from its
-authentication context, inject only that organization's native passport
-tenant key, reject caller-supplied organization/key context, and qualify all
-eight declared public gateway routes plus the separately signed bureau webhook
-ingress. Draft #852 now classifies those eight exact public method/path shapes
-from the frozen contract and explicitly excludes the signed webhook and
-lookalike paths. Its route-table opt-in proves that only those eight owners
-would change, while the executable still keeps legacy routing selected. The
-gateway's general tenant-authorization classifier does not currently cover
-`/v1/passport`; the
-cutover therefore remains blocked on an explicit authenticated organization
-and membership/scope gate before any tenant key can be injected. The gateway
-now parses and redacts the same optional tenant keyring type as Flow and
-issuance, with empty-default Compose pass-through. Its
-`PASSPORT_NATIVE_GATEWAY_ENABLED` setting defaults off and requires a valid
-keyring when true, but is not yet wired to route selection or key forwarding;
-setting it is not a cutover. A tested gateway key-selection helper now requires
-the exact public passport route, its gateway-authorized permission and tenant,
-and agreement from any client organization claims before it can return that
-tenant's key. The remaining work is to connect the authenticated middleware
-and upstream override end to end, then qualify two-tenant HTTP behavior. The
-shared
-issuance API key
-cannot serve as a passport tenant credential.
+Gateway still selects Python for public `/v1/passport` routes by default. Draft
+#852's explicit `PASSPORT_NATIVE_GATEWAY_ENABLED` switch, default false, now
+selects only the eight frozen public method/path shapes when enabled; it leaves
+the separately signed bureau webhook and lookalike paths outside gateway
+routing. The switch requires the shared, validated tenant keyring. Native
+passport middleware binds an authenticated organization to the existing
+issuance view/initiate permission, checks membership or
+API-key scope, rejects cross-tenant body/header/query claims, and replaces
+client-provided upstream key/organization headers with that organization's
+native key. A two-tenant gateway HTTP test confirms distinct keys and no
+forwarding on mismatched claims; the 131-test gateway library and strict Clippy
+pass locally. The shared issuance API key is not used as a passport tenant
+credential. This source gate is not deployment authorization: live signer and
+bureau, signed webhook, image, Flow, beta secret mount, exact-head CI and
+acceptance qualification still remain.

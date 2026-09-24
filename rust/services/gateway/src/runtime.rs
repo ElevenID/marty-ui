@@ -26,6 +26,7 @@ use axum::{
 };
 use chrono::Utc;
 use futures_core::Stream;
+use marty_passport_auth::PassportTenantKeyring;
 use mmf_platform::{
     ContentTypeDecision, EntityTagDecision, EntityTagPolicy, GatewayProxy, GatewayRequest,
     GatewayResponse, HttpMethod, IdempotencyBegin, IdempotencyRequest, IdempotencyResponse,
@@ -43,7 +44,7 @@ use crate::{
     authorization::{
         authorize_api_key, authorize_membership, extract_org_id, resolve_action,
         resolve_resource_lookup, skips_tenant_authorization, OrganizationMembership,
-        OrganizationMembershipProvider, TenantAuthorizationFailure,
+        OrganizationMembershipProvider, RequiredPermission, TenantAuthorizationFailure,
     },
     contract::{
         requires_issuance_service_auth, retired_canvas_state_route, route_ownership,
@@ -60,8 +61,9 @@ use crate::{
         GatewayHttpPolicies, GatewayIdentity, GatewayIdentityProvider, GatewayRateLimiter,
         MipError, MIP_VERSION,
     },
-    organization_composition, organization_contract, presentation_policy_contract,
-    response_projection,
+    organization_composition, organization_contract,
+    passport_gateway::{passport_upstream_auth, PassportUpstreamAuth},
+    presentation_policy_contract, response_projection,
     signing_compat::{self, SigningCompatibilityOperation},
     trust_contract,
     vc_api::{
@@ -92,6 +94,8 @@ pub struct GatewayRuntimeState {
     pub default_organization_id: Option<String>,
     pub signing_service_api_key: String,
     pub issuance_service_api_key: String,
+    pub passport_native_gateway_enabled: bool,
+    pub passport_tenant_keys: Option<PassportTenantKeyring>,
     pub service_token: Option<String>,
     pub release_identity: ReleaseIdentity,
     pub maximum_body_bytes: usize,
@@ -199,6 +203,8 @@ impl GatewayRuntimeState {
                 .filter(|value| !value.is_empty()),
             signing_service_api_key,
             issuance_service_api_key,
+            passport_native_gateway_enabled: false,
+            passport_tenant_keys: None,
             service_token: None,
             release_identity,
             maximum_body_bytes: DEFAULT_MAXIMUM_BODY_BYTES,
@@ -215,6 +221,21 @@ impl GatewayRuntimeState {
             ));
         }
         self.service_token = service_token;
+        Ok(self)
+    }
+
+    pub fn with_passport_native_gateway(
+        mut self,
+        enabled: bool,
+        tenant_keys: Option<PassportTenantKeyring>,
+    ) -> Result<Self, mmf_platform::PlatformError> {
+        if enabled && tenant_keys.is_none() {
+            return Err(mmf_platform::PlatformError::InvalidConfiguration(
+                "native passport gateway requires tenant keys".into(),
+            ));
+        }
+        self.passport_native_gateway_enabled = enabled;
+        self.passport_tenant_keys = tenant_keys;
         Ok(self)
     }
 }
@@ -509,6 +530,66 @@ async fn tenant_authorization_middleware(
         return next.run(Request::from_parts(parts, Body::from(body))).await;
     }
     let identity = parts.extensions.get::<GatewayIdentity>().cloned();
+    if let Some(method) = http_method(parts.method.as_str()).filter(|method| {
+        state.passport_native_gateway_enabled
+            && issuance_native::is_passport_public_http(*method, parts.uri.path())
+    }) {
+        let outcome = authorize_native_passport_tenant(
+            method,
+            parts.uri.path(),
+            identity.as_ref(),
+            state.memberships.as_ref(),
+        )
+        .await;
+        let TenantAuthorizationOutcome::Authorized(context) = outcome else {
+            return match outcome {
+                TenantAuthorizationOutcome::Denied(error) => {
+                    detail_response(error.status, &error.detail)
+                }
+                _ => detail_response(403, "Passport tenant authorization is required"),
+            };
+        };
+        let header_organizations = parts
+            .headers
+            .get_all("x-organization-id")
+            .iter()
+            .collect::<Vec<_>>();
+        if header_organizations.len() > 1 {
+            return detail_response(403, "Passport organization context is invalid");
+        }
+        let header_organization = header_organizations
+            .first()
+            .map(|value| value.to_str())
+            .transpose();
+        let Ok(header_organization) = header_organization else {
+            return detail_response(403, "Passport organization context is invalid");
+        };
+        let query = query_pairs(parts.uri.query());
+        let query_organizations = query.get("organization_id");
+        if query_organizations.is_some_and(|values| values.len() != 1) {
+            return detail_response(403, "Passport organization context is invalid");
+        }
+        let body_organization = body_organization_id(parts.method.as_str(), &body);
+        let Some(keyring) = state.passport_tenant_keys.as_ref() else {
+            return detail_response(503, "Passport tenant keys are unavailable");
+        };
+        let passport_auth = match passport_upstream_auth(
+            keyring,
+            &context,
+            method,
+            parts.uri.path(),
+            header_organization,
+            body_organization.as_deref(),
+            query_organizations.and_then(|values| values.first().map(String::as_str)),
+        ) {
+            Ok(auth) => auth,
+            Err(_) => return detail_response(403, "Passport organization is not authorized"),
+        };
+        let mut request = Request::from_parts(parts, Body::from(body));
+        request.extensions_mut().insert(*context);
+        request.extensions_mut().insert(passport_auth);
+        return next.run(request).await;
+    }
     // These public batch routes are tenant-scoped operations even though the
     // underlying worker API retains its frozen optional/global scope. Never
     // let an omitted, forged, or duplicate client query select the tenant used
@@ -877,6 +958,7 @@ async fn proxy_handler(
         .extensions()
         .get::<ConnectInfo<SocketAddr>>()
         .map(|value| value.0.ip().to_string());
+    let passport_auth = request.extensions().get::<PassportUpstreamAuth>().cloned();
     let (parts, body) = request.into_parts();
     let body = match to_bytes(body, state.maximum_body_bytes).await {
         Ok(body) => body,
@@ -888,6 +970,11 @@ async fn proxy_handler(
         }
     };
     let public_path = parts.uri.path().to_owned();
+    let native_passport_public = state.passport_native_gateway_enabled
+        && issuance_native::is_passport_public_http(method, &public_path);
+    if native_passport_public && passport_auth.is_none() {
+        return detail_response(403, "Passport tenant authorization is required");
+    }
     if issuance_native::is_canvas_mirror_public_batch(parts.method.as_str(), &public_path)
         && identity
             .organization_id
@@ -905,6 +992,10 @@ async fn proxy_handler(
     let mut gateway_request = GatewayRequest::new(method, &upstream_path, now_ms());
     gateway_request.query = query_pairs(parts.uri.query());
     gateway_request.headers = request_headers(&parts.headers);
+    if native_passport_public {
+        gateway_request.headers.remove("x-api-key");
+        gateway_request.headers.remove("x-organization-id");
+    }
     let mut canonical_body = match organization_contract::canonicalize_request(
         parts.method.as_str(),
         &public_path,
@@ -1015,6 +1106,15 @@ async fn proxy_handler(
     // overrides from the upstream path can lose the authenticated tenant or
     // misread a compatibility segment (for example `organizations/audit`).
     let mut overrides = proxy_overrides(&state, &public_path, &identity);
+    if let Some(passport_auth) = passport_auth.filter(|_| native_passport_public) {
+        overrides
+            .headers
+            .insert("x-api-key".into(), passport_auth.api_key().into());
+        overrides.headers.insert(
+            "x-organization-id".into(),
+            passport_auth.organization_id().into(),
+        );
+    }
     if issuance_native::is_canvas_mirror_public_batch(parts.method.as_str(), &public_path) {
         overrides.trusted_query.insert(
             "organization_id".into(),
@@ -4188,6 +4288,15 @@ pub async fn authorize_tenant_request(
     let Some(organization_id) = organization_id.and_then(normalize_id) else {
         return TenantAuthorizationOutcome::Bypass;
     };
+    authorize_required_tenant(required, organization_id, identity, memberships).await
+}
+
+async fn authorize_required_tenant(
+    required: RequiredPermission,
+    organization_id: &str,
+    identity: Option<&GatewayIdentity>,
+    memberships: &dyn OrganizationMembershipProvider,
+) -> TenantAuthorizationOutcome {
     let Some(identity) = identity else {
         return TenantAuthorizationOutcome::Denied(map_failure(
             TenantAuthorizationFailure::AuthenticationRequired,
@@ -4244,6 +4353,39 @@ pub async fn authorize_tenant_request(
         required.permission,
         membership.as_ref(),
     )))
+}
+
+async fn authorize_native_passport_tenant(
+    method: HttpMethod,
+    path: &str,
+    identity: Option<&GatewayIdentity>,
+    memberships: &dyn OrganizationMembershipProvider,
+) -> TenantAuthorizationOutcome {
+    let Some(permission) = issuance_native::passport_required_permission(method, path) else {
+        return TenantAuthorizationOutcome::Denied(TenantAuthorizationError {
+            status: 404,
+            detail: "Passport route not found".into(),
+        });
+    };
+    let Some(organization_id) = identity
+        .and_then(|value| value.session_organization_id.as_deref())
+        .and_then(normalize_id)
+    else {
+        return TenantAuthorizationOutcome::Denied(TenantAuthorizationError {
+            status: 403,
+            detail: "Authenticated organization context is required".into(),
+        });
+    };
+    authorize_required_tenant(
+        RequiredPermission {
+            permission,
+            resource: "issuance",
+        },
+        organization_id,
+        identity,
+        memberships,
+    )
+    .await
 }
 
 fn trusted_identity(
@@ -4510,6 +4652,7 @@ mod tests {
         ) -> Result<Option<SessionIdentity>, SecurityError> {
             let organization_id = match session_id {
                 "valid" => Some("org-1"),
+                "valid-org-2" => Some("org-2"),
                 "valid-uuid" => Some("11111111-1111-1111-1111-111111111111"),
                 "valid-no-org" => None,
                 _ => return Ok(None),
@@ -4521,8 +4664,32 @@ mod tests {
             }))
         }
 
-        async fn validate_api_key(&self, _: &str) -> Result<Option<ApiKeyIdentity>, SecurityError> {
-            Ok(None)
+        async fn validate_api_key(
+            &self,
+            key: &str,
+        ) -> Result<Option<ApiKeyIdentity>, SecurityError> {
+            Ok(match key {
+                "passport-gateway-key-org-1"
+                | "passport-gateway-key-org-2"
+                | "passport-gateway-read-only-org-1" => Some(ApiKeyIdentity {
+                    api_key_id: "gateway-test-key".into(),
+                    organization_id: Some(
+                        if key.ends_with("org-1") {
+                            "org-1"
+                        } else {
+                            "org-2"
+                        }
+                        .into(),
+                    ),
+                    key_prefix: None,
+                    scopes: if key == "passport-gateway-read-only-org-1" {
+                        vec!["credentials:read".into()]
+                    } else {
+                        vec!["credentials:read".into(), "credentials:issue".into()]
+                    },
+                }),
+                _ => None,
+            })
         }
     }
 
@@ -5658,13 +5825,21 @@ mod tests {
         event_streams: Arc<dyn EventStreamProvider>,
         upstream: Arc<dyn UpstreamClient>,
     ) -> Arc<GatewayRuntimeState> {
+        runtime_state_with_upstream_and_passport(event_streams, upstream, false)
+    }
+
+    fn runtime_state_with_upstream_and_passport(
+        event_streams: Arc<dyn EventStreamProvider>,
+        upstream: Arc<dyn UpstreamClient>,
+        passport_native: bool,
+    ) -> Arc<GatewayRuntimeState> {
         let routes = GatewayContract::load()
             .expect("contract")
-            .runtime_route_table()
+            .runtime_route_table_with_passport_native(passport_native)
             .expect("routes");
         let proxy_routes = GatewayContract::load()
             .expect("contract")
-            .proxy_route_table()
+            .proxy_route_table_with_passport_native(passport_native)
             .expect("proxy routes");
         let registry = StaticServiceRegistry::from_urls(&BTreeMap::from([
             ("auth".into(), "http://auth:8001".into()),
@@ -5727,7 +5902,17 @@ mod tests {
         )
         .expect("runtime state")
         .with_service_token(Some("s".repeat(32)))
-        .expect("service token");
+        .expect("service token")
+        .with_passport_native_gateway(
+            passport_native,
+            passport_native.then(|| {
+                PassportTenantKeyring::from_json(
+                    r#"{"org-1":"native-passport-key-for-org-1-00000001","org-2":"native-passport-key-for-org-2-00000002"}"#,
+                )
+                .expect("test tenant keys")
+            }),
+        )
+        .expect("passport gateway");
         Arc::new(state)
     }
 
@@ -5870,6 +6055,154 @@ mod tests {
         state_mut.identities = Arc::new(ActorIdentityProvider);
         state_mut.memberships = Arc::new(ActorIdentityProvider);
         (gateway_router(state), recorder)
+    }
+
+    #[tokio::test]
+    async fn native_passport_gateway_binds_upstream_keys_to_two_authenticated_tenants() {
+        let recorder = Arc::new(ActorRecordingUpstream::default());
+        let router = gateway_router(runtime_state_with_upstream_and_passport(
+            Arc::new(NoOwner),
+            recorder.clone(),
+            true,
+        ));
+        for (gateway_key, organization_id, native_key) in [
+            (
+                "passport-gateway-key-org-1",
+                "org-1",
+                "native-passport-key-for-org-1-00000001",
+            ),
+            (
+                "passport-gateway-key-org-2",
+                "org-2",
+                "native-passport-key-for-org-2-00000002",
+            ),
+        ] {
+            let response = router
+                .clone()
+                .oneshot(
+                    Request::builder()
+                        .method("POST")
+                        .uri("/v1/passport/applications")
+                        .header("content-type", "application/json")
+                        .header("x-api-key", gateway_key)
+                        .header("x-organization-id", organization_id)
+                        .body(Body::from(
+                            json!({"organization_id": organization_id}).to_string(),
+                        ))
+                        .unwrap(),
+                )
+                .await
+                .unwrap();
+            assert_eq!(response.status(), StatusCode::OK);
+            let captured = recorder.0.lock().unwrap();
+            let (service, upstream) = captured.last().unwrap();
+            assert_eq!(service, issuance_native::NATIVE_SERVICE);
+            assert_eq!(
+                upstream.headers.get("x-api-key").map(String::as_str),
+                Some(native_key)
+            );
+            assert_eq!(
+                upstream
+                    .headers
+                    .get("x-organization-id")
+                    .map(String::as_str),
+                Some(organization_id)
+            );
+            assert_ne!(
+                upstream.headers.get("x-api-key").map(String::as_str),
+                Some(gateway_key)
+            );
+        }
+        let before = recorder.0.lock().unwrap().len();
+        for request in [
+            Request::builder()
+                .method("POST")
+                .uri("/v1/passport/applications")
+                .header("content-type", "application/json")
+                .header("x-api-key", "passport-gateway-key-org-1")
+                .body(Body::from(r#"{"organization_id":"org-2"}"#))
+                .unwrap(),
+            Request::builder()
+                .method("GET")
+                .uri("/v1/passport/capabilities?organization_id=org-2")
+                .header("x-api-key", "passport-gateway-key-org-1")
+                .body(Body::empty())
+                .unwrap(),
+            Request::builder()
+                .method("GET")
+                .uri("/v1/passport/capabilities")
+                .header("x-api-key", "passport-gateway-key-org-1")
+                .header("x-organization-id", "org-2")
+                .body(Body::empty())
+                .unwrap(),
+            Request::builder()
+                .method("GET")
+                .uri("/v1/passport/capabilities?organization_id=org-1&organization_id=org-2")
+                .header("x-api-key", "passport-gateway-key-org-1")
+                .body(Body::empty())
+                .unwrap(),
+            Request::builder()
+                .method("GET")
+                .uri("/v1/passport/capabilities")
+                .header("cookie", "sessionId=valid-no-org")
+                .body(Body::empty())
+                .unwrap(),
+            Request::builder()
+                .method("POST")
+                .uri("/v1/passport/applications")
+                .header("content-type", "application/json")
+                .header("x-api-key", "passport-gateway-read-only-org-1")
+                .body(Body::from(r#"{"organization_id":"org-1"}"#))
+                .unwrap(),
+        ] {
+            let response = router.clone().oneshot(request).await.unwrap();
+            assert_eq!(response.status(), StatusCode::FORBIDDEN);
+        }
+        assert_eq!(recorder.0.lock().unwrap().len(), before);
+        let response = router
+            .oneshot(
+                Request::builder()
+                    .method("GET")
+                    .uri("/v1/passport/capabilities")
+                    .header("cookie", "sessionId=valid-org-2")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        {
+            let captured = recorder.0.lock().unwrap();
+            let (service, upstream) = captured.last().unwrap();
+            assert_eq!(service, issuance_native::NATIVE_SERVICE);
+            assert_eq!(
+                upstream.headers.get("x-api-key").map(String::as_str),
+                Some("native-passport-key-for-org-2-00000002")
+            );
+        }
+        let response = gateway_router(runtime_state_with_upstream_and_passport(
+            Arc::new(NoOwner),
+            recorder.clone(),
+            true,
+        ))
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/v1/passport/applications/job-1/activate")
+                .header("content-type", "application/json")
+                .header("x-api-key", "passport-gateway-key-org-1")
+                .body(Body::from("{}"))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        let captured = recorder.0.lock().unwrap();
+        let (_, upstream) = captured.last().unwrap();
+        assert_eq!(
+            upstream.headers.get("x-api-key").map(String::as_str),
+            Some("native-passport-key-for-org-1-00000001")
+        );
     }
 
     fn forged_actor_request(authentication: Option<(&str, &str)>, public: bool) -> Request {

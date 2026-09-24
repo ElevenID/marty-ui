@@ -133,10 +133,9 @@ pub fn is_passport_public_http(method: HttpMethod, path: &str) -> bool {
             .any(|route| route.method == method && exact_template_shape(&route.path, path))
 }
 
-/// Native passport requests use the existing issuance permissions; the final
-/// activation transition additionally requires application approval authority.
-/// Legacy routing does not call this policy until the native gateway selector
-/// and its authenticated tenant boundary are qualified together.
+/// Native passport requests use the existing issuance read/issue permissions.
+/// Legacy routing does not call this policy; only the explicit native gateway
+/// selector activates its authenticated tenant boundary.
 #[must_use]
 pub fn passport_required_permission(method: HttpMethod, path: &str) -> Option<&'static str> {
     if !is_passport_public_http(method, path) {
@@ -144,8 +143,6 @@ pub fn passport_required_permission(method: HttpMethod, path: &str) -> Option<&'
     }
     if method == HttpMethod::Get {
         Some("issuance:view")
-    } else if path.ends_with("/activate") {
-        Some("application:approve")
     } else {
         Some("issuance:initiate")
     }
@@ -272,7 +269,7 @@ mod tests {
                 HttpMethod::Post,
                 "/v1/passport/applications/job-1/activate"
             ),
-            Some("application:approve")
+            Some("issuance:initiate")
         );
     }
 

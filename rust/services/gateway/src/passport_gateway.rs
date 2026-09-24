@@ -162,7 +162,7 @@ mod tests {
         assert_eq!(
             passport_upstream_auth(
                 &keys,
-                &authorized("org-a", "issuance:initiate"),
+                &authorized("org-a", "issuance:view"),
                 HttpMethod::Post,
                 path,
                 None,
@@ -175,7 +175,7 @@ mod tests {
         assert_eq!(
             passport_upstream_auth(
                 &keys,
-                &authorized("org-c", "application:approve"),
+                &authorized("org-c", "issuance:initiate"),
                 HttpMethod::Post,
                 path,
                 None,
@@ -188,7 +188,7 @@ mod tests {
         assert_eq!(
             passport_upstream_auth(
                 &keys,
-                &authorized("org-a", "application:approve"),
+                &authorized("org-a", "issuance:initiate"),
                 HttpMethod::Post,
                 "/v1/passport/webhooks/personalization",
                 None,
