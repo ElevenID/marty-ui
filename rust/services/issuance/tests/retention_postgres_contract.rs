@@ -32,6 +32,8 @@ async fn retention_purge_preserves_tenant_and_recent_event_ownership() {
         "CREATE TABLE issuance_service.issuance_transactions (id text PRIMARY KEY, organization_id text NOT NULL, created_at timestamptz NOT NULL)",
         "CREATE TABLE issuance_service.authorization_sessions (id text PRIMARY KEY, organization_id text NOT NULL, created_at timestamptz NOT NULL)",
         "CREATE TABLE issuance_service.issued_credentials (id text PRIMARY KEY, organization_id text NOT NULL, transaction_id text NOT NULL REFERENCES issuance_service.issuance_transactions(id))",
+        "CREATE TABLE issuance_service.credential_delivery_records (id text PRIMARY KEY, organization_id text NOT NULL, credential_id text NOT NULL REFERENCES issuance_service.issued_credentials(id) ON DELETE CASCADE, transaction_id text NOT NULL REFERENCES issuance_service.issuance_transactions(id) ON DELETE CASCADE)",
+        "CREATE TABLE issuance_service.evidence_facts (id text PRIMARY KEY, organization_id text NOT NULL, application_id text NOT NULL REFERENCES issuance_service.applications(id) ON DELETE CASCADE)",
         "CREATE TABLE issuance_service.issuance_events (id text PRIMARY KEY, organization_id text, transaction_id text REFERENCES issuance_service.issuance_transactions(id) ON DELETE SET NULL, application_id text REFERENCES issuance_service.applications(id) ON DELETE SET NULL, created_at timestamptz NOT NULL)",
     ] {
         sqlx::query(statement).execute(&pool).await.unwrap();
@@ -81,6 +83,35 @@ async fn retention_purge_preserves_tenant_and_recent_event_ownership() {
             .bind(id)
             .bind(organization)
             .bind(transaction)
+            .execute(&pool)
+            .await
+            .unwrap();
+    }
+    for (id, organization, credential, transaction) in [
+        ("old-delivery", "owned", "old-credential", "old-tx"),
+        ("new-delivery", "owned", "new-credential", "new-tx"),
+        ("other-delivery", "other", "other-credential", "other-tx"),
+    ] {
+        sqlx::query(
+            "INSERT INTO issuance_service.credential_delivery_records VALUES ($1,$2,$3,$4)",
+        )
+        .bind(id)
+        .bind(organization)
+        .bind(credential)
+        .bind(transaction)
+        .execute(&pool)
+        .await
+        .unwrap();
+    }
+    for (id, organization, application) in [
+        ("old-fact", "owned", "old-app"),
+        ("new-fact", "owned", "new-app"),
+        ("other-fact", "other", "other-app"),
+    ] {
+        sqlx::query("INSERT INTO issuance_service.evidence_facts VALUES ($1,$2,$3)")
+            .bind(id)
+            .bind(organization)
+            .bind(application)
             .execute(&pool)
             .await
             .unwrap();
@@ -178,6 +209,19 @@ async fn retention_purge_preserves_tenant_and_recent_event_ownership() {
             ("recent-owned-event".into(), Some("owned".into())),
         ]
     );
+    let delivery_ids: Vec<String> = sqlx::query_scalar(
+        "SELECT id FROM issuance_service.credential_delivery_records ORDER BY id",
+    )
+    .fetch_all(&pool)
+    .await
+    .unwrap();
+    assert_eq!(delivery_ids, ["new-delivery", "other-delivery"]);
+    let evidence_ids: Vec<String> =
+        sqlx::query_scalar("SELECT id FROM issuance_service.evidence_facts ORDER BY id")
+            .fetch_all(&pool)
+            .await
+            .unwrap();
+    assert_eq!(evidence_ids, ["new-fact", "other-fact"]);
     for (table, query) in [
         ("applications", "SELECT count(*) FROM issuance_service.applications WHERE organization_id = 'other'"),
         ("issuance_transactions", "SELECT count(*) FROM issuance_service.issuance_transactions WHERE organization_id = 'other'"),
