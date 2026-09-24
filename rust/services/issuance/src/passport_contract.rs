@@ -464,21 +464,35 @@ mod tests {
     }
 
     #[test]
-    fn digit_tables_match_released_python_unicode_counts() {
+    fn digit_tables_match_released_python_unicode_codepoints_and_values() {
+        use sha2::{Digest, Sha256};
+
         let frozen: Value = serde_json::from_str(include_str!(
             "../../../../contracts/issuance-physical-passport-native.json"
         ))
         .unwrap();
         let unicode = &frozen["unicode_data_group_digit_observation"];
         assert_eq!(unicode["python_unicode_version"], "15.0.0");
-        let digits = (0..=0x10ffff)
-            .filter_map(char::from_u32)
-            .filter(|character| python_is_digit(*character))
-            .count();
-        let decimals = (0..=0x10ffff)
-            .filter_map(char::from_u32)
-            .filter(|character| python_decimal_digit(*character).is_some())
-            .count();
+        let mut digits = 0;
+        let mut decimals = 0;
+        let mut digit_codepoints = Sha256::new();
+        let mut decimal_codepoints = Sha256::new();
+        let mut decimal_values = Sha256::new();
+        for codepoint in 0_u32..=0x10ffff {
+            let Some(character) = char::from_u32(codepoint) else {
+                continue;
+            };
+            if python_is_digit(character) {
+                digits += 1;
+                digit_codepoints.update(codepoint.to_be_bytes());
+            }
+            if let Some(value) = python_decimal_digit(character) {
+                decimals += 1;
+                decimal_codepoints.update(codepoint.to_be_bytes());
+                decimal_values.update(codepoint.to_be_bytes());
+                decimal_values.update([value]);
+            }
+        }
         assert_eq!(
             digits,
             unicode["python_isdigit_count"].as_u64().unwrap() as usize
@@ -486,6 +500,18 @@ mod tests {
         assert_eq!(
             decimals,
             unicode["python_decimal_count"].as_u64().unwrap() as usize
+        );
+        assert_eq!(
+            format!("{:x}", digit_codepoints.finalize()),
+            unicode["python_isdigit_codepoints_sha256_be_u32"]
+        );
+        assert_eq!(
+            format!("{:x}", decimal_codepoints.finalize()),
+            unicode["python_decimal_codepoints_sha256_be_u32"]
+        );
+        assert_eq!(
+            format!("{:x}", decimal_values.finalize()),
+            unicode["python_decimal_values_sha256_be_u32_u8"]
         );
     }
 

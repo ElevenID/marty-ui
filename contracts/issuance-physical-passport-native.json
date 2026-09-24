@@ -77,6 +77,9 @@
     "python_unicode_version": "15.0.0",
     "python_isdigit_count": 808,
     "python_decimal_count": 680,
+    "python_isdigit_codepoints_sha256_be_u32": "ed93d5d2dd21031385372347516ef139e18bdba6063869446536e24e1721ddce",
+    "python_decimal_codepoints_sha256_be_u32": "93a69f3604c97cdaa6460b7acf761f7edd20725f281233cd2a52a9dcfa38a312",
+    "python_decimal_values_sha256_be_u32_u8": "4ca0017c23b94f2ef8fe4e461720955a6d4d1e03f0fb8898a90c39e772340662",
     "accepted_decimal_names": {"DG１２": "12", "DG١٣": "13"},
     "accepted_nondecimal_name": "DG²",
     "nondecimal_conversion": "accepted by the request model; Python int conversion fails at the later operation"
