@@ -5,7 +5,15 @@
     "protected_main_commit": "bd701403e7eae9f495fc3a8c4fea1945785b425a",
     "contract": "contracts/physical-passport-python-route-reference.json",
     "route_source_sha256": "2206f15dfd8a8040e997cba0e4a7f27cc8e3f4e84d6094c62ae71beae5d90e37",
+    "signer_source_sha256": "8064185f747bae091c5164a32915f83b435ccd6526434f5ddca5114cc6661472",
     "bureau_source_sha256": "31d70c676c2b4e5e09d0e0ea6aa7bea37432b98984a5adffd5fea7e18ede9afb"
+  },
+  "remote_signer": {
+    "method": "POST",
+    "path": "/v1/icao/emrtd/sign",
+    "timeout_seconds": 30,
+    "required_result_fields": ["sod_der_base64", "dsc_cert_pem"],
+    "incomplete_error": "ICAO document signer returned incomplete signing material"
   },
   "document_types": ["TD1", "TD2", "TD3"],
   "bureau_status_projection": {
