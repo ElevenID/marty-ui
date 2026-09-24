@@ -487,7 +487,9 @@ async fn generate_data_groups(
         .decrypt(&job)?
         .numbered_data_groups()
         .map_err(|_| PassportHttpError::InvalidArtifact)?;
-    if !groups.contains_key(&1) || !groups.contains_key(&2) {
+    if !groups.contains_key(&num_bigint::BigUint::from(1u8))
+        || !groups.contains_key(&num_bigint::BigUint::from(2u8))
+    {
         return Err(PassportHttpError::MissingDataGroups);
     }
     let updated = service

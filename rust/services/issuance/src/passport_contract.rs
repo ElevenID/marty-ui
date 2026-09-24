@@ -8,6 +8,7 @@ use std::{
 
 use base64::{engine::general_purpose::STANDARD, Engine as _};
 use chrono::{DateTime, Utc};
+use num_bigint::BigUint;
 use serde::{
     de::{IgnoredAny, MapAccess, Visitor},
     Deserialize, Serialize,
@@ -49,8 +50,6 @@ pub enum PassportRequestError {
     MissingDataGroups,
     #[error("invalid data group name")]
     InvalidDataGroupName,
-    #[error("data group number exceeds the native signer range")]
-    DataGroupNumberOutOfRange,
     #[error("data group content must be strict base64")]
     InvalidDataGroupContent,
 }
@@ -72,13 +71,9 @@ impl PassportApplicationRequest {
             return Err(PassportRequestError::MissingDataGroups);
         }
         for (name, content) in &self.data_groups {
-            let digits = name
-                .strip_prefix("DG")
+            name.strip_prefix("DG")
                 .filter(|digits| !digits.is_empty() && digits.bytes().all(|b| b.is_ascii_digit()))
                 .ok_or(PassportRequestError::InvalidDataGroupName)?;
-            digits
-                .parse::<u16>()
-                .map_err(|_| PassportRequestError::DataGroupNumberOutOfRange)?;
             STANDARD
                 .decode(content)
                 .map_err(|_| PassportRequestError::InvalidDataGroupContent)?;
@@ -294,15 +289,14 @@ impl<'a> From<&'a PassportJob> for PassportSafeResponse<'a> {
 }
 
 impl PassportSensitiveArtifact {
-    pub fn numbered_data_groups(&self) -> Result<BTreeMap<u16, String>, PassportRequestError> {
+    pub fn numbered_data_groups(&self) -> Result<BTreeMap<BigUint, String>, PassportRequestError> {
         let mut numbered = BTreeMap::new();
         for (name, content) in &self.data_groups {
             let digits = name
                 .strip_prefix("DG")
                 .ok_or(PassportRequestError::InvalidDataGroupName)?;
-            let number = digits
-                .parse::<u16>()
-                .map_err(|_| PassportRequestError::DataGroupNumberOutOfRange)?;
+            let number = BigUint::parse_bytes(digits.as_bytes(), 10)
+                .ok_or(PassportRequestError::InvalidDataGroupName)?;
             numbered.insert(number, content.clone());
         }
         Ok(numbered)
@@ -332,7 +326,10 @@ mod tests {
         request.validate().unwrap();
         assert_eq!(request.sensitive_artifact().data_groups.len(), 2);
         let numbered = request.sensitive_artifact().numbered_data_groups().unwrap();
-        assert_eq!(numbered.get(&1).map(String::as_str), Some("YQ=="));
+        assert_eq!(
+            numbered.get(&BigUint::from(1u8)).map(String::as_str),
+            Some("YQ==")
+        );
     }
 
     #[test]
@@ -369,17 +366,23 @@ mod tests {
                 json!({"DG1": "YQ==", "DG2": "***"}),
                 PassportRequestError::InvalidDataGroupContent,
             ),
-            (
-                "data_groups",
-                json!({"DG1": "YQ==", "DG2": "Yg==", "DG65536": "Yw=="}),
-                PassportRequestError::DataGroupNumberOutOfRange,
-            ),
         ] {
             let mut value = application();
             value[field] = replacement;
             let request: PassportApplicationRequest = serde_json::from_value(value).unwrap();
             assert_eq!(request.validate(), Err(error));
         }
+        let mut value = application();
+        value["data_groups"]["DG999999999999999999999999999999999999999999"] = json!("Yw==");
+        let request: PassportApplicationRequest = serde_json::from_value(value).unwrap();
+        request.validate().unwrap();
+        assert!(request
+            .sensitive_artifact()
+            .numbered_data_groups()
+            .unwrap()
+            .contains_key(
+                &BigUint::parse_bytes(b"999999999999999999999999999999999999999999", 10).unwrap()
+            ));
     }
 
     #[test]

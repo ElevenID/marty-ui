@@ -6,6 +6,7 @@ use std::{collections::BTreeMap, time::Duration};
 
 use chrono::{DateTime, Utc};
 use hmac::{Hmac, Mac};
+use num_bigint::BigUint;
 use reqwest::{Client, StatusCode, Url};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
@@ -55,7 +56,7 @@ pub struct PersonalizationJob {
     pub organization_id: String,
     pub country_code: String,
     pub document_type: DocumentType,
-    pub data_groups: BTreeMap<u16, String>,
+    pub data_groups: BTreeMap<BigUint, String>,
     pub sod_der_base64: String,
     pub dsc_cert_pem: String,
     pub mrz_line_1: String,
@@ -412,7 +413,10 @@ mod tests {
             organization_id: "organization-1".into(),
             country_code: "UTO".into(),
             document_type,
-            data_groups: BTreeMap::from([(1, "ZzE=".into()), (2, "ZzI=".into())]),
+            data_groups: BTreeMap::from([
+                (BigUint::from(1u8), "ZzE=".into()),
+                (BigUint::from(2u8), "ZzI=".into()),
+            ]),
             sod_der_base64: "c29k".into(),
             dsc_cert_pem: "certificate".into(),
             mrz_line_1: "line-1".into(),
@@ -442,6 +446,21 @@ mod tests {
                 .contains(&Value::String(expected.into())));
             assert_eq!(payload["data_groups"], json!({"DG1":"ZzE=","DG2":"ZzI="}));
         }
+    }
+
+    #[test]
+    fn bureau_payload_preserves_wide_python_data_group_number() {
+        let frozen = reference();
+        let wide = &frozen["wide_data_group_number_observation"];
+        let number =
+            BigUint::parse_bytes(wide["normalized_number"].as_str().unwrap().as_bytes(), 10)
+                .unwrap();
+        let mut candidate = job(DocumentType::TD3);
+        candidate.data_groups.insert(number, "Yw==".into());
+        assert_eq!(
+            candidate.payload()["data_groups"][wide["input_name"].as_str().unwrap()],
+            "Yw=="
+        );
     }
 
     #[test]

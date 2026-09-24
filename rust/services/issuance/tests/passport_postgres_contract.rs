@@ -409,6 +409,47 @@ async fn exercise_native_passport_http(
         .unwrap()
         .unwrap();
     assert!(cipher.decrypt(&job.secure_artifact_ciphertext).is_err());
+    let frozen: Value = serde_json::from_str(include_str!(
+        "../../../../contracts/issuance-physical-passport-native.json"
+    ))
+    .unwrap();
+    let wide_name = frozen["wide_data_group_number_observation"]["input_name"]
+        .as_str()
+        .unwrap();
+    let mut wide_payload = json!({
+        "organization_id":"org-a", "flow_execution_id":"wide-data-group-test",
+        "application_template_id":"template-test", "credential_template_id":"credential-test",
+        "delivery_destination_profile_id":"destination-test", "country_code":"USA",
+        "applicant":{}, "mrz":{}, "data_groups":{"DG1":"YQ==", "DG2":"Yg=="}
+    });
+    wide_payload["data_groups"][wide_name] = json!("Yw==");
+    let (status, wide_created) = passport_http_request(
+        &app,
+        "POST",
+        "/v1/passport/applications",
+        Some("org-a"),
+        Some(key_a),
+        wide_payload,
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED);
+    let wide_path = format!(
+        "/v1/passport/applications/{}/generate-data-groups",
+        wide_created["application_id"].as_str().unwrap()
+    );
+    let (status, wide_generated) = passport_http_request(
+        &app,
+        "POST",
+        &wide_path,
+        Some("org-a"),
+        Some(key_a),
+        json!({}),
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(wide_generated["status"], "DATA_GENERATED");
     #[cfg(feature = "passport-self-signed-test")]
     {
         let local = passport_router(PassportHttpService::new(

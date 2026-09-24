@@ -6,6 +6,9 @@ use std::{collections::BTreeMap, time::Duration};
 
 #[cfg(feature = "passport-self-signed-test")]
 use base64::{engine::general_purpose::STANDARD, Engine as _};
+use num_bigint::BigUint;
+#[cfg(feature = "passport-self-signed-test")]
+use num_traits::ToPrimitive;
 use reqwest::{Client, Url};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
@@ -65,7 +68,7 @@ impl PassportSigner {
         &self,
         country_code: &str,
         organization: &str,
-        data_groups: &BTreeMap<u16, String>,
+        data_groups: &BTreeMap<BigUint, String>,
     ) -> Result<SignedMaterial, SignerError> {
         match self {
             Self::Remote(remote) => remote.sign(country_code, organization, data_groups).await,
@@ -88,14 +91,14 @@ impl PassportSigner {
 fn self_signed_test_sign(
     country_code: &str,
     organization: &str,
-    data_groups: &BTreeMap<u16, String>,
+    data_groups: &BTreeMap<BigUint, String>,
 ) -> Result<SignedMaterial, SignerError> {
     use marty_verification::issuance::CscaAuthority;
 
     let decoded_groups = data_groups
         .iter()
         .map(|(number, content)| {
-            let number = u8::try_from(*number).map_err(|_| SignerError::TestSigningFailed)?;
+            let number = number.to_u8().ok_or(SignerError::TestSigningFailed)?;
             let content = STANDARD
                 .decode(content)
                 .map_err(|_| SignerError::TestSigningFailed)?;
@@ -160,7 +163,7 @@ impl RemoteSigner {
         &self,
         country_code: &str,
         organization: &str,
-        data_groups: &BTreeMap<u16, String>,
+        data_groups: &BTreeMap<BigUint, String>,
     ) -> Result<SignedMaterial, SignerError> {
         let data_groups: BTreeMap<_, _> = data_groups
             .iter()
@@ -217,7 +220,10 @@ mod tests {
     async fn explicit_self_signed_test_mode_issues_ephemeral_sod_and_dsc() {
         let signer = PassportSigner::SelfSignedTest;
         assert_eq!(signer.mode(), "SELF_SIGNED_TEST");
-        let groups = BTreeMap::from([(1, "YQ==".to_owned()), (2, "Yg==".to_owned())]);
+        let groups = BTreeMap::from([
+            (BigUint::from(1u8), "YQ==".to_owned()),
+            (BigUint::from(2u8), "Yg==".to_owned()),
+        ]);
         let signed = signer
             .sign("UTO", "synthetic-test-issuer", &groups)
             .await
@@ -229,7 +235,7 @@ mod tests {
             .as_deref()
             .unwrap()
             .contains("BEGIN CERTIFICATE"));
-        let invalid = BTreeMap::from([(256, "YQ==".to_owned())]);
+        let invalid = BTreeMap::from([(BigUint::from(256u16), "YQ==".to_owned())]);
         assert!(matches!(
             signer.sign("UTO", "synthetic-test-issuer", &invalid).await,
             Err(SignerError::TestSigningFailed)
@@ -305,7 +311,10 @@ mod tests {
         let address = listener.local_addr().unwrap();
         let server = tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
         let signer = RemoteSigner::new(&format!("http://{address}"), "signer-key").unwrap();
-        let data_groups = BTreeMap::from([(2, "Ag==".into()), (1, "AQ==".into())]);
+        let data_groups = BTreeMap::from([
+            (BigUint::from(2u8), "Ag==".into()),
+            (BigUint::from(1u8), "AQ==".into()),
+        ]);
 
         let signed = signer.sign("UTO", "org-1", &data_groups).await.unwrap();
         assert_eq!(signed.sod_der_base64, "U09E");
@@ -320,6 +329,24 @@ mod tests {
                     "organization": "org-1",
                     "data_groups": {"DG1":"AQ==","DG2":"Ag=="}
                 })
+            );
+        }
+        let reference: Value = serde_json::from_str(include_str!(
+            "../../../../contracts/issuance-physical-passport-native.json"
+        ))
+        .unwrap();
+        let wide = &reference["wide_data_group_number_observation"];
+        let large_number =
+            BigUint::parse_bytes(wide["normalized_number"].as_str().unwrap().as_bytes(), 10)
+                .unwrap();
+        let mut wide_groups = data_groups.clone();
+        wide_groups.insert(large_number, "Aw==".into());
+        signer.sign("UTO", "org-1", &wide_groups).await.unwrap();
+        {
+            let requests = observed.lock().unwrap();
+            assert_eq!(
+                requests.last().unwrap().1["data_groups"][wide["input_name"].as_str().unwrap()],
+                "Aw=="
             );
         }
         assert!(matches!(

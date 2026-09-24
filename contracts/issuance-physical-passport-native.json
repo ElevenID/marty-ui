@@ -67,6 +67,12 @@
     "python_retirement_gate": "qualify the Rust batch adapter against the frozen Python provider contract and live bureau before deleting the Python bureau adapter"
   },
   "document_types": ["TD1", "TD2", "TD3"],
+  "wide_data_group_number_observation": {
+    "python_oracle": "released PassportApplicationRequest accepts a DG number beyond u16; _numbered_data_groups converts it with Python int",
+    "input_name": "DG999999999999999999999999999999999999999999",
+    "normalized_number": "999999999999999999999999999999999999999999",
+    "native_requirement": "preserve creation, remote signer, and bureau payload behavior without truncating the number"
+  },
   "degraded_capabilities": {
     "condition": "native HTTP enabled with tenant keys but without signer, artifact key, or bureau",
     "http_status": 200,
