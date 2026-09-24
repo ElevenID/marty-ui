@@ -1699,8 +1699,8 @@ jobs:
           set -euo pipefail
           image="ghcr.io/elevenid/marty-credentials-issuance"
           digest="sha256:815cbba6efc7c91e770a8dd15fe5fa102d252a485073bf60f0e0d5e0a73b28e5"
-          locked="$(jq -er '.components[] | select(.name == "marty-credentials-issuance") | .artifacts[] | select(.type == "oci") | .digest' release/stack-lock.json)"
-          test "$locked" = "$digest"
+          # The oracle intentionally replays v0.1.76 even after the deployable
+          # stack lock advances to a newer Credentials release.
           docker pull "$image@$digest"
           python scripts/capture_canvas_mirror_reference.py \
             .reference/marty-credentials-v0.1.76 \
