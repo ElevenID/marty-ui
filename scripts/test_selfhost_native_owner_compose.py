@@ -58,6 +58,17 @@ SHARED_SETTINGS = {
     **SHARED_ADDITIONS,
     "ISSUANCE_AUTH_SESSION_TTL_MINUTES": "${ISSUANCE_AUTH_SESSION_TTL_MINUTES:-60}",
 }
+
+
+def rendered_additions(templates, values):
+    rendered = {}
+    for key, template in templates.items():
+        match = re.fullmatch(rf"\$\{{{key}:-([^}}]*)\}}", template)
+        assert match, f"Unsupported closed interpolation for {key}"
+        rendered[key] = values.get(key) or match.group(1)
+    return rendered
+
+
 UNFORWARDED = set(
     """
 APP_ENV CANVAS_ADMIN_API_TOKEN CANVAS_ALLOW_LOCAL_ADMIN_TOKEN_FALLBACK
@@ -240,13 +251,6 @@ def interpolated_models():
         | set(NATIVE_ADDITIVE)
     ) - required
 
-    def rendered_additions(templates, values):
-        rendered = {}
-        for key, template in templates.items():
-            match = re.fullmatch(rf"\$\{{{key}:-([^}}]*)\}}", template)
-            assert match, f"Unsupported closed interpolation for {key}"
-            rendered[key] = values.get(key) or match.group(1)
-        return rendered
     with tempfile.TemporaryDirectory(prefix="selfhost-native-config-") as temporary:
         directory = Path(temporary)
         inputs = dict.fromkeys(required, "https://synthetic.example")

@@ -123,7 +123,16 @@ def render(spec, command):
         )
         previous = compose(ROOT / SELFHOST["FROZEN"])
         selfhost = compose(ROOT / SELFHOST["GATE"]["BASE"])
-        SELFHOST["assert_models"](previous, selfhost)
+        SELFHOST["assert_models"](
+            previous,
+            selfhost,
+            shared_additions=SELFHOST["rendered_additions"](
+                SELFHOST["SHARED_ADDITIONS"], inputs
+            ),
+            native_additive=SELFHOST["rendered_additions"](
+                SELFHOST["NATIVE_ADDITIVE"], inputs
+            ),
+        )
         models = {"base": base, "base_native": native, "selfhost": selfhost}
         result = {
             name: {
