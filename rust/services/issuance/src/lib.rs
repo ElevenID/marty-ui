@@ -138,6 +138,7 @@ pub mod oid4vci_authorization_postgres;
 pub mod oid4vci_management;
 pub mod oid4vci_management_http;
 pub mod oid4vci_management_postgres;
+pub mod passport_bureau;
 pub mod proof_nonce;
 pub mod resource_owner;
 pub mod resource_owner_postgres;

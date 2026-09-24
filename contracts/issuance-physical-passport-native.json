@@ -1,0 +1,27 @@
+{
+  "schema": "elevenid.issuance-physical-passport-native/v1",
+  "python_reference": {
+    "repository": "ElevenID/marty-credentials",
+    "protected_main_commit": "bd701403e7eae9f495fc3a8c4fea1945785b425a",
+    "contract": "contracts/physical-passport-python-route-reference.json",
+    "route_source_sha256": "2206f15dfd8a8040e997cba0e4a7f27cc8e3f4e84d6094c62ae71beae5d90e37",
+    "bureau_source_sha256": "31d70c676c2b4e5e09d0e0ea6aa7bea37432b98984a5adffd5fea7e18ede9afb"
+  },
+  "document_types": ["TD1", "TD2", "TD3"],
+  "bureau_status_projection": {
+    "QUEUED": "SUBMITTED",
+    "PRINTING": "IN_PRODUCTION",
+    "ENCODING": "IN_PRODUCTION",
+    "QUALITY_CHECK": "QUALITY_CHECK",
+    "SHIPPED": "READY_FOR_ACTIVATION",
+    "DELIVERED": "READY_FOR_ACTIVATION",
+    "FAILED": "FAILED",
+    "CANCELLED": "CANCELLED"
+  },
+  "intentional_python_wire_repair": {
+    "observation": "Python accepts and stores TD1/TD2/TD3 but hardcodes TD3 in the bureau submit payload",
+    "native_requirement": "Forward the stored document type for all three accepted values",
+    "tracking_issue": "https://github.com/ElevenID/marty-ui/issues/851"
+  },
+  "qualification": "adapter checkpoint only; nine-route, tenant, durable job, image, gateway, Flow, and beta gates remain"
+}
