@@ -423,6 +423,8 @@ async fn exercise_native_passport_http(
         "applicant":{}, "mrz":{}, "data_groups":{"DG1":"YQ==", "DG2":"Yg=="}
     });
     wide_payload["data_groups"][wide_name] = json!("Yw==");
+    wide_payload["data_groups"]["DG１２"] = json!("ZA==");
+    wide_payload["data_groups"]["DG١٣"] = json!("ZQ==");
     let (status, wide_created) = passport_http_request(
         &app,
         "POST",

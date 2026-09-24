@@ -6231,9 +6231,16 @@ missing startup schema migration. The Rust branch now applies an idempotent
 when native passport HTTP is enabled. A dedicated feature-enabled CI step uses
 a separate released-schema database and the packaged binary to create a job,
 sign an SOD, and confirm persistence across another migration. This passed
-locally, as did the default PostgreSQL contract, 23 passport unit/HTTP tests,
+locally, as did the default PostgreSQL contract, passport unit/HTTP tests,
 strict Clippy, and 220 workflow-regression tests; hosted exact-head CI remains
 the merge authority.
+
+The frozen request contract also records the released Python runtime's Unicode
+15 digit behavior for `DG` names. Native validation accepts the same decimal
+and nondecimal digit classes; decimal names normalize to their numeric data-group
+numbers without the old fixed-width truncation, while nondecimal digits retain
+Python's later conversion failure. Focused unit tests and the real-PostgreSQL
+HTTP contract cover this edge before any passport cutover.
 
 The Rust Flow consumer now has a default-off `PASSPORT_NATIVE_FLOW_ENABLED`
 selector in this draft. When enabled with tenant keys it targets the native

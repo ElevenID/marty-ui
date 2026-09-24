@@ -72,7 +72,7 @@ impl PassportApplicationRequest {
         }
         for (name, content) in &self.data_groups {
             name.strip_prefix("DG")
-                .filter(|digits| !digits.is_empty() && digits.bytes().all(|b| b.is_ascii_digit()))
+                .filter(|digits| !digits.is_empty() && digits.chars().all(python_is_digit))
                 .ok_or(PassportRequestError::InvalidDataGroupName)?;
             STANDARD
                 .decode(content)
@@ -295,12 +295,69 @@ impl PassportSensitiveArtifact {
             let digits = name
                 .strip_prefix("DG")
                 .ok_or(PassportRequestError::InvalidDataGroupName)?;
-            let number = BigUint::parse_bytes(digits.as_bytes(), 10)
+            let normalized = digits
+                .chars()
+                .map(python_decimal_digit)
+                .map(|digit| digit.map(|value| char::from(b'0' + value)))
+                .collect::<Option<String>>()
+                .ok_or(PassportRequestError::InvalidDataGroupName)?;
+            let number = BigUint::parse_bytes(normalized.as_bytes(), 10)
                 .ok_or(PassportRequestError::InvalidDataGroupName)?;
             numbered.insert(number, content.clone());
         }
         Ok(numbered)
     }
+}
+
+// Frozen from the released Python runtime's Unicode 15.0 `str.isdigit` and
+// `unicodedata.decimal` behavior. Each decimal block contains digits 0..9.
+const DECIMAL_ZEROES: &[u32] = &[
+    0x30, 0x660, 0x6f0, 0x7c0, 0x966, 0x9e6, 0xa66, 0xae6, 0xb66, 0xbe6, 0xc66, 0xce6, 0xd66,
+    0xde6, 0xe50, 0xed0, 0xf20, 0x1040, 0x1090, 0x17e0, 0x1810, 0x1946, 0x19d0, 0x1a80, 0x1a90,
+    0x1b50, 0x1bb0, 0x1c40, 0x1c50, 0xa620, 0xa8d0, 0xa900, 0xa9d0, 0xa9f0, 0xaa50, 0xabf0, 0xff10,
+    0x104a0, 0x10d30, 0x11066, 0x110f0, 0x11136, 0x111d0, 0x112f0, 0x11450, 0x114d0, 0x11650,
+    0x116c0, 0x11730, 0x118e0, 0x11950, 0x11c50, 0x11d50, 0x11da0, 0x11f50, 0x16a60, 0x16ac0,
+    0x16b50, 0x1d7ce, 0x1d7d8, 0x1d7e2, 0x1d7ec, 0x1d7f6, 0x1e140, 0x1e2f0, 0x1e4f0, 0x1e950,
+    0x1fbf0,
+];
+
+const NONDECIMAL_DIGIT_RANGES: &[(u32, u32)] = &[
+    (0xb2, 0xb3),
+    (0xb9, 0xb9),
+    (0x1369, 0x1371),
+    (0x19da, 0x19da),
+    (0x2070, 0x2070),
+    (0x2074, 0x2079),
+    (0x2080, 0x2089),
+    (0x2460, 0x2468),
+    (0x2474, 0x247c),
+    (0x2488, 0x2490),
+    (0x24ea, 0x24ea),
+    (0x24f5, 0x24fd),
+    (0x24ff, 0x24ff),
+    (0x2776, 0x277e),
+    (0x2780, 0x2788),
+    (0x278a, 0x2792),
+    (0x10a40, 0x10a43),
+    (0x10e60, 0x10e68),
+    (0x11052, 0x1105a),
+    (0x1f100, 0x1f10a),
+];
+
+fn python_decimal_digit(character: char) -> Option<u8> {
+    let codepoint = u32::from(character);
+    let index = DECIMAL_ZEROES
+        .partition_point(|zero| *zero <= codepoint)
+        .checked_sub(1)?;
+    let value = codepoint - DECIMAL_ZEROES[index];
+    (value < 10).then_some(value as u8)
+}
+
+fn python_is_digit(character: char) -> bool {
+    python_decimal_digit(character).is_some()
+        || NONDECIMAL_DIGIT_RANGES
+            .iter()
+            .any(|(start, end)| (*start..=*end).contains(&u32::from(character)))
 }
 
 #[cfg(test)]
@@ -383,6 +440,53 @@ mod tests {
             .contains_key(
                 &BigUint::parse_bytes(b"999999999999999999999999999999999999999999", 10).unwrap()
             ));
+        let frozen: Value = serde_json::from_str(include_str!(
+            "../../../../contracts/issuance-physical-passport-native.json"
+        ))
+        .unwrap();
+        let unicode = &frozen["unicode_data_group_digit_observation"];
+        let mut value = application();
+        for (name, _) in unicode["accepted_decimal_names"].as_object().unwrap() {
+            value["data_groups"][name] = json!("Yw==");
+        }
+        let request: PassportApplicationRequest = serde_json::from_value(value).unwrap();
+        request.validate().unwrap();
+        let numbered = request.sensitive_artifact().numbered_data_groups().unwrap();
+        for (_, number) in unicode["accepted_decimal_names"].as_object().unwrap() {
+            let number = BigUint::parse_bytes(number.as_str().unwrap().as_bytes(), 10).unwrap();
+            assert_eq!(numbered.get(&number).map(String::as_str), Some("Yw=="));
+        }
+        let mut value = application();
+        value["data_groups"][unicode["accepted_nondecimal_name"].as_str().unwrap()] = json!("Yw==");
+        let request: PassportApplicationRequest = serde_json::from_value(value).unwrap();
+        request.validate().unwrap();
+        assert!(request.sensitive_artifact().numbered_data_groups().is_err());
+    }
+
+    #[test]
+    fn digit_tables_match_released_python_unicode_counts() {
+        let frozen: Value = serde_json::from_str(include_str!(
+            "../../../../contracts/issuance-physical-passport-native.json"
+        ))
+        .unwrap();
+        let unicode = &frozen["unicode_data_group_digit_observation"];
+        assert_eq!(unicode["python_unicode_version"], "15.0.0");
+        let digits = (0..=0x10ffff)
+            .filter_map(char::from_u32)
+            .filter(|character| python_is_digit(*character))
+            .count();
+        let decimals = (0..=0x10ffff)
+            .filter_map(char::from_u32)
+            .filter(|character| python_decimal_digit(*character).is_some())
+            .count();
+        assert_eq!(
+            digits,
+            unicode["python_isdigit_count"].as_u64().unwrap() as usize
+        );
+        assert_eq!(
+            decimals,
+            unicode["python_decimal_count"].as_u64().unwrap() as usize
+        );
     }
 
     #[test]

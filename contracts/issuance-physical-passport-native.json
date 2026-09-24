@@ -73,6 +73,14 @@
     "normalized_number": "999999999999999999999999999999999999999999",
     "native_requirement": "preserve creation, remote signer, and bureau payload behavior without truncating the number"
   },
+  "unicode_data_group_digit_observation": {
+    "python_unicode_version": "15.0.0",
+    "python_isdigit_count": 808,
+    "python_decimal_count": 680,
+    "accepted_decimal_names": {"DG１２": "12", "DG١٣": "13"},
+    "accepted_nondecimal_name": "DG²",
+    "nondecimal_conversion": "accepted by the request model; Python int conversion fails at the later operation"
+  },
   "degraded_capabilities": {
     "condition": "native HTTP enabled with tenant keys but without signer, artifact key, or bureau",
     "http_status": 200,
