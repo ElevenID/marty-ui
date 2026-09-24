@@ -136,6 +136,7 @@ use marty_issuance_service::{
     proof_nonce::{ProofNonceService, SecureProofNonceGenerator},
     resource_owner::ResourceOwnerService,
     resource_owner_postgres::PostgresResourceOwnerRepository,
+    retention::{PostgresRetentionRepository, RetentionService},
     signing_policy::HttpProofPolicyResolver,
     tenant_discovery::TenantDiscoveryService,
     tenant_postgres::PostgresTenantDiscoveryRepository,
@@ -796,7 +797,11 @@ async fn main() -> Result<(), Box<dyn Error>> {
         )
         .with_internal_applications(internal_applications)
         .with_issued_credentials(issued_credentials)
-        .with_oid4vci_management(oid4vci_management),
+        .with_oid4vci_management(oid4vci_management)
+        .with_retention(RetentionService::new(
+            Arc::new(PostgresRetentionRepository::new(pool.clone())),
+            config.issuance_api_key.as_deref(),
+        )),
     );
     let (health_reporter, health_service) = tonic_health::server::health_reporter();
     let grpc_server = IssuanceServiceServer::new(grpc_service);

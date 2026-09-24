@@ -162,6 +162,8 @@ struct HttpOperation {
     #[serde(default)]
     internal_application_behavior_case: Option<String>,
     #[serde(default)]
+    retention_behavior_contract: bool,
+    #[serde(default)]
     resource_owner_behavior_contract: bool,
     #[serde(default)]
     issued_credential_adapter_behavior_contract: bool,
@@ -257,6 +259,7 @@ impl HttpOperation {
             + usize::from(self.canvas_management_behavior_case.is_some())
             + usize::from(self.application_template_behavior_case.is_some())
             + usize::from(self.internal_application_behavior_case.is_some())
+            + usize::from(self.retention_behavior_contract)
             + usize::from(self.resource_owner_behavior_contract)
             + usize::from(self.issued_credential_adapter_behavior_contract)
             + usize::from(self.oid4vci_authorization_behavior_contract)
@@ -1516,6 +1519,19 @@ pub fn validate_embedded_contract() -> Result<CoverageSummary, MmfError> {
                     && proof_nonce.success["status_code"] == 200
                     && proof_nonce.failures.len() == 2,
                 "native issuance operation diverges from its proof nonce contract",
+            )?;
+        } else if operation.retention_behavior_contract {
+            let frozen = retention["routes"]
+                .as_array()
+                .ok_or_else(|| invalid("retention routes are missing"))?;
+            require(
+                operation.response.is_none()
+                    && frozen.iter().any(|candidate| {
+                        candidate["method"] == operation.method
+                            && candidate["path"] == operation.path
+                            && candidate["operation"] == operation.operation
+                    }),
+                "native retention operation diverges from its behavior contract",
             )?;
         } else if operation.resource_owner_behavior_contract {
             let frozen = resource_owners["operations"]
@@ -2989,8 +3005,8 @@ mod tests {
     #[test]
     fn embedded_surface_and_native_coverage_are_consistent() {
         let summary = validate_embedded_contract().expect("contract");
-        assert_eq!(summary.native_http, 120);
-        assert_eq!(summary.remaining_http, 11);
+        assert_eq!(summary.native_http, 122);
+        assert_eq!(summary.remaining_http, 9);
         assert_eq!(summary.remaining_grpc, 0);
     }
 }

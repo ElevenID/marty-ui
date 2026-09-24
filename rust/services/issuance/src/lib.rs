@@ -141,6 +141,8 @@ pub mod oid4vci_management_postgres;
 pub mod proof_nonce;
 pub mod resource_owner;
 pub mod resource_owner_postgres;
+pub mod retention;
+pub mod retention_http;
 pub mod runtime;
 pub mod signing_policy;
 pub mod tenant_discovery;
