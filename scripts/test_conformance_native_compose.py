@@ -32,6 +32,24 @@ TOKEN_RATE_CASES = (
     ("1200", "1200"),
     ("0", "0"),
 )
+MIRROR_WORKER_SETTINGS = (
+    "CANVAS_MIRROR_WORKER_ENABLED",
+    "CANVAS_MIRROR_WORKER_ORGANIZATION_ID",
+    "CANVAS_MIRROR_PUBLISH_INTERVAL_SECONDS",
+    "CANVAS_MIRROR_STATUS_SYNC_INTERVAL_SECONDS",
+    "CANVAS_MIRROR_WORKER_BATCH_LIMIT",
+    "CANVAS_MIRROR_WORKER_RETRY_FAILED",
+    "CANVAS_MIRROR_WORKER_RUN_ON_STARTUP",
+    "CANVAS_MIRROR_FAILURE_WARNING_ATTEMPTS",
+    "CANVAS_MIRROR_FAILURE_CRITICAL_ATTEMPTS",
+    "CANVAS_MIRROR_ALERT_WEBHOOK_URL",
+    "CANVAS_MIRROR_ALERT_WEBHOOK_TIMEOUT_SECONDS",
+)
+SHARED_SETTING_REPAIRS = (
+    "ALLOWED_REDIRECT_URIS",
+    "ISSUANCE_AUTH_SESSION_TTL_MINUTES",
+    "TOKEN_RATE_LIMIT",
+) + MIRROR_WORKER_SETTINGS
 
 
 def files(*, native, local, authcrypt):
@@ -106,11 +124,7 @@ def assert_beta_shared_setting_repairs(previous, actual):
     expected = deepcopy(previous)
     before = expected["services"]["issuance-native"]["environment"]
     legacy = previous["services"]["issuance"]["environment"]
-    for setting in (
-        "ALLOWED_REDIRECT_URIS",
-        "ISSUANCE_AUTH_SESSION_TTL_MINUTES",
-        "TOKEN_RATE_LIMIT",
-    ):
+    for setting in SHARED_SETTING_REPAIRS:
         assert setting not in before
         before[setting] = legacy[setting]
     assert actual == expected, (
@@ -159,11 +173,7 @@ def run(command):
     expected_environment = expected_common["services"]["issuance-native"][
         "environment"
     ]
-    for setting in (
-        "ALLOWED_REDIRECT_URIS",
-        "ISSUANCE_AUTH_SESSION_TTL_MINUTES",
-        "TOKEN_RATE_LIMIT",
-    ):
+    for setting in SHARED_SETTING_REPAIRS:
         assert setting not in expected_environment
         expected_environment[setting] = legacy_environment[setting]
     assert common == expected_common, (
