@@ -1,5 +1,8 @@
 use chrono::{TimeZone, Utc};
 use hmac::{Hmac, Mac};
+use marty_issuance_service::passport_artifact::{
+    PassportArtifactCipher, PassportSensitiveArtifact,
+};
 use marty_issuance_service::passport_bureau::BureauClient;
 use marty_issuance_service::passport_repository::{
     PassportJobInsert, PassportJobPatch, PassportJobStatus, PassportWebhookRepositoryError,
@@ -80,6 +83,14 @@ async fn passport_jobs_survive_restart_without_cross_tenant_reads() {
         .with_ymd_and_hms(2026, 9, 24, 12, 0, 0)
         .single()
         .unwrap();
+    let cipher = PassportArtifactCipher::from_key(&fernet::Fernet::generate_key()).unwrap();
+    let artifact: PassportSensitiveArtifact = serde_json::from_value(serde_json::json!({
+        "applicant": {"synthetic": "test-person"},
+        "mrz": {"line_1": "P<TEST", "line_2": "SYNTHETIC"},
+        "data_groups": {"DG1": "UkR4", "DG2": "UkR5"}
+    }))
+    .unwrap();
+    let encrypted_artifact = cipher.encrypt(&artifact).unwrap();
     let job = PassportJobInsert {
         id: "job-a".into(),
         application_id: "application-a".into(),
@@ -90,13 +101,14 @@ async fn passport_jobs_survive_restart_without_cross_tenant_reads() {
         delivery_destination_profile_id: "destination-a".into(),
         document_type: "TD2".into(),
         country_code: "USA".into(),
-        secure_artifact_ciphertext: "encrypted-artifact-a".into(),
+        secure_artifact_ciphertext: encrypted_artifact.clone(),
         secure_artifact_reference: "physical-artifact://job-a".into(),
     };
     let inserted = repository.insert(&org_a, &job, now).await.unwrap();
     assert_eq!(inserted.organization_id, "org-a");
     assert_eq!(inserted.status, "DRAFT");
     assert_eq!(inserted.document_type, "TD2");
+    assert!(!inserted.secure_artifact_ciphertext.contains("test-person"));
     assert_eq!(
         inserted.revocation_profile_id.as_deref(),
         Some("revocation-a")
@@ -119,7 +131,14 @@ async fn passport_jobs_survive_restart_without_cross_tenant_reads() {
         .await
         .unwrap()
         .unwrap();
-    assert_eq!(recovered.secure_artifact_ciphertext, "encrypted-artifact-a");
+    assert_eq!(recovered.secure_artifact_ciphertext, encrypted_artifact);
+    assert_eq!(
+        cipher
+            .decrypt(&recovered.secure_artifact_ciphertext)
+            .unwrap()
+            .mrz,
+        artifact.mrz
+    );
     assert_eq!(recovered.created_at, now);
     assert!(restarted
         .get(&org_b, "application-a")
@@ -205,6 +224,36 @@ async fn passport_jobs_survive_restart_without_cross_tenant_reads() {
         webhook_updated.tracking_number.as_deref(),
         Some("tracking-a")
     );
+    let mut quality = PassportJobPatch::new(PassportJobStatus::ReadyForActivation);
+    quality.quality_result = Some(Some(serde_json::json!({"passed": true})));
+    restarted
+        .update(
+            &org_a,
+            "application-a",
+            "READY_FOR_ACTIVATION",
+            &quality,
+            next,
+        )
+        .await
+        .unwrap()
+        .unwrap();
+    let mut activated = PassportJobPatch::new(PassportJobStatus::Active);
+    activated.completed_at = Some(next);
+    activated.secure_artifact_ciphertext = Some(cipher.encrypted_scrubbed_artifact());
+    let active = restarted
+        .update(
+            &org_a,
+            "application-a",
+            "READY_FOR_ACTIVATION",
+            &activated,
+            next,
+        )
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(active.status, "ACTIVE");
+    assert_eq!(active.completed_at, Some(next));
+    assert!(cipher.decrypt(&active.secure_artifact_ciphertext).is_err());
 
     let second_job = PassportJobInsert {
         id: "job-b".into(),
@@ -216,7 +265,7 @@ async fn passport_jobs_survive_restart_without_cross_tenant_reads() {
         delivery_destination_profile_id: "destination-b".into(),
         document_type: "TD1".into(),
         country_code: "CAN".into(),
-        secure_artifact_ciphertext: "encrypted-artifact-b".into(),
+        secure_artifact_ciphertext: cipher.encrypt(&artifact).unwrap(),
         secure_artifact_reference: "physical-artifact://job-b".into(),
     };
     restarted.insert(&org_b, &second_job, now).await.unwrap();
@@ -237,5 +286,14 @@ async fn passport_jobs_survive_restart_without_cross_tenant_reads() {
             .unwrap()
             .status,
         "SUBMITTED"
+    );
+    assert_eq!(
+        restarted
+            .get(&org_a, "application-a")
+            .await
+            .unwrap()
+            .unwrap()
+            .status,
+        "ACTIVE"
     );
 }
