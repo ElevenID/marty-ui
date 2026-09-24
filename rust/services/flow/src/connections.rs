@@ -107,10 +107,7 @@ async fn connect_providers(
     signing.health_check().await?;
     runtime.mark_healthy(FlowDependency::SigningKeys)?;
 
-    let physical = Arc::new(HttpPhysicalDocumentProvider::new(
-        &config.issuance_url,
-        required_secret(&config.issuance_api_key, "issuance API key")?,
-    )?);
+    let physical = Arc::new(physical_document_provider(config)?);
     physical.health_check().await?;
     runtime.mark_healthy(FlowDependency::PhysicalIssuance)?;
 
@@ -135,6 +132,124 @@ async fn connect_providers(
         physical_document: Some(physical),
         reference_catalog: Some(references),
     })
+}
+
+fn physical_document_provider(
+    config: &FlowServiceConfig,
+) -> Result<HttpPhysicalDocumentProvider, FlowConnectionError> {
+    if config.passport_native_flow_enabled {
+        let keys = config.passport_tenant_keys.clone().ok_or_else(|| {
+            FlowConnectionError::Configuration(
+                "PASSPORT_TENANT_API_KEYS is required for native passport Flow".into(),
+            )
+        })?;
+        HttpPhysicalDocumentProvider::new_tenant_bound(&config.issuance_native_url, keys)
+            .map_err(Into::into)
+    } else {
+        HttpPhysicalDocumentProvider::new(
+            &config.issuance_url,
+            required_secret(&config.issuance_api_key, "issuance API key")?,
+        )
+        .map_err(Into::into)
+    }
+}
+
+#[cfg(test)]
+mod physical_provider_tests {
+    use std::{collections::BTreeMap, sync::Mutex};
+
+    use axum::{extract::State, http::HeaderMap, routing::post, Json, Router};
+    use serde_json::{json, Value};
+
+    use super::*;
+    use crate::{PhysicalDocumentOperation, PhysicalDocumentProvider, PhysicalDocumentRequest};
+
+    type Captured = Arc<Mutex<Vec<(String, String, String)>>>;
+
+    async fn capture(
+        State((owner, captured)): State<(String, Captured)>,
+        headers: HeaderMap,
+    ) -> Json<Value> {
+        captured.lock().unwrap().push((
+            owner.clone(),
+            headers["x-organization-id"].to_str().unwrap().to_owned(),
+            headers["x-api-key"].to_str().unwrap().to_owned(),
+        ));
+        Json(json!({"status": "DRAFT", "owner": owner}))
+    }
+
+    #[tokio::test]
+    async fn native_flow_selector_uses_tenant_key_and_keeps_legacy_rollback() {
+        let captured: Captured = Arc::new(Mutex::new(Vec::new()));
+        let legacy_app = Router::new()
+            .route("/v1/passport/applications", post(capture))
+            .with_state(("legacy".to_owned(), captured.clone()));
+        let native_app = Router::new()
+            .route("/v1/passport/applications", post(capture))
+            .with_state(("native".to_owned(), captured.clone()));
+        let legacy_listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let legacy_address = legacy_listener.local_addr().unwrap();
+        let native_listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let native_address = native_listener.local_addr().unwrap();
+        let legacy_server =
+            tokio::spawn(async move { axum::serve(legacy_listener, legacy_app).await.unwrap() });
+        let native_server =
+            tokio::spawn(async move { axum::serve(native_listener, native_app).await.unwrap() });
+        let shared = "s".repeat(32);
+        let tenant = "t".repeat(32);
+        let mut values = BTreeMap::from([
+            ("ENVIRONMENT".to_owned(), "development".to_owned()),
+            (
+                "DATABASE_URL".to_owned(),
+                "postgresql://localhost/flow".to_owned(),
+            ),
+            ("REDIS_URL".to_owned(), "redis://localhost:6379".to_owned()),
+            (
+                "ISSUANCE_SERVICE_URL".to_owned(),
+                format!("http://{legacy_address}"),
+            ),
+            (
+                "ISSUANCE_NATIVE_SERVICE_URL".to_owned(),
+                format!("http://{native_address}"),
+            ),
+            ("ISSUANCE_API_KEY".to_owned(), shared.clone()),
+            (
+                "PASSPORT_TENANT_API_KEYS".to_owned(),
+                format!("{{\"org-a\":\"{tenant}\"}}"),
+            ),
+            ("PASSPORT_NATIVE_FLOW_ENABLED".to_owned(), "true".to_owned()),
+        ]);
+        let request = PhysicalDocumentRequest {
+            organization_id: "org-a".into(),
+            flow_instance_id: "flow-a".into(),
+            operation: PhysicalDocumentOperation::Initialize,
+            data: BTreeMap::new(),
+        };
+        let native = FlowServiceConfig::from_values(values.clone()).unwrap();
+        let result = physical_document_provider(&native)
+            .unwrap()
+            .execute(&request)
+            .await
+            .unwrap();
+        assert_eq!(result.data["owner"], "native");
+        values.insert("PASSPORT_NATIVE_FLOW_ENABLED".into(), "false".into());
+        let legacy = FlowServiceConfig::from_values(values).unwrap();
+        let result = physical_document_provider(&legacy)
+            .unwrap()
+            .execute(&request)
+            .await
+            .unwrap();
+        assert_eq!(result.data["owner"], "legacy");
+        assert_eq!(
+            *captured.lock().unwrap(),
+            vec![
+                ("native".into(), "org-a".into(), tenant),
+                ("legacy".into(), "org-a".into(), shared),
+            ]
+        );
+        legacy_server.abort();
+        native_server.abort();
+    }
 }
 
 fn redis_database_url(value: &str, database: u8) -> Result<String, FlowConnectionError> {

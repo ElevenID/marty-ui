@@ -125,6 +125,19 @@ fn passport_tenant_keyring_is_optional_validated_and_redacted() {
         .unwrap()
         .passport_tenant_keys
         .is_none());
+    assert!(
+        !FlowServiceConfig::from_values(values.clone())
+            .unwrap()
+            .passport_native_flow_enabled
+    );
+    let mut missing_keys = values.clone();
+    missing_keys.insert("PASSPORT_NATIVE_FLOW_ENABLED".into(), "true".into());
+    assert_eq!(
+        FlowServiceConfig::from_values(missing_keys).unwrap_err(),
+        FlowConfigError::Invalid {
+            name: "PASSPORT_TENANT_API_KEYS"
+        }
+    );
     values.insert(
         "PASSPORT_TENANT_API_KEYS".into(),
         format!("{{\"org-1\":\"{secret}\"}}"),
@@ -139,6 +152,18 @@ fn passport_tenant_keyring_is_optional_validated_and_redacted() {
         Some(secret.as_str())
     );
     assert!(!format!("{config:?}").contains(&secret));
+    values.insert("PASSPORT_NATIVE_FLOW_ENABLED".into(), "true".into());
+    let native = FlowServiceConfig::from_values(values.clone()).unwrap();
+    assert!(native.passport_native_flow_enabled);
+    assert!(!format!("{native:?}").contains(&secret));
+    values.insert("PASSPORT_NATIVE_FLOW_ENABLED".into(), "invalid".into());
+    assert_eq!(
+        FlowServiceConfig::from_values(values.clone()).unwrap_err(),
+        FlowConfigError::Invalid {
+            name: "PASSPORT_NATIVE_FLOW_ENABLED"
+        }
+    );
+    values.insert("PASSPORT_NATIVE_FLOW_ENABLED".into(), "true".into());
     values.insert(
         "PASSPORT_TENANT_API_KEYS".into(),
         "{\"org-1\":\"weak\"}".into(),

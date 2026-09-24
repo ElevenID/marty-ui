@@ -66,6 +66,7 @@ pub struct FlowServiceConfig {
     pub issuance_native_url: String,
     pub issuance_api_key: Option<String>,
     pub passport_tenant_keys: Option<PassportTenantKeyring>,
+    pub passport_native_flow_enabled: bool,
     pub service_token: Option<String>,
     pub webhook_secret: Option<String>,
     pub application_event_hmac_key: Option<String>,
@@ -179,6 +180,10 @@ impl fmt::Debug for FlowServiceConfig {
             .field(
                 "passport_tenant_keys_configured",
                 &self.passport_tenant_keys.is_some(),
+            )
+            .field(
+                "passport_native_flow_enabled",
+                &self.passport_native_flow_enabled,
             )
             .field("service_token", &redacted(&self.service_token))
             .field("webhook_secret", &redacted(&self.webhook_secret))
@@ -460,6 +465,13 @@ impl FlowServiceConfig {
                     .map_err(|_| invalid("PASSPORT_TENANT_API_KEYS"))
             })
             .transpose()?;
+        let passport_native_flow_enabled = parse_boolean(
+            value(&values, "PASSPORT_NATIVE_FLOW_ENABLED").unwrap_or("false"),
+            "PASSPORT_NATIVE_FLOW_ENABLED",
+        )?;
+        if passport_native_flow_enabled && passport_tenant_keys.is_none() {
+            return Err(invalid("PASSPORT_TENANT_API_KEYS"));
+        }
         let allow_plaintext_grpc = parse_boolean(
             value(&values, "GRPC_INSECURE_ALLOWED").unwrap_or("false"),
             "GRPC_INSECURE_ALLOWED",
@@ -515,6 +527,7 @@ impl FlowServiceConfig {
             issuance_native_url,
             issuance_api_key,
             passport_tenant_keys,
+            passport_native_flow_enabled,
             service_token,
             webhook_secret,
             application_event_hmac_key,

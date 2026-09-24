@@ -82,6 +82,14 @@
     },
     "invalid_provider_configuration": "unsafe or malformed configured provider URLs still fail startup; do not expose their secrets"
   },
+  "flow_cutover": {
+    "selector": "PASSPORT_NATIVE_FLOW_ENABLED",
+    "default": false,
+    "legacy_target": "ISSUANCE_SERVICE_URL with ISSUANCE_API_KEY",
+    "native_target": "ISSUANCE_NATIVE_SERVICE_URL with organization-specific PASSPORT_TENANT_API_KEYS",
+    "missing_native_keys": "configuration error",
+    "qualification": "selector and rollback are tested locally; do not enable in deployment until signer, bureau, image, gateway, schema, and route parity gates pass"
+  },
   "routes": [
     {"method": "GET", "path": "/v1/passport/capabilities"},
     {"method": "POST", "path": "/v1/passport/applications"},

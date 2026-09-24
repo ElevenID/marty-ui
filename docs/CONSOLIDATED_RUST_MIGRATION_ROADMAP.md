@@ -6235,8 +6235,14 @@ locally, as did the default PostgreSQL contract, 23 passport unit/HTTP tests,
 strict Clippy, and 220 workflow-regression tests; hosted exact-head CI remains
 the merge authority.
 
+The Rust Flow consumer now has a default-off `PASSPORT_NATIVE_FLOW_ENABLED`
+selector in this draft. When enabled with tenant keys it targets the native
+issuance URL using the organization-specific key; when disabled it retains the
+Python issuance URL and shared key for rollback. A local two-owner HTTP test
+checks both selections. Deployment configuration does not enable the selector.
+
 The draft is not a nine-route cutover. Live signer and bureau qualification
-(including batch), image, gateway, Flow, exact route/error parity, stacked-base
+(including batch), image, gateway, live Flow qualification, exact route/error parity, stacked-base
 review and CI, immediate qualified Python retirement, and the one aggregate
 beta-only acceptance soak remain. Production is unchanged; DIDComm KMS
 corrections remain separately deferred.
