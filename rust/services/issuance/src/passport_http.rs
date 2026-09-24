@@ -40,17 +40,22 @@ use crate::{
 pub struct PassportHttpService {
     keyring: PassportTenantKeyring,
     repository: PostgresPassportRepository,
-    cipher: Option<PassportArtifactCipher>,
+    cipher: ArtifactAvailability,
     signer: Option<PassportSigner>,
     bureau: Option<BureauClient>,
+}
+
+#[derive(Clone)]
+enum ArtifactAvailability {
+    Missing,
+    Invalid,
+    Ready(PassportArtifactCipher),
 }
 
 #[derive(Debug, thiserror::Error)]
 pub enum PassportStartupError {
     #[error("{0} is required for native passport HTTP")]
     Missing(&'static str),
-    #[error(transparent)]
-    Artifact(#[from] PassportArtifactError),
     #[error(transparent)]
     Signer(#[from] SignerError),
     #[error(transparent)]
@@ -70,11 +75,16 @@ impl PassportHttpService {
             .passport_tenant_keys
             .clone()
             .ok_or(PassportStartupError::Missing("PASSPORT_TENANT_API_KEYS"))?;
-        let cipher = native
-            .artifact_key
-            .as_deref()
-            .map(PassportArtifactCipher::from_key)
-            .transpose()?;
+        let cipher = match native.artifact_key.as_deref() {
+            None => ArtifactAvailability::Missing,
+            Some(key) => match PassportArtifactCipher::from_key(key) {
+                Ok(cipher) => ArtifactAvailability::Ready(cipher),
+                Err(PassportArtifactError::InvalidKey) => ArtifactAvailability::Invalid,
+                Err(PassportArtifactError::InvalidArtifact) => {
+                    unreachable!("key parsing cannot decrypt")
+                }
+            },
+        };
         let signer = if let Some(url) = native.signer_url.as_deref() {
             Some(PassportSigner::Remote(RemoteSigner::new(
                 url,
@@ -105,7 +115,7 @@ impl PassportHttpService {
                 )
             })
             .transpose()?;
-        Ok(Some(Self::new(
+        Ok(Some(Self::with_artifact_availability(
             keyring,
             PostgresPassportRepository::new(pool),
             cipher,
@@ -119,6 +129,22 @@ impl PassportHttpService {
         keyring: PassportTenantKeyring,
         repository: PostgresPassportRepository,
         cipher: Option<PassportArtifactCipher>,
+        signer: Option<PassportSigner>,
+        bureau: Option<BureauClient>,
+    ) -> Self {
+        Self::with_artifact_availability(
+            keyring,
+            repository,
+            cipher.map_or(ArtifactAvailability::Missing, ArtifactAvailability::Ready),
+            signer,
+            bureau,
+        )
+    }
+
+    fn with_artifact_availability(
+        keyring: PassportTenantKeyring,
+        repository: PostgresPassportRepository,
+        cipher: ArtifactAvailability,
         signer: Option<PassportSigner>,
         bureau: Option<BureauClient>,
     ) -> Self {
@@ -144,9 +170,11 @@ impl PassportHttpService {
     }
 
     fn cipher(&self) -> Result<&PassportArtifactCipher, PassportHttpError> {
-        self.cipher
-            .as_ref()
-            .ok_or(PassportHttpError::MissingArtifactKey)
+        match &self.cipher {
+            ArtifactAvailability::Ready(cipher) => Ok(cipher),
+            ArtifactAvailability::Missing => Err(PassportHttpError::MissingArtifactKey),
+            ArtifactAvailability::Invalid => Err(PassportHttpError::InvalidArtifactKey),
+        }
     }
 
     fn signer(&self) -> Result<&PassportSigner, PassportHttpError> {
@@ -240,6 +268,8 @@ enum PassportHttpError {
     WebhookJobNotFound,
     #[error("PHYSICAL_DOCUMENT_ARTIFACT_KEY is required for encrypted document artifacts")]
     MissingArtifactKey,
+    #[error("PHYSICAL_DOCUMENT_ARTIFACT_KEY is invalid")]
+    InvalidArtifactKey,
     #[error("Secure physical document artifact cannot be decrypted")]
     InvalidArtifact,
     #[error("{0}")]
@@ -276,6 +306,7 @@ impl IntoResponse for PassportHttpError {
             Self::InvalidRequest(_) | Self::MissingDataGroups => StatusCode::UNPROCESSABLE_ENTITY,
             Self::ApplicationNotFound | Self::WebhookJobNotFound => StatusCode::NOT_FOUND,
             Self::MissingArtifactKey
+            | Self::InvalidArtifactKey
             | Self::Signer(SignerError::NotConfigured)
             | Self::MissingBureau => StatusCode::SERVICE_UNAVAILABLE,
             Self::QualityNotReady | Self::ActivationNotReady | Self::ConcurrentChange => {
@@ -369,9 +400,12 @@ async fn capabilities(State(service): State<PassportHttpService>) -> Json<Value>
         blockers.push("Configure ICAO_DOCUMENT_SIGNER_URL. Self-signed document certificates are permitted only in explicit test mode.");
     }
     let signer_blockers = blockers.clone();
-    if service.cipher.is_none() {
-        blockers
-            .push("Configure PHYSICAL_DOCUMENT_ARTIFACT_KEY for encrypted sensitive artifacts.");
+    match &service.cipher {
+        ArtifactAvailability::Missing => blockers
+            .push("Configure PHYSICAL_DOCUMENT_ARTIFACT_KEY for encrypted sensitive artifacts."),
+        ArtifactAvailability::Invalid => blockers
+            .push("PHYSICAL_DOCUMENT_ARTIFACT_KEY is invalid for encrypted sensitive artifacts."),
+        ArtifactAvailability::Ready(_) => {}
     }
     if service.bureau.is_none() {
         blockers.push("Configure PERSONALIZATION_BUREAU_URL for production handoff.");
@@ -380,7 +414,7 @@ async fn capabilities(State(service): State<PassportHttpService>) -> Json<Value>
         "supported": blockers.is_empty(),
         "signer": {"configured": service.signer.is_some(), "mode": service.signer.as_ref().map_or("UNAVAILABLE", PassportSigner::mode), "blockers": signer_blockers},
         "bureau_configured": service.bureau.is_some(),
-        "encrypted_artifact_store": service.cipher.is_some(),
+        "encrypted_artifact_store": matches!(&service.cipher, ArtifactAvailability::Ready(_)),
         "blockers": blockers,
     }))
 }
@@ -666,8 +700,27 @@ mod tests {
         ))
     }
 
+    fn authenticated_application_request() -> Request<Body> {
+        Request::builder()
+            .method("POST")
+            .uri("/v1/passport/applications")
+            .header("content-type", "application/json")
+            .header("x-organization-id", "org-1")
+            .header("x-api-key", "passport-tenant-test-key-00000000000001")
+            .body(Body::from(
+                json!({
+                    "organization_id": "org-1", "flow_execution_id": "flow-1",
+                    "application_template_id": "template-1", "credential_template_id": "credential-1",
+                    "delivery_destination_profile_id": "destination-1", "country_code": "USA",
+                    "applicant": {}, "mrz": {}, "data_groups": {"DG1": "YQ==", "DG2": "Yg=="}
+                })
+                .to_string(),
+            ))
+            .unwrap()
+    }
+
     #[tokio::test]
-    async fn startup_is_default_off_and_rejects_invalid_secrets_or_provider_urls() {
+    async fn startup_is_default_off_and_reports_invalid_key_or_rejects_unsafe_urls() {
         let pool = PgPoolOptions::new()
             .connect_lazy("postgresql://unused:unused@127.0.0.1:5432/unused")
             .unwrap();
@@ -755,21 +808,7 @@ mod tests {
             expected["blocker_count"].as_u64().unwrap() as usize
         );
         let response = degraded_router
-            .oneshot(
-                Request::builder()
-                    .method("POST")
-                    .uri("/v1/passport/applications")
-                    .header("content-type", "application/json")
-                    .header("x-organization-id", "org-1")
-                    .header("x-api-key", "passport-tenant-test-key-00000000000001")
-                    .body(Body::from(json!({
-                        "organization_id": "org-1", "flow_execution_id": "flow-1",
-                        "application_template_id": "template-1", "credential_template_id": "credential-1",
-                        "delivery_destination_profile_id": "destination-1", "country_code": "USA",
-                        "applicant": {}, "mrz": {}, "data_groups": {"DG1": "YQ==", "DG2": "Yg=="}
-                    }).to_string()))
-                    .unwrap(),
-            )
+            .oneshot(authenticated_application_request())
             .await
             .unwrap();
         assert_eq!(
@@ -790,12 +829,44 @@ mod tests {
             "https://bureau.example.test",
         ))
         .unwrap();
-        assert!(matches!(
-            PassportHttpService::from_config(&bad_key, pool.clone()).err(),
-            Some(PassportStartupError::Artifact(
-                PassportArtifactError::InvalidKey
-            ))
-        ));
+        let bad_key = PassportHttpService::from_config(&bad_key, pool.clone())
+            .unwrap()
+            .unwrap();
+        let bad_key_router = router(bad_key);
+        let response = bad_key_router
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .uri("/v1/passport/capabilities")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+        let body: Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(body["encrypted_artifact_store"], false);
+        assert!(body["blockers"]
+            .as_array()
+            .unwrap()
+            .contains(&expected["invalid_artifact_key"]["capability_blocker"]));
+        let response = bad_key_router
+            .oneshot(authenticated_application_request())
+            .await
+            .unwrap();
+        assert_eq!(
+            u64::from(response.status().as_u16()),
+            expected["invalid_artifact_key"]["authenticated_application_create"]["status"]
+                .as_u64()
+                .unwrap()
+        );
+        let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+        let body: Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(
+            body["detail"],
+            expected["invalid_artifact_key"]["authenticated_application_create"]["detail"]
+        );
         let bad_signer = IssuanceServiceConfig::from_values(values(
             &fernet_key,
             "https://user:password@signer.example.test",

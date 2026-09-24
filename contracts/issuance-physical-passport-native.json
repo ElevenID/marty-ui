@@ -76,7 +76,11 @@
     "bureau_configured": false,
     "blocker_count": 3,
     "authenticated_application_create": {"status": 503, "detail": "PHYSICAL_DOCUMENT_ARTIFACT_KEY is required for encrypted document artifacts"},
-    "invalid_provider_configuration": "unsafe or malformed configured provider URLs and invalid artifact keys still fail startup; do not expose their secrets"
+    "invalid_artifact_key": {
+      "capability_blocker": "PHYSICAL_DOCUMENT_ARTIFACT_KEY is invalid for encrypted sensitive artifacts.",
+      "authenticated_application_create": {"status": 503, "detail": "PHYSICAL_DOCUMENT_ARTIFACT_KEY is invalid"}
+    },
+    "invalid_provider_configuration": "unsafe or malformed configured provider URLs still fail startup; do not expose their secrets"
   },
   "routes": [
     {"method": "GET", "path": "/v1/passport/capabilities"},
