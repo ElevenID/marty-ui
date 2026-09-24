@@ -995,6 +995,9 @@ async fn proxy_handler(
     if native_passport_public {
         gateway_request.headers.remove("x-api-key");
         gateway_request.headers.remove("x-organization-id");
+        gateway_request.headers.remove("x-user-id");
+        gateway_request.headers.remove("x-api-key-id");
+        gateway_request.headers.remove("x-authenticated-user-id");
     }
     let mut canonical_body = match organization_contract::canonicalize_request(
         parts.method.as_str(),
@@ -1114,6 +1117,16 @@ async fn proxy_handler(
             "x-organization-id".into(),
             passport_auth.organization_id().into(),
         );
+        if let Some(user_id) = &identity.user_id {
+            overrides
+                .headers
+                .insert("x-user-id".into(), user_id.clone());
+        }
+        if let Some(api_key_id) = &identity.api_key_id {
+            overrides
+                .headers
+                .insert("x-api-key-id".into(), api_key_id.clone());
+        }
     }
     if issuance_native::is_canvas_mirror_public_batch(parts.method.as_str(), &public_path) {
         overrides.trusted_query.insert(
@@ -6179,6 +6192,10 @@ mod tests {
                 upstream.headers.get("x-api-key").map(String::as_str),
                 Some("native-passport-key-for-org-2-00000002")
             );
+            assert_eq!(
+                upstream.headers.get("x-user-id").map(String::as_str),
+                Some("user-1")
+            );
         }
         let response = gateway_router(runtime_state_with_upstream_and_passport(
             Arc::new(NoOwner),
@@ -6197,8 +6214,38 @@ mod tests {
         .await
         .unwrap();
         assert_eq!(response.status(), StatusCode::OK);
+        {
+            let captured = recorder.0.lock().unwrap();
+            let (_, upstream) = captured.last().unwrap();
+            assert_eq!(
+                upstream.headers.get("x-api-key").map(String::as_str),
+                Some("native-passport-key-for-org-1-00000001")
+            );
+        }
+        let response = gateway_router(runtime_state_with_upstream_and_passport(
+            Arc::new(NoOwner),
+            recorder.clone(),
+            true,
+        ))
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/v1/passport/applications/job-1/quality-verify")
+                .header("content-type", "application/json")
+                .header("x-api-key", "passport-gateway-key-org-1")
+                .header("x-user-id", "forged-user")
+                .body(Body::from(r#"{"passed":true}"#))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
         let captured = recorder.0.lock().unwrap();
         let (_, upstream) = captured.last().unwrap();
+        assert_eq!(
+            upstream.headers.get("x-user-id").map(String::as_str),
+            Some("api_key:gateway-test-key")
+        );
         assert_eq!(
             upstream.headers.get("x-api-key").map(String::as_str),
             Some("native-passport-key-for-org-1-00000001")

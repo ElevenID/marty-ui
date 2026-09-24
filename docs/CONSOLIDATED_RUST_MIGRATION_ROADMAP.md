@@ -6265,11 +6265,14 @@ selects only the eight frozen public method/path shapes when enabled; it leaves
 the separately signed bureau webhook and lookalike paths outside gateway
 routing. The switch requires the shared, validated tenant keyring. Native
 passport middleware binds an authenticated organization to the existing
-issuance view/initiate permission, checks membership or
-API-key scope, rejects cross-tenant body/header/query claims, and replaces
+issuance view/initiate permission, checks membership or API-key scope, rejects
+cross-tenant body/header/query claims, and replaces
 client-provided upstream key/organization headers with that organization's
-native key. A two-tenant gateway HTTP test confirms distinct keys and no
-forwarding on mismatched claims; the 131-test gateway library and strict Clippy
+native key. Maintainer review found that the first native gateway pass omitted
+the trusted `X-User-ID` needed by passport quality-result audit records; the
+gateway now replaces any caller value with the authenticated session or API-key
+actor. A two-tenant gateway HTTP test confirms distinct keys, trusted actors,
+and no forwarding on mismatched claims. All 131 gateway tests and strict Clippy
 pass locally. The shared issuance API key is not used as a passport tenant
 credential. This source gate is not deployment authorization: live signer and
 bureau, signed webhook, image, Flow, beta secret mount, exact-head CI and
