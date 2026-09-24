@@ -301,6 +301,7 @@ def test_actual_full_deploy_validates_distinct_images_before_any_write(case, tmp
         "RENDERED": (tmp_path / "rendered").as_posix(),
         "VALIDATIONS": (tmp_path / "validations").as_posix(),
         "ROLLOUTS": (tmp_path / "rollouts").as_posix(),
+        "K8S_NATIVE_ISSUANCE_BIN": "synthetic_native_issuance",
     }
     selected = canonical() if case in {"canonical", "disabled-recovery"} else mirror()
     if case != "missing":
@@ -339,6 +340,21 @@ cmd_setup_secrets() { printf 'setup-secrets\n' >> "$WRITES"; }
 resolve_secret_input() { [[ $# == 1 && "$1" == CLOUDFLARE_TUNNEL_TOKEN ]] || return 93; printf ''; }
 is_placeholder_secret() { [[ -z "$1" ]]; }
 envsubst() { [[ $# == 0 ]] || return 94; "$REAL_ENVSUBST"; }
+synthetic_native_issuance() {
+  case "$1" in
+    validate)
+      printf 'native-validate\n' >> "$VALIDATIONS"
+      [[ ${MARTY_SERVICES_IMAGE-} == ghcr.io/elevenid*/services@sha256:* ]] || return 102
+      [[ "$MARTY_SERVICES_IMAGE" != "$MARTY_ISSUANCE_IMAGE" ]] || return 102 ;;
+    render)
+      # Keep this shell harness focused on deploy ordering and image bindings.
+      # The Rust renderer's full manifest model has its own contract tests.
+      while IFS= read -r line || [[ -n "$line" ]]; do printf '%s\n' "$line"; done
+      printf '\n---\nkind: Deployment\nmetadata:\n  name: issuance-native\nspec:\n  template:\n    spec:\n      containers:\n      - name: issuance-native\n        image: %s\n' "$MARTY_SERVICES_IMAGE"
+      printf '\n---\nkind: Deployment\nmetadata:\n  name: signing-keys\nspec:\n  template:\n    spec:\n      containers:\n      - name: signing-keys\n        image: %s\n' "$MARTY_SERVICES_IMAGE" ;;
+    *) return 101 ;;
+  esac
+}
 kubectl() {
   case "$1:$2" in
     create:configmap)
@@ -361,7 +377,7 @@ kubectl() {
     *) printf 'UNEXPECTED-KUBECTL\n' >> "$WRITES"; return 100 ;;
   esac
 }
-readonly -f kubectl checked_python envsubst
+readonly -f kubectl checked_python envsubst synthetic_native_issuance
 """
     program = (
         prelude
@@ -386,7 +402,10 @@ readonly -f kubectl checked_python envsubst
         timeout=20,
         check=False,
     )
-    assert (tmp_path / "validations").read_text().splitlines() == ["validate"]
+    expected_validations = ["validate"]
+    if case in {"canonical", "mirror", "missing-services", "mutable-services", "misbound-services"}:
+        expected_validations.append("native-validate")
+    assert (tmp_path / "validations").read_text().splitlines() == expected_validations
     assert PRIVATE not in result.stdout + result.stderr
     if case not in {"canonical", "mirror", "disabled-recovery"}:
         assert result.returncode != 0
