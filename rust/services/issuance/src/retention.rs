@@ -137,7 +137,19 @@ impl RetentionService {
         trusted_organization: Option<&str>,
         organization_id: &str,
     ) -> Result<(), TransactionReadError> {
-        self.security.authorize(api_key)?;
+        self.authenticate_api_key(api_key)?;
+        self.authorize_organization(trusted_organization, organization_id)
+    }
+
+    pub fn authenticate_api_key(&self, api_key: Option<&str>) -> Result<(), TransactionReadError> {
+        self.security.authorize(api_key)
+    }
+
+    pub fn authorize_organization(
+        &self,
+        trusted_organization: Option<&str>,
+        organization_id: &str,
+    ) -> Result<(), TransactionReadError> {
         self.security
             .require_organization(trusted_organization, organization_id, false)
     }

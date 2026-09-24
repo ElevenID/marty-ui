@@ -9,12 +9,20 @@
     "invalid_api_key": 401,
     "missing_trusted_organization": 403,
     "different_trusted_organization": 403,
-    "authorized": 200
+    "authorized": 200,
+    "error_detail": {
+      "missing_api_key": "X-API-Key header is missing",
+      "invalid_api_key": "Invalid API Key",
+      "missing_trusted_organization": "Trusted organization context is required",
+      "different_trusted_organization": "Organization context does not match requested organization",
+      "api_key_not_configured": "ISSUANCE_API_KEY not configured on server"
+    }
   },
   "retention_days": {
     "default": 30, "minimum": 1, "maximum": 3650, "invalid": 422,
     "validation_oracle": "marty-credentials-issuance v0.1.78 (FastAPI 0.109.0, Pydantic 2.11.7)",
-    "validation_precedes_route_authorization": true,
+    "api_key_dependency_precedes_validation": true,
+    "validation_precedes_tenant_check": true,
     "duplicate_query_uses_last_value": true,
     "size_boundary": {
       "maximum_significant_decimal_digits": 4300,

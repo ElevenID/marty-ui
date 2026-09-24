@@ -151,17 +151,22 @@ fn retention_days(query: Option<&str>) -> Result<u16, Box<Response>> {
     }
 }
 
-fn authorize(
+fn authenticate_api_key(
+    service: &RetentionService,
+    headers: &HeaderMap,
+) -> Result<(), Box<Response>> {
+    service
+        .authenticate_api_key(header(headers, API_KEY_HEADER))
+        .map_err(|error| Box::new(security_error(error)))
+}
+
+fn authorize_organization(
     service: &RetentionService,
     headers: &HeaderMap,
     organization_id: &str,
 ) -> Result<(), Box<Response>> {
     service
-        .authorize(
-            header(headers, API_KEY_HEADER),
-            header(headers, ORGANIZATION_HEADER),
-            organization_id,
-        )
+        .authorize_organization(header(headers, ORGANIZATION_HEADER), organization_id)
         .map_err(|error| Box::new(security_error(error)))
 }
 
@@ -173,11 +178,12 @@ fn security_error(error: TransactionReadError) -> Response {
         TransactionReadError::InvalidApiKey => (StatusCode::UNAUTHORIZED, "Invalid API Key"),
         TransactionReadError::TrustedOrganizationRequired => (
             StatusCode::FORBIDDEN,
-            "X-Organization-ID header is required",
+            "Trusted organization context is required",
         ),
-        TransactionReadError::OrganizationMismatch => {
-            (StatusCode::FORBIDDEN, "Organization does not match")
-        }
+        TransactionReadError::OrganizationMismatch => (
+            StatusCode::FORBIDDEN,
+            "Organization context does not match requested organization",
+        ),
         TransactionReadError::ApiKeyNotConfigured => (
             StatusCode::SERVICE_UNAVAILABLE,
             "ISSUANCE_API_KEY not configured on server",
@@ -201,11 +207,14 @@ async fn summary(
     RawQuery(query): RawQuery,
     headers: HeaderMap,
 ) -> Response {
+    if let Err(response) = authenticate_api_key(&service, &headers) {
+        return *response;
+    }
     let days = match retention_days(query.as_deref()) {
         Ok(days) => days,
         Err(response) => return *response,
     };
-    if let Err(response) = authorize(&service, &headers, &organization_id) {
+    if let Err(response) = authorize_organization(&service, &headers, &organization_id) {
         return *response;
     }
     match service.summary(&organization_id, days).await {
@@ -220,11 +229,14 @@ async fn purge(
     RawQuery(query): RawQuery,
     headers: HeaderMap,
 ) -> Response {
+    if let Err(response) = authenticate_api_key(&service, &headers) {
+        return *response;
+    }
     let days = match retention_days(query.as_deref()) {
         Ok(days) => days,
         Err(response) => return *response,
     };
-    if let Err(response) = authorize(&service, &headers, &organization_id) {
+    if let Err(response) = authorize_organization(&service, &headers, &organization_id) {
         return *response;
     }
     match service.purge(&organization_id, days).await {

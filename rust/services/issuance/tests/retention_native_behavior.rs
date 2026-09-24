@@ -104,10 +104,29 @@ async fn request_raw(
     organization: Option<&str>,
     repo: Arc<dyn RetentionRepository>,
 ) -> (StatusCode, Vec<u8>) {
+    request_raw_config(
+        method,
+        path,
+        api_key,
+        organization,
+        repo,
+        Some("management-key"),
+    )
+    .await
+}
+
+async fn request_raw_config(
+    method: &str,
+    path: &str,
+    api_key: Option<&str>,
+    organization: Option<&str>,
+    repo: Arc<dyn RetentionRepository>,
+    configured_api_key: Option<&str>,
+) -> (StatusCode, Vec<u8>) {
     let clock = Arc::new(FixedClock(
         Utc.with_ymd_and_hms(2026, 2, 1, 0, 0, 0).unwrap(),
     ));
-    let service = RetentionService::new(repo, Some("management-key")).with_clock(clock);
+    let service = RetentionService::new(repo, configured_api_key).with_clock(clock);
     let app = retention_http::router(service);
     let mut builder = Request::builder().method(method).uri(path);
     if let Some(api_key) = api_key {
@@ -188,22 +207,31 @@ async fn frozen_retention_boundary_precedes_repository_access() {
             .as_str()
             .unwrap()
             .replace("{organization_id}", "organization-a");
-        for (key, organization, status) in [
-            (None, None, StatusCode::UNAUTHORIZED),
-            (Some("wrong"), None, StatusCode::UNAUTHORIZED),
-            (Some("management-key"), None, StatusCode::FORBIDDEN),
+        for (key, organization, status, detail) in [
+            (None, None, StatusCode::UNAUTHORIZED, "missing_api_key"),
+            (
+                Some("wrong"),
+                None,
+                StatusCode::UNAUTHORIZED,
+                "invalid_api_key",
+            ),
+            (
+                Some("management-key"),
+                None,
+                StatusCode::FORBIDDEN,
+                "missing_trusted_organization",
+            ),
             (
                 Some("management-key"),
                 Some("organization-b"),
                 StatusCode::FORBIDDEN,
+                "different_trusted_organization",
             ),
         ] {
-            assert_eq!(
-                request(method, &path, key, organization, repo.clone())
-                    .await
-                    .0,
-                status
-            );
+            let (actual_status, body) =
+                request(method, &path, key, organization, repo.clone()).await;
+            assert_eq!(actual_status, status);
+            assert_eq!(body["detail"], contract["boundary"]["error_detail"][detail]);
             assert!(repo.calls.lock().unwrap().is_empty());
         }
         for case in contract["retention_days"]["invalid_queries"]
@@ -225,13 +253,59 @@ async fn frozen_retention_boundary_precedes_repository_access() {
             assert!(repo.calls.lock().unwrap().is_empty());
             let (without_key, without_key_body) =
                 request(method, &path, None, None, repo.clone()).await;
-            assert_eq!(without_key, StatusCode::UNPROCESSABLE_ENTITY);
+            assert_eq!(without_key, StatusCode::UNAUTHORIZED);
             assert_eq!(
-                without_key_body, body,
-                "validation precedes route authorization"
+                without_key_body["detail"], contract["boundary"]["error_detail"]["missing_api_key"],
+                "API-key dependency precedes query validation"
+            );
+            let (wrong_key, wrong_key_body) =
+                request(method, &path, Some("wrong"), None, repo.clone()).await;
+            assert_eq!(wrong_key, StatusCode::UNAUTHORIZED);
+            assert_eq!(
+                wrong_key_body["detail"],
+                contract["boundary"]["error_detail"]["invalid_api_key"]
+            );
+            let (no_tenant, no_tenant_body) =
+                request(method, &path, Some("management-key"), None, repo.clone()).await;
+            assert_eq!(no_tenant, StatusCode::UNPROCESSABLE_ENTITY);
+            assert_eq!(
+                no_tenant_body, body,
+                "query validation precedes tenant check"
             );
             assert!(repo.calls.lock().unwrap().is_empty());
         }
+    }
+}
+
+#[tokio::test]
+async fn frozen_retention_unconfigured_api_key_precedes_query_validation() {
+    let contract: Value = serde_json::from_str(CONTRACT).unwrap();
+    let repo = Arc::new(FakeRetentionRepository::default());
+    for route in contract["routes"].as_array().unwrap() {
+        let method = route["method"].as_str().unwrap();
+        let path = format!(
+            "{}?retention_days=not-a-number",
+            route["path"]
+                .as_str()
+                .unwrap()
+                .replace("{organization_id}", "organization-a")
+        );
+        let (status, body) = request_raw_config(
+            method,
+            &path,
+            Some("management-key"),
+            Some("organization-a"),
+            repo.clone(),
+            None,
+        )
+        .await;
+        assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE);
+        let body: Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(
+            body["detail"],
+            contract["boundary"]["error_detail"]["api_key_not_configured"]
+        );
+        assert!(repo.calls.lock().unwrap().is_empty());
     }
 }
 
