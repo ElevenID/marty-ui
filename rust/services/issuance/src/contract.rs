@@ -2,7 +2,7 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use mmf_core::{ErrorCode, MmfError};
 use serde::Deserialize;
-use serde_json::Value;
+use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
 
 const SURFACE: &[u8] = include_bytes!("../../../../contracts/issuance-runtime-surface.json");
@@ -35,6 +35,7 @@ const APPLICATION_TEMPLATES: &[u8] =
     include_bytes!("../../../../contracts/issuance-application-templates.json");
 const INTERNAL_APPLICATIONS: &[u8] =
     include_bytes!("../../../../contracts/issuance-internal-applications.json");
+const RETENTION: &[u8] = include_bytes!("../../../../contracts/issuance-retention-management.json");
 const RESOURCE_OWNERS: &[u8] =
     include_bytes!("../../../../contracts/issuance-resource-owner-lookups.json");
 const ISSUED_CREDENTIAL_ADAPTERS: &[u8] =
@@ -72,6 +73,7 @@ struct Coverage {
     initiation_behavior_contract: Upstream,
     application_template_behavior_contract: Upstream,
     internal_application_behavior_contract: Upstream,
+    retention_behavior_contract: Upstream,
     resource_owner_behavior_contract: SourceBehaviorContract,
     issued_credential_adapter_behavior_contract: SourceBehaviorContract,
     oid4vci_authorization_behavior_contract: Oid4vciBehaviorContract,
@@ -959,6 +961,14 @@ pub fn validate_embedded_contract() -> Result<CoverageSummary, MmfError> {
         "invalid internal application provenance",
     )?;
     require(
+        coverage.retention_behavior_contract.repository == "ElevenID/marty-credentials"
+            && coverage.retention_behavior_contract.path
+                == "contracts/issuance-retention-management.json"
+            && coverage.retention_behavior_contract.commit
+                == "3d54a96cdd88b8c83cae138149ad5217d8d251f8",
+        "invalid retention management provenance",
+    )?;
+    require(
         coverage.schema == "marty.issuance-native-coverage/v1",
         "unexpected issuance coverage schema",
     )?;
@@ -1072,6 +1082,53 @@ pub fn validate_embedded_contract() -> Result<CoverageSummary, MmfError> {
     require(
         actual_internal_applications == coverage.internal_application_behavior_contract.sha256,
         "internal application hash does not match provenance",
+    )?;
+    let canonical_retention = canonical_lf(RETENTION);
+    let actual_retention = format!("{:x}", Sha256::digest(&canonical_retention));
+    require(
+        actual_retention == coverage.retention_behavior_contract.sha256,
+        "retention management hash does not match provenance",
+    )?;
+    let retention: Value = serde_json::from_slice(&canonical_retention)
+        .map_err(|error| contract_error("invalid retention management contract", error))?;
+    require(
+        retention["schema"] == "marty.issuance-retention-management/v1"
+            && retention["routes"]
+                == json!([
+                    {"method": "GET", "path": "/v1/issuance/organizations/{organization_id}/retention", "operation": "get_organization_retention_summary"},
+                    {"method": "POST", "path": "/v1/issuance/organizations/{organization_id}/retention/purge", "operation": "purge_organization_retention_data"}
+                ])
+            && retention["boundary"]
+                == json!({
+                    "missing_api_key": 401,
+                    "invalid_api_key": 401,
+                    "missing_trusted_organization": 403,
+                    "different_trusted_organization": 403,
+                    "authorized": 200
+                })
+            && retention["retention_days"]
+                == json!({
+                    "default": 30, "minimum": 1, "maximum": 3650, "invalid": 422
+                })
+            && retention["tracked_scope"]
+                == json!([
+                    "applications",
+                    "submitted_evidence",
+                    "issuance_transactions",
+                    "issued_credentials",
+                    "authorization_sessions",
+                    "issuance_events"
+                ])
+            && retention["record_count_fields"]
+                == json!([
+                    "issuance_transactions",
+                    "applications",
+                    "authorization_sessions",
+                    "issuance_events",
+                    "issued_credentials",
+                    "total"
+                ]),
+        "unexpected retention management behavior contract",
     )?;
     let canonical_resource_owners = canonical_lf(RESOURCE_OWNERS);
     let actual_resource_owners = format!("{:x}", Sha256::digest(&canonical_resource_owners));
@@ -2290,7 +2347,7 @@ mod tests {
         Coverage, HttpOperation, APPLICATION_TEMPLATES, CANVAS_LTI, CANVAS_MANAGEMENT,
         CANVAS_MIRROR, CANVAS_OPERATIONS, COVERAGE, CREDENTIAL_ADMISSION, CREDENTIAL_LIFECYCLE,
         CREDENTIAL_SIGNING, DIDCOMM, INITIATION, INTERNAL_APPLICATIONS, ISSUED_CREDENTIAL_ADAPTERS,
-        OID4VCI_AUTHORIZATION, RENEWAL_REFERENCE, RESOURCE_OWNERS,
+        OID4VCI_AUTHORIZATION, RENEWAL_REFERENCE, RESOURCE_OWNERS, RETENTION,
     };
 
     #[test]
@@ -2911,6 +2968,10 @@ mod tests {
         assert_eq!(
             format!("{:x}", Sha256::digest(canonical_lf(INTERNAL_APPLICATIONS))),
             coverage.internal_application_behavior_contract.sha256
+        );
+        assert_eq!(
+            format!("{:x}", Sha256::digest(canonical_lf(RETENTION))),
+            coverage.retention_behavior_contract.sha256
         );
         assert_eq!(
             format!(

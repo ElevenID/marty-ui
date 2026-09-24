@@ -112,6 +112,12 @@
     "commit": "e40c1ce6e807714278ef362d3ed24909dd8686fa",
     "sha256": "650f22242055fbd4acbea523749a2d10aa8509a95fad9175d7b134c76433da12"
   },
+  "retention_behavior_contract": {
+    "repository": "ElevenID/marty-credentials",
+    "path": "contracts/issuance-retention-management.json",
+    "commit": "3d54a96cdd88b8c83cae138149ad5217d8d251f8",
+    "sha256": "dbc6ad753ba16f2277e6c40040a1115cff257a7cf0d7ec32786f474a5881db0c"
+  },
   "resource_owner_behavior_contract": {
     "path": "contracts/issuance-resource-owner-lookups.json",
     "sha256": "59b3f21107824f85136768545bca8f4a6374d3a4708a0408b1a7769c61c00a06",
