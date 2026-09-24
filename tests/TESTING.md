@@ -586,12 +586,12 @@ The deployed services and UI images independently expose their embedded release
 identity at `/.well-known/marty-release` and `/marty-ui-release.json`; both must
 match before any browser journey starts.
 
-Configure the protected `beta-lifecycle` environment with:
+Configure the protected `beta-lifecycle` environment and the repository with:
 
 ```text
 vars.BETA_ORIGIN
 vars.BETA_AUDIT_ORG_ID
-secrets.DEMO_RECORDER_DISPATCH_TOKEN
+repo.secrets.DEMO_RECORDER_DISPATCH_TOKEN
 secrets.TEST_APPLICANT_EMAIL
 secrets.TEST_APPLICANT_PASSWORD
 secrets.TEST_VENDOR_EMAIL

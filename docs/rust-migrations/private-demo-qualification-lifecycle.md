@@ -70,7 +70,7 @@ inputs plus these four required inputs:
   the recorder intake for its immutable maintainer-review checkpoint.
 - `demo_deployment_manifest_sha256`: the original receipt's lowercase SHA-256.
 
-The existing `DEMO_RECORDER_DISPATCH_TOKEN` secret reads the private run,
+The existing repository-scoped `DEMO_RECORDER_DISPATCH_TOKEN` secret reads the private run,
 artifact, server-side PR issue comment, and collaborator permission. Configure a
 fine-grained token restricted to `ElevenID/marty-demo-recorder` with repository
 permissions **Actions: Read-only**, **Pull requests: Read-only**, and

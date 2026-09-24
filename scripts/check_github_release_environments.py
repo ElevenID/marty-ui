@@ -59,6 +59,17 @@ class GitHubApi:
             if isinstance(item, dict) and item.get("name")
         }
 
+    def repository_secrets(self) -> set[str]:
+        payload = self.get(f"repos/{self.repository}/actions/secrets?per_page=100")
+        secrets = payload.get("secrets")
+        if not isinstance(secrets, list):
+            raise PreflightError("Repository secret response is malformed")
+        return {
+            str(item.get("name"))
+            for item in secrets
+            if isinstance(item, dict) and item.get("name")
+        }
+
     def environment(self, name: str) -> dict[str, Any]:
         encoded = urllib.parse.quote(name, safe="")
         return self.get(f"repos/{self.repository}/environments/{encoded}")
@@ -158,6 +169,20 @@ def validate_configuration(
                 errors.append(
                     f"repository variable {name} must be a lowercase 40-character SHA"
                 )
+        required_repository_secrets = manifest.get("required_repository_secrets", [])
+        if required_repository_secrets:
+            try:
+                repository_secrets = api.repository_secrets()
+            except PreflightError as exc:
+                errors.append(f"repository secrets: {exc}")
+            else:
+                missing_secrets = _missing(
+                    required_repository_secrets, repository_secrets
+                )
+                if missing_secrets:
+                    errors.append(
+                        "missing repository secrets: " + ", ".join(missing_secrets)
+                    )
 
     environments = manifest.get("environments")
     if not isinstance(environments, dict) or not environments:
