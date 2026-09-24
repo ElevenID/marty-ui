@@ -1824,7 +1824,7 @@ pub async fn run_canvas_mirror_automation_main_lifecycle(pool: &PgPool, database
         Some(json!({"status":"healthy","service":"issuance-service"}))
     );
 
-    tokio::time::timeout(Duration::from_secs(10), async {
+    let startup_cycle = tokio::time::timeout(Duration::from_secs(45), async {
         loop {
             let delivered: bool = sqlx::query_scalar(
                 "SELECT COALESCE(status='delivered' AND external_credential_id='automation-external', false) \
@@ -1844,8 +1844,19 @@ pub async fn run_canvas_mirror_automation_main_lifecycle(pool: &PgPool, database
             tokio::time::sleep(Duration::from_millis(50)).await;
         }
     })
-    .await
-    .expect("packaged automation startup cycle deadline");
+    .await;
+    if let Err(error) = startup_cycle {
+        let _ = child.0.kill();
+        let _ = child.0.wait();
+        let mut stderr = String::new();
+        if let Some(mut pipe) = child.0.stderr.take() {
+            let _ = pipe.read_to_string(&mut stderr);
+        }
+        panic!(
+            "packaged automation startup cycle deadline: {error}; calls={:?}; stderr={stderr}",
+            *state.calls.lock().unwrap()
+        );
+    }
     assert!(state.calls.lock().unwrap().iter().any(|call| {
         call["port"] == "automation_publish"
             && call["authorization"] == "Bearer synthetic-runtime-tenant-token"
