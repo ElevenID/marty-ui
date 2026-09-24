@@ -103,6 +103,15 @@
     "status": 422,
     "body": {"detail": [{"type": "missing", "loc": ["header", "x-personalization-signature"], "msg": "Field required", "input": null}]}
   },
+  "quality_validation_oracle": "FastAPI TestClient against the released physical_document_router with a missing job store; invalid models are rejected before the store is read",
+  "quality_validation_observations": [
+    {"input": {}, "status": 422, "body": {"detail": [{"type": "missing", "loc": ["body", "passed"], "msg": "Field required", "input": {}}]}},
+    {"input": {"passed": "abc"}, "status": 422, "body": {"detail": [{"type": "bool_parsing", "loc": ["body", "passed"], "msg": "Input should be a valid boolean, unable to interpret input", "input": "abc"}]}},
+    {"input": {"passed": null}, "status": 422, "body": {"detail": [{"type": "bool_type", "loc": ["body", "passed"], "msg": "Input should be a valid boolean", "input": null}]}},
+    {"input": {"passed": true, "extra": 1}, "status": 422, "body": {"detail": [{"type": "extra_forbidden", "loc": ["body", "extra"], "msg": "Extra inputs are not permitted", "input": 1}]}},
+    {"input": {"passed": true, "failure_codes": null}, "status": 422, "body": {"detail": [{"type": "list_type", "loc": ["body", "failure_codes"], "msg": "Input should be a valid list", "input": null}]}},
+    {"input": {"passed": true, "failure_codes": ["a", 2]}, "status": 422, "body": {"detail": [{"type": "string_type", "loc": ["body", "failure_codes", 1], "msg": "Input should be a valid string", "input": 2}]}}
+  ],
   "routes": [
     {"method": "GET", "path": "/v1/passport/capabilities"},
     {"method": "POST", "path": "/v1/passport/applications"},

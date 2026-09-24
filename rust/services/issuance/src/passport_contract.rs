@@ -6,7 +6,7 @@ use std::collections::BTreeMap;
 use base64::{engine::general_purpose::STANDARD, Engine as _};
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
-use serde_json::{Map, Value};
+use serde_json::{json, Map, Value};
 
 use crate::{
     passport_artifact::PassportSensitiveArtifact, passport_bureau::DocumentType,
@@ -96,6 +96,105 @@ pub struct QualityResultRequest {
     pub passed: bool,
     #[serde(default)]
     pub failure_codes: Vec<String>,
+}
+
+impl QualityResultRequest {
+    /// Reproduce the captured released Pydantic quality boundary before the job is read.
+    pub fn from_python_value(input: &Value) -> Result<Self, Value> {
+        let Some(fields) = input.as_object() else {
+            return Err(json!({"detail": [{
+                "type": "model_attributes_type", "loc": ["body"],
+                "msg": "Input should be a valid dictionary or object to extract fields from",
+                "input": input,
+            }]}));
+        };
+        let mut errors = Vec::new();
+        let passed = match fields.get("passed") {
+            None => {
+                errors.push(json!({
+                    "type": "missing", "loc": ["body", "passed"],
+                    "msg": "Field required", "input": input,
+                }));
+                None
+            }
+            Some(value) => match python_bool(value) {
+                Some(passed) => Some(passed),
+                None => {
+                    let (kind, message) =
+                        if value.is_null() || value.is_array() || value.is_object() {
+                            ("bool_type", "Input should be a valid boolean")
+                        } else {
+                            (
+                                "bool_parsing",
+                                "Input should be a valid boolean, unable to interpret input",
+                            )
+                        };
+                    errors.push(json!({
+                        "type": kind, "loc": ["body", "passed"],
+                        "msg": message, "input": value,
+                    }));
+                    None
+                }
+            },
+        };
+        let failure_codes = match fields.get("failure_codes") {
+            None => Some(Vec::new()),
+            Some(Value::Array(values)) => {
+                let mut codes = Vec::with_capacity(values.len());
+                for (index, value) in values.iter().enumerate() {
+                    if let Some(code) = value.as_str() {
+                        codes.push(code.to_owned());
+                    } else {
+                        errors.push(json!({
+                            "type": "string_type", "loc": ["body", "failure_codes", index],
+                            "msg": "Input should be a valid string", "input": value,
+                        }));
+                    }
+                }
+                Some(codes)
+            }
+            Some(value) => {
+                errors.push(json!({
+                    "type": "list_type", "loc": ["body", "failure_codes"],
+                    "msg": "Input should be a valid list", "input": value,
+                }));
+                None
+            }
+        };
+        for (name, value) in fields {
+            if name != "passed" && name != "failure_codes" {
+                errors.push(json!({
+                    "type": "extra_forbidden", "loc": ["body", name],
+                    "msg": "Extra inputs are not permitted", "input": value,
+                }));
+            }
+        }
+        if !errors.is_empty() {
+            return Err(json!({"detail": errors}));
+        }
+        Ok(Self {
+            passed: passed.expect("validated passed field"),
+            failure_codes: failure_codes.expect("validated failure code list"),
+        })
+    }
+}
+
+fn python_bool(value: &Value) -> Option<bool> {
+    match value {
+        Value::Bool(value) => Some(*value),
+        Value::Number(value) if value.as_i64() == Some(0) || value.as_f64() == Some(0.0) => {
+            Some(false)
+        }
+        Value::Number(value) if value.as_i64() == Some(1) || value.as_f64() == Some(1.0) => {
+            Some(true)
+        }
+        Value::String(value) => match value.to_ascii_lowercase().as_str() {
+            "0" | "false" | "f" | "no" | "n" | "off" => Some(false),
+            "1" | "true" | "t" | "yes" | "y" | "on" => Some(true),
+            _ => None,
+        },
+        _ => None,
+    }
 }
 
 /// Exactly the Python `_safe_response` projection; no ciphertext or applicant
@@ -248,6 +347,18 @@ mod tests {
             json!({"passed": true, "extra": 1})
         )
         .is_err());
+        for (input, expected) in [
+            (json!(true), true),
+            (json!(false), false),
+            (json!(1), true),
+            (json!(0), false),
+            (json!("true"), true),
+            (json!("off"), false),
+        ] {
+            let parsed =
+                QualityResultRequest::from_python_value(&json!({"passed": input})).unwrap();
+            assert_eq!(parsed.passed, expected);
+        }
     }
 
     #[test]

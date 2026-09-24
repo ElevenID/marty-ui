@@ -288,6 +288,8 @@ enum PassportHttpError {
     InvalidDocumentType,
     #[error("X-Personalization-Signature header is missing")]
     MissingWebhookSignature,
+    #[error("Physical document request validation failed")]
+    Validation(Value),
     #[error("Physical document changed concurrently; retry the operation")]
     ConcurrentChange,
     #[error("Physical document repository failed")]
@@ -300,6 +302,9 @@ impl IntoResponse for PassportHttpError {
     fn into_response(self) -> Response {
         if matches!(&self, Self::MissingWebhookSignature) {
             return crate::management_http::missing_header("x-personalization-signature");
+        }
+        if let Self::Validation(body) = &self {
+            return (StatusCode::UNPROCESSABLE_ENTITY, Json(body.clone())).into_response();
         }
         let status = match &self {
             Self::Auth(
@@ -326,6 +331,7 @@ impl IntoResponse for PassportHttpError {
             | Self::Storage(_)
             | Self::WebhookStorage(_) => StatusCode::INTERNAL_SERVER_ERROR,
             Self::MissingWebhookSignature => unreachable!("handled before status selection"),
+            Self::Validation(_) => unreachable!("handled before status selection"),
         };
         match &self {
             Self::Storage(error) => error!(%error, "physical document repository failed"),
@@ -609,8 +615,10 @@ async fn quality_verify(
     State(service): State<PassportHttpService>,
     Path(application_id): Path<String>,
     headers: HeaderMap,
-    Json(request): Json<QualityResultRequest>,
+    Json(payload): Json<Value>,
 ) -> Result<Json<Value>, PassportHttpError> {
+    let request =
+        QualityResultRequest::from_python_value(&payload).map_err(PassportHttpError::Validation)?;
     let principal = service.authenticate(&headers)?;
     let job = service.job(&principal, &application_id).await?;
     if !matches!(
@@ -757,6 +765,37 @@ mod tests {
             body,
             frozen["webhook_missing_signature_observation"]["body"]
         );
+    }
+
+    #[tokio::test]
+    async fn quality_validation_matches_frozen_python_responses() {
+        let frozen: Value = serde_json::from_str(include_str!(
+            "../../../../contracts/issuance-physical-passport-native.json"
+        ))
+        .unwrap();
+        for case in frozen["quality_validation_observations"]
+            .as_array()
+            .unwrap()
+        {
+            let response = test_router()
+                .oneshot(
+                    Request::builder()
+                        .method("POST")
+                        .uri("/v1/passport/applications/example/quality-verify")
+                        .header("content-type", "application/json")
+                        .body(Body::from(case["input"].to_string()))
+                        .unwrap(),
+                )
+                .await
+                .unwrap();
+            assert_eq!(
+                response.status().as_u16(),
+                case["status"].as_u64().unwrap() as u16
+            );
+            let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+            let body: Value = serde_json::from_slice(&body).unwrap();
+            assert_eq!(body, case["body"], "input: {}", case["input"]);
+        }
     }
 
     #[tokio::test]
