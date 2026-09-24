@@ -30,6 +30,81 @@ pub fn router(service: RetentionService) -> Router {
         .with_state(service)
 }
 
+#[derive(Clone, Copy)]
+enum RetentionDaysError {
+    Parse,
+    BelowMinimum,
+    AboveMaximum,
+}
+
+// Match the released Python query boundary, including its string-to-integer coercions.
+// Saturating at 3651 preserves range classification for arbitrarily long integers.
+fn parse_retention_integer(value: &str) -> Option<i32> {
+    let trimmed = value.trim();
+    let (negative, unsigned) = match trimmed.as_bytes().first() {
+        Some(b'-') => (true, &trimmed[1..]),
+        Some(b'+') => (false, &trimmed[1..]),
+        _ => (false, trimmed),
+    };
+    let unsigned = unsigned
+        .rsplit_once('.')
+        .and_then(|(whole, fraction)| {
+            (!fraction.is_empty() && fraction.bytes().all(|byte| byte == b'0')).then_some(whole)
+        })
+        .unwrap_or(unsigned);
+    let mut digits = unsigned.bytes().peekable();
+    let mut number: i32 = 0;
+    let mut saw_digit = false;
+    while let Some(byte) = digits.next() {
+        match byte {
+            b'0'..=b'9' => {
+                saw_digit = true;
+                number = number
+                    .saturating_mul(10)
+                    .saturating_add(i32::from(byte - b'0'));
+            }
+            b'_' if saw_digit && matches!(digits.peek(), Some(b'0'..=b'9')) => {}
+            _ => return None,
+        }
+    }
+    saw_digit.then_some(if negative { -number } else { number })
+}
+
+fn retention_validation_error(value: &str, error: RetentionDaysError) -> Response {
+    let (kind, message, context) = match error {
+        RetentionDaysError::Parse => (
+            "int_parsing",
+            "Input should be a valid integer, unable to parse string as an integer",
+            None,
+        ),
+        RetentionDaysError::BelowMinimum => (
+            "greater_than_equal",
+            "Input should be greater than or equal to 1",
+            Some(json!({"ge": 1})),
+        ),
+        RetentionDaysError::AboveMaximum => (
+            "less_than_equal",
+            "Input should be less than or equal to 3650",
+            Some(json!({"le": 3650})),
+        ),
+    };
+    let mut detail = json!({
+        "type": kind,
+        "loc": ["query", "retention_days"],
+        "msg": message,
+        "input": value,
+        "url": format!("https://errors.pydantic.dev/2.11/v/{kind}"),
+    });
+    if let Some(context) = context {
+        detail["ctx"] = context;
+    }
+    (
+        StatusCode::UNPROCESSABLE_ENTITY,
+        Json(json!({"detail": [detail]})),
+    )
+        .into_response()
+}
+
 fn retention_days(query: Option<&str>) -> Result<u16, Box<Response>> {
     let value = url::form_urlencoded::parse(query.unwrap_or_default().as_bytes())
         .filter(|(key, _)| key == "retention_days")
@@ -38,15 +113,16 @@ fn retention_days(query: Option<&str>) -> Result<u16, Box<Response>> {
     let Some(value) = value else {
         return Ok(30);
     };
-    match value.parse::<u16>() {
-        Ok(days @ 1..=3650) => Ok(days),
-        _ => Err(Box::new(
-            (
-                StatusCode::UNPROCESSABLE_ENTITY,
-                Json(json!({"detail": "retention_days must be between 1 and 3650"})),
-            )
-                .into_response(),
-        )),
+    match parse_retention_integer(&value) {
+        Some(days @ 1..=3650) => Ok(days as u16),
+        other => {
+            let error = match other {
+                None => RetentionDaysError::Parse,
+                Some(days) if days < 1 => RetentionDaysError::BelowMinimum,
+                Some(_) => RetentionDaysError::AboveMaximum,
+            };
+            Err(Box::new(retention_validation_error(&value, error)))
+        }
     }
 }
 

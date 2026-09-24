@@ -206,22 +206,47 @@ async fn frozen_retention_boundary_precedes_repository_access() {
             );
             assert!(repo.calls.lock().unwrap().is_empty());
         }
-        for invalid in ["0", "3651", "-1", "not-a-number"] {
+        for case in contract["retention_days"]["invalid_queries"]
+            .as_array()
+            .unwrap()
+        {
+            let invalid = case["input"].as_str().unwrap();
             let path = format!("{path}?retention_days={invalid}");
-            assert_eq!(
-                request(
-                    method,
-                    &path,
-                    Some("management-key"),
-                    Some("organization-a"),
-                    repo.clone()
-                )
-                .await
-                .0,
-                StatusCode::UNPROCESSABLE_ENTITY
-            );
+            let (status, body) = request(
+                method,
+                &path,
+                Some("management-key"),
+                Some("organization-a"),
+                repo.clone(),
+            )
+            .await;
+            assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY);
+            assert_eq!(body, json!({"detail": case["detail"]}), "{invalid}");
             assert!(repo.calls.lock().unwrap().is_empty());
         }
+    }
+}
+
+#[tokio::test]
+async fn frozen_retention_query_preserves_python_integer_coercions() {
+    let contract: Value = serde_json::from_str(CONTRACT).unwrap();
+    for case in contract["retention_days"]["accepted_string_coercions"]
+        .as_array()
+        .unwrap()
+    {
+        let input = case["input"].as_str().unwrap();
+        let path =
+            format!("/v1/issuance/organizations/organization-a/retention?retention_days={input}");
+        let (status, body) = request(
+            "GET",
+            &path,
+            Some("management-key"),
+            Some("organization-a"),
+            Arc::new(FakeRetentionRepository::default()),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "{input}");
+        assert_eq!(body["retention_days"], case["value"], "{input}");
     }
 }
 

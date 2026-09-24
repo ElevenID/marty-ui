@@ -11,7 +11,17 @@
     "different_trusted_organization": 403,
     "authorized": 200
   },
-  "retention_days": {"default": 30, "minimum": 1, "maximum": 3650, "invalid": 422},
+  "retention_days": {
+    "default": 30, "minimum": 1, "maximum": 3650, "invalid": 422,
+    "validation_oracle": "marty-credentials-issuance v0.1.78 (FastAPI 0.109.0, Pydantic 2.11.7)",
+    "invalid_queries": [
+      {"input": "0", "detail": [{"type": "greater_than_equal", "loc": ["query", "retention_days"], "msg": "Input should be greater than or equal to 1", "input": "0", "ctx": {"ge": 1}, "url": "https://errors.pydantic.dev/2.11/v/greater_than_equal"}]},
+      {"input": "3651", "detail": [{"type": "less_than_equal", "loc": ["query", "retention_days"], "msg": "Input should be less than or equal to 3650", "input": "3651", "ctx": {"le": 3650}, "url": "https://errors.pydantic.dev/2.11/v/less_than_equal"}]},
+      {"input": "-1", "detail": [{"type": "greater_than_equal", "loc": ["query", "retention_days"], "msg": "Input should be greater than or equal to 1", "input": "-1", "ctx": {"ge": 1}, "url": "https://errors.pydantic.dev/2.11/v/greater_than_equal"}]},
+      {"input": "not-a-number", "detail": [{"type": "int_parsing", "loc": ["query", "retention_days"], "msg": "Input should be a valid integer, unable to parse string as an integer", "input": "not-a-number", "url": "https://errors.pydantic.dev/2.11/v/int_parsing"}]}
+    ],
+    "accepted_string_coercions": [{"input": "1.0", "value": 1}, {"input": "1_0", "value": 10}]
+  },
   "repository_failure": {"status": 500, "body": "Internal Server Error", "sensitive_detail_exposed": false},
   "tracked_scope": [
     "applications", "submitted_evidence", "issuance_transactions",
