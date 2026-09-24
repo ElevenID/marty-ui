@@ -33,9 +33,9 @@ def test_exact_runtime_remainder_stays_on_python_without_hiding_migrated_routes(
     retained = _route_keys(CONTRACT["retained_legacy_http"])
 
     assert len(complete) == 131
-    assert len(native) == 120
+    assert len(native) == 122
     assert retained == complete - native
-    assert len(retained) == coverage["remaining"]["http"] == 11
+    assert len(retained) == coverage["remaining"]["http"] == 9
     runtime_grpc = {row["method"] for row in surface["grpc"]["methods"]}
     assert set(coverage["native_grpc"]) == runtime_grpc
     assert len(coverage["native_grpc"]) == len(surface["grpc"]["methods"]) == 12
@@ -182,7 +182,7 @@ def test_production_and_kms_boundaries_remain_explicit() -> None:
             "canvas-mirror-http",
             "canvas-mirror-automation-loop",
         ],
-        "retained_http_route_count": 11,
+        "retained_http_route_count": 9,
         "packaged_main_lifecycle_gate": (
             "canvas_mirror_worker_enabled_packaged_main_runs_and_shuts_down_cleanly"
         ),

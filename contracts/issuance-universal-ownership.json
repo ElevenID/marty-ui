@@ -5,8 +5,6 @@
   "default_owner": "issuance-native",
   "retained_legacy_owner": "issuance",
   "retained_legacy_http": [
-    {"method": "GET", "path": "/v1/issuance/organizations/{organization_id}/retention"},
-    {"method": "POST", "path": "/v1/issuance/organizations/{organization_id}/retention/purge"},
     {"method": "POST", "path": "/v1/passport/applications"},
     {"method": "POST", "path": "/v1/passport/applications/{application_id}/activate"},
     {"method": "POST", "path": "/v1/passport/applications/{application_id}/generate-data-groups"},
@@ -44,7 +42,7 @@
       "canvas-mirror-http",
       "canvas-mirror-automation-loop"
     ],
-    "retained_http_route_count": 11,
+    "retained_http_route_count": 9,
     "packaged_main_lifecycle_gate": "canvas_mirror_worker_enabled_packaged_main_runs_and_shuts_down_cleanly",
     "full_python_service_deletion_authorized": false
   },
