@@ -1,8 +1,18 @@
 # Consolidated Rust Migration Roadmap
 
 **Status:** Waves one through three, the 31-route Rust Canvas cutover, the
-canonical Rust verifier implementation, PR #814's native issuance consumer
-cutover, and PR #826's eight-route Application Template cutover are merged.
+canonical Rust verifier implementation, and the native issuance consumer,
+Application Template, internal-Application, resource-owner, public trust,
+OID4VCI public/management, and Canvas mirror slices are merged through PR
+#842 and PR #843. Universal native issuance ownership PR #844 is in the
+protected merge queue at reviewed head `896fac4510fdec423d1419b2b3e5d94060d5a05b`;
+its candidate reports **120 native / 11 remaining / 131 total** issuance HTTP
+operations. Stacked recorder-hardening PR #845 is at `19a982e011aa1adb5a5cb401e3ac6d4ad7393780`;
+retention draft PR #849 is at `dbd29f7e8378d5e885587bd1b74860c2d3e75e3c`
+and reports **122 native / 9 remaining**; passport draft PR #852 adds nine
+default-off Rust counterparts. These stacked drafts are not landed cutovers or
+permission to remove their Python owners.
+
 The last published beta baseline remains aggregate `marty-ui@v1.1.217`, source
 `4596afaca3724e60a8dadbd4e227b6e765cb495c`; no newer deployment is claimed
 here. PR #814 landed on protected `main` as merge-queue candidate
@@ -20,14 +30,8 @@ the Rust DIDComm consumer migration as `75e2394350185a1b7c0824b25b4016ca40b0174c
 the exact protected-main release source and immutable artifact are recorded
 below. Reachable unselected Python features, the independent KMS-hardening
 work, the dirty crypto/SD-JWT work, and the deferred DIDComm KMS redesign remain
-preserved. The current #837 stack reports **107 native / 24 remaining / 131
-total** issuance HTTP operations. PR #836 is at exact head `42d5030c` with
-checks active after its owner-outage harness correction; stacked PR #837 is at
-exact head `16e8ec517` and awaits retargeting; PR #838 freezes the authorization
-contract at exact head `8f452d589`. Signed local native OID4VCI public-protocol
-implementation `d7c9f94f8` is under independent review and is not routed. The
-aggregate beta deployment, all-demo/device acceptance, and governed soak remain
-incomplete. No production deployment occurred in this lane.
+preserved. The aggregate beta deployment, all-demo/device acceptance, and
+governed soak remain incomplete. No production deployment occurred in this lane.
 
 Prior `v1.1.214` evidence remains retained at source
 `24f5d5dc0bb47d3dadb118b4dbe45191c5cf71b1`, release run `33930593794`.
@@ -48,7 +52,7 @@ and `v1.2.78` is preliminary, non-activating evidence.
 
 **Initial rollout environment:** Beta only
 
-**Last updated:** 2026-09-21
+**Last updated:** 2026-09-24
 
 ## Objective
 
@@ -58,7 +62,7 @@ This is not a line-for-line translation project. Rust owns deterministic protoco
 
 The immediate deployment boundary is beta. Production and persistent self-host environments are not changed by this roadmap without a separate approval and promotion decision.
 
-## Current execution snapshot — 2026-09-21
+## Current execution snapshot — 2026-09-24
 
 The DIDComm consumer cutover gate is now bound to published Credentials
 `v0.1.76`, protected-main source
@@ -71,16 +75,17 @@ non-reusable; the minimum qualified coordinate is `v0.1.76`. This qualifies the
 selected consumer artifact but does not establish a beta deployment, Python
 deletion, KMS correction, or production change.
 
-The active stacked issuance lanes are newer than the landed 96/35 checkpoint.
-Resource-owner PR #836 is at exact head `42d5030c`; its hosted checks are active
-after correcting the owner-outage acceptance harness. Public trust-stack PR
-#837 is at exact head `16e8ec517`, stacked and awaiting retargeting. Authorization
-contract PR #838 is at exact head `8f452d589`. The #837 stack reports **107
-native / 24 remaining / 131 total** issuance HTTP operations. Signed local head
-`d7c9f94f8` implements the native OID4VCI public protocol but remains under
-independent review and has not been routed. These are implementation and review
-coordinates, not permission to delete reachable Python or a claim of beta or
-production deployment.
+Resource-owner PR #836, public trust PR #837, authorization contract PR #838,
+OID4VCI public-protocol PR #841, Canvas mirror PR #842, and OID4VCI management
+PR #843 are merged. PR #844's reviewed 120/11 native-ownership candidate is in
+the protected merge queue; its merge-group CodeQL Rust run passed and its Rust
+Service Tests run is still live. The corrected dependent stack is #845 (recorder
+review provenance), draft #849 (retention, 122/9 candidate), and draft #852
+(nine default-off physical-passport counterparts). The local behavior, gateway,
+and isolated PostgreSQL contracts for their code heads passed as recorded in the
+PRs, but hosted final-base CI and live provider/consumer acceptance remain.
+These coordinates do not authorize deletion of reachable Python or establish a
+new beta or production deployment.
 
 The current issued-credential adapter candidate preserves the five frozen
 public list/detail/lifecycle routes and restores lifecycle comments as durable,
