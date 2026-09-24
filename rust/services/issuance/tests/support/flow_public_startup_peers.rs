@@ -37,7 +37,7 @@ async fn request(State(state): State<StateData>, request: Request<Body>) -> Resp
         assert_eq!(method, "GET");
         assert_eq!(path, "/health");
         assert!(bytes.is_empty());
-        if matches!(state.role, "signing" | "legacy") {
+        if matches!(state.role, "signing" | "legacy" | "native") {
             assert_eq!(headers["x-api-key"], KEY);
         } else {
             assert_eq!(headers["x-service-token"], TOKEN);
@@ -119,6 +119,7 @@ impl Peers {
             "policy",
             "signing",
             "legacy",
+            "native",
             "template",
             "trust",
             "deployment",
@@ -147,7 +148,8 @@ impl Peers {
         let attempts = self.attempts.lock().unwrap();
         for (role, count) in [
             ("signing", 1),
-            ("legacy", 2),
+            ("legacy", 1),
+            ("native", 1),
             ("template", 1),
             ("trust", 1),
             ("deployment", 1),

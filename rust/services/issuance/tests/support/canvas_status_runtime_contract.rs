@@ -1827,7 +1827,7 @@ pub async fn run_canvas_mirror_automation_main_lifecycle(pool: &PgPool, database
     tokio::time::timeout(Duration::from_secs(10), async {
         loop {
             let delivered: bool = sqlx::query_scalar(
-                "SELECT status='delivered' AND external_credential_id='automation-external' \
+                "SELECT COALESCE(status='delivered' AND external_credential_id='automation-external', false) \
                  FROM issuance_service.credential_delivery_records \
                  WHERE id='delivery-provider' AND organization_id='org-review'",
             )
