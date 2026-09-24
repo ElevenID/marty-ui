@@ -14,9 +14,34 @@ use marty_issuance_service::{
     retention_http,
 };
 use serde_json::{json, Value};
+use sha2::{Digest, Sha256};
 use tower::ServiceExt;
 
 const CONTRACT: &str = include_str!("../../../../contracts/issuance-retention-management.json");
+const OBSERVED_ADDENDUM: &str =
+    include_str!("../../../../contracts/issuance-retention-observed-addendum.json");
+
+fn observed_contract() -> Value {
+    let mut frozen: Value = serde_json::from_str(CONTRACT).unwrap();
+    let observed: Value = serde_json::from_str(OBSERVED_ADDENDUM).unwrap();
+    assert_eq!(
+        observed["schema"],
+        "marty.issuance-retention-observed-addendum/v1"
+    );
+    assert_eq!(
+        observed["frozen_source_sha256"],
+        format!(
+            "{:x}",
+            Sha256::digest(CONTRACT.replace("\r\n", "\n").as_bytes())
+        )
+    );
+    frozen["boundary"]["error_detail"] = observed["boundary_error_detail"].clone();
+    for (key, value) in observed["retention_days"].as_object().unwrap() {
+        frozen["retention_days"][key] = value.clone();
+    }
+    frozen["repository_failure"] = observed["repository_failure"].clone();
+    frozen
+}
 
 #[derive(Clone)]
 struct FixedClock(DateTime<Utc>);
@@ -171,7 +196,7 @@ impl RetentionRepository for FailingRetentionRepository {
 
 #[tokio::test]
 async fn frozen_retention_repository_failure_is_generic_for_both_routes() {
-    let contract: Value = serde_json::from_str(CONTRACT).unwrap();
+    let contract = observed_contract();
     for route in contract["routes"].as_array().unwrap() {
         let method = route["method"].as_str().unwrap();
         let path = route["path"]
@@ -199,7 +224,7 @@ async fn frozen_retention_repository_failure_is_generic_for_both_routes() {
 
 #[tokio::test]
 async fn frozen_retention_boundary_precedes_repository_access() {
-    let contract: Value = serde_json::from_str(CONTRACT).unwrap();
+    let contract = observed_contract();
     let repo = Arc::new(FakeRetentionRepository::default());
     for route in contract["routes"].as_array().unwrap() {
         let method = route["method"].as_str().unwrap();
@@ -279,7 +304,7 @@ async fn frozen_retention_boundary_precedes_repository_access() {
 
 #[tokio::test]
 async fn frozen_retention_unconfigured_api_key_precedes_query_validation() {
-    let contract: Value = serde_json::from_str(CONTRACT).unwrap();
+    let contract = observed_contract();
     let repo = Arc::new(FakeRetentionRepository::default());
     for route in contract["routes"].as_array().unwrap() {
         let method = route["method"].as_str().unwrap();
@@ -345,7 +370,7 @@ async fn frozen_retention_duplicate_query_uses_last_value() {
 
 #[tokio::test]
 async fn frozen_retention_query_preserves_released_integer_size_errors() {
-    let contract: Value = serde_json::from_str(CONTRACT).unwrap();
+    let contract = observed_contract();
     let limit = contract["retention_days"]["size_boundary"]["maximum_significant_decimal_digits"]
         .as_u64()
         .unwrap() as usize;
@@ -379,7 +404,7 @@ async fn frozen_retention_query_preserves_released_integer_size_errors() {
 
 #[tokio::test]
 async fn frozen_retention_query_preserves_python_integer_coercions() {
-    let contract: Value = serde_json::from_str(CONTRACT).unwrap();
+    let contract = observed_contract();
     for case in contract["retention_days"]["accepted_string_coercions"]
         .as_array()
         .unwrap()
@@ -402,7 +427,7 @@ async fn frozen_retention_query_preserves_python_integer_coercions() {
 
 #[tokio::test]
 async fn frozen_retention_summary_and_repeat_purge_preserve_count_shape() {
-    let contract: Value = serde_json::from_str(CONTRACT).unwrap();
+    let contract = observed_contract();
     let repo = Arc::new(FakeRetentionRepository::default());
     let path = "/v1/issuance/organizations/organization-a/retention";
     let (status, summary) = request(
