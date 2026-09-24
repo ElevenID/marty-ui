@@ -6256,5 +6256,6 @@ Gateway currently routes public `/v1/passport` requests to Python. Before
 switching those routes, it must derive the trusted organization from its
 authentication context, inject only that organization's native passport
 tenant key, reject caller-supplied organization/key context, and qualify all
-nine public routes plus signed webhook ingress. The shared issuance API key
+eight declared public gateway routes plus the separately signed bureau webhook
+ingress. The shared issuance API key
 cannot serve as a passport tenant credential.

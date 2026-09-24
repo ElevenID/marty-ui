@@ -93,7 +93,9 @@
   "gateway_cutover": {
     "current_owner": "issuance",
     "native_route_count": 0,
-    "required_before_switch": "derive the trusted organization from gateway authentication, inject its matching passport tenant key, reject forged client organization/key context, and prove all nine public routes plus signed webhook ingress against the native owner",
+    "declared_gateway_route_count": 8,
+    "signed_webhook_path": "/v1/passport/webhooks/personalization",
+    "required_before_switch": "derive the trusted organization from gateway authentication, inject its matching passport tenant key, reject forged client organization/key context, and prove all eight declared gateway routes while preserving the separately signed webhook ingress against the native owner",
     "shared_issuance_api_key": "must not be used as a passport tenant credential"
   },
   "routes": [

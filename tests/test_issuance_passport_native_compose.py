@@ -72,6 +72,23 @@ def test_gateway_stays_legacy_until_tenant_key_boundary_is_qualified() -> None:
         if route["path"].startswith("/v1/passport/")
     ]
     assert len(routes) == contract["gateway_cutover"]["native_route_count"] == 0
+    gateway = json.loads(
+        (ROOT / "contracts/gateway-routes.json").read_text(encoding="utf-8")
+    )
+    declared = {
+        (route["method"], route["path"])
+        for route in gateway["routes"]
+        if route["path"].startswith("/v1/passport/")
+    }
+    webhook = contract["gateway_cutover"]["signed_webhook_path"]
+    frozen = {(route["method"], route["path"]) for route in contract["routes"]}
+    assert (
+        len(declared)
+        == contract["gateway_cutover"]["declared_gateway_route_count"]
+        == 8
+    )
+    assert declared == frozen - {("POST", webhook)}
+    assert ("POST", webhook) not in declared
     gateway_source = (ROOT / "rust/services/gateway/src/contract.rs").read_text(
         encoding="utf-8"
     )
