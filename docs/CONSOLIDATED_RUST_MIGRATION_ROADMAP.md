@@ -6264,5 +6264,11 @@ switching those routes, it must derive the trusted organization from its
 authentication context, inject only that organization's native passport
 tenant key, reject caller-supplied organization/key context, and qualify all
 eight declared public gateway routes plus the separately signed bureau webhook
-ingress. The shared issuance API key
+ingress. Draft #852 now classifies those eight exact public method/path shapes
+from the frozen contract and explicitly excludes the signed webhook and
+lookalike paths, while keeping legacy routing selected. Gateway's general
+tenant-authorization classifier does not currently cover `/v1/passport`; the
+cutover therefore remains blocked on an explicit authenticated organization
+and membership/scope gate before any tenant key can be injected. The shared
+issuance API key
 cannot serve as a passport tenant credential.
