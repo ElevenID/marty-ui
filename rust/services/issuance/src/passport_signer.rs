@@ -5,7 +5,7 @@ use std::{collections::BTreeMap, time::Duration};
 
 use reqwest::{Client, Url};
 use serde::{Deserialize, Serialize};
-use serde_json::{Value, json};
+use serde_json::{json, Value};
 
 const SIGNER_PATH: &str = "v1/icao/emrtd/sign";
 
@@ -98,12 +98,12 @@ mod tests {
     use std::sync::{Arc, Mutex};
 
     use axum::{
-        Json, Router,
         extract::State,
         http::{HeaderMap, StatusCode},
         routing::post,
+        Json, Router,
     };
-    use serde_json::{Value, json};
+    use serde_json::{json, Value};
 
     use super::*;
 

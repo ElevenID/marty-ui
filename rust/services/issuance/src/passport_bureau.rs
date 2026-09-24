@@ -7,7 +7,7 @@ use std::{collections::BTreeMap, time::Duration};
 use hmac::{Hmac, Mac};
 use reqwest::{Client, StatusCode, Url};
 use serde::{Deserialize, Serialize};
-use serde_json::{Value, json};
+use serde_json::{json, Value};
 use sha2::Sha256;
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -304,12 +304,10 @@ mod tests {
         ] {
             let payload = job(document_type).payload();
             assert_eq!(payload["document_type"], expected);
-            assert!(
-                reference()["document_types"]
-                    .as_array()
-                    .unwrap()
-                    .contains(&Value::String(expected.into()))
-            );
+            assert!(reference()["document_types"]
+                .as_array()
+                .unwrap()
+                .contains(&Value::String(expected.into())));
             assert_eq!(payload["data_groups"], json!({"DG1":"ZzE=","DG2":"ZzI="}));
         }
     }
@@ -377,10 +375,10 @@ mod tests {
         use std::sync::{Arc, Mutex};
 
         use axum::{
-            Json, Router,
             extract::{Path, State},
             http::{HeaderMap, StatusCode},
             routing::{get, post},
+            Json, Router,
         };
 
         type Observed = Arc<Mutex<Vec<(String, String, Value)>>>;
