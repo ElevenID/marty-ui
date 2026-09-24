@@ -176,13 +176,13 @@ async fn summary(
     RawQuery(query): RawQuery,
     headers: HeaderMap,
 ) -> Response {
-    if let Err(response) = authorize(&service, &headers, &organization_id) {
-        return *response;
-    }
     let days = match retention_days(query.as_deref()) {
         Ok(days) => days,
         Err(response) => return *response,
     };
+    if let Err(response) = authorize(&service, &headers, &organization_id) {
+        return *response;
+    }
     match service.summary(&organization_id, days).await {
         Ok(summary) => (StatusCode::OK, Json(summary)).into_response(),
         Err(error) => repository_error(error),
@@ -195,13 +195,13 @@ async fn purge(
     RawQuery(query): RawQuery,
     headers: HeaderMap,
 ) -> Response {
-    if let Err(response) = authorize(&service, &headers, &organization_id) {
-        return *response;
-    }
     let days = match retention_days(query.as_deref()) {
         Ok(days) => days,
         Err(response) => return *response,
     };
+    if let Err(response) = authorize(&service, &headers, &organization_id) {
+        return *response;
+    }
     match service.purge(&organization_id, days).await {
         Ok(purged) => (StatusCode::OK, Json(purged)).into_response(),
         Err(error) => repository_error(error),

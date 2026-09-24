@@ -223,6 +223,48 @@ async fn frozen_retention_boundary_precedes_repository_access() {
             assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY);
             assert_eq!(body, json!({"detail": case["detail"]}), "{invalid}");
             assert!(repo.calls.lock().unwrap().is_empty());
+            let (without_key, without_key_body) =
+                request(method, &path, None, None, repo.clone()).await;
+            assert_eq!(without_key, StatusCode::UNPROCESSABLE_ENTITY);
+            assert_eq!(
+                without_key_body, body,
+                "validation precedes route authorization"
+            );
+            assert!(repo.calls.lock().unwrap().is_empty());
+        }
+    }
+}
+
+#[tokio::test]
+async fn frozen_retention_duplicate_query_uses_last_value() {
+    let repo = Arc::new(FakeRetentionRepository::default());
+    for (query, expected_status, expected_days) in [
+        (
+            "retention_days=abc&retention_days=2",
+            StatusCode::OK,
+            Some(2),
+        ),
+        (
+            "retention_days=2&retention_days=abc",
+            StatusCode::UNPROCESSABLE_ENTITY,
+            None,
+        ),
+    ] {
+        let path = format!("/v1/issuance/organizations/organization-a/retention?{query}");
+        let (status, body) = request(
+            "GET",
+            &path,
+            Some("management-key"),
+            Some("organization-a"),
+            repo.clone(),
+        )
+        .await;
+        assert_eq!(status, expected_status);
+        if let Some(days) = expected_days {
+            assert_eq!(body["retention_days"], days);
+        } else {
+            assert_eq!(body["detail"][0]["type"], "int_parsing");
+            assert_eq!(body["detail"][0]["input"], "abc");
         }
     }
 }
