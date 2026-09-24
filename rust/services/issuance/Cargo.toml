@@ -293,3 +293,7 @@ path = "tests/retention_native_behavior.rs"
 [[test]]
 name = "retention_postgres_contract"
 path = "tests/retention_postgres_contract.rs"
+
+[[test]]
+name = "passport_postgres_contract"
+path = "tests/passport_postgres_contract.rs"

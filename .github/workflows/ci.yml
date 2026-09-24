@@ -876,7 +876,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          for database in marty_verification_contract marty_db_contracts_test marty_issuance_executable_smoke_test marty_retention_contract_test; do
+          for database in marty_verification_contract marty_db_contracts_test marty_issuance_executable_smoke_test marty_retention_contract_test marty_passport_contract_test; do
             docker exec "${{ job.services.postgres.id }}" createdb -U postgres "$database"
           done
           docker exec --interactive "${{ job.services.postgres.id }}" \
