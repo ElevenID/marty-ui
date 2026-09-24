@@ -270,6 +270,40 @@ async fn frozen_retention_duplicate_query_uses_last_value() {
 }
 
 #[tokio::test]
+async fn frozen_retention_query_preserves_released_integer_size_errors() {
+    let contract: Value = serde_json::from_str(CONTRACT).unwrap();
+    let limit = contract["retention_days"]["size_boundary"]["maximum_significant_decimal_digits"]
+        .as_u64()
+        .unwrap() as usize;
+    for (value, expected_type) in [
+        ("9".repeat(limit), "less_than_equal"),
+        ("9".repeat(limit + 1), "int_parsing_size"),
+        ("0".repeat(limit + 1), "greater_than_equal"),
+        (format!("0{}", "9".repeat(limit + 1)), "int_parsing"),
+    ] {
+        let path =
+            format!("/v1/issuance/organizations/organization-a/retention?retention_days={value}");
+        let (status, body) = request(
+            "GET",
+            &path,
+            Some("management-key"),
+            Some("organization-a"),
+            Arc::new(FakeRetentionRepository::default()),
+        )
+        .await;
+        assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY);
+        assert_eq!(body["detail"][0]["type"], expected_type);
+        assert_eq!(body["detail"][0]["loc"], json!(["query", "retention_days"]));
+        assert_eq!(body["detail"][0]["input"], value);
+        if expected_type == "int_parsing_size" {
+            let oracle = &contract["retention_days"]["size_boundary"]["direct_decimal_overflow"];
+            assert_eq!(body["detail"][0]["msg"], oracle["msg"]);
+            assert_eq!(body["detail"][0]["url"], oracle["url"]);
+        }
+    }
+}
+
+#[tokio::test]
 async fn frozen_retention_query_preserves_python_integer_coercions() {
     let contract: Value = serde_json::from_str(CONTRACT).unwrap();
     for case in contract["retention_days"]["accepted_string_coercions"]

@@ -33,13 +33,14 @@ pub fn router(service: RetentionService) -> Router {
 #[derive(Clone, Copy)]
 enum RetentionDaysError {
     Parse,
+    ParseSize,
     BelowMinimum,
     AboveMaximum,
 }
 
 // Match the released Python query boundary, including its string-to-integer coercions.
-// Saturating at 3651 preserves range classification for arbitrarily long integers.
-fn parse_retention_integer(value: &str) -> Option<i32> {
+// Saturation preserves range classification up to the released parser's size limit.
+fn parse_retention_integer(value: &str) -> Result<i32, RetentionDaysError> {
     let trimmed = value.trim();
     let (negative, unsigned) = match trimmed.as_bytes().first() {
         Some(b'-') => (true, &trimmed[1..]),
@@ -55,19 +56,38 @@ fn parse_retention_integer(value: &str) -> Option<i32> {
     let mut digits = unsigned.bytes().peekable();
     let mut number: i32 = 0;
     let mut saw_digit = false;
+    let mut significant_digits = 0;
+    let mut direct_decimal = unsigned
+        .as_bytes()
+        .first()
+        .is_some_and(|digit| *digit != b'0');
     while let Some(byte) = digits.next() {
         match byte {
             b'0'..=b'9' => {
                 saw_digit = true;
+                if significant_digits != 0 || byte != b'0' {
+                    significant_digits += 1;
+                }
+                if significant_digits > 4300 {
+                    return Err(if direct_decimal {
+                        RetentionDaysError::ParseSize
+                    } else {
+                        RetentionDaysError::Parse
+                    });
+                }
                 number = number
                     .saturating_mul(10)
                     .saturating_add(i32::from(byte - b'0'));
             }
-            b'_' if saw_digit && matches!(digits.peek(), Some(b'0'..=b'9')) => {}
-            _ => return None,
+            b'_' if saw_digit && matches!(digits.peek(), Some(b'0'..=b'9')) => {
+                direct_decimal = false;
+            }
+            _ => return Err(RetentionDaysError::Parse),
         }
     }
-    saw_digit.then_some(if negative { -number } else { number })
+    saw_digit
+        .then_some(if negative { -number } else { number })
+        .ok_or(RetentionDaysError::Parse)
 }
 
 fn retention_validation_error(value: &str, error: RetentionDaysError) -> Response {
@@ -75,6 +95,11 @@ fn retention_validation_error(value: &str, error: RetentionDaysError) -> Respons
         RetentionDaysError::Parse => (
             "int_parsing",
             "Input should be a valid integer, unable to parse string as an integer",
+            None,
+        ),
+        RetentionDaysError::ParseSize => (
+            "int_parsing_size",
+            "Unable to parse input string as an integer, exceeded maximum size",
             None,
         ),
         RetentionDaysError::BelowMinimum => (
@@ -114,12 +139,12 @@ fn retention_days(query: Option<&str>) -> Result<u16, Box<Response>> {
         return Ok(30);
     };
     match parse_retention_integer(&value) {
-        Some(days @ 1..=3650) => Ok(days as u16),
+        Ok(days @ 1..=3650) => Ok(days as u16),
         other => {
             let error = match other {
-                None => RetentionDaysError::Parse,
-                Some(days) if days < 1 => RetentionDaysError::BelowMinimum,
-                Some(_) => RetentionDaysError::AboveMaximum,
+                Err(error) => error,
+                Ok(days) if days < 1 => RetentionDaysError::BelowMinimum,
+                Ok(_) => RetentionDaysError::AboveMaximum,
             };
             Err(Box::new(retention_validation_error(&value, error)))
         }
