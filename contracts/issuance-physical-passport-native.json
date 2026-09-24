@@ -15,6 +15,13 @@
     "required_result_fields": ["sod_der_base64", "dsc_cert_pem"],
     "incomplete_error": "ICAO document signer returned incomplete signing material"
   },
+  "self_signed_test_signer": {
+    "python_flag": "PHYSICAL_DOCUMENT_ALLOW_SELF_SIGNED=true",
+    "python_behavior": "When no remote signer URL is set, issue a single-use CSCA and DSC for testing and offline fixtures only",
+    "native_status": "not yet implemented; PASSPORT_NATIVE_HTTP_ENABLED refuses this flag without a remote signer",
+    "core_capability": "marty-verification/authority-issuance is available at the pinned Core revision but must be isolated from the production KMS-only signer path",
+    "python_retirement_gate": "prove explicit test-only behavioral parity before deleting the Python passport signer path"
+  },
   "document_types": ["TD1", "TD2", "TD3"],
   "routes": [
     {"method": "GET", "path": "/v1/passport/capabilities"},

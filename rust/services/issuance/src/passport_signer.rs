@@ -43,7 +43,13 @@ impl RemoteSigner {
         }
         let base_url = Url::parse(&format!("{}/", base_url.trim_end_matches('/')))
             .map_err(|_| SignerError::InvalidUrl)?;
-        if !matches!(base_url.scheme(), "http" | "https") {
+        if !matches!(base_url.scheme(), "http" | "https")
+            || base_url.host_str().is_none()
+            || !base_url.username().is_empty()
+            || base_url.password().is_some()
+            || base_url.query().is_some()
+            || base_url.fragment().is_some()
+        {
             return Err(SignerError::InvalidUrl);
         }
         Ok(Self {
@@ -130,6 +136,16 @@ mod tests {
             RemoteSigner::new("file:///tmp/signer", "key"),
             Err(SignerError::InvalidUrl)
         ));
+        for url in [
+            "https://user:password@signer.example.test",
+            "https://signer.example.test?token=secret",
+            "https://signer.example.test#fragment",
+        ] {
+            assert!(matches!(
+                RemoteSigner::new(url, "key"),
+                Err(SignerError::InvalidUrl)
+            ));
+        }
     }
 
     #[tokio::test]

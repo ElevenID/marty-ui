@@ -133,6 +133,7 @@ use marty_issuance_service::{
     oid4vci_authorization_postgres::PostgresOid4vciAuthorizationRepository,
     oid4vci_management::Oid4vciManagementService,
     oid4vci_management_postgres::PostgresOid4vciManagementRepository,
+    passport_http::PassportHttpService,
     proof_nonce::{ProofNonceService, SecureProofNonceGenerator},
     resource_owner::ResourceOwnerService,
     resource_owner_postgres::PostgresResourceOwnerRepository,
@@ -177,6 +178,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
     let pool = sqlx::postgres::PgPoolOptions::new()
         .max_connections(5)
         .connect_lazy(&config.database_url)?;
+    let passport_http = PassportHttpService::from_config(&config, pool.clone())?;
     migration::migrate(&pool).await.map_err(|error| {
         if error
             .as_database_error()
@@ -754,11 +756,8 @@ async fn main() -> Result<(), Box<dyn Error>> {
         None
     };
     let transport = TransportPolicy::new(config.cors_allowed_origins.clone());
-    let app = router_with_all_services(
-        runtime.state(),
-        discovery,
-        transport,
-        IssuanceServices::new(
+    let app = router_with_all_services(runtime.state(), discovery, transport, {
+        let services = IssuanceServices::new(
             IssuanceCoreServices::new(
                 tenant_discovery,
                 IssuanceReadServices::new(transaction_reads, resource_owners),
@@ -801,8 +800,13 @@ async fn main() -> Result<(), Box<dyn Error>> {
         .with_retention(RetentionService::new(
             Arc::new(PostgresRetentionRepository::new(pool.clone())),
             config.issuance_api_key.as_deref(),
-        )),
-    );
+        ));
+        if let Some(passport_http) = passport_http {
+            services.with_passport(passport_http)
+        } else {
+            services
+        }
+    });
     let (health_reporter, health_service) = tonic_health::server::health_reporter();
     let grpc_server = IssuanceServiceServer::new(grpc_service);
     let (listener_shutdown_tx, listener_shutdown_rx) = watch::channel(false);

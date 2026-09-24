@@ -20,7 +20,8 @@ use tracing::error;
 use uuid::Uuid;
 
 use crate::{
-    passport_artifact::PassportArtifactCipher,
+    config::IssuanceServiceConfig,
+    passport_artifact::{PassportArtifactCipher, PassportArtifactError},
     passport_bureau::{
         BureauClient, BureauError, DocumentType, PersonalizationJob, ProductionStatus,
     },
@@ -44,7 +45,59 @@ pub struct PassportHttpService {
     bureau: Option<BureauClient>,
 }
 
+#[derive(Debug, thiserror::Error)]
+pub enum PassportStartupError {
+    #[error("{0} is required for native passport HTTP")]
+    Missing(&'static str),
+    #[error(transparent)]
+    Artifact(#[from] PassportArtifactError),
+    #[error(transparent)]
+    Signer(#[from] SignerError),
+    #[error(transparent)]
+    Bureau(#[from] BureauError),
+}
+
 impl PassportHttpService {
+    pub fn from_config(
+        config: &IssuanceServiceConfig,
+        pool: sqlx::PgPool,
+    ) -> Result<Option<Self>, PassportStartupError> {
+        let native = &config.passport_native;
+        if !native.enabled {
+            return Ok(None);
+        }
+        fn required<'a>(
+            value: Option<&'a str>,
+            name: &'static str,
+        ) -> Result<&'a str, PassportStartupError> {
+            value.ok_or(PassportStartupError::Missing(name))
+        }
+        let keyring = config
+            .passport_tenant_keys
+            .clone()
+            .ok_or(PassportStartupError::Missing("PASSPORT_TENANT_API_KEYS"))?;
+        let cipher = PassportArtifactCipher::from_key(required(
+            native.artifact_key.as_deref(),
+            "PHYSICAL_DOCUMENT_ARTIFACT_KEY",
+        )?)?;
+        let signer = RemoteSigner::new(
+            required(native.signer_url.as_deref(), "ICAO_DOCUMENT_SIGNER_URL")?,
+            native.signer_api_key.as_deref().unwrap_or_default(),
+        )?;
+        let bureau = BureauClient::new(
+            required(native.bureau_url.as_deref(), "PERSONALIZATION_BUREAU_URL")?,
+            native.bureau_api_key.as_deref().unwrap_or_default(),
+            native.bureau_webhook_secret.as_deref(),
+        )?;
+        Ok(Some(Self::new(
+            keyring,
+            PostgresPassportRepository::new(pool),
+            Some(cipher),
+            Some(signer),
+            Some(bureau),
+        )))
+    }
+
     #[must_use]
     pub fn new(
         keyring: PassportTenantKeyring,
@@ -588,6 +641,87 @@ mod tests {
             None,
             None,
         ))
+    }
+
+    #[tokio::test]
+    async fn startup_is_default_off_and_rejects_invalid_secrets_or_provider_urls() {
+        let pool = PgPoolOptions::new()
+            .connect_lazy("postgresql://unused:unused@127.0.0.1:5432/unused")
+            .unwrap();
+        let disabled = IssuanceServiceConfig::from_values(Vec::new()).unwrap();
+        assert!(PassportHttpService::from_config(&disabled, pool.clone())
+            .unwrap()
+            .is_none());
+
+        let fernet_key = fernet::Fernet::generate_key();
+        let values = |key: &str, signer_url: &str, bureau_url: &str| {
+            vec![
+                ("PASSPORT_NATIVE_HTTP_ENABLED".to_owned(), "true".to_owned()),
+                (
+                    "PASSPORT_TENANT_API_KEYS".to_owned(),
+                    r#"{"org-1":"passport-tenant-test-key-00000000000001"}"#.to_owned(),
+                ),
+                ("PHYSICAL_DOCUMENT_ARTIFACT_KEY".to_owned(), key.to_owned()),
+                ("ICAO_DOCUMENT_SIGNER_URL".to_owned(), signer_url.to_owned()),
+                (
+                    "ICAO_DOCUMENT_SIGNER_API_KEY".to_owned(),
+                    "signer-key".to_owned(),
+                ),
+                (
+                    "PERSONALIZATION_BUREAU_URL".to_owned(),
+                    bureau_url.to_owned(),
+                ),
+                (
+                    "PERSONALIZATION_BUREAU_API_KEY".to_owned(),
+                    "bureau-key".to_owned(),
+                ),
+                (
+                    "PERSONALIZATION_BUREAU_WEBHOOK_SECRET".to_owned(),
+                    "webhook-secret".to_owned(),
+                ),
+            ]
+        };
+        let valid = IssuanceServiceConfig::from_values(values(
+            &fernet_key,
+            "https://signer.example.test",
+            "https://bureau.example.test",
+        ))
+        .unwrap();
+        assert!(PassportHttpService::from_config(&valid, pool.clone())
+            .unwrap()
+            .is_some());
+        let bad_key = IssuanceServiceConfig::from_values(values(
+            "invalid-secret-artifact-key",
+            "https://signer.example.test",
+            "https://bureau.example.test",
+        ))
+        .unwrap();
+        assert!(matches!(
+            PassportHttpService::from_config(&bad_key, pool.clone()).err(),
+            Some(PassportStartupError::Artifact(
+                PassportArtifactError::InvalidKey
+            ))
+        ));
+        let bad_signer = IssuanceServiceConfig::from_values(values(
+            &fernet_key,
+            "https://user:password@signer.example.test",
+            "https://bureau.example.test",
+        ))
+        .unwrap();
+        assert!(matches!(
+            PassportHttpService::from_config(&bad_signer, pool.clone()).err(),
+            Some(PassportStartupError::Signer(SignerError::InvalidUrl))
+        ));
+        let bad_bureau = IssuanceServiceConfig::from_values(values(
+            &fernet_key,
+            "https://signer.example.test",
+            "https://bureau.example.test?token=secret",
+        ))
+        .unwrap();
+        assert!(matches!(
+            PassportHttpService::from_config(&bad_bureau, pool).err(),
+            Some(PassportStartupError::Bureau(BureauError::InvalidUrl))
+        ));
     }
 
     #[tokio::test]

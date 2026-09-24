@@ -192,7 +192,13 @@ impl BureauClient {
         }
         let base_url = Url::parse(&format!("{}/", base_url.trim_end_matches('/')))
             .map_err(|_| BureauError::InvalidUrl)?;
-        if !matches!(base_url.scheme(), "http" | "https") {
+        if !matches!(base_url.scheme(), "http" | "https")
+            || base_url.host_str().is_none()
+            || !base_url.username().is_empty()
+            || base_url.password().is_some()
+            || base_url.query().is_some()
+            || base_url.fragment().is_some()
+        {
             return Err(BureauError::InvalidUrl);
         }
         Ok(Self {
@@ -371,6 +377,16 @@ mod tests {
 
     #[test]
     fn webhook_signature_fails_closed() {
+        for url in [
+            "https://user:password@bureau.example",
+            "https://bureau.example?token=secret",
+            "https://bureau.example#fragment",
+        ] {
+            assert!(matches!(
+                BureauClient::new(url, "key", Some("secret")),
+                Err(BureauError::InvalidUrl)
+            ));
+        }
         let missing = BureauClient::new("https://bureau.example", "key", None).unwrap();
         assert!(!missing.verify_webhook(b"{}", ""));
         let configured =
