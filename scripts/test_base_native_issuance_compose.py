@@ -36,6 +36,9 @@ NATIVE_ONLY = {
     "SERVICE_NAME": "issuance_native",
     "ENVIRONMENT": "${ENVIRONMENT:-development}",
     "ISSUANCE_GRPC_ENABLED": "true",
+    "PASSPORT_NATIVE_HTTP_ENABLED": "${PASSPORT_NATIVE_HTTP_ENABLED:-false}",
+    "PASSPORT_TENANT_API_KEYS": "${PASSPORT_TENANT_API_KEYS:-}",
+    "PASSPORT_TENANT_API_KEYS_FILE": "${PASSPORT_TENANT_API_KEYS_FILE:-}",
     "MARTY_RELEASE_VERSION": "${MARTY_RELEASE_VERSION:-development}",
     "MARTY_UI_SHA": "${MARTY_UI_SHA:-unknown}",
     "RUST_LOG": "${ISSUANCE_NATIVE_RUST_LOG:-info}",
@@ -47,15 +50,13 @@ CANVAS_PUBLICATION_INPUTS = {
     "CANVAS_CREDENTIALS_RECIPIENT_HASHED": "${CANVAS_CREDENTIALS_RECIPIENT_HASHED:-true}",
     "CANVAS_CREDENTIALS_ALLOW_DUPLICATE_AWARDS": "${CANVAS_CREDENTIALS_ALLOW_DUPLICATE_AWARDS:-false}",
 }
-# Exact base legacy-only settings remain on the old owner; no wildcard copying
-# of KMS/physical-document/worker secrets into the partial native owner.
+# Exact base legacy-only settings remain on the old owner. Passport provider
+# settings are now explicitly paired on the default-off native owner; no
+# wildcard copying of unrelated KMS or worker secrets is permitted.
 LEGACY_ONLY = frozenset(
     """
 BAO_ADDR BAO_TOKEN CANVAS_CREDENTIAL_ISSUER_PROFILE_IDS CANVAS_LTI_TOOL_ACTIVE_KID
-CANVAS_LTI_TOOL_PUBLIC_JWKS ICAO_DOCUMENT_SIGNER_API_KEY ICAO_DOCUMENT_SIGNER_URL
-PERSONALIZATION_BUREAU_API_KEY
-PERSONALIZATION_BUREAU_URL PERSONALIZATION_BUREAU_WEBHOOK_SECRET
-PHYSICAL_DOCUMENT_ALLOW_SELF_SIGNED PHYSICAL_DOCUMENT_ARTIFACT_KEY
+CANVAS_LTI_TOOL_PUBLIC_JWKS
 """.split()
 )
 # Exhaustive source-input inventory exclusions, each explained in the companion
@@ -206,6 +207,11 @@ def expected_model(baseline, *, local, authcrypt, inputs, policy_directory):
             "SERVICE_NAME": "issuance_native",
             "ENVIRONMENT": inputs.get("ENVIRONMENT") or "development",
             "ISSUANCE_GRPC_ENABLED": "true",
+            "PASSPORT_NATIVE_HTTP_ENABLED": inputs.get("PASSPORT_NATIVE_HTTP_ENABLED")
+            or "false",
+            "PASSPORT_TENANT_API_KEYS": inputs.get("PASSPORT_TENANT_API_KEYS") or "",
+            "PASSPORT_TENANT_API_KEYS_FILE": inputs.get("PASSPORT_TENANT_API_KEYS_FILE")
+            or "",
             "MARTY_RELEASE_VERSION": inputs.get("MARTY_RELEASE_VERSION")
             or "development",
             "MARTY_UI_SHA": inputs.get("MARTY_UI_SHA") or "unknown",

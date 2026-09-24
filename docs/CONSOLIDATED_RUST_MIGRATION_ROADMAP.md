@@ -6240,6 +6240,12 @@ selector in this draft. When enabled with tenant keys it targets the native
 issuance URL using the organization-specific key; when disabled it retains the
 Python issuance URL and shared key for rollback. A local two-owner HTTP test
 checks both selections. Deployment configuration does not enable the selector.
+The development and beta Compose overlays now pass the two selectors and
+matching provider/keyring inputs with false/empty defaults. Their closed
+source inventories and complete synthetic Compose render gates pass; this is
+configuration availability, not approval to turn either selector on. The
+tenant-key secret file must still be mounted/provisioned in the target beta
+environment before enabling either service.
 
 The draft is not a nine-route cutover. Live signer and bureau qualification
 (including batch), image, gateway, live Flow qualification, exact route/error parity, stacked-base
