@@ -16,6 +16,17 @@
     "incomplete_error": "ICAO document signer returned incomplete signing material"
   },
   "document_types": ["TD1", "TD2", "TD3"],
+  "routes": [
+    {"method": "GET", "path": "/v1/passport/capabilities"},
+    {"method": "POST", "path": "/v1/passport/applications"},
+    {"method": "POST", "path": "/v1/passport/applications/{application_id}/generate-data-groups"},
+    {"method": "POST", "path": "/v1/passport/applications/{application_id}/generate-sod"},
+    {"method": "POST", "path": "/v1/passport/applications/{application_id}/submit-personalization"},
+    {"method": "GET", "path": "/v1/passport/applications/{application_id}/production-status"},
+    {"method": "POST", "path": "/v1/passport/applications/{application_id}/quality-verify"},
+    {"method": "POST", "path": "/v1/passport/applications/{application_id}/activate"},
+    {"method": "POST", "path": "/v1/passport/webhooks/personalization"}
+  ],
   "request_validation": {
     "application_required": ["organization_id", "flow_execution_id", "application_template_id", "credential_template_id", "delivery_destination_profile_id", "country_code", "applicant", "mrz", "data_groups"],
     "default_document_type": "TD3",
@@ -44,5 +55,5 @@
     "native_requirement": "Forward the stored document type for all three accepted values",
     "tracking_issue": "https://github.com/ElevenID/marty-ui/issues/851"
   },
-  "qualification": "adapter and request/response checkpoint only; nine-route, tenant, durable job, image, gateway, Flow, and beta gates remain"
+  "qualification": "nine opt-in native routes and a synthetic PostgreSQL/HTTP lifecycle checkpoint; live signer and bureau, image, gateway, Flow, Python retirement, and beta gates remain"
 }

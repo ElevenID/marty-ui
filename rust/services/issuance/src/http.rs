@@ -85,6 +85,7 @@ use crate::{
     issued_credential_records::IssuedCredentialAdapterService,
     oid4vci_authorization::Oid4vciAuthorizationService,
     oid4vci_management::Oid4vciManagementService,
+    passport_http::PassportHttpService,
     proof_nonce::{ProofNonceError, ProofNonceService},
     resource_owner::{ResourceOwner, ResourceOwnerKind, ResourceOwnerService},
     retention::RetentionService,
@@ -141,6 +142,7 @@ pub struct IssuanceServices {
     application_templates: ApplicationTemplateService,
     internal_applications: Option<InternalApplicationService>,
     retention: Option<RetentionService>,
+    passport: Option<PassportHttpService>,
     canvas: CanvasServices,
     token_rate_limiter: TokenRateLimiter,
     oid4vci_authorization: Oid4vciAuthorizationService,
@@ -344,6 +346,7 @@ impl IssuanceServices {
             application_templates,
             internal_applications: None,
             retention: None,
+            passport: None,
             canvas,
             token_rate_limiter,
             oid4vci_authorization,
@@ -383,6 +386,13 @@ impl IssuanceServices {
         self.retention = Some(retention);
         self
     }
+
+    /// Opt in only after the frozen nine-route passport and provider gates pass.
+    #[must_use]
+    pub fn with_passport(mut self, passport: PassportHttpService) -> Self {
+        self.passport = Some(passport);
+        self
+    }
 }
 
 #[derive(Default)]
@@ -402,6 +412,7 @@ struct OptionalServices {
     application_templates: Option<ApplicationTemplateService>,
     internal_applications: Option<InternalApplicationService>,
     retention: Option<RetentionService>,
+    passport: Option<PassportHttpService>,
     canvas_lti_login: Option<CanvasLtiLoginService>,
     canvas_lti_launch: Option<CanvasLtiLaunchService>,
     canvas_lti_experience: Option<CanvasLtiExperienceService>,
@@ -515,6 +526,7 @@ pub fn router_with_all_services(
             application_templates: Some(services.application_templates),
             internal_applications: services.internal_applications,
             retention: services.retention,
+            passport: services.passport,
             canvas_oauth: Some(services.canvas.oauth),
             canvas_management: Some(services.canvas.management),
             canvas_legacy_ingest: Some(services.canvas.legacy_ingest),
@@ -1288,6 +1300,11 @@ fn router_with_optional_services(
     };
     let api = if let Some(retention) = services.retention {
         api.merge(crate::retention_http::router(retention))
+    } else {
+        api
+    };
+    let api = if let Some(passport) = services.passport {
+        api.merge(crate::passport_http::router(passport))
     } else {
         api
     };

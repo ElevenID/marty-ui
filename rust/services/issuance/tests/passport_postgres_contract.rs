@@ -1,16 +1,299 @@
+use std::sync::{Arc, Mutex};
+
+use axum::{
+    body::{to_bytes, Body},
+    extract::State,
+    http::{Request, StatusCode},
+    routing::{get, post},
+    Json, Router,
+};
 use chrono::{TimeZone, Utc};
 use hmac::{Hmac, Mac};
 use marty_issuance_service::passport_artifact::{
     PassportArtifactCipher, PassportSensitiveArtifact,
 };
 use marty_issuance_service::passport_bureau::BureauClient;
+use marty_issuance_service::passport_http::{router as passport_router, PassportHttpService};
 use marty_issuance_service::passport_repository::{
     PassportJobInsert, PassportJobPatch, PassportJobStatus, PassportWebhookRepositoryError,
     PostgresPassportRepository,
 };
+use marty_issuance_service::passport_signer::RemoteSigner;
 use marty_passport_auth::PassportTenantKeyring;
-use sha2::Sha256;
+use serde_json::{json, Value};
+use sha2::{Digest, Sha256};
 use sqlx::postgres::PgPoolOptions;
+use tower::ServiceExt;
+
+async fn passport_http_request(
+    app: &Router,
+    method: &str,
+    path: &str,
+    organization: Option<&str>,
+    key: Option<&str>,
+    body: Value,
+    signature: Option<&str>,
+) -> (StatusCode, Value) {
+    let mut request = Request::builder()
+        .method(method)
+        .uri(path)
+        .header("content-type", "application/json");
+    if let Some(organization) = organization {
+        request = request.header("x-organization-id", organization);
+    }
+    if let Some(key) = key {
+        request = request.header("x-api-key", key);
+    }
+    if let Some(signature) = signature {
+        request = request.header("x-personalization-signature", signature);
+    }
+    let response = app
+        .clone()
+        .oneshot(request.body(Body::from(body.to_string())).unwrap())
+        .await
+        .unwrap();
+    let status = response.status();
+    let bytes = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    (status, serde_json::from_slice(&bytes).unwrap())
+}
+
+async fn exercise_native_passport_http(
+    repository: PostgresPassportRepository,
+    keyring: PassportTenantKeyring,
+    cipher: PassportArtifactCipher,
+    key_a: &str,
+    key_b: &str,
+) {
+    async fn sign(Json(body): Json<Value>) -> Json<Value> {
+        assert_eq!(body["country_code"], "USA");
+        assert_eq!(body["organization"], "org-a");
+        assert_eq!(body["data_groups"], json!({"DG1":"YQ==","DG2":"Yg=="}));
+        Json(json!({"sod_der_base64":"U09E", "dsc_cert_pem":"synthetic-cert"}))
+    }
+    async fn submit(
+        State(observed): State<Arc<Mutex<Vec<Value>>>>,
+        Json(body): Json<Value>,
+    ) -> (StatusCode, Json<Value>) {
+        observed.lock().unwrap().push(body);
+        (
+            StatusCode::ACCEPTED,
+            Json(json!({"bureau_job_id":"bureau-http", "status":"QUEUED"})),
+        )
+    }
+    async fn poll() -> Json<Value> {
+        Json(json!({"status":"SHIPPED", "tracking_number":"tracking-http"}))
+    }
+    let observed = Arc::new(Mutex::new(Vec::new()));
+    let mock = Router::new()
+        .route("/v1/icao/emrtd/sign", post(sign))
+        .route("/v1/personalization/jobs", post(submit))
+        .route("/v1/personalization/jobs/{job_id}", get(poll))
+        .with_state(observed.clone());
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let base_url = format!("http://{}", listener.local_addr().unwrap());
+    let server = tokio::spawn(async move { axum::serve(listener, mock).await.unwrap() });
+    let secret = "synthetic-bureau-webhook-secret";
+    let app = passport_router(PassportHttpService::new(
+        keyring.clone(),
+        repository.clone(),
+        Some(cipher.clone()),
+        Some(RemoteSigner::new(&base_url, "signer-key").unwrap()),
+        Some(BureauClient::new(&base_url, "bureau-key", Some(secret)).unwrap()),
+    ));
+    let payload = json!({
+        "organization_id":"org-a", "flow_execution_id":"flow-http",
+        "application_template_id":"template-http", "credential_template_id":"credential-http",
+        "delivery_destination_profile_id":"destination-http", "document_type":"TD1",
+        "country_code":"USA", "applicant":{"name":"Synthetic Sensitive"},
+        "mrz":{"line_1":"P<TEST", "line_2":"SYNTHETIC"},
+        "data_groups":{"DG1":"YQ==", "DG2":"Yg=="}
+    });
+    let (status, _) = passport_http_request(
+        &app,
+        "POST",
+        "/v1/passport/applications",
+        None,
+        Some(key_a),
+        payload.clone(),
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::UNAUTHORIZED);
+    let (status, _) = passport_http_request(
+        &app,
+        "POST",
+        "/v1/passport/applications",
+        Some("org-b"),
+        Some(key_b),
+        payload.clone(),
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::FORBIDDEN);
+    let (status, created) = passport_http_request(
+        &app,
+        "POST",
+        "/v1/passport/applications",
+        Some("org-a"),
+        Some(key_a),
+        payload,
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED);
+    assert_eq!(created["status"], "DRAFT");
+    assert_eq!(created["document_type"], "TD1");
+    assert!(!created.to_string().contains("Synthetic Sensitive"));
+    let application_id = created["application_id"].as_str().unwrap();
+    let job = repository
+        .get(
+            &keyring.authenticate(Some("org-a"), Some(key_a)).unwrap(),
+            application_id,
+        )
+        .await
+        .unwrap()
+        .unwrap();
+    assert!(!job
+        .secure_artifact_ciphertext
+        .contains("Synthetic Sensitive"));
+    let path = format!("/v1/passport/applications/{application_id}");
+    let (status, _) = passport_http_request(
+        &app,
+        "POST",
+        &format!("{path}/generate-data-groups"),
+        Some("org-b"),
+        Some(key_b),
+        json!({}),
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+    let (status, generated) = passport_http_request(
+        &app,
+        "POST",
+        &format!("{path}/generate-data-groups"),
+        Some("org-a"),
+        Some(key_a),
+        json!({}),
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(generated["status"], "DATA_GENERATED");
+    let (status, signed) = passport_http_request(
+        &app,
+        "POST",
+        &format!("{path}/generate-sod"),
+        Some("org-a"),
+        Some(key_a),
+        json!({}),
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(signed["status"], "SOD_SIGNED");
+    assert_eq!(
+        signed["sod_sha256"],
+        hex::encode(sha2::Sha256::digest(b"SOD"))
+    );
+    let (status, submitted) = passport_http_request(
+        &app,
+        "POST",
+        &format!("{path}/submit-personalization"),
+        Some("org-a"),
+        Some(key_a),
+        json!({}),
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(submitted["status"], "SUBMITTED");
+    assert_eq!(observed.lock().unwrap()[0]["document_type"], "TD1");
+    let (status, _) = passport_http_request(
+        &app,
+        "POST",
+        &format!("{path}/quality-verify"),
+        Some("org-a"),
+        Some(key_a),
+        json!({"passed":true}),
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::CONFLICT);
+    let (status, polled) = passport_http_request(
+        &app,
+        "GET",
+        &format!("{path}/production-status"),
+        Some("org-a"),
+        Some(key_a),
+        json!({}),
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(polled["status"], "READY_FOR_ACTIVATION");
+    let webhook = json!({"bureau_job_id":"bureau-http", "status":"SHIPPED", "tracking_number":"webhook-tracking"});
+    let (status, _) = passport_http_request(
+        &app,
+        "POST",
+        "/v1/passport/webhooks/personalization",
+        None,
+        None,
+        webhook.clone(),
+        Some("invalid"),
+    )
+    .await;
+    assert_eq!(status, StatusCode::UNAUTHORIZED);
+    let mut mac = Hmac::<Sha256>::new_from_slice(secret.as_bytes()).unwrap();
+    mac.update(webhook.to_string().as_bytes());
+    let signature = hex::encode(mac.finalize().into_bytes());
+    let (status, accepted) = passport_http_request(
+        &app,
+        "POST",
+        "/v1/passport/webhooks/personalization",
+        None,
+        None,
+        webhook,
+        Some(&signature),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(accepted, json!({"accepted":true}));
+    let (status, quality) = passport_http_request(
+        &app,
+        "POST",
+        &format!("{path}/quality-verify"),
+        Some("org-a"),
+        Some(key_a),
+        json!({"passed":true,"failure_codes":[]}),
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(quality["status"], "READY_FOR_ACTIVATION");
+    let (status, active) = passport_http_request(
+        &app,
+        "POST",
+        &format!("{path}/activate"),
+        Some("org-a"),
+        Some(key_a),
+        json!({}),
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(active["status"], "ACTIVE");
+    let job = repository
+        .get(
+            &keyring.authenticate(Some("org-a"), Some(key_a)).unwrap(),
+            application_id,
+        )
+        .await
+        .unwrap()
+        .unwrap();
+    assert!(cipher.decrypt(&job.secure_artifact_ciphertext).is_err());
+    server.abort();
+}
 
 #[tokio::test]
 async fn passport_jobs_survive_restart_without_cross_tenant_reads() {
@@ -296,4 +579,5 @@ async fn passport_jobs_survive_restart_without_cross_tenant_reads() {
             .status,
         "ACTIVE"
     );
+    exercise_native_passport_http(restarted, keyring, cipher, &key_a, &key_b).await;
 }
