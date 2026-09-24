@@ -286,6 +286,8 @@ enum PassportHttpError {
     MissingDataGroups,
     #[error("Invalid stored document type")]
     InvalidDocumentType,
+    #[error("X-Personalization-Signature header is missing")]
+    MissingWebhookSignature,
     #[error("Physical document changed concurrently; retry the operation")]
     ConcurrentChange,
     #[error("Physical document repository failed")]
@@ -296,6 +298,9 @@ enum PassportHttpError {
 
 impl IntoResponse for PassportHttpError {
     fn into_response(self) -> Response {
+        if matches!(&self, Self::MissingWebhookSignature) {
+            return crate::management_http::missing_header("x-personalization-signature");
+        }
         let status = match &self {
             Self::Auth(
                 PassportTenantAuthError::MissingOrganization
@@ -320,6 +325,7 @@ impl IntoResponse for PassportHttpError {
             | Self::Bureau(_)
             | Self::Storage(_)
             | Self::WebhookStorage(_) => StatusCode::INTERNAL_SERVER_ERROR,
+            Self::MissingWebhookSignature => unreachable!("handled before status selection"),
         };
         match &self {
             Self::Storage(error) => error!(%error, "physical document repository failed"),
@@ -656,7 +662,8 @@ async fn personalization_webhook(
     headers: HeaderMap,
     body: Bytes,
 ) -> Result<Json<Value>, PassportHttpError> {
-    let signature = header(&headers, "x-personalization-signature").unwrap_or_default();
+    let signature = header(&headers, "x-personalization-signature")
+        .ok_or(PassportHttpError::MissingWebhookSignature)?;
     let event = service
         .bureau()?
         .parse_webhook(&body, signature)
@@ -717,6 +724,39 @@ mod tests {
                 .to_string(),
             ))
             .unwrap()
+    }
+
+    #[tokio::test]
+    async fn missing_webhook_signature_matches_frozen_python_validation() {
+        let frozen: Value = serde_json::from_str(include_str!(
+            "../../../../contracts/issuance-physical-passport-native.json"
+        ))
+        .unwrap();
+        let response = test_router()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/v1/passport/webhooks/personalization")
+                    .header("content-type", "application/json")
+                    .body(Body::from(
+                        r#"{"bureau_job_id":"synthetic","status":"SHIPPED"}"#,
+                    ))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(
+            response.status().as_u16(),
+            frozen["webhook_missing_signature_observation"]["status"]
+                .as_u64()
+                .unwrap() as u16
+        );
+        let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+        let body: Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(
+            body,
+            frozen["webhook_missing_signature_observation"]["body"]
+        );
     }
 
     #[tokio::test]
@@ -990,7 +1030,7 @@ mod tests {
             (
                 "POST",
                 "/v1/passport/webhooks/personalization",
-                StatusCode::SERVICE_UNAVAILABLE,
+                StatusCode::UNPROCESSABLE_ENTITY,
             ),
         ];
         assert_eq!(routes.len(), 9);
