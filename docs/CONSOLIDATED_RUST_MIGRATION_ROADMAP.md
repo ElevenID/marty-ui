@@ -6252,3 +6252,9 @@ The draft is not a nine-route cutover. Live signer and bureau qualification
 review and CI, immediate qualified Python retirement, and the one aggregate
 beta-only acceptance soak remain. Production is unchanged; DIDComm KMS
 corrections remain separately deferred.
+Gateway currently routes public `/v1/passport` requests to Python. Before
+switching those routes, it must derive the trusted organization from its
+authentication context, inject only that organization's native passport
+tenant key, reject caller-supplied organization/key context, and qualify all
+nine public routes plus signed webhook ingress. The shared issuance API key
+cannot serve as a passport tenant credential.

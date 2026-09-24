@@ -90,6 +90,12 @@
     "missing_native_keys": "configuration error",
     "qualification": "selector and rollback are tested locally; do not enable in deployment until signer, bureau, image, gateway, schema, and route parity gates pass"
   },
+  "gateway_cutover": {
+    "current_owner": "issuance",
+    "native_route_count": 0,
+    "required_before_switch": "derive the trusted organization from gateway authentication, inject its matching passport tenant key, reject forged client organization/key context, and prove all nine public routes plus signed webhook ingress against the native owner",
+    "shared_issuance_api_key": "must not be used as a passport tenant credential"
+  },
   "routes": [
     {"method": "GET", "path": "/v1/passport/capabilities"},
     {"method": "POST", "path": "/v1/passport/applications"},

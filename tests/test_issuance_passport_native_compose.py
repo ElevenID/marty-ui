@@ -1,5 +1,6 @@
 """Source guards for default-off native passport cutover inputs."""
 
+import json
 from pathlib import Path
 
 import yaml
@@ -54,3 +55,25 @@ def test_compose_exposes_both_passport_selectors_without_enabling_them() -> None
         beta["PHYSICAL_DOCUMENT_ALLOW_SELF_SIGNED"]
         == "${PHYSICAL_DOCUMENT_ALLOW_SELF_SIGNED:-false}"
     )
+
+
+def test_gateway_stays_legacy_until_tenant_key_boundary_is_qualified() -> None:
+    contract = json.loads(
+        (ROOT / "contracts/issuance-physical-passport-native.json").read_text(
+            encoding="utf-8"
+        )
+    )
+    coverage = json.loads(
+        (ROOT / "contracts/issuance-native-coverage.json").read_text(encoding="utf-8")
+    )
+    routes = [
+        route
+        for route in coverage["native_http"]
+        if route["path"].startswith("/v1/passport/")
+    ]
+    assert len(routes) == contract["gateway_cutover"]["native_route_count"] == 0
+    gateway_source = (ROOT / "rust/services/gateway/src/contract.rs").read_text(
+        encoding="utf-8"
+    )
+    assert '("/v1/passport", "issuance")' in gateway_source
+    assert contract["gateway_cutover"]["current_owner"] == "issuance"
