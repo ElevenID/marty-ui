@@ -91,11 +91,7 @@ fn security_error(error: TransactionReadError) -> Response {
 
 fn repository_error(error: sqlx::Error) -> Response {
     error!(%error, "issuance retention repository operation failed");
-    (
-        StatusCode::INTERNAL_SERVER_ERROR,
-        Json(json!({"detail": "Retention operation failed"})),
-    )
-        .into_response()
+    (StatusCode::INTERNAL_SERVER_ERROR, "Internal Server Error").into_response()
 }
 
 async fn summary(

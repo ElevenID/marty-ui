@@ -91,8 +91,19 @@ async fn request(
     path: &str,
     api_key: Option<&str>,
     organization: Option<&str>,
-    repo: Arc<FakeRetentionRepository>,
+    repo: Arc<dyn RetentionRepository>,
 ) -> (StatusCode, Value) {
+    let (status, body) = request_raw(method, path, api_key, organization, repo).await;
+    (status, serde_json::from_slice(&body).unwrap())
+}
+
+async fn request_raw(
+    method: &str,
+    path: &str,
+    api_key: Option<&str>,
+    organization: Option<&str>,
+    repo: Arc<dyn RetentionRepository>,
+) -> (StatusCode, Vec<u8>) {
     let clock = Arc::new(FixedClock(
         Utc.with_ymd_and_hms(2026, 2, 1, 0, 0, 0).unwrap(),
     ));
@@ -111,7 +122,60 @@ async fn request(
         .unwrap();
     let status = response.status();
     let body = to_bytes(response.into_body(), 1_048_576).await.unwrap();
-    (status, serde_json::from_slice(&body).unwrap())
+    (status, body.to_vec())
+}
+
+struct FailingRetentionRepository;
+
+#[async_trait]
+impl RetentionRepository for FailingRetentionRepository {
+    async fn summary(
+        &self,
+        _organization_id: &str,
+        _cutoff_at: DateTime<Utc>,
+    ) -> Result<RetentionSnapshot, sqlx::Error> {
+        Err(sqlx::Error::Protocol(
+            "synthetic-private-repository-detail".into(),
+        ))
+    }
+
+    async fn purge(
+        &self,
+        _organization_id: &str,
+        _cutoff_at: DateTime<Utc>,
+    ) -> Result<RetentionRecordCounts, sqlx::Error> {
+        Err(sqlx::Error::Protocol(
+            "synthetic-private-repository-detail".into(),
+        ))
+    }
+}
+
+#[tokio::test]
+async fn frozen_retention_repository_failure_is_generic_for_both_routes() {
+    let contract: Value = serde_json::from_str(CONTRACT).unwrap();
+    for route in contract["routes"].as_array().unwrap() {
+        let method = route["method"].as_str().unwrap();
+        let path = route["path"]
+            .as_str()
+            .unwrap()
+            .replace("{organization_id}", "organization-a");
+        let (status, body) = request_raw(
+            method,
+            &path,
+            Some("management-key"),
+            Some("organization-a"),
+            Arc::new(FailingRetentionRepository),
+        )
+        .await;
+        assert_eq!(
+            u64::from(status.as_u16()),
+            contract["repository_failure"]["status"].as_u64().unwrap()
+        );
+        assert_eq!(
+            String::from_utf8(body).unwrap(),
+            contract["repository_failure"]["body"].as_str().unwrap()
+        );
+    }
 }
 
 #[tokio::test]
