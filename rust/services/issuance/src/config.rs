@@ -86,9 +86,10 @@ impl PassportNativeConfig {
             self_signed_test_enabled,
         };
         if config.self_signed_test_enabled && config.signer_url.is_none() {
+            #[cfg(not(feature = "passport-self-signed-test"))]
             return Err(MmfError::new(
                 ErrorCode::Configuration,
-                "self-signed passport test signing parity is not yet implemented in Rust",
+                "self-signed passport test mode requires the passport-self-signed-test build feature",
             ));
         }
         for (present, name) in [
@@ -97,7 +98,10 @@ impl PassportNativeConfig {
                 config.artifact_key.is_some(),
                 "PHYSICAL_DOCUMENT_ARTIFACT_KEY",
             ),
-            (config.signer_url.is_some(), "ICAO_DOCUMENT_SIGNER_URL"),
+            (
+                config.signer_url.is_some() || config.self_signed_test_enabled,
+                "ICAO_DOCUMENT_SIGNER_URL or PHYSICAL_DOCUMENT_ALLOW_SELF_SIGNED",
+            ),
             (config.bureau_url.is_some(), "PERSONALIZATION_BUREAU_URL"),
         ] {
             if !present {
@@ -1660,7 +1664,10 @@ mod tests {
         ]))
         .unwrap_err();
         assert_eq!(error.code, ErrorCode::Configuration);
-        assert!(error.to_string().contains("not yet implemented"));
+        #[cfg(not(feature = "passport-self-signed-test"))]
+        assert!(error.to_string().contains("passport-self-signed-test"));
+        #[cfg(feature = "passport-self-signed-test")]
+        assert!(error.to_string().contains("PASSPORT_TENANT_API_KEYS"));
     }
 
     #[test]

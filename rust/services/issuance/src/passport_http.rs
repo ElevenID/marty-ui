@@ -33,7 +33,7 @@ use crate::{
         PassportJob, PassportJobInsert, PassportJobPatch, PassportJobStatus,
         PassportWebhookRepositoryError, PostgresPassportRepository,
     },
-    passport_signer::{RemoteSigner, SignedMaterial, SignerError},
+    passport_signer::{PassportSigner, RemoteSigner, SignedMaterial, SignerError},
 };
 
 #[derive(Clone)]
@@ -41,7 +41,7 @@ pub struct PassportHttpService {
     keyring: PassportTenantKeyring,
     repository: PostgresPassportRepository,
     cipher: Option<PassportArtifactCipher>,
-    signer: Option<RemoteSigner>,
+    signer: Option<PassportSigner>,
     bureau: Option<BureauClient>,
 }
 
@@ -80,10 +80,25 @@ impl PassportHttpService {
             native.artifact_key.as_deref(),
             "PHYSICAL_DOCUMENT_ARTIFACT_KEY",
         )?)?;
-        let signer = RemoteSigner::new(
-            required(native.signer_url.as_deref(), "ICAO_DOCUMENT_SIGNER_URL")?,
-            native.signer_api_key.as_deref().unwrap_or_default(),
-        )?;
+        let signer = if let Some(url) = native.signer_url.as_deref() {
+            PassportSigner::Remote(RemoteSigner::new(
+                url,
+                native.signer_api_key.as_deref().unwrap_or_default(),
+            )?)
+        } else if native.self_signed_test_enabled {
+            #[cfg(feature = "passport-self-signed-test")]
+            {
+                PassportSigner::SelfSignedTest
+            }
+            #[cfg(not(feature = "passport-self-signed-test"))]
+            {
+                return Err(PassportStartupError::Signer(
+                    SignerError::TestModeUnavailable,
+                ));
+            }
+        } else {
+            return Err(PassportStartupError::Missing("ICAO_DOCUMENT_SIGNER_URL"));
+        };
         let bureau = BureauClient::new(
             required(native.bureau_url.as_deref(), "PERSONALIZATION_BUREAU_URL")?,
             native.bureau_api_key.as_deref().unwrap_or_default(),
@@ -103,7 +118,7 @@ impl PassportHttpService {
         keyring: PassportTenantKeyring,
         repository: PostgresPassportRepository,
         cipher: Option<PassportArtifactCipher>,
-        signer: Option<RemoteSigner>,
+        signer: Option<PassportSigner>,
         bureau: Option<BureauClient>,
     ) -> Self {
         Self {
@@ -133,7 +148,7 @@ impl PassportHttpService {
             .ok_or(PassportHttpError::MissingArtifactKey)
     }
 
-    fn signer(&self) -> Result<&RemoteSigner, PassportHttpError> {
+    fn signer(&self) -> Result<&PassportSigner, PassportHttpError> {
         self.signer
             .as_ref()
             .ok_or(PassportHttpError::Signer(SignerError::NotConfigured))
@@ -362,7 +377,7 @@ async fn capabilities(State(service): State<PassportHttpService>) -> Json<Value>
     }
     Json(json!({
         "supported": blockers.is_empty(),
-        "signer": {"configured": service.signer.is_some(), "mode": if service.signer.is_some() {"REMOTE"} else {"UNAVAILABLE"}, "blockers": signer_blockers},
+        "signer": {"configured": service.signer.is_some(), "mode": service.signer.as_ref().map_or("UNAVAILABLE", PassportSigner::mode), "blockers": signer_blockers},
         "bureau_configured": service.bureau.is_some(),
         "encrypted_artifact_store": service.cipher.is_some(),
         "blockers": blockers,
@@ -722,6 +737,61 @@ mod tests {
             PassportHttpService::from_config(&bad_bureau, pool).err(),
             Some(PassportStartupError::Bureau(BureauError::InvalidUrl))
         ));
+    }
+
+    #[cfg(feature = "passport-self-signed-test")]
+    #[tokio::test]
+    async fn explicit_test_signer_is_capable_and_remote_url_takes_precedence() {
+        let pool = PgPoolOptions::new()
+            .connect_lazy("postgresql://unused:unused@127.0.0.1:5432/unused")
+            .unwrap();
+        let mut values = vec![
+            ("PASSPORT_NATIVE_HTTP_ENABLED".to_owned(), "true".to_owned()),
+            (
+                "PHYSICAL_DOCUMENT_ALLOW_SELF_SIGNED".to_owned(),
+                "true".to_owned(),
+            ),
+            (
+                "PASSPORT_TENANT_API_KEYS".to_owned(),
+                r#"{"org-1":"passport-tenant-test-key-00000000000001"}"#.to_owned(),
+            ),
+            (
+                "PHYSICAL_DOCUMENT_ARTIFACT_KEY".to_owned(),
+                fernet::Fernet::generate_key(),
+            ),
+            (
+                "PERSONALIZATION_BUREAU_URL".to_owned(),
+                "https://bureau.example.test".to_owned(),
+            ),
+        ];
+        let local_config = IssuanceServiceConfig::from_values(values.clone()).unwrap();
+        let local = PassportHttpService::from_config(&local_config, pool.clone())
+            .unwrap()
+            .unwrap();
+        assert_eq!(local.signer.as_ref().unwrap().mode(), "SELF_SIGNED_TEST");
+        let response = router(local)
+            .oneshot(
+                Request::builder()
+                    .uri("/v1/passport/capabilities")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+        let body: Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(body["signer"]["mode"], "SELF_SIGNED_TEST");
+        assert_eq!(body["supported"], true);
+
+        values.push((
+            "ICAO_DOCUMENT_SIGNER_URL".to_owned(),
+            "https://signer.example.test".to_owned(),
+        ));
+        let remote_config = IssuanceServiceConfig::from_values(values).unwrap();
+        let remote = PassportHttpService::from_config(&remote_config, pool)
+            .unwrap()
+            .unwrap();
+        assert_eq!(remote.signer.as_ref().unwrap().mode(), "REMOTE");
     }
 
     #[tokio::test]

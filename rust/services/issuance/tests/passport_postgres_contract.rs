@@ -18,6 +18,8 @@ use marty_issuance_service::passport_repository::{
     PassportJobInsert, PassportJobPatch, PassportJobStatus, PassportWebhookRepositoryError,
     PostgresPassportRepository,
 };
+#[cfg(feature = "passport-self-signed-test")]
+use marty_issuance_service::passport_signer::PassportSigner;
 use marty_issuance_service::passport_signer::RemoteSigner;
 use marty_passport_auth::PassportTenantKeyring;
 use serde_json::{json, Value};
@@ -97,7 +99,7 @@ async fn exercise_native_passport_http(
         keyring.clone(),
         repository.clone(),
         Some(cipher.clone()),
-        Some(RemoteSigner::new(&base_url, "signer-key").unwrap()),
+        Some(RemoteSigner::new(&base_url, "signer-key").unwrap().into()),
         Some(BureauClient::new(&base_url, "bureau-key", Some(secret)).unwrap()),
     ));
     let payload = json!({
@@ -292,6 +294,46 @@ async fn exercise_native_passport_http(
         .unwrap()
         .unwrap();
     assert!(cipher.decrypt(&job.secure_artifact_ciphertext).is_err());
+    #[cfg(feature = "passport-self-signed-test")]
+    {
+        let local = passport_router(PassportHttpService::new(
+            keyring,
+            repository,
+            Some(cipher),
+            Some(PassportSigner::SelfSignedTest),
+            None,
+        ));
+        let (status, created) = passport_http_request(
+            &local,
+            "POST",
+            "/v1/passport/applications",
+            Some("org-a"),
+            Some(key_a),
+            json!({
+                "organization_id":"org-a", "flow_execution_id":"self-signed-test",
+                "application_template_id":"template-test", "credential_template_id":"credential-test",
+                "delivery_destination_profile_id":"destination-test", "country_code":"UTO",
+                "applicant":{}, "mrz":{}, "data_groups":{"DG1":"YQ==", "DG2":"Yg=="}
+            }),
+            None,
+        )
+        .await;
+        assert_eq!(status, StatusCode::CREATED);
+        let application_id = created["application_id"].as_str().unwrap();
+        let (status, signed) = passport_http_request(
+            &local,
+            "POST",
+            &format!("/v1/passport/applications/{application_id}/generate-sod"),
+            Some("org-a"),
+            Some(key_a),
+            json!({}),
+            None,
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(signed["status"], "SOD_SIGNED");
+        assert_eq!(signed["sod_sha256"].as_str().unwrap().len(), 64);
+    }
     server.abort();
 }
 

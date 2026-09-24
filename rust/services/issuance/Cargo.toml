@@ -12,6 +12,7 @@ autotests = false
 [features]
 default = []
 feature-regression-observer = []
+passport-self-signed-test = ["marty-verification/authority-issuance"]
 
 [[bin]]
 name = "marty-issuance-service"

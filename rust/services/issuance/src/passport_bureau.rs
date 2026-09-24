@@ -59,23 +59,78 @@ pub struct PersonalizationJob {
 }
 
 impl PersonalizationJob {
-    fn payload(&self) -> Value {
-        let data_groups: BTreeMap<_, _> = self
-            .data_groups
+    fn named_data_groups(&self) -> BTreeMap<String, &String> {
+        self.data_groups
             .iter()
             .map(|(number, content)| (format!("DG{number}"), content))
-            .collect();
+            .collect()
+    }
+
+    fn payload(&self) -> Value {
         json!({
             "job_id": self.id,
             "application_id": self.application_id,
             "organization_id": self.organization_id,
             "country_code": self.country_code,
             "document_type": self.document_type,
-            "data_groups": data_groups,
+            "data_groups": self.named_data_groups(),
             "sod_der_base64": self.sod_der_base64,
             "dsc_cert_pem": self.dsc_cert_pem,
             "mrz": {"line_1": self.mrz_line_1, "line_2": self.mrz_line_2},
         })
+    }
+
+    fn batch_payload(&self) -> Value {
+        json!({
+            "job_id": self.id,
+            "application_id": self.application_id,
+            "country_code": self.country_code,
+            "data_groups": self.named_data_groups(),
+            "sod_der_base64": self.sod_der_base64,
+            "dsc_cert_pem": self.dsc_cert_pem,
+            "mrz": {"line_1": self.mrz_line_1, "line_2": self.mrz_line_2},
+        })
+    }
+}
+
+#[derive(Clone, Debug)]
+pub struct PersonalizationBatch {
+    pub id: String,
+    pub organization_id: String,
+    pub jobs: Vec<PersonalizationJob>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct BatchJobOutcome {
+    pub job_id: String,
+    pub bureau_job_id: Option<String>,
+    pub status: ProductionStatus,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct BatchSubmissionOutcome {
+    pub batch_id: String,
+    pub organization_id: String,
+    pub status: ProductionStatus,
+    pub jobs: Vec<BatchJobOutcome>,
+}
+
+impl BatchSubmissionOutcome {
+    fn from_batch(batch: &PersonalizationBatch, status: ProductionStatus) -> Self {
+        Self {
+            batch_id: batch.id.clone(),
+            organization_id: batch.organization_id.clone(),
+            status,
+            jobs: batch
+                .jobs
+                .iter()
+                .map(|job| BatchJobOutcome {
+                    job_id: job.id.clone(),
+                    bureau_job_id: None,
+                    status: ProductionStatus::Queued,
+                })
+                .collect(),
+        }
     }
 }
 
@@ -89,11 +144,7 @@ pub struct SubmissionOutcome {
 
 impl SubmissionOutcome {
     fn accepted(body: &Value) -> Result<Self, BureauError> {
-        let status = match body.get("status").and_then(Value::as_str) {
-            Some(status) => serde_json::from_value(Value::String(status.to_owned()))
-                .map_err(|_| BureauError::InvalidResponse("unknown production status".into()))?,
-            None => ProductionStatus::Queued,
-        };
+        let status = production_status_field(body, "status")?.unwrap_or(ProductionStatus::Queued);
         Ok(Self {
             bureau_job_id: body
                 .get("bureau_job_id")
@@ -109,6 +160,19 @@ impl SubmissionOutcome {
             error_message: None,
         })
     }
+}
+
+fn production_status_field(
+    body: &Value,
+    field: &str,
+) -> Result<Option<ProductionStatus>, BureauError> {
+    body.get(field)
+        .and_then(Value::as_str)
+        .map(|status| {
+            serde_json::from_value(Value::String(status.to_owned()))
+                .map_err(|_| BureauError::InvalidResponse("unknown production status".into()))
+        })
+        .transpose()
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq)]
@@ -241,6 +305,59 @@ impl BureauClient {
         }
         let body: Value = response.json().await?;
         SubmissionOutcome::accepted(&body)
+    }
+
+    pub async fn submit_batch(
+        &self,
+        batch: &PersonalizationBatch,
+    ) -> Result<BatchSubmissionOutcome, BureauError> {
+        let jobs = batch
+            .jobs
+            .iter()
+            .map(PersonalizationJob::batch_payload)
+            .collect::<Vec<_>>();
+        let response = self
+            .http
+            .post(self.endpoint("v1/personalization/batches")?)
+            .bearer_auth(&self.api_key)
+            .json(&json!({
+                "batch_id": batch.id,
+                "organization_id": batch.organization_id,
+                "jobs": jobs,
+            }))
+            .timeout(Duration::from_secs(60))
+            .send()
+            .await?;
+        if !matches!(
+            response.status(),
+            StatusCode::OK | StatusCode::CREATED | StatusCode::ACCEPTED
+        ) {
+            return Ok(BatchSubmissionOutcome::from_batch(
+                batch,
+                ProductionStatus::Failed,
+            ));
+        }
+        let body: Value = response.json().await?;
+        let status = production_status_field(&body, "status")?.unwrap_or(ProductionStatus::Queued);
+        let mut outcome = BatchSubmissionOutcome::from_batch(batch, status);
+        if let Some(reported_jobs) = body.get("jobs").and_then(Value::as_array) {
+            for reported in reported_jobs {
+                let Some(id) = reported.get("job_id").and_then(Value::as_str) else {
+                    continue;
+                };
+                for job in &mut outcome.jobs {
+                    if job.job_id == id {
+                        job.bureau_job_id = reported
+                            .get("bureau_job_id")
+                            .and_then(Value::as_str)
+                            .map(str::to_owned);
+                        job.status = production_status_field(reported, "status")?
+                            .unwrap_or(ProductionStatus::Queued);
+                    }
+                }
+            }
+        }
+        Ok(outcome)
     }
 
     pub async fn poll(&self, bureau_job_id: &str) -> Result<PollOutcome, BureauError> {
@@ -407,6 +524,98 @@ mod tests {
             configured.parse_webhook(b"{}", &signature),
             Err(BureauError::InvalidWebhookSignature)
         ));
+    }
+
+    #[tokio::test]
+    async fn batch_submission_preserves_python_envelope_and_input_order() {
+        use std::sync::{Arc, Mutex};
+
+        use axum::{extract::State, routing::post, Json, Router};
+
+        type Observed = Arc<Mutex<Vec<Value>>>;
+        async fn submit_batch(
+            State(observed): State<Observed>,
+            Json(payload): Json<Value>,
+        ) -> (StatusCode, Json<Value>) {
+            let failed = payload["batch_id"] == "failure";
+            observed.lock().unwrap().push(payload);
+            if failed {
+                return (
+                    StatusCode::SERVICE_UNAVAILABLE,
+                    Json(json!({"private":"do-not-expose"})),
+                );
+            }
+            (
+                StatusCode::ACCEPTED,
+                Json(json!({
+                    "status":"QUEUED",
+                    "jobs":[
+                        {"job_id":"job-second", "bureau_job_id":"bureau-second", "status":"PRINTING"},
+                        {"job_id":"job-1", "bureau_job_id":"bureau-first", "status":"QUEUED"}
+                    ]
+                })),
+            )
+        }
+        let observed: Observed = Arc::new(Mutex::new(Vec::new()));
+        let app = Router::new()
+            .route("/v1/personalization/batches", post(submit_batch))
+            .with_state(observed.clone());
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let server = tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+        let client = BureauClient::new(&format!("http://{address}"), "bureau-key", None).unwrap();
+        let mut second = job(DocumentType::TD1);
+        second.id = "job-second".into();
+        second.application_id = "application-second".into();
+        second.country_code = "GBR".into();
+        second.data_groups = BTreeMap::from([(3, "Aw==".into())]);
+        let batch = PersonalizationBatch {
+            id: "batch-1".into(),
+            organization_id: "organization-1".into(),
+            jobs: vec![job(DocumentType::TD3), second],
+        };
+        let outcome = client.submit_batch(&batch).await.unwrap();
+        assert_eq!(outcome.status, ProductionStatus::Queued);
+        assert_eq!(outcome.batch_id, "batch-1");
+        assert_eq!(outcome.organization_id, "organization-1");
+        assert_eq!(
+            outcome
+                .jobs
+                .iter()
+                .map(|job| (
+                    job.job_id.as_str(),
+                    job.bureau_job_id.as_deref(),
+                    job.status
+                ))
+                .collect::<Vec<_>>(),
+            vec![
+                ("job-1", Some("bureau-first"), ProductionStatus::Queued),
+                (
+                    "job-second",
+                    Some("bureau-second"),
+                    ProductionStatus::Printing
+                ),
+            ]
+        );
+        let payload = observed.lock().unwrap()[0].clone();
+        assert_eq!(payload["batch_id"], "batch-1");
+        assert_eq!(payload["organization_id"], "organization-1");
+        assert_eq!(
+            payload["jobs"][0]["data_groups"],
+            json!({"DG1":"ZzE=","DG2":"ZzI="})
+        );
+        assert_eq!(payload["jobs"][1]["data_groups"], json!({"DG3":"Aw=="}));
+        assert!(payload["jobs"][0].get("document_type").is_none());
+        assert!(payload["jobs"][0].get("organization_id").is_none());
+        let mut failed_batch = batch;
+        failed_batch.id = "failure".into();
+        let failed = client.submit_batch(&failed_batch).await.unwrap();
+        assert_eq!(failed.status, ProductionStatus::Failed);
+        assert!(failed
+            .jobs
+            .iter()
+            .all(|job| job.status == ProductionStatus::Queued && job.bureau_job_id.is_none()));
+        server.abort();
     }
 
     #[tokio::test]

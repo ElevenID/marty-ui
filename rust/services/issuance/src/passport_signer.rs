@@ -1,8 +1,11 @@
-//! Remote eMRTD signer transport for the native physical-document service.
-//! Production signing material remains outside this service process.
+//! eMRTD signing for the native physical-document service. Production signing
+//! material remains remote; local single-use keys require an explicit
+//! non-default test-only build feature and runtime flag.
 
 use std::{collections::BTreeMap, time::Duration};
 
+#[cfg(feature = "passport-self-signed-test")]
+use base64::{engine::general_purpose::STANDARD, Engine as _};
 use reqwest::{Client, Url};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
@@ -13,6 +16,8 @@ const SIGNER_PATH: &str = "v1/icao/emrtd/sign";
 pub struct SignedMaterial {
     pub sod_der_base64: String,
     pub dsc_cert_pem: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub csca_cert_pem: Option<String>,
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -27,6 +32,96 @@ pub enum SignerError {
     Transport(#[from] reqwest::Error),
     #[error("ICAO document signer returned incomplete signing material")]
     IncompleteMaterial,
+    #[error("Explicit self-signed passport test mode is not compiled into this service")]
+    TestModeUnavailable,
+    #[error("Self-signed passport test signing failed")]
+    TestSigningFailed,
+}
+
+#[derive(Clone)]
+pub enum PassportSigner {
+    Remote(RemoteSigner),
+    #[cfg(feature = "passport-self-signed-test")]
+    SelfSignedTest,
+}
+
+impl From<RemoteSigner> for PassportSigner {
+    fn from(signer: RemoteSigner) -> Self {
+        Self::Remote(signer)
+    }
+}
+
+impl PassportSigner {
+    #[must_use]
+    pub const fn mode(&self) -> &'static str {
+        match self {
+            Self::Remote(_) => "REMOTE",
+            #[cfg(feature = "passport-self-signed-test")]
+            Self::SelfSignedTest => "SELF_SIGNED_TEST",
+        }
+    }
+
+    pub async fn sign(
+        &self,
+        country_code: &str,
+        organization: &str,
+        data_groups: &BTreeMap<u16, String>,
+    ) -> Result<SignedMaterial, SignerError> {
+        match self {
+            Self::Remote(remote) => remote.sign(country_code, organization, data_groups).await,
+            #[cfg(feature = "passport-self-signed-test")]
+            Self::SelfSignedTest => {
+                let country_code = country_code.to_owned();
+                let organization = organization.to_owned();
+                let data_groups = data_groups.clone();
+                tokio::task::spawn_blocking(move || {
+                    self_signed_test_sign(&country_code, &organization, &data_groups)
+                })
+                .await
+                .map_err(|_| SignerError::TestSigningFailed)?
+            }
+        }
+    }
+}
+
+#[cfg(feature = "passport-self-signed-test")]
+fn self_signed_test_sign(
+    country_code: &str,
+    organization: &str,
+    data_groups: &BTreeMap<u16, String>,
+) -> Result<SignedMaterial, SignerError> {
+    use marty_verification::issuance::CscaAuthority;
+
+    let decoded_groups = data_groups
+        .iter()
+        .map(|(number, content)| {
+            let number = u8::try_from(*number).map_err(|_| SignerError::TestSigningFailed)?;
+            let content = STANDARD
+                .decode(content)
+                .map_err(|_| SignerError::TestSigningFailed)?;
+            Ok((number, content))
+        })
+        .collect::<Result<Vec<_>, SignerError>>()?;
+    let csca = CscaAuthority::new(country_code, organization, 3650)
+        .map_err(|_| SignerError::TestSigningFailed)?;
+    let dsc = csca
+        .issue_dsc(organization, 730)
+        .map_err(|_| SignerError::TestSigningFailed)?;
+    let mut personalizer = dsc.personalizer();
+    for (number, content) in decoded_groups {
+        personalizer = personalizer.set_data_group(number, content);
+    }
+    let passport = personalizer
+        .build()
+        .map_err(|_| SignerError::TestSigningFailed)?;
+    Ok(SignedMaterial {
+        sod_der_base64: STANDARD.encode(passport.sod_der),
+        dsc_cert_pem: dsc.cert_pem().map_err(|_| SignerError::TestSigningFailed)?,
+        csca_cert_pem: Some(
+            csca.cert_pem()
+                .map_err(|_| SignerError::TestSigningFailed)?,
+        ),
+    })
 }
 
 #[derive(Clone)]
@@ -95,6 +190,10 @@ impl RemoteSigner {
         Ok(SignedMaterial {
             sod_der_base64: required("sod_der_base64")?,
             dsc_cert_pem: required("dsc_cert_pem")?,
+            csca_cert_pem: body
+                .get("csca_cert_pem")
+                .and_then(Value::as_str)
+                .map(str::to_owned),
         })
     }
 }
@@ -112,6 +211,30 @@ mod tests {
     use serde_json::{json, Value};
 
     use super::*;
+
+    #[cfg(feature = "passport-self-signed-test")]
+    #[tokio::test]
+    async fn explicit_self_signed_test_mode_issues_ephemeral_sod_and_dsc() {
+        let signer = PassportSigner::SelfSignedTest;
+        assert_eq!(signer.mode(), "SELF_SIGNED_TEST");
+        let groups = BTreeMap::from([(1, "YQ==".to_owned()), (2, "Yg==".to_owned())]);
+        let signed = signer
+            .sign("UTO", "synthetic-test-issuer", &groups)
+            .await
+            .unwrap();
+        assert!(!STANDARD.decode(signed.sod_der_base64).unwrap().is_empty());
+        assert!(signed.dsc_cert_pem.contains("BEGIN CERTIFICATE"));
+        assert!(signed
+            .csca_cert_pem
+            .as_deref()
+            .unwrap()
+            .contains("BEGIN CERTIFICATE"));
+        let invalid = BTreeMap::from([(256, "YQ==".to_owned())]);
+        assert!(matches!(
+            signer.sign("UTO", "synthetic-test-issuer", &invalid).await,
+            Err(SignerError::TestSigningFailed)
+        ));
+    }
 
     #[test]
     fn remote_signer_rejects_missing_or_unsafe_endpoint() {

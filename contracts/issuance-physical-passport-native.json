@@ -18,9 +18,14 @@
   "self_signed_test_signer": {
     "python_flag": "PHYSICAL_DOCUMENT_ALLOW_SELF_SIGNED=true",
     "python_behavior": "When no remote signer URL is set, issue a single-use CSCA and DSC for testing and offline fixtures only",
-    "native_status": "not yet implemented; PASSPORT_NATIVE_HTTP_ENABLED refuses this flag without a remote signer",
-    "core_capability": "marty-verification/authority-issuance is available at the pinned Core revision but must be isolated from the production KMS-only signer path",
-    "python_retirement_gate": "prove explicit test-only behavioral parity before deleting the Python passport signer path"
+    "native_status": "available behind non-default passport-self-signed-test Cargo feature plus explicit runtime flag; remote URL takes precedence",
+    "core_capability": "marty-verification/authority-issuance at the pinned Core revision; local single-use keys are excluded from the default production build",
+    "python_retirement_gate": "prove feature-enabled HTTP/database and packaged test-mode behavior before deleting the Python passport signer path"
+  },
+  "bureau_batch_provider": {
+    "python_reference": "contracts/physical-passport-provider-reference.json batch_http",
+    "native_status": "Rust BureauClient::submit_batch ports the Python batch envelope, accepted/rejected statuses and out-of-order job mapping; no public passport route uses it",
+    "python_retirement_gate": "qualify the Rust batch adapter against the frozen Python provider contract and live bureau before deleting the Python bureau adapter"
   },
   "document_types": ["TD1", "TD2", "TD3"],
   "routes": [
