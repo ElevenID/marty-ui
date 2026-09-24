@@ -140,7 +140,7 @@ check_prereqs() {
 apply_manifest() {
   local file="$1"
   info "Applying $(basename "$file")…"
-  if [[ "${K8S_ISSUANCE_NATIVE_ENABLED-false}" == true && "$file" == "${K8S_DIR}/07-microservices.yaml" ]]; then
+  if [[ "${K8S_ISSUANCE_NATIVE_ENABLED-true}" == true && "$file" == "${K8S_DIR}/07-microservices.yaml" ]]; then
     [[ -n "${K8S_NATIVE_RENDERED_MODEL:-}" ]] || { error "Native issuance model was not preflighted."; return 1; }
     printf '%s\n' "$K8S_NATIVE_RENDERED_MODEL" | kubectl apply -f -
     return
@@ -153,7 +153,8 @@ apply_manifest() {
 # does not require the new executable or inspect unused native-only inputs.
 prepare_kubernetes_native_issuance() {
   K8S_NATIVE_RENDERED_MODEL=""
-  case "${K8S_ISSUANCE_NATIVE_ENABLED-false}" in
+  K8S_ISSUANCE_NATIVE_ENABLED="${K8S_ISSUANCE_NATIVE_ENABLED-true}"
+  case "$K8S_ISSUANCE_NATIVE_ENABLED" in
     false) return 0 ;;
     true) ;;
     *) error "Kubernetes native issuance selection must be true or false."; return 1 ;;
@@ -425,9 +426,9 @@ cmd_status() {
 
 cmd_update_images() {
   prepare_kubernetes_native_issuance || return 1
-  if [[ "${K8S_ISSUANCE_NATIVE_ENABLED-false}" == true ]]; then
+  if [[ "${K8S_ISSUANCE_NATIVE_ENABLED-true}" == true ]]; then
     # Read-only API snapshot, not a lock against concurrent operator changes.
-    if ! kubectl get deployment/issuance-native deployment/gateway deployment/issuance deployment/signing-keys service/issuance-native service/signing-keys configmap/issuance-native-config -n "$NAMESPACE" -o json --request-timeout=10s \
+    if ! kubectl get deployment/issuance-native deployment/gateway deployment/issuance deployment/signing-keys deployment/auth deployment/applicant deployment/presentation-policy deployment/flow service/issuance-native service/signing-keys configmap/issuance-native-config -n "$NAMESPACE" -o json --request-timeout=10s \
       | "$K8S_NATIVE_ISSUANCE_BIN" check-update --repo-root "$REPO_ROOT" --manifest-dir "$K8S_DIR" --namespace "$NAMESPACE"; then
       error "Native issuance image update refused; apply the reviewed full-manifest selection first."
       return 1
@@ -441,7 +442,7 @@ cmd_update_images() {
     return 1
   fi
   step "Rolling image update — tag: ${IMAGE_TAG}"
-  if [[ "${K8S_ISSUANCE_NATIVE_ENABLED-false}" == true ]]; then
+  if [[ "${K8S_ISSUANCE_NATIVE_ENABLED-true}" == true ]]; then
     kubectl set image deployment/signing-keys "signing-keys=${MARTY_SERVICES_IMAGE}" -n "$NAMESPACE" || return 1
     kubectl rollout status deployment/signing-keys -n "$NAMESPACE" --timeout=180s || return 1
     kubectl set image deployment/issuance-native "issuance-native=${MARTY_SERVICES_IMAGE}" -n "$NAMESPACE" || return 1
@@ -547,7 +548,7 @@ cmd_deploy() {
 
   step "Deploying microservices…"
   apply_manifest "${K8S_DIR}/07-microservices.yaml"
-  if [[ "${K8S_ISSUANCE_NATIVE_ENABLED-false}" == true ]]; then
+  if [[ "${K8S_ISSUANCE_NATIVE_ENABLED-true}" == true ]]; then
     kubectl rollout status deployment/signing-keys -n "$NAMESPACE" --timeout=180s || return 1
     kubectl rollout status deployment/issuance-native -n "$NAMESPACE" --timeout=180s || return 1
     kubectl rollout status deployment/gateway -n "$NAMESPACE" --timeout=180s || return 1

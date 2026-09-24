@@ -80,6 +80,11 @@ pub const INHERITED_SETTINGS: &[&str] = &[
     "CANVAS_CREDENTIALS_ISSUER_ID",
     "CANVAS_CREDENTIALS_BADGECLASS_ID",
     "CANVAS_CREDENTIALS_ASSERTION_SCOPE",
+    "CANVAS_CREDENTIALS_ASSERTION_URL_TEMPLATE",
+    "CANVAS_CREDENTIALS_ASSERTION_NARRATIVE",
+    "CANVAS_CREDENTIALS_PROVENANCE_BASE_URL",
+    "CANVAS_CREDENTIALS_RECIPIENT_HASHED",
+    "CANVAS_CREDENTIALS_ALLOW_DUPLICATE_AWARDS",
 ];
 pub const SECRET_SETTINGS: &[&str] = &[
     "DATABASE_URL",
@@ -328,12 +333,94 @@ fn environment(value: &Value) -> Result<BTreeMap<&str, &Value>> {
     Ok(result)
 }
 
+fn issuance_consumer_bindings(resources: &[Value], selected: bool) -> Result<()> {
+    let native = json!({"name":"ISSUANCE_NATIVE_SERVICE_URL","value":NATIVE_URL});
+    let native_ref = config_ref("ISSUANCE_NATIVE_SERVICE_URL", "ISSUANCE_NATIVE_SERVICE_URL");
+    let legacy_ref = config_ref("ISSUANCE_SERVICE_URL", "ISSUANCE_SERVICE_URL");
+    let auth = environment(container(
+        &resources[index(resources, "Deployment", "auth")?],
+        "auth",
+    )?)?;
+    let applicant = environment(container(
+        &resources[index(resources, "Deployment", "applicant")?],
+        "applicant",
+    )?)?;
+    let policy = environment(container(
+        &resources[index(resources, "Deployment", "presentation-policy")?],
+        "presentation-policy",
+    )?)?;
+    let flow = environment(container(
+        &resources[index(resources, "Deployment", "flow")?],
+        "flow",
+    )?)?;
+    if selected {
+        for values in [&auth, &applicant, &policy] {
+            require(values.get("ISSUANCE_NATIVE_SERVICE_URL") == Some(&&native))?;
+            require(!values.contains_key("ISSUANCE_SERVICE_URL"))?;
+        }
+        require(flow.get("ISSUANCE_SERVICE_URL") == Some(&&legacy_ref))?;
+        require(flow.get("ISSUANCE_NATIVE_SERVICE_URL") == Some(&&native))?;
+        require(
+            flow.get("ISSUANCE_GRPC_TARGET")
+                == Some(&&json!({"name":"ISSUANCE_GRPC_TARGET","value":"issuance-native:9005"})),
+        )?;
+    } else {
+        for values in [&auth, &applicant, &policy] {
+            require(values.get("ISSUANCE_NATIVE_SERVICE_URL") == Some(&&native_ref))?;
+            require(!values.contains_key("ISSUANCE_SERVICE_URL"))?;
+        }
+        require(flow.get("ISSUANCE_SERVICE_URL") == Some(&&legacy_ref))?;
+        require(flow.get("ISSUANCE_NATIVE_SERVICE_URL") == Some(&&native_ref))?;
+        require(
+            flow.get("ISSUANCE_GRPC_TARGET")
+                == Some(&&json!({"name":"ISSUANCE_GRPC_TARGET","value":"issuance:9005"})),
+        )?;
+    }
+    let gateway = environment(container(
+        &resources[index(resources, "Deployment", "gateway")?],
+        "gateway",
+    )?)?;
+    require(gateway.get("ISSUANCE_SERVICE_URL") == Some(&&legacy_ref))?;
+    if selected {
+        require(
+            gateway.get("ISSUANCE_NATIVE_SERVICE_URL")
+                == Some(&&json!({"name":"ISSUANCE_NATIVE_SERVICE_URL","value":NATIVE_URL})),
+        )?;
+    } else {
+        require(!gateway.contains_key("ISSUANCE_NATIVE_SERVICE_URL"))?;
+    }
+    let mut allowed = BTreeSet::from(["auth", "applicant", "presentation-policy", "flow"]);
+    if selected {
+        allowed.extend(["gateway", "issuance"]);
+    }
+    for deployment in resources.iter().filter(|item| item["kind"] == "Deployment") {
+        let name = deployment["metadata"]["name"].as_str().ok_or(REFUSAL)?;
+        let values = environment(container(deployment, name)?)?;
+        if values.contains_key("ISSUANCE_NATIVE_SERVICE_URL") {
+            require(allowed.contains(name))?;
+        }
+    }
+    Ok(())
+}
+
 fn append_env(value: &mut Value, name: &str, setting: &str) -> Result<()> {
     require(!environment(value)?.contains_key(name))?;
     value["env"]
         .as_array_mut()
         .ok_or(REFUSAL)?
         .push(json!({"name":name,"value":setting}));
+    Ok(())
+}
+
+fn replace_env(value: &mut Value, name: &str, replacement: Value) -> Result<()> {
+    require(environment(value)?.contains_key(name))?;
+    let entry = value["env"]
+        .as_array_mut()
+        .ok_or(REFUSAL)?
+        .iter_mut()
+        .find(|entry| entry["name"] == name)
+        .ok_or(REFUSAL)?;
+    *entry = replacement;
     Ok(())
 }
 
@@ -608,6 +695,7 @@ pub fn compose(
     values: &Environment,
 ) -> Result<Value> {
     require(selected(values)?)?;
+    issuance_consumer_bindings(resources, false)?;
     let image = services_image(values.get("MARTY_SERVICES_IMAGE").ok_or(REFUSAL)?)?;
     let configuration = configuration(values)?;
     require(template.len() == 5)?;
@@ -632,6 +720,26 @@ pub fn compose(
     let mut result = resources.to_vec();
     let legacy_index = index(&result, "Deployment", "issuance")?;
     let gateway_index = index(&result, "Deployment", "gateway")?;
+    for name in ["auth", "applicant", "presentation-policy"] {
+        let consumer_index = index(&result, "Deployment", name)?;
+        replace_env(
+            container_mut(&mut result[consumer_index], name)?,
+            "ISSUANCE_NATIVE_SERVICE_URL",
+            json!({"name":"ISSUANCE_NATIVE_SERVICE_URL","value":NATIVE_URL}),
+        )?;
+    }
+    let flow_index = index(&result, "Deployment", "flow")?;
+    let flow = container_mut(&mut result[flow_index], "flow")?;
+    replace_env(
+        flow,
+        "ISSUANCE_GRPC_TARGET",
+        json!({"name":"ISSUANCE_GRPC_TARGET","value":"issuance-native:9005"}),
+    )?;
+    replace_env(
+        flow,
+        "ISSUANCE_NATIVE_SERVICE_URL",
+        json!({"name":"ISSUANCE_NATIVE_SERVICE_URL","value":NATIVE_URL}),
+    )?;
     let namespace = result[legacy_index]["metadata"]["namespace"]
         .as_str()
         .ok_or(REFUSAL)?
@@ -727,6 +835,7 @@ pub fn compose(
         }
     }
     result.extend(additions);
+    issuance_consumer_bindings(&result, true)?;
     let output = json!({"apiVersion":"v1","kind":"List","items":result});
     require(serde_json::to_vec(&output).map_err(|_| REFUSAL)?.len() <= MAX_BYTES)?;
     Ok(output)
@@ -738,6 +847,8 @@ pub fn check_update(actual: &Value, expected: &Value, namespace: &str) -> Result
     require(!namespace.is_empty() && actual["kind"] == "List" && expected["kind"] == "List")?;
     let actual = actual["items"].as_array().ok_or(REFUSAL)?;
     let expected = expected["items"].as_array().ok_or(REFUSAL)?;
+    issuance_consumer_bindings(actual, true)?;
+    issuance_consumer_bindings(expected, true)?;
     for (kind, name) in [
         ("Deployment", "issuance-native"),
         ("Deployment", "gateway"),

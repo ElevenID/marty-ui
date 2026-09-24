@@ -2677,6 +2677,26 @@ async fn status_main_process_resolves_reviews_with_real_http_publication_and_mir
     owned.close().unwrap();
 }
 
+#[cfg(unix)]
+#[tokio::test]
+async fn canvas_mirror_worker_enabled_packaged_main_runs_and_shuts_down_cleanly() {
+    if std::env::var("MARTY_CANVAS_PUBLISHED_SCHEMA_TEST").as_deref() != Ok("1") {
+        return;
+    }
+    let owned = canvas_published_database::PublishedDatabase::start_with_status_provider()
+        .await
+        .unwrap();
+    let pool = PgPoolOptions::new()
+        .max_connections(5)
+        .connect(&owned.url)
+        .await
+        .unwrap();
+    canvas_status_runtime_contract::run_canvas_mirror_automation_main_lifecycle(&pool, &owned.url)
+        .await;
+    pool.close().await;
+    owned.close().unwrap();
+}
+
 #[path = "support/canvas_worker_sql_logging.rs"]
 mod canvas_worker_sql_logging;
 

@@ -253,7 +253,6 @@ impl EnvoyFixture {
                 (
                     9901,
                     &[
-                        "cluster.issuance_grpc.membership_healthy",
                         "cluster.issuance_native_grpc.membership_healthy",
                         "cluster.auth_grpc.membership_healthy",
                     ][..],
@@ -435,109 +434,112 @@ impl EnvoyFixture {
         assert_eq!(transactions(pool).await, initial);
         assert_eq!(peer_effects(peers), effects);
 
-        // Real tonic client exercises every descriptor sibling, including the
-        // streaming method, against the counted legacy endpoint.
+        // The complete descriptor now belongs to native issuance. Exercise
+        // every method through the actual Envoy listener; authentication must
+        // be enforced by native without falling back to the counted legacy
+        // transport. Executable smoke separately freezes the same service's
+        // direct method boundary.
         let mut client = self.grpc().await;
-        macro_rules! sibling {
+        macro_rules! native_auth_boundary {
             ($method:ident) => {
-                client
-                    .$method(authenticated(Default::default()))
-                    .await
-                    .unwrap();
+                assert_eq!(
+                    client
+                        .$method(tonic::Request::new(Default::default()))
+                        .await
+                        .unwrap_err()
+                        .code(),
+                    tonic::Code::Unauthenticated,
+                    stringify!($method)
+                );
             };
         }
-        sibling!(exchange_token);
-        sibling!(issue_credential);
-        sibling!(get_offer);
-        sibling!(list_transactions);
-        sibling!(get_transaction);
-        sibling!(revoke_credential);
-        sibling!(suspend_credential);
-        sibling!(reinstate_credential);
-        sibling!(get_credential_status);
-        let mut stream = client
-            .stream_credential_events(authenticated(Default::default()))
+        native_auth_boundary!(exchange_token);
+        native_auth_boundary!(issue_credential);
+        native_auth_boundary!(get_offer);
+        native_auth_boundary!(list_transactions);
+        native_auth_boundary!(get_transaction);
+        native_auth_boundary!(revoke_credential);
+        native_auth_boundary!(suspend_credential);
+        native_auth_boundary!(reinstate_credential);
+        native_auth_boundary!(get_credential_status);
+        native_auth_boundary!(stream_credential_events);
+        native_auth_boundary!(health_check);
+        macro_rules! native_method_present {
+            ($method:ident) => {
+                if let Err(status) = client.$method(authenticated(Default::default())).await {
+                    assert!(
+                        !matches!(
+                            status.code(),
+                            tonic::Code::Unauthenticated
+                                | tonic::Code::Unimplemented
+                                | tonic::Code::Unavailable
+                        ),
+                        "authenticated native {} returned {status}",
+                        stringify!($method)
+                    );
+                }
+            };
+        }
+        native_method_present!(exchange_token);
+        // A service-authenticated credential call without an OAuth access
+        // token reaches native issuance and must still fail authentication.
+        // Requiring a non-Unauthenticated result here would erase that
+        // separate holder-token boundary.
+        let credential_status = client
+            .issue_credential(authenticated(Default::default()))
             .await
-            .unwrap()
-            .into_inner();
-        assert_eq!(stream.message().await.unwrap(), Some(Default::default()));
-        assert!(
-            stream.message().await.unwrap().is_none(),
-            "Legacy streaming terminal status is successful"
-        );
-        sibling!(health_check);
-        let names = [
-            "ExchangeToken",
-            "IssueCredential",
-            "GetOffer",
-            "ListTransactions",
-            "GetTransaction",
-            "RevokeCredential",
-            "SuspendCredential",
-            "ReinstateCredential",
-            "GetCredentialStatus",
-            "StreamCredentialEvents",
-            "HealthCheck",
-        ];
+            .unwrap_err();
+        assert_eq!(credential_status.code(), tonic::Code::Unauthenticated);
         assert_eq!(
-            *self.calls.lock().unwrap(),
-            names
-                .into_iter()
-                .map(|name| ("POST".to_owned(), format!("/{SERVICE}/{name}"), true))
-                .collect::<Vec<_>>()
+            credential_status.message(),
+            "missing or invalid authorization"
         );
-        for (method, path, name) in [
-            ("POST", "/v1/issuance/token", "ExchangeToken"),
-            ("POST", "/v1/issuance/credential", "IssueCredential"),
-            ("GET", "/v1/issuance/offers/owned-control", "GetOffer"),
-            ("GET", "/v1/issuance/transactions", "ListTransactions"),
-            (
-                "GET",
-                "/v1/issuance/transactions/owned-control",
-                "GetTransaction",
-            ),
-            (
-                "POST",
-                "/v1/issuance/credentials/owned-control/revoke",
-                "RevokeCredential",
-            ),
-            (
-                "POST",
-                "/v1/issuance/credentials/owned-control/suspend",
-                "SuspendCredential",
-            ),
-            (
-                "POST",
-                "/v1/issuance/credentials/owned-control/reinstate",
-                "ReinstateCredential",
-            ),
-            (
-                "GET",
-                "/v1/issuance/credentials/owned-control/status",
-                "GetCredentialStatus",
-            ),
-            ("GET", "/v1/issuance/health", "HealthCheck"),
+        native_method_present!(get_offer);
+        native_method_present!(list_transactions);
+        native_method_present!(get_transaction);
+        native_method_present!(revoke_credential);
+        native_method_present!(suspend_credential);
+        native_method_present!(reinstate_credential);
+        native_method_present!(get_credential_status);
+        native_method_present!(stream_credential_events);
+        assert_eq!(
+            client
+                .health_check(authenticated(Default::default()))
+                .await
+                .unwrap()
+                .into_inner()
+                .status,
+            "serving"
+        );
+        assert!(self.calls.lock().unwrap().is_empty());
+        for (method, path) in [
+            ("POST", "/v1/issuance/token"),
+            ("POST", "/v1/issuance/credential"),
+            ("GET", "/v1/issuance/offers/owned-control"),
+            ("GET", "/v1/issuance/transactions"),
+            ("GET", "/v1/issuance/transactions/owned-control"),
+            ("POST", "/v1/issuance/credentials/owned-control/revoke"),
+            ("POST", "/v1/issuance/credentials/owned-control/suspend"),
+            ("POST", "/v1/issuance/credentials/owned-control/reinstate"),
+            ("GET", "/v1/issuance/credentials/owned-control/status"),
+            ("GET", "/v1/issuance/health"),
         ] {
-            let before = self.calls.lock().unwrap().len();
-            let mut request = self
-                .client
-                .request(
-                    method.parse().unwrap(),
-                    format!("http://127.0.0.1:9000{path}"),
-                )
-                .header("x-service-token", TOKEN);
+            let mut request = self.client.request(
+                method.parse().unwrap(),
+                format!("http://127.0.0.1:9000{path}"),
+            );
             if method == "POST" {
                 request = request.json(&json!({}));
             }
             let response = request.send().await.unwrap();
-            assert_eq!(response.status(), StatusCode::OK);
-            let _: Value = response.json().await.unwrap();
-            assert_eq!(self.calls.lock().unwrap().len(), before + 1);
             assert_eq!(
-                self.calls.lock().unwrap().last(),
-                Some(&("POST".into(), format!("/{SERVICE}/{name}"), true)),
-                "Annotated sibling still reaches authenticated legacy gRPC owner"
+                response.status(),
+                StatusCode::UNAUTHORIZED,
+                "{method} {path}"
             );
+            let error: Value = response.json().await.unwrap();
+            assert_eq!(error["code"], 16, "{method} {path}");
+            assert!(self.calls.lock().unwrap().is_empty(), "{method} {path}");
         }
         let mut alias_body = body.clone();
         alias_body["idempotency_key"] = json!(format!("envoy-alias-{}", peers.source_id));
@@ -592,10 +594,21 @@ impl EnvoyFixture {
                 assert_eq!(candidate,canonical,"Normalized initiation alias preserves exact native response and no-fallback effects: {path}");
             } else {
                 assert_eq!(
-                    candidate_decodes, baseline_decodes,
-                    "candidate changed legacy initiation effects for {method} {path}"
+                    candidate_decodes, 0,
+                    "Native-owned candidate must never invoke legacy initiation for {method} {path}"
                 );
-                assert_eq!(candidate,baseline,"Actual unchanged baseline preserves response bytes, relevant headers and legacy attempts for {method} {path}");
+                assert!(
+                    candidate.1.is_empty(),
+                    "Native-owned candidate must never reach legacy for {method} {path}"
+                );
+                if baseline.1.is_empty() {
+                    assert_eq!(candidate.0,baseline.0,"Envoy-handled alias preserves response bytes and relevant headers for {method} {path}");
+                } else {
+                    assert_ne!(
+                        candidate.0["status"], 503,
+                        "Healthy native owner cannot be unavailable for {method} {path}"
+                    );
+                }
             }
         }
         let probe = "synthetic-generic-health-route";

@@ -107,8 +107,10 @@ impl PresentationPolicyServiceConfig {
             "TRUST_PROFILE_SERVICE_URL",
         )?;
         let issuance_url = service_url(
-            value(&values, "ISSUANCE_SERVICE_URL").unwrap_or("http://issuance:8005"),
-            "ISSUANCE_SERVICE_URL",
+            value(&values, "ISSUANCE_NATIVE_SERVICE_URL")
+                .or_else(|| value(&values, "ISSUANCE_SERVICE_URL"))
+                .unwrap_or("http://issuance-native:8005"),
+            "ISSUANCE_NATIVE_SERVICE_URL",
         )?;
         let credential_status_url_template = value(&values, "MIP_CREDENTIAL_STATUS_URL_TEMPLATE")
             .map(str::to_owned)

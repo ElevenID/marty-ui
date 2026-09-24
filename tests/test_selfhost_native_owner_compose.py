@@ -38,6 +38,11 @@ def models():
                     "ENVIRONMENT": "production",
                     "BAO_ADDR": "legacy",
                     "TOKEN_HMAC_KEY_FILE": "/run/secrets/token",
+                    **{
+                        key: value
+                        for key, value in GATE["PUBLICATION_SETTINGS"].items()
+                        if key not in GATE["SHARED_ADDITIONS"]
+                    },
                 },
                 "secrets": [{"source": "token"}, {"source": "openbao_service_token"}],
             },
@@ -65,10 +70,9 @@ def models():
         "ENVIRONMENT": "production",
         "TOKEN_HMAC_KEY_FILE": "/run/secrets/token",
         **GATE["SHARED_SETTINGS"],
+        **GATE["PUBLICATION_SETTINGS"],
     }
-    after["services"]["issuance"]["environment"].update(
-        GATE["SHARED_ADDITIONS"]
-    )
+    after["services"]["issuance"]["environment"].update(GATE["SHARED_ADDITIONS"])
     after["services"]["gateway"]["environment"].update(
         ISSUANCE_NATIVE_SERVICE_URL="http://issuance-native:8005",
         GATEWAY_REQUIRED_READY_SERVICES=GATE["READY"],
@@ -90,6 +94,7 @@ def models():
             "ENVIRONMENT": "production",
             "TOKEN_HMAC_KEY_FILE": "/run/secrets/token",
             **GATE["SHARED_SETTINGS"],
+            **GATE["PUBLICATION_SETTINGS"],
             "SERVICE_NAME": "issuance_native",
             "ISSUANCE_GRPC_ENABLED": "true",
             "RP_GRPC_TARGET": "revocation-profile:9013",
@@ -211,9 +216,25 @@ def test_authorization_settings_are_shared_without_weakening_model_closure(
     if fault == "shared":
         after["x-issuance-application-env"].pop(setting)
     else:
-        after["services"][
-            "issuance" if fault == "legacy" else "issuance-native"
-        ]["environment"][setting] = "changed"
+        after["services"]["issuance" if fault == "legacy" else "issuance-native"][
+            "environment"
+        ][setting] = "changed"
+    with pytest.raises((AssertionError, KeyError)):
+        GATE["assert_models"](before, after)
+
+
+@pytest.mark.parametrize("setting", sorted(GATE["PUBLICATION_SETTINGS"]))
+@pytest.mark.parametrize("fault", ["shared", "legacy", "native"])
+def test_canvas_credentials_publication_controls_are_shared_and_closed(
+    models, setting, fault
+):
+    before, after = models
+    if fault == "shared":
+        after["x-issuance-application-env"].pop(setting)
+    else:
+        after["services"]["issuance" if fault == "legacy" else "issuance-native"][
+            "environment"
+        ][setting] = "hostile-mismatch"
     with pytest.raises((AssertionError, KeyError)):
         GATE["assert_models"](before, after)
 

@@ -268,11 +268,20 @@ def binaries():
 
 @pytest.mark.parametrize(
     "case",
-    ["canonical", "mirror", "missing", "mutable", "wrong-digest", "private-input"],
+    [
+        "canonical",
+        "mirror",
+        "missing",
+        "mutable",
+        "wrong-digest",
+        "private-input",
+        "missing-services",
+        "mutable-services",
+        "misbound-services",
+        "disabled-recovery",
+    ],
 )
-def test_actual_full_deploy_validates_once_before_any_write_and_renders_same_pin(
-    case, tmp_path
-):
+def test_actual_full_deploy_validates_distinct_images_before_any_write(case, tmp_path):
     bash, envsubst = binaries()
     # No operator environment is inherited, and PATH cannot find real kubectl.
     env = {
@@ -291,14 +300,29 @@ def test_actual_full_deploy_validates_once_before_any_write_and_renders_same_pin
         "WRITES": (tmp_path / "writes").as_posix(),
         "RENDERED": (tmp_path / "rendered").as_posix(),
         "VALIDATIONS": (tmp_path / "validations").as_posix(),
+        "ROLLOUTS": (tmp_path / "rollouts").as_posix(),
+        "K8S_NATIVE_ISSUANCE_BIN": "synthetic_native_issuance",
     }
-    selected = canonical() if case == "canonical" else mirror()
+    selected = canonical() if case in {"canonical", "disabled-recovery"} else mirror()
     if case != "missing":
         env["MARTY_ISSUANCE_IMAGE"] = {
             "mutable": "registry.example/image:latest",
             "wrong-digest": "registry.example/image@sha256:" + "e" * 64,
             "private-input": PRIVATE,
         }.get(case, selected)
+    services_image = (
+        "ghcr.io/elevenid/services@sha256:" + "a" * 64
+        if case == "canonical"
+        else "ghcr.io/elevenid-mirror/services@sha256:" + "b" * 64
+    )
+    if case not in {"missing-services", "disabled-recovery"}:
+        env["MARTY_SERVICES_IMAGE"] = {
+            "mutable-services": "ghcr.io/elevenid/services:latest",
+            "misbound-services": selected,
+        }.get(case, services_image)
+    if case == "disabled-recovery":
+        env["K8S_ISSUANCE_NATIVE_ENABLED"] = "false"
+        env["K8S_NATIVE_ISSUANCE_BIN"] = "/nonexistent-unused-native-renderer"
     if os.name == "nt":
         env["SystemRoot"] = os.environ["SystemRoot"]
     prelude = r"""
@@ -316,6 +340,21 @@ cmd_setup_secrets() { printf 'setup-secrets\n' >> "$WRITES"; }
 resolve_secret_input() { [[ $# == 1 && "$1" == CLOUDFLARE_TUNNEL_TOKEN ]] || return 93; printf ''; }
 is_placeholder_secret() { [[ -z "$1" ]]; }
 envsubst() { [[ $# == 0 ]] || return 94; "$REAL_ENVSUBST"; }
+synthetic_native_issuance() {
+  case "$1" in
+    validate)
+      printf 'native-validate\n' >> "$VALIDATIONS"
+      [[ ${MARTY_SERVICES_IMAGE-} == ghcr.io/elevenid*/services@sha256:* ]] || return 102
+      [[ "$MARTY_SERVICES_IMAGE" != "$MARTY_ISSUANCE_IMAGE" ]] || return 102 ;;
+    render)
+      # Keep this shell harness focused on deploy ordering and image bindings.
+      # The Rust renderer's full manifest model has its own contract tests.
+      while IFS= read -r line || [[ -n "$line" ]]; do printf '%s\n' "$line"; done
+      printf '\n---\nkind: Deployment\nmetadata:\n  name: issuance-native\nspec:\n  template:\n    spec:\n      containers:\n      - name: issuance-native\n        image: %s\n' "$MARTY_SERVICES_IMAGE"
+      printf '\n---\nkind: Deployment\nmetadata:\n  name: signing-keys\nspec:\n  template:\n    spec:\n      containers:\n      - name: signing-keys\n        image: %s\n' "$MARTY_SERVICES_IMAGE" ;;
+    *) return 101 ;;
+  esac
+}
 kubectl() {
   case "$1:$2" in
     create:configmap)
@@ -328,7 +367,8 @@ kubectl() {
       printf '\n---\n' >> "$RENDERED"
       while IFS= read -r line || [[ -n "$line" ]]; do printf '%s\n' "$line" >> "$RENDERED"; done ;;
     rollout:status)
-      case "$3" in statefulset/postgres|statefulset/redis|statefulset/rabbitmq|deployment/keycloak|deployment/gateway|deployment/auth|deployment/ui) ;; *) return 97 ;; esac ;;
+      case "$3" in statefulset/postgres|statefulset/redis|statefulset/rabbitmq|deployment/keycloak|deployment/gateway|deployment/auth|deployment/ui|deployment/signing-keys|deployment/issuance-native) ;; *) return 97 ;; esac
+      printf '%s\n' "$3" >> "$ROLLOUTS" ;;
     delete:job)
       case "$3" in revocation-profile-migrations|db-migrate|issuance-migrations) ;; *) return 98 ;; esac
       printf 'delete-job\n' >> "$WRITES" ;;
@@ -337,7 +377,7 @@ kubectl() {
     *) printf 'UNEXPECTED-KUBECTL\n' >> "$WRITES"; return 100 ;;
   esac
 }
-readonly -f kubectl checked_python envsubst
+readonly -f kubectl checked_python envsubst synthetic_native_issuance
 """
     program = (
         prelude
@@ -362,9 +402,12 @@ readonly -f kubectl checked_python envsubst
         timeout=20,
         check=False,
     )
-    assert (tmp_path / "validations").read_text().splitlines() == ["validate"]
+    expected_validations = ["validate"]
+    if case in {"canonical", "mirror", "missing-services", "mutable-services", "misbound-services"}:
+        expected_validations.append("native-validate")
+    assert (tmp_path / "validations").read_text().splitlines() == expected_validations
     assert PRIVATE not in result.stdout + result.stderr
-    if case not in {"canonical", "mirror"}:
+    if case not in {"canonical", "mirror", "disabled-recovery"}:
         assert result.returncode != 0
         assert not (tmp_path / "writes").exists()
         assert not (tmp_path / "rendered").exists()
@@ -373,19 +416,89 @@ readonly -f kubectl checked_python envsubst
     writes = (tmp_path / "writes").read_text().splitlines()
     assert writes[0] == "apply"  # Namespace is the first write, after validation.
     assert set(writes) == {"apply", "setup-secrets", "create-configmap", "delete-job"}
-    rendered = [
+    documents = [
         item for item in yaml.safe_load_all((tmp_path / "rendered").read_text()) if item
+    ]
+    rendered = [
+        nested
+        for document in documents
+        for nested in (
+            document["items"] if document.get("kind") == "List" else [document]
+        )
     ]
     api = next(
         item
         for item in rendered
         if item.get("kind") == "Deployment" and item["metadata"]["name"] == "issuance"
     )
+    if case == "disabled-recovery":
+        assert not any(
+            item.get("kind") == "Deployment"
+            and item["metadata"]["name"] in {"issuance-native", "signing-keys"}
+            for item in rendered
+        )
+        rollouts = (tmp_path / "rollouts").read_text().splitlines()
+        assert "deployment/issuance-native" not in rollouts
+        assert "deployment/signing-keys" not in rollouts
+        common = next(
+            item
+            for item in rendered
+            if item.get("kind") == "ConfigMap"
+            and item["metadata"]["name"] == "marty-config"
+        )
+        assert common["data"]["ISSUANCE_SERVICE_URL"] == "http://issuance:8005"
+        assert (
+            common["data"]["ISSUANCE_NATIVE_SERVICE_URL"]
+            == common["data"]["ISSUANCE_SERVICE_URL"]
+        )
+        deployments = {
+            item["metadata"]["name"]: item
+            for item in rendered
+            if item.get("kind") == "Deployment"
+        }
+
+        def env_by_name(name):
+            return {
+                entry["name"]: entry
+                for entry in deployments[name]["spec"]["template"]["spec"][
+                    "containers"
+                ][0]["env"]
+            }
+
+        for name in ("auth", "applicant", "presentation-policy"):
+            assert (
+                env_by_name(name)["ISSUANCE_NATIVE_SERVICE_URL"]["valueFrom"][
+                    "configMapKeyRef"
+                ]["key"]
+                == "ISSUANCE_NATIVE_SERVICE_URL"
+            )
+        flow = env_by_name("flow")
+        assert flow["ISSUANCE_SERVICE_URL"]["valueFrom"]["configMapKeyRef"]["key"] == (
+            "ISSUANCE_SERVICE_URL"
+        )
+        assert (
+            flow["ISSUANCE_NATIVE_SERVICE_URL"]["valueFrom"]["configMapKeyRef"]["key"]
+            == "ISSUANCE_NATIVE_SERVICE_URL"
+        )
+        assert flow["ISSUANCE_GRPC_TARGET"]["value"] == "issuance:9005"
+        return
+    native = next(
+        item
+        for item in rendered
+        if item.get("kind") == "Deployment"
+        and item["metadata"]["name"] == "issuance-native"
+    )
     migration = next(
         item
         for item in rendered
         if item.get("kind") == "Job"
         and item["metadata"]["name"] == "issuance-migrations"
+    )
+    signing = next(
+        item
+        for item in rendered
+        if item.get("kind") == "Deployment"
+        and item["metadata"]["name"] == "signing-keys"
     )
     worker = next(
         item
@@ -398,6 +511,8 @@ readonly -f kubectl checked_python envsubst
         return item["spec"]["template"]["spec"]["containers"][0]
 
     assert container(api)["image"] == container(migration)["image"] == selected
+    assert container(native)["image"] == container(signing)["image"] == services_image
+    assert services_image != selected
     assert container(migration)["command"] == [
         "python",
         "manage_migrations.py",

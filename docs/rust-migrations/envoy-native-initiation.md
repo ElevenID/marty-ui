@@ -1,35 +1,35 @@
-# Opt-in Envoy native initiation
+# Default Envoy native issuance
 
-This source change selects only initiation. It does not deploy anything, remove
-Python, change authentication policy, or certify an immutable release artifact.
-The canonical `config/envoy/envoy.yaml` and default Compose model remain intact.
+The canonical source now selects the complete migrated twelve-method issuance
+gRPC surface. The historical renderer evidence below began with initiation and
+remains useful provenance. This does not deploy anything, remove Python, change
+authentication policy, or certify an immutable release artifact. Canonical
+`config/envoy/envoy.yaml` targets `issuance-native:9005`; Python remains in the
+default Compose model for its eleven HTTP-only routes.
 
 ## Configuration owner
 
-The existing Rust deployment-tooling crate provides
+The existing Rust deployment-tooling crate still provides
 `render-envoy-native-issuance BASE_YAML PROTO_DESCRIPTOR`. It emits bounded
 JSON-compatible YAML on stdout; the caller owns output publication. Inputs must
 be regular files, are limited to 1 MiB, and malformed/ambiguous source topology or
 a descriptor differing from the tool's compiled source is rejected. Output is
 also bounded. JSON encoding deliberately preserves scalar numbers under Cargo
 feature unification with `serde_json/arbitrary_precision`; cross-serializing
-JSON values directly with the YAML serializer did not do so.
+JSON values directly with the YAML serializer did not do so. The renderer now
+validates an already-native canonical model idempotently, while preserving its
+ability to upgrade a reviewed historical legacy model. It requires one native
+HTTP/2 cluster at `issuance-native:9005` and the exact gRPC/transcoded issuance
+prefixes; ambiguous clusters, shadowing matchers, weakened HTTP/2/health
+configuration, or a legacy endpoint under the native name fail closed. Generic
+health/reflection routing, filters, timeouts, access logging and unrelated
+clusters remain unchanged. No service token is injected: existing caller
+`x-service-token` authentication remains required by the native owner.
 
-Exactly two POST-qualified routes precede the existing legacy prefixes:
-
-- `/marty.ui.issuance.v1.IssuanceService/InitiateIssuance`
-- `/v1/issuance/initiate`
-
-Both use the separate `issuance_native_grpc` HTTP/2 cluster at
-`issuance-native:9005`. Its transport and canonical service-health settings derive
-from the existing issuance cluster. The other eleven RPC methods, their ten HTTP
-annotations, generic health/reflection routing, filters, timeouts, access logging
-and all unrelated clusters are unchanged. No service token is injected: existing
-caller `x-service-token` authentication remains required by the native owner.
-
-Select the generated file explicitly through `MARTY_ENVOY_NATIVE_CONFIG` and
-`docker-compose.profile.envoy-native-issuance.yml`, after the existing opt-in
-native issuance profile. The override changes only Envoy's read-only config bind
+Deployment-specific generated files may still be selected through
+`MARTY_ENVOY_NATIVE_CONFIG` and
+`docker-compose.profile.envoy-native-issuance.yml`. The override changes only
+Envoy's read-only config bind
 (`create_host_path: false`) and adds native readiness as a dependency. It retains
 the canonical descriptor mount, legacy dependency, image, ports and environment.
 Missing/empty selectors fail Compose rendering. Compose model checks do not
@@ -68,10 +68,10 @@ actual tonic gRPC and gRPC-web. Native unavailability must not fall back to lega
 This full Linux composition cannot be claimed from Windows compilation or the
 supplementary image-only gate; hosted execution remains required.
 
-The legacy and auth-health endpoints are explicitly counted transport controls,
-not replacements for legacy business acceptance. All eleven sibling RPCs and
-ten annotated HTTP endpoints must still reach the legacy control; the stream
-requires its first message and successful terminal status. Baseline/candidate
+The derived legacy reference and auth-health endpoints are explicitly counted
+transport controls, not product ownership. All twelve RPCs and their annotated
+HTTP endpoints must reach native in the candidate; the stream requires its first
+message and successful terminal status. Baseline/candidate
 comparisons cover method, lookalike/encoded path and CORS boundaries using whole
 response bytes, relevant headers and request-attempt vectors. If actual Envoy
 normalizes an encoded URL into initiation, its decoded baseline request identifies

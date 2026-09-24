@@ -18,6 +18,14 @@ pub mod store;
 pub const MAX_EVIDENCE_BYTES: usize = 10 * 1024 * 1024;
 pub const LOCK_TTL_SECONDS: i64 = 300;
 
+#[must_use]
+pub fn select_issuance_service_url(native: Option<String>, legacy: Option<String>) -> String {
+    native
+        .filter(|value| !value.trim().is_empty())
+        .or_else(|| legacy.filter(|value| !value.trim().is_empty()))
+        .unwrap_or_else(|| "http://issuance-native:8005".into())
+}
+
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "SCREAMING_SNAKE_CASE")]
 pub enum LifecycleStatus {

@@ -115,7 +115,7 @@ async fn connect_providers(
     runtime.mark_healthy(FlowDependency::PhysicalIssuance)?;
 
     let references = Arc::new(HttpFlowReferenceProvider::new(
-        &config.issuance_url,
+        &config.issuance_native_url,
         required_secret(&config.issuance_api_key, "issuance API key")?,
         &config.credential_template_url,
         &config.trust_profile_url,

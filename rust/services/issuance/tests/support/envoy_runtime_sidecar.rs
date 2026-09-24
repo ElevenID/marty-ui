@@ -91,6 +91,43 @@ fn is_fixture_peer(cluster: &Value) -> bool {
     )
 }
 
+fn legacy_reference(native: &Value) -> Result<Value, String> {
+    let mut legacy = native.clone();
+    let clusters = legacy["static_resources"]["clusters"]
+        .as_array_mut()
+        .ok_or("Envoy clusters missing from legacy reference")?;
+    let matches: Vec<_> = clusters
+        .iter_mut()
+        .filter(|cluster| cluster["name"] == NATIVE_CLUSTER)
+        .collect();
+    require(
+        matches.len() == 1,
+        "Envoy native cluster is ambiguous in legacy reference",
+    )?;
+    let cluster = matches.into_iter().next().unwrap();
+    cluster["name"] = json!("issuance_grpc");
+    cluster["load_assignment"]["cluster_name"] = json!("issuance_grpc");
+    cluster["load_assignment"]["endpoints"][0]["lb_endpoints"][0]["endpoint"]["address"]
+        ["socket_address"]["address"] = json!("issuance");
+
+    let routes = legacy["static_resources"]["listeners"][0]["filter_chains"][0]["filters"][0]
+        ["typed_config"]["route_config"]["virtual_hosts"][0]["routes"]
+        .as_array_mut()
+        .ok_or("Envoy routes missing from legacy reference")?;
+    for prefix in ["/marty.ui.issuance.v1.IssuanceService/", "/v1/issuance/"] {
+        let matches: Vec<_> = routes
+            .iter_mut()
+            .filter(|route| route["match"]["prefix"] == prefix)
+            .collect();
+        require(
+            matches.len() == 1,
+            "Envoy issuance route is ambiguous in legacy reference",
+        )?;
+        matches.into_iter().next().unwrap()["route"]["cluster"] = json!("issuance_grpc");
+    }
+    Ok(legacy)
+}
+
 fn fixture_projection(candidate: &Value, selection: Selection) -> Value {
     let mut fixture = candidate.clone();
     for cluster in fixture["static_resources"]["clusters"]
@@ -238,7 +275,7 @@ impl OwnedEnvoy {
         let candidate = render(&base, &descriptor_bytes)?;
         let selected_model = match selection {
             Selection::Candidate => candidate,
-            Selection::Baseline => parse(&base)?,
+            Selection::Baseline => legacy_reference(&candidate)?,
         };
         let fixture = encode(&fixture_projection(&selected_model, selection))?;
         // Match the existing wallet fixture's boundary: canonicalize to verify
@@ -565,7 +602,7 @@ fn fixture_projection_preserves_every_field_except_fixture_socket_and_cadence() 
         let selected = if selection == Selection::Candidate {
             candidate.clone()
         } else {
-            parse(base).unwrap()
+            legacy_reference(&candidate).unwrap()
         };
         let mut changed = fixture_projection(&selected, selection);
         for cluster in changed["static_resources"]["clusters"]

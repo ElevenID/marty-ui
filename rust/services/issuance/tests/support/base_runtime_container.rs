@@ -34,6 +34,7 @@ const ASSETS: &[&str] = &[
     "docker-compose.service.issuance-native-runtime.yml",
     "docker-compose.service.issuance-native.yml",
     "rust/services/issuance/src/config.rs",
+    "rust/services/issuance/src/canvas_credentials_publication.rs",
     "rust/services/gateway/src/config.rs",
     "scripts/render_base_native_runtime_fixture.py",
     "scripts/test_base_native_issuance_compose.py",
@@ -876,8 +877,8 @@ mod tests {
         ] {
             assert!(completed(&status, SENTINEL).is_err());
         }
-        assert_eq!(ASSETS.len(), 18);
-        assert_eq!(ASSETS.iter().collect::<BTreeSet<_>>().len(), 18);
+        assert_eq!(ASSETS.len(), 19);
+        assert_eq!(ASSETS.iter().collect::<BTreeSet<_>>().len(), 19);
         assert_eq!(kubernetes_source_assets().unwrap().len(), 7);
     }
 }

@@ -1,4 +1,4 @@
-"""Read-only general-base opt-in configuration gate; never runtime acceptance.
+"""Read-only default-base native configuration gate; never runtime acceptance.
 
 Only actual Compose rendering and synthetic inputs are used. No daemon, policy
 contents, operator env file, image pull, container or deployment is accessed.
@@ -40,13 +40,18 @@ NATIVE_ONLY = {
     "MARTY_UI_SHA": "${MARTY_UI_SHA:-unknown}",
     "RUST_LOG": "${ISSUANCE_NATIVE_RUST_LOG:-info}",
 }
+CANVAS_PUBLICATION_INPUTS = {
+    "CANVAS_CREDENTIALS_ASSERTION_URL_TEMPLATE": "${CANVAS_CREDENTIALS_ASSERTION_URL_TEMPLATE:-}",
+    "CANVAS_CREDENTIALS_ASSERTION_NARRATIVE": "${CANVAS_CREDENTIALS_ASSERTION_NARRATIVE:-}",
+    "CANVAS_CREDENTIALS_PROVENANCE_BASE_URL": "${CANVAS_CREDENTIALS_PROVENANCE_BASE_URL:-}",
+    "CANVAS_CREDENTIALS_RECIPIENT_HASHED": "${CANVAS_CREDENTIALS_RECIPIENT_HASHED:-true}",
+    "CANVAS_CREDENTIALS_ALLOW_DUPLICATE_AWARDS": "${CANVAS_CREDENTIALS_ALLOW_DUPLICATE_AWARDS:-false}",
+}
 # Exact base legacy-only settings remain on the old owner; no wildcard copying
 # of KMS/physical-document/worker secrets into the partial native owner.
 LEGACY_ONLY = frozenset(
     """
-BAO_ADDR BAO_TOKEN CANVAS_CREDENTIALS_ALLOW_DUPLICATE_AWARDS
-CANVAS_CREDENTIALS_PROVENANCE_BASE_URL CANVAS_CREDENTIALS_RECIPIENT_HASHED
-CANVAS_CREDENTIAL_ISSUER_PROFILE_IDS CANVAS_LTI_TOOL_ACTIVE_KID
+BAO_ADDR BAO_TOKEN CANVAS_CREDENTIAL_ISSUER_PROFILE_IDS CANVAS_LTI_TOOL_ACTIVE_KID
 CANVAS_LTI_TOOL_PUBLIC_JWKS ICAO_DOCUMENT_SIGNER_API_KEY ICAO_DOCUMENT_SIGNER_URL
 PERSONALIZATION_BUREAU_API_KEY
 PERSONALIZATION_BUREAU_URL PERSONALIZATION_BUREAU_WEBHOOK_SECRET
@@ -97,15 +102,29 @@ def assert_sources(base, profile, runtime):
     legacy = base["services"]["issuance"]["environment"]
     native = profile["services"]["issuance-native"]
     env = native["environment"]
-    assert set(legacy) - set(env) == LEGACY_ONLY
-    assert set(env) - set(legacy) == set(NATIVE_ONLY)
+    owner_selection = {"DIDCOMM_DELIVERY_OWNER", "ISSUANCE_NATIVE_SERVICE_URL"}
+    assert set(legacy) - set(env) - owner_selection == LEGACY_ONLY
+    assert set(env) - set(legacy) == set(NATIVE_ONLY) - {"GRPC_SERVICE_TOKEN"}
     assert {key: env[key] for key in NATIVE_ONLY} == NATIVE_ONLY
     for key in set(env) & set(legacy):
         assert env[key] == legacy[key], "Native expression changed legacy precedence"
-    assert (
+    publication_source = (
+        ROOT / "rust/services/issuance/src/canvas_credentials_publication.rs"
+    ).read_text(encoding="utf-8")
+    for key, expression in CANVAS_PUBLICATION_INPUTS.items():
+        assert key in publication_source, f"Native publication no longer reads {key}"
+        assert env.get(key) == expression, f"Native publication input {key} is unbound"
+        assert legacy.get(key) == expression, (
+            f"Base publication input {key} is unpaired"
+        )
+    for name in NATIVE["TOKEN_CONSUMERS"]:
+        assert (
+            base["services"][name]["environment"].get("GRPC_SERVICE_TOKEN")
+            == (NATIVE_ONLY["GRPC_SERVICE_TOKEN"])
+        ), f"Base token is not paired for {name}"
+    assert base["services"]["gateway"]["environment"][
         "GATEWAY_REQUIRED_READY_SERVICES"
-        not in base["services"]["gateway"]["environment"]
-    )
+    ] == ",".join([*readiness_default(), "issuance-native"])
     edge = profile["services"]["gateway"]
     assert edge["environment"] == {
         "GRPC_SERVICE_TOKEN": base["services"]["auth"]["environment"][
@@ -175,7 +194,12 @@ def expected_model(baseline, *, local, authcrypt, inputs, policy_directory):
         inputs.get("GRPC_SERVICE_TOKEN")
         or "dev-grpc-service-token-change-before-production"
     )
-    env = {key: value for key, value in legacy.items() if key not in LEGACY_ONLY}
+    owner_selection = {"DIDCOMM_DELIVERY_OWNER", "ISSUANCE_NATIVE_SERVICE_URL"}
+    env = {
+        key: value
+        for key, value in legacy.items()
+        if key not in LEGACY_ONLY | owner_selection
+    }
     env.update(
         {
             "GRPC_SERVICE_TOKEN": token,
@@ -288,7 +312,7 @@ def assert_model(baseline, actual, *, local, authcrypt, inputs, policy_directory
         policy_directory=policy_directory,
     )
     assert actual == expected, (
-        "Native opt-in changed an unowned field or required binding"
+        "Native compatibility overlay changed an unowned field or required binding"
     )
     POLICY["validate_model"](actual, authcrypt_enabled=authcrypt)
     assert (
@@ -323,6 +347,16 @@ def files(*, native, local, authcrypt):
         if authcrypt:
             result.append(ROOT / POLICY_PROFILE)
     return result
+
+
+def assert_default_base_token_pairing(model, token):
+    """The universal base owner and every authenticated peer share one token."""
+    for name in ("issuance-native", *NATIVE["TOKEN_CONSUMERS"]):
+        environment = model["services"][name]["environment"]
+        assert environment["GRPC_SERVICE_TOKEN"] == token, (
+            f"Rendered default-base token is not paired for {name}"
+        )
+        assert "GRPC_SERVICE_TOKEN_FILE" not in environment
 
 
 def run(command):
@@ -389,6 +423,11 @@ def run(command):
                     command,
                     *files(native=False, local=local, authcrypt=False),
                     project=PROJECT,
+                )
+                assert_default_base_token_pairing(
+                    baseline,
+                    inputs.get("GRPC_SERVICE_TOKEN")
+                    or "dev-grpc-service-token-change-before-production",
                 )
                 for authcrypt in (False, True):
                     actual = BIND["render_binding"](

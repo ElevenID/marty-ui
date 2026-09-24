@@ -376,6 +376,11 @@ pub(super) async fn run(database_url: &str, redis_url: &str) {
     assert_eq!(environment["ENVIRONMENT"], "development");
     assert_eq!(environment["ISSUANCE_GRPC_TARGET"], native.origin());
     assert_eq!(environment["ISSUANCE_SERVICE_URL"], peers.url("legacy"));
+    assert_eq!(
+        environment["ISSUANCE_NATIVE_SERVICE_URL"],
+        "http://issuance-native:8005"
+    );
+    environment.insert("ISSUANCE_NATIVE_SERVICE_URL".into(), peers.url("native"));
     // Closed test endpoint rebinding; every original configured owner is checked.
     for (name, original, role) in [
         ("ORG_GRPC_TARGET", "organization:9002", "organization"),

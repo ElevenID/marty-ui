@@ -62,6 +62,7 @@ pub struct FlowServiceConfig {
     pub deployment_profile_url: String,
     pub signing_keys_api_key: Option<String>,
     pub issuance_url: String,
+    pub issuance_native_url: String,
     pub issuance_api_key: Option<String>,
     pub service_token: Option<String>,
     pub webhook_secret: Option<String>,
@@ -171,6 +172,7 @@ impl fmt::Debug for FlowServiceConfig {
                 &redacted(&self.signing_keys_api_key),
             )
             .field("issuance_url", &self.issuance_url)
+            .field("issuance_native_url", &self.issuance_native_url)
             .field("issuance_api_key", &redacted(&self.issuance_api_key))
             .field("service_token", &redacted(&self.service_token))
             .field("webhook_secret", &redacted(&self.webhook_secret))
@@ -411,6 +413,20 @@ impl FlowServiceConfig {
             Some("http://issuance:8006"),
             environment,
         )?;
+        let issuance_native_url = if value(&values, "ISSUANCE_NATIVE_SERVICE_URL").is_some() {
+            service_url(&values, "ISSUANCE_NATIVE_SERVICE_URL", None, environment)?
+        } else if environment == Environment::Production {
+            // Production remains on its configured legacy HTTP owner until the
+            // aggregate beta acceptance explicitly authorizes a later cutover.
+            issuance_url.clone()
+        } else {
+            service_url(
+                &values,
+                "ISSUANCE_NATIVE_SERVICE_URL",
+                Some("http://issuance-native:8005"),
+                environment,
+            )?
+        };
 
         let service_token = optional_secret(&values, "GRPC_SERVICE_TOKEN", environment)?;
         let webhook_secret = optional_secret(&values, "FLOW_WEBHOOK_SECRET", environment)?;
@@ -483,6 +499,7 @@ impl FlowServiceConfig {
             deployment_profile_url,
             signing_keys_api_key,
             issuance_url,
+            issuance_native_url,
             issuance_api_key,
             service_token,
             webhook_secret,

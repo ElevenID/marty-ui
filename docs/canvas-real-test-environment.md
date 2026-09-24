@@ -55,7 +55,7 @@ The seeder script lives at:
 
 By default it will:
 
-1. Upsert an ElevenID Canvas platform via `http://localhost:8005/v1/integrations/canvas/platforms`
+1. Upsert an ElevenID Canvas platform through the gateway at `http://localhost:8000/v1/integrations/canvas/platforms`
 2. Sync Canvas's real LTI `client_id` and `deployment_id` back onto the platform.
 3. Refresh platform JWKS/OIDC metadata via `POST /v1/integrations/canvas/platforms/{id}/jwks-refresh`
 4. Upsert a Canvas program binding for the Marty organization when `CANVAS_PROGRAM_BINDING_SEED_ENABLED=true`
@@ -70,7 +70,9 @@ By default it will:
 
 Minimum env vars for Canvas platform/binding seeding:
 
-- `ISSUANCE_API_KEY` (required)
+- `MARTY_API_KEY` (required organization actor key; grant the documented Canvas integration/application/credential scopes)
+- `MARTY_API_BASE_URL` (gateway URL; default: `http://localhost:8000`)
+- `ISSUANCE_INTERNAL_API_BASE_URL` and `ISSUANCE_API_KEY` (required only while `CANVAS_DEMO_APPLICATION_SEED_ENABLED=true`; direct service boundary for the internal demo-application operation, never the gateway URL)
 - `CANVAS_ORGANIZATION_ID` (default: Marty org)
 - `CANVAS_CREDENTIAL_TEMPLATE_ID` (default: Interoperable Credentials Foundations Badge when `CANVAS_OPEN_BADGE_SCENARIO_ENABLED=true`; otherwise Verified Member Badge)
 - `CANVAS_APPLICATION_TEMPLATE_ID` (default: Interoperable Credentials Foundations Application when `CANVAS_OPEN_BADGE_SCENARIO_ENABLED=true`; otherwise Verified Member Badge application template)

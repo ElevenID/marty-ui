@@ -1,0 +1,52 @@
+{
+  "schema": "marty.issuance-http-consumer-ownership/v1",
+  "native_environment": "ISSUANCE_NATIVE_SERVICE_URL",
+  "legacy_environment": "ISSUANCE_SERVICE_URL",
+  "consumers": {
+    "auth": {
+      "native": ["GET /v1/integrations/canvas/lti/experience-sessions/current"],
+      "legacy": [],
+      "authentication": "bearer",
+      "tenant_binding": "organization derived from the validated bearer session"
+    },
+    "applicant": {
+      "native": [
+        "GET /v1/application-templates/{id}",
+        "GET /v1/issued-credentials",
+        "GET /v1/issuance/transactions/{id}"
+      ],
+      "legacy": [],
+      "authentication": "x-api-key",
+      "tenant_binding": {
+        "application_template": "response organization is validated by application workflow",
+        "issued_credentials": "x-organization-id header and organization_id query",
+        "issuance_transaction": "x-organization-id header from the persisted application"
+      }
+    },
+    "presentation-policy": {
+      "native": ["GET /v1/issuance/credentials/{credential_id}/status"],
+      "legacy": [],
+      "authentication": "x-api-key",
+      "tenant_binding": "x-organization-id header from authenticated verification context"
+    },
+    "flow": {
+      "native": ["GET /v1/application-templates/{id}", "GET /health"],
+      "legacy": [
+        "POST /v1/passport/applications",
+        "POST /v1/passport/applications/{application_id}/generate-data-groups",
+        "POST /v1/passport/applications/{application_id}/quality-verify",
+        "POST /v1/passport/applications/{application_id}/generate-sod",
+        "POST /v1/passport/applications/{application_id}/submit-personalization",
+        "GET /v1/passport/applications/{application_id}/production-status",
+        "POST /v1/passport/applications/{application_id}/activate",
+        "GET /health"
+      ],
+      "authentication": "x-api-key",
+      "tenant_binding": {
+        "application_template": "response organization is checked by the flow reference boundary",
+        "passport_initialize": "trusted organization_id in request body",
+        "passport_followups": "validated application_id returned by initialize"
+      }
+    }
+  }
+}

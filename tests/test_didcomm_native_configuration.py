@@ -64,9 +64,10 @@ def test_beta_initiation_consumer_selection_preserves_other_owners() -> None:
     gate = runpy.run_path(str(ROOT / "scripts/test_didcomm_native_compose.py"))
     gate["assert_initiation_consumer_bindings"](model)
     assert "ISSUANCE_SERVICE_URL" not in beta["services"]["flow"]["environment"]
-    assert base["services"]["flow"]["environment"]["ISSUANCE_GRPC_TARGET"] == (
-        "issuance:9005"
-    )
+    base_flow = base["services"]["flow"]["environment"]
+    assert base_flow["ISSUANCE_GRPC_TARGET"] == "issuance-native:9005"
+    assert base_flow["ISSUANCE_SERVICE_URL"] == "http://issuance:8005"
+    assert base_flow["ISSUANCE_NATIVE_SERVICE_URL"] == "http://issuance-native:8005"
     production = yaml.safe_load((ROOT / "docker-compose.selfhost.prod.yml").read_text())
     assert production["services"]["flow"]["environment"]["ISSUANCE_GRPC_TARGET"] == (
         "issuance-native:9005"
@@ -154,9 +155,7 @@ def test_native_conformance_trust_and_host_access_are_explicit() -> None:
     assert native["extra_hosts"] == ["host.docker.internal:host-gateway"]
 
 
-def test_native_profiles_are_not_implicitly_selected_by_release_or_legacy_conformance() -> (
-    None
-):
+def test_native_profiles_follow_the_explicit_conformance_owner() -> None:
     for path in (
         "docker-compose.base.yml",
         "docker-compose.selfhost.prod.yml",
@@ -168,7 +167,15 @@ def test_native_profiles_are_not_implicitly_selected_by_release_or_legacy_confor
         assert CONFORMANCE not in source
     stack = runpy.run_path(str(ROOT / "scripts/conformance_stack.py"))
     command = stack["compose_command"]("marty-conformance-reference")
-    assert all(AUTHCRYPT not in part and CONFORMANCE not in part for part in command)
+    assert all(AUTHCRYPT not in part for part in command)
+    assert sum(CONFORMANCE in part for part in command) == 1
+    legacy_command = stack["compose_command"](
+        "marty-conformance-reference",
+        issuance_owner="legacy",
+    )
+    assert all(
+        AUTHCRYPT not in part and CONFORMANCE not in part for part in legacy_command
+    )
     legacy = yaml.safe_load(
         (ROOT / "docker-compose.profile.didcomm-authcrypt.yml").read_text()
     )

@@ -190,6 +190,27 @@ async fn mirror(
     response
 }
 
+async fn publish_mirror(
+    State(state): State<Arc<RuntimeState>>,
+    headers: HeaderMap,
+    Json(body): Json<Value>,
+) -> axum::response::Response {
+    state.calls.lock().unwrap().push(json!({
+        "port": "automation_publish",
+        "body": body,
+        "authorization": headers
+            .get("authorization")
+            .and_then(|value| value.to_str().ok()),
+    }));
+    // This packaged test configures the bridge provider. Its response is a
+    // bridge credential_id, not a Badgr `result[].entityId` assertion.
+    Json(json!({
+        "credential_id": "automation-external",
+        "issuer_id": "issuer-elevenid"
+    }))
+    .into_response()
+}
+
 async fn publication_http(
     State(state): State<Arc<RuntimeState>>,
     headers: HeaderMap,
@@ -1642,6 +1663,7 @@ async fn start_dependencies(pool: &PgPool, responses: Responses) -> RuntimeDepen
     });
     let application = Router::new()
         .route("/status", post(mirror))
+        .route("/publish", post(publish_mirror))
         .route(
             "/revocation/internal/revocation-profiles/profile-review/process-revocation",
             post(publication_http),
@@ -1708,6 +1730,203 @@ pub async fn run_review_operations_main(pool: &PgPool, database_url: &str) {
         )
     })
     .await;
+}
+
+/// Prove the optional mirror scheduler is wired through the packaged issuance
+/// main, performs a real startup cycle, and joins during the process' graceful
+/// SIGTERM path. Route-local loop tests cannot establish this ownership.
+#[cfg(unix)]
+pub async fn run_canvas_mirror_automation_main_lifecycle(pool: &PgPool, database_url: &str) {
+    use super::issuance_process::{
+        bounded_http_client, isolated_smoke_command, reserve_port, wait_for_health_with_client,
+        ChildGuard,
+    };
+    use std::{io::Read, process::Stdio, time::Duration};
+
+    let database = url::Url::parse(database_url).unwrap();
+    assert!(database.path().ends_with("_test"));
+    let RuntimeDependencies {
+        state,
+        url,
+        stop,
+        server,
+        _cleanup,
+        ..
+    } = start_dependencies(pool, Responses::Baseline).await;
+    sqlx::query(
+        "UPDATE issuance_service.credential_delivery_records \
+         SET status='pending', external_credential_id=NULL, external_issuer_id=NULL, \
+             last_error=NULL, metadata=$1 \
+         WHERE id='delivery-provider' AND organization_id='org-review'",
+    )
+    .bind(json!({
+        "canvas_program_binding_id": "binding-review",
+        "automation_lifecycle_marker": true
+    }))
+    .execute(pool)
+    .await
+    .unwrap();
+
+    let (http_listener, http_port) = reserve_port();
+    let (grpc_listener, grpc_port) = reserve_port();
+    let mut command = isolated_smoke_command(http_port, grpc_port);
+    command
+        .env("DATABASE_URL", database_url)
+        .env("ISSUANCE_API_KEY", "synthetic-automation-key")
+        .env(
+            "GRPC_SERVICE_TOKEN",
+            "synthetic-main-service-token-at-least-32-bytes",
+        )
+        .env(
+            "INTEGRATION_SECRET_MASTER_KEY",
+            "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=",
+        )
+        .env("CANVAS_PORTABLE_INTEGRATION_ENABLED", "true")
+        .env("CANVAS_PILOT_ORGANIZATION_IDS", "org-review")
+        .env("CANVAS_CREDENTIALS_PROVIDER", "bridge")
+        .env(
+            "CANVAS_CREDENTIALS_API_TOKEN",
+            "synthetic-runtime-operator-token",
+        )
+        .env("CANVAS_CREDENTIALS_ISSUER_ID", "issuer-elevenid")
+        .env("CANVAS_CREDENTIALS_BADGECLASS_ID", "badge-review")
+        .env(
+            "CANVAS_CREDENTIALS_PUBLISH_URL",
+            url.replace("/status", "/publish"),
+        )
+        .env("CANVAS_CREDENTIALS_STATUS_SYNC_URL", &url)
+        .env("CANVAS_ALLOW_HTTP_LOCALHOST_BASE_URLS", "true")
+        .env("CANVAS_MIRROR_WORKER_ENABLED", "true")
+        .env("CANVAS_MIRROR_WORKER_ORGANIZATION_ID", "org-review")
+        .env("CANVAS_MIRROR_PUBLISH_INTERVAL_SECONDS", "3600")
+        .env("CANVAS_MIRROR_STATUS_SYNC_INTERVAL_SECONDS", "3600")
+        .env("CANVAS_MIRROR_WORKER_BATCH_LIMIT", "1")
+        .env("CANVAS_MIRROR_WORKER_RETRY_FAILED", "true")
+        .env("CANVAS_MIRROR_WORKER_RUN_ON_STARTUP", "true")
+        .env("RUST_LOG", "info,marty_issuance_service=info")
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+    drop((http_listener, grpc_listener));
+    let mut child = ChildGuard(
+        command
+            .spawn()
+            .expect("start packaged issuance automation process"),
+    );
+    let mut stdout_pipe = child.0.stdout.take().unwrap();
+    let stdout_reader = std::thread::spawn(move || {
+        let mut stdout = String::new();
+        stdout_pipe.read_to_string(&mut stdout).unwrap();
+        stdout
+    });
+    let client = bounded_http_client(Duration::from_secs(5));
+    let health = tokio::time::timeout(
+        Duration::from_secs(10),
+        wait_for_health_with_client(http_port, &client),
+    )
+    .await
+    .expect("packaged automation readiness deadline");
+    assert_eq!(
+        health,
+        Some(json!({"status":"healthy","service":"issuance-service"}))
+    );
+
+    let startup_cycle = tokio::time::timeout(Duration::from_secs(45), async {
+        loop {
+            let delivered: bool = sqlx::query_scalar(
+                "SELECT COALESCE(status='delivered' AND external_credential_id='automation-external', false) \
+                 FROM issuance_service.credential_delivery_records \
+                 WHERE id='delivery-provider' AND organization_id='org-review'",
+            )
+            .fetch_one(pool)
+            .await
+            .unwrap();
+            if delivered {
+                break;
+            }
+            assert!(
+                child.0.try_wait().unwrap().is_none(),
+                "packaged automation process exited before its startup cycle"
+            );
+            tokio::time::sleep(Duration::from_millis(50)).await;
+        }
+    })
+    .await;
+    if let Err(error) = startup_cycle {
+        let persisted = tokio::time::timeout(Duration::from_secs(5), async {
+            sqlx::query_as::<_, (String, Option<String>, Option<String>)>(
+                "SELECT status, external_credential_id, last_error \
+                 FROM issuance_service.credential_delivery_records \
+                 WHERE id='delivery-provider' AND organization_id='org-review'",
+            )
+            .fetch_one(pool)
+            .await
+        })
+        .await;
+        let _ = child.0.kill();
+        let _ = child.0.wait();
+        let stdout = stdout_reader.join().unwrap();
+        let mut stderr = String::new();
+        if let Some(mut pipe) = child.0.stderr.take() {
+            let _ = pipe.read_to_string(&mut stderr);
+        }
+        panic!(
+            "packaged automation startup cycle deadline: {error}; persisted={persisted:?}; calls={:?}; stdout={stdout}; stderr={stderr}",
+            *state.calls.lock().unwrap()
+        );
+    }
+    assert!(state.calls.lock().unwrap().iter().any(|call| {
+        call["port"] == "automation_publish"
+            && call["authorization"] == "Bearer synthetic-runtime-tenant-token"
+    }));
+
+    let signal = std::process::Command::new("kill")
+        .args(["-TERM", &child.0.id().to_string()])
+        .status()
+        .expect("send SIGTERM to packaged issuance process");
+    assert!(signal.success());
+    let status = tokio::time::timeout(Duration::from_secs(10), async {
+        loop {
+            if let Some(status) = child.0.try_wait().unwrap() {
+                break status;
+            }
+            tokio::time::sleep(Duration::from_millis(50)).await;
+        }
+    })
+    .await
+    .expect("packaged automation graceful shutdown deadline");
+    assert!(
+        status.success(),
+        "packaged issuance shutdown failed: {status}"
+    );
+    let stdout = stdout_reader.join().unwrap();
+    let mut stderr = String::new();
+    child
+        .0
+        .stderr
+        .take()
+        .unwrap()
+        .read_to_string(&mut stderr)
+        .unwrap();
+    let logs = format!("{stdout}\n{stderr}");
+    assert!(
+        logs.contains("Canvas mirror automation worker enabled"),
+        "missing worker startup log: {logs}"
+    );
+    assert!(
+        logs.contains("Canvas mirror publish worker cycle completed"),
+        "missing publish cycle log: {logs}"
+    );
+    assert!(
+        logs.contains("Issuance shutdown requested"),
+        "missing shutdown log: {logs}"
+    );
+
+    let _ = stop.send(());
+    tokio::time::timeout(Duration::from_secs(5), server)
+        .await
+        .unwrap()
+        .unwrap()
+        .unwrap();
 }
 
 pub(super) type ReviewTransportPorts = (

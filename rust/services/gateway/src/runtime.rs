@@ -490,6 +490,17 @@ async fn tenant_authorization_middleware(
             );
         }
     };
+    // Generic internal service routes authenticate with service credentials and
+    // are never part of the public gateway surface. The signing-key prefix is
+    // the sole explicit gateway-owned compatibility API; its dedicated handler
+    // replaces tenant scope and never enters the generic proxy. Falling through
+    // for any other internal path could inject a privileged upstream key after
+    // bypassing public route authorization.
+    if (parts.uri.path() == "/internal" || parts.uri.path().starts_with("/internal/"))
+        && !parts.uri.path().starts_with("/internal/signing-keys/")
+    {
+        return detail_response(404, "Route not found");
+    }
     // Public wallet protocol routes are deliberately tenant-authorization
     // skips.  Bypass owner resolution as well: resolving an instance owner
     // requires an authenticated service call and must never make a public
@@ -5946,6 +5957,36 @@ mod tests {
                 .headers
                 .values()
                 .all(|value| !value.contains("forged-")));
+        }
+    }
+
+    #[tokio::test]
+    async fn internal_service_routes_are_never_publicly_proxied() {
+        for path in [
+            "/internal",
+            "/internal/applications",
+            "/internal/applications/application-1/approve",
+        ] {
+            let (router, recorder) = actor_test_router();
+            let response = router
+                .oneshot(
+                    Request::builder()
+                        .method("POST")
+                        .uri(path)
+                        .header("content-type", "application/json")
+                        .header("x-api-key", "actor-key")
+                        .body(Body::from(
+                            r#"{"organization_id":"org-attacker","application_template_id":"template-1","applicant_data":{"organization_id":"org-attacker"}}"#,
+                        ))
+                        .unwrap(),
+                )
+                .await
+                .unwrap();
+            assert_eq!(response.status(), StatusCode::NOT_FOUND, "{path}");
+            assert!(
+                recorder.0.lock().unwrap().is_empty(),
+                "{path} must stop before privileged upstream credential injection"
+            );
         }
     }
 

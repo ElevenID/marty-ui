@@ -325,6 +325,10 @@ fn configured_factories_apply_workload_mtls_only_to_the_policy_provider() {
             "http://deployment-profile:8010".into(),
         ),
         ("ISSUANCE_SERVICE_URL".into(), "http://issuance:8005".into()),
+        (
+            "ISSUANCE_NATIVE_SERVICE_URL".into(),
+            "http://issuance-native:8005".into(),
+        ),
         ("GRPC_SERVICE_TOKEN".into(), "s".repeat(32)),
         ("FLOW_WEBHOOK_SECRET".into(), "w".repeat(32)),
         ("FLOW_APPLICATION_EVENT_HMAC_KEY".into(), "a".repeat(32)),

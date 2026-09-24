@@ -301,23 +301,29 @@ pub(super) async fn run(database_url: &str) {
     let before = snapshot(&pool).await;
     let base: BTreeMap<String, String> =
         serde_json::from_value(profiles["base"]["environment"].clone()).unwrap();
+    assert_eq!(base["ISSUANCE_GRPC_TARGET"], native.origin());
     assert_eq!(
-        execute(&base, &directory.0, "normal", false).await["kind"],
+        profiles["base_native"]["environment"]["ISSUANCE_GRPC_TARGET"],
+        native.origin()
+    );
+    // Keep the legacy listener as an explicit compatibility control. The
+    // rendered base now selects native, so it must not be treated as legacy.
+    let mut legacy_control = base.clone();
+    legacy_control.insert("ISSUANCE_GRPC_TARGET".into(), legacy.origin().to_owned());
+    legacy_control.remove("GRPC_SERVICE_TOKEN");
+    assert_eq!(
+        execute(&legacy_control, &directory.0, "normal", false).await["kind"],
         "rejected"
     );
-    // Standalone base intentionally has no forwarded service token. A second
-    // controlled baseline token proves the listener is a live authenticated
-    // RPC trap, not merely an unresolvable address.
-    let mut authenticated_base = base.clone();
-    authenticated_base.insert("GRPC_SERVICE_TOKEN".into(), TOKEN.into());
+    legacy_control.insert("GRPC_SERVICE_TOKEN".into(), TOKEN.into());
     assert_eq!(
-        execute(&authenticated_base, &directory.0, "normal", false).await["kind"],
+        execute(&legacy_control, &directory.0, "normal", false).await["kind"],
         "unavailable"
     );
     assert_eq!(legacy.attempts(), 2);
     assert_eq!(native.attempts(), 0);
     assert_eq!(snapshot(&pool).await, before);
-    for (index, name) in ["base_native", "selfhost"].into_iter().enumerate() {
+    for (index, name) in ["base", "selfhost"].into_iter().enumerate() {
         let environment: BTreeMap<String, String> =
             serde_json::from_value(profiles[name]["environment"].clone()).unwrap();
         let deployed = name == "selfhost";

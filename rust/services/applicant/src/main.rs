@@ -2,6 +2,7 @@ use marty_applicant::{
     http::{router, HttpState},
     migration::migrate_file,
     providers::{GrpcEventPublisher, HttpFlowProvider, HttpTemplateProvider},
+    select_issuance_service_url,
     service::{ApplicantService, FilePersistence, MmfApprovalAuthorizer},
 };
 use mmf_security::ApplicationEventAuthenticator;
@@ -45,7 +46,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let application_auth =
         ApplicationEventAuthenticator::new(application_secret, max_age, replay_ttl)?;
 
-    let issuance_url = env_value("ISSUANCE_SERVICE_URL", "http://issuance:8005");
+    let issuance_native_url = select_issuance_service_url(
+        env::var("ISSUANCE_NATIVE_SERVICE_URL").ok(),
+        env::var("ISSUANCE_SERVICE_URL").ok(),
+    );
     let flow_url = env_value("FLOW_SERVICE_URL", "http://flow:8011");
     let issuance_api_key = optional_secret("ISSUANCE_API_KEY")?;
     let event_stream_target = env_value("ES_GRPC_TARGET", "event-stream:9015");
@@ -66,7 +70,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let service = Arc::new(ApplicantService::with_persistence(
         Arc::new(RwLock::new(store)),
         Arc::new(HttpTemplateProvider::new(
-            issuance_url.clone(),
+            issuance_native_url.clone(),
             issuance_api_key.clone(),
         )),
         Arc::new(HttpFlowProvider::new(flow_url, application_auth)),
@@ -104,7 +108,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         listener,
         router(HttpState {
             service,
-            issuance_url,
+            issuance_url: issuance_native_url,
             issuance_api_key,
             client: Client::new(),
         }),

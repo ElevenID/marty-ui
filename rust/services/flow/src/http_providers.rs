@@ -154,7 +154,7 @@ pub struct HttpFlowReferenceProvider {
 
 impl HttpFlowReferenceProvider {
     pub fn new(
-        issuance_url: &str,
+        issuance_native_url: &str,
         issuance_api_key: &str,
         credential_template_url: &str,
         trust_profile_url: &str,
@@ -163,7 +163,7 @@ impl HttpFlowReferenceProvider {
     ) -> Result<Self, FlowProviderError> {
         Ok(Self {
             application_templates: BoundedHttpClient::new(
-                issuance_url,
+                issuance_native_url,
                 issuance_api_key,
                 "application_template",
                 Duration::from_secs(10),
@@ -678,9 +678,10 @@ mod tests {
         headers: HeaderMap,
         uri: Uri,
     ) -> Json<Value> {
+        let id = uri.path().rsplit('/').next().unwrap_or_default().to_owned();
         *captured.lock().unwrap() = Some((headers, uri));
         Json(json!({
-            "id": "trust-1",
+            "id": id,
             "organization_id": "org-1",
             "status": "active",
         }))
@@ -878,6 +879,50 @@ mod tests {
         assert_eq!(headers.get("x-service-token").unwrap(), service_token);
         assert_eq!(headers.get("x-user-id").unwrap(), "user-1");
         assert!(headers.get("x-api-key").is_none());
+        server.abort();
+    }
+
+    #[tokio::test]
+    async fn application_template_lookup_uses_native_owner_with_api_key_only() {
+        let captured = CapturedRead::default();
+        let router = Router::new()
+            .route(
+                "/v1/application-templates/{template_id}",
+                get(reference_resolver),
+            )
+            .with_state(captured.clone());
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let server = tokio::spawn(async move { axum::serve(listener, router).await.unwrap() });
+        let native_url = format!("http://{address}");
+        let api_key = "0123456789abcdef0123456789abcdef";
+        let provider = HttpFlowReferenceProvider::new(
+            &native_url,
+            api_key,
+            "https://credential-template.example",
+            "https://trust-profile.example",
+            "https://deployment-profile.example",
+            Some("0123456789abcdef0123456789abcdef"),
+        )
+        .unwrap();
+
+        provider
+            .resolve(
+                FlowReferenceKind::ApplicationTemplate,
+                "application-template-1",
+                "user-1",
+            )
+            .await
+            .unwrap();
+
+        let (headers, uri) = captured.lock().unwrap().take().unwrap();
+        assert_eq!(
+            uri.path(),
+            "/v1/application-templates/application-template-1"
+        );
+        assert_eq!(headers.get("x-api-key").unwrap(), api_key);
+        assert!(headers.get("x-service-token").is_none());
+        assert!(headers.get("x-user-id").is_none());
         server.abort();
     }
 

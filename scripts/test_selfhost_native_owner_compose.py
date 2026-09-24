@@ -20,9 +20,13 @@ LEGACY_ONLY = {
     "CANVAS_CREDENTIAL_ISSUER_PROFILE_IDS",
     "CANVAS_LTI_TOOL_ACTIVE_KID",
     "CANVAS_LTI_TOOL_PUBLIC_JWKS",
-    "CANVAS_CREDENTIALS_PROVENANCE_BASE_URL",
-    "CANVAS_CREDENTIALS_RECIPIENT_HASHED",
-    "CANVAS_CREDENTIALS_ALLOW_DUPLICATE_AWARDS",
+}
+PUBLICATION_SETTINGS = {
+    "CANVAS_CREDENTIALS_ASSERTION_URL_TEMPLATE": "${CANVAS_CREDENTIALS_ASSERTION_URL_TEMPLATE:-}",
+    "CANVAS_CREDENTIALS_ASSERTION_NARRATIVE": "${CANVAS_CREDENTIALS_ASSERTION_NARRATIVE:-}",
+    "CANVAS_CREDENTIALS_PROVENANCE_BASE_URL": "${CANVAS_CREDENTIALS_PROVENANCE_BASE_URL:-}",
+    "CANVAS_CREDENTIALS_RECIPIENT_HASHED": "${CANVAS_CREDENTIALS_RECIPIENT_HASHED:-true}",
+    "CANVAS_CREDENTIALS_ALLOW_DUPLICATE_AWARDS": "${CANVAS_CREDENTIALS_ALLOW_DUPLICATE_AWARDS:-false}",
 }
 READY = "auth,organizations,credential-templates,trust-profiles,presentation-policies,deployment-profiles,signing-keys,flows,issuance,issuance-native"
 NATIVE_ADDITIVE = {
@@ -53,6 +57,12 @@ EXPLICIT_POLICY = {"DIDCOMM_ENCRYPTION_POLICY_FILE", "DIDCOMM_TLS_CA_FILE"}
 CONFIG_META = {"CARGO_PKG_VERSION", "MARTY_ISSUANCE__"}
 SHARED_ADDITIONS = {
     "ALLOWED_REDIRECT_URIS": "${ALLOWED_REDIRECT_URIS:-}",
+    "CANVAS_CREDENTIALS_ASSERTION_URL_TEMPLATE": PUBLICATION_SETTINGS[
+        "CANVAS_CREDENTIALS_ASSERTION_URL_TEMPLATE"
+    ],
+    "CANVAS_CREDENTIALS_ASSERTION_NARRATIVE": PUBLICATION_SETTINGS[
+        "CANVAS_CREDENTIALS_ASSERTION_NARRATIVE"
+    ],
 }
 SHARED_SETTINGS = {
     **SHARED_ADDITIONS,
@@ -98,8 +108,7 @@ def assert_input_inventory():
     native = model["services"]["issuance-native"]["environment"]
     legacy = model["services"]["issuance"]["environment"]
     assert {
-        key: model["x-issuance-application-env"].get(key)
-        for key in SHARED_SETTINGS
+        key: model["x-issuance-application-env"].get(key) for key in SHARED_SETTINGS
     } == SHARED_SETTINGS
     assert {key: native.get(key) for key in NATIVE_ADDITIVE} == NATIVE_ADDITIVE
     expected_omitted = LOADED_INPUTS | EXPLICIT_POLICY | CONFIG_META | UNFORWARDED
@@ -160,9 +169,7 @@ def assert_models(
     shared = preserved.pop("x-issuance-application-env")
     assert {key: shared[key] for key in SHARED_ADDITIONS} == shared_additions
     legacy_after = preserved["services"]["issuance"]["environment"]
-    assert {
-        key: legacy_after.pop(key) for key in SHARED_ADDITIONS
-    } == shared_additions
+    assert {key: legacy_after.pop(key) for key in SHARED_ADDITIONS} == shared_additions
     gateway = preserved["services"]["gateway"]
     # Governed repair: the native signer and readiness need the separate owner,
     # whereas the unchanged frozen model omitted it and fell back to localhost.
@@ -286,6 +293,15 @@ def interpolated_models():
         ):
             values = {**inputs, **overrides}
             after = render(GATE["BASE"], values)
+            expected_publication = rendered_additions(PUBLICATION_SETTINGS, values)
+            for owner in ("issuance", "issuance-native"):
+                actual_publication = {
+                    key: after["services"][owner]["environment"][key]
+                    for key in PUBLICATION_SETTINGS
+                }
+                assert actual_publication == expected_publication
+            if mode == "custom":
+                assert set(expected_publication.values()) == {"synthetic-custom"}
             assert_models(
                 render(FROZEN, values),
                 after,

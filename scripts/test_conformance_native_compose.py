@@ -49,6 +49,11 @@ SHARED_SETTING_REPAIRS = (
     "ALLOWED_REDIRECT_URIS",
     "ISSUANCE_AUTH_SESSION_TTL_MINUTES",
     "TOKEN_RATE_LIMIT",
+    "CANVAS_CREDENTIALS_ASSERTION_URL_TEMPLATE",
+    "CANVAS_CREDENTIALS_ASSERTION_NARRATIVE",
+    "CANVAS_CREDENTIALS_PROVENANCE_BASE_URL",
+    "CANVAS_CREDENTIALS_RECIPIENT_HASHED",
+    "CANVAS_CREDENTIALS_ALLOW_DUPLICATE_AWARDS",
 ) + MIRROR_WORKER_SETTINGS
 
 
@@ -123,10 +128,14 @@ def assert_beta_shared_setting_repairs(previous, actual):
     """Reviewed shared settings only, not a frozen-definition rewrite."""
     expected = deepcopy(previous)
     before = expected["services"]["issuance-native"]["environment"]
-    legacy = previous["services"]["issuance"]["environment"]
+    legacy = expected["services"]["issuance"]["environment"]
     for setting in SHARED_SETTING_REPAIRS:
-        assert setting not in before
-        before[setting] = legacy[setting]
+        assert setting in legacy
+        selected = legacy[setting]
+        if setting in before:
+            assert before[setting] == selected
+        else:
+            before[setting] = selected
     assert actual == expected, (
         "Beta changed outside the reviewed shared-setting repairs"
     )
@@ -175,6 +184,7 @@ def run(command):
     ]
     for setting in SHARED_SETTING_REPAIRS:
         assert setting not in expected_environment
+        assert setting in legacy_environment
         expected_environment[setting] = legacy_environment[setting]
     assert common == expected_common, (
         "Shared service changed beyond the governed shared-setting repairs"
@@ -302,7 +312,7 @@ def run(command):
                         selected["services"]["flow"]["environment"][
                             "ISSUANCE_GRPC_TARGET"
                         ]
-                        == "issuance:9005"
+                        == "issuance-native:9005"
                     )
                     assert (
                         selected["services"]["issuance-native"]["environment"][

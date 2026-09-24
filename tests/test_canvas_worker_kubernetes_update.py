@@ -227,6 +227,9 @@ def test_actual_bash_guard_precedes_every_image_write(case, tmp_path):
         "FIXTURE_JSON": raw,
         "PRIVATE_DIAGNOSTIC": PRIVATE,
         "GET_EXIT": "1" if case == "get-failed" else "0",
+        # This test isolates the Canvas cutover guard; the native issuance
+        # selection and its image-update guard have separate contract tests.
+        "K8S_ISSUANCE_NATIVE_ENABLED": "false",
     }
     assert "MARTY_ISSUANCE_IMAGE" not in env
     catalog = json.loads((ROOT / "deploy-config/catalog/services.json").read_text())

@@ -9,6 +9,7 @@ struct Contract {
     deployed_environments: Vec<String>,
     required_always: Vec<String>,
     required_when_deployed: Vec<String>,
+    issuance_http_owner: IssuanceHttpOwner,
     minimum_secret_bytes: usize,
     secret_file_suffix: String,
     listener_port_aliases: Vec<String>,
@@ -23,6 +24,12 @@ struct Contract {
     application_event_auth: ApplicationEventAuth,
     verifier_profiles: VerifierProfiles,
     fail_closed_cases: Vec<String>,
+}
+
+#[derive(Deserialize)]
+struct IssuanceHttpOwner {
+    beta: String,
+    production: String,
 }
 
 #[derive(Deserialize)]
@@ -77,6 +84,10 @@ fn baseline(environment: &str) -> BTreeMap<String, String> {
             "http://deployment-profile:8010".into(),
         ),
         ("ISSUANCE_SERVICE_URL".into(), "http://issuance:8006".into()),
+        (
+            "ISSUANCE_NATIVE_SERVICE_URL".into(),
+            "http://issuance-native:8005".into(),
+        ),
         ("GRPC_SERVICE_TOKEN".into(), "s".repeat(32)),
         ("FLOW_WEBHOOK_SECRET".into(), "w".repeat(32)),
         ("FLOW_APPLICATION_EVENT_HMAC_KEY".into(), "a".repeat(32)),
@@ -116,6 +127,14 @@ fn language_neutral_startup_contract_is_frozen() {
     assert_eq!(contract.deployed_environments, ["beta", "production"]);
     assert_eq!(contract.required_always, ["DATABASE_URL", "REDIS_URL"]);
     assert_eq!(contract.required_when_deployed.len(), 22);
+    assert_eq!(
+        contract.issuance_http_owner.beta,
+        "ISSUANCE_NATIVE_SERVICE_URL_required"
+    );
+    assert_eq!(
+        contract.issuance_http_owner.production,
+        "ISSUANCE_NATIVE_SERVICE_URL_or_ISSUANCE_SERVICE_URL_fallback"
+    );
     assert_eq!(contract.minimum_secret_bytes, 32);
     assert_eq!(contract.secret_file_suffix, "_FILE");
     assert_eq!(
@@ -199,8 +218,28 @@ fn deployed_configuration_is_complete_and_normalized() {
     assert_eq!(config.oid4vp_url_query_maximum_length, 8_192);
     assert_eq!(config.verifier_expected_origins, ["https://issuer.example"]);
     assert_eq!(config.organization_grpc_target, "http://organization:9002");
+    assert_eq!(config.issuance_url, "http://issuance:8006");
+    assert_eq!(config.issuance_native_url, "http://issuance-native:8005");
     assert!(config.workload_client_tls.is_some());
     assert!(config.workload_server_tls.is_some());
+}
+
+#[test]
+fn production_preserves_legacy_http_owner_without_weakening_beta() {
+    let mut production = baseline("production");
+    production.remove("ISSUANCE_NATIVE_SERVICE_URL");
+    let config = FlowServiceConfig::from_values(production).expect("legacy production owner");
+    assert_eq!(config.issuance_url, "http://issuance:8006");
+    assert_eq!(config.issuance_native_url, config.issuance_url);
+
+    let mut beta = baseline("beta");
+    beta.remove("ISSUANCE_NATIVE_SERVICE_URL");
+    assert_eq!(
+        FlowServiceConfig::from_values(beta),
+        Err(FlowConfigError::Missing {
+            name: "ISSUANCE_NATIVE_SERVICE_URL"
+        })
+    );
 }
 
 #[test]
@@ -263,6 +302,18 @@ fn deployed_configuration_fails_closed() {
         FlowServiceConfig::from_values(credentialed),
         Err(FlowConfigError::Invalid {
             name: "SIGNING_KEYS_INTERNAL_URL"
+        })
+    );
+
+    let mut credentialed_native = baseline("beta");
+    credentialed_native.insert(
+        "ISSUANCE_NATIVE_SERVICE_URL".into(),
+        "https://user:password@issuance-native".into(),
+    );
+    assert_eq!(
+        FlowServiceConfig::from_values(credentialed_native),
+        Err(FlowConfigError::Invalid {
+            name: "ISSUANCE_NATIVE_SERVICE_URL"
         })
     );
 

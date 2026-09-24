@@ -1,0 +1,52 @@
+{
+  "schema": "marty.issuance-universal-ownership/v1",
+  "native_coverage": "contracts/issuance-native-coverage.json",
+  "runtime_surface": "contracts/issuance-runtime-surface.json",
+  "default_owner": "issuance-native",
+  "retained_legacy_owner": "issuance",
+  "retained_legacy_http": [
+    {"method": "GET", "path": "/v1/issuance/organizations/{organization_id}/retention"},
+    {"method": "POST", "path": "/v1/issuance/organizations/{organization_id}/retention/purge"},
+    {"method": "POST", "path": "/v1/passport/applications"},
+    {"method": "POST", "path": "/v1/passport/applications/{application_id}/activate"},
+    {"method": "POST", "path": "/v1/passport/applications/{application_id}/generate-data-groups"},
+    {"method": "POST", "path": "/v1/passport/applications/{application_id}/generate-sod"},
+    {"method": "GET", "path": "/v1/passport/applications/{application_id}/production-status"},
+    {"method": "POST", "path": "/v1/passport/applications/{application_id}/quality-verify"},
+    {"method": "POST", "path": "/v1/passport/applications/{application_id}/submit-personalization"},
+    {"method": "GET", "path": "/v1/passport/capabilities"},
+    {"method": "POST", "path": "/v1/passport/webhooks/personalization"}
+  ],
+  "default_compositions": {
+    "compose": "docker-compose.base.yml",
+    "conformance": "scripts/conformance_stack.py",
+    "envoy": "config/envoy/envoy.yaml",
+    "kubernetes": "scripts/deploy-kubernetes.sh"
+  },
+  "direct_client_boundary": "gateway",
+  "production_composition": "docker-compose.selfhost.prod.yml",
+  "production_unchanged": true,
+  "production_http_owner": {
+    "consumers": ["auth", "applicant", "presentation-policy", "flow"],
+    "selected_environment_variable": "ISSUANCE_SERVICE_URL",
+    "runtime_precedence": [
+      "ISSUANCE_NATIVE_SERVICE_URL",
+      "ISSUANCE_SERVICE_URL",
+      "development_native_default"
+    ],
+    "flow_grpc_owner": "issuance-native"
+  },
+  "python_deletion_authorized": false,
+  "rust_owned_python_retirement": {
+    "authorized": true,
+    "scope": [
+      "oid4vci-public-and-management-http",
+      "canvas-mirror-http",
+      "canvas-mirror-automation-loop"
+    ],
+    "retained_http_route_count": 11,
+    "packaged_main_lifecycle_gate": "canvas_mirror_worker_enabled_packaged_main_runs_and_shuts_down_cleanly",
+    "full_python_service_deletion_authorized": false
+  },
+  "deferred": ["DIDCOMM-KMS-001"]
+}

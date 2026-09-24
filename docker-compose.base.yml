@@ -16,6 +16,11 @@ x-marty-migration-build-artifacts: &marty_migration_build_artifacts
   MARTY_COMMON_URI: ${MARTY_COMMON_URI:?set MARTY_COMMON_URI to the immutable marty-common wheel}
   MARTY_COMMON_DIGEST: ${MARTY_COMMON_DIGEST:?set MARTY_COMMON_DIGEST to that wheel's sha256 digest}
 
+# One development-only value shared by the native issuance owner and its direct
+# callers. Deployed overlays replace this with their existing secret source.
+x-native-issuance-grpc-auth: &native_issuance_grpc_auth
+  GRPC_SERVICE_TOKEN: ${GRPC_SERVICE_TOKEN:-dev-grpc-service-token-change-before-production}
+
 services:
   # ==========================================================================
   # Infrastructure
@@ -344,6 +349,7 @@ services:
       args:
         SERVICE_NAME: gateway
     environment:
+      <<: *native_issuance_grpc_auth
       GATEWAY_PORT: "8000"
       AUTH_SERVICE_URL: http://auth:8001
       ORGANIZATION_SERVICE_URL: http://organization:8002
@@ -358,6 +364,8 @@ services:
       FLOW_SERVICE_URL: http://flow:8011
       DEVICE_REGISTRATION_SERVICE_URL: http://device-registration:8014
       ISSUANCE_SERVICE_URL: http://issuance:8005
+      ISSUANCE_NATIVE_SERVICE_URL: http://issuance-native:8005
+      GATEWAY_REQUIRED_READY_SERVICES: auth,organizations,credential-templates,trust-profiles,presentation-policies,deployment-profiles,signing-keys,flows,issuance,issuance-native
       REVOCATION_PROFILE_SERVICE_URL: http://revocation-profile:8013
       ISSUER_BASE_URL: ${PUBLIC_API_URL:-http://gateway:8000}
       CORS_ORIGINS: ${CORS_ORIGINS:-http://localhost:3000,http://localhost:5173}
@@ -415,6 +423,8 @@ services:
         condition: service_healthy
       issuance:
         condition: service_healthy
+      issuance-native:
+        condition: service_healthy
       event-stream:
         condition: service_healthy
       openbao-init:
@@ -435,6 +445,7 @@ services:
       args:
         SERVICE_NAME: auth
     environment:
+      <<: *native_issuance_grpc_auth
       AUTH_SERVICE_PORT: "8001"
       UI_BASE_URL: ${UI_BASE_URL:-http://localhost:3000}
       REDIS_URL: redis://redis:6379/0
@@ -458,10 +469,9 @@ services:
       CREDENTIAL_LOGIN_REQUIRE_EXISTING_KEYCLOAK_USER: ${CREDENTIAL_LOGIN_REQUIRE_EXISTING_KEYCLOAK_USER:-false}
       CREDENTIAL_LOGIN_CREATE_USERS: ${CREDENTIAL_LOGIN_CREATE_USERS:-false}
       FLOW_WEBHOOK_SECRET: ${FLOW_WEBHOOK_SECRET:-dev-flow-webhook-secret-change-me}
-      GRPC_SERVICE_TOKEN: ${GRPC_SERVICE_TOKEN:-dev-grpc-service-token-change-before-production}
       KEYCLOAK_TOKEN_EXCHANGE_ENABLED: ${KEYCLOAK_TOKEN_EXCHANGE_ENABLED:-false}
       AUTH_SERVICE_INTERNAL_URL: ${AUTH_SERVICE_INTERNAL_URL:-http://auth:8001}
-      ISSUANCE_SERVICE_URL: ${ISSUANCE_SERVICE_URL:-http://issuance:8005}
+      ISSUANCE_NATIVE_SERVICE_URL: http://issuance-native:8005
       CREDENTIAL_LOGIN_LISSI_DEEP_LINK_TEMPLATE: ${CREDENTIAL_LOGIN_LISSI_DEEP_LINK_TEMPLATE:-}
       CREDENTIAL_LOGIN_LISSI_ANDROID_DEEP_LINK_TEMPLATE: ${CREDENTIAL_LOGIN_LISSI_ANDROID_DEEP_LINK_TEMPLATE:-}
       CREDENTIAL_LOGIN_LISSI_IOS_DEEP_LINK_TEMPLATE: ${CREDENTIAL_LOGIN_LISSI_IOS_DEEP_LINK_TEMPLATE:-}
@@ -487,6 +497,8 @@ services:
         condition: service_healthy
       flow:
         condition: service_healthy
+      issuance-native:
+        condition: service_healthy
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8001/health"]
       interval: 10s
@@ -503,6 +515,7 @@ services:
       args:
         SERVICE_NAME: organization
     environment:
+      <<: *native_issuance_grpc_auth
       ORGANIZATION_SERVICE_PORT: "8002"
       DATABASE_URL: postgresql+asyncpg://marty:${MARTY_DB_PASSWORD:-marty_dev_password}@postgres:5432/marty
       REDIS_URL: redis://redis:6379
@@ -536,6 +549,7 @@ services:
       args:
         SERVICE_NAME: credential-template
     environment:
+      <<: *native_issuance_grpc_auth
       ENVIRONMENT: ${ENVIRONMENT:-development}
       CREDENTIAL_TEMPLATE_SERVICE_PORT: "8003"
       DATABASE_URL: postgresql+asyncpg://marty:${MARTY_DB_PASSWORD:-marty_dev_password}@postgres:5432/marty
@@ -572,6 +586,7 @@ services:
       args:
         SERVICE_NAME: trust-profile
     environment:
+      <<: *native_issuance_grpc_auth
       ENVIRONMENT: ${ENVIRONMENT:-development}
       TRUST_PROFILE_SERVICE_PORT: "8004"
       DATABASE_URL: postgresql+asyncpg://marty:${MARTY_DB_PASSWORD:-marty_dev_password}@postgres:5432/marty
@@ -610,7 +625,7 @@ services:
       FLOW_APPLICATION_EVENT_HMAC_KEY: ${FLOW_APPLICATION_EVENT_HMAC_KEY:-dev-flow-application-event-hmac-key-change-before-production}
       DATABASE_URL: postgresql+asyncpg://marty:${MARTY_DB_PASSWORD:-marty_dev_password}@postgres:5432/marty
       APPLICANT_DATA_FILE: /app/data/applicant_store.json
-      ISSUANCE_SERVICE_URL: http://issuance:8005
+      ISSUANCE_NATIVE_SERVICE_URL: http://issuance-native:8005
       ISSUANCE_API_KEY: ${ISSUANCE_API_KEY:-dev-issuance-api-key}
       APPLICATION_TEMPLATE_MIGRATION_MAP: ${APPLICATION_TEMPLATE_MIGRATION_MAP:-}
       NOTIFICATION_SERVICE_URL: http://notification:8007
@@ -627,6 +642,8 @@ services:
     depends_on:
       db-migrate:
         condition: service_completed_successfully
+      issuance-native:
+        condition: service_healthy
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8006/health"]
       interval: 10s
@@ -682,6 +699,7 @@ services:
         MARTY_RELEASE_VERSION: ${MARTY_RELEASE_VERSION:-development}
         MARTY_UI_SHA: ${MARTY_UI_SHA:-unknown}
     environment:
+      <<: *native_issuance_grpc_auth
       ENVIRONMENT: development
       COMPLIANCE_PROFILE_SERVICE_PORT: "8008"
       DATABASE_URL: postgresql+asyncpg://marty:${MARTY_DB_PASSWORD:-marty_dev_password}@postgres:5432/marty
@@ -708,6 +726,7 @@ services:
       args:
         SERVICE_NAME: presentation-policy
     environment:
+      <<: *native_issuance_grpc_auth
       PRESENTATION_POLICY_SERVICE_PORT: "8009"
       DATABASE_URL: postgresql+asyncpg://marty:${MARTY_DB_PASSWORD:-marty_dev_password}@postgres:5432/marty
       ORG_GRPC_TARGET: organization:9002
@@ -716,7 +735,7 @@ services:
       DID_PUBLIC_FALLBACK_ENABLED: ${DID_PUBLIC_FALLBACK_ENABLED:-false}
       DID_WEB_ALLOWED_HOSTS: ${DID_WEB_ALLOWED_HOSTS:-}
       TRUST_PROFILE_SERVICE_URL: http://trust-profile:8004
-      ISSUANCE_SERVICE_URL: http://issuance:8005
+      ISSUANCE_NATIVE_SERVICE_URL: http://issuance-native:8005
       ISSUANCE_API_KEY: ${ISSUANCE_API_KEY:-dev-issuance-api-key}
       PUBLIC_DOMAIN: ${PUBLIC_DOMAIN:-localhost}
       PUBLIC_BASE_URL: ${PUBLIC_API_URL:-http://gateway:8000}
@@ -728,6 +747,8 @@ services:
     depends_on:
       db-migrate:
         condition: service_completed_successfully
+      issuance-native:
+        condition: service_healthy
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8009/health"]
       interval: 10s
@@ -746,6 +767,7 @@ services:
         MARTY_RELEASE_VERSION: ${MARTY_RELEASE_VERSION:-development}
         MARTY_UI_SHA: ${MARTY_UI_SHA:-unknown}
     environment:
+      <<: *native_issuance_grpc_auth
       ENVIRONMENT: development
       DEPLOYMENT_PROFILE_SERVICE_PORT: "8010"
       DATABASE_URL: postgresql+asyncpg://marty:${MARTY_DB_PASSWORD:-marty_dev_password}@postgres:5432/marty
@@ -801,6 +823,7 @@ services:
       args:
         SERVICE_NAME: flow
     environment:
+      <<: *native_issuance_grpc_auth
       ENVIRONMENT: development
       FLOW_SERVICE_PORT: "8011"
       DATABASE_URL: postgresql+asyncpg://marty:${MARTY_DB_PASSWORD:-marty_dev_password}@postgres:5432/marty
@@ -808,8 +831,9 @@ services:
       ORG_GRPC_TARGET: organization:9002
       PP_GRPC_TARGET: presentation-policy:9009
       CT_GRPC_TARGET: credential-template:9003
-      ISSUANCE_GRPC_TARGET: issuance:9005
+      ISSUANCE_GRPC_TARGET: issuance-native:9005
       ISSUANCE_SERVICE_URL: http://issuance:8005
+      ISSUANCE_NATIVE_SERVICE_URL: http://issuance-native:8005
       CREDENTIAL_TEMPLATE_SERVICE_URL: http://credential-template:8003
       TRUST_PROFILE_SERVICE_URL: http://trust-profile:8004
       DEPLOYMENT_PROFILE_SERVICE_URL: http://deployment-profile:8010
@@ -847,6 +871,10 @@ services:
         condition: service_healthy
       presentation-policy:
         condition: service_healthy
+      issuance:
+        condition: service_healthy
+      issuance-native:
+        condition: service_healthy
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8011/health"]
       interval: 10s
@@ -859,7 +887,13 @@ services:
   issuance:
     image: ${MARTY_ISSUANCE_IMAGE:?set MARTY_ISSUANCE_IMAGE to an immutable issuance image digest}
     environment:
+      <<: *native_issuance_grpc_auth
       ISSUANCE_SERVICE_PORT: "8005"
+      # Retain this Python owner only for the two retention and nine physical-
+      # passport routes absent from the native coverage contract. Its migrated
+      # direct DIDComm entrypoints delegate whole requests without fallback.
+      DIDCOMM_DELIVERY_OWNER: native
+      ISSUANCE_NATIVE_SERVICE_URL: http://issuance-native:8005
       DATABASE_URL: postgresql+asyncpg://marty:${MARTY_DB_PASSWORD:-marty_dev_password}@postgres:5432/marty
       ISSUER_BASE_URL: ${PUBLIC_API_URL:-http://gateway:8000}
       ALLOWED_REDIRECT_URIS: ${ALLOWED_REDIRECT_URIS:-}
@@ -919,6 +953,8 @@ services:
       CANVAS_CREDENTIALS_ISSUER_ID: ${CANVAS_CREDENTIALS_ISSUER_ID:-}
       CANVAS_CREDENTIALS_BADGECLASS_ID: ${CANVAS_CREDENTIALS_BADGECLASS_ID:-}
       CANVAS_CREDENTIALS_ASSERTION_SCOPE: ${CANVAS_CREDENTIALS_ASSERTION_SCOPE:-badgeclasses}
+      CANVAS_CREDENTIALS_ASSERTION_URL_TEMPLATE: ${CANVAS_CREDENTIALS_ASSERTION_URL_TEMPLATE:-}
+      CANVAS_CREDENTIALS_ASSERTION_NARRATIVE: ${CANVAS_CREDENTIALS_ASSERTION_NARRATIVE:-}
       CANVAS_CREDENTIALS_PROVENANCE_BASE_URL: ${CANVAS_CREDENTIALS_PROVENANCE_BASE_URL:-}
       CANVAS_CREDENTIALS_RECIPIENT_HASHED: ${CANVAS_CREDENTIALS_RECIPIENT_HASHED:-true}
       CANVAS_CREDENTIALS_ALLOW_DUPLICATE_AWARDS: ${CANVAS_CREDENTIALS_ALLOW_DUPLICATE_AWARDS:-false}
@@ -953,8 +989,11 @@ services:
         condition: service_completed_successfully
       openbao-init:
         condition: service_completed_successfully
+      issuance-native:
+        condition: service_healthy
+        required: true
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:8005/health"]
+      test: ["CMD", "curl", "--fail", "http://localhost:8005/ready"]
       interval: 30s
       timeout: 10s
       retries: 5
@@ -962,6 +1001,14 @@ services:
     networks:
       - marty-network
     restart: unless-stopped
+
+  # Default owner for every route enumerated by
+  # contracts/issuance-native-coverage.json. The legacy service above remains
+  # reachable for the contract's exact eleven-route remainder.
+  issuance-native:
+    extends:
+      file: docker-compose.profile.issuance-native.yml
+      service: issuance-native
 
   # Portable Canvas synchronization runs out-of-process. The worker leases
   # PostgreSQL jobs and records a database heartbeat consumed by readiness.
@@ -1026,6 +1073,7 @@ services:
       args:
         SERVICE_NAME: revocation-profile
     environment:
+      <<: *native_issuance_grpc_auth
       SERVICE_NAME: revocation_profile
       ENVIRONMENT: development
       REVOCATION_PROFILE_SERVICE_PORT: "8013"
@@ -1064,6 +1112,7 @@ services:
         MARTY_RELEASE_VERSION: ${MARTY_RELEASE_VERSION:-development}
         MARTY_UI_SHA: ${MARTY_UI_SHA:-unknown}
     environment:
+      <<: *native_issuance_grpc_auth
       DEVICE_REGISTRATION_SERVICE_PORT: "8014"
       DATABASE_URL: postgresql+asyncpg://marty:${MARTY_DB_PASSWORD:-marty_dev_password}@postgres:5432/marty
       REDIS_URL: redis://redis:6379/5
@@ -1120,6 +1169,7 @@ services:
         MARTY_RELEASE_VERSION: ${MARTY_RELEASE_VERSION:-development}
         MARTY_UI_SHA: ${MARTY_UI_SHA:-unknown}
     environment:
+      <<: *native_issuance_grpc_auth
       ENVIRONMENT: development
       VERIFICATION_SERVICE_PORT: "8012"
       ORG_GRPC_TARGET: organization:9002
@@ -1178,6 +1228,8 @@ services:
       credential-template:
         condition: service_healthy
       issuance:
+        condition: service_healthy
+      issuance-native:
         condition: service_healthy
       notification:
         condition: service_healthy

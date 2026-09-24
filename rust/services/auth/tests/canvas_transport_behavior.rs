@@ -29,10 +29,6 @@ struct Provider(Value);
 
 #[async_trait]
 impl CanvasExperienceSessionProvider for Provider {
-    async fn by_state(&self, _state: &str) -> Result<Value, PortError> {
-        Ok(self.0.clone())
-    }
-
     async fn current(&self, token: &str) -> Result<Value, PortError> {
         assert_eq!(token, "experience-token");
         Ok(self.0.clone())
@@ -73,7 +69,7 @@ async fn canvas_http_transport_is_bounded_bearer_bound_and_status_aware() {
         request: Mutex::new(None),
     });
     let provider =
-        HttpCanvasExperienceSessionProvider::new(http.clone(), "http://issuance:8005/base/")
+        HttpCanvasExperienceSessionProvider::new(http.clone(), "http://issuance-native:8005/base/")
             .unwrap();
     assert_eq!(
         provider.current("experience-token").await.unwrap()["learner_key"],
@@ -82,7 +78,7 @@ async fn canvas_http_transport_is_bounded_bearer_bound_and_status_aware() {
     let request = http.request.lock().unwrap().clone().unwrap();
     assert_eq!(
         request.url,
-        "http://issuance:8005/base/v1/integrations/canvas/lti/experience-sessions/current"
+        "http://issuance-native:8005/base/v1/integrations/canvas/lti/experience-sessions/current"
     );
     assert_eq!(request.headers["authorization"], "Bearer experience-token");
     assert_eq!(request.maximum_response_bytes, 1024 * 1024);

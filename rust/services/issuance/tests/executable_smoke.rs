@@ -100,11 +100,14 @@ async fn executable_serves_health_readiness_and_version() {
     let Some(database_url) = smoke_database_url() else {
         return;
     };
-    let (listener, port) = reserve_port();
-    drop(listener);
-    let (grpc_listener, grpc_port) = reserve_port();
-    drop(grpc_listener);
+    // Keep both reservations alive while selecting ports: releasing HTTP first
+    // lets the OS hand its port back for gRPC in this same process.
+    let (http_reservation, port) = reserve_port();
+    let (grpc_reservation, grpc_port) = reserve_port();
+    assert_ne!(port, grpc_port);
     let mut command = smoke_command(port, grpc_port);
+    drop(http_reservation);
+    drop(grpc_reservation);
     let _child = ChildGuard(
         command
             .env("DATABASE_URL", &database_url)
@@ -231,9 +234,10 @@ async fn executable_does_not_bind_an_explicitly_disabled_grpc_listener() {
         return;
     };
     let (http_listener, http_port) = reserve_port();
-    drop(http_listener);
     let (grpc_reservation, grpc_port) = reserve_port();
+    assert_ne!(http_port, grpc_port);
     let mut command = smoke_command(http_port, grpc_port);
+    drop(http_listener);
     let _child = ChildGuard(
         command
             .env("DATABASE_URL", &database_url)

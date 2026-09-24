@@ -145,6 +145,31 @@ spec:
                 configMapKeyRef:
                   name: marty-config
                   key: CANVAS_CREDENTIALS_ASSERTION_SCOPE
+            - name: CANVAS_CREDENTIALS_ASSERTION_URL_TEMPLATE
+              valueFrom:
+                configMapKeyRef:
+                  name: marty-config
+                  key: CANVAS_CREDENTIALS_ASSERTION_URL_TEMPLATE
+            - name: CANVAS_CREDENTIALS_ASSERTION_NARRATIVE
+              valueFrom:
+                configMapKeyRef:
+                  name: marty-config
+                  key: CANVAS_CREDENTIALS_ASSERTION_NARRATIVE
+            - name: CANVAS_CREDENTIALS_PROVENANCE_BASE_URL
+              valueFrom:
+                configMapKeyRef:
+                  name: marty-config
+                  key: CANVAS_CREDENTIALS_PROVENANCE_BASE_URL
+            - name: CANVAS_CREDENTIALS_RECIPIENT_HASHED
+              valueFrom:
+                configMapKeyRef:
+                  name: marty-config
+                  key: CANVAS_CREDENTIALS_RECIPIENT_HASHED
+            - name: CANVAS_CREDENTIALS_ALLOW_DUPLICATE_AWARDS
+              valueFrom:
+                configMapKeyRef:
+                  name: marty-config
+                  key: CANVAS_CREDENTIALS_ALLOW_DUPLICATE_AWARDS
             - name: SERVICE_NAME
               value: issuance_native
             - name: ISSUANCE_SERVICE_PORT

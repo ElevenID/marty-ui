@@ -10,7 +10,9 @@ import yaml
 
 ROOT = Path(__file__).resolve().parents[1]
 CONTRACT = json.loads(
-    (ROOT / "contracts/didcomm-native-consumer-ownership.json").read_text(encoding="utf-8")
+    (ROOT / "contracts/didcomm-native-consumer-ownership.json").read_text(
+        encoding="utf-8"
+    )
 )
 
 
@@ -34,7 +36,9 @@ def _assert_selected(model: dict) -> None:
     assert "issuance-native" in model["services"]
 
 
-def test_every_declared_compose_consumer_selects_native_without_mode_downgrade() -> None:
+def test_every_declared_compose_consumer_selects_native_without_mode_downgrade() -> (
+    None
+):
     assert CONTRACT["required_modes"] == ["anoncrypt", "authcrypt"]
     assert CONTRACT["downgrade_or_fallback"] == "forbidden"
     for path in CONTRACT["selected_compose_models"]:
@@ -79,18 +83,15 @@ def test_consumer_contract_rejects_partial_or_legacy_selection(path: str, mutati
         _assert_selected(model)
 
 
-def test_default_and_selfhost_production_models_remain_legacy() -> None:
-    assert CONTRACT["legacy_compose_models"] == [
-        "docker-compose.base.yml",
-        "docker-compose.selfhost.prod.yml",
-    ]
+def test_only_selfhost_production_model_remains_legacy() -> None:
+    assert CONTRACT["legacy_compose_models"] == ["docker-compose.selfhost.prod.yml"]
     for path in CONTRACT["legacy_compose_models"]:
         environment = _model(path)["services"]["issuance"]["environment"]
         assert CONTRACT["owner_selector"]["name"] not in environment
         assert CONTRACT["native_origin"]["name"] not in environment
 
 
-def test_kubernetes_source_does_not_silently_change_production() -> None:
+def test_kubernetes_source_keeps_legacy_template_for_explicit_rendering() -> None:
     kubernetes = "\n".join(
         path.read_text(encoding="utf-8")
         for path in [

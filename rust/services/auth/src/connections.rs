@@ -126,7 +126,7 @@ impl AuthConnections {
         );
         let (applicant_health, canvas_health) = tokio::join!(
             probe_http_health(outbound_http.as_ref(), &config.applicant_service_url),
-            probe_http_health(outbound_http.as_ref(), &config.issuance_service_url),
+            probe_http_health(outbound_http.as_ref(), &config.issuance_native_service_url),
         );
         applicant_health?;
         runtime_health(runtime, AuthDependency::Applicant)?;
