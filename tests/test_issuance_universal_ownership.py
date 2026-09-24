@@ -201,7 +201,9 @@ def test_production_and_kms_boundaries_remain_explicit() -> None:
         'env("CANVAS_MIRROR_WORKER_ENABLED", "true")',
         'args(["-TERM", &child.0.id().to_string()])',
         'external_credential_id=\'automation-external\'',
-        'stderr.contains("Issuance shutdown requested")',
+        '.stdout(Stdio::piped())',
+        'let logs = format!("{stdout}\\n{stderr}")',
+        'logs.contains("Issuance shutdown requested")',
     ):
         assert evidence in lifecycle
     assert CONTRACT["deferred"] == ["DIDCOMM-KMS-001"]
