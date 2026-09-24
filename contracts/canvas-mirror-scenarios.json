@@ -34,6 +34,12 @@
       "expected_status": 502
     },
     {
+      "id": "publish_repository_failure",
+      "operation": "publish",
+      "repository_failure": "get_credential",
+      "expected_status": 500
+    },
+    {
       "id": "publish_empty_success",
       "operation": "publish",
       "provider_body": "",
@@ -124,6 +130,12 @@
       "expected_status": 200
     },
     {
+      "id": "pending_repository_failure",
+      "operation": "pending",
+      "repository_failure": "list_delivery_records",
+      "expected_status": 500
+    },
+    {
       "id": "pending_failed_excluded",
       "operation": "pending",
       "delivery_status": "failed",
@@ -203,6 +215,14 @@
       "expected_status": 200
     },
     {
+      "id": "status_repository_failure",
+      "operation": "resync",
+      "delivery_status": "delivered",
+      "sync_failure": true,
+      "repository_failure": "list_delivery_records",
+      "expected_status": 500
+    },
+    {
       "id": "status_badgr_revoke",
       "operation": "resync",
       "provider": "badgr_api",
@@ -257,6 +277,12 @@
       "expected_status": 200
     },
     {
+      "id": "automation_repository_failure",
+      "operation": "cycle",
+      "repository_failure": "list_delivery_records",
+      "expected_status": 500
+    },
+    {
       "id": "automation_failed_default_retry",
       "operation": "cycle",
       "delivery_status": "failed",
@@ -266,6 +292,12 @@
       "id": "health_pending",
       "operation": "health",
       "expected_status": 200
+    },
+    {
+      "id": "health_repository_failure",
+      "operation": "health",
+      "repository_failure": "list_delivery_records",
+      "expected_status": 500
     },
     {
       "id": "health_mixed_alerts",
@@ -284,6 +316,13 @@
       "operation": "provenance",
       "delivery_status": "delivered",
       "expected_status": 200
+    },
+    {
+      "id": "provenance_repository_failure",
+      "operation": "provenance",
+      "delivery_status": "delivered",
+      "repository_failure": "get_delivery_record",
+      "expected_status": 500
     },
     {
       "id": "provenance_by_external",
@@ -376,6 +415,31 @@
     "keys": [
       null,
       "incorrect"
+    ],
+    "order_cases": [
+      {
+        "id": "auth_publish_before_tenant",
+        "operation": "publish",
+        "key": "incorrect",
+        "organization_header": "org-other",
+        "expected_status": 401
+      },
+      {
+        "id": "auth_pending_before_validation",
+        "operation": "pending",
+        "key": null,
+        "query": {
+          "limit": "0"
+        },
+        "expected_status": 401
+      },
+      {
+        "id": "auth_provenance_before_tenant",
+        "operation": "provenance",
+        "key": "incorrect",
+        "organization_header": "org-other",
+        "expected_status": 401
+      }
     ]
   },
   "loop": [

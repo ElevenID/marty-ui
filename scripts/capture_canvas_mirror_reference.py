@@ -33,13 +33,13 @@ from unittest.mock import patch
 import uuid
 
 ROOT = Path(__file__).resolve().parents[1]
-REVISION = "578e86ef43166be79add2d812e92ef650535edaa"
+REVISION = "aaa6a9b8e31e62cd0ab087eef5fc1f4835048e26"
 ROUTES = "issuance.infrastructure.api.routes"
 ADAPTER = "issuance.infrastructure.adapters.canvas_credentials_adapter"
 SOURCES = {
     ROUTES: (
         "services/issuance/infrastructure/api/routes.py",
-        "1f137c588ffd7ed77ceb297a52d55e9a75ae7b81",
+        "f71dd82163fcb2296209f880fe78d55a130d356b",
     ),
     ADAPTER: (
         "services/issuance/infrastructure/adapters/canvas_credentials_adapter.py",
@@ -51,11 +51,11 @@ SOURCES = {
     ),
     "issuance.domain.ports": (
         "services/issuance/domain/ports.py",
-        "695a2cdd3f3a5c9d3ce6ef12e282cdca6f086a24",
+        "3454e78deb21af39a1d842ebfed3d8899aa69325",
     ),
     "issuance.infrastructure.adapters.memory_repository": (
         "services/issuance/infrastructure/adapters/memory_repository.py",
-        "2961bee99877f616512c99704dc5e63ef3b9c4cc",
+        "b9c65f5b35eebe1de9392491b8e3595396ff6565",
     ),
     "issuance.infrastructure.adapters.delivery_records": (
         "services/issuance/infrastructure/adapters/delivery_records.py",
@@ -79,12 +79,25 @@ SOURCES = {
     ),
     "mirror_seed": (
         "tests/test_issuance_changes.py",
-        "b47328b334b809b85db2aa67de675342b5ccd8ae",
+        "7ab0a410bd6a4b4507ddd535365fadf7f3dbac03",
     ),
     "startup_evidence": (
         "services/issuance/main.py",
-        "ed30de75eefa16beea1e820dc83fe8607311ed43",
+        "d2c7135bffc8d3ea8184233626b7e573f1fb837d",
     ),
+    "release_profile": (
+        "services/Dockerfile",
+        "13bcb60f46601303b0f524427d9d5aa6bce927d9",
+    ),
+}
+RELEASE_IMAGE = "ghcr.io/elevenid/marty-credentials-issuance"
+RELEASE_IMAGE_DIGEST = (
+    "sha256:815cbba6efc7c91e770a8dd15fe5fa102d252a485073bf60f0e0d5e0a73b28e5"
+)
+RELEASE_DEPENDENCIES = {
+    "fastapi": "0.109.0",
+    "pydantic": "2.11.7",
+    "httpx": "0.26.0",
 }
 OPERATIONS = (
     "publish_issued_credential_canvas_mirror",
@@ -160,6 +173,32 @@ def verify_sources(sources):
         ).hexdigest()
         if digest != SOURCES[name][1]:
             raise ValueError(f"Untrusted observation source: {name}")
+    verify_release_profile_source(sources["release_profile"])
+
+
+def verify_release_profile_source(dockerfile):
+    """Require the pinned image recipe to carry the exact runtime pins."""
+
+    for package, version in RELEASE_DEPENDENCIES.items():
+        if dockerfile.count(f"{package}=={version}") != 1:
+            raise ValueError(
+                f"Pinned release dependency profile differs: {package}"
+            )
+
+
+def require_release_dependency_profile():
+    """Refuse observations outside the exact immutable v0.1.76 image profile."""
+
+    observed = {
+        package: importlib.metadata.version(package)
+        for package in RELEASE_DEPENDENCIES
+    }
+    if observed != RELEASE_DEPENDENCIES:
+        raise RuntimeError(
+            "Canvas mirror capture requires the immutable Credentials v0.1.76 "
+            "dependency profile"
+        )
+    return observed
 
 
 def require_reference_mode(
@@ -169,20 +208,28 @@ def require_reference_mode(
         raise ValueError("Reference and audit modes are mutually exclusive")
 
 
-def bounded_observation_child(
-    sources, *, audit=False, adapter_reference=False, publication_boundary=False
+def require_release_image_controller(
+    *, audit=False, check=False, write_reference=False, release_image=False
 ):
-    """One owned child, no subprocess descendants; capped pipe drains + deadline.
+    """Prevent ambient runtimes from approving or replacing behavior artifacts."""
 
-    Source Git reads precede this observation-phase bound. A child that swallows
-    cancellation cannot hang the capture parent or yield a partial artifact.
-    """
-    require_reference_mode(
-        audit=audit,
-        adapter_reference=adapter_reference,
-        publication_boundary=publication_boundary,
-    )
-    verify_sources(sources)
+    if not audit and (check or write_reference) and not release_image:
+        raise ValueError(
+            "behavioral --check and --write-reference require --release-image"
+        )
+
+
+def run_bounded_process(
+    arguments,
+    source_input,
+    *,
+    deadline_seconds,
+    label,
+    env=None,
+    creationflags=0,
+):
+    """Run one child with concurrent, capped drains and a hard deadline."""
+
     failure = threading.Event()
     outputs = [bytearray(), bytearray()]
     cap = 4 * 1024 * 1024
@@ -202,6 +249,64 @@ def bounded_observation_child(
             except Exception:
                 failure.set()
 
+    child = subprocess.Popen(
+        arguments,
+        stdin=source_input,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        env=env,
+        creationflags=creationflags,
+    )
+    threads = []
+    reason = None
+    try:
+        for stream, output in zip((child.stdout, child.stderr), outputs, strict=True):
+            thread = threading.Thread(
+                target=drain, args=(stream, output), daemon=True
+            )
+            threads.append(thread)
+            thread.start()
+        deadline = time.monotonic() + deadline_seconds
+        while child.poll() is None:
+            if failure.is_set():
+                reason = f"{label} output collection failed (reader or size limit)"
+                break
+            if time.monotonic() >= deadline:
+                reason = f"{label} exceeded {deadline_seconds}-second deadline"
+                break
+            time.sleep(0.02)
+    finally:
+        if child.poll() is None:
+            child.kill()
+        child.wait(timeout=5)
+        for thread in threads:
+            if thread.ident is not None:
+                thread.join(timeout=2)
+        if any(thread.is_alive() for thread in threads):
+            raise RuntimeError(f"{label} pipe cleanup did not complete")
+        for stream in (child.stdout, child.stderr):
+            stream.close()
+    if reason or failure.is_set():
+        raise RuntimeError(
+            reason or f"{label} output collection failed (reader or size limit)"
+        )
+    return child.returncode, bytes(outputs[0]), bytes(outputs[1])
+
+
+def bounded_observation_child(
+    sources, *, audit=False, adapter_reference=False, publication_boundary=False
+):
+    """One owned child, no subprocess descendants; capped pipe drains + deadline.
+
+    Source Git reads precede this observation-phase bound. A child that swallows
+    cancellation cannot hang the capture parent or yield a partial artifact.
+    """
+    require_reference_mode(
+        audit=audit,
+        adapter_reference=adapter_reference,
+        publication_boundary=publication_boundary,
+    )
+    verify_sources(sources)
     child_env = {
         key: os.environ[key]
         for key in ("SystemRoot", "WINDIR", "SystemDrive")
@@ -220,56 +325,17 @@ def bounded_observation_child(
     with tempfile.TemporaryFile(dir=ROOT) as source_input:
         source_input.write(json.dumps(sources, ensure_ascii=True).encode("utf-8"))
         source_input.seek(0)
-        child = subprocess.Popen(
+        returncode, stdout, stderr = run_bounded_process(
             arguments,
-            stdin=source_input,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
+            source_input,
+            deadline_seconds=30,
+            label="Observation child",
             env=child_env,
             creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
         )
-        threads = []
-        reason = None
-        try:
-            for stream, output in zip(
-                (child.stdout, child.stderr), outputs, strict=True
-            ):
-                thread = threading.Thread(
-                    target=drain, args=(stream, output), daemon=True
-                )
-                threads.append(thread)
-                thread.start()
-            deadline = time.monotonic() + 30
-            while child.poll() is None:
-                if failure.is_set():
-                    reason = (
-                        "Observation output collection failed (reader or size limit)"
-                    )
-                    break
-                if time.monotonic() >= deadline:
-                    reason = "Observation child exceeded 30-second deadline"
-                    break
-                time.sleep(0.02)
-        finally:
-            if child.poll() is None:
-                child.kill()
-            child.wait(timeout=5)
-            for thread in threads:
-                if thread.ident is not None:
-                    thread.join(timeout=2)
-            if any(thread.is_alive() for thread in threads):
-                raise RuntimeError("Observation pipe cleanup did not complete")
-            for stream in (child.stdout, child.stderr):
-                stream.close()
-        if reason or failure.is_set():
-            raise RuntimeError(
-                reason or "Observation output collection failed (reader or size limit)"
-            )
-        if child.returncode:
-            raise RuntimeError(
-                "Observation child failed:\n" + outputs[1].decode("utf-8")
-            )
-        result = json.loads(outputs[0].decode("utf-8"))
+        if returncode:
+            raise RuntimeError("Observation child failed:\n" + stderr.decode("utf-8"))
+        result = json.loads(stdout.decode("utf-8"))
         if not isinstance(result, dict) or result.get("source_commit") != REVISION:
             raise ValueError("Invalid terminal observation envelope")
         if result.get("schema") != (
@@ -282,7 +348,76 @@ def bounded_observation_child(
             else "marty.canvas-mirror-python-reference/v1"
         ):
             raise ValueError("Unexpected observation schema")
-        return outputs[0].decode("utf-8").replace("\r\n", "\n"), result
+        return stdout.decode("utf-8").replace("\r\n", "\n"), result
+
+
+def release_image_observation(
+    sources, *, audit=False, adapter_reference=False, publication_boundary=False
+):
+    """Run the owned observation worker in the exact immutable release image."""
+
+    require_reference_mode(
+        audit=audit,
+        adapter_reference=adapter_reference,
+        publication_boundary=publication_boundary,
+    )
+    verify_sources(sources)
+    arguments = [
+        "docker",
+        "run",
+        "--rm",
+        "--interactive",
+        "--network",
+        "none",
+        "--read-only",
+        "--cap-drop",
+        "ALL",
+        "--security-opt",
+        "no-new-privileges",
+        "--tmpfs",
+        "/tmp:rw,noexec,nosuid,nodev,size=16m",
+        "--env",
+        "PYTHONDONTWRITEBYTECODE=1",
+        "--entrypoint",
+        "python",
+        "--volume",
+        f"{ROOT}:/review:ro",
+        f"{RELEASE_IMAGE}@{RELEASE_IMAGE_DIGEST}",
+        "-I",
+        "/review/scripts/capture_canvas_mirror_reference.py",
+        "--worker",
+    ]
+    if audit:
+        arguments.append("--audit")
+    if adapter_reference:
+        arguments.append("--adapter-reference")
+    if publication_boundary:
+        arguments.append("--publication-boundary-reference")
+    source_input = json.dumps(sources, ensure_ascii=True).encode("utf-8")
+    if len(source_input) > 4 * 1024 * 1024:
+        raise RuntimeError("Immutable release-image source envelope exceeded limit")
+    with tempfile.TemporaryFile(dir=ROOT) as input_file:
+        input_file.write(source_input)
+        input_file.seek(0)
+        returncode, stdout, stderr = run_bounded_process(
+            arguments,
+            input_file,
+            deadline_seconds=45,
+            label="Immutable release-image observation",
+        )
+    if returncode or stderr:
+        raise RuntimeError(
+            "Immutable release-image observation failed:\n"
+            + stderr.decode("utf-8", errors="replace")
+        )
+    result = json.loads(stdout)
+    if not audit and (
+        result.get("release_image")
+        != {"uri": RELEASE_IMAGE, "digest": RELEASE_IMAGE_DIGEST}
+        or result.get("dependencies") != RELEASE_DEPENDENCIES
+    ):
+        raise RuntimeError("Immutable release-image observation profile differs")
+    return stdout.decode("utf-8").replace("\r\n", "\n"), result
 
 
 def bound_names(node):
@@ -299,6 +434,36 @@ def bound_names(node):
     if isinstance(node, (ast.Import, ast.ImportFrom)):
         return [alias.asname or alias.name.split(".")[0] for alias in node.names]
     return []
+
+
+def referenced_names(node):
+    """Return loaded names without mistaking function locals for globals."""
+
+    loaded = {
+        item.id
+        for item in ast.walk(node)
+        if isinstance(item, ast.Name) and isinstance(item.ctx, ast.Load)
+    }
+    if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+        local = {
+            argument.arg
+            for argument in (
+                *node.args.posonlyargs,
+                *node.args.args,
+                *node.args.kwonlyargs,
+            )
+        }
+        if node.args.vararg is not None:
+            local.add(node.args.vararg.arg)
+        if node.args.kwarg is not None:
+            local.add(node.args.kwarg.arg)
+        local.update(
+            item.id
+            for item in ast.walk(node)
+            if isinstance(item, ast.Name) and isinstance(item.ctx, ast.Store)
+        )
+        loaded.difference_update(local)
+    return loaded
 
 
 class PinnedDefinitions:
@@ -356,9 +521,7 @@ class PinnedDefinitions:
                 continue
             selected.add(key)
             node = bindings[key]
-            queue.extend(
-                item.id for item in ast.walk(node) if isinstance(item, ast.Name)
-            )
+            queue.extend(referenced_names(node))
         old = set(self.selected.get(name, ()))
         self.selected[name] = sorted(selected)
         chosen = [
@@ -538,21 +701,23 @@ def intern_snapshots(observed):
     return observed
 
 
-def instrument_repository(repo, trace):
+def instrument_repository(repo, trace, *, failure_method=None):
     for name in dir(type(repo)):
         original = getattr(repo, name)
         if not asyncio.iscoroutinefunction(original):
             continue
 
         async def observed(*args, _name=name, _original=original, **kwargs):
-            trace.append(
-                {
-                    "kind": "repository",
-                    "method": _name,
-                    "args": serial(args),
-                    "kwargs": serial(kwargs),
-                }
-            )
+            call = {
+                "kind": "repository",
+                "method": _name,
+                "args": serial(args),
+                "kwargs": serial(kwargs),
+            }
+            trace.append(call)
+            if _name == failure_method:
+                call["failure"] = "RuntimeError"
+                raise RuntimeError(f"synthetic repository failure: {_name}")
             return await _original(*args, **kwargs)
 
         setattr(repo, name, observed)
@@ -753,7 +918,11 @@ async def observe_http(loader, routes, case):
     repo = await prepare(loader, case)
     before = snapshot(repo)
     trace = []
-    instrument_repository(repo, trace)
+    instrument_repository(
+        repo,
+        trace,
+        failure_method=case.get("repository_failure"),
+    )
     app = FastAPI()
     app.include_router(routes.issuance_router)
     app.include_router(routes.issued_credential_router)
@@ -865,7 +1034,10 @@ async def observe_http(loader, routes, case):
         patch.object(socket, "getaddrinfo", controlled_dns),
     ):
         async with original_client(
-            transport=httpx.ASGITransport(app=app, raise_app_exceptions=True),
+            transport=httpx.ASGITransport(
+                app=app,
+                raise_app_exceptions=not bool(case.get("repository_failure")),
+            ),
             base_url="https://capture.example",
         ) as transport:
             if case.get("entrypoint") == "direct_adapter":
@@ -957,9 +1129,13 @@ async def observe_http(loader, routes, case):
                         raise AssertionError(
                             f"Scenario {case['id']} did not reach its qualified HTTP outcome: {response.status_code}, {response.text}"
                         )
-                    responses.append(
-                        {"status": response.status_code, "body": response.json()}
+                    content_type = response.headers.get("content-type", "")
+                    body = (
+                        response.json()
+                        if content_type.split(";", 1)[0].strip().endswith("json")
+                        else response.text
                     )
+                    responses.append({"status": response.status_code, "body": body})
     require_clean_capture()
     return {
         "id": case["id"],
@@ -1089,6 +1265,7 @@ async def observe(loader, routes, scenarios):
                     "expected_status": 401,
                 }
             )
+    http_cases.extend(copy.deepcopy(scenarios["authentication"]["order_cases"]))
     observations = []
     with (
         patch.object(socket.socket, "connect", denied_network),
@@ -1179,6 +1356,9 @@ def observe_sources(
         publication_boundary=publication_boundary,
     )
     verify_sources(sources)
+    # Source-only audit remains usable without application dependencies. Every
+    # behavioral observation, including adapter-only modes, is release-bound.
+    dependency_profile = None if audit else require_release_dependency_profile()
     with patch.dict(os.environ, ENVIRONMENT, clear=True):
         loader = PinnedDefinitions(sources)
         try:
@@ -1266,10 +1446,11 @@ def observe_sources(
                     canonical_json_bytes(scenario_path.read_bytes())
                 ).hexdigest(),
                 "infrastructure_controls": controls,
-                "dependencies": {
-                    name: importlib.metadata.version(name)
-                    for name in ("fastapi", "pydantic", "httpx")
+                "release_image": {
+                    "uri": RELEASE_IMAGE,
+                    "digest": RELEASE_IMAGE_DIGEST,
                 },
+                "dependencies": dependency_profile,
                 "boundary": "Pinned publication adapter and models; original seed helpers with explicit inputs; controlled HTTP/org-secret lookup and clock; no ASGI/PG/filesystem/TLS/deployed proof"
                 if adapter_reference or publication_boundary
                 else "Pinned ASGI routes/models; frozen memory repository; controlled HTTP transport and clock; loop batch ports controlled; no PG/gateway/TLS/deployed proof",
@@ -1298,6 +1479,16 @@ def main():
         action="store_true",
         help="Print losslessly compact JSON instead of indented output",
     )
+    parser.add_argument(
+        "--write-reference",
+        action="store_true",
+        help="Atomically replace only the selected checked-in reference artifact",
+    )
+    parser.add_argument(
+        "--release-image",
+        action="store_true",
+        help="Execute the observation worker in the exact immutable release image",
+    )
     parser.add_argument("--worker", action="store_true", help=argparse.SUPPRESS)
     args = parser.parse_args()
     if args.worker:
@@ -1312,8 +1503,12 @@ def main():
         return
     if args.credentials_checkout is None:
         parser.error("credentials_checkout is required")
-    if args.check and (args.audit or args.summary or args.compact):
-        parser.error("--check cannot be combined with display/audit modes")
+    if args.check and (
+        args.audit or args.summary or args.compact or args.write_reference
+    ):
+        parser.error("--check cannot be combined with display/audit/write modes")
+    if args.write_reference and (args.audit or args.summary or args.compact):
+        parser.error("--write-reference cannot be combined with display/audit modes")
     if args.adapter_reference and (args.audit or args.summary):
         parser.error("--adapter-reference cannot be combined with audit/summary")
     if args.publication_boundary_reference and (
@@ -1322,20 +1517,30 @@ def main():
         parser.error(
             "--publication-boundary-reference cannot be combined with other reference/audit/summary modes"
         )
-    encoded, result = bounded_observation_child(
+    try:
+        require_release_image_controller(
+            audit=args.audit,
+            check=args.check,
+            write_reference=args.write_reference,
+            release_image=args.release_image,
+        )
+    except ValueError as exc:
+        parser.error(str(exc))
+    observe = release_image_observation if args.release_image else bounded_observation_child
+    encoded, result = observe(
         read_sources(args.credentials_checkout),
         audit=args.audit,
         adapter_reference=args.adapter_reference,
         publication_boundary=args.publication_boundary_reference,
     )
+    reference_path = (
+        PUBLICATION_BOUNDARY_REFERENCE
+        if args.publication_boundary_reference
+        else ADAPTER_REFERENCE
+        if args.adapter_reference
+        else REFERENCE
+    )
     if args.check:
-        reference_path = (
-            PUBLICATION_BOUNDARY_REFERENCE
-            if args.publication_boundary_reference
-            else ADAPTER_REFERENCE
-            if args.adapter_reference
-            else REFERENCE
-        )
         if canonical_json_bytes(reference_path.read_bytes()).decode("utf-8") != encoded:
             raise ValueError("Frozen Canvas mirror observations differ")
         if args.publication_boundary_reference:
@@ -1350,6 +1555,26 @@ def main():
             print(
                 f"Canvas mirror reference PASS: {len(result['http'])} HTTP, {len(result['provider_cancellation'])} provider cancellations, {len(result['loop'])} loop, {len(result['configuration'])} configuration cases"
             )
+    elif args.write_reference:
+        reference_path.parent.mkdir(parents=True, exist_ok=True)
+        temporary = None
+        try:
+            with tempfile.NamedTemporaryFile(
+                "w",
+                encoding="utf-8",
+                newline="\n",
+                dir=reference_path.parent,
+                prefix=f".{reference_path.name}.",
+                suffix=".tmp",
+                delete=False,
+            ) as handle:
+                handle.write(encoded)
+                temporary = Path(handle.name)
+            temporary.replace(reference_path)
+        finally:
+            if temporary is not None:
+                temporary.unlink(missing_ok=True)
+        print(f"Wrote {reference_path.relative_to(ROOT)}")
     elif args.summary and not args.audit:
         print(
             json.dumps(

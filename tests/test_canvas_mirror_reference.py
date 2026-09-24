@@ -10,6 +10,8 @@ import io
 import json
 import math
 from pathlib import Path
+import subprocess
+import sys
 
 import pytest
 
@@ -65,11 +67,15 @@ def assert_connected(contract, reference, scenarios, capture):
         "run_canvas_mirror_automation_loop",
         "CanvasMirrorAutomationConfig",
     } <= selected
-    expected_http = [case["id"] for case in scenarios["http"]] + [
-        f"auth_{operation}_{'missing' if key is None else 'wrong'}"
-        for operation in scenarios["authentication"]["operations"]
-        for key in scenarios["authentication"]["keys"]
-    ]
+    expected_http = (
+        [case["id"] for case in scenarios["http"]]
+        + [
+            f"auth_{operation}_{'missing' if key is None else 'wrong'}"
+            for operation in scenarios["authentication"]["operations"]
+            for key in scenarios["authentication"]["keys"]
+        ]
+        + [case["id"] for case in scenarios["authentication"]["order_cases"]]
+    )
     assert [case["id"] for case in reference["http"]] == expected_http
     assert (
         len(expected_http)
@@ -261,6 +267,11 @@ def test_contract_artifact_hashes_and_source_coverage(capture, artifact):
     )
     assert coverage["upstream"]["sha256"] == contract["upstream_surface_sha256"]
     assert artifact["scenarios_sha256"] == contract["scenarios"]["sha256"]
+    assert artifact["release_image"] == {
+        "uri": capture.RELEASE_IMAGE,
+        "digest": capture.RELEASE_IMAGE_DIGEST,
+    }
+    assert artifact["dependencies"] == capture.RELEASE_DEPENDENCIES
 
 
 @pytest.mark.parametrize("owner", ["reference", "scenarios"])
@@ -550,6 +561,168 @@ def test_positive_replay_and_denial_side_effects(artifact):
     assert cases["health_foreign_context"]["responses"][0]["status"] == 200
 
 
+def test_current_release_route_inventory_is_exact(capture):
+    contract = json.loads(CONTRACT.read_text(encoding="utf-8"))
+    assert contract["source_release"] == "v0.1.76"
+    assert contract["source_commit"] == capture.REVISION
+    assert contract["source_tree"] == "819b7458a31c75d28043a4660643b029c5ec4567"
+    assert contract["source_path"] == capture.SOURCES[capture.ROUTES][0]
+    assert contract["source_blob_sha1"] == capture.SOURCES[capture.ROUTES][1]
+    assert contract["release_runtime"] == {
+        "image": capture.RELEASE_IMAGE,
+        "digest": capture.RELEASE_IMAGE_DIGEST,
+        "dependencies": capture.RELEASE_DEPENDENCIES,
+        "profile_source_path": capture.SOURCES["release_profile"][0],
+        "profile_source_blob_sha1": capture.SOURCES["release_profile"][1],
+    }
+    assert [route["operation"] for route in contract["routes"]] == list(
+        capture.OPERATIONS
+    )
+    assert [route["source_line"] for route in contract["routes"]] == [
+        6151,
+        6201,
+        6220,
+        6237,
+        6256,
+        6393,
+    ]
+    assert sum(route["definition_lines"] for route in contract["routes"]) == 237
+    assert contract["route_definition_lines"] == 237
+    assert contract["registered_route_envelope_lines"] == 277
+
+
+def test_all_six_routes_have_success_and_owned_side_effect_contracts(artifact):
+    contract = json.loads(CONTRACT.read_text(encoding="utf-8"))
+    cases = {case["id"]: case for case in artifact["http"]}
+    success = contract["behavior"]["success_cases"]
+    assert set(success) == {
+        "publish",
+        "pending",
+        "resync",
+        "cycle",
+        "health",
+        "provenance",
+    }
+    outbound = {
+        "publish": 1,
+        "pending": 1,
+        "resync": 1,
+        "cycle": 2,
+        "health": 0,
+        "provenance": 0,
+    }
+    mutations = {"publish", "pending", "resync", "cycle"}
+    for operation, case_id in success.items():
+        case = cases[case_id]
+        assert all(response["status"] == 200 for response in case["responses"])
+        assert (
+            sum(call["kind"] == "http" for call in case["trace"]) == outbound[operation]
+        )
+        assert (case["before"] != case["after"]) == (operation in mutations)
+
+
+def test_authentication_precedes_validation_tenant_repository_and_effects(artifact):
+    cases = {case["id"]: case for case in artifact["http"]}
+    auth = [case for case in artifact["http"] if case["id"].startswith("auth_")]
+    assert len(auth) == 15
+    for case in auth:
+        missing = case["id"].endswith("_missing") or case["id"] == (
+            "auth_pending_before_validation"
+        )
+        detail = "X-API-Key header is missing" if missing else "Invalid API Key"
+        assert case["responses"] == [{"status": 401, "body": {"detail": detail}}]
+        assert case["before"] == case["after"]
+        assert case["trace"] == []
+    assert (
+        cases["auth_publish_before_tenant"]["request"]["headers"]["X-Organization-ID"]
+        == "org-other"
+    )
+    assert cases["auth_pending_before_validation"]["request"]["query"]["limit"] == "0"
+    assert (
+        cases["auth_provenance_before_tenant"]["request"]["headers"][
+            "X-Organization-ID"
+        ]
+        == "org-other"
+    )
+
+
+def test_tenant_order_and_management_scope_do_not_regress(artifact):
+    cases = {case["id"]: case for case in artifact["http"]}
+
+    for case_id, status_code in (
+        ("publish_foreign_context", 404),
+        ("publish_missing_context", 403),
+    ):
+        case = cases[case_id]
+        assert case["responses"][0]["status"] == status_code
+        assert [call["method"] for call in case["trace"]] == ["get_credential"]
+        assert case["before"] == case["after"]
+
+    for case_id in ("provenance_missing_context", "provenance_context_mismatch"):
+        case = cases[case_id]
+        assert case["responses"][0]["status"] == 403
+        assert case["trace"] == []
+        assert case["before"] == case["after"]
+
+    health = cases["health_foreign_context"]
+    assert health["responses"][0]["status"] == 200
+    assert [call["method"] for call in health["trace"]] == ["list_delivery_records"]
+    assert health["before"] == health["after"]
+    assert (
+        "organization_id" not in cases["pending_all_organizations"]["request"]["query"]
+    )
+
+
+def test_repository_failures_are_generic_ordered_and_effect_free(artifact):
+    contract = json.loads(CONTRACT.read_text(encoding="utf-8"))
+    cases = {case["id"]: case for case in artifact["http"]}
+    failure_methods = contract["behavior"]["repository_failure"]["cases"]
+    ids = {
+        "publish": "publish_repository_failure",
+        "pending": "pending_repository_failure",
+        "resync": "status_repository_failure",
+        "cycle": "automation_repository_failure",
+        "health": "health_repository_failure",
+        "provenance": "provenance_repository_failure",
+    }
+    assert set(ids) == set(failure_methods)
+    for operation, case_id in ids.items():
+        case = cases[case_id]
+        assert case["responses"] == [{"status": 500, "body": "Internal Server Error"}]
+        assert case["before"] == case["after"]
+        assert len(case["trace"]) == 1
+        failure = case["trace"][0]
+        assert failure["kind"] == "repository"
+        assert failure["method"] == failure_methods[operation]
+        assert failure["failure"] == "RuntimeError"
+        assert not any(call["kind"] in {"http", "secret"} for call in case["trace"])
+        response_text = json.dumps(case["responses"], sort_keys=True)
+        assert "RuntimeError" not in response_text
+        assert "synthetic repository failure" not in response_text
+        assert "private_fixture_marker" not in response_text
+
+
+def test_feature_gate_and_management_regression_cases_are_connected(artifact):
+    contract = json.loads(CONTRACT.read_text(encoding="utf-8"))
+    cases = {case["id"]: case for case in artifact["http"]}
+    assert set(contract["behavior"]["feature_regression_cases"]) <= set(cases)
+
+    expected = {
+        "publish_gate_disabled": (409, "enable_canvas_mirror_publish"),
+        "publish_operations_disabled": (409, "enable_canvas_mirror_ops"),
+        "status_gate_disabled": (200, "enable_canvas_mirror_ops"),
+    }
+    for case_id, (status_code, feature) in expected.items():
+        case = cases[case_id]
+        assert case["responses"][0]["status"] == status_code
+        assert not any(call["kind"] in {"http", "secret"} for call in case["trace"])
+        assert case["before"] != case["after"]
+        snapshot = artifact["snapshots"][case["after"]["snapshot_sha256"]]
+        metadata = snapshot["delivery_records"]["delivery-001"]["metadata"]
+        assert metadata["canvas_feature_gate_blocked"] is True
+        assert metadata["canvas_feature_gate"] == feature
+
+
 def test_provider_cancellation_is_not_only_a_stubbed_loop(artifact):
     for case in artifact["provider_cancellation"]:
         assert case["responses"] == [{"outcome": "CancelledError"}]
@@ -635,6 +808,147 @@ def test_source_input_hash_mismatch_is_fatal(capture):
     wrong = {name: "" for name in capture.SOURCES}
     with pytest.raises(ValueError, match="Untrusted"):
         capture.verify_sources(wrong)
+
+
+def test_release_dependency_profile_is_source_bound_and_fail_closed(
+    capture, monkeypatch
+):
+    profile = " ".join(
+        f"{package}=={version}"
+        for package, version in capture.RELEASE_DEPENDENCIES.items()
+    )
+    capture.verify_release_profile_source(profile)
+    with pytest.raises(ValueError, match="Pinned release dependency profile"):
+        capture.verify_release_profile_source(
+            profile.replace("fastapi==0.109.0", "fastapi==0.109.1")
+        )
+
+    monkeypatch.setattr(
+        capture.importlib.metadata,
+        "version",
+        lambda package: (
+            "0.109.1"
+            if package == "fastapi"
+            else capture.RELEASE_DEPENDENCIES[package]
+        ),
+    )
+    with pytest.raises(RuntimeError, match="immutable Credentials v0.1.76"):
+        capture.require_release_dependency_profile()
+
+
+def test_pinned_closure_distinguishes_function_locals_from_globals(capture):
+    function = ast.parse(
+        "def capture(repo, *, clock):\n"
+        "    response = repo.read()\n"
+        "    return normalize(response, clock())\n"
+    ).body[0]
+
+    assert capture.referenced_names(function) == {"normalize"}
+
+
+def test_ci_replays_reference_in_exact_release_image():
+    workflow = (ROOT / ".github/workflows/ci.yml").read_text(encoding="utf-8")
+    assert "needs.changes.outputs.rust == 'true'" in workflow
+    assert "repository: ElevenID/marty-credentials" in workflow
+    assert "ref: aaa6a9b8e31e62cd0ab087eef5fc1f4835048e26" in workflow
+    assert "docker pull \"$image@$digest\"" in workflow
+    assert workflow.count("scripts/capture_canvas_mirror_reference.py") >= 3
+    assert "--release-image --check" in workflow
+    assert "--release-image --adapter-reference --check" in workflow
+    assert "--release-image --publication-boundary-reference --check" in workflow
+    assert (
+        "sha256:815cbba6efc7c91e770a8dd15fe5fa102d252a485073bf60f0e0d5e0a73b28e5"
+        in workflow
+    )
+
+
+@pytest.mark.parametrize("operation", ["check", "write_reference"])
+def test_behavioral_artifact_operations_require_release_image(capture, operation):
+    arguments = {operation: True}
+    with pytest.raises(ValueError, match="require --release-image"):
+        capture.require_release_image_controller(**arguments)
+
+    capture.require_release_image_controller(release_image=True, **arguments)
+    capture.require_release_image_controller(audit=True, **arguments)
+
+
+@pytest.mark.parametrize("operation", ["--check", "--write-reference"])
+def test_cli_rejects_ambient_behavioral_artifact_operation(operation):
+    completed = subprocess.run(
+        [sys.executable, str(CAPTURE), str(ROOT), operation],
+        stdin=subprocess.DEVNULL,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        check=False,
+        timeout=5,
+    )
+    assert completed.returncode == 2
+    assert b"require --release-image" in completed.stderr
+
+
+def test_release_image_process_is_isolated_and_profile_checked(
+    capture, artifact, monkeypatch
+):
+    monkeypatch.setattr(capture, "verify_sources", lambda _sources: None)
+    observed = {}
+
+    def bounded(arguments, _source_input, **controls):
+        observed["arguments"] = arguments
+        observed["controls"] = controls
+        return 0, json.dumps(artifact).encode(), b""
+
+    monkeypatch.setattr(capture, "run_bounded_process", bounded)
+    _, actual = capture.release_image_observation({})
+    assert actual == artifact
+    arguments = observed["arguments"]
+    for option, value in (
+        ("--network", "none"),
+        ("--cap-drop", "ALL"),
+        ("--security-opt", "no-new-privileges"),
+        ("--tmpfs", "/tmp:rw,noexec,nosuid,nodev,size=16m"),
+    ):
+        position = arguments.index(option)
+        assert arguments[position + 1] == value
+    assert "--read-only" in arguments
+    assert f"{capture.ROOT}:/review:ro" in arguments
+    assert (
+        f"{capture.RELEASE_IMAGE}@{capture.RELEASE_IMAGE_DIGEST}" in arguments
+    )
+    assert observed["controls"] == {
+        "deadline_seconds": 45,
+        "label": "Immutable release-image observation",
+    }
+
+
+@pytest.mark.parametrize("mode", ["profile", "timeout", "flood", "nonzero", "stderr"])
+def test_release_image_observation_fails_closed(
+    capture, artifact, monkeypatch, mode
+):
+    monkeypatch.setattr(capture, "verify_sources", lambda _sources: None)
+    result = copy.deepcopy(artifact)
+    if mode == "profile":
+        result["dependencies"]["fastapi"] = "0.109.1"
+    outcomes = {
+        "profile": (0, json.dumps(result).encode(), b""),
+        "nonzero": (7, json.dumps(artifact).encode(), b"controlled failure"),
+        "stderr": (0, json.dumps(artifact).encode(), b"unexpected warning"),
+    }
+    if mode in {"timeout", "flood"}:
+        reason = "45-second deadline" if mode == "timeout" else "size limit"
+
+        def fail_bounded(*_args, **_kwargs):
+            raise RuntimeError(reason)
+
+        monkeypatch.setattr(capture, "run_bounded_process", fail_bounded)
+    else:
+        monkeypatch.setattr(
+            capture,
+            "run_bounded_process",
+            lambda *_args, **_kwargs: outcomes[mode],
+        )
+        reason = "profile differs" if mode == "profile" else "observation failed"
+    with pytest.raises(RuntimeError, match=reason):
+        capture.release_image_observation({})
 
 
 @pytest.mark.parametrize(

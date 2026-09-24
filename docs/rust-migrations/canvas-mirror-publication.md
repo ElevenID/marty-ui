@@ -1,7 +1,17 @@
 # Canvas mirror publication: frozen-reference phase
 
-Baseline UI: `65807a94e4a8f7a2c3fac9eb23f68e7b7fda8192`.
-Reference Credentials: `578e86ef43166be79add2d812e92ef650535edaa`.
+Baseline UI: `b5d9d5203511159ff38412fc6eaa691cae636ff8`.
+Reference Credentials: published `v0.1.76`, protected-main commit
+`aaa6a9b8e31e62cd0ab087eef5fc1f4835048e26`, tree
+`819b7458a31c75d28043a4660643b029c5ec4567`.
+The behavioral oracle runs only inside immutable issuance image
+`ghcr.io/elevenid/marty-credentials-issuance@sha256:815cbba6efc7c91e770a8dd15fe5fa102d252a485073bf60f0e0d5e0a73b28e5`.
+It verifies the release Dockerfile blob and refuses any runtime other than the
+deployed FastAPI `0.109.0`, Pydantic `2.11.7`, and httpx `0.26.0` profile before
+executing a route. CI executes the complete `--check` capture in that image;
+all three reference modes must pass, so static artifact hashes are not accepted
+as behavioral replay evidence. Artifact checks and writes refuse to run without
+the release-image controller.
 
 This slice covers six HTTP operations, bridge and Badgr publication, mirror
 health/provenance, publication and lifecycle-retry batches, alerts/webhooks, and
@@ -12,20 +22,22 @@ this reference checkpoint.
 
 ## Ownership and deletion boundary
 
-The frozen `infrastructure/api/routes.py` owns the six routes at lines 6190,
-6240, 6259, 6276, 6295 and 6432; mirror helpers at 2000–3068; response models
-at 1436–1544. `infrastructure/adapters/canvas_credentials_adapter.py` owns
-publication payloads and bridge/Badgr HTTP calls. `main.py:358` starts the
-optional mirror loop and cancels/awaits it during shutdown.
+The frozen `infrastructure/api/routes.py` owns the six route definitions at
+lines 6151, 6201, 6220, 6237, 6256 and 6393. They contain 237 definition lines
+inside a 277-line registered route envelope; the larger helper/DTO/publication
+envelope remains a separate implementation concern. The
+`infrastructure/adapters/canvas_credentials_adapter.py` module owns publication
+payloads and bridge/Badgr HTTP calls. `main.py:372` starts the optional mirror
+loop and cancels/awaits it during shutdown.
 
 Reuse native `canvas_lifecycle_delivery`, `canvas_credentials_status`,
 `canvas_credentials_validation`, the integration-secret owner, outbound HTTP
 policy and lossless JSON/text codecs. Validation is not publication. HTTP and
 automatic batches must share one domain implementation.
 
-Do not delete the whole Python adapter: `canvas_routes.py:128` still imports
+Do not delete the whole Python adapter: `canvas_routes.py:132` still imports
 validation and evidence functions. Legacy credential lifecycle handlers call
-`_sync_canvas_lifecycle_delivery_records` at `routes.py:5933,6016,6071`.
+`_sync_canvas_lifecycle_delivery_records` at `routes.py:5889,5972,6027`.
 The mirror loop is another consumer even when disabled by default.
 UI consumers include `ui/src/services/canvasIntegrationsApi.js:249–294`,
 `CanvasIntegrationsPage.jsx` and `CredentialTemplateDetailPage.jsx`.
@@ -42,7 +54,7 @@ the existing controlled HTTP transport. It covers bridge/Badgr payload options,
 eight aggregate identity mismatch cases, recipient precedence, delivery-secret aliases
 and fallback, HTTP errors, response IDs, UTF-16 JSON and Unicode text excerpts.
 It does not execute ASGI admission, persist deliveries, test real filesystem
-secret rotation, or replace the original 64/4/9/4 reference corpus.
+secret rotation, or replace the updated 73/4/9/4 reference corpus.
 The foreign delivery-organization case explicitly includes that organization in
 the synthetic pilot list to reach aggregate ownership; a separate unchanged
 pilot-list case preserves the earlier portable-feature rejection.
@@ -53,7 +65,8 @@ The outer artifact is strict JSON. Decode the tagged text using the existing
 lossless Python-compatible response decoder for native comparison: numeric NaN,
 string `"NaN"`, and escaped unpaired surrogates remain distinct. This is not an
 observation of an ASGI renderer or a production persistence representation.
-Run the same capture command with `--adapter-reference --check` for this corpus.
+Run the same release-image capture command with
+`--release-image --adapter-reference --check` for this corpus.
 Both corpora retain independent hashes and mandatory root-discovered guards.
 
 Checked-in reference and scenario artifact identities use strict UTF-8 with
@@ -81,7 +94,7 @@ startup behavior, exception continuation and cancellation propagation. This
 does not prove OS scheduling or graceful process shutdown; actual packaged-main
 startup/shutdown remains a later required gate.
 
-The initial corpus contains 64 HTTP cases, four cancellations while an actual
+The current corpus contains 73 HTTP cases, four cancellations while an actual
 selected bridge/Badgr transport callback is held (two ASGI calls and two actual
 loop-to-batch paths), nine separately controlled scheduling cases, and four
 configuration cases. Repeated whole snapshots are losslessly interned by their
@@ -95,21 +108,43 @@ complete observation phase has a 30-second parent deadline and 4 MiB per-stream
 capture limits. Deadline, output, pipe-reader, startup, missing-global, or
 unowned-origin failure cannot produce an accepted artifact. Source reads have
 their own per-command bound; the 30 seconds does not include those reads.
+The container controller has its own 45-second streaming bound and runs with no
+network, a read-only root filesystem and repository mount, no Linux capabilities,
+no-new-privileges, and a bounded 16 MiB temporary filesystem.
 
-Reproduce using a Python environment with the dependency versions recorded in
-the artifact:
+Reproduce through the pinned container controller; an ambient Python environment
+is deliberately rejected before route execution:
 
 ```text
-python scripts/capture_canvas_mirror_reference.py <credentials-git-checkout> --check
+python scripts/capture_canvas_mirror_reference.py <credentials-git-checkout> --release-image --check
+python scripts/capture_canvas_mirror_reference.py <credentials-git-checkout> --release-image --adapter-reference --check
+python scripts/capture_canvas_mirror_reference.py <credentials-git-checkout> --release-image --publication-boundary-reference --check
 python -m pytest tests/test_canvas_mirror_reference.py
 ```
 
 The normal root test suite discovers the artifact guards without importing
 FastAPI/httpx. `--check` additionally executes the controlled oracle; neither
-command substitutes for the later native/PG/runtime gates. This initial corpus
-does not claim exhaustive provider configuration/response grammar coverage.
-Further input vectors belong in the reference before their native behavior is
+command substitutes for the later native/PG/runtime gates. This corpus does not
+claim exhaustive provider configuration/response grammar coverage. Further
+input vectors belong in the reference before their native behavior is
 implemented, with prior observations retained.
+
+The HTTP corpus includes a success/effect case for every route and rejects
+missing or incorrect management authentication before tenant checks, query
+validation, repository access, provider access, or mutation. Dedicated order
+cases combine invalid authentication with a foreign tenant or invalid query.
+The publish route intentionally reads the credential before its hidden-resource
+tenant decision; provenance intentionally validates trusted organization
+context before any repository access. Health and batch routes remain
+management-key scoped and do not acquire an invented tenant-header rule.
+
+Each route also has a controlled first-repository-call failure. The frozen HTTP
+result is a generic 500 body with unchanged complete repository snapshots, no
+provider or secret access, and no Python exception/private fixture text in the
+response. Feature-gate regressions preserve their existing blocked-record
+metadata side effect while proving zero provider access. These controlled
+memory-repository cases do not establish PostgreSQL outage or transaction
+semantics; those remain an implementation gate.
 
 ## Required next implementation gates
 

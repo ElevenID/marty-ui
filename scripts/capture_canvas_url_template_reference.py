@@ -32,6 +32,7 @@ ROOT = SCRIPTS.parent
 SCENARIOS = ROOT / "contracts/canvas-url-template-scenarios.json"
 REFERENCE = ROOT / "contracts/canvas-url-template-python-reference.json"
 SCHEMA = "marty.canvas-url-template-reference/v1"
+SOURCE_COMMIT = "578e86ef43166be79add2d812e92ef650535edaa"
 HELPERS = {
     "assertion": ("_badgr_assertion_url", "CANVAS_CREDENTIALS_ASSERTION_URL_TEMPLATE"),
     "validation": ("_badgr_validation_url", "CANVAS_CREDENTIALS_VALIDATE_URL_TEMPLATE"),
@@ -205,7 +206,7 @@ def observe_sources(sources):
                 raise AssertionError("Template reference infrastructure violation")
             return {
                 "schema": SCHEMA,
-                "source_commit": pinned.REVISION,
+                "source_commit": SOURCE_COMMIT,
                 "source_blobs": {
                     name: pinned.SOURCES[name][1] for name in loader.selected
                 },
@@ -228,7 +229,7 @@ def validate_result(result):
         "observations",
     }:
         raise ValueError("Invalid terminal template envelope")
-    if result["schema"] != SCHEMA or result["source_commit"] != pinned.REVISION:
+    if result["schema"] != SCHEMA or result["source_commit"] != SOURCE_COMMIT:
         raise ValueError("Unexpected template reference provenance")
     expected_hash = hashlib.sha256(
         pinned.canonical_json_bytes(SCENARIOS.read_bytes())

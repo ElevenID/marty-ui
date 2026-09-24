@@ -1598,7 +1598,8 @@ jobs:
     needs: changes
     if: >-
       needs.changes.outputs.release == 'true' ||
-      needs.changes.outputs.verification == 'true'
+      needs.changes.outputs.verification == 'true' ||
+      needs.changes.outputs.rust == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 20
     env:
@@ -1610,6 +1611,12 @@ jobs:
       - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97
         with:
           python-version: "3.12.10"
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+          repository: ElevenID/marty-credentials
+          ref: aaa6a9b8e31e62cd0ab087eef5fc1f4835048e26
+          path: .reference/marty-credentials-v0.1.76
       - uses: astral-sh/setup-uv@20cfd1bf945f4377ade1205e4dbc17946fc9a30d
         with:
           version: "0.11.3"
@@ -1686,6 +1693,24 @@ jobs:
           PY
       - name: Enforce OSS commerce boundary
         run: python scripts/check_oss_boundary.py
+      - name: Replay Canvas mirror oracle in exact Credentials release image
+        shell: bash
+        run: |
+          set -euo pipefail
+          image="ghcr.io/elevenid/marty-credentials-issuance"
+          digest="sha256:815cbba6efc7c91e770a8dd15fe5fa102d252a485073bf60f0e0d5e0a73b28e5"
+          # The oracle intentionally replays v0.1.76 even after the deployable
+          # stack lock advances to a newer Credentials release.
+          docker pull "$image@$digest"
+          python scripts/capture_canvas_mirror_reference.py \
+            .reference/marty-credentials-v0.1.76 \
+            --release-image --check
+          python scripts/capture_canvas_mirror_reference.py \
+            .reference/marty-credentials-v0.1.76 \
+            --release-image --adapter-reference --check
+          python scripts/capture_canvas_mirror_reference.py \
+            .reference/marty-credentials-v0.1.76 \
+            --release-image --publication-boundary-reference --check
       - name: Run repository release checks
         run: python -m pytest tests -v --tb=short
       - name: Configure the pinned containerd image store

@@ -76,9 +76,9 @@
     }
   ],
   "dependencies": {
-    "fastapi": "0.135.3",
-    "httpx": "0.28.1",
-    "pydantic": "2.13.0"
+    "fastapi": "0.109.0",
+    "httpx": "0.26.0",
+    "pydantic": "2.11.7"
   },
   "http": [
     {
@@ -212,7 +212,7 @@
           "trust_env": false
         },
         {
-          "body": "{\"issuer_id\":\"issuer-elevenid\",\"organization_id\":\"org-1\",\"canvas_platform_id\":\"platform-1\",\"canvas_program_binding_id\":\"binding-1\",\"canvas_account_id\":\"canvas-account-1\",\"canvas_base_url\":\"https://canvas.example.test\",\"credential\":{\"id\":\"cred-001\",\"transaction_id\":\"tx-001\",\"credential_template_id\":\"tmpl-1\",\"format\":\"w3c_vcdm_v2_sd_jwt\",\"jwt\":\"eyJhbGciOiJFZERTQSJ9.test.sig\",\"hash\":\"62971d440b33f7dd58117df0ea1fb45ac424913c8b74b497869b50914568f7aa\",\"issuer_did\":\"did:web:issuer.example\",\"revocation_profile_id\":null,\"status_list_entries\":[],\"issued_at\":\"2026-03-01T00:00:00+00:00\",\"expires_at\":\"2027-03-01T00:00:00+00:00\"},\"recipient\":{\"applicant_id\":\"applicant-1\",\"subject_did\":\"did:key:z6Mk_subject\"},\"source\":{\"delivery_record_id\":\"delivery-001\",\"delivery_mode\":\"wallet_plus_canvas_mirror\",\"application_id\":null},\"metadata\":{\"queue\":\"canvas_credentials_mirror\",\"canvas_platform_id\":\"platform-1\",\"canvas_program_binding_id\":\"binding-1\",\"publish_attempts\":0,\"private_fixture_marker\":\"must-not-enter-public-provenance-metadata\"}}",
+          "body": "{\"issuer_id\": \"issuer-elevenid\", \"organization_id\": \"org-1\", \"canvas_platform_id\": \"platform-1\", \"canvas_program_binding_id\": \"binding-1\", \"canvas_account_id\": \"canvas-account-1\", \"canvas_base_url\": \"https://canvas.example.test\", \"credential\": {\"id\": \"cred-001\", \"transaction_id\": \"tx-001\", \"credential_template_id\": \"tmpl-1\", \"format\": \"w3c_vcdm_v2_sd_jwt\", \"jwt\": \"eyJhbGciOiJFZERTQSJ9.test.sig\", \"hash\": \"62971d440b33f7dd58117df0ea1fb45ac424913c8b74b497869b50914568f7aa\", \"issuer_did\": \"did:web:issuer.example\", \"revocation_profile_id\": null, \"status_list_entries\": [], \"issued_at\": \"2026-03-01T00:00:00+00:00\", \"expires_at\": \"2027-03-01T00:00:00+00:00\"}, \"recipient\": {\"applicant_id\": \"applicant-1\", \"subject_did\": \"did:key:z6Mk_subject\"}, \"source\": {\"delivery_record_id\": \"delivery-001\", \"delivery_mode\": \"wallet_plus_canvas_mirror\", \"application_id\": null}, \"metadata\": {\"queue\": \"canvas_credentials_mirror\", \"canvas_platform_id\": \"platform-1\", \"canvas_program_binding_id\": \"binding-1\", \"publish_attempts\": 0, \"private_fixture_marker\": \"must-not-enter-public-provenance-metadata\"}}",
           "headers": {
             "accept": "application/json",
             "authorization": "Bearer synthetic-provider-token",
@@ -421,7 +421,7 @@
           "trust_env": false
         },
         {
-          "body": "{\"issuedOn\":\"2026-03-01T00:00:00+00:00\",\"recipient\":{\"identity\":\"learner@example.edu\",\"type\":\"email\",\"hashed\":true},\"allowDuplicateAwards\":false,\"narrative\":\"Issued by ElevenID from verified Canvas course activity.\",\"evidence\":[{\"url\":\"https://issuer.example/console/org/operate/verify?delivery_record_id=delivery-001&credential_id=cred-001&canvas_account_id=canvas-account-1&organization_id=org-1\",\"name\":\"ElevenID canonical credential record\",\"description\":\"Links this Canvas Credentials badge to the canonical ElevenID issuance, issuer DID, and lifecycle status.\",\"narrative\":\"Canvas was the learning context; ElevenID holds the signed credential, issuer identity, and revocation status.\",\"genre\":\"Credential provenance\",\"audience\":\"Verifiers and employers\"}],\"extensions\":{\"value\":{\"elevenid\":{\"credential_id\":\"cred-001\",\"credential_hash\":\"62971d440b33f7dd58117df0ea1fb45ac424913c8b74b497869b50914568f7aa\",\"issuer_did\":\"did:web:issuer.example\",\"delivery_record_id\":\"delivery-001\",\"canvas_account_id\":\"canvas-account-1\",\"provenance_url\":\"https://issuer.example/console/org/operate/verify?delivery_record_id=delivery-001&credential_id=cred-001&canvas_account_id=canvas-account-1&organization_id=org-1\"}}},\"expires\":\"2027-03-01T00:00:00+00:00\"}",
+          "body": "{\"issuedOn\": \"2026-03-01T00:00:00+00:00\", \"recipient\": {\"identity\": \"learner@example.edu\", \"type\": \"email\", \"hashed\": true}, \"allowDuplicateAwards\": false, \"narrative\": \"Issued by ElevenID from verified Canvas course activity.\", \"evidence\": [{\"url\": \"https://issuer.example/console/org/operate/verify?delivery_record_id=delivery-001&credential_id=cred-001&canvas_account_id=canvas-account-1&organization_id=org-1\", \"name\": \"ElevenID canonical credential record\", \"description\": \"Links this Canvas Credentials badge to the canonical ElevenID issuance, issuer DID, and lifecycle status.\", \"narrative\": \"Canvas was the learning context; ElevenID holds the signed credential, issuer identity, and revocation status.\", \"genre\": \"Credential provenance\", \"audience\": \"Verifiers and employers\"}], \"extensions\": {\"value\": {\"elevenid\": {\"credential_id\": \"cred-001\", \"credential_hash\": \"62971d440b33f7dd58117df0ea1fb45ac424913c8b74b497869b50914568f7aa\", \"issuer_did\": \"did:web:issuer.example\", \"delivery_record_id\": \"delivery-001\", \"canvas_account_id\": \"canvas-account-1\", \"provenance_url\": \"https://issuer.example/console/org/operate/verify?delivery_record_id=delivery-001&credential_id=cred-001&canvas_account_id=canvas-account-1&organization_id=org-1\"}}}, \"expires\": \"2027-03-01T00:00:00+00:00\"}",
           "headers": {
             "accept": "application/json",
             "authorization": "Bearer synthetic-provider-token",
@@ -583,7 +583,7 @@
           "trust_env": false
         },
         {
-          "body": "{\"issuedOn\":\"2026-03-01T00:00:00+00:00\",\"recipient\":{\"identity\":\"learner@example.edu\",\"type\":\"email\",\"hashed\":true},\"allowDuplicateAwards\":false,\"narrative\":\"Issued by ElevenID from verified Canvas course activity.\",\"evidence\":[{\"url\":\"https://issuer.example/console/org/operate/verify?delivery_record_id=delivery-001&credential_id=cred-001&canvas_account_id=canvas-account-1&organization_id=org-1\",\"name\":\"ElevenID canonical credential record\",\"description\":\"Links this Canvas Credentials badge to the canonical ElevenID issuance, issuer DID, and lifecycle status.\",\"narrative\":\"Canvas was the learning context; ElevenID holds the signed credential, issuer identity, and revocation status.\",\"genre\":\"Credential provenance\",\"audience\":\"Verifiers and employers\"}],\"extensions\":{\"value\":{\"elevenid\":{\"credential_id\":\"cred-001\",\"credential_hash\":\"62971d440b33f7dd58117df0ea1fb45ac424913c8b74b497869b50914568f7aa\",\"issuer_did\":\"did:web:issuer.example\",\"delivery_record_id\":\"delivery-001\",\"canvas_account_id\":\"canvas-account-1\",\"provenance_url\":\"https://issuer.example/console/org/operate/verify?delivery_record_id=delivery-001&credential_id=cred-001&canvas_account_id=canvas-account-1&organization_id=org-1\"}}},\"expires\":\"2027-03-01T00:00:00+00:00\"}",
+          "body": "{\"issuedOn\": \"2026-03-01T00:00:00+00:00\", \"recipient\": {\"identity\": \"learner@example.edu\", \"type\": \"email\", \"hashed\": true}, \"allowDuplicateAwards\": false, \"narrative\": \"Issued by ElevenID from verified Canvas course activity.\", \"evidence\": [{\"url\": \"https://issuer.example/console/org/operate/verify?delivery_record_id=delivery-001&credential_id=cred-001&canvas_account_id=canvas-account-1&organization_id=org-1\", \"name\": \"ElevenID canonical credential record\", \"description\": \"Links this Canvas Credentials badge to the canonical ElevenID issuance, issuer DID, and lifecycle status.\", \"narrative\": \"Canvas was the learning context; ElevenID holds the signed credential, issuer identity, and revocation status.\", \"genre\": \"Credential provenance\", \"audience\": \"Verifiers and employers\"}], \"extensions\": {\"value\": {\"elevenid\": {\"credential_id\": \"cred-001\", \"credential_hash\": \"62971d440b33f7dd58117df0ea1fb45ac424913c8b74b497869b50914568f7aa\", \"issuer_did\": \"did:web:issuer.example\", \"delivery_record_id\": \"delivery-001\", \"canvas_account_id\": \"canvas-account-1\", \"provenance_url\": \"https://issuer.example/console/org/operate/verify?delivery_record_id=delivery-001&credential_id=cred-001&canvas_account_id=canvas-account-1&organization_id=org-1\"}}}, \"expires\": \"2027-03-01T00:00:00+00:00\"}",
           "headers": {
             "accept": "application/json",
             "authorization": "Bearer synthetic-provider-token",
@@ -680,7 +680,7 @@
           "trust_env": false
         },
         {
-          "body": "{\"issuer_id\":\"issuer-elevenid\",\"organization_id\":\"org-1\",\"canvas_platform_id\":\"platform-1\",\"canvas_program_binding_id\":\"binding-1\",\"canvas_account_id\":\"canvas-account-1\",\"canvas_base_url\":\"https://canvas.example.test\",\"credential\":{\"id\":\"cred-001\",\"transaction_id\":\"tx-001\",\"credential_template_id\":\"tmpl-1\",\"format\":\"w3c_vcdm_v2_sd_jwt\",\"jwt\":\"eyJhbGciOiJFZERTQSJ9.test.sig\",\"hash\":\"62971d440b33f7dd58117df0ea1fb45ac424913c8b74b497869b50914568f7aa\",\"issuer_did\":\"did:web:issuer.example\",\"revocation_profile_id\":null,\"status_list_entries\":[],\"issued_at\":\"2026-03-01T00:00:00+00:00\",\"expires_at\":\"2027-03-01T00:00:00+00:00\"},\"recipient\":{\"applicant_id\":\"applicant-1\",\"subject_did\":\"did:key:z6Mk_subject\"},\"source\":{\"delivery_record_id\":\"delivery-001\",\"delivery_mode\":\"wallet_plus_canvas_mirror\",\"application_id\":null},\"metadata\":{\"queue\":\"canvas_credentials_mirror\",\"canvas_platform_id\":\"platform-1\",\"canvas_program_binding_id\":\"binding-1\",\"publish_attempts\":0,\"private_fixture_marker\":\"must-not-enter-public-provenance-metadata\"}}",
+          "body": "{\"issuer_id\": \"issuer-elevenid\", \"organization_id\": \"org-1\", \"canvas_platform_id\": \"platform-1\", \"canvas_program_binding_id\": \"binding-1\", \"canvas_account_id\": \"canvas-account-1\", \"canvas_base_url\": \"https://canvas.example.test\", \"credential\": {\"id\": \"cred-001\", \"transaction_id\": \"tx-001\", \"credential_template_id\": \"tmpl-1\", \"format\": \"w3c_vcdm_v2_sd_jwt\", \"jwt\": \"eyJhbGciOiJFZERTQSJ9.test.sig\", \"hash\": \"62971d440b33f7dd58117df0ea1fb45ac424913c8b74b497869b50914568f7aa\", \"issuer_did\": \"did:web:issuer.example\", \"revocation_profile_id\": null, \"status_list_entries\": [], \"issued_at\": \"2026-03-01T00:00:00+00:00\", \"expires_at\": \"2027-03-01T00:00:00+00:00\"}, \"recipient\": {\"applicant_id\": \"applicant-1\", \"subject_did\": \"did:key:z6Mk_subject\"}, \"source\": {\"delivery_record_id\": \"delivery-001\", \"delivery_mode\": \"wallet_plus_canvas_mirror\", \"application_id\": null}, \"metadata\": {\"queue\": \"canvas_credentials_mirror\", \"canvas_platform_id\": \"platform-1\", \"canvas_program_binding_id\": \"binding-1\", \"publish_attempts\": 0, \"private_fixture_marker\": \"must-not-enter-public-provenance-metadata\"}}",
           "headers": {
             "accept": "application/json",
             "authorization": "Bearer synthetic-provider-token",
@@ -777,7 +777,7 @@
           "trust_env": false
         },
         {
-          "body": "{\"issuer_id\":\"issuer-elevenid\",\"organization_id\":\"org-1\",\"canvas_platform_id\":\"platform-1\",\"canvas_program_binding_id\":\"binding-1\",\"canvas_account_id\":\"canvas-account-1\",\"canvas_base_url\":\"https://canvas.example.test\",\"credential\":{\"id\":\"cred-001\",\"transaction_id\":\"tx-001\",\"credential_template_id\":\"tmpl-1\",\"format\":\"w3c_vcdm_v2_sd_jwt\",\"jwt\":\"eyJhbGciOiJFZERTQSJ9.test.sig\",\"hash\":\"62971d440b33f7dd58117df0ea1fb45ac424913c8b74b497869b50914568f7aa\",\"issuer_did\":\"did:web:issuer.example\",\"revocation_profile_id\":null,\"status_list_entries\":[],\"issued_at\":\"2026-03-01T00:00:00+00:00\",\"expires_at\":\"2027-03-01T00:00:00+00:00\"},\"recipient\":{\"applicant_id\":\"applicant-1\",\"subject_did\":\"did:key:z6Mk_subject\"},\"source\":{\"delivery_record_id\":\"delivery-001\",\"delivery_mode\":\"wallet_plus_canvas_mirror\",\"application_id\":null},\"metadata\":{\"queue\":\"canvas_credentials_mirror\",\"canvas_platform_id\":\"platform-1\",\"canvas_program_binding_id\":\"binding-1\",\"publish_attempts\":0,\"private_fixture_marker\":\"must-not-enter-public-provenance-metadata\"}}",
+          "body": "{\"issuer_id\": \"issuer-elevenid\", \"organization_id\": \"org-1\", \"canvas_platform_id\": \"platform-1\", \"canvas_program_binding_id\": \"binding-1\", \"canvas_account_id\": \"canvas-account-1\", \"canvas_base_url\": \"https://canvas.example.test\", \"credential\": {\"id\": \"cred-001\", \"transaction_id\": \"tx-001\", \"credential_template_id\": \"tmpl-1\", \"format\": \"w3c_vcdm_v2_sd_jwt\", \"jwt\": \"eyJhbGciOiJFZERTQSJ9.test.sig\", \"hash\": \"62971d440b33f7dd58117df0ea1fb45ac424913c8b74b497869b50914568f7aa\", \"issuer_did\": \"did:web:issuer.example\", \"revocation_profile_id\": null, \"status_list_entries\": [], \"issued_at\": \"2026-03-01T00:00:00+00:00\", \"expires_at\": \"2027-03-01T00:00:00+00:00\"}, \"recipient\": {\"applicant_id\": \"applicant-1\", \"subject_did\": \"did:key:z6Mk_subject\"}, \"source\": {\"delivery_record_id\": \"delivery-001\", \"delivery_mode\": \"wallet_plus_canvas_mirror\", \"application_id\": null}, \"metadata\": {\"queue\": \"canvas_credentials_mirror\", \"canvas_platform_id\": \"platform-1\", \"canvas_program_binding_id\": \"binding-1\", \"publish_attempts\": 0, \"private_fixture_marker\": \"must-not-enter-public-provenance-metadata\"}}",
           "headers": {
             "accept": "application/json",
             "authorization": "Bearer synthetic-provider-token",
@@ -796,6 +796,42 @@
           "kind": "repository",
           "kwargs": {},
           "method": "save_delivery_record"
+        }
+      ]
+    },
+    {
+      "after": {
+        "snapshot_sha256": "82e1ba235a9e8be536696657bd550fc4659a2e43e565b50b5e864a90550cff41"
+      },
+      "before": {
+        "snapshot_sha256": "82e1ba235a9e8be536696657bd550fc4659a2e43e565b50b5e864a90550cff41"
+      },
+      "entrypoint": "ASGI",
+      "id": "publish_repository_failure",
+      "request": {
+        "headers": {
+          "X-API-Key": "synthetic-mirror-management",
+          "X-Organization-ID": "org-1"
+        },
+        "method": "POST",
+        "path": "/v1/issued-credentials/cred-001/deliveries/canvas-credentials/publish",
+        "query": {}
+      },
+      "responses": [
+        {
+          "body": "Internal Server Error",
+          "status": 500
+        }
+      ],
+      "trace": [
+        {
+          "args": [
+            "cred-001"
+          ],
+          "failure": "RuntimeError",
+          "kind": "repository",
+          "kwargs": {},
+          "method": "get_credential"
         }
       ]
     },
@@ -898,7 +934,7 @@
           "trust_env": false
         },
         {
-          "body": "{\"issuer_id\":\"issuer-elevenid\",\"organization_id\":\"org-1\",\"canvas_platform_id\":\"platform-1\",\"canvas_program_binding_id\":\"binding-1\",\"canvas_account_id\":\"canvas-account-1\",\"canvas_base_url\":\"https://canvas.example.test\",\"credential\":{\"id\":\"cred-001\",\"transaction_id\":\"tx-001\",\"credential_template_id\":\"tmpl-1\",\"format\":\"w3c_vcdm_v2_sd_jwt\",\"jwt\":\"eyJhbGciOiJFZERTQSJ9.test.sig\",\"hash\":\"62971d440b33f7dd58117df0ea1fb45ac424913c8b74b497869b50914568f7aa\",\"issuer_did\":\"did:web:issuer.example\",\"revocation_profile_id\":null,\"status_list_entries\":[],\"issued_at\":\"2026-03-01T00:00:00+00:00\",\"expires_at\":\"2027-03-01T00:00:00+00:00\"},\"recipient\":{\"applicant_id\":\"applicant-1\",\"subject_did\":\"did:key:z6Mk_subject\"},\"source\":{\"delivery_record_id\":\"delivery-001\",\"delivery_mode\":\"wallet_plus_canvas_mirror\",\"application_id\":null},\"metadata\":{\"queue\":\"canvas_credentials_mirror\",\"canvas_platform_id\":\"platform-1\",\"canvas_program_binding_id\":\"binding-1\",\"publish_attempts\":0,\"private_fixture_marker\":\"must-not-enter-public-provenance-metadata\"}}",
+          "body": "{\"issuer_id\": \"issuer-elevenid\", \"organization_id\": \"org-1\", \"canvas_platform_id\": \"platform-1\", \"canvas_program_binding_id\": \"binding-1\", \"canvas_account_id\": \"canvas-account-1\", \"canvas_base_url\": \"https://canvas.example.test\", \"credential\": {\"id\": \"cred-001\", \"transaction_id\": \"tx-001\", \"credential_template_id\": \"tmpl-1\", \"format\": \"w3c_vcdm_v2_sd_jwt\", \"jwt\": \"eyJhbGciOiJFZERTQSJ9.test.sig\", \"hash\": \"62971d440b33f7dd58117df0ea1fb45ac424913c8b74b497869b50914568f7aa\", \"issuer_did\": \"did:web:issuer.example\", \"revocation_profile_id\": null, \"status_list_entries\": [], \"issued_at\": \"2026-03-01T00:00:00+00:00\", \"expires_at\": \"2027-03-01T00:00:00+00:00\"}, \"recipient\": {\"applicant_id\": \"applicant-1\", \"subject_did\": \"did:key:z6Mk_subject\"}, \"source\": {\"delivery_record_id\": \"delivery-001\", \"delivery_mode\": \"wallet_plus_canvas_mirror\", \"application_id\": null}, \"metadata\": {\"queue\": \"canvas_credentials_mirror\", \"canvas_platform_id\": \"platform-1\", \"canvas_program_binding_id\": \"binding-1\", \"publish_attempts\": 0, \"private_fixture_marker\": \"must-not-enter-public-provenance-metadata\"}}",
           "headers": {
             "accept": "application/json",
             "authorization": "Bearer synthetic-provider-token",
@@ -1019,7 +1055,7 @@
           "trust_env": false
         },
         {
-          "body": "{\"issuer_id\":\"issuer-elevenid\",\"organization_id\":\"org-1\",\"canvas_platform_id\":\"platform-1\",\"canvas_program_binding_id\":\"binding-1\",\"canvas_account_id\":\"canvas-account-1\",\"canvas_base_url\":\"https://canvas.example.test\",\"credential\":{\"id\":\"cred-001\",\"transaction_id\":\"tx-001\",\"credential_template_id\":\"tmpl-1\",\"format\":\"w3c_vcdm_v2_sd_jwt\",\"jwt\":\"eyJhbGciOiJFZERTQSJ9.test.sig\",\"hash\":\"62971d440b33f7dd58117df0ea1fb45ac424913c8b74b497869b50914568f7aa\",\"issuer_did\":\"did:web:issuer.example\",\"revocation_profile_id\":null,\"status_list_entries\":[],\"issued_at\":\"2026-03-01T00:00:00+00:00\",\"expires_at\":\"2027-03-01T00:00:00+00:00\"},\"recipient\":{\"applicant_id\":\"applicant-1\",\"subject_did\":\"did:key:z6Mk_subject\"},\"source\":{\"delivery_record_id\":\"delivery-001\",\"delivery_mode\":\"wallet_plus_canvas_mirror\",\"application_id\":null},\"metadata\":{\"queue\":\"canvas_credentials_mirror\",\"canvas_platform_id\":\"platform-1\",\"canvas_program_binding_id\":\"binding-1\",\"publish_attempts\":0,\"private_fixture_marker\":\"must-not-enter-public-provenance-metadata\"}}",
+          "body": "{\"issuer_id\": \"issuer-elevenid\", \"organization_id\": \"org-1\", \"canvas_platform_id\": \"platform-1\", \"canvas_program_binding_id\": \"binding-1\", \"canvas_account_id\": \"canvas-account-1\", \"canvas_base_url\": \"https://canvas.example.test\", \"credential\": {\"id\": \"cred-001\", \"transaction_id\": \"tx-001\", \"credential_template_id\": \"tmpl-1\", \"format\": \"w3c_vcdm_v2_sd_jwt\", \"jwt\": \"eyJhbGciOiJFZERTQSJ9.test.sig\", \"hash\": \"62971d440b33f7dd58117df0ea1fb45ac424913c8b74b497869b50914568f7aa\", \"issuer_did\": \"did:web:issuer.example\", \"revocation_profile_id\": null, \"status_list_entries\": [], \"issued_at\": \"2026-03-01T00:00:00+00:00\", \"expires_at\": \"2027-03-01T00:00:00+00:00\"}, \"recipient\": {\"applicant_id\": \"applicant-1\", \"subject_did\": \"did:key:z6Mk_subject\"}, \"source\": {\"delivery_record_id\": \"delivery-001\", \"delivery_mode\": \"wallet_plus_canvas_mirror\", \"application_id\": null}, \"metadata\": {\"queue\": \"canvas_credentials_mirror\", \"canvas_platform_id\": \"platform-1\", \"canvas_program_binding_id\": \"binding-1\", \"publish_attempts\": 0, \"private_fixture_marker\": \"must-not-enter-public-provenance-metadata\"}}",
           "headers": {
             "accept": "application/json",
             "authorization": "Bearer synthetic-provider-token",
@@ -1116,7 +1152,7 @@
           "trust_env": false
         },
         {
-          "body": "{\"issuedOn\":\"2026-03-01T00:00:00+00:00\",\"recipient\":{\"identity\":\"learner@example.edu\",\"type\":\"email\",\"hashed\":true},\"allowDuplicateAwards\":false,\"narrative\":\"Issued by ElevenID from verified Canvas course activity.\",\"evidence\":[{\"url\":\"https://issuer.example/console/org/operate/verify?delivery_record_id=delivery-001&credential_id=cred-001&canvas_account_id=canvas-account-1&organization_id=org-1\",\"name\":\"ElevenID canonical credential record\",\"description\":\"Links this Canvas Credentials badge to the canonical ElevenID issuance, issuer DID, and lifecycle status.\",\"narrative\":\"Canvas was the learning context; ElevenID holds the signed credential, issuer identity, and revocation status.\",\"genre\":\"Credential provenance\",\"audience\":\"Verifiers and employers\"}],\"extensions\":{\"value\":{\"elevenid\":{\"credential_id\":\"cred-001\",\"credential_hash\":\"62971d440b33f7dd58117df0ea1fb45ac424913c8b74b497869b50914568f7aa\",\"issuer_did\":\"did:web:issuer.example\",\"delivery_record_id\":\"delivery-001\",\"canvas_account_id\":\"canvas-account-1\",\"provenance_url\":\"https://issuer.example/console/org/operate/verify?delivery_record_id=delivery-001&credential_id=cred-001&canvas_account_id=canvas-account-1&organization_id=org-1\"}}},\"expires\":\"2027-03-01T00:00:00+00:00\"}",
+          "body": "{\"issuedOn\": \"2026-03-01T00:00:00+00:00\", \"recipient\": {\"identity\": \"learner@example.edu\", \"type\": \"email\", \"hashed\": true}, \"allowDuplicateAwards\": false, \"narrative\": \"Issued by ElevenID from verified Canvas course activity.\", \"evidence\": [{\"url\": \"https://issuer.example/console/org/operate/verify?delivery_record_id=delivery-001&credential_id=cred-001&canvas_account_id=canvas-account-1&organization_id=org-1\", \"name\": \"ElevenID canonical credential record\", \"description\": \"Links this Canvas Credentials badge to the canonical ElevenID issuance, issuer DID, and lifecycle status.\", \"narrative\": \"Canvas was the learning context; ElevenID holds the signed credential, issuer identity, and revocation status.\", \"genre\": \"Credential provenance\", \"audience\": \"Verifiers and employers\"}], \"extensions\": {\"value\": {\"elevenid\": {\"credential_id\": \"cred-001\", \"credential_hash\": \"62971d440b33f7dd58117df0ea1fb45ac424913c8b74b497869b50914568f7aa\", \"issuer_did\": \"did:web:issuer.example\", \"delivery_record_id\": \"delivery-001\", \"canvas_account_id\": \"canvas-account-1\", \"provenance_url\": \"https://issuer.example/console/org/operate/verify?delivery_record_id=delivery-001&credential_id=cred-001&canvas_account_id=canvas-account-1&organization_id=org-1\"}}}, \"expires\": \"2027-03-01T00:00:00+00:00\"}",
           "headers": {
             "accept": "application/json",
             "authorization": "Bearer synthetic-provider-token",
@@ -1896,7 +1932,7 @@
           "trust_env": false
         },
         {
-          "body": "{\"issuer_id\":\"issuer-elevenid\",\"organization_id\":\"org-1\",\"canvas_platform_id\":\"platform-1\",\"canvas_program_binding_id\":\"binding-1\",\"canvas_account_id\":\"canvas-account-1\",\"canvas_base_url\":\"https://canvas.example.test\",\"credential\":{\"id\":\"cred-001\",\"transaction_id\":\"tx-001\",\"credential_template_id\":\"tmpl-1\",\"format\":\"w3c_vcdm_v2_sd_jwt\",\"jwt\":\"eyJhbGciOiJFZERTQSJ9.test.sig\",\"hash\":\"62971d440b33f7dd58117df0ea1fb45ac424913c8b74b497869b50914568f7aa\",\"issuer_did\":\"did:web:issuer.example\",\"revocation_profile_id\":null,\"status_list_entries\":[],\"issued_at\":\"2026-03-01T00:00:00+00:00\",\"expires_at\":\"2027-03-01T00:00:00+00:00\"},\"recipient\":{\"applicant_id\":\"applicant-1\",\"subject_did\":\"did:key:z6Mk_subject\"},\"source\":{\"delivery_record_id\":\"delivery-001\",\"delivery_mode\":\"wallet_plus_canvas_mirror\",\"application_id\":null},\"metadata\":{\"queue\":\"canvas_credentials_mirror\",\"canvas_platform_id\":\"platform-1\",\"canvas_program_binding_id\":\"binding-1\",\"publish_attempts\":0,\"private_fixture_marker\":\"must-not-enter-public-provenance-metadata\"}}",
+          "body": "{\"issuer_id\": \"issuer-elevenid\", \"organization_id\": \"org-1\", \"canvas_platform_id\": \"platform-1\", \"canvas_program_binding_id\": \"binding-1\", \"canvas_account_id\": \"canvas-account-1\", \"canvas_base_url\": \"https://canvas.example.test\", \"credential\": {\"id\": \"cred-001\", \"transaction_id\": \"tx-001\", \"credential_template_id\": \"tmpl-1\", \"format\": \"w3c_vcdm_v2_sd_jwt\", \"jwt\": \"eyJhbGciOiJFZERTQSJ9.test.sig\", \"hash\": \"62971d440b33f7dd58117df0ea1fb45ac424913c8b74b497869b50914568f7aa\", \"issuer_did\": \"did:web:issuer.example\", \"revocation_profile_id\": null, \"status_list_entries\": [], \"issued_at\": \"2026-03-01T00:00:00+00:00\", \"expires_at\": \"2027-03-01T00:00:00+00:00\"}, \"recipient\": {\"applicant_id\": \"applicant-1\", \"subject_did\": \"did:key:z6Mk_subject\"}, \"source\": {\"delivery_record_id\": \"delivery-001\", \"delivery_mode\": \"wallet_plus_canvas_mirror\", \"application_id\": null}, \"metadata\": {\"queue\": \"canvas_credentials_mirror\", \"canvas_platform_id\": \"platform-1\", \"canvas_program_binding_id\": \"binding-1\", \"publish_attempts\": 0, \"private_fixture_marker\": \"must-not-enter-public-provenance-metadata\"}}",
           "headers": {
             "accept": "application/json",
             "authorization": "Bearer synthetic-provider-token",
@@ -1922,6 +1958,49 @@
           "message": "canvas_mirror_metrics",
           "mip_event": "canvas_mirror_metrics",
           "organization_id": "org-1"
+        }
+      ]
+    },
+    {
+      "after": {
+        "snapshot_sha256": "82e1ba235a9e8be536696657bd550fc4659a2e43e565b50b5e864a90550cff41"
+      },
+      "before": {
+        "snapshot_sha256": "82e1ba235a9e8be536696657bd550fc4659a2e43e565b50b5e864a90550cff41"
+      },
+      "entrypoint": "ASGI",
+      "id": "pending_repository_failure",
+      "request": {
+        "headers": {
+          "X-API-Key": "synthetic-mirror-management",
+          "X-Organization-ID": "org-1"
+        },
+        "method": "POST",
+        "path": "/v1/issuance/delivery-records/canvas-credentials/process-pending",
+        "query": {
+          "organization_id": "org-1"
+        }
+      },
+      "responses": [
+        {
+          "body": "Internal Server Error",
+          "status": 500
+        }
+      ],
+      "trace": [
+        {
+          "args": [],
+          "failure": "RuntimeError",
+          "kind": "repository",
+          "kwargs": {
+            "delivery_target": "canvas_credentials",
+            "limit": 25,
+            "organization_id": "org-1",
+            "statuses": [
+              "pending"
+            ]
+          },
+          "method": "list_delivery_records"
         }
       ]
     },
@@ -2115,7 +2194,7 @@
           "trust_env": false
         },
         {
-          "body": "{\"issuer_id\":\"issuer-elevenid\",\"organization_id\":\"org-1\",\"canvas_platform_id\":\"platform-1\",\"canvas_program_binding_id\":\"binding-1\",\"canvas_account_id\":\"canvas-account-1\",\"canvas_base_url\":\"https://canvas.example.test\",\"credential\":{\"id\":\"cred-001\",\"transaction_id\":\"tx-001\",\"credential_template_id\":\"tmpl-1\",\"format\":\"w3c_vcdm_v2_sd_jwt\",\"jwt\":\"eyJhbGciOiJFZERTQSJ9.test.sig\",\"hash\":\"62971d440b33f7dd58117df0ea1fb45ac424913c8b74b497869b50914568f7aa\",\"issuer_did\":\"did:web:issuer.example\",\"revocation_profile_id\":null,\"status_list_entries\":[],\"issued_at\":\"2026-03-01T00:00:00+00:00\",\"expires_at\":\"2027-03-01T00:00:00+00:00\"},\"recipient\":{\"applicant_id\":\"applicant-1\",\"subject_did\":\"did:key:z6Mk_subject\"},\"source\":{\"delivery_record_id\":\"delivery-001\",\"delivery_mode\":\"wallet_plus_canvas_mirror\",\"application_id\":null},\"metadata\":{\"queue\":\"canvas_credentials_mirror\",\"canvas_platform_id\":\"platform-1\",\"canvas_program_binding_id\":\"binding-1\",\"publish_attempts\":0,\"private_fixture_marker\":\"must-not-enter-public-provenance-metadata\"}}",
+          "body": "{\"issuer_id\": \"issuer-elevenid\", \"organization_id\": \"org-1\", \"canvas_platform_id\": \"platform-1\", \"canvas_program_binding_id\": \"binding-1\", \"canvas_account_id\": \"canvas-account-1\", \"canvas_base_url\": \"https://canvas.example.test\", \"credential\": {\"id\": \"cred-001\", \"transaction_id\": \"tx-001\", \"credential_template_id\": \"tmpl-1\", \"format\": \"w3c_vcdm_v2_sd_jwt\", \"jwt\": \"eyJhbGciOiJFZERTQSJ9.test.sig\", \"hash\": \"62971d440b33f7dd58117df0ea1fb45ac424913c8b74b497869b50914568f7aa\", \"issuer_did\": \"did:web:issuer.example\", \"revocation_profile_id\": null, \"status_list_entries\": [], \"issued_at\": \"2026-03-01T00:00:00+00:00\", \"expires_at\": \"2027-03-01T00:00:00+00:00\"}, \"recipient\": {\"applicant_id\": \"applicant-1\", \"subject_did\": \"did:key:z6Mk_subject\"}, \"source\": {\"delivery_record_id\": \"delivery-001\", \"delivery_mode\": \"wallet_plus_canvas_mirror\", \"application_id\": null}, \"metadata\": {\"queue\": \"canvas_credentials_mirror\", \"canvas_platform_id\": \"platform-1\", \"canvas_program_binding_id\": \"binding-1\", \"publish_attempts\": 0, \"private_fixture_marker\": \"must-not-enter-public-provenance-metadata\"}}",
           "headers": {
             "accept": "application/json",
             "authorization": "Bearer synthetic-provider-token",
@@ -2266,7 +2345,7 @@
           "trust_env": false
         },
         {
-          "body": "{\"issuer_id\":\"issuer-elevenid\",\"organization_id\":\"org-1\",\"canvas_platform_id\":\"platform-1\",\"canvas_program_binding_id\":\"binding-1\",\"canvas_account_id\":\"canvas-account-1\",\"canvas_base_url\":\"https://canvas.example.test\",\"credential\":{\"id\":\"cred-001\",\"transaction_id\":\"tx-001\",\"credential_template_id\":\"tmpl-1\",\"format\":\"w3c_vcdm_v2_sd_jwt\",\"jwt\":\"eyJhbGciOiJFZERTQSJ9.test.sig\",\"hash\":\"62971d440b33f7dd58117df0ea1fb45ac424913c8b74b497869b50914568f7aa\",\"issuer_did\":\"did:web:issuer.example\",\"revocation_profile_id\":null,\"status_list_entries\":[],\"issued_at\":\"2026-03-01T00:00:00+00:00\",\"expires_at\":\"2027-03-01T00:00:00+00:00\"},\"recipient\":{\"applicant_id\":\"applicant-1\",\"subject_did\":\"did:key:z6Mk_subject\"},\"source\":{\"delivery_record_id\":\"delivery-001\",\"delivery_mode\":\"wallet_plus_canvas_mirror\",\"application_id\":null},\"metadata\":{\"queue\":\"canvas_credentials_mirror\",\"canvas_platform_id\":\"platform-1\",\"canvas_program_binding_id\":\"binding-1\",\"publish_attempts\":0,\"private_fixture_marker\":\"must-not-enter-public-provenance-metadata\"}}",
+          "body": "{\"issuer_id\": \"issuer-elevenid\", \"organization_id\": \"org-1\", \"canvas_platform_id\": \"platform-1\", \"canvas_program_binding_id\": \"binding-1\", \"canvas_account_id\": \"canvas-account-1\", \"canvas_base_url\": \"https://canvas.example.test\", \"credential\": {\"id\": \"cred-001\", \"transaction_id\": \"tx-001\", \"credential_template_id\": \"tmpl-1\", \"format\": \"w3c_vcdm_v2_sd_jwt\", \"jwt\": \"eyJhbGciOiJFZERTQSJ9.test.sig\", \"hash\": \"62971d440b33f7dd58117df0ea1fb45ac424913c8b74b497869b50914568f7aa\", \"issuer_did\": \"did:web:issuer.example\", \"revocation_profile_id\": null, \"status_list_entries\": [], \"issued_at\": \"2026-03-01T00:00:00+00:00\", \"expires_at\": \"2027-03-01T00:00:00+00:00\"}, \"recipient\": {\"applicant_id\": \"applicant-1\", \"subject_did\": \"did:key:z6Mk_subject\"}, \"source\": {\"delivery_record_id\": \"delivery-001\", \"delivery_mode\": \"wallet_plus_canvas_mirror\", \"application_id\": null}, \"metadata\": {\"queue\": \"canvas_credentials_mirror\", \"canvas_platform_id\": \"platform-1\", \"canvas_program_binding_id\": \"binding-1\", \"publish_attempts\": 0, \"private_fixture_marker\": \"must-not-enter-public-provenance-metadata\"}}",
           "headers": {
             "accept": "application/json",
             "authorization": "Bearer synthetic-provider-token",
@@ -2330,7 +2409,8 @@
                   "limit"
                 ],
                 "msg": "Input should be greater than or equal to 1",
-                "type": "greater_than_equal"
+                "type": "greater_than_equal",
+                "url": "https://errors.pydantic.dev/2.11/v/greater_than_equal"
               }
             ]
           },
@@ -2374,7 +2454,8 @@
                   "limit"
                 ],
                 "msg": "Input should be less than or equal to 200",
-                "type": "less_than_equal"
+                "type": "less_than_equal",
+                "url": "https://errors.pydantic.dev/2.11/v/less_than_equal"
               }
             ]
           },
@@ -2415,7 +2496,8 @@
                   "retry_failed"
                 ],
                 "msg": "Input should be a valid boolean, unable to interpret input",
-                "type": "bool_parsing"
+                "type": "bool_parsing",
+                "url": "https://errors.pydantic.dev/2.11/v/bool_parsing"
               }
             ]
           },
@@ -2541,7 +2623,7 @@
           "trust_env": false
         },
         {
-          "body": "{\"issuer_id\":\"issuer-elevenid\",\"organization_id\":\"org-1\",\"canvas_platform_id\":\"platform-1\",\"canvas_program_binding_id\":\"binding-1\",\"canvas_account_id\":\"canvas-account-1\",\"canvas_base_url\":\"https://canvas.example.test\",\"credential\":{\"id\":\"cred-001\",\"transaction_id\":\"tx-001\",\"credential_template_id\":\"tmpl-1\",\"format\":\"w3c_vcdm_v2_sd_jwt\",\"jwt\":\"eyJhbGciOiJFZERTQSJ9.test.sig\",\"hash\":\"62971d440b33f7dd58117df0ea1fb45ac424913c8b74b497869b50914568f7aa\",\"issuer_did\":\"did:web:issuer.example\",\"revocation_profile_id\":null,\"status_list_entries\":[],\"issued_at\":\"2026-03-01T00:00:00+00:00\",\"expires_at\":\"2027-03-01T00:00:00+00:00\"},\"recipient\":{\"applicant_id\":\"applicant-1\",\"subject_did\":\"did:key:z6Mk_subject\"},\"source\":{\"delivery_record_id\":\"delivery-001\",\"delivery_mode\":\"wallet_plus_canvas_mirror\",\"application_id\":null},\"metadata\":{\"queue\":\"canvas_credentials_mirror\",\"canvas_platform_id\":\"platform-1\",\"canvas_program_binding_id\":\"binding-1\",\"publish_attempts\":4,\"private_fixture_marker\":\"must-not-enter-public-provenance-metadata\"}}",
+          "body": "{\"issuer_id\": \"issuer-elevenid\", \"organization_id\": \"org-1\", \"canvas_platform_id\": \"platform-1\", \"canvas_program_binding_id\": \"binding-1\", \"canvas_account_id\": \"canvas-account-1\", \"canvas_base_url\": \"https://canvas.example.test\", \"credential\": {\"id\": \"cred-001\", \"transaction_id\": \"tx-001\", \"credential_template_id\": \"tmpl-1\", \"format\": \"w3c_vcdm_v2_sd_jwt\", \"jwt\": \"eyJhbGciOiJFZERTQSJ9.test.sig\", \"hash\": \"62971d440b33f7dd58117df0ea1fb45ac424913c8b74b497869b50914568f7aa\", \"issuer_did\": \"did:web:issuer.example\", \"revocation_profile_id\": null, \"status_list_entries\": [], \"issued_at\": \"2026-03-01T00:00:00+00:00\", \"expires_at\": \"2027-03-01T00:00:00+00:00\"}, \"recipient\": {\"applicant_id\": \"applicant-1\", \"subject_did\": \"did:key:z6Mk_subject\"}, \"source\": {\"delivery_record_id\": \"delivery-001\", \"delivery_mode\": \"wallet_plus_canvas_mirror\", \"application_id\": null}, \"metadata\": {\"queue\": \"canvas_credentials_mirror\", \"canvas_platform_id\": \"platform-1\", \"canvas_program_binding_id\": \"binding-1\", \"publish_attempts\": 4, \"private_fixture_marker\": \"must-not-enter-public-provenance-metadata\"}}",
           "headers": {
             "accept": "application/json",
             "authorization": "Bearer synthetic-provider-token",
@@ -2608,7 +2690,7 @@
           "trust_env": true
         },
         {
-          "body": "{\"event\":\"canvas_mirror_critical_alert\",\"organization_id\":\"org-1\",\"alerts\":[{\"alert_type\":\"publish_failure\",\"severity\":\"critical\",\"delivery_record_id\":\"delivery-001\",\"credential_id\":\"cred-001\",\"transaction_id\":\"tx-001\",\"canvas_account_id\":\"canvas-account-1\",\"attempt_count\":5,\"last_error\":\"Canvas Credentials publish failed (HTTP 503): {\\\"id\\\": \\\"external-1\\\", \\\"issuer_id\\\": \\\"issuer-elevenid\\\"}\",\"last_error_at\":\"2026-09-01T12:00:00+00:00\",\"message\":\"Canvas mirror publish has failed 5 times for delivery record delivery-001.\",\"recommended_action\":\"Check Canvas Credentials publish configuration and rerun the Canvas mirror automation cycle.\"}],\"generated_at\":\"2026-09-01T12:00:00+00:00\"}",
+          "body": "{\"event\": \"canvas_mirror_critical_alert\", \"organization_id\": \"org-1\", \"alerts\": [{\"alert_type\": \"publish_failure\", \"severity\": \"critical\", \"delivery_record_id\": \"delivery-001\", \"credential_id\": \"cred-001\", \"transaction_id\": \"tx-001\", \"canvas_account_id\": \"canvas-account-1\", \"attempt_count\": 5, \"last_error\": \"Canvas Credentials publish failed (HTTP 503): {\\\"id\\\": \\\"external-1\\\", \\\"issuer_id\\\": \\\"issuer-elevenid\\\"}\", \"last_error_at\": \"2026-09-01T12:00:00+00:00\", \"message\": \"Canvas mirror publish has failed 5 times for delivery record delivery-001.\", \"recommended_action\": \"Check Canvas Credentials publish configuration and rerun the Canvas mirror automation cycle.\"}], \"generated_at\": \"2026-09-01T12:00:00+00:00\"}",
           "headers": {
             "accept": "*/*",
             "content-type": "application/json"
@@ -2736,7 +2818,7 @@
           "trust_env": false
         },
         {
-          "body": "{\"issuer_id\":\"issuer-elevenid\",\"organization_id\":\"org-1\",\"canvas_platform_id\":\"platform-1\",\"canvas_program_binding_id\":\"binding-1\",\"canvas_account_id\":\"canvas-account-1\",\"canvas_base_url\":\"https://canvas.example.test\",\"credential\":{\"id\":\"cred-001\",\"transaction_id\":\"tx-001\",\"credential_template_id\":\"tmpl-1\",\"format\":\"w3c_vcdm_v2_sd_jwt\",\"jwt\":\"eyJhbGciOiJFZERTQSJ9.test.sig\",\"hash\":\"62971d440b33f7dd58117df0ea1fb45ac424913c8b74b497869b50914568f7aa\",\"issuer_did\":\"did:web:issuer.example\",\"revocation_profile_id\":null,\"status_list_entries\":[],\"issued_at\":\"2026-03-01T00:00:00+00:00\",\"expires_at\":\"2027-03-01T00:00:00+00:00\"},\"recipient\":{\"applicant_id\":\"applicant-1\",\"subject_did\":\"did:key:z6Mk_subject\"},\"source\":{\"delivery_record_id\":\"delivery-001\",\"delivery_mode\":\"wallet_plus_canvas_mirror\",\"application_id\":null},\"metadata\":{\"queue\":\"canvas_credentials_mirror\",\"canvas_platform_id\":\"platform-1\",\"canvas_program_binding_id\":\"binding-1\",\"publish_attempts\":4,\"private_fixture_marker\":\"must-not-enter-public-provenance-metadata\"}}",
+          "body": "{\"issuer_id\": \"issuer-elevenid\", \"organization_id\": \"org-1\", \"canvas_platform_id\": \"platform-1\", \"canvas_program_binding_id\": \"binding-1\", \"canvas_account_id\": \"canvas-account-1\", \"canvas_base_url\": \"https://canvas.example.test\", \"credential\": {\"id\": \"cred-001\", \"transaction_id\": \"tx-001\", \"credential_template_id\": \"tmpl-1\", \"format\": \"w3c_vcdm_v2_sd_jwt\", \"jwt\": \"eyJhbGciOiJFZERTQSJ9.test.sig\", \"hash\": \"62971d440b33f7dd58117df0ea1fb45ac424913c8b74b497869b50914568f7aa\", \"issuer_did\": \"did:web:issuer.example\", \"revocation_profile_id\": null, \"status_list_entries\": [], \"issued_at\": \"2026-03-01T00:00:00+00:00\", \"expires_at\": \"2027-03-01T00:00:00+00:00\"}, \"recipient\": {\"applicant_id\": \"applicant-1\", \"subject_did\": \"did:key:z6Mk_subject\"}, \"source\": {\"delivery_record_id\": \"delivery-001\", \"delivery_mode\": \"wallet_plus_canvas_mirror\", \"application_id\": null}, \"metadata\": {\"queue\": \"canvas_credentials_mirror\", \"canvas_platform_id\": \"platform-1\", \"canvas_program_binding_id\": \"binding-1\", \"publish_attempts\": 4, \"private_fixture_marker\": \"must-not-enter-public-provenance-metadata\"}}",
           "headers": {
             "accept": "application/json",
             "authorization": "Bearer synthetic-provider-token",
@@ -2803,7 +2885,7 @@
           "trust_env": true
         },
         {
-          "body": "{\"event\":\"canvas_mirror_critical_alert\",\"organization_id\":\"org-1\",\"alerts\":[{\"alert_type\":\"publish_failure\",\"severity\":\"critical\",\"delivery_record_id\":\"delivery-001\",\"credential_id\":\"cred-001\",\"transaction_id\":\"tx-001\",\"canvas_account_id\":\"canvas-account-1\",\"attempt_count\":5,\"last_error\":\"Canvas Credentials publish failed (HTTP 503): {\\\"id\\\": \\\"external-1\\\", \\\"issuer_id\\\": \\\"issuer-elevenid\\\"}\",\"last_error_at\":\"2026-09-01T12:00:00+00:00\",\"message\":\"Canvas mirror publish has failed 5 times for delivery record delivery-001.\",\"recommended_action\":\"Check Canvas Credentials publish configuration and rerun the Canvas mirror automation cycle.\"}],\"generated_at\":\"2026-09-01T12:00:00+00:00\"}",
+          "body": "{\"event\": \"canvas_mirror_critical_alert\", \"organization_id\": \"org-1\", \"alerts\": [{\"alert_type\": \"publish_failure\", \"severity\": \"critical\", \"delivery_record_id\": \"delivery-001\", \"credential_id\": \"cred-001\", \"transaction_id\": \"tx-001\", \"canvas_account_id\": \"canvas-account-1\", \"attempt_count\": 5, \"last_error\": \"Canvas Credentials publish failed (HTTP 503): {\\\"id\\\": \\\"external-1\\\", \\\"issuer_id\\\": \\\"issuer-elevenid\\\"}\", \"last_error_at\": \"2026-09-01T12:00:00+00:00\", \"message\": \"Canvas mirror publish has failed 5 times for delivery record delivery-001.\", \"recommended_action\": \"Check Canvas Credentials publish configuration and rerun the Canvas mirror automation cycle.\"}], \"generated_at\": \"2026-09-01T12:00:00+00:00\"}",
           "headers": {
             "accept": "*/*",
             "content-type": "application/json"
@@ -2936,7 +3018,7 @@
           "trust_env": false
         },
         {
-          "body": "{\"issuer_id\":\"issuer-elevenid\",\"organization_id\":\"org-1\",\"canvas_platform_id\":\"platform-1\",\"canvas_program_binding_id\":\"binding-1\",\"canvas_account_id\":\"canvas-account-1\",\"canvas_base_url\":\"https://canvas.example.test\",\"credential\":{\"id\":\"cred-001\",\"transaction_id\":\"tx-001\",\"credential_template_id\":\"tmpl-1\",\"format\":\"w3c_vcdm_v2_sd_jwt\",\"jwt\":\"eyJhbGciOiJFZERTQSJ9.test.sig\",\"hash\":\"62971d440b33f7dd58117df0ea1fb45ac424913c8b74b497869b50914568f7aa\",\"issuer_did\":\"did:web:issuer.example\",\"revocation_profile_id\":null,\"status_list_entries\":[],\"issued_at\":\"2026-03-01T00:00:00+00:00\",\"expires_at\":\"2027-03-01T00:00:00+00:00\"},\"recipient\":{\"applicant_id\":\"applicant-1\",\"subject_did\":\"did:key:z6Mk_subject\"},\"source\":{\"delivery_record_id\":\"delivery-001\",\"delivery_mode\":\"wallet_plus_canvas_mirror\",\"application_id\":null},\"metadata\":{\"queue\":\"canvas_credentials_mirror\",\"canvas_platform_id\":\"platform-1\",\"canvas_program_binding_id\":\"binding-1\",\"publish_attempts\":2,\"private_fixture_marker\":\"must-not-enter-public-provenance-metadata\"}}",
+          "body": "{\"issuer_id\": \"issuer-elevenid\", \"organization_id\": \"org-1\", \"canvas_platform_id\": \"platform-1\", \"canvas_program_binding_id\": \"binding-1\", \"canvas_account_id\": \"canvas-account-1\", \"canvas_base_url\": \"https://canvas.example.test\", \"credential\": {\"id\": \"cred-001\", \"transaction_id\": \"tx-001\", \"credential_template_id\": \"tmpl-1\", \"format\": \"w3c_vcdm_v2_sd_jwt\", \"jwt\": \"eyJhbGciOiJFZERTQSJ9.test.sig\", \"hash\": \"62971d440b33f7dd58117df0ea1fb45ac424913c8b74b497869b50914568f7aa\", \"issuer_did\": \"did:web:issuer.example\", \"revocation_profile_id\": null, \"status_list_entries\": [], \"issued_at\": \"2026-03-01T00:00:00+00:00\", \"expires_at\": \"2027-03-01T00:00:00+00:00\"}, \"recipient\": {\"applicant_id\": \"applicant-1\", \"subject_did\": \"did:key:z6Mk_subject\"}, \"source\": {\"delivery_record_id\": \"delivery-001\", \"delivery_mode\": \"wallet_plus_canvas_mirror\", \"application_id\": null}, \"metadata\": {\"queue\": \"canvas_credentials_mirror\", \"canvas_platform_id\": \"platform-1\", \"canvas_program_binding_id\": \"binding-1\", \"publish_attempts\": 2, \"private_fixture_marker\": \"must-not-enter-public-provenance-metadata\"}}",
           "headers": {
             "accept": "application/json",
             "authorization": "Bearer synthetic-provider-token",
@@ -3128,7 +3210,7 @@
           "trust_env": false
         },
         {
-          "body": "{\"issuer_id\":\"issuer-elevenid\",\"canvas_platform_id\":\"platform-1\",\"canvas_program_binding_id\":\"binding-1\",\"canvas_account_id\":\"canvas-account-1\",\"lifecycle_action\":\"revoke\",\"credential\":{\"id\":\"cred-001\",\"external_credential_id\":\"external-1\",\"external_issuer_id\":null,\"issuer_did\":\"did:web:issuer.example\",\"status\":\"revoked\",\"status_updated_at\":\"2026-09-01T12:00:00+00:00\",\"revoked_at\":null,\"reason\":null},\"metadata\":{\"delivery_record_id\":\"delivery-001\",\"organization_id\":\"org-1\",\"credential_template_id\":\"tmpl-1\"}}",
+          "body": "{\"issuer_id\": \"issuer-elevenid\", \"canvas_platform_id\": \"platform-1\", \"canvas_program_binding_id\": \"binding-1\", \"canvas_account_id\": \"canvas-account-1\", \"lifecycle_action\": \"revoke\", \"credential\": {\"id\": \"cred-001\", \"external_credential_id\": \"external-1\", \"external_issuer_id\": null, \"issuer_did\": \"did:web:issuer.example\", \"status\": \"revoked\", \"status_updated_at\": \"2026-09-01T12:00:00+00:00\", \"revoked_at\": null, \"reason\": null}, \"metadata\": {\"delivery_record_id\": \"delivery-001\", \"organization_id\": \"org-1\", \"credential_template_id\": \"tmpl-1\"}}",
           "headers": {
             "accept": "application/json",
             "authorization": "Bearer synthetic-provider-token",
@@ -3154,6 +3236,48 @@
           "message": "canvas_mirror_metrics",
           "mip_event": "canvas_mirror_metrics",
           "organization_id": "org-1"
+        }
+      ]
+    },
+    {
+      "after": {
+        "snapshot_sha256": "f1289af7ddcfcac9160a404ef5cac1dc8da083b370a038fcfc572d6cf68f1cb4"
+      },
+      "before": {
+        "snapshot_sha256": "f1289af7ddcfcac9160a404ef5cac1dc8da083b370a038fcfc572d6cf68f1cb4"
+      },
+      "entrypoint": "ASGI",
+      "id": "status_repository_failure",
+      "request": {
+        "headers": {
+          "X-API-Key": "synthetic-mirror-management",
+          "X-Organization-ID": "org-1"
+        },
+        "method": "POST",
+        "path": "/v1/issuance/delivery-records/canvas-credentials/process-status-sync-failures",
+        "query": {
+          "organization_id": "org-1"
+        }
+      },
+      "responses": [
+        {
+          "body": "Internal Server Error",
+          "status": 500
+        }
+      ],
+      "trace": [
+        {
+          "args": [],
+          "failure": "RuntimeError",
+          "kind": "repository",
+          "kwargs": {
+            "delivery_target": "canvas_credentials",
+            "organization_id": "org-1",
+            "statuses": [
+              "delivered"
+            ]
+          },
+          "method": "list_delivery_records"
         }
       ]
     },
@@ -3298,7 +3422,7 @@
           "trust_env": false
         },
         {
-          "body": "{\"revocation_reason\":\"Canonical ElevenID credential was revoked.\"}",
+          "body": "{\"revocation_reason\": \"Canonical ElevenID credential was revoked.\"}",
           "headers": {
             "accept": "application/json",
             "authorization": "Bearer synthetic-provider-token",
@@ -4157,7 +4281,7 @@
           "trust_env": false
         },
         {
-          "body": "{\"issuer_id\":\"issuer-elevenid\",\"organization_id\":\"org-1\",\"canvas_platform_id\":\"platform-1\",\"canvas_program_binding_id\":\"binding-1\",\"canvas_account_id\":\"canvas-account-1\",\"canvas_base_url\":\"https://canvas.example.test\",\"credential\":{\"id\":\"cred-001\",\"transaction_id\":\"tx-001\",\"credential_template_id\":\"tmpl-1\",\"format\":\"w3c_vcdm_v2_sd_jwt\",\"jwt\":\"eyJhbGciOiJFZERTQSJ9.test.sig\",\"hash\":\"62971d440b33f7dd58117df0ea1fb45ac424913c8b74b497869b50914568f7aa\",\"issuer_did\":\"did:web:issuer.example\",\"revocation_profile_id\":null,\"status_list_entries\":[],\"issued_at\":\"2026-03-01T00:00:00+00:00\",\"expires_at\":\"2027-03-01T00:00:00+00:00\"},\"recipient\":{\"applicant_id\":\"applicant-1\",\"subject_did\":\"did:key:z6Mk_subject\"},\"source\":{\"delivery_record_id\":\"delivery-001\",\"delivery_mode\":\"wallet_plus_canvas_mirror\",\"application_id\":null},\"metadata\":{\"queue\":\"canvas_credentials_mirror\",\"canvas_platform_id\":\"platform-1\",\"canvas_program_binding_id\":\"binding-1\",\"publish_attempts\":0,\"private_fixture_marker\":\"must-not-enter-public-provenance-metadata\"}}",
+          "body": "{\"issuer_id\": \"issuer-elevenid\", \"organization_id\": \"org-1\", \"canvas_platform_id\": \"platform-1\", \"canvas_program_binding_id\": \"binding-1\", \"canvas_account_id\": \"canvas-account-1\", \"canvas_base_url\": \"https://canvas.example.test\", \"credential\": {\"id\": \"cred-001\", \"transaction_id\": \"tx-001\", \"credential_template_id\": \"tmpl-1\", \"format\": \"w3c_vcdm_v2_sd_jwt\", \"jwt\": \"eyJhbGciOiJFZERTQSJ9.test.sig\", \"hash\": \"62971d440b33f7dd58117df0ea1fb45ac424913c8b74b497869b50914568f7aa\", \"issuer_did\": \"did:web:issuer.example\", \"revocation_profile_id\": null, \"status_list_entries\": [], \"issued_at\": \"2026-03-01T00:00:00+00:00\", \"expires_at\": \"2027-03-01T00:00:00+00:00\"}, \"recipient\": {\"applicant_id\": \"applicant-1\", \"subject_did\": \"did:key:z6Mk_subject\"}, \"source\": {\"delivery_record_id\": \"delivery-001\", \"delivery_mode\": \"wallet_plus_canvas_mirror\", \"application_id\": null}, \"metadata\": {\"queue\": \"canvas_credentials_mirror\", \"canvas_platform_id\": \"platform-1\", \"canvas_program_binding_id\": \"binding-1\", \"publish_attempts\": 0, \"private_fixture_marker\": \"must-not-enter-public-provenance-metadata\"}}",
           "headers": {
             "accept": "application/json",
             "authorization": "Bearer synthetic-provider-token",
@@ -4236,7 +4360,7 @@
           "trust_env": false
         },
         {
-          "body": "{\"issuer_id\":\"issuer-elevenid\",\"canvas_platform_id\":\"platform-1\",\"canvas_program_binding_id\":\"binding-1\",\"canvas_account_id\":\"canvas-account-1\",\"lifecycle_action\":\"reinstate\",\"credential\":{\"id\":\"cred-001\",\"external_credential_id\":\"external-sync\",\"external_issuer_id\":null,\"issuer_did\":\"did:web:issuer.example\",\"status\":\"active\",\"status_updated_at\":\"2026-09-01T12:00:00+00:00\",\"revoked_at\":null,\"reason\":null},\"metadata\":{\"delivery_record_id\":\"delivery-sync\",\"organization_id\":\"org-1\",\"credential_template_id\":\"tmpl-1\"}}",
+          "body": "{\"issuer_id\": \"issuer-elevenid\", \"canvas_platform_id\": \"platform-1\", \"canvas_program_binding_id\": \"binding-1\", \"canvas_account_id\": \"canvas-account-1\", \"lifecycle_action\": \"reinstate\", \"credential\": {\"id\": \"cred-001\", \"external_credential_id\": \"external-sync\", \"external_issuer_id\": null, \"issuer_did\": \"did:web:issuer.example\", \"status\": \"active\", \"status_updated_at\": \"2026-09-01T12:00:00+00:00\", \"revoked_at\": null, \"reason\": null}, \"metadata\": {\"delivery_record_id\": \"delivery-sync\", \"organization_id\": \"org-1\", \"credential_template_id\": \"tmpl-1\"}}",
           "headers": {
             "accept": "application/json",
             "authorization": "Bearer synthetic-provider-token",
@@ -4269,6 +4393,50 @@
           "message": "canvas_mirror_metrics",
           "mip_event": "canvas_mirror_metrics",
           "organization_id": "org-1"
+        }
+      ]
+    },
+    {
+      "after": {
+        "snapshot_sha256": "82e1ba235a9e8be536696657bd550fc4659a2e43e565b50b5e864a90550cff41"
+      },
+      "before": {
+        "snapshot_sha256": "82e1ba235a9e8be536696657bd550fc4659a2e43e565b50b5e864a90550cff41"
+      },
+      "entrypoint": "ASGI",
+      "id": "automation_repository_failure",
+      "request": {
+        "headers": {
+          "X-API-Key": "synthetic-mirror-management",
+          "X-Organization-ID": "org-1"
+        },
+        "method": "POST",
+        "path": "/v1/issuance/delivery-records/canvas-credentials/run-automation-cycle",
+        "query": {
+          "organization_id": "org-1"
+        }
+      },
+      "responses": [
+        {
+          "body": "Internal Server Error",
+          "status": 500
+        }
+      ],
+      "trace": [
+        {
+          "args": [],
+          "failure": "RuntimeError",
+          "kind": "repository",
+          "kwargs": {
+            "delivery_target": "canvas_credentials",
+            "limit": 25,
+            "organization_id": "org-1",
+            "statuses": [
+              "pending",
+              "failed"
+            ]
+          },
+          "method": "list_delivery_records"
         }
       ]
     },
@@ -4443,7 +4611,7 @@
           "trust_env": false
         },
         {
-          "body": "{\"issuer_id\":\"issuer-elevenid\",\"organization_id\":\"org-1\",\"canvas_platform_id\":\"platform-1\",\"canvas_program_binding_id\":\"binding-1\",\"canvas_account_id\":\"canvas-account-1\",\"canvas_base_url\":\"https://canvas.example.test\",\"credential\":{\"id\":\"cred-001\",\"transaction_id\":\"tx-001\",\"credential_template_id\":\"tmpl-1\",\"format\":\"w3c_vcdm_v2_sd_jwt\",\"jwt\":\"eyJhbGciOiJFZERTQSJ9.test.sig\",\"hash\":\"62971d440b33f7dd58117df0ea1fb45ac424913c8b74b497869b50914568f7aa\",\"issuer_did\":\"did:web:issuer.example\",\"revocation_profile_id\":null,\"status_list_entries\":[],\"issued_at\":\"2026-03-01T00:00:00+00:00\",\"expires_at\":\"2027-03-01T00:00:00+00:00\"},\"recipient\":{\"applicant_id\":\"applicant-1\",\"subject_did\":\"did:key:z6Mk_subject\"},\"source\":{\"delivery_record_id\":\"delivery-001\",\"delivery_mode\":\"wallet_plus_canvas_mirror\",\"application_id\":null},\"metadata\":{\"queue\":\"canvas_credentials_mirror\",\"canvas_platform_id\":\"platform-1\",\"canvas_program_binding_id\":\"binding-1\",\"publish_attempts\":0,\"private_fixture_marker\":\"must-not-enter-public-provenance-metadata\"}}",
+          "body": "{\"issuer_id\": \"issuer-elevenid\", \"organization_id\": \"org-1\", \"canvas_platform_id\": \"platform-1\", \"canvas_program_binding_id\": \"binding-1\", \"canvas_account_id\": \"canvas-account-1\", \"canvas_base_url\": \"https://canvas.example.test\", \"credential\": {\"id\": \"cred-001\", \"transaction_id\": \"tx-001\", \"credential_template_id\": \"tmpl-1\", \"format\": \"w3c_vcdm_v2_sd_jwt\", \"jwt\": \"eyJhbGciOiJFZERTQSJ9.test.sig\", \"hash\": \"62971d440b33f7dd58117df0ea1fb45ac424913c8b74b497869b50914568f7aa\", \"issuer_did\": \"did:web:issuer.example\", \"revocation_profile_id\": null, \"status_list_entries\": [], \"issued_at\": \"2026-03-01T00:00:00+00:00\", \"expires_at\": \"2027-03-01T00:00:00+00:00\"}, \"recipient\": {\"applicant_id\": \"applicant-1\", \"subject_did\": \"did:key:z6Mk_subject\"}, \"source\": {\"delivery_record_id\": \"delivery-001\", \"delivery_mode\": \"wallet_plus_canvas_mirror\", \"application_id\": null}, \"metadata\": {\"queue\": \"canvas_credentials_mirror\", \"canvas_platform_id\": \"platform-1\", \"canvas_program_binding_id\": \"binding-1\", \"publish_attempts\": 0, \"private_fixture_marker\": \"must-not-enter-public-provenance-metadata\"}}",
           "headers": {
             "accept": "application/json",
             "authorization": "Bearer synthetic-provider-token",
@@ -4559,6 +4727,43 @@
       "trace": [
         {
           "args": [],
+          "kind": "repository",
+          "kwargs": {
+            "delivery_target": "canvas_credentials",
+            "organization_id": "org-1"
+          },
+          "method": "list_delivery_records"
+        }
+      ]
+    },
+    {
+      "after": {
+        "snapshot_sha256": "82e1ba235a9e8be536696657bd550fc4659a2e43e565b50b5e864a90550cff41"
+      },
+      "before": {
+        "snapshot_sha256": "82e1ba235a9e8be536696657bd550fc4659a2e43e565b50b5e864a90550cff41"
+      },
+      "entrypoint": "ASGI",
+      "id": "health_repository_failure",
+      "request": {
+        "headers": {
+          "X-API-Key": "synthetic-mirror-management",
+          "X-Organization-ID": "org-1"
+        },
+        "method": "GET",
+        "path": "/v1/issuance/organizations/org-1/canvas-mirror-health",
+        "query": {}
+      },
+      "responses": [
+        {
+          "body": "Internal Server Error",
+          "status": 500
+        }
+      ],
+      "trace": [
+        {
+          "args": [],
+          "failure": "RuntimeError",
           "kind": "repository",
           "kwargs": {
             "delivery_target": "canvas_credentials",
@@ -4867,6 +5072,45 @@
           "kind": "repository",
           "kwargs": {},
           "method": "get_transaction"
+        }
+      ]
+    },
+    {
+      "after": {
+        "snapshot_sha256": "e43e448c558b03f40fe37ee7e8b5d3fc4a763a99b3b6e53162c2f70b7009a72f"
+      },
+      "before": {
+        "snapshot_sha256": "e43e448c558b03f40fe37ee7e8b5d3fc4a763a99b3b6e53162c2f70b7009a72f"
+      },
+      "entrypoint": "ASGI",
+      "id": "provenance_repository_failure",
+      "request": {
+        "headers": {
+          "X-API-Key": "synthetic-mirror-management",
+          "X-Organization-ID": "org-1"
+        },
+        "method": "GET",
+        "path": "/v1/issuance/delivery-records/canvas-credentials/provenance",
+        "query": {
+          "delivery_record_id": "delivery-001",
+          "organization_id": "org-1"
+        }
+      },
+      "responses": [
+        {
+          "body": "Internal Server Error",
+          "status": 500
+        }
+      ],
+      "trace": [
+        {
+          "args": [
+            "delivery-001"
+          ],
+          "failure": "RuntimeError",
+          "kind": "repository",
+          "kwargs": {},
+          "method": "get_delivery_record"
         }
       ]
     },
@@ -5885,6 +6129,95 @@
         }
       ],
       "trace": []
+    },
+    {
+      "after": {
+        "snapshot_sha256": "82e1ba235a9e8be536696657bd550fc4659a2e43e565b50b5e864a90550cff41"
+      },
+      "before": {
+        "snapshot_sha256": "82e1ba235a9e8be536696657bd550fc4659a2e43e565b50b5e864a90550cff41"
+      },
+      "entrypoint": "ASGI",
+      "id": "auth_publish_before_tenant",
+      "request": {
+        "headers": {
+          "X-API-Key": "incorrect",
+          "X-Organization-ID": "org-other"
+        },
+        "method": "POST",
+        "path": "/v1/issued-credentials/cred-001/deliveries/canvas-credentials/publish",
+        "query": {}
+      },
+      "responses": [
+        {
+          "body": {
+            "detail": "Invalid API Key"
+          },
+          "status": 401
+        }
+      ],
+      "trace": []
+    },
+    {
+      "after": {
+        "snapshot_sha256": "82e1ba235a9e8be536696657bd550fc4659a2e43e565b50b5e864a90550cff41"
+      },
+      "before": {
+        "snapshot_sha256": "82e1ba235a9e8be536696657bd550fc4659a2e43e565b50b5e864a90550cff41"
+      },
+      "entrypoint": "ASGI",
+      "id": "auth_pending_before_validation",
+      "request": {
+        "headers": {
+          "X-Organization-ID": "org-1"
+        },
+        "method": "POST",
+        "path": "/v1/issuance/delivery-records/canvas-credentials/process-pending",
+        "query": {
+          "limit": "0",
+          "organization_id": "org-1"
+        }
+      },
+      "responses": [
+        {
+          "body": {
+            "detail": "X-API-Key header is missing"
+          },
+          "status": 401
+        }
+      ],
+      "trace": []
+    },
+    {
+      "after": {
+        "snapshot_sha256": "82e1ba235a9e8be536696657bd550fc4659a2e43e565b50b5e864a90550cff41"
+      },
+      "before": {
+        "snapshot_sha256": "82e1ba235a9e8be536696657bd550fc4659a2e43e565b50b5e864a90550cff41"
+      },
+      "entrypoint": "ASGI",
+      "id": "auth_provenance_before_tenant",
+      "request": {
+        "headers": {
+          "X-API-Key": "incorrect",
+          "X-Organization-ID": "org-other"
+        },
+        "method": "GET",
+        "path": "/v1/issuance/delivery-records/canvas-credentials/provenance",
+        "query": {
+          "delivery_record_id": "delivery-001",
+          "organization_id": "org-1"
+        }
+      },
+      "responses": [
+        {
+          "body": {
+            "detail": "Invalid API Key"
+          },
+          "status": 401
+        }
+      ],
+      "trace": []
     }
   ],
   "infrastructure_controls": [
@@ -6408,7 +6741,7 @@
           "trust_env": false
         },
         {
-          "body": "{\"issuer_id\":\"issuer-elevenid\",\"organization_id\":\"org-1\",\"canvas_platform_id\":\"platform-1\",\"canvas_program_binding_id\":\"binding-1\",\"canvas_account_id\":\"canvas-account-1\",\"canvas_base_url\":\"https://canvas.example.test\",\"credential\":{\"id\":\"cred-001\",\"transaction_id\":\"tx-001\",\"credential_template_id\":\"tmpl-1\",\"format\":\"w3c_vcdm_v2_sd_jwt\",\"jwt\":\"eyJhbGciOiJFZERTQSJ9.test.sig\",\"hash\":\"62971d440b33f7dd58117df0ea1fb45ac424913c8b74b497869b50914568f7aa\",\"issuer_did\":\"did:web:issuer.example\",\"revocation_profile_id\":null,\"status_list_entries\":[],\"issued_at\":\"2026-03-01T00:00:00+00:00\",\"expires_at\":\"2027-03-01T00:00:00+00:00\"},\"recipient\":{\"applicant_id\":\"applicant-1\",\"subject_did\":\"did:key:z6Mk_subject\"},\"source\":{\"delivery_record_id\":\"delivery-001\",\"delivery_mode\":\"wallet_plus_canvas_mirror\",\"application_id\":null},\"metadata\":{\"queue\":\"canvas_credentials_mirror\",\"canvas_platform_id\":\"platform-1\",\"canvas_program_binding_id\":\"binding-1\",\"publish_attempts\":0,\"private_fixture_marker\":\"must-not-enter-public-provenance-metadata\"}}",
+          "body": "{\"issuer_id\": \"issuer-elevenid\", \"organization_id\": \"org-1\", \"canvas_platform_id\": \"platform-1\", \"canvas_program_binding_id\": \"binding-1\", \"canvas_account_id\": \"canvas-account-1\", \"canvas_base_url\": \"https://canvas.example.test\", \"credential\": {\"id\": \"cred-001\", \"transaction_id\": \"tx-001\", \"credential_template_id\": \"tmpl-1\", \"format\": \"w3c_vcdm_v2_sd_jwt\", \"jwt\": \"eyJhbGciOiJFZERTQSJ9.test.sig\", \"hash\": \"62971d440b33f7dd58117df0ea1fb45ac424913c8b74b497869b50914568f7aa\", \"issuer_did\": \"did:web:issuer.example\", \"revocation_profile_id\": null, \"status_list_entries\": [], \"issued_at\": \"2026-03-01T00:00:00+00:00\", \"expires_at\": \"2027-03-01T00:00:00+00:00\"}, \"recipient\": {\"applicant_id\": \"applicant-1\", \"subject_did\": \"did:key:z6Mk_subject\"}, \"source\": {\"delivery_record_id\": \"delivery-001\", \"delivery_mode\": \"wallet_plus_canvas_mirror\", \"application_id\": null}, \"metadata\": {\"queue\": \"canvas_credentials_mirror\", \"canvas_platform_id\": \"platform-1\", \"canvas_program_binding_id\": \"binding-1\", \"publish_attempts\": 0, \"private_fixture_marker\": \"must-not-enter-public-provenance-metadata\"}}",
           "headers": {
             "accept": "application/json",
             "authorization": "Bearer synthetic-provider-token",
@@ -6492,7 +6825,7 @@
           "trust_env": false
         },
         {
-          "body": "{\"issuedOn\":\"2026-03-01T00:00:00+00:00\",\"recipient\":{\"identity\":\"learner@example.edu\",\"type\":\"email\",\"hashed\":true},\"allowDuplicateAwards\":false,\"narrative\":\"Issued by ElevenID from verified Canvas course activity.\",\"evidence\":[{\"url\":\"https://issuer.example/console/org/operate/verify?delivery_record_id=delivery-001&credential_id=cred-001&canvas_account_id=canvas-account-1&organization_id=org-1\",\"name\":\"ElevenID canonical credential record\",\"description\":\"Links this Canvas Credentials badge to the canonical ElevenID issuance, issuer DID, and lifecycle status.\",\"narrative\":\"Canvas was the learning context; ElevenID holds the signed credential, issuer identity, and revocation status.\",\"genre\":\"Credential provenance\",\"audience\":\"Verifiers and employers\"}],\"extensions\":{\"value\":{\"elevenid\":{\"credential_id\":\"cred-001\",\"credential_hash\":\"62971d440b33f7dd58117df0ea1fb45ac424913c8b74b497869b50914568f7aa\",\"issuer_did\":\"did:web:issuer.example\",\"delivery_record_id\":\"delivery-001\",\"canvas_account_id\":\"canvas-account-1\",\"provenance_url\":\"https://issuer.example/console/org/operate/verify?delivery_record_id=delivery-001&credential_id=cred-001&canvas_account_id=canvas-account-1&organization_id=org-1\"}}},\"expires\":\"2027-03-01T00:00:00+00:00\"}",
+          "body": "{\"issuedOn\": \"2026-03-01T00:00:00+00:00\", \"recipient\": {\"identity\": \"learner@example.edu\", \"type\": \"email\", \"hashed\": true}, \"allowDuplicateAwards\": false, \"narrative\": \"Issued by ElevenID from verified Canvas course activity.\", \"evidence\": [{\"url\": \"https://issuer.example/console/org/operate/verify?delivery_record_id=delivery-001&credential_id=cred-001&canvas_account_id=canvas-account-1&organization_id=org-1\", \"name\": \"ElevenID canonical credential record\", \"description\": \"Links this Canvas Credentials badge to the canonical ElevenID issuance, issuer DID, and lifecycle status.\", \"narrative\": \"Canvas was the learning context; ElevenID holds the signed credential, issuer identity, and revocation status.\", \"genre\": \"Credential provenance\", \"audience\": \"Verifiers and employers\"}], \"extensions\": {\"value\": {\"elevenid\": {\"credential_id\": \"cred-001\", \"credential_hash\": \"62971d440b33f7dd58117df0ea1fb45ac424913c8b74b497869b50914568f7aa\", \"issuer_did\": \"did:web:issuer.example\", \"delivery_record_id\": \"delivery-001\", \"canvas_account_id\": \"canvas-account-1\", \"provenance_url\": \"https://issuer.example/console/org/operate/verify?delivery_record_id=delivery-001&credential_id=cred-001&canvas_account_id=canvas-account-1&organization_id=org-1\"}}}, \"expires\": \"2027-03-01T00:00:00+00:00\"}",
           "headers": {
             "accept": "application/json",
             "authorization": "Bearer synthetic-provider-token",
@@ -6579,7 +6912,7 @@
           "trust_env": false
         },
         {
-          "body": "{\"issuer_id\":\"issuer-elevenid\",\"organization_id\":\"org-1\",\"canvas_platform_id\":\"platform-1\",\"canvas_program_binding_id\":\"binding-1\",\"canvas_account_id\":\"canvas-account-1\",\"canvas_base_url\":\"https://canvas.example.test\",\"credential\":{\"id\":\"cred-001\",\"transaction_id\":\"tx-001\",\"credential_template_id\":\"tmpl-1\",\"format\":\"w3c_vcdm_v2_sd_jwt\",\"jwt\":\"eyJhbGciOiJFZERTQSJ9.test.sig\",\"hash\":\"62971d440b33f7dd58117df0ea1fb45ac424913c8b74b497869b50914568f7aa\",\"issuer_did\":\"did:web:issuer.example\",\"revocation_profile_id\":null,\"status_list_entries\":[],\"issued_at\":\"2026-03-01T00:00:00+00:00\",\"expires_at\":\"2027-03-01T00:00:00+00:00\"},\"recipient\":{\"applicant_id\":\"applicant-1\",\"subject_did\":\"did:key:z6Mk_subject\"},\"source\":{\"delivery_record_id\":\"delivery-001\",\"delivery_mode\":\"wallet_plus_canvas_mirror\",\"application_id\":null},\"metadata\":{\"queue\":\"canvas_credentials_mirror\",\"canvas_platform_id\":\"platform-1\",\"canvas_program_binding_id\":\"binding-1\",\"publish_attempts\":0,\"private_fixture_marker\":\"must-not-enter-public-provenance-metadata\"}}",
+          "body": "{\"issuer_id\": \"issuer-elevenid\", \"organization_id\": \"org-1\", \"canvas_platform_id\": \"platform-1\", \"canvas_program_binding_id\": \"binding-1\", \"canvas_account_id\": \"canvas-account-1\", \"canvas_base_url\": \"https://canvas.example.test\", \"credential\": {\"id\": \"cred-001\", \"transaction_id\": \"tx-001\", \"credential_template_id\": \"tmpl-1\", \"format\": \"w3c_vcdm_v2_sd_jwt\", \"jwt\": \"eyJhbGciOiJFZERTQSJ9.test.sig\", \"hash\": \"62971d440b33f7dd58117df0ea1fb45ac424913c8b74b497869b50914568f7aa\", \"issuer_did\": \"did:web:issuer.example\", \"revocation_profile_id\": null, \"status_list_entries\": [], \"issued_at\": \"2026-03-01T00:00:00+00:00\", \"expires_at\": \"2027-03-01T00:00:00+00:00\"}, \"recipient\": {\"applicant_id\": \"applicant-1\", \"subject_did\": \"did:key:z6Mk_subject\"}, \"source\": {\"delivery_record_id\": \"delivery-001\", \"delivery_mode\": \"wallet_plus_canvas_mirror\", \"application_id\": null}, \"metadata\": {\"queue\": \"canvas_credentials_mirror\", \"canvas_platform_id\": \"platform-1\", \"canvas_program_binding_id\": \"binding-1\", \"publish_attempts\": 0, \"private_fixture_marker\": \"must-not-enter-public-provenance-metadata\"}}",
           "headers": {
             "accept": "application/json",
             "authorization": "Bearer synthetic-provider-token",
@@ -6685,7 +7018,7 @@
           "trust_env": false
         },
         {
-          "body": "{\"issuer_id\":\"issuer-elevenid\",\"canvas_platform_id\":\"platform-1\",\"canvas_program_binding_id\":\"binding-1\",\"canvas_account_id\":\"canvas-account-1\",\"lifecycle_action\":\"reinstate\",\"credential\":{\"id\":\"cred-001\",\"external_credential_id\":\"external-1\",\"external_issuer_id\":null,\"issuer_did\":\"did:web:issuer.example\",\"status\":\"active\",\"status_updated_at\":\"2026-09-01T12:00:00+00:00\",\"revoked_at\":null,\"reason\":null},\"metadata\":{\"delivery_record_id\":\"delivery-001\",\"organization_id\":\"org-1\",\"credential_template_id\":\"tmpl-1\"}}",
+          "body": "{\"issuer_id\": \"issuer-elevenid\", \"canvas_platform_id\": \"platform-1\", \"canvas_program_binding_id\": \"binding-1\", \"canvas_account_id\": \"canvas-account-1\", \"lifecycle_action\": \"reinstate\", \"credential\": {\"id\": \"cred-001\", \"external_credential_id\": \"external-1\", \"external_issuer_id\": null, \"issuer_did\": \"did:web:issuer.example\", \"status\": \"active\", \"status_updated_at\": \"2026-09-01T12:00:00+00:00\", \"revoked_at\": null, \"reason\": null}, \"metadata\": {\"delivery_record_id\": \"delivery-001\", \"organization_id\": \"org-1\", \"credential_template_id\": \"tmpl-1\"}}",
           "headers": {
             "accept": "application/json",
             "authorization": "Bearer synthetic-provider-token",
@@ -6698,7 +7031,11 @@
       ]
     }
   ],
-  "scenarios_sha256": "cb9571814cfe0b5e202833d6a30fc6fd75cbf45f476c770cad8ce5d09c8123c5",
+  "release_image": {
+    "digest": "sha256:815cbba6efc7c91e770a8dd15fe5fa102d252a485073bf60f0e0d5e0a73b28e5",
+    "uri": "ghcr.io/elevenid/marty-credentials-issuance"
+  },
+  "scenarios_sha256": "2f6e5fa34eb85f10a39fd457a594970c8cc6ba548e2acce69e30f4e2bab9f01d",
   "schema": "marty.canvas-mirror-python-reference/v1",
   "selected_definitions": {
     "issuance.application.canvas_feature_flags": [
@@ -6937,7 +7274,6 @@
       "CanvasEvidenceSyncTarget",
       "CanvasEvidenceTransitionPlanner",
       "CanvasLearnerIdentity",
-      "CanvasLearnerIdentityStatus",
       "CanvasLtiLaunchState",
       "CanvasOAuthAuthorization",
       "CanvasOAuthConnection",
@@ -7080,7 +7416,6 @@
       "run_canvas_mirror_automation_loop",
       "run_canvas_mirror_publish_batch",
       "run_canvas_mirror_status_sync_batch",
-      "status",
       "sync_canvas_credential_status",
       "time"
     ],
@@ -7089,21 +7424,17 @@
       "CredentialDeliveryStatus",
       "CredentialStatus",
       "DeliveryTarget",
-      "InMemoryIssuanceRepository",
       "IssuanceStatus",
       "IssuanceTransaction",
       "IssuedCredential",
       "UTC",
-      "_TestableRepo",
       "_canvas_binding_metadata",
       "_make_credential",
       "_make_delivery_record",
       "_make_transaction",
       "_save_canvas_program_target",
       "datetime",
-      "hashlib",
-      "pytest",
-      "repo"
+      "hashlib"
     ]
   },
   "snapshots": {
@@ -16221,7 +16552,7 @@
       "updated_at": "2026-09-01T12:00:00+00:00"
     }
   },
-  "source_commit": "578e86ef43166be79add2d812e92ef650535edaa",
+  "source_commit": "aaa6a9b8e31e62cd0ab087eef5fc1f4835048e26",
   "sources": {
     "issuance.application.canvas_feature_flags": [
       "services/issuance/application/canvas_feature_flags.py",
@@ -16245,7 +16576,7 @@
     ],
     "issuance.domain.ports": [
       "services/issuance/domain/ports.py",
-      "695a2cdd3f3a5c9d3ce6ef12e282cdca6f086a24"
+      "3454e78deb21af39a1d842ebfed3d8899aa69325"
     ],
     "issuance.infrastructure.adapters.canvas_credentials_adapter": [
       "services/issuance/infrastructure/adapters/canvas_credentials_adapter.py",
@@ -16257,19 +16588,23 @@
     ],
     "issuance.infrastructure.adapters.memory_repository": [
       "services/issuance/infrastructure/adapters/memory_repository.py",
-      "2961bee99877f616512c99704dc5e63ef3b9c4cc"
+      "b9c65f5b35eebe1de9392491b8e3595396ff6565"
     ],
     "issuance.infrastructure.api.routes": [
       "services/issuance/infrastructure/api/routes.py",
-      "1f137c588ffd7ed77ceb297a52d55e9a75ae7b81"
+      "f71dd82163fcb2296209f880fe78d55a130d356b"
     ],
     "mirror_seed": [
       "tests/test_issuance_changes.py",
-      "b47328b334b809b85db2aa67de675342b5ccd8ae"
+      "7ab0a410bd6a4b4507ddd535365fadf7f3dbac03"
+    ],
+    "release_profile": [
+      "services/Dockerfile",
+      "13bcb60f46601303b0f524427d9d5aa6bce927d9"
     ],
     "startup_evidence": [
       "services/issuance/main.py",
-      "ed30de75eefa16beea1e820dc83fe8607311ed43"
+      "d2c7135bffc8d3ea8184233626b7e573f1fb837d"
     ]
   }
 }
