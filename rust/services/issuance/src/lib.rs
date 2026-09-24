@@ -140,6 +140,7 @@ pub mod oid4vci_management_http;
 pub mod oid4vci_management_postgres;
 pub mod passport_bureau;
 pub mod passport_artifact;
+pub mod passport_contract;
 pub mod passport_repository;
 pub mod passport_signer;
 pub mod proof_nonce;

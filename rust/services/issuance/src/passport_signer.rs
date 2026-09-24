@@ -171,17 +171,18 @@ mod tests {
         let signed = signer.sign("UTO", "org-1", &data_groups).await.unwrap();
         assert_eq!(signed.sod_der_base64, "U09E");
         assert_eq!(signed.dsc_cert_pem, "synthetic-cert");
-        let requests = observed.lock().unwrap();
-        assert_eq!(requests[0].0, "Bearer signer-key");
-        assert_eq!(
-            requests[0].1,
-            json!({
-                "country_code": "UTO",
-                "organization": "org-1",
-                "data_groups": {"DG1":"AQ==","DG2":"Ag=="}
-            })
-        );
-        drop(requests);
+        {
+            let requests = observed.lock().unwrap();
+            assert_eq!(requests[0].0, "Bearer signer-key");
+            assert_eq!(
+                requests[0].1,
+                json!({
+                    "country_code": "UTO",
+                    "organization": "org-1",
+                    "data_groups": {"DG1":"AQ==","DG2":"Ag=="}
+                })
+            );
+        }
         assert!(matches!(
             signer.sign("UTO", "incomplete", &data_groups).await,
             Err(SignerError::IncompleteMaterial)

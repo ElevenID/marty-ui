@@ -16,6 +16,19 @@
     "incomplete_error": "ICAO document signer returned incomplete signing material"
   },
   "document_types": ["TD1", "TD2", "TD3"],
+  "request_validation": {
+    "application_required": ["organization_id", "flow_execution_id", "application_template_id", "credential_template_id", "delivery_destination_profile_id", "country_code", "applicant", "mrz", "data_groups"],
+    "default_document_type": "TD3",
+    "delivery_destination_profile_id_max_length": 128,
+    "country_code_pattern": "^[A-Z]{3}$",
+    "required_data_groups": ["DG1", "DG2"],
+    "data_group_name_pattern": "^DG[0-9]+$",
+    "data_group_values": "strict-base64",
+    "quality_required": ["passed"],
+    "quality_default_failure_codes": [],
+    "extra_fields": "forbid"
+  },
+  "safe_job_response_fields": ["id", "organization_id", "flow_execution_id", "application_id", "credential_template_id", "delivery_destination_profile_id", "document_type", "country_code", "secure_artifact_reference", "bureau_job_id", "tracking_number", "status", "quality_result", "error_code", "error_message", "submitted_at", "completed_at", "created_at", "updated_at"],
   "bureau_status_projection": {
     "QUEUED": "SUBMITTED",
     "PRINTING": "IN_PRODUCTION",
@@ -31,5 +44,5 @@
     "native_requirement": "Forward the stored document type for all three accepted values",
     "tracking_issue": "https://github.com/ElevenID/marty-ui/issues/851"
   },
-  "qualification": "adapter checkpoint only; nine-route, tenant, durable job, image, gateway, Flow, and beta gates remain"
+  "qualification": "adapter and request/response checkpoint only; nine-route, tenant, durable job, image, gateway, Flow, and beta gates remain"
 }
