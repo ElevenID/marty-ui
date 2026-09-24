@@ -1804,6 +1804,7 @@ pub async fn run_canvas_mirror_automation_main_lifecycle(pool: &PgPool, database
         .env("CANVAS_MIRROR_WORKER_RETRY_FAILED", "true")
         .env("CANVAS_MIRROR_WORKER_RUN_ON_STARTUP", "true")
         .env("RUST_LOG", "info,marty_issuance_service=info")
+        .stdout(Stdio::piped())
         .stderr(Stdio::piped());
     drop((http_listener, grpc_listener));
     let mut child = ChildGuard(
@@ -1811,6 +1812,12 @@ pub async fn run_canvas_mirror_automation_main_lifecycle(pool: &PgPool, database
             .spawn()
             .expect("start packaged issuance automation process"),
     );
+    let mut stdout_pipe = child.0.stdout.take().unwrap();
+    let stdout_reader = std::thread::spawn(move || {
+        let mut stdout = String::new();
+        stdout_pipe.read_to_string(&mut stdout).unwrap();
+        stdout
+    });
     let client = bounded_http_client(Duration::from_secs(5));
     let health = tokio::time::timeout(
         Duration::from_secs(10),
@@ -1857,12 +1864,13 @@ pub async fn run_canvas_mirror_automation_main_lifecycle(pool: &PgPool, database
         .await;
         let _ = child.0.kill();
         let _ = child.0.wait();
+        let stdout = stdout_reader.join().unwrap();
         let mut stderr = String::new();
         if let Some(mut pipe) = child.0.stderr.take() {
             let _ = pipe.read_to_string(&mut stderr);
         }
         panic!(
-            "packaged automation startup cycle deadline: {error}; persisted={persisted:?}; calls={:?}; stderr={stderr}",
+            "packaged automation startup cycle deadline: {error}; persisted={persisted:?}; calls={:?}; stdout={stdout}; stderr={stderr}",
             *state.calls.lock().unwrap()
         );
     }
@@ -1890,6 +1898,7 @@ pub async fn run_canvas_mirror_automation_main_lifecycle(pool: &PgPool, database
         status.success(),
         "packaged issuance shutdown failed: {status}"
     );
+    let stdout = stdout_reader.join().unwrap();
     let mut stderr = String::new();
     child
         .0
@@ -1898,9 +1907,19 @@ pub async fn run_canvas_mirror_automation_main_lifecycle(pool: &PgPool, database
         .unwrap()
         .read_to_string(&mut stderr)
         .unwrap();
-    assert!(stderr.contains("Canvas mirror automation worker enabled"));
-    assert!(stderr.contains("Canvas mirror publish worker cycle completed"));
-    assert!(stderr.contains("Issuance shutdown requested"));
+    let logs = format!("{stdout}\n{stderr}");
+    assert!(
+        logs.contains("Canvas mirror automation worker enabled"),
+        "missing worker startup log: {logs}"
+    );
+    assert!(
+        logs.contains("Canvas mirror publish worker cycle completed"),
+        "missing publish cycle log: {logs}"
+    );
+    assert!(
+        logs.contains("Issuance shutdown requested"),
+        "missing shutdown log: {logs}"
+    );
 
     let _ = stop.send(());
     tokio::time::timeout(Duration::from_secs(5), server)
