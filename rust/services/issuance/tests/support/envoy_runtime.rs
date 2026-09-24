@@ -481,7 +481,19 @@ impl EnvoyFixture {
             };
         }
         native_method_present!(exchange_token);
-        native_method_present!(issue_credential);
+        // A service-authenticated credential call without an OAuth access
+        // token reaches native issuance and must still fail authentication.
+        // Requiring a non-Unauthenticated result here would erase that
+        // separate holder-token boundary.
+        let credential_status = client
+            .issue_credential(authenticated(Default::default()))
+            .await
+            .unwrap_err();
+        assert_eq!(credential_status.code(), tonic::Code::Unauthenticated);
+        assert_eq!(
+            credential_status.message(),
+            "missing or invalid authorization"
+        );
         native_method_present!(get_offer);
         native_method_present!(list_transactions);
         native_method_present!(get_transaction);

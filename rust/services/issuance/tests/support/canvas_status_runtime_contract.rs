@@ -202,12 +202,11 @@ async fn publish_mirror(
             .get("authorization")
             .and_then(|value| value.to_str().ok()),
     }));
+    // This packaged test configures the bridge provider. Its response is a
+    // bridge credential_id, not a Badgr `result[].entityId` assertion.
     Json(json!({
-        "result": [{
-            "entityId": "automation-external",
-            "issuer": "issuer-elevenid",
-            "openBadgeId": "https://badges.example/assertion/automation-external"
-        }]
+        "credential_id": "automation-external",
+        "issuer_id": "issuer-elevenid"
     }))
     .into_response()
 }
@@ -1846,6 +1845,16 @@ pub async fn run_canvas_mirror_automation_main_lifecycle(pool: &PgPool, database
     })
     .await;
     if let Err(error) = startup_cycle {
+        let persisted = tokio::time::timeout(Duration::from_secs(5), async {
+            sqlx::query_as::<_, (String, Option<String>, Option<String>)>(
+                "SELECT status, external_credential_id, last_error \
+                 FROM issuance_service.credential_delivery_records \
+                 WHERE id='delivery-provider' AND organization_id='org-review'",
+            )
+            .fetch_one(pool)
+            .await
+        })
+        .await;
         let _ = child.0.kill();
         let _ = child.0.wait();
         let mut stderr = String::new();
@@ -1853,7 +1862,7 @@ pub async fn run_canvas_mirror_automation_main_lifecycle(pool: &PgPool, database
             let _ = pipe.read_to_string(&mut stderr);
         }
         panic!(
-            "packaged automation startup cycle deadline: {error}; calls={:?}; stderr={stderr}",
+            "packaged automation startup cycle deadline: {error}; persisted={persisted:?}; calls={:?}; stderr={stderr}",
             *state.calls.lock().unwrap()
         );
     }
