@@ -111,6 +111,9 @@ fn whole_model_preserves_legacy_and_all_siblings_with_only_closed_deltas() {
                     json!({"name":"ISSUANCE_NATIVE_SERVICE_URL","value":"http://issuance-native:8005"})
                 );
             } else if value["metadata"]["name"] == "issuance" {
+                assert_eq!(owner(value)["livenessProbe"]["httpGet"]["path"], "/health");
+                assert_eq!(owner(value)["readinessProbe"]["httpGet"]["path"], "/ready");
+                owner_mut(value)["readinessProbe"]["httpGet"]["path"] = json!("/health");
                 assert_eq!(
                     owner_mut(value)["envFrom"]
                         .as_array_mut()
@@ -155,6 +158,15 @@ fn whole_model_preserves_legacy_and_all_siblings_with_only_closed_deltas() {
                         &volumes
                     );
                 }
+                let entries = owner_mut(value)["env"].as_array_mut().unwrap();
+                assert_eq!(
+                    entries.pop().unwrap(),
+                    json!({"name":"ISSUANCE_NATIVE_SERVICE_URL","value":"http://issuance-native:8005"})
+                );
+                assert_eq!(
+                    entries.pop().unwrap(),
+                    json!({"name":"DIDCOMM_DELIVERY_OWNER","value":"native"})
+                );
             }
         }
         assert_eq!(
@@ -437,6 +449,9 @@ fn realistic_api_defaults_preserve_update_guard_and_hostile_changes_fail_closed(
     for fault in [
         "shared-map",
         "management-key",
+        "delivery-owner",
+        "native-service-url",
+        "readiness-path",
         "policy-volume",
         "policy-mount",
         "policy-path",
@@ -596,16 +611,22 @@ fn legacy_fault(model: &Value, fault: &str) -> Value {
                 .unwrap()
                 .pop();
         }
-        "management-key" | "policy-path" => {
-            let name = if fault == "management-key" {
-                "ISSUANCE_API_KEY"
-            } else {
-                "DIDCOMM_ENCRYPTION_POLICY_FILE"
+        "management-key" | "delivery-owner" | "native-service-url" | "policy-path" => {
+            let name = match fault {
+                "management-key" => "ISSUANCE_API_KEY",
+                "delivery-owner" => "DIDCOMM_DELIVERY_OWNER",
+                "native-service-url" => "ISSUANCE_NATIVE_SERVICE_URL",
+                _ => "DIDCOMM_ENCRYPTION_POLICY_FILE",
             };
-            owner_mut(deployment)["env"]
-                .as_array_mut()
-                .unwrap()
-                .retain(|v| v["name"] != name);
+            let entries = owner_mut(deployment)["env"].as_array_mut().unwrap();
+            if matches!(fault, "delivery-owner" | "native-service-url") {
+                entries
+                    .iter_mut()
+                    .find(|entry| entry["name"] == name)
+                    .unwrap()["value"] = json!("hostile-drift");
+            } else {
+                entries.retain(|v| v["name"] != name);
+            }
         }
         "policy-volume" => deployment["spec"]["template"]["spec"]["volumes"]
             .as_array_mut()
@@ -615,6 +636,9 @@ fn legacy_fault(model: &Value, fault: &str) -> Value {
             .as_array_mut()
             .unwrap()
             .retain(|v| v["mountPath"] != "/run/marty-didcomm-policy"),
+        "readiness-path" => {
+            owner_mut(deployment)["readinessProbe"]["httpGet"]["path"] = json!("/health")
+        }
         _ => panic!("Unknown closed legacy mutation"),
     }
     model

@@ -8,6 +8,7 @@ use axum::{
 };
 use serde::Deserialize;
 use serde_json::json;
+use tracing::{info, warn};
 
 use crate::{
     credential::CredentialTransactionStatus,
@@ -103,14 +104,71 @@ impl InitiationDidcommHttpService {
             &request.organization_id,
             true,
         )?;
-        self.delivery
+        let result = self
+            .delivery
             .deliver_for_organization(
                 &request.organization_id,
                 &request.transaction_id,
                 &request.holder_did,
             )
-            .await
-            .map_err(Into::into)
+            .await;
+        match &result {
+            Ok(receipt)
+                if receipt.status
+                    == crate::initiation_didcomm::NativeDidcommDeliveryStatus::Delivered =>
+            {
+                info!(
+                    didcomm_owner = "direct",
+                    didcomm_outcome = "delivered",
+                    "DIDComm direct delivery completed"
+                );
+            }
+            Ok(receipt) => {
+                warn!(
+                    didcomm_owner = "direct",
+                    didcomm_outcome = "delivery_failed",
+                    failure_class = receipt_failure_class(receipt),
+                    "DIDComm direct delivery failed"
+                );
+            }
+            Err(error) => {
+                warn!(
+                    didcomm_owner = "direct",
+                    didcomm_outcome = "unavailable",
+                    error_class = delivery_error_class(error),
+                    "DIDComm direct delivery failed"
+                );
+            }
+        }
+        result.map_err(Into::into)
+    }
+}
+
+fn receipt_failure_class(receipt: &NativeInitiationDidcommDeliveryReceipt) -> &'static str {
+    match receipt.error.as_deref() {
+        Some(error) if error.starts_with("HTTP ") => "http_status",
+        _ => "transport_exception",
+    }
+}
+
+fn delivery_error_class(error: &NativeInitiationDidcommDeliveryError) -> &'static str {
+    match error {
+        NativeInitiationDidcommDeliveryError::InvalidConfiguration => "invalid_configuration",
+        NativeInitiationDidcommDeliveryError::InvalidRequest => "invalid_request",
+        NativeInitiationDidcommDeliveryError::TransactionNotFound => "transaction_not_found",
+        NativeInitiationDidcommDeliveryError::InvalidTransactionState(_) => {
+            "invalid_transaction_state"
+        }
+        NativeInitiationDidcommDeliveryError::DidcommUnavailable => "didcomm_unavailable",
+        NativeInitiationDidcommDeliveryError::Prerequisite(_) => "prerequisite_unavailable",
+        NativeInitiationDidcommDeliveryError::CredentialUnavailable => "credential_unavailable",
+        NativeInitiationDidcommDeliveryError::ConcurrentDelivery => "concurrent_delivery",
+        NativeInitiationDidcommDeliveryError::DeliveryOutcomeUnknown => "delivery_outcome_unknown",
+        NativeInitiationDidcommDeliveryError::TransportFailed => "transport_failed",
+        NativeInitiationDidcommDeliveryError::PostIssuanceUnavailable => {
+            "post_issuance_unavailable"
+        }
+        NativeInitiationDidcommDeliveryError::RetryStateUnavailable => "retry_state_unavailable",
     }
 }
 
@@ -309,5 +367,39 @@ mod tests {
             "universal_resolver_url":"https://attacker.example"
         }))
         .is_err());
+    }
+
+    #[test]
+    fn direct_owner_diagnostics_use_only_fixed_error_classes() {
+        for (error, expected) in [
+            (
+                NativeInitiationDidcommDeliveryError::Prerequisite(
+                    NativeDidcommError::TransportUnavailable,
+                ),
+                "prerequisite_unavailable",
+            ),
+            (
+                NativeInitiationDidcommDeliveryError::DeliveryOutcomeUnknown,
+                "delivery_outcome_unknown",
+            ),
+            (
+                NativeInitiationDidcommDeliveryError::RetryStateUnavailable,
+                "retry_state_unavailable",
+            ),
+        ] {
+            assert_eq!(delivery_error_class(&error), expected);
+        }
+        let mut receipt = NativeInitiationDidcommDeliveryReceipt {
+            transaction_id: "private-transaction".into(),
+            credential_id: "private-credential".into(),
+            holder_did: "did:example:private".into(),
+            service_endpoint: "https://private.example/inbox".into(),
+            didcomm_message_id: "private-message".into(),
+            status: crate::initiation_didcomm::NativeDidcommDeliveryStatus::DeliveryFailed,
+            error: Some("HTTP 502".into()),
+        };
+        assert_eq!(receipt_failure_class(&receipt), "http_status");
+        receipt.error = Some("DIDComm transport failed".into());
+        assert_eq!(receipt_failure_class(&receipt), "transport_exception");
     }
 }

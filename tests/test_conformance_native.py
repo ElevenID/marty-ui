@@ -223,6 +223,16 @@ def model(*, local=False, authcrypt=False):
         "bind": {"create_host_path": False},
     }
     legacy = {"environment": deepcopy(env), "volumes": [deepcopy(ca)]}
+    legacy["environment"].update(
+        DIDCOMM_DELIVERY_OWNER="native",
+        ISSUANCE_NATIVE_SERVICE_URL=native.NATIVE_URL,
+    )
+    legacy["depends_on"] = {
+        "issuance-native": {"condition": "service_healthy", "required": True}
+    }
+    legacy["healthcheck"] = {
+        "test": ["CMD", "curl", "--fail", "http://localhost:8005/ready"]
+    }
     candidate = {
         "environment": {**env, "SERVICE_NAME": "issuance_native"},
         "volumes": [ca],
@@ -354,6 +364,12 @@ def test_unknown_owner_never_aliases_legacy(owner):
         ),
         lambda m: m["services"]["issuance-native"]["environment"].update(
             ALLOWED_REDIRECT_URIS="https://different.example/callback"
+        ),
+        lambda m: m["services"]["issuance"]["environment"].update(
+            DIDCOMM_DELIVERY_OWNER="legacy"
+        ),
+        lambda m: m["services"]["issuance"]["environment"].update(
+            ISSUANCE_NATIVE_SERVICE_URL=native.LEGACY_URL
         ),
         lambda m: m["services"]["issuance-native"]["environment"].update(
             DIDCOMM_ALLOW_PRIVATE_IPS="false"

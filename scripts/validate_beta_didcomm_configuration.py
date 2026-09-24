@@ -9,6 +9,7 @@ import subprocess
 import sys
 
 POLICY_TARGET = "/run/secrets/didcomm-authcrypt"
+NATIVE_URL = "http://issuance-native:8005"
 MAX_MODEL_BYTES = 8 * 1024 * 1024
 
 
@@ -89,6 +90,33 @@ def assert_native_policy_pairing(model):
 
 def validate_model(model, *, authcrypt_enabled):
     try:
+        legacy_environment = environment_mapping(
+            model["services"]["issuance"]["environment"]
+        )
+        if legacy_environment.get("DIDCOMM_DELIVERY_OWNER") != "native":
+            raise DidcommConfigurationError(
+                "Beta DIDComm delivery owner is not native"
+            )
+        if legacy_environment.get("ISSUANCE_NATIVE_SERVICE_URL") != NATIVE_URL:
+            raise DidcommConfigurationError(
+                "Beta DIDComm native service URL is not selected"
+            )
+        dependency = model["services"]["issuance"]["depends_on"][
+            "issuance-native"
+        ]
+        if dependency != {"condition": "service_healthy", "required": True}:
+            raise DidcommConfigurationError(
+                "Beta DIDComm native readiness dependency is not enforced"
+            )
+        if model["services"]["issuance"]["healthcheck"]["test"] != [
+            "CMD",
+            "curl",
+            "--fail",
+            "http://localhost:8005/ready",
+        ]:
+            raise DidcommConfigurationError(
+                "Beta DIDComm retained consumer readiness is not enforced"
+            )
         policies = [
             environment_mapping(model["services"][name]["environment"]).get(
                 "DIDCOMM_ENCRYPTION_POLICY_FILE"

@@ -115,6 +115,9 @@ def modeled(tmp_path):
     baseline["services"]["issuance"]["ports"] = [
         {"host_ip": "127.0.0.1", "published": "8005", "target": 8005}
     ]
+    baseline["services"]["issuance"]["healthcheck"] = {
+        "test": ["CMD", "curl", "-f", "http://localhost:8005/health"]
+    }
     baseline["services"]["gateway"].update(
         environment={"ISSUANCE_SERVICE_URL": GATE["NATIVE"]["LEGACY_URL"]},
         depends_on={},
@@ -243,6 +246,19 @@ def test_policy_source_must_exist_as_directory(modeled, tmp_path, kind):
     with pytest.raises(AssertionError, match="must already exist"):
         GATE["assert_model"](baseline, actual, **options)
     assert path.is_file() if kind == "file" else not path.exists()
+
+
+def test_expected_model_selects_the_retained_legacy_issuance_owner_exactly(modeled):
+    baseline, actual, _ = modeled
+    selector_names = {"DIDCOMM_DELIVERY_OWNER", "ISSUANCE_NATIVE_SERVICE_URL"}
+    baseline_environment = baseline["services"]["issuance"]["environment"]
+    actual_environment = actual["services"]["issuance"]["environment"]
+
+    assert selector_names.isdisjoint(baseline_environment)
+    assert {name: actual_environment[name] for name in selector_names} == {
+        "DIDCOMM_DELIVERY_OWNER": "native",
+        "ISSUANCE_NATIVE_SERVICE_URL": GATE["NATIVE"]["NATIVE_URL"],
+    }
 
 
 def test_shared_images_are_not_duplicated_and_packaging_paths_resolve():

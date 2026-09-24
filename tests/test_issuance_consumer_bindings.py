@@ -52,6 +52,7 @@ def environment(item):
 
 def target_key(name):
     return name.endswith("_GRPC_TARGET") or name in {
+        "DIDCOMM_DELIVERY_OWNER",
         "ISSUANCE_SERVICE_URL",
         "ISSUANCE_NATIVE_SERVICE_URL",
     }

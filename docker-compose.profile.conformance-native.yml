@@ -37,7 +37,16 @@ services:
   flow:
     environment: *conformance-grpc-auth
   issuance:
-    environment: *conformance-grpc-auth
+    environment:
+      <<: *conformance-grpc-auth
+      DIDCOMM_DELIVERY_OWNER: native
+      ISSUANCE_NATIVE_SERVICE_URL: http://issuance-native:8005
+    depends_on:
+      issuance-native:
+        condition: service_healthy
+        required: true
+    healthcheck:
+      test: ["CMD", "curl", "--fail", "http://localhost:8005/ready"]
   revocation-profile:
     environment: *conformance-grpc-auth
   device-registration:

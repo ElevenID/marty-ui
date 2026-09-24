@@ -1,0 +1,64 @@
+{
+  "schema": "marty.didcomm-native-consumer-ownership/v1",
+  "required_modes": ["anoncrypt", "authcrypt"],
+  "downgrade_or_fallback": "forbidden",
+  "owner_selector": {
+    "name": "DIDCOMM_DELIVERY_OWNER",
+    "native_value": "native",
+    "legacy_default": "legacy"
+  },
+  "native_origin": {
+    "name": "ISSUANCE_NATIVE_SERVICE_URL",
+    "value": "http://issuance-native:8005"
+  },
+  "retained_consumer_readiness": {
+    "service": "issuance",
+    "dependency": "issuance-native",
+    "condition": "service_healthy",
+    "required": true,
+    "path": "/ready",
+    "liveness_path": "/health"
+  },
+  "selected_compose_models": [
+    "docker-compose.beta.yml",
+    "docker-compose.profile.issuance-native.yml",
+    "docker-compose.profile.conformance-native.yml"
+  ],
+  "legacy_compose_models": [
+    "docker-compose.base.yml",
+    "docker-compose.selfhost.prod.yml"
+  ],
+  "kubernetes": {
+    "selector": "K8S_ISSUANCE_NATIVE_ENABLED",
+    "selected_value": "true",
+    "legacy_source_unchanged_until_render": true
+  },
+  "legacy_direct_compatibility": {
+    "routes": [
+      "POST /v1/issuance/initiate",
+      "POST /v1/issuance/didcomm/deliver"
+    ],
+    "behavior": "delegate-whole-request-before-python-repository-or-crypto",
+    "forwarded_headers": ["x-api-key", "x-organization-id", "idempotency-key"],
+    "all_other_headers": "discard",
+    "native_unavailable": "503-without-legacy-fallback"
+  },
+  "deferred": ["DIDCOMM-KMS-001"],
+  "production_deployment": "unchanged",
+  "release_gate": {
+    "state": "qualified",
+    "minimum_version": "0.1.77",
+    "required_source_checkpoint": "969cb045c774062c0d058d72283fe65507ca9a44",
+    "qualified_release": {
+      "version": "0.1.77",
+      "commit": "969cb045c774062c0d058d72283fe65507ca9a44",
+      "digest": "sha256:02fe863e9e6c5faf8538c95cfa030e92504b6c4b6ba695bd3656ec30f21f2c3f",
+      "evidence": {
+        "sbom": "https://github.com/ElevenID/marty-credentials/releases/download/v0.1.77/marty-credentials-issuance.spdx.json",
+        "provenance": "https://github.com/ElevenID/marty-credentials/attestations",
+        "provenance_subject": "ghcr.io/elevenid/marty-credentials-issuance@sha256:02fe863e9e6c5faf8538c95cfa030e92504b6c4b6ba695bd3656ec30f21f2c3f",
+        "provenance_source_commit": "969cb045c774062c0d058d72283fe65507ca9a44"
+      }
+    }
+  }
+}

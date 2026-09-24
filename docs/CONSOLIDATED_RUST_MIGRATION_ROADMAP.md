@@ -11,22 +11,23 @@ here. PR #814 landed on protected `main` as merge-queue candidate
 `1d94bbbb3c5ef4698eee92240673ae602c289bf1` landed as squash commit
 `0b08704e55f6e2a56a0f6eff625e1c6b9a8c741d`; both commits have exact tree
 `a0d0989a601742171e0da873e2d6bdd1545270e2`. The 14-route
-internal-Application cutover remains open in PR #827. Its 29 PR-only commits
-were restacked directly onto the #826 squash at pre-documentation checkpoint
-`2971f0ce5a92b05c2793614c0dce587cc0856f56`, whose exact tree
-`08b295406aadebb5fd28aaf7b4cdf96c171b56d0` matches prior reviewed head
-`d611ea2484d25a256200473c657cb06e9c3fa55f`. The staged Rust issuance
-inventory contains 96 native HTTP operations. The corresponding Python
-retirements remain independently gated as open Credentials PRs #279 and #278,
-and the required fresh Credentials `0.1.74` release coordinate remains staged
-as draft PR #280. No retirement lands before its Rust owner. Reachable Python
-features, the independent KMS-hardening work, the dirty crypto/SD-JWT work,
-and the deferred DIDComm KMS redesign remain preserved. After exact
-protected-main tree verification, nine superseded clean UI worktrees and local
-branch names were removed; the retained `marty-ui` worktrees are local `main`,
-the landed #826 checkpoint, open PR #827, and KMS hardening. The aggregate beta
-deployment, all-demo/device acceptance, and governed soak remain incomplete.
-No production deployment occurred in this lane.
+internal-Application cutover landed through PR #827 as protected-main commit
+`22d448000b1c539265097aa6bc8fafe46e998eed`. Its corresponding Python
+retirements landed independently through Credentials PRs #279 and #278 as
+`34d30ed3d2800186b57f79f8cc012e1ea27c2211` and
+`1a9a25b4290269722e5f27928958d3460d3367e1`. Credentials PR #281 then landed
+the Rust DIDComm consumer migration as `75e2394350185a1b7c0824b25b4016ca40b0174c`;
+the exact protected-main release source and immutable artifact are recorded
+below. Reachable unselected Python features, the independent KMS-hardening
+work, the dirty crypto/SD-JWT work, and the deferred DIDComm KMS redesign remain
+preserved. The current #837 stack reports **107 native / 24 remaining / 131
+total** issuance HTTP operations. PR #836 is at exact head `42d5030c` with
+checks active after its owner-outage harness correction; stacked PR #837 is at
+exact head `16e8ec517` and awaits retargeting; PR #838 freezes the authorization
+contract at exact head `8f452d589`. Signed local native OID4VCI public-protocol
+implementation `d7c9f94f8` is under independent review and is not routed. The
+aggregate beta deployment, all-demo/device acceptance, and governed soak remain
+incomplete. No production deployment occurred in this lane.
 
 Prior `v1.1.214` evidence remains retained at source
 `24f5d5dc0bb47d3dadb118b4dbe45191c5cf71b1`, release run `33930593794`.
@@ -37,15 +38,17 @@ release run `33931821255`. That historical static pin does not attest a newer
 beta aggregate; reconcile it after the next qualified release.
 
 Release-evidence classification remains exact: `v0.1.72` is a valid issuance
-component, not a failed verifier artifact; `v1.2.76` is retained held evidence
-only and grants no cutover authorization; `v1.2.77` is intermediate evidence
-only; and `v1.2.78` is preliminary, non-activating evidence.
+component, not a failed verifier artifact, and is now historical; failed immutable `v0.1.74`
+and quarantined immutable `v0.1.75` are non-reusable; `v0.1.76` is the qualified
+DIDComm consumer artifact. Integration `v1.2.76` is retained held evidence only
+and grants no cutover authorization; `v1.2.77` is intermediate evidence only;
+and `v1.2.78` is preliminary, non-activating evidence.
 
 **Scope:** Marty backend services, protocol kernels, security-sensitive mobile logic, and licensing
 
 **Initial rollout environment:** Beta only
 
-**Last updated:** 2026-09-20
+**Last updated:** 2026-09-21
 
 ## Objective
 
@@ -55,7 +58,29 @@ This is not a line-for-line translation project. Rust owns deterministic protoco
 
 The immediate deployment boundary is beta. Production and persistent self-host environments are not changed by this roadmap without a separate approval and promotion decision.
 
-## Current execution snapshot — 2026-09-20
+## Current execution snapshot — 2026-09-21
+
+The DIDComm consumer cutover gate is now bound to published Credentials
+`v0.1.76`, protected-main source
+`aaa6a9b8e31e62cd0ab087eef5fc1f4835048e26`, and issuance image
+`sha256:815cbba6efc7c91e770a8dd15fe5fa102d252a485073bf60f0e0d5e0a73b28e5`.
+Stable release and image-finalization runs `35621735371` and `35624018264`
+passed artifact/image provenance, signing, SBOM, exact-tag and publication
+gates. Failed immutable `v0.1.74` and quarantined immutable `v0.1.75` remain
+non-reusable; the minimum qualified coordinate is `v0.1.76`. This qualifies the
+selected consumer artifact but does not establish a beta deployment, Python
+deletion, KMS correction, or production change.
+
+The active stacked issuance lanes are newer than the landed 96/35 checkpoint.
+Resource-owner PR #836 is at exact head `42d5030c`; its hosted checks are active
+after correcting the owner-outage acceptance harness. Public trust-stack PR
+#837 is at exact head `16e8ec517`, stacked and awaiting retargeting. Authorization
+contract PR #838 is at exact head `8f452d589`. The #837 stack reports **107
+native / 24 remaining / 131 total** issuance HTTP operations. Signed local head
+`d7c9f94f8` implements the native OID4VCI public protocol but remains under
+independent review and has not been routed. These are implementation and review
+coordinates, not permission to delete reachable Python or a claim of beta or
+production deployment.
 
 The current issued-credential adapter candidate preserves the five frozen
 public list/detail/lifecycle routes and restores lifecycle comments as durable,
@@ -97,13 +122,14 @@ maintainer review removed the guarded `order.expect` and the HTTP error
 mapper's early-return/`unreachable!` pair without changing the frozen response
 boundary; six focused domain tests, all four language-neutral HTTP tests,
 package formatting, diff checks, and strict targeted Clippy pass under Rust
-1.95. Credentials PR #279 at
-`de52f2147b18696fff128c19bf71fa0fca2e069b` removes only those eight superseded
-Python management routes. Its Rust-owner ordering gate is now satisfied, but
-the retirement remains independently gated and unlanded; its exact-head hosted
-run `35502472242` is fully green.
+1.95. Credentials PR #279 at reviewed head
+`de52f2147b18696fff128c19bf71fa0fca2e069b` removed only those eight superseded
+Python management routes and merged independently as
+`34d30ed3d2800186b57f79f8cc012e1ea27c2211`; exact-head hosted run
+`35502472242` was fully green.
 
-Internal-Application PR #827 remains open. After #826 squash-merged, exactly
+Internal-Application PR #827 merged as protected-main commit
+`22d448000b1c539265097aa6bc8fafe46e998eed`. Before landing, exactly
 the 29 linear PR-only commits after stacked #826 tip
 `1d94bbbb3c5ef4698eee92240673ae602c289bf1` were restacked onto protected
 `main` commit `0b08704e55f6e2a56a0f6eff625e1c6b9a8c741d`. The resulting
@@ -136,24 +162,27 @@ Application Template HTTP tests, all ten internal-Application HTTP tests, all
 five reconciliation tests, package formatting, diff checks, and strict
 targeted Clippy. The latest reviewed head also preserves secret-safe structured
 failure diagnostics and the issuance-specific Canvas offer readiness response.
-Credentials PR #278 is open at
-`e40c1ce6e807714278ef362d3ed24909dd8686fa`; it retires only those 14 Python
-route owners after #827 lands while retaining shared storage and live
-Canvas/evidence consumers, and adds the frozen diagnostics provenance consumed
-by this Rust candidate. Its earlier Canvas atomic auto-approval checkpoint
+Credentials PR #278 at reviewed head
+`a138f1666d466a2f00c1b7baaca8489268d0d576` retired only those 14 Python
+route owners after #827 landed while retaining shared storage and live
+Canvas/evidence consumers, and merged independently as
+`1a9a25b4290269722e5f27928958d3460d3367e1`. Its earlier Canvas atomic
+auto-approval checkpoint
 `ab70b3139c279a7e8cad7da3691788964aacf92f` passed 111 focused
 Canvas/approval tests, 54 retirement/surface tests, collection of all 1,718
-remaining tests, and hosted run `35502944118`. That earlier run is not claimed
-as exact-head qualification for `e40c1ce6e807714278ef362d3ed24909dd8686fa`.
+remaining tests, and hosted run `35502944118`. That earlier run remains scoped
+historical evidence rather than a substitute for the protected merge result.
 
-Credentials PR #280 is a draft stacked on #278 at
-`a237a57c5fc5d3c4f3695192093b2e9c97a38247`. It changes only `Cargo.toml` and
-`Cargo.lock` from `0.1.73` to the fresh `0.1.74` release coordinate. The failed
-immutable `v0.1.73` tag remains preserved rather than retargeted. Locked Cargo
-metadata, a full locked Rust check, and all 37 stable-tag/release-contract tests
-pass. After #279 and #278 land, #280 must land and publish successfully before
-the new Credentials artifact is pinned into the next aggregate UI coordinate,
-`1.1.218`.
+Credentials PR #280 merged as
+`15af5232df376bb9596b5aed3703110bf890fce5`, but its immutable `v0.1.74`
+coordinate failed and remains non-reusable. Quarantined immutable `v0.1.75`
+also remains non-reusable. PR #281 landed the DIDComm consumer migration as
+`75e2394350185a1b7c0824b25b4016ca40b0174c`; release-hardening PR #282 then
+landed as exact protected-main source
+`aaa6a9b8e31e62cd0ab087eef5fc1f4835048e26`. Governed preparation run
+`35621707546`, stable release run `35621735371`, and image finalization run
+`35624018264` published qualified Credentials `v0.1.76` and immutable issuance
+digest `sha256:815cbba6efc7c91e770a8dd15fe5fa102d252a485073bf60f0e0d5e0a73b28e5`.
 
 Exact-head maintainer replay found that the 14 internal-Application entries were
 present in the JSON inventory but absent from the embedded Rust contract's
@@ -6122,17 +6151,22 @@ remaining / 131 total** without removing the entity, storage, or downstream
 consumer surface. Its separately tested Python management retirement remains
 open and independently gated.
 
-Open PR #827 adds the next 14 exact frozen internal-Application operations and
-reports **96 native / 35 remaining / 131 total**. Its 29 PR-only commits are
-restacked directly on the landed #826 squash with exact reviewed-tree parity.
-Its separately tested Python retirement remains ordered after the Rust owner
-lands and retains shared storage plus active Canvas and evidence consumers.
+PR #827 landed the next 14 exact frozen internal-Application operations and
+reported **96 native / 35 remaining / 131 total**. Its separately tested Python
+retirement followed through Credentials PR #278 while retaining shared storage
+plus active Canvas and evidence consumers.
 
-Remaining work includes qualification and protected landing of PR #827,
-independently gated Python retirements #279 and #278, the fresh Credentials
-`0.1.74` release coordinate in draft PR #280, release-image / gateway / callback
-/ self-host TLS acceptance, intended-consumer review for the remaining 35
-issuance HTTP entries, remaining branch and worktree reconciliation, and one
-aggregate beta recording/device acceptance soak. Local qualification is not
-deployed acceptance. Active Python remains until its retirement gates pass.
-DIDComm KMS corrections remain deferred; production is unchanged.
+The later #837 stack advances the current inventory to **107 native / 24
+remaining / 131 total**. PR #836 exact head `42d5030c` has active checks after
+the owner-outage harness correction; PR #837 exact head `16e8ec517` awaits
+retargeting; PR #838 exact head `8f452d589` freezes authorization behavior.
+Signed local OID4VCI public-protocol implementation `d7c9f94f8` is under
+independent review and remains unrouted.
+
+Remaining work includes landing the qualified DIDComm consumer lock, release-
+image / gateway / callback / self-host TLS acceptance, intended-consumer review
+for the remaining issuance HTTP entries, remaining branch and worktree
+reconciliation, and one aggregate beta recording/device acceptance soak. The
+published `v0.1.76` artifact is release evidence, not deployed acceptance.
+Reachable unselected Python remains until its own retirement gates pass. DIDComm
+KMS corrections remain deferred; production is unchanged.

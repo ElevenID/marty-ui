@@ -226,6 +226,43 @@ async fn direct_didcomm_route_matches_the_language_neutral_contract() {
 }
 
 #[tokio::test]
+async fn direct_transport_failure_preserves_the_language_neutral_contract() {
+    let contract = contract();
+    let failure = &contract["transport_failure_response"];
+    for expected in [&failure["body"], &failure["http_error_body"]] {
+        let delivery = ContractDelivery {
+            calls: Arc::new(Mutex::new(Vec::new())),
+            receipt: NativeInitiationDidcommDeliveryReceipt {
+                transaction_id: expected["transaction_id"].as_str().unwrap().to_owned(),
+                credential_id: expected["credential_id"].as_str().unwrap().to_owned(),
+                holder_did: expected["holder_did"].as_str().unwrap().to_owned(),
+                service_endpoint: expected["service_endpoint"].as_str().unwrap().to_owned(),
+                didcomm_message_id: expected["didcomm_message_id"].as_str().unwrap().to_owned(),
+                status: NativeDidcommDeliveryStatus::DeliveryFailed,
+                error: Some(expected["error"].as_str().unwrap().to_owned()),
+            },
+        };
+        let response = app(delivery.clone())
+            .oneshot(request(
+                contract["valid_request"].clone(),
+                Some("test-api-key"),
+            ))
+            .await
+            .unwrap();
+
+        assert_eq!(
+            u64::from(response.status().as_u16()),
+            failure["http_status"].as_u64().unwrap()
+        );
+        assert_eq!(body(response).await, *expected);
+        assert_eq!(
+            delivery.calls.lock().unwrap().as_slice(),
+            [contract["expected_request"].clone()]
+        );
+    }
+}
+
+#[tokio::test]
 async fn direct_didcomm_prerequisite_errors_match_captured_python_without_private_details() {
     let frozen: Value = serde_json::from_str(include_str!(
         "../../../../contracts/didcomm-public-error-python-reference.json"
@@ -353,6 +390,15 @@ async fn direct_didcomm_route_replays_the_frozen_transport_claim_failures() {
         "delivery_unknown"
     );
     assert_eq!(
+        contract["transport_failure_response"]
+            ["automatic_resend_after_attempted_or_ambiguous_failure"],
+        false
+    );
+    assert_eq!(
+        contract["transport_claim"]["automatic_resend_from_transport_retryable"],
+        true
+    );
+    assert_eq!(
         contract["transport_claim"]["post_attempt_completion_failure"],
         json!({
             "response": "delivery_outcome_unknown",
@@ -387,4 +433,19 @@ async fn direct_didcomm_route_replays_the_frozen_transport_claim_failures() {
             json!({"detail": failure["detail"].as_str().unwrap()})
         );
     }
+}
+
+#[test]
+fn didcomm_rollout_requires_a_credentials_284_derived_immutable_release() {
+    assert_eq!(
+        contract()["rollout_dependency"],
+        json!({
+            "repository": "ElevenID/marty-credentials",
+            "pull_request": 284,
+            "required_capability": "read-all-native-didcomm-delivery-statuses",
+            "immutable_release_required": true,
+            "immutable_release": null,
+            "state": "awaiting-reviewed-merge-and-release"
+        })
+    );
 }

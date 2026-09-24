@@ -159,6 +159,14 @@ def validate_model(
             "Legacy HTTP owner must be retained",
         )
         require(
+            previous.get("DIDCOMM_DELIVERY_OWNER") == "native",
+            "DIDComm delivery owner must be native",
+        )
+        require(
+            previous.get("ISSUANCE_NATIVE_SERVICE_URL") == NATIVE_URL,
+            "DIDComm native service URL must be selected",
+        )
+        require(
             env.get("SERVICE_NAME") == "issuance_native",
             "Native executable selector is missing",
         )

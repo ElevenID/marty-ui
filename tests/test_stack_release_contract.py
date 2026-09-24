@@ -501,11 +501,12 @@ def test_deletion_release_uses_the_reviewed_integration_suite_and_rust_candidate
         for component in lock["components"]
         if component["name"] == "marty-credentials-issuance"
     )
-    assert issuance["version"] == "0.1.72"
-    assert issuance["commit"] == "85b128a85426b3f5aeaf6f948ba5dfa2836e95d8"
-    assert issuance["artifacts"][0]["digest"] == (
-        "sha256:9f15b64bc0ec7a693339cada3142b2952a575d2b50ee89230aabe078d0026176"
-    )
+    qualified = json.loads(_text("contracts/didcomm-native-consumer-ownership.json"))[
+        "release_gate"
+    ]["qualified_release"]
+    assert issuance["version"] == qualified["version"]
+    assert issuance["commit"] == qualified["commit"]
+    assert issuance["artifacts"][0]["digest"] == qualified["digest"]
 
 
 def test_verifier_release_lineage_is_eligible_and_evidence_bounded() -> None:
@@ -514,7 +515,10 @@ def test_verifier_release_lineage_is_eligible_and_evidence_bounded() -> None:
 
     assert lock["release"] == "marty-ui@1.1.217"
     assert lock["release_state"] == "eligible"
-    assert components["marty-credentials-issuance"]["version"] == "0.1.72"
+    qualified = json.loads(_text("contracts/didcomm-native-consumer-ownership.json"))[
+        "release_gate"
+    ]["qualified_release"]
+    assert components["marty-credentials-issuance"]["version"] == qualified["version"]
     assert components["marty-integration-tests"]["version"] == "1.2.79"
 
     documents = (

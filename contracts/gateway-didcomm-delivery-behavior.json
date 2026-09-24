@@ -11,11 +11,25 @@
   ],
   "internal_response": {"transaction_id":"tx-123","credential_id":"credential-123","holder_did":"did:peer:2.EzExample","service_endpoint":"https://holder.example/didcomm","didcomm_message_id":"message-123","status":"delivered","error":null,"provider_delivery_receipt":"must-not-leak"},
   "expected_response": {"transaction_id":"tx-123","credential_id":"credential-123","holder_did":"did:peer:2.EzExample","service_endpoint":"https://holder.example/didcomm","didcomm_message_id":"message-123","status":"delivered","error":null},
+  "transport_failure_response": {
+    "http_status": 200,
+    "body": {"transaction_id":"tx-123","credential_id":"credential-123","holder_did":"did:peer:2.EzExample","service_endpoint":"https://holder.example/didcomm","didcomm_message_id":"message-123","status":"delivery_failed","error":"DIDComm transport failed"},
+    "http_error_body": {"transaction_id":"tx-123","credential_id":"credential-123","holder_did":"did:peer:2.EzExample","service_endpoint":"https://holder.example/didcomm","didcomm_message_id":"message-123","status":"delivery_failed","error":"HTTP 502"},
+    "redirect_status_below_400_is_delivered": true,
+    "automatic_uri": "didcomm://https://holder.example/didcomm",
+    "automatic_transaction_status": "pending",
+    "durable_transport_status": "delivery_unknown",
+    "replay_body_is_stable": true,
+    "automatic_resend_after_attempted_or_ambiguous_failure": false,
+    "remote_response_body_exposed": false,
+    "remote_exception_exposed": false
+  },
   "transport_claim": {
     "single_active_attempt": true,
     "lease_seconds": 60,
     "expired_or_malformed_lease": "delivery_unknown",
     "automatic_resend_from_delivery_unknown": false,
+    "automatic_resend_from_transport_retryable": true,
     "completion_fenced_by_attempt_id": true,
     "claim_aware_statuses": {
       "ready": "transport_ready",
@@ -33,6 +47,14 @@
       {"error":"concurrent_delivery","status":409,"detail":"Issuance transaction is not available for DIDComm delivery"},
       {"error":"delivery_outcome_unknown","status":409,"detail":"DIDComm delivery outcome requires reconciliation"}
     ]
+  },
+  "rollout_dependency": {
+    "repository": "ElevenID/marty-credentials",
+    "pull_request": 284,
+    "required_capability": "read-all-native-didcomm-delivery-statuses",
+    "immutable_release_required": true,
+    "immutable_release": null,
+    "state": "awaiting-reviewed-merge-and-release"
   },
   "invalid_responses": [
     {"transaction_id":"tx-123","credential_id":"credential-123","holder_did":"did:peer:2.EzExample","service_endpoint":"https://holder.example/didcomm","status":"delivered"},

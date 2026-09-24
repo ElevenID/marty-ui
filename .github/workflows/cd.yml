@@ -130,6 +130,7 @@ jobs:
           git fetch --no-tags origin +refs/heads/main:refs/remotes/origin/main
           test "$(git rev-parse 'HEAD^{commit}')" = "$SOURCE_SHA"
           test "$(git rev-parse 'refs/remotes/origin/main^{commit}')" = "$SOURCE_SHA"
+          python scripts/check_didcomm_native_credentials_release.py
           python scripts/release_transaction.py validate \
             --input "$RUNNER_TEMP/release-transaction-input/release-transaction.json" \
             --repository "$GITHUB_REPOSITORY" \
@@ -280,18 +281,48 @@ jobs:
             printf '%s  %s\n' "${digest#sha256:}" "$artifact" | sha256sum --check --strict
             gh attestation verify "$artifact" --repo "$repository"
           done
-      - name: Verify immutable OCI inputs and provenance
+      - name: Verify immutable Credentials OCI provenance and SBOM
         env:
           GH_TOKEN: ${{ github.token }}
           LOCK_FILE: release/stack-lock.json
         shell: bash
         run: |
           set -euo pipefail
-          jq -r '.components[] as $component | $component.artifacts[] | select(.type == "oci") | [$component.repository, .uri, .digest] | @tsv' "$LOCK_FILE" |
-          while IFS=$'\t' read -r repository uri digest; do
-            docker pull "$uri@$digest"
-            gh attestation verify "oci://$uri@$digest" --repo "$repository"
-          done
+          test "$(jq '[.components[] | select(.name == "marty-credentials-issuance")] | length' "$LOCK_FILE")" = 1
+          test "$(jq '[.components[].artifacts[] | select(.type == "oci")] | length' "$LOCK_FILE")" = 1
+          repository="$(jq -er '.components[] | select(.name == "marty-credentials-issuance") | .repository' "$LOCK_FILE")"
+          version="$(jq -er '.components[] | select(.name == "marty-credentials-issuance") | .version' "$LOCK_FILE")"
+          commit="$(jq -er '.components[] | select(.name == "marty-credentials-issuance") | .commit' "$LOCK_FILE")"
+          uri="$(jq -er '.components[] | select(.name == "marty-credentials-issuance") | .artifacts[] | select(.type == "oci") | .uri' "$LOCK_FILE")"
+          digest="$(jq -er '.components[] | select(.name == "marty-credentials-issuance") | .artifacts[] | select(.type == "oci") | .digest' "$LOCK_FILE")"
+          sbom="$(jq -er '.components[] | select(.name == "marty-credentials-issuance") | .artifacts[] | select(.type == "oci") | .sbom' "$LOCK_FILE")"
+          [[ "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]
+          [[ "$commit" =~ ^[0-9a-f]{40}$ ]]
+          [[ "$digest" =~ ^sha256:[0-9a-f]{64}$ ]]
+          test "$repository" = ElevenID/marty-credentials
+          test "$uri" = ghcr.io/elevenid/marty-credentials-issuance
+          source_ref="refs/tags/v${version}"
+          signer_workflow="$repository/.github/workflows/release-images.yml"
+          expected_sbom="https://github.com/$repository/releases/download/v${version}/marty-credentials-issuance.spdx.json"
+          test "$sbom" = "$expected_sbom"
+          docker pull "$uri@$digest"
+          gh attestation verify "oci://$uri@$digest" \
+            --repo "$repository" \
+            --source-digest "$commit" \
+            --source-ref "$source_ref" \
+            --signer-workflow "$signer_workflow" \
+            --deny-self-hosted-runners
+          sbom_file="$RUNNER_TEMP/marty-credentials-issuance.spdx.json"
+          curl --fail --location --retry 3 --silent --show-error "$sbom" \
+            --output "$sbom_file"
+          gh attestation verify "$sbom_file" \
+            --repo "$repository" \
+            --source-digest "$commit" \
+            --source-ref "$source_ref" \
+            --signer-workflow "$signer_workflow" \
+            --deny-self-hosted-runners
+          python scripts/check_credentials_issuance_sbom.py \
+            --sbom "$sbom_file" --image "$uri" --digest "$digest"
       - name: Stage the exact verified integration harness source
         env:
           GH_TOKEN: ${{ github.token }}

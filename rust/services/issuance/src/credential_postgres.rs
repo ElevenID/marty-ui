@@ -24,11 +24,12 @@ use crate::{
         IdempotencyBinding, InitiationRepository, InitiationRepositoryError, InitiationReservation,
     },
     initiation_didcomm::{
-        DeliveredInitiationDidcommDelivery, InitiationDidcommClaim, InitiationDidcommDeliveryState,
-        InitiationDidcommRepository, InitiationDidcommTransportClaim,
-        InitiationDidcommTransportClaimOutcome, PendingInitiationDidcommDelivery,
-        StagedInitiationDidcommDelivery, DIDCOMM_TRANSPORT_CLAIM_LEASE_SECONDS,
-        DIDCOMM_TRANSPORT_READY_STATUS, DIDCOMM_TRANSPORT_RETRYABLE_STATUS,
+        DeliveredInitiationDidcommDelivery, DidcommTransportFailure, InitiationDidcommClaim,
+        InitiationDidcommDeliveryState, InitiationDidcommRepository,
+        InitiationDidcommTransportClaim, InitiationDidcommTransportClaimOutcome,
+        PendingInitiationDidcommDelivery, StagedInitiationDidcommDelivery,
+        DIDCOMM_TRANSPORT_CLAIM_LEASE_SECONDS, DIDCOMM_TRANSPORT_READY_STATUS,
+        DIDCOMM_TRANSPORT_RETRYABLE_STATUS,
     },
     token_postgres::hash_access_token,
 };
@@ -845,7 +846,7 @@ impl InitiationDidcommRepository for PostgresCredentialRepository {
     ) -> Result<InitiationDidcommTransportClaimOutcome, CredentialIssuanceError> {
         let mut database = self.pool.begin().await.map_err(repository_error)?;
         let mut delivery_rows = sqlx::query(
-            "SELECT id, credential_id, transaction_id, organization_id, status, metadata,
+            "SELECT id, credential_id, transaction_id, organization_id, status, last_error, metadata,
                     clock_timestamp() AS database_now
              FROM issuance_service.credential_delivery_records
              WHERE transaction_id = $1
@@ -873,6 +874,7 @@ impl InitiationDidcommRepository for PostgresCredentialRepository {
         let bound_transaction_id = get::<String>(&delivery_row, "transaction_id")?;
         let bound_organization_id = get::<String>(&delivery_row, "organization_id")?;
         let delivery_status = get::<String>(&delivery_row, "status")?;
+        let last_error = get::<Option<String>>(&delivery_row, "last_error")?;
         let metadata = get::<Value>(&delivery_row, "metadata")?;
         let database_now = get::<DateTime<Utc>>(&delivery_row, "database_now")?;
 
@@ -955,7 +957,10 @@ impl InitiationDidcommRepository for PostgresCredentialRepository {
             "pending" | "failed" => {
                 mark_locked_didcomm_outcome_unknown(&mut database, &delivery_id).await?;
                 database.commit().await.map_err(repository_error)?;
-                Ok(InitiationDidcommTransportClaimOutcome::OutcomeUnknown)
+                Ok(InitiationDidcommTransportClaimOutcome::OutcomeUnknown(
+                    Box::new(pending),
+                    DidcommTransportFailure::Generic,
+                ))
             }
             "transported" => {
                 database.commit().await.map_err(repository_error)?;
@@ -965,7 +970,10 @@ impl InitiationDidcommRepository for PostgresCredentialRepository {
             }
             "delivery_unknown" => {
                 database.commit().await.map_err(repository_error)?;
-                Ok(InitiationDidcommTransportClaimOutcome::OutcomeUnknown)
+                Ok(InitiationDidcommTransportClaimOutcome::OutcomeUnknown(
+                    Box::new(pending),
+                    DidcommTransportFailure::from_persisted_error(last_error.as_deref()),
+                ))
             }
             "transporting" => {
                 let attempt_id = metadata
@@ -984,7 +992,10 @@ impl InitiationDidcommRepository for PostgresCredentialRepository {
                 }
                 mark_locked_didcomm_outcome_unknown(&mut database, &delivery_id).await?;
                 database.commit().await.map_err(repository_error)?;
-                Ok(InitiationDidcommTransportClaimOutcome::OutcomeUnknown)
+                Ok(InitiationDidcommTransportClaimOutcome::OutcomeUnknown(
+                    Box::new(pending),
+                    DidcommTransportFailure::Generic,
+                ))
             }
             DIDCOMM_TRANSPORT_READY_STATUS | DIDCOMM_TRANSPORT_RETRYABLE_STATUS => {
                 let attempt_id = Uuid::new_v4().to_string();
@@ -1168,7 +1179,7 @@ impl InitiationDidcommRepository for PostgresCredentialRepository {
             &self.pool,
             claim,
             DIDCOMM_TRANSPORT_RETRYABLE_STATUS,
-            Some("didcomm_delivery_failed"),
+            Some("DIDComm transport failed"),
         )
         .await
     }
@@ -1176,14 +1187,11 @@ impl InitiationDidcommRepository for PostgresCredentialRepository {
     async fn mark_transport_outcome_unknown(
         &self,
         claim: &InitiationDidcommTransportClaim,
+        failure: DidcommTransportFailure,
     ) -> Result<(), CredentialIssuanceError> {
-        finish_didcomm_transport_claim(
-            &self.pool,
-            claim,
-            "delivery_unknown",
-            Some("didcomm_delivery_outcome_unknown"),
-        )
-        .await
+        let public_error = failure.public_error();
+        finish_didcomm_transport_claim(&self.pool, claim, "delivery_unknown", Some(&public_error))
+            .await
     }
 }
 
@@ -1878,7 +1886,7 @@ async fn mark_locked_didcomm_outcome_unknown(
     let updated = sqlx::query(
         "UPDATE issuance_service.credential_delivery_records
          SET status = 'delivery_unknown',
-             last_error = 'didcomm_delivery_outcome_unknown',
+             last_error = 'DIDComm transport failed',
              metadata = metadata
                  - 'didcomm_transport_attempt_id'
                  - 'didcomm_transport_lease_expires_at',

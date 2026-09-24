@@ -208,7 +208,10 @@ pub enum InitiationDidcommTransportClaimOutcome {
     Transported(Box<PendingInitiationDidcommDelivery>),
     Delivered(DeliveredInitiationDidcommDelivery),
     Busy,
-    OutcomeUnknown,
+    OutcomeUnknown(
+        Box<PendingInitiationDidcommDelivery>,
+        DidcommTransportFailure,
+    ),
     BindingMismatch,
     Absent,
 }
@@ -220,7 +223,7 @@ impl fmt::Debug for InitiationDidcommTransportClaimOutcome {
             Self::Transported(_) => "Transported(..)",
             Self::Delivered(_) => "Delivered(..)",
             Self::Busy => "Busy",
-            Self::OutcomeUnknown => "OutcomeUnknown",
+            Self::OutcomeUnknown(_, _) => "OutcomeUnknown(..)",
             Self::BindingMismatch => "BindingMismatch",
             Self::Absent => "Absent",
         };
@@ -305,6 +308,7 @@ pub trait InitiationDidcommRepository: Send + Sync {
     async fn mark_transport_outcome_unknown(
         &self,
         _claim: &InitiationDidcommTransportClaim,
+        _failure: DidcommTransportFailure,
     ) -> Result<(), CredentialIssuanceError> {
         Err(CredentialIssuanceError::RepositoryUnavailable)
     }
@@ -842,8 +846,11 @@ impl DidcommTransport {
             .send()
             .await
         {
-            Ok(response) if response.status().is_success() => DidcommTransportOutcome::Delivered,
-            Ok(_) | Err(_) => DidcommTransportOutcome::OutcomeUnknown,
+            Ok(response) if response.status().as_u16() < 400 => DidcommTransportOutcome::Delivered,
+            Ok(response) => DidcommTransportOutcome::OutcomeUnknown(
+                DidcommTransportFailure::HttpStatus(response.status().as_u16()),
+            ),
+            Err(_) => DidcommTransportOutcome::OutcomeUnknown(DidcommTransportFailure::Generic),
         }
     }
 }
@@ -860,6 +867,31 @@ impl DidcommTransportPort for DidcommTransport {
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum DidcommTransportFailure {
+    Generic,
+    HttpStatus(u16),
+}
+
+impl DidcommTransportFailure {
+    const GENERIC_PUBLIC_ERROR: &'static str = "DIDComm transport failed";
+
+    pub(crate) fn public_error(self) -> String {
+        match self {
+            Self::Generic => Self::GENERIC_PUBLIC_ERROR.to_owned(),
+            Self::HttpStatus(status) => format!("HTTP {status}"),
+        }
+    }
+
+    pub(crate) fn from_persisted_error(error: Option<&str>) -> Self {
+        let status = error.and_then(|value| {
+            let status = value.strip_prefix("HTTP ")?.parse::<u16>().ok()?;
+            ((400..=599).contains(&status) && value == format!("HTTP {status}")).then_some(status)
+        });
+        status.map_or(Self::Generic, Self::HttpStatus)
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum DidcommTransportOutcome {
     Delivered,
     /// The request was definitely not sent and may be retried.
@@ -867,7 +899,7 @@ pub enum DidcommTransportOutcome {
     /// Operator trust could not be loaded. No HTTP request was attempted.
     TlsUnavailable,
     /// The request may have reached the recipient; automatic retry is unsafe.
-    OutcomeUnknown,
+    OutcomeUnknown(DidcommTransportFailure),
 }
 
 #[derive(Clone, Copy, Debug, Eq, Error, PartialEq)]
@@ -1037,8 +1069,9 @@ impl NativeInitiationDidcommDelivery {
             InitiationDidcommTransportClaimOutcome::Busy => {
                 return Err(NativeInitiationDidcommDeliveryError::ConcurrentDelivery);
             }
-            InitiationDidcommTransportClaimOutcome::OutcomeUnknown => {
-                return Err(NativeInitiationDidcommDeliveryError::DeliveryOutcomeUnknown);
+            InitiationDidcommTransportClaimOutcome::OutcomeUnknown(pending, failure) => {
+                Self::validate_pending_delivery(transaction, holder_did, &pending)?;
+                return Ok(Self::failed_receipt(*pending, failure));
             }
             InitiationDidcommTransportClaimOutcome::BindingMismatch => {
                 return Err(NativeInitiationDidcommDeliveryError::InvalidRequest);
@@ -1198,8 +1231,9 @@ impl NativeInitiationDidcommDelivery {
             InitiationDidcommTransportClaimOutcome::Busy => {
                 return Err(NativeInitiationDidcommDeliveryError::ConcurrentDelivery)
             }
-            InitiationDidcommTransportClaimOutcome::OutcomeUnknown => {
-                return Err(NativeInitiationDidcommDeliveryError::DeliveryOutcomeUnknown)
+            InitiationDidcommTransportClaimOutcome::OutcomeUnknown(pending, failure) => {
+                Self::validate_pending_delivery(&claim.transaction, holder_did, &pending)?;
+                return Ok(Self::failed_receipt(*pending, failure));
             }
             InitiationDidcommTransportClaimOutcome::BindingMismatch => {
                 return Err(NativeInitiationDidcommDeliveryError::InvalidRequest)
@@ -1244,7 +1278,7 @@ impl NativeInitiationDidcommDelivery {
                     let _ = self
                         .ports
                         .repository
-                        .mark_transport_outcome_unknown(&claim)
+                        .mark_transport_outcome_unknown(&claim, DidcommTransportFailure::Generic)
                         .await;
                     return Err(NativeInitiationDidcommDeliveryError::DeliveryOutcomeUnknown);
                 }
@@ -1262,16 +1296,19 @@ impl NativeInitiationDidcommDelivery {
                         NativeDidcommError::TlsUnavailable,
                     ))
                 } else {
-                    Ok(Self::failed_receipt(claim.into_pending()))
+                    Ok(Self::failed_receipt(
+                        claim.into_pending(),
+                        DidcommTransportFailure::Generic,
+                    ))
                 }
             }
-            DidcommTransportOutcome::OutcomeUnknown => {
-                let _ = self
-                    .ports
+            DidcommTransportOutcome::OutcomeUnknown(failure) => {
+                self.ports
                     .repository
-                    .mark_transport_outcome_unknown(&claim)
-                    .await;
-                Err(NativeInitiationDidcommDeliveryError::DeliveryOutcomeUnknown)
+                    .mark_transport_outcome_unknown(&claim, failure)
+                    .await
+                    .map_err(|_| NativeInitiationDidcommDeliveryError::DeliveryOutcomeUnknown)?;
+                Ok(Self::failed_receipt(claim.into_pending(), failure))
             }
         }
     }
@@ -1295,6 +1332,7 @@ impl NativeInitiationDidcommDelivery {
 
     fn failed_receipt(
         pending: PendingInitiationDidcommDelivery,
+        failure: DidcommTransportFailure,
     ) -> NativeInitiationDidcommDeliveryReceipt {
         NativeInitiationDidcommDeliveryReceipt {
             transaction_id: pending.transaction.id,
@@ -1303,7 +1341,7 @@ impl NativeInitiationDidcommDelivery {
             service_endpoint: pending.delivery.service_endpoint,
             didcomm_message_id: pending.delivery.message_id,
             status: NativeDidcommDeliveryStatus::DeliveryFailed,
-            error: Some("didcomm_delivery_failed".to_owned()),
+            error: Some(failure.public_error()),
         }
     }
 
@@ -1395,14 +1433,13 @@ impl InitiationDidcommDelivery for NativeInitiationDidcommDelivery {
         transaction: &CredentialTransaction,
         holder_did: &str,
     ) -> Result<InitiationDidcommDeliveryReceipt, InitiationDidcommDeliveryError> {
-        match self.deliver_native(transaction, holder_did).await {
-            Ok(receipt) if receipt.status == NativeDidcommDeliveryStatus::Delivered => {
-                Ok(InitiationDidcommDeliveryReceipt {
-                    service_endpoint: receipt.service_endpoint,
-                })
-            }
-            Ok(_) | Err(_) => Err(InitiationDidcommDeliveryError),
-        }
+        self.deliver_native(transaction, holder_did)
+            .await
+            .map(|receipt| InitiationDidcommDeliveryReceipt {
+                service_endpoint: receipt.service_endpoint,
+                delivered: receipt.status == NativeDidcommDeliveryStatus::Delivered,
+            })
+            .map_err(|_| InitiationDidcommDeliveryError)
     }
 }
 
@@ -1623,6 +1660,35 @@ fn preflight_plaintext(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn persisted_transport_failures_accept_only_failed_http_statuses() {
+        for status in [400, 502, 599] {
+            assert_eq!(
+                DidcommTransportFailure::from_persisted_error(Some(&format!("HTTP {status}"))),
+                DidcommTransportFailure::HttpStatus(status)
+            );
+        }
+        for corrupt_or_legacy in [
+            None,
+            Some(""),
+            Some("DIDComm transport failed"),
+            Some("didcomm_delivery_failed"),
+            Some("HTTP 399"),
+            Some("HTTP 600"),
+            Some("HTTP 0502"),
+            Some("HTTP +502"),
+            Some("HTTP 502 "),
+            Some("HTTP nope"),
+            Some(" HTTP 502"),
+        ] {
+            assert_eq!(
+                DidcommTransportFailure::from_persisted_error(corrupt_or_legacy),
+                DidcommTransportFailure::Generic
+            );
+        }
+    }
+
     mod shared_fixtures {
         include!(concat!(
             env!("CARGO_MANIFEST_DIR"),
@@ -1818,6 +1884,7 @@ mod tests {
         transport_claim: Mutex<HarnessTransportClaimState>,
         fail_transport_success_once: AtomicBool,
         fail_transport_unattempted: AtomicBool,
+        fail_transport_unknown: AtomicBool,
         fail_staging: AtomicBool,
     }
 
@@ -1829,7 +1896,7 @@ mod tests {
             attempt_id: String,
         },
         Legacy(&'static str),
-        OutcomeUnknown,
+        OutcomeUnknown(DidcommTransportFailure),
     }
 
     const HARNESS_DELIVERY_ID: &str = "harness-didcomm-delivery";
@@ -1852,6 +1919,7 @@ mod tests {
                 transport_claim: Mutex::new(HarnessTransportClaimState::Idle),
                 fail_transport_success_once: AtomicBool::new(false),
                 fail_transport_unattempted: AtomicBool::new(false),
+                fail_transport_unknown: AtomicBool::new(false),
                 fail_staging: AtomicBool::new(false),
             }
         }
@@ -1914,12 +1982,17 @@ mod tests {
                 HarnessTransportClaimState::Claimed { .. } => {
                     Ok(InitiationDidcommTransportClaimOutcome::Busy)
                 }
-                HarnessTransportClaimState::OutcomeUnknown => {
-                    Ok(InitiationDidcommTransportClaimOutcome::OutcomeUnknown)
-                }
+                HarnessTransportClaimState::OutcomeUnknown(failure) => Ok(
+                    InitiationDidcommTransportClaimOutcome::OutcomeUnknown(pending, *failure),
+                ),
                 HarnessTransportClaimState::Legacy(_) => {
-                    *state = HarnessTransportClaimState::OutcomeUnknown;
-                    Ok(InitiationDidcommTransportClaimOutcome::OutcomeUnknown)
+                    *state = HarnessTransportClaimState::OutcomeUnknown(
+                        DidcommTransportFailure::Generic,
+                    );
+                    Ok(InitiationDidcommTransportClaimOutcome::OutcomeUnknown(
+                        pending,
+                        DidcommTransportFailure::Generic,
+                    ))
                 }
                 HarnessTransportClaimState::Idle => {
                     let attempt_id = uuid::Uuid::new_v4().to_string();
@@ -2085,13 +2158,17 @@ mod tests {
         async fn mark_transport_outcome_unknown(
             &self,
             claim: &InitiationDidcommTransportClaim,
+            failure: DidcommTransportFailure,
         ) -> Result<(), CredentialIssuanceError> {
+            if self.fail_transport_unknown.load(Ordering::SeqCst) {
+                return Err(CredentialIssuanceError::RepositoryUnavailable);
+            }
             let mut state = self.transport_claim.lock().unwrap();
             if *state != harness_claim_state(claim) {
                 return Err(CredentialIssuanceError::RepositoryUnavailable);
             }
             record(&self.order, "mark-transport-unknown");
-            *state = HarnessTransportClaimState::OutcomeUnknown;
+            *state = HarnessTransportClaimState::OutcomeUnknown(failure);
             Ok(())
         }
     }
@@ -2610,7 +2687,9 @@ mod tests {
                 builder_fail: false,
                 transport_outcome: match failure {
                     "unattempted" => DidcommTransportOutcome::Failed,
-                    "unknown" => DidcommTransportOutcome::OutcomeUnknown,
+                    "unknown" => {
+                        DidcommTransportOutcome::OutcomeUnknown(DidcommTransportFailure::Generic)
+                    }
                     _ => DidcommTransportOutcome::Delivered,
                 },
                 post_issuance_fail: failure == "projection",
@@ -2636,13 +2715,20 @@ mod tests {
                 .await
                 .unwrap();
             assert_eq!(response.status, "pending");
-            assert_eq!(
-                response.credential_offer_uris["wallet-a"],
-                format!(
-                    "didcomm://pending?transaction_id={}",
-                    reservation.transaction.id
-                )
-            );
+            if matches!(failure, "unattempted" | "unknown") {
+                assert_eq!(
+                    response.credential_offer_uris["wallet-a"],
+                    reference["cases"][3]["response"]["credential_offer_uris"]["wallet-a"]
+                );
+            } else {
+                assert_eq!(
+                    response.credential_offer_uris["wallet-a"],
+                    format!(
+                        "didcomm://pending?transaction_id={}",
+                        reservation.transaction.id
+                    )
+                );
+            }
             if failure == "preflight" {
                 assert_eq!(response.status, reference["cases"][2]["response"]["status"]);
                 assert_eq!(
@@ -2650,11 +2736,10 @@ mod tests {
                     reference["cases"][2]["response"]["credential_offer_uris"]
                 );
             }
-            if failure == "unattempted" {
-                // The Python HTTP502 receipt produced an endpoint URI. Native
-                // definitely-unattempted failure is NOT the same transport case;
-                // retain the existing pending URI, without claiming parity.
-                assert_ne!(
+            if matches!(failure, "unattempted" | "unknown") {
+                // Preserve the language-neutral legacy response projection while
+                // the durable transport state controls whether retry is safe.
+                assert_eq!(
                     serde_json::to_value(&response.credential_offer_uris).unwrap(),
                     reference["cases"][3]["response"]["credential_offer_uris"]
                 );
@@ -2780,24 +2865,26 @@ mod tests {
             *repository.delivery.lock().unwrap() = Some(InitiationDidcommDeliveryState::Pending(
                 Box::new(staged_pending_delivery()),
             ));
-            for (claim_state, expected) in [
-                (
-                    HarnessTransportClaimState::Claimed {
-                        delivery_id: HARNESS_DELIVERY_ID.to_owned(),
-                        attempt_id: "existing-attempt".to_owned(),
-                    },
-                    NativeInitiationDidcommDeliveryError::ConcurrentDelivery,
-                ),
-                (
-                    HarnessTransportClaimState::OutcomeUnknown,
-                    NativeInitiationDidcommDeliveryError::DeliveryOutcomeUnknown,
-                ),
+            for claim_state in [
+                HarnessTransportClaimState::Claimed {
+                    delivery_id: HARNESS_DELIVERY_ID.to_owned(),
+                    attempt_id: "existing-attempt".to_owned(),
+                },
+                HarnessTransportClaimState::OutcomeUnknown(DidcommTransportFailure::Generic),
             ] {
                 *repository.transport_claim.lock().unwrap() = claim_state.clone();
-                assert_eq!(
-                    delivery.deliver_native(&tx, "did:example:holder").await,
-                    Err(expected)
-                );
+                let result = delivery.deliver_native(&tx, "did:example:holder").await;
+                if matches!(claim_state, HarnessTransportClaimState::OutcomeUnknown(_)) {
+                    assert_eq!(
+                        result.unwrap().status,
+                        NativeDidcommDeliveryStatus::DeliveryFailed
+                    );
+                } else {
+                    assert_eq!(
+                        result,
+                        Err(NativeInitiationDidcommDeliveryError::ConcurrentDelivery)
+                    );
+                }
                 assert!(order.lock().unwrap().is_empty());
                 assert_eq!(*repository.transport_claim.lock().unwrap(), claim_state);
                 let Some(InitiationDidcommDeliveryState::Pending(after)) =
@@ -2820,7 +2907,7 @@ mod tests {
             let mut pending = staged_pending_delivery();
             assert_eq!(
                 *repository.transport_claim.lock().unwrap(),
-                HarnessTransportClaimState::OutcomeUnknown
+                HarnessTransportClaimState::OutcomeUnknown(DidcommTransportFailure::Generic)
             );
             let Some(InitiationDidcommDeliveryState::Pending(after)) =
                 repository.delivery.lock().unwrap().clone()
@@ -3426,7 +3513,7 @@ mod tests {
         assert_eq!(receipt.service_endpoint, "https://wallet.example/inbox");
         assert_eq!(receipt.didcomm_message_id, "message-1");
         assert_eq!(receipt.status, NativeDidcommDeliveryStatus::DeliveryFailed);
-        assert_eq!(receipt.error.as_deref(), Some("didcomm_delivery_failed"));
+        assert_eq!(receipt.error.as_deref(), Some("DIDComm transport failed"));
         assert_eq!(repository.releases.load(Ordering::SeqCst), 0);
         assert_eq!(repository.finalizations.load(Ordering::SeqCst), 1);
         {
@@ -3502,7 +3589,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn unmarked_legacy_transport_states_fail_unknown_before_post() {
+    async fn unmarked_legacy_transport_states_replay_a_failed_receipt_before_post() {
         for legacy_status in ["pending", "failed"] {
             let (delivery, repository, order) = delivery_harness(HarnessOptions {
                 endpoint_fail: false,
@@ -3516,13 +3603,16 @@ mod tests {
             *repository.transport_claim.lock().unwrap() =
                 HarnessTransportClaimState::Legacy(legacy_status);
 
+            let receipt = delivery
+                .deliver_native(&transaction(), "did:example:holder")
+                .await
+                .unwrap();
             assert_eq!(
-                delivery
-                    .deliver_native(&transaction(), "did:example:holder")
-                    .await,
-                Err(NativeInitiationDidcommDeliveryError::DeliveryOutcomeUnknown),
+                receipt.status,
+                NativeDidcommDeliveryStatus::DeliveryFailed,
                 "an unmarked legacy {legacy_status} row must require reconciliation"
             );
+            assert_eq!(receipt.error.as_deref(), Some("DIDComm transport failed"));
             assert!(order.lock().unwrap().is_empty());
         }
     }
@@ -3532,31 +3622,32 @@ mod tests {
         let (delivery, repository, order) = delivery_harness(HarnessOptions {
             endpoint_fail: false,
             builder_fail: false,
-            transport_outcome: DidcommTransportOutcome::OutcomeUnknown,
+            transport_outcome: DidcommTransportOutcome::OutcomeUnknown(
+                DidcommTransportFailure::Generic,
+            ),
             post_issuance_fail: false,
         });
         *repository.delivery.lock().unwrap() = Some(InitiationDidcommDeliveryState::Pending(
             Box::new(staged_pending_delivery()),
         ));
 
-        assert_eq!(
-            delivery
-                .deliver_native(&transaction(), "did:example:holder")
-                .await,
-            Err(NativeInitiationDidcommDeliveryError::DeliveryOutcomeUnknown)
-        );
+        let first = delivery
+            .deliver_native(&transaction(), "did:example:holder")
+            .await
+            .unwrap();
+        assert_eq!(first.status, NativeDidcommDeliveryStatus::DeliveryFailed);
+        assert_eq!(first.error.as_deref(), Some("DIDComm transport failed"));
         assert_eq!(
             *order.lock().unwrap(),
             ["validate-endpoint", "transport", "mark-transport-unknown"]
         );
 
         order.lock().unwrap().clear();
-        assert_eq!(
-            delivery
-                .deliver_native(&transaction(), "did:example:holder")
-                .await,
-            Err(NativeInitiationDidcommDeliveryError::DeliveryOutcomeUnknown)
-        );
+        let replay = delivery
+            .deliver_native(&transaction(), "did:example:holder")
+            .await
+            .unwrap();
+        assert_eq!(replay, first);
         assert!(order.lock().unwrap().is_empty());
 
         *repository.transport_claim.lock().unwrap() = HarnessTransportClaimState::Idle;
@@ -3574,6 +3665,75 @@ mod tests {
                 .await,
             Err(NativeInitiationDidcommDeliveryError::ConcurrentDelivery),
             "an abandoned active lease must block a second POST"
+        );
+        assert!(order.lock().unwrap().is_empty());
+    }
+
+    #[tokio::test]
+    async fn http_failure_status_is_sanitized_and_stable_across_unknown_replay() {
+        let (delivery, repository, order) = delivery_harness(HarnessOptions {
+            endpoint_fail: false,
+            builder_fail: false,
+            transport_outcome: DidcommTransportOutcome::OutcomeUnknown(
+                DidcommTransportFailure::HttpStatus(502),
+            ),
+            post_issuance_fail: false,
+        });
+        *repository.delivery.lock().unwrap() = Some(InitiationDidcommDeliveryState::Pending(
+            Box::new(staged_pending_delivery()),
+        ));
+
+        let first = delivery
+            .deliver_native(&transaction(), "did:example:holder")
+            .await
+            .unwrap();
+        assert_eq!(first.status, NativeDidcommDeliveryStatus::DeliveryFailed);
+        assert_eq!(first.error.as_deref(), Some("HTTP 502"));
+        assert_eq!(
+            *order.lock().unwrap(),
+            ["validate-endpoint", "transport", "mark-transport-unknown"]
+        );
+
+        order.lock().unwrap().clear();
+        let replay = delivery
+            .deliver_native(&transaction(), "did:example:holder")
+            .await
+            .unwrap();
+        assert_eq!(replay, first);
+        assert!(order.lock().unwrap().is_empty());
+    }
+
+    #[tokio::test]
+    async fn ambiguous_transport_never_returns_a_receipt_without_a_durable_unknown_marker() {
+        let (delivery, repository, order) = delivery_harness(HarnessOptions {
+            endpoint_fail: false,
+            builder_fail: false,
+            transport_outcome: DidcommTransportOutcome::OutcomeUnknown(
+                DidcommTransportFailure::Generic,
+            ),
+            post_issuance_fail: false,
+        });
+        *repository.delivery.lock().unwrap() = Some(InitiationDidcommDeliveryState::Pending(
+            Box::new(staged_pending_delivery()),
+        ));
+        repository
+            .fail_transport_unknown
+            .store(true, Ordering::SeqCst);
+
+        assert_eq!(
+            delivery
+                .deliver_native(&transaction(), "did:example:holder")
+                .await,
+            Err(NativeInitiationDidcommDeliveryError::DeliveryOutcomeUnknown)
+        );
+        assert_eq!(*order.lock().unwrap(), ["validate-endpoint", "transport"]);
+
+        order.lock().unwrap().clear();
+        assert_eq!(
+            delivery
+                .deliver_native(&transaction(), "did:example:holder")
+                .await,
+            Err(NativeInitiationDidcommDeliveryError::ConcurrentDelivery)
         );
         assert!(order.lock().unwrap().is_empty());
     }
@@ -3610,12 +3770,11 @@ mod tests {
         );
 
         order.lock().unwrap().clear();
-        assert_eq!(
-            delivery
-                .deliver_native(&transaction(), "did:example:holder")
-                .await,
-            Err(NativeInitiationDidcommDeliveryError::DeliveryOutcomeUnknown)
-        );
+        let replay = delivery
+            .deliver_native(&transaction(), "did:example:holder")
+            .await
+            .unwrap();
+        assert_eq!(replay.status, NativeDidcommDeliveryStatus::DeliveryFailed);
         assert!(order.lock().unwrap().is_empty());
     }
 
@@ -4169,34 +4328,40 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn concrete_transport_treats_non_success_response_as_outcome_unknown() {
-        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
-        let address = listener.local_addr().unwrap();
-        let server = tokio::spawn(async move {
-            let (mut stream, _) = listener.accept().await.unwrap();
-            let mut request = [0_u8; 2_048];
-            assert!(stream.read(&mut request).await.unwrap() > 0);
-            stream
-                .write_all(
-                    b"HTTP/1.1 503 Service Unavailable\r\ncontent-length: 0\r\nconnection: close\r\n\r\n",
-                )
-                .await
-                .unwrap();
-        });
-        let endpoint = ValidatedDidcommEndpoint {
-            original: format!("http://{address}/didcomm"),
-            url: Url::parse(&format!("http://{address}/didcomm")).unwrap(),
-            dns_name: None,
-            addresses: vec![address],
-        };
-        let transport = DidcommTransport::with_timeout(None, Duration::from_secs(5)).unwrap();
+    async fn concrete_transport_preserves_legacy_redirect_and_http_failure_semantics() {
+        for (status_line, expected) in [
+            ("302 Found", DidcommTransportOutcome::Delivered),
+            (
+                "503 Service Unavailable",
+                DidcommTransportOutcome::OutcomeUnknown(DidcommTransportFailure::HttpStatus(503)),
+            ),
+        ] {
+            let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+            let address = listener.local_addr().unwrap();
+            let response = format!(
+                "HTTP/1.1 {status_line}\r\nlocation: http://127.0.0.1/ignored\r\ncontent-length: 0\r\nconnection: close\r\n\r\n"
+            );
+            let server = tokio::spawn(async move {
+                let (mut stream, _) = listener.accept().await.unwrap();
+                let mut request = [0_u8; 2_048];
+                assert!(stream.read(&mut request).await.unwrap() > 0);
+                stream.write_all(response.as_bytes()).await.unwrap();
+            });
+            let endpoint = ValidatedDidcommEndpoint {
+                original: format!("http://{address}/didcomm"),
+                url: Url::parse(&format!("http://{address}/didcomm")).unwrap(),
+                dns_name: None,
+                addresses: vec![address],
+            };
+            let transport = DidcommTransport::with_timeout(None, Duration::from_secs(5)).unwrap();
 
-        assert_eq!(
-            transport
-                .deliver(&endpoint, "encrypted-message".to_owned())
-                .await,
-            DidcommTransportOutcome::OutcomeUnknown
-        );
-        server.await.unwrap();
+            assert_eq!(
+                transport
+                    .deliver(&endpoint, "encrypted-message".to_owned())
+                    .await,
+                expected
+            );
+            server.await.unwrap();
+        }
     }
 }

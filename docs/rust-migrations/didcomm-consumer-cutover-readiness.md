@@ -1,8 +1,15 @@
 # DIDComm Rust consumer cutover readiness
 
-Status, 2026-09-12: direct-route and automatic-initiation native HTTP selection
-are locally qualified; beta Flow initiation RPC selection is configured. No deployed
-DIDComm cutover or reachable Python deletion is established by this document.
+Status, 2026-09-21: direct-route and automatic-initiation native HTTP selection
+are locally qualified. Selected Compose models and the selected Kubernetes
+renderer also make retained direct Python callers delegate those complete
+requests to the same Rust owner. Credentials `v0.1.76` supplied the earlier
+consumer-cutover image, but it cannot read all native delivery statuses added by
+this repair. Published Credentials `v0.1.77` now qualifies the release gate at
+source `969cb045c774062c0d058d72283fe65507ca9a44` and issuance image
+`sha256:02fe863e9e6c5faf8538c95cfa030e92504b6c4b6ba695bd3656ec30f21f2c3f`.
+No deployed DIDComm cutover or reachable Python
+deletion is established by this document.
 Production is unchanged. This is a migration of observable behavior into the
 existing native owner, not a second cryptographic implementation.
 
@@ -27,21 +34,76 @@ checks passed without rerunning successful tests. All sixteen owned containers
 were independently absent. These are local results, not new hosted acceptance.
 
 Beta configuration `d36479a79` preserves the legacy related-resource allowlist
-and control-plane bindings, and selects only Flow's initiation gRPC target;
-physical-document HTTP remains legacy. Standalone base/self-host/Kubernetes
-consumer profiles still prevent deleting reachable Python delivery code. KMS
-corrections remain deferred; compatible artifacts and aggregate beta acceptance
-are still required.
+and control-plane bindings, and selects Flow's initiation gRPC target;
+physical-document HTTP remains legacy. The later direct-consumer delegation
+checkpoint below closes the retained-port gap in selected native compositions.
+Standalone Credentials and the unselected base/Kubernetes sources remain legacy,
+so reachable Python delivery code cannot yet be deleted. KMS corrections remain
+deferred; compatible artifacts and aggregate beta acceptance are still required.
 
 ## Explicit scope
 
 The user directed Rust migration before KMS correction. Credentials PR #273
 merged the outstanding `DIDCOMM-KMS-001` note at
 `501977d0759ccad42b3e55488e65151c3934ef39`, in
-`docs/rust-migrations/didcomm-kms-outstanding.md`. KMS backend design, provisioning
+[Credentials DIDComm KMS outstanding record](https://github.com/ElevenID/marty-credentials/blob/aaa6a9b8e31e62cd0ab087eef5fc1f4835048e26/docs/rust-migrations/didcomm-kms-outstanding.md). KMS backend design, provisioning
 and opaque key-agreement corrections are outside this slice. Both anoncrypt and
 sender-authenticated authcrypt remain; failure must not select a weaker mode.
 Retained native local-key compatibility is not KMS-only custody.
+
+## Legacy direct-consumer delegation checkpoint
+
+The selected beta, general native and native-conformance Compose models now set
+`DIDCOMM_DELIVERY_OWNER=native` on the retained Python issuance
+service and pair it with the exact `ISSUANCE_NATIVE_SERVICE_URL`. The selected
+Kubernetes renderer adds the same closed pair; the unselected production source
+model and self-host production model remain legacy. This closes the direct-port
+compatibility gap for explicitly selected consumers without
+copying crypto back into Python: legacy `POST /v1/issuance/initiate` and
+`POST /v1/issuance/didcomm/deliver` delegate the complete request to the existing
+Rust owner before Python reservation, signing, packing, encryption or transport.
+Only the management key, trusted organization and idempotency headers cross that
+internal boundary. Native unavailability returns a bounded 503 and never retries
+the Python implementation or downgrades authcrypt.
+
+Credentials keeps `legacy` as its standalone default. Legacy startup continues
+to require its existing DIDComm binding capabilities and preserves both modes.
+Only an explicitly paired native composition omits those unreachable Python
+delivery requirements. This is an incremental consumer cutover, not permission
+to delete the standalone legacy implementation or a claim that Core 0.2 has a
+KMS-backed authcrypt API. `DIDCOMM-KMS-001` remains deferred.
+
+The earlier consumer-cutover gate was qualified by immutable Credentials
+`v0.1.76`, protected-main source
+`aaa6a9b8e31e62cd0ab087eef5fc1f4835048e26`, and issuance image
+`sha256:815cbba6efc7c91e770a8dd15fe5fa102d252a485073bf60f0e0d5e0a73b28e5`.
+Preparation run `35621707546`, stable release run `35621735371`, and image
+finalization run `35624018264` all succeeded. The published SPDX asset has
+SHA-256 `fb5aded96403b2320a8c0ee9aeb3cf0cfe29a4aa7e57dd1708e1ddf2989c50a3`;
+artifact and image provenance, cosign signing, checksum signing, exact remote-tag
+revalidation and stable image-tag promotion all passed. The contract binds the
+canonical SBOM URL, provenance URL, image subject and source commit to the same
+stack-lock coordinate.
+
+That evidence authorized the earlier selected consumer configuration. It does
+not qualify the delivery-status reader added by this repair, authorize a
+deployment or aggregate acceptance, permit deleting the standalone legacy
+Python owner, or resolve `DIDCOMM-KMS-001`. The failed immutable `v0.1.74` and
+quarantined immutable `v0.1.75` coordinates remain historical and must not be
+reused or relabeled. The current gate requires at least `v0.1.77` and is now
+qualified by the [published release](https://github.com/ElevenID/marty-credentials/releases/tag/v0.1.77),
+[stable build](https://github.com/ElevenID/marty-credentials/actions/runs/35914366616),
+and [image finalizer](https://github.com/ElevenID/marty-credentials/actions/runs/35916852428).
+The release tag peels to the same protected-main source checkpoint. The release
+asset `marty-credentials-issuance.digest` contains the image digest above; the
+published SPDX SBOM asset has SHA-256
+`c172c8dd3e0e512f4819646b531da4f80019c03d7735f5fde83dc9d17e05a132`.
+The [image attestation](https://github.com/ElevenID/marty-credentials/attestations/49655531)
+was independently verified against the exact image digest, source commit,
+`refs/tags/v0.1.77` and the release-images workflow. Stable tag promotion passed
+in the finalizer.
+This qualification unblocks the consumer release pin; it does not itself establish
+a merged consumer cutover, deployed acceptance or Python retirement.
 
 ## Unicode endpoint and complete policy-boundary checkpoint
 
@@ -313,12 +375,29 @@ acceptance test. Its regression first reproduced pending versus issued.
 The combined `29beef466` tree subsequently passed all 372 issuance unit tests,
 eight DIDComm/initiation HTTP and legacy-fence integration tests, and strict
 package Clippy with all test targets. Only documentation changed during that run.
-Seven actual Python observations also expose two differences that must not be
-silently called equivalent: Python maps a failed HTTP transport receipt to an
+Seven actual Python observations also expose two differences that must be
+reconciled deliberately: Python maps a failed HTTP transport receipt to an
 endpoint URI, and multiple DIDComm wallet entries can repeat signing/transport.
-Preserve native pending-failure URI and no-resend safeguards while reconciling
-their public contract explicitly. Do not restore duplicate sends to match a
-legacy observation.
+The native owner now preserves the language-neutral failed receipt and endpoint
+URI while durably recording an ambiguous attempted transport as
+`delivery_unknown`; replay returns the same sanitized failure without sending
+again. The public error remains `HTTP <status>` for an HTTP response at or above
+400 and `DIDComm transport failed` for an exception; response bodies and
+exception text are neither retained nor exposed. As in the Python owner, a
+redirect response below 400 is delivery success, while redirect following stays
+disabled. The no-resend rule applies only after an attempted or ambiguous
+transport; `transport_retryable` means the request was definitely not attempted
+and remains eligible for an automatic send. Do not restore duplicate sends to
+match a legacy observation.
+
+This repair cannot be rolled out against the currently pinned Credentials
+release. Credentials PR #284 must first merge and produce a new immutable
+release derived after PRs #283 and #284; that release must then replace the
+Credentials pin before native `transport_ready`, `transporting`,
+`transport_retryable`, `transported`, or `delivery_unknown` rows can be shared
+with the retained Python management reader. The shared delivery contract records
+this as a machine-readable unresolved dependency. No release tag, source SHA, or
+image digest is asserted until that immutable release exists and is qualified.
 
 Direct unsupported-state response specificity is repaired by reviewed source
 `40b06fcc8` (integration `9b4a8b67a`). Five freshly executed unchanged Python
