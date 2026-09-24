@@ -50,6 +50,7 @@ mmf-security.workspace = true
 marty-oid4vci = { workspace = true, features = ["lti"] }
 marty-didcomm = { workspace = true, features = ["did_web"] }
 marty-verification.workspace = true
+marty-passport-auth = { path = "../../crates/passport-auth" }
 marty-platform-clock = { path = "../../crates/platform-clock" }
 num-bigint.workspace = true
 num-traits.workspace = true

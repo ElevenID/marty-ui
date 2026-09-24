@@ -4,6 +4,7 @@ use std::{
     time::Duration,
 };
 
+use marty_passport_auth::PassportTenantKeyring;
 use mmf_config::{numeric_config::PythonConfigInteger, ConfigLayer, LayeredConfig};
 use mmf_core::{ErrorCode, MmfError};
 use serde::Deserialize;
@@ -32,6 +33,7 @@ pub struct IssuanceServiceConfig {
     pub integration_secret_master_key: Option<String>,
     pub token_hmac_key: Option<String>,
     pub issuance_api_key: Option<String>,
+    pub passport_tenant_keys: Option<PassportTenantKeyring>,
     pub signing_keys_internal_url: url::Url,
     pub signing_keys_internal_api_key: Option<String>,
     pub revocation_profile_service_url: url::Url,
@@ -119,6 +121,10 @@ impl std::fmt::Debug for IssuanceServiceConfig {
             .field(
                 "issuance_api_key_configured",
                 &self.issuance_api_key.is_some(),
+            )
+            .field(
+                "passport_tenant_keys_configured",
+                &self.passport_tenant_keys.is_some(),
             )
             .field("signing_keys_internal_url", &self.signing_keys_internal_url)
             .field(
@@ -492,6 +498,16 @@ impl IssuanceServiceConfig {
             "DIDCOMM_DID_WEB_INTERNAL_BASE_URL",
         )?;
         let issuance_api_key = secret_value(&values, "ISSUANCE_API_KEY")?;
+        let passport_tenant_keys = secret_value(&values, "PASSPORT_TENANT_API_KEYS")?
+            .map(|value| {
+                PassportTenantKeyring::from_json(&value).map_err(|_| {
+                    MmfError::new(
+                        ErrorCode::Configuration,
+                        "PASSPORT_TENANT_API_KEYS must be a valid tenant keyring",
+                    )
+                })
+            })
+            .transpose()?;
         let token_hmac_key = secret_value(&values, "TOKEN_HMAC_KEY")?;
         let integration_secret_key_name = values
             .get("INTEGRATION_SECRET_MASTER_KEY_ENV")
@@ -719,6 +735,7 @@ impl IssuanceServiceConfig {
             integration_secret_master_key,
             token_hmac_key,
             issuance_api_key,
+            passport_tenant_keys,
             signing_keys_internal_url,
             signing_keys_internal_api_key,
             revocation_profile_service_url,
@@ -1366,6 +1383,7 @@ mod tests {
         assert!(!config.didcomm_allow_private_ips);
         assert!(config.signing_keys_internal_api_key.is_none());
         assert!(config.issuance_api_key.is_none());
+        assert!(config.passport_tenant_keys.is_none());
         assert!(config.token_hmac_key.is_none());
         assert_eq!(config.token_rate_limit.as_decimal(), "30");
         assert_eq!(config.token_rate_window.as_decimal(), "60");
@@ -1426,6 +1444,32 @@ mod tests {
             config.canvas_mirror_alert_webhook_timeout,
             std::time::Duration::from_secs(5)
         );
+    }
+
+    #[test]
+    fn passport_tenant_keys_are_validated_and_redacted() {
+        let secret = "a".repeat(32);
+        let json = format!("{{\"org-1\":\"{secret}\"}}");
+        let config =
+            IssuanceServiceConfig::from_values(vec![("PASSPORT_TENANT_API_KEYS".to_owned(), json)])
+                .expect("valid tenant keys");
+        assert_eq!(
+            config
+                .passport_tenant_keys
+                .as_ref()
+                .unwrap()
+                .key_for("org-1"),
+            Some(secret.as_str())
+        );
+        assert!(!format!("{config:?}").contains(&secret));
+
+        let error = IssuanceServiceConfig::from_values(values(&[(
+            "PASSPORT_TENANT_API_KEYS",
+            "{\"org-1\":\"weak\"}",
+        )]))
+        .unwrap_err();
+        assert_eq!(error.code, ErrorCode::Configuration);
+        assert!(!error.to_string().contains("weak"));
     }
 
     #[test]

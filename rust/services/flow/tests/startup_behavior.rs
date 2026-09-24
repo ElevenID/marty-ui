@@ -118,6 +118,40 @@ fn baseline(environment: &str) -> BTreeMap<String, String> {
 }
 
 #[test]
+fn passport_tenant_keyring_is_optional_validated_and_redacted() {
+    let mut values = baseline("beta");
+    let secret = "a".repeat(32);
+    assert!(FlowServiceConfig::from_values(values.clone())
+        .unwrap()
+        .passport_tenant_keys
+        .is_none());
+    values.insert(
+        "PASSPORT_TENANT_API_KEYS".into(),
+        format!("{{\"org-1\":\"{secret}\"}}"),
+    );
+    let config = FlowServiceConfig::from_values(values.clone()).unwrap();
+    assert_eq!(
+        config
+            .passport_tenant_keys
+            .as_ref()
+            .unwrap()
+            .key_for("org-1"),
+        Some(secret.as_str())
+    );
+    assert!(!format!("{config:?}").contains(&secret));
+    values.insert(
+        "PASSPORT_TENANT_API_KEYS".into(),
+        "{\"org-1\":\"weak\"}".into(),
+    );
+    assert_eq!(
+        FlowServiceConfig::from_values(values).unwrap_err(),
+        FlowConfigError::Invalid {
+            name: "PASSPORT_TENANT_API_KEYS"
+        }
+    );
+}
+
+#[test]
 fn language_neutral_startup_contract_is_frozen() {
     let contract: Contract = serde_json::from_str(include_str!(
         "../../../../contracts/flow-startup-behavior.json"

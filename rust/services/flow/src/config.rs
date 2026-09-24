@@ -1,5 +1,6 @@
 use std::{collections::BTreeMap, fmt, fs, net::SocketAddr, path::PathBuf};
 
+use marty_passport_auth::PassportTenantKeyring;
 use mmf_push::WebhookDestinationRegistry;
 use thiserror::Error;
 use url::Url;
@@ -64,6 +65,7 @@ pub struct FlowServiceConfig {
     pub issuance_url: String,
     pub issuance_native_url: String,
     pub issuance_api_key: Option<String>,
+    pub passport_tenant_keys: Option<PassportTenantKeyring>,
     pub service_token: Option<String>,
     pub webhook_secret: Option<String>,
     pub application_event_hmac_key: Option<String>,
@@ -174,6 +176,10 @@ impl fmt::Debug for FlowServiceConfig {
             .field("issuance_url", &self.issuance_url)
             .field("issuance_native_url", &self.issuance_native_url)
             .field("issuance_api_key", &redacted(&self.issuance_api_key))
+            .field(
+                "passport_tenant_keys_configured",
+                &self.passport_tenant_keys.is_some(),
+            )
             .field("service_token", &redacted(&self.service_token))
             .field("webhook_secret", &redacted(&self.webhook_secret))
             .field(
@@ -214,6 +220,7 @@ impl FlowServiceConfig {
                 "FLOW_APPLICATION_EVENT_HMAC_KEY",
                 "SIGNING_KEYS_INTERNAL_API_KEY",
                 "ISSUANCE_API_KEY",
+                "PASSPORT_TENANT_API_KEYS",
             ],
         )?;
         load_text_file(
@@ -447,6 +454,12 @@ impl FlowServiceConfig {
         let signing_keys_api_key =
             optional_secret(&values, "SIGNING_KEYS_INTERNAL_API_KEY", environment)?;
         let issuance_api_key = optional_secret(&values, "ISSUANCE_API_KEY", environment)?;
+        let passport_tenant_keys = value(&values, "PASSPORT_TENANT_API_KEYS")
+            .map(|value| {
+                PassportTenantKeyring::from_json(value)
+                    .map_err(|_| invalid("PASSPORT_TENANT_API_KEYS"))
+            })
+            .transpose()?;
         let allow_plaintext_grpc = parse_boolean(
             value(&values, "GRPC_INSECURE_ALLOWED").unwrap_or("false"),
             "GRPC_INSECURE_ALLOWED",
@@ -501,6 +514,7 @@ impl FlowServiceConfig {
             issuance_url,
             issuance_native_url,
             issuance_api_key,
+            passport_tenant_keys,
             service_token,
             webhook_secret,
             application_event_hmac_key,

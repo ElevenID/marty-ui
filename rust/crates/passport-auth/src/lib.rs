@@ -7,7 +7,7 @@ use std::{collections::BTreeMap, fmt};
 use mmf_security::constant_time_secret_eq;
 use serde::de::{MapAccess, Visitor};
 
-#[derive(Clone)]
+#[derive(Clone, Eq, PartialEq)]
 pub struct PassportTenantKeyring {
     keys: BTreeMap<String, Box<str>>,
 }
@@ -39,10 +39,25 @@ pub enum KeyringError {
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, thiserror::Error)]
 pub enum PassportTenantAuthError {
+    #[error("X-Organization-ID header is missing")]
+    MissingOrganization,
     #[error("X-API-Key header is missing")]
     MissingKey,
     #[error("Invalid API Key")]
     InvalidKey,
+}
+
+/// An organization identity that was proven with its own passport API key.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct PassportTenantPrincipal {
+    organization_id: String,
+}
+
+impl PassportTenantPrincipal {
+    #[must_use]
+    pub fn organization_id(&self) -> &str {
+        &self.organization_id
+    }
 }
 
 impl PassportTenantKeyring {
@@ -59,9 +74,10 @@ impl PassportTenantKeyring {
             if !valid_key(&key) {
                 return Err(KeyringError::InvalidKey);
             }
-            if keys.values().any(|existing| {
-                constant_time_secret_eq(existing.as_bytes(), key.as_bytes())
-            }) {
+            if keys
+                .values()
+                .any(|existing| constant_time_secret_eq(existing.as_bytes(), key.as_bytes()))
+            {
                 return Err(KeyringError::DuplicateKey);
             }
             keys.insert(organization, key.into_boxed_str());
@@ -79,6 +95,18 @@ impl PassportTenantKeyring {
         organization_id: &str,
         presented: Option<&str>,
     ) -> Result<(), PassportTenantAuthError> {
+        self.authenticate(Some(organization_id), presented)
+            .map(|_| ())
+    }
+
+    pub fn authenticate(
+        &self,
+        organization_id: Option<&str>,
+        presented: Option<&str>,
+    ) -> Result<PassportTenantPrincipal, PassportTenantAuthError> {
+        let organization_id = organization_id
+            .filter(|value| !value.is_empty())
+            .ok_or(PassportTenantAuthError::MissingOrganization)?;
         let presented = presented
             .filter(|value| !value.is_empty())
             .ok_or(PassportTenantAuthError::MissingKey)?;
@@ -90,7 +118,9 @@ impl PassportTenantKeyring {
             .unwrap_or("00000000000000000000000000000000");
         let matches = constant_time_secret_eq(expected.as_bytes(), presented.as_bytes());
         if self.key_for(organization_id).is_some() && matches {
-            Ok(())
+            Ok(PassportTenantPrincipal {
+                organization_id: organization_id.to_owned(),
+            })
         } else {
             Err(PassportTenantAuthError::InvalidKey)
         }
@@ -166,6 +196,12 @@ mod tests {
         assert_eq!(ring.authorize("org-a", Some(A)), Ok(()));
         assert_eq!(ring.authorize("org-b", Some(B)), Ok(()));
         assert_eq!(
+            ring.authenticate(Some("org-b"), Some(B))
+                .unwrap()
+                .organization_id(),
+            "org-b"
+        );
+        assert_eq!(
             ring.authorize("org-b", Some(A)),
             Err(PassportTenantAuthError::InvalidKey)
         );
@@ -176,6 +212,10 @@ mod tests {
         assert_eq!(
             ring.authorize("org-a", None),
             Err(PassportTenantAuthError::MissingKey)
+        );
+        assert_eq!(
+            ring.authenticate(None, Some(A)),
+            Err(PassportTenantAuthError::MissingOrganization)
         );
         assert!(!format!("{ring:?}").contains(A));
     }

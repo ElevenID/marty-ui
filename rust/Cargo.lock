@@ -4615,6 +4615,7 @@ dependencies = [
  "marty-flow",
  "marty-gateway",
  "marty-oid4vci",
+ "marty-passport-auth",
  "marty-platform-clock",
  "marty-release-evidence",
  "marty-selfhost-bundle",
