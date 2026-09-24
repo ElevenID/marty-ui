@@ -6208,3 +6208,34 @@ release-contract tests and lint pass. The predecessor sequence #840 → #842 →
 #844 → #845, protected exact-head checks, maintainer re-review, Python
 retirement, and one aggregate
 beta-only deployment/acceptance soak remain. Production is unchanged.
+
+### Physical-passport checkpoint (draft #852, 2026-09-24)
+
+The nine retained Python passport routes have default-off Rust counterparts in
+draft #852. They are **not yet the selected owner**: Python routes, migrations,
+and provider adapters remain until the full cutover gate passes. The Rust draft
+preserves the frozen request and safe-response shapes, tenant-scoped durable
+jobs, remote ICAO signing, single-job and batch bureau transports, signed
+webhooks, and production-status projection. The batch adapter preserves the
+Python envelope and out-of-order job mapping. The native single-job payload
+forwards TD1/TD2/TD3 rather than Python's hardcoded TD3; that intentional repair
+is tracked in #851.
+
+The explicit self-signed test signer is behind both a non-default Cargo feature
+and a runtime flag; a configured remote signer takes precedence, and the default
+production build excludes local CSCA key generation. Packaged-process testing
+found that the original draft's in-process PostgreSQL fixture had hidden a
+missing startup schema migration. The Rust branch now applies an idempotent
+`physical_document_jobs` migration compatible with the released Python table
+when native passport HTTP is enabled. A dedicated feature-enabled CI step uses
+a separate released-schema database and the packaged binary to create a job,
+sign an SOD, and confirm persistence across another migration. This passed
+locally, as did the default PostgreSQL contract, 23 passport unit/HTTP tests,
+strict Clippy, and 220 workflow-regression tests; hosted exact-head CI remains
+the merge authority.
+
+The draft is not a nine-route cutover. Live signer and bureau qualification
+(including batch), image, gateway, Flow, exact route/error parity, stacked-base
+review and CI, immediate qualified Python retirement, and the one aggregate
+beta-only acceptance soak remain. Production is unchanged; DIDComm KMS
+corrections remain separately deferred.
