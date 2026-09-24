@@ -4553,6 +4553,7 @@ dependencies = [
  "http 1.5.0",
  "marty-deployment-profile",
  "marty-oid4vci",
+ "marty-passport-auth",
  "mmf-platform",
  "mmf-security",
  "percent-encoding",

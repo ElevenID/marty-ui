@@ -6269,6 +6269,9 @@ from the frozen contract and explicitly excludes the signed webhook and
 lookalike paths, while keeping legacy routing selected. Gateway's general
 tenant-authorization classifier does not currently cover `/v1/passport`; the
 cutover therefore remains blocked on an explicit authenticated organization
-and membership/scope gate before any tenant key can be injected. The shared
+and membership/scope gate before any tenant key can be injected. The gateway
+now parses and redacts the same optional tenant keyring type as Flow and
+issuance, with empty-default Compose pass-through; this alone does not switch
+routes or forward a tenant key. The shared
 issuance API key
 cannot serve as a passport tenant credential.
