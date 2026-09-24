@@ -11,6 +11,9 @@ use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use sha2::Sha256;
 
+const BATCH_PATH: &str = "v1/personalization/batches";
+const BATCH_TIMEOUT: Duration = Duration::from_secs(60);
+
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "SCREAMING_SNAKE_CASE")]
 pub enum ProductionStatus {
@@ -294,14 +297,14 @@ impl BureauClient {
             .collect::<Vec<_>>();
         let response = self
             .http
-            .post(self.endpoint("v1/personalization/batches")?)
+            .post(self.endpoint(BATCH_PATH)?)
             .bearer_auth(&self.api_key)
             .json(&json!({
                 "batch_id": batch.id,
                 "organization_id": batch.organization_id,
                 "jobs": jobs,
             }))
-            .timeout(Duration::from_secs(60))
+            .timeout(BATCH_TIMEOUT)
             .send()
             .await?;
         if !matches!(
@@ -541,45 +544,74 @@ mod tests {
             }
             (
                 StatusCode::ACCEPTED,
-                Json(json!({
-                    "status":"QUEUED",
-                    "jobs":[
-                        {"job_id":"job-second", "bureau_job_id":"bureau-second", "status":"PRINTING"},
-                        {"job_id":"job-1", "bureau_job_id":"bureau-first", "status":"QUEUED"}
-                    ]
-                })),
+                Json(reference()["bureau_batch_provider"]["frozen_exchange"]["response"].clone()),
             )
         }
+        fn job_from_wire(wire: &Value, document_type: DocumentType) -> PersonalizationJob {
+            let mut job = job(document_type);
+            job.id = wire["job_id"].as_str().unwrap().into();
+            job.application_id = wire["application_id"].as_str().unwrap().into();
+            job.country_code = wire["country_code"].as_str().unwrap().into();
+            job.data_groups = wire["data_groups"]
+                .as_object()
+                .unwrap()
+                .iter()
+                .map(|(name, content)| {
+                    (
+                        name.strip_prefix("DG").unwrap().parse().unwrap(),
+                        content.as_str().unwrap().to_owned(),
+                    )
+                })
+                .collect();
+            job.sod_der_base64 = wire["sod_der_base64"].as_str().unwrap().into();
+            job.dsc_cert_pem = wire["dsc_cert_pem"].as_str().unwrap().into();
+            job.mrz_line_1 = wire["mrz"]["line_1"].as_str().unwrap().into();
+            job.mrz_line_2 = wire["mrz"]["line_2"].as_str().unwrap().into();
+            job
+        }
+        let frozen = reference();
+        let exchange = &frozen["bureau_batch_provider"]["frozen_exchange"];
+        assert_eq!(format!("/{BATCH_PATH}"), exchange["path"].as_str().unwrap());
+        assert_eq!(
+            BATCH_TIMEOUT.as_secs(),
+            exchange["timeout_seconds"].as_u64().unwrap()
+        );
+        assert_eq!(exchange["method"], "POST");
         let observed: Observed = Arc::new(Mutex::new(Vec::new()));
         let app = Router::new()
-            .route("/v1/personalization/batches", post(submit_batch))
+            .route(&format!("/{BATCH_PATH}"), post(submit_batch))
             .with_state(observed.clone());
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let address = listener.local_addr().unwrap();
         let server = tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
-        let client = BureauClient::new(&format!("http://{address}"), "bureau-key", None).unwrap();
-        let mut second = job(DocumentType::TD1);
-        second.id = "job-second".into();
-        second.application_id = "application-second".into();
-        second.country_code = "GBR".into();
-        second.data_groups = BTreeMap::from([(3, "Aw==".into())]);
-        let mut first = job(DocumentType::TD3);
+        let api_key = exchange["authorization"]
+            .as_str()
+            .unwrap()
+            .strip_prefix("Bearer ")
+            .unwrap();
+        let client = BureauClient::new(&format!("http://{address}"), api_key, None).unwrap();
+        let jobs = exchange["json"]["jobs"].as_array().unwrap();
+        let second = job_from_wire(&jobs[1], DocumentType::TD1);
+        let mut first = job_from_wire(&jobs[0], DocumentType::TD3);
         first.status = ProductionStatus::Shipped;
         first.bureau_job_id = Some("prior-bureau".into());
         first.tracking_number = Some("prior-tracking".into());
         first.error_message = Some("prior-error".into());
         first.completed_at = Some(Utc::now());
         let batch = PersonalizationBatch {
-            id: "batch-1".into(),
-            organization_id: "organization-1".into(),
+            id: exchange["json"]["batch_id"].as_str().unwrap().into(),
+            organization_id: exchange["json"]["organization_id"].as_str().unwrap().into(),
             jobs: vec![first, second],
             status: ProductionStatus::Queued,
             submitted_at: Utc::now(),
         };
         let outcome = client.submit_batch(&batch).await.unwrap();
         assert_eq!(outcome.status, ProductionStatus::Queued);
-        assert_eq!(outcome.id, "batch-1");
-        assert_eq!(outcome.organization_id, "organization-1");
+        assert_eq!(outcome.id, exchange["json"]["batch_id"].as_str().unwrap());
+        assert_eq!(
+            outcome.organization_id,
+            exchange["json"]["organization_id"].as_str().unwrap()
+        );
         assert_eq!(outcome.submitted_at, batch.submitted_at);
         assert_eq!(
             outcome
@@ -588,7 +620,11 @@ mod tests {
                 .map(|job| (job.id.as_str(), job.bureau_job_id.as_deref(), job.status))
                 .collect::<Vec<_>>(),
             vec![
-                ("job-1", Some("bureau-first"), ProductionStatus::Queued),
+                (
+                    "job-reference",
+                    Some("bureau-reference"),
+                    ProductionStatus::Queued
+                ),
                 (
                     "job-second",
                     Some("bureau-second"),
@@ -597,34 +633,8 @@ mod tests {
             ]
         );
         let (authorization, payload) = observed.lock().unwrap()[0].clone();
-        assert_eq!(authorization, "Bearer bureau-key");
-        assert_eq!(
-            payload,
-            json!({
-                "batch_id": "batch-1",
-                "organization_id": "organization-1",
-                "jobs": [
-                    {
-                        "job_id": "job-1",
-                        "application_id": "application-1",
-                        "country_code": "UTO",
-                        "data_groups": {"DG1": "ZzE=", "DG2": "ZzI="},
-                        "sod_der_base64": "c29k",
-                        "dsc_cert_pem": "certificate",
-                        "mrz": {"line_1": "line-1", "line_2": "line-2"}
-                    },
-                    {
-                        "job_id": "job-second",
-                        "application_id": "application-second",
-                        "country_code": "GBR",
-                        "data_groups": {"DG3": "Aw=="},
-                        "sod_der_base64": "c29k",
-                        "dsc_cert_pem": "certificate",
-                        "mrz": {"line_1": "line-1", "line_2": "line-2"}
-                    }
-                ]
-            })
-        );
+        assert_eq!(authorization, exchange["authorization"].as_str().unwrap());
+        assert_eq!(payload, exchange["json"]);
         assert_eq!(
             outcome.jobs[0].tracking_number.as_deref(),
             Some("prior-tracking")

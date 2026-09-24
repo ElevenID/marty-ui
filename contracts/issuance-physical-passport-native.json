@@ -24,6 +24,45 @@
   },
   "bureau_batch_provider": {
     "python_reference": "contracts/physical-passport-provider-reference.json batch_http",
+    "python_reference_sha256": "fc2d68d4d199833ed6cbff0d9f5d57f6bcf58d78639bcc3146147442fd684e8a",
+    "frozen_exchange": {
+      "method": "POST",
+      "path": "/v1/personalization/batches",
+      "authorization": "Bearer synthetic-bureau-key",
+      "timeout_seconds": 60,
+      "json": {
+        "batch_id": "batch-reference",
+        "organization_id": "org-reference",
+        "jobs": [
+          {
+            "job_id": "job-reference",
+            "application_id": "app-reference",
+            "country_code": "UTO",
+            "data_groups": {"DG1": "AQ==", "DG2": "Ag=="},
+            "sod_der_base64": "U09E",
+            "dsc_cert_pem": "synthetic-cert",
+            "mrz": {"line_1": "P<UTOSYNTHETIC<<APPLICANT<<<<<<<<<<<<<<<<<<<", "line_2": "L898902C36UTO7408122F1204159ZE184226B<<<<<10"}
+          },
+          {
+            "job_id": "job-second",
+            "application_id": "app-second",
+            "country_code": "GBR",
+            "data_groups": {"DG3": "Aw=="},
+            "sod_der_base64": "U09E",
+            "dsc_cert_pem": "synthetic-cert",
+            "mrz": {"line_1": "P<UTOSYNTHETIC<<APPLICANT<<<<<<<<<<<<<<<<<<<", "line_2": "L898902C36UTO7408122F1204159ZE184226B<<<<<10"}
+          }
+        ]
+      },
+      "response": {
+        "status": "QUEUED",
+        "jobs": [
+          {"job_id": "job-second", "bureau_job_id": "bureau-second", "status": "PRINTING"},
+          {"job_id": "job-reference", "bureau_job_id": "bureau-reference", "status": "QUEUED"}
+        ]
+      },
+      "failure_status": "FAILED"
+    },
     "native_status": "Rust BureauClient::submit_batch ports the Python batch envelope, accepted/rejected statuses, out-of-order job mapping and preservation of existing job metadata/state on partial or failed responses; no public passport route uses it",
     "python_retirement_gate": "qualify the Rust batch adapter against the frozen Python provider contract and live bureau before deleting the Python bureau adapter"
   },
