@@ -16,6 +16,7 @@ pub mod issuance_native;
 pub mod middleware;
 pub mod organization_composition;
 pub mod organization_contract;
+pub mod passport_gateway;
 pub mod presentation_policy_contract;
 pub mod providers;
 pub mod registry;

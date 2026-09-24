@@ -6273,7 +6273,14 @@ gateway's general tenant-authorization classifier does not currently cover
 cutover therefore remains blocked on an explicit authenticated organization
 and membership/scope gate before any tenant key can be injected. The gateway
 now parses and redacts the same optional tenant keyring type as Flow and
-issuance, with empty-default Compose pass-through; this alone does not switch
-routes or forward a tenant key. The shared
+issuance, with empty-default Compose pass-through. Its
+`PASSPORT_NATIVE_GATEWAY_ENABLED` setting defaults off and requires a valid
+keyring when true, but is not yet wired to route selection or key forwarding;
+setting it is not a cutover. A tested gateway key-selection helper now requires
+the exact public passport route, its gateway-authorized permission and tenant,
+and agreement from any client organization claims before it can return that
+tenant's key. The remaining work is to connect the authenticated middleware
+and upstream override end to end, then qualify two-tenant HTTP behavior. The
+shared
 issuance API key
 cannot serve as a passport tenant credential.
