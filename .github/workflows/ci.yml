@@ -868,22 +868,10 @@ jobs:
           # The Canvas PostgreSQL contract launches this actual binary and sends
           # POSIX signals. A test-harness executable is not a substitute.
           test -x target/debug/marty-canvas-sync-worker
-      - name: Preflight timeout published worker parity
-        shell: bash
-        working-directory: rust
-        run: bash ../scripts/ci/run-published-canvas-contracts.sh timeout-preflight
-      - name: Preflight lease-expiry published worker parity
-        shell: bash
-        working-directory: rust
-        run: bash ../scripts/ci/run-published-canvas-contracts.sh lease-expiry-preflight
-      - name: Preflight body-timeout published worker parity
-        shell: bash
-        working-directory: rust
-        run: bash ../scripts/ci/run-published-canvas-contracts.sh body-timeout-preflight
-      - name: Preflight mixed-roster published worker parity
+      - name: Preflight published worker parity in two isolated groups
         working-directory: rust
         shell: bash
-        run: bash ../scripts/ci/run-published-canvas-contracts.sh mixed-roster-preflight
+        run: python3 ../scripts/ci/run-db-contract-groups.py preflights
       - name: Create isolated Rust contract databases
         shell: bash
         run: |

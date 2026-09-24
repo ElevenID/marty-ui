@@ -55,6 +55,23 @@ def test_launch_failure_still_runs_sibling(tmp_path: Path) -> None:
     assert "completed" in (tmp_path / "other.log").read_text()
 
 
+def test_four_preflights_all_finish_when_one_fails(tmp_path: Path) -> None:
+    commands = {
+        name: [sys.executable, "-c", f"print('{name}'); raise SystemExit({status})"]
+        for name, status in (
+            ("mixed-roster-preflight", 0),
+            ("body-timeout-preflight", 7),
+            ("timeout-preflight", 0),
+            ("lease-expiry-preflight", 0),
+        )
+    }
+    assert GROUPS.run_groups(commands, tmp_path) == {
+        name: (7 if name == "body-timeout-preflight" else 0) for name in commands
+    }
+    for name in commands:
+        assert name in (tmp_path / f"{name}.log").read_text(encoding="utf-8")
+
+
 @pytest.mark.parametrize("first_status,second_status", [(0, 7), (7, 0), (-9, 0)])
 def test_progress_reports_early_completion_then_waits_with_stable_result_order(
     monkeypatch, capsys, first_status: int, second_status: int
