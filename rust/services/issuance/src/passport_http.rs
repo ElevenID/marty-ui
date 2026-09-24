@@ -26,8 +26,8 @@ use crate::{
         BureauClient, BureauError, DocumentType, PersonalizationJob, ProductionStatus,
     },
     passport_contract::{
-        PassportApplicationRequest, PassportRequestError, PassportSafeResponse,
-        QualityResultRequest,
+        quality_field_order, PassportApplicationRequest, PassportRequestError,
+        PassportSafeResponse, QualityResultRequest,
     },
     passport_repository::{
         PassportJob, PassportJobInsert, PassportJobPatch, PassportJobStatus,
@@ -615,10 +615,20 @@ async fn quality_verify(
     State(service): State<PassportHttpService>,
     Path(application_id): Path<String>,
     headers: HeaderMap,
-    Json(payload): Json<Value>,
+    body: Bytes,
 ) -> Result<Json<Value>, PassportHttpError> {
-    let request =
-        QualityResultRequest::from_python_value(&payload).map_err(PassportHttpError::Validation)?;
+    let payload = if body.is_empty() {
+        Value::Null
+    } else {
+        serde_json::from_slice(&body).map_err(|error| {
+            PassportHttpError::Validation(json!({"detail": [
+                crate::python_json_diagnostic::diagnostic(&body, &error)
+            ]}))
+        })?
+    };
+    let order = quality_field_order(&body);
+    let request = QualityResultRequest::from_python_value(&payload, Some(&order))
+        .map_err(PassportHttpError::Validation)?;
     let principal = service.authenticate(&headers)?;
     let job = service.job(&principal, &application_id).await?;
     if !matches!(
@@ -783,7 +793,11 @@ mod tests {
                         .method("POST")
                         .uri("/v1/passport/applications/example/quality-verify")
                         .header("content-type", "application/json")
-                        .body(Body::from(case["input"].to_string()))
+                        .body(Body::from(
+                            case["raw_body"]
+                                .as_str()
+                                .map_or_else(|| case["input"].to_string(), str::to_owned),
+                        ))
                         .unwrap(),
                 )
                 .await

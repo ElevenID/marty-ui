@@ -1,11 +1,17 @@
 //! Frozen physical-document HTTP shapes. The source reference is Credentials
 //! `physical_document_routes.py` at the commit pinned in the native contract.
 
-use std::collections::BTreeMap;
+use std::{
+    collections::{BTreeMap, BTreeSet},
+    fmt,
+};
 
 use base64::{engine::general_purpose::STANDARD, Engine as _};
 use chrono::{DateTime, Utc};
-use serde::{Deserialize, Serialize};
+use serde::{
+    de::{IgnoredAny, MapAccess, Visitor},
+    Deserialize, Serialize,
+};
 use serde_json::{json, Map, Value};
 
 use crate::{
@@ -100,7 +106,13 @@ pub struct QualityResultRequest {
 
 impl QualityResultRequest {
     /// Reproduce the captured released Pydantic quality boundary before the job is read.
-    pub fn from_python_value(input: &Value) -> Result<Self, Value> {
+    pub fn from_python_value(input: &Value, field_order: Option<&[String]>) -> Result<Self, Value> {
+        if input.is_null() {
+            return Err(json!({"detail": [{
+                "type": "missing", "loc": ["body"],
+                "msg": "Field required", "input": null,
+            }]}));
+        }
         let Some(fields) = input.as_object() else {
             return Err(json!({"detail": [{
                 "type": "model_attributes_type", "loc": ["body"],
@@ -161,8 +173,16 @@ impl QualityResultRequest {
                 None
             }
         };
-        for (name, value) in fields {
-            if name != "passed" && name != "failure_codes" {
+        let names = field_order.map_or_else(
+            || fields.keys().cloned().collect::<Vec<_>>(),
+            <[String]>::to_vec,
+        );
+        let mut seen = BTreeSet::new();
+        for name in names {
+            if name != "passed" && name != "failure_codes" && seen.insert(name.clone()) {
+                let Some(value) = fields.get(&name) else {
+                    continue;
+                };
                 errors.push(json!({
                     "type": "extra_forbidden", "loc": ["body", name],
                     "msg": "Extra inputs are not permitted", "input": value,
@@ -177,6 +197,31 @@ impl QualityResultRequest {
             failure_codes: failure_codes.expect("validated failure code list"),
         })
     }
+}
+
+/// Preserve the submitted order of extra fields for Pydantic error arrays.
+pub fn quality_field_order(body: &[u8]) -> Vec<String> {
+    struct OrderedKeys(Vec<String>);
+    impl<'de> Deserialize<'de> for OrderedKeys {
+        fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+            struct Keys;
+            impl<'de> Visitor<'de> for Keys {
+                type Value = OrderedKeys;
+                fn expecting(&self, formatter: &mut fmt::Formatter) -> fmt::Result {
+                    formatter.write_str("a quality-result JSON object")
+                }
+                fn visit_map<M: MapAccess<'de>>(self, mut map: M) -> Result<Self::Value, M::Error> {
+                    let mut names = Vec::new();
+                    while let Some((name, _)) = map.next_entry::<String, IgnoredAny>()? {
+                        names.push(name);
+                    }
+                    Ok(OrderedKeys(names))
+                }
+            }
+            deserializer.deserialize_map(Keys)
+        }
+    }
+    serde_json::from_slice::<OrderedKeys>(body).map_or_else(|_| Vec::new(), |value| value.0)
 }
 
 fn python_bool(value: &Value) -> Option<bool> {
@@ -356,7 +401,7 @@ mod tests {
             (json!("off"), false),
         ] {
             let parsed =
-                QualityResultRequest::from_python_value(&json!({"passed": input})).unwrap();
+                QualityResultRequest::from_python_value(&json!({"passed": input}), None).unwrap();
             assert_eq!(parsed.passed, expected);
         }
     }
