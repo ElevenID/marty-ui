@@ -196,6 +196,12 @@ async fn main() -> Result<(), Box<dyn Error>> {
         }
         error
     })?;
+    if config.passport_native.enabled {
+        migration::migrate_passport(&pool).await.map_err(|error| {
+            error!(%error, "passport native schema migration failed");
+            error
+        })?;
+    }
     let tenant_discovery = TenantDiscoveryService::new(
         discovery.clone(),
         Arc::new(PostgresTenantDiscoveryRepository::new(pool.clone())),

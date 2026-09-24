@@ -876,11 +876,14 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          for database in marty_verification_contract marty_db_contracts_test marty_issuance_executable_smoke_test marty_retention_contract_test marty_passport_contract_test; do
+          for database in marty_verification_contract marty_db_contracts_test marty_issuance_executable_smoke_test marty_retention_contract_test marty_passport_contract_test marty_passport_packaged_test; do
             docker exec "${{ job.services.postgres.id }}" createdb -U postgres "$database"
           done
           docker exec --interactive "${{ job.services.postgres.id }}" \
             psql --username postgres --dbname marty_issuance_executable_smoke_test \
+            < rust/services/issuance/tests/fixtures/oid4vci_migration_base.sql
+          docker exec --interactive "${{ job.services.postgres.id }}" \
+            psql --username postgres --dbname marty_passport_packaged_test \
             < rust/services/issuance/tests/fixtures/oid4vci_migration_base.sql
       - name: Run safe Rust contract groups concurrently
         working-directory: rust
@@ -949,6 +952,12 @@ jobs:
         working-directory: rust
         shell: bash
         run: python3 ../scripts/ci/run-db-contract-groups.py
+      - name: Test packaged passport self-signed mode
+        working-directory: rust
+        env:
+          MARTY_PASSPORT_POSTGRES_TEST_URL: postgresql://postgres:postgres@127.0.0.1:5432/marty_passport_contract_test
+          MARTY_PASSPORT_PACKAGED_TEST_URL: postgresql://postgres:postgres@127.0.0.1:5432/marty_passport_packaged_test
+        run: cargo test --locked -p marty-issuance-service --features passport-self-signed-test --test passport_postgres_contract
       - name: Preserve synthetic runtime failure diagnostics
         if: always()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a

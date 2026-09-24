@@ -9,6 +9,7 @@ use axum::{
 };
 use chrono::{TimeZone, Utc};
 use hmac::{Hmac, Mac};
+use marty_issuance_service::migration;
 use marty_issuance_service::passport_artifact::{
     PassportArtifactCipher, PassportSensitiveArtifact,
 };
@@ -26,6 +27,120 @@ use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
 use sqlx::postgres::PgPoolOptions;
 use tower::ServiceExt;
+
+#[cfg(feature = "passport-self-signed-test")]
+#[path = "support/issuance_process.rs"]
+mod issuance_process;
+
+#[cfg(feature = "passport-self-signed-test")]
+async fn exercise_packaged_self_signed_test_mode(database_url: &str, key_a: &str) {
+    use std::time::Duration;
+
+    use issuance_process::{
+        bounded_http_client, isolated_smoke_command, reserve_port, wait_for_health_with_client,
+        ChildGuard,
+    };
+
+    assert!(
+        url::Url::parse(database_url)
+            .unwrap()
+            .path()
+            .trim_start_matches('/')
+            .ends_with("_test"),
+        "packaged passport test mode requires a dedicated *_test database"
+    );
+    let (http_reservation, http_port) = reserve_port();
+    let (_grpc_reservation, grpc_port) = reserve_port();
+    let mut command = isolated_smoke_command(http_port, grpc_port);
+    command
+        .env("DATABASE_URL", database_url)
+        .env("ISSUANCE_API_KEY", key_a)
+        .env("PASSPORT_NATIVE_HTTP_ENABLED", "true")
+        .env("PHYSICAL_DOCUMENT_ALLOW_SELF_SIGNED", "true")
+        .env(
+            "PASSPORT_TENANT_API_KEYS",
+            format!("{{\"org-a\":\"{key_a}\"}}"),
+        )
+        .env(
+            "PHYSICAL_DOCUMENT_ARTIFACT_KEY",
+            fernet::Fernet::generate_key(),
+        )
+        .env("PERSONALIZATION_BUREAU_URL", "http://127.0.0.1:1")
+        .env("RUST_LOG", "info")
+        .stdout(std::process::Stdio::inherit())
+        .stderr(std::process::Stdio::inherit());
+    drop(http_reservation);
+    let child = ChildGuard(
+        command
+            .spawn()
+            .expect("start packaged passport test-mode service"),
+    );
+    let client = bounded_http_client(Duration::from_secs(5));
+    assert_eq!(
+        tokio::time::timeout(
+            Duration::from_secs(10),
+            wait_for_health_with_client(http_port, &client)
+        )
+        .await
+        .expect("packaged passport readiness deadline"),
+        Some(json!({"status":"healthy", "service":"issuance-service"}))
+    );
+    let base = format!("http://127.0.0.1:{http_port}");
+    let capabilities = client
+        .get(format!("{base}/v1/passport/capabilities"))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(capabilities.status(), StatusCode::OK);
+    let capabilities: Value = capabilities.json().await.unwrap();
+    assert_eq!(capabilities["supported"], true);
+    assert_eq!(capabilities["signer"]["mode"], "SELF_SIGNED_TEST");
+
+    let created = client
+        .post(format!("{base}/v1/passport/applications"))
+        .header("x-organization-id", "org-a")
+        .header("x-api-key", key_a)
+        .json(&json!({
+            "organization_id":"org-a", "flow_execution_id":"flow-packaged-test",
+            "application_template_id":"template-packaged-test",
+            "credential_template_id":"credential-packaged-test",
+            "delivery_destination_profile_id":"destination-packaged-test",
+            "country_code":"USA", "applicant":{"name":"Synthetic Packaged Test"},
+            "mrz":{"line_1":"P<TEST", "line_2":"SYNTHETIC"},
+            "data_groups":{"DG1":"YQ==", "DG2":"Yg=="}
+        }))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(created.status(), StatusCode::CREATED);
+    let created: Value = created.json().await.unwrap();
+    assert!(!created.to_string().contains("Synthetic Packaged Test"));
+    let application_id = created["application_id"].as_str().unwrap();
+    let signed = client
+        .post(format!(
+            "{base}/v1/passport/applications/{application_id}/generate-sod"
+        ))
+        .header("x-organization-id", "org-a")
+        .header("x-api-key", key_a)
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(signed.status(), StatusCode::OK);
+    let signed: Value = signed.json().await.unwrap();
+    assert_eq!(signed["status"], "SOD_SIGNED");
+    assert_eq!(signed["sod_sha256"].as_str().unwrap().len(), 64);
+    drop(child);
+    let pool = PgPoolOptions::new().connect(database_url).await.unwrap();
+    migration::migrate_passport(&pool).await.unwrap();
+    let persisted: String = sqlx::query_scalar(
+        "SELECT status FROM issuance_service.physical_document_jobs WHERE application_id=$1",
+    )
+    .bind(application_id)
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert_eq!(persisted, "SOD_SIGNED");
+}
 
 async fn passport_http_request(
     app: &Router,
@@ -360,40 +475,8 @@ async fn passport_jobs_survive_restart_without_cross_tenant_reads() {
         .execute(&pool)
         .await
         .unwrap();
-    sqlx::query("CREATE SCHEMA issuance_service")
-        .execute(&pool)
-        .await
-        .unwrap();
-    sqlx::query(
-        "CREATE TABLE issuance_service.physical_document_jobs (
-            id text PRIMARY KEY,
-            organization_id text NOT NULL,
-            flow_execution_id text NOT NULL,
-            application_id text NOT NULL UNIQUE,
-            application_template_id text NOT NULL,
-            credential_template_id text NOT NULL,
-            revocation_profile_id text,
-            delivery_destination_profile_id varchar(128) NOT NULL,
-            document_type varchar(3) NOT NULL,
-            country_code varchar(3) NOT NULL,
-            secure_artifact_ciphertext text NOT NULL,
-            secure_artifact_reference varchar(512) NOT NULL,
-            sod_sha256 varchar(64),
-            bureau_job_id varchar(255),
-            tracking_number varchar(255),
-            status varchar(40) NOT NULL,
-            quality_result json,
-            error_code varchar(128),
-            error_message varchar(1024),
-            submitted_at timestamptz,
-            completed_at timestamptz,
-            created_at timestamptz NOT NULL,
-            updated_at timestamptz NOT NULL
-        )",
-    )
-    .execute(&pool)
-    .await
-    .unwrap();
+    migration::migrate_passport(&pool).await.unwrap();
+    migration::migrate_passport(&pool).await.unwrap(); // startup is idempotent
 
     let key_a = "a".repeat(32);
     let key_b = "b".repeat(32);
@@ -622,4 +705,10 @@ async fn passport_jobs_survive_restart_without_cross_tenant_reads() {
         "ACTIVE"
     );
     exercise_native_passport_http(restarted, keyring, cipher, &key_a, &key_b).await;
+    #[cfg(feature = "passport-self-signed-test")]
+    if let Ok(packaged_url) = std::env::var("MARTY_PASSPORT_PACKAGED_TEST_URL") {
+        exercise_packaged_self_signed_test_mode(&packaged_url, &key_a).await;
+    } else {
+        eprintln!("packaged passport test mode requires MARTY_PASSPORT_PACKAGED_TEST_URL");
+    }
 }
