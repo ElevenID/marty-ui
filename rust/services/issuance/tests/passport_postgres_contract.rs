@@ -1,6 +1,12 @@
 use chrono::{TimeZone, Utc};
-use marty_issuance_service::passport_repository::{PassportJobInsert, PostgresPassportRepository};
+use hmac::{Hmac, Mac};
+use marty_issuance_service::passport_bureau::BureauClient;
+use marty_issuance_service::passport_repository::{
+    PassportJobInsert, PassportJobPatch, PassportJobStatus, PassportWebhookRepositoryError,
+    PostgresPassportRepository,
+};
 use marty_passport_auth::PassportTenantKeyring;
+use sha2::Sha256;
 use sqlx::postgres::PgPoolOptions;
 
 #[tokio::test]
@@ -120,4 +126,116 @@ async fn passport_jobs_survive_restart_without_cross_tenant_reads() {
         .await
         .unwrap()
         .is_none());
+
+    let next = now + chrono::Duration::minutes(1);
+    let patch = PassportJobPatch::new(PassportJobStatus::DataGenerated);
+    assert!(restarted
+        .update(&org_b, "application-a", "DRAFT", &patch, next)
+        .await
+        .unwrap()
+        .is_none());
+    assert!(restarted
+        .update(&org_a, "application-a", "SOD_SIGNED", &patch, next)
+        .await
+        .unwrap()
+        .is_none());
+    let generated = restarted
+        .update(&org_a, "application-a", "DRAFT", &patch, next)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(generated.status, "DATA_GENERATED");
+    assert_eq!(generated.updated_at, next);
+    assert!(restarted
+        .update(&org_a, "application-a", "DRAFT", &patch, next)
+        .await
+        .unwrap()
+        .is_none());
+
+    let mut signed = PassportJobPatch::new(PassportJobStatus::SodSigned);
+    signed.sod_sha256 = Some(Some("a".repeat(64)));
+    let updated = restarted
+        .update(&org_a, "application-a", "DATA_GENERATED", &signed, next)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(updated.sod_sha256.as_deref(), Some("a".repeat(64).as_str()));
+    assert!(restarted
+        .get(&org_b, "application-a")
+        .await
+        .unwrap()
+        .is_none());
+
+    let mut submitted = PassportJobPatch::new(PassportJobStatus::Submitted);
+    submitted.bureau_job_id = Some(Some("bureau-a".into()));
+    restarted
+        .update(&org_a, "application-a", "SOD_SIGNED", &submitted, next)
+        .await
+        .unwrap()
+        .unwrap();
+    let secret = "synthetic-bureau-webhook-secret";
+    let bureau = BureauClient::new("http://127.0.0.1:1", "synthetic-key", Some(secret)).unwrap();
+    let body = serde_json::to_vec(&serde_json::json!({
+        "bureau_job_id": "bureau-a",
+        "status": "SHIPPED",
+        "tracking_number": "tracking-a"
+    }))
+    .unwrap();
+    let mut mac = Hmac::<Sha256>::new_from_slice(secret.as_bytes()).unwrap();
+    mac.update(&body);
+    let signature = hex::encode(mac.finalize().into_bytes());
+    assert!(bureau.parse_webhook(&body, "invalid").is_err());
+    assert_eq!(
+        restarted
+            .get(&org_a, "application-a")
+            .await
+            .unwrap()
+            .unwrap()
+            .status,
+        "SUBMITTED"
+    );
+    let event = bureau.parse_webhook(&body, &signature).unwrap();
+    let webhook_updated = restarted
+        .apply_verified_webhook(&event, next)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(webhook_updated.status, "READY_FOR_ACTIVATION");
+    assert_eq!(
+        webhook_updated.tracking_number.as_deref(),
+        Some("tracking-a")
+    );
+
+    let second_job = PassportJobInsert {
+        id: "job-b".into(),
+        application_id: "application-b".into(),
+        flow_execution_id: "flow-b".into(),
+        application_template_id: "template-b".into(),
+        credential_template_id: "credential-b".into(),
+        revocation_profile_id: None,
+        delivery_destination_profile_id: "destination-b".into(),
+        document_type: "TD1".into(),
+        country_code: "CAN".into(),
+        secure_artifact_ciphertext: "encrypted-artifact-b".into(),
+        secure_artifact_reference: "physical-artifact://job-b".into(),
+    };
+    restarted.insert(&org_b, &second_job, now).await.unwrap();
+    restarted
+        .update(&org_b, "application-b", "DRAFT", &submitted, next)
+        .await
+        .unwrap()
+        .unwrap();
+    assert!(matches!(
+        restarted.apply_verified_webhook(&event, next).await,
+        Err(PassportWebhookRepositoryError::AmbiguousBureauJob)
+    ));
+    assert_eq!(
+        restarted
+            .get(&org_b, "application-b")
+            .await
+            .unwrap()
+            .unwrap()
+            .status,
+        "SUBMITTED"
+    );
 }

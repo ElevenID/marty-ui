@@ -3,7 +3,80 @@
 use chrono::{DateTime, Utc};
 use marty_passport_auth::PassportTenantPrincipal;
 use serde_json::Value;
-use sqlx::{postgres::PgRow, PgPool, Row};
+use sqlx::{postgres::PgRow, PgPool, Postgres, QueryBuilder, Row};
+
+use crate::passport_bureau::VerifiedWebhookEvent;
+
+#[derive(Debug, thiserror::Error)]
+pub enum PassportWebhookRepositoryError {
+    #[error("physical document repository failed")]
+    Storage(#[from] sqlx::Error),
+    #[error("bureau job ID identifies multiple physical documents")]
+    AmbiguousBureauJob,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum PassportJobStatus {
+    Draft,
+    DataGenerated,
+    SodSigned,
+    Submitted,
+    InProduction,
+    QualityCheck,
+    ReadyForActivation,
+    Failed,
+    Cancelled,
+    Active,
+}
+
+impl PassportJobStatus {
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Draft => "DRAFT",
+            Self::DataGenerated => "DATA_GENERATED",
+            Self::SodSigned => "SOD_SIGNED",
+            Self::Submitted => "SUBMITTED",
+            Self::InProduction => "IN_PRODUCTION",
+            Self::QualityCheck => "QUALITY_CHECK",
+            Self::ReadyForActivation => "READY_FOR_ACTIVATION",
+            Self::Failed => "FAILED",
+            Self::Cancelled => "CANCELLED",
+            Self::Active => "ACTIVE",
+        }
+    }
+}
+
+pub struct PassportJobPatch {
+    pub status: PassportJobStatus,
+    pub sod_sha256: Option<Option<String>>,
+    pub bureau_job_id: Option<Option<String>>,
+    pub tracking_number: Option<Option<String>>,
+    pub quality_result: Option<Option<Value>>,
+    pub error_code: Option<Option<String>>,
+    pub error_message: Option<Option<String>>,
+    pub submitted_at: Option<DateTime<Utc>>,
+    pub completed_at: Option<DateTime<Utc>>,
+    pub secure_artifact_ciphertext: Option<String>,
+}
+
+impl PassportJobPatch {
+    #[must_use]
+    pub fn new(status: PassportJobStatus) -> Self {
+        Self {
+            status,
+            sod_sha256: None,
+            bureau_job_id: None,
+            tracking_number: None,
+            quality_result: None,
+            error_code: None,
+            error_message: None,
+            submitted_at: None,
+            completed_at: None,
+            secure_artifact_ciphertext: None,
+        }
+    }
+}
 
 pub struct PassportJobInsert {
     pub id: String,
@@ -107,6 +180,106 @@ impl PostgresPassportRepository {
         .as_ref()
         .map(row_to_job)
         .transpose()
+    }
+
+    pub async fn update(
+        &self,
+        principal: &PassportTenantPrincipal,
+        application_id: &str,
+        expected_status: &str,
+        patch: &PassportJobPatch,
+        now: DateTime<Utc>,
+    ) -> Result<Option<PassportJob>, sqlx::Error> {
+        let mut query = QueryBuilder::<Postgres>::new(
+            "UPDATE issuance_service.physical_document_jobs SET status = ",
+        );
+        query.push_bind(patch.status.as_str());
+        query.push(", updated_at = ").push_bind(now);
+        macro_rules! nullable_change {
+            ($field:ident) => {
+                if let Some(value) = &patch.$field {
+                    query
+                        .push(concat!(", ", stringify!($field), " = "))
+                        .push_bind(value);
+                }
+            };
+        }
+        nullable_change!(sod_sha256);
+        nullable_change!(bureau_job_id);
+        nullable_change!(tracking_number);
+        nullable_change!(quality_result);
+        nullable_change!(error_code);
+        nullable_change!(error_message);
+        if let Some(value) = patch.submitted_at {
+            query.push(", submitted_at = ").push_bind(value);
+        }
+        if let Some(value) = patch.completed_at {
+            query.push(", completed_at = ").push_bind(value);
+        }
+        if let Some(value) = &patch.secure_artifact_ciphertext {
+            query
+                .push(", secure_artifact_ciphertext = ")
+                .push_bind(value);
+        }
+        query
+            .push(" WHERE organization_id = ")
+            .push_bind(principal.organization_id())
+            .push(" AND application_id = ")
+            .push_bind(application_id)
+            .push(" AND status = ")
+            .push_bind(expected_status)
+            .push(" RETURNING *");
+        query
+            .build()
+            .fetch_optional(&self.pool)
+            .await?
+            .as_ref()
+            .map(row_to_job)
+            .transpose()
+    }
+
+    pub async fn apply_verified_webhook(
+        &self,
+        event: &VerifiedWebhookEvent,
+        now: DateTime<Utc>,
+    ) -> Result<Option<PassportJob>, PassportWebhookRepositoryError> {
+        let mut transaction = self.pool.begin().await?;
+        let matches = sqlx::query(
+            "SELECT id, organization_id FROM issuance_service.physical_document_jobs
+             WHERE bureau_job_id = $1 LIMIT 2 FOR UPDATE",
+        )
+        .bind(event.bureau_job_id())
+        .fetch_all(&mut *transaction)
+        .await?;
+        if matches.len() > 1 {
+            return Err(PassportWebhookRepositoryError::AmbiguousBureauJob);
+        }
+        let Some(matched) = matches.first() else {
+            return Ok(None);
+        };
+        let id: &str = matched.try_get("id")?;
+        let organization_id: &str = matched.try_get("organization_id")?;
+        let updated = sqlx::query(
+            "UPDATE issuance_service.physical_document_jobs
+             SET status = $1, tracking_number = $2, error_message = $3, updated_at = $4
+             WHERE id = $5 AND organization_id = $6 AND bureau_job_id = $7
+             RETURNING *",
+        )
+        .bind(event.status().issuance_status())
+        .bind(event.tracking_number())
+        .bind(event.error_message())
+        .bind(now)
+        .bind(id)
+        .bind(organization_id)
+        .bind(event.bureau_job_id())
+        .fetch_optional(&mut *transaction)
+        .await?;
+        transaction.commit().await?;
+        updated
+            .as_ref()
+            .map(row_to_job)
+            .transpose()
+            .map_err(Into::into)
     }
 }
 

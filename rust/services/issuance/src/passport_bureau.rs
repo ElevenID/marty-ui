@@ -119,22 +119,39 @@ pub struct PollOutcome {
 }
 
 #[derive(Clone, Debug, Deserialize, PartialEq)]
-pub struct WebhookEvent {
-    pub bureau_job_id: String,
-    pub status: ProductionStatus,
+struct WebhookEvent {
+    bureau_job_id: String,
+    status: ProductionStatus,
     #[serde(flatten)]
-    pub metadata: BTreeMap<String, Value>,
+    metadata: BTreeMap<String, Value>,
 }
 
-impl WebhookEvent {
+/// Only `BureauClient::parse_webhook` can construct this after HMAC validation.
+#[derive(Clone, Debug)]
+pub struct VerifiedWebhookEvent(WebhookEvent);
+
+impl VerifiedWebhookEvent {
+    #[must_use]
+    pub fn bureau_job_id(&self) -> &str {
+        &self.0.bureau_job_id
+    }
+
+    #[must_use]
+    pub fn status(&self) -> ProductionStatus {
+        self.0.status
+    }
+
     #[must_use]
     pub fn tracking_number(&self) -> Option<&str> {
-        self.metadata.get("tracking_number").and_then(Value::as_str)
+        self.0
+            .metadata
+            .get("tracking_number")
+            .and_then(Value::as_str)
     }
 
     #[must_use]
     pub fn error_message(&self) -> Option<&str> {
-        self.metadata.get("error_message").and_then(Value::as_str)
+        self.0.metadata.get("error_message").and_then(Value::as_str)
     }
 }
 
@@ -261,11 +278,17 @@ impl BureauClient {
         mac.verify_slice(&signature).is_ok()
     }
 
-    pub fn parse_webhook(&self, body: &[u8], signature: &str) -> Result<WebhookEvent, BureauError> {
+    pub fn parse_webhook(
+        &self,
+        body: &[u8],
+        signature: &str,
+    ) -> Result<VerifiedWebhookEvent, BureauError> {
         if !self.verify_webhook(body, signature) {
             return Err(BureauError::InvalidWebhookSignature);
         }
-        serde_json::from_slice(body).map_err(|_| BureauError::InvalidWebhookEvent)
+        serde_json::from_slice(body)
+            .map(VerifiedWebhookEvent)
+            .map_err(|_| BureauError::InvalidWebhookEvent)
     }
 }
 
@@ -361,8 +384,8 @@ mod tests {
         assert!(!configured.verify_webhook(body, &signature.to_uppercase()));
         assert!(!configured.verify_webhook(body, "not-hex"));
         let event = configured.parse_webhook(body, &signature).unwrap();
-        assert_eq!(event.bureau_job_id, "job-1");
-        assert_eq!(event.status, ProductionStatus::Shipped);
+        assert_eq!(event.bureau_job_id(), "job-1");
+        assert_eq!(event.status(), ProductionStatus::Shipped);
         assert_eq!(event.tracking_number(), None);
         assert!(matches!(
             configured.parse_webhook(b"{}", &signature),
