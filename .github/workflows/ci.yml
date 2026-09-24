@@ -1744,6 +1744,8 @@ jobs:
           tests/test_verification_candidate_workflow.py
       - name: Require a compatible Credentials image for native DIDComm consumers
         run: python scripts/check_didcomm_native_credentials_release.py
+      - name: Require the event-owner migration for native retention
+        run: python scripts/check_issuance_retention_credentials_release.py
 
   test-credential-lifecycle-browser:
     name: MIP 0.5 Credential Lifecycle Browser Gate
