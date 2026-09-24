@@ -499,6 +499,13 @@ async fn submit_personalization(
             dsc_cert_pem: signed.dsc_cert_pem,
             mrz_line_1: artifact.mrz.get("line_1").cloned().unwrap_or_default(),
             mrz_line_2: artifact.mrz.get("line_2").cloned().unwrap_or_default(),
+            bureau_job_id: None,
+            status: ProductionStatus::Queued,
+            tracking_number: None,
+            error_message: None,
+            submitted_at: Utc::now(),
+            updated_at: Utc::now(),
+            completed_at: None,
         })
         .await
         .map_err(PassportHttpError::Bureau)?;

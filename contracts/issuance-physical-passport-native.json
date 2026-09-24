@@ -24,7 +24,7 @@
   },
   "bureau_batch_provider": {
     "python_reference": "contracts/physical-passport-provider-reference.json batch_http",
-    "native_status": "Rust BureauClient::submit_batch ports the Python batch envelope, accepted/rejected statuses and out-of-order job mapping; no public passport route uses it",
+    "native_status": "Rust BureauClient::submit_batch ports the Python batch envelope, accepted/rejected statuses, out-of-order job mapping and preservation of existing job metadata/state on partial or failed responses; no public passport route uses it",
     "python_retirement_gate": "qualify the Rust batch adapter against the frozen Python provider contract and live bureau before deleting the Python bureau adapter"
   },
   "document_types": ["TD1", "TD2", "TD3"],

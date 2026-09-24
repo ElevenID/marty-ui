@@ -4,6 +4,7 @@
 
 use std::{collections::BTreeMap, time::Duration};
 
+use chrono::{DateTime, Utc};
 use hmac::{Hmac, Mac};
 use reqwest::{Client, StatusCode, Url};
 use serde::{Deserialize, Serialize};
@@ -56,6 +57,13 @@ pub struct PersonalizationJob {
     pub dsc_cert_pem: String,
     pub mrz_line_1: String,
     pub mrz_line_2: String,
+    pub bureau_job_id: Option<String>,
+    pub status: ProductionStatus,
+    pub tracking_number: Option<String>,
+    pub error_message: Option<String>,
+    pub submitted_at: DateTime<Utc>,
+    pub updated_at: DateTime<Utc>,
+    pub completed_at: Option<DateTime<Utc>>,
 }
 
 impl PersonalizationJob {
@@ -98,40 +106,8 @@ pub struct PersonalizationBatch {
     pub id: String,
     pub organization_id: String,
     pub jobs: Vec<PersonalizationJob>,
-}
-
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub struct BatchJobOutcome {
-    pub job_id: String,
-    pub bureau_job_id: Option<String>,
     pub status: ProductionStatus,
-}
-
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub struct BatchSubmissionOutcome {
-    pub batch_id: String,
-    pub organization_id: String,
-    pub status: ProductionStatus,
-    pub jobs: Vec<BatchJobOutcome>,
-}
-
-impl BatchSubmissionOutcome {
-    fn from_batch(batch: &PersonalizationBatch, status: ProductionStatus) -> Self {
-        Self {
-            batch_id: batch.id.clone(),
-            organization_id: batch.organization_id.clone(),
-            status,
-            jobs: batch
-                .jobs
-                .iter()
-                .map(|job| BatchJobOutcome {
-                    job_id: job.id.clone(),
-                    bureau_job_id: None,
-                    status: ProductionStatus::Queued,
-                })
-                .collect(),
-        }
-    }
+    pub submitted_at: DateTime<Utc>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -310,7 +286,7 @@ impl BureauClient {
     pub async fn submit_batch(
         &self,
         batch: &PersonalizationBatch,
-    ) -> Result<BatchSubmissionOutcome, BureauError> {
+    ) -> Result<PersonalizationBatch, BureauError> {
         let jobs = batch
             .jobs
             .iter()
@@ -332,21 +308,21 @@ impl BureauClient {
             response.status(),
             StatusCode::OK | StatusCode::CREATED | StatusCode::ACCEPTED
         ) {
-            return Ok(BatchSubmissionOutcome::from_batch(
-                batch,
-                ProductionStatus::Failed,
-            ));
+            let mut result = batch.clone();
+            result.status = ProductionStatus::Failed;
+            return Ok(result);
         }
         let body: Value = response.json().await?;
         let status = production_status_field(&body, "status")?.unwrap_or(ProductionStatus::Queued);
-        let mut outcome = BatchSubmissionOutcome::from_batch(batch, status);
+        let mut outcome = batch.clone();
+        outcome.status = status;
         if let Some(reported_jobs) = body.get("jobs").and_then(Value::as_array) {
             for reported in reported_jobs {
                 let Some(id) = reported.get("job_id").and_then(Value::as_str) else {
                     continue;
                 };
                 for job in &mut outcome.jobs {
-                    if job.job_id == id {
+                    if job.id == id {
                         job.bureau_job_id = reported
                             .get("bureau_job_id")
                             .and_then(Value::as_str)
@@ -438,6 +414,13 @@ mod tests {
             dsc_cert_pem: "certificate".into(),
             mrz_line_1: "line-1".into(),
             mrz_line_2: "line-2".into(),
+            bureau_job_id: None,
+            status: ProductionStatus::Queued,
+            tracking_number: None,
+            error_message: None,
+            submitted_at: Utc::now(),
+            updated_at: Utc::now(),
+            completed_at: None,
         }
     }
 
@@ -539,6 +522,7 @@ mod tests {
             Json(payload): Json<Value>,
         ) -> (StatusCode, Json<Value>) {
             let failed = payload["batch_id"] == "failure";
+            let partial = payload["batch_id"] == "partial";
             observed.lock().unwrap().push((
                 headers["authorization"].to_str().unwrap().to_owned(),
                 payload,
@@ -547,6 +531,12 @@ mod tests {
                 return (
                     StatusCode::SERVICE_UNAVAILABLE,
                     Json(json!({"private":"do-not-expose"})),
+                );
+            }
+            if partial {
+                return (
+                    StatusCode::ACCEPTED,
+                    Json(json!({"jobs":[{"job_id":"job-second", "status":"PRINTING"}]})),
                 );
             }
             (
@@ -573,24 +563,29 @@ mod tests {
         second.application_id = "application-second".into();
         second.country_code = "GBR".into();
         second.data_groups = BTreeMap::from([(3, "Aw==".into())]);
+        let mut first = job(DocumentType::TD3);
+        first.status = ProductionStatus::Shipped;
+        first.bureau_job_id = Some("prior-bureau".into());
+        first.tracking_number = Some("prior-tracking".into());
+        first.error_message = Some("prior-error".into());
+        first.completed_at = Some(Utc::now());
         let batch = PersonalizationBatch {
             id: "batch-1".into(),
             organization_id: "organization-1".into(),
-            jobs: vec![job(DocumentType::TD3), second],
+            jobs: vec![first, second],
+            status: ProductionStatus::Queued,
+            submitted_at: Utc::now(),
         };
         let outcome = client.submit_batch(&batch).await.unwrap();
         assert_eq!(outcome.status, ProductionStatus::Queued);
-        assert_eq!(outcome.batch_id, "batch-1");
+        assert_eq!(outcome.id, "batch-1");
         assert_eq!(outcome.organization_id, "organization-1");
+        assert_eq!(outcome.submitted_at, batch.submitted_at);
         assert_eq!(
             outcome
                 .jobs
                 .iter()
-                .map(|job| (
-                    job.job_id.as_str(),
-                    job.bureau_job_id.as_deref(),
-                    job.status
-                ))
+                .map(|job| (job.id.as_str(), job.bureau_job_id.as_deref(), job.status))
                 .collect::<Vec<_>>(),
             vec![
                 ("job-1", Some("bureau-first"), ProductionStatus::Queued),
@@ -630,14 +625,43 @@ mod tests {
                 ]
             })
         );
-        let mut failed_batch = batch;
+        assert_eq!(
+            outcome.jobs[0].tracking_number.as_deref(),
+            Some("prior-tracking")
+        );
+        assert_eq!(
+            outcome.jobs[0].error_message.as_deref(),
+            Some("prior-error")
+        );
+        assert_eq!(outcome.jobs[0].completed_at, batch.jobs[0].completed_at);
+
+        let mut partial_batch = batch;
+        partial_batch.id = "partial".into();
+        let partial = client.submit_batch(&partial_batch).await.unwrap();
+        assert_eq!(partial.status, ProductionStatus::Queued);
+        assert_eq!(partial.jobs[0].status, ProductionStatus::Shipped);
+        assert_eq!(
+            partial.jobs[0].bureau_job_id.as_deref(),
+            Some("prior-bureau")
+        );
+        assert_eq!(
+            partial.jobs[0].tracking_number.as_deref(),
+            Some("prior-tracking")
+        );
+        assert_eq!(partial.jobs[1].status, ProductionStatus::Printing);
+        assert!(partial.jobs[1].bureau_job_id.is_none());
+
+        let mut failed_batch = partial_batch;
         failed_batch.id = "failure".into();
         let failed = client.submit_batch(&failed_batch).await.unwrap();
         assert_eq!(failed.status, ProductionStatus::Failed);
-        assert!(failed
-            .jobs
-            .iter()
-            .all(|job| job.status == ProductionStatus::Queued && job.bureau_job_id.is_none()));
+        assert_eq!(failed.jobs[0].status, ProductionStatus::Shipped);
+        assert_eq!(
+            failed.jobs[0].bureau_job_id.as_deref(),
+            Some("prior-bureau")
+        );
+        assert_eq!(failed.jobs[1].status, ProductionStatus::Queued);
+        assert!(failed.jobs[1].bureau_job_id.is_none());
         server.abort();
     }
 

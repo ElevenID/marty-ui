@@ -6217,7 +6217,8 @@ and provider adapters remain until the full cutover gate passes. The Rust draft
 preserves the frozen request and safe-response shapes, tenant-scoped durable
 jobs, remote ICAO signing, single-job and batch bureau transports, signed
 webhooks, and production-status projection. The batch adapter preserves the
-Python envelope and out-of-order job mapping. The native single-job payload
+Python envelope, out-of-order job mapping, and prior job state/metadata on
+partial or failed responses. The native single-job payload
 forwards TD1/TD2/TD3 rather than Python's hardcoded TD3; that intentional repair
 is tracked in #851.
 
