@@ -21,7 +21,9 @@ def test_manifest_covers_every_release_workflow_environment() -> None:
         "stack-release",
         "wallet-conformance",
     }
-    assert "DEMO_RECORDER_DISPATCH_TOKEN" in manifest["required_repository_secrets"]
+    assert "DEMO_RECORDER_DISPATCH_TOKEN" in (
+        manifest["environments"]["beta-lifecycle"]["required_repository_secrets"]
+    )
     assert "DEMO_RECORDER_DISPATCH_TOKEN" not in (
         manifest["environments"]["beta-lifecycle"]["required_secrets"]
     )

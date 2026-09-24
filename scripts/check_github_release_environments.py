@@ -102,6 +102,7 @@ def validate_environment(
     secrets: set[str],
     variables: set[str],
     *,
+    repository_secrets: set[str] | None = None,
     check_inputs: bool = True,
 ) -> list[str]:
     errors: list[str] = []
@@ -140,6 +141,15 @@ def validate_environment(
         errors.append(f"{name}: deployment branches must be restricted")
 
     if check_inputs:
+        missing_repository_secrets = _missing(
+            requirement.get("required_repository_secrets", []),
+            repository_secrets or set(),
+        )
+        if missing_repository_secrets:
+            errors.append(
+                f"{name}: missing repository secrets: "
+                + ", ".join(missing_repository_secrets)
+            )
         missing_secrets = _missing(requirement.get("required_secrets", []), secrets)
         if missing_secrets:
             errors.append(f"{name}: missing secrets: {', '.join(missing_secrets)}")
@@ -169,20 +179,6 @@ def validate_configuration(
                 errors.append(
                     f"repository variable {name} must be a lowercase 40-character SHA"
                 )
-        required_repository_secrets = manifest.get("required_repository_secrets", [])
-        if required_repository_secrets:
-            try:
-                repository_secrets = api.repository_secrets()
-            except PreflightError as exc:
-                errors.append(f"repository secrets: {exc}")
-            else:
-                missing_secrets = _missing(
-                    required_repository_secrets, repository_secrets
-                )
-                if missing_secrets:
-                    errors.append(
-                        "missing repository secrets: " + ", ".join(missing_secrets)
-                    )
 
     environments = manifest.get("environments")
     if not isinstance(environments, dict) or not environments:
@@ -203,6 +199,11 @@ def validate_configuration(
             continue
         try:
             environment = api.environment(name)
+            repository_secrets = (
+                api.repository_secrets()
+                if check_inputs and requirement.get("required_repository_secrets")
+                else set()
+            )
             secrets = api.environment_names(name, "secrets") if check_inputs else set()
             variables = (
                 api.environment_names(name, "variables") if check_inputs else set()
@@ -217,6 +218,7 @@ def validate_configuration(
                 environment,
                 secrets,
                 variables,
+                repository_secrets=repository_secrets,
                 check_inputs=check_inputs,
             )
         )

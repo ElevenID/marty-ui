@@ -127,10 +127,13 @@ def test_configuration_can_validate_one_declared_environment() -> None:
 
 
 def test_configuration_checks_repository_scoped_secret_without_weakening_environment_scope() -> None:
+    beta_requirement = requirement()
+    beta_requirement["required_repository_secrets"] = [
+        "DEMO_RECORDER_DISPATCH_TOKEN"
+    ]
     manifest = {
         "repository_variables": ["MARTY_REF"],
-        "required_repository_secrets": ["DEMO_RECORDER_DISPATCH_TOKEN"],
-        "environments": {"beta": requirement()},
+        "environments": {"beta": beta_requirement},
     }
     assert validate_configuration(FakeApi(), manifest, {"beta"}) == []
 
@@ -139,7 +142,7 @@ def test_configuration_checks_repository_scoped_secret_without_weakening_environ
             return {"SECRET_A"}
 
     assert validate_configuration(MissingRepositorySecret(), manifest, {"beta"}) == [
-        "missing repository secrets: DEMO_RECORDER_DISPATCH_TOKEN"
+        "beta: missing repository secrets: DEMO_RECORDER_DISPATCH_TOKEN"
     ]
 
     class MissingEnvironmentSecret(FakeApi):
@@ -155,8 +158,14 @@ def test_configuration_checks_repository_scoped_secret_without_weakening_environ
             raise PreflightError("GitHub API returned 403")
 
     assert validate_configuration(InaccessibleRepositorySecrets(), manifest, {"beta"}) == [
-        "repository secrets: GitHub API returned 403"
+        "beta: GitHub API returned 403"
     ]
+
+    unrelated = {
+        "repository_variables": ["MARTY_REF"],
+        "environments": {"beta": requirement()},
+    }
+    assert validate_configuration(MissingRepositorySecret(), unrelated, {"beta"}) == []
 
 
 def test_configuration_rejects_an_undeclared_selected_environment() -> None:
@@ -183,8 +192,12 @@ def test_protection_only_does_not_require_privileged_input_inventory() -> None:
 
     manifest = {
         "repository_variables": ["MARTY_REF"],
-        "required_repository_secrets": ["DEMO_RECORDER_DISPATCH_TOKEN"],
-        "environments": {"beta": requirement()},
+        "environments": {
+            "beta": {
+                **requirement(),
+                "required_repository_secrets": ["DEMO_RECORDER_DISPATCH_TOKEN"],
+            }
+        },
     }
 
     assert (
