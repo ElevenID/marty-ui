@@ -92,24 +92,14 @@ impl PassportNativeConfig {
                 "self-signed passport test mode requires the passport-self-signed-test build feature",
             ));
         }
-        for (present, name) in [
-            (tenant_keys_configured, "PASSPORT_TENANT_API_KEYS"),
-            (
-                config.artifact_key.is_some(),
-                "PHYSICAL_DOCUMENT_ARTIFACT_KEY",
-            ),
-            (
-                config.signer_url.is_some() || config.self_signed_test_enabled,
-                "ICAO_DOCUMENT_SIGNER_URL or PHYSICAL_DOCUMENT_ALLOW_SELF_SIGNED",
-            ),
-            (config.bureau_url.is_some(), "PERSONALIZATION_BUREAU_URL"),
-        ] {
-            if !present {
-                return Err(MmfError::new(
-                    ErrorCode::Configuration,
-                    format!("{name} is required when PASSPORT_NATIVE_HTTP_ENABLED is true"),
-                ));
-            }
+        // Tenant authentication is mandatory even for the diagnostic capability
+        // route. Missing providers are represented as blockers there, matching
+        // the released Python surface; provider-backed operations remain 503.
+        if !tenant_keys_configured {
+            return Err(MmfError::new(
+                ErrorCode::Configuration,
+                "PASSPORT_TENANT_API_KEYS is required when PASSPORT_NATIVE_HTTP_ENABLED is true",
+            ));
         }
         Ok(config)
     }
@@ -1577,7 +1567,7 @@ mod tests {
     }
 
     #[test]
-    fn native_passport_is_default_off_and_requires_complete_redacted_configuration() {
+    fn native_passport_is_default_off_and_requires_tenant_auth_with_redacted_configuration() {
         let config = IssuanceServiceConfig::from_values(Vec::new()).unwrap();
         assert!(!config.passport_native.enabled);
         assert!(config.passport_native.artifact_key.is_none());
@@ -1622,7 +1612,6 @@ mod tests {
             assert!(!debug.contains(secret));
         }
         for name in [
-            "PASSPORT_TENANT_API_KEYS",
             "PHYSICAL_DOCUMENT_ARTIFACT_KEY",
             "ICAO_DOCUMENT_SIGNER_URL",
             "PERSONALIZATION_BUREAU_URL",
@@ -1632,11 +1621,8 @@ mod tests {
                 .filter(|(key, _)| key != name)
                 .cloned()
                 .collect::<Vec<_>>();
-            let error = IssuanceServiceConfig::from_values(missing).unwrap_err();
-            assert!(
-                error.to_string().contains(name),
-                "missing requirement: {name}"
-            );
+            let degraded = IssuanceServiceConfig::from_values(missing).unwrap();
+            assert!(degraded.passport_native.enabled, "missing provider: {name}");
         }
         let anonymous_providers = complete
             .into_iter()

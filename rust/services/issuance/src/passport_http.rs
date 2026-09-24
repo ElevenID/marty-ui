@@ -66,29 +66,24 @@ impl PassportHttpService {
         if !native.enabled {
             return Ok(None);
         }
-        fn required<'a>(
-            value: Option<&'a str>,
-            name: &'static str,
-        ) -> Result<&'a str, PassportStartupError> {
-            value.ok_or(PassportStartupError::Missing(name))
-        }
         let keyring = config
             .passport_tenant_keys
             .clone()
             .ok_or(PassportStartupError::Missing("PASSPORT_TENANT_API_KEYS"))?;
-        let cipher = PassportArtifactCipher::from_key(required(
-            native.artifact_key.as_deref(),
-            "PHYSICAL_DOCUMENT_ARTIFACT_KEY",
-        )?)?;
+        let cipher = native
+            .artifact_key
+            .as_deref()
+            .map(PassportArtifactCipher::from_key)
+            .transpose()?;
         let signer = if let Some(url) = native.signer_url.as_deref() {
-            PassportSigner::Remote(RemoteSigner::new(
+            Some(PassportSigner::Remote(RemoteSigner::new(
                 url,
                 native.signer_api_key.as_deref().unwrap_or_default(),
-            )?)
+            )?))
         } else if native.self_signed_test_enabled {
             #[cfg(feature = "passport-self-signed-test")]
             {
-                PassportSigner::SelfSignedTest
+                Some(PassportSigner::SelfSignedTest)
             }
             #[cfg(not(feature = "passport-self-signed-test"))]
             {
@@ -97,19 +92,25 @@ impl PassportHttpService {
                 ));
             }
         } else {
-            return Err(PassportStartupError::Missing("ICAO_DOCUMENT_SIGNER_URL"));
+            None
         };
-        let bureau = BureauClient::new(
-            required(native.bureau_url.as_deref(), "PERSONALIZATION_BUREAU_URL")?,
-            native.bureau_api_key.as_deref().unwrap_or_default(),
-            native.bureau_webhook_secret.as_deref(),
-        )?;
+        let bureau = native
+            .bureau_url
+            .as_deref()
+            .map(|url| {
+                BureauClient::new(
+                    url,
+                    native.bureau_api_key.as_deref().unwrap_or_default(),
+                    native.bureau_webhook_secret.as_deref(),
+                )
+            })
+            .transpose()?;
         Ok(Some(Self::new(
             keyring,
             PostgresPassportRepository::new(pool),
-            Some(cipher),
-            Some(signer),
-            Some(bureau),
+            cipher,
+            signer,
+            bureau,
         )))
     }
 
@@ -712,6 +713,77 @@ mod tests {
         assert!(PassportHttpService::from_config(&valid, pool.clone())
             .unwrap()
             .is_some());
+        let degraded = IssuanceServiceConfig::from_values(vec![
+            ("PASSPORT_NATIVE_HTTP_ENABLED".to_owned(), "true".to_owned()),
+            (
+                "PASSPORT_TENANT_API_KEYS".to_owned(),
+                r#"{"org-1":"passport-tenant-test-key-00000000000001"}"#.to_owned(),
+            ),
+        ])
+        .unwrap();
+        let degraded = PassportHttpService::from_config(&degraded, pool.clone())
+            .unwrap()
+            .unwrap();
+        let contract: Value = serde_json::from_str(include_str!(
+            "../../../../contracts/issuance-physical-passport-native.json"
+        ))
+        .unwrap();
+        let expected = &contract["degraded_capabilities"];
+        let degraded_router = router(degraded);
+        let response = degraded_router
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .uri("/v1/passport/capabilities")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(
+            u64::from(response.status().as_u16()),
+            expected["http_status"].as_u64().unwrap()
+        );
+        let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+        let body: Value = serde_json::from_slice(&body).unwrap();
+        for field in ["supported", "encrypted_artifact_store", "bureau_configured"] {
+            assert_eq!(body[field], expected[field]);
+        }
+        assert_eq!(body["signer"]["mode"], expected["signer_mode"]);
+        assert_eq!(
+            body["blockers"].as_array().unwrap().len(),
+            expected["blocker_count"].as_u64().unwrap() as usize
+        );
+        let response = degraded_router
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/v1/passport/applications")
+                    .header("content-type", "application/json")
+                    .header("x-organization-id", "org-1")
+                    .header("x-api-key", "passport-tenant-test-key-00000000000001")
+                    .body(Body::from(json!({
+                        "organization_id": "org-1", "flow_execution_id": "flow-1",
+                        "application_template_id": "template-1", "credential_template_id": "credential-1",
+                        "delivery_destination_profile_id": "destination-1", "country_code": "USA",
+                        "applicant": {}, "mrz": {}, "data_groups": {"DG1": "YQ==", "DG2": "Yg=="}
+                    }).to_string()))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(
+            u64::from(response.status().as_u16()),
+            expected["authenticated_application_create"]["status"]
+                .as_u64()
+                .unwrap()
+        );
+        let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+        let body: Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(
+            body["detail"],
+            expected["authenticated_application_create"]["detail"]
+        );
         let bad_key = IssuanceServiceConfig::from_values(values(
             "invalid-secret-artifact-key",
             "https://signer.example.test",
