@@ -4490,6 +4490,7 @@ dependencies = [
  "marty-didcomm",
  "marty-iso18013",
  "marty-oid4vci",
+ "marty-passport-auth",
  "marty-verification",
  "mmf-core",
  "mmf-messaging",
@@ -4772,6 +4773,16 @@ dependencies = [
  "tracing-subscriber",
  "url",
  "uuid",
+]
+
+[[package]]
+name = "marty-passport-auth"
+version = "0.1.0"
+dependencies = [
+ "mmf-security",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.20",
 ]
 
 [[package]]

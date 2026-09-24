@@ -2,6 +2,7 @@ use std::{collections::BTreeMap, time::Duration};
 
 use async_trait::async_trait;
 use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine};
+use marty_passport_auth::PassportTenantKeyring;
 use reqwest::{Client, Method, StatusCode};
 use serde::de::DeserializeOwned;
 use serde_json::{json, Value};
@@ -496,6 +497,7 @@ impl FlowKeyEnvelopeProvider for HttpSigningProvider {
 #[derive(Clone)]
 pub struct HttpPhysicalDocumentProvider {
     http: BoundedHttpClient,
+    tenant_keys: Option<PassportTenantKeyring>,
 }
 
 impl HttpPhysicalDocumentProvider {
@@ -507,6 +509,23 @@ impl HttpPhysicalDocumentProvider {
                 "physical_document",
                 Duration::from_secs(30),
             )?,
+            tenant_keys: None,
+        })
+    }
+
+    pub fn new_tenant_bound(
+        base_url: &str,
+        tenant_keys: PassportTenantKeyring,
+    ) -> Result<Self, FlowProviderError> {
+        Ok(Self {
+            http: BoundedHttpClient::build(
+                base_url,
+                None,
+                None,
+                "physical_document",
+                Duration::from_secs(30),
+            )?,
+            tenant_keys: Some(tenant_keys),
         })
     }
 
@@ -523,8 +542,17 @@ impl PhysicalDocumentProvider for HttpPhysicalDocumentProvider {
         request: &PhysicalDocumentRequest,
     ) -> Result<PhysicalDocumentResult, FlowProviderError> {
         let (method, path, body) = physical_operation(request)?;
-        let data: BTreeMap<String, Value> = self
-            .http
+        let mut http = self.http.clone();
+        if let Some(tenant_keys) = &self.tenant_keys {
+            let key = tenant_keys
+                .key_for(&request.organization_id)
+                .ok_or_else(|| FlowProviderError::Rejected {
+                    provider: "physical_document",
+                    message: "organization has no physical-document credential".into(),
+                })?;
+            http.api_key = Some(key.to_owned());
+        }
+        let data: BTreeMap<String, Value> = http
             .json_for_organization(method, &path, &[], body, &request.organization_id)
             .await?;
         let status = data
@@ -1100,6 +1128,49 @@ mod tests {
         assert_eq!(headers.get("x-api-key").unwrap().to_str().unwrap(), key);
         assert_eq!(headers.get("x-organization-id").unwrap(), "org-1");
         assert_eq!(body, Value::Null);
+        server.abort();
+    }
+
+    #[tokio::test]
+    async fn physical_document_tenant_keys_follow_the_organization_without_global_fallback() {
+        let captured: CapturedRequest = Arc::new(Mutex::new(None));
+        let router = Router::new()
+            .route("/v1/passport/applications", post(physical_capture))
+            .with_state(captured.clone());
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let server = tokio::spawn(async move { axum::serve(listener, router).await.unwrap() });
+        let first_key = "a".repeat(32);
+        let second_key = "b".repeat(32);
+        let keys = PassportTenantKeyring::from_json(&format!(
+            "{{\"org-1\":\"{first_key}\",\"org-2\":\"{second_key}\"}}"
+        ))
+        .unwrap();
+        let provider =
+            HttpPhysicalDocumentProvider::new_tenant_bound(&format!("http://{address}"), keys)
+                .unwrap();
+
+        provider
+            .execute(&request(PhysicalDocumentOperation::Initialize))
+            .await
+            .unwrap();
+        let (headers, _, _) = captured.lock().unwrap().take().unwrap();
+        assert_eq!(headers.get("x-api-key").unwrap(), first_key.as_str());
+
+        let mut second_request = request(PhysicalDocumentOperation::Initialize);
+        second_request.organization_id = "org-2".into();
+        provider.execute(&second_request).await.unwrap();
+        let (headers, _, body) = captured.lock().unwrap().take().unwrap();
+        assert_eq!(headers.get("x-api-key").unwrap(), second_key.as_str());
+        assert_eq!(headers.get("x-organization-id").unwrap(), "org-2");
+        assert_eq!(body["organization_id"], "org-2");
+
+        second_request.organization_id = "unknown".into();
+        assert!(matches!(
+            provider.execute(&second_request).await,
+            Err(FlowProviderError::Rejected { .. })
+        ));
+        assert!(captured.lock().unwrap().is_none());
         server.abort();
     }
 }
