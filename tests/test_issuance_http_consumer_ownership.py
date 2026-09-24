@@ -36,7 +36,7 @@ def test_inventory_freezes_native_and_legacy_consumer_ownership():
     assert all(owner["tenant_binding"] for owner in contract["consumers"].values())
 
 
-def test_source_wiring_keeps_native_reads_off_the_legacy_owner():
+def test_source_wiring_prefers_native_with_production_legacy_fallback():
     auth = (ROOT / "rust/services/auth/src/config.rs").read_text()
     applicant = (ROOT / "rust/services/applicant/src/main.rs").read_text()
     policy = (ROOT / "rust/services/presentation-policy/src/config.rs").read_text()
@@ -49,12 +49,20 @@ def test_source_wiring_keeps_native_reads_off_the_legacy_owner():
     flow_http = (ROOT / "rust/services/flow/src/http_providers.rs").read_text()
 
     assert "issuance_native_service_url" in auth
-    assert "ISSUANCE_SERVICE_URL" not in auth
     assert (
-        'env_value("ISSUANCE_NATIVE_SERVICE_URL", "http://issuance-native:8005")'
+        'get("ISSUANCE_NATIVE_SERVICE_URL")\n'
+        '                    .or_else(|| get("ISSUANCE_SERVICE_URL"))'
+    ) in auth
+    assert (
+        'select_issuance_service_url(\n'
+        '        env::var("ISSUANCE_NATIVE_SERVICE_URL").ok(),\n'
+        '        env::var("ISSUANCE_SERVICE_URL").ok(),'
         in applicant
     )
-    assert 'value(&values, "ISSUANCE_NATIVE_SERVICE_URL")' in policy
+    assert (
+        'value(&values, "ISSUANCE_NATIVE_SERVICE_URL")\n'
+        '                .or_else(|| value(&values, "ISSUANCE_SERVICE_URL"))'
+    ) in policy
     assert '"ISSUANCE_NATIVE_SERVICE_URL"' in flow_config
     assert "&config.issuance_native_url" in flow_connections
     assert (
