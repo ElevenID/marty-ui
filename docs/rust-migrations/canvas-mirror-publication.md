@@ -20,6 +20,64 @@ separate Canvas evidence `CanvasSyncWorker`. No native implementation, route
 selection, Python deletion, deployment, signing, or KMS change is authorized by
 this reference checkpoint.
 
+## Native implementation checkpoint (2026-09-21)
+
+The follow-on native branch now implements the six frozen routes, shared
+publication/status orchestration, health/provenance projections, alert events
+and optional critical webhooks in the Rust issuance service. The packaged main
+constructs that service from the existing publication/status providers and
+integration-secret vault, mounts the router, starts the optional automation
+worker, and aborts/awaits it during shutdown. Worker configuration, alert
+thresholds, webhook URL and bounded webhook timeout are typed once in
+`IssuanceServiceConfig`.
+
+Maintainer review found that the implementation and gateway router had not
+added these six routes to the canonical native-coverage ledger. That omission
+would have left the deletion gate blind to the actual owner. The reviewed
+branch now binds every exact method/path/operation to this frozen contract,
+rejects sibling and malformed template paths at the gateway, and reports the
+lane-local 131-route ledger as **113 native / 18 remaining**. The separate
+OID4VCI lane adds seven further routes; the combined count is not claimed until
+the branches are restacked together and their exact integrated tree passes CI.
+The same audit binds fourteen frozen Canvas Credentials/mirror environment
+variables to their typed Rust consumers, moving the historical configuration
+ledger from **28 frozen-native / 61 remaining** to **72 frozen-native / 17
+remaining**. Fourteen newly migrated mirror settings and thirty previously
+implemented typed Rust inputs are now accounted for. Five newer Rust-owned
+settings are tracked separately as platform-additive, without claiming the
+still-dynamic Python lookups or unrelated runtime modes.
+
+PostgreSQL batch selection now uses `FOR UPDATE SKIP LOCKED` leases. A durable
+effect-start marker prevents an expired claim from automatically repeating an
+external provider action whose outcome became ambiguous before persistence.
+Normal provider failures remain retryable. Claim metadata is internal and is
+removed from public projections and successful final writes. This is an
+intentional safety correction to the Python implementation's unclaimed
+`SELECT ... LIMIT` batches; it preserves successful/error response behavior
+while preventing concurrent duplicate provider effects.
+
+Global automation also keeps alerts tenant-isolated. Durable alert events use
+the organization on their source delivery record, and critical webhook calls
+are deterministically partitioned into one payload per organization. This is an
+intentional security correction to the Python implementation, which labelled a
+multi-organization batch with its first record's organization and could combine
+later tenants' alerts into that webhook payload. The native regression gate
+exercises two organizations in one global batch and proves that neither event
+metadata nor webhook alert arrays cross that boundary.
+
+The native gate currently proves the route/authentication/validation matrix,
+tenant-hidden publish admission, shared batch/automation behavior, provider
+cancellation before persistence, alert/webhook ordering, health/provenance
+output, and real-PostgreSQL tenant/claim/contention/fence behavior. Remaining
+before cutover are the full frozen HTTP corpus comparison, independent
+maintainer review, and all repository CI. The packaged-main gate now starts the
+real issuance executable against the owned PostgreSQL/provider fixture, proves
+all six routes are mounted with authentication-first admission, and performs an
+authenticated mirror-health read. The publication adapter's 51-case corpus and
+15 additional timestamp/cancellation/response cases remain required CI gates.
+Only after those gates pass may the superseded Python route/helper/worker code
+be deleted and the aggregate beta deployment proceed.
+
 ## Ownership and deletion boundary
 
 The frozen `infrastructure/api/routes.py` owns the six route definitions at

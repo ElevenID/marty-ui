@@ -498,9 +498,18 @@ async fn tenant_authorization_middleware(
         return next.run(Request::from_parts(parts, Body::from(body))).await;
     }
     let identity = parts.extensions.get::<GatewayIdentity>().cloned();
-    let query_organization_id = query_pairs(parts.uri.query())
-        .remove("organization_id")
-        .and_then(|values| values.into_iter().next());
+    // These public batch routes are tenant-scoped operations even though the
+    // underlying worker API retains its frozen optional/global scope. Never
+    // let an omitted, forged, or duplicate client query select the tenant used
+    // for authorization; the authenticated organization is authoritative.
+    let query_organization_id =
+        (!issuance_native::is_canvas_mirror_public_batch(parts.method.as_str(), parts.uri.path()))
+            .then(|| {
+                query_pairs(parts.uri.query())
+                    .remove("organization_id")
+                    .and_then(|values| values.into_iter().next())
+            })
+            .flatten();
     let resolved = match resolve_organization(
         &OrganizationResolutionInput {
             method: parts.method.as_str().into(),
@@ -868,6 +877,15 @@ async fn proxy_handler(
         }
     };
     let public_path = parts.uri.path().to_owned();
+    if issuance_native::is_canvas_mirror_public_batch(parts.method.as_str(), &public_path)
+        && identity
+            .organization_id
+            .as_deref()
+            .map(str::trim)
+            .is_none_or(|value| value.is_empty())
+    {
+        return detail_response(403, "Trusted organization context is required");
+    }
     let upstream_path =
         match compatibility_upstream_path(&public_path, api_key_organization_id.as_deref()) {
             Ok(path) => path,
@@ -986,6 +1004,15 @@ async fn proxy_handler(
     // overrides from the upstream path can lose the authenticated tenant or
     // misread a compatibility segment (for example `organizations/audit`).
     let mut overrides = proxy_overrides(&state, &public_path, &identity);
+    if issuance_native::is_canvas_mirror_public_batch(parts.method.as_str(), &public_path) {
+        overrides.trusted_query.insert(
+            "organization_id".into(),
+            vec![identity
+                .organization_id
+                .clone()
+                .expect("Canvas public batch tenant was required above")],
+        );
+    }
     overrides.body = canonical_body;
     match state
         .proxy
@@ -5759,11 +5786,14 @@ mod tests {
             session: &str,
         ) -> Result<Option<SessionIdentity>, SecurityError> {
             Ok(match session {
-                "actor-session" | "actor-denied" => Some(SessionIdentity {
-                    user_id: session.into(),
-                    organization_id: Some("org-1".into()),
-                    ..SessionIdentity::default()
-                }),
+                "actor-session" | "actor-denied" | "actor-no-organization" => {
+                    Some(SessionIdentity {
+                        user_id: session.into(),
+                        organization_id: (session != "actor-no-organization")
+                            .then(|| "org-1".into()),
+                        ..SessionIdentity::default()
+                    })
+                }
                 _ => None,
             })
         }
@@ -5916,6 +5946,79 @@ mod tests {
                 .headers
                 .values()
                 .all(|value| !value.contains("forged-")));
+        }
+    }
+
+    #[tokio::test]
+    async fn canvas_public_batches_replace_every_client_tenant_shape_or_fail_closed() {
+        let paths = [
+            "/v1/issuance/delivery-records/canvas-credentials/process-pending",
+            "/v1/issuance/delivery-records/canvas-credentials/process-status-sync-failures",
+            "/v1/issuance/delivery-records/canvas-credentials/run-automation-cycle",
+        ];
+        for path in paths {
+            for (header, authentication) in [
+                ("cookie", "sessionId=actor-session"),
+                ("x-api-key", "actor-key"),
+            ] {
+                for query in [
+                    "",
+                    "?organization_id=org-attacker",
+                    "?organization_id=org-attacker&organization_id=org-other&limit=7",
+                ] {
+                    let (router, recorder) = actor_test_router();
+                    let response = router
+                        .oneshot(
+                            Request::builder()
+                                .method("POST")
+                                .uri(format!("{path}{query}"))
+                                .header(header, authentication)
+                                .body(Body::empty())
+                                .unwrap(),
+                        )
+                        .await
+                        .unwrap();
+                    assert_eq!(response.status(), StatusCode::OK, "{path}{query}");
+                    let calls = recorder.0.lock().unwrap();
+                    assert_eq!(calls.len(), 1, "{path}{query}");
+                    let (service, forwarded) = &calls[0];
+                    assert_eq!(service, issuance_native::NATIVE_SERVICE);
+                    assert_eq!(forwarded.path, path);
+                    assert_eq!(
+                        forwarded.query.get("organization_id"),
+                        Some(&vec!["org-1".to_owned()]),
+                        "{path}{query}"
+                    );
+                    assert_eq!(
+                        forwarded.query.get("limit").map(Vec::as_slice),
+                        query
+                            .contains("limit=7")
+                            .then_some(["7".to_owned()].as_slice())
+                    );
+                }
+            }
+
+            let (router, recorder) = actor_test_router();
+            let response = router
+                .oneshot(
+                    Request::builder()
+                        .method("POST")
+                        .uri(format!("{path}?organization_id=org-attacker"))
+                        .header("cookie", "sessionId=actor-no-organization")
+                        .body(Body::empty())
+                        .unwrap(),
+                )
+                .await
+                .unwrap();
+            assert_eq!(response.status(), StatusCode::FORBIDDEN);
+            let body = to_bytes(response.into_body(), DEFAULT_MAXIMUM_BODY_BYTES)
+                .await
+                .unwrap();
+            assert_eq!(
+                serde_json::from_slice::<Value>(&body).unwrap(),
+                json!({"detail":"Trusted organization context is required"})
+            );
+            assert!(recorder.0.lock().unwrap().is_empty());
         }
     }
 

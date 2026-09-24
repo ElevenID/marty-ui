@@ -65,6 +65,7 @@ use crate::{
         CanvasPlatformReadinessResponse, CanvasPlatformResponse, CanvasProgramBindingResponse,
         CanvasProgramBindingValidationResponse,
     },
+    canvas_mirror_http::CanvasMirrorHttpService,
     canvas_oauth::{
         CanvasOAuthCallbackRequest, CanvasOAuthError, CanvasOAuthService, CanvasOAuthStartRequest,
     },
@@ -212,6 +213,7 @@ pub struct CanvasServices {
     legacy_ingest: CanvasLegacyIngestService,
     lti: CanvasLtiServices,
     operations: Option<CanvasOperationsService>,
+    mirror: Option<CanvasMirrorHttpService>,
 }
 
 impl CanvasServices {
@@ -228,6 +230,7 @@ impl CanvasServices {
             legacy_ingest,
             lti,
             operations: None,
+            mirror: None,
         }
     }
 
@@ -235,6 +238,13 @@ impl CanvasServices {
     #[must_use]
     pub fn with_operations(mut self, operations: CanvasOperationsService) -> Self {
         self.operations = Some(operations);
+        self
+    }
+
+    /// Opt in to the native Canvas mirror management surface.
+    #[must_use]
+    pub fn with_mirror(mut self, mirror: CanvasMirrorHttpService) -> Self {
+        self.mirror = Some(mirror);
         self
     }
 }
@@ -395,6 +405,7 @@ struct OptionalServices {
     canvas_management: Option<CanvasPlatformManagementHttpService>,
     canvas_legacy_ingest: Option<CanvasLegacyIngestService>,
     canvas_operations: Option<CanvasOperationsService>,
+    canvas_mirror: Option<CanvasMirrorHttpService>,
     token_rate_limiter: Option<TokenRateLimiter>,
     oid4vci_authorization: Option<Oid4vciAuthorizationService>,
 }
@@ -496,6 +507,7 @@ pub fn router_with_all_services(
             canvas_management: Some(services.canvas.management),
             canvas_legacy_ingest: Some(services.canvas.legacy_ingest),
             canvas_operations: services.canvas.operations,
+            canvas_mirror: services.canvas.mirror,
             canvas_lti_login: Some(services.canvas.lti.login),
             canvas_lti_launch: Some(services.canvas.lti.launch),
             canvas_lti_experience: Some(services.canvas.lti.experience),
@@ -1244,6 +1256,11 @@ fn router_with_optional_services(
     });
     let api = if let Some(operations) = services.canvas_operations {
         api.merge(crate::canvas_operations::candidate_router(operations))
+    } else {
+        api
+    };
+    let api = if let Some(mirror) = services.canvas_mirror {
+        api.merge(mirror.into_router())
     } else {
         api
     };

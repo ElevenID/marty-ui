@@ -3,6 +3,7 @@
 from copy import deepcopy
 from pathlib import Path
 import runpy
+import shutil
 
 import pytest
 
@@ -36,6 +37,38 @@ def service(owner):
             {"source": "workload_identity_ca_cert"},
         ],
     }
+
+
+def test_flow_fixture_renders_frozen_selfhost_with_closed_native_additions(tmp_path):
+    if shutil.which("docker") is None:
+        pytest.skip("Docker Compose is needed to render the deployment model")
+    result = GATE["render"](spec(tmp_path), ["docker", "compose"])
+    assert result["schema"] == "marty.flow-rendered-selection/v1"
+    assert set(result["profiles"]) == {"base", "base_native", "selfhost"}
+    assert (
+        result["profiles"]["selfhost"]["original_environment"][
+            "ISSUANCE_GRPC_TARGET"
+        ]
+        == "issuance-native:9005"
+    )
+
+
+def test_flow_selfhost_additions_require_closed_interpolation():
+    selfhost = GATE["SELFHOST"]
+    additions = selfhost["rendered_additions"](
+        selfhost["NATIVE_ADDITIVE"],
+        {
+            "CANVAS_MIRROR_WORKER_ENABLED": "true",
+            "CANVAS_MIRROR_WORKER_BATCH_LIMIT": "7",
+        },
+    )
+    assert additions["CANVAS_MIRROR_WORKER_ENABLED"] == "true"
+    assert additions["CANVAS_MIRROR_WORKER_BATCH_LIMIT"] == "7"
+    assert additions["CANVAS_MIRROR_PUBLISH_INTERVAL_SECONDS"] == "300"
+    with pytest.raises(AssertionError, match="Unsupported closed interpolation"):
+        selfhost["rendered_additions"](
+            {"CANVAS_MIRROR_WORKER_ENABLED": "unreviewed"}, {}
+        )
 
 
 @pytest.mark.parametrize(

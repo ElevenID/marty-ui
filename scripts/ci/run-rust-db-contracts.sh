@@ -74,8 +74,8 @@ mapfile -t canvas_issuance_contracts < <(
     \( -name 'canvas_*_postgres_contract-*' -o -name 'proof_nonce_postgres_contract-*' \) \
     | sort
 )
-if (( ${#canvas_issuance_contracts[@]} != 10 )); then
-  printf 'Expected ten issuance PostgreSQL contract executables (nine Canvas plus proof nonce), found %s.\n' "${#canvas_issuance_contracts[@]}" >&2
+if (( ${#canvas_issuance_contracts[@]} != 11 )); then
+  printf 'Expected eleven issuance PostgreSQL contract executables (ten Canvas plus proof nonce), found %s.\n' "${#canvas_issuance_contracts[@]}" >&2
   exit 1
 fi
 for contract in "${canvas_issuance_contracts[@]}"; do

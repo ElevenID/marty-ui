@@ -299,6 +299,19 @@ def test_all_production_native_configuration_inputs_have_a_classification():
         "INTEGRATION_SECRET_MASTER_KEY_ENV",
         "MARTY_ISSUANCE__",
     }
+    assert constants("OPTIONAL_SETTINGS") >= {
+        "CANVAS_MIRROR_WORKER_ENABLED",
+        "CANVAS_MIRROR_WORKER_ORGANIZATION_ID",
+        "CANVAS_MIRROR_PUBLISH_INTERVAL_SECONDS",
+        "CANVAS_MIRROR_STATUS_SYNC_INTERVAL_SECONDS",
+        "CANVAS_MIRROR_WORKER_BATCH_LIMIT",
+        "CANVAS_MIRROR_WORKER_RETRY_FAILED",
+        "CANVAS_MIRROR_WORKER_RUN_ON_STARTUP",
+        "CANVAS_MIRROR_FAILURE_WARNING_ATTEMPTS",
+        "CANVAS_MIRROR_FAILURE_CRITICAL_ATTEMPTS",
+        "CANVAS_MIRROR_ALERT_WEBHOOK_URL",
+        "CANVAS_MIRROR_ALERT_WEBHOOK_TIMEOUT_SECONDS",
+    }
 
 
 def test_existing_three_way_management_identity_and_legacy_owner_are_preserved():

@@ -142,7 +142,16 @@ def test_token_capacity_is_paired_without_rejecting_legacy_zero(rate):
 
 
 @pytest.mark.parametrize(
-    "fault", [None, "rate", "authorization", "other-field", "rewritten-before"]
+    "fault",
+    [
+        None,
+        "rate",
+        "authorization",
+        "mirror-setting",
+        "missing-mirror",
+        "other-field",
+        "rewritten-before",
+    ],
 )
 def test_beta_shared_setting_guard_accepts_only_source_derived_deltas(fault):
     import runpy
@@ -152,18 +161,12 @@ def test_beta_shared_setting_guard_accepts_only_source_derived_deltas(fault):
     )
     previous = model()
     previous["services"]["issuance"]["environment"]["TOKEN_RATE_LIMIT"] = "1200"
-    for setting in (
-        "ALLOWED_REDIRECT_URIS",
-        "ISSUANCE_AUTH_SESSION_TTL_MINUTES",
-        "TOKEN_RATE_LIMIT",
-    ):
-        previous["services"]["issuance-native"]["environment"].pop(setting)
+    for setting in gate["MIRROR_WORKER_SETTINGS"]:
+        previous["services"]["issuance"]["environment"][setting] = "synthetic"
+    for setting in gate["SHARED_SETTING_REPAIRS"]:
+        previous["services"]["issuance-native"]["environment"].pop(setting, None)
     actual = deepcopy(previous)
-    for setting in (
-        "ALLOWED_REDIRECT_URIS",
-        "ISSUANCE_AUTH_SESSION_TTL_MINUTES",
-        "TOKEN_RATE_LIMIT",
-    ):
+    for setting in gate["SHARED_SETTING_REPAIRS"]:
         actual["services"]["issuance-native"]["environment"][setting] = previous[
             "services"
         ]["issuance"]["environment"][setting]
@@ -174,6 +177,14 @@ def test_beta_shared_setting_guard_accepts_only_source_derived_deltas(fault):
         actual["services"]["issuance-native"]["environment"][
             "ISSUANCE_AUTH_SESSION_TTL_MINUTES"
         ] = "different"
+    elif fault == "mirror-setting":
+        actual["services"]["issuance-native"]["environment"][
+            "CANVAS_MIRROR_WORKER_BATCH_LIMIT"
+        ] = "different"
+    elif fault == "missing-mirror":
+        actual["services"]["issuance-native"]["environment"].pop(
+            "CANVAS_MIRROR_WORKER_BATCH_LIMIT"
+        )
     elif fault == "other-field":
         actual["services"]["gateway"]["environment"]["ISSUANCE_API_KEY"] = "changed"
     elif fault == "rewritten-before":

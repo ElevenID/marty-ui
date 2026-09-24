@@ -11,6 +11,8 @@ use serde_json::{json, Map, Value};
 
 use crate::canvas_credentials_status::CanvasCredentialsStatusConfig;
 use crate::canvas_credentials_validation::CanvasCredentialsValidationConfig;
+use crate::canvas_mirror_automation::CanvasMirrorAutomationConfig;
+use crate::canvas_mirror_domain::CanvasMirrorAlertThresholds;
 use crate::canvas_network_timeout::CanvasNetworkTimeout;
 
 #[derive(Clone, Eq, PartialEq)]
@@ -72,6 +74,10 @@ pub struct IssuanceServiceConfig {
     pub canvas_credentials_publish_timeout: CanvasNetworkTimeout,
     pub canvas_credentials_publication:
         crate::canvas_credentials_publication::CanvasCredentialsPublicationConfig,
+    pub canvas_mirror_automation: CanvasMirrorAutomationConfig,
+    pub canvas_mirror_alert_thresholds: CanvasMirrorAlertThresholds,
+    pub canvas_mirror_alert_webhook_url: Option<String>,
+    pub canvas_mirror_alert_webhook_timeout: Duration,
     pub canvas_allow_private_base_urls: bool,
     pub canvas_allow_http_localhost_base_urls: bool,
     pub canvas_local_admin_token: Option<String>,
@@ -653,6 +659,30 @@ impl IssuanceServiceConfig {
         let canvas_credentials_publish_timeout =
             CanvasNetworkTimeout::from_seconds(publish_timeout);
         let canvas_credentials_publication = crate::canvas_credentials_publication::CanvasCredentialsPublicationConfig::from_environment(canvas_credentials_status.clone(), &values);
+        let canvas_mirror_automation = CanvasMirrorAutomationConfig::from_values(&values);
+        let canvas_mirror_alert_thresholds = CanvasMirrorAlertThresholds {
+            warning_attempts: positive_i64_or_default(
+                &values,
+                "CANVAS_MIRROR_FAILURE_WARNING_ATTEMPTS",
+                3,
+            ),
+            critical_attempts: positive_i64_or_default(
+                &values,
+                "CANVAS_MIRROR_FAILURE_CRITICAL_ATTEMPTS",
+                5,
+            ),
+        }
+        .normalized();
+        let canvas_mirror_alert_webhook_url =
+            optional_environment_value(&values, "CANVAS_MIRROR_ALERT_WEBHOOK_URL");
+        let canvas_mirror_alert_webhook_timeout = Duration::from_secs_f64(
+            values
+                .get("CANVAS_MIRROR_ALERT_WEBHOOK_TIMEOUT_SECONDS")
+                .and_then(|value| value.parse::<f64>().ok())
+                .filter(|value| value.is_finite())
+                .unwrap_or(5.0)
+                .clamp(1.0, 20.0),
+        );
         let canvas_allow_private_base_urls =
             environment_flag(&values, "CANVAS_ALLOW_PRIVATE_BASE_URLS");
         let canvas_allow_http_localhost_base_urls =
@@ -732,6 +762,10 @@ impl IssuanceServiceConfig {
             canvas_credentials_validation_timeout,
             canvas_credentials_publish_timeout,
             canvas_credentials_publication,
+            canvas_mirror_automation,
+            canvas_mirror_alert_thresholds,
+            canvas_mirror_alert_webhook_url,
+            canvas_mirror_alert_webhook_timeout,
             canvas_allow_private_base_urls,
             canvas_allow_http_localhost_base_urls,
             canvas_local_admin_token,
@@ -1115,6 +1149,21 @@ fn optional_environment_value(values: &BTreeMap<String, String>, name: &str) -> 
     optional_trimmed(values.get(name).cloned())
 }
 
+fn positive_i64_or_default(values: &BTreeMap<String, String>, name: &str, default: i64) -> i64 {
+    let Some(raw) = values.get(name) else {
+        return default;
+    };
+    let Ok(parsed) = raw.parse::<PythonConfigInteger>() else {
+        tracing::warn!("Ignoring invalid integer {name}='{raw}'; using {default}");
+        return default;
+    };
+    if parsed < PythonConfigInteger::from(1_u64) {
+        tracing::warn!("Ignoring {name}='{raw}' below minimum 1; using {default}");
+        return default;
+    }
+    parsed.to_i64().unwrap_or(i64::MAX)
+}
+
 fn validate_canvas_oauth_completion_url(value: &str) -> Result<String, MmfError> {
     let parsed = url::Url::parse(value).map_err(|error| {
         MmfError::new(
@@ -1366,6 +1415,49 @@ mod tests {
         assert!(config.canvas_credentials_shared_secret.is_none());
         assert!(config.canvas_credentials_shared_secret_file.is_none());
         assert_eq!(config.canvas_credentials_signature_tolerance_seconds, 300);
+        assert_eq!(
+            config.canvas_mirror_automation,
+            crate::canvas_mirror_automation::CanvasMirrorAutomationConfig::default()
+        );
+        assert_eq!(config.canvas_mirror_alert_thresholds.warning_attempts, 3);
+        assert_eq!(config.canvas_mirror_alert_thresholds.critical_attempts, 5);
+        assert!(config.canvas_mirror_alert_webhook_url.is_none());
+        assert_eq!(
+            config.canvas_mirror_alert_webhook_timeout,
+            std::time::Duration::from_secs(5)
+        );
+    }
+
+    #[test]
+    fn canvas_mirror_runtime_configuration_is_typed_normalized_and_redacted() {
+        let config = IssuanceServiceConfig::from_values(values(&[
+            ("CANVAS_MIRROR_WORKER_ENABLED", "true"),
+            ("CANVAS_MIRROR_WORKER_ORGANIZATION_ID", " org-1 "),
+            ("CANVAS_MIRROR_FAILURE_WARNING_ATTEMPTS", "7"),
+            ("CANVAS_MIRROR_FAILURE_CRITICAL_ATTEMPTS", "4"),
+            (
+                "CANVAS_MIRROR_ALERT_WEBHOOK_URL",
+                " https://alerts.example/hook ",
+            ),
+            ("CANVAS_MIRROR_ALERT_WEBHOOK_TIMEOUT_SECONDS", "40"),
+        ]))
+        .expect("Canvas mirror settings");
+        assert!(config.canvas_mirror_automation.enabled);
+        assert_eq!(
+            config.canvas_mirror_automation.organization_id.as_deref(),
+            Some("org-1")
+        );
+        assert_eq!(config.canvas_mirror_alert_thresholds.warning_attempts, 7);
+        assert_eq!(config.canvas_mirror_alert_thresholds.critical_attempts, 7);
+        assert_eq!(
+            config.canvas_mirror_alert_webhook_url.as_deref(),
+            Some("https://alerts.example/hook")
+        );
+        assert_eq!(
+            config.canvas_mirror_alert_webhook_timeout,
+            std::time::Duration::from_secs(20)
+        );
+        assert!(!format!("{config:?}").contains("alerts.example"));
     }
 
     #[test]

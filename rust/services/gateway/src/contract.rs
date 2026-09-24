@@ -165,7 +165,7 @@ impl GatewayContract {
             tags: BTreeSet::from(["gateway-internal".into()]),
         })?;
         table.add(RouteConfig {
-            name: "internal:issuance-native:public-discovery".into(),
+            name: "internal:issuance-native:composition".into(),
             pattern: "/__gateway/issuance-native/{path:path}".into(),
             match_type: RouteMatchType::Template,
             upstream_service: issuance_native::NATIVE_SERVICE.into(),
@@ -975,6 +975,17 @@ mod tests {
             route_for(&proxy, HttpMethod::Post, &internal_management_path).is_err(),
             "the native helper must not broaden management access to unsupported methods"
         );
+        for method in [HttpMethod::Post, HttpMethod::Put] {
+            assert!(
+                route_for(
+                    &proxy,
+                    method,
+                    "/__gateway/issuance-native/internal/applications/app-1/evidence-summary"
+                )
+                .is_err(),
+                "native read-only composition must reject {method:?}"
+            );
+        }
         assert_eq!(
             route_for(&proxy, HttpMethod::Get, "/v1/passport/capabilities")
                 .expect("retained legacy issuance route")

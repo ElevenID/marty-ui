@@ -1691,7 +1691,7 @@ fn validate_scope_discovery_value(
     }
 }
 
-fn pydantic_bool(value: &Value) -> Option<bool> {
+pub(crate) fn pydantic_bool(value: &Value) -> Option<bool> {
     match value {
         Value::Bool(value) => Some(*value),
         Value::Number(value) if value.as_f64() == Some(1.0) => Some(true),
