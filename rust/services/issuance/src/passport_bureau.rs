@@ -530,15 +530,19 @@ mod tests {
     async fn batch_submission_preserves_python_envelope_and_input_order() {
         use std::sync::{Arc, Mutex};
 
-        use axum::{extract::State, routing::post, Json, Router};
+        use axum::{extract::State, http::HeaderMap, routing::post, Json, Router};
 
-        type Observed = Arc<Mutex<Vec<Value>>>;
+        type Observed = Arc<Mutex<Vec<(String, Value)>>>;
         async fn submit_batch(
             State(observed): State<Observed>,
+            headers: HeaderMap,
             Json(payload): Json<Value>,
         ) -> (StatusCode, Json<Value>) {
             let failed = payload["batch_id"] == "failure";
-            observed.lock().unwrap().push(payload);
+            observed.lock().unwrap().push((
+                headers["authorization"].to_str().unwrap().to_owned(),
+                payload,
+            ));
             if failed {
                 return (
                     StatusCode::SERVICE_UNAVAILABLE,
@@ -597,16 +601,35 @@ mod tests {
                 ),
             ]
         );
-        let payload = observed.lock().unwrap()[0].clone();
-        assert_eq!(payload["batch_id"], "batch-1");
-        assert_eq!(payload["organization_id"], "organization-1");
+        let (authorization, payload) = observed.lock().unwrap()[0].clone();
+        assert_eq!(authorization, "Bearer bureau-key");
         assert_eq!(
-            payload["jobs"][0]["data_groups"],
-            json!({"DG1":"ZzE=","DG2":"ZzI="})
+            payload,
+            json!({
+                "batch_id": "batch-1",
+                "organization_id": "organization-1",
+                "jobs": [
+                    {
+                        "job_id": "job-1",
+                        "application_id": "application-1",
+                        "country_code": "UTO",
+                        "data_groups": {"DG1": "ZzE=", "DG2": "ZzI="},
+                        "sod_der_base64": "c29k",
+                        "dsc_cert_pem": "certificate",
+                        "mrz": {"line_1": "line-1", "line_2": "line-2"}
+                    },
+                    {
+                        "job_id": "job-second",
+                        "application_id": "application-second",
+                        "country_code": "GBR",
+                        "data_groups": {"DG3": "Aw=="},
+                        "sod_der_base64": "c29k",
+                        "dsc_cert_pem": "certificate",
+                        "mrz": {"line_1": "line-1", "line_2": "line-2"}
+                    }
+                ]
+            })
         );
-        assert_eq!(payload["jobs"][1]["data_groups"], json!({"DG3":"Aw=="}));
-        assert!(payload["jobs"][0].get("document_type").is_none());
-        assert!(payload["jobs"][0].get("organization_id").is_none());
         let mut failed_batch = batch;
         failed_batch.id = "failure".into();
         let failed = client.submit_batch(&failed_batch).await.unwrap();
