@@ -533,7 +533,7 @@ async fn passport_jobs_survive_restart_without_cross_tenant_reads() {
         .connect(&database_url)
         .await
         .unwrap();
-    let restarted = PostgresPassportRepository::new(restarted_pool);
+    let restarted = PostgresPassportRepository::new(restarted_pool.clone());
     let recovered = restarted
         .get(&org_a, "application-a")
         .await
@@ -710,5 +710,48 @@ async fn passport_jobs_survive_restart_without_cross_tenant_reads() {
         exercise_packaged_self_signed_test_mode(&packaged_url, &key_a).await;
     } else {
         eprintln!("packaged passport test mode requires MARTY_PASSPORT_PACKAGED_TEST_URL");
+    }
+
+    // Upgrade a populated released Python table rather than only testing a
+    // fresh Rust table. The existing row and its original column type survive.
+    sqlx::raw_sql(include_str!(
+        "fixtures/physical_document_jobs_python_base.sql"
+    ))
+    .execute(&restarted_pool)
+    .await
+    .unwrap();
+    migration::migrate_passport(&restarted_pool).await.unwrap();
+    migration::migrate_passport(&restarted_pool).await.unwrap();
+    let released: (String, Option<String>, String) = sqlx::query_as(
+        "SELECT status, revocation_profile_id, document_type \
+         FROM issuance_service.physical_document_jobs WHERE id='released-python-job'",
+    )
+    .fetch_one(&restarted_pool)
+    .await
+    .unwrap();
+    assert_eq!(released, ("DRAFT".into(), None, "TD2".into()));
+    let id_type: String = sqlx::query_scalar(
+        "SELECT data_type FROM information_schema.columns \
+         WHERE table_schema='issuance_service' AND table_name='physical_document_jobs' \
+           AND column_name='id'",
+    )
+    .fetch_one(&restarted_pool)
+    .await
+    .unwrap();
+    assert_eq!(id_type, "character varying");
+    let indexes: Vec<String> = sqlx::query_scalar(
+        "SELECT indexname FROM pg_indexes \
+         WHERE schemaname='issuance_service' AND tablename='physical_document_jobs'",
+    )
+    .fetch_all(&restarted_pool)
+    .await
+    .unwrap();
+    for index in [
+        "ix_physical_document_jobs_organization_id",
+        "ix_physical_document_jobs_flow_execution_id",
+        "ix_physical_document_jobs_status",
+        "ix_physical_document_jobs_bureau_job_id",
+    ] {
+        assert!(indexes.iter().any(|existing| existing == index));
     }
 }
