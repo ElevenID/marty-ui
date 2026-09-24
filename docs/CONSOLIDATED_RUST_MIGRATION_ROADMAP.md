@@ -3,15 +3,13 @@
 **Status:** Waves one through three, the 31-route Rust Canvas cutover, the
 canonical Rust verifier implementation, and the native issuance consumer,
 Application Template, internal-Application, resource-owner, public trust,
-OID4VCI public/management, and Canvas mirror slices are merged through PR
-#842 and PR #843. Universal native issuance ownership PR #844 is in the
-protected merge queue at reviewed head `896fac4510fdec423d1419b2b3e5d94060d5a05b`;
-its candidate reports **120 native / 11 remaining / 131 total** issuance HTTP
-operations. Stacked recorder-hardening PR #845 is at `19a982e011aa1adb5a5cb401e3ac6d4ad7393780`;
-retention draft PR #849 is at `dbd29f7e8378d5e885587bd1b74860c2d3e75e3c`
-and reports **122 native / 9 remaining**; passport draft PR #852 adds nine
-default-off Rust counterparts. These stacked drafts are not landed cutovers or
-permission to remove their Python owners.
+OID4VCI public/management, Canvas mirror, and universal native issuance
+ownership slices are merged through PR #844. That protected-main checkpoint is
+**120 native / 11 remaining / 131 total** issuance HTTP operations. Recorder
+review-provenance PR #845 is now based on protected `main` with hosted checks
+active; retention draft PR #849 reports **122 native / 9 remaining**, and
+passport draft PR #852 adds nine default-off Rust counterparts. These remaining
+stacked PRs are not landed cutovers or permission to remove their Python owners.
 
 The last published beta baseline remains aggregate `marty-ui@v1.1.217`, source
 `4596afaca3724e60a8dadbd4e227b6e765cb495c`; no newer deployment is claimed
@@ -77,13 +75,16 @@ deletion, KMS correction, or production change.
 
 Resource-owner PR #836, public trust PR #837, authorization contract PR #838,
 OID4VCI public-protocol PR #841, Canvas mirror PR #842, and OID4VCI management
-PR #843 are merged. PR #844's reviewed 120/11 native-ownership candidate is in
-the protected merge queue; its merge-group CodeQL Rust run passed and its Rust
-Service Tests run is still live. The corrected dependent stack is #845 (recorder
-review provenance), draft #849 (retention, 122/9 candidate), and draft #852
-(nine default-off physical-passport counterparts). The local behavior, gateway,
-and isolated PostgreSQL contracts for their code heads passed as recorded in the
-PRs, but hosted final-base CI and live provider/consumer acceptance remain.
+PR #843 are merged. PR #844's reviewed 120/11 native-ownership tree landed on
+protected `main` as `4db6a6614e48f326546d5f61a5fa3a8764c46f3c` after
+merge-group CI `36062597618` and CodeQL Rust both passed; its squash tree
+matches reviewed head `896fac4510fdec423d1419b2b3e5d94060d5a05b` exactly.
+The corrected dependent stack is PR #845 (recorder review provenance, now
+main-based with hosted checks active), draft #849 (retention, 122/9 candidate),
+and draft #852 (nine default-off physical-passport counterparts). The local
+behavior, gateway, and isolated PostgreSQL contracts for their code heads
+passed as recorded in their PRs, but hosted final-base CI and live
+provider/consumer acceptance remain.
 These coordinates do not authorize deletion of reachable Python or establish a
 new beta or production deployment.
 
