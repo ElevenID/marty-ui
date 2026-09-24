@@ -330,9 +330,22 @@ def run(compose_command=None):
         )
         if authcrypt and conformance:
             assert_bindings(actual, compose_command)
-    legacy = render(BASE, LEGACY_AUTHCRYPT, ISOLATION)
-    assert "issuance-native" not in legacy["services"]
-    assert_native_policy_pairing(legacy)
+    base_legacy_policy = render(BASE, LEGACY_AUTHCRYPT, ISOLATION)
+    assert "issuance-native" in base_legacy_policy["services"]
+    try:
+        assert_native_policy_pairing(base_legacy_policy)
+    except DidcommConfigurationError:
+        pass
+    else:
+        raise AssertionError(
+            "Base legacy authcrypt policy was accepted without native pairing"
+        )
+    base_paired = render(BASE, LEGACY_AUTHCRYPT, AUTHCRYPT, ISOLATION)
+    assert_model(
+        base_paired,
+        expected_model(base_legacy_policy, authcrypt=True, conformance=False),
+    )
+    assert_native_policy_pairing(base_paired)
     unpaired = render(BASE, BETA, LEGACY_AUTHCRYPT)
     try:
         assert_native_policy_pairing(unpaired)
