@@ -6071,6 +6071,78 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn native_passport_gateway_forwards_all_eight_public_routes_with_tenant_key() {
+        let recorder = Arc::new(ActorRecordingUpstream::default());
+        let router = gateway_router(runtime_state_with_upstream_and_passport(
+            Arc::new(NoOwner),
+            recorder.clone(),
+            true,
+        ));
+        for (index, (method, path)) in [
+            ("GET", "/v1/passport/capabilities"),
+            ("POST", "/v1/passport/applications"),
+            (
+                "POST",
+                "/v1/passport/applications/job-1/generate-data-groups",
+            ),
+            ("POST", "/v1/passport/applications/job-1/generate-sod"),
+            (
+                "POST",
+                "/v1/passport/applications/job-1/submit-personalization",
+            ),
+            ("GET", "/v1/passport/applications/job-1/production-status"),
+            ("POST", "/v1/passport/applications/job-1/quality-verify"),
+            ("POST", "/v1/passport/applications/job-1/activate"),
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            let response = router
+                .clone()
+                .oneshot(
+                    Request::builder()
+                        .method(method)
+                        .uri(path)
+                        .header("content-type", "application/json")
+                        .header("x-api-key", "passport-gateway-key-org-1")
+                        .body(if method == "POST" {
+                            Body::from(r#"{"organization_id":"org-1"}"#)
+                        } else {
+                            Body::empty()
+                        })
+                        .unwrap(),
+                )
+                .await
+                .unwrap();
+            assert_eq!(response.status(), StatusCode::OK, "{method} {path}");
+            let captured = recorder.0.lock().unwrap();
+            assert_eq!(captured.len(), index + 1, "{method} {path}");
+            let (service, upstream) = captured.last().unwrap();
+            assert_eq!(service, issuance_native::NATIVE_SERVICE, "{method} {path}");
+            assert_eq!(
+                upstream.method,
+                http_method(method).unwrap(),
+                "{method} {path}"
+            );
+            assert_eq!(upstream.path, path, "{method} {path}");
+            assert_eq!(
+                upstream.headers.get("x-api-key").map(String::as_str),
+                Some("native-passport-key-for-org-1-00000001"),
+                "{method} {path}"
+            );
+            assert_eq!(
+                upstream
+                    .headers
+                    .get("x-organization-id")
+                    .map(String::as_str),
+                Some("org-1"),
+                "{method} {path}"
+            );
+        }
+        assert_eq!(recorder.0.lock().unwrap().len(), 8);
+    }
+
+    #[tokio::test]
     async fn native_passport_gateway_binds_upstream_keys_to_two_authenticated_tenants() {
         let recorder = Arc::new(ActorRecordingUpstream::default());
         let router = gateway_router(runtime_state_with_upstream_and_passport(
