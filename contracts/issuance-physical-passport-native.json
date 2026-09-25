@@ -112,7 +112,7 @@
     "native_route_count": 0,
     "declared_gateway_route_count": 8,
     "signed_webhook_path": "/v1/passport/webhooks/personalization",
-    "required_before_switch": "derive the trusted organization from gateway authentication, inject its matching passport tenant key, reject forged client organization/key context, and prove all eight declared gateway routes while preserving the separately signed webhook ingress against the native owner",
+    "required_before_switch": "the default-off tenant-keyed gateway selector and eight declared public routes are implemented; qualify the packaged image, live Flow, remote signer and bureau (including batch), signed webhook ingress, and exact route/error parity before selecting the native owner",
     "shared_issuance_api_key": "must not be used as a passport tenant credential"
   },
   "webhook_missing_signature_observation": {
