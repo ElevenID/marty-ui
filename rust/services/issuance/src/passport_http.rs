@@ -9,7 +9,6 @@ use axum::{
     routing::{get, post},
     Json, Router,
 };
-use base64::{engine::general_purpose::STANDARD, Engine as _};
 use chrono::Utc;
 use marty_passport_auth::{
     PassportTenantAuthError, PassportTenantKeyring, PassportTenantPrincipal,
@@ -27,8 +26,8 @@ use crate::{
         ProductionStatus,
     },
     passport_contract::{
-        json_field_order, PassportApplicationRequest, PassportRequestError, PassportSafeResponse,
-        QualityResultRequest,
+        decode_python_validated_base64, json_field_order, PassportApplicationRequest,
+        PassportRequestError, PassportSafeResponse, QualityResultRequest,
     },
     passport_repository::{
         PassportJob, PassportJobInsert, PassportJobPatch, PassportJobStatus,
@@ -554,8 +553,7 @@ async fn generate_sod(
     let principal = service.authenticate(&headers)?;
     let job = service.job(&principal, &application_id).await?;
     let (_, signed) = service.sign(&job).await?;
-    let sod = STANDARD
-        .decode(&signed.sod_der_base64)
+    let sod = decode_python_validated_base64(&signed.sod_der_base64)
         .map_err(|_| PassportHttpError::Signer(SignerError::IncompleteMaterial))?;
     let hash = hex::encode(Sha256::digest(sod));
     let mut patch = PassportJobPatch::new(PassportJobStatus::SodSigned);

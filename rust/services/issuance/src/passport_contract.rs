@@ -6,7 +6,11 @@ use std::{
     fmt,
 };
 
-use base64::{engine::general_purpose::STANDARD, Engine as _};
+use base64::{
+    alphabet,
+    engine::general_purpose::{GeneralPurpose, GeneralPurposeConfig},
+    Engine as _,
+};
 use chrono::{DateTime, Utc};
 use num_bigint::BigUint;
 use serde::{
@@ -19,6 +23,61 @@ use crate::{
     passport_artifact::PassportSensitiveArtifact, passport_bureau::DocumentType,
     passport_repository::PassportJob,
 };
+
+// Python's b64decode(validate=True) checks alphabet and padding but accepts
+// non-canonical trailing bits. Use one decoder for request validation, signing,
+// and SOD hashing so a valid Python artifact is never rejected mid-lifecycle.
+const PYTHON_VALIDATED_BASE64: GeneralPurpose = GeneralPurpose::new(
+    &alphabet::STANDARD,
+    GeneralPurposeConfig::new().with_decode_allow_trailing_bits(true),
+);
+
+pub(crate) fn decode_python_validated_base64(
+    content: &str,
+) -> Result<Vec<u8>, base64::DecodeError> {
+    PYTHON_VALIDATED_BASE64.decode(content)
+}
+
+fn python_base64_error(content: &str) -> String {
+    if !content.is_ascii() {
+        return "string argument should contain only ASCII characters".to_owned();
+    }
+    let bytes = content.as_bytes();
+    let padding_at = bytes
+        .iter()
+        .position(|byte| *byte == b'=')
+        .unwrap_or(bytes.len());
+    let data = &bytes[..padding_at];
+    if padding_at == 0 {
+        return "Leading padding not allowed".to_owned();
+    }
+    if data
+        .iter()
+        .any(|byte| !byte.is_ascii_alphanumeric() && *byte != b'+' && *byte != b'/')
+    {
+        return "Only base64 data is allowed".to_owned();
+    }
+    if data.len() % 4 == 1 {
+        return format!(
+            "Invalid base64-encoded string: number of data characters ({}) cannot be 1 more than a multiple of 4",
+            data.len()
+        );
+    }
+    if bytes[padding_at..].iter().any(|byte| *byte != b'=') {
+        return "Excess data after padding".to_owned();
+    }
+    let actual_padding = bytes.len() - padding_at;
+    let required_padding = (4 - data.len() % 4) % 4;
+    if actual_padding > required_padding {
+        return if required_padding == 0 {
+            "Excess padding not allowed"
+        } else {
+            "Excess data after padding"
+        }
+        .to_owned();
+    }
+    "Incorrect padding".to_owned()
+}
 
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -117,10 +176,10 @@ impl PassportApplicationRequest {
                     if !valid_data_group_name(name) {
                         return Some(format!("Invalid data group name: {name}"));
                     }
-                    STANDARD
-                        .decode(content.as_str().expect("validated string dictionary"))
+                    let content = content.as_str().expect("validated string dictionary");
+                    decode_python_validated_base64(content)
                         .err()
-                        .map(|_| "Only base64 data is allowed".to_owned())
+                        .map(|_| python_base64_error(content))
                 })
             };
             if let Some(problem) = problem {
@@ -180,8 +239,7 @@ impl PassportApplicationRequest {
             if !valid_data_group_name(name) {
                 return Err(PassportRequestError::InvalidDataGroupName);
             }
-            STANDARD
-                .decode(content)
+            decode_python_validated_base64(content)
                 .map_err(|_| PassportRequestError::InvalidDataGroupContent)?;
         }
         Ok(())
@@ -559,6 +617,24 @@ mod tests {
             numbered.get(&BigUint::from(1u8)).map(String::as_str),
             Some("YQ==")
         );
+    }
+
+    #[test]
+    fn python_accepted_noncanonical_base64_remains_valid_through_rust_validation() {
+        let frozen: Value = serde_json::from_str(include_str!(
+            "../../../../contracts/issuance-physical-passport-native.json"
+        ))
+        .unwrap();
+        let observed = &frozen["accepted_noncanonical_base64_observation"];
+        let content = observed["data_group_value"].as_str().unwrap();
+        assert_eq!(
+            hex::encode(decode_python_validated_base64(content).unwrap()),
+            observed["decoded_hex"].as_str().unwrap()
+        );
+        let mut value = application();
+        value["data_groups"]["DG1"] = json!(content);
+        let request = PassportApplicationRequest::from_python_value(&value, None).unwrap();
+        request.validate().unwrap();
     }
 
     #[test]

@@ -15,6 +15,9 @@ use serde_json::{json, Value};
 
 const SIGNER_PATH: &str = "v1/icao/emrtd/sign";
 
+#[cfg(feature = "passport-self-signed-test")]
+use crate::passport_contract::decode_python_validated_base64;
+
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub struct SignedMaterial {
     pub sod_der_base64: String,
@@ -99,8 +102,7 @@ fn self_signed_test_sign(
         .iter()
         .map(|(number, content)| {
             let number = number.to_u8().ok_or(SignerError::TestSigningFailed)?;
-            let content = STANDARD
-                .decode(content)
+            let content = decode_python_validated_base64(content)
                 .map_err(|_| SignerError::TestSigningFailed)?;
             Ok((number, content))
         })
@@ -228,7 +230,11 @@ mod tests {
             .sign("UTO", "synthetic-test-issuer", &groups)
             .await
             .unwrap();
-        assert!(!STANDARD.decode(signed.sod_der_base64).unwrap().is_empty());
+        assert!(
+            !crate::passport_contract::decode_python_validated_base64(&signed.sod_der_base64)
+                .unwrap()
+                .is_empty()
+        );
         assert!(signed.dsc_cert_pem.contains("BEGIN CERTIFICATE"));
         assert!(signed
             .csca_cert_pem
