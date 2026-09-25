@@ -6286,9 +6286,10 @@ acceptance of non-canonical trailing bits through validation, signing and SOD
 hashing, with padding-error vectors and explicit accepted-input regression.
 Nested MRZ and data-group error order follows the submitted JSON field order,
 including a frozen first-invalid-group case that differs from lexical order.
-Python-observed UTC timestamps in safe job responses and quality-result audit
-records use `+00:00` and microsecond precision (omitting a zero fraction);
-the native projection now shares that formatter.
+Direct Python HTTP replay distinguishes safe job datetime fields (`Z`) from
+the stored quality-result audit string (`+00:00`); both use microsecond precision
+and omit a zero fraction. Native job timestamps keep Chrono serialization,
+while the quality audit string uses a shared Python-compatible formatter.
 Strict Issuance Clippy passes. This
 closes the observed default-Axum-rejection gap, not the whole route/error
 parity gate: broader live and adverse-provider acceptance still precede

@@ -561,8 +561,8 @@ fn python_bool(value: &Value) -> Option<bool> {
     }
 }
 
-/// Match Python datetime.isoformat() and FastAPI's datetime encoder: UTC uses
-/// +00:00 and microsecond precision, omitting a zero fractional field.
+/// Match Python datetime.isoformat() for the stored quality-result audit
+/// string. FastAPI encodes job datetime fields separately with a Z suffix.
 pub(crate) fn python_datetime(value: DateTime<Utc>) -> String {
     value.to_rfc3339_opts(
         if value.timestamp_subsec_micros() == 0 {
@@ -593,10 +593,10 @@ pub struct PassportSafeResponse<'a> {
     pub quality_result: Option<&'a Value>,
     pub error_code: Option<&'a str>,
     pub error_message: Option<&'a str>,
-    pub submitted_at: Option<String>,
-    pub completed_at: Option<String>,
-    pub created_at: String,
-    pub updated_at: String,
+    pub submitted_at: Option<DateTime<Utc>>,
+    pub completed_at: Option<DateTime<Utc>>,
+    pub created_at: DateTime<Utc>,
+    pub updated_at: DateTime<Utc>,
 }
 
 impl<'a> From<&'a PassportJob> for PassportSafeResponse<'a> {
@@ -617,10 +617,10 @@ impl<'a> From<&'a PassportJob> for PassportSafeResponse<'a> {
             quality_result: job.quality_result.as_ref(),
             error_code: job.error_code.as_deref(),
             error_message: job.error_message.as_deref(),
-            submitted_at: job.submitted_at.map(python_datetime),
-            completed_at: job.completed_at.map(python_datetime),
-            created_at: python_datetime(job.created_at),
-            updated_at: python_datetime(job.updated_at),
+            submitted_at: job.submitted_at,
+            completed_at: job.completed_at,
+            created_at: job.created_at,
+            updated_at: job.updated_at,
         }
     }
 }
@@ -934,11 +934,11 @@ mod tests {
         assert_eq!(serialized.as_object().unwrap().len(), expected.len());
         assert_eq!(
             serialized["created_at"],
-            frozen["timestamp_wire_observation"]["microsecond_utc"]
+            frozen["timestamp_wire_observation"]["job_microsecond_utc"]
         );
         assert_eq!(
             serialized["submitted_at"],
-            frozen["timestamp_wire_observation"]["microsecond_utc"]
+            frozen["timestamp_wire_observation"]["job_microsecond_utc"]
         );
         for field in expected {
             let field = field.as_str().unwrap();
@@ -965,7 +965,14 @@ mod tests {
             .with_timezone(&Utc);
         assert_eq!(
             python_datetime(whole),
-            frozen["timestamp_wire_observation"]["whole_second_utc"]
+            frozen["timestamp_wire_observation"]["quality_whole_second_utc"]
+        );
+        let fractional = DateTime::parse_from_rfc3339("2026-09-25T06:01:02.123456+00:00")
+            .unwrap()
+            .with_timezone(&Utc);
+        assert_eq!(
+            python_datetime(fractional),
+            frozen["timestamp_wire_observation"]["quality_microsecond_utc"]
         );
     }
 }
