@@ -1,37 +1,25 @@
 # Consolidated Rust Migration Roadmap
 
-**Status:** Waves one through three, the 31-route Rust Canvas cutover, the
-canonical Rust verifier implementation, and the native issuance consumer,
-Application Template, internal-Application, resource-owner, public trust,
-OID4VCI public/management, Canvas mirror, and universal native issuance
-ownership slices are merged through PR #844. That historical protected-main
-checkpoint was **120 native / 11 remaining / 131 total** issuance HTTP
-operations. Recorder review-provenance PR #845 and retention PR #849 have since
-landed; protected main now reports **122 native / 9 remaining / 131 total**.
-Credentials PR #299 is the separate, provenance-qualified deletion of the two
-superseded Python retention routes; it remains in hosted CI. Passport draft
-PR #852 is main-based and adds nine default-off Rust counterparts, not yet a
-selected cutover or permission to remove the nine Python passport routes.
-
-The last published beta baseline remains aggregate `marty-ui@v1.1.217`, source
-`4596afaca3724e60a8dadbd4e227b6e765cb495c`; no newer deployment is claimed
-here. PR #814 landed on protected `main` as merge-queue candidate
-`ec7780f390b4ae123cf6d0bdf0f5d139000ab544` after full hosted run
-`35511058319` passed. PR #826's reviewed head
-`1d94bbbb3c5ef4698eee92240673ae602c289bf1` landed as squash commit
-`0b08704e55f6e2a56a0f6eff625e1c6b9a8c741d`; both commits have exact tree
-`a0d0989a601742171e0da873e2d6bdd1545270e2`. The 14-route
-internal-Application cutover landed through PR #827 as protected-main commit
-`22d448000b1c539265097aa6bc8fafe46e998eed`. Its corresponding Python
-retirements landed independently through Credentials PRs #279 and #278 as
-`34d30ed3d2800186b57f79f8cc012e1ea27c2211` and
-`1a9a25b4290269722e5f27928958d3460d3367e1`. Credentials PR #281 then landed
-the Rust DIDComm consumer migration as `75e2394350185a1b7c0824b25b4016ca40b0174c`;
-the exact protected-main release source and immutable artifact are recorded
-below. Reachable unselected Python features, the independent KMS-hardening
-work, the dirty crypto/SD-JWT work, and the deferred DIDComm KMS redesign remain
-preserved. The aggregate beta deployment, all-demo/device acceptance, and
-governed soak remain incomplete. No production deployment occurred in this lane.
+**Status (2026-09-25):** Waves one through three and the subsequent Canvas,
+verifier, DIDComm-consumer, and issuance ownership slices have landed. The
+PR #849's protected-main merge at `91ea7e52d6a3822981bb42f002da8c68532ebf2e`
+contains its Rust organization-retention routes: **122 native / 9 retained
+Python / 131 total** issuance HTTP operations. Credentials PR #299 removed the
+two superseded Python retention routes at `48298b943032ea86043d2d4e14c626211bb92d1b`;
+PR #300's CI correction landed at
+`9026cbbbfd647cae19af040d95b541e2e67cdb3e`, and post-merge Credentials
+main CI passed. The final nine retained Python routes are the physical-passport
+surface. Rust source PR #852 implements their default-off native counterparts
+and passed exact-head CI at `d39f878df5e4f1d954742efd21bf314b020e6a29`;
+it has not switched consumers or authorized Python deletion. Stacked PR #853
+adds a default-off beta secret/profile overlay, not a deployment. Real beta
+signer and bureau endpoints, five secret-file sources, provider callback and
+durable-job acceptance, and one aggregate beta-only soak remain outstanding.
+The last published beta baseline documented here is `marty-ui@v1.1.217`, source
+`4596afaca3724e60a8dadbd4e227b6e765cb495c`; no newer deployment is claimed.
+Production is unchanged. Independent KMS hardening and the deferred DIDComm
+KMS redesign remain outside this cutover; their worktrees are not migration
+cleanup targets.
 
 Prior `v1.1.214` evidence remains retained at source
 `24f5d5dc0bb47d3dadb118b4dbe45191c5cf71b1`, release run `33930593794`.
@@ -62,7 +50,7 @@ This is not a line-for-line translation project. Rust owns deterministic protoco
 
 The immediate deployment boundary is beta. Production and persistent self-host environments are not changed by this roadmap without a separate approval and promotion decision.
 
-## Current execution snapshot — 2026-09-25
+## Execution snapshots — through 2026-09-25
 
 The DIDComm consumer cutover gate is now bound to published Credentials
 `v0.1.76`, protected-main source
@@ -84,11 +72,11 @@ matches reviewed head `896fac4510fdec423d1419b2b3e5d94060d5a05b` exactly.
 PR #845 landed at `207c84afc00b2f3b2b3db6b433823a9c7d59ab38`. Retention
 PR #849 then landed through protected merge-group CI at
 `91ea7e52d6a3822981bb42f002da8c68532ebf2e` with a 122/9 source
-inventory. Credentials PR #299 is the separate two-route Python retention
-retirement, with its protected-source provenance lane passed and remaining
-hosted checks active. Draft #852 now targets main and contains only the nine
-default-off physical-passport counterparts; live provider/consumer acceptance
-and hosted cutover qualification remain.
+inventory. Credentials PR #299 separately retired the two Python retention
+routes; PR #300's toolchain correction and post-merge main CI passed. PR #852
+has passed exact-head CI for nine default-off physical-passport counterparts;
+protected merge, live provider/consumer acceptance, and cutover qualification
+remain.
 These coordinates do not authorize deletion of reachable Python or establish a
 new beta or production deployment.
 
@@ -6198,7 +6186,7 @@ and `DIDCOMM-KMS-001` remains deferred. Next gates are maintainer review, hosted
 CI, sequential stack landing, aggregate beta deployment/acceptance, and then
 Python retirement only where universal selection and parity evidence permit it.
 
-### Issuance retention checkpoint (merged #849)
+### Issuance retention and passport checkpoint (2026-09-25)
 
 The #849 source inventory is **122 native / 9 retained Python / 131 total HTTP
 routes**. The two organization-retention management routes now have a frozen
@@ -6251,8 +6239,8 @@ when native passport HTTP is enabled. A dedicated feature-enabled CI step uses
 a separate released-schema database and the packaged binary to create a job,
 sign an SOD, and confirm persistence across another migration. This passed
 locally, as did the default PostgreSQL contract, passport unit/HTTP tests,
-strict Clippy, and 220 workflow-regression tests; hosted exact-head CI remains
-the merge authority.
+strict Clippy, and 220 workflow-regression tests. Hosted exact-head CI passed;
+protected merge and live acceptance remain separate gates.
 
 The frozen request contract also records the released Python runtime's Unicode
 15 digit behavior for `DG` names. Native validation accepts the same decimal
@@ -6344,5 +6332,19 @@ the legacy URL now fails closed; an explicit native URL, secret-file mounts,
 live provider acceptance, and separate cutover authorization remain required.
 Both deployment profiles stay on the Python passport owner.
 The focused release-contract suite passed 111 tests and the locked Rust probe
-compiled locally; hosted exact-head CI remains the merge authority. This is a source
+compiled locally; hosted exact-head CI passed. This is a source
 qualification checkpoint, not a passport cutover or beta deployment.
+
+Exact-head repair `d39f878df5e4f1d954742efd21bf314b020e6a29` made the
+closed self-host executable contract distinguish a verified empty, default-off
+passport keyring file input from a mounted secret. Hosted run `36114977028`
+passed the previously failing concurrent Rust contract group and its complete
+CI gate. This qualifies source packaging, not a provider-backed beta cutover.
+
+Credentials PR #300's CI correction landed at
+`9026cbbbfd647cae19af040d95b541e2e67cdb3e`; post-merge main CI passed.
+Stacked PR #853 supplies a default-off beta-only secret/profile overlay but
+does not provision the five beta secret sources or real signer and bureau
+endpoints. Passport issue #851 tracks provider callback and tenant-isolation
+acceptance, Python retirement, and the aggregate beta-only soak. Production
+remains unchanged.
