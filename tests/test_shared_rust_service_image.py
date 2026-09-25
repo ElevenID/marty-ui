@@ -36,7 +36,7 @@ ALL_RUST_BINARIES = set(RUST_SERVICES.values()) | UNROUTED_RUST_BINARIES
 def test_shared_service_image_builds_all_rust_binaries_once() -> None:
     dockerfile = (ROOT / "services" / "Dockerfile").read_text(encoding="utf-8")
 
-    assert dockerfile.count("RUN cargo build --locked --release") == 1
+    assert dockerfile.count('&& cargo build --locked --release "$@"') == 1
     assert dockerfile.count(" --bin marty-") == len(ALL_RUST_BINARIES)
     assert dockerfile.count("COPY --from=rust-service-builder") == len(
         ALL_RUST_BINARIES
