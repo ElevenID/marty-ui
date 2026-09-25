@@ -3,6 +3,8 @@
 import json
 from pathlib import Path
 import runpy
+import shutil
+import subprocess
 from types import SimpleNamespace
 
 import pytest
@@ -169,3 +171,47 @@ def test_runner_validates_twice_before_mutation():
     assert source.rindex(marker) < source.index(
         'Invoke-Checked -FilePath docker -Arguments (@("stop")'
     )
+
+
+def test_actual_beta_compose_merge_preserves_default_off_and_selected_mounts():
+    if not shutil.which("docker"):
+        pytest.skip("Docker Compose is not installed")
+    base = [
+        str(ROOT / name)
+        for name in (
+            "docker-compose.base.yml",
+            "docker-compose.beta.yml",
+            "docker-compose.profile.dev.yml",
+        )
+    ]
+
+    def render(files):
+        command = ["docker", "compose"]
+        for file in files:
+            command.extend(["-f", file])
+        command.extend(["config", "--no-interpolate", "--format", "json"])
+        return json.loads(
+            subprocess.run(
+                command,
+                cwd=ROOT,
+                capture_output=True,
+                check=True,
+                timeout=30,
+            ).stdout
+        )
+
+    disabled = render(base)
+    enabled = render([*base, str(ROOT / PROFILE)])
+    for name, flag in (
+        ("gateway", "PASSPORT_NATIVE_GATEWAY_ENABLED"),
+        ("flow", "PASSPORT_NATIVE_FLOW_ENABLED"),
+        ("issuance-native", "PASSPORT_NATIVE_HTTP_ENABLED"),
+    ):
+        before = VALIDATOR["environment"](disabled["services"][name])
+        after = VALIDATOR["environment"](enabled["services"][name])
+        assert before.get(flag, "false") != "true"
+        assert after[flag] == "true"
+    for secret, owners in VALIDATOR["SECRET_MOUNTS"].items():
+        for owner in owners:
+            mounts = enabled["services"][owner]["secrets"]
+            assert {"source": secret, "target": "/run/secrets/" + secret} in mounts
