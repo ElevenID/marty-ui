@@ -21,6 +21,7 @@
       "prevent_self_review": false,
       "require_reviewers": true,
       "require_branch_policy": true,
+      "required_repository_secrets": ["DEMO_RECORDER_DISPATCH_TOKEN"],
       "required_secrets": [
         "TEST_APPLICANT_EMAIL",
         "TEST_APPLICANT_PASSWORD",

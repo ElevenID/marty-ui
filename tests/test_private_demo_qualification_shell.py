@@ -18,7 +18,10 @@ import yaml
 ROOT = Path(__file__).resolve().parents[1]
 
 
-@pytest.mark.parametrize("failure", ["", "download", "api", "validator", "token", "run_id"])
+@pytest.mark.parametrize(
+    "failure",
+    ["", "download", "run_api", "comment_api", "permission_api", "validator", "token", "run_id", "review_id"],
+)
 def test_private_intake_consumer_shell_is_ordered_and_fail_closed(tmp_path: Path, failure: str) -> None:
     workflow = yaml.safe_load((ROOT / ".github/workflows/e2e-tests.yml").read_text())
     steps = workflow["jobs"]["full-stack-credential-lifecycle"]["steps"]
@@ -46,24 +49,42 @@ gh() {
     mkdir -p "$9"
     printf '{"privateMetadata":"private-value"}\n' > "$9/release-qualification.json"
   elif [[ "$1" == api ]]; then
-    printf 'api\n' >> calls
-    [[ "$TEST_FAILURE" != api ]] || return 12
-    [[ "$#" == 2 && "$2" == "repos/ElevenID/marty-demo-recorder/actions/runs/$DEMO_QUALIFICATION_RUN_ID" ]]
-    printf '{"privateMetadata":"private-value"}\n'
+    if [[ "$2" == "repos/ElevenID/marty-demo-recorder/actions/runs/$DEMO_QUALIFICATION_RUN_ID" ]]; then
+      printf 'run_api\n' >> calls
+      [[ "$TEST_FAILURE" != run_api ]] || return 12
+      printf '{"privateMetadata":"private-value"}\n'
+    elif [[ "$2" == "repos/ElevenID/marty-demo-recorder/issues/comments/$DEMO_REVIEW_RECORD_ID" ]]; then
+      printf 'comment_api\n' >> calls
+      [[ "$TEST_FAILURE" != comment_api ]] || return 14
+      printf '{"user":{"login":"BurdettAdam"},"privateMetadata":"private-value"}\n'
+    elif [[ "$2" == 'repos/ElevenID/marty-demo-recorder/collaborators/BurdettAdam/permission' ]]; then
+      printf 'permission_api\n' >> calls
+      [[ "$TEST_FAILURE" != permission_api ]] || return 15
+      printf '{"permission":"admin","user":{"login":"BurdettAdam"},"privateMetadata":"private-value"}\n'
+    else
+      return 91
+    fi
   else
     return 90
   fi
 }
+jq() {
+  [[ "$#" == 3 && "$1" == -er && -f "$3" ]]
+  printf 'BurdettAdam\n'
+}
 cargo() {
   printf 'validate\n' >> calls
-  [[ "$#" == 19 ]]
+  [[ "$#" == 23 ]]
   [[ "$1 $2 $3 $4 $5 $6 $7 $8 $9 ${10}" == 'run --locked --quiet --manifest-path rust/Cargo.toml -p marty-release-evidence --bin validate-demo-qualification --' ]]
   shift 10
   [[ "$1" == "$RUNNER_TEMP"/*/run.json && -f "$1" ]]
   [[ "$2" == "$RUNNER_TEMP"/*/report/release-qualification.json && -f "$2" ]]
-  [[ "$3" == "$DEMO_QUALIFICATION_RUN_ID" && "$4" == "$DEMO_RECORDER_SHA" ]]
-  [[ "$5" == "$RELEASE_VERSION" && "$6" == "$MARTY_UI_RELEASE_SHA" && "$7" == "$BETA_SOURCE_ID" ]]
-  [[ "$8" == "$DEMO_DEPLOYMENT_MANIFEST_SHA256" && "$9" == "$STACK_MANIFEST_SHA256" ]]
+  [[ "$3" == "$RUNNER_TEMP"/*/review-comment.json && -f "$3" ]]
+  [[ "$4" == "$RUNNER_TEMP"/*/review-permission.json && -f "$4" ]]
+  [[ "$5" == "$DEMO_QUALIFICATION_RUN_ID" && "$6" == "$DEMO_RECORDER_SHA" ]]
+  [[ "$7" == "$DEMO_REVIEW_RECORD_ID" && "$8" == "$RELEASE_VERSION" && "$9" == "$BETA_ORIGIN" ]]
+  [[ "${10}" == "$MARTY_UI_RELEASE_SHA" && "${11}" == "$BETA_SOURCE_ID" ]]
+  [[ "${12}" == "$DEMO_DEPLOYMENT_MANIFEST_SHA256" && "${13}" == "$STACK_MANIFEST_SHA256" ]]
   [[ "$TEST_FAILURE" != validator ]] || return 13
   printf '{"qualified":true,"fixtureOnly":true}\n'
 }
@@ -75,7 +96,9 @@ cargo() {
         "RUNNER_TEMP": "private temp",
         "DEMO_QUALIFICATION_RUN_ID": "invalid" if failure == "run_id" else "123",
         "DEMO_RECORDER_SHA": "3" * 40,
+        "DEMO_REVIEW_RECORD_ID": "invalid" if failure == "review_id" else "101",
         "RELEASE_VERSION": "1.1.217",
+        "BETA_ORIGIN": "https://beta.elevenidllc.com",
         "MARTY_UI_RELEASE_SHA": "2" * 40,
         "BETA_SOURCE_ID": "1" * 40,
         "DEMO_DEPLOYMENT_MANIFEST_SHA256": "a" * 64,
@@ -89,9 +112,13 @@ cargo() {
     assert (result.returncode == 0) == (failure == ""), result.stderr
     assert (tmp_path / "browser-eligible").exists() == (failure == "")
     expected_calls = {
-        "": ["download", "api", "validate"], "download": ["download"],
-        "api": ["download", "api"], "validator": ["download", "api", "validate"],
-        "token": [], "run_id": [],
+        "": ["download", "run_api", "comment_api", "permission_api", "validate"],
+        "download": ["download"],
+        "run_api": ["download", "run_api"],
+        "comment_api": ["download", "run_api", "comment_api"],
+        "permission_api": ["download", "run_api", "comment_api", "permission_api"],
+        "validator": ["download", "run_api", "comment_api", "permission_api", "validate"],
+        "token": [], "run_id": [], "review_id": [],
     }[failure]
     calls = tmp_path / "calls"
     assert (calls.read_text().splitlines() if calls.exists() else []) == expected_calls

@@ -59,6 +59,17 @@ class GitHubApi:
             if isinstance(item, dict) and item.get("name")
         }
 
+    def repository_secrets(self) -> set[str]:
+        payload = self.get(f"repos/{self.repository}/actions/secrets?per_page=100")
+        secrets = payload.get("secrets")
+        if not isinstance(secrets, list):
+            raise PreflightError("Repository secret response is malformed")
+        return {
+            str(item.get("name"))
+            for item in secrets
+            if isinstance(item, dict) and item.get("name")
+        }
+
     def environment(self, name: str) -> dict[str, Any]:
         encoded = urllib.parse.quote(name, safe="")
         return self.get(f"repos/{self.repository}/environments/{encoded}")
@@ -91,6 +102,7 @@ def validate_environment(
     secrets: set[str],
     variables: set[str],
     *,
+    repository_secrets: set[str] | None = None,
     check_inputs: bool = True,
 ) -> list[str]:
     errors: list[str] = []
@@ -129,6 +141,15 @@ def validate_environment(
         errors.append(f"{name}: deployment branches must be restricted")
 
     if check_inputs:
+        missing_repository_secrets = _missing(
+            requirement.get("required_repository_secrets", []),
+            repository_secrets or set(),
+        )
+        if missing_repository_secrets:
+            errors.append(
+                f"{name}: missing repository secrets: "
+                + ", ".join(missing_repository_secrets)
+            )
         missing_secrets = _missing(requirement.get("required_secrets", []), secrets)
         if missing_secrets:
             errors.append(f"{name}: missing secrets: {', '.join(missing_secrets)}")
@@ -178,6 +199,11 @@ def validate_configuration(
             continue
         try:
             environment = api.environment(name)
+            repository_secrets = (
+                api.repository_secrets()
+                if check_inputs and requirement.get("required_repository_secrets")
+                else set()
+            )
             secrets = api.environment_names(name, "secrets") if check_inputs else set()
             variables = (
                 api.environment_names(name, "variables") if check_inputs else set()
@@ -192,6 +218,7 @@ def validate_configuration(
                 environment,
                 secrets,
                 variables,
+                repository_secrets=repository_secrets,
                 check_inputs=check_inputs,
             )
         )

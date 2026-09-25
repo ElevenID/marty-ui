@@ -1,0 +1,5 @@
+{
+  "permission": "admin",
+  "user": { "login": "BurdettAdam" },
+  "privateMetadata": "private-value"
+}

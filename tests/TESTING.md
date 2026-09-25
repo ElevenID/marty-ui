@@ -586,16 +586,26 @@ The deployed services and UI images independently expose their embedded release
 identity at `/.well-known/marty-release` and `/marty-ui-release.json`; both must
 match before any browser journey starts.
 
-Configure the protected `beta-lifecycle` environment with:
+Configure the protected `beta-lifecycle` environment and the repository with:
 
 ```text
 vars.BETA_ORIGIN
 vars.BETA_AUDIT_ORG_ID
+repo.secrets.DEMO_RECORDER_DISPATCH_TOKEN
 secrets.TEST_APPLICANT_EMAIL
 secrets.TEST_APPLICANT_PASSWORD
 secrets.TEST_VENDOR_EMAIL
 secrets.TEST_VENDOR_PASSWORD
 ```
+
+`DEMO_RECORDER_DISPATCH_TOKEN` must be a fine-grained token restricted to the
+private `ElevenID/marty-demo-recorder` repository with these repository
+permissions: **Actions: Read-only**, **Pull requests: Read-only**, and
+**Metadata: Read-only**. `Pull requests: Read-only` authorizes reading the
+server-side PR issue comment; GitHub also accepts `Issues: Read-only` for that
+single endpoint, but this environment standardizes on the pull-request grant.
+Metadata read is required for the collaborator-permission lookup. Do not grant
+write or administration permissions.
 
 Every release environment must have Burdettadam configured as a required
 reviewer, administrator bypass disabled, and a protected-branch or custom

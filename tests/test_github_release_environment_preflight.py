@@ -85,6 +85,9 @@ class FakeApi:
     def repository_variables(self) -> dict[str, str]:
         return {"MARTY_REF": "a" * 40}
 
+    def repository_secrets(self) -> set[str]:
+        return {"DEMO_RECORDER_DISPATCH_TOKEN"}
+
     def environment(self, name: str) -> dict:
         if name not in self.environments:
             raise PreflightError("GitHub API returned 404")
@@ -123,6 +126,48 @@ def test_configuration_can_validate_one_declared_environment() -> None:
     assert validate_configuration(FakeApi(), manifest, {"beta"}) == []
 
 
+def test_configuration_checks_repository_scoped_secret_without_weakening_environment_scope() -> None:
+    beta_requirement = requirement()
+    beta_requirement["required_repository_secrets"] = [
+        "DEMO_RECORDER_DISPATCH_TOKEN"
+    ]
+    manifest = {
+        "repository_variables": ["MARTY_REF"],
+        "environments": {"beta": beta_requirement},
+    }
+    assert validate_configuration(FakeApi(), manifest, {"beta"}) == []
+
+    class MissingRepositorySecret(FakeApi):
+        def repository_secrets(self) -> set[str]:
+            return {"SECRET_A"}
+
+    assert validate_configuration(MissingRepositorySecret(), manifest, {"beta"}) == [
+        "beta: missing repository secrets: DEMO_RECORDER_DISPATCH_TOKEN"
+    ]
+
+    class MissingEnvironmentSecret(FakeApi):
+        def environment_names(self, name: str, resource: str) -> set[str]:
+            return set() if resource == "secrets" else {"VARIABLE_A"}
+
+    assert validate_configuration(MissingEnvironmentSecret(), manifest, {"beta"}) == [
+        "beta: missing secrets: SECRET_A"
+    ]
+
+    class InaccessibleRepositorySecrets(FakeApi):
+        def repository_secrets(self) -> set[str]:
+            raise PreflightError("GitHub API returned 403")
+
+    assert validate_configuration(InaccessibleRepositorySecrets(), manifest, {"beta"}) == [
+        "beta: GitHub API returned 403"
+    ]
+
+    unrelated = {
+        "repository_variables": ["MARTY_REF"],
+        "environments": {"beta": requirement()},
+    }
+    assert validate_configuration(MissingRepositorySecret(), unrelated, {"beta"}) == []
+
+
 def test_configuration_rejects_an_undeclared_selected_environment() -> None:
     manifest = {
         "repository_variables": ["MARTY_REF"],
@@ -139,12 +184,20 @@ def test_protection_only_does_not_require_privileged_input_inventory() -> None:
         def repository_variables(self) -> dict[str, str]:
             raise AssertionError("repository variables must not be requested")
 
+        def repository_secrets(self) -> set[str]:
+            raise AssertionError("repository secrets must not be requested")
+
         def environment_names(self, name: str, resource: str) -> set[str]:
             raise AssertionError("environment inputs must not be requested")
 
     manifest = {
         "repository_variables": ["MARTY_REF"],
-        "environments": {"beta": requirement()},
+        "environments": {
+            "beta": {
+                **requirement(),
+                "required_repository_secrets": ["DEMO_RECORDER_DISPATCH_TOKEN"],
+            }
+        },
     }
 
     assert (

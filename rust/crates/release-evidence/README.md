@@ -66,6 +66,18 @@ deployment receipt hash and independently verified signed stack hash. It emits
 only allowlisted verified fields; raw private metadata stays in runner temporary
 storage, not public lifecycle artifacts.
 
+The lifecycle passes its expected beta origin explicitly. The validator accepts
+only `https://beta.elevenidllc.com` and requires the report to match it, declare
+`lifecycleQualified: true` in `official-private` mode, preserve the UI/source
+bindings, and carry complete well-shaped maintainer-review provenance. The
+reviewed recorder head is bound to the expected recorder SHA. Callers also pass
+the numeric review-record ID plus server-returned GitHub comment and collaborator
+permission JSON. The validator recomputes the exact UTF-8 body hash and the
+fixed-order compact server-record hash, requires the recorder repository and PR
+URL, structured complete review, authorized association and `admin`/`maintain`
+permission, and matching immutable timestamps. Only this sanitized provenance is
+retained; raw GitHub responses and arbitrary fields remain private.
+
 Private intake runs first; public lifecycle receives its successful run ID and
 the expected bindings. See the [operator sequence and evidence limits](../../../../docs/rust-migrations/private-demo-qualification-lifecycle.md).
 The private recorder intake and public consumer are wired, but actual hosted
