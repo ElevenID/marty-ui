@@ -6275,12 +6275,12 @@ corrections remain separately deferred.
 Maintainer error-parity review on 2026-09-25 found another explicit cutover
 gate: the released Python application-create route returns structured FastAPI
 422 details for missing fields, a non-object body, country-code pattern failure,
-missing DG2, and forbidden extras. Twenty-six Python-observed HTTP vectors now
+missing DG2, and forbidden extras. Twenty-seven Python-observed HTTP vectors now
 cover those cases plus malformed JSON, primitive and nested type failures,
-document-type literals, data-group validation, simultaneous errors, and
+document-type literals, destination length, data-group validation, simultaneous errors, and
 non-JSON/missing Content-Type. Both passport model handlers now share a
 FastAPI-compatible body decoder; the application route has an ordered
-validation projector. The 26 application and 13 quality vectors pass their
+validation projector. The 27 application and 13 quality vectors pass their
 Rust HTTP tests. A shared strict base64 decoder also preserves Python's
 acceptance of non-canonical trailing bits through validation, signing and SOD
 hashing, with padding-error vectors and explicit accepted-input regression.

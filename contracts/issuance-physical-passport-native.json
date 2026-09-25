@@ -158,6 +158,7 @@
     {"override": {"country_code": "us"}, "status": 422, "body": {"detail": [
       {"type": "string_pattern_mismatch", "loc": ["body", "country_code"], "msg": "String should match pattern '^[A-Z]{3}$'", "input": "us", "ctx": {"pattern": "^[A-Z]{3}$"}}
     ]}},
+    {"override": {"delivery_destination_profile_id": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"}, "status": 422, "body": {"detail": [{"type": "string_too_long", "loc": ["body", "delivery_destination_profile_id"], "msg": "String should have at most 128 characters", "input": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx", "ctx": {"max_length": 128}}]}},
     {"override": {"data_groups": {"DG1": "YQ=="}}, "status": 422, "body": {"detail": [
       {"type": "value_error", "loc": ["body", "data_groups"], "msg": "Value error, DG1 and DG2 are required", "input": {"DG1": "YQ=="}, "ctx": {"error": {}}}
     ]}},
