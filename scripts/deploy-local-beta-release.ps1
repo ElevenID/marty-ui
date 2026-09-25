@@ -9,6 +9,8 @@ param(
 
     [switch]$EnableDidcommAuthcrypt,
 
+    [switch]$EnablePassportNative,
+
     [string]$CanvasOrigin = "https://canvas-test.elevenidllc.com",
 
     [string]$PilotOrganizationId = "00000000-0000-0000-0000-000000000001",
@@ -36,6 +38,7 @@ $script:RepoRoot = (Resolve-Path (Join-Path $PSScriptRoot "..")).Path
 . (Join-Path $PSScriptRoot "beta-worker-launch-contract.ps1")
 . (Join-Path $PSScriptRoot "beta-application-image-plan.ps1")
 . (Join-Path $PSScriptRoot "beta-didcomm-configuration.ps1")
+. (Join-Path $PSScriptRoot "beta-passport-configuration.ps1")
 $script:WorkspaceRoot = (Resolve-Path (Join-Path $script:RepoRoot "..")).Path
 $script:ArtifactRoot = (Resolve-Path (Join-Path $script:RepoRoot "tests\artifacts")).Path
 $script:ArtifactDir = (Resolve-Path $ArtifactDir).Path
@@ -65,6 +68,10 @@ $script:ComposeFiles = @(
 )
 $didcommProfiles = @(Get-BetaDidcommProfiles -Enabled ([bool]$EnableDidcommAuthcrypt))
 foreach ($profile in $didcommProfiles) {
+    $script:ComposeFiles += (Join-Path $script:RepoRoot $profile)
+}
+$passportProfiles = @(Get-BetaPassportProfiles -Enabled ([bool]$EnablePassportNative))
+foreach ($profile in $passportProfiles) {
     $script:ComposeFiles += (Join-Path $script:RepoRoot $profile)
 }
 $script:ApplicationServices = @(
@@ -716,6 +723,7 @@ Write-Host "Artifact directory: $script:ArtifactDir"
 Write-Host "Promotion eligible: $promotionEligible"
 Write-Host "Portable Canvas enabled: $([bool]$EnablePortableCanvas)"
 Write-Host "DIDComm authcrypt enabled: $([bool]$EnableDidcommAuthcrypt)"
+Write-Host "Native passport enabled: $([bool]$EnablePassportNative)"
 Write-Host "Compose project: $script:BetaProject"
 Write-Host "UI Compose project: $script:BetaUiProject"
 Write-Host "Network: $script:BetaNetwork"
@@ -732,6 +740,9 @@ if ($PlanOnly) {
         didcomm_authcrypt_enabled = [bool]$EnableDidcommAuthcrypt
         didcomm_profiles = $didcommProfiles
         didcomm_configuration_validated = $false
+        passport_native_enabled = [bool]$EnablePassportNative
+        passport_profiles = $passportProfiles
+        passport_configuration_validated = $false
         canvas_origin = if ($EnablePortableCanvas) { $CanvasOrigin } else { $null }
         pilot_organization_id = if ($EnablePortableCanvas) { $PilotOrganizationId } else { $null }
         compose_project = $script:BetaProject
@@ -813,6 +824,8 @@ if ($LASTEXITCODE -ne 0 -or $env:MARTY_DOCS_IMAGE -notmatch '^sha256:[0-9a-f]{64
 Write-Step "Validate paired DIDComm configuration before image or service mutations"
 Assert-BetaDidcommConfiguration -RepoRoot $script:RepoRoot -EnvFiles $script:EnvFiles `
     -ComposeFiles $script:ComposeFiles -AuthcryptEnabled ([bool]$EnableDidcommAuthcrypt)
+Assert-BetaPassportConfiguration -RepoRoot $script:RepoRoot -EnvFiles $script:EnvFiles `
+    -ComposeFiles $script:ComposeFiles -PassportEnabled ([bool]$EnablePassportNative)
 if ($OfficialStackRelease) {
     $migrationImage = [string]$officialPlan.images.migrations.reference
     $uiImage = [string]$officialPlan.images.ui.reference
@@ -1069,6 +1082,8 @@ Write-Utf8Text -Path $imageDigestsPath -Content ($env:ELEVENID_IMAGE_DIGESTS_JSO
 Write-Step "Enter maintenance window and apply live migration"
 Assert-BetaDidcommConfiguration -RepoRoot $script:RepoRoot -EnvFiles $script:EnvFiles `
     -ComposeFiles $script:ComposeFiles -AuthcryptEnabled ([bool]$EnableDidcommAuthcrypt)
+Assert-BetaPassportConfiguration -RepoRoot $script:RepoRoot -EnvFiles $script:EnvFiles `
+    -ComposeFiles $script:ComposeFiles -PassportEnabled ([bool]$EnablePassportNative)
 $canvasLtiIssuerDid = $null
 $maintenanceServices = $script:ApplicationServices + $script:InfrastructureWriterServices + @("ui-prod")
 $maintenanceContainers = @($preDeployContainers | Where-Object { $_.running -and $_.service -in $maintenanceServices } | ForEach-Object { $_.container_id })
