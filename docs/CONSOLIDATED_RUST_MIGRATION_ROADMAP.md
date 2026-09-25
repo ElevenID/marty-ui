@@ -6272,6 +6272,16 @@ qualified Python retirement, and the one aggregate
 beta-only acceptance soak remain. Production is unchanged; DIDComm KMS
 corrections remain separately deferred.
 
+Maintainer error-parity review on 2026-09-25 found another explicit cutover
+gate: the released Python application-create route returns structured FastAPI
+422 details for missing fields, a non-object body, country-code pattern failure,
+missing DG2, and forbidden extras. The current Rust handler still uses Axum's
+default `Json<PassportApplicationRequest>` rejection before its own validation,
+so those errors are not yet wire-equivalent. The Python responses were observed
+with the retained route and `TestClient`; freeze them as language-neutral HTTP
+vectors and implement the native application validation boundary before
+enabling the gateway selector or removing Python.
+
 Gateway still selects Python for public `/v1/passport` routes by default. Draft
 #852's explicit `PASSPORT_NATIVE_GATEWAY_ENABLED` switch, default false, now
 selects the eight tenant-authenticated method/path shapes when enabled. The

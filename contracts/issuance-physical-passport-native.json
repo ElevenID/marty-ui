@@ -126,6 +126,41 @@
     "invalid_signature": {"status": 401, "body": {"detail": "Invalid personalization webhook signature"}},
     "native_requirement": "inbound callback verification remains available with a configured webhook secret when outbound bureau submission is unavailable"
   },
+  "application_validation_oracle": "FastAPI TestClient against the retained physical_document_router; invalid requests are rejected before the job store is read",
+  "application_validation_base_input": {
+    "organization_id": "org-1", "flow_execution_id": "flow-1",
+    "application_template_id": "template-1", "credential_template_id": "credential-1",
+    "delivery_destination_profile_id": "destination-1", "country_code": "USA",
+    "applicant": {}, "mrz": {}, "data_groups": {"DG1": "YQ==", "DG2": "Yg=="}
+  },
+  "application_validation_observations": [
+    {"input": {}, "status": 422, "body": {"detail": [
+      {"type": "missing", "loc": ["body", "organization_id"], "msg": "Field required", "input": {}},
+      {"type": "missing", "loc": ["body", "flow_execution_id"], "msg": "Field required", "input": {}},
+      {"type": "missing", "loc": ["body", "application_template_id"], "msg": "Field required", "input": {}},
+      {"type": "missing", "loc": ["body", "credential_template_id"], "msg": "Field required", "input": {}},
+      {"type": "missing", "loc": ["body", "delivery_destination_profile_id"], "msg": "Field required", "input": {}},
+      {"type": "missing", "loc": ["body", "country_code"], "msg": "Field required", "input": {}},
+      {"type": "missing", "loc": ["body", "applicant"], "msg": "Field required", "input": {}},
+      {"type": "missing", "loc": ["body", "mrz"], "msg": "Field required", "input": {}},
+      {"type": "missing", "loc": ["body", "data_groups"], "msg": "Field required", "input": {}}
+    ]}},
+    {"input": [], "status": 422, "body": {"detail": [
+      {"type": "model_attributes_type", "loc": ["body"], "msg": "Input should be a valid dictionary or object to extract fields from", "input": []}
+    ]}},
+    {"input": null, "status": 422, "body": {"detail": [
+      {"type": "missing", "loc": ["body"], "msg": "Field required", "input": null}
+    ]}},
+    {"override": {"country_code": "us"}, "status": 422, "body": {"detail": [
+      {"type": "string_pattern_mismatch", "loc": ["body", "country_code"], "msg": "String should match pattern '^[A-Z]{3}$'", "input": "us", "ctx": {"pattern": "^[A-Z]{3}$"}}
+    ]}},
+    {"override": {"data_groups": {"DG1": "YQ=="}}, "status": 422, "body": {"detail": [
+      {"type": "value_error", "loc": ["body", "data_groups"], "msg": "Value error, DG1 and DG2 are required", "input": {"DG1": "YQ=="}, "ctx": {"error": {}}}
+    ]}},
+    {"override": {"extra": 1}, "status": 422, "body": {"detail": [
+      {"type": "extra_forbidden", "loc": ["body", "extra"], "msg": "Extra inputs are not permitted", "input": 1}
+    ]}}
+  ],
   "quality_validation_oracle": "FastAPI TestClient against the released physical_document_router with a missing job store; invalid models are rejected before the store is read",
   "quality_validation_observations": [
     {"raw_body": "", "status": 422, "body": {"detail": [{"type": "missing", "loc": ["body"], "msg": "Field required", "input": null}]}},
