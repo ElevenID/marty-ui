@@ -4,12 +4,14 @@
 canonical Rust verifier implementation, and the native issuance consumer,
 Application Template, internal-Application, resource-owner, public trust,
 OID4VCI public/management, Canvas mirror, and universal native issuance
-ownership slices are merged through PR #844. That protected-main checkpoint is
-**120 native / 11 remaining / 131 total** issuance HTTP operations. Recorder
-review-provenance PR #845 is now based on protected `main` with hosted checks
-active; retention draft PR #849 reports **122 native / 9 remaining**, and
-passport draft PR #852 adds nine default-off Rust counterparts. These remaining
-stacked PRs are not landed cutovers or permission to remove their Python owners.
+ownership slices are merged through PR #844. That historical protected-main
+checkpoint was **120 native / 11 remaining / 131 total** issuance HTTP
+operations. Recorder review-provenance PR #845 and retention PR #849 have since
+landed; protected main now reports **122 native / 9 remaining / 131 total**.
+Credentials PR #299 is the separate, provenance-qualified deletion of the two
+superseded Python retention routes; it remains in hosted CI. Passport draft
+PR #852 is main-based and adds nine default-off Rust counterparts, not yet a
+selected cutover or permission to remove the nine Python passport routes.
 
 The last published beta baseline remains aggregate `marty-ui@v1.1.217`, source
 `4596afaca3724e60a8dadbd4e227b6e765cb495c`; no newer deployment is claimed
@@ -50,7 +52,7 @@ and `v1.2.78` is preliminary, non-activating evidence.
 
 **Initial rollout environment:** Beta only
 
-**Last updated:** 2026-09-24
+**Last updated:** 2026-09-25
 
 ## Objective
 
@@ -60,7 +62,7 @@ This is not a line-for-line translation project. Rust owns deterministic protoco
 
 The immediate deployment boundary is beta. Production and persistent self-host environments are not changed by this roadmap without a separate approval and promotion decision.
 
-## Current execution snapshot — 2026-09-24
+## Current execution snapshot — 2026-09-25
 
 The DIDComm consumer cutover gate is now bound to published Credentials
 `v0.1.76`, protected-main source
@@ -79,12 +81,14 @@ PR #843 are merged. PR #844's reviewed 120/11 native-ownership tree landed on
 protected `main` as `4db6a6614e48f326546d5f61a5fa3a8764c46f3c` after
 merge-group CI `36062597618` and CodeQL Rust both passed; its squash tree
 matches reviewed head `896fac4510fdec423d1419b2b3e5d94060d5a05b` exactly.
-The corrected dependent stack is PR #845 (recorder review provenance, now
-main-based with hosted checks active), draft #849 (retention, 122/9 candidate),
-and draft #852 (nine default-off physical-passport counterparts). The local
-behavior, gateway, and isolated PostgreSQL contracts for their code heads
-passed as recorded in their PRs, but hosted final-base CI and live
-provider/consumer acceptance remain.
+PR #845 landed at `207c84afc00b2f3b2b3db6b433823a9c7d59ab38`. Retention
+PR #849 then landed through protected merge-group CI at
+`91ea7e52d6a3822981bb42f002da8c68532ebf2e` with a 122/9 source
+inventory. Credentials PR #299 is the separate two-route Python retention
+retirement, with its protected-source provenance lane passed and remaining
+hosted checks active. Draft #852 now targets main and contains only the nine
+default-off physical-passport counterparts; live provider/consumer acceptance
+and hosted cutover qualification remain.
 These coordinates do not authorize deletion of reachable Python or establish a
 new beta or production deployment.
 
@@ -6194,28 +6198,29 @@ and `DIDCOMM-KMS-001` remains deferred. Next gates are maintainer review, hosted
 CI, sequential stack landing, aggregate beta deployment/acceptance, and then
 Python retirement only where universal selection and parity evidence permit it.
 
-### Issuance retention checkpoint (draft #849)
+### Issuance retention checkpoint (merged #849)
 
 The #849 source inventory is **122 native / 9 retained Python / 131 total HTTP
 routes**. The two organization-retention management routes now have a frozen
 behavior contract, Rust HTTP and PostgreSQL implementations, strict gateway
 ownership, and real-database checks for tenant isolation, retained event
 ownership, parent/child purge, and foreign/newer survivors. The remaining nine
-Python routes are the physical-passport surface. This is an implemented draft,
-not a landed or deployed cutover; the two Python retention routes remain until
-the full gate passes.
+Python routes are the physical-passport surface. Protected-main merge
+`91ea7e52d6a3822981bb42f002da8c68532ebf2e` passed exact-head and
+merge-group gates; no beta or production deployment is implied. The two Python
+retention routes remain in source pending Credentials PR #299's hosted merge.
 
 Credentials `v0.1.78` is published from protected-main source
 `efd5da1e2d41419ce93721f98d314c7b911e6b5e`, whose issuance migration head
-is `issuance_event_owner`. Draft #849 pins the release's immutable issuance
+is `issuance_event_owner`. Merged #849 pins the release's immutable issuance
 image digest in the stack lock and DIDComm evidence, and CI/CD require that
 reviewed migration-bearing source before native retention activates. Focused
-release-contract tests and lint pass. The predecessor sequence #840 → #842 →
-#844 → #845, protected exact-head checks, maintainer re-review, Python
-retirement, and one aggregate
-beta-only deployment/acceptance soak remain. Production is unchanged.
+release-contract tests and lint passed. The predecessor sequence through #845
+and retention #849 have landed; separate Python retirement, passport
+qualification, and one aggregate beta-only deployment/acceptance soak remain.
+Production is unchanged.
 
-### Physical-passport checkpoint (draft #852, 2026-09-24)
+### Physical-passport checkpoint (draft #852, 2026-09-25)
 
 The nine retained Python passport routes have default-off Rust counterparts in
 draft #852. They are **not yet the selected owner**: Python routes, migrations,
