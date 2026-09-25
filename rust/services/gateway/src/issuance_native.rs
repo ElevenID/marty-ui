@@ -108,9 +108,9 @@ static NATIVE_ROUTES: LazyLock<RouteTable> = LazyLock::new(|| {
     table
 });
 
-// The signed bureau webhook is deliberately not a public gateway route. Keep
-// the public selector tied to the frozen passport behavior contract, not to a
-// broad path prefix that could route unqualified operations to Rust.
+// The signed bureau webhook has its own HMAC-authenticated ingress boundary.
+// Keep the tenant-key selector tied to the eight caller-authenticated routes,
+// not to a broad prefix that could attach a tenant key to the webhook.
 static PASSPORT_PUBLIC_ROUTES: LazyLock<Vec<NativeHttpRoute>> = LazyLock::new(|| {
     let coverage: PassportCoverage = serde_json::from_str(include_str!(
         "../../../../contracts/issuance-physical-passport-native.json"
@@ -131,6 +131,11 @@ pub fn is_passport_public_http(method: HttpMethod, path: &str) -> bool {
         && PASSPORT_PUBLIC_ROUTES
             .iter()
             .any(|route| route.method == method && exact_template_shape(&route.path, path))
+}
+
+#[must_use]
+pub fn is_passport_signed_webhook(method: HttpMethod, path: &str) -> bool {
+    method == HttpMethod::Post && path == "/v1/passport/webhooks/personalization"
 }
 
 /// Native passport requests use the existing issuance read/issue permissions.
@@ -256,6 +261,14 @@ mod tests {
             assert!(!is_passport_public_http(method, path), "{method:?} {path}");
             assert_eq!(passport_required_permission(method, path), None);
         }
+        assert!(is_passport_signed_webhook(
+            HttpMethod::Post,
+            "/v1/passport/webhooks/personalization"
+        ));
+        assert!(!is_passport_signed_webhook(
+            HttpMethod::Get,
+            "/v1/passport/webhooks/personalization"
+        ));
         assert_eq!(
             passport_required_permission(HttpMethod::Get, "/v1/passport/capabilities"),
             Some("issuance:view")

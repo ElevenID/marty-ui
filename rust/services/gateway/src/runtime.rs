@@ -6143,6 +6143,50 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn signed_passport_webhook_preserves_raw_body_and_switches_owner_without_tenant_key() {
+        let body = br#"{ "bureau_job_id" : "bureau-1", "status":"PRINTING" }"#;
+        let signature = "sha256=synthetic-signature";
+        for (native, expected_service) in [
+            (false, issuance_native::LEGACY_SERVICE),
+            (true, issuance_native::NATIVE_SERVICE),
+        ] {
+            let recorder = Arc::new(ActorRecordingUpstream::default());
+            let router = gateway_router(runtime_state_with_upstream_and_passport(
+                Arc::new(NoOwner),
+                recorder.clone(),
+                native,
+            ));
+            let response = router
+                .oneshot(
+                    Request::builder()
+                        .method("POST")
+                        .uri("/v1/passport/webhooks/personalization")
+                        .header("content-type", "application/json")
+                        .header("x-personalization-signature", signature)
+                        .body(Body::from(body.as_slice()))
+                        .unwrap(),
+                )
+                .await
+                .unwrap();
+            assert_eq!(response.status(), StatusCode::OK);
+            let captured = recorder.0.lock().unwrap();
+            assert_eq!(captured.len(), 1);
+            let (service, upstream) = &captured[0];
+            assert_eq!(service, expected_service);
+            assert_eq!(upstream.path, "/v1/passport/webhooks/personalization");
+            assert_eq!(upstream.body.as_deref(), Some(body.as_slice()));
+            assert_eq!(
+                upstream
+                    .headers
+                    .get("x-personalization-signature")
+                    .map(String::as_str),
+                Some(signature)
+            );
+            assert!(!upstream.headers.contains_key("x-api-key"));
+        }
+    }
+
+    #[tokio::test]
     async fn native_passport_gateway_binds_upstream_keys_to_two_authenticated_tenants() {
         let recorder = Arc::new(ActorRecordingUpstream::default());
         let router = gateway_router(runtime_state_with_upstream_and_passport(

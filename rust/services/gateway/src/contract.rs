@@ -13,7 +13,7 @@ use serde_json::{json, Map, Value};
 
 use crate::issuance_native;
 
-pub const EXPECTED_ROUTE_COUNT: usize = 435;
+pub const EXPECTED_ROUTE_COUNT: usize = 436;
 
 #[derive(Debug, Deserialize)]
 pub struct GatewayContract {
@@ -114,7 +114,11 @@ impl GatewayContract {
             let upstream_service = if owner.service == issuance_native::LEGACY_SERVICE {
                 let upstream_path = rewrite_path.as_deref().unwrap_or(&declared.path);
                 if passport_native
-                    && issuance_native::is_passport_public_http(declared.method, upstream_path)
+                    && (issuance_native::is_passport_public_http(declared.method, upstream_path)
+                        || issuance_native::is_passport_signed_webhook(
+                            declared.method,
+                            upstream_path,
+                        ))
                 {
                     issuance_native::NATIVE_SERVICE
                 } else {
@@ -514,6 +518,7 @@ pub fn route_for(
 pub fn requires_issuance_service_auth(path: &str) -> bool {
     route_ownership(path).service == "issuance"
         && path != "/v1/issuance/authorize"
+        && path != "/v1/passport/webhooks/personalization"
         && !CANVAS_PUBLIC.iter().any(|pattern| pattern.is_match(path))
         && !CANVAS_SIGNED_INGRESS.is_match(path)
 }
@@ -661,6 +666,7 @@ fn public_route(path: &str) -> bool {
         || path.starts_with("/v1/auth")
         || path == "/v1/organizations/invitations/validate"
         || path == "/v1/organizations/join/code/validate"
+        || path == "/v1/passport/webhooks/personalization"
         || path.starts_with("/v1/trust-registry")
         || APPENDED_DISCOVERY_PUBLIC.is_match(path)
         || DID_WEB_PUBLIC.is_match(path)
@@ -787,7 +793,13 @@ mod tests {
         for route in frozen.routes {
             let path = route.path.replace("{application_id}", "job-1");
             if path == "/v1/passport/webhooks/personalization" {
-                assert!(route_for(&native, route.method, &path).is_err());
+                let old = route_for(&legacy, route.method, &path).unwrap();
+                let new = route_for(&native, route.method, &path).unwrap();
+                assert_eq!(old.route.upstream_service, issuance_native::LEGACY_SERVICE);
+                assert_eq!(new.route.upstream_service, issuance_native::NATIVE_SERVICE);
+                assert!(!old.route.auth_required);
+                assert!(!new.route.auth_required);
+                assert!(!requires_issuance_service_auth(&path));
                 continue;
             }
             public_count += 1;
@@ -951,17 +963,17 @@ mod tests {
     #[test]
     fn internal_proxy_routes_do_not_mutate_public_contract() {
         let contract = GatewayContract::load().expect("gateway contract");
-        assert_eq!(contract.route_table().expect("public").routes().len(), 435);
+        assert_eq!(contract.route_table().expect("public").routes().len(), 436);
         assert_eq!(
             contract
                 .runtime_route_table()
                 .expect("runtime")
                 .routes()
                 .len(),
-            438
+            439
         );
         let proxy = contract.proxy_route_table().expect("proxy");
-        assert_eq!(proxy.routes().len(), 451);
+        assert_eq!(proxy.routes().len(), 452);
         assert_eq!(
             route_for(
                 &proxy,

@@ -85,10 +85,10 @@ def test_gateway_stays_legacy_until_tenant_key_boundary_is_qualified() -> None:
     assert (
         len(declared)
         == contract["gateway_cutover"]["declared_gateway_route_count"]
-        == 8
+        == 9
     )
-    assert declared == frozen - {("POST", webhook)}
-    assert ("POST", webhook) not in declared
+    assert declared == frozen
+    assert ("POST", webhook) in declared
     gateway_source = (ROOT / "rust/services/gateway/src/contract.rs").read_text(
         encoding="utf-8"
     )
