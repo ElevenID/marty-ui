@@ -6230,8 +6230,13 @@ is tracked in #851.
 
 The explicit self-signed test signer is behind both a non-default Cargo feature
 and a runtime flag; a configured remote signer takes precedence, and the default
-production build excludes local CSCA key generation. Packaged-process testing
-found that the original draft's in-process PostgreSQL fixture had hidden a
+production build excludes local CSCA key generation. An opt-in service-image
+build argument preserves this test capability without enabling it in release
+images. Both image modes built locally; network-disabled startup probes showed
+the default image rejects the runtime flag and the opt-in image reaches the
+tenant-key gate. Full CI now repeats this image boundary check.
+Packaged-process testing found that the original draft's in-process
+PostgreSQL fixture had hidden a
 missing startup schema migration. The Rust branch now applies an idempotent
 `physical_document_jobs` migration compatible with the released Python table
 when native passport HTTP is enabled. A dedicated feature-enabled CI step uses
@@ -6261,16 +6266,22 @@ tenant-key secret file must still be mounted/provisioned in the target beta
 environment before enabling either service.
 
 The draft is not a nine-route cutover. Live signer and bureau qualification
-(including batch), image, gateway, live Flow qualification, exact route/error parity, stacked-base
-review and CI, immediate qualified Python retirement, and the one aggregate
+(including batch), live packaged-image and gateway acceptance, live Flow
+qualification, exact route/error parity, stacked-base review and CI, immediate
+qualified Python retirement, and the one aggregate
 beta-only acceptance soak remain. Production is unchanged; DIDComm KMS
 corrections remain separately deferred.
+
 Gateway still selects Python for public `/v1/passport` routes by default. Draft
 #852's explicit `PASSPORT_NATIVE_GATEWAY_ENABLED` switch, default false, now
-selects only the eight frozen public method/path shapes when enabled; it leaves
-the separately signed bureau webhook and lookalike paths outside gateway
-routing. The switch requires the shared, validated tenant keyring. Native
-passport middleware binds an authenticated organization to the existing
+selects the eight tenant-authenticated method/path shapes when enabled. The
+ninth, separately HMAC-signed bureau webhook is now a hidden public ingress
+route that forwards the raw body and signature to Python by default or Rust
+under the same selector, without a caller JWT or injected tenant key. Live
+bureau callback and end-to-end signature/error acceptance remain unqualified.
+Lookalike paths remain outside gateway routing. The authenticated selector
+requires the shared, validated tenant keyring. Native passport middleware
+binds an authenticated organization to the existing
 issuance view/initiate permission, checks membership or API-key scope, rejects
 cross-tenant body/header/query claims, and replaces
 client-provided upstream key/organization headers with that organization's
@@ -6278,8 +6289,8 @@ native key. Maintainer review found that the first native gateway pass omitted
 the trusted `X-User-ID` needed by passport quality-result audit records; the
 gateway now replaces any caller value with the authenticated session or API-key
 actor. A two-tenant gateway HTTP test confirms distinct keys, trusted actors,
-and no forwarding on mismatched claims. All 131 gateway tests and strict Clippy
-pass locally. The shared issuance API key is not used as a passport tenant
-credential. This source gate is not deployment authorization: live signer and
+and no forwarding on mismatched claims. All 133 gateway library tests and
+strict Clippy pass locally. The shared issuance API key is not used as a
+passport tenant credential. This source gate is not deployment authorization: live signer and
 bureau, signed webhook, image, Flow, beta secret mount, exact-head CI and
 acceptance qualification still remain.
