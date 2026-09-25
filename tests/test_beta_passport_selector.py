@@ -218,7 +218,45 @@ def test_runner_validates_twice_before_mutation():
     )
 
 
-def test_actual_beta_compose_merge_preserves_default_off_and_selected_mounts():
+def synthetic_beta_compose_env(tmp_path):
+    required = set()
+    for file in ROOT.glob("docker-compose*.yml"):
+        required.update(re.findall(r"\$\{([A-Z][A-Z0-9_]*):\?", file.read_text()))
+    values = {name: "synthetic-value" for name in required}
+    values["ICAO_DOCUMENT_SIGNER_URL"] = "https://signer.example.test"
+    values["PERSONALIZATION_BUREAU_URL"] = "https://bureau.example.test"
+    for secret in VALIDATOR["SECRET_MOUNTS"]:
+        source = tmp_path / secret
+        source.write_text("synthetic-private-value", encoding="utf-8")
+        values[secret.upper() + "_SOURCE_FILE"] = source.as_posix()
+    env_file = tmp_path / "synthetic-beta.env"
+    env_file.write_text(
+        "\n".join(f"{name}={value}" for name, value in sorted(values.items())) + "\n",
+        encoding="utf-8",
+    )
+    passthrough = (
+        "PATH",
+        "SYSTEMROOT",
+        "WINDIR",
+        "USERPROFILE",
+        "APPDATA",
+        "LOCALAPPDATA",
+        "HOME",
+        "HOMEDRIVE",
+        "HOMEPATH",
+        "PROGRAMFILES",
+        "PROGRAMFILES(X86)",
+        "DOCKER_HOST",
+        "DOCKER_CONTEXT",
+        "DOCKER_CONFIG",
+    )
+    environment = {name: os.environ[name] for name in passthrough if name in os.environ}
+    return env_file, environment
+
+
+def test_actual_beta_compose_merge_preserves_default_off_and_selected_mounts(
+    tmp_path,
+):
     if not shutil.which("docker"):
         pytest.skip("Docker Compose is not installed")
     base = [
@@ -230,16 +268,19 @@ def test_actual_beta_compose_merge_preserves_default_off_and_selected_mounts():
         )
     ]
 
+    env_file, environment = synthetic_beta_compose_env(tmp_path)
+
     def render(files):
-        command = ["docker", "compose"]
+        command = ["docker", "compose", "--env-file", str(env_file)]
         for file in files:
             command.extend(["-f", file])
-        command.extend(["config", "--no-interpolate", "--format", "json"])
+        command.extend(["config", "--format", "json"])
         return json.loads(
             subprocess.run(
                 command,
                 cwd=ROOT,
                 capture_output=True,
+                env=environment,
                 check=True,
                 timeout=30,
             ).stdout
@@ -276,38 +317,7 @@ def test_actual_interpolated_beta_compose_passes_selector_with_synthetic_sources
             PROFILE,
         )
     ]
-    required = set()
-    for file in ROOT.glob("docker-compose*.yml"):
-        required.update(re.findall(r"\$\{([A-Z][A-Z0-9_]*):\?", file.read_text()))
-    values = {name: "synthetic-value" for name in required}
-    values["ICAO_DOCUMENT_SIGNER_URL"] = "https://signer.example.test"
-    values["PERSONALIZATION_BUREAU_URL"] = "https://bureau.example.test"
-    for secret in VALIDATOR["SECRET_MOUNTS"]:
-        source = tmp_path / secret
-        source.write_text("synthetic-private-value", encoding="utf-8")
-        values[secret.upper() + "_SOURCE_FILE"] = source.as_posix()
-    env_file = tmp_path / "synthetic-beta.env"
-    env_file.write_text(
-        "\n".join(f"{name}={value}" for name, value in sorted(values.items())) + "\n",
-        encoding="utf-8",
-    )
-    passthrough = (
-        "PATH",
-        "SYSTEMROOT",
-        "WINDIR",
-        "USERPROFILE",
-        "APPDATA",
-        "LOCALAPPDATA",
-        "HOME",
-        "HOMEDRIVE",
-        "HOMEPATH",
-        "PROGRAMFILES",
-        "PROGRAMFILES(X86)",
-        "DOCKER_HOST",
-        "DOCKER_CONTEXT",
-        "DOCKER_CONFIG",
-    )
-    environment = {name: os.environ[name] for name in passthrough if name in os.environ}
+    env_file, environment = synthetic_beta_compose_env(tmp_path)
 
     def run(command, **kwargs):
         kwargs["stderr"] = subprocess.PIPE
