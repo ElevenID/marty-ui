@@ -165,6 +165,29 @@ def test_compose_call_is_read_only_and_closed(tmp_path):
     assert kwargs["stdin"] is not None and kwargs["stderr"] is not None
 
 
+@pytest.mark.parametrize("failure", ("exit", "json", "oversize", "timeout"))
+def test_compose_failures_do_not_expose_rendered_secret_values(failure):
+    def run(*args, **kwargs):
+        if failure == "timeout":
+            raise subprocess.TimeoutExpired(["synthetic-private-value"], 30)
+        output = (
+            b"x" * (VALIDATOR["MAX_MODEL_BYTES"] + 1)
+            if failure == "oversize"
+            else b"synthetic-private-value"
+        )
+        return SimpleNamespace(returncode=1 if failure == "exit" else 0, stdout=output)
+
+    with pytest.raises(VALIDATOR["PassportConfigurationError"]) as error:
+        VALIDATOR["validate_compose"](
+            project="elevenid-beta",
+            env_files=["synthetic.env"],
+            files=[PROFILE],
+            passport_enabled=True,
+            runner=run,
+        )
+    assert str(error.value) == "Beta passport Compose validation failed"
+
+
 def test_runner_validates_twice_before_mutation():
     source = (ROOT / "scripts/deploy-local-beta-release.ps1").read_text(
         encoding="utf-8"
