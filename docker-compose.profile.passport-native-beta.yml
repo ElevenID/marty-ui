@@ -1,0 +1,54 @@
+# Explicit beta-only passport selection. This file is excluded from the default
+# stack and must be paired with reviewed, exact-file secret inputs.
+services:
+  gateway:
+    environment:
+      PASSPORT_NATIVE_GATEWAY_ENABLED: "true"
+      PASSPORT_TENANT_API_KEYS: ""
+      PASSPORT_TENANT_API_KEYS_FILE: /run/secrets/passport_tenant_api_keys
+    secrets:
+      - passport_tenant_api_keys
+
+  flow:
+    environment:
+      ISSUANCE_NATIVE_SERVICE_URL: http://issuance-native:8005
+      PASSPORT_NATIVE_FLOW_ENABLED: "true"
+      PASSPORT_TENANT_API_KEYS: ""
+      PASSPORT_TENANT_API_KEYS_FILE: /run/secrets/passport_tenant_api_keys
+    secrets:
+      - passport_tenant_api_keys
+
+  issuance-native:
+    environment:
+      PASSPORT_NATIVE_HTTP_ENABLED: "true"
+      PASSPORT_TENANT_API_KEYS: ""
+      PASSPORT_TENANT_API_KEYS_FILE: /run/secrets/passport_tenant_api_keys
+      PHYSICAL_DOCUMENT_ALLOW_SELF_SIGNED: "false"
+      PHYSICAL_DOCUMENT_ARTIFACT_KEY: ""
+      PHYSICAL_DOCUMENT_ARTIFACT_KEY_FILE: /run/secrets/physical_document_artifact_key
+      ICAO_DOCUMENT_SIGNER_URL: ${ICAO_DOCUMENT_SIGNER_URL:?ICAO_DOCUMENT_SIGNER_URL must be set for beta passport}
+      ICAO_DOCUMENT_SIGNER_API_KEY: ""
+      ICAO_DOCUMENT_SIGNER_API_KEY_FILE: /run/secrets/icao_document_signer_api_key
+      PERSONALIZATION_BUREAU_URL: ${PERSONALIZATION_BUREAU_URL:?PERSONALIZATION_BUREAU_URL must be set for beta passport}
+      PERSONALIZATION_BUREAU_API_KEY: ""
+      PERSONALIZATION_BUREAU_API_KEY_FILE: /run/secrets/personalization_bureau_api_key
+      PERSONALIZATION_BUREAU_WEBHOOK_SECRET: ""
+      PERSONALIZATION_BUREAU_WEBHOOK_SECRET_FILE: /run/secrets/personalization_bureau_webhook_secret
+    secrets:
+      - passport_tenant_api_keys
+      - physical_document_artifact_key
+      - icao_document_signer_api_key
+      - personalization_bureau_api_key
+      - personalization_bureau_webhook_secret
+
+secrets:
+  passport_tenant_api_keys:
+    file: ${PASSPORT_TENANT_API_KEYS_SOURCE_FILE:?PASSPORT_TENANT_API_KEYS_SOURCE_FILE must identify a beta keyring file}
+  physical_document_artifact_key:
+    file: ${PHYSICAL_DOCUMENT_ARTIFACT_KEY_SOURCE_FILE:?PHYSICAL_DOCUMENT_ARTIFACT_KEY_SOURCE_FILE must identify a beta artifact key file}
+  icao_document_signer_api_key:
+    file: ${ICAO_DOCUMENT_SIGNER_API_KEY_SOURCE_FILE:?ICAO_DOCUMENT_SIGNER_API_KEY_SOURCE_FILE must identify a beta signer key file}
+  personalization_bureau_api_key:
+    file: ${PERSONALIZATION_BUREAU_API_KEY_SOURCE_FILE:?PERSONALIZATION_BUREAU_API_KEY_SOURCE_FILE must identify a beta bureau key file}
+  personalization_bureau_webhook_secret:
+    file: ${PERSONALIZATION_BUREAU_WEBHOOK_SECRET_SOURCE_FILE:?PERSONALIZATION_BUREAU_WEBHOOK_SECRET_SOURCE_FILE must identify a beta webhook secret file}
