@@ -164,6 +164,7 @@ pub struct PollOutcome {
 
 #[derive(Clone, Debug, Deserialize, PartialEq)]
 struct WebhookEvent {
+    organization_id: String,
     bureau_job_id: String,
     status: ProductionStatus,
     #[serde(flatten)]
@@ -175,6 +176,11 @@ struct WebhookEvent {
 pub struct VerifiedWebhookEvent(WebhookEvent);
 
 impl VerifiedWebhookEvent {
+    #[must_use]
+    pub fn organization_id(&self) -> &str {
+        &self.0.organization_id
+    }
+
     #[must_use]
     pub fn bureau_job_id(&self) -> &str {
         &self.0.bureau_job_id
@@ -412,9 +418,12 @@ pub(crate) fn parse_verified_webhook(
     if !verify_webhook_signature(secret, body, signature) {
         return Err(BureauError::InvalidWebhookSignature);
     }
-    serde_json::from_slice(body)
-        .map(VerifiedWebhookEvent)
-        .map_err(|_| BureauError::InvalidWebhookEvent)
+    let event: WebhookEvent =
+        serde_json::from_slice(body).map_err(|_| BureauError::InvalidWebhookEvent)?;
+    if event.organization_id.trim().is_empty() || event.bureau_job_id.trim().is_empty() {
+        return Err(BureauError::InvalidWebhookEvent);
+    }
+    Ok(VerifiedWebhookEvent(event))
 }
 
 #[cfg(test)]
@@ -535,7 +544,7 @@ mod tests {
         assert!(!missing.verify_webhook(b"{}", ""));
         let configured =
             BureauClient::new("https://bureau.example", "key", Some("secret")).unwrap();
-        let body = br#"{"bureau_job_id":"job-1","status":"SHIPPED"}"#;
+        let body = br#"{"organization_id":"org-1","bureau_job_id":"job-1","status":"SHIPPED"}"#;
         let mut mac = Hmac::<Sha256>::new_from_slice(b"secret").unwrap();
         mac.update(body);
         let signature = hex::encode(mac.finalize().into_bytes());
@@ -544,12 +553,21 @@ mod tests {
         assert!(!configured.verify_webhook(body, &signature.to_uppercase()));
         assert!(!configured.verify_webhook(body, "not-hex"));
         let event = configured.parse_webhook(body, &signature).unwrap();
+        assert_eq!(event.organization_id(), "org-1");
         assert_eq!(event.bureau_job_id(), "job-1");
         assert_eq!(event.status(), ProductionStatus::Shipped);
         assert_eq!(event.tracking_number(), None);
         assert!(matches!(
             configured.parse_webhook(b"{}", &signature),
             Err(BureauError::InvalidWebhookSignature)
+        ));
+        let missing_tenant = br#"{"bureau_job_id":"job-1","status":"SHIPPED"}"#;
+        let mut mac = Hmac::<Sha256>::new_from_slice(b"secret").unwrap();
+        mac.update(missing_tenant);
+        let signature = hex::encode(mac.finalize().into_bytes());
+        assert!(matches!(
+            configured.parse_webhook(missing_tenant, &signature),
+            Err(BureauError::InvalidWebhookEvent)
         ));
     }
 

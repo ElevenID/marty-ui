@@ -16,8 +16,7 @@ use marty_issuance_service::passport_artifact::{
 use marty_issuance_service::passport_bureau::BureauClient;
 use marty_issuance_service::passport_http::{router as passport_router, PassportHttpService};
 use marty_issuance_service::passport_repository::{
-    PassportJobInsert, PassportJobPatch, PassportJobStatus, PassportWebhookRepositoryError,
-    PostgresPassportRepository,
+    PassportJobInsert, PassportJobPatch, PassportJobStatus, PostgresPassportRepository,
 };
 #[cfg(feature = "passport-self-signed-test")]
 use marty_issuance_service::passport_signer::PassportSigner;
@@ -349,7 +348,7 @@ async fn exercise_native_passport_http(
     .await;
     assert_eq!(status, StatusCode::OK);
     assert_eq!(polled["status"], "READY_FOR_ACTIVATION");
-    let webhook = json!({"bureau_job_id":"bureau-http", "status":"SHIPPED", "tracking_number":"webhook-tracking"});
+    let webhook = json!({"organization_id":"org-a", "bureau_job_id":"bureau-http", "status":"SHIPPED", "tracking_number":"webhook-tracking"});
     let (status, _) = passport_http_request(
         &app,
         "POST",
@@ -645,7 +644,25 @@ async fn passport_jobs_survive_restart_without_cross_tenant_reads() {
         .unwrap();
     let secret = "synthetic-bureau-webhook-secret";
     let bureau = BureauClient::new("http://127.0.0.1:1", "synthetic-key", Some(secret)).unwrap();
+    let foreign_body = serde_json::to_vec(&serde_json::json!({
+        "organization_id": "org-b",
+        "bureau_job_id": "bureau-a",
+        "status": "SHIPPED"
+    }))
+    .unwrap();
+    let mut foreign_mac = Hmac::<Sha256>::new_from_slice(secret.as_bytes()).unwrap();
+    foreign_mac.update(&foreign_body);
+    let foreign_signature = hex::encode(foreign_mac.finalize().into_bytes());
+    let foreign_event = bureau
+        .parse_webhook(&foreign_body, &foreign_signature)
+        .unwrap();
+    assert!(restarted
+        .apply_verified_webhook(&foreign_event, next)
+        .await
+        .unwrap()
+        .is_none());
     let body = serde_json::to_vec(&serde_json::json!({
+        "organization_id": "org-a",
         "bureau_job_id": "bureau-a",
         "status": "SHIPPED",
         "tracking_number": "tracking-a"
@@ -725,10 +742,24 @@ async fn passport_jobs_survive_restart_without_cross_tenant_reads() {
         .await
         .unwrap()
         .unwrap();
-    assert!(matches!(
-        restarted.apply_verified_webhook(&event, next).await,
-        Err(PassportWebhookRepositoryError::AmbiguousBureauJob)
-    ));
+    // A provider may reuse a job ID for a different tenant; the signed
+    // organization claim must select exactly that tenant's row.
+    let other_body = serde_json::to_vec(&serde_json::json!({
+        "organization_id": "org-b",
+        "bureau_job_id": "bureau-a",
+        "status": "SHIPPED"
+    }))
+    .unwrap();
+    let mut other_mac = Hmac::<Sha256>::new_from_slice(secret.as_bytes()).unwrap();
+    other_mac.update(&other_body);
+    let other_signature = hex::encode(other_mac.finalize().into_bytes());
+    let other_event = bureau.parse_webhook(&other_body, &other_signature).unwrap();
+    let other_updated = restarted
+        .apply_verified_webhook(&other_event, next)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(other_updated.organization_id, "org-b");
     assert_eq!(
         restarted
             .get(&org_b, "application-b")
@@ -736,7 +767,7 @@ async fn passport_jobs_survive_restart_without_cross_tenant_reads() {
             .unwrap()
             .unwrap()
             .status,
-        "SUBMITTED"
+        "READY_FOR_ACTIVATION"
     );
     assert_eq!(
         restarted

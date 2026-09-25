@@ -126,6 +126,12 @@
     "invalid_signature": {"status": 401, "body": {"detail": "Invalid personalization webhook signature"}},
     "native_requirement": "inbound callback verification remains available with a configured webhook secret when outbound bureau submission is unavailable"
   },
+  "webhook_tenant_binding": {
+    "decision": "Intentional native security correction: the retained Python callback does not carry trusted tenant identity; beta's new Rust bureau must sign organization_id in the raw callback body before native ownership is selected.",
+    "signed_fields": ["organization_id", "bureau_job_id", "status"],
+    "lookup": "After HMAC verification, update only a durable job matching both organization_id and bureau_job_id. A valid callback naming another organization must not mutate a foreign job.",
+    "missing_or_empty_identity": "Invalid personalization webhook event"
+  },
   "application_validation_oracle": "FastAPI TestClient against the retained physical_document_router; invalid requests are rejected before the job store is read",
   "application_validation_base_input": {
     "organization_id": "org-1", "flow_execution_id": "flow-1",
