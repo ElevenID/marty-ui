@@ -49,8 +49,12 @@ selected here.
    authcrypt policy/CA pairing. `-PlanOnly` explicitly reports
    `didcomm_configuration_validated=false`; it is not runtime qualification.
    Native passport remains off unless `-EnablePassportNative` is explicitly
-   selected. That selector adds `docker-compose.profile.passport-native-beta.yml`
-   and requires five readable, nonempty beta-only secret source files supplied
+   selected. That selector adds `docker-compose.profile.passport-native-beta.yml`.
+   The wrapper reads the ignored `.env.passport.beta.local` source-path file (or the
+   explicitly supplied `-PassportEnvFile`) in addition to the normal beta env
+   files. This file must contain paths and credential-free provider URLs, not
+   secret values. It is required only for the opt-in passport deployment,
+   which requires five readable, nonempty beta-only secret source files supplied
    through `PASSPORT_TENANT_API_KEYS_SOURCE_FILE`,
    `PHYSICAL_DOCUMENT_ARTIFACT_KEY_SOURCE_FILE`,
    `ICAO_DOCUMENT_SIGNER_API_KEY_SOURCE_FILE`,
@@ -60,7 +64,10 @@ selected here.
    wrapper validates the rendered ownership and mounts before mutations and
    again before maintenance; `-PlanOnly` reports
    `passport_configuration_validated=false`. Provider sources are not yet
-   provisioned, and this opt-in is not permission to deploy or retire Python.
+   provisioned. The current Fernet artifact-key file is not KMS-backed; replace
+   that beta binding with a non-exportable KMS artifact envelope and prove
+   restart/decrypt/scrub behavior before selecting native passport. This
+   opt-in is not permission to deploy or retire Python.
 4. Explicitly hold `BetaOrigin` at `https://beta.elevenidllc.com`. The wrapper's
    HTTPS syntax check alone does not establish that an origin is beta. Retain
    fixed beta Compose projects/network and labeled-volume ownership checks.
