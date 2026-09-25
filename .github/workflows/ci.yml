@@ -640,6 +640,36 @@ jobs:
           printf 'MARTY_SELFHOST_TEST_PACKAGER_BINARY=%s\n' "$PWD/rust/target/debug/package-selfhost-bundle" >> "$GITHUB_ENV"
           printf 'MARTY_SELFHOST_TEST_IMAGE=%s\n' "$selfhost_image_id" >> "$GITHUB_ENV"
           printf 'MARTY_SELFHOST_TEST_REVISION=%s\n' "$selfhost_revision" >> "$GITHUB_ENV"
+      - name: Verify opt-in passport test-mode image boundary
+        shell: bash
+        run: |
+          set -euo pipefail
+          if default_output="$(docker run --rm --network none \
+            --env PASSPORT_NATIVE_HTTP_ENABLED=true \
+            --env PHYSICAL_DOCUMENT_ALLOW_SELF_SIGNED=true \
+            --entrypoint /usr/local/bin/marty-issuance-service \
+            "$MARTY_SELFHOST_TEST_IMAGE" 2>&1)"; then
+            echo "Default public image unexpectedly enabled passport test mode" >&2
+            exit 1
+          fi
+          grep -Fq 'self-signed passport test mode requires the passport-self-signed-test build feature' <<<"$default_output"
+          docker build \
+            --file services/Dockerfile \
+            --tag marty-passport-self-signed:contract \
+            --build-arg PASSPORT_SELF_SIGNED_TEST=true \
+            --build-arg MARTY_RELEASE_VERSION=ci \
+            --build-arg "MARTY_UI_SHA=$MARTY_SELFHOST_TEST_REVISION" \
+            --build-arg SERVICE_NAME=issuance_native \
+            .
+          if test_output="$(docker run --rm --network none \
+            --env PASSPORT_NATIVE_HTTP_ENABLED=true \
+            --env PHYSICAL_DOCUMENT_ALLOW_SELF_SIGNED=true \
+            --entrypoint /usr/local/bin/marty-issuance-service \
+            marty-passport-self-signed:contract 2>&1)"; then
+            echo "Test-mode image unexpectedly started without tenant keys" >&2
+            exit 1
+          fi
+          grep -Fq 'PASSPORT_TENANT_API_KEYS is required when PASSPORT_NATIVE_HTTP_ENABLED is true' <<<"$test_output"
       - name: Prepare database contract executables
         working-directory: rust
         shell: bash
@@ -876,11 +906,14 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          for database in marty_verification_contract marty_db_contracts_test marty_issuance_executable_smoke_test marty_retention_contract_test; do
+          for database in marty_verification_contract marty_db_contracts_test marty_issuance_executable_smoke_test marty_retention_contract_test marty_passport_contract_test marty_passport_packaged_test; do
             docker exec "${{ job.services.postgres.id }}" createdb -U postgres "$database"
           done
           docker exec --interactive "${{ job.services.postgres.id }}" \
             psql --username postgres --dbname marty_issuance_executable_smoke_test \
+            < rust/services/issuance/tests/fixtures/oid4vci_migration_base.sql
+          docker exec --interactive "${{ job.services.postgres.id }}" \
+            psql --username postgres --dbname marty_passport_packaged_test \
             < rust/services/issuance/tests/fixtures/oid4vci_migration_base.sql
       - name: Run safe Rust contract groups concurrently
         working-directory: rust
@@ -949,6 +982,12 @@ jobs:
         working-directory: rust
         shell: bash
         run: python3 ../scripts/ci/run-db-contract-groups.py
+      - name: Test packaged passport self-signed mode
+        working-directory: rust
+        env:
+          MARTY_PASSPORT_POSTGRES_TEST_URL: postgresql://postgres:postgres@127.0.0.1:5432/marty_passport_contract_test
+          MARTY_PASSPORT_PACKAGED_TEST_URL: postgresql://postgres:postgres@127.0.0.1:5432/marty_passport_packaged_test
+        run: cargo test --locked -p marty-issuance-service --features passport-self-signed-test --test passport_postgres_contract
       - name: Preserve synthetic runtime failure diagnostics
         if: always()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a

@@ -2,15 +2,15 @@
 
 **Status (2026-09-25):** Waves one through three and the subsequent Canvas,
 verifier, DIDComm-consumer, and issuance ownership slices have landed. The
-protected `marty-ui` main at `91ea7e52d6a3822981bb42f002da8c68532ebf2e`
-contains PR #849's Rust organization-retention routes: **122 native / 9 retained
+PR #849's protected-main merge at `91ea7e52d6a3822981bb42f002da8c68532ebf2e`
+contains its Rust organization-retention routes: **122 native / 9 retained
 Python / 131 total** issuance HTTP operations. Credentials PR #299 removed the
 two superseded Python retention routes at `48298b943032ea86043d2d4e14c626211bb92d1b`;
 PR #300's CI correction landed at
 `9026cbbbfd647cae19af040d95b541e2e67cdb3e`, and post-merge Credentials
 main CI passed. The final nine retained Python routes are the physical-passport
 surface. Rust source PR #852 implements their default-off native counterparts
-and is under protected exact-head CI at `d39f878df5e4f1d954742efd21bf314b020e6a29`;
+and passed exact-head CI at `d39f878df5e4f1d954742efd21bf314b020e6a29`;
 it has not switched consumers or authorized Python deletion. Stacked PR #853
 adds a default-off beta secret/profile overlay, not a deployment. Real beta
 signer and bureau endpoints, five secret-file sources, provider callback and
@@ -50,7 +50,7 @@ This is not a line-for-line translation project. Rust owns deterministic protoco
 
 The immediate deployment boundary is beta. Production and persistent self-host environments are not changed by this roadmap without a separate approval and promotion decision.
 
-## Historical execution snapshot — 2026-09-21
+## Execution snapshots — through 2026-09-25
 
 The DIDComm consumer cutover gate is now bound to published Credentials
 `v0.1.76`, protected-main source
@@ -63,16 +63,22 @@ non-reusable; the minimum qualified coordinate is `v0.1.76`. This qualifies the
 selected consumer artifact but does not establish a beta deployment, Python
 deletion, KMS correction, or production change.
 
-The active stacked issuance lanes are newer than the landed 96/35 checkpoint.
-Resource-owner PR #836 is at exact head `42d5030c`; its hosted checks are active
-after correcting the owner-outage acceptance harness. Public trust-stack PR
-#837 is at exact head `16e8ec517`, stacked and awaiting retargeting. Authorization
-contract PR #838 is at exact head `8f452d589`. The #837 stack reports **107
-native / 24 remaining / 131 total** issuance HTTP operations. Signed local head
-`d7c9f94f8` implements the native OID4VCI public protocol but remains under
-independent review and has not been routed. These are implementation and review
-coordinates, not permission to delete reachable Python or a claim of beta or
-production deployment.
+Resource-owner PR #836, public trust PR #837, authorization contract PR #838,
+OID4VCI public-protocol PR #841, Canvas mirror PR #842, and OID4VCI management
+PR #843 are merged. PR #844's reviewed 120/11 native-ownership tree landed on
+protected `main` as `4db6a6614e48f326546d5f61a5fa3a8764c46f3c` after
+merge-group CI `36062597618` and CodeQL Rust both passed; its squash tree
+matches reviewed head `896fac4510fdec423d1419b2b3e5d94060d5a05b` exactly.
+PR #845 landed at `207c84afc00b2f3b2b3db6b433823a9c7d59ab38`. Retention
+PR #849 then landed through protected merge-group CI at
+`91ea7e52d6a3822981bb42f002da8c68532ebf2e` with a 122/9 source
+inventory. Credentials PR #299 separately retired the two Python retention
+routes; PR #300's toolchain correction and post-merge main CI passed. PR #852
+has passed exact-head CI for nine default-off physical-passport counterparts;
+protected merge, live provider/consumer acceptance, and cutover qualification
+remain.
+These coordinates do not authorize deletion of reachable Python or establish a
+new beta or production deployment.
 
 The current issued-credential adapter candidate preserves the five frozen
 public list/detail/lifecycle routes and restores lifecycle comments as durable,
@@ -6187,25 +6193,158 @@ routes**. The two organization-retention management routes now have a frozen
 behavior contract, Rust HTTP and PostgreSQL implementations, strict gateway
 ownership, and real-database checks for tenant isolation, retained event
 ownership, parent/child purge, and foreign/newer survivors. The remaining nine
-Python routes are the physical-passport surface. PR #849 landed on protected
-`marty-ui` main at `91ea7e52d6a3822981bb42f002da8c68532ebf2e`. Credentials
-PR #299 then deleted the two superseded Python retention routes, and its
-post-merge main CI passed after PR #300's toolchain correction. This is a
-source-and-consumer cutover, not a claim of aggregate beta deployment.
+Python routes are the physical-passport surface. Protected-main merge
+`91ea7e52d6a3822981bb42f002da8c68532ebf2e` passed exact-head and
+merge-group gates; no beta or production deployment is implied. Credentials
+PR #299 subsequently merged at protected main
+`48298b943032ea86043d2d4e14c626211bb92d1b`, removing only the two
+qualified Python retention routes. The nine Python passport routes remain.
 
 Credentials `v0.1.78` is published from protected-main source
 `efd5da1e2d41419ce93721f98d314c7b911e6b5e`, whose issuance migration head
-is `issuance_event_owner`. PR #849 pins the release's immutable issuance
+is `issuance_event_owner`. Merged #849 pins the release's immutable issuance
 image digest in the stack lock and DIDComm evidence, and CI/CD require that
-reviewed migration-bearing source before native retention activates. The
-predecessor sequence #840 → #842 → #844 → #845, protected exact-head checks,
-maintainer re-review, and retention Python retirement have landed. One
-aggregate beta-only deployment/acceptance soak remains; production is unchanged.
+reviewed migration-bearing source before native retention activates. Focused
+release-contract tests and lint passed. The predecessor sequence through #845
+and retention #849 have landed. Retention Python retirement #299 has also
+landed; passport qualification, its separate Python retirement, and one
+aggregate beta-only deployment/acceptance soak remain.
+Production is unchanged.
 
-Passport issue #851 tracks the final nine routes. Its language-neutral
-behavioral oracle landed in Credentials PR #296. `marty-ui` PR #852 is the
-default-off Rust source port; stacked PR #853 is the beta-only secret/profile
-selection layer. Neither PR is a passport cutover. Real provider endpoints and
-secret sources, qualification of tenant-scoped authorization, PostgreSQL
-lifecycle and signed-callback evidence, image/rendered-selection gates, Python
-retirement, and the aggregate beta-only soak remain required.
+### Physical-passport checkpoint (open #852, 2026-09-25)
+
+The nine retained Python passport routes have default-off Rust counterparts in
+PR #852. They are **not yet the selected owner**: Python routes, migrations,
+and provider adapters remain until the full cutover gate passes. The Rust draft
+preserves the frozen request and safe-response shapes, tenant-scoped durable
+jobs, remote ICAO signing, single-job and batch bureau transports, signed
+webhooks, and production-status projection. The batch adapter preserves the
+Python envelope, out-of-order job mapping, and prior job state/metadata on
+partial or failed responses. The native single-job payload
+forwards TD1/TD2/TD3 rather than Python's hardcoded TD3; that intentional repair
+is tracked in #851.
+
+The explicit self-signed test signer is behind both a non-default Cargo feature
+and a runtime flag; a configured remote signer takes precedence, and the default
+production build excludes local CSCA key generation. An opt-in service-image
+build argument preserves this test capability without enabling it in release
+images. Both image modes built locally; network-disabled startup probes showed
+the default image rejects the runtime flag and the opt-in image reaches the
+tenant-key gate. Full CI now repeats this image boundary check.
+Packaged-process testing found that the original draft's in-process
+PostgreSQL fixture had hidden a
+missing startup schema migration. The Rust branch now applies an idempotent
+`physical_document_jobs` migration compatible with the released Python table
+when native passport HTTP is enabled. A dedicated feature-enabled CI step uses
+a separate released-schema database and the packaged binary to create a job,
+sign an SOD, and confirm persistence across another migration. This passed
+locally, as did the default PostgreSQL contract, passport unit/HTTP tests,
+strict Clippy, and 220 workflow-regression tests. Hosted exact-head CI passed;
+protected merge and live acceptance remain separate gates.
+
+The frozen request contract also records the released Python runtime's Unicode
+15 digit behavior for `DG` names. Native validation accepts the same decimal
+and nondecimal digit classes; decimal names normalize to their numeric data-group
+numbers without the old fixed-width truncation, while nondecimal digits retain
+Python's later conversion failure. Focused unit tests and the real-PostgreSQL
+HTTP contract cover this edge before any passport cutover.
+
+The Rust Flow consumer now has a default-off `PASSPORT_NATIVE_FLOW_ENABLED`
+selector in this draft. When enabled with tenant keys it targets the native
+issuance URL using the organization-specific key; when disabled it retains the
+Python issuance URL and shared key for rollback. A local two-owner HTTP test
+checks both selections. Deployment configuration does not enable the selector.
+The development and beta Compose overlays now pass the two selectors and
+matching provider/keyring inputs with false/empty defaults. Their closed
+source inventories and complete synthetic Compose render gates pass; this is
+configuration availability, not approval to turn either selector on. The
+tenant-key secret file must still be mounted/provisioned in the target beta
+environment before enabling either service.
+
+The draft is not a nine-route cutover. Live signer and bureau qualification
+(including batch), live packaged-image and gateway acceptance, live Flow
+qualification, exact route/error parity, stacked-base review and CI, immediate
+qualified Python retirement, and the one aggregate
+beta-only acceptance soak remain. Production is unchanged; DIDComm KMS
+corrections remain separately deferred.
+
+Maintainer error-parity review on 2026-09-25 found another explicit cutover
+gate: the released Python application-create route returns structured FastAPI
+422 details for missing fields, a non-object body, country-code pattern failure,
+missing DG2, and forbidden extras. Twenty-seven Python-observed HTTP vectors now
+cover those cases plus malformed JSON, primitive and nested type failures,
+document-type literals, destination length, data-group validation, simultaneous errors, and
+non-JSON/missing Content-Type. Both passport model handlers now share a
+FastAPI-compatible body decoder; the application route has an ordered
+validation projector. The 27 application and 13 quality vectors pass their
+Rust HTTP tests. A shared strict base64 decoder also preserves Python's
+acceptance of non-canonical trailing bits through validation, signing and SOD
+hashing, with padding-error vectors and explicit accepted-input regression.
+Nested MRZ and data-group error order follows the submitted JSON field order,
+including a frozen first-invalid-group case that differs from lexical order.
+Direct Python HTTP replay distinguishes safe job datetime fields (`Z`) from
+the stored quality-result audit string (`+00:00`); both use microsecond precision
+and omit a zero fraction. Native job timestamps keep Chrono serialization,
+while the quality audit string uses a shared Python-compatible formatter.
+Strict Issuance Clippy passes. This
+closes the observed default-Axum-rejection gap, not the whole route/error
+parity gate: broader live and adverse-provider acceptance still precede
+enabling the gateway selector or removing Python.
+
+Gateway still selects Python for public `/v1/passport` routes by default. Draft
+#852's explicit `PASSPORT_NATIVE_GATEWAY_ENABLED` switch, default false, now
+selects the eight tenant-authenticated method/path shapes when enabled. The
+ninth, separately HMAC-signed bureau webhook is now a hidden public ingress
+route that forwards the raw body and signature to Python by default or Rust
+under the same selector, without a caller JWT or injected tenant key. Live
+bureau callback and end-to-end signature/error acceptance remain unqualified.
+The native inbound HMAC verifier is independent of the outbound bureau URL:
+callbacks for already-submitted jobs still verify when submission is not
+configured, matching the retained Python path. A frozen missing-URL error
+observation and focused Rust test cover this edge; live callback acceptance is
+still required.
+Lookalike paths remain outside gateway routing. The authenticated selector
+requires the shared, validated tenant keyring. Native passport middleware
+binds an authenticated organization to the existing
+issuance view/initiate permission, checks membership or API-key scope, rejects
+cross-tenant body/header/query claims, and replaces
+client-provided upstream key/organization headers with that organization's
+native key. Maintainer review found that the first native gateway pass omitted
+the trusted `X-User-ID` needed by passport quality-result audit records; the
+gateway now replaces any caller value with the authenticated session or API-key
+actor. A two-tenant gateway HTTP test confirms distinct keys, trusted actors,
+and no forwarding on mismatched claims. All 133 gateway library tests and
+strict Clippy pass locally. The shared issuance API key is not used as a
+passport tenant credential. This source gate is not deployment authorization: live signer and
+bureau, signed webhook, image, Flow, beta secret mount, exact-head CI and
+acceptance qualification still remain.
+
+The post-rebase hosted CI pass exposed packaging and configuration inventories
+that had not yet accounted for passport. Repair `4f3efee01960c6811faf39934afcfc6ea1660bc2`
+adds the default-off self-host inputs, updates the Flow fixture and source
+guards, refreshes the locked feature-regression probe, and classifies passport
+Kubernetes inputs as deliberately unbound pending Secret-backed wiring. A
+follow-up source change wires the production self-host gateway and Flow
+selectors/keyring inputs with false/empty defaults, matching `issuance-native`.
+The default production Flow descriptor still omits the native HTTP URL, as its
+frozen consumer-owner guard requires. Enabling the Flow passport selector with
+the legacy URL now fails closed; an explicit native URL, secret-file mounts,
+live provider acceptance, and separate cutover authorization remain required.
+Both deployment profiles stay on the Python passport owner.
+The focused release-contract suite passed 111 tests and the locked Rust probe
+compiled locally; hosted exact-head CI passed. This is a source
+qualification checkpoint, not a passport cutover or beta deployment.
+
+Exact-head repair `d39f878df5e4f1d954742efd21bf314b020e6a29` made the
+closed self-host executable contract distinguish a verified empty, default-off
+passport keyring file input from a mounted secret. Hosted run `36114977028`
+passed the previously failing concurrent Rust contract group and its complete
+CI gate. This qualifies source packaging, not a provider-backed beta cutover.
+
+Credentials PR #300's CI correction landed at
+`9026cbbbfd647cae19af040d95b541e2e67cdb3e`; post-merge main CI passed.
+Stacked PR #853 supplies a default-off beta-only secret/profile overlay but
+does not provision the five beta secret sources or real signer and bureau
+endpoints. Passport issue #851 tracks provider callback and tenant-isolation
+acceptance, Python retirement, and the aggregate beta-only soak. Production
+remains unchanged.

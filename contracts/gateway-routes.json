@@ -21,7 +21,7 @@
       "MIPVersionMiddleware"
     ]
   },
-  "route_count": 435,
+  "route_count": 436,
   "routes": [
     {
       "include_in_schema": true,
@@ -1965,7 +1965,7 @@
       "include_in_schema": true,
       "method": "POST",
       "path": "/v1/passport/applications",
-      "status_code": 200
+      "status_code": 201
     },
     {
       "include_in_schema": true,
@@ -2007,6 +2007,12 @@
       "include_in_schema": true,
       "method": "GET",
       "path": "/v1/passport/capabilities",
+      "status_code": 200
+    },
+    {
+      "include_in_schema": false,
+      "method": "POST",
+      "path": "/v1/passport/webhooks/personalization",
       "status_code": 200
     },
     {

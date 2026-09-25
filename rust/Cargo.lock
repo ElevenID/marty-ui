@@ -2501,6 +2501,23 @@ dependencies = [
 ]
 
 [[package]]
+name = "fernet"
+version = "0.2.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "c66b725fe9483b9ee72ccaec072b15eb8ad95a3ae63a8c798d5748883b72fd33"
+dependencies = [
+ "aes",
+ "base64 0.22.1",
+ "byteorder",
+ "cbc",
+ "getrandom 0.2.17",
+ "hmac 0.12.1",
+ "sha2 0.10.9",
+ "subtle",
+ "zeroize",
+]
+
+[[package]]
 name = "ff"
 version = "0.13.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -4490,6 +4507,7 @@ dependencies = [
  "marty-didcomm",
  "marty-iso18013",
  "marty-oid4vci",
+ "marty-passport-auth",
  "marty-verification",
  "mmf-core",
  "mmf-messaging",
@@ -4535,6 +4553,7 @@ dependencies = [
  "http 1.5.0",
  "marty-deployment-profile",
  "marty-oid4vci",
+ "marty-passport-auth",
  "mmf-platform",
  "mmf-security",
  "percent-encoding",
@@ -4597,6 +4616,7 @@ dependencies = [
  "chrono",
  "ed25519-dalek",
  "fancy-regex",
+ "fernet",
  "flate2",
  "futures-core",
  "futures-util",
@@ -4614,6 +4634,7 @@ dependencies = [
  "marty-flow",
  "marty-gateway",
  "marty-oid4vci",
+ "marty-passport-auth",
  "marty-platform-clock",
  "marty-release-evidence",
  "marty-selfhost-bundle",
@@ -4655,6 +4676,7 @@ dependencies = [
  "tracing-subscriber",
  "url",
  "uuid",
+ "zeroize",
  "zip",
 ]
 
@@ -4772,6 +4794,16 @@ dependencies = [
  "tracing-subscriber",
  "url",
  "uuid",
+]
+
+[[package]]
+name = "marty-passport-auth"
+version = "0.1.0"
+dependencies = [
+ "mmf-security",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.20",
 ]
 
 [[package]]

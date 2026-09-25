@@ -1,0 +1,264 @@
+{
+  "schema": "elevenid.issuance-physical-passport-native/v1",
+  "python_reference": {
+    "repository": "ElevenID/marty-credentials",
+    "protected_main_commit": "bd701403e7eae9f495fc3a8c4fea1945785b425a",
+    "contract": "contracts/physical-passport-python-route-reference.json",
+    "route_source_sha256": "2206f15dfd8a8040e997cba0e4a7f27cc8e3f4e84d6094c62ae71beae5d90e37",
+    "signer_source_sha256": "8064185f747bae091c5164a32915f83b435ccd6526434f5ddca5114cc6661472",
+    "bureau_source_sha256": "31d70c676c2b4e5e09d0e0ea6aa7bea37432b98984a5adffd5fea7e18ede9afb"
+  },
+  "remote_signer": {
+    "method": "POST",
+    "path": "/v1/icao/emrtd/sign",
+    "timeout_seconds": 30,
+    "required_result_fields": ["sod_der_base64", "dsc_cert_pem"],
+    "incomplete_error": "ICAO document signer returned incomplete signing material"
+  },
+  "self_signed_test_signer": {
+    "python_flag": "PHYSICAL_DOCUMENT_ALLOW_SELF_SIGNED=true",
+    "python_behavior": "When no remote signer URL is set, issue a single-use CSCA and DSC for testing and offline fixtures only",
+    "native_status": "available behind non-default passport-self-signed-test Cargo feature plus explicit runtime flag; remote URL takes precedence",
+    "packaged_image_build_arg": "PASSPORT_SELF_SIGNED_TEST=true builds a separate opt-in image; the shared release image defaults to false",
+    "core_capability": "marty-verification/authority-issuance at the pinned Core revision; local single-use keys are excluded from the default production build",
+    "python_retirement_gate": "feature-enabled HTTP/database and packaged test-mode behavior are covered by the dedicated CI PostgreSQL fixture; retain Python until image, gateway/Flow and provider acceptance gates pass"
+  },
+  "bureau_batch_provider": {
+    "python_reference": "contracts/physical-passport-provider-reference.json batch_http",
+    "python_reference_sha256": "fc2d68d4d199833ed6cbff0d9f5d57f6bcf58d78639bcc3146147442fd684e8a",
+    "frozen_exchange": {
+      "method": "POST",
+      "path": "/v1/personalization/batches",
+      "authorization": "Bearer synthetic-bureau-key",
+      "timeout_seconds": 60,
+      "json": {
+        "batch_id": "batch-reference",
+        "organization_id": "org-reference",
+        "jobs": [
+          {
+            "job_id": "job-reference",
+            "application_id": "app-reference",
+            "country_code": "UTO",
+            "data_groups": {"DG1": "AQ==", "DG2": "Ag=="},
+            "sod_der_base64": "U09E",
+            "dsc_cert_pem": "synthetic-cert",
+            "mrz": {"line_1": "P<UTOSYNTHETIC<<APPLICANT<<<<<<<<<<<<<<<<<<<", "line_2": "L898902C36UTO7408122F1204159ZE184226B<<<<<10"}
+          },
+          {
+            "job_id": "job-second",
+            "application_id": "app-second",
+            "country_code": "GBR",
+            "data_groups": {"DG3": "Aw=="},
+            "sod_der_base64": "U09E",
+            "dsc_cert_pem": "synthetic-cert",
+            "mrz": {"line_1": "P<UTOSYNTHETIC<<APPLICANT<<<<<<<<<<<<<<<<<<<", "line_2": "L898902C36UTO7408122F1204159ZE184226B<<<<<10"}
+          }
+        ]
+      },
+      "response": {
+        "status": "QUEUED",
+        "jobs": [
+          {"job_id": "job-second", "bureau_job_id": "bureau-second", "status": "PRINTING"},
+          {"job_id": "job-reference", "bureau_job_id": "bureau-reference", "status": "QUEUED"}
+        ]
+      },
+      "failure_status": "FAILED"
+    },
+    "native_status": "Rust BureauClient::submit_batch ports the Python batch envelope, accepted/rejected statuses, out-of-order job mapping and preservation of existing job metadata/state on partial or failed responses; no public passport route uses it",
+    "python_retirement_gate": "qualify the Rust batch adapter against the frozen Python provider contract and live bureau before deleting the Python bureau adapter"
+  },
+  "document_types": ["TD1", "TD2", "TD3"],
+  "wide_data_group_number_observation": {
+    "python_oracle": "released PassportApplicationRequest accepts a DG number beyond u16; _numbered_data_groups converts it with Python int",
+    "input_name": "DG999999999999999999999999999999999999999999",
+    "normalized_number": "999999999999999999999999999999999999999999",
+    "native_requirement": "preserve creation, remote signer, and bureau payload behavior without truncating the number"
+  },
+  "unicode_data_group_digit_observation": {
+    "python_unicode_version": "15.0.0",
+    "python_isdigit_count": 808,
+    "python_decimal_count": 680,
+    "python_isdigit_codepoints_sha256_be_u32": "ed93d5d2dd21031385372347516ef139e18bdba6063869446536e24e1721ddce",
+    "python_decimal_codepoints_sha256_be_u32": "93a69f3604c97cdaa6460b7acf761f7edd20725f281233cd2a52a9dcfa38a312",
+    "python_decimal_values_sha256_be_u32_u8": "4ca0017c23b94f2ef8fe4e461720955a6d4d1e03f0fb8898a90c39e772340662",
+    "accepted_decimal_names": {"DG１２": "12", "DG١٣": "13"},
+    "accepted_nondecimal_name": "DG²",
+    "nondecimal_conversion": "accepted by the request model; Python int conversion fails at the later operation"
+  },
+  "degraded_capabilities": {
+    "condition": "native HTTP enabled with tenant keys but without signer, artifact key, or bureau",
+    "http_status": 200,
+    "supported": false,
+    "signer_mode": "UNAVAILABLE",
+    "encrypted_artifact_store": false,
+    "bureau_configured": false,
+    "blocker_count": 3,
+    "authenticated_application_create": {"status": 503, "detail": "PHYSICAL_DOCUMENT_ARTIFACT_KEY is required for encrypted document artifacts"},
+    "invalid_artifact_key": {
+      "capability_blocker": "PHYSICAL_DOCUMENT_ARTIFACT_KEY is invalid for encrypted sensitive artifacts.",
+      "authenticated_application_create": {"status": 503, "detail": "PHYSICAL_DOCUMENT_ARTIFACT_KEY is invalid"}
+    },
+    "invalid_provider_configuration": "unsafe or malformed configured provider URLs still fail startup; do not expose their secrets"
+  },
+  "flow_cutover": {
+    "selector": "PASSPORT_NATIVE_FLOW_ENABLED",
+    "default": false,
+    "legacy_target": "ISSUANCE_SERVICE_URL with ISSUANCE_API_KEY",
+    "native_target": "ISSUANCE_NATIVE_SERVICE_URL with organization-specific PASSPORT_TENANT_API_KEYS",
+    "missing_native_keys": "configuration error",
+    "qualification": "selector and rollback are tested locally; do not enable in deployment until signer, bureau, image, gateway, schema, and route parity gates pass"
+  },
+  "gateway_cutover": {
+    "current_owner": "issuance",
+    "native_route_count": 0,
+    "declared_gateway_route_count": 9,
+    "signed_webhook_path": "/v1/passport/webhooks/personalization",
+    "required_before_switch": "the default-off tenant-keyed gateway selector and nine declared routes, including raw-body signed webhook ingress, are implemented; qualify the packaged image, live Flow, remote signer and bureau (including batch), live signed webhook delivery, and exact route/error parity before selecting the native owner",
+    "shared_issuance_api_key": "must not be used as a passport tenant credential"
+  },
+  "webhook_missing_signature_observation": {
+    "python_oracle": "FastAPI TestClient against the released physical_document_router without X-Personalization-Signature",
+    "status": 422,
+    "body": {"detail": [{"type": "missing", "loc": ["header", "x-personalization-signature"], "msg": "Field required", "input": null}]}
+  },
+  "webhook_without_bureau_url_observation": {
+    "python_oracle": "verify_webhook_signature uses BUREAU_WEBHOOK_SECRET independently of BUREAU_URL; a callback with an invalid signature returns before the job store is read",
+    "invalid_signature": {"status": 401, "body": {"detail": "Invalid personalization webhook signature"}},
+    "native_requirement": "inbound callback verification remains available with a configured webhook secret when outbound bureau submission is unavailable"
+  },
+  "application_validation_oracle": "FastAPI TestClient against the retained physical_document_router; invalid requests are rejected before the job store is read",
+  "application_validation_base_input": {
+    "organization_id": "org-1", "flow_execution_id": "flow-1",
+    "application_template_id": "template-1", "credential_template_id": "credential-1",
+    "delivery_destination_profile_id": "destination-1", "country_code": "USA",
+    "applicant": {}, "mrz": {}, "data_groups": {"DG1": "YQ==", "DG2": "Yg=="}
+  },
+  "accepted_noncanonical_base64_observation": {
+    "python_oracle": "PassportApplicationRequest.model_validate accepts DG1=YR== and Python b64decode(validate=True) decodes it to the same byte as YQ==",
+    "data_group_value": "YR==", "decoded_hex": "61"
+  },
+  "application_validation_observations": [
+    {"input": {}, "status": 422, "body": {"detail": [
+      {"type": "missing", "loc": ["body", "organization_id"], "msg": "Field required", "input": {}},
+      {"type": "missing", "loc": ["body", "flow_execution_id"], "msg": "Field required", "input": {}},
+      {"type": "missing", "loc": ["body", "application_template_id"], "msg": "Field required", "input": {}},
+      {"type": "missing", "loc": ["body", "credential_template_id"], "msg": "Field required", "input": {}},
+      {"type": "missing", "loc": ["body", "delivery_destination_profile_id"], "msg": "Field required", "input": {}},
+      {"type": "missing", "loc": ["body", "country_code"], "msg": "Field required", "input": {}},
+      {"type": "missing", "loc": ["body", "applicant"], "msg": "Field required", "input": {}},
+      {"type": "missing", "loc": ["body", "mrz"], "msg": "Field required", "input": {}},
+      {"type": "missing", "loc": ["body", "data_groups"], "msg": "Field required", "input": {}}
+    ]}},
+    {"input": [], "status": 422, "body": {"detail": [
+      {"type": "model_attributes_type", "loc": ["body"], "msg": "Input should be a valid dictionary or object to extract fields from", "input": []}
+    ]}},
+    {"input": null, "status": 422, "body": {"detail": [
+      {"type": "missing", "loc": ["body"], "msg": "Field required", "input": null}
+    ]}},
+    {"override": {"country_code": "us"}, "status": 422, "body": {"detail": [
+      {"type": "string_pattern_mismatch", "loc": ["body", "country_code"], "msg": "String should match pattern '^[A-Z]{3}$'", "input": "us", "ctx": {"pattern": "^[A-Z]{3}$"}}
+    ]}},
+    {"override": {"delivery_destination_profile_id": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"}, "status": 422, "body": {"detail": [{"type": "string_too_long", "loc": ["body", "delivery_destination_profile_id"], "msg": "String should have at most 128 characters", "input": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx", "ctx": {"max_length": 128}}]}},
+    {"override": {"data_groups": {"DG1": "YQ=="}}, "status": 422, "body": {"detail": [
+      {"type": "value_error", "loc": ["body", "data_groups"], "msg": "Value error, DG1 and DG2 are required", "input": {"DG1": "YQ=="}, "ctx": {"error": {}}}
+    ]}},
+    {"override": {"extra": 1}, "status": 422, "body": {"detail": [
+      {"type": "extra_forbidden", "loc": ["body", "extra"], "msg": "Extra inputs are not permitted", "input": 1}
+    ]}},
+    {"raw_body": "", "status": 422, "body": {"detail": [{"type": "missing", "loc": ["body"], "msg": "Field required", "input": null}]}},
+    {"raw_body": "{", "status": 422, "body": {"detail": [{"type": "json_invalid", "loc": ["body", 1], "msg": "JSON decode error", "input": {}, "ctx": {"error": "Expecting property name enclosed in double quotes"}}]}},
+    {"raw_body": "{}", "content_type": "text/plain", "status": 422, "body": {"detail": [{"type": "model_attributes_type", "loc": ["body"], "msg": "Input should be a valid dictionary or object to extract fields from", "input": "{}"}]}},
+    {"raw_body": "{}", "omit_content_type": true, "status": 422, "body": {"detail": [{"type": "model_attributes_type", "loc": ["body"], "msg": "Input should be a valid dictionary or object to extract fields from", "input": "{}"}]}},
+    {"override": {"organization_id": null}, "status": 422, "body": {"detail": [{"type": "string_type", "loc": ["body", "organization_id"], "msg": "Input should be a valid string", "input": null}]}},
+    {"override": {"document_type": "TD4"}, "status": 422, "body": {"detail": [{"type": "literal_error", "loc": ["body", "document_type"], "msg": "Input should be 'TD1', 'TD2' or 'TD3'", "input": "TD4", "ctx": {"expected": "'TD1', 'TD2' or 'TD3'"}}]}},
+    {"override": {"applicant": []}, "status": 422, "body": {"detail": [{"type": "dict_type", "loc": ["body", "applicant"], "msg": "Input should be a valid dictionary", "input": []}]}},
+    {"override": {"mrz": {"line_1": 1}}, "status": 422, "body": {"detail": [{"type": "string_type", "loc": ["body", "mrz", "line_1"], "msg": "Input should be a valid string", "input": 1}]}},
+    {"override": {"data_groups": []}, "status": 422, "body": {"detail": [{"type": "dict_type", "loc": ["body", "data_groups"], "msg": "Input should be a valid dictionary", "input": []}]}},
+    {"override": {"data_groups": {"DG1": 1, "DG2": "Yg=="}}, "status": 422, "body": {"detail": [{"type": "string_type", "loc": ["body", "data_groups", "DG1"], "msg": "Input should be a valid string", "input": 1}]}},
+    {"override": {"data_groups": {"DG1": "YQ==", "DG2": "Yg==", "bad": "YQ=="}}, "status": 422, "body": {"detail": [{"type": "value_error", "loc": ["body", "data_groups"], "msg": "Value error, Invalid data group name: bad", "input": {"DG1": "YQ==", "DG2": "Yg==", "bad": "YQ=="}, "ctx": {"error": {}}}]}},
+    {"override": {"data_groups": {"DG1": "!", "DG2": "Yg=="}}, "status": 422, "body": {"detail": [{"type": "value_error", "loc": ["body", "data_groups"], "msg": "Value error, Only base64 data is allowed", "input": {"DG1": "!", "DG2": "Yg=="}, "ctx": {"error": {}}}]}},
+    {"override": {"data_groups": {"DG1": "YQ", "DG2": "Yg=="}}, "status": 422, "body": {"detail": [{"type": "value_error", "loc": ["body", "data_groups"], "msg": "Value error, Incorrect padding", "input": {"DG1": "YQ", "DG2": "Yg=="}, "ctx": {"error": {}}}]}},
+    {"override": {"data_groups": {"DG1": "YQ===", "DG2": "Yg=="}}, "status": 422, "body": {"detail": [{"type": "value_error", "loc": ["body", "data_groups"], "msg": "Value error, Excess data after padding", "input": {"DG1": "YQ===", "DG2": "Yg=="}, "ctx": {"error": {}}}]}},
+    {"override": {"data_groups": {"DG1": "A", "DG2": "Yg=="}}, "status": 422, "body": {"detail": [{"type": "value_error", "loc": ["body", "data_groups"], "msg": "Value error, Invalid base64-encoded string: number of data characters (1) cannot be 1 more than a multiple of 4", "input": {"DG1": "A", "DG2": "Yg=="}, "ctx": {"error": {}}}]}},
+    {"override": {"data_groups": {"DG1": "Zm9v=", "DG2": "Yg=="}}, "status": 422, "body": {"detail": [{"type": "value_error", "loc": ["body", "data_groups"], "msg": "Value error, Excess padding not allowed", "input": {"DG1": "Zm9v=", "DG2": "Yg=="}, "ctx": {"error": {}}}]}},
+    {"raw_body": "{\"organization_id\":\"org-1\",\"flow_execution_id\":\"flow-1\",\"application_template_id\":\"template-1\",\"credential_template_id\":\"credential-1\",\"delivery_destination_profile_id\":\"destination-1\",\"country_code\":\"USA\",\"applicant\":{},\"mrz\":{},\"data_groups\":{\"DG1\":\"YQ==\",\"DG2\":\"Yg==\",\"Zbad\":\"YQ==\",\"Abad\":\"YQ==\"}}", "status": 422, "body": {"detail": [{"type": "value_error", "loc": ["body", "data_groups"], "msg": "Value error, Invalid data group name: Zbad", "input": {"DG1": "YQ==", "DG2": "Yg==", "Zbad": "YQ==", "Abad": "YQ=="}, "ctx": {"error": {}}}]}},
+    {"raw_body": "{\"organization_id\":\"org-1\",\"flow_execution_id\":\"flow-1\",\"application_template_id\":\"template-1\",\"credential_template_id\":\"credential-1\",\"delivery_destination_profile_id\":\"destination-1\",\"country_code\":\"USA\",\"applicant\":{},\"mrz\":{\"z\":1,\"a\":2},\"data_groups\":{\"DG1\":\"YQ==\",\"DG2\":\"Yg==\"}}", "status": 422, "body": {"detail": [
+      {"type": "string_type", "loc": ["body", "mrz", "z"], "msg": "Input should be a valid string", "input": 1},
+      {"type": "string_type", "loc": ["body", "mrz", "a"], "msg": "Input should be a valid string", "input": 2}
+    ]}},
+    {"raw_body": "{\"organization_id\":\"org-1\",\"flow_execution_id\":\"flow-1\",\"application_template_id\":\"template-1\",\"credential_template_id\":\"credential-1\",\"delivery_destination_profile_id\":\"destination-1\",\"country_code\":\"USA\",\"applicant\":{},\"mrz\":{\"z\":1,\"a\":2},\"data_groups\":[]}", "status": 422, "body": {"detail": [
+      {"type": "string_type", "loc": ["body", "mrz", "z"], "msg": "Input should be a valid string", "input": 1},
+      {"type": "string_type", "loc": ["body", "mrz", "a"], "msg": "Input should be a valid string", "input": 2},
+      {"type": "dict_type", "loc": ["body", "data_groups"], "msg": "Input should be a valid dictionary", "input": []}
+    ]}},
+    {"override": {"country_code": "us", "data_groups": {"DG1": "YQ=="}, "extra": 1}, "status": 422, "body": {"detail": [
+      {"type": "string_pattern_mismatch", "loc": ["body", "country_code"], "msg": "String should match pattern '^[A-Z]{3}$'", "input": "us", "ctx": {"pattern": "^[A-Z]{3}$"}},
+      {"type": "value_error", "loc": ["body", "data_groups"], "msg": "Value error, DG1 and DG2 are required", "input": {"DG1": "YQ=="}, "ctx": {"error": {}}},
+      {"type": "extra_forbidden", "loc": ["body", "extra"], "msg": "Extra inputs are not permitted", "input": 1}
+    ]}}
+  ],
+  "quality_validation_oracle": "FastAPI TestClient against the released physical_document_router with a missing job store; invalid models are rejected before the store is read",
+  "quality_validation_observations": [
+    {"raw_body": "", "status": 422, "body": {"detail": [{"type": "missing", "loc": ["body"], "msg": "Field required", "input": null}]}},
+    {"raw_body": "null", "status": 422, "body": {"detail": [{"type": "missing", "loc": ["body"], "msg": "Field required", "input": null}]}},
+    {"input": [], "status": 422, "body": {"detail": [{"type": "model_attributes_type", "loc": ["body"], "msg": "Input should be a valid dictionary or object to extract fields from", "input": []}]}},
+    {"raw_body": "{", "status": 422, "body": {"detail": [{"type": "json_invalid", "loc": ["body", 1], "msg": "JSON decode error", "input": {}, "ctx": {"error": "Expecting property name enclosed in double quotes"}}]}},
+    {"raw_body": "{\"passed\":true}", "content_type": "text/plain", "status": 422, "body": {"detail": [{"type": "model_attributes_type", "loc": ["body"], "msg": "Input should be a valid dictionary or object to extract fields from", "input": "{\"passed\":true}"}]}},
+    {"raw_body": "{\"passed\":true}", "omit_content_type": true, "status": 422, "body": {"detail": [{"type": "model_attributes_type", "loc": ["body"], "msg": "Input should be a valid dictionary or object to extract fields from", "input": "{\"passed\":true}"}]}},
+    {"raw_body": "{\"z\":1,\"failure_codes\":null,\"a\":2}", "status": 422, "body": {"detail": [{"type": "missing", "loc": ["body", "passed"], "msg": "Field required", "input": {"z": 1, "failure_codes": null, "a": 2}}, {"type": "list_type", "loc": ["body", "failure_codes"], "msg": "Input should be a valid list", "input": null}, {"type": "extra_forbidden", "loc": ["body", "z"], "msg": "Extra inputs are not permitted", "input": 1}, {"type": "extra_forbidden", "loc": ["body", "a"], "msg": "Extra inputs are not permitted", "input": 2}]}},
+    {"input": {}, "status": 422, "body": {"detail": [{"type": "missing", "loc": ["body", "passed"], "msg": "Field required", "input": {}}]}},
+    {"input": {"passed": "abc"}, "status": 422, "body": {"detail": [{"type": "bool_parsing", "loc": ["body", "passed"], "msg": "Input should be a valid boolean, unable to interpret input", "input": "abc"}]}},
+    {"input": {"passed": null}, "status": 422, "body": {"detail": [{"type": "bool_type", "loc": ["body", "passed"], "msg": "Input should be a valid boolean", "input": null}]}},
+    {"input": {"passed": true, "extra": 1}, "status": 422, "body": {"detail": [{"type": "extra_forbidden", "loc": ["body", "extra"], "msg": "Extra inputs are not permitted", "input": 1}]}},
+    {"input": {"passed": true, "failure_codes": null}, "status": 422, "body": {"detail": [{"type": "list_type", "loc": ["body", "failure_codes"], "msg": "Input should be a valid list", "input": null}]}},
+    {"input": {"passed": true, "failure_codes": ["a", 2]}, "status": 422, "body": {"detail": [{"type": "string_type", "loc": ["body", "failure_codes", 1], "msg": "Input should be a valid string", "input": 2}]}}
+  ],
+  "routes": [
+    {"method": "GET", "path": "/v1/passport/capabilities"},
+    {"method": "POST", "path": "/v1/passport/applications"},
+    {"method": "POST", "path": "/v1/passport/applications/{application_id}/generate-data-groups"},
+    {"method": "POST", "path": "/v1/passport/applications/{application_id}/generate-sod"},
+    {"method": "POST", "path": "/v1/passport/applications/{application_id}/submit-personalization"},
+    {"method": "GET", "path": "/v1/passport/applications/{application_id}/production-status"},
+    {"method": "POST", "path": "/v1/passport/applications/{application_id}/quality-verify"},
+    {"method": "POST", "path": "/v1/passport/applications/{application_id}/activate"},
+    {"method": "POST", "path": "/v1/passport/webhooks/personalization"}
+  ],
+  "request_validation": {
+    "application_required": ["organization_id", "flow_execution_id", "application_template_id", "credential_template_id", "delivery_destination_profile_id", "country_code", "applicant", "mrz", "data_groups"],
+    "default_document_type": "TD3",
+    "delivery_destination_profile_id_max_length": 128,
+    "country_code_pattern": "^[A-Z]{3}$",
+    "required_data_groups": ["DG1", "DG2"],
+    "data_group_name_pattern": "^DG[0-9]+$",
+    "data_group_values": "strict-base64",
+    "quality_required": ["passed"],
+    "quality_default_failure_codes": [],
+    "extra_fields": "forbid"
+  },
+  "safe_job_response_fields": ["id", "organization_id", "flow_execution_id", "application_id", "credential_template_id", "delivery_destination_profile_id", "document_type", "country_code", "secure_artifact_reference", "bureau_job_id", "tracking_number", "status", "quality_result", "error_code", "error_message", "submitted_at", "completed_at", "created_at", "updated_at"],
+  "timestamp_wire_observation": {
+    "python_oracle": "released production-status route through FastAPI TestClient with a fixed UTC row; quality_result.checked_at is a separately stored datetime.isoformat string",
+    "job_whole_second_utc": "2026-09-25T06:01:02Z",
+    "job_microsecond_utc": "2026-09-25T06:01:02.123456Z",
+    "quality_whole_second_utc": "2026-09-25T06:01:02+00:00",
+    "quality_microsecond_utc": "2026-09-25T06:01:02.123456+00:00",
+    "precision": "microseconds; no fractional field when zero"
+  },
+  "bureau_status_projection": {
+    "QUEUED": "SUBMITTED",
+    "PRINTING": "IN_PRODUCTION",
+    "ENCODING": "IN_PRODUCTION",
+    "QUALITY_CHECK": "QUALITY_CHECK",
+    "SHIPPED": "READY_FOR_ACTIVATION",
+    "DELIVERED": "READY_FOR_ACTIVATION",
+    "FAILED": "FAILED",
+    "CANCELLED": "CANCELLED"
+  },
+  "intentional_python_wire_repair": {
+    "observation": "Python accepts and stores TD1/TD2/TD3 but hardcodes TD3 in the bureau submit payload",
+    "native_requirement": "Forward the stored document type for all three accepted values",
+    "tracking_issue": "https://github.com/ElevenID/marty-ui/issues/851"
+  },
+  "qualification": "nine opt-in native routes and a synthetic PostgreSQL/HTTP lifecycle checkpoint; live signer and bureau, image, gateway, Flow, Python retirement, and beta gates remain"
+}

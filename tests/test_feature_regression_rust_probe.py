@@ -215,6 +215,7 @@ def test_observer_is_narrow_feature_gated_and_absent_from_default_api() -> None:
     assert issuance_manifest["features"] == {
         "default": [],
         "feature-regression-observer": [],
+        "passport-self-signed-test": ["marty-verification/authority-issuance"],
     }
     library = ISSUANCE_LIB.read_text(encoding="utf-8")
     assert "mod internal_application_diagnostics;" in library

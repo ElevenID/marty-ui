@@ -40,7 +40,7 @@ def test_language_neutral_gateway_contracts_are_the_runtime_boundary() -> None:
     ):
         assert (ROOT / str(behavior[field])).is_file()
     assert 'include_str!("../../../../contracts/gateway-routes.json")' in rust_contract
-    assert "EXPECTED_ROUTE_COUNT: usize = 435" in rust_contract
+    assert "EXPECTED_ROUTE_COUNT: usize = 436" in rust_contract
     assert not (ROOT / "scripts/gateway_route_contract.py").exists()
 
 
@@ -69,9 +69,7 @@ def test_deployed_manifests_require_distributed_gateway_state() -> None:
 
     base_gateway = base.split("\n  gateway:\n", 1)[1].split("\n  auth:\n", 1)[0]
     beta_gateway = beta.split("\n  gateway:\n", 1)[1].split("\n  auth:\n", 1)[0]
-    selfhost_gateway = selfhost.split("\n  gateway:\n", 1)[1].split(
-        "\n  auth:\n", 1
-    )[0]
+    selfhost_gateway = selfhost.split("\n  gateway:\n", 1)[1].split("\n  auth:\n", 1)[0]
 
     assert behavior["production_requires_redis"] is True
     assert "REDIS_URL: redis://redis:6379" in base_gateway

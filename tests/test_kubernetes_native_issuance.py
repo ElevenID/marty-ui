@@ -17,6 +17,19 @@ NATIVE = ROOT / "rust/crates/release-evidence/src/kubernetes_native.rs"
 CONTRACT = json.loads(
     (ROOT / "contracts/kubernetes-native-image-reference.json").read_text()
 )
+# The passport selector remains disabled in Kubernetes until tenant keyring and
+# provider secrets have a closed Secret-backed binding in the renderer.
+PASSPORT_NOT_KUBERNETES_BOUND = {
+    "PASSPORT_NATIVE_HTTP_ENABLED",
+    "PASSPORT_TENANT_API_KEYS",
+    "ICAO_DOCUMENT_SIGNER_URL",
+    "ICAO_DOCUMENT_SIGNER_API_KEY",
+    "PHYSICAL_DOCUMENT_ALLOW_SELF_SIGNED",
+    "PHYSICAL_DOCUMENT_ARTIFACT_KEY",
+    "PERSONALIZATION_BUREAU_URL",
+    "PERSONALIZATION_BUREAU_API_KEY",
+    "PERSONALIZATION_BUREAU_WEBHOOK_SECRET",
+}
 
 
 def resources(path):
@@ -286,6 +299,12 @@ def test_all_production_native_configuration_inputs_have_a_classification():
         "NATIVE_SETTINGS",
     ):
         covered |= constants(category)
+    assert PASSPORT_NOT_KUBERNETES_BOUND.isdisjoint(covered)
+    assert PASSPORT_NOT_KUBERNETES_BOUND.isdisjoint(
+        {v["name"] for v in native["env"]}
+    )
+    assert PASSPORT_NOT_KUBERNETES_BOUND <= inputs
+    covered |= PASSPORT_NOT_KUBERNETES_BOUND
     assert inputs - covered == {
         "APP_ENV",
         "CANVAS_ADMIN_API_TOKEN",

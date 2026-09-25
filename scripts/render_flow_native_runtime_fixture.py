@@ -68,6 +68,8 @@ def mapped_environment(service, spec):
     declared = {item["source"] for item in service.get("secrets", [])}
     for key, value in original.items():
         if key.endswith("_FILE") or key in TLS_FILES:
+            if not value and key == "PASSPORT_TENANT_API_KEYS_FILE":
+                continue
             name = Path(value).name
             assert value == f"/run/secrets/{name}" and name in declared
             assert name in SECRET_VALUES or name in TLS_FILES.values()
@@ -131,6 +133,9 @@ def render(spec, command):
             ),
             native_additive=SELFHOST["rendered_additions"](
                 SELFHOST["NATIVE_ADDITIVE"], inputs
+            ),
+            passport_consumer_additive=SELFHOST["rendered_passport_consumer_additions"](
+                inputs
             ),
         )
         models = {"base": base, "base_native": native, "selfhost": selfhost}

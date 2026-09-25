@@ -55,6 +55,20 @@ SHARED_SETTING_REPAIRS = (
     "CANVAS_CREDENTIALS_RECIPIENT_HASHED",
     "CANVAS_CREDENTIALS_ALLOW_DUPLICATE_AWARDS",
 ) + MIRROR_WORKER_SETTINGS
+PASSPORT_SHARED_INPUTS = (
+    "PHYSICAL_DOCUMENT_ARTIFACT_KEY",
+    "ICAO_DOCUMENT_SIGNER_URL",
+    "ICAO_DOCUMENT_SIGNER_API_KEY",
+    "PHYSICAL_DOCUMENT_ALLOW_SELF_SIGNED",
+    "PERSONALIZATION_BUREAU_URL",
+    "PERSONALIZATION_BUREAU_API_KEY",
+    "PERSONALIZATION_BUREAU_WEBHOOK_SECRET",
+)
+PASSPORT_NATIVE_ONLY = {
+    "PASSPORT_NATIVE_HTTP_ENABLED": ("${PASSPORT_NATIVE_HTTP_ENABLED:-false}", "false"),
+    "PASSPORT_TENANT_API_KEYS": ("${PASSPORT_TENANT_API_KEYS:-}", ""),
+    "PASSPORT_TENANT_API_KEYS_FILE": ("${PASSPORT_TENANT_API_KEYS_FILE:-}", ""),
+}
 
 
 def files(*, native, local, authcrypt):
@@ -124,8 +138,8 @@ def assert_native_delta(legacy, actual):
     assert actual == expected, "Native selection changed an unowned existing field"
 
 
-def assert_beta_shared_setting_repairs(previous, actual):
-    """Reviewed shared settings only, not a frozen-definition rewrite."""
+def assert_beta_shared_setting_repairs(previous, actual, inputs=None):
+    """Reviewed shared and default-off passport inputs only."""
     expected = deepcopy(previous)
     before = expected["services"]["issuance-native"]["environment"]
     legacy = expected["services"]["issuance"]["environment"]
@@ -136,6 +150,19 @@ def assert_beta_shared_setting_repairs(previous, actual):
             assert before[setting] == selected
         else:
             before[setting] = selected
+    if inputs is not None:
+        for setting in PASSPORT_SHARED_INPUTS:
+            assert setting in legacy
+            if setting in before:
+                assert before[setting] == legacy[setting]
+            else:
+                before[setting] = legacy[setting]
+        for setting, (_, default) in PASSPORT_NATIVE_ONLY.items():
+            selected = inputs.get(setting) or default
+            if setting in before:
+                assert before[setting] == selected
+            else:
+                before[setting] = selected
     assert actual == expected, (
         "Beta changed outside the reviewed shared-setting repairs"
     )
@@ -186,6 +213,12 @@ def run(command):
         assert setting not in expected_environment
         assert setting in legacy_environment
         expected_environment[setting] = legacy_environment[setting]
+    for setting in PASSPORT_SHARED_INPUTS:
+        assert setting not in expected_environment
+        expected_environment[setting] = legacy_environment[setting]
+    for setting, (expression, _) in PASSPORT_NATIVE_ONLY.items():
+        assert setting not in expected_environment
+        expected_environment[setting] = expression
     assert common == expected_common, (
         "Shared service changed beyond the governed shared-setting repairs"
     )
@@ -237,14 +270,14 @@ def run(command):
         ):
             effective = {**values, **overrides}
             assert_beta_shared_setting_repairs(
-                beta_binding(True, effective), beta_binding(False, effective)
+                beta_binding(True, effective), beta_binding(False, effective), effective
             )
         for configured, expected_rate in TOKEN_RATE_CASES:
             effective = dict(values)
             if configured is not None:
                 effective["TOKEN_RATE_LIMIT"] = configured
             actual = beta_binding(False, effective)
-            assert_beta_shared_setting_repairs(beta_binding(True, effective), actual)
+            assert_beta_shared_setting_repairs(beta_binding(True, effective), actual, effective)
             assert (
                 actual["services"]["issuance-native"]["environment"]["TOKEN_RATE_LIMIT"]
                 == expected_rate

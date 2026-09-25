@@ -39,6 +39,11 @@ struct Coverage {
 }
 
 #[derive(Debug, Deserialize)]
+struct PassportCoverage {
+    routes: Vec<NativeHttpRoute>,
+}
+
+#[derive(Debug, Deserialize)]
 struct NativeHttpRoute {
     method: HttpMethod,
     path: String,
@@ -103,6 +108,51 @@ static NATIVE_ROUTES: LazyLock<RouteTable> = LazyLock::new(|| {
     table
 });
 
+// The signed bureau webhook has its own HMAC-authenticated ingress boundary.
+// Keep the tenant-key selector tied to the eight caller-authenticated routes,
+// not to a broad prefix that could attach a tenant key to the webhook.
+static PASSPORT_PUBLIC_ROUTES: LazyLock<Vec<NativeHttpRoute>> = LazyLock::new(|| {
+    let coverage: PassportCoverage = serde_json::from_str(include_str!(
+        "../../../../contracts/issuance-physical-passport-native.json"
+    ))
+    .expect("embedded passport behavior contract must be valid");
+    let routes = coverage
+        .routes
+        .into_iter()
+        .filter(|route| route.path != "/v1/passport/webhooks/personalization")
+        .collect::<Vec<_>>();
+    assert_eq!(routes.len(), 8, "exactly eight public passport routes");
+    routes
+});
+
+#[must_use]
+pub fn is_passport_public_http(method: HttpMethod, path: &str) -> bool {
+    is_canonical_absolute_path(path)
+        && PASSPORT_PUBLIC_ROUTES
+            .iter()
+            .any(|route| route.method == method && exact_template_shape(&route.path, path))
+}
+
+#[must_use]
+pub fn is_passport_signed_webhook(method: HttpMethod, path: &str) -> bool {
+    method == HttpMethod::Post && path == "/v1/passport/webhooks/personalization"
+}
+
+/// Native passport requests use the existing issuance read/issue permissions.
+/// Legacy routing does not call this policy; only the explicit native gateway
+/// selector activates its authenticated tenant boundary.
+#[must_use]
+pub fn passport_required_permission(method: HttpMethod, path: &str) -> Option<&'static str> {
+    if !is_passport_public_http(method, path) {
+        return None;
+    }
+    if method == HttpMethod::Get {
+        Some("issuance:view")
+    } else {
+        Some("issuance:initiate")
+    }
+}
+
 #[must_use]
 pub fn is_native_http(method: HttpMethod, path: &str) -> bool {
     if method == HttpMethod::Get && path == "/v1/issued-credentials/mine" {
@@ -162,6 +212,79 @@ pub fn upstream_service(method: HttpMethod, path: &str) -> &'static str {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn passport_public_classifier_selects_only_frozen_eight_routes() {
+        for (method, path) in [
+            (HttpMethod::Get, "/v1/passport/capabilities"),
+            (HttpMethod::Post, "/v1/passport/applications"),
+            (
+                HttpMethod::Post,
+                "/v1/passport/applications/job-1/generate-data-groups",
+            ),
+            (
+                HttpMethod::Post,
+                "/v1/passport/applications/job-1/generate-sod",
+            ),
+            (
+                HttpMethod::Post,
+                "/v1/passport/applications/job-1/submit-personalization",
+            ),
+            (
+                HttpMethod::Get,
+                "/v1/passport/applications/job-1/production-status",
+            ),
+            (
+                HttpMethod::Post,
+                "/v1/passport/applications/job-1/quality-verify",
+            ),
+            (HttpMethod::Post, "/v1/passport/applications/job-1/activate"),
+        ] {
+            assert!(is_passport_public_http(method, path), "{method:?} {path}");
+            assert_eq!(upstream_service(method, path), LEGACY_SERVICE);
+        }
+        for (method, path) in [
+            (HttpMethod::Post, "/v1/passport/webhooks/personalization"),
+            (HttpMethod::Get, "/v1/passport/applications"),
+            (HttpMethod::Post, "/v1/passport/capabilities"),
+            (HttpMethod::Post, "/v1/passport/applications//activate"),
+            (
+                HttpMethod::Post,
+                "/v1/passport/applications/job-1/activate/extra",
+            ),
+            (
+                HttpMethod::Post,
+                "/v1/passport/applications/job-1/activate/",
+            ),
+            (HttpMethod::Post, "//v1/passport/applications"),
+        ] {
+            assert!(!is_passport_public_http(method, path), "{method:?} {path}");
+            assert_eq!(passport_required_permission(method, path), None);
+        }
+        assert!(is_passport_signed_webhook(
+            HttpMethod::Post,
+            "/v1/passport/webhooks/personalization"
+        ));
+        assert!(!is_passport_signed_webhook(
+            HttpMethod::Get,
+            "/v1/passport/webhooks/personalization"
+        ));
+        assert_eq!(
+            passport_required_permission(HttpMethod::Get, "/v1/passport/capabilities"),
+            Some("issuance:view")
+        );
+        assert_eq!(
+            passport_required_permission(HttpMethod::Post, "/v1/passport/applications"),
+            Some("issuance:initiate")
+        );
+        assert_eq!(
+            passport_required_permission(
+                HttpMethod::Post,
+                "/v1/passport/applications/job-1/activate"
+            ),
+            Some("issuance:initiate")
+        );
+    }
 
     #[test]
     fn retention_selects_only_frozen_tenant_routes() {

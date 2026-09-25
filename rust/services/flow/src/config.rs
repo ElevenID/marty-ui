@@ -1,5 +1,6 @@
 use std::{collections::BTreeMap, fmt, fs, net::SocketAddr, path::PathBuf};
 
+use marty_passport_auth::PassportTenantKeyring;
 use mmf_push::WebhookDestinationRegistry;
 use thiserror::Error;
 use url::Url;
@@ -64,6 +65,8 @@ pub struct FlowServiceConfig {
     pub issuance_url: String,
     pub issuance_native_url: String,
     pub issuance_api_key: Option<String>,
+    pub passport_tenant_keys: Option<PassportTenantKeyring>,
+    pub passport_native_flow_enabled: bool,
     pub service_token: Option<String>,
     pub webhook_secret: Option<String>,
     pub application_event_hmac_key: Option<String>,
@@ -174,6 +177,14 @@ impl fmt::Debug for FlowServiceConfig {
             .field("issuance_url", &self.issuance_url)
             .field("issuance_native_url", &self.issuance_native_url)
             .field("issuance_api_key", &redacted(&self.issuance_api_key))
+            .field(
+                "passport_tenant_keys_configured",
+                &self.passport_tenant_keys.is_some(),
+            )
+            .field(
+                "passport_native_flow_enabled",
+                &self.passport_native_flow_enabled,
+            )
             .field("service_token", &redacted(&self.service_token))
             .field("webhook_secret", &redacted(&self.webhook_secret))
             .field(
@@ -214,6 +225,7 @@ impl FlowServiceConfig {
                 "FLOW_APPLICATION_EVENT_HMAC_KEY",
                 "SIGNING_KEYS_INTERNAL_API_KEY",
                 "ISSUANCE_API_KEY",
+                "PASSPORT_TENANT_API_KEYS",
             ],
         )?;
         load_text_file(
@@ -447,6 +459,22 @@ impl FlowServiceConfig {
         let signing_keys_api_key =
             optional_secret(&values, "SIGNING_KEYS_INTERNAL_API_KEY", environment)?;
         let issuance_api_key = optional_secret(&values, "ISSUANCE_API_KEY", environment)?;
+        let passport_tenant_keys = value(&values, "PASSPORT_TENANT_API_KEYS")
+            .map(|value| {
+                PassportTenantKeyring::from_json(value)
+                    .map_err(|_| invalid("PASSPORT_TENANT_API_KEYS"))
+            })
+            .transpose()?;
+        let passport_native_flow_enabled = parse_boolean(
+            value(&values, "PASSPORT_NATIVE_FLOW_ENABLED").unwrap_or("false"),
+            "PASSPORT_NATIVE_FLOW_ENABLED",
+        )?;
+        if passport_native_flow_enabled && passport_tenant_keys.is_none() {
+            return Err(invalid("PASSPORT_TENANT_API_KEYS"));
+        }
+        if passport_native_flow_enabled && issuance_native_url == issuance_url {
+            return Err(invalid("ISSUANCE_NATIVE_SERVICE_URL"));
+        }
         let allow_plaintext_grpc = parse_boolean(
             value(&values, "GRPC_INSECURE_ALLOWED").unwrap_or("false"),
             "GRPC_INSECURE_ALLOWED",
@@ -501,6 +529,8 @@ impl FlowServiceConfig {
             issuance_url,
             issuance_native_url,
             issuance_api_key,
+            passport_tenant_keys,
+            passport_native_flow_enabled,
             service_token,
             webhook_secret,
             application_event_hmac_key,
@@ -935,6 +965,36 @@ fn redacted(value: &Option<String>) -> &'static str {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn passport_selector_rejects_a_legacy_native_target() {
+        let mut values = BTreeMap::from([
+            ("ENVIRONMENT".into(), "development".into()),
+            ("DATABASE_URL".into(), "postgresql://localhost/flow".into()),
+            ("REDIS_URL".into(), "redis://localhost:6379".into()),
+            ("ISSUANCE_SERVICE_URL".into(), "http://issuance:8005".into()),
+            (
+                "ISSUANCE_NATIVE_SERVICE_URL".into(),
+                "http://issuance:8005".into(),
+            ),
+            (
+                "PASSPORT_TENANT_API_KEYS".into(),
+                format!("{{\"org-a\":\"{}\"}}", "t".repeat(32)),
+            ),
+            ("PASSPORT_NATIVE_FLOW_ENABLED".into(), "true".into()),
+        ]);
+        assert!(matches!(
+            FlowServiceConfig::from_values(values.clone()),
+            Err(FlowConfigError::Invalid {
+                name: "ISSUANCE_NATIVE_SERVICE_URL"
+            })
+        ));
+        values.insert(
+            "ISSUANCE_NATIVE_SERVICE_URL".into(),
+            "http://issuance-native:8005".into(),
+        );
+        assert!(FlowServiceConfig::from_values(values).is_ok());
+    }
 
     #[test]
     fn release_identity_prefers_shared_names_and_preserves_legacy_fallbacks() {

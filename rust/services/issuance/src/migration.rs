@@ -73,6 +73,59 @@ pub async fn migrate(pool: &PgPool) -> Result<(), sqlx::Error> {
     transaction.commit().await
 }
 
+/// Upgrade the physical-document table only when native passport HTTP is
+/// enabled. The released Python table remains in place during the cutover.
+pub async fn migrate_passport(pool: &PgPool) -> Result<(), sqlx::Error> {
+    const REQUIRED_COLUMNS: &[&str] = &[
+        "id",
+        "organization_id",
+        "flow_execution_id",
+        "application_id",
+        "application_template_id",
+        "credential_template_id",
+        "revocation_profile_id",
+        "delivery_destination_profile_id",
+        "document_type",
+        "country_code",
+        "secure_artifact_ciphertext",
+        "secure_artifact_reference",
+        "sod_sha256",
+        "bureau_job_id",
+        "tracking_number",
+        "status",
+        "quality_result",
+        "error_code",
+        "error_message",
+        "submitted_at",
+        "completed_at",
+        "created_at",
+        "updated_at",
+    ];
+    let mut transaction = pool.begin().await?;
+    sqlx::query("SELECT pg_advisory_xact_lock(hashtextextended('issuance_passport_native_v1', 0))")
+        .execute(&mut *transaction)
+        .await?;
+    sqlx::raw_sql(include_str!(
+        "../migrations/0002_physical_document_jobs.sql"
+    ))
+    .execute(&mut *transaction)
+    .await?;
+    let columns = sqlx::query_scalar::<_, String>(
+        "SELECT column_name FROM information_schema.columns \
+         WHERE table_schema='issuance_service' AND table_name='physical_document_jobs'",
+    )
+    .fetch_all(&mut *transaction)
+    .await?;
+    for column in REQUIRED_COLUMNS {
+        if !columns.iter().any(|existing| existing.as_str() == *column) {
+            return Err(sqlx::Error::Protocol(format!(
+                "physical_document_jobs is missing required column {column}"
+            )));
+        }
+    }
+    transaction.commit().await
+}
+
 fn normalize_catalog_expression(value: &str) -> String {
     value
         .replace("::text", "")

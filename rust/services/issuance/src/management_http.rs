@@ -69,6 +69,21 @@ pub(crate) fn missing_organization_query() -> Response {
         .into_response()
 }
 
+pub(crate) fn missing_header(name: &'static str) -> Response {
+    (
+        StatusCode::UNPROCESSABLE_ENTITY,
+        Json(json!({
+            "detail": [{
+                "type": "missing",
+                "loc": ["header", name],
+                "msg": "Field required",
+                "input": null,
+            }]
+        })),
+    )
+        .into_response()
+}
+
 pub(crate) fn header<'a>(headers: &'a HeaderMap, name: &str) -> Option<&'a str> {
     headers.get(name).and_then(|value| value.to_str().ok())
 }

@@ -11,6 +11,7 @@ export MARTY_ISSUANCE_POSTGRES_CONTRACT_URL=postgresql://postgres:postgres@127.0
 export ORGANIZATION_POSTGRES_TEST_URL=postgresql://postgres:postgres@127.0.0.1:5432/marty_db_contracts_test
 export TEST_POSTGRES_URL=postgresql://postgres:postgres@127.0.0.1:5432/marty_db_contracts_test
 export MARTY_RETENTION_POSTGRES_TEST_URL=postgresql://postgres:postgres@127.0.0.1:5432/marty_retention_contract_test
+export MARTY_PASSPORT_POSTGRES_TEST_URL=postgresql://postgres:postgres@127.0.0.1:5432/marty_passport_contract_test
 set -euo pipefail
 mapfile -t contracts < <(find target/debug/deps -maxdepth 1 -type f -name 'contracts-*' -perm -u+x)
 if (( ${#contracts[@]} != 1 )); then
@@ -64,6 +65,13 @@ if (( ${#retention_contracts[@]} != 1 )); then
   exit 1
 fi
 "${retention_contracts[0]}" --test-threads=1
+
+mapfile -t passport_contracts < <(find target/debug/deps -maxdepth 1 -type f -name 'passport_postgres_contract-*' -perm -u+x)
+if (( ${#passport_contracts[@]} != 1 )); then
+  printf 'Expected one Issuance passport PostgreSQL contract executable, found %s.\n' "${#passport_contracts[@]}" >&2
+  exit 1
+fi
+"${passport_contracts[0]}" --test-threads=1
 mapfile -t application_template_contracts < <(find target/debug/deps -maxdepth 1 -type f -name 'application_template_postgres_contract-*' -perm -u+x)
 if (( ${#application_template_contracts[@]} != 1 )); then
   printf 'Expected one Application Template PostgreSQL contract executable, found %s.\n' "${#application_template_contracts[@]}" >&2

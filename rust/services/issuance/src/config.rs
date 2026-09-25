@@ -4,6 +4,7 @@ use std::{
     time::Duration,
 };
 
+use marty_passport_auth::PassportTenantKeyring;
 use mmf_config::{numeric_config::PythonConfigInteger, ConfigLayer, LayeredConfig};
 use mmf_core::{ErrorCode, MmfError};
 use serde::Deserialize;
@@ -14,6 +15,95 @@ use crate::canvas_credentials_validation::CanvasCredentialsValidationConfig;
 use crate::canvas_mirror_automation::CanvasMirrorAutomationConfig;
 use crate::canvas_mirror_domain::CanvasMirrorAlertThresholds;
 use crate::canvas_network_timeout::CanvasNetworkTimeout;
+
+#[derive(Clone, Eq, PartialEq)]
+pub struct PassportNativeConfig {
+    pub enabled: bool,
+    pub artifact_key: Option<String>,
+    pub signer_url: Option<String>,
+    pub signer_api_key: Option<String>,
+    pub bureau_url: Option<String>,
+    pub bureau_api_key: Option<String>,
+    pub bureau_webhook_secret: Option<String>,
+    pub self_signed_test_enabled: bool,
+}
+
+impl std::fmt::Debug for PassportNativeConfig {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("PassportNativeConfig")
+            .field("enabled", &self.enabled)
+            .field("artifact_key_configured", &self.artifact_key.is_some())
+            .field("signer_url_configured", &self.signer_url.is_some())
+            .field("signer_api_key_configured", &self.signer_api_key.is_some())
+            .field("bureau_url_configured", &self.bureau_url.is_some())
+            .field("bureau_api_key_configured", &self.bureau_api_key.is_some())
+            .field(
+                "bureau_webhook_secret_configured",
+                &self.bureau_webhook_secret.is_some(),
+            )
+            .field("self_signed_test_enabled", &self.self_signed_test_enabled)
+            .finish()
+    }
+}
+
+impl PassportNativeConfig {
+    fn from_values(
+        values: &BTreeMap<String, String>,
+        tenant_keys_configured: bool,
+    ) -> Result<Self, MmfError> {
+        let enabled = environment_flag(values, "PASSPORT_NATIVE_HTTP_ENABLED");
+        let self_signed_test_enabled =
+            environment_flag(values, "PHYSICAL_DOCUMENT_ALLOW_SELF_SIGNED");
+        if !enabled {
+            return Ok(Self {
+                enabled,
+                artifact_key: None,
+                signer_url: None,
+                signer_api_key: None,
+                bureau_url: None,
+                bureau_api_key: None,
+                bureau_webhook_secret: None,
+                self_signed_test_enabled,
+            });
+        }
+        let configured = |name: &str| {
+            values
+                .get(name)
+                .map(String::as_str)
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+                .map(str::to_owned)
+        };
+        let config = Self {
+            enabled,
+            artifact_key: secret_value(values, "PHYSICAL_DOCUMENT_ARTIFACT_KEY")?,
+            signer_url: configured("ICAO_DOCUMENT_SIGNER_URL"),
+            signer_api_key: secret_value(values, "ICAO_DOCUMENT_SIGNER_API_KEY")?,
+            bureau_url: configured("PERSONALIZATION_BUREAU_URL"),
+            bureau_api_key: secret_value(values, "PERSONALIZATION_BUREAU_API_KEY")?,
+            bureau_webhook_secret: secret_value(values, "PERSONALIZATION_BUREAU_WEBHOOK_SECRET")?,
+            self_signed_test_enabled,
+        };
+        if config.self_signed_test_enabled && config.signer_url.is_none() {
+            #[cfg(not(feature = "passport-self-signed-test"))]
+            return Err(MmfError::new(
+                ErrorCode::Configuration,
+                "self-signed passport test mode requires the passport-self-signed-test build feature",
+            ));
+        }
+        // Tenant authentication is mandatory even for the diagnostic capability
+        // route. Missing providers are represented as blockers there, matching
+        // the released Python surface; provider-backed operations remain 503.
+        if !tenant_keys_configured {
+            return Err(MmfError::new(
+                ErrorCode::Configuration,
+                "PASSPORT_TENANT_API_KEYS is required when PASSPORT_NATIVE_HTTP_ENABLED is true",
+            ));
+        }
+        Ok(config)
+    }
+}
 
 #[derive(Clone, Eq, PartialEq)]
 pub struct IssuanceServiceConfig {
@@ -32,6 +122,8 @@ pub struct IssuanceServiceConfig {
     pub integration_secret_master_key: Option<String>,
     pub token_hmac_key: Option<String>,
     pub issuance_api_key: Option<String>,
+    pub passport_tenant_keys: Option<PassportTenantKeyring>,
+    pub passport_native: PassportNativeConfig,
     pub signing_keys_internal_url: url::Url,
     pub signing_keys_internal_api_key: Option<String>,
     pub revocation_profile_service_url: url::Url,
@@ -120,6 +212,11 @@ impl std::fmt::Debug for IssuanceServiceConfig {
                 "issuance_api_key_configured",
                 &self.issuance_api_key.is_some(),
             )
+            .field(
+                "passport_tenant_keys_configured",
+                &self.passport_tenant_keys.is_some(),
+            )
+            .field("passport_native", &self.passport_native)
             .field("signing_keys_internal_url", &self.signing_keys_internal_url)
             .field(
                 "signing_keys_internal_api_key_configured",
@@ -492,6 +589,18 @@ impl IssuanceServiceConfig {
             "DIDCOMM_DID_WEB_INTERNAL_BASE_URL",
         )?;
         let issuance_api_key = secret_value(&values, "ISSUANCE_API_KEY")?;
+        let passport_tenant_keys = secret_value(&values, "PASSPORT_TENANT_API_KEYS")?
+            .map(|value| {
+                PassportTenantKeyring::from_json(&value).map_err(|_| {
+                    MmfError::new(
+                        ErrorCode::Configuration,
+                        "PASSPORT_TENANT_API_KEYS must be a valid tenant keyring",
+                    )
+                })
+            })
+            .transpose()?;
+        let passport_native =
+            PassportNativeConfig::from_values(&values, passport_tenant_keys.is_some())?;
         let token_hmac_key = secret_value(&values, "TOKEN_HMAC_KEY")?;
         let integration_secret_key_name = values
             .get("INTEGRATION_SECRET_MASTER_KEY_ENV")
@@ -719,6 +828,8 @@ impl IssuanceServiceConfig {
             integration_secret_master_key,
             token_hmac_key,
             issuance_api_key,
+            passport_tenant_keys,
+            passport_native,
             signing_keys_internal_url,
             signing_keys_internal_api_key,
             revocation_profile_service_url,
@@ -1366,6 +1477,7 @@ mod tests {
         assert!(!config.didcomm_allow_private_ips);
         assert!(config.signing_keys_internal_api_key.is_none());
         assert!(config.issuance_api_key.is_none());
+        assert!(config.passport_tenant_keys.is_none());
         assert!(config.token_hmac_key.is_none());
         assert_eq!(config.token_rate_limit.as_decimal(), "30");
         assert_eq!(config.token_rate_window.as_decimal(), "60");
@@ -1426,6 +1538,122 @@ mod tests {
             config.canvas_mirror_alert_webhook_timeout,
             std::time::Duration::from_secs(5)
         );
+    }
+
+    #[test]
+    fn passport_tenant_keys_are_validated_and_redacted() {
+        let secret = "a".repeat(32);
+        let json = format!("{{\"org-1\":\"{secret}\"}}");
+        let config =
+            IssuanceServiceConfig::from_values(vec![("PASSPORT_TENANT_API_KEYS".to_owned(), json)])
+                .expect("valid tenant keys");
+        assert_eq!(
+            config
+                .passport_tenant_keys
+                .as_ref()
+                .unwrap()
+                .key_for("org-1"),
+            Some(secret.as_str())
+        );
+        assert!(!format!("{config:?}").contains(&secret));
+
+        let error = IssuanceServiceConfig::from_values(values(&[(
+            "PASSPORT_TENANT_API_KEYS",
+            "{\"org-1\":\"weak\"}",
+        )]))
+        .unwrap_err();
+        assert_eq!(error.code, ErrorCode::Configuration);
+        assert!(!error.to_string().contains("weak"));
+    }
+
+    #[test]
+    fn native_passport_is_default_off_and_requires_tenant_auth_with_redacted_configuration() {
+        let config = IssuanceServiceConfig::from_values(Vec::new()).unwrap();
+        assert!(!config.passport_native.enabled);
+        assert!(config.passport_native.artifact_key.is_none());
+        let disabled = IssuanceServiceConfig::from_values(values(&[(
+            "PHYSICAL_DOCUMENT_ARTIFACT_KEY_FILE",
+            "nonexistent-passport-key-file",
+        )]))
+        .unwrap();
+        assert!(!disabled.passport_native.enabled);
+
+        let error =
+            IssuanceServiceConfig::from_values(values(&[("PASSPORT_NATIVE_HTTP_ENABLED", "true")]))
+                .unwrap_err();
+        assert_eq!(error.code, ErrorCode::Configuration);
+        assert!(error.to_string().contains("PASSPORT_TENANT_API_KEYS"));
+
+        let secret = "a".repeat(32);
+        let fernet_key = fernet::Fernet::generate_key();
+        let complete = values(&[
+            ("PASSPORT_NATIVE_HTTP_ENABLED", "true"),
+            (
+                "PASSPORT_TENANT_API_KEYS",
+                &format!("{{\"org-a\":\"{secret}\"}}"),
+            ),
+            ("PHYSICAL_DOCUMENT_ARTIFACT_KEY", &fernet_key),
+            ("ICAO_DOCUMENT_SIGNER_URL", "https://signer.example.test"),
+            ("ICAO_DOCUMENT_SIGNER_API_KEY", "signer-secret"),
+            ("PERSONALIZATION_BUREAU_URL", "https://bureau.example.test"),
+            ("PERSONALIZATION_BUREAU_API_KEY", "bureau-secret"),
+            ("PERSONALIZATION_BUREAU_WEBHOOK_SECRET", "webhook-secret"),
+        ]);
+        let config = IssuanceServiceConfig::from_values(complete.clone()).unwrap();
+        assert!(config.passport_native.enabled);
+        let debug = format!("{config:?}");
+        for secret in [
+            &secret[..],
+            &fernet_key,
+            "signer-secret",
+            "bureau-secret",
+            "webhook-secret",
+        ] {
+            assert!(!debug.contains(secret));
+        }
+        for name in [
+            "PHYSICAL_DOCUMENT_ARTIFACT_KEY",
+            "ICAO_DOCUMENT_SIGNER_URL",
+            "PERSONALIZATION_BUREAU_URL",
+        ] {
+            let missing = complete
+                .iter()
+                .filter(|(key, _)| key != name)
+                .cloned()
+                .collect::<Vec<_>>();
+            let degraded = IssuanceServiceConfig::from_values(missing).unwrap();
+            assert!(degraded.passport_native.enabled, "missing provider: {name}");
+        }
+        let anonymous_providers = complete
+            .into_iter()
+            .filter(|(name, _)| {
+                ![
+                    "ICAO_DOCUMENT_SIGNER_API_KEY",
+                    "PERSONALIZATION_BUREAU_API_KEY",
+                    "PERSONALIZATION_BUREAU_WEBHOOK_SECRET",
+                ]
+                .contains(&name.as_str())
+            })
+            .collect::<Vec<_>>();
+        let anonymous = IssuanceServiceConfig::from_values(anonymous_providers).unwrap();
+        assert!(anonymous.passport_native.enabled);
+        assert!(anonymous.passport_native.signer_api_key.is_none());
+        assert!(anonymous.passport_native.bureau_api_key.is_none());
+        assert!(anonymous.passport_native.bureau_webhook_secret.is_none());
+    }
+
+    #[test]
+    fn native_passport_does_not_claim_unimplemented_self_signed_test_parity() {
+        let error = IssuanceServiceConfig::from_values(values(&[
+            ("PASSPORT_NATIVE_HTTP_ENABLED", "true"),
+            ("PHYSICAL_DOCUMENT_ALLOW_SELF_SIGNED", "true"),
+        ]))
+        .unwrap_err();
+        assert_eq!(error.code, ErrorCode::Configuration);
+        #[cfg(not(feature = "passport-self-signed-test"))]
+        assert!(error.to_string().contains("passport-self-signed-test"));
+        #[cfg(feature = "passport-self-signed-test")]
+        assert!(error.to_string().contains("PASSPORT_TENANT_API_KEYS"));
     }
 
     #[test]

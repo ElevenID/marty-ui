@@ -7,6 +7,7 @@ use std::{
     path::PathBuf,
 };
 
+use marty_passport_auth::PassportTenantKeyring;
 use thiserror::Error;
 
 use crate::discovery::ReleaseIdentity;
@@ -106,6 +107,8 @@ pub struct GatewayConfig {
     pub grpc_service_token: Option<String>,
     pub signing_internal_api_key: String,
     pub issuance_api_key: String,
+    pub passport_native_gateway_enabled: bool,
+    pub passport_tenant_keys: Option<PassportTenantKeyring>,
     pub redis_url: Option<String>,
     pub cors_origins: Vec<String>,
     pub issuer_base_url: String,
@@ -166,6 +169,19 @@ impl GatewayConfig {
             .ok_or_else(|| error("ISSUANCE_API_KEY is required"))?;
         if production {
             validate_production_secret("ISSUANCE_API_KEY", Some(&issuance_api_key), 16)?;
+        }
+        let passport_tenant_keys = secret(values, "PASSPORT_TENANT_API_KEYS")?
+            .map(|value| {
+                PassportTenantKeyring::from_json(&value)
+                    .map_err(|_| error("PASSPORT_TENANT_API_KEYS must be a valid tenant keyring"))
+            })
+            .transpose()?;
+        let passport_native_gateway_enabled =
+            boolean(values, "PASSPORT_NATIVE_GATEWAY_ENABLED", false)?;
+        if passport_native_gateway_enabled && passport_tenant_keys.is_none() {
+            return Err(error(
+                "PASSPORT_TENANT_API_KEYS is required when PASSPORT_NATIVE_GATEWAY_ENABLED is true",
+            ));
         }
 
         let grpc_ca_certificate = value(values, "GRPC_TLS_CA_CERT").map(PathBuf::from);
@@ -265,6 +281,8 @@ impl GatewayConfig {
             grpc_service_token,
             signing_internal_api_key,
             issuance_api_key,
+            passport_native_gateway_enabled,
+            passport_tenant_keys,
             redis_url,
             cors_origins,
             issuer_base_url,
@@ -477,7 +495,58 @@ mod tests {
             config.service_urls["issuance"]
         );
         assert!(config.redis_url.is_none());
+        assert!(config.passport_tenant_keys.is_none());
+        assert!(!config.passport_native_gateway_enabled);
         assert!(config.release_identity.component_revisions.is_empty());
+    }
+
+    #[test]
+    fn passport_tenant_keyring_is_shared_validated_and_redacted() {
+        let key_a = "passport-gateway-tenant-key-00000001";
+        let key_b = "passport-gateway-tenant-key-00000002";
+        let mut values = BTreeMap::from([(
+            "PASSPORT_TENANT_API_KEYS".into(),
+            format!(r#"{{"org-a":"{key_a}","org-b":"{key_b}"}}"#),
+        )]);
+        let config = GatewayConfig::from_values(&values).expect("shared passport keyring");
+        let keyring = config.passport_tenant_keys.as_ref().unwrap();
+        assert_eq!(keyring.key_for("org-a"), Some(key_a));
+        assert_eq!(keyring.key_for("org-b"), Some(key_b));
+        assert!(!format!("{config:?}").contains(key_a));
+        values.insert(
+            "PASSPORT_TENANT_API_KEYS".into(),
+            r#"{"org-a":"short"}"#.into(),
+        );
+        assert!(GatewayConfig::from_values(&values)
+            .expect_err("weak tenant key")
+            .to_string()
+            .contains("valid tenant keyring"));
+        values.insert(
+            "PASSPORT_TENANT_API_KEYS".into(),
+            format!(r#"{{"org-a":"{key_a}","org-b":"{key_a}"}}"#),
+        );
+        assert!(GatewayConfig::from_values(&values).is_err());
+    }
+
+    #[test]
+    fn passport_native_gateway_switch_is_default_off_and_requires_tenant_keys() {
+        let mut values =
+            BTreeMap::from([("PASSPORT_NATIVE_GATEWAY_ENABLED".into(), "true".into())]);
+        assert!(GatewayConfig::from_values(&values)
+            .expect_err("missing keyring")
+            .to_string()
+            .contains("PASSPORT_TENANT_API_KEYS"));
+        values.insert(
+            "PASSPORT_TENANT_API_KEYS".into(),
+            r#"{"org-a":"passport-gateway-tenant-key-00000001"}"#.into(),
+        );
+        assert!(
+            GatewayConfig::from_values(&values)
+                .expect("configured passport gateway")
+                .passport_native_gateway_enabled
+        );
+        values.insert("PASSPORT_NATIVE_GATEWAY_ENABLED".into(), "invalid".into());
+        assert!(GatewayConfig::from_values(&values).is_err());
     }
 
     #[test]

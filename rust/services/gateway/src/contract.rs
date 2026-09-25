@@ -13,7 +13,7 @@ use serde_json::{json, Map, Value};
 
 use crate::issuance_native;
 
-pub const EXPECTED_ROUTE_COUNT: usize = 435;
+pub const EXPECTED_ROUTE_COUNT: usize = 436;
 
 #[derive(Debug, Deserialize)]
 pub struct GatewayContract {
@@ -98,15 +98,32 @@ impl GatewayContract {
     }
 
     pub fn route_table(&self) -> Result<RouteTable, PlatformError> {
+        self.route_table_with_passport_native(false)
+    }
+
+    /// The passport selector is explicit and default-off until the gateway
+    /// tenant-authentication and per-organization key boundary is qualified.
+    pub fn route_table_with_passport_native(
+        &self,
+        passport_native: bool,
+    ) -> Result<RouteTable, PlatformError> {
         let mut table = RouteTable::default();
         for (index, declared) in self.routes.iter().enumerate() {
             let owner = route_ownership(&declared.path);
             let rewrite_path = upstream_rewrite(declared.method, &declared.path);
             let upstream_service = if owner.service == issuance_native::LEGACY_SERVICE {
-                issuance_native::upstream_service(
-                    declared.method,
-                    rewrite_path.as_deref().unwrap_or(&declared.path),
-                )
+                let upstream_path = rewrite_path.as_deref().unwrap_or(&declared.path);
+                if passport_native
+                    && (issuance_native::is_passport_public_http(declared.method, upstream_path)
+                        || issuance_native::is_passport_signed_webhook(
+                            declared.method,
+                            upstream_path,
+                        ))
+                {
+                    issuance_native::NATIVE_SERVICE
+                } else {
+                    issuance_native::upstream_service(declared.method, upstream_path)
+                }
             } else {
                 owner.service
             };
@@ -146,7 +163,14 @@ impl GatewayContract {
     /// Internal helpers are not public API declarations and therefore do not
     /// alter the frozen public-route contract.
     pub fn proxy_route_table(&self) -> Result<RouteTable, PlatformError> {
-        let mut table = self.route_table()?;
+        self.proxy_route_table_with_passport_native(false)
+    }
+
+    pub fn proxy_route_table_with_passport_native(
+        &self,
+        passport_native: bool,
+    ) -> Result<RouteTable, PlatformError> {
+        let mut table = self.route_table_with_passport_native(passport_native)?;
         add_gateway_documentation_routes(&mut table)?;
         table.add(RouteConfig {
             name: "internal:compliance-profiles:discoverable".into(),
@@ -304,7 +328,14 @@ impl GatewayContract {
     /// real public routes, while proxy-only helper routes remain unreachable
     /// from the external request classifier.
     pub fn runtime_route_table(&self) -> Result<RouteTable, PlatformError> {
-        let mut table = self.route_table()?;
+        self.runtime_route_table_with_passport_native(false)
+    }
+
+    pub fn runtime_route_table_with_passport_native(
+        &self,
+        passport_native: bool,
+    ) -> Result<RouteTable, PlatformError> {
+        let mut table = self.route_table_with_passport_native(passport_native)?;
         add_gateway_documentation_routes(&mut table)?;
         Ok(table)
     }
@@ -487,6 +518,7 @@ pub fn route_for(
 pub fn requires_issuance_service_auth(path: &str) -> bool {
     route_ownership(path).service == "issuance"
         && path != "/v1/issuance/authorize"
+        && path != "/v1/passport/webhooks/personalization"
         && !CANVAS_PUBLIC.iter().any(|pattern| pattern.is_match(path))
         && !CANVAS_SIGNED_INGRESS.is_match(path)
 }
@@ -634,6 +666,7 @@ fn public_route(path: &str) -> bool {
         || path.starts_with("/v1/auth")
         || path == "/v1/organizations/invitations/validate"
         || path == "/v1/organizations/join/code/validate"
+        || path == "/v1/passport/webhooks/personalization"
         || path.starts_with("/v1/trust-registry")
         || APPENDED_DISCOVERY_PUBLIC.is_match(path)
         || DID_WEB_PUBLIC.is_match(path)
@@ -733,6 +766,57 @@ const fn method_name(method: HttpMethod) -> &'static str {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn passport_route_table_opt_in_changes_only_frozen_public_owners() {
+        #[derive(Deserialize)]
+        struct PassportRoutes {
+            routes: Vec<PassportRoute>,
+        }
+        #[derive(Deserialize)]
+        struct PassportRoute {
+            method: HttpMethod,
+            path: String,
+        }
+
+        let frozen: PassportRoutes = serde_json::from_str(include_str!(
+            "../../../../contracts/issuance-physical-passport-native.json"
+        ))
+        .unwrap();
+        let contract = GatewayContract::load().unwrap();
+        let legacy = contract.proxy_route_table().unwrap();
+        let native = contract
+            .proxy_route_table_with_passport_native(true)
+            .unwrap();
+        assert_eq!(legacy.routes().len(), native.routes().len());
+        let mut public_count = 0;
+        for route in frozen.routes {
+            let path = route.path.replace("{application_id}", "job-1");
+            if path == "/v1/passport/webhooks/personalization" {
+                let old = route_for(&legacy, route.method, &path).unwrap();
+                let new = route_for(&native, route.method, &path).unwrap();
+                assert_eq!(old.route.upstream_service, issuance_native::LEGACY_SERVICE);
+                assert_eq!(new.route.upstream_service, issuance_native::NATIVE_SERVICE);
+                assert!(!old.route.auth_required);
+                assert!(!new.route.auth_required);
+                assert!(!requires_issuance_service_auth(&path));
+                continue;
+            }
+            public_count += 1;
+            let old = route_for(&legacy, route.method, &path).unwrap();
+            let new = route_for(&native, route.method, &path).unwrap();
+            assert_eq!(old.route.upstream_service, issuance_native::LEGACY_SERVICE);
+            assert_eq!(new.route.upstream_service, issuance_native::NATIVE_SERVICE);
+            assert!(new.route.auth_required, "{path} must stay authenticated");
+        }
+        assert_eq!(public_count, 8);
+        assert!(route_for(
+            &native,
+            HttpMethod::Post,
+            "/v1/passport/applications/job-1/activate/extra"
+        )
+        .is_err());
+    }
     use serde::Deserialize;
 
     #[derive(Deserialize)]
@@ -879,17 +963,17 @@ mod tests {
     #[test]
     fn internal_proxy_routes_do_not_mutate_public_contract() {
         let contract = GatewayContract::load().expect("gateway contract");
-        assert_eq!(contract.route_table().expect("public").routes().len(), 435);
+        assert_eq!(contract.route_table().expect("public").routes().len(), 436);
         assert_eq!(
             contract
                 .runtime_route_table()
                 .expect("runtime")
                 .routes()
                 .len(),
-            438
+            439
         );
         let proxy = contract.proxy_route_table().expect("proxy");
-        assert_eq!(proxy.routes().len(), 451);
+        assert_eq!(proxy.routes().len(), 452);
         assert_eq!(
             route_for(
                 &proxy,

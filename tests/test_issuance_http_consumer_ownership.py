@@ -66,7 +66,7 @@ def test_source_wiring_prefers_native_with_production_legacy_fallback():
     assert '"ISSUANCE_NATIVE_SERVICE_URL"' in flow_config
     assert "&config.issuance_native_url" in flow_connections
     assert (
-        "HttpPhysicalDocumentProvider::new(\n        &config.issuance_url"
+        "HttpPhysicalDocumentProvider::new(\n            &config.issuance_url"
         in flow_connections
     )
     assert applicant_http.count('.header("x-organization-id"') >= 2
