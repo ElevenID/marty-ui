@@ -6,7 +6,12 @@ COPY rust /build/rust
 COPY proto /build/proto
 COPY contracts /build/contracts
 COPY services/auth/assets /build/services/auth/assets
-RUN cargo build --locked --release \
+ARG PASSPORT_SELF_SIGNED_TEST=false
+RUN case "$PASSPORT_SELF_SIGNED_TEST" in \
+      false) set -- ;; \
+      true) set -- --features marty-issuance-service/passport-self-signed-test ;; \
+      *) echo "PASSPORT_SELF_SIGNED_TEST must be true or false" >&2; exit 2 ;; \
+    esac && cargo build --locked --release "$@" \
     -p marty-event-stream --bin marty-event-stream \
     -p marty-gateway --bin marty-gateway \
     -p marty-revocation-profile --bin marty-revocation-profile \

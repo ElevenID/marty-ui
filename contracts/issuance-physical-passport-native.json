@@ -19,6 +19,7 @@
     "python_flag": "PHYSICAL_DOCUMENT_ALLOW_SELF_SIGNED=true",
     "python_behavior": "When no remote signer URL is set, issue a single-use CSCA and DSC for testing and offline fixtures only",
     "native_status": "available behind non-default passport-self-signed-test Cargo feature plus explicit runtime flag; remote URL takes precedence",
+    "packaged_image_build_arg": "PASSPORT_SELF_SIGNED_TEST=true builds a separate opt-in image; the shared release image defaults to false",
     "core_capability": "marty-verification/authority-issuance at the pinned Core revision; local single-use keys are excluded from the default production build",
     "python_retirement_gate": "feature-enabled HTTP/database and packaged test-mode behavior are covered by the dedicated CI PostgreSQL fixture; retain Python until image, gateway/Flow and provider acceptance gates pass"
   },
