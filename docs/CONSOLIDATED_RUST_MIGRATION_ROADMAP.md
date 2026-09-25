@@ -10,9 +10,11 @@ PR #300's CI correction landed at
 `9026cbbbfd647cae19af040d95b541e2e67cdb3e`, and post-merge Credentials
 main CI passed. The final nine retained Python routes are the physical-passport
 surface. Rust source PR #852 implements their default-off native counterparts
-and passed exact-head CI at `d39f878df5e4f1d954742efd21bf314b020e6a29`;
-it has not switched consumers or authorized Python deletion. Stacked PR #853
-adds a default-off beta secret/profile overlay, not a deployment. Real beta
+and landed through protected merge queue at
+`e00b9fd87ed1240bd927c8c8b0714e30d4963cdb` after exact-head and
+merge-group CI; it has not switched consumers or authorized Python deletion.
+PR #853 adds a default-off beta secret/profile overlay and is under exact-head
+CI, not deployed. Real beta
 signer and bureau endpoints, five secret-file sources, provider callback and
 durable-job acceptance, and one aggregate beta-only soak remain outstanding.
 The last published beta baseline documented here is `marty-ui@v1.1.217`, source
@@ -6211,11 +6213,11 @@ landed; passport qualification, its separate Python retirement, and one
 aggregate beta-only deployment/acceptance soak remain.
 Production is unchanged.
 
-### Physical-passport checkpoint (open #852, 2026-09-25)
+### Physical-passport source checkpoint (landed #852, 2026-09-25)
 
-The nine retained Python passport routes have default-off Rust counterparts in
-PR #852. They are **not yet the selected owner**: Python routes, migrations,
-and provider adapters remain until the full cutover gate passes. The Rust draft
+The nine retained Python passport routes have default-off Rust counterparts from
+merged PR #852. They are **not yet the selected owner**: Python routes, migrations,
+and provider adapters remain until the full cutover gate passes. The landed Rust source
 preserves the frozen request and safe-response shapes, tenant-scoped durable
 jobs, remote ICAO signing, single-job and batch bureau transports, signed
 webhooks, and production-status projection. The batch adapter preserves the
@@ -6239,8 +6241,9 @@ when native passport HTTP is enabled. A dedicated feature-enabled CI step uses
 a separate released-schema database and the packaged binary to create a job,
 sign an SOD, and confirm persistence across another migration. This passed
 locally, as did the default PostgreSQL contract, passport unit/HTTP tests,
-strict Clippy, and 220 workflow-regression tests. Hosted exact-head CI passed;
-protected merge and live acceptance remain separate gates.
+strict Clippy, and 220 workflow-regression tests. Hosted exact-head and
+merge-group CI passed, and protected merge completed; live acceptance remains
+a separate gate.
 
 The frozen request contract also records the released Python runtime's Unicode
 15 digit behavior for `DG` names. Native validation accepts the same decimal
@@ -6250,7 +6253,7 @@ Python's later conversion failure. Focused unit tests and the real-PostgreSQL
 HTTP contract cover this edge before any passport cutover.
 
 The Rust Flow consumer now has a default-off `PASSPORT_NATIVE_FLOW_ENABLED`
-selector in this draft. When enabled with tenant keys it targets the native
+selector in the landed source. When enabled with tenant keys it targets the native
 issuance URL using the organization-specific key; when disabled it retains the
 Python issuance URL and shared key for rollback. A local two-owner HTTP test
 checks both selections. Deployment configuration does not enable the selector.
@@ -6261,9 +6264,9 @@ configuration availability, not approval to turn either selector on. The
 tenant-key secret file must still be mounted/provisioned in the target beta
 environment before enabling either service.
 
-The draft is not a nine-route cutover. Live signer and bureau qualification
+The landed source is not a nine-route cutover. Live signer and bureau qualification
 (including batch), live packaged-image and gateway acceptance, live Flow
-qualification, exact route/error parity, stacked-base review and CI, immediate
+qualification, exact route/error parity, PR #853 overlay qualification, immediate
 qualified Python retirement, and the one aggregate
 beta-only acceptance soak remain. Production is unchanged; DIDComm KMS
 corrections remain separately deferred.
@@ -6291,7 +6294,7 @@ closes the observed default-Axum-rejection gap, not the whole route/error
 parity gate: broader live and adverse-provider acceptance still precede
 enabling the gateway selector or removing Python.
 
-Gateway still selects Python for public `/v1/passport` routes by default. Draft
+Gateway still selects Python for public `/v1/passport` routes by default. Merged
 #852's explicit `PASSPORT_NATIVE_GATEWAY_ENABLED` switch, default false, now
 selects the eight tenant-authenticated method/path shapes when enabled. The
 ninth, separately HMAC-signed bureau webhook is now a hidden public ingress
@@ -6315,8 +6318,8 @@ gateway now replaces any caller value with the authenticated session or API-key
 actor. A two-tenant gateway HTTP test confirms distinct keys, trusted actors,
 and no forwarding on mismatched claims. All 133 gateway library tests and
 strict Clippy pass locally. The shared issuance API key is not used as a
-passport tenant credential. This source gate is not deployment authorization: live signer and
-bureau, signed webhook, image, Flow, beta secret mount, exact-head CI and
+passport tenant credential. This source gate is not deployment authorization:
+live signer and bureau, signed webhook, image, Flow, beta secret mount, and
 acceptance qualification still remain.
 
 The post-rebase hosted CI pass exposed packaging and configuration inventories
@@ -6343,8 +6346,8 @@ CI gate. This qualifies source packaging, not a provider-backed beta cutover.
 
 Credentials PR #300's CI correction landed at
 `9026cbbbfd647cae19af040d95b541e2e67cdb3e`; post-merge main CI passed.
-Stacked PR #853 supplies a default-off beta-only secret/profile overlay but
-does not provision the five beta secret sources or real signer and bureau
-endpoints. Passport issue #851 tracks provider callback and tenant-isolation
+PR #853 supplies a default-off beta-only secret/profile overlay under separate
+exact-head CI. It does not provision the five beta secret sources or real signer
+and bureau endpoints. Passport issue #851 tracks provider callback and tenant-isolation
 acceptance, Python retirement, and the aggregate beta-only soak. Production
 remains unchanged.
