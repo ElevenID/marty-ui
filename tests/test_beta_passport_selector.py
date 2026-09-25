@@ -1,7 +1,9 @@
 """The beta passport selector is opt-in and rejects partial or unsafe bindings."""
 
 import json
+import os
 from pathlib import Path
+import re
 import runpy
 import shutil
 import subprocess
@@ -225,3 +227,65 @@ def test_actual_beta_compose_merge_preserves_default_off_and_selected_mounts():
         for owner in owners:
             mounts = enabled["services"][owner]["secrets"]
             assert {"source": secret, "target": "/run/secrets/" + secret} in mounts
+
+
+def test_actual_interpolated_beta_compose_passes_selector_with_synthetic_sources(
+    tmp_path,
+):
+    if not shutil.which("docker"):
+        pytest.skip("Docker Compose is not installed")
+    files = [
+        str(ROOT / name)
+        for name in (
+            "docker-compose.base.yml",
+            "docker-compose.beta.yml",
+            "docker-compose.profile.dev.yml",
+            PROFILE,
+        )
+    ]
+    required = set()
+    for file in ROOT.glob("docker-compose*.yml"):
+        required.update(re.findall(r"\$\{([A-Z][A-Z0-9_]*):\?", file.read_text()))
+    values = {name: "synthetic-value" for name in required}
+    values["ICAO_DOCUMENT_SIGNER_URL"] = "https://signer.example.test"
+    values["PERSONALIZATION_BUREAU_URL"] = "https://bureau.example.test"
+    for secret in VALIDATOR["SECRET_MOUNTS"]:
+        source = tmp_path / secret
+        source.write_text("synthetic-private-value", encoding="utf-8")
+        values[secret.upper() + "_SOURCE_FILE"] = source.as_posix()
+    env_file = tmp_path / "synthetic-beta.env"
+    env_file.write_text(
+        "\n".join(f"{name}={value}" for name, value in sorted(values.items())) + "\n",
+        encoding="utf-8",
+    )
+    passthrough = (
+        "PATH",
+        "SYSTEMROOT",
+        "WINDIR",
+        "USERPROFILE",
+        "APPDATA",
+        "LOCALAPPDATA",
+        "HOME",
+        "HOMEDRIVE",
+        "HOMEPATH",
+        "PROGRAMFILES",
+        "PROGRAMFILES(X86)",
+        "DOCKER_HOST",
+        "DOCKER_CONTEXT",
+        "DOCKER_CONFIG",
+    )
+    environment = {name: os.environ[name] for name in passthrough if name in os.environ}
+
+    def run(command, **kwargs):
+        kwargs["stderr"] = subprocess.PIPE
+        result = subprocess.run(command, env=environment, cwd=ROOT, **kwargs)
+        assert result.returncode == 0, result.stderr.decode(errors="replace")
+        return result
+
+    VALIDATOR["validate_compose"](
+        project="elevenid-beta",
+        env_files=[str(env_file)],
+        files=files,
+        passport_enabled=True,
+        runner=run,
+    )
