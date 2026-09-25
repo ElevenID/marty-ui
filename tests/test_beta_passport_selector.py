@@ -203,6 +203,11 @@ def test_runner_validates_twice_before_mutation():
         encoding="utf-8"
     )
     assert "[switch]$EnablePassportNative" in source
+    assert "[string]$PassportEnvFile" in source
+    assert 'Join-Path $script:RepoRoot ".env.passport.beta.local"' in source
+    assert source.index("$script:EnvFiles += $PassportEnvFile") < source.index(
+        "foreach ($envFile in $script:EnvFiles)"
+    )
     assert (
         "$passportProfiles = @(Get-BetaPassportProfiles -Enabled ([bool]$EnablePassportNative))"
         in source

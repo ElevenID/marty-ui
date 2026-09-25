@@ -19,6 +19,9 @@ param(
 
     [string]$GeneratedEnvFile,
 
+    # Contains source paths and provider URLs, never inline key material.
+    [string]$PassportEnvFile,
+
     [switch]$OfficialStackRelease,
 
     [string]$RecorderRevision,
@@ -54,6 +57,12 @@ $script:BetaNetwork = "elevenid-beta-network"
 $script:VolumeHelperImage = "alpine@sha256:d9e853e87e55526f6b2917df91a2115c36dd7c696a35be12163d44e6e2a4b6bc"
 $env:MARTY_NETWORK_NAME = $script:BetaNetwork
 $script:EnvFiles = @($TunnelEnvFile, $GeneratedEnvFile)
+if ($EnablePassportNative) {
+    if ([string]::IsNullOrWhiteSpace($PassportEnvFile)) {
+        $PassportEnvFile = Join-Path $script:RepoRoot ".env.passport.beta.local"
+    }
+    $script:EnvFiles += $PassportEnvFile
+}
 foreach ($envFile in $script:EnvFiles) {
     if (-not (Test-Path -LiteralPath $envFile -PathType Leaf)) { throw "Required beta environment file is missing: $envFile" }
 }
