@@ -6207,8 +6207,10 @@ ownership, and real-database checks for tenant isolation, retained event
 ownership, parent/child purge, and foreign/newer survivors. The remaining nine
 Python routes are the physical-passport surface. Protected-main merge
 `91ea7e52d6a3822981bb42f002da8c68532ebf2e` passed exact-head and
-merge-group gates; no beta or production deployment is implied. The two Python
-retention routes remain in source pending Credentials PR #299's hosted merge.
+merge-group gates; no beta or production deployment is implied. Credentials
+PR #299 subsequently merged at protected main
+`48298b943032ea86043d2d4e14c626211bb92d1b`, removing only the two
+qualified Python retention routes. The nine Python passport routes remain.
 
 Credentials `v0.1.78` is published from protected-main source
 `efd5da1e2d41419ce93721f98d314c7b911e6b5e`, whose issuance migration head
@@ -6216,14 +6218,15 @@ is `issuance_event_owner`. Merged #849 pins the release's immutable issuance
 image digest in the stack lock and DIDComm evidence, and CI/CD require that
 reviewed migration-bearing source before native retention activates. Focused
 release-contract tests and lint passed. The predecessor sequence through #845
-and retention #849 have landed; separate Python retirement, passport
-qualification, and one aggregate beta-only deployment/acceptance soak remain.
+and retention #849 have landed. Retention Python retirement #299 has also
+landed; passport qualification, its separate Python retirement, and one
+aggregate beta-only deployment/acceptance soak remain.
 Production is unchanged.
 
-### Physical-passport checkpoint (draft #852, 2026-09-25)
+### Physical-passport checkpoint (open #852, 2026-09-25)
 
 The nine retained Python passport routes have default-off Rust counterparts in
-draft #852. They are **not yet the selected owner**: Python routes, migrations,
+PR #852. They are **not yet the selected owner**: Python routes, migrations,
 and provider adapters remain until the full cutover gate passes. The Rust draft
 preserves the frozen request and safe-response shapes, tenant-scoped durable
 jobs, remote ICAO signing, single-job and batch bureau transports, signed
@@ -6327,3 +6330,15 @@ strict Clippy pass locally. The shared issuance API key is not used as a
 passport tenant credential. This source gate is not deployment authorization: live signer and
 bureau, signed webhook, image, Flow, beta secret mount, exact-head CI and
 acceptance qualification still remain.
+
+The post-rebase hosted CI pass exposed packaging and configuration inventories
+that had not yet accounted for passport. Repair `4f3efee01960c6811faf39934afcfc6ea1660bc2`
+adds the default-off self-host inputs, updates the Flow fixture and source
+guards, refreshes the locked feature-regression probe, and classifies passport
+Kubernetes inputs as deliberately unbound pending Secret-backed wiring. The
+production self-host gateway and Flow selectors are likewise not yet wired;
+forwarding inputs to `issuance-native` alone does not permit a self-host
+passport cutover. Both deployment profiles stay on the Python passport owner.
+The focused release-contract suite passed 111 tests and the locked Rust probe
+compiled locally; hosted exact-head CI remains the merge authority. This is a source
+qualification checkpoint, not a passport cutover or beta deployment.
