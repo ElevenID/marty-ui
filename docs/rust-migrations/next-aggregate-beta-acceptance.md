@@ -48,19 +48,23 @@ selected here.
    migration rehearsal, workload identity, actual rendered configuration and
    authcrypt policy/CA pairing. `-PlanOnly` explicitly reports
    `didcomm_configuration_validated=false`; it is not runtime qualification.
-   Native passport remains off unless `-EnablePassportNative` is explicitly
-   selected. That selector adds `docker-compose.profile.passport-native-beta.yml`
-   and requires five readable, nonempty beta-only secret source files supplied
-   through `PASSPORT_TENANT_API_KEYS_SOURCE_FILE`,
-   `PHYSICAL_DOCUMENT_ARTIFACT_KEY_SOURCE_FILE`,
-   `ICAO_DOCUMENT_SIGNER_API_KEY_SOURCE_FILE`,
-   `PERSONALIZATION_BUREAU_API_KEY_SOURCE_FILE`, and
-   `PERSONALIZATION_BUREAU_WEBHOOK_SECRET_SOURCE_FILE`, plus credential-free
-   HTTPS `ICAO_DOCUMENT_SIGNER_URL` and `PERSONALIZATION_BUREAU_URL`. The
-   wrapper validates the rendered ownership and mounts before mutations and
-   again before maintenance; `-PlanOnly` reports
-   `passport_configuration_validated=false`. Provider sources are not yet
-   provisioned, and this opt-in is not permission to deploy or retire Python.
+   Native passport remains off. The current `-EnablePassportNative` selector
+   and `docker-compose.profile.passport-native-beta.yml` still require five
+   file-backed tenant, artifact, signer, bureau, and callback secrets. **Do not
+   provision those files or select that profile:** the configuration does not
+   meet the KMS-only custody requirement. Its render checks and `-PlanOnly`
+   result (`passport_configuration_validated=false`) are not acceptance.
+   Replace the selector and service configuration before passport activation.
+   Resolve an active, organization-scoped `ICAO_EMRTD` X.509 document-signer
+   identity created through the existing issuer UI; bind it to the passport
+   job and use its managed Signing Keys/KMS reference and published certificate
+   for opaque CMS/SOD signing. Keep artifact encryption keys and callback MAC
+   keys inside KMS. Authenticate internal provider calls without new static
+   passport bearer-token files. Require signed organization identity on bureau
+   callbacks and enforce that identity in job lookup. Inventory beta again
+   before adding any bureau provider; do not deploy a duplicate ICAO signer.
+   No native cutover or Python retirement is permitted until these gates and
+   their language-neutral behavior tests pass.
 4. Explicitly hold `BetaOrigin` at `https://beta.elevenidllc.com`. The wrapper's
    HTTPS syntax check alone does not establish that an origin is beta. Retain
    fixed beta Compose projects/network and labeled-volume ownership checks.
