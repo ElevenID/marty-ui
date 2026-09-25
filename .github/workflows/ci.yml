@@ -640,6 +640,36 @@ jobs:
           printf 'MARTY_SELFHOST_TEST_PACKAGER_BINARY=%s\n' "$PWD/rust/target/debug/package-selfhost-bundle" >> "$GITHUB_ENV"
           printf 'MARTY_SELFHOST_TEST_IMAGE=%s\n' "$selfhost_image_id" >> "$GITHUB_ENV"
           printf 'MARTY_SELFHOST_TEST_REVISION=%s\n' "$selfhost_revision" >> "$GITHUB_ENV"
+      - name: Verify opt-in passport test-mode image boundary
+        shell: bash
+        run: |
+          set -euo pipefail
+          if default_output="$(docker run --rm --network none \
+            --env PASSPORT_NATIVE_HTTP_ENABLED=true \
+            --env PHYSICAL_DOCUMENT_ALLOW_SELF_SIGNED=true \
+            --entrypoint /usr/local/bin/marty-issuance-service \
+            "$MARTY_SELFHOST_TEST_IMAGE" 2>&1)"; then
+            echo "Default public image unexpectedly enabled passport test mode" >&2
+            exit 1
+          fi
+          grep -Fq 'self-signed passport test mode requires the passport-self-signed-test build feature' <<<"$default_output"
+          docker build \
+            --file services/Dockerfile \
+            --tag marty-passport-self-signed:contract \
+            --build-arg PASSPORT_SELF_SIGNED_TEST=true \
+            --build-arg MARTY_RELEASE_VERSION=ci \
+            --build-arg "MARTY_UI_SHA=$MARTY_SELFHOST_TEST_REVISION" \
+            --build-arg SERVICE_NAME=issuance_native \
+            .
+          if test_output="$(docker run --rm --network none \
+            --env PASSPORT_NATIVE_HTTP_ENABLED=true \
+            --env PHYSICAL_DOCUMENT_ALLOW_SELF_SIGNED=true \
+            --entrypoint /usr/local/bin/marty-issuance-service \
+            marty-passport-self-signed:contract 2>&1)"; then
+            echo "Test-mode image unexpectedly started without tenant keys" >&2
+            exit 1
+          fi
+          grep -Fq 'PASSPORT_TENANT_API_KEYS is required when PASSPORT_NATIVE_HTTP_ENABLED is true' <<<"$test_output"
       - name: Prepare database contract executables
         working-directory: rust
         shell: bash

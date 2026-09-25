@@ -98,6 +98,7 @@ def test_gateway_stays_legacy_until_tenant_key_boundary_is_qualified() -> None:
 
 def test_self_signed_test_image_is_explicit_opt_in() -> None:
     dockerfile = (ROOT / "services/Dockerfile").read_text(encoding="utf-8")
+    workflow = (ROOT / ".github/workflows/ci.yml").read_text(encoding="utf-8")
     contract = json.loads(
         (ROOT / "contracts/issuance-physical-passport-native.json").read_text(
             encoding="utf-8"
@@ -109,6 +110,8 @@ def test_self_signed_test_image_is_explicit_opt_in() -> None:
         in dockerfile
     )
     assert "PASSPORT_SELF_SIGNED_TEST must be true or false" in dockerfile
+    assert "Verify opt-in passport test-mode image boundary" in workflow
+    assert "--build-arg PASSPORT_SELF_SIGNED_TEST=true" in workflow
     assert (
         "PASSPORT_SELF_SIGNED_TEST=true"
         in contract["self_signed_test_signer"]["packaged_image_build_arg"]
