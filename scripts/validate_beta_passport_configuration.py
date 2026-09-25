@@ -120,7 +120,9 @@ def validate_model(model, *, passport_enabled, files):
                     raise PassportConfigurationError(
                         "Beta passport secret file binding is invalid"
                     )
-    except (KeyError, TypeError, AttributeError, OSError):
+    except PassportConfigurationError:
+        raise
+    except (KeyError, TypeError, AttributeError, OSError, ValueError):
         raise PassportConfigurationError(
             "Invalid beta passport Compose model"
         ) from None
