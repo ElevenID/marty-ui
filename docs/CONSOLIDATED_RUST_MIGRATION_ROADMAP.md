@@ -13,8 +13,10 @@ surface. Rust source PR #852 implements their default-off native counterparts
 and landed through protected merge queue at
 `e00b9fd87ed1240bd927c8c8b0714e30d4963cdb` after exact-head and
 merge-group CI; it has not switched consumers or authorized Python deletion.
-PR #853 adds a default-off beta secret/profile overlay and is under exact-head
-CI, not deployed. Real beta
+PR #853's default-off beta secret/profile overlay landed through protected
+merge queue at `9c4d58214178f5c6489fdb8ea74655cca0133e8b` after exact-head
+and merge-group CI; its landed tree matches the reviewed head. It is not
+deployed. Real beta
 signer and bureau endpoints, five secret-file sources, provider callback and
 durable-job acceptance, and one aggregate beta-only soak remain outstanding.
 The last published beta baseline documented here is `marty-ui@v1.1.217`, source
@@ -75,9 +77,10 @@ PR #845 landed at `207c84afc00b2f3b2b3db6b433823a9c7d59ab38`. Retention
 PR #849 then landed through protected merge-group CI at
 `91ea7e52d6a3822981bb42f002da8c68532ebf2e` with a 122/9 source
 inventory. Credentials PR #299 separately retired the two Python retention
-routes; PR #300's toolchain correction and post-merge main CI passed. PR #852
-has passed exact-head CI for nine default-off physical-passport counterparts;
-protected merge, live provider/consumer acceptance, and cutover qualification
+routes; PR #300's toolchain correction and post-merge main CI passed. PR #852's
+nine default-off physical-passport counterparts landed on protected `main` as
+`e00b9fd87ed1240bd927c8c8b0714e30d4963cdb` after exact-head and
+merge-group CI. Live provider/consumer acceptance and cutover qualification
 remain.
 These coordinates do not authorize deletion of reachable Python or establish a
 new beta or production deployment.
@@ -6266,7 +6269,7 @@ environment before enabling either service.
 
 The landed source is not a nine-route cutover. Live signer and bureau qualification
 (including batch), live packaged-image and gateway acceptance, live Flow
-qualification, exact route/error parity, PR #853 overlay qualification, immediate
+qualification, exact route/error parity, beta secret provisioning, immediate
 qualified Python retirement, and the one aggregate
 beta-only acceptance soak remain. Production is unchanged; DIDComm KMS
 corrections remain separately deferred.
@@ -6346,8 +6349,9 @@ CI gate. This qualifies source packaging, not a provider-backed beta cutover.
 
 Credentials PR #300's CI correction landed at
 `9026cbbbfd647cae19af040d95b541e2e67cdb3e`; post-merge main CI passed.
-PR #853 supplies a default-off beta-only secret/profile overlay under separate
-exact-head CI. It does not provision the five beta secret sources or real signer
+PR #853's default-off beta-only secret/profile overlay landed on protected
+`main` at `9c4d58214178f5c6489fdb8ea74655cca0133e8b` after exact-head and
+merge-group CI. It does not provision the five beta secret sources or real signer
 and bureau endpoints. Passport issue #851 tracks provider callback and tenant-isolation
 acceptance, Python retirement, and the aggregate beta-only soak. Production
 remains unchanged.
