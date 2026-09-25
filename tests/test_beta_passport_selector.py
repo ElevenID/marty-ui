@@ -83,6 +83,7 @@ def test_rendered_compose_environment_list_is_supported(tmp_path):
         "target",
         "self_signed",
         "url",
+        "url_query",
         "missing",
         "empty",
         "mount",
@@ -106,6 +107,10 @@ def test_partial_or_unsafe_selection_fails_closed(tmp_path, mutation):
     elif mutation == "url":
         services["issuance-native"]["environment"]["ICAO_DOCUMENT_SIGNER_URL"] = (
             "http://signer.example.test"
+        )
+    elif mutation == "url_query":
+        services["issuance-native"]["environment"]["ICAO_DOCUMENT_SIGNER_URL"] = (
+            "https://signer.example.test/?api_key=synthetic-private-value"
         )
     elif mutation == "missing":
         Path(candidate["secrets"]["passport_tenant_api_keys"]["file"]).unlink()

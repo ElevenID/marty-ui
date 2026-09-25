@@ -82,6 +82,8 @@ def validate_model(model, *, passport_enabled, files):
                 or not url.hostname
                 or url.username
                 or url.password
+                or url.query
+                or url.fragment
             ):
                 raise PassportConfigurationError(
                     f"{name} must be a credential-free HTTPS URL"
