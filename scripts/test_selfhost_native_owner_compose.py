@@ -59,7 +59,6 @@ PASSPORT_CONSUMER_ADDITIVE = {
         "PASSPORT_TENANT_API_KEYS_FILE": "${PASSPORT_TENANT_API_KEYS_FILE:-}",
     },
     "flow": {
-        "ISSUANCE_NATIVE_SERVICE_URL": "http://issuance-native:8005",
         "PASSPORT_NATIVE_FLOW_ENABLED": "${PASSPORT_NATIVE_FLOW_ENABLED:-false}",
         "PASSPORT_TENANT_API_KEYS": "${PASSPORT_TENANT_API_KEYS:-}",
         "PASSPORT_TENANT_API_KEYS_FILE": "${PASSPORT_TENANT_API_KEYS_FILE:-}",
@@ -104,21 +103,7 @@ def rendered_additions(templates, values):
 
 def rendered_passport_consumer_additions(values):
     return {
-        owner: {
-            **{
-                key: template
-                for key, template in additions.items()
-                if not template.startswith("${")
-            },
-            **rendered_additions(
-                {
-                    key: template
-                    for key, template in additions.items()
-                    if template.startswith("${")
-                },
-                values,
-            ),
-        }
+        owner: rendered_additions(additions, values)
         for owner, additions in PASSPORT_CONSUMER_ADDITIVE.items()
     }
 

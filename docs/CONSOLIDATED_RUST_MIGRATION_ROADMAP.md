@@ -6338,9 +6338,11 @@ guards, refreshes the locked feature-regression probe, and classifies passport
 Kubernetes inputs as deliberately unbound pending Secret-backed wiring. A
 follow-up source change wires the production self-host gateway and Flow
 selectors/keyring inputs with false/empty defaults, matching `issuance-native`.
-That is configuration availability only: secret-file mounts, live provider
-acceptance, and separate cutover authorization remain. Both deployment
-profiles stay on the Python passport owner.
+The default production Flow descriptor still omits the native HTTP URL, as its
+frozen consumer-owner guard requires. Enabling the Flow passport selector with
+the legacy URL now fails closed; an explicit native URL, secret-file mounts,
+live provider acceptance, and separate cutover authorization remain required.
+Both deployment profiles stay on the Python passport owner.
 The focused release-contract suite passed 111 tests and the locked Rust probe
 compiled locally; hosted exact-head CI remains the merge authority. This is a source
 qualification checkpoint, not a passport cutover or beta deployment.

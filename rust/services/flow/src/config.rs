@@ -472,6 +472,9 @@ impl FlowServiceConfig {
         if passport_native_flow_enabled && passport_tenant_keys.is_none() {
             return Err(invalid("PASSPORT_TENANT_API_KEYS"));
         }
+        if passport_native_flow_enabled && issuance_native_url == issuance_url {
+            return Err(invalid("ISSUANCE_NATIVE_SERVICE_URL"));
+        }
         let allow_plaintext_grpc = parse_boolean(
             value(&values, "GRPC_INSECURE_ALLOWED").unwrap_or("false"),
             "GRPC_INSECURE_ALLOWED",
@@ -962,6 +965,36 @@ fn redacted(value: &Option<String>) -> &'static str {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn passport_selector_rejects_a_legacy_native_target() {
+        let mut values = BTreeMap::from([
+            ("ENVIRONMENT".into(), "development".into()),
+            ("DATABASE_URL".into(), "postgresql://localhost/flow".into()),
+            ("REDIS_URL".into(), "redis://localhost:6379".into()),
+            ("ISSUANCE_SERVICE_URL".into(), "http://issuance:8005".into()),
+            (
+                "ISSUANCE_NATIVE_SERVICE_URL".into(),
+                "http://issuance:8005".into(),
+            ),
+            (
+                "PASSPORT_TENANT_API_KEYS".into(),
+                format!("{{\"org-a\":\"{}\"}}", "t".repeat(32)),
+            ),
+            ("PASSPORT_NATIVE_FLOW_ENABLED".into(), "true".into()),
+        ]);
+        assert!(matches!(
+            FlowServiceConfig::from_values(values.clone()),
+            Err(FlowConfigError::Invalid {
+                name: "ISSUANCE_NATIVE_SERVICE_URL"
+            })
+        ));
+        values.insert(
+            "ISSUANCE_NATIVE_SERVICE_URL".into(),
+            "http://issuance-native:8005".into(),
+        );
+        assert!(FlowServiceConfig::from_values(values).is_ok());
+    }
 
     #[test]
     fn release_identity_prefers_shared_names_and_preserves_legacy_fallbacks() {
