@@ -405,6 +405,7 @@ mod tests {
                     && !route.issued_credential_adapter_behavior_contract
                     && !route.oid4vci_authorization_behavior_contract
                     && !route.canvas_mirror_behavior_contract
+                    && !route.retention_behavior_contract
             })
             .collect::<Vec<_>>();
         assert_eq!(preexisting.len(), 98);
