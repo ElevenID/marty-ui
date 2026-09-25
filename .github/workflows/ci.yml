@@ -876,7 +876,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          for database in marty_verification_contract marty_db_contracts_test marty_issuance_executable_smoke_test; do
+          for database in marty_verification_contract marty_db_contracts_test marty_issuance_executable_smoke_test marty_retention_contract_test; do
             docker exec "${{ job.services.postgres.id }}" createdb -U postgres "$database"
           done
           docker exec --interactive "${{ job.services.postgres.id }}" \
@@ -1744,6 +1744,8 @@ jobs:
           tests/test_verification_candidate_workflow.py
       - name: Require a compatible Credentials image for native DIDComm consumers
         run: python scripts/check_didcomm_native_credentials_release.py
+      - name: Require the event-owner migration for native retention
+        run: python scripts/check_issuance_retention_credentials_release.py
 
   test-credential-lifecycle-browser:
     name: MIP 0.5 Credential Lifecycle Browser Gate

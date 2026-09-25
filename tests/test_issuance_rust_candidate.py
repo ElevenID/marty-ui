@@ -157,6 +157,10 @@ def test_frozen_surface_provenance_and_coverage_are_complete() -> None:
         ROOT / "contracts/issuance-internal-applications.json"
     ).read_bytes()
     internal_applications = json.loads(internal_application_bytes)
+    retention_bytes = (
+        ROOT / "contracts/issuance-retention-management.json"
+    ).read_bytes()
+    retention = json.loads(retention_bytes)
     resource_owner_bytes = (
         ROOT / "contracts/issuance-resource-owner-lookups.json"
     ).read_bytes()
@@ -452,6 +456,12 @@ def test_frozen_surface_provenance_and_coverage_are_complete() -> None:
         "marty.issuance-internal-applications/v1"
     )
     assert len(internal_applications["surface"]["routes"]) == 14
+    assert (
+        hashlib.sha256(retention_bytes.replace(b"\r\n", b"\n")).hexdigest()
+        == coverage["retention_behavior_contract"]["sha256"]
+    )
+    assert retention["schema"] == "marty.issuance-retention-management/v1"
+    assert len(retention["routes"]) == 2
     capability_policy = canvas_lti["launch"]["capability_snapshot_persistence"]
     assert capability_policy["authority"] == "verified-signed-launch-claims"
     assert capability_policy["authorization_index"] == "verified_binding_launches"
@@ -537,6 +547,9 @@ def test_frozen_surface_provenance_and_coverage_are_complete() -> None:
     internal_application_operations = {
         route["operation"] for route in internal_applications["surface"]["routes"]
     }
+    retention_operations = {
+        route["operation"]: route for route in retention["routes"]
+    }
     resource_owner_operations = {
         route["operation"]: route for route in resource_owners["operations"]
     }
@@ -577,7 +590,7 @@ def test_frozen_surface_provenance_and_coverage_are_complete() -> None:
         hashlib.sha256(renewal_bytes).hexdigest()
         == coverage["renewal_behavior_contract"]["sha256"]
     )
-    assert len(coverage["native_http"]) == 120
+    assert len(coverage["native_http"]) == 122
     assert set(native) == (
         set(discovery_cases)
         | set(tenant_cases)
@@ -587,6 +600,7 @@ def test_frozen_surface_provenance_and_coverage_are_complete() -> None:
         | set(canvas_mirror_operations)
         | application_template_operations
         | internal_application_operations
+        | set(retention_operations)
         | set(resource_owner_operations)
         | set(issued_credential_adapter_operations)
         | set(oid4vci_public_operations)
@@ -806,6 +820,12 @@ def test_frozen_surface_provenance_and_coverage_are_complete() -> None:
                 for route in internal_applications["surface"]["routes"]
             )
             continue
+        if operation in retention_operations:
+            assert coverage_entry == {
+                **retention_operations[operation],
+                "retention_behavior_contract": True,
+            }
+            continue
         if operation in resource_owner_operations:
             frozen = resource_owner_operations[operation]
             assert coverage_entry == {
@@ -870,7 +890,7 @@ def test_frozen_surface_provenance_and_coverage_are_complete() -> None:
         )
         assert discovery_cases[operation]["path"] == expected_case_path
     assert coverage["remaining"] == {
-        "http": 11,
+            "http": 9,
         "grpc": 0,
         "runtime_modes": ["api", "canvas-sync-worker"],
         "literal_environment_variables": 15,

@@ -87,6 +87,7 @@ use crate::{
     oid4vci_management::Oid4vciManagementService,
     proof_nonce::{ProofNonceError, ProofNonceService},
     resource_owner::{ResourceOwner, ResourceOwnerKind, ResourceOwnerService},
+    retention::RetentionService,
     tenant_discovery::{TenantDiscoveryError, TenantDiscoveryService},
     token_exchange::{TokenExchangeError, TokenExchangeRequest, TokenExchangeService},
     token_rate_limit::{token_rate_limit_middleware, TokenRateLimiter},
@@ -139,6 +140,7 @@ pub struct IssuanceServices {
     oid4vci_management: Option<Oid4vciManagementService>,
     application_templates: ApplicationTemplateService,
     internal_applications: Option<InternalApplicationService>,
+    retention: Option<RetentionService>,
     canvas: CanvasServices,
     token_rate_limiter: TokenRateLimiter,
     oid4vci_authorization: Oid4vciAuthorizationService,
@@ -341,6 +343,7 @@ impl IssuanceServices {
             oid4vci_management: None,
             application_templates,
             internal_applications: None,
+            retention: None,
             canvas,
             token_rate_limiter,
             oid4vci_authorization,
@@ -373,6 +376,13 @@ impl IssuanceServices {
         self.oid4vci_management = Some(oid4vci_management);
         self
     }
+
+    /// Opt in only after the frozen retention and PostgreSQL parity gates pass.
+    #[must_use]
+    pub fn with_retention(mut self, retention: RetentionService) -> Self {
+        self.retention = Some(retention);
+        self
+    }
 }
 
 #[derive(Default)]
@@ -391,6 +401,7 @@ struct OptionalServices {
     oid4vci_management: Option<Oid4vciManagementService>,
     application_templates: Option<ApplicationTemplateService>,
     internal_applications: Option<InternalApplicationService>,
+    retention: Option<RetentionService>,
     canvas_lti_login: Option<CanvasLtiLoginService>,
     canvas_lti_launch: Option<CanvasLtiLaunchService>,
     canvas_lti_experience: Option<CanvasLtiExperienceService>,
@@ -503,6 +514,7 @@ pub fn router_with_all_services(
             oid4vci_management: services.oid4vci_management,
             application_templates: Some(services.application_templates),
             internal_applications: services.internal_applications,
+            retention: services.retention,
             canvas_oauth: Some(services.canvas.oauth),
             canvas_management: Some(services.canvas.management),
             canvas_legacy_ingest: Some(services.canvas.legacy_ingest),
@@ -1271,6 +1283,11 @@ fn router_with_optional_services(
     };
     let api = if let Some(management) = oid4vci_management {
         api.merge(crate::oid4vci_management_http::router(management))
+    } else {
+        api
+    };
+    let api = if let Some(retention) = services.retention {
+        api.merge(crate::retention_http::router(retention))
     } else {
         api
     };

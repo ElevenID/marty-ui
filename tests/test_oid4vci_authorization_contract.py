@@ -122,7 +122,9 @@ def test_all_frozen_oid4vci_routes_are_native_after_management_cutover() -> None
     operations = {route["operation"] for route in contract["routes"]}
 
     assert operations <= native
-    assert coverage["remaining"]["http"] == 11
+    # Retention's two routes are native in this candidate; passport's nine
+    # routes remain Python-owned until their separate parity gate passes.
+    assert coverage["remaining"]["http"] == 9
 
     surface = _json(ROOT / "contracts" / "issuance-runtime-surface.json")
     frozen_surface = {

@@ -112,6 +112,12 @@
     "commit": "e40c1ce6e807714278ef362d3ed24909dd8686fa",
     "sha256": "650f22242055fbd4acbea523749a2d10aa8509a95fad9175d7b134c76433da12"
   },
+  "retention_behavior_contract": {
+    "repository": "ElevenID/marty-credentials",
+    "path": "contracts/issuance-retention-management.json",
+    "commit": "3d54a96cdd88b8c83cae138149ad5217d8d251f8",
+    "sha256": "dbc6ad753ba16f2277e6c40040a1115cff257a7cf0d7ec32786f474a5881db0c"
+  },
   "resource_owner_behavior_contract": {
     "path": "contracts/issuance-resource-owner-lookups.json",
     "sha256": "59b3f21107824f85136768545bca8f4a6374d3a4708a0408b1a7769c61c00a06",
@@ -858,6 +864,18 @@
       "path": "/v1/integrations/canvas/evidence-policy-reviews/{review_id}/resolve",
       "operation": "resolve_evidence_policy_review_route",
       "canvas_operations_behavior_case": "resolve_review"
+    },
+    {
+      "method": "GET",
+      "path": "/v1/issuance/organizations/{organization_id}/retention",
+      "operation": "get_organization_retention_summary",
+      "retention_behavior_contract": true
+    },
+    {
+      "method": "POST",
+      "path": "/v1/issuance/organizations/{organization_id}/retention/purge",
+      "operation": "purge_organization_retention_data",
+      "retention_behavior_contract": true
     }
   ],
   "native_grpc": [
@@ -894,7 +912,7 @@
     "CANVAS_PORTABLE_INTEGRATION_ENABLED"
   ],
   "remaining": {
-    "http": 11,
+    "http": 9,
     "grpc": 0,
     "runtime_modes": ["api", "canvas-sync-worker"],
     "literal_environment_variables": 15,

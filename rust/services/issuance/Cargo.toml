@@ -284,3 +284,11 @@ path = "tests/oid4vci_management_behavior.rs"
 [[test]]
 name = "oid4vci_migration_postgres_contract"
 path = "tests/oid4vci_migration_postgres_contract.rs"
+
+[[test]]
+name = "retention_native_behavior"
+path = "tests/retention_native_behavior.rs"
+
+[[test]]
+name = "retention_postgres_contract"
+path = "tests/retention_postgres_contract.rs"

@@ -71,13 +71,13 @@
     {
       "name": "marty-credentials-issuance",
       "repository": "ElevenID/marty-credentials",
-      "version": "0.1.77",
-      "commit": "969cb045c774062c0d058d72283fe65507ca9a44",
+      "version": "0.1.78",
+      "commit": "efd5da1e2d41419ce93721f98d314c7b911e6b5e",
       "artifacts": [{
         "type": "oci",
         "uri": "ghcr.io/elevenid/marty-credentials-issuance",
-        "digest": "sha256:02fe863e9e6c5faf8538c95cfa030e92504b6c4b6ba695bd3656ec30f21f2c3f",
-        "sbom": "https://github.com/ElevenID/marty-credentials/releases/download/v0.1.77/marty-credentials-issuance.spdx.json",
+        "digest": "sha256:e7bb482120837c68af6cec2f6d1d5276488de440b93fc811987860b7b99b4657",
+        "sbom": "https://github.com/ElevenID/marty-credentials/releases/download/v0.1.78/marty-credentials-issuance.spdx.json",
         "provenance": "https://github.com/ElevenID/marty-credentials/attestations"
       }]
     },

@@ -6187,3 +6187,24 @@ capabilities. Self-host production stays unchanged, no deployment is performed,
 and `DIDCOMM-KMS-001` remains deferred. Next gates are maintainer review, hosted
 CI, sequential stack landing, aggregate beta deployment/acceptance, and then
 Python retirement only where universal selection and parity evidence permit it.
+
+### Issuance retention checkpoint (draft #849)
+
+The #849 source inventory is **122 native / 9 retained Python / 131 total HTTP
+routes**. The two organization-retention management routes now have a frozen
+behavior contract, Rust HTTP and PostgreSQL implementations, strict gateway
+ownership, and real-database checks for tenant isolation, retained event
+ownership, parent/child purge, and foreign/newer survivors. The remaining nine
+Python routes are the physical-passport surface. This is an implemented draft,
+not a landed or deployed cutover; the two Python retention routes remain until
+the full gate passes.
+
+Credentials `v0.1.78` is published from protected-main source
+`efd5da1e2d41419ce93721f98d314c7b911e6b5e`, whose issuance migration head
+is `issuance_event_owner`. Draft #849 pins the release's immutable issuance
+image digest in the stack lock and DIDComm evidence, and CI/CD require that
+reviewed migration-bearing source before native retention activates. Focused
+release-contract tests and lint pass. The predecessor sequence #840 → #842 →
+#844 → #845, protected exact-head checks, maintainer re-review, Python
+retirement, and one aggregate
+beta-only deployment/acceptance soak remain. Production is unchanged.

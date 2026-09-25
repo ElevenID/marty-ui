@@ -9,7 +9,6 @@ import pytest
 from scripts.check_didcomm_native_credentials_release import (
     IMAGE,
     NativeDidcommReleaseError,
-    PROVENANCE,
     RELEASE_BASE,
     SBOM_NAME,
     validate_release_gate,
@@ -61,10 +60,10 @@ def _pending_models() -> tuple[dict, dict]:
 def test_current_activation_is_pinned_to_the_published_immutable_release() -> None:
     gate = CONTRACT["release_gate"]
     assert gate["state"] == "qualified"
-    assert gate["required_source_checkpoint"] == "969cb045c774062c0d058d72283fe65507ca9a44"
+    assert gate["required_source_checkpoint"] == "efd5da1e2d41419ce93721f98d314c7b911e6b5e"
     assert gate["minimum_version"] == "0.1.77"
     assert gate["qualified_release"]["digest"] == (
-        "sha256:02fe863e9e6c5faf8538c95cfa030e92504b6c4b6ba695bd3656ec30f21f2c3f"
+        "sha256:e7bb482120837c68af6cec2f6d1d5276488de440b93fc811987860b7b99b4657"
     )
     component = _component(LOCK)
     assert {

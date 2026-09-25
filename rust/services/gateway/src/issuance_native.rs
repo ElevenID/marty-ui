@@ -17,6 +17,7 @@ const CREDENTIAL_LIFECYCLE_TAG: &str = "credential-lifecycle";
 const ISSUED_CREDENTIAL_ADAPTER_TAG: &str = "issued-credential-adapter";
 const OID4VCI_AUTHORIZATION_TAG: &str = "oid4vci-authorization";
 const CANVAS_MIRROR_TAG: &str = "canvas-mirror";
+const RETENTION_TAG: &str = "retention";
 
 const CANVAS_MIRROR_BATCH_PATHS: [&str; 3] = [
     "/v1/issuance/delivery-records/canvas-credentials/process-pending",
@@ -49,6 +50,8 @@ struct NativeHttpRoute {
     oid4vci_authorization_behavior_contract: bool,
     #[serde(default)]
     canvas_mirror_behavior_contract: bool,
+    #[serde(default)]
+    retention_behavior_contract: bool,
 }
 
 static NATIVE_ROUTES: LazyLock<RouteTable> = LazyLock::new(|| {
@@ -70,6 +73,9 @@ static NATIVE_ROUTES: LazyLock<RouteTable> = LazyLock::new(|| {
         }
         if route.canvas_mirror_behavior_contract {
             tags.insert(CANVAS_MIRROR_TAG.into());
+        }
+        if route.retention_behavior_contract {
+            tags.insert(RETENTION_TAG.into());
         }
         table
             .add(RouteConfig {
@@ -108,7 +114,8 @@ pub fn is_native_http(method: HttpMethod, path: &str) -> bool {
             let exact_shape_required = matched.route.tags.contains(CREDENTIAL_LIFECYCLE_TAG)
                 || matched.route.tags.contains(ISSUED_CREDENTIAL_ADAPTER_TAG)
                 || matched.route.tags.contains(OID4VCI_AUTHORIZATION_TAG)
-                || matched.route.tags.contains(CANVAS_MIRROR_TAG);
+                || matched.route.tags.contains(CANVAS_MIRROR_TAG)
+                || matched.route.tags.contains(RETENTION_TAG);
             !exact_shape_required
                 || (is_canonical_absolute_path(path)
                     && exact_template_shape(&matched.route.pattern, path))
@@ -155,6 +162,31 @@ pub fn upstream_service(method: HttpMethod, path: &str) -> &'static str {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn retention_selects_only_frozen_tenant_routes() {
+        for (method, suffix) in [(HttpMethod::Get, ""), (HttpMethod::Post, "/purge")] {
+            let path = format!("/v1/issuance/organizations/org-a/retention{suffix}");
+            assert_eq!(upstream_service(method, &path), NATIVE_SERVICE);
+        }
+        for (method, path) in [
+            (
+                HttpMethod::Post,
+                "/v1/issuance/organizations/org-a/retention",
+            ),
+            (
+                HttpMethod::Get,
+                "/v1/issuance/organizations/org-a/retention/purge",
+            ),
+            (
+                HttpMethod::Get,
+                "/v1/issuance/organizations/org-a/retention/extra",
+            ),
+            (HttpMethod::Get, "/v1/issuance/organizations//retention"),
+        ] {
+            assert_eq!(upstream_service(method, path), LEGACY_SERVICE);
+        }
+    }
 
     #[test]
     fn application_templates_select_only_the_eight_frozen_methods_and_paths() {
@@ -373,6 +405,7 @@ mod tests {
                     && !route.issued_credential_adapter_behavior_contract
                     && !route.oid4vci_authorization_behavior_contract
                     && !route.canvas_mirror_behavior_contract
+                    && !route.retention_behavior_contract
             })
             .collect::<Vec<_>>();
         assert_eq!(preexisting.len(), 98);
