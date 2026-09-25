@@ -62,6 +62,7 @@ def models():
         ISSUANCE_GRPC_TARGET="issuance-native:9005",
         ISSUANCE_API_KEY_FILE="/run/secrets/issuance_api_key",
         SIGNING_KEYS_INTERNAL_API_KEY_FILE="/run/secrets/issuance_api_key",
+        **GATE["PASSPORT_CONSUMER_ADDITIVE"]["flow"],
     )
     after["services"]["flow"]["secrets"].append(
         {"source": "issuance_api_key", "target": "/run/secrets/issuance_api_key"}
@@ -77,6 +78,7 @@ def models():
         ISSUANCE_NATIVE_SERVICE_URL="http://issuance-native:8005",
         GATEWAY_REQUIRED_READY_SERVICES=GATE["READY"],
         SIGNING_KEYS_SERVICE_URL="http://signing-keys:8017",
+        **GATE["PASSPORT_CONSUMER_ADDITIVE"]["gateway"],
     )
     after["services"]["gateway"]["depends_on"]["issuance-native"] = {
         "condition": "service_healthy",
@@ -141,6 +143,21 @@ def models():
 def test_every_native_field_is_closed(models, field):
     before, after = models
     after["services"]["issuance-native"][field] = "changed"
+    with pytest.raises(AssertionError):
+        GATE["assert_models"](before, after)
+
+
+@pytest.mark.parametrize(
+    "owner,key",
+    [
+        (owner, key)
+        for owner, additions in GATE["PASSPORT_CONSUMER_ADDITIVE"].items()
+        for key in additions
+    ],
+)
+def test_passport_consumer_additions_are_closed(models, owner, key):
+    before, after = models
+    after["services"][owner]["environment"][key] = "unreviewed"
     with pytest.raises(AssertionError):
         GATE["assert_models"](before, after)
 

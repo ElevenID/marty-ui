@@ -20,12 +20,33 @@ def test_compose_exposes_both_passport_selectors_without_enabling_them() -> None
         "docker-compose.profile.issuance-native.yml", "issuance-native"
     )
     beta = _environment("docker-compose.service.issuance-native.yml", "issuance-native")
+    selfhost = _environment("docker-compose.selfhost.prod.yml", "issuance-native")
+    selfhost_gateway = _environment("docker-compose.selfhost.prod.yml", "gateway")
+    selfhost_flow = _environment("docker-compose.selfhost.prod.yml", "flow")
     assert (
         flow["PASSPORT_NATIVE_FLOW_ENABLED"] == "${PASSPORT_NATIVE_FLOW_ENABLED:-false}"
     )
     assert flow["PASSPORT_TENANT_API_KEYS"] == "${PASSPORT_TENANT_API_KEYS:-}"
     assert flow["PASSPORT_TENANT_API_KEYS_FILE"] == "${PASSPORT_TENANT_API_KEYS_FILE:-}"
-    for native in (development, beta):
+    assert (
+        selfhost_gateway["PASSPORT_NATIVE_GATEWAY_ENABLED"]
+        == "${PASSPORT_NATIVE_GATEWAY_ENABLED:-false}"
+    )
+    assert (
+        selfhost_flow["PASSPORT_NATIVE_FLOW_ENABLED"]
+        == "${PASSPORT_NATIVE_FLOW_ENABLED:-false}"
+    )
+    assert (
+        selfhost_flow["ISSUANCE_NATIVE_SERVICE_URL"]
+        == selfhost_gateway["ISSUANCE_NATIVE_SERVICE_URL"]
+    )
+    for consumer in (selfhost_gateway, selfhost_flow, selfhost):
+        assert consumer["PASSPORT_TENANT_API_KEYS"] == flow["PASSPORT_TENANT_API_KEYS"]
+        assert (
+            consumer["PASSPORT_TENANT_API_KEYS_FILE"]
+            == flow["PASSPORT_TENANT_API_KEYS_FILE"]
+        )
+    for native in (development, beta, selfhost):
         assert (
             native["PASSPORT_NATIVE_HTTP_ENABLED"]
             == "${PASSPORT_NATIVE_HTTP_ENABLED:-false}"

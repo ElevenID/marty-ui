@@ -134,6 +134,9 @@ def render(spec, command):
             native_additive=SELFHOST["rendered_additions"](
                 SELFHOST["NATIVE_ADDITIVE"], inputs
             ),
+            passport_consumer_additive=SELFHOST["rendered_passport_consumer_additions"](
+                inputs
+            ),
         )
         models = {"base": base, "base_native": native, "selfhost": selfhost}
         result = {

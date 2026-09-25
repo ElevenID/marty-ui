@@ -6335,10 +6335,12 @@ The post-rebase hosted CI pass exposed packaging and configuration inventories
 that had not yet accounted for passport. Repair `4f3efee01960c6811faf39934afcfc6ea1660bc2`
 adds the default-off self-host inputs, updates the Flow fixture and source
 guards, refreshes the locked feature-regression probe, and classifies passport
-Kubernetes inputs as deliberately unbound pending Secret-backed wiring. The
-production self-host gateway and Flow selectors are likewise not yet wired;
-forwarding inputs to `issuance-native` alone does not permit a self-host
-passport cutover. Both deployment profiles stay on the Python passport owner.
+Kubernetes inputs as deliberately unbound pending Secret-backed wiring. A
+follow-up source change wires the production self-host gateway and Flow
+selectors/keyring inputs with false/empty defaults, matching `issuance-native`.
+That is configuration availability only: secret-file mounts, live provider
+acceptance, and separate cutover authorization remain. Both deployment
+profiles stay on the Python passport owner.
 The focused release-contract suite passed 111 tests and the locked Rust probe
 compiled locally; hosted exact-head CI remains the merge authority. This is a source
 qualification checkpoint, not a passport cutover or beta deployment.

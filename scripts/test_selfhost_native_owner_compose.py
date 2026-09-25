@@ -43,6 +43,7 @@ NATIVE_ADDITIVE = {
     "CANVAS_MIRROR_ALERT_WEBHOOK_TIMEOUT_SECONDS": "${CANVAS_MIRROR_ALERT_WEBHOOK_TIMEOUT_SECONDS:-5}",
     "PASSPORT_NATIVE_HTTP_ENABLED": "${PASSPORT_NATIVE_HTTP_ENABLED:-false}",
     "PASSPORT_TENANT_API_KEYS": "${PASSPORT_TENANT_API_KEYS:-}",
+    "PASSPORT_TENANT_API_KEYS_FILE": "${PASSPORT_TENANT_API_KEYS_FILE:-}",
     "ICAO_DOCUMENT_SIGNER_URL": "${ICAO_DOCUMENT_SIGNER_URL:-}",
     "ICAO_DOCUMENT_SIGNER_API_KEY": "${ICAO_DOCUMENT_SIGNER_API_KEY:-}",
     "PHYSICAL_DOCUMENT_ALLOW_SELF_SIGNED": "${PHYSICAL_DOCUMENT_ALLOW_SELF_SIGNED:-false}",
@@ -50,6 +51,19 @@ NATIVE_ADDITIVE = {
     "PERSONALIZATION_BUREAU_URL": "${PERSONALIZATION_BUREAU_URL:-}",
     "PERSONALIZATION_BUREAU_API_KEY": "${PERSONALIZATION_BUREAU_API_KEY:-}",
     "PERSONALIZATION_BUREAU_WEBHOOK_SECRET": "${PERSONALIZATION_BUREAU_WEBHOOK_SECRET:-}",
+}
+PASSPORT_CONSUMER_ADDITIVE = {
+    "gateway": {
+        "PASSPORT_NATIVE_GATEWAY_ENABLED": "${PASSPORT_NATIVE_GATEWAY_ENABLED:-false}",
+        "PASSPORT_TENANT_API_KEYS": "${PASSPORT_TENANT_API_KEYS:-}",
+        "PASSPORT_TENANT_API_KEYS_FILE": "${PASSPORT_TENANT_API_KEYS_FILE:-}",
+    },
+    "flow": {
+        "ISSUANCE_NATIVE_SERVICE_URL": "http://issuance-native:8005",
+        "PASSPORT_NATIVE_FLOW_ENABLED": "${PASSPORT_NATIVE_FLOW_ENABLED:-false}",
+        "PASSPORT_TENANT_API_KEYS": "${PASSPORT_TENANT_API_KEYS:-}",
+        "PASSPORT_TENANT_API_KEYS_FILE": "${PASSPORT_TENANT_API_KEYS_FILE:-}",
+    },
 }
 
 # Inputs populated by the existing file loader, not raw host interpolation.
@@ -86,6 +100,27 @@ def rendered_additions(templates, values):
         assert match, f"Unsupported closed interpolation for {key}"
         rendered[key] = values.get(key) or match.group(1)
     return rendered
+
+
+def rendered_passport_consumer_additions(values):
+    return {
+        owner: {
+            **{
+                key: template
+                for key, template in additions.items()
+                if not template.startswith("${")
+            },
+            **rendered_additions(
+                {
+                    key: template
+                    for key, template in additions.items()
+                    if template.startswith("${")
+                },
+                values,
+            ),
+        }
+        for owner, additions in PASSPORT_CONSUMER_ADDITIVE.items()
+    }
 
 
 UNFORWARDED = set(
@@ -170,6 +205,7 @@ def assert_models(
     *,
     shared_additions=SHARED_ADDITIONS,
     native_additive=NATIVE_ADDITIVE,
+    passport_consumer_additive=PASSPORT_CONSUMER_ADDITIVE,
 ):
     preserved = deepcopy(after)
     native = GATE["native_dispatcher_model"](
@@ -191,6 +227,10 @@ def assert_models(
         == "http://issuance-native:8005"
     )
     assert gateway["environment"].pop("GATEWAY_REQUIRED_READY_SERVICES") == READY
+    for owner in ("gateway", "flow"):
+        environment = preserved["services"][owner]["environment"]
+        expected = passport_consumer_additive[owner]
+        assert {key: environment.pop(key) for key in expected} == expected
     assert gateway["depends_on"].pop("issuance-native") == {
         "condition": "service_healthy",
         "required": True,
@@ -265,6 +305,11 @@ def interpolated_models():
         set(re.findall(r"\$\{([A-Z0-9_]+):-", str(environment)))
         | set(SHARED_ADDITIONS)
         | set(NATIVE_ADDITIVE)
+        | {
+            key
+            for additions in PASSPORT_CONSUMER_ADDITIVE.values()
+            for key in additions
+        }
     ) - required
 
     with tempfile.TemporaryDirectory(prefix="selfhost-native-config-") as temporary:
@@ -316,6 +361,7 @@ def interpolated_models():
                 after,
                 shared_additions=rendered_additions(SHARED_ADDITIONS, values),
                 native_additive=rendered_additions(NATIVE_ADDITIVE, values),
+                passport_consumer_additive=rendered_passport_consumer_additions(values),
             )
             assert_signing_binding(after)
             print(f"PASS: self-host {mode} interpolated whole model")
