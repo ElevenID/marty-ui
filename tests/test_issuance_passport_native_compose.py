@@ -75,6 +75,12 @@ def test_gateway_stays_legacy_until_tenant_key_boundary_is_qualified() -> None:
     gateway = json.loads(
         (ROOT / "contracts/gateway-routes.json").read_text(encoding="utf-8")
     )
+    created = [
+        route
+        for route in gateway["routes"]
+        if route["method"] == "POST" and route["path"] == "/v1/passport/applications"
+    ]
+    assert len(created) == 1 and created[0]["status_code"] == 201
     declared = {
         (route["method"], route["path"])
         for route in gateway["routes"]

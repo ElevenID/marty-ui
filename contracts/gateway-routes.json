@@ -1965,7 +1965,7 @@
       "include_in_schema": true,
       "method": "POST",
       "path": "/v1/passport/applications",
-      "status_code": 200
+      "status_code": 201
     },
     {
       "include_in_schema": true,
