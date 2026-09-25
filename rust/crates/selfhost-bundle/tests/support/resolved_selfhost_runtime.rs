@@ -438,6 +438,18 @@ impl ClosedSelfhostModel {
             require(environment.values().all(|value| value.is_string()))?;
             require(environment.get("ENVIRONMENT") == Some(&json!("production")))?;
             require(environment.get("SERVICE_NAME") == Some(&json!(owner.replace('-', "_"))))?;
+            let passport_selector = match *owner {
+                "gateway" => "PASSPORT_NATIVE_GATEWAY_ENABLED",
+                "flow" => "PASSPORT_NATIVE_FLOW_ENABLED",
+                "issuance-native" => "PASSPORT_NATIVE_HTTP_ENABLED",
+                _ => unreachable!(),
+            };
+            // This released selfhost fixture is deliberately default-off. The
+            // optional empty file selector is not a mounted secret; selecting
+            // passport later requires a separate qualified secret overlay.
+            require(environment.get(passport_selector) == Some(&json!("false")))?;
+            require(environment.get("PASSPORT_TENANT_API_KEYS") == Some(&json!("")))?;
+            require(environment.get("PASSPORT_TENANT_API_KEYS_FILE") == Some(&json!("")))?;
             for raw in [
                 "ISSUANCE_API_KEY",
                 "SIGNING_KEYS_INTERNAL_API_KEY",
@@ -472,6 +484,9 @@ impl ClosedSelfhostModel {
             }
             require(mounts == expected_secrets(owner))?;
             for (key, value) in environment {
+                if key == "PASSPORT_TENANT_API_KEYS_FILE" {
+                    continue;
+                }
                 if key.ends_with("_FILE") || key.starts_with("GRPC_WORKLOAD_TLS_") {
                     let source = text(value)?.strip_prefix("/run/secrets/").ok_or(ERROR)?;
                     require(mounts.contains(source) && source == secret_field(key)?)?;
@@ -1042,6 +1057,22 @@ fn negative_controls(
         (
             "/services/flow/environment/GRPC_WORKLOAD_TLS_CA_CERT",
             json!("/run/secrets/unknown"),
+        ),
+        (
+            "/services/gateway/environment/PASSPORT_NATIVE_GATEWAY_ENABLED",
+            json!("true"),
+        ),
+        (
+            "/services/flow/environment/PASSPORT_NATIVE_FLOW_ENABLED",
+            json!("true"),
+        ),
+        (
+            "/services/issuance-native/environment/PASSPORT_NATIVE_HTTP_ENABLED",
+            json!("true"),
+        ),
+        (
+            "/services/flow/environment/PASSPORT_TENANT_API_KEYS_FILE",
+            json!("/run/secrets/unmounted"),
         ),
         ("/secrets/issuance_api_key/file", json!("/unowned/secret")),
         (
