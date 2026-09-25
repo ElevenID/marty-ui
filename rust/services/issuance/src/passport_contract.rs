@@ -14,7 +14,7 @@ use base64::{
 use chrono::{DateTime, Utc};
 use num_bigint::BigUint;
 use serde::{
-    de::{IgnoredAny, MapAccess, Visitor},
+    de::{IgnoredAny, MapAccess, SeqAccess, Visitor},
     Deserialize, Serialize,
 };
 use serde_json::{json, Map, Value};
@@ -115,7 +115,12 @@ pub enum PassportRequestError {
 
 impl PassportApplicationRequest {
     /// Reproduce the released Pydantic request boundary before reading a job or key.
-    pub fn from_python_value(input: &Value, field_order: Option<&[String]>) -> Result<Self, Value> {
+    pub fn from_python_value(
+        input: &Value,
+        field_order: Option<&[String]>,
+        mrz_order: Option<&[String]>,
+        data_group_order: Option<&[String]>,
+    ) -> Result<Self, Value> {
         if input.is_null() {
             return Err(json!({"detail": [{
                 "type": "missing", "loc": ["body"], "msg": "Field required", "input": null,
@@ -167,20 +172,25 @@ impl PassportApplicationRequest {
             }
         }
         dictionary_field(fields, "applicant", &mut errors);
-        string_dictionary_field(fields, "mrz", &mut errors);
-        if let Some(groups) = string_dictionary_field(fields, "data_groups", &mut errors) {
+        string_dictionary_field(fields, "mrz", mrz_order, &mut errors);
+        if let Some(groups) =
+            string_dictionary_field(fields, "data_groups", data_group_order, &mut errors)
+        {
             let problem = if !groups.contains_key("DG1") || !groups.contains_key("DG2") {
                 Some("DG1 and DG2 are required".to_owned())
             } else {
-                groups.iter().find_map(|(name, content)| {
-                    if !valid_data_group_name(name) {
-                        return Some(format!("Invalid data group name: {name}"));
-                    }
-                    let content = content.as_str().expect("validated string dictionary");
-                    decode_python_validated_base64(content)
-                        .err()
-                        .map(|_| python_base64_error(content))
-                })
+                ordered_names(groups, data_group_order)
+                    .into_iter()
+                    .find_map(|name| {
+                        let content = &groups[&name];
+                        if !valid_data_group_name(&name) {
+                            return Some(format!("Invalid data group name: {name}"));
+                        }
+                        let content = content.as_str().expect("validated string dictionary");
+                        decode_python_validated_base64(content)
+                            .err()
+                            .map(|_| python_base64_error(content))
+                    })
             };
             if let Some(problem) = problem {
                 errors.push(json!({
@@ -190,10 +200,7 @@ impl PassportApplicationRequest {
                 }));
             }
         }
-        let names = field_order.map_or_else(
-            || fields.keys().cloned().collect::<Vec<_>>(),
-            <[String]>::to_vec,
-        );
+        let names = ordered_names(fields, field_order);
         let mut seen = BTreeSet::new();
         for name in names {
             if !matches!(
@@ -305,11 +312,13 @@ fn dictionary_field<'a>(
 fn string_dictionary_field<'a>(
     fields: &'a Map<String, Value>,
     name: &str,
+    order: Option<&[String]>,
     errors: &mut Vec<Value>,
 ) -> Option<&'a Map<String, Value>> {
     let values = dictionary_field(fields, name, errors)?;
     let mut all_strings = true;
-    for (key, value) in values {
+    for key in ordered_names(values, order) {
+        let value = &values[&key];
         if !value.is_string() {
             errors.push(json!({
                 "type": "string_type", "loc": ["body", name, key],
@@ -319,6 +328,22 @@ fn string_dictionary_field<'a>(
         }
     }
     all_strings.then_some(values)
+}
+
+fn ordered_names(fields: &Map<String, Value>, order: Option<&[String]>) -> Vec<String> {
+    let mut seen = BTreeSet::new();
+    let mut names = Vec::with_capacity(fields.len());
+    for name in order.into_iter().flatten() {
+        if fields.contains_key(name) && seen.insert(name.clone()) {
+            names.push(name.clone());
+        }
+    }
+    for name in fields.keys() {
+        if seen.insert(name.clone()) {
+            names.push(name.clone());
+        }
+    }
+    names
 }
 
 #[derive(Deserialize)]
@@ -424,29 +449,98 @@ impl QualityResultRequest {
     }
 }
 
-/// Preserve the submitted order of extra fields for Pydantic error arrays.
+struct OrderedKeys(Vec<String>);
+
+impl<'de> Deserialize<'de> for OrderedKeys {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        struct Keys;
+        impl<'de> Visitor<'de> for Keys {
+            type Value = OrderedKeys;
+            fn expecting(&self, formatter: &mut fmt::Formatter) -> fmt::Result {
+                formatter.write_str("a JSON value")
+            }
+            fn visit_map<M: MapAccess<'de>>(self, mut map: M) -> Result<Self::Value, M::Error> {
+                let mut names = Vec::new();
+                while let Some((name, _)) = map.next_entry::<String, IgnoredAny>()? {
+                    names.push(name);
+                }
+                Ok(OrderedKeys(names))
+            }
+            fn visit_seq<S: SeqAccess<'de>>(self, mut seq: S) -> Result<Self::Value, S::Error> {
+                while seq.next_element::<IgnoredAny>()?.is_some() {}
+                Ok(OrderedKeys(Vec::new()))
+            }
+            fn visit_str<E: serde::de::Error>(self, _: &str) -> Result<Self::Value, E> {
+                Ok(OrderedKeys(Vec::new()))
+            }
+            fn visit_string<E: serde::de::Error>(self, _: String) -> Result<Self::Value, E> {
+                Ok(OrderedKeys(Vec::new()))
+            }
+            fn visit_bool<E: serde::de::Error>(self, _: bool) -> Result<Self::Value, E> {
+                Ok(OrderedKeys(Vec::new()))
+            }
+            fn visit_i64<E: serde::de::Error>(self, _: i64) -> Result<Self::Value, E> {
+                Ok(OrderedKeys(Vec::new()))
+            }
+            fn visit_u64<E: serde::de::Error>(self, _: u64) -> Result<Self::Value, E> {
+                Ok(OrderedKeys(Vec::new()))
+            }
+            fn visit_f64<E: serde::de::Error>(self, _: f64) -> Result<Self::Value, E> {
+                Ok(OrderedKeys(Vec::new()))
+            }
+            fn visit_unit<E: serde::de::Error>(self) -> Result<Self::Value, E> {
+                Ok(OrderedKeys(Vec::new()))
+            }
+        }
+        deserializer.deserialize_any(Keys)
+    }
+}
+
+/// Preserve submitted field order for Pydantic error arrays.
 pub fn json_field_order(body: &[u8]) -> Vec<String> {
-    struct OrderedKeys(Vec<String>);
-    impl<'de> Deserialize<'de> for OrderedKeys {
+    serde_json::from_slice::<OrderedKeys>(body).map_or_else(|_| Vec::new(), |value| value.0)
+}
+
+/// The released passport validator iterates nested maps in submitted order.
+pub fn application_nested_field_orders(body: &[u8]) -> (Vec<String>, Vec<String>) {
+    struct NestedKeys {
+        mrz: Vec<String>,
+        data_groups: Vec<String>,
+    }
+    impl<'de> Deserialize<'de> for NestedKeys {
         fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
-            struct Keys;
-            impl<'de> Visitor<'de> for Keys {
-                type Value = OrderedKeys;
+            struct Fields;
+            impl<'de> Visitor<'de> for Fields {
+                type Value = NestedKeys;
                 fn expecting(&self, formatter: &mut fmt::Formatter) -> fmt::Result {
-                    formatter.write_str("a quality-result JSON object")
+                    formatter.write_str("a passport application JSON object")
                 }
                 fn visit_map<M: MapAccess<'de>>(self, mut map: M) -> Result<Self::Value, M::Error> {
-                    let mut names = Vec::new();
-                    while let Some((name, _)) = map.next_entry::<String, IgnoredAny>()? {
-                        names.push(name);
+                    let mut orders = NestedKeys {
+                        mrz: Vec::new(),
+                        data_groups: Vec::new(),
+                    };
+                    while let Some(name) = map.next_key::<String>()? {
+                        match name.as_str() {
+                            "mrz" => orders.mrz = map.next_value::<OrderedKeys>()?.0,
+                            "data_groups" => {
+                                orders.data_groups = map.next_value::<OrderedKeys>()?.0
+                            }
+                            _ => {
+                                map.next_value::<IgnoredAny>()?;
+                            }
+                        }
                     }
-                    Ok(OrderedKeys(names))
+                    Ok(orders)
                 }
             }
-            deserializer.deserialize_map(Keys)
+            deserializer.deserialize_map(Fields)
         }
     }
-    serde_json::from_slice::<OrderedKeys>(body).map_or_else(|_| Vec::new(), |value| value.0)
+    serde_json::from_slice::<NestedKeys>(body).map_or_else(
+        |_| (Vec::new(), Vec::new()),
+        |orders| (orders.mrz, orders.data_groups),
+    )
 }
 
 fn python_bool(value: &Value) -> Option<bool> {
@@ -633,7 +727,8 @@ mod tests {
         );
         let mut value = application();
         value["data_groups"]["DG1"] = json!(content);
-        let request = PassportApplicationRequest::from_python_value(&value, None).unwrap();
+        let request =
+            PassportApplicationRequest::from_python_value(&value, None, None, None).unwrap();
         request.validate().unwrap();
     }
 

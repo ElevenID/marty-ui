@@ -26,8 +26,9 @@ use crate::{
         ProductionStatus,
     },
     passport_contract::{
-        decode_python_validated_base64, json_field_order, PassportApplicationRequest,
-        PassportRequestError, PassportSafeResponse, QualityResultRequest,
+        application_nested_field_orders, decode_python_validated_base64, json_field_order,
+        PassportApplicationRequest, PassportRequestError, PassportSafeResponse,
+        QualityResultRequest,
     },
     passport_repository::{
         PassportJob, PassportJobInsert, PassportJobPatch, PassportJobStatus,
@@ -477,8 +478,14 @@ async fn create_application(
 ) -> Result<(StatusCode, Json<Value>), PassportHttpError> {
     let payload = python_model_body(&body, &headers)?;
     let order = json_field_order(&body);
-    let request = PassportApplicationRequest::from_python_value(&payload, Some(&order))
-        .map_err(PassportHttpError::Validation)?;
+    let (mrz_order, data_group_order) = application_nested_field_orders(&body);
+    let request = PassportApplicationRequest::from_python_value(
+        &payload,
+        Some(&order),
+        Some(&mrz_order),
+        Some(&data_group_order),
+    )
+    .map_err(PassportHttpError::Validation)?;
     let principal = service.authenticate(&headers)?;
     if principal.organization_id() != request.organization_id {
         return Err(PassportHttpError::OrganizationMismatch);

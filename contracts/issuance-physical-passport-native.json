@@ -180,6 +180,16 @@
     {"override": {"data_groups": {"DG1": "YQ===", "DG2": "Yg=="}}, "status": 422, "body": {"detail": [{"type": "value_error", "loc": ["body", "data_groups"], "msg": "Value error, Excess data after padding", "input": {"DG1": "YQ===", "DG2": "Yg=="}, "ctx": {"error": {}}}]}},
     {"override": {"data_groups": {"DG1": "A", "DG2": "Yg=="}}, "status": 422, "body": {"detail": [{"type": "value_error", "loc": ["body", "data_groups"], "msg": "Value error, Invalid base64-encoded string: number of data characters (1) cannot be 1 more than a multiple of 4", "input": {"DG1": "A", "DG2": "Yg=="}, "ctx": {"error": {}}}]}},
     {"override": {"data_groups": {"DG1": "Zm9v=", "DG2": "Yg=="}}, "status": 422, "body": {"detail": [{"type": "value_error", "loc": ["body", "data_groups"], "msg": "Value error, Excess padding not allowed", "input": {"DG1": "Zm9v=", "DG2": "Yg=="}, "ctx": {"error": {}}}]}},
+    {"raw_body": "{\"organization_id\":\"org-1\",\"flow_execution_id\":\"flow-1\",\"application_template_id\":\"template-1\",\"credential_template_id\":\"credential-1\",\"delivery_destination_profile_id\":\"destination-1\",\"country_code\":\"USA\",\"applicant\":{},\"mrz\":{},\"data_groups\":{\"DG1\":\"YQ==\",\"DG2\":\"Yg==\",\"Zbad\":\"YQ==\",\"Abad\":\"YQ==\"}}", "status": 422, "body": {"detail": [{"type": "value_error", "loc": ["body", "data_groups"], "msg": "Value error, Invalid data group name: Zbad", "input": {"DG1": "YQ==", "DG2": "Yg==", "Zbad": "YQ==", "Abad": "YQ=="}, "ctx": {"error": {}}}]}},
+    {"raw_body": "{\"organization_id\":\"org-1\",\"flow_execution_id\":\"flow-1\",\"application_template_id\":\"template-1\",\"credential_template_id\":\"credential-1\",\"delivery_destination_profile_id\":\"destination-1\",\"country_code\":\"USA\",\"applicant\":{},\"mrz\":{\"z\":1,\"a\":2},\"data_groups\":{\"DG1\":\"YQ==\",\"DG2\":\"Yg==\"}}", "status": 422, "body": {"detail": [
+      {"type": "string_type", "loc": ["body", "mrz", "z"], "msg": "Input should be a valid string", "input": 1},
+      {"type": "string_type", "loc": ["body", "mrz", "a"], "msg": "Input should be a valid string", "input": 2}
+    ]}},
+    {"raw_body": "{\"organization_id\":\"org-1\",\"flow_execution_id\":\"flow-1\",\"application_template_id\":\"template-1\",\"credential_template_id\":\"credential-1\",\"delivery_destination_profile_id\":\"destination-1\",\"country_code\":\"USA\",\"applicant\":{},\"mrz\":{\"z\":1,\"a\":2},\"data_groups\":[]}", "status": 422, "body": {"detail": [
+      {"type": "string_type", "loc": ["body", "mrz", "z"], "msg": "Input should be a valid string", "input": 1},
+      {"type": "string_type", "loc": ["body", "mrz", "a"], "msg": "Input should be a valid string", "input": 2},
+      {"type": "dict_type", "loc": ["body", "data_groups"], "msg": "Input should be a valid dictionary", "input": []}
+    ]}},
     {"override": {"country_code": "us", "data_groups": {"DG1": "YQ=="}, "extra": 1}, "status": 422, "body": {"detail": [
       {"type": "string_pattern_mismatch", "loc": ["body", "country_code"], "msg": "String should match pattern '^[A-Z]{3}$'", "input": "us", "ctx": {"pattern": "^[A-Z]{3}$"}},
       {"type": "value_error", "loc": ["body", "data_groups"], "msg": "Value error, DG1 and DG2 are required", "input": {"DG1": "YQ=="}, "ctx": {"error": {}}},
