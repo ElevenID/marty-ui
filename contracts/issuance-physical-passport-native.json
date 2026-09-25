@@ -237,6 +237,12 @@
     "extra_fields": "forbid"
   },
   "safe_job_response_fields": ["id", "organization_id", "flow_execution_id", "application_id", "credential_template_id", "delivery_destination_profile_id", "document_type", "country_code", "secure_artifact_reference", "bureau_job_id", "tracking_number", "status", "quality_result", "error_code", "error_message", "submitted_at", "completed_at", "created_at", "updated_at"],
+  "timestamp_wire_observation": {
+    "python_oracle": "released route uses FastAPI jsonable_encoder for job datetimes and datetime.isoformat for quality_result.checked_at",
+    "whole_second_utc": "2026-09-25T06:01:02+00:00",
+    "microsecond_utc": "2026-09-25T06:01:02.123456+00:00",
+    "precision": "microseconds; no fractional field when zero"
+  },
   "bureau_status_projection": {
     "QUEUED": "SUBMITTED",
     "PRINTING": "IN_PRODUCTION",

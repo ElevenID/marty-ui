@@ -27,7 +27,7 @@ use crate::{
     },
     passport_contract::{
         application_nested_field_orders, decode_python_validated_base64, json_field_order,
-        PassportApplicationRequest, PassportRequestError, PassportSafeResponse,
+        python_datetime, PassportApplicationRequest, PassportRequestError, PassportSafeResponse,
         QualityResultRequest,
     },
     passport_repository::{
@@ -686,7 +686,7 @@ async fn quality_verify(
         PassportJobStatus::Failed
     });
     patch.quality_result = Some(Some(json!({
-        "passed": request.passed, "checked_at": Utc::now().to_rfc3339(),
+        "passed": request.passed, "checked_at": python_datetime(Utc::now()),
         "checked_by": header(&headers, "x-user-id"), "failure_codes": request.failure_codes,
     })));
     patch.error_code = Some((!request.passed).then(|| "QUALITY_CHECK_FAILED".to_owned()));

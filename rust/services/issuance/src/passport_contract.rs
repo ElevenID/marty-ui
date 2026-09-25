@@ -11,7 +11,7 @@ use base64::{
     engine::general_purpose::{GeneralPurpose, GeneralPurposeConfig},
     Engine as _,
 };
-use chrono::{DateTime, Utc};
+use chrono::{DateTime, SecondsFormat, Utc};
 use num_bigint::BigUint;
 use serde::{
     de::{IgnoredAny, MapAccess, SeqAccess, Visitor},
@@ -561,6 +561,19 @@ fn python_bool(value: &Value) -> Option<bool> {
     }
 }
 
+/// Match Python datetime.isoformat() and FastAPI's datetime encoder: UTC uses
+/// +00:00 and microsecond precision, omitting a zero fractional field.
+pub(crate) fn python_datetime(value: DateTime<Utc>) -> String {
+    value.to_rfc3339_opts(
+        if value.timestamp_subsec_micros() == 0 {
+            SecondsFormat::Secs
+        } else {
+            SecondsFormat::Micros
+        },
+        false,
+    )
+}
+
 /// Exactly the Python `_safe_response` projection; no ciphertext or applicant
 /// material is reachable through this type.
 #[derive(Serialize)]
@@ -580,10 +593,10 @@ pub struct PassportSafeResponse<'a> {
     pub quality_result: Option<&'a Value>,
     pub error_code: Option<&'a str>,
     pub error_message: Option<&'a str>,
-    pub submitted_at: Option<DateTime<Utc>>,
-    pub completed_at: Option<DateTime<Utc>>,
-    pub created_at: DateTime<Utc>,
-    pub updated_at: DateTime<Utc>,
+    pub submitted_at: Option<String>,
+    pub completed_at: Option<String>,
+    pub created_at: String,
+    pub updated_at: String,
 }
 
 impl<'a> From<&'a PassportJob> for PassportSafeResponse<'a> {
@@ -604,10 +617,10 @@ impl<'a> From<&'a PassportJob> for PassportSafeResponse<'a> {
             quality_result: job.quality_result.as_ref(),
             error_code: job.error_code.as_deref(),
             error_message: job.error_message.as_deref(),
-            submitted_at: job.submitted_at,
-            completed_at: job.completed_at,
-            created_at: job.created_at,
-            updated_at: job.updated_at,
+            submitted_at: job.submitted_at.map(python_datetime),
+            completed_at: job.completed_at.map(python_datetime),
+            created_at: python_datetime(job.created_at),
+            updated_at: python_datetime(job.updated_at),
         }
     }
 }
@@ -884,7 +897,9 @@ mod tests {
 
     #[test]
     fn safe_projection_has_only_the_frozen_public_fields() {
-        let now = Utc::now();
+        let now = DateTime::parse_from_rfc3339("2026-09-25T06:01:02.123456+00:00")
+            .unwrap()
+            .with_timezone(&Utc);
         let job = PassportJob {
             id: "job-1".into(),
             organization_id: "org-1".into(),
@@ -905,7 +920,7 @@ mod tests {
             quality_result: None,
             error_code: None,
             error_message: None,
-            submitted_at: None,
+            submitted_at: Some(now),
             completed_at: None,
             created_at: now,
             updated_at: now,
@@ -917,6 +932,14 @@ mod tests {
         .unwrap();
         let expected = frozen["safe_job_response_fields"].as_array().unwrap();
         assert_eq!(serialized.as_object().unwrap().len(), expected.len());
+        assert_eq!(
+            serialized["created_at"],
+            frozen["timestamp_wire_observation"]["microsecond_utc"]
+        );
+        assert_eq!(
+            serialized["submitted_at"],
+            frozen["timestamp_wire_observation"]["microsecond_utc"]
+        );
         for field in expected {
             let field = field.as_str().unwrap();
             assert!(serialized.get(field).is_some(), "missing {field}");
@@ -929,5 +952,20 @@ mod tests {
         ] {
             assert!(!serialized.to_string().contains(secret));
         }
+    }
+
+    #[test]
+    fn python_datetime_omits_zero_microseconds() {
+        let frozen: Value = serde_json::from_str(include_str!(
+            "../../../../contracts/issuance-physical-passport-native.json"
+        ))
+        .unwrap();
+        let whole = DateTime::parse_from_rfc3339("2026-09-25T06:01:02+00:00")
+            .unwrap()
+            .with_timezone(&Utc);
+        assert_eq!(
+            python_datetime(whole),
+            frozen["timestamp_wire_observation"]["whole_second_utc"]
+        );
     }
 }
