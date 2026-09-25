@@ -82,6 +82,7 @@ def validate_model(model, *, passport_enabled, files):
                 or not url.hostname
                 or url.username
                 or url.password
+                or url.port == 0
                 or url.query
                 or url.fragment
             ):

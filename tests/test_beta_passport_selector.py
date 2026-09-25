@@ -89,6 +89,8 @@ def test_rendered_compose_environment_list_is_supported(tmp_path):
         "url",
         "url_query",
         "url_malformed",
+        "url_port_malformed",
+        "url_port_zero",
         "missing",
         "path_malformed",
         "empty",
@@ -121,6 +123,14 @@ def test_partial_or_unsafe_selection_fails_closed(tmp_path, mutation):
     elif mutation == "url_malformed":
         services["issuance-native"]["environment"]["ICAO_DOCUMENT_SIGNER_URL"] = (
             "https://[synthetic-private-value"
+        )
+    elif mutation == "url_port_malformed":
+        services["issuance-native"]["environment"]["ICAO_DOCUMENT_SIGNER_URL"] = (
+            "https://signer.example.test:synthetic-private-value"
+        )
+    elif mutation == "url_port_zero":
+        services["issuance-native"]["environment"]["ICAO_DOCUMENT_SIGNER_URL"] = (
+            "https://signer.example.test:0"
         )
     elif mutation == "missing":
         Path(candidate["secrets"]["passport_tenant_api_keys"]["file"]).unlink()
