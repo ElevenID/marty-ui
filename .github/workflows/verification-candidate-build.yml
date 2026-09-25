@@ -49,7 +49,7 @@ jobs:
         run: mkdir -p "${{ runner.temp }}/verification-candidate"
 
       - name: Configure the pinned containerd image store
-        uses: docker/setup-docker-action@77e84dbf09b47d1e29270283c22f16145aa85ca1 # v5.4.0
+        uses: docker/setup-docker-action@2bf61fb9464cc67f0cbdeabed6aa0380accd1c70 # v5.5.0
         with:
           version: v29.7.2
           daemon-config: |
@@ -61,7 +61,7 @@ jobs:
 
       - name: Configure the pinned OCI exporter
         id: buildx
-        uses: docker/setup-buildx-action@37fe631027851001ddb9b187196cc803df7f5f0e # v6.2.0
+        uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v6.2.0
         with:
           version: v0.36.1
           driver: docker-container
@@ -74,7 +74,7 @@ jobs:
         run: python scripts/check_verification_candidate_backend.py
 
       - name: Build one local Linux amd64 OCI archive
-        uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a # v7.3.0
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
         with:
           context: .
           file: services/Dockerfile
@@ -91,7 +91,7 @@ jobs:
           sbom: false
 
       - name: Generate raw CycloneDX SBOM from the local archive
-        uses: anchore/sbom-action@e22c389904149dbc22b58101806040fa8d37a610
+        uses: anchore/sbom-action@3ad7283483fc7af8ff2b4ea19663c2d5ca935e26
         with:
           image: oci-archive:${{ runner.temp }}/verification-candidate/marty-ui-services.oci.tar
           format: cyclonedx-json

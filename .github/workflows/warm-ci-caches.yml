@@ -37,12 +37,12 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
           persist-credentials: false
-      - uses: dtolnay/rust-toolchain@6c977a6ca4077a0ceb28ffbe03f59d46e9ac8772
+      - uses: dtolnay/rust-toolchain@02cb101ec7c40f2c49e1d9714d64511d8e1b74de
         with:
           toolchain: 1.95.0
           components: clippy
       - name: Use mold linker
-        uses: rui314/setup-mold@7e4f20ad28a2e8ca6fd0892ccf72e2abb706b9c3
+        uses: rui314/setup-mold@10ca16bf91dc22e05ebdc935cad9c75ea248f621
         with:
           mold-version: 2.41.0
       - name: Enable compiler cache
@@ -71,7 +71,7 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
           persist-credentials: false
-      - uses: docker/setup-buildx-action@37fe631027851001ddb9b187196cc803df7f5f0e
+      - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069
       - name: Expose compiler cache credentials to BuildKit secrets
         uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3
         with:
@@ -84,7 +84,7 @@ jobs:
             core.exportVariable('SCCACHE_GHA_CACHE_URL', url);
             core.exportVariable('SCCACHE_GHA_RW_MODE', 'READ_WRITE');
       - name: Verify release compiler cache storage across daemons
-        uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc
         with:
           context: .
           file: rust/services/Dockerfile.ci
@@ -99,7 +99,7 @@ jobs:
             sccache_url=SCCACHE_GHA_CACHE_URL
             sccache_mode=SCCACHE_GHA_RW_MODE
       - name: Warm shared image layers
-        uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc
         with:
           context: .
           file: rust/services/Dockerfile.ci

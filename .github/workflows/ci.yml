@@ -132,7 +132,7 @@ jobs:
       - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97
         with:
           python-version: "3.12"
-      - uses: astral-sh/setup-uv@20cfd1bf945f4377ade1205e4dbc17946fc9a30d
+      - uses: astral-sh/setup-uv@c18668ad3cf93ea998bef934396af7bb5c839dc7
         with:
           version: "0.11.3"
           enable-cache: false
@@ -343,7 +343,7 @@ jobs:
       - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97
         with:
           python-version: "3.12"
-      - uses: astral-sh/setup-uv@20cfd1bf945f4377ade1205e4dbc17946fc9a30d
+      - uses: astral-sh/setup-uv@c18668ad3cf93ea998bef934396af7bb5c839dc7
         with:
           version: "0.11.3"
           enable-cache: true
@@ -470,11 +470,11 @@ jobs:
           # Rust invokes python3 by name in preflights AND the full suite.
           # Publish this interpreter only after both installation and smoke pass.
           printf '%s\n' "$RUNNER_TEMP/canvas-worker-harness/bin" >> "$GITHUB_PATH"
-      - uses: dtolnay/rust-toolchain@6c977a6ca4077a0ceb28ffbe03f59d46e9ac8772
+      - uses: dtolnay/rust-toolchain@02cb101ec7c40f2c49e1d9714d64511d8e1b74de
         with:
           toolchain: 1.95.0
       - name: Use mold linker
-        uses: rui314/setup-mold@7e4f20ad28a2e8ca6fd0892ccf72e2abb706b9c3
+        uses: rui314/setup-mold@10ca16bf91dc22e05ebdc935cad9c75ea248f621
         with:
           mold-version: 2.41.0
       - name: Enable compiler cache
@@ -1031,12 +1031,12 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
           persist-credentials: false
-      - uses: dtolnay/rust-toolchain@6c977a6ca4077a0ceb28ffbe03f59d46e9ac8772
+      - uses: dtolnay/rust-toolchain@02cb101ec7c40f2c49e1d9714d64511d8e1b74de
         with:
           toolchain: 1.95.0
           components: clippy,rustfmt
       - name: Use mold linker
-        uses: rui314/setup-mold@7e4f20ad28a2e8ca6fd0892ccf72e2abb706b9c3
+        uses: rui314/setup-mold@10ca16bf91dc22e05ebdc935cad9c75ea248f621
         with:
           mold-version: 2.41.0
       - name: Enable compiler cache
@@ -1166,7 +1166,7 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
           persist-credentials: false
-      - uses: docker/setup-buildx-action@37fe631027851001ddb9b187196cc803df7f5f0e
+      - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069
       - name: Verify merged Canvas worker deployment configuration
         run: python3 scripts/test_canvas_worker_compose_render.py
       - name: Verify self-host native owner preservation
@@ -1205,7 +1205,7 @@ jobs:
             core.exportVariable('SCCACHE_GHA_CACHE_URL', url);
             core.exportVariable('SCCACHE_GHA_RW_MODE', 'READ_ONLY');
       - name: Build event-stream image
-        uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc
         with:
           context: .
           file: rust/services/Dockerfile.ci
@@ -1224,7 +1224,7 @@ jobs:
             sccache_url=SCCACHE_GHA_CACHE_URL
             sccache_mode=SCCACHE_GHA_RW_MODE
       - name: Build issuance image
-        uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc
         with:
           context: .
           file: rust/services/Dockerfile.ci
@@ -1238,7 +1238,7 @@ jobs:
           provenance: false
           cache-from: type=gha,scope=marty-ui-rust-service-images
       - name: Build gateway image
-        uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc
         with:
           context: .
           file: rust/services/Dockerfile.ci
@@ -1252,7 +1252,7 @@ jobs:
           provenance: false
           cache-from: type=gha,scope=marty-ui-rust-service-images
       - name: Build revocation-profile image
-        uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc
         with:
           context: .
           file: rust/services/Dockerfile.ci
@@ -1266,7 +1266,7 @@ jobs:
           provenance: false
           cache-from: type=gha,scope=marty-ui-rust-service-images
       - name: Build signing-keys image
-        uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc
         with:
           context: .
           file: rust/services/Dockerfile.ci
@@ -1280,7 +1280,7 @@ jobs:
           provenance: false
           cache-from: type=gha,scope=marty-ui-rust-service-images
       - name: Build notification image
-        uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc
         with:
           context: .
           file: rust/services/Dockerfile.ci
@@ -1294,7 +1294,7 @@ jobs:
           provenance: false
           cache-from: type=gha,scope=marty-ui-rust-service-images
       - name: Build flow image
-        uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc
         with:
           context: .
           file: rust/services/Dockerfile.ci
@@ -1308,7 +1308,7 @@ jobs:
           provenance: false
           cache-from: type=gha,scope=marty-ui-rust-service-images
       - name: Build organization image
-        uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc
         with:
           context: .
           file: rust/services/Dockerfile.ci
@@ -1322,7 +1322,7 @@ jobs:
           provenance: false
           cache-from: type=gha,scope=marty-ui-rust-service-images
       - name: Build credential-template image
-        uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc
         with:
           context: .
           file: rust/services/Dockerfile.ci
@@ -1336,7 +1336,7 @@ jobs:
           provenance: false
           cache-from: type=gha,scope=marty-ui-rust-service-images
       - name: Build presentation-policy image
-        uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc
         with:
           context: .
           file: rust/services/Dockerfile.ci
@@ -1350,7 +1350,7 @@ jobs:
           provenance: false
           cache-from: type=gha,scope=marty-ui-rust-service-images
       - name: Build trust-profile image
-        uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc
         with:
           context: .
           file: rust/services/Dockerfile.ci
@@ -1364,7 +1364,7 @@ jobs:
           provenance: false
           cache-from: type=gha,scope=marty-ui-rust-service-images
       - name: Build applicant image
-        uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc
         with:
           context: .
           file: rust/services/Dockerfile.ci
@@ -1378,7 +1378,7 @@ jobs:
           provenance: false
           cache-from: type=gha,scope=marty-ui-rust-service-images
       - name: Build device-registration image
-        uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc
         with:
           context: .
           file: rust/services/Dockerfile.ci
@@ -1392,7 +1392,7 @@ jobs:
           provenance: false
           cache-from: type=gha,scope=marty-ui-rust-service-images
       - name: Build verification image
-        uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc
         with:
           context: .
           file: rust/services/Dockerfile.ci
@@ -1409,7 +1409,7 @@ jobs:
         shell: bash
         run: bash scripts/smoke-verification-image.sh marty-verification-service:ci dedicated
       - name: Build deployment-profile image
-        uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc
         with:
           context: .
           file: rust/services/Dockerfile.ci
@@ -1423,7 +1423,7 @@ jobs:
           provenance: false
           cache-from: type=gha,scope=marty-ui-rust-service-images
       - name: Build compliance-profile image
-        uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc
         with:
           context: .
           file: rust/services/Dockerfile.ci
@@ -1621,7 +1621,7 @@ jobs:
       - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97
         with:
           python-version: "3.12"
-      - uses: astral-sh/setup-uv@20cfd1bf945f4377ade1205e4dbc17946fc9a30d
+      - uses: astral-sh/setup-uv@c18668ad3cf93ea998bef934396af7bb5c839dc7
         with:
           version: "0.11.3"
           enable-cache: true
@@ -1656,7 +1656,7 @@ jobs:
           repository: ElevenID/marty-credentials
           ref: aaa6a9b8e31e62cd0ab087eef5fc1f4835048e26
           path: .reference/marty-credentials-v0.1.76
-      - uses: astral-sh/setup-uv@20cfd1bf945f4377ade1205e4dbc17946fc9a30d
+      - uses: astral-sh/setup-uv@c18668ad3cf93ea998bef934396af7bb5c839dc7
         with:
           version: "0.11.3"
           enable-cache: true
@@ -1753,7 +1753,7 @@ jobs:
       - name: Run repository release checks
         run: python -m pytest tests -v --tb=short
       - name: Configure the pinned containerd image store
-        uses: docker/setup-docker-action@77e84dbf09b47d1e29270283c22f16145aa85ca1 # v5.4.0
+        uses: docker/setup-docker-action@2bf61fb9464cc67f0cbdeabed6aa0380accd1c70 # v5.5.0
         with:
           version: v29.7.2
           daemon-config: |
@@ -1764,7 +1764,7 @@ jobs:
             }
       - name: Configure the pinned OCI exporter
         id: buildx
-        uses: docker/setup-buildx-action@37fe631027851001ddb9b187196cc803df7f5f0e # v6.2.0
+        uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v6.2.0
         with:
           version: v0.36.1
           driver: docker-container
@@ -1862,7 +1862,7 @@ jobs:
       - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97
         with:
           python-version: "3.12"
-      - uses: astral-sh/setup-uv@20cfd1bf945f4377ade1205e4dbc17946fc9a30d
+      - uses: astral-sh/setup-uv@c18668ad3cf93ea998bef934396af7bb5c839dc7
         with:
           version: "0.11.3"
           enable-cache: false

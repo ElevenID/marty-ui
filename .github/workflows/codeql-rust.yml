@@ -68,13 +68,13 @@ jobs:
           persist-credentials: false
       - name: Initialize production-focused analysis
         if: steps.scope.outputs.analyze == 'true'
-        uses: github/codeql-action/init@cdf488f595d80d6e07e03d4674febd5ab45fa938
+        uses: github/codeql-action/init@1c5b675653bb5c22dbe9b12b556ec555138e09fd
         with:
           languages: rust
           build-mode: none
           config-file: ${{ (github.event_name == 'schedule' || github.event_name == 'workflow_dispatch') && './.github/codeql/codeql-full.yml' || './.github/codeql/codeql-production.yml' }}
       - name: Analyze Rust
         if: steps.scope.outputs.analyze == 'true'
-        uses: github/codeql-action/analyze@cdf488f595d80d6e07e03d4674febd5ab45fa938
+        uses: github/codeql-action/analyze@1c5b675653bb5c22dbe9b12b556ec555138e09fd
         with:
           category: /language:rust
