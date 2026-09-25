@@ -170,7 +170,7 @@ struct WebhookEvent {
     metadata: BTreeMap<String, Value>,
 }
 
-/// Only `BureauClient::parse_webhook` can construct this after HMAC validation.
+/// Only a successful HMAC check can construct this event.
 #[derive(Clone, Debug)]
 pub struct VerifiedWebhookEvent(WebhookEvent);
 
@@ -359,26 +359,12 @@ impl BureauClient {
 
     #[must_use]
     pub fn verify_webhook(&self, body: &[u8], signature: &str) -> bool {
-        let Some(secret) = &self.webhook_secret else {
-            return false;
-        };
-        // The released webhook accepts the lowercase hexdigest, not alternate
-        // encodings of the same MAC.
-        if signature.len() != 64
-            || !signature
-                .bytes()
-                .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
-        {
-            return false;
-        }
-        let Ok(signature) = hex::decode(signature) else {
-            return false;
-        };
-        let Ok(mut mac) = Hmac::<Sha256>::new_from_slice(secret) else {
-            return false;
-        };
-        mac.update(body);
-        mac.verify_slice(&signature).is_ok()
+        verify_webhook_signature(self.webhook_secret.as_deref(), body, signature)
+    }
+
+    #[must_use]
+    pub(crate) fn webhook_secret(&self) -> Option<&[u8]> {
+        self.webhook_secret.as_deref()
     }
 
     pub fn parse_webhook(
@@ -386,13 +372,49 @@ impl BureauClient {
         body: &[u8],
         signature: &str,
     ) -> Result<VerifiedWebhookEvent, BureauError> {
-        if !self.verify_webhook(body, signature) {
-            return Err(BureauError::InvalidWebhookSignature);
-        }
-        serde_json::from_slice(body)
-            .map(VerifiedWebhookEvent)
-            .map_err(|_| BureauError::InvalidWebhookEvent)
+        parse_verified_webhook(self.webhook_secret(), body, signature)
     }
+}
+
+#[must_use]
+pub(crate) fn verify_webhook_signature(
+    secret: Option<&[u8]>,
+    body: &[u8],
+    signature: &str,
+) -> bool {
+    let Some(secret) = secret else {
+        return false;
+    };
+    // The released webhook accepts the lowercase hexdigest, not alternate
+    // encodings of the same MAC.
+    if signature.len() != 64
+        || !signature
+            .bytes()
+            .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+    {
+        return false;
+    }
+    let Ok(signature) = hex::decode(signature) else {
+        return false;
+    };
+    let Ok(mut mac) = Hmac::<Sha256>::new_from_slice(secret) else {
+        return false;
+    };
+    mac.update(body);
+    mac.verify_slice(&signature).is_ok()
+}
+
+pub(crate) fn parse_verified_webhook(
+    secret: Option<&[u8]>,
+    body: &[u8],
+    signature: &str,
+) -> Result<VerifiedWebhookEvent, BureauError> {
+    if !verify_webhook_signature(secret, body, signature) {
+        return Err(BureauError::InvalidWebhookSignature);
+    }
+    serde_json::from_slice(body)
+        .map(VerifiedWebhookEvent)
+        .map_err(|_| BureauError::InvalidWebhookEvent)
 }
 
 #[cfg(test)]

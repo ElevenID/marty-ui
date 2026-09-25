@@ -23,7 +23,8 @@ use crate::{
     config::IssuanceServiceConfig,
     passport_artifact::{PassportArtifactCipher, PassportArtifactError},
     passport_bureau::{
-        BureauClient, BureauError, DocumentType, PersonalizationJob, ProductionStatus,
+        parse_verified_webhook, BureauClient, BureauError, DocumentType, PersonalizationJob,
+        ProductionStatus,
     },
     passport_contract::{
         quality_field_order, PassportApplicationRequest, PassportRequestError,
@@ -43,6 +44,7 @@ pub struct PassportHttpService {
     cipher: ArtifactAvailability,
     signer: Option<PassportSigner>,
     bureau: Option<BureauClient>,
+    webhook_secret: Option<Vec<u8>>,
 }
 
 #[derive(Clone)]
@@ -115,13 +117,21 @@ impl PassportHttpService {
                 )
             })
             .transpose()?;
-        Ok(Some(Self::with_artifact_availability(
+        let mut service = Self::with_artifact_availability(
             keyring,
             PostgresPassportRepository::new(pool),
             cipher,
             signer,
             bureau,
-        )))
+        );
+        // Inbound callbacks from already-submitted jobs remain verifiable even
+        // when outbound bureau submission is not configured.
+        service.webhook_secret = native
+            .bureau_webhook_secret
+            .as_deref()
+            .filter(|secret| !secret.is_empty())
+            .map(|secret| secret.as_bytes().to_vec());
+        Ok(Some(service))
     }
 
     #[must_use]
@@ -148,12 +158,17 @@ impl PassportHttpService {
         signer: Option<PassportSigner>,
         bureau: Option<BureauClient>,
     ) -> Self {
+        let webhook_secret = bureau
+            .as_ref()
+            .and_then(BureauClient::webhook_secret)
+            .map(<[u8]>::to_vec);
         Self {
             keyring,
             repository,
             cipher,
             signer,
             bureau,
+            webhook_secret,
         }
     }
 
@@ -684,9 +699,7 @@ async fn personalization_webhook(
 ) -> Result<Json<Value>, PassportHttpError> {
     let signature = header(&headers, "x-personalization-signature")
         .ok_or(PassportHttpError::MissingWebhookSignature)?;
-    let event = service
-        .bureau()?
-        .parse_webhook(&body, signature)
+    let event = parse_verified_webhook(service.webhook_secret.as_deref(), &body, signature)
         .map_err(PassportHttpError::Bureau)?;
     let updated = service
         .repository
@@ -777,6 +790,62 @@ mod tests {
             body,
             frozen["webhook_missing_signature_observation"]["body"]
         );
+    }
+
+    #[tokio::test]
+    async fn signed_webhook_verification_does_not_require_outbound_bureau_url() {
+        use hmac::Mac;
+
+        let frozen: Value = serde_json::from_str(include_str!(
+            "../../../../contracts/issuance-physical-passport-native.json"
+        ))
+        .unwrap();
+        let pool = PgPoolOptions::new()
+            .connect_lazy("postgresql://unused:unused@127.0.0.1:5432/unused")
+            .unwrap();
+        let config = IssuanceServiceConfig::from_values(vec![
+            ("PASSPORT_NATIVE_HTTP_ENABLED".to_owned(), "true".to_owned()),
+            (
+                "PASSPORT_TENANT_API_KEYS".to_owned(),
+                r#"{"org-1":"passport-tenant-test-key-00000000000001"}"#.to_owned(),
+            ),
+            (
+                "PERSONALIZATION_BUREAU_WEBHOOK_SECRET".to_owned(),
+                "webhook-secret".to_owned(),
+            ),
+        ])
+        .unwrap();
+        let service = PassportHttpService::from_config(&config, pool)
+            .unwrap()
+            .unwrap();
+        assert!(service.bureau.is_none());
+        assert!(service.webhook_secret.is_some());
+        let payload = br#"{"bureau_job_id":"synthetic","status":"SHIPPED"}"#;
+        let mut mac = hmac::Hmac::<Sha256>::new_from_slice(b"webhook-secret").unwrap();
+        mac.update(payload);
+        let signature = hex::encode(mac.finalize().into_bytes());
+        let verified =
+            parse_verified_webhook(service.webhook_secret.as_deref(), payload, &signature).unwrap();
+        assert_eq!(verified.bureau_job_id(), "synthetic");
+        let response = router(service)
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/v1/passport/webhooks/personalization")
+                    .header("x-personalization-signature", "invalid")
+                    .body(Body::from(payload.as_slice().to_vec()))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        let expected = &frozen["webhook_without_bureau_url_observation"]["invalid_signature"];
+        assert_eq!(
+            response.status().as_u16(),
+            expected["status"].as_u64().unwrap() as u16
+        );
+        let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+        let body: Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(body, expected["body"]);
     }
 
     #[tokio::test]

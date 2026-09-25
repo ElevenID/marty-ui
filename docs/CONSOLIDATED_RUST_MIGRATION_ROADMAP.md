@@ -6279,6 +6279,11 @@ ninth, separately HMAC-signed bureau webhook is now a hidden public ingress
 route that forwards the raw body and signature to Python by default or Rust
 under the same selector, without a caller JWT or injected tenant key. Live
 bureau callback and end-to-end signature/error acceptance remain unqualified.
+The native inbound HMAC verifier is independent of the outbound bureau URL:
+callbacks for already-submitted jobs still verify when submission is not
+configured, matching the retained Python path. A frozen missing-URL error
+observation and focused Rust test cover this edge; live callback acceptance is
+still required.
 Lookalike paths remain outside gateway routing. The authenticated selector
 requires the shared, validated tenant keyring. Native passport middleware
 binds an authenticated organization to the existing
