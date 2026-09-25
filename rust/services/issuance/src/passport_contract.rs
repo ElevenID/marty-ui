@@ -55,25 +55,131 @@ pub enum PassportRequestError {
 }
 
 impl PassportApplicationRequest {
+    /// Reproduce the released Pydantic request boundary before reading a job or key.
+    pub fn from_python_value(input: &Value, field_order: Option<&[String]>) -> Result<Self, Value> {
+        if input.is_null() {
+            return Err(json!({"detail": [{
+                "type": "missing", "loc": ["body"], "msg": "Field required", "input": null,
+            }]}));
+        }
+        let Some(fields) = input.as_object() else {
+            return Err(json!({"detail": [{
+                "type": "model_attributes_type", "loc": ["body"],
+                "msg": "Input should be a valid dictionary or object to extract fields from",
+                "input": input,
+            }]}));
+        };
+        let mut errors = Vec::new();
+        for name in [
+            "organization_id",
+            "flow_execution_id",
+            "application_template_id",
+            "credential_template_id",
+        ] {
+            string_field(fields, name, &mut errors);
+        }
+        if let Some(destination) =
+            string_field(fields, "delivery_destination_profile_id", &mut errors)
+        {
+            if destination.chars().count() > 128 {
+                errors.push(json!({
+                    "type": "string_too_long", "loc": ["body", "delivery_destination_profile_id"],
+                    "msg": "String should have at most 128 characters", "input": destination,
+                    "ctx": {"max_length": 128},
+                }));
+            }
+        }
+        if let Some(value) = fields.get("document_type") {
+            if !matches!(value.as_str(), Some("TD1" | "TD2" | "TD3")) {
+                errors.push(json!({
+                    "type": "literal_error", "loc": ["body", "document_type"],
+                    "msg": "Input should be 'TD1', 'TD2' or 'TD3'", "input": value,
+                    "ctx": {"expected": "'TD1', 'TD2' or 'TD3'"},
+                }));
+            }
+        }
+        if let Some(country) = string_field(fields, "country_code", &mut errors) {
+            if !valid_country_code(country) {
+                errors.push(json!({
+                    "type": "string_pattern_mismatch", "loc": ["body", "country_code"],
+                    "msg": "String should match pattern '^[A-Z]{3}$'", "input": country,
+                    "ctx": {"pattern": "^[A-Z]{3}$"},
+                }));
+            }
+        }
+        dictionary_field(fields, "applicant", &mut errors);
+        string_dictionary_field(fields, "mrz", &mut errors);
+        if let Some(groups) = string_dictionary_field(fields, "data_groups", &mut errors) {
+            let problem = if !groups.contains_key("DG1") || !groups.contains_key("DG2") {
+                Some("DG1 and DG2 are required".to_owned())
+            } else {
+                groups.iter().find_map(|(name, content)| {
+                    if !valid_data_group_name(name) {
+                        return Some(format!("Invalid data group name: {name}"));
+                    }
+                    STANDARD
+                        .decode(content.as_str().expect("validated string dictionary"))
+                        .err()
+                        .map(|_| "Only base64 data is allowed".to_owned())
+                })
+            };
+            if let Some(problem) = problem {
+                errors.push(json!({
+                    "type": "value_error", "loc": ["body", "data_groups"],
+                    "msg": format!("Value error, {problem}"), "input": fields["data_groups"],
+                    "ctx": {"error": {}},
+                }));
+            }
+        }
+        let names = field_order.map_or_else(
+            || fields.keys().cloned().collect::<Vec<_>>(),
+            <[String]>::to_vec,
+        );
+        let mut seen = BTreeSet::new();
+        for name in names {
+            if !matches!(
+                name.as_str(),
+                "organization_id"
+                    | "flow_execution_id"
+                    | "application_template_id"
+                    | "credential_template_id"
+                    | "delivery_destination_profile_id"
+                    | "document_type"
+                    | "country_code"
+                    | "applicant"
+                    | "mrz"
+                    | "data_groups"
+            ) && seen.insert(name.clone())
+            {
+                if let Some(value) = fields.get(&name) {
+                    errors.push(json!({
+                        "type": "extra_forbidden", "loc": ["body", name],
+                        "msg": "Extra inputs are not permitted", "input": value,
+                    }));
+                }
+            }
+        }
+        if !errors.is_empty() {
+            return Err(json!({"detail": errors}));
+        }
+        serde_json::from_value(input.clone())
+            .map_err(|_| json!({"detail": "Physical document request validation failed"}))
+    }
+
     pub fn validate(&self) -> Result<(), PassportRequestError> {
         if self.delivery_destination_profile_id.chars().count() > 128 {
             return Err(PassportRequestError::DestinationTooLong);
         }
-        if self.country_code.len() != 3
-            || !self
-                .country_code
-                .bytes()
-                .all(|byte| byte.is_ascii_uppercase())
-        {
+        if !valid_country_code(&self.country_code) {
             return Err(PassportRequestError::InvalidCountryCode);
         }
         if !self.data_groups.contains_key("DG1") || !self.data_groups.contains_key("DG2") {
             return Err(PassportRequestError::MissingDataGroups);
         }
         for (name, content) in &self.data_groups {
-            name.strip_prefix("DG")
-                .filter(|digits| !digits.is_empty() && digits.chars().all(python_is_digit))
-                .ok_or(PassportRequestError::InvalidDataGroupName)?;
+            if !valid_data_group_name(name) {
+                return Err(PassportRequestError::InvalidDataGroupName);
+            }
             STANDARD
                 .decode(content)
                 .map_err(|_| PassportRequestError::InvalidDataGroupContent)?;
@@ -89,6 +195,72 @@ impl PassportApplicationRequest {
             data_groups: self.data_groups.clone(),
         }
     }
+}
+
+fn valid_country_code(value: &str) -> bool {
+    value.len() == 3 && value.bytes().all(|byte| byte.is_ascii_uppercase())
+}
+
+fn valid_data_group_name(name: &str) -> bool {
+    name.strip_prefix("DG")
+        .is_some_and(|digits| !digits.is_empty() && digits.chars().all(python_is_digit))
+}
+
+fn string_field<'a>(
+    fields: &'a Map<String, Value>,
+    name: &str,
+    errors: &mut Vec<Value>,
+) -> Option<&'a str> {
+    match fields.get(name) {
+        None => errors.push(json!({
+            "type": "missing", "loc": ["body", name], "msg": "Field required",
+            "input": fields,
+        })),
+        Some(value) if !value.is_string() => errors.push(json!({
+            "type": "string_type", "loc": ["body", name],
+            "msg": "Input should be a valid string", "input": value,
+        })),
+        Some(value) => return value.as_str(),
+    }
+    None
+}
+
+fn dictionary_field<'a>(
+    fields: &'a Map<String, Value>,
+    name: &str,
+    errors: &mut Vec<Value>,
+) -> Option<&'a Map<String, Value>> {
+    match fields.get(name) {
+        None => errors.push(json!({
+            "type": "missing", "loc": ["body", name], "msg": "Field required",
+            "input": fields,
+        })),
+        Some(value) if !value.is_object() => errors.push(json!({
+            "type": "dict_type", "loc": ["body", name],
+            "msg": "Input should be a valid dictionary", "input": value,
+        })),
+        Some(value) => return value.as_object(),
+    }
+    None
+}
+
+fn string_dictionary_field<'a>(
+    fields: &'a Map<String, Value>,
+    name: &str,
+    errors: &mut Vec<Value>,
+) -> Option<&'a Map<String, Value>> {
+    let values = dictionary_field(fields, name, errors)?;
+    let mut all_strings = true;
+    for (key, value) in values {
+        if !value.is_string() {
+            errors.push(json!({
+                "type": "string_type", "loc": ["body", name, key],
+                "msg": "Input should be a valid string", "input": value,
+            }));
+            all_strings = false;
+        }
+    }
+    all_strings.then_some(values)
 }
 
 #[derive(Deserialize)]
@@ -195,7 +367,7 @@ impl QualityResultRequest {
 }
 
 /// Preserve the submitted order of extra fields for Pydantic error arrays.
-pub fn quality_field_order(body: &[u8]) -> Vec<String> {
+pub fn json_field_order(body: &[u8]) -> Vec<String> {
     struct OrderedKeys(Vec<String>);
     impl<'de> Deserialize<'de> for OrderedKeys {
         fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {

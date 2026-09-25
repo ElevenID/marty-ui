@@ -27,8 +27,8 @@ use crate::{
         ProductionStatus,
     },
     passport_contract::{
-        quality_field_order, PassportApplicationRequest, PassportRequestError,
-        PassportSafeResponse, QualityResultRequest,
+        json_field_order, PassportApplicationRequest, PassportRequestError, PassportSafeResponse,
+        QualityResultRequest,
     },
     passport_repository::{
         PassportJob, PassportJobInsert, PassportJobPatch, PassportJobStatus,
@@ -269,6 +269,31 @@ fn header<'a>(headers: &'a HeaderMap, name: &str) -> Option<&'a str> {
     headers.get(name).and_then(|value| value.to_str().ok())
 }
 
+fn python_model_body(body: &[u8], headers: &HeaderMap) -> Result<Value, PassportHttpError> {
+    if body.is_empty() {
+        return Ok(Value::Null);
+    }
+    let media_type = header(headers, "content-type")
+        .unwrap_or_default()
+        .split(';')
+        .next()
+        .unwrap_or_default()
+        .trim()
+        .to_ascii_lowercase();
+    let is_json = media_type == "application/json"
+        || media_type
+            .split_once('/')
+            .is_some_and(|(_, subtype)| subtype.ends_with("+json"));
+    if !is_json {
+        return Ok(Value::String(String::from_utf8_lossy(body).into_owned()));
+    }
+    serde_json::from_slice(body).map_err(|error| {
+        PassportHttpError::Validation(json!({"detail": [
+            crate::python_json_diagnostic::diagnostic(body, &error)
+        ]}))
+    })
+}
+
 #[derive(Debug, thiserror::Error)]
 enum PassportHttpError {
     #[error("{0}")]
@@ -449,8 +474,12 @@ async fn capabilities(State(service): State<PassportHttpService>) -> Json<Value>
 async fn create_application(
     State(service): State<PassportHttpService>,
     headers: HeaderMap,
-    Json(request): Json<PassportApplicationRequest>,
+    body: Bytes,
 ) -> Result<(StatusCode, Json<Value>), PassportHttpError> {
+    let payload = python_model_body(&body, &headers)?;
+    let order = json_field_order(&body);
+    let request = PassportApplicationRequest::from_python_value(&payload, Some(&order))
+        .map_err(PassportHttpError::Validation)?;
     let principal = service.authenticate(&headers)?;
     if principal.organization_id() != request.organization_id {
         return Err(PassportHttpError::OrganizationMismatch);
@@ -634,16 +663,8 @@ async fn quality_verify(
     headers: HeaderMap,
     body: Bytes,
 ) -> Result<Json<Value>, PassportHttpError> {
-    let payload = if body.is_empty() {
-        Value::Null
-    } else {
-        serde_json::from_slice(&body).map_err(|error| {
-            PassportHttpError::Validation(json!({"detail": [
-                crate::python_json_diagnostic::diagnostic(&body, &error)
-            ]}))
-        })?
-    };
-    let order = quality_field_order(&body);
+    let payload = python_model_body(&body, &headers)?;
+    let order = json_field_order(&body);
     let request = QualityResultRequest::from_python_value(&payload, Some(&order))
         .map_err(PassportHttpError::Validation)?;
     let principal = service.authenticate(&headers)?;
@@ -849,6 +870,53 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn application_validation_matches_frozen_python_responses() {
+        let frozen: Value = serde_json::from_str(include_str!(
+            "../../../../contracts/issuance-physical-passport-native.json"
+        ))
+        .unwrap();
+        let base = frozen["application_validation_base_input"]
+            .as_object()
+            .unwrap();
+        for case in frozen["application_validation_observations"]
+            .as_array()
+            .unwrap()
+        {
+            let payload = case.get("input").cloned().unwrap_or_else(|| {
+                let mut payload = base.clone();
+                if let Some(overrides) = case.get("override").and_then(Value::as_object) {
+                    payload.extend(overrides.clone());
+                }
+                Value::Object(payload)
+            });
+            let raw_body = case["raw_body"]
+                .as_str()
+                .map_or_else(|| payload.to_string(), str::to_owned);
+            let mut request = Request::builder()
+                .method("POST")
+                .uri("/v1/passport/applications");
+            if case["omit_content_type"] != true {
+                request = request.header(
+                    "content-type",
+                    case["content_type"].as_str().unwrap_or("application/json"),
+                );
+            }
+            let response = test_router()
+                .oneshot(request.body(Body::from(raw_body)).unwrap())
+                .await
+                .unwrap();
+            assert_eq!(
+                response.status().as_u16(),
+                case["status"].as_u64().unwrap() as u16,
+                "payload: {payload}"
+            );
+            let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+            let body: Value = serde_json::from_slice(&body).unwrap();
+            assert_eq!(body, case["body"], "payload: {payload}");
+        }
+    }
+
+    #[tokio::test]
     async fn quality_validation_matches_frozen_python_responses() {
         let frozen: Value = serde_json::from_str(include_str!(
             "../../../../contracts/issuance-physical-passport-native.json"
@@ -858,12 +926,18 @@ mod tests {
             .as_array()
             .unwrap()
         {
+            let mut request = Request::builder()
+                .method("POST")
+                .uri("/v1/passport/applications/example/quality-verify");
+            if case["omit_content_type"] != true {
+                request = request.header(
+                    "content-type",
+                    case["content_type"].as_str().unwrap_or("application/json"),
+                );
+            }
             let response = test_router()
                 .oneshot(
-                    Request::builder()
-                        .method("POST")
-                        .uri("/v1/passport/applications/example/quality-verify")
-                        .header("content-type", "application/json")
+                    request
                         .body(Body::from(
                             case["raw_body"]
                                 .as_str()

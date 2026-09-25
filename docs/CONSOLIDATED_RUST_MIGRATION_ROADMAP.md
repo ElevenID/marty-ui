@@ -6275,11 +6275,15 @@ corrections remain separately deferred.
 Maintainer error-parity review on 2026-09-25 found another explicit cutover
 gate: the released Python application-create route returns structured FastAPI
 422 details for missing fields, a non-object body, country-code pattern failure,
-missing DG2, and forbidden extras. The current Rust handler still uses Axum's
-default `Json<PassportApplicationRequest>` rejection before its own validation,
-so those errors are not yet wire-equivalent. The Python responses were observed
-with the retained route and `TestClient`; freeze them as language-neutral HTTP
-vectors and implement the native application validation boundary before
+missing DG2, and forbidden extras. Nineteen Python-observed HTTP vectors now
+cover those cases plus malformed JSON, primitive and nested type failures,
+document-type literals, data-group validation, simultaneous errors, and
+non-JSON/missing Content-Type. Both passport model handlers now share a
+FastAPI-compatible body decoder; the application route has an ordered
+validation projector. The 19 application and 13 quality vectors pass their
+Rust HTTP tests. Strict Issuance Clippy passes. This
+closes the observed default-Axum-rejection gap, not the whole route/error
+parity gate: broader live and adverse-provider acceptance still precede
 enabling the gateway selector or removing Python.
 
 Gateway still selects Python for public `/v1/passport` routes by default. Draft
