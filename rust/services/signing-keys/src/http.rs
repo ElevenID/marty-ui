@@ -1,4 +1,5 @@
 use crate::certificate_csr::{self, CsrSubject};
+use crate::certificate_issuance::{self, VerifiedDscSubject};
 use crate::compat::{
     CompatibilityError, IssuerContextRequest, IssuerDidSignRequest, ProfileIdentityRequest,
     ProfileWriteRequest, ResolveIssuerDidRequest, ServiceSignRequest, SigningCompatibilityService,
@@ -17,6 +18,10 @@ use crate::documents::{
     StoredCertificate, UpdateJwkRequest, UpdateJwkResponse,
 };
 use crate::domain::{key_purposes, service_capabilities};
+use crate::dsc_issuance_store::{
+    BeginDscIssuance, CommitDscIssuance, DscClaim, DscIssuanceSnapshot, DscIssuanceStore,
+    DscIssuanceStoreError,
+};
 use crate::flow_envelope::{
     FlowEnvelopeError, OpenBaoEnvelopeProvider, UnwrapRequest, WrapRequest,
 };
@@ -69,10 +74,12 @@ struct ServiceStatus {
 #[derive(Clone)]
 struct AppState {
     internal_api_key: Arc<str>,
+    dsc_issue_gateway_key: Option<Arc<str>>,
     registry_store: Option<RegistryStore>,
     document_store: Option<DocumentStore>,
     csca_lifecycle_store: Option<CscaLifecycleStore>,
     profile_store: Option<ProfileStore>,
+    dsc_issuance_store: Option<DscIssuanceStore>,
     flow_envelopes: Option<OpenBaoEnvelopeProvider>,
     compatibility: Option<SigningCompatibilityService>,
     public_domain: Option<String>,
@@ -95,6 +102,30 @@ pub fn router_with_dependencies(
     flow_envelopes: Option<OpenBaoEnvelopeProvider>,
     public_domain: Option<String>,
 ) -> Router {
+    router_with_dependencies_and_dsc_key(
+        internal_api_key,
+        None,
+        registry_store,
+        document_store,
+        csca_lifecycle_store,
+        profile_store,
+        flow_envelopes,
+        public_domain,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+pub fn router_with_dependencies_and_dsc_key(
+    internal_api_key: String,
+    dsc_issue_gateway_key: Option<String>,
+    registry_store: Option<RegistryStore>,
+    document_store: Option<DocumentStore>,
+    csca_lifecycle_store: Option<CscaLifecycleStore>,
+    profile_store: Option<ProfileStore>,
+    flow_envelopes: Option<OpenBaoEnvelopeProvider>,
+    public_domain: Option<String>,
+) -> Router {
+    let dsc_issuance_store = profile_store.as_ref().map(ProfileStore::dsc_issuance_store);
     let compatibility = match (&registry_store, &document_store, &profile_store) {
         (Some(registry), Some(documents), Some(profiles)) => {
             Some(SigningCompatibilityService::new(
@@ -173,6 +204,10 @@ pub fn router_with_dependencies(
         .route(
             "/v1/signing-keys/issuer-identities/certificate-csr",
             axum::routing::put(generate_public_issuer_csr),
+        )
+        .route(
+            "/v1/signing-keys/issuer-identities/dsc-certificate",
+            post(issue_public_dsc_certificate),
         )
         .route(
             "/v1/signing-keys/services/{service_id}/certificate",
@@ -388,10 +423,12 @@ pub fn router_with_dependencies(
         .layer(TraceLayer::new_for_http())
         .with_state(AppState {
             internal_api_key: Arc::from(internal_api_key),
+            dsc_issue_gateway_key: dsc_issue_gateway_key.map(Arc::from),
             registry_store,
             document_store,
             csca_lifecycle_store,
             profile_store,
+            dsc_issuance_store,
             flow_envelopes,
             compatibility,
             public_domain,
@@ -516,6 +553,22 @@ struct PassportCsrRequest {
     country: String,
     organization: String,
     common_name: String,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct DscCertificateIssueRequest {
+    #[serde(default)]
+    organization_id: Option<String>,
+    dsc_issuer_did: String,
+    csca_issuer_did: String,
+    csca_certificate_id: String,
+    credential_format: String,
+    country: String,
+    organization: String,
+    common_name: String,
+    validity_days: u8,
+    idempotency_key: String,
 }
 
 #[derive(Debug, Deserialize)]
@@ -2244,6 +2297,614 @@ async fn generate_public_issuer_csr(
         "issuer_did": input.issuer_did,
         "subject": {"country": input.country, "organization": input.organization, "common_name": input.common_name}
     })).into_response()
+}
+
+async fn issue_public_dsc_certificate(
+    State(state): State<AppState>,
+    Query(scope): Query<OrganizationScope>,
+    headers: HeaderMap,
+    Json(input): Json<DscCertificateIssueRequest>,
+) -> Response {
+    // Only Gateway holds this distinct credential, which it attaches after
+    // its dedicated passport-certificate:issue policy check.
+    if state.dsc_issue_gateway_key.is_none() {
+        return public_error(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "Operator issuance is not configured.",
+        );
+    }
+    if !authorize_dsc_issue(&state, &headers) {
+        return public_error(
+            StatusCode::UNAUTHORIZED,
+            "Operator issuance authority is required.",
+        );
+    }
+    let Some(actor_id) = headers
+        .get("x-user-id")
+        .and_then(|value| value.to_str().ok())
+        .filter(|value| {
+            !value.is_empty() && value.len() <= 128 && !value.chars().any(char::is_control)
+        })
+    else {
+        return public_error(
+            StatusCode::UNAUTHORIZED,
+            "Trusted operator identity is required.",
+        );
+    };
+    match issue_managed_dsc_certificate(&state, &scope.organization_id, actor_id, &input).await {
+        Ok(result) => Json(result).into_response(),
+        Err(error) => error.into_response(),
+    }
+}
+
+fn dsc_identity(
+    input: &DscCertificateIssueRequest,
+    purpose: &str,
+    issuer_did: &str,
+) -> IssuerIdentityRequest {
+    IssuerIdentityRequest {
+        organization_id: input.organization_id.clone(),
+        issuer_did: issuer_did.into(),
+        key_purpose: purpose.into(),
+        credential_format: input.credential_format.clone(),
+        algorithm: "ES256".into(),
+        key_attestation_policy: None,
+        cert_pem: None,
+        cert_chain_pem: None,
+    }
+}
+
+fn dsc_store_failure(error: DscIssuanceStoreError) -> PublicSigningError {
+    let status = match error {
+        DscIssuanceStoreError::Invalid(_) => StatusCode::UNPROCESSABLE_ENTITY,
+        DscIssuanceStoreError::Conflict(_) => StatusCode::CONFLICT,
+        DscIssuanceStoreError::Storage(_) => StatusCode::SERVICE_UNAVAILABLE,
+        DscIssuanceStoreError::Corrupt(_) => StatusCode::INTERNAL_SERVER_ERROR,
+    };
+    public_failure(status, &error.to_string())
+}
+
+fn dsc_compat_failure(error: CompatibilityError) -> PublicSigningError {
+    let status = match error {
+        CompatibilityError::Unauthorized => StatusCode::UNAUTHORIZED,
+        CompatibilityError::ProfileNotFound
+        | CompatibilityError::ServiceNotFound
+        | CompatibilityError::NotFound(_) => StatusCode::NOT_FOUND,
+        CompatibilityError::BadRequest(_) => StatusCode::BAD_REQUEST,
+        CompatibilityError::AmbiguousProfile | CompatibilityError::Conflict(_) => {
+            StatusCode::CONFLICT
+        }
+        CompatibilityError::Invalid(_) => StatusCode::UNPROCESSABLE_ENTITY,
+        CompatibilityError::Unavailable => StatusCode::SERVICE_UNAVAILABLE,
+    };
+    public_failure(status, &error.to_string())
+}
+
+async fn issue_managed_dsc_certificate(
+    state: &AppState,
+    organization_id: &str,
+    actor_id: &str,
+    input: &DscCertificateIssueRequest,
+) -> Result<Value, PublicSigningError> {
+    let dsc_request_identity = dsc_identity(input, "x509_doc_signer", &input.dsc_issuer_did);
+    let csca_request_identity = dsc_identity(input, "csca", &input.csca_issuer_did);
+    validate_identity_scope(organization_id, &dsc_request_identity)?;
+    validate_identity_scope(organization_id, &csca_request_identity)?;
+    if !input.credential_format.eq_ignore_ascii_case("ICAO_EMRTD")
+        || !(1..=90).contains(&input.validity_days)
+        || input.csca_certificate_id.is_empty()
+        || input.csca_certificate_id.len() > 128
+        || input.idempotency_key.is_empty()
+        || input.idempotency_key.len() > 128
+        || !input
+            .idempotency_key
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || b"-._".contains(&byte))
+    {
+        return Err(public_failure(
+            StatusCode::UNPROCESSABLE_ENTITY,
+            "DSC issuance request is invalid.",
+        ));
+    }
+    let store = state.dsc_issuance_store.as_ref().ok_or_else(|| {
+        public_failure(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "DSC issuance storage is unavailable.",
+        )
+    })?;
+    let digest_body = json!({
+        "organization_id": organization_id,
+        "dsc_issuer_did": input.dsc_issuer_did,
+        "csca_issuer_did": input.csca_issuer_did,
+        "csca_certificate_id": input.csca_certificate_id,
+        "credential_format": "ICAO_EMRTD",
+        "country": input.country,
+        "organization": input.organization,
+        "common_name": input.common_name,
+        "validity_days": input.validity_days,
+    });
+    let request_digest = format!(
+        "{:x}",
+        Sha256::digest(serde_json::to_vec(&digest_body).expect("DSC request serializes"))
+    );
+    let claim = match store
+        .begin(organization_id, &input.idempotency_key, &request_digest)
+        .await
+        .map_err(dsc_store_failure)?
+    {
+        BeginDscIssuance::Completed(result) => return Ok(result),
+        BeginDscIssuance::Pending => {
+            return Err(public_failure(
+                StatusCode::CONFLICT,
+                "DSC issuance is already in progress.",
+            ))
+        }
+        BeginDscIssuance::Claim(claim) => claim,
+    };
+    let result =
+        issue_claimed_dsc_certificate(state, store, &claim, organization_id, actor_id, input).await;
+    if result.is_err() {
+        let _ = store.release(&claim).await;
+    }
+    result
+}
+
+async fn checked_dsc_profile_key(
+    compatibility: &SigningCompatibilityService,
+    organization_id: &str,
+    profile: &Value,
+    identity: &IssuerIdentityRequest,
+) -> Result<Value, PublicSigningError> {
+    let resolved = compatibility
+        .resolve_issuer_did(&ResolveIssuerDidRequest {
+            organization_id: organization_id.into(),
+            issuer_did: identity.issuer_did.clone(),
+            verification_method_id: None,
+            credential_format: Some(identity.credential_format.clone()),
+            key_purpose: Some(identity.key_purpose.clone()),
+            algorithm: Some("ES256".into()),
+        })
+        .await
+        .map_err(dsc_compat_failure)?;
+    if !same_managed_identity(profile, &resolved) {
+        return Err(public_failure(
+            StatusCode::CONFLICT,
+            "Resolved identity differs from its active issuer profile.",
+        ));
+    }
+    let current = compatibility
+        .provider_public_key_for_profile(organization_id, profile)
+        .await
+        .map_err(dsc_compat_failure)?;
+    if !resolved
+        .get("public_jwk")
+        .is_some_and(|published| documents::same_public_jwk(published, &current))
+    {
+        return Err(public_failure(
+            StatusCode::CONFLICT,
+            "Published identity differs from its current managed KMS key.",
+        ));
+    }
+    Ok(current)
+}
+
+async fn issue_claimed_dsc_certificate(
+    state: &AppState,
+    store: &DscIssuanceStore,
+    claim: &DscClaim,
+    organization_id: &str,
+    actor_id: &str,
+    input: &DscCertificateIssueRequest,
+) -> Result<Value, PublicSigningError> {
+    let registry = state.registry_store.as_ref().ok_or_else(|| {
+        public_failure(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "Signing registry is unavailable.",
+        )
+    })?;
+    let lease = registry
+        .acquire_rotation_lease(organization_id)
+        .await
+        .map_err(|_| {
+            public_failure(
+                StatusCode::SERVICE_UNAVAILABLE,
+                "Tenant signing lease is unavailable.",
+            )
+        })?
+        .ok_or_else(|| public_failure(StatusCode::CONFLICT, "Tenant signing state is changing."))?;
+    let snapshot = store
+        .snapshot(organization_id)
+        .await
+        .map_err(dsc_store_failure)?;
+    let dsc_request_identity = dsc_identity(input, "x509_doc_signer", &input.dsc_issuer_did);
+    let csca_request_identity = dsc_identity(input, "csca", &input.csca_issuer_did);
+    let dsc_profile = one_matching_profile(state, organization_id, &dsc_request_identity).await?;
+    let csca_profile = one_matching_profile(state, organization_id, &csca_request_identity).await?;
+    let dsc_profile_id = dsc_profile
+        .get("id")
+        .and_then(Value::as_str)
+        .ok_or_else(|| {
+            public_failure(
+                StatusCode::SERVICE_UNAVAILABLE,
+                "DSC issuer profile is malformed.",
+            )
+        })?;
+    let csca_profile_id = csca_profile
+        .get("id")
+        .and_then(Value::as_str)
+        .ok_or_else(|| {
+            public_failure(
+                StatusCode::SERVICE_UNAVAILABLE,
+                "CSCA issuer profile is malformed.",
+            )
+        })?;
+    let snapshot_matches = |profile: &Value, id: &str| {
+        snapshot
+            .profiles
+            .get("profiles")
+            .and_then(Value::as_array)
+            .and_then(|profiles| {
+                profiles
+                    .iter()
+                    .find(|candidate| candidate.get("id").and_then(Value::as_str) == Some(id))
+            })
+            == Some(profile)
+    };
+    if !snapshot_matches(&dsc_profile, dsc_profile_id)
+        || !snapshot_matches(&csca_profile, csca_profile_id)
+    {
+        return Err(public_failure(
+            StatusCode::CONFLICT,
+            "Issuer profiles changed during DSC issuance.",
+        ));
+    }
+    let dsc_key_reference = dsc_profile
+        .get("signing_key_reference")
+        .and_then(Value::as_str);
+    let csca_key_reference = csca_profile
+        .get("signing_key_reference")
+        .and_then(Value::as_str);
+    if dsc_profile_id == csca_profile_id
+        || dsc_key_reference.is_none()
+        || csca_key_reference.is_none()
+        || dsc_key_reference == csca_key_reference
+    {
+        return Err(public_failure(
+            StatusCode::CONFLICT,
+            "CSCA and DSC require distinct active managed keys.",
+        ));
+    }
+    let compatibility = state.compatibility.as_ref().ok_or_else(|| {
+        public_failure(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "Issuer identity service is unavailable.",
+        )
+    })?;
+    let dsc_jwk = checked_dsc_profile_key(
+        compatibility,
+        organization_id,
+        &dsc_profile,
+        &dsc_request_identity,
+    )
+    .await?;
+    let csca_jwk = checked_dsc_profile_key(
+        compatibility,
+        organization_id,
+        &csca_profile,
+        &csca_request_identity,
+    )
+    .await?;
+    let lifecycle_store = state.csca_lifecycle_store.as_ref().ok_or_else(|| {
+        public_failure(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "CSCA lifecycle storage is unavailable.",
+        )
+    })?;
+    let now_utc = chrono::Utc::now();
+    let lifecycle = lifecycle_store
+        .load(organization_id, now_utc)
+        .await
+        .map_err(|_| {
+            public_failure(
+                StatusCode::SERVICE_UNAVAILABLE,
+                "CSCA lifecycle storage is unavailable.",
+            )
+        })?;
+    if serde_json::to_value(&lifecycle).ok().as_ref() != Some(&snapshot.lifecycle) {
+        return Err(public_failure(
+            StatusCode::CONFLICT,
+            "CSCA lifecycle changed during DSC issuance.",
+        ));
+    }
+    let csca_view = lifecycle
+        .get(&input.csca_certificate_id, now_utc)
+        .map_err(|_| {
+            public_failure(
+                StatusCode::NOT_FOUND,
+                "Active CSCA certificate was not found.",
+            )
+        })?;
+    if csca_view.status != csca_lifecycle::CscaCertificateStatus::Valid
+        || csca_view.certificate.key_reference != csca_key_reference.unwrap_or_default()
+        || !documents::same_public_jwk(&csca_view.certificate.public_jwk, &csca_jwk)
+        || csca_view
+            .certificate
+            .metadata
+            .get("issuer_did")
+            .and_then(Value::as_str)
+            != Some(input.csca_issuer_did.as_str())
+        || certificate_issuance::certificate_country(&csca_view.certificate.cert_pem).as_deref()
+            != Some(input.country.as_str())
+    {
+        return Err(public_failure(
+            StatusCode::CONFLICT,
+            "Selected CSCA certificate is not the active managed issuer for this country.",
+        ));
+    }
+    let subject = CsrSubject {
+        country: &input.country,
+        organization: &input.organization,
+        common_name: &input.common_name,
+    };
+    let csr = certificate_csr::prepare(&dsc_jwk, "ES256", &subject)
+        .map_err(|error| public_failure(StatusCode::UNPROCESSABLE_ENTITY, &error.to_string()))?;
+    let csr_signature = compatibility
+        .sign_with_issuer_did(&IssuerDidSignRequest {
+            organization_id: organization_id.into(),
+            issuer_did: input.dsc_issuer_did.clone(),
+            credential_format: input.credential_format.clone(),
+            key_purpose: "x509_doc_signer".into(),
+            algorithm: "ES256".into(),
+            payload_b64: Some(URL_SAFE_NO_PAD.encode(csr.signing_bytes())),
+            payload_hex: None,
+        })
+        .await
+        .map_err(dsc_compat_failure)?;
+    let csr_signature = managed_der_signature(&csr_signature)?;
+    let csr_pem = csr.finish(&csr_signature).map_err(|_| {
+        public_failure(
+            StatusCode::BAD_GATEWAY,
+            "Managed DSC CSR signature did not verify.",
+        )
+    })?;
+    let verified = VerifiedDscSubject::from_csr_pem(&csr_pem, &dsc_jwk).map_err(|_| {
+        public_failure(
+            StatusCode::BAD_GATEWAY,
+            "Managed DSC CSR proof did not verify.",
+        )
+    })?;
+    if verified.country().as_deref() != Some(input.country.as_str()) {
+        return Err(public_failure(
+            StatusCode::CONFLICT,
+            "DSC certificate country differs from the selected CSCA.",
+        ));
+    }
+    issue_signed_dsc_certificate(
+        state,
+        store,
+        claim,
+        &lease,
+        &snapshot,
+        organization_id,
+        actor_id,
+        input,
+        &dsc_profile,
+        &csca_profile,
+        dsc_profile_id,
+        csca_profile_id,
+        &dsc_jwk,
+        &csca_jwk,
+        &csca_view.certificate,
+        &verified,
+    )
+    .await
+}
+
+fn managed_der_signature(signed: &Value) -> Result<Vec<u8>, PublicSigningError> {
+    if signed.get("signature_encoding").and_then(Value::as_str) != Some("der") {
+        return Err(public_failure(
+            StatusCode::BAD_GATEWAY,
+            "Managed issuer returned an incompatible certificate signature.",
+        ));
+    }
+    signed
+        .get("signature_b64")
+        .and_then(Value::as_str)
+        .and_then(|encoded| URL_SAFE_NO_PAD.decode(encoded).ok())
+        .filter(|signature| !signature.is_empty())
+        .ok_or_else(|| {
+            public_failure(
+                StatusCode::BAD_GATEWAY,
+                "Managed issuer returned an invalid certificate signature.",
+            )
+        })
+}
+
+#[allow(clippy::too_many_arguments)]
+async fn issue_signed_dsc_certificate(
+    state: &AppState,
+    store: &DscIssuanceStore,
+    claim: &DscClaim,
+    lease: &RotationLease,
+    snapshot: &DscIssuanceSnapshot,
+    organization_id: &str,
+    actor_id: &str,
+    input: &DscCertificateIssueRequest,
+    dsc_profile: &Value,
+    csca_profile: &Value,
+    dsc_profile_id: &str,
+    csca_profile_id: &str,
+    dsc_jwk: &Value,
+    csca_jwk: &Value,
+    csca_record: &csca_lifecycle::CscaCertificateRecord,
+    verified: &VerifiedDscSubject,
+) -> Result<Value, PublicSigningError> {
+    let compatibility = state.compatibility.as_ref().ok_or_else(|| {
+        public_failure(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "Issuer identity service is unavailable.",
+        )
+    })?;
+    let mut serial = uuid::Uuid::new_v4().into_bytes();
+    serial[0] &= 0x7f;
+    if serial[0] == 0 {
+        serial[0] = 1;
+    }
+    let prepared = certificate_issuance::prepare_dsc(
+        verified,
+        &csca_record.cert_pem,
+        &csca_record.cert_chain_pem,
+        csca_jwk,
+        &serial,
+        input.validity_days,
+        std::time::SystemTime::now(),
+    )
+    .map_err(|error| public_failure(StatusCode::UNPROCESSABLE_ENTITY, &error.to_string()))?;
+    let metadata = prepared
+        .metadata()
+        .map_err(|error| public_failure(StatusCode::UNPROCESSABLE_ENTITY, &error.to_string()))?;
+    let signed = compatibility
+        .sign_with_issuer_did(&IssuerDidSignRequest {
+            organization_id: organization_id.into(),
+            issuer_did: input.csca_issuer_did.clone(),
+            credential_format: input.credential_format.clone(),
+            key_purpose: "csca".into(),
+            algorithm: "ES256".into(),
+            payload_b64: Some(URL_SAFE_NO_PAD.encode(prepared.signing_bytes())),
+            payload_hex: None,
+        })
+        .await
+        .map_err(dsc_compat_failure)?;
+    let signature = managed_der_signature(&signed)?;
+    let certificate_pem = prepared.finish(&signature).map_err(|_| {
+        public_failure(
+            StatusCode::BAD_GATEWAY,
+            "Managed CSCA signature did not verify against the enrolled certificate.",
+        )
+    })?;
+    let chain_pem = if csca_record.cert_chain_pem.trim().is_empty() {
+        csca_record.cert_pem.clone()
+    } else {
+        format!(
+            "{}\n{}",
+            csca_record.cert_pem.trim(),
+            csca_record.cert_chain_pem.trim()
+        )
+    };
+    let inspected = documents::inspect_certificate(&InspectCertificateRequest {
+        cert_pem: certificate_pem.clone(),
+        cert_chain_pem: Some(chain_pem.clone()),
+        expected_public_jwk: Some(dsc_jwk.clone()),
+    })
+    .map_err(|_| {
+        public_failure(
+            StatusCode::BAD_GATEWAY,
+            "Issued DSC certificate is invalid.",
+        )
+    })?;
+    if inspected.public_key_matches != Some(true) {
+        return Err(public_failure(
+            StatusCode::BAD_GATEWAY,
+            "Issued DSC certificate does not match the managed DSC key.",
+        ));
+    }
+    // Recheck provider keys immediately before the Redis snapshot-fenced
+    // commit. An external KMS rotation cannot be fenced by Redis alone.
+    let dsc_request_identity = dsc_identity(input, "x509_doc_signer", &input.dsc_issuer_did);
+    let csca_request_identity = dsc_identity(input, "csca", &input.csca_issuer_did);
+    let current_dsc = checked_dsc_profile_key(
+        compatibility,
+        organization_id,
+        dsc_profile,
+        &dsc_request_identity,
+    )
+    .await?;
+    let current_csca = checked_dsc_profile_key(
+        compatibility,
+        organization_id,
+        csca_profile,
+        &csca_request_identity,
+    )
+    .await?;
+    if !documents::same_public_jwk(dsc_jwk, &current_dsc)
+        || !documents::same_public_jwk(csca_jwk, &current_csca)
+    {
+        return Err(public_failure(
+            StatusCode::CONFLICT,
+            "Managed certificate key rotated during issuance.",
+        ));
+    }
+    let lifecycle = state
+        .csca_lifecycle_store
+        .as_ref()
+        .ok_or_else(|| {
+            public_failure(
+                StatusCode::SERVICE_UNAVAILABLE,
+                "CSCA lifecycle storage is unavailable.",
+            )
+        })?
+        .load(organization_id, chrono::Utc::now())
+        .await
+        .map_err(|_| {
+            public_failure(
+                StatusCode::SERVICE_UNAVAILABLE,
+                "CSCA lifecycle storage is unavailable.",
+            )
+        })?;
+    let current_csca_view = lifecycle
+        .get(&input.csca_certificate_id, chrono::Utc::now())
+        .map_err(|_| {
+            public_failure(
+                StatusCode::CONFLICT,
+                "Selected CSCA certificate changed during issuance.",
+            )
+        })?;
+    if current_csca_view.status != csca_lifecycle::CscaCertificateStatus::Valid
+        || current_csca_view.certificate != *csca_record
+    {
+        return Err(public_failure(
+            StatusCode::CONFLICT,
+            "Selected CSCA certificate changed during issuance.",
+        ));
+    }
+    let attachment = json!({
+        "cert_pem": certificate_pem,
+        "cert_chain_pem": chain_pem,
+        "cert_expires_at": inspected.expires_at,
+        "updated_at": chrono::Utc::now().to_rfc3339(),
+        "x5c": inspected.x5c,
+        "public_jwk": inspected.public_jwk,
+        "signing_key_reference": dsc_profile["signing_key_reference"],
+    });
+    let public_result = json!({
+        "certificate_pem": certificate_pem,
+        "chain_pem": chain_pem,
+        "dsc_issuer_did": input.dsc_issuer_did,
+        "csca_issuer_did": input.csca_issuer_did,
+        "subject": {"country": input.country, "organization": input.organization, "common_name": input.common_name},
+        "serial": metadata.serial_hex,
+        "not_before": metadata.not_before,
+        "not_after": metadata.not_after,
+        "status": "valid",
+    });
+    match store
+        .commit(
+            claim,
+            snapshot,
+            lease,
+            dsc_profile_id,
+            csca_profile_id,
+            &input.csca_certificate_id,
+            actor_id,
+            &metadata.serial_hex,
+            attachment,
+            public_result,
+        )
+        .await
+        .map_err(dsc_store_failure)?
+    {
+        CommitDscIssuance::Committed(result) | CommitDscIssuance::Completed(result) => Ok(result),
+    }
 }
 
 fn validate_service_scope(
@@ -6029,6 +6690,22 @@ fn authorize_internal(state: &AppState, headers: &HeaderMap) -> Result<(), kms::
     Ok(())
 }
 
+fn authorize_dsc_issue(state: &AppState, headers: &HeaderMap) -> bool {
+    let Some(expected) = state.dsc_issue_gateway_key.as_ref() else {
+        return false;
+    };
+    if expected.as_ref() == state.internal_api_key.as_ref() {
+        return false;
+    }
+    let supplied = headers
+        .get("x-api-key")
+        .and_then(|value| value.to_str().ok())
+        .unwrap_or_default();
+    let supplied = supplied.as_bytes();
+    let expected = expected.as_bytes();
+    expected.len() == supplied.len() && expected.ct_eq(supplied).unwrap_u8() == 1
+}
+
 async fn health() -> Json<HealthResponse> {
     Json(HealthResponse {
         status: "healthy",
@@ -6113,6 +6790,16 @@ async fn openapi() -> Json<serde_json::Value> {
             "/v1/signing-keys/issuer-identities/certificate-csr": {
                 "put": {"summary": "Generate KMS-backed Certificate Request for Passport Issuer Identity", "responses": {"200": {"description": "Public PKCS#10 request signed in managed custody"}}}
             },
+            "/v1/signing-keys/issuer-identities/dsc-certificate": {
+                "post": {"summary": "Issue Managed Passport DSC Certificate", "responses": {
+                    "200": {"description": "Verified DSC certificate and CSCA chain, with idempotent replay"},
+                    "401": {"description": "Dedicated Gateway issuance credential is missing"},
+                    "403": {"description": "Organization context is forbidden"},
+                    "409": {"description": "Issuer state or idempotency claim changed"},
+                    "422": {"description": "Issuance request violates certificate policy"},
+                    "503": {"description": "Managed KMS or issuance storage unavailable"}
+                }}
+            },
             "/v1/signing-keys/services/{service_id}/certificate": {
                 "get": {"summary": "Read Registered Service Certificate", "responses": {"200": {"description": "Public certificate and chain"}}},
                 "put": {"summary": "Store Registered Service Certificate", "responses": {"200": {"description": "Certificate checked against current KMS public key"}}}
@@ -6190,6 +6877,53 @@ mod public_contract_tests {
         middleware::{self, Next},
     };
     use tower::ServiceExt;
+
+    #[tokio::test]
+    async fn dsc_issuance_rejects_shared_internal_key_and_requires_distinct_gateway_key() {
+        let app = router_with_dependencies_and_dsc_key(
+            "shared-internal-signing-key-32-chars".into(),
+            Some("dedicated-dsc-operator-gateway-key-32-chars".into()),
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+        );
+        let payload = json!({
+            "dsc_issuer_did": "did:web:beta.example:orgs:org-a",
+            "csca_issuer_did": "did:web:beta.example:orgs:org-a",
+            "csca_certificate_id": "csca-1",
+            "credential_format": "ICAO_EMRTD",
+            "country": "US", "organization": "ElevenID Beta", "common_name": "Pilot DSC",
+            "validity_days": 30, "idempotency_key": "request-1"
+        });
+        let request = |key: &str| {
+            Request::post(
+                "/v1/signing-keys/issuer-identities/dsc-certificate?organization_id=org-a",
+            )
+            .header("content-type", "application/json")
+            .header("x-api-key", key)
+            .header("x-user-id", "operator-1")
+            .body(Body::from(payload.to_string()))
+            .unwrap()
+        };
+        assert_eq!(
+            app.clone()
+                .oneshot(request("shared-internal-signing-key-32-chars"))
+                .await
+                .unwrap()
+                .status(),
+            StatusCode::UNAUTHORIZED
+        );
+        assert_eq!(
+            app.oneshot(request("dedicated-dsc-operator-gateway-key-32-chars"))
+                .await
+                .unwrap()
+                .status(),
+            StatusCode::SERVICE_UNAVAILABLE
+        );
+    }
 
     #[test]
     fn config_discovery_accepts_public_jwks_inside_provider_envelopes() {
@@ -6610,10 +7344,12 @@ mod public_contract_tests {
             .unwrap();
         let state = AppState {
             internal_api_key: Arc::from("test-key"),
+            dsc_issue_gateway_key: None,
             registry_store: Some(store.clone()),
             document_store: None,
             csca_lifecycle_store: None,
             profile_store: None,
+            dsc_issuance_store: None,
             flow_envelopes: None,
             compatibility: None,
             public_domain: None,
@@ -7533,10 +8269,12 @@ mod public_contract_tests {
     fn public_config_preserves_provider_routing_defaults_for_lossless_updates() {
         let state = AppState {
             internal_api_key: Arc::from("test-key"),
+            dsc_issue_gateway_key: None,
             registry_store: None,
             document_store: None,
             csca_lifecycle_store: None,
             profile_store: None,
+            dsc_issuance_store: None,
             flow_envelopes: None,
             compatibility: None,
             public_domain: Some("beta.example".into()),
@@ -7559,10 +8297,12 @@ mod public_contract_tests {
     fn public_config_redacts_credentials_without_hiding_service_metadata() {
         let state = AppState {
             internal_api_key: Arc::from("test-key"),
+            dsc_issue_gateway_key: None,
             registry_store: None,
             document_store: None,
             csca_lifecycle_store: None,
             profile_store: None,
+            dsc_issuance_store: None,
             flow_envelopes: None,
             compatibility: None,
             public_domain: None,
