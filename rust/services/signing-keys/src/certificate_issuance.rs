@@ -357,6 +357,8 @@ fn verify_issuer_chain(
     }
     let mut child = leaf.clone();
     let mut child_der = leaf_der.to_vec();
+    let mut subordinate_cas =
+        usize::from(leaf.tbs_certificate.subject != leaf.tbs_certificate.issuer);
     for link in links {
         let parent =
             Certificate::from_pem(link.as_str()).map_err(|_| DscCertificateError::InvalidIssuer)?;
@@ -364,7 +366,7 @@ fn verify_issuer_chain(
             .to_der()
             .map_err(|_| DscCertificateError::InvalidIssuer)?;
         if child.tbs_certificate.issuer != parent.tbs_certificate.subject
-            || !valid_chain_parent(&parent, not_before, not_after)?
+            || !valid_chain_parent(&parent, not_before, not_after, subordinate_cas)?
             || !verify_certificate_signature(&child_der, &parent_der)
                 .map_err(|_| DscCertificateError::InvalidIssuer)?
         {
@@ -372,6 +374,9 @@ fn verify_issuer_chain(
         }
         child = parent;
         child_der = parent_der;
+        if child.tbs_certificate.subject != child.tbs_certificate.issuer {
+            subordinate_cas += 1;
+        }
     }
     if child.tbs_certificate.subject == child.tbs_certificate.issuer {
         if !verify_certificate_signature(&child_der, &child_der)
@@ -389,6 +394,7 @@ fn valid_chain_parent(
     issuer: &Certificate,
     not_before: SystemTime,
     not_after: SystemTime,
+    subordinate_cas: usize,
 ) -> Result<bool, DscCertificateError> {
     let tbs = &issuer.tbs_certificate;
     let constraints = tbs
@@ -403,12 +409,13 @@ fn valid_chain_parent(
     let end = not_after
         .duration_since(SystemTime::UNIX_EPOCH)
         .map_err(|_| DscCertificateError::InvalidIssuer)?;
-    Ok(
-        matches!(constraints, Some((true, BasicConstraints { ca: true, .. })))
-            && usage.is_some_and(|(critical, usage)| critical && usage.key_cert_sign())
-            && start >= tbs.validity.not_before.to_unix_duration()
-            && end <= tbs.validity.not_after.to_unix_duration(),
-    )
+    Ok(matches!(
+        constraints,
+        Some((true, BasicConstraints { ca: true, path_len_constraint, .. }))
+            if path_len_constraint.is_none_or(|limit| subordinate_cas <= usize::from(limit))
+    ) && usage.is_some_and(|(critical, usage)| critical && usage.key_cert_sign())
+        && start >= tbs.validity.not_before.to_unix_duration()
+        && end <= tbs.validity.not_after.to_unix_duration())
 }
 
 #[cfg(test)]
@@ -656,7 +663,7 @@ mod tests {
         let mut intermediate = Certificate::from_der(&intermediate_der).unwrap();
         let now = SystemTime::now();
         let end = now + Duration::from_secs(24 * 60 * 60);
-        assert!(valid_chain_parent(&intermediate, now, end).unwrap());
+        assert!(valid_chain_parent(&intermediate, now, end, 1).unwrap());
         let constraints = BasicConstraints {
             ca: true,
             path_len_constraint: Some(0),
@@ -670,6 +677,82 @@ mod tests {
             )
             .unwrap();
         intermediate.tbs_certificate.extensions = Some(vec![constraints, wrong_usage]);
-        assert!(!valid_chain_parent(&intermediate, now, end).unwrap());
+        assert!(!valid_chain_parent(&intermediate, now, end, 1).unwrap());
+    }
+
+    #[test]
+    fn rejects_path_length_zero_ca_with_subordinate_ca() {
+        let (subject, _, _) = fixture();
+        let (root_der, root_key) =
+            create_csca_certificate("US", "Root", 365, KeyType::EcdsaP256).unwrap();
+        let (intermediate_der, intermediate_key) = CertificateBuilderConfig::new()
+            .subject(
+                DistinguishedName::new()
+                    .cn("Path-Length-Zero Intermediate")
+                    .country("US")
+                    .organization("Disposable"),
+            )
+            .validity_days(365)
+            .profile(CertProfile::SubCa { path_length: 0 })
+            .key_type(KeyType::EcdsaP256)
+            .build_signed_by(&root_der, &root_key)
+            .unwrap();
+        let (child_der, _) = CertificateBuilderConfig::new()
+            .subject(
+                DistinguishedName::new()
+                    .cn("Enrolled CSCA")
+                    .country("US")
+                    .organization("Disposable"),
+            )
+            .validity_days(365)
+            .profile(CertProfile::SubCa { path_length: 0 })
+            .key_type(KeyType::EcdsaP256)
+            .build_signed_by(&intermediate_der, &intermediate_key)
+            .unwrap();
+        let child = Certificate::from_der(&child_der).unwrap();
+        let child_jwk = jwk_for_spki(&child.tbs_certificate.subject_public_key_info);
+        let child_pem = child.to_pem(der::pem::LineEnding::LF).unwrap();
+        let intermediate_pem = Certificate::from_der(&intermediate_der)
+            .unwrap()
+            .to_pem(der::pem::LineEnding::LF)
+            .unwrap();
+        let root_pem = Certificate::from_der(&root_der)
+            .unwrap()
+            .to_pem(der::pem::LineEnding::LF)
+            .unwrap();
+        let chain = format!("{intermediate_pem}\n{root_pem}");
+        assert!(matches!(
+            prepare_dsc(
+                &subject,
+                &child_pem,
+                &chain,
+                &child_jwk,
+                &[4],
+                1,
+                SystemTime::now()
+            ),
+            Err(DscCertificateError::InvalidIssuer)
+        ));
+
+        // The same restriction applies when the enrolled CSCA is directly
+        // below a root with a zero path-length constraint.
+        let mut root = Certificate::from_der(&root_der).unwrap();
+        let constraints = BasicConstraints {
+            ca: true,
+            path_len_constraint: Some(0),
+        }
+        .to_extension(&root.tbs_certificate.subject, &[])
+        .unwrap();
+        let usage = KeyUsage(KeyUsages::KeyCertSign.into())
+            .to_extension(
+                &root.tbs_certificate.subject,
+                std::slice::from_ref(&constraints),
+            )
+            .unwrap();
+        root.tbs_certificate.extensions = Some(vec![constraints, usage]);
+        let now = SystemTime::now();
+        let end = now + Duration::from_secs(24 * 60 * 60);
+        assert!(valid_chain_parent(&root, now, end, 0).unwrap());
+        assert!(!valid_chain_parent(&root, now, end, 1).unwrap());
     }
 }
