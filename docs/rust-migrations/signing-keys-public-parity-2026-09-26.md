@@ -199,7 +199,11 @@ upstream transport, managed creation, and public-only inventory against
 disposable Redis and a mock Transit provider. The beta deployment gate remains.
 
 All 24 originally missing declared pairs now have local Rust handlers in the
-stacked review branches. This is not a merged or beta-accepted result. The
+stacked review branches. A data-driven route-layer test verifies that all 37
+Gateway-declared Signing Keys method/path pairs match Rust public routes and
+do not return method-not-allowed; it does not prove behavioral parity or
+authenticated runtime acceptance for every pair. This is not a merged or
+beta-accepted result. The
 other adapters still need authenticated combined Gateway-to-Rust runtime tests,
 protected CI, re-audit on main, and aggregate beta acceptance before any
 Python retirement or migration-complete claim. The 24-pair table above remains

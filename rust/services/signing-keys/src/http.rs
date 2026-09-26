@@ -6099,8 +6099,87 @@ async fn redoc() -> Html<&'static str> {
 #[cfg(test)]
 mod public_contract_tests {
     use super::*;
-    use axum::{body::Body, http::Request};
+    use axum::{
+        body::Body,
+        http::Request,
+        middleware::{self, Next},
+    };
     use tower::ServiceExt;
+
+    #[tokio::test]
+    async fn every_gateway_declared_signing_pair_matches_a_rust_public_route() {
+        async fn mark_matched_route(request: Request<Body>, next: Next) -> Response {
+            let mut response = next.run(request).await;
+            response.headers_mut().insert(
+                "x-rust-signing-route-match",
+                axum::http::HeaderValue::from_static("true"),
+            );
+            response
+        }
+
+        let gateway: Value =
+            serde_json::from_str(include_str!("../../../../contracts/gateway-routes.json"))
+                .unwrap();
+        let declared = gateway["routes"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter(|route| {
+                route["path"]
+                    .as_str()
+                    .is_some_and(|path| path.starts_with("/v1/signing-keys"))
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(declared.len(), 37, "review route additions explicitly");
+        let app = router_with_internal_api_key("test-only".into())
+            .route_layer(middleware::from_fn(mark_matched_route));
+        let unknown = app
+            .clone()
+            .oneshot(
+                Request::get("/v1/signing-keys/not/a/declared/path")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert!(unknown
+            .headers()
+            .get("x-rust-signing-route-match")
+            .is_none());
+        for route in declared {
+            let method = route["method"].as_str().unwrap();
+            let path = route["path"]
+                .as_str()
+                .unwrap()
+                .replace("{service_id}", "service-1")
+                .replace("{key_id}", "key-1");
+            let response = app
+                .clone()
+                .oneshot(
+                    Request::builder()
+                        .method(method)
+                        .uri(format!("{path}?organization_id=org-a"))
+                        .header("content-type", "application/json")
+                        .body(Body::from("{}"))
+                        .unwrap(),
+                )
+                .await
+                .unwrap();
+            assert_eq!(
+                response
+                    .headers()
+                    .get("x-rust-signing-route-match")
+                    .unwrap(),
+                "true",
+                "{method} {path} did not reach a Rust route"
+            );
+            assert_ne!(
+                response.status(),
+                StatusCode::METHOD_NOT_ALLOWED,
+                "{method} {path} lacks its declared method"
+            );
+        }
+    }
 
     #[test]
     fn managed_key_creation_behavior_is_frozen_before_public_port() {
