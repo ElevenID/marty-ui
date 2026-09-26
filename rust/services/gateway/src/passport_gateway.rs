@@ -2,7 +2,7 @@
 
 use std::fmt;
 
-use marty_passport_auth::PassportTenantKeyring;
+use marty_passport_auth::PassportCredentialLookup;
 use mmf_platform::{HttpMethod, TrustedIdentityContext};
 
 use crate::issuance_native::passport_required_permission;
@@ -46,7 +46,7 @@ pub enum PassportGatewayAuthError {
 /// Caller-provided organization hints are never used to select a key. They
 /// may only agree with the organization authorized by gateway middleware.
 pub fn passport_upstream_auth(
-    keyring: &PassportTenantKeyring,
+    keyring: &impl PassportCredentialLookup,
     identity: &TrustedIdentityContext,
     method: HttpMethod,
     path: &str,
@@ -87,6 +87,40 @@ pub fn passport_upstream_auth(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use marty_passport_auth::{PassportTenantCredentialSource, PassportTenantKeyring};
+
+    #[test]
+    fn internal_handoff_uses_only_authorized_organization_and_existing_service_token() {
+        let token = "s".repeat(32);
+        let source = PassportTenantCredentialSource::internal_service_token(&token).unwrap();
+        let authorized = authorized("org-a", "issuance:initiate");
+        let handoff = passport_upstream_auth(
+            &source,
+            &authorized,
+            HttpMethod::Post,
+            "/v1/passport/applications",
+            Some("org-a"),
+            Some("org-a"),
+            None,
+        )
+        .unwrap();
+        assert_eq!(handoff.organization_id(), "org-a");
+        assert_eq!(handoff.api_key(), token);
+        assert!(!format!("{handoff:?}").contains(&token));
+        assert_eq!(
+            passport_upstream_auth(
+                &source,
+                &authorized,
+                HttpMethod::Post,
+                "/v1/passport/applications",
+                Some("org-b"),
+                None,
+                None
+            )
+            .unwrap_err(),
+            PassportGatewayAuthError::OrganizationMismatch
+        );
+    }
 
     fn keyring() -> PassportTenantKeyring {
         PassportTenantKeyring::from_json(

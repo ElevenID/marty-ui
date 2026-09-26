@@ -26,6 +26,8 @@ use axum::{
 };
 use chrono::Utc;
 use futures_core::Stream;
+use marty_passport_auth::PassportTenantCredentialSource;
+#[cfg(test)]
 use marty_passport_auth::PassportTenantKeyring;
 use mmf_platform::{
     ContentTypeDecision, EntityTagDecision, EntityTagPolicy, GatewayProxy, GatewayRequest,
@@ -95,7 +97,7 @@ pub struct GatewayRuntimeState {
     pub signing_service_api_key: String,
     pub issuance_service_api_key: String,
     pub passport_native_gateway_enabled: bool,
-    pub passport_tenant_keys: Option<PassportTenantKeyring>,
+    pub passport_tenant_keys: Option<PassportTenantCredentialSource>,
     pub service_token: Option<String>,
     pub release_identity: ReleaseIdentity,
     pub maximum_body_bytes: usize,
@@ -227,7 +229,7 @@ impl GatewayRuntimeState {
     pub fn with_passport_native_gateway(
         mut self,
         enabled: bool,
-        tenant_keys: Option<PassportTenantKeyring>,
+        tenant_keys: Option<PassportTenantCredentialSource>,
     ) -> Result<Self, mmf_platform::PlatformError> {
         if enabled && tenant_keys.is_none() {
             return Err(mmf_platform::PlatformError::InvalidConfiguration(
@@ -5998,6 +6000,7 @@ mod tests {
                     r#"{"org-1":"native-passport-key-for-org-1-00000001","org-2":"native-passport-key-for-org-2-00000002"}"#,
                 )
                 .expect("test tenant keys")
+                .into()
             }),
         )
         .expect("passport gateway");

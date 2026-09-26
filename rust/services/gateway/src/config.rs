@@ -2,12 +2,12 @@
 
 use std::{
     collections::BTreeMap,
-    env, fs,
+    env, fmt, fs,
     net::{IpAddr, Ipv4Addr, SocketAddr},
     path::PathBuf,
 };
 
-use marty_passport_auth::PassportTenantKeyring;
+use marty_passport_auth::{PassportTenantCredentialSource, PassportTenantKeyring};
 use thiserror::Error;
 
 use crate::discovery::ReleaseIdentity;
@@ -94,7 +94,7 @@ const SERVICE_URLS: &[(&str, &str, &str)] = &[
 #[error("invalid gateway configuration: {0}")]
 pub struct GatewayConfigError(String);
 
-#[derive(Clone, Debug)]
+#[derive(Clone)]
 pub struct GatewayConfig {
     pub address: SocketAddr,
     pub production: bool,
@@ -108,7 +108,7 @@ pub struct GatewayConfig {
     pub signing_internal_api_key: String,
     pub issuance_api_key: String,
     pub passport_native_gateway_enabled: bool,
-    pub passport_tenant_keys: Option<PassportTenantKeyring>,
+    pub passport_tenant_keys: Option<PassportTenantCredentialSource>,
     pub redis_url: Option<String>,
     pub cors_origins: Vec<String>,
     pub issuer_base_url: String,
@@ -122,6 +122,55 @@ pub struct GatewayConfig {
     pub hosted_pilot_auto_purge_interval_seconds: u64,
     pub hosted_pilot_auto_purge_batch_size: usize,
     pub release_identity: ReleaseIdentity,
+}
+
+impl fmt::Debug for GatewayConfig {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("GatewayConfig")
+            .field("address", &self.address)
+            .field("production", &self.production)
+            .field("service_urls", &self.service_urls)
+            .field("auth_grpc_target", &self.auth_grpc_target)
+            .field("organization_grpc_target", &self.organization_grpc_target)
+            .field("event_stream_grpc_target", &self.event_stream_grpc_target)
+            .field("grpc_ca_certificate", &self.grpc_ca_certificate)
+            .field("grpc_insecure_allowed", &self.grpc_insecure_allowed)
+            .field(
+                "grpc_service_token_configured",
+                &self.grpc_service_token.is_some(),
+            )
+            .field("signing_internal_api_key_configured", &true)
+            .field("issuance_api_key_configured", &true)
+            .field(
+                "passport_native_gateway_enabled",
+                &self.passport_native_gateway_enabled,
+            )
+            .field("passport_tenant_keys", &self.passport_tenant_keys)
+            .field("redis_url_configured", &self.redis_url.is_some())
+            .field("cors_origins", &self.cors_origins)
+            .field("issuer_base_url", &self.issuer_base_url)
+            .field("public_api_url", &self.public_api_url)
+            .field("public_domain", &self.public_domain)
+            .field("default_organization_id", &self.default_organization_id)
+            .field("required_ready_services", &self.required_ready_services)
+            .field("rate_limit_rpm", &self.rate_limit_rpm)
+            .field("maximum_response_bytes", &self.maximum_response_bytes)
+            .field(
+                "hosted_pilot_auto_purge_enabled",
+                &self.hosted_pilot_auto_purge_enabled,
+            )
+            .field(
+                "hosted_pilot_auto_purge_interval_seconds",
+                &self.hosted_pilot_auto_purge_interval_seconds,
+            )
+            .field(
+                "hosted_pilot_auto_purge_batch_size",
+                &self.hosted_pilot_auto_purge_batch_size,
+            )
+            .field("release_identity", &self.release_identity)
+            .finish()
+    }
 }
 
 impl GatewayConfig {
@@ -170,12 +219,37 @@ impl GatewayConfig {
         if production {
             validate_production_secret("ISSUANCE_API_KEY", Some(&issuance_api_key), 16)?;
         }
+        let passport_internal_service_auth_enabled =
+            boolean(values, "PASSPORT_INTERNAL_SERVICE_AUTH_ENABLED", false)?;
+        if passport_internal_service_auth_enabled
+            && (value(values, "PASSPORT_TENANT_API_KEYS").is_some()
+                || value(values, "PASSPORT_TENANT_API_KEYS_FILE").is_some())
+        {
+            return Err(error(
+                "internal passport service authentication cannot be combined with a tenant keyring",
+            ));
+        }
         let passport_tenant_keys = secret(values, "PASSPORT_TENANT_API_KEYS")?
             .map(|value| {
                 PassportTenantKeyring::from_json(&value)
                     .map_err(|_| error("PASSPORT_TENANT_API_KEYS must be a valid tenant keyring"))
             })
-            .transpose()?;
+            .transpose()?
+            .map(Into::into);
+        let passport_tenant_keys = if passport_internal_service_auth_enabled {
+            Some(
+                PassportTenantCredentialSource::internal_service_token(
+                    grpc_service_token.as_deref().ok_or_else(|| {
+                        error("GRPC_SERVICE_TOKEN is required for internal passport authentication")
+                    })?,
+                )
+                .map_err(|_| {
+                    error("GRPC_SERVICE_TOKEN is invalid for internal passport authentication")
+                })?,
+            )
+        } else {
+            passport_tenant_keys
+        };
         let passport_native_gateway_enabled =
             boolean(values, "PASSPORT_NATIVE_GATEWAY_ENABLED", false)?;
         if passport_native_gateway_enabled && passport_tenant_keys.is_none() {
@@ -525,6 +599,40 @@ mod tests {
             "PASSPORT_TENANT_API_KEYS".into(),
             format!(r#"{{"org-a":"{key_a}","org-b":"{key_a}"}}"#),
         );
+        assert!(GatewayConfig::from_values(&values).is_err());
+    }
+
+    #[test]
+    fn internal_passport_auth_uses_existing_service_token_without_loading_a_keyring() {
+        let token = "g".repeat(32);
+        let mut values = BTreeMap::from([
+            ("PASSPORT_NATIVE_GATEWAY_ENABLED".into(), "true".into()),
+            (
+                "PASSPORT_INTERNAL_SERVICE_AUTH_ENABLED".into(),
+                "true".into(),
+            ),
+            ("GRPC_SERVICE_TOKEN".into(), token.clone()),
+        ]);
+        let config = GatewayConfig::from_values(&values).unwrap();
+        assert_eq!(
+            config
+                .passport_tenant_keys
+                .as_ref()
+                .unwrap()
+                .key_for("org-a"),
+            Some(token.as_str())
+        );
+        assert!(!format!("{config:?}").contains(&token));
+        values.insert(
+            "PASSPORT_TENANT_API_KEYS_FILE".into(),
+            "nonexistent-keyring".into(),
+        );
+        assert!(GatewayConfig::from_values(&values)
+            .unwrap_err()
+            .to_string()
+            .contains("cannot be combined"));
+        values.remove("PASSPORT_TENANT_API_KEYS_FILE");
+        values.remove("GRPC_SERVICE_TOKEN");
         assert!(GatewayConfig::from_values(&values).is_err());
     }
 

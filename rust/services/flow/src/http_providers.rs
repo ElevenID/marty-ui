@@ -2,6 +2,8 @@ use std::{collections::BTreeMap, time::Duration};
 
 use async_trait::async_trait;
 use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine};
+use marty_passport_auth::PassportTenantCredentialSource;
+#[cfg(test)]
 use marty_passport_auth::PassportTenantKeyring;
 use reqwest::{Client, Method, StatusCode};
 use serde::de::DeserializeOwned;
@@ -497,7 +499,7 @@ impl FlowKeyEnvelopeProvider for HttpSigningProvider {
 #[derive(Clone)]
 pub struct HttpPhysicalDocumentProvider {
     http: BoundedHttpClient,
-    tenant_keys: Option<PassportTenantKeyring>,
+    tenant_keys: Option<PassportTenantCredentialSource>,
 }
 
 impl HttpPhysicalDocumentProvider {
@@ -515,7 +517,7 @@ impl HttpPhysicalDocumentProvider {
 
     pub fn new_tenant_bound(
         base_url: &str,
-        tenant_keys: PassportTenantKeyring,
+        tenant_keys: impl Into<PassportTenantCredentialSource>,
     ) -> Result<Self, FlowProviderError> {
         Ok(Self {
             http: BoundedHttpClient::build(
@@ -525,7 +527,7 @@ impl HttpPhysicalDocumentProvider {
                 "physical_document",
                 Duration::from_secs(30),
             )?,
-            tenant_keys: Some(tenant_keys),
+            tenant_keys: Some(tenant_keys.into()),
         })
     }
 
@@ -1168,6 +1170,36 @@ mod tests {
         second_request.organization_id = "unknown".into();
         assert!(matches!(
             provider.execute(&second_request).await,
+            Err(FlowProviderError::Rejected { .. })
+        ));
+        assert!(captured.lock().unwrap().is_none());
+        server.abort();
+    }
+
+    #[tokio::test]
+    async fn physical_document_internal_handoff_preserves_organization_in_header_and_body() {
+        let captured: CapturedRequest = Arc::new(Mutex::new(None));
+        let router = Router::new()
+            .route("/v1/passport/applications", post(physical_capture))
+            .with_state(captured.clone());
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let server = tokio::spawn(async move { axum::serve(listener, router).await.unwrap() });
+        let token = "synthetic-internal-passport-token-00000001";
+        let source = PassportTenantCredentialSource::internal_service_token(token).unwrap();
+        let provider =
+            HttpPhysicalDocumentProvider::new_tenant_bound(&format!("http://{address}"), source)
+                .unwrap();
+        let mut operation = request(PhysicalDocumentOperation::Initialize);
+        operation.organization_id = "org-2".into();
+        provider.execute(&operation).await.unwrap();
+        let (headers, _, body) = captured.lock().unwrap().take().unwrap();
+        assert_eq!(headers.get("x-api-key").unwrap(), token);
+        assert_eq!(headers.get("x-organization-id").unwrap(), "org-2");
+        assert_eq!(body["organization_id"], "org-2");
+        operation.organization_id = "bad org".into();
+        assert!(matches!(
+            provider.execute(&operation).await,
             Err(FlowProviderError::Rejected { .. })
         ));
         assert!(captured.lock().unwrap().is_none());

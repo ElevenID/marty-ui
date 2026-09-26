@@ -11,7 +11,8 @@ use axum::{
 };
 use chrono::Utc;
 use marty_passport_auth::{
-    PassportTenantAuthError, PassportTenantKeyring, PassportTenantPrincipal,
+    PassportTenantAuthError, PassportTenantCredentialSource, PassportTenantKeyring,
+    PassportTenantPrincipal,
 };
 use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
@@ -42,7 +43,7 @@ use crate::{
 
 #[derive(Clone)]
 pub struct PassportHttpService {
-    keyring: PassportTenantKeyring,
+    keyring: PassportTenantCredentialSource,
     repository: PostgresPassportRepository,
     cipher: ArtifactAvailability,
     signer: Option<PassportSigner>,
@@ -145,10 +146,21 @@ impl PassportHttpService {
         if !native.enabled {
             return Ok(None);
         }
-        let keyring = config
-            .passport_tenant_keys
-            .clone()
-            .ok_or(PassportStartupError::Missing("PASSPORT_TENANT_API_KEYS"))?;
+        let keyring = if native.internal_service_auth_enabled {
+            PassportTenantCredentialSource::internal_service_token(
+                config
+                    .internal_service_token
+                    .as_deref()
+                    .ok_or(PassportStartupError::Missing("GRPC_SERVICE_TOKEN"))?,
+            )
+            .map_err(|_| PassportStartupError::Missing("GRPC_SERVICE_TOKEN"))?
+        } else {
+            config
+                .passport_tenant_keys
+                .clone()
+                .ok_or(PassportStartupError::Missing("PASSPORT_TENANT_API_KEYS"))?
+                .into()
+        };
         let cipher = if native.kms_artifacts_enabled {
             let api_key = config.signing_keys_internal_api_key.as_deref().ok_or(
                 PassportStartupError::Missing("SIGNING_KEYS_INTERNAL_API_KEY"),
@@ -243,7 +255,7 @@ impl PassportHttpService {
         bureau: Option<BureauClient>,
     ) -> Self {
         Self::with_artifact_availability(
-            keyring,
+            keyring.into(),
             repository,
             cipher.map_or(ArtifactAvailability::Missing, |cipher| {
                 ArtifactAvailability::Ready(ArtifactCryptor::Legacy(cipher))
@@ -254,7 +266,7 @@ impl PassportHttpService {
     }
 
     fn with_artifact_availability(
-        keyring: PassportTenantKeyring,
+        keyring: PassportTenantCredentialSource,
         repository: PostgresPassportRepository,
         cipher: ArtifactAvailability,
         signer: Option<PassportSigner>,
@@ -896,6 +908,35 @@ mod tests {
             None,
             None,
         ))
+    }
+
+    #[tokio::test]
+    async fn internal_service_token_authenticates_only_the_presented_organization_context() {
+        let pool = PgPoolOptions::new()
+            .connect_lazy("postgresql://unused:unused@127.0.0.1:5432/unused")
+            .unwrap();
+        let token = "synthetic-internal-passport-token-00000001";
+        let service = PassportHttpService::with_artifact_availability(
+            PassportTenantCredentialSource::internal_service_token(token).unwrap(),
+            PostgresPassportRepository::new(pool),
+            ArtifactAvailability::Missing,
+            None,
+            None,
+        );
+        let mut headers = HeaderMap::new();
+        headers.insert("x-organization-id", "org-a".parse().unwrap());
+        headers.insert("x-api-key", token.parse().unwrap());
+        assert_eq!(
+            service.authenticate(&headers).unwrap().organization_id(),
+            "org-a"
+        );
+        headers.insert("x-api-key", "wrong-token".parse().unwrap());
+        assert!(service.authenticate(&headers).is_err());
+        headers.remove("x-api-key");
+        assert!(service.authenticate(&headers).is_err());
+        headers.insert("x-api-key", token.parse().unwrap());
+        headers.remove("x-organization-id");
+        assert!(service.authenticate(&headers).is_err());
     }
 
     fn authenticated_application_request() -> Request<Body> {
