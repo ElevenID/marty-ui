@@ -262,7 +262,13 @@ pub fn prepare_dsc(
     if subject.public_key == issuer_tbs.subject_public_key_info {
         return Err(DscCertificateError::InvalidIssuer);
     }
-    verify_issuer_chain(&issuer, &issuer_der, issuer_chain_pem)?;
+    verify_issuer_chain(
+        &issuer,
+        &issuer_der,
+        issuer_chain_pem,
+        not_before,
+        not_after,
+    )?;
     let constraints = issuer_tbs
         .get::<BasicConstraints>()
         .map_err(|_| DscCertificateError::InvalidIssuer)?;
@@ -337,6 +343,8 @@ fn verify_issuer_chain(
     leaf: &Certificate,
     leaf_der: &[u8],
     chain_pem: &str,
+    not_before: SystemTime,
+    not_after: SystemTime,
 ) -> Result<(), DscCertificateError> {
     if chain_pem.contains("PRIVATE KEY-----") {
         return Err(DscCertificateError::InvalidIssuer);
@@ -356,7 +364,7 @@ fn verify_issuer_chain(
             .to_der()
             .map_err(|_| DscCertificateError::InvalidIssuer)?;
         if child.tbs_certificate.issuer != parent.tbs_certificate.subject
-            || !chain_parent_is_ca(&parent)?
+            || !valid_chain_parent(&parent, not_before, not_after)?
             || !verify_certificate_signature(&child_der, &parent_der)
                 .map_err(|_| DscCertificateError::InvalidIssuer)?
         {
@@ -377,15 +385,30 @@ fn verify_issuer_chain(
     Ok(())
 }
 
-fn chain_parent_is_ca(issuer: &Certificate) -> Result<bool, DscCertificateError> {
+fn valid_chain_parent(
+    issuer: &Certificate,
+    not_before: SystemTime,
+    not_after: SystemTime,
+) -> Result<bool, DscCertificateError> {
     let tbs = &issuer.tbs_certificate;
     let constraints = tbs
         .get::<BasicConstraints>()
         .map_err(|_| DscCertificateError::InvalidIssuer)?;
-    Ok(matches!(
-        constraints,
-        Some((_, BasicConstraints { ca: true, .. }))
-    ))
+    let usage = tbs
+        .get::<KeyUsage>()
+        .map_err(|_| DscCertificateError::InvalidIssuer)?;
+    let start = not_before
+        .duration_since(SystemTime::UNIX_EPOCH)
+        .map_err(|_| DscCertificateError::InvalidIssuer)?;
+    let end = not_after
+        .duration_since(SystemTime::UNIX_EPOCH)
+        .map_err(|_| DscCertificateError::InvalidIssuer)?;
+    Ok(
+        matches!(constraints, Some((true, BasicConstraints { ca: true, .. })))
+            && usage.is_some_and(|(critical, usage)| critical && usage.key_cert_sign())
+            && start >= tbs.validity.not_before.to_unix_duration()
+            && end <= tbs.validity.not_after.to_unix_duration(),
+    )
 }
 
 #[cfg(test)]
@@ -556,5 +579,97 @@ mod tests {
             prepare_dsc(&subject, &child_pem, "", &child_jwk, &[2], 29, now),
             Err(DscCertificateError::InvalidIssuer)
         ));
+    }
+
+    #[test]
+    fn rejects_expired_intermediate_even_when_enrolled_csca_is_still_valid() {
+        let (subject, _, _) = fixture();
+        let (root_der, root_key) =
+            create_csca_certificate("US", "Root", 365, KeyType::EcdsaP256).unwrap();
+        let (intermediate_der, intermediate_key) = CertificateBuilderConfig::new()
+            .subject(
+                DistinguishedName::new()
+                    .cn("Short Intermediate")
+                    .country("US")
+                    .organization("Disposable"),
+            )
+            .validity_days(1)
+            .profile(CertProfile::SubCa { path_length: 1 })
+            .key_type(KeyType::EcdsaP256)
+            .build_signed_by(&root_der, &root_key)
+            .unwrap();
+        let (child_der, _) = CertificateBuilderConfig::new()
+            .subject(
+                DistinguishedName::new()
+                    .cn("Long-Lived CSCA")
+                    .country("US")
+                    .organization("Disposable"),
+            )
+            .validity_days(365)
+            .profile(CertProfile::SubCa { path_length: 0 })
+            .key_type(KeyType::EcdsaP256)
+            .build_signed_by(&intermediate_der, &intermediate_key)
+            .unwrap();
+        let child = Certificate::from_der(&child_der).unwrap();
+        let child_jwk = jwk_for_spki(&child.tbs_certificate.subject_public_key_info);
+        let child_pem = child.to_pem(der::pem::LineEnding::LF).unwrap();
+        let intermediate_pem = Certificate::from_der(&intermediate_der)
+            .unwrap()
+            .to_pem(der::pem::LineEnding::LF)
+            .unwrap();
+        let root_pem = Certificate::from_der(&root_der)
+            .unwrap()
+            .to_pem(der::pem::LineEnding::LF)
+            .unwrap();
+        let chain = format!("{intermediate_pem}\n{root_pem}");
+        let after_intermediate_expiry = SystemTime::now() + Duration::from_secs(2 * 24 * 60 * 60);
+        assert!(matches!(
+            prepare_dsc(
+                &subject,
+                &child_pem,
+                &chain,
+                &child_jwk,
+                &[3],
+                1,
+                after_intermediate_expiry,
+            ),
+            Err(DscCertificateError::InvalidIssuer)
+        ));
+    }
+
+    #[test]
+    fn rejects_intermediate_without_critical_ca_signing_usage() {
+        let (root_der, root_key) =
+            create_csca_certificate("US", "Root", 365, KeyType::EcdsaP256).unwrap();
+        let (intermediate_der, _) = CertificateBuilderConfig::new()
+            .subject(
+                DistinguishedName::new()
+                    .cn("Intermediate")
+                    .country("US")
+                    .organization("Disposable"),
+            )
+            .validity_days(365)
+            .profile(CertProfile::SubCa { path_length: 1 })
+            .key_type(KeyType::EcdsaP256)
+            .build_signed_by(&root_der, &root_key)
+            .unwrap();
+        let mut intermediate = Certificate::from_der(&intermediate_der).unwrap();
+        let now = SystemTime::now();
+        let end = now + Duration::from_secs(24 * 60 * 60);
+        assert!(valid_chain_parent(&intermediate, now, end).unwrap());
+        let constraints = BasicConstraints {
+            ca: true,
+            path_len_constraint: Some(0),
+        }
+        .to_extension(&intermediate.tbs_certificate.subject, &[])
+        .unwrap();
+        let wrong_usage = KeyUsage(KeyUsages::DigitalSignature.into())
+            .to_extension(
+                &intermediate.tbs_certificate.subject,
+                std::slice::from_ref(&constraints),
+            )
+            .unwrap();
+        intermediate.tbs_certificate.extensions = Some(vec![constraints, wrong_usage]);
+        assert!(!valid_chain_parent(&intermediate, now, end).unwrap());
     }
 }
