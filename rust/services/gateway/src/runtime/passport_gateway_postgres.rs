@@ -82,11 +82,12 @@ async fn native_passport_gateway_signed_webhook_updates_durable_tenant_job() {
     let Ok(database_url) = std::env::var("MARTY_PASSPORT_GATEWAY_TEST_URL") else {
         return;
     };
-    let database_name = url::Url::parse(&database_url)
-        .expect("gateway passport test URL must parse")
-        .path()
-        .trim_start_matches('/')
-        .to_owned();
+    let database = url::Url::parse(&database_url).expect("gateway passport test URL must parse");
+    assert!(
+        matches!(database.host_str(), Some("127.0.0.1" | "localhost")),
+        "gateway passport contract requires a loopback PostgreSQL host"
+    );
+    let database_name = database.path().trim_start_matches('/');
     assert_eq!(
         database_name, "marty_passport_gateway_test",
         "gateway passport contract requires its dedicated disposable database"
@@ -201,6 +202,20 @@ async fn native_passport_gateway_signed_webhook_updates_durable_tenant_job() {
         send_webhook(&gateway, altered, &signed).await,
         StatusCode::UNAUTHORIZED
     );
+    let rejected_owner = repository
+        .get(&org_1, "application-org-1")
+        .await
+        .unwrap()
+        .unwrap();
+    let rejected_other = repository
+        .get(&org_2, "application-org-2")
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(rejected_owner.status, "IN_PRODUCTION");
+    assert_eq!(rejected_owner.tracking_number.as_deref(), Some("tracking-org-1"));
+    assert_eq!(rejected_other.status, "SUBMITTED");
+    assert_eq!(rejected_other.tracking_number, None);
     let shipped =
         br#"{"organization_id":"org-1","bureau_job_id":"bureau-shared","status":"SHIPPED"}"#;
     assert_eq!(
