@@ -232,14 +232,72 @@ function Assert-NoInFlightPassportJobs {
     if ($LASTEXITCODE -ne 0 -or $exists.Count -ne 1 -or $exists[0] -notin @("t", "f")) {
         throw "Could not verify the beta passport job table"
     }
-    if ($exists[0] -eq "f") { return }
-    $pending = @(& docker exec $postgres psql -U postgres -d marty -At -v ON_ERROR_STOP=1 `
-        -c "SELECT count(*) FROM issuance_service.physical_document_jobs WHERE status NOT IN ('ACTIVE', 'FAILED', 'CANCELLED')")
-    if ($LASTEXITCODE -ne 0 -or $pending.Count -ne 1 -or $pending[0] -notmatch '^[0-9]+$') {
-        throw "Could not count in-flight passport jobs"
+    if ($exists[0] -eq "t") {
+        $pending = @(& docker exec $postgres psql -U postgres -d marty -At -v ON_ERROR_STOP=1 `
+            -c "SELECT count(*) FROM issuance_service.physical_document_jobs WHERE status NOT IN ('ACTIVE', 'FAILED', 'CANCELLED')")
+        if ($LASTEXITCODE -ne 0 -or $pending.Count -ne 1 -or $pending[0] -notmatch '^[0-9]+$') {
+            throw "Could not count in-flight passport jobs"
+        }
+        if ([int64]$pending[0] -ne 0) {
+            throw "In-flight passport jobs must drain before enabling KMS callback verification"
+        }
+
+        # A terminal Python Fernet row can still be selected by a later
+        # request. Native beta uses a Transit manifest and has no Fernet key.
+        # Parse only within PostgreSQL and return a count, never ciphertext.
+        $legacyArtifactSql = @'
+WITH artifacts AS (
+    SELECT CASE WHEN left(secure_artifact_ciphertext, 1) = '{'
+        THEN secure_artifact_ciphertext::jsonb ELSE NULL END AS manifest,
+        CASE WHEN left(secure_artifact_ciphertext, 1) = '{'
+        THEN secure_artifact_ciphertext::json ELSE NULL END AS raw_manifest
+    FROM issuance_service.physical_document_jobs
+)
+SELECT count(*) FROM artifacts WHERE CASE
+    WHEN manifest IS NULL THEN true
+    WHEN jsonb_typeof(manifest) IS DISTINCT FROM 'object' THEN true
+    WHEN (SELECT count(*) FROM json_each(raw_manifest)) <> 2 THEN true
+    WHEN manifest->>'schema' IS DISTINCT FROM 'marty.passport-artifact-manifest/v1'
+        OR jsonb_typeof(manifest->'chunks') IS DISTINCT FROM 'array'
+        OR manifest - 'schema' - 'chunks' <> '{}'::jsonb THEN true
+    WHEN jsonb_array_length(manifest->'chunks') NOT BETWEEN 1 AND 4096 THEN true
+    WHEN EXISTS (
+        SELECT 1 FROM jsonb_array_elements(manifest->'chunks') AS chunk(value)
+        WHERE jsonb_typeof(chunk.value) <> 'string'
+            OR left(chunk.value #>> '{}', 7) <> 'vault:v'
+            OR length(chunk.value #>> '{}') > 2000000
+    ) THEN true
+    ELSE false
+END
+'@
+        $legacyArtifacts = @(& docker exec $postgres psql -U postgres -d marty -At -v ON_ERROR_STOP=1 -c $legacyArtifactSql 2>$null)
+        if ($LASTEXITCODE -ne 0 -or $legacyArtifacts.Count -ne 1 -or $legacyArtifacts[0] -notmatch '^[0-9]+$') {
+            throw "Could not verify stored passport artifact format"
+        }
+        if ([int64]$legacyArtifacts[0] -ne 0) {
+            throw "Legacy or unknown passport artifacts block KMS-only cutover"
+        }
     }
-    if ([int64]$pending[0] -ne 0) {
-        throw "In-flight passport jobs must drain before enabling KMS callback verification"
+
+    $flowTables = @(& docker exec $postgres psql -U postgres -d marty -At -v ON_ERROR_STOP=1 `
+        -c "SELECT to_regclass('flow_service.flow_instances') IS NOT NULL AND to_regclass('flow_service.flow_definitions') IS NOT NULL")
+    if ($LASTEXITCODE -ne 0 -or $flowTables.Count -ne 1 -or $flowTables[0] -ne "t") {
+        throw "Could not verify beta physical-document Flow storage"
+    }
+    $activeFlowsSql = @'
+SELECT count(*) FROM flow_service.flow_instances AS instance
+LEFT JOIN flow_service.flow_definitions AS definition ON definition.id = instance.flow_definition_id
+WHERE (definition.id IS NULL
+    OR lower(definition.flow_type) = 'physical_document_issuance'
+    OR instance.context::jsonb ? 'physical_document_job')
+    AND lower(instance.status) NOT IN ('completed', 'failed', 'cancelled', 'expired')
+'@
+    $activeFlows = @(& docker exec $postgres psql -U postgres -d marty -At -v ON_ERROR_STOP=1 -c $activeFlowsSql)
+    if ($LASTEXITCODE -ne 0 -or $activeFlows.Count -ne 1 -or $activeFlows[0] -notmatch '^[0-9]+$') {
+        throw "Could not count active physical-document Flows"
+    }
+    if ([int64]$activeFlows[0] -ne 0) {
+        throw "Active physical-document Flows must drain before KMS-only cutover"
     }
 }
 
