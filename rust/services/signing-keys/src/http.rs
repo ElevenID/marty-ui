@@ -33,7 +33,7 @@ use crate::profiles::{
 use crate::registry::{
     self, BindProfileRequest, NormalizeRegistryRequest, NormalizeRegistryResponse,
     NormalizeServiceRequest, NormalizeServiceResponse, RegistryStore, ResolveRequest,
-    ResolveResponse, SaveRegistryRequest,
+    ResolveResponse, RotationLease, SaveRegistryRequest,
 };
 use crate::validation::{self, ValidationRequest};
 use axum::{
@@ -1063,6 +1063,10 @@ async fn save_public_config(
     }
     match store.save(&scope.organization_id, &body).await {
         Ok(registry) => Json(public_config_document(&state, registry)).into_response(),
+        Err(registry::RegistryError::Conflict) => public_error(
+            StatusCode::CONFLICT,
+            "Signing registry update is already in progress.",
+        ),
         Err(error) => public_error(StatusCode::UNPROCESSABLE_ENTITY, &error.to_string()),
     }
 }
@@ -1872,7 +1876,7 @@ async fn rotate_public_service_key(
         }};
     }
     let registry_timeout = std::time::Duration::from_secs(15);
-    let mut registry =
+    let registry =
         match tokio::time::timeout(registry_timeout, store.load(&scope.organization_id)).await {
             Ok(Ok(registry)) => registry,
             _ => {
@@ -1908,7 +1912,7 @@ async fn rotate_public_service_key(
     }
     let now = chrono::Utc::now();
     let rotated_at = now.to_rfc3339();
-    let mut rotation_state = service
+    let rotation_state = service
         .get("rotation_state")
         .filter(|state| state.is_object())
         .cloned()
@@ -1946,70 +1950,52 @@ async fn rotate_public_service_key(
             rotation_state
         ));
     };
-    let provider_rotation = match kms::rotate_openbao(ProviderRequest {
-        service_config: service.clone(),
-    })
-    .await
+    if rotation_state
+        .get("reconcile_required")
+        .is_some_and(|value| !value.is_null())
     {
-        Ok(result) => result,
-        Err(_) => finish_with_lease!(unrotated(
-            "Transit provider rotation failed.",
-            rotation_state
-        )),
-    };
-
-    let previous_version = json!({
-        "key_reference": key_reference,
-        "retire_after": (now + chrono::Duration::days(overlap_days)).to_rfc3339(),
-        "recorded_at": rotated_at,
-    });
-    let previous = rotation_state
-        .get_mut("previous_versions")
-        .and_then(Value::as_array_mut);
-    if let Some(previous) = previous {
-        previous.push(previous_version);
-    } else {
-        rotation_state["previous_versions"] = json!([previous_version]);
+        finish_with_lease!(public_error(
+            StatusCode::CONFLICT,
+            "KMS rotation requires reconciliation before another attempt.",
+        ));
     }
-    rotation_state["last_rotated_at"] = json!(rotated_at);
-    rotation_state["activate_at"] = json!(body.activate_at.unwrap_or_else(|| rotated_at.clone()));
-    rotation_state["overlap_days"] = json!(overlap_days);
-    rotation_state["provider_rotation"] = provider_rotation;
-    let Some(services) = registry.get_mut("services").and_then(Value::as_array_mut) else {
-        finish_with_lease!(public_error(
-            StatusCode::BAD_GATEWAY,
-            "Signing registry is malformed."
-        ));
-    };
-    let Some(recorded) = services
-        .iter_mut()
-        .find(|recorded| recorded.get("id").and_then(Value::as_str) == Some(&service_id))
-    else {
-        finish_with_lease!(public_error(
-            StatusCode::BAD_GATEWAY,
-            "Signing registry is malformed."
-        ));
-    };
-    recorded["rotation_state"] = rotation_state.clone();
-    recorded["rotation_policy"]["overlap_days"] = json!(overlap_days);
-    recorded["rotation_policy"]["auto_publish"] = json!(body.publish_updates.unwrap_or(true));
-    recorded["updated_at"] = json!(rotated_at);
-    if !matches!(
-        tokio::time::timeout(
-            registry_timeout,
-            store.save(&scope.organization_id, &registry)
+    let publish_updates = body.publish_updates.unwrap_or(true);
+    let activate_at = body.activate_at.unwrap_or_else(|| rotated_at.clone());
+    let task_store = store.clone();
+    let task_organization_id = scope.organization_id.clone();
+    let task_service_id = service_id.clone();
+    let key_reference = key_reference.to_owned();
+    let completed = tokio::spawn(async move {
+        rotate_and_record_public_service(
+            task_store,
+            lease,
+            task_organization_id,
+            task_service_id,
+            registry,
+            service,
+            rotation_state,
+            key_reference,
+            now,
+            rotated_at,
+            overlap_days,
+            activate_at,
+            publish_updates,
         )
-        .await,
-        Ok(Ok(_))
-    ) {
-        finish_with_lease!(public_error(
-            StatusCode::SERVICE_UNAVAILABLE,
-            "The KMS key rotated, but its registry state could not be stored; reconcile before retrying.",
-        ));
-    }
-    let _ = tokio::time::timeout(std::time::Duration::from_secs(5), lease.release()).await;
+        .await
+    })
+    .await;
+    let (rotation_state, rotated_at) = match completed {
+        Ok(Ok(completed)) => completed,
+        Ok(Err(response)) => return response,
+        Err(_) => {
+            return public_error(
+                StatusCode::SERVICE_UNAVAILABLE,
+                "KMS rotation outcome is uncertain; reconcile before retrying.",
+            )
+        }
+    };
     let mut publication = json!({"jwks": false, "did": false});
-    if body.publish_updates.unwrap_or(true) {
+    if publish_updates {
         publication["jwks"] = json!(publish_public_service_jwks(
             State(state.clone()),
             Path(service_id.clone()),
@@ -2042,6 +2028,147 @@ async fn rotate_public_service_key(
         "note": "Provider rotation completed; publication may require renewed certificate material."
     }))
     .into_response()
+}
+
+fn registered_service_mut<'a>(registry: &'a mut Value, service_id: &str) -> Option<&'a mut Value> {
+    registry
+        .get_mut("services")
+        .and_then(Value::as_array_mut)
+        .and_then(|services| {
+            services
+                .iter_mut()
+                .find(|service| service.get("id").and_then(Value::as_str) == Some(service_id))
+        })
+}
+
+#[allow(clippy::too_many_arguments)]
+async fn rotate_and_record_public_service(
+    store: RegistryStore,
+    lease: RotationLease,
+    organization_id: String,
+    service_id: String,
+    mut registry: Value,
+    service: Value,
+    mut rotation_state: Value,
+    key_reference: String,
+    now: chrono::DateTime<chrono::Utc>,
+    rotated_at: String,
+    overlap_days: i64,
+    activate_at: String,
+    publish_updates: bool,
+) -> Result<(Value, String), Response> {
+    let registry_timeout = std::time::Duration::from_secs(15);
+    let outcome = async {
+        let prior_state = rotation_state.clone();
+        rotation_state["reconcile_required"] = json!({
+            "operation_id": uuid::Uuid::new_v4().to_string(),
+            "started_at": rotated_at,
+            "key_reference": key_reference,
+        });
+        let recorded = registered_service_mut(&mut registry, &service_id).ok_or_else(|| {
+            public_error(StatusCode::BAD_GATEWAY, "Signing registry is malformed.")
+        })?;
+        recorded["rotation_state"] = rotation_state.clone();
+        if !matches!(
+            tokio::time::timeout(
+                registry_timeout,
+                store.save_with_rotation_lease(&organization_id, &registry, &lease)
+            )
+            .await,
+            Ok(Ok(_))
+        ) {
+            return Err(public_error(
+                StatusCode::SERVICE_UNAVAILABLE,
+                "Signing registry could not record the pending rotation; KMS was not called.",
+            ));
+        }
+        let provider_rotation = match kms::rotate_openbao(ProviderRequest {
+            service_config: service,
+        })
+        .await
+        {
+            Ok(result) => result,
+            Err(error) => {
+                let definitely_unrotated = matches!(
+                    error,
+                    kms::KmsError::InvalidConfig(_)
+                        | kms::KmsError::UnsupportedProvider(_)
+                        | kms::KmsError::ProviderStatus {
+                            status: StatusCode::UNAUTHORIZED | StatusCode::FORBIDDEN,
+                            ..
+                        }
+                );
+                if definitely_unrotated {
+                    if let Some(recorded) = registered_service_mut(&mut registry, &service_id) {
+                        recorded["rotation_state"] = prior_state.clone();
+                    }
+                    if matches!(
+                        tokio::time::timeout(
+                            registry_timeout,
+                            store.save_with_rotation_lease(&organization_id, &registry, &lease)
+                        )
+                        .await,
+                        Ok(Ok(_))
+                    ) {
+                        return Err(Json(json!({
+                            "ok": false, "service_id": service_id,
+                            "rotation_state": {"provider_rotation": {"ok": false, "error": "Transit provider rotation failed."}},
+                            "publication": {"jwks": false, "did": false},
+                            "rotated_at": null,
+                            "note": "Provider rotation did not complete; no rotation state was stored."
+                        }))
+                        .into_response());
+                    }
+                }
+                return Err(public_error(
+                    StatusCode::SERVICE_UNAVAILABLE,
+                    "KMS rotation outcome requires reconciliation before retrying.",
+                ));
+            }
+        };
+        rotation_state = prior_state;
+        let previous_version = json!({
+            "key_reference": key_reference,
+            "retire_after": (now + chrono::Duration::days(overlap_days)).to_rfc3339(),
+            "recorded_at": rotated_at,
+        });
+        if let Some(previous) = rotation_state
+            .get_mut("previous_versions")
+            .and_then(Value::as_array_mut)
+        {
+            previous.push(previous_version);
+        } else {
+            rotation_state["previous_versions"] = json!([previous_version]);
+        }
+        rotation_state["last_rotated_at"] = json!(rotated_at);
+        rotation_state["activate_at"] = json!(activate_at);
+        rotation_state["overlap_days"] = json!(overlap_days);
+        rotation_state["provider_rotation"] = provider_rotation;
+        let recorded = registered_service_mut(&mut registry, &service_id).ok_or_else(|| {
+            public_error(StatusCode::BAD_GATEWAY, "Signing registry is malformed.")
+        })?;
+        recorded["rotation_state"] = rotation_state.clone();
+        recorded["rotation_policy"]["overlap_days"] = json!(overlap_days);
+        recorded["rotation_policy"]["auto_publish"] = json!(publish_updates);
+        recorded["updated_at"] = json!(rotated_at);
+        if !matches!(
+            tokio::time::timeout(
+                registry_timeout,
+                store.save_with_rotation_lease(&organization_id, &registry, &lease)
+            )
+            .await,
+            Ok(Ok(_))
+        ) {
+            return Err(public_error(
+                StatusCode::SERVICE_UNAVAILABLE,
+                "The KMS key rotated, but its registry state could not be stored; reconcile before retrying.",
+            ));
+        }
+        Ok((rotation_state, rotated_at))
+    }
+    .await;
+    let _ = tokio::time::timeout(std::time::Duration::from_secs(5), lease.release()).await;
+    outcome
 }
 
 async fn authorize_public_service_reference(
@@ -4122,6 +4249,7 @@ fn registry_error(error: registry::RegistryError) -> RegistryHttpError {
         registry::RegistryError::Invalid(_) => StatusCode::UNPROCESSABLE_ENTITY,
         registry::RegistryError::Storage(_) => StatusCode::SERVICE_UNAVAILABLE,
         registry::RegistryError::Corrupt(_) => StatusCode::INTERNAL_SERVER_ERROR,
+        registry::RegistryError::Conflict => StatusCode::CONFLICT,
     };
     (
         status,
@@ -4857,6 +4985,11 @@ mod public_contract_tests {
             json!([200, 204])
         );
         assert_eq!(behavior["concurrent_same_tenant_status"], 409);
+        assert_eq!(behavior["ambiguous_provider_failure"]["status"], 503);
+        assert_eq!(
+            behavior["ambiguous_provider_failure"]["reconcile_required"],
+            true
+        );
         assert_eq!(behavior["publication_fields"], json!(["jwks", "did"]));
         assert_eq!(behavior["managed_or_read_only_service_status"], 403);
         assert!(

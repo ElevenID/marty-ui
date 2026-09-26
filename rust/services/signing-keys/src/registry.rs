@@ -23,6 +23,63 @@ const SUPPORTED_ALGORITHMS: &[&str] = &["ES256", "ES384", "ES512", "RS256", "EdD
 pub(crate) const MANAGED_OPENBAO_SERVICE_ID: &str = "managed-openbao-transit";
 const ROTATION_LEASE_TTL_MS: u64 = 120_000;
 
+fn rotation_lease_key(organization_id: &str) -> String {
+    format!(
+        "signing-service:rotation-lease:{}:{}",
+        organization_id.len(),
+        organization_id
+    )
+}
+
+fn preserve_rotation_fields(requested: &mut Value, current: &Value) {
+    let Some(services) = requested.get_mut("services").and_then(Value::as_array_mut) else {
+        return;
+    };
+    let current_services = current.get("services").and_then(Value::as_array);
+    for service in services {
+        let existing = service.get("id").and_then(Value::as_str).and_then(|id| {
+            current_services?
+                .iter()
+                .find(|candidate| candidate.get("id").and_then(Value::as_str) == Some(id))
+        });
+        let Some(fields) = service.as_object_mut() else {
+            continue;
+        };
+        let same_key = existing.is_some_and(|existing| {
+            [
+                "service_type",
+                "provider",
+                "endpoint",
+                "mount",
+                "namespace",
+                "key_reference",
+            ]
+            .iter()
+            .all(|field| fields.get(*field) == existing.get(*field))
+        });
+        if same_key {
+            let existing = existing.expect("same key has a stored service");
+            let stale_rotation = fields.get("rotation_state") != existing.get("rotation_state");
+            fields.insert(
+                "rotation_state".into(),
+                existing
+                    .get("rotation_state")
+                    .cloned()
+                    .unwrap_or_else(|| json!({})),
+            );
+            if stale_rotation {
+                for field in ["rotation_policy", "updated_at"] {
+                    if let Some(value) = existing.get(field) {
+                        fields.insert(field.into(), value.clone());
+                    }
+                }
+            }
+        } else {
+            fields.insert("rotation_state".into(), json!({}));
+        }
+    }
+}
+
 pub struct RotationLease {
     connection: ConnectionManager,
     key: String,
@@ -81,6 +138,8 @@ pub enum RegistryError {
     Storage(String),
     #[error("stored signing registry is malformed: {0}")]
     Corrupt(String),
+    #[error("signing registry update is in progress for this tenant")]
+    Conflict,
 }
 
 #[derive(Clone)]
@@ -130,11 +189,7 @@ impl RegistryStore {
         &self,
         organization_id: &str,
     ) -> Result<Option<RotationLease>, RegistryError> {
-        let key = format!(
-            "signing-service:rotation-lease:{}:{}",
-            organization_id.len(),
-            organization_id
-        );
+        let key = rotation_lease_key(organization_id);
         let owner = Uuid::new_v4().to_string();
         let mut connection = self.connection.clone();
         let acquired: Option<String> = redis::cmd("SET")
@@ -176,16 +231,52 @@ impl RegistryStore {
         organization_id: &str,
         registry: &Value,
     ) -> Result<Value, RegistryError> {
+        let lease = self
+            .acquire_rotation_lease(organization_id)
+            .await?
+            .ok_or(RegistryError::Conflict)?;
+        let existing = self.load(organization_id).await?;
+        let mut merged = normalize_requested_registry(registry)?;
+        preserve_rotation_fields(&mut merged, &existing);
+        let saved = self
+            .save_with_rotation_lease(organization_id, &merged, &lease)
+            .await;
+        let release = lease.release().await;
+        let normalized = saved?;
+        release?;
+        Ok(self.with_managed_service(organization_id, normalized).await)
+    }
+
+    pub async fn save_with_rotation_lease(
+        &self,
+        organization_id: &str,
+        registry: &Value,
+        lease: &RotationLease,
+    ) -> Result<Value, RegistryError> {
+        if lease.key != rotation_lease_key(organization_id) {
+            return Err(RegistryError::Conflict);
+        }
         let normalized = normalize_requested_registry(registry)?;
         let payload = serde_json::to_string(&normalized)
             .map_err(|error| RegistryError::Invalid(error.to_string()))?;
         let mut connection = self.connection.clone();
-        connection
-            .set::<_, _, ()>(storage_key(organization_id), payload)
-            .await
-            .map_err(|error| RegistryError::Storage(error.to_string()))?;
+        let saved: i32 = redis::Script::new(
+            "if redis.call('GET', KEYS[1]) ~= ARGV[1] then return 0 end
+             redis.call('SET', KEYS[2], ARGV[2])
+             return 1",
+        )
+        .key(&lease.key)
+        .key(storage_key(organization_id))
+        .arg(&lease.owner)
+        .arg(payload)
+        .invoke_async(&mut connection)
+        .await
+        .map_err(|error| RegistryError::Storage(error.to_string()))?;
+        if saved != 1 {
+            return Err(RegistryError::Conflict);
+        }
         self.managed_inventory.write().await.remove(organization_id);
-        Ok(self.with_managed_service(organization_id, normalized).await)
+        Ok(normalized)
     }
 
     pub async fn bind_profile(
@@ -218,6 +309,10 @@ impl RegistryStore {
             )));
         }
 
+        let lease = self
+            .acquire_rotation_lease(organization_id)
+            .await?
+            .ok_or(RegistryError::Conflict)?;
         let mut registry = self.load(organization_id).await?;
         let bindings = registry
             .as_object_mut()
@@ -259,7 +354,13 @@ impl RegistryStore {
         {
             registry["default_service_id"] = Value::String(service_id);
         }
-        self.save(organization_id, &registry).await
+        let saved = self
+            .save_with_rotation_lease(organization_id, &registry, &lease)
+            .await;
+        let release = lease.release().await;
+        let normalized = saved?;
+        release?;
+        Ok(self.with_managed_service(organization_id, normalized).await)
     }
 
     pub fn connection(&self) -> ConnectionManager {
