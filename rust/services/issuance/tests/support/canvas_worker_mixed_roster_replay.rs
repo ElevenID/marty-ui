@@ -312,9 +312,14 @@ pub async fn replay(
                 if rows.len() == index + 1 {
                     let latest = &rows[index];
                     assert!(!matches!(latest["status"].as_str(), Some("retry" | "dead_letter")), "mixed-roster job failed: {latest}");
-                    let idle: bool = sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM issuance_service.canvas_worker_heartbeats WHERE worker_id='worker-rest' AND metadata->>'phase'='idle')").fetch_one(pool).await.unwrap();
-                    if latest["status"] == "succeeded" && idle {
-                        break observe(pool, &fixture, &matrix, &roster_sql).await;
+                    if latest["status"] == "succeeded" {
+                        let observed = observe(pool, &fixture, &matrix, &roster_sql).await;
+                        // Compare the same observed heartbeat snapshot with the
+                        // frozen idle state. A separate preflight idle query can
+                        // race the next worker scheduling phase before observe.
+                        if observed["state"]["heartbeat"]["metadata"]["phase"] == "idle" {
+                            break observed;
+                        }
                     }
                 }
                 tokio::time::sleep(Duration::from_millis(25)).await;
