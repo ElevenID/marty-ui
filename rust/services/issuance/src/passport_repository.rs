@@ -262,7 +262,7 @@ impl PostgresPassportRepository {
             return Ok(None);
         };
         let current_status: &str = matched.try_get("status")?;
-        if !should_apply_webhook_status(current_status, event.status().issuance_status()) {
+        if !should_apply_bureau_status(current_status, event.status().issuance_status()) {
             let unchanged = row_to_job(matched)?;
             transaction.commit().await?;
             return Ok(Some(unchanged));
@@ -293,7 +293,7 @@ impl PostgresPassportRepository {
     }
 }
 
-fn should_apply_webhook_status(current: &str, incoming: &str) -> bool {
+pub(crate) fn should_apply_bureau_status(current: &str, incoming: &str) -> bool {
     if matches!(current, "ACTIVE" | "FAILED" | "CANCELLED") {
         return false;
     }
@@ -344,7 +344,7 @@ fn row_to_job(row: &PgRow) -> Result<PassportJob, sqlx::Error> {
 
 #[cfg(test)]
 mod webhook_state_tests {
-    use super::should_apply_webhook_status;
+    use super::should_apply_bureau_status;
     use serde_json::Value;
 
     #[test]
@@ -354,13 +354,17 @@ mod webhook_state_tests {
         ))
         .unwrap();
         assert_eq!(contract["schema_version"], 1);
+        assert_eq!(
+            contract["sources"],
+            serde_json::json!(["verified_callback", "authenticated_poll"])
+        );
         for (field, expected) in [
             ("accepted_transitions", true),
             ("ignored_transitions", false),
         ] {
             for pair in contract[field].as_array().unwrap() {
                 assert_eq!(
-                    should_apply_webhook_status(
+                    should_apply_bureau_status(
                         pair[0].as_str().unwrap(),
                         pair[1].as_str().unwrap()
                     ),

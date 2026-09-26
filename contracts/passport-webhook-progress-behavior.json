@@ -1,6 +1,7 @@
 {
   "schema_version": 1,
-  "description": "An authenticated bureau callback may advance production status or report a terminal failure, but cannot rewind progress or change a terminal document.",
+  "description": "An authenticated bureau callback or poll may advance production status or report a terminal failure, but cannot rewind progress or change a terminal document.",
+  "sources": ["verified_callback", "authenticated_poll"],
   "accepted_transitions": [
     ["SUBMITTED", "IN_PRODUCTION"],
     ["IN_PRODUCTION", "QUALITY_CHECK"],
@@ -10,6 +11,8 @@
   ],
   "ignored_transitions": [
     ["QUALITY_CHECK", "IN_PRODUCTION"],
+    ["READY_FOR_ACTIVATION", "IN_PRODUCTION"],
+    ["READY_FOR_ACTIVATION", "QUALITY_CHECK"],
     ["READY_FOR_ACTIVATION", "SUBMITTED"],
     ["ACTIVE", "READY_FOR_ACTIVATION"],
     ["FAILED", "READY_FOR_ACTIVATION"],

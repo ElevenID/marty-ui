@@ -1,4 +1,7 @@
-use std::sync::{Arc, Mutex};
+use std::sync::{
+    atomic::{AtomicBool, Ordering},
+    Arc, Mutex,
+};
 
 use axum::{
     body::{to_bytes, Body},
@@ -197,14 +200,25 @@ async fn exercise_native_passport_http(
             Json(json!({"bureau_job_id":"bureau-http", "status":"QUEUED"})),
         )
     }
-    async fn poll() -> Json<Value> {
-        Json(json!({"status":"SHIPPED", "tracking_number":"tracking-http"}))
-    }
     let observed = Arc::new(Mutex::new(Vec::new()));
+    let stale_poll = Arc::new(AtomicBool::new(false));
+    let poll_state = stale_poll.clone();
     let mock = Router::new()
         .route("/v1/icao/emrtd/sign", post(sign))
         .route("/v1/personalization/jobs", post(submit))
-        .route("/v1/personalization/jobs/{job_id}", get(poll))
+        .route(
+            "/v1/personalization/jobs/{job_id}",
+            get(move || {
+                let stale_poll = poll_state.clone();
+                async move {
+                    Json(if stale_poll.load(Ordering::SeqCst) {
+                        json!({"status":"PRINTING", "tracking_number":null})
+                    } else {
+                        json!({"status":"SHIPPED", "tracking_number":"tracking-http"})
+                    })
+                }
+            }),
+        )
         .with_state(observed.clone());
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let base_url = format!("http://{}", listener.local_addr().unwrap());
@@ -376,6 +390,20 @@ async fn exercise_native_passport_http(
     .await;
     assert_eq!(status, StatusCode::OK);
     assert_eq!(accepted, json!({"accepted":true}));
+    stale_poll.store(true, Ordering::SeqCst);
+    let (status, after_stale_poll) = passport_http_request(
+        &app,
+        "GET",
+        &format!("{path}/production-status"),
+        Some("org-a"),
+        Some(key_a),
+        json!({}),
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(after_stale_poll["status"], "READY_FOR_ACTIVATION");
+    assert_eq!(after_stale_poll["tracking_number"], "webhook-tracking");
     let (status, quality) = passport_http_request(
         &app,
         "POST",
@@ -388,6 +416,19 @@ async fn exercise_native_passport_http(
     .await;
     assert_eq!(status, StatusCode::OK);
     assert_eq!(quality["status"], "READY_FOR_ACTIVATION");
+    let (status, after_quality_poll) = passport_http_request(
+        &app,
+        "GET",
+        &format!("{path}/production-status"),
+        Some("org-a"),
+        Some(key_a),
+        json!({}),
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(after_quality_poll["status"], "READY_FOR_ACTIVATION");
+    assert_eq!(after_quality_poll["quality_result"]["passed"], true);
     let (status, active) = passport_http_request(
         &app,
         "POST",
