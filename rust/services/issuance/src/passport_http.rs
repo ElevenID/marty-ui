@@ -827,7 +827,7 @@ async fn production_status(
     patch.tracking_number = Some(
         outcome
             .tracking_number
-            .filter(|number| !number.is_empty())
+            .filter(|number| !number.trim().is_empty())
             .or(job.tracking_number.clone()),
     );
     patch.error_message = Some(outcome.error_message);
