@@ -960,6 +960,19 @@ jobs:
             fi
           done
           exit "$status"
+      - name: Exercise authenticated Signing Keys Gateway to Rust routes
+        working-directory: rust
+        shell: bash
+        run: |
+          set -euo pipefail
+          MARTY_TEST_REDIS_URL=redis://127.0.0.1:6379/14 \
+            cargo test --locked -p marty-gateway --lib \
+              runtime::tests::authenticated_gateway_reaches_remaining_rust_signing_handlers \
+              -- --ignored --exact
+          MARTY_TEST_REDIS_URL=redis://127.0.0.1:6379/13 BAO_TOKEN=test-only \
+            cargo test --locked -p marty-gateway --lib \
+              runtime::tests::authenticated_gateway_reaches_rust_managed_key_route_without_custody \
+              -- --ignored --exact
       # The Flow contract deliberately requires the marty_atomic_test database.
       # Serialize it after the workspace suite so both retain their isolation.
       - name: Run Flow database contract after workspace suite
