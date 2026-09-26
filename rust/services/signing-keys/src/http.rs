@@ -4570,6 +4570,23 @@ mod public_contract_tests {
     use axum::{body::Body, http::Request};
     use tower::ServiceExt;
 
+    #[test]
+    fn service_rotation_behavior_is_frozen_before_public_port() {
+        let behavior: Value = serde_json::from_str(include_str!(
+            "../../../../contracts/signing-service-rotation-behavior.json"
+        ))
+        .unwrap();
+        assert_eq!(behavior["method"], "POST");
+        assert_eq!(
+            behavior["path"],
+            "/v1/signing-keys/services/{service_id}/rotate"
+        );
+        assert_eq!(behavior["request_fields"]["overlap_days"]["default"], 7);
+        assert_eq!(behavior["request_fields"]["publish_updates"]["default"], true);
+        assert_eq!(behavior["provider_rotation"]["success_statuses"], json!([200, 204]));
+        assert_eq!(behavior["publication_fields"], json!(["jwks", "did"]));
+    }
+
     #[tokio::test]
     async fn public_config_resolver_discovers_only_existing_algorithm_compatible_keys() {
         use std::sync::atomic::{AtomicUsize, Ordering};
