@@ -56,7 +56,7 @@ impl Config {
         let signing_base = required_url("SIGNING_KEYS_INTERNAL_URL")?;
         if !private_signing_gateway(&signing_base) {
             return Err(
-                "SIGNING_KEYS_INTERNAL_URL must name the private beta signing gateway".into(),
+                "SIGNING_KEYS_INTERNAL_URL must name the isolated beta callback signer".into(),
             );
         }
         let callback_url = required_url("PASSPORT_BUREAU_CALLBACK_URL")?;
@@ -71,8 +71,8 @@ impl Config {
             .map_err(|_| "invalid PASSPORT_BETA_BUREAU_LISTEN")?;
         let database_url =
             required("DATABASE_URL")?.replacen("postgresql+asyncpg://", "postgresql://", 1);
-        if !database_url.starts_with("postgresql://") && !database_url.starts_with("postgres://") {
-            return Err("DATABASE_URL must be PostgreSQL".into());
+        if !private_beta_database(&database_url) {
+            return Err("DATABASE_URL must name the private beta database".into());
         }
         Ok(Self {
             listen,
@@ -90,11 +90,24 @@ fn beta_gate(environment: Option<&str>, enabled: Option<&str>) -> bool {
 }
 
 fn private_signing_gateway(url: &Url) -> bool {
-    url.as_str().trim_end_matches('/') == "http://gateway:8000/internal/signing-keys"
+    url.as_str().trim_end_matches('/') == "http://passport-callback-signer:8018/internal/documents"
 }
 
 fn private_native_callback(url: &Url) -> bool {
     url.as_str() == "http://issuance-native:8005/v1/passport/webhooks/personalization"
+}
+
+fn private_beta_database(value: &str) -> bool {
+    Url::parse(value).ok().is_some_and(|url| {
+        matches!(url.scheme(), "postgres" | "postgresql")
+            && url.host_str() == Some("postgres")
+            && url.port() == Some(5432)
+            && url.path() == "/marty"
+            && url.username() == "marty"
+            && url.password().is_some_and(|password| !password.is_empty())
+            && url.query().is_none()
+            && url.fragment().is_none()
+    })
 }
 
 fn required(name: &str) -> Result<String, String> {
@@ -225,7 +238,21 @@ fn validate_job<'a>(
     {
         return Err(ApiError::Invalid);
     }
-    let digest = Sha256::digest(serde_json::to_vec(value).map_err(|_| ApiError::Invalid)?).to_vec();
+    // SOD signatures and the accompanying public DSC may change when an
+    // accepted request is retried after its response is lost. The document
+    // content and tenant-bound source job must remain identical.
+    let document_identity = json!({
+        "organization_id": organization_id,
+        "job_id": job_id,
+        "application_id": value["application_id"],
+        "country_code": country,
+        "document_type": document_type,
+        "data_groups": value["data_groups"],
+        "mrz": value["mrz"],
+    });
+    let digest =
+        Sha256::digest(serde_json::to_vec(&document_identity).map_err(|_| ApiError::Invalid)?)
+            .to_vec();
     Ok(JobInput {
         organization_id,
         job_id,
@@ -381,13 +408,12 @@ async fn deliver_one(state: &AppState) -> Result<bool, String> {
     }
     let body = serde_json::to_vec(&callback).map_err(|_| "callback serialization failed")?;
     let mut sign_url = state.config.signing_url.clone();
-    sign_url.set_path(&format!(
-        "{}/passport-callbacks/sign",
-        sign_url.path().trim_end_matches('/')
-    ));
     sign_url
-        .query_pairs_mut()
-        .append_pair("organization_id", &organization_id);
+        .path_segments_mut()
+        .map_err(|()| "invalid private signing URL")?
+        .push(&organization_id)
+        .push("passport-callbacks")
+        .push("sign");
     let signed = state
         .http
         .post(sign_url)
@@ -506,8 +532,61 @@ mod tests {
     };
     use tower::ServiceExt;
 
-    async fn synthetic_sign(headers: HeaderMap, Json(request): Json<Value>) -> Json<Value> {
+    fn disposable_database_url(value: &str) -> bool {
+        Url::parse(value).ok().is_some_and(|url| {
+            matches!(url.scheme(), "postgres" | "postgresql")
+                && url.host_str() == Some("127.0.0.1")
+                && url.path() == "/marty_passport_bureau_test"
+        })
+    }
+
+    #[test]
+    fn bureau_database_contract_refuses_nonlocal_or_wrong_database() {
+        assert!(disposable_database_url(
+            "postgresql://postgres@127.0.0.1:5432/marty_passport_bureau_test"
+        ));
+        for value in [
+            "postgresql://postgres@127.0.0.1:5432/marty",
+            "postgresql://postgres@test.example:5432/marty_passport_bureau_test",
+            "postgresql://postgres@localhost:5432/marty_passport_bureau_test",
+            "postgresql://postgres@127.0.0.1:5432/marty_passport_bureau_test_extra",
+            "https://127.0.0.1/marty_passport_bureau_test",
+        ] {
+            assert!(
+                !disposable_database_url(value),
+                "unexpected database URL accepted"
+            );
+        }
+    }
+
+    #[test]
+    fn startup_database_must_match_the_private_beta_compose_target() {
+        assert!(private_beta_database(
+            "postgresql://marty:synthetic@postgres:5432/marty"
+        ));
+        for value in [
+            "postgresql://marty:synthetic@production.example:5432/marty",
+            "postgresql://marty:synthetic@postgres:5432/production",
+            "postgresql://admin:synthetic@postgres:5432/marty",
+            "postgresql://marty@postgres:5432/marty",
+            "postgresql://marty:synthetic@postgres:5432/marty?sslmode=disable",
+            "postgresql://marty:synthetic@postgres:5432/marty#other",
+            "postgresql://marty:synthetic@postgres/marty",
+        ] {
+            assert!(
+                !private_beta_database(value),
+                "unexpected database URL accepted"
+            );
+        }
+    }
+
+    async fn synthetic_sign(
+        Path(organization_id): Path<String>,
+        headers: HeaderMap,
+        Json(request): Json<Value>,
+    ) -> Json<Value> {
         assert_eq!(headers.get("x-api-key").unwrap(), "synthetic-signing-auth");
+        assert_eq!(organization_id, "test-org-a");
         let body = STANDARD
             .decode(request["body_b64"].as_str().unwrap())
             .unwrap();
@@ -547,10 +626,10 @@ mod tests {
         assert!(!beta_gate(Some("production"), Some("true")));
         assert!(!beta_gate(Some("beta"), None));
         assert!(private_signing_gateway(
-            &Url::parse("http://gateway:8000/internal/signing-keys").unwrap()
+            &Url::parse("http://passport-callback-signer:8018/internal/documents").unwrap()
         ));
         assert!(!private_signing_gateway(
-            &Url::parse("https://external.example/internal/signing-keys").unwrap()
+            &Url::parse("http://gateway:8000/internal/signing-keys").unwrap()
         ));
         assert!(private_native_callback(
             &Url::parse("http://issuance-native:8005/v1/passport/webhooks/personalization")
@@ -573,6 +652,12 @@ mod tests {
         assert_eq!(job.organization_id, "org-1");
         assert_eq!(job.digest.len(), 32);
         assert!(!job.digest.windows(7).any(|part| part == b"private"));
+        let mut resigned = value.clone();
+        resigned["sod_der_base64"] = json!("other-signature");
+        resigned["dsc_cert_pem"] = json!("renewed-public-cert");
+        assert_eq!(validate_job(&resigned, None).unwrap().digest, job.digest);
+        resigned["mrz"]["line_2"] = json!("changed-document");
+        assert_ne!(validate_job(&resigned, None).unwrap().digest, job.digest);
         assert!(validate_job(&value, Some("foreign-org")).is_err());
         let mut wrong = value;
         wrong["document_type"] = json!("VISA");
@@ -606,7 +691,10 @@ mod tests {
         let Ok(database_url) = env::var("PASSPORT_BUREAU_TEST_DATABASE_URL") else {
             return;
         };
-        assert!(database_url.contains("test"), "refuse a non-test database");
+        assert!(
+            disposable_database_url(&database_url),
+            "refuse a nonlocal or non-disposable database"
+        );
         let pool = PgPoolOptions::new()
             .max_connections(2)
             .connect(&database_url)
@@ -660,7 +748,7 @@ mod tests {
         }
         let mock = Router::new()
             .route(
-                "/internal/signing-keys/passport-callbacks/sign",
+                "/internal/documents/{organization_id}/passport-callbacks/sign",
                 post(synthetic_sign),
             )
             .route(
@@ -676,8 +764,7 @@ mod tests {
                 database_url: database_url.clone(),
                 service_token: "synthetic-bureau-auth".into(),
                 signing_api_key: "synthetic-signing-auth".into(),
-                signing_url: Url::parse(&format!("http://{address}/internal/signing-keys"))
-                    .unwrap(),
+                signing_url: Url::parse(&format!("http://{address}/internal/documents")).unwrap(),
                 callback_url: Url::parse(&format!(
                     "http://{address}/v1/passport/webhooks/personalization"
                 ))
@@ -735,6 +822,60 @@ mod tests {
             serde_json::from_slice(&to_bytes(accepted.into_body(), 8192).await.unwrap()).unwrap();
         assert_eq!(response["status"], "QUEUED");
         let bureau_job_id = response["bureau_job_id"].as_str().unwrap();
+        sqlx::query("UPDATE issuance_service.passport_beta_bureau_jobs SET status = 'PRINTING' WHERE organization_id = 'test-org-a' AND source_job_id = $1")
+            .bind(&http_source)
+            .execute(&pool)
+            .await
+            .unwrap();
+        let mut resigned_payload = payload.clone();
+        resigned_payload["sod_der_base64"] = json!("changed-signature");
+        resigned_payload["dsc_cert_pem"] = json!("renewed-public-cert");
+        let retry = router(state.clone())
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/v1/personalization/jobs")
+                    .header("content-type", "application/json")
+                    .header("authorization", "Bearer synthetic-bureau-auth")
+                    .body(Body::from(resigned_payload.to_string()))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(retry.status(), StatusCode::ACCEPTED);
+        let retry: Value =
+            serde_json::from_slice(&to_bytes(retry.into_body(), 8192).await.unwrap()).unwrap();
+        assert_eq!(retry["bureau_job_id"], bureau_job_id);
+        let stored_count: i64 = sqlx::query_scalar(
+            "SELECT COUNT(*) FROM issuance_service.passport_beta_bureau_jobs WHERE organization_id = 'test-org-a' AND source_job_id = $1",
+        )
+        .bind(&http_source)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert_eq!(stored_count, 1);
+        let persisted_status: String = sqlx::query_scalar(
+            "SELECT status FROM issuance_service.passport_beta_bureau_jobs WHERE organization_id = 'test-org-a' AND source_job_id = $1",
+        )
+        .bind(&http_source)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert_eq!(persisted_status, "PRINTING");
+        resigned_payload["data_groups"]["DG1"] = json!("different-document");
+        let conflict = router(state.clone())
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/v1/personalization/jobs")
+                    .header("content-type", "application/json")
+                    .header("authorization", "Bearer synthetic-bureau-auth")
+                    .body(Body::from(resigned_payload.to_string()))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(conflict.status(), StatusCode::CONFLICT);
         let polled = router(state.clone())
             .oneshot(
                 Request::builder()
@@ -748,7 +889,7 @@ mod tests {
         assert_eq!(polled.status(), StatusCode::OK);
         let polled: Value =
             serde_json::from_slice(&to_bytes(polled.into_body(), 8192).await.unwrap()).unwrap();
-        assert_eq!(polled["status"], "QUEUED");
+        assert_eq!(polled["status"], "PRINTING");
         let batch_job_id = format!("{source}-batch");
         let batch = json!({"batch_id": "synthetic-batch", "organization_id": "test-org-a", "jobs": [{
             "job_id": batch_job_id, "application_id": "app-2", "country_code": "USA",

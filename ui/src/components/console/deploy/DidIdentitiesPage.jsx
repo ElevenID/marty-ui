@@ -43,6 +43,7 @@ const PUBLIC_CREDENTIAL_FORMATS = [
   'ZK_MDOC',
   'ICAO_EMRTD',
 ];
+const CSR_ALGORITHMS = new Set(['ES256', 'ES384', 'ES512']);
 
 const identityKey = (identity) => [
   identity.issuer_did,
@@ -65,6 +66,7 @@ export default function DidIdentitiesPage() {
   const [csrSubject, setCsrSubject] = useState({ country: '', organization: '', common_name: '' });
   const [csrPem, setCsrPem] = useState('');
   const [submitting, setSubmitting] = useState(false);
+  const csrSupported = certifying && CSR_ALGORITHMS.has(certifying.algorithm);
 
   const load = useCallback(async () => {
     if (!activeOrgId) {
@@ -215,7 +217,7 @@ export default function DidIdentitiesPage() {
   };
 
   const generateCsr = async () => {
-    if (!certifying || !activeOrgId || !csrSubject.country.trim()
+    if (!csrSupported || !activeOrgId || !csrSubject.country.trim()
       || !csrSubject.organization.trim() || !csrSubject.common_name.trim()) return;
     setSubmitting(true);
     setError('');
@@ -380,6 +382,11 @@ export default function DidIdentitiesPage() {
               <Typography fontFamily="monospace" sx={{ overflowWrap: 'anywhere' }}>{certifying.issuer_did}</Typography>
             )}
             <Typography variant="subtitle2">Generate a KMS-backed certificate request</Typography>
+            {certifying && !csrSupported && (
+              <Alert severity="info">
+                KMS-backed certificate requests support ES256, ES384, and ES512 identities. You can still attach a signed public certificate for this identity.
+              </Alert>
+            )}
             <Stack direction={{ xs: 'column', sm: 'row' }} spacing={1}>
               <TextField
                 label="Country code (C)"
@@ -400,7 +407,7 @@ export default function DidIdentitiesPage() {
                 fullWidth
               />
             </Stack>
-            <Button variant="outlined" onClick={generateCsr} disabled={submitting || !csrSubject.country.trim() || !csrSubject.organization.trim() || !csrSubject.common_name.trim()}>
+            <Button variant="outlined" onClick={generateCsr} disabled={!csrSupported || submitting || !csrSubject.country.trim() || !csrSubject.organization.trim() || !csrSubject.common_name.trim()}>
               Generate KMS-backed CSR
             </Button>
             {csrPem && (

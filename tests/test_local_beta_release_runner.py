@@ -14,6 +14,8 @@ def text(path: str) -> str:
 def test_local_release_runner_is_backup_and_rehearsal_gated() -> None:
     script = text("scripts/deploy-local-beta-release.ps1")
 
+    assert 'if ($BetaOrigin -cne "https://beta.elevenidllc.com")' in script
+    assert script.index('if ($BetaOrigin -cne "https://beta.elevenidllc.com")') < script.index('if ($PlanOnly)')
     assert 'source_kind -ne "local-worktree-snapshot"' in script
     assert "promotion_eligible -ne $false" in script
     assert '"--verify-manifest", $sourceManifestPath' in script
@@ -541,6 +543,57 @@ def test_beta_runner_targets_only_the_beta_projects_and_rust_services() -> None:
     assert set(re.findall(r'"([a-z0-9-]+)"', restored)) == set(
         re.findall(r'"([a-z0-9-]+)"', deployed)
     )
+
+
+def test_passport_bureau_is_optional_but_included_in_beta_recovery() -> None:
+    deploy = text("scripts/deploy-local-beta-release.ps1")
+    restore = text("scripts/restore-local-beta-release.ps1")
+    assert '$script:SelectedApplicationServices += "passport-beta-bureau"' in deploy
+    assert '$script:SelectedApplicationServices += "passport-callback-signer"' in deploy
+    assert '$applicationServices += "passport-beta-bureau"' in restore
+    assert '$applicationServices += "passport-callback-signer"' in restore
+    assert (
+        '$composeFiles += Join-Path $repoRoot "docker-compose.profile.passport-native-beta.yml"'
+        in restore
+    )
+    assert "com.docker.compose.service=passport-beta-bureau" in restore
+    assert "com.docker.compose.service=passport-callback-signer" in restore
+    assert 'Invoke-Checked docker @("stop", $currentBureau)' in restore
+    assert 'Invoke-Checked docker @("rm", $currentBureau)' in restore
+    assert 'Invoke-Checked docker @("stop", $currentSigner)' in restore
+    assert 'Invoke-Checked docker @("rm", $currentSigner)' in restore
+    assert 'Assert-BetaCallbackSignerNetwork -AttachOpenBao' in deploy
+    assert deploy.index('Assert-BetaCallbackSignerNetwork -AttachOpenBao') < deploy.index(
+        'Invoke-Compose -Arguments (@("up", "--detach", "--no-build", "--no-deps", "--force-recreate") + $remainingServices)'
+    )
+    assert restore.count('Assert-RestoredPassportCallbackNetwork') == 3
+    for script in (deploy, restore):
+        assert '"openbao" -notin @($openbaoEndpoint.Value.Aliases)' in script
+    assert deploy.index('Invoke-Checked -FilePath docker -Arguments (@("stop") + $maintenanceContainers)') < deploy.index(
+        'Assert-NoInFlightPassportJobs\n'
+    ) < deploy.index('Write-Step "Capture quiesced maintenance snapshot"')
+    assert "WHERE status NOT IN ('ACTIVE', 'FAILED', 'CANCELLED')" in deploy
+    assert 'if ($existingPassportServices["passport-beta-bureau"] -gt 0 -and' in deploy
+    assert '$existingPassportServices["passport-callback-signer"] -eq 0)' in deploy
+    assert "this release cannot restore that legacy passport snapshot" in deploy
+    assert deploy.index("this release cannot restore that legacy passport snapshot") < deploy.index(
+        'Invoke-Checked -FilePath docker -Arguments @("pull",'
+    )
+    assert '$priorSigner.Count -ne $priorBureau.Count' in restore
+    assert "Beta passport callback recovery records must contain both bureau and signer" in restore
+    assert '"passport-callback-network-before.json"' in deploy
+    assert '"passport-callback-network-before.json"' in restore
+    assert 'schema_version = 1\n        exists = $matchingNetworks.Count -eq 1' in deploy
+    assert '$callbackNetworkBefore.id = [string]$network[0].Id' in deploy
+    assert '$callbackNetworkBefore.members = @($network[0].Containers.PSObject.Properties.Name)' in deploy
+    assert 'Unexpected member blocks beta callback network restore' in restore
+    assert 'function Restore-PriorPassportCallbackNetwork' in restore
+    assert restore.index('Invoke-Checked docker @("rm", $currentSigner)') < restore.index(
+        'Restore-PriorPassportCallbackNetwork\n'
+    )
+    assert 'Invoke-Checked docker @("network", "disconnect", $name, $openbaoId)' in restore
+    assert 'Invoke-Checked docker @("network", "rm", [string]$network[0].Id)' in restore
+    assert '$network[0].Labels.\'com.docker.compose.project\' -ne $project' in restore
 
 
 def assert_beta_service_authentication(beta, shared):

@@ -26,6 +26,8 @@ use axum::{
 };
 use chrono::Utc;
 use futures_core::Stream;
+use marty_passport_auth::PassportTenantCredentialSource;
+#[cfg(test)]
 use marty_passport_auth::PassportTenantKeyring;
 use mmf_platform::{
     ContentTypeDecision, EntityTagDecision, EntityTagPolicy, GatewayProxy, GatewayRequest,
@@ -95,7 +97,7 @@ pub struct GatewayRuntimeState {
     pub signing_service_api_key: String,
     pub issuance_service_api_key: String,
     pub passport_native_gateway_enabled: bool,
-    pub passport_tenant_keys: Option<PassportTenantKeyring>,
+    pub passport_tenant_keys: Option<PassportTenantCredentialSource>,
     pub service_token: Option<String>,
     pub release_identity: ReleaseIdentity,
     pub maximum_body_bytes: usize,
@@ -227,7 +229,7 @@ impl GatewayRuntimeState {
     pub fn with_passport_native_gateway(
         mut self,
         enabled: bool,
-        tenant_keys: Option<PassportTenantKeyring>,
+        tenant_keys: Option<PassportTenantCredentialSource>,
     ) -> Result<Self, mmf_platform::PlatformError> {
         if enabled && tenant_keys.is_none() {
             return Err(mmf_platform::PlatformError::InvalidConfiguration(
@@ -5993,6 +5995,7 @@ mod tests {
                     r#"{"org-1":"native-passport-key-for-org-1-00000001","org-2":"native-passport-key-for-org-2-00000002"}"#,
                 )
                 .expect("test tenant keys")
+                .into()
             }),
         )
         .expect("passport gateway");
@@ -6436,6 +6439,70 @@ mod tests {
             upstream.headers.get("x-api-key").map(String::as_str),
             Some("native-passport-key-for-org-1-00000001")
         );
+    }
+
+    #[tokio::test]
+    async fn internal_passport_handoff_keeps_public_api_key_organizations_isolated() {
+        let recorder = Arc::new(ActorRecordingUpstream::default());
+        let mut state =
+            runtime_state_with_upstream_and_passport(Arc::new(NoOwner), recorder.clone(), true);
+        let internal_token = "synthetic-internal-passport-token-00000001";
+        Arc::get_mut(&mut state).unwrap().passport_tenant_keys =
+            Some(PassportTenantCredentialSource::internal_service_token(internal_token).unwrap());
+        let router = gateway_router(state);
+        for (public_key, organization_id) in [
+            ("passport-gateway-key-org-1", "org-1"),
+            ("passport-gateway-key-org-2", "org-2"),
+        ] {
+            let response = router
+                .clone()
+                .oneshot(
+                    Request::builder()
+                        .method("POST")
+                        .uri("/v1/passport/applications")
+                        .header("content-type", "application/json")
+                        .header("x-api-key", public_key)
+                        .body(Body::from(
+                            json!({"organization_id": organization_id}).to_string(),
+                        ))
+                        .unwrap(),
+                )
+                .await
+                .unwrap();
+            assert_eq!(response.status(), StatusCode::OK);
+            let captured = recorder.0.lock().unwrap();
+            let (_, upstream) = captured.last().unwrap();
+            assert_eq!(
+                upstream
+                    .headers
+                    .get("x-organization-id")
+                    .map(String::as_str),
+                Some(organization_id)
+            );
+            assert_eq!(
+                upstream.headers.get("x-api-key").map(String::as_str),
+                Some(internal_token)
+            );
+            assert_ne!(
+                upstream.headers.get("x-api-key").map(String::as_str),
+                Some(public_key)
+            );
+        }
+        let before = recorder.0.lock().unwrap().len();
+        let response = router
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/v1/passport/applications")
+                    .header("content-type", "application/json")
+                    .header("x-api-key", "passport-gateway-key-org-1")
+                    .body(Body::from(r#"{"organization_id":"org-2"}"#))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::FORBIDDEN);
+        assert_eq!(recorder.0.lock().unwrap().len(), before);
     }
 
     fn forged_actor_request(authentication: Option<(&str, &str)>, public: bool) -> Request {

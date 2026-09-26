@@ -19,8 +19,10 @@ use crate::canvas_network_timeout::CanvasNetworkTimeout;
 #[derive(Clone, Eq, PartialEq)]
 pub struct PassportNativeConfig {
     pub enabled: bool,
+    pub internal_service_auth_enabled: bool,
     pub managed_issuer_signing_enabled: bool,
     pub kms_artifacts_enabled: bool,
+    pub kms_callbacks_enabled: bool,
     pub artifact_key: Option<String>,
     pub signer_url: Option<String>,
     pub signer_api_key: Option<String>,
@@ -36,10 +38,15 @@ impl std::fmt::Debug for PassportNativeConfig {
             .debug_struct("PassportNativeConfig")
             .field("enabled", &self.enabled)
             .field(
+                "internal_service_auth_enabled",
+                &self.internal_service_auth_enabled,
+            )
+            .field(
                 "managed_issuer_signing_enabled",
                 &self.managed_issuer_signing_enabled,
             )
             .field("kms_artifacts_enabled", &self.kms_artifacts_enabled)
+            .field("kms_callbacks_enabled", &self.kms_callbacks_enabled)
             .field("artifact_key_configured", &self.artifact_key.is_some())
             .field("signer_url_configured", &self.signer_url.is_some())
             .field("signer_api_key_configured", &self.signer_api_key.is_some())
@@ -65,8 +72,10 @@ impl PassportNativeConfig {
         if !enabled {
             return Ok(Self {
                 enabled,
+                internal_service_auth_enabled: false,
                 managed_issuer_signing_enabled: false,
                 kms_artifacts_enabled: false,
+                kms_callbacks_enabled: false,
                 artifact_key: None,
                 signer_url: None,
                 signer_api_key: None,
@@ -94,13 +103,28 @@ impl PassportNativeConfig {
                 "KMS passport artifact mode cannot be combined with PHYSICAL_DOCUMENT_ARTIFACT_KEY",
             ));
         }
+        let kms_callbacks_enabled = environment_flag(values, "PASSPORT_KMS_CALLBACKS_ENABLED");
+        if kms_callbacks_enabled
+            && (configured("PERSONALIZATION_BUREAU_WEBHOOK_SECRET").is_some()
+                || configured("PERSONALIZATION_BUREAU_WEBHOOK_SECRET_FILE").is_some())
+        {
+            return Err(MmfError::new(
+                ErrorCode::Configuration,
+                "KMS passport callback mode cannot be combined with PERSONALIZATION_BUREAU_WEBHOOK_SECRET",
+            ));
+        }
         let config = Self {
             enabled,
+            internal_service_auth_enabled: environment_flag(
+                values,
+                "PASSPORT_INTERNAL_SERVICE_AUTH_ENABLED",
+            ),
             managed_issuer_signing_enabled: environment_flag(
                 values,
                 "PASSPORT_MANAGED_ISSUER_SIGNING_ENABLED",
             ),
             kms_artifacts_enabled,
+            kms_callbacks_enabled,
             artifact_key: secret_value(values, "PHYSICAL_DOCUMENT_ARTIFACT_KEY")?,
             signer_url: configured("ICAO_DOCUMENT_SIGNER_URL"),
             signer_api_key: secret_value(values, "ICAO_DOCUMENT_SIGNER_API_KEY")?,
@@ -127,7 +151,7 @@ impl PassportNativeConfig {
         // Tenant authentication is mandatory even for the diagnostic capability
         // route. Missing providers are represented as blockers there, matching
         // the released Python surface; provider-backed operations remain 503.
-        if !tenant_keys_configured {
+        if !tenant_keys_configured && !config.internal_service_auth_enabled {
             return Err(MmfError::new(
                 ErrorCode::Configuration,
                 "PASSPORT_TENANT_API_KEYS is required when PASSPORT_NATIVE_HTTP_ENABLED is true",
@@ -621,6 +645,19 @@ impl IssuanceServiceConfig {
             "DIDCOMM_DID_WEB_INTERNAL_BASE_URL",
         )?;
         let issuance_api_key = secret_value(&values, "ISSUANCE_API_KEY")?;
+        if environment_flag(&values, "PASSPORT_INTERNAL_SERVICE_AUTH_ENABLED")
+            && (values
+                .get("PASSPORT_TENANT_API_KEYS")
+                .is_some_and(|value| !value.trim().is_empty())
+                || values
+                    .get("PASSPORT_TENANT_API_KEYS_FILE")
+                    .is_some_and(|value| !value.trim().is_empty()))
+        {
+            return Err(MmfError::new(
+                ErrorCode::Configuration,
+                "internal passport service authentication cannot be combined with a tenant keyring",
+            ));
+        }
         let passport_tenant_keys = secret_value(&values, "PASSPORT_TENANT_API_KEYS")?
             .map(|value| {
                 PassportTenantKeyring::from_json(&value).map_err(|_| {
@@ -658,6 +695,16 @@ impl IssuanceServiceConfig {
         let internal_service_token = secret_value(&values, "GRPC_SERVICE_TOKEN")?
             .map(|value| value.trim().to_owned())
             .filter(|value| !value.is_empty());
+        if passport_native.internal_service_auth_enabled
+            && internal_service_token
+                .as_deref()
+                .is_none_or(|token| token.len() < 32 || token.starts_with("dev-"))
+        {
+            return Err(MmfError::new(
+                ErrorCode::Configuration,
+                "GRPC_SERVICE_TOKEN is required for internal passport authentication",
+            ));
+        }
         let canvas_portable_enabled =
             environment_flag(&values, "CANVAS_PORTABLE_INTEGRATION_ENABLED");
         let canvas_legacy_event_ingest_enabled =
@@ -1604,6 +1651,7 @@ mod tests {
         assert!(!config.passport_native.enabled);
         assert!(!config.passport_native.managed_issuer_signing_enabled);
         assert!(!config.passport_native.kms_artifacts_enabled);
+        assert!(!config.passport_native.kms_callbacks_enabled);
         assert!(config.passport_native.artifact_key.is_none());
         let disabled = IssuanceServiceConfig::from_values(values(&[(
             "PHYSICAL_DOCUMENT_ARTIFACT_KEY_FILE",
@@ -1698,6 +1746,25 @@ mod tests {
     }
 
     #[test]
+    fn internal_passport_auth_rejects_a_keyring_file_before_loading_it() {
+        let token = "s".repeat(32);
+        let mut values = values(&[
+            ("PASSPORT_NATIVE_HTTP_ENABLED", "true"),
+            ("PASSPORT_INTERNAL_SERVICE_AUTH_ENABLED", "true"),
+            ("GRPC_SERVICE_TOKEN", &token),
+        ]);
+        let config = IssuanceServiceConfig::from_values(values.clone()).unwrap();
+        assert!(config.passport_native.internal_service_auth_enabled);
+        assert!(config.passport_tenant_keys.is_none());
+        values.push((
+            "PASSPORT_TENANT_API_KEYS_FILE".into(),
+            "nonexistent-keyring".into(),
+        ));
+        let error = IssuanceServiceConfig::from_values(values).unwrap_err();
+        assert!(error.to_string().contains("cannot be combined"));
+    }
+
+    #[test]
     fn kms_artifact_mode_is_explicit_and_rejects_a_raw_or_file_key_before_loading() {
         let tenant_keys = format!("{{\"org-a\":\"{}\"}}", "a".repeat(32));
         let values = values(&[
@@ -1713,6 +1780,33 @@ mod tests {
             (
                 "PHYSICAL_DOCUMENT_ARTIFACT_KEY_FILE",
                 "nonexistent-passport-key-file",
+            ),
+        ] {
+            let mut conflicting = values.clone();
+            conflicting.push((name.into(), value.into()));
+            let error = IssuanceServiceConfig::from_values(conflicting).unwrap_err();
+            assert_eq!(error.code, ErrorCode::Configuration);
+            assert!(error.to_string().contains("cannot be combined"));
+            assert!(!error.to_string().contains(value));
+        }
+    }
+
+    #[test]
+    fn kms_callback_mode_rejects_process_held_secret_before_loading_it() {
+        let keyring = format!("{{\"org-a\":\"{}\"}}", "a".repeat(32));
+        let values = values(&[
+            ("PASSPORT_NATIVE_HTTP_ENABLED", "true"),
+            ("PASSPORT_KMS_CALLBACKS_ENABLED", "true"),
+            ("PASSPORT_TENANT_API_KEYS", &keyring),
+        ]);
+        let config = IssuanceServiceConfig::from_values(values.clone()).unwrap();
+        assert!(config.passport_native.kms_callbacks_enabled);
+        assert!(config.passport_native.bureau_webhook_secret.is_none());
+        for (name, value) in [
+            ("PERSONALIZATION_BUREAU_WEBHOOK_SECRET", "must-never-load"),
+            (
+                "PERSONALIZATION_BUREAU_WEBHOOK_SECRET_FILE",
+                "nonexistent-webhook-key-file",
             ),
         ] {
             let mut conflicting = values.clone();

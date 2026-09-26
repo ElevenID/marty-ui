@@ -16,6 +16,7 @@ def _environment(path: str, service: str) -> dict[str, str]:
 
 def test_compose_exposes_both_passport_selectors_without_enabling_them() -> None:
     flow = _environment("docker-compose.base.yml", "flow")
+    gateway = _environment("docker-compose.base.yml", "gateway")
     development = _environment(
         "docker-compose.profile.issuance-native.yml", "issuance-native"
     )
@@ -40,13 +41,21 @@ def test_compose_exposes_both_passport_selectors_without_enabling_them() -> None
     assert (
         selfhost_gateway["ISSUANCE_NATIVE_SERVICE_URL"] == "http://issuance-native:8005"
     )
-    for consumer in (selfhost_gateway, selfhost_flow, selfhost):
+    for consumer in (gateway, flow, selfhost_gateway, selfhost_flow, selfhost):
+        assert (
+            consumer["PASSPORT_INTERNAL_SERVICE_AUTH_ENABLED"]
+            == "${PASSPORT_INTERNAL_SERVICE_AUTH_ENABLED:-false}"
+        )
         assert consumer["PASSPORT_TENANT_API_KEYS"] == flow["PASSPORT_TENANT_API_KEYS"]
         assert (
             consumer["PASSPORT_TENANT_API_KEYS_FILE"]
             == flow["PASSPORT_TENANT_API_KEYS_FILE"]
         )
     for native in (development, beta, selfhost):
+        assert (
+            native["PASSPORT_INTERNAL_SERVICE_AUTH_ENABLED"]
+            == "${PASSPORT_INTERNAL_SERVICE_AUTH_ENABLED:-false}"
+        )
         assert (
             native["PASSPORT_NATIVE_HTTP_ENABLED"]
             == "${PASSPORT_NATIVE_HTTP_ENABLED:-false}"
@@ -56,6 +65,7 @@ def test_compose_exposes_both_passport_selectors_without_enabling_them() -> None
             == "${PASSPORT_MANAGED_ISSUER_SIGNING_ENABLED:-false}"
         )
         assert native["PASSPORT_KMS_ARTIFACTS_ENABLED"] == "${PASSPORT_KMS_ARTIFACTS_ENABLED:-false}"
+        assert native["PASSPORT_KMS_CALLBACKS_ENABLED"] == "${PASSPORT_KMS_CALLBACKS_ENABLED:-false}"
         for key in (
             "PASSPORT_TENANT_API_KEYS",
             "PASSPORT_TENANT_API_KEYS_FILE",

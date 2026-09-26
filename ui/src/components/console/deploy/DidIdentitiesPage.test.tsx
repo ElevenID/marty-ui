@@ -217,6 +217,22 @@ describe('DidIdentitiesPage', () => {
     expect(storeIssuerIdentityCertificate).not.toHaveBeenCalled();
   });
 
+  it.each(['RS256', 'EdDSA'])('keeps public certificate enrollment available without offering a %s CSR', async (algorithm) => {
+    listPublicIssuerIdentities.mockImplementation(async ({ credential_format: credentialFormat }) => ({
+      identities: credentialFormat === 'ICAO_EMRTD'
+        ? [{ issuer_did: 'did:web:issuer.example:orgs:dsc', key_purpose: 'x509_doc_signer', algorithm, status: 'active' }]
+        : [],
+    }));
+    const { user } = renderWithRouter(<DidIdentitiesPage />);
+    await screen.findByText('did:web:issuer.example:orgs:dsc');
+    await user.click(screen.getByRole('button', { name: 'Attach document signer certificate' }));
+    expect(screen.getByRole('button', { name: 'Generate KMS-backed CSR' })).toBeDisabled();
+    expect(screen.getByText(/certificate requests support ES256, ES384, and ES512/i)).toBeInTheDocument();
+    await user.type(screen.getByRole('textbox', { name: /Document signer certificate PEM/i }), 'certificate');
+    expect(screen.getByRole('button', { name: 'Attach certificate' })).toBeEnabled();
+    expect(generateIssuerIdentityCsr).not.toHaveBeenCalled();
+  });
+
   it('never loads issuer profiles, services, or raw keys', async () => {
     renderWithRouter(<DidIdentitiesPage />);
     await waitFor(() => expect(listPublicIssuerIdentities).toHaveBeenCalled());

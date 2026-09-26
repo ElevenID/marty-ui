@@ -23,7 +23,8 @@ route, although its KMS branch returned structured 501
 issuer-scoped Rust CSR operation is separate and more capable, but does not
 erase that public-route/error contract. The managed-service UI now directs
 operators to the issuer-scoped operation. Dedicated-service CSR behavior and
-the other missing adapters still require review and implementation.
+the other formerly missing adapters are implemented in the local stacked
+branches; protected CI and beta acceptance remain pending.
 
 Port in groups, using the last Python implementation and live consumer
 requests as behavioral evidence. Keep all key references and signing secrets
@@ -227,12 +228,12 @@ holder-key POST, and VDS-NC registration without returning a provider secret.
 The earlier real-upstream test covers managed key POST and detail GET. CI runs
 both opt-in tests against separate disposable Redis databases.
 
-Most remaining service, certificate, publication, discovery, and issuer probes
-currently reach Rust through missing-service or missing-profile responses.
-Their successful end-to-end behavior still needs seeded service/profile,
-certificate, and KMS fixtures through Gateway. The deliberate audit and
-compliance 501 responses retain their frozen unavailable contracts. Protected
-CI, re-audit on main, those success paths, and aggregate beta acceptance
-remain gates before Python retirement or a migration-complete claim. The
-24-pair table above remains the protected-main audit baseline until the stack
-lands.
+The stacked Gateway fixtures now exercise service certificates, KMS public-key
+verification, JWKS/DID publication, config resolution, issuer-profile custody,
+dedicated service rotation, and CSCA/DSC CSR signing with disposable providers.
+They do not establish the live beta CA chain, workload-identity acquisition,
+or aggregate deployment acceptance. The deliberate audit and compliance 501
+responses retain their frozen unavailable contracts. Protected CI, re-audit
+on main, and live beta acceptance remain gates before Python retirement or a
+migration-complete claim. The 24-pair table above remains the protected-main
+audit baseline until the stack lands.

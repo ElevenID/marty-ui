@@ -12,6 +12,48 @@ pub struct PassportTenantKeyring {
     keys: BTreeMap<String, Box<str>>,
 }
 
+/// Selects either the frozen per-tenant credential boundary or an existing
+/// internal workload credential. The latter is opt-in for trusted gateway and
+/// Flow handoffs; public tenant authorization must happen before forwarding.
+#[derive(Clone, Eq, PartialEq)]
+pub enum PassportTenantCredentialSource {
+    PerTenant(PassportTenantKeyring),
+    InternalServiceToken(Box<str>),
+}
+
+pub trait PassportCredentialLookup {
+    fn key_for(&self, organization_id: &str) -> Option<&str>;
+}
+
+impl PassportCredentialLookup for PassportTenantKeyring {
+    fn key_for(&self, organization_id: &str) -> Option<&str> {
+        PassportTenantKeyring::key_for(self, organization_id)
+    }
+}
+
+impl PassportCredentialLookup for PassportTenantCredentialSource {
+    fn key_for(&self, organization_id: &str) -> Option<&str> {
+        PassportTenantCredentialSource::key_for(self, organization_id)
+    }
+}
+
+impl fmt::Debug for PassportTenantCredentialSource {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::PerTenant(keys) => formatter.debug_tuple("PerTenant").field(keys).finish(),
+            Self::InternalServiceToken(_) => {
+                formatter.write_str("InternalServiceToken([REDACTED])")
+            }
+        }
+    }
+}
+
+impl From<PassportTenantKeyring> for PassportTenantCredentialSource {
+    fn from(value: PassportTenantKeyring) -> Self {
+        Self::PerTenant(value)
+    }
+}
+
 impl fmt::Debug for PassportTenantKeyring {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter
@@ -35,6 +77,8 @@ pub enum KeyringError {
     InvalidOrganization,
     #[error("passport tenant key configuration has a weak or invalid API key")]
     InvalidKey,
+    #[error("passport internal service credential is weak or invalid")]
+    InvalidInternalServiceToken,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, thiserror::Error)]
@@ -127,6 +171,50 @@ impl PassportTenantKeyring {
     }
 }
 
+impl PassportTenantCredentialSource {
+    pub fn internal_service_token(value: &str) -> Result<Self, KeyringError> {
+        if !valid_key(value) || value.starts_with("dev-") {
+            return Err(KeyringError::InvalidInternalServiceToken);
+        }
+        Ok(Self::InternalServiceToken(value.into()))
+    }
+
+    #[must_use]
+    pub fn key_for(&self, organization_id: &str) -> Option<&str> {
+        match self {
+            Self::PerTenant(keys) => keys.key_for(organization_id),
+            Self::InternalServiceToken(token) if valid_organization(organization_id) => Some(token),
+            Self::InternalServiceToken(_) => None,
+        }
+    }
+
+    pub fn authenticate(
+        &self,
+        organization_id: Option<&str>,
+        presented: Option<&str>,
+    ) -> Result<PassportTenantPrincipal, PassportTenantAuthError> {
+        match self {
+            Self::PerTenant(keys) => keys.authenticate(organization_id, presented),
+            Self::InternalServiceToken(expected) => {
+                let organization_id = organization_id
+                    .filter(|value| !value.is_empty())
+                    .ok_or(PassportTenantAuthError::MissingOrganization)?;
+                let presented = presented
+                    .filter(|value| !value.is_empty())
+                    .ok_or(PassportTenantAuthError::MissingKey)?;
+                if !valid_organization(organization_id)
+                    || !constant_time_secret_eq(expected.as_bytes(), presented.as_bytes())
+                {
+                    return Err(PassportTenantAuthError::InvalidKey);
+                }
+                Ok(PassportTenantPrincipal {
+                    organization_id: organization_id.to_owned(),
+                })
+            }
+        }
+    }
+}
+
 fn valid_organization(value: &str) -> bool {
     !value.is_empty()
         && value.len() <= 128
@@ -186,6 +274,30 @@ mod tests {
 
     const A: &str = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
     const B: &str = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
+
+    #[test]
+    fn internal_service_credential_is_opt_in_tenant_bound_and_redacted() {
+        let source = PassportTenantCredentialSource::internal_service_token(A).unwrap();
+        assert_eq!(source.key_for("org-a"), Some(A));
+        assert_eq!(source.key_for("bad org"), None);
+        assert_eq!(
+            source
+                .authenticate(Some("org-a"), Some(A))
+                .unwrap()
+                .organization_id(),
+            "org-a"
+        );
+        assert_eq!(
+            source.authenticate(Some("org-a"), Some(B)),
+            Err(PassportTenantAuthError::InvalidKey)
+        );
+        assert_eq!(
+            source.authenticate(Some("bad org"), Some(A)),
+            Err(PassportTenantAuthError::InvalidKey)
+        );
+        assert!(!format!("{source:?}").contains(A));
+        assert!(PassportTenantCredentialSource::internal_service_token("dev-token").is_err());
+    }
 
     #[test]
     fn tenant_key_can_authorize_only_its_own_organization() {

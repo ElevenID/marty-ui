@@ -48,13 +48,14 @@ selected here.
    migration rehearsal, workload identity, actual rendered configuration and
    authcrypt policy/CA pairing. `-PlanOnly` explicitly reports
    `didcomm_configuration_validated=false`; it is not runtime qualification.
-   Native passport remains off. The current `-EnablePassportNative` selector
-   and `docker-compose.profile.passport-native-beta.yml` still require five
-   file-backed tenant, artifact, signer, bureau, and callback secrets. **Do not
-   provision those files or select that profile:** the configuration does not
-   meet the KMS-only custody requirement. Its render checks and `-PlanOnly`
-   result (`passport_configuration_validated=false`) are not acceptance.
-   Replace the selector and service configuration before passport activation.
+   Native passport remains off until the protected passport PR chain and this
+   KMS-only selector have merged, the exact beta image digest is available,
+   and the runtime gates below pass. The former five-file passport overlay has
+   been replaced in the integration branch by managed issuer signing, Transit
+   artifact encryption, Transit callback MAC, an existing internal service
+   credential handoff, and a beta-only non-physical bureau simulator. **Do not
+   provision the old passport key files or select an older profile.** Render
+   checks and `-PlanOnly` are not runtime acceptance.
    Resolve an active, organization-scoped `ICAO_EMRTD` X.509 document-signer
    identity created through the existing issuer UI; bind it to the passport
    job and use its managed Signing Keys/KMS reference and published certificate
@@ -79,6 +80,15 @@ selected here.
    before adding any bureau provider; do not deploy a duplicate ICAO signer.
    No native cutover or Python retirement is permitted until these gates and
    their language-neutral behavior tests pass.
+
+   The integration branch puts callback HMAC signing on a beta-only signer
+   listener; the ordinary Signing Keys and Gateway listeners have no signing
+   route. Compose limits the listener to an internal network shared only by
+   OpenBao and the bureau, with no published port. Before the remaining apps
+   start, deployment attaches the existing OpenBao container and checks the
+   live network is internal, has exactly those three running containers, and
+   gives OpenBao its required DNS alias. Restore repeats that gate. These
+   script and Compose checks have not yet been exercised in a beta deployment.
 
    The [Signing Keys public-route parity audit](signing-keys-public-parity-2026-09-26.md)
    found 24 Gateway-declared method/path pairs without Rust public handlers on
@@ -119,6 +129,14 @@ selected here.
    route audit on protected main after the stack lands, and complete beta
    acceptance before describing the aggregate release as feature-complete.
 
+   A read-only Redis inventory on 2026-09-26 found zero beta and production
+   managed `cred-issuer-*` bindings or active profiles for `holder_binding`,
+   `presentation_signing`, or `oid4vp_request_signing`. The dedicated managed
+   prefixes can therefore retain purpose isolation without a current legacy
+   generic-prefix migration. Recheck both environments immediately before
+   cutover; if that inventory changes, preserve exact tenant-bound live keys
+   before retiring Python.
+
    Certificate-enrollment follow-up: the protected baseline's service CSR UI
    action lacked a matching public service route. This review branch restores
    `/v1/signing-keys/services/{service_id}/certificate-csr` for dedicated
@@ -148,9 +166,15 @@ selected here.
    chat), and verify the `credentials:issue` scope maps to passport initiation.
    No new tenant or passport-specific static keyring is required for the
    existing pilot organization. Recheck these counts at actual cutover.
-4. Explicitly hold `BetaOrigin` at `https://beta.elevenidllc.com`. The wrapper's
-   HTTPS syntax check alone does not establish that an origin is beta. Retain
-   fixed beta Compose projects/network and labeled-volume ownership checks.
+   At cutover, deployment stops and verifies application writers, then requires
+   zero in-flight legacy bureau jobs before switching to KMS callback
+   verification. The deployment preflight rejects an existing bureau without
+   the isolated signer: the current restore script cannot recover such a
+   pre-isolation passport snapshot. The inventoried beta has no bureau, so
+   this release is eligible for a first passport cutover only; recheck that
+   condition before deployment and keep the restore constraint visible.
+4. The wrapper requires `BetaOrigin` to equal `https://beta.elevenidllc.com`.
+   Retain fixed beta Compose projects/network and labeled-volume ownership checks.
    Capture and compare production's exact before/after identity and state;
    beta isolation checks do not independently prove production unchanged.
    Do not deploy, restore, reset or probe mutating endpoints on production.
