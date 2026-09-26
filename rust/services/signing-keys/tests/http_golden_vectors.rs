@@ -1,4 +1,9 @@
-use axum::body::{to_bytes, Body};
+use axum::{
+    body::{to_bytes, Body},
+    routing::post,
+    Json, Router,
+};
+use base64::{engine::general_purpose::STANDARD, Engine as _};
 use http::{Request, StatusCode};
 use serde_json::Value;
 use tower::ServiceExt;
@@ -57,6 +62,110 @@ async fn passport_artifact_transit_routes_require_auth_and_kms() {
             .unwrap();
         assert_eq!(unavailable.status(), StatusCode::SERVICE_UNAVAILABLE);
     }
+}
+
+#[tokio::test]
+async fn passport_artifact_http_round_trip_preserves_kms_and_tenant_boundary() {
+    async fn kms_encrypt(Json(body): Json<Value>) -> Json<Value> {
+        STANDARD
+            .decode(body["plaintext"].as_str().unwrap())
+            .expect("base64 Transit plaintext");
+        Json(serde_json::json!({"data": {"ciphertext": "vault:v1:synthetic"}}))
+    }
+
+    async fn kms_decrypt(Json(body): Json<Value>) -> Json<Value> {
+        assert_eq!(body["ciphertext"], "vault:v1:synthetic");
+        let envelope = serde_json::json!({
+            "schema": "marty.passport-artifact-chunk/v1",
+            "organization_id": "org-a",
+            "artifact_id": "artifact-1",
+            "chunk_index": 0,
+            "chunk_count": 1,
+            "plaintext_b64": STANDARD.encode(b"passport")
+        });
+        Json(serde_json::json!({
+            "data": {"plaintext": STANDARD.encode(envelope.to_string())}
+        }))
+    }
+
+    let kms = Router::new()
+        .route(
+            "/v1/transit/encrypt/passport-artifact-marty-aes256",
+            post(kms_encrypt),
+        )
+        .route(
+            "/v1/transit/decrypt/passport-artifact-marty-aes256",
+            post(kms_decrypt),
+        );
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let address = listener.local_addr().unwrap();
+    let server = tokio::spawn(async move { axum::serve(listener, kms).await.unwrap() });
+    let provider = marty_signing_keys::flow_envelope::OpenBaoEnvelopeProvider::new(
+        format!("http://{address}"),
+        "synthetic-token",
+    )
+    .unwrap();
+    let app = marty_signing_keys::http::router_with_dependencies(
+        "synthetic-internal-key".into(),
+        None,
+        None,
+        None,
+        None,
+        Some(provider),
+        None,
+    );
+    let encrypted = app
+        .clone()
+        .oneshot(
+            Request::post("/internal/documents/org-a/passport-artifacts/encrypt")
+                .header("content-type", "application/json")
+                .header("x-api-key", "synthetic-internal-key")
+                .body(Body::from(
+                    serde_json::json!({
+                        "artifact_id": "artifact-1",
+                        "chunk_index": 0,
+                        "chunk_count": 1,
+                        "plaintext_b64": STANDARD.encode(b"passport")
+                    })
+                    .to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(encrypted.status(), StatusCode::OK);
+    let encrypted: Value =
+        serde_json::from_slice(&to_bytes(encrypted.into_body(), usize::MAX).await.unwrap())
+            .unwrap();
+    assert_eq!(encrypted["ciphertext"], "vault:v1:synthetic");
+
+    for (organization_id, expected_status) in
+        [("org-a", StatusCode::OK), ("org-b", StatusCode::CONFLICT)]
+    {
+        let decrypted = app
+            .clone()
+            .oneshot(
+                Request::post(format!(
+                    "/internal/documents/{organization_id}/passport-artifacts/decrypt"
+                ))
+                .header("content-type", "application/json")
+                .header("x-api-key", "synthetic-internal-key")
+                .body(Body::from(
+                    serde_json::json!({
+                        "artifact_id": "artifact-1",
+                        "chunk_index": 0,
+                        "chunk_count": 1,
+                        "ciphertext": "vault:v1:synthetic"
+                    })
+                    .to_string(),
+                ))
+                .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(decrypted.status(), expected_status);
+    }
+    server.abort();
 }
 
 #[tokio::test]
