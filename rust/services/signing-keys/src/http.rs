@@ -2110,9 +2110,14 @@ async fn rotate_and_record_public_service(
                         .await,
                         Ok(Ok(_))
                     ) {
+                        let mut reported_state = prior_state.clone();
+                        reported_state["provider_rotation"] = json!({
+                            "ok": false,
+                            "error": "Transit provider rotation failed."
+                        });
                         return Err(Json(json!({
                             "ok": false, "service_id": service_id,
-                            "rotation_state": {"provider_rotation": {"ok": false, "error": "Transit provider rotation failed."}},
+                            "rotation_state": reported_state,
                             "publication": {"jwks": false, "did": false},
                             "rotated_at": null,
                             "note": "Provider rotation did not complete; no rotation state was stored."

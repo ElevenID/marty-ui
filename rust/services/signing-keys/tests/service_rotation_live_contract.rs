@@ -348,6 +348,11 @@ async fn public_rotation_updates_state_only_after_kms_success() {
     let (status, denied) = rotate(&app, &organization_id, "service-a", json!({})).await;
     assert_eq!(status, StatusCode::OK, "{denied}");
     assert_eq!(denied["ok"], false);
+    assert_eq!(denied["rotation_state"]["provider_rotation"]["ok"], false);
+    assert_eq!(
+        denied["rotation_state"]["previous_versions"],
+        before_denial["services"][0]["rotation_state"]["previous_versions"]
+    );
     let after_denial = store.load(&organization_id).await.unwrap();
     assert_eq!(
         after_denial["services"][0]["rotation_state"],
