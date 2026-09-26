@@ -66,6 +66,8 @@ def validate_model(model, *, passport_enabled, files):
                 )
             return
         bureau = services["passport-beta-bureau"]
+        signing = environment(services["signing-keys"])
+        gateway = environment(targets["gateway"])
         flow = environment(targets["flow"])
         if flow.get("ISSUANCE_NATIVE_SERVICE_URL") != "http://issuance-native:8005":
             raise PassportConfigurationError("Beta passport Flow target is not native")
@@ -113,6 +115,7 @@ def validate_model(model, *, passport_enabled, files):
                 "Beta passport bureau key file is forbidden"
             )
         bureau_env = environment(bureau)
+        signing_key = bureau_env.get("SIGNING_KEYS_INTERNAL_API_KEY")
         if not (
             bureau_env.get("SERVICE_NAME") == "passport_beta_bureau"
             and bureau_env.get("ENVIRONMENT") == "beta"
@@ -122,12 +125,14 @@ def validate_model(model, *, passport_enabled, files):
             and bureau_env.get("GRPC_SERVICE_TOKEN")
             == native.get("PERSONALIZATION_BUREAU_API_KEY")
             and bureau_env.get("GRPC_SERVICE_TOKEN")
-            == environment(targets["gateway"]).get("GRPC_SERVICE_TOKEN")
+            == gateway.get("GRPC_SERVICE_TOKEN")
             and bureau_env.get("GRPC_SERVICE_TOKEN") == flow.get("GRPC_SERVICE_TOKEN")
             and bureau_env.get("GRPC_SERVICE_TOKEN") == native.get("GRPC_SERVICE_TOKEN")
-            and bureau_env.get("SIGNING_KEYS_INTERNAL_API_KEY")
-            and bureau_env.get("SIGNING_KEYS_INTERNAL_API_KEY")
-            == native.get("SIGNING_KEYS_INTERNAL_API_KEY")
+            and signing_key
+            and all(
+                signing_key == owner.get("SIGNING_KEYS_INTERNAL_API_KEY")
+                for owner in (native, gateway, signing)
+            )
             and bureau_env.get("SIGNING_KEYS_INTERNAL_URL") == PRIVATE_SIGNING_URL
             and bureau_env.get("PASSPORT_BUREAU_CALLBACK_URL") == PRIVATE_CALLBACK_URL
         ):

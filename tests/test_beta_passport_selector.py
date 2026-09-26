@@ -58,6 +58,14 @@ def model(enabled=True):
             "SIGNING_KEYS_INTERNAL_API_KEY": "synthetic-signing-credential",
         }
     )
+    services["gateway"]["environment"]["SIGNING_KEYS_INTERNAL_API_KEY"] = (
+        "synthetic-signing-credential"
+    )
+    services["signing-keys"] = {
+        "environment": {
+            "SIGNING_KEYS_INTERNAL_API_KEY": "synthetic-signing-credential"
+        }
+    }
     services["passport-beta-bureau"] = {
         "image": IMAGE,
         "environment": {
@@ -119,6 +127,8 @@ def test_rendered_compose_environment_list_is_supported():
         "missing_bureau",
         "token_mismatch",
         "signing_key_mismatch",
+        "gateway_signing_key_mismatch",
+        "service_signing_key_mismatch",
         "signing_route",
         "callback_route",
         "image",
@@ -180,6 +190,14 @@ def test_partial_or_unsafe_selection_fails_closed(mutation):
         native["PERSONALIZATION_BUREAU_API_KEY"] = "synthetic-private-value"
     elif mutation == "signing_key_mismatch":
         native["SIGNING_KEYS_INTERNAL_API_KEY"] = "synthetic-other-credential"
+    elif mutation == "gateway_signing_key_mismatch":
+        services["gateway"]["environment"]["SIGNING_KEYS_INTERNAL_API_KEY"] = (
+            "synthetic-other-credential"
+        )
+    elif mutation == "service_signing_key_mismatch":
+        services["signing-keys"]["environment"]["SIGNING_KEYS_INTERNAL_API_KEY"] = (
+            "synthetic-other-credential"
+        )
     elif mutation == "signing_route":
         bureau["environment"]["SIGNING_KEYS_INTERNAL_URL"] = (
             "https://public.example.test"
