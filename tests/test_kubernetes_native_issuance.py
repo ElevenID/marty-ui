@@ -21,6 +21,7 @@ CONTRACT = json.loads(
 # provider secrets have a closed Secret-backed binding in the renderer.
 PASSPORT_NOT_KUBERNETES_BOUND = {
     "PASSPORT_NATIVE_HTTP_ENABLED",
+    "PASSPORT_MANAGED_ISSUER_SIGNING_ENABLED",
     "PASSPORT_TENANT_API_KEYS",
     "ICAO_DOCUMENT_SIGNER_URL",
     "ICAO_DOCUMENT_SIGNER_API_KEY",
