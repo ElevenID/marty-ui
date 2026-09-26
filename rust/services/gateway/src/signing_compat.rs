@@ -18,6 +18,8 @@ pub enum SigningCompatibilityOperation {
     ProfilePublicIdentity { profile_id: String },
     ResolveIssuerDid,
     CscaTrustAnchors,
+    PassportArtifactEncrypt,
+    PassportArtifactDecrypt,
     ServiceSign { service_id: String },
 }
 
@@ -42,6 +44,12 @@ pub fn operation(method: HttpMethod, path: &str) -> Option<SigningCompatibilityO
         }
         (HttpMethod::Get, "csca-trust-anchors") => {
             Some(SigningCompatibilityOperation::CscaTrustAnchors)
+        }
+        (HttpMethod::Post, "passport-artifacts/encrypt") => {
+            Some(SigningCompatibilityOperation::PassportArtifactEncrypt)
+        }
+        (HttpMethod::Post, "passport-artifacts/decrypt") => {
+            Some(SigningCompatibilityOperation::PassportArtifactDecrypt)
         }
         _ => parameterized(method, relative),
     }
@@ -129,7 +137,7 @@ mod tests {
         ))
         .expect("internal signing contract");
         assert_eq!(contract.schema_version, 1);
-        assert_eq!(contract.routes.len(), 15);
+        assert_eq!(contract.routes.len(), 17);
         for case in contract.routes {
             let path = case.example_path.as_deref().unwrap_or(&case.path);
             let actual = operation(case.method, path).expect("classified route");
@@ -155,6 +163,8 @@ mod tests {
             }
             SigningCompatibilityOperation::ResolveIssuerDid => "resolve_issuer_did",
             SigningCompatibilityOperation::CscaTrustAnchors => "csca_trust_anchors",
+            SigningCompatibilityOperation::PassportArtifactEncrypt => "passport_artifact_encrypt",
+            SigningCompatibilityOperation::PassportArtifactDecrypt => "passport_artifact_decrypt",
             SigningCompatibilityOperation::ServiceSign { .. } => "service_sign",
         }
     }

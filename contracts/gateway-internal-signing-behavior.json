@@ -15,6 +15,8 @@
     {"method": "GET", "path": "/internal/signing-keys/issuer-profiles/{profile_id}/public-identity", "example_path": "/internal/signing-keys/issuer-profiles/profile-1/public-identity", "operation": "profile_public_identity"},
     {"method": "GET", "path": "/internal/signing-keys/resolve-issuer-did", "operation": "resolve_issuer_did"},
     {"method": "GET", "path": "/internal/signing-keys/csca-trust-anchors", "operation": "csca_trust_anchors"},
+    {"method": "POST", "path": "/internal/signing-keys/passport-artifacts/encrypt", "operation": "passport_artifact_encrypt"},
+    {"method": "POST", "path": "/internal/signing-keys/passport-artifacts/decrypt", "operation": "passport_artifact_decrypt"},
     {"method": "POST", "path": "/internal/signing-keys/services/{service_id}/sign", "example_path": "/internal/signing-keys/services/service-1/sign", "operation": "service_sign"}
   ],
   "dedicated_auth": {

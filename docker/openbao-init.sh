@@ -68,6 +68,8 @@ bao write -address="${BAO_ADDR}" -f transit/keys/auth-session-es256 \
 # credential encryption so ciphertext cannot be replayed across domains.
 bao write -address="${BAO_ADDR}" -f transit/keys/flow-response-envelope-marty-aes256 \
     type=aes256-gcm96 exportable=false 2>/dev/null || echo "  flow-response-envelope-marty-aes256 already exists"
+bao write -address="${BAO_ADDR}" -f transit/keys/passport-artifact-marty-aes256 \
+    type=aes256-gcm96 exportable=false 2>/dev/null || echo "  passport-artifact-marty-aes256 already exists"
 bao write -address="${BAO_ADDR}" -f transit/keys/notification-webhook-envelope-marty-aes256 \
     type=aes256-gcm96 exportable=false 2>/dev/null || echo "  notification-webhook-envelope-marty-aes256 already exists"
 
@@ -178,6 +180,15 @@ path "transit/decrypt/flow-response-envelope-marty-aes256" {
   capabilities = ["create", "update"]
 }
 path "transit/keys/flow-response-envelope-marty-aes256" {
+  capabilities = ["read"]
+}
+path "transit/encrypt/passport-artifact-marty-aes256" {
+  capabilities = ["create", "update"]
+}
+path "transit/decrypt/passport-artifact-marty-aes256" {
+  capabilities = ["create", "update"]
+}
+path "transit/keys/passport-artifact-marty-aes256" {
   capabilities = ["read"]
 }
 path "transit/encrypt/notification-webhook-envelope-marty-aes256" {

@@ -3092,8 +3092,10 @@ async fn internal_signing_compatibility_handler(
         &operation,
         SigningCompatibilityOperation::FlowEnvelopeWrap
             | SigningCompatibilityOperation::FlowEnvelopeUnwrap
+            | SigningCompatibilityOperation::PassportArtifactEncrypt
+            | SigningCompatibilityOperation::PassportArtifactDecrypt
     ) {
-        return forward_flow_envelope(&state, &operation, &organization_id, request).await;
+        return forward_bound_envelope(&state, &operation, &organization_id, request).await;
     }
     if operation == SigningCompatibilityOperation::IssuerContext {
         return forward_issuer_context(&state, &organization_id, &query).await;
@@ -3344,7 +3346,7 @@ async fn forward_issuer_context(
     }
 }
 
-async fn forward_flow_envelope(
+async fn forward_bound_envelope(
     state: &Arc<GatewayRuntimeState>,
     operation: &SigningCompatibilityOperation,
     organization_id: &str,
@@ -3358,16 +3360,29 @@ async fn forward_flow_envelope(
         Ok(Value::Object(body)) => Value::Object(body),
         _ => return detail_response(422, "Request body must be a JSON object."),
     };
-    body["organization_id"] = Value::String(organization_id.into());
     let path = match operation {
-        SigningCompatibilityOperation::FlowEnvelopeWrap => "/internal/flow-key-envelopes/wrap",
-        SigningCompatibilityOperation::FlowEnvelopeUnwrap => "/internal/flow-key-envelopes/unwrap",
-        _ => unreachable!("caller restricts flow-envelope operations"),
+        SigningCompatibilityOperation::FlowEnvelopeWrap => {
+            body["organization_id"] = Value::String(organization_id.into());
+            "/internal/flow-key-envelopes/wrap".to_owned()
+        }
+        SigningCompatibilityOperation::FlowEnvelopeUnwrap => {
+            body["organization_id"] = Value::String(organization_id.into());
+            "/internal/flow-key-envelopes/unwrap".to_owned()
+        }
+        SigningCompatibilityOperation::PassportArtifactEncrypt => format!(
+            "/internal/documents/{}/passport-artifacts/encrypt",
+            utf8_percent_encode(organization_id, NON_ALPHANUMERIC)
+        ),
+        SigningCompatibilityOperation::PassportArtifactDecrypt => format!(
+            "/internal/documents/{}/passport-artifacts/decrypt",
+            utf8_percent_encode(organization_id, NON_ALPHANUMERIC)
+        ),
+        _ => unreachable!("caller restricts bound-envelope operations"),
     };
     let response = signing_service_request(
         state,
         HttpMethod::Post,
-        path,
+        &path,
         Some(serde_json::to_vec(&body).expect("flow envelope request serializes")),
     )
     .await;
@@ -5042,6 +5057,24 @@ mod tests {
                     .expect("flow envelope JSON");
                     assert_eq!(body["organization_id"], "org-1");
                     br#"{"schema":"marty.flow-key-envelope/v1","flow_instance_id":"flow-1","plaintext_b64":"cHJpdmF0ZS1qd2s"}"#.to_vec()
+                }
+                "/internal/documents/org%2D1/passport-artifacts/encrypt" => {
+                    let body: Value = serde_json::from_slice(
+                        request.body.as_deref().expect("passport artifact body"),
+                    )
+                    .expect("passport artifact JSON");
+                    assert_eq!(body["artifact_id"], "artifact-1");
+                    assert!(body.get("organization_id").is_none());
+                    br#"{"ciphertext":"vault:v1:synthetic"}"#.to_vec()
+                }
+                "/internal/documents/org%2D1/passport-artifacts/decrypt" => {
+                    let body: Value = serde_json::from_slice(
+                        request.body.as_deref().expect("passport artifact body"),
+                    )
+                    .expect("passport artifact JSON");
+                    assert_eq!(body["artifact_id"], "artifact-1");
+                    assert!(body.get("organization_id").is_none());
+                    br#"{"plaintext_b64":"cGFzc3BvcnQ="}"#.to_vec()
                 }
                 "/internal/compat/issuer-context" => {
                     let body: Value = serde_json::from_slice(
@@ -8157,6 +8190,55 @@ mod tests {
         )
         .expect("unwrap JSON");
         assert_eq!(body["plaintext_b64"], "cHJpdmF0ZS1qd2s");
+    }
+
+    #[tokio::test]
+    async fn passport_artifact_routes_are_internal_and_tenant_scoped() {
+        let body = br#"{"artifact_id":"artifact-1","chunk_index":0,"chunk_count":1,"plaintext_b64":"cGFzc3BvcnQ="}"#;
+        let unauthorized = runtime_router()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/internal/signing-keys/passport-artifacts/encrypt?organization_id=org-1")
+                    .body(Body::from(body.as_slice()))
+                    .expect("request"),
+            )
+            .await
+            .expect("response");
+        assert_eq!(unauthorized.status(), StatusCode::UNAUTHORIZED);
+        let encrypted = runtime_router()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/internal/signing-keys/passport-artifacts/encrypt?organization_id=org-1")
+                    .header("x-api-key", "internal-signing-key")
+                    .body(Body::from(body.as_slice()))
+                    .expect("request"),
+            )
+            .await
+            .expect("response");
+        assert_eq!(encrypted.status(), StatusCode::OK);
+        let encrypted: Value = serde_json::from_slice(
+            &to_bytes(encrypted.into_body(), DEFAULT_MAXIMUM_BODY_BYTES)
+                .await
+                .expect("body"),
+        )
+        .expect("encrypted JSON");
+        assert_eq!(encrypted["ciphertext"], "vault:v1:synthetic");
+        let decrypted = runtime_router()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/internal/signing-keys/passport-artifacts/decrypt?organization_id=org-1")
+                    .header("x-api-key", "internal-signing-key")
+                    .body(Body::from(
+                        br#"{"artifact_id":"artifact-1","chunk_index":0,"chunk_count":1,"ciphertext":"vault:v1:synthetic"}"#.as_slice(),
+                    ))
+                    .expect("request"),
+            )
+            .await
+            .expect("response");
+        assert_eq!(decrypted.status(), StatusCode::OK);
     }
 
     #[tokio::test]
