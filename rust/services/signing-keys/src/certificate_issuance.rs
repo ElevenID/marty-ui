@@ -272,11 +272,8 @@ pub fn prepare_dsc(
     let constraints = issuer_tbs
         .get::<BasicConstraints>()
         .map_err(|_| DscCertificateError::InvalidIssuer)?;
-    let usage = issuer_tbs
-        .get::<KeyUsage>()
-        .map_err(|_| DscCertificateError::InvalidIssuer)?;
     if !matches!(constraints, Some((true, BasicConstraints { ca: true, .. })))
-        || !usage.is_some_and(|(critical, usage)| critical && usage.key_cert_sign())
+        || !ca_key_usage_allows_signing(issuer_tbs)?
     {
         return Err(DscCertificateError::InvalidIssuer);
     }
@@ -400,9 +397,6 @@ fn valid_chain_parent(
     let constraints = tbs
         .get::<BasicConstraints>()
         .map_err(|_| DscCertificateError::InvalidIssuer)?;
-    let usage = tbs
-        .get::<KeyUsage>()
-        .map_err(|_| DscCertificateError::InvalidIssuer)?;
     let start = not_before
         .duration_since(SystemTime::UNIX_EPOCH)
         .map_err(|_| DscCertificateError::InvalidIssuer)?;
@@ -413,9 +407,16 @@ fn valid_chain_parent(
         constraints,
         Some((true, BasicConstraints { ca: true, path_len_constraint, .. }))
             if path_len_constraint.is_none_or(|limit| subordinate_cas <= usize::from(limit))
-    ) && usage.is_some_and(|(critical, usage)| critical && usage.key_cert_sign())
+    ) && ca_key_usage_allows_signing(tbs)?
         && start >= tbs.validity.not_before.to_unix_duration()
         && end <= tbs.validity.not_after.to_unix_duration())
+}
+
+fn ca_key_usage_allows_signing(tbs: &TbsCertificate) -> Result<bool, DscCertificateError> {
+    let usage = tbs
+        .get::<KeyUsage>()
+        .map_err(|_| DscCertificateError::InvalidIssuer)?;
+    Ok(usage.is_some_and(|(_, usage)| usage.key_cert_sign()))
 }
 
 #[cfg(test)]
@@ -645,7 +646,7 @@ mod tests {
     }
 
     #[test]
-    fn rejects_intermediate_without_critical_ca_signing_usage() {
+    fn rejects_intermediate_without_key_cert_sign_usage() {
         let (root_der, root_key) =
             create_csca_certificate("US", "Root", 365, KeyType::EcdsaP256).unwrap();
         let (intermediate_der, _) = CertificateBuilderConfig::new()
@@ -678,6 +679,30 @@ mod tests {
             .unwrap();
         intermediate.tbs_certificate.extensions = Some(vec![constraints, wrong_usage]);
         assert!(!valid_chain_parent(&intermediate, now, end, 1).unwrap());
+    }
+
+    #[test]
+    fn accepts_noncritical_key_cert_sign_usage_for_enrolled_csca_and_parent() {
+        let (root_der, _) = create_csca_certificate("US", "Root", 365, KeyType::EcdsaP256).unwrap();
+        let mut root = Certificate::from_der(&root_der).unwrap();
+        let constraints = BasicConstraints {
+            ca: true,
+            path_len_constraint: None,
+        }
+        .to_extension(&root.tbs_certificate.subject, &[])
+        .unwrap();
+        let mut usage = KeyUsage(KeyUsages::KeyCertSign.into())
+            .to_extension(
+                &root.tbs_certificate.subject,
+                std::slice::from_ref(&constraints),
+            )
+            .unwrap();
+        usage.critical = false;
+        root.tbs_certificate.extensions = Some(vec![constraints, usage]);
+        let now = SystemTime::now();
+        let end = now + Duration::from_secs(24 * 60 * 60);
+        assert!(ca_key_usage_allows_signing(&root.tbs_certificate).unwrap());
+        assert!(valid_chain_parent(&root, now, end, 1).unwrap());
     }
 
     #[test]
