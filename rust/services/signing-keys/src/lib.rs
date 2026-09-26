@@ -6,6 +6,7 @@ pub mod domain;
 pub mod flow_envelope;
 pub mod http;
 pub mod kms;
+pub mod passport_artifact_envelope;
 pub mod profiles;
 pub mod registry;
 pub mod validation;

@@ -19,6 +19,9 @@ use crate::flow_envelope::{
     FlowEnvelopeError, OpenBaoEnvelopeProvider, UnwrapRequest, WrapRequest,
 };
 use crate::kms::{self, ProviderRequest, SignRequest};
+use crate::passport_artifact_envelope::{
+    self, ArtifactEnvelopeError, DecryptChunkRequest, EncryptChunkRequest,
+};
 use crate::profiles::{
     self, CustodyFormatRequest, CustodyFormatResponse, DuplicateProfileRequest,
     DuplicateProfileResponse, FindProfilesRequest, NormalizeProfileRequest, ProfileStore,
@@ -204,6 +207,14 @@ pub fn router_with_dependencies(
         .route(
             "/internal/documents/{organization_id}/csca-trust-anchors",
             get(active_csca_trust_anchors),
+        )
+        .route(
+            "/internal/documents/{organization_id}/passport-artifacts/encrypt",
+            post(encrypt_passport_artifact_chunk),
+        )
+        .route(
+            "/internal/documents/{organization_id}/passport-artifacts/decrypt",
+            post(decrypt_passport_artifact_chunk),
         )
         .route(
             "/internal/documents/{organization_id}/csca-certificates/expiring",
@@ -1123,6 +1134,38 @@ async fn unwrap_flow_key(
         .as_ref()
         .ok_or(FlowEnvelopeError::Unavailable)?;
     provider.unwrap(request).await.map(Json)
+}
+
+async fn encrypt_passport_artifact_chunk(
+    State(state): State<AppState>,
+    Path(organization_id): Path<String>,
+    headers: HeaderMap,
+    Json(request): Json<EncryptChunkRequest>,
+) -> Result<Json<Value>, ArtifactEnvelopeError> {
+    authorize_internal(&state, &headers).map_err(|_| ArtifactEnvelopeError::Unauthorized)?;
+    let provider = state
+        .flow_envelopes
+        .as_ref()
+        .ok_or(ArtifactEnvelopeError::Unavailable)?;
+    passport_artifact_envelope::encrypt_chunk(provider, &organization_id, request)
+        .await
+        .map(Json)
+}
+
+async fn decrypt_passport_artifact_chunk(
+    State(state): State<AppState>,
+    Path(organization_id): Path<String>,
+    headers: HeaderMap,
+    Json(request): Json<DecryptChunkRequest>,
+) -> Result<Json<Value>, ArtifactEnvelopeError> {
+    authorize_internal(&state, &headers).map_err(|_| ArtifactEnvelopeError::Unauthorized)?;
+    let provider = state
+        .flow_envelopes
+        .as_ref()
+        .ok_or(ArtifactEnvelopeError::Unavailable)?;
+    passport_artifact_envelope::decrypt_chunk(provider, &organization_id, request)
+        .await
+        .map(Json)
 }
 
 async fn kms_sign(
