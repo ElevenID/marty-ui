@@ -20,6 +20,7 @@ import {
   TableContainer,
   TableHead,
   TableRow,
+  TextField,
   Tooltip,
   Typography,
 } from '@mui/material';
@@ -28,6 +29,7 @@ import ContentCopyIcon from '@mui/icons-material/ContentCopy';
 import DeleteOutlineIcon from '@mui/icons-material/DeleteOutlineOutlined';
 import RefreshIcon from '@mui/icons-material/Refresh';
 import SwapHorizIcon from '@mui/icons-material/SwapHoriz';
+import UploadFileOutlinedIcon from '@mui/icons-material/UploadFileOutlined';
 
 import signingKeysApi from '../../../services/signingKeysApi';
 import { useConsole } from '../../../contexts/ConsoleContext';
@@ -58,6 +60,8 @@ export default function DidIdentitiesPage() {
   const [error, setError] = useState('');
   const [retiring, setRetiring] = useState(null);
   const [rebinding, setRebinding] = useState(null);
+  const [certifying, setCertifying] = useState(null);
+  const [certificate, setCertificate] = useState({ cert_pem: '', cert_chain_pem: '' });
   const [submitting, setSubmitting] = useState(false);
 
   const load = useCallback(async () => {
@@ -165,6 +169,35 @@ export default function DidIdentitiesPage() {
     }
   };
 
+  const attachCertificate = async () => {
+    if (!certifying || !activeOrgId || !certificate.cert_pem.trim()) return;
+    setSubmitting(true);
+    setError('');
+    try {
+      await signingKeysApi.storeIssuerIdentityCertificate({
+        organization_id: activeOrgId,
+        issuer_did: certifying.issuer_did,
+        key_purpose: certifying.key_purpose,
+        credential_format: certifying.credential_format,
+        algorithm: certifying.algorithm,
+        cert_pem: certificate.cert_pem.trim(),
+        cert_chain_pem: certificate.cert_chain_pem.trim(),
+      });
+      showNotification?.('Document signer certificate attached to issuer identity.', 'success');
+      setCertifying(null);
+      setCertificate({ cert_pem: '', cert_chain_pem: '' });
+    } catch (requestError) {
+      setError(
+        requestError?.response?.error?.message
+        || requestError?.response?.detail
+        || requestError?.message
+        || 'Document signer certificate could not be attached.',
+      );
+    } finally {
+      setSubmitting(false);
+    }
+  };
+
   return (
     <Container maxWidth="xl" sx={{ py: 4 }}>
       <Stack direction={{ xs: 'column', md: 'row' }} justifyContent="space-between" spacing={2} sx={{ mb: 3 }}>
@@ -241,6 +274,19 @@ export default function DidIdentitiesPage() {
                 <TableCell>{identity.algorithm}</TableCell>
                 <TableCell><Chip size="small" color="success" label={identity.status} /></TableCell>
                 <TableCell align="right">
+                  {identity.credential_format === 'ICAO_EMRTD' && (
+                    <Tooltip title="Attach document signer certificate">
+                      <IconButton
+                        onClick={() => {
+                          setCertifying(identity);
+                          setCertificate({ cert_pem: '', cert_chain_pem: '' });
+                        }}
+                        aria-label="Attach document signer certificate"
+                      >
+                        <UploadFileOutlinedIcon />
+                      </IconButton>
+                    </Tooltip>
+                  )}
                   <Tooltip title="Move to default signing service">
                     <IconButton onClick={() => setRebinding(identity)} aria-label="Move identity to default signing service">
                       <SwapHorizIcon />
@@ -257,6 +303,43 @@ export default function DidIdentitiesPage() {
           </TableBody>
         </Table>
       </TableContainer>
+
+      <Dialog open={Boolean(certifying)} onClose={() => !submitting && setCertifying(null)} maxWidth="md" fullWidth>
+        <DialogTitle>Attach document signer certificate</DialogTitle>
+        <DialogContent>
+          <Stack spacing={2} sx={{ mt: 1 }}>
+            <Alert severity="info">
+              Upload the signed DSC and optional chain for this passport issuer. Marty verifies the certificate public key against the issuer’s managed KMS identity; no private key is uploaded.
+            </Alert>
+            {certifying && (
+              <Typography fontFamily="monospace" sx={{ overflowWrap: 'anywhere' }}>{certifying.issuer_did}</Typography>
+            )}
+            <TextField
+              label="Document signer certificate PEM"
+              multiline
+              minRows={6}
+              fullWidth
+              required
+              value={certificate.cert_pem}
+              onChange={(event) => setCertificate((current) => ({ ...current, cert_pem: event.target.value }))}
+            />
+            <TextField
+              label="Certificate chain PEM (optional)"
+              multiline
+              minRows={3}
+              fullWidth
+              value={certificate.cert_chain_pem}
+              onChange={(event) => setCertificate((current) => ({ ...current, cert_chain_pem: event.target.value }))}
+            />
+          </Stack>
+        </DialogContent>
+        <DialogActions>
+          <Button onClick={() => setCertifying(null)} disabled={submitting}>Cancel</Button>
+          <Button variant="contained" onClick={attachCertificate} disabled={submitting || !certificate.cert_pem.trim()}>
+            {submitting ? <CircularProgress size={20} /> : 'Attach certificate'}
+          </Button>
+        </DialogActions>
+      </Dialog>
 
       <Dialog open={Boolean(retiring)} onClose={() => !submitting && setRetiring(null)} maxWidth="sm" fullWidth>
         <DialogTitle>Retire issuer identity?</DialogTitle>

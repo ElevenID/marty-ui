@@ -221,7 +221,7 @@ fn managed_openbao_service(endpoint: &str) -> Value {
         "key_aliases": [],
         "algorithms": SUPPORTED_ALGORITHMS,
         "key_purposes": purposes,
-        "credential_formats": ["jwt_vc_json", "dc+sd-jwt", "mso_mdoc", "zk_mdoc", "vds_nc", "oauth-authz-req+jwt", "lti_tool_jwt"],
+        "credential_formats": ["jwt_vc_json", "dc+sd-jwt", "mso_mdoc", "zk_mdoc", "icao_emrtd", "vds_nc", "oauth-authz-req+jwt", "lti_tool_jwt"],
         "status": "configured",
         "managed": true,
         "read_only": true,
@@ -895,6 +895,19 @@ fn truthy(value: &Value) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn managed_openbao_accepts_passport_profile_wire_format() {
+        let managed = managed_openbao_service("http://openbao:8200");
+        assert!(managed["credential_formats"]
+            .as_array()
+            .unwrap()
+            .contains(&json!("icao_emrtd")));
+        assert!(managed["key_purposes"]
+            .as_array()
+            .unwrap()
+            .contains(&json!("x509_doc_signer")));
+    }
 
     #[test]
     fn malformed_service_is_not_silently_registered() {
