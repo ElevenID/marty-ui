@@ -6915,6 +6915,7 @@ mod tests {
                 HttpMethod::Get,
                 "/v1/signing-keys/services/service-1/audit-log",
             ),
+            (HttpMethod::Post, "/v1/signing-keys/services/service-1/sign"),
             (HttpMethod::Get, "/v1/signing-keys/compliance/keys-summary"),
         ] {
             let route =
