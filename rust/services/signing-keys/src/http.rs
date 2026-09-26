@@ -5388,6 +5388,21 @@ mod public_contract_tests {
     use axum::{body::Body, http::Request};
     use tower::ServiceExt;
 
+    #[test]
+    fn vdsnc_registration_behavior_is_frozen_before_public_port() {
+        let behavior: Value = serde_json::from_str(include_str!(
+            "../../../../contracts/signing-vdsnc-registration-behavior.json"
+        ))
+        .unwrap();
+        assert_eq!(behavior["method"], "POST");
+        assert_eq!(
+            behavior["path"],
+            "/v1/signing-keys/services/vdsnc/register"
+        );
+        assert_eq!(behavior["defaults"]["key_purposes"], json!(["vdsnc_signing"]));
+        assert_eq!(behavior["defaults"]["released_credential_formats"], json!(["mso_mdoc"]));
+    }
+
     #[tokio::test]
     #[ignore = "requires disposable MARTY_TEST_REDIS_URL"]
     async fn publication_discovery_preserves_intervening_config_edit() {
