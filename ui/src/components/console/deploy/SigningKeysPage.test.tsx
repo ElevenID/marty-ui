@@ -77,6 +77,17 @@ vi.mock('../../../contexts/ConsoleContext', () => ({
 
 describe('SigningKeysPage', () => {
   const CurrentPath = () => <span data-testid="current-path">{useLocation().pathname}</span>
+  const configureRotatableService = () => mockGetKeyManagementConfig.mockResolvedValue({
+    supports_native_key_management: false,
+    default_service_id: 'svc-transit',
+    services: [{
+      id: 'svc-transit', name: 'Registered OpenBao', service_type: 'openbao-transit',
+      provider: 'openbao', endpoint: 'http://openbao:8200', mount: 'transit',
+      key_reference: 'registered-key', key_aliases: ['registered-key'],
+      algorithms: ['ES256'], managed: false, read_only: false,
+    }],
+    service_type_catalog: [],
+  })
   beforeEach(() => {
     vi.clearAllMocks()
     mockUseConsole.mockReturnValue({
@@ -156,6 +167,7 @@ describe('SigningKeysPage', () => {
     expect(screen.getByText(/Create an issuer identity and choose "Create new key in KMS"/i)).toBeInTheDocument()
     expect(screen.queryByRole('button', { name: 'deploy.signingKeys.uploadKey' })).not.toBeInTheDocument()
     expect(screen.getByText('Elevenidllc managed OpenBao transit')).toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: 'Rotate key' })).not.toBeInTheDocument()
   })
 
   it('routes managed passport CSR creation to the issuer identity instead of a shared service key', async () => {
@@ -266,20 +278,40 @@ describe('SigningKeysPage', () => {
 
   it('reports rotation completion after rotating a service key', async () => {
     vi.spyOn(window, 'confirm').mockImplementation(() => true)
+    configureRotatableService()
 
     const { user } = renderWithRouter(<SigningKeysPage />, {
       initialEntries: ['/console/org/deploy/key-management'],
     })
 
     await waitFor(() => {
-      expect(screen.getByText('Elevenidllc managed OpenBao transit')).toBeInTheDocument()
+      expect(screen.getByText('Registered OpenBao')).toBeInTheDocument()
     })
 
     await user.click(screen.getByRole('button', { name: 'Rotate key' }))
 
     await waitFor(() => {
-      expect(mockRotateServiceKey).toHaveBeenCalledWith('managed-openbao-transit', { organization_id: 'org-123' })
+      expect(mockRotateServiceKey).toHaveBeenCalledWith('svc-transit', { organization_id: 'org-123' })
       expect(mockShowNotification).toHaveBeenCalledWith('Key rotation completed successfully.', 'success')
+    })
+  })
+
+  it('warns when KMS rotation succeeds but public key publication fails', async () => {
+    vi.spyOn(window, 'confirm').mockImplementation(() => true)
+    configureRotatableService()
+    mockRotateServiceKey.mockResolvedValue({ ok: true, publication: { jwks: false, did: false } })
+    const { user } = renderWithRouter(<SigningKeysPage />, {
+      initialEntries: ['/console/org/deploy/key-management'],
+    })
+    await waitFor(() => {
+      expect(screen.getByText('Registered OpenBao')).toBeInTheDocument()
+    })
+    await user.click(screen.getByRole('button', { name: 'Rotate key' }))
+    await waitFor(() => {
+      expect(mockShowNotification).toHaveBeenCalledWith(
+        expect.stringContaining('public key publication is incomplete'),
+        'warning',
+      )
     })
   })
 

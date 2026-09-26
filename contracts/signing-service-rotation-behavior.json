@@ -4,7 +4,7 @@
   "method": "POST",
   "path": "/v1/signing-keys/services/{service_id}/rotate",
   "request_fields": {
-    "overlap_days": {"default": 7},
+    "overlap_days": {"default": 7, "zero_uses_default": true, "rust_valid_range_after_default": [0, 3650]},
     "activate_at": {"default": "current_utc_iso"},
     "publish_updates": {"default": true}
   },
@@ -19,6 +19,7 @@
   "publication_fields": ["jwks", "did"],
   "previous_version_fields": ["key_reference", "retire_after", "recorded_at"],
   "missing_service_status": 404,
+  "provider_failure_response": {"ok": false, "rotated_at": null, "state_persisted": false},
   "security_and_integrity_rules": [
     "Use only the tenant-registered service and its KMS key reference; never accept a caller-selected KMS locator or private material.",
     "Rotate inside KMS; never export or hold a private key.",
@@ -26,5 +27,5 @@
     "Do not claim a completed rotation in stored state when the provider did not rotate a key.",
     "A rotated key invalidates a stale certificate; public publication must revalidate the certificate against the current KMS public key."
   ],
-  "reviewed_divergence": "The Python handler recorded last_rotated_at and appended previous_versions even when the provider returned ok=false. Rust must fail closed and avoid claiming rotation on provider failure, while retaining the released response field names for completed rotations."
+  "reviewed_divergence": "The Python handler recorded last_rotated_at and appended previous_versions even when the provider returned ok=false. Rust must fail closed and avoid claiming rotation on provider failure, while retaining the released response field names for completed rotations. Rust also rejects a future activate_at because Transit rotates immediately; the Python path accepted a future annotation without scheduling activation."
 }

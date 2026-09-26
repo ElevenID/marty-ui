@@ -183,6 +183,10 @@ pub fn router_with_dependencies(
             post(sign_public_service_payload),
         )
         .route(
+            "/v1/signing-keys/services/{service_id}/rotate",
+            post(rotate_public_service_key),
+        )
+        .route(
             "/v1/signing-keys/services/{service_id}/mdoc-x5c",
             get(public_service_mdoc_x5c),
         )
@@ -515,6 +519,19 @@ struct PublicServiceSignRequest {
     key_reference: Option<String>,
     #[serde(default)]
     key_purpose: Option<String>,
+}
+
+#[derive(Debug, Default, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct PublicServiceRotationRequest {
+    #[serde(default)]
+    organization_id: Option<String>,
+    #[serde(default)]
+    overlap_days: Option<i64>,
+    #[serde(default)]
+    activate_at: Option<String>,
+    #[serde(default)]
+    publish_updates: Option<bool>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -1783,6 +1800,184 @@ async fn sign_public_service_payload(
         Ok(signed) => Json(signed).into_response(),
         Err(error) => error.into_response(),
     }
+}
+
+async fn rotate_public_service_key(
+    State(state): State<AppState>,
+    Path(service_id): Path<String>,
+    Query(scope): Query<OrganizationScope>,
+    body: Option<Json<PublicServiceRotationRequest>>,
+) -> Response {
+    let body = body.map(|Json(body)| body).unwrap_or_default();
+    if let Err(error) =
+        validate_service_scope(&scope.organization_id, body.organization_id.as_deref())
+    {
+        return error.into_response();
+    }
+    let overlap_days = body.overlap_days.filter(|days| *days != 0).unwrap_or(7);
+    if !(0..=3650).contains(&overlap_days) {
+        return public_error(
+            StatusCode::UNPROCESSABLE_ENTITY,
+            "overlap_days must be between 0 and 3650.",
+        );
+    }
+    if let Some(activate_at) = body.activate_at.as_deref() {
+        let parsed = match chrono::DateTime::parse_from_rfc3339(activate_at) {
+            Ok(parsed) => parsed,
+            Err(_) => {
+                return public_error(
+                    StatusCode::UNPROCESSABLE_ENTITY,
+                    "activate_at must be an RFC 3339 timestamp.",
+                )
+            }
+        };
+        if parsed > chrono::Utc::now() {
+            return public_error(
+                StatusCode::UNPROCESSABLE_ENTITY,
+                "Future activation is not supported by immediate KMS rotation.",
+            );
+        }
+    }
+    let Some(store) = state.registry_store.as_ref() else {
+        return public_error(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "Signing registry is unavailable.",
+        );
+    };
+    let mut registry = match store.load(&scope.organization_id).await {
+        Ok(registry) => registry,
+        Err(_) => {
+            return public_error(
+                StatusCode::SERVICE_UNAVAILABLE,
+                "Signing registry is unavailable.",
+            )
+        }
+    };
+    let Some(service) = registry
+        .get("services")
+        .and_then(Value::as_array)
+        .and_then(|services| {
+            services
+                .iter()
+                .find(|service| service.get("id").and_then(Value::as_str) == Some(&service_id))
+        })
+        .cloned()
+    else {
+        return public_error(StatusCode::NOT_FOUND, "Signing service not found.");
+    };
+    let now = chrono::Utc::now();
+    let rotated_at = now.to_rfc3339();
+    let mut rotation_state = service
+        .get("rotation_state")
+        .filter(|state| state.is_object())
+        .cloned()
+        .unwrap_or_else(|| json!({}));
+    let unrotated = |error: &str, state: Value| {
+        let mut state = state;
+        state["provider_rotation"] = json!({"ok": false, "error": error});
+        Json(json!({
+            "ok": false,
+            "service_id": service_id,
+            "rotation_state": state,
+            "publication": {"jwks": false, "did": false},
+            "rotated_at": null,
+            "note": "Provider rotation did not complete; no rotation state was stored."
+        }))
+        .into_response()
+    };
+    if !matches!(
+        service.get("service_type").and_then(Value::as_str),
+        Some("openbao-transit" | "hashicorp-vault-transit" | "custom-transit-compatible")
+    ) {
+        return unrotated("No provider rotation adapter available.", rotation_state);
+    }
+    let key_reference = service
+        .get("key_reference")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|reference| !reference.is_empty());
+    let Some(key_reference) = key_reference else {
+        return unrotated("key_reference is required for rotation.", rotation_state);
+    };
+    let provider_rotation = match kms::rotate_openbao(ProviderRequest {
+        service_config: service.clone(),
+    })
+    .await
+    {
+        Ok(result) => result,
+        Err(_) => return unrotated("Transit provider rotation failed.", rotation_state),
+    };
+
+    let previous_version = json!({
+        "key_reference": key_reference,
+        "retire_after": (now + chrono::Duration::days(overlap_days)).to_rfc3339(),
+        "recorded_at": rotated_at,
+    });
+    let previous = rotation_state
+        .get_mut("previous_versions")
+        .and_then(Value::as_array_mut);
+    if let Some(previous) = previous {
+        previous.push(previous_version);
+    } else {
+        rotation_state["previous_versions"] = json!([previous_version]);
+    }
+    rotation_state["last_rotated_at"] = json!(rotated_at);
+    rotation_state["activate_at"] = json!(body.activate_at.unwrap_or_else(|| rotated_at.clone()));
+    rotation_state["overlap_days"] = json!(overlap_days);
+    rotation_state["provider_rotation"] = provider_rotation;
+    let Some(services) = registry.get_mut("services").and_then(Value::as_array_mut) else {
+        return public_error(StatusCode::BAD_GATEWAY, "Signing registry is malformed.");
+    };
+    let Some(recorded) = services
+        .iter_mut()
+        .find(|recorded| recorded.get("id").and_then(Value::as_str) == Some(&service_id))
+    else {
+        return public_error(StatusCode::BAD_GATEWAY, "Signing registry is malformed.");
+    };
+    recorded["rotation_state"] = rotation_state.clone();
+    recorded["rotation_policy"]["overlap_days"] = json!(overlap_days);
+    recorded["rotation_policy"]["auto_publish"] = json!(body.publish_updates.unwrap_or(true));
+    recorded["updated_at"] = json!(rotated_at);
+    if store.save(&scope.organization_id, &registry).await.is_err() {
+        return public_error(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "The KMS key rotated, but its registry state could not be stored; reconcile before retrying.",
+        );
+    }
+    let mut publication = json!({"jwks": false, "did": false});
+    if body.publish_updates.unwrap_or(true) {
+        publication["jwks"] = json!(publish_public_service_jwks(
+            State(state.clone()),
+            Path(service_id.clone()),
+            Query(OrganizationScope {
+                organization_id: scope.organization_id.clone()
+            }),
+            None,
+        )
+        .await
+        .status()
+        .is_success());
+        publication["did"] = json!(publish_public_service_did_vm(
+            State(state),
+            Path(service_id.clone()),
+            Query(OrganizationScope {
+                organization_id: scope.organization_id
+            }),
+            None,
+        )
+        .await
+        .status()
+        .is_success());
+    }
+    Json(json!({
+        "ok": true,
+        "service_id": service_id,
+        "rotation_state": rotation_state,
+        "publication": publication,
+        "rotated_at": rotated_at,
+        "note": "Provider rotation completed; publication may require renewed certificate material."
+    }))
+    .into_response()
 }
 
 async fn authorize_public_service_reference(
@@ -4520,6 +4715,13 @@ async fn openapi() -> Json<serde_json::Value> {
             "/v1/signing-keys/services/{service_id}/mdoc-x5c": {
                 "get": {"summary": "Read Registered Service mDoc Certificate Chain", "responses": {"200": {"description": "Public X.509 chain bound to the current KMS key"}}}
             },
+            "/v1/signing-keys/services/{service_id}/rotate": {
+                "post": {"summary": "Rotate Registered Service Key in KMS", "responses": {
+                    "200": {"description": "Provider rotation and optional publication results"},
+                    "404": {"description": "Signing service not found"},
+                    "503": {"description": "Signing registry unavailable"}
+                }}
+            },
             "/v1/signing-keys/services/{service_id}/verify-current": {
                 "get": {"summary": "Verify Current Registered Service Public Key", "responses": {"200": {"description": "KMS public-key verification checks"}}}
             },
@@ -4570,8 +4772,8 @@ mod public_contract_tests {
     use axum::{body::Body, http::Request};
     use tower::ServiceExt;
 
-    #[test]
-    fn service_rotation_behavior_is_frozen_before_public_port() {
+    #[tokio::test]
+    async fn service_rotation_behavior_is_frozen_before_public_port() {
         let behavior: Value = serde_json::from_str(include_str!(
             "../../../../contracts/signing-service-rotation-behavior.json"
         ))
@@ -4582,9 +4784,19 @@ mod public_contract_tests {
             "/v1/signing-keys/services/{service_id}/rotate"
         );
         assert_eq!(behavior["request_fields"]["overlap_days"]["default"], 7);
-        assert_eq!(behavior["request_fields"]["publish_updates"]["default"], true);
-        assert_eq!(behavior["provider_rotation"]["success_statuses"], json!([200, 204]));
+        assert_eq!(
+            behavior["request_fields"]["publish_updates"]["default"],
+            true
+        );
+        assert_eq!(
+            behavior["provider_rotation"]["success_statuses"],
+            json!([200, 204])
+        );
         assert_eq!(behavior["publication_fields"], json!(["jwks", "did"]));
+        assert!(
+            openapi().await.0["paths"]["/v1/signing-keys/services/{service_id}/rotate"]["post"]
+                .is_object()
+        );
     }
 
     #[tokio::test]

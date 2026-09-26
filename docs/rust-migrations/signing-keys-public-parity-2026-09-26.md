@@ -145,6 +145,22 @@ passes for session authorization and trusted tenant forwarding to the
 Signing Keys upstream. The combined Gateway-to-Rust and beta gates remain
 open.
 
-Thus 6 declared pairs remain without local public handlers. These new
+The local `POST /services/{service_id}/rotate` adapter now rotates an existing
+registered Transit key inside KMS, reads only its new public version, and
+records overlap metadata only after a successful provider operation. It
+optionally reuses the existing Rust JWKS and DID publication handlers; those
+handlers recheck any service certificate against the current KMS public key.
+The released response fields are frozen in
+`contracts/signing-service-rotation-behavior.json`; its deliberate failure
+integrity tightening is documented there. An isolated Redis/mock-KMS route
+test passed for success, failure-without-state-change, tenant isolation, and
+caller key-selector rejection. Future `activate_at` values are rejected because
+Transit rotates immediately and cannot schedule that activation. A Gateway
+runtime test passed for session
+authorization and trusted tenant forwarding. The console hides rotation for
+read-only shared services and warns if KMS rotation succeeds but publication
+does not. Combined Gateway-to-Rust and beta acceptance remain open.
+
+Thus 5 declared pairs remain without local public handlers. These new
 adapters still need authenticated through-Gateway runtime tests. The
 24-pair table above remains the protected-main audit baseline.

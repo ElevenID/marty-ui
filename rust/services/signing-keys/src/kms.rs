@@ -270,6 +270,71 @@ fn empty_transit_list_response(detail: &str) -> bool {
         .is_some_and(|errors| errors.is_empty())
 }
 
+/// Rotate one existing Transit key inside KMS and return its new public version.
+/// No private key material crosses this boundary.
+pub async fn rotate_openbao(request: ProviderRequest) -> Result<Value, KmsError> {
+    if Provider::from_config(&request.service_config)? != Provider::OpenBao {
+        return Err(KmsError::InvalidConfig(
+            "No provider rotation adapter available.".into(),
+        ));
+    }
+    let config = &request.service_config;
+    let endpoint = required(
+        config,
+        "endpoint",
+        "Transit endpoint is required for rotation",
+    )?;
+    let key_reference = required(
+        config,
+        "key_reference",
+        "A registered KMS key reference is required for rotation",
+    )?;
+    let token = transit_token(config);
+    if token.is_empty() {
+        return Err(KmsError::InvalidConfig(
+            "Transit access is not configured for rotation.".into(),
+        ));
+    }
+    let mount = string(config, "mount")
+        .unwrap_or("transit")
+        .trim_matches('/');
+    let namespace = string(config, "namespace")
+        .map(str::trim)
+        .filter(|value| !value.is_empty());
+    let url = format!(
+        "{}/v1/{mount}/keys/{key_reference}",
+        endpoint.trim_end_matches('/')
+    );
+    let rotate = Client::new()
+        .post(format!("{url}/rotate"))
+        .timeout(HTTP_TIMEOUT)
+        .header("X-Vault-Token", &token);
+    let rotate = if let Some(namespace) = namespace {
+        rotate.header("X-Vault-Namespace", namespace)
+    } else {
+        rotate
+    };
+    send_json_or_empty(rotate).await?;
+    let read = Client::new()
+        .get(url)
+        .timeout(HTTP_TIMEOUT)
+        .header("X-Vault-Token", &token);
+    let read = if let Some(namespace) = namespace {
+        read.header("X-Vault-Namespace", namespace)
+    } else {
+        read
+    };
+    let latest_version = match send_json(read).await {
+        Ok(response) => response
+            .get("data")
+            .and_then(|data| data.get("latest_version"))
+            .cloned()
+            .unwrap_or(Value::Null),
+        Err(_) => Value::Null,
+    };
+    Ok(json!({"ok": true, "version": latest_version}))
+}
+
 pub async fn verify(request: ProviderRequest) -> Result<CapabilityResult, KmsError> {
     Ok(match Provider::from_config(&request.service_config)? {
         Provider::OpenBao => verify_openbao(&request.service_config).await,
@@ -1122,6 +1187,56 @@ fn bounded(value: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn transit_rotation_stays_in_kms_and_reports_public_version() {
+        use std::sync::{
+            atomic::{AtomicUsize, Ordering},
+            Arc,
+        };
+
+        let rotations = Arc::new(AtomicUsize::new(0));
+        let app = axum::Router::new()
+            .route(
+                "/v1/transit/keys/signing-key",
+                axum::routing::get(|| async { axum::Json(json!({"data": {"latest_version": 2}})) }),
+            )
+            .route(
+                "/v1/transit/keys/signing-key/rotate",
+                axum::routing::post({
+                    let rotations = Arc::clone(&rotations);
+                    move || {
+                        let rotations = Arc::clone(&rotations);
+                        async move {
+                            rotations.fetch_add(1, Ordering::SeqCst);
+                            StatusCode::NO_CONTENT
+                        }
+                    }
+                }),
+            );
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("local KMS fixture");
+        let endpoint = format!("http://{}", listener.local_addr().unwrap());
+        let server = tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+        let rotated = rotate_openbao(ProviderRequest {
+            service_config: json!({
+                "service_type": "openbao-transit", "endpoint": endpoint,
+                "mount": "transit", "auth_mode": "token", "auth_reference": "fixture-token",
+                "key_reference": "signing-key"
+            }),
+        })
+        .await
+        .unwrap();
+        server.abort();
+        assert_eq!(rotated, json!({"ok": true, "version": 2}));
+        assert_eq!(rotations.load(Ordering::SeqCst), 1);
+        assert!(rotate_openbao(ProviderRequest {
+            service_config: json!({"service_type": "aws-kms"}),
+        })
+        .await
+        .is_err());
+    }
 
     #[tokio::test]
     async fn existing_public_key_discovery_never_creates_a_managed_key() {
