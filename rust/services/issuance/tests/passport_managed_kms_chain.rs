@@ -120,7 +120,7 @@ async fn issue_certificate(
         payload_b64: URL_SAFE_NO_PAD.encode(tbs.to_der().unwrap()),
     })
     .await
-    .unwrap();
+    .unwrap_or_else(|_| panic!("disposable OpenBao certificate signing failed"));
     assert_eq!(signed.signature_encoding, "der");
     let signature = URL_SAFE_NO_PAD.decode(signed.signature_b64).unwrap();
     Certificate {
