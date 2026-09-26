@@ -13,6 +13,11 @@ name = "marty-signing-keys"
 path = "src/main.rs"
 test = false
 
+[[bin]]
+name = "marty-passport-callback-signer"
+path = "src/bin/passport_callback_signer.rs"
+test = false
+
 [dependencies]
 axum.workspace = true
 aws-config.workspace = true
@@ -20,7 +25,7 @@ aws-sdk-kms.workspace = true
 aws-smithy-http-client.workspace = true
 base64.workspace = true
 chrono.workspace = true
-marty-crypto.workspace = true
+marty-crypto = { workspace = true, features = ["x509"] }
 percent-encoding.workspace = true
 regex.workspace = true
 reqwest.workspace = true

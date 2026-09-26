@@ -1,0 +1,16 @@
+{
+  "schema": "marty.passport-bureau-callback/v1",
+  "maximum_body_bytes": 65536,
+  "transit_key_id": "passport-bureau-callback-marty-hmac",
+  "algorithm": "sha2-256",
+  "signed_input": "base64(UTF8(schema) || NUL || UTF8(organization_id) || NUL || raw_callback_body)",
+  "required_callback_fields": ["organization_id", "bureau_job_id", "status"],
+  "signature_header": "x-personalization-signature",
+  "signature_format": "vault:vN:...",
+  "internal_routes": {
+    "sign": "/internal/documents/{organization_id}/passport-callbacks/sign",
+    "verify": "/internal/signing-keys/passport-callbacks/verify"
+  },
+  "key_custody": "The purpose-bound, non-exportable HMAC key stays in OpenBao Transit; no caller receives key material.",
+  "signer_exposure": "The sign route is available only on the beta-only callback signer process and isolated Compose network; the ordinary signing-keys and gateway listeners cannot sign callbacks."
+}
