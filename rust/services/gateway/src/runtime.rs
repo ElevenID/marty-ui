@@ -3094,7 +3094,6 @@ async fn internal_signing_compatibility_handler(
             | SigningCompatibilityOperation::FlowEnvelopeUnwrap
             | SigningCompatibilityOperation::PassportArtifactEncrypt
             | SigningCompatibilityOperation::PassportArtifactDecrypt
-            | SigningCompatibilityOperation::PassportCallbackSign
             | SigningCompatibilityOperation::PassportCallbackVerify
     ) {
         return forward_bound_envelope(&state, &operation, &organization_id, request).await;
@@ -3377,10 +3376,6 @@ async fn forward_bound_envelope(
         ),
         SigningCompatibilityOperation::PassportArtifactDecrypt => format!(
             "/internal/documents/{}/passport-artifacts/decrypt",
-            utf8_percent_encode(organization_id, NON_ALPHANUMERIC)
-        ),
-        SigningCompatibilityOperation::PassportCallbackSign => format!(
-            "/internal/documents/{}/passport-callbacks/sign",
             utf8_percent_encode(organization_id, NON_ALPHANUMERIC)
         ),
         SigningCompatibilityOperation::PassportCallbackVerify => format!(
@@ -5085,15 +5080,6 @@ mod tests {
                     assert_eq!(body["artifact_id"], "artifact-1");
                     assert!(body.get("organization_id").is_none());
                     br#"{"plaintext_b64":"cGFzc3BvcnQ="}"#.to_vec()
-                }
-                "/internal/documents/org%2D1/passport-callbacks/sign" => {
-                    let body: Value = serde_json::from_slice(
-                        request.body.as_deref().expect("passport callback body"),
-                    )
-                    .expect("passport callback JSON");
-                    assert_eq!(body["body_b64"], "c3ludGhldGlj");
-                    assert!(body.get("organization_id").is_none());
-                    br#"{"signature":"vault:v1:synthetic"}"#.to_vec()
                 }
                 "/internal/documents/org%2D1/passport-callbacks/verify" => {
                     let body: Value = serde_json::from_slice(
@@ -8271,18 +8257,7 @@ mod tests {
 
     #[tokio::test]
     async fn passport_callback_routes_are_internal_and_tenant_scoped() {
-        let unauthorized = runtime_router()
-            .oneshot(
-                Request::builder()
-                    .method("POST")
-                    .uri("/internal/signing-keys/passport-callbacks/sign?organization_id=org-1")
-                    .body(Body::from(r#"{"body_b64":"c3ludGhldGlj"}"#))
-                    .expect("request"),
-            )
-            .await
-            .expect("response");
-        assert_eq!(unauthorized.status(), StatusCode::UNAUTHORIZED);
-        let signed = runtime_router()
+        let unsigned = runtime_router()
             .oneshot(
                 Request::builder()
                     .method("POST")
@@ -8293,7 +8268,7 @@ mod tests {
             )
             .await
             .expect("response");
-        assert_eq!(signed.status(), StatusCode::OK);
+        assert_eq!(unsigned.status(), StatusCode::NOT_FOUND);
         let verified = runtime_router()
             .oneshot(
                 Request::builder()

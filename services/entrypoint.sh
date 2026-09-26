@@ -32,6 +32,11 @@ if [ "$MODULE_NAME" = "signing_keys" ]; then
 	exec /usr/local/bin/marty-signing-keys
 fi
 
+if [ "$MODULE_NAME" = "passport_callback_signer" ]; then
+	echo "Starting beta-only passport callback signer"
+	exec /usr/local/bin/marty-passport-callback-signer
+fi
+
 if [ "$MODULE_NAME" = "notification" ]; then
 	echo "Starting canonical Rust service: $SERVICE_NAME"
 	exec /usr/local/bin/marty-notification

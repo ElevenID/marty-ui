@@ -8,8 +8,9 @@
   "signature_header": "x-personalization-signature",
   "signature_format": "vault:vN:...",
   "internal_routes": {
-    "sign": "/internal/signing-keys/passport-callbacks/sign",
+    "sign": "/internal/documents/{organization_id}/passport-callbacks/sign",
     "verify": "/internal/signing-keys/passport-callbacks/verify"
   },
-  "key_custody": "The purpose-bound, non-exportable HMAC key stays in OpenBao Transit; no caller receives key material."
+  "key_custody": "The purpose-bound, non-exportable HMAC key stays in OpenBao Transit; no caller receives key material.",
+  "signer_exposure": "The sign route is available only on the beta-only callback signer process and isolated Compose network; the ordinary signing-keys and gateway listeners cannot sign callbacks."
 }
