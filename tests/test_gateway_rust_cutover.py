@@ -40,7 +40,9 @@ def test_language_neutral_gateway_contracts_are_the_runtime_boundary() -> None:
     ):
         assert (ROOT / str(behavior[field])).is_file()
     assert 'include_str!("../../../../contracts/gateway-routes.json")' in rust_contract
-    assert "EXPECTED_ROUTE_COUNT: usize = 441" in rust_contract
+    routes = json.loads(text("contracts/gateway-routes.json"))
+    assert routes["route_count"] == len(routes["routes"]) == 442
+    assert f"EXPECTED_ROUTE_COUNT: usize = {routes['route_count']}" in rust_contract
     assert not (ROOT / "scripts/gateway_route_contract.py").exists()
 
 

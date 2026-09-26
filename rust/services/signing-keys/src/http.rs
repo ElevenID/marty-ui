@@ -129,6 +129,10 @@ pub fn router_with_dependencies(
             "/v1/signing-keys/issuer-identities/certificate",
             axum::routing::put(store_public_issuer_certificate),
         )
+        .route(
+            "/v1/signing-keys/issuer-identities/csca-certificate",
+            axum::routing::put(enroll_public_csca_certificate),
+        )
         .route("/v1/signing-keys/config/purposes", get(purposes))
         .route(
             "/v1/signing-keys/config/service-capabilities",
@@ -340,6 +344,36 @@ struct IssuerIdentityRequest {
     cert_chain_pem: Option<String>,
 }
 
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct CscaCertificateEnrollment {
+    #[serde(default)]
+    organization_id: Option<String>,
+    issuer_did: String,
+    credential_format: String,
+    algorithm: String,
+    certificate_id: String,
+    cert_pem: String,
+    #[serde(default)]
+    cert_chain_pem: String,
+}
+
+impl CscaCertificateEnrollment {
+    fn identity(&self) -> IssuerIdentityRequest {
+        IssuerIdentityRequest {
+            organization_id: self.organization_id.clone(),
+            issuer_did: self.issuer_did.clone(),
+            key_purpose: "csca".into(),
+            credential_format: self.credential_format.clone(),
+            algorithm: self.algorithm.clone(),
+            key_attestation_policy: None,
+            cert_pem: None,
+            cert_chain_pem: None,
+        }
+    }
+}
+
+#[derive(Debug)]
 struct PublicSigningError {
     status: StatusCode,
     detail: String,
@@ -746,6 +780,130 @@ async fn store_public_issuer_certificate(
         Ok(_) => Json(identity_projection(&profile)).into_response(),
         Err(error) => error.into_response(),
     }
+}
+
+fn managed_csca_import(
+    input: &CscaCertificateEnrollment,
+    profile: &Value,
+    resolved: &Value,
+    provider_public_jwk: &Value,
+) -> Result<ImportCscaCertificateRequest, PublicSigningError> {
+    if profile.get("id") != resolved.pointer("/issuer_profile/id")
+        || profile.get("signing_key_reference")
+            != resolved.pointer("/issuer_profile/signing_key_reference")
+        || profile.get("signing_service_id")
+            != resolved.pointer("/issuer_profile/signing_service_id")
+        || profile.get("key_purpose").and_then(Value::as_str) != Some("csca")
+    {
+        return Err(public_failure(
+            StatusCode::CONFLICT,
+            "Resolved CSCA identity does not match its active managed profile.",
+        ));
+    }
+    let key_reference = profile
+        .get("signing_key_reference")
+        .and_then(Value::as_str)
+        .filter(|reference| !reference.trim().is_empty())
+        .ok_or_else(|| {
+            public_failure(
+                StatusCode::SERVICE_UNAVAILABLE,
+                "Managed CSCA key reference is unavailable.",
+            )
+        })?;
+    let expected_public_jwk = resolved
+        .get("public_jwk")
+        .filter(|jwk| jwk.is_object())
+        .cloned()
+        .ok_or_else(|| {
+            public_failure(
+                StatusCode::SERVICE_UNAVAILABLE,
+                "Managed CSCA public key is unavailable.",
+            )
+        })?;
+    if !documents::same_public_jwk(&expected_public_jwk, provider_public_jwk) {
+        return Err(public_failure(
+            StatusCode::CONFLICT,
+            "Published CSCA identity does not match its current managed KMS key.",
+        ));
+    }
+    Ok(ImportCscaCertificateRequest {
+        cert_pem: input.cert_pem.clone(),
+        cert_chain_pem: input.cert_chain_pem.clone(),
+        key_reference: key_reference.to_owned(),
+        expected_public_jwk,
+        metadata: json!({"issuer_did": input.issuer_did}),
+    })
+}
+
+async fn enroll_public_csca_certificate(
+    State(state): State<AppState>,
+    Query(scope): Query<OrganizationScope>,
+    Json(input): Json<CscaCertificateEnrollment>,
+) -> Response {
+    let identity = input.identity();
+    if let Err(error) = validate_identity_scope(&scope.organization_id, &identity) {
+        return error.into_response();
+    }
+    if state.csca_lifecycle_store.is_none() {
+        return public_error(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "CSCA lifecycle storage is unavailable.",
+        );
+    }
+    let profile = match one_matching_profile(&state, &scope.organization_id, &identity).await {
+        Ok(profile) => profile,
+        Err(error) => return error.into_response(),
+    };
+    let Some(compatibility) = state.compatibility.as_ref() else {
+        return public_error(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "Issuer identity service is unavailable.",
+        );
+    };
+    let resolved = match compatibility
+        .resolve_issuer_did(&ResolveIssuerDidRequest {
+            organization_id: scope.organization_id.clone(),
+            issuer_did: input.issuer_did.clone(),
+            verification_method_id: None,
+            credential_format: Some(input.credential_format.clone()),
+            key_purpose: Some("csca".into()),
+            algorithm: Some(canonical_algorithm(&input.algorithm)),
+        })
+        .await
+    {
+        Ok(resolved) => resolved,
+        Err(error) => return error.into_response(),
+    };
+    let provider_public_jwk = match compatibility
+        .provider_public_key_for_profile(&scope.organization_id, &profile)
+        .await
+    {
+        Ok(jwk) => jwk,
+        Err(error) => return error.into_response(),
+    };
+    let request = match managed_csca_import(&input, &profile, &resolved, &provider_public_jwk) {
+        Ok(request) => request,
+        Err(error) => return error.into_response(),
+    };
+    let now = chrono::Utc::now();
+    let mut document = match load_csca_lifecycle(&state, &scope.organization_id, now).await {
+        Ok(document) => document,
+        Err(error) => return error.into_response(),
+    };
+    let view = match document.import(&input.certificate_id, request, now) {
+        Ok(view) => view,
+        Err(error) => return csca_lifecycle_error(error).into_response(),
+    };
+    if let Err(error) = save_csca_lifecycle(&state, &document).await {
+        return error.into_response();
+    }
+    Json(json!({
+        "certificate_id": view.certificate.certificate_id,
+        "subject": view.certificate.subject,
+        "not_after": view.certificate.not_after,
+        "status": view.status,
+    }))
+    .into_response()
 }
 
 async fn delete_public_issuer_identity(
@@ -1993,6 +2151,9 @@ async fn openapi() -> Json<serde_json::Value> {
                 "patch": {"summary": "Move Issuer Identity to Default Signing Service", "responses": {"200": {"description": "Replacement public key is published before active custody changes"}}},
                 "delete": {"summary": "Retire Public Issuer Identity", "responses": {"200": {"description": "Issuer identity retired"}}}
             },
+            "/v1/signing-keys/issuer-identities/csca-certificate": {
+                "put": {"summary": "Enroll Public CSCA Certificate for Managed Issuer Identity", "responses": {"200": {"description": "Tenant-scoped public trust anchor enrolled without exposing key coordinates"}}}
+            },
             "/v1/signing-keys/service-status": {"get": {"summary": "Signing Keys Service Extraction Status", "responses": {"200": {"description": "Successful Response"}}}},
             "/v1/signing-keys/config/purposes": {"get": {"summary": "List Available Key Purposes", "responses": {"200": {"description": "Successful Response"}}}},
             "/v1/signing-keys/config/service-capabilities": {"get": {"summary": "List Provider Capability Metadata", "responses": {"200": {"description": "Successful Response"}}}}
@@ -2027,6 +2188,65 @@ mod public_contract_tests {
             cert_pem: None,
             cert_chain_pem: None,
         }
+    }
+
+    #[test]
+    fn public_csca_enrollment_derives_custody_from_matching_managed_identity() {
+        let input: CscaCertificateEnrollment = serde_json::from_value(json!({
+            "organization_id": "org-a",
+            "issuer_did": "did:web:beta.example:orgs:acme",
+            "credential_format": "MDOC",
+            "algorithm": "ES256",
+            "certificate_id": "csca-a",
+            "cert_pem": "public-certificate",
+            "cert_chain_pem": ""
+        }))
+        .unwrap();
+        assert_eq!(input.identity().key_purpose, "csca");
+        let profile = json!({
+            "id": "profile-a", "key_purpose": "csca",
+            "signing_service_id": "managed-openbao-transit",
+            "signing_key_reference": "managed-kms-csca-a"
+        });
+        let resolved = json!({
+            "issuer_profile": {"id": "profile-a", "signing_service_id": "managed-openbao-transit", "signing_key_reference": "managed-kms-csca-a"},
+            "public_jwk": {"kty": "EC", "crv": "P-256", "x": "public-x", "y": "public-y"}
+        });
+        let request =
+            managed_csca_import(&input, &profile, &resolved, &resolved["public_jwk"]).unwrap();
+        assert_eq!(request.key_reference, "managed-kms-csca-a");
+        assert_eq!(request.expected_public_jwk, resolved["public_jwk"]);
+        assert_eq!(request.metadata, json!({"issuer_did": input.issuer_did}));
+        assert!(serde_json::from_value::<CscaCertificateEnrollment>(json!({
+            "issuer_did": input.issuer_did, "credential_format": "MDOC",
+            "algorithm": "ES256", "certificate_id": "csca-a",
+            "cert_pem": "public-certificate", "key_reference": "attacker-key"
+        }))
+        .is_err());
+        assert!(managed_csca_import(
+            &input,
+            &profile,
+            &json!({"issuer_profile": {"id": "profile-b"}, "public_jwk": resolved["public_jwk"]}),
+            &resolved["public_jwk"]
+        )
+        .is_err());
+        assert!(managed_csca_import(
+            &input,
+            &profile,
+            &json!({
+                "issuer_profile": {"id": "profile-a", "signing_service_id": "managed-openbao-transit", "signing_key_reference": "stale-kms-csca"},
+                "public_jwk": resolved["public_jwk"]
+            }),
+            &resolved["public_jwk"]
+        )
+        .is_err());
+        assert!(managed_csca_import(
+            &input,
+            &profile,
+            &resolved,
+            &json!({"kty": "EC", "crv": "P-256", "x": "rotated-x", "y": "rotated-y"})
+        )
+        .is_err());
     }
 
     #[test]

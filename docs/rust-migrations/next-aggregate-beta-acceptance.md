@@ -61,14 +61,15 @@ selected here.
    job and use its managed Signing Keys/KMS reference and published certificate
    for opaque CMS/SOD signing. Configure its active public CSCA trust anchor
    through the existing Rust CSCA lifecycle import and verify the DSC chain
-   before accepting a passport job. The issuer UI provisions managed CSCA and
-   DSC identities and attaches the public DSC certificate, but it does not
-   currently enroll a CSCA lifecycle trust anchor. A read-only beta check on
+   before accepting a passport job. The integration branch extends the issuer
+   UI to enroll a public CSCA lifecycle trust anchor against its managed CSCA
+   identity, deriving the KMS key binding server-side. This is not yet merged
+   or deployed. A read-only beta check on
    2026-09-26 found no CSCA lifecycle record for the pilot organization; its
    six existing issuer profiles include no `ICAO_EMRTD` document signer. This
    remains a cutover gate: obtain a valid CA/DSC certificate chain whose keys
    remain in KMS, import only the public CSCA material through the governed
-   internal lifecycle API, and verify the active trust-anchor projection before
+   tenant-scoped operator route, and verify the active trust-anchor projection before
    starting passport issuance. Do not treat a created issuer profile or an
    attached DSC alone as proof that the chain gate is ready. The beta bureau
    is a synthetic, non-physical handoff; do not present its tracking result as
@@ -84,8 +85,8 @@ selected here.
    signing service, but this source tree has no matching
    `/v1/signing-keys/services/{service_id}/certificate-csr` service route.
    Do not rely on that button for the pilot chain. Before beta acceptance,
-   provide a tested KMS-custodied CSR/CA enrollment path and a tenant-scoped
-   operator path for public CSCA lifecycle import; no private key or raw signing
+   provide a tested KMS-custodied CSR/CA enrollment path and verify the new
+   tenant-scoped operator path for public CSCA lifecycle import; no private key or raw signing
    secret may pass through the UI, repository, or deployment files.
 
    Read-only beta inventory on 2026-09-26 found the existing pilot

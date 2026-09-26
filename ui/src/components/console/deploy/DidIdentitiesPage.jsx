@@ -61,7 +61,7 @@ export default function DidIdentitiesPage() {
   const [retiring, setRetiring] = useState(null);
   const [rebinding, setRebinding] = useState(null);
   const [certifying, setCertifying] = useState(null);
-  const [certificate, setCertificate] = useState({ cert_pem: '', cert_chain_pem: '' });
+  const [certificate, setCertificate] = useState({ certificate_id: '', cert_pem: '', cert_chain_pem: '' });
   const [submitting, setSubmitting] = useState(false);
 
   const load = useCallback(async () => {
@@ -170,28 +170,42 @@ export default function DidIdentitiesPage() {
   };
 
   const attachCertificate = async () => {
-    if (!certifying || !activeOrgId || !certificate.cert_pem.trim()) return;
+    if (!certifying || !activeOrgId || !certificate.cert_pem.trim()
+      || (certifying.key_purpose === 'csca' && !certificate.certificate_id.trim())) return;
     setSubmitting(true);
     setError('');
     try {
-      await signingKeysApi.storeIssuerIdentityCertificate({
+      const publicCertificate = {
         organization_id: activeOrgId,
         issuer_did: certifying.issuer_did,
-        key_purpose: certifying.key_purpose,
         credential_format: certifying.credential_format,
         algorithm: certifying.algorithm,
         cert_pem: certificate.cert_pem.trim(),
         cert_chain_pem: certificate.cert_chain_pem.trim(),
-      });
-      showNotification?.('Document signer certificate attached to issuer identity.', 'success');
+      };
+      if (certifying.key_purpose === 'csca') {
+        await signingKeysApi.enrollCscaCertificate({
+          ...publicCertificate,
+          certificate_id: certificate.certificate_id.trim(),
+        });
+        showNotification?.('Public CSCA trust anchor enrolled.', 'success');
+      } else {
+        await signingKeysApi.storeIssuerIdentityCertificate({
+          ...publicCertificate,
+          key_purpose: certifying.key_purpose,
+        });
+        showNotification?.('Document signer certificate attached to issuer identity.', 'success');
+      }
       setCertifying(null);
-      setCertificate({ cert_pem: '', cert_chain_pem: '' });
+      setCertificate({ certificate_id: '', cert_pem: '', cert_chain_pem: '' });
     } catch (requestError) {
       setError(
         requestError?.response?.error?.message
         || requestError?.response?.detail
         || requestError?.message
-        || 'Document signer certificate could not be attached.',
+        || (certifying.key_purpose === 'csca'
+          ? 'CSCA trust anchor could not be enrolled.'
+          : 'Document signer certificate could not be attached.'),
       );
     } finally {
       setSubmitting(false);
@@ -274,14 +288,27 @@ export default function DidIdentitiesPage() {
                 <TableCell>{identity.algorithm}</TableCell>
                 <TableCell><Chip size="small" color="success" label={identity.status} /></TableCell>
                 <TableCell align="right">
-                  {identity.credential_format === 'ICAO_EMRTD' && (
+                  {identity.credential_format === 'ICAO_EMRTD' && identity.key_purpose === 'x509_doc_signer' && (
                     <Tooltip title="Attach document signer certificate">
                       <IconButton
                         onClick={() => {
                           setCertifying(identity);
-                          setCertificate({ cert_pem: '', cert_chain_pem: '' });
+                          setCertificate({ certificate_id: '', cert_pem: '', cert_chain_pem: '' });
                         }}
                         aria-label="Attach document signer certificate"
+                      >
+                        <UploadFileOutlinedIcon />
+                      </IconButton>
+                    </Tooltip>
+                  )}
+                  {identity.key_purpose === 'csca' && (
+                    <Tooltip title="Enroll public CSCA trust anchor">
+                      <IconButton
+                        onClick={() => {
+                          setCertifying(identity);
+                          setCertificate({ certificate_id: '', cert_pem: '', cert_chain_pem: '' });
+                        }}
+                        aria-label="Enroll public CSCA trust anchor"
                       >
                         <UploadFileOutlinedIcon />
                       </IconButton>
@@ -305,17 +332,28 @@ export default function DidIdentitiesPage() {
       </TableContainer>
 
       <Dialog open={Boolean(certifying)} onClose={() => !submitting && setCertifying(null)} maxWidth="md" fullWidth>
-        <DialogTitle>Attach document signer certificate</DialogTitle>
+        <DialogTitle>{certifying?.key_purpose === 'csca' ? 'Enroll public CSCA trust anchor' : 'Attach document signer certificate'}</DialogTitle>
         <DialogContent>
           <Stack spacing={2} sx={{ mt: 1 }}>
             <Alert severity="info">
-              Upload the signed DSC and optional chain for this passport issuer. Marty verifies the certificate public key against the issuer’s managed KMS identity; no private key is uploaded.
+              {certifying?.key_purpose === 'csca'
+                ? 'Upload only the public CA certificate and optional chain. Marty verifies its signature and matches its public key to this managed KMS identity; no private key is uploaded.'
+                : 'Upload the signed DSC and optional chain for this passport issuer. Marty verifies the certificate public key against the issuer’s managed KMS identity; no private key is uploaded.'}
             </Alert>
             {certifying && (
               <Typography fontFamily="monospace" sx={{ overflowWrap: 'anywhere' }}>{certifying.issuer_did}</Typography>
             )}
+            {certifying?.key_purpose === 'csca' && (
+              <TextField
+                label="CSCA certificate ID"
+                required
+                fullWidth
+                value={certificate.certificate_id}
+                onChange={(event) => setCertificate((current) => ({ ...current, certificate_id: event.target.value }))}
+              />
+            )}
             <TextField
-              label="Document signer certificate PEM"
+              label={certifying?.key_purpose === 'csca' ? 'CSCA certificate PEM' : 'Document signer certificate PEM'}
               multiline
               minRows={6}
               fullWidth
@@ -335,8 +373,8 @@ export default function DidIdentitiesPage() {
         </DialogContent>
         <DialogActions>
           <Button onClick={() => setCertifying(null)} disabled={submitting}>Cancel</Button>
-          <Button variant="contained" onClick={attachCertificate} disabled={submitting || !certificate.cert_pem.trim()}>
-            {submitting ? <CircularProgress size={20} /> : 'Attach certificate'}
+          <Button variant="contained" onClick={attachCertificate} disabled={submitting || !certificate.cert_pem.trim() || (certifying?.key_purpose === 'csca' && !certificate.certificate_id.trim())}>
+            {submitting ? <CircularProgress size={20} /> : (certifying?.key_purpose === 'csca' ? 'Enroll trust anchor' : 'Attach certificate')}
           </Button>
         </DialogActions>
       </Dialog>

@@ -3,11 +3,12 @@ import { renderWithRouter, screen, waitFor } from '@test/utils';
 
 import DidIdentitiesPage from './DidIdentitiesPage';
 
-const { listPublicIssuerIdentities, rebindIssuerIdentity, deleteIssuerIdentity, storeIssuerIdentityCertificate, showNotification } = vi.hoisted(() => ({
+const { listPublicIssuerIdentities, rebindIssuerIdentity, deleteIssuerIdentity, storeIssuerIdentityCertificate, enrollCscaCertificate, showNotification } = vi.hoisted(() => ({
   listPublicIssuerIdentities: vi.fn(),
   rebindIssuerIdentity: vi.fn(),
   deleteIssuerIdentity: vi.fn(),
   storeIssuerIdentityCertificate: vi.fn(),
+  enrollCscaCertificate: vi.fn(),
   showNotification: vi.fn(),
 }));
 
@@ -17,6 +18,7 @@ vi.mock('../../../services/signingKeysApi', () => ({
     rebindIssuerIdentity: (...args: unknown[]) => rebindIssuerIdentity(...args),
     deleteIssuerIdentity: (...args: unknown[]) => deleteIssuerIdentity(...args),
     storeIssuerIdentityCertificate: (...args: unknown[]) => storeIssuerIdentityCertificate(...args),
+    enrollCscaCertificate: (...args: unknown[]) => enrollCscaCertificate(...args),
   },
 }));
 
@@ -44,6 +46,7 @@ describe('DidIdentitiesPage', () => {
     deleteIssuerIdentity.mockResolvedValue({ deleted: { issuer_did: 'did:web:issuer.example:orgs:test' } });
     rebindIssuerIdentity.mockResolvedValue({ changed: true });
     storeIssuerIdentityCertificate.mockResolvedValue({ ok: true });
+    enrollCscaCertificate.mockResolvedValue({ status: 'VALID' });
   });
 
   it('loads identities through format-scoped public DID queries', async () => {
@@ -125,6 +128,38 @@ describe('DidIdentitiesPage', () => {
         cert_chain_pem: '',
       });
     });
+  });
+
+  it('enrolls a public CSCA anchor for the managed identity without custody inputs', async () => {
+    listPublicIssuerIdentities.mockImplementation(async ({ credential_format: credentialFormat }) => ({
+      identities: credentialFormat === 'MDOC'
+        ? [{
+          issuer_did: 'did:web:issuer.example:orgs:csca',
+          key_purpose: 'csca',
+          algorithm: 'ES256',
+          status: 'active',
+        }]
+        : [],
+    }));
+    const { user } = renderWithRouter(<DidIdentitiesPage />);
+    await screen.findByText('did:web:issuer.example:orgs:csca');
+    await user.click(screen.getByRole('button', { name: 'Enroll public CSCA trust anchor' }));
+    await user.type(screen.getByRole('textbox', { name: 'CSCA certificate ID' }), 'pilot-csca');
+    await user.type(screen.getByRole('textbox', { name: 'CSCA certificate PEM' }), 'public-certificate');
+    await user.click(screen.getByRole('button', { name: 'Enroll trust anchor' }));
+    await waitFor(() => {
+      expect(enrollCscaCertificate).toHaveBeenCalledWith({
+        organization_id: 'org-test-1',
+        issuer_did: 'did:web:issuer.example:orgs:csca',
+        credential_format: 'MDOC',
+        algorithm: 'ES256',
+        certificate_id: 'pilot-csca',
+        cert_pem: 'public-certificate',
+        cert_chain_pem: '',
+      });
+    });
+    expect(storeIssuerIdentityCertificate).not.toHaveBeenCalled();
+    expect(showNotification).toHaveBeenCalledWith('Public CSCA trust anchor enrolled.', 'success');
   });
 
   it('never loads issuer profiles, services, or raw keys', async () => {
