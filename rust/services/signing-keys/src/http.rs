@@ -150,6 +150,10 @@ pub fn router_with_dependencies(
             post(resolve_public_issuer_identity),
         )
         .route(
+            "/v1/signing-keys/issuer-identities/didcomm-key-agreement",
+            axum::routing::put(publish_public_issuer_didcomm_key_agreement),
+        )
+        .route(
             "/v1/signing-keys/issuer-identities/certificate",
             axum::routing::put(store_public_issuer_certificate),
         )
@@ -410,6 +414,32 @@ struct IssuerIdentityRequest {
     cert_pem: Option<String>,
     #[serde(default)]
     cert_chain_pem: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct DidcommKeyAgreementRequest {
+    organization_id: String,
+    issuer_did: String,
+    key_purpose: String,
+    credential_format: String,
+    algorithm: String,
+    public_jwk: Value,
+}
+
+impl DidcommKeyAgreementRequest {
+    fn identity(&self) -> IssuerIdentityRequest {
+        IssuerIdentityRequest {
+            organization_id: Some(self.organization_id.clone()),
+            issuer_did: self.issuer_did.clone(),
+            key_purpose: self.key_purpose.clone(),
+            credential_format: self.credential_format.clone(),
+            algorithm: self.algorithm.clone(),
+            key_attestation_policy: None,
+            cert_pem: None,
+            cert_chain_pem: None,
+        }
+    }
 }
 
 #[derive(Debug, Deserialize)]
@@ -1081,6 +1111,122 @@ async fn resolve_public_issuer_identity(
     };
     Json(json!({"identity": identity_projection(&profile), "public_jwk": public_jwk}))
         .into_response()
+}
+
+async fn publish_public_issuer_didcomm_key_agreement(
+    State(state): State<AppState>,
+    Query(scope): Query<OrganizationScope>,
+    Json(input): Json<DidcommKeyAgreementRequest>,
+) -> Response {
+    let identity = input.identity();
+    if let Err(error) = validate_identity_scope(&scope.organization_id, &identity) {
+        return error.into_response();
+    }
+    if input.organization_id.len() > 255
+        || !input.issuer_did.starts_with("did:")
+        || input.issuer_did.len() > 2048
+        || !key_purposes()
+            .iter()
+            .any(|purpose| purpose.id == input.key_purpose)
+        || !matches!(
+            input.credential_format.as_str(),
+            "MDOC" | "SD_JWT_VC" | "VC_JWT" | "JSON_LD" | "ZK_MDOC" | "ICAO_EMRTD"
+        )
+        || !matches!(
+            input.algorithm.as_str(),
+            "ES256" | "ES384" | "RS256" | "EdDSA"
+        )
+    {
+        return public_error(
+            StatusCode::UNPROCESSABLE_ENTITY,
+            "A valid issuer identity tuple is required.",
+        );
+    }
+    if let Err(error) = documents::validate_x25519_public_jwk(&input.public_jwk) {
+        return public_publication_error(error);
+    }
+    if let Err(error) = one_matching_profile(&state, &scope.organization_id, &identity).await {
+        return error.into_response();
+    }
+    let Some(public_domain) = state.public_domain.as_deref() else {
+        return public_error(
+            StatusCode::UNPROCESSABLE_ENTITY,
+            "DIDComm key agreement publication requires a local managed did:web issuer.",
+        );
+    };
+    let Some(org_slug) = documents::did_web_org_slug(&input.issuer_did, Some(public_domain)) else {
+        return public_error(
+            StatusCode::UNPROCESSABLE_ENTITY,
+            "DIDComm key agreement publication requires a local managed did:web issuer.",
+        );
+    };
+    let Some(store) = state.document_store.as_ref() else {
+        return public_error(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "DID document registry is unavailable.",
+        );
+    };
+    let method_id = format!("{}#didcomm-authcrypt-x25519", input.issuer_did);
+    let publication = match store
+        .publish_did(
+            &scope.organization_id,
+            "didcomm-authcrypt",
+            PublishDidRequest {
+                jwk: input.public_jwk.clone(),
+                public_domain: public_domain.to_owned(),
+                did_id: Some(input.issuer_did.clone()),
+                org_slug: Some(org_slug),
+                fragment: Some("didcomm-authcrypt-x25519".into()),
+                key_reference: None,
+                cert_pem: None,
+                cert_chain_pem: None,
+                relationship: DidVerificationRelationship::KeyAgreement,
+            },
+        )
+        .await
+    {
+        Ok(publication) => publication,
+        Err(error) => return public_publication_error(error),
+    };
+    if !valid_didcomm_publication(
+        &publication,
+        &input.issuer_did,
+        &method_id,
+        &input.public_jwk,
+    ) {
+        return public_error(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "DID document registry returned an invalid key agreement publication.",
+        );
+    }
+    Json(json!({
+        "issuer_did": input.issuer_did,
+        "key_agreement_method_id": method_id,
+    }))
+    .into_response()
+}
+
+fn valid_didcomm_publication(
+    publication: &PublishDidResponse,
+    issuer_did: &str,
+    method_id: &str,
+    public_jwk: &Value,
+) -> bool {
+    let method = &publication.verification_method;
+    let document = &publication.document;
+    method.get("id").and_then(Value::as_str) == Some(method_id)
+        && method.get("type").and_then(Value::as_str) == Some("JsonWebKey2020")
+        && method.get("controller").and_then(Value::as_str) == Some(issuer_did)
+        && method.get("publicKeyJwk") == Some(public_jwk)
+        && document.get("id").and_then(Value::as_str) == Some(issuer_did)
+        && document
+            .get("verificationMethod")
+            .and_then(Value::as_array)
+            .is_some_and(|methods| methods.contains(method))
+        && document
+            .get("keyAgreement")
+            .and_then(Value::as_array)
+            .is_some_and(|methods| methods.contains(&json!(method_id)))
 }
 
 async fn create_public_issuer_identity(
@@ -4681,5 +4827,26 @@ mod public_contract_tests {
         assert_eq!(body["organization_id"], "org-a");
         assert_eq!(body["service_id"], "svc-a");
         assert!(uuid::Uuid::parse_str(body["message_id"].as_str().unwrap()).is_ok());
+    }
+
+    #[test]
+    fn public_didcomm_key_agreement_contract_keeps_custody_out_of_publication() {
+        let contract: Value = serde_json::from_str(include_str!(
+            "../../../../contracts/signing-issuer-didcomm-key-agreement-behavior.json"
+        ))
+        .unwrap();
+        assert_eq!(contract["method"], "PUT");
+        assert_eq!(contract["published_relationship"], "keyAgreement");
+        assert_eq!(contract["published_fragment"], "didcomm-authcrypt-x25519");
+        assert_eq!(contract["private_key_material_allowed"], false);
+        assert_eq!(contract["kms_key_agreement_follow_up"], "DIDCOMM-KMS-001");
+        let public_jwk = json!({
+            "kty": "OKP", "crv": "X25519",
+            "x": URL_SAFE_NO_PAD.encode([7_u8; 32]),
+        });
+        assert!(documents::validate_x25519_public_jwk(&public_jwk).is_ok());
+        let mut private_jwk = public_jwk;
+        private_jwk["d"] = json!(URL_SAFE_NO_PAD.encode([8_u8; 32]));
+        assert!(documents::validate_x25519_public_jwk(&private_jwk).is_err());
     }
 }

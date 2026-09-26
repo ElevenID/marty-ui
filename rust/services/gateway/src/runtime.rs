@@ -6908,6 +6908,10 @@ mod tests {
                 "/v1/signing-keys/issuer-identities/certificate-csr",
             ),
             (
+                HttpMethod::Put,
+                "/v1/signing-keys/issuer-identities/didcomm-key-agreement",
+            ),
+            (
                 HttpMethod::Get,
                 "/v1/signing-keys/services/service-1/audit-log",
             ),

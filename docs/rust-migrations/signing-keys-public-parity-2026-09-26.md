@@ -105,6 +105,18 @@ carry an opaque message ID and the MIP version header. Their behavior is
 frozen in `contracts/signing-observability-unavailable-behavior.json` and
 verified against isolated Redis. These adapters do not implement audit-event
 storage or compliance metrics; no synthetic events or totals are returned.
-Thus 9 declared pairs remain without local public handlers. These new
+The `PUT /issuer-identities/didcomm-key-agreement` adapter now requires one
+active tenant-scoped issuer identity, an exact public-only X25519 JWK, and a
+local managed `did:web` issuer before publishing the fixed
+`didcomm-authcrypt-x25519` method into `keyAgreement`. Its released public
+response and rejection rules are frozen in
+`contracts/signing-issuer-didcomm-key-agreement-behavior.json`. This is only
+publication of caller-supplied public material; it does not create, import,
+read, or hold a private key. Opaque KMS-backed DIDComm key agreement remains
+the separately tracked `DIDCOMM-KMS-001` follow-up, not a claim made by this
+adapter. An isolated-Redis Rust-route test passed for publication, private-JWK
+rejection, tenant isolation, absent and ambiguous profiles, and public-only
+stored output. Authenticated through-Gateway acceptance remains before cutover.
+Thus 8 declared pairs remain without local public handlers. These new
 adapters still need authenticated through-Gateway runtime tests. The
 24-pair table above remains the protected-main audit baseline.

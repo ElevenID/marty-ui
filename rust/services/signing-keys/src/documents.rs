@@ -947,31 +947,7 @@ fn prepare_did_publication(
                 "keyAgreement publication accepts only public X25519 key material".to_string(),
             ));
         }
-        let fields = request
-            .jwk
-            .as_object()
-            .ok_or_else(|| DocumentError::Invalid("JWK must be an object".to_string()))?;
-        if fields.len() != 3
-            || fields.get("kty").and_then(Value::as_str) != Some("OKP")
-            || fields.get("crv").and_then(Value::as_str) != Some("X25519")
-        {
-            return Err(DocumentError::Invalid(
-                "keyAgreement publication requires an exact public X25519 JWK".to_string(),
-            ));
-        }
-        let encoded = fields.get("x").and_then(Value::as_str).ok_or_else(|| {
-            DocumentError::Invalid(
-                "keyAgreement publication requires an exact public X25519 JWK".to_string(),
-            )
-        })?;
-        let decoded = URL_SAFE_NO_PAD.decode(encoded).map_err(|_| {
-            DocumentError::Invalid("X25519 public key must use canonical base64url".to_string())
-        })?;
-        if decoded.len() != 32 || URL_SAFE_NO_PAD.encode(&decoded) != encoded {
-            return Err(DocumentError::Invalid(
-                "X25519 public key must encode exactly 32 bytes".to_string(),
-            ));
-        }
+        validate_x25519_public_jwk(&request.jwk)?;
     }
     let jwk = sanitize_public_jwk(&request.jwk, request.key_reference.as_deref())?;
     let fragment = request
@@ -1006,6 +982,34 @@ fn prepare_did_publication(
         verification_method,
         relationship: request.relationship,
     })
+}
+
+pub fn validate_x25519_public_jwk(jwk: &Value) -> Result<(), DocumentError> {
+    let fields = jwk
+        .as_object()
+        .ok_or_else(|| DocumentError::Invalid("JWK must be an object".to_string()))?;
+    if fields.len() != 3
+        || fields.get("kty").and_then(Value::as_str) != Some("OKP")
+        || fields.get("crv").and_then(Value::as_str) != Some("X25519")
+    {
+        return Err(DocumentError::Invalid(
+            "keyAgreement publication requires an exact public X25519 JWK".to_string(),
+        ));
+    }
+    let encoded = fields.get("x").and_then(Value::as_str).ok_or_else(|| {
+        DocumentError::Invalid(
+            "keyAgreement publication requires an exact public X25519 JWK".to_string(),
+        )
+    })?;
+    let decoded = URL_SAFE_NO_PAD.decode(encoded).map_err(|_| {
+        DocumentError::Invalid("X25519 public key must use canonical base64url".to_string())
+    })?;
+    if decoded.len() != 32 || URL_SAFE_NO_PAD.encode(&decoded) != encoded {
+        return Err(DocumentError::Invalid(
+            "X25519 public key must encode exactly 32 bytes".to_string(),
+        ));
+    }
+    Ok(())
 }
 
 fn upsert_did_document(
