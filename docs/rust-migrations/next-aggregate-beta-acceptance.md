@@ -66,6 +66,17 @@ selected here.
    before adding any bureau provider; do not deploy a duplicate ICAO signer.
    No native cutover or Python retirement is permitted until these gates and
    their language-neutral behavior tests pass.
+
+   Read-only beta inventory on 2026-09-26 found the existing pilot
+   organization active, no running or stopped ICAO signer or passport bureau
+   container, and zero `issuance_service.physical_document_jobs`. There were
+   zero active organization API keys. The UI/session flow can be used for
+   initial operator acceptance; before claiming API-key acceptance, create an
+   organization-scoped key through the existing UI/API mechanism, store its
+   one-time value with the governed beta secrets (never in a repo, log, or
+   chat), and verify the `credentials:issue` scope maps to passport initiation.
+   No new tenant or passport-specific static keyring is required for the
+   existing pilot organization. Recheck these counts at actual cutover.
 4. Explicitly hold `BetaOrigin` at `https://beta.elevenidllc.com`. The wrapper's
    HTTPS syntax check alone does not establish that an origin is beta. Retain
    fixed beta Compose projects/network and labeled-volume ownership checks.
