@@ -84,8 +84,14 @@ selected here.
    Certificate-enrollment follow-up: the current UI has a CSR action for a
    signing service, but this source tree has no matching
    `/v1/signing-keys/services/{service_id}/certificate-csr` service route.
-   Do not rely on that button for the pilot chain. Before beta acceptance,
-   provide a tested KMS-custodied CSR/CA enrollment path and verify the new
+   Do not rely on that button for the pilot chain: the managed OpenBao signing
+   service can be shared by several issuer profiles, while each CSCA/DSC has
+   its own KMS key reference. The Rust CSR operation must select the active
+   issuer identity tuple, resolve its KMS custody server-side, sign the PKCS#10
+   request in KMS, and verify the returned CSR against the current KMS public
+   key. It must not accept a caller-supplied key reference or attach a chain
+   to the shared service. Before beta acceptance, provide a tested
+   KMS-custodied CSR/CA enrollment path and verify the new
    tenant-scoped operator path for public CSCA lifecycle import; no private key or raw signing
    secret may pass through the UI, repository, or deployment files.
 
