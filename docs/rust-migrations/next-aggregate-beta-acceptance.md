@@ -81,6 +81,12 @@ selected here.
    No native cutover or Python retirement is permitted until these gates and
    their language-neutral behavior tests pass.
 
+   The [Signing Keys public-route parity audit](signing-keys-public-parity-2026-09-26.md)
+   found 24 Gateway-declared method/path pairs without Rust public handlers.
+   Repair and retest those adapters before describing the aggregate beta
+   release as feature-complete; the new passport certificate routes alone do
+   not satisfy the no-feature-loss gate.
+
    Certificate-enrollment follow-up: the current UI has a CSR action for a
    signing service, but this source tree has no matching
    `/v1/signing-keys/services/{service_id}/certificate-csr` service route.
