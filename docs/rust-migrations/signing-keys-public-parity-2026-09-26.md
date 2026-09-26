@@ -42,9 +42,11 @@ service-CSR handlers. The managed shared service is rejected in favor of the
 issuer identity route. Registered-service certificate uploads are matched to
 the current KMS public key, and CSRs are signed by that KMS key and verified
 before release. The console asks for the country and organization explicitly.
-These three pairs are no longer absent from the local router, but they
-still require authenticated through-Gateway and live
-registered-service KMS tests before they count as cutover-accepted. A fourth
+These three pairs are no longer absent from the local router. An opt-in
+live Rust-route test for registered-service CSR passed against isolated Redis
+and OpenBao on 2026-09-26; the disposable containers and their test key were
+removed afterward. Authenticated through-Gateway tests and live certificate
+upload/read tests are still required before cutover acceptance. A fourth
 local adapter now restores `GET /config/certificate-expiry-alerts` using the
 existing Rust alert kernel and the stored service-certificate override, with
 its response frozen in `contracts/signing-certificate-alerts-behavior.json`.
