@@ -551,6 +551,7 @@ async fn passport_jobs_survive_restart_without_cross_tenant_reads() {
         delivery_destination_profile_id: "destination-a".into(),
         document_type: "TD2".into(),
         country_code: "USA".into(),
+        issuer_did: Some("did:web:issuer.example:orgs:org-a".into()),
         secure_artifact_ciphertext: encrypted_artifact.clone(),
         secure_artifact_reference: "physical-artifact://job-a".into(),
     };
@@ -558,6 +559,10 @@ async fn passport_jobs_survive_restart_without_cross_tenant_reads() {
     assert_eq!(inserted.organization_id, "org-a");
     assert_eq!(inserted.status, "DRAFT");
     assert_eq!(inserted.document_type, "TD2");
+    assert_eq!(
+        inserted.issuer_did.as_deref(),
+        Some("did:web:issuer.example:orgs:org-a")
+    );
     assert!(!inserted.secure_artifact_ciphertext.contains("test-person"));
     assert_eq!(
         inserted.revocation_profile_id.as_deref(),
@@ -733,6 +738,7 @@ async fn passport_jobs_survive_restart_without_cross_tenant_reads() {
         delivery_destination_profile_id: "destination-b".into(),
         document_type: "TD1".into(),
         country_code: "CAN".into(),
+        issuer_did: None,
         secure_artifact_ciphertext: cipher.encrypt(&artifact).unwrap(),
         secure_artifact_reference: "physical-artifact://job-b".into(),
     };
@@ -796,14 +802,14 @@ async fn passport_jobs_survive_restart_without_cross_tenant_reads() {
     .unwrap();
     migration::migrate_passport(&restarted_pool).await.unwrap();
     migration::migrate_passport(&restarted_pool).await.unwrap();
-    let released: (String, Option<String>, String) = sqlx::query_as(
-        "SELECT status, revocation_profile_id, document_type \
+    let released: (String, Option<String>, String, Option<String>) = sqlx::query_as(
+        "SELECT status, revocation_profile_id, document_type, issuer_did \
          FROM issuance_service.physical_document_jobs WHERE id='released-python-job'",
     )
     .fetch_one(&restarted_pool)
     .await
     .unwrap();
-    assert_eq!(released, ("DRAFT".into(), None, "TD2".into()));
+    assert_eq!(released, ("DRAFT".into(), None, "TD2".into(), None));
     let id_type: String = sqlx::query_scalar(
         "SELECT data_type FROM information_schema.columns \
          WHERE table_schema='issuance_service' AND table_name='physical_document_jobs' \

@@ -52,11 +52,13 @@ mmf-security.workspace = true
 marty-oid4vci = { workspace = true, features = ["lti"] }
 marty-didcomm = { workspace = true, features = ["did_web"] }
 marty-verification.workspace = true
+marty-emrtd-issuance = { version = "=0.2.0", git = "https://github.com/ElevenID/marty-core", rev = "83cdaeb5657679a256b7b605178a222157e2d486" }
 marty-passport-auth = { path = "../../crates/passport-auth" }
 marty-platform-clock = { path = "../../crates/platform-clock" }
 num-bigint.workspace = true
 num-traits.workspace = true
 p256.workspace = true
+p384 = { version = "0.13", features = ["ecdsa"] }
 percent-encoding.workspace = true
 prost.workspace = true
 rand.workspace = true
@@ -94,6 +96,7 @@ marty-gateway = { path = "../gateway" }
 mmf-platform.workspace = true
 rand08 = { package = "rand", version = "0.8" }
 rsa = "0.9"
+rcgen = { version = "0.14", default-features = false, features = ["aws_lc_rs"] }
 tower.workspace = true
 
 [build-dependencies]

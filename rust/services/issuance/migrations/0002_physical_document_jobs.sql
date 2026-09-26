@@ -14,6 +14,7 @@ CREATE TABLE IF NOT EXISTS issuance_service.physical_document_jobs (
     delivery_destination_profile_id varchar(128) NOT NULL,
     document_type varchar(3) NOT NULL,
     country_code varchar(3) NOT NULL,
+    issuer_did text,
     secure_artifact_ciphertext text NOT NULL,
     secure_artifact_reference varchar(512) NOT NULL,
     sod_sha256 varchar(64),
@@ -31,6 +32,9 @@ CREATE TABLE IF NOT EXISTS issuance_service.physical_document_jobs (
 
 ALTER TABLE issuance_service.physical_document_jobs
     ADD COLUMN IF NOT EXISTS revocation_profile_id text;
+
+ALTER TABLE issuance_service.physical_document_jobs
+    ADD COLUMN IF NOT EXISTS issuer_did text;
 
 CREATE INDEX IF NOT EXISTS ix_physical_document_jobs_organization_id
     ON issuance_service.physical_document_jobs (organization_id);

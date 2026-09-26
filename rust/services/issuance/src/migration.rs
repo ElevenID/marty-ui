@@ -87,6 +87,7 @@ pub async fn migrate_passport(pool: &PgPool) -> Result<(), sqlx::Error> {
         "delivery_destination_profile_id",
         "document_type",
         "country_code",
+        "issuer_did",
         "secure_artifact_ciphertext",
         "secure_artifact_reference",
         "sod_sha256",
