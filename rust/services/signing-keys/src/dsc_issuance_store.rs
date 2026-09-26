@@ -498,9 +498,11 @@ fn contains_private_key_material(value: &Value) -> bool {
     match value {
         Value::Object(fields) => fields.values().any(contains_private_key_material),
         Value::Array(items) => items.iter().any(contains_private_key_material),
-        Value::String(text) => text.contains("-----BEGIN PRIVATE KEY-----")
-            || text.contains("-----BEGIN EC PRIVATE KEY-----")
-            || text.contains("-----BEGIN RSA PRIVATE KEY-----"),
+        Value::String(text) => {
+            text.contains("-----BEGIN PRIVATE KEY-----")
+                || text.contains("-----BEGIN EC PRIVATE KEY-----")
+                || text.contains("-----BEGIN RSA PRIVATE KEY-----")
+        }
         _ => false,
     }
 }
