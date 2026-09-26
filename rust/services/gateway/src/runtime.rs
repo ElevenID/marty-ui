@@ -6446,6 +6446,70 @@ mod tests {
         );
     }
 
+    #[tokio::test]
+    async fn internal_passport_handoff_keeps_public_api_key_organizations_isolated() {
+        let recorder = Arc::new(ActorRecordingUpstream::default());
+        let mut state =
+            runtime_state_with_upstream_and_passport(Arc::new(NoOwner), recorder.clone(), true);
+        let internal_token = "synthetic-internal-passport-token-00000001";
+        Arc::get_mut(&mut state).unwrap().passport_tenant_keys =
+            Some(PassportTenantCredentialSource::internal_service_token(internal_token).unwrap());
+        let router = gateway_router(state);
+        for (public_key, organization_id) in [
+            ("passport-gateway-key-org-1", "org-1"),
+            ("passport-gateway-key-org-2", "org-2"),
+        ] {
+            let response = router
+                .clone()
+                .oneshot(
+                    Request::builder()
+                        .method("POST")
+                        .uri("/v1/passport/applications")
+                        .header("content-type", "application/json")
+                        .header("x-api-key", public_key)
+                        .body(Body::from(
+                            json!({"organization_id": organization_id}).to_string(),
+                        ))
+                        .unwrap(),
+                )
+                .await
+                .unwrap();
+            assert_eq!(response.status(), StatusCode::OK);
+            let captured = recorder.0.lock().unwrap();
+            let (_, upstream) = captured.last().unwrap();
+            assert_eq!(
+                upstream
+                    .headers
+                    .get("x-organization-id")
+                    .map(String::as_str),
+                Some(organization_id)
+            );
+            assert_eq!(
+                upstream.headers.get("x-api-key").map(String::as_str),
+                Some(internal_token)
+            );
+            assert_ne!(
+                upstream.headers.get("x-api-key").map(String::as_str),
+                Some(public_key)
+            );
+        }
+        let before = recorder.0.lock().unwrap().len();
+        let response = router
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/v1/passport/applications")
+                    .header("content-type", "application/json")
+                    .header("x-api-key", "passport-gateway-key-org-1")
+                    .body(Body::from(r#"{"organization_id":"org-2"}"#))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::FORBIDDEN);
+        assert_eq!(recorder.0.lock().unwrap().len(), before);
+    }
+
     fn forged_actor_request(authentication: Option<(&str, &str)>, public: bool) -> Request {
         let mut request = Request::builder()
             .method(if public { "GET" } else { "POST" })
