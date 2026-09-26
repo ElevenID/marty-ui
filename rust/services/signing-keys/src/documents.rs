@@ -87,27 +87,12 @@ impl DocumentStore {
         service_id: &str,
         request: InspectCertificateRequest,
     ) -> Result<StoredCertificate, DocumentError> {
-        let inspected = inspect_certificate(&request)?;
-        let updated_at = now_iso();
-        let attachment = StoredCertificate {
-            cert_pem: request.cert_pem,
-            cert_chain_pem: request.cert_chain_pem.unwrap_or_default(),
-            cert_expires_at: inspected.expires_at,
-            updated_at,
-            public_jwk: inspected.public_jwk,
-            x5c: inspected.x5c,
-        };
+        let attachment = checked_certificate(request)?;
         let mut document = self.certificate_overrides(organization_id).await?;
-        let services = document
-            .as_object_mut()
-            .expect("certificate document is an object")
-            .entry("services")
-            .or_insert_with(|| json!({}));
-        let services = services.as_object_mut().ok_or_else(|| {
-            DocumentError::Corrupt("certificate services must be an object".to_string())
-        })?;
-        services.insert(
-            service_id.to_string(),
+        insert_certificate(
+            &mut document,
+            "services",
+            service_id,
             json!({
                 "cert_pem": attachment.cert_pem,
                 "cert_chain_pem": attachment.cert_chain_pem,
@@ -115,8 +100,35 @@ impl DocumentStore {
                 "updated_at": attachment.updated_at,
                 "x5c": attachment.x5c,
             }),
-        );
-        document["updated_at"] = Value::String(now_iso());
+        )?;
+        self.save(&certificate_storage_key(organization_id), &document)
+            .await?;
+        Ok(attachment)
+    }
+
+    pub async fn store_profile_certificate(
+        &self,
+        organization_id: &str,
+        profile_id: &str,
+        key_reference: &str,
+        request: InspectCertificateRequest,
+    ) -> Result<StoredCertificate, DocumentError> {
+        let attachment = checked_certificate(request)?;
+        let mut document = self.certificate_overrides(organization_id).await?;
+        insert_certificate(
+            &mut document,
+            "profiles",
+            profile_id,
+            json!({
+                "cert_pem": attachment.cert_pem,
+                "cert_chain_pem": attachment.cert_chain_pem,
+                "cert_expires_at": attachment.cert_expires_at,
+                "updated_at": attachment.updated_at,
+                "x5c": attachment.x5c,
+                "public_jwk": attachment.public_jwk,
+                "signing_key_reference": key_reference,
+            }),
+        )?;
         self.save(&certificate_storage_key(organization_id), &document)
             .await?;
         Ok(attachment)
@@ -252,6 +264,27 @@ impl DocumentStore {
             )),
         }
     }
+}
+
+fn insert_certificate(
+    document: &mut Value,
+    collection: &str,
+    id: &str,
+    attachment: Value,
+) -> Result<(), DocumentError> {
+    let entries = document
+        .as_object_mut()
+        .ok_or_else(|| DocumentError::Corrupt("certificate document must be an object".into()))?
+        .entry(collection)
+        .or_insert_with(|| json!({}));
+    entries
+        .as_object_mut()
+        .ok_or_else(|| {
+            DocumentError::Corrupt(format!("certificate {collection} must be an object"))
+        })?
+        .insert(id.into(), attachment);
+    document["updated_at"] = Value::String(now_iso());
+    Ok(())
 }
 
 pub fn build_jwks_document(
@@ -480,6 +513,25 @@ pub fn inspect_certificate(
         public_jwk,
         x5c,
         public_key_matches,
+    })
+}
+
+fn checked_certificate(
+    request: InspectCertificateRequest,
+) -> Result<StoredCertificate, DocumentError> {
+    let inspected = inspect_certificate(&request)?;
+    if inspected.public_key_matches == Some(false) {
+        return Err(DocumentError::Conflict(
+            "certificate public key does not match the issuer signing key".to_string(),
+        ));
+    }
+    Ok(StoredCertificate {
+        cert_pem: request.cert_pem,
+        cert_chain_pem: request.cert_chain_pem.unwrap_or_default(),
+        cert_expires_at: inspected.expires_at,
+        updated_at: now_iso(),
+        public_jwk: inspected.public_jwk,
+        x5c: inspected.x5c,
     })
 }
 
@@ -988,6 +1040,45 @@ pub fn normalize_certificate_overrides(document: &Value) -> BTreeMap<String, Val
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn profile_certificate_entries_preserve_other_profiles_and_legacy_services() {
+        let mut document = json!({"services": {"shared-kms": {"x5c": ["legacy"]}}});
+        insert_certificate(
+            &mut document,
+            "profiles",
+            "passport-a",
+            json!({"x5c": ["dsc-a"]}),
+        )
+        .unwrap();
+        insert_certificate(
+            &mut document,
+            "profiles",
+            "passport-b",
+            json!({"x5c": ["dsc-b"]}),
+        )
+        .unwrap();
+        assert_eq!(document["profiles"]["passport-a"]["x5c"], json!(["dsc-a"]));
+        assert_eq!(document["profiles"]["passport-b"]["x5c"], json!(["dsc-b"]));
+        assert_eq!(document["services"]["shared-kms"]["x5c"], json!(["legacy"]));
+    }
+
+    #[test]
+    fn profile_certificate_attachment_rejects_a_different_public_key() {
+        let fixture: Value =
+            serde_json::from_str(include_str!("../tests/fixtures/document_vectors.json")).unwrap();
+        let request = InspectCertificateRequest {
+            cert_pem: fixture["certificate"]["cert_pem"].as_str().unwrap().into(),
+            cert_chain_pem: None,
+            expected_public_jwk: Some(json!({
+                "kty": "EC", "crv": "P-256", "x": "other-x", "y": "other-y"
+            })),
+        };
+        assert!(matches!(
+            checked_certificate(request),
+            Err(DocumentError::Conflict(_))
+        ));
+    }
 
     #[test]
     fn storage_keys_preserve_the_python_keyspace() {
