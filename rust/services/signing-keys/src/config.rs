@@ -9,6 +9,7 @@ pub struct Config {
     pub release_version: String,
     pub build_revision: String,
     pub internal_api_key: String,
+    pub dsc_issue_gateway_key: Option<String>,
     pub registry_redis_url: String,
     pub bao_addr: Option<String>,
     pub bao_token: Option<String>,
@@ -42,6 +43,16 @@ impl Config {
                     .to_string(),
             );
         }
+        let dsc_issue_gateway_key = secret_value(values, "SIGNING_KEYS_DSC_ISSUE_GATEWAY_KEY")?;
+        if dsc_issue_gateway_key
+            .as_ref()
+            .is_some_and(|key| key.len() < 32 || key == &internal_api_key)
+        {
+            return Err(
+                "SIGNING_KEYS_DSC_ISSUE_GATEWAY_KEY must be distinct and at least 32 characters"
+                    .into(),
+            );
+        }
         let bao_addr = value(values, "BAO_ADDR");
         let bao_token =
             secret_value(values, "BAO_TOKEN")?.or(secret_value(values, "OPENBAO_SERVICE_TOKEN")?);
@@ -56,6 +67,7 @@ impl Config {
             release_version,
             build_revision: value(values, "MARTY_UI_SHA").unwrap_or_else(|| "unknown".into()),
             internal_api_key,
+            dsc_issue_gateway_key,
             registry_redis_url: value(values, "SIGNING_KEYS_REDIS_URL")
                 .unwrap_or_else(|| "redis://localhost:6379/2".into()),
             bao_addr,
@@ -99,6 +111,7 @@ mod tests {
         assert_eq!(config.release_version, "development");
         assert_eq!(config.build_revision, "unknown");
         assert_eq!(config.internal_api_key, DEVELOPMENT_INTERNAL_API_KEY);
+        assert_eq!(config.dsc_issue_gateway_key, None);
         assert_eq!(config.registry_redis_url, "redis://localhost:6379/2");
         assert_eq!(config.bao_addr, None);
         assert_eq!(config.bao_token, None);
@@ -146,5 +159,26 @@ mod tests {
         let config = Config::from_values(&values).expect("OpenBao config");
         assert_eq!(config.bao_addr.as_deref(), Some("http://bao:8200"));
         assert_eq!(config.bao_token.as_deref(), Some("secret"));
+    }
+
+    #[test]
+    fn dsc_gateway_key_is_optional_but_must_be_distinct_and_strong_when_enabled() {
+        let mut values = HashMap::new();
+        values.insert(
+            "SIGNING_KEYS_INTERNAL_API_KEY".into(),
+            "shared-internal-key-32-characters-long".into(),
+        );
+        values.insert(
+            "SIGNING_KEYS_DSC_ISSUE_GATEWAY_KEY".into(),
+            "shared-internal-key-32-characters-long".into(),
+        );
+        assert!(Config::from_values(&values).is_err());
+        values.insert("SIGNING_KEYS_DSC_ISSUE_GATEWAY_KEY".into(), "short".into());
+        assert!(Config::from_values(&values).is_err());
+        values.insert(
+            "SIGNING_KEYS_DSC_ISSUE_GATEWAY_KEY".into(),
+            "separate-dsc-operator-key-32-characters".into(),
+        );
+        assert!(Config::from_values(&values).is_ok());
     }
 }

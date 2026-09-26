@@ -43,6 +43,8 @@ url.workspace = true
 uuid.workspace = true
 
 [dev-dependencies]
+base64.workspace = true
+const-oid.workspace = true
 der.workspace = true
 hex.workspace = true
 hmac.workspace = true
@@ -51,6 +53,7 @@ marty-issuance-service = { path = "../issuance" }
 marty-signing-keys = { path = "../signing-keys" }
 redis.workspace = true
 sqlx.workspace = true
+spki.workspace = true
 tower.workspace = true
 x509-cert.workspace = true
 

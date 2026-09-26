@@ -40,8 +40,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     );
     axum::serve(
         listener,
-        http::router_with_dependencies(
+        http::router_with_dependencies_and_dsc_key(
             config.internal_api_key,
+            config.dsc_issue_gateway_key,
             Some(registry_store),
             Some(document_store),
             Some(csca_lifecycle_store),

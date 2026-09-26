@@ -19,6 +19,7 @@ VALIDATOR = runpy.run_path(
 PROFILE = "docker-compose.profile.passport-native-beta.yml"
 IMAGE = "ghcr.io/elevenid/marty-ui-oss/services@sha256:" + "a" * 64
 TOKEN = "synthetic-internal-passport-token-00000001"
+DSC_GATEWAY_KEY = "synthetic-dsc-gateway-only-credential-000001"
 
 
 def model(enabled=True):
@@ -63,9 +64,11 @@ def model(enabled=True):
     services["gateway"]["environment"]["SIGNING_KEYS_INTERNAL_API_KEY"] = (
         "synthetic-signing-credential"
     )
+    services["gateway"]["environment"]["SIGNING_KEYS_DSC_ISSUE_GATEWAY_KEY"] = DSC_GATEWAY_KEY
     services["signing-keys"] = {
         "environment": {
             "SIGNING_KEYS_INTERNAL_API_KEY": "synthetic-signing-credential",
+            "SIGNING_KEYS_DSC_ISSUE_GATEWAY_KEY": DSC_GATEWAY_KEY,
             "BAO_TOKEN": "synthetic-existing-openbao-token",
         }
     }
@@ -151,6 +154,10 @@ def test_rendered_compose_environment_list_is_supported():
         "signing_key_mismatch",
         "gateway_signing_key_mismatch",
         "service_signing_key_mismatch",
+        "missing_dsc_gateway_key",
+        "shared_dsc_gateway_key",
+        "leaked_dsc_gateway_key",
+        "dsc_gateway_key_file",
         "bureau_database_target",
         "native_database_target",
         "signing_route",
@@ -229,6 +236,15 @@ def test_partial_or_unsafe_selection_fails_closed(mutation):
         services["signing-keys"]["environment"]["SIGNING_KEYS_INTERNAL_API_KEY"] = (
             "synthetic-other-credential"
         )
+    elif mutation == "missing_dsc_gateway_key":
+        del services["gateway"]["environment"]["SIGNING_KEYS_DSC_ISSUE_GATEWAY_KEY"]
+    elif mutation == "shared_dsc_gateway_key":
+        services["gateway"]["environment"]["SIGNING_KEYS_DSC_ISSUE_GATEWAY_KEY"] = "synthetic-signing-credential"
+        services["signing-keys"]["environment"]["SIGNING_KEYS_DSC_ISSUE_GATEWAY_KEY"] = "synthetic-signing-credential"
+    elif mutation == "leaked_dsc_gateway_key":
+        services["flow"]["environment"]["SIGNING_KEYS_DSC_ISSUE_GATEWAY_KEY"] = DSC_GATEWAY_KEY
+    elif mutation == "dsc_gateway_key_file":
+        services["issuance-native"]["environment"]["SIGNING_KEYS_DSC_ISSUE_GATEWAY_KEY_FILE"] = "/tmp/dsc-gateway-key"
     elif mutation == "bureau_database_target":
         bureau["environment"]["DATABASE_URL"] = (
             "postgresql://marty:synthetic@production.example:5432/marty"
@@ -429,6 +445,7 @@ def synthetic_beta_compose_env(tmp_path):
     values = {name: "synthetic-value" for name in required}
     values["GRPC_SERVICE_TOKEN"] = TOKEN
     values["MARTY_SERVICES_IMAGE"] = IMAGE
+    values["SIGNING_KEYS_DSC_ISSUE_GATEWAY_KEY"] = DSC_GATEWAY_KEY
     env_file = tmp_path / "synthetic-beta.env"
     env_file.write_text(
         "\n".join(f"{name}={value}" for name, value in sorted(values.items())) + "\n",

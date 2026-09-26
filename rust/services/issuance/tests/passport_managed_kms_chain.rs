@@ -2,7 +2,10 @@
 //! Certificate bodies are assembled here, but every certificate and SOD
 //! signature is made by a Transit-held key. No private key enters this test.
 
-use std::{collections::BTreeMap, time::Duration};
+use std::{
+    collections::BTreeMap,
+    time::{Duration, SystemTime},
+};
 
 use axum::{
     body::{to_bytes, Body},
@@ -21,10 +24,11 @@ use der::{asn1::BitString, DecodePem, Encode, EncodePem};
 use marty_crypto::certificate::{load_certificate_pem, verify_certificate_signature};
 use marty_issuance_service::passport_signer::{ManagedProfileSigner, SignerError};
 use marty_signing_keys::{
+    certificate_issuance::{prepare_dsc, VerifiedDscSubject},
     csca_lifecycle::CscaLifecycleStore,
     documents::DocumentStore,
-    http::router_with_dependencies,
-    kms::{self, SignRequest},
+    http::router_with_dependencies_and_dsc_key,
+    kms::{self, ProviderRequest, SignRequest},
     profiles::{FindProfilesRequest, ProfileStore},
     registry::RegistryStore,
 };
@@ -46,6 +50,7 @@ use x509_cert::{
 
 const ECDSA_SHA256: ObjectIdentifier = ObjectIdentifier::new_unwrap("1.2.840.10045.4.3.2");
 const INTERNAL_KEY: &str = "disposable-passport-chain-internal-key";
+const DSC_GATEWAY_KEY: &str = "disposable-passport-dsc-gateway-key-32-characters";
 
 async fn route(app: &Router, method: Method, path: &str, body: Value) -> Value {
     let response = app
@@ -64,6 +69,35 @@ async fn route(app: &Router, method: Method, path: &str, body: Value) -> Value {
     let bytes = to_bytes(response.into_body(), 1_048_576).await.unwrap();
     assert_eq!(status, StatusCode::OK, "{path} returned {status}");
     serde_json::from_slice(&bytes).unwrap()
+}
+
+async fn issue_managed_dsc(app: &Router, path: &str, body: Value) -> Value {
+    let response = issue_managed_dsc_response(app, path, body).await;
+    let status = response.status();
+    let bytes = to_bytes(response.into_body(), 1_048_576).await.unwrap();
+    assert_eq!(
+        status,
+        StatusCode::OK,
+        "DSC issuance returned {status}: {}",
+        String::from_utf8_lossy(&bytes)
+    );
+    serde_json::from_slice(&bytes).unwrap()
+}
+
+async fn issue_managed_dsc_response(app: &Router, path: &str, body: Value) -> Response {
+    app.clone()
+        .oneshot(
+            Request::builder()
+                .method(Method::POST)
+                .uri(path)
+                .header(CONTENT_TYPE, "application/json")
+                .header("x-api-key", DSC_GATEWAY_KEY)
+                .header("x-user-id", "disposable-certificate-operator")
+                .body(Body::from(body.to_string()))
+                .unwrap(),
+        )
+        .await
+        .unwrap()
 }
 
 fn signing_config(service: &Value, profile: &Value) -> Value {
@@ -108,7 +142,10 @@ async fn issue_certificate(
         serial_number: SerialNumber::new(&[serial]).unwrap(),
         signature: algorithm.clone(),
         issuer,
-        validity: Validity::from_now(Duration::from_secs(30 * 24 * 60 * 60)).unwrap(),
+        validity: Validity::from_now(Duration::from_secs(
+            if ca { 365 } else { 30 } * 24 * 60 * 60,
+        ))
+        .unwrap(),
         subject,
         subject_public_key_info: csr.info.public_key,
         issuer_unique_id: None,
@@ -130,6 +167,37 @@ async fn issue_certificate(
     }
     .to_pem(der::pem::LineEnding::LF)
     .unwrap()
+}
+
+async fn issue_dsc_with_shared_builder(
+    csr_pem: &str,
+    csca_pem: &str,
+    csca_config: Value,
+    dsc_config: Value,
+) -> String {
+    let dsc_public = kms::public_key_existing(ProviderRequest {
+        service_config: dsc_config,
+    })
+    .await
+    .unwrap();
+    let csca_public = kms::public_key_existing(ProviderRequest {
+        service_config: csca_config.clone(),
+    })
+    .await
+    .unwrap();
+    let subject = VerifiedDscSubject::from_csr_pem(csr_pem, &dsc_public).unwrap();
+    let now = SystemTime::now();
+    let prepared = prepare_dsc(&subject, csca_pem, "", &csca_public, &[2], 29, now).unwrap();
+    let signed = kms::sign(SignRequest {
+        service_config: csca_config,
+        payload_b64: URL_SAFE_NO_PAD.encode(prepared.signing_bytes()),
+    })
+    .await
+    .unwrap();
+    assert_eq!(signed.signature_encoding, "der");
+    prepared
+        .finish(&URL_SAFE_NO_PAD.decode(signed.signature_b64).unwrap())
+        .unwrap()
 }
 
 // The native signer uses the Gateway's internal path. This adapter performs
@@ -320,8 +388,9 @@ async fn managed_passport_chain_issues_and_verifies_sod_without_exporting_privat
     let documents = DocumentStore::from_connection(registry.connection());
     let lifecycle = CscaLifecycleStore::from_connection(registry.connection());
     let profiles = ProfileStore::from_connection(registry.connection());
-    let signing = router_with_dependencies(
+    let signing = router_with_dependencies_and_dsc_key(
         INTERNAL_KEY.into(),
+        Some(DSC_GATEWAY_KEY.into()),
         Some(registry),
         Some(documents),
         Some(lifecycle),
@@ -408,16 +477,15 @@ async fn managed_passport_chain_issues_and_verifies_sod_without_exporting_privat
         true,
     )
     .await;
-    let dsc_pem = issue_certificate(
+    let fixture_dsc_pem = issue_dsc_with_shared_builder(
         dsc_csr["csr_pem"].as_str().unwrap(),
-        csca_name,
+        &csca_pem,
         signing_config(&service, &csca_profile),
-        2,
-        false,
+        signing_config(&service, &dsc_profile),
     )
     .await;
     let csca_der = load_certificate_pem(&csca_pem).unwrap();
-    let dsc_der = load_certificate_pem(&dsc_pem).unwrap();
+    let dsc_der = load_certificate_pem(&fixture_dsc_pem).unwrap();
     assert!(verify_certificate_signature(&csca_der, &csca_der).unwrap());
     assert!(verify_certificate_signature(&dsc_der, &csca_der).unwrap());
     let enrolled = route(
@@ -432,17 +500,25 @@ async fn managed_passport_chain_issues_and_verifies_sod_without_exporting_privat
     )
     .await;
     assert_eq!(enrolled["status"], "VALID");
-    route(
-        &signing,
-        Method::PUT,
-        &scoped("/v1/signing-keys/issuer-identities/certificate"),
-        json!({
-            "organization_id": organization_id, "issuer_did": issuer_did,
-            "key_purpose": "x509_doc_signer", "credential_format": "ICAO_EMRTD",
-            "algorithm": "ES256", "cert_pem": dsc_pem, "cert_chain_pem": csca_pem
-        }),
-    )
-    .await;
+    let issue_request = json!({
+        "organization_id": organization_id,
+        "dsc_issuer_did": issuer_did,
+        "csca_issuer_did": issuer_did,
+        "csca_certificate_id": format!("csca-{suffix}"),
+        "credential_format": "ICAO_EMRTD",
+        "country": "US", "organization": "ElevenID Beta", "common_name": "Disposable DSC",
+        "validity_days": 30, "idempotency_key": format!("disposable-{suffix}")
+    });
+    let issue_path = scoped("/v1/signing-keys/issuer-identities/dsc-certificate");
+    let issued = issue_managed_dsc(&signing, &issue_path, issue_request.clone()).await;
+    let replayed = issue_managed_dsc(&signing, &issue_path, issue_request.clone()).await;
+    assert_eq!(
+        issued, replayed,
+        "idempotent DSC issuance must return the original certificate"
+    );
+    let dsc_pem = issued["certificate_pem"].as_str().unwrap();
+    let issued_der = load_certificate_pem(dsc_pem).unwrap();
+    assert!(verify_certificate_signature(&issued_der, &csca_der).unwrap());
     let gateway = internal_gateway_adapter(signing.clone());
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let address = listener.local_addr().unwrap();
@@ -483,6 +559,21 @@ async fn managed_passport_chain_issues_and_verifies_sod_without_exporting_privat
     )
     .await;
     assert_eq!(revoked.status(), StatusCode::OK);
+    let mut new_after_revocation = issue_request.clone();
+    new_after_revocation["idempotency_key"] = json!(format!("revoked-{suffix}"));
+    let replay_after_revocation = issue_managed_dsc(&signing, &issue_path, issue_request).await;
+    assert_eq!(
+        replay_after_revocation, issued,
+        "retry is an immutable issuance receipt, not a current trust decision"
+    );
+    assert_eq!(replay_after_revocation["status"], "issued");
+    assert_eq!(
+        issue_managed_dsc_response(&signing, &issue_path, new_after_revocation)
+            .await
+            .status(),
+        StatusCode::CONFLICT,
+        "a revoked CSCA cannot issue a new DSC"
+    );
     assert!(matches!(
         signer
             .sign("USA", &organization_id, &issuer_did, &groups)
@@ -524,5 +615,23 @@ async fn managed_passport_chain_issues_and_verifies_sod_without_exporting_privat
         .await
         .unwrap();
     assert_eq!(stale_certificate.status(), StatusCode::CONFLICT);
+    let rotated_issue = json!({
+        "organization_id": organization_id,
+        "dsc_issuer_did": issuer_did,
+        "csca_issuer_did": issuer_did,
+        "csca_certificate_id": format!("csca-{suffix}"),
+        "credential_format": "ICAO_EMRTD",
+        "country": "US", "organization": "ElevenID Beta", "common_name": "Disposable DSC",
+        "validity_days": 30, "idempotency_key": format!("rotated-{suffix}")
+    });
+    let rotated_response = issue_managed_dsc_response(&signing, &issue_path, rotated_issue).await;
+    assert_eq!(rotated_response.status(), StatusCode::CONFLICT);
+    let rotated_body = to_bytes(rotated_response.into_body(), 1_048_576)
+        .await
+        .unwrap();
+    assert!(
+        String::from_utf8_lossy(&rotated_body).contains("current managed KMS key"),
+        "rotation must be rejected by the KMS/public identity binding"
+    );
     server.abort();
 }

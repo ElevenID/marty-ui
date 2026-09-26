@@ -668,6 +668,9 @@ $requiredFlowSecrets = @(
     "ISSUANCE_API_KEY",
     "SIGNING_KEYS_INTERNAL_API_KEY"
 )
+if ($EnablePassportNative) {
+    $requiredFlowSecrets += "SIGNING_KEYS_DSC_ISSUE_GATEWAY_KEY"
+}
 foreach ($name in $requiredFlowSecrets) {
     $secret = Get-DotEnvValue -Path $GeneratedEnvFile -Name $name
     if ($secret.Length -lt 32 -or $secret -match '^(?i:change[-_]?me|changeme|replace[-_]?me)') {
