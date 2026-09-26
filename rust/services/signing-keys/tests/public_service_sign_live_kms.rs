@@ -4,6 +4,7 @@
 use axum::{
     body::{to_bytes, Body},
     http::{Request, StatusCode},
+    routing::post,
     Router,
 };
 use marty_signing_keys::{
@@ -13,15 +14,28 @@ use marty_signing_keys::{
 };
 use redis::AsyncCommands;
 use serde_json::{json, Value};
+use std::sync::{
+    atomic::{AtomicUsize, Ordering},
+    Arc,
+};
 use tower::ServiceExt;
 use uuid::Uuid;
 
 async fn sign(app: &Router, organization_id: &str, payload: Value) -> (StatusCode, Value) {
+    sign_service(app, organization_id, "service-a", payload).await
+}
+
+async fn sign_service(
+    app: &Router,
+    organization_id: &str,
+    service_id: &str,
+    payload: Value,
+) -> (StatusCode, Value) {
     let response = app
         .clone()
         .oneshot(
             Request::post(format!(
-                "/v1/signing-keys/services/service-a/sign?organization_id={organization_id}"
+                "/v1/signing-keys/services/{service_id}/sign?organization_id={organization_id}"
             ))
             .header("content-type", "application/json")
             .body(Body::from(payload.to_string()))
@@ -38,6 +52,201 @@ async fn sign(app: &Router, organization_id: &str, payload: Value) -> (StatusCod
         )
     });
     (status, body)
+}
+
+#[tokio::test]
+#[ignore = "requires disposable MARTY_TEST_REDIS_URL"]
+async fn stale_managed_profile_binding_cannot_select_a_kms_key() {
+    let redis_url = std::env::var("MARTY_TEST_REDIS_URL").expect("disposable Redis URL");
+    let calls = Arc::new(AtomicUsize::new(0));
+    let kms = Router::new().route(
+        "/v1/transit/sign/{reference}",
+        post({
+            let calls = Arc::clone(&calls);
+            move || {
+                let calls = Arc::clone(&calls);
+                async move {
+                    calls.fetch_add(1, Ordering::SeqCst);
+                    StatusCode::INTERNAL_SERVER_ERROR
+                }
+            }
+        }),
+    );
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let endpoint = format!("http://{}", listener.local_addr().unwrap());
+    let server = tokio::spawn(async move { axum::serve(listener, kms).await.unwrap() });
+    let organization_id = format!("test-managed-stale-{}", Uuid::new_v4().simple());
+    let stale_reference = "cred-issuer-0123456789abcdefabcd-es256";
+    let foreign_namespace = Uuid::new_v5(&Uuid::NAMESPACE_URL, b"other-tenant")
+        .simple()
+        .to_string();
+    let foreign_reference = format!("cred-issuer-{foreign_namespace}-foreign-es256");
+    let registry = RegistryStore::connect(&redis_url).await.unwrap();
+    registry
+        .save(
+            &organization_id,
+            &json!({
+                "services": [],
+                "key_reference_purposes": {
+                    "managed-openbao-transit": {
+                        (stale_reference): ["vc_jwt_issuer", "jwks_signing"],
+                        (foreign_reference.clone()): ["vc_jwt_issuer"]
+                    }
+                }
+            }),
+        )
+        .await
+        .unwrap();
+    let managed = registry.clone().with_managed_openbao(Some(endpoint));
+    let profiles = ProfileStore::from_connection(registry.connection());
+    let app = marty_signing_keys::http::router_with_dependencies(
+        "test-internal-key".to_string(),
+        Some(managed),
+        Some(DocumentStore::from_connection(registry.connection())),
+        None,
+        Some(profiles.clone()),
+        None,
+        None,
+    );
+    let (status, body) = sign_service(
+        &app,
+        &organization_id,
+        "managed-openbao-transit",
+        json!({
+            "payload_b64": "cGF5bG9hZA",
+            "algorithm": "ES256",
+            "key_purpose": "vc_jwt_issuer",
+            "key_reference": stale_reference
+        }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CONFLICT, "{body}");
+    let (status, foreign) = sign_service(
+        &app,
+        &organization_id,
+        "managed-openbao-transit",
+        json!({
+            "payload_b64": "cGF5bG9hZA",
+            "algorithm": "ES256",
+            "key_purpose": "vc_jwt_issuer",
+            "key_reference": foreign_reference
+        }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CONFLICT, "{foreign}");
+    let fixture: Value =
+        serde_json::from_str(include_str!("fixtures/issuer_profile_vectors.json")).unwrap();
+    let mut profile = fixture["normalize"]["expected"].clone();
+    profile["organization_id"] = json!(organization_id);
+    profile["signing_service_id"] = json!("managed-openbao-transit");
+    profile["signing_key_reference"] = json!(stale_reference);
+    profile["key_purpose"] = json!("vc_jwt_issuer");
+    profile["algorithm"] = json!("ES256");
+    profile["status"] = json!("active");
+    profiles
+        .put(&organization_id, "ip-vector", profile)
+        .await
+        .unwrap();
+    let (status, mismatched) = sign_service(
+        &app,
+        &organization_id,
+        "managed-openbao-transit",
+        json!({
+            "payload_b64": "cGF5bG9hZA",
+            "algorithm": "ES256",
+            "key_purpose": "jwks_signing",
+            "key_reference": stale_reference
+        }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CONFLICT, "{mismatched}");
+    assert_eq!(calls.load(Ordering::SeqCst), 0);
+    let mut connection = registry.connection();
+    let _: () = connection.del(storage_key(&organization_id)).await.unwrap();
+    let _: () = connection
+        .del(profile_storage_key(&organization_id))
+        .await
+        .unwrap();
+    server.abort();
+}
+
+#[tokio::test]
+#[ignore = "requires disposable MARTY_TEST_REDIS_URL"]
+async fn public_config_cannot_replace_managed_kms_purpose_bindings() {
+    let redis_url = std::env::var("MARTY_TEST_REDIS_URL").expect("disposable Redis URL");
+    let organization_id = format!("test-managed-config-{}", Uuid::new_v4().simple());
+    let registry = RegistryStore::connect(&redis_url).await.unwrap();
+    registry
+        .save(
+            &organization_id,
+            &json!({
+                "services": [],
+                "key_reference_purposes": {
+                    "managed-openbao-transit": {"approved-key": ["vc_jwt_issuer"]}
+                }
+            }),
+        )
+        .await
+        .unwrap();
+    let app = marty_signing_keys::http::router_with_dependencies(
+        "test-internal-key".to_string(),
+        Some(registry.clone()),
+        None,
+        None,
+        None,
+        None,
+        None,
+    );
+    for body in [
+        json!({
+            "services": [],
+            "key_reference_purposes": {
+                "managed-openbao-transit": {"foreign-key": ["vc_jwt_issuer"]}
+            }
+        }),
+        json!({}),
+        json!({"hsm_enabled": false}),
+    ] {
+        let response = app
+            .clone()
+            .oneshot(
+                Request::patch(format!(
+                    "/v1/signing-keys/config?organization_id={organization_id}"
+                ))
+                .header("content-type", "application/json")
+                .body(Body::from(body.to_string()))
+                .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        let stored = registry.load(&organization_id).await.unwrap();
+        let managed = &stored["key_reference_purposes"]["managed-openbao-transit"];
+        assert_eq!(managed["approved-key"], json!(["vc_jwt_issuer"]));
+        assert!(managed.get("foreign-key").is_none());
+    }
+    for body in [json!([]), Value::Null, json!("invalid"), json!(1)] {
+        let response = app
+            .clone()
+            .oneshot(
+                Request::patch(format!(
+                    "/v1/signing-keys/config?organization_id={organization_id}"
+                ))
+                .header("content-type", "application/json")
+                .body(Body::from(body.to_string()))
+                .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::UNPROCESSABLE_ENTITY);
+        let stored = registry.load(&organization_id).await.unwrap();
+        assert_eq!(
+            stored["key_reference_purposes"]["managed-openbao-transit"]["approved-key"],
+            json!(["vc_jwt_issuer"])
+        );
+    }
+    let mut connection = registry.connection();
+    let _: () = connection.del(storage_key(&organization_id)).await.unwrap();
 }
 
 #[tokio::test]
