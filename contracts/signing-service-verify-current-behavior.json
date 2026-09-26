@@ -1,0 +1,17 @@
+{
+  "schema_version": 1,
+  "source": "pre-Rust services/gateway/routes/signing_keys.py at parent of e1ebad979",
+  "method": "GET",
+  "path": "/v1/signing-keys/services/{service_id}/verify-current",
+  "success_fields": ["service_id", "key_valid", "checks", "verified_at"],
+  "legacy_check_fields": ["key_present", "required_fields_present", "algorithm_supported"],
+  "missing_service_status": 404,
+  "kms_unavailable_status": 503,
+  "rules": {
+    "public_key_is_fetched_from_current_kms_service": true,
+    "caller_cannot_select_a_key_reference": true,
+    "managed_shared_service_uses_issuer_scoped_identity": true,
+    "supported_algorithms_are_derived_from_public_key_material_and_registered_service_policy": true,
+    "response_contains_no_public_key_or_custody_coordinates": true
+  }
+}

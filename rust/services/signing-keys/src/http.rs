@@ -163,6 +163,10 @@ pub fn router_with_dependencies(
             "/v1/signing-keys/services/{service_id}/mdoc-x5c",
             get(public_service_mdoc_x5c),
         )
+        .route(
+            "/v1/signing-keys/services/{service_id}/verify-current",
+            get(verify_public_service_key),
+        )
         .route("/v1/signing-keys/config/purposes", get(purposes))
         .route(
             "/v1/signing-keys/config/service-capabilities",
@@ -1524,6 +1528,84 @@ async fn current_service_public_jwk(service: &Value) -> Result<(Value, Value), P
         )
     })?;
     Ok((config, public_jwk))
+}
+
+async fn verify_public_service_key(
+    State(state): State<AppState>,
+    Path(service_id): Path<String>,
+    Query(scope): Query<OrganizationScope>,
+) -> Response {
+    if let Err(error) = validate_service_scope(&scope.organization_id, None) {
+        return error.into_response();
+    }
+    let service =
+        match registered_certificate_service(&state, &scope.organization_id, &service_id).await {
+            Ok(service) => service,
+            Err(error) => return error.into_response(),
+        };
+    let public_jwk = match current_service_public_jwk(&service).await {
+        Ok((_, jwk)) => jwk,
+        Err(error) => return error.into_response(),
+    };
+    Json(verify_service_key_result(
+        &service_id,
+        &service,
+        &public_jwk,
+        chrono::Utc::now().to_rfc3339(),
+    ))
+    .into_response()
+}
+
+fn verify_service_key_result(
+    service_id: &str,
+    service: &Value,
+    public_jwk: &Value,
+    verified_at: String,
+) -> Value {
+    let key_present = public_jwk.as_object().is_some_and(|jwk| !jwk.is_empty());
+    let required_fields: &[&str] = match public_jwk.get("kty").and_then(Value::as_str) {
+        Some("EC") => &["crv", "x", "y"],
+        Some("RSA") => &["n", "e"],
+        Some("OKP") => &["crv", "x"],
+        _ => &[],
+    };
+    let required_fields_present = !required_fields.is_empty()
+        && required_fields.iter().all(|field| {
+            public_jwk
+                .get(*field)
+                .and_then(Value::as_str)
+                .is_some_and(|value| !value.is_empty())
+        });
+    let compatible_algorithms: &[&str] = match (
+        public_jwk.get("kty").and_then(Value::as_str),
+        public_jwk.get("crv").and_then(Value::as_str),
+    ) {
+        (Some("EC"), Some("P-256")) => &["ES256"],
+        (Some("EC"), Some("P-384")) => &["ES384"],
+        (Some("EC"), Some("P-521")) => &["ES512"],
+        (Some("RSA"), _) => &["RS256", "PS256"],
+        (Some("OKP"), Some("Ed25519")) => &["EdDSA"],
+        _ => &[],
+    };
+    let advertised = service.get("algorithms").and_then(Value::as_array);
+    let declared = public_jwk.get("alg").and_then(Value::as_str);
+    let algorithm_supported = compatible_algorithms.iter().any(|algorithm| {
+        advertised.is_some_and(|algorithms| {
+            algorithms
+                .iter()
+                .any(|candidate| candidate.as_str() == Some(*algorithm))
+        }) && declared.is_none_or(|value| value == *algorithm)
+    });
+    json!({
+        "service_id": service_id,
+        "key_valid": key_present && required_fields_present && algorithm_supported,
+        "checks": {
+            "key_present": key_present,
+            "required_fields_present": required_fields_present,
+            "algorithm_supported": algorithm_supported,
+        },
+        "verified_at": verified_at,
+    })
 }
 
 async fn get_public_service_certificate(
@@ -3197,6 +3279,9 @@ async fn openapi() -> Json<serde_json::Value> {
             "/v1/signing-keys/services/{service_id}/mdoc-x5c": {
                 "get": {"summary": "Read Registered Service mDoc Certificate Chain", "responses": {"200": {"description": "Public X.509 chain bound to the current KMS key"}}}
             },
+            "/v1/signing-keys/services/{service_id}/verify-current": {
+                "get": {"summary": "Verify Current Registered Service Public Key", "responses": {"200": {"description": "KMS public-key verification checks"}}}
+            },
             "/v1/signing-keys/config/certificate-expiry-alerts": {
                 "get": {"summary": "Registered Service Certificate Expiry Alerts", "responses": {"200": {"description": "Tenant-scoped alerts using stored certificate overrides"}}}
             },
@@ -3465,6 +3550,83 @@ mod public_contract_tests {
             "service-a"
         )
         .is_none());
+    }
+
+    #[test]
+    fn verify_current_preserves_checks_and_accepts_supported_kms_key_types() {
+        let behavior: Value = serde_json::from_str(include_str!(
+            "../../../../contracts/signing-service-verify-current-behavior.json"
+        ))
+        .unwrap();
+        assert_eq!(
+            behavior["path"],
+            "/v1/signing-keys/services/{service_id}/verify-current"
+        );
+        let fixture: Value =
+            serde_json::from_str(include_str!("../tests/fixtures/document_vectors.json")).unwrap();
+        let p256 = &fixture["certificate"]["expected_jwk"];
+        let result = verify_service_key_result(
+            "service-a",
+            &json!({"algorithms": ["ES256"]}),
+            p256,
+            "2026-09-26T00:00:00Z".into(),
+        );
+        assert_eq!(result["key_valid"], true);
+        assert_eq!(
+            result["checks"],
+            json!({
+                "key_present": true,
+                "required_fields_present": true,
+                "algorithm_supported": true,
+            })
+        );
+        assert_eq!(result["verified_at"], "2026-09-26T00:00:00Z");
+        assert!(result.get("key_reference").is_none());
+        assert!(result.get("public_jwk").is_none());
+        let wrong_policy = verify_service_key_result(
+            "service-a",
+            &json!({"algorithms": ["ES384"]}),
+            p256,
+            String::new(),
+        );
+        assert_eq!(wrong_policy["checks"]["algorithm_supported"], false);
+        assert_eq!(wrong_policy["key_valid"], false);
+        let missing_coordinate = verify_service_key_result(
+            "service-a",
+            &json!({"algorithms": ["ES256"]}),
+            &json!({"kty": "EC", "crv": "P-256", "x": p256["x"]}),
+            String::new(),
+        );
+        assert_eq!(
+            missing_coordinate["checks"]["required_fields_present"],
+            false
+        );
+        assert_eq!(missing_coordinate["key_valid"], false);
+        for (key, algorithm) in [
+            (
+                json!({"kty": "EC", "crv": "P-384", "x": "x", "y": "y"}),
+                "ES384",
+            ),
+            (
+                json!({"kty": "EC", "crv": "P-521", "x": "x", "y": "y"}),
+                "ES512",
+            ),
+            (
+                json!({"kty": "RSA", "n": "n", "e": "AQAB", "alg": "PS256"}),
+                "PS256",
+            ),
+            (json!({"kty": "OKP", "crv": "Ed25519", "x": "x"}), "EdDSA"),
+        ] {
+            assert_eq!(
+                verify_service_key_result(
+                    "service-a",
+                    &json!({"algorithms": [algorithm]}),
+                    &key,
+                    String::new(),
+                )["key_valid"],
+                true
+            );
+        }
     }
 
     #[test]
