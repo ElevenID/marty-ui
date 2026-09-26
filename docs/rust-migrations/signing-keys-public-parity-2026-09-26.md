@@ -131,6 +131,20 @@ private key material enters this route. An isolated Redis/OpenBao route test
 passed for a real KMS-held signature and the unregistered-key, tenant,
 private-field, and empty-payload denials. Authenticated through-Gateway
 acceptance is still required before cutover.
-Thus 7 declared pairs remain without local public handlers. These new
+The local `POST /config/resolve` adapter restores the released service-default
+order and purpose-bound key selection in
+`contracts/signing-public-config-resolve-behavior.json`. Algorithm filtering
+reads only existing public KMS key metadata and never creates a missing
+managed key. The response keeps the released `service`, `resolved_by`, and
+`mdoc_signing_hints` fields, with a deliberate credential-redaction and
+certificate/key-match tightening. Frozen-selection and mock-KMS unit tests
+pass, and the isolated Redis/mock-KMS Rust-route test passed for tenant
+isolation, algorithm selection, redaction, no key provisioning, malformed
+certificate rejection, and KMS-outage status. A Gateway runtime test also
+passes for session authorization and trusted tenant forwarding to the
+Signing Keys upstream. The combined Gateway-to-Rust and beta gates remain
+open.
+
+Thus 6 declared pairs remain without local public handlers. These new
 adapters still need authenticated through-Gateway runtime tests. The
 24-pair table above remains the protected-main audit baseline.

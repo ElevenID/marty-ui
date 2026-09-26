@@ -20,7 +20,7 @@ use crate::kms;
 use crate::profiles::ProfileStore;
 
 const SUPPORTED_ALGORITHMS: &[&str] = &["ES256", "ES384", "ES512", "RS256", "EdDSA"];
-const MANAGED_OPENBAO_SERVICE_ID: &str = "managed-openbao-transit";
+pub(crate) const MANAGED_OPENBAO_SERVICE_ID: &str = "managed-openbao-transit";
 
 #[derive(Debug, Error, PartialEq, Eq)]
 pub enum RegistryError {
@@ -451,6 +451,11 @@ fn managed_openbao_service(endpoint: &str, keys: &[ManagedKey], inventory_comple
         .iter()
         .map(|key| (key.reference.as_str(), key.algorithm.as_str()))
         .collect::<BTreeMap<_, _>>();
+    let lti_only_references = keys
+        .iter()
+        .filter(|key| key.lti_only)
+        .map(|key| key.reference.as_str())
+        .collect::<Vec<_>>();
     json!({
         "id": MANAGED_OPENBAO_SERVICE_ID,
         "name": "Marty managed OpenBao transit",
@@ -469,6 +474,7 @@ fn managed_openbao_service(endpoint: &str, keys: &[ManagedKey], inventory_comple
         "key_reference": default_reference,
         "key_aliases": references,
         "key_algorithms": key_algorithms,
+        "lti_only_references": lti_only_references,
         "algorithms": SUPPORTED_ALGORITHMS,
         "key_purposes": purposes,
         "credential_formats": ["jwt_vc_json", "dc+sd-jwt", "mso_mdoc", "zk_mdoc", "icao_emrtd", "vds_nc", "oauth-authz-req+jwt", "lti_tool_jwt"],
@@ -890,13 +896,71 @@ fn resolve_key_reference(
         .filter(|value| !value.is_empty())
         .map(str::to_string);
     let Some(key_purpose) = key_purpose else {
-        return current;
+        let Some(algorithm) = algorithm else {
+            return current;
+        };
+        let service_id = service.get("id").and_then(Value::as_str)?;
+        let lti_only_references = dedupe_strings(service.get("lti_only_references"))
+            .into_iter()
+            .collect::<BTreeSet<_>>();
+        let bindings = normalize_bindings(registry.get("key_reference_purposes"));
+        let service_bindings = bindings.get(service_id);
+        let mut references = dedupe_strings(service.get("key_aliases"))
+            .into_iter()
+            .collect::<BTreeSet<_>>();
+        if let Some(reference) = &current {
+            references.insert(reference.clone());
+        }
+        if service_id != MANAGED_OPENBAO_SERVICE_ID {
+            if let Some(bound) = service_bindings {
+                references.extend(bound.keys().cloned());
+            }
+        }
+        let mut candidates = keys
+            .iter()
+            .filter(|key| key.get("algorithm").and_then(Value::as_str) == Some(algorithm))
+            .filter_map(|key| {
+                let reference = key
+                    .get("provider_key_name")
+                    .or_else(|| key.get("id"))
+                    .and_then(Value::as_str)
+                    .filter(|reference| references.contains(*reference))?;
+                if key
+                    .get("service_id")
+                    .and_then(Value::as_str)
+                    .is_some_and(|key_service_id| key_service_id != service_id)
+                {
+                    return None;
+                }
+                if service_bindings
+                    .and_then(|bound| bound.get(reference))
+                    .is_some_and(|purposes| purposes.as_slice() == ["lti_tool_signing"])
+                    || lti_only_references.contains(reference)
+                    || (service_id == MANAGED_OPENBAO_SERVICE_ID
+                        && managed_key_purposes(reference) == ["lti_tool_signing"])
+                {
+                    return None;
+                }
+                Some(reference.to_owned())
+            })
+            .collect::<Vec<_>>();
+        if current
+            .as_ref()
+            .is_some_and(|reference| candidates.contains(reference))
+        {
+            return current;
+        }
+        candidates.sort();
+        return candidates.into_iter().next();
     };
     let Some(service_id) = service.get("id").and_then(Value::as_str) else {
         return current;
     };
     let bindings = normalize_bindings(registry.get("key_reference_purposes"));
     let service_bindings = bindings.get(service_id).cloned().unwrap_or_default();
+    let lti_only_references = dedupe_strings(service.get("lti_only_references"))
+        .into_iter()
+        .collect::<BTreeSet<_>>();
     let mut aliases = dedupe_strings(service.get("key_aliases"))
         .into_iter()
         .collect::<BTreeSet<_>>();
@@ -907,7 +971,12 @@ fn resolve_key_reference(
         .iter()
         .filter(|(reference, purposes)| {
             purposes.iter().any(|purpose| purpose == key_purpose)
-                && (aliases.is_empty() || aliases.contains(*reference))
+                && (key_purpose == "lti_tool_signing" || !lti_only_references.contains(*reference))
+                && (service_id != MANAGED_OPENBAO_SERVICE_ID
+                    || managed_key_purposes(reference).is_empty()
+                    || managed_key_purposes(reference).contains(&key_purpose))
+                && (aliases.contains(*reference)
+                    || (service_id != MANAGED_OPENBAO_SERVICE_ID && aliases.is_empty()))
         })
         .map(|(reference, _)| reference.clone())
         .collect::<Vec<_>>();
@@ -919,13 +988,20 @@ fn resolve_key_reference(
                     .get("provider_key_name")
                     .or_else(|| key.get("id"))?
                     .as_str()?;
-                (managed_key_purposes(reference).contains(&key_purpose)
-                    && (aliases.is_empty() || aliases.contains(reference)))
+                ((managed_key_purposes(reference).contains(&key_purpose)
+                    || (key_purpose == "lti_tool_signing"
+                        && lti_only_references.contains(reference)))
+                    && (key_purpose == "lti_tool_signing"
+                        || !lti_only_references.contains(reference))
+                    && aliases.contains(reference))
                 .then(|| reference.to_string())
             })
             .collect();
     }
     if candidates.is_empty() {
+        if service_id == MANAGED_OPENBAO_SERVICE_ID {
+            return None;
+        }
         return if service_bindings.is_empty() {
             current
         } else {
@@ -1158,6 +1234,43 @@ mod tests {
     use std::sync::{Arc, Mutex};
 
     static BAO_ENV_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
+
+    #[test]
+    fn public_config_resolve_frozen_selection_cases() {
+        let contract: Value = serde_json::from_str(include_str!(
+            "../../../../contracts/signing-public-config-resolve-behavior.json"
+        ))
+        .expect("frozen public resolve contract");
+        for case in contract["cases"].as_array().expect("resolve cases") {
+            let mut request = case["request"].clone();
+            request["registry"] = case["registry"].clone();
+            request["keys"] = case["keys"].clone();
+            let request: ResolveRequest = serde_json::from_value(request).expect("resolve input");
+            let requires_bound_key = request.key_purpose.is_some();
+            let resolved = resolve(request).expect("registry resolution");
+            if case["expected_status"] == 404 {
+                assert!(
+                    resolved.service.is_none()
+                        || (requires_bound_key && resolved.key_reference.is_none()),
+                    "{} must not resolve",
+                    case["name"]
+                );
+                continue;
+            }
+            assert_eq!(
+                resolved.service.as_ref().map(|service| &service["id"]),
+                Some(&case["expected_service_id"]),
+                "{} service",
+                case["name"]
+            );
+            assert_eq!(
+                resolved.key_reference.as_deref(),
+                case["expected_key_reference"].as_str(),
+                "{} key",
+                case["name"]
+            );
+        }
+    }
 
     #[test]
     fn managed_openbao_accepts_passport_profile_wire_format() {
