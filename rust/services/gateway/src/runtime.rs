@@ -6922,6 +6922,9 @@ mod tests {
                 "/v1/signing-keys/services/service-1/rotate",
             ),
             (HttpMethod::Post, "/v1/signing-keys/services/vdsnc/register"),
+            (HttpMethod::Get, "/v1/signing-keys/key-1"),
+            (HttpMethod::Patch, "/v1/signing-keys/key-1"),
+            (HttpMethod::Delete, "/v1/signing-keys/key-1"),
             (HttpMethod::Get, "/v1/signing-keys/compliance/keys-summary"),
         ] {
             let route =
@@ -6985,6 +6988,94 @@ mod tests {
                 serde_json::from_slice::<Value>(forwarded.body.as_deref().unwrap()).unwrap(),
                 body
             );
+        }
+    }
+
+    #[tokio::test]
+    async fn signing_key_metadata_mutations_require_session_and_forward_trusted_scope() {
+        let recorder = Arc::new(ActorRecordingUpstream::default());
+        let limited = gateway_router(runtime_state_with_upstream(
+            Arc::new(NoOwner),
+            recorder.clone(),
+        ));
+        let forbidden = limited
+            .oneshot(
+                Request::builder()
+                    .method("DELETE")
+                    .uri("/v1/signing-keys/key-1")
+                    .header("cookie", "sessionId=valid")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(forbidden.status(), StatusCode::FORBIDDEN);
+        assert!(recorder.0.lock().unwrap().is_empty());
+        struct KeyMetadataGrantProvider;
+        #[async_trait]
+        impl OrganizationMembershipProvider for KeyMetadataGrantProvider {
+            async fn get_membership(
+                &self,
+                user_id: &str,
+                organization_id: &str,
+            ) -> Result<Option<OrganizationMembership>, SecurityError> {
+                let mut membership = RuntimeProvider
+                    .get_membership(user_id, organization_id)
+                    .await?;
+                if let Some(membership) = membership.as_mut() {
+                    membership.permissions.insert("signing-key:edit".into());
+                    membership.permissions.insert("signing-key:delete".into());
+                }
+                Ok(membership)
+            }
+        }
+        let mut state = runtime_state_with_upstream(Arc::new(NoOwner), recorder.clone());
+        Arc::get_mut(&mut state)
+            .expect("unique runtime state")
+            .memberships = Arc::new(KeyMetadataGrantProvider);
+        let router = gateway_router(state);
+        let path = "/v1/signing-keys/key-1";
+        for (method, method_name, body) in [
+            (
+                HttpMethod::Patch,
+                "PATCH",
+                Some(json!({"name": "New name"})),
+            ),
+            (HttpMethod::Delete, "DELETE", None),
+        ] {
+            let request = |authenticated| {
+                let mut builder = Request::builder().method(method_name).uri(path);
+                if authenticated {
+                    builder = builder.header("cookie", "sessionId=valid");
+                }
+                if body.is_some() {
+                    builder = builder.header("content-type", "application/json");
+                }
+                builder
+                    .body(Body::from(
+                        body.as_ref().map_or_else(String::new, Value::to_string),
+                    ))
+                    .unwrap()
+            };
+            let before = recorder.0.lock().unwrap().len();
+            let denied = router.clone().oneshot(request(false)).await.unwrap();
+            assert_eq!(denied.status(), StatusCode::UNAUTHORIZED);
+            assert_eq!(recorder.0.lock().unwrap().len(), before);
+            let accepted = router.clone().oneshot(request(true)).await.unwrap();
+            assert_eq!(accepted.status(), StatusCode::OK);
+            let calls = recorder.0.lock().unwrap();
+            assert_eq!(calls.len(), before + 1);
+            let (service, forwarded) = &calls[before];
+            assert_eq!(service, "signing-keys");
+            assert_eq!(forwarded.path, path);
+            assert_eq!(forwarded.query["organization_id"], vec!["org-1"]);
+            assert_eq!(forwarded.method, method);
+            if let Some(expected) = body.as_ref() {
+                assert_eq!(
+                    serde_json::from_slice::<Value>(forwarded.body.as_deref().unwrap()).unwrap(),
+                    *expected
+                );
+            }
         }
     }
 

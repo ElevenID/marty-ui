@@ -215,6 +215,12 @@ pub fn router_with_dependencies(
             "/v1/signing-keys/config/service-capabilities",
             get(capabilities),
         )
+        .route(
+            "/v1/signing-keys/{key_id}",
+            get(get_public_signing_key)
+                .patch(update_public_signing_key)
+                .delete(delete_public_signing_key),
+        )
         .route("/internal/kms/sign", post(kms_sign))
         .route("/internal/kms/public-key", post(kms_public_key))
         .route("/internal/kms/verify", post(kms_verify))
@@ -630,28 +636,10 @@ async fn list_public_signing_keys(
     State(state): State<AppState>,
     Query(scope): Query<OrganizationScope>,
 ) -> Response {
-    let Some(registry_store) = state.registry_store.as_ref() else {
-        return public_error(
-            StatusCode::SERVICE_UNAVAILABLE,
-            "Signing registry is unavailable.",
-        );
+    let keys = match load_public_signing_key_inventory(&state, &scope.organization_id).await {
+        Ok(keys) => keys,
+        Err(error) => return error.into_response(),
     };
-    let registry = match registry_store.load(&scope.organization_id).await {
-        Ok(registry) => registry,
-        Err(error) => return public_error(StatusCode::SERVICE_UNAVAILABLE, &error.to_string()),
-    };
-    let profiles = if let Some(profile_store) = state.profile_store.as_ref() {
-        match profile_store
-            .find(&scope.organization_id, FindProfilesRequest::default())
-            .await
-        {
-            Ok(profiles) => profiles,
-            Err(error) => return public_error(StatusCode::SERVICE_UNAVAILABLE, &error.to_string()),
-        }
-    } else {
-        Vec::new()
-    };
-    let keys = public_signing_key_inventory(&registry, &profiles);
     let key_count = keys.len();
     Json(json!({
         "keys": keys,
@@ -665,6 +653,151 @@ async fn list_public_signing_keys(
         "message": Value::Null,
     }))
     .into_response()
+}
+
+async fn load_public_signing_key_inventory(
+    state: &AppState,
+    organization_id: &str,
+) -> Result<Vec<Value>, PublicSigningError> {
+    validate_service_scope(organization_id, None)?;
+    let Some(registry_store) = state.registry_store.as_ref() else {
+        return Err(public_failure(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "Signing registry is unavailable.",
+        ));
+    };
+    let registry = registry_store.load(organization_id).await.map_err(|_| {
+        public_failure(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "Signing registry is unavailable.",
+        )
+    })?;
+    let profiles = if let Some(profile_store) = state.profile_store.as_ref() {
+        match profile_store
+            .find(organization_id, FindProfilesRequest::default())
+            .await
+        {
+            Ok(profiles) => profiles,
+            Err(_) => {
+                return Err(public_failure(
+                    StatusCode::SERVICE_UNAVAILABLE,
+                    "Issuer identity storage is unavailable.",
+                ))
+            }
+        }
+    } else {
+        Vec::new()
+    };
+    Ok(public_signing_key_inventory(&registry, &profiles))
+}
+
+async fn get_public_signing_key(
+    State(state): State<AppState>,
+    Path(key_id): Path<String>,
+    Query(scope): Query<OrganizationScope>,
+) -> Response {
+    let keys = match load_public_signing_key_inventory(&state, &scope.organization_id).await {
+        Ok(keys) => keys,
+        Err(error) => return error.into_response(),
+    };
+    match keys.into_iter().find(|key| {
+        key.get("id").and_then(Value::as_str) == Some(&key_id)
+            || key.get("provider_key_name").and_then(Value::as_str) == Some(&key_id)
+    }) {
+        Some(key) => Json(key).into_response(),
+        None => public_error(
+            StatusCode::NOT_FOUND,
+            &format!("Signing key '{key_id}' not found."),
+        ),
+    }
+}
+
+fn public_jwk_metadata_patch(body: &Value) -> Result<Value, &'static str> {
+    let valid_text = |text: &str| {
+        !text.trim().is_empty() && text.len() <= 200 && !text.chars().any(char::is_control)
+    };
+    let Some(fields) = body.as_object() else {
+        return Err("Signing key metadata update must be an object.");
+    };
+    let mut updates = serde_json::Map::new();
+    for (field, value) in fields {
+        match field.as_str() {
+            "name" | "status" if value.as_str().is_some_and(valid_text) => {
+                updates.insert(field.clone(), value.clone());
+            }
+            "aliases" | "key_aliases"
+                if value.as_array().is_some_and(|values| {
+                    values.len() <= 100
+                        && values
+                            .iter()
+                            .all(|value| value.as_str().is_some_and(valid_text))
+                }) =>
+            {
+                updates.insert(field.clone(), value.clone());
+            }
+            "name" | "status" | "aliases" | "key_aliases" => {
+                return Err("Signing key metadata field has an invalid value.")
+            }
+            _ => return Err("Only name, status, aliases, and key_aliases may be updated."),
+        }
+    }
+    Ok(Value::Object(updates))
+}
+
+async fn update_public_signing_key(
+    State(state): State<AppState>,
+    Path(key_id): Path<String>,
+    Query(scope): Query<OrganizationScope>,
+    Json(body): Json<Value>,
+) -> Response {
+    if let Err(error) = validate_service_scope(&scope.organization_id, None) {
+        return error.into_response();
+    }
+    let updates = match public_jwk_metadata_patch(&body) {
+        Ok(updates) => updates,
+        Err(message) => return public_error(StatusCode::UNPROCESSABLE_ENTITY, message),
+    };
+    let Some(store) = state.document_store.as_ref() else {
+        return public_error(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "Signing document storage is unavailable.",
+        );
+    };
+    match store
+        .update_jwk(
+            &scope.organization_id,
+            &key_id,
+            UpdateJwkRequest { updates },
+        )
+        .await
+    {
+        Ok(updated) => {
+            Json(json!({"ok": true, "key_id": key_id, "updated": updated.updated})).into_response()
+        }
+        Err(error) => public_publication_error(error),
+    }
+}
+
+async fn delete_public_signing_key(
+    State(state): State<AppState>,
+    Path(key_id): Path<String>,
+    Query(scope): Query<OrganizationScope>,
+) -> Response {
+    if let Err(error) = validate_service_scope(&scope.organization_id, None) {
+        return error.into_response();
+    }
+    let Some(store) = state.document_store.as_ref() else {
+        return public_error(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "Signing document storage is unavailable.",
+        );
+    };
+    match store.delete_jwk(&scope.organization_id, &key_id).await {
+        Ok(deleted) => {
+            Json(json!({"ok": true, "key_id": key_id, "removed": deleted.removed})).into_response()
+        }
+        Err(error) => public_publication_error(error),
+    }
 }
 
 fn public_signing_key_inventory(registry: &Value, profiles: &[Value]) -> Vec<Value> {
@@ -5527,6 +5660,11 @@ async fn openapi() -> Json<serde_json::Value> {
         "paths": {
             "/health": {"get": {"summary": "Health Check", "responses": {"200": {"description": "Successful Response"}}}},
             "/v1/signing-keys": {"get": {"summary": "List Signing Keys", "responses": {"200": {"description": "Provider-neutral signing-key inventory"}}}},
+            "/v1/signing-keys/{key_id}": {
+                "get": {"summary": "Get Public Signing Key Metadata", "responses": {"200": {"description": "Tenant signing-key inventory entry"}, "404": {"description": "Signing key not found"}}},
+                "patch": {"summary": "Update Published Signing Key Metadata", "responses": {"200": {"description": "JWKS metadata updated without altering KMS key material"}, "404": {"description": "Published key not found"}}},
+                "delete": {"summary": "Deregister Published Signing Key", "responses": {"200": {"description": "JWKS entry removed without deleting KMS key material"}, "404": {"description": "Published key not found"}}}
+            },
             "/v1/signing-keys/issuer-identities": {
                 "get": {"summary": "List Public Issuer Identities", "responses": {"200": {"description": "DID-first issuer identity inventory without custody coordinates"}}},
                 "post": {"summary": "Create Public Issuer Identity", "responses": {"200": {"description": "Provider-neutral issuer identity provisioning"}}},
@@ -5629,6 +5767,43 @@ mod public_contract_tests {
             json!(["name", "status", "aliases", "key_aliases"])
         );
         assert_eq!(behavior["routes"][2]["method"], "DELETE");
+    }
+
+    #[tokio::test]
+    async fn public_key_metadata_routes_reject_custody_fields_before_storage() {
+        for method in ["get", "patch", "delete"] {
+            assert!(openapi().await.0["paths"]["/v1/signing-keys/{key_id}"][method].is_object());
+        }
+        let router = router_with_internal_api_key("test-only".into());
+        let request = |body: Value| {
+            Request::patch("/v1/signing-keys/key-a?organization_id=org-a")
+                .header("content-type", "application/json")
+                .body(Body::from(body.to_string()))
+                .unwrap()
+        };
+        let valid = router
+            .clone()
+            .oneshot(request(json!({"name": "New name"})))
+            .await
+            .unwrap();
+        assert_eq!(valid.status(), StatusCode::SERVICE_UNAVAILABLE);
+        for body in [
+            json!({"d": "private-scalar"}),
+            json!({"auth_reference": "provider-secret"}),
+            json!({"aliases": [{"private_key": "forged"}]}),
+            json!({"name": {"private_key": "forged"}}),
+            json!({"status": "active\nforged"}),
+        ] {
+            assert_eq!(
+                router
+                    .clone()
+                    .oneshot(request(body))
+                    .await
+                    .unwrap()
+                    .status(),
+                StatusCode::UNPROCESSABLE_ENTITY
+            );
+        }
     }
 
     #[test]

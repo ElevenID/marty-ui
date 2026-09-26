@@ -171,6 +171,18 @@ test covers persistence, tenant isolation, default preservation, redaction,
 and invalid input. Gateway session/trusted-scope tests cover forwarding.
 Combined Gateway-to-Rust and beta acceptance remain open.
 
-Thus 4 declared pairs remain without local public handlers. These new
-adapters still need authenticated through-Gateway runtime tests. The
+The local `GET`, `PATCH`, and `DELETE /{key_id}` adapters reuse the Rust
+tenant inventory and JWKS document kernels. GET returns only a public
+inventory entry; PATCH edits only published name/status/alias metadata; DELETE
+removes only a published JWKS entry and leaves the KMS key and service
+registration untouched. Their released distinctions and response fields are
+frozen in `contracts/signing-public-key-metadata-behavior.json`. An isolated
+Redis route test covers tenant isolation, metadata persistence, private-field
+rejection, and the JWKS-only deletion boundary; Gateway tests cover session
+authorization and trusted tenant forwarding. Combined Gateway-to-Rust and
+beta acceptance remain open.
+
+Thus 1 declared pair remains without a local public handler:
+`POST /v1/signing-keys`, managed KMS-backed key creation. These new
+adapters still need authenticated combined Gateway-to-Rust runtime tests. The
 24-pair table above remains the protected-main audit baseline.
