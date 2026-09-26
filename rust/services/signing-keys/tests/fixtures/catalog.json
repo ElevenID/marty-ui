@@ -3,12 +3,12 @@
     "purposes": [
       {"id":"vc_jwt_issuer","allowed_algorithms":["ES256","ES384","EdDSA","RS256"],"credential_formats":["jwt_vc_json","dc+sd-jwt","ldp_vc"]},
       {"id":"mdoc_dsc","allowed_algorithms":["ES256","ES384","EdDSA"],"credential_formats":["mso_mdoc","zk_mdoc"]},
-      {"id":"x509_doc_signer","allowed_algorithms":["ES256","ES384","EdDSA","RS256"],"credential_formats":["mso_mdoc","zk_mdoc"]},
+      {"id":"x509_doc_signer","allowed_algorithms":["ES256","ES384","EdDSA","RS256"],"credential_formats":["mso_mdoc","zk_mdoc","icao_emrtd"]},
       {"id":"holder_binding","allowed_algorithms":["ES256","EdDSA"],"credential_formats":["mso_mdoc","zk_mdoc","dc+sd-jwt"]},
       {"id":"presentation_signing","allowed_algorithms":["ES256","EdDSA"],"credential_formats":["jwt_vc_json","dc+sd-jwt","mso_mdoc","zk_mdoc"]},
       {"id":"oid4vp_request_signing","allowed_algorithms":["ES256"],"credential_formats":["oauth-authz-req+jwt"]},
       {"id":"vdsnc_signing","allowed_algorithms":["ES256","ES384","EdDSA"],"credential_formats":["mso_mdoc"]},
-      {"id":"csca","allowed_algorithms":["ES256","ES384","ES512","EdDSA","RS256"],"credential_formats":["mso_mdoc","zk_mdoc"]},
+      {"id":"csca","allowed_algorithms":["ES256","ES384","ES512","EdDSA","RS256"],"credential_formats":["mso_mdoc","zk_mdoc","icao_emrtd"]},
       {"id":"jwks_signing","allowed_algorithms":["ES256","ES384","EdDSA","RS256"],"credential_formats":["jwt_vc_json","dc+sd-jwt"]},
       {"id":"lti_tool_signing","allowed_algorithms":["RS256"],"credential_formats":["lti_tool_jwt"]}
     ]
