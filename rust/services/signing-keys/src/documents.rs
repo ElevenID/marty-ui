@@ -15,6 +15,8 @@ use serde_json::{json, Map, Value};
 use sha2::{Digest, Sha256};
 use thiserror::Error;
 
+use crate::registry::RotationLease;
+
 const PRIVATE_JWK_FIELDS: &[&str] = &["d", "p", "q", "dp", "dq", "qi", "oth", "k", "rsa_d"];
 
 #[derive(Debug, Error, PartialEq, Eq)]
@@ -192,6 +194,74 @@ impl DocumentStore {
         Ok(response)
     }
 
+    pub async fn publish_jwk_with_lease(
+        &self,
+        organization_id: &str,
+        service_id: &str,
+        request: PublishJwkRequest,
+        lease: &RotationLease,
+    ) -> Result<PublishJwkResponse, DocumentError> {
+        if !lease.covers_organization(organization_id) {
+            return Err(DocumentError::Conflict(
+                "Signing registry lease belongs to a different tenant.".into(),
+            ));
+        }
+        let key = jwks_storage_key(organization_id);
+        for _ in 0..128 {
+            let mut connection = self.connection.clone();
+            let previous: Option<String> = connection
+                .get(&key)
+                .await
+                .map_err(|error| DocumentError::Storage(error.to_string()))?;
+            let existing = match previous.as_deref() {
+                Some(payload) => serde_json::from_str::<Value>(payload)
+                    .map_err(|error| DocumentError::Corrupt(error.to_string()))?,
+                None => {
+                    json!({"keys": [], "organization_id": organization_id, "updated_at": now_iso()})
+                }
+            };
+            if !existing.is_object() {
+                return Err(DocumentError::Corrupt(
+                    "JWKS document must be an object".into(),
+                ));
+            }
+            let response =
+                build_jwks_document(existing, organization_id, service_id, request.clone())?;
+            let replacement = serde_json::to_string(&response.document)
+                .map_err(|error| DocumentError::Invalid(error.to_string()))?;
+            let saved: i32 = redis::Script::new(
+                "if redis.call('GET', KEYS[1]) ~= ARGV[1] then return -1 end
+                 local current = redis.call('GET', KEYS[2])
+                 if ARGV[2] == '0' then
+                     if current then return 0 end
+                 elseif current ~= ARGV[3] then return 0 end
+                 redis.call('SET', KEYS[2], ARGV[4])
+                 return 1",
+            )
+            .key(lease.redis_key())
+            .key(&key)
+            .arg(lease.owner())
+            .arg(if previous.is_some() { "1" } else { "0" })
+            .arg(previous.as_deref().unwrap_or_default())
+            .arg(replacement)
+            .invoke_async(&mut connection)
+            .await
+            .map_err(|error| DocumentError::Storage(error.to_string()))?;
+            match saved {
+                1 => return Ok(response),
+                -1 => {
+                    return Err(DocumentError::Conflict(
+                        "Signing registry lease expired before JWKS publication.".into(),
+                    ))
+                }
+                _ => tokio::task::yield_now().await,
+            }
+        }
+        Err(DocumentError::Conflict(
+            "Concurrent JWKS updates did not settle.".into(),
+        ))
+    }
+
     pub async fn update_jwk(
         &self,
         organization_id: &str,
@@ -257,6 +327,102 @@ impl DocumentStore {
         self.save(&did_storage_key(organization_id, None), &response.document)
             .await?;
         Ok(response)
+    }
+
+    pub async fn publish_did_with_lease(
+        &self,
+        organization_id: &str,
+        service_id: &str,
+        request: PublishDidRequest,
+        lease: &RotationLease,
+    ) -> Result<PublishDidResponse, DocumentError> {
+        if !lease.covers_organization(organization_id) {
+            return Err(DocumentError::Conflict(
+                "Signing registry lease belongs to a different tenant.".into(),
+            ));
+        }
+        let prepared = prepare_did_publication(service_id, request)?;
+        let key = did_storage_key(organization_id, Some(&prepared.did_id));
+        let default_key = did_storage_key(organization_id, None);
+        let slug_key = prepared
+            .org_slug
+            .as_deref()
+            .map(slug_storage_key)
+            .unwrap_or_else(|| format!("signing-service:unused-slug:{organization_id}"));
+        for _ in 0..128 {
+            let mut connection = self.connection.clone();
+            let previous: Option<String> = connection
+                .get(&key)
+                .await
+                .map_err(|error| DocumentError::Storage(error.to_string()))?;
+            let previous_default: Option<String> = connection
+                .get(&default_key)
+                .await
+                .map_err(|error| DocumentError::Storage(error.to_string()))?;
+            let existing = previous
+                .as_deref()
+                .map(serde_json::from_str::<Value>)
+                .transpose()
+                .map_err(|error| DocumentError::Corrupt(error.to_string()))?;
+            let response = build_prepared_did_document(existing, prepared.clone())?;
+            let payload = serde_json::to_string(&response.document)
+                .map_err(|error| DocumentError::Invalid(error.to_string()))?;
+            let saved: i32 = redis::Script::new(
+                "if redis.call('GET', KEYS[1]) ~= ARGV[1] then return -1 end
+                 local scoped = redis.call('GET', KEYS[2])
+                 local default = redis.call('GET', KEYS[3])
+                 if ARGV[2] == '0' then
+                     if scoped then return 0 end
+                 elseif scoped ~= ARGV[3] then return 0 end
+                 if ARGV[4] == '0' then
+                     if default then return 0 end
+                 elseif default ~= ARGV[5] then return 0 end
+                 if ARGV[7] == '1' then
+                     local owner = redis.call('GET', KEYS[4])
+                     if owner and owner ~= ARGV[8] then return -2 end
+                     if not owner then redis.call('SET', KEYS[4], ARGV[8]) end
+                 end
+                 redis.call('SET', KEYS[2], ARGV[6])
+                 redis.call('SET', KEYS[3], ARGV[6])
+                 return 1",
+            )
+            .key(lease.redis_key())
+            .key(&key)
+            .key(&default_key)
+            .key(&slug_key)
+            .arg(lease.owner())
+            .arg(if previous.is_some() { "1" } else { "0" })
+            .arg(previous.as_deref().unwrap_or_default())
+            .arg(if previous_default.is_some() { "1" } else { "0" })
+            .arg(previous_default.as_deref().unwrap_or_default())
+            .arg(payload)
+            .arg(if prepared.org_slug.is_some() {
+                "1"
+            } else {
+                "0"
+            })
+            .arg(organization_id)
+            .invoke_async(&mut connection)
+            .await
+            .map_err(|error| DocumentError::Storage(error.to_string()))?;
+            match saved {
+                1 => return Ok(response),
+                -1 => {
+                    return Err(DocumentError::Conflict(
+                        "Signing registry lease expired before DID publication.".into(),
+                    ))
+                }
+                -2 => {
+                    return Err(DocumentError::Conflict(
+                        "DID web slug is already in use.".into(),
+                    ))
+                }
+                _ => tokio::task::yield_now().await,
+            }
+        }
+        Err(DocumentError::Conflict(
+            "Concurrent DID updates did not settle.".into(),
+        ))
     }
 
     pub async fn resolve_slug(&self, slug: &str) -> Result<Option<String>, DocumentError> {
