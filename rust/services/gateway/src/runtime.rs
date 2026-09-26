@@ -3101,6 +3101,16 @@ async fn internal_signing_compatibility_handler(
     if operation == SigningCompatibilityOperation::ResolveIssuerDid {
         return forward_resolve_issuer_did(&state, &organization_id, &query).await;
     }
+    if operation == SigningCompatibilityOperation::CscaTrustAnchors {
+        let path = format!(
+            "/internal/documents/{}/csca-trust-anchors",
+            utf8_percent_encode(&organization_id, NON_ALPHANUMERIC)
+        );
+        return match signing_service_request(&state, HttpMethod::Get, &path, None).await {
+            Ok(response) => upstream_response(response),
+            Err(response) => response,
+        };
+    }
     if let SigningCompatibilityOperation::ProfileIdentity { profile_id } = &operation {
         return forward_profile_identity(&state, &organization_id, profile_id, false).await;
     }
@@ -5074,6 +5084,10 @@ mod tests {
                     }))
                     .expect("issuer DID response")
                 }
+                "/internal/documents/org%2D1/csca-trust-anchors" => serde_json::to_vec(&json!([
+                    {"certificate_id": "csca-1", "certificate_data": "public-csca-pem", "status": "VALID"}
+                ]))
+                .expect("active CSCA trust response"),
                 "/internal/compat/issuer-profiles/profile%2D1/identity" => {
                     let body: Value = serde_json::from_slice(
                         request.body.as_deref().expect("profile identity body"),
@@ -8246,6 +8260,39 @@ mod tests {
             .await
             .expect("response");
         assert_eq!(rejected.status(), StatusCode::UNPROCESSABLE_ENTITY);
+    }
+
+    #[tokio::test]
+    async fn csca_trust_anchors_are_internal_and_do_not_expose_custody_routing() {
+        let unauthorized = runtime_router()
+            .oneshot(
+                Request::builder()
+                    .uri("/internal/signing-keys/csca-trust-anchors?organization_id=org-1")
+                    .body(Body::empty())
+                    .expect("request"),
+            )
+            .await
+            .expect("response");
+        assert_eq!(unauthorized.status(), StatusCode::UNAUTHORIZED);
+        let response = runtime_router()
+            .oneshot(
+                Request::builder()
+                    .uri("/internal/signing-keys/csca-trust-anchors?organization_id=org-1")
+                    .header("x-api-key", "internal-signing-key")
+                    .body(Body::empty())
+                    .expect("request"),
+            )
+            .await
+            .expect("response");
+        assert_eq!(response.status(), StatusCode::OK);
+        let body: Value = serde_json::from_slice(
+            &to_bytes(response.into_body(), DEFAULT_MAXIMUM_BODY_BYTES)
+                .await
+                .expect("body"),
+        )
+        .expect("trust anchor JSON");
+        assert_eq!(body[0]["certificate_id"], "csca-1");
+        assert!(body[0].get("key_reference").is_none());
     }
 
     #[tokio::test]
