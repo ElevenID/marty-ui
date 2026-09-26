@@ -161,6 +161,16 @@ authorization and trusted tenant forwarding. The console hides rotation for
 read-only shared services and warns if KMS rotation succeeds but publication
 does not. Combined Gateway-to-Rust and beta acceptance remain open.
 
-Thus 5 declared pairs remain without local public handlers. These new
+The local `POST /services/vdsnc/register` adapter preserves the released
+tenant-scoped registration workflow and deterministic VDS-NC KMS reference
+without creating or reading key material. It keeps existing service defaults,
+returns a credential-redacted service, and retains the released `mso_mdoc`
+format while adding the actual `vds_nc` format. The behavior is frozen in
+`contracts/signing-vdsnc-registration-behavior.json`. An isolated Redis route
+test covers persistence, tenant isolation, default preservation, redaction,
+and invalid input. Gateway session/trusted-scope tests cover forwarding.
+Combined Gateway-to-Rust and beta acceptance remain open.
+
+Thus 4 declared pairs remain without local public handlers. These new
 adapters still need authenticated through-Gateway runtime tests. The
 24-pair table above remains the protected-main audit baseline.

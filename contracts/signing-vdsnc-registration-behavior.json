@@ -1,0 +1,36 @@
+{
+  "schema_version": 1,
+  "source": "pre-Rust services/gateway/routes/signing_keys.py at parent of e1ebad979",
+  "method": "POST",
+  "path": "/v1/signing-keys/services/vdsnc/register",
+  "required_fields": ["country_code", "authority_name"],
+  "optional_fields": [
+    "organization_id", "role", "generation", "key_reference", "service_type", "provider",
+    "endpoint", "mount", "namespace", "auth_mode", "auth_reference", "algorithms"
+  ],
+  "defaults": {
+    "role": "dsc",
+    "generation": 1,
+    "key_reference_format": "cred:vdsnc:{organization_uuid_v5}:{UPPERCASE_COUNTRY}:{lowercase_role}:{generation}",
+    "service_type": "custom-transit-compatible",
+    "provider": "custom",
+    "mount": "transit",
+    "auth_mode": "token",
+    "algorithms": ["ES256"],
+    "key_purposes": ["vdsnc_signing"],
+    "released_credential_formats": ["mso_mdoc"]
+  },
+  "service_id_format": "svc-vdsnc-{lowercase_country}-{8_hex_digits}",
+  "discovered_capabilities": ["vdsnc_namespaced_key_reference", "vdsnc_role", "vdsnc_generation"],
+  "response_fields": ["ok", "service", "registered_at"],
+  "missing_required_status": 422,
+  "default_service_when_missing": true,
+  "reviewed_parity_extension": "Retain mso_mdoc and add vds_nc so the registered VDS-NC signer can be selected for its actual credential format.",
+  "reviewed_security_tightening": [
+    "Only service configuration and an opaque KMS key reference are registered; no private key is created, imported, read, or returned.",
+    "Return redacted public service metadata, never auth_reference or private key material.",
+    "Validate country, role, and generation before using them in a KMS reference; generated references are organization-namespaced.",
+    "Public VDS-NC registration never selects the process-wide OpenBao service token, including through an invalid auth_mode normalized to service_token. External KMS credentials remain explicit tenant registrations.",
+    "Preserve tenant-scoped service registry defaults and existing registrations."
+  ]
+}

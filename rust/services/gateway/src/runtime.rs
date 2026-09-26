@@ -6921,6 +6921,7 @@ mod tests {
                 HttpMethod::Post,
                 "/v1/signing-keys/services/service-1/rotate",
             ),
+            (HttpMethod::Post, "/v1/signing-keys/services/vdsnc/register"),
             (HttpMethod::Get, "/v1/signing-keys/compliance/keys-summary"),
         ] {
             let route =
@@ -6950,6 +6951,10 @@ mod tests {
             (
                 "/v1/signing-keys/services/service-1/rotate",
                 json!({"overlap_days": 14, "publish_updates": false}),
+            ),
+            (
+                "/v1/signing-keys/services/vdsnc/register",
+                json!({"country_code": "USA", "authority_name": "Test Bureau"}),
             ),
         ] {
             let request = |authenticated| {

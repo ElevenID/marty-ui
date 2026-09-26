@@ -187,6 +187,10 @@ pub fn router_with_dependencies(
             post(rotate_public_service_key),
         )
         .route(
+            "/v1/signing-keys/services/vdsnc/register",
+            post(register_public_vdsnc_service),
+        )
+        .route(
             "/v1/signing-keys/services/{service_id}/mdoc-x5c",
             get(public_service_mdoc_x5c),
         )
@@ -542,6 +546,37 @@ struct PublicServiceRotationRequest {
 #[serde(deny_unknown_fields)]
 struct RotationReconcileRequest {
     operation_id: String,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct PublicVdsncRegistrationRequest {
+    #[serde(default)]
+    organization_id: Option<String>,
+    country_code: String,
+    authority_name: String,
+    #[serde(default)]
+    role: Option<String>,
+    #[serde(default)]
+    generation: Option<i64>,
+    #[serde(default)]
+    key_reference: Option<String>,
+    #[serde(default)]
+    service_type: Option<String>,
+    #[serde(default)]
+    provider: Option<String>,
+    #[serde(default)]
+    endpoint: Option<String>,
+    #[serde(default)]
+    mount: Option<String>,
+    #[serde(default)]
+    namespace: Option<String>,
+    #[serde(default)]
+    auth_mode: Option<String>,
+    #[serde(default)]
+    auth_reference: Option<String>,
+    #[serde(default)]
+    algorithms: Option<Vec<String>>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -1834,6 +1869,192 @@ async fn sign_public_service_payload(
         Ok(signed) => Json(signed).into_response(),
         Err(error) => error.into_response(),
     }
+}
+
+fn vdsnc_registration_fields(
+    organization_id: &str,
+    input: &PublicVdsncRegistrationRequest,
+) -> Result<(String, String, String, i64, String), &'static str> {
+    let country = input.country_code.trim().to_ascii_uppercase();
+    if !(2..=3).contains(&country.len()) || !country.bytes().all(|byte| byte.is_ascii_alphabetic())
+    {
+        return Err("country_code must contain two or three ASCII letters.");
+    }
+    let authority = input.authority_name.trim();
+    if authority.is_empty() || authority.len() > 200 || authority.chars().any(char::is_control) {
+        return Err("authority_name must be a nonempty name of at most 200 bytes.");
+    }
+    let role = input
+        .role
+        .as_deref()
+        .unwrap_or("dsc")
+        .trim()
+        .to_ascii_lowercase();
+    if role.is_empty()
+        || role.len() > 32
+        || !role
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || byte == b'_' || byte == b'-')
+    {
+        return Err("role must be an ASCII identifier of at most 32 bytes.");
+    }
+    let generation = input.generation.filter(|value| *value != 0).unwrap_or(1);
+    if !(1..=1_000_000).contains(&generation) {
+        return Err("generation must be between 1 and 1000000.");
+    }
+    let reference = input
+        .key_reference
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(str::to_owned)
+        .unwrap_or_else(|| {
+            let tenant =
+                uuid::Uuid::new_v5(&uuid::Uuid::NAMESPACE_URL, organization_id.as_bytes()).simple();
+            format!("cred:vdsnc:{tenant}:{country}:{role}:{generation}")
+        });
+    if reference.len() > 512 || reference.chars().any(char::is_control) {
+        return Err("key_reference must be an opaque KMS reference of at most 512 bytes.");
+    }
+    Ok((country, authority.to_owned(), role, generation, reference))
+}
+
+async fn register_public_vdsnc_service(
+    State(state): State<AppState>,
+    Query(scope): Query<OrganizationScope>,
+    Json(input): Json<PublicVdsncRegistrationRequest>,
+) -> Response {
+    if let Err(error) =
+        validate_service_scope(&scope.organization_id, input.organization_id.as_deref())
+    {
+        return error.into_response();
+    }
+    let (country, authority, role, generation, key_reference) =
+        match vdsnc_registration_fields(&scope.organization_id, &input) {
+            Ok(fields) => fields,
+            Err(message) => return public_error(StatusCode::UNPROCESSABLE_ENTITY, message),
+        };
+    let Some(store) = state.registry_store.as_ref() else {
+        return public_error(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "Signing registry is unavailable.",
+        );
+    };
+    let suffix = uuid::Uuid::new_v4().simple().to_string();
+    let service_id = format!(
+        "svc-vdsnc-{}-{}",
+        country.to_ascii_lowercase(),
+        &suffix[..8]
+    );
+    let service = json!({
+        "id": service_id,
+        "name": format!("VDS-NC {country} {authority}"),
+        "service_type": input.service_type.as_deref().unwrap_or("custom-transit-compatible"),
+        "provider": input.provider.as_deref().unwrap_or("custom"),
+        "endpoint": input.endpoint.as_deref().unwrap_or(""),
+        "mount": input.mount.as_deref().unwrap_or("transit"),
+        "namespace": input.namespace.as_deref().unwrap_or(""),
+        "auth_mode": input.auth_mode.as_deref().unwrap_or("token"),
+        "auth_reference": input.auth_reference.as_deref().unwrap_or(""),
+        "key_reference": key_reference,
+        "algorithms": input.algorithms.as_deref().unwrap_or(&["ES256".to_owned()]),
+        "key_purposes": ["vdsnc_signing"],
+        "credential_formats": ["mso_mdoc", "vds_nc"],
+        "country_code": country,
+        "authority_name": authority,
+        "discovered_capabilities": {
+            "vdsnc_namespaced_key_reference": key_reference,
+            "vdsnc_role": role,
+            "vdsnc_generation": generation
+        }
+    });
+    let normalized = match registry::normalize_service(NormalizeServiceRequest { service }) {
+        Ok(NormalizeServiceResponse {
+            service: Some(service),
+        }) => service,
+        _ => {
+            return public_error(
+                StatusCode::UNPROCESSABLE_ENTITY,
+                "VDS-NC signing service configuration is invalid.",
+            )
+        }
+    };
+    if normalized.get("auth_mode").and_then(Value::as_str) == Some("service_token") {
+        return public_error(
+            StatusCode::UNPROCESSABLE_ENTITY,
+            "VDS-NC registration requires tenant-provided KMS credentials.",
+        );
+    }
+    let lease = match store.acquire_rotation_lease(&scope.organization_id).await {
+        Ok(Some(lease)) => lease,
+        Ok(None) => {
+            return public_error(
+                StatusCode::CONFLICT,
+                "Signing registry is being updated. Retry VDS-NC registration.",
+            )
+        }
+        Err(_) => {
+            return public_error(
+                StatusCode::SERVICE_UNAVAILABLE,
+                "Signing registry is unavailable.",
+            )
+        }
+    };
+    let mut registry = match store.load(&scope.organization_id).await {
+        Ok(registry) => registry,
+        Err(_) => {
+            let _ = lease.release().await;
+            return public_error(
+                StatusCode::SERVICE_UNAVAILABLE,
+                "Signing registry is unavailable.",
+            );
+        }
+    };
+    let Some(services) = registry.get_mut("services").and_then(Value::as_array_mut) else {
+        let _ = lease.release().await;
+        return public_error(StatusCode::BAD_GATEWAY, "Signing registry is malformed.");
+    };
+    services.push(normalized);
+    if registry
+        .get("default_service_id")
+        .and_then(Value::as_str)
+        .is_none_or(|value| value.trim().is_empty())
+    {
+        registry["default_service_id"] = json!(service_id);
+    }
+    let saved = store
+        .save_with_rotation_lease(&scope.organization_id, &registry, &lease)
+        .await;
+    let _ = lease.release().await;
+    let saved = match saved {
+        Ok(saved) => saved,
+        Err(_) => {
+            return public_error(
+                StatusCode::SERVICE_UNAVAILABLE,
+                "Signing registry could not be saved.",
+            )
+        }
+    };
+    let Some(registered) = saved
+        .get("services")
+        .and_then(Value::as_array)
+        .and_then(|services| {
+            services
+                .iter()
+                .find(|service| service.get("id").and_then(Value::as_str) == Some(&service_id))
+        })
+    else {
+        return public_error(
+            StatusCode::BAD_GATEWAY,
+            "Signing registry did not retain the service.",
+        );
+    };
+    Json(json!({
+        "ok": true,
+        "service": public_service_config(registered),
+        "registered_at": chrono::Utc::now().to_rfc3339(),
+    }))
+    .into_response()
 }
 
 async fn rotate_public_service_key(
@@ -5338,6 +5559,13 @@ async fn openapi() -> Json<serde_json::Value> {
                     "503": {"description": "Signing registry unavailable"}
                 }}
             },
+            "/v1/signing-keys/services/vdsnc/register": {
+                "post": {"summary": "Register VDS-NC Signing Service", "responses": {
+                    "200": {"description": "Tenant service registered with an opaque KMS key reference"},
+                    "422": {"description": "Invalid VDS-NC service configuration"},
+                    "503": {"description": "Signing registry unavailable"}
+                }}
+            },
             "/v1/signing-keys/services/{service_id}/verify-current": {
                 "get": {"summary": "Verify Current Registered Service Public Key", "responses": {"200": {"description": "KMS public-key verification checks"}}}
             },
@@ -5387,6 +5615,65 @@ mod public_contract_tests {
     use super::*;
     use axum::{body::Body, http::Request};
     use tower::ServiceExt;
+
+    #[test]
+    fn vdsnc_registration_behavior_is_frozen_before_public_port() {
+        let behavior: Value = serde_json::from_str(include_str!(
+            "../../../../contracts/signing-vdsnc-registration-behavior.json"
+        ))
+        .unwrap();
+        assert_eq!(behavior["method"], "POST");
+        assert_eq!(behavior["path"], "/v1/signing-keys/services/vdsnc/register");
+        assert_eq!(
+            behavior["defaults"]["key_purposes"],
+            json!(["vdsnc_signing"])
+        );
+        assert_eq!(
+            behavior["defaults"]["released_credential_formats"],
+            json!(["mso_mdoc"])
+        );
+        assert_eq!(
+            behavior["discovered_capabilities"],
+            json!([
+                "vdsnc_namespaced_key_reference",
+                "vdsnc_role",
+                "vdsnc_generation"
+            ])
+        );
+    }
+
+    #[tokio::test]
+    async fn vdsnc_registration_validates_reference_fields_before_storage() {
+        assert!(
+            openapi().await.0["paths"]["/v1/signing-keys/services/vdsnc/register"]["post"]
+                .is_object()
+        );
+        let request = |body: Value| {
+            Request::post("/v1/signing-keys/services/vdsnc/register?organization_id=org-a")
+                .header("content-type", "application/json")
+                .body(Body::from(body.to_string()))
+                .unwrap()
+        };
+        let router = router_with_internal_api_key("test-only".into());
+        let valid = router
+            .clone()
+            .oneshot(request(
+                json!({"country_code": "USA", "authority_name": "Bureau"}),
+            ))
+            .await
+            .unwrap();
+        assert_eq!(valid.status(), StatusCode::SERVICE_UNAVAILABLE);
+        for body in [
+            json!({"country_code": "U$", "authority_name": "Bureau"}),
+            json!({"country_code": "USA", "authority_name": "Bureau", "role": "../dsc"}),
+            json!({"country_code": "USA", "authority_name": "Bureau", "generation": -1}),
+            json!({"country_code": "USA", "authority_name": "Bureau", "key_reference": "bad\nkey"}),
+            json!({"country_code": "USA", "authority_name": "Bureau", "private_key": "forged"}),
+        ] {
+            let response = router.clone().oneshot(request(body)).await.unwrap();
+            assert_eq!(response.status(), StatusCode::UNPROCESSABLE_ENTITY);
+        }
+    }
 
     #[tokio::test]
     #[ignore = "requires disposable MARTY_TEST_REDIS_URL"]
