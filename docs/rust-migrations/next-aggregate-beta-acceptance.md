@@ -58,13 +58,46 @@ selected here.
    Resolve an active, organization-scoped `ICAO_EMRTD` X.509 document-signer
    identity created through the existing issuer UI; bind it to the passport
    job and use its managed Signing Keys/KMS reference and published certificate
-   for opaque CMS/SOD signing. Keep artifact encryption keys and callback MAC
+   for opaque CMS/SOD signing. Configure its active public CSCA trust anchor
+   through the existing Rust CSCA lifecycle import and verify the DSC chain
+   before accepting a passport job. The integration branch extends the issuer
+   UI to enroll a public CSCA lifecycle trust anchor against its managed CSCA
+   identity, deriving the KMS key binding server-side. This is not yet merged
+   or deployed. A read-only beta check on
+   2026-09-26 found no CSCA lifecycle record for the pilot organization; its
+   six existing issuer profiles include no `ICAO_EMRTD` document signer. This
+   remains a cutover gate: obtain a valid CA/DSC certificate chain whose keys
+   remain in KMS, import only the public CSCA material through the governed
+   tenant-scoped operator route, and verify the active trust-anchor projection before
+   starting passport issuance. Do not treat a created issuer profile or an
+   attached DSC alone as proof that the chain gate is ready. The beta bureau
+   is a synthetic, non-physical handoff; do not present its tracking result as
+   a shipped physical document. Keep artifact encryption keys and callback MAC
    keys inside KMS. Authenticate internal provider calls without new static
    passport bearer-token files. Require signed organization identity on bureau
    callbacks and enforce that identity in job lookup. Inventory beta again
    before adding any bureau provider; do not deploy a duplicate ICAO signer.
    No native cutover or Python retirement is permitted until these gates and
    their language-neutral behavior tests pass.
+
+   Certificate-enrollment follow-up: the current UI has a CSR action for a
+   signing service, but this source tree has no matching
+   `/v1/signing-keys/services/{service_id}/certificate-csr` service route.
+   Do not rely on that button for the pilot chain. Before beta acceptance,
+   provide a tested KMS-custodied CSR/CA enrollment path and verify the new
+   tenant-scoped operator path for public CSCA lifecycle import; no private key or raw signing
+   secret may pass through the UI, repository, or deployment files.
+
+   Read-only beta inventory on 2026-09-26 found the existing pilot
+   organization active, no running or stopped ICAO signer or passport bureau
+   container, and zero `issuance_service.physical_document_jobs`. There were
+   zero active organization API keys. The UI/session flow can be used for
+   initial operator acceptance; before claiming API-key acceptance, create an
+   organization-scoped key through the existing UI/API mechanism, store its
+   one-time value with the governed beta secrets (never in a repo, log, or
+   chat), and verify the `credentials:issue` scope maps to passport initiation.
+   No new tenant or passport-specific static keyring is required for the
+   existing pilot organization. Recheck these counts at actual cutover.
 4. Explicitly hold `BetaOrigin` at `https://beta.elevenidllc.com`. The wrapper's
    HTTPS syntax check alone does not establish that an origin is beta. Retain
    fixed beta Compose projects/network and labeled-volume ownership checks.
