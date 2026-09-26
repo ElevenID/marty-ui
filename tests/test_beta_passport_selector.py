@@ -279,6 +279,18 @@ def test_selected_bureau_has_a_packaged_rust_entrypoint():
     assert "exec /usr/local/bin/marty-passport-beta-bureau" in entrypoint
 
 
+def test_passport_transit_keys_are_verified_non_exportable_at_bootstrap():
+    source = (ROOT / "docker/openbao-init.sh").read_text(encoding="utf-8")
+    for key, kind in (
+        ("passport-artifact-marty-aes256", "aes256-gcm96"),
+        ("passport-bureau-callback-marty-hmac", "hmac"),
+    ):
+        assert f"transit/keys/{key}" in source
+        assert f'type={kind} exportable=false' in source
+        assert f'-field=type transit/keys/{key}' in source
+        assert f'-field=exportable transit/keys/{key}' in source
+
+
 def synthetic_beta_compose_env(tmp_path):
     required = set()
     for file in ROOT.glob("docker-compose*.yml"):
