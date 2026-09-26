@@ -28,6 +28,7 @@ use marty_passport_auth::PassportTenantKeyring;
 use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
 use sqlx::postgres::PgPoolOptions;
+use tokio::sync::oneshot;
 use tower::ServiceExt;
 
 #[cfg(feature = "passport-self-signed-test")]
@@ -199,9 +200,30 @@ async fn exercise_native_passport_http(
             Json(json!({"bureau_job_id":"bureau-http", "status":"QUEUED"})),
         )
     }
+    async fn signed_callback(app: &Router, secret: &str, body: Value) -> (StatusCode, Value) {
+        let mut mac = Hmac::<Sha256>::new_from_slice(secret.as_bytes()).unwrap();
+        mac.update(body.to_string().as_bytes());
+        let signature = hex::encode(mac.finalize().into_bytes());
+        passport_http_request(
+            app,
+            "POST",
+            "/v1/passport/webhooks/personalization",
+            None,
+            None,
+            body,
+            Some(&signature),
+        )
+        .await
+    }
     let observed = Arc::new(Mutex::new(Vec::new()));
     let stale_poll = Arc::new(AtomicBool::new(false));
     let poll_state = stale_poll.clone();
+    let same_rank_poll = Arc::new(AtomicBool::new(false));
+    let same_rank_state = same_rank_poll.clone();
+    let poll_gate = Arc::new(Mutex::new(
+        None::<(oneshot::Sender<()>, oneshot::Receiver<()>)>,
+    ));
+    let gate_state = poll_gate.clone();
     let mock = Router::new()
         .route("/v1/icao/emrtd/sign", post(sign))
         .route("/v1/personalization/jobs", post(submit))
@@ -209,8 +231,17 @@ async fn exercise_native_passport_http(
             "/v1/personalization/jobs/{job_id}",
             get(move || {
                 let stale_poll = poll_state.clone();
+                let same_rank_poll = same_rank_state.clone();
+                let poll_gate = gate_state.clone();
                 async move {
-                    Json(if stale_poll.load(Ordering::SeqCst) {
+                    let gated = { poll_gate.lock().unwrap().take() };
+                    if let Some((entered, release)) = gated {
+                        entered.send(()).unwrap();
+                        release.await.unwrap();
+                    }
+                    Json(if same_rank_poll.load(Ordering::SeqCst) {
+                        json!({"status":"QUEUED", "tracking_number":null})
+                    } else if stale_poll.load(Ordering::SeqCst) {
                         json!({"status":"PRINTING", "tracking_number":null})
                     } else {
                         json!({"status":"SHIPPED", "tracking_number":"tracking-http"})
@@ -492,6 +523,116 @@ async fn exercise_native_passport_http(
     .await;
     assert_eq!(status, StatusCode::OK);
     assert_eq!(wide_generated["status"], "DATA_GENERATED");
+    let principal = keyring.authenticate(Some("org-a"), Some(key_a)).unwrap();
+    let race_job = PassportJobInsert {
+        id: "job-poll-race".into(),
+        application_id: "application-poll-race".into(),
+        flow_execution_id: "flow-poll-race".into(),
+        application_template_id: "template-poll-race".into(),
+        credential_template_id: "credential-poll-race".into(),
+        revocation_profile_id: None,
+        delivery_destination_profile_id: "destination-poll-race".into(),
+        document_type: "TD1".into(),
+        country_code: "USA".into(),
+        issuer_did: None,
+        secure_artifact_ciphertext: cipher.encrypted_scrubbed_artifact(),
+        secure_artifact_reference: "physical-artifact://poll-race".into(),
+    };
+    repository
+        .insert(&principal, &race_job, Utc::now())
+        .await
+        .unwrap();
+    let mut race_submitted = PassportJobPatch::new(PassportJobStatus::Submitted);
+    race_submitted.bureau_job_id = Some(Some("bureau-poll-race".into()));
+    repository
+        .update(
+            &principal,
+            &race_job.application_id,
+            "DRAFT",
+            &race_submitted,
+            Utc::now(),
+        )
+        .await
+        .unwrap()
+        .unwrap();
+    let race_path = format!(
+        "/v1/passport/applications/{}/production-status",
+        race_job.application_id
+    );
+    same_rank_poll.store(true, Ordering::SeqCst);
+    let (entered, entered_rx) = oneshot::channel();
+    let (release_tx, release) = oneshot::channel();
+    *poll_gate.lock().unwrap() = Some((entered, release));
+    let poll_app = app.clone();
+    let poll_path = race_path.clone();
+    let poll_key = key_a.to_owned();
+    let in_flight = tokio::spawn(async move {
+        passport_http_request(
+            &poll_app,
+            "GET",
+            &poll_path,
+            Some("org-a"),
+            Some(&poll_key),
+            json!({}),
+            None,
+        )
+        .await
+    });
+    tokio::time::timeout(std::time::Duration::from_secs(5), entered_rx)
+        .await
+        .unwrap()
+        .unwrap();
+    let (status, _) = signed_callback(
+        &app,
+        secret,
+        json!({"organization_id":"org-a", "bureau_job_id":"bureau-poll-race",
+               "status":"SHIPPED", "tracking_number":"race-tracking"}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    release_tx.send(()).unwrap();
+    let (status, after_same_rank_poll) = in_flight.await.unwrap();
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(after_same_rank_poll["status"], "READY_FOR_ACTIVATION");
+    assert_eq!(after_same_rank_poll["tracking_number"], "race-tracking");
+
+    same_rank_poll.store(false, Ordering::SeqCst);
+    let (entered, entered_rx) = oneshot::channel();
+    let (release_tx, release) = oneshot::channel();
+    *poll_gate.lock().unwrap() = Some((entered, release));
+    let poll_app = app.clone();
+    let poll_path = race_path;
+    let poll_key = key_a.to_owned();
+    let in_flight = tokio::spawn(async move {
+        passport_http_request(
+            &poll_app,
+            "GET",
+            &poll_path,
+            Some("org-a"),
+            Some(&poll_key),
+            json!({}),
+            None,
+        )
+        .await
+    });
+    tokio::time::timeout(std::time::Duration::from_secs(5), entered_rx)
+        .await
+        .unwrap()
+        .unwrap();
+    let (status, _) = signed_callback(
+        &app,
+        secret,
+        json!({"organization_id":"org-a", "bureau_job_id":"bureau-poll-race",
+               "status":"FAILED", "error_message":"production failed"}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    release_tx.send(()).unwrap();
+    let (status, after_stale_poll) = in_flight.await.unwrap();
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(after_stale_poll["status"], "FAILED");
+    assert_eq!(after_stale_poll["tracking_number"], "race-tracking");
+    assert_eq!(after_stale_poll["error_message"], "production failed");
     #[cfg(feature = "passport-self-signed-test")]
     {
         let local = passport_router(PassportHttpService::new(

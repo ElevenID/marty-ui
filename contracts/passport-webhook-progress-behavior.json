@@ -24,5 +24,6 @@
   ],
   "ignored_result": "Return the unchanged, tenant-bound job as an idempotent accepted callback, except for the permitted same-rank metadata fill.",
   "same_rank_metadata": "A repeated mapped status may fill a blank tracking_number or error_message from a nonblank incoming value. It must not clear or replace a nonblank value. If neither field is filled, updated_at is unchanged.",
-  "forward_metadata": "A forward or terminal status update keeps the stored tracking_number when incoming tracking is missing or blank, and replaces it when incoming tracking is nonblank. The new status's error_message replaces the previous one; an absent error clears it."
+  "forward_metadata": "A forward or terminal status update keeps the stored tracking_number when incoming tracking is missing or blank, and replaces it when incoming tracking is nonblank. The new status's error_message replaces the previous one; an absent error clears it.",
+  "poll_response": "After an awaited bureau poll produces a stale or same-rank no-op result, the tenant-scoped job is read again before the HTTP response so a callback committed during the poll is visible."
 }

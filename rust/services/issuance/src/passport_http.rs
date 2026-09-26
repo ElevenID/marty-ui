@@ -788,7 +788,8 @@ async fn production_status(
         )
         .is_none()
         {
-            return Ok(Json(safe(&job)));
+            let current = service.job(&principal, &application_id).await?;
+            return Ok(Json(safe(&current)));
         }
         let updated = service
             .repository
@@ -809,7 +810,8 @@ async fn production_status(
         return Ok(Json(safe(&updated)));
     }
     if !should_apply_bureau_status(&job.status, incoming_status.as_str()) {
-        return Ok(Json(safe(&job)));
+        let current = service.job(&principal, &application_id).await?;
+        return Ok(Json(safe(&current)));
     }
     let mut patch = PassportJobPatch::new(incoming_status);
     patch.tracking_number = Some(
