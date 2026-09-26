@@ -3,9 +3,11 @@
 
 use axum::{
     body::{to_bytes, Body},
+    extract::Path,
     http::{Request, StatusCode},
-    routing::post,
-    Router,
+    response::IntoResponse,
+    routing::{get, post},
+    Json, Router,
 };
 use marty_signing_keys::{
     documents::DocumentStore,
@@ -247,6 +249,131 @@ async fn public_config_cannot_replace_managed_kms_purpose_bindings() {
     }
     let mut connection = registry.connection();
     let _: () = connection.del(storage_key(&organization_id)).await.unwrap();
+}
+
+#[tokio::test]
+#[ignore = "requires disposable MARTY_TEST_REDIS_URL and test-only BAO_TOKEN"]
+async fn live_managed_alias_requires_tenant_purpose_and_algorithm_before_kms_sign() {
+    let redis_url = std::env::var("MARTY_TEST_REDIS_URL").expect("disposable Redis URL");
+    std::env::var("BAO_TOKEN").expect("test-only managed OpenBao token");
+    let organization_id = format!("test-managed-alias-{}", Uuid::new_v4().simple());
+    let other_organization_id = format!("test-managed-other-{}", Uuid::new_v4().simple());
+    let namespace = Uuid::new_v5(&Uuid::NAMESPACE_URL, organization_id.as_bytes())
+        .simple()
+        .to_string();
+    let reference = format!("cred-issuer-{namespace}-issuer-es256");
+    let calls = Arc::new(AtomicUsize::new(0));
+    const PUBLIC_KEY_PEM: &str = "-----BEGIN PUBLIC KEY-----\nMFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEaxfR8uEsQkf4vOblY6RA8ncDfYEt\n6zOg9KE5RdiYwpZP40Li/hp/m47n60p8D54WK84zV2sxXs7LtkBoN79R9Q==\n-----END PUBLIC KEY-----\n";
+    let kms = Router::new()
+        .route(
+            "/v1/transit/keys",
+            get({
+                let reference = reference.clone();
+                move || {
+                    let reference = reference.clone();
+                    async move { Json(json!({"data": {"keys": [reference]}})) }
+                }
+            }),
+        )
+        .route(
+            "/v1/transit/keys/{reference}",
+            get({
+                let expected = reference.clone();
+                move |Path(actual): Path<String>| {
+                    let expected = expected.clone();
+                    async move {
+                        if actual != expected {
+                            return StatusCode::NOT_FOUND.into_response();
+                        }
+                        Json(json!({"data": {
+                            "latest_version": 1,
+                            "type": "ecdsa-p256",
+                            "keys": {"1": {"public_key": PUBLIC_KEY_PEM}}
+                        }}))
+                        .into_response()
+                    }
+                }
+            }),
+        )
+        .route(
+            "/v1/transit/sign/{reference}",
+            post({
+                let calls = Arc::clone(&calls);
+                let expected = reference.clone();
+                move |Path(actual): Path<String>| {
+                    let calls = Arc::clone(&calls);
+                    let expected = expected.clone();
+                    async move {
+                        if actual != expected {
+                            return StatusCode::NOT_FOUND.into_response();
+                        }
+                        calls.fetch_add(1, Ordering::SeqCst);
+                        Json(json!({"data": {"signature": "vault:v1:c2lnbmF0dXJl"}}))
+                            .into_response()
+                    }
+                }
+            }),
+        );
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let endpoint = format!("http://{}", listener.local_addr().unwrap());
+    let server = tokio::spawn(async move { axum::serve(listener, kms).await.unwrap() });
+    let stored = RegistryStore::connect(&redis_url).await.unwrap();
+    let managed = stored.clone().with_managed_openbao(Some(endpoint));
+    for tenant in [&organization_id, &other_organization_id] {
+        managed
+            .save(
+                tenant,
+                &json!({
+                    "services": [],
+                    "key_reference_purposes": {
+                        "managed-openbao-transit": {(reference.clone()): ["vc_jwt_issuer"]}
+                    }
+                }),
+            )
+            .await
+            .unwrap();
+    }
+    let app = marty_signing_keys::http::router_with_dependencies(
+        "test-internal-key".to_string(),
+        Some(managed),
+        Some(DocumentStore::from_connection(stored.connection())),
+        None,
+        Some(ProfileStore::from_connection(stored.connection())),
+        None,
+        None,
+    );
+    let request = json!({
+        "payload_b64": "cGF5bG9hZA",
+        "algorithm": "ES256",
+        "key_purpose": "vc_jwt_issuer",
+        "key_reference": reference
+    });
+    let (status, signed) = sign_service(
+        &app,
+        &organization_id,
+        "managed-openbao-transit",
+        request.clone(),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{signed}");
+    assert_eq!(calls.load(Ordering::SeqCst), 1);
+    for (tenant, purpose, algorithm) in [
+        (&organization_id, "mdoc_dsc", "ES256"),
+        (&organization_id, "vc_jwt_issuer", "RS256"),
+        (&other_organization_id, "vc_jwt_issuer", "ES256"),
+    ] {
+        let mut denied = request.clone();
+        denied["key_purpose"] = json!(purpose);
+        denied["algorithm"] = json!(algorithm);
+        let (status, body) = sign_service(&app, tenant, "managed-openbao-transit", denied).await;
+        assert_eq!(status, StatusCode::CONFLICT, "{body}");
+        assert_eq!(calls.load(Ordering::SeqCst), 1);
+    }
+    let mut connection = stored.connection();
+    for tenant in [&organization_id, &other_organization_id] {
+        let _: () = connection.del(storage_key(tenant)).await.unwrap();
+    }
+    server.abort();
 }
 
 #[tokio::test]
