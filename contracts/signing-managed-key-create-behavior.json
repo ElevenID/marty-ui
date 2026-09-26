@@ -17,7 +17,7 @@
     "A deterministic organization namespace is included in every KMS key name before a caller-controlled sanitized name, so same-name requests from different tenants never select the same KMS key.",
     "Only explicit managed OpenBao KMS creation is allowed; private key material never enters Rust response, Redis, Gateway, or UI.",
     "An existing KMS key is accepted only when its current public key matches the requested algorithm; purpose bindings are stored only after KMS success.",
-    "The public request rejects private key material, direct KMS endpoint/token selectors, and cross-tenant organization overrides.",
+    "The public request rejects key-import fields (private_key, public_key, key_type, hsm_config, vault_config), direct KMS endpoint/token selectors, and cross-tenant organization overrides. The released Python handler ignored those import fields; the old UI API comment claiming upload was not an implemented capability.",
     "A failed KMS operation or public-key verification does not record a purpose binding."
   ],
   "acceptance_cases": [

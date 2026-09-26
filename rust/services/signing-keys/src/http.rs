@@ -6156,6 +6156,9 @@ mod public_contract_tests {
             json!({"name": "Key", "algorithm": "ES512"}),
             json!({"name": "Key", "key_purpose": "lti_tool_signing", "algorithm": "ES256"}),
             json!({"name": "Key", "private_key": "forged"}),
+            json!({"name": "Key", "public_key": "not-an-import-route"}),
+            json!({"name": "Key", "key_type": "local"}),
+            json!({"name": "Key", "hsm_config": {"endpoint": "https://attacker.invalid"}}),
             json!({"name": "Key", "endpoint": "https://attacker.invalid"}),
         ] {
             let status = router
