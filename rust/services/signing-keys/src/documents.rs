@@ -201,6 +201,11 @@ impl DocumentStore {
         request: PublishJwkRequest,
         lease: &RotationLease,
     ) -> Result<PublishJwkResponse, DocumentError> {
+        if !lease.covers_organization(organization_id) {
+            return Err(DocumentError::Conflict(
+                "Signing registry lease belongs to a different tenant.".into(),
+            ));
+        }
         let key = jwks_storage_key(organization_id);
         for _ in 0..128 {
             let mut connection = self.connection.clone();
@@ -331,6 +336,11 @@ impl DocumentStore {
         request: PublishDidRequest,
         lease: &RotationLease,
     ) -> Result<PublishDidResponse, DocumentError> {
+        if !lease.covers_organization(organization_id) {
+            return Err(DocumentError::Conflict(
+                "Signing registry lease belongs to a different tenant.".into(),
+            ));
+        }
         let prepared = prepare_did_publication(service_id, request)?;
         let key = did_storage_key(organization_id, Some(&prepared.did_id));
         let default_key = did_storage_key(organization_id, None);

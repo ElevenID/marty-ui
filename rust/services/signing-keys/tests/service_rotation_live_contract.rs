@@ -7,7 +7,9 @@ use axum::{
     Json, Router,
 };
 use marty_signing_keys::{
-    documents::{did_storage_key, DocumentStore, PublishDidRequest, PublishJwkRequest},
+    documents::{
+        did_storage_key, DocumentError, DocumentStore, PublishDidRequest, PublishJwkRequest,
+    },
     http::router_with_dependencies,
     registry::{storage_key, RegistryError, RegistryStore},
 };
@@ -857,6 +859,51 @@ async fn public_rotation_updates_state_only_after_kms_success() {
         .await
         .unwrap();
     assert!((1..=120_000).contains(&ttl));
+    let foreign_organization = format!("{organization_id}-foreign");
+    assert!(matches!(
+        publication_documents
+            .publish_jwk_with_lease(
+                &foreign_organization,
+                "service-a",
+                PublishJwkRequest {
+                    jwk: json!({"kty": "EC", "crv": "P-256", "x": "x", "y": "y"}),
+                    key_reference: Some("foreign-key".into()),
+                    cert_pem: None,
+                    cert_chain_pem: None,
+                },
+                &old_lease,
+            )
+            .await,
+        Err(DocumentError::Conflict(_))
+    ));
+    assert!(publication_documents
+        .jwks(&foreign_organization)
+        .await
+        .unwrap()["keys"]
+        .as_array()
+        .unwrap()
+        .is_empty());
+    assert!(matches!(
+        publication_documents
+            .publish_did_with_lease(
+                &foreign_organization,
+                "service-a",
+                PublishDidRequest {
+                    jwk: json!({"kty": "EC", "crv": "P-256", "x": "x", "y": "y"}),
+                    public_domain: "example.test".into(),
+                    did_id: None,
+                    org_slug: Some(foreign_organization.clone()),
+                    fragment: None,
+                    key_reference: None,
+                    cert_pem: None,
+                    cert_chain_pem: None,
+                    relationship: Default::default(),
+                },
+                &old_lease,
+            )
+            .await,
+        Err(DocumentError::Conflict(_))
+    ));
     let _: () = redis::cmd("SET")
         .arg(&lease_key)
         .arg("replacement-owner")
@@ -973,6 +1020,43 @@ async fn lost_pending_write_response_keeps_registry_and_marker_together() {
         .await
         .unwrap()
         .unwrap();
+    let index_key = format!(
+        "signing-service:rotation-reconcile-index:{}:{}:{}:{}",
+        organization_id.len(),
+        organization_id,
+        "service-a".len(),
+        "service-a"
+    );
+    let mut connection = store.connection();
+    let _: () = connection
+        .set(&index_key, "wrong-index-type")
+        .await
+        .unwrap();
+    assert!(matches!(
+        store
+            .create_rotation_marker(&organization_id, service, &marker, &lease)
+            .await,
+        Err(RegistryError::Conflict)
+    ));
+    assert!(matches!(
+        store
+            .save_pending_rotation_with_marker(
+                &organization_id,
+                service,
+                &pending,
+                &marker,
+                &lease,
+            )
+            .await,
+        Err(RegistryError::Conflict)
+    ));
+    assert!(store
+        .rotation_marker(&organization_id, service)
+        .await
+        .unwrap()
+        .is_none());
+    assert_eq!(store.load(&organization_id).await.unwrap(), initial);
+    let _: () = connection.del(&index_key).await.unwrap();
     let _lost_response = store
         .save_pending_rotation_with_marker(&organization_id, service, &pending, &marker, &lease)
         .await

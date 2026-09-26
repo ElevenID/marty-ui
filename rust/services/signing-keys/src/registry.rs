@@ -129,6 +129,10 @@ pub struct RotationLease {
 }
 
 impl RotationLease {
+    pub(crate) fn covers_organization(&self, organization_id: &str) -> bool {
+        self.key == rotation_lease_key(organization_id)
+    }
+
     pub(crate) fn redis_key(&self) -> &str {
         &self.key
     }
@@ -285,8 +289,10 @@ impl RegistryStore {
         let created: i32 = redis::Script::new(
             "if redis.call('GET', KEYS[1]) ~= ARGV[1] then return 0 end
              if redis.call('EXISTS', KEYS[2]) == 1 then return 0 end
-             redis.call('SET', KEYS[2], ARGV[2])
+             local index_type = redis.call('TYPE', KEYS[3]).ok
+             if index_type ~= 'none' and index_type ~= 'set' then return 0 end
              redis.call('SADD', KEYS[3], KEYS[2])
+             redis.call('SET', KEYS[2], ARGV[2])
              return 1",
         )
         .key(&lease.key)
@@ -328,9 +334,11 @@ impl RegistryStore {
         let saved: i32 = redis::Script::new(
             "if redis.call('GET', KEYS[1]) ~= ARGV[1] then return 0 end
              if redis.call('EXISTS', KEYS[3]) == 1 then return 0 end
-             redis.call('SET', KEYS[2], ARGV[2])
-             redis.call('SET', KEYS[3], ARGV[3])
+             local index_type = redis.call('TYPE', KEYS[4]).ok
+             if index_type ~= 'none' and index_type ~= 'set' then return 0 end
              redis.call('SADD', KEYS[4], KEYS[3])
+             redis.call('SET', KEYS[3], ARGV[3])
+             redis.call('SET', KEYS[2], ARGV[2])
              return 1",
         )
         .key(&lease.key)
@@ -371,6 +379,7 @@ impl RegistryStore {
         let cleared: i32 = redis::Script::new(
             "if redis.call('GET', KEYS[1]) ~= ARGV[1] then return 0 end
              if redis.call('GET', KEYS[2]) ~= ARGV[2] then return 0 end
+             if redis.call('TYPE', KEYS[3]).ok ~= 'set' then return 0 end
              if redis.call('SISMEMBER', KEYS[3], KEYS[2]) ~= 1 then return 0 end
              redis.call('DEL', KEYS[2])
              redis.call('SREM', KEYS[3], KEYS[2])
