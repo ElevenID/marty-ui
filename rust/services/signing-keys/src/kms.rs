@@ -488,7 +488,7 @@ fn openbao_jwk_from_data(config: &Value, data: &Value) -> Result<Value, KmsError
         "key_reference",
         "OpenBao adapter requires 'endpoint' and 'key_reference' in service_config",
     )?;
-    let latest = openbao_latest_version(data);
+    let latest = openbao_latest_version_from_data(data);
     let metadata = data
         .get("keys")
         .and_then(Value::as_object)
@@ -541,7 +541,7 @@ fn openbao_jwk_from_data(config: &Value, data: &Value) -> Result<Value, KmsError
     jwk_value(jwk, key_reference)
 }
 
-fn openbao_latest_version(data: &Value) -> String {
+fn openbao_latest_version_from_data(data: &Value) -> String {
     data.get("latest_version")
         .map(|value| match value {
             Value::String(value) => value.clone(),
@@ -568,7 +568,7 @@ pub async fn read_managed_openbao(request: ProviderRequest) -> Result<Value, Kms
     let data = openbao_key_data(config).await?;
     let public_jwk = openbao_jwk_from_data(config, &data)?;
     let latest_version = data.get("latest_version").cloned().unwrap_or(Value::Null);
-    let latest = openbao_latest_version(&data);
+    let latest = openbao_latest_version_from_data(&data);
     let latest_key = data
         .get("keys")
         .and_then(Value::as_object)
