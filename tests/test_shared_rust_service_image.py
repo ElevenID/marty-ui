@@ -21,6 +21,7 @@ RUST_SERVICES = {
     "issuance_native": "marty-issuance-service",
     "notification": "marty-notification",
     "organization": "marty-organization",
+    "passport_callback_signer": "marty-passport-callback-signer",
     "presentation_policy": "marty-presentation-policy",
     "revocation_profile": "marty-revocation-profile",
     "signing_keys": "marty-signing-keys",
@@ -28,6 +29,7 @@ RUST_SERVICES = {
     "verification": "marty-verification-service",
 }
 UNROUTED_RUST_BINARIES = {
+    "marty-passport-beta-bureau",
     "marty-verifier-positive-gate",
 }
 ALL_RUST_BINARIES = set(RUST_SERVICES.values()) | UNROUTED_RUST_BINARIES

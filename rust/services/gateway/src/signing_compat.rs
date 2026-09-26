@@ -20,6 +20,7 @@ pub enum SigningCompatibilityOperation {
     CscaTrustAnchors,
     PassportArtifactEncrypt,
     PassportArtifactDecrypt,
+    PassportCallbackVerify,
     ServiceSign { service_id: String },
 }
 
@@ -50,6 +51,9 @@ pub fn operation(method: HttpMethod, path: &str) -> Option<SigningCompatibilityO
         }
         (HttpMethod::Post, "passport-artifacts/decrypt") => {
             Some(SigningCompatibilityOperation::PassportArtifactDecrypt)
+        }
+        (HttpMethod::Post, "passport-callbacks/verify") => {
+            Some(SigningCompatibilityOperation::PassportCallbackVerify)
         }
         _ => parameterized(method, relative),
     }
@@ -137,7 +141,7 @@ mod tests {
         ))
         .expect("internal signing contract");
         assert_eq!(contract.schema_version, 1);
-        assert_eq!(contract.routes.len(), 17);
+        assert_eq!(contract.routes.len(), 18);
         for case in contract.routes {
             let path = case.example_path.as_deref().unwrap_or(&case.path);
             let actual = operation(case.method, path).expect("classified route");
@@ -165,6 +169,7 @@ mod tests {
             SigningCompatibilityOperation::CscaTrustAnchors => "csca_trust_anchors",
             SigningCompatibilityOperation::PassportArtifactEncrypt => "passport_artifact_encrypt",
             SigningCompatibilityOperation::PassportArtifactDecrypt => "passport_artifact_decrypt",
+            SigningCompatibilityOperation::PassportCallbackVerify => "passport_callback_verify",
             SigningCompatibilityOperation::ServiceSign { .. } => "service_sign",
         }
     }

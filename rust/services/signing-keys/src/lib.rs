@@ -8,6 +8,7 @@ pub mod flow_envelope;
 pub mod http;
 pub mod kms;
 pub mod passport_artifact_envelope;
+pub mod passport_callback_hmac;
 pub mod profiles;
 pub mod registry;
 pub mod validation;

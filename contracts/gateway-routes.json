@@ -21,7 +21,7 @@
       "MIPVersionMiddleware"
     ]
   },
-  "route_count": 441,
+  "route_count": 442,
   "routes": [
     {
       "include_in_schema": true,
@@ -279,6 +279,12 @@
       "include_in_schema": false,
       "method": "POST",
       "path": "/internal/signing-keys/passport-artifacts/decrypt",
+      "status_code": 200
+    },
+    {
+      "include_in_schema": false,
+      "method": "POST",
+      "path": "/internal/signing-keys/passport-callbacks/verify",
       "status_code": 200
     },
     {

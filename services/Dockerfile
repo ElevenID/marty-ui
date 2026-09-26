@@ -15,7 +15,7 @@ RUN case "$PASSPORT_SELF_SIGNED_TEST" in \
     -p marty-event-stream --bin marty-event-stream \
     -p marty-gateway --bin marty-gateway \
     -p marty-revocation-profile --bin marty-revocation-profile \
-    -p marty-signing-keys --bin marty-signing-keys \
+    -p marty-signing-keys --bin marty-signing-keys --bin marty-passport-callback-signer \
     -p marty-notification --bin marty-notification \
     -p marty-flow --bin marty-flow \
     -p marty-organization --bin marty-organization \
@@ -26,7 +26,7 @@ RUN case "$PASSPORT_SELF_SIGNED_TEST" in \
     -p marty-applicant --bin marty-applicant \
     -p marty-device-registration --bin marty-device-registration \
     -p marty-verification-service --bin marty-verification-service \
-    -p marty-issuance-service --bin marty-issuance-service --bin marty-canvas-sync-worker \
+    -p marty-issuance-service --bin marty-issuance-service --bin marty-canvas-sync-worker --bin marty-passport-beta-bureau \
     -p marty-deployment-profile --bin marty-deployment-profile \
     -p marty-compliance-profile --bin marty-compliance-profile
 
@@ -54,6 +54,7 @@ COPY --from=rust-service-builder /build/rust/target/release/marty-event-stream /
 COPY --from=rust-service-builder /build/rust/target/release/marty-gateway /usr/local/bin/marty-gateway
 COPY --from=rust-service-builder /build/rust/target/release/marty-revocation-profile /usr/local/bin/marty-revocation-profile
 COPY --from=rust-service-builder /build/rust/target/release/marty-signing-keys /usr/local/bin/marty-signing-keys
+COPY --from=rust-service-builder /build/rust/target/release/marty-passport-callback-signer /usr/local/bin/marty-passport-callback-signer
 COPY --from=rust-service-builder /build/rust/target/release/marty-notification /usr/local/bin/marty-notification
 COPY --from=rust-service-builder /build/rust/target/release/marty-flow /usr/local/bin/marty-flow
 COPY --from=rust-service-builder /build/rust/target/release/marty-organization /usr/local/bin/marty-organization
@@ -67,6 +68,7 @@ COPY --from=rust-service-builder /build/rust/target/release/marty-device-registr
 COPY --from=rust-service-builder /build/rust/target/release/marty-verification-service /usr/local/bin/marty-verification-service
 COPY --from=rust-service-builder /build/rust/target/release/marty-issuance-service /usr/local/bin/marty-issuance-service
 COPY --from=rust-service-builder /build/rust/target/release/marty-canvas-sync-worker /usr/local/bin/marty-canvas-sync-worker
+COPY --from=rust-service-builder /build/rust/target/release/marty-passport-beta-bureau /usr/local/bin/marty-passport-beta-bureau
 COPY --from=rust-service-builder /build/rust/target/release/marty-deployment-profile /usr/local/bin/marty-deployment-profile
 COPY --from=rust-service-builder /build/rust/target/release/marty-compliance-profile /usr/local/bin/marty-compliance-profile
 RUN chmod +x /app/services/entrypoint.sh /app/load-secrets-env.sh

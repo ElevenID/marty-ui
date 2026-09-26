@@ -1,0 +1,42 @@
+{
+  "schema": "marty.passport-beta-bureau/v1",
+  "scope": "beta-only non-physical simulator; never an ICAO production bureau",
+  "startup_gate": {
+    "ENVIRONMENT": "beta",
+    "PASSPORT_BETA_BUREAU_ENABLED": "true"
+  },
+  "authentication": "Existing GRPC_SERVICE_TOKEN bearer token; no new passport token file",
+  "routes": {
+    "submit": "POST /v1/personalization/jobs",
+    "submit_batch": "POST /v1/personalization/batches",
+    "poll": "GET /v1/personalization/jobs/{bureau_job_id}"
+  },
+  "durability": "PostgreSQL organization_id plus source_job_id idempotency; conflicting payload digest returns 409",
+  "persisted_fields": [
+    "bureau_job_id",
+    "organization_id",
+    "source_job_id",
+    "request_sha256",
+    "status",
+    "next_transition_at",
+    "callback_lease_token",
+    "callback_lease_until",
+    "created_at",
+    "updated_at"
+  ],
+  "prohibited_persistence": ["MRZ", "data groups", "SOD", "DSC certificate", "raw job payload"],
+  "status_sequence": ["QUEUED", "PRINTING", "ENCODING", "QUALITY_CHECK", "SHIPPED"],
+  "callback": {
+    "body_fields": ["organization_id", "bureau_job_id", "status"],
+    "signature": "KMS-held passport-bureau-callback HMAC via internal signing-keys gateway",
+    "advance_only_after_accepted_callback": true,
+    "retry_after_provider_failure": true,
+    "tracking_prefix": "BETA-SIM-"
+  },
+  "security": {
+    "maximum_request_bytes": 33554432,
+    "redirects": "disabled",
+    "private_network_only": true,
+    "no_public_host_port": true
+  }
+}

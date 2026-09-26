@@ -89,7 +89,7 @@ RUN --mount=type=cache,id=marty-cargo-registry,target=/usr/local/cargo/registry,
     -p marty-gateway --bin marty-gateway \
     -p marty-revocation-profile --bin marty-revocation-profile \
     -p marty-notification --bin marty-notification \
-    -p marty-signing-keys --bin marty-signing-keys \
+    -p marty-signing-keys --bin marty-signing-keys --bin marty-passport-callback-signer \
     -p marty-flow --bin marty-flow \
     -p marty-organization --bin marty-organization \
     -p marty-credential-template --bin marty-credential-template \
@@ -98,7 +98,7 @@ RUN --mount=type=cache,id=marty-cargo-registry,target=/usr/local/cargo/registry,
     -p marty-applicant --bin marty-applicant \
     -p marty-device-registration --bin marty-device-registration \
     -p marty-verification-service --bin marty-verification-service \
-    -p marty-issuance-service --bin marty-issuance-service --bin marty-canvas-sync-worker \
+    -p marty-issuance-service --bin marty-issuance-service --bin marty-canvas-sync-worker --bin marty-passport-beta-bureau \
     -p marty-deployment-profile --bin marty-deployment-profile \
     -p marty-compliance-profile --bin marty-compliance-profile \
     && sccache --stop-server
@@ -136,6 +136,7 @@ LABEL org.opencontainers.image.source="https://github.com/ElevenID/marty-ui" \
       org.opencontainers.image.version="${MARTY_RELEASE_VERSION}"
 COPY --from=builder /build/rust/target/release/marty-issuance-service /usr/local/bin/marty-issuance-service
 COPY --from=builder /build/rust/target/release/marty-canvas-sync-worker /usr/local/bin/marty-canvas-sync-worker
+COPY --from=builder /build/rust/target/release/marty-passport-beta-bureau /usr/local/bin/marty-passport-beta-bureau
 COPY --chmod=755 services/entrypoint.sh /app/services/entrypoint.sh
 COPY --chown=10001:10001 scripts/load-secrets-env.sh /usr/local/bin/load-secrets-env.sh
 ENV SERVICE_NAME=issuance_native \
@@ -189,6 +190,7 @@ LABEL org.opencontainers.image.source="https://github.com/ElevenID/marty-ui" \
       org.opencontainers.image.revision="${MARTY_UI_SHA}" \
       org.opencontainers.image.version="${MARTY_RELEASE_VERSION}"
 COPY --from=builder /build/rust/target/release/marty-signing-keys /usr/local/bin/marty-signing-keys
+COPY --from=builder /build/rust/target/release/marty-passport-callback-signer /usr/local/bin/marty-passport-callback-signer
 ENV SIGNING_KEYS_SERVICE_PORT=8017 \
     MARTY_RELEASE_VERSION=${MARTY_RELEASE_VERSION} \
     MARTY_UI_SHA=${MARTY_UI_SHA} \

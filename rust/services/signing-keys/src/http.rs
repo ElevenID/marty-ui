@@ -24,6 +24,7 @@ use crate::kms::{self, ProviderRequest, SignRequest};
 use crate::passport_artifact_envelope::{
     self, ArtifactEnvelopeError, DecryptChunkRequest, EncryptChunkRequest,
 };
+use crate::passport_callback_hmac::{self, CallbackKmsError};
 use crate::profiles::{
     self, CustodyFormatRequest, CustodyFormatResponse, DuplicateProfileRequest,
     DuplicateProfileResponse, FindProfilesRequest, NormalizeProfileRequest, ProfileStore,
@@ -267,6 +268,10 @@ pub fn router_with_dependencies(
         .route(
             "/internal/documents/{organization_id}/passport-artifacts/decrypt",
             post(decrypt_passport_artifact_chunk),
+        )
+        .route(
+            "/internal/documents/{organization_id}/passport-callbacks/verify",
+            post(verify_passport_callback),
         )
         .route(
             "/internal/documents/{organization_id}/csca-certificates/expiring",
@@ -2840,6 +2845,22 @@ async fn decrypt_passport_artifact_chunk(
         .as_ref()
         .ok_or(ArtifactEnvelopeError::Unavailable)?;
     passport_artifact_envelope::decrypt_chunk(provider, &organization_id, request)
+        .await
+        .map(Json)
+}
+
+async fn verify_passport_callback(
+    State(state): State<AppState>,
+    Path(organization_id): Path<String>,
+    headers: HeaderMap,
+    Json(request): Json<passport_callback_hmac::VerifyRequest>,
+) -> Result<Json<Value>, CallbackKmsError> {
+    authorize_internal(&state, &headers).map_err(|_| CallbackKmsError::Unauthorized)?;
+    let provider = state
+        .flow_envelopes
+        .as_ref()
+        .ok_or(CallbackKmsError::Unavailable)?;
+    passport_callback_hmac::verify(provider, &organization_id, request)
         .await
         .map(Json)
 }
