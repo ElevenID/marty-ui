@@ -5617,6 +5617,21 @@ mod public_contract_tests {
     use tower::ServiceExt;
 
     #[test]
+    fn public_key_metadata_behavior_is_frozen_before_public_port() {
+        let behavior: Value = serde_json::from_str(include_str!(
+            "../../../../contracts/signing-public-key-metadata-behavior.json"
+        ))
+        .unwrap();
+        assert_eq!(behavior["routes"].as_array().unwrap().len(), 3);
+        assert_eq!(behavior["routes"][0]["method"], "GET");
+        assert_eq!(
+            behavior["routes"][1]["mutable_fields"],
+            json!(["name", "status", "aliases", "key_aliases"])
+        );
+        assert_eq!(behavior["routes"][2]["method"], "DELETE");
+    }
+
+    #[test]
     fn vdsnc_registration_behavior_is_frozen_before_public_port() {
         let behavior: Value = serde_json::from_str(include_str!(
             "../../../../contracts/signing-vdsnc-registration-behavior.json"

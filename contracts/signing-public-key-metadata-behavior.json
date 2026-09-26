@@ -1,0 +1,15 @@
+{
+  "schema_version": 1,
+  "source": "pre-Rust services/gateway/routes/signing_keys.py at parent of e1ebad979",
+  "routes": [
+    {"method": "GET", "path": "/v1/signing-keys/{key_id}", "lookup": ["id", "provider_key_name"], "source": "tenant signing-key inventory", "missing_status": 404},
+    {"method": "PATCH", "path": "/v1/signing-keys/{key_id}", "lookup": ["kid", "provider_key_name"], "source": "tenant JWKS only", "mutable_fields": ["name", "status", "aliases", "key_aliases"], "response_fields": ["ok", "key_id", "updated"], "missing_status": 404},
+    {"method": "DELETE", "path": "/v1/signing-keys/{key_id}", "lookup": ["kid", "provider_key_name"], "source": "tenant JWKS only", "response_fields": ["ok", "key_id", "removed"], "missing_status": 404}
+  ],
+  "custody_boundary": "PATCH and DELETE update only published JWKS metadata. Neither alters nor deletes key material in KMS.",
+  "reviewed_security_tightening": [
+    "GET uses the public-only tenant inventory; never return private JWK fields or service credentials.",
+    "PATCH accepts only the four declared metadata fields and rejects private/custody fields.",
+    "Errors from storage do not expose Redis coordinates or provider credentials."
+  ]
+}
