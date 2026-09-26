@@ -186,3 +186,12 @@ Thus 1 declared pair remains without a local public handler:
 `POST /v1/signing-keys`, managed KMS-backed key creation. These new
 adapters still need authenticated combined Gateway-to-Rust runtime tests. The
 24-pair table above remains the protected-main audit baseline.
+
+For the remaining POST, the released Gateway sanitized a caller name into an
+OpenBao reference and treated an existing reference as success, but did not
+include the organization in that reference. Its Rust port must preserve the
+documented request/response and purpose binding while preventing two tenants
+from selecting the same KMS key by name. Creation must be an explicit KMS
+operation returning public metadata only; neither private material nor a
+Gateway-held KMS credential may enter the public path. Freeze this behavior
+before implementation and test same-name requests across tenants.
