@@ -630,6 +630,30 @@ async fn exercise_native_passport_http(
         .await
         .unwrap()
         .unwrap();
+    let mut stale_no_id = PassportJobPatch::new(PassportJobStatus::Submitted);
+    stale_no_id.bureau_job_id = Some(None);
+    stale_no_id.error_code = Some(Some("BUREAU_SUBMISSION_FAILED".into()));
+    assert!(repository
+        .update(
+            &principal,
+            &race_job.application_id,
+            "SUBMITTED",
+            &stale_no_id,
+            Utc::now(),
+        )
+        .await
+        .unwrap()
+        .is_none());
+    let still_bound = repository
+        .get(&principal, &race_job.application_id)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(
+        still_bound.bureau_job_id.as_deref(),
+        Some("bureau-poll-race")
+    );
+    assert!(still_bound.error_code.is_none());
     let race_path = format!(
         "/v1/passport/applications/{}/production-status",
         race_job.application_id

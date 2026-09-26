@@ -231,7 +231,7 @@ impl PostgresPassportRepository {
             .push_bind(application_id)
             .push(" AND status = ")
             .push_bind(expected_status);
-        if patch.bureau_job_id.as_ref().is_some_and(Option::is_some)
+        if patch.bureau_job_id.is_some()
             || matches!(
                 patch.status,
                 PassportJobStatus::DataGenerated | PassportJobStatus::SodSigned
