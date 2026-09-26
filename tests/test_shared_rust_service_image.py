@@ -28,6 +28,7 @@ RUST_SERVICES = {
     "verification": "marty-verification-service",
 }
 UNROUTED_RUST_BINARIES = {
+    "marty-passport-beta-bureau",
     "marty-verifier-positive-gate",
 }
 ALL_RUST_BINARIES = set(RUST_SERVICES.values()) | UNROUTED_RUST_BINARIES
