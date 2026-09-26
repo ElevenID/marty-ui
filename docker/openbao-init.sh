@@ -139,6 +139,11 @@ path "transit/decrypt/cred-*" {
 path "transit/keys/cred-*" {
   capabilities = ["read"]
 }
+# Managed signing inventory filters names by tenant before reading public keys.
+# OpenBao requires list on the collection path, not on transit/keys/cred-*.
+path "transit/keys" {
+  capabilities = ["list"]
+}
 
 # Purpose-bound protocol keys are deliberately outside the credential-key
 # wildcard so a caller cannot substitute them across signing domains.

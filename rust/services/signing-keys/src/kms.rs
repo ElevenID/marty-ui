@@ -218,7 +218,7 @@ pub async fn list_managed_openbao_key_names(endpoint: &str) -> Result<Vec<String
     let token = secret_value("BAO_TOKEN")
         .or_else(|| secret_value("OPENBAO_SERVICE_TOKEN"))
         .ok_or_else(|| KmsError::InvalidConfig("Managed OpenBao access is unavailable.".into()))?;
-    let response = send_json(
+    let response = match send_json(
         Client::new()
             .get(format!(
                 "{}/v1/transit/keys",
@@ -228,7 +228,16 @@ pub async fn list_managed_openbao_key_names(endpoint: &str) -> Result<Vec<String
             .timeout(HTTP_TIMEOUT)
             .header("X-Vault-Token", token),
     )
-    .await?;
+    .await
+    {
+        Ok(response) => response,
+        Err(KmsError::ProviderStatus { status, detail })
+            if status == reqwest::StatusCode::NOT_FOUND && empty_transit_list_response(&detail) =>
+        {
+            return Ok(Vec::new());
+        }
+        Err(error) => return Err(error),
+    };
     let names = response
         .pointer("/data/keys")
         .and_then(Value::as_array)
@@ -242,6 +251,13 @@ pub async fn list_managed_openbao_key_names(endpoint: &str) -> Result<Vec<String
                 .ok_or_else(|| KmsError::InvalidResponse("OpenBao key name is malformed".into()))
         })
         .collect()
+}
+
+fn empty_transit_list_response(detail: &str) -> bool {
+    serde_json::from_str::<Value>(detail)
+        .ok()
+        .and_then(|response| response.get("errors").and_then(Value::as_array).cloned())
+        .is_some_and(|errors| errors.is_empty())
 }
 
 pub async fn verify(request: ProviderRequest) -> Result<CapabilityResult, KmsError> {
@@ -1096,6 +1112,15 @@ fn bounded(value: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn empty_transit_list_is_distinct_from_missing_mount_and_denied_access() {
+        assert!(empty_transit_list_response("{\"errors\":[]}"));
+        assert!(!empty_transit_list_response(
+            "{\"errors\":[\"no handler for route \\\"transit/keys/\\\"\"]}"
+        ));
+        assert!(!empty_transit_list_response("permission denied"));
+    }
 
     #[test]
     fn provider_factory_preserves_supported_aliases_and_rejects_unknowns() {
