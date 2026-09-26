@@ -159,7 +159,7 @@ pub fn key_purposes() -> Vec<KeyPurpose> {
         KeyPurpose {
             id: "x509_doc_signer",
             allowed_algorithms: PURPOSE_ALL_ALGORITHMS,
-            credential_formats: &["mso_mdoc", "zk_mdoc"],
+            credential_formats: &["mso_mdoc", "zk_mdoc", "icao_emrtd"],
         },
         KeyPurpose {
             id: "holder_binding",
@@ -184,7 +184,7 @@ pub fn key_purposes() -> Vec<KeyPurpose> {
         KeyPurpose {
             id: "csca",
             allowed_algorithms: CSCA_ALGORITHMS,
-            credential_formats: &["mso_mdoc", "zk_mdoc"],
+            credential_formats: &["mso_mdoc", "zk_mdoc", "icao_emrtd"],
         },
         KeyPurpose {
             id: "jwks_signing",
@@ -293,6 +293,17 @@ mod tests {
             value.service_type_id.contains("transit") && value.capabilities.public_key_export
         }) {
             assert_eq!(provider.capabilities.signature_encoding, "der");
+        }
+    }
+
+    #[test]
+    fn passport_document_signer_and_csca_purposes_advertise_icao_format() {
+        for purpose in ["x509_doc_signer", "csca"] {
+            let definition = key_purposes()
+                .into_iter()
+                .find(|definition| definition.id == purpose)
+                .unwrap();
+            assert!(definition.credential_formats.contains(&"icao_emrtd"));
         }
     }
 }

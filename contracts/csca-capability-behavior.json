@@ -80,7 +80,7 @@
       "key_purpose": {
         "id": "csca",
         "allowed_algorithms": ["ES256", "ES384", "ES512", "EdDSA", "RS256"],
-        "credential_formats": ["mso_mdoc", "zk_mdoc"]
+        "credential_formats": ["mso_mdoc", "zk_mdoc", "icao_emrtd"]
       },
       "managed_key_reference_prefix": "cred-dsc-",
       "renewal_contract": {

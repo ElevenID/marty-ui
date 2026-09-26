@@ -292,7 +292,13 @@ impl SigningCompatibilityService {
                 .map_err(|_| CompatibilityError::Unavailable)?;
             let mut service =
                 service_for(&registry, service_id).ok_or(CompatibilityError::ServiceNotFound)?;
-            merge_certificate(&mut service, &certificates, service_id);
+            merge_profile_certificate(&mut service, &certificates, &profile, service_id);
+            let certificate_expires_at = resolved["issuer_x5c"]
+                .as_array()
+                .filter(|chain| !chain.is_empty())
+                .and_then(|_| service.get("cert_expires_at"))
+                .cloned()
+                .unwrap_or(Value::Null);
             Ok(json!({
                 "issuer_profile_id": profile_id,
                 "issuer_did": resolved["issuer_did"],
@@ -300,7 +306,7 @@ impl SigningCompatibilityService {
                 "public_jwk": resolved["public_jwk"],
                 "algorithm": profile.get("algorithm").cloned().unwrap_or_else(|| json!("ES256")),
                 "x5c": resolved["issuer_x5c"],
-                "certificate_expires_at": service.get("cert_expires_at").cloned().unwrap_or(Value::Null)
+                "certificate_expires_at": certificate_expires_at
             }))
         } else {
             Ok(json!({
@@ -719,7 +725,7 @@ impl SigningCompatibilityService {
             .get(&request.organization_id, profile_id)
             .await
             .map_err(map_profile_error)?;
-        let service_id = required(&profile, "signing_service_id")?;
+        let key_reference = required(&profile, "signing_key_reference")?;
         let cert_pem = request
             .body
             .get("cert_pem")
@@ -728,9 +734,10 @@ impl SigningCompatibilityService {
             .ok_or_else(|| CompatibilityError::BadRequest("cert_pem is required.".into()))?;
         let stored = self
             .documents
-            .store_certificate(
+            .store_profile_certificate(
                 &request.organization_id,
-                service_id,
+                profile_id,
+                key_reference,
                 InspectCertificateRequest {
                     cert_pem: cert_pem.into(),
                     cert_chain_pem: clean(
@@ -914,7 +921,7 @@ pub fn resolve_issuer_context(
         .and_then(Value::as_object)
         .cloned()
         .ok_or(CompatibilityError::ServiceNotFound)?;
-    merge_certificate(&mut service, certificates, service_id);
+    merge_profile_certificate(&mut service, certificates, profile, service_id);
     let key_reference = profile
         .get("signing_key_reference")
         .and_then(Value::as_str)
@@ -1032,7 +1039,7 @@ pub async fn resolve_issuer_identity(
         let Some(mut service) = service_for(registry, service_id) else {
             continue;
         };
-        merge_certificate(&mut service, certificates, service_id);
+        merge_profile_certificate(&mut service, certificates, &profile, service_id);
         let key_reference = clean(profile.get("signing_key_reference").and_then(Value::as_str))
             .or_else(|| clean(service.get("key_reference").and_then(Value::as_str)));
         if let Some(reference) = &key_reference {
@@ -1102,6 +1109,17 @@ pub async fn resolve_issuer_identity(
         let Some(mut public_jwk) = public_jwk else {
             return Err(CompatibilityError::Unavailable);
         };
+        if let Some(attachment) = profile_certificate(certificates, &profile) {
+            if attachment.get("signing_key_reference") == profile.get("signing_key_reference")
+                && attachment.get("public_jwk").is_some_and(|certificate_key| {
+                    !documents::same_public_jwk(certificate_key, &Value::Object(public_jwk.clone()))
+                })
+            {
+                // Keep the identity resolvable so a rotated KMS key can receive
+                // its replacement certificate, but never expose the stale chain.
+                clear_certificate(&mut service);
+            }
+        }
         public_jwk.insert("kid".into(), Value::String(method_id.clone()));
         if effective_profile
             .get("verification_method_id")
@@ -1789,6 +1807,60 @@ fn merge_certificate(service: &mut Map<String, Value>, certificates: &Value, ser
     }
 }
 
+fn merge_profile_certificate(
+    service: &mut Map<String, Value>,
+    certificates: &Value,
+    profile: &Value,
+    service_id: &str,
+) {
+    let passport = profile.get("credential_format").and_then(Value::as_str) == Some("ICAO_EMRTD");
+    if passport {
+        clear_certificate(service);
+    }
+    let attachment = profile_certificate(certificates, profile);
+    if let Some(attachment) = attachment {
+        clear_certificate(service);
+        let current_key = profile.get("signing_key_reference").and_then(Value::as_str);
+        if attachment
+            .get("signing_key_reference")
+            .and_then(Value::as_str)
+            == current_key
+        {
+            for (name, value) in attachment {
+                if matches!(
+                    name.as_str(),
+                    "cert_pem" | "cert_chain_pem" | "cert_expires_at" | "updated_at" | "x5c"
+                ) {
+                    service.insert(name.clone(), value.clone());
+                }
+            }
+        }
+        return;
+    }
+    // Passport DSCs must be tied to the selected issuer identity, never a shared
+    // signing service. Other formats retain their legacy service-level override.
+    if !passport {
+        merge_certificate(service, certificates, service_id);
+    }
+}
+
+fn clear_certificate(service: &mut Map<String, Value>) {
+    for name in ["cert_pem", "cert_chain_pem", "cert_expires_at", "x5c"] {
+        service.remove(name);
+    }
+}
+
+fn profile_certificate<'a>(
+    certificates: &'a Value,
+    profile: &Value,
+) -> Option<&'a Map<String, Value>> {
+    profile
+        .get("id")
+        .and_then(Value::as_str)
+        .and_then(|id| certificates.pointer(&format!("/profiles/{}", escape_pointer(id))))
+        .and_then(Value::as_object)
+}
+
 fn escape_pointer(value: &str) -> String {
     value.replace('~', "~0").replace('/', "~1")
 }
@@ -1888,6 +1960,78 @@ mod tests {
         assert_eq!(result, contract.expected);
     }
 
+    #[test]
+    fn passport_certificates_are_profile_bound_even_with_a_shared_kms_service() {
+        let mut contract: Contract = serde_json::from_str(include_str!(
+            "../../../../contracts/gateway-issuer-context-behavior.json"
+        ))
+        .expect("issuer context contract");
+        let first = &mut contract.profile_document["profiles"][0];
+        first["credential_format"] = json!("ICAO_EMRTD");
+        first["key_purpose"] = json!("x509_doc_signer");
+        let mut second = first.clone();
+        second["id"] = json!("profile-2");
+        second["issuer_did"] = json!("did:web:issuer.example:orgs:other");
+        second["signing_key_reference"] = json!("other-key");
+        contract.profile_document["profiles"]
+            .as_array_mut()
+            .unwrap()
+            .push(second);
+        contract.registry["services"][0]["credential_formats"] = json!(["ICAO_EMRTD"]);
+        contract.registry["services"][0]["key_purposes"] = json!(["x509_doc_signer"]);
+        contract.registry["key_reference_purposes"]["service-1"] =
+            json!({"issuer-key": ["x509_doc_signer"], "other-key": ["x509_doc_signer"]});
+        contract.certificates = json!({
+            "services": {"service-1": {"x5c": ["wrong-shared-certificate"]}},
+            "profiles": {
+                "profile-1": {"signing_key_reference": "issuer-key", "x5c": ["first-dsc"]},
+                "profile-2": {"signing_key_reference": "other-key", "x5c": ["second-dsc"]}
+            }
+        });
+        contract.request.key_purpose = Some("x509_doc_signer".into());
+        contract.request.credential_format = Some("ICAO_EMRTD".into());
+        let first = resolve_issuer_context(
+            &contract.profile_document,
+            &contract.registry,
+            &contract.certificates,
+            &contract.request,
+        )
+        .expect("first passport issuer");
+        assert_eq!(first["issuer_x5c"], json!(["first-dsc"]));
+        contract.request.issuer_did = Some("did:web:issuer.example:orgs:other".into());
+        let second = resolve_issuer_context(
+            &contract.profile_document,
+            &contract.registry,
+            &contract.certificates,
+            &contract.request,
+        )
+        .expect("second passport issuer");
+        assert_eq!(second["issuer_x5c"], json!(["second-dsc"]));
+
+        contract.certificates["profiles"]["profile-2"]["signing_key_reference"] =
+            json!("retired-key");
+        let stale = resolve_issuer_context(
+            &contract.profile_document,
+            &contract.registry,
+            &contract.certificates,
+            &contract.request,
+        )
+        .expect("stale certificate is not used");
+        assert_eq!(stale["issuer_x5c"], json!([]));
+        contract.certificates["profiles"]
+            .as_object_mut()
+            .unwrap()
+            .remove("profile-2");
+        let missing = resolve_issuer_context(
+            &contract.profile_document,
+            &contract.registry,
+            &contract.certificates,
+            &contract.request,
+        )
+        .expect("shared service certificate is not used for passport");
+        assert_eq!(missing["issuer_x5c"], json!([]));
+    }
+
     #[tokio::test]
     async fn issuer_identity_matches_language_neutral_behavior() {
         let contract: IdentityContract = serde_json::from_str(include_str!(
@@ -1910,6 +2054,24 @@ mod tests {
             .expect("resolver")
             .remove("resolved_at");
         assert_eq!(result, contract.expected_without_resolved_at);
+
+        let mut stale_certificates = contract.certificates.clone();
+        stale_certificates["profiles"] = json!({"profile-1": {
+            "signing_key_reference": "issuer-key",
+            "public_jwk": {"kty": "EC", "crv": "P-256", "x": "stale-x", "y": "stale-y"},
+            "x5c": ["stale-dsc"],
+            "cert_expires_at": "2035-01-01T00:00:00Z"
+        }});
+        let stale = resolve_issuer_identity(
+            &contract.profile_document,
+            &contract.registry,
+            &stale_certificates,
+            &contract.did_document,
+            &contract.request,
+        )
+        .await
+        .expect("rotated identity remains resolvable for certificate replacement");
+        assert_eq!(stale["issuer_x5c"], json!([]));
     }
 
     #[test]
@@ -2004,11 +2166,17 @@ mod tests {
             json!({"provider-b-key": ["vc_jwt_issuer"]});
         let mut request = contract.request.clone();
         request.verification_method_id = Some(replacement_method_id.into());
+        let mut certificates = contract.certificates.clone();
+        certificates["profiles"] = json!({"profile-1": {
+            "signing_key_reference": "issuer-key",
+            "public_jwk": {"kty": "EC", "crv": "P-256", "x": "public-x", "y": "public-y"},
+            "x5c": ["old-dsc"]
+        }});
 
         let unpublished = resolve_issuer_identity(
             &profile_document,
             &registry,
-            &contract.certificates,
+            &certificates,
             &contract.did_document,
             &request,
         )
@@ -2035,7 +2203,7 @@ mod tests {
         let resolved = resolve_issuer_identity(
             &profile_document,
             &registry,
-            &contract.certificates,
+            &certificates,
             &did_document,
             &request,
         )
@@ -2043,6 +2211,7 @@ mod tests {
         .expect("published replacement identity");
         assert_eq!(resolved["issuer_did"], request.issuer_did);
         assert_eq!(resolved["verification_method_id"], replacement_method_id);
+        assert_eq!(resolved["issuer_x5c"], json!([]));
         assert_eq!(
             resolved["issuer_profile"]["signing_service_id"],
             "provider-b"
