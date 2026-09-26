@@ -449,7 +449,7 @@ export default function SigningKeysPage() {
   };
 
   const handleOpenCertDialog = async (service) => {
-    setCertData({ cert_pem: '', cert_chain_pem: '', common_name: service.name || '' });
+    setCertData({ cert_pem: '', cert_chain_pem: '', country: '', organization: '', common_name: service.name || '' });
     setCertAction('view');
     certDialog.open(service);
     // Try to load existing cert
@@ -478,6 +478,8 @@ export default function SigningKeysPage() {
     try {
       const result = await signingKeysApi.generateServiceCsr(service.id, {
         ...orgRequestParams,
+        country: certData.country,
+        organization: certData.organization,
         common_name: certData.common_name || service.name,
       });
       showNotification?.('CSR generated. Download or copy it to submit to your CA.', 'success');
@@ -826,7 +828,30 @@ export default function SigningKeysPage() {
                     value={certData.common_name || ''}
                     onChange={(e) => setCertData((prev) => ({ ...prev, common_name: e.target.value }))}
                   />
-                  <Button variant="outlined" onClick={handleGenerateCsr}>
+                  {certDialog.data?.id !== MANAGED_OPENBAO_SERVICE_ID && (
+                    <>
+                      <TextField
+                        fullWidth
+                        label="Subject country (two-letter ISO code)"
+                        inputProps={{ maxLength: 2 }}
+                        value={certData.country || ''}
+                        onChange={(e) => setCertData((prev) => ({ ...prev, country: e.target.value.toUpperCase() }))}
+                      />
+                      <TextField
+                        fullWidth
+                        label="Subject organization"
+                        value={certData.organization || ''}
+                        onChange={(e) => setCertData((prev) => ({ ...prev, organization: e.target.value }))}
+                      />
+                    </>
+                  )}
+                  <Button
+                    variant="outlined"
+                    onClick={handleGenerateCsr}
+                    disabled={certDialog.data?.id !== MANAGED_OPENBAO_SERVICE_ID && (
+                      !/^[A-Z]{2}$/.test(certData.country || '') || !certData.organization?.trim() || !certData.common_name?.trim()
+                    )}
+                  >
                     {certDialog.data?.id === MANAGED_OPENBAO_SERVICE_ID
                       ? 'Generate CSR from issuer identity'
                       : 'Generate CSR from service public key'}

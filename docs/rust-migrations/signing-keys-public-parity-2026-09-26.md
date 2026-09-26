@@ -34,3 +34,16 @@ not merely Gateway route-table membership. Re-run the audit after each merge.
 The service certificate/CSR group is frozen first in
 `contracts/signing-service-certificate-behavior.json`, including its legacy
 success and error shapes and the stricter managed-service custody rule.
+
+## Local integration progress (not merged or beta-accepted)
+
+The integration branch now has Rust `GET`/`PUT` service-certificate and `POST`
+service-CSR handlers. The managed shared service is rejected in favor of the
+issuer identity route. Registered-service certificate uploads are matched to
+the current KMS public key, and CSRs are signed by that KMS key and verified
+before release. The console asks for the country and organization explicitly.
+These three pairs are no longer absent from the local router, leaving 21
+declared method/path pairs without local public handlers. However, the
+three new routes still require authenticated through-Gateway and live
+registered-service KMS tests before they count as cutover-accepted. The
+24-pair table above remains the protected-main audit baseline.

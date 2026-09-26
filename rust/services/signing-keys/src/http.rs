@@ -138,6 +138,14 @@ pub fn router_with_dependencies(
             "/v1/signing-keys/issuer-identities/certificate-csr",
             axum::routing::put(generate_public_issuer_csr),
         )
+        .route(
+            "/v1/signing-keys/services/{service_id}/certificate",
+            get(get_public_service_certificate).put(store_public_service_certificate),
+        )
+        .route(
+            "/v1/signing-keys/services/{service_id}/certificate-csr",
+            post(generate_public_service_csr),
+        )
         .route("/v1/signing-keys/config/purposes", get(purposes))
         .route(
             "/v1/signing-keys/config/service-capabilities",
@@ -364,6 +372,27 @@ struct PassportCsrRequest {
     key_purpose: String,
     credential_format: String,
     algorithm: String,
+    country: String,
+    organization: String,
+    common_name: String,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ServiceCertificateRequest {
+    #[serde(default)]
+    organization_id: Option<String>,
+    #[serde(default)]
+    cert_pem: String,
+    #[serde(default)]
+    cert_chain_pem: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ServiceCsrRequest {
+    #[serde(default)]
+    organization_id: Option<String>,
     country: String,
     organization: String,
     common_name: String,
@@ -995,6 +1024,334 @@ async fn generate_public_issuer_csr(
         "issuer_did": input.issuer_did,
         "subject": {"country": input.country, "organization": input.organization, "common_name": input.common_name}
     })).into_response()
+}
+
+fn validate_service_scope(
+    organization_id: &str,
+    requested_organization_id: Option<&str>,
+) -> Result<(), PublicSigningError> {
+    if organization_id.trim().is_empty() {
+        return Err(public_failure(
+            StatusCode::UNPROCESSABLE_ENTITY,
+            "An organization context is required.",
+        ));
+    }
+    if requested_organization_id.is_some_and(|requested| requested.trim() != organization_id) {
+        return Err(public_failure(
+            StatusCode::FORBIDDEN,
+            "organization_id does not match the authorized organization context.",
+        ));
+    }
+    Ok(())
+}
+
+async fn registered_certificate_service(
+    state: &AppState,
+    organization_id: &str,
+    service_id: &str,
+) -> Result<Value, PublicSigningError> {
+    let store = state.registry_store.as_ref().ok_or_else(|| {
+        public_failure(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "Signing registry is unavailable.",
+        )
+    })?;
+    let registry = store.load(organization_id).await.map_err(|_| {
+        public_failure(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "Signing registry is unavailable.",
+        )
+    })?;
+    let service = registry
+        .get("services")
+        .and_then(Value::as_array)
+        .and_then(|services| {
+            services
+                .iter()
+                .find(|service| service.get("id").and_then(Value::as_str) == Some(service_id))
+        })
+        .cloned()
+        .ok_or_else(|| {
+            public_failure(
+                StatusCode::NOT_FOUND,
+                &format!("Service '{service_id}' not found."),
+            )
+        })?;
+    if service_id == "managed-openbao-transit" {
+        return Err(public_failure(
+            StatusCode::CONFLICT,
+            "Managed signing keys require an issuer-scoped certificate identity.",
+        ));
+    }
+    Ok(service)
+}
+
+fn service_certificate_projection(service: &Value, certificate: &Value) -> Value {
+    json!({
+        "id": service.get("id"),
+        "name": service.get("name"),
+        "service_type": service.get("service_type"),
+        "provider": service.get("provider"),
+        "status": service.get("status"),
+        "cert_pem": certificate.get("cert_pem"),
+        "cert_chain_pem": certificate.get("cert_chain_pem"),
+        "cert_expires_at": certificate.get("cert_expires_at"),
+    })
+}
+
+fn service_certificate_key_config(service: &Value) -> Result<Value, PublicSigningError> {
+    let mut config = service.clone();
+    let reference = service
+        .get("key_reference")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|reference| !reference.is_empty())
+        .map(str::to_owned)
+        .or_else(|| {
+            let aliases = service.get("key_aliases")?.as_array()?;
+            if aliases.len() == 1 {
+                aliases[0]
+                    .as_str()
+                    .map(str::trim)
+                    .filter(|value| !value.is_empty())
+                    .map(str::to_owned)
+            } else {
+                None
+            }
+        })
+        .ok_or_else(|| {
+            public_failure(
+                StatusCode::CONFLICT,
+                "A service certificate requires one configured KMS signing key.",
+            )
+        })?;
+    config["key_reference"] = json!(reference);
+    Ok(config)
+}
+
+async fn current_service_public_jwk(service: &Value) -> Result<(Value, Value), PublicSigningError> {
+    let config = service_certificate_key_config(service)?;
+    let response = kms::public_key(ProviderRequest {
+        service_config: config.clone(),
+    })
+    .await
+    .map_err(|_| {
+        public_failure(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "The service KMS public key is unavailable.",
+        )
+    })?;
+    let public_jwk = documents::sanitize_public_jwk(&response, None).map_err(|_| {
+        public_failure(
+            StatusCode::BAD_GATEWAY,
+            "The service KMS returned an invalid public key.",
+        )
+    })?;
+    Ok((config, public_jwk))
+}
+
+async fn get_public_service_certificate(
+    State(state): State<AppState>,
+    Path(service_id): Path<String>,
+    Query(scope): Query<OrganizationScope>,
+) -> Response {
+    if let Err(error) = validate_service_scope(&scope.organization_id, None) {
+        return error.into_response();
+    }
+    let service =
+        match registered_certificate_service(&state, &scope.organization_id, &service_id).await {
+            Ok(service) => service,
+            Err(error) => return error.into_response(),
+        };
+    let Some(store) = state.document_store.as_ref() else {
+        return public_error(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "Certificate storage is unavailable.",
+        );
+    };
+    let overrides = match store.certificate_overrides(&scope.organization_id).await {
+        Ok(overrides) => overrides,
+        Err(_) => {
+            return public_error(
+                StatusCode::SERVICE_UNAVAILABLE,
+                "Certificate storage is unavailable.",
+            )
+        }
+    };
+    let certificate = overrides
+        .get("services")
+        .and_then(|services| services.get(&service_id))
+        .filter(|attachment| attachment.get("cert_pem").and_then(Value::as_str).is_some())
+        .unwrap_or(&service);
+    if certificate
+        .get("cert_pem")
+        .and_then(Value::as_str)
+        .is_none_or(str::is_empty)
+    {
+        return public_error(
+            StatusCode::NOT_FOUND,
+            &format!("No certificate stored for service '{service_id}'."),
+        );
+    }
+    Json(json!({
+        "service_id": service_id,
+        "cert_pem": certificate.get("cert_pem"),
+        "cert_chain_pem": certificate.get("cert_chain_pem").cloned().unwrap_or_else(|| json!("")),
+        "cert_expires_at": certificate.get("cert_expires_at"),
+    }))
+    .into_response()
+}
+
+async fn store_public_service_certificate(
+    State(state): State<AppState>,
+    Path(service_id): Path<String>,
+    Query(scope): Query<OrganizationScope>,
+    Json(input): Json<ServiceCertificateRequest>,
+) -> Response {
+    if let Err(error) =
+        validate_service_scope(&scope.organization_id, input.organization_id.as_deref())
+    {
+        return error.into_response();
+    }
+    if input.cert_pem.trim().is_empty() {
+        return public_error(StatusCode::BAD_REQUEST, "cert_pem is required.");
+    }
+    let service =
+        match registered_certificate_service(&state, &scope.organization_id, &service_id).await {
+            Ok(service) => service,
+            Err(error) => return error.into_response(),
+        };
+    let public_jwk = match current_service_public_jwk(&service).await {
+        Ok((_, jwk)) => jwk,
+        Err(error) => return error.into_response(),
+    };
+    let Some(store) = state.document_store.as_ref() else {
+        return public_error(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "Certificate storage is unavailable.",
+        );
+    };
+    let attachment = match store
+        .store_certificate(
+            &scope.organization_id,
+            &service_id,
+            InspectCertificateRequest {
+                cert_pem: input.cert_pem,
+                cert_chain_pem: input.cert_chain_pem,
+                expected_public_jwk: Some(public_jwk),
+            },
+        )
+        .await
+    {
+        Ok(attachment) => attachment,
+        Err(error) => return document_error(error).into_response(),
+    };
+    let certificate = json!({
+        "cert_pem": attachment.cert_pem,
+        "cert_chain_pem": attachment.cert_chain_pem,
+        "cert_expires_at": attachment.cert_expires_at,
+    });
+    let display_pem = attachment.cert_pem.chars().take(100).collect::<String>();
+    Json(json!({
+        "ok": true,
+        "service_id": service_id,
+        "cert_pem": if attachment.cert_pem.chars().count() > 100 { format!("{display_pem}...") } else { display_pem },
+        "cert_expires_at": attachment.cert_expires_at,
+        "stored_at": attachment.updated_at,
+        "service": service_certificate_projection(&service, &certificate),
+    }))
+    .into_response()
+}
+
+async fn generate_public_service_csr(
+    State(state): State<AppState>,
+    Path(service_id): Path<String>,
+    Query(scope): Query<OrganizationScope>,
+    Json(input): Json<ServiceCsrRequest>,
+) -> Response {
+    if let Err(error) =
+        validate_service_scope(&scope.organization_id, input.organization_id.as_deref())
+    {
+        return error.into_response();
+    }
+    let service =
+        match registered_certificate_service(&state, &scope.organization_id, &service_id).await {
+            Ok(service) => service,
+            Err(error) => return error.into_response(),
+        };
+    let (mut service_config, public_jwk) = match current_service_public_jwk(&service).await {
+        Ok(result) => result,
+        Err(error) => return error.into_response(),
+    };
+    let algorithm = match public_jwk.get("crv").and_then(Value::as_str) {
+        Some("P-256") => "ES256",
+        Some("P-384") => "ES384",
+        Some("P-521") => "ES512",
+        _ => {
+            return public_error(
+                StatusCode::UNPROCESSABLE_ENTITY,
+                "The service KMS key cannot sign an X.509 CSR.",
+            )
+        }
+    };
+    let csr = match certificate_csr::prepare(
+        &public_jwk,
+        algorithm,
+        &CsrSubject {
+            country: &input.country,
+            organization: &input.organization,
+            common_name: &input.common_name,
+        },
+    ) {
+        Ok(csr) => csr,
+        Err(error) => return public_error(StatusCode::UNPROCESSABLE_ENTITY, &error.to_string()),
+    };
+    service_config["algorithm"] = json!(algorithm);
+    let signed = match kms::sign(SignRequest {
+        service_config,
+        payload_b64: URL_SAFE_NO_PAD.encode(csr.signing_bytes()),
+    })
+    .await
+    {
+        Ok(signed) => signed,
+        Err(_) => {
+            return public_error(
+                StatusCode::SERVICE_UNAVAILABLE,
+                "The service KMS could not sign the CSR.",
+            )
+        }
+    };
+    if signed.signature_encoding != "der" {
+        return public_error(
+            StatusCode::BAD_GATEWAY,
+            "The service KMS returned an incompatible CSR signature.",
+        );
+    }
+    let signature = match URL_SAFE_NO_PAD.decode(signed.signature_b64) {
+        Ok(signature) => signature,
+        Err(_) => {
+            return public_error(
+                StatusCode::BAD_GATEWAY,
+                "The service KMS returned an invalid CSR signature.",
+            )
+        }
+    };
+    let csr_pem = match csr.finish(&signature) {
+        Ok(pem) => pem,
+        Err(_) => {
+            return public_error(
+                StatusCode::BAD_GATEWAY,
+                "The service KMS CSR signature did not verify.",
+            )
+        }
+    };
+    Json(json!({
+        "ok": true,
+        "service_id": service_id,
+        "csr_pem": csr_pem,
+        "generated_at": chrono::Utc::now().to_rfc3339(),
+    }))
+    .into_response()
 }
 
 async fn enroll_public_csca_certificate(
@@ -2356,6 +2713,13 @@ async fn openapi() -> Json<serde_json::Value> {
             "/v1/signing-keys/issuer-identities/certificate-csr": {
                 "put": {"summary": "Generate KMS-backed Certificate Request for Passport Issuer Identity", "responses": {"200": {"description": "Public PKCS#10 request signed in managed custody"}}}
             },
+            "/v1/signing-keys/services/{service_id}/certificate": {
+                "get": {"summary": "Read Registered Service Certificate", "responses": {"200": {"description": "Public certificate and chain"}}},
+                "put": {"summary": "Store Registered Service Certificate", "responses": {"200": {"description": "Certificate checked against current KMS public key"}}}
+            },
+            "/v1/signing-keys/services/{service_id}/certificate-csr": {
+                "post": {"summary": "Generate Registered Service CSR", "responses": {"200": {"description": "PKCS#10 request signed by the configured KMS key"}}}
+            },
             "/v1/signing-keys/service-status": {"get": {"summary": "Signing Keys Service Extraction Status", "responses": {"200": {"description": "Successful Response"}}}},
             "/v1/signing-keys/config/purposes": {"get": {"summary": "List Available Key Purposes", "responses": {"200": {"description": "Successful Response"}}}},
             "/v1/signing-keys/config/service-capabilities": {"get": {"summary": "List Provider Capability Metadata", "responses": {"200": {"description": "Successful Response"}}}}
@@ -2497,6 +2861,127 @@ mod public_contract_tests {
         forbidden["key_reference"] = json!("caller-selected-key");
         let response = router_with_internal_api_key("test-only".into())
             .oneshot(request(forbidden))
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::UNPROCESSABLE_ENTITY);
+    }
+
+    #[test]
+    fn service_certificate_contract_rejects_caller_custody_coordinates() {
+        let behavior: Value = serde_json::from_str(include_str!(
+            "../../../../contracts/signing-service-certificate-behavior.json"
+        ))
+        .unwrap();
+        assert_eq!(behavior["routes"].as_array().unwrap().len(), 3);
+        let upload = json!({"cert_pem": "public certificate", "cert_chain_pem": "public chain"});
+        assert!(serde_json::from_value::<ServiceCertificateRequest>(upload.clone()).is_ok());
+        for field in ["key_reference", "private_key", "expected_public_jwk"] {
+            let mut forged = upload.clone();
+            forged[field] = json!("attacker-selected-key");
+            assert!(serde_json::from_value::<ServiceCertificateRequest>(forged).is_err());
+        }
+        let csr = json!({
+            "country": "US", "organization": "ElevenID Beta", "common_name": "Signing Service"
+        });
+        assert!(serde_json::from_value::<ServiceCsrRequest>(csr.clone()).is_ok());
+        let mut forged = csr;
+        forged["key_reference"] = json!("attacker-selected-key");
+        assert!(serde_json::from_value::<ServiceCsrRequest>(forged).is_err());
+        assert!(validate_service_scope("org-a", Some("org-b")).is_err());
+    }
+
+    #[test]
+    fn service_certificate_projection_never_leaks_kms_coordinates() {
+        let service = json!({
+            "id": "service-a", "name": "Signer", "service_type": "openbao-transit",
+            "key_reference": "secret-key-name", "auth_reference": "secret-token",
+            "endpoint": "https://private-kms.example", "private_key": "forbidden"
+        });
+        let certificate = json!({
+            "cert_pem": "public certificate", "cert_chain_pem": "public chain",
+            "cert_expires_at": "2030-01-01T00:00:00Z"
+        });
+        let projection = service_certificate_projection(&service, &certificate);
+        let serialized = projection.to_string();
+        for forbidden in [
+            "secret-key-name",
+            "secret-token",
+            "private-kms",
+            "forbidden",
+        ] {
+            assert!(!serialized.contains(forbidden));
+        }
+        assert_eq!(projection["cert_pem"], "public certificate");
+    }
+
+    #[test]
+    fn service_certificate_uses_one_registered_key_without_caller_selection() {
+        let fixed =
+            json!({"key_reference": "service-primary", "key_aliases": ["service-secondary"]});
+        assert_eq!(
+            service_certificate_key_config(&fixed).unwrap()["key_reference"],
+            "service-primary"
+        );
+        let one_alias = json!({"key_reference": "", "key_aliases": ["service-only"]});
+        assert_eq!(
+            service_certificate_key_config(&one_alias).unwrap()["key_reference"],
+            "service-only"
+        );
+        let ambiguous = json!({"key_reference": "", "key_aliases": ["service-a", "service-b"]});
+        assert!(service_certificate_key_config(&ambiguous).is_err());
+    }
+
+    #[tokio::test]
+    async fn service_certificate_routes_reject_custody_fields_before_storage() {
+        let request = |method: &str, path: &str, body: Value| {
+            Request::builder()
+                .method(method)
+                .uri(format!(
+                    "/v1/signing-keys/services/service-a/{path}?organization_id=org-a"
+                ))
+                .header("content-type", "application/json")
+                .body(Body::from(body.to_string()))
+                .unwrap()
+        };
+        let router = router_with_internal_api_key("test-only".into());
+        let response = router
+            .clone()
+            .oneshot(request("PUT", "certificate", json!({"cert_pem": "public"})))
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
+        let response = router
+            .clone()
+            .oneshot(request("PUT", "certificate", json!({})))
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+        let response = router
+            .clone()
+            .oneshot(request(
+                "PUT",
+                "certificate",
+                json!({"cert_pem": "public", "key_reference": "forged"}),
+            ))
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::UNPROCESSABLE_ENTITY);
+        let response = router
+            .clone()
+            .oneshot(request(
+                "POST",
+                "certificate-csr",
+                json!({
+                    "country": "US", "organization": "Test", "common_name": "Test"
+                }),
+            ))
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
+        let response = router
+            .oneshot(request("POST", "certificate-csr", json!({
+                "country": "US", "organization": "Test", "common_name": "Test", "private_key": "forged"
+            })))
             .await
             .unwrap();
         assert_eq!(response.status(), StatusCode::UNPROCESSABLE_ENTITY);
