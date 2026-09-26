@@ -759,6 +759,30 @@ async fn passport_jobs_survive_restart_without_cross_tenant_reads() {
         Some("bureau accepted the job")
     );
     assert!(metadata_filled.updated_at > queued_replay.updated_at);
+    let printing_body = serde_json::to_vec(&serde_json::json!({
+        "organization_id": "org-a", "bureau_job_id": "bureau-a", "status": "PRINTING",
+        "tracking_number": "   "
+    }))
+    .unwrap();
+    let mut printing_mac = Hmac::<Sha256>::new_from_slice(secret.as_bytes()).unwrap();
+    printing_mac.update(&printing_body);
+    let printing_event = bureau
+        .parse_webhook(
+            &printing_body,
+            &hex::encode(printing_mac.finalize().into_bytes()),
+        )
+        .unwrap();
+    let printing = restarted
+        .apply_verified_webhook(&printing_event, next + chrono::Duration::seconds(3))
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(printing.status, "IN_PRODUCTION");
+    assert_eq!(
+        printing.tracking_number.as_deref(),
+        Some("submitted-tracking")
+    );
+    assert_eq!(printing.error_message, None);
     let body = serde_json::to_vec(&serde_json::json!({
         "organization_id": "org-a",
         "bureau_job_id": "bureau-a",
@@ -777,11 +801,11 @@ async fn passport_jobs_survive_restart_without_cross_tenant_reads() {
             .unwrap()
             .unwrap()
             .status,
-        "SUBMITTED"
+        "IN_PRODUCTION"
     );
     let event = bureau.parse_webhook(&body, &signature).unwrap();
     let webhook_updated = restarted
-        .apply_verified_webhook(&event, next)
+        .apply_verified_webhook(&event, next + chrono::Duration::seconds(4))
         .await
         .unwrap()
         .unwrap();
@@ -803,7 +827,7 @@ async fn passport_jobs_survive_restart_without_cross_tenant_reads() {
         )
         .unwrap();
     let delivered_replay = restarted
-        .apply_verified_webhook(&delivered_event, next + chrono::Duration::seconds(2))
+        .apply_verified_webhook(&delivered_event, next + chrono::Duration::seconds(5))
         .await
         .unwrap()
         .unwrap();
@@ -952,6 +976,7 @@ async fn passport_jobs_survive_restart_without_cross_tenant_reads() {
         .unwrap()
         .unwrap();
     assert_eq!(other_updated.organization_id, "org-b");
+    assert_eq!(other_updated.tracking_number.as_deref(), Some("tracking-b"));
     assert_eq!(
         restarted
             .get(&org_b, "application-b")

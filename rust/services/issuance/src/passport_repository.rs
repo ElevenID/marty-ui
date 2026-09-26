@@ -300,11 +300,11 @@ impl PostgresPassportRepository {
             return Ok(None);
         };
         let current_status: &str = matched.try_get("status")?;
+        let current_tracking: Option<String> = matched.try_get("tracking_number")?;
         let incoming_status = event.status().issuance_status();
         let metadata = if current_status == incoming_status
             && !matches!(current_status, "ACTIVE" | "FAILED" | "CANCELLED")
         {
-            let current_tracking: Option<String> = matched.try_get("tracking_number")?;
             let current_error: Option<String> = matched.try_get("error_message")?;
             fill_missing_bureau_metadata(
                 current_tracking.as_deref(),
@@ -314,7 +314,11 @@ impl PostgresPassportRepository {
             )
         } else if should_apply_bureau_status(current_status, incoming_status) {
             Some((
-                event.tracking_number().map(str::to_owned),
+                event
+                    .tracking_number()
+                    .filter(|number| !number.trim().is_empty())
+                    .map(str::to_owned)
+                    .or(current_tracking),
                 event.error_message().map(str::to_owned),
             ))
         } else {
