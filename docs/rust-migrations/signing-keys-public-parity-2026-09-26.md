@@ -50,6 +50,9 @@ upload/read tests are still required before cutover acceptance. A fourth
 local adapter now restores `GET /config/certificate-expiry-alerts` using the
 existing Rust alert kernel and the stored service-certificate override, with
 its response frozen in `contracts/signing-certificate-alerts-behavior.json`.
-Thus 20 declared pairs remain without local public handlers. The alert route
-also needs an authenticated through-Gateway runtime test. The
+The local `GET /jwks` adapter now exposes only public verification fields from
+the tenant's stored JWKS and strips legacy custody coordinates. Its behavior
+is frozen in `contracts/signing-public-jwks-behavior.json`. Thus 19 declared
+pairs remain without local public handlers. The alert and JWKS routes also
+need authenticated through-Gateway runtime tests. The
 24-pair table above remains the protected-main audit baseline.
