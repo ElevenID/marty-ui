@@ -37,6 +37,7 @@ NATIVE_ONLY = {
     "ENVIRONMENT": "${ENVIRONMENT:-development}",
     "ISSUANCE_GRPC_ENABLED": "true",
     "PASSPORT_NATIVE_HTTP_ENABLED": "${PASSPORT_NATIVE_HTTP_ENABLED:-false}",
+    "PASSPORT_MANAGED_ISSUER_SIGNING_ENABLED": "${PASSPORT_MANAGED_ISSUER_SIGNING_ENABLED:-false}",
     "PASSPORT_TENANT_API_KEYS": "${PASSPORT_TENANT_API_KEYS:-}",
     "PASSPORT_TENANT_API_KEYS_FILE": "${PASSPORT_TENANT_API_KEYS_FILE:-}",
     "MARTY_RELEASE_VERSION": "${MARTY_RELEASE_VERSION:-development}",
@@ -208,6 +209,10 @@ def expected_model(baseline, *, local, authcrypt, inputs, policy_directory):
             "ENVIRONMENT": inputs.get("ENVIRONMENT") or "development",
             "ISSUANCE_GRPC_ENABLED": "true",
             "PASSPORT_NATIVE_HTTP_ENABLED": inputs.get("PASSPORT_NATIVE_HTTP_ENABLED")
+            or "false",
+            "PASSPORT_MANAGED_ISSUER_SIGNING_ENABLED": inputs.get(
+                "PASSPORT_MANAGED_ISSUER_SIGNING_ENABLED"
+            )
             or "false",
             "PASSPORT_TENANT_API_KEYS": inputs.get("PASSPORT_TENANT_API_KEYS") or "",
             "PASSPORT_TENANT_API_KEYS_FILE": inputs.get("PASSPORT_TENANT_API_KEYS_FILE")

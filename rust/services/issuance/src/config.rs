@@ -19,6 +19,7 @@ use crate::canvas_network_timeout::CanvasNetworkTimeout;
 #[derive(Clone, Eq, PartialEq)]
 pub struct PassportNativeConfig {
     pub enabled: bool,
+    pub managed_issuer_signing_enabled: bool,
     pub artifact_key: Option<String>,
     pub signer_url: Option<String>,
     pub signer_api_key: Option<String>,
@@ -33,6 +34,10 @@ impl std::fmt::Debug for PassportNativeConfig {
         formatter
             .debug_struct("PassportNativeConfig")
             .field("enabled", &self.enabled)
+            .field(
+                "managed_issuer_signing_enabled",
+                &self.managed_issuer_signing_enabled,
+            )
             .field("artifact_key_configured", &self.artifact_key.is_some())
             .field("signer_url_configured", &self.signer_url.is_some())
             .field("signer_api_key_configured", &self.signer_api_key.is_some())
@@ -58,6 +63,7 @@ impl PassportNativeConfig {
         if !enabled {
             return Ok(Self {
                 enabled,
+                managed_issuer_signing_enabled: false,
                 artifact_key: None,
                 signer_url: None,
                 signer_api_key: None,
@@ -77,6 +83,10 @@ impl PassportNativeConfig {
         };
         let config = Self {
             enabled,
+            managed_issuer_signing_enabled: environment_flag(
+                values,
+                "PASSPORT_MANAGED_ISSUER_SIGNING_ENABLED",
+            ),
             artifact_key: secret_value(values, "PHYSICAL_DOCUMENT_ARTIFACT_KEY")?,
             signer_url: configured("ICAO_DOCUMENT_SIGNER_URL"),
             signer_api_key: secret_value(values, "ICAO_DOCUMENT_SIGNER_API_KEY")?,
@@ -85,6 +95,14 @@ impl PassportNativeConfig {
             bureau_webhook_secret: secret_value(values, "PERSONALIZATION_BUREAU_WEBHOOK_SECRET")?,
             self_signed_test_enabled,
         };
+        if config.managed_issuer_signing_enabled
+            && (config.signer_url.is_some() || config.self_signed_test_enabled)
+        {
+            return Err(MmfError::new(
+                ErrorCode::Configuration,
+                "managed passport issuer signing cannot be combined with remote or self-signed signing",
+            ));
+        }
         if config.self_signed_test_enabled && config.signer_url.is_none() {
             #[cfg(not(feature = "passport-self-signed-test"))]
             return Err(MmfError::new(
@@ -1570,6 +1588,7 @@ mod tests {
     fn native_passport_is_default_off_and_requires_tenant_auth_with_redacted_configuration() {
         let config = IssuanceServiceConfig::from_values(Vec::new()).unwrap();
         assert!(!config.passport_native.enabled);
+        assert!(!config.passport_native.managed_issuer_signing_enabled);
         assert!(config.passport_native.artifact_key.is_none());
         let disabled = IssuanceServiceConfig::from_values(values(&[(
             "PHYSICAL_DOCUMENT_ARTIFACT_KEY_FILE",
@@ -1640,6 +1659,27 @@ mod tests {
         assert!(anonymous.passport_native.signer_api_key.is_none());
         assert!(anonymous.passport_native.bureau_api_key.is_none());
         assert!(anonymous.passport_native.bureau_webhook_secret.is_none());
+    }
+
+    #[test]
+    fn managed_passport_signing_is_explicit_and_excludes_legacy_signers() {
+        let tenant_keys = format!("{{\"org-a\":\"{}\"}}", "a".repeat(32));
+        let values = values(&[
+            ("PASSPORT_NATIVE_HTTP_ENABLED", "true"),
+            ("PASSPORT_MANAGED_ISSUER_SIGNING_ENABLED", "true"),
+            ("PASSPORT_TENANT_API_KEYS", &tenant_keys),
+        ]);
+        let config = IssuanceServiceConfig::from_values(values.clone()).unwrap();
+        assert!(config.passport_native.managed_issuer_signing_enabled);
+        let mut conflicting = values;
+        conflicting.push((
+            "ICAO_DOCUMENT_SIGNER_URL".into(),
+            "https://signer.example.test".into(),
+        ));
+        assert!(IssuanceServiceConfig::from_values(conflicting)
+            .unwrap_err()
+            .to_string()
+            .contains("cannot be combined"));
     }
 
     #[test]

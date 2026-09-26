@@ -140,6 +140,16 @@ and pool maximum at five in the current main; this slice adds no knobs for them.
 
 ### Base-only fields retained on their actual legacy owner
 
+This section records the first native-issuance landing slice, not the later
+passport cutover. The native passport candidate can now opt into
+`PASSPORT_MANAGED_ISSUER_SIGNING_ENABLED=true`: each job supplies an
+organization-scoped public `issuer_did`, resolves its profile-bound DSC, and
+asks the existing signing-keys service to sign an opaque CMS input with its
+KMS-held key. The switch defaults off and cannot be combined with a remote or
+self-signed signer. It does **not** authorize beta activation while artifact
+encryption, callback authentication, bureau handoff, and CSCA trust checks
+remain on their separate cutover gates.
+
 The excluded set is exact and guarded; exclusion does not mean feature deletion:
 
 - `BAO_ADDR`, `BAO_TOKEN`: legacy custody configuration. Native uses its existing

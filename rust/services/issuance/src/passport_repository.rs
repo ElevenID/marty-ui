@@ -88,6 +88,7 @@ pub struct PassportJobInsert {
     pub delivery_destination_profile_id: String,
     pub document_type: String,
     pub country_code: String,
+    pub issuer_did: Option<String>,
     pub secure_artifact_ciphertext: String,
     pub secure_artifact_reference: String,
 }
@@ -104,6 +105,7 @@ pub struct PassportJob {
     pub delivery_destination_profile_id: String,
     pub document_type: String,
     pub country_code: String,
+    pub issuer_did: Option<String>,
     pub secure_artifact_ciphertext: String,
     pub secure_artifact_reference: String,
     pub sod_sha256: Option<String>,
@@ -140,10 +142,10 @@ impl PostgresPassportRepository {
             "INSERT INTO issuance_service.physical_document_jobs (
                 id, organization_id, flow_execution_id, application_id,
                 application_template_id, credential_template_id, revocation_profile_id,
-                delivery_destination_profile_id, document_type, country_code,
+                delivery_destination_profile_id, document_type, country_code, issuer_did,
                 secure_artifact_ciphertext, secure_artifact_reference, status,
                 created_at, updated_at
-            ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,'DRAFT',$13,$13)
+            ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,'DRAFT',$14,$14)
             RETURNING *",
         )
         .bind(&job.id)
@@ -156,6 +158,7 @@ impl PostgresPassportRepository {
         .bind(&job.delivery_destination_profile_id)
         .bind(&job.document_type)
         .bind(&job.country_code)
+        .bind(&job.issuer_did)
         .bind(&job.secure_artifact_ciphertext)
         .bind(&job.secure_artifact_reference)
         .bind(now)
@@ -296,6 +299,7 @@ fn row_to_job(row: &PgRow) -> Result<PassportJob, sqlx::Error> {
         delivery_destination_profile_id: row.try_get("delivery_destination_profile_id")?,
         document_type: row.try_get("document_type")?,
         country_code: row.try_get("country_code")?,
+        issuer_did: row.try_get("issuer_did")?,
         secure_artifact_ciphertext: row.try_get("secure_artifact_ciphertext")?,
         secure_artifact_reference: row.try_get("secure_artifact_reference")?,
         sod_sha256: row.try_get("sod_sha256")?,

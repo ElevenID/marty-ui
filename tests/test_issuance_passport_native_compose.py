@@ -51,6 +51,10 @@ def test_compose_exposes_both_passport_selectors_without_enabling_them() -> None
             native["PASSPORT_NATIVE_HTTP_ENABLED"]
             == "${PASSPORT_NATIVE_HTTP_ENABLED:-false}"
         )
+        assert (
+            native["PASSPORT_MANAGED_ISSUER_SIGNING_ENABLED"]
+            == "${PASSPORT_MANAGED_ISSUER_SIGNING_ENABLED:-false}"
+        )
         for key in (
             "PASSPORT_TENANT_API_KEYS",
             "PASSPORT_TENANT_API_KEYS_FILE",

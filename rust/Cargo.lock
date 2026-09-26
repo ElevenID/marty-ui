@@ -291,14 +291,30 @@ version = "0.5.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "7f6fd5ddaf0351dff5b8da21b2fb4ff8e08ddd02857f0bf69c47639106c0fff0"
 dependencies = [
- "asn1-rs-derive",
- "asn1-rs-impl",
+ "asn1-rs-derive 0.4.0",
+ "asn1-rs-impl 0.1.0",
  "bitvec 1.1.1",
  "displaydoc",
  "nom 7.1.3",
  "num-traits",
  "rusticata-macros",
  "thiserror 1.0.69",
+]
+
+[[package]]
+name = "asn1-rs"
+version = "0.7.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "b7f43a50ac4fdca5df8e885c21b835997f0a1cdee65494a6847694a98652d9d8"
+dependencies = [
+ "asn1-rs-derive 0.6.0",
+ "asn1-rs-impl 0.2.0",
+ "displaydoc",
+ "nom 7.1.3",
+ "num-traits",
+ "rusticata-macros",
+ "thiserror 2.0.20",
+ "time",
 ]
 
 [[package]]
@@ -314,6 +330,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "asn1-rs-derive"
+version = "0.6.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "3109e49b1e4909e9db6515a30c633684d68cdeaa252f215214cb4fa1a5bfee2c"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "syn 2.0.119",
+ "synstructure 0.13.2",
+]
+
+[[package]]
 name = "asn1-rs-impl"
 version = "0.1.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -322,6 +350,17 @@ dependencies = [
  "proc-macro2",
  "quote",
  "syn 1.0.109",
+]
+
+[[package]]
+name = "asn1-rs-impl"
+version = "0.2.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "7b18050c2cd6fe86c3a76584ef5e0baf286d038cda203eb6223df2cc413565f7"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "syn 2.0.119",
 ]
 
 [[package]]
@@ -479,6 +518,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "ce2b2dcc879c3bae0d371e77c99f2238400ef24ec001394befa67b6e543add9e"
 dependencies = [
  "aws-lc-sys",
+ "untrusted 0.7.1",
  "zeroize",
 ]
 
@@ -1002,7 +1042,7 @@ version = "0.8.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "08807e080ed7f9d5433fa9b275196cfc35414f66a0c79d864dc51a0d825231a3"
 dependencies = [
- "bit-vec",
+ "bit-vec 0.8.0",
 ]
 
 [[package]]
@@ -1010,6 +1050,15 @@ name = "bit-vec"
 version = "0.8.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "5e764a1d40d510daf35e07be9eb06e75770908c27d411ee6c92109c9840eaaf7"
+
+[[package]]
+name = "bit-vec"
+version = "0.9.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "b71798fca2c1fe1086445a7258a4bc81e6e49dcd24c8d0dd9a1e57395b603f51"
+dependencies = [
+ "serde",
+]
 
 [[package]]
 name = "bit_field"
@@ -1941,6 +1990,20 @@ dependencies = [
  "const-oid 0.10.2",
  "pem-rfc7468 1.0.0",
  "zeroize",
+]
+
+[[package]]
+name = "der-parser"
+version = "10.0.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "07da5016415d5a3c4dd39b11ed26f915f52fc4e0dc197d87908bc916e51bc1a6"
+dependencies = [
+ "asn1-rs 0.7.2",
+ "displaydoc",
+ "nom 7.1.3",
+ "num-bigint",
+ "num-traits",
+ "rusticata-macros",
 ]
 
 [[package]]
@@ -3472,7 +3535,7 @@ dependencies = [
  "aes",
  "aes-gcm",
  "anyhow",
- "asn1-rs",
+ "asn1-rs 0.5.2",
  "async-signature",
  "base64 0.13.1",
  "ciborium",
@@ -4386,6 +4449,31 @@ dependencies = [
 ]
 
 [[package]]
+name = "marty-crypto"
+version = "0.2.0"
+source = "git+https://github.com/ElevenID/marty-core?rev=83cdaeb5657679a256b7b605178a222157e2d486#83cdaeb5657679a256b7b605178a222157e2d486"
+dependencies = [
+ "base64 0.22.1",
+ "chrono",
+ "const-oid 0.9.6",
+ "der 0.7.10",
+ "ecdsa 0.16.9",
+ "ed25519-dalek",
+ "elliptic-curve 0.13.8",
+ "hex",
+ "p256 0.13.2",
+ "p384 0.13.1",
+ "p521 0.13.3",
+ "rsa",
+ "serde",
+ "serde_json",
+ "sha2 0.10.9",
+ "spki 0.7.3",
+ "thiserror 2.0.20",
+ "x509-cert",
+]
+
+[[package]]
 name = "marty-deployment-profile"
 version = "0.1.0"
 dependencies = [
@@ -4468,6 +4556,21 @@ dependencies = [
 ]
 
 [[package]]
+name = "marty-emrtd-issuance"
+version = "0.2.0"
+source = "git+https://github.com/ElevenID/marty-core?rev=83cdaeb5657679a256b7b605178a222157e2d486#83cdaeb5657679a256b7b605178a222157e2d486"
+dependencies = [
+ "cms",
+ "const-oid 0.9.6",
+ "der 0.7.10",
+ "marty-crypto 0.2.0",
+ "sha2 0.10.9",
+ "spki 0.7.3",
+ "thiserror 2.0.20",
+ "x509-cert",
+]
+
+[[package]]
 name = "marty-event-stream"
 version = "0.1.0"
 dependencies = [
@@ -4503,7 +4606,7 @@ dependencies = [
  "futures-core",
  "http 1.5.0",
  "jsonwebtoken",
- "marty-crypto",
+ "marty-crypto 0.1.61",
  "marty-didcomm",
  "marty-iso18013",
  "marty-oid4vci",
@@ -4590,7 +4693,7 @@ dependencies = [
  "hex",
  "image",
  "isomdl",
- "marty-crypto",
+ "marty-crypto 0.1.61",
  "marty-types",
  "qrcode",
  "rand 0.8.7",
@@ -4631,6 +4734,7 @@ dependencies = [
  "jsonwebtoken",
  "log",
  "marty-didcomm",
+ "marty-emrtd-issuance",
  "marty-flow",
  "marty-gateway",
  "marty-oid4vci",
@@ -4647,11 +4751,13 @@ dependencies = [
  "num-bigint",
  "num-traits",
  "p256 0.13.2",
+ "p384 0.13.1",
  "percent-encoding",
  "prost",
  "protoc-bin-vendored",
  "rand 0.8.7",
  "rand 0.9.5",
+ "rcgen",
  "regex",
  "reqwest",
  "rsa",
@@ -4729,7 +4835,7 @@ dependencies = [
  "ed25519-dalek",
  "isomdl",
  "jsonwebtoken",
- "marty-crypto",
+ "marty-crypto 0.1.61",
  "p256 0.13.2",
  "p384 0.13.1",
  "rand 0.8.7",
@@ -4825,7 +4931,7 @@ dependencies = [
  "base64 0.22.1",
  "chrono",
  "hex",
- "marty-crypto",
+ "marty-crypto 0.1.61",
  "marty-oid4vci",
  "marty-verification",
  "mmf-core",
@@ -4929,7 +5035,7 @@ dependencies = [
  "base64 0.22.1",
  "chrono",
  "http 1.5.0",
- "marty-crypto",
+ "marty-crypto 0.1.61",
  "marty-verification",
  "percent-encoding",
  "redis",
@@ -5027,7 +5133,7 @@ dependencies = [
  "hmac 0.12.1",
  "iref",
  "isomdl",
- "marty-crypto",
+ "marty-crypto 0.1.61",
  "marty-oid4vci",
  "p256 0.13.2",
  "p384 0.13.1",
@@ -5624,6 +5730,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "oid-registry"
+version = "0.8.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "12f40cff3dde1b6087cc5d5f5d4d65712f34016a03ed60e9c08dcc392736b5b7"
+dependencies = [
+ "asn1-rs 0.7.2",
+]
+
+[[package]]
 name = "once_cell"
 version = "1.21.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -5734,7 +5849,7 @@ dependencies = [
  "lazy_static",
  "rc2",
  "sha1 0.10.7",
- "yasna",
+ "yasna 0.5.2",
 ]
 
 [[package]]
@@ -6736,6 +6851,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "rcgen"
+version = "0.14.9"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "091e7a8e7d86e6feb87a27ce8e2cba29d49eff9507afeebefab7eeb2ca667fb4"
+dependencies = [
+ "aws-lc-rs",
+ "rustls-pki-types",
+ "time",
+ "x509-parser",
+ "yasna 0.6.0",
+]
+
+[[package]]
 name = "rdf-types"
 version = "0.22.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -6936,7 +7064,7 @@ dependencies = [
  "cfg-if",
  "getrandom 0.2.17",
  "libc",
- "untrusted",
+ "untrusted 0.9.0",
  "windows-sys 0.52.0",
 ]
 
@@ -7078,7 +7206,7 @@ dependencies = [
  "aws-lc-rs",
  "ring",
  "rustls-pki-types",
- "untrusted",
+ "untrusted 0.9.0",
 ]
 
 [[package]]
@@ -9315,6 +9443,12 @@ checksum = "6889a77d49f1f013504cec6bf97a2c730394adedaeb1deb5ea08949a50541105"
 
 [[package]]
 name = "untrusted"
+version = "0.7.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "a156c684c91ea7d62626509bce3cb4e1d9ed5c4d978f7b4352658f96a4c26b4a"
+
+[[package]]
+name = "untrusted"
 version = "0.9.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "8ecb6da28b8a351d773b68d5825ac39017e680750f980f3a1a85cd8dd28a47c1"
@@ -9792,6 +9926,24 @@ dependencies = [
 ]
 
 [[package]]
+name = "x509-parser"
+version = "0.18.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "d43b0f71ce057da06bc0851b23ee24f3f86190b07203dd8f567d0b706a185202"
+dependencies = [
+ "asn1-rs 0.7.2",
+ "aws-lc-rs",
+ "data-encoding",
+ "der-parser",
+ "lazy_static",
+ "nom 7.1.3",
+ "oid-registry",
+ "rusticata-macros",
+ "thiserror 2.0.20",
+ "time",
+]
+
+[[package]]
 name = "xmlparser"
 version = "0.13.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -9835,6 +9987,16 @@ name = "yasna"
 version = "0.5.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "e17bb3549cc1321ae1296b9cdc2698e2b6cb1992adfa19a8c72e5b7a738f44cd"
+
+[[package]]
+name = "yasna"
+version = "0.6.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "b5f6765e852b9b4dc8e2a76843e4d64d1cea8e79bcde0b6901aea8e7c7f08282"
+dependencies = [
+ "bit-vec 0.9.1",
+ "time",
+]
 
 [[package]]
 name = "yoke"
