@@ -6,7 +6,12 @@ use std::{collections::BTreeMap, time::Duration};
 
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use base64::{engine::general_purpose::STANDARD, Engine as _};
+use marty_crypto::certificate::{load_certificate_der, load_certificate_pem};
 use marty_emrtd_issuance::{prepare_sod, SodSignatureAlgorithm};
+use marty_verification::{
+    trust_anchor::CscaRegistry,
+    verification::emrtd::{verify_dsc_chain, ChainStatus, DocumentSignerCertificate},
+};
 use num_bigint::BigUint;
 use num_traits::ToPrimitive;
 use reqwest::{Client, Url};
@@ -52,12 +57,14 @@ pub enum SignerError {
     ManagedUnavailable,
     #[error("Managed passport issuer returned invalid signing material")]
     InvalidManagedMaterial,
+    #[error("Document signer certificate is not trusted by an active organization CSCA")]
+    UntrustedDsc,
 }
 
 #[derive(Clone)]
 pub enum PassportSigner {
     Remote(RemoteSigner),
-    Managed(ManagedProfileSigner),
+    Managed(Box<ManagedProfileSigner>),
     #[cfg(feature = "passport-self-signed-test")]
     SelfSignedTest,
 }
@@ -101,6 +108,7 @@ impl PassportSigner {
             Self::Managed(managed) => {
                 managed
                     .sign(
+                        country_code,
                         organization,
                         issuer_did.ok_or(SignerError::MissingIssuerDid)?,
                         data_groups,
@@ -168,6 +176,66 @@ fn self_signed_test_sign(
 pub struct ManagedProfileSigner {
     resolver: HttpIssuerContextResolver,
     signer: HttpDidSigner,
+    trust: CscaTrustAnchorClient,
+}
+
+#[derive(Clone)]
+struct CscaTrustAnchorClient {
+    client: Client,
+    endpoint: Url,
+    api_key: Option<String>,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ActiveCscaTrustAnchor {
+    certificate_id: String,
+    certificate_data: String,
+    status: String,
+}
+
+impl CscaTrustAnchorClient {
+    fn new(mut base_url: Url, api_key: Option<&str>) -> Result<Self, SignerError> {
+        let path = format!(
+            "{}/csca-trust-anchors",
+            base_url.path().trim_end_matches('/')
+        );
+        base_url.set_path(&path);
+        base_url.set_query(None);
+        base_url.set_fragment(None);
+        Ok(Self {
+            client: Client::builder()
+                .timeout(Duration::from_secs(15))
+                .redirect(reqwest::redirect::Policy::none())
+                .build()
+                .map_err(|_| SignerError::ManagedUnavailable)?,
+            endpoint: base_url,
+            api_key: api_key.map(str::to_owned),
+        })
+    }
+
+    async fn active(
+        &self,
+        organization_id: &str,
+    ) -> Result<Vec<ActiveCscaTrustAnchor>, SignerError> {
+        let mut request = self
+            .client
+            .get(self.endpoint.clone())
+            .query(&[("organization_id", organization_id)]);
+        if let Some(api_key) = self.api_key.as_deref() {
+            request = request.header("X-API-Key", api_key);
+        }
+        let response = request
+            .send()
+            .await
+            .map_err(|_| SignerError::ManagedUnavailable)?
+            .error_for_status()
+            .map_err(|_| SignerError::ManagedUnavailable)?;
+        response
+            .json::<Vec<ActiveCscaTrustAnchor>>()
+            .await
+            .map_err(|_| SignerError::InvalidManagedMaterial)
+    }
 }
 
 impl ManagedProfileSigner {
@@ -179,13 +247,15 @@ impl ManagedProfileSigner {
                 Duration::from_secs(15),
             )
             .map_err(|_| SignerError::ManagedUnavailable)?,
-            signer: HttpDidSigner::new(base_url, api_key, Duration::from_secs(30))
+            signer: HttpDidSigner::new(base_url.clone(), api_key, Duration::from_secs(30))
                 .map_err(|_| SignerError::ManagedUnavailable)?,
+            trust: CscaTrustAnchorClient::new(base_url, api_key)?,
         })
     }
 
     pub async fn sign(
         &self,
+        country_code: &str,
         organization_id: &str,
         issuer_did: &str,
         data_groups: &BTreeMap<BigUint, String>,
@@ -233,6 +303,12 @@ impl ManagedProfileSigner {
         let certificate_der = STANDARD
             .decode(leaf)
             .map_err(|_| SignerError::InvalidManagedMaterial)?;
+        let trusted_csca = trusted_csca_for_dsc(
+            &certificate_der,
+            country_code,
+            chain.get(1).and_then(Value::as_str),
+            &self.trust.active(organization_id).await?,
+        )?;
         let groups = data_groups
             .iter()
             .map(|(number, content)| {
@@ -272,13 +348,64 @@ impl ManagedProfileSigner {
         Ok(SignedMaterial {
             sod_der_base64: STANDARD.encode(sod),
             dsc_cert_pem: pem_certificate(leaf),
-            csca_cert_pem: chain.get(1).and_then(Value::as_str).map(pem_certificate),
+            csca_cert_pem: Some(trusted_csca),
         })
     }
 }
 
+fn trusted_csca_for_dsc(
+    dsc_der: &[u8],
+    country_code: &str,
+    supplied_csca: Option<&str>,
+    anchors: &[ActiveCscaTrustAnchor],
+) -> Result<String, SignerError> {
+    let certificate =
+        load_certificate_der(dsc_der).map_err(|_| SignerError::InvalidManagedMaterial)?;
+    let dsc = DocumentSignerCertificate {
+        serial_number: certificate.tbs_certificate.serial_number.to_string(),
+        certificate,
+        country: Some(country_code.to_owned()),
+    };
+    let supplied_csca = supplied_csca
+        .map(|encoded| STANDARD.decode(encoded))
+        .transpose()
+        .map_err(|_| SignerError::InvalidManagedMaterial)?;
+    for anchor in anchors {
+        if anchor.status != "VALID" || anchor.certificate_id.trim().is_empty() {
+            return Err(SignerError::InvalidManagedMaterial);
+        }
+        let der = load_certificate_pem(&anchor.certificate_data)
+            .map_err(|_| SignerError::InvalidManagedMaterial)?;
+        if supplied_csca
+            .as_ref()
+            .is_some_and(|supplied| supplied != &der)
+        {
+            continue;
+        }
+        let mut registry = CscaRegistry::new();
+        registry
+            .add_country_csca(
+                country_code,
+                load_certificate_der(&der).map_err(|_| SignerError::InvalidManagedMaterial)?,
+            )
+            .map_err(|_| SignerError::InvalidManagedMaterial)?;
+        if matches!(verify_dsc_chain(&dsc, &registry), Ok(ChainStatus::Valid)) {
+            return Ok(anchor.certificate_data.clone());
+        }
+    }
+    Err(SignerError::UntrustedDsc)
+}
+
 fn pem_certificate(encoded: &str) -> String {
-    format!("-----BEGIN CERTIFICATE-----\n{encoded}\n-----END CERTIFICATE-----\n")
+    let mut pem = String::from("-----BEGIN CERTIFICATE-----\n");
+    for (index, character) in encoded.chars().enumerate() {
+        if index > 0 && index % 64 == 0 {
+            pem.push('\n');
+        }
+        pem.push(character);
+    }
+    pem.push_str("\n-----END CERTIFICATE-----\n");
+    pem
 }
 
 fn cms_signature(
@@ -374,10 +501,16 @@ impl RemoteSigner {
 
 #[cfg(test)]
 mod tests {
-    use std::sync::{Arc, Mutex};
+    use std::{
+        collections::HashMap,
+        sync::{
+            atomic::{AtomicBool, Ordering},
+            Arc, Mutex,
+        },
+    };
 
     use axum::{
-        extract::State,
+        extract::{Query, State},
         http::{HeaderMap, StatusCode},
         routing::{get, post},
         Json, Router,
@@ -386,10 +519,41 @@ mod tests {
         ecdsa::{signature::Signer, Signature, SigningKey},
         pkcs8::DecodePrivateKey,
     };
-    use rcgen::{CertificateParams, DnType, KeyPair, PKCS_ECDSA_P256_SHA256};
+    use rcgen::{
+        BasicConstraints, CertificateParams, DnType, IsCa, Issuer, KeyPair, KeyUsagePurpose,
+        PKCS_ECDSA_P256_SHA256,
+    };
     use serde_json::{json, Value};
 
     use super::*;
+
+    fn synthetic_dsc_chain() -> (String, String, String, SigningKey) {
+        let mut csca = CertificateParams::default();
+        csca.is_ca = IsCa::Ca(BasicConstraints::Unconstrained);
+        csca.key_usages = vec![KeyUsagePurpose::KeyCertSign, KeyUsagePurpose::CrlSign];
+        csca.distinguished_name
+            .push(DnType::CommonName, "Synthetic CSCA");
+        csca.distinguished_name.push(DnType::CountryName, "US");
+        let csca_key = KeyPair::generate_for(&PKCS_ECDSA_P256_SHA256).unwrap();
+        let csca_certificate = csca.self_signed(&csca_key).unwrap();
+        let issuer = Issuer::from_params(&csca, &csca_key);
+
+        let mut dsc = CertificateParams::default();
+        dsc.is_ca = IsCa::ExplicitNoCa;
+        dsc.key_usages = vec![KeyUsagePurpose::DigitalSignature];
+        dsc.distinguished_name
+            .push(DnType::CommonName, "Synthetic Passport DSC");
+        dsc.distinguished_name.push(DnType::CountryName, "US");
+        let dsc_key = KeyPair::generate_for(&PKCS_ECDSA_P256_SHA256).unwrap();
+        let dsc_certificate = dsc.signed_by(&dsc_key, &issuer).unwrap();
+        let csca_b64 = STANDARD.encode(csca_certificate.der());
+        (
+            STANDARD.encode(dsc_certificate.der()),
+            csca_b64.clone(),
+            pem_certificate(&csca_b64),
+            SigningKey::from_pkcs8_der(dsc_key.serialized_der()).unwrap(),
+        )
+    }
 
     #[test]
     fn cms_normalizes_jose_ecdsa_signatures_without_accepting_malformed_bytes() {
@@ -418,13 +582,57 @@ mod tests {
         ));
     }
 
+    #[test]
+    fn managed_dsc_requires_a_matching_active_csca_and_chain() {
+        let (dsc_b64, csca_b64, csca_pem, _) = synthetic_dsc_chain();
+        let dsc = STANDARD.decode(dsc_b64).unwrap();
+        let active = ActiveCscaTrustAnchor {
+            certificate_id: "csca-1".into(),
+            certificate_data: csca_pem.clone(),
+            status: "VALID".into(),
+        };
+        assert_eq!(
+            trusted_csca_for_dsc(&dsc, "USA", Some(&csca_b64), &[active]).unwrap(),
+            csca_pem
+        );
+        assert!(matches!(
+            trusted_csca_for_dsc(&dsc, "USA", None, &[]),
+            Err(SignerError::UntrustedDsc)
+        ));
+        let revoked = ActiveCscaTrustAnchor {
+            certificate_id: "csca-1".into(),
+            certificate_data: csca_pem.clone(),
+            status: "REVOKED".into(),
+        };
+        assert!(matches!(
+            trusted_csca_for_dsc(&dsc, "USA", None, &[revoked]),
+            Err(SignerError::InvalidManagedMaterial)
+        ));
+        assert!(matches!(
+            trusted_csca_for_dsc(
+                &dsc,
+                "USA",
+                Some(&STANDARD.encode([0, 1, 2])),
+                &[ActiveCscaTrustAnchor {
+                    certificate_id: "csca-1".into(),
+                    certificate_data: csca_pem,
+                    status: "VALID".into(),
+                }]
+            ),
+            Err(SignerError::UntrustedDsc)
+        ));
+    }
+
     #[tokio::test]
     async fn managed_signer_uses_profile_dsc_and_provider_native_signature() {
         #[derive(Clone)]
         struct ManagedMock {
             dsc_b64: String,
+            csca_b64: String,
+            csca_pem: String,
             signer: SigningKey,
             requests: Arc<Mutex<Vec<Value>>>,
+            trust_available: Arc<AtomicBool>,
         }
         async fn resolve(State(state): State<ManagedMock>, headers: HeaderMap) -> Json<Value> {
             assert_eq!(headers["x-api-key"], "existing-internal-auth");
@@ -436,8 +644,25 @@ mod tests {
                 "algorithm": "ES256",
                 "verification_method_id": "did:web:issuer.example:orgs:org-1#dsc",
                 "issuer_profile": {"credential_format": "ICAO_EMRTD"},
-                "issuer_x5c": [state.dsc_b64]
+                "issuer_x5c": [state.dsc_b64, state.csca_b64]
             }))
+        }
+        async fn trust(
+            State(state): State<ManagedMock>,
+            Query(query): Query<HashMap<String, String>>,
+            headers: HeaderMap,
+        ) -> Json<Value> {
+            assert_eq!(headers["x-api-key"], "existing-internal-auth");
+            assert_eq!(
+                query.get("organization_id").map(String::as_str),
+                Some("org-1")
+            );
+            if !state.trust_available.load(Ordering::SeqCst) {
+                return Json(json!([]));
+            }
+            Json(
+                json!([{"certificate_id": "csca-1", "certificate_data": state.csca_pem, "status": "VALID"}]),
+            )
         }
         async fn sign(
             State(state): State<ManagedMock>,
@@ -461,19 +686,18 @@ mod tests {
                 "signature_raw_b64": URL_SAFE_NO_PAD.encode([0_u8; 64])
             }))
         }
-        let mut parameters = CertificateParams::default();
-        parameters
-            .distinguished_name
-            .push(DnType::CommonName, "Synthetic Passport DSC");
-        let key = KeyPair::generate_for(&PKCS_ECDSA_P256_SHA256).unwrap();
-        let certificate = parameters.self_signed(&key).unwrap();
+        let (dsc_b64, csca_b64, csca_pem, signer) = synthetic_dsc_chain();
         let state = ManagedMock {
-            dsc_b64: STANDARD.encode(certificate.der()),
-            signer: SigningKey::from_pkcs8_der(key.serialized_der()).unwrap(),
+            dsc_b64,
+            csca_b64,
+            csca_pem,
+            signer,
             requests: Arc::new(Mutex::new(Vec::new())),
+            trust_available: Arc::new(AtomicBool::new(true)),
         };
         let app = Router::new()
             .route("/internal/signing-keys/resolve-issuer-did", get(resolve))
+            .route("/internal/signing-keys/csca-trust-anchors", get(trust))
             .route("/internal/signing-keys/issuer-dids/sign", post(sign))
             .with_state(state.clone());
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
@@ -489,20 +713,37 @@ mod tests {
             (BigUint::from(2u8), "Ag==".into()),
         ]);
         let signed = signer
-            .sign("org-1", "did:web:issuer.example:orgs:org-1", &groups)
+            .sign("USA", "org-1", "did:web:issuer.example:orgs:org-1", &groups)
             .await
             .unwrap();
         let sod = STANDARD.decode(&signed.sod_der_base64).unwrap();
         assert!(marty_verification::asn1::sod::verify_sod_signature(&sod).unwrap());
-        assert!(signed.dsc_cert_pem.contains(&state.dsc_b64));
-        let requests = state.requests.lock().unwrap();
-        assert_eq!(requests.len(), 1);
         assert_eq!(
-            requests[0]["issuer_did"],
-            "did:web:issuer.example:orgs:org-1"
+            load_certificate_pem(&signed.dsc_cert_pem).unwrap(),
+            STANDARD.decode(&state.dsc_b64).unwrap()
         );
-        assert_eq!(requests[0]["key_purpose"], "x509_doc_signer");
-        assert_eq!(requests[0]["credential_format"], "ICAO_EMRTD");
+        assert_eq!(
+            signed.csca_cert_pem.as_deref(),
+            Some(state.csca_pem.as_str())
+        );
+        {
+            let requests = state.requests.lock().unwrap();
+            assert_eq!(requests.len(), 1);
+            assert_eq!(
+                requests[0]["issuer_did"],
+                "did:web:issuer.example:orgs:org-1"
+            );
+            assert_eq!(requests[0]["key_purpose"], "x509_doc_signer");
+            assert_eq!(requests[0]["credential_format"], "ICAO_EMRTD");
+        }
+        state.trust_available.store(false, Ordering::SeqCst);
+        assert!(matches!(
+            signer
+                .sign("USA", "org-1", "did:web:issuer.example:orgs:org-1", &groups)
+                .await,
+            Err(SignerError::UntrustedDsc)
+        ));
+        assert_eq!(state.requests.lock().unwrap().len(), 1);
         server.abort();
     }
 
@@ -533,7 +774,7 @@ mod tests {
         let groups = BTreeMap::from([(BigUint::from(1u8), "AQ==".into())]);
         assert!(matches!(
             signer
-                .sign("org-1", "did:web:issuer.example:orgs:org-1", &groups)
+                .sign("USA", "org-1", "did:web:issuer.example:orgs:org-1", &groups)
                 .await,
             Err(SignerError::InvalidManagedMaterial)
         ));
@@ -581,7 +822,7 @@ mod tests {
             let groups = BTreeMap::from([(BigUint::from(1u8), "AQ==".into())]);
             assert!(matches!(
                 signer
-                    .sign("org-1", "did:web:issuer.example:orgs:org-1", &groups)
+                    .sign("USA", "org-1", "did:web:issuer.example:orgs:org-1", &groups)
                     .await,
                 Err(SignerError::InvalidManagedMaterial)
             ));

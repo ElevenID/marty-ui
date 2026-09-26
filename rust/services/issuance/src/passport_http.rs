@@ -90,10 +90,12 @@ impl PassportHttpService {
             },
         };
         let signer = if native.managed_issuer_signing_enabled {
-            Some(PassportSigner::Managed(ManagedProfileSigner::new(
-                config.signing_keys_internal_url.clone(),
-                config.signing_keys_internal_api_key.as_deref(),
-            )?))
+            Some(PassportSigner::Managed(Box::new(
+                ManagedProfileSigner::new(
+                    config.signing_keys_internal_url.clone(),
+                    config.signing_keys_internal_api_key.as_deref(),
+                )?,
+            )))
         } else if let Some(url) = native.signer_url.as_deref() {
             Some(PassportSigner::Remote(RemoteSigner::new(
                 url,
@@ -375,9 +377,10 @@ impl IntoResponse for PassportHttpError {
             | Self::Signer(SignerError::ManagedUnavailable)
             | Self::MissingBureau => StatusCode::SERVICE_UNAVAILABLE,
             Self::Signer(SignerError::InvalidManagedMaterial) => StatusCode::BAD_GATEWAY,
-            Self::QualityNotReady | Self::ActivationNotReady | Self::ConcurrentChange => {
-                StatusCode::CONFLICT
-            }
+            Self::Signer(SignerError::UntrustedDsc)
+            | Self::QualityNotReady
+            | Self::ActivationNotReady
+            | Self::ConcurrentChange => StatusCode::CONFLICT,
             Self::Bureau(BureauError::InvalidWebhookSignature) => StatusCode::UNAUTHORIZED,
             Self::Bureau(BureauError::InvalidWebhookEvent) => StatusCode::UNPROCESSABLE_ENTITY,
             Self::InvalidArtifact
