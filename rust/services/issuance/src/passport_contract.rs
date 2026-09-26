@@ -83,6 +83,9 @@ fn python_base64_error(content: &str) -> String {
 #[serde(deny_unknown_fields)]
 pub struct PassportApplicationRequest {
     pub organization_id: String,
+    /// Public DID selector; managed custody coordinates remain internal.
+    #[serde(default)]
+    pub issuer_did: Option<String>,
     pub flow_execution_id: String,
     pub application_template_id: String,
     pub credential_template_id: String,
@@ -172,6 +175,14 @@ impl PassportApplicationRequest {
             }
         }
         dictionary_field(fields, "applicant", &mut errors);
+        if let Some(value) = fields.get("issuer_did") {
+            if !value.is_null() && !value.is_string() {
+                errors.push(json!({
+                    "type": "string_type", "loc": ["body", "issuer_did"],
+                    "msg": "Input should be a valid string", "input": value,
+                }));
+            }
+        }
         string_dictionary_field(fields, "mrz", mrz_order, &mut errors);
         if let Some(groups) =
             string_dictionary_field(fields, "data_groups", data_group_order, &mut errors)
@@ -206,6 +217,7 @@ impl PassportApplicationRequest {
             if !matches!(
                 name.as_str(),
                 "organization_id"
+                    | "issuer_did"
                     | "flow_execution_id"
                     | "application_template_id"
                     | "credential_template_id"
@@ -586,6 +598,8 @@ pub struct PassportSafeResponse<'a> {
     pub delivery_destination_profile_id: &'a str,
     pub document_type: &'a str,
     pub country_code: &'a str,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub issuer_did: Option<&'a str>,
     pub secure_artifact_reference: &'a str,
     pub bureau_job_id: Option<&'a str>,
     pub tracking_number: Option<&'a str>,
@@ -610,6 +624,7 @@ impl<'a> From<&'a PassportJob> for PassportSafeResponse<'a> {
             delivery_destination_profile_id: &job.delivery_destination_profile_id,
             document_type: &job.document_type,
             country_code: &job.country_code,
+            issuer_did: job.issuer_did.as_deref(),
             secure_artifact_reference: &job.secure_artifact_reference,
             bureau_job_id: job.bureau_job_id.as_deref(),
             tracking_number: job.tracking_number.as_deref(),
@@ -723,6 +738,15 @@ mod tests {
         assert_eq!(
             numbered.get(&BigUint::from(1u8)).map(String::as_str),
             Some("YQ==")
+        );
+        assert!(request.issuer_did.is_none());
+        let mut managed = application();
+        managed["issuer_did"] = json!("did:web:issuer.example:orgs:org-1");
+        let managed = PassportApplicationRequest::from_python_value(&managed, None, None, None)
+            .expect("new public DID selector is accepted");
+        assert_eq!(
+            managed.issuer_did.as_deref(),
+            Some("did:web:issuer.example:orgs:org-1")
         );
     }
 
@@ -900,7 +924,7 @@ mod tests {
         let now = DateTime::parse_from_rfc3339("2026-09-25T06:01:02.123456+00:00")
             .unwrap()
             .with_timezone(&Utc);
-        let job = PassportJob {
+        let mut job = PassportJob {
             id: "job-1".into(),
             organization_id: "org-1".into(),
             flow_execution_id: "flow-1".into(),
@@ -911,6 +935,7 @@ mod tests {
             delivery_destination_profile_id: "destination-1".into(),
             document_type: "TD3".into(),
             country_code: "USA".into(),
+            issuer_did: None,
             secure_artifact_ciphertext: "secret-ciphertext".into(),
             secure_artifact_reference: "physical-artifact://job-1".into(),
             sod_sha256: Some("secret-sod".into()),
@@ -952,6 +977,9 @@ mod tests {
         ] {
             assert!(!serialized.to_string().contains(secret));
         }
+        job.issuer_did = Some("did:web:issuer.example:orgs:org-1".into());
+        let selected = serde_json::to_value(PassportSafeResponse::from(&job)).unwrap();
+        assert_eq!(selected["issuer_did"], "did:web:issuer.example:orgs:org-1");
     }
 
     #[test]

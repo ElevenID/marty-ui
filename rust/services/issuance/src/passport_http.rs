@@ -34,7 +34,9 @@ use crate::{
         PassportJob, PassportJobInsert, PassportJobPatch, PassportJobStatus,
         PassportWebhookRepositoryError, PostgresPassportRepository,
     },
-    passport_signer::{PassportSigner, RemoteSigner, SignedMaterial, SignerError},
+    passport_signer::{
+        ManagedProfileSigner, PassportSigner, RemoteSigner, SignedMaterial, SignerError,
+    },
 };
 
 #[derive(Clone)]
@@ -87,7 +89,12 @@ impl PassportHttpService {
                 }
             },
         };
-        let signer = if let Some(url) = native.signer_url.as_deref() {
+        let signer = if native.managed_issuer_signing_enabled {
+            Some(PassportSigner::Managed(ManagedProfileSigner::new(
+                config.signing_keys_internal_url.clone(),
+                config.signing_keys_internal_api_key.as_deref(),
+            )?))
+        } else if let Some(url) = native.signer_url.as_deref() {
             Some(PassportSigner::Remote(RemoteSigner::new(
                 url,
                 native.signer_api_key.as_deref().unwrap_or_default(),
@@ -258,7 +265,12 @@ impl PassportHttpService {
             .map_err(|_| PassportHttpError::InvalidArtifact)?;
         let signed = self
             .signer()?
-            .sign(&job.country_code, &job.organization_id, &data_groups)
+            .sign_for_identity(
+                &job.country_code,
+                &job.organization_id,
+                job.issuer_did.as_deref(),
+                &data_groups,
+            )
             .await
             .map_err(PassportHttpError::Signer)?;
         Ok((artifact, signed))
@@ -353,12 +365,16 @@ impl IntoResponse for PassportHttpError {
                 | PassportTenantAuthError::InvalidKey,
             ) => StatusCode::UNAUTHORIZED,
             Self::OrganizationMismatch => StatusCode::FORBIDDEN,
-            Self::InvalidRequest(_) | Self::MissingDataGroups => StatusCode::UNPROCESSABLE_ENTITY,
+            Self::InvalidRequest(_)
+            | Self::MissingDataGroups
+            | Self::Signer(SignerError::MissingIssuerDid) => StatusCode::UNPROCESSABLE_ENTITY,
             Self::ApplicationNotFound | Self::WebhookJobNotFound => StatusCode::NOT_FOUND,
             Self::MissingArtifactKey
             | Self::InvalidArtifactKey
             | Self::Signer(SignerError::NotConfigured)
+            | Self::Signer(SignerError::ManagedUnavailable)
             | Self::MissingBureau => StatusCode::SERVICE_UNAVAILABLE,
+            Self::Signer(SignerError::InvalidManagedMaterial) => StatusCode::BAD_GATEWAY,
             Self::QualityNotReady | Self::ActivationNotReady | Self::ConcurrentChange => {
                 StatusCode::CONFLICT
             }
@@ -493,6 +509,14 @@ async fn create_application(
     request
         .validate()
         .map_err(PassportHttpError::InvalidRequest)?;
+    if matches!(service.signer.as_ref(), Some(PassportSigner::Managed(_)))
+        && request
+            .issuer_did
+            .as_deref()
+            .is_none_or(|did| !did.starts_with("did:"))
+    {
+        return Err(PassportHttpError::Signer(SignerError::MissingIssuerDid));
+    }
     let id = Uuid::new_v4().to_string();
     let ciphertext = service
         .cipher()?
@@ -516,6 +540,7 @@ async fn create_application(
                     .expect("document type string")
                     .to_owned(),
                 country_code: request.country_code,
+                issuer_did: request.issuer_did,
                 secure_artifact_ciphertext: ciphertext,
                 secure_artifact_reference: format!("physical-artifact://{id}"),
             },
@@ -1020,6 +1045,30 @@ mod tests {
         let degraded = PassportHttpService::from_config(&degraded, pool.clone())
             .unwrap()
             .unwrap();
+        let managed = IssuanceServiceConfig::from_values(vec![
+            ("PASSPORT_NATIVE_HTTP_ENABLED".into(), "true".into()),
+            (
+                "PASSPORT_MANAGED_ISSUER_SIGNING_ENABLED".into(),
+                "true".into(),
+            ),
+            (
+                "PASSPORT_TENANT_API_KEYS".into(),
+                r#"{"org-1":"passport-tenant-test-key-00000000000001"}"#.into(),
+            ),
+        ])
+        .unwrap();
+        let managed = PassportHttpService::from_config(&managed, pool.clone())
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            managed.signer.as_ref().unwrap().mode(),
+            "MANAGED_ISSUER_PROFILE"
+        );
+        let missing_selector = router(managed)
+            .oneshot(authenticated_application_request())
+            .await
+            .unwrap();
+        assert_eq!(missing_selector.status(), StatusCode::UNPROCESSABLE_ENTITY);
         let contract: Value = serde_json::from_str(include_str!(
             "../../../../contracts/issuance-physical-passport-native.json"
         ))

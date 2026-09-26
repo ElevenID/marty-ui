@@ -362,6 +362,8 @@ impl fmt::Debug for SignRequest {
 
 pub(crate) struct SignResponse {
     pub(crate) signature_b64: String,
+    /// Provider-native signature (DER for ECDSA), retained for CMS callers.
+    pub(crate) signature_native_b64: Option<String>,
 }
 
 impl fmt::Debug for SignResponse {
@@ -369,6 +371,7 @@ impl fmt::Debug for SignResponse {
         formatter
             .debug_struct("SignResponse")
             .field("signature_b64", &REDACTED_SIGNING_VALUE)
+            .field("signature_native_b64", &REDACTED_SIGNING_VALUE)
             .finish()
     }
 }
@@ -503,12 +506,16 @@ impl DidSigner for HttpDidSigner {
                 "DID-mediated signer exposed private signing routing",
             ));
         }
+        let signature_native_b64 = body.signature_b64.clone().filter(|value| !value.is_empty());
         let signature_b64 = body
             .signature_raw_b64
             .or(body.signature_b64)
             .filter(|value| !value.is_empty())
             .ok_or_else(|| signing_error("DID-mediated signer did not return a signature"))?;
-        Ok(SignResponse { signature_b64 })
+        Ok(SignResponse {
+            signature_b64,
+            signature_native_b64,
+        })
     }
 }
 
@@ -931,6 +938,7 @@ mod tests {
             self.requests.lock().expect("request lock").push(request);
             Ok(SignResponse {
                 signature_b64: URL_SAFE_NO_PAD.encode(signature),
+                signature_native_b64: None,
             })
         }
     }
@@ -950,6 +958,7 @@ mod tests {
         };
         let response = SignResponse {
             signature_b64: signature_secret.to_owned(),
+            signature_native_b64: Some(signature_secret.to_owned()),
         };
 
         let request_debug = format!("{request:?}");
