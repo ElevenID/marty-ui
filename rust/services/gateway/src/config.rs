@@ -2,7 +2,7 @@
 
 use std::{
     collections::BTreeMap,
-    env, fs,
+    env, fmt, fs,
     net::{IpAddr, Ipv4Addr, SocketAddr},
     path::PathBuf,
 };
@@ -94,7 +94,7 @@ const SERVICE_URLS: &[(&str, &str, &str)] = &[
 #[error("invalid gateway configuration: {0}")]
 pub struct GatewayConfigError(String);
 
-#[derive(Clone, Debug)]
+#[derive(Clone)]
 pub struct GatewayConfig {
     pub address: SocketAddr,
     pub production: bool,
@@ -122,6 +122,60 @@ pub struct GatewayConfig {
     pub hosted_pilot_auto_purge_interval_seconds: u64,
     pub hosted_pilot_auto_purge_batch_size: usize,
     pub release_identity: ReleaseIdentity,
+}
+
+// Runtime credentials and connection targets must never enter diagnostic logs.
+impl fmt::Debug for GatewayConfig {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("GatewayConfig")
+            .field("address", &self.address)
+            .field("production", &self.production)
+            .field(
+                "service_names",
+                &self.service_urls.keys().collect::<Vec<_>>(),
+            )
+            .field("grpc_targets_configured", &true)
+            .field("grpc_ca_certificate", &self.grpc_ca_certificate)
+            .field("grpc_insecure_allowed", &self.grpc_insecure_allowed)
+            .field(
+                "grpc_service_token_configured",
+                &self.grpc_service_token.is_some(),
+            )
+            .field("signing_internal_api_key_configured", &true)
+            .field("issuance_api_key_configured", &true)
+            .field(
+                "passport_native_gateway_enabled",
+                &self.passport_native_gateway_enabled,
+            )
+            .field(
+                "passport_tenant_keys_configured",
+                &self.passport_tenant_keys.is_some(),
+            )
+            .field("redis_url_configured", &self.redis_url.is_some())
+            .field("cors_origins", &self.cors_origins)
+            .field("issuer_base_url", &self.issuer_base_url)
+            .field("public_api_url", &self.public_api_url)
+            .field("public_domain", &self.public_domain)
+            .field("default_organization_id", &self.default_organization_id)
+            .field("required_ready_services", &self.required_ready_services)
+            .field("rate_limit_rpm", &self.rate_limit_rpm)
+            .field("maximum_response_bytes", &self.maximum_response_bytes)
+            .field(
+                "hosted_pilot_auto_purge_enabled",
+                &self.hosted_pilot_auto_purge_enabled,
+            )
+            .field(
+                "hosted_pilot_auto_purge_interval_seconds",
+                &self.hosted_pilot_auto_purge_interval_seconds,
+            )
+            .field(
+                "hosted_pilot_auto_purge_batch_size",
+                &self.hosted_pilot_auto_purge_batch_size,
+            )
+            .field("release_identity", &self.release_identity)
+            .finish()
+    }
 }
 
 impl GatewayConfig {
@@ -405,9 +459,16 @@ fn grpc_target(
         format!("http://{value}")
     };
     let parsed = url::Url::parse(&target).map_err(|_| error(format!("{name} is invalid")))?;
-    if !matches!(parsed.scheme(), "http" | "https") || parsed.host_str().is_none() {
+    if !matches!(parsed.scheme(), "http" | "https")
+        || parsed.host_str().is_none()
+        || !parsed.username().is_empty()
+        || parsed.password().is_some()
+        || !matches!(parsed.path(), "" | "/")
+        || parsed.query().is_some()
+        || parsed.fragment().is_some()
+    {
         return Err(error(format!(
-            "{name} must identify an HTTP(S) gRPC endpoint"
+            "{name} must identify a credential-free HTTP(S) gRPC endpoint"
         )));
     }
     Ok(target)
@@ -547,6 +608,52 @@ mod tests {
         );
         values.insert("PASSPORT_NATIVE_GATEWAY_ENABLED".into(), "invalid".into());
         assert!(GatewayConfig::from_values(&values).is_err());
+    }
+
+    #[test]
+    fn grpc_targets_reject_embedded_credentials_without_echoing_them() {
+        for target in [
+            "http://synthetic-private-value@organization:9002",
+            "http://organization:9002/synthetic-private-value",
+            "http://organization:9002?token=synthetic-private-value",
+            "http://organization:9002#synthetic-private-value",
+        ] {
+            let values = BTreeMap::from([("ORG_GRPC_TARGET".into(), target.into())]);
+            let error = GatewayConfig::from_values(&values).unwrap_err();
+            assert!(!error.to_string().contains("synthetic-private-value"));
+        }
+    }
+
+    #[test]
+    fn gateway_config_debug_redacts_runtime_secrets_and_targets() {
+        let values = BTreeMap::from([
+            ("ORG_GRPC_TARGET".into(), "private-organization:9002".into()),
+            (
+                "ORGANIZATION_SERVICE_URL".into(),
+                "http://organization:8002/synthetic-service-path-token".into(),
+            ),
+            ("GRPC_SERVICE_TOKEN".into(), "synthetic-grpc-token".into()),
+            (
+                "SIGNING_KEYS_INTERNAL_API_KEY".into(),
+                "synthetic-signing-key".into(),
+            ),
+            ("ISSUANCE_API_KEY".into(), "synthetic-issuance-key".into()),
+            (
+                "REDIS_URL".into(),
+                "redis://:synthetic-redis-password@localhost:6379".into(),
+            ),
+        ]);
+        let debug = format!("{:?}", GatewayConfig::from_values(&values).unwrap());
+        for secret in [
+            "private-organization",
+            "synthetic-grpc-token",
+            "synthetic-signing-key",
+            "synthetic-issuance-key",
+            "synthetic-redis-password",
+            "synthetic-service-path-token",
+        ] {
+            assert!(!debug.contains(secret));
+        }
     }
 
     #[test]
