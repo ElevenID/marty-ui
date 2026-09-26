@@ -95,6 +95,13 @@ selected here.
    Repair and retest those adapters before describing the aggregate beta
    release as feature-complete; the new passport certificate routes alone do
    not satisfy the no-feature-loss gate.
+   A read-only Redis inventory on 2026-09-26 found zero beta and production
+   managed `cred-issuer-*` bindings or active profiles for `holder_binding`,
+   `presentation_signing`, or `oid4vp_request_signing`. The dedicated managed
+   prefixes can therefore retain purpose isolation without a current legacy
+   generic-prefix migration. Recheck both environments immediately before
+   cutover; if that inventory changes, preserve exact tenant-bound live keys
+   before retiring Python.
 
    Certificate-enrollment follow-up: the current UI has a CSR action for a
    signing service, but this source tree has no matching
