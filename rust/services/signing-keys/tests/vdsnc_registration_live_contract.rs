@@ -75,10 +75,14 @@ async fn public_vdsnc_registration_preserves_registry_and_never_returns_provider
     });
     let (status, response) = register(&app, &organization_id, body).await;
     assert_eq!(status, StatusCode::OK, "{response}");
+    let tenant = Uuid::new_v5(&Uuid::NAMESPACE_URL, organization_id.as_bytes()).simple();
     assert_eq!(response["ok"], true);
     assert_eq!(response["service"]["country_code"], "USA");
     assert_eq!(response["service"]["authority_name"], "Test Bureau");
-    assert_eq!(response["service"]["key_reference"], "cred:vdsnc:USA:dsc:2");
+    assert_eq!(
+        response["service"]["key_reference"],
+        format!("cred:vdsnc:{tenant}:USA:dsc:2")
+    );
     assert_eq!(response["service"]["auth_reference"], "");
     assert_eq!(response["service"]["auth_configured"], true);
     assert_eq!(
@@ -108,7 +112,7 @@ async fn public_vdsnc_registration_preserves_registry_and_never_returns_provider
     assert_eq!(registered["auth_reference"], "provider-secret-never-echo");
     assert_eq!(
         registered["discovered_capabilities"]["vdsnc_namespaced_key_reference"],
-        "cred:vdsnc:USA:dsc:2"
+        format!("cred:vdsnc:{tenant}:USA:dsc:2")
     );
     assert_eq!(registered["discovered_capabilities"]["vdsnc_generation"], 2);
     assert!(
@@ -132,12 +136,26 @@ async fn public_vdsnc_registration_preserves_registry_and_never_returns_provider
     assert_eq!(other_registry["default_service_id"], other["service"]["id"]);
     assert_eq!(other_registry["services"].as_array().unwrap().len(), 1);
 
+    let (status, other_generated) = register(
+        &app,
+        &other_organization_id,
+        json!({"country_code": "USA", "authority_name": "Test Bureau", "generation": 2}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{other_generated}");
+    assert_ne!(
+        other_generated["service"]["key_reference"],
+        response["service"]["key_reference"]
+    );
+
     let before = stored;
     for invalid in [
         json!({"country_code": "U$", "authority_name": "Bureau"}),
         json!({"country_code": "USA", "authority_name": " ", "generation": -1}),
         json!({"country_code": "USA", "authority_name": "Bureau", "private_key": "forged"}),
         json!({"country_code": "USA", "authority_name": "Bureau", "organization_id": other_organization_id}),
+        json!({"country_code": "USA", "authority_name": "Bureau", "service_type": "openbao-transit", "auth_mode": "service_token", "key_reference": "foreign-key"}),
+        json!({"country_code": "USA", "authority_name": "Bureau", "service_type": "openbao-transit", "auth_mode": "invalid-mode", "key_reference": "foreign-key"}),
     ] {
         let (status, response) = register(&app, &organization_id, invalid).await;
         assert!(status.is_client_error(), "{status}: {response}");

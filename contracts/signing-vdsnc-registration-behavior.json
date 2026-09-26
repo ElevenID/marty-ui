@@ -11,7 +11,7 @@
   "defaults": {
     "role": "dsc",
     "generation": 1,
-    "key_reference_format": "cred:vdsnc:{UPPERCASE_COUNTRY}:{lowercase_role}:{generation}",
+    "key_reference_format": "cred:vdsnc:{organization_uuid_v5}:{UPPERCASE_COUNTRY}:{lowercase_role}:{generation}",
     "service_type": "custom-transit-compatible",
     "provider": "custom",
     "mount": "transit",
@@ -29,7 +29,8 @@
   "reviewed_security_tightening": [
     "Only service configuration and an opaque KMS key reference are registered; no private key is created, imported, read, or returned.",
     "Return redacted public service metadata, never auth_reference or private key material.",
-    "Validate country, role, and generation before using them in a KMS reference.",
+    "Validate country, role, and generation before using them in a KMS reference; generated references are organization-namespaced.",
+    "Public VDS-NC registration never selects the process-wide OpenBao service token, including through an invalid auth_mode normalized to service_token. External KMS credentials remain explicit tenant registrations.",
     "Preserve tenant-scoped service registry defaults and existing registrations."
   ]
 }

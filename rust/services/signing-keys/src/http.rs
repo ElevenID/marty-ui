@@ -1872,6 +1872,7 @@ async fn sign_public_service_payload(
 }
 
 fn vdsnc_registration_fields(
+    organization_id: &str,
     input: &PublicVdsncRegistrationRequest,
 ) -> Result<(String, String, String, i64, String), &'static str> {
     let country = input.country_code.trim().to_ascii_uppercase();
@@ -1907,7 +1908,11 @@ fn vdsnc_registration_fields(
         .map(str::trim)
         .filter(|value| !value.is_empty())
         .map(str::to_owned)
-        .unwrap_or_else(|| format!("cred:vdsnc:{country}:{role}:{generation}"));
+        .unwrap_or_else(|| {
+            let tenant =
+                uuid::Uuid::new_v5(&uuid::Uuid::NAMESPACE_URL, organization_id.as_bytes()).simple();
+            format!("cred:vdsnc:{tenant}:{country}:{role}:{generation}")
+        });
     if reference.len() > 512 || reference.chars().any(char::is_control) {
         return Err("key_reference must be an opaque KMS reference of at most 512 bytes.");
     }
@@ -1925,7 +1930,7 @@ async fn register_public_vdsnc_service(
         return error.into_response();
     }
     let (country, authority, role, generation, key_reference) =
-        match vdsnc_registration_fields(&input) {
+        match vdsnc_registration_fields(&scope.organization_id, &input) {
             Ok(fields) => fields,
             Err(message) => return public_error(StatusCode::UNPROCESSABLE_ENTITY, message),
         };
@@ -1974,6 +1979,12 @@ async fn register_public_vdsnc_service(
             )
         }
     };
+    if normalized.get("auth_mode").and_then(Value::as_str) == Some("service_token") {
+        return public_error(
+            StatusCode::UNPROCESSABLE_ENTITY,
+            "VDS-NC registration requires tenant-provided KMS credentials.",
+        );
+    }
     let mut registry = match store.load(&scope.organization_id).await {
         Ok(registry) => registry,
         Err(_) => {
