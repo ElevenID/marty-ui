@@ -139,7 +139,9 @@ export async function getKeyManagementConfig(params = {}) {
 }
 
 /**
- * Update HSM/Vault configuration
+ * Update HSM/Vault configuration. Existing service credentials are never
+ * returned by GET. An empty or omitted auth_reference preserves one only for
+ * the same service connection; send null to clear it or a new value to replace it.
  * @param {Object} config - HSM/Vault configuration
  * @param {boolean} config.hsm_enabled - Whether HSM is enabled
  * @param {Object} config.hsm_settings - HSM connection settings

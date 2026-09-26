@@ -117,7 +117,7 @@ describe('KeyManagementServiceWizard', () => {
 
     await user.type(screen.getByRole('textbox', { name: /service name/i }), 'Production AWS KMS')
     await user.type(screen.getByRole('textbox', { name: /region \/ location/i }), 'us-west-2')
-    await user.type(screen.getByRole('textbox', { name: /credential reference/i }), 'aws-role/signing')
+    await user.type(screen.getByLabelText(/credential reference/i), 'aws-role/signing')
     await user.click(screen.getByRole('button', { name: 'Next' }))
 
     await user.type(screen.getByRole('textbox', { name: /key arn/i }), 'arn:aws:kms:us-west-2:123456789012:key/abc')
@@ -169,7 +169,8 @@ describe('KeyManagementServiceWizard', () => {
     const mountInput = screen.getByRole('textbox', { name: /transit mount/i })
     await user.clear(mountInput)
     await user.type(mountInput, 'marty-transit')
-    await user.type(screen.getByRole('textbox', { name: /credential reference/i }), 'vault-token')
+    await user.type(screen.getByLabelText(/credential reference/i), 'vault-token')
+    expect(screen.getByLabelText(/credential reference/i)).toHaveAttribute('type', 'password')
     await user.click(screen.getByRole('button', { name: 'Next' }))
 
     await user.type(screen.getByRole('textbox', { name: /key reference/i }), 'cred-issuer-prod')
@@ -178,6 +179,8 @@ describe('KeyManagementServiceWizard', () => {
     await waitFor(() => {
       expect(screen.getByRole('heading', { name: 'Review' })).toBeInTheDocument()
     })
+    expect(screen.getByText('Credential reference: Configured (hidden)')).toBeInTheDocument()
+    expect(screen.queryByText(/Credential reference: vault-token/)).not.toBeInTheDocument()
     expect(screen.getByText((content) => content.includes('vault secrets enable -path=marty-transit transit'))).toBeInTheDocument()
     expect(screen.getByText((content) => content.includes('vault write -f marty-transit/keys/cred-issuer-prod type=ecdsa-p256'))).toBeInTheDocument()
 
