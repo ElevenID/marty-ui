@@ -21,6 +21,7 @@
       "method": "POST",
       "path": "/v1/signing-keys/services/{service_id}/certificate-csr",
       "legacy_kms_response": {"status": 501, "error": "kms_csr_generation_unavailable"},
+      "rust_request_fields": ["country", "organization", "common_name"],
       "success_fields": ["ok", "service_id", "csr_pem", "generated_at"]
     }
   ],
@@ -28,6 +29,7 @@
     "organization_from_gateway_trusted_scope": true,
     "certificate_public_key_matches_current_kms_key": true,
     "managed_shared_service_requires_issuer_scoped_certificate": true,
+    "csr_signature_must_verify_against_current_kms_public_key": true,
     "reject_caller_key_reference_or_private_key": true,
     "private_key_export": false
   }
