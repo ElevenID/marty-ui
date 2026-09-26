@@ -1,0 +1,12 @@
+{
+  "schema": "marty.passport-artifact-manifest/v1",
+  "maximum_chunk_bytes": 524288,
+  "maximum_chunks": 4096,
+  "maximum_ciphertext_bytes_per_chunk": 2000000,
+  "encrypted_artifact_shape": {
+    "schema": "marty.passport-artifact-manifest/v1",
+    "chunks": ["vault:v1:synthetic"]
+  },
+  "binding": "Every chunk is bound by the provider to organization_id, passport job id, chunk index, and total chunk count.",
+  "cutover": "Drain or migrate all pending legacy Fernet-encrypted jobs before enabling PASSPORT_KMS_ARTIFACTS_ENABLED. The KMS-only client does not load a Fernet key or decrypt legacy ciphertext."
+}
