@@ -220,10 +220,19 @@ by ID through the Gateway. The beta deployment gate remains.
 All 24 originally missing declared pairs now have local Rust handlers in the
 stacked review branches. A data-driven route-layer test verifies that all 37
 Gateway-declared Signing Keys method/path pairs match Rust public routes and
-do not return method-not-allowed; it does not prove behavioral parity or
-authenticated runtime acceptance for every pair. This is not a merged or
-beta-accepted result. The
-other adapters still need authenticated combined Gateway-to-Rust runtime tests,
-protected CI, re-audit on main, and aggregate beta acceptance before any
-Python retirement or migration-complete claim. The 24-pair table above remains
-the protected-main audit baseline until the stack lands.
+do not return method-not-allowed. An opt-in real Gateway-to-Rust HTTP suite now
+traverses the other 22 restored pairs with session denial, foreign-tenant
+denial, and Rust-specific responses. It verifies successful JWKS PATCH/DELETE,
+holder-key POST, and VDS-NC registration without returning a provider secret.
+The earlier real-upstream test covers managed key POST and detail GET. CI runs
+both opt-in tests against separate disposable Redis databases.
+
+Most remaining service, certificate, publication, discovery, and issuer probes
+currently reach Rust through missing-service or missing-profile responses.
+Their successful end-to-end behavior still needs seeded service/profile,
+certificate, and KMS fixtures through Gateway. The deliberate audit and
+compliance 501 responses retain their frozen unavailable contracts. Protected
+CI, re-audit on main, those success paths, and aggregate beta acceptance
+remain gates before Python retirement or a migration-complete claim. The
+24-pair table above remains the protected-main audit baseline until the stack
+lands.
