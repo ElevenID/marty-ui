@@ -32,8 +32,8 @@ use crate::{
         QualityResultRequest,
     },
     passport_repository::{
-        PassportJob, PassportJobInsert, PassportJobPatch, PassportJobStatus,
-        PassportWebhookRepositoryError, PostgresPassportRepository,
+        should_apply_bureau_status, PassportJob, PassportJobInsert, PassportJobPatch,
+        PassportJobStatus, PassportWebhookRepositoryError, PostgresPassportRepository,
     },
     passport_signer::{
         ManagedProfileSigner, PassportSigner, RemoteSigner, SignedMaterial, SignerError,
@@ -777,7 +777,11 @@ async fn production_status(
         .poll(bureau_job_id)
         .await
         .map_err(PassportHttpError::Bureau)?;
-    let mut patch = PassportJobPatch::new(status_from_bureau(outcome.status));
+    let incoming_status = status_from_bureau(outcome.status);
+    if !should_apply_bureau_status(&job.status, incoming_status.as_str()) {
+        return Ok(Json(safe(&job)));
+    }
+    let mut patch = PassportJobPatch::new(incoming_status);
     patch.tracking_number = Some(
         outcome
             .tracking_number
