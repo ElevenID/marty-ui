@@ -48,6 +48,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use std::sync::Arc;
 use subtle::ConstantTimeEq;
+use tokio::task::JoinSet;
 use tower_http::trace::TraceLayer;
 
 #[derive(Debug, Serialize)]
@@ -133,6 +134,10 @@ pub fn router_with_dependencies(
         .route(
             "/v1/signing-keys/config/validate",
             post(validate_public_service),
+        )
+        .route(
+            "/v1/signing-keys/config/resolve",
+            post(resolve_public_config),
         )
         .route(
             "/v1/signing-keys/config/certificate-expiry-alerts",
@@ -2429,6 +2434,360 @@ async fn mark_service_publication_discovered(
     Ok(())
 }
 
+fn compatible_public_key_algorithms(public_jwk: &Value) -> &'static [&'static str] {
+    match (
+        public_jwk.get("kty").and_then(Value::as_str),
+        public_jwk.get("crv").and_then(Value::as_str),
+    ) {
+        (Some("EC"), Some("P-256")) => &["ES256"],
+        (Some("EC"), Some("P-384")) => &["ES384"],
+        (Some("EC"), Some("P-521")) => &["ES512"],
+        (Some("RSA"), _) => &["RS256", "PS256"],
+        (Some("OKP"), Some("Ed25519")) => &["EdDSA"],
+        _ => &[],
+    }
+}
+
+async fn resolve_public_config(
+    State(state): State<AppState>,
+    Query(scope): Query<OrganizationScope>,
+    body: Option<Json<Value>>,
+) -> Response {
+    if let Err(error) = validate_service_scope(&scope.organization_id, None) {
+        return error.into_response();
+    }
+    let Some(store) = state.registry_store.as_ref() else {
+        return public_error(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "Signing registry is unavailable.",
+        );
+    };
+    let registry = match store.load(&scope.organization_id).await {
+        Ok(registry) => registry,
+        Err(_) => {
+            return public_error(
+                StatusCode::SERVICE_UNAVAILABLE,
+                "Signing registry is unavailable.",
+            )
+        }
+    };
+    let body = body.map(|Json(body)| body).unwrap_or_else(|| json!({}));
+    let field = |name: &str| body.get(name).and_then(Value::as_str).map(str::to_owned);
+    let credential_format = field("credential_format");
+    let key_purpose = field("key_purpose");
+    let algorithm = field("algorithm");
+    let selected = registry::resolve(ResolveRequest {
+        registry: registry.clone(),
+        service: None,
+        keys: Vec::new(),
+        credential_format: nonempty(&credential_format),
+        key_purpose: nonempty(&key_purpose),
+        algorithm: nonempty(&algorithm),
+    });
+    let Some(service) = selected.ok().and_then(|selection| selection.service) else {
+        return public_error(
+            StatusCode::NOT_FOUND,
+            "No registered signing service matches the requested format, purpose, and algorithm.",
+        );
+    };
+    let profiles = if let Some(profiles) = state.profile_store.as_ref() {
+        match profiles
+            .find(
+                &scope.organization_id,
+                FindProfilesRequest {
+                    active_only: true,
+                    ..FindProfilesRequest::default()
+                },
+            )
+            .await
+        {
+            Ok(profiles) => profiles,
+            Err(_) => {
+                return public_error(
+                    StatusCode::SERVICE_UNAVAILABLE,
+                    "Issuer identity storage is unavailable.",
+                )
+            }
+        }
+    } else {
+        Vec::new()
+    };
+    let (keys, discovery_failed) = resolution_keys(
+        &registry,
+        &service,
+        &profiles,
+        nonempty(&key_purpose).as_deref(),
+        nonempty(&algorithm).as_deref(),
+    )
+    .await;
+    let compatible_references = keys
+        .iter()
+        .filter_map(|key| key.get("id").and_then(Value::as_str))
+        .map(str::to_owned)
+        .collect::<std::collections::BTreeSet<_>>();
+    let resolved = match registry::resolve(ResolveRequest {
+        registry,
+        service: Some(service),
+        keys,
+        credential_format: nonempty(&credential_format),
+        key_purpose: nonempty(&key_purpose),
+        algorithm: nonempty(&algorithm),
+    }) {
+        Ok(resolved) => resolved,
+        Err(_) => {
+            return public_error(
+                StatusCode::UNPROCESSABLE_ENTITY,
+                "Signing service resolution failed.",
+            )
+        }
+    };
+    let Some(mut service) = resolved.service else {
+        return public_error(
+            StatusCode::NOT_FOUND,
+            "No registered signing service matches the requested format, purpose, and algorithm.",
+        );
+    };
+    if nonempty(&key_purpose).is_some()
+        && (resolved.key_reference.is_none()
+            || (nonempty(&algorithm).is_some()
+                && !resolved
+                    .key_reference
+                    .as_deref()
+                    .is_some_and(|reference| compatible_references.contains(reference))))
+    {
+        return public_error(
+            if discovery_failed {
+                StatusCode::SERVICE_UNAVAILABLE
+            } else {
+                StatusCode::NOT_FOUND
+            },
+            if discovery_failed {
+                "The signing KMS key inventory is unavailable."
+            } else {
+                "No key reference is bound to the requested purpose and algorithm."
+            },
+        );
+    }
+    if let Some(reference) = resolved.key_reference.as_deref() {
+        service["key_reference"] = json!(reference);
+    }
+    let mdoc_hints = if needs_mdoc_hints(
+        nonempty(&credential_format).as_deref(),
+        nonempty(&key_purpose).as_deref(),
+    ) {
+        match resolved_mdoc_hints(&state, &scope.organization_id, &service).await {
+            Ok(hints) => hints,
+            Err(error) => return error.into_response(),
+        }
+    } else {
+        Value::Null
+    };
+    Json(json!({
+        "service": public_service_config(&service),
+        "resolved_by": {"credential_format": credential_format, "key_purpose": key_purpose, "algorithm": algorithm},
+        "mdoc_signing_hints": mdoc_hints,
+    })).into_response()
+}
+
+fn nonempty(value: &Option<String>) -> Option<String> {
+    value
+        .as_deref()
+        .filter(|value| !value.is_empty())
+        .map(str::to_owned)
+}
+
+fn needs_mdoc_hints(format: Option<&str>, purpose: Option<&str>) -> bool {
+    matches!(format, Some("mso_mdoc" | "zk_mdoc"))
+        || matches!(purpose, Some("mdoc_dsc" | "vdsnc_signing" | "csca"))
+}
+
+fn resolution_references(
+    registry: &Value,
+    service: &Value,
+    profiles: &[Value],
+) -> std::collections::BTreeSet<String> {
+    let mut references = std::collections::BTreeSet::new();
+    let Some(service_id) = service.get("id").and_then(Value::as_str) else {
+        return references;
+    };
+    if let Some(reference) = service
+        .get("key_reference")
+        .and_then(Value::as_str)
+        .filter(|reference| !reference.is_empty())
+    {
+        references.insert(reference.to_owned());
+    }
+    for reference in service
+        .get("key_aliases")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter_map(Value::as_str)
+    {
+        if !reference.is_empty() {
+            references.insert(reference.to_owned());
+        }
+    }
+    if let Some(bound) = registry
+        .get("key_reference_purposes")
+        .and_then(|all| all.get(service_id))
+        .and_then(Value::as_object)
+    {
+        references.extend(
+            bound
+                .keys()
+                .filter(|reference| !reference.is_empty())
+                .cloned(),
+        );
+    }
+    for profile in profiles {
+        if profile.get("signing_service_id").and_then(Value::as_str) == Some(service_id) {
+            if let Some(reference) = profile
+                .get("signing_key_reference")
+                .and_then(Value::as_str)
+                .filter(|reference| !reference.is_empty())
+            {
+                references.insert(reference.to_owned());
+            }
+        }
+    }
+    references
+}
+
+fn queue_key_discovery(
+    tasks: &mut JoinSet<Result<Option<Value>, ()>>,
+    service: &Value,
+    reference: String,
+    requested_algorithm: &str,
+) {
+    let mut config = service.clone();
+    config["key_reference"] = json!(reference);
+    let algorithm = requested_algorithm.to_owned();
+    tasks.spawn(async move {
+        match kms::public_key_existing(ProviderRequest {
+            service_config: config,
+        })
+        .await
+        {
+            Ok(jwk) => {
+                let compatible = compatible_public_key_algorithms(&jwk)
+                    .contains(&algorithm.as_str())
+                    && jwk
+                        .get("alg")
+                        .and_then(Value::as_str)
+                        .is_none_or(|declared| declared == algorithm);
+                Ok(compatible.then(|| json!({"id": reference, "algorithm": algorithm})))
+            }
+            Err(kms::KmsError::ProviderStatus {
+                status: StatusCode::NOT_FOUND,
+                ..
+            }) => Ok(None),
+            Err(_) => Err(()),
+        }
+    });
+}
+
+async fn resolution_keys(
+    registry: &Value,
+    service: &Value,
+    profiles: &[Value],
+    purpose: Option<&str>,
+    algorithm: Option<&str>,
+) -> (Vec<Value>, bool) {
+    let references = resolution_references(registry, service, profiles);
+    if purpose.is_none() || algorithm.is_none() {
+        return (
+            references
+                .into_iter()
+                .map(|reference| json!({"id": reference}))
+                .collect(),
+            false,
+        );
+    }
+    let algorithm = algorithm.expect("checked algorithm");
+    let mut references = references.into_iter();
+    let mut tasks = JoinSet::new();
+    for _ in 0..8 {
+        if let Some(reference) = references.next() {
+            queue_key_discovery(&mut tasks, service, reference, algorithm);
+        }
+    }
+    let mut keys = Vec::new();
+    let mut unavailable = false;
+    while let Some(result) = tasks.join_next().await {
+        match result {
+            Ok(Ok(Some(key))) => keys.push(key),
+            Ok(Ok(None)) => {}
+            _ => unavailable = true,
+        }
+        if let Some(reference) = references.next() {
+            queue_key_discovery(&mut tasks, service, reference, algorithm);
+        }
+    }
+    (keys, unavailable)
+}
+
+async fn resolved_mdoc_hints(
+    state: &AppState,
+    organization_id: &str,
+    service: &Value,
+) -> Result<Value, PublicSigningError> {
+    let Some(service_id) = service.get("id").and_then(Value::as_str) else {
+        return Err(public_failure(
+            StatusCode::BAD_GATEWAY,
+            "Resolved signing service has no identifier.",
+        ));
+    };
+    let overrides = if let Some(store) = state.document_store.as_ref() {
+        store
+            .certificate_overrides(organization_id)
+            .await
+            .map_err(|_| {
+                public_failure(
+                    StatusCode::SERVICE_UNAVAILABLE,
+                    "Certificate storage is unavailable.",
+                )
+            })?
+    } else {
+        json!({})
+    };
+    let Some(certificate) = selected_service_certificate(service, &overrides, service_id) else {
+        return Ok(Value::Null);
+    };
+    let reference = service
+        .get("key_reference")
+        .and_then(Value::as_str)
+        .filter(|reference| !reference.is_empty())
+        .ok_or_else(|| {
+            public_failure(
+                StatusCode::CONFLICT,
+                "An mDoc certificate requires a resolved KMS key reference.",
+            )
+        })?;
+    let public_jwk = kms::public_key_existing(ProviderRequest {
+        service_config: service.clone(),
+    })
+    .await
+    .map_err(|_| {
+        public_failure(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "The service KMS public key is unavailable.",
+        )
+    })?;
+    let public_jwk = documents::sanitize_public_jwk(&public_jwk, None).map_err(|_| {
+        public_failure(
+            StatusCode::BAD_GATEWAY,
+            "The service KMS returned an invalid public key.",
+        )
+    })?;
+    let checked = checked_service_x5c(certificate, &public_jwk, service_id)?;
+    Ok(json!({
+        "x5c": checked["x5c"],
+        "x5c_length": checked["mdoc_cose_header_hints"]["x5c_length"],
+        "key_reference": reference,
+    }))
+}
+
 fn verify_service_key_result(
     service_id: &str,
     service: &Value,
@@ -2449,17 +2808,7 @@ fn verify_service_key_result(
                 .and_then(Value::as_str)
                 .is_some_and(|value| !value.is_empty())
         });
-    let compatible_algorithms: &[&str] = match (
-        public_jwk.get("kty").and_then(Value::as_str),
-        public_jwk.get("crv").and_then(Value::as_str),
-    ) {
-        (Some("EC"), Some("P-256")) => &["ES256"],
-        (Some("EC"), Some("P-384")) => &["ES384"],
-        (Some("EC"), Some("P-521")) => &["ES512"],
-        (Some("RSA"), _) => &["RS256", "PS256"],
-        (Some("OKP"), Some("Ed25519")) => &["EdDSA"],
-        _ => &[],
-    };
+    let compatible_algorithms = compatible_public_key_algorithms(public_jwk);
     let advertised = service.get("algorithms").and_then(Value::as_array);
     let declared = public_jwk.get("alg").and_then(Value::as_str);
     let algorithm_supported = compatible_algorithms.iter().any(|algorithm| {
@@ -4180,6 +4529,13 @@ async fn openapi() -> Json<serde_json::Value> {
             "/v1/signing-keys/config/certificate-expiry-alerts": {
                 "get": {"summary": "Registered Service Certificate Expiry Alerts", "responses": {"200": {"description": "Tenant-scoped alerts using stored certificate overrides"}}}
             },
+            "/v1/signing-keys/config/resolve": {
+                "post": {"summary": "Resolve Registered Signing Service", "responses": {
+                    "200": {"description": "Tenant service and purpose-bound public KMS key selection"},
+                    "404": {"description": "No matching service or purpose-bound key"},
+                    "503": {"description": "Signing registry or KMS public-key inventory unavailable"}
+                }}
+            },
             "/v1/signing-keys/jwks": {
                 "get": {"summary": "Organization Public JWKS", "responses": {"200": {"description": "Public JWKs without KMS custody coordinates"}}}
             },
@@ -4210,6 +4566,102 @@ mod public_contract_tests {
     use super::*;
     use axum::{body::Body, http::Request};
     use tower::ServiceExt;
+
+    #[tokio::test]
+    async fn public_config_resolver_discovers_only_existing_algorithm_compatible_keys() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+
+        assert!(openapi().await.0["paths"]["/v1/signing-keys/config/resolve"]["post"].is_object());
+
+        let writes = Arc::new(AtomicUsize::new(0));
+        let app = Router::new().route(
+            "/v1/transit/keys/{reference}",
+            get(|Path(reference): Path<String>| async move {
+                if reference != "dsc-ed" {
+                    return (StatusCode::NOT_FOUND, Json(json!({}))).into_response();
+                }
+                (StatusCode::OK, Json(json!({
+                    "data": {
+                        "latest_version": 1,
+                        "type": "ed25519",
+                        "keys": {"1": {"name": "ed25519", "public_key": "AQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQE="}}
+                    }
+                }))).into_response()
+            })
+            .post({
+                let writes = Arc::clone(&writes);
+                move || {
+                    let writes = Arc::clone(&writes);
+                    async move {
+                        writes.fetch_add(1, Ordering::SeqCst);
+                        StatusCode::INTERNAL_SERVER_ERROR
+                    }
+                }
+            }),
+        );
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("local KMS fixture");
+        let endpoint = format!("http://{}", listener.local_addr().unwrap());
+        let server = tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+        let service = json!({
+            "id": "managed-openbao-transit", "service_type": "openbao-transit",
+            "endpoint": endpoint, "mount": "transit", "key_reference": "vc-key",
+            "key_aliases": ["dsc-ed"], "auth_reference": "never-echo-this"
+        });
+        let registry = json!({
+            "services": [service], "default_service_id": "managed-openbao-transit",
+            "key_reference_purposes": {
+                "managed-openbao-transit": {"dsc-ed": ["mdoc_dsc"]}
+            }
+        });
+        let service = &registry["services"][0];
+        let (keys, unavailable) =
+            resolution_keys(&registry, service, &[], Some("mdoc_dsc"), Some("EdDSA")).await;
+        assert!(!unavailable);
+        assert_eq!(keys, vec![json!({"id": "dsc-ed", "algorithm": "EdDSA"})]);
+        let selected = registry::resolve(ResolveRequest {
+            registry: registry.clone(),
+            service: Some(service.clone()),
+            keys,
+            credential_format: None,
+            key_purpose: Some("mdoc_dsc".into()),
+            algorithm: Some("EdDSA".into()),
+        })
+        .unwrap();
+        assert_eq!(selected.key_reference.as_deref(), Some("dsc-ed"));
+        assert!(!public_service_config(service)
+            .to_string()
+            .contains("never-echo-this"));
+        let (wrong_algorithm, unavailable) =
+            resolution_keys(&registry, service, &[], Some("mdoc_dsc"), Some("ES256")).await;
+        assert!(!unavailable);
+        assert!(wrong_algorithm.is_empty());
+        assert_eq!(writes.load(Ordering::SeqCst), 0);
+        server.abort();
+    }
+
+    #[test]
+    fn public_config_resolver_hints_only_for_mdoc_formats_and_purposes() {
+        let behavior: Value = serde_json::from_str(include_str!(
+            "../../../../contracts/signing-public-config-resolve-behavior.json"
+        ))
+        .unwrap();
+        assert_eq!(behavior["path"], "/v1/signing-keys/config/resolve");
+        for purpose in behavior["mdoc_hint_triggers"]["key_purposes"]
+            .as_array()
+            .unwrap()
+        {
+            assert!(needs_mdoc_hints(None, purpose.as_str()));
+        }
+        for format in behavior["mdoc_hint_triggers"]["credential_formats"]
+            .as_array()
+            .unwrap()
+        {
+            assert!(needs_mdoc_hints(format.as_str(), None));
+        }
+        assert!(!needs_mdoc_hints(Some("dc+sd-jwt"), Some("vc_jwt_issuer")));
+    }
 
     fn identity(purpose: &str, algorithm: &str) -> IssuerIdentityRequest {
         IssuerIdentityRequest {

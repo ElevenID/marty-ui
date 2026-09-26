@@ -179,17 +179,27 @@ pub async fn sign(request: SignRequest) -> Result<SignResponse, KmsError> {
 }
 
 pub async fn public_key(request: ProviderRequest) -> Result<Value, KmsError> {
+    let managed_openbao = Provider::from_config(&request.service_config)? == Provider::OpenBao
+        && string(&request.service_config, "id") == Some("managed-openbao-transit");
+    match public_key_existing(ProviderRequest {
+        service_config: request.service_config.clone(),
+    })
+    .await
+    {
+        Err(KmsError::ProviderStatus { status, .. })
+            if managed_openbao && status == StatusCode::NOT_FOUND =>
+        {
+            create_managed_openbao_key(&request.service_config).await?;
+            public_key_existing(request).await
+        }
+        result => result,
+    }
+}
+
+/// Read existing public key material without provisioning a missing managed key.
+pub async fn public_key_existing(request: ProviderRequest) -> Result<Value, KmsError> {
     match Provider::from_config(&request.service_config)? {
-        Provider::OpenBao => match public_key_openbao(&request.service_config).await {
-            Err(KmsError::ProviderStatus { status, .. })
-                if status == StatusCode::NOT_FOUND
-                    && string(&request.service_config, "id") == Some("managed-openbao-transit") =>
-            {
-                create_managed_openbao_key(&request.service_config).await?;
-                public_key_openbao(&request.service_config).await
-            }
-            result => result,
-        },
+        Provider::OpenBao => public_key_openbao(&request.service_config).await,
         Provider::Aws => public_key_aws(&request.service_config).await,
         Provider::Azure => public_key_azure(&request.service_config).await,
         Provider::Gcp => public_key_gcp(&request.service_config).await,
@@ -1112,6 +1122,53 @@ fn bounded(value: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn existing_public_key_discovery_never_creates_a_managed_key() {
+        use std::sync::{
+            atomic::{AtomicUsize, Ordering},
+            Arc,
+        };
+
+        let creates = Arc::new(AtomicUsize::new(0));
+        let app = axum::Router::new().route(
+            "/v1/transit/keys/missing-key",
+            axum::routing::get(|| async { StatusCode::NOT_FOUND }).post({
+                let creates = Arc::clone(&creates);
+                move || {
+                    let creates = Arc::clone(&creates);
+                    async move {
+                        creates.fetch_add(1, Ordering::SeqCst);
+                        StatusCode::OK
+                    }
+                }
+            }),
+        );
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("local KMS fixture");
+        let endpoint = format!("http://{}", listener.local_addr().unwrap());
+        let server = tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+        let result = public_key_existing(ProviderRequest {
+            service_config: json!({
+                "id": "managed-openbao-transit",
+                "service_type": "openbao-transit",
+                "endpoint": endpoint,
+                "mount": "transit",
+                "key_reference": "missing-key"
+            }),
+        })
+        .await;
+        server.abort();
+        assert!(matches!(
+            result,
+            Err(KmsError::ProviderStatus {
+                status: StatusCode::NOT_FOUND,
+                ..
+            })
+        ));
+        assert_eq!(creates.load(Ordering::SeqCst), 0);
+    }
 
     #[test]
     fn empty_transit_list_is_distinct_from_missing_mount_and_denied_access() {

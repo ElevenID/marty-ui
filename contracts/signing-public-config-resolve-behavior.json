@@ -16,6 +16,9 @@
   "resolved_by_echoes_optional_request_fields_including_null": true,
   "missing_service_status": 404,
   "missing_purpose_bound_key_status": 404,
+  "kms_inventory_unavailable_status": 503,
+  "algorithm_filter_uses_only_existing_kms_public_key_metadata": true,
+  "resolver_never_provisions_a_missing_managed_key": true,
   "purpose_bound_key_selection": "Prefer the service default when it is bound to the requested purpose and algorithm; otherwise select the first sorted matching alias. Never substitute an unrelated default key.",
   "mdoc_hint_triggers": {
     "key_purposes": ["mdoc_dsc", "vdsnc_signing", "csca"],
