@@ -15,7 +15,7 @@ use marty_signing_keys::{
 use redis::AsyncCommands;
 use serde_json::{json, Value};
 use std::sync::{
-    atomic::{AtomicUsize, Ordering},
+    atomic::{AtomicBool, AtomicUsize, Ordering},
     Arc,
 };
 use tower::ServiceExt;
@@ -43,16 +43,26 @@ async fn resolve(app: &Router, organization_id: &str, body: Value) -> (StatusCod
 async fn public_config_resolve_preserves_selection_and_redacts_kms_credentials() {
     let redis_url = std::env::var("MARTY_TEST_REDIS_URL").expect("disposable Redis URL");
     let writes = Arc::new(AtomicUsize::new(0));
+    let unavailable = Arc::new(AtomicBool::new(false));
     let kms = Router::new().route(
         "/v1/transit/keys/{reference}",
-        get(|Path(reference): Path<String>| async move {
-            if reference != "dsc-ed" {
-                return (StatusCode::NOT_FOUND, Json(json!({}))).into_response();
+        get({
+            let unavailable = Arc::clone(&unavailable);
+            move |Path(reference): Path<String>| {
+                let unavailable = Arc::clone(&unavailable);
+                async move {
+                    if unavailable.load(Ordering::SeqCst) {
+                        return (StatusCode::INTERNAL_SERVER_ERROR, Json(json!({}))).into_response();
+                    }
+                    if reference != "dsc-ed" {
+                        return (StatusCode::NOT_FOUND, Json(json!({}))).into_response();
+                    }
+                    (StatusCode::OK, Json(json!({"data": {
+                        "latest_version": 1, "type": "ed25519",
+                        "keys": {"1": {"name": "ed25519", "public_key": "AQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQE="}}
+                    }}))).into_response()
+                }
             }
-            (StatusCode::OK, Json(json!({"data": {
-                "latest_version": 1, "type": "ed25519",
-                "keys": {"1": {"name": "ed25519", "public_key": "AQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQE="}}
-            }}))).into_response()
         }).post({
             let writes = Arc::clone(&writes);
             move || {
@@ -134,6 +144,37 @@ async fn public_config_resolve_preserves_selection_and_redacts_kms_credentials()
     assert_eq!(
         resolve(&app, &other_organization_id, json!({})).await.0,
         StatusCode::NOT_FOUND
+    );
+    let mut bad_certificate = store.load(&organization_id).await.unwrap();
+    bad_certificate["services"][0]["cert_pem"] = json!("not a certificate");
+    store
+        .save(&organization_id, &bad_certificate)
+        .await
+        .unwrap();
+    assert_eq!(
+        resolve(
+            &app,
+            &organization_id,
+            json!({
+                "credential_format": "mso_mdoc", "key_purpose": "mdoc_dsc", "algorithm": "EdDSA"
+            })
+        )
+        .await
+        .0,
+        StatusCode::BAD_GATEWAY
+    );
+    unavailable.store(true, Ordering::SeqCst);
+    assert_eq!(
+        resolve(
+            &app,
+            &organization_id,
+            json!({
+                "key_purpose": "mdoc_dsc", "algorithm": "EdDSA"
+            })
+        )
+        .await
+        .0,
+        StatusCode::SERVICE_UNAVAILABLE
     );
     assert_eq!(writes.load(Ordering::SeqCst), 0);
 
