@@ -73,6 +73,13 @@ check names while deriving supported algorithms from the current KMS public
 key and registered service policy, including ES384, ES512, PS256, and EdDSA.
 Its response contains no public key or custody coordinates; the behavior is
 frozen in `contracts/signing-service-verify-current-behavior.json`.
-Thus 15 declared pairs remain without local public handlers. These new
+The `POST /services/{service_id}/publish-jwks` adapter fetches the current
+KMS public key, requires any attached certificate to match it, upserts the
+tenant JWKS, and updates service discovery metadata. It rejects caller key
+selection and returns only the public JWK projection. The contract is
+`contracts/signing-service-publish-jwks-behavior.json`. An isolated
+Redis/mock-KMS test passed for publication, public readback, and discovery
+metadata; this is not through-Gateway or beta acceptance.
+Thus 14 declared pairs remain without local public handlers. These new
 adapters still need authenticated through-Gateway runtime tests. The
 24-pair table above remains the protected-main audit baseline.
