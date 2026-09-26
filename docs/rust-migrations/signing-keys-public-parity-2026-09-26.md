@@ -37,7 +37,7 @@ success and error shapes and the stricter managed-service custody rule.
 
 ## Local integration progress (not merged or beta-accepted)
 
-The integration branch now has Rust `GET`/`PUT` service-certificate and `POST`
+This review branch has Rust `GET`/`PUT` service-certificate and `POST`
 service-CSR handlers. The managed shared service is rejected in favor of the
 issuer identity route. Registered-service certificate uploads are matched to
 the current KMS public key, and CSRs are signed by that KMS key and verified

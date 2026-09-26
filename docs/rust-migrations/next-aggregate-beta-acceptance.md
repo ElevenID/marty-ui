@@ -1,7 +1,7 @@
 # Next aggregate beta: acceptance checklist
 
-Source-readiness audit: PR #814 integration branch
-`feat/canvas-review-resolution-v1`; record its exact protected merge SHA before
+Source-readiness audit: the protected source and this pending Signing Keys
+public-parity branch; record their exact protected merge SHAs before
 selecting a release. This is a pending checklist, not a release reservation,
 deployment authorization for production, or an acceptance claim. Historical
 beta 1.1.217 evidence cannot qualify a new candidate. No candidate coordinate is
@@ -60,7 +60,7 @@ selected here.
    job and use its managed Signing Keys/KMS reference and published certificate
    for opaque CMS/SOD signing. Configure its active public CSCA trust anchor
    through the existing Rust CSCA lifecycle import and verify the DSC chain
-   before accepting a passport job. The integration branch extends the issuer
+   before accepting a passport job. This review branch extends the issuer
    UI to enroll a public CSCA lifecycle trust anchor against its managed CSCA
    identity, deriving the KMS key binding server-side. This is not yet merged
    or deployed. A read-only beta check on
@@ -81,23 +81,24 @@ selected here.
    their language-neutral behavior tests pass.
 
    The [Signing Keys public-route parity audit](signing-keys-public-parity-2026-09-26.md)
-   found 24 Gateway-declared method/path pairs without Rust public handlers.
-   Repair and retest those adapters before describing the aggregate beta
-   release as feature-complete; the new passport certificate routes alone do
-   not satisfy the no-feature-loss gate.
+   found 24 Gateway-declared method/path pairs without Rust public handlers on
+   its protected-main baseline. This review branch restores 13, leaving 11
+   without local handlers. Repair and retest those adapters, and exercise the
+   new ones through the authenticated Gateway, before describing the aggregate
+   beta release as feature-complete.
 
-   Certificate-enrollment follow-up: the current UI has a CSR action for a
-   signing service, but this source tree has no matching
-   `/v1/signing-keys/services/{service_id}/certificate-csr` service route.
-   The integration branch redirects the managed-service button to issuer
-   identities; do not use the legacy service CSR action for the pilot chain.
+   Certificate-enrollment follow-up: the protected baseline's service CSR UI
+   action lacked a matching public service route. This review branch restores
+   `/v1/signing-keys/services/{service_id}/certificate-csr` for dedicated
+   services and redirects the managed-service button to issuer identities;
+   do not use the shared-service CSR action for the pilot chain.
    The managed OpenBao signing
    service can be shared by several issuer profiles, while each CSCA/DSC has
    its own KMS key reference. The Rust CSR operation must select the active
    issuer identity tuple, resolve its KMS custody server-side, sign the PKCS#10
    request in KMS, and verify the returned CSR against the current KMS public
    key. It must not accept a caller-supplied key reference or attach a chain
-   to the shared service. The integration branch now contains a distinct
+   to the shared service. This review branch contains a distinct
    issuer-scoped Rust PKCS#10 CSR route and UI action that verifies the
    signature against the current KMS public key. Before beta acceptance,
    exercise it against beta KMS, complete the CA issuance/chain enrollment
