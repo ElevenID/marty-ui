@@ -137,6 +137,10 @@ pub fn router_with_dependencies(
                 .delete(delete_public_issuer_identity),
         )
         .route(
+            "/v1/signing-keys/issuer-identities/resolve",
+            post(resolve_public_issuer_identity),
+        )
+        .route(
             "/v1/signing-keys/issuer-identities/certificate",
             axum::routing::put(store_public_issuer_certificate),
         )
@@ -938,6 +942,80 @@ async fn list_public_issuer_identities(
         },
         Err(error) => public_error(StatusCode::UNPROCESSABLE_ENTITY, &error.to_string()),
     }
+}
+
+fn public_issuer_jwk(candidate: &Value) -> Result<Value, PublicSigningError> {
+    let mut public = public_jwk_projection(candidate).map_err(|_| {
+        public_failure(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "Issuer DID resolution returned no usable public key.",
+        )
+    })?;
+    let Some(fields) = public.as_object_mut() else {
+        return Err(public_failure(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "Issuer DID resolution returned no usable public key.",
+        ));
+    };
+    for field in ["kid", "service_id", "name", "status"] {
+        fields.remove(field);
+    }
+    Ok(public)
+}
+
+async fn resolve_public_issuer_identity(
+    State(state): State<AppState>,
+    Query(scope): Query<OrganizationScope>,
+    Json(input): Json<IssuerIdentityRequest>,
+) -> Response {
+    if let Err(error) = validate_identity_scope(&scope.organization_id, &input) {
+        return error.into_response();
+    }
+    if let Err(error) = validate_identity_operation_fields(&input, false, false) {
+        return error.into_response();
+    }
+    let profile = match one_matching_profile(&state, &scope.organization_id, &input).await {
+        Ok(profile) => profile,
+        Err(error) => return error.into_response(),
+    };
+    let Some(compatibility) = state.compatibility.as_ref() else {
+        return public_error(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "Issuer identity service is unavailable.",
+        );
+    };
+    let resolved = match compatibility
+        .resolve_issuer_did(&ResolveIssuerDidRequest {
+            organization_id: scope.organization_id,
+            issuer_did: input.issuer_did,
+            verification_method_id: None,
+            credential_format: Some(input.credential_format),
+            key_purpose: Some(input.key_purpose),
+            algorithm: Some(canonical_algorithm(&input.algorithm)),
+        })
+        .await
+    {
+        Ok(resolved) => resolved,
+        Err(error) => return error.into_response(),
+    };
+    if !same_managed_identity(&profile, &resolved) {
+        return public_error(
+            StatusCode::CONFLICT,
+            "Resolved issuer identity does not match its active managed profile.",
+        );
+    }
+    let Some(jwk) = resolved.get("public_jwk") else {
+        return public_error(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "Issuer DID resolution returned no usable public key.",
+        );
+    };
+    let public_jwk = match public_issuer_jwk(jwk) {
+        Ok(jwk) => jwk,
+        Err(error) => return error.into_response(),
+    };
+    Json(json!({"identity": identity_projection(&profile), "public_jwk": public_jwk}))
+        .into_response()
 }
 
 async fn create_public_issuer_identity(
@@ -2968,6 +3046,9 @@ async fn openapi() -> Json<serde_json::Value> {
                 "patch": {"summary": "Move Issuer Identity to Default Signing Service", "responses": {"200": {"description": "Replacement public key is published before active custody changes"}}},
                 "delete": {"summary": "Retire Public Issuer Identity", "responses": {"200": {"description": "Issuer identity retired"}}}
             },
+            "/v1/signing-keys/issuer-identities/resolve": {
+                "post": {"summary": "Resolve Public Issuer Identity", "responses": {"200": {"description": "Exact active tuple and public JWK without custody coordinates"}}}
+            },
             "/v1/signing-keys/issuer-identities/csca-certificate": {
                 "put": {"summary": "Enroll Public CSCA Certificate for Managed Issuer Identity", "responses": {"200": {"description": "Tenant-scoped public trust anchor enrolled without exposing key coordinates"}}}
             },
@@ -3261,6 +3342,66 @@ mod public_contract_tests {
             assert!(projected["keys"][0].get(field.as_str().unwrap()).is_none());
         }
         assert!(public_jwks_document(json!({"keys": [{}]}), "org-a").is_err());
+    }
+
+    #[test]
+    fn public_issuer_resolution_contract_rejects_selectors_and_scrubs_public_jwk() {
+        let behavior: Value = serde_json::from_str(include_str!(
+            "../../../../contracts/signing-public-issuer-resolution-behavior.json"
+        ))
+        .unwrap();
+        assert_eq!(
+            behavior["path"],
+            "/v1/signing-keys/issuer-identities/resolve"
+        );
+        let request = json!({
+            "organization_id": "org-a", "issuer_did": "did:web:beta.example:orgs:org-a",
+            "key_purpose": "csca", "credential_format": "ICAO_EMRTD", "algorithm": "ES256"
+        });
+        assert!(serde_json::from_value::<IssuerIdentityRequest>(request.clone()).is_ok());
+        for field in behavior["forbidden_request_fields"].as_array().unwrap() {
+            let mut forbidden = request.clone();
+            forbidden[field.as_str().unwrap()] = json!("caller-selected");
+            assert!(serde_json::from_value::<IssuerIdentityRequest>(forbidden).is_err());
+        }
+        let jwk = json!({
+            "kty": "EC", "crv": "P-256", "x": "public-x", "y": "public-y",
+            "kid": "internal-key-name", "d": "private-scalar", "key_reference": "internal-key-name",
+            "auth_reference": "secret-token"
+        });
+        let public = public_issuer_jwk(&jwk).unwrap();
+        assert_eq!(public["x"], "public-x");
+        for field in behavior["forbidden_public_jwk_fields"].as_array().unwrap() {
+            assert!(public.get(field.as_str().unwrap()).is_none());
+        }
+        assert!(public_issuer_jwk(&json!({"d": "private-only"})).is_err());
+    }
+
+    #[tokio::test]
+    async fn public_issuer_resolve_route_rejects_caller_custody_before_lookup() {
+        let request = |body: Value| {
+            Request::builder()
+                .method("POST")
+                .uri("/v1/signing-keys/issuer-identities/resolve?organization_id=org-a")
+                .header("content-type", "application/json")
+                .body(Body::from(body.to_string()))
+                .unwrap()
+        };
+        let valid = json!({
+            "organization_id": "org-a", "issuer_did": "did:web:beta.example:orgs:org-a",
+            "key_purpose": "csca", "credential_format": "ICAO_EMRTD", "algorithm": "ES256"
+        });
+        let router = router_with_internal_api_key("test-only".into());
+        let unavailable = router
+            .clone()
+            .oneshot(request(valid.clone()))
+            .await
+            .unwrap();
+        assert_eq!(unavailable.status(), StatusCode::SERVICE_UNAVAILABLE);
+        let mut forged = valid;
+        forged["key_reference"] = json!("attacker-selected");
+        let rejected = router.oneshot(request(forged)).await.unwrap();
+        assert_eq!(rejected.status(), StatusCode::UNPROCESSABLE_ENTITY);
     }
 
     #[test]
