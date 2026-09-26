@@ -6922,6 +6922,7 @@ mod tests {
                 "/v1/signing-keys/services/service-1/rotate",
             ),
             (HttpMethod::Post, "/v1/signing-keys/services/vdsnc/register"),
+            (HttpMethod::Post, "/v1/signing-keys"),
             (HttpMethod::Get, "/v1/signing-keys/key-1"),
             (HttpMethod::Patch, "/v1/signing-keys/key-1"),
             (HttpMethod::Delete, "/v1/signing-keys/key-1"),
@@ -6958,6 +6959,10 @@ mod tests {
             (
                 "/v1/signing-keys/services/vdsnc/register",
                 json!({"country_code": "USA", "authority_name": "Test Bureau"}),
+            ),
+            (
+                "/v1/signing-keys",
+                json!({"name": "Demo signer", "algorithm": "ES256"}),
             ),
         ] {
             let request = |authenticated| {

@@ -182,16 +182,21 @@ rejection, and the JWKS-only deletion boundary; Gateway tests cover session
 authorization and trusted tenant forwarding. Combined Gateway-to-Rust and
 beta acceptance remain open.
 
-Thus 1 declared pair remains without a local public handler:
-`POST /v1/signing-keys`, managed KMS-backed key creation. These new
-adapters still need authenticated combined Gateway-to-Rust runtime tests. The
-24-pair table above remains the protected-main audit baseline.
+The local `POST /v1/signing-keys` adapter now makes an explicit managed
+OpenBao Transit creation request and returns only its public metadata. It
+preserves the released four algorithms, purpose binding, LTI isolation, and
+response fields, but deliberately includes a deterministic organization
+namespace in the provider key name. The released Gateway omitted that
+namespace and could select the same KMS key for same-name requests from two
+tenants. `contracts/signing-managed-key-create-behavior.json` freezes both the
+released behavior and this reviewed security correction. The disposable
+Redis/mock-KMS route test covers all four algorithms, same-name tenant
+isolation, read-after-create inventory, existing-key reuse, mismatched or
+failed KMS writes leaving registry bindings unchanged, and custody rejection.
 
-For the remaining POST, the released Gateway sanitized a caller name into an
-OpenBao reference and treated an existing reference as success, but did not
-include the organization in that reference. Its Rust port must preserve the
-documented request/response and purpose binding while preventing two tenants
-from selecting the same KMS key by name. Creation must be an explicit KMS
-operation returning public metadata only; neither private material nor a
-Gateway-held KMS credential may enter the public path. Freeze this behavior
-before implementation and test same-name requests across tenants.
+All 24 originally missing declared pairs now have local Rust handlers in the
+stacked review branches. This is not a merged or beta-accepted result. The
+new adapters still need authenticated combined Gateway-to-Rust runtime tests,
+protected CI, re-audit on main, and aggregate beta acceptance before any
+Python retirement or migration-complete claim. The 24-pair table above remains
+the protected-main audit baseline until the stack lands.

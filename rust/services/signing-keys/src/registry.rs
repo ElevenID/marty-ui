@@ -551,7 +551,48 @@ impl RegistryStore {
         let service_id = required("signing_service_id")?;
         let key_reference = required("signing_key_reference")?;
         let key_purpose = required("key_purpose")?;
-        if !is_key_purpose(&key_purpose) {
+        self.bind_reference_purpose(
+            organization_id,
+            &service_id,
+            &key_reference,
+            &key_purpose,
+            true,
+        )
+        .await
+    }
+
+    /// Bind a managed key to its purpose without changing organization service defaults.
+    pub async fn bind_key_purpose(
+        &self,
+        organization_id: &str,
+        service_id: &str,
+        key_reference: &str,
+        key_purpose: &str,
+    ) -> Result<Value, RegistryError> {
+        self.bind_reference_purpose(
+            organization_id,
+            service_id,
+            key_reference,
+            key_purpose,
+            false,
+        )
+        .await
+    }
+
+    async fn bind_reference_purpose(
+        &self,
+        organization_id: &str,
+        service_id: &str,
+        key_reference: &str,
+        key_purpose: &str,
+        set_defaults: bool,
+    ) -> Result<Value, RegistryError> {
+        if service_id.trim().is_empty() || key_reference.trim().is_empty() {
+            return Err(RegistryError::Invalid(
+                "Incomplete KMS purpose binding.".into(),
+            ));
+        }
+        if !is_key_purpose(key_purpose) {
             return Err(RegistryError::Invalid(format!(
                 "Invalid key_purpose '{key_purpose}'."
             )));
@@ -571,36 +612,38 @@ impl RegistryStore {
             .as_object_mut()
             .expect("normalized registry bindings object");
         let references = bindings
-            .entry(service_id.clone())
+            .entry(service_id.to_owned())
             .or_insert_with(|| json!({}))
             .as_object_mut()
             .expect("normalized service bindings object");
         let purposes = references
-            .entry(key_reference)
+            .entry(key_reference.to_owned())
             .or_insert_with(|| json!([]))
             .as_array_mut()
             .expect("normalized purpose bindings array");
         if !purposes
             .iter()
-            .any(|value| value.as_str() == Some(&key_purpose))
+            .any(|value| value.as_str() == Some(key_purpose))
         {
-            purposes.push(Value::String(key_purpose.clone()));
+            purposes.push(Value::String(key_purpose.to_owned()));
         }
         purposes.sort_by(|left, right| left.as_str().cmp(&right.as_str()));
         let normalized_bindings = normalize_bindings(registry.get("key_reference_purposes"));
         validate_lti_bindings(&normalized_bindings)?;
         registry["key_reference_purposes"] = json!(normalized_bindings);
 
-        set_default(&mut registry, "type_defaults", &key_purpose, &service_id);
-        for format in formats_for_purposes(std::slice::from_ref(&key_purpose)) {
-            set_default(&mut registry, "format_defaults", &format, &service_id);
-        }
-        if registry
-            .get("default_service_id")
-            .and_then(Value::as_str)
-            .is_none_or(|value| value.trim().is_empty())
-        {
-            registry["default_service_id"] = Value::String(service_id);
+        if set_defaults {
+            set_default(&mut registry, "type_defaults", key_purpose, service_id);
+            for format in formats_for_purposes(&[key_purpose.to_owned()]) {
+                set_default(&mut registry, "format_defaults", &format, service_id);
+            }
+            if registry
+                .get("default_service_id")
+                .and_then(Value::as_str)
+                .is_none_or(|value| value.trim().is_empty())
+            {
+                registry["default_service_id"] = Value::String(service_id.to_owned());
+            }
         }
         let saved = self
             .save_with_rotation_lease(organization_id, &registry, &lease)

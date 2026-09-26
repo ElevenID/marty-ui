@@ -113,7 +113,10 @@ pub fn router_with_dependencies(
         .route("/docs", get(docs))
         .route("/redoc", get(redoc))
         .route("/v1/signing-keys/service-status", get(service_status))
-        .route("/v1/signing-keys", get(list_public_signing_keys))
+        .route(
+            "/v1/signing-keys",
+            get(list_public_signing_keys).post(create_public_signing_key),
+        )
         .route("/v1/signing-keys/jwks", get(public_organization_jwks))
         .route(
             "/v1/signing-keys/compliance/keys-summary",
@@ -397,6 +400,23 @@ pub fn router_with_dependencies(
 #[derive(Debug, Deserialize)]
 struct OrganizationScope {
     organization_id: String,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct PublicManagedKeyCreateRequest {
+    #[serde(default)]
+    organization_id: Option<String>,
+    #[serde(default)]
+    name: Option<String>,
+    #[serde(default)]
+    key_name: Option<String>,
+    #[serde(default)]
+    algorithm: Option<String>,
+    #[serde(default)]
+    key_purpose: Option<String>,
+    #[serde(default)]
+    service_id: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -688,7 +708,107 @@ async fn load_public_signing_key_inventory(
     } else {
         Vec::new()
     };
-    Ok(public_signing_key_inventory(&registry, &profiles))
+    let mut keys = public_signing_key_inventory(&registry, &profiles);
+    enrich_managed_signing_key_inventory(&registry, &mut keys).await;
+    keys.sort_by(|left, right| {
+        left.get("id")
+            .and_then(Value::as_str)
+            .cmp(&right.get("id").and_then(Value::as_str))
+    });
+    Ok(keys)
+}
+
+fn queue_managed_key_inventory(
+    tasks: &mut JoinSet<Option<(String, Value)>>,
+    service: &Value,
+    reference: String,
+) {
+    let mut config = service.clone();
+    config["key_reference"] = json!(reference);
+    tasks.spawn(async move {
+        kms::read_managed_openbao(ProviderRequest {
+            service_config: config,
+        })
+        .await
+        .ok()
+        .map(|public| (reference, public))
+    });
+}
+
+async fn enrich_managed_signing_key_inventory(registry: &Value, keys: &mut Vec<Value>) {
+    const MANAGED_ID: &str = "managed-openbao-transit";
+    let Some(service) = registry
+        .get("services")
+        .and_then(Value::as_array)
+        .and_then(|services| {
+            services
+                .iter()
+                .find(|service| service.get("id").and_then(Value::as_str) == Some(MANAGED_ID))
+        })
+    else {
+        return;
+    };
+    let Some(bindings) = registry
+        .get("key_reference_purposes")
+        .and_then(|bindings| bindings.get(MANAGED_ID))
+        .and_then(Value::as_object)
+    else {
+        return;
+    };
+    let mut references = bindings.keys().cloned();
+    let mut tasks = JoinSet::new();
+    for _ in 0..8 {
+        if let Some(reference) = references.next() {
+            queue_managed_key_inventory(&mut tasks, service, reference);
+        }
+    }
+    while let Some(result) = tasks.join_next().await {
+        if let Some(reference) = references.next() {
+            queue_managed_key_inventory(&mut tasks, service, reference);
+        }
+        if let Ok(Some((reference, public))) = result {
+            let Some(public_jwk) = public.get("public_jwk") else {
+                continue;
+            };
+            let Ok(public_jwk) = public_jwk_projection(public_jwk) else {
+                continue;
+            };
+            let Some(algorithm) = compatible_public_key_algorithms(&public_jwk).first() else {
+                continue;
+            };
+            if let Some(existing) = keys.iter_mut().find(|key| {
+                key.get("service_id").and_then(Value::as_str) == Some(MANAGED_ID)
+                    && key.get("provider_key_name").and_then(Value::as_str) == Some(&reference)
+            }) {
+                existing["public_jwk"] = public_jwk;
+                existing["algorithm"] = json!(algorithm);
+                existing["latest_version"] =
+                    public.get("latest_version").cloned().unwrap_or(Value::Null);
+            } else {
+                let purpose = bindings
+                    .get(&reference)
+                    .and_then(Value::as_array)
+                    .and_then(|purposes| purposes.first())
+                    .cloned()
+                    .unwrap_or(Value::Null);
+                keys.push(json!({
+                    "id": reference,
+                    "provider_key_name": reference,
+                    "name": reference,
+                    "algorithm": algorithm,
+                    "status": public.get("status").cloned().unwrap_or(json!("invalid")),
+                    "created_at": public.get("created_at").cloned().unwrap_or(Value::Null),
+                    "expiry_date": null,
+                    "key_type": "hsm",
+                    "provider": "openbao",
+                    "service_id": MANAGED_ID,
+                    "key_purpose": purpose,
+                    "latest_version": public.get("latest_version").cloned().unwrap_or(Value::Null),
+                    "public_jwk": public_jwk,
+                }));
+            }
+        }
+    }
 }
 
 async fn get_public_signing_key(
@@ -894,6 +1014,227 @@ impl IntoResponse for PublicSigningError {
     fn into_response(self) -> Response {
         public_error(self.status, &self.detail)
     }
+}
+
+fn managed_key_name(
+    organization_id: &str,
+    requested_name: &str,
+    key_purpose: &str,
+    algorithm: &str,
+) -> Result<String, &'static str> {
+    let requested_name = requested_name.trim();
+    if requested_name.is_empty()
+        || requested_name.len() > 256
+        || requested_name.chars().any(char::is_control)
+    {
+        return Err(
+            "name is required, must contain no control characters, and must be at most 256 bytes.",
+        );
+    }
+    let mut stem = String::new();
+    for character in requested_name.to_ascii_lowercase().chars() {
+        if character.is_ascii_lowercase() || character.is_ascii_digit() || character == '-' {
+            stem.push(character);
+        } else if !stem.ends_with('-') {
+            stem.push('-');
+        }
+    }
+    let stem = stem.trim_matches('-');
+    let stem = if stem.is_empty() { "key" } else { stem };
+    let expected_prefix = match key_purpose {
+        "lti_tool_signing" => "lti-tool-",
+        "mdoc_dsc" | "x509_doc_signer" | "vdsnc_signing" | "csca" => "cred-dsc-",
+        _ => "cred-issuer-",
+    };
+    let stem = ["cred-issuer-", "cred-dsc-", "lti-tool-"]
+        .iter()
+        .find_map(|prefix| stem.strip_prefix(prefix))
+        .unwrap_or(stem)
+        .trim_matches('-');
+    let stem = if stem.is_empty() { "key" } else { stem };
+    let algorithm_suffix = format!("-{}", algorithm.to_ascii_lowercase());
+    let stem = stem
+        .strip_suffix(&algorithm_suffix)
+        .unwrap_or(stem)
+        .trim_matches('-');
+    let stem = if stem.is_empty() { "key" } else { stem };
+    let tenant = uuid::Uuid::new_v5(&uuid::Uuid::NAMESPACE_URL, organization_id.as_bytes())
+        .simple()
+        .to_string();
+    let available = 96 - expected_prefix.len() - tenant.len() - 1 - algorithm_suffix.len();
+    let stem = stem[..stem.len().min(available)].trim_matches('-');
+    let stem = if stem.is_empty() { "key" } else { stem };
+    Ok(format!(
+        "{expected_prefix}{tenant}-{stem}{algorithm_suffix}"
+    ))
+}
+
+async fn create_public_signing_key(
+    State(state): State<AppState>,
+    Query(scope): Query<OrganizationScope>,
+    Json(input): Json<PublicManagedKeyCreateRequest>,
+) -> Response {
+    if let Err(error) =
+        validate_service_scope(&scope.organization_id, input.organization_id.as_deref())
+    {
+        return error.into_response();
+    }
+    let requested_name = input
+        .name
+        .as_deref()
+        .or(input.key_name.as_deref())
+        .unwrap_or_default();
+    let algorithm = input.algorithm.as_deref().unwrap_or("ES256");
+    if !matches!(algorithm, "ES256" | "ES384" | "RS256" | "EdDSA") {
+        return public_error(
+            StatusCode::UNPROCESSABLE_ENTITY,
+            "Unsupported signing algorithm.",
+        );
+    }
+    let key_purpose = input.key_purpose.as_deref().unwrap_or("vc_jwt_issuer");
+    if !key_purposes()
+        .iter()
+        .any(|purpose| purpose.id == key_purpose)
+    {
+        return public_error(StatusCode::UNPROCESSABLE_ENTITY, "Unsupported key_purpose.");
+    }
+    if key_purpose == "lti_tool_signing" && algorithm != "RS256" {
+        return public_error(
+            StatusCode::UNPROCESSABLE_ENTITY,
+            "lti_tool_signing keys must use RS256.",
+        );
+    }
+    let key_reference = match managed_key_name(
+        &scope.organization_id,
+        requested_name,
+        key_purpose,
+        algorithm,
+    ) {
+        Ok(reference) => reference,
+        Err(message) => return public_error(StatusCode::UNPROCESSABLE_ENTITY, message),
+    };
+    let Some(store) = state.registry_store.as_ref() else {
+        return public_error(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "Signing registry is unavailable.",
+        );
+    };
+    let registry = match store.load(&scope.organization_id).await {
+        Ok(registry) => registry,
+        Err(_) => {
+            return public_error(
+                StatusCode::SERVICE_UNAVAILABLE,
+                "Signing registry is unavailable.",
+            )
+        }
+    };
+    let service_id = input
+        .service_id
+        .as_deref()
+        .filter(|value| !value.trim().is_empty())
+        .or_else(|| registry.get("default_service_id").and_then(Value::as_str));
+    let Some(service_id) = service_id else {
+        return public_error(
+            StatusCode::BAD_REQUEST,
+            "No signing service is configured for this organization.",
+        );
+    };
+    if service_id != "managed-openbao-transit" {
+        return public_error(
+            StatusCode::BAD_REQUEST,
+            "Managed key creation is supported only for the managed OpenBao Transit service.",
+        );
+    }
+    let Some(mut service) = registry
+        .get("services")
+        .and_then(Value::as_array)
+        .and_then(|services| {
+            services
+                .iter()
+                .find(|service| service.get("id").and_then(Value::as_str) == Some(service_id))
+        })
+        .cloned()
+    else {
+        return public_error(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "Managed OpenBao Transit is unavailable.",
+        );
+    };
+    service["key_reference"] = json!(key_reference);
+    service["algorithm"] = json!(algorithm);
+    let created = match kms::create_managed_openbao(ProviderRequest {
+        service_config: service,
+    })
+    .await
+    {
+        Ok(created) => created,
+        Err(_) => {
+            return public_error(
+                StatusCode::SERVICE_UNAVAILABLE,
+                "Managed KMS key creation failed.",
+            )
+        }
+    };
+    let Some(public_jwk) = created.get("public_jwk") else {
+        return public_error(
+            StatusCode::BAD_GATEWAY,
+            "Managed KMS did not return a public key.",
+        );
+    };
+    if !compatible_public_key_algorithms(public_jwk).contains(&algorithm)
+        || created.get("status").and_then(Value::as_str) != Some("active")
+    {
+        return public_error(
+            StatusCode::CONFLICT,
+            "The existing KMS key is incompatible with the requested algorithm or signing state.",
+        );
+    }
+    let public_jwk = match public_jwk_projection(public_jwk) {
+        Ok(public_jwk) => public_jwk,
+        Err(_) => {
+            return public_error(
+                StatusCode::BAD_GATEWAY,
+                "Managed KMS returned an invalid public key.",
+            )
+        }
+    };
+    if store
+        .bind_key_purpose(
+            &scope.organization_id,
+            service_id,
+            &key_reference,
+            key_purpose,
+        )
+        .await
+        .is_err()
+    {
+        return public_error(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "Signing key purpose binding could not be saved.",
+        );
+    }
+    let key = json!({
+        "id": key_reference,
+        "name": requested_name.trim(),
+        "algorithm": algorithm,
+        "status": "active",
+        "expiry_date": null,
+        "created_at": created.get("created_at").cloned().unwrap_or(Value::Null),
+        "key_type": "hsm",
+        "provider": "openbao",
+        "provider_key_name": key_reference,
+        "latest_version": created.get("latest_version").cloned().unwrap_or(Value::Null),
+        "public_jwk": public_jwk,
+        "service_id": service_id,
+        "key_purpose": key_purpose,
+    });
+    Json(json!({
+        "ok": true, "service_id": service_id,
+        "provider_key_name": key_reference,
+        "key": key,
+        "created_at": chrono::Utc::now().to_rfc3339(),
+    }))
+    .into_response()
 }
 
 async fn public_config(
@@ -5659,7 +6000,14 @@ async fn openapi() -> Json<serde_json::Value> {
         "info": {"title": "Signing Keys Service", "version": "1.0.0"},
         "paths": {
             "/health": {"get": {"summary": "Health Check", "responses": {"200": {"description": "Successful Response"}}}},
-            "/v1/signing-keys": {"get": {"summary": "List Signing Keys", "responses": {"200": {"description": "Provider-neutral signing-key inventory"}}}},
+            "/v1/signing-keys": {
+                "get": {"summary": "List Signing Keys", "responses": {"200": {"description": "Provider-neutral signing-key inventory"}}},
+                "post": {"summary": "Create Managed KMS Signing Key", "responses": {
+                    "200": {"description": "Tenant-namespaced KMS key created and public metadata returned"},
+                    "409": {"description": "Existing KMS key is incompatible with the requested algorithm"},
+                    "503": {"description": "Managed KMS or registry unavailable"}
+                }}
+            },
             "/v1/signing-keys/{key_id}": {
                 "get": {"summary": "Get Public Signing Key Metadata", "responses": {"200": {"description": "Tenant signing-key inventory entry"}, "404": {"description": "Signing key not found"}}},
                 "patch": {"summary": "Update Published Signing Key Metadata", "responses": {"200": {"description": "JWKS metadata updated without altering KMS key material"}, "404": {"description": "Published key not found"}}},
@@ -5762,8 +6110,67 @@ mod public_contract_tests {
         .unwrap();
         assert_eq!(behavior["method"], "POST");
         assert_eq!(behavior["path"], "/v1/signing-keys");
-        assert_eq!(behavior["request_fields"]["algorithm"], "ES256 by default; released support ES256, ES384, RS256, EdDSA");
-        assert_eq!(behavior["released_reference_prefixes"]["lti_tool_signing"], "lti-tool-");
+        assert_eq!(
+            behavior["request_fields"]["algorithm"],
+            "ES256 by default; released support ES256, ES384, RS256, EdDSA"
+        );
+        assert_eq!(
+            behavior["released_reference_prefixes"]["lti_tool_signing"],
+            "lti-tool-"
+        );
+    }
+
+    #[tokio::test]
+    async fn managed_key_creation_names_are_tenant_scoped_and_inputs_fail_closed() {
+        assert!(openapi().await.0["paths"]["/v1/signing-keys"]["post"].is_object());
+        let first = managed_key_name("org-a", "cred-dsc-My Key", "vc_jwt_issuer", "ES256").unwrap();
+        let same = managed_key_name("org-a", "cred-dsc-My Key", "vc_jwt_issuer", "ES256").unwrap();
+        let other = managed_key_name("org-b", "cred-dsc-My Key", "vc_jwt_issuer", "ES256").unwrap();
+        assert_eq!(first, same);
+        assert_ne!(first, other);
+        assert!(first.starts_with("cred-issuer-"));
+        assert!(first.ends_with("-my-key-es256"));
+        assert!(first.len() <= 96);
+        assert!(
+            managed_key_name("org-a", &"a".repeat(250), "lti_tool_signing", "RS256")
+                .unwrap()
+                .ends_with("-rs256")
+        );
+        assert!(managed_key_name("org-a", " ", "vc_jwt_issuer", "ES256").is_err());
+        let router = router_with_internal_api_key("test-only".into());
+        let request = |body: Value| {
+            Request::post("/v1/signing-keys?organization_id=org-a")
+                .header("content-type", "application/json")
+                .body(Body::from(body.to_string()))
+                .unwrap()
+        };
+        let valid = router
+            .clone()
+            .oneshot(request(json!({"name": "Key"})))
+            .await
+            .unwrap();
+        assert_eq!(valid.status(), StatusCode::SERVICE_UNAVAILABLE);
+        for invalid in [
+            json!({"name": ""}),
+            json!({"name": "bad\nname"}),
+            json!({"name": "Key", "algorithm": "ES512"}),
+            json!({"name": "Key", "key_purpose": "lti_tool_signing", "algorithm": "ES256"}),
+            json!({"name": "Key", "private_key": "forged"}),
+            json!({"name": "Key", "endpoint": "https://attacker.invalid"}),
+        ] {
+            let status = router
+                .clone()
+                .oneshot(request(invalid))
+                .await
+                .unwrap()
+                .status();
+            assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY);
+        }
+        let mismatch = router
+            .oneshot(request(json!({"name": "Key", "organization_id": "org-b"})))
+            .await
+            .unwrap();
+        assert_eq!(mismatch.status(), StatusCode::FORBIDDEN);
     }
 
     #[test]
