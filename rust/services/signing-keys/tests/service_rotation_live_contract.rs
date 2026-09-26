@@ -14,8 +14,9 @@ use redis::AsyncCommands;
 use serde_json::{json, Value};
 use std::sync::{
     atomic::{AtomicBool, AtomicUsize, Ordering},
-    Arc,
+    Arc, Mutex,
 };
+use tokio::sync::oneshot;
 use tower::ServiceExt;
 
 async fn rotate(
@@ -50,6 +51,9 @@ async fn public_rotation_updates_state_only_after_kms_success() {
     let redis_url = std::env::var("MARTY_TEST_REDIS_URL").expect("disposable Redis URL");
     let rotations = Arc::new(AtomicUsize::new(0));
     let fail = Arc::new(AtomicBool::new(false));
+    let rotation_gate = Arc::new(Mutex::new(
+        None::<(oneshot::Sender<()>, oneshot::Receiver<()>)>,
+    ));
     let kms = Router::new()
         .route(
             "/v1/transit/keys/signing-key",
@@ -60,11 +64,18 @@ async fn public_rotation_updates_state_only_after_kms_success() {
             axum::routing::post({
                 let rotations = Arc::clone(&rotations);
                 let fail = Arc::clone(&fail);
+                let rotation_gate = Arc::clone(&rotation_gate);
                 move || {
                     let rotations = Arc::clone(&rotations);
                     let fail = Arc::clone(&fail);
+                    let rotation_gate = Arc::clone(&rotation_gate);
                     async move {
                         rotations.fetch_add(1, Ordering::SeqCst);
+                        let gated = { rotation_gate.lock().unwrap().take() };
+                        if let Some((entered, release)) = gated {
+                            entered.send(()).unwrap();
+                            let _ = release.await;
+                        }
                         if fail.load(Ordering::SeqCst) {
                             StatusCode::SERVICE_UNAVAILABLE
                         } else {
@@ -86,6 +97,12 @@ async fn public_rotation_updates_state_only_after_kms_success() {
             &json!({
                 "services": [{
                     "id": "service-a", "name": "Test signing service",
+                    "service_type": "openbao-transit", "endpoint": endpoint,
+                    "mount": "transit", "auth_mode": "token", "auth_reference": "fixture-token",
+                    "key_reference": "signing-key", "algorithms": ["ES256"],
+                    "key_purposes": ["vc_jwt_issuer"]
+                }, {
+                    "id": "service-b", "name": "Second signing service",
                     "service_type": "openbao-transit", "endpoint": endpoint,
                     "mount": "transit", "auth_mode": "token", "auth_reference": "fixture-token",
                     "key_reference": "signing-key", "algorithms": ["ES256"],
@@ -117,6 +134,15 @@ async fn public_rotation_updates_state_only_after_kms_success() {
     let app = router_with_dependencies(
         "test-internal-key".into(),
         Some(store.clone()),
+        None,
+        None,
+        None,
+        None,
+        None,
+    );
+    let competing_app = router_with_dependencies(
+        "test-internal-key".into(),
+        Some(RegistryStore::connect(&redis_url).await.unwrap()),
         None,
         None,
         None,
@@ -155,15 +181,37 @@ async fn public_rotation_updates_state_only_after_kms_success() {
     );
     assert_eq!(rotations.load(Ordering::SeqCst), 0);
 
-    let (status, completed) = rotate(
-        &app,
-        &organization_id,
-        "service-a",
-        json!({
-            "overlap_days": 14, "publish_updates": false
-        }),
-    )
-    .await;
+    let (entered, entered_rx) = oneshot::channel();
+    let (release_tx, release) = oneshot::channel();
+    *rotation_gate.lock().unwrap() = Some((entered, release));
+    let first_app = app.clone();
+    let first_organization = organization_id.clone();
+    let first = tokio::spawn(async move {
+        rotate(
+            &first_app,
+            &first_organization,
+            "service-a",
+            json!({"overlap_days": 14, "publish_updates": false}),
+        )
+        .await
+    });
+    tokio::time::timeout(std::time::Duration::from_secs(5), entered_rx)
+        .await
+        .unwrap()
+        .unwrap();
+    let (busy_status, busy) =
+        rotate(&competing_app, &organization_id, "service-a", json!({})).await;
+    assert_eq!(busy_status, StatusCode::CONFLICT, "{busy}");
+    let (other_service_status, other_service_busy) =
+        rotate(&competing_app, &organization_id, "service-b", json!({})).await;
+    assert_eq!(
+        other_service_status,
+        StatusCode::CONFLICT,
+        "{other_service_busy}"
+    );
+    assert_eq!(rotations.load(Ordering::SeqCst), 1);
+    release_tx.send(()).unwrap();
+    let (status, completed) = first.await.unwrap();
     assert_eq!(status, StatusCode::OK, "{completed}");
     assert_eq!(completed["ok"], true);
     assert_eq!(
@@ -200,7 +248,75 @@ async fn public_rotation_updates_state_only_after_kms_success() {
     );
     assert_eq!(rotations.load(Ordering::SeqCst), 2);
 
+    fail.store(false, Ordering::SeqCst);
+    let (entered, entered_rx) = oneshot::channel();
+    let (release_tx, release) = oneshot::channel();
+    *rotation_gate.lock().unwrap() = Some((entered, release));
+    let cancelled_app = app.clone();
+    let cancelled_organization = organization_id.clone();
+    let cancelled = tokio::spawn(async move {
+        rotate(
+            &cancelled_app,
+            &cancelled_organization,
+            "service-a",
+            json!({}),
+        )
+        .await
+    });
+    tokio::time::timeout(std::time::Duration::from_secs(5), entered_rx)
+        .await
+        .unwrap()
+        .unwrap();
+    cancelled.abort();
+    let _ = cancelled.await;
+    let mut released_after_cancellation = false;
+    for _ in 0..50 {
+        if let Some(lease) = store
+            .acquire_rotation_lease(&organization_id)
+            .await
+            .unwrap()
+        {
+            lease.release().await.unwrap();
+            released_after_cancellation = true;
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+    }
+    assert!(
+        released_after_cancellation,
+        "cancelled route retained the lease"
+    );
+    let _ = release_tx.send(());
+
+    let old_lease = store
+        .acquire_rotation_lease(&organization_id)
+        .await
+        .unwrap()
+        .unwrap();
+    let lease_key = format!(
+        "signing-service:rotation-lease:{}:{}",
+        organization_id.len(),
+        organization_id
+    );
     let mut connection = store.connection();
+    let ttl: i64 = redis::cmd("PTTL")
+        .arg(&lease_key)
+        .query_async(&mut connection)
+        .await
+        .unwrap();
+    assert!((1..=120_000).contains(&ttl));
+    let _: () = redis::cmd("SET")
+        .arg(&lease_key)
+        .arg("replacement-owner")
+        .arg("PX")
+        .arg(5_000)
+        .query_async(&mut connection)
+        .await
+        .unwrap();
+    old_lease.release().await.unwrap();
+    let owner: String = connection.get(&lease_key).await.unwrap();
+    assert_eq!(owner, "replacement-owner");
+    let _: () = connection.del(&lease_key).await.unwrap();
     let _: () = connection.del(storage_key(&organization_id)).await.unwrap();
     server.abort();
 }

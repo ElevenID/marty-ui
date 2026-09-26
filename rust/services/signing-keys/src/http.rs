@@ -1844,15 +1844,44 @@ async fn rotate_public_service_key(
             "Signing registry is unavailable.",
         );
     };
-    let mut registry = match store.load(&scope.organization_id).await {
-        Ok(registry) => registry,
-        Err(_) => {
+    let lease = match tokio::time::timeout(
+        std::time::Duration::from_secs(5),
+        store.acquire_rotation_lease(&scope.organization_id),
+    )
+    .await
+    {
+        Ok(Ok(Some(lease))) => lease,
+        Ok(Ok(None)) => {
+            return public_error(
+                StatusCode::CONFLICT,
+                "Signing service rotation is already in progress.",
+            )
+        }
+        _ => {
             return public_error(
                 StatusCode::SERVICE_UNAVAILABLE,
                 "Signing registry is unavailable.",
             )
         }
     };
+    macro_rules! finish_with_lease {
+        ($response:expr) => {{
+            let response = $response;
+            let _ = tokio::time::timeout(std::time::Duration::from_secs(5), lease.release()).await;
+            return response;
+        }};
+    }
+    let registry_timeout = std::time::Duration::from_secs(15);
+    let mut registry =
+        match tokio::time::timeout(registry_timeout, store.load(&scope.organization_id)).await {
+            Ok(Ok(registry)) => registry,
+            _ => {
+                finish_with_lease!(public_error(
+                    StatusCode::SERVICE_UNAVAILABLE,
+                    "Signing registry is unavailable.",
+                ))
+            }
+        };
     let Some(service) = registry
         .get("services")
         .and_then(Value::as_array)
@@ -1863,16 +1892,19 @@ async fn rotate_public_service_key(
         })
         .cloned()
     else {
-        return public_error(StatusCode::NOT_FOUND, "Signing service not found.");
+        finish_with_lease!(public_error(
+            StatusCode::NOT_FOUND,
+            "Signing service not found."
+        ));
     };
     if service_id == "managed-openbao-transit"
         || service.get("managed").and_then(Value::as_bool) == Some(true)
         || service.get("read_only").and_then(Value::as_bool) == Some(true)
     {
-        return public_error(
+        finish_with_lease!(public_error(
             StatusCode::FORBIDDEN,
             "Managed or read-only signing services cannot be rotated through this route.",
-        );
+        ));
     }
     let now = chrono::Utc::now();
     let rotated_at = now.to_rfc3339();
@@ -1898,7 +1930,10 @@ async fn rotate_public_service_key(
         service.get("service_type").and_then(Value::as_str),
         Some("openbao-transit" | "hashicorp-vault-transit" | "custom-transit-compatible")
     ) {
-        return unrotated("No provider rotation adapter available.", rotation_state);
+        finish_with_lease!(unrotated(
+            "No provider rotation adapter available.",
+            rotation_state
+        ));
     }
     let key_reference = service
         .get("key_reference")
@@ -1906,7 +1941,10 @@ async fn rotate_public_service_key(
         .map(str::trim)
         .filter(|reference| !reference.is_empty());
     let Some(key_reference) = key_reference else {
-        return unrotated("key_reference is required for rotation.", rotation_state);
+        finish_with_lease!(unrotated(
+            "key_reference is required for rotation.",
+            rotation_state
+        ));
     };
     let provider_rotation = match kms::rotate_openbao(ProviderRequest {
         service_config: service.clone(),
@@ -1914,7 +1952,10 @@ async fn rotate_public_service_key(
     .await
     {
         Ok(result) => result,
-        Err(_) => return unrotated("Transit provider rotation failed.", rotation_state),
+        Err(_) => finish_with_lease!(unrotated(
+            "Transit provider rotation failed.",
+            rotation_state
+        )),
     };
 
     let previous_version = json!({
@@ -1935,24 +1976,38 @@ async fn rotate_public_service_key(
     rotation_state["overlap_days"] = json!(overlap_days);
     rotation_state["provider_rotation"] = provider_rotation;
     let Some(services) = registry.get_mut("services").and_then(Value::as_array_mut) else {
-        return public_error(StatusCode::BAD_GATEWAY, "Signing registry is malformed.");
+        finish_with_lease!(public_error(
+            StatusCode::BAD_GATEWAY,
+            "Signing registry is malformed."
+        ));
     };
     let Some(recorded) = services
         .iter_mut()
         .find(|recorded| recorded.get("id").and_then(Value::as_str) == Some(&service_id))
     else {
-        return public_error(StatusCode::BAD_GATEWAY, "Signing registry is malformed.");
+        finish_with_lease!(public_error(
+            StatusCode::BAD_GATEWAY,
+            "Signing registry is malformed."
+        ));
     };
     recorded["rotation_state"] = rotation_state.clone();
     recorded["rotation_policy"]["overlap_days"] = json!(overlap_days);
     recorded["rotation_policy"]["auto_publish"] = json!(body.publish_updates.unwrap_or(true));
     recorded["updated_at"] = json!(rotated_at);
-    if store.save(&scope.organization_id, &registry).await.is_err() {
-        return public_error(
+    if !matches!(
+        tokio::time::timeout(
+            registry_timeout,
+            store.save(&scope.organization_id, &registry)
+        )
+        .await,
+        Ok(Ok(_))
+    ) {
+        finish_with_lease!(public_error(
             StatusCode::SERVICE_UNAVAILABLE,
             "The KMS key rotated, but its registry state could not be stored; reconcile before retrying.",
-        );
+        ));
     }
+    let _ = tokio::time::timeout(std::time::Duration::from_secs(5), lease.release()).await;
     let mut publication = json!({"jwks": false, "did": false});
     if body.publish_updates.unwrap_or(true) {
         publication["jwks"] = json!(publish_public_service_jwks(
@@ -4801,6 +4856,7 @@ mod public_contract_tests {
             behavior["provider_rotation"]["success_statuses"],
             json!([200, 204])
         );
+        assert_eq!(behavior["concurrent_same_tenant_status"], 409);
         assert_eq!(behavior["publication_fields"], json!(["jwks", "did"]));
         assert_eq!(behavior["managed_or_read_only_service_status"], 403);
         assert!(

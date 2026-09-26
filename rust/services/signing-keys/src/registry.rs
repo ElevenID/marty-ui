@@ -21,6 +21,57 @@ use crate::profiles::ProfileStore;
 
 const SUPPORTED_ALGORITHMS: &[&str] = &["ES256", "ES384", "ES512", "RS256", "EdDSA"];
 pub(crate) const MANAGED_OPENBAO_SERVICE_ID: &str = "managed-openbao-transit";
+const ROTATION_LEASE_TTL_MS: u64 = 120_000;
+
+pub struct RotationLease {
+    connection: ConnectionManager,
+    key: String,
+    owner: String,
+    released: bool,
+}
+
+impl RotationLease {
+    pub async fn release(mut self) -> Result<(), RegistryError> {
+        release_rotation_lease(&mut self.connection, &self.key, &self.owner).await?;
+        self.released = true;
+        Ok(())
+    }
+}
+
+impl Drop for RotationLease {
+    fn drop(&mut self) {
+        if self.released {
+            return;
+        }
+        if let Ok(runtime) = tokio::runtime::Handle::try_current() {
+            let mut connection = self.connection.clone();
+            let key = self.key.clone();
+            let owner = self.owner.clone();
+            runtime.spawn(async move {
+                let _ = release_rotation_lease(&mut connection, &key, &owner).await;
+            });
+        }
+    }
+}
+
+async fn release_rotation_lease(
+    connection: &mut ConnectionManager,
+    key: &str,
+    owner: &str,
+) -> Result<(), RegistryError> {
+    redis::Script::new(
+        "if redis.call('GET', KEYS[1]) == ARGV[1] then
+            return redis.call('DEL', KEYS[1])
+         end
+         return 0",
+    )
+    .key(key)
+    .arg(owner)
+    .invoke_async::<i32>(connection)
+    .await
+    .map_err(|error| RegistryError::Storage(error.to_string()))?;
+    Ok(())
+}
 
 #[derive(Debug, Error, PartialEq, Eq)]
 pub enum RegistryError {
@@ -73,6 +124,34 @@ impl RegistryStore {
     pub fn with_managed_openbao(mut self, endpoint: Option<String>) -> Self {
         self.managed_openbao_endpoint = endpoint;
         self
+    }
+
+    pub async fn acquire_rotation_lease(
+        &self,
+        organization_id: &str,
+    ) -> Result<Option<RotationLease>, RegistryError> {
+        let key = format!(
+            "signing-service:rotation-lease:{}:{}",
+            organization_id.len(),
+            organization_id
+        );
+        let owner = Uuid::new_v4().to_string();
+        let mut connection = self.connection.clone();
+        let acquired: Option<String> = redis::cmd("SET")
+            .arg(&key)
+            .arg(&owner)
+            .arg("NX")
+            .arg("PX")
+            .arg(ROTATION_LEASE_TTL_MS)
+            .query_async(&mut connection)
+            .await
+            .map_err(|error| RegistryError::Storage(error.to_string()))?;
+        Ok(acquired.map(|_| RotationLease {
+            connection,
+            key,
+            owner,
+            released: false,
+        }))
     }
 
     pub async fn load(&self, organization_id: &str) -> Result<Value, RegistryError> {
