@@ -21,7 +21,7 @@
       "MIPVersionMiddleware"
     ]
   },
-  "route_count": 442,
+  "route_count": 443,
   "routes": [
     {
       "include_in_schema": true,

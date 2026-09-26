@@ -95,6 +95,7 @@ pub struct GatewayRuntimeState {
     pub did_web_authority: String,
     pub default_organization_id: Option<String>,
     pub signing_service_api_key: String,
+    pub dsc_issue_gateway_key: Option<String>,
     pub issuance_service_api_key: String,
     pub passport_native_gateway_enabled: bool,
     pub passport_tenant_keys: Option<PassportTenantCredentialSource>,
@@ -204,6 +205,7 @@ impl GatewayRuntimeState {
                 .map(|value| value.trim().to_owned())
                 .filter(|value| !value.is_empty()),
             signing_service_api_key,
+            dsc_issue_gateway_key: None,
             issuance_service_api_key,
             passport_native_gateway_enabled: false,
             passport_tenant_keys: None,
@@ -223,6 +225,21 @@ impl GatewayRuntimeState {
             ));
         }
         self.service_token = service_token;
+        Ok(self)
+    }
+
+    pub fn with_dsc_issue_gateway_key(
+        mut self,
+        key: Option<String>,
+    ) -> Result<Self, mmf_platform::PlatformError> {
+        if let Some(key) = &key {
+            if key.len() < 32 || key == &self.signing_service_api_key {
+                return Err(mmf_platform::PlatformError::InvalidConfiguration(
+                    "DSC issuance credential must be distinct and at least 32 bytes".into(),
+                ));
+            }
+        }
+        self.dsc_issue_gateway_key = key;
         Ok(self)
     }
 
@@ -991,6 +1008,11 @@ async fn proxy_handler(
             Ok(path) => path,
             Err((status, detail)) => return detail_response(status, detail),
         };
+    if public_path == "/v1/signing-keys/issuer-identities/dsc-certificate"
+        && state.dsc_issue_gateway_key.is_none()
+    {
+        return detail_response(503, "DSC issuance authority is unavailable");
+    }
     let mut gateway_request = GatewayRequest::new(method, &upstream_path, now_ms());
     gateway_request.query = query_pairs(parts.uri.query());
     gateway_request.headers = request_headers(&parts.headers);
@@ -2940,9 +2962,9 @@ fn proxy_overrides(
         && identity.user_id.is_some()
         && identity.api_key_id.is_none()
     {
-        overrides
-            .headers
-            .insert("x-api-key".into(), state.signing_service_api_key.clone());
+        if let Some(key) = &state.dsc_issue_gateway_key {
+            overrides.headers.insert("x-api-key".into(), key.clone());
+        }
     }
     let owner = route_ownership(path);
     if requires_gateway_service_token(owner.service) {
@@ -7191,10 +7213,26 @@ mod tests {
                 Ok(membership)
             }
         }
+        let mut unavailable = runtime_state_with_upstream(Arc::new(NoOwner), recorder.clone());
+        Arc::get_mut(&mut unavailable)
+            .expect("unique runtime state")
+            .memberships = Arc::new(CertificateOperator);
+        assert_eq!(
+            gateway_router(unavailable)
+                .oneshot(request())
+                .await
+                .unwrap()
+                .status(),
+            StatusCode::SERVICE_UNAVAILABLE
+        );
+        assert!(recorder.0.lock().unwrap().is_empty());
         let mut state = runtime_state_with_upstream(Arc::new(NoOwner), recorder.clone());
         Arc::get_mut(&mut state)
             .expect("unique runtime state")
             .memberships = Arc::new(CertificateOperator);
+        Arc::get_mut(&mut state)
+            .expect("unique runtime state")
+            .dsc_issue_gateway_key = Some("dedicated-dsc-gateway-credential-000001".into());
         let gateway = gateway_router(state);
         assert_eq!(
             gateway.clone().oneshot(request()).await.unwrap().status(),
@@ -7206,7 +7244,16 @@ mod tests {
         assert_eq!(service, "signing-keys");
         assert_eq!(forwarded.path, PATH);
         assert_eq!(forwarded.query["organization_id"], vec!["org-1"]);
-        assert_eq!(forwarded.header("x-api-key"), Some("internal-signing-key"));
+        assert_eq!(
+            forwarded.header("x-api-key"),
+            Some("dedicated-dsc-gateway-credential-000001")
+        );
+        assert_eq!(forwarded.header("x-user-id"), Some("user-1"));
+        assert!(forwarded
+            .header("x-org-roles")
+            .unwrap()
+            .split(',')
+            .any(|role| role == "operator"));
         assert_eq!(
             forwarded.header("x-required-permission"),
             Some("passport-certificate:issue")

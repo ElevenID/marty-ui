@@ -8,10 +8,15 @@ services:
 
   gateway:
     environment:
+      SIGNING_KEYS_DSC_ISSUE_GATEWAY_KEY: ${SIGNING_KEYS_DSC_ISSUE_GATEWAY_KEY:?SIGNING_KEYS_DSC_ISSUE_GATEWAY_KEY must be set for beta passport issuance}
       PASSPORT_NATIVE_GATEWAY_ENABLED: "true"
       PASSPORT_INTERNAL_SERVICE_AUTH_ENABLED: "true"
       PASSPORT_TENANT_API_KEYS: ""
       PASSPORT_TENANT_API_KEYS_FILE: ""
+
+  signing-keys:
+    environment:
+      SIGNING_KEYS_DSC_ISSUE_GATEWAY_KEY: ${SIGNING_KEYS_DSC_ISSUE_GATEWAY_KEY:?SIGNING_KEYS_DSC_ISSUE_GATEWAY_KEY must be set for beta passport issuance}
 
   flow:
     environment:

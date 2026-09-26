@@ -141,6 +141,27 @@ def validate_model(model, *, passport_enabled, files):
         ):
             raise PassportConfigurationError("Beta passport database target is invalid")
         signing_key = bureau_env.get("SIGNING_KEYS_INTERNAL_API_KEY")
+        dsc_gateway_key_name = "SIGNING_KEYS_DSC_ISSUE_GATEWAY_KEY"
+        dsc_gateway_key = gateway.get(dsc_gateway_key_name)
+        dsc_key_holders = {
+            name
+            for name, service in services.items()
+            if service.get("environment") is not None
+            and environment(service).get(dsc_gateway_key_name)
+        }
+        if not (
+            isinstance(dsc_gateway_key, str)
+            and len(dsc_gateway_key) >= 32
+            and dsc_gateway_key == signing.get(dsc_gateway_key_name)
+            and dsc_gateway_key != signing_key
+            and dsc_key_holders == {"gateway", "signing-keys"}
+            and all(
+                not environment(service).get(f"{dsc_gateway_key_name}_FILE")
+                for service in services.values()
+                if service.get("environment") is not None
+            )
+        ):
+            raise PassportConfigurationError("Beta DSC operator credential isolation is invalid")
         callback_signer_env = environment(callback_signer)
         if not (
             bureau_env.get("SERVICE_NAME") == "passport_beta_bureau"

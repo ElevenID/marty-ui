@@ -106,6 +106,7 @@ pub struct GatewayConfig {
     pub grpc_insecure_allowed: bool,
     pub grpc_service_token: Option<String>,
     pub signing_internal_api_key: String,
+    pub dsc_issue_gateway_key: Option<String>,
     pub issuance_api_key: String,
     pub passport_native_gateway_enabled: bool,
     pub passport_tenant_keys: Option<PassportTenantCredentialSource>,
@@ -143,6 +144,10 @@ impl fmt::Debug for GatewayConfig {
                 &self.grpc_service_token.is_some(),
             )
             .field("signing_internal_api_key_configured", &true)
+            .field(
+                "dsc_issue_gateway_key_configured",
+                &self.dsc_issue_gateway_key.is_some(),
+            )
             .field("issuance_api_key_configured", &true)
             .field(
                 "passport_native_gateway_enabled",
@@ -189,6 +194,8 @@ impl GatewayConfig {
             environment.to_ascii_lowercase().as_str(),
             "development" | "dev" | "local" | "test"
         );
+        let passport_native_gateway_enabled =
+            boolean(values, "PASSPORT_NATIVE_GATEWAY_ENABLED", false)?;
         let port = parse(values, "GATEWAY_PORT", 8000_u16)?;
         let mut service_urls = SERVICE_URLS
             .iter()
@@ -217,6 +224,21 @@ impl GatewayConfig {
                 Some(&signing_internal_api_key),
                 16,
             )?;
+        }
+        let dsc_issue_gateway_key = secret(values, "SIGNING_KEYS_DSC_ISSUE_GATEWAY_KEY")?;
+        if (environment.eq_ignore_ascii_case("beta") && passport_native_gateway_enabled)
+            || dsc_issue_gateway_key.is_some()
+        {
+            validate_production_secret(
+                "SIGNING_KEYS_DSC_ISSUE_GATEWAY_KEY",
+                dsc_issue_gateway_key.as_deref(),
+                32,
+            )?;
+        }
+        if dsc_issue_gateway_key.as_deref() == Some(signing_internal_api_key.as_str()) {
+            return Err(error(
+                "DSC issuance credential must differ from the shared Signing Keys key",
+            ));
         }
         let issuance_api_key = secret(values, "ISSUANCE_API_KEY")?
             .or_else(|| (!production).then(|| "dev-issuance-api-key".into()))
@@ -255,8 +277,6 @@ impl GatewayConfig {
         } else {
             passport_tenant_keys
         };
-        let passport_native_gateway_enabled =
-            boolean(values, "PASSPORT_NATIVE_GATEWAY_ENABLED", false)?;
         if passport_native_gateway_enabled && passport_tenant_keys.is_none() {
             return Err(error(
                 "PASSPORT_TENANT_API_KEYS is required when PASSPORT_NATIVE_GATEWAY_ENABLED is true",
@@ -359,6 +379,7 @@ impl GatewayConfig {
             grpc_insecure_allowed,
             grpc_service_token,
             signing_internal_api_key,
+            dsc_issue_gateway_key,
             issuance_api_key,
             passport_native_gateway_enabled,
             passport_tenant_keys,
@@ -706,6 +727,10 @@ mod tests {
                 "SIGNING_KEYS_INTERNAL_API_KEY".into(),
                 "synthetic-signing-key".into(),
             ),
+            (
+                "SIGNING_KEYS_DSC_ISSUE_GATEWAY_KEY".into(),
+                "synthetic-dsc-gateway-only-credential-000001".into(),
+            ),
             ("ISSUANCE_API_KEY".into(), "synthetic-issuance-key".into()),
             (
                 "REDIS_URL".into(),
@@ -717,6 +742,7 @@ mod tests {
             "private-organization",
             "synthetic-grpc-token",
             "synthetic-signing-key",
+            "synthetic-dsc-gateway-only-credential-000001",
             "synthetic-issuance-key",
             "synthetic-redis-password",
             "synthetic-service-path-token",
@@ -775,6 +801,33 @@ mod tests {
             .to_string()
             .contains("GRPC_TLS_CA_CERT"));
         values.insert("GRPC_INSECURE_ALLOWED".into(), "true".into());
+        assert!(GatewayConfig::from_values(&values).is_ok());
+    }
+
+    #[test]
+    fn beta_passport_requires_a_distinct_dsc_gateway_credential() {
+        let mut values = BTreeMap::from([
+            ("ENVIRONMENT".into(), "beta".into()),
+            ("PASSPORT_NATIVE_GATEWAY_ENABLED".into(), "true".into()),
+            (
+                "PASSPORT_INTERNAL_SERVICE_AUTH_ENABLED".into(),
+                "true".into(),
+            ),
+            ("GRPC_SERVICE_TOKEN".into(), "g".repeat(32)),
+            ("SIGNING_KEYS_INTERNAL_API_KEY".into(), "s".repeat(32)),
+            ("ISSUANCE_API_KEY".into(), "i".repeat(32)),
+            ("GRPC_INSECURE_ALLOWED".into(), "true".into()),
+        ]);
+        assert!(GatewayConfig::from_values(&values)
+            .unwrap_err()
+            .to_string()
+            .contains("SIGNING_KEYS_DSC_ISSUE_GATEWAY_KEY"));
+        values.insert("SIGNING_KEYS_DSC_ISSUE_GATEWAY_KEY".into(), "s".repeat(32));
+        assert!(GatewayConfig::from_values(&values).is_err());
+        values.insert("SIGNING_KEYS_DSC_ISSUE_GATEWAY_KEY".into(), "d".repeat(32));
+        assert!(GatewayConfig::from_values(&values).is_ok());
+        values.insert("PASSPORT_NATIVE_GATEWAY_ENABLED".into(), "false".into());
+        values.remove("SIGNING_KEYS_DSC_ISSUE_GATEWAY_KEY");
         assert!(GatewayConfig::from_values(&values).is_ok());
     }
 
