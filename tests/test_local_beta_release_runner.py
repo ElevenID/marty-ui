@@ -14,6 +14,8 @@ def text(path: str) -> str:
 def test_local_release_runner_is_backup_and_rehearsal_gated() -> None:
     script = text("scripts/deploy-local-beta-release.ps1")
 
+    assert 'if ($BetaOrigin -cne "https://beta.elevenidllc.com")' in script
+    assert script.index('if ($BetaOrigin -cne "https://beta.elevenidllc.com")') < script.index('if ($PlanOnly)')
     assert 'source_kind -ne "local-worktree-snapshot"' in script
     assert "promotion_eligible -ne $false" in script
     assert '"--verify-manifest", $sourceManifestPath' in script

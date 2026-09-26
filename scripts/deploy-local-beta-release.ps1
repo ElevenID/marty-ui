@@ -621,8 +621,8 @@ $artifactPrefix = $script:ArtifactRoot.TrimEnd([IO.Path]::DirectorySeparatorChar
 if (-not $script:ArtifactDir.StartsWith($artifactPrefix, [System.StringComparison]::OrdinalIgnoreCase)) {
     throw "ArtifactDir must stay under $script:ArtifactRoot"
 }
-if ($BetaOrigin -notmatch '^https://[^/]+$') {
-    throw "BetaOrigin must be an absolute HTTPS origin without a path"
+if ($BetaOrigin -cne "https://beta.elevenidllc.com") {
+    throw "BetaOrigin must be https://beta.elevenidllc.com for the beta-only release"
 }
 if ($EnablePortableCanvas -and $CanvasOrigin -notmatch '^https://[^/]+$') {
     throw "CanvasOrigin must be an absolute HTTPS origin without a path"

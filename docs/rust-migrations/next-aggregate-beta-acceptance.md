@@ -132,9 +132,8 @@ selected here.
    pre-isolation passport snapshot. The inventoried beta has no bureau, so
    this release is eligible for a first passport cutover only; recheck that
    condition before deployment and keep the restore constraint visible.
-4. Explicitly hold `BetaOrigin` at `https://beta.elevenidllc.com`. The wrapper's
-   HTTPS syntax check alone does not establish that an origin is beta. Retain
-   fixed beta Compose projects/network and labeled-volume ownership checks.
+4. The wrapper requires `BetaOrigin` to equal `https://beta.elevenidllc.com`.
+   Retain fixed beta Compose projects/network and labeled-volume ownership checks.
    Capture and compare production's exact before/after identity and state;
    beta isolation checks do not independently prove production unchanged.
    Do not deploy, restore, reset or probe mutating endpoints on production.
