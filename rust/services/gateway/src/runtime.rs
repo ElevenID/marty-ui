@@ -7019,6 +7019,25 @@ mod tests {
             == Some("test-only")
     }
 
+    fn gateway_with_signing_http(signing_url: String) -> Router {
+        let upstream = Arc::new(crate::transport::ReqwestUpstream::new(1024 * 1024).unwrap());
+        let mut state = runtime_state_with_upstream(Arc::new(NoOwner), upstream.clone());
+        let routes = GatewayContract::load()
+            .unwrap()
+            .proxy_route_table_with_passport_native(false)
+            .unwrap();
+        let registry = StaticServiceRegistry::from_urls(&BTreeMap::from([(
+            "signing-keys".into(),
+            signing_url,
+        )]))
+        .unwrap();
+        Arc::get_mut(&mut state).unwrap().proxy = Arc::new(
+            GatewayProxy::new(routes, Arc::new(registry), upstream, ProxyConfig::default())
+                .unwrap(),
+        );
+        gateway_router(state)
+    }
+
     async fn gateway_transit_create(
         State(fixture): State<GatewayTransitFixture>,
         Path(reference): Path<String>,
@@ -7148,22 +7167,7 @@ mod tests {
         let signing_url = format!("http://{}", signing_listener.local_addr().unwrap());
         let signing_server =
             tokio::spawn(async move { axum::serve(signing_listener, signing).await.unwrap() });
-        let upstream = Arc::new(crate::transport::ReqwestUpstream::new(1024 * 1024).unwrap());
-        let mut state = runtime_state_with_upstream(Arc::new(NoOwner), upstream.clone());
-        let routes = GatewayContract::load()
-            .unwrap()
-            .proxy_route_table_with_passport_native(false)
-            .unwrap();
-        let registry = StaticServiceRegistry::from_urls(&BTreeMap::from([(
-            "signing-keys".into(),
-            signing_url,
-        )]))
-        .unwrap();
-        Arc::get_mut(&mut state).unwrap().proxy = Arc::new(
-            GatewayProxy::new(routes, Arc::new(registry), upstream, ProxyConfig::default())
-                .unwrap(),
-        );
-        let gateway = gateway_router(state);
+        let gateway = gateway_with_signing_http(signing_url);
         let create = |cookie: bool| {
             let mut builder =
                 Request::post("/v1/signing-keys").header("content-type", "application/json");
@@ -7387,6 +7391,249 @@ mod tests {
         }
         signing_server.abort();
         kms_server.abort();
+    }
+
+    #[tokio::test]
+    #[ignore = "requires independently marked disposable Redis and OpenBao instances"]
+    async fn authenticated_gateway_generates_profile_scoped_passport_csrs_in_openbao() {
+        use std::str::FromStr;
+
+        use der::{DecodePem, Encode};
+        use x509_cert::name::Name;
+        use x509_cert::request::CertReq;
+
+        let redis_url = std::env::var("MARTY_TEST_REDIS_URL").expect("disposable Redis URL");
+        let parsed_redis = url::Url::parse(&redis_url).expect("disposable Redis URL syntax");
+        let redis_db = parsed_redis
+            .path()
+            .trim_start_matches('/')
+            .parse::<u8>()
+            .ok();
+        assert!(
+            parsed_redis.host_str() == Some("127.0.0.1") && redis_db.is_some_and(|db| db >= 13),
+            "CSR test requires an isolated loopback Redis database numbered 13 or higher"
+        );
+        let nonce = std::env::var("MARTY_TEST_REDIS_DISPOSABLE_NONCE")
+            .expect("disposable Redis sentinel value");
+        assert!(nonce.len() >= 16, "disposable Redis sentinel is too short");
+        let client = redis::Client::open(redis_url.as_str()).expect("disposable Redis client");
+        let mut redis = client
+            .get_multiplexed_async_connection()
+            .await
+            .expect("disposable Redis connection");
+        let observed: Option<String> = redis::cmd("GET")
+            .arg("marty:tests:disposable-guard")
+            .query_async(&mut redis)
+            .await
+            .expect("disposable Redis sentinel read");
+        assert!(
+            observed.as_deref() == Some(nonce.as_str()),
+            "disposable Redis sentinel does not match"
+        );
+        let endpoint = std::env::var("MARTY_TEST_OPENBAO_URL").expect("disposable OpenBao URL");
+        let parsed_bao = url::Url::parse(&endpoint).expect("disposable OpenBao URL syntax");
+        assert!(
+            parsed_bao.scheme() == "http" && parsed_bao.host_str() == Some("127.0.0.1"),
+            "CSR test requires a loopback disposable OpenBao instance"
+        );
+        let token = std::env::var("MARTY_TEST_OPENBAO_TOKEN").expect("disposable OpenBao token");
+        assert!(
+            std::env::var("BAO_TOKEN").ok().as_deref() == Some(token.as_str()),
+            "disposable OpenBao token binding does not match"
+        );
+        let bao_nonce = std::env::var("MARTY_TEST_OPENBAO_DISPOSABLE_NONCE")
+            .expect("pre-provisioned disposable OpenBao sentinel value");
+        assert!(
+            bao_nonce.len() >= 16,
+            "disposable OpenBao sentinel is too short"
+        );
+        let marker = reqwest::Client::new()
+            .get(
+                parsed_bao
+                    .join("/v1/secret/data/marty-test-disposable-guard")
+                    .expect("disposable OpenBao sentinel URL"),
+            )
+            .header("X-Vault-Token", &token)
+            .send()
+            .await
+            .expect("disposable OpenBao sentinel read");
+        assert!(
+            marker.status().is_success(),
+            "disposable OpenBao sentinel is absent"
+        );
+        let marker: Value = marker
+            .json()
+            .await
+            .expect("disposable OpenBao sentinel JSON");
+        assert!(
+            marker["data"]["data"]["nonce"].as_str() == Some(bao_nonce.as_str()),
+            "disposable OpenBao sentinel does not match"
+        );
+        let registry = SigningRegistryStore::connect(&redis_url)
+            .await
+            .unwrap()
+            .with_managed_openbao(Some(endpoint.clone()));
+        let profiles = SigningProfileStore::from_connection(registry.connection());
+        let documents = SigningDocumentStore::from_connection(registry.connection());
+        let signing = signing_router(
+            "internal-signing-key".into(),
+            Some(registry),
+            Some(documents),
+            None,
+            Some(profiles.clone()),
+            None,
+            Some("issuer.example".into()),
+        );
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let signing_url = format!("http://{}", listener.local_addr().unwrap());
+        let signing_server =
+            tokio::spawn(async move { axum::serve(listener, signing).await.unwrap() });
+        let gateway = gateway_with_signing_http(signing_url);
+        let mut references = Vec::new();
+        let mut public_keys = Vec::new();
+        for (purpose, common_name) in [("csca", "Pilot CSCA"), ("x509_doc_signer", "Pilot DSC")] {
+            let issuer_did = format!(
+                "did:web:issuer.example:orgs:csr-{}",
+                uuid::Uuid::new_v4().simple()
+            );
+            let identity = json!({
+                "organization_id":"org-1", "issuer_did":issuer_did,
+                "key_purpose":purpose, "credential_format":"ICAO_EMRTD",
+                "algorithm":"ES256"
+            });
+            let request = |method: &str, path: &str, body: &Value, authenticated: bool| {
+                let mut builder = Request::builder()
+                    .method(method)
+                    .uri(path)
+                    .header("content-type", "application/json");
+                if authenticated {
+                    builder = builder.header("cookie", "sessionId=valid");
+                }
+                builder.body(Body::from(body.to_string())).unwrap()
+            };
+            let created = gateway
+                .clone()
+                .oneshot(request(
+                    "POST",
+                    "/v1/signing-keys/issuer-identities",
+                    &identity,
+                    true,
+                ))
+                .await
+                .unwrap();
+            let status = created.status();
+            let created: Value = serde_json::from_slice(
+                &to_bytes(created.into_body(), DEFAULT_MAXIMUM_BODY_BYTES)
+                    .await
+                    .unwrap(),
+            )
+            .unwrap();
+            assert_eq!(status, StatusCode::OK, "{purpose}: profile create failed");
+            assert_eq!(created["created"], true);
+            let resolved = gateway
+                .clone()
+                .oneshot(request(
+                    "POST",
+                    "/v1/signing-keys/issuer-identities/resolve",
+                    &identity,
+                    true,
+                ))
+                .await
+                .unwrap();
+            let status = resolved.status();
+            let resolved: Value = serde_json::from_slice(
+                &to_bytes(resolved.into_body(), DEFAULT_MAXIMUM_BODY_BYTES)
+                    .await
+                    .unwrap(),
+            )
+            .unwrap();
+            assert_eq!(status, StatusCode::OK, "{purpose}: profile resolve failed");
+            assert_eq!(resolved["public_jwk"]["crv"], "P-256");
+            public_keys.push(resolved["public_jwk"].clone());
+            let profile = profiles.list("org-1").await.unwrap()["profiles"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .find(|profile| profile["issuer_did"] == issuer_did)
+                .unwrap()
+                .clone();
+            let reference = profile["signing_key_reference"]
+                .as_str()
+                .unwrap()
+                .to_owned();
+            references.push(reference.clone());
+            let mut csr_input = identity.clone();
+            csr_input["country"] = json!("US");
+            csr_input["organization"] = json!("ElevenID Beta");
+            csr_input["common_name"] = json!(common_name);
+            let route = "/v1/signing-keys/issuer-identities/certificate-csr";
+            let denied = gateway
+                .clone()
+                .oneshot(request("PUT", route, &csr_input, false))
+                .await
+                .unwrap();
+            assert_eq!(denied.status(), StatusCode::UNAUTHORIZED);
+            let foreign = gateway
+                .clone()
+                .oneshot(request(
+                    "PUT",
+                    "/v1/signing-keys/issuer-identities/certificate-csr?organization_id=org-other",
+                    &csr_input,
+                    true,
+                ))
+                .await
+                .unwrap();
+            assert_eq!(foreign.status(), StatusCode::FORBIDDEN);
+            let mut forged = csr_input.clone();
+            forged["key_reference"] = json!("attacker-key");
+            let rejected = gateway
+                .clone()
+                .oneshot(request("PUT", route, &forged, true))
+                .await
+                .unwrap();
+            assert_eq!(rejected.status(), StatusCode::UNPROCESSABLE_ENTITY);
+            let csr = gateway
+                .clone()
+                .oneshot(request("PUT", route, &csr_input, true))
+                .await
+                .unwrap();
+            let status = csr.status();
+            let csr: Value = serde_json::from_slice(
+                &to_bytes(csr.into_body(), DEFAULT_MAXIMUM_BODY_BYTES)
+                    .await
+                    .unwrap(),
+            )
+            .unwrap();
+            assert_eq!(status, StatusCode::OK, "{purpose}: CSR request failed");
+            assert_eq!(csr["issuer_did"], issuer_did);
+            assert_eq!(csr["subject"]["country"], "US");
+            assert_eq!(csr["subject"]["organization"], "ElevenID Beta");
+            assert_eq!(csr["subject"]["common_name"], common_name);
+            let parsed = CertReq::from_pem(csr["csr_pem"].as_str().unwrap()).unwrap();
+            assert_eq!(
+                parsed.info.subject,
+                Name::from_str(&format!("C=US,O=ElevenID Beta,CN={common_name}")).unwrap()
+            );
+            let parsed_jwk: Value = serde_json::to_value(
+                marty_crypto::jwk::public_key_der_to_jwk(&parsed.info.public_key.to_der().unwrap())
+                    .unwrap(),
+            )
+            .unwrap();
+            for field in ["kty", "crv", "x", "y"] {
+                assert_eq!(parsed_jwk[field], resolved["public_jwk"][field]);
+            }
+            for public in [&created, &resolved, &csr] {
+                for secret in [&endpoint[..], token.as_str(), reference.as_str()] {
+                    assert!(
+                        !public.to_string().contains(secret),
+                        "{purpose}: public response exposed custody metadata"
+                    );
+                }
+            }
+        }
+        assert_ne!(references[0], references[1]);
+        assert_ne!(public_keys[0]["x"], public_keys[1]["x"]);
+        signing_server.abort();
     }
 
     #[tokio::test]
