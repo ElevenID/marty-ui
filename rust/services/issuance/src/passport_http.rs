@@ -21,6 +21,7 @@ use uuid::Uuid;
 use crate::{
     config::IssuanceServiceConfig,
     passport_artifact::{PassportArtifactCipher, PassportArtifactError},
+    passport_artifact_kms::{KmsArtifactError, KmsPassportArtifactCipher},
     passport_bureau::{
         parse_verified_webhook, BureauClient, BureauError, DocumentType, PersonalizationJob,
         ProductionStatus,
@@ -53,7 +54,73 @@ pub struct PassportHttpService {
 enum ArtifactAvailability {
     Missing,
     Invalid,
-    Ready(PassportArtifactCipher),
+    Ready(ArtifactCryptor),
+}
+
+#[derive(Clone)]
+enum ArtifactCryptor {
+    Legacy(PassportArtifactCipher),
+    Kms(KmsPassportArtifactCipher),
+}
+
+impl ArtifactCryptor {
+    async fn encrypt(
+        &self,
+        organization_id: &str,
+        artifact_id: &str,
+        artifact: &crate::passport_artifact::PassportSensitiveArtifact,
+    ) -> Result<String, PassportHttpError> {
+        match self {
+            Self::Legacy(cipher) => cipher
+                .encrypt(artifact)
+                .map_err(|_| PassportHttpError::InvalidArtifact),
+            Self::Kms(cipher) => cipher
+                .encrypt(organization_id, artifact_id, artifact)
+                .await
+                .map_err(kms_artifact_error),
+        }
+    }
+
+    async fn decrypt(
+        &self,
+        job: &PassportJob,
+    ) -> Result<crate::passport_artifact::PassportSensitiveArtifact, PassportHttpError> {
+        match self {
+            Self::Legacy(cipher) => cipher
+                .decrypt(&job.secure_artifact_ciphertext)
+                .map_err(|_| PassportHttpError::InvalidArtifact),
+            Self::Kms(cipher) => cipher
+                .decrypt(
+                    &job.organization_id,
+                    &job.id,
+                    &job.secure_artifact_ciphertext,
+                )
+                .await
+                .map_err(kms_artifact_error),
+        }
+    }
+
+    async fn encrypted_scrubbed_artifact(
+        &self,
+        job: &PassportJob,
+    ) -> Result<String, PassportHttpError> {
+        match self {
+            Self::Legacy(cipher) => Ok(cipher.encrypted_scrubbed_artifact()),
+            Self::Kms(cipher) => cipher
+                .encrypted_scrubbed_artifact(&job.organization_id, &job.id)
+                .await
+                .map_err(kms_artifact_error),
+        }
+    }
+}
+
+fn kms_artifact_error(error: KmsArtifactError) -> PassportHttpError {
+    match error {
+        KmsArtifactError::InvalidArtifact => PassportHttpError::InvalidArtifact,
+        KmsArtifactError::InvalidConfig | KmsArtifactError::Unavailable => {
+            PassportHttpError::ArtifactKmsUnavailable
+        }
+    }
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -64,6 +131,8 @@ pub enum PassportStartupError {
     Signer(#[from] SignerError),
     #[error(transparent)]
     Bureau(#[from] BureauError),
+    #[error(transparent)]
+    Artifact(#[from] KmsArtifactError),
 }
 
 impl PassportHttpService {
@@ -79,15 +148,25 @@ impl PassportHttpService {
             .passport_tenant_keys
             .clone()
             .ok_or(PassportStartupError::Missing("PASSPORT_TENANT_API_KEYS"))?;
-        let cipher = match native.artifact_key.as_deref() {
-            None => ArtifactAvailability::Missing,
-            Some(key) => match PassportArtifactCipher::from_key(key) {
-                Ok(cipher) => ArtifactAvailability::Ready(cipher),
-                Err(PassportArtifactError::InvalidKey) => ArtifactAvailability::Invalid,
-                Err(PassportArtifactError::InvalidArtifact) => {
-                    unreachable!("key parsing cannot decrypt")
-                }
-            },
+        let cipher = if native.kms_artifacts_enabled {
+            let api_key = config.signing_keys_internal_api_key.as_deref().ok_or(
+                PassportStartupError::Missing("SIGNING_KEYS_INTERNAL_API_KEY"),
+            )?;
+            ArtifactAvailability::Ready(ArtifactCryptor::Kms(KmsPassportArtifactCipher::new(
+                config.signing_keys_internal_url.clone(),
+                api_key,
+            )?))
+        } else {
+            match native.artifact_key.as_deref() {
+                None => ArtifactAvailability::Missing,
+                Some(key) => match PassportArtifactCipher::from_key(key) {
+                    Ok(cipher) => ArtifactAvailability::Ready(ArtifactCryptor::Legacy(cipher)),
+                    Err(PassportArtifactError::InvalidKey) => ArtifactAvailability::Invalid,
+                    Err(PassportArtifactError::InvalidArtifact) => {
+                        unreachable!("key parsing cannot decrypt")
+                    }
+                },
+            }
         };
         let signer = if native.managed_issuer_signing_enabled {
             Some(PassportSigner::Managed(Box::new(
@@ -154,7 +233,9 @@ impl PassportHttpService {
         Self::with_artifact_availability(
             keyring,
             repository,
-            cipher.map_or(ArtifactAvailability::Missing, ArtifactAvailability::Ready),
+            cipher.map_or(ArtifactAvailability::Missing, |cipher| {
+                ArtifactAvailability::Ready(ArtifactCryptor::Legacy(cipher))
+            }),
             signer,
             bureau,
         )
@@ -193,7 +274,7 @@ impl PassportHttpService {
             .map_err(PassportHttpError::Auth)
     }
 
-    fn cipher(&self) -> Result<&PassportArtifactCipher, PassportHttpError> {
+    fn cipher(&self) -> Result<&ArtifactCryptor, PassportHttpError> {
         match &self.cipher {
             ArtifactAvailability::Ready(cipher) => Ok(cipher),
             ArtifactAvailability::Missing => Err(PassportHttpError::MissingArtifactKey),
@@ -242,13 +323,11 @@ impl PassportHttpService {
             .ok_or(PassportHttpError::ConcurrentChange)
     }
 
-    fn decrypt(
+    async fn decrypt(
         &self,
         job: &PassportJob,
     ) -> Result<crate::passport_artifact::PassportSensitiveArtifact, PassportHttpError> {
-        self.cipher()?
-            .decrypt(&job.secure_artifact_ciphertext)
-            .map_err(|_| PassportHttpError::InvalidArtifact)
+        self.cipher()?.decrypt(job).await
     }
 
     async fn sign(
@@ -261,7 +340,7 @@ impl PassportHttpService {
         ),
         PassportHttpError,
     > {
-        let artifact = self.decrypt(job)?;
+        let artifact = self.decrypt(job).await?;
         let data_groups = artifact
             .numbered_data_groups()
             .map_err(|_| PassportHttpError::InvalidArtifact)?;
@@ -326,6 +405,8 @@ enum PassportHttpError {
     InvalidArtifactKey,
     #[error("Secure physical document artifact cannot be decrypted")]
     InvalidArtifact,
+    #[error("KMS passport artifact provider is unavailable")]
+    ArtifactKmsUnavailable,
     #[error("{0}")]
     Signer(SignerError),
     #[error("Personalization bureau not configured. Set PERSONALIZATION_BUREAU_URL environment variable.")]
@@ -373,6 +454,7 @@ impl IntoResponse for PassportHttpError {
             Self::ApplicationNotFound | Self::WebhookJobNotFound => StatusCode::NOT_FOUND,
             Self::MissingArtifactKey
             | Self::InvalidArtifactKey
+            | Self::ArtifactKmsUnavailable
             | Self::Signer(SignerError::NotConfigured)
             | Self::Signer(SignerError::ManagedUnavailable)
             | Self::MissingBureau => StatusCode::SERVICE_UNAVAILABLE,
@@ -523,8 +605,8 @@ async fn create_application(
     let id = Uuid::new_v4().to_string();
     let ciphertext = service
         .cipher()?
-        .encrypt(&request.sensitive_artifact())
-        .map_err(|_| PassportHttpError::InvalidArtifact)?;
+        .encrypt(&request.organization_id, &id, &request.sensitive_artifact())
+        .await?;
     let inserted = service
         .repository
         .insert(
@@ -562,7 +644,8 @@ async fn generate_data_groups(
     let principal = service.authenticate(&headers)?;
     let job = service.job(&principal, &application_id).await?;
     let groups = service
-        .decrypt(&job)?
+        .decrypt(&job)
+        .await?
         .numbered_data_groups()
         .map_err(|_| PassportHttpError::InvalidArtifact)?;
     if !groups.contains_key(&num_bigint::BigUint::from(1u8))
@@ -741,7 +824,8 @@ async fn activate(
     }
     let mut patch = PassportJobPatch::new(PassportJobStatus::Active);
     patch.completed_at = Some(Utc::now());
-    patch.secure_artifact_ciphertext = Some(service.cipher()?.encrypted_scrubbed_artifact());
+    patch.secure_artifact_ciphertext =
+        Some(service.cipher()?.encrypted_scrubbed_artifact(&job).await?);
     let updated = service.update(&principal, &job, &patch).await?;
     Ok(Json(safe(&updated)))
 }
@@ -1049,6 +1133,35 @@ mod tests {
         let degraded = PassportHttpService::from_config(&degraded, pool.clone())
             .unwrap()
             .unwrap();
+        let kms_values = vec![
+            ("PASSPORT_NATIVE_HTTP_ENABLED".into(), "true".into()),
+            ("PASSPORT_KMS_ARTIFACTS_ENABLED".into(), "true".into()),
+            (
+                "PASSPORT_TENANT_API_KEYS".into(),
+                r#"{"org-1":"passport-tenant-test-key-00000000000001"}"#.into(),
+            ),
+        ];
+        let kms_without_credential =
+            IssuanceServiceConfig::from_values(kms_values.clone()).unwrap();
+        assert!(matches!(
+            PassportHttpService::from_config(&kms_without_credential, pool.clone()),
+            Err(PassportStartupError::Missing(
+                "SIGNING_KEYS_INTERNAL_API_KEY"
+            ))
+        ));
+        let mut kms_values = kms_values;
+        kms_values.push((
+            "SIGNING_KEYS_INTERNAL_API_KEY".into(),
+            "internal-test-key".into(),
+        ));
+        let kms_config = IssuanceServiceConfig::from_values(kms_values).unwrap();
+        let kms_service = PassportHttpService::from_config(&kms_config, pool.clone())
+            .unwrap()
+            .unwrap();
+        assert!(matches!(
+            kms_service.cipher,
+            ArtifactAvailability::Ready(ArtifactCryptor::Kms(_))
+        ));
         let managed = IssuanceServiceConfig::from_values(vec![
             ("PASSPORT_NATIVE_HTTP_ENABLED".into(), "true".into()),
             (
