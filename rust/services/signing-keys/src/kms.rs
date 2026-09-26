@@ -272,6 +272,53 @@ fn empty_transit_list_response(detail: &str) -> bool {
 
 /// Rotate one existing Transit key inside KMS and return its new public version.
 /// No private key material crosses this boundary.
+pub async fn openbao_latest_version(request: ProviderRequest) -> Result<u64, KmsError> {
+    if Provider::from_config(&request.service_config)? != Provider::OpenBao {
+        return Err(KmsError::InvalidConfig(
+            "No provider rotation adapter available.".into(),
+        ));
+    }
+    let config = &request.service_config;
+    let endpoint = required(
+        config,
+        "endpoint",
+        "Transit endpoint is required for rotation",
+    )?;
+    let key_reference = required(
+        config,
+        "key_reference",
+        "A registered KMS key reference is required for rotation",
+    )?;
+    let token = transit_token(config);
+    if token.is_empty() {
+        return Err(KmsError::InvalidConfig(
+            "Transit access is not configured for rotation.".into(),
+        ));
+    }
+    let mount = string(config, "mount")
+        .unwrap_or("transit")
+        .trim_matches('/');
+    let mut read = Client::new()
+        .get(format!(
+            "{}/v1/{mount}/keys/{key_reference}",
+            endpoint.trim_end_matches('/')
+        ))
+        .timeout(HTTP_TIMEOUT)
+        .header("X-Vault-Token", token);
+    if let Some(namespace) = string(config, "namespace")
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    {
+        read = read.header("X-Vault-Namespace", namespace);
+    }
+    let response = send_json(read).await?;
+    response
+        .pointer("/data/latest_version")
+        .and_then(|value| value.as_u64().or_else(|| value.as_str()?.parse().ok()))
+        .filter(|version| *version > 0)
+        .ok_or_else(|| KmsError::InvalidResponse("OpenBao key version is unavailable".into()))
+}
+
 pub async fn rotate_openbao(request: ProviderRequest) -> Result<Value, KmsError> {
     if Provider::from_config(&request.service_config)? != Provider::OpenBao {
         return Err(KmsError::InvalidConfig(

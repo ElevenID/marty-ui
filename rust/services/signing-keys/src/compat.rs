@@ -565,7 +565,7 @@ impl SigningCompatibilityService {
         self.registry
             .bind_profile(&request.organization_id, &profile)
             .await
-            .map_err(|error| CompatibilityError::Invalid(error.to_string()))?;
+            .map_err(map_registry_binding_error)?;
         let profile_id = required(&profile, "id")?.to_owned();
         let profile = self
             .profiles
@@ -672,7 +672,7 @@ impl SigningCompatibilityService {
         self.registry
             .bind_profile(organization_id, &profile)
             .await
-            .map_err(|error| CompatibilityError::Invalid(error.to_string()))?;
+            .map_err(map_registry_binding_error)?;
         let profile = self
             .profiles
             .put(organization_id, profile_id, profile)
@@ -1925,6 +1925,18 @@ fn map_profile_error(error: profiles::ProfileError) -> CompatibilityError {
         profiles::ProfileError::Conflict(detail) => CompatibilityError::Conflict(detail),
         profiles::ProfileError::NotFound(detail) => CompatibilityError::NotFound(detail),
         profiles::ProfileError::Storage(_) | profiles::ProfileError::Corrupt(_) => {
+            CompatibilityError::Unavailable
+        }
+    }
+}
+
+fn map_registry_binding_error(error: crate::registry::RegistryError) -> CompatibilityError {
+    match error {
+        crate::registry::RegistryError::Conflict => {
+            CompatibilityError::Conflict("Signing registry update is already in progress.".into())
+        }
+        crate::registry::RegistryError::Invalid(detail) => CompatibilityError::Invalid(detail),
+        crate::registry::RegistryError::Storage(_) | crate::registry::RegistryError::Corrupt(_) => {
             CompatibilityError::Unavailable
         }
     }

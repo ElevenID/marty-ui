@@ -10,6 +10,7 @@ use chrono::Utc;
 use redis::{aio::ConnectionManager, AsyncCommands};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Map, Value};
+use sha2::{Digest, Sha256};
 use thiserror::Error;
 use tokio::sync::RwLock;
 use tokio::task::JoinSet;
@@ -29,6 +30,36 @@ fn rotation_lease_key(organization_id: &str) -> String {
         organization_id.len(),
         organization_id
     )
+}
+
+fn rotation_marker_key(organization_id: &str, service: &Value) -> Result<String, RegistryError> {
+    let field = |name: &str| {
+        service
+            .get(name)
+            .and_then(Value::as_str)
+            .unwrap_or_default()
+            .trim()
+            .to_owned()
+    };
+    let endpoint = field("endpoint").trim_end_matches('/').to_owned();
+    let key_reference = field("key_reference");
+    if endpoint.is_empty() || key_reference.is_empty() {
+        return Err(RegistryError::Invalid(
+            "Transit endpoint and key reference are required for rotation.".into(),
+        ));
+    }
+    let identity = json!({
+        "endpoint": endpoint,
+        "mount": if field("mount").is_empty() { "transit".into() } else { field("mount").trim_matches('/').to_owned() },
+        "namespace": field("namespace"),
+        "key_reference": key_reference,
+    });
+    let digest = Sha256::digest(serde_json::to_vec(&identity).expect("KMS identity serializes"));
+    Ok(format!(
+        "signing-service:rotation-reconcile:{}:{}:{digest:x}",
+        organization_id.len(),
+        organization_id
+    ))
 }
 
 fn preserve_rotation_fields(requested: &mut Value, current: &Value) {
@@ -160,6 +191,90 @@ pub struct RegistryStore {
 }
 
 impl RegistryStore {
+    pub async fn rotation_marker(
+        &self,
+        organization_id: &str,
+        service: &Value,
+    ) -> Result<Option<Value>, RegistryError> {
+        let key = rotation_marker_key(organization_id, service)?;
+        let mut connection = self.connection.clone();
+        let payload: Option<String> = connection
+            .get(key)
+            .await
+            .map_err(|error| RegistryError::Storage(error.to_string()))?;
+        payload
+            .map(|payload| {
+                serde_json::from_str(&payload)
+                    .map_err(|error| RegistryError::Corrupt(error.to_string()))
+            })
+            .transpose()
+    }
+
+    pub async fn create_rotation_marker(
+        &self,
+        organization_id: &str,
+        service: &Value,
+        marker: &Value,
+        lease: &RotationLease,
+    ) -> Result<(), RegistryError> {
+        if lease.key != rotation_lease_key(organization_id) {
+            return Err(RegistryError::Conflict);
+        }
+        let key = rotation_marker_key(organization_id, service)?;
+        let payload = serde_json::to_string(marker)
+            .map_err(|error| RegistryError::Invalid(error.to_string()))?;
+        let mut connection = self.connection.clone();
+        let created: i32 = redis::Script::new(
+            "if redis.call('GET', KEYS[1]) ~= ARGV[1] then return 0 end
+             if redis.call('EXISTS', KEYS[2]) == 1 then return 0 end
+             redis.call('SET', KEYS[2], ARGV[2])
+             return 1",
+        )
+        .key(&lease.key)
+        .key(key)
+        .arg(&lease.owner)
+        .arg(payload)
+        .invoke_async(&mut connection)
+        .await
+        .map_err(|error| RegistryError::Storage(error.to_string()))?;
+        if created != 1 {
+            return Err(RegistryError::Conflict);
+        }
+        Ok(())
+    }
+
+    pub async fn clear_rotation_marker(
+        &self,
+        organization_id: &str,
+        service: &Value,
+        marker: &Value,
+        lease: &RotationLease,
+    ) -> Result<(), RegistryError> {
+        if lease.key != rotation_lease_key(organization_id) {
+            return Err(RegistryError::Conflict);
+        }
+        let key = rotation_marker_key(organization_id, service)?;
+        let payload = serde_json::to_string(marker)
+            .map_err(|error| RegistryError::Invalid(error.to_string()))?;
+        let mut connection = self.connection.clone();
+        let cleared: i32 = redis::Script::new(
+            "if redis.call('GET', KEYS[1]) ~= ARGV[1] then return 0 end
+             if redis.call('GET', KEYS[2]) ~= ARGV[2] then return 0 end
+             redis.call('DEL', KEYS[2])
+             return 1",
+        )
+        .key(&lease.key)
+        .key(key)
+        .arg(&lease.owner)
+        .arg(payload)
+        .invoke_async(&mut connection)
+        .await
+        .map_err(|error| RegistryError::Storage(error.to_string()))?;
+        if cleared != 1 {
+            return Err(RegistryError::Conflict);
+        }
+        Ok(())
+    }
     pub async fn connect(redis_url: &str) -> Result<Self, RegistryError> {
         let client = redis::Client::open(redis_url)
             .map_err(|error| RegistryError::Storage(error.to_string()))?;
@@ -236,15 +351,26 @@ impl RegistryStore {
             .await?
             .ok_or(RegistryError::Conflict)?;
         let existing = self.load(organization_id).await?;
-        let mut merged = normalize_requested_registry(registry)?;
-        preserve_rotation_fields(&mut merged, &existing);
         let saved = self
-            .save_with_rotation_lease(organization_id, &merged, &lease)
+            .save_requested_with_rotation_lease(organization_id, registry, &existing, &lease)
             .await;
         let release = lease.release().await;
         let normalized = saved?;
         release?;
         Ok(self.with_managed_service(organization_id, normalized).await)
+    }
+
+    pub async fn save_requested_with_rotation_lease(
+        &self,
+        organization_id: &str,
+        requested: &Value,
+        existing: &Value,
+        lease: &RotationLease,
+    ) -> Result<Value, RegistryError> {
+        let mut merged = normalize_requested_registry(requested)?;
+        preserve_rotation_fields(&mut merged, existing);
+        self.save_with_rotation_lease(organization_id, &merged, lease)
+            .await
     }
 
     pub async fn save_with_rotation_lease(

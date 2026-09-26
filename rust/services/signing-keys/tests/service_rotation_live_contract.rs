@@ -68,11 +68,45 @@ async fn public_config_request(
     )
 }
 
+async fn reconcile(
+    app: &Router,
+    organization_id: &str,
+    service_id: &str,
+    operation_id: &str,
+    authorized: bool,
+) -> (StatusCode, Value) {
+    let mut request = Request::post(format!(
+        "/internal/registry/{organization_id}/services/{service_id}/rotation-reconcile"
+    ))
+    .header("content-type", "application/json");
+    if authorized {
+        request = request.header("x-api-key", "test-internal-key");
+    }
+    let response = app
+        .clone()
+        .oneshot(
+            request
+                .body(Body::from(
+                    json!({"operation_id": operation_id}).to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let status = response.status();
+    let bytes = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    (
+        status,
+        serde_json::from_slice(&bytes).unwrap_or(Value::Null),
+    )
+}
+
 #[tokio::test]
 #[ignore = "requires disposable MARTY_TEST_REDIS_URL"]
 async fn public_rotation_updates_state_only_after_kms_success() {
     let redis_url = std::env::var("MARTY_TEST_REDIS_URL").expect("disposable Redis URL");
     let rotations = Arc::new(AtomicUsize::new(0));
+    let latest_version = Arc::new(AtomicUsize::new(2));
     let fail = Arc::new(AtomicBool::new(false));
     let deny = Arc::new(AtomicBool::new(false));
     let rotation_gate = Arc::new(Mutex::new(
@@ -81,7 +115,15 @@ async fn public_rotation_updates_state_only_after_kms_success() {
     let kms = Router::new()
         .route(
             "/v1/transit/keys/signing-key",
-            get(|| async { Json(json!({"data": {"latest_version": 2}})) }),
+            get({
+                let latest_version = Arc::clone(&latest_version);
+                move || {
+                    let latest_version = Arc::clone(&latest_version);
+                    async move {
+                        Json(json!({"data": {"latest_version": latest_version.load(Ordering::SeqCst)}}))
+                    }
+                }
+            }),
         )
         .route(
             "/v1/transit/keys/signing-key/rotate",
@@ -89,11 +131,13 @@ async fn public_rotation_updates_state_only_after_kms_success() {
                 let rotations = Arc::clone(&rotations);
                 let fail = Arc::clone(&fail);
                 let deny = Arc::clone(&deny);
+                let latest_version = Arc::clone(&latest_version);
                 let rotation_gate = Arc::clone(&rotation_gate);
                 move || {
                     let rotations = Arc::clone(&rotations);
                     let fail = Arc::clone(&fail);
                     let deny = Arc::clone(&deny);
+                    let latest_version = Arc::clone(&latest_version);
                     let rotation_gate = Arc::clone(&rotation_gate);
                     async move {
                         rotations.fetch_add(1, Ordering::SeqCst);
@@ -105,8 +149,10 @@ async fn public_rotation_updates_state_only_after_kms_success() {
                         if deny.load(Ordering::SeqCst) {
                             StatusCode::FORBIDDEN
                         } else if fail.load(Ordering::SeqCst) {
+                            latest_version.fetch_add(1, Ordering::SeqCst);
                             StatusCode::SERVICE_UNAVAILABLE
                         } else {
+                            latest_version.fetch_add(1, Ordering::SeqCst);
                             StatusCode::NO_CONTENT
                         }
                     }
@@ -256,7 +302,7 @@ async fn public_rotation_updates_state_only_after_kms_success() {
     assert_eq!(completed["ok"], true);
     assert_eq!(
         completed["rotation_state"]["provider_rotation"]["version"],
-        2
+        3
     );
     assert_eq!(completed["rotation_state"]["overlap_days"], 14);
     assert_eq!(
@@ -285,6 +331,56 @@ async fn public_rotation_updates_state_only_after_kms_success() {
     assert_eq!(
         merged["services"][0]["rotation_policy"],
         stored["services"][0]["rotation_policy"]
+    );
+
+    let (status, mut stale_binding_config) =
+        public_config_request(&app, &organization_id, "GET", json!({})).await;
+    assert_eq!(status, StatusCode::OK);
+    stale_binding_config["services"][0]["name"] = json!("Preserve managed binding");
+    let binding_lease = store
+        .acquire_rotation_lease(&organization_id)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(
+        public_config_request(
+            &competing_app,
+            &organization_id,
+            "PATCH",
+            stale_binding_config.clone(),
+        )
+        .await
+        .0,
+        StatusCode::CONFLICT
+    );
+    binding_lease.release().await.unwrap();
+    store
+        .bind_profile(
+            &organization_id,
+            &json!({
+                "signing_service_id": "managed-openbao-transit",
+                "signing_key_reference": "managed-issuer-key",
+                "key_purpose": "vc_jwt_issuer"
+            }),
+        )
+        .await
+        .unwrap();
+    assert_eq!(
+        public_config_request(
+            &competing_app,
+            &organization_id,
+            "PATCH",
+            stale_binding_config,
+        )
+        .await
+        .0,
+        StatusCode::OK
+    );
+    let bound = store.load(&organization_id).await.unwrap();
+    assert_eq!(bound["services"][0]["name"], "Preserve managed binding");
+    assert_eq!(
+        bound["key_reference_purposes"]["managed-openbao-transit"]["managed-issuer-key"],
+        json!(["vc_jwt_issuer"])
     );
 
     let (entered, entered_rx) = oneshot::channel();
@@ -373,6 +469,12 @@ async fn public_rotation_updates_state_only_after_kms_success() {
         StatusCode::CONFLICT
     );
     assert_eq!(rotations.load(Ordering::SeqCst), rotations_before_block);
+    assert_eq!(
+        rotate(&app, &organization_id, "service-b", json!({}))
+            .await
+            .0,
+        StatusCode::CONFLICT
+    );
 
     let (status, mut rebound_config) =
         public_config_request(&app, &organization_id, "GET", json!({})).await;
@@ -382,6 +484,153 @@ async fn public_rotation_updates_state_only_after_kms_success() {
     assert_eq!(status, StatusCode::OK);
     let rebound = store.load(&organization_id).await.unwrap();
     assert_eq!(rebound["services"][0]["rotation_state"], json!({}));
+    let (status, mut rebound_to_original) =
+        public_config_request(&app, &organization_id, "GET", json!({})).await;
+    assert_eq!(status, StatusCode::OK);
+    rebound_to_original["services"][0]["key_reference"] = json!("signing-key");
+    assert_eq!(
+        public_config_request(&app, &organization_id, "PATCH", rebound_to_original)
+            .await
+            .0,
+        StatusCode::OK
+    );
+    let rotations_before_rebind = rotations.load(Ordering::SeqCst);
+    assert_eq!(
+        rotate(&app, &organization_id, "service-a", json!({}))
+            .await
+            .0,
+        StatusCode::CONFLICT
+    );
+    assert_eq!(rotations.load(Ordering::SeqCst), rotations_before_rebind);
+    let rebound_to_original = store.load(&organization_id).await.unwrap();
+    let current_service = &rebound_to_original["services"][0];
+    let marker = store
+        .rotation_marker(&organization_id, current_service)
+        .await
+        .unwrap()
+        .unwrap();
+    let operation_id = marker["operation_id"].as_str().unwrap();
+    let status_response = app
+        .clone()
+        .oneshot(
+            Request::get(format!(
+                "/internal/registry/{organization_id}/services/service-a/rotation-reconcile"
+            ))
+            .header("x-api-key", "test-internal-key")
+            .body(Body::empty())
+            .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(status_response.status(), StatusCode::OK);
+    let status_body: Value = serde_json::from_slice(
+        &to_bytes(status_response.into_body(), usize::MAX)
+            .await
+            .unwrap(),
+    )
+    .unwrap();
+    assert_eq!(status_body["operation_id"], operation_id);
+    assert_eq!(status_body["baseline_version"], marker["baseline_version"]);
+    assert_eq!(
+        reconcile(&app, &organization_id, "service-a", operation_id, false)
+            .await
+            .0,
+        StatusCode::UNAUTHORIZED
+    );
+    assert_eq!(
+        reconcile(&app, &organization_id, "service-a", operation_id, true)
+            .await
+            .0,
+        StatusCode::CONFLICT
+    );
+    let lease = store
+        .acquire_rotation_lease(&organization_id)
+        .await
+        .unwrap()
+        .unwrap();
+    store
+        .clear_rotation_marker(&organization_id, current_service, &marker, &lease)
+        .await
+        .unwrap();
+    let mut settled_marker = marker.clone();
+    settled_marker["started_at"] =
+        json!((chrono::Utc::now() - chrono::Duration::minutes(1)).to_rfc3339());
+    store
+        .create_rotation_marker(&organization_id, current_service, &settled_marker, &lease)
+        .await
+        .unwrap();
+    lease.release().await.unwrap();
+    let (reconciled_status, reconciled) =
+        reconcile(&app, &organization_id, "service-a", operation_id, true).await;
+    assert_eq!(reconciled_status, StatusCode::OK, "{reconciled}");
+    assert_eq!(reconciled["republication_required"], true);
+    assert_eq!(
+        reconciled["rotation_state"]["provider_rotation"]["version"],
+        5
+    );
+    assert!(store
+        .rotation_marker(&organization_id, current_service)
+        .await
+        .unwrap()
+        .is_none());
+    let current = store.load(&organization_id).await.unwrap();
+    let service_b = &current["services"][1];
+    let unchanged_operation = uuid::Uuid::new_v4().to_string();
+    let unchanged_marker = json!({
+        "operation_id": unchanged_operation,
+        "started_at": (chrono::Utc::now() - chrono::Duration::minutes(1)).to_rfc3339(),
+        "service_id": "service-b",
+        "key_reference": "signing-key",
+        "baseline_version": latest_version.load(Ordering::SeqCst),
+        "prior_rotation_state": {},
+        "overlap_days": 7,
+        "activate_at": chrono::Utc::now().to_rfc3339(),
+        "publish_updates": false,
+    });
+    let lease = store
+        .acquire_rotation_lease(&organization_id)
+        .await
+        .unwrap()
+        .unwrap();
+    store
+        .create_rotation_marker(&organization_id, service_b, &unchanged_marker, &lease)
+        .await
+        .unwrap();
+    lease.release().await.unwrap();
+    let (unchanged_status, unchanged) = reconcile(
+        &app,
+        &organization_id,
+        "service-b",
+        &unchanged_operation,
+        true,
+    )
+    .await;
+    assert_eq!(unchanged_status, StatusCode::CONFLICT, "{unchanged}");
+    assert!(store
+        .rotation_marker(&organization_id, service_b)
+        .await
+        .unwrap()
+        .is_some());
+    let lease = store
+        .acquire_rotation_lease(&organization_id)
+        .await
+        .unwrap()
+        .unwrap();
+    store
+        .clear_rotation_marker(&organization_id, service_b, &unchanged_marker, &lease)
+        .await
+        .unwrap();
+    lease.release().await.unwrap();
+    let (status, mut rebound_again) =
+        public_config_request(&app, &organization_id, "GET", json!({})).await;
+    assert_eq!(status, StatusCode::OK);
+    rebound_again["services"][0]["key_reference"] = json!("replacement-key");
+    assert_eq!(
+        public_config_request(&app, &organization_id, "PATCH", rebound_again)
+            .await
+            .0,
+        StatusCode::OK
+    );
     let (status, mut missing_token_config) =
         public_config_request(&app, &organization_id, "GET", json!({})).await;
     assert_eq!(status, StatusCode::OK);
@@ -430,6 +679,17 @@ async fn public_rotation_updates_state_only_after_kms_success() {
     assert!(matches!(
         store
             .save_with_rotation_lease(&organization_id, &needs_reconcile, &old_lease)
+            .await,
+        Err(RegistryError::Conflict)
+    ));
+    assert!(matches!(
+        store
+            .create_rotation_marker(
+                &organization_id,
+                &needs_reconcile["services"][0],
+                &needs_reconcile["services"][0]["rotation_state"]["reconcile_required"],
+                &old_lease,
+            )
             .await,
         Err(RegistryError::Conflict)
     ));
