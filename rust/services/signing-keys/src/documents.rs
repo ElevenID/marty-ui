@@ -71,6 +71,38 @@ impl DocumentStore {
             .map_err(|error| DocumentError::Storage(error.to_string()))
     }
 
+    pub async fn holder_keys(
+        &self,
+        organization_id: &str,
+        device_id: Option<&str>,
+    ) -> Result<Value, DocumentError> {
+        let document = self
+            .load_optional(&holder_keys_storage_key(organization_id))
+            .await?
+            .unwrap_or_else(
+                || json!({"organization_id": organization_id, "keys": [], "updated_at": now_iso()}),
+            );
+        project_holder_keys(document, organization_id, device_id)
+    }
+
+    pub async fn register_holder_key(
+        &self,
+        organization_id: &str,
+        request: RegisterHolderKeyRequest,
+    ) -> Result<RegisterHolderKeyResponse, DocumentError> {
+        let document = self
+            .load_optional(&holder_keys_storage_key(organization_id))
+            .await?
+            .unwrap_or_else(
+                || json!({"organization_id": organization_id, "keys": [], "updated_at": now_iso()}),
+            );
+        let (document, response) =
+            register_holder_key_document(document, organization_id, request)?;
+        self.save(&holder_keys_storage_key(organization_id), &document)
+            .await?;
+        Ok(response)
+    }
+
     pub async fn certificate_overrides(
         &self,
         organization_id: &str,
@@ -614,6 +646,152 @@ pub fn sanitize_public_jwk(
     Ok(Value::Object(sanitized))
 }
 
+pub fn public_jwk_projection(candidate: &Value) -> Result<Value, DocumentError> {
+    let sanitized = sanitize_public_jwk(candidate, None)?;
+    const PUBLIC_JWK_FIELDS: &[&str] = &[
+        "kty",
+        "crv",
+        "x",
+        "y",
+        "n",
+        "e",
+        "kid",
+        "use",
+        "alg",
+        "key_ops",
+        "x5c",
+        "x5t",
+        "x5t#S256",
+        "service_id",
+        "name",
+        "status",
+    ];
+    let fields = sanitized
+        .as_object()
+        .expect("sanitized JWK is an object")
+        .iter()
+        .filter(|(name, _)| PUBLIC_JWK_FIELDS.contains(&name.as_str()))
+        .map(|(name, value)| (name.clone(), value.clone()))
+        .collect();
+    Ok(Value::Object(fields))
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct RegisterHolderKeyRequest {
+    pub device_id: String,
+    pub credential_id: String,
+    #[serde(default)]
+    pub key_purpose: Option<String>,
+    pub public_jwk: Value,
+}
+
+#[derive(Debug, Serialize)]
+pub struct RegisterHolderKeyResponse {
+    pub ok: bool,
+    pub record_id: String,
+    pub registered_at: String,
+}
+
+pub fn register_holder_key_document(
+    mut document: Value,
+    organization_id: &str,
+    request: RegisterHolderKeyRequest,
+) -> Result<(Value, RegisterHolderKeyResponse), DocumentError> {
+    let key_purpose = request.key_purpose.as_deref().unwrap_or("holder_binding");
+    if !matches!(key_purpose, "holder_binding" | "presentation_signing") {
+        return Err(DocumentError::Invalid(
+            "key_purpose must be holder_binding or presentation_signing".to_string(),
+        ));
+    }
+    if request.device_id.is_empty() || request.credential_id.is_empty() {
+        return Err(DocumentError::Invalid(
+            "device_id, credential_id, and public_jwk are required".to_string(),
+        ));
+    }
+    let supplied = request.public_jwk.as_object().ok_or_else(|| {
+        DocumentError::Invalid("device_id, credential_id, and public_jwk are required".to_string())
+    })?;
+    if supplied.is_empty() {
+        return Err(DocumentError::Invalid(
+            "device_id, credential_id, and public_jwk are required".to_string(),
+        ));
+    }
+    let public_jwk = public_jwk_projection(&request.public_jwk)?;
+    if public_jwk.as_object() != Some(supplied) {
+        return Err(DocumentError::Invalid(
+            "public_jwk may contain only standard public verification fields".to_string(),
+        ));
+    }
+    let record_id = format!(
+        "holder:{}:{}:{}",
+        request.device_id, request.credential_id, key_purpose
+    );
+    let records = document
+        .get("keys")
+        .and_then(Value::as_array)
+        .cloned()
+        .unwrap_or_default();
+    let mut records = records
+        .into_iter()
+        .filter(|record| record.get("id").and_then(Value::as_str) != Some(&record_id))
+        .collect::<Vec<_>>();
+    let registered_at = now_iso();
+    records.push(json!({
+        "id": record_id,
+        "device_id": request.device_id,
+        "credential_id": request.credential_id,
+        "key_purpose": key_purpose,
+        "public_jwk": public_jwk,
+        "created_at": registered_at,
+    }));
+    document["organization_id"] = Value::String(organization_id.to_string());
+    document["keys"] = Value::Array(records);
+    document["updated_at"] = Value::String(registered_at.clone());
+    Ok((
+        document,
+        RegisterHolderKeyResponse {
+            ok: true,
+            record_id,
+            registered_at,
+        },
+    ))
+}
+
+pub fn project_holder_keys(
+    document: Value,
+    organization_id: &str,
+    device_id: Option<&str>,
+) -> Result<Value, DocumentError> {
+    let mut keys = Vec::new();
+    for record in document
+        .get("keys")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+    {
+        if device_id.is_some_and(|device_id| {
+            !device_id.is_empty()
+                && record.get("device_id").and_then(Value::as_str) != Some(device_id)
+        }) {
+            continue;
+        }
+        let Some(jwk) = record.get("public_jwk") else {
+            continue;
+        };
+        let public_jwk = public_jwk_projection(jwk)?;
+        keys.push(json!({
+            "id": record.get("id").and_then(Value::as_str),
+            "device_id": record.get("device_id").and_then(Value::as_str),
+            "credential_id": record.get("credential_id").and_then(Value::as_str),
+            "key_purpose": record.get("key_purpose").and_then(Value::as_str),
+            "public_jwk": public_jwk,
+            "created_at": record.get("created_at").and_then(Value::as_str),
+        }));
+    }
+    Ok(json!({"organization_id": organization_id, "keys": keys}))
+}
+
 pub fn update_jwks_document(
     mut document: Value,
     key_id: &str,
@@ -982,6 +1160,10 @@ pub fn jwks_storage_key(organization_id: &str) -> String {
     format!("org:{organization_id}:signing-key-jwks")
 }
 
+pub fn holder_keys_storage_key(organization_id: &str) -> String {
+    format!("org:{organization_id}:holder-keys")
+}
+
 pub fn certificate_storage_key(organization_id: &str) -> String {
     format!("org:{organization_id}:signing-key-service-certificates")
 }
@@ -1083,6 +1265,7 @@ mod tests {
     #[test]
     fn storage_keys_preserve_the_python_keyspace() {
         assert_eq!(jwks_storage_key("org-a"), "org:org-a:signing-key-jwks");
+        assert_eq!(holder_keys_storage_key("org-a"), "org:org-a:holder-keys");
         assert_eq!(
             certificate_storage_key("org-a"),
             "org:org-a:signing-key-service-certificates"
@@ -1090,6 +1273,118 @@ mod tests {
         assert_eq!(slug_storage_key("acme"), "did-web-slug:acme");
         assert!(did_storage_key("org-a", Some("did:web:example.test"))
             .starts_with("org:org-a:signing-key-did-document:did:"));
+    }
+
+    #[test]
+    fn holder_keys_replace_only_matching_id_and_filter_exact_device() {
+        let empty = json!({"organization_id": "org-a", "keys": []});
+        let register = |device_id: &str, purpose: Option<&str>, x: &str| RegisterHolderKeyRequest {
+            device_id: device_id.to_string(),
+            credential_id: "credential-a".to_string(),
+            key_purpose: purpose.map(str::to_string),
+            public_jwk: json!({"kty": "OKP", "crv": "Ed25519", "x": x}),
+        };
+        let (document, first) =
+            register_holder_key_document(empty, "org-a", register("device-a", None, "old"))
+                .unwrap();
+        assert_eq!(
+            first.record_id,
+            "holder:device-a:credential-a:holder_binding"
+        );
+        let (document, _) = register_holder_key_document(
+            document,
+            "org-a",
+            register("device-a", Some("presentation_signing"), "presentation"),
+        )
+        .unwrap();
+        let (document, _) = register_holder_key_document(
+            document,
+            "org-a",
+            register("device-a", None, "replacement"),
+        )
+        .unwrap();
+        let (document, _) = register_holder_key_document(
+            document,
+            "org-a",
+            register("device-b", None, "other-device"),
+        )
+        .unwrap();
+        let all = project_holder_keys(document.clone(), "org-a", None).unwrap();
+        assert_eq!(all["keys"].as_array().unwrap().len(), 3);
+        let selected = project_holder_keys(document, "org-a", Some("device-a")).unwrap();
+        assert_eq!(selected["keys"].as_array().unwrap().len(), 2);
+        assert!(selected["keys"].as_array().unwrap().iter().any(|record| {
+            record["key_purpose"] == "holder_binding" && record["public_jwk"]["x"] == "replacement"
+        }));
+        assert_eq!(selected["organization_id"], "org-a");
+    }
+
+    #[test]
+    fn holder_key_behavior_contract_keeps_the_public_route_and_storage_shape() {
+        let contract: Value = serde_json::from_str(include_str!(
+            "../../../../contracts/signing-holder-keys-behavior.json"
+        ))
+        .unwrap();
+        assert_eq!(contract["storage_key"], "org:{organization_id}:holder-keys");
+        assert_eq!(contract["routes"]["register"]["method"], "POST");
+        assert_eq!(contract["routes"]["list"]["method"], "GET");
+        assert_eq!(
+            contract["routes"]["register"]["path"],
+            "/v1/signing-keys/holder-keys"
+        );
+        assert_eq!(contract["default_key_purpose"], "holder_binding");
+    }
+
+    #[test]
+    fn holder_registration_rejects_private_custody_and_bad_purpose() {
+        for forbidden in ["d", "k", "key_reference", "private_key"] {
+            let mut public_jwk = json!({"kty": "OKP", "crv": "Ed25519", "x": "public"});
+            public_jwk[forbidden] = json!("never-store");
+            let result = register_holder_key_document(
+                json!({"keys": []}),
+                "org-a",
+                RegisterHolderKeyRequest {
+                    device_id: "device-a".into(),
+                    credential_id: "credential-a".into(),
+                    key_purpose: None,
+                    public_jwk,
+                },
+            );
+            assert!(
+                matches!(result, Err(DocumentError::Invalid(_))),
+                "{forbidden}"
+            );
+        }
+        let result = register_holder_key_document(
+            json!({"keys": []}),
+            "org-a",
+            RegisterHolderKeyRequest {
+                device_id: "device-a".into(),
+                credential_id: "credential-a".into(),
+                key_purpose: Some("issuer_signing".into()),
+                public_jwk: json!({"kty": "OKP", "x": "public"}),
+            },
+        );
+        assert!(matches!(result, Err(DocumentError::Invalid(_))));
+    }
+
+    #[test]
+    fn holder_read_redacts_legacy_private_fields() {
+        let listed = project_holder_keys(
+            json!({"keys": [{
+                "id": "holder:device-a:credential-a:holder_binding",
+                "device_id": "device-a", "credential_id": "credential-a",
+                "key_purpose": "holder_binding", "created_at": "now",
+                "public_jwk": {"kty": "OKP", "crv": "Ed25519", "x": "public", "d": "private"},
+                "private_key": "legacy-private"
+            }]}),
+            "org-a",
+            None,
+        )
+        .unwrap();
+        let serialized = listed.to_string();
+        assert!(!serialized.contains("private"));
+        assert_eq!(listed["keys"][0]["public_jwk"]["x"], "public");
     }
 
     #[test]

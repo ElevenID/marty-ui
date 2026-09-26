@@ -13,8 +13,8 @@ use crate::documents::{
     self, CertificateAlertsRequest, CertificateAlertsResponse, DeleteJwkResponse,
     DidVerificationRelationship, DocumentStore, InspectCertificateRequest,
     InspectCertificateResponse, LoadDidRequest, LoadDidResponse, PublishDidRequest,
-    PublishDidResponse, PublishJwkRequest, PublishJwkResponse, StoredCertificate, UpdateJwkRequest,
-    UpdateJwkResponse,
+    PublishDidResponse, PublishJwkRequest, PublishJwkResponse, RegisterHolderKeyRequest,
+    StoredCertificate, UpdateJwkRequest, UpdateJwkResponse,
 };
 use crate::domain::{key_purposes, service_capabilities};
 use crate::flow_envelope::{
@@ -114,6 +114,10 @@ pub fn router_with_dependencies(
         .route("/v1/signing-keys/service-status", get(service_status))
         .route("/v1/signing-keys", get(list_public_signing_keys))
         .route("/v1/signing-keys/jwks", get(public_organization_jwks))
+        .route(
+            "/v1/signing-keys/holder-keys",
+            get(list_public_holder_keys).post(register_public_holder_key),
+        )
         .route(
             "/v1/signing-keys/did-document",
             get(public_organization_did_document),
@@ -358,6 +362,13 @@ pub fn router_with_dependencies(
 #[derive(Debug, Deserialize)]
 struct OrganizationScope {
     organization_id: String,
+}
+
+#[derive(Debug, Deserialize)]
+struct HolderKeysScope {
+    organization_id: String,
+    #[serde(default)]
+    device_id: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -638,33 +649,52 @@ async fn public_config(
 }
 
 fn public_jwk_projection(key: &Value) -> Result<Value, documents::DocumentError> {
-    let sanitized = documents::sanitize_public_jwk(key, None)?;
-    const PUBLIC_JWK_FIELDS: &[&str] = &[
-        "kty",
-        "crv",
-        "x",
-        "y",
-        "n",
-        "e",
-        "kid",
-        "use",
-        "alg",
-        "key_ops",
-        "x5c",
-        "x5t",
-        "x5t#S256",
-        "service_id",
-        "name",
-        "status",
-    ];
-    let fields = sanitized
-        .as_object()
-        .expect("sanitized JWK is an object")
-        .iter()
-        .filter(|(name, _)| PUBLIC_JWK_FIELDS.contains(&name.as_str()))
-        .map(|(name, value)| (name.clone(), value.clone()))
-        .collect();
-    Ok(Value::Object(fields))
+    documents::public_jwk_projection(key)
+}
+
+async fn list_public_holder_keys(
+    State(state): State<AppState>,
+    Query(scope): Query<HolderKeysScope>,
+) -> Response {
+    if let Err(error) = validate_service_scope(&scope.organization_id, None) {
+        return error.into_response();
+    }
+    let Some(store) = state.document_store.as_ref() else {
+        return public_error(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "Signing document storage is unavailable.",
+        );
+    };
+    match store
+        .holder_keys(&scope.organization_id, scope.device_id.as_deref())
+        .await
+    {
+        Ok(keys) => Json(keys).into_response(),
+        Err(error) => public_publication_error(error),
+    }
+}
+
+async fn register_public_holder_key(
+    State(state): State<AppState>,
+    Query(scope): Query<OrganizationScope>,
+    Json(request): Json<RegisterHolderKeyRequest>,
+) -> Response {
+    if let Err(error) = validate_service_scope(&scope.organization_id, None) {
+        return error.into_response();
+    }
+    let Some(store) = state.document_store.as_ref() else {
+        return public_error(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "Signing document storage is unavailable.",
+        );
+    };
+    match store
+        .register_holder_key(&scope.organization_id, request)
+        .await
+    {
+        Ok(registered) => Json(registered).into_response(),
+        Err(error) => public_publication_error(error),
+    }
 }
 
 fn public_jwks_document(

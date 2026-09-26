@@ -89,6 +89,14 @@ the document is stored. Its request permits `did_id`, `org_slug`, and
 Redis/mock-KMS route test passed for publish/readback, assertion relationship,
 certificate chain, and discovery metadata; this is not a through-Gateway or
 beta acceptance result.
-Thus 13 declared pairs remain without local public handlers. These new
+The `GET` and `POST /holder-keys` adapters preserve the tenant's legacy Redis
+keyspace, default purpose, record ID, replacement, and exact device filter.
+They accept and return only public verification fields; legacy private JWK
+parameters are redacted on read, and new private/custody fields are rejected
+before storage. `contracts/signing-holder-keys-behavior.json` freezes the
+behavior, and a disposable-Redis route test passed. The wallet-supplied public
+key does not create or import a signing key in KMS. This is not a
+through-Gateway or beta acceptance result.
+Thus 11 declared pairs remain without local public handlers. These new
 adapters still need authenticated through-Gateway runtime tests. The
 24-pair table above remains the protected-main audit baseline.
