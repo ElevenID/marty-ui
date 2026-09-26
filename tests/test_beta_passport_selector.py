@@ -56,6 +56,7 @@ def model(enabled=True):
             "PERSONALIZATION_BUREAU_URL": VALIDATOR["PRIVATE_BUREAU_URL"],
             "PERSONALIZATION_BUREAU_API_KEY": TOKEN,
             "SIGNING_KEYS_INTERNAL_API_KEY": "synthetic-signing-credential",
+            "DATABASE_URL": "postgresql+asyncpg://marty:synthetic@postgres:5432/marty",
         }
     )
     services["gateway"]["environment"]["SIGNING_KEYS_INTERNAL_API_KEY"] = (
@@ -72,6 +73,7 @@ def model(enabled=True):
             "SERVICE_NAME": "passport_beta_bureau",
             "ENVIRONMENT": "beta",
             "PASSPORT_BETA_BUREAU_ENABLED": "true",
+            "DATABASE_URL": "postgresql://marty:synthetic@postgres:5432/marty",
             "GRPC_SERVICE_TOKEN": TOKEN,
             "SIGNING_KEYS_INTERNAL_API_KEY": "synthetic-signing-credential",
             "SIGNING_KEYS_INTERNAL_URL": VALIDATOR["PRIVATE_SIGNING_URL"],
@@ -129,6 +131,8 @@ def test_rendered_compose_environment_list_is_supported():
         "signing_key_mismatch",
         "gateway_signing_key_mismatch",
         "service_signing_key_mismatch",
+        "bureau_database_target",
+        "native_database_target",
         "signing_route",
         "callback_route",
         "image",
@@ -197,6 +201,14 @@ def test_partial_or_unsafe_selection_fails_closed(mutation):
     elif mutation == "service_signing_key_mismatch":
         services["signing-keys"]["environment"]["SIGNING_KEYS_INTERNAL_API_KEY"] = (
             "synthetic-other-credential"
+        )
+    elif mutation == "bureau_database_target":
+        bureau["environment"]["DATABASE_URL"] = (
+            "postgresql://marty:synthetic@production.example:5432/marty"
+        )
+    elif mutation == "native_database_target":
+        native["DATABASE_URL"] = (
+            "postgresql+asyncpg://marty:other@postgres:5432/marty"
         )
     elif mutation == "signing_route":
         bureau["environment"]["SIGNING_KEYS_INTERNAL_URL"] = (

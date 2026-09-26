@@ -8,6 +8,7 @@ from pathlib import Path
 import re
 import subprocess
 import sys
+from urllib.parse import urlsplit
 
 MAX_MODEL_BYTES = 8 * 1024 * 1024
 PROFILE = "docker-compose.profile.passport-native-beta.yml"
@@ -115,6 +116,28 @@ def validate_model(model, *, passport_enabled, files):
                 "Beta passport bureau key file is forbidden"
             )
         bureau_env = environment(bureau)
+        database_url = bureau_env.get("DATABASE_URL")
+        native_database_url = native.get("DATABASE_URL")
+        if not (
+            isinstance(database_url, str)
+            and isinstance(native_database_url, str)
+            and native_database_url.startswith("postgresql+asyncpg://")
+            and database_url
+            == native_database_url.replace("postgresql+asyncpg://", "postgresql://", 1)
+        ):
+            raise PassportConfigurationError("Beta passport database target is invalid")
+        database_target = urlsplit(database_url)
+        if not (
+            database_target.scheme == "postgresql"
+            and database_target.hostname == "postgres"
+            and database_target.port == 5432
+            and database_target.path == "/marty"
+            and database_target.username == "marty"
+            and database_target.password
+            and not database_target.query
+            and not database_target.fragment
+        ):
+            raise PassportConfigurationError("Beta passport database target is invalid")
         signing_key = bureau_env.get("SIGNING_KEYS_INTERNAL_API_KEY")
         if not (
             bureau_env.get("SERVICE_NAME") == "passport_beta_bureau"
