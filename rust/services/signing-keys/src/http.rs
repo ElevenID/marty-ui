@@ -2547,7 +2547,7 @@ async fn resolve_public_config(
             "No registered signing service matches the requested format, purpose, and algorithm.",
         );
     };
-    if nonempty(&key_purpose).is_some()
+    if (nonempty(&key_purpose).is_some() || nonempty(&algorithm).is_some())
         && (resolved.key_reference.is_none()
             || (nonempty(&algorithm).is_some()
                 && !resolved
@@ -2691,11 +2691,11 @@ async fn resolution_keys(
     registry: &Value,
     service: &Value,
     profiles: &[Value],
-    purpose: Option<&str>,
+    _purpose: Option<&str>,
     algorithm: Option<&str>,
 ) -> (Vec<Value>, bool) {
     let references = resolution_references(registry, service, profiles);
-    if purpose.is_none() || algorithm.is_none() {
+    if algorithm.is_none() {
         return (
             references
                 .into_iter()
@@ -4637,6 +4637,27 @@ mod public_contract_tests {
             resolution_keys(&registry, service, &[], Some("mdoc_dsc"), Some("ES256")).await;
         assert!(!unavailable);
         assert!(wrong_algorithm.is_empty());
+        let (algorithm_only, unavailable) =
+            resolution_keys(&registry, service, &[], None, Some("EdDSA")).await;
+        assert!(!unavailable);
+        assert_eq!(
+            algorithm_only,
+            vec![json!({"id": "dsc-ed", "algorithm": "EdDSA"})]
+        );
+        let selected = registry::resolve(ResolveRequest {
+            registry: registry.clone(),
+            service: Some(service.clone()),
+            keys: algorithm_only,
+            credential_format: None,
+            key_purpose: None,
+            algorithm: Some("EdDSA".into()),
+        })
+        .unwrap();
+        assert_eq!(selected.key_reference.as_deref(), Some("dsc-ed"));
+        let (wrong_algorithm_only, unavailable) =
+            resolution_keys(&registry, service, &[], None, Some("ES256")).await;
+        assert!(!unavailable);
+        assert!(wrong_algorithm_only.is_empty());
         assert_eq!(writes.load(Ordering::SeqCst), 0);
         server.abort();
     }

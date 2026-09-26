@@ -64,6 +64,57 @@
       "expected_key_reference": "dsc-384"
     },
     {
+      "name": "algorithm_only_selects_compatible_alias_instead_of_default",
+      "registry": {
+        "services": [{"id": "managed", "key_reference": "es256-key", "key_aliases": ["es384-key"]}],
+        "default_service_id": "managed"
+      },
+      "keys": [
+        {"id": "es256-key", "algorithm": "ES256"},
+        {"id": "es384-key", "algorithm": "ES384"}
+      ],
+      "request": {"algorithm": "ES384"},
+      "expected_service_id": "managed",
+      "expected_key_reference": "es384-key"
+    },
+    {
+      "name": "algorithm_only_rejects_incompatible_default",
+      "registry": {
+        "services": [{"id": "managed", "key_reference": "es256-key"}],
+        "default_service_id": "managed"
+      },
+      "keys": [{"id": "es256-key", "algorithm": "ES256"}],
+      "request": {"algorithm": "ES384"},
+      "expected_service_id": "managed",
+      "expected_key_reference": null
+    },
+    {
+      "name": "algorithm_only_ignores_another_services_key",
+      "registry": {
+        "services": [{"id": "managed", "key_reference": "managed-es256"}, {"id": "other", "key_reference": "other-es384"}],
+        "default_service_id": "managed"
+      },
+      "keys": [
+        {"id": "managed-es256", "service_id": "managed", "algorithm": "ES256"},
+        {"id": "other-es384", "service_id": "other", "algorithm": "ES384"}
+      ],
+      "request": {"algorithm": "ES384"},
+      "expected_service_id": "managed",
+      "expected_key_reference": null
+    },
+    {
+      "name": "algorithm_only_excludes_lti_only_binding",
+      "registry": {
+        "services": [{"id": "managed", "key_reference": "lti-tool-only"}],
+        "default_service_id": "managed",
+        "key_reference_purposes": {"managed": {"lti-tool-only": ["lti_tool_signing"]}}
+      },
+      "keys": [{"id": "lti-tool-only", "algorithm": "ES256"}],
+      "request": {"algorithm": "ES256"},
+      "expected_service_id": "managed",
+      "expected_key_reference": null
+    },
+    {
       "name": "no_registered_service",
       "registry": {"services": []},
       "keys": [],

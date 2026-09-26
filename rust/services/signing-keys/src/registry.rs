@@ -890,7 +890,56 @@ fn resolve_key_reference(
         .filter(|value| !value.is_empty())
         .map(str::to_string);
     let Some(key_purpose) = key_purpose else {
-        return current;
+        let Some(algorithm) = algorithm else {
+            return current;
+        };
+        let service_id = service.get("id").and_then(Value::as_str)?;
+        let bindings = normalize_bindings(registry.get("key_reference_purposes"));
+        let service_bindings = bindings.get(service_id);
+        let mut references = dedupe_strings(service.get("key_aliases"))
+            .into_iter()
+            .collect::<BTreeSet<_>>();
+        if let Some(reference) = &current {
+            references.insert(reference.clone());
+        }
+        if let Some(bound) = service_bindings {
+            references.extend(bound.keys().cloned());
+        }
+        let mut candidates = keys
+            .iter()
+            .filter(|key| key.get("algorithm").and_then(Value::as_str) == Some(algorithm))
+            .filter_map(|key| {
+                let reference = key
+                    .get("provider_key_name")
+                    .or_else(|| key.get("id"))
+                    .and_then(Value::as_str)
+                    .filter(|reference| references.contains(*reference))?;
+                if key
+                    .get("service_id")
+                    .and_then(Value::as_str)
+                    .is_some_and(|key_service_id| key_service_id != service_id)
+                {
+                    return None;
+                }
+                if service_bindings
+                    .and_then(|bound| bound.get(reference))
+                    .is_some_and(|purposes| purposes.as_slice() == ["lti_tool_signing"])
+                    || (service_id == MANAGED_OPENBAO_SERVICE_ID
+                        && managed_key_purposes(reference) == ["lti_tool_signing"])
+                {
+                    return None;
+                }
+                Some(reference.to_owned())
+            })
+            .collect::<Vec<_>>();
+        if current
+            .as_ref()
+            .is_some_and(|reference| candidates.contains(reference))
+        {
+            return current;
+        }
+        candidates.sort();
+        return candidates.into_iter().next();
     };
     let Some(service_id) = service.get("id").and_then(Value::as_str) else {
         return current;
