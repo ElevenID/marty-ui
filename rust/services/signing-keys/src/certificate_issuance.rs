@@ -300,20 +300,16 @@ pub fn prepare_dsc(
         not_before: Time::try_from(not_before).map_err(|_| DscCertificateError::InvalidValidity)?,
         not_after: Time::try_from(not_after).map_err(|_| DscCertificateError::InvalidValidity)?,
     };
-    let mut extensions = Vec::new();
-    extensions.push(
-        BasicConstraints {
-            ca: false,
-            path_len_constraint: None,
-        }
-        .to_extension(&subject.subject, &extensions)
-        .map_err(|_| DscCertificateError::Encoding)?,
-    );
-    extensions.push(
-        KeyUsage(KeyUsages::DigitalSignature.into())
-            .to_extension(&subject.subject, &extensions)
-            .map_err(|_| DscCertificateError::Encoding)?,
-    );
+    let constraints = BasicConstraints {
+        ca: false,
+        path_len_constraint: None,
+    }
+    .to_extension(&subject.subject, &[])
+    .map_err(|_| DscCertificateError::Encoding)?;
+    let usage = KeyUsage(KeyUsages::DigitalSignature.into())
+        .to_extension(&subject.subject, std::slice::from_ref(&constraints))
+        .map_err(|_| DscCertificateError::Encoding)?;
+    let extensions = vec![constraints, usage];
     let tbs = TbsCertificate {
         version: Version::V3,
         serial_number: serial,
