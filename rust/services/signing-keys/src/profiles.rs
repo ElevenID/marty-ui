@@ -59,20 +59,33 @@ impl ProfileStore {
         Self { connection }
     }
 
+    pub fn dsc_issuance_store(&self) -> crate::dsc_issuance_store::DscIssuanceStore {
+        crate::dsc_issuance_store::DscIssuanceStore::from_connection(self.connection.clone())
+    }
+
     pub async fn list(&self, organization_id: &str) -> Result<Value, ProfileError> {
+        self.load_with_raw(organization_id)
+            .await
+            .map(|(_, document)| document)
+    }
+
+    async fn load_with_raw(
+        &self,
+        organization_id: &str,
+    ) -> Result<(Option<String>, Value), ProfileError> {
         let mut connection = self.connection.clone();
         let payload: Option<String> = connection
             .get(storage_key(organization_id))
             .await
             .map_err(|error| ProfileError::Storage(error.to_string()))?;
-        let document = match payload {
-            Some(payload) => serde_json::from_str::<Value>(&payload)
+        let document = match payload.as_deref() {
+            Some(payload) => serde_json::from_str::<Value>(payload)
                 .map_err(|error| ProfileError::Corrupt(error.to_string()))?,
-            None => json!({"profiles": []}),
+            None => json!({"profiles": [], "revision": 0}),
         };
         validate_document(&document)?;
         validate_scoped_document(&document, organization_id)?;
-        Ok(document)
+        Ok((payload, document))
     }
 
     pub async fn get(
@@ -100,20 +113,44 @@ impl ProfileStore {
         profile: Value,
     ) -> Result<Value, ProfileError> {
         validate_stored_profile(&profile, organization_id, Some(profile_id))?;
-        let mut document = self.list(organization_id).await?;
-        let profiles = document["profiles"]
-            .as_array_mut()
-            .expect("validated profile array");
-        if let Some(existing) = profiles
-            .iter_mut()
-            .find(|candidate| candidate.get("id").and_then(Value::as_str) == Some(profile_id))
-        {
-            *existing = profile.clone();
-        } else {
-            profiles.push(profile.clone());
+        let mut baseline: Option<Option<Value>> = None;
+        for _ in 0..128 {
+            let (previous, mut document) = self.load_with_raw(organization_id).await?;
+            let profiles = document["profiles"]
+                .as_array_mut()
+                .expect("validated profile array");
+            let current = profiles
+                .iter()
+                .find(|candidate| candidate.get("id").and_then(Value::as_str) == Some(profile_id))
+                .cloned();
+            if let Some(expected) = &baseline {
+                if &current != expected {
+                    return Err(ProfileError::Conflict(
+                        "Issuer profile changed during update.".into(),
+                    ));
+                }
+            } else {
+                baseline = Some(current);
+            }
+            if let Some(existing) = profiles
+                .iter_mut()
+                .find(|candidate| candidate.get("id").and_then(Value::as_str) == Some(profile_id))
+            {
+                *existing = profile.clone();
+            } else {
+                profiles.push(profile.clone());
+            }
+            if self
+                .save_if_unchanged(organization_id, previous.as_deref(), &mut document)
+                .await?
+            {
+                return Ok(profile);
+            }
+            tokio::task::yield_now().await;
         }
-        self.save(organization_id, &document).await?;
-        Ok(profile)
+        Err(ProfileError::Conflict(
+            "Concurrent issuer profile updates did not settle.".into(),
+        ))
     }
 
     pub async fn delete(
@@ -121,18 +158,45 @@ impl ProfileStore {
         organization_id: &str,
         profile_id: &str,
     ) -> Result<(), ProfileError> {
-        let mut document = self.list(organization_id).await?;
-        let profiles = document["profiles"]
-            .as_array_mut()
-            .expect("validated profile array");
-        let original = profiles.len();
-        profiles.retain(|profile| profile.get("id").and_then(Value::as_str) != Some(profile_id));
-        if profiles.len() == original {
-            return Err(ProfileError::NotFound(
-                "Issuer profile not found.".to_string(),
-            ));
+        let mut baseline: Option<Value> = None;
+        for _ in 0..128 {
+            let (previous, mut document) = self.load_with_raw(organization_id).await?;
+            let profiles = document["profiles"]
+                .as_array_mut()
+                .expect("validated profile array");
+            let current = profiles
+                .iter()
+                .find(|candidate| candidate.get("id").and_then(Value::as_str) == Some(profile_id))
+                .cloned()
+                .ok_or_else(|| ProfileError::NotFound("Issuer profile not found.".into()))?;
+            if baseline
+                .as_ref()
+                .is_some_and(|expected| expected != &current)
+            {
+                return Err(ProfileError::Conflict(
+                    "Issuer profile changed during deletion.".into(),
+                ));
+            }
+            baseline = Some(current);
+            let original = profiles.len();
+            profiles
+                .retain(|profile| profile.get("id").and_then(Value::as_str) != Some(profile_id));
+            if profiles.len() == original {
+                return Err(ProfileError::NotFound(
+                    "Issuer profile not found.".to_string(),
+                ));
+            }
+            if self
+                .save_if_unchanged(organization_id, previous.as_deref(), &mut document)
+                .await?
+            {
+                return Ok(());
+            }
+            tokio::task::yield_now().await;
         }
-        self.save(organization_id, &document).await
+        Err(ProfileError::Conflict(
+            "Concurrent issuer profile updates did not settle.".into(),
+        ))
     }
 
     pub async fn find(
@@ -165,15 +229,43 @@ impl ProfileStore {
         )
     }
 
-    async fn save(&self, organization_id: &str, document: &Value) -> Result<(), ProfileError> {
+    async fn save_if_unchanged(
+        &self,
+        organization_id: &str,
+        previous: Option<&str>,
+        document: &mut Value,
+    ) -> Result<bool, ProfileError> {
+        let revision = document
+            .get("revision")
+            .and_then(Value::as_u64)
+            .unwrap_or(0);
+        let next = revision
+            .checked_add(1)
+            .filter(|value| *value <= 9_007_199_254_740_991)
+            .ok_or_else(|| ProfileError::Corrupt("issuer profile revision overflowed".into()))?;
+        document["revision"] = json!(next);
         validate_document(document)?;
         let payload = serde_json::to_string(document)
             .map_err(|error| ProfileError::Corrupt(error.to_string()))?;
         let mut connection = self.connection.clone();
-        connection
-            .set::<_, _, ()>(storage_key(organization_id), payload)
-            .await
-            .map_err(|error| ProfileError::Storage(error.to_string()))
+        let saved: i32 = redis::Script::new(
+            "local current = redis.call('GET', KEYS[1])
+             if ARGV[1] == '0' then
+               if current then return 0 end
+             elseif current ~= ARGV[2] then
+               return 0
+             end
+             redis.call('SET', KEYS[1], ARGV[3])
+             return 1",
+        )
+        .key(storage_key(organization_id))
+        .arg(if previous.is_some() { "1" } else { "0" })
+        .arg(previous.unwrap_or_default())
+        .arg(payload)
+        .invoke_async(&mut connection)
+        .await
+        .map_err(|error| ProfileError::Storage(error.to_string()))?;
+        Ok(saved == 1)
     }
 }
 
@@ -638,6 +730,15 @@ fn protocol_wire_format(protocol_format: &str) -> Option<String> {
 }
 
 fn validate_document(document: &Value) -> Result<(), ProfileError> {
+    if document.get("revision").is_some_and(|revision| {
+        revision
+            .as_u64()
+            .is_none_or(|value| value > 9_007_199_254_740_991)
+    }) {
+        return Err(ProfileError::Corrupt(
+            "issuer profile revision is invalid".into(),
+        ));
+    }
     let profiles = document
         .get("profiles")
         .and_then(Value::as_array)
