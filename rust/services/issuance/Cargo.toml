@@ -24,6 +24,11 @@ name = "marty-canvas-sync-worker"
 path = "src/bin/canvas_sync_worker.rs"
 test = true
 
+[[bin]]
+name = "marty-passport-beta-bureau"
+path = "src/bin/passport_beta_bureau.rs"
+test = true
+
 [dependencies]
 aes-gcm.workspace = true
 axum.workspace = true
@@ -70,6 +75,7 @@ serde.workspace = true
 serde_json = { workspace = true, features = ["raw_value", "arbitrary_precision"] }
 sha2.workspace = true
 sqlx.workspace = true
+subtle.workspace = true
 thiserror.workspace = true
 tokio.workspace = true
 tokio-stream.workspace = true

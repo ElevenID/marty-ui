@@ -26,7 +26,7 @@ RUN case "$PASSPORT_SELF_SIGNED_TEST" in \
     -p marty-applicant --bin marty-applicant \
     -p marty-device-registration --bin marty-device-registration \
     -p marty-verification-service --bin marty-verification-service \
-    -p marty-issuance-service --bin marty-issuance-service --bin marty-canvas-sync-worker \
+    -p marty-issuance-service --bin marty-issuance-service --bin marty-canvas-sync-worker --bin marty-passport-beta-bureau \
     -p marty-deployment-profile --bin marty-deployment-profile \
     -p marty-compliance-profile --bin marty-compliance-profile
 
@@ -67,6 +67,7 @@ COPY --from=rust-service-builder /build/rust/target/release/marty-device-registr
 COPY --from=rust-service-builder /build/rust/target/release/marty-verification-service /usr/local/bin/marty-verification-service
 COPY --from=rust-service-builder /build/rust/target/release/marty-issuance-service /usr/local/bin/marty-issuance-service
 COPY --from=rust-service-builder /build/rust/target/release/marty-canvas-sync-worker /usr/local/bin/marty-canvas-sync-worker
+COPY --from=rust-service-builder /build/rust/target/release/marty-passport-beta-bureau /usr/local/bin/marty-passport-beta-bureau
 COPY --from=rust-service-builder /build/rust/target/release/marty-deployment-profile /usr/local/bin/marty-deployment-profile
 COPY --from=rust-service-builder /build/rust/target/release/marty-compliance-profile /usr/local/bin/marty-compliance-profile
 RUN chmod +x /app/services/entrypoint.sh /app/load-secrets-env.sh
