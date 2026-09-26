@@ -224,7 +224,7 @@ function Get-ComposeContainerId {
     return $null
 }
 
-function Assert-NoInFlightLegacyPassportJobs {
+function Assert-NoInFlightPassportJobs {
     $postgres = Get-ComposeContainerId -Service "postgres"
     if (-not $postgres) { throw "Beta PostgreSQL container is unavailable for passport drain preflight" }
     $exists = @(& docker exec $postgres psql -U postgres -d marty -At -v ON_ERROR_STOP=1 `
@@ -234,12 +234,12 @@ function Assert-NoInFlightLegacyPassportJobs {
     }
     if ($exists[0] -eq "f") { return }
     $pending = @(& docker exec $postgres psql -U postgres -d marty -At -v ON_ERROR_STOP=1 `
-        -c "SELECT count(*) FROM issuance_service.physical_document_jobs WHERE bureau_job_id IS NOT NULL AND status NOT IN ('ACTIVE', 'FAILED', 'CANCELLED')")
+        -c "SELECT count(*) FROM issuance_service.physical_document_jobs WHERE status NOT IN ('ACTIVE', 'FAILED', 'CANCELLED')")
     if ($LASTEXITCODE -ne 0 -or $pending.Count -ne 1 -or $pending[0] -notmatch '^[0-9]+$') {
-        throw "Could not count in-flight legacy passport jobs"
+        throw "Could not count in-flight passport jobs"
     }
     if ([int64]$pending[0] -ne 0) {
-        throw "In-flight legacy passport jobs must drain before enabling KMS callback verification"
+        throw "In-flight passport jobs must drain before enabling KMS callback verification"
     }
 }
 
@@ -1248,7 +1248,7 @@ try {
     }
 
     if ($EnablePassportNative) {
-        Assert-NoInFlightLegacyPassportJobs
+        Assert-NoInFlightPassportJobs
     }
 
     Write-Step "Capture quiesced maintenance snapshot"

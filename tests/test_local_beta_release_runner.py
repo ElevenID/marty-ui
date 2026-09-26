@@ -568,9 +568,9 @@ def test_passport_bureau_is_optional_but_included_in_beta_recovery() -> None:
     for script in (deploy, restore):
         assert '"openbao" -notin @($openbaoEndpoint.Value.Aliases)' in script
     assert deploy.index('Invoke-Checked -FilePath docker -Arguments (@("stop") + $maintenanceContainers)') < deploy.index(
-        'Assert-NoInFlightLegacyPassportJobs\n'
+        'Assert-NoInFlightPassportJobs\n'
     ) < deploy.index('Write-Step "Capture quiesced maintenance snapshot"')
-    assert "bureau_job_id IS NOT NULL AND status NOT IN ('ACTIVE', 'FAILED', 'CANCELLED')" in deploy
+    assert "WHERE status NOT IN ('ACTIVE', 'FAILED', 'CANCELLED')" in deploy
     assert 'if ($existingPassportServices["passport-beta-bureau"] -gt 0 -and' in deploy
     assert '$existingPassportServices["passport-callback-signer"] -eq 0)' in deploy
     assert "this release cannot restore that legacy passport snapshot" in deploy

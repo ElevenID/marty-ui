@@ -6,6 +6,7 @@ from pathlib import Path
 import re
 import runpy
 import shutil
+import sqlite3
 import subprocess
 from types import SimpleNamespace
 
@@ -343,16 +344,47 @@ def test_runner_validates_twice_before_mutation():
     assert source.rindex(marker) < source.index(
         'Invoke-Checked -FilePath docker -Arguments (@("stop")'
     )
-    assert source.index("Assert-NoInFlightLegacyPassportJobs") < source.index(
+    assert source.index("Assert-NoInFlightPassportJobs") < source.index(
         'Write-Step "Capture quiesced maintenance snapshot"'
     )
-    assert "bureau_job_id IS NOT NULL AND status NOT IN ('ACTIVE', 'FAILED', 'CANCELLED')" in source
+    assert "WHERE status NOT IN ('ACTIVE', 'FAILED', 'CANCELLED')" in source
     assert "Assert-BetaCallbackSignerNetwork -AttachOpenBao" in source
     assert source.index("Assert-BetaCallbackSignerNetwork -AttachOpenBao") < source.index(
         'Invoke-Compose -Arguments (@("up", "--detach", "--no-build", "--no-deps", "--force-recreate") + $remainingServices)'
     )
     assert "Unexpected container joined the beta callback network" in source
     assert '"openbao" -notin @($openbaoEndpoint.Value.Aliases)' in source
+
+
+def test_beta_cutover_drain_query_catches_submission_before_bureau_id_is_saved():
+    contract = json.loads(
+        (ROOT / "contracts/passport-beta-cutover-drain-behavior.json").read_text(
+            encoding="utf-8"
+        )
+    )
+    source = (ROOT / "scripts/deploy-local-beta-release.ps1").read_text(
+        encoding="utf-8"
+    )
+    match = re.search(
+        r'-c "(SELECT count\(\*\) FROM issuance_service\.physical_document_jobs WHERE [^"]+)"',
+        source,
+    )
+    assert match, "beta drain SQL is missing"
+    with sqlite3.connect(":memory:") as database:
+        database.execute("ATTACH DATABASE ':memory:' AS issuance_service")
+        database.execute(
+            "CREATE TABLE issuance_service.physical_document_jobs "
+            "(status TEXT NOT NULL, bureau_job_id TEXT)"
+        )
+        for case in contract["cases"]:
+            database.execute("DELETE FROM issuance_service.physical_document_jobs")
+            database.execute(
+                "INSERT INTO issuance_service.physical_document_jobs "
+                "(status, bureau_job_id) VALUES (?, ?)",
+                (case["status"], case["bureau_job_id"]),
+            )
+            count = database.execute(match.group(1)).fetchone()[0]
+            assert bool(count) is case["blocks"], case["name"]
 
 
 def test_restore_reconstitutes_isolated_signer_before_applications():
