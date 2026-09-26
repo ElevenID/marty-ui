@@ -7394,7 +7394,7 @@ mod tests {
     }
 
     #[tokio::test]
-    #[ignore = "requires disposable MARTY_TEST_REDIS_URL and MARTY_TEST_OPENBAO_URL/TOKEN"]
+    #[ignore = "requires independently marked disposable Redis and OpenBao instances"]
     async fn authenticated_gateway_generates_profile_scoped_passport_csrs_in_openbao() {
         use std::str::FromStr;
 
@@ -7440,6 +7440,32 @@ mod tests {
         assert!(
             std::env::var("BAO_TOKEN").ok().as_deref() == Some(token.as_str()),
             "disposable OpenBao token binding does not match"
+        );
+        let bao_nonce = std::env::var("MARTY_TEST_OPENBAO_DISPOSABLE_NONCE")
+            .expect("pre-provisioned disposable OpenBao sentinel value");
+        assert!(
+            bao_nonce.len() >= 16,
+            "disposable OpenBao sentinel is too short"
+        );
+        let marker = reqwest::Client::new()
+            .get(format!(
+                "{endpoint}/v1/secret/data/marty-test-disposable-guard"
+            ))
+            .header("X-Vault-Token", &token)
+            .send()
+            .await
+            .expect("disposable OpenBao sentinel read");
+        assert!(
+            marker.status().is_success(),
+            "disposable OpenBao sentinel is absent"
+        );
+        let marker: Value = marker
+            .json()
+            .await
+            .expect("disposable OpenBao sentinel JSON");
+        assert!(
+            marker["data"]["data"]["nonce"].as_str() == Some(bao_nonce.as_str()),
+            "disposable OpenBao sentinel does not match"
         );
         let registry = SigningRegistryStore::connect(&redis_url)
             .await
