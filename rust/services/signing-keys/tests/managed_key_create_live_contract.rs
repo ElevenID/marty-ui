@@ -321,6 +321,76 @@ async fn issuer_profile_creates_managed_key_then_resolves_and_signs_without_a_lo
     assert_eq!(passport_resolved["public_jwk"]["crv"], "P-256");
     assert!(!passport_created.to_string().contains(&passport_reference));
     assert!(!passport_resolved.to_string().contains(&passport_reference));
+    let dsc_did = format!("did:web:issuer.example:orgs:{}", Uuid::new_v4().simple());
+    let dsc_tuple = json!({
+        "organization_id": organization_id,
+        "issuer_did": dsc_did,
+        "key_purpose": "x509_doc_signer",
+        "credential_format": "ICAO_EMRTD",
+        "algorithm": "ES256"
+    });
+    let (status, dsc_created) = json_route(&app, "POST", &identity_path, dsc_tuple.clone()).await;
+    assert_eq!(status, StatusCode::OK, "{dsc_created}");
+    let dsc_reference = profiles.list(&organization_id).await.unwrap()["profiles"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|profile| profile["issuer_did"] == dsc_did)
+        .unwrap()["signing_key_reference"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    assert!(dsc_reference.starts_with("cred-dsc-"));
+    assert_ne!(dsc_reference, passport_reference);
+    let (status, dsc_resolved) = json_route(
+        &app,
+        "POST",
+        &format!("/v1/signing-keys/issuer-identities/resolve?organization_id={organization_id}"),
+        dsc_tuple.clone(),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{dsc_resolved}");
+    assert_eq!(dsc_resolved["public_jwk"]["crv"], "P-256");
+    let (status, dsc_signed) = json_route(
+        &app,
+        "POST",
+        "/internal/compat/issuer-dids/sign",
+        json!({
+            "organization_id": organization_id,
+            "issuer_did": dsc_did,
+            "key_purpose": "x509_doc_signer",
+            "credential_format": "ICAO_EMRTD",
+            "algorithm": "ES256",
+            "payload_b64": "cGFzc3BvcnQ"
+        }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{dsc_signed}");
+    assert_eq!(dsc_signed["ok"], true);
+    let dsc_document = documents
+        .load_did(
+            &organization_id,
+            LoadDidRequest {
+                did_id: Some(dsc_did),
+                fallback_did: None,
+            },
+        )
+        .await
+        .unwrap();
+    assert!(dsc_document.found);
+    for public in [
+        &dsc_created,
+        &dsc_resolved,
+        &dsc_signed,
+        &dsc_document.document,
+    ] {
+        for secret in [&endpoint[..], "test-only", &dsc_reference] {
+            assert!(
+                !public.to_string().contains(secret),
+                "DSC response exposed custody metadata: {public}"
+            );
+        }
+    }
     server.abort();
 }
 

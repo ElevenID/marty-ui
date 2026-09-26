@@ -1214,9 +1214,9 @@ fn missing_route_detail(detail: &str) -> bool {
         || detail.contains("route not found")
 }
 
-/// OpenBao can return the same empty 404 body for an absent key and an absent
-/// mount. Confirm the Transit collection is readable and omits this key before
-/// provisioning; a denied list or missing mount must fail closed.
+/// Confirm the Transit collection is readable and omits this key before
+/// provisioning after a 404. Error bodies vary across OpenBao and proxies;
+/// a denied list or missing mount must fail closed.
 pub(crate) async fn missing_managed_openbao_key(
     config: &Value,
     error: &KmsError,
