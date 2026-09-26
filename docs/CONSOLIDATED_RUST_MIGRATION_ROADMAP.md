@@ -3273,7 +3273,7 @@ generated protobufs and caches remain excluded.
 
 ### Gateway port status
 
-The gateway's 434 method/path declarations and eight-middleware execution
+The gateway's 439 method/path declarations and eight-middleware execution
 order are frozen in `contracts/gateway-routes.json`. The Rust gateway now
 builds one MMF route table, classifies public and gateway-owned boundaries,
 uses the canonical MMF reverse proxy, and has provider adapters for static

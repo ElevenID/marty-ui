@@ -1,0 +1,17 @@
+{
+  "schema_version": 1,
+  "source": "pre-Rust services/gateway/routes/signing_keys.py at parent of e1ebad979",
+  "method": "GET",
+  "path": "/v1/signing-keys/services/{service_id}/mdoc-x5c",
+  "legacy_success_fields": ["service_id", "key_reference", "x5c", "mdoc_cose_header_hints"],
+  "public_success_fields": ["service_id", "x5c", "mdoc_cose_header_hints"],
+  "missing_service_status": 404,
+  "missing_certificate_status": 404,
+  "rules": {
+    "service_certificate_override_precedes_registry_certificate": true,
+    "certificate_public_key_must_match_current_kms_key": true,
+    "managed_shared_service_uses_issuer_profile_certificate": true,
+    "response_omits_custody_coordinates": true,
+    "mdoc_cose_header_hints": {"x5chain": true, "x5c_length": "number of DER certificates"}
+  }
+}

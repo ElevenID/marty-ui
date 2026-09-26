@@ -196,6 +196,70 @@ pub async fn public_key(request: ProviderRequest) -> Result<Value, KmsError> {
     }
 }
 
+/// Read an existing managed key. Inventory must never provision a missing key.
+pub async fn managed_openbao_public_key_existing(
+    endpoint: &str,
+    key_reference: &str,
+) -> Result<Value, KmsError> {
+    public_key_openbao(&json!({
+        "id": "managed-openbao-transit",
+        "service_type": "openbao-transit",
+        "endpoint": endpoint,
+        "mount": "transit",
+        "auth_mode": "service_token",
+        "key_reference": key_reference,
+    }))
+    .await
+}
+
+/// List public Transit key names without creating or exporting key material.
+/// Callers must tenant-filter the names before reading individual keys.
+pub async fn list_managed_openbao_key_names(endpoint: &str) -> Result<Vec<String>, KmsError> {
+    let token = secret_value("BAO_TOKEN")
+        .or_else(|| secret_value("OPENBAO_SERVICE_TOKEN"))
+        .ok_or_else(|| KmsError::InvalidConfig("Managed OpenBao access is unavailable.".into()))?;
+    let response = match send_json(
+        Client::new()
+            .get(format!(
+                "{}/v1/transit/keys",
+                endpoint.trim_end_matches('/')
+            ))
+            .query(&[("list", "true")])
+            .timeout(HTTP_TIMEOUT)
+            .header("X-Vault-Token", token),
+    )
+    .await
+    {
+        Ok(response) => response,
+        Err(KmsError::ProviderStatus { status, detail })
+            if status == reqwest::StatusCode::NOT_FOUND && empty_transit_list_response(&detail) =>
+        {
+            return Ok(Vec::new());
+        }
+        Err(error) => return Err(error),
+    };
+    let names = response
+        .pointer("/data/keys")
+        .and_then(Value::as_array)
+        .ok_or_else(|| KmsError::InvalidResponse("OpenBao key list is malformed".into()))?;
+    names
+        .iter()
+        .map(|name| {
+            name.as_str()
+                .filter(|name| !name.is_empty())
+                .map(str::to_owned)
+                .ok_or_else(|| KmsError::InvalidResponse("OpenBao key name is malformed".into()))
+        })
+        .collect()
+}
+
+fn empty_transit_list_response(detail: &str) -> bool {
+    serde_json::from_str::<Value>(detail)
+        .ok()
+        .and_then(|response| response.get("errors").and_then(Value::as_array).cloned())
+        .is_some_and(|errors| errors.is_empty())
+}
+
 pub async fn verify(request: ProviderRequest) -> Result<CapabilityResult, KmsError> {
     Ok(match Provider::from_config(&request.service_config)? {
         Provider::OpenBao => verify_openbao(&request.service_config).await,
@@ -1048,6 +1112,15 @@ fn bounded(value: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn empty_transit_list_is_distinct_from_missing_mount_and_denied_access() {
+        assert!(empty_transit_list_response("{\"errors\":[]}"));
+        assert!(!empty_transit_list_response(
+            "{\"errors\":[\"no handler for route \\\"transit/keys/\\\"\"]}"
+        ));
+        assert!(!empty_transit_list_response("permission denied"));
+    }
 
     #[test]
     fn provider_factory_preserves_supported_aliases_and_rejects_unknowns() {

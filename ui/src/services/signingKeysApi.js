@@ -404,6 +404,35 @@ export async function storeIssuerIdentityCertificate(body) {
   });
 }
 
+/** Enroll only public CSCA material; Rust resolves the managed key internally. */
+export async function enrollCscaCertificate(body) {
+  const organizationId = requireOrganizationId(body, 'enrolling CSCA certificates');
+  return put(`${BASE_PATH}/issuer-identities/csca-certificate`, {
+    organization_id: organizationId,
+    issuer_did: body?.issuer_did,
+    credential_format: body?.credential_format,
+    algorithm: body?.algorithm,
+    certificate_id: body?.certificate_id,
+    cert_pem: body?.cert_pem,
+    cert_chain_pem: body?.cert_chain_pem,
+  });
+}
+
+/** Build a public PKCS#10 request using the selected issuer identity's KMS key. */
+export async function generateIssuerIdentityCsr(body) {
+  const organizationId = requireOrganizationId(body, 'generating an issuer CSR');
+  return put(`${BASE_PATH}/issuer-identities/certificate-csr`, {
+    organization_id: organizationId,
+    issuer_did: body?.issuer_did,
+    key_purpose: body?.key_purpose,
+    credential_format: body?.credential_format,
+    algorithm: body?.algorithm,
+    country: body?.country,
+    organization: body?.organization,
+    common_name: body?.common_name,
+  });
+}
+
 /**
  * Retire exactly one DID-selected managed identity.
  */
@@ -450,5 +479,7 @@ export default {
   listPublicIssuerIdentities,
   rebindIssuerIdentity,
   storeIssuerIdentityCertificate,
+  enrollCscaCertificate,
+  generateIssuerIdentityCsr,
   deleteIssuerIdentity,
 };

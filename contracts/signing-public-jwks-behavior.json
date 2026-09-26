@@ -1,0 +1,11 @@
+{
+  "schema_version": 1,
+  "source": "pre-Rust services/gateway/routes/signing_keys.py at parent of e1ebad979",
+  "method": "GET",
+  "path": "/v1/signing-keys/jwks",
+  "response": "tenant-scoped JWKS document",
+  "required_fields": ["keys", "organization_id", "updated_at"],
+  "public_key_fields": ["kty", "crv", "x", "y", "n", "e", "kid", "use", "alg", "key_ops", "x5c", "x5t", "x5t#S256", "service_id", "name", "status"],
+  "forbidden_fields": ["d", "p", "q", "dp", "dq", "qi", "k", "key_reference", "auth_reference", "private_key"],
+  "missing_document_returns_empty_keys": true
+}

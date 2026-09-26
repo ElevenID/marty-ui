@@ -213,6 +213,40 @@ impl SigningCompatibilityService {
         .await
     }
 
+    /// Read the current public key from the configured KMS service for this
+    /// managed issuer profile. A DID document may be stale during rotation.
+    pub async fn provider_public_key_for_profile(
+        &self,
+        organization_id: &str,
+        profile: &Value,
+    ) -> Result<Value, CompatibilityError> {
+        let service_id = required(profile, "signing_service_id")?;
+        let key_reference = required(profile, "signing_key_reference")?;
+        let registry = self
+            .registry
+            .load(organization_id)
+            .await
+            .map_err(|_| CompatibilityError::Unavailable)?;
+        let mut service =
+            service_for(&registry, service_id).ok_or(CompatibilityError::ServiceNotFound)?;
+        service.insert(
+            "key_reference".into(),
+            Value::String(key_reference.to_owned()),
+        );
+        let response = kms::public_key(ProviderRequest {
+            service_config: Value::Object(service),
+        })
+        .await
+        .map_err(map_kms_error)?;
+        let jwk = extract_provider_jwk(&response).ok_or(CompatibilityError::Unavailable)?;
+        validate_public_key_algorithm(
+            &jwk,
+            Some(required(profile, "algorithm")?),
+            "Managed issuer key",
+        )?;
+        Ok(Value::Object(jwk))
+    }
+
     pub async fn profile_identity(
         &self,
         organization_id: &str,

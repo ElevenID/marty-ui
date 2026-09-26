@@ -1,0 +1,12 @@
+{
+  "schema_version": 1,
+  "source": "pre-Rust services/gateway/routes/signing_keys.py at parent of e1ebad979",
+  "method": "GET",
+  "path": "/v1/signing-keys/did-document",
+  "response": "tenant-scoped DID document",
+  "missing_document_fallback": "did:web:{public_domain}:orgs:{organization_id}",
+  "preserve_fields": ["id", "controller", "verificationMethod", "assertionMethod", "keyAgreement", "service", "updated_at"],
+  "public_key_field": "publicKeyJwk",
+  "forbidden_custody_fields": ["privateKeyJwk", "privateKeyMultibase", "private_key", "key_reference", "auth_reference", "secret", "seed"],
+  "malformed_public_jwk_fails_closed": true
+}

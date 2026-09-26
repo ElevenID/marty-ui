@@ -1,0 +1,16 @@
+{
+  "schema_version": 1,
+  "source": "pre-Rust services/gateway/routes/signing_keys.py at parent of e1ebad979",
+  "method": "POST",
+  "path": "/v1/signing-keys/services/{service_id}/publish-jwks",
+  "legacy_success_fields": ["ok", "service_id", "message", "jwk", "jwks_document", "published_at"],
+  "missing_service_status": 404,
+  "rules": {
+    "public_key_is_fetched_from_current_kms_service": true,
+    "caller_supplied_key_reference_is_rejected": true,
+    "managed_shared_service_uses_issuer_scoped_identity": true,
+    "certificate_chain_is_published_only_when_matching_current_kms_key": true,
+    "service_discovered_capabilities_are_updated": true,
+    "public_response_omits_custody_coordinates": true
+  }
+}

@@ -1,5 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { renderWithRouter, screen, waitFor } from '@test/utils'
+import { useLocation } from 'react-router'
 import SigningKeysPage from './SigningKeysPage'
 
 const {
@@ -10,6 +11,8 @@ const {
   mockCreateSigningKey,
   mockRotateSigningKey,
   mockRotateServiceKey,
+  mockGetServiceCertificate,
+  mockGenerateServiceCsr,
   mockDeleteSigningKey,
   mockGetKeyManagementConfig,
   mockUpdateKeyManagementConfig,
@@ -22,6 +25,8 @@ const {
   mockCreateSigningKey: vi.fn(),
   mockRotateSigningKey: vi.fn(),
   mockRotateServiceKey: vi.fn(),
+  mockGetServiceCertificate: vi.fn(),
+  mockGenerateServiceCsr: vi.fn(),
   mockDeleteSigningKey: vi.fn(),
   mockGetKeyManagementConfig: vi.fn(),
   mockUpdateKeyManagementConfig: vi.fn(),
@@ -44,6 +49,8 @@ vi.mock('../../../services/signingKeysApi', () => ({
     createSigningKey: (...args: unknown[]) => mockCreateSigningKey(...args),
     rotateSigningKey: (...args: unknown[]) => mockRotateSigningKey(...args),
     rotateServiceKey: (...args: unknown[]) => mockRotateServiceKey(...args),
+    getServiceCertificate: (...args: unknown[]) => mockGetServiceCertificate(...args),
+    generateServiceCsr: (...args: unknown[]) => mockGenerateServiceCsr(...args),
     deleteSigningKey: (...args: unknown[]) => mockDeleteSigningKey(...args),
     getKeyManagementConfig: (...args: unknown[]) => mockGetKeyManagementConfig(...args),
     updateKeyManagementConfig: (...args: unknown[]) => mockUpdateKeyManagementConfig(...args),
@@ -69,6 +76,7 @@ vi.mock('../../../contexts/ConsoleContext', () => ({
 }))
 
 describe('SigningKeysPage', () => {
+  const CurrentPath = () => <span data-testid="current-path">{useLocation().pathname}</span>
   beforeEach(() => {
     vi.clearAllMocks()
     mockUseConsole.mockReturnValue({
@@ -99,6 +107,8 @@ describe('SigningKeysPage', () => {
     mockCreateSigningKey.mockResolvedValue({ id: 'key_new' })
     mockRotateSigningKey.mockResolvedValue({ id: 'key_new' })
     mockRotateServiceKey.mockResolvedValue({ ok: true })
+    mockGetServiceCertificate.mockRejectedValue(new Error('No certificate'))
+    mockGenerateServiceCsr.mockResolvedValue({ csr_pem: '-----BEGIN CERTIFICATE REQUEST-----' })
     mockDeleteSigningKey.mockResolvedValue({ ok: true })
     mockGetKeyManagementConfig.mockResolvedValue({
       supports_native_key_management: false,
@@ -146,6 +156,56 @@ describe('SigningKeysPage', () => {
     expect(screen.getByText(/Create an issuer identity and choose "Create new key in KMS"/i)).toBeInTheDocument()
     expect(screen.queryByRole('button', { name: 'deploy.signingKeys.uploadKey' })).not.toBeInTheDocument()
     expect(screen.getByText('Elevenidllc managed OpenBao transit')).toBeInTheDocument()
+  })
+
+  it('routes managed passport CSR creation to the issuer identity instead of a shared service key', async () => {
+    mockGetKeyManagementConfig.mockResolvedValue({
+      supports_native_key_management: false,
+      default_service_id: 'managed-openbao-transit',
+      services: [{
+        id: 'managed-openbao-transit', name: 'Marty managed OpenBao transit',
+        service_type: 'openbao-transit', provider: 'openbao',
+        key_purposes: ['csca', 'x509_doc_signer'], algorithms: ['ES256'],
+        managed: true, read_only: true, status: 'configured',
+      }],
+      service_type_catalog: [],
+    })
+    const { user } = renderWithRouter(<><SigningKeysPage /><CurrentPath /></>, {
+      initialEntries: ['/console/org/deploy/key-management'],
+    })
+    await screen.findByText('Elevenidllc managed OpenBao transit')
+    await user.click(screen.getByRole('button', { name: 'Certificate' }))
+    await user.click(screen.getByRole('button', { name: 'Generate CSR from issuer identity' }))
+    expect(screen.getByTestId('current-path')).toHaveTextContent('/console/org/deploy/issuer-identity')
+  })
+
+  it('requires an explicit registered-service CSR subject and sends only public fields', async () => {
+    mockGetKeyManagementConfig.mockResolvedValue({
+      supports_native_key_management: false,
+      default_service_id: 'service-a',
+      services: [{
+        id: 'service-a', name: 'Registered signer', service_type: 'openbao-transit',
+        provider: 'openbao', key_reference: 'server-side-only', algorithms: ['ES256'],
+        key_purposes: ['csca'],
+        managed: false, read_only: false, status: 'registered',
+      }],
+      service_type_catalog: [],
+    })
+    const { user } = renderWithRouter(<SigningKeysPage />, {
+      initialEntries: ['/console/org/deploy/key-management'],
+    })
+    await screen.findByText('Registered signer')
+    await user.click(screen.getByRole('button', { name: 'Certificate' }))
+    const csrButton = screen.getByRole('button', { name: 'Generate CSR from service public key' })
+    expect(csrButton).toBeDisabled()
+    await user.type(screen.getByLabelText('Subject country (two-letter ISO code)'), 'us')
+    await user.type(screen.getByLabelText('Subject organization'), 'Example Org')
+    expect(csrButton).toBeEnabled()
+    await user.click(csrButton)
+    await waitFor(() => expect(mockGenerateServiceCsr).toHaveBeenCalledWith('service-a', {
+      organization_id: 'org-123', country: 'US', organization: 'Example Org', common_name: 'Registered signer',
+    }))
+    expect(mockGenerateServiceCsr.mock.calls[0][1]).not.toHaveProperty('key_reference')
   })
 
   it('renders the services registry view with managed and registered services', async () => {
