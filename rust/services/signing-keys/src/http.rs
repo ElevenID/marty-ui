@@ -115,6 +115,10 @@ pub fn router_with_dependencies(
         .route("/v1/signing-keys", get(list_public_signing_keys))
         .route("/v1/signing-keys/jwks", get(public_organization_jwks))
         .route(
+            "/v1/signing-keys/compliance/keys-summary",
+            get(public_compliance_keys_summary),
+        )
+        .route(
             "/v1/signing-keys/holder-keys",
             get(list_public_holder_keys).post(register_public_holder_key),
         )
@@ -172,6 +176,10 @@ pub fn router_with_dependencies(
         .route(
             "/v1/signing-keys/services/{service_id}/verify-current",
             get(verify_public_service_key),
+        )
+        .route(
+            "/v1/signing-keys/services/{service_id}/audit-log",
+            get(public_service_audit_log),
         )
         .route(
             "/v1/signing-keys/services/{service_id}/publish-jwks",
@@ -365,6 +373,15 @@ struct HolderKeysScope {
     organization_id: String,
     #[serde(default)]
     device_id: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+struct AuditLogScope {
+    organization_id: String,
+    #[serde(default)]
+    limit: Option<String>,
+    #[serde(default)]
+    offset: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -1469,7 +1486,7 @@ fn validate_service_scope(
     Ok(())
 }
 
-async fn registered_certificate_service(
+async fn registered_service(
     state: &AppState,
     organization_id: &str,
     service_id: &str,
@@ -1501,6 +1518,15 @@ async fn registered_certificate_service(
                 &format!("Service '{service_id}' not found."),
             )
         })?;
+    Ok(service)
+}
+
+async fn registered_certificate_service(
+    state: &AppState,
+    organization_id: &str,
+    service_id: &str,
+) -> Result<Value, PublicSigningError> {
+    let service = registered_service(state, organization_id, service_id).await?;
     if service_id == "managed-openbao-transit" {
         return Err(public_failure(
             StatusCode::CONFLICT,
@@ -1508,6 +1534,79 @@ async fn registered_certificate_service(
         ));
     }
     Ok(service)
+}
+
+fn unavailable_observability_response(error: &str, message: &str, extra: Value) -> Response {
+    let mut body = json!({
+        "error": error,
+        "error_description": message,
+        "message_id": uuid::Uuid::new_v4().to_string(),
+    });
+    if let Some(fields) = extra.as_object() {
+        for (name, value) in fields {
+            body[name] = value.clone();
+        }
+    }
+    let mut response = (StatusCode::NOT_IMPLEMENTED, Json(body)).into_response();
+    response.headers_mut().insert(
+        "x-mip-version",
+        "0.5.0"
+            .parse()
+            .expect("static MIP version is a valid header"),
+    );
+    response
+}
+
+async fn public_compliance_keys_summary(
+    State(_state): State<AppState>,
+    Query(scope): Query<OrganizationScope>,
+) -> Response {
+    if let Err(error) = validate_service_scope(&scope.organization_id, None) {
+        return error.into_response();
+    }
+    unavailable_observability_response(
+        "key_compliance_summary_unavailable",
+        "Key compliance summary metrics are not available from a live backing data source.",
+        json!({"organization_id": scope.organization_id}),
+    )
+}
+
+async fn public_service_audit_log(
+    State(state): State<AppState>,
+    Path(service_id): Path<String>,
+    Query(scope): Query<AuditLogScope>,
+) -> Response {
+    if let Err(error) = validate_service_scope(&scope.organization_id, None) {
+        return error.into_response();
+    }
+    if scope.limit.as_deref().is_some_and(|value| {
+        !value
+            .parse::<usize>()
+            .is_ok_and(|limit| (1..=1000).contains(&limit))
+    }) {
+        return public_error(
+            StatusCode::UNPROCESSABLE_ENTITY,
+            "limit must be between 1 and 1000",
+        );
+    }
+    if scope
+        .offset
+        .as_deref()
+        .is_some_and(|value| value.parse::<usize>().is_err())
+    {
+        return public_error(
+            StatusCode::UNPROCESSABLE_ENTITY,
+            "offset must be nonnegative",
+        );
+    }
+    if let Err(error) = registered_service(&state, &scope.organization_id, &service_id).await {
+        return error.into_response();
+    }
+    unavailable_observability_response(
+        "key_audit_log_unavailable",
+        &format!("Key audit log storage is not available for service '{service_id}'."),
+        json!({"organization_id": scope.organization_id, "service_id": service_id}),
+    )
 }
 
 fn service_certificate_projection(service: &Value, certificate: &Value) -> Value {
@@ -4554,5 +4653,33 @@ mod public_contract_tests {
                 .unwrap()["algorithm"],
             "EdDSA"
         );
+    }
+
+    #[tokio::test]
+    async fn unavailable_observability_retains_the_released_mip_error_envelope() {
+        let contract: Value = serde_json::from_str(include_str!(
+            "../../../../contracts/signing-observability-unavailable-behavior.json"
+        ))
+        .unwrap();
+        assert_eq!(
+            contract["routes"]["audit_log"]["registered_service_status"],
+            501
+        );
+        assert_eq!(contract["routes"]["compliance_summary"]["status"], 501);
+        let response = unavailable_observability_response(
+            "key_audit_log_unavailable",
+            "Key audit log storage is not available for service 'svc-a'.",
+            json!({"organization_id": "org-a", "service_id": "svc-a"}),
+        );
+        assert_eq!(response.status(), StatusCode::NOT_IMPLEMENTED);
+        assert_eq!(response.headers()["x-mip-version"], "0.5.0");
+        let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let body: Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(body["error"], contract["routes"]["audit_log"]["error"]);
+        assert_eq!(body["organization_id"], "org-a");
+        assert_eq!(body["service_id"], "svc-a");
+        assert!(uuid::Uuid::parse_str(body["message_id"].as_str().unwrap()).is_ok());
     }
 }
