@@ -747,7 +747,11 @@ fn normalize_requested_registry(value: &Value) -> Result<Value, RegistryError> {
         return Ok(empty_registry());
     };
     let Some(raw_services) = body.get("services").and_then(Value::as_array) else {
-        return normalize_legacy_registry(body);
+        let mut legacy = normalize_legacy_registry(body)?;
+        let bindings = normalize_bindings(body.get("key_reference_purposes"));
+        validate_lti_bindings(&bindings)?;
+        legacy["key_reference_purposes"] = json!(bindings);
+        return Ok(legacy);
     };
     let mut services = Vec::new();
     for service in raw_services {
@@ -1044,7 +1048,7 @@ fn is_key_purpose(value: &str) -> bool {
     key_purposes().iter().any(|purpose| purpose.id == value)
 }
 
-fn managed_key_purposes(reference: &str) -> &'static [&'static str] {
+pub(crate) fn managed_key_purposes(reference: &str) -> &'static [&'static str] {
     if reference.starts_with("oid4vp-verifier-") {
         &["oid4vp_request_signing"]
     } else if reference.starts_with("lti-tool-") {
