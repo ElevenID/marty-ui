@@ -513,7 +513,9 @@ const KeyManagementServiceWizard = () => {
         <TextField
           fullWidth
           label="Credential reference"
-          helperText="Store secret material outside Marty and reference it here, for example a secret name, policy name, or workload identity."
+          type="password"
+          autoComplete="new-password"
+          helperText="Use a provider identity or secret reference when supported. Token-based modes treat this value as sensitive; prefer the managed service token when available."
           value={wizard.data.auth_reference}
           onChange={(event) => wizard.updateData({ auth_reference: event.target.value })}
         />
@@ -736,7 +738,7 @@ const KeyManagementServiceWizard = () => {
           Authentication: {authModeLabel(wizard.data.auth_mode)}
         </Typography>
         <Typography variant="body2" sx={{ mb: 0.75 }}>
-          Credential reference: {wizard.data.auth_reference || '-'}
+          Credential reference: {wizard.data.auth_reference ? 'Configured (hidden)' : '-'}
         </Typography>
         <Typography variant="body2" sx={{ mb: 0.75 }}>
           {selectedDefinition.key_reference_label}: {wizard.data.key_reference || '-'}

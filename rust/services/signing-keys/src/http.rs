@@ -492,7 +492,7 @@ async fn public_config(
 async fn save_public_config(
     State(state): State<AppState>,
     Query(scope): Query<OrganizationScope>,
-    Json(body): Json<Value>,
+    Json(mut body): Json<Value>,
 ) -> Response {
     let Some(store) = state.registry_store.as_ref() else {
         return public_error(
@@ -500,6 +500,11 @@ async fn save_public_config(
             "Signing registry is unavailable.",
         );
     };
+    let existing = match store.load(&scope.organization_id).await {
+        Ok(registry) => registry,
+        Err(error) => return public_error(StatusCode::SERVICE_UNAVAILABLE, &error.to_string()),
+    };
+    preserve_unchanged_auth_references(&mut body, &existing);
     match store.save(&scope.organization_id, &body).await {
         Ok(registry) => Json(public_config_document(&state, registry)).into_response(),
         Err(error) => public_error(StatusCode::UNPROCESSABLE_ENTITY, &error.to_string()),
@@ -776,7 +781,12 @@ fn public_config_document(state: &AppState, registry: Value) -> Value {
     let services = registry
         .get("services")
         .and_then(Value::as_array)
-        .cloned()
+        .map(|services| {
+            services
+                .iter()
+                .map(public_service_config)
+                .collect::<Vec<_>>()
+        })
         .unwrap_or_default();
     json!({
         "hsm_enabled": !services.is_empty(),
@@ -794,6 +804,70 @@ fn public_config_document(state: &AppState, registry: Value) -> Value {
         "key_reference_purposes": registry.get("key_reference_purposes").cloned().unwrap_or_else(|| json!({})),
         "service_type_catalog": registry::service_catalog(),
     })
+}
+
+fn public_service_config(service: &Value) -> Value {
+    let mut public = service.clone();
+    if let Some(fields) = public.as_object_mut() {
+        let configured = fields
+            .get("auth_reference")
+            .and_then(Value::as_str)
+            .is_some_and(|reference| !reference.is_empty());
+        fields.insert("auth_reference".into(), json!(""));
+        fields.insert("auth_configured".into(), json!(configured));
+    }
+    public
+}
+
+// The console sends the complete visible service list for default/removal changes.
+// Preserve a hidden credential only when its service and connection binding are
+// unchanged. An explicit null clears it; changing the endpoint or auth mode
+// must never silently forward the old credential to another destination.
+fn preserve_unchanged_auth_references(request: &mut Value, existing: &Value) {
+    const BINDING: [&str; 8] = [
+        "provider",
+        "service_type",
+        "protocol",
+        "endpoint",
+        "region",
+        "auth_mode",
+        "mount",
+        "namespace",
+    ];
+    let Some(requested) = request.get_mut("services").and_then(Value::as_array_mut) else {
+        return;
+    };
+    let Some(stored) = existing.get("services").and_then(Value::as_array) else {
+        return;
+    };
+    for service in requested {
+        let Some(id) = service.get("id").and_then(Value::as_str) else {
+            continue;
+        };
+        let Some(previous) = stored
+            .iter()
+            .find(|candidate| candidate.get("id").and_then(Value::as_str) == Some(id))
+        else {
+            continue;
+        };
+        let Some(fields) = service.as_object_mut() else {
+            continue;
+        };
+        if fields.get("auth_reference").is_some_and(|value| {
+            value.is_null() || value.as_str().is_some_and(|text| !text.is_empty())
+        }) {
+            continue;
+        }
+        if BINDING
+            .iter()
+            .any(|field| fields.get(*field) != previous.get(*field))
+        {
+            continue;
+        }
+        if let Some(reference) = previous.get("auth_reference") {
+            fields.insert("auth_reference".into(), reference.clone());
+        }
+    }
 }
 
 fn identity_selector(input: &IssuerIdentityRequest) -> FindProfilesRequest {
@@ -2085,6 +2159,76 @@ mod public_contract_tests {
         );
         assert_eq!(projected["format_defaults"]["dc+sd-jwt"], "provider-b");
         assert_eq!(projected["type_defaults"]["vc_jwt_issuer"], "provider-c");
+    }
+
+    #[test]
+    fn public_config_redacts_credentials_without_hiding_service_metadata() {
+        let state = AppState {
+            internal_api_key: Arc::from("test-key"),
+            registry_store: None,
+            document_store: None,
+            csca_lifecycle_store: None,
+            profile_store: None,
+            flow_envelopes: None,
+            compatibility: None,
+            public_domain: None,
+        };
+        let projected = public_config_document(
+            &state,
+            json!({"services": [{
+                "id": "provider-a",
+                "endpoint": "https://kms.example.test",
+                "key_reference": "issuer-key",
+                "auth_reference": "sensitive-test-token"
+            }]}),
+        );
+        assert_eq!(projected["services"][0]["id"], "provider-a");
+        assert_eq!(projected["services"][0]["key_reference"], "issuer-key");
+        assert_eq!(projected["services"][0]["auth_reference"], "");
+        assert_eq!(projected["services"][0]["auth_configured"], true);
+        assert!(!projected.to_string().contains("sensitive-test-token"));
+    }
+
+    #[test]
+    fn redacted_config_round_trip_preserves_only_unchanged_credential_binding() {
+        let existing = json!({"services": [{
+            "id": "provider-a",
+            "provider": "openbao",
+            "service_type": "openbao-transit",
+            "endpoint": "https://kms.example.test",
+            "region": "",
+            "auth_mode": "token",
+            "mount": "transit",
+            "namespace": "",
+            "auth_reference": "sensitive-test-token"
+        }]});
+        let mut unchanged = json!({"services": [{
+            "id": "provider-a",
+            "provider": "openbao",
+            "service_type": "openbao-transit",
+            "endpoint": "https://kms.example.test",
+            "region": "",
+            "auth_mode": "token",
+            "mount": "transit",
+            "namespace": "",
+            "auth_reference": ""
+        }]});
+        preserve_unchanged_auth_references(&mut unchanged, &existing);
+        assert_eq!(
+            unchanged["services"][0]["auth_reference"],
+            "sensitive-test-token"
+        );
+
+        let mut rebound = unchanged.clone();
+        rebound["services"][0]["endpoint"] = json!("https://other.example.test");
+        rebound["services"][0]["auth_reference"] = json!("");
+        preserve_unchanged_auth_references(&mut rebound, &existing);
+        assert_eq!(rebound["services"][0]["auth_reference"], "");
+
+        let mut cleared = unchanged;
+        cleared["services"][0]["auth_reference"] = Value::Null;
+        preserve_unchanged_auth_references(&mut cleared, &existing);
+        assert!(cleared["services"][0]["auth_reference"].is_null());
     }
 
     #[test]
