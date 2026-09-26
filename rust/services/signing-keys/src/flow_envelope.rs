@@ -104,7 +104,10 @@ impl OpenBaoEnvelopeProvider {
         Ok(Self {
             endpoint,
             token,
-            client: Client::new(),
+            client: Client::builder()
+                .redirect(reqwest::redirect::Policy::none())
+                .build()
+                .map_err(|_| "OpenBao envelope HTTP client is unavailable")?,
         })
     }
 
@@ -150,7 +153,7 @@ impl OpenBaoEnvelopeProvider {
         validate_envelope(&request, &plaintext)
     }
 
-    async fn post(&self, path: &str, body: Value) -> Result<Value, reqwest::Error> {
+    pub(crate) async fn post(&self, path: &str, body: Value) -> Result<Value, reqwest::Error> {
         self.client
             .post(format!("{}{path}", self.endpoint))
             .timeout(TIMEOUT)
