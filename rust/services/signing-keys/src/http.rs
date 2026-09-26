@@ -174,6 +174,10 @@ pub fn router_with_dependencies(
             post(generate_public_service_csr),
         )
         .route(
+            "/v1/signing-keys/services/{service_id}/sign",
+            post(sign_public_service_payload),
+        )
+        .route(
             "/v1/signing-keys/services/{service_id}/mdoc-x5c",
             get(public_service_mdoc_x5c),
         )
@@ -489,6 +493,23 @@ struct ServiceCsrRequest {
     country: String,
     organization: String,
     common_name: String,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct PublicServiceSignRequest {
+    #[serde(default)]
+    organization_id: Option<String>,
+    #[serde(default)]
+    payload_b64: Option<String>,
+    #[serde(default)]
+    payload_hex: Option<String>,
+    #[serde(default)]
+    algorithm: Option<String>,
+    #[serde(default)]
+    key_reference: Option<String>,
+    #[serde(default)]
+    key_purpose: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -989,6 +1010,12 @@ async fn save_public_config(
     Query(scope): Query<OrganizationScope>,
     Json(mut body): Json<Value>,
 ) -> Response {
+    if !body.is_object() {
+        return public_error(
+            StatusCode::UNPROCESSABLE_ENTITY,
+            "Signing configuration must be an object.",
+        );
+    }
     let Some(store) = state.registry_store.as_ref() else {
         return public_error(
             StatusCode::SERVICE_UNAVAILABLE,
@@ -1000,6 +1027,18 @@ async fn save_public_config(
         Err(error) => return public_error(StatusCode::SERVICE_UNAVAILABLE, &error.to_string()),
     };
     preserve_unchanged_auth_references(&mut body, &existing);
+    if let Some(config) = body.as_object_mut() {
+        let bindings = config
+            .entry("key_reference_purposes")
+            .or_insert_with(|| json!({}));
+        if !bindings.is_object() {
+            *bindings = json!({});
+        }
+        bindings["managed-openbao-transit"] = existing
+            .pointer("/key_reference_purposes/managed-openbao-transit")
+            .cloned()
+            .unwrap_or_else(|| json!({}));
+    }
     match store.save(&scope.organization_id, &body).await {
         Ok(registry) => Json(public_config_document(&state, registry)).into_response(),
         Err(error) => public_error(StatusCode::UNPROCESSABLE_ENTITY, &error.to_string()),
@@ -1680,6 +1719,222 @@ async fn registered_certificate_service(
         ));
     }
     Ok(service)
+}
+
+async fn sign_public_service_payload(
+    State(state): State<AppState>,
+    Path(service_id): Path<String>,
+    Query(scope): Query<OrganizationScope>,
+    input: Result<Json<PublicServiceSignRequest>, axum::extract::rejection::JsonRejection>,
+) -> Response {
+    let Json(input) = match input {
+        Ok(input) => input,
+        Err(error) => {
+            return public_error(
+                StatusCode::UNPROCESSABLE_ENTITY,
+                &format!("Invalid signing request: {error}"),
+            );
+        }
+    };
+    if let Err(error) =
+        validate_service_scope(&scope.organization_id, input.organization_id.as_deref())
+    {
+        return error.into_response();
+    }
+    let Some(service) = state.compatibility.as_ref() else {
+        return public_error(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "Signing service is unavailable.",
+        );
+    };
+    if let Some(reference) = input
+        .key_reference
+        .as_deref()
+        .map(str::trim)
+        .filter(|reference| !reference.is_empty())
+    {
+        if let Err(error) = authorize_public_service_reference(
+            &state,
+            &scope.organization_id,
+            &service_id,
+            reference,
+            input.key_purpose.as_deref(),
+            input.algorithm.as_deref(),
+        )
+        .await
+        {
+            return error.into_response();
+        }
+    }
+    let request = ServiceSignRequest {
+        organization_id: scope.organization_id,
+        payload_b64: input.payload_b64,
+        payload_hex: input.payload_hex,
+        algorithm: input.algorithm,
+        key_reference: input.key_reference,
+        key_purpose: input.key_purpose,
+    };
+    match service.sign_with_service(&service_id, &request).await {
+        Ok(signed) => Json(signed).into_response(),
+        Err(error) => error.into_response(),
+    }
+}
+
+async fn authorize_public_service_reference(
+    state: &AppState,
+    organization_id: &str,
+    service_id: &str,
+    reference: &str,
+    key_purpose: Option<&str>,
+    algorithm: Option<&str>,
+) -> Result<(), PublicSigningError> {
+    let store = state.registry_store.as_ref().ok_or_else(|| {
+        public_failure(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "Signing registry is unavailable.",
+        )
+    })?;
+    let registry = store.load(organization_id).await.map_err(|_| {
+        public_failure(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "Signing registry is unavailable.",
+        )
+    })?;
+    let service = registry
+        .get("services")
+        .and_then(Value::as_array)
+        .and_then(|services| {
+            services
+                .iter()
+                .find(|service| service.get("id").and_then(Value::as_str) == Some(service_id))
+        })
+        .ok_or_else(|| {
+            public_failure(
+                StatusCode::NOT_FOUND,
+                &format!("Service '{service_id}' not found."),
+            )
+        })?;
+    let is_default = service.get("key_reference").and_then(Value::as_str) == Some(reference);
+    let is_alias = service
+        .get("key_aliases")
+        .and_then(Value::as_array)
+        .is_some_and(|aliases| {
+            aliases
+                .iter()
+                .any(|alias| alias.as_str() == Some(reference))
+        });
+    let bound_purposes = registry
+        .get("key_reference_purposes")
+        .and_then(|bindings| bindings.get(service_id))
+        .and_then(|bindings| bindings.get(reference))
+        .and_then(Value::as_array);
+    let is_bound = bound_purposes.is_some_and(|purposes| !purposes.is_empty());
+    let managed = service_id == "managed-openbao-transit";
+    let selected_algorithm = algorithm.or_else(|| {
+        service
+            .get("algorithms")
+            .and_then(Value::as_array)
+            .and_then(|algorithms| algorithms.first())
+            .and_then(Value::as_str)
+    });
+    if managed
+        && managed_alias_allowed(
+            service,
+            organization_id,
+            reference,
+            bound_purposes,
+            key_purpose,
+            selected_algorithm,
+        )
+    {
+        return Ok(());
+    }
+    if !managed && (is_default || is_alias || is_bound) {
+        return Ok(());
+    }
+    let profiles = state.profile_store.as_ref().ok_or_else(|| {
+        public_failure(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "Issuer identity storage is unavailable.",
+        )
+    })?;
+    let document = profiles.list(organization_id).await.map_err(|_| {
+        public_failure(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "Issuer identity storage is unavailable.",
+        )
+    })?;
+    let active_profile_bound = document
+        .get("profiles")
+        .and_then(Value::as_array)
+        .is_some_and(|profiles| {
+            profiles.iter().any(|profile| {
+                profile.get("status").and_then(Value::as_str) == Some("active")
+                    && profile.get("signing_service_id").and_then(Value::as_str) == Some(service_id)
+                    && profile.get("signing_key_reference").and_then(Value::as_str)
+                        == Some(reference)
+                    && key_purpose.is_none_or(|purpose| {
+                        profile.get("key_purpose").and_then(Value::as_str) == Some(purpose)
+                    })
+                    && selected_algorithm.is_none_or(|algorithm| {
+                        profile.get("algorithm").and_then(Value::as_str) == Some(algorithm)
+                    })
+            })
+        });
+    if active_profile_bound {
+        Ok(())
+    } else {
+        Err(public_failure(
+            StatusCode::CONFLICT,
+            "Requested signing key is not registered for this service.",
+        ))
+    }
+}
+
+fn is_tenant_managed_create_reference(organization_id: &str, reference: &str) -> bool {
+    let namespace = uuid::Uuid::new_v5(&uuid::Uuid::NAMESPACE_URL, organization_id.as_bytes())
+        .simple()
+        .to_string();
+    ["cred-issuer-", "cred-dsc-", "lti-tool-"]
+        .into_iter()
+        .any(|prefix| reference.starts_with(&format!("{prefix}{namespace}-")))
+}
+
+fn managed_alias_allowed(
+    service: &Value,
+    organization_id: &str,
+    reference: &str,
+    bound_purposes: Option<&Vec<Value>>,
+    key_purpose: Option<&str>,
+    algorithm: Option<&str>,
+) -> bool {
+    let is_alias = service
+        .get("key_aliases")
+        .and_then(Value::as_array)
+        .is_some_and(|aliases| {
+            aliases
+                .iter()
+                .any(|alias| alias.as_str() == Some(reference))
+        });
+    let is_bound = bound_purposes.is_some_and(|purposes| !purposes.is_empty());
+    let purpose_matches = key_purpose.is_none_or(|purpose| {
+        registry::managed_key_purposes(reference).contains(&purpose)
+            && bound_purposes.is_some_and(|purposes| {
+                purposes.iter().any(|bound| bound.as_str() == Some(purpose))
+            })
+    });
+    let algorithm_matches = algorithm.is_some_and(|algorithm| {
+        service
+            .get("key_algorithms")
+            .and_then(|algorithms| algorithms.get(reference))
+            .and_then(Value::as_str)
+            == Some(algorithm)
+    });
+    is_alias
+        && is_bound
+        && is_tenant_managed_create_reference(organization_id, reference)
+        && purpose_matches
+        && algorithm_matches
 }
 
 fn unavailable_observability_response(error: &str, message: &str, extra: Value) -> Response {
@@ -4848,5 +5103,76 @@ mod public_contract_tests {
         let mut private_jwk = public_jwk;
         private_jwk["d"] = json!(URL_SAFE_NO_PAD.encode([8_u8; 32]));
         assert!(documents::validate_x25519_public_jwk(&private_jwk).is_err());
+    }
+
+    #[test]
+    fn public_service_sign_contract_reuses_the_kms_only_authorized_kernel() {
+        let contract: Value = serde_json::from_str(include_str!(
+            "../../../../contracts/signing-public-service-sign-behavior.json"
+        ))
+        .unwrap();
+        assert_eq!(contract["method"], "POST");
+        assert_eq!(contract["signing_private_key_location"], "KMS only");
+        assert_eq!(contract["public_request_private_key_fields_allowed"], false);
+        assert_eq!(contract["empty_or_missing_payload_status"], 400);
+        assert_eq!(contract["missing_service_status"], 404);
+        assert!(contract["managed_reference_rule"].is_string());
+        let tenant = uuid::Uuid::new_v5(&uuid::Uuid::NAMESPACE_URL, b"org-a")
+            .simple()
+            .to_string();
+        let tenant_key = format!("cred-issuer-{tenant}-issuer-es256");
+        assert!(is_tenant_managed_create_reference("org-a", &tenant_key));
+        assert!(!is_tenant_managed_create_reference("org-b", &tenant_key));
+        assert!(!is_tenant_managed_create_reference(
+            "org-a",
+            "cred-issuer-0123456789abcdefabcd-es256"
+        ));
+        assert!(contract["managed_binding_update_rule"].is_string());
+        let service = json!({
+            "key_aliases": [tenant_key.clone()],
+            "key_algorithms": {(tenant_key.clone()): "ES256"}
+        });
+        let binding = json!(["vc_jwt_issuer"]);
+        let purposes = binding.as_array();
+        assert!(managed_alias_allowed(
+            &service,
+            "org-a",
+            &tenant_key,
+            purposes,
+            Some("vc_jwt_issuer"),
+            Some("ES256")
+        ));
+        assert!(!managed_alias_allowed(
+            &service,
+            "org-a",
+            &tenant_key,
+            purposes,
+            Some("mdoc_dsc"),
+            Some("ES256")
+        ));
+        assert!(!managed_alias_allowed(
+            &service,
+            "org-a",
+            &tenant_key,
+            purposes,
+            Some("vc_jwt_issuer"),
+            Some("RS256")
+        ));
+        assert!(!managed_alias_allowed(
+            &service,
+            "org-b",
+            &tenant_key,
+            purposes,
+            Some("vc_jwt_issuer"),
+            Some("ES256")
+        ));
+        assert!(!managed_alias_allowed(
+            &service,
+            "org-a",
+            &tenant_key,
+            None,
+            Some("vc_jwt_issuer"),
+            Some("ES256")
+        ));
     }
 }

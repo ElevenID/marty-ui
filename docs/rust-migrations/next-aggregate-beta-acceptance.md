@@ -82,7 +82,7 @@ selected here.
 
    The [Signing Keys public-route parity audit](signing-keys-public-parity-2026-09-26.md)
    found 24 Gateway-declared method/path pairs without Rust public handlers on
-   its protected-main baseline. The stacked review head restores 16, leaving 8
+   its protected-main baseline. The stacked review head restores 17, leaving 7
    without local handlers. Repair and retest those adapters, and exercise the
    new ones through the authenticated Gateway, before describing the aggregate
    beta release as feature-complete.
