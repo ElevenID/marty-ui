@@ -9,6 +9,7 @@ use axum::{
 };
 use chrono::{TimeZone, Utc};
 use hmac::{Hmac, Mac};
+use marty_issuance_service::config::IssuanceServiceConfig;
 use marty_issuance_service::migration;
 use marty_issuance_service::passport_artifact::{
     PassportArtifactCipher, PassportSensitiveArtifact,
@@ -573,6 +574,61 @@ async fn passport_jobs_survive_restart_without_cross_tenant_reads() {
         .await
         .unwrap()
         .is_none());
+
+    // The opt-in internal handoff must retain the same PostgreSQL tenant
+    // boundary as the frozen per-tenant keyring, even though both trusted
+    // callers now present the same workload credential.
+    let internal_token = "synthetic-internal-passport-token-00000001";
+    let config = IssuanceServiceConfig::from_values(vec![
+        ("PASSPORT_NATIVE_HTTP_ENABLED".into(), "true".into()),
+        (
+            "PASSPORT_INTERNAL_SERVICE_AUTH_ENABLED".into(),
+            "true".into(),
+        ),
+        ("GRPC_SERVICE_TOKEN".into(), internal_token.into()),
+        ("DATABASE_URL".into(), database_url.clone()),
+    ])
+    .unwrap();
+    let internal = passport_router(
+        PassportHttpService::from_config(&config, pool.clone())
+            .unwrap()
+            .unwrap(),
+    );
+    let path = "/v1/passport/applications/application-a/production-status";
+    let (status, body) = passport_http_request(
+        &internal,
+        "GET",
+        path,
+        Some("org-a"),
+        Some(internal_token),
+        json!(null),
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(body["organization_id"], "org-a");
+    let (status, _) = passport_http_request(
+        &internal,
+        "GET",
+        path,
+        Some("org-b"),
+        Some(internal_token),
+        json!(null),
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+    let (status, _) = passport_http_request(
+        &internal,
+        "GET",
+        path,
+        Some("org-a"),
+        Some("wrong-token"),
+        json!(null),
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::UNAUTHORIZED);
 
     pool.close().await;
     let restarted_pool = PgPoolOptions::new()
