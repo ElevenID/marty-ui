@@ -90,8 +90,10 @@ selected here.
    public-key verification, JWKS/DID publication, and config resolution through
    an authenticated GCP adapter fixture. AWS/GCP provider envelopes are normalized
    by the shared public-JWK sanitizer before resolver algorithm matching; AWS
-   key usage and signing algorithms, GCP key-version algorithm, and JWK signing
-   permissions reject provider-declared non-signing keys. OpenBao's public-JWK
+   key usage and signing algorithms, GCP key-version algorithm, and Azure Key
+   Vault key operations reject provider-declared non-signing keys. A public JWK
+   with `key_ops: ["verify"]` remains eligible when its provider does not declare
+   signing restrictions. OpenBao's public-JWK
    response does not expose its Transit `supports_signing` flag; confirm that
    capability during live beta acceptance. The
    direct-service public JWKS/DID contract still uses the provider key reference

@@ -4232,15 +4232,6 @@ fn discovered_key_matches_algorithm(response: &Value, algorithm: &str) -> Result
             }
         }
     }
-    if let Some(operations) = jwk.get("key_ops") {
-        let operations = operations.as_array().ok_or(())?;
-        if !operations.iter().all(Value::is_string) {
-            return Err(());
-        }
-        if !operations.iter().any(|operation| operation == "sign") {
-            return Ok(false);
-        }
-    }
     match response.get("provider").and_then(Value::as_str) {
         Some("aws") => {
             let usage = response
@@ -4278,6 +4269,16 @@ fn discovered_key_matches_algorithm(response: &Value, algorithm: &str) -> Result
                 "EdDSA" => native == "EC_SIGN_ED25519",
                 _ => false,
             })
+        }
+        Some("azure") => {
+            let Some(operations) = jwk.get("key_ops") else {
+                return Ok(true);
+            };
+            let operations = operations.as_array().ok_or(())?;
+            if !operations.iter().all(Value::is_string) {
+                return Err(());
+            }
+            Ok(operations.iter().any(|operation| operation == "sign"))
         }
         _ => Ok(true),
     }
@@ -6241,6 +6242,14 @@ mod public_contract_tests {
         azure["key_ops"] = json!(["sign"]);
         azure["use"] = json!("enc");
         assert_eq!(discovered_key_matches_algorithm(&azure, "ES256"), Ok(false));
+        let public_verifier = json!({
+            "kty": "EC", "crv": "P-256", "x": "public-x", "y": "public-y",
+            "use": "sig", "key_ops": ["verify"]
+        });
+        assert_eq!(
+            discovered_key_matches_algorithm(&public_verifier, "ES256"),
+            Ok(true)
+        );
         assert!(discovered_key_matches_algorithm(&json!({"provider":"gcp"}), "ES256").is_err());
     }
 
