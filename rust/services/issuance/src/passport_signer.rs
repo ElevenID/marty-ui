@@ -9,6 +9,7 @@ use base64::{engine::general_purpose::STANDARD, Engine as _};
 use marty_crypto::certificate::{load_certificate_der, load_certificate_pem};
 use marty_emrtd_issuance::{prepare_sod, SodSignatureAlgorithm};
 use marty_verification::{
+    asn1::sod::verify_sod_signature,
     trust_anchor::CscaRegistry,
     verification::emrtd::{verify_dsc_chain, ChainStatus, DocumentSignerCertificate},
 };
@@ -345,6 +346,9 @@ impl ManagedProfileSigner {
         let sod = prepared
             .assemble(&signature)
             .map_err(|_| SignerError::InvalidManagedMaterial)?;
+        if !verify_sod_signature(&sod).map_err(|_| SignerError::InvalidManagedMaterial)? {
+            return Err(SignerError::InvalidManagedMaterial);
+        }
         Ok(SignedMaterial {
             sod_der_base64: STANDARD.encode(sod),
             dsc_cert_pem: pem_certificate(leaf),
@@ -631,6 +635,8 @@ mod tests {
             csca_b64: String,
             csca_pem: String,
             signer: SigningKey,
+            rotated_signer: SigningKey,
+            rotated: Arc<AtomicBool>,
             requests: Arc<Mutex<Vec<Value>>>,
             trust_available: Arc<AtomicBool>,
         }
@@ -674,7 +680,12 @@ mod tests {
             let input = URL_SAFE_NO_PAD
                 .decode(request["payload_b64"].as_str().unwrap())
                 .unwrap();
-            let signature: Signature = state.signer.sign(&input);
+            let signing_key = if state.rotated.load(Ordering::SeqCst) {
+                &state.rotated_signer
+            } else {
+                &state.signer
+            };
+            let signature: Signature = signing_key.sign(&input);
             Json(json!({
                 "ok": true,
                 "issuer_did": request["issuer_did"],
@@ -687,11 +698,14 @@ mod tests {
             }))
         }
         let (dsc_b64, csca_b64, csca_pem, signer) = synthetic_dsc_chain();
+        let (_, _, _, rotated_signer) = synthetic_dsc_chain();
         let state = ManagedMock {
             dsc_b64,
             csca_b64,
             csca_pem,
             signer,
+            rotated_signer,
+            rotated: Arc::new(AtomicBool::new(false)),
             requests: Arc::new(Mutex::new(Vec::new())),
             trust_available: Arc::new(AtomicBool::new(true)),
         };
@@ -736,6 +750,15 @@ mod tests {
             assert_eq!(requests[0]["key_purpose"], "x509_doc_signer");
             assert_eq!(requests[0]["credential_format"], "ICAO_EMRTD");
         }
+        state.rotated.store(true, Ordering::SeqCst);
+        assert!(matches!(
+            signer
+                .sign("USA", "org-1", "did:web:issuer.example:orgs:org-1", &groups)
+                .await,
+            Err(SignerError::InvalidManagedMaterial)
+        ));
+        assert_eq!(state.requests.lock().unwrap().len(), 2);
+        state.rotated.store(false, Ordering::SeqCst);
         state.trust_available.store(false, Ordering::SeqCst);
         assert!(matches!(
             signer
@@ -743,7 +766,7 @@ mod tests {
                 .await,
             Err(SignerError::UntrustedDsc)
         ));
-        assert_eq!(state.requests.lock().unwrap().len(), 1);
+        assert_eq!(state.requests.lock().unwrap().len(), 2);
         server.abort();
     }
 

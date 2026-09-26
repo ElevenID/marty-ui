@@ -15,6 +15,15 @@
     "required_result_fields": ["sod_der_base64", "dsc_cert_pem"],
     "incomplete_error": "ICAO document signer returned incomplete signing material"
   },
+  "managed_issuer_profile_signer": {
+    "scope": "beta-only extension to the frozen Python remote-signer contract",
+    "selection": "Resolve the active organization and issuer DID profile for ICAO_EMRTD and x509_doc_signer before signing",
+    "custody": "Select the signing key through the issuer profile and keep private key material inside KMS",
+    "certificate_gate": "Require the attached DSC to chain to an active organization CSCA trust anchor before signing",
+    "sod_gate": "Verify the assembled SOD signature against its embedded DSC before returning material to a passport job",
+    "stale_key_behavior": "If KMS uses a key different from the attached DSC, fail closed until a matching DSC is enrolled",
+    "production_selector_default": false
+  },
   "self_signed_test_signer": {
     "python_flag": "PHYSICAL_DOCUMENT_ALLOW_SELF_SIGNED=true",
     "python_behavior": "When no remote signer URL is set, issue a single-use CSCA and DSC for testing and offline fixtures only",
