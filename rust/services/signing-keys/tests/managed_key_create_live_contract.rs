@@ -14,7 +14,9 @@ use axum::{
     Json, Router,
 };
 use marty_signing_keys::{
+    documents::{DocumentStore, LoadDidRequest},
     http::router_with_dependencies,
+    profiles::ProfileStore,
     registry::{storage_key, RegistryStore},
 };
 use redis::AsyncCommands;
@@ -112,6 +114,246 @@ async fn read_key(
     )
 }
 
+async fn sign_key(Path(reference): Path<String>, State(keys): State<Keys>) -> impl IntoResponse {
+    if !keys.lock().unwrap().contains_key(&reference) {
+        return (
+            StatusCode::NOT_FOUND,
+            Json(json!({"errors": ["key not found"]})),
+        );
+    }
+    (
+        StatusCode::OK,
+        Json(json!({"data": {"signature": "vault:v1:AQ=="}})),
+    )
+}
+
+async fn json_route(app: &Router, method: &str, path: &str, body: Value) -> (StatusCode, Value) {
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method(method)
+                .uri(path)
+                .header("content-type", "application/json")
+                .header("x-api-key", "test-internal-key")
+                .body(Body::from(body.to_string()))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let status = response.status();
+    let body = serde_json::from_slice(&to_bytes(response.into_body(), usize::MAX).await.unwrap())
+        .unwrap_or(Value::Null);
+    (status, body)
+}
+
+#[tokio::test]
+#[ignore = "requires disposable MARTY_TEST_REDIS_URL and BAO_TOKEN=test-only"]
+async fn issuer_profile_creates_managed_key_then_resolves_and_signs_without_a_locator() {
+    assert_eq!(std::env::var("BAO_TOKEN").as_deref(), Ok("test-only"));
+    let redis_url = std::env::var("MARTY_TEST_REDIS_URL").expect("disposable Redis URL");
+    let keys: Keys = Arc::new(Mutex::new(BTreeMap::new()));
+    let kms = Router::new()
+        .route(
+            "/v1/transit/keys/{reference}",
+            get(read_key).post(create_key),
+        )
+        .route(
+            "/v1/transit/sign/{reference}",
+            axum::routing::post(sign_key),
+        )
+        .with_state(Arc::clone(&keys));
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let endpoint = format!("http://{}", listener.local_addr().unwrap());
+    let server = tokio::spawn(async move { axum::serve(listener, kms).await.unwrap() });
+    let organization_id = format!("managed-profile-{}", Uuid::new_v4().simple());
+    let did = format!("did:web:issuer.example:orgs:{organization_id}");
+    let registry = RegistryStore::connect(&redis_url)
+        .await
+        .unwrap()
+        .with_managed_openbao(Some(endpoint.clone()));
+    let profiles = ProfileStore::from_connection(registry.connection());
+    let documents = DocumentStore::from_connection(registry.connection());
+    let app = router_with_dependencies(
+        "test-internal-key".into(),
+        Some(registry.clone()),
+        Some(documents.clone()),
+        None,
+        Some(profiles.clone()),
+        None,
+        Some("issuer.example".into()),
+    );
+    let tuple = json!({
+        "organization_id": organization_id,
+        "issuer_did": did,
+        "key_purpose": "vc_jwt_issuer",
+        "credential_format": "SD_JWT_VC",
+        "algorithm": "EdDSA"
+    });
+    let identity_path =
+        format!("/v1/signing-keys/issuer-identities?organization_id={organization_id}");
+    let (status, created) = json_route(&app, "POST", &identity_path, tuple.clone()).await;
+    assert_eq!(status, StatusCode::OK, "{created}");
+    assert_eq!(created["created"], true);
+    assert_eq!(created["identity"]["issuer_did"], did);
+    let stored = profiles.list(&organization_id).await.unwrap();
+    let reference = stored["profiles"][0]["signing_key_reference"]
+        .as_str()
+        .unwrap();
+    assert!(reference.starts_with("cred-issuer-"));
+    assert!(keys.lock().unwrap().contains_key(reference));
+    let did_document = documents
+        .load_did(
+            &organization_id,
+            LoadDidRequest {
+                did_id: Some(did.clone()),
+                fallback_did: None,
+            },
+        )
+        .await
+        .unwrap();
+    assert!(did_document.found);
+    let public_did_response = app
+        .clone()
+        .oneshot(
+            Request::get(format!(
+                "/v1/signing-keys/did-document?organization_id={organization_id}"
+            ))
+            .body(Body::empty())
+            .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(public_did_response.status(), StatusCode::OK);
+    let public_did: Value = serde_json::from_slice(
+        &to_bytes(public_did_response.into_body(), usize::MAX)
+            .await
+            .unwrap(),
+    )
+    .unwrap();
+    let (status, resolved) = json_route(
+        &app,
+        "POST",
+        &format!("/v1/signing-keys/issuer-identities/resolve?organization_id={organization_id}"),
+        tuple.clone(),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{resolved}");
+    assert_eq!(resolved["public_jwk"]["crv"], "Ed25519");
+    let (status, signed) = json_route(
+        &app,
+        "POST",
+        "/internal/compat/issuer-dids/sign",
+        json!({
+            "organization_id": organization_id,
+            "issuer_did": did,
+            "key_purpose": "vc_jwt_issuer",
+            "credential_format": "SD_JWT_VC",
+            "algorithm": "EdDSA",
+            "payload_b64": "cGF5bG9hZA"
+        }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{signed}");
+    assert_eq!(signed["ok"], true);
+    for public in [
+        &created,
+        &resolved,
+        &signed,
+        &did_document.document,
+        &public_did,
+    ] {
+        for secret in [&endpoint[..], "test-only", reference] {
+            assert!(
+                !public.to_string().contains(secret),
+                "public response exposed custody metadata: {public}"
+            );
+        }
+    }
+    let passport_did = format!("did:web:issuer.example:orgs:{}", Uuid::new_v4().simple());
+    let passport_tuple = json!({
+        "organization_id": organization_id,
+        "issuer_did": passport_did,
+        "key_purpose": "csca",
+        "credential_format": "ICAO_EMRTD",
+        "algorithm": "ES256"
+    });
+    let (status, passport_created) =
+        json_route(&app, "POST", &identity_path, passport_tuple.clone()).await;
+    assert_eq!(status, StatusCode::OK, "{passport_created}");
+    let passport_reference = profiles.list(&organization_id).await.unwrap()["profiles"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|profile| profile["issuer_did"] == passport_did)
+        .unwrap()["signing_key_reference"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    assert!(passport_reference.starts_with("cred-dsc-"));
+    let (status, passport_resolved) = json_route(
+        &app,
+        "POST",
+        &format!("/v1/signing-keys/issuer-identities/resolve?organization_id={organization_id}"),
+        passport_tuple,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{passport_resolved}");
+    assert_eq!(passport_resolved["public_jwk"]["crv"], "P-256");
+    assert!(!passport_created.to_string().contains(&passport_reference));
+    assert!(!passport_resolved.to_string().contains(&passport_reference));
+    server.abort();
+}
+
+#[tokio::test]
+#[ignore = "requires disposable MARTY_TEST_REDIS_URL and BAO_TOKEN=test-only"]
+async fn failed_managed_provision_does_not_activate_an_issuer_profile() {
+    assert_eq!(std::env::var("BAO_TOKEN").as_deref(), Ok("test-only"));
+    let redis_url = std::env::var("MARTY_TEST_REDIS_URL").expect("disposable Redis URL");
+    let kms = Router::new().route(
+        "/v1/transit/keys/{reference}",
+        axum::routing::post(|| async { StatusCode::SERVICE_UNAVAILABLE }),
+    );
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let endpoint = format!("http://{}", listener.local_addr().unwrap());
+    let server = tokio::spawn(async move { axum::serve(listener, kms).await.unwrap() });
+    let organization_id = format!("managed-profile-fail-{}", Uuid::new_v4().simple());
+    let did = format!("did:web:issuer.example:orgs:{}", Uuid::new_v4().simple());
+    let registry = RegistryStore::connect(&redis_url)
+        .await
+        .unwrap()
+        .with_managed_openbao(Some(endpoint));
+    let profiles = ProfileStore::from_connection(registry.connection());
+    let app = router_with_dependencies(
+        "test-internal-key".into(),
+        Some(registry.clone()),
+        Some(DocumentStore::from_connection(registry.connection())),
+        None,
+        Some(profiles.clone()),
+        None,
+        Some("issuer.example".into()),
+    );
+    let (status, failure) = json_route(
+        &app,
+        "POST",
+        &format!("/v1/signing-keys/issuer-identities?organization_id={organization_id}"),
+        json!({
+            "organization_id": organization_id,
+            "issuer_did": did,
+            "key_purpose": "vc_jwt_issuer",
+            "credential_format": "SD_JWT_VC",
+            "algorithm": "EdDSA"
+        }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE, "{failure}");
+    assert!(profiles.list(&organization_id).await.unwrap()["profiles"]
+        .as_array()
+        .unwrap()
+        .is_empty());
+    server.abort();
+}
+
 async fn request(app: &Router, organization_id: &str, body: Value) -> (StatusCode, Value) {
     let response = app
         .clone()
@@ -144,6 +386,10 @@ async fn managed_key_creation_stays_in_kms_and_binds_only_after_verified_success
             "/v1/transit/keys/{reference}",
             get(read_key).post(create_key),
         )
+        .route(
+            "/v1/transit/sign/{reference}",
+            axum::routing::post(sign_key),
+        )
         .with_state(Arc::clone(&keys));
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let endpoint = format!("http://{}", listener.local_addr().unwrap());
@@ -157,9 +403,9 @@ async fn managed_key_creation_stays_in_kms_and_binds_only_after_verified_success
     let app = router_with_dependencies(
         "test-internal-key".into(),
         Some(registry.clone()),
+        Some(DocumentStore::from_connection(registry.connection())),
         None,
-        None,
-        None,
+        Some(ProfileStore::from_connection(registry.connection())),
         None,
         None,
     );
@@ -254,6 +500,29 @@ async fn managed_key_creation_stays_in_kms_and_binds_only_after_verified_success
             .await
             .unwrap();
     }
+    let stale_tuple = "cred-issuer-0123456789abcdef0123-es256";
+    let foreign_tenant = Uuid::new_v5(&Uuid::NAMESPACE_URL, other_organization_id.as_bytes());
+    let foreign_holder = format!("cred-holder-{}-foreign-es256", foreign_tenant.simple());
+    keys.lock()
+        .unwrap()
+        .insert(stale_tuple.into(), "ecdsa-p256".into());
+    keys.lock()
+        .unwrap()
+        .insert(foreign_holder.clone(), "ecdsa-p256".into());
+    for (reference, purpose) in [
+        (stale_tuple, "vc_jwt_issuer"),
+        (foreign_holder.as_str(), "holder_binding"),
+    ] {
+        registry
+            .bind_key_purpose(
+                &organization_id,
+                "managed-openbao-transit",
+                reference,
+                purpose,
+            )
+            .await
+            .unwrap();
+    }
     let listed = app
         .clone()
         .oneshot(
@@ -279,6 +548,13 @@ async fn managed_key_creation_stays_in_kms_and_binds_only_after_verified_success
             .unwrap()
             .iter()
             .any(|key| key["id"] == created["provider_key_name"] && key["algorithm"] == algorithm));
+    }
+    for excluded in [stale_tuple, foreign_holder.as_str()] {
+        assert!(!listed["keys"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|key| key["provider_key_name"] == excluded));
     }
     let key_detail = app
         .clone()
@@ -326,7 +602,67 @@ async fn managed_key_creation_stays_in_kms_and_binds_only_after_verified_success
         let (status, response) = request(&app, &organization_id, body).await;
         assert_eq!(status, expected, "{response}");
     }
+    let created_count = keys.lock().unwrap().len();
+    for (purpose, algorithm) in [
+        ("holder_binding", "RS256"),
+        ("presentation_signing", "ES384"),
+        ("oid4vp_request_signing", "EdDSA"),
+        ("mdoc_dsc", "RS256"),
+        ("vdsnc_signing", "RS256"),
+        ("lti_tool_signing", "ES256"),
+    ] {
+        let (status, response) = request(
+            &app,
+            &organization_id,
+            json!({"name": format!("disallowed-{purpose}"), "key_purpose": purpose, "algorithm": algorithm}),
+        )
+        .await;
+        assert_eq!(
+            status,
+            StatusCode::UNPROCESSABLE_ENTITY,
+            "{purpose}: {response}"
+        );
+    }
+    assert_eq!(keys.lock().unwrap().len(), created_count);
     assert_eq!(registry.load(&organization_id).await.unwrap(), before);
+
+    for (purpose, format, algorithm) in [
+        ("holder_binding", "dc+sd-jwt", "ES256"),
+        ("presentation_signing", "dc+sd-jwt", "EdDSA"),
+        ("oid4vp_request_signing", "oauth-authz-req+jwt", "ES256"),
+        ("mdoc_dsc", "mso_mdoc", "ES256"),
+        ("x509_doc_signer", "mso_mdoc", "ES256"),
+        ("vdsnc_signing", "mso_mdoc", "ES256"),
+        ("csca", "mso_mdoc", "ES256"),
+        ("jwks_signing", "dc+sd-jwt", "ES256"),
+        ("lti_tool_signing", "lti_tool_jwt", "RS256"),
+    ] {
+        let (status, created) = request(
+            &app,
+            &organization_id,
+            json!({"name": format!("route-{purpose}"), "key_purpose": purpose, "algorithm": algorithm}),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "{purpose}: {created}");
+        let reference = created["provider_key_name"].as_str().unwrap();
+        let (status, resolved) = json_route(
+            &app,
+            "POST",
+            &format!("/v1/signing-keys/config/resolve?organization_id={organization_id}"),
+            json!({"credential_format": format, "key_purpose": purpose, "algorithm": algorithm}),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "{purpose}: {resolved}");
+        let (status, signed) = json_route(
+            &app,
+            "POST",
+            &format!("/v1/signing-keys/services/managed-openbao-transit/sign?organization_id={organization_id}"),
+            json!({"payload_b64": "cGF5bG9hZA", "key_reference": reference, "key_purpose": purpose, "algorithm": algorithm}),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "{purpose}: {signed}");
+        assert_eq!(signed["ok"], true);
+    }
 
     let mut redis = registry.connection();
     for tenant in [&organization_id, &other_organization_id] {

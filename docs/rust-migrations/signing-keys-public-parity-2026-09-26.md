@@ -182,17 +182,34 @@ rejection, and the JWKS-only deletion boundary; Gateway tests cover session
 authorization and trusted tenant forwarding. Combined Gateway-to-Rust and
 beta acceptance remain open.
 
-The local `POST /v1/signing-keys` adapter now makes an explicit managed
-OpenBao Transit creation request and returns only its public metadata. It
-preserves the released four algorithms, purpose binding, LTI isolation, and
-response fields, but deliberately includes a deterministic organization
-namespace in the provider key name. The released Gateway omitted that
-namespace and could select the same KMS key for same-name requests from two
-tenants. `contracts/signing-managed-key-create-behavior.json` freezes both the
-released behavior and this reviewed security correction. The disposable
-Redis/mock-KMS route test covers all four algorithms, same-name tenant
-isolation, read-after-create inventory, existing-key reuse, mismatched or
-failed KMS writes leaving registry bindings unchanged, and custody rejection.
+The issuer identity/profile create route is the primary KMS-abstracted
+signing path. Callers provide an issuer DID, purpose, format, and algorithm;
+the Rust custody resolver selects a tenant service and provisions the
+deterministic managed key when that service is managed OpenBao. The resulting
+profile publishes an opaque DID verification method, then resolves and signs
+without a caller KMS locator. `contracts/signing-issuer-profile-managed-provision-behavior.json`
+freezes this flow. Its disposable Redis/mock-KMS route gate covers fresh
+create, resolve, DID-mediated sign, custody-free public responses and DID
+document, a CSCA `ICAO_EMRTD` profile, and failed provisioning without an
+active profile. Nonmanaged custody selection and existing published
+verification method IDs remain in place. The issuer-scoped CSR resolver uses
+the stored method ID and compares public key coordinates, so the opaque
+fragment is compatible with its lookup; a real OpenBao CSR signature and
+chain still need the beta gate. Combined Gateway-to-Rust and beta acceptance
+for this profile flow remain open.
+
+The local direct `POST /v1/signing-keys` route remains the released
+compatibility/admin key-inventory API. It returns public metadata, preserves
+the released four algorithms, purpose binding, LTI isolation, and response
+fields, and includes a deterministic organization namespace in provider key
+names. The released Gateway omitted that namespace and could select the same
+KMS key for same-name requests from two tenants.
+`contracts/signing-managed-key-create-behavior.json` freezes the released
+behavior and this reviewed correction. The disposable Redis/mock-KMS route
+test covers all four algorithms, all advertised purposes through create,
+resolve, and sign, same-name tenant isolation, read-after-create inventory,
+existing-key reuse, rejected algorithms before KMS, stale/foreign inventory
+exclusion, and failed writes leaving registry bindings unchanged.
 An opt-in authenticated Gateway-to-Rust route test now verifies session denial,
 foreign-tenant denial, trusted tenant forwarding through the real HTTP
 upstream transport, managed creation, and public-only inventory against

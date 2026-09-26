@@ -764,12 +764,14 @@ fn tenant_managed_key_name(organization_id: &str, reference: &str) -> bool {
     let tenant = Uuid::new_v5(&Uuid::NAMESPACE_URL, organization_id.as_bytes())
         .simple()
         .to_string();
-    crate::domain::MANAGED_KEY_PREFIXES.iter()
+    crate::domain::MANAGED_KEY_PREFIXES
+        .iter()
         .any(|prefix| reference.starts_with(&format!("{prefix}{tenant}-")))
 }
 
 fn foreign_namespaced_key(organization_id: &str, reference: &str) -> bool {
-    crate::domain::MANAGED_KEY_PREFIXES.iter()
+    crate::domain::MANAGED_KEY_PREFIXES
+        .iter()
         .filter_map(|prefix| reference.strip_prefix(prefix))
         .any(|suffix| {
             suffix.len() > 32
@@ -1785,17 +1787,19 @@ mod tests {
 
     #[test]
     fn managed_key_scope_keeps_legacy_bound_names_but_rejects_foreign_namespaces() {
-        let own = format!(
-            "cred-issuer-{}-demo-es256",
-            Uuid::new_v5(&Uuid::NAMESPACE_URL, b"org-a").simple()
-        );
-        let foreign = format!(
-            "cred-issuer-{}-demo-es256",
-            Uuid::new_v5(&Uuid::NAMESPACE_URL, b"org-b").simple()
-        );
-        assert!(tenant_managed_key_name("org-a", &own));
-        assert!(!tenant_managed_key_name("org-a", &foreign));
-        assert!(foreign_namespaced_key("org-a", &foreign));
+        for prefix in crate::domain::MANAGED_KEY_PREFIXES {
+            let own = format!(
+                "{prefix}{}-demo-es256",
+                Uuid::new_v5(&Uuid::NAMESPACE_URL, b"org-a").simple()
+            );
+            let foreign = format!(
+                "{prefix}{}-demo-es256",
+                Uuid::new_v5(&Uuid::NAMESPACE_URL, b"org-b").simple()
+            );
+            assert!(tenant_managed_key_name("org-a", &own), "{prefix}");
+            assert!(!tenant_managed_key_name("org-a", &foreign), "{prefix}");
+            assert!(foreign_namespaced_key("org-a", &foreign), "{prefix}");
+        }
         assert!(!foreign_namespaced_key("org-a", "cred-issuer-legacy-es256"));
         assert!(issuer_tuple_key_name(
             "cred-issuer-0123456789abcdef0123-es256"
@@ -1803,6 +1807,10 @@ mod tests {
         assert!(issuer_tuple_key_name(
             "oid4vp-verifier-0123456789abcdef0123-eddsa"
         ));
+        let own = format!(
+            "cred-issuer-{}-demo-es256",
+            Uuid::new_v5(&Uuid::NAMESPACE_URL, b"org-a").simple()
+        );
         assert!(!issuer_tuple_key_name(&own));
         assert!(!issuer_tuple_key_name("cred-issuer-legacy-es256"));
         assert_eq!(

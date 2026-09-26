@@ -3368,8 +3368,8 @@ fn is_tenant_managed_create_reference(organization_id: &str, reference: &str) ->
     let namespace = uuid::Uuid::new_v5(&uuid::Uuid::NAMESPACE_URL, organization_id.as_bytes())
         .simple()
         .to_string();
-    ["cred-issuer-", "cred-dsc-", "lti-tool-"]
-        .into_iter()
+    crate::domain::MANAGED_KEY_PREFIXES
+        .iter()
         .any(|prefix| reference.starts_with(&format!("{prefix}{namespace}-")))
 }
 
