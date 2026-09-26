@@ -55,6 +55,7 @@ def model(enabled=True):
             "ICAO_DOCUMENT_SIGNER_URL": "",
             "PERSONALIZATION_BUREAU_URL": VALIDATOR["PRIVATE_BUREAU_URL"],
             "PERSONALIZATION_BUREAU_API_KEY": TOKEN,
+            "SIGNING_KEYS_INTERNAL_API_KEY": "synthetic-signing-credential",
         }
     )
     services["passport-beta-bureau"] = {
@@ -117,6 +118,7 @@ def test_rendered_compose_environment_list_is_supported():
         "callback_key_file",
         "missing_bureau",
         "token_mismatch",
+        "signing_key_mismatch",
         "signing_route",
         "callback_route",
         "image",
@@ -176,6 +178,8 @@ def test_partial_or_unsafe_selection_fails_closed(mutation):
         del services["passport-beta-bureau"]
     elif mutation == "token_mismatch":
         native["PERSONALIZATION_BUREAU_API_KEY"] = "synthetic-private-value"
+    elif mutation == "signing_key_mismatch":
+        native["SIGNING_KEYS_INTERNAL_API_KEY"] = "synthetic-other-credential"
     elif mutation == "signing_route":
         bureau["environment"]["SIGNING_KEYS_INTERNAL_URL"] = (
             "https://public.example.test"
@@ -257,7 +261,9 @@ def test_runner_validates_twice_before_mutation():
     )
     assert "passport_configuration_validated = $false" in source
     assert '$script:ApplicationServices += "passport-beta-bureau"' in source
-    assert "retire it explicitly before deploying without the passport profile" in source
+    assert (
+        "retire it explicitly before deploying without the passport profile" in source
+    )
     marker = "Assert-BetaPassportConfiguration -RepoRoot $script:RepoRoot"
     assert source.count(marker) == 2
     assert source.index(marker) < source.index(
@@ -286,9 +292,9 @@ def test_passport_transit_keys_are_verified_non_exportable_at_bootstrap():
         ("passport-bureau-callback-marty-hmac", "hmac"),
     ):
         assert f"transit/keys/{key}" in source
-        assert f'type={kind} exportable=false' in source
-        assert f'-field=type transit/keys/{key}' in source
-        assert f'-field=exportable transit/keys/{key}' in source
+        assert f"type={kind} exportable=false" in source
+        assert f"-field=type transit/keys/{key}" in source
+        assert f"-field=exportable transit/keys/{key}" in source
 
 
 def synthetic_beta_compose_env(tmp_path):

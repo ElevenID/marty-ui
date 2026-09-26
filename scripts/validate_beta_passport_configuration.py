@@ -126,6 +126,8 @@ def validate_model(model, *, passport_enabled, files):
             and bureau_env.get("GRPC_SERVICE_TOKEN") == flow.get("GRPC_SERVICE_TOKEN")
             and bureau_env.get("GRPC_SERVICE_TOKEN") == native.get("GRPC_SERVICE_TOKEN")
             and bureau_env.get("SIGNING_KEYS_INTERNAL_API_KEY")
+            and bureau_env.get("SIGNING_KEYS_INTERNAL_API_KEY")
+            == native.get("SIGNING_KEYS_INTERNAL_API_KEY")
             and bureau_env.get("SIGNING_KEYS_INTERNAL_URL") == PRIVATE_SIGNING_URL
             and bureau_env.get("PASSPORT_BUREAU_CALLBACK_URL") == PRIVATE_CALLBACK_URL
         ):
