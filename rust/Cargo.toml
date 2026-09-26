@@ -18,6 +18,8 @@ aws-smithy-http-client = "1.3.0"
 base64 = "0.22"
 bytes = "1"
 chrono = { version = "0.4", default-features = false, features = ["clock", "serde"] }
+const-oid = "0.9.6"
+der = { version = "0.7.10", features = ["pem"] }
 ed25519-dalek = { version = "2", features = ["pkcs8"] }
 fancy-regex = "0.19.2"
 fernet = { version = "0.2.2", default-features = false, features = ["rustcrypto"] }
@@ -61,6 +63,7 @@ rustls = { version = "0.23", default-features = false, features = ["std", "aws_l
 rustls-platform-verifier = "0.7"
 serde = { version = "1", features = ["derive"] }
 serde_json = { version = "1", features = ["preserve_order"] }
+spki = "0.7.3"
 sha2 = "0.10"
 sqlx = { version = "0.9", default-features = false, features = ["chrono", "json", "postgres", "runtime-tokio", "tls-rustls-ring-webpki", "uuid"] }
 subtle = "2"
@@ -77,6 +80,7 @@ tower-http = { version = "0.6", features = ["trace"] }
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter", "json"] }
 uuid = { version = "1", features = ["serde", "v4", "v5"] }
+x509-cert = { version = "0.2.5", features = ["pem"] }
 url = "2"
 zeroize = "1.9"
 

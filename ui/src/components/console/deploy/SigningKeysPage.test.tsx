@@ -1,5 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { renderWithRouter, screen, waitFor } from '@test/utils'
+import { useLocation } from 'react-router'
 import SigningKeysPage from './SigningKeysPage'
 
 const {
@@ -69,6 +70,7 @@ vi.mock('../../../contexts/ConsoleContext', () => ({
 }))
 
 describe('SigningKeysPage', () => {
+  const CurrentPath = () => <span data-testid="current-path">{useLocation().pathname}</span>
   beforeEach(() => {
     vi.clearAllMocks()
     mockUseConsole.mockReturnValue({
@@ -146,6 +148,27 @@ describe('SigningKeysPage', () => {
     expect(screen.getByText(/Create an issuer identity and choose "Create new key in KMS"/i)).toBeInTheDocument()
     expect(screen.queryByRole('button', { name: 'deploy.signingKeys.uploadKey' })).not.toBeInTheDocument()
     expect(screen.getByText('Elevenidllc managed OpenBao transit')).toBeInTheDocument()
+  })
+
+  it('routes managed passport CSR creation to the issuer identity instead of a shared service key', async () => {
+    mockGetKeyManagementConfig.mockResolvedValue({
+      supports_native_key_management: false,
+      default_service_id: 'managed-openbao-transit',
+      services: [{
+        id: 'managed-openbao-transit', name: 'Marty managed OpenBao transit',
+        service_type: 'openbao-transit', provider: 'openbao',
+        key_purposes: ['csca', 'x509_doc_signer'], algorithms: ['ES256'],
+        managed: true, read_only: true, status: 'configured',
+      }],
+      service_type_catalog: [],
+    })
+    const { user } = renderWithRouter(<><SigningKeysPage /><CurrentPath /></>, {
+      initialEntries: ['/console/org/deploy/key-management'],
+    })
+    await screen.findByText('Elevenidllc managed OpenBao transit')
+    await user.click(screen.getByRole('button', { name: 'Certificate' }))
+    await user.click(screen.getByRole('button', { name: 'Generate CSR from issuer identity' }))
+    expect(screen.getByTestId('current-path')).toHaveTextContent('/console/org/deploy/issuer-identity')
   })
 
   it('renders the services registry view with managed and registered services', async () => {

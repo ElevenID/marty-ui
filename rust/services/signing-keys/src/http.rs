@@ -1,3 +1,4 @@
+use crate::certificate_csr::{self, CsrSubject};
 use crate::compat::{
     CompatibilityError, IssuerContextRequest, IssuerDidSignRequest, ProfileIdentityRequest,
     ProfileWriteRequest, ResolveIssuerDidRequest, ServiceSignRequest, SigningCompatibilityService,
@@ -40,6 +41,7 @@ use axum::{
     routing::{get, post},
     Json, Router,
 };
+use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use std::sync::Arc;
@@ -131,6 +133,10 @@ pub fn router_with_dependencies(
         .route(
             "/v1/signing-keys/issuer-identities/csca-certificate",
             axum::routing::put(enroll_public_csca_certificate),
+        )
+        .route(
+            "/v1/signing-keys/issuer-identities/certificate-csr",
+            axum::routing::put(generate_public_issuer_csr),
         )
         .route("/v1/signing-keys/config/purposes", get(purposes))
         .route(
@@ -347,6 +353,35 @@ struct CscaCertificateEnrollment {
     cert_pem: String,
     #[serde(default)]
     cert_chain_pem: String,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct PassportCsrRequest {
+    #[serde(default)]
+    organization_id: Option<String>,
+    issuer_did: String,
+    key_purpose: String,
+    credential_format: String,
+    algorithm: String,
+    country: String,
+    organization: String,
+    common_name: String,
+}
+
+impl PassportCsrRequest {
+    fn identity(&self) -> IssuerIdentityRequest {
+        IssuerIdentityRequest {
+            organization_id: self.organization_id.clone(),
+            issuer_did: self.issuer_did.clone(),
+            key_purpose: self.key_purpose.clone(),
+            credential_format: self.credential_format.clone(),
+            algorithm: self.algorithm.clone(),
+            key_attestation_policy: None,
+            cert_pem: None,
+            cert_chain_pem: None,
+        }
+    }
 }
 
 impl CscaCertificateEnrollment {
@@ -784,11 +819,7 @@ fn managed_csca_import(
     resolved: &Value,
     provider_public_jwk: &Value,
 ) -> Result<ImportCscaCertificateRequest, PublicSigningError> {
-    if profile.get("id") != resolved.pointer("/issuer_profile/id")
-        || profile.get("signing_key_reference")
-            != resolved.pointer("/issuer_profile/signing_key_reference")
-        || profile.get("signing_service_id")
-            != resolved.pointer("/issuer_profile/signing_service_id")
+    if !same_managed_identity(profile, resolved)
         || profile.get("key_purpose").and_then(Value::as_str) != Some("csca")
     {
         return Err(public_failure(
@@ -829,6 +860,141 @@ fn managed_csca_import(
         expected_public_jwk,
         metadata: json!({"issuer_did": input.issuer_did}),
     })
+}
+
+fn same_managed_identity(profile: &Value, resolved: &Value) -> bool {
+    ["id", "signing_service_id", "signing_key_reference"]
+        .iter()
+        .all(|field| {
+            profile
+                .get(*field)
+                .and_then(Value::as_str)
+                .is_some_and(|value| {
+                    !value.trim().is_empty()
+                        && resolved
+                            .pointer(&format!("/issuer_profile/{field}"))
+                            .and_then(Value::as_str)
+                            == Some(value)
+                })
+        })
+}
+
+async fn generate_public_issuer_csr(
+    State(state): State<AppState>,
+    Query(scope): Query<OrganizationScope>,
+    Json(input): Json<PassportCsrRequest>,
+) -> Response {
+    if !matches!(input.key_purpose.as_str(), "csca" | "x509_doc_signer") {
+        return public_error(
+            StatusCode::UNPROCESSABLE_ENTITY,
+            "Passport CSR purpose is unsupported.",
+        );
+    }
+    let identity = input.identity();
+    if let Err(error) = validate_identity_scope(&scope.organization_id, &identity) {
+        return error.into_response();
+    }
+    let profile = match one_matching_profile(&state, &scope.organization_id, &identity).await {
+        Ok(profile) => profile,
+        Err(error) => return error.into_response(),
+    };
+    let Some(compatibility) = state.compatibility.as_ref() else {
+        return public_error(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "Issuer identity service is unavailable.",
+        );
+    };
+    let algorithm = canonical_algorithm(&input.algorithm);
+    let resolved = match compatibility
+        .resolve_issuer_did(&ResolveIssuerDidRequest {
+            organization_id: scope.organization_id.clone(),
+            issuer_did: input.issuer_did.clone(),
+            verification_method_id: None,
+            credential_format: Some(input.credential_format.clone()),
+            key_purpose: Some(input.key_purpose.clone()),
+            algorithm: Some(algorithm.clone()),
+        })
+        .await
+    {
+        Ok(value) => value,
+        Err(error) => return error.into_response(),
+    };
+    if !same_managed_identity(&profile, &resolved) {
+        return public_error(
+            StatusCode::CONFLICT,
+            "Resolved issuer identity does not match its active managed profile.",
+        );
+    }
+    let current_jwk = match compatibility
+        .provider_public_key_for_profile(&scope.organization_id, &profile)
+        .await
+    {
+        Ok(jwk) => jwk,
+        Err(error) => return error.into_response(),
+    };
+    if !resolved
+        .get("public_jwk")
+        .is_some_and(|jwk| documents::same_public_jwk(jwk, &current_jwk))
+    {
+        return public_error(
+            StatusCode::CONFLICT,
+            "Published issuer identity does not match its current managed KMS key.",
+        );
+    }
+    let subject = CsrSubject {
+        country: &input.country,
+        organization: &input.organization,
+        common_name: &input.common_name,
+    };
+    let csr = match certificate_csr::prepare(&current_jwk, &algorithm, &subject) {
+        Ok(csr) => csr,
+        Err(error) => return public_error(StatusCode::UNPROCESSABLE_ENTITY, &error.to_string()),
+    };
+    let signed = match compatibility
+        .sign_with_issuer_did(&IssuerDidSignRequest {
+            organization_id: scope.organization_id,
+            issuer_did: input.issuer_did.clone(),
+            credential_format: input.credential_format,
+            key_purpose: input.key_purpose,
+            algorithm,
+            payload_b64: Some(URL_SAFE_NO_PAD.encode(csr.signing_bytes())),
+            payload_hex: None,
+        })
+        .await
+    {
+        Ok(value) => value,
+        Err(error) => return error.into_response(),
+    };
+    if signed.get("signature_encoding").and_then(Value::as_str) != Some("der") {
+        return public_error(
+            StatusCode::BAD_GATEWAY,
+            "Managed issuer returned an incompatible CSR signature.",
+        );
+    }
+    let signature = signed
+        .get("signature_b64")
+        .and_then(Value::as_str)
+        .and_then(|value| URL_SAFE_NO_PAD.decode(value).ok());
+    let Some(signature) = signature else {
+        return public_error(
+            StatusCode::BAD_GATEWAY,
+            "Managed issuer returned an invalid CSR signature.",
+        );
+    };
+    let csr_pem = match csr.finish(&signature) {
+        Ok(pem) => pem,
+        Err(_) => {
+            return public_error(
+                StatusCode::BAD_GATEWAY,
+                "Managed issuer CSR signature did not verify.",
+            )
+        }
+    };
+    Json(json!({
+        "csr_pem": csr_pem,
+        "issuer_did": input.issuer_did,
+        "subject": {"country": input.country, "organization": input.organization, "common_name": input.common_name}
+    })).into_response()
 }
 
 async fn enroll_public_csca_certificate(
@@ -2187,6 +2353,9 @@ async fn openapi() -> Json<serde_json::Value> {
             "/v1/signing-keys/issuer-identities/csca-certificate": {
                 "put": {"summary": "Enroll Public CSCA Certificate for Managed Issuer Identity", "responses": {"200": {"description": "Tenant-scoped public trust anchor enrolled without exposing key coordinates"}}}
             },
+            "/v1/signing-keys/issuer-identities/certificate-csr": {
+                "put": {"summary": "Generate KMS-backed Certificate Request for Passport Issuer Identity", "responses": {"200": {"description": "Public PKCS#10 request signed in managed custody"}}}
+            },
             "/v1/signing-keys/service-status": {"get": {"summary": "Signing Keys Service Extraction Status", "responses": {"200": {"description": "Successful Response"}}}},
             "/v1/signing-keys/config/purposes": {"get": {"summary": "List Available Key Purposes", "responses": {"200": {"description": "Successful Response"}}}},
             "/v1/signing-keys/config/service-capabilities": {"get": {"summary": "List Provider Capability Metadata", "responses": {"200": {"description": "Successful Response"}}}}
@@ -2209,6 +2378,8 @@ async fn redoc() -> Html<&'static str> {
 #[cfg(test)]
 mod public_contract_tests {
     use super::*;
+    use axum::{body::Body, http::Request};
+    use tower::ServiceExt;
 
     fn identity(purpose: &str, algorithm: &str) -> IssuerIdentityRequest {
         IssuerIdentityRequest {
@@ -2280,6 +2451,55 @@ mod public_contract_tests {
             &json!({"kty": "EC", "crv": "P-256", "x": "rotated-x", "y": "rotated-y"})
         )
         .is_err());
+    }
+
+    #[test]
+    fn passport_csr_request_accepts_only_public_issuer_identity_fields() {
+        let behavior: Value = serde_json::from_str(include_str!(
+            "../../../../contracts/passport-certificate-csr-behavior.json"
+        ))
+        .unwrap();
+        let route = behavior["public_route"]["path"].as_str().unwrap();
+        assert_eq!(route, "/v1/signing-keys/issuer-identities/certificate-csr");
+        let request = json!({
+            "organization_id": "org-a", "issuer_did": "did:web:beta.example:orgs:acme",
+            "key_purpose": "csca", "credential_format": "MDOC", "algorithm": "ES256",
+            "country": "US", "organization": "ElevenID Beta", "common_name": "Pilot CSCA"
+        });
+        let parsed: PassportCsrRequest = serde_json::from_value(request.clone()).unwrap();
+        assert_eq!(parsed.identity().key_purpose, "csca");
+        let mut with_key = request;
+        with_key["key_reference"] = json!("attacker-key");
+        assert!(serde_json::from_value::<PassportCsrRequest>(with_key).is_err());
+    }
+
+    #[tokio::test]
+    async fn public_csr_route_rejects_caller_custody_before_managed_lookup() {
+        let valid = json!({
+            "organization_id": "org-a", "issuer_did": "did:web:beta.example:orgs:acme",
+            "key_purpose": "csca", "credential_format": "MDOC", "algorithm": "ES256",
+            "country": "US", "organization": "ElevenID Beta", "common_name": "Pilot CSCA"
+        });
+        let request = |body: Value| {
+            Request::builder()
+                .method("PUT")
+                .uri("/v1/signing-keys/issuer-identities/certificate-csr?organization_id=org-a")
+                .header("content-type", "application/json")
+                .body(Body::from(body.to_string()))
+                .unwrap()
+        };
+        let response = router_with_internal_api_key("test-only".into())
+            .oneshot(request(valid.clone()))
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
+        let mut forbidden = valid;
+        forbidden["key_reference"] = json!("caller-selected-key");
+        let response = router_with_internal_api_key("test-only".into())
+            .oneshot(request(forbidden))
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::UNPROCESSABLE_ENTITY);
     }
 
     #[test]

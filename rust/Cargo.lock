@@ -5035,6 +5035,8 @@ dependencies = [
  "axum",
  "base64 0.22.1",
  "chrono",
+ "const-oid 0.9.6",
+ "der 0.7.10",
  "http 1.5.0",
  "marty-crypto 0.1.61",
  "marty-verification",
@@ -5045,6 +5047,7 @@ dependencies = [
  "serde",
  "serde_json",
  "sha2 0.10.9",
+ "spki 0.7.3",
  "subtle",
  "thiserror 2.0.20",
  "tokio",
@@ -5053,6 +5056,7 @@ dependencies = [
  "tracing",
  "tracing-subscriber",
  "uuid",
+ "x509-cert",
 ]
 
 [[package]]

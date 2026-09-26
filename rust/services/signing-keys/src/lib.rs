@@ -1,3 +1,4 @@
+pub mod certificate_csr;
 pub mod compat;
 pub mod config;
 pub mod csca_lifecycle;
