@@ -305,13 +305,22 @@ pub async fn replay(
         }
         let observed = tokio::time::timeout(Duration::from_secs(95), async {
             loop {
-                assert!(worker.as_mut().unwrap().0.try_wait().unwrap().is_none(), "worker exited before stage outcome");
+                assert!(
+                    worker.as_mut().unwrap().0.try_wait().unwrap().is_none(),
+                    "worker exited before stage outcome"
+                );
                 let jobs = scalar(pool, text(&fixture.spec["jobs_sql"])).await;
                 let rows = jobs.as_array().unwrap();
-                assert!(rows.len() <= index + 1, "worker scheduled unexpected extra work");
+                assert!(
+                    rows.len() <= index + 1,
+                    "worker scheduled unexpected extra work"
+                );
                 if rows.len() == index + 1 {
                     let latest = &rows[index];
-                    assert!(!matches!(latest["status"].as_str(), Some("retry" | "dead_letter")), "mixed-roster job failed: {latest}");
+                    assert!(
+                        !matches!(latest["status"].as_str(), Some("retry" | "dead_letter")),
+                        "mixed-roster job failed: {latest}"
+                    );
                     if latest["status"] == "succeeded" {
                         let observed = observe(pool, &fixture, &matrix, &roster_sql).await;
                         // Compare the same observed heartbeat snapshot with the
@@ -324,7 +333,9 @@ pub async fn replay(
                 }
                 tokio::time::sleep(Duration::from_millis(25)).await;
             }
-        }).await.expect("natural minute-scheduled worker cycle must reach its durable idle outcome");
+        })
+        .await
+        .expect("natural minute-scheduled worker cycle must reach its durable idle outcome");
         for key in ["state", "roster", "target"] {
             assert_eq!(observed[key], expected[key], "{key} in {}", stage["name"]);
         }
