@@ -5654,6 +5654,14 @@ async fn one_matching_profile(
             StatusCode::CONFLICT,
             "Issuer DID resolution is ambiguous for the requested identity tuple.",
         )),
+        Err(profiles::ProfileError::Storage(_)) => Err(public_failure(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "Issuer identity storage is unavailable.",
+        )),
+        Err(profiles::ProfileError::Corrupt(_)) => Err(public_failure(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "Issuer identity storage is malformed.",
+        )),
         Err(error) => Err(public_failure(
             StatusCode::UNPROCESSABLE_ENTITY,
             &error.to_string(),
