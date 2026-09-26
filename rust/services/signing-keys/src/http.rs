@@ -202,6 +202,10 @@ pub fn router_with_dependencies(
             get(list_csca_certificates),
         )
         .route(
+            "/internal/documents/{organization_id}/csca-trust-anchors",
+            get(active_csca_trust_anchors),
+        )
+        .route(
             "/internal/documents/{organization_id}/csca-certificates/expiring",
             post(expiring_csca_certificates),
         )
@@ -1343,6 +1347,20 @@ async fn list_csca_certificates(
     let document = load_csca_lifecycle(&state, &organization_id, now).await?;
     document
         .list(&query, now)
+        .map(Json)
+        .map_err(csca_lifecycle_error)
+}
+
+async fn active_csca_trust_anchors(
+    State(state): State<AppState>,
+    Path(organization_id): Path<String>,
+    headers: HeaderMap,
+) -> Result<Json<Vec<CscaCertificateDataResponse>>, DocumentHttpError> {
+    authorize_documents(&state, &headers)?;
+    let now = chrono::Utc::now();
+    load_csca_lifecycle(&state, &organization_id, now)
+        .await?
+        .active_certificate_data(now)
         .map(Json)
         .map_err(csca_lifecycle_error)
 }
