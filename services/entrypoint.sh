@@ -87,6 +87,11 @@ if [ "$MODULE_NAME" = "issuance_native" ]; then
 	exec /usr/local/bin/marty-issuance-service
 fi
 
+if [ "$MODULE_NAME" = "passport_beta_bureau" ]; then
+	echo "Starting beta-only Rust service: $SERVICE_NAME"
+	exec /usr/local/bin/marty-passport-beta-bureau
+fi
+
 if [ "$MODULE_NAME" = "canvas_sync_worker" ]; then
 	echo "Starting canonical Rust service: $SERVICE_NAME"
 	exec /usr/local/bin/marty-canvas-sync-worker

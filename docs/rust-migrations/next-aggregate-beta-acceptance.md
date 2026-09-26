@@ -48,13 +48,14 @@ selected here.
    migration rehearsal, workload identity, actual rendered configuration and
    authcrypt policy/CA pairing. `-PlanOnly` explicitly reports
    `didcomm_configuration_validated=false`; it is not runtime qualification.
-   Native passport remains off. The current `-EnablePassportNative` selector
-   and `docker-compose.profile.passport-native-beta.yml` still require five
-   file-backed tenant, artifact, signer, bureau, and callback secrets. **Do not
-   provision those files or select that profile:** the configuration does not
-   meet the KMS-only custody requirement. Its render checks and `-PlanOnly`
-   result (`passport_configuration_validated=false`) are not acceptance.
-   Replace the selector and service configuration before passport activation.
+   Native passport remains off until the protected passport PR chain and this
+   KMS-only selector have merged, the exact beta image digest is available,
+   and the runtime gates below pass. The former five-file passport overlay has
+   been replaced in the integration branch by managed issuer signing, Transit
+   artifact encryption, Transit callback MAC, an existing internal service
+   credential handoff, and a beta-only non-physical bureau simulator. **Do not
+   provision the old passport key files or select an older profile.** Render
+   checks and `-PlanOnly` are not runtime acceptance.
    Resolve an active, organization-scoped `ICAO_EMRTD` X.509 document-signer
    identity created through the existing issuer UI; bind it to the passport
    job and use its managed Signing Keys/KMS reference and published certificate

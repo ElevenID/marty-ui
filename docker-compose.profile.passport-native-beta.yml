@@ -1,54 +1,63 @@
-# Explicit beta-only passport selection. This file is excluded from the default
-# stack and must be paired with reviewed, exact-file secret inputs.
+# Explicit beta-only selection. Every cryptographic private/signing/MAC key
+# remains in KMS; this profile mounts no passport key or tenant-keyring files.
 services:
   gateway:
     environment:
       PASSPORT_NATIVE_GATEWAY_ENABLED: "true"
+      PASSPORT_INTERNAL_SERVICE_AUTH_ENABLED: "true"
       PASSPORT_TENANT_API_KEYS: ""
-      PASSPORT_TENANT_API_KEYS_FILE: /run/secrets/passport_tenant_api_keys
-    secrets:
-      - passport_tenant_api_keys
+      PASSPORT_TENANT_API_KEYS_FILE: ""
 
   flow:
     environment:
       ISSUANCE_NATIVE_SERVICE_URL: http://issuance-native:8005
       PASSPORT_NATIVE_FLOW_ENABLED: "true"
+      PASSPORT_INTERNAL_SERVICE_AUTH_ENABLED: "true"
       PASSPORT_TENANT_API_KEYS: ""
-      PASSPORT_TENANT_API_KEYS_FILE: /run/secrets/passport_tenant_api_keys
-    secrets:
-      - passport_tenant_api_keys
+      PASSPORT_TENANT_API_KEYS_FILE: ""
 
   issuance-native:
     environment:
       PASSPORT_NATIVE_HTTP_ENABLED: "true"
+      PASSPORT_INTERNAL_SERVICE_AUTH_ENABLED: "true"
+      PASSPORT_MANAGED_ISSUER_SIGNING_ENABLED: "true"
+      PASSPORT_KMS_ARTIFACTS_ENABLED: "true"
+      PASSPORT_KMS_CALLBACKS_ENABLED: "true"
       PASSPORT_TENANT_API_KEYS: ""
-      PASSPORT_TENANT_API_KEYS_FILE: /run/secrets/passport_tenant_api_keys
+      PASSPORT_TENANT_API_KEYS_FILE: ""
       PHYSICAL_DOCUMENT_ALLOW_SELF_SIGNED: "false"
       PHYSICAL_DOCUMENT_ARTIFACT_KEY: ""
-      PHYSICAL_DOCUMENT_ARTIFACT_KEY_FILE: /run/secrets/physical_document_artifact_key
-      ICAO_DOCUMENT_SIGNER_URL: ${ICAO_DOCUMENT_SIGNER_URL:?ICAO_DOCUMENT_SIGNER_URL must be set for beta passport}
+      PHYSICAL_DOCUMENT_ARTIFACT_KEY_FILE: ""
+      ICAO_DOCUMENT_SIGNER_URL: ""
       ICAO_DOCUMENT_SIGNER_API_KEY: ""
-      ICAO_DOCUMENT_SIGNER_API_KEY_FILE: /run/secrets/icao_document_signer_api_key
-      PERSONALIZATION_BUREAU_URL: ${PERSONALIZATION_BUREAU_URL:?PERSONALIZATION_BUREAU_URL must be set for beta passport}
-      PERSONALIZATION_BUREAU_API_KEY: ""
-      PERSONALIZATION_BUREAU_API_KEY_FILE: /run/secrets/personalization_bureau_api_key
+      ICAO_DOCUMENT_SIGNER_API_KEY_FILE: ""
+      PERSONALIZATION_BUREAU_URL: http://passport-beta-bureau:8020
+      PERSONALIZATION_BUREAU_API_KEY: ${GRPC_SERVICE_TOKEN:?GRPC_SERVICE_TOKEN must be set for beta Rust services}
+      PERSONALIZATION_BUREAU_API_KEY_FILE: ""
       PERSONALIZATION_BUREAU_WEBHOOK_SECRET: ""
-      PERSONALIZATION_BUREAU_WEBHOOK_SECRET_FILE: /run/secrets/personalization_bureau_webhook_secret
-    secrets:
-      - passport_tenant_api_keys
-      - physical_document_artifact_key
-      - icao_document_signer_api_key
-      - personalization_bureau_api_key
-      - personalization_bureau_webhook_secret
+      PERSONALIZATION_BUREAU_WEBHOOK_SECRET_FILE: ""
 
-secrets:
-  passport_tenant_api_keys:
-    file: ${PASSPORT_TENANT_API_KEYS_SOURCE_FILE:?PASSPORT_TENANT_API_KEYS_SOURCE_FILE must identify a beta keyring file}
-  physical_document_artifact_key:
-    file: ${PHYSICAL_DOCUMENT_ARTIFACT_KEY_SOURCE_FILE:?PHYSICAL_DOCUMENT_ARTIFACT_KEY_SOURCE_FILE must identify a beta artifact key file}
-  icao_document_signer_api_key:
-    file: ${ICAO_DOCUMENT_SIGNER_API_KEY_SOURCE_FILE:?ICAO_DOCUMENT_SIGNER_API_KEY_SOURCE_FILE must identify a beta signer key file}
-  personalization_bureau_api_key:
-    file: ${PERSONALIZATION_BUREAU_API_KEY_SOURCE_FILE:?PERSONALIZATION_BUREAU_API_KEY_SOURCE_FILE must identify a beta bureau key file}
-  personalization_bureau_webhook_secret:
-    file: ${PERSONALIZATION_BUREAU_WEBHOOK_SECRET_SOURCE_FILE:?PERSONALIZATION_BUREAU_WEBHOOK_SECRET_SOURCE_FILE must identify a beta webhook secret file}
+  # Synthetic, non-physical provider: never selected outside this beta profile.
+  # It stores only job metadata/digests and sends KMS-signed callbacks.
+  passport-beta-bureau:
+    image: ${MARTY_SERVICES_IMAGE:?set MARTY_SERVICES_IMAGE to the immutable services image digest}
+    environment:
+      SERVICE_NAME: passport_beta_bureau
+      ENVIRONMENT: beta
+      PASSPORT_BETA_BUREAU_ENABLED: "true"
+      DATABASE_URL: postgresql://marty:${MARTY_DB_PASSWORD:?MARTY_DB_PASSWORD must be set for beta}@postgres:5432/marty
+      GRPC_SERVICE_TOKEN: ${GRPC_SERVICE_TOKEN:?GRPC_SERVICE_TOKEN must be set for beta Rust services}
+      SIGNING_KEYS_INTERNAL_API_KEY: ${SIGNING_KEYS_INTERNAL_API_KEY:?SIGNING_KEYS_INTERNAL_API_KEY must be set for beta}
+      SIGNING_KEYS_INTERNAL_URL: http://gateway:8000/internal/signing-keys
+      PASSPORT_BUREAU_CALLBACK_URL: http://issuance-native:8005/v1/passport/webhooks/personalization
+    depends_on:
+      postgres:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "--fail", "http://localhost:8020/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+    networks:
+      - marty-network
+    restart: unless-stopped

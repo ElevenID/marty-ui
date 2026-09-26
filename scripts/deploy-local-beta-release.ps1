@@ -95,6 +95,9 @@ $script:ApplicationServices = @(
     "canvas-sync-worker",
     "gateway"
 )
+if ($EnablePassportNative) {
+    $script:ApplicationServices += "passport-beta-bureau"
+}
 $script:InfrastructureWriterServices = @("keycloak")
 
 function Write-Step([string]$Message) {
