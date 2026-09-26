@@ -96,6 +96,24 @@ async fn public_rotation_updates_state_only_after_kms_success() {
         )
         .await
         .unwrap();
+    let managed_app = router_with_dependencies(
+        "test-internal-key".into(),
+        Some(store.clone().with_managed_openbao(Some(endpoint.clone()))),
+        None,
+        None,
+        None,
+        None,
+        None,
+    );
+    let (status, denied) = rotate(
+        &managed_app,
+        &organization_id,
+        "managed-openbao-transit",
+        json!({}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::FORBIDDEN, "{denied}");
+    assert_eq!(rotations.load(Ordering::SeqCst), 0);
     let app = router_with_dependencies(
         "test-internal-key".into(),
         Some(store.clone()),

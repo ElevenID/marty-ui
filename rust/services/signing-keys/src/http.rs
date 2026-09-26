@@ -1865,6 +1865,15 @@ async fn rotate_public_service_key(
     else {
         return public_error(StatusCode::NOT_FOUND, "Signing service not found.");
     };
+    if service_id == "managed-openbao-transit"
+        || service.get("managed").and_then(Value::as_bool) == Some(true)
+        || service.get("read_only").and_then(Value::as_bool) == Some(true)
+    {
+        return public_error(
+            StatusCode::FORBIDDEN,
+            "Managed or read-only signing services cannot be rotated through this route.",
+        );
+    }
     let now = chrono::Utc::now();
     let rotated_at = now.to_rfc3339();
     let mut rotation_state = service
@@ -4793,6 +4802,7 @@ mod public_contract_tests {
             json!([200, 204])
         );
         assert_eq!(behavior["publication_fields"], json!(["jwks", "did"]));
+        assert_eq!(behavior["managed_or_read_only_service_status"], 403);
         assert!(
             openapi().await.0["paths"]["/v1/signing-keys/services/{service_id}/rotate"]["post"]
                 .is_object()

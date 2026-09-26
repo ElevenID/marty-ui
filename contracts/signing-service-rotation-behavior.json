@@ -19,9 +19,11 @@
   "publication_fields": ["jwks", "did"],
   "previous_version_fields": ["key_reference", "retire_after", "recorded_at"],
   "missing_service_status": 404,
+  "managed_or_read_only_service_status": 403,
   "provider_failure_response": {"ok": false, "rotated_at": null, "state_persisted": false},
   "security_and_integrity_rules": [
     "Use only the tenant-registered service and its KMS key reference; never accept a caller-selected KMS locator or private material.",
+    "Reject managed and read-only services before any provider rotation; the shared managed KMS key is not tenant-rotatable through this route.",
     "Rotate inside KMS; never export or hold a private key.",
     "Report provider rotation and publication failures without exposing provider credentials or raw upstream errors.",
     "Do not claim a completed rotation in stored state when the provider did not rotate a key.",
