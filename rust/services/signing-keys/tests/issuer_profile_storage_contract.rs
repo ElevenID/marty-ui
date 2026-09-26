@@ -265,6 +265,44 @@ async fn provider_rebind_publishes_before_cutover_and_preserves_the_prior_method
     let profile_id = stored[0]["id"].as_str().unwrap().to_string();
     assert_eq!(stored[0]["signing_service_id"], "provider-a");
 
+    let resolve = |app: Router, request: &Value| {
+        let request = request.clone();
+        let organization_id = organization_id.clone();
+        async move {
+            let response = app
+                .oneshot(
+                    Request::builder()
+                        .method("POST")
+                        .uri(format!(
+                            "/v1/signing-keys/issuer-identities/resolve?organization_id={organization_id}"
+                        ))
+                        .header("content-type", "application/json")
+                        .body(Body::from(request.to_string()))
+                        .unwrap(),
+                )
+                .await
+                .unwrap();
+            assert_eq!(response.status(), StatusCode::OK);
+            serde_json::from_slice::<Value>(
+                &to_bytes(response.into_body(), usize::MAX).await.unwrap(),
+            )
+            .unwrap()
+        }
+    };
+    let initial_public = resolve(app.clone(), &identity_request).await;
+    assert_eq!(initial_public["identity"]["issuer_did"], issuer_did);
+    assert_eq!(initial_public["public_jwk"]["kty"], "OKP");
+    for forbidden in [
+        "kid",
+        "d",
+        "signing_service_id",
+        "signing_key_reference",
+        "auth_reference",
+    ] {
+        assert!(initial_public["public_jwk"].get(forbidden).is_none());
+        assert!(initial_public["identity"].get(forbidden).is_none());
+    }
+
     registry
         .save(
             &organization_id,
@@ -311,6 +349,12 @@ async fn provider_rebind_publishes_before_cutover_and_preserves_the_prior_method
         2
     );
     assert_eq!(did.document["assertionMethod"].as_array().unwrap().len(), 2);
+    let rebound_public = resolve(app.clone(), &identity_request).await;
+    assert_ne!(
+        rebound_public["public_jwk"]["x"],
+        initial_public["public_jwk"]["x"]
+    );
+    assert_eq!(rebound_public["identity"]["issuer_did"], issuer_did);
 
     let unavailable = signing_service("provider-unavailable", "issuer-missing");
     registry

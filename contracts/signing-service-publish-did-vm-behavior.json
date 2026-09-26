@@ -1,0 +1,18 @@
+{
+  "schema_version": 1,
+  "source": "pre-Rust services/gateway/routes/signing_keys.py at parent of e1ebad979",
+  "method": "POST",
+  "path": "/v1/signing-keys/services/{service_id}/publish-did-vm",
+  "request_fields": ["did_id", "org_slug", "fragment"],
+  "success_fields": ["ok", "service_id", "message", "verification_method", "did_document", "published_at"],
+  "rules": {
+    "public_key_is_fetched_from_current_kms_service": true,
+    "caller_supplied_key_reference_is_rejected": true,
+    "managed_shared_service_uses_issuer_scoped_identity": true,
+    "certificate_chain_is_published_only_when_matching_current_kms_key": true,
+    "default_local_did_uses_organization_slug_and_configured_public_domain": true,
+    "explicit_nonlocal_did_does_not_claim_a_local_slug": true,
+    "stored_did_verification_method_is_public_and_assertion_scoped": true,
+    "service_discovery_metadata_is_updated_only_after_document_publication": true
+  }
+}

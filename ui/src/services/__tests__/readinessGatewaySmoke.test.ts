@@ -13,6 +13,7 @@ import {
   createIssuerIdentity,
   deleteIssuerIdentity,
   getCertificateExpiryAlerts,
+  generateIssuerIdentityCsr,
   getKeyManagementConfig,
   listPublicIssuerIdentities,
   listSigningKeys,
@@ -356,5 +357,36 @@ describe('readiness gateway smoke', () => {
         algorithm: 'ES256',
       })
     }
+  })
+
+  it('drops caller custody coordinates from issuer-scoped passport CSR requests', async () => {
+    let body: Record<string, unknown> | undefined
+    server.use(http.put('*/v1/signing-keys/issuer-identities/certificate-csr', async ({ request }) => {
+      body = await request.json() as Record<string, unknown>
+      return HttpResponse.json({ csr_pem: 'public-csr' })
+    }))
+    await generateIssuerIdentityCsr({
+      organization_id: 'org_live',
+      issuer_did: 'did:web:issuer.example.com:orgs:live',
+      key_purpose: 'csca',
+      credential_format: 'MDOC',
+      algorithm: 'ES256',
+      country: 'US',
+      organization: 'ElevenID Beta',
+      common_name: 'Pilot CSCA',
+      key_reference: 'must-not-cross',
+      private_key: 'must-not-cross',
+      signing_service_id: 'must-not-cross',
+    })
+    expect(body).toEqual({
+      organization_id: 'org_live',
+      issuer_did: 'did:web:issuer.example.com:orgs:live',
+      key_purpose: 'csca',
+      credential_format: 'MDOC',
+      algorithm: 'ES256',
+      country: 'US',
+      organization: 'ElevenID Beta',
+      common_name: 'Pilot CSCA',
+    })
   })
 })
