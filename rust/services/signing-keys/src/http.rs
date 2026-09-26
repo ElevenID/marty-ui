@@ -174,6 +174,10 @@ pub fn router_with_dependencies(
             post(generate_public_service_csr),
         )
         .route(
+            "/v1/signing-keys/services/{service_id}/sign",
+            post(sign_public_service_payload),
+        )
+        .route(
             "/v1/signing-keys/services/{service_id}/mdoc-x5c",
             get(public_service_mdoc_x5c),
         )
@@ -489,6 +493,23 @@ struct ServiceCsrRequest {
     country: String,
     organization: String,
     common_name: String,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct PublicServiceSignRequest {
+    #[serde(default)]
+    organization_id: Option<String>,
+    #[serde(default)]
+    payload_b64: Option<String>,
+    #[serde(default)]
+    payload_hex: Option<String>,
+    #[serde(default)]
+    algorithm: Option<String>,
+    #[serde(default)]
+    key_reference: Option<String>,
+    #[serde(default)]
+    key_purpose: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -1680,6 +1701,146 @@ async fn registered_certificate_service(
         ));
     }
     Ok(service)
+}
+
+async fn sign_public_service_payload(
+    State(state): State<AppState>,
+    Path(service_id): Path<String>,
+    Query(scope): Query<OrganizationScope>,
+    input: Result<Json<PublicServiceSignRequest>, axum::extract::rejection::JsonRejection>,
+) -> Response {
+    let Json(input) = match input {
+        Ok(input) => input,
+        Err(error) => {
+            return public_error(
+                StatusCode::UNPROCESSABLE_ENTITY,
+                &format!("Invalid signing request: {error}"),
+            );
+        }
+    };
+    if let Err(error) =
+        validate_service_scope(&scope.organization_id, input.organization_id.as_deref())
+    {
+        return error.into_response();
+    }
+    let Some(service) = state.compatibility.as_ref() else {
+        return public_error(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "Signing service is unavailable.",
+        );
+    };
+    if let Some(reference) = input
+        .key_reference
+        .as_deref()
+        .map(str::trim)
+        .filter(|reference| !reference.is_empty())
+    {
+        if let Err(error) = authorize_public_service_reference(
+            &state,
+            &scope.organization_id,
+            &service_id,
+            reference,
+        )
+        .await
+        {
+            return error.into_response();
+        }
+    }
+    let request = ServiceSignRequest {
+        organization_id: scope.organization_id,
+        payload_b64: input.payload_b64,
+        payload_hex: input.payload_hex,
+        algorithm: input.algorithm,
+        key_reference: input.key_reference,
+        key_purpose: input.key_purpose,
+    };
+    match service.sign_with_service(&service_id, &request).await {
+        Ok(signed) => Json(signed).into_response(),
+        Err(error) => error.into_response(),
+    }
+}
+
+async fn authorize_public_service_reference(
+    state: &AppState,
+    organization_id: &str,
+    service_id: &str,
+    reference: &str,
+) -> Result<(), PublicSigningError> {
+    let store = state.registry_store.as_ref().ok_or_else(|| {
+        public_failure(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "Signing registry is unavailable.",
+        )
+    })?;
+    let registry = store.load(organization_id).await.map_err(|_| {
+        public_failure(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "Signing registry is unavailable.",
+        )
+    })?;
+    let service = registry
+        .get("services")
+        .and_then(Value::as_array)
+        .and_then(|services| {
+            services
+                .iter()
+                .find(|service| service.get("id").and_then(Value::as_str) == Some(service_id))
+        })
+        .ok_or_else(|| {
+            public_failure(
+                StatusCode::NOT_FOUND,
+                &format!("Service '{service_id}' not found."),
+            )
+        })?;
+    let is_default = service.get("key_reference").and_then(Value::as_str) == Some(reference);
+    let is_alias = service
+        .get("key_aliases")
+        .and_then(Value::as_array)
+        .is_some_and(|aliases| {
+            aliases
+                .iter()
+                .any(|alias| alias.as_str() == Some(reference))
+        });
+    let is_bound = registry
+        .get("key_reference_purposes")
+        .and_then(|bindings| bindings.get(service_id))
+        .and_then(|bindings| bindings.get(reference))
+        .and_then(Value::as_array)
+        .is_some_and(|purposes| !purposes.is_empty());
+    if is_default || is_alias || is_bound {
+        return Ok(());
+    }
+    let profiles = state.profile_store.as_ref().ok_or_else(|| {
+        public_failure(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "Issuer identity storage is unavailable.",
+        )
+    })?;
+    let document = profiles.list(organization_id).await.map_err(|_| {
+        public_failure(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "Issuer identity storage is unavailable.",
+        )
+    })?;
+    let active_profile_bound = document
+        .get("profiles")
+        .and_then(Value::as_array)
+        .is_some_and(|profiles| {
+            profiles.iter().any(|profile| {
+                profile.get("status").and_then(Value::as_str) == Some("active")
+                    && profile.get("signing_service_id").and_then(Value::as_str) == Some(service_id)
+                    && profile.get("signing_key_reference").and_then(Value::as_str)
+                        == Some(reference)
+            })
+        });
+    if active_profile_bound {
+        Ok(())
+    } else {
+        Err(public_failure(
+            StatusCode::CONFLICT,
+            "Requested signing key is not registered for this service.",
+        ))
+    }
 }
 
 fn unavailable_observability_response(error: &str, message: &str, extra: Value) -> Response {
@@ -4848,5 +5009,18 @@ mod public_contract_tests {
         let mut private_jwk = public_jwk;
         private_jwk["d"] = json!(URL_SAFE_NO_PAD.encode([8_u8; 32]));
         assert!(documents::validate_x25519_public_jwk(&private_jwk).is_err());
+    }
+
+    #[test]
+    fn public_service_sign_contract_reuses_the_kms_only_authorized_kernel() {
+        let contract: Value = serde_json::from_str(include_str!(
+            "../../../../contracts/signing-public-service-sign-behavior.json"
+        ))
+        .unwrap();
+        assert_eq!(contract["method"], "POST");
+        assert_eq!(contract["signing_private_key_location"], "KMS only");
+        assert_eq!(contract["public_request_private_key_fields_allowed"], false);
+        assert_eq!(contract["empty_or_missing_payload_status"], 400);
+        assert_eq!(contract["missing_service_status"], 404);
     }
 }
