@@ -13,6 +13,53 @@ async fn get_json(path: &str) -> Value {
 }
 
 #[tokio::test]
+async fn passport_artifact_transit_routes_require_auth_and_kms() {
+    for (operation, body) in [
+        (
+            "encrypt",
+            serde_json::json!({
+                "artifact_id": "artifact-1",
+                "chunk_index": 0,
+                "chunk_count": 1,
+                "plaintext_b64": "cGFzc3BvcnQ="
+            }),
+        ),
+        (
+            "decrypt",
+            serde_json::json!({
+                "artifact_id": "artifact-1",
+                "chunk_index": 0,
+                "chunk_count": 1,
+                "ciphertext": "vault:v1:synthetic"
+            }),
+        ),
+    ] {
+        let path = format!("/internal/documents/org-a/passport-artifacts/{operation}");
+        let unauthorized = marty_signing_keys::http::router()
+            .oneshot(
+                Request::post(path.as_str())
+                    .header("content-type", "application/json")
+                    .body(Body::from(body.to_string()))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(unauthorized.status(), StatusCode::UNAUTHORIZED);
+        let unavailable = marty_signing_keys::http::router()
+            .oneshot(
+                Request::post(path.as_str())
+                    .header("content-type", "application/json")
+                    .header("x-api-key", "dev-signing-keys-internal-api-key")
+                    .body(Body::from(body.to_string()))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(unavailable.status(), StatusCode::SERVICE_UNAVAILABLE);
+    }
+}
+
+#[tokio::test]
 async fn public_catalog_matches_language_neutral_contract() {
     let fixture: Value = serde_json::from_str(include_str!("fixtures/catalog.json")).unwrap();
     assert_eq!(
