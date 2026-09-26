@@ -33,8 +33,9 @@ use crate::{
         QualityResultRequest,
     },
     passport_repository::{
-        should_apply_bureau_status, PassportJob, PassportJobInsert, PassportJobPatch,
-        PassportJobStatus, PassportWebhookRepositoryError, PostgresPassportRepository,
+        fill_missing_bureau_metadata, should_apply_bureau_status, PassportJob, PassportJobInsert,
+        PassportJobPatch, PassportJobStatus, PassportWebhookRepositoryError,
+        PostgresPassportRepository,
     },
     passport_signer::{
         ManagedProfileSigner, PassportSigner, RemoteSigner, SignedMaterial, SignerError,
@@ -790,6 +791,35 @@ async fn production_status(
         .await
         .map_err(PassportHttpError::Bureau)?;
     let incoming_status = status_from_bureau(outcome.status);
+    if job.status == incoming_status.as_str() {
+        if fill_missing_bureau_metadata(
+            job.tracking_number.as_deref(),
+            job.error_message.as_deref(),
+            outcome.tracking_number.as_deref(),
+            outcome.error_message.as_deref(),
+        )
+        .is_none()
+        {
+            return Ok(Json(safe(&job)));
+        }
+        let updated = service
+            .repository
+            .fill_missing_bureau_metadata(
+                &principal,
+                &job.application_id,
+                &job.status,
+                outcome.tracking_number.as_deref(),
+                outcome.error_message.as_deref(),
+                Utc::now(),
+            )
+            .await
+            .map_err(PassportHttpError::Storage)?;
+        let updated = match updated {
+            Some(updated) => updated,
+            None => service.job(&principal, &application_id).await?,
+        };
+        return Ok(Json(safe(&updated)));
+    }
     if !should_apply_bureau_status(&job.status, incoming_status.as_str()) {
         return Ok(Json(safe(&job)));
     }
