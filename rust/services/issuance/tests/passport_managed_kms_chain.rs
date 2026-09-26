@@ -392,9 +392,9 @@ async fn managed_passport_chain_issues_and_verifies_sod_without_exporting_privat
         .unwrap()
         .pop()
         .unwrap();
-    assert_ne!(
-        csca_profile["signing_key_reference"],
-        dsc_profile["signing_key_reference"]
+    assert!(
+        csca_profile["signing_key_reference"] != dsc_profile["signing_key_reference"],
+        "CSCA and DSC must use distinct KMS keys"
     );
     let csca_name = CertReq::from_pem(csca_csr["csr_pem"].as_str().unwrap())
         .unwrap()
@@ -461,6 +461,14 @@ async fn managed_passport_chain_issues_and_verifies_sod_without_exporting_privat
         .unwrap();
     let sod = STANDARD.decode(&signed.sod_der_base64).unwrap();
     assert!(marty_verification::asn1::sod::verify_sod_signature(&sod).unwrap());
+    assert!(
+        marty_verification::asn1::sod::verify_data_group_hash_from_sod(&sod, 1, b"disposable DG1")
+            .unwrap()
+    );
+    assert!(
+        !marty_verification::asn1::sod::verify_data_group_hash_from_sod(&sod, 1, b"altered DG1")
+            .unwrap()
+    );
     assert_eq!(signed.dsc_cert_pem, dsc_pem);
     assert_eq!(signed.csca_cert_pem.as_deref(), Some(csca_pem.as_str()));
     assert!(signer
