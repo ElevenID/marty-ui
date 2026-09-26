@@ -1985,8 +1985,14 @@ async fn register_public_vdsnc_service(
             "VDS-NC registration requires tenant-provided KMS credentials.",
         );
     }
-    let mut registry = match store.load(&scope.organization_id).await {
-        Ok(registry) => registry,
+    let lease = match store.acquire_rotation_lease(&scope.organization_id).await {
+        Ok(Some(lease)) => lease,
+        Ok(None) => {
+            return public_error(
+                StatusCode::CONFLICT,
+                "Signing registry is being updated. Retry VDS-NC registration.",
+            )
+        }
         Err(_) => {
             return public_error(
                 StatusCode::SERVICE_UNAVAILABLE,
@@ -1994,7 +2000,18 @@ async fn register_public_vdsnc_service(
             )
         }
     };
+    let mut registry = match store.load(&scope.organization_id).await {
+        Ok(registry) => registry,
+        Err(_) => {
+            let _ = lease.release().await;
+            return public_error(
+                StatusCode::SERVICE_UNAVAILABLE,
+                "Signing registry is unavailable.",
+            );
+        }
+    };
     let Some(services) = registry.get_mut("services").and_then(Value::as_array_mut) else {
+        let _ = lease.release().await;
         return public_error(StatusCode::BAD_GATEWAY, "Signing registry is malformed.");
     };
     services.push(normalized);
@@ -2005,7 +2022,11 @@ async fn register_public_vdsnc_service(
     {
         registry["default_service_id"] = json!(service_id);
     }
-    let saved = match store.save(&scope.organization_id, &registry).await {
+    let saved = store
+        .save_with_rotation_lease(&scope.organization_id, &registry, &lease)
+        .await;
+    let _ = lease.release().await;
+    let saved = match saved {
         Ok(saved) => saved,
         Err(_) => {
             return public_error(

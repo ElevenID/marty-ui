@@ -168,3 +168,51 @@ async fn public_vdsnc_registration_preserves_registry_and_never_returns_provider
         let _: () = redis.del(storage_key(tenant)).await.unwrap();
     }
 }
+
+#[tokio::test]
+#[ignore = "requires disposable MARTY_TEST_REDIS_URL"]
+async fn concurrent_vdsnc_registration_retains_both_services() {
+    let redis_url = std::env::var("MARTY_TEST_REDIS_URL").expect("disposable Redis URL");
+    let organization_id = format!("rust-vdsnc-race-{}", Uuid::new_v4().simple());
+    let registry = RegistryStore::connect(&redis_url).await.unwrap();
+    let app = router_with_dependencies(
+        "test-internal-key".into(),
+        Some(registry.clone()),
+        None,
+        None,
+        None,
+        None,
+        None,
+    );
+    let first = json!({"country_code": "USA", "authority_name": "First Bureau"});
+    let second = json!({"country_code": "CAN", "authority_name": "Second Bureau"});
+    let (mut first_result, mut second_result) = tokio::join!(
+        register(&app, &organization_id, first.clone()),
+        register(&app, &organization_id, second.clone())
+    );
+    for _ in 0..20 {
+        if first_result.0 == StatusCode::CONFLICT {
+            first_result = register(&app, &organization_id, first.clone()).await;
+        }
+        if second_result.0 == StatusCode::CONFLICT {
+            second_result = register(&app, &organization_id, second.clone()).await;
+        }
+        if first_result.0 == StatusCode::OK && second_result.0 == StatusCode::OK {
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+    }
+    assert_eq!(first_result.0, StatusCode::OK, "{}", first_result.1);
+    assert_eq!(second_result.0, StatusCode::OK, "{}", second_result.1);
+    let stored = registry.load(&organization_id).await.unwrap();
+    let services = stored["services"].as_array().unwrap();
+    assert_eq!(services.len(), 2);
+    for id in [
+        &first_result.1["service"]["id"],
+        &second_result.1["service"]["id"],
+    ] {
+        assert!(services.iter().any(|service| &service["id"] == id));
+    }
+    let mut redis = registry.connection();
+    let _: () = redis.del(storage_key(&organization_id)).await.unwrap();
+}
