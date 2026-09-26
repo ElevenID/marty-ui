@@ -1,0 +1,30 @@
+{
+  "schema_version": 1,
+  "source": "pre-Rust services/gateway/routes/signing_keys.py at parent of e1ebad979",
+  "routes": {
+    "audit_log": {
+      "method": "GET",
+      "path": "/v1/signing-keys/services/{service_id}/audit-log",
+      "missing_service_status": 404,
+      "registered_service_status": 501,
+      "error": "key_audit_log_unavailable",
+      "error_description_template": "Key audit log storage is not available for service '{service_id}'.",
+      "extra_fields": ["organization_id", "service_id"],
+      "limit_default": 100,
+      "limit_minimum": 1,
+      "limit_maximum": 1000,
+      "offset_default": 0
+    },
+    "compliance_summary": {
+      "method": "GET",
+      "path": "/v1/signing-keys/compliance/keys-summary",
+      "status": 501,
+      "error": "key_compliance_summary_unavailable",
+      "error_description": "Key compliance summary metrics are not available from a live backing data source.",
+      "extra_fields": ["organization_id"]
+    }
+  },
+  "error_envelope": ["error", "error_description", "message_id"],
+  "mip_version": "0.5.0",
+  "no_synthetic_events_or_metrics": true
+}
