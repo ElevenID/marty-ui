@@ -196,7 +196,8 @@ failed KMS writes leaving registry bindings unchanged, and custody rejection.
 An opt-in authenticated Gateway-to-Rust route test now verifies session denial,
 foreign-tenant denial, trusted tenant forwarding through the real HTTP
 upstream transport, managed creation, and public-only inventory against
-disposable Redis and a mock Transit provider. The beta deployment gate remains.
+disposable Redis and a mock Transit provider. It also reads the new key back
+by ID through the Gateway. The beta deployment gate remains.
 
 All 24 originally missing declared pairs now have local Rust handlers in the
 stacked review branches. A data-driven route-layer test verifies that all 37

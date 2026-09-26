@@ -7110,6 +7110,26 @@ mod tests {
             .unwrap()
             .iter()
             .any(|key| key["id"] == reference));
+        let detail = gateway
+            .clone()
+            .oneshot(
+                Request::get(format!("/v1/signing-keys/{reference}"))
+                    .header("cookie", "sessionId=valid")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(detail.status(), StatusCode::OK);
+        let detail: Value = serde_json::from_slice(
+            &to_bytes(detail.into_body(), DEFAULT_MAXIMUM_BODY_BYTES)
+                .await
+                .unwrap(),
+        )
+        .unwrap();
+        assert_eq!(detail["id"], reference);
+        assert_eq!(detail["public_jwk"]["crv"], "P-256");
+        assert!(!detail.to_string().contains("test-only"));
         signing_server.abort();
         kms_server.abort();
     }
