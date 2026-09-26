@@ -6898,12 +6898,23 @@ mod tests {
             .unwrap()
             .runtime_route_table()
             .unwrap();
-        for path in [
-            "/v1/signing-keys/issuer-identities/csca-certificate",
-            "/v1/signing-keys/issuer-identities/certificate-csr",
+        for (method, path) in [
+            (
+                HttpMethod::Put,
+                "/v1/signing-keys/issuer-identities/csca-certificate",
+            ),
+            (
+                HttpMethod::Put,
+                "/v1/signing-keys/issuer-identities/certificate-csr",
+            ),
+            (
+                HttpMethod::Get,
+                "/v1/signing-keys/services/service-1/audit-log",
+            ),
+            (HttpMethod::Get, "/v1/signing-keys/compliance/keys-summary"),
         ] {
-            let route = crate::contract::route_for(&routes, HttpMethod::Put, path)
-                .expect("public passport certificate route");
+            let route =
+                crate::contract::route_for(&routes, method, path).expect("public signing route");
             assert_eq!(route.route.upstream_service, "signing-keys");
             assert!(route.route.auth_required);
             let overrides = proxy_overrides(&state, path, &identity);
