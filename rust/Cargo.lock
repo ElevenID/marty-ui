@@ -4657,6 +4657,7 @@ dependencies = [
  "marty-deployment-profile",
  "marty-oid4vci",
  "marty-passport-auth",
+ "marty-signing-keys",
  "mmf-platform",
  "mmf-security",
  "percent-encoding",

@@ -193,10 +193,14 @@ released behavior and this reviewed security correction. The disposable
 Redis/mock-KMS route test covers all four algorithms, same-name tenant
 isolation, read-after-create inventory, existing-key reuse, mismatched or
 failed KMS writes leaving registry bindings unchanged, and custody rejection.
+An opt-in authenticated Gateway-to-Rust in-process route test now verifies
+session denial, foreign-tenant denial, trusted tenant forwarding, managed
+creation, and public-only inventory against disposable Redis and a mock
+Transit provider. The real network transport and beta deployment gate remain.
 
 All 24 originally missing declared pairs now have local Rust handlers in the
 stacked review branches. This is not a merged or beta-accepted result. The
-new adapters still need authenticated combined Gateway-to-Rust runtime tests,
+other adapters still need authenticated combined Gateway-to-Rust runtime tests,
 protected CI, re-audit on main, and aggregate beta acceptance before any
 Python retirement or migration-complete claim. The 24-pair table above remains
 the protected-main audit baseline until the stack lands.

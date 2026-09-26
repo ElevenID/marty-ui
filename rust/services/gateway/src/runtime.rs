@@ -4488,11 +4488,16 @@ fn map_failure(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use axum::routing::get;
     use std::{
         collections::BTreeSet,
         sync::atomic::{AtomicBool, Ordering},
     };
 
+    use marty_signing_keys::{
+        http::router_with_dependencies as signing_router,
+        registry::RegistryStore as SigningRegistryStore,
+    };
     use mmf_platform::{
         GatewayResponse, InMemoryIdempotencyStore, PlatformError, ProxyConfig, ServiceInstance,
         UpstreamClient,
@@ -6994,6 +6999,158 @@ mod tests {
                 body
             );
         }
+    }
+
+    struct RustSigningUpstream(Router);
+
+    #[async_trait]
+    impl UpstreamClient for RustSigningUpstream {
+        async fn send(
+            &self,
+            instance: &ServiceInstance,
+            request: GatewayRequest,
+        ) -> Result<GatewayResponse, PlatformError> {
+            assert_eq!(instance.service_name, "signing-keys");
+            let mut url = url::Url::parse(&format!("http://signing.invalid{}", request.path))
+                .expect("signing route URL");
+            for (name, values) in &request.query {
+                for value in values {
+                    url.query_pairs_mut().append_pair(name, value);
+                }
+            }
+            let method = match request.method {
+                HttpMethod::Get => "GET",
+                HttpMethod::Post => "POST",
+                _ => panic!("unexpected signing method"),
+            };
+            let mut builder = Request::builder().method(method).uri(format!(
+                "{}{}",
+                url.path(),
+                url.query()
+                    .map(|query| format!("?{query}"))
+                    .unwrap_or_default()
+            ));
+            for (name, value) in request.headers {
+                builder = builder.header(name, value);
+            }
+            let response = self
+                .0
+                .clone()
+                .oneshot(
+                    builder
+                        .body(Body::from(request.body.unwrap_or_default()))
+                        .expect("signing request"),
+                )
+                .await
+                .expect("signing response");
+            let status_code = response.status().as_u16();
+            let body = to_bytes(response.into_body(), DEFAULT_MAXIMUM_BODY_BYTES)
+                .await
+                .expect("bounded signing response");
+            Ok(GatewayResponse {
+                status_code,
+                headers: BTreeMap::from([("content-type".into(), "application/json".into())]),
+                body: Some(body.to_vec()),
+                response_time_ms: None,
+                upstream_service: Some("signing-keys".into()),
+            })
+        }
+    }
+
+    #[tokio::test]
+    #[ignore = "requires disposable MARTY_TEST_REDIS_URL and BAO_TOKEN=test-only"]
+    async fn authenticated_gateway_reaches_rust_managed_key_route_without_custody() {
+        assert_eq!(std::env::var("BAO_TOKEN").as_deref(), Ok("test-only"));
+        let redis_url = std::env::var("MARTY_TEST_REDIS_URL").expect("disposable Redis URL");
+        const PUBLIC_PEM: &str = "-----BEGIN PUBLIC KEY-----\nMFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEaxfR8uEsQkf4vOblY6RA8ncDfYEt\n6zOg9KE5RdiYwpZP40Li/hp/m47n60p8D54WK84zV2sxXs7LtkBoN79R9Q==\n-----END PUBLIC KEY-----\n";
+        let kms = Router::new().route(
+            "/v1/transit/keys/{reference}",
+            get(|| async { Json(json!({"data": {"latest_version": 1, "supports_signing": true, "keys": {"1": {"public_key": PUBLIC_PEM}}}})) })
+                .post(|| async { StatusCode::NO_CONTENT }),
+        );
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let endpoint = format!("http://{}", listener.local_addr().unwrap());
+        let kms_server = tokio::spawn(async move { axum::serve(listener, kms).await.unwrap() });
+        let store = SigningRegistryStore::connect(&redis_url)
+            .await
+            .unwrap()
+            .with_managed_openbao(Some(endpoint));
+        store
+            .save("org-1", &marty_signing_keys::registry::empty_registry())
+            .await
+            .unwrap();
+        let signing = signing_router(
+            "test-internal-key".into(),
+            Some(store),
+            None,
+            None,
+            None,
+            None,
+            None,
+        );
+        let gateway = gateway_router(runtime_state_with_upstream(
+            Arc::new(NoOwner),
+            Arc::new(RustSigningUpstream(signing)),
+        ));
+        let create = |cookie: bool| {
+            let mut builder =
+                Request::post("/v1/signing-keys").header("content-type", "application/json");
+            if cookie {
+                builder = builder.header("cookie", "sessionId=valid");
+            }
+            builder
+                .body(Body::from(r#"{"name":"Gateway KMS key"}"#))
+                .unwrap()
+        };
+        let denied = gateway.clone().oneshot(create(false)).await.unwrap();
+        assert_eq!(denied.status(), StatusCode::UNAUTHORIZED);
+        let cross_tenant = gateway
+            .clone()
+            .oneshot(
+                Request::post("/v1/signing-keys?organization_id=org-other")
+                    .header("content-type", "application/json")
+                    .header("cookie", "sessionId=valid")
+                    .body(Body::from(r#"{"name":"Wrong tenant"}"#))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(cross_tenant.status(), StatusCode::FORBIDDEN);
+        let created = gateway.clone().oneshot(create(true)).await.unwrap();
+        assert_eq!(created.status(), StatusCode::OK);
+        let created: Value = serde_json::from_slice(
+            &to_bytes(created.into_body(), DEFAULT_MAXIMUM_BODY_BYTES)
+                .await
+                .unwrap(),
+        )
+        .unwrap();
+        let reference = created["provider_key_name"].as_str().unwrap();
+        assert_eq!(created["key"]["public_jwk"]["crv"], "P-256");
+        assert!(!created.to_string().contains("test-only"));
+        assert!(!created.to_string().contains("private_key"));
+        let listed = gateway
+            .clone()
+            .oneshot(
+                Request::get("/v1/signing-keys")
+                    .header("cookie", "sessionId=valid")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(listed.status(), StatusCode::OK);
+        let listed: Value = serde_json::from_slice(
+            &to_bytes(listed.into_body(), DEFAULT_MAXIMUM_BODY_BYTES)
+                .await
+                .unwrap(),
+        )
+        .unwrap();
+        assert!(listed["keys"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|key| key["id"] == reference));
+        kms_server.abort();
     }
 
     #[tokio::test]
