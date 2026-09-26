@@ -2931,6 +2931,19 @@ fn proxy_overrides(
             .headers
             .insert("x-api-key".into(), state.issuance_service_api_key.clone());
     }
+    // Only the exact Gateway-authorized DSC issuance action receives the
+    // internal Signing Keys credential. GatewayProxy strips caller identity
+    // and credential headers before applying these trusted overrides.
+    if path == "/v1/signing-keys/issuer-identities/dsc-certificate"
+        && identity.required_permission.as_deref() == Some("passport-certificate:issue")
+        && identity.organization_id.is_some()
+        && identity.user_id.is_some()
+        && identity.api_key_id.is_none()
+    {
+        overrides
+            .headers
+            .insert("x-api-key".into(), state.signing_service_api_key.clone());
+    }
     let owner = route_ownership(path);
     if requires_gateway_service_token(owner.service) {
         if let Some(service_token) = &state.service_token {
@@ -4331,8 +4344,27 @@ pub async fn authorize_tenant_request(
         return TenantAuthorizationOutcome::Bypass;
     };
     let Some(organization_id) = organization_id.and_then(normalize_id) else {
-        return TenantAuthorizationOutcome::Bypass;
+        return if required.permission == "passport-certificate:issue" {
+            TenantAuthorizationOutcome::Denied(TenantAuthorizationError {
+                status: 403,
+                detail: "Authenticated organization context is required".into(),
+            })
+        } else {
+            TenantAuthorizationOutcome::Bypass
+        };
     };
+    if required.permission == "passport-certificate:issue"
+        && identity
+            .filter(|identity| identity.source == AuthenticationSource::Session)
+            .and_then(|identity| identity.session_organization_id.as_deref())
+            .and_then(normalize_id)
+            != Some(organization_id)
+    {
+        return TenantAuthorizationOutcome::Denied(TenantAuthorizationError {
+            status: 403,
+            detail: "Authenticated organization context is required".into(),
+        });
+    }
     authorize_required_tenant(required, organization_id, identity, memberships).await
 }
 
@@ -7074,6 +7106,146 @@ mod tests {
                 body
             );
         }
+    }
+
+    #[tokio::test]
+    async fn dsc_certificate_issuance_requires_operator_grant_and_forwards_only_trusted_authority()
+    {
+        const PATH: &str = "/v1/signing-keys/issuer-identities/dsc-certificate";
+        let recorder = Arc::new(ActorRecordingUpstream::default());
+        let limited = gateway_router(runtime_state_with_upstream(
+            Arc::new(NoOwner),
+            recorder.clone(),
+        ));
+        let body = json!({"issuer_did": "did:web:issuer.example", "csca_profile_id": "csca-1"});
+        let request = || {
+            Request::post(PATH)
+                .header("cookie", "sessionId=valid")
+                .header("content-type", "application/json")
+                .header("x-required-permission", "passport-certificate:issue")
+                .header("x-org-permissions", "signing-key:delete")
+                .body(Body::from(body.to_string()))
+                .unwrap()
+        };
+        assert_eq!(
+            limited.clone().oneshot(request()).await.unwrap().status(),
+            StatusCode::FORBIDDEN
+        );
+        assert!(recorder.0.lock().unwrap().is_empty());
+        let api_key = Request::post(PATH)
+            .header("x-api-key", "passport-gateway-key-org-1")
+            .header("x-required-permission", "passport-certificate:issue")
+            .header("content-type", "application/json")
+            .body(Body::from(body.to_string()))
+            .unwrap();
+        assert_eq!(
+            limited.clone().oneshot(api_key).await.unwrap().status(),
+            StatusCode::FORBIDDEN
+        );
+        assert!(recorder.0.lock().unwrap().is_empty());
+        let no_tenant = Request::post(PATH)
+            .header("cookie", "sessionId=valid-no-org")
+            .header("content-type", "application/json")
+            .body(Body::from(body.to_string()))
+            .unwrap();
+        assert_eq!(
+            limited.oneshot(no_tenant).await.unwrap().status(),
+            StatusCode::FORBIDDEN
+        );
+        assert!(recorder.0.lock().unwrap().is_empty());
+        let chosen_tenant_without_session = Request::post(format!("{PATH}?organization_id=org-1"))
+            .header("cookie", "sessionId=valid-no-org")
+            .header("content-type", "application/json")
+            .body(Body::from(body.to_string()))
+            .unwrap();
+        assert_eq!(
+            gateway_router(runtime_state_with_upstream(
+                Arc::new(NoOwner),
+                recorder.clone()
+            ))
+            .oneshot(chosen_tenant_without_session)
+            .await
+            .unwrap()
+            .status(),
+            StatusCode::FORBIDDEN
+        );
+        assert!(recorder.0.lock().unwrap().is_empty());
+
+        struct CertificateOperator;
+        #[async_trait]
+        impl OrganizationMembershipProvider for CertificateOperator {
+            async fn get_membership(
+                &self,
+                user_id: &str,
+                organization_id: &str,
+            ) -> Result<Option<OrganizationMembership>, SecurityError> {
+                let mut membership = RuntimeProvider
+                    .get_membership(user_id, organization_id)
+                    .await?;
+                if let Some(membership) = membership.as_mut() {
+                    membership.role_names.insert("operator".into());
+                    membership
+                        .permissions
+                        .insert("passport-certificate:issue".into());
+                }
+                Ok(membership)
+            }
+        }
+        let mut state = runtime_state_with_upstream(Arc::new(NoOwner), recorder.clone());
+        Arc::get_mut(&mut state)
+            .expect("unique runtime state")
+            .memberships = Arc::new(CertificateOperator);
+        let gateway = gateway_router(state);
+        assert_eq!(
+            gateway.clone().oneshot(request()).await.unwrap().status(),
+            StatusCode::OK
+        );
+        let calls = recorder.0.lock().unwrap();
+        assert_eq!(calls.len(), 1);
+        let (service, forwarded) = &calls[0];
+        assert_eq!(service, "signing-keys");
+        assert_eq!(forwarded.path, PATH);
+        assert_eq!(forwarded.query["organization_id"], vec!["org-1"]);
+        assert_eq!(forwarded.header("x-api-key"), Some("internal-signing-key"));
+        assert_eq!(
+            forwarded.header("x-required-permission"),
+            Some("passport-certificate:issue")
+        );
+        let permissions = forwarded.header("x-org-permissions").unwrap();
+        assert!(permissions
+            .split(',')
+            .any(|permission| permission == "passport-certificate:issue"));
+        assert!(!permissions
+            .split(',')
+            .any(|permission| permission == "signing-key:delete"));
+
+        drop(calls);
+        let foreign = Request::post(format!("{PATH}?organization_id=org-other"))
+            .header("cookie", "sessionId=valid")
+            .header("content-type", "application/json")
+            .body(Body::from(body.to_string()))
+            .unwrap();
+        assert_eq!(
+            gateway.oneshot(foreign).await.unwrap().status(),
+            StatusCode::FORBIDDEN
+        );
+        assert_eq!(recorder.0.lock().unwrap().len(), 1);
+        let forged_body = Request::post(PATH)
+            .header("cookie", "sessionId=valid")
+            .header("content-type", "application/json")
+            .body(Body::from(
+                json!({"organization_id":"org-other"}).to_string(),
+            ))
+            .unwrap();
+        let gateway = gateway_router(runtime_state_with_upstream(
+            Arc::new(NoOwner),
+            recorder.clone(),
+        ));
+        assert_eq!(
+            gateway.oneshot(forged_body).await.unwrap().status(),
+            StatusCode::FORBIDDEN
+        );
+        assert_eq!(recorder.0.lock().unwrap().len(), 1);
     }
 
     #[derive(Clone, Default)]
