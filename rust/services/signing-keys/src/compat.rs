@@ -1469,17 +1469,7 @@ async fn complete_profile_binding(
 }
 
 fn managed_key_purposes(reference: &str) -> &'static [&'static str] {
-    if reference.starts_with("oid4vp-verifier-") {
-        &["oid4vp_request_signing"]
-    } else if reference.starts_with("lti-tool-") {
-        &["lti_tool_signing"]
-    } else if reference.starts_with("cred-dsc-") {
-        &["mdoc_dsc", "x509_doc_signer", "vdsnc_signing", "csca"]
-    } else if reference.starts_with("cred-issuer-") {
-        &["vc_jwt_issuer", "jwks_signing"]
-    } else {
-        &[]
-    }
+    crate::domain::managed_key_purposes(reference)
 }
 
 fn algorithm_for_jwk(jwk: &Map<String, Value>) -> Option<&'static str> {

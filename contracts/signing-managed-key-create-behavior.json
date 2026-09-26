@@ -12,7 +12,10 @@
   "lti_constraint": "lti_tool_signing requires RS256 and cannot share a reference with any credential-signing purpose",
   "released_response_fields": ["ok", "service_id", "provider_key_name", "key", "created_at"],
   "released_key_fields": ["id", "name", "algorithm", "status", "expiry_date", "created_at", "key_type", "provider", "provider_key_name", "latest_version", "public_jwk", "service_id", "key_purpose"],
-  "released_reference_prefixes": {"lti_tool_signing": "lti-tool-", "document_signing": "cred-dsc-", "other": "cred-issuer-"},
+  "released_reference_prefixes": {"lti_tool_signing": "lti-tool-", "oid4vp_request_signing": "oid4vp-verifier-", "holder_binding": "cred-holder-", "presentation_signing": "cred-presenter-", "document_signing": "cred-dsc-", "other_credential_signing": "cred-issuer-"},
+  "purpose_algorithm_rule": "Each accepted key_purpose must use an algorithm listed by the canonical signing key-purpose catalog; validation happens before any KMS request.",
+  "inventory_rule": "Public enrichment reads only live tenant-verified managed service default and aliases. A persisted binding alone cannot restore a retired or foreign KMS reference.",
+  "concurrent_binding_rule": "Two successful managed creates for different keys in the same tenant preserve both purpose bindings.",
   "long_name_collision_policy": "Names up to 256 bytes remain accepted. When the tenant namespace leaves insufficient room for the complete sanitized name, the key reference includes a stable SHA-256 suffix derived from the complete sanitized name. Distinct long names that share the truncated prefix must not select one KMS key.",
   "reviewed_security_tightening": [
     "A deterministic organization namespace is included in every KMS key name before a caller-controlled sanitized name, so same-name requests from different tenants never select the same KMS key.",
@@ -29,6 +32,9 @@
     "distinct long names sharing a truncated prefix remain distinct",
     "existing-key algorithm mismatch",
     "KMS failure leaves registry unchanged",
+    "all catalog purposes either resolve and sign or fail validation before KMS",
+    "retired tuple and foreign bindings stay absent from public inventory",
+    "concurrent successful creates retain both bindings",
     "response never contains credentials or private key material"
   ]
 }

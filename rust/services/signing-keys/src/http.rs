@@ -736,6 +736,24 @@ fn queue_managed_key_inventory(
     });
 }
 
+fn verified_managed_references(service: &Value) -> std::collections::BTreeSet<String> {
+    let mut references = service
+        .get("key_aliases")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter_map(Value::as_str)
+        .filter(|reference| !reference.is_empty())
+        .map(str::to_owned)
+        .collect::<std::collections::BTreeSet<_>>();
+    if let Some(reference) = service.get("key_reference").and_then(Value::as_str) {
+        if !reference.is_empty() {
+            references.insert(reference.to_owned());
+        }
+    }
+    references
+}
+
 async fn enrich_managed_signing_key_inventory(registry: &Value, keys: &mut Vec<Value>) {
     const MANAGED_ID: &str = "managed-openbao-transit";
     let Some(service) = registry
@@ -756,7 +774,10 @@ async fn enrich_managed_signing_key_inventory(registry: &Value, keys: &mut Vec<V
     else {
         return;
     };
-    let mut references = bindings.keys().cloned();
+    // The managed service projection contains only live, tenant-owned keys.
+    // Persisted bindings can outlive a retired issuer profile or refer to a
+    // foreign namespace, so they are metadata rather than discovery input.
+    let mut references = verified_managed_references(service).into_iter();
     let mut tasks = JoinSet::new();
     for _ in 0..8 {
         if let Some(reference) = references.next() {
@@ -1042,12 +1063,9 @@ fn managed_key_name(
     }
     let stem = stem.trim_matches('-');
     let stem = if stem.is_empty() { "key" } else { stem };
-    let expected_prefix = match key_purpose {
-        "lti_tool_signing" => "lti-tool-",
-        "mdoc_dsc" | "x509_doc_signer" | "vdsnc_signing" | "csca" => "cred-dsc-",
-        _ => "cred-issuer-",
-    };
-    let stem = ["cred-issuer-", "cred-dsc-", "lti-tool-"]
+    let expected_prefix = crate::domain::managed_key_prefix_for_purpose(key_purpose)
+        .ok_or("Unsupported key_purpose.")?;
+    let stem = crate::domain::MANAGED_KEY_PREFIXES
         .iter()
         .find_map(|prefix| stem.strip_prefix(prefix))
         .unwrap_or(stem)
@@ -1103,16 +1121,16 @@ async fn create_public_signing_key(
         );
     }
     let key_purpose = input.key_purpose.as_deref().unwrap_or("vc_jwt_issuer");
-    if !key_purposes()
-        .iter()
-        .any(|purpose| purpose.id == key_purpose)
-    {
+    let Some(purpose) = key_purposes()
+        .into_iter()
+        .find(|purpose| purpose.id == key_purpose)
+    else {
         return public_error(StatusCode::UNPROCESSABLE_ENTITY, "Unsupported key_purpose.");
-    }
-    if key_purpose == "lti_tool_signing" && algorithm != "RS256" {
+    };
+    if !purpose.allowed_algorithms.contains(&algorithm) {
         return public_error(
             StatusCode::UNPROCESSABLE_ENTITY,
-            "lti_tool_signing keys must use RS256.",
+            "The requested algorithm is not allowed for key_purpose.",
         );
     }
     let key_reference = match managed_key_name(
@@ -4982,12 +5000,8 @@ fn managed_key_reference(organization_id: &str, input: &IssuerIdentityRequest) -
     let token = uuid::Uuid::new_v5(&uuid::Uuid::NAMESPACE_URL, tuple.as_bytes())
         .simple()
         .to_string();
-    let prefix = match input.key_purpose.as_str() {
-        "oid4vp_request_signing" => "oid4vp-verifier-",
-        "lti_tool_signing" => "lti-tool-",
-        "mdoc_dsc" | "x509_doc_signer" | "vdsnc_signing" | "csca" => "cred-dsc-",
-        _ => "cred-issuer-",
-    };
+    let prefix =
+        crate::domain::managed_key_prefix_for_purpose(&input.key_purpose).unwrap_or("cred-issuer-");
     format!(
         "{prefix}{}-{}",
         &token[..20],
@@ -6213,6 +6227,29 @@ mod public_contract_tests {
             .is_some_and(|policy| policy.contains("stable SHA-256 suffix")));
     }
 
+    #[test]
+    fn managed_inventory_enrichment_uses_verified_aliases_not_stale_bindings() {
+        let service = json!({
+            "id": "managed-openbao-transit",
+            "key_reference": "cred-issuer-own-live",
+            "key_aliases": ["cred-issuer-own-live", "oid4vp-verifier-own-live"]
+        });
+        let bindings = json!({
+            "cred-issuer-own-live": ["vc_jwt_issuer"],
+            "cred-issuer-0123456789abcdef0123-es256": ["vc_jwt_issuer"],
+            "cred-issuer-foreign-tenant-key": ["vc_jwt_issuer"]
+        });
+        let references = verified_managed_references(&service);
+        assert_eq!(references.len(), 2);
+        assert!(references.contains("cred-issuer-own-live"));
+        assert!(references.contains("oid4vp-verifier-own-live"));
+        for bound in bindings.as_object().unwrap().keys() {
+            if bound != "cred-issuer-own-live" {
+                assert!(!references.contains(bound));
+            }
+        }
+    }
+
     #[tokio::test]
     async fn managed_key_creation_names_are_tenant_scoped_and_inputs_fail_closed() {
         assert!(openapi().await.0["paths"]["/v1/signing-keys"]["post"].is_object());
@@ -6252,6 +6289,22 @@ mod public_contract_tests {
         );
         assert!(first_long.len() <= 96 && second_long.len() <= 96);
         assert!(first_long.ends_with("-es256") && second_long.ends_with("-es256"));
+        for (purpose, prefix) in [
+            ("vc_jwt_issuer", "cred-issuer-"),
+            ("jwks_signing", "cred-issuer-"),
+            ("mdoc_dsc", "cred-dsc-"),
+            ("x509_doc_signer", "cred-dsc-"),
+            ("vdsnc_signing", "cred-dsc-"),
+            ("csca", "cred-dsc-"),
+            ("holder_binding", "cred-holder-"),
+            ("presentation_signing", "cred-presenter-"),
+            ("oid4vp_request_signing", "oid4vp-verifier-"),
+            ("lti_tool_signing", "lti-tool-"),
+        ] {
+            let reference = managed_key_name("org-a", "shared", purpose, "ES256").unwrap();
+            assert!(reference.starts_with(prefix), "{purpose}: {reference}");
+            assert!(crate::domain::managed_key_purposes(&reference).contains(&purpose));
+        }
         assert!(
             managed_key_name("org-a", &"a".repeat(250), "lti_tool_signing", "RS256")
                 .unwrap()
@@ -6276,6 +6329,11 @@ mod public_contract_tests {
             json!({"name": "bad\nname"}),
             json!({"name": "Key", "algorithm": "ES512"}),
             json!({"name": "Key", "key_purpose": "lti_tool_signing", "algorithm": "ES256"}),
+            json!({"name": "Key", "key_purpose": "mdoc_dsc", "algorithm": "RS256"}),
+            json!({"name": "Key", "key_purpose": "vdsnc_signing", "algorithm": "RS256"}),
+            json!({"name": "Key", "key_purpose": "holder_binding", "algorithm": "RS256"}),
+            json!({"name": "Key", "key_purpose": "presentation_signing", "algorithm": "ES384"}),
+            json!({"name": "Key", "key_purpose": "oid4vp_request_signing", "algorithm": "EdDSA"}),
             json!({"name": "Key", "private_key": "forged"}),
             json!({"name": "Key", "public_key": "not-an-import-route"}),
             json!({"name": "Key", "key_type": "local"}),
