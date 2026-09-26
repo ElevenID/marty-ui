@@ -30,7 +30,7 @@
     "subject": "bounded validated C, O, and CN from a verified managed DSC CSR; C agrees with the active CSCA and passport issuing country",
     "csca": "pre-enrolled active and non-revoked CA with valid self-signature, critical CA basic constraints, and keyCertSign usage; CSCA issuance is outside this action",
     "dsc": "signed by an active valid CSCA, critical non-CA basic constraints and digitalSignature usage",
-    "validity": "bounded by policy; DSC validity must fit within issuer CSCA validity",
+    "validity": "beta issue request requires 1 to 90 whole days from server time; DSC validity must fit within issuer CSCA validity without silent truncation",
     "csr": "verify proof of possession and require its SPKI to equal the current DSC subject profile KMS public key",
     "role_separation": "DSC subject and CSCA signer use different active profiles, purposes, and KMS key references",
     "signature": "require active CSCA certificate public key to equal current CSCA signer profile KMS public key; sign DER TBS via that profile and verify the returned signature against that current KMS public key before publication",
