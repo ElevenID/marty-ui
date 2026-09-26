@@ -7448,9 +7448,11 @@ mod tests {
             "disposable OpenBao sentinel is too short"
         );
         let marker = reqwest::Client::new()
-            .get(format!(
-                "{endpoint}/v1/secret/data/marty-test-disposable-guard"
-            ))
+            .get(
+                parsed_bao
+                    .join("/v1/secret/data/marty-test-disposable-guard")
+                    .expect("disposable OpenBao sentinel URL"),
+            )
             .header("X-Vault-Token", &token)
             .send()
             .await
