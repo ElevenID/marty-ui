@@ -57,6 +57,10 @@ is frozen in `contracts/signing-public-jwks-behavior.json`. The neighboring
 service entries while removing custody fields from stored data; its fallback
 uses the configured public authority and the trusted organization scope.
 `contracts/signing-public-did-document-behavior.json` freezes that behavior.
-Thus 18 declared pairs remain without local public handlers. The alert, JWKS,
-and DID routes also need authenticated through-Gateway runtime tests. The
+The `POST /issuer-identities/resolve` adapter now uses the same exact active
+profile tuple and internal DID resolver as signing, then returns only the
+public identity projection and a custody-free JWK. Its request and response
+are frozen in `contracts/signing-public-issuer-resolution-behavior.json`.
+Thus 17 declared pairs remain without local public handlers. These new
+adapters still need authenticated through-Gateway runtime tests. The
 24-pair table above remains the protected-main audit baseline.
