@@ -846,7 +846,8 @@ mod tests {
             .unwrap();
         assert!(service.bureau.is_none());
         assert!(service.webhook_secret.is_some());
-        let payload = br#"{"bureau_job_id":"synthetic","status":"SHIPPED"}"#;
+        let payload =
+            br#"{"organization_id":"org-1","bureau_job_id":"synthetic","status":"SHIPPED"}"#;
         let mut mac = hmac::Hmac::<Sha256>::new_from_slice(b"webhook-secret").unwrap();
         mac.update(payload);
         let signature = hex::encode(mac.finalize().into_bytes());

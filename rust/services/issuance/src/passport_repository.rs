@@ -246,9 +246,10 @@ impl PostgresPassportRepository {
         let mut transaction = self.pool.begin().await?;
         let matches = sqlx::query(
             "SELECT id, organization_id FROM issuance_service.physical_document_jobs
-             WHERE bureau_job_id = $1 LIMIT 2 FOR UPDATE",
+             WHERE bureau_job_id = $1 AND organization_id = $2 LIMIT 2 FOR UPDATE",
         )
         .bind(event.bureau_job_id())
+        .bind(event.organization_id())
         .fetch_all(&mut *transaction)
         .await?;
         if matches.len() > 1 {
