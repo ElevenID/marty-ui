@@ -88,7 +88,7 @@ async fn registered_service_csr_is_signed_by_kms_through_public_rust_route() {
         None,
         None,
         None,
-        None,
+        Some("beta.example".into()),
     );
 
     let request = Request::builder()
@@ -146,6 +146,30 @@ async fn registered_service_csr_is_signed_by_kms_through_public_rust_route() {
     .expect("JWKS JSON");
     assert_eq!(jwks["organization_id"], organization_id);
     assert_eq!(jwks["keys"], json!([]));
+
+    let did_request = Request::builder()
+        .uri(format!(
+            "/v1/signing-keys/did-document?organization_id={organization_id}"
+        ))
+        .body(Body::empty())
+        .expect("DID request");
+    let did_response = app
+        .clone()
+        .oneshot(did_request)
+        .await
+        .expect("DID response");
+    assert_eq!(did_response.status(), StatusCode::OK);
+    let did: Value = serde_json::from_slice(
+        &to_bytes(did_response.into_body(), 1_048_576)
+            .await
+            .expect("DID body"),
+    )
+    .expect("DID JSON");
+    assert_eq!(
+        did["id"],
+        format!("did:web:beta.example:orgs:{organization_id}")
+    );
+    assert_eq!(did["verificationMethod"], json!([]));
 
     let missing = Request::builder()
         .uri(format!(

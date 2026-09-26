@@ -52,7 +52,11 @@ existing Rust alert kernel and the stored service-certificate override, with
 its response frozen in `contracts/signing-certificate-alerts-behavior.json`.
 The local `GET /jwks` adapter now exposes only public verification fields from
 the tenant's stored JWKS and strips legacy custody coordinates. Its behavior
-is frozen in `contracts/signing-public-jwks-behavior.json`. Thus 19 declared
-pairs remain without local public handlers. The alert and JWKS routes also
-need authenticated through-Gateway runtime tests. The
+is frozen in `contracts/signing-public-jwks-behavior.json`. The neighboring
+`GET /did-document` adapter now preserves public DID relationships and
+service entries while removing custody fields from stored data; its fallback
+uses the configured public authority and the trusted organization scope.
+`contracts/signing-public-did-document-behavior.json` freezes that behavior.
+Thus 18 declared pairs remain without local public handlers. The alert, JWKS,
+and DID routes also need authenticated through-Gateway runtime tests. The
 24-pair table above remains the protected-main audit baseline.

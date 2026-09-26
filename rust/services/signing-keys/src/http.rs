@@ -114,6 +114,10 @@ pub fn router_with_dependencies(
         .route("/v1/signing-keys", get(list_public_signing_keys))
         .route("/v1/signing-keys/jwks", get(public_organization_jwks))
         .route(
+            "/v1/signing-keys/did-document",
+            get(public_organization_did_document),
+        )
+        .route(
             "/v1/signing-keys/config",
             get(public_config).patch(save_public_config),
         )
@@ -612,6 +616,36 @@ async fn public_config(
     }
 }
 
+fn public_jwk_projection(key: &Value) -> Result<Value, documents::DocumentError> {
+    let sanitized = documents::sanitize_public_jwk(key, None)?;
+    const PUBLIC_JWK_FIELDS: &[&str] = &[
+        "kty",
+        "crv",
+        "x",
+        "y",
+        "n",
+        "e",
+        "kid",
+        "use",
+        "alg",
+        "key_ops",
+        "x5c",
+        "x5t",
+        "x5t#S256",
+        "service_id",
+        "name",
+        "status",
+    ];
+    let fields = sanitized
+        .as_object()
+        .expect("sanitized JWK is an object")
+        .iter()
+        .filter(|(name, _)| PUBLIC_JWK_FIELDS.contains(&name.as_str()))
+        .map(|(name, value)| (name.clone(), value.clone()))
+        .collect();
+    Ok(Value::Object(fields))
+}
+
 fn public_jwks_document(
     document: Value,
     organization_id: &str,
@@ -622,35 +656,7 @@ fn public_jwks_document(
         .ok_or_else(|| public_failure(StatusCode::BAD_GATEWAY, "Stored JWKS is malformed."))?;
     let sanitized = keys
         .iter()
-        .map(|key| {
-            let sanitized = documents::sanitize_public_jwk(key, None)?;
-            const PUBLIC_JWK_FIELDS: &[&str] = &[
-                "kty",
-                "crv",
-                "x",
-                "y",
-                "n",
-                "e",
-                "kid",
-                "use",
-                "alg",
-                "key_ops",
-                "x5c",
-                "x5t",
-                "x5t#S256",
-                "service_id",
-                "name",
-                "status",
-            ];
-            let fields = sanitized
-                .as_object()
-                .expect("sanitized JWK is an object")
-                .iter()
-                .filter(|(name, _)| PUBLIC_JWK_FIELDS.contains(&name.as_str()))
-                .map(|(name, value)| (name.clone(), value.clone()))
-                .collect();
-            Ok::<Value, documents::DocumentError>(Value::Object(fields))
-        })
+        .map(public_jwk_projection)
         .collect::<Result<Vec<_>, _>>()
         .map_err(|_| public_failure(StatusCode::BAD_GATEWAY, "Stored JWKS is malformed."))?;
     Ok(json!({
@@ -683,6 +689,120 @@ async fn public_organization_jwks(
         }
     };
     match public_jwks_document(document, &scope.organization_id) {
+        Ok(document) => Json(document).into_response(),
+        Err(error) => error.into_response(),
+    }
+}
+
+fn public_did_document(document: Value) -> Result<Value, PublicSigningError> {
+    fn scrub(value: &Value) -> Result<Value, documents::DocumentError> {
+        match value {
+            Value::Object(fields) => {
+                const CUSTODY_FIELDS: &[&str] = &[
+                    "d",
+                    "p",
+                    "q",
+                    "dp",
+                    "dq",
+                    "qi",
+                    "oth",
+                    "k",
+                    "rsa_d",
+                    "privateKeyJwk",
+                    "privateKeyMultibase",
+                    "privateKeyBase58",
+                    "private_key",
+                    "key_reference",
+                    "auth_reference",
+                    "auth_token",
+                    "access_token",
+                    "api_key",
+                    "secret",
+                    "secret_key",
+                    "seed",
+                ];
+                let mut public = serde_json::Map::new();
+                for (name, nested) in fields {
+                    if CUSTODY_FIELDS.contains(&name.as_str()) {
+                        continue;
+                    }
+                    public.insert(
+                        name.clone(),
+                        if name == "publicKeyJwk" {
+                            public_jwk_projection(nested)?
+                        } else {
+                            scrub(nested)?
+                        },
+                    );
+                }
+                Ok(Value::Object(public))
+            }
+            Value::Array(values) => values
+                .iter()
+                .map(scrub)
+                .collect::<Result<Vec<_>, _>>()
+                .map(Value::Array),
+            other => Ok(other.clone()),
+        }
+    }
+    if document
+        .get("id")
+        .and_then(Value::as_str)
+        .is_none_or(str::is_empty)
+    {
+        return Err(public_failure(
+            StatusCode::BAD_GATEWAY,
+            "Stored DID document is malformed.",
+        ));
+    }
+    scrub(&document)
+        .map_err(|_| public_failure(StatusCode::BAD_GATEWAY, "Stored DID document is malformed."))
+}
+
+async fn public_organization_did_document(
+    State(state): State<AppState>,
+    Query(scope): Query<OrganizationScope>,
+) -> Response {
+    if let Err(error) = validate_service_scope(&scope.organization_id, None) {
+        return error.into_response();
+    }
+    let Some(domain) = state
+        .public_domain
+        .as_deref()
+        .map(str::trim)
+        .filter(|domain| !domain.is_empty())
+    else {
+        return public_error(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "Public DID authority is unavailable.",
+        );
+    };
+    let Some(store) = state.document_store.as_ref() else {
+        return public_error(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "Signing document storage is unavailable.",
+        );
+    };
+    let fallback_did = format!("did:web:{domain}:orgs:{}", scope.organization_id);
+    let loaded = match store
+        .load_did(
+            &scope.organization_id,
+            LoadDidRequest {
+                did_id: None,
+                fallback_did: Some(fallback_did),
+            },
+        )
+        .await
+    {
+        Ok(loaded) => loaded,
+        Err(_) => {
+            return public_error(
+                StatusCode::SERVICE_UNAVAILABLE,
+                "Signing document storage is unavailable.",
+            )
+        }
+    };
+    match public_did_document(loaded.document) {
         Ok(document) => Json(document).into_response(),
         Err(error) => error.into_response(),
     }
@@ -2867,6 +2987,9 @@ async fn openapi() -> Json<serde_json::Value> {
             "/v1/signing-keys/jwks": {
                 "get": {"summary": "Organization Public JWKS", "responses": {"200": {"description": "Public JWKs without KMS custody coordinates"}}}
             },
+            "/v1/signing-keys/did-document": {
+                "get": {"summary": "Organization Public DID Document", "responses": {"200": {"description": "DID document with public verification material only"}}}
+            },
             "/v1/signing-keys/service-status": {"get": {"summary": "Signing Keys Service Extraction Status", "responses": {"200": {"description": "Successful Response"}}}},
             "/v1/signing-keys/config/purposes": {"get": {"summary": "List Available Key Purposes", "responses": {"200": {"description": "Successful Response"}}}},
             "/v1/signing-keys/config/service-capabilities": {"get": {"summary": "List Provider Capability Metadata", "responses": {"200": {"description": "Successful Response"}}}}
@@ -3138,6 +3261,43 @@ mod public_contract_tests {
             assert!(projected["keys"][0].get(field.as_str().unwrap()).is_none());
         }
         assert!(public_jwks_document(json!({"keys": [{}]}), "org-a").is_err());
+    }
+
+    #[test]
+    fn public_did_preserves_relationships_and_services_without_custody_fields() {
+        let behavior: Value = serde_json::from_str(include_str!(
+            "../../../../contracts/signing-public-did-document-behavior.json"
+        ))
+        .unwrap();
+        assert_eq!(behavior["path"], "/v1/signing-keys/did-document");
+        let document = json!({
+            "id": "did:web:beta.example:orgs:org-a", "controller": "did:web:beta.example:orgs:org-a",
+            "verificationMethod": [{
+                "id": "did:web:beta.example:orgs:org-a#key-1", "type": "JsonWebKey2020",
+                "publicKeyJwk": {"kty": "EC", "crv": "P-256", "x": "public-x", "y": "public-y", "d": "private-scalar", "key_reference": "secret-key-name"},
+                "privateKeyJwk": {"d": "private-scalar"}
+            }],
+            "assertionMethod": ["did:web:beta.example:orgs:org-a#key-1"],
+            "service": [{"id": "#endpoint", "serviceEndpoint": "https://example.org", "auth_reference": "secret-token"}],
+            "key_reference": "secret-key-name"
+        });
+        let projected = public_did_document(document).unwrap();
+        assert_eq!(
+            projected["verificationMethod"][0]["publicKeyJwk"]["x"],
+            "public-x"
+        );
+        assert_eq!(
+            projected["assertionMethod"][0],
+            "did:web:beta.example:orgs:org-a#key-1"
+        );
+        assert_eq!(
+            projected["service"][0]["serviceEndpoint"],
+            "https://example.org"
+        );
+        for forbidden in ["private-scalar", "secret-key-name", "secret-token"] {
+            assert!(!projected.to_string().contains(forbidden));
+        }
+        assert!(public_did_document(json!({"id": "did:web:beta.example", "verificationMethod": [{"publicKeyJwk": {"d": "private"}}]})).is_err());
     }
 
     #[tokio::test]
