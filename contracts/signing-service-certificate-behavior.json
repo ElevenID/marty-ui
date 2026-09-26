@@ -1,0 +1,34 @@
+{
+  "schema_version": 1,
+  "source": "pre-Rust services/gateway/routes/signing_keys.py at parent of e1ebad979",
+  "routes": [
+    {
+      "method": "GET",
+      "path": "/v1/signing-keys/services/{service_id}/certificate",
+      "success_fields": ["service_id", "cert_pem", "cert_chain_pem", "cert_expires_at"],
+      "missing_service": 404,
+      "missing_certificate": 404
+    },
+    {
+      "method": "PUT",
+      "path": "/v1/signing-keys/services/{service_id}/certificate",
+      "request_fields": ["cert_pem", "cert_chain_pem"],
+      "success_fields": ["ok", "service_id", "cert_pem", "cert_expires_at", "stored_at", "service"],
+      "missing_cert_pem": 400,
+      "missing_service": 404
+    },
+    {
+      "method": "POST",
+      "path": "/v1/signing-keys/services/{service_id}/certificate-csr",
+      "legacy_kms_response": {"status": 501, "error": "kms_csr_generation_unavailable"},
+      "success_fields": ["ok", "service_id", "csr_pem", "generated_at"]
+    }
+  ],
+  "rust_security_requirements": {
+    "organization_from_gateway_trusted_scope": true,
+    "certificate_public_key_matches_current_kms_key": true,
+    "managed_shared_service_requires_issuer_scoped_certificate": true,
+    "reject_caller_key_reference_or_private_key": true,
+    "private_key_export": false
+  }
+}
