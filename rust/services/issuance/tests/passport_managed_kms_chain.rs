@@ -2,7 +2,10 @@
 //! Certificate bodies are assembled here, but every certificate and SOD
 //! signature is made by a Transit-held key. No private key enters this test.
 
-use std::{collections::BTreeMap, time::Duration};
+use std::{
+    collections::BTreeMap,
+    time::{Duration, SystemTime},
+};
 
 use axum::{
     body::{to_bytes, Body},
@@ -21,10 +24,11 @@ use der::{asn1::BitString, DecodePem, Encode, EncodePem};
 use marty_crypto::certificate::{load_certificate_pem, verify_certificate_signature};
 use marty_issuance_service::passport_signer::{ManagedProfileSigner, SignerError};
 use marty_signing_keys::{
+    certificate_issuance::{prepare_dsc, VerifiedDscSubject},
     csca_lifecycle::CscaLifecycleStore,
     documents::DocumentStore,
     http::router_with_dependencies,
-    kms::{self, SignRequest},
+    kms::{self, ProviderRequest, SignRequest},
     profiles::{FindProfilesRequest, ProfileStore},
     registry::RegistryStore,
 };
@@ -130,6 +134,37 @@ async fn issue_certificate(
     }
     .to_pem(der::pem::LineEnding::LF)
     .unwrap()
+}
+
+async fn issue_dsc_with_shared_builder(
+    csr_pem: &str,
+    csca_pem: &str,
+    csca_config: Value,
+    dsc_config: Value,
+) -> String {
+    let dsc_public = kms::public_key_existing(ProviderRequest {
+        service_config: dsc_config,
+    })
+    .await
+    .unwrap();
+    let csca_public = kms::public_key_existing(ProviderRequest {
+        service_config: csca_config.clone(),
+    })
+    .await
+    .unwrap();
+    let subject = VerifiedDscSubject::from_csr_pem(csr_pem, &dsc_public).unwrap();
+    let now = SystemTime::now();
+    let prepared = prepare_dsc(&subject, csca_pem, "", &csca_public, &[2], 29, now).unwrap();
+    let signed = kms::sign(SignRequest {
+        service_config: csca_config,
+        payload_b64: URL_SAFE_NO_PAD.encode(prepared.signing_bytes()),
+    })
+    .await
+    .unwrap();
+    assert_eq!(signed.signature_encoding, "der");
+    prepared
+        .finish(&URL_SAFE_NO_PAD.decode(signed.signature_b64).unwrap())
+        .unwrap()
 }
 
 // The native signer uses the Gateway's internal path. This adapter performs
@@ -408,12 +443,11 @@ async fn managed_passport_chain_issues_and_verifies_sod_without_exporting_privat
         true,
     )
     .await;
-    let dsc_pem = issue_certificate(
+    let dsc_pem = issue_dsc_with_shared_builder(
         dsc_csr["csr_pem"].as_str().unwrap(),
-        csca_name,
+        &csca_pem,
         signing_config(&service, &csca_profile),
-        2,
-        false,
+        signing_config(&service, &dsc_profile),
     )
     .await;
     let csca_der = load_certificate_pem(&csca_pem).unwrap();
