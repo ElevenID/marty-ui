@@ -1,15 +1,33 @@
 {
   "schema": "marty.passport-beta-cutover-drain/v1",
-  "scope": "First beta cutover to KMS-verified bureau callbacks after application writers stop",
+  "scope": "First beta cutover to KMS-only passport custody and KMS-verified bureau callbacks after application writers stop",
   "terminal_statuses": ["ACTIVE", "FAILED", "CANCELLED"],
   "missing_job_table": "allow initial deployment before native physical-document migration",
-  "policy": "Every nonterminal physical-document job blocks callback cutover, including a SOD_SIGNED job whose bureau_job_id is still null during bureau submission.",
+  "policy": "Every nonterminal physical-document job blocks callback cutover, including a SOD_SIGNED job whose bureau_job_id is still null during bureau submission. A stored legacy Fernet or unknown artifact blocks even if its job is terminal, because this cutover has no artifact migration or replay path.",
+  "artifact_policy": {
+    "native_shape": "JSON object with schema marty.passport-artifact-manifest/v1 and one or more bounded vault:v ciphertext chunks",
+    "legacy_or_unknown": "block regardless of job status; never read or log ciphertext during inventory",
+    "malformed_native_manifest": "block or fail closed on query error",
+    "first_cutover": "zero rows is sufficient and expected before native issuance; later native-only rows may remain"
+  },
+  "flow_policy": {
+    "source": "flow_service.flow_instances joined to flow_service.flow_definitions",
+    "selector": "physical_document_issuance definition or context carrying physical_document_job",
+    "terminal_statuses": ["completed", "failed", "cancelled", "expired"],
+    "active": "block even when no physical-document job exists yet; a paused Flow may create or resume a job after cutover",
+    "missing_schema_or_query_failure": "fail closed; do not infer zero active flows"
+  },
   "cases": [
     {"name": "submission interruption window", "status": "SOD_SIGNED", "bureau_job_id": null, "blocks": true},
     {"name": "already submitted", "status": "SUBMITTED", "bureau_job_id": "bureau-1", "blocks": true},
     {"name": "draft job", "status": "DRAFT", "bureau_job_id": null, "blocks": true},
     {"name": "activated", "status": "ACTIVE", "bureau_job_id": "bureau-1", "blocks": false},
     {"name": "failed", "status": "FAILED", "bureau_job_id": null, "blocks": false},
-    {"name": "cancelled", "status": "CANCELLED", "bureau_job_id": "bureau-1", "blocks": false}
+    {"name": "cancelled", "status": "CANCELLED", "bureau_job_id": "bureau-1", "blocks": false},
+    {"name": "terminal legacy Fernet artifact", "status": "ACTIVE", "artifact": "legacy_fernet", "blocks": true},
+    {"name": "terminal native Transit manifest", "status": "ACTIVE", "artifact": "native_manifest", "blocks": false},
+    {"name": "malformed artifact manifest", "artifact": "unknown", "blocks": true},
+    {"name": "active physical-document Flow before job creation", "flow_status": "in_progress", "job_count": 0, "blocks": true},
+    {"name": "completed physical-document Flow", "flow_status": "completed", "blocks": false}
   ]
 }
