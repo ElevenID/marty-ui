@@ -260,7 +260,7 @@ def test_runner_validates_twice_before_mutation():
         in source
     )
     assert "passport_configuration_validated = $false" in source
-    assert '$script:ApplicationServices += "passport-beta-bureau"' in source
+    assert '$script:SelectedApplicationServices += "passport-beta-bureau"' in source
     assert (
         "retire it explicitly before deploying without the passport profile" in source
     )

@@ -546,10 +546,13 @@ def test_beta_runner_targets_only_the_beta_projects_and_rust_services() -> None:
 def test_passport_bureau_is_optional_but_included_in_beta_recovery() -> None:
     deploy = text("scripts/deploy-local-beta-release.ps1")
     restore = text("scripts/restore-local-beta-release.ps1")
-    assert '$script:ApplicationServices += "passport-beta-bureau"' in deploy
+    assert '$script:SelectedApplicationServices += "passport-beta-bureau"' in deploy
     assert '$applicationServices += "passport-beta-bureau"' in restore
-    assert '$composeFiles += Join-Path $repoRoot "docker-compose.profile.passport-native-beta.yml"' in restore
-    assert 'com.docker.compose.service=passport-beta-bureau' in restore
+    assert (
+        '$composeFiles += Join-Path $repoRoot "docker-compose.profile.passport-native-beta.yml"'
+        in restore
+    )
+    assert "com.docker.compose.service=passport-beta-bureau" in restore
     assert 'Invoke-Checked docker @("stop", $currentBureau)' in restore
     assert 'Invoke-Checked docker @("rm", $currentBureau)' in restore
 

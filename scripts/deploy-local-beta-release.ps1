@@ -95,8 +95,9 @@ $script:ApplicationServices = @(
     "canvas-sync-worker",
     "gateway"
 )
+$script:SelectedApplicationServices = @($script:ApplicationServices)
 if ($EnablePassportNative) {
-    $script:ApplicationServices += "passport-beta-bureau"
+    $script:SelectedApplicationServices += "passport-beta-bureau"
 }
 $script:InfrastructureWriterServices = @("keycloak")
 
@@ -751,7 +752,7 @@ if ($PlanOnly) {
         compose_project = $script:BetaProject
         ui_compose_project = $script:BetaUiProject
         network = $script:BetaNetwork
-        application_services = $script:ApplicationServices
+        application_services = $script:SelectedApplicationServices
         steps = @(
             "backup",
             $plannedImageStep,
@@ -771,7 +772,7 @@ if ($OfficialStackRelease) {
 }
 $releaseComposeFile = Join-Path $script:ArtifactDir "local-release-images.yml"
 $applicationImageArguments = @{
-    Services = $script:ApplicationServices
+    Services = $script:SelectedApplicationServices
     ReleaseVersion = $releaseVersion
     OfficialStackRelease = [bool]$OfficialStackRelease
     IssuanceReference = "$($martyIssuance.Uri)@$($martyIssuance.Digest)"
@@ -862,7 +863,7 @@ $uiContainer = Get-ComposeContainerId -Service "ui-prod" -Ui
 if (-not $uiContainer) { throw "Required beta UI service is absent" }
 Invoke-Checked -FilePath docker -Arguments @("inspect", $uiContainer, "--format", "{{.State.Status}}")
 
-$preDeployContainers = Get-ServiceRecords ($script:ApplicationServices + $script:InfrastructureWriterServices) -IncludeUi
+$preDeployContainers = Get-ServiceRecords ($script:SelectedApplicationServices + $script:InfrastructureWriterServices) -IncludeUi
 $preDeployContainers | ConvertTo-Json -Depth 5 | Set-Content -LiteralPath (Join-Path $script:ArtifactDir "pre-deploy-containers.json") -Encoding utf8
 
 Write-Step "Capture preflight backup for isolated migration rehearsal"
@@ -1098,7 +1099,7 @@ Assert-BetaDidcommConfiguration -RepoRoot $script:RepoRoot -EnvFiles $script:Env
 Assert-BetaPassportConfiguration -RepoRoot $script:RepoRoot -EnvFiles $script:EnvFiles `
     -ComposeFiles $script:ComposeFiles -PassportEnabled ([bool]$EnablePassportNative)
 $canvasLtiIssuerDid = $null
-$maintenanceServices = $script:ApplicationServices + $script:InfrastructureWriterServices + @("ui-prod")
+$maintenanceServices = $script:SelectedApplicationServices + $script:InfrastructureWriterServices + @("ui-prod")
 $maintenanceContainers = @($preDeployContainers | Where-Object { $_.running -and $_.service -in $maintenanceServices } | ForEach-Object { $_.container_id })
 if ($maintenanceContainers.Count -gt 0) {
     Invoke-Checked -FilePath docker -Arguments (@("stop") + $maintenanceContainers)
@@ -1191,8 +1192,8 @@ try {
     Wait-ForServiceHealth $script:InfrastructureWriterServices
 
     Write-Step "Recreate application containers from coordinated images"
-    Invoke-Compose -Arguments (@("up", "--detach", "--no-build", "--no-deps", "--force-recreate") + $script:ApplicationServices)
-    Wait-ForServiceHealth $script:ApplicationServices
+    Invoke-Compose -Arguments (@("up", "--detach", "--no-build", "--no-deps", "--force-recreate") + $script:SelectedApplicationServices)
+    Wait-ForServiceHealth $script:SelectedApplicationServices
 
     Write-Step "Recreate public UI from immutable image"
     $env:MARTY_UI_RELEASE_IMAGE = $uiImage
@@ -1275,7 +1276,7 @@ Invoke-Checked -FilePath python -Arguments @(
     "--output", $deployedDemoManifestPath
 )
 
-$postDeployContainers = Get-ServiceRecords $script:ApplicationServices -IncludeUi
+$postDeployContainers = Get-ServiceRecords $script:SelectedApplicationServices -IncludeUi
 $deploymentManifest = [ordered]@{
     schema_version = 1
     release_version = $releaseVersion
