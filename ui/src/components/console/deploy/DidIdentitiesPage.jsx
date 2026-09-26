@@ -62,6 +62,8 @@ export default function DidIdentitiesPage() {
   const [rebinding, setRebinding] = useState(null);
   const [certifying, setCertifying] = useState(null);
   const [certificate, setCertificate] = useState({ certificate_id: '', cert_pem: '', cert_chain_pem: '' });
+  const [csrSubject, setCsrSubject] = useState({ country: '', organization: '', common_name: '' });
+  const [csrPem, setCsrPem] = useState('');
   const [submitting, setSubmitting] = useState(false);
 
   const load = useCallback(async () => {
@@ -212,6 +214,36 @@ export default function DidIdentitiesPage() {
     }
   };
 
+  const generateCsr = async () => {
+    if (!certifying || !activeOrgId || !csrSubject.country.trim()
+      || !csrSubject.organization.trim() || !csrSubject.common_name.trim()) return;
+    setSubmitting(true);
+    setError('');
+    try {
+      const result = await signingKeysApi.generateIssuerIdentityCsr({
+        organization_id: activeOrgId,
+        issuer_did: certifying.issuer_did,
+        key_purpose: certifying.key_purpose,
+        credential_format: certifying.credential_format,
+        algorithm: certifying.algorithm,
+        country: csrSubject.country.trim(),
+        organization: csrSubject.organization.trim(),
+        common_name: csrSubject.common_name.trim(),
+      });
+      setCsrPem(result?.csr_pem || '');
+      showNotification?.('KMS-backed certificate request generated.', 'success');
+    } catch (requestError) {
+      setError(
+        requestError?.response?.error?.message
+        || requestError?.response?.detail
+        || requestError?.message
+        || 'Certificate request could not be generated.',
+      );
+    } finally {
+      setSubmitting(false);
+    }
+  };
+
   return (
     <Container maxWidth="xl" sx={{ py: 4 }}>
       <Stack direction={{ xs: 'column', md: 'row' }} justifyContent="space-between" spacing={2} sx={{ mb: 3 }}>
@@ -294,6 +326,8 @@ export default function DidIdentitiesPage() {
                         onClick={() => {
                           setCertifying(identity);
                           setCertificate({ certificate_id: '', cert_pem: '', cert_chain_pem: '' });
+                          setCsrSubject({ country: '', organization: '', common_name: '' });
+                          setCsrPem('');
                         }}
                         aria-label="Attach document signer certificate"
                       >
@@ -307,6 +341,8 @@ export default function DidIdentitiesPage() {
                         onClick={() => {
                           setCertifying(identity);
                           setCertificate({ certificate_id: '', cert_pem: '', cert_chain_pem: '' });
+                          setCsrSubject({ country: '', organization: '', common_name: '' });
+                          setCsrPem('');
                         }}
                         aria-label="Enroll public CSCA trust anchor"
                       >
@@ -342,6 +378,40 @@ export default function DidIdentitiesPage() {
             </Alert>
             {certifying && (
               <Typography fontFamily="monospace" sx={{ overflowWrap: 'anywhere' }}>{certifying.issuer_did}</Typography>
+            )}
+            <Typography variant="subtitle2">Generate a KMS-backed certificate request</Typography>
+            <Stack direction={{ xs: 'column', sm: 'row' }} spacing={1}>
+              <TextField
+                label="Country code (C)"
+                value={csrSubject.country}
+                onChange={(event) => setCsrSubject((current) => ({ ...current, country: event.target.value }))}
+                slotProps={{ htmlInput: { maxLength: 2 } }}
+              />
+              <TextField
+                label="Organization (O)"
+                value={csrSubject.organization}
+                onChange={(event) => setCsrSubject((current) => ({ ...current, organization: event.target.value }))}
+                fullWidth
+              />
+              <TextField
+                label="Common name (CN)"
+                value={csrSubject.common_name}
+                onChange={(event) => setCsrSubject((current) => ({ ...current, common_name: event.target.value }))}
+                fullWidth
+              />
+            </Stack>
+            <Button variant="outlined" onClick={generateCsr} disabled={submitting || !csrSubject.country.trim() || !csrSubject.organization.trim() || !csrSubject.common_name.trim()}>
+              Generate KMS-backed CSR
+            </Button>
+            {csrPem && (
+              <TextField
+                label="Certificate Signing Request (PEM)"
+                value={csrPem}
+                multiline
+                minRows={5}
+                fullWidth
+                slotProps={{ input: { readOnly: true, sx: { fontFamily: 'monospace' } } }}
+              />
             )}
             {certifying?.key_purpose === 'csca' && (
               <TextField

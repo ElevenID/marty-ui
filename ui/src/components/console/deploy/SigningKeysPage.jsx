@@ -470,6 +470,11 @@ export default function SigningKeysPage() {
   const handleGenerateCsr = async () => {
     const service = certDialog.data;
     if (!service) return;
+    if (service.id === MANAGED_OPENBAO_SERVICE_ID) {
+      certDialog.close();
+      navigate('/console/org/deploy/issuer-identity');
+      return;
+    }
     try {
       const result = await signingKeysApi.generateServiceCsr(service.id, {
         ...orgRequestParams,
@@ -822,7 +827,9 @@ export default function SigningKeysPage() {
                     onChange={(e) => setCertData((prev) => ({ ...prev, common_name: e.target.value }))}
                   />
                   <Button variant="outlined" onClick={handleGenerateCsr}>
-                    Generate CSR from service public key
+                    {certDialog.data?.id === MANAGED_OPENBAO_SERVICE_ID
+                      ? 'Generate CSR from issuer identity'
+                      : 'Generate CSR from service public key'}
                   </Button>
                   <TextField
                     fullWidth

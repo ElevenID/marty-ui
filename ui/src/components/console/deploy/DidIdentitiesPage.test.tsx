@@ -3,12 +3,13 @@ import { renderWithRouter, screen, waitFor } from '@test/utils';
 
 import DidIdentitiesPage from './DidIdentitiesPage';
 
-const { listPublicIssuerIdentities, rebindIssuerIdentity, deleteIssuerIdentity, storeIssuerIdentityCertificate, enrollCscaCertificate, showNotification } = vi.hoisted(() => ({
+const { listPublicIssuerIdentities, rebindIssuerIdentity, deleteIssuerIdentity, storeIssuerIdentityCertificate, enrollCscaCertificate, generateIssuerIdentityCsr, showNotification } = vi.hoisted(() => ({
   listPublicIssuerIdentities: vi.fn(),
   rebindIssuerIdentity: vi.fn(),
   deleteIssuerIdentity: vi.fn(),
   storeIssuerIdentityCertificate: vi.fn(),
   enrollCscaCertificate: vi.fn(),
+  generateIssuerIdentityCsr: vi.fn(),
   showNotification: vi.fn(),
 }));
 
@@ -19,6 +20,7 @@ vi.mock('../../../services/signingKeysApi', () => ({
     deleteIssuerIdentity: (...args: unknown[]) => deleteIssuerIdentity(...args),
     storeIssuerIdentityCertificate: (...args: unknown[]) => storeIssuerIdentityCertificate(...args),
     enrollCscaCertificate: (...args: unknown[]) => enrollCscaCertificate(...args),
+    generateIssuerIdentityCsr: (...args: unknown[]) => generateIssuerIdentityCsr(...args),
   },
 }));
 
@@ -47,6 +49,7 @@ describe('DidIdentitiesPage', () => {
     rebindIssuerIdentity.mockResolvedValue({ changed: true });
     storeIssuerIdentityCertificate.mockResolvedValue({ ok: true });
     enrollCscaCertificate.mockResolvedValue({ status: 'VALID' });
+    generateIssuerIdentityCsr.mockResolvedValue({ csr_pem: '-----BEGIN CERTIFICATE REQUEST-----\npublic-csr\n-----END CERTIFICATE REQUEST-----' });
   });
 
   it('loads identities through format-scoped public DID queries', async () => {
@@ -160,6 +163,58 @@ describe('DidIdentitiesPage', () => {
     });
     expect(storeIssuerIdentityCertificate).not.toHaveBeenCalled();
     expect(showNotification).toHaveBeenCalledWith('Public CSCA trust anchor enrolled.', 'success');
+  });
+
+  it('generates a public PKCS#10 request through the selected KMS-held CSCA identity', async () => {
+    listPublicIssuerIdentities.mockImplementation(async ({ credential_format: credentialFormat }) => ({
+      identities: credentialFormat === 'MDOC'
+        ? [{ issuer_did: 'did:web:issuer.example:orgs:csca', key_purpose: 'csca', algorithm: 'ES256', status: 'active' }]
+        : [],
+    }));
+    const { user } = renderWithRouter(<DidIdentitiesPage />);
+    await screen.findByText('did:web:issuer.example:orgs:csca');
+    await user.click(screen.getByRole('button', { name: 'Enroll public CSCA trust anchor' }));
+    await user.type(screen.getByRole('textbox', { name: 'Country code (C)' }), 'US');
+    await user.type(screen.getByRole('textbox', { name: 'Organization (O)' }), 'ElevenID Beta');
+    await user.type(screen.getByRole('textbox', { name: 'Common name (CN)' }), 'Pilot CSCA');
+    await user.click(screen.getByRole('button', { name: 'Generate KMS-backed CSR' }));
+    await waitFor(() => expect(generateIssuerIdentityCsr).toHaveBeenCalledWith({
+      organization_id: 'org-test-1',
+      issuer_did: 'did:web:issuer.example:orgs:csca',
+      key_purpose: 'csca',
+      credential_format: 'MDOC',
+      algorithm: 'ES256',
+      country: 'US',
+      organization: 'ElevenID Beta',
+      common_name: 'Pilot CSCA',
+    }));
+    expect((screen.getByRole('textbox', { name: 'Certificate Signing Request (PEM)' }) as HTMLInputElement).value)
+      .toContain('BEGIN CERTIFICATE REQUEST');
+    expect(storeIssuerIdentityCertificate).not.toHaveBeenCalled();
+    expect(enrollCscaCertificate).not.toHaveBeenCalled();
+  });
+
+  it('uses the document-signer identity rather than the shared signing service for its CSR', async () => {
+    listPublicIssuerIdentities.mockImplementation(async ({ credential_format: credentialFormat }) => ({
+      identities: credentialFormat === 'ICAO_EMRTD'
+        ? [{ issuer_did: 'did:web:issuer.example:orgs:dsc', key_purpose: 'x509_doc_signer', algorithm: 'ES384', status: 'active' }]
+        : [],
+    }));
+    const { user } = renderWithRouter(<DidIdentitiesPage />);
+    await screen.findByText('did:web:issuer.example:orgs:dsc');
+    await user.click(screen.getByRole('button', { name: 'Attach document signer certificate' }));
+    await user.type(screen.getByRole('textbox', { name: 'Country code (C)' }), 'US');
+    await user.type(screen.getByRole('textbox', { name: 'Organization (O)' }), 'ElevenID Beta');
+    await user.type(screen.getByRole('textbox', { name: 'Common name (CN)' }), 'Pilot DSC');
+    await user.click(screen.getByRole('button', { name: 'Generate KMS-backed CSR' }));
+    await waitFor(() => expect(generateIssuerIdentityCsr).toHaveBeenCalledWith(expect.objectContaining({
+      issuer_did: 'did:web:issuer.example:orgs:dsc',
+      key_purpose: 'x509_doc_signer',
+      credential_format: 'ICAO_EMRTD',
+      algorithm: 'ES384',
+      common_name: 'Pilot DSC',
+    })));
+    expect(storeIssuerIdentityCertificate).not.toHaveBeenCalled();
   });
 
   it('never loads issuer profiles, services, or raw keys', async () => {

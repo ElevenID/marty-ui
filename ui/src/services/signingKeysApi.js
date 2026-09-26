@@ -416,6 +416,21 @@ export async function enrollCscaCertificate(body) {
   });
 }
 
+/** Build a public PKCS#10 request using the selected issuer identity's KMS key. */
+export async function generateIssuerIdentityCsr(body) {
+  const organizationId = requireOrganizationId(body, 'generating an issuer CSR');
+  return put(`${BASE_PATH}/issuer-identities/certificate-csr`, {
+    organization_id: organizationId,
+    issuer_did: body?.issuer_did,
+    key_purpose: body?.key_purpose,
+    credential_format: body?.credential_format,
+    algorithm: body?.algorithm,
+    country: body?.country,
+    organization: body?.organization,
+    common_name: body?.common_name,
+  });
+}
+
 /**
  * Retire exactly one DID-selected managed identity.
  */
@@ -463,5 +478,6 @@ export default {
   rebindIssuerIdentity,
   storeIssuerIdentityCertificate,
   enrollCscaCertificate,
+  generateIssuerIdentityCsr,
   deleteIssuerIdentity,
 };

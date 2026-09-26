@@ -6975,23 +6975,24 @@ mod tests {
             overrides.trusted_query["organization_id"],
             vec!["trusted-org"]
         );
-        let csca_path = "/v1/signing-keys/issuer-identities/csca-certificate";
-        let route = crate::contract::route_for(
-            &GatewayContract::load()
-                .unwrap()
-                .runtime_route_table()
-                .unwrap(),
-            HttpMethod::Put,
-            csca_path,
-        )
-        .expect("public CSCA enrollment route");
-        assert_eq!(route.route.upstream_service, "signing-keys");
-        assert!(route.route.auth_required);
-        let overrides = proxy_overrides(&state, csca_path, &identity);
-        assert_eq!(
-            overrides.trusted_query["organization_id"],
-            vec!["trusted-org"]
-        );
+        let routes = GatewayContract::load()
+            .unwrap()
+            .runtime_route_table()
+            .unwrap();
+        for path in [
+            "/v1/signing-keys/issuer-identities/csca-certificate",
+            "/v1/signing-keys/issuer-identities/certificate-csr",
+        ] {
+            let route = crate::contract::route_for(&routes, HttpMethod::Put, path)
+                .expect("public passport certificate route");
+            assert_eq!(route.route.upstream_service, "signing-keys");
+            assert!(route.route.auth_required);
+            let overrides = proxy_overrides(&state, path, &identity);
+            assert_eq!(
+                overrides.trusted_query["organization_id"],
+                vec!["trusted-org"]
+            );
+        }
     }
 
     #[tokio::test]
