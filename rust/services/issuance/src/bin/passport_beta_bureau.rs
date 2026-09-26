@@ -506,6 +506,33 @@ mod tests {
     };
     use tower::ServiceExt;
 
+    fn disposable_database_url(value: &str) -> bool {
+        Url::parse(value).ok().is_some_and(|url| {
+            matches!(url.scheme(), "postgres" | "postgresql")
+                && url.host_str() == Some("127.0.0.1")
+                && url.path() == "/marty_passport_bureau_test"
+        })
+    }
+
+    #[test]
+    fn bureau_database_contract_refuses_nonlocal_or_wrong_database() {
+        assert!(disposable_database_url(
+            "postgresql://postgres@127.0.0.1:5432/marty_passport_bureau_test"
+        ));
+        for value in [
+            "postgresql://postgres@127.0.0.1:5432/marty",
+            "postgresql://postgres@test.example:5432/marty_passport_bureau_test",
+            "postgresql://postgres@localhost:5432/marty_passport_bureau_test",
+            "postgresql://postgres@127.0.0.1:5432/marty_passport_bureau_test_extra",
+            "https://127.0.0.1/marty_passport_bureau_test",
+        ] {
+            assert!(
+                !disposable_database_url(value),
+                "unexpected database URL accepted"
+            );
+        }
+    }
+
     async fn synthetic_sign(headers: HeaderMap, Json(request): Json<Value>) -> Json<Value> {
         assert_eq!(headers.get("x-api-key").unwrap(), "synthetic-signing-auth");
         let body = STANDARD
@@ -606,7 +633,10 @@ mod tests {
         let Ok(database_url) = env::var("PASSPORT_BUREAU_TEST_DATABASE_URL") else {
             return;
         };
-        assert!(database_url.contains("test"), "refuse a non-test database");
+        assert!(
+            disposable_database_url(&database_url),
+            "refuse a nonlocal or non-disposable database"
+        );
         let pool = PgPoolOptions::new()
             .max_connections(2)
             .connect(&database_url)
