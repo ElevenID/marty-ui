@@ -21,6 +21,7 @@ pub struct PassportNativeConfig {
     pub enabled: bool,
     pub managed_issuer_signing_enabled: bool,
     pub kms_artifacts_enabled: bool,
+    pub kms_callbacks_enabled: bool,
     pub artifact_key: Option<String>,
     pub signer_url: Option<String>,
     pub signer_api_key: Option<String>,
@@ -40,6 +41,7 @@ impl std::fmt::Debug for PassportNativeConfig {
                 &self.managed_issuer_signing_enabled,
             )
             .field("kms_artifacts_enabled", &self.kms_artifacts_enabled)
+            .field("kms_callbacks_enabled", &self.kms_callbacks_enabled)
             .field("artifact_key_configured", &self.artifact_key.is_some())
             .field("signer_url_configured", &self.signer_url.is_some())
             .field("signer_api_key_configured", &self.signer_api_key.is_some())
@@ -67,6 +69,7 @@ impl PassportNativeConfig {
                 enabled,
                 managed_issuer_signing_enabled: false,
                 kms_artifacts_enabled: false,
+                kms_callbacks_enabled: false,
                 artifact_key: None,
                 signer_url: None,
                 signer_api_key: None,
@@ -94,6 +97,16 @@ impl PassportNativeConfig {
                 "KMS passport artifact mode cannot be combined with PHYSICAL_DOCUMENT_ARTIFACT_KEY",
             ));
         }
+        let kms_callbacks_enabled = environment_flag(values, "PASSPORT_KMS_CALLBACKS_ENABLED");
+        if kms_callbacks_enabled
+            && (configured("PERSONALIZATION_BUREAU_WEBHOOK_SECRET").is_some()
+                || configured("PERSONALIZATION_BUREAU_WEBHOOK_SECRET_FILE").is_some())
+        {
+            return Err(MmfError::new(
+                ErrorCode::Configuration,
+                "KMS passport callback mode cannot be combined with PERSONALIZATION_BUREAU_WEBHOOK_SECRET",
+            ));
+        }
         let config = Self {
             enabled,
             managed_issuer_signing_enabled: environment_flag(
@@ -101,6 +114,7 @@ impl PassportNativeConfig {
                 "PASSPORT_MANAGED_ISSUER_SIGNING_ENABLED",
             ),
             kms_artifacts_enabled,
+            kms_callbacks_enabled,
             artifact_key: secret_value(values, "PHYSICAL_DOCUMENT_ARTIFACT_KEY")?,
             signer_url: configured("ICAO_DOCUMENT_SIGNER_URL"),
             signer_api_key: secret_value(values, "ICAO_DOCUMENT_SIGNER_API_KEY")?,
@@ -1604,6 +1618,7 @@ mod tests {
         assert!(!config.passport_native.enabled);
         assert!(!config.passport_native.managed_issuer_signing_enabled);
         assert!(!config.passport_native.kms_artifacts_enabled);
+        assert!(!config.passport_native.kms_callbacks_enabled);
         assert!(config.passport_native.artifact_key.is_none());
         let disabled = IssuanceServiceConfig::from_values(values(&[(
             "PHYSICAL_DOCUMENT_ARTIFACT_KEY_FILE",
@@ -1713,6 +1728,33 @@ mod tests {
             (
                 "PHYSICAL_DOCUMENT_ARTIFACT_KEY_FILE",
                 "nonexistent-passport-key-file",
+            ),
+        ] {
+            let mut conflicting = values.clone();
+            conflicting.push((name.into(), value.into()));
+            let error = IssuanceServiceConfig::from_values(conflicting).unwrap_err();
+            assert_eq!(error.code, ErrorCode::Configuration);
+            assert!(error.to_string().contains("cannot be combined"));
+            assert!(!error.to_string().contains(value));
+        }
+    }
+
+    #[test]
+    fn kms_callback_mode_rejects_process_held_secret_before_loading_it() {
+        let keyring = format!("{{\"org-a\":\"{}\"}}", "a".repeat(32));
+        let values = values(&[
+            ("PASSPORT_NATIVE_HTTP_ENABLED", "true"),
+            ("PASSPORT_KMS_CALLBACKS_ENABLED", "true"),
+            ("PASSPORT_TENANT_API_KEYS", &keyring),
+        ]);
+        let config = IssuanceServiceConfig::from_values(values.clone()).unwrap();
+        assert!(config.passport_native.kms_callbacks_enabled);
+        assert!(config.passport_native.bureau_webhook_secret.is_none());
+        for (name, value) in [
+            ("PERSONALIZATION_BUREAU_WEBHOOK_SECRET", "must-never-load"),
+            (
+                "PERSONALIZATION_BUREAU_WEBHOOK_SECRET_FILE",
+                "nonexistent-webhook-key-file",
             ),
         ] {
             let mut conflicting = values.clone();
