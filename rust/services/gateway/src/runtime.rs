@@ -6932,6 +6932,43 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn signing_config_resolve_requires_session_and_forwards_trusted_scope() {
+        let recorder = Arc::new(ActorRecordingUpstream::default());
+        let router = gateway_router(runtime_state_with_upstream(
+            Arc::new(NoOwner),
+            recorder.clone(),
+        ));
+        let body = json!({"key_purpose": "mdoc_dsc", "algorithm": "EdDSA"});
+        let request = |authenticated| {
+            let mut builder = Request::builder()
+                .method("POST")
+                .uri("/v1/signing-keys/config/resolve")
+                .header("content-type", "application/json");
+            if authenticated {
+                builder = builder.header("cookie", "sessionId=valid");
+            }
+            builder.body(Body::from(body.to_string())).unwrap()
+        };
+        let denied = router.clone().oneshot(request(false)).await.unwrap();
+        assert_eq!(denied.status(), StatusCode::UNAUTHORIZED);
+        assert!(recorder.0.lock().unwrap().is_empty());
+
+        let accepted = router.oneshot(request(true)).await.unwrap();
+        assert_eq!(accepted.status(), StatusCode::OK);
+        let calls = recorder.0.lock().unwrap();
+        assert_eq!(calls.len(), 1);
+        let (service, forwarded) = &calls[0];
+        assert_eq!(service, "signing-keys");
+        assert_eq!(forwarded.method, HttpMethod::Post);
+        assert_eq!(forwarded.path, "/v1/signing-keys/config/resolve");
+        assert_eq!(forwarded.query["organization_id"], vec!["org-1"]);
+        assert_eq!(
+            serde_json::from_slice::<Value>(forwarded.body.as_deref().unwrap()).unwrap(),
+            body
+        );
+    }
+
+    #[tokio::test]
     async fn axum_chain_preserves_outer_auth_and_content_type_order() {
         let response = runtime_router()
             .oneshot(

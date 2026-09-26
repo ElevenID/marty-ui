@@ -140,8 +140,10 @@ managed key. The response keeps the released `service`, `resolved_by`, and
 certificate/key-match tightening. Frozen-selection and mock-KMS unit tests
 pass, and the isolated Redis/mock-KMS Rust-route test passed for tenant
 isolation, algorithm selection, redaction, no key provisioning, malformed
-certificate rejection, and KMS-outage status. The
-authenticated through-Gateway and beta gates remain open.
+certificate rejection, and KMS-outage status. A Gateway runtime test also
+passes for session authorization and trusted tenant forwarding to the
+Signing Keys upstream. The combined Gateway-to-Rust and beta gates remain
+open.
 
 Thus 6 declared pairs remain without local public handlers. These new
 adapters still need authenticated through-Gateway runtime tests. The
