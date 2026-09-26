@@ -89,6 +89,10 @@ selected here.
    live network is internal, has exactly those three running containers, and
    gives OpenBao its required DNS alias. Restore repeats that gate. These
    script and Compose checks have not yet been exercised in a beta deployment.
+   The shared Rust image builds both beta-only binaries and its closed entrypoint
+   dispatches `passport-callback-signer` and `passport-beta-bureau` explicitly.
+   The exact-head protected image and release-contract jobs must pass before
+   selecting an aggregate beta release.
 
    The [Signing Keys public-route parity audit](signing-keys-public-parity-2026-09-26.md)
    found 24 Gateway-declared method/path pairs without Rust public handlers on
