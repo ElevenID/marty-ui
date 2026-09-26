@@ -22,8 +22,8 @@ use crate::{
     config::IssuanceServiceConfig,
     passport_artifact::{PassportArtifactCipher, PassportArtifactError},
     passport_bureau::{
-        parse_verified_webhook, BureauClient, BureauError, DocumentType, PersonalizationJob,
-        ProductionStatus,
+        parse_verified_webhook, BureauClient, BureauError, DocumentType, KmsWebhookVerifier,
+        PersonalizationJob, ProductionStatus,
     },
     passport_contract::{
         application_nested_field_orders, decode_python_validated_base64, json_field_order,
@@ -45,6 +45,7 @@ pub struct PassportHttpService {
     signer: Option<PassportSigner>,
     bureau: Option<BureauClient>,
     webhook_secret: Option<Vec<u8>>,
+    webhook_kms: Option<KmsWebhookVerifier>,
 }
 
 #[derive(Clone)]
@@ -126,11 +127,22 @@ impl PassportHttpService {
         );
         // Inbound callbacks from already-submitted jobs remain verifiable even
         // when outbound bureau submission is not configured.
-        service.webhook_secret = native
-            .bureau_webhook_secret
-            .as_deref()
-            .filter(|secret| !secret.is_empty())
-            .map(|secret| secret.as_bytes().to_vec());
+        if native.kms_callbacks_enabled {
+            let api_key = config.signing_keys_internal_api_key.as_deref().ok_or(
+                PassportStartupError::Missing("SIGNING_KEYS_INTERNAL_API_KEY"),
+            )?;
+            service.webhook_secret = None;
+            service.webhook_kms = Some(KmsWebhookVerifier::new(
+                config.signing_keys_internal_url.clone(),
+                api_key,
+            )?);
+        } else {
+            service.webhook_secret = native
+                .bureau_webhook_secret
+                .as_deref()
+                .filter(|secret| !secret.is_empty())
+                .map(|secret| secret.as_bytes().to_vec());
+        }
         Ok(Some(service))
     }
 
@@ -169,6 +181,7 @@ impl PassportHttpService {
             signer,
             bureau,
             webhook_secret,
+            webhook_kms: None,
         }
     }
 
@@ -364,6 +377,9 @@ impl IntoResponse for PassportHttpError {
             }
             Self::Bureau(BureauError::InvalidWebhookSignature) => StatusCode::UNAUTHORIZED,
             Self::Bureau(BureauError::InvalidWebhookEvent) => StatusCode::UNPROCESSABLE_ENTITY,
+            Self::Bureau(
+                BureauError::CallbackKmsConfiguration | BureauError::CallbackKmsUnavailable,
+            ) => StatusCode::SERVICE_UNAVAILABLE,
             Self::InvalidArtifact
             | Self::InvalidDocumentType
             | Self::Signer(_)
@@ -725,8 +741,12 @@ async fn personalization_webhook(
 ) -> Result<Json<Value>, PassportHttpError> {
     let signature = header(&headers, "x-personalization-signature")
         .ok_or(PassportHttpError::MissingWebhookSignature)?;
-    let event = parse_verified_webhook(service.webhook_secret.as_deref(), &body, signature)
-        .map_err(PassportHttpError::Bureau)?;
+    let event = if let Some(verifier) = &service.webhook_kms {
+        verifier.verify(&body, signature).await
+    } else {
+        parse_verified_webhook(service.webhook_secret.as_deref(), &body, signature)
+    }
+    .map_err(PassportHttpError::Bureau)?;
     let updated = service
         .repository
         .apply_verified_webhook(&event, Utc::now())
@@ -873,6 +893,78 @@ mod tests {
         let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
         let body: Value = serde_json::from_slice(&body).unwrap();
         assert_eq!(body, expected["body"]);
+    }
+
+    #[tokio::test]
+    async fn kms_callback_mode_requires_internal_credential_and_never_falls_back_to_a_secret() {
+        let pool = PgPoolOptions::new()
+            .connect_lazy("postgresql://unused:unused@127.0.0.1:5432/unused")
+            .unwrap();
+        let values = vec![
+            ("PASSPORT_NATIVE_HTTP_ENABLED".into(), "true".into()),
+            ("PASSPORT_KMS_CALLBACKS_ENABLED".into(), "true".into()),
+            (
+                "PASSPORT_TENANT_API_KEYS".into(),
+                r#"{"org-1":"passport-tenant-test-key-00000000000001"}"#.into(),
+            ),
+        ];
+        let missing = IssuanceServiceConfig::from_values(values.clone()).unwrap();
+        assert!(matches!(
+            PassportHttpService::from_config(&missing, pool.clone()),
+            Err(PassportStartupError::Missing(
+                "SIGNING_KEYS_INTERNAL_API_KEY"
+            ))
+        ));
+        let mut values = values;
+        values.push((
+            "SIGNING_KEYS_INTERNAL_API_KEY".into(),
+            "internal-test-key".into(),
+        ));
+        values.push((
+            "SIGNING_KEYS_INTERNAL_URL".into(),
+            "http://127.0.0.1:1/internal/signing-keys".into(),
+        ));
+        let configured = IssuanceServiceConfig::from_values(values).unwrap();
+        let service = PassportHttpService::from_config(&configured, pool)
+            .unwrap()
+            .unwrap();
+        assert!(service.webhook_secret.is_none());
+        assert!(service.webhook_kms.is_some());
+        let router = router(service);
+        let response = router
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/v1/passport/webhooks/personalization")
+                    .header("x-personalization-signature", "legacy-hex-signature")
+                    .body(Body::from(
+                        br#"{"organization_id":"org-1","bureau_job_id":"job-1","status":"SHIPPED"}"#
+                            .as_slice(),
+                    ))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+        let unavailable = router
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/v1/passport/webhooks/personalization")
+                    .header(
+                        "x-personalization-signature",
+                        "vault:v1:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=",
+                    )
+                    .body(Body::from(
+                        br#"{"organization_id":"org-1","bureau_job_id":"job-1","status":"SHIPPED"}"#
+                            .as_slice(),
+                    ))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(unavailable.status(), StatusCode::SERVICE_UNAVAILABLE);
     }
 
     #[tokio::test]

@@ -692,6 +692,21 @@ async fn passport_jobs_survive_restart_without_cross_tenant_reads() {
         webhook_updated.tracking_number.as_deref(),
         Some("tracking-a")
     );
+    let stale_body = serde_json::to_vec(&serde_json::json!({
+        "organization_id": "org-a", "bureau_job_id": "bureau-a", "status": "PRINTING"
+    }))
+    .unwrap();
+    let mut stale_mac = Hmac::<Sha256>::new_from_slice(secret.as_bytes()).unwrap();
+    stale_mac.update(&stale_body);
+    let stale_signature = hex::encode(stale_mac.finalize().into_bytes());
+    let stale_event = bureau.parse_webhook(&stale_body, &stale_signature).unwrap();
+    let unchanged = restarted
+        .apply_verified_webhook(&stale_event, next)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(unchanged.status, "READY_FOR_ACTIVATION");
+    assert_eq!(unchanged.tracking_number.as_deref(), Some("tracking-a"));
     let mut quality = PassportJobPatch::new(PassportJobStatus::ReadyForActivation);
     quality.quality_result = Some(Some(serde_json::json!({"passed": true})));
     restarted
@@ -722,6 +737,14 @@ async fn passport_jobs_survive_restart_without_cross_tenant_reads() {
     assert_eq!(active.status, "ACTIVE");
     assert_eq!(active.completed_at, Some(next));
     assert!(cipher.decrypt(&active.secure_artifact_ciphertext).is_err());
+    let replayed = restarted
+        .apply_verified_webhook(&event, next)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(replayed.status, "ACTIVE");
+    assert_eq!(replayed.completed_at, Some(next));
+    assert_eq!(replayed.tracking_number.as_deref(), Some("tracking-a"));
 
     let second_job = PassportJobInsert {
         id: "job-b".into(),
