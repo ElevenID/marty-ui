@@ -305,21 +305,37 @@ pub async fn replay(
         }
         let observed = tokio::time::timeout(Duration::from_secs(95), async {
             loop {
-                assert!(worker.as_mut().unwrap().0.try_wait().unwrap().is_none(), "worker exited before stage outcome");
+                assert!(
+                    worker.as_mut().unwrap().0.try_wait().unwrap().is_none(),
+                    "worker exited before stage outcome"
+                );
                 let jobs = scalar(pool, text(&fixture.spec["jobs_sql"])).await;
                 let rows = jobs.as_array().unwrap();
-                assert!(rows.len() <= index + 1, "worker scheduled unexpected extra work");
+                assert!(
+                    rows.len() <= index + 1,
+                    "worker scheduled unexpected extra work"
+                );
                 if rows.len() == index + 1 {
                     let latest = &rows[index];
-                    assert!(!matches!(latest["status"].as_str(), Some("retry" | "dead_letter")), "mixed-roster job failed: {latest}");
-                    let idle: bool = sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM issuance_service.canvas_worker_heartbeats WHERE worker_id='worker-rest' AND metadata->>'phase'='idle')").fetch_one(pool).await.unwrap();
-                    if latest["status"] == "succeeded" && idle {
-                        break observe(pool, &fixture, &matrix, &roster_sql).await;
+                    assert!(
+                        !matches!(latest["status"].as_str(), Some("retry" | "dead_letter")),
+                        "mixed-roster job failed: {latest}"
+                    );
+                    if latest["status"] == "succeeded" {
+                        // The worker polls again immediately. An idle probe followed by
+                        // a separate snapshot can observe the next scheduling heartbeat.
+                        // Require idle in the snapshot that we compare with the oracle.
+                        let observed = observe(pool, &fixture, &matrix, &roster_sql).await;
+                        if observed["state"]["heartbeat"]["metadata"]["phase"] == "idle" {
+                            break observed;
+                        }
                     }
                 }
                 tokio::time::sleep(Duration::from_millis(25)).await;
             }
-        }).await.expect("natural minute-scheduled worker cycle must reach its durable idle outcome");
+        })
+        .await
+        .expect("natural minute-scheduled worker cycle must reach its durable idle outcome");
         for key in ["state", "roster", "target"] {
             assert_eq!(observed[key], expected[key], "{key} in {}", stage["name"]);
         }
