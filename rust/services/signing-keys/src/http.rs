@@ -2628,6 +2628,9 @@ fn resolution_references(
             references.insert(reference.to_owned());
         }
     }
+    if service_id == registry::MANAGED_OPENBAO_SERVICE_ID {
+        return references;
+    }
     if let Some(bound) = registry
         .get("key_reference_purposes")
         .and_then(|all| all.get(service_id))
@@ -4605,14 +4608,14 @@ mod public_contract_tests {
         let endpoint = format!("http://{}", listener.local_addr().unwrap());
         let server = tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
         let service = json!({
-            "id": "managed-openbao-transit", "service_type": "openbao-transit",
+            "id": "service-a", "service_type": "openbao-transit",
             "endpoint": endpoint, "mount": "transit", "key_reference": "vc-key",
             "key_aliases": ["dsc-ed"], "auth_reference": "never-echo-this"
         });
         let registry = json!({
-            "services": [service], "default_service_id": "managed-openbao-transit",
+            "services": [service], "default_service_id": "service-a",
             "key_reference_purposes": {
-                "managed-openbao-transit": {"dsc-ed": ["mdoc_dsc"]}
+                "service-a": {"dsc-ed": ["mdoc_dsc"]}
             }
         });
         let service = &registry["services"][0];

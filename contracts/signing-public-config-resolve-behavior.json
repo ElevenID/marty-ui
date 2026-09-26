@@ -19,6 +19,8 @@
   "kms_inventory_unavailable_status": 503,
   "algorithm_filter_uses_only_existing_kms_public_key_metadata": true,
   "resolver_never_provisions_a_missing_managed_key": true,
+  "managed_key_inventory_rule": "For the managed OpenBao service, resolve only references present in the tenant's live verified service default or aliases. Stale registry bindings and retired issuer profiles never restore a managed reference, with or without an algorithm filter.",
+  "managed_lti_only_key_rule": "A live key restricted to LTI signing never resolves for an algorithm-only or unrelated-purpose request; its LTI-purpose resolution remains available.",
   "purpose_bound_key_selection": "Prefer the service default when it is bound to the requested purpose and algorithm; otherwise select the first sorted matching alias. Never substitute an unrelated default key.",
   "mdoc_hint_triggers": {
     "key_purposes": ["mdoc_dsc", "vdsnc_signing", "csca"],
