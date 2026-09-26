@@ -190,9 +190,10 @@ profile publishes an opaque DID verification method, then resolves and signs
 without a caller KMS locator. `contracts/signing-issuer-profile-managed-provision-behavior.json`
 freezes this flow. Its disposable Redis/mock-KMS route gate covers fresh
 create, resolve, DID-mediated sign, custody-free public responses and DID
-document, a CSCA `ICAO_EMRTD` profile, and failed provisioning without an
-active profile. Nonmanaged custody selection and existing published
-verification method IDs remain in place. The issuer-scoped CSR resolver uses
+document, a CSCA `ICAO_EMRTD` profile, reuse of a live key with KMS read/sign
+permission but no create permission, and failed provisioning without an active profile. Nonmanaged
+custody selection and existing published verification method IDs remain in
+place. The issuer-scoped CSR resolver uses
 the stored method ID and compares public key coordinates, so the opaque
 fragment is compatible with its lookup; a real OpenBao CSR signature and
 chain still need the beta gate. Combined Gateway-to-Rust and beta acceptance

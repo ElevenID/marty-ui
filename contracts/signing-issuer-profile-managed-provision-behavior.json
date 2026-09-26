@@ -4,7 +4,7 @@
   "method": "POST",
   "public_request_fields": ["organization_id", "issuer_did", "key_purpose", "credential_format", "algorithm", "key_attestation_policy"],
   "custody_rule": "Select a signing service using the tenant registry and canonical issuer tuple. If the selected service is managed OpenBao, provision or retrieve its deterministic tenant-and-tuple key before validating and publishing the profile. Other providers retain their configured custody flow.",
-  "managed_key_rule": "Accept an existing managed key only when its live public key and status match the requested algorithm and purpose. KMS failure must not create an active profile.",
+  "managed_key_rule": "Read the live managed key first and accept it when its public key and status match the requested algorithm and purpose. Create only after an authoritative key-level 404; a denied read or missing Transit route must not trigger creation. KMS failure must not create an active profile.",
   "public_response_rule": "Create, resolve, and DID-mediated sign responses contain identity and public signing metadata but no KMS endpoint, token, service ID, or key reference.",
-  "acceptance_cases": ["fresh managed profile create then resolve then DID-mediated sign without caller KMS locator", "managed KMS failure leaves no active profile", "nonmanaged custody remains selectable", "cross-tenant identity cannot select another tenant key"]
+  "acceptance_cases": ["fresh managed profile create then resolve then DID-mediated sign without caller KMS locator", "existing key profiles with read access and no create permission", "managed KMS failure leaves no active profile", "nonmanaged custody remains selectable", "cross-tenant identity cannot select another tenant key"]
 }

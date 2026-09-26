@@ -1214,6 +1214,40 @@ fn missing_route_detail(detail: &str) -> bool {
         || detail.contains("route not found")
 }
 
+/// OpenBao can return the same empty 404 body for an absent key and an absent
+/// mount. Confirm the Transit collection is readable and omits this key before
+/// provisioning; a denied list or missing mount must fail closed.
+pub(crate) async fn missing_managed_openbao_key(
+    config: &Value,
+    error: &KmsError,
+) -> Result<bool, KmsError> {
+    let KmsError::ProviderStatus { status, detail } = error else {
+        return Ok(false);
+    };
+    if *status != StatusCode::NOT_FOUND || missing_route_detail(detail) {
+        return Ok(false);
+    }
+    let endpoint = required(
+        config,
+        "endpoint",
+        "Managed OpenBao key lookup requires 'endpoint' and 'key_reference'",
+    )?;
+    let reference = required(
+        config,
+        "key_reference",
+        "Managed OpenBao key lookup requires 'endpoint' and 'key_reference'",
+    )?;
+    if string(config, "mount").unwrap_or("transit") != "transit" {
+        return Err(KmsError::InvalidConfig(
+            "Managed OpenBao key lookup requires the transit mount".into(),
+        ));
+    }
+    Ok(!list_managed_openbao_key_names(endpoint)
+        .await?
+        .iter()
+        .any(|name| name == reference))
+}
+
 fn mount_exists_detail(detail: &str) -> bool {
     let detail = detail.to_ascii_lowercase();
     detail.contains("path is already in use") || detail.contains("already exists")
@@ -1397,6 +1431,30 @@ mod tests {
             "{\"errors\":[\"no handler for route \\\"transit/keys/\\\"\"]}"
         ));
         assert!(!empty_transit_list_response("permission denied"));
+    }
+
+    #[tokio::test]
+    async fn managed_key_missing_signal_requires_404_before_collection_lookup() {
+        let config = json!({"endpoint": "http://127.0.0.1:1", "key_reference": "key"});
+        let missing = |detail: &str| KmsError::ProviderStatus {
+            status: StatusCode::NOT_FOUND,
+            detail: detail.into(),
+        };
+        assert!(!missing_managed_openbao_key(
+            &config,
+            &missing(r#"{"errors":["no handler for route transit/keys/key"]}"#)
+        )
+        .await
+        .unwrap());
+        assert!(!missing_managed_openbao_key(
+            &config,
+            &KmsError::ProviderStatus {
+                status: StatusCode::FORBIDDEN,
+                detail: "permission denied".into()
+            }
+        )
+        .await
+        .unwrap());
     }
 
     #[test]

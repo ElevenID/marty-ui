@@ -2,7 +2,10 @@
 
 use std::{
     collections::BTreeMap,
-    sync::{Arc, Mutex},
+    sync::{
+        atomic::{AtomicUsize, Ordering},
+        Arc, Mutex,
+    },
 };
 
 use axum::{
@@ -114,6 +117,21 @@ async fn read_key(
     )
 }
 
+async fn list_keys(State(keys): State<Keys>, headers: HeaderMap) -> impl IntoResponse {
+    if headers
+        .get("x-vault-token")
+        .and_then(|value| value.to_str().ok())
+        != Some("test-only")
+    {
+        return (
+            StatusCode::FORBIDDEN,
+            Json(json!({"errors": ["test token required"]})),
+        );
+    }
+    let names: Vec<_> = keys.lock().unwrap().keys().cloned().collect();
+    (StatusCode::OK, Json(json!({"data": {"keys": names}})))
+}
+
 async fn sign_key(Path(reference): Path<String>, State(keys): State<Keys>) -> impl IntoResponse {
     if !keys.lock().unwrap().contains_key(&reference) {
         return (
@@ -154,6 +172,7 @@ async fn issuer_profile_creates_managed_key_then_resolves_and_signs_without_a_lo
     let redis_url = std::env::var("MARTY_TEST_REDIS_URL").expect("disposable Redis URL");
     let keys: Keys = Arc::new(Mutex::new(BTreeMap::new()));
     let kms = Router::new()
+        .route("/v1/transit/keys", get(list_keys))
         .route(
             "/v1/transit/keys/{reference}",
             get(read_key).post(create_key),
@@ -310,10 +329,21 @@ async fn issuer_profile_creates_managed_key_then_resolves_and_signs_without_a_lo
 async fn failed_managed_provision_does_not_activate_an_issuer_profile() {
     assert_eq!(std::env::var("BAO_TOKEN").as_deref(), Ok("test-only"));
     let redis_url = std::env::var("MARTY_TEST_REDIS_URL").expect("disposable Redis URL");
-    let kms = Router::new().route(
-        "/v1/transit/keys/{reference}",
-        axum::routing::post(|| async { StatusCode::SERVICE_UNAVAILABLE }),
-    );
+    let kms = Router::new()
+        .route(
+            "/v1/transit/keys",
+            get(|| async { Json(json!({"data": {"keys": []}})) }),
+        )
+        .route(
+            "/v1/transit/keys/{reference}",
+            get(|| async {
+                (
+                    StatusCode::NOT_FOUND,
+                    Json(json!({"errors": ["key not found"]})),
+                )
+            })
+            .post(|| async { StatusCode::SERVICE_UNAVAILABLE }),
+        );
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let endpoint = format!("http://{}", listener.local_addr().unwrap());
     let server = tokio::spawn(async move { axum::serve(listener, kms).await.unwrap() });
@@ -351,6 +381,165 @@ async fn failed_managed_provision_does_not_activate_an_issuer_profile() {
         .as_array()
         .unwrap()
         .is_empty());
+    server.abort();
+}
+
+#[tokio::test]
+#[ignore = "requires disposable MARTY_TEST_REDIS_URL and BAO_TOKEN=test-only"]
+async fn denied_read_or_missing_mount_never_provisions_a_profile() {
+    assert_eq!(std::env::var("BAO_TOKEN").as_deref(), Ok("test-only"));
+    let redis_url = std::env::var("MARTY_TEST_REDIS_URL").expect("disposable Redis URL");
+    for (read_status, list_status) in [
+        (StatusCode::FORBIDDEN, StatusCode::OK),
+        (StatusCode::NOT_FOUND, StatusCode::NOT_FOUND),
+    ] {
+        let create_attempts = Arc::new(AtomicUsize::new(0));
+        let kms = Router::new()
+            .route("/v1/transit/keys", get(move || async move { list_status }))
+            .route(
+                "/v1/transit/keys/{reference}",
+                get(move || async move { read_status }).post({
+                    let create_attempts = Arc::clone(&create_attempts);
+                    move || {
+                        let create_attempts = Arc::clone(&create_attempts);
+                        async move {
+                            create_attempts.fetch_add(1, Ordering::SeqCst);
+                            StatusCode::NO_CONTENT
+                        }
+                    }
+                }),
+            );
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let endpoint = format!("http://{}", listener.local_addr().unwrap());
+        let server = tokio::spawn(async move { axum::serve(listener, kms).await.unwrap() });
+        let organization_id = format!("managed-read-fail-{}", Uuid::new_v4().simple());
+        let registry = RegistryStore::connect(&redis_url)
+            .await
+            .unwrap()
+            .with_managed_openbao(Some(endpoint));
+        let profiles = ProfileStore::from_connection(registry.connection());
+        let app = router_with_dependencies(
+            "test-internal-key".into(),
+            Some(registry.clone()),
+            Some(DocumentStore::from_connection(registry.connection())),
+            None,
+            Some(profiles.clone()),
+            None,
+            Some("issuer.example".into()),
+        );
+        let (status, response) = json_route(
+            &app,
+            "POST",
+            &format!("/v1/signing-keys/issuer-identities?organization_id={organization_id}"),
+            json!({
+                "organization_id": organization_id,
+                "issuer_did": format!("did:web:issuer.example:orgs:{organization_id}"),
+                "key_purpose": "vc_jwt_issuer",
+                "credential_format": "SD_JWT_VC",
+                "algorithm": "EdDSA"
+            }),
+        )
+        .await;
+        assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE, "{response}");
+        assert_eq!(create_attempts.load(Ordering::SeqCst), 0);
+        assert!(profiles.list(&organization_id).await.unwrap()["profiles"]
+            .as_array()
+            .unwrap()
+            .is_empty());
+        server.abort();
+    }
+}
+
+#[tokio::test]
+#[ignore = "requires disposable MARTY_TEST_REDIS_URL and BAO_TOKEN=test-only"]
+async fn existing_managed_key_profiles_with_read_access_and_no_create_permission() {
+    assert_eq!(std::env::var("BAO_TOKEN").as_deref(), Ok("test-only"));
+    let redis_url = std::env::var("MARTY_TEST_REDIS_URL").expect("disposable Redis URL");
+    let organization_id = format!("managed-read-only-{}", Uuid::new_v4().simple());
+    let did = format!("did:web:issuer.example:orgs:{organization_id}");
+    let tuple = format!("{organization_id}|{did}|vc_jwt_issuer|SD_JWT_VC|EdDSA");
+    let token = Uuid::new_v5(&Uuid::NAMESPACE_URL, tuple.as_bytes())
+        .simple()
+        .to_string();
+    let reference = format!("cred-issuer-{}-eddsa", &token[..20]);
+    let keys: Keys = Arc::new(Mutex::new(BTreeMap::from([(
+        reference.clone(),
+        "ed25519".into(),
+    )])));
+    let create_attempts = Arc::new(AtomicUsize::new(0));
+    let kms = Router::new()
+        .route(
+            "/v1/transit/keys/{reference}",
+            get(read_key).post({
+                let create_attempts = Arc::clone(&create_attempts);
+                move || {
+                    let create_attempts = Arc::clone(&create_attempts);
+                    async move {
+                        create_attempts.fetch_add(1, Ordering::SeqCst);
+                        StatusCode::FORBIDDEN
+                    }
+                }
+            }),
+        )
+        .route(
+            "/v1/transit/sign/{reference}",
+            axum::routing::post(sign_key),
+        )
+        .with_state(keys);
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let endpoint = format!("http://{}", listener.local_addr().unwrap());
+    let server = tokio::spawn(async move { axum::serve(listener, kms).await.unwrap() });
+    let registry = RegistryStore::connect(&redis_url)
+        .await
+        .unwrap()
+        .with_managed_openbao(Some(endpoint));
+    let profiles = ProfileStore::from_connection(registry.connection());
+    let app = router_with_dependencies(
+        "test-internal-key".into(),
+        Some(registry.clone()),
+        Some(DocumentStore::from_connection(registry.connection())),
+        None,
+        Some(profiles.clone()),
+        None,
+        Some("issuer.example".into()),
+    );
+    let (status, created) = json_route(
+        &app,
+        "POST",
+        &format!("/v1/signing-keys/issuer-identities?organization_id={organization_id}"),
+        json!({
+            "organization_id": organization_id,
+            "issuer_did": did,
+            "key_purpose": "vc_jwt_issuer",
+            "credential_format": "SD_JWT_VC",
+            "algorithm": "EdDSA"
+        }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{created}");
+    let (status, signed) = json_route(
+        &app,
+        "POST",
+        "/internal/compat/issuer-dids/sign",
+        json!({
+            "organization_id": organization_id,
+            "issuer_did": did,
+            "key_purpose": "vc_jwt_issuer",
+            "credential_format": "SD_JWT_VC",
+            "algorithm": "EdDSA",
+            "payload_b64": "cGF5bG9hZA"
+        }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{signed}");
+    assert_eq!(create_attempts.load(Ordering::SeqCst), 0);
+    assert_eq!(
+        profiles.list(&organization_id).await.unwrap()["profiles"]
+            .as_array()
+            .unwrap()
+            .len(),
+        1
+    );
     server.abort();
 }
 

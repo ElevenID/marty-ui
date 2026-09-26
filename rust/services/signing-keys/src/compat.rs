@@ -625,11 +625,27 @@ impl SigningCompatibilityService {
                 .ok_or(CompatibilityError::ServiceNotFound)?;
             service.insert("key_reference".into(), Value::String(reference.into()));
             service.insert("algorithm".into(), Value::String(algorithm.into()));
-            let created = kms::create_managed_openbao(ProviderRequest {
-                service_config: Value::Object(service),
+            let configuration = Value::Object(service);
+            let created = match kms::read_managed_openbao(ProviderRequest {
+                service_config: configuration.clone(),
             })
             .await
-            .map_err(map_kms_error)?;
+            {
+                Ok(existing) => existing,
+                Err(error) => {
+                    if !kms::missing_managed_openbao_key(&configuration, &error)
+                        .await
+                        .map_err(map_kms_error)?
+                    {
+                        return Err(map_kms_error(error));
+                    }
+                    kms::create_managed_openbao(ProviderRequest {
+                        service_config: configuration,
+                    })
+                    .await
+                    .map_err(map_kms_error)?
+                }
+            };
             if created.get("status").and_then(Value::as_str) != Some("active") {
                 return Err(CompatibilityError::Conflict(
                     "Managed KMS key does not support signing.".into(),
