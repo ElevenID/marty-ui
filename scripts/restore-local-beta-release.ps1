@@ -170,6 +170,24 @@ $applicationServices = @(
     "revocation-profile", "device-registration", "event-stream", "signing-keys", "issuance",
     "issuance-native", "canvas-sync-worker", "gateway"
 )
+$priorBureau = @($preDeploy | Where-Object { $_.service -eq "passport-beta-bureau" })
+if ($priorBureau.Count -gt 1) { throw "Ambiguous beta passport bureau recovery records" }
+if ($priorBureau.Count -eq 1) {
+    if ($priorBureau[0].image_id -notmatch '^sha256:[0-9a-f]{64}$' -or
+        $priorBureau[0].compose_project -ne $project -or
+        $priorBureau[0].compose_service -ne "passport-beta-bureau") {
+        throw "Invalid beta passport bureau recovery record"
+    }
+    $env:MARTY_SERVICES_IMAGE = [string]$priorBureau[0].image_id
+    $composeFiles += Join-Path $repoRoot "docker-compose.profile.passport-native-beta.yml"
+    $applicationServices += "passport-beta-bureau"
+}
+$currentBureauIds = @(& docker ps -a --filter "label=com.docker.compose.project=$project" `
+    --filter "label=com.docker.compose.service=passport-beta-bureau" --format '{{.ID}}')
+if ($LASTEXITCODE -ne 0 -or $currentBureauIds.Count -gt 1) {
+    throw "Could not uniquely resolve current beta passport bureau"
+}
+$currentBureau = if ($currentBureauIds.Count -eq 1) { [string]$currentBureauIds[0] } else { $null }
 $gatewayRecord = @($preDeploy | Where-Object { $_.service -eq "gateway" } | Select-Object -First 1)
 if ($gatewayRecord.Count -eq 1) {
     foreach ($name in @("MARTY_RELEASE_VERSION", "MARTY_UI_SHA", "ELEVENID_STACK_VERSION", "ELEVENID_COMPONENT_REVISIONS_JSON", "ELEVENID_IMAGE_DIGESTS_JSON")) {
@@ -245,6 +263,9 @@ $applicantVolumeName = Assert-BetaVolume "elevenid-beta_applicant_data"
 $yaml -join "`n" | Set-Content -LiteralPath $restoreImages -Encoding utf8
 $composeFiles += $restoreImages
 Invoke-Checked docker (Get-ComposeArgs (@("stop") + $applicationServices + @("keycloak")))
+if ($priorBureau.Count -eq 0 -and $currentBureau) {
+    Invoke-Checked docker @("stop", $currentBureau)
+}
 
 Invoke-Checked docker @("cp", (Join-Path $backupDir "postgres-marty.dump"), "${postgres}:/tmp/beta-restore-marty.dump")
 Invoke-Checked docker @("cp", (Join-Path $backupDir "postgres-keycloak.dump"), "${postgres}:/tmp/beta-restore-keycloak.dump")
@@ -270,6 +291,9 @@ if ("canvas-sync-worker" -notin @($preDeploy.service)) {
 if ("issuance-native" -notin @($preDeploy.service)) {
     $nativeIssuance = Find-ServiceContainer "issuance-native"
     if ($nativeIssuance) { Invoke-Checked docker @("rm", "--force", $nativeIssuance) }
+}
+if ($priorBureau.Count -eq 0 -and $currentBureau) {
+    Invoke-Checked docker @("rm", $currentBureau)
 }
 
 if ($uiRecord.Count -eq 1) {
