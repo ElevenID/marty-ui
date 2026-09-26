@@ -17,6 +17,8 @@
     {"method": "GET", "path": "/internal/signing-keys/csca-trust-anchors", "operation": "csca_trust_anchors"},
     {"method": "POST", "path": "/internal/signing-keys/passport-artifacts/encrypt", "operation": "passport_artifact_encrypt"},
     {"method": "POST", "path": "/internal/signing-keys/passport-artifacts/decrypt", "operation": "passport_artifact_decrypt"},
+    {"method": "POST", "path": "/internal/signing-keys/passport-callbacks/sign", "operation": "passport_callback_sign"},
+    {"method": "POST", "path": "/internal/signing-keys/passport-callbacks/verify", "operation": "passport_callback_verify"},
     {"method": "POST", "path": "/internal/signing-keys/services/{service_id}/sign", "example_path": "/internal/signing-keys/services/service-1/sign", "operation": "service_sign"}
   ],
   "dedicated_auth": {
