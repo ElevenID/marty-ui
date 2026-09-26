@@ -78,6 +78,7 @@ LOADED_INPUTS = {
     "TOKEN_HMAC_KEY",
 }
 EXPLICIT_POLICY = {"DIDCOMM_ENCRYPTION_POLICY_FILE", "DIDCOMM_TLS_CA_FILE"}
+PASSPORT_BETA_ONLY_FILE_ALIASES = {"PHYSICAL_DOCUMENT_ARTIFACT_KEY_FILE"}
 CONFIG_META = {"CARGO_PKG_VERSION", "MARTY_ISSUANCE__"}
 SHARED_ADDITIONS = {
     "ALLOWED_REDIRECT_URIS": "${ALLOWED_REDIRECT_URIS:-}",
@@ -142,7 +143,13 @@ def assert_input_inventory():
         key: model["x-issuance-application-env"].get(key) for key in SHARED_SETTINGS
     } == SHARED_SETTINGS
     assert {key: native.get(key) for key in NATIVE_ADDITIVE} == NATIVE_ADDITIVE
-    expected_omitted = LOADED_INPUTS | EXPLICIT_POLICY | CONFIG_META | UNFORWARDED
+    expected_omitted = (
+        LOADED_INPUTS
+        | EXPLICIT_POLICY
+        | PASSPORT_BETA_ONLY_FILE_ALIASES
+        | CONFIG_META
+        | UNFORWARDED
+    )
     actual_omitted = inputs - set(native)
     assert actual_omitted == expected_omitted, (
         "Update the exhaustive self-host native configuration inventory: "
