@@ -42,8 +42,12 @@ service-CSR handlers. The managed shared service is rejected in favor of the
 issuer identity route. Registered-service certificate uploads are matched to
 the current KMS public key, and CSRs are signed by that KMS key and verified
 before release. The console asks for the country and organization explicitly.
-These three pairs are no longer absent from the local router, leaving 21
-declared method/path pairs without local public handlers. However, the
-three new routes still require authenticated through-Gateway and live
-registered-service KMS tests before they count as cutover-accepted. The
+These three pairs are no longer absent from the local router, but they
+still require authenticated through-Gateway and live
+registered-service KMS tests before they count as cutover-accepted. A fourth
+local adapter now restores `GET /config/certificate-expiry-alerts` using the
+existing Rust alert kernel and the stored service-certificate override, with
+its response frozen in `contracts/signing-certificate-alerts-behavior.json`.
+Thus 20 declared pairs remain without local public handlers. The alert route
+also needs an authenticated through-Gateway runtime test. The
 24-pair table above remains the protected-main audit baseline.
