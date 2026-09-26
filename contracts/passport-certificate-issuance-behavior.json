@@ -4,7 +4,7 @@
   "public_route": {
     "method": "POST",
     "path": "/v1/signing-keys/issuer-identities/dsc-certificate",
-    "operator_claim_source": "gateway-validated authenticated principal and organization context",
+    "operator_claim_source": "gateway-validated authenticated principal and organization context; Gateway injects its Signing Keys internal API key only after the exact route permission check, and Signing Keys rejects the route without that key",
     "required_permission": "passport-certificate:issue",
     "request_fields": ["organization_id", "dsc_issuer_did", "csca_issuer_did", "csca_certificate_id", "credential_format", "country", "organization", "common_name", "validity_days", "idempotency_key"],
     "response_fields": ["certificate_pem", "chain_pem", "dsc_issuer_did", "csca_issuer_did", "subject", "serial", "not_before", "not_after", "status"],
