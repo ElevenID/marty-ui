@@ -248,7 +248,7 @@ impl PostgresPassportRepository {
     ) -> Result<Option<PassportJob>, PassportWebhookRepositoryError> {
         let mut transaction = self.pool.begin().await?;
         let matches = sqlx::query(
-            "SELECT id, organization_id FROM issuance_service.physical_document_jobs
+            "SELECT * FROM issuance_service.physical_document_jobs
              WHERE bureau_job_id = $1 AND organization_id = $2 LIMIT 2 FOR UPDATE",
         )
         .bind(event.bureau_job_id())
@@ -261,6 +261,12 @@ impl PostgresPassportRepository {
         let Some(matched) = matches.first() else {
             return Ok(None);
         };
+        let current_status: &str = matched.try_get("status")?;
+        if !should_apply_webhook_status(current_status, event.status().issuance_status()) {
+            let unchanged = row_to_job(matched)?;
+            transaction.commit().await?;
+            return Ok(Some(unchanged));
+        }
         let id: &str = matched.try_get("id")?;
         let organization_id: &str = matched.try_get("organization_id")?;
         let updated = sqlx::query(
@@ -284,6 +290,26 @@ impl PostgresPassportRepository {
             .map(row_to_job)
             .transpose()
             .map_err(Into::into)
+    }
+}
+
+fn should_apply_webhook_status(current: &str, incoming: &str) -> bool {
+    if matches!(current, "ACTIVE" | "FAILED" | "CANCELLED") {
+        return false;
+    }
+    if matches!(incoming, "FAILED" | "CANCELLED") {
+        return true;
+    }
+    let rank = |status| match status {
+        "SUBMITTED" => Some(1),
+        "IN_PRODUCTION" => Some(2),
+        "QUALITY_CHECK" => Some(3),
+        "READY_FOR_ACTIVATION" => Some(4),
+        _ => None,
+    };
+    match (rank(current), rank(incoming)) {
+        (Some(current), Some(incoming)) => incoming >= current,
+        _ => true,
     }
 }
 
@@ -314,4 +340,34 @@ fn row_to_job(row: &PgRow) -> Result<PassportJob, sqlx::Error> {
         created_at: row.try_get("created_at")?,
         updated_at: row.try_get("updated_at")?,
     })
+}
+
+#[cfg(test)]
+mod webhook_state_tests {
+    use super::should_apply_webhook_status;
+    use serde_json::Value;
+
+    #[test]
+    fn stale_or_terminal_callback_never_rewinds_a_document() {
+        let contract: Value = serde_json::from_str(include_str!(
+            "../../../../contracts/passport-webhook-progress-behavior.json"
+        ))
+        .unwrap();
+        assert_eq!(contract["schema_version"], 1);
+        for (field, expected) in [
+            ("accepted_transitions", true),
+            ("ignored_transitions", false),
+        ] {
+            for pair in contract[field].as_array().unwrap() {
+                assert_eq!(
+                    should_apply_webhook_status(
+                        pair[0].as_str().unwrap(),
+                        pair[1].as_str().unwrap()
+                    ),
+                    expected,
+                    "transition: {pair}"
+                );
+            }
+        }
+    }
 }
