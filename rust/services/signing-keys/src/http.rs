@@ -111,6 +111,7 @@ pub fn router_with_dependencies(
         .route("/redoc", get(redoc))
         .route("/v1/signing-keys/service-status", get(service_status))
         .route("/v1/signing-keys", get(list_public_signing_keys))
+        .route("/v1/signing-keys/jwks", get(public_organization_jwks))
         .route(
             "/v1/signing-keys/config",
             get(public_config).patch(save_public_config),
@@ -599,6 +600,82 @@ async fn public_config(
     match store.load(&scope.organization_id).await {
         Ok(registry) => Json(public_config_document(&state, registry)).into_response(),
         Err(error) => public_error(StatusCode::SERVICE_UNAVAILABLE, &error.to_string()),
+    }
+}
+
+fn public_jwks_document(
+    document: Value,
+    organization_id: &str,
+) -> Result<Value, PublicSigningError> {
+    let keys = document
+        .get("keys")
+        .and_then(Value::as_array)
+        .ok_or_else(|| public_failure(StatusCode::BAD_GATEWAY, "Stored JWKS is malformed."))?;
+    let sanitized = keys
+        .iter()
+        .map(|key| {
+            let sanitized = documents::sanitize_public_jwk(key, None)?;
+            const PUBLIC_JWK_FIELDS: &[&str] = &[
+                "kty",
+                "crv",
+                "x",
+                "y",
+                "n",
+                "e",
+                "kid",
+                "use",
+                "alg",
+                "key_ops",
+                "x5c",
+                "x5t",
+                "x5t#S256",
+                "service_id",
+                "name",
+                "status",
+            ];
+            let fields = sanitized
+                .as_object()
+                .expect("sanitized JWK is an object")
+                .iter()
+                .filter(|(name, _)| PUBLIC_JWK_FIELDS.contains(&name.as_str()))
+                .map(|(name, value)| (name.clone(), value.clone()))
+                .collect();
+            Ok::<Value, documents::DocumentError>(Value::Object(fields))
+        })
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|_| public_failure(StatusCode::BAD_GATEWAY, "Stored JWKS is malformed."))?;
+    Ok(json!({
+        "keys": sanitized,
+        "organization_id": organization_id,
+        "updated_at": document.get("updated_at"),
+    }))
+}
+
+async fn public_organization_jwks(
+    State(state): State<AppState>,
+    Query(scope): Query<OrganizationScope>,
+) -> Response {
+    if let Err(error) = validate_service_scope(&scope.organization_id, None) {
+        return error.into_response();
+    }
+    let Some(store) = state.document_store.as_ref() else {
+        return public_error(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "Signing document storage is unavailable.",
+        );
+    };
+    let document = match store.jwks(&scope.organization_id).await {
+        Ok(document) => document,
+        Err(_) => {
+            return public_error(
+                StatusCode::SERVICE_UNAVAILABLE,
+                "Signing document storage is unavailable.",
+            )
+        }
+    };
+    match public_jwks_document(document, &scope.organization_id) {
+        Ok(document) => Json(document).into_response(),
+        Err(error) => error.into_response(),
     }
 }
 
@@ -2820,6 +2897,9 @@ async fn openapi() -> Json<serde_json::Value> {
             "/v1/signing-keys/config/certificate-expiry-alerts": {
                 "get": {"summary": "Registered Service Certificate Expiry Alerts", "responses": {"200": {"description": "Tenant-scoped alerts using stored certificate overrides"}}}
             },
+            "/v1/signing-keys/jwks": {
+                "get": {"summary": "Organization Public JWKS", "responses": {"200": {"description": "Public JWKs without KMS custody coordinates"}}}
+            },
             "/v1/signing-keys/service-status": {"get": {"summary": "Signing Keys Service Extraction Status", "responses": {"200": {"description": "Successful Response"}}}},
             "/v1/signing-keys/config/purposes": {"get": {"summary": "List Available Key Purposes", "responses": {"200": {"description": "Successful Response"}}}},
             "/v1/signing-keys/config/service-capabilities": {"get": {"summary": "List Provider Capability Metadata", "responses": {"200": {"description": "Successful Response"}}}}
@@ -3063,6 +3143,34 @@ mod public_contract_tests {
         .unwrap();
         assert_eq!(alerts.alerts.len(), 1);
         assert_eq!(alerts.alerts[0].service_id.as_deref(), Some("service-a"));
+    }
+
+    #[test]
+    fn public_jwks_preserves_verification_fields_but_never_returns_custody_fields() {
+        let behavior: Value = serde_json::from_str(include_str!(
+            "../../../../contracts/signing-public-jwks-behavior.json"
+        ))
+        .unwrap();
+        assert_eq!(behavior["path"], "/v1/signing-keys/jwks");
+        let document = json!({
+            "organization_id": "untrusted-stored-org", "updated_at": "2026-09-26T00:00:00Z",
+            "auth_reference": "secret-top-level-token",
+            "keys": [{
+                "kty": "EC", "crv": "P-256", "x": "public-x", "y": "public-y", "kid": "public-id",
+                "x5c": ["public-cert"], "service_id": "service-a", "status": "active",
+                "d": "private-scalar", "key_reference": "internal-key-name",
+                "auth_reference": "secret-token", "private_key": "forbidden"
+            }]
+        });
+        let projected = public_jwks_document(document, "org-a").unwrap();
+        assert_eq!(projected["keys"][0]["kid"], "public-id");
+        assert_eq!(projected["organization_id"], "org-a");
+        assert_eq!(projected["keys"][0]["x5c"][0], "public-cert");
+        assert!(projected.get("auth_reference").is_none());
+        for field in behavior["forbidden_fields"].as_array().unwrap() {
+            assert!(projected["keys"][0].get(field.as_str().unwrap()).is_none());
+        }
+        assert!(public_jwks_document(json!({"keys": [{}]}), "org-a").is_err());
     }
 
     #[tokio::test]

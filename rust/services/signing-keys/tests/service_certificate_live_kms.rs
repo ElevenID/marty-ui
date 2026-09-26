@@ -126,6 +126,27 @@ async fn registered_service_csr_is_signed_by_kms_through_public_rust_route() {
     assert!(!serialized.contains("key_reference"));
     assert!(!serialized.contains("private_key"));
 
+    let jwks_request = Request::builder()
+        .uri(format!(
+            "/v1/signing-keys/jwks?organization_id={organization_id}"
+        ))
+        .body(Body::empty())
+        .expect("JWKS request");
+    let jwks_response = app
+        .clone()
+        .oneshot(jwks_request)
+        .await
+        .expect("JWKS response");
+    assert_eq!(jwks_response.status(), StatusCode::OK);
+    let jwks: Value = serde_json::from_slice(
+        &to_bytes(jwks_response.into_body(), 1_048_576)
+            .await
+            .expect("JWKS body"),
+    )
+    .expect("JWKS JSON");
+    assert_eq!(jwks["organization_id"], organization_id);
+    assert_eq!(jwks["keys"], json!([]));
+
     let missing = Request::builder()
         .uri(format!(
             "/v1/signing-keys/services/service-a/certificate?organization_id={organization_id}"
