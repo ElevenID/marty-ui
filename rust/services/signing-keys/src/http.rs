@@ -121,6 +121,10 @@ pub fn router_with_dependencies(
             post(validate_public_service),
         )
         .route(
+            "/v1/signing-keys/config/certificate-expiry-alerts",
+            get(public_certificate_expiry_alerts),
+        )
+        .route(
             "/v1/signing-keys/issuer-identities",
             get(list_public_issuer_identities)
                 .post(create_public_issuer_identity)
@@ -407,6 +411,17 @@ struct ServiceCsrRequest {
     common_name: String,
 }
 
+#[derive(Debug, Deserialize)]
+struct CertificateExpiryAlertQuery {
+    organization_id: String,
+    #[serde(default = "default_certificate_alert_days")]
+    days_until_expiry: i64,
+}
+
+fn default_certificate_alert_days() -> i64 {
+    30
+}
+
 impl PassportCsrRequest {
     fn identity(&self) -> IssuerIdentityRequest {
         IssuerIdentityRequest {
@@ -593,6 +608,88 @@ async fn public_config(
     match store.load(&scope.organization_id).await {
         Ok(registry) => Json(public_config_document(&state, registry)).into_response(),
         Err(error) => public_error(StatusCode::SERVICE_UNAVAILABLE, &error.to_string()),
+    }
+}
+
+fn services_with_certificate_overrides(registry: &Value, overrides: &Value) -> Vec<Value> {
+    let certificates = documents::normalize_certificate_overrides(overrides);
+    registry
+        .get("services")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter(|service| service.is_object())
+        .map(|service| {
+            let mut service = service.clone();
+            if let Some(attachment) = service
+                .get("id")
+                .and_then(Value::as_str)
+                .and_then(|id| certificates.get(id))
+            {
+                for field in ["cert_pem", "cert_chain_pem", "cert_expires_at"] {
+                    if let Some(value) = attachment.get(field) {
+                        service[field] = value.clone();
+                    }
+                }
+            }
+            service
+        })
+        .collect()
+}
+
+async fn public_certificate_expiry_alerts(
+    State(state): State<AppState>,
+    Query(query): Query<CertificateExpiryAlertQuery>,
+) -> Response {
+    if let Err(error) = validate_service_scope(&query.organization_id, None) {
+        return error.into_response();
+    }
+    if !(0..=36_500).contains(&query.days_until_expiry) {
+        return public_error(
+            StatusCode::UNPROCESSABLE_ENTITY,
+            "days_until_expiry must be between 0 and 36500.",
+        );
+    }
+    let Some(registry_store) = state.registry_store.as_ref() else {
+        return public_error(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "Signing registry is unavailable.",
+        );
+    };
+    let Some(document_store) = state.document_store.as_ref() else {
+        return public_error(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "Certificate storage is unavailable.",
+        );
+    };
+    let registry = match registry_store.load(&query.organization_id).await {
+        Ok(registry) => registry,
+        Err(_) => {
+            return public_error(
+                StatusCode::SERVICE_UNAVAILABLE,
+                "Signing registry is unavailable.",
+            )
+        }
+    };
+    let overrides = match document_store
+        .certificate_overrides(&query.organization_id)
+        .await
+    {
+        Ok(overrides) => overrides,
+        Err(_) => {
+            return public_error(
+                StatusCode::SERVICE_UNAVAILABLE,
+                "Certificate storage is unavailable.",
+            )
+        }
+    };
+    match documents::certificate_alerts(CertificateAlertsRequest {
+        services: services_with_certificate_overrides(&registry, &overrides),
+        days_until_expiry: query.days_until_expiry,
+        now: None,
+    }) {
+        Ok(alerts) => Json(alerts).into_response(),
+        Err(error) => document_error(error).into_response(),
     }
 }
 
@@ -2687,6 +2784,9 @@ async fn openapi() -> Json<serde_json::Value> {
             "/v1/signing-keys/services/{service_id}/certificate-csr": {
                 "post": {"summary": "Generate Registered Service CSR", "responses": {"200": {"description": "PKCS#10 request signed by the configured KMS key"}}}
             },
+            "/v1/signing-keys/config/certificate-expiry-alerts": {
+                "get": {"summary": "Registered Service Certificate Expiry Alerts", "responses": {"200": {"description": "Tenant-scoped alerts using stored certificate overrides"}}}
+            },
             "/v1/signing-keys/service-status": {"get": {"summary": "Signing Keys Service Extraction Status", "responses": {"200": {"description": "Successful Response"}}}},
             "/v1/signing-keys/config/purposes": {"get": {"summary": "List Available Key Purposes", "responses": {"200": {"description": "Successful Response"}}}},
             "/v1/signing-keys/config/service-capabilities": {"get": {"summary": "List Provider Capability Metadata", "responses": {"200": {"description": "Successful Response"}}}}
@@ -2898,6 +2998,40 @@ mod public_contract_tests {
         assert!(service_certificate_key_config(&ambiguous).is_err());
     }
 
+    #[test]
+    fn certificate_alerts_overlay_service_certificates_without_profile_leakage() {
+        let behavior: Value = serde_json::from_str(include_str!(
+            "../../../../contracts/signing-certificate-alerts-behavior.json"
+        ))
+        .unwrap();
+        assert_eq!(
+            behavior["path"],
+            "/v1/signing-keys/config/certificate-expiry-alerts"
+        );
+        assert_eq!(behavior["query"]["days_until_expiry_default"], 30);
+        let registry = json!({"services": [
+            {"id": "service-a", "name": "Signer", "cert_expires_at": "2035-01-01T00:00:00Z"},
+            {"id": "service-b", "name": "Other", "cert_expires_at": "2034-01-01T00:00:00Z"}
+        ]});
+        let overrides = json!({
+            "services": {"service-a": {"cert_pem": "public-a", "cert_expires_at": "2026-10-01T00:00:00Z", "key_reference": "must-not-leak"}},
+            "profiles": {"profile-a": {"cert_expires_at": "2026-09-27T00:00:00Z"}}
+        });
+        let services = services_with_certificate_overrides(&registry, &overrides);
+        assert_eq!(services.len(), 2);
+        assert_eq!(services[0]["cert_expires_at"], "2026-10-01T00:00:00Z");
+        assert_eq!(services[1]["cert_expires_at"], "2034-01-01T00:00:00Z");
+        assert!(services[0].get("key_reference").is_none());
+        let alerts = documents::certificate_alerts(CertificateAlertsRequest {
+            services,
+            days_until_expiry: 30,
+            now: Some("2026-09-26T00:00:00Z".into()),
+        })
+        .unwrap();
+        assert_eq!(alerts.alerts.len(), 1);
+        assert_eq!(alerts.alerts[0].service_id.as_deref(), Some("service-a"));
+    }
+
     #[tokio::test]
     async fn service_certificate_routes_reject_custody_fields_before_storage() {
         let request = |method: &str, path: &str, body: Value| {
@@ -2952,6 +3086,23 @@ mod public_contract_tests {
             .await
             .unwrap();
         assert_eq!(response.status(), StatusCode::UNPROCESSABLE_ENTITY);
+    }
+
+    #[tokio::test]
+    async fn public_certificate_alert_route_validates_threshold_before_storage() {
+        let router = router_with_internal_api_key("test-only".into());
+        let request = |threshold: &str| {
+            Request::builder()
+                .uri(format!(
+                    "/v1/signing-keys/config/certificate-expiry-alerts?organization_id=org-a&days_until_expiry={threshold}"
+                ))
+                .body(Body::empty())
+                .unwrap()
+        };
+        let response = router.clone().oneshot(request("-1")).await.unwrap();
+        assert_eq!(response.status(), StatusCode::UNPROCESSABLE_ENTITY);
+        let response = router.oneshot(request("30")).await.unwrap();
+        assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
     }
 
     #[test]
