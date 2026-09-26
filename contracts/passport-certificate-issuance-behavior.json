@@ -52,7 +52,7 @@
     "provider public key different from the profile's published key",
     "profile or provider key rotation during issuance"
   ],
-  "public_projection": "certificate PEM, chain PEM, issuer identity, subject, serial, validity, and lifecycle status only; no private material, provider token, service configuration, or key locator",
+  "public_projection": "certificate PEM, chain PEM, issuer identity, subject, serial, validity, and historical issuance status only; no private material, provider token, service configuration, or key locator",
   "cases": [
     {"name": "valid_dsc", "result": "issue, verify, attach, and return one DSC certificate under an enrolled KMS-backed CSCA"},
     {"name": "same_request_retry", "result": "return the original certificate without new signing or mutation"},
