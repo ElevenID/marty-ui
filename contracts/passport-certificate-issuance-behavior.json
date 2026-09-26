@@ -1,0 +1,67 @@
+{
+  "schema_version": 1,
+  "scope": "beta passport DSC issuance through active managed issuer profiles; existing CSCA CSR and governed certificate enrollment remain the CSCA ceremony",
+  "public_route": {
+    "method": "POST",
+    "path": "/v1/signing-keys/issuer-identities/dsc-certificate",
+    "operator_claim_source": "gateway-validated authenticated principal and organization context",
+    "required_permission": "passport-certificate:issue",
+    "request_fields": ["organization_id", "dsc_issuer_did", "csca_issuer_did", "csca_certificate_id", "credential_format", "country", "organization", "common_name", "validity_days", "idempotency_key"],
+    "response_fields": ["certificate_pem", "chain_pem", "dsc_issuer_did", "csca_issuer_did", "subject", "serial", "not_before", "not_after", "status"],
+    "reject_unknown_fields": true,
+    "errors": {"unauthorized": 401, "forbidden_or_cross_tenant": 403, "invalid_input": 422, "stale_profile_or_retry_conflict": 409, "unavailable_kms_or_storage": 503, "invalid_kms_signature": 502}
+  },
+  "authority": {
+    "operation": "governed operator DSC certificate issuance",
+    "organization_context": "authenticated organization; request cannot select another tenant",
+    "operator_grant": "trusted gateway operator identity and certificate-issue permission are required and fail closed; ordinary signing-key:create or issuer payload-signing grants are insufficient",
+    "signing_identity": "resolve active organization, issuer DID, purpose, format, and algorithm to exactly one issuer profile",
+    "key_reference": "derived from the resolved profile; never accepted from the caller"
+  },
+  "supported": {
+    "algorithm": "ES256 for this beta issuance action; existing CSR and offline authority algorithm support is unchanged",
+    "csca_purpose": "csca",
+    "dsc_purpose": "x509_doc_signer",
+    "private_key_custody": "KMS only; no generated, imported, exported, or serialized private key"
+  },
+  "certificate": {
+    "version": "X.509 v3",
+    "serial": "positive unpredictable DER integer of no more than 20 octets, unique per issuing CSCA",
+    "subject": "bounded validated C, O, and CN from a verified managed DSC CSR; C agrees with the active CSCA and passport issuing country",
+    "csca": "pre-enrolled active and non-revoked CA with valid self-signature, critical CA basic constraints, and keyCertSign usage; CSCA issuance is outside this action",
+    "dsc": "signed by an active valid CSCA, critical non-CA basic constraints and digitalSignature usage",
+    "validity": "bounded by policy; DSC validity must fit within issuer CSCA validity",
+    "csr": "verify proof of possession and require its SPKI to equal the current DSC subject profile KMS public key",
+    "role_separation": "DSC subject and CSCA signer use different active profiles, purposes, and KMS key references",
+    "signature": "require active CSCA certificate public key to equal current CSCA signer profile KMS public key; sign DER TBS via that profile and verify the returned signature against that current KMS public key before publication",
+    "chain": "verify issuer and subject, signature, validity, CA and leaf usage, and active non-revoked CSCA before attachment"
+  },
+  "concurrency": {
+    "rotation": "recheck both active profile revisions and current KMS public keys after signing; use a revision fence at the lifecycle and attachment commit, rejecting any intervening change",
+    "retry": "scope an idempotency key to tenant, DSC profile, CSCA profile, and request digest; replay of identical input returns the stored result, changed input conflicts, and issuer serial reservation is atomic",
+    "failure": "a failed check publishes no certificate and does not mutate lifecycle or profile attachment"
+  },
+  "rejections": [
+    "cross-organization request or profile",
+    "missing, ambiguous, inactive, stale, or wrong-purpose profile",
+    "caller-supplied signing service configuration or key locator",
+    "forged or mismatched CSR, issuer, certificate, signature, country, or critical extension",
+    "expired or revoked CSCA",
+    "unsupported algorithm or key curve",
+    "provider public key different from the profile's published key",
+    "profile or provider key rotation during issuance"
+  ],
+  "public_projection": "certificate PEM, chain PEM, issuer identity, subject, serial, validity, and lifecycle status only; no private material, provider token, service configuration, or key locator",
+  "cases": [
+    {"name": "valid_dsc", "result": "issue, verify, attach, and return one DSC certificate under an enrolled KMS-backed CSCA"},
+    {"name": "same_request_retry", "result": "return the original certificate without new signing or mutation"},
+    {"name": "changed_request_retry", "result": "conflict without mutation"},
+    {"name": "bad_csr_signature_or_spki", "result": "reject without signing or mutation"},
+    {"name": "wrong_purpose_or_cross_tenant_csca", "result": "reject without signing or mutation"},
+    {"name": "expired_or_revoked_csca", "result": "reject without signing or mutation"},
+    {"name": "profile_or_kms_key_rotates_during_operation", "result": "reject without publication or attachment"},
+    {"name": "bad_kms_signature_or_malformed_extensions", "result": "reject without publication or attachment"},
+    {"name": "missing_operator_grant", "result": "forbid before signing or mutation"},
+    {"name": "public_projection", "result": "omit private key, KMS token, service configuration, and key locator"}
+  ]
+}
