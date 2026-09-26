@@ -131,7 +131,10 @@ impl fmt::Debug for GatewayConfig {
             .debug_struct("GatewayConfig")
             .field("address", &self.address)
             .field("production", &self.production)
-            .field("service_urls", &self.service_urls)
+            .field(
+                "service_names",
+                &self.service_urls.keys().collect::<Vec<_>>(),
+            )
             .field("grpc_targets_configured", &true)
             .field("grpc_ca_certificate", &self.grpc_ca_certificate)
             .field("grpc_insecure_allowed", &self.grpc_insecure_allowed)
@@ -625,6 +628,10 @@ mod tests {
     fn gateway_config_debug_redacts_runtime_secrets_and_targets() {
         let values = BTreeMap::from([
             ("ORG_GRPC_TARGET".into(), "private-organization:9002".into()),
+            (
+                "ORGANIZATION_SERVICE_URL".into(),
+                "http://organization:8002/synthetic-service-path-token".into(),
+            ),
             ("GRPC_SERVICE_TOKEN".into(), "synthetic-grpc-token".into()),
             (
                 "SIGNING_KEYS_INTERNAL_API_KEY".into(),
@@ -643,6 +650,7 @@ mod tests {
             "synthetic-signing-key",
             "synthetic-issuance-key",
             "synthetic-redis-password",
+            "synthetic-service-path-token",
         ] {
             assert!(!debug.contains(secret));
         }
