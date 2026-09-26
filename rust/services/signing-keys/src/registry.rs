@@ -551,62 +551,116 @@ impl RegistryStore {
         let service_id = required("signing_service_id")?;
         let key_reference = required("signing_key_reference")?;
         let key_purpose = required("key_purpose")?;
-        if !is_key_purpose(&key_purpose) {
+        self.bind_reference_purpose(
+            organization_id,
+            &service_id,
+            &key_reference,
+            &key_purpose,
+            true,
+        )
+        .await
+    }
+
+    /// Bind a managed key to its purpose without changing organization service defaults.
+    pub async fn bind_key_purpose(
+        &self,
+        organization_id: &str,
+        service_id: &str,
+        key_reference: &str,
+        key_purpose: &str,
+    ) -> Result<Value, RegistryError> {
+        self.bind_reference_purpose(
+            organization_id,
+            service_id,
+            key_reference,
+            key_purpose,
+            false,
+        )
+        .await
+    }
+
+    async fn bind_reference_purpose(
+        &self,
+        organization_id: &str,
+        service_id: &str,
+        key_reference: &str,
+        key_purpose: &str,
+        set_defaults: bool,
+    ) -> Result<Value, RegistryError> {
+        if service_id.trim().is_empty() || key_reference.trim().is_empty() {
+            return Err(RegistryError::Invalid(
+                "Incomplete KMS purpose binding.".into(),
+            ));
+        }
+        if !is_key_purpose(key_purpose) {
             return Err(RegistryError::Invalid(format!(
                 "Invalid key_purpose '{key_purpose}'."
             )));
         }
 
-        let lease = self
-            .acquire_rotation_lease(organization_id)
-            .await?
-            .ok_or(RegistryError::Conflict)?;
-        let mut registry = self.load(organization_id).await?;
-        let bindings = registry
-            .as_object_mut()
-            .expect("normalized registry object")
-            .entry("key_reference_purposes")
-            .or_insert_with(|| json!({}));
-        let bindings = bindings
-            .as_object_mut()
-            .expect("normalized registry bindings object");
-        let references = bindings
-            .entry(service_id.clone())
-            .or_insert_with(|| json!({}))
-            .as_object_mut()
-            .expect("normalized service bindings object");
-        let purposes = references
-            .entry(key_reference)
-            .or_insert_with(|| json!([]))
-            .as_array_mut()
-            .expect("normalized purpose bindings array");
-        if !purposes
-            .iter()
-            .any(|value| value.as_str() == Some(&key_purpose))
-        {
-            purposes.push(Value::String(key_purpose.clone()));
-        }
-        purposes.sort_by(|left, right| left.as_str().cmp(&right.as_str()));
-        let normalized_bindings = normalize_bindings(registry.get("key_reference_purposes"));
-        validate_lti_bindings(&normalized_bindings)?;
-        registry["key_reference_purposes"] = json!(normalized_bindings);
+        // Every whole-registry writer shares this lease. Retry briefly so two
+        // successful KMS creates can both persist their independent bindings.
+        let lease = tokio::time::timeout(std::time::Duration::from_secs(30), async {
+            loop {
+                if let Some(lease) = self.acquire_rotation_lease(organization_id).await? {
+                    break Ok::<_, RegistryError>(lease);
+                }
+                tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+            }
+        })
+        .await
+        .map_err(|_| RegistryError::Conflict)??;
+        let result = async {
+            let mut registry = self.load(organization_id).await?;
+            let bindings = registry
+                .as_object_mut()
+                .expect("normalized registry object")
+                .entry("key_reference_purposes")
+                .or_insert_with(|| json!({}));
+            let bindings = bindings
+                .as_object_mut()
+                .expect("normalized registry bindings object");
+            let references = bindings
+                .entry(service_id.to_owned())
+                .or_insert_with(|| json!({}))
+                .as_object_mut()
+                .expect("normalized service bindings object");
+            let purposes = references
+                .entry(key_reference.to_owned())
+                .or_insert_with(|| json!([]))
+                .as_array_mut()
+                .expect("normalized purpose bindings array");
+            if !purposes
+                .iter()
+                .any(|value| value.as_str() == Some(key_purpose))
+            {
+                purposes.push(Value::String(key_purpose.to_owned()));
+            }
+            purposes.sort_by(|left, right| left.as_str().cmp(&right.as_str()));
+            let normalized_bindings = normalize_bindings(registry.get("key_reference_purposes"));
+            validate_lti_bindings(&normalized_bindings)?;
+            registry["key_reference_purposes"] = json!(normalized_bindings);
 
-        set_default(&mut registry, "type_defaults", &key_purpose, &service_id);
-        for format in formats_for_purposes(std::slice::from_ref(&key_purpose)) {
-            set_default(&mut registry, "format_defaults", &format, &service_id);
+            if set_defaults {
+                set_default(&mut registry, "type_defaults", key_purpose, service_id);
+                for format in formats_for_purposes(&[key_purpose.to_owned()]) {
+                    set_default(&mut registry, "format_defaults", &format, service_id);
+                }
+                if registry
+                    .get("default_service_id")
+                    .and_then(Value::as_str)
+                    .is_none_or(|value| value.trim().is_empty())
+                {
+                    registry["default_service_id"] = Value::String(service_id.to_owned());
+                }
+            }
+            self.save_with_rotation_lease(organization_id, &registry, &lease)
+                .await
         }
-        if registry
-            .get("default_service_id")
-            .and_then(Value::as_str)
-            .is_none_or(|value| value.trim().is_empty())
-        {
-            registry["default_service_id"] = Value::String(service_id);
-        }
-        let saved = self
-            .save_with_rotation_lease(organization_id, &registry, &lease)
-            .await;
-        let _ = lease.release().await;
-        let normalized = saved?;
+        .await;
+        let release = lease.release().await;
+        let normalized = result?;
+        release?;
         Ok(self.with_managed_service(organization_id, normalized).await)
     }
 
@@ -710,13 +764,13 @@ fn tenant_managed_key_name(organization_id: &str, reference: &str) -> bool {
     let tenant = Uuid::new_v5(&Uuid::NAMESPACE_URL, organization_id.as_bytes())
         .simple()
         .to_string();
-    ["cred-issuer-", "cred-dsc-", "lti-tool-"]
+    crate::domain::MANAGED_KEY_PREFIXES
         .iter()
         .any(|prefix| reference.starts_with(&format!("{prefix}{tenant}-")))
 }
 
 fn foreign_namespaced_key(organization_id: &str, reference: &str) -> bool {
-    ["cred-issuer-", "cred-dsc-", "lti-tool-"]
+    crate::domain::MANAGED_KEY_PREFIXES
         .iter()
         .filter_map(|prefix| reference.strip_prefix(prefix))
         .any(|suffix| {
@@ -1552,17 +1606,7 @@ fn is_key_purpose(value: &str) -> bool {
 }
 
 pub(crate) fn managed_key_purposes(reference: &str) -> &'static [&'static str] {
-    if reference.starts_with("oid4vp-verifier-") {
-        &["oid4vp_request_signing"]
-    } else if reference.starts_with("lti-tool-") {
-        &["lti_tool_signing"]
-    } else if reference.starts_with("cred-dsc-") {
-        &["mdoc_dsc", "x509_doc_signer", "vdsnc_signing", "csca"]
-    } else if reference.starts_with("cred-issuer-") {
-        &["vc_jwt_issuer", "jwks_signing"]
-    } else {
-        &[]
-    }
+    crate::domain::managed_key_purposes(reference)
 }
 
 fn contains_if_set(value: Option<&Value>, required: Option<&str>) -> bool {
@@ -1743,17 +1787,19 @@ mod tests {
 
     #[test]
     fn managed_key_scope_keeps_legacy_bound_names_but_rejects_foreign_namespaces() {
-        let own = format!(
-            "cred-issuer-{}-demo-es256",
-            Uuid::new_v5(&Uuid::NAMESPACE_URL, b"org-a").simple()
-        );
-        let foreign = format!(
-            "cred-issuer-{}-demo-es256",
-            Uuid::new_v5(&Uuid::NAMESPACE_URL, b"org-b").simple()
-        );
-        assert!(tenant_managed_key_name("org-a", &own));
-        assert!(!tenant_managed_key_name("org-a", &foreign));
-        assert!(foreign_namespaced_key("org-a", &foreign));
+        for prefix in crate::domain::MANAGED_KEY_PREFIXES {
+            let own = format!(
+                "{prefix}{}-demo-es256",
+                Uuid::new_v5(&Uuid::NAMESPACE_URL, b"org-a").simple()
+            );
+            let foreign = format!(
+                "{prefix}{}-demo-es256",
+                Uuid::new_v5(&Uuid::NAMESPACE_URL, b"org-b").simple()
+            );
+            assert!(tenant_managed_key_name("org-a", &own), "{prefix}");
+            assert!(!tenant_managed_key_name("org-a", &foreign), "{prefix}");
+            assert!(foreign_namespaced_key("org-a", &foreign), "{prefix}");
+        }
         assert!(!foreign_namespaced_key("org-a", "cred-issuer-legacy-es256"));
         assert!(issuer_tuple_key_name(
             "cred-issuer-0123456789abcdef0123-es256"
@@ -1761,6 +1807,10 @@ mod tests {
         assert!(issuer_tuple_key_name(
             "oid4vp-verifier-0123456789abcdef0123-eddsa"
         ));
+        let own = format!(
+            "cred-issuer-{}-demo-es256",
+            Uuid::new_v5(&Uuid::NAMESPACE_URL, b"org-a").simple()
+        );
         assert!(!issuer_tuple_key_name(&own));
         assert!(!issuer_tuple_key_name("cred-issuer-legacy-es256"));
         assert_eq!(
@@ -2031,5 +2081,42 @@ mod tests {
         .unwrap()
         .unwrap();
         assert_eq!(gcp["algorithms"], json!(["EdDSA"]));
+    }
+
+    #[tokio::test]
+    #[ignore = "requires disposable MARTY_TEST_REDIS_URL"]
+    async fn concurrent_purpose_bindings_remain_atomic_with_rotation_lease() {
+        let redis_url = std::env::var("MARTY_TEST_REDIS_URL").expect("disposable Redis URL");
+        let store = RegistryStore::connect(&redis_url).await.unwrap();
+        let organization_id = format!("managed-bind-race-{}", Uuid::new_v4().simple());
+        let key = storage_key(&organization_id);
+        let mut connection = store.connection();
+        let mut tasks = tokio::task::JoinSet::new();
+        for index in 0..24 {
+            let store = store.clone();
+            let organization_id = organization_id.clone();
+            tasks.spawn(async move {
+                store
+                    .bind_key_purpose(
+                        &organization_id,
+                        MANAGED_OPENBAO_SERVICE_ID,
+                        &format!("cred-issuer-race-{index:02}"),
+                        "vc_jwt_issuer",
+                    )
+                    .await
+            });
+        }
+        while let Some(result) = tasks.join_next().await {
+            result.unwrap().unwrap();
+        }
+        let registry = store.load(&organization_id).await.unwrap();
+        assert_eq!(
+            registry["key_reference_purposes"][MANAGED_OPENBAO_SERVICE_ID]
+                .as_object()
+                .unwrap()
+                .len(),
+            24
+        );
+        let _: () = connection.del(&key).await.unwrap();
     }
 }

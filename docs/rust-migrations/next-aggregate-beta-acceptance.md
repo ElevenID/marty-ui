@@ -82,10 +82,12 @@ selected here.
 
    The [Signing Keys public-route parity audit](signing-keys-public-parity-2026-09-26.md)
    found 24 Gateway-declared method/path pairs without Rust public handlers on
-   its protected-main baseline. The stacked review head restores 17, leaving 7
-   without local handlers. Repair and retest those adapters, and exercise the
-   new ones through the authenticated Gateway, before describing the aggregate
-   beta release as feature-complete.
+   its protected-main baseline. The current stacked review head has local Rust
+   handlers for all 24, but they are not yet merged or beta-accepted. The
+   managed-key creation route has an authenticated real-HTTP Gateway-to-Rust
+   test; exercise the other adapters through that boundary, rerun the route
+   audit on protected main after the stack lands, and complete beta acceptance
+   before describing the aggregate release as feature-complete.
 
    Certificate-enrollment follow-up: the protected baseline's service CSR UI
    action lacked a matching public service route. This review branch restores

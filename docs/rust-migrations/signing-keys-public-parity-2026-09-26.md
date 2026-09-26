@@ -182,16 +182,48 @@ rejection, and the JWKS-only deletion boundary; Gateway tests cover session
 authorization and trusted tenant forwarding. Combined Gateway-to-Rust and
 beta acceptance remain open.
 
-Thus 1 declared pair remains without a local public handler:
-`POST /v1/signing-keys`, managed KMS-backed key creation. These new
-adapters still need authenticated combined Gateway-to-Rust runtime tests. The
-24-pair table above remains the protected-main audit baseline.
+The issuer identity/profile create route is the primary KMS-abstracted
+signing path. Callers provide an issuer DID, purpose, format, and algorithm;
+the Rust custody resolver selects a tenant service and provisions the
+deterministic managed key when that service is managed OpenBao. The resulting
+profile publishes an opaque DID verification method, then resolves and signs
+without a caller KMS locator. `contracts/signing-issuer-profile-managed-provision-behavior.json`
+freezes this flow. Its disposable Redis/mock-KMS route gate covers fresh
+create, resolve, DID-mediated sign, custody-free public responses and DID
+document, CSCA and `x509_doc_signer` `ICAO_EMRTD` profiles, reuse of a live key with KMS read/sign
+permission but no create permission, and failed provisioning without an active profile. Nonmanaged
+custody selection and existing published verification method IDs remain in
+place. The issuer-scoped CSR resolver uses
+the stored method ID and compares public key coordinates, so the opaque
+fragment is compatible with its lookup; a real OpenBao CSR signature and
+chain still need the beta gate. Combined Gateway-to-Rust and beta acceptance
+for this profile flow remain open.
 
-For the remaining POST, the released Gateway sanitized a caller name into an
-OpenBao reference and treated an existing reference as success, but did not
-include the organization in that reference. Its Rust port must preserve the
-documented request/response and purpose binding while preventing two tenants
-from selecting the same KMS key by name. Creation must be an explicit KMS
-operation returning public metadata only; neither private material nor a
-Gateway-held KMS credential may enter the public path. Freeze this behavior
-before implementation and test same-name requests across tenants.
+The local direct `POST /v1/signing-keys` route remains the released
+compatibility/admin key-inventory API. It returns public metadata, preserves
+the released four algorithms, purpose binding, LTI isolation, and response
+fields, and includes a deterministic organization namespace in provider key
+names. The released Gateway omitted that namespace and could select the same
+KMS key for same-name requests from two tenants.
+`contracts/signing-managed-key-create-behavior.json` freezes the released
+behavior and this reviewed correction. The disposable Redis/mock-KMS route
+test covers all four algorithms, all advertised purposes through create,
+resolve, and sign, same-name tenant isolation, read-after-create inventory,
+existing-key reuse, rejected algorithms before KMS, stale/foreign inventory
+exclusion, and failed writes leaving registry bindings unchanged.
+An opt-in authenticated Gateway-to-Rust route test now verifies session denial,
+foreign-tenant denial, trusted tenant forwarding through the real HTTP
+upstream transport, managed creation, and public-only inventory against
+disposable Redis and a mock Transit provider. It also reads the new key back
+by ID through the Gateway. The beta deployment gate remains.
+
+All 24 originally missing declared pairs now have local Rust handlers in the
+stacked review branches. A data-driven route-layer test verifies that all 37
+Gateway-declared Signing Keys method/path pairs match Rust public routes and
+do not return method-not-allowed; it does not prove behavioral parity or
+authenticated runtime acceptance for every pair. This is not a merged or
+beta-accepted result. The
+other adapters still need authenticated combined Gateway-to-Rust runtime tests,
+protected CI, re-audit on main, and aggregate beta acceptance before any
+Python retirement or migration-complete claim. The 24-pair table above remains
+the protected-main audit baseline until the stack lands.
