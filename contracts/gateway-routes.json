@@ -21,7 +21,7 @@
       "MIPVersionMiddleware"
     ]
   },
-  "route_count": 436,
+  "route_count": 437,
   "routes": [
     {
       "include_in_schema": true,
@@ -261,6 +261,12 @@
       "include_in_schema": true,
       "method": "GET",
       "path": "/internal/signing-keys/resolve-issuer-did",
+      "status_code": 200
+    },
+    {
+      "include_in_schema": true,
+      "method": "GET",
+      "path": "/internal/signing-keys/csca-trust-anchors",
       "status_code": 200
     },
     {

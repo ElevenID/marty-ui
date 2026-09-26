@@ -17,6 +17,7 @@ pub enum SigningCompatibilityOperation {
     ProfileCertificate { profile_id: String },
     ProfilePublicIdentity { profile_id: String },
     ResolveIssuerDid,
+    CscaTrustAnchors,
     ServiceSign { service_id: String },
 }
 
@@ -38,6 +39,9 @@ pub fn operation(method: HttpMethod, path: &str) -> Option<SigningCompatibilityO
         (HttpMethod::Get, "issuer-profiles") => Some(SigningCompatibilityOperation::ListProfiles),
         (HttpMethod::Get, "resolve-issuer-did") => {
             Some(SigningCompatibilityOperation::ResolveIssuerDid)
+        }
+        (HttpMethod::Get, "csca-trust-anchors") => {
+            Some(SigningCompatibilityOperation::CscaTrustAnchors)
         }
         _ => parameterized(method, relative),
     }
@@ -125,7 +129,7 @@ mod tests {
         ))
         .expect("internal signing contract");
         assert_eq!(contract.schema_version, 1);
-        assert_eq!(contract.routes.len(), 14);
+        assert_eq!(contract.routes.len(), 15);
         for case in contract.routes {
             let path = case.example_path.as_deref().unwrap_or(&case.path);
             let actual = operation(case.method, path).expect("classified route");
@@ -150,6 +154,7 @@ mod tests {
                 "profile_public_identity"
             }
             SigningCompatibilityOperation::ResolveIssuerDid => "resolve_issuer_did",
+            SigningCompatibilityOperation::CscaTrustAnchors => "csca_trust_anchors",
             SigningCompatibilityOperation::ServiceSign { .. } => "service_sign",
         }
     }

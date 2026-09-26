@@ -95,6 +95,26 @@ fn certificate_not_before(request: &ImportCscaCertificateRequest) -> chrono::Dat
 }
 
 #[test]
+fn trust_anchor_projection_excludes_private_routing_and_inactive_certificates() {
+    let request = csca_request("DEU", "German CSCA");
+    let now = certificate_not_before(&request);
+    let mut document = CscaLifecycleDocument::empty("org-a", now);
+    let certificate = request.cert_pem.clone();
+    document.import("csca-deu-1", request, now).unwrap();
+    let active = document.active_certificate_data(now).unwrap();
+    assert_eq!(active.len(), 1);
+    assert_eq!(active[0].certificate_id, "csca-deu-1");
+    assert_eq!(active[0].certificate_data, certificate);
+    assert_eq!(active[0].status, CscaCertificateStatus::Valid);
+    let wire = serde_json::to_value(&active).unwrap().to_string();
+    assert!(!wire.contains("key_reference"));
+    assert!(!wire.contains("hsm://"));
+
+    document.revoke("csca-deu-1", "retired", now).unwrap();
+    assert!(document.active_certificate_data(now).unwrap().is_empty());
+}
+
+#[test]
 fn creation_algorithms_match_the_language_neutral_contract() {
     let contract: Value = serde_json::from_str(include_str!(
         "../../../../contracts/csca-capability-behavior.json"

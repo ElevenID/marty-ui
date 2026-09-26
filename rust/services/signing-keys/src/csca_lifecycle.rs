@@ -459,6 +459,29 @@ impl CscaLifecycleDocument {
             .collect()
     }
 
+    /// Public certificate material for a consumer checking a DSC chain.
+    /// Never expose the managed key reference or lifecycle metadata.
+    pub fn active_certificate_data(
+        &self,
+        now: DateTime<Utc>,
+    ) -> Result<Vec<CscaCertificateDataResponse>, CscaLifecycleError> {
+        Ok(self
+            .list(
+                &ListCscaCertificatesQuery {
+                    status: Some(CscaCertificateStatus::Valid),
+                    subject: None,
+                },
+                now,
+            )?
+            .into_iter()
+            .map(|view| CscaCertificateDataResponse {
+                certificate_id: view.certificate.certificate_id,
+                certificate_data: view.certificate.cert_pem,
+                status: view.status,
+            })
+            .collect())
+    }
+
     pub fn expiring(
         &self,
         days_threshold: i64,
