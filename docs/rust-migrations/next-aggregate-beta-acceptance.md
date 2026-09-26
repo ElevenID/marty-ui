@@ -106,7 +106,12 @@ selected here.
    internal issuer-DID sign route sends the derived profile key and EdDSA payload
    to Transit without returning the KMS locator to callers. Its fixed mock
    signature proves routing and custody selection, not cryptographic validity.
-   Exercise the remaining CSR and rotate paths through Gateway, rerun the
+   A further opt-in Gateway test now creates separate CSCA and DSC issuer
+   profiles with a disposable OpenBao Transit instance, requests both PKCS#10
+   CSRs, and compares each parsed CSR public key with the resolved issuer key.
+   It exercises KMS signing and Rust signature verification through Gateway;
+   it does not issue CA certificates or prove the DSC-to-CSCA chain. Exercise
+   the remaining rotate path through Gateway, rerun the
    route audit on protected main after the stack lands, and complete beta
    acceptance before describing the aggregate release as feature-complete.
 

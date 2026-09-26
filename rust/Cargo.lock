@@ -4652,8 +4652,10 @@ dependencies = [
  "async-trait",
  "axum",
  "chrono",
+ "der 0.7.10",
  "futures-core",
  "http 1.5.0",
+ "marty-crypto 0.1.61",
  "marty-deployment-profile",
  "marty-oid4vci",
  "marty-passport-auth",
@@ -4663,6 +4665,7 @@ dependencies = [
  "percent-encoding",
  "prost",
  "protoc-bin-vendored",
+ "redis",
  "regex",
  "reqwest",
  "serde",
@@ -4680,6 +4683,7 @@ dependencies = [
  "tracing-subscriber",
  "url",
  "uuid",
+ "x509-cert",
 ]
 
 [[package]]
