@@ -33,11 +33,20 @@ pub enum RegistryError {
 }
 
 #[derive(Clone)]
+struct ManagedInventorySnapshot {
+    refreshed_at: Instant,
+    keys: Vec<ManagedKey>,
+    complete: bool,
+    profile_references: BTreeMap<String, bool>,
+}
+
+type ManagedInventoryCache = Arc<RwLock<BTreeMap<String, ManagedInventorySnapshot>>>;
+
+#[derive(Clone)]
 pub struct RegistryStore {
     connection: ConnectionManager,
     managed_openbao_endpoint: Option<String>,
-    managed_inventory:
-        Arc<RwLock<BTreeMap<String, (Instant, Vec<ManagedKey>, bool, BTreeMap<String, bool>)>>>,
+    managed_inventory: ManagedInventoryCache,
 }
 
 impl RegistryStore {
@@ -200,11 +209,13 @@ impl RegistryStore {
             .get(organization_id)
             .cloned();
         let (mut managed_keys, mut inventory_complete) = match cached {
-            Some((at, keys, complete, cached_profiles))
-                if at.elapsed() < Duration::from_secs(if complete { 30 } else { 5 })
-                    && (!profiles_available || cached_profiles == profile_references) =>
+            Some(snapshot)
+                if snapshot.refreshed_at.elapsed()
+                    < Duration::from_secs(if snapshot.complete { 30 } else { 5 })
+                    && (!profiles_available
+                        || snapshot.profile_references == profile_references) =>
             {
-                (keys, complete)
+                (snapshot.keys, snapshot.complete)
             }
             _ => {
                 let mut discovered =
@@ -213,12 +224,12 @@ impl RegistryStore {
                 discovered.1 &= profiles_available;
                 self.managed_inventory.write().await.insert(
                     organization_id.to_owned(),
-                    (
-                        Instant::now(),
-                        discovered.0.clone(),
-                        discovered.1,
-                        profile_references.clone(),
-                    ),
+                    ManagedInventorySnapshot {
+                        refreshed_at: Instant::now(),
+                        keys: discovered.0.clone(),
+                        complete: discovered.1,
+                        profile_references: profile_references.clone(),
+                    },
                 );
                 discovered
             }
@@ -1142,7 +1153,7 @@ mod tests {
     };
     use std::sync::{Arc, Mutex};
 
-    static BAO_ENV_LOCK: Mutex<()> = Mutex::new(());
+    static BAO_ENV_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
 
     #[test]
     fn managed_openbao_accepts_passport_profile_wire_format() {
@@ -1222,10 +1233,7 @@ mod tests {
             {"status": "active", "signing_service_id": MANAGED_OPENBAO_SERVICE_ID,
                 "signing_key_reference": "legacy-shared-key", "key_purpose": "vc_jwt_issuer"}
         ]});
-        assert_eq!(
-            active_managed_profile_references("org-a", &profiles)["legacy-shared-key"],
-            true
-        );
+        assert!(active_managed_profile_references("org-a", &profiles)["legacy-shared-key"]);
     }
 
     #[tokio::test]
@@ -1273,7 +1281,7 @@ mod tests {
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let endpoint = format!("http://{}", listener.local_addr().unwrap());
         let server = tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
-        let _guard = BAO_ENV_LOCK.lock().unwrap();
+        let _guard = BAO_ENV_LOCK.lock().await;
         let previous = std::env::var("BAO_TOKEN").ok();
         std::env::set_var("BAO_TOKEN", "test-only");
         let revoked = "cred-issuer-00000000000000000000-es256";
@@ -1362,7 +1370,7 @@ mod tests {
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let endpoint = format!("http://{}", listener.local_addr().unwrap());
         let server = tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
-        let _guard = BAO_ENV_LOCK.lock().unwrap();
+        let _guard = BAO_ENV_LOCK.lock().await;
         let previous = std::env::var("BAO_TOKEN").ok();
         std::env::set_var("BAO_TOKEN", "test-only");
         let redis_url = std::env::var("MARTY_TEST_REDIS_URL").expect("disposable Redis URL");
