@@ -402,7 +402,7 @@ async fn exercise_native_passport_http(
     .await;
     assert_eq!(status, StatusCode::OK);
     assert_eq!(after_stale_poll["status"], "READY_FOR_ACTIVATION");
-    assert_eq!(after_stale_poll["tracking_number"], "webhook-tracking");
+    assert_eq!(after_stale_poll["tracking_number"], "tracking-http");
     let (status, quality) = passport_http_request(
         &app,
         "POST",
@@ -683,7 +683,8 @@ async fn passport_jobs_survive_restart_without_cross_tenant_reads() {
 
     let mut submitted = PassportJobPatch::new(PassportJobStatus::Submitted);
     submitted.bureau_job_id = Some(Some("bureau-a".into()));
-    restarted
+    submitted.tracking_number = Some(Some("submitted-tracking".into()));
+    let submitted_job = restarted
         .update(&org_a, "application-a", "SOD_SIGNED", &submitted, next)
         .await
         .unwrap()
@@ -707,6 +708,57 @@ async fn passport_jobs_survive_restart_without_cross_tenant_reads() {
         .await
         .unwrap()
         .is_none());
+    let queued_body = serde_json::to_vec(&serde_json::json!({
+        "organization_id": "org-a", "bureau_job_id": "bureau-a", "status": "QUEUED"
+    }))
+    .unwrap();
+    let mut queued_mac = Hmac::<Sha256>::new_from_slice(secret.as_bytes()).unwrap();
+    queued_mac.update(&queued_body);
+    let queued_event = bureau
+        .parse_webhook(
+            &queued_body,
+            &hex::encode(queued_mac.finalize().into_bytes()),
+        )
+        .unwrap();
+    let queued_replay = restarted
+        .apply_verified_webhook(&queued_event, next + chrono::Duration::seconds(1))
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(queued_replay.status, "SUBMITTED");
+    assert_eq!(
+        queued_replay.tracking_number.as_deref(),
+        Some("submitted-tracking")
+    );
+    assert_eq!(queued_replay.updated_at, submitted_job.updated_at);
+    let queued_with_error_body = serde_json::to_vec(&serde_json::json!({
+        "organization_id": "org-a", "bureau_job_id": "bureau-a", "status": "QUEUED",
+        "error_message": "bureau accepted the job"
+    }))
+    .unwrap();
+    let mut queued_with_error_mac = Hmac::<Sha256>::new_from_slice(secret.as_bytes()).unwrap();
+    queued_with_error_mac.update(&queued_with_error_body);
+    let queued_with_error = bureau
+        .parse_webhook(
+            &queued_with_error_body,
+            &hex::encode(queued_with_error_mac.finalize().into_bytes()),
+        )
+        .unwrap();
+    let metadata_filled = restarted
+        .apply_verified_webhook(&queued_with_error, next + chrono::Duration::seconds(2))
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(metadata_filled.status, "SUBMITTED");
+    assert_eq!(
+        metadata_filled.tracking_number.as_deref(),
+        Some("submitted-tracking")
+    );
+    assert_eq!(
+        metadata_filled.error_message.as_deref(),
+        Some("bureau accepted the job")
+    );
+    assert!(metadata_filled.updated_at > queued_replay.updated_at);
     let body = serde_json::to_vec(&serde_json::json!({
         "organization_id": "org-a",
         "bureau_job_id": "bureau-a",
@@ -738,6 +790,29 @@ async fn passport_jobs_survive_restart_without_cross_tenant_reads() {
         webhook_updated.tracking_number.as_deref(),
         Some("tracking-a")
     );
+    let delivered_body = serde_json::to_vec(&serde_json::json!({
+        "organization_id": "org-a", "bureau_job_id": "bureau-a", "status": "DELIVERED"
+    }))
+    .unwrap();
+    let mut delivered_mac = Hmac::<Sha256>::new_from_slice(secret.as_bytes()).unwrap();
+    delivered_mac.update(&delivered_body);
+    let delivered_event = bureau
+        .parse_webhook(
+            &delivered_body,
+            &hex::encode(delivered_mac.finalize().into_bytes()),
+        )
+        .unwrap();
+    let delivered_replay = restarted
+        .apply_verified_webhook(&delivered_event, next + chrono::Duration::seconds(2))
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(delivered_replay.status, "READY_FOR_ACTIVATION");
+    assert_eq!(
+        delivered_replay.tracking_number.as_deref(),
+        Some("tracking-a")
+    );
+    assert_eq!(delivered_replay.updated_at, webhook_updated.updated_at);
     let stale_body = serde_json::to_vec(&serde_json::json!({
         "organization_id": "org-a", "bureau_job_id": "bureau-a", "status": "PRINTING"
     }))
@@ -807,11 +882,58 @@ async fn passport_jobs_survive_restart_without_cross_tenant_reads() {
         secure_artifact_reference: "physical-artifact://job-b".into(),
     };
     restarted.insert(&org_b, &second_job, now).await.unwrap();
-    restarted
-        .update(&org_b, "application-b", "DRAFT", &submitted, next)
+    let mut second_submitted = PassportJobPatch::new(PassportJobStatus::Submitted);
+    second_submitted.bureau_job_id = Some(Some("bureau-a".into()));
+    let second_submitted_job = restarted
+        .update(&org_b, "application-b", "DRAFT", &second_submitted, next)
         .await
         .unwrap()
         .unwrap();
+    assert!(restarted
+        .fill_missing_bureau_metadata(
+            &org_a,
+            "application-b",
+            "SUBMITTED",
+            Some("tracking-b"),
+            None,
+            next + chrono::Duration::seconds(1),
+        )
+        .await
+        .unwrap()
+        .is_none());
+    let filled = restarted
+        .fill_missing_bureau_metadata(
+            &org_b,
+            "application-b",
+            "SUBMITTED",
+            Some("tracking-b"),
+            None,
+            next + chrono::Duration::seconds(1),
+        )
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(filled.tracking_number.as_deref(), Some("tracking-b"));
+    assert!(filled.updated_at > second_submitted_job.updated_at);
+    assert!(restarted
+        .fill_missing_bureau_metadata(
+            &org_b,
+            "application-b",
+            "SUBMITTED",
+            Some("replacement-b"),
+            None,
+            next + chrono::Duration::seconds(2),
+        )
+        .await
+        .unwrap()
+        .is_none());
+    let preserved = restarted
+        .get(&org_b, "application-b")
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(preserved.tracking_number.as_deref(), Some("tracking-b"));
+    assert_eq!(preserved.updated_at, filled.updated_at);
     // A provider may reuse a job ID for a different tenant; the signed
     // organization claim must select exactly that tenant's row.
     let other_body = serde_json::to_vec(&serde_json::json!({

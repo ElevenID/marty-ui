@@ -241,6 +241,44 @@ impl PostgresPassportRepository {
             .transpose()
     }
 
+    pub async fn fill_missing_bureau_metadata(
+        &self,
+        principal: &PassportTenantPrincipal,
+        application_id: &str,
+        expected_status: &str,
+        tracking_number: Option<&str>,
+        error_message: Option<&str>,
+        now: DateTime<Utc>,
+    ) -> Result<Option<PassportJob>, sqlx::Error> {
+        sqlx::query(
+            "UPDATE issuance_service.physical_document_jobs
+             SET tracking_number = CASE WHEN NULLIF(BTRIM(tracking_number), '') IS NULL
+                 THEN CASE WHEN NULLIF(BTRIM($4::text), '') IS NOT NULL THEN $4 ELSE tracking_number END
+                 ELSE tracking_number END,
+                 error_message = CASE WHEN NULLIF(BTRIM(error_message), '') IS NULL
+                 THEN CASE WHEN NULLIF(BTRIM($5::text), '') IS NOT NULL THEN $5 ELSE error_message END
+                 ELSE error_message END,
+                 updated_at = $6
+             WHERE organization_id = $1 AND application_id = $2 AND status = $3
+                 AND ((NULLIF(BTRIM(tracking_number), '') IS NULL
+                       AND NULLIF(BTRIM($4::text), '') IS NOT NULL)
+                   OR (NULLIF(BTRIM(error_message), '') IS NULL
+                       AND NULLIF(BTRIM($5::text), '') IS NOT NULL))
+             RETURNING *",
+        )
+        .bind(principal.organization_id())
+        .bind(application_id)
+        .bind(expected_status)
+        .bind(tracking_number)
+        .bind(error_message)
+        .bind(now)
+        .fetch_optional(&self.pool)
+        .await?
+        .as_ref()
+        .map(row_to_job)
+        .transpose()
+    }
+
     pub async fn apply_verified_webhook(
         &self,
         event: &VerifiedWebhookEvent,
@@ -262,11 +300,31 @@ impl PostgresPassportRepository {
             return Ok(None);
         };
         let current_status: &str = matched.try_get("status")?;
-        if !should_apply_bureau_status(current_status, event.status().issuance_status()) {
+        let incoming_status = event.status().issuance_status();
+        let metadata = if current_status == incoming_status
+            && !matches!(current_status, "ACTIVE" | "FAILED" | "CANCELLED")
+        {
+            let current_tracking: Option<String> = matched.try_get("tracking_number")?;
+            let current_error: Option<String> = matched.try_get("error_message")?;
+            fill_missing_bureau_metadata(
+                current_tracking.as_deref(),
+                current_error.as_deref(),
+                event.tracking_number(),
+                event.error_message(),
+            )
+        } else if should_apply_bureau_status(current_status, incoming_status) {
+            Some((
+                event.tracking_number().map(str::to_owned),
+                event.error_message().map(str::to_owned),
+            ))
+        } else {
+            None
+        };
+        let Some((tracking_number, error_message)) = metadata else {
             let unchanged = row_to_job(matched)?;
             transaction.commit().await?;
             return Ok(Some(unchanged));
-        }
+        };
         let id: &str = matched.try_get("id")?;
         let organization_id: &str = matched.try_get("organization_id")?;
         let updated = sqlx::query(
@@ -275,9 +333,9 @@ impl PostgresPassportRepository {
              WHERE id = $5 AND organization_id = $6 AND bureau_job_id = $7
              RETURNING *",
         )
-        .bind(event.status().issuance_status())
-        .bind(event.tracking_number())
-        .bind(event.error_message())
+        .bind(incoming_status)
+        .bind(tracking_number)
+        .bind(error_message)
         .bind(now)
         .bind(id)
         .bind(organization_id)
@@ -308,9 +366,34 @@ pub(crate) fn should_apply_bureau_status(current: &str, incoming: &str) -> bool 
         _ => None,
     };
     match (rank(current), rank(incoming)) {
-        (Some(current), Some(incoming)) => incoming >= current,
+        (Some(current), Some(incoming)) => incoming > current,
         _ => true,
     }
+}
+
+pub(crate) fn fill_missing_bureau_metadata(
+    current_tracking: Option<&str>,
+    current_error: Option<&str>,
+    incoming_tracking: Option<&str>,
+    incoming_error: Option<&str>,
+) -> Option<(Option<String>, Option<String>)> {
+    let tracking_fill = if current_tracking.is_none_or(|value| value.trim().is_empty()) {
+        incoming_tracking.filter(|value| !value.trim().is_empty())
+    } else {
+        None
+    };
+    let error_fill = if current_error.is_none_or(|value| value.trim().is_empty()) {
+        incoming_error.filter(|value| !value.trim().is_empty())
+    } else {
+        None
+    };
+    if tracking_fill.is_none() && error_fill.is_none() {
+        return None;
+    }
+    Some((
+        tracking_fill.or(current_tracking).map(str::to_owned),
+        error_fill.or(current_error).map(str::to_owned),
+    ))
 }
 
 fn row_to_job(row: &PgRow) -> Result<PassportJob, sqlx::Error> {
@@ -344,7 +427,7 @@ fn row_to_job(row: &PgRow) -> Result<PassportJob, sqlx::Error> {
 
 #[cfg(test)]
 mod webhook_state_tests {
-    use super::should_apply_bureau_status;
+    use super::{fill_missing_bureau_metadata, should_apply_bureau_status};
     use serde_json::Value;
 
     #[test]
@@ -373,5 +456,26 @@ mod webhook_state_tests {
                 );
             }
         }
+    }
+
+    #[test]
+    fn same_rank_metadata_only_fills_blank_fields() {
+        assert_eq!(
+            fill_missing_bureau_metadata(Some("tracking-a"), None, None, None),
+            None
+        );
+        assert_eq!(
+            fill_missing_bureau_metadata(Some("tracking-a"), None, Some("tracking-b"), None),
+            None
+        );
+        assert_eq!(
+            fill_missing_bureau_metadata(
+                None,
+                Some("error-a"),
+                Some("tracking-a"),
+                Some("error-b")
+            ),
+            Some((Some("tracking-a".into()), Some("error-a".into())))
+        );
     }
 }
