@@ -160,6 +160,10 @@ pub fn router_with_dependencies(
             "/v1/signing-keys/services/{service_id}/certificate-csr",
             post(generate_public_service_csr),
         )
+        .route(
+            "/v1/signing-keys/services/{service_id}/mdoc-x5c",
+            get(public_service_mdoc_x5c),
+        )
         .route("/v1/signing-keys/config/purposes", get(purposes))
         .route(
             "/v1/signing-keys/config/service-capabilities",
@@ -1554,21 +1558,13 @@ async fn get_public_service_certificate(
             )
         }
     };
-    let certificate = overrides
-        .get("services")
-        .and_then(|services| services.get(&service_id))
-        .filter(|attachment| attachment.get("cert_pem").and_then(Value::as_str).is_some())
-        .unwrap_or(&service);
-    if certificate
-        .get("cert_pem")
-        .and_then(Value::as_str)
-        .is_none_or(str::is_empty)
-    {
+    let certificate = selected_service_certificate(&service, &overrides, &service_id);
+    let Some(certificate) = certificate else {
         return public_error(
             StatusCode::NOT_FOUND,
             &format!("No certificate stored for service '{service_id}'."),
         );
-    }
+    };
     Json(json!({
         "service_id": service_id,
         "cert_pem": certificate.get("cert_pem"),
@@ -1576,6 +1572,109 @@ async fn get_public_service_certificate(
         "cert_expires_at": certificate.get("cert_expires_at"),
     }))
     .into_response()
+}
+
+fn selected_service_certificate<'a>(
+    service: &'a Value,
+    overrides: &'a Value,
+    service_id: &str,
+) -> Option<&'a Value> {
+    let certificate = overrides
+        .get("services")
+        .and_then(|services| services.get(service_id))
+        .filter(|attachment| attachment.get("cert_pem").and_then(Value::as_str).is_some())
+        .unwrap_or(service);
+    certificate
+        .get("cert_pem")
+        .and_then(Value::as_str)
+        .filter(|pem| !pem.is_empty())
+        .map(|_| certificate)
+}
+
+async fn public_service_mdoc_x5c(
+    State(state): State<AppState>,
+    Path(service_id): Path<String>,
+    Query(scope): Query<OrganizationScope>,
+) -> Response {
+    if let Err(error) = validate_service_scope(&scope.organization_id, None) {
+        return error.into_response();
+    }
+    let service =
+        match registered_certificate_service(&state, &scope.organization_id, &service_id).await {
+            Ok(service) => service,
+            Err(error) => return error.into_response(),
+        };
+    let Some(store) = state.document_store.as_ref() else {
+        return public_error(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "Certificate storage is unavailable.",
+        );
+    };
+    let overrides = match store.certificate_overrides(&scope.organization_id).await {
+        Ok(overrides) => overrides,
+        Err(_) => {
+            return public_error(
+                StatusCode::SERVICE_UNAVAILABLE,
+                "Certificate storage is unavailable.",
+            )
+        }
+    };
+    let Some(certificate) = selected_service_certificate(&service, &overrides, &service_id) else {
+        return public_error(
+            StatusCode::NOT_FOUND,
+            &format!("No certificate chain stored for service '{service_id}'."),
+        );
+    };
+    let public_jwk = match current_service_public_jwk(&service).await {
+        Ok((_, jwk)) => jwk,
+        Err(error) => return error.into_response(),
+    };
+    match checked_service_x5c(certificate, &public_jwk, &service_id) {
+        Ok(response) => Json(response).into_response(),
+        Err(error) => error.into_response(),
+    }
+}
+
+fn checked_service_x5c(
+    certificate: &Value,
+    public_jwk: &Value,
+    service_id: &str,
+) -> Result<Value, PublicSigningError> {
+    let inspected = documents::inspect_certificate(&InspectCertificateRequest {
+        cert_pem: certificate["cert_pem"]
+            .as_str()
+            .unwrap_or_default()
+            .to_owned(),
+        cert_chain_pem: certificate
+            .get("cert_chain_pem")
+            .and_then(Value::as_str)
+            .map(str::to_owned),
+        expected_public_jwk: Some(public_jwk.clone()),
+    })
+    .map_err(|_| {
+        public_failure(
+            StatusCode::BAD_GATEWAY,
+            "Stored service certificate is malformed.",
+        )
+    })?;
+    if inspected.public_key_matches != Some(true) {
+        return Err(public_failure(
+            StatusCode::CONFLICT,
+            "Stored service certificate does not match its current KMS key.",
+        ));
+    }
+    if inspected.x5c.is_empty() {
+        return Err(public_failure(
+            StatusCode::NOT_FOUND,
+            &format!("No certificate chain stored for service '{service_id}'."),
+        ));
+    }
+    let chain_length = inspected.x5c.len();
+    Ok(json!({
+        "service_id": service_id,
+        "x5c": inspected.x5c,
+        "mdoc_cose_header_hints": {"x5chain": true, "x5c_length": chain_length},
+    }))
 }
 
 async fn store_public_service_certificate(
@@ -3062,6 +3161,9 @@ async fn openapi() -> Json<serde_json::Value> {
             "/v1/signing-keys/services/{service_id}/certificate-csr": {
                 "post": {"summary": "Generate Registered Service CSR", "responses": {"200": {"description": "PKCS#10 request signed by the configured KMS key"}}}
             },
+            "/v1/signing-keys/services/{service_id}/mdoc-x5c": {
+                "get": {"summary": "Read Registered Service mDoc Certificate Chain", "responses": {"200": {"description": "Public X.509 chain bound to the current KMS key"}}}
+            },
             "/v1/signing-keys/config/certificate-expiry-alerts": {
                 "get": {"summary": "Registered Service Certificate Expiry Alerts", "responses": {"200": {"description": "Tenant-scoped alerts using stored certificate overrides"}}}
             },
@@ -3280,6 +3382,56 @@ mod public_contract_tests {
         );
         let ambiguous = json!({"key_reference": "", "key_aliases": ["service-a", "service-b"]});
         assert!(service_certificate_key_config(&ambiguous).is_err());
+    }
+
+    #[test]
+    fn mdoc_x5c_prefers_override_and_requires_current_kms_public_key() {
+        let behavior: Value = serde_json::from_str(include_str!(
+            "../../../../contracts/signing-mdoc-x5c-behavior.json"
+        ))
+        .unwrap();
+        assert_eq!(
+            behavior["path"],
+            "/v1/signing-keys/services/{service_id}/mdoc-x5c"
+        );
+        let fixture: Value =
+            serde_json::from_str(include_str!("../tests/fixtures/document_vectors.json")).unwrap();
+        let cert = &fixture["certificate"];
+        let service = json!({"id": "service-a", "cert_pem": "stale-inline-cert"});
+        let overrides = json!({"services": {"service-a": {"cert_pem": cert["cert_pem"]}}});
+        let selected = selected_service_certificate(&service, &overrides, "service-a").unwrap();
+        assert_eq!(selected["cert_pem"], cert["cert_pem"]);
+        let result = checked_service_x5c(selected, &cert["expected_jwk"], "service-a").unwrap();
+        assert_eq!(result["x5c"][0], cert["expected_x5c"]);
+        assert_eq!(
+            result["mdoc_cose_header_hints"],
+            json!({"x5chain": true, "x5c_length": 1})
+        );
+        assert!(result.get("key_reference").is_none());
+        let mut wrong_key = cert["expected_jwk"].clone();
+        wrong_key["x"] = json!("different-public-key");
+        assert_eq!(
+            checked_service_x5c(selected, &wrong_key, "service-a")
+                .unwrap_err()
+                .status,
+            StatusCode::CONFLICT
+        );
+        assert_eq!(
+            checked_service_x5c(
+                &json!({"cert_pem": "not-a-cert"}),
+                &cert["expected_jwk"],
+                "service-a"
+            )
+            .unwrap_err()
+            .status,
+            StatusCode::BAD_GATEWAY
+        );
+        assert!(selected_service_certificate(
+            &json!({"id": "service-a"}),
+            &json!({"services": {}}),
+            "service-a"
+        )
+        .is_none());
     }
 
     #[test]

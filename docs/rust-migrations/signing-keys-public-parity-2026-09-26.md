@@ -61,6 +61,13 @@ The `POST /issuer-identities/resolve` adapter now uses the same exact active
 profile tuple and internal DID resolver as signing, then returns only the
 public identity projection and a custody-free JWK. Its request and response
 are frozen in `contracts/signing-public-issuer-resolution-behavior.json`.
-Thus 17 declared pairs remain without local public handlers. These new
+The `GET /services/{service_id}/mdoc-x5c` adapter now selects the same stored
+certificate override as the service-certificate read path, checks it against
+the current KMS public key, and returns only the public X.509 chain and COSE
+header hints. Its intentional omission of the legacy public key-reference
+field is recorded in `contracts/signing-mdoc-x5c-behavior.json`. Its isolated
+Redis/mock-KMS route test passed for a matching certificate and rejected a
+cross-tenant read; this is not a through-Gateway or beta acceptance test.
+Thus 16 declared pairs remain without local public handlers. These new
 adapters still need authenticated through-Gateway runtime tests. The
 24-pair table above remains the protected-main audit baseline.
