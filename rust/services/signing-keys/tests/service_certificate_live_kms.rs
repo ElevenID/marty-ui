@@ -299,7 +299,7 @@ async fn registered_service_public_material_routes_use_current_kms_key_and_tenan
         None,
         None,
         None,
-        None,
+        Some("beta.example".into()),
     );
     let request = Request::builder()
         .uri(format!(
@@ -391,6 +391,69 @@ async fn registered_service_public_material_routes_use_current_kms_key_and_tenan
         .expect("saved discovery state");
     assert_eq!(
         saved_registry["services"][0]["discovered_capabilities"]["last_jwk_fetch_ok"],
+        true
+    );
+    let publish_did = Request::builder()
+        .method("POST")
+        .uri(format!(
+            "/v1/signing-keys/services/service-a/publish-did-vm?organization_id={organization_id}"
+        ))
+        .header("content-type", "application/json")
+        .body(Body::from(r#"{"fragment":"service-a-vm"}"#))
+        .expect("publish current KMS verification method");
+    let published_did = app
+        .clone()
+        .oneshot(publish_did)
+        .await
+        .expect("DID publication");
+    assert_eq!(published_did.status(), StatusCode::OK);
+    let published_did: Value = serde_json::from_slice(
+        &to_bytes(published_did.into_body(), 1_048_576)
+            .await
+            .expect("DID publication body"),
+    )
+    .expect("DID publication JSON");
+    let expected_did = format!("did:web:beta.example:orgs:{organization_id}");
+    let expected_method = format!("{expected_did}#service-a-vm");
+    assert_eq!(published_did["did_document"]["id"], expected_did);
+    assert_eq!(published_did["verification_method"]["id"], expected_method);
+    assert_eq!(
+        published_did["verification_method"]["x5c"][0],
+        fixture["certificate"]["expected_x5c"]
+    );
+    assert!(published_did["verification_method"]
+        .get("key_reference")
+        .is_none());
+    let did_read = Request::builder()
+        .uri(format!(
+            "/v1/signing-keys/did-document?organization_id={organization_id}"
+        ))
+        .body(Body::empty())
+        .expect("public DID document read");
+    let did = app
+        .clone()
+        .oneshot(did_read)
+        .await
+        .expect("public DID response");
+    assert_eq!(did.status(), StatusCode::OK);
+    let did: Value = serde_json::from_slice(
+        &to_bytes(did.into_body(), 1_048_576)
+            .await
+            .expect("public DID document body"),
+    )
+    .expect("public DID document JSON");
+    assert_eq!(did["verificationMethod"][0]["id"], expected_method);
+    assert_eq!(did["assertionMethod"][0], expected_method);
+    let saved_registry = inspect_registry
+        .load(&organization_id)
+        .await
+        .expect("saved DID discovery state");
+    assert_eq!(
+        saved_registry["services"][0]["discovered_capabilities"]["last_did_publish_ok"],
+        true
+    );
+    assert_eq!(
+        saved_registry["services"][0]["discovered_capabilities"]["has_x5c"],
         true
     );
     let cross_tenant = Request::builder()

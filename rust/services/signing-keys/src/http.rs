@@ -10,10 +10,11 @@ use crate::csca_lifecycle::{
     RenewCscaCertificateRequest, RevokeCscaCertificateRequest,
 };
 use crate::documents::{
-    self, CertificateAlertsRequest, CertificateAlertsResponse, DeleteJwkResponse, DocumentStore,
-    InspectCertificateRequest, InspectCertificateResponse, LoadDidRequest, LoadDidResponse,
-    PublishDidRequest, PublishDidResponse, PublishJwkRequest, PublishJwkResponse,
-    StoredCertificate, UpdateJwkRequest, UpdateJwkResponse,
+    self, CertificateAlertsRequest, CertificateAlertsResponse, DeleteJwkResponse,
+    DidVerificationRelationship, DocumentStore, InspectCertificateRequest,
+    InspectCertificateResponse, LoadDidRequest, LoadDidResponse, PublishDidRequest,
+    PublishDidResponse, PublishJwkRequest, PublishJwkResponse, StoredCertificate, UpdateJwkRequest,
+    UpdateJwkResponse,
 };
 use crate::domain::{key_purposes, service_capabilities};
 use crate::flow_envelope::{
@@ -170,6 +171,10 @@ pub fn router_with_dependencies(
         .route(
             "/v1/signing-keys/services/{service_id}/publish-jwks",
             post(publish_public_service_jwks),
+        )
+        .route(
+            "/v1/signing-keys/services/{service_id}/publish-did-vm",
+            post(publish_public_service_did_vm),
         )
         .route("/v1/signing-keys/config/purposes", get(purposes))
         .route(
@@ -1564,6 +1569,47 @@ async fn verify_public_service_key(
 #[serde(deny_unknown_fields)]
 struct PublicServiceJwksPublicationRequest {}
 
+async fn checked_stored_service_certificate(
+    documents: &DocumentStore,
+    organization_id: &str,
+    service_id: &str,
+    service: &Value,
+    public_jwk: &Value,
+) -> Result<Option<Value>, PublicSigningError> {
+    let overrides = documents
+        .certificate_overrides(organization_id)
+        .await
+        .map_err(|_| {
+            public_failure(
+                StatusCode::SERVICE_UNAVAILABLE,
+                "Certificate storage is unavailable.",
+            )
+        })?;
+    let certificate = selected_service_certificate(service, &overrides, service_id).cloned();
+    if let Some(certificate) = certificate.as_ref() {
+        checked_service_x5c(certificate, public_jwk, service_id)?;
+    }
+    Ok(certificate)
+}
+
+fn public_publication_error(error: documents::DocumentError) -> Response {
+    match error {
+        documents::DocumentError::Invalid(detail) => {
+            public_error(StatusCode::UNPROCESSABLE_ENTITY, &detail)
+        }
+        documents::DocumentError::Conflict(detail) => public_error(StatusCode::CONFLICT, &detail),
+        documents::DocumentError::NotFound(detail) => public_error(StatusCode::NOT_FOUND, &detail),
+        documents::DocumentError::Storage(_) => public_error(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "Signing document storage is unavailable.",
+        ),
+        documents::DocumentError::Corrupt(_) => public_error(
+            StatusCode::BAD_GATEWAY,
+            "Stored signing document is malformed.",
+        ),
+    }
+}
+
 async fn publish_public_service_jwks(
     State(state): State<AppState>,
     Path(service_id): Path<String>,
@@ -1588,24 +1634,18 @@ async fn publish_public_service_jwks(
         Ok(material) => material,
         Err(error) => return error.into_response(),
     };
-    let overrides = match documents
-        .certificate_overrides(&scope.organization_id)
-        .await
+    let certificate = match checked_stored_service_certificate(
+        documents,
+        &scope.organization_id,
+        &service_id,
+        &service,
+        &public_jwk,
+    )
+    .await
     {
-        Ok(overrides) => overrides,
-        Err(_) => {
-            return public_error(
-                StatusCode::SERVICE_UNAVAILABLE,
-                "Certificate storage is unavailable.",
-            )
-        }
+        Ok(certificate) => certificate,
+        Err(error) => return error.into_response(),
     };
-    let certificate = selected_service_certificate(&service, &overrides, &service_id);
-    if let Some(certificate) = certificate {
-        if let Err(error) = checked_service_x5c(certificate, &public_jwk, &service_id) {
-            return error.into_response();
-        }
-    }
     let publication = match documents
         .publish_jwk(
             &scope.organization_id,
@@ -1614,10 +1654,12 @@ async fn publish_public_service_jwks(
                 jwk: public_jwk,
                 key_reference: config["key_reference"].as_str().map(str::to_owned),
                 cert_pem: certificate
+                    .as_ref()
                     .and_then(|value| value.get("cert_pem"))
                     .and_then(Value::as_str)
                     .map(str::to_owned),
                 cert_chain_pem: certificate
+                    .as_ref()
                     .and_then(|value| value.get("cert_chain_pem"))
                     .and_then(Value::as_str)
                     .map(str::to_owned),
@@ -1626,24 +1668,15 @@ async fn publish_public_service_jwks(
         .await
     {
         Ok(publication) => publication,
-        Err(documents::DocumentError::Invalid(_)) => {
-            return public_error(StatusCode::UNPROCESSABLE_ENTITY, "Public JWK is invalid.")
-        }
-        Err(documents::DocumentError::Conflict(_)) => {
-            return public_error(
-                StatusCode::CONFLICT,
-                "Public JWK conflicts with stored state.",
-            )
-        }
-        Err(_) => {
-            return public_error(
-                StatusCode::SERVICE_UNAVAILABLE,
-                "JWKS publication storage is unavailable.",
-            )
-        }
+        Err(error) => return public_publication_error(error),
     };
-    if let Err(error) =
-        mark_service_public_key_discovered(&state, &scope.organization_id, &service_id).await
+    if let Err(error) = mark_service_publication_discovered(
+        &state,
+        &scope.organization_id,
+        &service_id,
+        &[("last_jwk_fetch_ok", json!(true))],
+    )
+    .await
     {
         return error.into_response();
     }
@@ -1665,10 +1698,156 @@ async fn publish_public_service_jwks(
     .into_response()
 }
 
-async fn mark_service_public_key_discovered(
+#[derive(Debug, Default, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct PublicServiceDidPublicationRequest {
+    #[serde(default)]
+    did_id: Option<String>,
+    #[serde(default)]
+    org_slug: Option<String>,
+    #[serde(default)]
+    fragment: Option<String>,
+}
+
+async fn publish_public_service_did_vm(
+    State(state): State<AppState>,
+    Path(service_id): Path<String>,
+    Query(scope): Query<OrganizationScope>,
+    body: Option<Json<PublicServiceDidPublicationRequest>>,
+) -> Response {
+    if let Err(error) = validate_service_scope(&scope.organization_id, None) {
+        return error.into_response();
+    }
+    let body = body.map(|Json(body)| body).unwrap_or_default();
+    let service =
+        match registered_certificate_service(&state, &scope.organization_id, &service_id).await {
+            Ok(service) => service,
+            Err(error) => return error.into_response(),
+        };
+    let Some(documents) = state.document_store.as_ref() else {
+        return public_error(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "Signing document storage is unavailable.",
+        );
+    };
+    let Some(public_domain) = state
+        .public_domain
+        .as_deref()
+        .map(str::trim)
+        .filter(|domain| !domain.is_empty())
+    else {
+        return public_error(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "Public DID authority is unavailable.",
+        );
+    };
+    let (config, public_jwk) = match current_service_public_jwk(&service).await {
+        Ok(material) => material,
+        Err(error) => return error.into_response(),
+    };
+    let certificate = match checked_stored_service_certificate(
+        documents,
+        &scope.organization_id,
+        &service_id,
+        &service,
+        &public_jwk,
+    )
+    .await
+    {
+        Ok(certificate) => certificate,
+        Err(error) => return error.into_response(),
+    };
+    let org_slug = body.org_slug.or_else(|| {
+        body.did_id
+            .is_none()
+            .then(|| scope.organization_id.to_lowercase())
+    });
+    let publication = match documents
+        .publish_did(
+            &scope.organization_id,
+            &service_id,
+            PublishDidRequest {
+                jwk: public_jwk,
+                public_domain: public_domain.to_owned(),
+                did_id: body.did_id,
+                org_slug,
+                fragment: body.fragment,
+                key_reference: config["key_reference"].as_str().map(str::to_owned),
+                cert_pem: certificate
+                    .as_ref()
+                    .and_then(|value| value.get("cert_pem"))
+                    .and_then(Value::as_str)
+                    .map(str::to_owned),
+                cert_chain_pem: certificate
+                    .as_ref()
+                    .and_then(|value| value.get("cert_chain_pem"))
+                    .and_then(Value::as_str)
+                    .map(str::to_owned),
+                relationship: DidVerificationRelationship::AssertionMethod,
+            },
+        )
+        .await
+    {
+        Ok(publication) => publication,
+        Err(error) => return public_publication_error(error),
+    };
+    let public_document = match public_did_document(publication.document) {
+        Ok(document) => document,
+        Err(error) => return error.into_response(),
+    };
+    let method_id = publication.verification_method["id"].as_str();
+    let Some(method) = public_document
+        .get("verificationMethod")
+        .and_then(Value::as_array)
+        .and_then(|methods| {
+            methods
+                .iter()
+                .find(|method| method.get("id").and_then(Value::as_str) == method_id)
+        })
+        .cloned()
+    else {
+        return public_error(
+            StatusCode::BAD_GATEWAY,
+            "Published DID method is malformed.",
+        );
+    };
+    let has_x5c = method
+        .get("x5c")
+        .and_then(Value::as_array)
+        .is_some_and(|chain| !chain.is_empty());
+    if let Err(error) = mark_service_publication_discovered(
+        &state,
+        &scope.organization_id,
+        &service_id,
+        &[
+            ("did_verification_method_publish", json!(true)),
+            ("last_did_publish_ok", json!(true)),
+            ("has_x5c", json!(has_x5c)),
+        ],
+    )
+    .await
+    {
+        return error.into_response();
+    }
+    Json(json!({
+        "ok": true,
+        "service_id": service_id,
+        "message": "Verification method published to organization DID document",
+        "verification_method": method,
+        "did_document": {
+            "id": public_document.get("id"),
+            "verification_method_count": publication.verification_method_count,
+        },
+        "published_at": chrono::Utc::now().to_rfc3339(),
+    }))
+    .into_response()
+}
+
+async fn mark_service_publication_discovered(
     state: &AppState,
     organization_id: &str,
     service_id: &str,
+    publication_capabilities: &[(&str, Value)],
 ) -> Result<(), PublicSigningError> {
     let store = state.registry_store.as_ref().ok_or_else(|| {
         public_failure(
@@ -1701,8 +1880,10 @@ async fn mark_service_public_key_discovered(
         .as_object_mut()
         .expect("normalized discovered capabilities are an object");
     capabilities.insert("public_key_export".into(), json!(true));
-    capabilities.insert("last_jwk_fetch_ok".into(), json!(true));
     capabilities.insert("provider".into(), provider);
+    for (name, value) in publication_capabilities {
+        capabilities.insert((*name).into(), value.clone());
+    }
     service["updated_at"] = json!(chrono::Utc::now().to_rfc3339());
     store.save(organization_id, &registry).await.map_err(|_| {
         public_failure(
@@ -3442,6 +3623,9 @@ async fn openapi() -> Json<serde_json::Value> {
             "/v1/signing-keys/services/{service_id}/publish-jwks": {
                 "post": {"summary": "Publish Registered Service Public Key to Organization JWKS", "responses": {"200": {"description": "Current KMS public key published without custody coordinates"}}}
             },
+            "/v1/signing-keys/services/{service_id}/publish-did-vm": {
+                "post": {"summary": "Publish Registered Service DID Verification Method", "responses": {"200": {"description": "Current KMS public key published as a public assertion method"}}}
+            },
             "/v1/signing-keys/config/certificate-expiry-alerts": {
                 "get": {"summary": "Registered Service Certificate Expiry Alerts", "responses": {"200": {"description": "Tenant-scoped alerts using stored certificate overrides"}}}
             },
@@ -3827,6 +4011,42 @@ mod public_contract_tests {
             .await
             .unwrap();
         assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
+    }
+
+    #[tokio::test]
+    async fn public_did_publication_accepts_only_identity_fields_before_kms_use() {
+        let behavior: Value = serde_json::from_str(include_str!(
+            "../../../../contracts/signing-service-publish-did-vm-behavior.json"
+        ))
+        .unwrap();
+        assert_eq!(
+            behavior["path"],
+            "/v1/signing-keys/services/{service_id}/publish-did-vm"
+        );
+        let accepted: PublicServiceDidPublicationRequest = serde_json::from_value(json!({
+            "did_id": "did:web:issuer.example:orgs:acme",
+            "org_slug": "acme",
+            "fragment": "service-a-vm"
+        }))
+        .unwrap();
+        assert_eq!(accepted.org_slug.as_deref(), Some("acme"));
+        assert!(
+            serde_json::from_value::<PublicServiceDidPublicationRequest>(
+                json!({"key_reference": "caller-selected"})
+            )
+            .is_err()
+        );
+        let forbidden = Request::builder()
+            .method("POST")
+            .uri("/v1/signing-keys/services/service-a/publish-did-vm?organization_id=org-a")
+            .header("content-type", "application/json")
+            .body(Body::from(r#"{"key_reference":"caller-selected"}"#))
+            .unwrap();
+        let response = router_with_internal_api_key("test-only".into())
+            .oneshot(forbidden)
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::UNPROCESSABLE_ENTITY);
     }
 
     #[test]
