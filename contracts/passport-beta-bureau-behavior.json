@@ -11,7 +11,9 @@
     "submit_batch": "POST /v1/personalization/batches",
     "poll": "GET /v1/personalization/jobs/{bureau_job_id}"
   },
-  "durability": "PostgreSQL organization_id plus source_job_id idempotency; conflicting payload digest returns 409",
+  "durability": "PostgreSQL organization_id plus source_job_id idempotency; a changed document identity digest returns 409, while a retry with a different SOD signature or public DSC certificate returns the original bureau job ID",
+  "document_identity_digest_fields": ["organization_id", "job_id", "application_id", "country_code", "document_type (if present)", "data_groups", "mrz"],
+  "retry_semantics": "The first accepted document identity is authoritative. SOD and DSC are validated as present on every submission but excluded from the identity digest because re-signing may change them. A retry does not reset bureau status or create another job.",
   "persisted_fields": [
     "bureau_job_id",
     "organization_id",

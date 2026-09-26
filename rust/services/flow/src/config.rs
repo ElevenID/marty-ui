@@ -1,6 +1,6 @@
 use std::{collections::BTreeMap, fmt, fs, net::SocketAddr, path::PathBuf};
 
-use marty_passport_auth::PassportTenantKeyring;
+use marty_passport_auth::{PassportTenantCredentialSource, PassportTenantKeyring};
 use mmf_push::WebhookDestinationRegistry;
 use thiserror::Error;
 use url::Url;
@@ -65,7 +65,7 @@ pub struct FlowServiceConfig {
     pub issuance_url: String,
     pub issuance_native_url: String,
     pub issuance_api_key: Option<String>,
-    pub passport_tenant_keys: Option<PassportTenantKeyring>,
+    pub passport_tenant_keys: Option<PassportTenantCredentialSource>,
     pub passport_native_flow_enabled: bool,
     pub service_token: Option<String>,
     pub webhook_secret: Option<String>,
@@ -217,6 +217,14 @@ impl fmt::Debug for FlowServiceConfig {
 impl FlowServiceConfig {
     pub fn from_env() -> Result<Self, FlowConfigError> {
         let mut values = std::env::vars().collect::<BTreeMap<_, _>>();
+        if parse_boolean(
+            value(&values, "PASSPORT_INTERNAL_SERVICE_AUTH_ENABLED").unwrap_or("false"),
+            "PASSPORT_INTERNAL_SERVICE_AUTH_ENABLED",
+        )? && (value(&values, "PASSPORT_TENANT_API_KEYS").is_some()
+            || value(&values, "PASSPORT_TENANT_API_KEYS_FILE").is_some())
+        {
+            return Err(invalid("PASSPORT_TENANT_API_KEYS"));
+        }
         load_secret_files(
             &mut values,
             &[
@@ -459,12 +467,35 @@ impl FlowServiceConfig {
         let signing_keys_api_key =
             optional_secret(&values, "SIGNING_KEYS_INTERNAL_API_KEY", environment)?;
         let issuance_api_key = optional_secret(&values, "ISSUANCE_API_KEY", environment)?;
+        let passport_internal_service_auth_enabled = parse_boolean(
+            value(&values, "PASSPORT_INTERNAL_SERVICE_AUTH_ENABLED").unwrap_or("false"),
+            "PASSPORT_INTERNAL_SERVICE_AUTH_ENABLED",
+        )?;
+        if passport_internal_service_auth_enabled
+            && (value(&values, "PASSPORT_TENANT_API_KEYS").is_some()
+                || value(&values, "PASSPORT_TENANT_API_KEYS_FILE").is_some())
+        {
+            return Err(invalid("PASSPORT_TENANT_API_KEYS"));
+        }
         let passport_tenant_keys = value(&values, "PASSPORT_TENANT_API_KEYS")
             .map(|value| {
                 PassportTenantKeyring::from_json(value)
                     .map_err(|_| invalid("PASSPORT_TENANT_API_KEYS"))
             })
-            .transpose()?;
+            .transpose()?
+            .map(Into::into);
+        let passport_tenant_keys = if passport_internal_service_auth_enabled {
+            Some(
+                PassportTenantCredentialSource::internal_service_token(
+                    service_token
+                        .as_deref()
+                        .ok_or_else(|| invalid("GRPC_SERVICE_TOKEN"))?,
+                )
+                .map_err(|_| invalid("GRPC_SERVICE_TOKEN"))?,
+            )
+        } else {
+            passport_tenant_keys
+        };
         let passport_native_flow_enabled = parse_boolean(
             value(&values, "PASSPORT_NATIVE_FLOW_ENABLED").unwrap_or("false"),
             "PASSPORT_NATIVE_FLOW_ENABLED",
@@ -965,6 +996,42 @@ fn redacted(value: &Option<String>) -> &'static str {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn internal_passport_flow_auth_reuses_service_token_and_rejects_keyring_file() {
+        let token = "f".repeat(32);
+        let mut values = BTreeMap::from([
+            ("ENVIRONMENT".into(), "development".into()),
+            ("DATABASE_URL".into(), "postgresql://localhost/flow".into()),
+            ("REDIS_URL".into(), "redis://localhost:6379".into()),
+            ("ISSUANCE_SERVICE_URL".into(), "http://issuance:8005".into()),
+            (
+                "ISSUANCE_NATIVE_SERVICE_URL".into(),
+                "http://issuance-native:8005".into(),
+            ),
+            ("PASSPORT_NATIVE_FLOW_ENABLED".into(), "true".into()),
+            (
+                "PASSPORT_INTERNAL_SERVICE_AUTH_ENABLED".into(),
+                "true".into(),
+            ),
+            ("GRPC_SERVICE_TOKEN".into(), token.clone()),
+        ]);
+        let config = FlowServiceConfig::from_values(values.clone()).unwrap();
+        assert_eq!(
+            config
+                .passport_tenant_keys
+                .as_ref()
+                .unwrap()
+                .key_for("org-a"),
+            Some(token.as_str())
+        );
+        assert!(!format!("{config:?}").contains(&token));
+        values.insert(
+            "PASSPORT_TENANT_API_KEYS_FILE".into(),
+            "nonexistent-keyring".into(),
+        );
+        assert!(FlowServiceConfig::from_values(values).is_err());
+    }
 
     #[test]
     fn passport_selector_rejects_a_legacy_native_target() {

@@ -26,6 +26,8 @@ use axum::{
 };
 use chrono::Utc;
 use futures_core::Stream;
+use marty_passport_auth::PassportTenantCredentialSource;
+#[cfg(test)]
 use marty_passport_auth::PassportTenantKeyring;
 use mmf_platform::{
     ContentTypeDecision, EntityTagDecision, EntityTagPolicy, GatewayProxy, GatewayRequest,
@@ -95,7 +97,7 @@ pub struct GatewayRuntimeState {
     pub signing_service_api_key: String,
     pub issuance_service_api_key: String,
     pub passport_native_gateway_enabled: bool,
-    pub passport_tenant_keys: Option<PassportTenantKeyring>,
+    pub passport_tenant_keys: Option<PassportTenantCredentialSource>,
     pub service_token: Option<String>,
     pub release_identity: ReleaseIdentity,
     pub maximum_body_bytes: usize,
@@ -227,7 +229,7 @@ impl GatewayRuntimeState {
     pub fn with_passport_native_gateway(
         mut self,
         enabled: bool,
-        tenant_keys: Option<PassportTenantKeyring>,
+        tenant_keys: Option<PassportTenantCredentialSource>,
     ) -> Result<Self, mmf_platform::PlatformError> {
         if enabled && tenant_keys.is_none() {
             return Err(mmf_platform::PlatformError::InvalidConfiguration(
@@ -4488,11 +4490,20 @@ fn map_failure(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use axum::extract::Path;
+    use axum::http::HeaderMap;
+    use axum::routing::get;
     use std::{
         collections::BTreeSet,
         sync::atomic::{AtomicBool, Ordering},
     };
 
+    use marty_signing_keys::{
+        documents::{DocumentStore as SigningDocumentStore, PublishJwkRequest},
+        http::router_with_dependencies as signing_router,
+        profiles::ProfileStore as SigningProfileStore,
+        registry::RegistryStore as SigningRegistryStore,
+    };
     use mmf_platform::{
         GatewayResponse, InMemoryIdempotencyStore, PlatformError, ProxyConfig, ServiceInstance,
         UpstreamClient,
@@ -5984,6 +5995,7 @@ mod tests {
                     r#"{"org-1":"native-passport-key-for-org-1-00000001","org-2":"native-passport-key-for-org-2-00000002"}"#,
                 )
                 .expect("test tenant keys")
+                .into()
             }),
         )
         .expect("passport gateway");
@@ -6427,6 +6439,70 @@ mod tests {
             upstream.headers.get("x-api-key").map(String::as_str),
             Some("native-passport-key-for-org-1-00000001")
         );
+    }
+
+    #[tokio::test]
+    async fn internal_passport_handoff_keeps_public_api_key_organizations_isolated() {
+        let recorder = Arc::new(ActorRecordingUpstream::default());
+        let mut state =
+            runtime_state_with_upstream_and_passport(Arc::new(NoOwner), recorder.clone(), true);
+        let internal_token = "synthetic-internal-passport-token-00000001";
+        Arc::get_mut(&mut state).unwrap().passport_tenant_keys =
+            Some(PassportTenantCredentialSource::internal_service_token(internal_token).unwrap());
+        let router = gateway_router(state);
+        for (public_key, organization_id) in [
+            ("passport-gateway-key-org-1", "org-1"),
+            ("passport-gateway-key-org-2", "org-2"),
+        ] {
+            let response = router
+                .clone()
+                .oneshot(
+                    Request::builder()
+                        .method("POST")
+                        .uri("/v1/passport/applications")
+                        .header("content-type", "application/json")
+                        .header("x-api-key", public_key)
+                        .body(Body::from(
+                            json!({"organization_id": organization_id}).to_string(),
+                        ))
+                        .unwrap(),
+                )
+                .await
+                .unwrap();
+            assert_eq!(response.status(), StatusCode::OK);
+            let captured = recorder.0.lock().unwrap();
+            let (_, upstream) = captured.last().unwrap();
+            assert_eq!(
+                upstream
+                    .headers
+                    .get("x-organization-id")
+                    .map(String::as_str),
+                Some(organization_id)
+            );
+            assert_eq!(
+                upstream.headers.get("x-api-key").map(String::as_str),
+                Some(internal_token)
+            );
+            assert_ne!(
+                upstream.headers.get("x-api-key").map(String::as_str),
+                Some(public_key)
+            );
+        }
+        let before = recorder.0.lock().unwrap().len();
+        let response = router
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/v1/passport/applications")
+                    .header("content-type", "application/json")
+                    .header("x-api-key", "passport-gateway-key-org-1")
+                    .body(Body::from(r#"{"organization_id":"org-2"}"#))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::FORBIDDEN);
+        assert_eq!(recorder.0.lock().unwrap().len(), before);
     }
 
     fn forged_actor_request(authentication: Option<(&str, &str)>, public: bool) -> Request {
@@ -6894,6 +6970,1575 @@ mod tests {
             overrides.trusted_query["organization_id"],
             vec!["trusted-org"]
         );
+        let routes = GatewayContract::load()
+            .unwrap()
+            .runtime_route_table()
+            .unwrap();
+        for (method, path) in [
+            (
+                HttpMethod::Put,
+                "/v1/signing-keys/issuer-identities/csca-certificate",
+            ),
+            (
+                HttpMethod::Put,
+                "/v1/signing-keys/issuer-identities/certificate-csr",
+            ),
+            (
+                HttpMethod::Put,
+                "/v1/signing-keys/issuer-identities/didcomm-key-agreement",
+            ),
+            (
+                HttpMethod::Get,
+                "/v1/signing-keys/services/service-1/audit-log",
+            ),
+            (HttpMethod::Post, "/v1/signing-keys/services/service-1/sign"),
+            (HttpMethod::Post, "/v1/signing-keys/config/resolve"),
+            (
+                HttpMethod::Post,
+                "/v1/signing-keys/services/service-1/rotate",
+            ),
+            (HttpMethod::Post, "/v1/signing-keys/services/vdsnc/register"),
+            (HttpMethod::Post, "/v1/signing-keys"),
+            (HttpMethod::Get, "/v1/signing-keys/key-1"),
+            (HttpMethod::Patch, "/v1/signing-keys/key-1"),
+            (HttpMethod::Delete, "/v1/signing-keys/key-1"),
+            (HttpMethod::Get, "/v1/signing-keys/compliance/keys-summary"),
+        ] {
+            let route =
+                crate::contract::route_for(&routes, method, path).expect("public signing route");
+            assert_eq!(route.route.upstream_service, "signing-keys");
+            assert!(route.route.auth_required);
+            let overrides = proxy_overrides(&state, path, &identity);
+            assert_eq!(
+                overrides.trusted_query["organization_id"],
+                vec!["trusted-org"]
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn signing_mutations_require_session_and_forward_trusted_scope() {
+        let recorder = Arc::new(ActorRecordingUpstream::default());
+        let router = gateway_router(runtime_state_with_upstream(
+            Arc::new(NoOwner),
+            recorder.clone(),
+        ));
+        for (path, body) in [
+            (
+                "/v1/signing-keys/config/resolve",
+                json!({"key_purpose": "mdoc_dsc", "algorithm": "EdDSA"}),
+            ),
+            (
+                "/v1/signing-keys/services/service-1/rotate",
+                json!({"overlap_days": 14, "publish_updates": false}),
+            ),
+            (
+                "/v1/signing-keys/services/vdsnc/register",
+                json!({"country_code": "USA", "authority_name": "Test Bureau"}),
+            ),
+            (
+                "/v1/signing-keys",
+                json!({"name": "Demo signer", "algorithm": "ES256"}),
+            ),
+        ] {
+            let request = |authenticated| {
+                let mut builder = Request::builder()
+                    .method("POST")
+                    .uri(path)
+                    .header("content-type", "application/json");
+                if authenticated {
+                    builder = builder.header("cookie", "sessionId=valid");
+                }
+                builder.body(Body::from(body.to_string())).unwrap()
+            };
+            let before = recorder.0.lock().unwrap().len();
+            let denied = router.clone().oneshot(request(false)).await.unwrap();
+            assert_eq!(denied.status(), StatusCode::UNAUTHORIZED);
+            assert_eq!(recorder.0.lock().unwrap().len(), before);
+
+            let accepted = router.clone().oneshot(request(true)).await.unwrap();
+            assert_eq!(accepted.status(), StatusCode::OK);
+            let calls = recorder.0.lock().unwrap();
+            assert_eq!(calls.len(), before + 1);
+            let (service, forwarded) = &calls[before];
+            assert_eq!(service, "signing-keys");
+            assert_eq!(forwarded.method, HttpMethod::Post);
+            assert_eq!(forwarded.path, path);
+            assert_eq!(forwarded.query["organization_id"], vec!["org-1"]);
+            assert_eq!(
+                serde_json::from_slice::<Value>(forwarded.body.as_deref().unwrap()).unwrap(),
+                body
+            );
+        }
+    }
+
+    #[derive(Clone, Default)]
+    struct GatewayTransitFixture {
+        keys: Arc<std::sync::Mutex<BTreeMap<String, String>>>,
+        creates: Arc<std::sync::Mutex<Vec<(String, String)>>>,
+        signs: Arc<std::sync::Mutex<Vec<(String, Value)>>>,
+    }
+
+    fn gateway_transit_authorized(headers: &HeaderMap) -> bool {
+        headers
+            .get("x-vault-token")
+            .and_then(|value| value.to_str().ok())
+            == Some("test-only")
+    }
+
+    fn gateway_with_signing_http(signing_url: String) -> Router {
+        let upstream = Arc::new(crate::transport::ReqwestUpstream::new(1024 * 1024).unwrap());
+        let mut state = runtime_state_with_upstream(Arc::new(NoOwner), upstream.clone());
+        let routes = GatewayContract::load()
+            .unwrap()
+            .proxy_route_table_with_passport_native(false)
+            .unwrap();
+        let registry = StaticServiceRegistry::from_urls(&BTreeMap::from([(
+            "signing-keys".into(),
+            signing_url,
+        )]))
+        .unwrap();
+        Arc::get_mut(&mut state).unwrap().proxy = Arc::new(
+            GatewayProxy::new(routes, Arc::new(registry), upstream, ProxyConfig::default())
+                .unwrap(),
+        );
+        gateway_router(state)
+    }
+
+    async fn gateway_transit_create(
+        State(fixture): State<GatewayTransitFixture>,
+        Path(reference): Path<String>,
+        headers: HeaderMap,
+        Json(body): Json<Value>,
+    ) -> Response {
+        if !gateway_transit_authorized(&headers) {
+            return StatusCode::FORBIDDEN.into_response();
+        }
+        let Some(key_type) = body.get("type").and_then(Value::as_str) else {
+            return StatusCode::BAD_REQUEST.into_response();
+        };
+        fixture
+            .creates
+            .lock()
+            .unwrap()
+            .push((reference.clone(), key_type.to_owned()));
+        let mut keys = fixture.keys.lock().unwrap();
+        if keys.contains_key(&reference) {
+            return (
+                StatusCode::BAD_REQUEST,
+                Json(json!({"errors":["key already exists"]})),
+            )
+                .into_response();
+        }
+        keys.insert(reference, key_type.to_owned());
+        StatusCode::NO_CONTENT.into_response()
+    }
+
+    async fn gateway_transit_read(
+        State(fixture): State<GatewayTransitFixture>,
+        Path(reference): Path<String>,
+        headers: HeaderMap,
+    ) -> Response {
+        if !gateway_transit_authorized(&headers) {
+            return StatusCode::FORBIDDEN.into_response();
+        }
+        let Some(key_type) = fixture.keys.lock().unwrap().get(&reference).cloned() else {
+            return StatusCode::NOT_FOUND.into_response();
+        };
+        let material = match key_type.as_str() {
+            "ed25519" => "AQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQE=",
+            "ecdsa-p256" => "-----BEGIN PUBLIC KEY-----\nMFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEaxfR8uEsQkf4vOblY6RA8ncDfYEt\n6zOg9KE5RdiYwpZP40Li/hp/m47n60p8D54WK84zV2sxXs7LtkBoN79R9Q==\n-----END PUBLIC KEY-----\n",
+            _ => return StatusCode::UNPROCESSABLE_ENTITY.into_response(),
+        };
+        Json(json!({"data": {
+            "latest_version": 1, "type": key_type, "supports_signing": true,
+            "soft_deleted": false,
+            "keys": {"1": {"name": key_type, "public_key": material}}
+        }}))
+        .into_response()
+    }
+
+    async fn gateway_transit_list(
+        State(fixture): State<GatewayTransitFixture>,
+        headers: HeaderMap,
+    ) -> Response {
+        if !gateway_transit_authorized(&headers) {
+            return StatusCode::FORBIDDEN.into_response();
+        }
+        let keys = fixture
+            .keys
+            .lock()
+            .unwrap()
+            .keys()
+            .cloned()
+            .collect::<Vec<_>>();
+        Json(json!({"data":{"keys":keys}})).into_response()
+    }
+
+    async fn gateway_transit_sign(
+        State(fixture): State<GatewayTransitFixture>,
+        Path(reference): Path<String>,
+        headers: HeaderMap,
+        Json(body): Json<Value>,
+    ) -> Response {
+        if !gateway_transit_authorized(&headers) {
+            return StatusCode::FORBIDDEN.into_response();
+        }
+        if !fixture.keys.lock().unwrap().contains_key(&reference) {
+            return StatusCode::NOT_FOUND.into_response();
+        }
+        fixture.signs.lock().unwrap().push((reference, body));
+        Json(json!({"data":{"signature":"vault:v1:AQ=="}})).into_response()
+    }
+
+    #[tokio::test]
+    #[ignore = "requires disposable MARTY_TEST_REDIS_URL and BAO_TOKEN=test-only"]
+    async fn authenticated_gateway_reaches_rust_managed_key_route_without_custody() {
+        assert_eq!(std::env::var("BAO_TOKEN").as_deref(), Ok("test-only"));
+        let redis_url = std::env::var("MARTY_TEST_REDIS_URL").expect("disposable Redis URL");
+        let fixture = GatewayTransitFixture::default();
+        let kms = Router::new()
+            .route("/v1/transit/keys", get(gateway_transit_list))
+            .route(
+                "/v1/transit/keys/{reference}",
+                get(gateway_transit_read).post(gateway_transit_create),
+            )
+            .route(
+                "/v1/transit/sign/{reference}",
+                axum::routing::post(gateway_transit_sign),
+            )
+            .with_state(fixture.clone());
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let endpoint = format!("http://{}", listener.local_addr().unwrap());
+        let kms_server = tokio::spawn(async move { axum::serve(listener, kms).await.unwrap() });
+        let store = SigningRegistryStore::connect(&redis_url)
+            .await
+            .unwrap()
+            .with_managed_openbao(Some(endpoint.clone()));
+        store
+            .save("org-1", &marty_signing_keys::registry::empty_registry())
+            .await
+            .unwrap();
+        let profiles = SigningProfileStore::from_connection(store.connection());
+        let documents = SigningDocumentStore::from_connection(store.connection());
+        let signing = signing_router(
+            "internal-signing-key".into(),
+            Some(store),
+            Some(documents.clone()),
+            None,
+            Some(profiles.clone()),
+            None,
+            Some("issuer.example".into()),
+        );
+        let signing_listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let signing_url = format!("http://{}", signing_listener.local_addr().unwrap());
+        let signing_server =
+            tokio::spawn(async move { axum::serve(signing_listener, signing).await.unwrap() });
+        let gateway = gateway_with_signing_http(signing_url);
+        let create = |cookie: bool| {
+            let mut builder =
+                Request::post("/v1/signing-keys").header("content-type", "application/json");
+            if cookie {
+                builder = builder.header("cookie", "sessionId=valid");
+            }
+            builder
+                .body(Body::from(r#"{"name":"Gateway KMS key"}"#))
+                .unwrap()
+        };
+        let denied = gateway.clone().oneshot(create(false)).await.unwrap();
+        assert_eq!(denied.status(), StatusCode::UNAUTHORIZED);
+        let cross_tenant = gateway
+            .clone()
+            .oneshot(
+                Request::post("/v1/signing-keys?organization_id=org-other")
+                    .header("content-type", "application/json")
+                    .header("cookie", "sessionId=valid")
+                    .body(Body::from(r#"{"name":"Wrong tenant"}"#))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(cross_tenant.status(), StatusCode::FORBIDDEN);
+        let created = gateway.clone().oneshot(create(true)).await.unwrap();
+        assert_eq!(created.status(), StatusCode::OK);
+        let created: Value = serde_json::from_slice(
+            &to_bytes(created.into_body(), DEFAULT_MAXIMUM_BODY_BYTES)
+                .await
+                .unwrap(),
+        )
+        .unwrap();
+        let reference = created["provider_key_name"].as_str().unwrap();
+        assert_eq!(created["key"]["public_jwk"]["crv"], "P-256");
+        assert_eq!(
+            fixture.keys.lock().unwrap().get(reference).unwrap(),
+            "ecdsa-p256"
+        );
+        assert!(!created.to_string().contains("test-only"));
+        assert!(!created.to_string().contains("private_key"));
+        let listed = gateway
+            .clone()
+            .oneshot(
+                Request::get("/v1/signing-keys")
+                    .header("cookie", "sessionId=valid")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(listed.status(), StatusCode::OK);
+        let listed: Value = serde_json::from_slice(
+            &to_bytes(listed.into_body(), DEFAULT_MAXIMUM_BODY_BYTES)
+                .await
+                .unwrap(),
+        )
+        .unwrap();
+        assert!(listed["keys"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|key| key["id"] == reference));
+        let detail = gateway
+            .clone()
+            .oneshot(
+                Request::get(format!("/v1/signing-keys/{reference}"))
+                    .header("cookie", "sessionId=valid")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(detail.status(), StatusCode::OK);
+        let detail: Value = serde_json::from_slice(
+            &to_bytes(detail.into_body(), DEFAULT_MAXIMUM_BODY_BYTES)
+                .await
+                .unwrap(),
+        )
+        .unwrap();
+        assert_eq!(detail["id"], reference);
+        assert_eq!(detail["public_jwk"]["crv"], "P-256");
+        assert!(!detail.to_string().contains("test-only"));
+        let issuer_did = format!(
+            "did:web:issuer.example:orgs:org-1-{}",
+            uuid::Uuid::new_v4().simple()
+        );
+        let identity = json!({
+            "organization_id": "org-1", "issuer_did": issuer_did,
+            "key_purpose": "vc_jwt_issuer", "credential_format": "SD_JWT_VC",
+            "algorithm": "EdDSA"
+        });
+        let request = |path: &str, body: &Value| {
+            Request::post(path)
+                .header("cookie", "sessionId=valid")
+                .header("content-type", "application/json")
+                .body(Body::from(body.to_string()))
+                .unwrap()
+        };
+        let denied = gateway
+            .clone()
+            .oneshot(
+                Request::post("/v1/signing-keys/issuer-identities")
+                    .header("content-type", "application/json")
+                    .body(Body::from(identity.to_string()))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(denied.status(), StatusCode::UNAUTHORIZED);
+        let foreign = gateway
+            .clone()
+            .oneshot(request(
+                "/v1/signing-keys/issuer-identities?organization_id=org-other",
+                &identity,
+            ))
+            .await
+            .unwrap();
+        assert_eq!(foreign.status(), StatusCode::FORBIDDEN);
+        let created = gateway
+            .clone()
+            .oneshot(request("/v1/signing-keys/issuer-identities", &identity))
+            .await
+            .unwrap();
+        let status = created.status();
+        let created: Value = serde_json::from_slice(
+            &to_bytes(created.into_body(), DEFAULT_MAXIMUM_BODY_BYTES)
+                .await
+                .unwrap(),
+        )
+        .unwrap();
+        assert_eq!(status, StatusCode::OK, "{created}");
+        assert_eq!(created["created"], true);
+        assert_eq!(created["identity"]["issuer_did"], issuer_did);
+        let profile = profiles.list("org-1").await.unwrap()["profiles"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|profile| profile["issuer_did"] == issuer_did)
+            .unwrap()
+            .clone();
+        let profile_reference = profile["signing_key_reference"].as_str().unwrap();
+        assert_eq!(profile["key_purpose"], "vc_jwt_issuer");
+        assert!(profile_reference.starts_with("cred-issuer-"));
+        assert_eq!(
+            fixture.keys.lock().unwrap().get(profile_reference).unwrap(),
+            "ed25519"
+        );
+        assert_eq!(
+            fixture.creates.lock().unwrap().as_slice(),
+            &[
+                (reference.to_owned(), "ecdsa-p256".into()),
+                (profile_reference.to_owned(), "ed25519".into())
+            ]
+        );
+        let resolved = gateway
+            .clone()
+            .oneshot(request(
+                "/v1/signing-keys/issuer-identities/resolve",
+                &identity,
+            ))
+            .await
+            .unwrap();
+        let status = resolved.status();
+        let resolved: Value = serde_json::from_slice(
+            &to_bytes(resolved.into_body(), DEFAULT_MAXIMUM_BODY_BYTES)
+                .await
+                .unwrap(),
+        )
+        .unwrap();
+        assert_eq!(status, StatusCode::OK, "{resolved}");
+        assert_eq!(resolved["public_jwk"]["crv"], "Ed25519");
+        let sign_body = json!({
+            "organization_id": "org-other", "issuer_did": issuer_did,
+            "key_purpose": "vc_jwt_issuer", "credential_format": "SD_JWT_VC",
+            "algorithm": "EdDSA", "payload_b64": "cGF5bG9hZA"
+        });
+        let denied_sign = gateway
+            .clone()
+            .oneshot(
+                Request::post("/internal/signing-keys/issuer-dids/sign?organization_id=org-1")
+                    .header("content-type", "application/json")
+                    .body(Body::from(sign_body.to_string()))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(denied_sign.status(), StatusCode::UNAUTHORIZED);
+        assert!(fixture.signs.lock().unwrap().is_empty());
+        let signed = gateway
+            .clone()
+            .oneshot(
+                Request::post("/internal/signing-keys/issuer-dids/sign?organization_id=org-1")
+                    .header("x-api-key", "internal-signing-key")
+                    .header("content-type", "application/json")
+                    .body(Body::from(sign_body.to_string()))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        let status = signed.status();
+        let signed: Value = serde_json::from_slice(
+            &to_bytes(signed.into_body(), DEFAULT_MAXIMUM_BODY_BYTES)
+                .await
+                .unwrap(),
+        )
+        .unwrap();
+        assert_eq!(status, StatusCode::OK, "{signed}");
+        assert_eq!(signed["ok"], true);
+        assert!(!signed["signature_b64"].as_str().unwrap().is_empty());
+        assert_eq!(
+            fixture.signs.lock().unwrap().as_slice(),
+            &[(
+                profile_reference.to_owned(),
+                json!({"input":"cGF5bG9hZA==","prehashed":false})
+            )]
+        );
+        for public in [&created, &resolved, &signed] {
+            for secret in [&endpoint[..], "test-only", profile_reference] {
+                assert!(!public.to_string().contains(secret), "{public}");
+            }
+        }
+        signing_server.abort();
+        kms_server.abort();
+    }
+
+    async fn disposable_signing_redis_url() -> String {
+        let redis_url = std::env::var("MARTY_TEST_REDIS_URL").expect("disposable Redis URL");
+        let parsed_redis = url::Url::parse(&redis_url).expect("disposable Redis URL syntax");
+        let redis_db = parsed_redis
+            .path()
+            .trim_start_matches('/')
+            .parse::<u8>()
+            .ok();
+        assert!(
+            parsed_redis.host_str() == Some("127.0.0.1") && redis_db.is_some_and(|db| db >= 13),
+            "CSR test requires an isolated loopback Redis database numbered 13 or higher"
+        );
+        let nonce = std::env::var("MARTY_TEST_REDIS_DISPOSABLE_NONCE")
+            .expect("disposable Redis sentinel value");
+        assert!(nonce.len() >= 16, "disposable Redis sentinel is too short");
+        let client = redis::Client::open(redis_url.as_str()).expect("disposable Redis client");
+        let mut redis = client
+            .get_multiplexed_async_connection()
+            .await
+            .expect("disposable Redis connection");
+        let observed: Option<String> = redis::cmd("GET")
+            .arg("marty:tests:disposable-guard")
+            .query_async(&mut redis)
+            .await
+            .expect("disposable Redis sentinel read");
+        assert!(
+            observed.as_deref() == Some(nonce.as_str()),
+            "disposable Redis sentinel does not match"
+        );
+        redis_url
+    }
+
+    #[tokio::test]
+    #[ignore = "requires independently marked disposable Redis and OpenBao instances"]
+    async fn authenticated_gateway_generates_profile_scoped_passport_csrs_in_openbao() {
+        use std::str::FromStr;
+
+        use der::{DecodePem, Encode};
+        use x509_cert::name::Name;
+        use x509_cert::request::CertReq;
+
+        let redis_url = disposable_signing_redis_url().await;
+        let endpoint = std::env::var("MARTY_TEST_OPENBAO_URL").expect("disposable OpenBao URL");
+        let parsed_bao = url::Url::parse(&endpoint).expect("disposable OpenBao URL syntax");
+        assert!(
+            parsed_bao.scheme() == "http" && parsed_bao.host_str() == Some("127.0.0.1"),
+            "CSR test requires a loopback disposable OpenBao instance"
+        );
+        let token = std::env::var("MARTY_TEST_OPENBAO_TOKEN").expect("disposable OpenBao token");
+        assert!(
+            std::env::var("BAO_TOKEN").ok().as_deref() == Some(token.as_str()),
+            "disposable OpenBao token binding does not match"
+        );
+        let bao_nonce = std::env::var("MARTY_TEST_OPENBAO_DISPOSABLE_NONCE")
+            .expect("pre-provisioned disposable OpenBao sentinel value");
+        assert!(
+            bao_nonce.len() >= 16,
+            "disposable OpenBao sentinel is too short"
+        );
+        let marker = reqwest::Client::new()
+            .get(
+                parsed_bao
+                    .join("/v1/secret/data/marty-test-disposable-guard")
+                    .expect("disposable OpenBao sentinel URL"),
+            )
+            .header("X-Vault-Token", &token)
+            .send()
+            .await
+            .expect("disposable OpenBao sentinel read");
+        assert!(
+            marker.status().is_success(),
+            "disposable OpenBao sentinel is absent"
+        );
+        let marker: Value = marker
+            .json()
+            .await
+            .expect("disposable OpenBao sentinel JSON");
+        assert!(
+            marker["data"]["data"]["nonce"].as_str() == Some(bao_nonce.as_str()),
+            "disposable OpenBao sentinel does not match"
+        );
+        let registry = SigningRegistryStore::connect(&redis_url)
+            .await
+            .unwrap()
+            .with_managed_openbao(Some(endpoint.clone()));
+        let profiles = SigningProfileStore::from_connection(registry.connection());
+        let documents = SigningDocumentStore::from_connection(registry.connection());
+        let signing = signing_router(
+            "internal-signing-key".into(),
+            Some(registry),
+            Some(documents),
+            None,
+            Some(profiles.clone()),
+            None,
+            Some("issuer.example".into()),
+        );
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let signing_url = format!("http://{}", listener.local_addr().unwrap());
+        let signing_server =
+            tokio::spawn(async move { axum::serve(listener, signing).await.unwrap() });
+        let gateway = gateway_with_signing_http(signing_url);
+        let mut references = Vec::new();
+        let mut public_keys = Vec::new();
+        for (purpose, common_name) in [("csca", "Pilot CSCA"), ("x509_doc_signer", "Pilot DSC")] {
+            let issuer_did = format!(
+                "did:web:issuer.example:orgs:csr-{}",
+                uuid::Uuid::new_v4().simple()
+            );
+            let identity = json!({
+                "organization_id":"org-1", "issuer_did":issuer_did,
+                "key_purpose":purpose, "credential_format":"ICAO_EMRTD",
+                "algorithm":"ES256"
+            });
+            let request = |method: &str, path: &str, body: &Value, authenticated: bool| {
+                let mut builder = Request::builder()
+                    .method(method)
+                    .uri(path)
+                    .header("content-type", "application/json");
+                if authenticated {
+                    builder = builder.header("cookie", "sessionId=valid");
+                }
+                builder.body(Body::from(body.to_string())).unwrap()
+            };
+            let created = gateway
+                .clone()
+                .oneshot(request(
+                    "POST",
+                    "/v1/signing-keys/issuer-identities",
+                    &identity,
+                    true,
+                ))
+                .await
+                .unwrap();
+            let status = created.status();
+            let created: Value = serde_json::from_slice(
+                &to_bytes(created.into_body(), DEFAULT_MAXIMUM_BODY_BYTES)
+                    .await
+                    .unwrap(),
+            )
+            .unwrap();
+            assert_eq!(status, StatusCode::OK, "{purpose}: profile create failed");
+            assert_eq!(created["created"], true);
+            let resolved = gateway
+                .clone()
+                .oneshot(request(
+                    "POST",
+                    "/v1/signing-keys/issuer-identities/resolve",
+                    &identity,
+                    true,
+                ))
+                .await
+                .unwrap();
+            let status = resolved.status();
+            let resolved: Value = serde_json::from_slice(
+                &to_bytes(resolved.into_body(), DEFAULT_MAXIMUM_BODY_BYTES)
+                    .await
+                    .unwrap(),
+            )
+            .unwrap();
+            assert_eq!(status, StatusCode::OK, "{purpose}: profile resolve failed");
+            assert_eq!(resolved["public_jwk"]["crv"], "P-256");
+            public_keys.push(resolved["public_jwk"].clone());
+            let profile = profiles.list("org-1").await.unwrap()["profiles"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .find(|profile| profile["issuer_did"] == issuer_did)
+                .unwrap()
+                .clone();
+            let reference = profile["signing_key_reference"]
+                .as_str()
+                .unwrap()
+                .to_owned();
+            references.push(reference.clone());
+            let mut csr_input = identity.clone();
+            csr_input["country"] = json!("US");
+            csr_input["organization"] = json!("ElevenID Beta");
+            csr_input["common_name"] = json!(common_name);
+            let route = "/v1/signing-keys/issuer-identities/certificate-csr";
+            let denied = gateway
+                .clone()
+                .oneshot(request("PUT", route, &csr_input, false))
+                .await
+                .unwrap();
+            assert_eq!(denied.status(), StatusCode::UNAUTHORIZED);
+            let foreign = gateway
+                .clone()
+                .oneshot(request(
+                    "PUT",
+                    "/v1/signing-keys/issuer-identities/certificate-csr?organization_id=org-other",
+                    &csr_input,
+                    true,
+                ))
+                .await
+                .unwrap();
+            assert_eq!(foreign.status(), StatusCode::FORBIDDEN);
+            let mut forged = csr_input.clone();
+            forged["key_reference"] = json!("attacker-key");
+            let rejected = gateway
+                .clone()
+                .oneshot(request("PUT", route, &forged, true))
+                .await
+                .unwrap();
+            assert_eq!(rejected.status(), StatusCode::UNPROCESSABLE_ENTITY);
+            let csr = gateway
+                .clone()
+                .oneshot(request("PUT", route, &csr_input, true))
+                .await
+                .unwrap();
+            let status = csr.status();
+            let csr: Value = serde_json::from_slice(
+                &to_bytes(csr.into_body(), DEFAULT_MAXIMUM_BODY_BYTES)
+                    .await
+                    .unwrap(),
+            )
+            .unwrap();
+            assert_eq!(status, StatusCode::OK, "{purpose}: CSR request failed");
+            assert_eq!(csr["issuer_did"], issuer_did);
+            assert_eq!(csr["subject"]["country"], "US");
+            assert_eq!(csr["subject"]["organization"], "ElevenID Beta");
+            assert_eq!(csr["subject"]["common_name"], common_name);
+            let parsed = CertReq::from_pem(csr["csr_pem"].as_str().unwrap()).unwrap();
+            assert_eq!(
+                parsed.info.subject,
+                Name::from_str(&format!("C=US,O=ElevenID Beta,CN={common_name}")).unwrap()
+            );
+            let parsed_jwk: Value = serde_json::to_value(
+                marty_crypto::jwk::public_key_der_to_jwk(&parsed.info.public_key.to_der().unwrap())
+                    .unwrap(),
+            )
+            .unwrap();
+            for field in ["kty", "crv", "x", "y"] {
+                assert_eq!(parsed_jwk[field], resolved["public_jwk"][field]);
+            }
+            for public in [&created, &resolved, &csr] {
+                for secret in [&endpoint[..], token.as_str(), reference.as_str()] {
+                    assert!(
+                        !public.to_string().contains(secret),
+                        "{purpose}: public response exposed custody metadata"
+                    );
+                }
+            }
+        }
+        assert_ne!(references[0], references[1]);
+        assert_ne!(public_keys[0]["x"], public_keys[1]["x"]);
+        signing_server.abort();
+    }
+
+    #[tokio::test]
+    #[ignore = "requires a marked disposable Redis database"]
+    async fn authenticated_gateway_rotates_only_a_dedicated_signing_service() {
+        use std::sync::atomic::AtomicUsize;
+
+        let redis_url = disposable_signing_redis_url().await;
+        let version = Arc::new(AtomicUsize::new(1));
+        let rotations = Arc::new(AtomicUsize::new(0));
+        let kms = Router::new()
+            .route(
+                "/v1/transit/keys/gateway-rotation-key",
+                get({
+                    let version = Arc::clone(&version);
+                    move |headers: HeaderMap| {
+                        let version = Arc::clone(&version);
+                        async move {
+                            if !gateway_transit_authorized(&headers) {
+                                return StatusCode::FORBIDDEN.into_response();
+                            }
+                            Json(json!({"data":{"latest_version":version.load(Ordering::SeqCst)}}))
+                                .into_response()
+                        }
+                    }
+                }),
+            )
+            .route(
+                "/v1/transit/keys/gateway-rotation-key/rotate",
+                axum::routing::post({
+                    let version = Arc::clone(&version);
+                    let rotations = Arc::clone(&rotations);
+                    move |headers: HeaderMap| {
+                        let version = Arc::clone(&version);
+                        let rotations = Arc::clone(&rotations);
+                        async move {
+                            if !gateway_transit_authorized(&headers) {
+                                return StatusCode::FORBIDDEN;
+                            }
+                            rotations.fetch_add(1, Ordering::SeqCst);
+                            version.fetch_add(1, Ordering::SeqCst);
+                            StatusCode::NO_CONTENT
+                        }
+                    }
+                }),
+            );
+        let kms_listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let endpoint = format!("http://{}", kms_listener.local_addr().unwrap());
+        let kms_server = tokio::spawn(async move { axum::serve(kms_listener, kms).await.unwrap() });
+        let store = SigningRegistryStore::connect(&redis_url).await.unwrap();
+        let service_id = format!("gateway-rotation-{}", uuid::Uuid::new_v4().simple());
+        let mut registry = store.load("org-2").await.unwrap();
+        registry["services"].as_array_mut().unwrap().push(json!({
+            "id":service_id, "name":"Gateway dedicated rotation",
+            "service_type":"openbao-transit", "endpoint":endpoint,
+            "mount":"transit", "auth_mode":"token", "auth_reference":"test-only",
+            "key_reference":"gateway-rotation-key", "algorithms":["ES256"],
+            "key_purposes":["vc_jwt_issuer"]
+        }));
+        store.save("org-2", &registry).await.unwrap();
+        let signing = signing_router(
+            "internal-signing-key".into(),
+            Some(store.clone().with_managed_openbao(Some(endpoint.clone()))),
+            None,
+            None,
+            None,
+            None,
+            None,
+        );
+        let signing_listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let signing_url = format!("http://{}", signing_listener.local_addr().unwrap());
+        let signing_server =
+            tokio::spawn(async move { axum::serve(signing_listener, signing).await.unwrap() });
+        let gateway = gateway_with_signing_http(signing_url);
+        let route = format!("/v1/signing-keys/services/{service_id}/rotate");
+        let body = json!({"overlap_days":14,"publish_updates":false});
+        let request = |path: &str, authenticated: bool| {
+            let mut builder = Request::post(path).header("content-type", "application/json");
+            if authenticated {
+                builder = builder.header("cookie", "sessionId=valid-org-2");
+            }
+            builder.body(Body::from(body.to_string())).unwrap()
+        };
+        let denied = gateway
+            .clone()
+            .oneshot(request(&route, false))
+            .await
+            .unwrap();
+        assert_eq!(denied.status(), StatusCode::UNAUTHORIZED);
+        let foreign = gateway
+            .clone()
+            .oneshot(request(&format!("{route}?organization_id=org-other"), true))
+            .await
+            .unwrap();
+        assert_eq!(foreign.status(), StatusCode::FORBIDDEN);
+        let managed = gateway
+            .clone()
+            .oneshot(request(
+                "/v1/signing-keys/services/managed-openbao-transit/rotate",
+                true,
+            ))
+            .await
+            .unwrap();
+        assert_eq!(managed.status(), StatusCode::FORBIDDEN);
+        assert_eq!(rotations.load(Ordering::SeqCst), 0);
+        let accepted = gateway
+            .clone()
+            .oneshot(request(&route, true))
+            .await
+            .unwrap();
+        let status = accepted.status();
+        let accepted: Value = serde_json::from_slice(
+            &to_bytes(accepted.into_body(), DEFAULT_MAXIMUM_BODY_BYTES)
+                .await
+                .unwrap(),
+        )
+        .unwrap();
+        assert_eq!(status, StatusCode::OK, "dedicated service rotation failed");
+        assert_eq!(accepted["ok"], true);
+        assert_eq!(accepted["service_id"], service_id);
+        assert_eq!(accepted["publication"], json!({"jwks":false,"did":false}));
+        assert_eq!(
+            accepted["rotation_state"]["provider_rotation"]["version"],
+            2
+        );
+        assert_eq!(accepted["rotation_state"]["overlap_days"], 14);
+        assert_eq!(
+            accepted["rotation_state"]["previous_versions"][0]["key_reference"],
+            "gateway-rotation-key"
+        );
+        assert_eq!(rotations.load(Ordering::SeqCst), 1);
+        let stored = store.load("org-2").await.unwrap();
+        let stored_service = stored["services"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|service| service["id"] == service_id)
+            .unwrap();
+        assert_eq!(stored_service["rotation_state"], accepted["rotation_state"]);
+        assert_eq!(stored_service["rotation_policy"]["overlap_days"], 14);
+        assert_eq!(stored_service["rotation_policy"]["auto_publish"], false);
+        assert!(store
+            .rotation_marker("org-2", stored_service)
+            .await
+            .unwrap()
+            .is_none());
+        assert!(!accepted.to_string().contains(&endpoint));
+        assert!(!accepted.to_string().contains("test-only"));
+        signing_server.abort();
+        kms_server.abort();
+    }
+
+    #[tokio::test]
+    #[ignore = "requires disposable MARTY_TEST_REDIS_URL"]
+    async fn authenticated_gateway_reaches_remaining_rust_signing_handlers() {
+        let redis_url = std::env::var("MARTY_TEST_REDIS_URL").expect("disposable Redis URL");
+        let store = SigningRegistryStore::connect(&redis_url).await.unwrap();
+        store
+            .save("org-1", &marty_signing_keys::registry::empty_registry())
+            .await
+            .unwrap();
+        let documents = SigningDocumentStore::from_connection(store.connection());
+        documents
+            .publish_jwk(
+                "org-1",
+                "gateway-fixture",
+                PublishJwkRequest {
+                    jwk: json!({"kty":"OKP","crv":"Ed25519","x":"AQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQE","kid":"gateway-published"}),
+                    key_reference: Some("gateway-published".into()),
+                    cert_pem: None,
+                    cert_chain_pem: None,
+                },
+            )
+            .await
+            .unwrap();
+        let verify_documents = documents.clone();
+        let profiles = SigningProfileStore::from_connection(store.connection());
+        let verify_registry = store.clone();
+        let signing = signing_router(
+            "test-internal-key".into(),
+            Some(store),
+            Some(documents),
+            None,
+            Some(profiles),
+            None,
+            Some("beta.example".into()),
+        );
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let signing_url = format!("http://{}", listener.local_addr().unwrap());
+        let signing_server =
+            tokio::spawn(async move { axum::serve(listener, signing).await.unwrap() });
+        let upstream = Arc::new(crate::transport::ReqwestUpstream::new(1024 * 1024).unwrap());
+        let mut state = runtime_state_with_upstream(Arc::new(NoOwner), upstream.clone());
+        let routes = GatewayContract::load()
+            .unwrap()
+            .proxy_route_table_with_passport_native(false)
+            .unwrap();
+        let registry = StaticServiceRegistry::from_urls(&BTreeMap::from([(
+            "signing-keys".into(),
+            signing_url,
+        )]))
+        .unwrap();
+        Arc::get_mut(&mut state).unwrap().proxy = Arc::new(
+            GatewayProxy::new(routes, Arc::new(registry), upstream, ProxyConfig::default())
+                .unwrap(),
+        );
+        struct SigningMetadataGrantProvider;
+        #[async_trait]
+        impl OrganizationMembershipProvider for SigningMetadataGrantProvider {
+            async fn get_membership(
+                &self,
+                user_id: &str,
+                organization_id: &str,
+            ) -> Result<Option<OrganizationMembership>, SecurityError> {
+                let mut membership = RuntimeProvider
+                    .get_membership(user_id, organization_id)
+                    .await?;
+                if let Some(membership) = membership.as_mut() {
+                    membership.permissions.insert("signing-key:edit".into());
+                    membership.permissions.insert("signing-key:delete".into());
+                }
+                Ok(membership)
+            }
+        }
+        Arc::get_mut(&mut state).unwrap().memberships = Arc::new(SigningMetadataGrantProvider);
+        let gateway = gateway_router(state);
+
+        let cases = [
+            (
+                "PATCH",
+                "/v1/signing-keys/gateway-published",
+                Some(json!({"name":"Gateway renamed"})),
+                StatusCode::OK,
+                "updated",
+            ),
+            (
+                "DELETE",
+                "/v1/signing-keys/gateway-published",
+                None,
+                StatusCode::OK,
+                "removed",
+            ),
+            (
+                "GET",
+                "/v1/signing-keys/holder-keys?device_id=device-gateway-acceptance",
+                None,
+                StatusCode::OK,
+                "keys",
+            ),
+            (
+                "POST",
+                "/v1/signing-keys/holder-keys",
+                Some(
+                    json!({"device_id":"device-gateway-acceptance","credential_id":"credential-gateway-acceptance","public_jwk":{"kty":"OKP","crv":"Ed25519","x":"AQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQE"}}),
+                ),
+                StatusCode::OK,
+                "record_id",
+            ),
+            (
+                "GET",
+                "/v1/signing-keys/services/missing-service/certificate",
+                None,
+                StatusCode::NOT_FOUND,
+                "service",
+            ),
+            (
+                "PUT",
+                "/v1/signing-keys/services/missing-service/certificate",
+                Some(json!({"cert_pem":"test"})),
+                StatusCode::NOT_FOUND,
+                "service",
+            ),
+            (
+                "POST",
+                "/v1/signing-keys/services/missing-service/certificate-csr",
+                Some(json!({"country":"US","organization":"Test","common_name":"test"})),
+                StatusCode::NOT_FOUND,
+                "service",
+            ),
+            (
+                "POST",
+                "/v1/signing-keys/services/missing-service/sign",
+                Some(json!({"payload_b64":"cGF5bG9hZA"})),
+                StatusCode::NOT_FOUND,
+                "service",
+            ),
+            (
+                "GET",
+                "/v1/signing-keys/services/missing-service/verify-current",
+                None,
+                StatusCode::NOT_FOUND,
+                "service",
+            ),
+            (
+                "POST",
+                "/v1/signing-keys/services/missing-service/rotate",
+                Some(json!({})),
+                StatusCode::NOT_FOUND,
+                "service",
+            ),
+            (
+                "GET",
+                "/v1/signing-keys/services/missing-service/audit-log",
+                None,
+                StatusCode::NOT_FOUND,
+                "service",
+            ),
+            (
+                "GET",
+                "/v1/signing-keys/services/missing-service/mdoc-x5c",
+                None,
+                StatusCode::NOT_FOUND,
+                "service",
+            ),
+            (
+                "POST",
+                "/v1/signing-keys/services/missing-service/publish-did-vm",
+                Some(json!({})),
+                StatusCode::NOT_FOUND,
+                "service",
+            ),
+            (
+                "POST",
+                "/v1/signing-keys/services/missing-service/publish-jwks",
+                Some(json!({})),
+                StatusCode::NOT_FOUND,
+                "service",
+            ),
+            (
+                "GET",
+                "/v1/signing-keys/compliance/keys-summary",
+                None,
+                StatusCode::NOT_IMPLEMENTED,
+                "key_compliance_summary_unavailable",
+            ),
+            (
+                "GET",
+                "/v1/signing-keys/config/certificate-expiry-alerts",
+                None,
+                StatusCode::OK,
+                "alerts",
+            ),
+            (
+                "POST",
+                "/v1/signing-keys/config/resolve",
+                Some(json!({"key_purpose":"mdoc_dsc","algorithm":"EdDSA"})),
+                StatusCode::NOT_FOUND,
+                "No registered signing service",
+            ),
+            (
+                "GET",
+                "/v1/signing-keys/did-document",
+                None,
+                StatusCode::OK,
+                "did:web:beta.example:orgs:org-1",
+            ),
+            ("GET", "/v1/signing-keys/jwks", None, StatusCode::OK, "keys"),
+            (
+                "PUT",
+                "/v1/signing-keys/issuer-identities/didcomm-key-agreement",
+                Some(
+                    json!({"organization_id":"org-1","issuer_did":"did:web:beta.example:orgs:org-1","key_purpose":"vc_jwt_issuer","credential_format":"VC_JWT","algorithm":"EdDSA","public_jwk":{"kty":"OKP","crv":"X25519","x":"AQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQE"}}),
+                ),
+                StatusCode::NOT_FOUND,
+                "issuer",
+            ),
+            (
+                "POST",
+                "/v1/signing-keys/issuer-identities/resolve",
+                Some(
+                    json!({"issuer_did":"did:web:beta.example:orgs:org-1","key_purpose":"vc_jwt_issuer","credential_format":"VC_JWT","algorithm":"EdDSA"}),
+                ),
+                StatusCode::NOT_FOUND,
+                "issuer",
+            ),
+            (
+                "POST",
+                "/v1/signing-keys/services/vdsnc/register",
+                Some(
+                    json!({"country_code":"USA","authority_name":"Test Bureau","endpoint":"https://kms.example.invalid","auth_reference":"test-secret"}),
+                ),
+                StatusCode::OK,
+                "service",
+            ),
+        ];
+        for (method, path, body, expected_status, expected_fragment) in cases {
+            let request = |authenticated| {
+                let mut builder = Request::builder().method(method).uri(path);
+                if authenticated {
+                    builder = builder.header("cookie", "sessionId=valid");
+                }
+                if body.is_some() {
+                    builder = builder.header("content-type", "application/json");
+                }
+                builder
+                    .body(Body::from(
+                        body.as_ref().map_or_else(String::new, Value::to_string),
+                    ))
+                    .unwrap()
+            };
+            let denied = gateway.clone().oneshot(request(false)).await.unwrap();
+            assert_eq!(denied.status(), StatusCode::UNAUTHORIZED, "{method} {path}");
+            let foreign_path = format!(
+                "{path}{}organization_id=org-other",
+                if path.contains('?') { '&' } else { '?' },
+            );
+            let mut foreign_request = Request::builder()
+                .method(method)
+                .uri(foreign_path)
+                .header("cookie", "sessionId=valid");
+            if body.is_some() {
+                foreign_request = foreign_request.header("content-type", "application/json");
+            }
+            let forbidden = gateway
+                .clone()
+                .oneshot(
+                    foreign_request
+                        .body(Body::from(
+                            body.as_ref().map_or_else(String::new, Value::to_string),
+                        ))
+                        .unwrap(),
+                )
+                .await
+                .unwrap();
+            assert_eq!(forbidden.status(), StatusCode::FORBIDDEN, "{method} {path}");
+            let response = gateway.clone().oneshot(request(true)).await.unwrap();
+            let status = response.status();
+            let payload = to_bytes(response.into_body(), DEFAULT_MAXIMUM_BODY_BYTES)
+                .await
+                .unwrap();
+            let text = String::from_utf8_lossy(&payload);
+            assert_eq!(status, expected_status, "{method} {path}: {text}");
+            assert!(text.contains(expected_fragment), "{method} {path}: {text}");
+            assert!(!text.contains("test-secret"), "{method} {path}: {text}");
+            if method == "PATCH" && path == "/v1/signing-keys/gateway-published" {
+                let jwks = verify_documents.jwks("org-1").await.unwrap();
+                assert!(jwks["keys"].as_array().unwrap().iter().any(|key| {
+                    key["kid"] == "gateway-published" && key["name"] == "Gateway renamed"
+                }));
+            }
+        }
+        let jwks = verify_documents.jwks("org-1").await.unwrap();
+        assert!(jwks["keys"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .all(|key| key["kid"] != "gateway-published"));
+        let holder_keys = verify_documents
+            .holder_keys("org-1", Some("device-gateway-acceptance"))
+            .await
+            .unwrap();
+        assert!(holder_keys["keys"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|key| { key["credential_id"] == "credential-gateway-acceptance" }));
+        let registry = verify_registry.load("org-1").await.unwrap();
+        assert!(registry["services"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|service| {
+                service["id"]
+                    .as_str()
+                    .is_some_and(|id| id.starts_with("svc-vdsnc-usa-"))
+                    && service["key_purposes"] == json!(["vdsnc_signing"])
+            }));
+        let certificate: Value = serde_json::from_str(include_str!(
+            "../../signing-keys/tests/fixtures/document_vectors.json"
+        ))
+        .unwrap();
+        let provider_vectors: Value = serde_json::from_str(include_str!(
+            "../../signing-keys/tests/fixtures/kms_provider_vectors.json"
+        ))
+        .unwrap();
+        let provider_response = provider_vectors["public_key_cases"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|case| case["name"] == "gcp_pem_public_key")
+            .unwrap()["provider_response"]
+            .clone();
+        let kms_material = Arc::new(std::sync::Mutex::new(provider_response));
+        let kms_listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let kms_endpoint = format!("http://{}", kms_listener.local_addr().unwrap());
+        let kms_calls = Arc::new(std::sync::Mutex::new(Vec::new()));
+        let recorded_kms_calls = kms_calls.clone();
+        let served_kms_material = kms_material.clone();
+        let kms_server = tokio::spawn(async move {
+            axum::serve(
+                kms_listener,
+                Router::new().fallback(any(move |request: Request| {
+                    let response = served_kms_material.lock().unwrap().clone();
+                    let calls = recorded_kms_calls.clone();
+                    async move {
+                        let path = request.uri().path().to_owned();
+                        let authorization = request
+                            .headers()
+                            .get(header::AUTHORIZATION)
+                            .and_then(|value| value.to_str().ok())
+                            .unwrap_or_default()
+                            .to_owned();
+                        calls.lock().unwrap().push((
+                            request.method().to_string(),
+                            path.clone(),
+                            authorization.clone(),
+                        ));
+                        if authorization != "Bearer internal-test-credential" {
+                            return StatusCode::UNAUTHORIZED.into_response();
+                        }
+                        if request.method() != axum::http::Method::GET
+                            || path != "/v1/projects/p/locations/l/keyRings/r/cryptoKeys/k/cryptoKeyVersions/1/publicKey"
+                        {
+                            return StatusCode::NOT_FOUND.into_response();
+                        }
+                        Json(response).into_response()
+                    }
+                })),
+            )
+            .await
+            .unwrap()
+        });
+        verify_registry
+            .save(
+                "org-1",
+                &json!({
+                    "services": [{
+                        "id": "gateway-service", "name": "Gateway mDoc Signer",
+                        "service_type": "gcp-cloud-kms", "endpoint": kms_endpoint,
+                        "auth_mode": "workload_identity", "auth_reference": "internal-test-credential",
+                        "key_reference": "projects/p/locations/l/keyRings/r/cryptoKeys/k/cryptoKeyVersions/1",
+                        "algorithms": ["ES256"], "key_purposes": ["mdoc_dsc"]
+                    }],
+                    "default_service_id": "gateway-service",
+                    "format_defaults": {"mso_mdoc": "gateway-service"},
+                    "type_defaults": {"mdoc_dsc": "gateway-service"},
+                    "key_reference_purposes": {
+                        "gateway-service": {
+                            "projects/p/locations/l/keyRings/r/cryptoKeys/k/cryptoKeyVersions/1": ["mdoc_dsc"]
+                        }
+                    }
+                }),
+            )
+            .await
+            .unwrap();
+        let seeded = verify_registry.load("org-1").await.unwrap();
+        assert_eq!(
+            seeded["key_reference_purposes"]["gateway-service"]
+                ["projects/p/locations/l/keyRings/r/cryptoKeys/k/cryptoKeyVersions/1"],
+            json!(["mdoc_dsc"])
+        );
+        let reference = "projects/p/locations/l/keyRings/r/cryptoKeys/k/cryptoKeyVersions/1";
+        let selected =
+            marty_signing_keys::registry::resolve(marty_signing_keys::registry::ResolveRequest {
+                registry: seeded.clone(),
+                service: None,
+                keys: vec![json!({"id": reference, "algorithm": "ES256"})],
+                credential_format: Some("mso_mdoc".into()),
+                key_purpose: Some("mdoc_dsc".into()),
+                algorithm: Some("ES256".into()),
+            })
+            .unwrap();
+        assert_eq!(selected.key_reference.as_deref(), Some(reference));
+        let positive_cases = [
+            (
+                "PUT",
+                "/v1/signing-keys/services/gateway-service/certificate",
+                Some(json!({"cert_pem": certificate["certificate"]["cert_pem"]})),
+                StatusCode::OK,
+                "cert_pem",
+            ),
+            (
+                "GET",
+                "/v1/signing-keys/services/gateway-service/certificate",
+                None,
+                StatusCode::OK,
+                "cert_pem",
+            ),
+            (
+                "GET",
+                "/v1/signing-keys/services/gateway-service/mdoc-x5c",
+                None,
+                StatusCode::OK,
+                "mdoc_cose_header_hints",
+            ),
+            (
+                "GET",
+                "/v1/signing-keys/services/gateway-service/verify-current",
+                None,
+                StatusCode::OK,
+                "key_valid",
+            ),
+            (
+                "POST",
+                "/v1/signing-keys/services/gateway-service/publish-jwks",
+                Some(json!({})),
+                StatusCode::OK,
+                "jwks_document",
+            ),
+            (
+                "POST",
+                "/v1/signing-keys/services/gateway-service/publish-did-vm",
+                Some(json!({})),
+                StatusCode::OK,
+                "verification_method",
+            ),
+            ("GET", "/v1/signing-keys/jwks", None, StatusCode::OK, "x5c"),
+            (
+                "GET",
+                "/v1/signing-keys/did-document",
+                None,
+                StatusCode::OK,
+                "assertionMethod",
+            ),
+            (
+                "POST",
+                "/v1/signing-keys/config/resolve",
+                Some(
+                    json!({"credential_format":"mso_mdoc","key_purpose":"mdoc_dsc","algorithm":"ES256"}),
+                ),
+                StatusCode::OK,
+                "resolved_by",
+            ),
+            (
+                "GET",
+                "/v1/signing-keys/services/gateway-service/audit-log",
+                None,
+                StatusCode::NOT_IMPLEMENTED,
+                "key_audit_log_unavailable",
+            ),
+        ];
+        for (method, path, body, expected_status, expected_fragment) in positive_cases {
+            let mut builder = Request::builder()
+                .method(method)
+                .uri(path)
+                .header("cookie", "sessionId=valid");
+            if body.is_some() {
+                builder = builder.header("content-type", "application/json");
+            }
+            let response = gateway
+                .clone()
+                .oneshot(
+                    builder
+                        .body(Body::from(
+                            body.as_ref().map_or_else(String::new, Value::to_string),
+                        ))
+                        .unwrap(),
+                )
+                .await
+                .unwrap();
+            let status = response.status();
+            let payload = to_bytes(response.into_body(), DEFAULT_MAXIMUM_BODY_BYTES)
+                .await
+                .unwrap();
+            let text = String::from_utf8_lossy(&payload);
+            assert_eq!(status, expected_status, "{method} {path}: {text}");
+            assert!(text.contains(expected_fragment), "{method} {path}: {text}");
+            assert!(
+                !text.contains("internal-test-credential"),
+                "{method} {path}: {text}"
+            );
+            let result: Value = serde_json::from_slice(&payload).unwrap();
+            match (method, path) {
+                ("GET", "/v1/signing-keys/services/gateway-service/certificate") => {
+                    assert_eq!(result["cert_pem"], certificate["certificate"]["cert_pem"]);
+                }
+                ("PUT", "/v1/signing-keys/services/gateway-service/certificate") => {
+                    assert_eq!(
+                        result["service"]["cert_pem"],
+                        certificate["certificate"]["cert_pem"]
+                    );
+                }
+                ("GET", "/v1/signing-keys/services/gateway-service/mdoc-x5c") => {
+                    assert_eq!(result["x5c"][0], certificate["certificate"]["expected_x5c"]);
+                }
+                ("GET", "/v1/signing-keys/services/gateway-service/verify-current") => {
+                    assert_eq!(result["key_valid"], true);
+                }
+                ("POST", "/v1/signing-keys/services/gateway-service/publish-jwks") => {
+                    assert_eq!(result["jwks_document"]["key_count"], 1);
+                    assert_eq!(result["jwk"]["kid"], reference);
+                    assert_eq!(
+                        result["jwk"]["x5c"][0],
+                        certificate["certificate"]["expected_x5c"]
+                    );
+                    assert!(text.contains(reference));
+                }
+                ("POST", "/v1/signing-keys/services/gateway-service/publish-did-vm") => {
+                    assert_eq!(
+                        result["verification_method"]["x5c"][0],
+                        certificate["certificate"]["expected_x5c"]
+                    );
+                    assert_eq!(
+                        result["verification_method"]["publicKeyJwk"]["kid"],
+                        reference
+                    );
+                }
+                ("GET", "/v1/signing-keys/jwks") => {
+                    assert_eq!(
+                        result["keys"][0]["x5c"][0],
+                        certificate["certificate"]["expected_x5c"]
+                    );
+                    assert_eq!(result["keys"].as_array().unwrap().len(), 1);
+                    assert_eq!(result["keys"][0]["kid"], reference);
+                }
+                ("GET", "/v1/signing-keys/did-document") => {
+                    assert!(!result["assertionMethod"].as_array().unwrap().is_empty());
+                    assert!(result["verificationMethod"]
+                        .as_array()
+                        .unwrap()
+                        .iter()
+                        .any(|method| method["publicKeyJwk"]["kid"] == reference));
+                }
+                ("POST", "/v1/signing-keys/config/resolve") => {
+                    assert_eq!(result["service"]["id"], "gateway-service");
+                }
+                _ => {}
+            }
+        }
+        kms_material.lock().unwrap()["algorithm"] = json!("RSA_DECRYPT_OAEP_2048_SHA256");
+        let non_signing = gateway
+            .clone()
+            .oneshot(
+                Request::post("/v1/signing-keys/config/resolve")
+                    .header("cookie", "sessionId=valid")
+                    .header("content-type", "application/json")
+                    .body(Body::from(
+                        json!({"credential_format":"mso_mdoc","key_purpose":"mdoc_dsc","algorithm":"ES256"})
+                            .to_string(),
+                    ))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(non_signing.status(), StatusCode::NOT_FOUND);
+        let calls = kms_calls.lock().unwrap();
+        assert!(calls.len() >= 4, "expected live KMS checks: {calls:?}");
+        assert!(calls.iter().all(|(method, path, authorization)| {
+            method == "GET"
+                && path
+                    == "/v1/projects/p/locations/l/keyRings/r/cryptoKeys/k/cryptoKeyVersions/1/publicKey"
+                && authorization == "Bearer internal-test-credential"
+        }));
+        kms_server.abort();
+        signing_server.abort();
+    }
+
+    #[tokio::test]
+    async fn signing_key_metadata_mutations_require_session_and_forward_trusted_scope() {
+        let recorder = Arc::new(ActorRecordingUpstream::default());
+        let limited = gateway_router(runtime_state_with_upstream(
+            Arc::new(NoOwner),
+            recorder.clone(),
+        ));
+        let forbidden = limited
+            .oneshot(
+                Request::builder()
+                    .method("DELETE")
+                    .uri("/v1/signing-keys/key-1")
+                    .header("cookie", "sessionId=valid")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(forbidden.status(), StatusCode::FORBIDDEN);
+        assert!(recorder.0.lock().unwrap().is_empty());
+        struct KeyMetadataGrantProvider;
+        #[async_trait]
+        impl OrganizationMembershipProvider for KeyMetadataGrantProvider {
+            async fn get_membership(
+                &self,
+                user_id: &str,
+                organization_id: &str,
+            ) -> Result<Option<OrganizationMembership>, SecurityError> {
+                let mut membership = RuntimeProvider
+                    .get_membership(user_id, organization_id)
+                    .await?;
+                if let Some(membership) = membership.as_mut() {
+                    membership.permissions.insert("signing-key:edit".into());
+                    membership.permissions.insert("signing-key:delete".into());
+                }
+                Ok(membership)
+            }
+        }
+        let mut state = runtime_state_with_upstream(Arc::new(NoOwner), recorder.clone());
+        Arc::get_mut(&mut state)
+            .expect("unique runtime state")
+            .memberships = Arc::new(KeyMetadataGrantProvider);
+        let router = gateway_router(state);
+        let path = "/v1/signing-keys/key-1";
+        for (method, method_name, body) in [
+            (
+                HttpMethod::Patch,
+                "PATCH",
+                Some(json!({"name": "New name"})),
+            ),
+            (HttpMethod::Delete, "DELETE", None),
+        ] {
+            let request = |authenticated| {
+                let mut builder = Request::builder().method(method_name).uri(path);
+                if authenticated {
+                    builder = builder.header("cookie", "sessionId=valid");
+                }
+                if body.is_some() {
+                    builder = builder.header("content-type", "application/json");
+                }
+                builder
+                    .body(Body::from(
+                        body.as_ref().map_or_else(String::new, Value::to_string),
+                    ))
+                    .unwrap()
+            };
+            let before = recorder.0.lock().unwrap().len();
+            let denied = router.clone().oneshot(request(false)).await.unwrap();
+            assert_eq!(denied.status(), StatusCode::UNAUTHORIZED);
+            assert_eq!(recorder.0.lock().unwrap().len(), before);
+            let accepted = router.clone().oneshot(request(true)).await.unwrap();
+            assert_eq!(accepted.status(), StatusCode::OK);
+            let calls = recorder.0.lock().unwrap();
+            assert_eq!(calls.len(), before + 1);
+            let (service, forwarded) = &calls[before];
+            assert_eq!(service, "signing-keys");
+            assert_eq!(forwarded.path, path);
+            assert_eq!(forwarded.query["organization_id"], vec!["org-1"]);
+            assert_eq!(forwarded.method, method);
+            if let Some(expected) = body.as_ref() {
+                assert_eq!(
+                    serde_json::from_slice::<Value>(forwarded.body.as_deref().unwrap()).unwrap(),
+                    *expected
+                );
+            }
+        }
     }
 
     #[tokio::test]

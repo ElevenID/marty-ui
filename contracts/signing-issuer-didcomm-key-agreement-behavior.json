@@ -1,0 +1,24 @@
+{
+  "schema_version": 1,
+  "source": "pre-Rust services/gateway/routes/signing_keys.py and services/gateway/models.py at parent of e1ebad979",
+  "method": "PUT",
+  "path": "/v1/signing-keys/issuer-identities/didcomm-key-agreement",
+  "selector": ["organization_id", "issuer_did", "key_purpose", "credential_format", "algorithm"],
+  "requires_exactly_one_active_issuer_profile": true,
+  "requires_local_managed_did_web_issuer": true,
+  "request_public_jwk": {
+    "required_fields": ["kty", "crv", "x"],
+    "kty": "OKP",
+    "crv": "X25519",
+    "x_encoding": "canonical unpadded base64url of exactly 32 bytes",
+    "additional_fields_allowed": false
+  },
+  "published_relationship": "keyAgreement",
+  "published_fragment": "didcomm-authcrypt-x25519",
+  "success_fields": ["issuer_did", "key_agreement_method_id"],
+  "missing_profile_status": 404,
+  "ambiguous_profile_status": 409,
+  "invalid_jwk_or_local_did_status": 422,
+  "private_key_material_allowed": false,
+  "kms_key_agreement_follow_up": "DIDCOMM-KMS-001"
+}

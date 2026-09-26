@@ -5,26 +5,25 @@ from __future__ import annotations
 import argparse
 import json
 from pathlib import Path
+import re
 import subprocess
 import sys
-from urllib.parse import urlparse
+from urllib.parse import urlsplit
 
 MAX_MODEL_BYTES = 8 * 1024 * 1024
 PROFILE = "docker-compose.profile.passport-native-beta.yml"
-SECRET_MOUNTS = {
-    "passport_tenant_api_keys": ("gateway", "flow", "issuance-native"),
-    "physical_document_artifact_key": ("issuance-native",),
-    "icao_document_signer_api_key": ("issuance-native",),
-    "personalization_bureau_api_key": ("issuance-native",),
-    "personalization_bureau_webhook_secret": ("issuance-native",),
-}
-ENV_NAMES = {
-    "passport_tenant_api_keys": "PASSPORT_TENANT_API_KEYS",
-    "physical_document_artifact_key": "PHYSICAL_DOCUMENT_ARTIFACT_KEY",
-    "icao_document_signer_api_key": "ICAO_DOCUMENT_SIGNER_API_KEY",
-    "personalization_bureau_api_key": "PERSONALIZATION_BUREAU_API_KEY",
-    "personalization_bureau_webhook_secret": "PERSONALIZATION_BUREAU_WEBHOOK_SECRET",
-}
+PASSPORT_RAW_KEY_NAMES = (
+    "PASSPORT_TENANT_API_KEYS",
+    "PHYSICAL_DOCUMENT_ARTIFACT_KEY",
+    "ICAO_DOCUMENT_SIGNER_API_KEY",
+    "PERSONALIZATION_BUREAU_WEBHOOK_SECRET",
+)
+PRIVATE_BUREAU_URL = "http://passport-beta-bureau:8020"
+PRIVATE_SIGNING_URL = "http://passport-callback-signer:8018/internal/documents"
+PRIVATE_SIGNING_NETWORK = "passport-callback-signing"
+PRIVATE_CALLBACK_URL = (
+    "http://issuance-native:8005/v1/passport/webhooks/personalization"
+)
 
 
 class PassportConfigurationError(ValueError):
@@ -63,11 +62,41 @@ def validate_model(model, *, passport_enabled, files):
                     "Beta passport owner selection is inconsistent"
                 )
         if not passport_enabled:
+            if "passport-beta-bureau" in services or "passport-callback-signer" in services:
+                raise PassportConfigurationError(
+                    "Beta passport callback services selected without profile"
+                )
             return
+        bureau = services["passport-beta-bureau"]
+        callback_signer = services["passport-callback-signer"]
+        signing = environment(services["signing-keys"])
+        gateway = environment(targets["gateway"])
         flow = environment(targets["flow"])
         if flow.get("ISSUANCE_NATIVE_SERVICE_URL") != "http://issuance-native:8005":
             raise PassportConfigurationError("Beta passport Flow target is not native")
+        for owner in targets.values():
+            env = environment(owner)
+            if (
+                str(env.get("PASSPORT_INTERNAL_SERVICE_AUTH_ENABLED", "false")).lower()
+                != "true"
+            ):
+                raise PassportConfigurationError(
+                    "Beta passport internal handoff is incomplete"
+                )
+            if env.get("PASSPORT_TENANT_API_KEYS") or env.get(
+                "PASSPORT_TENANT_API_KEYS_FILE"
+            ):
+                raise PassportConfigurationError(
+                    "Beta passport tenant keyring is forbidden"
+                )
         native = environment(targets["issuance-native"])
+        for name in (
+            "PASSPORT_MANAGED_ISSUER_SIGNING_ENABLED",
+            "PASSPORT_KMS_ARTIFACTS_ENABLED",
+            "PASSPORT_KMS_CALLBACKS_ENABLED",
+        ):
+            if str(native.get(name, "false")).lower() != "true":
+                raise PassportConfigurationError("Beta passport KMS mode is incomplete")
         if (
             str(native.get("PHYSICAL_DOCUMENT_ALLOW_SELF_SIGNED", "false")).lower()
             != "false"
@@ -75,52 +104,146 @@ def validate_model(model, *, passport_enabled, files):
             raise PassportConfigurationError(
                 "Beta passport self-signed mode is forbidden"
             )
-        for name in ("ICAO_DOCUMENT_SIGNER_URL", "PERSONALIZATION_BUREAU_URL"):
-            url = urlparse(str(native.get(name, "")))
-            if (
-                url.scheme != "https"
-                or not url.hostname
-                or url.username
-                or url.password
-                or url.port == 0
-                or url.query
-                or url.fragment
+        if native.get("ICAO_DOCUMENT_SIGNER_URL"):
+            raise PassportConfigurationError("Beta passport remote signer is forbidden")
+        if native.get("PERSONALIZATION_BUREAU_URL") != PRIVATE_BUREAU_URL:
+            raise PassportConfigurationError("Beta passport bureau target is invalid")
+        for name in PASSPORT_RAW_KEY_NAMES:
+            if native.get(name) or native.get(f"{name}_FILE"):
+                raise PassportConfigurationError(
+                    "Beta passport raw key binding is forbidden"
+                )
+        if native.get("PERSONALIZATION_BUREAU_API_KEY_FILE"):
+            raise PassportConfigurationError(
+                "Beta passport bureau key file is forbidden"
+            )
+        bureau_env = environment(bureau)
+        database_url = bureau_env.get("DATABASE_URL")
+        native_database_url = native.get("DATABASE_URL")
+        if not (
+            isinstance(database_url, str)
+            and isinstance(native_database_url, str)
+            and native_database_url.startswith("postgresql+asyncpg://")
+            and database_url
+            == native_database_url.replace("postgresql+asyncpg://", "postgresql://", 1)
+        ):
+            raise PassportConfigurationError("Beta passport database target is invalid")
+        database_target = urlsplit(database_url)
+        if not (
+            database_target.scheme == "postgresql"
+            and database_target.hostname == "postgres"
+            and database_target.port == 5432
+            and database_target.path == "/marty"
+            and database_target.username == "marty"
+            and database_target.password
+            and not database_target.query
+            and not database_target.fragment
+        ):
+            raise PassportConfigurationError("Beta passport database target is invalid")
+        signing_key = bureau_env.get("SIGNING_KEYS_INTERNAL_API_KEY")
+        callback_signer_env = environment(callback_signer)
+        if not (
+            bureau_env.get("SERVICE_NAME") == "passport_beta_bureau"
+            and bureau_env.get("ENVIRONMENT") == "beta"
+            and str(bureau_env.get("PASSPORT_BETA_BUREAU_ENABLED", "false")).lower()
+            == "true"
+            and bureau_env.get("GRPC_SERVICE_TOKEN")
+            and bureau_env.get("GRPC_SERVICE_TOKEN")
+            == native.get("PERSONALIZATION_BUREAU_API_KEY")
+            and bureau_env.get("GRPC_SERVICE_TOKEN")
+            == gateway.get("GRPC_SERVICE_TOKEN")
+            and bureau_env.get("GRPC_SERVICE_TOKEN") == flow.get("GRPC_SERVICE_TOKEN")
+            and bureau_env.get("GRPC_SERVICE_TOKEN") == native.get("GRPC_SERVICE_TOKEN")
+            and signing_key
+            and all(
+                signing_key == owner.get("SIGNING_KEYS_INTERNAL_API_KEY")
+                for owner in (native, gateway, signing)
+            )
+            and bureau_env.get("SIGNING_KEYS_INTERNAL_URL") == PRIVATE_SIGNING_URL
+            and bureau_env.get("PASSPORT_BUREAU_CALLBACK_URL") == PRIVATE_CALLBACK_URL
+        ):
+            raise PassportConfigurationError(
+                "Beta passport bureau identity or route is invalid"
+            )
+        if not (
+            callback_signer_env.get("SERVICE_NAME") == "passport_callback_signer"
+            and callback_signer_env.get("ENVIRONMENT") == "beta"
+            and str(callback_signer_env.get("PASSPORT_CALLBACK_SIGNER_ENABLED", "false")).lower()
+            == "true"
+            and str(callback_signer_env.get("SIGNING_KEYS_SERVICE_PORT")) == "8018"
+            and callback_signer_env.get("SIGNING_KEYS_INTERNAL_API_KEY") == signing_key
+            and callback_signer_env.get("BAO_ADDR") == "http://openbao:8200"
+            and callback_signer_env.get("BAO_TOKEN")
+            and callback_signer_env.get("BAO_TOKEN") == signing.get("BAO_TOKEN")
+        ):
+            raise PassportConfigurationError("Beta callback signer configuration is invalid")
+        if not re.fullmatch(
+            r"ghcr\.io/elevenid/marty-ui-oss/services@sha256:[0-9a-f]{64}",
+            str(bureau.get("image", "")),
+        ):
+            raise PassportConfigurationError(
+                "Beta passport bureau image must be immutable"
+            )
+        if callback_signer.get("image") != bureau.get("image"):
+            raise PassportConfigurationError("Beta callback signer image must be immutable")
+        if (
+            bureau.get("ports")
+            or bureau.get("secrets")
+            or bureau.get("volumes")
+            or bureau.get("build")
+            or bureau.get("entrypoint")
+            or bureau.get("command")
+            or bureau.get("privileged")
+            or bureau.get("network_mode")
+        ):
+            raise PassportConfigurationError(
+                "Beta passport bureau exposure is forbidden"
+            )
+        if any(
+            callback_signer.get(name)
+            for name in (
+                "ports", "secrets", "volumes", "build", "entrypoint", "command",
+                "privileged", "network_mode",
+            )
+        ):
+            raise PassportConfigurationError("Beta callback signer exposure is forbidden")
+        networks = bureau.get("networks", {})
+        if not isinstance(networks, dict) or set(networks) != {
+            "marty-network", PRIVATE_SIGNING_NETWORK
+        }:
+            raise PassportConfigurationError("Beta passport bureau network is invalid")
+        isolated = model.get("networks", {}).get(PRIVATE_SIGNING_NETWORK, {})
+        if isolated.get("internal") is not True:
+            raise PassportConfigurationError("Beta callback signer network is not internal")
+        members = {
+            name
+            for name, service in services.items()
+            if PRIVATE_SIGNING_NETWORK in service.get("networks", {})
+        }
+        if members != {"openbao", "passport-beta-bureau", "passport-callback-signer"}:
+            raise PassportConfigurationError("Beta callback signer network membership is invalid")
+        if set(callback_signer.get("networks", {})) != {PRIVATE_SIGNING_NETWORK}:
+            raise PassportConfigurationError("Beta callback signer network is invalid")
+        forbidden = {
+            "passport_tenant_api_keys",
+            "physical_document_artifact_key",
+            "icao_document_signer_api_key",
+            "personalization_bureau_api_key",
+            "personalization_bureau_webhook_secret",
+        }
+        if forbidden.intersection(model.get("secrets", {})):
+            raise PassportConfigurationError(
+                "Legacy passport secret mounts are forbidden"
+            )
+        for owner in (*targets.values(), bureau, callback_signer):
+            if any(
+                item.get("source") in forbidden
+                for item in owner.get("secrets", [])
+                if isinstance(item, dict)
             ):
                 raise PassportConfigurationError(
-                    f"{name} must be a credential-free HTTPS URL"
+                    "Legacy passport secret mounts are forbidden"
                 )
-        secrets = model["secrets"]
-        for secret_name, owners in SECRET_MOUNTS.items():
-            source = secrets[secret_name]["file"]
-            if not isinstance(source, str) or not Path(source).is_file():
-                raise PassportConfigurationError(
-                    "Beta passport secret source is not a file"
-                )
-            with Path(source).open("rb") as secret_file:
-                has_content = bool(secret_file.read(1))
-            if not has_content:
-                raise PassportConfigurationError("Beta passport secret source is empty")
-            for owner in owners:
-                service = targets[owner]
-                mounts = service.get("secrets", [])
-                if not any(
-                    isinstance(item, dict)
-                    and item.get("source") == secret_name
-                    and item.get("target") == f"/run/secrets/{secret_name}"
-                    for item in mounts
-                ):
-                    raise PassportConfigurationError(
-                        "Beta passport secret mount is missing"
-                    )
-                env = environment(service)
-                name = ENV_NAMES[secret_name]
-                if (
-                    env.get(name)
-                    or env.get(f"{name}_FILE") != f"/run/secrets/{secret_name}"
-                ):
-                    raise PassportConfigurationError(
-                        "Beta passport secret file binding is invalid"
-                    )
     except PassportConfigurationError:
         raise
     except (KeyError, TypeError, AttributeError, OSError, ValueError):

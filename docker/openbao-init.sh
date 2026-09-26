@@ -70,6 +70,11 @@ bao write -address="${BAO_ADDR}" -f transit/keys/flow-response-envelope-marty-ae
     type=aes256-gcm96 exportable=false 2>/dev/null || echo "  flow-response-envelope-marty-aes256 already exists"
 bao write -address="${BAO_ADDR}" -f transit/keys/passport-artifact-marty-aes256 \
     type=aes256-gcm96 exportable=false 2>/dev/null || echo "  passport-artifact-marty-aes256 already exists"
+if [ "$(bao read -address="${BAO_ADDR}" -field=type transit/keys/passport-artifact-marty-aes256 2>/dev/null)" != "aes256-gcm96" ] || \
+   [ "$(bao read -address="${BAO_ADDR}" -field=exportable transit/keys/passport-artifact-marty-aes256 2>/dev/null)" != "false" ]; then
+    echo "Passport artifact Transit key must exist as a non-exportable AES-GCM key" >&2
+    exit 1
+fi
 bao write -address="${BAO_ADDR}" -f transit/keys/passport-bureau-callback-marty-hmac \
     type=hmac exportable=false 2>/dev/null || echo "  passport-bureau-callback-marty-hmac already exists"
 if [ "$(bao read -address="${BAO_ADDR}" -field=type transit/keys/passport-bureau-callback-marty-hmac 2>/dev/null)" != "hmac" ] || \
@@ -145,6 +150,11 @@ path "transit/decrypt/cred-*" {
 }
 path "transit/keys/cred-*" {
   capabilities = ["read"]
+}
+# Managed signing inventory filters names by tenant before reading public keys.
+# OpenBao requires list on the collection path, not on transit/keys/cred-*.
+path "transit/keys" {
+  capabilities = ["list"]
 }
 
 # Purpose-bound protocol keys are deliberately outside the credential-key

@@ -1,0 +1,13 @@
+{
+  "schema_version": 1,
+  "source": "pre-Rust services/gateway/routes/signing_keys.py at parent of e1ebad979",
+  "method": "POST",
+  "path": "/v1/signing-keys/issuer-identities/resolve",
+  "request_fields": ["organization_id", "issuer_did", "key_purpose", "credential_format", "algorithm"],
+  "response_fields": ["identity", "public_jwk"],
+  "missing_identity_status": 404,
+  "ambiguous_identity_status": 409,
+  "forbidden_request_fields": ["key_reference", "signing_service_id", "private_key", "verification_method_id"],
+  "forbidden_public_jwk_fields": ["kid", "d", "p", "q", "dp", "dq", "qi", "oth", "k", "key_reference", "auth_reference"],
+  "resolved_profile_must_match_active_tuple": true
+}

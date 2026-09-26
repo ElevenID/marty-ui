@@ -7,7 +7,7 @@ use std::{
     path::PathBuf,
 };
 
-use marty_passport_auth::PassportTenantKeyring;
+use marty_passport_auth::{PassportTenantCredentialSource, PassportTenantKeyring};
 use thiserror::Error;
 
 use crate::discovery::ReleaseIdentity;
@@ -108,7 +108,7 @@ pub struct GatewayConfig {
     pub signing_internal_api_key: String,
     pub issuance_api_key: String,
     pub passport_native_gateway_enabled: bool,
-    pub passport_tenant_keys: Option<PassportTenantKeyring>,
+    pub passport_tenant_keys: Option<PassportTenantCredentialSource>,
     pub redis_url: Option<String>,
     pub cors_origins: Vec<String>,
     pub issuer_base_url: String,
@@ -224,12 +224,37 @@ impl GatewayConfig {
         if production {
             validate_production_secret("ISSUANCE_API_KEY", Some(&issuance_api_key), 16)?;
         }
+        let passport_internal_service_auth_enabled =
+            boolean(values, "PASSPORT_INTERNAL_SERVICE_AUTH_ENABLED", false)?;
+        if passport_internal_service_auth_enabled
+            && (value(values, "PASSPORT_TENANT_API_KEYS").is_some()
+                || value(values, "PASSPORT_TENANT_API_KEYS_FILE").is_some())
+        {
+            return Err(error(
+                "internal passport service authentication cannot be combined with a tenant keyring",
+            ));
+        }
         let passport_tenant_keys = secret(values, "PASSPORT_TENANT_API_KEYS")?
             .map(|value| {
                 PassportTenantKeyring::from_json(&value)
                     .map_err(|_| error("PASSPORT_TENANT_API_KEYS must be a valid tenant keyring"))
             })
-            .transpose()?;
+            .transpose()?
+            .map(Into::into);
+        let passport_tenant_keys = if passport_internal_service_auth_enabled {
+            Some(
+                PassportTenantCredentialSource::internal_service_token(
+                    grpc_service_token.as_deref().ok_or_else(|| {
+                        error("GRPC_SERVICE_TOKEN is required for internal passport authentication")
+                    })?,
+                )
+                .map_err(|_| {
+                    error("GRPC_SERVICE_TOKEN is invalid for internal passport authentication")
+                })?,
+            )
+        } else {
+            passport_tenant_keys
+        };
         let passport_native_gateway_enabled =
             boolean(values, "PASSPORT_NATIVE_GATEWAY_ENABLED", false)?;
         if passport_native_gateway_enabled && passport_tenant_keys.is_none() {
@@ -587,6 +612,50 @@ mod tests {
             format!(r#"{{"org-a":"{key_a}","org-b":"{key_a}"}}"#),
         );
         assert!(GatewayConfig::from_values(&values).is_err());
+    }
+
+    #[test]
+    fn internal_passport_auth_uses_existing_service_token_without_loading_a_keyring() {
+        let token = "g".repeat(32);
+        let mut values = BTreeMap::from([
+            ("PASSPORT_NATIVE_GATEWAY_ENABLED".into(), "true".into()),
+            (
+                "PASSPORT_INTERNAL_SERVICE_AUTH_ENABLED".into(),
+                "true".into(),
+            ),
+            ("GRPC_SERVICE_TOKEN".into(), token.clone()),
+        ]);
+        let config = GatewayConfig::from_values(&values).unwrap();
+        assert_eq!(
+            config
+                .passport_tenant_keys
+                .as_ref()
+                .unwrap()
+                .key_for("org-a"),
+            Some(token.as_str())
+        );
+        assert!(!format!("{config:?}").contains(&token));
+        values.insert(
+            "PASSPORT_TENANT_API_KEYS_FILE".into(),
+            "nonexistent-keyring".into(),
+        );
+        assert!(GatewayConfig::from_values(&values)
+            .unwrap_err()
+            .to_string()
+            .contains("cannot be combined"));
+        values.remove("PASSPORT_TENANT_API_KEYS_FILE");
+        values.remove("GRPC_SERVICE_TOKEN");
+        assert!(GatewayConfig::from_values(&values).is_err());
+    }
+
+    #[test]
+    fn grpc_target_rejects_embedded_credentials_before_configuration_can_be_logged() {
+        let values = BTreeMap::from([(
+            "ORG_GRPC_TARGET".into(),
+            "http://synthetic-private-value@organization:9002".into(),
+        )]);
+        let error = GatewayConfig::from_values(&values).unwrap_err();
+        assert!(!error.to_string().contains("synthetic-private-value"));
     }
 
     #[test]

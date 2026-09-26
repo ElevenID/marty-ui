@@ -906,7 +906,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          for database in marty_verification_contract marty_db_contracts_test marty_issuance_executable_smoke_test marty_retention_contract_test marty_passport_contract_test marty_passport_packaged_test; do
+          for database in marty_verification_contract marty_db_contracts_test marty_issuance_executable_smoke_test marty_retention_contract_test marty_passport_contract_test marty_passport_packaged_test marty_passport_bureau_test; do
             docker exec "${{ job.services.postgres.id }}" createdb -U postgres "$database"
           done
           docker exec --interactive "${{ job.services.postgres.id }}" \
@@ -926,6 +926,7 @@ jobs:
           (
             set +e
             ISSUANCE_EXECUTABLE_SMOKE_DATABASE_URL=postgresql://postgres:postgres@127.0.0.1:5432/marty_issuance_executable_smoke_test \
+            PASSPORT_BUREAU_TEST_DATABASE_URL=postgresql://postgres:postgres@127.0.0.1:5432/marty_passport_bureau_test \
               cargo test --locked --workspace >"$RUNNER_TEMP/rust-workspace.log" 2>&1
             printf '%s\n' "$?" >"$RUNNER_TEMP/rust-workspace.status"
           ) &
@@ -960,6 +961,19 @@ jobs:
             fi
           done
           exit "$status"
+      - name: Exercise authenticated Signing Keys Gateway to Rust routes
+        working-directory: rust
+        shell: bash
+        run: |
+          set -euo pipefail
+          MARTY_TEST_REDIS_URL=redis://127.0.0.1:6379/14 \
+            cargo test --locked -p marty-gateway --lib \
+              runtime::tests::authenticated_gateway_reaches_remaining_rust_signing_handlers \
+              -- --ignored --exact
+          MARTY_TEST_REDIS_URL=redis://127.0.0.1:6379/13 BAO_TOKEN=test-only \
+            cargo test --locked -p marty-gateway --lib \
+              runtime::tests::authenticated_gateway_reaches_rust_managed_key_route_without_custody \
+              -- --ignored --exact
       # The Flow contract deliberately requires the marty_atomic_test database.
       # Serialize it after the workspace suite so both retain their isolation.
       - name: Run Flow database contract after workspace suite

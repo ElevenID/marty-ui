@@ -15,6 +15,8 @@ use serde_json::{json, Map, Value};
 use sha2::{Digest, Sha256};
 use thiserror::Error;
 
+use crate::registry::RotationLease;
+
 const PRIVATE_JWK_FIELDS: &[&str] = &["d", "p", "q", "dp", "dq", "qi", "oth", "k", "rsa_d"];
 
 #[derive(Debug, Error, PartialEq, Eq)]
@@ -69,6 +71,121 @@ impl DocumentStore {
             .set::<_, _, ()>(key, payload)
             .await
             .map_err(|error| DocumentError::Storage(error.to_string()))
+    }
+
+    async fn mutate_jwks<T, F>(
+        &self,
+        organization_id: &str,
+        lease: Option<&RotationLease>,
+        mutation: F,
+    ) -> Result<T, DocumentError>
+    where
+        F: Fn(Value) -> Result<(Value, T), DocumentError>,
+    {
+        if lease.is_some_and(|lease| !lease.covers_organization(organization_id)) {
+            return Err(DocumentError::Conflict(
+                "Signing registry lease belongs to a different tenant.".into(),
+            ));
+        }
+        let key = jwks_storage_key(organization_id);
+        for _ in 0..128 {
+            let mut connection = self.connection.clone();
+            let previous: Option<String> = connection
+                .get(&key)
+                .await
+                .map_err(|error| DocumentError::Storage(error.to_string()))?;
+            let document = match previous.as_deref() {
+                Some(payload) => {
+                    let document: Value = serde_json::from_str(payload)
+                        .map_err(|error| DocumentError::Corrupt(error.to_string()))?;
+                    if !document.is_object() {
+                        return Err(DocumentError::Corrupt(
+                            "JWKS document must be a JSON object".to_string(),
+                        ));
+                    }
+                    document
+                }
+                None => json!({
+                    "keys": [],
+                    "organization_id": organization_id,
+                    "updated_at": now_iso(),
+                }),
+            };
+            let (document, response) = mutation(document)?;
+            let replacement = serde_json::to_string(&document)
+                .map_err(|error| DocumentError::Invalid(error.to_string()))?;
+            let saved: i32 = redis::Script::new(
+                "if ARGV[4] == '1' and redis.call('GET', KEYS[2]) ~= ARGV[5] then
+                     return -1
+                 end
+                 local current = redis.call('GET', KEYS[1])
+                 if ARGV[1] == '0' then
+                     if current then return 0 end
+                 elseif current ~= ARGV[2] then
+                     return 0
+                 end
+                 redis.call('SET', KEYS[1], ARGV[3])
+                 return 1",
+            )
+            .key(&key)
+            .key(
+                lease
+                    .map(RotationLease::redis_key)
+                    .unwrap_or("signing-service:unused-lease"),
+            )
+            .arg(if previous.is_some() { "1" } else { "0" })
+            .arg(previous.as_deref().unwrap_or_default())
+            .arg(replacement)
+            .arg(if lease.is_some() { "1" } else { "0" })
+            .arg(lease.map(RotationLease::owner).unwrap_or_default())
+            .invoke_async(&mut connection)
+            .await
+            .map_err(|error| DocumentError::Storage(error.to_string()))?;
+            if saved == 1 {
+                return Ok(response);
+            }
+            if saved == -1 {
+                return Err(DocumentError::Conflict(
+                    "Signing registry lease expired before JWKS publication.".into(),
+                ));
+            }
+            tokio::task::yield_now().await;
+        }
+        Err(DocumentError::Conflict(
+            "Concurrent JWKS updates did not settle.".to_string(),
+        ))
+    }
+
+    pub async fn holder_keys(
+        &self,
+        organization_id: &str,
+        device_id: Option<&str>,
+    ) -> Result<Value, DocumentError> {
+        let document = self
+            .load_optional(&holder_keys_storage_key(organization_id))
+            .await?
+            .unwrap_or_else(
+                || json!({"organization_id": organization_id, "keys": [], "updated_at": now_iso()}),
+            );
+        project_holder_keys(document, organization_id, device_id)
+    }
+
+    pub async fn register_holder_key(
+        &self,
+        organization_id: &str,
+        request: RegisterHolderKeyRequest,
+    ) -> Result<RegisterHolderKeyResponse, DocumentError> {
+        let document = self
+            .load_optional(&holder_keys_storage_key(organization_id))
+            .await?
+            .unwrap_or_else(
+                || json!({"organization_id": organization_id, "keys": [], "updated_at": now_iso()}),
+            );
+        let (document, response) =
+            register_holder_key_document(document, organization_id, request)?;
+        self.save(&holder_keys_storage_key(organization_id), &document)
+            .await?;
+        Ok(response)
     }
 
     pub async fn certificate_overrides(
@@ -153,11 +270,27 @@ impl DocumentStore {
         service_id: &str,
         request: PublishJwkRequest,
     ) -> Result<PublishJwkResponse, DocumentError> {
-        let existing = self.jwks(organization_id).await?;
-        let response = build_jwks_document(existing, organization_id, service_id, request)?;
-        self.save(&jwks_storage_key(organization_id), &response.document)
-            .await?;
-        Ok(response)
+        self.mutate_jwks(organization_id, None, |existing| {
+            let response =
+                build_jwks_document(existing, organization_id, service_id, request.clone())?;
+            Ok((response.document.clone(), response))
+        })
+        .await
+    }
+
+    pub async fn publish_jwk_with_lease(
+        &self,
+        organization_id: &str,
+        service_id: &str,
+        request: PublishJwkRequest,
+        lease: &RotationLease,
+    ) -> Result<PublishJwkResponse, DocumentError> {
+        self.mutate_jwks(organization_id, Some(lease), |existing| {
+            let response =
+                build_jwks_document(existing, organization_id, service_id, request.clone())?;
+            Ok((response.document.clone(), response))
+        })
+        .await
     }
 
     pub async fn update_jwk(
@@ -166,11 +299,16 @@ impl DocumentStore {
         key_id: &str,
         request: UpdateJwkRequest,
     ) -> Result<UpdateJwkResponse, DocumentError> {
-        let document = self.jwks(organization_id).await?;
-        let (document, response) = update_jwks_document(document, key_id, request)?;
-        self.save(&jwks_storage_key(organization_id), &document)
-            .await?;
-        Ok(response)
+        self.mutate_jwks(organization_id, None, |document| {
+            update_jwks_document(
+                document,
+                key_id,
+                UpdateJwkRequest {
+                    updates: request.updates.clone(),
+                },
+            )
+        })
+        .await
     }
 
     pub async fn delete_jwk(
@@ -178,11 +316,10 @@ impl DocumentStore {
         organization_id: &str,
         key_id: &str,
     ) -> Result<DeleteJwkResponse, DocumentError> {
-        let document = self.jwks(organization_id).await?;
-        let (document, response) = delete_jwks_document(document, key_id)?;
-        self.save(&jwks_storage_key(organization_id), &document)
-            .await?;
-        Ok(response)
+        self.mutate_jwks(organization_id, None, |document| {
+            delete_jwks_document(document, key_id)
+        })
+        .await
     }
 
     pub async fn load_did(
@@ -225,6 +362,102 @@ impl DocumentStore {
         self.save(&did_storage_key(organization_id, None), &response.document)
             .await?;
         Ok(response)
+    }
+
+    pub async fn publish_did_with_lease(
+        &self,
+        organization_id: &str,
+        service_id: &str,
+        request: PublishDidRequest,
+        lease: &RotationLease,
+    ) -> Result<PublishDidResponse, DocumentError> {
+        if !lease.covers_organization(organization_id) {
+            return Err(DocumentError::Conflict(
+                "Signing registry lease belongs to a different tenant.".into(),
+            ));
+        }
+        let prepared = prepare_did_publication(service_id, request)?;
+        let key = did_storage_key(organization_id, Some(&prepared.did_id));
+        let default_key = did_storage_key(organization_id, None);
+        let slug_key = prepared
+            .org_slug
+            .as_deref()
+            .map(slug_storage_key)
+            .unwrap_or_else(|| format!("signing-service:unused-slug:{organization_id}"));
+        for _ in 0..128 {
+            let mut connection = self.connection.clone();
+            let previous: Option<String> = connection
+                .get(&key)
+                .await
+                .map_err(|error| DocumentError::Storage(error.to_string()))?;
+            let previous_default: Option<String> = connection
+                .get(&default_key)
+                .await
+                .map_err(|error| DocumentError::Storage(error.to_string()))?;
+            let existing = previous
+                .as_deref()
+                .map(serde_json::from_str::<Value>)
+                .transpose()
+                .map_err(|error| DocumentError::Corrupt(error.to_string()))?;
+            let response = build_prepared_did_document(existing, prepared.clone())?;
+            let payload = serde_json::to_string(&response.document)
+                .map_err(|error| DocumentError::Invalid(error.to_string()))?;
+            let saved: i32 = redis::Script::new(
+                "if redis.call('GET', KEYS[1]) ~= ARGV[1] then return -1 end
+                 local scoped = redis.call('GET', KEYS[2])
+                 local default = redis.call('GET', KEYS[3])
+                 if ARGV[2] == '0' then
+                     if scoped then return 0 end
+                 elseif scoped ~= ARGV[3] then return 0 end
+                 if ARGV[4] == '0' then
+                     if default then return 0 end
+                 elseif default ~= ARGV[5] then return 0 end
+                 if ARGV[7] == '1' then
+                     local owner = redis.call('GET', KEYS[4])
+                     if owner and owner ~= ARGV[8] then return -2 end
+                     if not owner then redis.call('SET', KEYS[4], ARGV[8]) end
+                 end
+                 redis.call('SET', KEYS[2], ARGV[6])
+                 redis.call('SET', KEYS[3], ARGV[6])
+                 return 1",
+            )
+            .key(lease.redis_key())
+            .key(&key)
+            .key(&default_key)
+            .key(&slug_key)
+            .arg(lease.owner())
+            .arg(if previous.is_some() { "1" } else { "0" })
+            .arg(previous.as_deref().unwrap_or_default())
+            .arg(if previous_default.is_some() { "1" } else { "0" })
+            .arg(previous_default.as_deref().unwrap_or_default())
+            .arg(payload)
+            .arg(if prepared.org_slug.is_some() {
+                "1"
+            } else {
+                "0"
+            })
+            .arg(organization_id)
+            .invoke_async(&mut connection)
+            .await
+            .map_err(|error| DocumentError::Storage(error.to_string()))?;
+            match saved {
+                1 => return Ok(response),
+                -1 => {
+                    return Err(DocumentError::Conflict(
+                        "Signing registry lease expired before DID publication.".into(),
+                    ))
+                }
+                -2 => {
+                    return Err(DocumentError::Conflict(
+                        "DID web slug is already in use.".into(),
+                    ))
+                }
+                _ => tokio::task::yield_now().await,
+            }
+        }
+        Err(DocumentError::Conflict(
+            "Concurrent DID updates did not settle.".into(),
+        ))
     }
 
     pub async fn resolve_slug(&self, slug: &str) -> Result<Option<String>, DocumentError> {
@@ -614,6 +847,152 @@ pub fn sanitize_public_jwk(
     Ok(Value::Object(sanitized))
 }
 
+pub fn public_jwk_projection(candidate: &Value) -> Result<Value, DocumentError> {
+    let sanitized = sanitize_public_jwk(candidate, None)?;
+    const PUBLIC_JWK_FIELDS: &[&str] = &[
+        "kty",
+        "crv",
+        "x",
+        "y",
+        "n",
+        "e",
+        "kid",
+        "use",
+        "alg",
+        "key_ops",
+        "x5c",
+        "x5t",
+        "x5t#S256",
+        "service_id",
+        "name",
+        "status",
+    ];
+    let fields = sanitized
+        .as_object()
+        .expect("sanitized JWK is an object")
+        .iter()
+        .filter(|(name, _)| PUBLIC_JWK_FIELDS.contains(&name.as_str()))
+        .map(|(name, value)| (name.clone(), value.clone()))
+        .collect();
+    Ok(Value::Object(fields))
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct RegisterHolderKeyRequest {
+    pub device_id: String,
+    pub credential_id: String,
+    #[serde(default)]
+    pub key_purpose: Option<String>,
+    pub public_jwk: Value,
+}
+
+#[derive(Debug, Serialize)]
+pub struct RegisterHolderKeyResponse {
+    pub ok: bool,
+    pub record_id: String,
+    pub registered_at: String,
+}
+
+pub fn register_holder_key_document(
+    mut document: Value,
+    organization_id: &str,
+    request: RegisterHolderKeyRequest,
+) -> Result<(Value, RegisterHolderKeyResponse), DocumentError> {
+    let key_purpose = request.key_purpose.as_deref().unwrap_or("holder_binding");
+    if !matches!(key_purpose, "holder_binding" | "presentation_signing") {
+        return Err(DocumentError::Invalid(
+            "key_purpose must be holder_binding or presentation_signing".to_string(),
+        ));
+    }
+    if request.device_id.is_empty() || request.credential_id.is_empty() {
+        return Err(DocumentError::Invalid(
+            "device_id, credential_id, and public_jwk are required".to_string(),
+        ));
+    }
+    let supplied = request.public_jwk.as_object().ok_or_else(|| {
+        DocumentError::Invalid("device_id, credential_id, and public_jwk are required".to_string())
+    })?;
+    if supplied.is_empty() {
+        return Err(DocumentError::Invalid(
+            "device_id, credential_id, and public_jwk are required".to_string(),
+        ));
+    }
+    let public_jwk = public_jwk_projection(&request.public_jwk)?;
+    if public_jwk.as_object() != Some(supplied) {
+        return Err(DocumentError::Invalid(
+            "public_jwk may contain only standard public verification fields".to_string(),
+        ));
+    }
+    let record_id = format!(
+        "holder:{}:{}:{}",
+        request.device_id, request.credential_id, key_purpose
+    );
+    let records = document
+        .get("keys")
+        .and_then(Value::as_array)
+        .cloned()
+        .unwrap_or_default();
+    let mut records = records
+        .into_iter()
+        .filter(|record| record.get("id").and_then(Value::as_str) != Some(&record_id))
+        .collect::<Vec<_>>();
+    let registered_at = now_iso();
+    records.push(json!({
+        "id": record_id,
+        "device_id": request.device_id,
+        "credential_id": request.credential_id,
+        "key_purpose": key_purpose,
+        "public_jwk": public_jwk,
+        "created_at": registered_at,
+    }));
+    document["organization_id"] = Value::String(organization_id.to_string());
+    document["keys"] = Value::Array(records);
+    document["updated_at"] = Value::String(registered_at.clone());
+    Ok((
+        document,
+        RegisterHolderKeyResponse {
+            ok: true,
+            record_id,
+            registered_at,
+        },
+    ))
+}
+
+pub fn project_holder_keys(
+    document: Value,
+    organization_id: &str,
+    device_id: Option<&str>,
+) -> Result<Value, DocumentError> {
+    let mut keys = Vec::new();
+    for record in document
+        .get("keys")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+    {
+        if device_id.is_some_and(|device_id| {
+            !device_id.is_empty()
+                && record.get("device_id").and_then(Value::as_str) != Some(device_id)
+        }) {
+            continue;
+        }
+        let Some(jwk) = record.get("public_jwk") else {
+            continue;
+        };
+        let public_jwk = public_jwk_projection(jwk)?;
+        keys.push(json!({
+            "id": record.get("id").and_then(Value::as_str),
+            "device_id": record.get("device_id").and_then(Value::as_str),
+            "credential_id": record.get("credential_id").and_then(Value::as_str),
+            "key_purpose": record.get("key_purpose").and_then(Value::as_str),
+            "public_jwk": public_jwk,
+            "created_at": record.get("created_at").and_then(Value::as_str),
+        }));
+    }
+    Ok(json!({"organization_id": organization_id, "keys": keys}))
+}
+
 pub fn update_jwks_document(
     mut document: Value,
     key_id: &str,
@@ -769,31 +1148,7 @@ fn prepare_did_publication(
                 "keyAgreement publication accepts only public X25519 key material".to_string(),
             ));
         }
-        let fields = request
-            .jwk
-            .as_object()
-            .ok_or_else(|| DocumentError::Invalid("JWK must be an object".to_string()))?;
-        if fields.len() != 3
-            || fields.get("kty").and_then(Value::as_str) != Some("OKP")
-            || fields.get("crv").and_then(Value::as_str) != Some("X25519")
-        {
-            return Err(DocumentError::Invalid(
-                "keyAgreement publication requires an exact public X25519 JWK".to_string(),
-            ));
-        }
-        let encoded = fields.get("x").and_then(Value::as_str).ok_or_else(|| {
-            DocumentError::Invalid(
-                "keyAgreement publication requires an exact public X25519 JWK".to_string(),
-            )
-        })?;
-        let decoded = URL_SAFE_NO_PAD.decode(encoded).map_err(|_| {
-            DocumentError::Invalid("X25519 public key must use canonical base64url".to_string())
-        })?;
-        if decoded.len() != 32 || URL_SAFE_NO_PAD.encode(&decoded) != encoded {
-            return Err(DocumentError::Invalid(
-                "X25519 public key must encode exactly 32 bytes".to_string(),
-            ));
-        }
+        validate_x25519_public_jwk(&request.jwk)?;
     }
     let jwk = sanitize_public_jwk(&request.jwk, request.key_reference.as_deref())?;
     let fragment = request
@@ -828,6 +1183,34 @@ fn prepare_did_publication(
         verification_method,
         relationship: request.relationship,
     })
+}
+
+pub fn validate_x25519_public_jwk(jwk: &Value) -> Result<(), DocumentError> {
+    let fields = jwk
+        .as_object()
+        .ok_or_else(|| DocumentError::Invalid("JWK must be an object".to_string()))?;
+    if fields.len() != 3
+        || fields.get("kty").and_then(Value::as_str) != Some("OKP")
+        || fields.get("crv").and_then(Value::as_str) != Some("X25519")
+    {
+        return Err(DocumentError::Invalid(
+            "keyAgreement publication requires an exact public X25519 JWK".to_string(),
+        ));
+    }
+    let encoded = fields.get("x").and_then(Value::as_str).ok_or_else(|| {
+        DocumentError::Invalid(
+            "keyAgreement publication requires an exact public X25519 JWK".to_string(),
+        )
+    })?;
+    let decoded = URL_SAFE_NO_PAD.decode(encoded).map_err(|_| {
+        DocumentError::Invalid("X25519 public key must use canonical base64url".to_string())
+    })?;
+    if decoded.len() != 32 || URL_SAFE_NO_PAD.encode(&decoded) != encoded {
+        return Err(DocumentError::Invalid(
+            "X25519 public key must encode exactly 32 bytes".to_string(),
+        ));
+    }
+    Ok(())
 }
 
 fn upsert_did_document(
@@ -982,6 +1365,10 @@ pub fn jwks_storage_key(organization_id: &str) -> String {
     format!("org:{organization_id}:signing-key-jwks")
 }
 
+pub fn holder_keys_storage_key(organization_id: &str) -> String {
+    format!("org:{organization_id}:holder-keys")
+}
+
 pub fn certificate_storage_key(organization_id: &str) -> String {
     format!("org:{organization_id}:signing-key-service-certificates")
 }
@@ -1083,6 +1470,7 @@ mod tests {
     #[test]
     fn storage_keys_preserve_the_python_keyspace() {
         assert_eq!(jwks_storage_key("org-a"), "org:org-a:signing-key-jwks");
+        assert_eq!(holder_keys_storage_key("org-a"), "org:org-a:holder-keys");
         assert_eq!(
             certificate_storage_key("org-a"),
             "org:org-a:signing-key-service-certificates"
@@ -1090,6 +1478,118 @@ mod tests {
         assert_eq!(slug_storage_key("acme"), "did-web-slug:acme");
         assert!(did_storage_key("org-a", Some("did:web:example.test"))
             .starts_with("org:org-a:signing-key-did-document:did:"));
+    }
+
+    #[test]
+    fn holder_keys_replace_only_matching_id_and_filter_exact_device() {
+        let empty = json!({"organization_id": "org-a", "keys": []});
+        let register = |device_id: &str, purpose: Option<&str>, x: &str| RegisterHolderKeyRequest {
+            device_id: device_id.to_string(),
+            credential_id: "credential-a".to_string(),
+            key_purpose: purpose.map(str::to_string),
+            public_jwk: json!({"kty": "OKP", "crv": "Ed25519", "x": x}),
+        };
+        let (document, first) =
+            register_holder_key_document(empty, "org-a", register("device-a", None, "old"))
+                .unwrap();
+        assert_eq!(
+            first.record_id,
+            "holder:device-a:credential-a:holder_binding"
+        );
+        let (document, _) = register_holder_key_document(
+            document,
+            "org-a",
+            register("device-a", Some("presentation_signing"), "presentation"),
+        )
+        .unwrap();
+        let (document, _) = register_holder_key_document(
+            document,
+            "org-a",
+            register("device-a", None, "replacement"),
+        )
+        .unwrap();
+        let (document, _) = register_holder_key_document(
+            document,
+            "org-a",
+            register("device-b", None, "other-device"),
+        )
+        .unwrap();
+        let all = project_holder_keys(document.clone(), "org-a", None).unwrap();
+        assert_eq!(all["keys"].as_array().unwrap().len(), 3);
+        let selected = project_holder_keys(document, "org-a", Some("device-a")).unwrap();
+        assert_eq!(selected["keys"].as_array().unwrap().len(), 2);
+        assert!(selected["keys"].as_array().unwrap().iter().any(|record| {
+            record["key_purpose"] == "holder_binding" && record["public_jwk"]["x"] == "replacement"
+        }));
+        assert_eq!(selected["organization_id"], "org-a");
+    }
+
+    #[test]
+    fn holder_key_behavior_contract_keeps_the_public_route_and_storage_shape() {
+        let contract: Value = serde_json::from_str(include_str!(
+            "../../../../contracts/signing-holder-keys-behavior.json"
+        ))
+        .unwrap();
+        assert_eq!(contract["storage_key"], "org:{organization_id}:holder-keys");
+        assert_eq!(contract["routes"]["register"]["method"], "POST");
+        assert_eq!(contract["routes"]["list"]["method"], "GET");
+        assert_eq!(
+            contract["routes"]["register"]["path"],
+            "/v1/signing-keys/holder-keys"
+        );
+        assert_eq!(contract["default_key_purpose"], "holder_binding");
+    }
+
+    #[test]
+    fn holder_registration_rejects_private_custody_and_bad_purpose() {
+        for forbidden in ["d", "k", "key_reference", "private_key"] {
+            let mut public_jwk = json!({"kty": "OKP", "crv": "Ed25519", "x": "public"});
+            public_jwk[forbidden] = json!("never-store");
+            let result = register_holder_key_document(
+                json!({"keys": []}),
+                "org-a",
+                RegisterHolderKeyRequest {
+                    device_id: "device-a".into(),
+                    credential_id: "credential-a".into(),
+                    key_purpose: None,
+                    public_jwk,
+                },
+            );
+            assert!(
+                matches!(result, Err(DocumentError::Invalid(_))),
+                "{forbidden}"
+            );
+        }
+        let result = register_holder_key_document(
+            json!({"keys": []}),
+            "org-a",
+            RegisterHolderKeyRequest {
+                device_id: "device-a".into(),
+                credential_id: "credential-a".into(),
+                key_purpose: Some("issuer_signing".into()),
+                public_jwk: json!({"kty": "OKP", "x": "public"}),
+            },
+        );
+        assert!(matches!(result, Err(DocumentError::Invalid(_))));
+    }
+
+    #[test]
+    fn holder_read_redacts_legacy_private_fields() {
+        let listed = project_holder_keys(
+            json!({"keys": [{
+                "id": "holder:device-a:credential-a:holder_binding",
+                "device_id": "device-a", "credential_id": "credential-a",
+                "key_purpose": "holder_binding", "created_at": "now",
+                "public_jwk": {"kty": "OKP", "crv": "Ed25519", "x": "public", "d": "private"},
+                "private_key": "legacy-private"
+            }]}),
+            "org-a",
+            None,
+        )
+        .unwrap();
+        let serialized = listed.to_string();
+        assert!(!serialized.contains("private"));
+        assert_eq!(listed["keys"][0]["public_jwk"]["x"], "public");
     }
 
     #[test]

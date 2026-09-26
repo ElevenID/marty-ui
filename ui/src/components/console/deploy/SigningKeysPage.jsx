@@ -259,8 +259,9 @@ function ServiceCard({
 }) {
   const hasCertPurpose = Array.isArray(service.key_purposes)
     && service.key_purposes.some((p) => PURPOSES_REQUIRING_CERTIFICATE.includes(p));
-  const supportsRotation = service.service_type === 'openbao-transit'
-    || service.service_type === 'hashicorp-vault-transit';
+  const supportsRotation = !service.read_only
+    && Boolean(service.key_reference)
+    && ['openbao-transit', 'hashicorp-vault-transit', 'custom-transit-compatible'].includes(service.service_type);
 
   return (
     <Paper variant="outlined" sx={{ p: 2.5 }}>
@@ -425,13 +426,20 @@ export default function SigningKeysPage() {
   };
 
   const handleRotateService = async (serviceId) => {
-    if (!window.confirm('Rotate the key for this signing service? The old key will remain active during the overlap period.')) {
+    if (!window.confirm('Rotate the key for this signing service? The prior version remains subject to KMS retention policy; overlap metadata will be recorded.')) {
       return;
     }
     try {
       const result = await signingKeysApi.rotateServiceKey(serviceId, orgRequestParams);
       if (result?.ok) {
-        showNotification?.('Key rotation completed successfully.', 'success');
+        if (result.publication && (!result.publication.jwks || !result.publication.did)) {
+          showNotification?.(
+            'Key rotated in KMS, but public key publication is incomplete. Check the service certificate and republish its JWKS and DID method.',
+            'warning',
+          );
+        } else {
+          showNotification?.('Key rotation completed successfully.', 'success');
+        }
       } else {
         const reason = result?.rotation_state?.provider_rotation?.error || result?.note;
         showNotification?.(
@@ -449,7 +457,7 @@ export default function SigningKeysPage() {
   };
 
   const handleOpenCertDialog = async (service) => {
-    setCertData({ cert_pem: '', cert_chain_pem: '', common_name: service.name || '' });
+    setCertData({ cert_pem: '', cert_chain_pem: '', country: '', organization: '', common_name: service.name || '' });
     setCertAction('view');
     certDialog.open(service);
     // Try to load existing cert
@@ -470,9 +478,16 @@ export default function SigningKeysPage() {
   const handleGenerateCsr = async () => {
     const service = certDialog.data;
     if (!service) return;
+    if (service.id === MANAGED_OPENBAO_SERVICE_ID) {
+      certDialog.close();
+      navigate('/console/org/deploy/issuer-identity');
+      return;
+    }
     try {
       const result = await signingKeysApi.generateServiceCsr(service.id, {
         ...orgRequestParams,
+        country: certData.country,
+        organization: certData.organization,
         common_name: certData.common_name || service.name,
       });
       showNotification?.('CSR generated. Download or copy it to submit to your CA.', 'success');
@@ -821,8 +836,33 @@ export default function SigningKeysPage() {
                     value={certData.common_name || ''}
                     onChange={(e) => setCertData((prev) => ({ ...prev, common_name: e.target.value }))}
                   />
-                  <Button variant="outlined" onClick={handleGenerateCsr}>
-                    Generate CSR from service public key
+                  {certDialog.data?.id !== MANAGED_OPENBAO_SERVICE_ID && (
+                    <>
+                      <TextField
+                        fullWidth
+                        label="Subject country (two-letter ISO code)"
+                        inputProps={{ maxLength: 2 }}
+                        value={certData.country || ''}
+                        onChange={(e) => setCertData((prev) => ({ ...prev, country: e.target.value.toUpperCase() }))}
+                      />
+                      <TextField
+                        fullWidth
+                        label="Subject organization"
+                        value={certData.organization || ''}
+                        onChange={(e) => setCertData((prev) => ({ ...prev, organization: e.target.value }))}
+                      />
+                    </>
+                  )}
+                  <Button
+                    variant="outlined"
+                    onClick={handleGenerateCsr}
+                    disabled={certDialog.data?.id !== MANAGED_OPENBAO_SERVICE_ID && (
+                      !/^[A-Z]{2}$/.test(certData.country || '') || !certData.organization?.trim() || !certData.common_name?.trim()
+                    )}
+                  >
+                    {certDialog.data?.id === MANAGED_OPENBAO_SERVICE_ID
+                      ? 'Generate CSR from issuer identity'
+                      : 'Generate CSR from service public key'}
                   </Button>
                   <TextField
                     fullWidth

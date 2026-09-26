@@ -179,21 +179,207 @@ pub async fn sign(request: SignRequest) -> Result<SignResponse, KmsError> {
 }
 
 pub async fn public_key(request: ProviderRequest) -> Result<Value, KmsError> {
+    let managed_openbao = Provider::from_config(&request.service_config)? == Provider::OpenBao
+        && string(&request.service_config, "id") == Some("managed-openbao-transit");
+    match public_key_existing(ProviderRequest {
+        service_config: request.service_config.clone(),
+    })
+    .await
+    {
+        Err(KmsError::ProviderStatus { status, .. })
+            if managed_openbao && status == StatusCode::NOT_FOUND =>
+        {
+            create_managed_openbao_key(&request.service_config).await?;
+            public_key_existing(request).await
+        }
+        result => result,
+    }
+}
+
+/// Read existing public key material without provisioning a missing managed key.
+pub async fn public_key_existing(request: ProviderRequest) -> Result<Value, KmsError> {
     match Provider::from_config(&request.service_config)? {
-        Provider::OpenBao => match public_key_openbao(&request.service_config).await {
-            Err(KmsError::ProviderStatus { status, .. })
-                if status == StatusCode::NOT_FOUND
-                    && string(&request.service_config, "id") == Some("managed-openbao-transit") =>
-            {
-                create_managed_openbao_key(&request.service_config).await?;
-                public_key_openbao(&request.service_config).await
-            }
-            result => result,
-        },
+        Provider::OpenBao => public_key_openbao(&request.service_config).await,
         Provider::Aws => public_key_aws(&request.service_config).await,
         Provider::Azure => public_key_azure(&request.service_config).await,
         Provider::Gcp => public_key_gcp(&request.service_config).await,
     }
+}
+
+/// Read an existing managed key. Inventory must never provision a missing key.
+pub async fn managed_openbao_public_key_existing(
+    endpoint: &str,
+    key_reference: &str,
+) -> Result<Value, KmsError> {
+    public_key_openbao(&json!({
+        "id": "managed-openbao-transit",
+        "service_type": "openbao-transit",
+        "endpoint": endpoint,
+        "mount": "transit",
+        "auth_mode": "service_token",
+        "key_reference": key_reference,
+    }))
+    .await
+}
+
+/// List public Transit key names without creating or exporting key material.
+/// Callers must tenant-filter the names before reading individual keys.
+pub async fn list_managed_openbao_key_names(endpoint: &str) -> Result<Vec<String>, KmsError> {
+    let token = secret_value("BAO_TOKEN")
+        .or_else(|| secret_value("OPENBAO_SERVICE_TOKEN"))
+        .ok_or_else(|| KmsError::InvalidConfig("Managed OpenBao access is unavailable.".into()))?;
+    let response = match send_json(
+        Client::new()
+            .get(format!(
+                "{}/v1/transit/keys",
+                endpoint.trim_end_matches('/')
+            ))
+            .query(&[("list", "true")])
+            .timeout(HTTP_TIMEOUT)
+            .header("X-Vault-Token", token),
+    )
+    .await
+    {
+        Ok(response) => response,
+        Err(KmsError::ProviderStatus { status, detail })
+            if status == reqwest::StatusCode::NOT_FOUND && empty_transit_list_response(&detail) =>
+        {
+            return Ok(Vec::new());
+        }
+        Err(error) => return Err(error),
+    };
+    let names = response
+        .pointer("/data/keys")
+        .and_then(Value::as_array)
+        .ok_or_else(|| KmsError::InvalidResponse("OpenBao key list is malformed".into()))?;
+    names
+        .iter()
+        .map(|name| {
+            name.as_str()
+                .filter(|name| !name.is_empty())
+                .map(str::to_owned)
+                .ok_or_else(|| KmsError::InvalidResponse("OpenBao key name is malformed".into()))
+        })
+        .collect()
+}
+
+fn empty_transit_list_response(detail: &str) -> bool {
+    serde_json::from_str::<Value>(detail)
+        .ok()
+        .and_then(|response| response.get("errors").and_then(Value::as_array).cloned())
+        .is_some_and(|errors| errors.is_empty())
+}
+
+/// Rotate one existing Transit key inside KMS and return its new public version.
+/// No private key material crosses this boundary.
+pub async fn openbao_latest_version(request: ProviderRequest) -> Result<u64, KmsError> {
+    if Provider::from_config(&request.service_config)? != Provider::OpenBao {
+        return Err(KmsError::InvalidConfig(
+            "No provider rotation adapter available.".into(),
+        ));
+    }
+    let config = &request.service_config;
+    let endpoint = required(
+        config,
+        "endpoint",
+        "Transit endpoint is required for rotation",
+    )?;
+    let key_reference = required(
+        config,
+        "key_reference",
+        "A registered KMS key reference is required for rotation",
+    )?;
+    let token = transit_token(config);
+    if token.is_empty() {
+        return Err(KmsError::InvalidConfig(
+            "Transit access is not configured for rotation.".into(),
+        ));
+    }
+    let mount = string(config, "mount")
+        .unwrap_or("transit")
+        .trim_matches('/');
+    let mut read = Client::new()
+        .get(format!(
+            "{}/v1/{mount}/keys/{key_reference}",
+            endpoint.trim_end_matches('/')
+        ))
+        .timeout(HTTP_TIMEOUT)
+        .header("X-Vault-Token", token);
+    if let Some(namespace) = string(config, "namespace")
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    {
+        read = read.header("X-Vault-Namespace", namespace);
+    }
+    let response = send_json(read).await?;
+    response
+        .pointer("/data/latest_version")
+        .and_then(|value| value.as_u64().or_else(|| value.as_str()?.parse().ok()))
+        .filter(|version| *version > 0)
+        .ok_or_else(|| KmsError::InvalidResponse("OpenBao key version is unavailable".into()))
+}
+
+pub async fn rotate_openbao(request: ProviderRequest) -> Result<Value, KmsError> {
+    if Provider::from_config(&request.service_config)? != Provider::OpenBao {
+        return Err(KmsError::InvalidConfig(
+            "No provider rotation adapter available.".into(),
+        ));
+    }
+    let config = &request.service_config;
+    let endpoint = required(
+        config,
+        "endpoint",
+        "Transit endpoint is required for rotation",
+    )?;
+    let key_reference = required(
+        config,
+        "key_reference",
+        "A registered KMS key reference is required for rotation",
+    )?;
+    let token = transit_token(config);
+    if token.is_empty() {
+        return Err(KmsError::InvalidConfig(
+            "Transit access is not configured for rotation.".into(),
+        ));
+    }
+    let mount = string(config, "mount")
+        .unwrap_or("transit")
+        .trim_matches('/');
+    let namespace = string(config, "namespace")
+        .map(str::trim)
+        .filter(|value| !value.is_empty());
+    let url = format!(
+        "{}/v1/{mount}/keys/{key_reference}",
+        endpoint.trim_end_matches('/')
+    );
+    let rotate = Client::new()
+        .post(format!("{url}/rotate"))
+        .timeout(HTTP_TIMEOUT)
+        .header("X-Vault-Token", &token);
+    let rotate = if let Some(namespace) = namespace {
+        rotate.header("X-Vault-Namespace", namespace)
+    } else {
+        rotate
+    };
+    send_json_or_empty(rotate).await?;
+    let read = Client::new()
+        .get(url)
+        .timeout(HTTP_TIMEOUT)
+        .header("X-Vault-Token", &token);
+    let read = if let Some(namespace) = namespace {
+        read.header("X-Vault-Namespace", namespace)
+    } else {
+        read
+    };
+    let latest_version = match send_json(read).await {
+        Ok(response) => response
+            .get("data")
+            .and_then(|data| data.get("latest_version"))
+            .cloned()
+            .unwrap_or(Value::Null),
+        Err(_) => Value::Null,
+    };
+    Ok(json!({"ok": true, "version": latest_version}))
 }
 
 pub async fn verify(request: ProviderRequest) -> Result<CapabilityResult, KmsError> {
@@ -259,6 +445,11 @@ async fn sign_openbao(config: &Value, payload: &[u8]) -> Result<Vec<u8>, KmsErro
 }
 
 async fn public_key_openbao(config: &Value) -> Result<Value, KmsError> {
+    let data = openbao_key_data(config).await?;
+    openbao_jwk_from_data(config, &data)
+}
+
+async fn openbao_key_data(config: &Value) -> Result<Value, KmsError> {
     let endpoint = required(
         config,
         "endpoint",
@@ -282,19 +473,22 @@ async fn public_key_openbao(config: &Value) -> Result<Value, KmsError> {
             .header("X-Vault-Token", transit_token(config)),
     )
     .await?;
-    let data = response
+    response
         .get("data")
-        .and_then(Value::as_object)
+        .filter(|data| data.is_object())
+        .cloned()
         .ok_or_else(|| {
             KmsError::InvalidResponse("OpenBao key response did not include data".to_string())
-        })?;
-    let latest = data
-        .get("latest_version")
-        .map(|value| match value {
-            Value::String(value) => value.clone(),
-            other => other.to_string(),
         })
-        .unwrap_or_else(|| "1".to_string());
+}
+
+fn openbao_jwk_from_data(config: &Value, data: &Value) -> Result<Value, KmsError> {
+    let key_reference = required(
+        config,
+        "key_reference",
+        "OpenBao adapter requires 'endpoint' and 'key_reference' in service_config",
+    )?;
+    let latest = openbao_latest_version_from_data(data);
     let metadata = data
         .get("keys")
         .and_then(Value::as_object)
@@ -345,6 +539,56 @@ async fn public_key_openbao(config: &Value) -> Result<Value, KmsError> {
         })?
     };
     jwk_value(jwk, key_reference)
+}
+
+fn openbao_latest_version_from_data(data: &Value) -> String {
+    data.get("latest_version")
+        .map(|value| match value {
+            Value::String(value) => value.clone(),
+            other => other.to_string(),
+        })
+        .unwrap_or_else(|| "1".to_string())
+}
+
+fn validate_managed_openbao(config: &Value) -> Result<(), KmsError> {
+    if string(config, "id") != Some("managed-openbao-transit")
+        || string(config, "service_type") != Some("openbao-transit")
+    {
+        return Err(KmsError::InvalidConfig(
+            "Only the managed OpenBao Transit service can create signing keys.".into(),
+        ));
+    }
+    Ok(())
+}
+
+/// Read only public metadata for an existing managed Transit key.
+pub async fn read_managed_openbao(request: ProviderRequest) -> Result<Value, KmsError> {
+    let config = &request.service_config;
+    validate_managed_openbao(config)?;
+    let data = openbao_key_data(config).await?;
+    let public_jwk = openbao_jwk_from_data(config, &data)?;
+    let latest_version = data.get("latest_version").cloned().unwrap_or(Value::Null);
+    let latest = openbao_latest_version_from_data(&data);
+    let latest_key = data
+        .get("keys")
+        .and_then(Value::as_object)
+        .and_then(|keys| keys.get(&latest));
+    Ok(json!({
+        "public_jwk": public_jwk,
+        "latest_version": latest_version,
+        "created_at": latest_key.and_then(|key| key.get("creation_time")).cloned().unwrap_or(Value::Null),
+        "status": if data.get("supports_signing").and_then(Value::as_bool) == Some(true)
+            && data.get("soft_deleted").and_then(Value::as_bool) != Some(true) {"active"} else {"invalid"},
+    }))
+}
+
+/// Explicitly create or retrieve one managed Transit key and return public metadata only.
+/// The provider retains all private key material; callers must independently authorize
+/// and tenant-scope the key reference before reaching this operation.
+pub async fn create_managed_openbao(request: ProviderRequest) -> Result<Value, KmsError> {
+    validate_managed_openbao(&request.service_config)?;
+    create_managed_openbao_key(&request.service_config).await?;
+    read_managed_openbao(request).await
 }
 
 async fn create_managed_openbao_key(config: &Value) -> Result<(), KmsError> {
@@ -970,6 +1214,40 @@ fn missing_route_detail(detail: &str) -> bool {
         || detail.contains("route not found")
 }
 
+/// Confirm the Transit collection is readable and omits this key before
+/// provisioning after a 404. Error bodies vary across OpenBao and proxies;
+/// a denied list or missing mount must fail closed.
+pub(crate) async fn missing_managed_openbao_key(
+    config: &Value,
+    error: &KmsError,
+) -> Result<bool, KmsError> {
+    let KmsError::ProviderStatus { status, detail } = error else {
+        return Ok(false);
+    };
+    if *status != StatusCode::NOT_FOUND || missing_route_detail(detail) {
+        return Ok(false);
+    }
+    let endpoint = required(
+        config,
+        "endpoint",
+        "Managed OpenBao key lookup requires 'endpoint' and 'key_reference'",
+    )?;
+    let reference = required(
+        config,
+        "key_reference",
+        "Managed OpenBao key lookup requires 'endpoint' and 'key_reference'",
+    )?;
+    if string(config, "mount").unwrap_or("transit") != "transit" {
+        return Err(KmsError::InvalidConfig(
+            "Managed OpenBao key lookup requires the transit mount".into(),
+        ));
+    }
+    Ok(!list_managed_openbao_key_names(endpoint)
+        .await?
+        .iter()
+        .any(|name| name == reference))
+}
+
 fn mount_exists_detail(detail: &str) -> bool {
     let detail = detail.to_ascii_lowercase();
     detail.contains("path is already in use") || detail.contains("already exists")
@@ -1048,6 +1326,136 @@ fn bounded(value: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn transit_rotation_stays_in_kms_and_reports_public_version() {
+        use std::sync::{
+            atomic::{AtomicUsize, Ordering},
+            Arc,
+        };
+
+        let rotations = Arc::new(AtomicUsize::new(0));
+        let app = axum::Router::new()
+            .route(
+                "/v1/transit/keys/signing-key",
+                axum::routing::get(|| async { axum::Json(json!({"data": {"latest_version": 2}})) }),
+            )
+            .route(
+                "/v1/transit/keys/signing-key/rotate",
+                axum::routing::post({
+                    let rotations = Arc::clone(&rotations);
+                    move || {
+                        let rotations = Arc::clone(&rotations);
+                        async move {
+                            rotations.fetch_add(1, Ordering::SeqCst);
+                            StatusCode::NO_CONTENT
+                        }
+                    }
+                }),
+            );
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("local KMS fixture");
+        let endpoint = format!("http://{}", listener.local_addr().unwrap());
+        let server = tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+        let rotated = rotate_openbao(ProviderRequest {
+            service_config: json!({
+                "service_type": "openbao-transit", "endpoint": endpoint,
+                "mount": "transit", "auth_mode": "token", "auth_reference": "fixture-token",
+                "key_reference": "signing-key"
+            }),
+        })
+        .await
+        .unwrap();
+        server.abort();
+        assert_eq!(rotated, json!({"ok": true, "version": 2}));
+        assert_eq!(rotations.load(Ordering::SeqCst), 1);
+        assert!(rotate_openbao(ProviderRequest {
+            service_config: json!({"service_type": "aws-kms"}),
+        })
+        .await
+        .is_err());
+    }
+
+    #[tokio::test]
+    async fn existing_public_key_discovery_never_creates_a_managed_key() {
+        use std::sync::{
+            atomic::{AtomicUsize, Ordering},
+            Arc,
+        };
+
+        let creates = Arc::new(AtomicUsize::new(0));
+        let app = axum::Router::new().route(
+            "/v1/transit/keys/missing-key",
+            axum::routing::get(|| async { StatusCode::NOT_FOUND }).post({
+                let creates = Arc::clone(&creates);
+                move || {
+                    let creates = Arc::clone(&creates);
+                    async move {
+                        creates.fetch_add(1, Ordering::SeqCst);
+                        StatusCode::OK
+                    }
+                }
+            }),
+        );
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("local KMS fixture");
+        let endpoint = format!("http://{}", listener.local_addr().unwrap());
+        let server = tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+        let result = public_key_existing(ProviderRequest {
+            service_config: json!({
+                "id": "managed-openbao-transit",
+                "service_type": "openbao-transit",
+                "endpoint": endpoint,
+                "mount": "transit",
+                "key_reference": "missing-key"
+            }),
+        })
+        .await;
+        server.abort();
+        assert!(matches!(
+            result,
+            Err(KmsError::ProviderStatus {
+                status: StatusCode::NOT_FOUND,
+                ..
+            })
+        ));
+        assert_eq!(creates.load(Ordering::SeqCst), 0);
+    }
+
+    #[test]
+    fn empty_transit_list_is_distinct_from_missing_mount_and_denied_access() {
+        assert!(empty_transit_list_response("{\"errors\":[]}"));
+        assert!(!empty_transit_list_response(
+            "{\"errors\":[\"no handler for route \\\"transit/keys/\\\"\"]}"
+        ));
+        assert!(!empty_transit_list_response("permission denied"));
+    }
+
+    #[tokio::test]
+    async fn managed_key_missing_signal_requires_404_before_collection_lookup() {
+        let config = json!({"endpoint": "http://127.0.0.1:1", "key_reference": "key"});
+        let missing = |detail: &str| KmsError::ProviderStatus {
+            status: StatusCode::NOT_FOUND,
+            detail: detail.into(),
+        };
+        assert!(!missing_managed_openbao_key(
+            &config,
+            &missing(r#"{"errors":["no handler for route transit/keys/key"]}"#)
+        )
+        .await
+        .unwrap());
+        assert!(!missing_managed_openbao_key(
+            &config,
+            &KmsError::ProviderStatus {
+                status: StatusCode::FORBIDDEN,
+                detail: "permission denied".into()
+            }
+        )
+        .await
+        .unwrap());
+    }
 
     #[test]
     fn provider_factory_preserves_supported_aliases_and_rejects_unknowns() {

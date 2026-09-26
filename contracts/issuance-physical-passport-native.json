@@ -15,6 +15,15 @@
     "required_result_fields": ["sod_der_base64", "dsc_cert_pem"],
     "incomplete_error": "ICAO document signer returned incomplete signing material"
   },
+  "managed_issuer_profile_signer": {
+    "scope": "beta-only extension to the frozen Python remote-signer contract",
+    "selection": "Resolve the active organization and issuer DID profile for ICAO_EMRTD and x509_doc_signer before signing",
+    "custody": "Select the signing key through the issuer profile and keep private key material inside KMS",
+    "certificate_gate": "Require the attached DSC to chain to an active organization CSCA trust anchor before signing",
+    "sod_gate": "The shared marty-emrtd-issuance PreparedSod::assemble verifies the KMS signature against the attached DSC before emitting the SOD",
+    "stale_key_behavior": "If KMS uses a key different from the attached DSC, fail closed until a matching DSC is enrolled",
+    "production_selector_default": false
+  },
   "self_signed_test_signer": {
     "python_flag": "PHYSICAL_DOCUMENT_ALLOW_SELF_SIGNED=true",
     "python_behavior": "When no remote signer URL is set, issue a single-use CSCA and DSC for testing and offline fixtures only",
@@ -243,6 +252,8 @@
     "extra_fields": "forbid"
   },
   "safe_job_response_fields": ["id", "organization_id", "flow_execution_id", "application_id", "credential_template_id", "delivery_destination_profile_id", "document_type", "country_code", "secure_artifact_reference", "bureau_job_id", "tracking_number", "status", "quality_result", "error_code", "error_message", "submitted_at", "completed_at", "created_at", "updated_at"],
+  "submit_retry": "A job with a bound bureau_job_id returns its current safe tenant-scoped representation without signing or submitting again. An unbound job retains the released route's status eligibility; concurrent bind attempts preserve the first matching bureau ID and later status.",
+  "post_submission_generation": "Once a bureau job ID is bound, data-group and SOD generation return 409 so they cannot rewind the bureau lifecycle or replace the submitted SOD hash.",
   "timestamp_wire_observation": {
     "python_oracle": "released production-status route through FastAPI TestClient with a fixed UTC row; quality_result.checked_at is a separately stored datetime.isoformat string",
     "job_whole_second_utc": "2026-09-25T06:01:02Z",

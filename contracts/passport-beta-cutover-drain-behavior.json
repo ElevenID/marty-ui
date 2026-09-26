@@ -1,0 +1,15 @@
+{
+  "schema": "marty.passport-beta-cutover-drain/v1",
+  "scope": "First beta cutover to KMS-verified bureau callbacks after application writers stop",
+  "terminal_statuses": ["ACTIVE", "FAILED", "CANCELLED"],
+  "missing_job_table": "allow initial deployment before native physical-document migration",
+  "policy": "Every nonterminal physical-document job blocks callback cutover, including a SOD_SIGNED job whose bureau_job_id is still null during bureau submission.",
+  "cases": [
+    {"name": "submission interruption window", "status": "SOD_SIGNED", "bureau_job_id": null, "blocks": true},
+    {"name": "already submitted", "status": "SUBMITTED", "bureau_job_id": "bureau-1", "blocks": true},
+    {"name": "draft job", "status": "DRAFT", "bureau_job_id": null, "blocks": true},
+    {"name": "activated", "status": "ACTIVE", "bureau_job_id": "bureau-1", "blocks": false},
+    {"name": "failed", "status": "FAILED", "bureau_job_id": null, "blocks": false},
+    {"name": "cancelled", "status": "CANCELLED", "bureau_job_id": "bureau-1", "blocks": false}
+  ]
+}

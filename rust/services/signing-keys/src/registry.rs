@@ -1,18 +1,187 @@
 //! Canonical signing-service registry normalization and routing decisions.
 
-use std::collections::{BTreeMap, BTreeSet};
+use std::{
+    collections::{BTreeMap, BTreeSet},
+    sync::Arc,
+    time::{Duration, Instant},
+};
 
 use chrono::Utc;
 use redis::{aio::ConnectionManager, AsyncCommands};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Map, Value};
+use sha2::{Digest, Sha256};
 use thiserror::Error;
+use tokio::sync::RwLock;
+use tokio::task::JoinSet;
 use uuid::Uuid;
 
 use crate::domain::{key_purposes, service_capabilities, service_type, service_types};
+use crate::kms;
+use crate::profiles::ProfileStore;
 
 const SUPPORTED_ALGORITHMS: &[&str] = &["ES256", "ES384", "ES512", "RS256", "EdDSA"];
-const MANAGED_OPENBAO_SERVICE_ID: &str = "managed-openbao-transit";
+pub(crate) const MANAGED_OPENBAO_SERVICE_ID: &str = "managed-openbao-transit";
+const ROTATION_LEASE_TTL_MS: u64 = 120_000;
+
+fn rotation_lease_key(organization_id: &str) -> String {
+    format!(
+        "signing-service:rotation-lease:{}:{}",
+        organization_id.len(),
+        organization_id
+    )
+}
+
+fn rotation_marker_key(organization_id: &str, service: &Value) -> Result<String, RegistryError> {
+    let field = |name: &str| {
+        service
+            .get(name)
+            .and_then(Value::as_str)
+            .unwrap_or_default()
+            .trim()
+            .to_owned()
+    };
+    let endpoint = field("endpoint").trim_end_matches('/').to_owned();
+    let key_reference = field("key_reference");
+    if endpoint.is_empty() || key_reference.is_empty() {
+        return Err(RegistryError::Invalid(
+            "Transit endpoint and key reference are required for rotation.".into(),
+        ));
+    }
+    let identity = json!({
+        "endpoint": endpoint,
+        "mount": if field("mount").is_empty() { "transit".into() } else { field("mount").trim_matches('/').to_owned() },
+        "namespace": field("namespace"),
+        "key_reference": key_reference,
+    });
+    let digest = Sha256::digest(serde_json::to_vec(&identity).expect("KMS identity serializes"));
+    Ok(format!(
+        "signing-service:rotation-reconcile:{}:{}:{digest:x}",
+        organization_id.len(),
+        organization_id
+    ))
+}
+
+fn rotation_marker_index_key(organization_id: &str, service_id: &str) -> String {
+    format!(
+        "signing-service:rotation-reconcile-index:{}:{}:{}:{}",
+        organization_id.len(),
+        organization_id,
+        service_id.len(),
+        service_id
+    )
+}
+
+fn preserve_rotation_fields(requested: &mut Value, current: &Value) {
+    let Some(services) = requested.get_mut("services").and_then(Value::as_array_mut) else {
+        return;
+    };
+    let current_services = current.get("services").and_then(Value::as_array);
+    for service in services {
+        let existing = service.get("id").and_then(Value::as_str).and_then(|id| {
+            current_services?
+                .iter()
+                .find(|candidate| candidate.get("id").and_then(Value::as_str) == Some(id))
+        });
+        let Some(fields) = service.as_object_mut() else {
+            continue;
+        };
+        let same_key = existing.is_some_and(|existing| {
+            [
+                "service_type",
+                "provider",
+                "endpoint",
+                "mount",
+                "namespace",
+                "key_reference",
+            ]
+            .iter()
+            .all(|field| fields.get(*field) == existing.get(*field))
+        });
+        if same_key {
+            let existing = existing.expect("same key has a stored service");
+            let stale_rotation = fields.get("rotation_state") != existing.get("rotation_state");
+            fields.insert(
+                "rotation_state".into(),
+                existing
+                    .get("rotation_state")
+                    .cloned()
+                    .unwrap_or_else(|| json!({})),
+            );
+            if stale_rotation {
+                for field in ["rotation_policy", "updated_at"] {
+                    if let Some(value) = existing.get(field) {
+                        fields.insert(field.into(), value.clone());
+                    }
+                }
+            }
+        } else {
+            fields.insert("rotation_state".into(), json!({}));
+        }
+    }
+}
+
+pub struct RotationLease {
+    connection: ConnectionManager,
+    key: String,
+    owner: String,
+    released: bool,
+}
+
+impl RotationLease {
+    pub(crate) fn covers_organization(&self, organization_id: &str) -> bool {
+        self.key == rotation_lease_key(organization_id)
+    }
+
+    pub(crate) fn redis_key(&self) -> &str {
+        &self.key
+    }
+
+    pub(crate) fn owner(&self) -> &str {
+        &self.owner
+    }
+
+    pub async fn release(mut self) -> Result<(), RegistryError> {
+        release_rotation_lease(&mut self.connection, &self.key, &self.owner).await?;
+        self.released = true;
+        Ok(())
+    }
+}
+
+impl Drop for RotationLease {
+    fn drop(&mut self) {
+        if self.released {
+            return;
+        }
+        if let Ok(runtime) = tokio::runtime::Handle::try_current() {
+            let mut connection = self.connection.clone();
+            let key = self.key.clone();
+            let owner = self.owner.clone();
+            runtime.spawn(async move {
+                let _ = release_rotation_lease(&mut connection, &key, &owner).await;
+            });
+        }
+    }
+}
+
+async fn release_rotation_lease(
+    connection: &mut ConnectionManager,
+    key: &str,
+    owner: &str,
+) -> Result<(), RegistryError> {
+    redis::Script::new(
+        "if redis.call('GET', KEYS[1]) == ARGV[1] then
+            return redis.call('DEL', KEYS[1])
+         end
+         return 0",
+    )
+    .key(key)
+    .arg(owner)
+    .invoke_async::<i32>(connection)
+    .await
+    .map_err(|error| RegistryError::Storage(error.to_string()))?;
+    Ok(())
+}
 
 #[derive(Debug, Error, PartialEq, Eq)]
 pub enum RegistryError {
@@ -22,15 +191,213 @@ pub enum RegistryError {
     Storage(String),
     #[error("stored signing registry is malformed: {0}")]
     Corrupt(String),
+    #[error("signing registry update is in progress for this tenant")]
+    Conflict,
 }
+
+#[derive(Clone)]
+struct ManagedInventorySnapshot {
+    refreshed_at: Instant,
+    keys: Vec<ManagedKey>,
+    complete: bool,
+    profile_references: BTreeMap<String, bool>,
+}
+
+type ManagedInventoryCache = Arc<RwLock<BTreeMap<String, ManagedInventorySnapshot>>>;
 
 #[derive(Clone)]
 pub struct RegistryStore {
     connection: ConnectionManager,
     managed_openbao_endpoint: Option<String>,
+    managed_inventory: ManagedInventoryCache,
 }
 
 impl RegistryStore {
+    pub async fn rotation_markers_for_service(
+        &self,
+        organization_id: &str,
+        service_id: &str,
+    ) -> Result<Vec<Value>, RegistryError> {
+        let mut connection = self.connection.clone();
+        let marker_keys: Vec<String> = connection
+            .smembers(rotation_marker_index_key(organization_id, service_id))
+            .await
+            .map_err(|error| RegistryError::Storage(error.to_string()))?;
+        let mut markers = Vec::with_capacity(marker_keys.len());
+        for marker_key in marker_keys {
+            let payload: Option<String> = connection
+                .get(marker_key)
+                .await
+                .map_err(|error| RegistryError::Storage(error.to_string()))?;
+            let payload = payload.ok_or_else(|| {
+                RegistryError::Corrupt("Rotation marker index has no matching marker".into())
+            })?;
+            let marker: Value = serde_json::from_str(&payload)
+                .map_err(|error| RegistryError::Corrupt(error.to_string()))?;
+            if marker["service_id"] != service_id {
+                return Err(RegistryError::Corrupt(
+                    "Rotation marker index has a different service".into(),
+                ));
+            }
+            markers.push(marker);
+        }
+        markers.sort_by(|left, right| {
+            left["started_at"]
+                .as_str()
+                .cmp(&right["started_at"].as_str())
+        });
+        Ok(markers)
+    }
+
+    pub async fn rotation_marker(
+        &self,
+        organization_id: &str,
+        service: &Value,
+    ) -> Result<Option<Value>, RegistryError> {
+        let key = rotation_marker_key(organization_id, service)?;
+        let mut connection = self.connection.clone();
+        let payload: Option<String> = connection
+            .get(key)
+            .await
+            .map_err(|error| RegistryError::Storage(error.to_string()))?;
+        payload
+            .map(|payload| {
+                serde_json::from_str(&payload)
+                    .map_err(|error| RegistryError::Corrupt(error.to_string()))
+            })
+            .transpose()
+    }
+
+    pub async fn create_rotation_marker(
+        &self,
+        organization_id: &str,
+        service: &Value,
+        marker: &Value,
+        lease: &RotationLease,
+    ) -> Result<(), RegistryError> {
+        if lease.key != rotation_lease_key(organization_id) {
+            return Err(RegistryError::Conflict);
+        }
+        let key = rotation_marker_key(organization_id, service)?;
+        let service_id = marker["service_id"]
+            .as_str()
+            .ok_or_else(|| RegistryError::Invalid("Rotation marker has no service ID".into()))?;
+        let index_key = rotation_marker_index_key(organization_id, service_id);
+        let payload = serde_json::to_string(marker)
+            .map_err(|error| RegistryError::Invalid(error.to_string()))?;
+        let mut connection = self.connection.clone();
+        let created: i32 = redis::Script::new(
+            "if redis.call('GET', KEYS[1]) ~= ARGV[1] then return 0 end
+             if redis.call('EXISTS', KEYS[2]) == 1 then return 0 end
+             local index_type = redis.call('TYPE', KEYS[3]).ok
+             if index_type ~= 'none' and index_type ~= 'set' then return 0 end
+             redis.call('SADD', KEYS[3], KEYS[2])
+             redis.call('SET', KEYS[2], ARGV[2])
+             return 1",
+        )
+        .key(&lease.key)
+        .key(key)
+        .key(index_key)
+        .arg(&lease.owner)
+        .arg(payload)
+        .invoke_async(&mut connection)
+        .await
+        .map_err(|error| RegistryError::Storage(error.to_string()))?;
+        if created != 1 {
+            return Err(RegistryError::Conflict);
+        }
+        Ok(())
+    }
+
+    pub async fn save_pending_rotation_with_marker(
+        &self,
+        organization_id: &str,
+        service: &Value,
+        registry: &Value,
+        marker: &Value,
+        lease: &RotationLease,
+    ) -> Result<Value, RegistryError> {
+        if lease.key != rotation_lease_key(organization_id) {
+            return Err(RegistryError::Conflict);
+        }
+        let marker_key = rotation_marker_key(organization_id, service)?;
+        let service_id = marker["service_id"]
+            .as_str()
+            .ok_or_else(|| RegistryError::Invalid("Rotation marker has no service ID".into()))?;
+        let index_key = rotation_marker_index_key(organization_id, service_id);
+        let normalized = normalize_requested_registry(registry)?;
+        let registry_payload = serde_json::to_string(&normalized)
+            .map_err(|error| RegistryError::Invalid(error.to_string()))?;
+        let marker_payload = serde_json::to_string(marker)
+            .map_err(|error| RegistryError::Invalid(error.to_string()))?;
+        let mut connection = self.connection.clone();
+        let saved: i32 = redis::Script::new(
+            "if redis.call('GET', KEYS[1]) ~= ARGV[1] then return 0 end
+             if redis.call('EXISTS', KEYS[3]) == 1 then return 0 end
+             local index_type = redis.call('TYPE', KEYS[4]).ok
+             if index_type ~= 'none' and index_type ~= 'set' then return 0 end
+             redis.call('SADD', KEYS[4], KEYS[3])
+             redis.call('SET', KEYS[3], ARGV[3])
+             redis.call('SET', KEYS[2], ARGV[2])
+             return 1",
+        )
+        .key(&lease.key)
+        .key(storage_key(organization_id))
+        .key(marker_key)
+        .key(index_key)
+        .arg(&lease.owner)
+        .arg(registry_payload)
+        .arg(marker_payload)
+        .invoke_async(&mut connection)
+        .await
+        .map_err(|error| RegistryError::Storage(error.to_string()))?;
+        if saved != 1 {
+            return Err(RegistryError::Conflict);
+        }
+        self.managed_inventory.write().await.remove(organization_id);
+        Ok(normalized)
+    }
+
+    pub async fn clear_rotation_marker(
+        &self,
+        organization_id: &str,
+        service: &Value,
+        marker: &Value,
+        lease: &RotationLease,
+    ) -> Result<(), RegistryError> {
+        if lease.key != rotation_lease_key(organization_id) {
+            return Err(RegistryError::Conflict);
+        }
+        let key = rotation_marker_key(organization_id, service)?;
+        let service_id = marker["service_id"]
+            .as_str()
+            .ok_or_else(|| RegistryError::Invalid("Rotation marker has no service ID".into()))?;
+        let index_key = rotation_marker_index_key(organization_id, service_id);
+        let payload = serde_json::to_string(marker)
+            .map_err(|error| RegistryError::Invalid(error.to_string()))?;
+        let mut connection = self.connection.clone();
+        let cleared: i32 = redis::Script::new(
+            "if redis.call('GET', KEYS[1]) ~= ARGV[1] then return 0 end
+             if redis.call('GET', KEYS[2]) ~= ARGV[2] then return 0 end
+             if redis.call('TYPE', KEYS[3]).ok ~= 'set' then return 0 end
+             if redis.call('SISMEMBER', KEYS[3], KEYS[2]) ~= 1 then return 0 end
+             redis.call('DEL', KEYS[2])
+             redis.call('SREM', KEYS[3], KEYS[2])
+             return 1",
+        )
+        .key(&lease.key)
+        .key(key)
+        .key(index_key)
+        .arg(&lease.owner)
+        .arg(payload)
+        .invoke_async(&mut connection)
+        .await
+        .map_err(|error| RegistryError::Storage(error.to_string()))?;
+        if cleared != 1 {
+            return Err(RegistryError::Conflict);
+        }
+        Ok(())
+    }
     pub async fn connect(redis_url: &str) -> Result<Self, RegistryError> {
         let client = redis::Client::open(redis_url)
             .map_err(|error| RegistryError::Storage(error.to_string()))?;
@@ -46,6 +413,7 @@ impl RegistryStore {
         Ok(Self {
             connection,
             managed_openbao_endpoint: None,
+            managed_inventory: Arc::new(RwLock::new(BTreeMap::new())),
         })
     }
 
@@ -53,6 +421,30 @@ impl RegistryStore {
     pub fn with_managed_openbao(mut self, endpoint: Option<String>) -> Self {
         self.managed_openbao_endpoint = endpoint;
         self
+    }
+
+    pub async fn acquire_rotation_lease(
+        &self,
+        organization_id: &str,
+    ) -> Result<Option<RotationLease>, RegistryError> {
+        let key = rotation_lease_key(organization_id);
+        let owner = Uuid::new_v4().to_string();
+        let mut connection = self.connection.clone();
+        let acquired: Option<String> = redis::cmd("SET")
+            .arg(&key)
+            .arg(&owner)
+            .arg("NX")
+            .arg("PX")
+            .arg(ROTATION_LEASE_TTL_MS)
+            .query_async(&mut connection)
+            .await
+            .map_err(|error| RegistryError::Storage(error.to_string()))?;
+        Ok(acquired.map(|_| RotationLease {
+            connection,
+            key,
+            owner,
+            released: false,
+        }))
     }
 
     pub async fn load(&self, organization_id: &str) -> Result<Value, RegistryError> {
@@ -69,7 +461,7 @@ impl RegistryStore {
             }
             None => empty_registry(),
         };
-        Ok(self.with_managed_service(registry))
+        Ok(self.with_managed_service(organization_id, registry).await)
     }
 
     pub async fn save(
@@ -77,15 +469,62 @@ impl RegistryStore {
         organization_id: &str,
         registry: &Value,
     ) -> Result<Value, RegistryError> {
+        let lease = self
+            .acquire_rotation_lease(organization_id)
+            .await?
+            .ok_or(RegistryError::Conflict)?;
+        let existing = self.load(organization_id).await?;
+        let saved = self
+            .save_requested_with_rotation_lease(organization_id, registry, &existing, &lease)
+            .await;
+        let _ = lease.release().await;
+        let normalized = saved?;
+        Ok(self.with_managed_service(organization_id, normalized).await)
+    }
+
+    pub async fn save_requested_with_rotation_lease(
+        &self,
+        organization_id: &str,
+        requested: &Value,
+        existing: &Value,
+        lease: &RotationLease,
+    ) -> Result<Value, RegistryError> {
+        let mut merged = normalize_requested_registry(requested)?;
+        preserve_rotation_fields(&mut merged, existing);
+        self.save_with_rotation_lease(organization_id, &merged, lease)
+            .await
+    }
+
+    pub async fn save_with_rotation_lease(
+        &self,
+        organization_id: &str,
+        registry: &Value,
+        lease: &RotationLease,
+    ) -> Result<Value, RegistryError> {
+        if lease.key != rotation_lease_key(organization_id) {
+            return Err(RegistryError::Conflict);
+        }
         let normalized = normalize_requested_registry(registry)?;
         let payload = serde_json::to_string(&normalized)
             .map_err(|error| RegistryError::Invalid(error.to_string()))?;
         let mut connection = self.connection.clone();
-        connection
-            .set::<_, _, ()>(storage_key(organization_id), payload)
-            .await
-            .map_err(|error| RegistryError::Storage(error.to_string()))?;
-        Ok(self.with_managed_service(normalized))
+        let saved: i32 = redis::Script::new(
+            "if redis.call('GET', KEYS[1]) ~= ARGV[1] then return 0 end
+             redis.call('SET', KEYS[2], ARGV[2])
+             return 1",
+        )
+        .key(&lease.key)
+        .key(storage_key(organization_id))
+        .arg(&lease.owner)
+        .arg(payload)
+        .invoke_async(&mut connection)
+        .await
+        .map_err(|error| RegistryError::Storage(error.to_string()))?;
+        if saved != 1 {
+            return Err(RegistryError::Conflict);
+        }
+        self.managed_inventory.write().await.remove(organization_id);
+        Ok(normalized)
     }
 
     pub async fn bind_profile(
@@ -112,64 +551,178 @@ impl RegistryStore {
         let service_id = required("signing_service_id")?;
         let key_reference = required("signing_key_reference")?;
         let key_purpose = required("key_purpose")?;
-        if !is_key_purpose(&key_purpose) {
+        self.bind_reference_purpose(
+            organization_id,
+            &service_id,
+            &key_reference,
+            &key_purpose,
+            true,
+        )
+        .await
+    }
+
+    /// Bind a managed key to its purpose without changing organization service defaults.
+    pub async fn bind_key_purpose(
+        &self,
+        organization_id: &str,
+        service_id: &str,
+        key_reference: &str,
+        key_purpose: &str,
+    ) -> Result<Value, RegistryError> {
+        self.bind_reference_purpose(
+            organization_id,
+            service_id,
+            key_reference,
+            key_purpose,
+            false,
+        )
+        .await
+    }
+
+    async fn bind_reference_purpose(
+        &self,
+        organization_id: &str,
+        service_id: &str,
+        key_reference: &str,
+        key_purpose: &str,
+        set_defaults: bool,
+    ) -> Result<Value, RegistryError> {
+        if service_id.trim().is_empty() || key_reference.trim().is_empty() {
+            return Err(RegistryError::Invalid(
+                "Incomplete KMS purpose binding.".into(),
+            ));
+        }
+        if !is_key_purpose(key_purpose) {
             return Err(RegistryError::Invalid(format!(
                 "Invalid key_purpose '{key_purpose}'."
             )));
         }
 
-        let mut registry = self.load(organization_id).await?;
-        let bindings = registry
-            .as_object_mut()
-            .expect("normalized registry object")
-            .entry("key_reference_purposes")
-            .or_insert_with(|| json!({}));
-        let bindings = bindings
-            .as_object_mut()
-            .expect("normalized registry bindings object");
-        let references = bindings
-            .entry(service_id.clone())
-            .or_insert_with(|| json!({}))
-            .as_object_mut()
-            .expect("normalized service bindings object");
-        let purposes = references
-            .entry(key_reference)
-            .or_insert_with(|| json!([]))
-            .as_array_mut()
-            .expect("normalized purpose bindings array");
-        if !purposes
-            .iter()
-            .any(|value| value.as_str() == Some(&key_purpose))
-        {
-            purposes.push(Value::String(key_purpose.clone()));
-        }
-        purposes.sort_by(|left, right| left.as_str().cmp(&right.as_str()));
-        let normalized_bindings = normalize_bindings(registry.get("key_reference_purposes"));
-        validate_lti_bindings(&normalized_bindings)?;
-        registry["key_reference_purposes"] = json!(normalized_bindings);
+        // Every whole-registry writer shares this lease. Retry briefly so two
+        // successful KMS creates can both persist their independent bindings.
+        let lease = tokio::time::timeout(std::time::Duration::from_secs(30), async {
+            loop {
+                if let Some(lease) = self.acquire_rotation_lease(organization_id).await? {
+                    break Ok::<_, RegistryError>(lease);
+                }
+                tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+            }
+        })
+        .await
+        .map_err(|_| RegistryError::Conflict)??;
+        let result = async {
+            let mut registry = self.load(organization_id).await?;
+            let bindings = registry
+                .as_object_mut()
+                .expect("normalized registry object")
+                .entry("key_reference_purposes")
+                .or_insert_with(|| json!({}));
+            let bindings = bindings
+                .as_object_mut()
+                .expect("normalized registry bindings object");
+            let references = bindings
+                .entry(service_id.to_owned())
+                .or_insert_with(|| json!({}))
+                .as_object_mut()
+                .expect("normalized service bindings object");
+            let purposes = references
+                .entry(key_reference.to_owned())
+                .or_insert_with(|| json!([]))
+                .as_array_mut()
+                .expect("normalized purpose bindings array");
+            if !purposes
+                .iter()
+                .any(|value| value.as_str() == Some(key_purpose))
+            {
+                purposes.push(Value::String(key_purpose.to_owned()));
+            }
+            purposes.sort_by(|left, right| left.as_str().cmp(&right.as_str()));
+            let normalized_bindings = normalize_bindings(registry.get("key_reference_purposes"));
+            validate_lti_bindings(&normalized_bindings)?;
+            registry["key_reference_purposes"] = json!(normalized_bindings);
 
-        set_default(&mut registry, "type_defaults", &key_purpose, &service_id);
-        for format in formats_for_purposes(std::slice::from_ref(&key_purpose)) {
-            set_default(&mut registry, "format_defaults", &format, &service_id);
+            if set_defaults {
+                set_default(&mut registry, "type_defaults", key_purpose, service_id);
+                for format in formats_for_purposes(&[key_purpose.to_owned()]) {
+                    set_default(&mut registry, "format_defaults", &format, service_id);
+                }
+                if registry
+                    .get("default_service_id")
+                    .and_then(Value::as_str)
+                    .is_none_or(|value| value.trim().is_empty())
+                {
+                    registry["default_service_id"] = Value::String(service_id.to_owned());
+                }
+            }
+            self.save_with_rotation_lease(organization_id, &registry, &lease)
+                .await
         }
-        if registry
-            .get("default_service_id")
-            .and_then(Value::as_str)
-            .is_none_or(|value| value.trim().is_empty())
-        {
-            registry["default_service_id"] = Value::String(service_id);
-        }
-        self.save(organization_id, &registry).await
+        .await;
+        let release = lease.release().await;
+        let normalized = result?;
+        release?;
+        Ok(self.with_managed_service(organization_id, normalized).await)
     }
 
     pub fn connection(&self) -> ConnectionManager {
         self.connection.clone()
     }
 
-    fn with_managed_service(&self, mut registry: Value) -> Value {
+    pub async fn with_managed_service(&self, organization_id: &str, mut registry: Value) -> Value {
         let Some(endpoint) = self.managed_openbao_endpoint.as_deref() else {
             return registry;
         };
+        let profiles = ProfileStore::from_connection(self.connection.clone())
+            .list(organization_id)
+            .await;
+        let profiles_available = profiles.is_ok();
+        let profiles = profiles.unwrap_or_else(|_| json!({"profiles": []}));
+        let profile_references = active_managed_profile_references(organization_id, &profiles);
+        let active_tuple_references = profile_references
+            .keys()
+            .filter(|reference| issuer_tuple_key_name(reference))
+            .cloned()
+            .collect::<BTreeSet<_>>();
+        let cached = self
+            .managed_inventory
+            .read()
+            .await
+            .get(organization_id)
+            .cloned();
+        let (mut managed_keys, mut inventory_complete) = match cached {
+            Some(snapshot)
+                if snapshot.refreshed_at.elapsed()
+                    < Duration::from_secs(if snapshot.complete { 30 } else { 5 })
+                    && (!profiles_available
+                        || snapshot.profile_references == profile_references) =>
+            {
+                (snapshot.keys, snapshot.complete)
+            }
+            _ => {
+                let mut discovered =
+                    managed_live_keys(organization_id, &registry, &profile_references, endpoint)
+                        .await;
+                discovered.1 &= profiles_available;
+                self.managed_inventory.write().await.insert(
+                    organization_id.to_owned(),
+                    ManagedInventorySnapshot {
+                        refreshed_at: Instant::now(),
+                        keys: discovered.0.clone(),
+                        complete: discovered.1,
+                        profile_references: profile_references.clone(),
+                    },
+                );
+                discovered
+            }
+        };
+        // Profile mutations do not write the registry. Check the cheap Redis
+        // profile document on every load so a cached tuple key stops being
+        // selectable as soon as its last active profile is retired or deleted.
+        managed_keys.retain(|key| {
+            !issuer_tuple_key_name(&key.reference)
+                || active_tuple_references.contains(&key.reference)
+        });
+        inventory_complete &= profiles_available;
         let requested_default = registry
             .get("default_service_id")
             .and_then(Value::as_str)
@@ -181,7 +734,10 @@ impl RegistryStore {
             services.retain(|service| {
                 service.get("id").and_then(Value::as_str) != Some(MANAGED_OPENBAO_SERVICE_ID)
             });
-            services.insert(0, managed_openbao_service(endpoint));
+            services.insert(
+                0,
+                managed_openbao_service(endpoint, &managed_keys, inventory_complete),
+            );
         }
         let configured_default = requested_default.as_deref().is_some_and(|id| {
             registry["services"]
@@ -197,10 +753,189 @@ impl RegistryStore {
     }
 }
 
-fn managed_openbao_service(endpoint: &str) -> Value {
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct ManagedKey {
+    reference: String,
+    algorithm: String,
+    lti_only: bool,
+}
+
+fn tenant_managed_key_name(organization_id: &str, reference: &str) -> bool {
+    let tenant = Uuid::new_v5(&Uuid::NAMESPACE_URL, organization_id.as_bytes())
+        .simple()
+        .to_string();
+    crate::domain::MANAGED_KEY_PREFIXES
+        .iter()
+        .any(|prefix| reference.starts_with(&format!("{prefix}{tenant}-")))
+}
+
+fn foreign_namespaced_key(organization_id: &str, reference: &str) -> bool {
+    crate::domain::MANAGED_KEY_PREFIXES
+        .iter()
+        .filter_map(|prefix| reference.strip_prefix(prefix))
+        .any(|suffix| {
+            suffix.len() > 32
+                && suffix.as_bytes().get(32) == Some(&b'-')
+                && suffix.as_bytes()[..32].iter().all(u8::is_ascii_hexdigit)
+                && !tenant_managed_key_name(organization_id, reference)
+        })
+}
+
+fn issuer_tuple_key_name(reference: &str) -> bool {
+    ["cred-issuer-", "cred-dsc-", "oid4vp-verifier-", "lti-tool-"]
+        .iter()
+        .filter_map(|prefix| reference.strip_prefix(prefix))
+        .any(|suffix| {
+            let Some((token, algorithm)) = suffix.split_once('-') else {
+                return false;
+            };
+            token.len() == 20
+                && token.bytes().all(|byte| byte.is_ascii_hexdigit())
+                && ["es256", "es384", "es512", "rs256", "eddsa"].contains(&algorithm)
+        })
+}
+
+fn managed_key_algorithm(jwk: &Value) -> Option<&'static str> {
+    match (
+        jwk.get("kty").and_then(Value::as_str),
+        jwk.get("crv").and_then(Value::as_str),
+    ) {
+        (Some("EC"), Some("P-256")) => Some("ES256"),
+        (Some("EC"), Some("P-384")) => Some("ES384"),
+        (Some("EC"), Some("P-521")) => Some("ES512"),
+        (Some("RSA"), _) => Some("RS256"),
+        (Some("OKP"), Some("Ed25519")) => Some("EdDSA"),
+        _ => None,
+    }
+}
+
+async fn managed_live_keys(
+    organization_id: &str,
+    registry: &Value,
+    profile_references: &BTreeMap<String, bool>,
+    endpoint: &str,
+) -> (Vec<ManagedKey>, bool) {
+    let bindings = normalize_bindings(registry.get("key_reference_purposes"))
+        .remove(MANAGED_OPENBAO_SERVICE_ID)
+        .unwrap_or_default();
+    // Profile references were loaded from the tenant-scoped canonical store.
+    let mut references = bindings
+        .keys()
+        .filter(|reference| {
+            !foreign_namespaced_key(organization_id, reference)
+                && (!issuer_tuple_key_name(reference)
+                    || profile_references.contains_key(*reference))
+        })
+        .cloned()
+        .collect::<BTreeSet<_>>();
+    references.extend(profile_references.keys().cloned());
+    let mut inventory_complete = match kms::list_managed_openbao_key_names(endpoint).await {
+        Ok(names) => {
+            references.extend(
+                names
+                    .into_iter()
+                    .filter(|name| tenant_managed_key_name(organization_id, name)),
+            );
+            true
+        }
+        Err(_) => false,
+    };
+    let mut pending = references.into_iter();
+    let mut tasks = JoinSet::new();
+    let queue = |tasks: &mut JoinSet<Result<Option<ManagedKey>, ()>>, reference: String| {
+        let endpoint = endpoint.to_owned();
+        let lti_only = bindings
+            .get(&reference)
+            .is_some_and(|purposes| purposes.as_slice() == ["lti_tool_signing"])
+            || profile_references.get(&reference) == Some(&true)
+            || reference.starts_with("lti-tool-");
+        tasks.spawn(async move {
+            let public = match kms::managed_openbao_public_key_existing(&endpoint, &reference).await
+            {
+                Ok(public) => public,
+                Err(kms::KmsError::ProviderStatus {
+                    status: reqwest::StatusCode::NOT_FOUND,
+                    ..
+                }) => return Ok(None),
+                Err(_) => return Err(()),
+            };
+            Ok(managed_key_algorithm(&public).map(|algorithm| ManagedKey {
+                reference,
+                algorithm: algorithm.to_owned(),
+                lti_only,
+            }))
+        });
+    };
+    for _ in 0..8 {
+        if let Some(reference) = pending.next() {
+            queue(&mut tasks, reference);
+        }
+    }
+    let mut live = Vec::new();
+    while let Some(result) = tasks.join_next().await {
+        match result {
+            Ok(Ok(Some(key))) => live.push(key),
+            Ok(Ok(None)) => {}
+            _ => inventory_complete = false,
+        }
+        if let Some(reference) = pending.next() {
+            queue(&mut tasks, reference);
+        }
+    }
+    live.sort_by(|left, right| left.reference.cmp(&right.reference));
+    (live, inventory_complete)
+}
+
+fn active_managed_profile_references(
+    organization_id: &str,
+    profiles: &Value,
+) -> BTreeMap<String, bool> {
+    let mut references = BTreeMap::new();
+    for (reference, lti_only) in profiles
+        .get("profiles")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter(|profile| {
+            profile.get("status").and_then(Value::as_str) == Some("active")
+                && profile.get("signing_service_id").and_then(Value::as_str)
+                    == Some(MANAGED_OPENBAO_SERVICE_ID)
+        })
+        .filter_map(|profile| {
+            Some((
+                profile.get("signing_key_reference")?.as_str()?.to_owned(),
+                profile.get("key_purpose").and_then(Value::as_str) == Some("lti_tool_signing"),
+            ))
+        })
+        .filter(|(reference, _)| !foreign_namespaced_key(organization_id, reference))
+    {
+        *references.entry(reference).or_insert(false) |= lti_only;
+    }
+    references
+}
+
+fn managed_openbao_service(endpoint: &str, keys: &[ManagedKey], inventory_complete: bool) -> Value {
     let purposes = key_purposes()
         .into_iter()
         .map(|purpose| purpose.id)
+        .collect::<Vec<_>>();
+    let default_reference = keys
+        .iter()
+        .find(|key| !key.lti_only)
+        .map(|key| key.reference.as_str())
+        .unwrap_or_default();
+    let references = keys
+        .iter()
+        .map(|key| key.reference.as_str())
+        .collect::<Vec<_>>();
+    let key_algorithms = keys
+        .iter()
+        .map(|key| (key.reference.as_str(), key.algorithm.as_str()))
+        .collect::<BTreeMap<_, _>>();
+    let lti_only_references = keys
+        .iter()
+        .filter(|key| key.lti_only)
+        .map(|key| key.reference.as_str())
         .collect::<Vec<_>>();
     json!({
         "id": MANAGED_OPENBAO_SERVICE_ID,
@@ -217,16 +952,18 @@ fn managed_openbao_service(endpoint: &str) -> Value {
         "namespace": "",
         "auth_mode": "service_token",
         "auth_reference": "Managed by Marty service stack",
-        "key_reference": "",
-        "key_aliases": [],
+        "key_reference": default_reference,
+        "key_aliases": references,
+        "key_algorithms": key_algorithms,
+        "lti_only_references": lti_only_references,
         "algorithms": SUPPORTED_ALGORITHMS,
         "key_purposes": purposes,
         "credential_formats": ["jwt_vc_json", "dc+sd-jwt", "mso_mdoc", "zk_mdoc", "icao_emrtd", "vds_nc", "oauth-authz-req+jwt", "lti_tool_jwt"],
-        "status": "configured",
+        "status": if inventory_complete { "configured" } else { "degraded" },
         "managed": true,
         "read_only": true,
         "managed_by": "Marty service stack",
-        "key_count": 0,
+        "key_count": keys.len(),
         "capabilities": {
             "discover_keys": true,
             "sign": true,
@@ -497,7 +1234,11 @@ fn normalize_requested_registry(value: &Value) -> Result<Value, RegistryError> {
         return Ok(empty_registry());
     };
     let Some(raw_services) = body.get("services").and_then(Value::as_array) else {
-        return normalize_legacy_registry(body);
+        let mut legacy = normalize_legacy_registry(body)?;
+        let bindings = normalize_bindings(body.get("key_reference_purposes"));
+        validate_lti_bindings(&bindings)?;
+        legacy["key_reference_purposes"] = json!(bindings);
+        return Ok(legacy);
     };
     let mut services = Vec::new();
     for service in raw_services {
@@ -636,13 +1377,71 @@ fn resolve_key_reference(
         .filter(|value| !value.is_empty())
         .map(str::to_string);
     let Some(key_purpose) = key_purpose else {
-        return current;
+        let Some(algorithm) = algorithm else {
+            return current;
+        };
+        let service_id = service.get("id").and_then(Value::as_str)?;
+        let lti_only_references = dedupe_strings(service.get("lti_only_references"))
+            .into_iter()
+            .collect::<BTreeSet<_>>();
+        let bindings = normalize_bindings(registry.get("key_reference_purposes"));
+        let service_bindings = bindings.get(service_id);
+        let mut references = dedupe_strings(service.get("key_aliases"))
+            .into_iter()
+            .collect::<BTreeSet<_>>();
+        if let Some(reference) = &current {
+            references.insert(reference.clone());
+        }
+        if service_id != MANAGED_OPENBAO_SERVICE_ID {
+            if let Some(bound) = service_bindings {
+                references.extend(bound.keys().cloned());
+            }
+        }
+        let mut candidates = keys
+            .iter()
+            .filter(|key| key.get("algorithm").and_then(Value::as_str) == Some(algorithm))
+            .filter_map(|key| {
+                let reference = key
+                    .get("provider_key_name")
+                    .or_else(|| key.get("id"))
+                    .and_then(Value::as_str)
+                    .filter(|reference| references.contains(*reference))?;
+                if key
+                    .get("service_id")
+                    .and_then(Value::as_str)
+                    .is_some_and(|key_service_id| key_service_id != service_id)
+                {
+                    return None;
+                }
+                if service_bindings
+                    .and_then(|bound| bound.get(reference))
+                    .is_some_and(|purposes| purposes.as_slice() == ["lti_tool_signing"])
+                    || lti_only_references.contains(reference)
+                    || (service_id == MANAGED_OPENBAO_SERVICE_ID
+                        && managed_key_purposes(reference) == ["lti_tool_signing"])
+                {
+                    return None;
+                }
+                Some(reference.to_owned())
+            })
+            .collect::<Vec<_>>();
+        if current
+            .as_ref()
+            .is_some_and(|reference| candidates.contains(reference))
+        {
+            return current;
+        }
+        candidates.sort();
+        return candidates.into_iter().next();
     };
     let Some(service_id) = service.get("id").and_then(Value::as_str) else {
         return current;
     };
     let bindings = normalize_bindings(registry.get("key_reference_purposes"));
     let service_bindings = bindings.get(service_id).cloned().unwrap_or_default();
+    let lti_only_references = dedupe_strings(service.get("lti_only_references"))
+        .into_iter()
+        .collect::<BTreeSet<_>>();
     let mut aliases = dedupe_strings(service.get("key_aliases"))
         .into_iter()
         .collect::<BTreeSet<_>>();
@@ -653,7 +1452,12 @@ fn resolve_key_reference(
         .iter()
         .filter(|(reference, purposes)| {
             purposes.iter().any(|purpose| purpose == key_purpose)
-                && (aliases.is_empty() || aliases.contains(*reference))
+                && (key_purpose == "lti_tool_signing" || !lti_only_references.contains(*reference))
+                && (service_id != MANAGED_OPENBAO_SERVICE_ID
+                    || managed_key_purposes(reference).is_empty()
+                    || managed_key_purposes(reference).contains(&key_purpose))
+                && (aliases.contains(*reference)
+                    || (service_id != MANAGED_OPENBAO_SERVICE_ID && aliases.is_empty()))
         })
         .map(|(reference, _)| reference.clone())
         .collect::<Vec<_>>();
@@ -665,13 +1469,20 @@ fn resolve_key_reference(
                     .get("provider_key_name")
                     .or_else(|| key.get("id"))?
                     .as_str()?;
-                (managed_key_purposes(reference).contains(&key_purpose)
-                    && (aliases.is_empty() || aliases.contains(reference)))
+                ((managed_key_purposes(reference).contains(&key_purpose)
+                    || (key_purpose == "lti_tool_signing"
+                        && lti_only_references.contains(reference)))
+                    && (key_purpose == "lti_tool_signing"
+                        || !lti_only_references.contains(reference))
+                    && aliases.contains(reference))
                 .then(|| reference.to_string())
             })
             .collect();
     }
     if candidates.is_empty() {
+        if service_id == MANAGED_OPENBAO_SERVICE_ID {
+            return None;
+        }
         return if service_bindings.is_empty() {
             current
         } else {
@@ -794,18 +1605,8 @@ fn is_key_purpose(value: &str) -> bool {
     key_purposes().iter().any(|purpose| purpose.id == value)
 }
 
-fn managed_key_purposes(reference: &str) -> &'static [&'static str] {
-    if reference.starts_with("oid4vp-verifier-") {
-        &["oid4vp_request_signing"]
-    } else if reference.starts_with("lti-tool-") {
-        &["lti_tool_signing"]
-    } else if reference.starts_with("cred-dsc-") {
-        &["mdoc_dsc", "x509_doc_signer", "vdsnc_signing", "csca"]
-    } else if reference.starts_with("cred-issuer-") {
-        &["vc_jwt_issuer", "jwks_signing"]
-    } else {
-        &[]
-    }
+pub(crate) fn managed_key_purposes(reference: &str) -> &'static [&'static str] {
+    crate::domain::managed_key_purposes(reference)
 }
 
 fn contains_if_set(value: Option<&Value>, required: Option<&str>) -> bool {
@@ -895,10 +1696,56 @@ fn truthy(value: &Value) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use axum::{
+        extract::{Path, State},
+        http::StatusCode,
+        routing::get,
+        Json, Router,
+    };
+    use std::sync::{Arc, Mutex};
+
+    static BAO_ENV_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
+
+    #[test]
+    fn public_config_resolve_frozen_selection_cases() {
+        let contract: Value = serde_json::from_str(include_str!(
+            "../../../../contracts/signing-public-config-resolve-behavior.json"
+        ))
+        .expect("frozen public resolve contract");
+        for case in contract["cases"].as_array().expect("resolve cases") {
+            let mut request = case["request"].clone();
+            request["registry"] = case["registry"].clone();
+            request["keys"] = case["keys"].clone();
+            let request: ResolveRequest = serde_json::from_value(request).expect("resolve input");
+            let requires_bound_key = request.key_purpose.is_some();
+            let resolved = resolve(request).expect("registry resolution");
+            if case["expected_status"] == 404 {
+                assert!(
+                    resolved.service.is_none()
+                        || (requires_bound_key && resolved.key_reference.is_none()),
+                    "{} must not resolve",
+                    case["name"]
+                );
+                continue;
+            }
+            assert_eq!(
+                resolved.service.as_ref().map(|service| &service["id"]),
+                Some(&case["expected_service_id"]),
+                "{} service",
+                case["name"]
+            );
+            assert_eq!(
+                resolved.key_reference.as_deref(),
+                case["expected_key_reference"].as_str(),
+                "{} key",
+                case["name"]
+            );
+        }
+    }
 
     #[test]
     fn managed_openbao_accepts_passport_profile_wire_format() {
-        let managed = managed_openbao_service("http://openbao:8200");
+        let managed = managed_openbao_service("http://openbao:8200", &[], true);
         assert!(managed["credential_formats"]
             .as_array()
             .unwrap()
@@ -907,6 +1754,281 @@ mod tests {
             .as_array()
             .unwrap()
             .contains(&json!("x509_doc_signer")));
+    }
+
+    #[test]
+    fn managed_service_uses_only_live_public_keys_and_never_defaults_to_lti() {
+        let keys = vec![
+            ManagedKey {
+                reference: "lti-tool-1".into(),
+                algorithm: "RS256".into(),
+                lti_only: true,
+            },
+            ManagedKey {
+                reference: "cred-issuer-2".into(),
+                algorithm: "ES256".into(),
+                lti_only: false,
+            },
+        ];
+        let service = managed_openbao_service("http://openbao:8200", &keys, true);
+        assert_eq!(service["key_reference"], "cred-issuer-2");
+        assert_eq!(
+            service["key_aliases"],
+            json!(["lti-tool-1", "cred-issuer-2"])
+        );
+        assert_eq!(service["key_count"], 2);
+        assert!(service["algorithms"]
+            .as_array()
+            .unwrap()
+            .contains(&json!("EdDSA")));
+        let only_lti = managed_openbao_service("http://openbao:8200", &keys[..1], true);
+        assert_eq!(only_lti["key_reference"], "");
+    }
+
+    #[test]
+    fn managed_key_scope_keeps_legacy_bound_names_but_rejects_foreign_namespaces() {
+        for prefix in crate::domain::MANAGED_KEY_PREFIXES {
+            let own = format!(
+                "{prefix}{}-demo-es256",
+                Uuid::new_v5(&Uuid::NAMESPACE_URL, b"org-a").simple()
+            );
+            let foreign = format!(
+                "{prefix}{}-demo-es256",
+                Uuid::new_v5(&Uuid::NAMESPACE_URL, b"org-b").simple()
+            );
+            assert!(tenant_managed_key_name("org-a", &own), "{prefix}");
+            assert!(!tenant_managed_key_name("org-a", &foreign), "{prefix}");
+            assert!(foreign_namespaced_key("org-a", &foreign), "{prefix}");
+        }
+        assert!(!foreign_namespaced_key("org-a", "cred-issuer-legacy-es256"));
+        assert!(issuer_tuple_key_name(
+            "cred-issuer-0123456789abcdef0123-es256"
+        ));
+        assert!(issuer_tuple_key_name(
+            "oid4vp-verifier-0123456789abcdef0123-eddsa"
+        ));
+        let own = format!(
+            "cred-issuer-{}-demo-es256",
+            Uuid::new_v5(&Uuid::NAMESPACE_URL, b"org-a").simple()
+        );
+        assert!(!issuer_tuple_key_name(&own));
+        assert!(!issuer_tuple_key_name("cred-issuer-legacy-es256"));
+        assert_eq!(
+            managed_key_algorithm(&json!({"kty":"EC", "crv":"P-384"})),
+            Some("ES384")
+        );
+    }
+
+    #[test]
+    fn shared_profile_reference_preserves_lti_only_restriction() {
+        let profiles = json!({"profiles": [
+            {"status": "active", "signing_service_id": MANAGED_OPENBAO_SERVICE_ID,
+                "signing_key_reference": "legacy-shared-key", "key_purpose": "lti_tool_signing"},
+            {"status": "active", "signing_service_id": MANAGED_OPENBAO_SERVICE_ID,
+                "signing_key_reference": "legacy-shared-key", "key_purpose": "vc_jwt_issuer"}
+        ]});
+        assert!(active_managed_profile_references("org-a", &profiles)["legacy-shared-key"]);
+    }
+
+    #[tokio::test]
+    async fn managed_inventory_discards_stale_and_foreign_keys_and_recovers_tenant_key() {
+        #[derive(Clone)]
+        struct Fixture {
+            own: String,
+            foreign: String,
+            reads: Arc<Mutex<Vec<String>>>,
+        }
+        async fn list(State(state): State<Fixture>) -> Json<Value> {
+            Json(json!({"data": {"keys": [state.own, state.foreign]}}))
+        }
+        async fn read(
+            State(state): State<Fixture>,
+            Path(reference): Path<String>,
+        ) -> Result<Json<Value>, StatusCode> {
+            state.reads.lock().unwrap().push(reference.clone());
+            if reference == "a-stale" || reference == state.foreign {
+                return Err(StatusCode::NOT_FOUND);
+            }
+            const PEM: &str = "-----BEGIN PUBLIC KEY-----\nMFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEaxfR8uEsQkf4vOblY6RA8ncDfYEt\n6zOg9KE5RdiYwpZP40Li/hp/m47n60p8D54WK84zV2sxXs7LtkBoN79R9Q==\n-----END PUBLIC KEY-----\n";
+            Ok(Json(json!({"data": {
+                "latest_version": 1, "type": "ecdsa-p256",
+                "keys": {"1": {"public_key": PEM}}
+            }})))
+        }
+        let own = format!(
+            "cred-issuer-{}-unbound-es256",
+            Uuid::new_v5(&Uuid::NAMESPACE_URL, b"org-a").simple()
+        );
+        let foreign = format!(
+            "cred-issuer-{}-foreign-es256",
+            Uuid::new_v5(&Uuid::NAMESPACE_URL, b"org-b").simple()
+        );
+        let fixture = Fixture {
+            own: own.clone(),
+            foreign: foreign.clone(),
+            reads: Arc::new(Mutex::new(Vec::new())),
+        };
+        let app = Router::new()
+            .route("/v1/transit/keys", get(list))
+            .route("/v1/transit/keys/{reference}", get(read))
+            .with_state(fixture.clone());
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let endpoint = format!("http://{}", listener.local_addr().unwrap());
+        let server = tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+        let _guard = BAO_ENV_LOCK.lock().await;
+        let previous = std::env::var("BAO_TOKEN").ok();
+        std::env::set_var("BAO_TOKEN", "test-only");
+        let revoked = "cred-issuer-00000000000000000000-es256";
+        let deleted = "cred-dsc-11111111111111111111-es256";
+        let registry = json!({"key_reference_purposes": {"managed-openbao-transit": {
+            "a-stale": ["vc_jwt_issuer"],
+            "cred-issuer-legacy": ["vc_jwt_issuer"],
+            revoked: ["vc_jwt_issuer"],
+            deleted: ["mdoc_dsc"],
+            foreign.clone(): ["vc_jwt_issuer"]
+        }}});
+        let profile_only = "oid4vp-verifier-01234567890123456789-es256";
+        let profiles = json!({"profiles": [
+            {
+                "status": "active", "signing_service_id": "managed-openbao-transit",
+                "signing_key_reference": profile_only,
+                "key_purpose": "oid4vp_request_signing"
+            },
+            {
+                "status": "revoked", "signing_service_id": "managed-openbao-transit",
+                "signing_key_reference": revoked,
+                "key_purpose": "vc_jwt_issuer"
+            }
+        ]});
+        let active = active_managed_profile_references("org-a", &profiles);
+        let (keys, complete) = managed_live_keys("org-a", &registry, &active, &endpoint).await;
+        match previous {
+            Some(value) => std::env::set_var("BAO_TOKEN", value),
+            None => std::env::remove_var("BAO_TOKEN"),
+        }
+        server.abort();
+        assert!(complete);
+        assert_eq!(
+            keys.iter()
+                .map(|key| key.reference.as_str())
+                .collect::<Vec<_>>(),
+            [own.as_str(), "cred-issuer-legacy", profile_only]
+        );
+        let reads = fixture.reads.lock().unwrap();
+        assert!(reads.contains(&"a-stale".into()));
+        assert!(!reads.contains(&foreign));
+        assert!(!reads.contains(&revoked.to_owned()));
+        assert!(!reads.contains(&deleted.to_owned()));
+        let service = managed_openbao_service(&endpoint, &keys, complete);
+        assert_eq!(service["key_reference"], own);
+        assert_eq!(service["key_count"], 3);
+        assert!(service["algorithms"]
+            .as_array()
+            .unwrap()
+            .contains(&json!("ES384")));
+        let resolved = resolve(ResolveRequest {
+            registry: json!({"key_reference_purposes": {}, "services": [service.clone()], "default_service_id": "managed-openbao-transit"}),
+            service: Some(service),
+            keys: keys.iter().map(|key| json!({"id": key.reference, "algorithm": key.algorithm})).collect(),
+            credential_format: None,
+            key_purpose: Some("oid4vp_request_signing".into()),
+            algorithm: Some("ES256".into()),
+        }).unwrap();
+        assert_eq!(resolved.key_reference.as_deref(), Some(profile_only));
+    }
+
+    #[tokio::test]
+    #[ignore = "requires disposable MARTY_TEST_REDIS_URL"]
+    async fn cached_managed_inventory_tracks_immediate_profile_create_and_delete() {
+        #[derive(Clone)]
+        struct Fixture {
+            listings: Arc<Mutex<usize>>,
+        }
+        async fn list(State(state): State<Fixture>) -> Json<Value> {
+            *state.listings.lock().unwrap() += 1;
+            Json(json!({"data": {"keys": []}}))
+        }
+        async fn read(Path(_reference): Path<String>) -> Json<Value> {
+            const PEM: &str = "-----BEGIN PUBLIC KEY-----\nMFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEaxfR8uEsQkf4vOblY6RA8ncDfYEt\n6zOg9KE5RdiYwpZP40Li/hp/m47n60p8D54WK84zV2sxXs7LtkBoN79R9Q==\n-----END PUBLIC KEY-----\n";
+            Json(
+                json!({"data": {"latest_version": 1, "type": "ecdsa-p256", "keys": {"1": {"public_key": PEM}}}}),
+            )
+        }
+        let fixture = Fixture {
+            listings: Arc::new(Mutex::new(0)),
+        };
+        let app = Router::new()
+            .route("/v1/transit/keys", get(list))
+            .route("/v1/transit/keys/{reference}", get(read))
+            .with_state(fixture.clone());
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let endpoint = format!("http://{}", listener.local_addr().unwrap());
+        let server = tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+        let _guard = BAO_ENV_LOCK.lock().await;
+        let previous = std::env::var("BAO_TOKEN").ok();
+        std::env::set_var("BAO_TOKEN", "test-only");
+        let redis_url = std::env::var("MARTY_TEST_REDIS_URL").expect("disposable Redis URL");
+        let organization_id = format!("rust-signing-cache-{}", Uuid::new_v4().simple());
+        let reference = "cred-issuer-0123456789abcdef0123-es256";
+        let store = RegistryStore::connect(&redis_url)
+            .await
+            .unwrap()
+            .with_managed_openbao(Some(endpoint));
+        let profiles = ProfileStore::from_connection(store.connection());
+        let saved = store.save(&organization_id, &json!({
+            "services": [],
+            "key_reference_purposes": {"managed-openbao-transit": {reference: ["vc_jwt_issuer"]}}
+        })).await.unwrap();
+        assert_eq!(saved["services"][0]["key_reference"], "");
+        let listings_after_save = *fixture.listings.lock().unwrap();
+        assert_eq!(
+            store.load(&organization_id).await.unwrap()["services"][0]["key_count"],
+            0
+        );
+        assert_eq!(*fixture.listings.lock().unwrap(), listings_after_save);
+
+        let fixture_profile: Value = serde_json::from_str(include_str!(
+            "../tests/fixtures/issuer_profile_vectors.json"
+        ))
+        .unwrap();
+        let mut profile = fixture_profile["normalize"]["expected"].clone();
+        profile["organization_id"] = json!(organization_id);
+        profile["signing_service_id"] = json!(MANAGED_OPENBAO_SERVICE_ID);
+        profile["signing_key_reference"] = json!(reference);
+        let profile_id = profile["id"].as_str().unwrap();
+        profiles
+            .put(&organization_id, profile_id, profile.clone())
+            .await
+            .unwrap();
+        let created = store.load(&organization_id).await.unwrap();
+        assert_eq!(created["services"][0]["key_reference"], reference);
+        assert_eq!(created["services"][0]["key_count"], 1);
+        let listings_after_create = *fixture.listings.lock().unwrap();
+        assert!(listings_after_create > listings_after_save);
+        profiles.delete(&organization_id, profile_id).await.unwrap();
+        let deleted = store.load(&organization_id).await.unwrap();
+        assert_eq!(deleted["services"][0]["key_reference"], "");
+        assert_eq!(deleted["services"][0]["key_aliases"], json!([]));
+        assert_eq!(deleted["services"][0]["key_count"], 0);
+        let listings_after_delete = *fixture.listings.lock().unwrap();
+        assert!(listings_after_delete > listings_after_create);
+        assert_eq!(
+            store.load(&organization_id).await.unwrap()["services"][0]["key_count"],
+            0
+        );
+        assert_eq!(*fixture.listings.lock().unwrap(), listings_after_delete);
+        let mut connection = store.connection();
+        let _: () = redis::cmd("DEL")
+            .arg(storage_key(&organization_id))
+            .arg(crate::profiles::storage_key(&organization_id))
+            .query_async(&mut connection)
+            .await
+            .unwrap();
+        match previous {
+            Some(value) => std::env::set_var("BAO_TOKEN", value),
+            None => std::env::remove_var("BAO_TOKEN"),
+        }
+        server.abort();
     }
 
     #[test]
@@ -959,5 +2081,42 @@ mod tests {
         .unwrap()
         .unwrap();
         assert_eq!(gcp["algorithms"], json!(["EdDSA"]));
+    }
+
+    #[tokio::test]
+    #[ignore = "requires disposable MARTY_TEST_REDIS_URL"]
+    async fn concurrent_purpose_bindings_remain_atomic_with_rotation_lease() {
+        let redis_url = std::env::var("MARTY_TEST_REDIS_URL").expect("disposable Redis URL");
+        let store = RegistryStore::connect(&redis_url).await.unwrap();
+        let organization_id = format!("managed-bind-race-{}", Uuid::new_v4().simple());
+        let key = storage_key(&organization_id);
+        let mut connection = store.connection();
+        let mut tasks = tokio::task::JoinSet::new();
+        for index in 0..24 {
+            let store = store.clone();
+            let organization_id = organization_id.clone();
+            tasks.spawn(async move {
+                store
+                    .bind_key_purpose(
+                        &organization_id,
+                        MANAGED_OPENBAO_SERVICE_ID,
+                        &format!("cred-issuer-race-{index:02}"),
+                        "vc_jwt_issuer",
+                    )
+                    .await
+            });
+        }
+        while let Some(result) = tasks.join_next().await {
+            result.unwrap().unwrap();
+        }
+        let registry = store.load(&organization_id).await.unwrap();
+        assert_eq!(
+            registry["key_reference_purposes"][MANAGED_OPENBAO_SERVICE_ID]
+                .as_object()
+                .unwrap()
+                .len(),
+            24
+        );
+        let _: () = connection.del(&key).await.unwrap();
     }
 }

@@ -170,6 +170,188 @@ $applicationServices = @(
     "revocation-profile", "device-registration", "event-stream", "signing-keys", "issuance",
     "issuance-native", "canvas-sync-worker", "gateway"
 )
+$priorBureau = @($preDeploy | Where-Object { $_.service -eq "passport-beta-bureau" })
+$priorSigner = @($preDeploy | Where-Object { $_.service -eq "passport-callback-signer" })
+if ($priorBureau.Count -gt 1) { throw "Ambiguous beta passport bureau recovery records" }
+if ($priorSigner.Count -gt 1 -or $priorSigner.Count -ne $priorBureau.Count) {
+    throw "Beta passport callback recovery records must contain both bureau and signer"
+}
+
+function Assert-RestoredPassportCallbackNetwork {
+    $name = "elevenid-beta-passport-callback-signing"
+    $ids = @()
+    $openbao = $null
+    foreach ($service in @("openbao", "passport-beta-bureau", "passport-callback-signer")) {
+        $container = Find-ServiceContainer $service
+        if (-not $container) { throw "Missing restored passport callback service: $service" }
+        $id = & docker inspect $container --format '{{.Id}}'
+        if ($LASTEXITCODE -ne 0 -or $id -notmatch '^[0-9a-f]{64}$') {
+            throw "Invalid restored passport callback service identity"
+        }
+        $running = & docker inspect $container --format '{{.State.Running}}'
+        if ($LASTEXITCODE -ne 0 -or $running -ne "true") {
+            throw "Restored passport callback service is not running: $service"
+        }
+        $ids += [string]$id
+        if ($service -eq "openbao") { $openbao = [string]$id }
+    }
+    $raw = & docker network inspect $name
+    if ($LASTEXITCODE -ne 0) { throw "Restored passport callback network is missing" }
+    $network = @(($raw -join "`n") | ConvertFrom-Json)
+    if ($network.Count -ne 1 -or $network[0].Internal -ne $true) {
+        throw "Restored passport callback network is not isolated"
+    }
+    $members = @($network[0].Containers.PSObject.Properties.Name)
+    if (@($members | Where-Object { $_ -notin $ids }).Count -ne 0) {
+        throw "Unexpected container joined the restored passport callback network"
+    }
+    if ($openbao -notin $members) {
+        Invoke-Checked docker @("network", "connect", "--alias", "openbao", $name, $openbao)
+    }
+    $raw = & docker network inspect $name
+    if ($LASTEXITCODE -ne 0) { throw "Restored passport callback network is missing" }
+    $network = @(($raw -join "`n") | ConvertFrom-Json)
+    $members = @($network[0].Containers.PSObject.Properties.Name)
+    if ($network.Count -ne 1 -or $network[0].Internal -ne $true -or
+        $members.Count -ne 3 -or @($members | Where-Object { $_ -notin $ids }).Count -ne 0) {
+        throw "Restored passport callback network membership is invalid"
+    }
+    $openbaoNetworksRaw = & docker inspect $openbao --format '{{json .NetworkSettings.Networks}}'
+    if ($LASTEXITCODE -ne 0) { throw "Could not inspect restored OpenBao callback network aliases" }
+    $openbaoNetworks = ($openbaoNetworksRaw -join "`n") | ConvertFrom-Json
+    $openbaoEndpoint = $openbaoNetworks.PSObject.Properties[$name]
+    if (-not $openbaoEndpoint -or "openbao" -notin @($openbaoEndpoint.Value.Aliases)) {
+        throw "Restored OpenBao lacks its isolated callback network alias"
+    }
+}
+
+function Restore-PriorPassportCallbackNetwork {
+    if ($priorBureau.Count -ne 0 -or $null -eq $callbackNetworkBefore) { return }
+    $name = "elevenid-beta-passport-callback-signing"
+    $networkNames = @(& docker network ls --format '{{.Name}}')
+    if ($LASTEXITCODE -ne 0) { throw "Could not inventory restored beta callback networks" }
+    $matches = @($networkNames | Where-Object { $_ -ceq $name })
+    if ($matches.Count -gt 1) { throw "Ambiguous restored beta callback network" }
+    if ($matches.Count -eq 0) {
+        if ($callbackNetworkBefore.exists) { throw "Preexisting beta callback network was lost" }
+        return
+    }
+    $raw = & docker network inspect $name
+    if ($LASTEXITCODE -ne 0) { throw "Could not inspect restored beta callback network" }
+    $network = @(($raw -join "`n") | ConvertFrom-Json)
+    if ($network.Count -ne 1 -or $network[0].Internal -ne $true -or
+        $network[0].Id -notmatch '^[0-9a-f]{64}$' -or
+        $network[0].Labels.'com.docker.compose.project' -ne $project) {
+        throw "Restored beta callback network is not owned and isolated"
+    }
+    if ($callbackNetworkBefore.exists -and $network[0].Id -cne $callbackNetworkBefore.id) {
+        throw "Preexisting beta callback network identity changed"
+    }
+    $openbaoContainer = Find-ServiceContainer "openbao"
+    if (-not $openbaoContainer) { throw "OpenBao is missing during beta callback network restore" }
+    $openbaoId = & docker inspect $openbaoContainer --format '{{.Id}}'
+    if ($LASTEXITCODE -ne 0 -or $openbaoId -notmatch '^[0-9a-f]{64}$') {
+        throw "Could not identify OpenBao during beta callback network restore"
+    }
+    $priorMembers = @($callbackNetworkBefore.members)
+    $members = @($network[0].Containers.PSObject.Properties.Name)
+    $allowedMembers = if ($callbackNetworkBefore.exists) { @($priorMembers + $openbaoId) } else { @($openbaoId) }
+    if (@($members | Where-Object { $_ -notin $allowedMembers }).Count -ne 0) {
+        throw "Unexpected member blocks beta callback network rollback cleanup"
+    }
+    if ($openbaoId -in $members -and $openbaoId -notin $priorMembers) {
+        Invoke-Checked docker @("network", "disconnect", $name, $openbaoId)
+    }
+    $raw = & docker network inspect $name
+    if ($LASTEXITCODE -ne 0) { throw "Could not recheck restored beta callback network" }
+    $network = @(($raw -join "`n") | ConvertFrom-Json)
+    $members = @($network[0].Containers.PSObject.Properties.Name)
+    if ($network.Count -ne 1 -or
+        $members.Count -ne $priorMembers.Count -or
+        @($members | Where-Object { $_ -notin $priorMembers }).Count -ne 0) {
+        throw "Beta callback network does not match its predeploy membership"
+    }
+    if (-not $callbackNetworkBefore.exists) {
+        Invoke-Checked docker @("network", "rm", [string]$network[0].Id)
+    }
+}
+if ($priorBureau.Count -eq 1) {
+    if ($priorBureau[0].image_id -notmatch '^sha256:[0-9a-f]{64}$' -or
+        $priorBureau[0].compose_project -ne $project -or
+        $priorBureau[0].compose_service -ne "passport-beta-bureau") {
+        throw "Invalid beta passport bureau recovery record"
+    }
+    if ($priorSigner[0].image_id -notmatch '^sha256:[0-9a-f]{64}$' -or
+        $priorSigner[0].image_id -ne $priorBureau[0].image_id -or
+        $priorSigner[0].compose_project -ne $project -or
+        $priorSigner[0].compose_service -ne "passport-callback-signer") {
+        throw "Invalid beta passport callback signer recovery record"
+    }
+    $env:MARTY_SERVICES_IMAGE = [string]$priorBureau[0].image_id
+    $composeFiles += Join-Path $repoRoot "docker-compose.profile.passport-native-beta.yml"
+    $applicationServices += "passport-callback-signer"
+    $applicationServices += "passport-beta-bureau"
+}
+$currentBureauIds = @(& docker ps -a --filter "label=com.docker.compose.project=$project" `
+    --filter "label=com.docker.compose.service=passport-beta-bureau" --format '{{.ID}}')
+if ($LASTEXITCODE -ne 0 -or $currentBureauIds.Count -gt 1) {
+    throw "Could not uniquely resolve current beta passport bureau"
+}
+$currentBureau = if ($currentBureauIds.Count -eq 1) { [string]$currentBureauIds[0] } else { $null }
+$currentSignerIds = @(& docker ps -a --filter "label=com.docker.compose.project=$project" `
+    --filter "label=com.docker.compose.service=passport-callback-signer" --format '{{.ID}}')
+if ($LASTEXITCODE -ne 0 -or $currentSignerIds.Count -gt 1) {
+    throw "Could not uniquely resolve current beta passport callback signer"
+}
+$currentSigner = if ($currentSignerIds.Count -eq 1) { [string]$currentSignerIds[0] } else { $null }
+$callbackNetworkBeforePath = Join-Path $resolvedArtifacts "passport-callback-network-before.json"
+$callbackNetworkBefore = $null
+if (Test-Path -LiteralPath $callbackNetworkBeforePath -PathType Leaf) {
+    $callbackNetworkBefore = Get-Content -LiteralPath $callbackNetworkBeforePath -Raw | ConvertFrom-Json
+    if ($callbackNetworkBefore.schema_version -ne 1 -or
+        $callbackNetworkBefore.exists -isnot [bool] -or
+        ($callbackNetworkBefore.exists -and $callbackNetworkBefore.id -notmatch '^[0-9a-f]{64}$') -or
+        (-not $callbackNetworkBefore.exists -and $null -ne $callbackNetworkBefore.id)) {
+        throw "Invalid predeploy beta callback network record"
+    }
+}
+elseif ($priorBureau.Count -gt 0 -or $currentBureau -or $currentSigner) {
+    throw "Missing predeploy beta callback network record for passport recovery"
+}
+if ($null -ne $callbackNetworkBefore) {
+    $name = "elevenid-beta-passport-callback-signing"
+    $networkNames = @(& docker network ls --format '{{.Name}}')
+    if ($LASTEXITCODE -ne 0) { throw "Could not inventory beta callback network before restore" }
+    $matches = @($networkNames | Where-Object { $_ -ceq $name })
+    if ($matches.Count -gt 1 -or ($matches.Count -eq 0 -and $callbackNetworkBefore.exists)) {
+        throw "Predeploy beta callback network identity is unavailable"
+    }
+    if ($matches.Count -eq 1) {
+        $raw = & docker network inspect $name
+        if ($LASTEXITCODE -ne 0) { throw "Could not inspect beta callback network before restore" }
+        $network = @(($raw -join "`n") | ConvertFrom-Json)
+        if ($network.Count -ne 1 -or $network[0].Internal -ne $true -or
+            $network[0].Id -notmatch '^[0-9a-f]{64}$' -or
+            $network[0].Labels.'com.docker.compose.project' -ne $project -or
+            ($callbackNetworkBefore.exists -and $network[0].Id -cne $callbackNetworkBefore.id)) {
+            throw "Beta callback network identity or isolation changed before restore"
+        }
+        $allowedIds = @()
+        foreach ($container in @((Find-ServiceContainer "openbao"), $currentBureau, $currentSigner)) {
+            if ($container) {
+                $id = & docker inspect $container --format '{{.Id}}'
+                if ($LASTEXITCODE -ne 0 -or $id -notmatch '^[0-9a-f]{64}$') {
+                    throw "Could not identify beta callback container before restore"
+                }
+                $allowedIds += [string]$id
+            }
+        }
+        $members = @($network[0].Containers.PSObject.Properties.Name)
+        if (@($members | Where-Object { $_ -notin $allowedIds }).Count -ne 0) {
+            throw "Unexpected member blocks beta callback network restore"
+        }
+    }
+}
 $gatewayRecord = @($preDeploy | Where-Object { $_.service -eq "gateway" } | Select-Object -First 1)
 if ($gatewayRecord.Count -eq 1) {
     foreach ($name in @("MARTY_RELEASE_VERSION", "MARTY_UI_SHA", "ELEVENID_STACK_VERSION", "ELEVENID_COMPONENT_REVISIONS_JSON", "ELEVENID_IMAGE_DIGESTS_JSON")) {
@@ -245,6 +427,12 @@ $applicantVolumeName = Assert-BetaVolume "elevenid-beta_applicant_data"
 $yaml -join "`n" | Set-Content -LiteralPath $restoreImages -Encoding utf8
 $composeFiles += $restoreImages
 Invoke-Checked docker (Get-ComposeArgs (@("stop") + $applicationServices + @("keycloak")))
+if ($priorBureau.Count -eq 0 -and $currentBureau) {
+    Invoke-Checked docker @("stop", $currentBureau)
+}
+if ($priorSigner.Count -eq 0 -and $currentSigner) {
+    Invoke-Checked docker @("stop", $currentSigner)
+}
 
 Invoke-Checked docker @("cp", (Join-Path $backupDir "postgres-marty.dump"), "${postgres}:/tmp/beta-restore-marty.dump")
 Invoke-Checked docker @("cp", (Join-Path $backupDir "postgres-keycloak.dump"), "${postgres}:/tmp/beta-restore-keycloak.dump")
@@ -260,8 +448,19 @@ Invoke-Checked docker @("run", "--rm", "--mount", "type=volume,src=$redisVolumeN
 Invoke-Checked docker (Get-ComposeArgs @("start", "redis"))
 Wait-ForServiceHealth @("redis")
 Invoke-Checked docker @("run", "--rm", "--mount", "type=volume,src=$applicantVolumeName,dst=/data", "--mount", "type=bind,src=$backupDir,dst=/backup,readonly", $volumeHelperImage, "sh", "-lc", "test -s /backup/applicant_store.json && cp /backup/applicant_store.json /data/applicant_store.json.tmp && mv /data/applicant_store.json.tmp /data/applicant_store.json")
-Invoke-Checked docker (Get-ComposeArgs (@("up", "--detach", "--no-build", "--no-deps", "--force-recreate") + @("keycloak") + $restoreServices))
+$callbackRestore = @($restoreServices | Where-Object { $_ -in @("passport-callback-signer", "passport-beta-bureau") })
+if ($priorBureau.Count -eq 1 -and $callbackRestore.Count -ne 2) {
+    throw "Both passport callback services must be running in the restored beta snapshot"
+}
+if ($callbackRestore.Count -eq 2) {
+    Invoke-Checked docker (Get-ComposeArgs (@("up", "--detach", "--no-build", "--no-deps", "--force-recreate") + $callbackRestore))
+    Wait-ForServiceHealth $callbackRestore
+    Assert-RestoredPassportCallbackNetwork
+}
+$otherRestore = @($restoreServices | Where-Object { $_ -notin $callbackRestore })
+Invoke-Checked docker (Get-ComposeArgs (@("up", "--detach", "--no-build", "--no-deps", "--force-recreate") + @("keycloak") + $otherRestore))
 Wait-ForServiceHealth (@("keycloak") + $restoreServices)
+if ($callbackRestore.Count -eq 2) { Assert-RestoredPassportCallbackNetwork }
 
 if ("canvas-sync-worker" -notin @($preDeploy.service)) {
     $worker = Find-ServiceContainer "canvas-sync-worker"
@@ -271,6 +470,13 @@ if ("issuance-native" -notin @($preDeploy.service)) {
     $nativeIssuance = Find-ServiceContainer "issuance-native"
     if ($nativeIssuance) { Invoke-Checked docker @("rm", "--force", $nativeIssuance) }
 }
+if ($priorBureau.Count -eq 0 -and $currentBureau) {
+    Invoke-Checked docker @("rm", $currentBureau)
+}
+if ($priorSigner.Count -eq 0 -and $currentSigner) {
+    Invoke-Checked docker @("rm", $currentSigner)
+}
+Restore-PriorPassportCallbackNetwork
 
 if ($uiRecord.Count -eq 1) {
     $env:MARTY_UI_RELEASE_IMAGE = $uiRecord[0].image_id

@@ -101,3 +101,13 @@ def test_selfhost_stack_runs_rust_signing_keys_with_secret_files() -> None:
     assert "BAO_TOKEN_FILE: /run/secrets/openbao_service_token" in compose
     assert "SIGNING_KEYS_REDIS_URL: redis://redis:6379/2" in compose
     assert 'test: ["CMD", "curl", "-f", "http://localhost:8017/health"]' in compose
+
+
+def test_scoped_openbao_service_token_can_list_managed_key_names() -> None:
+    init = read("docker/openbao-init.sh")
+    policy = init.split("credential-service - <<'EOF'\n", 1)[1].split("\nEOF", 1)[0]
+    registry = read("rust/services/signing-keys/src/registry.rs")
+
+    assert 'path "transit/keys" {\n  capabilities = ["list"]\n}' in policy
+    assert "list_managed_openbao_key_names(endpoint)" in registry
+    assert "tenant_managed_key_name(organization_id, name)" in registry

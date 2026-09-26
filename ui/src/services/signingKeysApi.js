@@ -80,15 +80,14 @@ export async function getSigningKey(keyId, params = {}) {
 }
 
 /**
- * Upload/create a new signing key
- * @param {Object} keyData - Key configuration
- * @param {string} keyData.name - Key name
- * @param {string} keyData.algorithm - Algorithm (e.g., 'ES256', 'RS256')
- * @param {string} keyData.public_key - Public key in PEM format
- * @param {string} keyData.key_type - Key type: 'local', 'hsm', 'vault'
- * @param {Object} keyData.hsm_config - HSM configuration (if key_type === 'hsm')
- * @param {Object} keyData.vault_config - Vault configuration (if key_type === 'vault')
- * @returns {Promise<Object>} Created signing key
+ * Create a signing key in the tenant's managed OpenBao Transit service.
+ * This endpoint does not import key material or accept provider credentials.
+ * @param {Object} keyData - Managed-key request
+ * @param {string} keyData.name - Key name (key_name is a compatibility alias)
+ * @param {string} [keyData.algorithm='ES256'] - ES256, ES384, RS256, or EdDSA
+ * @param {string} [keyData.key_purpose='vc_jwt_issuer'] - Canonical signing purpose
+ * @param {string} [keyData.service_id] - Managed service ID when not the tenant default
+ * @returns {Promise<Object>} Created key's public metadata
  */
 export async function createSigningKey(keyData) {
   const body = withoutOrganizationFields(keyData);
@@ -404,6 +403,35 @@ export async function storeIssuerIdentityCertificate(body) {
   });
 }
 
+/** Enroll only public CSCA material; Rust resolves the managed key internally. */
+export async function enrollCscaCertificate(body) {
+  const organizationId = requireOrganizationId(body, 'enrolling CSCA certificates');
+  return put(`${BASE_PATH}/issuer-identities/csca-certificate`, {
+    organization_id: organizationId,
+    issuer_did: body?.issuer_did,
+    credential_format: body?.credential_format,
+    algorithm: body?.algorithm,
+    certificate_id: body?.certificate_id,
+    cert_pem: body?.cert_pem,
+    cert_chain_pem: body?.cert_chain_pem,
+  });
+}
+
+/** Build a public PKCS#10 request using the selected issuer identity's KMS key. */
+export async function generateIssuerIdentityCsr(body) {
+  const organizationId = requireOrganizationId(body, 'generating an issuer CSR');
+  return put(`${BASE_PATH}/issuer-identities/certificate-csr`, {
+    organization_id: organizationId,
+    issuer_did: body?.issuer_did,
+    key_purpose: body?.key_purpose,
+    credential_format: body?.credential_format,
+    algorithm: body?.algorithm,
+    country: body?.country,
+    organization: body?.organization,
+    common_name: body?.common_name,
+  });
+}
+
 /**
  * Retire exactly one DID-selected managed identity.
  */
@@ -450,5 +478,7 @@ export default {
   listPublicIssuerIdentities,
   rebindIssuerIdentity,
   storeIssuerIdentityCertificate,
+  enrollCscaCertificate,
+  generateIssuerIdentityCsr,
   deleteIssuerIdentity,
 };

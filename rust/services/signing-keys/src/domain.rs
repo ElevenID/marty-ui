@@ -199,6 +199,45 @@ pub fn key_purposes() -> Vec<KeyPurpose> {
     ]
 }
 
+pub const MANAGED_KEY_PREFIXES: &[&str] = &[
+    "cred-issuer-",
+    "cred-dsc-",
+    "lti-tool-",
+    "oid4vp-verifier-",
+    "cred-holder-",
+    "cred-presenter-",
+];
+
+pub fn managed_key_prefix_for_purpose(purpose: &str) -> Option<&'static str> {
+    match purpose {
+        "vc_jwt_issuer" | "jwks_signing" => Some("cred-issuer-"),
+        "mdoc_dsc" | "x509_doc_signer" | "vdsnc_signing" | "csca" => Some("cred-dsc-"),
+        "lti_tool_signing" => Some("lti-tool-"),
+        "oid4vp_request_signing" => Some("oid4vp-verifier-"),
+        "holder_binding" => Some("cred-holder-"),
+        "presentation_signing" => Some("cred-presenter-"),
+        _ => None,
+    }
+}
+
+pub fn managed_key_purposes(reference: &str) -> &'static [&'static str] {
+    if reference.starts_with("oid4vp-verifier-") {
+        &["oid4vp_request_signing"]
+    } else if reference.starts_with("cred-holder-") {
+        &["holder_binding"]
+    } else if reference.starts_with("cred-presenter-") {
+        &["presentation_signing"]
+    } else if reference.starts_with("lti-tool-") {
+        &["lti_tool_signing"]
+    } else if reference.starts_with("cred-dsc-") {
+        &["mdoc_dsc", "x509_doc_signer", "vdsnc_signing", "csca"]
+    } else if reference.starts_with("cred-issuer-") {
+        &["vc_jwt_issuer", "jwks_signing"]
+    } else {
+        &[]
+    }
+}
+
 fn capabilities(
     algorithms: &'static [&'static str],
     signature_encoding: &'static str,

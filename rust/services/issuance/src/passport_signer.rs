@@ -342,6 +342,7 @@ impl ManagedProfileSigner {
             .decode(signature)
             .map_err(|_| SignerError::InvalidManagedMaterial)?;
         let signature = cms_signature(&signature, algorithm)?;
+        // Shared eMRTD assembly verifies this KMS signature against the DSC.
         let sod = prepared
             .assemble(&signature)
             .map_err(|_| SignerError::InvalidManagedMaterial)?;
@@ -631,6 +632,8 @@ mod tests {
             csca_b64: String,
             csca_pem: String,
             signer: SigningKey,
+            rotated_signer: SigningKey,
+            rotated: Arc<AtomicBool>,
             requests: Arc<Mutex<Vec<Value>>>,
             trust_available: Arc<AtomicBool>,
         }
@@ -674,7 +677,12 @@ mod tests {
             let input = URL_SAFE_NO_PAD
                 .decode(request["payload_b64"].as_str().unwrap())
                 .unwrap();
-            let signature: Signature = state.signer.sign(&input);
+            let signing_key = if state.rotated.load(Ordering::SeqCst) {
+                &state.rotated_signer
+            } else {
+                &state.signer
+            };
+            let signature: Signature = signing_key.sign(&input);
             Json(json!({
                 "ok": true,
                 "issuer_did": request["issuer_did"],
@@ -687,11 +695,14 @@ mod tests {
             }))
         }
         let (dsc_b64, csca_b64, csca_pem, signer) = synthetic_dsc_chain();
+        let (_, _, _, rotated_signer) = synthetic_dsc_chain();
         let state = ManagedMock {
             dsc_b64,
             csca_b64,
             csca_pem,
             signer,
+            rotated_signer,
+            rotated: Arc::new(AtomicBool::new(false)),
             requests: Arc::new(Mutex::new(Vec::new())),
             trust_available: Arc::new(AtomicBool::new(true)),
         };
@@ -736,6 +747,15 @@ mod tests {
             assert_eq!(requests[0]["key_purpose"], "x509_doc_signer");
             assert_eq!(requests[0]["credential_format"], "ICAO_EMRTD");
         }
+        state.rotated.store(true, Ordering::SeqCst);
+        assert!(matches!(
+            signer
+                .sign("USA", "org-1", "did:web:issuer.example:orgs:org-1", &groups)
+                .await,
+            Err(SignerError::InvalidManagedMaterial)
+        ));
+        assert_eq!(state.requests.lock().unwrap().len(), 2);
+        state.rotated.store(false, Ordering::SeqCst);
         state.trust_available.store(false, Ordering::SeqCst);
         assert!(matches!(
             signer
@@ -743,7 +763,7 @@ mod tests {
                 .await,
             Err(SignerError::UntrustedDsc)
         ));
-        assert_eq!(state.requests.lock().unwrap().len(), 1);
+        assert_eq!(state.requests.lock().unwrap().len(), 2);
         server.abort();
     }
 

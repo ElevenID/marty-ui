@@ -213,6 +213,40 @@ impl SigningCompatibilityService {
         .await
     }
 
+    /// Read the current public key from the configured KMS service for this
+    /// managed issuer profile. A DID document may be stale during rotation.
+    pub async fn provider_public_key_for_profile(
+        &self,
+        organization_id: &str,
+        profile: &Value,
+    ) -> Result<Value, CompatibilityError> {
+        let service_id = required(profile, "signing_service_id")?;
+        let key_reference = required(profile, "signing_key_reference")?;
+        let registry = self
+            .registry
+            .load(organization_id)
+            .await
+            .map_err(|_| CompatibilityError::Unavailable)?;
+        let mut service =
+            service_for(&registry, service_id).ok_or(CompatibilityError::ServiceNotFound)?;
+        service.insert(
+            "key_reference".into(),
+            Value::String(key_reference.to_owned()),
+        );
+        let response = kms::public_key(ProviderRequest {
+            service_config: Value::Object(service),
+        })
+        .await
+        .map_err(map_kms_error)?;
+        let jwk = extract_provider_jwk(&response).ok_or(CompatibilityError::Unavailable)?;
+        validate_public_key_algorithm(
+            &jwk,
+            Some(required(profile, "algorithm")?),
+            "Managed issuer key",
+        )?;
+        Ok(Value::Object(jwk))
+    }
+
     pub async fn profile_identity(
         &self,
         organization_id: &str,
@@ -531,7 +565,7 @@ impl SigningCompatibilityService {
         self.registry
             .bind_profile(&request.organization_id, &profile)
             .await
-            .map_err(|error| CompatibilityError::Invalid(error.to_string()))?;
+            .map_err(map_registry_binding_error)?;
         let profile_id = required(&profile, "id")?.to_owned();
         let profile = self
             .profiles
@@ -558,6 +592,71 @@ impl SigningCompatibilityService {
             .await?;
         body["signing_service_id"] = Value::String(service_id);
         body["signing_key_reference"] = Value::String(key_reference);
+        // Validate the public tuple before a provider side effect. The managed
+        // reference is derived by the issuer route, never supplied by the caller.
+        profiles::normalize_profile(
+            &request.organization_id,
+            profiles::NormalizeProfileRequest {
+                body: body.clone(),
+                existing: None,
+                now: None,
+                profile_id: None,
+            },
+        )
+        .map_err(map_profile_error)?;
+        if body["signing_service_id"] == "managed-openbao-transit" {
+            let purpose = required(&body, "key_purpose")?;
+            let algorithm = required(&body, "algorithm")?;
+            let reference = required(&body, "signing_key_reference")?;
+            let allowed = crate::domain::key_purposes()
+                .into_iter()
+                .any(|entry| entry.id == purpose && entry.allowed_algorithms.contains(&algorithm));
+            if !allowed || !managed_key_purposes(reference).contains(&purpose) {
+                return Err(CompatibilityError::Invalid(
+                    "Managed issuer purpose and algorithm are incompatible.".into(),
+                ));
+            }
+            let registry = self
+                .registry
+                .load(&request.organization_id)
+                .await
+                .map_err(|_| CompatibilityError::Unavailable)?;
+            let mut service = service_for(&registry, "managed-openbao-transit")
+                .ok_or(CompatibilityError::ServiceNotFound)?;
+            service.insert("key_reference".into(), Value::String(reference.into()));
+            service.insert("algorithm".into(), Value::String(algorithm.into()));
+            let configuration = Value::Object(service);
+            let created = match kms::read_managed_openbao(ProviderRequest {
+                service_config: configuration.clone(),
+            })
+            .await
+            {
+                Ok(existing) => existing,
+                Err(error) => {
+                    if !kms::missing_managed_openbao_key(&configuration, &error)
+                        .await
+                        .map_err(map_kms_error)?
+                    {
+                        return Err(map_kms_error(error));
+                    }
+                    kms::create_managed_openbao(ProviderRequest {
+                        service_config: configuration,
+                    })
+                    .await
+                    .map_err(map_kms_error)?
+                }
+            };
+            if created.get("status").and_then(Value::as_str) != Some("active") {
+                return Err(CompatibilityError::Conflict(
+                    "Managed KMS key does not support signing.".into(),
+                ));
+            }
+            let jwk = created
+                .get("public_jwk")
+                .and_then(Value::as_object)
+                .ok_or(CompatibilityError::Unavailable)?;
+            validate_public_key_algorithm(jwk, Some(algorithm), "Managed KMS key")?;
+        }
         self.create_profile(&ProfileWriteRequest {
             organization_id: request.organization_id.clone(),
             body,
@@ -638,7 +737,7 @@ impl SigningCompatibilityService {
         self.registry
             .bind_profile(organization_id, &profile)
             .await
-            .map_err(|error| CompatibilityError::Invalid(error.to_string()))?;
+            .map_err(map_registry_binding_error)?;
         let profile = self
             .profiles
             .put(organization_id, profile_id, profile)
@@ -725,6 +824,14 @@ impl SigningCompatibilityService {
             .get(&request.organization_id, profile_id)
             .await
             .map_err(map_profile_error)?;
+        let current_jwk = self
+            .provider_public_key_for_profile(&request.organization_id, &profile)
+            .await?;
+        if !documents::same_public_jwk(&identity["public_jwk"], &current_jwk) {
+            return Err(CompatibilityError::Conflict(
+                "Published issuer identity does not match its current managed KMS key.".into(),
+            ));
+        }
         let key_reference = required(&profile, "signing_key_reference")?;
         let cert_pem = request
             .body
@@ -743,7 +850,7 @@ impl SigningCompatibilityService {
                     cert_chain_pem: clean(
                         request.body.get("cert_chain_pem").and_then(Value::as_str),
                     ),
-                    expected_public_jwk: Some(identity["public_jwk"].clone()),
+                    expected_public_jwk: Some(current_jwk),
                 },
             )
             .await
@@ -795,12 +902,15 @@ impl SigningCompatibilityService {
         })
         .await
         .map_err(map_kms_error)?;
-        let jwk = extract_provider_jwk(&provider_key).ok_or(CompatibilityError::Unavailable)?;
+        let mut jwk = extract_provider_jwk(&provider_key).ok_or(CompatibilityError::Unavailable)?;
         validate_public_key_algorithm(
             &jwk,
             Some(required(profile, "algorithm")?),
             "The replacement signing key",
         )?;
+        if service_id == "managed-openbao-transit" {
+            jwk.remove("kid");
+        }
         let key_reference = clean(profile.get("signing_key_reference").and_then(Value::as_str));
         let published = self
             .documents
@@ -812,11 +922,15 @@ impl SigningCompatibilityService {
                     public_domain: public_domain.into(),
                     did_id: Some(issuer_did.into()),
                     org_slug: Some(org_slug),
-                    fragment: Some(documents::did_fragment(
+                    fragment: Some(issuer_did_fragment(
+                        organization_id,
+                        issuer_did,
                         service_id,
                         key_reference.as_deref(),
                     )),
-                    key_reference,
+                    key_reference: (service_id != "managed-openbao-transit")
+                        .then_some(key_reference)
+                        .flatten(),
                     cert_pem: None,
                     cert_chain_pem: None,
                     relationship: documents::DidVerificationRelationship::AssertionMethod,
@@ -1435,17 +1549,29 @@ async fn complete_profile_binding(
 }
 
 fn managed_key_purposes(reference: &str) -> &'static [&'static str] {
-    if reference.starts_with("oid4vp-verifier-") {
-        &["oid4vp_request_signing"]
-    } else if reference.starts_with("lti-tool-") {
-        &["lti_tool_signing"]
-    } else if reference.starts_with("cred-dsc-") {
-        &["mdoc_dsc", "x509_doc_signer", "vdsnc_signing", "csca"]
-    } else if reference.starts_with("cred-issuer-") {
-        &["vc_jwt_issuer", "jwks_signing"]
-    } else {
-        &[]
+    crate::domain::managed_key_purposes(reference)
+}
+
+fn issuer_did_fragment(
+    organization_id: &str,
+    issuer_did: &str,
+    service_id: &str,
+    key_reference: Option<&str>,
+) -> String {
+    if service_id == "managed-openbao-transit" {
+        let token = uuid::Uuid::new_v5(
+            &uuid::Uuid::NAMESPACE_URL,
+            format!(
+                "{organization_id}|{issuer_did}|{service_id}|{}",
+                key_reference.unwrap_or_default()
+            )
+            .as_bytes(),
+        )
+        .simple()
+        .to_string();
+        return format!("managed-{}", &token[..20]);
     }
+    documents::did_fragment(service_id, key_reference)
 }
 
 fn algorithm_for_jwk(jwk: &Map<String, Value>) -> Option<&'static str> {
@@ -1896,6 +2022,18 @@ fn map_profile_error(error: profiles::ProfileError) -> CompatibilityError {
     }
 }
 
+fn map_registry_binding_error(error: crate::registry::RegistryError) -> CompatibilityError {
+    match error {
+        crate::registry::RegistryError::Conflict => {
+            CompatibilityError::Conflict("Signing registry update is already in progress.".into())
+        }
+        crate::registry::RegistryError::Invalid(detail) => CompatibilityError::Invalid(detail),
+        crate::registry::RegistryError::Storage(_) | crate::registry::RegistryError::Corrupt(_) => {
+            CompatibilityError::Unavailable
+        }
+    }
+}
+
 fn default_issuer_mode() -> String {
     "org_managed".into()
 }
@@ -1905,6 +2043,53 @@ mod tests {
     use serde::Deserialize;
 
     use super::*;
+
+    #[test]
+    fn managed_issuer_fragment_is_opaque_scoped_and_legacy_nonmanaged_is_unchanged() {
+        let first = issuer_did_fragment(
+            "org-a",
+            "did:web:issuer.example:orgs:a",
+            "managed-openbao-transit",
+            Some("cred-issuer-internal-key"),
+        );
+        assert_eq!(
+            first,
+            issuer_did_fragment(
+                "org-a",
+                "did:web:issuer.example:orgs:a",
+                "managed-openbao-transit",
+                Some("cred-issuer-internal-key"),
+            )
+        );
+        assert!(!first.contains("internal-key"));
+        assert_ne!(
+            first,
+            issuer_did_fragment(
+                "org-b",
+                "did:web:issuer.example:orgs:a",
+                "managed-openbao-transit",
+                Some("cred-issuer-internal-key"),
+            )
+        );
+        assert_ne!(
+            first,
+            issuer_did_fragment(
+                "org-a",
+                "did:web:issuer.example:orgs:b",
+                "managed-openbao-transit",
+                Some("cred-issuer-internal-key"),
+            )
+        );
+        assert_eq!(
+            issuer_did_fragment(
+                "org-a",
+                "did:web:issuer.example:orgs:a",
+                "service-a",
+                Some("legacy-key")
+            ),
+            documents::did_fragment("service-a", Some("legacy-key"))
+        );
+    }
 
     #[derive(Deserialize)]
     struct Contract {

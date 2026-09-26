@@ -1,4 +1,7 @@
-use std::sync::{Arc, Mutex};
+use std::sync::{
+    atomic::{AtomicBool, Ordering},
+    Arc, Mutex,
+};
 
 use axum::{
     body::{to_bytes, Body},
@@ -9,6 +12,7 @@ use axum::{
 };
 use chrono::{TimeZone, Utc};
 use hmac::{Hmac, Mac};
+use marty_issuance_service::config::IssuanceServiceConfig;
 use marty_issuance_service::migration;
 use marty_issuance_service::passport_artifact::{
     PassportArtifactCipher, PassportSensitiveArtifact,
@@ -25,6 +29,7 @@ use marty_passport_auth::PassportTenantKeyring;
 use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
 use sqlx::postgres::PgPoolOptions;
+use tokio::sync::oneshot;
 use tower::ServiceExt;
 
 #[cfg(feature = "passport-self-signed-test")]
@@ -186,25 +191,73 @@ async fn exercise_native_passport_http(
         assert_eq!(body["data_groups"], json!({"DG1":"YQ==","DG2":"Yg=="}));
         Json(json!({"sod_der_base64":"U09E", "dsc_cert_pem":"synthetic-cert"}))
     }
+    type SubmitGate = Arc<Mutex<Option<(oneshot::Sender<()>, oneshot::Receiver<()>)>>>;
     async fn submit(
-        State(observed): State<Arc<Mutex<Vec<Value>>>>,
+        State((observed, gate)): State<(Arc<Mutex<Vec<Value>>>, SubmitGate)>,
         Json(body): Json<Value>,
     ) -> (StatusCode, Json<Value>) {
         observed.lock().unwrap().push(body);
+        let gated = { gate.lock().unwrap().take() };
+        if let Some((entered, release)) = gated {
+            entered.send(()).unwrap();
+            release.await.unwrap();
+        }
         (
             StatusCode::ACCEPTED,
             Json(json!({"bureau_job_id":"bureau-http", "status":"QUEUED"})),
         )
     }
-    async fn poll() -> Json<Value> {
-        Json(json!({"status":"SHIPPED", "tracking_number":"tracking-http"}))
+    async fn signed_callback(app: &Router, secret: &str, body: Value) -> (StatusCode, Value) {
+        let mut mac = Hmac::<Sha256>::new_from_slice(secret.as_bytes()).unwrap();
+        mac.update(body.to_string().as_bytes());
+        let signature = hex::encode(mac.finalize().into_bytes());
+        passport_http_request(
+            app,
+            "POST",
+            "/v1/passport/webhooks/personalization",
+            None,
+            None,
+            body,
+            Some(&signature),
+        )
+        .await
     }
     let observed = Arc::new(Mutex::new(Vec::new()));
+    let submit_gate: SubmitGate = Arc::new(Mutex::new(None));
+    let stale_poll = Arc::new(AtomicBool::new(false));
+    let poll_state = stale_poll.clone();
+    let same_rank_poll = Arc::new(AtomicBool::new(false));
+    let same_rank_state = same_rank_poll.clone();
+    let poll_gate = Arc::new(Mutex::new(
+        None::<(oneshot::Sender<()>, oneshot::Receiver<()>)>,
+    ));
+    let gate_state = poll_gate.clone();
     let mock = Router::new()
         .route("/v1/icao/emrtd/sign", post(sign))
         .route("/v1/personalization/jobs", post(submit))
-        .route("/v1/personalization/jobs/{job_id}", get(poll))
-        .with_state(observed.clone());
+        .route(
+            "/v1/personalization/jobs/{job_id}",
+            get(move || {
+                let stale_poll = poll_state.clone();
+                let same_rank_poll = same_rank_state.clone();
+                let poll_gate = gate_state.clone();
+                async move {
+                    let gated = { poll_gate.lock().unwrap().take() };
+                    if let Some((entered, release)) = gated {
+                        entered.send(()).unwrap();
+                        release.await.unwrap();
+                    }
+                    Json(if same_rank_poll.load(Ordering::SeqCst) {
+                        json!({"status":"QUEUED", "tracking_number":null})
+                    } else if stale_poll.load(Ordering::SeqCst) {
+                        json!({"status":"PRINTING", "tracking_number":null})
+                    } else {
+                        json!({"status":"SHIPPED", "tracking_number":"tracking-http"})
+                    })
+                }
+            }),
+        )
+        .with_state((observed.clone(), submit_gate.clone()));
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let base_url = format!("http://{}", listener.local_addr().unwrap());
     let server = tokio::spawn(async move { axum::serve(listener, mock).await.unwrap() });
@@ -312,6 +365,25 @@ async fn exercise_native_passport_http(
         signed["sod_sha256"],
         hex::encode(sha2::Sha256::digest(b"SOD"))
     );
+    let (entered_tx, entered_rx) = oneshot::channel();
+    let (release_tx, release_rx) = oneshot::channel();
+    *submit_gate.lock().unwrap() = Some((entered_tx, release_rx));
+    let pending_app = app.clone();
+    let pending_path = format!("{path}/submit-personalization");
+    let pending_key = key_a.to_owned();
+    let pending_submit = tokio::spawn(async move {
+        passport_http_request(
+            &pending_app,
+            "POST",
+            &pending_path,
+            Some("org-a"),
+            Some(&pending_key),
+            json!({}),
+            None,
+        )
+        .await
+    });
+    entered_rx.await.unwrap();
     let (status, submitted) = passport_http_request(
         &app,
         "POST",
@@ -324,6 +396,12 @@ async fn exercise_native_passport_http(
     .await;
     assert_eq!(status, StatusCode::OK);
     assert_eq!(submitted["status"], "SUBMITTED");
+    release_tx.send(()).unwrap();
+    let (status, raced_submit) = pending_submit.await.unwrap();
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(raced_submit["bureau_job_id"], submitted["bureau_job_id"]);
+    assert_eq!(raced_submit["status"], "SUBMITTED");
+    assert_eq!(observed.lock().unwrap().len(), 2);
     assert_eq!(observed.lock().unwrap()[0]["document_type"], "TD1");
     let (status, _) = passport_http_request(
         &app,
@@ -348,6 +426,34 @@ async fn exercise_native_passport_http(
     .await;
     assert_eq!(status, StatusCode::OK);
     assert_eq!(polled["status"], "READY_FOR_ACTIVATION");
+    for operation in ["generate-data-groups", "generate-sod"] {
+        let (status, _) = passport_http_request(
+            &app,
+            "POST",
+            &format!("{path}/{operation}"),
+            Some("org-a"),
+            Some(key_a),
+            json!({}),
+            None,
+        )
+        .await;
+        assert_eq!(status, StatusCode::CONFLICT);
+    }
+    let (status, repeated) = passport_http_request(
+        &app,
+        "POST",
+        &format!("{path}/submit-personalization"),
+        Some("org-a"),
+        Some(key_a),
+        json!({}),
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(repeated["status"], "READY_FOR_ACTIVATION");
+    assert_eq!(repeated["bureau_job_id"], "bureau-http");
+    assert_eq!(repeated, polled);
+    assert_eq!(observed.lock().unwrap().len(), 2);
     let webhook = json!({"organization_id":"org-a", "bureau_job_id":"bureau-http", "status":"SHIPPED", "tracking_number":"webhook-tracking"});
     let (status, _) = passport_http_request(
         &app,
@@ -375,6 +481,20 @@ async fn exercise_native_passport_http(
     .await;
     assert_eq!(status, StatusCode::OK);
     assert_eq!(accepted, json!({"accepted":true}));
+    stale_poll.store(true, Ordering::SeqCst);
+    let (status, after_stale_poll) = passport_http_request(
+        &app,
+        "GET",
+        &format!("{path}/production-status"),
+        Some("org-a"),
+        Some(key_a),
+        json!({}),
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(after_stale_poll["status"], "READY_FOR_ACTIVATION");
+    assert_eq!(after_stale_poll["tracking_number"], "tracking-http");
     let (status, quality) = passport_http_request(
         &app,
         "POST",
@@ -387,6 +507,19 @@ async fn exercise_native_passport_http(
     .await;
     assert_eq!(status, StatusCode::OK);
     assert_eq!(quality["status"], "READY_FOR_ACTIVATION");
+    let (status, after_quality_poll) = passport_http_request(
+        &app,
+        "GET",
+        &format!("{path}/production-status"),
+        Some("org-a"),
+        Some(key_a),
+        json!({}),
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(after_quality_poll["status"], "READY_FOR_ACTIVATION");
+    assert_eq!(after_quality_poll["quality_result"]["passed"], true);
     let (status, active) = passport_http_request(
         &app,
         "POST",
@@ -399,6 +532,20 @@ async fn exercise_native_passport_http(
     .await;
     assert_eq!(status, StatusCode::OK);
     assert_eq!(active["status"], "ACTIVE");
+    let (status, repeated_active) = passport_http_request(
+        &app,
+        "POST",
+        &format!("{path}/submit-personalization"),
+        Some("org-a"),
+        Some(key_a),
+        json!({}),
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(repeated_active["status"], "ACTIVE");
+    assert_eq!(repeated_active, active);
+    assert_eq!(observed.lock().unwrap().len(), 2);
     let job = repository
         .get(
             &keyring.authenticate(Some("org-a"), Some(key_a)).unwrap(),
@@ -451,6 +598,140 @@ async fn exercise_native_passport_http(
     .await;
     assert_eq!(status, StatusCode::OK);
     assert_eq!(wide_generated["status"], "DATA_GENERATED");
+    let principal = keyring.authenticate(Some("org-a"), Some(key_a)).unwrap();
+    let race_job = PassportJobInsert {
+        id: "job-poll-race".into(),
+        application_id: "application-poll-race".into(),
+        flow_execution_id: "flow-poll-race".into(),
+        application_template_id: "template-poll-race".into(),
+        credential_template_id: "credential-poll-race".into(),
+        revocation_profile_id: None,
+        delivery_destination_profile_id: "destination-poll-race".into(),
+        document_type: "TD1".into(),
+        country_code: "USA".into(),
+        issuer_did: None,
+        secure_artifact_ciphertext: cipher.encrypted_scrubbed_artifact(),
+        secure_artifact_reference: "physical-artifact://poll-race".into(),
+    };
+    repository
+        .insert(&principal, &race_job, Utc::now())
+        .await
+        .unwrap();
+    let mut race_submitted = PassportJobPatch::new(PassportJobStatus::Submitted);
+    race_submitted.bureau_job_id = Some(Some("bureau-poll-race".into()));
+    repository
+        .update(
+            &principal,
+            &race_job.application_id,
+            "DRAFT",
+            &race_submitted,
+            Utc::now(),
+        )
+        .await
+        .unwrap()
+        .unwrap();
+    let mut stale_no_id = PassportJobPatch::new(PassportJobStatus::Submitted);
+    stale_no_id.bureau_job_id = Some(None);
+    stale_no_id.error_code = Some(Some("BUREAU_SUBMISSION_FAILED".into()));
+    assert!(repository
+        .update(
+            &principal,
+            &race_job.application_id,
+            "SUBMITTED",
+            &stale_no_id,
+            Utc::now(),
+        )
+        .await
+        .unwrap()
+        .is_none());
+    let still_bound = repository
+        .get(&principal, &race_job.application_id)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(
+        still_bound.bureau_job_id.as_deref(),
+        Some("bureau-poll-race")
+    );
+    assert!(still_bound.error_code.is_none());
+    let race_path = format!(
+        "/v1/passport/applications/{}/production-status",
+        race_job.application_id
+    );
+    same_rank_poll.store(true, Ordering::SeqCst);
+    let (entered, entered_rx) = oneshot::channel();
+    let (release_tx, release) = oneshot::channel();
+    *poll_gate.lock().unwrap() = Some((entered, release));
+    let poll_app = app.clone();
+    let poll_path = race_path.clone();
+    let poll_key = key_a.to_owned();
+    let in_flight = tokio::spawn(async move {
+        passport_http_request(
+            &poll_app,
+            "GET",
+            &poll_path,
+            Some("org-a"),
+            Some(&poll_key),
+            json!({}),
+            None,
+        )
+        .await
+    });
+    tokio::time::timeout(std::time::Duration::from_secs(5), entered_rx)
+        .await
+        .unwrap()
+        .unwrap();
+    let (status, _) = signed_callback(
+        &app,
+        secret,
+        json!({"organization_id":"org-a", "bureau_job_id":"bureau-poll-race",
+               "status":"SHIPPED", "tracking_number":"race-tracking"}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    release_tx.send(()).unwrap();
+    let (status, after_same_rank_poll) = in_flight.await.unwrap();
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(after_same_rank_poll["status"], "READY_FOR_ACTIVATION");
+    assert_eq!(after_same_rank_poll["tracking_number"], "race-tracking");
+
+    same_rank_poll.store(false, Ordering::SeqCst);
+    let (entered, entered_rx) = oneshot::channel();
+    let (release_tx, release) = oneshot::channel();
+    *poll_gate.lock().unwrap() = Some((entered, release));
+    let poll_app = app.clone();
+    let poll_path = race_path;
+    let poll_key = key_a.to_owned();
+    let in_flight = tokio::spawn(async move {
+        passport_http_request(
+            &poll_app,
+            "GET",
+            &poll_path,
+            Some("org-a"),
+            Some(&poll_key),
+            json!({}),
+            None,
+        )
+        .await
+    });
+    tokio::time::timeout(std::time::Duration::from_secs(5), entered_rx)
+        .await
+        .unwrap()
+        .unwrap();
+    let (status, _) = signed_callback(
+        &app,
+        secret,
+        json!({"organization_id":"org-a", "bureau_job_id":"bureau-poll-race",
+               "status":"FAILED", "error_message":"production failed"}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    release_tx.send(()).unwrap();
+    let (status, after_stale_poll) = in_flight.await.unwrap();
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(after_stale_poll["status"], "FAILED");
+    assert_eq!(after_stale_poll["tracking_number"], "race-tracking");
+    assert_eq!(after_stale_poll["error_message"], "production failed");
     #[cfg(feature = "passport-self-signed-test")]
     {
         let local = passport_router(PassportHttpService::new(
@@ -574,6 +855,61 @@ async fn passport_jobs_survive_restart_without_cross_tenant_reads() {
         .unwrap()
         .is_none());
 
+    // The opt-in internal handoff must retain the same PostgreSQL tenant
+    // boundary as the frozen per-tenant keyring, even though both trusted
+    // callers now present the same workload credential.
+    let internal_token = "synthetic-internal-passport-token-00000001";
+    let config = IssuanceServiceConfig::from_values(vec![
+        ("PASSPORT_NATIVE_HTTP_ENABLED".into(), "true".into()),
+        (
+            "PASSPORT_INTERNAL_SERVICE_AUTH_ENABLED".into(),
+            "true".into(),
+        ),
+        ("GRPC_SERVICE_TOKEN".into(), internal_token.into()),
+        ("DATABASE_URL".into(), database_url.clone()),
+    ])
+    .unwrap();
+    let internal = passport_router(
+        PassportHttpService::from_config(&config, pool.clone())
+            .unwrap()
+            .unwrap(),
+    );
+    let path = "/v1/passport/applications/application-a/production-status";
+    let (status, body) = passport_http_request(
+        &internal,
+        "GET",
+        path,
+        Some("org-a"),
+        Some(internal_token),
+        json!(null),
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(body["organization_id"], "org-a");
+    let (status, _) = passport_http_request(
+        &internal,
+        "GET",
+        path,
+        Some("org-b"),
+        Some(internal_token),
+        json!(null),
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+    let (status, _) = passport_http_request(
+        &internal,
+        "GET",
+        path,
+        Some("org-a"),
+        Some("wrong-token"),
+        json!(null),
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::UNAUTHORIZED);
+
     pool.close().await;
     let restarted_pool = PgPoolOptions::new()
         .max_connections(2)
@@ -642,7 +978,8 @@ async fn passport_jobs_survive_restart_without_cross_tenant_reads() {
 
     let mut submitted = PassportJobPatch::new(PassportJobStatus::Submitted);
     submitted.bureau_job_id = Some(Some("bureau-a".into()));
-    restarted
+    submitted.tracking_number = Some(Some("submitted-tracking".into()));
+    let submitted_job = restarted
         .update(&org_a, "application-a", "SOD_SIGNED", &submitted, next)
         .await
         .unwrap()
@@ -666,6 +1003,81 @@ async fn passport_jobs_survive_restart_without_cross_tenant_reads() {
         .await
         .unwrap()
         .is_none());
+    let queued_body = serde_json::to_vec(&serde_json::json!({
+        "organization_id": "org-a", "bureau_job_id": "bureau-a", "status": "QUEUED"
+    }))
+    .unwrap();
+    let mut queued_mac = Hmac::<Sha256>::new_from_slice(secret.as_bytes()).unwrap();
+    queued_mac.update(&queued_body);
+    let queued_event = bureau
+        .parse_webhook(
+            &queued_body,
+            &hex::encode(queued_mac.finalize().into_bytes()),
+        )
+        .unwrap();
+    let queued_replay = restarted
+        .apply_verified_webhook(&queued_event, next + chrono::Duration::seconds(1))
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(queued_replay.status, "SUBMITTED");
+    assert_eq!(
+        queued_replay.tracking_number.as_deref(),
+        Some("submitted-tracking")
+    );
+    assert_eq!(queued_replay.updated_at, submitted_job.updated_at);
+    let queued_with_error_body = serde_json::to_vec(&serde_json::json!({
+        "organization_id": "org-a", "bureau_job_id": "bureau-a", "status": "QUEUED",
+        "error_message": "bureau accepted the job"
+    }))
+    .unwrap();
+    let mut queued_with_error_mac = Hmac::<Sha256>::new_from_slice(secret.as_bytes()).unwrap();
+    queued_with_error_mac.update(&queued_with_error_body);
+    let queued_with_error = bureau
+        .parse_webhook(
+            &queued_with_error_body,
+            &hex::encode(queued_with_error_mac.finalize().into_bytes()),
+        )
+        .unwrap();
+    let metadata_filled = restarted
+        .apply_verified_webhook(&queued_with_error, next + chrono::Duration::seconds(2))
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(metadata_filled.status, "SUBMITTED");
+    assert_eq!(
+        metadata_filled.tracking_number.as_deref(),
+        Some("submitted-tracking")
+    );
+    assert_eq!(
+        metadata_filled.error_message.as_deref(),
+        Some("bureau accepted the job")
+    );
+    assert!(metadata_filled.updated_at > queued_replay.updated_at);
+    let printing_body = serde_json::to_vec(&serde_json::json!({
+        "organization_id": "org-a", "bureau_job_id": "bureau-a", "status": "PRINTING",
+        "tracking_number": "   "
+    }))
+    .unwrap();
+    let mut printing_mac = Hmac::<Sha256>::new_from_slice(secret.as_bytes()).unwrap();
+    printing_mac.update(&printing_body);
+    let printing_event = bureau
+        .parse_webhook(
+            &printing_body,
+            &hex::encode(printing_mac.finalize().into_bytes()),
+        )
+        .unwrap();
+    let printing = restarted
+        .apply_verified_webhook(&printing_event, next + chrono::Duration::seconds(3))
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(printing.status, "IN_PRODUCTION");
+    assert_eq!(
+        printing.tracking_number.as_deref(),
+        Some("submitted-tracking")
+    );
+    assert_eq!(printing.error_message, None);
     let body = serde_json::to_vec(&serde_json::json!({
         "organization_id": "org-a",
         "bureau_job_id": "bureau-a",
@@ -684,11 +1096,11 @@ async fn passport_jobs_survive_restart_without_cross_tenant_reads() {
             .unwrap()
             .unwrap()
             .status,
-        "SUBMITTED"
+        "IN_PRODUCTION"
     );
     let event = bureau.parse_webhook(&body, &signature).unwrap();
     let webhook_updated = restarted
-        .apply_verified_webhook(&event, next)
+        .apply_verified_webhook(&event, next + chrono::Duration::seconds(4))
         .await
         .unwrap()
         .unwrap();
@@ -697,6 +1109,44 @@ async fn passport_jobs_survive_restart_without_cross_tenant_reads() {
         webhook_updated.tracking_number.as_deref(),
         Some("tracking-a")
     );
+    let delivered_body = serde_json::to_vec(&serde_json::json!({
+        "organization_id": "org-a", "bureau_job_id": "bureau-a", "status": "DELIVERED"
+    }))
+    .unwrap();
+    let mut delivered_mac = Hmac::<Sha256>::new_from_slice(secret.as_bytes()).unwrap();
+    delivered_mac.update(&delivered_body);
+    let delivered_event = bureau
+        .parse_webhook(
+            &delivered_body,
+            &hex::encode(delivered_mac.finalize().into_bytes()),
+        )
+        .unwrap();
+    let delivered_replay = restarted
+        .apply_verified_webhook(&delivered_event, next + chrono::Duration::seconds(5))
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(delivered_replay.status, "READY_FOR_ACTIVATION");
+    assert_eq!(
+        delivered_replay.tracking_number.as_deref(),
+        Some("tracking-a")
+    );
+    assert_eq!(delivered_replay.updated_at, webhook_updated.updated_at);
+    let stale_body = serde_json::to_vec(&serde_json::json!({
+        "organization_id": "org-a", "bureau_job_id": "bureau-a", "status": "PRINTING"
+    }))
+    .unwrap();
+    let mut stale_mac = Hmac::<Sha256>::new_from_slice(secret.as_bytes()).unwrap();
+    stale_mac.update(&stale_body);
+    let stale_signature = hex::encode(stale_mac.finalize().into_bytes());
+    let stale_event = bureau.parse_webhook(&stale_body, &stale_signature).unwrap();
+    let unchanged = restarted
+        .apply_verified_webhook(&stale_event, next)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(unchanged.status, "READY_FOR_ACTIVATION");
+    assert_eq!(unchanged.tracking_number.as_deref(), Some("tracking-a"));
     let mut quality = PassportJobPatch::new(PassportJobStatus::ReadyForActivation);
     quality.quality_result = Some(Some(serde_json::json!({"passed": true})));
     restarted
@@ -727,6 +1177,14 @@ async fn passport_jobs_survive_restart_without_cross_tenant_reads() {
     assert_eq!(active.status, "ACTIVE");
     assert_eq!(active.completed_at, Some(next));
     assert!(cipher.decrypt(&active.secure_artifact_ciphertext).is_err());
+    let replayed = restarted
+        .apply_verified_webhook(&event, next)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(replayed.status, "ACTIVE");
+    assert_eq!(replayed.completed_at, Some(next));
+    assert_eq!(replayed.tracking_number.as_deref(), Some("tracking-a"));
 
     let second_job = PassportJobInsert {
         id: "job-b".into(),
@@ -743,11 +1201,58 @@ async fn passport_jobs_survive_restart_without_cross_tenant_reads() {
         secure_artifact_reference: "physical-artifact://job-b".into(),
     };
     restarted.insert(&org_b, &second_job, now).await.unwrap();
-    restarted
-        .update(&org_b, "application-b", "DRAFT", &submitted, next)
+    let mut second_submitted = PassportJobPatch::new(PassportJobStatus::Submitted);
+    second_submitted.bureau_job_id = Some(Some("bureau-a".into()));
+    let second_submitted_job = restarted
+        .update(&org_b, "application-b", "DRAFT", &second_submitted, next)
         .await
         .unwrap()
         .unwrap();
+    assert!(restarted
+        .fill_missing_bureau_metadata(
+            &org_a,
+            "application-b",
+            "SUBMITTED",
+            Some("tracking-b"),
+            None,
+            next + chrono::Duration::seconds(1),
+        )
+        .await
+        .unwrap()
+        .is_none());
+    let filled = restarted
+        .fill_missing_bureau_metadata(
+            &org_b,
+            "application-b",
+            "SUBMITTED",
+            Some("tracking-b"),
+            None,
+            next + chrono::Duration::seconds(1),
+        )
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(filled.tracking_number.as_deref(), Some("tracking-b"));
+    assert!(filled.updated_at > second_submitted_job.updated_at);
+    assert!(restarted
+        .fill_missing_bureau_metadata(
+            &org_b,
+            "application-b",
+            "SUBMITTED",
+            Some("replacement-b"),
+            None,
+            next + chrono::Duration::seconds(2),
+        )
+        .await
+        .unwrap()
+        .is_none());
+    let preserved = restarted
+        .get(&org_b, "application-b")
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(preserved.tracking_number.as_deref(), Some("tracking-b"));
+    assert_eq!(preserved.updated_at, filled.updated_at);
     // A provider may reuse a job ID for a different tenant; the signed
     // organization claim must select exactly that tenant's row.
     let other_body = serde_json::to_vec(&serde_json::json!({
@@ -766,6 +1271,7 @@ async fn passport_jobs_survive_restart_without_cross_tenant_reads() {
         .unwrap()
         .unwrap();
     assert_eq!(other_updated.organization_id, "org-b");
+    assert_eq!(other_updated.tracking_number.as_deref(), Some("tracking-b"));
     assert_eq!(
         restarted
             .get(&org_b, "application-b")
