@@ -8,6 +8,7 @@
     "required_permission": "passport-certificate:issue",
     "request_fields": ["organization_id", "dsc_issuer_did", "csca_issuer_did", "csca_certificate_id", "credential_format", "country", "organization", "common_name", "validity_days", "idempotency_key"],
     "response_fields": ["certificate_pem", "chain_pem", "dsc_issuer_did", "csca_issuer_did", "subject", "serial", "not_before", "not_after", "status"],
+    "status_meaning": "issued is an immutable historical issuance result; current trust, revocation, and expiry are checked by lifecycle and passport verification on use",
     "reject_unknown_fields": true,
     "errors": {"unauthorized": 401, "forbidden_or_cross_tenant": 403, "invalid_input": 422, "stale_profile_or_retry_conflict": 409, "unavailable_kms_or_storage": 503, "invalid_kms_signature": 502}
   },
@@ -38,7 +39,7 @@
   },
   "concurrency": {
     "rotation": "recheck both active profile revisions and current KMS public keys after signing; use a revision fence at the lifecycle and attachment commit, rejecting any intervening change",
-    "retry": "scope an idempotency key to tenant, DSC profile, CSCA profile, and request digest; replay of identical input returns the stored result, changed input conflicts, and issuer serial reservation is atomic",
+    "retry": "scope an idempotency key to tenant; compare a digest of the full requested DSC and CSCA identity, certificate, subject, country, and validity; replay of identical input returns the immutable historical issued result even after later rotation or revocation, changed input conflicts, and issuer serial reservation is atomic",
     "failure": "a failed check publishes no certificate and does not mutate lifecycle or profile attachment"
   },
   "rejections": [

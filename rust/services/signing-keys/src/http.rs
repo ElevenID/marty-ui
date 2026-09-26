@@ -2355,29 +2355,57 @@ fn dsc_identity(
 }
 
 fn dsc_store_failure(error: DscIssuanceStoreError) -> PublicSigningError {
-    let status = match error {
-        DscIssuanceStoreError::Invalid(_) => StatusCode::UNPROCESSABLE_ENTITY,
-        DscIssuanceStoreError::Conflict(_) => StatusCode::CONFLICT,
-        DscIssuanceStoreError::Storage(_) => StatusCode::SERVICE_UNAVAILABLE,
-        DscIssuanceStoreError::Corrupt(_) => StatusCode::INTERNAL_SERVER_ERROR,
+    let (status, detail) = match error {
+        DscIssuanceStoreError::Invalid(_) => (
+            StatusCode::UNPROCESSABLE_ENTITY,
+            "DSC issuance input is invalid.",
+        ),
+        DscIssuanceStoreError::Conflict(_) => (
+            StatusCode::CONFLICT,
+            "DSC issuance state conflicts with the current request.",
+        ),
+        DscIssuanceStoreError::Storage(_) => (
+            StatusCode::SERVICE_UNAVAILABLE,
+            "DSC issuance storage is unavailable.",
+        ),
+        DscIssuanceStoreError::Corrupt(_) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "DSC issuance storage is malformed.",
+        ),
     };
-    public_failure(status, &error.to_string())
+    public_failure(status, detail)
 }
 
 fn dsc_compat_failure(error: CompatibilityError) -> PublicSigningError {
-    let status = match error {
-        CompatibilityError::Unauthorized => StatusCode::UNAUTHORIZED,
+    let (status, detail) = match error {
+        CompatibilityError::Unauthorized => (
+            StatusCode::UNAUTHORIZED,
+            "Managed issuer authority is unavailable.",
+        ),
         CompatibilityError::ProfileNotFound
         | CompatibilityError::ServiceNotFound
-        | CompatibilityError::NotFound(_) => StatusCode::NOT_FOUND,
-        CompatibilityError::BadRequest(_) => StatusCode::BAD_REQUEST,
-        CompatibilityError::AmbiguousProfile | CompatibilityError::Conflict(_) => {
-            StatusCode::CONFLICT
-        }
-        CompatibilityError::Invalid(_) => StatusCode::UNPROCESSABLE_ENTITY,
-        CompatibilityError::Unavailable => StatusCode::SERVICE_UNAVAILABLE,
+        | CompatibilityError::NotFound(_) => (
+            StatusCode::NOT_FOUND,
+            "Managed issuer identity was not found.",
+        ),
+        CompatibilityError::BadRequest(_) => (
+            StatusCode::BAD_REQUEST,
+            "Managed issuer request is invalid.",
+        ),
+        CompatibilityError::AmbiguousProfile | CompatibilityError::Conflict(_) => (
+            StatusCode::CONFLICT,
+            "Managed issuer binding conflicts with current state.",
+        ),
+        CompatibilityError::Invalid(_) => (
+            StatusCode::UNPROCESSABLE_ENTITY,
+            "Managed issuer binding is invalid.",
+        ),
+        CompatibilityError::Unavailable => (
+            StatusCode::SERVICE_UNAVAILABLE,
+            "Managed issuer backend is unavailable.",
+        ),
     };
-    public_failure(status, &error.to_string())
+    public_failure(status, detail)
 }
 
 async fn issue_managed_dsc_certificate(
@@ -2885,7 +2913,7 @@ async fn issue_signed_dsc_certificate(
         "serial": metadata.serial_hex,
         "not_before": metadata.not_before,
         "not_after": metadata.not_after,
-        "status": "valid",
+        "status": "issued",
     });
     match store
         .commit(
@@ -6923,6 +6951,17 @@ mod public_contract_tests {
                 .status(),
             StatusCode::SERVICE_UNAVAILABLE
         );
+    }
+
+    #[test]
+    fn dsc_issuance_public_errors_do_not_disclose_managed_key_references() {
+        let reference = "kms-secret-key-locator";
+        let compatibility = dsc_compat_failure(CompatibilityError::Conflict(reference.into()));
+        let storage = dsc_store_failure(DscIssuanceStoreError::Storage(reference.into()));
+        assert_eq!(compatibility.status, StatusCode::CONFLICT);
+        assert_eq!(storage.status, StatusCode::SERVICE_UNAVAILABLE);
+        assert!(!compatibility.detail.contains(reference));
+        assert!(!storage.detail.contains(reference));
     }
 
     #[test]
