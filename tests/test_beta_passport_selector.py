@@ -348,7 +348,80 @@ def test_mounted_secret_cannot_reuse_dsc_gateway_credential(tmp_path):
     mounted.unlink()
     with pytest.raises(
         VALIDATOR["PassportConfigurationError"],
-        match="cannot verify a mounted secret",
+        match="cannot verify mounted files",
+    ):
+        validate(candidate)
+
+
+@pytest.mark.parametrize("kind", ["file", "directory"])
+def test_bind_mount_cannot_reuse_dsc_gateway_credential(tmp_path, kind):
+    candidate = model()
+    source = tmp_path / "non-owner-config"
+    if kind == "directory":
+        source.mkdir()
+        mounted = source / "credentials.json"
+    else:
+        mounted = source
+    mounted.write_text(f'{{"token":"{DSC_GATEWAY_KEY}"}}', encoding="utf-8")
+    candidate["services"]["flow"]["volumes"] = [
+        {"type": "bind", "source": str(source), "target": "/config"}
+    ]
+    with pytest.raises(
+        VALIDATOR["PassportConfigurationError"],
+        match="Beta DSC operator credential isolation is invalid",
+    ):
+        validate(candidate)
+
+
+@pytest.mark.parametrize("failure", ["missing", "oversize", "too_many"])
+def test_bind_mount_scan_fails_closed_with_fixed_error(tmp_path, failure):
+    candidate = model()
+    source = tmp_path / "non-owner-config"
+    if failure == "oversize":
+        source.write_bytes(b"x" * (VALIDATOR["MAX_MOUNT_FILE_BYTES"] + 1))
+    elif failure == "too_many":
+        source.mkdir()
+        for index in range(VALIDATOR["MAX_MOUNT_FILES"] + 1):
+            (source / f"file-{index}").write_bytes(b"x")
+    candidate["services"]["flow"]["volumes"] = [
+        {"type": "bind", "source": str(source), "target": "/config"}
+    ]
+    with pytest.raises(
+        VALIDATOR["PassportConfigurationError"],
+        match="cannot verify mounted files",
+    ) as error:
+        validate(candidate)
+    assert DSC_GATEWAY_KEY not in str(error.value)
+
+
+def test_named_volume_is_not_treated_as_a_host_bind(tmp_path):
+    candidate = model()
+    candidate["services"]["flow"]["volumes"] = [
+        {"type": "volume", "source": "flow-data", "target": "/data"}
+    ]
+    validate(candidate)
+
+
+@pytest.mark.parametrize("link_location", ["source", "child"])
+def test_bind_mount_symlink_fails_closed(tmp_path, link_location):
+    candidate = model()
+    target = tmp_path / "safe-config"
+    target.write_text("public fixture", encoding="utf-8")
+    source = tmp_path / "mounted"
+    try:
+        if link_location == "source":
+            source.symlink_to(target)
+        else:
+            source.mkdir()
+            (source / "linked-config").symlink_to(target)
+    except OSError:
+        pytest.skip("host does not permit test symlinks")
+    candidate["services"]["flow"]["volumes"] = [
+        {"type": "bind", "source": str(source), "target": "/config"}
+    ]
+    with pytest.raises(
+        VALIDATOR["PassportConfigurationError"],
+        match="cannot verify mounted files",
     ):
         validate(candidate)
 

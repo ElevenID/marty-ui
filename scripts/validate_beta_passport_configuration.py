@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 from pathlib import Path
 import re
 import subprocess
@@ -11,6 +12,10 @@ import sys
 from urllib.parse import urlsplit
 
 MAX_MODEL_BYTES = 8 * 1024 * 1024
+MAX_MOUNT_ENTRIES = 1024
+MAX_MOUNT_FILES = 512
+MAX_MOUNT_FILE_BYTES = 1024 * 1024
+MAX_MOUNT_TOTAL_BYTES = 8 * 1024 * 1024
 PROFILE = "docker-compose.profile.passport-native-beta.yml"
 PASSPORT_RAW_KEY_NAMES = (
     "PASSPORT_TENANT_API_KEYS",
@@ -47,6 +52,87 @@ def contains_credential(value, credential):
     if isinstance(value, dict):
         return any(contains_credential(item, credential) for item in value.values())
     return False
+
+
+def validate_mounted_sources(model, services, credential):
+    sources = []
+    for secret in model.get("secrets", {}).values():
+        path = secret.get("file") if isinstance(secret, dict) else None
+        if not isinstance(path, str):
+            raise PassportConfigurationError(
+                "Beta DSC operator credential isolation cannot verify mounted files"
+            )
+        sources.append(path)
+    for service_name, service in services.items():
+        if service_name in {"gateway", "signing-keys"}:
+            continue
+        volumes = service.get("volumes", [])
+        if not isinstance(volumes, list):
+            raise PassportConfigurationError(
+                "Beta DSC operator credential isolation cannot verify mounted files"
+            )
+        for volume in volumes:
+            if not isinstance(volume, dict):
+                raise PassportConfigurationError(
+                    "Beta DSC operator credential isolation cannot verify mounted files"
+                )
+            kind = volume.get("type")
+            if kind in {"volume", "tmpfs"}:
+                continue
+            if kind != "bind" or not isinstance(volume.get("source"), str):
+                raise PassportConfigurationError(
+                    "Beta DSC operator credential isolation cannot verify mounted files"
+                )
+            sources.append(volume["source"])
+
+    pending = [Path(source).absolute() for source in sources]
+    visited = set()
+    file_count = 0
+    total_bytes = 0
+    marker = credential.encode()
+    try:
+        while pending:
+            path = pending.pop()
+            if path in visited:
+                continue
+            visited.add(path)
+            if len(visited) > MAX_MOUNT_ENTRIES or path.is_symlink():
+                raise PassportConfigurationError(
+                    "Beta DSC operator credential isolation cannot verify mounted files"
+                )
+            if path.is_dir():
+                with os.scandir(path) as entries:
+                    for entry in entries:
+                        if len(visited) + len(pending) >= MAX_MOUNT_ENTRIES:
+                            raise PassportConfigurationError(
+                                "Beta DSC operator credential isolation cannot verify mounted files"
+                            )
+                        pending.append(Path(entry.path))
+            elif path.is_file():
+                file_count += 1
+                size = path.stat().st_size
+                total_bytes += size
+                if (
+                    file_count > MAX_MOUNT_FILES
+                    or size > MAX_MOUNT_FILE_BYTES
+                    or total_bytes > MAX_MOUNT_TOTAL_BYTES
+                ):
+                    raise PassportConfigurationError(
+                        "Beta DSC operator credential isolation cannot verify mounted files"
+                    )
+                with path.open("rb") as mounted:
+                    if marker in mounted.read(MAX_MOUNT_FILE_BYTES + 1):
+                        raise PassportConfigurationError(
+                            "Beta DSC operator credential isolation is invalid"
+                        )
+            else:
+                raise PassportConfigurationError(
+                    "Beta DSC operator credential isolation cannot verify mounted files"
+                )
+    except OSError:
+        raise PassportConfigurationError(
+            "Beta DSC operator credential isolation cannot verify mounted files"
+        ) from None
 
 
 def validate_model(model, *, passport_enabled, files):
@@ -187,23 +273,7 @@ def validate_model(model, *, passport_enabled, files):
             )
         ):
             raise PassportConfigurationError("Beta DSC operator credential isolation is invalid")
-        for secret in model.get("secrets", {}).values():
-            path = secret.get("file") if isinstance(secret, dict) else None
-            if not isinstance(path, str):
-                raise PassportConfigurationError(
-                    "Beta DSC operator credential isolation cannot verify a mounted secret"
-                )
-            try:
-                with Path(path).open("rb") as mounted:
-                    material = mounted.read(1024 * 1024 + 1)
-            except OSError:
-                raise PassportConfigurationError(
-                    "Beta DSC operator credential isolation cannot verify a mounted secret"
-                ) from None
-            if len(material) > 1024 * 1024 or dsc_gateway_key.encode() in material:
-                raise PassportConfigurationError(
-                    "Beta DSC operator credential isolation is invalid"
-                )
+        validate_mounted_sources(model, services, dsc_gateway_key)
         callback_signer_env = environment(callback_signer)
         if not (
             bureau_env.get("SERVICE_NAME") == "passport_beta_bureau"
