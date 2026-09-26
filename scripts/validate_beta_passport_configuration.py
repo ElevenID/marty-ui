@@ -19,7 +19,8 @@ PASSPORT_RAW_KEY_NAMES = (
     "PERSONALIZATION_BUREAU_WEBHOOK_SECRET",
 )
 PRIVATE_BUREAU_URL = "http://passport-beta-bureau:8020"
-PRIVATE_SIGNING_URL = "http://gateway:8000/internal/signing-keys"
+PRIVATE_SIGNING_URL = "http://passport-callback-signer:8018/internal/documents"
+PRIVATE_SIGNING_NETWORK = "passport-callback-signing"
 PRIVATE_CALLBACK_URL = (
     "http://issuance-native:8005/v1/passport/webhooks/personalization"
 )
@@ -61,12 +62,13 @@ def validate_model(model, *, passport_enabled, files):
                     "Beta passport owner selection is inconsistent"
                 )
         if not passport_enabled:
-            if "passport-beta-bureau" in services:
+            if "passport-beta-bureau" in services or "passport-callback-signer" in services:
                 raise PassportConfigurationError(
-                    "Beta passport bureau selected without profile"
+                    "Beta passport callback services selected without profile"
                 )
             return
         bureau = services["passport-beta-bureau"]
+        callback_signer = services["passport-callback-signer"]
         signing = environment(services["signing-keys"])
         gateway = environment(targets["gateway"])
         flow = environment(targets["flow"])
@@ -139,6 +141,7 @@ def validate_model(model, *, passport_enabled, files):
         ):
             raise PassportConfigurationError("Beta passport database target is invalid")
         signing_key = bureau_env.get("SIGNING_KEYS_INTERNAL_API_KEY")
+        callback_signer_env = environment(callback_signer)
         if not (
             bureau_env.get("SERVICE_NAME") == "passport_beta_bureau"
             and bureau_env.get("ENVIRONMENT") == "beta"
@@ -162,6 +165,18 @@ def validate_model(model, *, passport_enabled, files):
             raise PassportConfigurationError(
                 "Beta passport bureau identity or route is invalid"
             )
+        if not (
+            callback_signer_env.get("SERVICE_NAME") == "passport_callback_signer"
+            and callback_signer_env.get("ENVIRONMENT") == "beta"
+            and str(callback_signer_env.get("PASSPORT_CALLBACK_SIGNER_ENABLED", "false")).lower()
+            == "true"
+            and str(callback_signer_env.get("SIGNING_KEYS_SERVICE_PORT")) == "8018"
+            and callback_signer_env.get("SIGNING_KEYS_INTERNAL_API_KEY") == signing_key
+            and callback_signer_env.get("BAO_ADDR") == "http://openbao:8200"
+            and callback_signer_env.get("BAO_TOKEN")
+            and callback_signer_env.get("BAO_TOKEN") == signing.get("BAO_TOKEN")
+        ):
+            raise PassportConfigurationError("Beta callback signer configuration is invalid")
         if not re.fullmatch(
             r"ghcr\.io/elevenid/marty-ui-oss/services@sha256:[0-9a-f]{64}",
             str(bureau.get("image", "")),
@@ -169,6 +184,8 @@ def validate_model(model, *, passport_enabled, files):
             raise PassportConfigurationError(
                 "Beta passport bureau image must be immutable"
             )
+        if callback_signer.get("image") != bureau.get("image"):
+            raise PassportConfigurationError("Beta callback signer image must be immutable")
         if (
             bureau.get("ports")
             or bureau.get("secrets")
@@ -182,9 +199,31 @@ def validate_model(model, *, passport_enabled, files):
             raise PassportConfigurationError(
                 "Beta passport bureau exposure is forbidden"
             )
+        if any(
+            callback_signer.get(name)
+            for name in (
+                "ports", "secrets", "volumes", "build", "entrypoint", "command",
+                "privileged", "network_mode",
+            )
+        ):
+            raise PassportConfigurationError("Beta callback signer exposure is forbidden")
         networks = bureau.get("networks", {})
-        if not isinstance(networks, dict) or set(networks) != {"marty-network"}:
+        if not isinstance(networks, dict) or set(networks) != {
+            "marty-network", PRIVATE_SIGNING_NETWORK
+        }:
             raise PassportConfigurationError("Beta passport bureau network is invalid")
+        isolated = model.get("networks", {}).get(PRIVATE_SIGNING_NETWORK, {})
+        if isolated.get("internal") is not True:
+            raise PassportConfigurationError("Beta callback signer network is not internal")
+        members = {
+            name
+            for name, service in services.items()
+            if PRIVATE_SIGNING_NETWORK in service.get("networks", {})
+        }
+        if members != {"openbao", "passport-beta-bureau", "passport-callback-signer"}:
+            raise PassportConfigurationError("Beta callback signer network membership is invalid")
+        if set(callback_signer.get("networks", {})) != {PRIVATE_SIGNING_NETWORK}:
+            raise PassportConfigurationError("Beta callback signer network is invalid")
         forbidden = {
             "passport_tenant_api_keys",
             "physical_document_artifact_key",
@@ -196,7 +235,7 @@ def validate_model(model, *, passport_enabled, files):
             raise PassportConfigurationError(
                 "Legacy passport secret mounts are forbidden"
             )
-        for owner in (*targets.values(), bureau):
+        for owner in (*targets.values(), bureau, callback_signer):
             if any(
                 item.get("source") in forbidden
                 for item in owner.get("secrets", [])

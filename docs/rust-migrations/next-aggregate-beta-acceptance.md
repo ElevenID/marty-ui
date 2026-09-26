@@ -81,6 +81,15 @@ selected here.
    No native cutover or Python retirement is permitted until these gates and
    their language-neutral behavior tests pass.
 
+   The integration branch puts callback HMAC signing on a beta-only signer
+   listener; the ordinary Signing Keys and Gateway listeners have no signing
+   route. Compose limits the listener to an internal network shared only by
+   OpenBao and the bureau, with no published port. Before the remaining apps
+   start, deployment attaches the existing OpenBao container and checks the
+   live network is internal, has exactly those three running containers, and
+   gives OpenBao its required DNS alias. Restore repeats that gate. These
+   script and Compose checks have not yet been exercised in a beta deployment.
+
    The [Signing Keys public-route parity audit](signing-keys-public-parity-2026-09-26.md)
    found 24 Gateway-declared method/path pairs without Rust public handlers.
    Repair and retest those adapters before describing the aggregate beta
@@ -116,6 +125,13 @@ selected here.
    chat), and verify the `credentials:issue` scope maps to passport initiation.
    No new tenant or passport-specific static keyring is required for the
    existing pilot organization. Recheck these counts at actual cutover.
+   At cutover, deployment stops and verifies application writers, then requires
+   zero in-flight legacy bureau jobs before switching to KMS callback
+   verification. The deployment preflight rejects an existing bureau without
+   the isolated signer: the current restore script cannot recover such a
+   pre-isolation passport snapshot. The inventoried beta has no bureau, so
+   this release is eligible for a first passport cutover only; recheck that
+   condition before deployment and keep the restore constraint visible.
 4. Explicitly hold `BetaOrigin` at `https://beta.elevenidllc.com`. The wrapper's
    HTTPS syntax check alone does not establish that an origin is beta. Retain
    fixed beta Compose projects/network and labeled-volume ownership checks.

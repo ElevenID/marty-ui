@@ -1,13 +1,16 @@
 //! KMS-held MAC for tenant-bound passport bureau callbacks.
 
 use axum::{
-    http::StatusCode,
+    extract::{Path, State},
+    http::{HeaderMap, StatusCode},
     response::{IntoResponse, Response},
-    Json,
+    routing::{get, post},
+    Json, Router,
 };
 use base64::{engine::general_purpose::STANDARD, Engine as _};
 use serde::Deserialize;
 use serde_json::{json, Value};
+use subtle::ConstantTimeEq;
 
 use crate::flow_envelope::OpenBaoEnvelopeProvider;
 
@@ -153,6 +156,54 @@ pub async fn verify(
     Ok(json!({"valid": valid}))
 }
 
+#[derive(Clone)]
+struct SignerState {
+    provider: OpenBaoEnvelopeProvider,
+    internal_api_key: String,
+}
+
+/// The beta-only signer has no general signing, verification, or public routes.
+/// Deploy it only on the dedicated callback-signing Compose network.
+pub fn isolated_signer_router(
+    provider: OpenBaoEnvelopeProvider,
+    internal_api_key: String,
+) -> Router {
+    Router::new()
+        .route("/health", get(|| async { StatusCode::OK }))
+        .route(
+            "/internal/documents/{organization_id}/passport-callbacks/sign",
+            post(sign_callback),
+        )
+        .with_state(SignerState {
+            provider,
+            internal_api_key,
+        })
+}
+
+async fn sign_callback(
+    State(state): State<SignerState>,
+    Path(organization_id): Path<String>,
+    headers: HeaderMap,
+    Json(request): Json<SignRequest>,
+) -> Result<Json<Value>, CallbackKmsError> {
+    let supplied = headers
+        .get("x-api-key")
+        .and_then(|value| value.to_str().ok())
+        .unwrap_or_default();
+    if supplied.len() != state.internal_api_key.len()
+        || supplied
+            .as_bytes()
+            .ct_eq(state.internal_api_key.as_bytes())
+            .unwrap_u8()
+            != 1
+    {
+        return Err(CallbackKmsError::Unauthorized);
+    }
+    sign(&state.provider, &organization_id, request)
+        .await
+        .map(Json)
+}
+
 #[cfg(test)]
 mod tests {
     use std::sync::{Arc, Mutex};
@@ -256,17 +307,34 @@ mod tests {
         .unwrap();
         assert_eq!(tampered["valid"], false);
 
-        let app = crate::http::router_with_dependencies(
+        let ordinary = crate::http::router_with_dependencies(
             "internal-key".into(),
             None,
             None,
             None,
             None,
-            Some(provider),
+            Some(provider.clone()),
             None,
         );
         let endpoint = "/internal/documents/org-a/passport-callbacks/sign";
         let request_body = json!({"body_b64": body("org-a")}).to_string();
+        let unavailable_on_ordinary_service = ordinary
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri(endpoint)
+                    .header("content-type", "application/json")
+                    .header("x-api-key", "internal-key")
+                    .body(Body::from(request_body.clone()))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(
+            unavailable_on_ordinary_service.status(),
+            StatusCode::NOT_FOUND
+        );
+        let app = isolated_signer_router(provider, "internal-key".into());
         let unauthorized = app
             .clone()
             .oneshot(
@@ -281,6 +349,7 @@ mod tests {
             .unwrap();
         assert_eq!(unauthorized.status(), StatusCode::UNAUTHORIZED);
         let signed = app
+            .clone()
             .oneshot(
                 Request::builder()
                     .method("POST")
@@ -293,6 +362,25 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(signed.status(), StatusCode::OK);
+        for isolated_path in [
+            "/internal/documents/org-a/passport-callbacks/verify",
+            "/internal/documents/org-a/passport-artifacts/decrypt",
+            "/v1/signing-keys",
+        ] {
+            let response = app
+                .clone()
+                .oneshot(
+                    Request::builder()
+                        .method("POST")
+                        .uri(isolated_path)
+                        .header("x-api-key", "internal-key")
+                        .body(Body::empty())
+                        .unwrap(),
+                )
+                .await
+                .unwrap();
+            assert_eq!(response.status(), StatusCode::NOT_FOUND, "{isolated_path}");
+        }
         server.abort();
     }
 }

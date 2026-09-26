@@ -56,7 +56,7 @@ impl Config {
         let signing_base = required_url("SIGNING_KEYS_INTERNAL_URL")?;
         if !private_signing_gateway(&signing_base) {
             return Err(
-                "SIGNING_KEYS_INTERNAL_URL must name the private beta signing gateway".into(),
+                "SIGNING_KEYS_INTERNAL_URL must name the isolated beta callback signer".into(),
             );
         }
         let callback_url = required_url("PASSPORT_BUREAU_CALLBACK_URL")?;
@@ -71,8 +71,8 @@ impl Config {
             .map_err(|_| "invalid PASSPORT_BETA_BUREAU_LISTEN")?;
         let database_url =
             required("DATABASE_URL")?.replacen("postgresql+asyncpg://", "postgresql://", 1);
-        if !database_url.starts_with("postgresql://") && !database_url.starts_with("postgres://") {
-            return Err("DATABASE_URL must be PostgreSQL".into());
+        if !private_beta_database(&database_url) {
+            return Err("DATABASE_URL must name the private beta database".into());
         }
         Ok(Self {
             listen,
@@ -90,11 +90,24 @@ fn beta_gate(environment: Option<&str>, enabled: Option<&str>) -> bool {
 }
 
 fn private_signing_gateway(url: &Url) -> bool {
-    url.as_str().trim_end_matches('/') == "http://gateway:8000/internal/signing-keys"
+    url.as_str().trim_end_matches('/') == "http://passport-callback-signer:8018/internal/documents"
 }
 
 fn private_native_callback(url: &Url) -> bool {
     url.as_str() == "http://issuance-native:8005/v1/passport/webhooks/personalization"
+}
+
+fn private_beta_database(value: &str) -> bool {
+    Url::parse(value).ok().is_some_and(|url| {
+        matches!(url.scheme(), "postgres" | "postgresql")
+            && url.host_str() == Some("postgres")
+            && url.port() == Some(5432)
+            && url.path() == "/marty"
+            && url.username() == "marty"
+            && url.password().is_some_and(|password| !password.is_empty())
+            && url.query().is_none()
+            && url.fragment().is_none()
+    })
 }
 
 fn required(name: &str) -> Result<String, String> {
@@ -381,13 +394,12 @@ async fn deliver_one(state: &AppState) -> Result<bool, String> {
     }
     let body = serde_json::to_vec(&callback).map_err(|_| "callback serialization failed")?;
     let mut sign_url = state.config.signing_url.clone();
-    sign_url.set_path(&format!(
-        "{}/passport-callbacks/sign",
-        sign_url.path().trim_end_matches('/')
-    ));
     sign_url
-        .query_pairs_mut()
-        .append_pair("organization_id", &organization_id);
+        .path_segments_mut()
+        .map_err(|()| "invalid private signing URL")?
+        .push(&organization_id)
+        .push("passport-callbacks")
+        .push("sign");
     let signed = state
         .http
         .post(sign_url)
@@ -533,8 +545,34 @@ mod tests {
         }
     }
 
-    async fn synthetic_sign(headers: HeaderMap, Json(request): Json<Value>) -> Json<Value> {
+    #[test]
+    fn startup_database_must_match_the_private_beta_compose_target() {
+        assert!(private_beta_database(
+            "postgresql://marty:synthetic@postgres:5432/marty"
+        ));
+        for value in [
+            "postgresql://marty:synthetic@production.example:5432/marty",
+            "postgresql://marty:synthetic@postgres:5432/production",
+            "postgresql://admin:synthetic@postgres:5432/marty",
+            "postgresql://marty@postgres:5432/marty",
+            "postgresql://marty:synthetic@postgres:5432/marty?sslmode=disable",
+            "postgresql://marty:synthetic@postgres:5432/marty#other",
+            "postgresql://marty:synthetic@postgres/marty",
+        ] {
+            assert!(
+                !private_beta_database(value),
+                "unexpected database URL accepted"
+            );
+        }
+    }
+
+    async fn synthetic_sign(
+        Path(organization_id): Path<String>,
+        headers: HeaderMap,
+        Json(request): Json<Value>,
+    ) -> Json<Value> {
         assert_eq!(headers.get("x-api-key").unwrap(), "synthetic-signing-auth");
+        assert_eq!(organization_id, "test-org-a");
         let body = STANDARD
             .decode(request["body_b64"].as_str().unwrap())
             .unwrap();
@@ -574,10 +612,10 @@ mod tests {
         assert!(!beta_gate(Some("production"), Some("true")));
         assert!(!beta_gate(Some("beta"), None));
         assert!(private_signing_gateway(
-            &Url::parse("http://gateway:8000/internal/signing-keys").unwrap()
+            &Url::parse("http://passport-callback-signer:8018/internal/documents").unwrap()
         ));
         assert!(!private_signing_gateway(
-            &Url::parse("https://external.example/internal/signing-keys").unwrap()
+            &Url::parse("http://gateway:8000/internal/signing-keys").unwrap()
         ));
         assert!(private_native_callback(
             &Url::parse("http://issuance-native:8005/v1/passport/webhooks/personalization")
@@ -690,7 +728,7 @@ mod tests {
         }
         let mock = Router::new()
             .route(
-                "/internal/signing-keys/passport-callbacks/sign",
+                "/internal/documents/{organization_id}/passport-callbacks/sign",
                 post(synthetic_sign),
             )
             .route(
@@ -706,8 +744,7 @@ mod tests {
                 database_url: database_url.clone(),
                 service_token: "synthetic-bureau-auth".into(),
                 signing_api_key: "synthetic-signing-auth".into(),
-                signing_url: Url::parse(&format!("http://{address}/internal/signing-keys"))
-                    .unwrap(),
+                signing_url: Url::parse(&format!("http://{address}/internal/documents")).unwrap(),
                 callback_url: Url::parse(&format!(
                     "http://{address}/v1/passport/webhooks/personalization"
                 ))

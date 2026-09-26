@@ -64,8 +64,26 @@ def model(enabled=True):
     )
     services["signing-keys"] = {
         "environment": {
-            "SIGNING_KEYS_INTERNAL_API_KEY": "synthetic-signing-credential"
+            "SIGNING_KEYS_INTERNAL_API_KEY": "synthetic-signing-credential",
+            "BAO_TOKEN": "synthetic-existing-openbao-token",
         }
+    }
+    services["openbao"] = {
+        "environment": {},
+        "networks": {"marty-network": None, "passport-callback-signing": None},
+    }
+    services["passport-callback-signer"] = {
+        "image": IMAGE,
+        "environment": {
+            "SERVICE_NAME": "passport_callback_signer",
+            "ENVIRONMENT": "beta",
+            "PASSPORT_CALLBACK_SIGNER_ENABLED": "true",
+            "SIGNING_KEYS_SERVICE_PORT": "8018",
+            "SIGNING_KEYS_INTERNAL_API_KEY": "synthetic-signing-credential",
+            "BAO_ADDR": "http://openbao:8200",
+            "BAO_TOKEN": "synthetic-existing-openbao-token",
+        },
+        "networks": {"passport-callback-signing": None},
     }
     services["passport-beta-bureau"] = {
         "image": IMAGE,
@@ -79,8 +97,9 @@ def model(enabled=True):
             "SIGNING_KEYS_INTERNAL_URL": VALIDATOR["PRIVATE_SIGNING_URL"],
             "PASSPORT_BUREAU_CALLBACK_URL": VALIDATOR["PRIVATE_CALLBACK_URL"],
         },
-        "networks": {"marty-network": None},
+        "networks": {"marty-network": None, "passport-callback-signing": None},
     }
+    result["networks"] = {"passport-callback-signing": {"internal": True}}
     return result
 
 
@@ -142,6 +161,13 @@ def test_rendered_compose_environment_list_is_supported():
         "bureau_key_file",
         "local_build",
         "entrypoint_override",
+        "missing_callback_signer",
+        "callback_signer_public_network",
+        "callback_signer_shared_network",
+        "callback_signer_disabled",
+        "callback_signer_image",
+        "callback_signer_key_mismatch",
+        "callback_signer_extra_member",
     ),
 )
 def test_partial_or_unsafe_selection_fails_closed(mutation):
@@ -232,6 +258,20 @@ def test_partial_or_unsafe_selection_fails_closed(mutation):
         bureau["build"] = "."
     elif mutation == "entrypoint_override":
         bureau["entrypoint"] = ["sh", "-c", "true"]
+    elif mutation == "missing_callback_signer":
+        del services["passport-callback-signer"]
+    elif mutation == "callback_signer_public_network":
+        candidate["networks"]["passport-callback-signing"]["internal"] = False
+    elif mutation == "callback_signer_shared_network":
+        services["passport-callback-signer"]["networks"]["marty-network"] = None
+    elif mutation == "callback_signer_disabled":
+        services["passport-callback-signer"]["environment"]["PASSPORT_CALLBACK_SIGNER_ENABLED"] = "false"
+    elif mutation == "callback_signer_image":
+        services["passport-callback-signer"]["image"] = "services:latest"
+    elif mutation == "callback_signer_key_mismatch":
+        services["passport-callback-signer"]["environment"]["SIGNING_KEYS_INTERNAL_API_KEY"] = "another-key"
+    elif mutation == "callback_signer_extra_member":
+        services["gateway"]["networks"] = {"passport-callback-signing": None}
     with pytest.raises(VALIDATOR["PassportConfigurationError"]) as error:
         validate(candidate)
     assert "synthetic-private-value" not in str(error.value)
@@ -291,8 +331,9 @@ def test_runner_validates_twice_before_mutation():
     )
     assert "passport_configuration_validated = $false" in source
     assert '$script:SelectedApplicationServices += "passport-beta-bureau"' in source
+    assert '$script:SelectedApplicationServices += "passport-callback-signer"' in source
     assert (
-        "retire it explicitly before deploying without the passport profile" in source
+        "retire them explicitly before deploying without the passport profile" in source
     )
     marker = "Assert-BetaPassportConfiguration -RepoRoot $script:RepoRoot"
     assert source.count(marker) == 2
@@ -302,6 +343,26 @@ def test_runner_validates_twice_before_mutation():
     assert source.rindex(marker) < source.index(
         'Invoke-Checked -FilePath docker -Arguments (@("stop")'
     )
+    assert source.index("Assert-NoInFlightLegacyPassportJobs") < source.index(
+        'Write-Step "Capture quiesced maintenance snapshot"'
+    )
+    assert "bureau_job_id IS NOT NULL AND status NOT IN ('ACTIVE', 'FAILED', 'CANCELLED')" in source
+    assert "Assert-BetaCallbackSignerNetwork -AttachOpenBao" in source
+    assert source.index("Assert-BetaCallbackSignerNetwork -AttachOpenBao") < source.index(
+        'Invoke-Compose -Arguments (@("up", "--detach", "--no-build", "--no-deps", "--force-recreate") + $remainingServices)'
+    )
+    assert "Unexpected container joined the beta callback network" in source
+    assert '"openbao" -notin @($openbaoEndpoint.Value.Aliases)' in source
+
+
+def test_restore_reconstitutes_isolated_signer_before_applications():
+    source = (ROOT / "scripts/restore-local-beta-release.ps1").read_text(
+        encoding="utf-8"
+    )
+    assert '"passport-callback-signer"' in source
+    assert source.count("Assert-RestoredPassportCallbackNetwork") >= 3
+    assert "Unexpected container joined the restored passport callback network" in source
+    assert '"openbao" -notin @($openbaoEndpoint.Value.Aliases)' in source
 
 
 def test_selected_bureau_has_a_packaged_rust_entrypoint():
@@ -313,6 +374,8 @@ def test_selected_bureau_has_a_packaged_rust_entrypoint():
     )
     assert 'if [ "$MODULE_NAME" = "passport_beta_bureau" ]; then' in entrypoint
     assert "exec /usr/local/bin/marty-passport-beta-bureau" in entrypoint
+    assert "exec /usr/local/bin/marty-passport-callback-signer" in entrypoint
+    assert "target/release/marty-passport-callback-signer" in dockerfile
 
 
 def test_passport_transit_keys_are_verified_non_exportable_at_bootstrap():
@@ -392,6 +455,8 @@ def test_actual_beta_compose_merge_preserves_default_off_and_kms_selection(tmp_p
     enabled = render([*base, str(ROOT / PROFILE)])
     assert "passport-beta-bureau" not in disabled["services"]
     assert "passport-beta-bureau" in enabled["services"]
+    assert "passport-callback-signer" not in disabled["services"]
+    assert "passport-callback-signer" in enabled["services"]
     for name, flag in (
         ("gateway", "PASSPORT_NATIVE_GATEWAY_ENABLED"),
         ("flow", "PASSPORT_NATIVE_FLOW_ENABLED"),

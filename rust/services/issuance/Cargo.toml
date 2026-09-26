@@ -91,6 +91,11 @@ uuid.workspace = true
 zeroize.workspace = true
 
 [dev-dependencies]
+const-oid.workspace = true
+der.workspace = true
+marty-signing-keys = { path = "../signing-keys" }
+spki.workspace = true
+x509-cert.workspace = true
 marty-selfhost-bundle = { path = "../../crates/selfhost-bundle" }
 tempfile = "3"
 zip = { version = "=8.6.0", default-features = false, features = ["deflate-flate2"] }
@@ -310,3 +315,7 @@ path = "tests/retention_postgres_contract.rs"
 [[test]]
 name = "passport_postgres_contract"
 path = "tests/passport_postgres_contract.rs"
+
+[[test]]
+name = "passport_managed_kms_chain"
+path = "tests/passport_managed_kms_chain.rs"

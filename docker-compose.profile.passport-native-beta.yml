@@ -1,6 +1,11 @@
 # Explicit beta-only selection. Every cryptographic private/signing/MAC key
 # remains in KMS; this profile mounts no passport key or tenant-keyring files.
 services:
+  openbao:
+    networks:
+      - marty-network
+      - passport-callback-signing
+
   gateway:
     environment:
       PASSPORT_NATIVE_GATEWAY_ENABLED: "true"
@@ -39,6 +44,28 @@ services:
 
   # Synthetic, non-physical provider: never selected outside this beta profile.
   # It stores only job metadata/digests and sends KMS-signed callbacks.
+  passport-callback-signer:
+    image: ${MARTY_SERVICES_IMAGE:?set MARTY_SERVICES_IMAGE to the immutable services image digest}
+    environment:
+      SERVICE_NAME: passport_callback_signer
+      ENVIRONMENT: beta
+      PASSPORT_CALLBACK_SIGNER_ENABLED: "true"
+      SIGNING_KEYS_SERVICE_PORT: "8018"
+      SIGNING_KEYS_INTERNAL_API_KEY: ${SIGNING_KEYS_INTERNAL_API_KEY:?SIGNING_KEYS_INTERNAL_API_KEY must be set for beta}
+      BAO_ADDR: http://openbao:8200
+      BAO_TOKEN: ${BAO_DEV_ROOT_TOKEN:?BAO_DEV_ROOT_TOKEN must be set for beta}
+    depends_on:
+      openbao:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "--fail", "http://localhost:8018/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+    networks:
+      - passport-callback-signing
+    restart: unless-stopped
+
   passport-beta-bureau:
     image: ${MARTY_SERVICES_IMAGE:?set MARTY_SERVICES_IMAGE to the immutable services image digest}
     environment:
@@ -48,10 +75,12 @@ services:
       DATABASE_URL: postgresql://marty:${MARTY_DB_PASSWORD:?MARTY_DB_PASSWORD must be set for beta}@postgres:5432/marty
       GRPC_SERVICE_TOKEN: ${GRPC_SERVICE_TOKEN:?GRPC_SERVICE_TOKEN must be set for beta Rust services}
       SIGNING_KEYS_INTERNAL_API_KEY: ${SIGNING_KEYS_INTERNAL_API_KEY:?SIGNING_KEYS_INTERNAL_API_KEY must be set for beta}
-      SIGNING_KEYS_INTERNAL_URL: http://gateway:8000/internal/signing-keys
+      SIGNING_KEYS_INTERNAL_URL: http://passport-callback-signer:8018/internal/documents
       PASSPORT_BUREAU_CALLBACK_URL: http://issuance-native:8005/v1/passport/webhooks/personalization
     depends_on:
       postgres:
+        condition: service_healthy
+      passport-callback-signer:
         condition: service_healthy
     healthcheck:
       test: ["CMD", "curl", "--fail", "http://localhost:8020/health"]
@@ -60,4 +89,10 @@ services:
       retries: 3
     networks:
       - marty-network
+      - passport-callback-signing
     restart: unless-stopped
+
+networks:
+  passport-callback-signing:
+    name: elevenid-beta-passport-callback-signing
+    internal: true

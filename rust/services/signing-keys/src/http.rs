@@ -270,10 +270,6 @@ pub fn router_with_dependencies(
             post(decrypt_passport_artifact_chunk),
         )
         .route(
-            "/internal/documents/{organization_id}/passport-callbacks/sign",
-            post(sign_passport_callback),
-        )
-        .route(
             "/internal/documents/{organization_id}/passport-callbacks/verify",
             post(verify_passport_callback),
         )
@@ -2775,22 +2771,6 @@ async fn decrypt_passport_artifact_chunk(
         .as_ref()
         .ok_or(ArtifactEnvelopeError::Unavailable)?;
     passport_artifact_envelope::decrypt_chunk(provider, &organization_id, request)
-        .await
-        .map(Json)
-}
-
-async fn sign_passport_callback(
-    State(state): State<AppState>,
-    Path(organization_id): Path<String>,
-    headers: HeaderMap,
-    Json(request): Json<passport_callback_hmac::SignRequest>,
-) -> Result<Json<Value>, CallbackKmsError> {
-    authorize_internal(&state, &headers).map_err(|_| CallbackKmsError::Unauthorized)?;
-    let provider = state
-        .flow_envelopes
-        .as_ref()
-        .ok_or(CallbackKmsError::Unavailable)?;
-    passport_callback_hmac::sign(provider, &organization_id, request)
         .await
         .map(Json)
 }

@@ -15,7 +15,7 @@ RUN case "$PASSPORT_SELF_SIGNED_TEST" in \
     -p marty-event-stream --bin marty-event-stream \
     -p marty-gateway --bin marty-gateway \
     -p marty-revocation-profile --bin marty-revocation-profile \
-    -p marty-signing-keys --bin marty-signing-keys \
+    -p marty-signing-keys --bin marty-signing-keys --bin marty-passport-callback-signer \
     -p marty-notification --bin marty-notification \
     -p marty-flow --bin marty-flow \
     -p marty-organization --bin marty-organization \
@@ -54,6 +54,7 @@ COPY --from=rust-service-builder /build/rust/target/release/marty-event-stream /
 COPY --from=rust-service-builder /build/rust/target/release/marty-gateway /usr/local/bin/marty-gateway
 COPY --from=rust-service-builder /build/rust/target/release/marty-revocation-profile /usr/local/bin/marty-revocation-profile
 COPY --from=rust-service-builder /build/rust/target/release/marty-signing-keys /usr/local/bin/marty-signing-keys
+COPY --from=rust-service-builder /build/rust/target/release/marty-passport-callback-signer /usr/local/bin/marty-passport-callback-signer
 COPY --from=rust-service-builder /build/rust/target/release/marty-notification /usr/local/bin/marty-notification
 COPY --from=rust-service-builder /build/rust/target/release/marty-flow /usr/local/bin/marty-flow
 COPY --from=rust-service-builder /build/rust/target/release/marty-organization /usr/local/bin/marty-organization
