@@ -131,9 +131,7 @@ impl fmt::Debug for GatewayConfig {
             .field("address", &self.address)
             .field("production", &self.production)
             .field("service_urls", &self.service_urls)
-            .field("auth_grpc_target", &self.auth_grpc_target)
-            .field("organization_grpc_target", &self.organization_grpc_target)
-            .field("event_stream_grpc_target", &self.event_stream_grpc_target)
+            .field("grpc_targets_configured", &true)
             .field("grpc_ca_certificate", &self.grpc_ca_certificate)
             .field("grpc_insecure_allowed", &self.grpc_insecure_allowed)
             .field(
@@ -479,9 +477,15 @@ fn grpc_target(
         format!("http://{value}")
     };
     let parsed = url::Url::parse(&target).map_err(|_| error(format!("{name} is invalid")))?;
-    if !matches!(parsed.scheme(), "http" | "https") || parsed.host_str().is_none() {
+    if !matches!(parsed.scheme(), "http" | "https")
+        || parsed.host_str().is_none()
+        || !parsed.username().is_empty()
+        || parsed.password().is_some()
+        || parsed.query().is_some()
+        || parsed.fragment().is_some()
+    {
         return Err(error(format!(
-            "{name} must identify an HTTP(S) gRPC endpoint"
+            "{name} must identify a credential-free HTTP(S) gRPC endpoint"
         )));
     }
     Ok(target)
@@ -634,6 +638,16 @@ mod tests {
         values.remove("PASSPORT_TENANT_API_KEYS_FILE");
         values.remove("GRPC_SERVICE_TOKEN");
         assert!(GatewayConfig::from_values(&values).is_err());
+    }
+
+    #[test]
+    fn grpc_target_rejects_embedded_credentials_before_configuration_can_be_logged() {
+        let values = BTreeMap::from([(
+            "ORG_GRPC_TARGET".into(),
+            "http://synthetic-private-value@organization:9002".into(),
+        )]);
+        let error = GatewayConfig::from_values(&values).unwrap_err();
+        assert!(!error.to_string().contains("synthetic-private-value"));
     }
 
     #[test]
