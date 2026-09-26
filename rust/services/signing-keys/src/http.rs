@@ -46,6 +46,7 @@ use axum::{
 use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
+use sha2::{Digest, Sha256};
 use std::sync::Arc;
 use subtle::ConstantTimeEq;
 use tokio::task::JoinSet;
@@ -1062,8 +1063,18 @@ fn managed_key_name(
         .simple()
         .to_string();
     let available = 96 - expected_prefix.len() - tenant.len() - 1 - algorithm_suffix.len();
-    let stem = stem[..stem.len().min(available)].trim_matches('-');
-    let stem = if stem.is_empty() { "key" } else { stem };
+    let stem = if stem.len() > available {
+        // Keep the released 96-byte reference limit without conflating two
+        // accepted names whose distinguishing bytes fall beyond that limit.
+        let digest = Sha256::digest(stem.as_bytes())[..16]
+            .iter()
+            .map(|byte| format!("{byte:02x}"))
+            .collect::<String>();
+        let prefix = stem[..available - digest.len() - 1].trim_matches('-');
+        format!("{prefix}-{digest}")
+    } else {
+        stem.to_owned()
+    };
     Ok(format!(
         "{expected_prefix}{tenant}-{stem}{algorithm_suffix}"
     ))
@@ -6197,6 +6208,9 @@ mod public_contract_tests {
             behavior["released_reference_prefixes"]["lti_tool_signing"],
             "lti-tool-"
         );
+        assert!(behavior["long_name_collision_policy"]
+            .as_str()
+            .is_some_and(|policy| policy.contains("stable SHA-256 suffix")));
     }
 
     #[tokio::test]
@@ -6210,6 +6224,34 @@ mod public_contract_tests {
         assert!(first.starts_with("cred-issuer-"));
         assert!(first.ends_with("-my-key-es256"));
         assert!(first.len() <= 96);
+        let long_prefix = "a".repeat(80);
+        let first_long = managed_key_name(
+            "org-a",
+            &format!("{long_prefix}-first"),
+            "vc_jwt_issuer",
+            "ES256",
+        )
+        .unwrap();
+        let second_long = managed_key_name(
+            "org-a",
+            &format!("{long_prefix}-second"),
+            "vc_jwt_issuer",
+            "ES256",
+        )
+        .unwrap();
+        assert_ne!(first_long, second_long);
+        assert_eq!(
+            first_long,
+            managed_key_name(
+                "org-a",
+                &format!("{long_prefix}-first"),
+                "vc_jwt_issuer",
+                "ES256"
+            )
+            .unwrap()
+        );
+        assert!(first_long.len() <= 96 && second_long.len() <= 96);
+        assert!(first_long.ends_with("-es256") && second_long.ends_with("-es256"));
         assert!(
             managed_key_name("org-a", &"a".repeat(250), "lti_tool_signing", "RS256")
                 .unwrap()

@@ -13,6 +13,7 @@
   "released_response_fields": ["ok", "service_id", "provider_key_name", "key", "created_at"],
   "released_key_fields": ["id", "name", "algorithm", "status", "expiry_date", "created_at", "key_type", "provider", "provider_key_name", "latest_version", "public_jwk", "service_id", "key_purpose"],
   "released_reference_prefixes": {"lti_tool_signing": "lti-tool-", "document_signing": "cred-dsc-", "other": "cred-issuer-"},
+  "long_name_collision_policy": "Names up to 256 bytes remain accepted. When the tenant namespace leaves insufficient room for the complete sanitized name, the key reference includes a stable SHA-256 suffix derived from the complete sanitized name. Distinct long names that share the truncated prefix must not select one KMS key.",
   "reviewed_security_tightening": [
     "A deterministic organization namespace is included in every KMS key name before a caller-controlled sanitized name, so same-name requests from different tenants never select the same KMS key.",
     "Only explicit managed OpenBao KMS creation is allowed; private key material never enters Rust response, Redis, Gateway, or UI.",
@@ -25,6 +26,7 @@
     "all four released algorithms",
     "LTI purpose isolation",
     "same-name different-tenant isolation",
+    "distinct long names sharing a truncated prefix remain distinct",
     "existing-key algorithm mismatch",
     "KMS failure leaves registry unchanged",
     "response never contains credentials or private key material"
