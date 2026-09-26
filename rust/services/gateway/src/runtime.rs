@@ -7001,62 +7001,6 @@ mod tests {
         }
     }
 
-    struct RustSigningUpstream(Router);
-
-    #[async_trait]
-    impl UpstreamClient for RustSigningUpstream {
-        async fn send(
-            &self,
-            instance: &ServiceInstance,
-            request: GatewayRequest,
-        ) -> Result<GatewayResponse, PlatformError> {
-            assert_eq!(instance.service_name, "signing-keys");
-            let mut url = url::Url::parse(&format!("http://signing.invalid{}", request.path))
-                .expect("signing route URL");
-            for (name, values) in &request.query {
-                for value in values {
-                    url.query_pairs_mut().append_pair(name, value);
-                }
-            }
-            let method = match request.method {
-                HttpMethod::Get => "GET",
-                HttpMethod::Post => "POST",
-                _ => panic!("unexpected signing method"),
-            };
-            let mut builder = Request::builder().method(method).uri(format!(
-                "{}{}",
-                url.path(),
-                url.query()
-                    .map(|query| format!("?{query}"))
-                    .unwrap_or_default()
-            ));
-            for (name, value) in request.headers {
-                builder = builder.header(name, value);
-            }
-            let response = self
-                .0
-                .clone()
-                .oneshot(
-                    builder
-                        .body(Body::from(request.body.unwrap_or_default()))
-                        .expect("signing request"),
-                )
-                .await
-                .expect("signing response");
-            let status_code = response.status().as_u16();
-            let body = to_bytes(response.into_body(), DEFAULT_MAXIMUM_BODY_BYTES)
-                .await
-                .expect("bounded signing response");
-            Ok(GatewayResponse {
-                status_code,
-                headers: BTreeMap::from([("content-type".into(), "application/json".into())]),
-                body: Some(body.to_vec()),
-                response_time_ms: None,
-                upstream_service: Some("signing-keys".into()),
-            })
-        }
-    }
-
     #[tokio::test]
     #[ignore = "requires disposable MARTY_TEST_REDIS_URL and BAO_TOKEN=test-only"]
     async fn authenticated_gateway_reaches_rust_managed_key_route_without_custody() {
@@ -7088,10 +7032,26 @@ mod tests {
             None,
             None,
         );
-        let gateway = gateway_router(runtime_state_with_upstream(
-            Arc::new(NoOwner),
-            Arc::new(RustSigningUpstream(signing)),
-        ));
+        let signing_listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let signing_url = format!("http://{}", signing_listener.local_addr().unwrap());
+        let signing_server =
+            tokio::spawn(async move { axum::serve(signing_listener, signing).await.unwrap() });
+        let upstream = Arc::new(crate::transport::ReqwestUpstream::new(1024 * 1024).unwrap());
+        let mut state = runtime_state_with_upstream(Arc::new(NoOwner), upstream.clone());
+        let routes = GatewayContract::load()
+            .unwrap()
+            .proxy_route_table_with_passport_native(false)
+            .unwrap();
+        let registry = StaticServiceRegistry::from_urls(&BTreeMap::from([(
+            "signing-keys".into(),
+            signing_url,
+        )]))
+        .unwrap();
+        Arc::get_mut(&mut state).unwrap().proxy = Arc::new(
+            GatewayProxy::new(routes, Arc::new(registry), upstream, ProxyConfig::default())
+                .unwrap(),
+        );
+        let gateway = gateway_router(state);
         let create = |cookie: bool| {
             let mut builder =
                 Request::post("/v1/signing-keys").header("content-type", "application/json");
@@ -7150,6 +7110,7 @@ mod tests {
             .unwrap()
             .iter()
             .any(|key| key["id"] == reference));
+        signing_server.abort();
         kms_server.abort();
     }
 
