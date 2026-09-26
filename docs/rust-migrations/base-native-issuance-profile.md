@@ -153,6 +153,25 @@ authorize beta activation while artifact encryption, callback authentication,
 bureau handoff, DSC revocation/country policy, and acceptance remain on their
 separate cutover gates.
 
+The native artifact client also supports `PASSPORT_KMS_ARTIFACTS_ENABLED=true`.
+This opt-in mode sends bounded applicant/MRZ/data-group chunks to the internal
+signing-keys Transit boundary using the existing internal service credential.
+The non-exportable Transit key stays in OpenBao; issuance stores only the
+versioned encrypted manifest defined in
+`contracts/passport-artifact-manifest-behavior.json`. Each chunk is bound to
+the organization, passport job ID, chunk index, and total chunk count. The
+mode rejects either form of `PHYSICAL_DOCUMENT_ARTIFACT_KEY` before reading it,
+and a missing or failed provider cannot fall back to plaintext or Fernet.
+It defaults off in Compose and remains excluded from Kubernetes until a
+closed Secret-backed binding and acceptance gate exist.
+
+Before enabling KMS mode on an existing database, check for all unfinished
+passport jobs with legacy Fernet ciphertext; complete or explicitly migrate
+those jobs while the legacy deployment is still running. The KMS-only reader
+does not accept their ciphertext, because loading the legacy key would violate
+the KMS-only boundary. A successful local test or capability response alone
+does not satisfy this operational gate.
+
 The excluded set is exact and guarded; exclusion does not mean feature deletion:
 
 - `BAO_ADDR`, `BAO_TOKEN`: legacy custody configuration. Native uses its existing
