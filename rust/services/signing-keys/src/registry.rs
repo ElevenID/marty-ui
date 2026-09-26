@@ -1,15 +1,23 @@
 //! Canonical signing-service registry normalization and routing decisions.
 
-use std::collections::{BTreeMap, BTreeSet};
+use std::{
+    collections::{BTreeMap, BTreeSet},
+    sync::Arc,
+    time::{Duration, Instant},
+};
 
 use chrono::Utc;
 use redis::{aio::ConnectionManager, AsyncCommands};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Map, Value};
 use thiserror::Error;
+use tokio::sync::RwLock;
+use tokio::task::JoinSet;
 use uuid::Uuid;
 
 use crate::domain::{key_purposes, service_capabilities, service_type, service_types};
+use crate::kms;
+use crate::profiles::ProfileStore;
 
 const SUPPORTED_ALGORITHMS: &[&str] = &["ES256", "ES384", "ES512", "RS256", "EdDSA"];
 const MANAGED_OPENBAO_SERVICE_ID: &str = "managed-openbao-transit";
@@ -28,6 +36,8 @@ pub enum RegistryError {
 pub struct RegistryStore {
     connection: ConnectionManager,
     managed_openbao_endpoint: Option<String>,
+    managed_inventory:
+        Arc<RwLock<BTreeMap<String, (Instant, Vec<ManagedKey>, bool, BTreeMap<String, bool>)>>>,
 }
 
 impl RegistryStore {
@@ -46,6 +56,7 @@ impl RegistryStore {
         Ok(Self {
             connection,
             managed_openbao_endpoint: None,
+            managed_inventory: Arc::new(RwLock::new(BTreeMap::new())),
         })
     }
 
@@ -69,7 +80,7 @@ impl RegistryStore {
             }
             None => empty_registry(),
         };
-        Ok(self.with_managed_service(registry))
+        Ok(self.with_managed_service(organization_id, registry).await)
     }
 
     pub async fn save(
@@ -85,7 +96,8 @@ impl RegistryStore {
             .set::<_, _, ()>(storage_key(organization_id), payload)
             .await
             .map_err(|error| RegistryError::Storage(error.to_string()))?;
-        Ok(self.with_managed_service(normalized))
+        self.managed_inventory.write().await.remove(organization_id);
+        Ok(self.with_managed_service(organization_id, normalized).await)
     }
 
     pub async fn bind_profile(
@@ -166,10 +178,59 @@ impl RegistryStore {
         self.connection.clone()
     }
 
-    fn with_managed_service(&self, mut registry: Value) -> Value {
+    async fn with_managed_service(&self, organization_id: &str, mut registry: Value) -> Value {
         let Some(endpoint) = self.managed_openbao_endpoint.as_deref() else {
             return registry;
         };
+        let profiles = ProfileStore::from_connection(self.connection.clone())
+            .list(organization_id)
+            .await;
+        let profiles_available = profiles.is_ok();
+        let profiles = profiles.unwrap_or_else(|_| json!({"profiles": []}));
+        let profile_references = active_managed_profile_references(organization_id, &profiles);
+        let active_tuple_references = profile_references
+            .keys()
+            .filter(|reference| issuer_tuple_key_name(reference))
+            .cloned()
+            .collect::<BTreeSet<_>>();
+        let cached = self
+            .managed_inventory
+            .read()
+            .await
+            .get(organization_id)
+            .cloned();
+        let (mut managed_keys, mut inventory_complete) = match cached {
+            Some((at, keys, complete, cached_profiles))
+                if at.elapsed() < Duration::from_secs(if complete { 30 } else { 5 })
+                    && (!profiles_available || cached_profiles == profile_references) =>
+            {
+                (keys, complete)
+            }
+            _ => {
+                let mut discovered =
+                    managed_live_keys(organization_id, &registry, &profile_references, endpoint)
+                        .await;
+                discovered.1 &= profiles_available;
+                self.managed_inventory.write().await.insert(
+                    organization_id.to_owned(),
+                    (
+                        Instant::now(),
+                        discovered.0.clone(),
+                        discovered.1,
+                        profile_references.clone(),
+                    ),
+                );
+                discovered
+            }
+        };
+        // Profile mutations do not write the registry. Check the cheap Redis
+        // profile document on every load so a cached tuple key stops being
+        // selectable as soon as its last active profile is retired or deleted.
+        managed_keys.retain(|key| {
+            !issuer_tuple_key_name(&key.reference)
+                || active_tuple_references.contains(&key.reference)
+        });
+        inventory_complete &= profiles_available;
         let requested_default = registry
             .get("default_service_id")
             .and_then(Value::as_str)
@@ -181,7 +242,10 @@ impl RegistryStore {
             services.retain(|service| {
                 service.get("id").and_then(Value::as_str) != Some(MANAGED_OPENBAO_SERVICE_ID)
             });
-            services.insert(0, managed_openbao_service(endpoint));
+            services.insert(
+                0,
+                managed_openbao_service(endpoint, &managed_keys, inventory_complete),
+            );
         }
         let configured_default = requested_default.as_deref().is_some_and(|id| {
             registry["services"]
@@ -197,11 +261,185 @@ impl RegistryStore {
     }
 }
 
-fn managed_openbao_service(endpoint: &str) -> Value {
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct ManagedKey {
+    reference: String,
+    algorithm: String,
+    lti_only: bool,
+}
+
+fn tenant_managed_key_name(organization_id: &str, reference: &str) -> bool {
+    let tenant = Uuid::new_v5(&Uuid::NAMESPACE_URL, organization_id.as_bytes())
+        .simple()
+        .to_string();
+    ["cred-issuer-", "cred-dsc-", "lti-tool-"]
+        .iter()
+        .any(|prefix| reference.starts_with(&format!("{prefix}{tenant}-")))
+}
+
+fn foreign_namespaced_key(organization_id: &str, reference: &str) -> bool {
+    ["cred-issuer-", "cred-dsc-", "lti-tool-"]
+        .iter()
+        .filter_map(|prefix| reference.strip_prefix(prefix))
+        .any(|suffix| {
+            suffix.len() > 32
+                && suffix.as_bytes().get(32) == Some(&b'-')
+                && suffix.as_bytes()[..32].iter().all(u8::is_ascii_hexdigit)
+                && !tenant_managed_key_name(organization_id, reference)
+        })
+}
+
+fn issuer_tuple_key_name(reference: &str) -> bool {
+    ["cred-issuer-", "cred-dsc-", "oid4vp-verifier-", "lti-tool-"]
+        .iter()
+        .filter_map(|prefix| reference.strip_prefix(prefix))
+        .any(|suffix| {
+            let Some((token, algorithm)) = suffix.split_once('-') else {
+                return false;
+            };
+            token.len() == 20
+                && token.bytes().all(|byte| byte.is_ascii_hexdigit())
+                && ["es256", "es384", "es512", "rs256", "eddsa"].contains(&algorithm)
+        })
+}
+
+fn managed_key_algorithm(jwk: &Value) -> Option<&'static str> {
+    match (
+        jwk.get("kty").and_then(Value::as_str),
+        jwk.get("crv").and_then(Value::as_str),
+    ) {
+        (Some("EC"), Some("P-256")) => Some("ES256"),
+        (Some("EC"), Some("P-384")) => Some("ES384"),
+        (Some("EC"), Some("P-521")) => Some("ES512"),
+        (Some("RSA"), _) => Some("RS256"),
+        (Some("OKP"), Some("Ed25519")) => Some("EdDSA"),
+        _ => None,
+    }
+}
+
+async fn managed_live_keys(
+    organization_id: &str,
+    registry: &Value,
+    profile_references: &BTreeMap<String, bool>,
+    endpoint: &str,
+) -> (Vec<ManagedKey>, bool) {
+    let bindings = normalize_bindings(registry.get("key_reference_purposes"))
+        .remove(MANAGED_OPENBAO_SERVICE_ID)
+        .unwrap_or_default();
+    // Profile references were loaded from the tenant-scoped canonical store.
+    let mut references = bindings
+        .keys()
+        .filter(|reference| {
+            !foreign_namespaced_key(organization_id, reference)
+                && (!issuer_tuple_key_name(reference)
+                    || profile_references.contains_key(*reference))
+        })
+        .cloned()
+        .collect::<BTreeSet<_>>();
+    references.extend(profile_references.keys().cloned());
+    let mut inventory_complete = match kms::list_managed_openbao_key_names(endpoint).await {
+        Ok(names) => {
+            references.extend(
+                names
+                    .into_iter()
+                    .filter(|name| tenant_managed_key_name(organization_id, name)),
+            );
+            true
+        }
+        Err(_) => false,
+    };
+    let mut pending = references.into_iter();
+    let mut tasks = JoinSet::new();
+    let queue = |tasks: &mut JoinSet<Result<Option<ManagedKey>, ()>>, reference: String| {
+        let endpoint = endpoint.to_owned();
+        let lti_only = bindings
+            .get(&reference)
+            .is_some_and(|purposes| purposes.as_slice() == ["lti_tool_signing"])
+            || profile_references.get(&reference) == Some(&true)
+            || reference.starts_with("lti-tool-");
+        tasks.spawn(async move {
+            let public = match kms::managed_openbao_public_key_existing(&endpoint, &reference).await
+            {
+                Ok(public) => public,
+                Err(kms::KmsError::ProviderStatus {
+                    status: reqwest::StatusCode::NOT_FOUND,
+                    ..
+                }) => return Ok(None),
+                Err(_) => return Err(()),
+            };
+            Ok(managed_key_algorithm(&public).map(|algorithm| ManagedKey {
+                reference,
+                algorithm: algorithm.to_owned(),
+                lti_only,
+            }))
+        });
+    };
+    for _ in 0..8 {
+        if let Some(reference) = pending.next() {
+            queue(&mut tasks, reference);
+        }
+    }
+    let mut live = Vec::new();
+    while let Some(result) = tasks.join_next().await {
+        match result {
+            Ok(Ok(Some(key))) => live.push(key),
+            Ok(Ok(None)) => {}
+            _ => inventory_complete = false,
+        }
+        if let Some(reference) = pending.next() {
+            queue(&mut tasks, reference);
+        }
+    }
+    live.sort_by(|left, right| left.reference.cmp(&right.reference));
+    (live, inventory_complete)
+}
+
+fn active_managed_profile_references(
+    organization_id: &str,
+    profiles: &Value,
+) -> BTreeMap<String, bool> {
+    let mut references = BTreeMap::new();
+    for (reference, lti_only) in profiles
+        .get("profiles")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter(|profile| {
+            profile.get("status").and_then(Value::as_str) == Some("active")
+                && profile.get("signing_service_id").and_then(Value::as_str)
+                    == Some(MANAGED_OPENBAO_SERVICE_ID)
+        })
+        .filter_map(|profile| {
+            Some((
+                profile.get("signing_key_reference")?.as_str()?.to_owned(),
+                profile.get("key_purpose").and_then(Value::as_str) == Some("lti_tool_signing"),
+            ))
+        })
+        .filter(|(reference, _)| !foreign_namespaced_key(organization_id, reference))
+    {
+        *references.entry(reference).or_insert(false) |= lti_only;
+    }
+    references
+}
+
+fn managed_openbao_service(endpoint: &str, keys: &[ManagedKey], inventory_complete: bool) -> Value {
     let purposes = key_purposes()
         .into_iter()
         .map(|purpose| purpose.id)
         .collect::<Vec<_>>();
+    let default_reference = keys
+        .iter()
+        .find(|key| !key.lti_only)
+        .map(|key| key.reference.as_str())
+        .unwrap_or_default();
+    let references = keys
+        .iter()
+        .map(|key| key.reference.as_str())
+        .collect::<Vec<_>>();
+    let key_algorithms = keys
+        .iter()
+        .map(|key| (key.reference.as_str(), key.algorithm.as_str()))
+        .collect::<BTreeMap<_, _>>();
     json!({
         "id": MANAGED_OPENBAO_SERVICE_ID,
         "name": "Marty managed OpenBao transit",
@@ -217,16 +455,17 @@ fn managed_openbao_service(endpoint: &str) -> Value {
         "namespace": "",
         "auth_mode": "service_token",
         "auth_reference": "Managed by Marty service stack",
-        "key_reference": "",
-        "key_aliases": [],
+        "key_reference": default_reference,
+        "key_aliases": references,
+        "key_algorithms": key_algorithms,
         "algorithms": SUPPORTED_ALGORITHMS,
         "key_purposes": purposes,
         "credential_formats": ["jwt_vc_json", "dc+sd-jwt", "mso_mdoc", "zk_mdoc", "icao_emrtd", "vds_nc", "oauth-authz-req+jwt", "lti_tool_jwt"],
-        "status": "configured",
+        "status": if inventory_complete { "configured" } else { "degraded" },
         "managed": true,
         "read_only": true,
         "managed_by": "Marty service stack",
-        "key_count": 0,
+        "key_count": keys.len(),
         "capabilities": {
             "discover_keys": true,
             "sign": true,
@@ -895,10 +1134,19 @@ fn truthy(value: &Value) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use axum::{
+        extract::{Path, State},
+        http::StatusCode,
+        routing::get,
+        Json, Router,
+    };
+    use std::sync::{Arc, Mutex};
+
+    static BAO_ENV_LOCK: Mutex<()> = Mutex::new(());
 
     #[test]
     fn managed_openbao_accepts_passport_profile_wire_format() {
-        let managed = managed_openbao_service("http://openbao:8200");
+        let managed = managed_openbao_service("http://openbao:8200", &[], true);
         assert!(managed["credential_formats"]
             .as_array()
             .unwrap()
@@ -907,6 +1155,278 @@ mod tests {
             .as_array()
             .unwrap()
             .contains(&json!("x509_doc_signer")));
+    }
+
+    #[test]
+    fn managed_service_uses_only_live_public_keys_and_never_defaults_to_lti() {
+        let keys = vec![
+            ManagedKey {
+                reference: "lti-tool-1".into(),
+                algorithm: "RS256".into(),
+                lti_only: true,
+            },
+            ManagedKey {
+                reference: "cred-issuer-2".into(),
+                algorithm: "ES256".into(),
+                lti_only: false,
+            },
+        ];
+        let service = managed_openbao_service("http://openbao:8200", &keys, true);
+        assert_eq!(service["key_reference"], "cred-issuer-2");
+        assert_eq!(
+            service["key_aliases"],
+            json!(["lti-tool-1", "cred-issuer-2"])
+        );
+        assert_eq!(service["key_count"], 2);
+        assert!(service["algorithms"]
+            .as_array()
+            .unwrap()
+            .contains(&json!("EdDSA")));
+        let only_lti = managed_openbao_service("http://openbao:8200", &keys[..1], true);
+        assert_eq!(only_lti["key_reference"], "");
+    }
+
+    #[test]
+    fn managed_key_scope_keeps_legacy_bound_names_but_rejects_foreign_namespaces() {
+        let own = format!(
+            "cred-issuer-{}-demo-es256",
+            Uuid::new_v5(&Uuid::NAMESPACE_URL, b"org-a").simple()
+        );
+        let foreign = format!(
+            "cred-issuer-{}-demo-es256",
+            Uuid::new_v5(&Uuid::NAMESPACE_URL, b"org-b").simple()
+        );
+        assert!(tenant_managed_key_name("org-a", &own));
+        assert!(!tenant_managed_key_name("org-a", &foreign));
+        assert!(foreign_namespaced_key("org-a", &foreign));
+        assert!(!foreign_namespaced_key("org-a", "cred-issuer-legacy-es256"));
+        assert!(issuer_tuple_key_name(
+            "cred-issuer-0123456789abcdef0123-es256"
+        ));
+        assert!(issuer_tuple_key_name(
+            "oid4vp-verifier-0123456789abcdef0123-eddsa"
+        ));
+        assert!(!issuer_tuple_key_name(&own));
+        assert!(!issuer_tuple_key_name("cred-issuer-legacy-es256"));
+        assert_eq!(
+            managed_key_algorithm(&json!({"kty":"EC", "crv":"P-384"})),
+            Some("ES384")
+        );
+    }
+
+    #[test]
+    fn shared_profile_reference_preserves_lti_only_restriction() {
+        let profiles = json!({"profiles": [
+            {"status": "active", "signing_service_id": MANAGED_OPENBAO_SERVICE_ID,
+                "signing_key_reference": "legacy-shared-key", "key_purpose": "lti_tool_signing"},
+            {"status": "active", "signing_service_id": MANAGED_OPENBAO_SERVICE_ID,
+                "signing_key_reference": "legacy-shared-key", "key_purpose": "vc_jwt_issuer"}
+        ]});
+        assert_eq!(
+            active_managed_profile_references("org-a", &profiles)["legacy-shared-key"],
+            true
+        );
+    }
+
+    #[tokio::test]
+    async fn managed_inventory_discards_stale_and_foreign_keys_and_recovers_tenant_key() {
+        #[derive(Clone)]
+        struct Fixture {
+            own: String,
+            foreign: String,
+            reads: Arc<Mutex<Vec<String>>>,
+        }
+        async fn list(State(state): State<Fixture>) -> Json<Value> {
+            Json(json!({"data": {"keys": [state.own, state.foreign]}}))
+        }
+        async fn read(
+            State(state): State<Fixture>,
+            Path(reference): Path<String>,
+        ) -> Result<Json<Value>, StatusCode> {
+            state.reads.lock().unwrap().push(reference.clone());
+            if reference == "a-stale" || reference == state.foreign {
+                return Err(StatusCode::NOT_FOUND);
+            }
+            const PEM: &str = "-----BEGIN PUBLIC KEY-----\nMFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEaxfR8uEsQkf4vOblY6RA8ncDfYEt\n6zOg9KE5RdiYwpZP40Li/hp/m47n60p8D54WK84zV2sxXs7LtkBoN79R9Q==\n-----END PUBLIC KEY-----\n";
+            Ok(Json(json!({"data": {
+                "latest_version": 1, "type": "ecdsa-p256",
+                "keys": {"1": {"public_key": PEM}}
+            }})))
+        }
+        let own = format!(
+            "cred-issuer-{}-unbound-es256",
+            Uuid::new_v5(&Uuid::NAMESPACE_URL, b"org-a").simple()
+        );
+        let foreign = format!(
+            "cred-issuer-{}-foreign-es256",
+            Uuid::new_v5(&Uuid::NAMESPACE_URL, b"org-b").simple()
+        );
+        let fixture = Fixture {
+            own: own.clone(),
+            foreign: foreign.clone(),
+            reads: Arc::new(Mutex::new(Vec::new())),
+        };
+        let app = Router::new()
+            .route("/v1/transit/keys", get(list))
+            .route("/v1/transit/keys/{reference}", get(read))
+            .with_state(fixture.clone());
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let endpoint = format!("http://{}", listener.local_addr().unwrap());
+        let server = tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+        let _guard = BAO_ENV_LOCK.lock().unwrap();
+        let previous = std::env::var("BAO_TOKEN").ok();
+        std::env::set_var("BAO_TOKEN", "test-only");
+        let revoked = "cred-issuer-00000000000000000000-es256";
+        let deleted = "cred-dsc-11111111111111111111-es256";
+        let registry = json!({"key_reference_purposes": {"managed-openbao-transit": {
+            "a-stale": ["vc_jwt_issuer"],
+            "cred-issuer-legacy": ["vc_jwt_issuer"],
+            revoked: ["vc_jwt_issuer"],
+            deleted: ["mdoc_dsc"],
+            foreign.clone(): ["vc_jwt_issuer"]
+        }}});
+        let profile_only = "oid4vp-verifier-01234567890123456789-es256";
+        let profiles = json!({"profiles": [
+            {
+                "status": "active", "signing_service_id": "managed-openbao-transit",
+                "signing_key_reference": profile_only,
+                "key_purpose": "oid4vp_request_signing"
+            },
+            {
+                "status": "revoked", "signing_service_id": "managed-openbao-transit",
+                "signing_key_reference": revoked,
+                "key_purpose": "vc_jwt_issuer"
+            }
+        ]});
+        let active = active_managed_profile_references("org-a", &profiles);
+        let (keys, complete) = managed_live_keys("org-a", &registry, &active, &endpoint).await;
+        match previous {
+            Some(value) => std::env::set_var("BAO_TOKEN", value),
+            None => std::env::remove_var("BAO_TOKEN"),
+        }
+        server.abort();
+        assert!(complete);
+        assert_eq!(
+            keys.iter()
+                .map(|key| key.reference.as_str())
+                .collect::<Vec<_>>(),
+            [own.as_str(), "cred-issuer-legacy", profile_only]
+        );
+        let reads = fixture.reads.lock().unwrap();
+        assert!(reads.contains(&"a-stale".into()));
+        assert!(!reads.contains(&foreign));
+        assert!(!reads.contains(&revoked.to_owned()));
+        assert!(!reads.contains(&deleted.to_owned()));
+        let service = managed_openbao_service(&endpoint, &keys, complete);
+        assert_eq!(service["key_reference"], own);
+        assert_eq!(service["key_count"], 3);
+        assert!(service["algorithms"]
+            .as_array()
+            .unwrap()
+            .contains(&json!("ES384")));
+        let resolved = resolve(ResolveRequest {
+            registry: json!({"key_reference_purposes": {}, "services": [service.clone()], "default_service_id": "managed-openbao-transit"}),
+            service: Some(service),
+            keys: keys.iter().map(|key| json!({"id": key.reference, "algorithm": key.algorithm})).collect(),
+            credential_format: None,
+            key_purpose: Some("oid4vp_request_signing".into()),
+            algorithm: Some("ES256".into()),
+        }).unwrap();
+        assert_eq!(resolved.key_reference.as_deref(), Some(profile_only));
+    }
+
+    #[tokio::test]
+    #[ignore = "requires disposable MARTY_TEST_REDIS_URL"]
+    async fn cached_managed_inventory_tracks_immediate_profile_create_and_delete() {
+        #[derive(Clone)]
+        struct Fixture {
+            listings: Arc<Mutex<usize>>,
+        }
+        async fn list(State(state): State<Fixture>) -> Json<Value> {
+            *state.listings.lock().unwrap() += 1;
+            Json(json!({"data": {"keys": []}}))
+        }
+        async fn read(Path(_reference): Path<String>) -> Json<Value> {
+            const PEM: &str = "-----BEGIN PUBLIC KEY-----\nMFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEaxfR8uEsQkf4vOblY6RA8ncDfYEt\n6zOg9KE5RdiYwpZP40Li/hp/m47n60p8D54WK84zV2sxXs7LtkBoN79R9Q==\n-----END PUBLIC KEY-----\n";
+            Json(
+                json!({"data": {"latest_version": 1, "type": "ecdsa-p256", "keys": {"1": {"public_key": PEM}}}}),
+            )
+        }
+        let fixture = Fixture {
+            listings: Arc::new(Mutex::new(0)),
+        };
+        let app = Router::new()
+            .route("/v1/transit/keys", get(list))
+            .route("/v1/transit/keys/{reference}", get(read))
+            .with_state(fixture.clone());
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let endpoint = format!("http://{}", listener.local_addr().unwrap());
+        let server = tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+        let _guard = BAO_ENV_LOCK.lock().unwrap();
+        let previous = std::env::var("BAO_TOKEN").ok();
+        std::env::set_var("BAO_TOKEN", "test-only");
+        let redis_url = std::env::var("MARTY_TEST_REDIS_URL").expect("disposable Redis URL");
+        let organization_id = format!("rust-signing-cache-{}", Uuid::new_v4().simple());
+        let reference = "cred-issuer-0123456789abcdef0123-es256";
+        let store = RegistryStore::connect(&redis_url)
+            .await
+            .unwrap()
+            .with_managed_openbao(Some(endpoint));
+        let profiles = ProfileStore::from_connection(store.connection());
+        let saved = store.save(&organization_id, &json!({
+            "services": [],
+            "key_reference_purposes": {"managed-openbao-transit": {reference: ["vc_jwt_issuer"]}}
+        })).await.unwrap();
+        assert_eq!(saved["services"][0]["key_reference"], "");
+        let listings_after_save = *fixture.listings.lock().unwrap();
+        assert_eq!(
+            store.load(&organization_id).await.unwrap()["services"][0]["key_count"],
+            0
+        );
+        assert_eq!(*fixture.listings.lock().unwrap(), listings_after_save);
+
+        let fixture_profile: Value = serde_json::from_str(include_str!(
+            "../tests/fixtures/issuer_profile_vectors.json"
+        ))
+        .unwrap();
+        let mut profile = fixture_profile["normalize"]["expected"].clone();
+        profile["organization_id"] = json!(organization_id);
+        profile["signing_service_id"] = json!(MANAGED_OPENBAO_SERVICE_ID);
+        profile["signing_key_reference"] = json!(reference);
+        let profile_id = profile["id"].as_str().unwrap();
+        profiles
+            .put(&organization_id, profile_id, profile.clone())
+            .await
+            .unwrap();
+        let created = store.load(&organization_id).await.unwrap();
+        assert_eq!(created["services"][0]["key_reference"], reference);
+        assert_eq!(created["services"][0]["key_count"], 1);
+        let listings_after_create = *fixture.listings.lock().unwrap();
+        assert!(listings_after_create > listings_after_save);
+        profiles.delete(&organization_id, profile_id).await.unwrap();
+        let deleted = store.load(&organization_id).await.unwrap();
+        assert_eq!(deleted["services"][0]["key_reference"], "");
+        assert_eq!(deleted["services"][0]["key_aliases"], json!([]));
+        assert_eq!(deleted["services"][0]["key_count"], 0);
+        let listings_after_delete = *fixture.listings.lock().unwrap();
+        assert!(listings_after_delete > listings_after_create);
+        assert_eq!(
+            store.load(&organization_id).await.unwrap()["services"][0]["key_count"],
+            0
+        );
+        assert_eq!(*fixture.listings.lock().unwrap(), listings_after_delete);
+        let mut connection = store.connection();
+        let _: () = redis::cmd("DEL")
+            .arg(storage_key(&organization_id))
+            .arg(crate::profiles::storage_key(&organization_id))
+            .query_async(&mut connection)
+            .await
+            .unwrap();
+        match previous {
+            Some(value) => std::env::set_var("BAO_TOKEN", value),
+            None => std::env::remove_var("BAO_TOKEN"),
+        }
+        server.abort();
     }
 
     #[test]

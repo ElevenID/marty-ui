@@ -602,7 +602,7 @@ fn public_signing_key_inventory(registry: &Value, profiles: &[Value]) -> Vec<Val
                     "id": reference,
                     "provider_key_name": reference,
                     "name": reference,
-                    "algorithm": service.get("algorithms").and_then(Value::as_array).and_then(|values| values.first()).cloned().unwrap_or(Value::Null),
+                    "algorithm": service.get("key_algorithms").and_then(|algorithms| algorithms.get(reference)).cloned().or_else(|| service.get("algorithms").and_then(Value::as_array).and_then(|values| values.first()).cloned()).unwrap_or(Value::Null),
                     "status": "active",
                     "created_at": Value::Null,
                     "expiry_date": Value::Null,
@@ -4507,5 +4507,31 @@ mod public_contract_tests {
         let serialized = serde_json::to_string(&inventory).expect("inventory JSON");
         assert!(!serialized.contains("private-profile-id"));
         assert!(!serialized.contains("private-token-reference"));
+    }
+
+    #[test]
+    fn public_inventory_uses_verified_algorithm_for_unprofiled_managed_key() {
+        let registry = json!({"services": [{
+            "id": "managed-openbao-transit", "provider": "openbao",
+            "algorithms": ["ES256", "RS256", "EdDSA"],
+            "key_reference": "cred-issuer-rsa", "key_aliases": ["cred-issuer-ed"],
+            "key_algorithms": {"cred-issuer-rsa": "RS256", "cred-issuer-ed": "EdDSA"}
+        }]});
+        let inventory = public_signing_key_inventory(&registry, &[]);
+        assert_eq!(inventory.len(), 2);
+        assert_eq!(
+            inventory
+                .iter()
+                .find(|key| key["id"] == "cred-issuer-rsa")
+                .unwrap()["algorithm"],
+            "RS256"
+        );
+        assert_eq!(
+            inventory
+                .iter()
+                .find(|key| key["id"] == "cred-issuer-ed")
+                .unwrap()["algorithm"],
+            "EdDSA"
+        );
     }
 }
