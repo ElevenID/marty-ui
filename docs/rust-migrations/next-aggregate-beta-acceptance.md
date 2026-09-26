@@ -101,8 +101,12 @@ selected here.
    until previously issued credentials expire; move future custody identifiers
    behind issuer profiles with a separately reviewed compatibility migration.
    The fixture supplies a bearer token and does not establish workload-identity
-   token acquisition. Exercise the
-   remaining CSR, sign, rotate, and profile paths through Gateway, rerun the
+   token acquisition. The next stacked Gateway fixture exercises issuer-profile
+   create and resolve through a stateful mock Transit server, then confirms the
+   internal issuer-DID sign route sends the derived profile key and EdDSA payload
+   to Transit without returning the KMS locator to callers. Its fixed mock
+   signature proves routing and custody selection, not cryptographic validity.
+   Exercise the remaining CSR and rotate paths through Gateway, rerun the
    route audit on protected main after the stack lands, and complete beta
    acceptance before describing the aggregate release as feature-complete.
 

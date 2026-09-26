@@ -4488,6 +4488,8 @@ fn map_failure(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use axum::extract::Path;
+    use axum::http::HeaderMap;
     use axum::routing::get;
     use std::{
         collections::BTreeSet,
@@ -7003,36 +7005,144 @@ mod tests {
         }
     }
 
+    #[derive(Clone, Default)]
+    struct GatewayTransitFixture {
+        keys: Arc<std::sync::Mutex<BTreeMap<String, String>>>,
+        creates: Arc<std::sync::Mutex<Vec<(String, String)>>>,
+        signs: Arc<std::sync::Mutex<Vec<(String, Value)>>>,
+    }
+
+    fn gateway_transit_authorized(headers: &HeaderMap) -> bool {
+        headers
+            .get("x-vault-token")
+            .and_then(|value| value.to_str().ok())
+            == Some("test-only")
+    }
+
+    async fn gateway_transit_create(
+        State(fixture): State<GatewayTransitFixture>,
+        Path(reference): Path<String>,
+        headers: HeaderMap,
+        Json(body): Json<Value>,
+    ) -> Response {
+        if !gateway_transit_authorized(&headers) {
+            return StatusCode::FORBIDDEN.into_response();
+        }
+        let Some(key_type) = body.get("type").and_then(Value::as_str) else {
+            return StatusCode::BAD_REQUEST.into_response();
+        };
+        fixture
+            .creates
+            .lock()
+            .unwrap()
+            .push((reference.clone(), key_type.to_owned()));
+        let mut keys = fixture.keys.lock().unwrap();
+        if keys.contains_key(&reference) {
+            return (
+                StatusCode::BAD_REQUEST,
+                Json(json!({"errors":["key already exists"]})),
+            )
+                .into_response();
+        }
+        keys.insert(reference, key_type.to_owned());
+        StatusCode::NO_CONTENT.into_response()
+    }
+
+    async fn gateway_transit_read(
+        State(fixture): State<GatewayTransitFixture>,
+        Path(reference): Path<String>,
+        headers: HeaderMap,
+    ) -> Response {
+        if !gateway_transit_authorized(&headers) {
+            return StatusCode::FORBIDDEN.into_response();
+        }
+        let Some(key_type) = fixture.keys.lock().unwrap().get(&reference).cloned() else {
+            return StatusCode::NOT_FOUND.into_response();
+        };
+        let material = match key_type.as_str() {
+            "ed25519" => "AQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQE=",
+            "ecdsa-p256" => "-----BEGIN PUBLIC KEY-----\nMFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEaxfR8uEsQkf4vOblY6RA8ncDfYEt\n6zOg9KE5RdiYwpZP40Li/hp/m47n60p8D54WK84zV2sxXs7LtkBoN79R9Q==\n-----END PUBLIC KEY-----\n",
+            _ => return StatusCode::UNPROCESSABLE_ENTITY.into_response(),
+        };
+        Json(json!({"data": {
+            "latest_version": 1, "type": key_type, "supports_signing": true,
+            "soft_deleted": false,
+            "keys": {"1": {"name": key_type, "public_key": material}}
+        }}))
+        .into_response()
+    }
+
+    async fn gateway_transit_list(
+        State(fixture): State<GatewayTransitFixture>,
+        headers: HeaderMap,
+    ) -> Response {
+        if !gateway_transit_authorized(&headers) {
+            return StatusCode::FORBIDDEN.into_response();
+        }
+        let keys = fixture
+            .keys
+            .lock()
+            .unwrap()
+            .keys()
+            .cloned()
+            .collect::<Vec<_>>();
+        Json(json!({"data":{"keys":keys}})).into_response()
+    }
+
+    async fn gateway_transit_sign(
+        State(fixture): State<GatewayTransitFixture>,
+        Path(reference): Path<String>,
+        headers: HeaderMap,
+        Json(body): Json<Value>,
+    ) -> Response {
+        if !gateway_transit_authorized(&headers) {
+            return StatusCode::FORBIDDEN.into_response();
+        }
+        if !fixture.keys.lock().unwrap().contains_key(&reference) {
+            return StatusCode::NOT_FOUND.into_response();
+        }
+        fixture.signs.lock().unwrap().push((reference, body));
+        Json(json!({"data":{"signature":"vault:v1:AQ=="}})).into_response()
+    }
+
     #[tokio::test]
     #[ignore = "requires disposable MARTY_TEST_REDIS_URL and BAO_TOKEN=test-only"]
     async fn authenticated_gateway_reaches_rust_managed_key_route_without_custody() {
         assert_eq!(std::env::var("BAO_TOKEN").as_deref(), Ok("test-only"));
         let redis_url = std::env::var("MARTY_TEST_REDIS_URL").expect("disposable Redis URL");
-        const PUBLIC_PEM: &str = "-----BEGIN PUBLIC KEY-----\nMFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEaxfR8uEsQkf4vOblY6RA8ncDfYEt\n6zOg9KE5RdiYwpZP40Li/hp/m47n60p8D54WK84zV2sxXs7LtkBoN79R9Q==\n-----END PUBLIC KEY-----\n";
-        let kms = Router::new().route(
-            "/v1/transit/keys/{reference}",
-            get(|| async { Json(json!({"data": {"latest_version": 1, "supports_signing": true, "keys": {"1": {"public_key": PUBLIC_PEM}}}})) })
-                .post(|| async { StatusCode::NO_CONTENT }),
-        );
+        let fixture = GatewayTransitFixture::default();
+        let kms = Router::new()
+            .route("/v1/transit/keys", get(gateway_transit_list))
+            .route(
+                "/v1/transit/keys/{reference}",
+                get(gateway_transit_read).post(gateway_transit_create),
+            )
+            .route(
+                "/v1/transit/sign/{reference}",
+                axum::routing::post(gateway_transit_sign),
+            )
+            .with_state(fixture.clone());
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let endpoint = format!("http://{}", listener.local_addr().unwrap());
         let kms_server = tokio::spawn(async move { axum::serve(listener, kms).await.unwrap() });
         let store = SigningRegistryStore::connect(&redis_url)
             .await
             .unwrap()
-            .with_managed_openbao(Some(endpoint));
+            .with_managed_openbao(Some(endpoint.clone()));
         store
             .save("org-1", &marty_signing_keys::registry::empty_registry())
             .await
             .unwrap();
+        let profiles = SigningProfileStore::from_connection(store.connection());
+        let documents = SigningDocumentStore::from_connection(store.connection());
         let signing = signing_router(
-            "test-internal-key".into(),
+            "internal-signing-key".into(),
             Some(store),
+            Some(documents.clone()),
             None,
+            Some(profiles.clone()),
             None,
-            None,
-            None,
-            None,
+            Some("issuer.example".into()),
         );
         let signing_listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let signing_url = format!("http://{}", signing_listener.local_addr().unwrap());
@@ -7088,6 +7198,10 @@ mod tests {
         .unwrap();
         let reference = created["provider_key_name"].as_str().unwrap();
         assert_eq!(created["key"]["public_jwk"]["crv"], "P-256");
+        assert_eq!(
+            fixture.keys.lock().unwrap().get(reference).unwrap(),
+            "ecdsa-p256"
+        );
         assert!(!created.to_string().contains("test-only"));
         assert!(!created.to_string().contains("private_key"));
         let listed = gateway
@@ -7132,6 +7246,145 @@ mod tests {
         assert_eq!(detail["id"], reference);
         assert_eq!(detail["public_jwk"]["crv"], "P-256");
         assert!(!detail.to_string().contains("test-only"));
+        let issuer_did = format!(
+            "did:web:issuer.example:orgs:org-1-{}",
+            uuid::Uuid::new_v4().simple()
+        );
+        let identity = json!({
+            "organization_id": "org-1", "issuer_did": issuer_did,
+            "key_purpose": "vc_jwt_issuer", "credential_format": "SD_JWT_VC",
+            "algorithm": "EdDSA"
+        });
+        let request = |path: &str, body: &Value| {
+            Request::post(path)
+                .header("cookie", "sessionId=valid")
+                .header("content-type", "application/json")
+                .body(Body::from(body.to_string()))
+                .unwrap()
+        };
+        let denied = gateway
+            .clone()
+            .oneshot(
+                Request::post("/v1/signing-keys/issuer-identities")
+                    .header("content-type", "application/json")
+                    .body(Body::from(identity.to_string()))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(denied.status(), StatusCode::UNAUTHORIZED);
+        let foreign = gateway
+            .clone()
+            .oneshot(request(
+                "/v1/signing-keys/issuer-identities?organization_id=org-other",
+                &identity,
+            ))
+            .await
+            .unwrap();
+        assert_eq!(foreign.status(), StatusCode::FORBIDDEN);
+        let created = gateway
+            .clone()
+            .oneshot(request("/v1/signing-keys/issuer-identities", &identity))
+            .await
+            .unwrap();
+        let status = created.status();
+        let created: Value = serde_json::from_slice(
+            &to_bytes(created.into_body(), DEFAULT_MAXIMUM_BODY_BYTES)
+                .await
+                .unwrap(),
+        )
+        .unwrap();
+        assert_eq!(status, StatusCode::OK, "{created}");
+        assert_eq!(created["created"], true);
+        assert_eq!(created["identity"]["issuer_did"], issuer_did);
+        let profile = profiles.list("org-1").await.unwrap()["profiles"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|profile| profile["issuer_did"] == issuer_did)
+            .unwrap()
+            .clone();
+        let profile_reference = profile["signing_key_reference"].as_str().unwrap();
+        assert_eq!(profile["key_purpose"], "vc_jwt_issuer");
+        assert!(profile_reference.starts_with("cred-issuer-"));
+        assert_eq!(
+            fixture.keys.lock().unwrap().get(profile_reference).unwrap(),
+            "ed25519"
+        );
+        assert_eq!(
+            fixture.creates.lock().unwrap().as_slice(),
+            &[
+                (reference.to_owned(), "ecdsa-p256".into()),
+                (profile_reference.to_owned(), "ed25519".into())
+            ]
+        );
+        let resolved = gateway
+            .clone()
+            .oneshot(request(
+                "/v1/signing-keys/issuer-identities/resolve",
+                &identity,
+            ))
+            .await
+            .unwrap();
+        let status = resolved.status();
+        let resolved: Value = serde_json::from_slice(
+            &to_bytes(resolved.into_body(), DEFAULT_MAXIMUM_BODY_BYTES)
+                .await
+                .unwrap(),
+        )
+        .unwrap();
+        assert_eq!(status, StatusCode::OK, "{resolved}");
+        assert_eq!(resolved["public_jwk"]["crv"], "Ed25519");
+        let sign_body = json!({
+            "organization_id": "org-other", "issuer_did": issuer_did,
+            "key_purpose": "vc_jwt_issuer", "credential_format": "SD_JWT_VC",
+            "algorithm": "EdDSA", "payload_b64": "cGF5bG9hZA"
+        });
+        let denied_sign = gateway
+            .clone()
+            .oneshot(
+                Request::post("/internal/signing-keys/issuer-dids/sign?organization_id=org-1")
+                    .header("content-type", "application/json")
+                    .body(Body::from(sign_body.to_string()))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(denied_sign.status(), StatusCode::UNAUTHORIZED);
+        assert!(fixture.signs.lock().unwrap().is_empty());
+        let signed = gateway
+            .clone()
+            .oneshot(
+                Request::post("/internal/signing-keys/issuer-dids/sign?organization_id=org-1")
+                    .header("x-api-key", "internal-signing-key")
+                    .header("content-type", "application/json")
+                    .body(Body::from(sign_body.to_string()))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        let status = signed.status();
+        let signed: Value = serde_json::from_slice(
+            &to_bytes(signed.into_body(), DEFAULT_MAXIMUM_BODY_BYTES)
+                .await
+                .unwrap(),
+        )
+        .unwrap();
+        assert_eq!(status, StatusCode::OK, "{signed}");
+        assert_eq!(signed["ok"], true);
+        assert!(!signed["signature_b64"].as_str().unwrap().is_empty());
+        assert_eq!(
+            fixture.signs.lock().unwrap().as_slice(),
+            &[(
+                profile_reference.to_owned(),
+                json!({"input":"cGF5bG9hZA==","prehashed":false})
+            )]
+        );
+        for public in [&created, &resolved, &signed] {
+            for secret in [&endpoint[..], "test-only", profile_reference] {
+                assert!(!public.to_string().contains(secret), "{public}");
+            }
+        }
         signing_server.abort();
         kms_server.abort();
     }
