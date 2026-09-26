@@ -3593,6 +3593,7 @@ dependencies = [
  "hyper",
  "hyper-util",
  "log",
+ "marty-crypto 0.1.61",
  "marty-didcomm",
  "marty-emrtd-issuance",
  "marty-oid4vci",
