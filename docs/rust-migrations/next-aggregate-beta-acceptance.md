@@ -110,8 +110,12 @@ selected here.
    profiles with a disposable OpenBao Transit instance, requests both PKCS#10
    CSRs, and compares each parsed CSR public key with the resolved issuer key.
    It exercises KMS signing and Rust signature verification through Gateway;
-   it does not issue CA certificates or prove the DSC-to-CSCA chain. Exercise
-   the remaining rotate path through Gateway, rerun the
+   it does not issue CA certificates or prove the DSC-to-CSCA chain. A further
+   opt-in Gateway test rotates a dedicated registered Transit service, checking
+   tenant denial, the managed-service rotation boundary, one KMS rotation,
+   and persisted version history. This is not issuer-profile key rotation:
+   shared managed services are rejected by the service route, and a future
+   CSCA/DSC profile rotation needs its own reviewed contract and API. Rerun the
    route audit on protected main after the stack lands, and complete beta
    acceptance before describing the aggregate release as feature-complete.
 

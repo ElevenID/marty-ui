@@ -7393,15 +7393,7 @@ mod tests {
         kms_server.abort();
     }
 
-    #[tokio::test]
-    #[ignore = "requires independently marked disposable Redis and OpenBao instances"]
-    async fn authenticated_gateway_generates_profile_scoped_passport_csrs_in_openbao() {
-        use std::str::FromStr;
-
-        use der::{DecodePem, Encode};
-        use x509_cert::name::Name;
-        use x509_cert::request::CertReq;
-
+    async fn disposable_signing_redis_url() -> String {
         let redis_url = std::env::var("MARTY_TEST_REDIS_URL").expect("disposable Redis URL");
         let parsed_redis = url::Url::parse(&redis_url).expect("disposable Redis URL syntax");
         let redis_db = parsed_redis
@@ -7430,6 +7422,19 @@ mod tests {
             observed.as_deref() == Some(nonce.as_str()),
             "disposable Redis sentinel does not match"
         );
+        redis_url
+    }
+
+    #[tokio::test]
+    #[ignore = "requires independently marked disposable Redis and OpenBao instances"]
+    async fn authenticated_gateway_generates_profile_scoped_passport_csrs_in_openbao() {
+        use std::str::FromStr;
+
+        use der::{DecodePem, Encode};
+        use x509_cert::name::Name;
+        use x509_cert::request::CertReq;
+
+        let redis_url = disposable_signing_redis_url().await;
         let endpoint = std::env::var("MARTY_TEST_OPENBAO_URL").expect("disposable OpenBao URL");
         let parsed_bao = url::Url::parse(&endpoint).expect("disposable OpenBao URL syntax");
         assert!(
@@ -7634,6 +7639,156 @@ mod tests {
         assert_ne!(references[0], references[1]);
         assert_ne!(public_keys[0]["x"], public_keys[1]["x"]);
         signing_server.abort();
+    }
+
+    #[tokio::test]
+    #[ignore = "requires a marked disposable Redis database"]
+    async fn authenticated_gateway_rotates_only_a_dedicated_signing_service() {
+        use std::sync::atomic::AtomicUsize;
+
+        let redis_url = disposable_signing_redis_url().await;
+        let version = Arc::new(AtomicUsize::new(1));
+        let rotations = Arc::new(AtomicUsize::new(0));
+        let kms = Router::new()
+            .route(
+                "/v1/transit/keys/gateway-rotation-key",
+                get({
+                    let version = Arc::clone(&version);
+                    move |headers: HeaderMap| {
+                        let version = Arc::clone(&version);
+                        async move {
+                            if !gateway_transit_authorized(&headers) {
+                                return StatusCode::FORBIDDEN.into_response();
+                            }
+                            Json(json!({"data":{"latest_version":version.load(Ordering::SeqCst)}}))
+                                .into_response()
+                        }
+                    }
+                }),
+            )
+            .route(
+                "/v1/transit/keys/gateway-rotation-key/rotate",
+                axum::routing::post({
+                    let version = Arc::clone(&version);
+                    let rotations = Arc::clone(&rotations);
+                    move |headers: HeaderMap| {
+                        let version = Arc::clone(&version);
+                        let rotations = Arc::clone(&rotations);
+                        async move {
+                            if !gateway_transit_authorized(&headers) {
+                                return StatusCode::FORBIDDEN;
+                            }
+                            rotations.fetch_add(1, Ordering::SeqCst);
+                            version.fetch_add(1, Ordering::SeqCst);
+                            StatusCode::NO_CONTENT
+                        }
+                    }
+                }),
+            );
+        let kms_listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let endpoint = format!("http://{}", kms_listener.local_addr().unwrap());
+        let kms_server = tokio::spawn(async move { axum::serve(kms_listener, kms).await.unwrap() });
+        let store = SigningRegistryStore::connect(&redis_url).await.unwrap();
+        let service_id = format!("gateway-rotation-{}", uuid::Uuid::new_v4().simple());
+        let mut registry = store.load("org-2").await.unwrap();
+        registry["services"].as_array_mut().unwrap().push(json!({
+            "id":service_id, "name":"Gateway dedicated rotation",
+            "service_type":"openbao-transit", "endpoint":endpoint,
+            "mount":"transit", "auth_mode":"token", "auth_reference":"test-only",
+            "key_reference":"gateway-rotation-key", "algorithms":["ES256"],
+            "key_purposes":["vc_jwt_issuer"]
+        }));
+        store.save("org-2", &registry).await.unwrap();
+        let signing = signing_router(
+            "internal-signing-key".into(),
+            Some(store.clone().with_managed_openbao(Some(endpoint.clone()))),
+            None,
+            None,
+            None,
+            None,
+            None,
+        );
+        let signing_listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let signing_url = format!("http://{}", signing_listener.local_addr().unwrap());
+        let signing_server =
+            tokio::spawn(async move { axum::serve(signing_listener, signing).await.unwrap() });
+        let gateway = gateway_with_signing_http(signing_url);
+        let route = format!("/v1/signing-keys/services/{service_id}/rotate");
+        let body = json!({"overlap_days":14,"publish_updates":false});
+        let request = |path: &str, authenticated: bool| {
+            let mut builder = Request::post(path).header("content-type", "application/json");
+            if authenticated {
+                builder = builder.header("cookie", "sessionId=valid-org-2");
+            }
+            builder.body(Body::from(body.to_string())).unwrap()
+        };
+        let denied = gateway
+            .clone()
+            .oneshot(request(&route, false))
+            .await
+            .unwrap();
+        assert_eq!(denied.status(), StatusCode::UNAUTHORIZED);
+        let foreign = gateway
+            .clone()
+            .oneshot(request(&format!("{route}?organization_id=org-other"), true))
+            .await
+            .unwrap();
+        assert_eq!(foreign.status(), StatusCode::FORBIDDEN);
+        let managed = gateway
+            .clone()
+            .oneshot(request(
+                "/v1/signing-keys/services/managed-openbao-transit/rotate",
+                true,
+            ))
+            .await
+            .unwrap();
+        assert_eq!(managed.status(), StatusCode::FORBIDDEN);
+        assert_eq!(rotations.load(Ordering::SeqCst), 0);
+        let accepted = gateway
+            .clone()
+            .oneshot(request(&route, true))
+            .await
+            .unwrap();
+        let status = accepted.status();
+        let accepted: Value = serde_json::from_slice(
+            &to_bytes(accepted.into_body(), DEFAULT_MAXIMUM_BODY_BYTES)
+                .await
+                .unwrap(),
+        )
+        .unwrap();
+        assert_eq!(status, StatusCode::OK, "dedicated service rotation failed");
+        assert_eq!(accepted["ok"], true);
+        assert_eq!(accepted["service_id"], service_id);
+        assert_eq!(accepted["publication"], json!({"jwks":false,"did":false}));
+        assert_eq!(
+            accepted["rotation_state"]["provider_rotation"]["version"],
+            2
+        );
+        assert_eq!(accepted["rotation_state"]["overlap_days"], 14);
+        assert_eq!(
+            accepted["rotation_state"]["previous_versions"][0]["key_reference"],
+            "gateway-rotation-key"
+        );
+        assert_eq!(rotations.load(Ordering::SeqCst), 1);
+        let stored = store.load("org-2").await.unwrap();
+        let stored_service = stored["services"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|service| service["id"] == service_id)
+            .unwrap();
+        assert_eq!(stored_service["rotation_state"], accepted["rotation_state"]);
+        assert_eq!(stored_service["rotation_policy"]["overlap_days"], 14);
+        assert_eq!(stored_service["rotation_policy"]["auto_publish"], false);
+        assert!(store
+            .rotation_marker("org-2", stored_service)
+            .await
+            .unwrap()
+            .is_none());
+        assert!(!accepted.to_string().contains(&endpoint));
+        assert!(!accepted.to_string().contains("test-only"));
+        signing_server.abort();
+        kms_server.abort();
     }
 
     #[tokio::test]
