@@ -9,7 +9,6 @@ use base64::{engine::general_purpose::STANDARD, Engine as _};
 use marty_crypto::certificate::{load_certificate_der, load_certificate_pem};
 use marty_emrtd_issuance::{prepare_sod, SodSignatureAlgorithm};
 use marty_verification::{
-    asn1::sod::verify_sod_signature,
     trust_anchor::CscaRegistry,
     verification::emrtd::{verify_dsc_chain, ChainStatus, DocumentSignerCertificate},
 };
@@ -343,12 +342,10 @@ impl ManagedProfileSigner {
             .decode(signature)
             .map_err(|_| SignerError::InvalidManagedMaterial)?;
         let signature = cms_signature(&signature, algorithm)?;
+        // Shared eMRTD assembly verifies this KMS signature against the DSC.
         let sod = prepared
             .assemble(&signature)
             .map_err(|_| SignerError::InvalidManagedMaterial)?;
-        if !verify_sod_signature(&sod).map_err(|_| SignerError::InvalidManagedMaterial)? {
-            return Err(SignerError::InvalidManagedMaterial);
-        }
         Ok(SignedMaterial {
             sod_der_base64: STANDARD.encode(sod),
             dsc_cert_pem: pem_certificate(leaf),

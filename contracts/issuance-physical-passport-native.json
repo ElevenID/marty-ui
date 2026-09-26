@@ -20,7 +20,7 @@
     "selection": "Resolve the active organization and issuer DID profile for ICAO_EMRTD and x509_doc_signer before signing",
     "custody": "Select the signing key through the issuer profile and keep private key material inside KMS",
     "certificate_gate": "Require the attached DSC to chain to an active organization CSCA trust anchor before signing",
-    "sod_gate": "Verify the assembled SOD signature against its embedded DSC before returning material to a passport job",
+    "sod_gate": "The shared marty-emrtd-issuance PreparedSod::assemble verifies the KMS signature against the attached DSC before emitting the SOD",
     "stale_key_behavior": "If KMS uses a key different from the attached DSC, fail closed until a matching DSC is enrolled",
     "production_selector_default": false
   },
