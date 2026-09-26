@@ -4762,6 +4762,7 @@ dependencies = [
  "rand 0.8.7",
  "rand 0.9.5",
  "rcgen",
+ "redis",
  "regex",
  "reqwest",
  "rsa",

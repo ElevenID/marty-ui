@@ -215,13 +215,80 @@ async fn forward(app: &Router, method: Method, path: &str, body: Value) -> Respo
 }
 
 #[tokio::test]
-#[ignore = "requires disposable MARTY_TEST_REDIS_URL, MARTY_TEST_OPENBAO_URL, and MARTY_TEST_OPENBAO_TOKEN"]
+#[ignore = "requires independently marked disposable Redis and OpenBao instances"]
 async fn managed_passport_chain_issues_and_verifies_sod_without_exporting_private_keys() {
     let redis_url = std::env::var("MARTY_TEST_REDIS_URL").expect("disposable Redis URL");
+    let parsed_redis = url::Url::parse(&redis_url).expect("disposable Redis URL syntax");
+    let redis_db = parsed_redis
+        .path()
+        .trim_start_matches('/')
+        .parse::<u8>()
+        .ok();
+    assert!(
+        parsed_redis.host_str() == Some("127.0.0.1") && redis_db.is_some_and(|db| db >= 13),
+        "passport chain test requires an isolated loopback Redis database numbered 13 or higher"
+    );
+    let redis_nonce = std::env::var("MARTY_TEST_REDIS_DISPOSABLE_NONCE")
+        .expect("pre-provisioned disposable Redis sentinel value");
+    assert!(
+        redis_nonce.len() >= 16,
+        "disposable Redis sentinel is too short"
+    );
+    let redis_client = redis::Client::open(redis_url.as_str()).expect("disposable Redis client");
+    let mut redis = redis_client
+        .get_multiplexed_async_connection()
+        .await
+        .expect("disposable Redis connection");
+    let observed: Option<String> = redis::cmd("GET")
+        .arg("marty:tests:disposable-guard")
+        .query_async(&mut redis)
+        .await
+        .expect("disposable Redis sentinel read");
+    assert!(
+        observed.as_deref() == Some(redis_nonce.as_str()),
+        "disposable Redis sentinel does not match"
+    );
     let bao_url = std::env::var("MARTY_TEST_OPENBAO_URL").expect("disposable OpenBao URL");
+    let parsed_bao = url::Url::parse(&bao_url).expect("disposable OpenBao URL syntax");
+    assert!(
+        parsed_bao.scheme() == "http" && parsed_bao.host_str() == Some("127.0.0.1"),
+        "passport chain test requires a loopback disposable OpenBao instance"
+    );
+    let bao_url = bao_url.trim_end_matches('/').to_owned();
     let bao_token = std::env::var("MARTY_TEST_OPENBAO_TOKEN").expect("disposable OpenBao token");
-    std::env::set_var("BAO_TOKEN", &bao_token);
+    assert!(
+        std::env::var("BAO_TOKEN").ok().as_deref() == Some(bao_token.as_str()),
+        "disposable OpenBao token binding does not match"
+    );
+    let bao_nonce = std::env::var("MARTY_TEST_OPENBAO_DISPOSABLE_NONCE")
+        .expect("pre-provisioned disposable OpenBao sentinel value");
+    assert!(
+        bao_nonce.len() >= 16,
+        "disposable OpenBao sentinel is too short"
+    );
     let kms_client = reqwest::Client::new();
+    let marker = kms_client
+        .get(
+            parsed_bao
+                .join("/v1/secret/data/marty-test-disposable-guard")
+                .expect("disposable OpenBao sentinel URL"),
+        )
+        .header("X-Vault-Token", &bao_token)
+        .send()
+        .await
+        .expect("disposable OpenBao sentinel read");
+    assert!(
+        marker.status().is_success(),
+        "disposable OpenBao sentinel is absent"
+    );
+    let marker: Value = marker
+        .json()
+        .await
+        .expect("disposable OpenBao sentinel JSON");
+    assert!(
+        marker["data"]["data"]["nonce"].as_str() == Some(bao_nonce.as_str()),
+        "disposable OpenBao sentinel does not match"
+    );
     let mounted = kms_client
         .get(format!("{bao_url}/v1/sys/mounts/transit"))
         .header("X-Vault-Token", &bao_token)
