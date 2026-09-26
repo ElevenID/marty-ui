@@ -30,3 +30,7 @@ requests as behavioral evidence. Keep all key references and signing secrets
 inside Rust service/KMS boundaries. For each group, add a test that traverses
 the authenticated Gateway route and asserts the corresponding Rust handler,
 not merely Gateway route-table membership. Re-run the audit after each merge.
+
+The service certificate/CSR group is frozen first in
+`contracts/signing-service-certificate-behavior.json`, including its legacy
+success and error shapes and the stricter managed-service custody rule.
