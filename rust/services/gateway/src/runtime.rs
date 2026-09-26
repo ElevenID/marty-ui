@@ -7451,6 +7451,283 @@ mod tests {
                     .is_some_and(|id| id.starts_with("svc-vdsnc-usa-"))
                     && service["key_purposes"] == json!(["vdsnc_signing"])
             }));
+        let certificate: Value = serde_json::from_str(include_str!(
+            "../../signing-keys/tests/fixtures/document_vectors.json"
+        ))
+        .unwrap();
+        let provider_vectors: Value = serde_json::from_str(include_str!(
+            "../../signing-keys/tests/fixtures/kms_provider_vectors.json"
+        ))
+        .unwrap();
+        let provider_response = provider_vectors["public_key_cases"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|case| case["name"] == "gcp_pem_public_key")
+            .unwrap()["provider_response"]
+            .clone();
+        let kms_material = Arc::new(std::sync::Mutex::new(provider_response));
+        let kms_listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let kms_endpoint = format!("http://{}", kms_listener.local_addr().unwrap());
+        let kms_calls = Arc::new(std::sync::Mutex::new(Vec::new()));
+        let recorded_kms_calls = kms_calls.clone();
+        let served_kms_material = kms_material.clone();
+        let kms_server = tokio::spawn(async move {
+            axum::serve(
+                kms_listener,
+                Router::new().fallback(any(move |request: Request| {
+                    let response = served_kms_material.lock().unwrap().clone();
+                    let calls = recorded_kms_calls.clone();
+                    async move {
+                        let path = request.uri().path().to_owned();
+                        let authorization = request
+                            .headers()
+                            .get(header::AUTHORIZATION)
+                            .and_then(|value| value.to_str().ok())
+                            .unwrap_or_default()
+                            .to_owned();
+                        calls.lock().unwrap().push((
+                            request.method().to_string(),
+                            path.clone(),
+                            authorization.clone(),
+                        ));
+                        if authorization != "Bearer internal-test-credential" {
+                            return StatusCode::UNAUTHORIZED.into_response();
+                        }
+                        if request.method() != axum::http::Method::GET
+                            || path != "/v1/projects/p/locations/l/keyRings/r/cryptoKeys/k/cryptoKeyVersions/1/publicKey"
+                        {
+                            return StatusCode::NOT_FOUND.into_response();
+                        }
+                        Json(response).into_response()
+                    }
+                })),
+            )
+            .await
+            .unwrap()
+        });
+        verify_registry
+            .save(
+                "org-1",
+                &json!({
+                    "services": [{
+                        "id": "gateway-service", "name": "Gateway mDoc Signer",
+                        "service_type": "gcp-cloud-kms", "endpoint": kms_endpoint,
+                        "auth_mode": "workload_identity", "auth_reference": "internal-test-credential",
+                        "key_reference": "projects/p/locations/l/keyRings/r/cryptoKeys/k/cryptoKeyVersions/1",
+                        "algorithms": ["ES256"], "key_purposes": ["mdoc_dsc"]
+                    }],
+                    "default_service_id": "gateway-service",
+                    "format_defaults": {"mso_mdoc": "gateway-service"},
+                    "type_defaults": {"mdoc_dsc": "gateway-service"},
+                    "key_reference_purposes": {
+                        "gateway-service": {
+                            "projects/p/locations/l/keyRings/r/cryptoKeys/k/cryptoKeyVersions/1": ["mdoc_dsc"]
+                        }
+                    }
+                }),
+            )
+            .await
+            .unwrap();
+        let seeded = verify_registry.load("org-1").await.unwrap();
+        assert_eq!(
+            seeded["key_reference_purposes"]["gateway-service"]
+                ["projects/p/locations/l/keyRings/r/cryptoKeys/k/cryptoKeyVersions/1"],
+            json!(["mdoc_dsc"])
+        );
+        let reference = "projects/p/locations/l/keyRings/r/cryptoKeys/k/cryptoKeyVersions/1";
+        let selected =
+            marty_signing_keys::registry::resolve(marty_signing_keys::registry::ResolveRequest {
+                registry: seeded.clone(),
+                service: None,
+                keys: vec![json!({"id": reference, "algorithm": "ES256"})],
+                credential_format: Some("mso_mdoc".into()),
+                key_purpose: Some("mdoc_dsc".into()),
+                algorithm: Some("ES256".into()),
+            })
+            .unwrap();
+        assert_eq!(selected.key_reference.as_deref(), Some(reference));
+        let positive_cases = [
+            (
+                "PUT",
+                "/v1/signing-keys/services/gateway-service/certificate",
+                Some(json!({"cert_pem": certificate["certificate"]["cert_pem"]})),
+                StatusCode::OK,
+                "cert_pem",
+            ),
+            (
+                "GET",
+                "/v1/signing-keys/services/gateway-service/certificate",
+                None,
+                StatusCode::OK,
+                "cert_pem",
+            ),
+            (
+                "GET",
+                "/v1/signing-keys/services/gateway-service/mdoc-x5c",
+                None,
+                StatusCode::OK,
+                "mdoc_cose_header_hints",
+            ),
+            (
+                "GET",
+                "/v1/signing-keys/services/gateway-service/verify-current",
+                None,
+                StatusCode::OK,
+                "key_valid",
+            ),
+            (
+                "POST",
+                "/v1/signing-keys/services/gateway-service/publish-jwks",
+                Some(json!({})),
+                StatusCode::OK,
+                "jwks_document",
+            ),
+            (
+                "POST",
+                "/v1/signing-keys/services/gateway-service/publish-did-vm",
+                Some(json!({})),
+                StatusCode::OK,
+                "verification_method",
+            ),
+            ("GET", "/v1/signing-keys/jwks", None, StatusCode::OK, "x5c"),
+            (
+                "GET",
+                "/v1/signing-keys/did-document",
+                None,
+                StatusCode::OK,
+                "assertionMethod",
+            ),
+            (
+                "POST",
+                "/v1/signing-keys/config/resolve",
+                Some(
+                    json!({"credential_format":"mso_mdoc","key_purpose":"mdoc_dsc","algorithm":"ES256"}),
+                ),
+                StatusCode::OK,
+                "resolved_by",
+            ),
+            (
+                "GET",
+                "/v1/signing-keys/services/gateway-service/audit-log",
+                None,
+                StatusCode::NOT_IMPLEMENTED,
+                "key_audit_log_unavailable",
+            ),
+        ];
+        for (method, path, body, expected_status, expected_fragment) in positive_cases {
+            let mut builder = Request::builder()
+                .method(method)
+                .uri(path)
+                .header("cookie", "sessionId=valid");
+            if body.is_some() {
+                builder = builder.header("content-type", "application/json");
+            }
+            let response = gateway
+                .clone()
+                .oneshot(
+                    builder
+                        .body(Body::from(
+                            body.as_ref().map_or_else(String::new, Value::to_string),
+                        ))
+                        .unwrap(),
+                )
+                .await
+                .unwrap();
+            let status = response.status();
+            let payload = to_bytes(response.into_body(), DEFAULT_MAXIMUM_BODY_BYTES)
+                .await
+                .unwrap();
+            let text = String::from_utf8_lossy(&payload);
+            assert_eq!(status, expected_status, "{method} {path}: {text}");
+            assert!(text.contains(expected_fragment), "{method} {path}: {text}");
+            assert!(
+                !text.contains("internal-test-credential"),
+                "{method} {path}: {text}"
+            );
+            let result: Value = serde_json::from_slice(&payload).unwrap();
+            match (method, path) {
+                ("GET", "/v1/signing-keys/services/gateway-service/certificate") => {
+                    assert_eq!(result["cert_pem"], certificate["certificate"]["cert_pem"]);
+                }
+                ("PUT", "/v1/signing-keys/services/gateway-service/certificate") => {
+                    assert_eq!(
+                        result["service"]["cert_pem"],
+                        certificate["certificate"]["cert_pem"]
+                    );
+                }
+                ("GET", "/v1/signing-keys/services/gateway-service/mdoc-x5c") => {
+                    assert_eq!(result["x5c"][0], certificate["certificate"]["expected_x5c"]);
+                }
+                ("GET", "/v1/signing-keys/services/gateway-service/verify-current") => {
+                    assert_eq!(result["key_valid"], true);
+                }
+                ("POST", "/v1/signing-keys/services/gateway-service/publish-jwks") => {
+                    assert_eq!(result["jwks_document"]["key_count"], 1);
+                    assert_eq!(result["jwk"]["kid"], reference);
+                    assert_eq!(
+                        result["jwk"]["x5c"][0],
+                        certificate["certificate"]["expected_x5c"]
+                    );
+                    assert!(text.contains(reference));
+                }
+                ("POST", "/v1/signing-keys/services/gateway-service/publish-did-vm") => {
+                    assert_eq!(
+                        result["verification_method"]["x5c"][0],
+                        certificate["certificate"]["expected_x5c"]
+                    );
+                    assert_eq!(
+                        result["verification_method"]["publicKeyJwk"]["kid"],
+                        reference
+                    );
+                }
+                ("GET", "/v1/signing-keys/jwks") => {
+                    assert_eq!(
+                        result["keys"][0]["x5c"][0],
+                        certificate["certificate"]["expected_x5c"]
+                    );
+                    assert_eq!(result["keys"].as_array().unwrap().len(), 1);
+                    assert_eq!(result["keys"][0]["kid"], reference);
+                }
+                ("GET", "/v1/signing-keys/did-document") => {
+                    assert!(!result["assertionMethod"].as_array().unwrap().is_empty());
+                    assert!(result["verificationMethod"]
+                        .as_array()
+                        .unwrap()
+                        .iter()
+                        .any(|method| method["publicKeyJwk"]["kid"] == reference));
+                }
+                ("POST", "/v1/signing-keys/config/resolve") => {
+                    assert_eq!(result["service"]["id"], "gateway-service");
+                }
+                _ => {}
+            }
+        }
+        kms_material.lock().unwrap()["algorithm"] = json!("RSA_DECRYPT_OAEP_2048_SHA256");
+        let non_signing = gateway
+            .clone()
+            .oneshot(
+                Request::post("/v1/signing-keys/config/resolve")
+                    .header("cookie", "sessionId=valid")
+                    .header("content-type", "application/json")
+                    .body(Body::from(
+                        json!({"credential_format":"mso_mdoc","key_purpose":"mdoc_dsc","algorithm":"ES256"})
+                            .to_string(),
+                    ))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(non_signing.status(), StatusCode::NOT_FOUND);
+        let calls = kms_calls.lock().unwrap();
+        assert!(calls.len() >= 4, "expected live KMS checks: {calls:?}");
+        assert!(calls.iter().all(|(method, path, authorization)| {
+            method == "GET"
+                && path
+                    == "/v1/projects/p/locations/l/keyRings/r/cryptoKeys/k/cryptoKeyVersions/1/publicKey"
+                && authorization == "Bearer internal-test-credential"
+        }));
+        kms_server.abort();
         signing_server.abort();
     }
 
