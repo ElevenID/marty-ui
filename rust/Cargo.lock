@@ -4733,6 +4733,7 @@ dependencies = [
  "hyper-util",
  "jsonwebtoken",
  "log",
+ "marty-crypto 0.1.61",
  "marty-didcomm",
  "marty-emrtd-issuance",
  "marty-flow",

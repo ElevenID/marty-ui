@@ -145,10 +145,13 @@ passport cutover. The native passport candidate can now opt into
 `PASSPORT_MANAGED_ISSUER_SIGNING_ENABLED=true`: each job supplies an
 organization-scoped public `issuer_did`, resolves its profile-bound DSC, and
 asks the existing signing-keys service to sign an opaque CMS input with its
-KMS-held key. The switch defaults off and cannot be combined with a remote or
-self-signed signer. It does **not** authorize beta activation while artifact
-encryption, callback authentication, bureau handoff, and CSCA trust checks
-remain on their separate cutover gates.
+KMS-held key. Before signing, the Rust verifier checks the DSC against an active
+organization CSCA from the public-only lifecycle projection; the trusted CSCA,
+not a caller-supplied chain entry, is returned with the SOD. The switch defaults
+off and cannot be combined with a remote or self-signed signer. It does **not**
+authorize beta activation while artifact encryption, callback authentication,
+bureau handoff, DSC revocation/country policy, and acceptance remain on their
+separate cutover gates.
 
 The excluded set is exact and guarded; exclusion does not mean feature deletion:
 

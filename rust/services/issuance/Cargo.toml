@@ -51,7 +51,8 @@ mmf-runtime.workspace = true
 mmf-security.workspace = true
 marty-oid4vci = { workspace = true, features = ["lti"] }
 marty-didcomm = { workspace = true, features = ["did_web"] }
-marty-verification.workspace = true
+marty-crypto.workspace = true
+marty-verification = { workspace = true, features = ["csca"] }
 marty-emrtd-issuance = { version = "=0.2.0", git = "https://github.com/ElevenID/marty-core", rev = "83cdaeb5657679a256b7b605178a222157e2d486" }
 marty-passport-auth = { path = "../../crates/passport-auth" }
 marty-platform-clock = { path = "../../crates/platform-clock" }
