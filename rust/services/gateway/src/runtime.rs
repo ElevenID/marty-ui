@@ -7690,7 +7690,7 @@ mod tests {
         let kms_server = tokio::spawn(async move { axum::serve(kms_listener, kms).await.unwrap() });
         let store = SigningRegistryStore::connect(&redis_url).await.unwrap();
         let service_id = format!("gateway-rotation-{}", uuid::Uuid::new_v4().simple());
-        let mut registry = store.load("org-1").await.unwrap();
+        let mut registry = store.load("org-2").await.unwrap();
         registry["services"].as_array_mut().unwrap().push(json!({
             "id":service_id, "name":"Gateway dedicated rotation",
             "service_type":"openbao-transit", "endpoint":endpoint,
@@ -7698,7 +7698,7 @@ mod tests {
             "key_reference":"gateway-rotation-key", "algorithms":["ES256"],
             "key_purposes":["vc_jwt_issuer"]
         }));
-        store.save("org-1", &registry).await.unwrap();
+        store.save("org-2", &registry).await.unwrap();
         let signing = signing_router(
             "internal-signing-key".into(),
             Some(store.clone().with_managed_openbao(Some(endpoint.clone()))),
@@ -7718,7 +7718,7 @@ mod tests {
         let request = |path: &str, authenticated: bool| {
             let mut builder = Request::post(path).header("content-type", "application/json");
             if authenticated {
-                builder = builder.header("cookie", "sessionId=valid");
+                builder = builder.header("cookie", "sessionId=valid-org-2");
             }
             builder.body(Body::from(body.to_string())).unwrap()
         };
@@ -7770,7 +7770,7 @@ mod tests {
             "gateway-rotation-key"
         );
         assert_eq!(rotations.load(Ordering::SeqCst), 1);
-        let stored = store.load("org-1").await.unwrap();
+        let stored = store.load("org-2").await.unwrap();
         let stored_service = stored["services"]
             .as_array()
             .unwrap()
@@ -7780,6 +7780,11 @@ mod tests {
         assert_eq!(stored_service["rotation_state"], accepted["rotation_state"]);
         assert_eq!(stored_service["rotation_policy"]["overlap_days"], 14);
         assert_eq!(stored_service["rotation_policy"]["auto_publish"], false);
+        assert!(store
+            .rotation_marker("org-2", stored_service)
+            .await
+            .unwrap()
+            .is_none());
         assert!(!accepted.to_string().contains(&endpoint));
         assert!(!accepted.to_string().contains("test-only"));
         signing_server.abort();
