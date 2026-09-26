@@ -39,6 +39,7 @@ def test_drain_preflight_counts_artifacts_and_flows_before_backup():
     assert "LEFT JOIN flow_service.flow_definitions" in function
     assert "definition.id IS NULL" in function
     assert "physical_document_issuance" in function
+    assert "definition.extension::jsonb->>'extends_flow_type'" in function
     assert "physical_document_job" in function
     assert source.index("Assert-NoInFlightPassportJobs\n") < source.index(
         'Write-Step "Capture quiesced maintenance snapshot"'
@@ -155,7 +156,7 @@ CREATE SCHEMA flow_service;
 CREATE TABLE issuance_service.physical_document_jobs (
     status text NOT NULL, secure_artifact_ciphertext text NOT NULL
 );
-CREATE TABLE flow_service.flow_definitions (id text, flow_type text);
+CREATE TABLE flow_service.flow_definitions (id text, flow_type text, extension json);
 CREATE TABLE flow_service.flow_instances (
     flow_definition_id text, status text, context json
 );
@@ -182,14 +183,19 @@ CREATE TABLE flow_service.flow_instances (
             1,
         ),
         (
-            "INSERT INTO flow_service.flow_definitions VALUES ('physical', 'physical_document_issuance'); INSERT INTO flow_service.flow_instances VALUES ('physical', 'in_progress', '{}');",
+            "INSERT INTO flow_service.flow_definitions (id, flow_type) VALUES ('physical', 'physical_document_issuance'); INSERT INTO flow_service.flow_instances VALUES ('physical', 'in_progress', '{}');",
             flow_sql,
             1,
         ),
         (
-            "INSERT INTO flow_service.flow_definitions VALUES ('physical', 'physical_document_issuance'); INSERT INTO flow_service.flow_instances VALUES ('physical', 'completed', '{}');",
+            "INSERT INTO flow_service.flow_definitions (id, flow_type) VALUES ('physical', 'physical_document_issuance'); INSERT INTO flow_service.flow_instances VALUES ('physical', 'completed', '{}');",
             flow_sql,
             0,
+        ),
+        (
+            "INSERT INTO flow_service.flow_definitions VALUES ('custom', 'custom', '{\"extends_flow_type\":\"physical_document_issuance\"}'); INSERT INTO flow_service.flow_instances VALUES ('custom', 'in_progress', '{}');",
+            flow_sql,
+            1,
         ),
         (
             "INSERT INTO flow_service.flow_instances VALUES ('missing', 'in_progress', '{}');",
@@ -197,7 +203,7 @@ CREATE TABLE flow_service.flow_instances (
             1,
         ),
         (
-            "INSERT INTO flow_service.flow_definitions VALUES ('custom', 'custom'); INSERT INTO flow_service.flow_instances VALUES ('custom', 'created', '{\"physical_document_job\":{}}');",
+            "INSERT INTO flow_service.flow_definitions (id, flow_type) VALUES ('custom', 'custom'); INSERT INTO flow_service.flow_instances VALUES ('custom', 'created', '{\"physical_document_job\":{}}');",
             flow_sql,
             1,
         ),

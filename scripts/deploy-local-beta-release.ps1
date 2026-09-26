@@ -289,6 +289,8 @@ SELECT count(*) FROM flow_service.flow_instances AS instance
 LEFT JOIN flow_service.flow_definitions AS definition ON definition.id = instance.flow_definition_id
 WHERE (definition.id IS NULL
     OR lower(definition.flow_type) = 'physical_document_issuance'
+    OR (lower(definition.flow_type) = 'custom'
+        AND definition.extension::jsonb->>'extends_flow_type' = 'physical_document_issuance')
     OR instance.context::jsonb ? 'physical_document_job')
     AND lower(instance.status) NOT IN ('completed', 'failed', 'cancelled', 'expired')
 '@
