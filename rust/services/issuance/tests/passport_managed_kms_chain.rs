@@ -489,5 +489,40 @@ async fn managed_passport_chain_issues_and_verifies_sod_without_exporting_privat
             .await,
         Err(SignerError::UntrustedDsc)
     ));
+    let dsc_reference = dsc_profile["signing_key_reference"].as_str().unwrap();
+    let rotated = kms_client
+        .post(format!("{bao_url}/v1/transit/keys/{dsc_reference}/rotate"))
+        .header("X-Vault-Token", &bao_token)
+        .send()
+        .await
+        .unwrap_or_else(|_| panic!("disposable DSC key rotation request failed"));
+    assert!(
+        rotated.status().is_success(),
+        "disposable DSC key rotation failed"
+    );
+    let stale_certificate = signing
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method(Method::PUT)
+                .uri(scoped("/v1/signing-keys/issuer-identities/certificate"))
+                .header(CONTENT_TYPE, "application/json")
+                .body(Body::from(
+                    json!({
+                        "organization_id": organization_id,
+                        "issuer_did": issuer_did,
+                        "key_purpose": "x509_doc_signer",
+                        "credential_format": "ICAO_EMRTD",
+                        "algorithm": "ES256",
+                        "cert_pem": dsc_pem,
+                        "cert_chain_pem": csca_pem
+                    })
+                    .to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(stale_certificate.status(), StatusCode::CONFLICT);
     server.abort();
 }
