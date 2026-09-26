@@ -373,7 +373,7 @@ def test_beta_browser_contracts_run_after_chromium_and_system_dependencies() -> 
 
 
 def test_every_rust_toolchain_action_pins_the_workspace_toolchain() -> None:
-    action = "dtolnay/rust-toolchain@6c977a6ca4077a0ceb28ffbe03f59d46e9ac8772"
+    action = "dtolnay/rust-toolchain@02cb101ec7c40f2c49e1d9714d64511d8e1b74de"
     matched_steps: list[tuple[str, dict[str, object]]] = []
 
     for workflow_path in sorted((ROOT / ".github/workflows").glob("*.yml")):
