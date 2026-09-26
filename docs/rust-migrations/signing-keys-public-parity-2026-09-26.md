@@ -80,6 +80,15 @@ selection and returns only the public JWK projection. The contract is
 `contracts/signing-service-publish-jwks-behavior.json`. An isolated
 Redis/mock-KMS test passed for publication, public readback, and discovery
 metadata; this is not through-Gateway or beta acceptance.
-Thus 14 declared pairs remain without local public handlers. These new
+The paired `POST /services/{service_id}/publish-did-vm` adapter uses the same
+current KMS key and certificate binding check, then publishes a public
+assertion method to the tenant DID document and records discovery only after
+the document is stored. Its request permits `did_id`, `org_slug`, and
+`fragment`, but no caller KMS locator; the behavior is frozen in
+`contracts/signing-service-publish-did-vm-behavior.json`. An isolated
+Redis/mock-KMS route test passed for publish/readback, assertion relationship,
+certificate chain, and discovery metadata; this is not a through-Gateway or
+beta acceptance result.
+Thus 13 declared pairs remain without local public handlers. These new
 adapters still need authenticated through-Gateway runtime tests. The
 24-pair table above remains the protected-main audit baseline.
