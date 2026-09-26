@@ -4,12 +4,15 @@
 use axum::{
     body::{to_bytes, Body},
     http::{Request, StatusCode},
+    routing::any,
+    Json, Router,
 };
 use der::DecodePem;
 use marty_signing_keys::{
     documents::DocumentStore, http::router_with_dependencies, registry::RegistryStore,
 };
 use serde_json::{json, Value};
+use tokio::net::TcpListener;
 use tower::ServiceExt;
 use x509_cert::request::CertReq;
 
@@ -185,6 +188,20 @@ async fn registered_service_csr_is_signed_by_kms_through_public_rust_route() {
             .status(),
         StatusCode::NOT_FOUND
     );
+    let missing_chain = Request::builder()
+        .uri(format!(
+            "/v1/signing-keys/services/service-a/mdoc-x5c?organization_id={organization_id}"
+        ))
+        .body(Body::empty())
+        .expect("read missing mDoc certificate chain");
+    assert_eq!(
+        app.clone()
+            .oneshot(missing_chain)
+            .await
+            .expect("mDoc chain response")
+            .status(),
+        StatusCode::NOT_FOUND
+    );
     let invalid = Request::builder()
         .method("PUT")
         .uri(format!(
@@ -211,6 +228,107 @@ async fn registered_service_csr_is_signed_by_kms_through_public_rust_route() {
         app.oneshot(cross_tenant)
             .await
             .expect("cross-tenant response")
+            .status(),
+        StatusCode::NOT_FOUND
+    );
+}
+
+#[tokio::test]
+#[ignore = "requires disposable MARTY_TEST_REDIS_URL; KMS public-key endpoint is mocked"]
+async fn mdoc_chain_route_serves_only_a_certificate_bound_to_kms_public_key() {
+    let redis_url = std::env::var("MARTY_TEST_REDIS_URL").expect("disposable Redis URL");
+    let suffix = uuid::Uuid::new_v4().simple().to_string();
+    let organization_id = format!("test-mdoc-x5c-{suffix}");
+    let fixture: Value = serde_json::from_str(include_str!("fixtures/document_vectors.json"))
+        .expect("certificate vector");
+    let provider_vectors: Value =
+        serde_json::from_str(include_str!("fixtures/kms_provider_vectors.json"))
+            .expect("provider vector");
+    let provider_response = provider_vectors["public_key_cases"]
+        .as_array()
+        .expect("public key cases")
+        .iter()
+        .find(|case| case["name"] == "gcp_pem_public_key")
+        .expect("matching GCP public key vector")["provider_response"]
+        .clone();
+    let listener = TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("mock KMS listener");
+    let endpoint = format!(
+        "http://{}",
+        listener.local_addr().expect("mock KMS address")
+    );
+    tokio::spawn(async move {
+        axum::serve(
+            listener,
+            Router::new().fallback(any(move || {
+                let response = provider_response.clone();
+                async move { Json(response) }
+            })),
+        )
+        .await
+        .expect("mock KMS server");
+    });
+
+    let registry = RegistryStore::connect(&redis_url)
+        .await
+        .expect("Redis registry");
+    registry
+        .save(
+            &organization_id,
+            &json!({
+                "services": [{
+                    "id": "service-a", "name": "Test mDoc Signer",
+                    "service_type": "gcp-cloud-kms", "endpoint": endpoint,
+                    "auth_mode": "workload_identity", "auth_reference": "test-only-token",
+                    "key_reference": "projects/p/locations/l/keyRings/r/cryptoKeys/k/cryptoKeyVersions/1", "algorithms": ["ES256"],
+                    "key_purposes": ["mdoc_dsc"],
+                    "cert_pem": fixture["certificate"]["cert_pem"]
+                }],
+                "default_service_id": "service-a"
+            }),
+        )
+        .await
+        .expect("register test signing service");
+    let documents = DocumentStore::from_connection(registry.connection());
+    let app = router_with_dependencies(
+        "test-internal-only".into(),
+        Some(registry),
+        Some(documents),
+        None,
+        None,
+        None,
+        None,
+    );
+    let request = Request::builder()
+        .uri(format!(
+            "/v1/signing-keys/services/service-a/mdoc-x5c?organization_id={organization_id}"
+        ))
+        .body(Body::empty())
+        .expect("mDoc chain request");
+    let response = app
+        .clone()
+        .oneshot(request)
+        .await
+        .expect("mDoc chain response");
+    assert_eq!(response.status(), StatusCode::OK);
+    let body: Value = serde_json::from_slice(
+        &to_bytes(response.into_body(), 1_048_576)
+            .await
+            .expect("mDoc chain body"),
+    )
+    .expect("mDoc chain JSON");
+    assert_eq!(body["x5c"][0], fixture["certificate"]["expected_x5c"]);
+    assert_eq!(body["mdoc_cose_header_hints"]["x5c_length"], 1);
+    assert!(body.get("key_reference").is_none());
+    let cross_tenant = Request::builder()
+        .uri("/v1/signing-keys/services/service-a/mdoc-x5c?organization_id=another-tenant")
+        .body(Body::empty())
+        .expect("cross-tenant mDoc chain request");
+    assert_eq!(
+        app.oneshot(cross_tenant)
+            .await
+            .expect("cross-tenant mDoc chain response")
             .status(),
         StatusCode::NOT_FOUND
     );
