@@ -453,6 +453,8 @@ enum PassportHttpError {
     Validation(Value),
     #[error("Physical document changed concurrently; retry the operation")]
     ConcurrentChange,
+    #[error("Physical document has already been submitted to the bureau")]
+    AlreadySubmitted,
     #[error("Physical document repository failed")]
     Storage(sqlx::Error),
     #[error("Physical document webhook repository failed")]
@@ -488,7 +490,8 @@ impl IntoResponse for PassportHttpError {
             Self::Signer(SignerError::UntrustedDsc)
             | Self::QualityNotReady
             | Self::ActivationNotReady
-            | Self::ConcurrentChange => StatusCode::CONFLICT,
+            | Self::ConcurrentChange
+            | Self::AlreadySubmitted => StatusCode::CONFLICT,
             Self::Bureau(BureauError::InvalidWebhookSignature) => StatusCode::UNAUTHORIZED,
             Self::Bureau(BureauError::InvalidWebhookEvent) => StatusCode::UNPROCESSABLE_ENTITY,
             Self::Bureau(
@@ -672,6 +675,9 @@ async fn generate_data_groups(
 ) -> Result<Json<Value>, PassportHttpError> {
     let principal = service.authenticate(&headers)?;
     let job = service.job(&principal, &application_id).await?;
+    if job.bureau_job_id.is_some() {
+        return Err(PassportHttpError::AlreadySubmitted);
+    }
     let groups = service
         .decrypt(&job)
         .await?
@@ -699,6 +705,9 @@ async fn generate_sod(
 ) -> Result<Json<Value>, PassportHttpError> {
     let principal = service.authenticate(&headers)?;
     let job = service.job(&principal, &application_id).await?;
+    if job.bureau_job_id.is_some() {
+        return Err(PassportHttpError::AlreadySubmitted);
+    }
     let (_, signed) = service.sign(&job).await?;
     let sod = decode_python_validated_base64(&signed.sod_der_base64)
         .map_err(|_| PassportHttpError::Signer(SignerError::IncompleteMaterial))?;
@@ -718,6 +727,9 @@ async fn submit_personalization(
 ) -> Result<Json<Value>, PassportHttpError> {
     let principal = service.authenticate(&headers)?;
     let job = service.job(&principal, &application_id).await?;
+    if job.bureau_job_id.is_some() {
+        return Ok(Json(safe(&job)));
+    }
     let (artifact, signed) = service.sign(&job).await?;
     let document_type: DocumentType =
         serde_json::from_value(Value::String(job.document_type.clone()))
@@ -748,14 +760,26 @@ async fn submit_personalization(
         .await
         .map_err(PassportHttpError::Bureau)?;
     let mut patch = PassportJobPatch::new(status_from_bureau(outcome.status));
-    patch.bureau_job_id = Some(outcome.bureau_job_id);
+    patch.bureau_job_id = Some(outcome.bureau_job_id.clone());
     patch.tracking_number = Some(outcome.tracking_number);
     patch.error_code = Some(
         (outcome.status == ProductionStatus::Failed).then(|| "BUREAU_SUBMISSION_FAILED".to_owned()),
     );
     patch.error_message = Some(outcome.error_message);
     patch.submitted_at = Some(Utc::now());
-    let updated = service.update(&principal, &job, &patch).await?;
+    let updated = match service.update(&principal, &job, &patch).await {
+        Ok(updated) => updated,
+        Err(PassportHttpError::ConcurrentChange) => {
+            let current = service.job(&principal, &application_id).await?;
+            if outcome.bureau_job_id.is_none()
+                || current.bureau_job_id.as_deref() != outcome.bureau_job_id.as_deref()
+            {
+                return Err(PassportHttpError::ConcurrentChange);
+            }
+            current
+        }
+        Err(error) => return Err(error),
+    };
     Ok(Json(safe(&updated)))
 }
 

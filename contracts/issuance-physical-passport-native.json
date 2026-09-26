@@ -252,6 +252,8 @@
     "extra_fields": "forbid"
   },
   "safe_job_response_fields": ["id", "organization_id", "flow_execution_id", "application_id", "credential_template_id", "delivery_destination_profile_id", "document_type", "country_code", "secure_artifact_reference", "bureau_job_id", "tracking_number", "status", "quality_result", "error_code", "error_message", "submitted_at", "completed_at", "created_at", "updated_at"],
+  "submit_retry": "A job with a bound bureau_job_id returns its current safe tenant-scoped representation without signing or submitting again. An unbound job retains the released route's status eligibility; concurrent bind attempts preserve the first matching bureau ID and later status.",
+  "post_submission_generation": "Once a bureau job ID is bound, data-group and SOD generation return 409 so they cannot rewind the bureau lifecycle or replace the submitted SOD hash.",
   "timestamp_wire_observation": {
     "python_oracle": "released production-status route through FastAPI TestClient with a fixed UTC row; quality_result.checked_at is a separately stored datetime.isoformat string",
     "job_whole_second_utc": "2026-09-25T06:01:02Z",

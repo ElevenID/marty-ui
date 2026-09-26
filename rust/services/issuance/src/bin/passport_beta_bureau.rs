@@ -238,7 +238,21 @@ fn validate_job<'a>(
     {
         return Err(ApiError::Invalid);
     }
-    let digest = Sha256::digest(serde_json::to_vec(value).map_err(|_| ApiError::Invalid)?).to_vec();
+    // SOD signatures and the accompanying public DSC may change when an
+    // accepted request is retried after its response is lost. The document
+    // content and tenant-bound source job must remain identical.
+    let document_identity = json!({
+        "organization_id": organization_id,
+        "job_id": job_id,
+        "application_id": value["application_id"],
+        "country_code": country,
+        "document_type": document_type,
+        "data_groups": value["data_groups"],
+        "mrz": value["mrz"],
+    });
+    let digest =
+        Sha256::digest(serde_json::to_vec(&document_identity).map_err(|_| ApiError::Invalid)?)
+            .to_vec();
     Ok(JobInput {
         organization_id,
         job_id,
@@ -638,6 +652,12 @@ mod tests {
         assert_eq!(job.organization_id, "org-1");
         assert_eq!(job.digest.len(), 32);
         assert!(!job.digest.windows(7).any(|part| part == b"private"));
+        let mut resigned = value.clone();
+        resigned["sod_der_base64"] = json!("other-signature");
+        resigned["dsc_cert_pem"] = json!("renewed-public-cert");
+        assert_eq!(validate_job(&resigned, None).unwrap().digest, job.digest);
+        resigned["mrz"]["line_2"] = json!("changed-document");
+        assert_ne!(validate_job(&resigned, None).unwrap().digest, job.digest);
         assert!(validate_job(&value, Some("foreign-org")).is_err());
         let mut wrong = value;
         wrong["document_type"] = json!("VISA");
@@ -802,6 +822,60 @@ mod tests {
             serde_json::from_slice(&to_bytes(accepted.into_body(), 8192).await.unwrap()).unwrap();
         assert_eq!(response["status"], "QUEUED");
         let bureau_job_id = response["bureau_job_id"].as_str().unwrap();
+        sqlx::query("UPDATE issuance_service.passport_beta_bureau_jobs SET status = 'PRINTING' WHERE organization_id = 'test-org-a' AND source_job_id = $1")
+            .bind(&http_source)
+            .execute(&pool)
+            .await
+            .unwrap();
+        let mut resigned_payload = payload.clone();
+        resigned_payload["sod_der_base64"] = json!("changed-signature");
+        resigned_payload["dsc_cert_pem"] = json!("renewed-public-cert");
+        let retry = router(state.clone())
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/v1/personalization/jobs")
+                    .header("content-type", "application/json")
+                    .header("authorization", "Bearer synthetic-bureau-auth")
+                    .body(Body::from(resigned_payload.to_string()))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(retry.status(), StatusCode::ACCEPTED);
+        let retry: Value =
+            serde_json::from_slice(&to_bytes(retry.into_body(), 8192).await.unwrap()).unwrap();
+        assert_eq!(retry["bureau_job_id"], bureau_job_id);
+        let stored_count: i64 = sqlx::query_scalar(
+            "SELECT COUNT(*) FROM issuance_service.passport_beta_bureau_jobs WHERE organization_id = 'test-org-a' AND source_job_id = $1",
+        )
+        .bind(&http_source)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert_eq!(stored_count, 1);
+        let persisted_status: String = sqlx::query_scalar(
+            "SELECT status FROM issuance_service.passport_beta_bureau_jobs WHERE organization_id = 'test-org-a' AND source_job_id = $1",
+        )
+        .bind(&http_source)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert_eq!(persisted_status, "PRINTING");
+        resigned_payload["data_groups"]["DG1"] = json!("different-document");
+        let conflict = router(state.clone())
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/v1/personalization/jobs")
+                    .header("content-type", "application/json")
+                    .header("authorization", "Bearer synthetic-bureau-auth")
+                    .body(Body::from(resigned_payload.to_string()))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(conflict.status(), StatusCode::CONFLICT);
         let polled = router(state.clone())
             .oneshot(
                 Request::builder()
@@ -815,7 +889,7 @@ mod tests {
         assert_eq!(polled.status(), StatusCode::OK);
         let polled: Value =
             serde_json::from_slice(&to_bytes(polled.into_body(), 8192).await.unwrap()).unwrap();
-        assert_eq!(polled["status"], "QUEUED");
+        assert_eq!(polled["status"], "PRINTING");
         let batch_job_id = format!("{source}-batch");
         let batch = json!({"batch_id": "synthetic-batch", "organization_id": "test-org-a", "jobs": [{
             "job_id": batch_job_id, "application_id": "app-2", "country_code": "USA",

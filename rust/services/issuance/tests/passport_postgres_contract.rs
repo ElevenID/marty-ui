@@ -191,11 +191,17 @@ async fn exercise_native_passport_http(
         assert_eq!(body["data_groups"], json!({"DG1":"YQ==","DG2":"Yg=="}));
         Json(json!({"sod_der_base64":"U09E", "dsc_cert_pem":"synthetic-cert"}))
     }
+    type SubmitGate = Arc<Mutex<Option<(oneshot::Sender<()>, oneshot::Receiver<()>)>>>;
     async fn submit(
-        State(observed): State<Arc<Mutex<Vec<Value>>>>,
+        State((observed, gate)): State<(Arc<Mutex<Vec<Value>>>, SubmitGate)>,
         Json(body): Json<Value>,
     ) -> (StatusCode, Json<Value>) {
         observed.lock().unwrap().push(body);
+        let gated = { gate.lock().unwrap().take() };
+        if let Some((entered, release)) = gated {
+            entered.send(()).unwrap();
+            release.await.unwrap();
+        }
         (
             StatusCode::ACCEPTED,
             Json(json!({"bureau_job_id":"bureau-http", "status":"QUEUED"})),
@@ -217,6 +223,7 @@ async fn exercise_native_passport_http(
         .await
     }
     let observed = Arc::new(Mutex::new(Vec::new()));
+    let submit_gate: SubmitGate = Arc::new(Mutex::new(None));
     let stale_poll = Arc::new(AtomicBool::new(false));
     let poll_state = stale_poll.clone();
     let same_rank_poll = Arc::new(AtomicBool::new(false));
@@ -250,7 +257,7 @@ async fn exercise_native_passport_http(
                 }
             }),
         )
-        .with_state(observed.clone());
+        .with_state((observed.clone(), submit_gate.clone()));
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let base_url = format!("http://{}", listener.local_addr().unwrap());
     let server = tokio::spawn(async move { axum::serve(listener, mock).await.unwrap() });
@@ -358,6 +365,25 @@ async fn exercise_native_passport_http(
         signed["sod_sha256"],
         hex::encode(sha2::Sha256::digest(b"SOD"))
     );
+    let (entered_tx, entered_rx) = oneshot::channel();
+    let (release_tx, release_rx) = oneshot::channel();
+    *submit_gate.lock().unwrap() = Some((entered_tx, release_rx));
+    let pending_app = app.clone();
+    let pending_path = format!("{path}/submit-personalization");
+    let pending_key = key_a.to_owned();
+    let pending_submit = tokio::spawn(async move {
+        passport_http_request(
+            &pending_app,
+            "POST",
+            &pending_path,
+            Some("org-a"),
+            Some(&pending_key),
+            json!({}),
+            None,
+        )
+        .await
+    });
+    entered_rx.await.unwrap();
     let (status, submitted) = passport_http_request(
         &app,
         "POST",
@@ -370,6 +396,12 @@ async fn exercise_native_passport_http(
     .await;
     assert_eq!(status, StatusCode::OK);
     assert_eq!(submitted["status"], "SUBMITTED");
+    release_tx.send(()).unwrap();
+    let (status, raced_submit) = pending_submit.await.unwrap();
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(raced_submit["bureau_job_id"], submitted["bureau_job_id"]);
+    assert_eq!(raced_submit["status"], "SUBMITTED");
+    assert_eq!(observed.lock().unwrap().len(), 2);
     assert_eq!(observed.lock().unwrap()[0]["document_type"], "TD1");
     let (status, _) = passport_http_request(
         &app,
@@ -394,6 +426,34 @@ async fn exercise_native_passport_http(
     .await;
     assert_eq!(status, StatusCode::OK);
     assert_eq!(polled["status"], "READY_FOR_ACTIVATION");
+    for operation in ["generate-data-groups", "generate-sod"] {
+        let (status, _) = passport_http_request(
+            &app,
+            "POST",
+            &format!("{path}/{operation}"),
+            Some("org-a"),
+            Some(key_a),
+            json!({}),
+            None,
+        )
+        .await;
+        assert_eq!(status, StatusCode::CONFLICT);
+    }
+    let (status, repeated) = passport_http_request(
+        &app,
+        "POST",
+        &format!("{path}/submit-personalization"),
+        Some("org-a"),
+        Some(key_a),
+        json!({}),
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(repeated["status"], "READY_FOR_ACTIVATION");
+    assert_eq!(repeated["bureau_job_id"], "bureau-http");
+    assert_eq!(repeated, polled);
+    assert_eq!(observed.lock().unwrap().len(), 2);
     let webhook = json!({"organization_id":"org-a", "bureau_job_id":"bureau-http", "status":"SHIPPED", "tracking_number":"webhook-tracking"});
     let (status, _) = passport_http_request(
         &app,
@@ -472,6 +532,20 @@ async fn exercise_native_passport_http(
     .await;
     assert_eq!(status, StatusCode::OK);
     assert_eq!(active["status"], "ACTIVE");
+    let (status, repeated_active) = passport_http_request(
+        &app,
+        "POST",
+        &format!("{path}/submit-personalization"),
+        Some("org-a"),
+        Some(key_a),
+        json!({}),
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(repeated_active["status"], "ACTIVE");
+    assert_eq!(repeated_active, active);
+    assert_eq!(observed.lock().unwrap().len(), 2);
     let job = repository
         .get(
             &keyring.authenticate(Some("org-a"), Some(key_a)).unwrap(),
