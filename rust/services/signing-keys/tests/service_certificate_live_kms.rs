@@ -321,6 +321,24 @@ async fn mdoc_chain_route_serves_only_a_certificate_bound_to_kms_public_key() {
     assert_eq!(body["x5c"][0], fixture["certificate"]["expected_x5c"]);
     assert_eq!(body["mdoc_cose_header_hints"]["x5c_length"], 1);
     assert!(body.get("key_reference").is_none());
+    let verify = Request::builder()
+        .uri(format!(
+            "/v1/signing-keys/services/service-a/verify-current?organization_id={organization_id}"
+        ))
+        .body(Body::empty())
+        .expect("verify current KMS key request");
+    let verified = app.clone().oneshot(verify).await.expect("KMS key response");
+    assert_eq!(verified.status(), StatusCode::OK);
+    let verified: Value = serde_json::from_slice(
+        &to_bytes(verified.into_body(), 1_048_576)
+            .await
+            .expect("KMS key response body"),
+    )
+    .expect("KMS key verification JSON");
+    assert_eq!(verified["key_valid"], true);
+    assert_eq!(verified["checks"]["algorithm_supported"], true);
+    assert!(verified.get("public_jwk").is_none());
+    assert!(verified.get("key_reference").is_none());
     let cross_tenant = Request::builder()
         .uri("/v1/signing-keys/services/service-a/mdoc-x5c?organization_id=another-tenant")
         .body(Body::empty())

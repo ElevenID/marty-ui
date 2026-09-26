@@ -68,6 +68,11 @@ header hints. Its intentional omission of the legacy public key-reference
 field is recorded in `contracts/signing-mdoc-x5c-behavior.json`. Its isolated
 Redis/mock-KMS route test passed for a matching certificate and rejected a
 cross-tenant read; this is not a through-Gateway or beta acceptance test.
-Thus 16 declared pairs remain without local public handlers. These new
+The `GET /services/{service_id}/verify-current` adapter restores the legacy
+check names while deriving supported algorithms from the current KMS public
+key and registered service policy, including ES384, ES512, PS256, and EdDSA.
+Its response contains no public key or custody coordinates; the behavior is
+frozen in `contracts/signing-service-verify-current-behavior.json`.
+Thus 15 declared pairs remain without local public handlers. These new
 adapters still need authenticated through-Gateway runtime tests. The
 24-pair table above remains the protected-main audit baseline.
