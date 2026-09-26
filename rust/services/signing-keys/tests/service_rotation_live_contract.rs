@@ -7,6 +7,7 @@ use axum::{
     Json, Router,
 };
 use marty_signing_keys::{
+    documents::{did_storage_key, DocumentStore, PublishDidRequest, PublishJwkRequest},
     http::router_with_dependencies,
     registry::{storage_key, RegistryError, RegistryStore},
 };
@@ -104,6 +105,7 @@ async fn reconcile(
 #[tokio::test]
 #[ignore = "requires disposable MARTY_TEST_REDIS_URL"]
 async fn public_rotation_updates_state_only_after_kms_success() {
+    const PUBLIC_KEY_PEM: &str = "-----BEGIN PUBLIC KEY-----\nMFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEaxfR8uEsQkf4vOblY6RA8ncDfYEt\n6zOg9KE5RdiYwpZP40Li/hp/m47n60p8D54WK84zV2sxXs7LtkBoN79R9Q==\n-----END PUBLIC KEY-----\n";
     let redis_url = std::env::var("MARTY_TEST_REDIS_URL").expect("disposable Redis URL");
     let rotations = Arc::new(AtomicUsize::new(0));
     let latest_version = Arc::new(AtomicUsize::new(2));
@@ -112,15 +114,35 @@ async fn public_rotation_updates_state_only_after_kms_success() {
     let rotation_gate = Arc::new(Mutex::new(
         None::<(oneshot::Sender<()>, oneshot::Receiver<()>)>,
     ));
+    let public_key_gate = Arc::new(Mutex::new(
+        None::<(oneshot::Sender<()>, oneshot::Receiver<()>)>,
+    ));
     let kms = Router::new()
         .route(
             "/v1/transit/keys/signing-key",
             get({
                 let latest_version = Arc::clone(&latest_version);
+                let public_key_gate = Arc::clone(&public_key_gate);
                 move || {
                     let latest_version = Arc::clone(&latest_version);
+                    let public_key_gate = Arc::clone(&public_key_gate);
                     async move {
-                        Json(json!({"data": {"latest_version": latest_version.load(Ordering::SeqCst)}}))
+                        let gated = { public_key_gate.lock().unwrap().take() };
+                        if let Some((entered, release)) = gated {
+                            entered.send(()).unwrap();
+                            let _ = release.await;
+                        }
+                        let version = latest_version.load(Ordering::SeqCst);
+                        Json(json!({"data": {
+                            "latest_version": version, "type": "ecdsa-p256",
+                            "keys": {
+                                "2": {"public_key": PUBLIC_KEY_PEM},
+                                "3": {"public_key": PUBLIC_KEY_PEM},
+                                "4": {"public_key": PUBLIC_KEY_PEM},
+                                "5": {"public_key": PUBLIC_KEY_PEM},
+                                "6": {"public_key": PUBLIC_KEY_PEM}
+                            }
+                        }}))
                     }
                 }
             }),
@@ -223,6 +245,87 @@ async fn public_rotation_updates_state_only_after_kms_success() {
         None,
         None,
     );
+    let publication_documents = DocumentStore::from_connection(store.connection());
+    let publication_app = router_with_dependencies(
+        "test-internal-key".into(),
+        Some(store.clone()),
+        Some(publication_documents.clone()),
+        None,
+        None,
+        None,
+        Some("example.test".into()),
+    );
+    let (entered, entered_rx) = oneshot::channel();
+    let (release_tx, release) = oneshot::channel();
+    *public_key_gate.lock().unwrap() = Some((entered, release));
+    let publishing_app = publication_app.clone();
+    let publishing_organization = organization_id.clone();
+    let publishing = tokio::spawn(async move {
+        publishing_app
+            .oneshot(
+                Request::post(format!(
+                    "/v1/signing-keys/services/service-a/publish-jwks?organization_id={publishing_organization}"
+                ))
+                .body(Body::empty())
+                .unwrap(),
+            )
+            .await
+            .unwrap()
+    });
+    tokio::time::timeout(std::time::Duration::from_secs(5), entered_rx)
+        .await
+        .unwrap()
+        .unwrap();
+    let rotations_before_publication = rotations.load(Ordering::SeqCst);
+    assert_eq!(
+        rotate(&competing_app, &organization_id, "service-a", json!({}))
+            .await
+            .0,
+        StatusCode::CONFLICT
+    );
+    assert_eq!(
+        rotations.load(Ordering::SeqCst),
+        rotations_before_publication
+    );
+    release_tx.send(()).unwrap();
+    let published = publishing.await.unwrap();
+    assert_eq!(published.status(), StatusCode::OK);
+    assert_eq!(
+        publication_documents.jwks(&organization_id).await.unwrap()["keys"]
+            .as_array()
+            .unwrap()
+            .len(),
+        1
+    );
+    let (entered, entered_rx) = oneshot::channel();
+    let (release_tx, release) = oneshot::channel();
+    *public_key_gate.lock().unwrap() = Some((entered, release));
+    let did_app = publication_app.clone();
+    let did_organization = organization_id.clone();
+    let did_publication = tokio::spawn(async move {
+        did_app
+            .oneshot(
+                Request::post(format!(
+                    "/v1/signing-keys/services/service-a/publish-did-vm?organization_id={did_organization}"
+                ))
+                .body(Body::empty())
+                .unwrap(),
+            )
+            .await
+            .unwrap()
+    });
+    tokio::time::timeout(std::time::Duration::from_secs(5), entered_rx)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(
+        rotate(&competing_app, &organization_id, "service-a", json!({}))
+            .await
+            .0,
+        StatusCode::CONFLICT
+    );
+    release_tx.send(()).unwrap();
+    assert_eq!(did_publication.await.unwrap().status(), StatusCode::OK);
     let (status, mut stale_config) =
         public_config_request(&app, &organization_id, "GET", json!({})).await;
     assert_eq!(status, StatusCode::OK);
@@ -319,9 +422,13 @@ async fn public_rotation_updates_state_only_after_kms_success() {
         stored["services"][0]["rotation_state"]["last_rotated_at"],
         completed["rotated_at"]
     );
-    let (config_status, _) =
+    let (config_status, saved_response) =
         public_config_request(&competing_app, &organization_id, "PATCH", stale_config).await;
     assert_eq!(config_status, StatusCode::OK);
+    assert_eq!(
+        saved_response["services"][0]["name"],
+        "Renamed during rotation"
+    );
     let merged = store.load(&organization_id).await.unwrap();
     assert_eq!(merged["services"][0]["name"], "Renamed during rotation");
     assert_eq!(
@@ -484,6 +591,88 @@ async fn public_rotation_updates_state_only_after_kms_success() {
     assert_eq!(status, StatusCode::OK);
     let rebound = store.load(&organization_id).await.unwrap();
     assert_eq!(rebound["services"][0]["rotation_state"], json!({}));
+    let unresolved_operation = needs_reconcile["services"][0]["rotation_state"]
+        ["reconcile_required"]["operation_id"]
+        .as_str()
+        .unwrap();
+    let status_response = app
+        .clone()
+        .oneshot(
+            Request::get(format!(
+                "/internal/registry/{organization_id}/services/service-a/rotation-reconcile"
+            ))
+            .header("x-api-key", "test-internal-key")
+            .body(Body::empty())
+            .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(status_response.status(), StatusCode::OK);
+    let status_body: Value = serde_json::from_slice(
+        &to_bytes(status_response.into_body(), usize::MAX)
+            .await
+            .unwrap(),
+    )
+    .unwrap();
+    assert_eq!(status_body["reconcile_required"], true);
+    assert_eq!(status_body["operation_id"], unresolved_operation);
+    let replacement_marker = json!({
+        "operation_id": uuid::Uuid::new_v4().to_string(),
+        "service_id": "service-a",
+        "key_reference": "replacement-key",
+        "started_at": chrono::Utc::now().to_rfc3339(),
+        "baseline_version": 1,
+    });
+    let lease = store
+        .acquire_rotation_lease(&organization_id)
+        .await
+        .unwrap()
+        .unwrap();
+    store
+        .create_rotation_marker(
+            &organization_id,
+            &rebound["services"][0],
+            &replacement_marker,
+            &lease,
+        )
+        .await
+        .unwrap();
+    lease.release().await.unwrap();
+    assert_eq!(
+        store
+            .rotation_markers_for_service(&organization_id, "service-a")
+            .await
+            .unwrap()
+            .len(),
+        2
+    );
+    let lease = store
+        .acquire_rotation_lease(&organization_id)
+        .await
+        .unwrap()
+        .unwrap();
+    store
+        .clear_rotation_marker(
+            &organization_id,
+            &rebound["services"][0],
+            &replacement_marker,
+            &lease,
+        )
+        .await
+        .unwrap();
+    lease.release().await.unwrap();
+    assert_eq!(
+        reconcile(
+            &app,
+            &organization_id,
+            "service-a",
+            unresolved_operation,
+            true,
+        )
+        .await
+        .0,
+        StatusCode::CONFLICT
+    );
     let (status, mut rebound_to_original) =
         public_config_request(&app, &organization_id, "GET", json!({})).await;
     assert_eq!(status, StatusCode::OK);
@@ -693,10 +882,124 @@ async fn public_rotation_updates_state_only_after_kms_success() {
             .await,
         Err(RegistryError::Conflict)
     ));
+    let before_jwks = publication_documents.jwks(&organization_id).await.unwrap();
+    let stale_jwk = json!({
+        "kty": "EC", "crv": "P-256",
+        "x": "axfR8uEsQkf4vOblY6RA8ncDfYEt6zOg9KE5RdiYwpY",
+        "y": "T-NC4v4af5uO5-tKfA-eFivOM1drMV7Oy7ZAaDe_UfU"
+    });
+    assert!(publication_documents
+        .publish_jwk_with_lease(
+            &organization_id,
+            "service-a",
+            PublishJwkRequest {
+                jwk: stale_jwk.clone(),
+                key_reference: Some("stale-key".into()),
+                cert_pem: None,
+                cert_chain_pem: None,
+            },
+            &old_lease,
+        )
+        .await
+        .is_err());
+    assert_eq!(
+        publication_documents.jwks(&organization_id).await.unwrap(),
+        before_jwks
+    );
+    let did_key = did_storage_key(&organization_id, None);
+    let before_did: Option<String> = connection.get(&did_key).await.unwrap();
+    assert!(publication_documents
+        .publish_did_with_lease(
+            &organization_id,
+            "service-a",
+            PublishDidRequest {
+                jwk: stale_jwk,
+                public_domain: "example.test".into(),
+                did_id: None,
+                org_slug: Some(organization_id.to_lowercase()),
+                fragment: Some("stale-after-lease".into()),
+                key_reference: Some("signing-key".into()),
+                cert_pem: None,
+                cert_chain_pem: None,
+                relationship: Default::default(),
+            },
+            &old_lease,
+        )
+        .await
+        .is_err());
+    let after_did: Option<String> = connection.get(&did_key).await.unwrap();
+    assert_eq!(after_did, before_did);
     old_lease.release().await.unwrap();
     let owner: String = connection.get(&lease_key).await.unwrap();
     assert_eq!(owner, "replacement-owner");
     let _: () = connection.del(&lease_key).await.unwrap();
     let _: () = connection.del(storage_key(&organization_id)).await.unwrap();
     server.abort();
+}
+
+#[tokio::test]
+#[ignore = "requires disposable MARTY_TEST_REDIS_URL"]
+async fn lost_pending_write_response_keeps_registry_and_marker_together() {
+    let redis_url = std::env::var("MARTY_TEST_REDIS_URL").expect("disposable Redis URL");
+    let organization_id = format!("test-pending-{}", uuid::Uuid::new_v4().simple());
+    let store = RegistryStore::connect(&redis_url).await.unwrap();
+    let initial = store
+        .save(
+            &organization_id,
+            &json!({"services": [{
+                "id": "service-a", "service_type": "openbao-transit",
+                "endpoint": "https://kms.example.test", "mount": "transit",
+                "key_reference": "signing-key", "algorithms": ["ES256"]
+            }]}),
+        )
+        .await
+        .unwrap();
+    let service = &initial["services"][0];
+    let marker = json!({
+        "operation_id": uuid::Uuid::new_v4().to_string(),
+        "service_id": "service-a",
+        "key_reference": "signing-key",
+        "started_at": chrono::Utc::now().to_rfc3339(),
+        "baseline_version": 3,
+        "prior_rotation_state": {},
+        "overlap_days": 7,
+        "activate_at": chrono::Utc::now().to_rfc3339(),
+        "publish_updates": false,
+    });
+    let mut pending = initial.clone();
+    pending["services"][0]["rotation_state"]["reconcile_required"] = marker.clone();
+    let lease = store
+        .acquire_rotation_lease(&organization_id)
+        .await
+        .unwrap()
+        .unwrap();
+    let _lost_response = store
+        .save_pending_rotation_with_marker(&organization_id, service, &pending, &marker, &lease)
+        .await
+        .unwrap();
+    lease.release().await.unwrap();
+    let persisted = store.load(&organization_id).await.unwrap();
+    assert_eq!(
+        persisted["services"][0]["rotation_state"]["reconcile_required"],
+        marker
+    );
+    assert_eq!(
+        store
+            .rotation_markers_for_service(&organization_id, "service-a")
+            .await
+            .unwrap(),
+        vec![marker.clone()]
+    );
+    let lease = store
+        .acquire_rotation_lease(&organization_id)
+        .await
+        .unwrap()
+        .unwrap();
+    store
+        .clear_rotation_marker(&organization_id, service, &marker, &lease)
+        .await
+        .unwrap();
+    lease.release().await.unwrap();
+    let mut connection = store.connection();
+    let _: () = connection.del(storage_key(&organization_id)).await.unwrap();
 }

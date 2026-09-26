@@ -1079,26 +1079,25 @@ async fn save_public_config(
                 .cloned()
                 .unwrap_or_else(|| json!({}));
         }
-        store
+        let normalized = store
             .save_requested_with_rotation_lease(&scope.organization_id, &body, &existing, &lease)
-            .await
+            .await?;
+        Ok(store
+            .with_managed_service(&scope.organization_id, normalized)
+            .await)
     }
     .await;
-    let released = lease.release().await;
-    match (saved, released) {
-        (Ok(_), Ok(())) => match store.load(&scope.organization_id).await {
-            Ok(registry) => Json(public_config_document(&state, registry)).into_response(),
-            Err(error) => public_error(StatusCode::SERVICE_UNAVAILABLE, &error.to_string()),
-        },
-        (Err(registry::RegistryError::Conflict), _) => public_error(
+    let _ = lease.release().await;
+    match saved {
+        Ok(registry) => Json(public_config_document(&state, registry)).into_response(),
+        Err(registry::RegistryError::Conflict) => public_error(
             StatusCode::CONFLICT,
             "Signing registry update is already in progress.",
         ),
-        (Err(registry::RegistryError::Invalid(detail)), _) => {
+        Err(registry::RegistryError::Invalid(detail)) => {
             public_error(StatusCode::UNPROCESSABLE_ENTITY, &detail)
         }
-        (Err(error), _) => public_error(StatusCode::SERVICE_UNAVAILABLE, &error.to_string()),
-        (Ok(_), Err(error)) => public_error(StatusCode::SERVICE_UNAVAILABLE, &error.to_string()),
+        Err(error) => public_error(StatusCode::SERVICE_UNAVAILABLE, &error.to_string()),
     }
 }
 
@@ -2107,6 +2106,40 @@ async fn registry_rotation_reconcile_status(
             "Signing registry is unavailable.",
         );
     };
+    let indexed = match store
+        .rotation_markers_for_service(&organization_id, &service_id)
+        .await
+    {
+        Ok(indexed) => indexed,
+        Err(_) => {
+            return public_error(
+                StatusCode::SERVICE_UNAVAILABLE,
+                "Rotation marker is unavailable.",
+            )
+        }
+    };
+    if let Some(marker) = indexed.first() {
+        let operations = indexed
+            .iter()
+            .map(|marker| {
+                json!({
+                    "operation_id": marker["operation_id"],
+                    "service_id": marker["service_id"],
+                    "started_at": marker["started_at"],
+                    "baseline_version": marker["baseline_version"],
+                })
+            })
+            .collect::<Vec<_>>();
+        return Json(json!({
+            "reconcile_required": true,
+            "operation_id": marker["operation_id"],
+            "service_id": marker["service_id"],
+            "started_at": marker["started_at"],
+            "baseline_version": marker["baseline_version"],
+            "operations": operations,
+            "note": "Restore the original registered KMS identity before reconciliation if the service was rebound."
+        })).into_response();
+    }
     let registry = match store.load(&organization_id).await {
         Ok(registry) => registry,
         Err(_) => {
@@ -2183,11 +2216,21 @@ async fn reconcile_registry_rotation(
             .and_then(|services| services.iter().find(|service| service["id"] == service_id))
             .cloned()
             .ok_or_else(|| public_error(StatusCode::NOT_FOUND, "Signing service not found."))?;
+        let indexed = store
+            .rotation_markers_for_service(&organization_id, &service_id)
+            .await
+            .map_err(|_| public_error(StatusCode::SERVICE_UNAVAILABLE, "Rotation marker is unavailable."))?;
         let marker = store
             .rotation_marker(&organization_id, &service)
             .await
             .map_err(|_| public_error(StatusCode::SERVICE_UNAVAILABLE, "Rotation marker is unavailable."))?
-            .ok_or_else(|| public_error(StatusCode::NOT_FOUND, "No unresolved rotation exists for this KMS key."))?;
+            .ok_or_else(|| {
+                if !indexed.is_empty() {
+                    public_error(StatusCode::CONFLICT, "Restore the original registered KMS identity before reconciliation.")
+                } else {
+                    public_error(StatusCode::NOT_FOUND, "No unresolved rotation exists for this KMS key.")
+                }
+            })?;
         if marker["operation_id"] != request.operation_id || marker["service_id"] != service_id {
             return Err(public_error(StatusCode::CONFLICT, "Rotation operation or service does not match the unresolved KMS key."));
         }
@@ -2267,13 +2310,7 @@ async fn reconcile_registry_rotation(
             "note": "Verify the current KMS public key, replace stale certificate material, and revalidate JWKS/DID publication."
         })).into_response())
     }.await;
-    let released = lease.release().await;
-    if released.is_err() {
-        return public_error(
-            StatusCode::SERVICE_UNAVAILABLE,
-            "Signing registry lease release failed.",
-        );
-    }
+    let _ = lease.release().await;
     outcome.unwrap_or_else(|response| response)
 }
 
@@ -2343,16 +2380,6 @@ async fn rotate_and_record_public_service(
             "activate_at": activate_at,
             "publish_updates": publish_updates,
         });
-        if store
-            .create_rotation_marker(&organization_id, &service, &marker, &lease)
-            .await
-            .is_err()
-        {
-            return Err(public_error(
-                StatusCode::CONFLICT,
-                "KMS rotation requires reconciliation before another attempt.",
-            ));
-        }
         rotation_state["reconcile_required"] = marker.clone();
         let recorded = registered_service_mut(&mut registry, &service_id).ok_or_else(|| {
             public_error(StatusCode::BAD_GATEWAY, "Signing registry is malformed.")
@@ -2361,17 +2388,20 @@ async fn rotate_and_record_public_service(
         if !matches!(
             tokio::time::timeout(
                 registry_timeout,
-                store.save_with_rotation_lease(&organization_id, &registry, &lease)
+                store.save_pending_rotation_with_marker(
+                    &organization_id,
+                    &service,
+                    &registry,
+                    &marker,
+                    &lease,
+                )
             )
             .await,
             Ok(Ok(_))
         ) {
-            let _ = store
-                .clear_rotation_marker(&organization_id, &service, &marker, &lease)
-                .await;
             return Err(public_error(
                 StatusCode::SERVICE_UNAVAILABLE,
-                "Signing registry could not record the pending rotation; KMS was not called.",
+                "Pending rotation storage is uncertain; KMS was not called. Check reconciliation status before retrying.",
             ));
         }
         let provider_rotation = match kms::rotate_openbao(ProviderRequest {
@@ -2873,83 +2903,112 @@ async fn publish_public_service_jwks(
     if let Err(error) = validate_service_scope(&scope.organization_id, None) {
         return error.into_response();
     }
-    let service =
-        match registered_certificate_service(&state, &scope.organization_id, &service_id).await {
-            Ok(service) => service,
-            Err(error) => return error.into_response(),
-        };
-    let Some(documents) = state.document_store.as_ref() else {
+    let Some(store) = state.registry_store.as_ref() else {
         return public_error(
             StatusCode::SERVICE_UNAVAILABLE,
-            "Signing document storage is unavailable.",
+            "Signing registry is unavailable.",
         );
     };
-    let (config, public_jwk) = match current_service_public_jwk(&service).await {
-        Ok(material) => material,
-        Err(error) => return error.into_response(),
+    let lease = match store.acquire_rotation_lease(&scope.organization_id).await {
+        Ok(Some(lease)) => lease,
+        Ok(None) | Err(registry::RegistryError::Conflict) => {
+            return public_error(
+                StatusCode::CONFLICT,
+                "Signing registry update is already in progress.",
+            )
+        }
+        Err(_) => {
+            return public_error(
+                StatusCode::SERVICE_UNAVAILABLE,
+                "Signing registry is unavailable.",
+            )
+        }
     };
-    let certificate = match checked_stored_service_certificate(
-        documents,
-        &scope.organization_id,
-        &service_id,
-        &service,
-        &public_jwk,
-    )
-    .await
-    {
-        Ok(certificate) => certificate,
-        Err(error) => return error.into_response(),
-    };
-    let publication = match documents
-        .publish_jwk(
+    let outcome = async {
+        let service =
+            match registered_certificate_service(&state, &scope.organization_id, &service_id).await
+            {
+                Ok(service) => service,
+                Err(error) => return error.into_response(),
+            };
+        let Some(documents) = state.document_store.as_ref() else {
+            return public_error(
+                StatusCode::SERVICE_UNAVAILABLE,
+                "Signing document storage is unavailable.",
+            );
+        };
+        let (config, public_jwk) = match current_service_public_jwk(&service).await {
+            Ok(material) => material,
+            Err(error) => return error.into_response(),
+        };
+        let certificate = match checked_stored_service_certificate(
+            documents,
             &scope.organization_id,
             &service_id,
-            PublishJwkRequest {
-                jwk: public_jwk,
-                key_reference: config["key_reference"].as_str().map(str::to_owned),
-                cert_pem: certificate
-                    .as_ref()
-                    .and_then(|value| value.get("cert_pem"))
-                    .and_then(Value::as_str)
-                    .map(str::to_owned),
-                cert_chain_pem: certificate
-                    .as_ref()
-                    .and_then(|value| value.get("cert_chain_pem"))
-                    .and_then(Value::as_str)
-                    .map(str::to_owned),
-            },
+            &service,
+            &public_jwk,
         )
         .await
-    {
-        Ok(publication) => publication,
-        Err(error) => return public_publication_error(error),
-    };
-    if let Err(error) = mark_service_publication_discovered(
-        &state,
-        &scope.organization_id,
-        &service_id,
-        &[("last_jwk_fetch_ok", json!(true))],
-    )
-    .await
-    {
-        return error.into_response();
+        {
+            Ok(certificate) => certificate,
+            Err(error) => return error.into_response(),
+        };
+        let publication = match documents
+            .publish_jwk_with_lease(
+                &scope.organization_id,
+                &service_id,
+                PublishJwkRequest {
+                    jwk: public_jwk,
+                    key_reference: config["key_reference"].as_str().map(str::to_owned),
+                    cert_pem: certificate
+                        .as_ref()
+                        .and_then(|value| value.get("cert_pem"))
+                        .and_then(Value::as_str)
+                        .map(str::to_owned),
+                    cert_chain_pem: certificate
+                        .as_ref()
+                        .and_then(|value| value.get("cert_chain_pem"))
+                        .and_then(Value::as_str)
+                        .map(str::to_owned),
+                },
+                &lease,
+            )
+            .await
+        {
+            Ok(publication) => publication,
+            Err(error) => return public_publication_error(error),
+        };
+        if let Err(error) = mark_service_publication_discovered(
+            &state,
+            &scope.organization_id,
+            &service_id,
+            &[("last_jwk_fetch_ok", json!(true))],
+            &lease,
+        )
+        .await
+        {
+            return error.into_response();
+        }
+        let public = match public_jwk_projection(&publication.jwk) {
+            Ok(public) => public,
+            Err(_) => return public_error(StatusCode::BAD_GATEWAY, "Published JWK is malformed."),
+        };
+        Json(json!({
+            "ok": true,
+            "service_id": service_id,
+            "message": "Public key published to organization JWKS document",
+            "jwk": public,
+            "jwks_document": {
+                "organization_id": scope.organization_id,
+                "key_count": publication.key_count,
+            },
+            "published_at": chrono::Utc::now().to_rfc3339(),
+        }))
+        .into_response()
     }
-    let public = match public_jwk_projection(&publication.jwk) {
-        Ok(public) => public,
-        Err(_) => return public_error(StatusCode::BAD_GATEWAY, "Published JWK is malformed."),
-    };
-    Json(json!({
-        "ok": true,
-        "service_id": service_id,
-        "message": "Public key published to organization JWKS document",
-        "jwk": public,
-        "jwks_document": {
-            "organization_id": scope.organization_id,
-            "key_count": publication.key_count,
-        },
-        "published_at": chrono::Utc::now().to_rfc3339(),
-    }))
-    .into_response()
+    .await;
+    let _ = lease.release().await;
+    outcome
 }
 
 #[derive(Debug, Default, Deserialize)]
@@ -2972,129 +3031,158 @@ async fn publish_public_service_did_vm(
     if let Err(error) = validate_service_scope(&scope.organization_id, None) {
         return error.into_response();
     }
-    let body = body.map(|Json(body)| body).unwrap_or_default();
-    let service =
-        match registered_certificate_service(&state, &scope.organization_id, &service_id).await {
-            Ok(service) => service,
+    let Some(store) = state.registry_store.as_ref() else {
+        return public_error(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "Signing registry is unavailable.",
+        );
+    };
+    let lease = match store.acquire_rotation_lease(&scope.organization_id).await {
+        Ok(Some(lease)) => lease,
+        Ok(None) | Err(registry::RegistryError::Conflict) => {
+            return public_error(
+                StatusCode::CONFLICT,
+                "Signing registry update is already in progress.",
+            )
+        }
+        Err(_) => {
+            return public_error(
+                StatusCode::SERVICE_UNAVAILABLE,
+                "Signing registry is unavailable.",
+            )
+        }
+    };
+    let outcome = async {
+        let body = body.map(|Json(body)| body).unwrap_or_default();
+        let service =
+            match registered_certificate_service(&state, &scope.organization_id, &service_id).await
+            {
+                Ok(service) => service,
+                Err(error) => return error.into_response(),
+            };
+        let Some(documents) = state.document_store.as_ref() else {
+            return public_error(
+                StatusCode::SERVICE_UNAVAILABLE,
+                "Signing document storage is unavailable.",
+            );
+        };
+        let Some(public_domain) = state
+            .public_domain
+            .as_deref()
+            .map(str::trim)
+            .filter(|domain| !domain.is_empty())
+        else {
+            return public_error(
+                StatusCode::SERVICE_UNAVAILABLE,
+                "Public DID authority is unavailable.",
+            );
+        };
+        let (config, public_jwk) = match current_service_public_jwk(&service).await {
+            Ok(material) => material,
             Err(error) => return error.into_response(),
         };
-    let Some(documents) = state.document_store.as_ref() else {
-        return public_error(
-            StatusCode::SERVICE_UNAVAILABLE,
-            "Signing document storage is unavailable.",
-        );
-    };
-    let Some(public_domain) = state
-        .public_domain
-        .as_deref()
-        .map(str::trim)
-        .filter(|domain| !domain.is_empty())
-    else {
-        return public_error(
-            StatusCode::SERVICE_UNAVAILABLE,
-            "Public DID authority is unavailable.",
-        );
-    };
-    let (config, public_jwk) = match current_service_public_jwk(&service).await {
-        Ok(material) => material,
-        Err(error) => return error.into_response(),
-    };
-    let certificate = match checked_stored_service_certificate(
-        documents,
-        &scope.organization_id,
-        &service_id,
-        &service,
-        &public_jwk,
-    )
-    .await
-    {
-        Ok(certificate) => certificate,
-        Err(error) => return error.into_response(),
-    };
-    let org_slug = body.org_slug.or_else(|| {
-        body.did_id
-            .is_none()
-            .then(|| scope.organization_id.to_lowercase())
-    });
-    let publication = match documents
-        .publish_did(
+        let certificate = match checked_stored_service_certificate(
+            documents,
             &scope.organization_id,
             &service_id,
-            PublishDidRequest {
-                jwk: public_jwk,
-                public_domain: public_domain.to_owned(),
-                did_id: body.did_id,
-                org_slug,
-                fragment: body.fragment,
-                key_reference: config["key_reference"].as_str().map(str::to_owned),
-                cert_pem: certificate
-                    .as_ref()
-                    .and_then(|value| value.get("cert_pem"))
-                    .and_then(Value::as_str)
-                    .map(str::to_owned),
-                cert_chain_pem: certificate
-                    .as_ref()
-                    .and_then(|value| value.get("cert_chain_pem"))
-                    .and_then(Value::as_str)
-                    .map(str::to_owned),
-                relationship: DidVerificationRelationship::AssertionMethod,
-            },
+            &service,
+            &public_jwk,
         )
         .await
-    {
-        Ok(publication) => publication,
-        Err(error) => return public_publication_error(error),
-    };
-    let public_document = match public_did_document(publication.document) {
-        Ok(document) => document,
-        Err(error) => return error.into_response(),
-    };
-    let method_id = publication.verification_method["id"].as_str();
-    let Some(method) = public_document
-        .get("verificationMethod")
-        .and_then(Value::as_array)
-        .and_then(|methods| {
-            methods
-                .iter()
-                .find(|method| method.get("id").and_then(Value::as_str) == method_id)
-        })
-        .cloned()
-    else {
-        return public_error(
-            StatusCode::BAD_GATEWAY,
-            "Published DID method is malformed.",
-        );
-    };
-    let has_x5c = method
-        .get("x5c")
-        .and_then(Value::as_array)
-        .is_some_and(|chain| !chain.is_empty());
-    if let Err(error) = mark_service_publication_discovered(
-        &state,
-        &scope.organization_id,
-        &service_id,
-        &[
-            ("did_verification_method_publish", json!(true)),
-            ("last_did_publish_ok", json!(true)),
-            ("has_x5c", json!(has_x5c)),
-        ],
-    )
-    .await
-    {
-        return error.into_response();
+        {
+            Ok(certificate) => certificate,
+            Err(error) => return error.into_response(),
+        };
+        let org_slug = body.org_slug.or_else(|| {
+            body.did_id
+                .is_none()
+                .then(|| scope.organization_id.to_lowercase())
+        });
+        let publication = match documents
+            .publish_did_with_lease(
+                &scope.organization_id,
+                &service_id,
+                PublishDidRequest {
+                    jwk: public_jwk,
+                    public_domain: public_domain.to_owned(),
+                    did_id: body.did_id,
+                    org_slug,
+                    fragment: body.fragment,
+                    key_reference: config["key_reference"].as_str().map(str::to_owned),
+                    cert_pem: certificate
+                        .as_ref()
+                        .and_then(|value| value.get("cert_pem"))
+                        .and_then(Value::as_str)
+                        .map(str::to_owned),
+                    cert_chain_pem: certificate
+                        .as_ref()
+                        .and_then(|value| value.get("cert_chain_pem"))
+                        .and_then(Value::as_str)
+                        .map(str::to_owned),
+                    relationship: DidVerificationRelationship::AssertionMethod,
+                },
+                &lease,
+            )
+            .await
+        {
+            Ok(publication) => publication,
+            Err(error) => return public_publication_error(error),
+        };
+        let public_document = match public_did_document(publication.document) {
+            Ok(document) => document,
+            Err(error) => return error.into_response(),
+        };
+        let method_id = publication.verification_method["id"].as_str();
+        let Some(method) = public_document
+            .get("verificationMethod")
+            .and_then(Value::as_array)
+            .and_then(|methods| {
+                methods
+                    .iter()
+                    .find(|method| method.get("id").and_then(Value::as_str) == method_id)
+            })
+            .cloned()
+        else {
+            return public_error(
+                StatusCode::BAD_GATEWAY,
+                "Published DID method is malformed.",
+            );
+        };
+        let has_x5c = method
+            .get("x5c")
+            .and_then(Value::as_array)
+            .is_some_and(|chain| !chain.is_empty());
+        if let Err(error) = mark_service_publication_discovered(
+            &state,
+            &scope.organization_id,
+            &service_id,
+            &[
+                ("did_verification_method_publish", json!(true)),
+                ("last_did_publish_ok", json!(true)),
+                ("has_x5c", json!(has_x5c)),
+            ],
+            &lease,
+        )
+        .await
+        {
+            return error.into_response();
+        }
+        Json(json!({
+            "ok": true,
+            "service_id": service_id,
+            "message": "Verification method published to organization DID document",
+            "verification_method": method,
+            "did_document": {
+                "id": public_document.get("id"),
+                "verification_method_count": publication.verification_method_count,
+            },
+            "published_at": chrono::Utc::now().to_rfc3339(),
+        }))
+        .into_response()
     }
-    Json(json!({
-        "ok": true,
-        "service_id": service_id,
-        "message": "Verification method published to organization DID document",
-        "verification_method": method,
-        "did_document": {
-            "id": public_document.get("id"),
-            "verification_method_count": publication.verification_method_count,
-        },
-        "published_at": chrono::Utc::now().to_rfc3339(),
-    }))
-    .into_response()
+    .await;
+    let _ = lease.release().await;
+    outcome
 }
 
 async fn mark_service_publication_discovered(
@@ -3102,6 +3190,7 @@ async fn mark_service_publication_discovered(
     organization_id: &str,
     service_id: &str,
     publication_capabilities: &[(&str, Value)],
+    lease: &RotationLease,
 ) -> Result<(), PublicSigningError> {
     let store = state.registry_store.as_ref().ok_or_else(|| {
         public_failure(
@@ -3109,78 +3198,50 @@ async fn mark_service_publication_discovered(
             "Signing registry is unavailable.",
         )
     })?;
-    let lease = store
-        .acquire_rotation_lease(organization_id)
-        .await
-        .map_err(|_| {
-            public_failure(
-                StatusCode::SERVICE_UNAVAILABLE,
-                "Signing registry is unavailable.",
-            )
-        })?
-        .ok_or_else(|| {
-            public_failure(
-                StatusCode::CONFLICT,
-                "Signing registry update is already in progress.",
-            )
-        })?;
-    let outcome = async {
-        let mut registry = store.load(organization_id).await.map_err(|_| {
-            public_failure(
-                StatusCode::SERVICE_UNAVAILABLE,
-                "Signing registry is unavailable.",
-            )
-        })?;
-        let service = registry
-            .get_mut("services")
-            .and_then(Value::as_array_mut)
-            .and_then(|services| {
-                services
-                    .iter_mut()
-                    .find(|service| service.get("id").and_then(Value::as_str) == Some(service_id))
-            })
-            .ok_or_else(|| {
-                public_failure(StatusCode::NOT_FOUND, "Signing service is unavailable.")
-            })?;
-        let provider = service["provider"].clone();
-        let capabilities = service
-            .as_object_mut()
-            .expect("registered service is an object")
-            .entry("discovered_capabilities")
-            .or_insert_with(|| json!({}));
-        let capabilities = capabilities
-            .as_object_mut()
-            .expect("normalized discovered capabilities are an object");
-        capabilities.insert("public_key_export".into(), json!(true));
-        capabilities.insert("provider".into(), provider);
-        for (name, value) in publication_capabilities {
-            capabilities.insert((*name).into(), value.clone());
-        }
-        service["updated_at"] = json!(chrono::Utc::now().to_rfc3339());
-        store
-            .save_with_rotation_lease(organization_id, &registry, &lease)
-            .await
-            .map_err(|error| {
-                public_failure(
-                    if error == registry::RegistryError::Conflict {
-                        StatusCode::CONFLICT
-                    } else {
-                        StatusCode::SERVICE_UNAVAILABLE
-                    },
-                    "Signing registry is unavailable.",
-                )
-            })?;
-        Ok(())
-    }
-    .await;
-    let released = lease.release().await;
-    released.map_err(|_| {
+    let mut registry = store.load(organization_id).await.map_err(|_| {
         public_failure(
             StatusCode::SERVICE_UNAVAILABLE,
             "Signing registry is unavailable.",
         )
     })?;
-    outcome
+    let service = registry
+        .get_mut("services")
+        .and_then(Value::as_array_mut)
+        .and_then(|services| {
+            services
+                .iter_mut()
+                .find(|service| service.get("id").and_then(Value::as_str) == Some(service_id))
+        })
+        .ok_or_else(|| public_failure(StatusCode::NOT_FOUND, "Signing service is unavailable."))?;
+    let provider = service["provider"].clone();
+    let capabilities = service
+        .as_object_mut()
+        .expect("registered service is an object")
+        .entry("discovered_capabilities")
+        .or_insert_with(|| json!({}));
+    let capabilities = capabilities
+        .as_object_mut()
+        .expect("normalized discovered capabilities are an object");
+    capabilities.insert("public_key_export".into(), json!(true));
+    capabilities.insert("provider".into(), provider);
+    for (name, value) in publication_capabilities {
+        capabilities.insert((*name).into(), value.clone());
+    }
+    service["updated_at"] = json!(chrono::Utc::now().to_rfc3339());
+    store
+        .save_with_rotation_lease(organization_id, &registry, lease)
+        .await
+        .map_err(|error| {
+            public_failure(
+                if error == registry::RegistryError::Conflict {
+                    StatusCode::CONFLICT
+                } else {
+                    StatusCode::SERVICE_UNAVAILABLE
+                },
+                "Signing registry is unavailable.",
+            )
+        })?;
+    Ok(())
 }
 
 fn compatible_public_key_algorithms(public_jwk: &Value) -> &'static [&'static str] {
@@ -5359,27 +5420,45 @@ mod public_contract_tests {
             .await
             .unwrap()
             .unwrap();
-        let busy = mark_service_publication_discovered(
-            &state,
-            &organization_id,
-            "service-a",
-            &[("jwks", json!(true))],
-        )
-        .await
-        .unwrap_err();
-        assert_eq!(busy.status, StatusCode::CONFLICT);
+        let app = router_with_dependencies(
+            "test-key".into(),
+            Some(store.clone()),
+            None,
+            None,
+            None,
+            None,
+            None,
+        );
+        let busy = app
+            .oneshot(
+                Request::post(format!(
+                    "/v1/signing-keys/services/service-a/publish-jwks?organization_id={organization_id}"
+                ))
+                .body(Body::empty())
+                .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(busy.status(), StatusCode::CONFLICT);
         lease.release().await.unwrap();
         let mut config = store.load(&organization_id).await.unwrap();
         config["services"][0]["name"] = json!("After");
         store.save(&organization_id, &config).await.unwrap();
+        let lease = store
+            .acquire_rotation_lease(&organization_id)
+            .await
+            .unwrap()
+            .unwrap();
         mark_service_publication_discovered(
             &state,
             &organization_id,
             "service-a",
             &[("jwks", json!(true))],
+            &lease,
         )
         .await
         .unwrap();
+        lease.release().await.unwrap();
         let final_registry = store.load(&organization_id).await.unwrap();
         assert_eq!(final_registry["services"][0]["name"], "After");
         assert_eq!(
