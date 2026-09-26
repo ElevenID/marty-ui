@@ -56,6 +56,19 @@ impl Config {
         let bao_addr = value(values, "BAO_ADDR");
         let bao_token =
             secret_value(values, "BAO_TOKEN")?.or(secret_value(values, "OPENBAO_SERVICE_TOKEN")?);
+        if let Some(dsc_key) = dsc_issue_gateway_key.as_deref() {
+            let reused_in_environment = values.iter().any(|(name, value)| {
+                name != "SIGNING_KEYS_DSC_ISSUE_GATEWAY_KEY"
+                    && name != "SIGNING_KEYS_DSC_ISSUE_GATEWAY_KEY_FILE"
+                    && value.contains(dsc_key)
+            });
+            if reused_in_environment || bao_token.as_deref() == Some(dsc_key) {
+                return Err(
+                    "SIGNING_KEYS_DSC_ISSUE_GATEWAY_KEY must not be reused by another configuration value"
+                        .into(),
+                );
+            }
+        }
         if bao_addr.is_some() != bao_token.is_some() {
             return Err(
                 "BAO_ADDR and BAO_TOKEN (or OPENBAO_SERVICE_TOKEN) must be configured together"
@@ -179,6 +192,19 @@ mod tests {
             "SIGNING_KEYS_DSC_ISSUE_GATEWAY_KEY".into(),
             "separate-dsc-operator-key-32-characters".into(),
         );
+        values.insert("BAO_ADDR".into(), "http://bao:8200".into());
+        values.insert(
+            "BAO_TOKEN".into(),
+            "separate-dsc-operator-key-32-characters".into(),
+        );
+        assert!(Config::from_values(&values).is_err());
+        values.insert("BAO_TOKEN".into(), "independent-bao-token".into());
+        values.insert(
+            "OTHER_SERVICE_URL".into(),
+            "redis://user:separate-dsc-operator-key-32-characters@redis:6379/2".into(),
+        );
+        assert!(Config::from_values(&values).is_err());
+        values.remove("OTHER_SERVICE_URL");
         assert!(Config::from_values(&values).is_ok());
     }
 }

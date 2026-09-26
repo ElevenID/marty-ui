@@ -677,6 +677,22 @@ foreach ($name in $requiredFlowSecrets) {
         throw "$name must be a non-placeholder value of at least 32 characters"
     }
 }
+if ($EnablePassportNative) {
+    $dscGatewayKeyName = "SIGNING_KEYS_DSC_ISSUE_GATEWAY_KEY"
+    $dscGatewayKey = Get-DotEnvValue -Path $GeneratedEnvFile -Name $dscGatewayKeyName
+    foreach ($envFile in $script:EnvFiles) {
+        foreach ($line in Get-Content -LiteralPath $envFile) {
+            $entry = $line.Trim()
+            if (-not $entry -or $entry.StartsWith("#")) { continue }
+            $parts = $entry -split "=", 2
+            if ($parts.Count -ne 2) { continue }
+            if ($envFile -eq $GeneratedEnvFile -and $parts[0].Trim() -ceq $dscGatewayKeyName) { continue }
+            if ($parts[1].Contains($dscGatewayKey)) {
+                throw "Beta DSC operator credential is reused by another beta setting"
+            }
+        }
+    }
+}
 $workloadIdentityPathNames = @(
     "MARTY_WORKLOAD_IDENTITY_CA_CERT_FILE",
     "PP_WORKLOAD_SERVER_CERT_FILE",
@@ -703,6 +719,19 @@ foreach ($name in $workloadIdentityPathNames) {
         throw "$name does not identify a readable workload identity file"
     }
     $workloadIdentityPaths[$name] = (Resolve-Path -LiteralPath $path).Path
+}
+if ($EnablePassportNative) {
+    foreach ($path in $workloadIdentityPaths.Values) {
+        try {
+            $mountedMaterial = Get-Content -LiteralPath $path -Raw -ErrorAction Stop
+        }
+        catch {
+            throw "Could not read a beta workload secret for DSC credential isolation"
+        }
+        if ($mountedMaterial.Contains($dscGatewayKey)) {
+            throw "Beta DSC operator credential is reused by a mounted workload secret"
+        }
+    }
 }
 if (-not (Get-Command openssl -ErrorAction SilentlyContinue)) {
     throw "OpenSSL is required to validate beta workload identity certificates"

@@ -246,6 +246,21 @@ impl GatewayConfig {
         if production {
             validate_production_secret("ISSUANCE_API_KEY", Some(&issuance_api_key), 16)?;
         }
+        if let Some(dsc_key) = dsc_issue_gateway_key.as_deref() {
+            let reused_in_environment = values.iter().any(|(name, value)| {
+                name != "SIGNING_KEYS_DSC_ISSUE_GATEWAY_KEY"
+                    && name != "SIGNING_KEYS_DSC_ISSUE_GATEWAY_KEY_FILE"
+                    && value.contains(dsc_key)
+            });
+            if reused_in_environment
+                || grpc_service_token.as_deref() == Some(dsc_key)
+                || issuance_api_key == dsc_key
+            {
+                return Err(error(
+                    "DSC issuance credential must not be reused by another configuration value",
+                ));
+            }
+        }
         let passport_internal_service_auth_enabled =
             boolean(values, "PASSPORT_INTERNAL_SERVICE_AUTH_ENABLED", false)?;
         if passport_internal_service_auth_enabled
@@ -824,7 +839,17 @@ mod tests {
             .contains("SIGNING_KEYS_DSC_ISSUE_GATEWAY_KEY"));
         values.insert("SIGNING_KEYS_DSC_ISSUE_GATEWAY_KEY".into(), "s".repeat(32));
         assert!(GatewayConfig::from_values(&values).is_err());
+        values.insert("SIGNING_KEYS_DSC_ISSUE_GATEWAY_KEY".into(), "g".repeat(32));
+        assert!(GatewayConfig::from_values(&values).is_err());
+        values.insert("SIGNING_KEYS_DSC_ISSUE_GATEWAY_KEY".into(), "i".repeat(32));
+        assert!(GatewayConfig::from_values(&values).is_err());
         values.insert("SIGNING_KEYS_DSC_ISSUE_GATEWAY_KEY".into(), "d".repeat(32));
+        values.insert(
+            "OTHER_SERVICE_URL".into(),
+            format!("https://example/?token={}", "d".repeat(32)),
+        );
+        assert!(GatewayConfig::from_values(&values).is_err());
+        values.remove("OTHER_SERVICE_URL");
         assert!(GatewayConfig::from_values(&values).is_ok());
         values.insert("PASSPORT_NATIVE_GATEWAY_ENABLED".into(), "false".into());
         values.remove("SIGNING_KEYS_DSC_ISSUE_GATEWAY_KEY");

@@ -39,6 +39,16 @@ def environment(service):
     raise PassportConfigurationError("Invalid beta passport service environment")
 
 
+def contains_credential(value, credential):
+    if isinstance(value, str):
+        return credential in value
+    if isinstance(value, (list, tuple)):
+        return any(contains_credential(item, credential) for item in value)
+    if isinstance(value, dict):
+        return any(contains_credential(item, credential) for item in value.values())
+    return False
+
+
 def validate_model(model, *, passport_enabled, files):
     selected = sum(Path(path).name == PROFILE for path in files)
     if selected != int(passport_enabled):
@@ -149,12 +159,27 @@ def validate_model(model, *, passport_enabled, files):
             if service.get("environment") is not None
             and environment(service).get(dsc_gateway_key_name)
         }
+        dsc_value_reused = isinstance(dsc_gateway_key, str) and (
+            any(
+                contains_credential(value, dsc_gateway_key)
+                for service in services.values()
+                if service.get("environment") is not None
+                for name, value in environment(service).items()
+                if name != dsc_gateway_key_name
+            )
+            or any(
+                contains_credential(service.get(field), dsc_gateway_key)
+                for service in services.values()
+                for field in ("command", "entrypoint")
+            )
+        )
         if not (
             isinstance(dsc_gateway_key, str)
             and len(dsc_gateway_key) >= 32
             and dsc_gateway_key == signing.get(dsc_gateway_key_name)
             and dsc_gateway_key != signing_key
             and dsc_key_holders == {"gateway", "signing-keys"}
+            and not dsc_value_reused
             and all(
                 not environment(service).get(f"{dsc_gateway_key_name}_FILE")
                 for service in services.values()
@@ -162,6 +187,23 @@ def validate_model(model, *, passport_enabled, files):
             )
         ):
             raise PassportConfigurationError("Beta DSC operator credential isolation is invalid")
+        for secret in model.get("secrets", {}).values():
+            path = secret.get("file") if isinstance(secret, dict) else None
+            if not isinstance(path, str):
+                raise PassportConfigurationError(
+                    "Beta DSC operator credential isolation cannot verify a mounted secret"
+                )
+            try:
+                with Path(path).open("rb") as mounted:
+                    material = mounted.read(1024 * 1024 + 1)
+            except OSError:
+                raise PassportConfigurationError(
+                    "Beta DSC operator credential isolation cannot verify a mounted secret"
+                ) from None
+            if len(material) > 1024 * 1024 or dsc_gateway_key.encode() in material:
+                raise PassportConfigurationError(
+                    "Beta DSC operator credential isolation is invalid"
+                )
         callback_signer_env = environment(callback_signer)
         if not (
             bureau_env.get("SERVICE_NAME") == "passport_beta_bureau"

@@ -158,6 +158,13 @@ def test_rendered_compose_environment_list_is_supported():
         "shared_dsc_gateway_key",
         "leaked_dsc_gateway_key",
         "dsc_gateway_key_file",
+        "dsc_key_as_issuance_credential",
+        "dsc_key_as_unrelated_credential",
+        "dsc_key_embedded_in_connection_string",
+        "dsc_key_as_bao_token",
+        "dsc_key_embedded_in_database_password",
+        "dsc_key_embedded_in_redis_url",
+        "dsc_key_in_service_command",
         "bureau_database_target",
         "native_database_target",
         "signing_route",
@@ -245,6 +252,29 @@ def test_partial_or_unsafe_selection_fails_closed(mutation):
         services["flow"]["environment"]["SIGNING_KEYS_DSC_ISSUE_GATEWAY_KEY"] = DSC_GATEWAY_KEY
     elif mutation == "dsc_gateway_key_file":
         services["issuance-native"]["environment"]["SIGNING_KEYS_DSC_ISSUE_GATEWAY_KEY_FILE"] = "/tmp/dsc-gateway-key"
+    elif mutation == "dsc_key_as_issuance_credential":
+        services["issuance-native"]["environment"]["ISSUANCE_API_KEY"] = DSC_GATEWAY_KEY
+    elif mutation == "dsc_key_as_unrelated_credential":
+        services["flow"]["environment"]["OTHER_SERVICE_CREDENTIAL"] = DSC_GATEWAY_KEY
+    elif mutation == "dsc_key_embedded_in_connection_string":
+        services["flow"]["environment"]["OTHER_SERVICE_URL"] = (
+            f"https://service.example/?token={DSC_GATEWAY_KEY}"
+        )
+    elif mutation == "dsc_key_as_bao_token":
+        services["signing-keys"]["environment"]["BAO_TOKEN"] = DSC_GATEWAY_KEY
+        services["passport-callback-signer"]["environment"]["BAO_TOKEN"] = DSC_GATEWAY_KEY
+    elif mutation == "dsc_key_embedded_in_database_password":
+        for name in ("issuance-native", "passport-beta-bureau"):
+            database_url = services[name]["environment"]["DATABASE_URL"]
+            services[name]["environment"]["DATABASE_URL"] = database_url.replace(
+                ":synthetic@", f":{DSC_GATEWAY_KEY}@"
+            )
+    elif mutation == "dsc_key_embedded_in_redis_url":
+        services["signing-keys"]["environment"]["SIGNING_KEYS_REDIS_URL"] = (
+            f"redis://:{DSC_GATEWAY_KEY}@redis:6379/2"
+        )
+    elif mutation == "dsc_key_in_service_command":
+        services["openbao"]["command"] = ["server", f"--token={DSC_GATEWAY_KEY}"]
     elif mutation == "bureau_database_target":
         bureau["environment"]["DATABASE_URL"] = (
             "postgresql://marty:synthetic@production.example:5432/marty"
@@ -291,7 +321,36 @@ def test_partial_or_unsafe_selection_fails_closed(mutation):
         services["gateway"]["networks"] = {"passport-callback-signing": None}
     with pytest.raises(VALIDATOR["PassportConfigurationError"]) as error:
         validate(candidate)
+    if mutation in {
+        "dsc_key_as_issuance_credential",
+        "dsc_key_as_unrelated_credential",
+        "dsc_key_embedded_in_connection_string",
+        "dsc_key_as_bao_token",
+        "dsc_key_embedded_in_database_password",
+        "dsc_key_embedded_in_redis_url",
+        "dsc_key_in_service_command",
+    }:
+        assert str(error.value) == "Beta DSC operator credential isolation is invalid"
     assert "synthetic-private-value" not in str(error.value)
+
+
+def test_mounted_secret_cannot_reuse_dsc_gateway_credential(tmp_path):
+    candidate = model()
+    mounted = tmp_path / "flow-secret"
+    mounted.write_text(f"prefix:{DSC_GATEWAY_KEY}:suffix", encoding="utf-8")
+    candidate["secrets"]["flow-secret"] = {"file": str(mounted)}
+    candidate["services"]["flow"]["secrets"] = [{"source": "flow-secret"}]
+    with pytest.raises(
+        VALIDATOR["PassportConfigurationError"],
+        match="Beta DSC operator credential isolation is invalid",
+    ):
+        validate(candidate)
+    mounted.unlink()
+    with pytest.raises(
+        VALIDATOR["PassportConfigurationError"],
+        match="cannot verify a mounted secret",
+    ):
+        validate(candidate)
 
 
 def test_compose_call_is_read_only_and_closed():
@@ -443,6 +502,11 @@ def synthetic_beta_compose_env(tmp_path):
     for file in ROOT.glob("docker-compose*.yml"):
         required.update(re.findall(r"\$\{([A-Z][A-Z0-9_]*):\?", file.read_text()))
     values = {name: "synthetic-value" for name in required}
+    for name in required:
+        if name.endswith("_FILE"):
+            fixture = tmp_path / name.lower()
+            fixture.write_text("synthetic-workload-material", encoding="utf-8")
+            values[name] = str(fixture)
     values["GRPC_SERVICE_TOKEN"] = TOKEN
     values["MARTY_SERVICES_IMAGE"] = IMAGE
     values["SIGNING_KEYS_DSC_ISSUE_GATEWAY_KEY"] = DSC_GATEWAY_KEY
