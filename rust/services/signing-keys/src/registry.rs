@@ -1160,6 +1160,43 @@ mod tests {
     static BAO_ENV_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
 
     #[test]
+    fn public_config_resolve_frozen_selection_cases() {
+        let contract: Value = serde_json::from_str(include_str!(
+            "../../../../contracts/signing-public-config-resolve-behavior.json"
+        ))
+        .expect("frozen public resolve contract");
+        for case in contract["cases"].as_array().expect("resolve cases") {
+            let mut request = case["request"].clone();
+            request["registry"] = case["registry"].clone();
+            request["keys"] = case["keys"].clone();
+            let request: ResolveRequest = serde_json::from_value(request).expect("resolve input");
+            let requires_bound_key = request.key_purpose.is_some();
+            let resolved = resolve(request).expect("registry resolution");
+            if case["expected_status"] == 404 {
+                assert!(
+                    resolved.service.is_none()
+                        || (requires_bound_key && resolved.key_reference.is_none()),
+                    "{} must not resolve",
+                    case["name"]
+                );
+                continue;
+            }
+            assert_eq!(
+                resolved.service.as_ref().map(|service| &service["id"]),
+                Some(&case["expected_service_id"]),
+                "{} service",
+                case["name"]
+            );
+            assert_eq!(
+                resolved.key_reference.as_deref(),
+                case["expected_key_reference"].as_str(),
+                "{} key",
+                case["name"]
+            );
+        }
+    }
+
+    #[test]
     fn managed_openbao_accepts_passport_profile_wire_format() {
         let managed = managed_openbao_service("http://openbao:8200", &[], true);
         assert!(managed["credential_formats"]

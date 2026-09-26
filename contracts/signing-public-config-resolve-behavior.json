@@ -1,0 +1,82 @@
+{
+  "schema_version": 1,
+  "source": "pre-Rust services/gateway/routes/signing_keys.py at parent of e1ebad979",
+  "method": "POST",
+  "path": "/v1/signing-keys/config/resolve",
+  "request_fields": ["credential_format", "key_purpose", "algorithm"],
+  "nonstring_request_fields_are_ignored": true,
+  "resolution_order": [
+    "type_defaults[credential_format]",
+    "type_defaults[key_purpose]",
+    "format_defaults[credential_format]",
+    "default_service_id",
+    "first_service_matching_all_supplied_filters"
+  ],
+  "success_fields": ["service", "resolved_by", "mdoc_signing_hints"],
+  "resolved_by_echoes_optional_request_fields_including_null": true,
+  "missing_service_status": 404,
+  "missing_purpose_bound_key_status": 404,
+  "purpose_bound_key_selection": "Prefer the service default when it is bound to the requested purpose and algorithm; otherwise select the first sorted matching alias. Never substitute an unrelated default key.",
+  "mdoc_hint_triggers": {
+    "key_purposes": ["mdoc_dsc", "vdsnc_signing", "csca"],
+    "credential_formats": ["mso_mdoc", "zk_mdoc"]
+  },
+  "mdoc_hints_when_certificate_available": ["x5c", "x5c_length", "key_reference"],
+  "mdoc_hints_when_certificate_unavailable": null,
+  "reviewed_security_tightening": "Only tenant-owned public service metadata is returned. Never return auth_reference or private key material. A certificate hint must match the selected current KMS public key, including service certificate overrides; a stale or malformed certificate fails closed.",
+  "cases": [
+    {
+      "name": "format_type_default_precedes_purpose_format_and_global_defaults",
+      "registry": {
+        "services": [
+          {"id": "type", "key_reference": "type-key"},
+          {"id": "purpose", "key_reference": "purpose-key"},
+          {"id": "format", "key_reference": "format-key"},
+          {"id": "global", "key_reference": "global-key"}
+        ],
+        "type_defaults": {"mso_mdoc": "type", "mdoc_dsc": "purpose"},
+        "format_defaults": {"mso_mdoc": "format"},
+        "default_service_id": "global"
+      },
+      "keys": [],
+      "request": {"credential_format": "mso_mdoc", "key_purpose": "mdoc_dsc"},
+      "expected_service_id": "type",
+      "expected_key_reference": "type-key"
+    },
+    {
+      "name": "purpose_and_algorithm_select_registered_alias_not_unrelated_default",
+      "registry": {
+        "services": [{"id": "managed", "key_reference": "vc-key", "key_aliases": ["dsc-256", "dsc-384"]}],
+        "default_service_id": "managed",
+        "key_reference_purposes": {
+          "managed": {"vc-key": ["vc_jwt_issuer"], "dsc-256": ["mdoc_dsc"], "dsc-384": ["mdoc_dsc"]}
+        }
+      },
+      "keys": [
+        {"id": "dsc-256", "algorithm": "ES256"},
+        {"id": "dsc-384", "algorithm": "ES384"}
+      ],
+      "request": {"credential_format": "mso_mdoc", "key_purpose": "mdoc_dsc", "algorithm": "ES384"},
+      "expected_service_id": "managed",
+      "expected_key_reference": "dsc-384"
+    },
+    {
+      "name": "no_registered_service",
+      "registry": {"services": []},
+      "keys": [],
+      "request": {"credential_format": "mso_mdoc"},
+      "expected_status": 404
+    },
+    {
+      "name": "no_key_bound_to_requested_purpose_and_algorithm",
+      "registry": {
+        "services": [{"id": "managed", "key_reference": "vc-key", "key_aliases": ["dsc-256"]}],
+        "default_service_id": "managed",
+        "key_reference_purposes": {"managed": {"dsc-256": ["mdoc_dsc"]}}
+      },
+      "keys": [{"id": "dsc-256", "algorithm": "ES256"}],
+      "request": {"key_purpose": "mdoc_dsc", "algorithm": "ES384"},
+      "expected_status": 404
+    }
+  ]
+}
