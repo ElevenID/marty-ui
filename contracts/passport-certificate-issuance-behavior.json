@@ -28,7 +28,7 @@
     "version": "X.509 v3",
     "serial": "positive unpredictable DER integer of no more than 20 octets, unique per issuing CSCA",
     "subject": "bounded validated C, O, and CN from a verified managed DSC CSR; C agrees with the active CSCA and passport issuing country",
-    "csca": "pre-enrolled active and non-revoked CA with valid self-signature, critical CA basic constraints, and keyCertSign usage; CSCA issuance is outside this action",
+    "csca": "pre-enrolled active and non-revoked CA with a verified issuer chain or self-signature, critical CA basic constraints, and keyCertSign usage; CSCA issuance is outside this action",
     "dsc": "signed by an active valid CSCA, critical non-CA basic constraints and digitalSignature usage",
     "validity": "beta issue request requires 1 to 90 whole days from server time; DSC validity must fit within issuer CSCA validity without silent truncation",
     "csr": "verify proof of possession and require its SPKI to equal the current DSC subject profile KMS public key",
