@@ -6,12 +6,13 @@ use axum::{
     Router,
 };
 use marty_signing_keys::{
-    documents::{jwks_storage_key, DocumentStore},
+    documents::{jwks_storage_key, DocumentStore, PublishJwkRequest, UpdateJwkRequest},
     http::router_with_dependencies,
     registry::{storage_key, RegistryStore},
 };
 use redis::AsyncCommands;
 use serde_json::{json, Value};
+use tokio::sync::Barrier;
 use tower::ServiceExt;
 use uuid::Uuid;
 
@@ -176,4 +177,117 @@ async fn public_key_detail_and_jwks_metadata_do_not_mutate_kms_registration() {
         let _: () = redis.del(storage_key(tenant)).await.unwrap();
         let _: () = redis.del(jwks_storage_key(tenant)).await.unwrap();
     }
+}
+
+#[tokio::test]
+#[ignore = "requires disposable MARTY_TEST_REDIS_URL"]
+async fn concurrent_jwks_publication_metadata_and_deletion_preserve_completed_mutations() {
+    let redis_url = std::env::var("MARTY_TEST_REDIS_URL").expect("disposable Redis URL");
+    let organization_id = format!("rust-key-meta-race-{}", Uuid::new_v4().simple());
+    let registry = RegistryStore::connect(&redis_url).await.unwrap();
+    let documents = DocumentStore::from_connection(registry.connection());
+    let publish = |key: String| PublishJwkRequest {
+        jwk: json!({"kty": "EC", "crv": "P-256", "x": "x", "y": "y"}),
+        key_reference: Some(key),
+        cert_pem: None,
+        cert_chain_pem: None,
+    };
+    documents
+        .publish_jwk(
+            &organization_id,
+            "metadata-service",
+            publish("meta-key".into()),
+        )
+        .await
+        .unwrap();
+
+    let barrier = std::sync::Arc::new(Barrier::new(25));
+    let mut writes = tokio::task::JoinSet::new();
+    for index in 0..24 {
+        let documents = documents.clone();
+        let organization_id = organization_id.clone();
+        let barrier = barrier.clone();
+        let request = publish(format!("key-{index:02}"));
+        writes.spawn(async move {
+            barrier.wait().await;
+            documents
+                .publish_jwk(&organization_id, &format!("service-{index:02}"), request)
+                .await
+                .unwrap();
+        });
+    }
+    let metadata_documents = documents.clone();
+    let metadata_organization_id = organization_id.clone();
+    writes.spawn(async move {
+        barrier.wait().await;
+        metadata_documents
+            .update_jwk(
+                &metadata_organization_id,
+                "meta-key",
+                UpdateJwkRequest {
+                    updates: json!({"name": "Updated metadata"}),
+                },
+            )
+            .await
+            .unwrap();
+    });
+    while let Some(result) = writes.join_next().await {
+        result.unwrap();
+    }
+    let after_publish = documents.jwks(&organization_id).await.unwrap();
+    let keys = after_publish["keys"].as_array().unwrap();
+    assert_eq!(keys.len(), 25);
+    assert!(keys
+        .iter()
+        .any(|key| { key["kid"] == "meta-key" && key["name"] == "Updated metadata" }));
+
+    let barrier = std::sync::Arc::new(Barrier::new(24));
+    let mut writes = tokio::task::JoinSet::new();
+    for index in 0..12 {
+        let documents = documents.clone();
+        let organization_id = organization_id.clone();
+        let barrier = barrier.clone();
+        writes.spawn(async move {
+            barrier.wait().await;
+            documents
+                .delete_jwk(&organization_id, &format!("key-{index:02}"))
+                .await
+                .unwrap();
+        });
+    }
+    for index in 24..36 {
+        let documents = documents.clone();
+        let organization_id = organization_id.clone();
+        let barrier = barrier.clone();
+        let request = publish(format!("key-{index:02}"));
+        writes.spawn(async move {
+            barrier.wait().await;
+            documents
+                .publish_jwk(&organization_id, &format!("service-{index:02}"), request)
+                .await
+                .unwrap();
+        });
+    }
+    while let Some(result) = writes.join_next().await {
+        result.unwrap();
+    }
+    let final_jwks = documents.jwks(&organization_id).await.unwrap();
+    let keys = final_jwks["keys"].as_array().unwrap();
+    assert_eq!(keys.len(), 25);
+    for index in 0..12 {
+        assert!(!keys
+            .iter()
+            .any(|key| key["kid"] == format!("key-{index:02}")));
+    }
+    for index in 12..36 {
+        assert!(keys
+            .iter()
+            .any(|key| key["kid"] == format!("key-{index:02}")));
+    }
+    assert!(keys
+        .iter()
+        .any(|key| { key["kid"] == "meta-key" && key["name"] == "Updated metadata" }));
+
+    let mut redis = registry.connection();
+    let _: () = redis.del(jwks_storage_key(&organization_id)).await.unwrap();
 }

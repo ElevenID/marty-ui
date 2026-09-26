@@ -5767,6 +5767,9 @@ mod public_contract_tests {
             json!(["name", "status", "aliases", "key_aliases"])
         );
         assert_eq!(behavior["routes"][2]["method"], "DELETE");
+        assert!(behavior["concurrent_mutation_rule"]
+            .as_str()
+            .is_some_and(|rule| rule.contains("atomic read-modify-write")));
     }
 
     #[tokio::test]

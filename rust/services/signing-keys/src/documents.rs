@@ -73,6 +73,68 @@ impl DocumentStore {
             .map_err(|error| DocumentError::Storage(error.to_string()))
     }
 
+    async fn mutate_jwks<T, F>(
+        &self,
+        organization_id: &str,
+        mutation: F,
+    ) -> Result<T, DocumentError>
+    where
+        F: Fn(Value) -> Result<(Value, T), DocumentError>,
+    {
+        let key = jwks_storage_key(organization_id);
+        for _ in 0..128 {
+            let mut connection = self.connection.clone();
+            let previous: Option<String> = connection
+                .get(&key)
+                .await
+                .map_err(|error| DocumentError::Storage(error.to_string()))?;
+            let document = match previous.as_deref() {
+                Some(payload) => {
+                    let document: Value = serde_json::from_str(payload)
+                        .map_err(|error| DocumentError::Corrupt(error.to_string()))?;
+                    if !document.is_object() {
+                        return Err(DocumentError::Corrupt(
+                            "JWKS document must be a JSON object".to_string(),
+                        ));
+                    }
+                    document
+                }
+                None => json!({
+                    "keys": [],
+                    "organization_id": organization_id,
+                    "updated_at": now_iso(),
+                }),
+            };
+            let (document, response) = mutation(document)?;
+            let replacement = serde_json::to_string(&document)
+                .map_err(|error| DocumentError::Invalid(error.to_string()))?;
+            let saved: i32 = redis::Script::new(
+                "local current = redis.call('GET', KEYS[1])
+                 if ARGV[1] == '0' then
+                     if current then return 0 end
+                 elseif current ~= ARGV[2] then
+                     return 0
+                 end
+                 redis.call('SET', KEYS[1], ARGV[3])
+                 return 1",
+            )
+            .key(&key)
+            .arg(if previous.is_some() { "1" } else { "0" })
+            .arg(previous.as_deref().unwrap_or_default())
+            .arg(replacement)
+            .invoke_async(&mut connection)
+            .await
+            .map_err(|error| DocumentError::Storage(error.to_string()))?;
+            if saved == 1 {
+                return Ok(response);
+            }
+            tokio::task::yield_now().await;
+        }
+        Err(DocumentError::Conflict(
+            "Concurrent JWKS updates did not settle.".to_string(),
+        ))
+    }
+
     pub async fn holder_keys(
         &self,
         organization_id: &str,
@@ -187,11 +249,12 @@ impl DocumentStore {
         service_id: &str,
         request: PublishJwkRequest,
     ) -> Result<PublishJwkResponse, DocumentError> {
-        let existing = self.jwks(organization_id).await?;
-        let response = build_jwks_document(existing, organization_id, service_id, request)?;
-        self.save(&jwks_storage_key(organization_id), &response.document)
-            .await?;
-        Ok(response)
+        self.mutate_jwks(organization_id, |existing| {
+            let response =
+                build_jwks_document(existing, organization_id, service_id, request.clone())?;
+            Ok((response.document.clone(), response))
+        })
+        .await
     }
 
     pub async fn publish_jwk_with_lease(
@@ -268,11 +331,16 @@ impl DocumentStore {
         key_id: &str,
         request: UpdateJwkRequest,
     ) -> Result<UpdateJwkResponse, DocumentError> {
-        let document = self.jwks(organization_id).await?;
-        let (document, response) = update_jwks_document(document, key_id, request)?;
-        self.save(&jwks_storage_key(organization_id), &document)
-            .await?;
-        Ok(response)
+        self.mutate_jwks(organization_id, |document| {
+            update_jwks_document(
+                document,
+                key_id,
+                UpdateJwkRequest {
+                    updates: request.updates.clone(),
+                },
+            )
+        })
+        .await
     }
 
     pub async fn delete_jwk(
@@ -280,11 +348,10 @@ impl DocumentStore {
         organization_id: &str,
         key_id: &str,
     ) -> Result<DeleteJwkResponse, DocumentError> {
-        let document = self.jwks(organization_id).await?;
-        let (document, response) = delete_jwks_document(document, key_id)?;
-        self.save(&jwks_storage_key(organization_id), &document)
-            .await?;
-        Ok(response)
+        self.mutate_jwks(organization_id, |document| {
+            delete_jwks_document(document, key_id)
+        })
+        .await
     }
 
     pub async fn load_did(
