@@ -911,7 +911,15 @@ if ($EnablePassportNative) {
             --filter "label=com.docker.compose.service=$passportService" `
             --format '{{.ID}}')
         if ($LASTEXITCODE -ne 0) { throw "Could not inspect beta passport callback service state" }
-        $existingPassportServices[$passportService] = @($existing | Where-Object { -not [string]::IsNullOrWhiteSpace($_) }).Count
+        $existing = @($existing | Where-Object { -not [string]::IsNullOrWhiteSpace($_) })
+        if ($existing.Count -gt 1) { throw "Ambiguous beta passport callback service state" }
+        if ($existing.Count -eq 1) {
+            $running = & docker inspect $existing[0] --format '{{.State.Running}}'
+            if ($LASTEXITCODE -ne 0 -or $running -ne "true") {
+                throw "Existing beta passport callback service must be running before deployment"
+            }
+        }
+        $existingPassportServices[$passportService] = $existing.Count
     }
     if ($existingPassportServices["passport-beta-bureau"] -gt 0 -and
         $existingPassportServices["passport-callback-signer"] -eq 0) {
