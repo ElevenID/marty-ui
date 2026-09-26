@@ -235,7 +235,7 @@ async fn registered_service_csr_is_signed_by_kms_through_public_rust_route() {
 
 #[tokio::test]
 #[ignore = "requires disposable MARTY_TEST_REDIS_URL; KMS public-key endpoint is mocked"]
-async fn mdoc_chain_route_serves_only_a_certificate_bound_to_kms_public_key() {
+async fn registered_service_public_material_routes_use_current_kms_key_and_tenant_scope() {
     let redis_url = std::env::var("MARTY_TEST_REDIS_URL").expect("disposable Redis URL");
     let suffix = uuid::Uuid::new_v4().simple().to_string();
     let organization_id = format!("test-mdoc-x5c-{suffix}");
@@ -291,6 +291,7 @@ async fn mdoc_chain_route_serves_only_a_certificate_bound_to_kms_public_key() {
         .await
         .expect("register test signing service");
     let documents = DocumentStore::from_connection(registry.connection());
+    let inspect_registry = registry.clone();
     let app = router_with_dependencies(
         "test-internal-only".into(),
         Some(registry),
@@ -339,6 +340,59 @@ async fn mdoc_chain_route_serves_only_a_certificate_bound_to_kms_public_key() {
     assert_eq!(verified["checks"]["algorithm_supported"], true);
     assert!(verified.get("public_jwk").is_none());
     assert!(verified.get("key_reference").is_none());
+    let publish = Request::builder()
+        .method("POST")
+        .uri(format!(
+            "/v1/signing-keys/services/service-a/publish-jwks?organization_id={organization_id}"
+        ))
+        .body(Body::empty())
+        .expect("publish current KMS public key");
+    let published = app
+        .clone()
+        .oneshot(publish)
+        .await
+        .expect("JWKS publication");
+    assert_eq!(published.status(), StatusCode::OK);
+    let published: Value = serde_json::from_slice(
+        &to_bytes(published.into_body(), 1_048_576)
+            .await
+            .expect("JWKS publication body"),
+    )
+    .expect("JWKS publication JSON");
+    assert_eq!(published["jwks_document"]["key_count"], 1);
+    assert_eq!(
+        published["jwk"]["x5c"][0],
+        fixture["certificate"]["expected_x5c"]
+    );
+    assert!(published["jwk"].get("key_reference").is_none());
+    let public_jwks = Request::builder()
+        .uri(format!(
+            "/v1/signing-keys/jwks?organization_id={organization_id}"
+        ))
+        .body(Body::empty())
+        .expect("public JWKS read");
+    let jwks = app
+        .clone()
+        .oneshot(public_jwks)
+        .await
+        .expect("public JWKS response");
+    assert_eq!(jwks.status(), StatusCode::OK);
+    let jwks: Value = serde_json::from_slice(
+        &to_bytes(jwks.into_body(), 1_048_576)
+            .await
+            .expect("public JWKS body"),
+    )
+    .expect("public JWKS JSON");
+    assert_eq!(jwks["keys"].as_array().expect("published keys").len(), 1);
+    assert!(jwks["keys"][0].get("key_reference").is_none());
+    let saved_registry = inspect_registry
+        .load(&organization_id)
+        .await
+        .expect("saved discovery state");
+    assert_eq!(
+        saved_registry["services"][0]["discovered_capabilities"]["last_jwk_fetch_ok"],
+        true
+    );
     let cross_tenant = Request::builder()
         .uri("/v1/signing-keys/services/service-a/mdoc-x5c?organization_id=another-tenant")
         .body(Body::empty())

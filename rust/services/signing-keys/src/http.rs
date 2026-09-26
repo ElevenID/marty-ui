@@ -168,6 +168,10 @@ pub fn router_with_dependencies(
             "/v1/signing-keys/services/{service_id}/verify-current",
             get(verify_public_service_key),
         )
+        .route(
+            "/v1/signing-keys/services/{service_id}/publish-jwks",
+            post(publish_public_service_jwks),
+        )
         .route("/v1/signing-keys/config/purposes", get(purposes))
         .route(
             "/v1/signing-keys/config/service-capabilities",
@@ -1558,6 +1562,159 @@ async fn verify_public_service_key(
         chrono::Utc::now().to_rfc3339(),
     ))
     .into_response()
+}
+
+#[derive(Debug, Default, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct PublicServiceJwksPublicationRequest {}
+
+async fn publish_public_service_jwks(
+    State(state): State<AppState>,
+    Path(service_id): Path<String>,
+    Query(scope): Query<OrganizationScope>,
+    _body: Option<Json<PublicServiceJwksPublicationRequest>>,
+) -> Response {
+    if let Err(error) = validate_service_scope(&scope.organization_id, None) {
+        return error.into_response();
+    }
+    let service =
+        match registered_certificate_service(&state, &scope.organization_id, &service_id).await {
+            Ok(service) => service,
+            Err(error) => return error.into_response(),
+        };
+    let Some(documents) = state.document_store.as_ref() else {
+        return public_error(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "Signing document storage is unavailable.",
+        );
+    };
+    let (config, public_jwk) = match current_service_public_jwk(&service).await {
+        Ok(material) => material,
+        Err(error) => return error.into_response(),
+    };
+    let overrides = match documents
+        .certificate_overrides(&scope.organization_id)
+        .await
+    {
+        Ok(overrides) => overrides,
+        Err(_) => {
+            return public_error(
+                StatusCode::SERVICE_UNAVAILABLE,
+                "Certificate storage is unavailable.",
+            )
+        }
+    };
+    let certificate = selected_service_certificate(&service, &overrides, &service_id);
+    if let Some(certificate) = certificate {
+        if let Err(error) = checked_service_x5c(certificate, &public_jwk, &service_id) {
+            return error.into_response();
+        }
+    }
+    let publication = match documents
+        .publish_jwk(
+            &scope.organization_id,
+            &service_id,
+            PublishJwkRequest {
+                jwk: public_jwk,
+                key_reference: config["key_reference"].as_str().map(str::to_owned),
+                cert_pem: certificate
+                    .and_then(|value| value.get("cert_pem"))
+                    .and_then(Value::as_str)
+                    .map(str::to_owned),
+                cert_chain_pem: certificate
+                    .and_then(|value| value.get("cert_chain_pem"))
+                    .and_then(Value::as_str)
+                    .map(str::to_owned),
+            },
+        )
+        .await
+    {
+        Ok(publication) => publication,
+        Err(documents::DocumentError::Invalid(_)) => {
+            return public_error(StatusCode::UNPROCESSABLE_ENTITY, "Public JWK is invalid.")
+        }
+        Err(documents::DocumentError::Conflict(_)) => {
+            return public_error(
+                StatusCode::CONFLICT,
+                "Public JWK conflicts with stored state.",
+            )
+        }
+        Err(_) => {
+            return public_error(
+                StatusCode::SERVICE_UNAVAILABLE,
+                "JWKS publication storage is unavailable.",
+            )
+        }
+    };
+    if let Err(error) =
+        mark_service_public_key_discovered(&state, &scope.organization_id, &service_id).await
+    {
+        return error.into_response();
+    }
+    let public = match public_jwk_projection(&publication.jwk) {
+        Ok(public) => public,
+        Err(_) => return public_error(StatusCode::BAD_GATEWAY, "Published JWK is malformed."),
+    };
+    Json(json!({
+        "ok": true,
+        "service_id": service_id,
+        "message": "Public key published to organization JWKS document",
+        "jwk": public,
+        "jwks_document": {
+            "organization_id": scope.organization_id,
+            "key_count": publication.key_count,
+        },
+        "published_at": chrono::Utc::now().to_rfc3339(),
+    }))
+    .into_response()
+}
+
+async fn mark_service_public_key_discovered(
+    state: &AppState,
+    organization_id: &str,
+    service_id: &str,
+) -> Result<(), PublicSigningError> {
+    let store = state.registry_store.as_ref().ok_or_else(|| {
+        public_failure(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "Signing registry is unavailable.",
+        )
+    })?;
+    let mut registry = store.load(organization_id).await.map_err(|_| {
+        public_failure(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "Signing registry is unavailable.",
+        )
+    })?;
+    let service = registry
+        .get_mut("services")
+        .and_then(Value::as_array_mut)
+        .and_then(|services| {
+            services
+                .iter_mut()
+                .find(|service| service.get("id").and_then(Value::as_str) == Some(service_id))
+        })
+        .ok_or_else(|| public_failure(StatusCode::NOT_FOUND, "Signing service is unavailable."))?;
+    let provider = service["provider"].clone();
+    let capabilities = service
+        .as_object_mut()
+        .expect("registered service is an object")
+        .entry("discovered_capabilities")
+        .or_insert_with(|| json!({}));
+    let capabilities = capabilities
+        .as_object_mut()
+        .expect("normalized discovered capabilities are an object");
+    capabilities.insert("public_key_export".into(), json!(true));
+    capabilities.insert("last_jwk_fetch_ok".into(), json!(true));
+    capabilities.insert("provider".into(), provider);
+    service["updated_at"] = json!(chrono::Utc::now().to_rfc3339());
+    store.save(organization_id, &registry).await.map_err(|_| {
+        public_failure(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "Signing registry is unavailable.",
+        )
+    })?;
+    Ok(())
 }
 
 fn verify_service_key_result(
@@ -3249,6 +3406,9 @@ async fn openapi() -> Json<serde_json::Value> {
             "/v1/signing-keys/services/{service_id}/verify-current": {
                 "get": {"summary": "Verify Current Registered Service Public Key", "responses": {"200": {"description": "KMS public-key verification checks"}}}
             },
+            "/v1/signing-keys/services/{service_id}/publish-jwks": {
+                "post": {"summary": "Publish Registered Service Public Key to Organization JWKS", "responses": {"200": {"description": "Current KMS public key published without custody coordinates"}}}
+            },
             "/v1/signing-keys/config/certificate-expiry-alerts": {
                 "get": {"summary": "Registered Service Certificate Expiry Alerts", "responses": {"200": {"description": "Tenant-scoped alerts using stored certificate overrides"}}}
             },
@@ -3594,6 +3754,46 @@ mod public_contract_tests {
                 true
             );
         }
+    }
+
+    #[tokio::test]
+    async fn public_jwks_publication_rejects_caller_key_selection_before_kms_use() {
+        let behavior: Value = serde_json::from_str(include_str!(
+            "../../../../contracts/signing-service-publish-jwks-behavior.json"
+        ))
+        .unwrap();
+        assert_eq!(
+            behavior["path"],
+            "/v1/signing-keys/services/{service_id}/publish-jwks"
+        );
+        assert!(serde_json::from_value::<PublicServiceJwksPublicationRequest>(json!({})).is_ok());
+        assert!(
+            serde_json::from_value::<PublicServiceJwksPublicationRequest>(
+                json!({"key_reference": "caller-selected"})
+            )
+            .is_err()
+        );
+        let forbidden = Request::builder()
+            .method("POST")
+            .uri("/v1/signing-keys/services/service-a/publish-jwks?organization_id=org-a")
+            .header("content-type", "application/json")
+            .body(Body::from(r#"{"key_reference":"caller-selected"}"#))
+            .unwrap();
+        let response = router_with_internal_api_key("test-only".into())
+            .oneshot(forbidden)
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::UNPROCESSABLE_ENTITY);
+        let empty = Request::builder()
+            .method("POST")
+            .uri("/v1/signing-keys/services/service-a/publish-jwks?organization_id=org-a")
+            .body(Body::empty())
+            .unwrap();
+        let response = router_with_internal_api_key("test-only".into())
+            .oneshot(empty)
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
     }
 
     #[test]
