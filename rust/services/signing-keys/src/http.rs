@@ -5755,6 +5755,18 @@ mod public_contract_tests {
     use tower::ServiceExt;
 
     #[test]
+    fn managed_key_creation_behavior_is_frozen_before_public_port() {
+        let behavior: Value = serde_json::from_str(include_str!(
+            "../../../../contracts/signing-managed-key-create-behavior.json"
+        ))
+        .unwrap();
+        assert_eq!(behavior["method"], "POST");
+        assert_eq!(behavior["path"], "/v1/signing-keys");
+        assert_eq!(behavior["request_fields"]["algorithm"], "ES256 by default; released support ES256, ES384, RS256, EdDSA");
+        assert_eq!(behavior["released_reference_prefixes"]["lti_tool_signing"], "lti-tool-");
+    }
+
+    #[test]
     fn public_key_metadata_behavior_is_frozen_before_public_port() {
         let behavior: Value = serde_json::from_str(include_str!(
             "../../../../contracts/signing-public-key-metadata-behavior.json"

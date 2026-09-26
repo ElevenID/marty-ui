@@ -1,0 +1,32 @@
+{
+  "schema_version": 1,
+  "source": "pre-Rust services/gateway/routes/signing_keys.py at parent of e1ebad979",
+  "method": "POST",
+  "path": "/v1/signing-keys",
+  "request_fields": {
+    "name": "required nonempty string; key_name is a compatibility alias",
+    "algorithm": "ES256 by default; released support ES256, ES384, RS256, EdDSA",
+    "key_purpose": "vc_jwt_issuer by default; one canonical signing purpose",
+    "service_id": "managed default when omitted; only managed-openbao-transit supports creation"
+  },
+  "lti_constraint": "lti_tool_signing requires RS256 and cannot share a reference with any credential-signing purpose",
+  "released_response_fields": ["ok", "service_id", "provider_key_name", "key", "created_at"],
+  "released_key_fields": ["id", "name", "algorithm", "status", "expiry_date", "created_at", "key_type", "provider", "provider_key_name", "latest_version", "public_jwk", "service_id", "key_purpose"],
+  "released_reference_prefixes": {"lti_tool_signing": "lti-tool-", "document_signing": "cred-dsc-", "other": "cred-issuer-"},
+  "reviewed_security_tightening": [
+    "A deterministic organization namespace is included in every KMS key name before a caller-controlled sanitized name, so same-name requests from different tenants never select the same KMS key.",
+    "Only explicit managed OpenBao KMS creation is allowed; private key material never enters Rust response, Redis, Gateway, or UI.",
+    "An existing KMS key is accepted only when its current public key matches the requested algorithm; purpose bindings are stored only after KMS success.",
+    "The public request rejects private key material, direct KMS endpoint/token selectors, and cross-tenant organization overrides.",
+    "A failed KMS operation or public-key verification does not record a purpose binding."
+  ],
+  "acceptance_cases": [
+    "default algorithm and purpose",
+    "all four released algorithms",
+    "LTI purpose isolation",
+    "same-name different-tenant isolation",
+    "existing-key algorithm mismatch",
+    "KMS failure leaves registry unchanged",
+    "response never contains credentials or private key material"
+  ]
+}
