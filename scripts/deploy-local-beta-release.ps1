@@ -829,6 +829,16 @@ Assert-BetaDidcommConfiguration -RepoRoot $script:RepoRoot -EnvFiles $script:Env
     -ComposeFiles $script:ComposeFiles -AuthcryptEnabled ([bool]$EnableDidcommAuthcrypt)
 Assert-BetaPassportConfiguration -RepoRoot $script:RepoRoot -EnvFiles $script:EnvFiles `
     -ComposeFiles $script:ComposeFiles -PassportEnabled ([bool]$EnablePassportNative)
+if (-not $EnablePassportNative) {
+    $existingPassportBureau = @(& docker ps -a `
+        --filter "label=com.docker.compose.project=$script:BetaProject" `
+        --filter "label=com.docker.compose.service=passport-beta-bureau" `
+        --format '{{.ID}}')
+    if ($LASTEXITCODE -ne 0) { throw "Could not inspect beta passport bureau state" }
+    if (@($existingPassportBureau | Where-Object { -not [string]::IsNullOrWhiteSpace($_) }).Count -ne 0) {
+        throw "Beta passport bureau exists; retire it explicitly before deploying without the passport profile"
+    }
+}
 if ($OfficialStackRelease) {
     $migrationImage = [string]$officialPlan.images.migrations.reference
     $uiImage = [string]$officialPlan.images.ui.reference
