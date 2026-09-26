@@ -85,9 +85,26 @@ selected here.
    its protected-main baseline. The current stacked review head has local Rust
    handlers for all 24, but they are not yet merged or beta-accepted. The
    managed-key creation route has an authenticated real-HTTP Gateway-to-Rust
-   test; exercise the other adapters through that boundary, rerun the route
-   audit on protected main after the stack lands, and complete beta acceptance
-   before describing the aggregate release as feature-complete.
+   test. The stacked Gateway route matrix now checks session and tenant rejection
+   for 22 further method/path pairs, plus successful service certificate, KMS
+   public-key verification, JWKS/DID publication, and config resolution through
+   an authenticated GCP adapter fixture. AWS/GCP provider envelopes are normalized
+   by the shared public-JWK sanitizer before resolver algorithm matching; AWS
+   key usage and signing algorithms, GCP key-version algorithm, and Azure Key
+   Vault key operations reject provider-declared non-signing keys. A public JWK
+   with `key_ops: ["verify"]` remains eligible when its provider does not declare
+   signing restrictions. OpenBao's public-JWK
+   response does not expose its Transit `supports_signing` flag; confirm that
+   capability during live beta acceptance. The
+   direct-service public JWKS/DID contract still uses the provider key reference
+   as `kid` and a locator-derived DID fragment. Preserve this published identity
+   until previously issued credentials expire; move future custody identifiers
+   behind issuer profiles with a separately reviewed compatibility migration.
+   The fixture supplies a bearer token and does not establish workload-identity
+   token acquisition. Exercise the
+   remaining CSR, sign, rotate, and profile paths through Gateway, rerun the
+   route audit on protected main after the stack lands, and complete beta
+   acceptance before describing the aggregate release as feature-complete.
 
    Certificate-enrollment follow-up: the protected baseline's service CSR UI
    action lacked a matching public service route. This review branch restores

@@ -4206,13 +4206,8 @@ fn queue_key_discovery(
         })
         .await
         {
-            Ok(jwk) => {
-                let compatible = compatible_public_key_algorithms(&jwk)
-                    .contains(&algorithm.as_str())
-                    && jwk
-                        .get("alg")
-                        .and_then(Value::as_str)
-                        .is_none_or(|declared| declared == algorithm);
+            Ok(response) => {
+                let compatible = discovered_key_matches_algorithm(&response, &algorithm)?;
                 Ok(compatible.then(|| json!({"id": reference, "algorithm": algorithm})))
             }
             Err(kms::KmsError::ProviderStatus {
@@ -4222,6 +4217,71 @@ fn queue_key_discovery(
             Err(_) => Err(()),
         }
     });
+}
+
+fn discovered_key_matches_algorithm(response: &Value, algorithm: &str) -> Result<bool, ()> {
+    let jwk = documents::sanitize_public_jwk(response, None).map_err(|_| ())?;
+    if !compatible_public_key_algorithms(&jwk).contains(&algorithm) {
+        return Ok(false);
+    }
+    for field in ["alg", "use"] {
+        if let Some(declared) = jwk.get(field) {
+            let value = declared.as_str().ok_or(())?;
+            if (field == "alg" && value != algorithm) || (field == "use" && value != "sig") {
+                return Ok(false);
+            }
+        }
+    }
+    match response.get("provider").and_then(Value::as_str) {
+        Some("aws") => {
+            let usage = response
+                .get("key_usage")
+                .and_then(Value::as_str)
+                .ok_or(())?;
+            let native = match algorithm {
+                "ES256" => "ECDSA_SHA_256",
+                "ES384" => "ECDSA_SHA_384",
+                "ES512" => "ECDSA_SHA_512",
+                "RS256" => "RSASSA_PKCS1_V1_5_SHA_256",
+                "PS256" => "RSASSA_PSS_SHA_256",
+                _ => return Ok(false),
+            };
+            let supported = response
+                .get("signing_algorithms")
+                .and_then(Value::as_array)
+                .ok_or(())?;
+            if !supported.iter().all(Value::is_string) {
+                return Err(());
+            }
+            Ok(usage == "SIGN_VERIFY" && supported.iter().any(|item| item == native))
+        }
+        Some("gcp") => {
+            let native = response
+                .get("algorithm")
+                .and_then(Value::as_str)
+                .ok_or(())?;
+            Ok(match algorithm {
+                "ES256" => native == "EC_SIGN_P256_SHA256",
+                "ES384" => native == "EC_SIGN_P384_SHA384",
+                "ES512" => native == "EC_SIGN_P521_SHA512",
+                "RS256" => native.starts_with("RSA_SIGN_PKCS1_") && native.ends_with("_SHA256"),
+                "PS256" => native.starts_with("RSA_SIGN_PSS_") && native.ends_with("_SHA256"),
+                "EdDSA" => native == "EC_SIGN_ED25519",
+                _ => false,
+            })
+        }
+        Some("azure") => {
+            let Some(operations) = jwk.get("key_ops") else {
+                return Ok(true);
+            };
+            let operations = operations.as_array().ok_or(())?;
+            if !operations.iter().all(Value::is_string) {
+                return Err(());
+            }
+            Ok(operations.iter().any(|operation| operation == "sign"))
+        }
+        _ => Ok(true),
+    }
 }
 
 async fn resolution_keys(
@@ -6130,6 +6190,68 @@ mod public_contract_tests {
         middleware::{self, Next},
     };
     use tower::ServiceExt;
+
+    #[test]
+    fn config_discovery_accepts_public_jwks_inside_provider_envelopes() {
+        let vectors: Value =
+            serde_json::from_str(include_str!("../tests/fixtures/kms_provider_vectors.json"))
+                .unwrap();
+        let fixture = |name: &str| {
+            vectors["public_key_cases"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .find(|case| case["name"] == name)
+                .unwrap()["expected_response"]
+                .clone()
+        };
+        for (name, algorithm) in [
+            ("aws_kms_spki_public_key", "ES256"),
+            ("azure_embedded_public_jwk", "ES256"),
+            ("gcp_pem_public_key", "ES256"),
+            ("openbao_raw_ed25519", "EdDSA"),
+        ] {
+            let response = fixture(name);
+            assert_eq!(
+                discovered_key_matches_algorithm(&response, algorithm),
+                Ok(true),
+                "{name}"
+            );
+            assert_eq!(
+                discovered_key_matches_algorithm(&response, "ES512"),
+                Ok(false),
+                "{name}"
+            );
+        }
+        let mut aws = fixture("aws_kms_spki_public_key");
+        aws["key_usage"] = json!("ENCRYPT_DECRYPT");
+        assert_eq!(discovered_key_matches_algorithm(&aws, "ES256"), Ok(false));
+        aws["key_usage"] = json!("SIGN_VERIFY");
+        aws["signing_algorithms"] = json!(["ECDSA_SHA_384"]);
+        assert_eq!(discovered_key_matches_algorithm(&aws, "ES256"), Ok(false));
+        aws.as_object_mut().unwrap().remove("signing_algorithms");
+        assert!(discovered_key_matches_algorithm(&aws, "ES256").is_err());
+        let mut gcp = fixture("gcp_pem_public_key");
+        gcp["algorithm"] = json!("RSA_DECRYPT_OAEP_2048_SHA256");
+        assert_eq!(discovered_key_matches_algorithm(&gcp, "ES256"), Ok(false));
+        gcp.as_object_mut().unwrap().remove("algorithm");
+        assert!(discovered_key_matches_algorithm(&gcp, "ES256").is_err());
+        let mut azure = fixture("azure_embedded_public_jwk");
+        azure["key_ops"] = json!(["verify"]);
+        assert_eq!(discovered_key_matches_algorithm(&azure, "ES256"), Ok(false));
+        azure["key_ops"] = json!(["sign"]);
+        azure["use"] = json!("enc");
+        assert_eq!(discovered_key_matches_algorithm(&azure, "ES256"), Ok(false));
+        let public_verifier = json!({
+            "kty": "EC", "crv": "P-256", "x": "public-x", "y": "public-y",
+            "use": "sig", "key_ops": ["verify"]
+        });
+        assert_eq!(
+            discovered_key_matches_algorithm(&public_verifier, "ES256"),
+            Ok(true)
+        );
+        assert!(discovered_key_matches_algorithm(&json!({"provider":"gcp"}), "ES256").is_err());
+    }
 
     #[tokio::test]
     async fn every_gateway_declared_signing_pair_matches_a_rust_public_route() {
