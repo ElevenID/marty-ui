@@ -7495,17 +7495,7 @@ mod tests {
         kms_server.abort();
     }
 
-    #[tokio::test]
-    #[ignore = "requires independently marked disposable Redis and OpenBao instances"]
-    async fn authenticated_gateway_generates_profile_scoped_passport_csrs_in_openbao() {
-        use std::str::FromStr;
-
-        use der::{DecodePem, Encode};
-        use x509_cert::name::Name;
-        use x509_cert::request::CertReq;
-
-        let redis_url = disposable_signing_redis_url().await;
-        let organization_id = format!("gateway-csr-{}", uuid::Uuid::new_v4().simple());
+    async fn disposable_signing_openbao() -> (String, String) {
         let endpoint = std::env::var("MARTY_TEST_OPENBAO_URL").expect("disposable OpenBao URL");
         let parsed_bao = url::Url::parse(&endpoint).expect("disposable OpenBao URL syntax");
         assert!(
@@ -7545,6 +7535,21 @@ mod tests {
             marker["data"]["data"]["nonce"].as_str() == Some(bao_nonce.as_str()),
             "disposable OpenBao sentinel does not match"
         );
+        (endpoint, token)
+    }
+
+    #[tokio::test]
+    #[ignore = "requires independently marked disposable Redis and OpenBao instances"]
+    async fn authenticated_gateway_generates_profile_scoped_passport_csrs_in_openbao() {
+        use std::str::FromStr;
+
+        use der::{DecodePem, Encode};
+        use x509_cert::name::Name;
+        use x509_cert::request::CertReq;
+
+        let redis_url = disposable_signing_redis_url().await;
+        let organization_id = format!("gateway-csr-{}", uuid::Uuid::new_v4().simple());
+        let (endpoint, token) = disposable_signing_openbao().await;
         let registry = SigningRegistryStore::connect(&redis_url)
             .await
             .unwrap()
@@ -7734,6 +7739,145 @@ mod tests {
             ));
         }
         let _: usize = delete.query_async(&mut cleanup).await.unwrap();
+        signing_server.abort();
+    }
+
+    #[tokio::test]
+    #[ignore = "requires independently marked disposable Redis and OpenBao instances"]
+    async fn authenticated_gateway_generates_a_dedicated_service_csr_in_openbao() {
+        use std::str::FromStr;
+
+        use der::{DecodePem, Encode};
+        use x509_cert::name::Name;
+        use x509_cert::request::CertReq;
+
+        let redis_url = disposable_signing_redis_url().await;
+        let (endpoint, token) = disposable_signing_openbao().await;
+        let organization_id = format!("gateway-service-csr-{}", uuid::Uuid::new_v4().simple());
+        let service_id = format!("service-csr-{}", uuid::Uuid::new_v4().simple());
+        let key_reference = format!("service-csr-key-{}", uuid::Uuid::new_v4().simple());
+        let client = reqwest::Client::new();
+        let created_key = client
+            .post(format!("{endpoint}/v1/transit/keys/{key_reference}"))
+            .header("X-Vault-Token", &token)
+            .json(&json!({"type":"ecdsa-p256"}))
+            .send()
+            .await
+            .unwrap();
+        assert!(created_key.status().is_success());
+
+        let store = SigningRegistryStore::connect(&redis_url).await.unwrap();
+        let service = json!({
+            "id":service_id, "name":"Gateway dedicated CSR",
+            "service_type":"openbao-transit", "endpoint":endpoint,
+            "mount":"transit", "auth_mode":"token", "auth_reference":token,
+            "key_reference":key_reference, "algorithms":["ES256"],
+            "key_purposes":["x509_doc_signer"]
+        });
+        let mut registry = marty_signing_keys::registry::empty_registry();
+        registry["services"]
+            .as_array_mut()
+            .unwrap()
+            .push(service.clone());
+        store.save(&organization_id, &registry).await.unwrap();
+        let signing = signing_router(
+            "internal-signing-key".into(),
+            Some(store.clone()),
+            None,
+            None,
+            None,
+            None,
+            None,
+        );
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let signing_url = format!("http://{}", listener.local_addr().unwrap());
+        let signing_server =
+            tokio::spawn(async move { axum::serve(listener, signing).await.unwrap() });
+        let gateway = gateway_with_signing_http(signing_url, &organization_id);
+        let route = format!("/v1/signing-keys/services/{service_id}/certificate-csr");
+        let subject = json!({
+            "country":"US", "organization":"ElevenID Beta", "common_name":"Pilot DSC"
+        });
+        let request = |path: &str, body: &Value, authenticated: bool| {
+            let mut builder = Request::post(path).header("content-type", "application/json");
+            if authenticated {
+                builder = builder.header("cookie", "sessionId=valid");
+            }
+            builder.body(Body::from(body.to_string())).unwrap()
+        };
+        let denied = gateway
+            .clone()
+            .oneshot(request(&route, &subject, false))
+            .await
+            .unwrap();
+        assert_eq!(denied.status(), StatusCode::UNAUTHORIZED);
+        let foreign = gateway
+            .clone()
+            .oneshot(request(
+                &format!("{route}?organization_id=org-other"),
+                &subject,
+                true,
+            ))
+            .await
+            .unwrap();
+        assert_eq!(foreign.status(), StatusCode::FORBIDDEN);
+        let mut forged = subject.clone();
+        forged["key_reference"] = json!("attacker-key");
+        let rejected = gateway
+            .clone()
+            .oneshot(request(&route, &forged, true))
+            .await
+            .unwrap();
+        assert_eq!(rejected.status(), StatusCode::UNPROCESSABLE_ENTITY);
+
+        let response = gateway
+            .clone()
+            .oneshot(request(&route, &subject, true))
+            .await
+            .unwrap();
+        let status = response.status();
+        let payload = to_bytes(response.into_body(), DEFAULT_MAXIMUM_BODY_BYTES)
+            .await
+            .unwrap();
+        let result: Value = serde_json::from_slice(&payload).unwrap();
+        assert_eq!(
+            status,
+            StatusCode::OK,
+            "service CSR request failed: {result}"
+        );
+        assert_eq!(result["ok"], true);
+        assert_eq!(result["service_id"], service_id);
+        let parsed = CertReq::from_pem(result["csr_pem"].as_str().unwrap()).unwrap();
+        assert_eq!(
+            parsed.info.subject,
+            Name::from_str("C=US,O=ElevenID Beta,CN=Pilot DSC").unwrap()
+        );
+        let csr_jwk: Value = serde_json::to_value(
+            marty_crypto::jwk::public_key_der_to_jwk(&parsed.info.public_key.to_der().unwrap())
+                .unwrap(),
+        )
+        .unwrap();
+        let provider = marty_signing_keys::kms::public_key_existing(
+            marty_signing_keys::kms::ProviderRequest {
+                service_config: service,
+            },
+        )
+        .await
+        .unwrap();
+        let provider_jwk =
+            marty_signing_keys::documents::sanitize_public_jwk(&provider, None).unwrap();
+        for field in ["kty", "crv", "x", "y"] {
+            assert_eq!(csr_jwk[field], provider_jwk[field]);
+        }
+        for secret in [&endpoint[..], token.as_str(), key_reference.as_str()] {
+            assert!(!result.to_string().contains(secret));
+        }
+        let mut cleanup = store.connection();
+        let _: usize = redis::cmd("DEL")
+            .arg(marty_signing_keys::registry::storage_key(&organization_id))
+            .query_async(&mut cleanup)
+            .await
+            .unwrap();
         signing_server.abort();
     }
 
