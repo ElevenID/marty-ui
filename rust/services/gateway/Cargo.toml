@@ -44,6 +44,7 @@ uuid.workspace = true
 
 [dev-dependencies]
 marty-signing-keys = { path = "../signing-keys" }
+redis.workspace = true
 tower.workspace = true
 
 [build-dependencies]

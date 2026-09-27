@@ -4488,6 +4488,7 @@ fn map_failure(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use axum::http::HeaderMap;
     use axum::routing::get;
     use std::{
         collections::BTreeSet,
@@ -4503,6 +4504,7 @@ mod tests {
         UpstreamClient,
     };
     use mmf_security::InMemoryRateLimiter;
+    use redis::AsyncCommands;
     use tower::ServiceExt;
 
     use crate::{
@@ -7006,11 +7008,65 @@ mod tests {
     async fn authenticated_gateway_reaches_rust_managed_key_route_without_custody() {
         assert_eq!(std::env::var("BAO_TOKEN").as_deref(), Ok("test-only"));
         let redis_url = std::env::var("MARTY_TEST_REDIS_URL").expect("disposable Redis URL");
+        let parsed = reqwest::Url::parse(&redis_url).expect("disposable Redis URL syntax");
+        assert!(matches!(
+            parsed.host_str(),
+            Some("127.0.0.1" | "localhost" | "::1")
+        ));
+        assert!(parsed
+            .path()
+            .trim_start_matches('/')
+            .parse::<u8>()
+            .is_ok_and(|db| db >= 13));
+        let nonce = std::env::var("MARTY_TEST_REDIS_DISPOSABLE_NONCE")
+            .expect("disposable Redis sentinel value");
+        assert!(nonce.len() >= 16, "disposable Redis sentinel is too short");
+        let client = redis::Client::open(redis_url.as_str()).expect("disposable Redis client");
+        let mut guard_connection = client.get_multiplexed_async_connection().await.unwrap();
+        let observed: Option<String> = guard_connection
+            .get("marty:tests:disposable-guard")
+            .await
+            .unwrap();
+        assert_eq!(observed.as_deref(), Some(nonce.as_str()));
+        let organization_id = format!("gateway-managed-{}", uuid::Uuid::new_v4().simple());
+        struct IsolatedSession {
+            organization_id: String,
+        }
+        #[async_trait]
+        impl GatewayIdentityProvider for IsolatedSession {
+            async fn validate_session(
+                &self,
+                session_id: &str,
+            ) -> Result<Option<SessionIdentity>, SecurityError> {
+                let mut identity = RuntimeProvider.validate_session(session_id).await?;
+                if let Some(identity) = identity.as_mut() {
+                    identity.organization_id = Some(self.organization_id.clone());
+                }
+                Ok(identity)
+            }
+            async fn validate_api_key(
+                &self,
+                key: &str,
+            ) -> Result<Option<ApiKeyIdentity>, SecurityError> {
+                RuntimeProvider.validate_api_key(key).await
+            }
+        }
         const PUBLIC_PEM: &str = "-----BEGIN PUBLIC KEY-----\nMFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEaxfR8uEsQkf4vOblY6RA8ncDfYEt\n6zOg9KE5RdiYwpZP40Li/hp/m47n60p8D54WK84zV2sxXs7LtkBoN79R9Q==\n-----END PUBLIC KEY-----\n";
         let kms = Router::new().route(
             "/v1/transit/keys/{reference}",
-            get(|| async { Json(json!({"data": {"latest_version": 1, "supports_signing": true, "keys": {"1": {"public_key": PUBLIC_PEM}}}})) })
-                .post(|| async { StatusCode::NO_CONTENT }),
+            get(|headers: HeaderMap| async move {
+                if headers.get("x-vault-token").and_then(|value| value.to_str().ok()) != Some("test-only") {
+                    return StatusCode::FORBIDDEN.into_response();
+                }
+                Json(json!({"data": {"latest_version": 1, "supports_signing": true, "keys": {"1": {"public_key": PUBLIC_PEM}}}})).into_response()
+            })
+                .post(|headers: HeaderMap| async move {
+                    if headers.get("x-vault-token").and_then(|value| value.to_str().ok()) == Some("test-only") {
+                        StatusCode::NO_CONTENT
+                    } else {
+                        StatusCode::FORBIDDEN
+                    }
+                }),
         );
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let endpoint = format!("http://{}", listener.local_addr().unwrap());
@@ -7020,9 +7076,13 @@ mod tests {
             .unwrap()
             .with_managed_openbao(Some(endpoint));
         store
-            .save("org-1", &marty_signing_keys::registry::empty_registry())
+            .save(
+                &organization_id,
+                &marty_signing_keys::registry::empty_registry(),
+            )
             .await
             .unwrap();
+        let cleanup_store = store.clone();
         let signing = signing_router(
             "test-internal-key".into(),
             Some(store),
@@ -7038,6 +7098,9 @@ mod tests {
             tokio::spawn(async move { axum::serve(signing_listener, signing).await.unwrap() });
         let upstream = Arc::new(crate::transport::ReqwestUpstream::new(1024 * 1024).unwrap());
         let mut state = runtime_state_with_upstream(Arc::new(NoOwner), upstream.clone());
+        Arc::get_mut(&mut state).unwrap().identities = Arc::new(IsolatedSession {
+            organization_id: organization_id.clone(),
+        });
         let routes = GatewayContract::load()
             .unwrap()
             .proxy_route_table_with_passport_native(false)
@@ -7064,6 +7127,12 @@ mod tests {
         };
         let denied = gateway.clone().oneshot(create(false)).await.unwrap();
         assert_eq!(denied.status(), StatusCode::UNAUTHORIZED);
+        assert!(
+            cleanup_store.load(&organization_id).await.unwrap()["key_reference_purposes"]
+                .as_object()
+                .unwrap()
+                .is_empty()
+        );
         let cross_tenant = gateway
             .clone()
             .oneshot(
@@ -7076,6 +7145,12 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(cross_tenant.status(), StatusCode::FORBIDDEN);
+        assert!(
+            cleanup_store.load(&organization_id).await.unwrap()["key_reference_purposes"]
+                .as_object()
+                .unwrap()
+                .is_empty()
+        );
         let created = gateway.clone().oneshot(create(true)).await.unwrap();
         assert_eq!(created.status(), StatusCode::OK);
         let created: Value = serde_json::from_slice(
@@ -7130,6 +7205,11 @@ mod tests {
         assert_eq!(detail["id"], reference);
         assert_eq!(detail["public_jwk"]["crv"], "P-256");
         assert!(!detail.to_string().contains("test-only"));
+        let mut cleanup = cleanup_store.connection();
+        let _: () = cleanup
+            .del(marty_signing_keys::registry::storage_key(&organization_id))
+            .await
+            .unwrap();
         signing_server.abort();
         kms_server.abort();
     }
@@ -7141,7 +7221,8 @@ mod tests {
             Arc::new(NoOwner),
             recorder.clone(),
         ));
-        let forbidden = limited.clone()
+        let forbidden = limited
+            .clone()
             .oneshot(
                 Request::builder()
                     .method("DELETE")

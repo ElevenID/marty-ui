@@ -1913,6 +1913,34 @@ mod tests {
 
     static BAO_ENV_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
 
+    async fn disposable_redis_url() -> String {
+        let url = std::env::var("MARTY_TEST_REDIS_URL").expect("disposable Redis URL");
+        let parsed = reqwest::Url::parse(&url).expect("disposable Redis URL syntax");
+        assert!(matches!(
+            parsed.host_str(),
+            Some("127.0.0.1" | "localhost" | "::1")
+        ));
+        assert!(parsed
+            .path()
+            .trim_start_matches('/')
+            .parse::<u8>()
+            .is_ok_and(|db| db >= 13));
+        let nonce = std::env::var("MARTY_TEST_REDIS_DISPOSABLE_NONCE")
+            .expect("disposable Redis sentinel value");
+        assert!(nonce.len() >= 16, "disposable Redis sentinel is too short");
+        let client = redis::Client::open(url.as_str()).expect("disposable Redis client");
+        let mut connection = client
+            .get_multiplexed_async_connection()
+            .await
+            .expect("disposable Redis connection");
+        let observed: Option<String> = connection
+            .get("marty:tests:disposable-guard")
+            .await
+            .expect("disposable Redis sentinel read");
+        assert_eq!(observed.as_deref(), Some(nonce.as_str()));
+        url
+    }
+
     #[test]
     fn public_config_resolve_frozen_selection_cases() {
         let contract: Value = serde_json::from_str(include_str!(
@@ -2171,10 +2199,10 @@ mod tests {
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let endpoint = format!("http://{}", listener.local_addr().unwrap());
         let server = tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+        let redis_url = disposable_redis_url().await;
         let _guard = BAO_ENV_LOCK.lock().await;
         let previous = std::env::var("BAO_TOKEN").ok();
         std::env::set_var("BAO_TOKEN", "test-only");
-        let redis_url = std::env::var("MARTY_TEST_REDIS_URL").expect("disposable Redis URL");
         let organization_id = format!("rust-signing-cache-{}", Uuid::new_v4().simple());
         let reference = "cred-issuer-0123456789abcdef0123-es256";
         let store = RegistryStore::connect(&redis_url)
@@ -2293,7 +2321,7 @@ mod tests {
     #[tokio::test]
     #[ignore = "requires disposable MARTY_TEST_REDIS_URL"]
     async fn concurrent_purpose_bindings_remain_atomic_with_rotation_lease() {
-        let redis_url = std::env::var("MARTY_TEST_REDIS_URL").expect("disposable Redis URL");
+        let redis_url = disposable_redis_url().await;
         let store = RegistryStore::connect(&redis_url).await.unwrap();
         let organization_id = format!("managed-bind-race-{}", Uuid::new_v4().simple());
         let key = storage_key(&organization_id);
