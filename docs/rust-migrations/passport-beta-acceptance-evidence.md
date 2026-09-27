@@ -55,3 +55,36 @@ independent provider evidence of a real personalized booklet. The beta bureau
 simulator's status and callback cannot establish it. Separate supported base
 Compose, self-host, and Kubernetes acceptance remains mandatory before Python
 retirement.
+
+## Protected beta acceptance run
+
+The manual `passport-beta-acceptance.yml` workflow uses the same protected
+`beta-lifecycle` environment and local beta runner. It requires the official
+released deployment artifact directory, beta API key, and synthetic test
+application. The runner authenticates the stack manifest and all three UI OCI
+images, checks six live beta services, and confirms KMS managed issuer mode.
+It then takes a read-only snapshot of both production Compose projects, queries
+beta PostgreSQL for in-flight jobs, legacy or malformed artifact rows, and
+active physical-document Flows using the deployment preflight's narrow
+expired verification orphan exemption,
+executes the seven application route identities, and repeats the beta and
+production checks. Only the beta Gateway receives mutating requests. The
+private application file is removed before artifact upload.
+
+The production snapshot proves continuity **during this acceptance run**. It
+does not replace the deployment wrapper's before/after production comparison.
+The report sets `legacy_drain` and the additional
+`production_continuity_during_probe` probe when those live checks pass, while
+`production_isolation` remains false. The workflow remains `blocked` until the
+governed operator CSCA/DSC ceremony, SOD signature verification, full nine
+route Gateway/Flow and signed callback proof, physical provider submission,
+rollback, deployment-wide production isolation, and independently verified
+physical booklet receipt have executable evidence. It cannot qualify Python
+retirement on its own.
+
+The protected run uploads a GitHub artifact named
+`passport-beta-acceptance-<run-id>` containing the same name plus `.json`.
+A future retirement receipt uses
+`evidence_artifact: passport-beta-acceptance-<run-id>.json` and the exact file
+SHA-256, together with that successful run ID and its protected source SHA.
+This receipt must not be marked qualified while the report is `blocked`.

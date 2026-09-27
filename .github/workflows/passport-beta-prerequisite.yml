@@ -13,7 +13,7 @@ on:
         default: false
 
 concurrency:
-  group: passport-beta-prerequisite
+  group: passport-beta-acceptance
   cancel-in-progress: false
 
 permissions:
@@ -37,6 +37,7 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
       - name: Collect exact beta prerequisite evidence
+        id: collect
         shell: bash
         run: |
           set -euo pipefail
@@ -57,9 +58,9 @@ jobs:
             args+=(--application-file "$application_file")
           fi
           python3 scripts/collect_passport_beta_acceptance.py "${args[@]}"
-          python3 -c 'import json; from pathlib import Path; report=json.loads(Path("tests/artifacts/passport-beta-prerequisite/report.json").read_text()); assert report["schema"] == "marty.passport-beta-acceptance/v1" and report["status"] == "blocked"'
+          python3 -c 'import json,sys; from pathlib import Path; report=json.loads(Path("tests/artifacts/passport-beta-prerequisite/report.json").read_text()); sys.exit(0 if report.get("schema") == "marty.passport-beta-acceptance/v1" and report.get("status") == "blocked" else "Passport beta prerequisite report is invalid")'
       - name: Upload sanitized blocked prerequisite report
-        if: always()
+        if: always() && (steps.collect.outcome == 'success' || steps.collect.outcome == 'failure')
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
           name: passport-beta-prerequisite-${{ github.run_id }}
