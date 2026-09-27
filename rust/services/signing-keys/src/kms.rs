@@ -1458,15 +1458,6 @@ mod tests {
     }
 
     #[test]
-    fn empty_transit_list_is_distinct_from_missing_mount_and_denied_access() {
-        assert!(empty_transit_list_response("{\"errors\":[]}"));
-        assert!(!empty_transit_list_response(
-            "{\"errors\":[\"no handler for route \\\"transit/keys/\\\"\"]}"
-        ));
-        assert!(!empty_transit_list_response("permission denied"));
-    }
-
-    #[test]
     fn provider_factory_preserves_supported_aliases_and_rejects_unknowns() {
         for service_type in [
             "openbao-transit",

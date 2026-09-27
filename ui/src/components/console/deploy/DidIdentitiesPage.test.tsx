@@ -283,6 +283,7 @@ describe('DidIdentitiesPage', () => {
 
   it('issues a DSC through the selected DSC and public CSCA identity with a stable retry key', async () => {
     can.mockImplementation((resource: string, action: string) => resource === 'passport-certificate' && action === 'issue');
+    issueDscCertificate.mockRejectedValueOnce(new Error('response lost'));
     listPublicIssuerIdentities.mockImplementation(async ({ credential_format: format }) => ({
       identities: format === 'ICAO_EMRTD'
         ? [{ issuer_did: 'did:web:issuer.example:dsc', key_purpose: 'x509_doc_signer', algorithm: 'ES256', status: 'active' }]
@@ -296,13 +297,22 @@ describe('DidIdentitiesPage', () => {
     await user.type(screen.getByRole('textbox', { name: 'Country code (C)' }), 'US');
     await user.type(screen.getByRole('textbox', { name: 'Organization (O)' }), 'Beta Issuer');
     await user.type(screen.getByRole('textbox', { name: 'Common name (CN)' }), 'Beta DSC');
+    const retryReference = screen.getByRole('textbox', { name: 'DSC request reference' });
+    const reference = (retryReference as HTMLInputElement).value;
+    expect(reference).toMatch(/^passport-dsc-[A-Za-z0-9._-]+$/);
+    await user.click(screen.getByRole('button', { name: 'Issue DSC certificate' }));
+    await screen.findByText(/could not be issued/i);
+    expect(retryReference).toHaveValue(reference);
     await user.click(screen.getByRole('button', { name: 'Issue DSC certificate' }));
     await waitFor(() => expect(issueDscCertificate).toHaveBeenCalledWith(expect.objectContaining({
       organization_id: 'org-test-1', dsc_issuer_did: 'did:web:issuer.example:dsc',
       csca_issuer_did: 'did:web:issuer.example:csca', csca_certificate_id: 'beta-csca-1',
       country: 'US', organization: 'Beta Issuer', common_name: 'Beta DSC', validity_days: 30,
-      idempotency_key: expect.stringMatching(/^passport-dsc:/),
+      idempotency_key: reference,
     })));
+    expect(issueDscCertificate).toHaveBeenCalledTimes(2);
+    expect(issueDscCertificate.mock.calls[0][0].idempotency_key).toBe(reference);
+    expect(issueDscCertificate.mock.calls[1][0].idempotency_key).toBe(reference);
     expect(screen.getByRole('textbox', { name: 'Issued certificate PEM' })).toHaveValue('public-dsc-pem');
     expect(screen.getByRole('textbox', { name: 'Issued certificate chain PEM' })).toHaveValue('public-csca-pem');
     expect(issueCscaSelfSignedCertificate).not.toHaveBeenCalled();
@@ -320,6 +330,21 @@ describe('DidIdentitiesPage', () => {
     }));
     renderWithRouter(<DidIdentitiesPage />);
     await screen.findByText('did:web:issuer.example:csca');
+    expect(screen.queryByRole('button', { name: 'Issue CSCA' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Issue DSC' })).not.toBeInTheDocument();
+  });
+
+  it('offers issuance only for active ES256 passport profiles', async () => {
+    can.mockReturnValue(true);
+    listPublicIssuerIdentities.mockImplementation(async ({ credential_format: format }) => ({
+      identities: format === 'ICAO_EMRTD'
+        ? [
+          { issuer_did: 'did:web:issuer.example:inactive-csca', key_purpose: 'csca', algorithm: 'ES256', status: 'retired' },
+          { issuer_did: 'did:web:issuer.example:wrong-algorithm', key_purpose: 'x509_doc_signer', algorithm: 'ES384', status: 'active' },
+        ] : [],
+    }));
+    renderWithRouter(<DidIdentitiesPage />);
+    await screen.findByText('did:web:issuer.example:inactive-csca');
     expect(screen.queryByRole('button', { name: 'Issue CSCA' })).not.toBeInTheDocument();
     expect(screen.queryByRole('button', { name: 'Issue DSC' })).not.toBeInTheDocument();
   });

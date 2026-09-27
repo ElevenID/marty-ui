@@ -87,7 +87,8 @@ export default function DidIdentitiesPage() {
     && Boolean(issueForm.organization.trim() && issueForm.common_name.trim())
     && (issuing?.key_purpose === 'csca'
       ? Boolean(issueForm.certificate_id.trim())
-      : Boolean(issueForm.csca_issuer_did.trim() && issueForm.csca_certificate_id.trim()));
+      : Boolean(issueForm.csca_issuer_did.trim() && issueForm.csca_certificate_id.trim())
+        && /^[A-Za-z0-9._-]{1,128}$/.test(issueForm.idempotency_key));
 
   const openIssuance = (identity) => {
     setIssuing(identity);
@@ -97,7 +98,7 @@ export default function DidIdentitiesPage() {
       certificate_id: '', csca_issuer_did: '', csca_certificate_id: '',
       country: '', organization: '', common_name: '',
       validity_days: identity.key_purpose === 'csca' ? '365' : '30',
-      idempotency_key: createIdempotencyKey('passport-dsc'),
+      idempotency_key: createIdempotencyKey('passport-dsc').replace(/:/g, '-'),
     });
   };
 
@@ -389,10 +390,10 @@ export default function DidIdentitiesPage() {
                 <TableCell>{identity.algorithm}</TableCell>
                 <TableCell><Chip size="small" color="success" label={identity.status} /></TableCell>
                 <TableCell align="right">
-                  {identity.credential_format === 'ICAO_EMRTD' && identity.key_purpose === 'csca' && canIssueCsca && (
+                  {identity.credential_format === 'ICAO_EMRTD' && identity.key_purpose === 'csca' && identity.algorithm === 'ES256' && identity.status === 'active' && canIssueCsca && (
                     <Button size="small" onClick={() => openIssuance(identity)}>Issue CSCA</Button>
                   )}
-                  {identity.credential_format === 'ICAO_EMRTD' && identity.key_purpose === 'x509_doc_signer' && canIssueDsc && (
+                  {identity.credential_format === 'ICAO_EMRTD' && identity.key_purpose === 'x509_doc_signer' && identity.algorithm === 'ES256' && identity.status === 'active' && canIssueDsc && (
                     <Button size="small" onClick={() => openIssuance(identity)}>Issue DSC</Button>
                   )}
                   {identity.credential_format === 'ICAO_EMRTD' && identity.key_purpose === 'x509_doc_signer' && (
@@ -460,6 +461,10 @@ export default function DidIdentitiesPage() {
                   onChange={(event) => setIssueForm((current) => ({ ...current, csca_issuer_did: event.target.value }))} />
                 <TextField label="CSCA certificate ID" required value={issueForm.csca_certificate_id}
                   onChange={(event) => setIssueForm((current) => ({ ...current, csca_certificate_id: event.target.value }))} />
+                <TextField label="DSC request reference" required value={issueForm.idempotency_key}
+                  helperText="Save this reference before submitting. Use the same reference and details to retry after a lost response."
+                  onChange={(event) => setIssueForm((current) => ({ ...current, idempotency_key: event.target.value }))}
+                  slotProps={{ htmlInput: { maxLength: 128 } }} />
               </>
             )}
             <Stack direction={{ xs: 'column', sm: 'row' }} spacing={1}>
