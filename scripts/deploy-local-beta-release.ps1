@@ -11,6 +11,8 @@ param(
 
     [switch]$EnablePassportNative,
 
+    [switch]$EnablePassportPhysicalProvider,
+
     [string]$CanvasOrigin = "https://canvas-test.elevenidllc.com",
 
     [string]$PilotOrganizationId = "00000000-0000-0000-0000-000000000001",
@@ -28,6 +30,12 @@ param(
 
 Set-StrictMode -Version Latest
 $ErrorActionPreference = "Stop"
+if ($EnablePassportPhysicalProvider -and -not $EnablePassportNative) {
+    throw "Physical provider beta mode requires -EnablePassportNative"
+}
+if ($EnablePassportPhysicalProvider -and -not $PlanOnly) {
+    throw "Physical provider beta deployment is blocked pending accepted provider and rollback evidence; use -PlanOnly"
+}
 if (Get-Variable PSNativeCommandUseErrorActionPreference -ErrorAction SilentlyContinue) {
     # Docker and Alembic emit normal progress logs on stderr. Native failures
     # remain fail-closed through the explicit $LASTEXITCODE checks below.
@@ -70,7 +78,8 @@ $didcommProfiles = @(Get-BetaDidcommProfiles -Enabled ([bool]$EnableDidcommAuthc
 foreach ($profile in $didcommProfiles) {
     $script:ComposeFiles += (Join-Path $script:RepoRoot $profile)
 }
-$passportProfiles = @(Get-BetaPassportProfiles -Enabled ([bool]$EnablePassportNative))
+$passportProfiles = @(Get-BetaPassportProfiles -Enabled ([bool]$EnablePassportNative) `
+    -PhysicalProvider ([bool]$EnablePassportPhysicalProvider))
 foreach ($profile in $passportProfiles) {
     $script:ComposeFiles += (Join-Path $script:RepoRoot $profile)
 }
@@ -97,8 +106,14 @@ $script:ApplicationServices = @(
 )
 $script:SelectedApplicationServices = @($script:ApplicationServices)
 if ($EnablePassportNative) {
-    $script:SelectedApplicationServices += "passport-callback-signer"
-    $script:SelectedApplicationServices += "passport-beta-bureau"
+    if ($EnablePassportPhysicalProvider) {
+        $script:SelectedApplicationServices += "passport-callback-signer-supported"
+        $script:SelectedApplicationServices += "passport-provider-ingress"
+    }
+    else {
+        $script:SelectedApplicationServices += "passport-callback-signer"
+        $script:SelectedApplicationServices += "passport-beta-bureau"
+    }
 }
 $script:InfrastructureWriterServices = @("keycloak")
 
@@ -924,6 +939,7 @@ Write-Host "Promotion eligible: $promotionEligible"
 Write-Host "Portable Canvas enabled: $([bool]$EnablePortableCanvas)"
 Write-Host "DIDComm authcrypt enabled: $([bool]$EnableDidcommAuthcrypt)"
 Write-Host "Native passport enabled: $([bool]$EnablePassportNative)"
+Write-Host "Physical provider beta mode: $([bool]$EnablePassportPhysicalProvider)"
 Write-Host "Compose project: $script:BetaProject"
 Write-Host "UI Compose project: $script:BetaUiProject"
 Write-Host "Network: $script:BetaNetwork"
@@ -941,6 +957,8 @@ if ($PlanOnly) {
         didcomm_profiles = $didcommProfiles
         didcomm_configuration_validated = $false
         passport_native_enabled = [bool]$EnablePassportNative
+        passport_physical_provider_enabled = [bool]$EnablePassportPhysicalProvider
+        passport_mode = if ($EnablePassportPhysicalProvider) { "physical_provider_blocked" } elseif ($EnablePassportNative) { "simulator" } else { "off" }
         passport_profiles = $passportProfiles
         passport_configuration_validated = $false
         canvas_origin = if ($EnablePortableCanvas) { $CanvasOrigin } else { $null }
@@ -1025,7 +1043,8 @@ Write-Step "Validate paired DIDComm configuration before image or service mutati
 Assert-BetaDidcommConfiguration -RepoRoot $script:RepoRoot -EnvFiles $script:EnvFiles `
     -ComposeFiles $script:ComposeFiles -AuthcryptEnabled ([bool]$EnableDidcommAuthcrypt)
 Assert-BetaPassportConfiguration -RepoRoot $script:RepoRoot -EnvFiles $script:EnvFiles `
-    -ComposeFiles $script:ComposeFiles -PassportEnabled ([bool]$EnablePassportNative)
+    -ComposeFiles $script:ComposeFiles -PassportEnabled ([bool]$EnablePassportNative) `
+    -PhysicalProvider ([bool]$EnablePassportPhysicalProvider)
 if ($EnablePassportNative) {
     $existingPassportServices = @{}
     foreach ($passportService in @("passport-beta-bureau", "passport-callback-signer")) {
@@ -1362,7 +1381,8 @@ Write-Step "Enter maintenance window and apply live migration"
 Assert-BetaDidcommConfiguration -RepoRoot $script:RepoRoot -EnvFiles $script:EnvFiles `
     -ComposeFiles $script:ComposeFiles -AuthcryptEnabled ([bool]$EnableDidcommAuthcrypt)
 Assert-BetaPassportConfiguration -RepoRoot $script:RepoRoot -EnvFiles $script:EnvFiles `
-    -ComposeFiles $script:ComposeFiles -PassportEnabled ([bool]$EnablePassportNative)
+    -ComposeFiles $script:ComposeFiles -PassportEnabled ([bool]$EnablePassportNative) `
+    -PhysicalProvider ([bool]$EnablePassportPhysicalProvider)
 $canvasLtiIssuerDid = $null
 $maintenanceServices = $script:SelectedApplicationServices + $script:InfrastructureWriterServices + @("ui-prod")
 $maintenanceContainers = @($preDeployContainers | Where-Object { $_.running -and $_.service -in $maintenanceServices } | ForEach-Object { $_.container_id })
@@ -1563,6 +1583,7 @@ $deploymentManifest = [ordered]@{
     source_kind = $sourceKind
     marty_ui_sha = $sourceId
     beta_origin = $BetaOrigin
+    passport_provider_mode = if ($EnablePassportPhysicalProvider) { "physical" } elseif ($EnablePassportNative) { "simulator" } else { "off" }
     compose_project = $script:BetaProject
     ui_compose_project = $script:BetaUiProject
     network = $script:BetaNetwork
