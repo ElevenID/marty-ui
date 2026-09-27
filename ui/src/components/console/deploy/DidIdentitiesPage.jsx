@@ -32,8 +32,10 @@ import SwapHorizIcon from '@mui/icons-material/SwapHoriz';
 import UploadFileOutlinedIcon from '@mui/icons-material/UploadFileOutlined';
 
 import signingKeysApi from '../../../services/signingKeysApi';
+import { createIdempotencyKey } from '../../../services/idempotency';
 import { useConsole } from '../../../contexts/ConsoleContext';
 import { useNotifications } from '../../../hooks/useNotifications';
+import { usePermissions } from '../../../hooks/usePermissions';
 
 const PUBLIC_CREDENTIAL_FORMATS = [
   'SD_JWT_VC',
@@ -56,6 +58,9 @@ export default function DidIdentitiesPage() {
   const navigate = useNavigate();
   const { activeOrgId } = useConsole();
   const { showNotification } = useNotifications();
+  const { can, isLoading: permissionsLoading } = usePermissions();
+  const canIssueCsca = !permissionsLoading && can('passport-certificate', 'issue-csca');
+  const canIssueDsc = !permissionsLoading && can('passport-certificate', 'issue');
   const [identities, setIdentities] = useState([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
@@ -66,7 +71,69 @@ export default function DidIdentitiesPage() {
   const [csrSubject, setCsrSubject] = useState({ country: '', organization: '', common_name: '' });
   const [csrPem, setCsrPem] = useState('');
   const [submitting, setSubmitting] = useState(false);
+  const [issuing, setIssuing] = useState(null);
+  const [issueForm, setIssueForm] = useState({
+    certificate_id: '', csca_issuer_did: '', csca_certificate_id: '',
+    country: '', organization: '', common_name: '', validity_days: '', idempotency_key: '',
+  });
+  const [issuedCertificate, setIssuedCertificate] = useState(null);
+  const [issueError, setIssueError] = useState('');
   const csrSupported = certifying && CSR_ALGORITHMS.has(certifying.algorithm);
+  const issueValidityDays = Number(issueForm.validity_days);
+  const issueFormValid = Boolean(issuing)
+    && Number.isInteger(issueValidityDays) && issueValidityDays >= 1
+    && issueValidityDays <= (issuing?.key_purpose === 'csca' ? 3650 : 90)
+    && /^[A-Za-z]{2}$/.test(issueForm.country.trim())
+    && Boolean(issueForm.organization.trim() && issueForm.common_name.trim())
+    && (issuing?.key_purpose === 'csca'
+      ? Boolean(issueForm.certificate_id.trim())
+      : Boolean(issueForm.csca_issuer_did.trim() && issueForm.csca_certificate_id.trim()));
+
+  const openIssuance = (identity) => {
+    setIssuing(identity);
+    setIssuedCertificate(null);
+    setIssueError('');
+    setIssueForm({
+      certificate_id: '', csca_issuer_did: '', csca_certificate_id: '',
+      country: '', organization: '', common_name: '',
+      validity_days: identity.key_purpose === 'csca' ? '365' : '30',
+      idempotency_key: createIdempotencyKey('passport-dsc'),
+    });
+  };
+
+  const issueCertificate = async () => {
+    if (!issuing || !activeOrgId) return;
+    const csca = issuing.key_purpose === 'csca';
+    if (!(csca ? canIssueCsca : canIssueDsc)) return;
+    if (!issueFormValid) return;
+    setSubmitting(true);
+    setIssueError('');
+    try {
+      const subject = {
+        organization_id: activeOrgId,
+        country: issueForm.country.trim().toUpperCase(),
+        organization: issueForm.organization.trim(),
+        common_name: issueForm.common_name.trim(),
+        validity_days: issueValidityDays,
+      };
+      const result = csca
+        ? await signingKeysApi.issueCscaSelfSignedCertificate({
+          ...subject, issuer_did: issuing.issuer_did, certificate_id: issueForm.certificate_id.trim(),
+        })
+        : await signingKeysApi.issueDscCertificate({
+          ...subject, dsc_issuer_did: issuing.issuer_did,
+          csca_issuer_did: issueForm.csca_issuer_did.trim(),
+          csca_certificate_id: issueForm.csca_certificate_id.trim(),
+          idempotency_key: issueForm.idempotency_key,
+        });
+      setIssuedCertificate(result);
+      showNotification?.(csca ? 'CSCA certificate issued.' : 'Document signer certificate issued.', 'success');
+    } catch {
+      setIssueError('Passport certificate could not be issued. Check the selected profiles and certificate details, then retry.');
+    } finally {
+      setSubmitting(false);
+    }
+  };
 
   const load = useCallback(async () => {
     if (!activeOrgId) {
@@ -322,6 +389,12 @@ export default function DidIdentitiesPage() {
                 <TableCell>{identity.algorithm}</TableCell>
                 <TableCell><Chip size="small" color="success" label={identity.status} /></TableCell>
                 <TableCell align="right">
+                  {identity.credential_format === 'ICAO_EMRTD' && identity.key_purpose === 'csca' && canIssueCsca && (
+                    <Button size="small" onClick={() => openIssuance(identity)}>Issue CSCA</Button>
+                  )}
+                  {identity.credential_format === 'ICAO_EMRTD' && identity.key_purpose === 'x509_doc_signer' && canIssueDsc && (
+                    <Button size="small" onClick={() => openIssuance(identity)}>Issue DSC</Button>
+                  )}
                   {identity.credential_format === 'ICAO_EMRTD' && identity.key_purpose === 'x509_doc_signer' && (
                     <Tooltip title="Attach document signer certificate">
                       <IconButton
@@ -368,6 +441,59 @@ export default function DidIdentitiesPage() {
           </TableBody>
         </Table>
       </TableContainer>
+
+      <Dialog open={Boolean(issuing)} onClose={() => !submitting && setIssuing(null)} maxWidth="md" fullWidth>
+        <DialogTitle>{issuing?.key_purpose === 'csca' ? 'Issue beta CSCA certificate' : 'Issue beta document signer certificate'}</DialogTitle>
+        <DialogContent>
+          <Stack spacing={2} sx={{ mt: 1 }}>
+            {issueError && <Alert severity="error">{issueError}</Alert>}
+            <Alert severity="info">
+              The selected issuer profile holds the signing key in managed custody. This ceremony returns public certificate material only.
+            </Alert>
+            <Typography fontFamily="monospace" sx={{ overflowWrap: 'anywhere' }}>{issuing?.issuer_did}</Typography>
+            {issuing?.key_purpose === 'csca' ? (
+              <TextField label="CSCA certificate ID" required value={issueForm.certificate_id}
+                onChange={(event) => setIssueForm((current) => ({ ...current, certificate_id: event.target.value }))} />
+            ) : (
+              <>
+                <TextField label="CSCA issuer DID" required value={issueForm.csca_issuer_did}
+                  onChange={(event) => setIssueForm((current) => ({ ...current, csca_issuer_did: event.target.value }))} />
+                <TextField label="CSCA certificate ID" required value={issueForm.csca_certificate_id}
+                  onChange={(event) => setIssueForm((current) => ({ ...current, csca_certificate_id: event.target.value }))} />
+              </>
+            )}
+            <Stack direction={{ xs: 'column', sm: 'row' }} spacing={1}>
+              <TextField label="Country code (C)" required value={issueForm.country}
+                onChange={(event) => setIssueForm((current) => ({ ...current, country: event.target.value }))}
+                slotProps={{ htmlInput: { maxLength: 2 } }} />
+              <TextField label="Organization (O)" required fullWidth value={issueForm.organization}
+                onChange={(event) => setIssueForm((current) => ({ ...current, organization: event.target.value }))} />
+              <TextField label="Common name (CN)" required fullWidth value={issueForm.common_name}
+                onChange={(event) => setIssueForm((current) => ({ ...current, common_name: event.target.value }))} />
+            </Stack>
+            <TextField label="Validity (days)" type="number" required value={issueForm.validity_days}
+              onChange={(event) => setIssueForm((current) => ({ ...current, validity_days: event.target.value }))}
+              slotProps={{ htmlInput: { min: 1, max: issuing?.key_purpose === 'csca' ? 3650 : 90, step: 1 } }} />
+            {issuedCertificate && (
+              <>
+                <Alert severity="success">Certificate issued. Save this public result for enrollment records.</Alert>
+                <Typography>Serial: {issuedCertificate.serial}</Typography>
+                <Typography>Valid: {issuedCertificate.not_before} to {issuedCertificate.not_after}</Typography>
+                <TextField label="Issued certificate PEM" multiline minRows={6} fullWidth
+                  value={issuedCertificate.certificate_pem || ''} slotProps={{ input: { readOnly: true, sx: { fontFamily: 'monospace' } } }} />
+                <TextField label="Issued certificate chain PEM" multiline minRows={3} fullWidth
+                  value={issuedCertificate.chain_pem || ''} slotProps={{ input: { readOnly: true, sx: { fontFamily: 'monospace' } } }} />
+              </>
+            )}
+          </Stack>
+        </DialogContent>
+        <DialogActions>
+          <Button onClick={() => setIssuing(null)} disabled={submitting}>Close</Button>
+          {!issuedCertificate && <Button variant="contained" onClick={issueCertificate} disabled={submitting || !issueFormValid}>
+            {submitting ? <CircularProgress size={20} /> : (issuing?.key_purpose === 'csca' ? 'Issue CSCA certificate' : 'Issue DSC certificate')}
+          </Button>}
+        </DialogActions>
+      </Dialog>
 
       <Dialog open={Boolean(certifying)} onClose={() => !submitting && setCertifying(null)} maxWidth="md" fullWidth>
         <DialogTitle>{certifying?.key_purpose === 'csca' ? 'Enroll public CSCA trust anchor' : 'Attach document signer certificate'}</DialogTitle>

@@ -3,13 +3,17 @@ import { renderWithRouter, screen, waitFor } from '@test/utils';
 
 import DidIdentitiesPage from './DidIdentitiesPage';
 
-const { listPublicIssuerIdentities, rebindIssuerIdentity, deleteIssuerIdentity, storeIssuerIdentityCertificate, enrollCscaCertificate, generateIssuerIdentityCsr, showNotification } = vi.hoisted(() => ({
+const { listPublicIssuerIdentities, rebindIssuerIdentity, deleteIssuerIdentity, storeIssuerIdentityCertificate, enrollCscaCertificate, generateIssuerIdentityCsr, issueCscaSelfSignedCertificate, issueDscCertificate, can, permissionState, showNotification } = vi.hoisted(() => ({
   listPublicIssuerIdentities: vi.fn(),
   rebindIssuerIdentity: vi.fn(),
   deleteIssuerIdentity: vi.fn(),
   storeIssuerIdentityCertificate: vi.fn(),
   enrollCscaCertificate: vi.fn(),
   generateIssuerIdentityCsr: vi.fn(),
+  issueCscaSelfSignedCertificate: vi.fn(),
+  issueDscCertificate: vi.fn(),
+  can: vi.fn(),
+  permissionState: { isLoading: false },
   showNotification: vi.fn(),
 }));
 
@@ -21,6 +25,8 @@ vi.mock('../../../services/signingKeysApi', () => ({
     storeIssuerIdentityCertificate: (...args: unknown[]) => storeIssuerIdentityCertificate(...args),
     enrollCscaCertificate: (...args: unknown[]) => enrollCscaCertificate(...args),
     generateIssuerIdentityCsr: (...args: unknown[]) => generateIssuerIdentityCsr(...args),
+    issueCscaSelfSignedCertificate: (...args: unknown[]) => issueCscaSelfSignedCertificate(...args),
+    issueDscCertificate: (...args: unknown[]) => issueDscCertificate(...args),
   },
 }));
 
@@ -32,9 +38,15 @@ vi.mock('../../../contexts/ConsoleContext', () => ({
   useConsole: () => ({ activeOrgId: 'org-test-1' }),
 }));
 
+vi.mock('../../../hooks/usePermissions', () => ({
+  usePermissions: () => ({ can, isLoading: permissionState.isLoading }),
+}));
+
 describe('DidIdentitiesPage', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    permissionState.isLoading = false;
+    can.mockReturnValue(false);
     listPublicIssuerIdentities.mockImplementation(async ({ credential_format: credentialFormat }) => ({
       identities: credentialFormat === 'SD_JWT_VC'
         ? [{
@@ -50,6 +62,8 @@ describe('DidIdentitiesPage', () => {
     storeIssuerIdentityCertificate.mockResolvedValue({ ok: true });
     enrollCscaCertificate.mockResolvedValue({ status: 'VALID' });
     generateIssuerIdentityCsr.mockResolvedValue({ csr_pem: '-----BEGIN CERTIFICATE REQUEST-----\npublic-csr\n-----END CERTIFICATE REQUEST-----' });
+    issueCscaSelfSignedCertificate.mockResolvedValue({ certificate_pem: 'public-csca-pem', chain_pem: '', serial: '123', not_before: '2026-01-01', not_after: '2027-01-01' });
+    issueDscCertificate.mockResolvedValue({ certificate_pem: 'public-dsc-pem', chain_pem: 'public-csca-pem', serial: '456', not_before: '2026-01-01', not_after: '2026-02-01' });
   });
 
   it('loads identities through format-scoped public DID queries', async () => {
@@ -239,5 +253,74 @@ describe('DidIdentitiesPage', () => {
     expect(screen.queryByRole('textbox', { name: /signing service/i })).not.toBeInTheDocument();
     expect(screen.queryByRole('textbox', { name: /key reference/i })).not.toBeInTheDocument();
     expect(screen.queryByRole('textbox', { name: /issuer profile/i })).not.toBeInTheDocument();
+  });
+
+  it('issues a self-signed CSCA only for an operator with the dedicated grant', async () => {
+    can.mockImplementation((resource: string, action: string) => resource === 'passport-certificate' && action === 'issue-csca');
+    listPublicIssuerIdentities.mockImplementation(async ({ credential_format: format }) => ({
+      identities: format === 'ICAO_EMRTD'
+        ? [{ issuer_did: 'did:web:issuer.example:csca', key_purpose: 'csca', algorithm: 'ES256', status: 'active' }]
+        : [],
+    }));
+    const { user } = renderWithRouter(<DidIdentitiesPage />);
+    await screen.findByText('did:web:issuer.example:csca');
+    expect(screen.queryByRole('button', { name: 'Issue DSC' })).not.toBeInTheDocument();
+    await user.click(screen.getByRole('button', { name: 'Issue CSCA' }));
+    await user.type(screen.getByRole('textbox', { name: 'CSCA certificate ID' }), 'beta-csca-1');
+    await user.type(screen.getByRole('textbox', { name: 'Country code (C)' }), 'US');
+    await user.type(screen.getByRole('textbox', { name: 'Organization (O)' }), 'Beta Issuer');
+    await user.type(screen.getByRole('textbox', { name: 'Common name (CN)' }), 'Beta CSCA');
+    await user.click(screen.getByRole('button', { name: 'Issue CSCA certificate' }));
+    await waitFor(() => expect(issueCscaSelfSignedCertificate).toHaveBeenCalledWith({
+      organization_id: 'org-test-1', issuer_did: 'did:web:issuer.example:csca',
+      certificate_id: 'beta-csca-1', country: 'US', organization: 'Beta Issuer',
+      common_name: 'Beta CSCA', validity_days: 365,
+    }));
+    expect(screen.getByRole('textbox', { name: 'Issued certificate PEM' })).toHaveValue('public-csca-pem');
+    expect(issueDscCertificate).not.toHaveBeenCalled();
+    expect(screen.queryByRole('textbox', { name: /KMS locator|private key|token/i })).not.toBeInTheDocument();
+  });
+
+  it('issues a DSC through the selected DSC and public CSCA identity with a stable retry key', async () => {
+    can.mockImplementation((resource: string, action: string) => resource === 'passport-certificate' && action === 'issue');
+    listPublicIssuerIdentities.mockImplementation(async ({ credential_format: format }) => ({
+      identities: format === 'ICAO_EMRTD'
+        ? [{ issuer_did: 'did:web:issuer.example:dsc', key_purpose: 'x509_doc_signer', algorithm: 'ES256', status: 'active' }]
+        : [],
+    }));
+    const { user } = renderWithRouter(<DidIdentitiesPage />);
+    await screen.findByText('did:web:issuer.example:dsc');
+    await user.click(screen.getByRole('button', { name: 'Issue DSC' }));
+    await user.type(screen.getByRole('textbox', { name: 'CSCA issuer DID' }), 'did:web:issuer.example:csca');
+    await user.type(screen.getByRole('textbox', { name: 'CSCA certificate ID' }), 'beta-csca-1');
+    await user.type(screen.getByRole('textbox', { name: 'Country code (C)' }), 'US');
+    await user.type(screen.getByRole('textbox', { name: 'Organization (O)' }), 'Beta Issuer');
+    await user.type(screen.getByRole('textbox', { name: 'Common name (CN)' }), 'Beta DSC');
+    await user.click(screen.getByRole('button', { name: 'Issue DSC certificate' }));
+    await waitFor(() => expect(issueDscCertificate).toHaveBeenCalledWith(expect.objectContaining({
+      organization_id: 'org-test-1', dsc_issuer_did: 'did:web:issuer.example:dsc',
+      csca_issuer_did: 'did:web:issuer.example:csca', csca_certificate_id: 'beta-csca-1',
+      country: 'US', organization: 'Beta Issuer', common_name: 'Beta DSC', validity_days: 30,
+      idempotency_key: expect.stringMatching(/^passport-dsc:/),
+    })));
+    expect(screen.getByRole('textbox', { name: 'Issued certificate PEM' })).toHaveValue('public-dsc-pem');
+    expect(screen.getByRole('textbox', { name: 'Issued certificate chain PEM' })).toHaveValue('public-csca-pem');
+    expect(issueCscaSelfSignedCertificate).not.toHaveBeenCalled();
+  });
+
+  it('hides both issuance actions while permissions are loading or missing', async () => {
+    permissionState.isLoading = true;
+    can.mockReturnValue(true);
+    listPublicIssuerIdentities.mockImplementation(async ({ credential_format: format }) => ({
+      identities: format === 'ICAO_EMRTD'
+        ? [
+          { issuer_did: 'did:web:issuer.example:csca', key_purpose: 'csca', algorithm: 'ES256', status: 'active' },
+          { issuer_did: 'did:web:issuer.example:dsc', key_purpose: 'x509_doc_signer', algorithm: 'ES256', status: 'active' },
+        ] : [],
+    }));
+    renderWithRouter(<DidIdentitiesPage />);
+    await screen.findByText('did:web:issuer.example:csca');
+    expect(screen.queryByRole('button', { name: 'Issue CSCA' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Issue DSC' })).not.toBeInTheDocument();
   });
 });

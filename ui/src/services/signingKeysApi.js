@@ -417,6 +417,34 @@ export async function enrollCscaCertificate(body) {
   });
 }
 
+/** Issue a beta CSCA certificate using the selected managed issuer profile. */
+export async function issueCscaSelfSignedCertificate(body) {
+  return post(withOrganizationQuery(`${BASE_PATH}/issuer-identities/csca-self-signed-certificate`, body), {
+    issuer_did: body?.issuer_did,
+    certificate_id: body?.certificate_id,
+    credential_format: 'ICAO_EMRTD',
+    country: body?.country,
+    organization: body?.organization,
+    common_name: body?.common_name,
+    validity_days: body?.validity_days,
+  });
+}
+
+/** Issue a beta DSC certificate through managed DSC and CSCA profiles. */
+export async function issueDscCertificate(body) {
+  return post(withOrganizationQuery(`${BASE_PATH}/issuer-identities/dsc-certificate`, body), {
+    dsc_issuer_did: body?.dsc_issuer_did,
+    csca_issuer_did: body?.csca_issuer_did,
+    csca_certificate_id: body?.csca_certificate_id,
+    credential_format: 'ICAO_EMRTD',
+    country: body?.country,
+    organization: body?.organization,
+    common_name: body?.common_name,
+    validity_days: body?.validity_days,
+    idempotency_key: body?.idempotency_key,
+  });
+}
+
 /** Build a public PKCS#10 request using the selected issuer identity's KMS key. */
 export async function generateIssuerIdentityCsr(body) {
   const organizationId = requireOrganizationId(body, 'generating an issuer CSR');
@@ -479,6 +507,8 @@ export default {
   rebindIssuerIdentity,
   storeIssuerIdentityCertificate,
   enrollCscaCertificate,
+  issueCscaSelfSignedCertificate,
+  issueDscCertificate,
   generateIssuerIdentityCsr,
   deleteIssuerIdentity,
 };
