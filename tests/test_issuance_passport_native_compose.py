@@ -29,8 +29,13 @@ def test_compose_exposes_both_passport_selectors_without_enabling_them() -> None
             routed_gateway["PASSPORT_PROVIDER_INGRESS_GATEWAY_ENABLED"]
             == "${PASSPORT_PROVIDER_INGRESS_GATEWAY_ENABLED:-false}"
         )
+        assert "PASSPORT_PROVIDER_INGRESS_SERVICE_URL" not in routed_gateway
+    for profile in (
+        "docker-compose.profile.passport-provider-base.yml",
+        "docker-compose.profile.passport-provider-selfhost.yml",
+    ):
         assert (
-            routed_gateway["PASSPORT_PROVIDER_INGRESS_SERVICE_URL"]
+            _environment(profile, "gateway")["PASSPORT_PROVIDER_INGRESS_SERVICE_URL"]
             == "${PASSPORT_PROVIDER_INGRESS_SERVICE_URL:-}"
         )
     assert (

@@ -1,6 +1,10 @@
 # Opt-in physical bureau callback path for the base Compose stack. Select this
 # overlay only after supplying a real provider and a narrowly scoped Bao token.
 services:
+  gateway:
+    environment:
+      PASSPORT_PROVIDER_INGRESS_SERVICE_URL: ${PASSPORT_PROVIDER_INGRESS_SERVICE_URL:-}
+
   openbao:
     networks:
       - marty-network

@@ -1,6 +1,10 @@
 # Opt-in physical bureau callback path for docker-compose.selfhost.prod.yml.
 # The signer reaches the external OpenBao address by outbound connection only.
 services:
+  gateway:
+    environment:
+      PASSPORT_PROVIDER_INGRESS_SERVICE_URL: ${PASSPORT_PROVIDER_INGRESS_SERVICE_URL:-}
+
   passport-callback-signer-supported:
     image: ${MARTY_SERVICES_IMAGE:?set MARTY_SERVICES_IMAGE to the immutable services image digest}
     environment:
