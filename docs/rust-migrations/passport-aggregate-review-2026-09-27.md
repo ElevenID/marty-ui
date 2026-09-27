@@ -1,10 +1,10 @@
 # Passport Rust aggregate review — 2026-09-27
 
-This draft stacks the passport migration and beta acceptance source on Signing
-Keys aggregate PR #913. Its parent is the exact reviewed #913 head
-`10c7b6f62f86dd88720bc9d22450ba9bdfaea67c`. The aggregate source tree
-before this note is `a7480d3538a974678787439550bf1ab747e2b384`, matching
-local reviewed union `e413c1e89e8dd8bc2df96c7602b1582aac135119`.
+Signing Keys aggregate PR #913 merged to protected main at
+`c70aa64492f135d3ffd54dc10c8a9867fc39528f`. This passport migration and
+beta acceptance aggregate is rebased on that exact main commit. Its original
+source tree matched local reviewed union
+`e413c1e89e8dd8bc2df96c7602b1582aac135119`.
 
 The union includes passport aggregate #881 through the restacked #917
 physical-profile and producer integration; #915–#917 workflow artifact
@@ -25,8 +25,15 @@ Local checks on the union tree:
 | Beta acceptance, release contract, and CI workflow Python tests | 195 passed |
 | Independent exact-tree review of #917 workflow bindings, #909, and #907 integration | No P1/P2 findings |
 
-The protected #913 merge and this aggregate's protected checks remain
-required. Physical provider allowlisting and live evidence remain blocked
+The first protected aggregate run found that an unconditional provider-ingress
+service URL changed the frozen default base Compose peer set. The fix moves
+that URL into opt-in passport provider overlays, adds rendered Compose
+regression coverage, and passed 68 focused tests, 91 adjacent tests, all 12
+base-native renderer models, self-host renderer models, and conformance Compose
+checks. An independent reviewer found no P1/P2 in the exact fix. This
+aggregate's protected checks and merge-group gates remain required.
+
+Physical provider allowlisting and live evidence remain blocked
 pending governed provider details, KMS-backed issuer profiles, signed runtime
 provenance, rollback proof, and nine-route acceptance. Python retirement PR
 #305 remains draft until those gates pass. This note records local source and
