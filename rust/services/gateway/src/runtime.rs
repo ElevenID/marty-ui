@@ -4600,8 +4600,9 @@ mod tests {
     use marty_signing_keys::{
         csca_lifecycle::CscaLifecycleStore,
         documents::{DocumentStore as SigningDocumentStore, PublishJwkRequest},
-        http::{router_with_dependencies as signing_router, router_with_dependencies_and_dsc_key},
-        kms::{self, SignRequest},
+        http::{
+            router_with_dependencies as signing_router, router_with_dependencies_and_ceremony_keys,
+        },
         profiles::ProfileStore as SigningProfileStore,
         registry::RegistryStore as SigningRegistryStore,
     };
@@ -7487,6 +7488,9 @@ mod tests {
                     membership
                         .permissions
                         .insert("passport-certificate:issue".into());
+                    membership
+                        .permissions
+                        .insert("passport-certificate:issue-csca".into());
                 }
             }
             Ok(membership)
@@ -7494,12 +7498,13 @@ mod tests {
     }
 
     fn gateway_with_signing_http(signing_url: String) -> Router {
-        gateway_with_signing_http_dsc(signing_url, None, None)
+        gateway_with_signing_http_dsc(signing_url, None, None, None)
     }
 
     fn gateway_with_signing_http_dsc(
         signing_url: String,
         dsc_key: Option<&str>,
+        csca_key: Option<&str>,
         disposable_org: Option<(&str, bool)>,
     ) -> Router {
         let upstream = Arc::new(crate::transport::ReqwestUpstream::new(1024 * 1024).unwrap());
@@ -7520,6 +7525,11 @@ mod tests {
         if let Some(dsc_key) = dsc_key {
             let state = Arc::get_mut(&mut state).unwrap();
             state.dsc_issue_gateway_key = Some(dsc_key.to_owned());
+        }
+        if let Some(csca_key) = csca_key {
+            let state = Arc::get_mut(&mut state).unwrap();
+            state.csca_issue_gateway_key = Some(csca_key.to_owned());
+            state.passport_native_gateway_enabled = true;
         }
         if let Some((organization_id, operator)) = disposable_org {
             let fixture = Arc::new(DisposableDscIdentity {
@@ -8136,71 +8146,6 @@ mod tests {
         signing_server.abort();
     }
 
-    // The CA is assembled only for this disposable fixture. Transit signs the
-    // certificate body; no CA or DSC private key is present in the test.
-    async fn disposable_csca_certificate(csr_pem: &str, signer_config: Value) -> String {
-        use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine};
-        use const_oid::ObjectIdentifier;
-        use der::{asn1::BitString, DecodePem, Encode, EncodePem};
-        use spki::AlgorithmIdentifierOwned;
-        use std::time::Duration;
-        use x509_cert::{
-            certificate::{Certificate, TbsCertificate, Version},
-            ext::{
-                pkix::{BasicConstraints, KeyUsage, KeyUsages},
-                AsExtension,
-            },
-            request::CertReq,
-            serial_number::SerialNumber,
-            time::Validity,
-        };
-
-        let csr = CertReq::from_pem(csr_pem).unwrap();
-        let subject = csr.info.subject;
-        let constraints = BasicConstraints {
-            ca: true,
-            path_len_constraint: Some(0),
-        }
-        .to_extension(&subject, &[])
-        .unwrap();
-        let usage = KeyUsage(KeyUsages::KeyCertSign | KeyUsages::CRLSign)
-            .to_extension(&subject, std::slice::from_ref(&constraints))
-            .unwrap();
-        let algorithm = AlgorithmIdentifierOwned {
-            oid: ObjectIdentifier::new_unwrap("1.2.840.10045.4.3.2"),
-            parameters: None,
-        };
-        let tbs = TbsCertificate {
-            version: Version::V3,
-            serial_number: SerialNumber::new(&[1]).unwrap(),
-            signature: algorithm.clone(),
-            issuer: subject.clone(),
-            validity: Validity::from_now(Duration::from_secs(365 * 24 * 60 * 60)).unwrap(),
-            subject,
-            subject_public_key_info: csr.info.public_key,
-            issuer_unique_id: None,
-            subject_unique_id: None,
-            extensions: Some(vec![constraints, usage]),
-        };
-        let signed = kms::sign(SignRequest {
-            service_config: signer_config,
-            payload_b64: URL_SAFE_NO_PAD.encode(tbs.to_der().unwrap()),
-        })
-        .await
-        .unwrap_or_else(|_| panic!("disposable OpenBao CSCA signing failed"));
-        assert_eq!(signed.signature_encoding, "der");
-        Certificate {
-            tbs_certificate: tbs,
-            signature_algorithm: algorithm,
-            signature: BitString::from_bytes(
-                &URL_SAFE_NO_PAD.decode(signed.signature_b64).unwrap(),
-            )
-            .unwrap(),
-        }
-        .to_pem(der::pem::LineEnding::LF)
-        .unwrap()
-    }
-
     async fn disposable_gateway_json(
         gateway: &Router,
         method: &str,
@@ -8242,8 +8187,10 @@ mod tests {
         use x509_cert::{request::CertReq, Certificate};
 
         const DSC_KEY: &str = "disposable-gateway-dsc-issue-key-32-characters";
+        const CSCA_KEY: &str = "disposable-gateway-csca-issue-key-32-characters";
         const INTERNAL_KEY: &str = "disposable-gateway-internal-key";
         const DSC_ROUTE: &str = "/v1/signing-keys/issuer-identities/dsc-certificate";
+        const CSCA_ROUTE: &str = "/v1/signing-keys/issuer-identities/csca-self-signed-certificate";
 
         let redis_url = disposable_signing_redis_url().await;
         let endpoint = std::env::var("MARTY_TEST_OPENBAO_URL").expect("disposable OpenBao URL");
@@ -8293,9 +8240,11 @@ mod tests {
         let profiles = SigningProfileStore::from_connection(registry.connection());
         let documents = SigningDocumentStore::from_connection(registry.connection());
         let lifecycle = CscaLifecycleStore::from_connection(registry.connection());
-        let signing = router_with_dependencies_and_dsc_key(
+        let signing = router_with_dependencies_and_ceremony_keys(
             INTERNAL_KEY.into(),
             Some(DSC_KEY.into()),
+            Some(CSCA_KEY.into()),
+            true,
             Some(registry),
             Some(documents),
             Some(lifecycle),
@@ -8312,11 +8261,13 @@ mod tests {
         let gateway = gateway_with_signing_http_dsc(
             signing_url.clone(),
             Some(DSC_KEY),
+            Some(CSCA_KEY),
             Some((&organization_id, true)),
         );
         let limited_gateway = gateway_with_signing_http_dsc(
             signing_url.clone(),
             Some(DSC_KEY),
+            Some(CSCA_KEY),
             Some((&organization_id, false)),
         );
         let issuer_did = format!("did:web:issuer.example:orgs:gateway-dsc-{suffix}");
@@ -8372,38 +8323,59 @@ mod tests {
         let csca_reference = csca_profile["signing_key_reference"].as_str().unwrap();
         let dsc_reference = dsc_profile["signing_key_reference"].as_str().unwrap();
         assert_ne!(csca_reference, dsc_reference);
-        let csca_config = json!({
-            "id":"managed-openbao-transit", "name":"Disposable Gateway CSCA",
-            "service_type":"openbao-transit", "endpoint":endpoint, "mount":"transit",
-            "auth_mode":"token", "auth_reference":token,
-            "key_reference":csca_reference, "algorithm":"ES256",
-            "algorithms":["ES256"], "key_purposes":["csca"],
-            "credential_formats":["icao_emrtd"]
-        });
         let csr_pem = csca_csr["csr_pem"].as_str().unwrap();
         let csca_name = CertReq::from_pem(csr_pem).unwrap().info.subject;
-        let csca_pem = disposable_csca_certificate(csr_pem, csca_config).await;
+        let certificate_id = format!("gateway-csca-{suffix}");
+        let csca_issue = json!({
+            "organization_id":organization_id, "issuer_did":issuer_did,
+            "certificate_id":certificate_id, "credential_format":"ICAO_EMRTD",
+            "country":"US", "organization":"ElevenID Beta",
+            "common_name":"Disposable Gateway CSCA", "validity_days":365
+        });
+        let (status, _) = disposable_gateway_json(
+            &limited_gateway,
+            "POST",
+            CSCA_ROUTE,
+            &csca_issue,
+            true,
+            None,
+        )
+        .await;
+        assert_eq!(
+            status,
+            StatusCode::FORBIDDEN,
+            "ordinary user must not issue CSCA"
+        );
+        let (status, _) = disposable_gateway_json(
+            &gateway,
+            "POST",
+            CSCA_ROUTE,
+            &csca_issue,
+            false,
+            Some(INTERNAL_KEY),
+        )
+        .await;
+        assert_eq!(status, StatusCode::FORBIDDEN, "API key must not issue CSCA");
+        let (status, issued_csca) =
+            disposable_gateway_json(&gateway, "POST", CSCA_ROUTE, &csca_issue, true, None).await;
+        assert_eq!(status, StatusCode::OK, "managed CSCA ceremony failed");
+        assert_eq!(issued_csca["status"], "issued");
+        assert_eq!(issued_csca["chain_pem"], "");
+        let csca_pem = issued_csca["certificate_pem"].as_str().unwrap();
         let csca_der = load_certificate_pem(&csca_pem).unwrap();
         assert!(verify_certificate_signature(&csca_der, &csca_der).unwrap());
         let parsed_csca = Certificate::from_der(&csca_der).unwrap();
         assert_eq!(parsed_csca.tbs_certificate.subject, csca_name);
         assert_eq!(parsed_csca.tbs_certificate.issuer, csca_name);
-        let certificate_id = format!("gateway-csca-{suffix}");
-        let (status, enrolled) = disposable_gateway_json(
-            &gateway,
-            "PUT",
-            "/v1/signing-keys/issuer-identities/csca-certificate",
-            &json!({
-                "organization_id":organization_id, "issuer_did":issuer_did,
-                "credential_format":"ICAO_EMRTD", "algorithm":"ES256",
-                "certificate_id":certificate_id, "cert_pem":csca_pem
-            }),
-            true,
-            None,
-        )
-        .await;
-        assert_eq!(status, StatusCode::OK, "CSCA trust enrollment failed");
-        assert_eq!(enrolled["status"], "VALID");
+        let (status, replay) =
+            disposable_gateway_json(&gateway, "POST", CSCA_ROUTE, &csca_issue, true, None).await;
+        assert_eq!(status, StatusCode::OK, "CSCA ceremony replay failed");
+        assert_eq!(replay, issued_csca);
+        let mut changed = csca_issue.clone();
+        changed["common_name"] = json!("Changed Gateway CSCA");
+        let (status, _) =
+            disposable_gateway_json(&gateway, "POST", CSCA_ROUTE, &changed, true, None).await;
+        assert_eq!(status, StatusCode::CONFLICT);
 
         let issue = json!({
             "organization_id":organization_id, "dsc_issuer_did":issuer_did,
