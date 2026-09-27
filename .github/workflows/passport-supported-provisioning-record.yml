@@ -47,7 +47,7 @@ jobs:
                  and .state == "active"' <<< "$workflow"
           record_dir="$RUNNER_TEMP/passport-supported-record-$PRODUCER_RUN_ID"
           mkdir -p "$record_dir"
-          gh run download "$PRODUCER_RUN_ID" --repo ElevenID/marty-ui \
+          gh run download "$PRODUCER_RUN_ID" --repo "$GITHUB_REPOSITORY" \
             --name "passport-supported-compose-ownership-$PRODUCER_RUN_ID" \
             --dir "$record_dir"
           record="$record_dir/passport-supported-compose-ownership-$PRODUCER_RUN_ID.json"
@@ -64,7 +64,7 @@ jobs:
           plan_workflow="$(gh api "repos/ElevenID/marty-ui/actions/workflows/$plan_workflow_id")"
           jq -e '.path == ".github/workflows/passport-supported-provisioning-plan.yml"
                  and .state == "active"' <<< "$plan_workflow"
-          gh run download "$plan_run_id" --repo ElevenID/marty-ui \
+          gh run download "$plan_run_id" --repo "$GITHUB_REPOSITORY" \
             --name "passport-supported-provisioning-plan-$plan_run_id" \
             --dir "$record_dir"
           plan="$record_dir/passport-supported-provisioning-plan-$plan_run_id.json"
