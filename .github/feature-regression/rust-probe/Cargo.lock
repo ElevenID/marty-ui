@@ -3463,8 +3463,8 @@ checksum = "112b39cec0b298b6c1999fee3e31427f74f676e4cb9879ed1a121b43661a4154"
 
 [[package]]
 name = "marty-crypto"
-version = "0.1.61"
-source = "git+https://github.com/ElevenID/marty-core?rev=ec307b6edd0450c558869fd587215e72cd46e9d1#ec307b6edd0450c558869fd587215e72cd46e9d1"
+version = "0.1.62"
+source = "git+https://github.com/ElevenID/marty-core?rev=bdbd1510ab6ad650e4d408a93dac22b57eb67e68#bdbd1510ab6ad650e4d408a93dac22b57eb67e68"
 dependencies = [
  "aes",
  "aes-gcm",
@@ -3533,8 +3533,8 @@ dependencies = [
 
 [[package]]
 name = "marty-didcomm"
-version = "0.1.61"
-source = "git+https://github.com/ElevenID/marty-core?rev=ec307b6edd0450c558869fd587215e72cd46e9d1#ec307b6edd0450c558869fd587215e72cd46e9d1"
+version = "0.1.62"
+source = "git+https://github.com/ElevenID/marty-core?rev=bdbd1510ab6ad650e4d408a93dac22b57eb67e68#bdbd1510ab6ad650e4d408a93dac22b57eb67e68"
 dependencies = [
  "affinidi-messaging-didcomm",
  "base64 0.22.1",
@@ -3593,7 +3593,7 @@ dependencies = [
  "hyper",
  "hyper-util",
  "log",
- "marty-crypto 0.1.61",
+ "marty-crypto 0.1.62",
  "marty-didcomm",
  "marty-emrtd-issuance",
  "marty-oid4vci",
@@ -3638,8 +3638,8 @@ dependencies = [
 
 [[package]]
 name = "marty-oid4vci"
-version = "0.1.61"
-source = "git+https://github.com/ElevenID/marty-core?rev=ec307b6edd0450c558869fd587215e72cd46e9d1#ec307b6edd0450c558869fd587215e72cd46e9d1"
+version = "0.1.62"
+source = "git+https://github.com/ElevenID/marty-core?rev=bdbd1510ab6ad650e4d408a93dac22b57eb67e68#bdbd1510ab6ad650e4d408a93dac22b57eb67e68"
 dependencies = [
  "base64 0.22.1",
  "chrono",
@@ -3648,7 +3648,7 @@ dependencies = [
  "ed25519-dalek",
  "isomdl",
  "jsonwebtoken",
- "marty-crypto 0.1.61",
+ "marty-crypto 0.1.62",
  "p256 0.13.2",
  "p384 0.13.1",
  "rand 0.8.8",
@@ -3688,8 +3688,8 @@ dependencies = [
 
 [[package]]
 name = "marty-verification"
-version = "0.1.61"
-source = "git+https://github.com/ElevenID/marty-core?rev=ec307b6edd0450c558869fd587215e72cd46e9d1#ec307b6edd0450c558869fd587215e72cd46e9d1"
+version = "0.1.62"
+source = "git+https://github.com/ElevenID/marty-core?rev=bdbd1510ab6ad650e4d408a93dac22b57eb67e68#bdbd1510ab6ad650e4d408a93dac22b57eb67e68"
 dependencies = [
  "anyhow",
  "base64 0.22.1",
@@ -3710,7 +3710,7 @@ dependencies = [
  "hmac 0.12.1",
  "iref",
  "isomdl",
- "marty-crypto 0.1.61",
+ "marty-crypto 0.1.62",
  "marty-oid4vci",
  "p256 0.13.2",
  "p384 0.13.1",
@@ -5431,13 +5431,14 @@ dependencies = [
 [[package]]
 name = "sd-jwt-rs"
 version = "0.7.1"
-source = "git+https://github.com/ElevenID/sd-jwt-rust?rev=c6199bfd61fb7e14b5d1a25a77ba9432cc36a0f7#c6199bfd61fb7e14b5d1a25a77ba9432cc36a0f7"
+source = "git+https://github.com/ElevenID/sd-jwt-rust?rev=74c086841f8086507e5dc8b6a1acf59feecf0809#74c086841f8086507e5dc8b6a1acf59feecf0809"
 dependencies = [
  "base64 0.21.7",
+ "curve25519-dalek",
  "getrandom 0.2.17",
- "hmac 0.12.1",
  "jsonwebtoken",
- "log",
+ "p256 0.13.2",
+ "p384 0.13.1",
  "rand 0.8.8",
  "serde",
  "serde_json",
