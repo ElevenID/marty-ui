@@ -35,6 +35,45 @@ pub struct SignedMaterial {
     pub csca_cert_pem: Option<String>,
 }
 
+impl SignedMaterial {
+    /// Check the CMS signature, embedded DSC, and every issued data-group hash
+    /// before a managed SOD is reported or handed to a personalization bureau.
+    pub fn verify_data_groups(
+        &self,
+        data_groups: &BTreeMap<BigUint, String>,
+    ) -> Result<(), SignerError> {
+        use marty_verification::asn1::sod::{
+            parse_sod, verify_data_group_hash_from_sod, verify_sod_signature,
+        };
+
+        let sod = decode_python_validated_base64(&self.sod_der_base64)
+            .map_err(|_| SignerError::InvalidManagedMaterial)?;
+        if !verify_sod_signature(&sod).unwrap_or(false) {
+            return Err(SignerError::InvalidManagedMaterial);
+        }
+        let parsed = parse_sod(&sod).map_err(|_| SignerError::InvalidManagedMaterial)?;
+        let embedded_dsc = parsed
+            .document_signer_cert
+            .ok_or(SignerError::InvalidManagedMaterial)?;
+        let embedded_dsc =
+            load_certificate_pem(&embedded_dsc).map_err(|_| SignerError::InvalidManagedMaterial)?;
+        let expected_dsc = load_certificate_pem(&self.dsc_cert_pem)
+            .map_err(|_| SignerError::InvalidManagedMaterial)?;
+        if embedded_dsc != expected_dsc || parsed.data_group_hashes.len() != data_groups.len() {
+            return Err(SignerError::InvalidManagedMaterial);
+        }
+        for (number, encoded) in data_groups {
+            let number = number.to_u8().ok_or(SignerError::InvalidManagedMaterial)?;
+            let content = decode_python_validated_base64(encoded)
+                .map_err(|_| SignerError::InvalidManagedMaterial)?;
+            if !verify_data_group_hash_from_sod(&sod, number, &content).unwrap_or(false) {
+                return Err(SignerError::InvalidManagedMaterial);
+            }
+        }
+        Ok(())
+    }
+}
+
 #[derive(Debug, thiserror::Error)]
 pub enum SignerError {
     #[error(
@@ -727,7 +766,22 @@ mod tests {
             .sign("USA", "org-1", "did:web:issuer.example:orgs:org-1", &groups)
             .await
             .unwrap();
+        signed.verify_data_groups(&groups).unwrap();
+        let altered_groups = BTreeMap::from([
+            (BigUint::from(1u8), "Aw==".into()),
+            (BigUint::from(2u8), "Ag==".into()),
+        ]);
+        assert!(signed.verify_data_groups(&altered_groups).is_err());
+        let mut wrong_dsc = signed.clone();
+        wrong_dsc.dsc_cert_pem = state.csca_pem.clone();
+        assert!(wrong_dsc.verify_data_groups(&groups).is_err());
         let sod = STANDARD.decode(&signed.sod_der_base64).unwrap();
+        let mut tampered_sod = signed.clone();
+        let mut altered_sod = sod.clone();
+        let last = altered_sod.len() - 1;
+        altered_sod[last] ^= 1;
+        tampered_sod.sod_der_base64 = STANDARD.encode(altered_sod);
+        assert!(tampered_sod.verify_data_groups(&groups).is_err());
         assert!(marty_verification::asn1::sod::verify_sod_signature(&sod).unwrap());
         assert_eq!(
             load_certificate_pem(&signed.dsc_cert_pem).unwrap(),

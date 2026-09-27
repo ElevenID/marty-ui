@@ -366,6 +366,7 @@ impl PassportHttpService {
         (
             crate::passport_artifact::PassportSensitiveArtifact,
             SignedMaterial,
+            bool,
         ),
         PassportHttpError,
     > {
@@ -383,7 +384,13 @@ impl PassportHttpService {
             )
             .await
             .map_err(PassportHttpError::Signer)?;
-        Ok((artifact, signed))
+        let sod_verified = signed.verify_data_groups(&data_groups).is_ok();
+        if matches!(self.signer.as_ref(), Some(PassportSigner::Managed(_))) && !sod_verified {
+            return Err(PassportHttpError::Signer(
+                SignerError::InvalidManagedMaterial,
+            ));
+        }
+        Ok((artifact, signed, sod_verified))
     }
 }
 
@@ -714,7 +721,7 @@ async fn generate_sod(
     if job.bureau_job_id.is_some() {
         return Err(PassportHttpError::AlreadySubmitted);
     }
-    let (_, signed) = service.sign(&job).await?;
+    let (_, signed, sod_verified) = service.sign(&job).await?;
     let sod = decode_python_validated_base64(&signed.sod_der_base64)
         .map_err(|_| PassportHttpError::Signer(SignerError::IncompleteMaterial))?;
     let hash = hex::encode(Sha256::digest(sod));
@@ -723,6 +730,7 @@ async fn generate_sod(
     let updated = service.update(&principal, &job, &patch).await?;
     let mut response = safe(&updated);
     response["sod_sha256"] = Value::String(hash);
+    response["sod_signature_verified"] = Value::Bool(sod_verified);
     Ok(Json(response))
 }
 
@@ -736,7 +744,7 @@ async fn submit_personalization(
     if job.bureau_job_id.is_some() {
         return Ok(Json(safe(&job)));
     }
-    let (artifact, signed) = service.sign(&job).await?;
+    let (artifact, signed, _) = service.sign(&job).await?;
     let document_type: DocumentType =
         serde_json::from_value(Value::String(job.document_type.clone()))
             .map_err(|_| PassportHttpError::InvalidDocumentType)?;

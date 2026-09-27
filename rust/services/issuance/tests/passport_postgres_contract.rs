@@ -159,6 +159,7 @@ async fn exercise_packaged_self_signed_test_mode(database_url: &str, key_a: &str
     assert_eq!(signed.status(), StatusCode::OK);
     let signed: Value = signed.json().await.unwrap();
     assert_eq!(signed["status"], "SOD_SIGNED");
+    assert_eq!(signed["sod_signature_verified"], true);
     assert_eq!(signed["sod_sha256"].as_str().unwrap().len(), 64);
     drop(child);
     let pool = PgPoolOptions::new().connect(database_url).await.unwrap();
@@ -388,6 +389,7 @@ async fn exercise_native_passport_http(
     .await;
     assert_eq!(status, StatusCode::OK);
     assert_eq!(signed["status"], "SOD_SIGNED");
+    assert_eq!(signed["sod_signature_verified"], false);
     assert_eq!(
         signed["sod_sha256"],
         hex::encode(sha2::Sha256::digest(b"SOD"))

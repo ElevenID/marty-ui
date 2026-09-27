@@ -535,6 +535,15 @@ async fn managed_passport_chain_issues_and_verifies_sod_without_exporting_privat
         .sign("USA", &organization_id, &issuer_did, &groups)
         .await
         .unwrap();
+    signed.verify_data_groups(&groups).unwrap();
+    let altered_groups = BTreeMap::from([(BigUint::from(1u8), STANDARD.encode(b"altered DG1"))]);
+    assert!(signed.verify_data_groups(&altered_groups).is_err());
+    let mut tampered_sod = signed.clone();
+    let mut sod_bytes = STANDARD.decode(&tampered_sod.sod_der_base64).unwrap();
+    let last = sod_bytes.len() - 1;
+    sod_bytes[last] ^= 1;
+    tampered_sod.sod_der_base64 = STANDARD.encode(sod_bytes);
+    assert!(tampered_sod.verify_data_groups(&groups).is_err());
     let sod = STANDARD.decode(&signed.sod_der_base64).unwrap();
     assert!(marty_verification::asn1::sod::verify_sod_signature(&sod).unwrap());
     assert!(
