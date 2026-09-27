@@ -8,6 +8,7 @@ but never sufficient, for a later protected rollback rehearsal.
 from __future__ import annotations
 
 import argparse
+from datetime import datetime, timezone
 import json
 import os
 import re
@@ -16,6 +17,11 @@ from pathlib import Path
 from typing import Callable
 from urllib.parse import urlsplit
 
+if __package__:
+    from .passport_supported_infra_images import qualified_images
+else:
+    from passport_supported_infra_images import qualified_images
+
 
 PROJECT = re.compile(r"marty-passport-acceptance-(base|selfhost)-[a-z0-9]{6,32}\Z")
 SELECTED = frozenset({
@@ -23,6 +29,9 @@ SELECTED = frozenset({
     "passport-provider-ingress",
 })
 ISOLATED_DEPENDENCIES = frozenset({"postgres", "openbao", "redis"})
+DISPOSABLE_SERVICES = SELECTED | ISOLATED_DEPENDENCIES | frozenset({
+    "db-migrate", "issuance", "signing-keys",
+})
 ALLOWED_SERVICES = frozenset({
     "applicant", "auth", "canvas-sync-worker", "compliance-profile",
     "credential-template", "db-migrate", "deployment-profile",
@@ -69,6 +78,22 @@ def _run_config(args: list[str], environment: dict[str, str]) -> str:
     return result.stdout
 
 
+def source_identity() -> tuple[str, bool]:
+    """Read the exact checked-out commit and all tracked/untracked source drift."""
+    try:
+        head = subprocess.run(["git", "rev-parse", "HEAD"], cwd=ROOT,
+                              check=True, capture_output=True, text=True,
+                              encoding="utf-8", timeout=10).stdout.strip()
+        status = subprocess.run(
+            ["git", "status", "--porcelain", "--untracked-files=all"],
+            cwd=ROOT, check=True, capture_output=True,
+            text=True, encoding="utf-8", timeout=10,
+        ).stdout
+    except (OSError, subprocess.SubprocessError) as exc:
+        raise ModelPreflightError("Protected source checkout cannot be verified") from exc
+    return head, bool(status.strip())
+
+
 def render_model(
     surface: str, project: str, env_file: Path, disposable_root: Path,
     services_reference: str,
@@ -100,6 +125,8 @@ def render_model(
             "config", "--format", "json"]
     environment = os.environ.copy()
     environment["MARTY_SERVICES_IMAGE"] = services_reference
+    for role, reference in qualified_images(verify_registry=False).items():
+        environment[f"PASSPORT_ACCEPTANCE_{role.upper()}_IMAGE"] = reference
     try:
         model = json.loads(runner(args, environment))
     except ValueError as exc:
@@ -116,13 +143,71 @@ def preflight_read_only(
     model = render_model(surface, project, env_file, disposable_root,
                          services_reference, runner)
     result = validate_model(model, project, services_reference, disposable_root)
+    result["static_isolation_verified"] = result.pop("model_safe")
+    result["model_safe"] = False
     return {"schema": "marty.passport-supported-rollback-preflight/v1",
             "status": "blocked", "model": result,
-            "blocker": "protected provisioning and live ownership proof are absent"}
+            "blocker": "protected plan attestation and live ownership proof are absent"}
+
+
+def preflight_attested_plan(
+    surface: str, project: str, env_file: Path, disposable_root: Path,
+    services_reference: str, plan_path: Path,
+    runner: Callable[[list[str], dict[str, str]], str] = _run_config,
+    *, attest: Callable[[str, str, str, str, str], bool] | None = None,
+    now: datetime | None = None,
+    checkout: Callable[[], tuple[str, bool]] = source_identity,
+) -> dict:
+    """Verify plan provenance before a read-only model render; never authorize up/down."""
+    if __package__:
+        from .passport_supported_provisioning_plan import (
+            COMMIT, PLAN_WORKFLOW, _attest,
+        )
+    else:
+        from passport_supported_provisioning_plan import (
+            COMMIT, PLAN_WORKFLOW, _attest,
+        )
+    try:
+        plan = json.loads(plan_path.read_text(encoding="utf-8"))
+    except (OSError, ValueError) as exc:
+        raise ModelPreflightError("Protected plan artifact is invalid") from exc
+    require(isinstance(plan, dict)
+            and isinstance(plan.get("source_commit"), str)
+            and COMMIT.fullmatch(plan["source_commit"]) is not None
+            and plan.get("project") == project
+            and plan.get("surface") == surface
+            and plan.get("services_reference") == services_reference,
+            "Protected plan source/project/reference mismatch")
+    attestor = attest or _attest
+    try:
+        verified = attestor(str(plan_path), "ElevenID/marty-ui", PLAN_WORKFLOW,
+                            plan["source_commit"], "refs/heads/main")
+    except (OSError, ValueError, subprocess.SubprocessError) as exc:
+        raise ModelPreflightError("Protected plan attestation failed") from exc
+    require(verified is True, "Protected plan attestation failed")
+    head, dirty = checkout()
+    require(head == plan["source_commit"] and not dirty,
+            "Protected source checkout differs from attested plan")
+    try:
+        created = datetime.fromisoformat(plan["created_at"])
+        expires = datetime.fromisoformat(plan["expires_at"])
+    except (KeyError, TypeError, ValueError) as exc:
+        raise ModelPreflightError("Protected plan lease is invalid") from exc
+    current = now or datetime.now(timezone.utc)
+    require(current.tzinfo is not None and created.tzinfo is not None
+            and expires.tzinfo is not None and created <= current < expires,
+            "Protected plan lease has expired")
+    model = render_model(surface, project, env_file, disposable_root,
+                         services_reference, runner)
+    result = validate_planned_model(model, plan, disposable_root)
+    return {"schema": "marty.passport-supported-rollback-preflight/v1",
+            "status": "blocked", "model": result,
+            "blocker": "live ownership and Rust-to-Python rollback proof are absent"}
 
 
 def validate_model(
     model: dict, project: str, services_reference: str, disposable_root: Path,
+    *, migrations_reference: str | None = None, legacy_reference: str | None = None,
 ) -> dict[str, object]:
     """Reject resolved configurations that can touch shared production resources."""
     require(PROJECT.fullmatch(project) is not None, "Disposable project name is required")
@@ -131,11 +216,9 @@ def validate_model(
     require(isinstance(model, dict) and model.get("name") == project,
             "Resolved Compose model has a different project")
     services = model.get("services")
-    require(isinstance(services, dict)
-            and SELECTED | ISOLATED_DEPENDENCIES <= set(services),
-            "Resolved Compose model lacks isolated passport dependencies")
-    require(set(services) <= ALLOWED_SERVICES,
-            "Resolved Compose model has an unexpected service")
+    require(isinstance(services, dict) and set(services) == DISPOSABLE_SERVICES,
+            "Resolved Compose model has an unexpected or missing service")
+    infra_images = qualified_images(verify_registry=False)
     networks = model.get("networks")
     require(isinstance(networks, dict) and bool(networks),
             "Disposable Compose networks are missing")
@@ -188,6 +271,13 @@ def validate_model(
         if name in SELECTED:
             require(service.get("image") == services_reference,
                     f"Compose {name} is not pinned to the signed services image")
+        expected_image = (infra_images.get(name)
+                          or (services_reference if name == "signing-keys" else None)
+                          or (migrations_reference if name == "db-migrate" else None)
+                          or (legacy_reference if name == "issuance" else None))
+        if expected_image is not None:
+            require(service.get("image") == expected_image,
+                    f"Compose {name} differs from the protected image reference")
         mounts = service.get("volumes", [])
         require(isinstance(mounts, list), f"Compose {name} mounts are invalid")
         for mount in mounts:
@@ -233,6 +323,29 @@ def validate_model(
             "model_safe": True, "rollback_accepted": False}
 
 
+def validate_planned_model(model: dict, plan: dict, disposable_root: Path) -> dict:
+    """Compare a rendered model to a plan whose provenance caller already verified.
+
+    This helper does not verify attestations or authorize resource mutation.
+    """
+    require(isinstance(plan, dict)
+            and plan.get("schema") == "marty.passport-supported-provisioning-plan/v1"
+            and plan.get("status") == "blocked"
+            and isinstance(plan.get("project"), str)
+            and isinstance(plan.get("services_reference"), str)
+            and isinstance(plan.get("migrations_reference"), str)
+            and isinstance(plan.get("legacy_reference"), str)
+            and plan.get("infra_images") == qualified_images(verify_registry=False),
+            "Protected plan image bindings are invalid")
+    match = PROJECT.fullmatch(plan["project"])
+    require(match is not None and match.group(1) == plan.get("surface"),
+            "Protected plan surface/project mismatch")
+    return validate_model(model, plan["project"], plan["services_reference"],
+                          disposable_root,
+                          migrations_reference=plan["migrations_reference"],
+                          legacy_reference=plan["legacy_reference"])
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--surface", choices=("base", "selfhost"), required=True)
@@ -240,11 +353,17 @@ def main() -> int:
     parser.add_argument("--env-file", type=Path, required=True)
     parser.add_argument("--disposable-root", type=Path, required=True)
     parser.add_argument("--services-reference", required=True)
+    parser.add_argument("--plan", type=Path)
     parser.add_argument("--output", type=Path, required=True)
     args = parser.parse_args()
     try:
-        report = preflight_read_only(args.surface, args.project, args.env_file,
-                                     args.disposable_root, args.services_reference)
+        if args.plan:
+            report = preflight_attested_plan(
+                args.surface, args.project, args.env_file,
+                args.disposable_root, args.services_reference, args.plan)
+        else:
+            report = preflight_read_only(args.surface, args.project, args.env_file,
+                                         args.disposable_root, args.services_reference)
     except ModelPreflightError as exc:
         report = {"schema": "marty.passport-supported-rollback-preflight/v1",
                   "status": "blocked", "blocker": str(exc)}

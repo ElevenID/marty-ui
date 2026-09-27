@@ -11,6 +11,7 @@ import pytest
 from scripts.check_passport_supported_rollback_model import (
     ModelPreflightError, render_model, validate_model,
 )
+from scripts.passport_supported_infra_images import qualified_images
 
 
 SERVICES = "ghcr.io/elevenid/marty-ui-oss/services@sha256:" + "a" * 64
@@ -67,6 +68,8 @@ def test_real_compose_render_is_safe_but_not_accepted(
         assert env["ENVIRONMENT"] == ("development" if surface == "base"
                                        else "production")
     assert model["services"]["issuance"]["image"] == LEGACY
+    for role, reference in qualified_images(verify_registry=False).items():
+        assert model["services"][role]["image"] == reference
 
 
 @pytest.mark.skipif(shutil.which("docker") is None, reason="Docker Compose CLI unavailable")

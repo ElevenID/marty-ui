@@ -17,12 +17,14 @@ from typing import Callable
 
 if __package__:
     from .check_passport_supported_rollback_model import (
-        ALLOWED_SERVICES, ISOLATED_DEPENDENCIES, PROJECT, SELECTED,
+        DISPOSABLE_SERVICES, PROJECT, SELECTED,
     )
+    from .passport_supported_infra_images import ROLES
 else:
     from check_passport_supported_rollback_model import (
-        ALLOWED_SERVICES, ISOLATED_DEPENDENCIES, PROJECT, SELECTED,
+        DISPOSABLE_SERVICES, PROJECT, SELECTED,
     )
+    from passport_supported_infra_images import ROLES
 
 
 COMMIT = re.compile(r"[0-9a-f]{40}\Z")
@@ -121,6 +123,14 @@ def verify(record: dict, surface: str, now: datetime,
             and isinstance(record.get("legacy_reference"), str)
             and LEGACY_IMAGE.fullmatch(record["legacy_reference"]) is not None,
             "Released migration or legacy rollback image is invalid")
+    infra_images = record.get("infra_images")
+    require(isinstance(infra_images, dict) and set(infra_images) == set(ROLES)
+            and all(isinstance(infra_images[role], str)
+                    and infra_images[role].startswith(repository + "@")
+                    and re.fullmatch(r"sha256:[0-9a-f]{64}",
+                                     infra_images[role].removeprefix(repository + "@"))
+                    for role, repository in ROLES.items()),
+            "Disposable infrastructure image references are invalid")
     try:
         created = datetime.fromisoformat(record["created_at"])
         expires = datetime.fromisoformat(record["expires_at"])
@@ -138,8 +148,7 @@ def verify(record: dict, surface: str, now: datetime,
                     for item in volumes)
             and len(volumes) == len(set(volumes)),
             "Disposable volume identities are invalid")
-    require(SELECTED | ISOLATED_DEPENDENCIES | REQUIRED_ROLLBACK <= set(containers)
-            and set(containers) <= ALLOWED_SERVICES
+    require(set(containers) == DISPOSABLE_SERVICES
             and all(re.fullmatch(r"[a-z][a-z0-9-]+", name) for name in containers),
             "Disposable service ownership is incomplete")
     require(all(name.startswith(project + "_") for name in networks),
@@ -206,11 +215,10 @@ def verify(record: dict, surface: str, now: datetime,
             record["legacy_reference"] if service == "issuance" else
             record["migrations_reference"] if service == "db-migrate" else
             record["services_reference"] if service in SELECTED | {"signing-keys"}
-            else None
+            else infra_images.get(service)
         )
-        if expected_image is not None:
-            require(config.get("Image") == expected_image,
-                    "Passport container image differs from signed release")
+        require(expected_image is not None and config.get("Image") == expected_image,
+                "Passport container image differs from signed release")
         mounts = item.get("Mounts", [])
         require(isinstance(mounts, list), "Disposable container mounts are invalid")
         for mount in mounts:

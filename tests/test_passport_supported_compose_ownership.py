@@ -20,6 +20,11 @@ PROJECT = "marty-passport-acceptance-base-abcdef"
 IMAGE = "ghcr.io/elevenid/marty-ui-oss/services@sha256:" + "a" * 64
 MIGRATIONS = "ghcr.io/elevenid/marty-ui-oss/migrations@sha256:" + "b" * 64
 LEGACY = "ghcr.io/elevenid/marty-credentials-issuance@sha256:" + "c" * 64
+INFRA = {
+    "postgres": "docker.io/library/postgres@sha256:" + "1" * 64,
+    "redis": "docker.io/library/redis@sha256:" + "2" * 64,
+    "openbao": "quay.io/openbao/openbao@sha256:" + "3" * 64,
+}
 NOW = datetime(2026, 9, 27, 12, tzinfo=timezone.utc)
 LABELS = {
     "com.docker.compose.project": PROJECT,
@@ -41,6 +46,7 @@ def fixture() -> tuple[dict, dict[tuple[str, ...], str]]:
         "project": PROJECT, "run_id": "123456", "source_commit": "b" * 40,
         "services_reference": IMAGE,
         "migrations_reference": MIGRATIONS, "legacy_reference": LEGACY,
+        "infra_images": INFRA,
         "created_at": (NOW - timedelta(minutes=5)).isoformat(),
         "expires_at": (NOW + timedelta(minutes=55)).isoformat(),
         "containers": containers, "networks": {network_name: network_id},
@@ -63,7 +69,7 @@ def fixture() -> tuple[dict, dict[tuple[str, ...], str]]:
                        "Image": (LEGACY if service == "issuance" else
                                  MIGRATIONS if service == "db-migrate" else
                                  IMAGE if service in SELECTED | {"signing-keys"} else
-                                 "postgres@sha256:" + "c" * 64)},
+                                 INFRA[service])},
             "NetworkSettings": {"Networks": {network_name: {"NetworkID": network_id}}},
         }])
     calls[("network", "inspect", network_id)] = json.dumps([{
@@ -84,6 +90,17 @@ def run(record: dict, calls: dict[tuple[str, ...], str]) -> dict:
 
 def add_migration(record: dict, calls: dict[tuple[str, ...], str],
                   service: str, exit_code: int) -> None:
+    if service == "db-migrate":
+        identifier = record["containers"][service]
+        key = ("container", "inspect", identifier)
+        item = json.loads(calls[key])
+        item[0]["State"] = {"Running": False, "Status": "exited", "ExitCode": exit_code}
+        calls[key] = json.dumps(item)
+        network_key = ("network", "inspect", "e" * 64)
+        network = json.loads(calls[network_key])
+        network[0]["Containers"].pop(identifier)
+        calls[network_key] = json.dumps(network)
+        return
     identifier = "d" * 64
     record["containers"][service] = identifier
     list_key = ("ps", "-aq", "--no-trunc", "--filter",
@@ -118,16 +135,16 @@ def test_exact_live_project_ownership_is_read_only_and_still_blocked() -> None:
 
 def test_successful_completed_migration_service_is_allowed() -> None:
     record, calls = fixture()
-    add_migration(record, calls, "issuance-migrations", 0)
+    add_migration(record, calls, "db-migrate", 0)
     assert run(record, calls)["live_ownership_verified"] is True
 
 
 def test_completed_migration_may_remain_in_network_member_listing() -> None:
     record, calls = fixture()
-    add_migration(record, calls, "issuance-migrations", 0)
+    add_migration(record, calls, "db-migrate", 0)
     key = ("network", "inspect", "e" * 64)
     item = json.loads(calls[key])
-    item[0]["Containers"]["d" * 64] = {}
+    item[0]["Containers"][record["containers"]["db-migrate"]] = {}
     calls[key] = json.dumps(item)
     assert run(record, calls)["live_ownership_verified"] is True
 
@@ -137,8 +154,8 @@ def test_completed_migration_may_keep_configured_detached_network(
     network_id: str,
 ) -> None:
     record, calls = fixture()
-    add_migration(record, calls, "issuance-migrations", 0)
-    key = ("container", "inspect", "d" * 64)
+    add_migration(record, calls, "db-migrate", 0)
+    key = ("container", "inspect", record["containers"]["db-migrate"])
     item = json.loads(calls[key])
     item[0]["NetworkSettings"]["Networks"] = {
         PROJECT + "_private": {"NetworkID": network_id}}
@@ -148,8 +165,8 @@ def test_completed_migration_may_keep_configured_detached_network(
 
 def test_completed_migration_rejects_foreign_configured_network_id() -> None:
     record, calls = fixture()
-    add_migration(record, calls, "issuance-migrations", 0)
-    key = ("container", "inspect", "d" * 64)
+    add_migration(record, calls, "db-migrate", 0)
+    key = ("container", "inspect", record["containers"]["db-migrate"])
     item = json.loads(calls[key])
     item[0]["NetworkSettings"]["Networks"] = {
         PROJECT + "_private": {"NetworkID": "f" * 64}}
@@ -159,7 +176,7 @@ def test_completed_migration_rejects_foreign_configured_network_id() -> None:
 
 
 @pytest.mark.parametrize("service,exit_code", [
-    ("issuance-migrations", 1), ("gateway-helper", 0), ("notification", 0),
+    ("db-migrate", 1), ("gateway-helper", 0), ("notification", 0),
 ])
 def test_only_exact_successful_init_service_may_be_exited(
     service: str, exit_code: int,
@@ -178,6 +195,8 @@ def test_only_exact_successful_init_service_may_be_exited(
     (lambda record, calls: record["containers"].pop("postgres"), "service ownership"),
     (lambda record, calls: record["containers"].update({
         "prod-sidecar": "f" * 64}), "service ownership"),
+    (lambda record, calls: record["containers"].update({
+        "auth": "f" * 64}), "service ownership"),
     (lambda record, calls: calls.update({
         ("ps", "-aq", "--no-trunc", "--filter", f"label=com.docker.compose.project={PROJECT}"):
             "f" * 64}), "container set"),
@@ -216,6 +235,12 @@ def test_rejects_bad_lease_identity_and_resource_sets(mutate, match: str) -> Non
         "Image": "ghcr.io/other/migrations@sha256:" + "b" * 64}), "signed release"),
     ("signing-keys", lambda item: item["Config"].update({
         "Image": "ghcr.io/other/signing-keys@sha256:" + "a" * 64}), "signed release"),
+    ("postgres", lambda item: item["Config"].update({
+        "Image": "postgres:15-alpine"}), "signed release"),
+    ("redis", lambda item: item["Config"].update({
+        "Image": "redis:7-alpine"}), "signed release"),
+    ("openbao", lambda item: item["Config"].update({
+        "Image": "quay.io/openbao/openbao:2"}), "signed release"),
     ("gateway", lambda item: item.update(Name="/marty-selfhost-prod-gateway-1"),
      "named Compose service"),
     ("gateway", lambda item: item.update(Mounts=[{

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from copy import deepcopy
+from datetime import datetime, timedelta, timezone
 import json
 from pathlib import Path
 import sys
@@ -11,8 +12,10 @@ import pytest
 
 from scripts import check_passport_supported_rollback_model as preflight
 from scripts.check_passport_supported_rollback_model import (
-    ModelPreflightError, SELECTED, preflight_read_only, validate_model,
+    ModelPreflightError, SELECTED, preflight_attested_plan, preflight_read_only, validate_model,
+    validate_planned_model,
 )
+from scripts.passport_supported_infra_images import qualified_images
 
 
 PROJECT = "marty-passport-acceptance-base-abcdef"
@@ -24,12 +27,16 @@ def safe_model(root: Path) -> dict:
         "DATABASE_URL": "postgresql://postgres:5432/test",
         "BAO_ADDR": "http://openbao:8200",
     }} for name in SELECTED}
-    services["postgres"] = {"image": "postgres@sha256:" + "b" * 64, "volumes": [
+    infra = qualified_images(verify_registry=False)
+    services["postgres"] = {"image": infra["postgres"], "volumes": [
         {"type": "bind", "source": str(root / "postgres"),
          "target": "/var/lib/postgresql/data"},
     ]}
-    services["openbao"] = {"image": "openbao@sha256:" + "c" * 64}
-    services["redis"] = {"image": "redis@sha256:" + "d" * 64}
+    services["openbao"] = {"image": infra["openbao"]}
+    services["redis"] = {"image": infra["redis"]}
+    services["signing-keys"] = {"image": IMAGE}
+    services["db-migrate"] = {"image": "ghcr.io/elevenid/marty-ui-oss/migrations@sha256:" + "b" * 64}
+    services["issuance"] = {"image": "ghcr.io/elevenid/marty-credentials-issuance@sha256:" + "c" * 64}
     return {"name": PROJECT, "services": services,
             "networks": {"default": {"name": PROJECT + "_default",
                                      "internal": True}},
@@ -42,6 +49,28 @@ def test_isolated_resolved_compose_model_passes_only_static_preflight(
     report = validate_model(safe_model(tmp_path), PROJECT, IMAGE, tmp_path)
     assert report["model_safe"] is True
     assert report["rollback_accepted"] is False
+
+
+def test_attested_plan_binds_all_disposable_images(tmp_path: Path) -> None:
+    model = safe_model(tmp_path)
+    plan = {
+        "schema": "marty.passport-supported-provisioning-plan/v1",
+        "status": "blocked", "surface": "base", "project": PROJECT,
+        "services_reference": IMAGE,
+        "migrations_reference": model["services"]["db-migrate"]["image"],
+        "legacy_reference": model["services"]["issuance"]["image"],
+        "infra_images": qualified_images(verify_registry=False),
+    }
+    assert validate_planned_model(model, plan, tmp_path)["model_safe"] is True
+    for role in ("postgres", "redis", "openbao", "db-migrate", "issuance", "signing-keys"):
+        bad = deepcopy(model)
+        bad["services"][role]["image"] = "other@sha256:" + "f" * 64
+        with pytest.raises(ModelPreflightError, match="protected image|signed services"):
+            validate_planned_model(bad, plan, tmp_path)
+    bad_plan = deepcopy(plan)
+    bad_plan["infra_images"]["redis"] = "docker.io/library/redis@sha256:" + "f" * 64
+    with pytest.raises(ModelPreflightError, match="plan image bindings"):
+        validate_planned_model(model, bad_plan, tmp_path)
 
 
 @pytest.mark.parametrize("change,match", [
@@ -82,7 +111,7 @@ def test_isolated_resolved_compose_model_passes_only_static_preflight(
     (lambda model, root: model["services"].update(
         {"prod-write": {"image": "alpine@sha256:" + "e" * 64,
                         "command": "curl https://prod.example/write"}}),
-     "unexpected service"),
+     "unexpected or missing service"),
     (lambda model, root: model.update(configs={
         "prod": {"file": "/etc/marty-selfhost-prod/secret"}}), "config"),
     (lambda model, root: model["services"]["gateway"].update(
@@ -109,13 +138,88 @@ def test_render_uses_fixed_repo_compose_files_and_never_transitions(
 
     report = preflight_read_only("base", PROJECT, env_file, tmp_path, IMAGE, render)
     assert report["status"] == "blocked"
-    assert report["model"]["model_safe"] is True
+    assert report["model"]["static_isolation_verified"] is True
+    assert report["model"]["model_safe"] is False
     assert report["model"]["rollback_accepted"] is False
     args, environment = captured[0]
     assert args[:4] == ["docker", "compose", "--project-name", PROJECT]
     assert args[-3:] == ["config", "--format", "json"]
     assert "up" not in args and "down" not in args
     assert environment["MARTY_SERVICES_IMAGE"] == IMAGE
+
+
+def test_executable_planned_preflight_rejects_unsigned_and_mutated_images(
+    tmp_path: Path,
+) -> None:
+    now = datetime(2026, 9, 27, 12, tzinfo=timezone.utc)
+    model = safe_model(tmp_path)
+    plan = {
+        "schema": "marty.passport-supported-provisioning-plan/v1",
+        "status": "blocked", "surface": "base", "project": PROJECT,
+        "source_commit": "a" * 40,
+        "services_reference": IMAGE,
+        "migrations_reference": model["services"]["db-migrate"]["image"],
+        "legacy_reference": model["services"]["issuance"]["image"],
+        "infra_images": qualified_images(verify_registry=False),
+        "created_at": (now - timedelta(minutes=5)).isoformat(),
+        "expires_at": (now + timedelta(minutes=55)).isoformat(),
+    }
+    plan_path = tmp_path / "plan.json"
+    plan_path.write_text(json.dumps(plan), encoding="utf-8")
+    env_file = tmp_path / "acceptance.env"
+    env_file.write_text("synthetic", encoding="utf-8")
+    rendered = []
+
+    def render(args, environment):
+        rendered.append(args)
+        return json.dumps(model)
+
+    with pytest.raises(ModelPreflightError, match="attestation"):
+        preflight_attested_plan("base", PROJECT, env_file, tmp_path, IMAGE,
+                                plan_path, render, attest=lambda *args: False, now=now,
+                                checkout=lambda: ("a" * 40, False))
+    assert rendered == []
+    report = preflight_attested_plan("base", PROJECT, env_file, tmp_path, IMAGE,
+                                     plan_path, render, attest=lambda *args: True, now=now,
+                                     checkout=lambda: ("a" * 40, False))
+    assert report["status"] == "blocked"
+    assert report["model"]["model_safe"] is True
+    bad = deepcopy(model)
+    bad["services"]["issuance"]["image"] = "other@sha256:" + "f" * 64
+    with pytest.raises(ModelPreflightError, match="protected image"):
+        preflight_attested_plan("base", PROJECT, env_file, tmp_path, IMAGE,
+                                plan_path, lambda *args: json.dumps(bad),
+                                attest=lambda *args: True, now=now,
+                                checkout=lambda: ("a" * 40, False))
+    for source, dirty in (("b" * 40, False), ("a" * 40, True)):
+        rendered.clear()
+        with pytest.raises(ModelPreflightError, match="source checkout"):
+            preflight_attested_plan("base", PROJECT, env_file, tmp_path, IMAGE,
+                                    plan_path, render, attest=lambda *args: True,
+                                    now=now, checkout=lambda: (source, dirty))
+        assert rendered == []
+
+
+@pytest.mark.parametrize("dirty_path", [
+    "docker-compose.passport-supported-disposable.yml",
+    "scripts/collect_passport_beta_acceptance.py",
+])
+def test_source_identity_detects_dirty_checkout(
+    monkeypatch: pytest.MonkeyPatch,
+    dirty_path: str,
+) -> None:
+    observed = []
+
+    def fake_run(args, **kwargs):
+        observed.append(args)
+        output = ("a" * 40 + "\n" if "rev-parse" in args else
+                  f" M {dirty_path}\n")
+        return type("Result", (), {"stdout": output})()
+
+    monkeypatch.setattr(preflight.subprocess, "run", fake_run)
+    assert preflight.source_identity() == ("a" * 40, True)
+    assert "--untracked-files=all" in observed[1]
+    assert "--" not in observed[1]
 
 
 def test_render_rejects_production_env_file_before_docker(tmp_path: Path) -> None:

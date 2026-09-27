@@ -22,9 +22,11 @@ from typing import Callable
 if __package__:
     from .check_passport_supported_compose_ownership import verify as verify_ownership
     from .collect_passport_beta_acceptance import verify_attestations
+    from .passport_supported_infra_images import qualified_images
 else:
     from check_passport_supported_compose_ownership import verify as verify_ownership
     from collect_passport_beta_acceptance import verify_attestations
+    from passport_supported_infra_images import qualified_images
 
 
 COMMIT = re.compile(r"[0-9a-f]{40}\Z")
@@ -101,7 +103,8 @@ def _component(manifest: dict, name: str, repository: str,
 
 def release_inputs(manifest_path: Path, source_commit: str, *,
                    verify_ui: Callable[[Path, dict[str, str], str], bool] = verify_attestations,
-                   attest: Callable[[str, str, str, str, str], bool] = _attest) -> dict:
+                   attest: Callable[[str, str, str, str, str], bool] = _attest,
+                   infra: Callable[[], dict[str, str]] = qualified_images) -> dict:
     require(COMMIT.fullmatch(source_commit) is not None,
             "Protected UI source commit is invalid")
     try:
@@ -138,6 +141,7 @@ def release_inputs(manifest_path: Path, source_commit: str, *,
                    "ElevenID/marty-credentials/.github/workflows/release-images.yml",
                    legacy_commit, f"refs/tags/v{legacy_version}") is True,
             "Legacy issuance image attestation is unverified")
+    infra_images = infra()
     return {
         "source_commit": source_commit,
         "stack_manifest_sha256": hashlib.sha256(manifest_path.read_bytes()).hexdigest(),
@@ -146,6 +150,7 @@ def release_inputs(manifest_path: Path, source_commit: str, *,
         "legacy_reference": f"{LEGACY}@{legacy_digest}",
         "legacy_commit": legacy_commit,
         "legacy_version": legacy_version,
+        "infra_images": infra_images,
     }
 
 
@@ -215,20 +220,7 @@ def verify_record(plan_path: Path, record_path: Path, now: datetime, *,
     require(attest(str(record_path), "ElevenID/marty-ui", RECORD_WORKFLOW,
                    source, "refs/heads/main") is True,
             "Protected resource record attestation is missing")
-    require(plan.get("status") == "blocked"
-            and record.get("plan_sha256") == hashlib.sha256(plan_path.read_bytes()).hexdigest()
-            and record.get("run_id") == plan.get("run_id")
-            and record.get("project") == plan.get("project")
-            and record.get("source_commit") == source
-            and record.get("services_reference") == plan.get("services_reference")
-            and record.get("migrations_reference") == plan.get("migrations_reference")
-            and record.get("legacy_reference") == plan.get("legacy_reference")
-            and record.get("created_at") == plan.get("created_at")
-            and record.get("expires_at") == plan.get("expires_at")
-            and record.get("owner_labels") == plan.get("owner_labels"),
-            "Protected resource record differs from attested plan")
-    require(plan.get("surface") in {"base", "selfhost"},
-            "Protected surface is invalid")
+    _require_record_binding(plan_path, plan, record)
     result = ownership(record, plan["surface"], now)
     require(result.get("live_ownership_verified") is True
             and result.get("rollback_accepted") is False,
@@ -237,6 +229,56 @@ def verify_record(plan_path: Path, record_path: Path, now: datetime, *,
             "status": "blocked", "project": plan["project"],
             "live_ownership_verified": True, "rollback_accepted": False,
             "blocker": "live Rust-to-Python-to-Rust route proof is absent"}
+
+
+def _require_record_binding(plan_path: Path, plan: dict, record: dict) -> None:
+    require(plan.get("status") == "blocked"
+            and record.get("plan_sha256") == hashlib.sha256(plan_path.read_bytes()).hexdigest()
+            and record.get("run_id") == plan.get("run_id")
+            and record.get("project") == plan.get("project")
+            and record.get("source_commit") == plan.get("source_commit")
+            and record.get("services_reference") == plan.get("services_reference")
+            and record.get("migrations_reference") == plan.get("migrations_reference")
+            and record.get("legacy_reference") == plan.get("legacy_reference")
+            and record.get("infra_images") == plan.get("infra_images")
+            and record.get("created_at") == plan.get("created_at")
+            and record.get("expires_at") == plan.get("expires_at")
+            and record.get("owner_labels") == plan.get("owner_labels"),
+            "Protected resource record differs from attested plan")
+    producer_run_id = record.get("producer_run_id")
+    require(isinstance(producer_run_id, str)
+            and RUN_ID.fullmatch(producer_run_id) is not None,
+            "Protected producer run ID is invalid")
+    require(plan.get("surface") in {"base", "selfhost"},
+            "Protected surface is invalid")
+
+
+def verify_handoff(plan_path: Path, record_path: Path, source_commit: str,
+                   producer_run_id: str, *,
+                   attest: Callable[[str, str, str, str, str], bool] = _attest) -> dict:
+    """Check exact protected producer handoff before a hosted job signs it."""
+    require(COMMIT.fullmatch(source_commit) is not None
+            and RUN_ID.fullmatch(producer_run_id) is not None,
+            "Protected handoff source/run is invalid")
+    try:
+        plan = json.loads(plan_path.read_text(encoding="utf-8"))
+        record = json.loads(record_path.read_text(encoding="utf-8"))
+    except (OSError, ValueError) as exc:
+        raise PlanError("Protected handoff artifacts are invalid") from exc
+    require(isinstance(plan, dict) and isinstance(record, dict)
+            and plan.get("schema") == "marty.passport-supported-provisioning-plan/v1"
+            and record.get("schema") == "marty.passport-supported-compose-ownership/v1"
+            and plan.get("source_commit") == source_commit
+            and record.get("producer_run_id") == producer_run_id,
+            "Protected handoff source/run mismatch")
+    require(attest(str(plan_path), "ElevenID/marty-ui", PLAN_WORKFLOW,
+                   source_commit, "refs/heads/main") is True,
+            "Protected plan attestation is missing")
+    _require_record_binding(plan_path, plan, record)
+    return {"schema": "marty.passport-supported-record-handoff/v1",
+            "status": "blocked", "project": plan["project"],
+            "producer_run_id": producer_run_id,
+            "blocker": "live ownership and rollback have not been verified"}
 
 
 def main() -> int:

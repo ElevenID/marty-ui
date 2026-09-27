@@ -10,7 +10,8 @@ from pathlib import Path
 import pytest
 
 from scripts.passport_supported_provisioning_plan import (
-    PlanError, build_plan, protected_context, release_inputs, verify_record,
+    PlanError, build_plan, protected_context, release_inputs, verify_handoff,
+    verify_record,
 )
 
 
@@ -21,6 +22,11 @@ SERVICES = "ghcr.io/elevenid/marty-ui-oss/services@sha256:" + "c" * 64
 MIGRATIONS = "ghcr.io/elevenid/marty-ui-oss/migrations@sha256:" + "d" * 64
 LEGACY_DIGEST = "sha256:e7bb482120837c68af6cec2f6d1d5276488de440b93fc811987860b7b99b4657"
 LEGACY = "ghcr.io/elevenid/marty-credentials-issuance@" + LEGACY_DIGEST
+INFRA = {
+    "postgres": "docker.io/library/postgres@sha256:" + "1" * 64,
+    "redis": "docker.io/library/redis@sha256:" + "2" * 64,
+    "openbao": "quay.io/openbao/openbao@sha256:" + "3" * 64,
+}
 
 
 def manifest() -> dict:
@@ -52,10 +58,11 @@ def verified_inputs(tmp_path: Path) -> dict:
         attested.append(args)
         return True
     result = release_inputs(path, SOURCE, verify_ui=lambda *args: True,
-                            attest=attest)
+                            attest=attest, infra=lambda: INFRA)
     assert result["services_reference"] == SERVICES
     assert result["migrations_reference"] == MIGRATIONS
     assert result["legacy_reference"] == LEGACY
+    assert result["infra_images"] == INFRA
     assert attested == [(
         "oci://" + LEGACY, "ElevenID/marty-credentials",
         "ElevenID/marty-credentials/.github/workflows/release-images.yml",
@@ -100,18 +107,18 @@ def test_release_rejects_unbound_credentials_image(tmp_path: Path) -> None:
     path.write_text(json.dumps(value), encoding="utf-8")
     with pytest.raises(PlanError, match="image"):
         release_inputs(path, SOURCE, verify_ui=lambda *args: True,
-                       attest=lambda *args: True)
+                       attest=lambda *args: True, infra=lambda: INFRA)
     value = manifest()
     value["components"][0]["commit"] = "f" * 40
     path.write_text(json.dumps(value), encoding="utf-8")
     with pytest.raises(PlanError, match="protected main"):
         release_inputs(path, SOURCE, verify_ui=lambda *args: True,
-                       attest=lambda *args: True)
+                       attest=lambda *args: True, infra=lambda: INFRA)
     value = manifest()
     path.write_text(json.dumps(value), encoding="utf-8")
     with pytest.raises(PlanError, match="attestation"):
         release_inputs(path, SOURCE, verify_ui=lambda *args: True,
-                       attest=lambda *args: False)
+                       attest=lambda *args: False, infra=lambda: INFRA)
 
 
 @pytest.mark.parametrize("field,value", [
@@ -145,10 +152,11 @@ def record_files(tmp_path: Path) -> tuple[Path, Path, dict, dict]:
     record = {
         "schema": "marty.passport-supported-compose-ownership/v1",
         "plan_sha256": hashlib.sha256(plan_path.read_bytes()).hexdigest(),
+        "producer_run_id": "555555555",
         **{key: plan[key] for key in (
             "run_id", "project", "source_commit", "services_reference",
             "migrations_reference", "legacy_reference", "created_at",
-            "expires_at", "owner_labels")},
+            "expires_at", "owner_labels", "infra_images")},
         "containers": {}, "networks": {}, "volumes": [],
     }
     record_path = tmp_path / "record.json"
@@ -172,6 +180,7 @@ def test_unsigned_record_never_reaches_docker(tmp_path: Path) -> None:
     ("services_reference", "ghcr.io/other/services@sha256:" + "c" * 64),
     ("legacy_reference", "ghcr.io/other/issuance@sha256:" + "e" * 64),
     ("migrations_reference", "ghcr.io/other/migrations@sha256:" + "d" * 64),
+    ("infra_images", {**INFRA, "openbao": "quay.io/other/openbao@sha256:" + "3" * 64}),
     ("plan_sha256", "0" * 64),
 ])
 def test_attested_but_mismatched_record_never_reaches_docker(
@@ -205,3 +214,22 @@ def test_verified_plan_and_record_still_cannot_accept_rollback(tmp_path: Path) -
         "ElevenID/marty-ui/.github/workflows/passport-supported-provisioning-plan.yml",
         "ElevenID/marty-ui/.github/workflows/passport-supported-provisioning-record.yml",
     ]
+
+
+def test_hosted_handoff_requires_exact_producer_and_signed_plan(tmp_path: Path) -> None:
+    plan_path, record_path, _, record = record_files(tmp_path)
+    result = verify_handoff(plan_path, record_path, SOURCE, "555555555",
+                            attest=lambda *args: True)
+    assert result["status"] == "blocked"
+    assert result["producer_run_id"] == "555555555"
+    with pytest.raises(PlanError, match="source/run mismatch"):
+        verify_handoff(plan_path, record_path, SOURCE, "666666666",
+                       attest=lambda *args: True)
+    with pytest.raises(PlanError, match="attestation"):
+        verify_handoff(plan_path, record_path, SOURCE, "555555555",
+                       attest=lambda *args: False)
+    record["producer_run_id"] = "marty-selfhost-prod"
+    record_path.write_text(json.dumps(record), encoding="utf-8")
+    with pytest.raises(PlanError):
+        verify_handoff(plan_path, record_path, SOURCE, "555555555",
+                       attest=lambda *args: True)
