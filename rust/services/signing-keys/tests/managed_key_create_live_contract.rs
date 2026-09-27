@@ -35,6 +35,34 @@ const ED25519_PUBLIC_B64: &str = "AQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQE=";
 
 type Keys = Arc<Mutex<BTreeMap<String, String>>>;
 
+async fn disposable_redis_url() -> String {
+    let url = std::env::var("MARTY_TEST_REDIS_URL").expect("disposable Redis URL");
+    let parsed = reqwest::Url::parse(&url).expect("disposable Redis URL syntax");
+    assert!(matches!(
+        parsed.host_str(),
+        Some("127.0.0.1" | "localhost" | "::1")
+    ));
+    assert!(parsed
+        .path()
+        .trim_start_matches('/')
+        .parse::<u8>()
+        .is_ok_and(|db| db >= 13));
+    let nonce = std::env::var("MARTY_TEST_REDIS_DISPOSABLE_NONCE")
+        .expect("disposable Redis sentinel value");
+    assert!(nonce.len() >= 16, "disposable Redis sentinel is too short");
+    let client = redis::Client::open(url.as_str()).expect("disposable Redis client");
+    let mut connection = client
+        .get_multiplexed_async_connection()
+        .await
+        .expect("disposable Redis connection");
+    let observed: Option<String> = connection
+        .get("marty:tests:disposable-guard")
+        .await
+        .expect("disposable Redis sentinel read");
+    assert_eq!(observed.as_deref(), Some(nonce.as_str()));
+    url
+}
+
 async fn create_key(
     State(keys): State<Keys>,
     Path(reference): Path<String>,
@@ -132,7 +160,21 @@ async fn list_keys(State(keys): State<Keys>, headers: HeaderMap) -> impl IntoRes
     (StatusCode::OK, Json(json!({"data": {"keys": names}})))
 }
 
-async fn sign_key(Path(reference): Path<String>, State(keys): State<Keys>) -> impl IntoResponse {
+async fn sign_key(
+    Path(reference): Path<String>,
+    State(keys): State<Keys>,
+    headers: HeaderMap,
+) -> impl IntoResponse {
+    if headers
+        .get("x-vault-token")
+        .and_then(|value| value.to_str().ok())
+        != Some("test-only")
+    {
+        return (
+            StatusCode::FORBIDDEN,
+            Json(json!({"errors": ["test token required"]})),
+        );
+    }
     if !keys.lock().unwrap().contains_key(&reference) {
         return (
             StatusCode::NOT_FOUND,
@@ -169,7 +211,7 @@ async fn json_route(app: &Router, method: &str, path: &str, body: Value) -> (Sta
 #[ignore = "requires disposable MARTY_TEST_REDIS_URL and BAO_TOKEN=test-only"]
 async fn issuer_profile_creates_managed_key_then_resolves_and_signs_without_a_locator() {
     assert_eq!(std::env::var("BAO_TOKEN").as_deref(), Ok("test-only"));
-    let redis_url = std::env::var("MARTY_TEST_REDIS_URL").expect("disposable Redis URL");
+    let redis_url = disposable_redis_url().await;
     let keys: Keys = Arc::new(Mutex::new(BTreeMap::new()));
     let kms = Router::new()
         .route("/v1/transit/keys", get(list_keys))
@@ -398,7 +440,7 @@ async fn issuer_profile_creates_managed_key_then_resolves_and_signs_without_a_lo
 #[ignore = "requires disposable MARTY_TEST_REDIS_URL and BAO_TOKEN=test-only"]
 async fn failed_managed_provision_does_not_activate_an_issuer_profile() {
     assert_eq!(std::env::var("BAO_TOKEN").as_deref(), Ok("test-only"));
-    let redis_url = std::env::var("MARTY_TEST_REDIS_URL").expect("disposable Redis URL");
+    let redis_url = disposable_redis_url().await;
     let kms = Router::new()
         .route(
             "/v1/transit/keys",
@@ -458,7 +500,7 @@ async fn failed_managed_provision_does_not_activate_an_issuer_profile() {
 #[ignore = "requires disposable MARTY_TEST_REDIS_URL and BAO_TOKEN=test-only"]
 async fn denied_read_or_missing_mount_never_provisions_a_profile() {
     assert_eq!(std::env::var("BAO_TOKEN").as_deref(), Ok("test-only"));
-    let redis_url = std::env::var("MARTY_TEST_REDIS_URL").expect("disposable Redis URL");
+    let redis_url = disposable_redis_url().await;
     for (read_status, list_status) in [
         (StatusCode::FORBIDDEN, StatusCode::OK),
         (StatusCode::NOT_FOUND, StatusCode::NOT_FOUND),
@@ -524,7 +566,7 @@ async fn denied_read_or_missing_mount_never_provisions_a_profile() {
 #[ignore = "requires disposable MARTY_TEST_REDIS_URL and BAO_TOKEN=test-only"]
 async fn existing_managed_key_profiles_with_read_access_and_no_create_permission() {
     assert_eq!(std::env::var("BAO_TOKEN").as_deref(), Ok("test-only"));
-    let redis_url = std::env::var("MARTY_TEST_REDIS_URL").expect("disposable Redis URL");
+    let redis_url = disposable_redis_url().await;
     let organization_id = format!("managed-read-only-{}", Uuid::new_v4().simple());
     let did = format!("did:web:issuer.example:orgs:{organization_id}");
     let tuple = format!("{organization_id}|{did}|vc_jwt_issuer|SD_JWT_VC|EdDSA");
@@ -638,7 +680,7 @@ async fn request(app: &Router, organization_id: &str, body: Value) -> (StatusCod
 #[ignore = "requires disposable MARTY_TEST_REDIS_URL and BAO_TOKEN=test-only"]
 async fn managed_key_creation_stays_in_kms_and_binds_only_after_verified_success() {
     assert_eq!(std::env::var("BAO_TOKEN").as_deref(), Ok("test-only"));
-    let redis_url = std::env::var("MARTY_TEST_REDIS_URL").expect("disposable Redis URL");
+    let redis_url = disposable_redis_url().await;
     let keys: Keys = Arc::new(Mutex::new(BTreeMap::new()));
     let kms = Router::new()
         .route(

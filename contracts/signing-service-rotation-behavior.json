@@ -27,6 +27,8 @@
   "security_and_integrity_rules": [
     "Use only the tenant-registered service and its KMS key reference; never accept a caller-selected KMS locator or private material.",
     "Reject managed and read-only services before any provider rotation; the shared managed KMS key is not tenant-rotatable through this route.",
+    "Reject service-token aliases and any service pointing at the configured managed Transit endpoint, mount, and namespace, even when its registered ID and flags are not managed.",
+    "Hold a global registry write fence while scanning existing tenant registries for the same physical Transit endpoint, mount, namespace, and key reference; deny rotation when another tenant binds the key. Registry save scripts reject writes by other tenants until the rotation completes.",
     "Rotate inside KMS; never export or hold a private key.",
     "Report provider rotation and publication failures without exposing provider credentials or raw upstream errors.",
     "Do not claim a completed rotation in stored state when the provider did not rotate a key.",
