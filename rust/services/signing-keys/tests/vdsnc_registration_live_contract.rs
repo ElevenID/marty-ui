@@ -14,6 +14,34 @@ use serde_json::{json, Value};
 use tower::ServiceExt;
 use uuid::Uuid;
 
+async fn disposable_redis_url() -> String {
+    let url = std::env::var("MARTY_TEST_REDIS_URL").expect("disposable Redis URL");
+    let parsed = reqwest::Url::parse(&url).expect("disposable Redis URL syntax");
+    assert!(matches!(
+        parsed.host_str(),
+        Some("127.0.0.1" | "localhost" | "::1")
+    ));
+    assert!(parsed
+        .path()
+        .trim_start_matches('/')
+        .parse::<u8>()
+        .is_ok_and(|db| db >= 13));
+    let nonce = std::env::var("MARTY_TEST_REDIS_DISPOSABLE_NONCE")
+        .expect("disposable Redis sentinel value");
+    assert!(nonce.len() >= 16, "disposable Redis sentinel is too short");
+    let client = redis::Client::open(url.as_str()).expect("disposable Redis client");
+    let mut connection = client
+        .get_multiplexed_async_connection()
+        .await
+        .expect("disposable Redis connection");
+    let observed: Option<String> = connection
+        .get("marty:tests:disposable-guard")
+        .await
+        .expect("disposable Redis sentinel read");
+    assert_eq!(observed.as_deref(), Some(nonce.as_str()));
+    url
+}
+
 async fn register(app: &Router, organization_id: &str, body: Value) -> (StatusCode, Value) {
     let response = app
         .clone()
@@ -38,7 +66,7 @@ async fn register(app: &Router, organization_id: &str, body: Value) -> (StatusCo
 #[tokio::test]
 #[ignore = "requires disposable MARTY_TEST_REDIS_URL"]
 async fn public_vdsnc_registration_preserves_registry_and_never_returns_provider_secret() {
-    let redis_url = std::env::var("MARTY_TEST_REDIS_URL").expect("disposable Redis URL");
+    let redis_url = disposable_redis_url().await;
     let organization_id = format!("rust-vdsnc-{}", Uuid::new_v4().simple());
     let other_organization_id = format!("rust-vdsnc-other-{}", Uuid::new_v4().simple());
     let registry = RegistryStore::connect(&redis_url).await.unwrap();
@@ -172,7 +200,7 @@ async fn public_vdsnc_registration_preserves_registry_and_never_returns_provider
 #[tokio::test]
 #[ignore = "requires disposable MARTY_TEST_REDIS_URL"]
 async fn concurrent_vdsnc_registration_retains_both_services() {
-    let redis_url = std::env::var("MARTY_TEST_REDIS_URL").expect("disposable Redis URL");
+    let redis_url = disposable_redis_url().await;
     let organization_id = format!("rust-vdsnc-race-{}", Uuid::new_v4().simple());
     let registry = RegistryStore::connect(&redis_url).await.unwrap();
     let app = router_with_dependencies(
