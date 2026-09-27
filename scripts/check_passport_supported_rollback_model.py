@@ -73,6 +73,7 @@ def render_model(
     surface: str, project: str, env_file: Path, disposable_root: Path,
     services_reference: str,
     runner: Callable[[list[str], dict[str, str]], str] = _run_config,
+    *, phase: str = "rust",
 ) -> dict:
     """Read Docker's resolved model using only fixed repo-owned Compose files."""
     match = PROJECT.fullmatch(project)
@@ -85,16 +86,17 @@ def render_model(
     require(re.fullmatch(r"ghcr\.io/elevenid/marty-ui-oss/services@sha256:[0-9a-f]{64}",
                          services_reference) is not None,
             "Signed services image reference is invalid")
-    compose = ROOT / ("docker-compose.base.yml" if surface == "base"
-                      else "docker-compose.selfhost.prod.yml")
-    provider = ROOT / ("docker-compose.profile.passport-provider-base.yml"
-                       if surface == "base" else
-                       "docker-compose.profile.passport-provider-selfhost.yml")
-    images = ROOT / "docker-compose.profile.passport-acceptance-images.yml"
-    require(all(path.is_file() for path in (compose, provider, images)),
+    require(phase in {"rust", "python"}, "Disposable owner phase is invalid")
+    compose = ROOT / "docker-compose.passport-supported-disposable.yml"
+    surface_overlay = ROOT / f"docker-compose.passport-supported-disposable-{surface}.yml"
+    owner_overlay = ROOT / "docker-compose.passport-supported-disposable-python-owner.yml"
+    files = [compose, surface_overlay]
+    if phase == "python":
+        files.append(owner_overlay)
+    require(all(path.is_file() for path in files),
             "Protected Compose source is missing")
     args = ["docker", "compose", "--project-name", project, "--env-file", str(env_file),
-            "-f", str(compose), "-f", str(provider), "-f", str(images),
+            *(arg for path in files for arg in ("-f", str(path))),
             "config", "--format", "json"]
     environment = os.environ.copy()
     environment["MARTY_SERVICES_IMAGE"] = services_reference
