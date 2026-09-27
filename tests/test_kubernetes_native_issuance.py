@@ -17,8 +17,8 @@ NATIVE = ROOT / "rust/crates/release-evidence/src/kubernetes_native.rs"
 CONTRACT = json.loads(
     (ROOT / "contracts/kubernetes-native-image-reference.json").read_text()
 )
-# Provider settings remain unbound. Passport routing stays disabled by default;
-# opt-in needs a separately accepted native image and provider configuration.
+# Callback and legacy signer settings remain unbound. Passport routing stays
+# disabled by default; opt-in needs a separately accepted provider and image.
 PASSPORT_NOT_KUBERNETES_BOUND = {
     "PERSONALIZATION_BUREAU_WEBHOOK_SECRET_FILE",
     "PASSPORT_TENANT_API_KEYS",
@@ -28,8 +28,6 @@ PASSPORT_NOT_KUBERNETES_BOUND = {
     "PHYSICAL_DOCUMENT_ALLOW_SELF_SIGNED",
     "PHYSICAL_DOCUMENT_ARTIFACT_KEY",
     "PHYSICAL_DOCUMENT_ARTIFACT_KEY_FILE",
-    "PERSONALIZATION_BUREAU_URL",
-    "PERSONALIZATION_BUREAU_API_KEY",
     "PERSONALIZATION_BUREAU_WEBHOOK_SECRET",
 }
 
@@ -62,9 +60,12 @@ def test_duplicate_common_organization_binding_cleanup_preserves_complete_mappin
     binding = '  MARTY_ORG_ID: "${MARTY_ORG_ID}"\n'
     anchor = '  MARTY_MIGRATION_PROFILE: "${MARTY_MIGRATION_PROFILE}"\n'
     assert source.count(binding) == source.count(anchor) == 1
+    # Keep the historical duplicate-binding fixture stable as new, independent
+    # configuration keys are added to the current ConfigMap.
     historical = source.replace('  PERSONALIZATION_BUREAU_PROVIDER_PROFILE_ID: ""\n', '')
     historical = historical.replace('  PASSPORT_PROVIDER_INGRESS_GATEWAY_ENABLED: "false"\n', '')
     historical = historical.replace('  PASSPORT_PROVIDER_INGRESS_SERVICE_URL: ""\n', '')
+    historical = historical.replace('  PERSONALIZATION_BUREAU_URL: ""\n', '')
     original = historical.replace(anchor, anchor + binding)
     assert hashlib.sha256(original.encode()).hexdigest() == (
         "31868e16c09c815461cd42eb6b7d08ca35d251828428c7069bf05f1cd76a47d9"
@@ -239,13 +240,18 @@ def native_inventory(value):
         if "secretKeyRef" in v.get("valueFrom", {})
     }
     assert set(secret_refs) == constants("SECRET_SETTINGS") | {
-        "CANVAS_CREDENTIALS_API_TOKEN"
+        "CANVAS_CREDENTIALS_API_TOKEN",
+        "PERSONALIZATION_BUREAU_API_KEY",
     }
     for name, ref in secret_refs.items():
         assert ref == {
             "name": "marty-secrets",
             "key": name,
-            **({"optional": True} if name == "CANVAS_CREDENTIALS_API_TOKEN" else {}),
+            **(
+                {"optional": True}
+                if name in {"CANVAS_CREDENTIALS_API_TOKEN", "PERSONALIZATION_BUREAU_API_KEY"}
+                else {}
+            ),
         }
     assert not any(
         "BAO" in v["name"] or v["name"] == "CANVAS_SYNC_PROCESSOR" for v in entries

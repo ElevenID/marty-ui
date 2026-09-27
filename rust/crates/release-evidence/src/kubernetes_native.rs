@@ -66,6 +66,7 @@ pub const INHERITED_SETTINGS: &[&str] = &[
     "PASSPORT_MANAGED_ISSUER_SIGNING_ENABLED",
     "PASSPORT_KMS_ARTIFACTS_ENABLED",
     "PASSPORT_KMS_CALLBACKS_ENABLED",
+    "PERSONALIZATION_BUREAU_URL",
     "UI_BASE_URL",
     "CREDENTIAL_TEMPLATE_SERVICE_URL",
     "REVOCATION_PROFILE_SERVICE_URL",
@@ -102,6 +103,7 @@ pub const SECRET_SETTINGS: &[&str] = &[
     "CANVAS_CREDENTIALS_SHARED_SECRET",
 ];
 pub const SHARED_BINDINGS: &[&str] = &[
+    "PERSONALIZATION_BUREAU_API_KEY",
     "CANVAS_CREDENTIALS_API_TOKEN",
     "ISSUER_BASE_URL",
     "ORG_GRPC_TARGET",
@@ -465,6 +467,7 @@ fn native_template(resources: &[Value]) -> Result<()> {
         config_ref("ISSUER_BASE_URL", "PUBLIC_API_URL"),
     );
     expected.insert("CANVAS_CREDENTIALS_API_TOKEN",json!({"name":"CANVAS_CREDENTIALS_API_TOKEN","valueFrom":{"secretKeyRef":{"name":"marty-secrets","key":"CANVAS_CREDENTIALS_API_TOKEN","optional":true}}}));
+    expected.insert("PERSONALIZATION_BUREAU_API_KEY",json!({"name":"PERSONALIZATION_BUREAU_API_KEY","valueFrom":{"secretKeyRef":{"name":"marty-secrets","key":"PERSONALIZATION_BUREAU_API_KEY","optional":true}}}));
     for (name, value) in [
         ("SERVICE_NAME", "issuance_native"),
         ("ISSUANCE_SERVICE_PORT", "8005"),

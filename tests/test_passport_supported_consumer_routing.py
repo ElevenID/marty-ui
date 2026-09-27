@@ -107,6 +107,18 @@ def test_kubernetes_consumers_default_off_and_use_exact_token_secret() -> None:
     gateway = k8s_container("k8s/oracle/07-microservices.yaml", "gateway")
     flow = k8s_container("k8s/oracle/07-microservices.yaml", "flow")
     owner = k8s_container("k8s/oracle/07a-issuance-native.yaml", "issuance-native")
+    assert common["PERSONALIZATION_BUREAU_URL"] == ""
+    bureau_url = next(item for item in owner["env"] if item["name"] == "PERSONALIZATION_BUREAU_URL")
+    assert bureau_url["valueFrom"]["configMapKeyRef"] == {
+        "name": "marty-config",
+        "key": "PERSONALIZATION_BUREAU_URL",
+    }
+    bureau_key = next(item for item in owner["env"] if item["name"] == "PERSONALIZATION_BUREAU_API_KEY")
+    assert bureau_key["valueFrom"]["secretKeyRef"] == {
+        "name": "marty-secrets",
+        "key": "PERSONALIZATION_BUREAU_API_KEY",
+        "optional": True,
+    }
     for consumer in (gateway, flow, owner):
         token = next(item for item in consumer["env"] if item["name"] == "GRPC_SERVICE_TOKEN")
         assert token["valueFrom"]["secretKeyRef"] == {
