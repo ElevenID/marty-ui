@@ -40,7 +40,9 @@ def model(tmp_path: Path) -> dict:
     )
     secrets = {}
     for index, name in enumerate(secret_names):
-        path = secret_root / name
+        parent = secret_root if index < 5 else tmp_path / "beta-workload"
+        parent.mkdir(exist_ok=True)
+        path = parent / name
         path.write_text("beta-physical-secret-" + str(index) * 40, encoding="utf-8")
         secrets[name] = {"file": str(path)}
     return {"name": "elevenid-beta", "secrets": secrets,
@@ -242,6 +244,26 @@ def test_physical_mode_plan_only_blocks_live_deploy_and_restore() -> None:
         "networks": {"marty-network": {}},
         "volumes": [{"source": str(ROOT / "config/canvas/production-local.rb"),
                      "target": "/config", "type": "bind"}]}),
+    lambda candidate: candidate["services"].update(auth={
+        "networks": {"marty-network": {}},
+        "environment": {"BAO_TOKEN": Path(candidate["secrets"][
+            "passport_callback_signer_bao_token"]["file"]).read_text()}}),
+    lambda candidate: candidate["services"].update(auth={
+        "networks": {"marty-network": {}},
+        "volumes": [{"type": "bind", "source": candidate["secrets"][
+            "passport_callback_signer_bao_token"]["file"], "target": "/tmp/token"}]}),
+    lambda candidate: (candidate["secrets"].update(copy_token={"file": candidate[
+        "secrets"]["passport_callback_signer_bao_token"]["file"]}),
+        candidate["services"].update(auth={"networks": {"marty-network": {}},
+                                       "secrets": ["copy_token"]})),
+    lambda candidate: (candidate.update(configs={"copy_token": {"file": candidate[
+        "secrets"]["passport_callback_signer_bao_token"]["file"]}}),
+        candidate["services"].update(auth={"networks": {"marty-network": {}},
+                                       "configs": ["copy_token"]})),
+    lambda candidate: candidate["services"].update(auth={
+        "networks": {"marty-network": {}},
+        "build": {"context": str(Path(candidate["secrets"][
+            "passport_callback_signer_bao_token"]["file"]).parent)}}),
 ])
 def test_physical_mode_rejects_regression(tmp_path: Path, change) -> None:
     candidate = deepcopy(model(tmp_path))

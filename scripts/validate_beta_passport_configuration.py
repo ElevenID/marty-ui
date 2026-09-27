@@ -258,6 +258,23 @@ def validate_physical_model(model, files, provider_registry=None):
         "passport-provider-ingress": {
             "passport_callback_signer_api_key", "passport_provider_webhook_secret"},
     }
+    physical_secret_root = physical_secret_path(
+        model, "passport_callback_signer_bao_token").parent.resolve()
+    approved_secret_names = physical_secrets | {"marty_db_password"}
+    for secret_name, definition in model.get("secrets", {}).items():
+        source = definition.get("file") if isinstance(definition, dict) else None
+        physical_require(isinstance(source, str),
+                         "Beta physical provider secret source is unverified")
+        secret_path = Path(source).resolve()
+        if secret_path == physical_secret_root or physical_secret_root in secret_path.parents:
+            physical_require(secret_name in approved_secret_names
+                             and secret_path.name == secret_name,
+                             "Beta physical provider secret alias is forbidden")
+    protected_values = [physical_secret(model, secret_name)
+                        for secret_name in physical_secrets]
+    config_definitions = model.get("configs", {})
+    physical_require(isinstance(config_definitions, dict),
+                     "Beta physical provider stack configs are invalid")
     for name, service in services.items():
         service_networks = service.get("networks", {})
         physical_require(isinstance(service_networks, dict),
@@ -277,11 +294,34 @@ def validate_physical_model(model, files, provider_registry=None):
         physical_require((mounted & physical_secrets)
                          == expected_secret_consumers.get(name, set()),
                          "Beta physical secret has an unauthorized consumer")
+        physical_require(not any(contains_credential(service.get("environment", {}), value)
+                                 for value in protected_values),
+                         "Beta physical provider secret leaked into environment")
+        build = service.get("build")
+        build_context = (build.get("context") if isinstance(build, dict) else build)
+        if build_context:
+            physical_require(isinstance(build_context, str),
+                             "Beta physical provider build context is invalid")
+            context_path = Path(build_context).resolve()
+            physical_require(context_path != physical_secret_root
+                             and context_path not in physical_secret_root.parents
+                             and physical_secret_root not in context_path.parents,
+                             "Beta physical provider secret root entered a build context")
         volumes = service.get("volumes", [])
         physical_require(isinstance(volumes, list),
                          "Beta physical provider service volume is invalid")
         for volume in volumes:
-            source = volume.get("source", "") if isinstance(volume, dict) else str(volume)
+            physical_require(isinstance(volume, dict),
+                             "Beta physical provider volume source is unverified")
+            source = volume.get("source", "")
+            kind = volume.get("type")
+            if kind == "bind":
+                physical_require(isinstance(source, str),
+                                 "Beta physical provider bind source is unverified")
+                bound_path = Path(source).resolve()
+                physical_require(bound_path != physical_secret_root
+                                 and physical_secret_root not in bound_path.parents,
+                                 "Beta physical secret root was bind-mounted")
             canvas_config = Path(__file__).resolve().parents[1] / "config/canvas/production-local.rb"
             known_beta_canvas_config = (name == "canvas-real" and isinstance(source, str)
                                         and Path(source).absolute() == canvas_config
@@ -290,6 +330,20 @@ def validate_physical_model(model, files, provider_registry=None):
                              or not re.search(r"prod|production|selfhost", source,
                                               re.IGNORECASE),
                              "Beta physical provider stack references production volume")
+        configs = service.get("configs", [])
+        physical_require(isinstance(configs, list),
+                         "Beta physical provider service configs are invalid")
+        for config in configs:
+            config_name = (config if isinstance(config, str) else
+                           config.get("source") if isinstance(config, dict) else None)
+            definition = config_definitions.get(config_name)
+            path = definition.get("file") if isinstance(definition, dict) else None
+            physical_require(isinstance(path, str),
+                             "Beta physical provider config source is unverified")
+            config_path = Path(path).resolve()
+            physical_require(config_path != physical_secret_root
+                             and physical_secret_root not in config_path.parents,
+                             "Beta physical secret root was mounted as config")
     for service, expected in ((services["gateway"], {"marty-network"}),
                               (services["flow"], {"marty-network"}),
                               (services["issuance-native"], {"marty-network"}),
