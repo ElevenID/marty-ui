@@ -12,9 +12,10 @@
   },
   "flow_policy": {
     "source": "flow_service.flow_instances joined to flow_service.flow_definitions",
-    "selector": "physical_document_issuance definition, custom definition extending physical_document_issuance, or context carrying physical_document_job; block nonterminal orphan instances because their purpose cannot be verified",
+    "selector": "physical_document_issuance definition, custom definition extending physical_document_issuance, or context carrying physical_document_job; block nonterminal orphan instances unless they meet the exact expired synthetic OID4VP verification exemption",
     "terminal_statuses": ["completed", "failed", "cancelled", "expired"],
     "active": "block even when no physical-document job exists yet; a paused Flow may create or resume a job after cutover",
+    "expired_orphan_verification_exemption": "A definitionless awaiting_wallet instance may be excluded only when expiry is past, no current step or application flow key exists, context identifies the synthetic __verification__ OID4VP presentation flow with auth_request, oid4vp_profile, and request_uri, neither physical_document nor passport appears in context, and its provenance is either holder with verification_started by verification_api or legacy applicant with empty state history. All other definitionless nonterminal instances block. Preserve exempted rows without mutation.",
     "missing_schema_or_query_failure": "fail closed; do not infer zero active flows"
   },
   "cases": [
@@ -34,6 +35,10 @@
     {"name": "active physical-document Flow before job creation", "flow_status": "in_progress", "job_count": 0, "blocks": true},
     {"name": "active custom Flow extending physical-document issuance before job creation", "flow_status": "in_progress", "extends_flow_type": "physical_document_issuance", "job_count": 0, "blocks": true},
     {"name": "active orphan Flow with unknown purpose", "flow_status": "in_progress", "definition_missing": true, "blocks": true},
+    {"name": "expired synthetic OID4VP verification with modern provenance", "flow_status": "awaiting_wallet", "definition_missing": true, "expired": true, "protocol": "oid4vp_presentation", "provenance": "holder_verification_started", "blocks": false},
+    {"name": "expired synthetic OID4VP verification with legacy provenance", "flow_status": "awaiting_wallet", "definition_missing": true, "expired": true, "protocol": "oid4vp_presentation", "provenance": "applicant_empty_history", "blocks": false},
+    {"name": "unexpired synthetic OID4VP verification", "flow_status": "awaiting_wallet", "definition_missing": true, "expired": false, "protocol": "oid4vp_presentation", "blocks": true},
+    {"name": "expired orphan with passport context", "flow_status": "awaiting_wallet", "definition_missing": true, "expired": true, "passport_context": true, "blocks": true},
     {"name": "completed physical-document Flow", "flow_status": "completed", "blocks": false}
   ]
 }
