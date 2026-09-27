@@ -49,6 +49,7 @@ pub struct PassportHttpService {
     cipher: ArtifactAvailability,
     signer: Option<PassportSigner>,
     bureau: Option<BureauClient>,
+    bureau_provider_profile_id: Option<String>,
     webhook_secret: Option<Vec<u8>>,
     webhook_kms: Option<KmsWebhookVerifier>,
 }
@@ -226,6 +227,7 @@ impl PassportHttpService {
             signer,
             bureau,
         );
+        service.bureau_provider_profile_id = native.bureau_provider_profile_id.clone();
         // Inbound callbacks from already-submitted jobs remain verifiable even
         // when outbound bureau submission is not configured.
         if native.kms_callbacks_enabled {
@@ -283,6 +285,7 @@ impl PassportHttpService {
             cipher,
             signer,
             bureau,
+            bureau_provider_profile_id: None,
             webhook_secret,
             webhook_kms: None,
         }
@@ -761,6 +764,10 @@ async fn submit_personalization(
         .map_err(PassportHttpError::Bureau)?;
     let mut patch = PassportJobPatch::new(status_from_bureau(outcome.status));
     patch.bureau_job_id = Some(outcome.bureau_job_id.clone());
+    patch.bureau_provider_profile_id = outcome
+        .bureau_job_id
+        .as_ref()
+        .and(service.bureau_provider_profile_id.clone());
     patch.tracking_number = Some(outcome.tracking_number);
     patch.error_code = Some(
         (outcome.status == ProductionStatus::Failed).then(|| "BUREAU_SUBMISSION_FAILED".to_owned()),
@@ -773,6 +780,7 @@ async fn submit_personalization(
             let current = service.job(&principal, &application_id).await?;
             if outcome.bureau_job_id.is_none()
                 || current.bureau_job_id.as_deref() != outcome.bureau_job_id.as_deref()
+                || current.bureau_provider_profile_id != patch.bureau_provider_profile_id
             {
                 return Err(PassportHttpError::ConcurrentChange);
             }

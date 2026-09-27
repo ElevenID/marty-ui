@@ -28,6 +28,7 @@ pub struct PassportNativeConfig {
     pub signer_api_key: Option<String>,
     pub bureau_url: Option<String>,
     pub bureau_api_key: Option<String>,
+    pub bureau_provider_profile_id: Option<String>,
     pub bureau_webhook_secret: Option<String>,
     pub self_signed_test_enabled: bool,
 }
@@ -52,6 +53,10 @@ impl std::fmt::Debug for PassportNativeConfig {
             .field("signer_api_key_configured", &self.signer_api_key.is_some())
             .field("bureau_url_configured", &self.bureau_url.is_some())
             .field("bureau_api_key_configured", &self.bureau_api_key.is_some())
+            .field(
+                "bureau_provider_profile_id",
+                &self.bureau_provider_profile_id,
+            )
             .field(
                 "bureau_webhook_secret_configured",
                 &self.bureau_webhook_secret.is_some(),
@@ -81,6 +86,7 @@ impl PassportNativeConfig {
                 signer_api_key: None,
                 bureau_url: None,
                 bureau_api_key: None,
+                bureau_provider_profile_id: None,
                 bureau_webhook_secret: None,
                 self_signed_test_enabled,
             });
@@ -104,6 +110,16 @@ impl PassportNativeConfig {
             ));
         }
         let kms_callbacks_enabled = environment_flag(values, "PASSPORT_KMS_CALLBACKS_ENABLED");
+        let bureau_provider_profile_id = configured("PERSONALIZATION_BUREAU_PROVIDER_PROFILE_ID");
+        if bureau_provider_profile_id
+            .as_deref()
+            .is_some_and(|profile_id| profile_id.len() > 128)
+        {
+            return Err(MmfError::new(
+                ErrorCode::Configuration,
+                "PERSONALIZATION_BUREAU_PROVIDER_PROFILE_ID exceeds 128 bytes",
+            ));
+        }
         if kms_callbacks_enabled
             && (configured("PERSONALIZATION_BUREAU_WEBHOOK_SECRET").is_some()
                 || configured("PERSONALIZATION_BUREAU_WEBHOOK_SECRET_FILE").is_some())
@@ -130,6 +146,7 @@ impl PassportNativeConfig {
             signer_api_key: secret_value(values, "ICAO_DOCUMENT_SIGNER_API_KEY")?,
             bureau_url: configured("PERSONALIZATION_BUREAU_URL"),
             bureau_api_key: secret_value(values, "PERSONALIZATION_BUREAU_API_KEY")?,
+            bureau_provider_profile_id,
             bureau_webhook_secret: secret_value(values, "PERSONALIZATION_BUREAU_WEBHOOK_SECRET")?,
             self_signed_test_enabled,
         };
@@ -1679,10 +1696,18 @@ mod tests {
             ("ICAO_DOCUMENT_SIGNER_API_KEY", "signer-secret"),
             ("PERSONALIZATION_BUREAU_URL", "https://bureau.example.test"),
             ("PERSONALIZATION_BUREAU_API_KEY", "bureau-secret"),
+            (
+                "PERSONALIZATION_BUREAU_PROVIDER_PROFILE_ID",
+                "provider-reference",
+            ),
             ("PERSONALIZATION_BUREAU_WEBHOOK_SECRET", "webhook-secret"),
         ]);
         let config = IssuanceServiceConfig::from_values(complete.clone()).unwrap();
         assert!(config.passport_native.enabled);
+        assert_eq!(
+            config.passport_native.bureau_provider_profile_id.as_deref(),
+            Some("provider-reference")
+        );
         let debug = format!("{config:?}");
         for secret in [
             &secret[..],
@@ -1722,6 +1747,19 @@ mod tests {
         assert!(anonymous.passport_native.signer_api_key.is_none());
         assert!(anonymous.passport_native.bureau_api_key.is_none());
         assert!(anonymous.passport_native.bureau_webhook_secret.is_none());
+
+        let too_long = IssuanceServiceConfig::from_values(values(&[
+            ("PASSPORT_NATIVE_HTTP_ENABLED", "true"),
+            (
+                "PASSPORT_TENANT_API_KEYS",
+                &format!("{{\"org-a\":\"{secret}\"}}"),
+            ),
+            (
+                "PERSONALIZATION_BUREAU_PROVIDER_PROFILE_ID",
+                &"p".repeat(129),
+            ),
+        ]));
+        assert!(too_long.is_err());
     }
 
     #[test]

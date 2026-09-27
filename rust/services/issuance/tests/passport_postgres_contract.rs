@@ -978,6 +978,7 @@ async fn passport_jobs_survive_restart_without_cross_tenant_reads() {
 
     let mut submitted = PassportJobPatch::new(PassportJobStatus::Submitted);
     submitted.bureau_job_id = Some(Some("bureau-a".into()));
+    submitted.bureau_provider_profile_id = Some("provider-a".into());
     submitted.tracking_number = Some(Some("submitted-tracking".into()));
     let submitted_job = restarted
         .update(&org_a, "application-a", "SOD_SIGNED", &submitted, next)
@@ -1203,6 +1204,7 @@ async fn passport_jobs_survive_restart_without_cross_tenant_reads() {
     restarted.insert(&org_b, &second_job, now).await.unwrap();
     let mut second_submitted = PassportJobPatch::new(PassportJobStatus::Submitted);
     second_submitted.bureau_job_id = Some(Some("bureau-a".into()));
+    second_submitted.bureau_provider_profile_id = Some("provider-b".into());
     let second_submitted_job = restarted
         .update(&org_b, "application-b", "DRAFT", &second_submitted, next)
         .await
@@ -1290,6 +1292,78 @@ async fn passport_jobs_survive_restart_without_cross_tenant_reads() {
             .status,
         "ACTIVE"
     );
+    assert_eq!(
+        restarted
+            .resolve_provider_callback_tenant("provider-a", "bureau-a")
+            .await
+            .unwrap()
+            .as_deref(),
+        Some("org-a")
+    );
+    assert_eq!(
+        restarted
+            .resolve_provider_callback_tenant("provider-b", "bureau-a")
+            .await
+            .unwrap()
+            .as_deref(),
+        Some("org-b")
+    );
+    assert!(restarted
+        .resolve_provider_callback_tenant("provider-foreign", "bureau-a")
+        .await
+        .unwrap()
+        .is_none());
+    assert!(restarted
+        .resolve_provider_callback_tenant("provider-a", "missing")
+        .await
+        .unwrap()
+        .is_none());
+    assert!(restarted
+        .resolve_provider_callback_tenant("", "bureau-a")
+        .await
+        .is_err());
+    assert!(sqlx::query(
+        "UPDATE issuance_service.physical_document_jobs
+         SET bureau_provider_profile_id='provider-a' WHERE id='job-b'",
+    )
+    .execute(&restarted_pool)
+    .await
+    .is_err());
+    assert_eq!(
+        restarted
+            .resolve_provider_callback_tenant("provider-b", "bureau-a")
+            .await
+            .unwrap()
+            .as_deref(),
+        Some("org-b")
+    );
+
+    // Simulate a partially upgraded database with duplicate bound provider
+    // jobs. Both lookup and restart migration must fail before choosing a tenant.
+    sqlx::query("DROP INDEX issuance_service.ux_physical_document_jobs_bureau_provider_job")
+        .execute(&restarted_pool)
+        .await
+        .unwrap();
+    sqlx::query(
+        "UPDATE issuance_service.physical_document_jobs
+         SET bureau_provider_profile_id='provider-a' WHERE id='job-b'",
+    )
+    .execute(&restarted_pool)
+    .await
+    .unwrap();
+    assert!(restarted
+        .resolve_provider_callback_tenant("provider-a", "bureau-a")
+        .await
+        .is_err());
+    assert!(migration::migrate_passport(&restarted_pool).await.is_err());
+    sqlx::query(
+        "UPDATE issuance_service.physical_document_jobs
+         SET bureau_provider_profile_id='provider-b' WHERE id='job-b'",
+    )
+    .execute(&restarted_pool)
+    .await
+    .unwrap();
+    migration::migrate_passport(&restarted_pool).await.unwrap();
     exercise_native_passport_http(restarted, keyring, cipher, &key_a, &key_b).await;
     #[cfg(feature = "passport-self-signed-test")]
     if let Ok(packaged_url) = std::env::var("MARTY_PASSPORT_PACKAGED_TEST_URL") {
@@ -1316,6 +1390,34 @@ async fn passport_jobs_survive_restart_without_cross_tenant_reads() {
     .await
     .unwrap();
     assert_eq!(released, ("DRAFT".into(), None, "TD2".into(), None));
+    let legacy_provider: Option<String> = sqlx::query_scalar(
+        "SELECT bureau_provider_profile_id FROM issuance_service.physical_document_jobs
+         WHERE id='released-python-job'",
+    )
+    .fetch_one(&restarted_pool)
+    .await
+    .unwrap();
+    assert!(legacy_provider.is_none());
+    sqlx::query(
+        "UPDATE issuance_service.physical_document_jobs
+         SET bureau_job_id='bureau-a' WHERE id='released-python-job'",
+    )
+    .execute(&restarted_pool)
+    .await
+    .unwrap();
+    // The fixture drops and recreates the table with the released varchar
+    // shape, so use a new connection without the pre-upgrade prepared plan.
+    let upgraded_pool = PgPoolOptions::new()
+        .max_connections(1)
+        .connect(&database_url)
+        .await
+        .unwrap();
+    assert!(PostgresPassportRepository::new(upgraded_pool.clone())
+        .resolve_provider_callback_tenant("provider-a", "bureau-a")
+        .await
+        .unwrap()
+        .is_none());
+    upgraded_pool.close().await;
     let id_type: String = sqlx::query_scalar(
         "SELECT data_type FROM information_schema.columns \
          WHERE table_schema='issuance_service' AND table_name='physical_document_jobs' \
@@ -1337,6 +1439,7 @@ async fn passport_jobs_survive_restart_without_cross_tenant_reads() {
         "ix_physical_document_jobs_flow_execution_id",
         "ix_physical_document_jobs_status",
         "ix_physical_document_jobs_bureau_job_id",
+        "ux_physical_document_jobs_bureau_provider_job",
     ] {
         assert!(indexes.iter().any(|existing| existing == index));
     }

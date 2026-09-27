@@ -13,6 +13,8 @@ pub enum PassportWebhookRepositoryError {
     Storage(#[from] sqlx::Error),
     #[error("bureau job ID identifies multiple physical documents")]
     AmbiguousBureauJob,
+    #[error("invalid bureau provider binding")]
+    InvalidProviderBinding,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -51,6 +53,7 @@ pub struct PassportJobPatch {
     pub status: PassportJobStatus,
     pub sod_sha256: Option<Option<String>>,
     pub bureau_job_id: Option<Option<String>>,
+    pub bureau_provider_profile_id: Option<String>,
     pub tracking_number: Option<Option<String>>,
     pub quality_result: Option<Option<Value>>,
     pub error_code: Option<Option<String>>,
@@ -67,6 +70,7 @@ impl PassportJobPatch {
             status,
             sod_sha256: None,
             bureau_job_id: None,
+            bureau_provider_profile_id: None,
             tracking_number: None,
             quality_result: None,
             error_code: None,
@@ -110,6 +114,7 @@ pub struct PassportJob {
     pub secure_artifact_reference: String,
     pub sod_sha256: Option<String>,
     pub bureau_job_id: Option<String>,
+    pub bureau_provider_profile_id: Option<String>,
     pub tracking_number: Option<String>,
     pub status: String,
     pub quality_result: Option<Value>,
@@ -209,6 +214,11 @@ impl PostgresPassportRepository {
         }
         nullable_change!(sod_sha256);
         nullable_change!(bureau_job_id);
+        if let Some(value) = &patch.bureau_provider_profile_id {
+            query
+                .push(", bureau_provider_profile_id = ")
+                .push_bind(value);
+        }
         nullable_change!(tracking_number);
         nullable_change!(quality_result);
         nullable_change!(error_code);
@@ -238,6 +248,9 @@ impl PostgresPassportRepository {
             )
         {
             query.push(" AND bureau_job_id IS NULL");
+        }
+        if patch.bureau_provider_profile_id.is_some() {
+            query.push(" AND bureau_provider_profile_id IS NULL");
         }
         query.push(" RETURNING *");
         query
@@ -285,6 +298,40 @@ impl PostgresPassportRepository {
         .as_ref()
         .map(row_to_job)
         .transpose()
+    }
+
+    /// Resolve a tenant only from a previously authenticated provider profile
+    /// and the bureau job ID covered by that provider's raw-body MAC. Callers
+    /// must verify that MAC before invoking this method.
+    pub async fn resolve_provider_callback_tenant(
+        &self,
+        provider_profile_id: &str,
+        bureau_job_id: &str,
+    ) -> Result<Option<String>, PassportWebhookRepositoryError> {
+        if provider_profile_id.is_empty()
+            || provider_profile_id.len() > 128
+            || provider_profile_id.trim() != provider_profile_id
+            || bureau_job_id.is_empty()
+            || bureau_job_id.len() > 255
+        {
+            return Err(PassportWebhookRepositoryError::InvalidProviderBinding);
+        }
+        let matches = sqlx::query_scalar::<_, String>(
+            "SELECT organization_id FROM issuance_service.physical_document_jobs
+             WHERE bureau_provider_profile_id = $1 AND bureau_job_id = $2 LIMIT 2",
+        )
+        .bind(provider_profile_id)
+        .bind(bureau_job_id)
+        .fetch_all(&self.pool)
+        .await?;
+        match matches.as_slice() {
+            [] => Ok(None),
+            [organization_id] if !organization_id.trim().is_empty() => {
+                Ok(Some(organization_id.clone()))
+            }
+            [_] => Err(PassportWebhookRepositoryError::InvalidProviderBinding),
+            _ => Err(PassportWebhookRepositoryError::AmbiguousBureauJob),
+        }
     }
 
     pub async fn apply_verified_webhook(
@@ -425,6 +472,7 @@ fn row_to_job(row: &PgRow) -> Result<PassportJob, sqlx::Error> {
         secure_artifact_reference: row.try_get("secure_artifact_reference")?,
         sod_sha256: row.try_get("sod_sha256")?,
         bureau_job_id: row.try_get("bureau_job_id")?,
+        bureau_provider_profile_id: row.try_get("bureau_provider_profile_id")?,
         tracking_number: row.try_get("tracking_number")?,
         status: row.try_get("status")?,
         quality_result: row.try_get("quality_result")?,

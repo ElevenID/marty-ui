@@ -92,6 +92,7 @@ pub async fn migrate_passport(pool: &PgPool) -> Result<(), sqlx::Error> {
         "secure_artifact_reference",
         "sod_sha256",
         "bureau_job_id",
+        "bureau_provider_profile_id",
         "tracking_number",
         "status",
         "quality_result",
@@ -108,6 +109,11 @@ pub async fn migrate_passport(pool: &PgPool) -> Result<(), sqlx::Error> {
         .await?;
     sqlx::raw_sql(include_str!(
         "../migrations/0002_physical_document_jobs.sql"
+    ))
+    .execute(&mut *transaction)
+    .await?;
+    sqlx::raw_sql(include_str!(
+        "../migrations/0003_passport_bureau_provider_binding.sql"
     ))
     .execute(&mut *transaction)
     .await?;
