@@ -94,6 +94,12 @@ PRESENTATION = {
         ["Administrator", "Integrator"],
         ["https-webhooks"],
     ),
+    "physical-passport-issuance-evidence": (
+        "Physical Passport Issuance Evidence",
+        "Follow a KMS-backed passport issuer profile through the physical issuance Flow, bureau job, signed callback, and booklet evidence.",
+        ["Administrator", "Issuer", "Integrator"],
+        ["https-webhooks"],
+    ),
 }
 
 LEGACY_PRESENTATION = {
@@ -400,7 +406,7 @@ def build_manifest() -> dict[str, object]:
         "release_differences": {
             "previous_stack_version": "2026.07.0",
             "ux": [
-                "Adds an eleven-scenario release catalog, including a gateway-only external admissions integration, without removing historical wallet demonstrations."
+                "Adds a twelve-scenario release catalog, including physical passport issuance evidence and a gateway-only external admissions integration, without removing historical wallet demonstrations."
             ],
             "services": [
                 "Qualifies the Rust-native platform through explicit happy and denial paths."
