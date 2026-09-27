@@ -1019,7 +1019,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          for attempt in {1..30}; do
+          for ((attempt=1; attempt<=30; attempt++)); do
             if curl --silent --fail http://127.0.0.1:8200/v1/sys/health >/dev/null; then
               break
             fi
