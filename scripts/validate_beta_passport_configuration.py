@@ -241,13 +241,13 @@ def validate_physical_model(model, files, provider_registry=None):
     networks = model.get("networks")
     physical_require(isinstance(networks, dict)
                      and set(networks) == {"marty-network", "passport-provider-signing"}
-                     and isinstance(networks.get("passport-provider-signing"), dict)
-                     and networks["passport-provider-signing"].get("internal") is True
-                     and networks["passport-provider-signing"].get("name")
-                     == "elevenid-beta_passport-provider-signing"
-                     and isinstance(networks.get("marty-network"), dict)
-                     and networks["marty-network"].get("name") == "elevenid-beta-network"
-                     and not any(definition.get("external") for definition in networks.values()),
+                     and networks.get("passport-provider-signing") == {
+                         "internal": True,
+                         "ipam": {},
+                         "name": "elevenid-beta_passport-provider-signing"}
+                     and networks.get("marty-network") == {
+                         "ipam": {},
+                         "name": "elevenid-beta-network"},
                      "Beta physical provider networks are not isolated")
     physical_secrets = {
         "passport_physical_provider_api_key", "passport_provider_webhook_secret",
@@ -281,10 +281,7 @@ def validate_physical_model(model, files, provider_registry=None):
     physical_require(isinstance(volume_definitions, dict),
                      "Beta physical provider stack volumes are invalid")
     for volume_name, definition in volume_definitions.items():
-        physical_require(isinstance(definition, dict)
-                         and not definition.get("driver_opts")
-                         and not definition.get("external")
-                         and definition.get("name") == f"elevenid-beta_{volume_name}",
+        physical_require(definition == {"name": f"elevenid-beta_{volume_name}"},
                          "Beta physical provider named volume escaped isolation")
     for name, service in services.items():
         service_networks = service.get("networks", {})

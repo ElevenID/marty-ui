@@ -47,9 +47,10 @@ def model(tmp_path: Path) -> dict:
         secrets[name] = {"file": str(path)}
     return {"name": "elevenid-beta", "secrets": secrets,
             "networks": {
-                "marty-network": {"name": "elevenid-beta-network"},
+                "marty-network": {"name": "elevenid-beta-network", "ipam": {}},
                 "passport-provider-signing": {
-                    "name": "elevenid-beta_passport-provider-signing", "internal": True},
+                    "name": "elevenid-beta_passport-provider-signing", "internal": True,
+                    "ipam": {}},
             }, "services": {
         "gateway": {"networks": {"marty-network": {}}, "environment": {
             "PASSPORT_NATIVE_GATEWAY_ENABLED": "true",
@@ -281,6 +282,12 @@ def test_physical_mode_plan_only_blocks_live_deploy_and_restore() -> None:
     lambda candidate: (candidate["networks"].update(shared={
         "name": "marty-selfhost-prod-network", "external": True}),
         candidate["services"].update(auth={"networks": {"shared": {}}})),
+    lambda candidate: candidate["networks"]["marty-network"].update(
+        driver="macvlan", driver_opts={"parent": "eth0"}),
+    lambda candidate: candidate["networks"]["passport-provider-signing"].update(
+        attachable=True),
+    lambda candidate: candidate.update(volumes={"shared": {
+        "name": "elevenid-beta_shared", "driver": "custom-prod-storage"}}),
     lambda candidate: candidate["services"].update(auth={
         "networks": {"marty-network": {}},
         "build": {"context": str(ROOT), "args": {"BAO_TOKEN": Path(candidate[
