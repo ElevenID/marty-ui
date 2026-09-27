@@ -9,12 +9,13 @@ use marty_organization::{
 fn shared_permission_catalog_is_unique_and_complete() {
     let catalog = permission_catalog().expect("shared permission catalog must parse");
     let keys: BTreeSet<_> = catalog.iter().map(|permission| permission.key()).collect();
-    assert_eq!(catalog.len(), 105);
+    assert_eq!(catalog.len(), 106);
     assert_eq!(keys.len(), catalog.len());
     assert!(keys.contains("wallet:view"));
     assert!(keys.contains("issuance:revoke"));
     assert!(keys.contains("verification:execute"));
     assert!(keys.contains("passport-certificate:issue"));
+    assert!(keys.contains("passport-certificate:issue-csca"));
 }
 
 #[test]
@@ -47,6 +48,9 @@ fn system_role_templates_preserve_intended_entitlements() {
         .find(|role| role.name == "owner")
         .expect("owner template must exist");
     assert_eq!(owner.permission_keys.len(), catalog.len());
+    assert!(owner
+        .permission_keys
+        .contains("passport-certificate:issue-csca"));
     let applicant = templates
         .iter()
         .find(|role| role.name == "applicant")
@@ -67,6 +71,9 @@ fn system_role_templates_preserve_intended_entitlements() {
     assert!(operator
         .permission_keys
         .contains("passport-certificate:issue"));
+    assert!(!operator
+        .permission_keys
+        .contains("passport-certificate:issue-csca"));
     for role in [
         "access_admin",
         "catalog_admin",

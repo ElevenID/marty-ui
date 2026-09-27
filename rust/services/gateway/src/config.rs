@@ -231,6 +231,11 @@ impl GatewayConfig {
             )?;
         }
         let dsc_issue_gateway_key = secret(values, "SIGNING_KEYS_DSC_ISSUE_GATEWAY_KEY")?;
+        if value(values, "SIGNING_KEYS_CSCA_ISSUE_GATEWAY_KEY_FILE").is_some() {
+            return Err(error(
+                "SIGNING_KEYS_CSCA_ISSUE_GATEWAY_KEY_FILE is not allowed for beta passport issuance",
+            ));
+        }
         let csca_issue_gateway_key = secret(values, "SIGNING_KEYS_CSCA_ISSUE_GATEWAY_KEY")?;
         if csca_issue_gateway_key.is_some() && !environment.eq_ignore_ascii_case("beta") {
             return Err(error("CSCA issuance credential is beta-only"));
@@ -902,6 +907,15 @@ mod tests {
         assert!(GatewayConfig::from_values(&values).is_err());
         values.insert("SIGNING_KEYS_CSCA_ISSUE_GATEWAY_KEY".into(), "c".repeat(32));
         assert!(GatewayConfig::from_values(&values).is_ok());
+        values.insert(
+            "SIGNING_KEYS_CSCA_ISSUE_GATEWAY_KEY_FILE".into(),
+            "C:\\beta-csca-key.txt".into(),
+        );
+        assert!(GatewayConfig::from_values(&values)
+            .unwrap_err()
+            .to_string()
+            .contains("SIGNING_KEYS_CSCA_ISSUE_GATEWAY_KEY_FILE"));
+        values.remove("SIGNING_KEYS_CSCA_ISSUE_GATEWAY_KEY_FILE");
         values.insert("PASSPORT_NATIVE_GATEWAY_ENABLED".into(), "false".into());
         values.remove("SIGNING_KEYS_DSC_ISSUE_GATEWAY_KEY");
         values.remove("SIGNING_KEYS_CSCA_ISSUE_GATEWAY_KEY");
