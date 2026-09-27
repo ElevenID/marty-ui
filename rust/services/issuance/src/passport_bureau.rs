@@ -4,6 +4,7 @@
 
 use std::{collections::BTreeMap, time::Duration};
 
+use base64::{engine::general_purpose::STANDARD, Engine as _};
 use chrono::{DateTime, Utc};
 use hmac::{Hmac, Mac};
 use num_bigint::BigUint;
@@ -14,6 +15,21 @@ use sha2::Sha256;
 
 const BATCH_PATH: &str = "v1/personalization/batches";
 const BATCH_TIMEOUT: Duration = Duration::from_secs(60);
+const CALLBACK_KMS_MAX_BODY_BYTES: usize = 64 * 1024;
+const CALLBACK_KMS_MAX_SIGNATURE_BYTES: usize = 512;
+
+fn valid_kms_callback_signature(signature: &str) -> bool {
+    let Some((version, digest)) = signature
+        .strip_prefix("vault:v")
+        .and_then(|value| value.split_once(':'))
+    else {
+        return false;
+    };
+    !version.is_empty()
+        && version.bytes().all(|byte| byte.is_ascii_digit())
+        && signature.len() <= CALLBACK_KMS_MAX_SIGNATURE_BYTES
+        && STANDARD.decode(digest).is_ok_and(|bytes| bytes.len() == 32)
+}
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "SCREAMING_SNAKE_CASE")]
@@ -221,6 +237,91 @@ pub enum BureauError {
     InvalidWebhookSignature,
     #[error("Invalid personalization webhook event")]
     InvalidWebhookEvent,
+    #[error("KMS passport callback verifier configuration is invalid")]
+    CallbackKmsConfiguration,
+    #[error("KMS passport callback verifier is unavailable")]
+    CallbackKmsUnavailable,
+}
+
+#[derive(Clone)]
+pub struct KmsWebhookVerifier {
+    base_url: Url,
+    api_key: String,
+    http: Client,
+}
+
+impl KmsWebhookVerifier {
+    pub fn new(base_url: Url, api_key: &str) -> Result<Self, BureauError> {
+        if api_key.trim().is_empty()
+            || !matches!(base_url.scheme(), "http" | "https")
+            || base_url.host_str().is_none()
+            || !base_url.username().is_empty()
+            || base_url.password().is_some()
+            || base_url.query().is_some()
+            || base_url.fragment().is_some()
+        {
+            return Err(BureauError::CallbackKmsConfiguration);
+        }
+        let http = Client::builder()
+            .timeout(Duration::from_secs(10))
+            .redirect(reqwest::redirect::Policy::none())
+            .build()
+            .map_err(|_| BureauError::CallbackKmsConfiguration)?;
+        Ok(Self {
+            base_url,
+            api_key: api_key.to_owned(),
+            http,
+        })
+    }
+
+    pub async fn verify(
+        &self,
+        body: &[u8],
+        signature: &str,
+    ) -> Result<VerifiedWebhookEvent, BureauError> {
+        if body.is_empty() || body.len() > CALLBACK_KMS_MAX_BODY_BYTES {
+            return Err(BureauError::InvalidWebhookEvent);
+        }
+        let event = parse_webhook_event(body)?;
+        if !valid_kms_callback_signature(signature) {
+            return Err(BureauError::InvalidWebhookSignature);
+        }
+        let mut endpoint = self.base_url.clone();
+        endpoint.set_path(&format!(
+            "{}/passport-callbacks/verify",
+            self.base_url.path().trim_end_matches('/')
+        ));
+        endpoint
+            .query_pairs_mut()
+            .append_pair("organization_id", &event.organization_id);
+        let response = self
+            .http
+            .post(endpoint)
+            .header("X-API-Key", &self.api_key)
+            .json(&json!({"body_b64": STANDARD.encode(body), "signature": signature}))
+            .send()
+            .await
+            .map_err(|_| BureauError::CallbackKmsUnavailable)?;
+        match response.status() {
+            // A 401 here means the internal service credential failed, not
+            // that OpenBao reported a non-matching callback MAC.
+            StatusCode::UNAUTHORIZED => return Err(BureauError::CallbackKmsUnavailable),
+            StatusCode::UNPROCESSABLE_ENTITY => return Err(BureauError::InvalidWebhookEvent),
+            status if !status.is_success() => return Err(BureauError::CallbackKmsUnavailable),
+            _ => {}
+        }
+        let valid = response
+            .json::<Value>()
+            .await
+            .map_err(|_| BureauError::CallbackKmsUnavailable)?
+            .get("valid")
+            .and_then(Value::as_bool)
+            .ok_or(BureauError::CallbackKmsUnavailable)?;
+        if !valid {
+            return Err(BureauError::InvalidWebhookSignature);
+        }
+        Ok(VerifiedWebhookEvent(event))
+    }
 }
 
 #[derive(Clone)]
@@ -418,17 +519,97 @@ pub(crate) fn parse_verified_webhook(
     if !verify_webhook_signature(secret, body, signature) {
         return Err(BureauError::InvalidWebhookSignature);
     }
+    Ok(VerifiedWebhookEvent(parse_webhook_event(body)?))
+}
+
+fn parse_webhook_event(body: &[u8]) -> Result<WebhookEvent, BureauError> {
     let event: WebhookEvent =
         serde_json::from_slice(body).map_err(|_| BureauError::InvalidWebhookEvent)?;
     if event.organization_id.trim().is_empty() || event.bureau_job_id.trim().is_empty() {
         return Err(BureauError::InvalidWebhookEvent);
     }
-    Ok(VerifiedWebhookEvent(event))
+    Ok(event)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    const SYNTHETIC_KMS_SIGNATURE: &str = "vault:v1:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=";
+
+    #[tokio::test]
+    async fn kms_webhook_verifier_requires_a_positive_tenant_bound_provider_result() {
+        use axum::{extract::Query, http::HeaderMap, routing::post, Json, Router};
+
+        async fn verify(
+            Query(query): Query<BTreeMap<String, String>>,
+            headers: HeaderMap,
+            Json(request): Json<Value>,
+        ) -> (StatusCode, Json<Value>) {
+            if headers["x-api-key"] != "synthetic-internal-key" {
+                return (StatusCode::UNAUTHORIZED, Json(json!({"detail": "denied"})));
+            }
+            let body = STANDARD
+                .decode(request["body_b64"].as_str().unwrap())
+                .unwrap();
+            let event: Value = serde_json::from_slice(&body).unwrap();
+            (
+                StatusCode::OK,
+                Json(
+                    json!({"valid": query["organization_id"] == event["organization_id"]
+                    && request["signature"] == SYNTHETIC_KMS_SIGNATURE}),
+                ),
+            )
+        }
+        let app = Router::new().route(
+            "/internal/signing-keys/passport-callbacks/verify",
+            post(verify),
+        );
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let server = tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+        let verifier = KmsWebhookVerifier::new(
+            Url::parse(&format!("http://{address}/internal/signing-keys")).unwrap(),
+            "synthetic-internal-key",
+        )
+        .unwrap();
+        let body = br#"{"organization_id":"org-a","bureau_job_id":"job-1","status":"SHIPPED"}"#;
+        let event = verifier
+            .verify(body, SYNTHETIC_KMS_SIGNATURE)
+            .await
+            .unwrap();
+        assert_eq!(event.organization_id(), "org-a");
+        assert_eq!(event.bureau_job_id(), "job-1");
+        assert!(matches!(
+            verifier
+                .verify(
+                    body,
+                    "vault:v1:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAE="
+                )
+                .await,
+            Err(BureauError::InvalidWebhookSignature)
+        ));
+        assert!(matches!(
+            verifier.verify(b"{}", SYNTHETIC_KMS_SIGNATURE).await,
+            Err(BureauError::InvalidWebhookEvent)
+        ));
+        let wrong_internal_key = KmsWebhookVerifier::new(
+            Url::parse(&format!("http://{address}/internal/signing-keys")).unwrap(),
+            "wrong-internal-key",
+        )
+        .unwrap();
+        assert!(matches!(
+            wrong_internal_key
+                .verify(body, SYNTHETIC_KMS_SIGNATURE)
+                .await,
+            Err(BureauError::CallbackKmsUnavailable)
+        ));
+        server.abort();
+        let _ = server.await;
+        assert!(matches!(
+            verifier.verify(body, SYNTHETIC_KMS_SIGNATURE).await,
+            Err(BureauError::CallbackKmsUnavailable)
+        ));
+    }
 
     fn reference() -> Value {
         serde_json::from_str(include_str!(
