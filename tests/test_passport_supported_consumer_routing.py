@@ -58,8 +58,9 @@ def test_compose_consumers_keep_selectors_off_and_share_token_source() -> None:
             == "${PASSPORT_INTERNAL_SERVICE_AUTH_ENABLED:-false}"
             for env in (gateway, flow, owner)
         )
-        assert gateway["ISSUANCE_NATIVE_SERVICE_URL"] == flow["ISSUANCE_NATIVE_SERVICE_URL"] == "http://issuance-native:8005"
+        assert gateway["ISSUANCE_NATIVE_SERVICE_URL"] == "http://issuance-native:8005"
         if file == "docker-compose.selfhost.prod.yml":
+            assert flow["ISSUANCE_NATIVE_SERVICE_URL"] == "${ISSUANCE_NATIVE_SERVICE_URL:-http://issuance:8005}"
             assert all(
                 env["GRPC_SERVICE_TOKEN_FILE"] == "/run/secrets/grpc_service_token"
                 for env in (gateway, flow, owner)
@@ -68,7 +69,27 @@ def test_compose_consumers_keep_selectors_off_and_share_token_source() -> None:
             assert model["secrets"]["grpc_service_token"]["file"]
             assert all("grpc_service_token" in model["services"][name]["secrets"] for name in ("gateway", "flow", "issuance-native"))
         else:
+            assert flow["ISSUANCE_NATIVE_SERVICE_URL"] == "http://issuance-native:8005"
             assert all(env["GRPC_SERVICE_TOKEN"] == "${GRPC_SERVICE_TOKEN:-dev-grpc-service-token-change-before-production}" for env in (gateway, flow, owner))
+
+
+def test_selfhost_flow_reference_catalog_keeps_legacy_default_until_explicit_override() -> None:
+    flow = compose_environment("docker-compose.selfhost.prod.yml", "flow")
+    setting = flow["ISSUANCE_NATIVE_SERVICE_URL"]
+    prefix, fallback = setting.removeprefix("${").removesuffix("}").split(":-", 1)
+    assert prefix == "ISSUANCE_NATIVE_SERVICE_URL"
+    assert fallback == flow["ISSUANCE_SERVICE_URL"] == "http://issuance:8005"
+    assert flow["PASSPORT_NATIVE_FLOW_ENABLED"] == "${PASSPORT_NATIVE_FLOW_ENABLED:-false}"
+    assert "http://issuance-native:8005" != fallback
+    connections = (ROOT / "rust/services/flow/src/connections.rs").read_text()
+    assert "HttpFlowReferenceProvider::new(\n        &config.issuance_native_url," in connections
+    assert "HttpPhysicalDocumentProvider::new_tenant_bound(&config.issuance_native_url, keys)" in connections
+    assert "HttpPhysicalDocumentProvider::new(\n            &config.issuance_url," in connections
+    config = (ROOT / "rust/services/flow/src/config.rs").read_text()
+    assert "if passport_native_flow_enabled && issuance_native_url == issuance_url" in config
+    # Setting ISSUANCE_NATIVE_SERVICE_URL to the native DNS is the explicit
+    # post-acceptance override; the Flow config rejects a selected legacy URL.
+    assert "http://issuance-native:8005" != fallback
 
 
 def test_kubernetes_consumers_default_off_and_use_exact_token_secret() -> None:

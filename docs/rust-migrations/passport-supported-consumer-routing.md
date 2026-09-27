@@ -8,6 +8,12 @@ Gateway, Flow, and native HTTP selectors all remain `false`.
 An accepted cutover must select the three flags together, enable internal
 service authentication, and point Gateway and Flow at the native HTTP owner.
 Self-host uses the same mounted `grpc_service_token` for all three processes.
+Self-host Flow keeps `ISSUANCE_NATIVE_SERVICE_URL` at the legacy issuance URL
+by default because its reference catalog uses that URL even when passport is
+off. After acceptance, the explicit
+`ISSUANCE_NATIVE_SERVICE_URL=http://issuance-native:8005` override accompanies
+the three native passport selectors; Flow rejects a selected passport owner if
+that URL still equals the legacy URL.
 Kubernetes uses the same `marty-secrets/GRPC_SERVICE_TOKEN` key; the closed
 native renderer passes its passport flags from `marty-config` to the native
 deployment. The Kubernetes native issuance image selection must be completed
