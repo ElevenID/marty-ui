@@ -19,6 +19,7 @@ KEY = "a" * 32
 
 def gateway(*, wrong_tenant: bool = False, no_quality: bool = False,
             wrong_job: bool = False, missing_sod: bool = False,
+            missing_verified_sod: bool = False,
             failed_bureau: bool = False):
     calls = []
     states = ["DRAFT", "DATA_GENERATED", "SOD_SIGNED", "SUBMITTED",
@@ -35,6 +36,8 @@ def gateway(*, wrong_tenant: bool = False, no_quality: bool = False,
                    "status": state, "bureau_job_id": "bureau-1" if len(calls) >= 4 else None}
         if state == "SOD_SIGNED" and not missing_sod:
             payload["sod_sha256"] = "f" * 64
+            if not missing_verified_sod:
+                payload["sod_signature_verified"] = True
         if state == "READY_FOR_ACTIVATION":
             payload["quality_result"] = {"passed": True}
         if state == "ACTIVE":
@@ -53,6 +56,7 @@ def test_exercises_lifecycle_but_does_not_claim_nine_routes_or_physical_booklet(
     assert calls[0][2] == APPLICATION
     assert calls[5][2] == {"passed": True, "failure_codes": []}
     assert result["evidence"]["sod_sha256"] == "f" * 64
+    assert result["evidence"]["sod_signature_verified"] is True
     assert result["evidence"]["routes"][-1]["job_status"] == "ACTIVE"
     assert "physical_booklet_verified" not in result
     assert "nine_route_gateway_flow" not in result
@@ -74,7 +78,7 @@ def test_rejects_unfinished_bureau_lifecycle() -> None:
     assert len(calls) == 5
 
 
-@pytest.mark.parametrize("defect", ["wrong_job", "missing_sod", "failed_bureau"])
+@pytest.mark.parametrize("defect", ["wrong_job", "missing_sod", "missing_verified_sod", "failed_bureau"])
 def test_rejects_missing_or_inconsistent_runtime_outcome(defect: str) -> None:
     calls, request = gateway(**{defect: True})
     with pytest.raises(ProbeError):

@@ -13,24 +13,26 @@ if __package__:
     from .collect_passport_beta_acceptance import (
         EvidenceError, collect, read_json, require, verify_attestations,
     )
-    from .probe_passport_beta_gateway import ProbeError, exercise
+    from .probe_passport_beta_gateway import ProbeError, SHA256, exercise
     from .probe_passport_beta_chain import (
         ChainProbeError, exercise as exercise_chain, validate_plan, validate_sessions,
     )
+    from .probe_passport_beta_flow import FlowProbeError, exercise as exercise_flow
     from .probe_passport_beta_host import (
-        HostProbeError, assert_production_unchanged, beta_legacy_drain,
+        HostProbeError, assert_production_unchanged, beta_legacy_drain, beta_native_route_ownership,
         production_snapshot,
     )
 else:
     from collect_passport_beta_acceptance import (
         EvidenceError, collect, read_json, require, verify_attestations,
     )
-    from probe_passport_beta_gateway import ProbeError, exercise
+    from probe_passport_beta_gateway import ProbeError, SHA256, exercise
     from probe_passport_beta_chain import (
         ChainProbeError, exercise as exercise_chain, validate_plan, validate_sessions,
     )
+    from probe_passport_beta_flow import FlowProbeError, exercise as exercise_flow
     from probe_passport_beta_host import (
-        HostProbeError, assert_production_unchanged, beta_legacy_drain,
+        HostProbeError, assert_production_unchanged, beta_legacy_drain, beta_native_route_ownership,
         production_snapshot,
     )
 
@@ -49,6 +51,8 @@ def run(
     csca_session: str | None = None,
     dsc_session: str | None = None,
     chain: Callable[..., dict[str, Any]] = exercise_chain,
+    routing: Callable[[dict[str, dict[str, Any]], dict[str, Any] | None], dict[str, Any]] = beta_native_route_ownership,
+    flow: Callable[[str], dict[str, Any]] = exercise_flow,
 ) -> dict[str, Any]:
     report = collector(artifact_dir, api_key=api_key, attest=attestor)
     require(report.get("status") == "blocked" and report.get("release", {}).get("signed_manifest_verified") is True, "Official beta release is not authenticated")
@@ -62,9 +66,21 @@ def run(
         require(certificate_plan["organization_id"] == application.get("organization_id")
                 and certificate_plan["dsc"]["dsc_issuer_did"] == application.get("issuer_did"),
                 "Certificate plan does not match the passport application")
+    route_ownership = routing(report["runtime_images"], report.get("provider_ingress_runtime_image"))
+    route_evidence = route_ownership.get("evidence")
+    webhook_owner = route_evidence.get("webhook_owner") if isinstance(route_evidence, dict) else None
+    require(route_ownership.get("verified") is True
+            and webhook_owner in ("issuance-native", "passport-provider-ingress"),
+            "Beta native route ownership did not verify")
     before_production = snapshot()
     before_drain = drain()
     try:
+        flow_result = flow(webhook_owner)
+        flow_evidence = flow_result.get("evidence")
+        require(flow_result.get("verified") is True and isinstance(flow_evidence, dict)
+                and flow_evidence.get("unsigned_webhook_owner") == webhook_owner
+                and flow_evidence.get("signature_denial_verified") is True,
+                "Beta Flow and webhook probe did not verify")
         lifecycle_result = lifecycle(application, api_key)
         chain_result = None
         if chain_requested:
@@ -77,7 +93,30 @@ def run(
     after_drain = drain()
     after = collector(artifact_dir, api_key=api_key, attest=attestor)
     require(all(report[key] == after[key] for key in ("release", "deployment", "runtime_images")), "Beta release or runtime drifted during passport acceptance")
+    require(report.get("provider_ingress_runtime_image") == after.get("provider_ingress_runtime_image"),
+            "Beta provider ingress drifted during passport acceptance")
+    require(route_ownership == routing(after["runtime_images"], after.get("provider_ingress_runtime_image")),
+            "Beta native route selectors drifted during passport acceptance")
     report["probes"]["gateway_application_lifecycle"] = lifecycle_result
+    lifecycle_evidence = lifecycle_result.get("evidence")
+    require(lifecycle_result.get("verified") is True and isinstance(lifecycle_evidence, dict)
+            and lifecycle_evidence.get("sod_signature_verified") is True
+            and isinstance(lifecycle_evidence.get("sod_sha256"), str)
+            and SHA256.fullmatch(lifecycle_evidence["sod_sha256"]) is not None,
+            "Native SOD signature evidence is unavailable")
+    report["probes"]["sod_signature"] = {"verified": True, "evidence": {
+        "sod_sha256": lifecycle_evidence["sod_sha256"],
+        "native_generate_sod_verified": True,
+    }}
+    report["probes"]["beta_native_route_ownership"] = route_ownership
+    report["probes"]["flow_capability_and_webhook_denial"] = flow_result
+    report["probes"]["nine_route_gateway_flow"] = {"verified": False, "evidence": {
+        "capabilities_http": report["probes"]["capabilities_http"].get("evidence"),
+        "application_lifecycle": lifecycle_result.get("evidence"),
+        "flow_and_webhook_denial": flow_result.get("evidence"),
+        "native_route_ownership": route_ownership.get("evidence"),
+        "missing": ["signed_provider_webhook", "executed_physical_document_flow"],
+    }}
     if chain_result is not None:
         report["probes"]["managed_csca_dsc_chain"] = chain_result
     report["probes"]["legacy_drain"] = {
@@ -109,7 +148,7 @@ def main() -> int:
             dsc_session=os.environ.get("PASSPORT_ACCEPTANCE_DSC_OPERATOR_COOKIE"),
         )
         args.output.write_text(json.dumps(report, indent=2, sort_keys=True) + "\n", encoding="utf-8")
-    except (EvidenceError, ProbeError, ChainProbeError, HostProbeError, OSError) as exc:
+    except (EvidenceError, ProbeError, ChainProbeError, FlowProbeError, HostProbeError, OSError) as exc:
         args.output.write_text(json.dumps({"schema": "marty.passport-beta-acceptance/v1", "status": "blocked", "blocker": str(exc)}, indent=2) + "\n", encoding="utf-8")
         parser.exit(1, f"Passport beta acceptance blocked: {exc}\n")
     print(f"Wrote blocked passport beta acceptance evidence: {args.output}")

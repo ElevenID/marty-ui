@@ -71,6 +71,21 @@ executes the seven application route identities, and repeats the beta and
 production checks. Only the beta Gateway receives mutating requests. The
 private application file is removed before artifact upload.
 
+The runner also reads the three live beta containers' native routing and
+internal-auth selectors without publishing their environment. It requires
+Gateway, Flow, and issuance-native to select the native owner and Flow to
+target `http://issuance-native:8005`. A Gateway request to
+`/v1/flows/capabilities` must expose the nine physical-document steps. A
+second Gateway request sends `{}` to the bureau webhook without a signature.
+The live Gateway selector determines whether the signed deployment's native
+owner must return its exact missing-header 422 response or the separately
+selected provider ingress must return its exact invalid-signature 401 response.
+This checks an ingress guard, not a valid signed callback. The report records
+these outcomes as partial `nine_route_gateway_flow` evidence and keeps that
+required probe false until a signed provider callback and an executed physical
+document Flow are verified. Only fixed route names, counts, statuses, and
+selector booleans enter the report.
+
 The full run can also perform the managed beta CSCA and DSC ceremonies when
 the protected `beta-lifecycle` environment supplies
 `PASSPORT_ACCEPTANCE_CERTIFICATE_PLAN_JSON` and separate governed operator

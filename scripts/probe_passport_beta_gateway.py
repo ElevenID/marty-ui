@@ -106,8 +106,10 @@ def exercise(
     if groups.get("status") != "DATA_GENERATED":
         raise ProbeError("Data-group state is unexpected")
     sod = call("POST", base + "/generate-sod", None, 200)
-    if sod.get("status") != "SOD_SIGNED" or not isinstance(sod.get("sod_sha256"), str) or not SHA256.fullmatch(sod["sod_sha256"]):
-        raise ProbeError("SOD operation did not return a digest")
+    if (sod.get("status") != "SOD_SIGNED" or not isinstance(sod.get("sod_sha256"), str)
+            or not SHA256.fullmatch(sod["sod_sha256"])
+            or sod.get("sod_signature_verified") is not True):
+        raise ProbeError("SOD operation did not return verified signature evidence")
     submitted = call("POST", base + "/submit-personalization", None, 200)
     bureau_job_id = submitted.get("bureau_job_id")
     if not isinstance(bureau_job_id, str) or not bureau_job_id:
@@ -135,5 +137,6 @@ def exercise(
                      "job_id_sha256": hashlib.sha256(job_id.encode()).hexdigest(),
                      "application_id_sha256": hashlib.sha256(application_id.encode()).hexdigest(),
                      "bureau_job_id_sha256": hashlib.sha256(bureau_job_id.encode()).hexdigest(),
-                     "sod_sha256": sod["sod_sha256"], "routes": outcomes},
+                     "sod_sha256": sod["sod_sha256"],
+                     "sod_signature_verified": True, "routes": outcomes},
     }

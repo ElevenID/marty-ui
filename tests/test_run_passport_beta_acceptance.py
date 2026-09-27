@@ -48,17 +48,34 @@ def test_keeps_partial_acceptance_blocked_after_actual_probe_functions() -> None
 
     def lifecycle(*args: object) -> dict:
         calls.append("lifecycle")
-        return {"verified": True, "evidence": {"routes": []}}
+        return {"verified": True, "evidence": {"routes": [], "sod_signature_verified": True,
+                                                "sod_sha256": "f" * 64}}
+
+    def routing(*args: object) -> dict:
+        calls.append("routing")
+        return {"verified": True, "evidence": {"native_selectors": True,
+                                               "webhook_owner": "issuance-native"}}
+
+    def flow(owner: str) -> dict:
+        calls.append("flow")
+        assert owner == "issuance-native"
+        return {"verified": True, "evidence": {"unsigned_webhook_http_status": 422,
+                                               "unsigned_webhook_owner": owner,
+                                               "signature_denial_verified": True}}
 
     result = run(Path("beta-artifacts"), {"organization_id": "beta"}, "a" * 32,
                  collector=collect, attestor=lambda *args: True, snapshot=snapshot,
-                 drain=drain, lifecycle=lifecycle)
-    assert calls == ["collect", "snapshot", "drain", "lifecycle", "snapshot", "drain", "collect"]
+                 drain=drain, lifecycle=lifecycle, routing=routing, flow=flow)
+    assert calls == ["collect", "routing", "snapshot", "drain", "flow", "lifecycle", "snapshot", "drain", "collect", "routing"]
     assert result["status"] == "blocked"
     assert result["probes"]["legacy_drain"]["verified"] is True
     assert result["probes"]["production_continuity_during_probe"]["verified"] is True
     assert result["probes"]["production_isolation"]["verified"] is False
     assert result["probes"]["nine_route_gateway_flow"]["verified"] is False
+    assert result["probes"]["sod_signature"]["verified"] is True
+    assert result["probes"]["nine_route_gateway_flow"]["evidence"]["missing"] == [
+        "signed_provider_webhook", "executed_physical_document_flow",
+    ]
     assert result["probes"]["physical_booklet_verified"]["verified"] is False
 
 
@@ -95,13 +112,20 @@ def test_governed_chain_runs_with_complete_inputs_and_stays_blocked() -> None:
         Path("beta-artifacts"), {"organization_id": "org-a", "issuer_did": certificate_plan()["dsc"]["dsc_issuer_did"]}, "a" * 32,
         collector=collect, snapshot=lambda: {"sha256": "c" * 64, "container_counts": {}},
         drain=lambda: {"verified": True, "evidence": {"in_flight_jobs": 0}},
-        lifecycle=lambda *args: {"verified": True, "evidence": {"routes": []}},
+        lifecycle=lambda *args: {"verified": True, "evidence": {"routes": [],
+                                                                 "sod_signature_verified": True,
+                                                                 "sod_sha256": "f" * 64}},
+        routing=lambda *args: {"verified": True, "evidence": {"native_selectors": True,
+                                                               "webhook_owner": "issuance-native"}},
+        flow=lambda owner: {"verified": True, "evidence": {"unsigned_webhook_http_status": 422,
+                                                           "unsigned_webhook_owner": owner,
+                                                           "signature_denial_verified": True}},
         certificate_plan=certificate_plan(), csca_session="csca-session",
         dsc_session="dsc-session", chain=chain,
     )
     assert calls == ["collect", "chain", "collect"]
     assert result["probes"]["managed_csca_dsc_chain"]["verified"] is True
-    assert result["probes"]["sod_signature"]["verified"] is False
+    assert result["probes"]["sod_signature"]["verified"] is True
     assert result["status"] == "blocked"
 
 

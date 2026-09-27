@@ -10,6 +10,7 @@ import pytest
 
 from scripts.probe_passport_beta_host import (
     ACTIVE_PHYSICAL_FLOWS_SQL, HostProbeError, assert_production_unchanged, beta_legacy_drain,
+    beta_native_route_ownership,
     production_snapshot,
 )
 
@@ -93,3 +94,56 @@ def test_active_flow_drain_stays_equal_to_beta_cutover_preflight() -> None:
     match = re.search(r"\$activeFlowsSql = @'\s*(.*?)\s*'@", deploy, re.DOTALL)
     assert match is not None
     assert " ".join(match.group(1).split()) == " ".join(ACTIVE_PHYSICAL_FLOWS_SQL.split())
+
+
+def test_beta_native_route_ownership_projects_only_expected_selectors() -> None:
+    images = {service: {"container_id": service, "image_id": "sha256:" + "a" * 64,
+                        "oci_reference": "ghcr.io/elevenid/marty-ui-oss/services@sha256:" + "b" * 64}
+              for service in ("gateway", "flow", "issuance-native")}
+    configs = {
+        "gateway": ["PASSPORT_NATIVE_GATEWAY_ENABLED=true", "PASSPORT_INTERNAL_SERVICE_AUTH_ENABLED=true",
+                    "PASSPORT_PROVIDER_INGRESS_GATEWAY_ENABLED=false", "PASSPORT_PROVIDER_INGRESS_SERVICE_URL="],
+        "flow": ["PASSPORT_NATIVE_FLOW_ENABLED=true", "PASSPORT_INTERNAL_SERVICE_AUTH_ENABLED=true",
+                 "ISSUANCE_NATIVE_SERVICE_URL=http://issuance-native:8005"],
+        "issuance-native": ["PASSPORT_NATIVE_HTTP_ENABLED=true", "PASSPORT_INTERNAL_SERVICE_AUTH_ENABLED=true"],
+    }
+
+    def inspector(container_id: str) -> dict:
+        return {"Image": images[container_id]["image_id"],
+                "Config": {"Image": images[container_id]["oci_reference"],
+                           "Labels": {"com.docker.compose.project": "elevenid-beta",
+                                      "com.docker.compose.service": container_id},
+                           "Env": [*configs[container_id], "SECRET_KEY=must-never-appear"]},
+                "State": {"Running": True, "Status": "running"}}
+
+    result = beta_native_route_ownership(images, inspector=inspector)
+    assert result["verified"] is True
+    assert result["evidence"]["webhook_owner"] == "issuance-native"
+    assert "SECRET_KEY" not in str(result) and "must-never-appear" not in str(result)
+    for service, changed in (("gateway", "PASSPORT_NATIVE_GATEWAY_ENABLED=false"),
+                             ("flow", "ISSUANCE_NATIVE_SERVICE_URL=http://issuance:8005"),
+                             ("issuance-native", "PASSPORT_INTERNAL_SERVICE_AUTH_ENABLED=false")):
+        original = configs[service]
+        configs[service] = [item for item in original if item.split("=", 1)[0] != changed.split("=", 1)[0]] + [changed]
+        with pytest.raises(HostProbeError):
+            beta_native_route_ownership(images, inspector=inspector)
+        configs[service] = original
+    configs["flow"].append("PASSPORT_NATIVE_FLOW_ENABLED=true")
+    with pytest.raises(HostProbeError, match="ambiguous"):
+        beta_native_route_ownership(images, inspector=inspector)
+    configs["flow"].pop()
+    configs["gateway"] = [item for item in configs["gateway"] if not item.startswith("PASSPORT_PROVIDER_INGRESS_GATEWAY_ENABLED=")]
+    configs["gateway"].append("PASSPORT_PROVIDER_INGRESS_GATEWAY_ENABLED=true")
+    with pytest.raises(HostProbeError, match="target"):
+        beta_native_route_ownership(images, inspector=inspector)
+    configs["gateway"] = [item for item in configs["gateway"] if not item.startswith("PASSPORT_PROVIDER_INGRESS_SERVICE_URL=")]
+    configs["gateway"].append("PASSPORT_PROVIDER_INGRESS_SERVICE_URL=http://passport-provider-ingress:8021")
+    with pytest.raises(HostProbeError, match="absent"):
+        beta_native_route_ownership(images, inspector=inspector)
+    images["passport-provider-ingress"] = {"container_id": "passport-provider-ingress",
+                                          "image_id": images["gateway"]["image_id"],
+                                          "oci_reference": images["gateway"]["oci_reference"]}
+    configs["passport-provider-ingress"] = []
+    provider_image = images["passport-provider-ingress"]
+    runtime_images = {key: value for key, value in images.items() if key != "passport-provider-ingress"}
+    assert beta_native_route_ownership(runtime_images, provider_image, inspector)["evidence"]["webhook_owner"] == "passport-provider-ingress"

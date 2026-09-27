@@ -16,6 +16,11 @@ REQUIRED_PRODUCTION_SERVICES = {
     "marty-selfhost-openbao": {"openbao"},
 }
 BETA_PROJECT = "elevenid-beta"
+NATIVE_ROUTE_FLAGS = {
+    "gateway": "PASSPORT_NATIVE_GATEWAY_ENABLED",
+    "flow": "PASSPORT_NATIVE_FLOW_ENABLED",
+    "issuance-native": "PASSPORT_NATIVE_HTTP_ENABLED",
+}
 COUNT = re.compile(r"[0-9]+\Z")
 LEGACY_ARTIFACT_SQL = """
 WITH artifacts AS (
@@ -163,6 +168,82 @@ def assert_production_unchanged(before: dict[str, Any], after: dict[str, Any]) -
                                            "after_sha256": after["sha256"],
                                            "container_counts": after["container_counts"],
                                            "scope": "acceptance-run-window-only"}}
+
+
+def beta_native_route_ownership(
+    runtime_images: dict[str, dict[str, Any]],
+    provider_ingress_image: dict[str, Any] | None = None,
+    inspector: Callable[[str], dict[str, Any]] = inspect,
+) -> dict[str, Any]:
+    """Project only the exact routing selectors from signed beta containers."""
+    webhook_owner = None
+    for service, selector in NATIVE_ROUTE_FLAGS.items():
+        image = runtime_images.get(service)
+        if not isinstance(image, dict) or not isinstance(image.get("container_id"), str):
+            raise HostProbeError("Beta native route container is missing")
+        record = inspector(image["container_id"])
+        config = record.get("Config")
+        state = record.get("State")
+        if not isinstance(config, dict) or not isinstance(state, dict):
+            raise HostProbeError("Beta native route state is incomplete")
+        labels = config.get("Labels")
+        if not isinstance(labels, dict) or labels.get("com.docker.compose.project") != BETA_PROJECT or labels.get("com.docker.compose.service") != service:
+            raise HostProbeError("Beta native route container identity changed")
+        if record.get("Image") != image.get("image_id") or config.get("Image") != image.get("oci_reference"):
+            raise HostProbeError("Beta native route image changed")
+        if state.get("Running") is not True or state.get("Status") != "running":
+            raise HostProbeError("Beta native route service is not running")
+        env = config.get("Env")
+        if not isinstance(env, list) or not all(isinstance(item, str) and "=" in item for item in env):
+            raise HostProbeError("Beta native route configuration is incomplete")
+        relevant = {}
+        required = {selector, "PASSPORT_INTERNAL_SERVICE_AUTH_ENABLED"}
+        if service == "flow":
+            required.add("ISSUANCE_NATIVE_SERVICE_URL")
+        if service == "gateway":
+            required.update(("PASSPORT_PROVIDER_INGRESS_GATEWAY_ENABLED", "PASSPORT_PROVIDER_INGRESS_SERVICE_URL"))
+        for item in env:
+            name, value = item.split("=", 1)
+            if name in required:
+                if name in relevant:
+                    raise HostProbeError("Beta native route selector is ambiguous")
+                relevant[name] = value
+        if relevant.get(selector) != "true" or relevant.get("PASSPORT_INTERNAL_SERVICE_AUTH_ENABLED") != "true":
+            raise HostProbeError("Beta native route selector is disabled")
+        if service == "flow" and relevant.get("ISSUANCE_NATIVE_SERVICE_URL") != "http://issuance-native:8005":
+            raise HostProbeError("Beta Flow does not target the native passport owner")
+        if service == "gateway":
+            provider_enabled = relevant.get("PASSPORT_PROVIDER_INGRESS_GATEWAY_ENABLED")
+            if provider_enabled not in ("true", "false"):
+                raise HostProbeError("Beta provider ingress selector is invalid")
+            if provider_enabled == "true":
+                if relevant.get("PASSPORT_PROVIDER_INGRESS_SERVICE_URL") != "http://passport-provider-ingress:8021":
+                    raise HostProbeError("Beta provider ingress target is invalid")
+                webhook_owner = "passport-provider-ingress"
+            else:
+                webhook_owner = "issuance-native"
+    if webhook_owner == "passport-provider-ingress":
+        image = provider_ingress_image
+        if not isinstance(image, dict) or not isinstance(image.get("container_id"), str):
+            raise HostProbeError("Selected beta provider ingress is absent from signed deployment")
+        record = inspector(image["container_id"])
+        config = record.get("Config")
+        state = record.get("State")
+        labels = config.get("Labels") if isinstance(config, dict) else None
+        if (not isinstance(labels, dict) or labels.get("com.docker.compose.project") != BETA_PROJECT
+                or labels.get("com.docker.compose.service") != webhook_owner
+                or not isinstance(state, dict) or state.get("Running") is not True
+                or state.get("Status") != "running" or record.get("Image") != image.get("image_id")
+                or config.get("Image") != image.get("oci_reference")):
+            raise HostProbeError("Selected beta provider ingress identity changed")
+    return {"verified": True, "evidence": {
+        "compose_project": BETA_PROJECT,
+        "services": sorted(NATIVE_ROUTE_FLAGS),
+        "native_selectors": True,
+        "internal_service_auth": True,
+        "flow_native_target": True,
+        "webhook_owner": webhook_owner,
+    }}
 
 
 def beta_legacy_drain(runner: Callable[[list[str]], str] = run) -> dict[str, Any]:

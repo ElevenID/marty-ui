@@ -120,6 +120,30 @@ def test_attestation_result_is_bound_to_the_exact_manifest_and_images(tmp_path: 
     assert report["status"] == "blocked"
 
 
+def test_optional_provider_ingress_must_match_signed_deployment_when_present(tmp_path: Path) -> None:
+    _, _, deployment = fixture(tmp_path)
+    deployment["images"].append({
+        "service": "passport-provider-ingress", "container_id": "passport-provider-ingress-container",
+        "compose_project": "elevenid-beta", "compose_service": "passport-provider-ingress",
+        "image_id": IMAGE_ID, "configured_image": REFERENCE,
+    })
+    write(tmp_path / "local-deployment-manifest.json", deployment)
+    report = collect(tmp_path, api_key="in-memory-only", inspect=inspect, probe=probe)
+    assert set(report["runtime_images"]) == set(SERVICES)
+    assert report["provider_ingress_runtime_image"]["oci_reference"] == REFERENCE
+    deployment["images"][-1]["configured_image"] = "ghcr.io/foreign/provider@" + OCI
+    write(tmp_path / "local-deployment-manifest.json", deployment)
+
+    def foreign_inspect(container_id: str) -> dict:
+        record = inspect(container_id)
+        if container_id == "passport-provider-ingress-container":
+            record["Config"]["Image"] = deployment["images"][-1]["configured_image"]
+        return record
+
+    with pytest.raises(EvidenceError, match="signed Marty services OCI"):
+        collect(tmp_path, api_key="in-memory-only", inspect=foreign_inspect, probe=probe)
+
+
 def test_attestation_checks_checksum_and_each_immutable_oci(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     fixture(tmp_path)
     manifest_path = tmp_path / "stack-manifest.json"

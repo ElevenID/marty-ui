@@ -30,6 +30,7 @@ BETA_ORIGIN = "https://beta.elevenidllc.com"
 SHA = re.compile(r"[0-9a-f]{40}\Z")
 DIGEST = re.compile(r"sha256:[0-9a-f]{64}\Z")
 SERVICES = ("gateway", "flow", "issuance-native", "signing-keys", "passport-callback-signer", "passport-beta-bureau")
+OPTIONAL_SERVICES = ("passport-provider-ingress",)
 REQUIRED_PROBES = (
     "managed_csca_dsc_chain", "sod_signature", "nine_route_gateway_flow",
     "packaged_image", "physical_bureau_submission", "signed_bureau_callback",
@@ -178,7 +179,9 @@ def collect(
     records = deployment.get("images")
     require(isinstance(records, list), "Deployment image records are missing")
     runtime_images = {}
-    for service in SERVICES:
+    provider_ingress_runtime_image = None
+    deployed_services = {record.get("service") for record in records if isinstance(record, dict)}
+    for service in (*SERVICES, *(service for service in OPTIONAL_SERVICES if service in deployed_services)):
         matches = [record for record in records if isinstance(record, dict) and record.get("service") == service]
         require(len(matches) == 1, f"Deployment service {service} is missing or ambiguous")
         saved = matches[0]
@@ -199,7 +202,12 @@ def collect(
         require(isinstance(image_id, str) and DIGEST.fullmatch(image_id) is not None, f"Invalid {service} image ID")
         require(saved.get("image_id") == image_id and saved.get("configured_image") == image_ref, f"{service} image drifted since deployment")
         require(isinstance(image_ref, str) and image_ref in service_images, f"{service} is not pinned to the signed Marty services OCI digest")
-        runtime_images[service] = {"container_id": container_id, "image_id": image_id, "oci_reference": image_ref, "oci_digest": service_images[image_ref]}
+        projection = {"container_id": container_id, "image_id": image_id,
+                      "oci_reference": image_ref, "oci_digest": service_images[image_ref]}
+        if service in OPTIONAL_SERVICES:
+            provider_ingress_runtime_image = projection
+        else:
+            runtime_images[service] = projection
     unauth_status, _ = probe(None)
     require(unauth_status in (401, 403), "Unauthenticated passport capability request was not denied")
     authenticated = {"verified": False, "evidence": None}
@@ -213,13 +221,16 @@ def collect(
     probes = {key: {"verified": False, "evidence": None} for key in REQUIRED_PROBES}
     probes["capabilities_http"] = authenticated
     probes["unauthenticated_denial"] = {"verified": True, "evidence": {"http_status": unauth_status}}
-    return {
+    report = {
         "schema": "marty.passport-beta-acceptance/v1", "status": "blocked",
         "collected_at": datetime.now(timezone.utc).isoformat(), "beta_origin": BETA_ORIGIN,
         "release": {"source_commit": commit, "stack_manifest_sha256": manifest_digest.removeprefix("sha256:"), "oci_digests": oci_digests, "signed_manifest_verified": signed},
         "deployment": {"local_deployment_manifest_sha256": digest_file(deployment_path).removeprefix("sha256:"), "source_manifest_sha256": digest_file(source_path).removeprefix("sha256:"), "release_version": deployment["release_version"]},
         "runtime_images": runtime_images, "probes": probes,
     }
+    if provider_ingress_runtime_image is not None:
+        report["provider_ingress_runtime_image"] = provider_ingress_runtime_image
+    return report
 
 
 def main() -> int:
