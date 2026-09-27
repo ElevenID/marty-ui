@@ -36,3 +36,21 @@ Run a callback smoke test through an internal route, then explicitly set
 for the physical-provider acceptance run. Keep Python as the rollback owner
 until that gate passes. Roll back by disabling the Gateway selector before
 removing the opt-in manifest.
+
+## Disposable runtime and rollback preflight
+
+The supported-consumer collector requires a Kubernetes identity plan before
+it inspects a disposable namespace. The plan follows
+`contracts/passport-supported-kubernetes-preflight.json` and records the exact
+context, HTTPS API server, CA digest, namespace UID, and ConfigMap, Deployment,
+and private Service UIDs. Its source commit and services image must match the
+signed aggregate manifest. The read-only preflight checks those identities,
+the selected Rust ConfigMap values, immutable services and frozen Python owner
+images, and a Python rollback model with all three passport selectors off.
+
+Pass the plan with `--kubernetes-identity-plan` to the supported-consumer
+collector, or run `scripts/check_passport_supported_kubernetes_model.py` on
+its own. A matching operator-supplied plan is only static identity evidence.
+It is not a protected plan attestation, a live nine-route test, or an executed
+Rust-to-Python rollback. Both outputs remain `blocked`; the preflight never
+applies a manifest or changes a running owner.

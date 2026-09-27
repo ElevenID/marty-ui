@@ -1,0 +1,41 @@
+{
+  "schema": "marty.passport-supported-kubernetes-preflight-contract/v1",
+  "status": "blocked",
+  "owner": "supported-consumer",
+  "resources": [
+    "configmap/marty-config",
+    "deployment/gateway",
+    "deployment/flow",
+    "deployment/issuance-native",
+    "deployment/passport-callback-signer-supported",
+    "deployment/passport-provider-ingress",
+    "deployment/issuance",
+    "service/gateway",
+    "service/flow",
+    "service/issuance-native",
+    "service/passport-callback-signer-supported",
+    "service/passport-provider-ingress",
+    "service/issuance"
+  ],
+  "rust_selectors": [
+    "PASSPORT_NATIVE_GATEWAY_ENABLED",
+    "PASSPORT_NATIVE_FLOW_ENABLED",
+    "PASSPORT_NATIVE_HTTP_ENABLED"
+  ],
+  "python_rollback": {
+    "gateway_owner": "python",
+    "flow_owner": "python",
+    "issuance_owner": "python",
+    "native_url": "http://issuance:8005",
+    "selectors": "false"
+  },
+  "required_identity": [
+    "exact_context_and_cluster_name",
+    "exact_https_server_and_ca_digest",
+    "disposable_namespace_name_uid_and_source_labels",
+    "exact_configmap_deployment_and_private_service_uids",
+    "signed_services_image_and_frozen_legacy_image"
+  ],
+  "runtime_accepted": false,
+  "rollback_accepted": false
+}

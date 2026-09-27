@@ -12,15 +12,22 @@ import argparse
 import json
 import re
 import subprocess
+from collections.abc import Callable
 from pathlib import Path
-from typing import Any, Callable
+from typing import Any
 from urllib.error import HTTPError, URLError
 from urllib.parse import urlsplit
 from urllib.request import HTTPRedirectHandler, Request, build_opener
 
 if __package__:
+    from .check_passport_supported_kubernetes_model import (
+        inspect as inspect_kubernetes_model,
+    )
     from .collect_passport_beta_acceptance import digest_file, verify_attestations
 else:
+    from check_passport_supported_kubernetes_model import (
+        inspect as inspect_kubernetes_model,
+    )
     from collect_passport_beta_acceptance import digest_file, verify_attestations
 
 
@@ -289,8 +296,10 @@ def collect(
     kubernetes_context: str | None = None,
     base_origin: str | None = None, selfhost_origin: str | None = None,
     kubernetes_origin: str | None = None, api_key: str | None = None,
+    kubernetes_identity_plan: Path | None = None,
     compose_probe: Callable[[str, str, str], dict] = observe_compose,
     kubernetes_probe: Callable[[str, str, str], dict] = observe_kubernetes,
+    kubernetes_preflight: Callable[[dict, str, str], dict] = inspect_kubernetes_model,
     capability_probe: Callable[[str, str | None], tuple[int, dict | None]] = capability_status,
     attest: Callable[[Path, dict[str, str], str], bool] = verify_attestations,
 ) -> dict:
@@ -337,9 +346,35 @@ def collect(
             surfaces[name] = report_surface(None, "disposable runtime target is absent",
                                             source_commit)
             continue
+        if name == "kubernetes":
+            if kubernetes_identity_plan is None:
+                surfaces[name] = report_surface(
+                    None, "disposable Kubernetes identity plan is absent", source_commit)
+                continue
+            try:
+                identity = json.loads(kubernetes_identity_plan.read_text(encoding="utf-8"))
+                require(isinstance(identity, dict)
+                        and identity.get("namespace", {}).get("name") == target
+                        and identity.get("cluster", {}).get("context") == kubernetes_context,
+                        "disposable Kubernetes identity plan target differs")
+                model = kubernetes_preflight(identity, source_commit, services_reference)
+                require(model.get("status") == "blocked"
+                        and model.get("static_identity_verified") is True,
+                        "disposable Kubernetes identity preflight failed")
+            except (OSError, ValueError, TypeError, AttributeError):
+                surfaces[name] = report_surface(
+                    None, "disposable Kubernetes identity preflight failed", source_commit)
+                continue
         try:
             runtime = (kubernetes_probe(target, kubernetes_context, services_reference)
                        if name == "kubernetes" else compose_probe(name, target, services_reference))
+            if name == "kubernetes":
+                require(isinstance(runtime, dict) and set(runtime) == set(SERVICES)
+                        and all(isinstance(runtime[service], dict)
+                                and runtime[service].get("deployment_uid") ==
+                                model["resource_uids"][f"deployment/{service}"]
+                                for service in SERVICES),
+                        "disposable Kubernetes deployment identity changed during inspection")
         except (SupportedEvidenceError, OSError, ValueError):
             surfaces[name] = report_surface(None, "disposable runtime probe failed",
                                             source_commit)
@@ -348,6 +383,8 @@ def collect(
                        if name == "kubernetes" else
                        "nine-route/simulator/rollback acceptance is pending")
             observed = report_surface(runtime, pending, source_commit)
+            if name == "kubernetes":
+                observed["identity_preflight"] = model
             bound_port = runtime.get("gateway", {}).get("loopback_port")
             parsed_origin = urlsplit(origin) if origin is not None else None
             if (name != "kubernetes" and origin is not None and api_key is not None
@@ -388,6 +425,7 @@ def main() -> int:
     parser.add_argument("--selfhost-project")
     parser.add_argument("--kubernetes-namespace")
     parser.add_argument("--kubernetes-context")
+    parser.add_argument("--kubernetes-identity-plan", type=Path)
     parser.add_argument("--base-origin")
     parser.add_argument("--selfhost-origin")
     parser.add_argument("--kubernetes-origin")
@@ -402,6 +440,7 @@ def main() -> int:
                          selfhost_project=args.selfhost_project,
                          namespace=args.kubernetes_namespace,
                          kubernetes_context=args.kubernetes_context,
+                         kubernetes_identity_plan=args.kubernetes_identity_plan,
                          base_origin=args.base_origin,
                          selfhost_origin=args.selfhost_origin,
                          kubernetes_origin=args.kubernetes_origin,

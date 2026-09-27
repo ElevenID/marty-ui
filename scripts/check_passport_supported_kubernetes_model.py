@@ -1,0 +1,356 @@
+#!/usr/bin/env python3
+"""Read-only disposable Kubernetes identity and rollback preflight.
+
+An operator-supplied identity plan is only an expected model. It is not a
+protected attestation, rollout authorization, or runtime/rollback acceptance.
+"""
+
+from __future__ import annotations
+
+import argparse
+import base64
+import hashlib
+import json
+import re
+import subprocess
+from collections.abc import Callable
+from pathlib import Path
+from urllib.parse import urlsplit
+
+if __package__:
+    from .passport_supported_provisioning_plan import FROZEN_LEGACY_RELEASE
+else:
+    from passport_supported_provisioning_plan import FROZEN_LEGACY_RELEASE
+
+COMMIT = re.compile(r"[0-9a-f]{40}\Z")
+DIGEST = re.compile(r"sha256:[0-9a-f]{64}\Z")
+NAME = re.compile(r"marty-passport-acceptance-[a-z0-9]{6,32}\Z")
+UID = re.compile(r"[a-zA-Z0-9][a-zA-Z0-9-]{7,127}\Z")
+SERVICES = (
+    "gateway",
+    "flow",
+    "issuance-native",
+    "passport-callback-signer-supported",
+    "passport-provider-ingress",
+)
+RESOURCES = (
+    ("configmap", "marty-config"),
+    *(("deployment", name) for name in (*SERVICES, "issuance")),
+    *(("service", name) for name in (*SERVICES, "issuance")),
+)
+FLAGS = {
+    "gateway": "PASSPORT_NATIVE_GATEWAY_ENABLED",
+    "flow": "PASSPORT_NATIVE_FLOW_ENABLED",
+    "issuance-native": "PASSPORT_NATIVE_HTTP_ENABLED",
+}
+OWNER_LABEL = "marty.elevenid.io/passport-acceptance"
+SOURCE_LABEL = "marty.elevenid.io/source-commit"
+
+
+class KubernetesPreflightError(ValueError):
+    pass
+
+
+def require(ok: bool, message: str) -> None:
+    if not ok:
+        raise KubernetesPreflightError(message)
+
+
+def command(args: list[str]) -> str:
+    try:
+        result = subprocess.run(
+            args,
+            check=True,
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            timeout=25,
+        )
+    except (OSError, subprocess.SubprocessError) as exc:
+        raise KubernetesPreflightError(
+            "Disposable Kubernetes inspection failed"
+        ) from exc
+    require(
+        len(result.stdout) <= 1024 * 1024,
+        "Disposable Kubernetes inspection is oversized",
+    )
+    return result.stdout
+
+
+def object_command(args: list[str], runner: Callable[[list[str]], str]) -> dict:
+    try:
+        value = json.loads(runner(args))
+    except ValueError as exc:
+        raise KubernetesPreflightError(
+            "Disposable Kubernetes response is invalid"
+        ) from exc
+    require(isinstance(value, dict), "Disposable Kubernetes response is not an object")
+    return value
+
+
+def validate_plan(plan: dict, source_commit: str, services_reference: str) -> None:
+    """Freeze the operator's exact read-only target without trusting it as proof."""
+    require(
+        isinstance(plan, dict)
+        and set(plan)
+        == {
+            "schema",
+            "status",
+            "source_commit",
+            "services_reference",
+            "legacy_reference",
+            "cluster",
+            "namespace",
+            "resources",
+            "rollback_model",
+        }
+        and plan["schema"] == "marty.passport-supported-kubernetes-model/v1"
+        and plan["status"] == "blocked"
+        and COMMIT.fullmatch(source_commit) is not None
+        and plan["source_commit"] == source_commit
+        and plan["services_reference"] == services_reference
+        and re.fullmatch(
+            r"ghcr\.io/elevenid/marty-ui-oss/services@sha256:[0-9a-f]{64}",
+            services_reference,
+        )
+        is not None
+        and plan["legacy_reference"]
+        == ("ghcr.io/elevenid/marty-credentials-issuance@" + FROZEN_LEGACY_RELEASE[2]),
+        "Disposable Kubernetes plan source or images are invalid",
+    )
+    cluster = plan["cluster"]
+    namespace = plan["namespace"]
+    require(
+        isinstance(cluster, dict)
+        and set(cluster)
+        == {
+            "context",
+            "name",
+            "server",
+            "ca_sha256",
+        }
+        and all(isinstance(cluster[key], str) for key in cluster)
+        and NAME.fullmatch(cluster["context"]) is not None
+        and NAME.fullmatch(cluster["name"]) is not None
+        and urlsplit(cluster["server"]).scheme == "https"
+        and urlsplit(cluster["server"]).hostname is not None
+        and not urlsplit(cluster["server"]).username
+        and not urlsplit(cluster["server"]).password
+        and not urlsplit(cluster["server"]).path.strip("/")
+        and not urlsplit(cluster["server"]).query
+        and DIGEST.fullmatch(cluster["ca_sha256"]) is not None,
+        "Disposable Kubernetes cluster identity is invalid",
+    )
+    require(
+        isinstance(namespace, dict)
+        and set(namespace) == {"name", "uid"}
+        and isinstance(namespace["name"], str)
+        and NAME.fullmatch(namespace["name"]) is not None
+        and isinstance(namespace["uid"], str)
+        and UID.fullmatch(namespace["uid"]) is not None,
+        "Disposable Kubernetes namespace identity is invalid",
+    )
+    resources = plan["resources"]
+    require(
+        isinstance(resources, dict)
+        and set(resources) == {f"{kind}/{name}" for kind, name in RESOURCES}
+        and all(
+            isinstance(uid, str) and UID.fullmatch(uid) is not None
+            for uid in resources.values()
+        )
+        and len(set(resources.values())) == len(resources),
+        "Disposable Kubernetes resource identities are invalid",
+    )
+    rollback = plan["rollback_model"]
+    require(
+        isinstance(rollback, dict)
+        and set(rollback)
+        == {
+            "gateway_owner",
+            "flow_owner",
+            "issuance_owner",
+            "native_url",
+            "selectors",
+        }
+        and all(
+            rollback[key] == "python"
+            for key in ("gateway_owner", "flow_owner", "issuance_owner")
+        )
+        and rollback["native_url"] == "http://issuance:8005"
+        and rollback["selectors"] == {flag: "false" for flag in FLAGS.values()},
+        "Disposable Kubernetes Python rollback model is invalid",
+    )
+
+
+def inspect(
+    plan: dict,
+    source_commit: str,
+    services_reference: str,
+    runner: Callable[[list[str]], str] = command,
+) -> dict:
+    """Check exact context, CA, namespace and resource IDs without mutation."""
+    validate_plan(plan, source_commit, services_reference)
+    cluster = plan["cluster"]
+    namespace = plan["namespace"]
+    context = cluster["context"]
+    config = object_command(
+        [
+            "kubectl",
+            "--context",
+            context,
+            "config",
+            "view",
+            "--minify",
+            "--raw",
+            "-o",
+            "json",
+        ],
+        runner,
+    )
+    contexts, clusters = config.get("contexts"), config.get("clusters")
+    require(
+        config.get("current-context") == context
+        and isinstance(contexts, list)
+        and len(contexts) == 1
+        and isinstance(contexts[0], dict)
+        and contexts[0].get("name") == context
+        and isinstance(contexts[0].get("context"), dict)
+        and contexts[0].get("context", {}).get("cluster") == cluster["name"]
+        and isinstance(clusters, list)
+        and len(clusters) == 1
+        and isinstance(clusters[0], dict)
+        and clusters[0].get("name") == cluster["name"],
+        "Disposable Kubernetes context or cluster changed",
+    )
+    connection = clusters[0].get("cluster")
+    require(
+        isinstance(connection, dict)
+        and connection.get("server") == cluster["server"]
+        and connection.get("insecure-skip-tls-verify") is not True
+        and isinstance(connection.get("certificate-authority-data"), str),
+        "Disposable Kubernetes server or TLS authority changed",
+    )
+    try:
+        ca = base64.b64decode(connection["certificate-authority-data"], validate=True)
+    except ValueError as exc:
+        raise KubernetesPreflightError("Disposable Kubernetes CA is invalid") from exc
+    require(
+        bool(ca) and "sha256:" + hashlib.sha256(ca).hexdigest() == cluster["ca_sha256"],
+        "Disposable Kubernetes CA digest changed",
+    )
+    prefix = ["kubectl", "--context", context]
+    ns = object_command(
+        [*prefix, "get", "namespace", namespace["name"], "-o", "json"], runner
+    )
+    metadata = ns.get("metadata")
+    require(
+        isinstance(metadata, dict)
+        and metadata.get("name") == namespace["name"]
+        and metadata.get("uid") == namespace["uid"]
+        and isinstance(metadata.get("labels"), dict)
+        and metadata["labels"].get(OWNER_LABEL) == "supported-consumer"
+        and metadata["labels"].get(SOURCE_LABEL) == source_commit
+        and isinstance(ns.get("status"), dict)
+        and ns["status"].get("phase") == "Active",
+        "Disposable Kubernetes namespace identity changed",
+    )
+    observed = {}
+    for kind, name in RESOURCES:
+        item = object_command(
+            [*prefix, "-n", namespace["name"], "get", kind, name, "-o", "json"], runner
+        )
+        metadata = item.get("metadata")
+        require(
+            isinstance(metadata, dict)
+            and metadata.get("name") == name
+            and metadata.get("namespace") == namespace["name"]
+            and metadata.get("uid") == plan["resources"][f"{kind}/{name}"]
+            and isinstance(metadata.get("labels"), dict)
+            and metadata["labels"].get(OWNER_LABEL) == "supported-consumer"
+            and metadata["labels"].get(SOURCE_LABEL) == source_commit,
+            f"Disposable Kubernetes {kind}/{name} identity changed",
+        )
+        if kind == "deployment":
+            deployment = item.get("spec")
+            template = (
+                deployment.get("template") if isinstance(deployment, dict) else None
+            )
+            spec = template.get("spec") if isinstance(template, dict) else None
+            containers = spec.get("containers") if isinstance(spec, dict) else None
+            require(
+                isinstance(containers, list)
+                and len(containers) == 1
+                and isinstance(containers[0], dict)
+                and containers[0].get("name") == name
+                and containers[0].get("image")
+                == (
+                    services_reference
+                    if name != "issuance"
+                    else plan["legacy_reference"]
+                )
+                and spec.get("hostNetwork") is not True
+                and spec.get("hostPID") is not True
+                and spec.get("automountServiceAccountToken") is False,
+                f"Disposable Kubernetes deployment/{name} is unsafe",
+            )
+        elif kind == "service":
+            spec = item.get("spec")
+            require(
+                isinstance(spec, dict)
+                and spec.get("type") == "ClusterIP"
+                and spec.get("selector") == {"app": name}
+                and isinstance(spec.get("clusterIP"), str)
+                and bool(spec["clusterIP"]),
+                f"Disposable Kubernetes service/{name} is not private",
+            )
+        else:
+            data = item.get("data")
+            require(
+                isinstance(data, dict)
+                and all(data.get(flag) == "true" for flag in FLAGS.values())
+                and data.get("ISSUANCE_NATIVE_SERVICE_URL")
+                == "http://issuance-native:8005",
+                "Disposable Kubernetes Rust selector model is invalid",
+            )
+        observed[f"{kind}/{name}"] = metadata["uid"]
+    return {
+        "schema": "marty.passport-supported-kubernetes-preflight/v1",
+        "status": "blocked",
+        "cluster_context": context,
+        "namespace": namespace["name"],
+        "namespace_uid": namespace["uid"],
+        "resource_uids": observed,
+        "static_identity_verified": True,
+        "runtime_accepted": False,
+        "rollback_accepted": False,
+        "blocker": "protected plan attestation, live route proof, and rollback are absent",
+    }
+
+
+def main() -> int:
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--plan", type=Path, required=True)
+    parser.add_argument("--source-commit", required=True)
+    parser.add_argument("--services-reference", required=True)
+    parser.add_argument("--output", type=Path, required=True)
+    args = parser.parse_args()
+    try:
+        plan = json.loads(args.plan.read_text(encoding="utf-8"))
+        report = inspect(plan, args.source_commit, args.services_reference)
+    except (OSError, ValueError) as exc:
+        report = {
+            "schema": "marty.passport-supported-kubernetes-preflight/v1",
+            "status": "blocked",
+            "static_identity_verified": False,
+            "runtime_accepted": False,
+            "rollback_accepted": False,
+            "blocker": str(exc),
+        }
+    args.output.write_text(
+        json.dumps(report, sort_keys=True, indent=2) + "\n", encoding="utf-8"
+    )
+    return 1
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
