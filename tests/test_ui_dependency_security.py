@@ -52,21 +52,27 @@ def test_vitest_suite_excludes_redirect_mock_file_read_advisory() -> None:
     npm_lock = json.loads(_text("ui/package-lock.json"))
     bun_lock = _text("ui/bun.lock")
     suite = ("vitest", "@vitest/ui", "@vitest/coverage-v8")
-    versions = set()
+    npm_versions = set()
+    bun_versions = set()
 
     for dependency in (*suite, "@vitest/mocker"):
         version = npm_lock["packages"][f"node_modules/{dependency}"]["version"]
         assert re.fullmatch(r"\d+\.\d+\.\d+", version)
         assert tuple(map(int, version.split("."))) >= (4, 1, 11)
-        versions.add(version)
-        assert re.search(
+        npm_versions.add(version)
+        bun_match = re.search(
             rf'^    "{re.escape(dependency)}": '
-            rf'\["{re.escape(dependency)}@{re.escape(version)}"',
+            rf'\["{re.escape(dependency)}@(\d+\.\d+\.\d+)"',
             bun_lock,
             re.MULTILINE,
         )
+        assert bun_match, f"Bun lock is missing {dependency}"
+        bun_version = bun_match.group(1)
+        assert tuple(map(int, bun_version.split("."))) >= (4, 1, 11)
+        bun_versions.add(bun_version)
 
-    assert len(versions) == 1, "Vitest runner, UI, coverage and mocker must agree"
+    assert len(npm_versions) == 1, "npm Vitest runner, UI, coverage and mocker must agree"
+    assert len(bun_versions) == 1, "Bun Vitest runner, UI, coverage and mocker must agree"
     for dependency in suite:
         requirement = package["devDependencies"][dependency]
         assert re.fullmatch(r"\^\d+\.\d+\.\d+", requirement)
