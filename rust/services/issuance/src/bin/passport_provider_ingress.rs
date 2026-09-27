@@ -36,7 +36,7 @@ impl Config {
         validate_credential_separation(&webhook_secret, &signing_api_key)?;
         let signing_base_url = private_url(
             "PASSPORT_PROVIDER_SIGNER_URL",
-            "passport-callback-signer",
+            "passport-callback-signer-supported",
             "/internal/documents",
         )?;
         let native_callback_url = private_url(
@@ -159,32 +159,38 @@ mod tests {
     #[test]
     fn private_callback_urls_reject_public_signer_and_wrong_route() {
         assert!(private_url_from(
-            "http://passport-callback-signer:8018/internal/documents",
-            "passport-callback-signer",
+            "http://passport-callback-signer-supported:8018/internal/documents",
+            "passport-callback-signer-supported",
             "/internal/documents"
         )
         .is_ok());
         assert!(private_url_from(
-            "https://passport-callback-signer.marty-prod.svc.cluster.local/internal/documents",
-            "passport-callback-signer",
+            "https://passport-callback-signer-supported.marty-prod.svc.cluster.local/internal/documents",
+            "passport-callback-signer-supported",
             "/internal/documents"
         )
         .is_ok());
         assert!(private_url_from(
             "https://public.example/internal/documents",
-            "passport-callback-signer",
+            "passport-callback-signer-supported",
             "/internal/documents"
         )
         .is_err());
         assert!(private_url_from(
-            "https://passport-callback-signer.foreign.svc.cluster.local/internal/documents",
-            "passport-callback-signer",
+            "https://passport-callback-signer-supported.foreign.svc.cluster.local/internal/documents",
+            "passport-callback-signer-supported",
             "/internal/documents"
         )
         .is_err());
         assert!(private_url_from(
-            "http://passport-callback-signer:8018/public",
-            "passport-callback-signer",
+            "http://passport-callback-signer-supported:8018/public",
+            "passport-callback-signer-supported",
+            "/internal/documents"
+        )
+        .is_err());
+        assert!(private_url_from(
+            "http://passport-callback-signer:8018/internal/documents",
+            "passport-callback-signer-supported",
             "/internal/documents"
         )
         .is_err());

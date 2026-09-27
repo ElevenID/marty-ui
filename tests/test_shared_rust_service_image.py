@@ -24,6 +24,7 @@ RUST_SERVICES = {
     "passport_beta_bureau": "marty-passport-beta-bureau",
     "passport_provider_ingress": "marty-passport-provider-ingress",
     "passport_callback_signer": "marty-passport-callback-signer",
+    "passport_callback_signer_supported": "marty-passport-callback-signer-supported",
     "presentation_policy": "marty-presentation-policy",
     "revocation_profile": "marty-revocation-profile",
     "signing_keys": "marty-signing-keys",
