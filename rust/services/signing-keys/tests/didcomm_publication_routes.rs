@@ -7,7 +7,7 @@ use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine};
 use marty_signing_keys::{
     documents::{did_storage_key, slug_storage_key, DocumentStore, LoadDidRequest},
     profiles::{storage_key as profile_storage_key, ProfileStore},
-    registry::RegistryStore,
+    registry::{storage_key as registry_storage_key, RegistryStore},
 };
 use redis::AsyncCommands;
 use serde_json::{json, Value};
@@ -34,9 +34,32 @@ async fn publish(app: &Router, organization_id: &str, payload: Value) -> (Status
 }
 
 #[tokio::test]
-#[ignore = "requires MARTY_TEST_REDIS_URL"]
+#[ignore = "requires disposable loopback MARTY_TEST_REDIS_URL and nonce sentinel"]
 async fn public_didcomm_publication_is_tenant_scoped_and_public_only() {
     let redis_url = std::env::var("MARTY_TEST_REDIS_URL").expect("disposable Redis URL");
+    let parsed = reqwest::Url::parse(&redis_url).expect("disposable Redis URL syntax");
+    assert!(matches!(
+        parsed.host_str(),
+        Some("127.0.0.1" | "localhost" | "::1")
+    ));
+    assert!(parsed
+        .path()
+        .trim_start_matches('/')
+        .parse::<u8>()
+        .is_ok_and(|db| db >= 13));
+    let nonce = std::env::var("MARTY_TEST_REDIS_DISPOSABLE_NONCE")
+        .expect("disposable Redis sentinel value");
+    assert!(nonce.len() >= 16, "disposable Redis sentinel is too short");
+    let client = redis::Client::open(redis_url.as_str()).expect("disposable Redis client");
+    let mut sentinel_connection = client
+        .get_multiplexed_async_connection()
+        .await
+        .expect("disposable Redis connection");
+    let observed: Option<String> = sentinel_connection
+        .get("marty:tests:disposable-guard")
+        .await
+        .expect("disposable Redis sentinel read");
+    assert_eq!(observed.as_deref(), Some(nonce.as_str()));
     let organization_id = format!("rust-didcomm-publication-{}", Uuid::new_v4().simple());
     let other_organization_id = format!("rust-didcomm-other-{}", Uuid::new_v4().simple());
     let slug = format!("didcomm-{}", Uuid::new_v4().simple());
@@ -72,6 +95,34 @@ async fn public_didcomm_publication_is_tenant_scoped_and_public_only() {
         "public_jwk":public_jwk,
     });
 
+    let (missing_service, missing_detail) = publish(&app, &organization_id, request.clone()).await;
+    assert_eq!(missing_service, StatusCode::NOT_FOUND);
+    assert!(!missing_detail.to_string().contains("svc-a"));
+    assert!(!missing_detail.to_string().contains("key-a"));
+    assert!(
+        !documents
+            .load_did(
+                &organization_id,
+                LoadDidRequest {
+                    did_id: Some(issuer_did.clone()),
+                    fallback_did: None,
+                },
+            )
+            .await
+            .unwrap()
+            .found
+    );
+    let service = json!({
+        "id": "svc-a", "name": "Test issuer service", "service_type": "aws-kms",
+        "provider": "aws", "auth_mode": "iam_role", "key_reference": "key-a",
+        "credential_formats": ["dc+sd-jwt"], "key_purposes": ["vc_jwt_issuer"],
+        "algorithms": ["ES256"]
+    });
+    registry
+        .save(&organization_id, &json!({"services": [service.clone()]}))
+        .await
+        .unwrap();
+
     let (status, response) = publish(&app, &organization_id, request.clone()).await;
     assert_eq!(status, StatusCode::OK, "{response}");
     assert_eq!(response["issuer_did"], issuer_did);
@@ -95,6 +146,51 @@ async fn public_didcomm_publication_is_tenant_scoped_and_public_only() {
         public_jwk
     );
     assert!(!stored.document.to_string().contains("\"d\""));
+
+    let mut incompatible_service = service.clone();
+    incompatible_service["algorithms"] = json!(["ES384"]);
+    registry
+        .save(
+            &organization_id,
+            &json!({"services": [incompatible_service]}),
+        )
+        .await
+        .unwrap();
+    assert_eq!(
+        publish(&app, &organization_id, request.clone()).await.0,
+        StatusCode::NOT_FOUND
+    );
+    incompatible_service = service.clone();
+    incompatible_service["credential_formats"] = json!(["mso_mdoc"]);
+    registry
+        .save(
+            &organization_id,
+            &json!({"services": [incompatible_service]}),
+        )
+        .await
+        .unwrap();
+    assert_eq!(
+        publish(&app, &organization_id, request.clone()).await.0,
+        StatusCode::NOT_FOUND
+    );
+    registry
+        .save(
+            &organization_id,
+            &json!({
+                "services": [service.clone()],
+                "key_reference_purposes": {"svc-a": {"key-a": ["lti_tool_signing"]}}
+            }),
+        )
+        .await
+        .unwrap();
+    let (reserved_status, reserved_detail) = publish(&app, &organization_id, request.clone()).await;
+    assert_eq!(reserved_status, StatusCode::UNPROCESSABLE_ENTITY);
+    assert!(!reserved_detail.to_string().contains("svc-a"));
+    assert!(!reserved_detail.to_string().contains("key-a"));
+    registry
+        .save(&organization_id, &json!({"services": [service]}))
+        .await
+        .unwrap();
 
     let mut private_jwk = request.clone();
     private_jwk["public_jwk"]["d"] = json!(URL_SAFE_NO_PAD.encode([8_u8; 32]));
@@ -148,6 +244,7 @@ async fn public_didcomm_publication_is_tenant_scoped_and_public_only() {
     let mut connection = registry.connection();
     for key in [
         profile_storage_key(&organization_id),
+        registry_storage_key(&organization_id),
         did_storage_key(&organization_id, Some(&issuer_did)),
         did_storage_key(&organization_id, None),
         slug_storage_key(&slug),
