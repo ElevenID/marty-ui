@@ -67,13 +67,14 @@ def test_duplicate_common_organization_binding_cleanup_preserves_complete_mappin
     binding = '  MARTY_ORG_ID: "${MARTY_ORG_ID}"\n'
     anchor = '  MARTY_MIGRATION_PROFILE: "${MARTY_MIGRATION_PROFILE}"\n'
     assert source.count(binding) == source.count(anchor) == 1
-    original = source.replace(anchor, anchor + binding)
+    historical = source.replace('  PERSONALIZATION_BUREAU_PROVIDER_PROFILE_ID: ""\n', '')
+    original = historical.replace(anchor, anchor + binding)
     assert hashlib.sha256(original.encode()).hexdigest() == (
         "94188015aa6a471d6aba8c8713cd38ede22531676e588dd21da913bf266c3259"
     )
     # This historical parser overwrites the identical duplicate; the actual
     # Rust renderer's separate test still refuses duplicate mappings strictly.
-    assert yaml.safe_load(source) == yaml.safe_load(original)
+    assert yaml.safe_load(historical) == yaml.safe_load(original)
     assert yaml.safe_load(source)["data"]["MARTY_ORG_ID"] == "${MARTY_ORG_ID}"
 
 
@@ -380,6 +381,25 @@ def test_existing_three_way_management_identity_and_legacy_owner_are_preserved()
     assert "ISSUANCE_NATIVE_SERVICE_URL" not in {
         v["name"] for v in owner(deployment(original, "gateway"))["env"]
     }
+
+
+def test_native_issuance_receives_configured_bureau_provider_profile():
+    config = resources("k8s/oracle/01-configmap.yaml")[0]["data"]
+    native = resources("k8s/oracle/07a-issuance-native.yaml")
+    env = owner(deployment(native, "issuance-native"))["env"]
+    assert config["PERSONALIZATION_BUREAU_PROVIDER_PROFILE_ID"] == ""
+    assert [entry for entry in env if entry["name"] == "PERSONALIZATION_BUREAU_PROVIDER_PROFILE_ID"] == [
+        {
+            "name": "PERSONALIZATION_BUREAU_PROVIDER_PROFILE_ID",
+            "valueFrom": {
+                "configMapKeyRef": {
+                    "name": "marty-config",
+                    "key": "PERSONALIZATION_BUREAU_PROVIDER_PROFILE_ID",
+                }
+            },
+        }
+    ]
+    assert "PERSONALIZATION_BUREAU_PROVIDER_PROFILE_ID" in constants("INHERITED_SETTINGS")
 
 
 def test_operational_owner_is_rust_and_existing_binary_preflight_is_connected():

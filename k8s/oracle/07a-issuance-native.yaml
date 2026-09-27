@@ -45,6 +45,11 @@ spec:
                 configMapKeyRef:
                   name: marty-config
                   key: ENVIRONMENT
+            - name: PERSONALIZATION_BUREAU_PROVIDER_PROFILE_ID
+              valueFrom:
+                configMapKeyRef:
+                  name: marty-config
+                  key: PERSONALIZATION_BUREAU_PROVIDER_PROFILE_ID
             - name: UI_BASE_URL
               valueFrom:
                 configMapKeyRef:

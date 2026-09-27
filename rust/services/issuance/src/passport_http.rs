@@ -440,6 +440,8 @@ enum PassportHttpError {
     Signer(SignerError),
     #[error("Personalization bureau not configured. Set PERSONALIZATION_BUREAU_URL environment variable.")]
     MissingBureau,
+    #[error("Personalization bureau provider is unavailable for this job")]
+    ProviderUnavailable,
     #[error("{0}")]
     Bureau(BureauError),
     #[error("Document is not ready for quality verification")]
@@ -488,7 +490,8 @@ impl IntoResponse for PassportHttpError {
             | Self::ArtifactKmsUnavailable
             | Self::Signer(SignerError::NotConfigured)
             | Self::Signer(SignerError::ManagedUnavailable)
-            | Self::MissingBureau => StatusCode::SERVICE_UNAVAILABLE,
+            | Self::MissingBureau
+            | Self::ProviderUnavailable => StatusCode::SERVICE_UNAVAILABLE,
             Self::Signer(SignerError::InvalidManagedMaterial) => StatusCode::BAD_GATEWAY,
             Self::Signer(SignerError::UntrustedDsc)
             | Self::QualityNotReady
@@ -816,6 +819,9 @@ async fn production_status(
     };
     if matches!(job.status.as_str(), "ACTIVE" | "FAILED" | "CANCELLED") {
         return Ok(Json(safe(&job)));
+    }
+    if job.bureau_provider_profile_id.as_deref() != service.bureau_provider_profile_id.as_deref() {
+        return Err(PassportHttpError::ProviderUnavailable);
     }
     let outcome = service
         .bureau()?

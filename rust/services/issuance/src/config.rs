@@ -111,6 +111,7 @@ impl PassportNativeConfig {
         }
         let kms_callbacks_enabled = environment_flag(values, "PASSPORT_KMS_CALLBACKS_ENABLED");
         let bureau_provider_profile_id = configured("PERSONALIZATION_BUREAU_PROVIDER_PROFILE_ID");
+        let bureau_url = configured("PERSONALIZATION_BUREAU_URL");
         if bureau_provider_profile_id
             .as_deref()
             .is_some_and(|profile_id| profile_id.len() > 128)
@@ -129,6 +130,12 @@ impl PassportNativeConfig {
                 "KMS passport callback mode cannot be combined with PERSONALIZATION_BUREAU_WEBHOOK_SECRET",
             ));
         }
+        if kms_callbacks_enabled && bureau_url.is_some() && bureau_provider_profile_id.is_none() {
+            return Err(MmfError::new(
+                ErrorCode::Configuration,
+                "KMS passport bureau submission requires PERSONALIZATION_BUREAU_PROVIDER_PROFILE_ID",
+            ));
+        }
         let config = Self {
             enabled,
             internal_service_auth_enabled: environment_flag(
@@ -144,7 +151,7 @@ impl PassportNativeConfig {
             artifact_key: secret_value(values, "PHYSICAL_DOCUMENT_ARTIFACT_KEY")?,
             signer_url: configured("ICAO_DOCUMENT_SIGNER_URL"),
             signer_api_key: secret_value(values, "ICAO_DOCUMENT_SIGNER_API_KEY")?,
-            bureau_url: configured("PERSONALIZATION_BUREAU_URL"),
+            bureau_url,
             bureau_api_key: secret_value(values, "PERSONALIZATION_BUREAU_API_KEY")?,
             bureau_provider_profile_id,
             bureau_webhook_secret: secret_value(values, "PERSONALIZATION_BUREAU_WEBHOOK_SECRET")?,
@@ -1760,6 +1767,26 @@ mod tests {
             ),
         ]));
         assert!(too_long.is_err());
+
+        let mut kms_bureau = values(&[
+            ("PASSPORT_NATIVE_HTTP_ENABLED", "true"),
+            ("PASSPORT_KMS_CALLBACKS_ENABLED", "true"),
+            (
+                "PASSPORT_TENANT_API_KEYS",
+                &format!("{{\"org-a\":\"{secret}\"}}"),
+            ),
+            ("PERSONALIZATION_BUREAU_URL", "https://bureau.example.test"),
+        ]);
+        let missing_profile = IssuanceServiceConfig::from_values(kms_bureau.clone()).unwrap_err();
+        assert_eq!(missing_profile.code, ErrorCode::Configuration);
+        assert!(missing_profile
+            .to_string()
+            .contains("PERSONALIZATION_BUREAU_PROVIDER_PROFILE_ID"));
+        kms_bureau.push((
+            "PERSONALIZATION_BUREAU_PROVIDER_PROFILE_ID".into(),
+            "provider-reference".into(),
+        ));
+        assert!(IssuanceServiceConfig::from_values(kms_bureau).is_ok());
     }
 
     #[test]

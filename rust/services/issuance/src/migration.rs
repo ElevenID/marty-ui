@@ -130,6 +130,47 @@ pub async fn migrate_passport(pool: &PgPool) -> Result<(), sqlx::Error> {
             )));
         }
     }
+    let binding_index = sqlx::query(
+        "SELECT index.indisunique, index.indisvalid, index.indisready,
+                index.indnkeyatts, index.indnatts,
+                pg_get_indexdef(index.indexrelid, 1, false) AS first_key,
+                pg_get_indexdef(index.indexrelid, 2, false) AS second_key,
+                pg_get_expr(index.indpred, index.indrelid) AS predicate
+         FROM pg_index AS index
+         WHERE index.indrelid = 'issuance_service.physical_document_jobs'::regclass
+           AND index.indexrelid = to_regclass(
+               'issuance_service.ux_physical_document_jobs_bureau_provider_job'
+           )",
+    )
+    .fetch_optional(&mut *transaction)
+    .await?;
+    let Some(binding_index) = binding_index else {
+        return Err(sqlx::Error::Protocol(
+            "passport bureau provider/job index is missing".into(),
+        ));
+    };
+    let first_key = binding_index.try_get::<String, _>("first_key")?;
+    let second_key = binding_index.try_get::<String, _>("second_key")?;
+    let predicate = binding_index
+        .try_get::<Option<String>, _>("predicate")?
+        .unwrap_or_default();
+    if !binding_index.try_get::<bool, _>("indisunique")?
+        || !binding_index.try_get::<bool, _>("indisvalid")?
+        || !binding_index.try_get::<bool, _>("indisready")?
+        || binding_index.try_get::<i16, _>("indnkeyatts")? != 2
+        || binding_index.try_get::<i16, _>("indnatts")? != 2
+        || normalize_catalog_expression(&first_key) != "bureau_provider_profile_id"
+        || normalize_catalog_expression(&second_key) != "bureau_job_id"
+        || ![
+            "bureau_provider_profile_idISNOTNULLANDbureau_job_idISNOTNULL",
+            "bureau_job_idISNOTNULLANDbureau_provider_profile_idISNOTNULL",
+        ]
+        .contains(&normalize_catalog_expression(&predicate).as_str())
+    {
+        return Err(sqlx::Error::Protocol(
+            "passport bureau provider/job index is incompatible".into(),
+        ));
+    }
     transaction.commit().await
 }
 

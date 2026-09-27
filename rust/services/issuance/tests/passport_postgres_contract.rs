@@ -985,6 +985,57 @@ async fn passport_jobs_survive_restart_without_cross_tenant_reads() {
         .await
         .unwrap()
         .unwrap();
+    let rotated_provider = IssuanceServiceConfig::from_values(vec![
+        ("PASSPORT_NATIVE_HTTP_ENABLED".into(), "true".into()),
+        (
+            "PASSPORT_INTERNAL_SERVICE_AUTH_ENABLED".into(),
+            "true".into(),
+        ),
+        ("GRPC_SERVICE_TOKEN".into(), internal_token.into()),
+        ("DATABASE_URL".into(), database_url.clone()),
+        (
+            "PERSONALIZATION_BUREAU_URL".into(),
+            "http://127.0.0.1:1".into(),
+        ),
+        (
+            "PERSONALIZATION_BUREAU_PROVIDER_PROFILE_ID".into(),
+            "provider-b".into(),
+        ),
+    ])
+    .unwrap();
+    let rotated_router = passport_router(
+        PassportHttpService::from_config(&rotated_provider, restarted_pool.clone())
+            .unwrap()
+            .unwrap(),
+    );
+    let (rotation_status, rotation_body) = passport_http_request(
+        &rotated_router,
+        "GET",
+        "/v1/passport/applications/application-a/production-status",
+        Some("org-a"),
+        Some(internal_token),
+        json!(null),
+        None,
+    )
+    .await;
+    assert_eq!(
+        rotation_status,
+        StatusCode::SERVICE_UNAVAILABLE,
+        "{rotation_body}"
+    );
+    assert_eq!(
+        rotation_body["detail"],
+        "Personalization bureau provider is unavailable for this job"
+    );
+    assert_eq!(
+        restarted
+            .get(&org_a, "application-a")
+            .await
+            .unwrap()
+            .unwrap()
+            .status,
+        submitted_job.status
+    );
     let secret = "synthetic-bureau-webhook-secret";
     let bureau = BureauClient::new("http://127.0.0.1:1", "synthetic-key", Some(secret)).unwrap();
     let foreign_body = serde_json::to_vec(&serde_json::json!({
@@ -1337,6 +1388,27 @@ async fn passport_jobs_survive_restart_without_cross_tenant_reads() {
             .as_deref(),
         Some("org-b")
     );
+
+    // A same-name but nonunique partial-upgrade index cannot bypass the
+    // provider/job uniqueness gate on restart.
+    sqlx::query("DROP INDEX issuance_service.ux_physical_document_jobs_bureau_provider_job")
+        .execute(&restarted_pool)
+        .await
+        .unwrap();
+    sqlx::query(
+        "CREATE INDEX ux_physical_document_jobs_bureau_provider_job
+         ON issuance_service.physical_document_jobs (bureau_provider_profile_id, bureau_job_id)
+         WHERE bureau_provider_profile_id IS NOT NULL AND bureau_job_id IS NOT NULL",
+    )
+    .execute(&restarted_pool)
+    .await
+    .unwrap();
+    assert!(migration::migrate_passport(&restarted_pool).await.is_err());
+    sqlx::query("DROP INDEX issuance_service.ux_physical_document_jobs_bureau_provider_job")
+        .execute(&restarted_pool)
+        .await
+        .unwrap();
+    migration::migrate_passport(&restarted_pool).await.unwrap();
 
     // Simulate a partially upgraded database with duplicate bound provider
     // jobs. Both lookup and restart migration must fail before choosing a tenant.

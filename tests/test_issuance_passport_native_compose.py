@@ -74,10 +74,15 @@ def test_compose_exposes_both_passport_selectors_without_enabling_them() -> None
             "ICAO_DOCUMENT_SIGNER_API_KEY",
             "PHYSICAL_DOCUMENT_ALLOW_SELF_SIGNED",
             "PERSONALIZATION_BUREAU_URL",
+            "PERSONALIZATION_BUREAU_PROVIDER_PROFILE_ID",
             "PERSONALIZATION_BUREAU_API_KEY",
             "PERSONALIZATION_BUREAU_WEBHOOK_SECRET",
         ):
             assert key in native
+        assert (
+            native["PERSONALIZATION_BUREAU_PROVIDER_PROFILE_ID"]
+            == "${PERSONALIZATION_BUREAU_PROVIDER_PROFILE_ID:-}"
+        )
         assert native["PASSPORT_TENANT_API_KEYS"] == flow["PASSPORT_TENANT_API_KEYS"]
         assert (
             native["PASSPORT_TENANT_API_KEYS_FILE"]
