@@ -234,6 +234,11 @@ static SPECIAL_RULES: LazyLock<Vec<RouteRule>> = LazyLock::new(|| {
             "passport-certificate",
         ),
         rule(
+            r"^/v1/signing-keys/issuer-identities/csca-self-signed-certificate$",
+            &[("POST", "passport-certificate:issue-csca")],
+            "passport-certificate",
+        ),
+        rule(
             r"^/v1/signing-keys(?:/|$)",
             &[
                 ("GET", "signing-key:view"),
@@ -866,7 +871,10 @@ pub fn api_key_allowed(required_permission: &str, scopes: &[String]) -> bool {
     let scopes = scopes.iter().map(String::as_str).collect::<BTreeSet<_>>();
     // DSC issuance requires a tenant-bound human operator grant. API keys,
     // including broad legacy scopes, must not mint document certificates.
-    if required_permission == "passport-certificate:issue" {
+    if matches!(
+        required_permission,
+        "passport-certificate:issue" | "passport-certificate:issue-csca"
+    ) {
         return false;
     }
     if scopes.contains("admin:full") {

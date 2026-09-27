@@ -107,6 +107,7 @@ pub struct GatewayConfig {
     pub grpc_service_token: Option<String>,
     pub signing_internal_api_key: String,
     pub dsc_issue_gateway_key: Option<String>,
+    pub csca_issue_gateway_key: Option<String>,
     pub issuance_api_key: String,
     pub passport_native_gateway_enabled: bool,
     pub passport_tenant_keys: Option<PassportTenantCredentialSource>,
@@ -147,6 +148,10 @@ impl fmt::Debug for GatewayConfig {
             .field(
                 "dsc_issue_gateway_key_configured",
                 &self.dsc_issue_gateway_key.is_some(),
+            )
+            .field(
+                "csca_issue_gateway_key_configured",
+                &self.csca_issue_gateway_key.is_some(),
             )
             .field("issuance_api_key_configured", &true)
             .field(
@@ -226,6 +231,10 @@ impl GatewayConfig {
             )?;
         }
         let dsc_issue_gateway_key = secret(values, "SIGNING_KEYS_DSC_ISSUE_GATEWAY_KEY")?;
+        let csca_issue_gateway_key = secret(values, "SIGNING_KEYS_CSCA_ISSUE_GATEWAY_KEY")?;
+        if csca_issue_gateway_key.is_some() && !environment.eq_ignore_ascii_case("beta") {
+            return Err(error("CSCA issuance credential is beta-only"));
+        }
         if (environment.eq_ignore_ascii_case("beta") && passport_native_gateway_enabled)
             || dsc_issue_gateway_key.is_some()
         {
@@ -238,6 +247,23 @@ impl GatewayConfig {
         if dsc_issue_gateway_key.as_deref() == Some(signing_internal_api_key.as_str()) {
             return Err(error(
                 "DSC issuance credential must differ from the shared Signing Keys key",
+            ));
+        }
+        if (environment.eq_ignore_ascii_case("beta") && passport_native_gateway_enabled)
+            || csca_issue_gateway_key.is_some()
+        {
+            validate_production_secret(
+                "SIGNING_KEYS_CSCA_ISSUE_GATEWAY_KEY",
+                csca_issue_gateway_key.as_deref(),
+                32,
+            )?;
+        }
+        if csca_issue_gateway_key.as_deref() == Some(signing_internal_api_key.as_str())
+            || csca_issue_gateway_key.as_deref() == dsc_issue_gateway_key.as_deref()
+                && csca_issue_gateway_key.is_some()
+        {
+            return Err(error(
+                "CSCA issuance credential must differ from shared and DSC Signing Keys credentials",
             ));
         }
         let issuance_api_key = secret(values, "ISSUANCE_API_KEY")?
@@ -258,6 +284,21 @@ impl GatewayConfig {
             {
                 return Err(error(
                     "DSC issuance credential must not be reused by another configuration value",
+                ));
+            }
+        }
+        if let Some(csca_key) = csca_issue_gateway_key.as_deref() {
+            let reused_in_environment = values.iter().any(|(name, value)| {
+                name != "SIGNING_KEYS_CSCA_ISSUE_GATEWAY_KEY"
+                    && name != "SIGNING_KEYS_CSCA_ISSUE_GATEWAY_KEY_FILE"
+                    && value.contains(csca_key)
+            });
+            if reused_in_environment
+                || grpc_service_token.as_deref() == Some(csca_key)
+                || issuance_api_key == csca_key
+            {
+                return Err(error(
+                    "CSCA issuance credential must not be reused by another configuration value",
                 ));
             }
         }
@@ -395,6 +436,7 @@ impl GatewayConfig {
             grpc_service_token,
             signing_internal_api_key,
             dsc_issue_gateway_key,
+            csca_issue_gateway_key,
             issuance_api_key,
             passport_native_gateway_enabled,
             passport_tenant_keys,
@@ -850,9 +892,19 @@ mod tests {
         );
         assert!(GatewayConfig::from_values(&values).is_err());
         values.remove("OTHER_SERVICE_URL");
+        assert!(GatewayConfig::from_values(&values)
+            .unwrap_err()
+            .to_string()
+            .contains("SIGNING_KEYS_CSCA_ISSUE_GATEWAY_KEY"));
+        values.insert("SIGNING_KEYS_CSCA_ISSUE_GATEWAY_KEY".into(), "s".repeat(32));
+        assert!(GatewayConfig::from_values(&values).is_err());
+        values.insert("SIGNING_KEYS_CSCA_ISSUE_GATEWAY_KEY".into(), "d".repeat(32));
+        assert!(GatewayConfig::from_values(&values).is_err());
+        values.insert("SIGNING_KEYS_CSCA_ISSUE_GATEWAY_KEY".into(), "c".repeat(32));
         assert!(GatewayConfig::from_values(&values).is_ok());
         values.insert("PASSPORT_NATIVE_GATEWAY_ENABLED".into(), "false".into());
         values.remove("SIGNING_KEYS_DSC_ISSUE_GATEWAY_KEY");
+        values.remove("SIGNING_KEYS_CSCA_ISSUE_GATEWAY_KEY");
         assert!(GatewayConfig::from_values(&values).is_ok());
     }
 

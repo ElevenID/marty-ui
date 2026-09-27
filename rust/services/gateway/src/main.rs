@@ -98,6 +98,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
         )?
         .with_service_token(config.grpc_service_token.clone())?
         .with_dsc_issue_gateway_key(config.dsc_issue_gateway_key.clone())?
+        .with_csca_issue_gateway_key(config.csca_issue_gateway_key.clone())?
         .with_passport_native_gateway(
             config.passport_native_gateway_enabled,
             config.passport_tenant_keys.clone(),
