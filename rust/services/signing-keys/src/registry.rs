@@ -23,6 +23,7 @@ use crate::profiles::ProfileStore;
 const SUPPORTED_ALGORITHMS: &[&str] = &["ES256", "ES384", "ES512", "RS256", "EdDSA"];
 pub(crate) const MANAGED_OPENBAO_SERVICE_ID: &str = "managed-openbao-transit";
 const ROTATION_LEASE_TTL_MS: u64 = 120_000;
+const GLOBAL_ROTATION_FENCE_KEY: &str = "signing-service:global-rotation-fence";
 
 fn rotation_lease_key(organization_id: &str) -> String {
     format!(
@@ -33,6 +34,22 @@ fn rotation_lease_key(organization_id: &str) -> String {
 }
 
 fn rotation_marker_key(organization_id: &str, service: &Value) -> Result<String, RegistryError> {
+    let identity = transit_identity(
+        service,
+        service
+            .get("key_reference")
+            .and_then(Value::as_str)
+            .unwrap_or_default(),
+    )?;
+    let digest = Sha256::digest(serde_json::to_vec(&identity).expect("KMS identity serializes"));
+    Ok(format!(
+        "signing-service:rotation-reconcile:{}:{}:{digest:x}",
+        organization_id.len(),
+        organization_id
+    ))
+}
+
+fn transit_identity(service: &Value, reference: &str) -> Result<Value, RegistryError> {
     let field = |name: &str| {
         service
             .get(name)
@@ -41,25 +58,36 @@ fn rotation_marker_key(organization_id: &str, service: &Value) -> Result<String,
             .trim()
             .to_owned()
     };
-    let endpoint = field("endpoint").trim_end_matches('/').to_owned();
-    let key_reference = field("key_reference");
+    let endpoint = canonical_transit_endpoint(&field("endpoint"))?;
+    let key_reference = reference.trim();
     if endpoint.is_empty() || key_reference.is_empty() {
         return Err(RegistryError::Invalid(
             "Transit endpoint and key reference are required for rotation.".into(),
         ));
     }
-    let identity = json!({
+    Ok(json!({
         "endpoint": endpoint,
         "mount": if field("mount").is_empty() { "transit".into() } else { field("mount").trim_matches('/').to_owned() },
         "namespace": field("namespace"),
         "key_reference": key_reference,
-    });
-    let digest = Sha256::digest(serde_json::to_vec(&identity).expect("KMS identity serializes"));
-    Ok(format!(
-        "signing-service:rotation-reconcile:{}:{}:{digest:x}",
-        organization_id.len(),
-        organization_id
-    ))
+    }))
+}
+
+fn canonical_transit_endpoint(endpoint: &str) -> Result<String, RegistryError> {
+    let parsed = reqwest::Url::parse(endpoint.trim())
+        .map_err(|_| RegistryError::Invalid("Transit endpoint is invalid for rotation".into()))?;
+    if !matches!(parsed.scheme(), "http" | "https")
+        || parsed.host_str().is_none()
+        || parsed.query().is_some()
+        || parsed.fragment().is_some()
+        || !parsed.username().is_empty()
+        || parsed.password().is_some()
+    {
+        return Err(RegistryError::Invalid(
+            "Transit endpoint is invalid for rotation".into(),
+        ));
+    }
+    Ok(parsed.as_str().trim_end_matches('/').to_owned())
 }
 
 fn rotation_marker_index_key(organization_id: &str, service_id: &str) -> String {
@@ -139,6 +167,21 @@ impl RotationLease {
 
     pub(crate) fn owner(&self) -> &str {
         &self.owner
+    }
+
+    pub async fn renew(&self) -> Result<bool, RegistryError> {
+        let mut connection = self.connection.clone();
+        let renewed: i32 = redis::Script::new(
+            "if redis.call('GET', KEYS[1]) ~= ARGV[1] then return 0 end
+             return redis.call('PEXPIRE', KEYS[1], ARGV[2])",
+        )
+        .key(&self.key)
+        .arg(&self.owner)
+        .arg(ROTATION_LEASE_TTL_MS)
+        .invoke_async(&mut connection)
+        .await
+        .map_err(|error| RegistryError::Storage(error.to_string()))?;
+        Ok(renewed == 1)
     }
 
     pub async fn release(mut self) -> Result<(), RegistryError> {
@@ -333,6 +376,7 @@ impl RegistryStore {
         let mut connection = self.connection.clone();
         let saved: i32 = redis::Script::new(
             "if redis.call('GET', KEYS[1]) ~= ARGV[1] then return 0 end
+             if redis.call('GET', KEYS[5]) ~= ARGV[1] then return 0 end
              if redis.call('EXISTS', KEYS[3]) == 1 then return 0 end
              local index_type = redis.call('TYPE', KEYS[4]).ok
              if index_type ~= 'none' and index_type ~= 'set' then return 0 end
@@ -345,6 +389,7 @@ impl RegistryStore {
         .key(storage_key(organization_id))
         .key(marker_key)
         .key(index_key)
+        .key(GLOBAL_ROTATION_FENCE_KEY)
         .arg(&lease.owner)
         .arg(registry_payload)
         .arg(marker_payload)
@@ -447,6 +492,165 @@ impl RegistryStore {
         }))
     }
 
+    /// Freeze all registry writes while checking whether a physical Transit key
+    /// is used by another tenant and rotating it. The owner may still persist
+    /// its pending and completed rotation state through the fenced save scripts.
+    pub async fn acquire_global_rotation_fence(
+        &self,
+        tenant_lease: &RotationLease,
+    ) -> Result<Option<RotationLease>, RegistryError> {
+        let mut connection = self.connection.clone();
+        let acquired: Option<String> = redis::cmd("SET")
+            .arg(GLOBAL_ROTATION_FENCE_KEY)
+            .arg(&tenant_lease.owner)
+            .arg("NX")
+            .arg("PX")
+            .arg(ROTATION_LEASE_TTL_MS)
+            .query_async(&mut connection)
+            .await
+            .map_err(|error| RegistryError::Storage(error.to_string()))?;
+        Ok(acquired.map(|_| RotationLease {
+            connection,
+            key: GLOBAL_ROTATION_FENCE_KEY.to_owned(),
+            owner: tenant_lease.owner.clone(),
+            released: false,
+        }))
+    }
+
+    /// Called only while the global fence is held. Existing registry documents
+    /// predate this route, so inspect them rather than trusting a new index.
+    pub async fn ensure_exclusive_rotation_identity(
+        &self,
+        organization_id: &str,
+        service: &Value,
+        fence: &RotationLease,
+    ) -> Result<(), RegistryError> {
+        if fence.key != GLOBAL_ROTATION_FENCE_KEY {
+            return Err(RegistryError::Conflict);
+        }
+        if service.get("auth_mode").and_then(Value::as_str) == Some("service_token") {
+            return Err(RegistryError::Conflict);
+        }
+        if self
+            .managed_openbao_endpoint
+            .as_deref()
+            .is_some_and(|managed| {
+                canonical_transit_endpoint(managed).ok()
+                    == canonical_transit_endpoint(
+                        service
+                            .get("endpoint")
+                            .and_then(Value::as_str)
+                            .unwrap_or_default(),
+                    )
+                    .ok()
+                    && service
+                        .get("mount")
+                        .and_then(Value::as_str)
+                        .unwrap_or("transit")
+                        .trim_matches('/')
+                        == "transit"
+                    && service
+                        .get("namespace")
+                        .and_then(Value::as_str)
+                        .unwrap_or_default()
+                        .trim()
+                        .is_empty()
+            })
+        {
+            return Err(RegistryError::Conflict);
+        }
+        let identity = transit_identity(
+            service,
+            service
+                .get("key_reference")
+                .and_then(Value::as_str)
+                .unwrap_or_default(),
+        )?;
+        let mut connection = self.connection.clone();
+        let owner: Option<String> = connection
+            .get(GLOBAL_ROTATION_FENCE_KEY)
+            .await
+            .map_err(|error| RegistryError::Storage(error.to_string()))?;
+        if owner.as_deref() != Some(fence.owner.as_str()) {
+            return Err(RegistryError::Conflict);
+        }
+        let mut cursor = 0_u64;
+        let mut scanned = 0_usize;
+        loop {
+            let (next, keys): (u64, Vec<String>) = redis::cmd("SCAN")
+                .arg(cursor)
+                .arg("MATCH")
+                .arg("org:*:signing-key-services")
+                .arg("COUNT")
+                .arg(100)
+                .query_async(&mut connection)
+                .await
+                .map_err(|error| RegistryError::Storage(error.to_string()))?;
+            scanned += keys.len();
+            if scanned > 100_000 {
+                return Err(RegistryError::Storage(
+                    "Rotation ownership scan exceeded its limit".into(),
+                ));
+            }
+            for key in keys {
+                let other = key
+                    .strip_prefix("org:")
+                    .and_then(|suffix| suffix.strip_suffix(":signing-key-services"))
+                    .ok_or_else(|| RegistryError::Corrupt("Invalid signing registry key".into()))?;
+                if other == organization_id {
+                    continue;
+                }
+                let payload: Option<String> = connection
+                    .get(&key)
+                    .await
+                    .map_err(|error| RegistryError::Storage(error.to_string()))?;
+                let Some(payload) = payload else { continue };
+                let registry: Value = serde_json::from_str(&payload)
+                    .map_err(|error| RegistryError::Corrupt(error.to_string()))?;
+                for registered in registry
+                    .get("services")
+                    .and_then(Value::as_array)
+                    .into_iter()
+                    .flatten()
+                {
+                    if !matches!(
+                        registered.get("service_type").and_then(Value::as_str),
+                        Some(
+                            "openbao-transit"
+                                | "hashicorp-vault-transit"
+                                | "custom-transit-compatible"
+                        )
+                    ) {
+                        continue;
+                    }
+                    let references = registered
+                        .get("key_reference")
+                        .and_then(Value::as_str)
+                        .into_iter()
+                        .chain(
+                            registered
+                                .get("key_aliases")
+                                .and_then(Value::as_array)
+                                .into_iter()
+                                .flatten()
+                                .filter_map(Value::as_str),
+                        );
+                    for reference in references {
+                        if transit_identity(registered, reference).ok().as_ref() == Some(&identity)
+                        {
+                            return Err(RegistryError::Conflict);
+                        }
+                    }
+                }
+            }
+            if next == 0 {
+                break;
+            }
+            cursor = next;
+        }
+        Ok(())
+    }
+
     pub async fn load(&self, organization_id: &str) -> Result<Value, RegistryError> {
         let mut connection = self.connection.clone();
         let payload: Option<String> = connection
@@ -510,11 +714,14 @@ impl RegistryStore {
         let mut connection = self.connection.clone();
         let saved: i32 = redis::Script::new(
             "if redis.call('GET', KEYS[1]) ~= ARGV[1] then return 0 end
+             local fence = redis.call('GET', KEYS[3])
+             if fence and fence ~= ARGV[1] then return 0 end
              redis.call('SET', KEYS[2], ARGV[2])
              return 1",
         )
         .key(&lease.key)
         .key(storage_key(organization_id))
+        .key(GLOBAL_ROTATION_FENCE_KEY)
         .arg(&lease.owner)
         .arg(payload)
         .invoke_async(&mut connection)
@@ -1706,6 +1913,34 @@ mod tests {
 
     static BAO_ENV_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
 
+    async fn disposable_redis_url() -> String {
+        let url = std::env::var("MARTY_TEST_REDIS_URL").expect("disposable Redis URL");
+        let parsed = reqwest::Url::parse(&url).expect("disposable Redis URL syntax");
+        assert!(matches!(
+            parsed.host_str(),
+            Some("127.0.0.1" | "localhost" | "::1")
+        ));
+        assert!(parsed
+            .path()
+            .trim_start_matches('/')
+            .parse::<u8>()
+            .is_ok_and(|db| db >= 13));
+        let nonce = std::env::var("MARTY_TEST_REDIS_DISPOSABLE_NONCE")
+            .expect("disposable Redis sentinel value");
+        assert!(nonce.len() >= 16, "disposable Redis sentinel is too short");
+        let client = redis::Client::open(url.as_str()).expect("disposable Redis client");
+        let mut connection = client
+            .get_multiplexed_async_connection()
+            .await
+            .expect("disposable Redis connection");
+        let observed: Option<String> = connection
+            .get("marty:tests:disposable-guard")
+            .await
+            .expect("disposable Redis sentinel read");
+        assert_eq!(observed.as_deref(), Some(nonce.as_str()));
+        url
+    }
+
     #[test]
     fn public_config_resolve_frozen_selection_cases() {
         let contract: Value = serde_json::from_str(include_str!(
@@ -1964,10 +2199,10 @@ mod tests {
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let endpoint = format!("http://{}", listener.local_addr().unwrap());
         let server = tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+        let redis_url = disposable_redis_url().await;
         let _guard = BAO_ENV_LOCK.lock().await;
         let previous = std::env::var("BAO_TOKEN").ok();
         std::env::set_var("BAO_TOKEN", "test-only");
-        let redis_url = std::env::var("MARTY_TEST_REDIS_URL").expect("disposable Redis URL");
         let organization_id = format!("rust-signing-cache-{}", Uuid::new_v4().simple());
         let reference = "cred-issuer-0123456789abcdef0123-es256";
         let store = RegistryStore::connect(&redis_url)
@@ -2086,7 +2321,7 @@ mod tests {
     #[tokio::test]
     #[ignore = "requires disposable MARTY_TEST_REDIS_URL"]
     async fn concurrent_purpose_bindings_remain_atomic_with_rotation_lease() {
-        let redis_url = std::env::var("MARTY_TEST_REDIS_URL").expect("disposable Redis URL");
+        let redis_url = disposable_redis_url().await;
         let store = RegistryStore::connect(&redis_url).await.unwrap();
         let organization_id = format!("managed-bind-race-{}", Uuid::new_v4().simple());
         let key = storage_key(&organization_id);

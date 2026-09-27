@@ -16,6 +16,34 @@ use tokio::sync::Barrier;
 use tower::ServiceExt;
 use uuid::Uuid;
 
+async fn disposable_redis_url() -> String {
+    let url = std::env::var("MARTY_TEST_REDIS_URL").expect("disposable Redis URL");
+    let parsed = reqwest::Url::parse(&url).expect("disposable Redis URL syntax");
+    assert!(matches!(
+        parsed.host_str(),
+        Some("127.0.0.1" | "localhost" | "::1")
+    ));
+    assert!(parsed
+        .path()
+        .trim_start_matches('/')
+        .parse::<u8>()
+        .is_ok_and(|db| db >= 13));
+    let nonce = std::env::var("MARTY_TEST_REDIS_DISPOSABLE_NONCE")
+        .expect("disposable Redis sentinel value");
+    assert!(nonce.len() >= 16, "disposable Redis sentinel is too short");
+    let client = redis::Client::open(url.as_str()).expect("disposable Redis client");
+    let mut connection = client
+        .get_multiplexed_async_connection()
+        .await
+        .expect("disposable Redis connection");
+    let observed: Option<String> = connection
+        .get("marty:tests:disposable-guard")
+        .await
+        .expect("disposable Redis sentinel read");
+    assert_eq!(observed.as_deref(), Some(nonce.as_str()));
+    url
+}
+
 async fn request(
     app: &Router,
     method: Method,
@@ -51,7 +79,7 @@ async fn request(
 #[tokio::test]
 #[ignore = "requires disposable MARTY_TEST_REDIS_URL"]
 async fn public_key_detail_and_jwks_metadata_do_not_mutate_kms_registration() {
-    let redis_url = std::env::var("MARTY_TEST_REDIS_URL").expect("disposable Redis URL");
+    let redis_url = disposable_redis_url().await;
     let organization_id = format!("rust-key-meta-{}", Uuid::new_v4().simple());
     let other_organization_id = format!("rust-key-meta-other-{}", Uuid::new_v4().simple());
     let registry = RegistryStore::connect(&redis_url).await.unwrap();
@@ -182,7 +210,7 @@ async fn public_key_detail_and_jwks_metadata_do_not_mutate_kms_registration() {
 #[tokio::test]
 #[ignore = "requires disposable MARTY_TEST_REDIS_URL"]
 async fn concurrent_jwks_publication_metadata_and_deletion_preserve_completed_mutations() {
-    let redis_url = std::env::var("MARTY_TEST_REDIS_URL").expect("disposable Redis URL");
+    let redis_url = disposable_redis_url().await;
     let organization_id = format!("rust-key-meta-race-{}", Uuid::new_v4().simple());
     let registry = RegistryStore::connect(&redis_url).await.unwrap();
     let documents = DocumentStore::from_connection(registry.connection());
