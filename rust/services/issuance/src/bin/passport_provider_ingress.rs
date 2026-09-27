@@ -109,7 +109,7 @@ fn private_url(name: &str, service: &str, path: &str) -> Result<Url, &'static st
 }
 
 fn private_url_from(value: &str, service: &str, path: &str) -> Result<Url, &'static str> {
-    let url = Url::parse(&value).map_err(|_| "invalid private passport URL")?;
+    let url = Url::parse(value).map_err(|_| "invalid private passport URL")?;
     let host = url.host_str().ok_or("invalid private passport URL")?;
     let private_host = host == service
         || host == format!("{service}.marty-prod.svc.cluster.local")

@@ -935,8 +935,6 @@ services:
       CT_GRPC_TARGET: credential-template:9003
       ISSUANCE_GRPC_TARGET: issuance-native:9005
       ISSUANCE_SERVICE_URL: http://issuance:8005
-      # Preserve Flow's legacy reference catalog until an accepted cutover supplies the native target.
-      ISSUANCE_NATIVE_SERVICE_URL: ${ISSUANCE_NATIVE_SERVICE_URL:-http://issuance:8005}
       PASSPORT_NATIVE_FLOW_ENABLED: ${PASSPORT_NATIVE_FLOW_ENABLED:-false}
       PASSPORT_INTERNAL_SERVICE_AUTH_ENABLED: ${PASSPORT_INTERNAL_SERVICE_AUTH_ENABLED:-false}
       PASSPORT_TENANT_API_KEYS: ${PASSPORT_TENANT_API_KEYS:-}
