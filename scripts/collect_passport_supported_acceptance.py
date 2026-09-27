@@ -190,11 +190,23 @@ def observe_kubernetes(
         status = deployment.get("status")
         spec = deployment.get("spec")
         require(isinstance(metadata, dict) and metadata.get("namespace") == namespace
+                and isinstance(metadata.get("uid"), str) and bool(metadata["uid"])
                 and isinstance(status, dict) and status.get("readyReplicas", 0) >= 1
                 and isinstance(spec, dict),
                 f"Kubernetes {service} is not ready in the disposable namespace")
+        selector = spec.get("selector")
+        template = spec.get("template")
+        require(isinstance(selector, dict)
+                and selector.get("matchLabels") == {"app": service}
+                and isinstance(template, dict)
+                and isinstance(template.get("metadata"), dict)
+                and isinstance(template["metadata"].get("labels"), dict)
+                and template["metadata"]["labels"].get("app") == service,
+                f"Kubernetes {service} deployment selector is invalid")
         containers = spec.get("template", {}).get("spec", {}).get("containers")
         require(isinstance(containers, list) and len(containers) == 1
+                and isinstance(containers[0], dict)
+                and containers[0].get("name") == service
                 and containers[0].get("image") == services_reference,
                 f"Kubernetes {service} is not pinned to the released services image")
         container_env = containers[0].get("env", [])
@@ -223,10 +235,54 @@ def observe_kubernetes(
                 and isinstance(pod_items[0], dict),
                 f"Kubernetes {service} pod is missing or ambiguous")
         pod = pod_items[0]
+        pod_metadata = pod.get("metadata")
+        require(isinstance(pod_metadata, dict)
+                and isinstance(pod_metadata.get("labels"), dict)
+                and pod_metadata["labels"].get("app") == service
+                and isinstance(pod_metadata.get("uid"), str)
+                and bool(pod_metadata["uid"]),
+                f"Kubernetes {service} pod identity is invalid")
+        pod_owners = pod_metadata.get("ownerReferences")
+        require(isinstance(pod_owners, list) and len(pod_owners) == 1
+                and isinstance(pod_owners[0], dict)
+                and pod_owners[0].get("controller") is True
+                and pod_owners[0].get("kind") == "ReplicaSet"
+                and isinstance(pod_owners[0].get("name"), str)
+                and re.fullmatch(r"[a-z0-9]([-a-z0-9]*[a-z0-9])?", pod_owners[0]["name"])
+                and isinstance(pod_owners[0].get("uid"), str)
+                and bool(pod_owners[0]["uid"]),
+                f"Kubernetes {service} pod has no bound ReplicaSet owner")
+        replica_set = json_command(["kubectl", "--context", context, "-n", namespace,
+                                    "get", "replicaset", pod_owners[0]["name"],
+                                    "-o", "json"], runner)
+        replica_metadata = replica_set.get("metadata")
+        require(isinstance(replica_metadata, dict)
+                and replica_metadata.get("namespace") == namespace
+                and replica_metadata.get("name") == pod_owners[0]["name"]
+                and replica_metadata.get("uid") == pod_owners[0]["uid"]
+                and isinstance(replica_metadata.get("labels"), dict)
+                and replica_metadata["labels"].get("app") == service
+                and isinstance(replica_metadata.get("ownerReferences"), list)
+                and len(replica_metadata["ownerReferences"]) == 1
+                and isinstance(replica_metadata["ownerReferences"][0], dict)
+                and replica_metadata["ownerReferences"][0].get("controller") is True
+                and replica_metadata["ownerReferences"][0].get("kind") == "Deployment"
+                and replica_metadata["ownerReferences"][0].get("name") == service
+                and replica_metadata["ownerReferences"][0].get("uid") == metadata["uid"],
+                f"Kubernetes {service} ReplicaSet owner differs from deployment")
+        pod_spec = pod.get("spec")
+        pod_containers = pod_spec.get("containers") if isinstance(pod_spec, dict) else None
+        require(isinstance(pod_containers, list) and len(pod_containers) == 1
+                and isinstance(pod_containers[0], dict)
+                and pod_containers[0].get("name") == service
+                and pod_containers[0].get("image") == services_reference,
+                f"Kubernetes {service} pod spec differs from released image")
         statuses = pod.get("status", {}).get("containerStatuses")
-        require(pod.get("metadata", {}).get("namespace") == namespace
+        require(pod_metadata.get("namespace") == namespace
                 and pod.get("status", {}).get("phase") == "Running"
                 and isinstance(statuses, list) and len(statuses) == 1
+                and isinstance(statuses[0], dict)
+                and statuses[0].get("name") == service
                 and statuses[0].get("ready") is True
                 and isinstance(statuses[0].get("containerID"), str)
                 and bool(statuses[0]["containerID"])
@@ -375,7 +431,11 @@ def collect(
                                 model["resource_uids"][f"deployment/{service}"]
                                 for service in SERVICES),
                         "disposable Kubernetes deployment identity changed during inspection")
-        except (SupportedEvidenceError, OSError, ValueError):
+                post_model = kubernetes_preflight(identity, source_commit,
+                                                  services_reference)
+                require(post_model == model,
+                        "disposable Kubernetes identity changed during runtime probe")
+        except (SupportedEvidenceError, OSError, ValueError, TypeError, AttributeError):
             surfaces[name] = report_surface(None, "disposable runtime probe failed",
                                             source_commit)
         else:

@@ -228,6 +228,11 @@ def test_identity_or_rollback_drift_fails_closed(mutate, match: str) -> None:
             "service/gateway is not private",
         ),
         (
+            "service/gateway",
+            lambda x: x["spec"].update(externalIPs=["203.0.113.1"]),
+            "service/gateway is not private",
+        ),
+        (
             "configmap/marty-config",
             lambda x: x["data"].update(PASSPORT_NATIVE_FLOW_ENABLED="false"),
             "Rust selector model",
@@ -339,3 +344,43 @@ def test_collector_rejects_deployment_replacement_after_preflight(
     assert surface["runtime_images"] is None
     assert surface["blocker"] == "disposable runtime probe failed"
     assert surface["runtime_accepted"] is False
+
+
+def test_collector_rejects_service_replacement_during_runtime_probe(
+    tmp_path: Path,
+) -> None:
+    expected = plan()
+    identity = tmp_path / "identity.json"
+    identity.write_text(json.dumps(expected), encoding="utf-8")
+    model = gate.inspect(expected, COMMIT, REFERENCE, runner(expected))
+    calls = []
+
+    def preflight(*args):
+        calls.append("preflight")
+        if len(calls) == 1:
+            return model
+        replaced = dict(model)
+        replaced["resource_uids"] = {
+            **model["resource_uids"], "service/gateway": "replacement-uid"
+        }
+        return replaced
+
+    def probe(*args):
+        calls.append("probe")
+        return {
+            name: {"deployment_uid": model["resource_uids"][f"deployment/{name}"],
+                   "oci_reference": REFERENCE}
+            for name in collector.SERVICES
+        }
+
+    report = collector.collect(
+        manifest_file(tmp_path), COMMIT, namespace=NAMESPACE,
+        kubernetes_context=CONTEXT, kubernetes_identity_plan=identity,
+        kubernetes_preflight=preflight, kubernetes_probe=probe,
+        attest=lambda *args: True,
+    )
+    assert calls == ["preflight", "probe", "preflight"]
+    surface = report["surfaces"]["kubernetes"]
+    assert surface["runtime_images"] is None
+    assert surface["runtime_accepted"] is False
+    assert surface["blocker"] == "disposable runtime probe failed"

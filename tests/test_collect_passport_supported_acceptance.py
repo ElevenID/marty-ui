@@ -10,7 +10,6 @@ import yaml
 
 from scripts import collect_passport_supported_acceptance as gate
 
-
 COMMIT = "a" * 40
 DIGEST = "sha256:" + "b" * 64
 REFERENCE = "ghcr.io/elevenid/marty-ui-oss/services@" + DIGEST
@@ -126,7 +125,7 @@ def test_live_compose_prerequisite_still_does_not_claim_routes_or_rollback(
     assert report["physical_claim"] == "not_claimed"
 
 
-def test_kubernetes_inspection_is_bounded_to_disposable_namespace() -> None:
+def kubernetes_runtime_runner(bad_owner: bool = False):
     def run(args: list[str]) -> str:
         assert args[1:5] == ["--context", CONTEXT, "-n", NAMESPACE]
         if args[6] == "configmap":
@@ -135,23 +134,53 @@ def test_kubernetes_inspection_is_bounded_to_disposable_namespace() -> None:
         if args[6] == "pods":
             service = args[8].removeprefix("app=")
             return json.dumps({"items": [{
-                "metadata": {"namespace": NAMESPACE, "uid": service + "-pod"},
+                "metadata": {"namespace": NAMESPACE, "uid": service + "-pod",
+                             "labels": {"app": service},
+                             "ownerReferences": [{"kind": "ReplicaSet",
+                                                  "name": service + "-rs",
+                                                  "uid": service + "-rs-uid",
+                                                  "controller": True}]},
+                "spec": {"containers": [{"name": service, "image": REFERENCE}]},
                 "status": {"phase": "Running", "containerStatuses": [{
+                    "name": service,
                     "ready": True, "imageID": "docker-pullable://" + REFERENCE,
                     "containerID": "containerd://" + service + "-container",
                 }]},
             }]})
+        if args[6] == "replicaset":
+            service = args[7].removesuffix("-rs")
+            return json.dumps({"metadata": {
+                "name": args[7], "namespace": NAMESPACE, "uid": service + "-rs-uid",
+                "labels": {"app": service},
+                "ownerReferences": [{"kind": "Deployment", "name": service,
+                                     "uid": ("wrong-uid" if bad_owner else service + "-uid"),
+                                     "controller": True}],
+            }})
         service = args[7]
         return json.dumps({
             "metadata": {"namespace": NAMESPACE, "uid": service + "-uid"},
             "status": {"readyReplicas": 1},
-            "spec": {"template": {"spec": {"containers": [{
-                "image": REFERENCE,
+            "spec": {"selector": {"matchLabels": {"app": service}},
+                     "template": {"metadata": {"labels": {"app": service}},
+                                  "spec": {"containers": [{
+                "name": service, "image": REFERENCE,
                 "env": [{"name": flag, "value": "true"} for flag in gate.KUBERNETES_FLAGS[service]],
             }]}}},
         })
-    observed = gate.observe_kubernetes(NAMESPACE, CONTEXT, REFERENCE, run)
+
+    return run
+
+
+def test_kubernetes_inspection_is_bounded_to_disposable_namespace() -> None:
+    observed = gate.observe_kubernetes(
+        NAMESPACE, CONTEXT, REFERENCE, kubernetes_runtime_runner())
     assert set(observed) == set(gate.KUBERNETES_SERVICES)
+
+
+def test_kubernetes_pod_must_be_owned_by_expected_deployment() -> None:
+    with pytest.raises(gate.SupportedEvidenceError, match="ReplicaSet owner"):
+        gate.observe_kubernetes(
+            NAMESPACE, CONTEXT, REFERENCE, kubernetes_runtime_runner(bad_owner=True))
 
 
 def test_capability_origin_must_match_inspected_gateway_port(tmp_path: Path) -> None:

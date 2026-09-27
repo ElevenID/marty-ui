@@ -300,7 +300,15 @@ def inspect(
                 and spec.get("type") == "ClusterIP"
                 and spec.get("selector") == {"app": name}
                 and isinstance(spec.get("clusterIP"), str)
-                and bool(spec["clusterIP"]),
+                and bool(spec["clusterIP"])
+                and not spec.get("externalIPs")
+                and not spec.get("loadBalancerIP")
+                and not spec.get("loadBalancerSourceRanges")
+                and isinstance(spec.get("ports", []), list)
+                and all(
+                    isinstance(port, dict) and "nodePort" not in port
+                    for port in spec.get("ports", [])
+                ),
                 f"Disposable Kubernetes service/{name} is not private",
             )
         else:
