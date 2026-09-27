@@ -261,6 +261,7 @@ function ServiceCard({
     && service.key_purposes.some((p) => PURPOSES_REQUIRING_CERTIFICATE.includes(p));
   const supportsRotation = !service.read_only
     && Boolean(service.key_reference)
+    && service.auth_mode !== 'service_token'
     && ['openbao-transit', 'hashicorp-vault-transit', 'custom-transit-compatible'].includes(service.service_type);
 
   return (

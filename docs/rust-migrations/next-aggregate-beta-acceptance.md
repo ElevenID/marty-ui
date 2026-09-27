@@ -111,7 +111,7 @@ selected here.
    CSRs, and compares each parsed CSR public key with the resolved issuer key.
    It exercises KMS signing and Rust signature verification through Gateway;
    it does not issue CA certificates or prove the DSC-to-CSCA chain. Exercise
-   the remaining rotate path through Gateway, rerun the
+   the remaining service CSR and rotate paths through Gateway, rerun the
    route audit on protected main after the stack lands, and complete beta
    acceptance before describing the aggregate release as feature-complete.
 
