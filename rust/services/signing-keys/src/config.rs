@@ -10,6 +10,8 @@ pub struct Config {
     pub build_revision: String,
     pub internal_api_key: String,
     pub dsc_issue_gateway_key: Option<String>,
+    pub csca_issue_gateway_key: Option<String>,
+    pub beta_csca_issuance_enabled: bool,
     pub registry_redis_url: String,
     pub bao_addr: Option<String>,
     pub bao_token: Option<String>,
@@ -53,6 +55,38 @@ impl Config {
                     .into(),
             );
         }
+        let beta_csca_issuance_enabled =
+            match value(values, "SIGNING_KEYS_BETA_CSCA_ISSUANCE_ENABLED").as_deref() {
+                None | Some("false") => false,
+                Some("true") => true,
+                Some(_) => {
+                    return Err(
+                        "SIGNING_KEYS_BETA_CSCA_ISSUANCE_ENABLED must be true or false".into(),
+                    )
+                }
+            };
+        if value(values, "SIGNING_KEYS_CSCA_ISSUE_GATEWAY_KEY_FILE").is_some() {
+            return Err("SIGNING_KEYS_CSCA_ISSUE_GATEWAY_KEY_FILE is unsupported".into());
+        }
+        let csca_issue_gateway_key = value(values, "SIGNING_KEYS_CSCA_ISSUE_GATEWAY_KEY");
+        if (beta_csca_issuance_enabled || csca_issue_gateway_key.is_some())
+            && value(values, "ENVIRONMENT").as_deref() != Some("beta")
+        {
+            return Err("CSCA certificate ceremony is available only in ENVIRONMENT=beta".into());
+        }
+        if beta_csca_issuance_enabled != csca_issue_gateway_key.is_some() {
+            return Err("beta CSCA certificate ceremony requires its dedicated Gateway key".into());
+        }
+        if csca_issue_gateway_key.as_ref().is_some_and(|key| {
+            key.len() < 32
+                || key == &internal_api_key
+                || dsc_issue_gateway_key.as_ref() == Some(key)
+        }) {
+            return Err(
+                "SIGNING_KEYS_CSCA_ISSUE_GATEWAY_KEY must be distinct and at least 32 characters"
+                    .into(),
+            );
+        }
         let bao_addr = value(values, "BAO_ADDR");
         let bao_token =
             secret_value(values, "BAO_TOKEN")?.or(secret_value(values, "OPENBAO_SERVICE_TOKEN")?);
@@ -69,6 +103,16 @@ impl Config {
                 );
             }
         }
+        if let Some(csca_key) = csca_issue_gateway_key.as_deref() {
+            if values.iter().any(|(name, value)| {
+                name != "SIGNING_KEYS_CSCA_ISSUE_GATEWAY_KEY"
+                    && name != "SIGNING_KEYS_CSCA_ISSUE_GATEWAY_KEY_FILE"
+                    && value.contains(csca_key)
+            }) || bao_token.as_deref() == Some(csca_key)
+            {
+                return Err("SIGNING_KEYS_CSCA_ISSUE_GATEWAY_KEY must not be reused by another configuration value".into());
+            }
+        }
         if bao_addr.is_some() != bao_token.is_some() {
             return Err(
                 "BAO_ADDR and BAO_TOKEN (or OPENBAO_SERVICE_TOKEN) must be configured together"
@@ -81,6 +125,8 @@ impl Config {
             build_revision: value(values, "MARTY_UI_SHA").unwrap_or_else(|| "unknown".into()),
             internal_api_key,
             dsc_issue_gateway_key,
+            csca_issue_gateway_key,
+            beta_csca_issuance_enabled,
             registry_redis_url: value(values, "SIGNING_KEYS_REDIS_URL")
                 .unwrap_or_else(|| "redis://localhost:6379/2".into()),
             bao_addr,
@@ -125,6 +171,8 @@ mod tests {
         assert_eq!(config.build_revision, "unknown");
         assert_eq!(config.internal_api_key, DEVELOPMENT_INTERNAL_API_KEY);
         assert_eq!(config.dsc_issue_gateway_key, None);
+        assert_eq!(config.csca_issue_gateway_key, None);
+        assert!(!config.beta_csca_issuance_enabled);
         assert_eq!(config.registry_redis_url, "redis://localhost:6379/2");
         assert_eq!(config.bao_addr, None);
         assert_eq!(config.bao_token, None);
@@ -206,5 +254,61 @@ mod tests {
         assert!(Config::from_values(&values).is_err());
         values.remove("OTHER_SERVICE_URL");
         assert!(Config::from_values(&values).is_ok());
+    }
+
+    #[test]
+    fn csca_ceremony_is_beta_only_and_has_a_distinct_operator_key() {
+        let mut values = HashMap::from([
+            ("ENVIRONMENT".into(), "beta".into()),
+            (
+                "SIGNING_KEYS_BETA_CSCA_ISSUANCE_ENABLED".into(),
+                "true".into(),
+            ),
+            (
+                "SIGNING_KEYS_INTERNAL_API_KEY".into(),
+                "internal-signing-key-32-characters-long".into(),
+            ),
+        ]);
+        assert!(Config::from_values(&values).is_err());
+        values.insert(
+            "SIGNING_KEYS_CSCA_ISSUE_GATEWAY_KEY".into(),
+            "internal-signing-key-32-characters-long".into(),
+        );
+        assert!(Config::from_values(&values).is_err());
+        values.insert(
+            "SIGNING_KEYS_CSCA_ISSUE_GATEWAY_KEY".into(),
+            "distinct-csca-operator-key-32-characters".into(),
+        );
+        assert!(
+            Config::from_values(&values)
+                .unwrap()
+                .beta_csca_issuance_enabled
+        );
+        values.insert(
+            "SIGNING_KEYS_DSC_ISSUE_GATEWAY_KEY".into(),
+            "distinct-csca-operator-key-32-characters".into(),
+        );
+        assert!(Config::from_values(&values).is_err());
+        values.remove("SIGNING_KEYS_DSC_ISSUE_GATEWAY_KEY");
+        values.insert(
+            "OTHER_URL".into(),
+            "redis://user:distinct-csca-operator-key-32-characters@redis".into(),
+        );
+        assert!(Config::from_values(&values).is_err());
+        values.remove("OTHER_URL");
+        values.insert("ENVIRONMENT".into(), "production".into());
+        assert!(Config::from_values(&values).is_err());
+        values.insert("ENVIRONMENT".into(), "beta".into());
+        values.insert(
+            "SIGNING_KEYS_BETA_CSCA_ISSUANCE_ENABLED".into(),
+            "false".into(),
+        );
+        assert!(Config::from_values(&values).is_err());
+        values.remove("SIGNING_KEYS_CSCA_ISSUE_GATEWAY_KEY");
+        values.insert(
+            "SIGNING_KEYS_CSCA_ISSUE_GATEWAY_KEY_FILE".into(),
+            "C:/not-a-key".into(),
+        );
+        assert!(Config::from_values(&values).is_err());
     }
 }

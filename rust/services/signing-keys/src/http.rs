@@ -75,6 +75,8 @@ struct ServiceStatus {
 struct AppState {
     internal_api_key: Arc<str>,
     dsc_issue_gateway_key: Option<Arc<str>>,
+    csca_issue_gateway_key: Option<Arc<str>>,
+    beta_csca_issuance_enabled: bool,
     registry_store: Option<RegistryStore>,
     document_store: Option<DocumentStore>,
     csca_lifecycle_store: Option<CscaLifecycleStore>,
@@ -118,6 +120,33 @@ pub fn router_with_dependencies(
 pub fn router_with_dependencies_and_dsc_key(
     internal_api_key: String,
     dsc_issue_gateway_key: Option<String>,
+    registry_store: Option<RegistryStore>,
+    document_store: Option<DocumentStore>,
+    csca_lifecycle_store: Option<CscaLifecycleStore>,
+    profile_store: Option<ProfileStore>,
+    flow_envelopes: Option<OpenBaoEnvelopeProvider>,
+    public_domain: Option<String>,
+) -> Router {
+    router_with_dependencies_and_ceremony_keys(
+        internal_api_key,
+        dsc_issue_gateway_key,
+        None,
+        false,
+        registry_store,
+        document_store,
+        csca_lifecycle_store,
+        profile_store,
+        flow_envelopes,
+        public_domain,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+pub fn router_with_dependencies_and_ceremony_keys(
+    internal_api_key: String,
+    dsc_issue_gateway_key: Option<String>,
+    csca_issue_gateway_key: Option<String>,
+    beta_csca_issuance_enabled: bool,
     registry_store: Option<RegistryStore>,
     document_store: Option<DocumentStore>,
     csca_lifecycle_store: Option<CscaLifecycleStore>,
@@ -208,6 +237,10 @@ pub fn router_with_dependencies_and_dsc_key(
         .route(
             "/v1/signing-keys/issuer-identities/dsc-certificate",
             post(issue_public_dsc_certificate),
+        )
+        .route(
+            "/v1/signing-keys/issuer-identities/csca-self-signed-certificate",
+            post(issue_public_csca_self_signed_certificate),
         )
         .route(
             "/v1/signing-keys/services/{service_id}/certificate",
@@ -424,6 +457,8 @@ pub fn router_with_dependencies_and_dsc_key(
         .with_state(AppState {
             internal_api_key: Arc::from(internal_api_key),
             dsc_issue_gateway_key: dsc_issue_gateway_key.map(Arc::from),
+            csca_issue_gateway_key: csca_issue_gateway_key.map(Arc::from),
+            beta_csca_issuance_enabled,
             registry_store,
             document_store,
             csca_lifecycle_store,
@@ -569,6 +604,20 @@ struct DscCertificateIssueRequest {
     common_name: String,
     validity_days: u8,
     idempotency_key: String,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct CscaSelfSignedIssueRequest {
+    #[serde(default)]
+    organization_id: Option<String>,
+    issuer_did: String,
+    certificate_id: String,
+    credential_format: String,
+    country: String,
+    organization: String,
+    common_name: String,
+    validity_days: u16,
 }
 
 #[derive(Debug, Deserialize)]
@@ -2297,6 +2346,357 @@ async fn generate_public_issuer_csr(
         "issuer_did": input.issuer_did,
         "subject": {"country": input.country, "organization": input.organization, "common_name": input.common_name}
     })).into_response()
+}
+
+async fn issue_public_csca_self_signed_certificate(
+    State(state): State<AppState>,
+    Query(scope): Query<OrganizationScope>,
+    headers: HeaderMap,
+    Json(input): Json<CscaSelfSignedIssueRequest>,
+) -> Response {
+    if !state.beta_csca_issuance_enabled || state.csca_issue_gateway_key.is_none() {
+        return public_error(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "Beta CSCA ceremony is disabled.",
+        );
+    }
+    if !authorize_csca_issue(&state, &headers) {
+        return public_error(
+            StatusCode::UNAUTHORIZED,
+            "CSCA operator authority is required.",
+        );
+    }
+    let Some(actor_id) = headers
+        .get("x-user-id")
+        .and_then(|value| value.to_str().ok())
+        .filter(|value| {
+            !value.is_empty() && value.len() <= 128 && !value.chars().any(char::is_control)
+        })
+    else {
+        return public_error(
+            StatusCode::UNAUTHORIZED,
+            "Trusted operator identity is required.",
+        );
+    };
+    match issue_managed_csca_self_signed(&state, &scope.organization_id, actor_id, &input).await {
+        Ok(result) => Json(result).into_response(),
+        Err(error) => error.into_response(),
+    }
+}
+
+async fn issue_managed_csca_self_signed(
+    state: &AppState,
+    organization_id: &str,
+    actor_id: &str,
+    input: &CscaSelfSignedIssueRequest,
+) -> Result<Value, PublicSigningError> {
+    let identity = IssuerIdentityRequest {
+        organization_id: input.organization_id.clone(),
+        issuer_did: input.issuer_did.clone(),
+        key_purpose: "csca".into(),
+        credential_format: input.credential_format.clone(),
+        algorithm: "ES256".into(),
+        key_attestation_policy: None,
+        cert_pem: None,
+        cert_chain_pem: None,
+    };
+    validate_identity_scope(organization_id, &identity)?;
+    if !input.credential_format.eq_ignore_ascii_case("ICAO_EMRTD")
+        || !(1..=3650).contains(&input.validity_days)
+        || input.certificate_id.is_empty()
+        || input.certificate_id.len() > 128
+        || !input
+            .certificate_id
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || b"-_.:".contains(&byte))
+    {
+        return Err(public_failure(
+            StatusCode::UNPROCESSABLE_ENTITY,
+            "CSCA ceremony request is invalid.",
+        ));
+    }
+    let digest_body = json!({
+        "organization_id": organization_id,
+        "issuer_did": input.issuer_did,
+        "certificate_id": input.certificate_id,
+        "credential_format": "ICAO_EMRTD",
+        "country": input.country,
+        "organization": input.organization,
+        "common_name": input.common_name,
+        "validity_days": input.validity_days,
+    });
+    let request_digest = format!(
+        "{:x}",
+        Sha256::digest(serde_json::to_vec(&digest_body).expect("CSCA request serializes"))
+    );
+    let lifecycle_store = state.csca_lifecycle_store.as_ref().ok_or_else(|| {
+        public_failure(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "CSCA lifecycle storage is unavailable.",
+        )
+    })?;
+    let registry = state.registry_store.as_ref().ok_or_else(|| {
+        public_failure(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "Signing registry is unavailable.",
+        )
+    })?;
+    let replay = |document: &CscaLifecycleDocument| -> Result<Option<Value>, PublicSigningError> {
+        let Some(record) = document.certificates.get(&input.certificate_id) else {
+            return Ok(None);
+        };
+        if record
+            .metadata
+            .pointer("/csca_ceremony/request_digest")
+            .and_then(Value::as_str)
+            != Some(&request_digest)
+        {
+            return Err(public_failure(
+                StatusCode::CONFLICT,
+                "CSCA certificate identifier is already used.",
+            ));
+        }
+        record
+            .metadata
+            .pointer("/csca_ceremony/public_result")
+            .cloned()
+            .ok_or_else(|| {
+                public_failure(
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    "Stored CSCA ceremony result is malformed.",
+                )
+            })
+            .map(Some)
+    };
+    let now = chrono::Utc::now();
+    let mut document = lifecycle_store
+        .load(organization_id, now)
+        .await
+        .map_err(csca_public_failure)?;
+    if let Some(result) = replay(&document)? {
+        return Ok(result);
+    }
+    let lease = registry
+        .acquire_rotation_lease(organization_id)
+        .await
+        .map_err(|_| {
+            public_failure(
+                StatusCode::SERVICE_UNAVAILABLE,
+                "Tenant signing lease is unavailable.",
+            )
+        })?
+        .ok_or_else(|| public_failure(StatusCode::CONFLICT, "Tenant signing state is changing."))?;
+    document = lifecycle_store
+        .load(organization_id, now)
+        .await
+        .map_err(csca_public_failure)?;
+    if let Some(result) = replay(&document)? {
+        return Ok(result);
+    }
+    let profile = one_matching_profile(state, organization_id, &identity).await?;
+    let compatibility = state.compatibility.as_ref().ok_or_else(|| {
+        public_failure(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "Issuer identity service is unavailable.",
+        )
+    })?;
+    let current_jwk =
+        checked_dsc_profile_key(compatibility, organization_id, &profile, &identity).await?;
+    let subject = CsrSubject {
+        country: &input.country,
+        organization: &input.organization,
+        common_name: &input.common_name,
+    };
+    let csr = certificate_csr::prepare(&current_jwk, "ES256", &subject).map_err(|_| {
+        public_failure(
+            StatusCode::UNPROCESSABLE_ENTITY,
+            "CSCA subject or managed key is invalid.",
+        )
+    })?;
+    let sign = |payload: &[u8]| IssuerDidSignRequest {
+        organization_id: organization_id.into(),
+        issuer_did: input.issuer_did.clone(),
+        credential_format: "ICAO_EMRTD".into(),
+        key_purpose: "csca".into(),
+        algorithm: "ES256".into(),
+        payload_b64: Some(URL_SAFE_NO_PAD.encode(payload)),
+        payload_hex: None,
+    };
+    let csr_signed = compatibility
+        .sign_with_issuer_did(&sign(csr.signing_bytes()))
+        .await
+        .map_err(dsc_compat_failure)?;
+    let csr_signature = managed_der_signature(&csr_signed)?;
+    let csr_pem = csr.finish(&csr_signature).map_err(|_| {
+        public_failure(
+            StatusCode::BAD_GATEWAY,
+            "Managed CSCA CSR signature did not verify.",
+        )
+    })?;
+    let verified = VerifiedDscSubject::from_csr_pem(&csr_pem, &current_jwk).map_err(|_| {
+        public_failure(
+            StatusCode::BAD_GATEWAY,
+            "Managed CSCA CSR proof did not verify.",
+        )
+    })?;
+    if verified.country().as_deref() != Some(input.country.as_str()) {
+        return Err(public_failure(
+            StatusCode::UNPROCESSABLE_ENTITY,
+            "CSCA country is invalid.",
+        ));
+    }
+    let mut serial = uuid::Uuid::new_v4().into_bytes();
+    serial[0] &= 0x7f;
+    if serial[0] == 0 {
+        serial[0] = 1;
+    }
+    let prepared = certificate_issuance::prepare_csca(
+        &verified,
+        &serial,
+        input.validity_days,
+        std::time::SystemTime::now(),
+    )
+    .map_err(|_| {
+        public_failure(
+            StatusCode::UNPROCESSABLE_ENTITY,
+            "CSCA certificate policy is invalid.",
+        )
+    })?;
+    let metadata = prepared.metadata().map_err(|_| {
+        public_failure(
+            StatusCode::UNPROCESSABLE_ENTITY,
+            "CSCA certificate metadata is invalid.",
+        )
+    })?;
+    let certificate_signed = compatibility
+        .sign_with_issuer_did(&sign(prepared.signing_bytes()))
+        .await
+        .map_err(dsc_compat_failure)?;
+    let certificate_signature = managed_der_signature(&certificate_signed)?;
+    let certificate_pem = prepared.finish(&certificate_signature).map_err(|_| {
+        public_failure(
+            StatusCode::BAD_GATEWAY,
+            "Managed CSCA certificate signature did not verify.",
+        )
+    })?;
+    let current_profile = one_matching_profile(state, organization_id, &identity).await?;
+    if current_profile != profile {
+        return Err(public_failure(
+            StatusCode::CONFLICT,
+            "CSCA issuer profile changed during ceremony.",
+        ));
+    }
+    let latest_jwk =
+        checked_dsc_profile_key(compatibility, organization_id, &current_profile, &identity)
+            .await?;
+    if !documents::same_public_jwk(&current_jwk, &latest_jwk) {
+        return Err(public_failure(
+            StatusCode::CONFLICT,
+            "Managed CSCA key rotated during ceremony.",
+        ));
+    }
+    let result = json!({
+        "certificate_id": input.certificate_id,
+        "certificate_pem": certificate_pem,
+        "chain_pem": "",
+        "issuer_did": input.issuer_did,
+        "subject": {"country": input.country, "organization": input.organization, "common_name": input.common_name},
+        "serial": metadata.serial_hex,
+        "not_before": metadata.not_before,
+        "not_after": metadata.not_after,
+        "status": "issued",
+    });
+    let enrollment = CscaCertificateEnrollment {
+        organization_id: input.organization_id.clone(),
+        issuer_did: input.issuer_did.clone(),
+        credential_format: "ICAO_EMRTD".into(),
+        algorithm: "ES256".into(),
+        certificate_id: input.certificate_id.clone(),
+        cert_pem: certificate_pem.clone(),
+        cert_chain_pem: String::new(),
+    };
+    let resolved = compatibility
+        .resolve_issuer_did(&ResolveIssuerDidRequest {
+            organization_id: organization_id.into(),
+            issuer_did: input.issuer_did.clone(),
+            verification_method_id: None,
+            credential_format: Some("ICAO_EMRTD".into()),
+            key_purpose: Some("csca".into()),
+            algorithm: Some("ES256".into()),
+        })
+        .await
+        .map_err(dsc_compat_failure)?;
+    let mut imported = managed_csca_import(&enrollment, &current_profile, &resolved, &latest_jwk)?;
+    let profile_document = state
+        .profile_store
+        .as_ref()
+        .ok_or_else(|| {
+            public_failure(
+                StatusCode::SERVICE_UNAVAILABLE,
+                "Issuer identity storage is unavailable.",
+            )
+        })?
+        .list(organization_id)
+        .await
+        .map_err(|_| {
+            public_failure(
+                StatusCode::SERVICE_UNAVAILABLE,
+                "Issuer identity storage is unavailable.",
+            )
+        })?;
+    let profile_still_current = profile_document
+        .get("profiles")
+        .and_then(Value::as_array)
+        .is_some_and(|profiles| profiles.iter().any(|candidate| candidate == &profile));
+    if !profile_still_current {
+        return Err(public_failure(
+            StatusCode::CONFLICT,
+            "CSCA issuer profile changed during ceremony.",
+        ));
+    }
+    let profile_revision = profile_document
+        .get("revision")
+        .and_then(Value::as_u64)
+        .ok_or_else(|| {
+            public_failure(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "Issuer profile revision is malformed.",
+            )
+        })?;
+    imported.metadata = json!({
+        "issuer_did": input.issuer_did,
+        "csca_ceremony": {"request_digest": request_digest, "public_result": result, "actor_id": actor_id},
+    });
+    document
+        .import(&input.certificate_id, imported, chrono::Utc::now())
+        .map_err(csca_public_failure)?;
+    lifecycle_store
+        .save_with_rotation_lease(&document, &lease, profile_revision)
+        .await
+        .map_err(csca_public_failure)?;
+    Ok(result)
+}
+
+fn csca_public_failure(error: CscaLifecycleError) -> PublicSigningError {
+    let (status, detail) = match error {
+        CscaLifecycleError::Conflict(_) | CscaLifecycleError::ConcurrentModification => (
+            StatusCode::CONFLICT,
+            "CSCA lifecycle changed during ceremony.",
+        ),
+        CscaLifecycleError::Invalid(_) => (
+            StatusCode::UNPROCESSABLE_ENTITY,
+            "CSCA certificate is invalid.",
+        ),
+        CscaLifecycleError::Storage(_) => (
+            StatusCode::SERVICE_UNAVAILABLE,
+            "CSCA lifecycle storage is unavailable.",
+        ),
+        _ => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "CSCA lifecycle storage is malformed.",
+        ),
+    };
+    public_failure(status, detail)
 }
 
 async fn issue_public_dsc_certificate(
@@ -6742,6 +7142,26 @@ fn authorize_dsc_issue(state: &AppState, headers: &HeaderMap) -> bool {
     expected.len() == supplied.len() && expected.ct_eq(supplied).unwrap_u8() == 1
 }
 
+fn authorize_csca_issue(state: &AppState, headers: &HeaderMap) -> bool {
+    if !state.beta_csca_issuance_enabled {
+        return false;
+    }
+    let Some(expected) = state.csca_issue_gateway_key.as_ref() else {
+        return false;
+    };
+    if expected.as_ref() == state.internal_api_key.as_ref()
+        || state.dsc_issue_gateway_key.as_deref() == Some(expected.as_ref())
+    {
+        return false;
+    }
+    let supplied = headers
+        .get("x-api-key")
+        .and_then(|value| value.to_str().ok())
+        .unwrap_or_default();
+    expected.len() == supplied.len()
+        && expected.as_bytes().ct_eq(supplied.as_bytes()).unwrap_u8() == 1
+}
+
 async fn health() -> Json<HealthResponse> {
     Json(HealthResponse {
         status: "healthy",
@@ -6834,6 +7254,16 @@ async fn openapi() -> Json<serde_json::Value> {
                     "409": {"description": "Issuer state or idempotency claim changed"},
                     "422": {"description": "Issuance request violates certificate policy"},
                     "503": {"description": "Managed KMS or issuance storage unavailable"}
+                }}
+            },
+            "/v1/signing-keys/issuer-identities/csca-self-signed-certificate": {
+                "post": {"summary": "Perform Beta KMS-backed CSCA Self-Signed Certificate Ceremony", "responses": {
+                    "200": {"description": "Verified self-signed CSCA certificate enrolled in tenant lifecycle or replayed"},
+                    "401": {"description": "Dedicated Gateway CSCA operator credential is missing"},
+                    "403": {"description": "Organization context is forbidden"},
+                    "409": {"description": "Profile, key, lifecycle, or certificate identifier changed"},
+                    "422": {"description": "CSCA ceremony request violates certificate policy"},
+                    "503": {"description": "Beta ceremony, KMS, or storage unavailable"}
                 }}
             },
             "/v1/signing-keys/services/{service_id}/certificate": {
@@ -6961,6 +7391,95 @@ mod public_contract_tests {
         );
     }
 
+    #[tokio::test]
+    async fn csca_ceremony_requires_beta_and_its_own_gateway_authority() {
+        let key = "dedicated-csca-operator-gateway-key-32-chars";
+        let payload = json!({
+            "issuer_did": "did:web:beta.example:orgs:org-a",
+            "certificate_id": "csca-pilot-1",
+            "credential_format": "ICAO_EMRTD",
+            "country": "US", "organization": "ElevenID Beta", "common_name": "Pilot CSCA",
+            "validity_days": 365
+        });
+        let request = |key: &str, body: Value| {
+            Request::post(
+            "/v1/signing-keys/issuer-identities/csca-self-signed-certificate?organization_id=org-a"
+        ).header("content-type", "application/json")
+            .header("x-api-key", key)
+            .header("x-user-id", "operator-1")
+            .body(Body::from(body.to_string())).unwrap()
+        };
+        let disabled = router_with_dependencies_and_ceremony_keys(
+            "internal-signing-key-32-characters-long".into(),
+            None,
+            Some(key.into()),
+            false,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+        );
+        assert_eq!(
+            disabled
+                .oneshot(request(key, payload.clone()))
+                .await
+                .unwrap()
+                .status(),
+            StatusCode::SERVICE_UNAVAILABLE
+        );
+        let enabled = router_with_dependencies_and_ceremony_keys(
+            "internal-signing-key-32-characters-long".into(),
+            Some("dedicated-dsc-operator-gateway-key-32-chars".into()),
+            Some(key.into()),
+            true,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+        );
+        for wrong in [
+            "internal-signing-key-32-characters-long",
+            "dedicated-dsc-operator-gateway-key-32-chars",
+            "forged",
+        ] {
+            assert_eq!(
+                enabled
+                    .clone()
+                    .oneshot(request(wrong, payload.clone()))
+                    .await
+                    .unwrap()
+                    .status(),
+                StatusCode::UNAUTHORIZED
+            );
+        }
+        assert_eq!(
+            enabled
+                .clone()
+                .oneshot(request(key, payload.clone()))
+                .await
+                .unwrap()
+                .status(),
+            StatusCode::SERVICE_UNAVAILABLE
+        );
+        let mut forged = payload;
+        forged["key_reference"] = json!("attacker-selected-kms-key");
+        assert_eq!(
+            enabled
+                .oneshot(request(key, forged))
+                .await
+                .unwrap()
+                .status(),
+            StatusCode::UNPROCESSABLE_ENTITY
+        );
+        assert!(openapi().await.0["paths"]
+            ["/v1/signing-keys/issuer-identities/csca-self-signed-certificate"]["post"]
+            .is_object());
+    }
+
     #[test]
     fn dsc_issuance_public_errors_do_not_disclose_managed_key_references() {
         let reference = "kms-secret-key-locator";
@@ -7058,7 +7577,7 @@ mod public_contract_tests {
                     .is_some_and(|path| path.starts_with("/v1/signing-keys"))
             })
             .collect::<Vec<_>>();
-        assert_eq!(declared.len(), 38, "review route additions explicitly");
+        assert_eq!(declared.len(), 39, "review route additions explicitly");
         let app = router_with_internal_api_key("test-only".into())
             .route_layer(middleware::from_fn(mark_matched_route));
         let unknown = app
@@ -7392,6 +7911,8 @@ mod public_contract_tests {
         let state = AppState {
             internal_api_key: Arc::from("test-key"),
             dsc_issue_gateway_key: None,
+            csca_issue_gateway_key: None,
+            beta_csca_issuance_enabled: false,
             registry_store: Some(store.clone()),
             document_store: None,
             csca_lifecycle_store: None,
@@ -8317,6 +8838,8 @@ mod public_contract_tests {
         let state = AppState {
             internal_api_key: Arc::from("test-key"),
             dsc_issue_gateway_key: None,
+            csca_issue_gateway_key: None,
+            beta_csca_issuance_enabled: false,
             registry_store: None,
             document_store: None,
             csca_lifecycle_store: None,
@@ -8345,6 +8868,8 @@ mod public_contract_tests {
         let state = AppState {
             internal_api_key: Arc::from("test-key"),
             dsc_issue_gateway_key: None,
+            csca_issue_gateway_key: None,
+            beta_csca_issuance_enabled: false,
             registry_store: None,
             document_store: None,
             csca_lifecycle_store: None,

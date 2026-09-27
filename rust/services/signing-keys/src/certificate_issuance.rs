@@ -45,6 +45,18 @@ pub enum DscCertificateError {
     InvalidSignature,
 }
 
+#[derive(Debug, Error, PartialEq, Eq)]
+pub enum CscaCertificateError {
+    #[error("CSCA serial number is invalid")]
+    InvalidSerial,
+    #[error("CSCA validity is outside beta policy")]
+    InvalidValidity,
+    #[error("CSCA certificate encoding failed")]
+    Encoding,
+    #[error("KMS signature does not verify against the current CSCA key")]
+    InvalidSignature,
+}
+
 /// A DSC CSR whose ES256 proof of possession and current KMS key match passed.
 pub struct VerifiedDscSubject {
     subject: Name,
@@ -157,6 +169,97 @@ pub struct PreparedDscCertificate {
     issuer_der: Vec<u8>,
 }
 
+/// A self-issued CA certificate whose only signing input is public DER TBS.
+pub struct PreparedCscaCertificate {
+    tbs: TbsCertificate,
+    tbs_der: Vec<u8>,
+}
+
+impl PreparedCscaCertificate {
+    pub fn signing_bytes(&self) -> &[u8] {
+        &self.tbs_der
+    }
+
+    pub fn metadata(&self) -> Result<DscCertificateMetadata, CscaCertificateError> {
+        certificate_metadata(&self.tbs).map_err(|_| CscaCertificateError::Encoding)
+    }
+
+    pub fn finish(self, signature_der: &[u8]) -> Result<String, CscaCertificateError> {
+        if !der_ecdsa_signature(signature_der) {
+            return Err(CscaCertificateError::InvalidSignature);
+        }
+        let certificate = Certificate {
+            tbs_certificate: self.tbs,
+            signature_algorithm: AlgorithmIdentifierOwned {
+                oid: ECDSA_SHA256,
+                parameters: None,
+            },
+            signature: BitString::from_bytes(signature_der)
+                .map_err(|_| CscaCertificateError::Encoding)?,
+        };
+        let der = certificate
+            .to_der()
+            .map_err(|_| CscaCertificateError::Encoding)?;
+        if !verify_certificate_signature(&der, &der)
+            .map_err(|_| CscaCertificateError::InvalidSignature)?
+        {
+            return Err(CscaCertificateError::InvalidSignature);
+        }
+        certificate
+            .to_pem(der::pem::LineEnding::LF)
+            .map_err(|_| CscaCertificateError::Encoding)
+    }
+}
+
+pub fn prepare_csca(
+    subject: &VerifiedDscSubject,
+    serial_bytes: &[u8],
+    validity_days: u16,
+    now: SystemTime,
+) -> Result<PreparedCscaCertificate, CscaCertificateError> {
+    if !(1..=3650).contains(&validity_days) {
+        return Err(CscaCertificateError::InvalidValidity);
+    }
+    let serial =
+        SerialNumber::new(serial_bytes).map_err(|_| CscaCertificateError::InvalidSerial)?;
+    if serial_bytes.is_empty() || !serial_bytes.iter().any(|byte| *byte != 0) {
+        return Err(CscaCertificateError::InvalidSerial);
+    }
+    let end = now
+        .checked_add(Duration::from_secs(u64::from(validity_days) * 24 * 60 * 60))
+        .ok_or(CscaCertificateError::InvalidValidity)?;
+    let validity = Validity {
+        not_before: Time::try_from(now).map_err(|_| CscaCertificateError::InvalidValidity)?,
+        not_after: Time::try_from(end).map_err(|_| CscaCertificateError::InvalidValidity)?,
+    };
+    let constraints = BasicConstraints {
+        ca: true,
+        path_len_constraint: Some(0),
+    }
+    .to_extension(&subject.subject, &[])
+    .map_err(|_| CscaCertificateError::Encoding)?;
+    let usage = KeyUsage(KeyUsages::KeyCertSign.into())
+        .to_extension(&subject.subject, std::slice::from_ref(&constraints))
+        .map_err(|_| CscaCertificateError::Encoding)?;
+    let tbs = TbsCertificate {
+        version: Version::V3,
+        serial_number: serial,
+        signature: AlgorithmIdentifierOwned {
+            oid: ECDSA_SHA256,
+            parameters: None,
+        },
+        issuer: subject.subject.clone(),
+        validity,
+        subject: subject.subject.clone(),
+        subject_public_key_info: subject.public_key.clone(),
+        issuer_unique_id: None,
+        subject_unique_id: None,
+        extensions: Some(vec![constraints, usage]),
+    };
+    let tbs_der = tbs.to_der().map_err(|_| CscaCertificateError::Encoding)?;
+    Ok(PreparedCscaCertificate { tbs, tbs_der })
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DscCertificateMetadata {
     pub serial_hex: String,
@@ -170,26 +273,33 @@ impl PreparedDscCertificate {
     }
 
     pub fn metadata(&self) -> Result<DscCertificateMetadata, DscCertificateError> {
-        let timestamp = |time: Time| {
-            i64::try_from(time.to_unix_duration().as_secs())
-                .ok()
-                .and_then(|seconds| chrono::DateTime::<chrono::Utc>::from_timestamp(seconds, 0))
-                .map(|time| time.to_rfc3339_opts(chrono::SecondsFormat::Secs, true))
-                .ok_or(DscCertificateError::Encoding)
-        };
-        Ok(DscCertificateMetadata {
-            serial_hex: self
-                .tbs
-                .serial_number
-                .as_bytes()
-                .iter()
-                .map(|byte| format!("{byte:02x}"))
-                .collect(),
-            not_before: timestamp(self.tbs.validity.not_before)?,
-            not_after: timestamp(self.tbs.validity.not_after)?,
-        })
+        certificate_metadata(&self.tbs)
     }
+}
 
+fn certificate_metadata(
+    tbs: &TbsCertificate,
+) -> Result<DscCertificateMetadata, DscCertificateError> {
+    let timestamp = |time: Time| {
+        i64::try_from(time.to_unix_duration().as_secs())
+            .ok()
+            .and_then(|seconds| chrono::DateTime::<chrono::Utc>::from_timestamp(seconds, 0))
+            .map(|time| time.to_rfc3339_opts(chrono::SecondsFormat::Secs, true))
+            .ok_or(DscCertificateError::Encoding)
+    };
+    Ok(DscCertificateMetadata {
+        serial_hex: tbs
+            .serial_number
+            .as_bytes()
+            .iter()
+            .map(|byte| format!("{byte:02x}"))
+            .collect(),
+        not_before: timestamp(tbs.validity.not_before)?,
+        not_after: timestamp(tbs.validity.not_after)?,
+    })
+}
+
+impl PreparedDscCertificate {
     /// Accept only a DER ECDSA signature over exactly `signing_bytes()`.
     pub fn finish(self, signature_der: &[u8]) -> Result<String, DscCertificateError> {
         if !der_ecdsa_signature(signature_der) {
@@ -526,6 +636,41 @@ mod tests {
             prepare_dsc(&subject, &short_pem, "", &short_jwk, &[1], 2, short_now),
             Err(DscCertificateError::InvalidValidity)
         ));
+    }
+
+    #[test]
+    fn prepares_self_signed_csca_with_critical_ca_and_signing_usage() {
+        let (subject, _, _) = fixture();
+        let now = SystemTime::now();
+        let prepared = prepare_csca(&subject, &[1; 16], 365, now).unwrap();
+        assert!(!prepared.signing_bytes().is_empty());
+        assert_eq!(prepared.tbs.version, Version::V3);
+        assert_eq!(prepared.tbs.subject, prepared.tbs.issuer);
+        let (critical, constraints) = prepared.tbs.get::<BasicConstraints>().unwrap().unwrap();
+        assert!(critical);
+        assert!(constraints.ca);
+        assert_eq!(constraints.path_len_constraint, Some(0));
+        let (_, usage) = prepared.tbs.get::<KeyUsage>().unwrap().unwrap();
+        assert!(usage.key_cert_sign());
+        assert_eq!(prepared.metadata().unwrap().serial_hex.len(), 32);
+        assert!(matches!(
+            prepared.finish(&[0u8; 64]),
+            Err(CscaCertificateError::InvalidSignature)
+        ));
+        assert!(matches!(
+            prepare_csca(&subject, &[0], 365, now),
+            Err(CscaCertificateError::InvalidSerial)
+        ));
+        assert!(matches!(
+            prepare_csca(&subject, &[0xff; 20], 365, now),
+            Err(CscaCertificateError::InvalidSerial)
+        ));
+        for days in [0, 3651] {
+            assert!(matches!(
+                prepare_csca(&subject, &[1], days, now),
+                Err(CscaCertificateError::InvalidValidity)
+            ));
+        }
     }
 
     #[test]
