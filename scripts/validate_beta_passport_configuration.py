@@ -240,12 +240,14 @@ def validate_physical_model(model, files, provider_registry=None):
         raise PassportConfigurationError("Beta physical provider services are incomplete") from exc
     networks = model.get("networks")
     physical_require(isinstance(networks, dict)
+                     and set(networks) == {"marty-network", "passport-provider-signing"}
                      and isinstance(networks.get("passport-provider-signing"), dict)
                      and networks["passport-provider-signing"].get("internal") is True
                      and networks["passport-provider-signing"].get("name")
                      == "elevenid-beta_passport-provider-signing"
                      and isinstance(networks.get("marty-network"), dict)
-                     and networks["marty-network"].get("name") == "elevenid-beta-network",
+                     and networks["marty-network"].get("name") == "elevenid-beta-network"
+                     and not any(definition.get("external") for definition in networks.values()),
                      "Beta physical provider networks are not isolated")
     physical_secrets = {
         "passport_physical_provider_api_key", "passport_provider_webhook_secret",
@@ -278,14 +280,16 @@ def validate_physical_model(model, files, provider_registry=None):
     volume_definitions = model.get("volumes", {})
     physical_require(isinstance(volume_definitions, dict),
                      "Beta physical provider stack volumes are invalid")
-    for definition in volume_definitions.values():
+    for volume_name, definition in volume_definitions.items():
         physical_require(isinstance(definition, dict)
                          and not definition.get("driver_opts")
-                         and not definition.get("external"),
+                         and not definition.get("external")
+                         and definition.get("name") == f"elevenid-beta_{volume_name}",
                          "Beta physical provider named volume escaped isolation")
     for name, service in services.items():
         service_networks = service.get("networks", {})
-        physical_require(isinstance(service_networks, dict),
+        physical_require(isinstance(service_networks, dict)
+                         and set(service_networks) <= set(networks),
                          "Beta physical provider service network is invalid")
         bridge_mode = (name == "issuance-canvas-localhost-bridge"
                        and service.get("network_mode") == "service:issuance"
@@ -323,6 +327,9 @@ def validate_physical_model(model, files, provider_registry=None):
                              "Beta physical provider volume source is unverified")
             source = volume.get("source", "")
             kind = volume.get("type")
+            if kind == "volume":
+                physical_require(source in volume_definitions,
+                                 "Beta physical provider named volume is undefined")
             if kind == "bind":
                 physical_require(isinstance(source, str),
                                  "Beta physical provider bind source is unverified")

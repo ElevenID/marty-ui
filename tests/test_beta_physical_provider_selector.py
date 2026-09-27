@@ -273,6 +273,14 @@ def test_physical_mode_plan_only_blocks_live_deploy_and_restore() -> None:
         "driver": "local", "driver_opts": {"type": "none", "o": "bind",
             "device": str(Path(candidate["secrets"][
                 "passport_callback_signer_bao_token"]["file"]).parent)}}}),
+    lambda candidate: (candidate.update(volumes={"shared": {
+        "name": "marty-selfhost-prod_postgres"}}),
+        candidate["services"].update(auth={"networks": {"marty-network": {}},
+            "volumes": [{"type": "volume", "source": "shared",
+                         "target": "/prod"}]})),
+    lambda candidate: (candidate["networks"].update(shared={
+        "name": "marty-selfhost-prod-network", "external": True}),
+        candidate["services"].update(auth={"networks": {"shared": {}}})),
     lambda candidate: candidate["services"].update(auth={
         "networks": {"marty-network": {}},
         "build": {"context": str(ROOT), "args": {"BAO_TOKEN": Path(candidate[
