@@ -1,0 +1,8 @@
+# Acceptance-only image pins for disposable Compose projects.
+services:
+  gateway:
+    image: ${MARTY_SERVICES_IMAGE:?set immutable services image from signed release}
+  flow:
+    image: ${MARTY_SERVICES_IMAGE:?set immutable services image from signed release}
+  issuance-native:
+    image: ${MARTY_SERVICES_IMAGE:?set immutable services image from signed release}
