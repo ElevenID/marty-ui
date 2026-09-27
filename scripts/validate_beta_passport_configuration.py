@@ -247,6 +247,49 @@ def validate_physical_model(model, files, provider_registry=None):
                      and isinstance(networks.get("marty-network"), dict)
                      and networks["marty-network"].get("name") == "elevenid-beta-network",
                      "Beta physical provider networks are not isolated")
+    physical_secrets = {
+        "passport_physical_provider_api_key", "passport_provider_webhook_secret",
+        "passport_callback_signer_api_key", "passport_callback_signer_bao_token",
+    }
+    expected_secret_consumers = {
+        "issuance-native": {"passport_physical_provider_api_key"},
+        "passport-callback-signer-supported": {
+            "passport_callback_signer_api_key", "passport_callback_signer_bao_token"},
+        "passport-provider-ingress": {
+            "passport_callback_signer_api_key", "passport_provider_webhook_secret"},
+    }
+    for name, service in services.items():
+        service_networks = service.get("networks", {})
+        physical_require(isinstance(service_networks, dict),
+                         "Beta physical provider service network is invalid")
+        bridge_mode = (name == "issuance-canvas-localhost-bridge"
+                       and service.get("network_mode") == "service:issuance"
+                       and set(services.get("issuance", {}).get("networks", {}))
+                       == {"marty-network"})
+        physical_require((not service.get("network_mode") or bridge_mode)
+                         and not service.get("volumes_from"),
+                         "Beta physical provider service inherited network or volumes")
+        if "passport-provider-signing" in service_networks:
+            physical_require(name in {
+                "passport-callback-signer-supported", "passport-provider-ingress", "openbao"},
+                "Beta physical signer network has an unauthorized member")
+        mounted = physical_secret_sources(service)
+        physical_require((mounted & physical_secrets)
+                         == expected_secret_consumers.get(name, set()),
+                         "Beta physical secret has an unauthorized consumer")
+        volumes = service.get("volumes", [])
+        physical_require(isinstance(volumes, list),
+                         "Beta physical provider service volume is invalid")
+        for volume in volumes:
+            source = volume.get("source", "") if isinstance(volume, dict) else str(volume)
+            canvas_config = Path(__file__).resolve().parents[1] / "config/canvas/production-local.rb"
+            known_beta_canvas_config = (name == "canvas-real" and isinstance(source, str)
+                                        and Path(source).absolute() == canvas_config
+                                        and not Path(source).is_symlink())
+            physical_require(known_beta_canvas_config
+                             or not re.search(r"prod|production|selfhost", source,
+                                              re.IGNORECASE),
+                             "Beta physical provider stack references production volume")
     for service, expected in ((services["gateway"], {"marty-network"}),
                               (services["flow"], {"marty-network"}),
                               (services["issuance-native"], {"marty-network"}),
@@ -269,9 +312,14 @@ def validate_physical_model(model, files, provider_registry=None):
         physical_require(isinstance(labels, dict)
                          and not any(key.startswith("com.docker.compose.") for key in labels),
                          "Beta physical provider callback service labels are invalid")
-    for name in ("gateway", "flow", "signing-keys"):
+    for name in ("gateway", "signing-keys"):
         physical_require(not physical_secret_sources(services[name]),
                          "Beta physical provider core service gained a secret mount")
+    physical_require(physical_secret_sources(services["flow"]) == {
+        "flow_workload_client_cert", "flow_workload_client_key",
+        "flow_workload_server_cert", "flow_workload_server_key",
+        "workload_identity_ca_cert"},
+        "Beta physical provider flow workload secret mounts are invalid")
     physical_require(physical_secret_sources(services["issuance-native"])
                      == {"passport_physical_provider_api_key"},
                      "Beta physical provider native secret mounts are invalid")
@@ -394,6 +442,36 @@ def validate_physical_model(model, files, provider_registry=None):
                      and gateway.get("SIGNING_KEYS_DSC_ISSUE_GATEWAY_KEY")
                      != gateway.get("SIGNING_KEYS_CSCA_ISSUE_GATEWAY_KEY"),
                      "Beta physical provider operator credentials are invalid")
+    grpc_token = gateway.get("GRPC_SERVICE_TOKEN")
+    core_signing_key = signing.get("SIGNING_KEYS_INTERNAL_API_KEY")
+    physical_require(isinstance(grpc_token, str) and grpc_token
+                     and all(owner.get("GRPC_SERVICE_TOKEN") == grpc_token
+                             for owner in (flow, native))
+                     and isinstance(core_signing_key, str) and core_signing_key
+                     and all(owner.get("SIGNING_KEYS_INTERNAL_API_KEY") == core_signing_key
+                             for owner in (gateway, native)),
+                     "Beta physical provider internal authentication parity is invalid")
+    csca_flag = "SIGNING_KEYS_BETA_CSCA_ISSUANCE_ENABLED"
+    flag_holders = {name for name, service in services.items()
+                    if service.get("environment") is not None
+                    and csca_flag in environment(service)}
+    physical_require(flag_holders == {"signing-keys"},
+                     "Beta physical provider CSCA ceremony holder is invalid")
+    for purpose, key_name in (("DSC", "SIGNING_KEYS_DSC_ISSUE_GATEWAY_KEY"),
+                              ("CSCA", "SIGNING_KEYS_CSCA_ISSUE_GATEWAY_KEY")):
+        credential = gateway[key_name]
+        holders = {name for name, service in services.items()
+                   if service.get("environment") is not None
+                   and environment(service).get(key_name)}
+        reused = any(service_reuses_credential(name, service, credential, key_name)
+                     for name, service in services.items())
+        physical_require(holders == {"gateway", "signing-keys"}
+                         and credential != core_signing_key and not reused
+                         and all(not environment(service).get(f"{key_name}_FILE")
+                                 for service in services.values()
+                                 if service.get("environment") is not None),
+                         f"Beta physical provider {purpose} operator credential isolation is invalid")
+        validate_mounted_sources(model, services, credential, purpose)
     physical_require(not any(service.get(name) for service in
                              (signer_service, ingress_service)
                              for name in ("ports", "build", "entrypoint", "command",

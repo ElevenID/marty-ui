@@ -54,6 +54,26 @@ if ($PlanOnly) {
     exit 0
 }
 
+# The switch is only a request for a plan. A caller may omit it while passing
+# a physical snapshot, so identify the snapshot and live beta service labels
+# before any restore action regardless of requested mode.
+$physicalServices = @("passport-callback-signer-supported", "passport-provider-ingress")
+$preflightSnapshot = Join-Path $resolvedArtifacts "pre-deploy-containers.json"
+if (Test-Path -LiteralPath $preflightSnapshot -PathType Leaf) {
+    $snapshotRecords = @(Get-Content -LiteralPath $preflightSnapshot -Raw | ConvertFrom-Json)
+    if (@($snapshotRecords | Where-Object { $_.service -in $physicalServices }).Count -gt 0) {
+        throw "Physical provider beta snapshot restore is blocked"
+    }
+}
+foreach ($service in $physicalServices) {
+    $ids = @(& docker ps -a --filter "label=com.docker.compose.project=elevenid-beta" `
+        --filter "label=com.docker.compose.service=$service" --format '{{.ID}}')
+    if ($LASTEXITCODE -ne 0) { throw "Could not inspect beta physical provider service labels" }
+    if (@($ids | Where-Object { $_ }).Count -gt 0) {
+        throw "Physical provider beta runtime restore is blocked"
+    }
+}
+
 $project = "elevenid-beta"
 $uiProject = "elevenid-beta-ui"
 $volumeHelperImage = "alpine@sha256:d9e853e87e55526f6b2917df91a2115c36dd7c696a35be12163d44e6e2a4b6bc"

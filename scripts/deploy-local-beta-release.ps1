@@ -1583,6 +1583,7 @@ $deploymentManifest = [ordered]@{
     source_kind = $sourceKind
     marty_ui_sha = $sourceId
     beta_origin = $BetaOrigin
+    passport_provider_mode = if ($EnablePassportPhysicalProvider) { "physical" } elseif ($EnablePassportNative) { "simulator" } else { "off" }
     compose_project = $script:BetaProject
     ui_compose_project = $script:BetaUiProject
     network = $script:BetaNetwork
