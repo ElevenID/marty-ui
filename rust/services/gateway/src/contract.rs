@@ -970,10 +970,10 @@ mod tests {
                 .expect("runtime")
                 .routes()
                 .len(),
-            445
+            446
         );
         let proxy = contract.proxy_route_table().expect("proxy");
-        assert_eq!(proxy.routes().len(), 458);
+        assert_eq!(proxy.routes().len(), 459);
         assert_eq!(
             route_for(
                 &proxy,
