@@ -15,11 +15,12 @@ from scripts.passport_supported_provisioning_plan import (
 
 
 SOURCE = "a" * 40
-LEGACY_SOURCE = "b" * 40
+LEGACY_SOURCE = "efd5da1e2d41419ce93721f98d314c7b911e6b5e"
 NOW = datetime(2026, 9, 27, 13, tzinfo=timezone.utc)
 SERVICES = "ghcr.io/elevenid/marty-ui-oss/services@sha256:" + "c" * 64
 MIGRATIONS = "ghcr.io/elevenid/marty-ui-oss/migrations@sha256:" + "d" * 64
-LEGACY = "ghcr.io/elevenid/marty-credentials-issuance@sha256:" + "e" * 64
+LEGACY_DIGEST = "sha256:e7bb482120837c68af6cec2f6d1d5276488de440b93fc811987860b7b99b4657"
+LEGACY = "ghcr.io/elevenid/marty-credentials-issuance@" + LEGACY_DIGEST
 
 
 def manifest() -> dict:
@@ -38,7 +39,7 @@ def manifest() -> dict:
          "repository": "ElevenID/marty-credentials", "version": "0.1.78",
          "commit": LEGACY_SOURCE, "artifacts": [
              {"type": "oci", "uri": "ghcr.io/elevenid/marty-credentials-issuance",
-              "digest": "sha256:" + "e" * 64},
+              "digest": LEGACY_DIGEST},
          ]},
     ]}
 
@@ -111,6 +112,29 @@ def test_release_rejects_unbound_credentials_image(tmp_path: Path) -> None:
     with pytest.raises(PlanError, match="attestation"):
         release_inputs(path, SOURCE, verify_ui=lambda *args: True,
                        attest=lambda *args: False)
+
+
+@pytest.mark.parametrize("field,value", [
+    ("version", "0.1.72"),
+    ("commit", "85b128a85426b3f5aeaf6f948ba5dfa2836e95d8"),
+    ("digest", "sha256:9f15b64bc0ec7a693339cada3142b2952a575d2b50ee89230aabe078d0026176"),
+])
+def test_release_rejects_signed_but_unfrozen_legacy_image(
+    tmp_path: Path, field: str, value: str,
+) -> None:
+    candidate = manifest()
+    legacy = candidate["components"][1]
+    if field == "digest":
+        legacy["artifacts"][0]["digest"] = value
+    else:
+        legacy[field] = value
+    path = tmp_path / "stack-manifest.json"
+    path.write_text(json.dumps(candidate), encoding="utf-8")
+    calls = []
+    with pytest.raises(PlanError, match="frozen Python route reference"):
+        release_inputs(path, SOURCE, verify_ui=lambda *args: True,
+                       attest=lambda *args: calls.append(args) or True)
+    assert calls == []
 
 
 def record_files(tmp_path: Path) -> tuple[Path, Path, dict, dict]:

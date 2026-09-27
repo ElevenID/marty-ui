@@ -33,6 +33,20 @@ RUN_ID = re.compile(r"[1-9][0-9]{0,19}\Z")
 UI_SERVICES = "ghcr.io/elevenid/marty-ui-oss/services"
 UI_MIGRATIONS = "ghcr.io/elevenid/marty-ui-oss/migrations"
 LEGACY = "ghcr.io/elevenid/marty-credentials-issuance"
+# The v0.1.78 release source matches all three SHA256 values in
+# marty-credentials/contracts/physical-passport-python-route-reference.json:
+# physical_document_routes.py 2206f15dfd8a8040e997cba0e4a7f27cc8e3f4e84d6094c62ae71beae5d90e37,
+# emrtd_signer_client.py 8064185f747bae091c5164a32915f83b435ccd6526434f5ddca5114cc6661472,
+# personalization_bureau_client.py 31d70c676c2b4e5e09d0e0ea6aa7bea37432b98984a5adffd5fea7e18ede9afb.
+# Its release digest asset, checksum manifest,
+# and hosted release-images.yml OCI attestation were verified together.
+# A signed older image with the nine routes is insufficient for rollback when
+# its route or bureau behavior differs from that frozen reference.
+FROZEN_LEGACY_RELEASE = (
+    "0.1.78",
+    "efd5da1e2d41419ce93721f98d314c7b911e6b5e",
+    "sha256:e7bb482120837c68af6cec2f6d1d5276488de440b93fc811987860b7b99b4657",
+)
 PLAN_WORKFLOW = "ElevenID/marty-ui/.github/workflows/passport-supported-provisioning-plan.yml"
 # This hosted attestor does not exist yet. The current acceptance workflow runs
 # on a self-hosted runner and cannot satisfy --deny-self-hosted-runners.
@@ -105,6 +119,8 @@ def release_inputs(manifest_path: Path, source_commit: str, *,
     legacy_commit, legacy_version, legacy_digest = _component(
         manifest, "marty-credentials-issuance", "ElevenID/marty-credentials",
         LEGACY)
+    require((legacy_version, legacy_commit, legacy_digest) == FROZEN_LEGACY_RELEASE,
+            "Legacy issuance release differs from frozen Python route reference")
     ui_images = {artifact.get("uri"): artifact.get("digest")
                  for component in manifest["components"] if isinstance(component, dict)
                  and component.get("name") == "marty-ui"
