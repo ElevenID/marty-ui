@@ -29,6 +29,11 @@ COMMIT = re.compile(r"[0-9a-f]{40}\Z")
 IMAGE = re.compile(r"ghcr\.io/elevenid/marty-ui-oss/services@sha256:[0-9a-f]{64}\Z")
 IDENTIFIER = re.compile(r"[0-9a-f]{64}\Z")
 RUN_ID = re.compile(r"[1-9][0-9]{0,19}\Z")
+MIGRATIONS_IMAGE = re.compile(
+    r"ghcr\.io/elevenid/marty-ui-oss/migrations@sha256:[0-9a-f]{64}\Z")
+LEGACY_IMAGE = re.compile(
+    r"ghcr\.io/elevenid/marty-credentials-issuance@sha256:[0-9a-f]{64}\Z")
+REQUIRED_ROLLBACK = frozenset({"issuance", "db-migrate", "signing-keys"})
 OWNER_LABELS = {
     "com.marty.passport.acceptance.owner": "supported-consumer",
     "com.marty.passport.acceptance.run-id": "run_id",
@@ -111,6 +116,11 @@ def verify(record: dict, surface: str, now: datetime,
     require(isinstance(record.get("services_reference"), str)
             and IMAGE.fullmatch(record["services_reference"]) is not None,
             "Released services image is invalid")
+    require(isinstance(record.get("migrations_reference"), str)
+            and MIGRATIONS_IMAGE.fullmatch(record["migrations_reference"]) is not None
+            and isinstance(record.get("legacy_reference"), str)
+            and LEGACY_IMAGE.fullmatch(record["legacy_reference"]) is not None,
+            "Released migration or legacy rollback image is invalid")
     try:
         created = datetime.fromisoformat(record["created_at"])
         expires = datetime.fromisoformat(record["expires_at"])
@@ -128,7 +138,7 @@ def verify(record: dict, surface: str, now: datetime,
                     for item in volumes)
             and len(volumes) == len(set(volumes)),
             "Disposable volume identities are invalid")
-    require(SELECTED | ISOLATED_DEPENDENCIES <= set(containers)
+    require(SELECTED | ISOLATED_DEPENDENCIES | REQUIRED_ROLLBACK <= set(containers)
             and set(containers) <= ALLOWED_SERVICES
             and all(re.fullmatch(r"[a-z][a-z0-9-]+", name) for name in containers),
             "Disposable service ownership is incomplete")
@@ -192,8 +202,14 @@ def verify(record: dict, surface: str, now: datetime,
                     "Disposable container network identity changed")
             if running:
                 expected_network_members[name].add(identifier)
-        if service in SELECTED:
-            require(config.get("Image") == record["services_reference"],
+        expected_image = (
+            record["legacy_reference"] if service == "issuance" else
+            record["migrations_reference"] if service == "db-migrate" else
+            record["services_reference"] if service in SELECTED | {"signing-keys"}
+            else None
+        )
+        if expected_image is not None:
+            require(config.get("Image") == expected_image,
                     "Passport container image differs from signed release")
         mounts = item.get("Mounts", [])
         require(isinstance(mounts, list), "Disposable container mounts are invalid")

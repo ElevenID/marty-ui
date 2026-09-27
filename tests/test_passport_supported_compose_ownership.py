@@ -9,7 +9,7 @@ import json
 import pytest
 
 from scripts.check_passport_supported_compose_ownership import (
-    OwnershipError, verify,
+    OwnershipError, REQUIRED_ROLLBACK, verify,
 )
 from scripts.check_passport_supported_rollback_model import (
     ISOLATED_DEPENDENCIES, SELECTED,
@@ -18,6 +18,8 @@ from scripts.check_passport_supported_rollback_model import (
 
 PROJECT = "marty-passport-acceptance-base-abcdef"
 IMAGE = "ghcr.io/elevenid/marty-ui-oss/services@sha256:" + "a" * 64
+MIGRATIONS = "ghcr.io/elevenid/marty-ui-oss/migrations@sha256:" + "b" * 64
+LEGACY = "ghcr.io/elevenid/marty-credentials-issuance@sha256:" + "c" * 64
 NOW = datetime(2026, 9, 27, 12, tzinfo=timezone.utc)
 LABELS = {
     "com.docker.compose.project": PROJECT,
@@ -30,7 +32,7 @@ LABELS = {
 
 def fixture() -> tuple[dict, dict[tuple[str, ...], str]]:
     containers = {name: format(i + 1, "064x") for i, name in
-                  enumerate(sorted(SELECTED | ISOLATED_DEPENDENCIES))}
+                  enumerate(sorted(SELECTED | ISOLATED_DEPENDENCIES | REQUIRED_ROLLBACK))}
     network_name = PROJECT + "_private"
     network_id = "e" * 64
     volume_name = PROJECT + "_postgres"
@@ -38,6 +40,7 @@ def fixture() -> tuple[dict, dict[tuple[str, ...], str]]:
         "schema": "marty.passport-supported-compose-ownership/v1",
         "project": PROJECT, "run_id": "123456", "source_commit": "b" * 40,
         "services_reference": IMAGE,
+        "migrations_reference": MIGRATIONS, "legacy_reference": LEGACY,
         "created_at": (NOW - timedelta(minutes=5)).isoformat(),
         "expires_at": (NOW + timedelta(minutes=55)).isoformat(),
         "containers": containers, "networks": {network_name: network_id},
@@ -57,7 +60,10 @@ def fixture() -> tuple[dict, dict[tuple[str, ...], str]]:
             "State": {"Running": True, "Status": "running",
                       "Health": {"Status": "healthy"}},
             "Config": {"Labels": {**LABELS, "com.docker.compose.service": service},
-                       "Image": IMAGE if service in SELECTED else "postgres@sha256:" + "c" * 64},
+                       "Image": (LEGACY if service == "issuance" else
+                                 MIGRATIONS if service == "db-migrate" else
+                                 IMAGE if service in SELECTED | {"signing-keys"} else
+                                 "postgres@sha256:" + "c" * 64)},
             "NetworkSettings": {"Networks": {network_name: {"NetworkID": network_id}}},
         }])
     calls[("network", "inspect", network_id)] = json.dumps([{
@@ -112,13 +118,13 @@ def test_exact_live_project_ownership_is_read_only_and_still_blocked() -> None:
 
 def test_successful_completed_migration_service_is_allowed() -> None:
     record, calls = fixture()
-    add_migration(record, calls, "db-migrate", 0)
+    add_migration(record, calls, "issuance-migrations", 0)
     assert run(record, calls)["live_ownership_verified"] is True
 
 
 def test_completed_migration_may_remain_in_network_member_listing() -> None:
     record, calls = fixture()
-    add_migration(record, calls, "db-migrate", 0)
+    add_migration(record, calls, "issuance-migrations", 0)
     key = ("network", "inspect", "e" * 64)
     item = json.loads(calls[key])
     item[0]["Containers"]["d" * 64] = {}
@@ -131,7 +137,7 @@ def test_completed_migration_may_keep_configured_detached_network(
     network_id: str,
 ) -> None:
     record, calls = fixture()
-    add_migration(record, calls, "db-migrate", 0)
+    add_migration(record, calls, "issuance-migrations", 0)
     key = ("container", "inspect", "d" * 64)
     item = json.loads(calls[key])
     item[0]["NetworkSettings"]["Networks"] = {
@@ -142,7 +148,7 @@ def test_completed_migration_may_keep_configured_detached_network(
 
 def test_completed_migration_rejects_foreign_configured_network_id() -> None:
     record, calls = fixture()
-    add_migration(record, calls, "db-migrate", 0)
+    add_migration(record, calls, "issuance-migrations", 0)
     key = ("container", "inspect", "d" * 64)
     item = json.loads(calls[key])
     item[0]["NetworkSettings"]["Networks"] = {
@@ -153,7 +159,7 @@ def test_completed_migration_rejects_foreign_configured_network_id() -> None:
 
 
 @pytest.mark.parametrize("service,exit_code", [
-    ("db-migrate", 1), ("gateway-helper", 0), ("notification", 0),
+    ("issuance-migrations", 1), ("gateway-helper", 0), ("notification", 0),
 ])
 def test_only_exact_successful_init_service_may_be_exited(
     service: str, exit_code: int,
@@ -204,6 +210,12 @@ def test_rejects_bad_lease_identity_and_resource_sets(mutate, match: str) -> Non
         PROJECT + "_private"].update(NetworkID="f" * 64), "network identity"),
     ("gateway", lambda item: item["Config"].update({
         "Image": "ghcr.io/other/services@sha256:" + "a" * 64}), "signed release"),
+    ("issuance", lambda item: item["Config"].update({
+        "Image": "ghcr.io/other/issuance@sha256:" + "c" * 64}), "signed release"),
+    ("db-migrate", lambda item: item["Config"].update({
+        "Image": "ghcr.io/other/migrations@sha256:" + "b" * 64}), "signed release"),
+    ("signing-keys", lambda item: item["Config"].update({
+        "Image": "ghcr.io/other/signing-keys@sha256:" + "a" * 64}), "signed release"),
     ("gateway", lambda item: item.update(Name="/marty-selfhost-prod-gateway-1"),
      "named Compose service"),
     ("gateway", lambda item: item.update(Mounts=[{
