@@ -230,7 +230,8 @@ both opt-in tests against separate disposable Redis databases.
 
 The stacked Gateway fixtures now exercise service certificates, KMS public-key
 verification, JWKS/DID publication, config resolution, issuer-profile custody,
-dedicated service rotation, and CSCA/DSC CSR signing with disposable providers.
+dedicated service rotation, CSCA/DSC issuer-profile CSR signing, and dedicated
+service CSR signing with disposable providers.
 They do not establish the live beta CA chain, workload-identity acquisition,
 or aggregate deployment acceptance. The deliberate audit and compliance 501
 responses retain their frozen unavailable contracts. Protected CI, re-audit

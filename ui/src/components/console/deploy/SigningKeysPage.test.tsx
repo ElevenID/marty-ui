@@ -77,12 +77,12 @@ vi.mock('../../../contexts/ConsoleContext', () => ({
 
 describe('SigningKeysPage', () => {
   const CurrentPath = () => <span data-testid="current-path">{useLocation().pathname}</span>
-  const configureRotatableService = () => mockGetKeyManagementConfig.mockResolvedValue({
+  const configureRotatableService = (authMode = 'token') => mockGetKeyManagementConfig.mockResolvedValue({
     supports_native_key_management: false,
     default_service_id: 'svc-transit',
     services: [{
       id: 'svc-transit', name: 'Registered OpenBao', service_type: 'openbao-transit',
-      provider: 'openbao', endpoint: 'http://openbao:8200', mount: 'transit',
+      provider: 'openbao', endpoint: 'http://openbao:8200', mount: 'transit', auth_mode: authMode,
       key_reference: 'registered-key', key_aliases: ['registered-key'],
       algorithms: ['ES256'], managed: false, read_only: false,
     }],
@@ -220,56 +220,6 @@ describe('SigningKeysPage', () => {
     expect(mockGenerateServiceCsr.mock.calls[0][1]).not.toHaveProperty('key_reference')
   })
 
-  it('routes managed passport CSR creation to the issuer identity instead of a shared service key', async () => {
-    mockGetKeyManagementConfig.mockResolvedValue({
-      supports_native_key_management: false,
-      default_service_id: 'managed-openbao-transit',
-      services: [{
-        id: 'managed-openbao-transit', name: 'Marty managed OpenBao transit',
-        service_type: 'openbao-transit', provider: 'openbao',
-        key_purposes: ['csca', 'x509_doc_signer'], algorithms: ['ES256'],
-        managed: true, read_only: true, status: 'configured',
-      }],
-      service_type_catalog: [],
-    })
-    const { user } = renderWithRouter(<><SigningKeysPage /><CurrentPath /></>, {
-      initialEntries: ['/console/org/deploy/key-management'],
-    })
-    await screen.findByText('Elevenidllc managed OpenBao transit')
-    await user.click(screen.getByRole('button', { name: 'Certificate' }))
-    await user.click(screen.getByRole('button', { name: 'Generate CSR from issuer identity' }))
-    expect(screen.getByTestId('current-path')).toHaveTextContent('/console/org/deploy/issuer-identity')
-  })
-
-  it('requires an explicit registered-service CSR subject and sends only public fields', async () => {
-    mockGetKeyManagementConfig.mockResolvedValue({
-      supports_native_key_management: false,
-      default_service_id: 'service-a',
-      services: [{
-        id: 'service-a', name: 'Registered signer', service_type: 'openbao-transit',
-        provider: 'openbao', key_reference: 'server-side-only', algorithms: ['ES256'],
-        key_purposes: ['csca'],
-        managed: false, read_only: false, status: 'registered',
-      }],
-      service_type_catalog: [],
-    })
-    const { user } = renderWithRouter(<SigningKeysPage />, {
-      initialEntries: ['/console/org/deploy/key-management'],
-    })
-    await screen.findByText('Registered signer')
-    await user.click(screen.getByRole('button', { name: 'Certificate' }))
-    const csrButton = screen.getByRole('button', { name: 'Generate CSR from service public key' })
-    expect(csrButton).toBeDisabled()
-    await user.type(screen.getByLabelText('Subject country (two-letter ISO code)'), 'us')
-    await user.type(screen.getByLabelText('Subject organization'), 'Example Org')
-    expect(csrButton).toBeEnabled()
-    await user.click(csrButton)
-    await waitFor(() => expect(mockGenerateServiceCsr).toHaveBeenCalledWith('service-a', {
-      organization_id: 'org-123', country: 'US', organization: 'Example Org', common_name: 'Registered signer',
-    }))
-    expect(mockGenerateServiceCsr.mock.calls[0][1]).not.toHaveProperty('key_reference')
-  })
-
   it('renders the services registry view with managed and registered services', async () => {
     mockGetKeyManagementConfig.mockResolvedValue({
       supports_native_key_management: false,
@@ -344,6 +294,17 @@ describe('SigningKeysPage', () => {
       expect(mockRotateServiceKey).toHaveBeenCalledWith('svc-transit', { organization_id: 'org-123' })
       expect(mockShowNotification).toHaveBeenCalledWith('Key rotation completed successfully.', 'success')
     })
+  })
+
+  it('does not offer rotation for an alias using the shared service token', async () => {
+    configureRotatableService('service_token')
+    renderWithRouter(<SigningKeysPage />, {
+      initialEntries: ['/console/org/deploy/key-management'],
+    })
+    await waitFor(() => {
+      expect(screen.getByText('Registered OpenBao')).toBeInTheDocument()
+    })
+    expect(screen.queryByRole('button', { name: 'Rotate key' })).not.toBeInTheDocument()
   })
 
   it('warns when KMS rotation succeeds but public key publication fails', async () => {

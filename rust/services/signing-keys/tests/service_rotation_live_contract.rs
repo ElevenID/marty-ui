@@ -22,6 +22,34 @@ use std::sync::{
 use tokio::sync::oneshot;
 use tower::ServiceExt;
 
+async fn disposable_redis_url() -> String {
+    let url = std::env::var("MARTY_TEST_REDIS_URL").expect("disposable Redis URL");
+    let parsed = reqwest::Url::parse(&url).expect("disposable Redis URL syntax");
+    assert!(matches!(
+        parsed.host_str(),
+        Some("127.0.0.1" | "localhost" | "::1")
+    ));
+    assert!(parsed
+        .path()
+        .trim_start_matches('/')
+        .parse::<u8>()
+        .is_ok_and(|db| db >= 13));
+    let nonce = std::env::var("MARTY_TEST_REDIS_DISPOSABLE_NONCE")
+        .expect("disposable Redis sentinel value");
+    assert!(nonce.len() >= 16, "disposable Redis sentinel is too short");
+    let client = redis::Client::open(url.as_str()).expect("disposable Redis client");
+    let mut connection = client
+        .get_multiplexed_async_connection()
+        .await
+        .expect("disposable Redis connection");
+    let observed: Option<String> = connection
+        .get("marty:tests:disposable-guard")
+        .await
+        .expect("disposable Redis sentinel read");
+    assert_eq!(observed.as_deref(), Some(nonce.as_str()));
+    url
+}
+
 async fn rotate(
     app: &Router,
     organization_id: &str,
@@ -108,7 +136,7 @@ async fn reconcile(
 #[ignore = "requires disposable MARTY_TEST_REDIS_URL"]
 async fn public_rotation_updates_state_only_after_kms_success() {
     const PUBLIC_KEY_PEM: &str = "-----BEGIN PUBLIC KEY-----\nMFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEaxfR8uEsQkf4vOblY6RA8ncDfYEt\n6zOg9KE5RdiYwpZP40Li/hp/m47n60p8D54WK84zV2sxXs7LtkBoN79R9Q==\n-----END PUBLIC KEY-----\n";
-    let redis_url = std::env::var("MARTY_TEST_REDIS_URL").expect("disposable Redis URL");
+    let redis_url = disposable_redis_url().await;
     let rotations = Arc::new(AtomicUsize::new(0));
     let latest_version = Arc::new(AtomicUsize::new(2));
     let fail = Arc::new(AtomicBool::new(false));
@@ -205,6 +233,11 @@ async fn public_rotation_updates_state_only_after_kms_success() {
                     "mount": "transit", "auth_mode": "token", "auth_reference": "fixture-token",
                     "key_reference": "signing-key", "algorithms": ["ES256"],
                     "key_purposes": ["vc_jwt_issuer"]
+                }, {
+                    "id": "managed-alias", "name": "Aliased managed service",
+                    "service_type": "openbao-transit", "endpoint": endpoint,
+                    "mount": "transit", "auth_mode": "service_token",
+                    "key_reference": "signing-key", "algorithms": ["ES256"]
                 }],
                 "default_service_id": "service-a"
             }),
@@ -229,6 +262,14 @@ async fn public_rotation_updates_state_only_after_kms_success() {
     .await;
     assert_eq!(status, StatusCode::FORBIDDEN, "{denied}");
     assert_eq!(rotations.load(Ordering::SeqCst), 0);
+    let (status, denied_alias) =
+        rotate(&managed_app, &organization_id, "managed-alias", json!({})).await;
+    assert_eq!(status, StatusCode::FORBIDDEN, "{denied_alias}");
+    assert_eq!(rotations.load(Ordering::SeqCst), 0);
+    let (status, denied_locator) =
+        rotate(&managed_app, &organization_id, "service-a", json!({})).await;
+    assert_eq!(status, StatusCode::FORBIDDEN, "{denied_locator}");
+    assert_eq!(rotations.load(Ordering::SeqCst), 0);
     let app = router_with_dependencies(
         "test-internal-key".into(),
         Some(store.clone()),
@@ -238,6 +279,27 @@ async fn public_rotation_updates_state_only_after_kms_success() {
         None,
         None,
     );
+    let shared_organization_id = format!("{organization_id}-shared");
+    store
+        .save(
+            &shared_organization_id,
+            &json!({"services": [{
+                "id": "shared", "service_type": "openbao-transit",
+                "endpoint": endpoint, "mount": "transit", "auth_mode": "token",
+                "auth_reference": "other-tenant-token", "key_reference": "signing-key",
+                "algorithms": ["ES256"]
+            }]}),
+        )
+        .await
+        .unwrap();
+    let (status, denied_shared) = rotate(&app, &organization_id, "service-a", json!({})).await;
+    assert_eq!(status, StatusCode::FORBIDDEN, "{denied_shared}");
+    assert_eq!(rotations.load(Ordering::SeqCst), 0);
+    let mut connection = store.connection();
+    let _: () = connection
+        .del(storage_key(&shared_organization_id))
+        .await
+        .unwrap();
     let competing_app = router_with_dependencies(
         "test-internal-key".into(),
         Some(RegistryStore::connect(&redis_url).await.unwrap()),
@@ -385,6 +447,19 @@ async fn public_rotation_updates_state_only_after_kms_success() {
     let (busy_status, busy) =
         rotate(&competing_app, &organization_id, "service-a", json!({})).await;
     assert_eq!(busy_status, StatusCode::CONFLICT, "{busy}");
+    assert!(matches!(
+        store
+            .save(
+                &shared_organization_id,
+                &json!({"services": [{
+                    "id": "late-shared", "service_type": "openbao-transit",
+                    "endpoint": endpoint, "mount": "transit", "auth_mode": "token",
+                    "key_reference": "signing-key"
+                }]})
+            )
+            .await,
+        Err(RegistryError::Conflict)
+    ));
     let (other_service_status, other_service_busy) =
         rotate(&competing_app, &organization_id, "service-b", json!({})).await;
     assert_eq!(
@@ -987,7 +1062,7 @@ async fn public_rotation_updates_state_only_after_kms_success() {
 #[tokio::test]
 #[ignore = "requires disposable MARTY_TEST_REDIS_URL"]
 async fn lost_pending_write_response_keeps_registry_and_marker_together() {
-    let redis_url = std::env::var("MARTY_TEST_REDIS_URL").expect("disposable Redis URL");
+    let redis_url = disposable_redis_url().await;
     let organization_id = format!("test-pending-{}", uuid::Uuid::new_v4().simple());
     let store = RegistryStore::connect(&redis_url).await.unwrap();
     let initial = store
@@ -1020,6 +1095,32 @@ async fn lost_pending_write_response_keeps_registry_and_marker_together() {
         .await
         .unwrap()
         .unwrap();
+    let expired_fence = store
+        .acquire_global_rotation_fence(&lease)
+        .await
+        .unwrap()
+        .unwrap();
+    let mut connection = store.connection();
+    let _: bool = redis::cmd("PEXPIRE")
+        .arg("signing-service:global-rotation-fence")
+        .arg(1)
+        .query_async(&mut connection)
+        .await
+        .unwrap();
+    tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+    assert!(!expired_fence.renew().await.unwrap());
+    assert!(matches!(
+        store
+            .save_pending_rotation_with_marker(&organization_id, service, &pending, &marker, &lease)
+            .await,
+        Err(RegistryError::Conflict)
+    ));
+    expired_fence.release().await.unwrap();
+    let global_fence = store
+        .acquire_global_rotation_fence(&lease)
+        .await
+        .unwrap()
+        .unwrap();
     let index_key = format!(
         "signing-service:rotation-reconcile-index:{}:{}:{}:{}",
         organization_id.len(),
@@ -1027,7 +1128,6 @@ async fn lost_pending_write_response_keeps_registry_and_marker_together() {
         "service-a".len(),
         "service-a"
     );
-    let mut connection = store.connection();
     let _: () = connection
         .set(&index_key, "wrong-index-type")
         .await
@@ -1061,6 +1161,7 @@ async fn lost_pending_write_response_keeps_registry_and_marker_together() {
         .save_pending_rotation_with_marker(&organization_id, service, &pending, &marker, &lease)
         .await
         .unwrap();
+    global_fence.release().await.unwrap();
     lease.release().await.unwrap();
     let persisted = store.load(&organization_id).await.unwrap();
     assert_eq!(

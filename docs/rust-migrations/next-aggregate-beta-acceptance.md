@@ -140,8 +140,11 @@ selected here.
    tenant denial, the managed-service rotation boundary, one KMS rotation,
    and persisted version history. This is not issuer-profile key rotation:
    shared managed services are rejected by the service route, and a future
-   CSCA/DSC profile rotation needs its own reviewed contract and API. Rerun the
-   route audit on protected main after the stack lands, and complete beta
+   CSCA/DSC profile rotation needs its own reviewed contract and API. A
+   separate Gateway test now generates a dedicated service CSR with disposable
+   OpenBao, verifies its subject and KMS public key binding, and checks tenant
+   denial and custody redaction. Rerun the route audit on protected main after
+   the stack lands, and complete beta
    acceptance before describing the aggregate release as feature-complete.
 
    A read-only Redis inventory on 2026-09-26 found zero beta and production
