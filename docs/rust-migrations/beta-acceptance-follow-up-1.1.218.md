@@ -1,14 +1,12 @@
 # Beta aggregate coordinate proposal: 1.1.218
 
-This local proposal descends from reviewed integration tree
-`57aa292af62d969ccf4fa5b61b0156c827f7c036`, which combines Signing Keys
-aggregate #913 head `10c7b6f62f86dd88720bc9d22450ba9bdfaea67c` with
-the current passport producer/profile stack. That local tree is a rehearsal,
-not protected-main release authority. Merge #913 and the final intended passport
-wave through protected main first. Record the resulting exact main SHA, verify
-that it contains the reviewed aggregate behavior, then rebase and review this
-coordinate change before merging it. No tag, claim, image, release, deployment,
-or acceptance is created here.
+Signing Keys aggregate #913 merged to protected main at
+`c70aa64492f135d3ffd54dc10c8a9867fc39528f`. This local hold proposal is
+rebased on passport aggregate #919, which is still awaiting protected gates and
+merge. The proposal has no protected-main release authority. After the final
+intended passport wave merges, record the exact main SHA and verify that it
+contains the reviewed aggregate behavior before merging this coordinate. No
+tag, claim, image, release, deployment, or acceptance is created here.
 
 The lock selects `marty-ui@1.1.218` but keeps `release_state=hold`. The claim
 workflow requires `eligible` and therefore cannot claim this proposal even if

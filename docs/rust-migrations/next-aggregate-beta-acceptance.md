@@ -1,7 +1,7 @@
 # Next aggregate beta: acceptance checklist
 
-Source-readiness audit: merge pending Signing Keys aggregate #913 and the final
-passport wave into protected main, then record and verify the exact source SHA
+Source-readiness audit: Signing Keys aggregate #913 is on protected main.
+Merge passport aggregate #919, then record and verify the exact source SHA
 before merging the coordinate proposal. The local
 [1.1.218 coordinate proposal](beta-acceptance-follow-up-1.1.218.md) selects an
 unused candidate for review. Its lock stays on `hold` until a separate reviewed
