@@ -313,6 +313,13 @@ def validate_model(
                     f"Compose {name} publishes outside loopback")
         environment = service.get("environment", {})
         require(isinstance(environment, dict), f"Compose {name} environment is invalid")
+        if name == "signing-keys":
+            dependencies = service.get("depends_on")
+            require(environment.get("SIGNING_KEYS_REDIS_URL") == "redis://redis:6379/2"
+                    and isinstance(dependencies, dict)
+                    and isinstance(dependencies.get("redis"), dict)
+                    and dependencies["redis"].get("condition") == "service_healthy",
+                    "Compose signing-keys lacks isolated Redis readiness")
         for key, value in environment.items():
             require(isinstance(key, str), f"Compose {name} environment key is invalid")
             if not isinstance(value, str):

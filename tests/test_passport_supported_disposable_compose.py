@@ -70,6 +70,9 @@ def test_real_compose_render_is_safe_but_not_accepted(
         assert env["ENVIRONMENT"] == ("development" if surface == "base"
                                        else "production")
     assert model["services"]["issuance"]["image"] == LEGACY
+    signing = model["services"]["signing-keys"]
+    assert signing["environment"]["SIGNING_KEYS_REDIS_URL"] == "redis://redis:6379/2"
+    assert signing["depends_on"]["redis"]["condition"] == "service_healthy"
     for role, reference in qualified_images(verify_registry=False).items():
         assert model["services"][role]["image"] == reference
     labels = model["services"]["gateway"]["labels"]

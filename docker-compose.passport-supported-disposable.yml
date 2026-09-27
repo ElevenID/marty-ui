@@ -56,6 +56,7 @@ services:
     image: ${MARTY_SERVICES_IMAGE:?pin signed services image by digest}
     environment:
       SERVICE_NAME: signing_keys
+      SIGNING_KEYS_REDIS_URL: redis://redis:6379/2
       DATABASE_URL_TEMPLATE: postgresql+asyncpg://marty:$${MARTY_DB_PASSWORD}@postgres:5432/marty
       MARTY_DB_PASSWORD_FILE: /run/secrets/marty_db_password
       BAO_ADDR: http://openbao:8200
@@ -66,6 +67,8 @@ services:
       db-migrate:
         condition: service_completed_successfully
       openbao:
+        condition: service_healthy
+      redis:
         condition: service_healthy
     networks: [private]
 

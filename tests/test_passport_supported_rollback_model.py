@@ -40,7 +40,11 @@ def safe_model(root: Path) -> dict:
     ]}
     services["openbao"] = {"image": infra["openbao"]}
     services["redis"] = {"image": infra["redis"]}
-    services["signing-keys"] = {"image": IMAGE}
+    services["signing-keys"] = {
+        "image": IMAGE,
+        "environment": {"SIGNING_KEYS_REDIS_URL": "redis://redis:6379/2"},
+        "depends_on": {"redis": {"condition": "service_healthy"}},
+    }
     services["db-migrate"] = {"image": "ghcr.io/elevenid/marty-ui-oss/migrations@sha256:" + "b" * 64}
     services["issuance"] = {"image": "ghcr.io/elevenid/marty-credentials-issuance@sha256:" + "c" * 64}
     for service in services.values():
@@ -85,6 +89,17 @@ def test_attested_plan_binds_all_disposable_images(tmp_path: Path) -> None:
         bad = deepcopy(model)
         bad[section][name]["labels"]["com.marty.passport.acceptance.run-id"] = "other"
         with pytest.raises(ModelPreflightError, match="resource labels"):
+            validate_planned_model(bad, plan, tmp_path)
+    for mutate in (
+        lambda service: service["environment"].pop("SIGNING_KEYS_REDIS_URL"),
+        lambda service: service["environment"].update(
+            SIGNING_KEYS_REDIS_URL="redis://localhost:6379/2"),
+        lambda service: service["depends_on"]["redis"].update(
+            condition="service_started"),
+    ):
+        bad = deepcopy(model)
+        mutate(bad["services"]["signing-keys"])
+        with pytest.raises(ModelPreflightError, match="isolated Redis readiness"):
             validate_planned_model(bad, plan, tmp_path)
 
 
