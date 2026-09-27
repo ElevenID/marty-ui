@@ -100,6 +100,26 @@ describe('IssuerIdentityWizard', () => {
     });
   });
 
+  it('offers the ICAO CSCA tuple required for managed passport DSC issuance', async () => {
+    const { user } = renderWithRouter(<IssuerIdentityWizard />);
+
+    await user.click(await screen.findByLabelText(/Signing purpose/));
+    await user.click(screen.getByRole('option', { name: 'CSCA / IACA root authority' }));
+    await user.click(screen.getByLabelText(/Credential format/));
+    await user.click(screen.getByRole('option', { name: 'ICAO_EMRTD' }));
+    await user.click(screen.getByRole('button', { name: 'Create managed identity' }));
+
+    await waitFor(() => {
+      expect(createIssuerIdentity).toHaveBeenCalledWith({
+        organization_id: 'org-test-1',
+        issuer_did: 'did:web:localhost%3A3000:orgs:test-org',
+        key_purpose: 'csca',
+        credential_format: 'ICAO_EMRTD',
+        algorithm: 'ES256',
+      });
+    });
+  });
+
   it('does not submit a non-DID identity', async () => {
     const { user } = renderWithRouter(<IssuerIdentityWizard />);
     const didInput = await screen.findByLabelText(/Issuer DID/);
