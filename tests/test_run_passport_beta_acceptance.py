@@ -12,7 +12,9 @@ import pytest
 import yaml
 
 from scripts.collect_passport_beta_acceptance import EvidenceError
+from scripts.probe_passport_beta_chain import ChainProbeError
 from scripts.run_passport_beta_acceptance import run
+from tests.test_probe_passport_beta_chain import plan as certificate_plan
 
 
 def report(*, ready: bool = True) -> dict:
@@ -22,6 +24,7 @@ def report(*, ready: bool = True) -> dict:
         "deployment": {"release_version": "1.1.999"},
         "runtime_images": {"gateway": {"image_id": "sha256:" + "b" * 64}},
         "probes": {"capabilities_http": {"verified": ready},
+                   "sod_signature": {"verified": False, "evidence": None},
                    "nine_route_gateway_flow": {"verified": False, "evidence": None},
                    "physical_booklet_verified": {"verified": False, "evidence": None},
                    "production_isolation": {"verified": False, "evidence": None}},
@@ -74,14 +77,109 @@ def test_does_not_mutate_beta_before_signed_release_and_managed_capability() -> 
     assert calls == ["collect"]
 
 
+def test_governed_chain_runs_with_complete_inputs_and_stays_blocked() -> None:
+    calls = []
+
+    def collect(*args: object, **kwargs: object) -> dict:
+        calls.append("collect")
+        result = report()
+        result["probes"]["managed_csca_dsc_chain"] = {"verified": False, "evidence": None}
+        return result
+
+    def chain(plan: dict, csca: str, dsc: str) -> dict:
+        calls.append("chain")
+        assert (plan, csca, dsc) == (certificate_plan(), "csca-session", "dsc-session")
+        return {"verified": True, "evidence": {"csca_certificate_sha256": "b" * 64}}
+
+    result = run(
+        Path("beta-artifacts"), {"organization_id": "org-a", "issuer_did": certificate_plan()["dsc"]["dsc_issuer_did"]}, "a" * 32,
+        collector=collect, snapshot=lambda: {"sha256": "c" * 64, "container_counts": {}},
+        drain=lambda: {"verified": True, "evidence": {"in_flight_jobs": 0}},
+        lifecycle=lambda *args: {"verified": True, "evidence": {"routes": []}},
+        certificate_plan=certificate_plan(), csca_session="csca-session",
+        dsc_session="dsc-session", chain=chain,
+    )
+    assert calls == ["collect", "chain", "collect"]
+    assert result["probes"]["managed_csca_dsc_chain"]["verified"] is True
+    assert result["probes"]["sod_signature"]["verified"] is False
+    assert result["status"] == "blocked"
+
+
+def test_incomplete_governed_chain_inputs_fail_closed_before_ceremony() -> None:
+    with pytest.raises(EvidenceError, match="inputs are incomplete"):
+        run(
+            Path("beta-artifacts"), {}, "a" * 32,
+            collector=lambda *args, **kwargs: report(),
+            snapshot=lambda: pytest.fail("production snapshot should not start"),
+            drain=lambda: {"verified": True, "evidence": {}},
+            lifecycle=lambda *args: pytest.fail("application lifecycle should not start"),
+            certificate_plan={"organization_id": "beta"},
+            chain=lambda *args: pytest.fail("certificate ceremony should not start"),
+        )
+
+
+@pytest.mark.parametrize("field,bad_value", [
+    ("validity_days", "30"), ("validity_days", True), ("validity_days", 91),
+    ("country", "CA"), ("country", "us"), ("organization", "X" * 65),
+    ("common_name", "bad,name"),
+])
+def test_malformed_dsc_plan_prevents_any_beta_mutation(field: str, bad_value: object) -> None:
+    value = certificate_plan()
+    value["dsc"][field] = bad_value
+    with pytest.raises(ChainProbeError):
+        run(
+            Path("beta-artifacts"), {}, "a" * 32,
+            collector=lambda *args, **kwargs: report(),
+            snapshot=lambda: pytest.fail("production snapshot should not start"),
+            drain=lambda: pytest.fail("beta drain should not start"),
+            lifecycle=lambda *args: pytest.fail("application lifecycle should not start"),
+            certificate_plan=value, csca_session="sessionId=csca", dsc_session="sessionId=dsc",
+            chain=lambda *args: pytest.fail("certificate ceremony should not start"),
+        )
+
+
+def test_certificate_plan_must_match_application_before_mutation() -> None:
+    with pytest.raises(EvidenceError, match="does not match"):
+        run(
+            Path("beta-artifacts"), {"organization_id": "other", "issuer_did": "did:web:other"}, "a" * 32,
+            collector=lambda *args, **kwargs: report(),
+            snapshot=lambda: pytest.fail("production snapshot should not start"),
+            drain=lambda: pytest.fail("beta drain should not start"),
+            lifecycle=lambda *args: pytest.fail("application lifecycle should not start"),
+            certificate_plan=certificate_plan(), csca_session="sessionId=csca", dsc_session="sessionId=dsc",
+            chain=lambda *args: pytest.fail("certificate ceremony should not start"),
+        )
+
+
+def test_dsc_lifetime_must_fit_csca_before_any_beta_mutation() -> None:
+    value = certificate_plan()
+    value["csca"]["validity_days"] = value["dsc"]["validity_days"]
+    with pytest.raises(ChainProbeError, match="does not fit"):
+        run(
+            Path("beta-artifacts"), {}, "a" * 32,
+            collector=lambda *args, **kwargs: report(),
+            snapshot=lambda: pytest.fail("production snapshot should not start"),
+            drain=lambda: pytest.fail("beta drain should not start"),
+            lifecycle=lambda *args: pytest.fail("application lifecycle should not start"),
+            certificate_plan=value, csca_session="sessionId=csca", dsc_session="sessionId=dsc",
+            chain=lambda *args: pytest.fail("certificate ceremony should not start"),
+        )
+
+
 def test_workflow_artifact_matches_credentials_retirement_receipt_convention() -> None:
     workflow_path = Path(__file__).resolve().parents[1] / ".github/workflows/passport-beta-acceptance.yml"
     workflow = yaml.safe_load(workflow_path.read_text(encoding="utf-8"))
     steps = workflow["jobs"]["beta-passport-evidence"]["steps"]
     probe = next(step for step in steps if step.get("id") == "probe")
     upload = next(step for step in steps if step.get("name") == "Upload sanitized beta evidence")
+    environment = workflow["jobs"]["beta-passport-evidence"]["env"]
     assert 'report_file="$report_dir/passport-beta-acceptance-$GITHUB_RUN_ID.json"' in probe["run"]
     assert 'report.get("status") == "accepted"' in probe["run"]
+    assert environment["PASSPORT_ACCEPTANCE_CERTIFICATE_PLAN_JSON"] == "${{ secrets.PASSPORT_ACCEPTANCE_CERTIFICATE_PLAN_JSON }}"
+    assert environment["PASSPORT_ACCEPTANCE_CSCA_OPERATOR_COOKIE"] == "${{ secrets.PASSPORT_ACCEPTANCE_CSCA_OPERATOR_COOKIE }}"
+    assert environment["PASSPORT_ACCEPTANCE_DSC_OPERATOR_COOKIE"] == "${{ secrets.PASSPORT_ACCEPTANCE_DSC_OPERATOR_COOKIE }}"
+    assert 'certificate_args+=(--certificate-plan-file "$certificate_plan_file")' in probe["run"]
+    assert "--certificate-plan-file" in probe["run"]
     assert upload["with"]["name"] == "passport-beta-acceptance-${{ github.run_id }}"
     assert upload["with"]["path"] == (
         "tests/artifacts/passport-beta-acceptance/"

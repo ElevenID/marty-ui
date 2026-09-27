@@ -71,12 +71,32 @@ executes the seven application route identities, and repeats the beta and
 production checks. Only the beta Gateway receives mutating requests. The
 private application file is removed before artifact upload.
 
+The full run can also perform the managed beta CSCA and DSC ceremonies when
+the protected `beta-lifecycle` environment supplies
+`PASSPORT_ACCEPTANCE_CERTIFICATE_PLAN_JSON` and separate governed operator
+session cookies in `PASSPORT_ACCEPTANCE_CSCA_OPERATOR_COOKIE` and
+`PASSPORT_ACCEPTANCE_DSC_OPERATOR_COOKIE`. The plan is a JSON object with
+`organization_id`, a `csca` request for the public self-signed ceremony, and
+a `dsc` request bound to its `issuer_did` and `certificate_id`. Both requests
+use `ICAO_EMRTD` and the official Gateway routes; issuer profile purposes
+distinguish CSCA from DSC even if the DID is the same. The runner checks the
+returned public certificates against the selected CSCA with OpenSSL strict
+chain and self-signature verification. The plan and both session cookies are
+validated before any beta mutation, and the plan's tenant and DSC issuer must
+match the private test application. The probe follows the issuer console's
+cookie-based Gateway request and organization query; it does not supply an API
+key or asserted user identity. Evidence contains certificate and DID hashes, never
+session cookies or certificate bodies. Partial ceremony input fails before
+any application or certificate mutation. If no ceremony input exists, the
+`managed_csca_dsc_chain` probe remains false.
+
 The production snapshot proves continuity **during this acceptance run**. It
 does not replace the deployment wrapper's before/after production comparison.
 The report sets `legacy_drain` and the additional
 `production_continuity_during_probe` probe when those live checks pass, while
-`production_isolation` remains false. The workflow remains `blocked` until the
-governed operator CSCA/DSC ceremony, SOD signature verification, full nine
+`production_isolation` remains false. The workflow fails while the report is
+`blocked`, but uploads the sanitized report from an attempted probe. The
+acceptance report remains `blocked` until SOD signature verification, full nine
 route Gateway/Flow and signed callback proof, physical provider submission,
 rollback, deployment-wide production isolation, and independently verified
 physical booklet receipt have executable evidence. It cannot qualify Python

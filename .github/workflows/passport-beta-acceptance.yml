@@ -27,6 +27,9 @@ jobs:
       GH_TOKEN: ${{ github.token }}
       PASSPORT_ACCEPTANCE_API_KEY: ${{ secrets.PASSPORT_ACCEPTANCE_API_KEY }}
       PASSPORT_ACCEPTANCE_APPLICATION_JSON: ${{ secrets.PASSPORT_ACCEPTANCE_APPLICATION_JSON }}
+      PASSPORT_ACCEPTANCE_CERTIFICATE_PLAN_JSON: ${{ secrets.PASSPORT_ACCEPTANCE_CERTIFICATE_PLAN_JSON }}
+      PASSPORT_ACCEPTANCE_CSCA_OPERATOR_COOKIE: ${{ secrets.PASSPORT_ACCEPTANCE_CSCA_OPERATOR_COOKIE }}
+      PASSPORT_ACCEPTANCE_DSC_OPERATOR_COOKIE: ${{ secrets.PASSPORT_ACCEPTANCE_DSC_OPERATOR_COOKIE }}
       BETA_ARTIFACT_DIR: ${{ inputs.beta_artifact_dir }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
@@ -40,12 +43,20 @@ jobs:
           mkdir -p "$report_dir"
           rm -f "$report_file"
           application_file="$RUNNER_TEMP/passport-beta-application-$GITHUB_RUN_ID.json"
-          trap 'rm -f "$application_file"' EXIT
+          certificate_plan_file="$RUNNER_TEMP/passport-beta-certificates-$GITHUB_RUN_ID.json"
+          trap 'rm -f "$application_file" "$certificate_plan_file"' EXIT
           printf '%s' "$PASSPORT_ACCEPTANCE_APPLICATION_JSON" > "$application_file"
           chmod 600 "$application_file"
+          certificate_args=()
+          if [[ -n "$PASSPORT_ACCEPTANCE_CERTIFICATE_PLAN_JSON" ]]; then
+            printf '%s' "$PASSPORT_ACCEPTANCE_CERTIFICATE_PLAN_JSON" > "$certificate_plan_file"
+            chmod 600 "$certificate_plan_file"
+            certificate_args+=(--certificate-plan-file "$certificate_plan_file")
+          fi
           python3 scripts/run_passport_beta_acceptance.py \
             --artifact-dir "$BETA_ARTIFACT_DIR" \
             --application-file "$application_file" \
+            "${certificate_args[@]}" \
             --output "$report_file"
           # A protected success must mean the whole acceptance gate passed.
           # Until physical provider and recovery proof exist, preserve the
