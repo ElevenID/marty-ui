@@ -1,11 +1,13 @@
 # Next aggregate beta: acceptance checklist
 
-Source-readiness audit: the protected source and this pending Signing Keys
-public-parity branch; record their exact protected merge SHAs before
-selecting a release. This is a pending checklist, not a release reservation,
-deployment authorization for production, or an acceptance claim. Historical
-beta 1.1.217 evidence cannot qualify a new candidate. No candidate coordinate is
-selected here.
+Source-readiness audit: merge pending Signing Keys aggregate #913 and the final
+passport wave into protected main, then record and verify the exact source SHA
+before merging the coordinate proposal. The local
+[1.1.218 coordinate proposal](beta-acceptance-follow-up-1.1.218.md) selects an
+unused candidate for review. Its lock stays on `hold` until a separate reviewed
+eligibility change after the final aggregate is on main. It is not a release
+claim, deployment authorization, or acceptance pass. Historical beta 1.1.217
+evidence cannot qualify it.
 
 ## Protected configuration audit — 2026-09-20
 
