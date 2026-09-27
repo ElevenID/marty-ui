@@ -796,7 +796,11 @@ def test_passport_transit_keys_are_verified_non_exportable_at_bootstrap():
         ("passport-bureau-callback-marty-hmac", "hmac"),
     ):
         assert f"transit/keys/{key}" in source
-        assert f"type={kind} exportable=false" in source
+        creation = source.split(f"transit/keys/{key} \\\n", 1)[1].split("2>/dev/null", 1)[0]
+        assert f"type={kind}" in creation
+        assert "exportable=false" in creation
+        if kind == "hmac":
+            assert "key_size=32" in creation
         assert f"-field=type transit/keys/{key}" in source
         assert f"-field=exportable transit/keys/{key}" in source
 
