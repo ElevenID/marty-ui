@@ -161,6 +161,18 @@ def _assert_python_service_job_preserves_full_suite(document) -> None:
         "BAO_DEV_ROOT_TOKEN_ID": "test-only",
         "BAO_DEV_LISTEN_ADDRESS": "0.0.0.0:8200",
     }
+    chain_step_name = (
+        "Exercise Gateway CSR and managed passport chain with disposable OpenBao"
+    )
+    managed_chain = next(
+        step for step in rust["steps"] if step.get("name") == chain_step_name
+    )["run"]
+    assert "--test passport_managed_kms_chain" in managed_chain
+    chain_test_name = (
+        "managed_passport_chain_issues_and_verifies_sod_without_exporting_private_keys"
+    )
+    assert chain_test_name in managed_chain
+    assert "-- --ignored --exact" in managed_chain
     assert rust["env"]["FLOW_POSTGRES_TEST_URL"].endswith(
         "localhost:5432/marty_atomic_test"
     )

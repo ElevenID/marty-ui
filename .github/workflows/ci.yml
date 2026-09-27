@@ -988,7 +988,7 @@ jobs:
             cargo test --locked -p marty-gateway --lib \
               runtime::tests::authenticated_gateway_rotates_only_a_dedicated_signing_service \
               -- --ignored --exact
-      - name: Exercise profile and service CSR through Gateway and disposable OpenBao
+      - name: Exercise Gateway CSR and managed passport chain with disposable OpenBao
         working-directory: rust
         shell: bash
         run: |
@@ -1020,6 +1020,9 @@ jobs:
             -- --ignored --exact
           cargo test --locked -p marty-gateway --lib \
             runtime::tests::authenticated_gateway_generates_a_dedicated_service_csr_in_openbao \
+            -- --ignored --exact
+          cargo test --locked -p marty-issuance-service --test passport_managed_kms_chain \
+            managed_passport_chain_issues_and_verifies_sod_without_exporting_private_keys \
             -- --ignored --exact
       # The Flow contract deliberately requires the marty_atomic_test database.
       # Serialize it after the workspace suite so both retain their isolation.

@@ -136,6 +136,9 @@ selected here.
    CSCA ceremony and DSC issuance routes, verifies their certificate chain,
    and checks replay, changed-input conflict, operator separation, and public
    custody redaction. This is disposable test evidence, not live beta enrollment.
+   The same marked CI step now runs the Rust issuance managed-profile chain
+   test through a real disposable OpenBao signer and verifies its SOD signature,
+   data-group hash, tenant isolation, revocation, and stale-key rejection.
    A further opt-in Gateway test rotates a dedicated registered Transit service, checking
    tenant denial, the managed-service rotation boundary, one KMS rotation,
    and persisted version history. This is not issuer-profile key rotation:
