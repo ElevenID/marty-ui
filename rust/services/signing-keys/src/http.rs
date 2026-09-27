@@ -2109,6 +2109,40 @@ async fn rotate_public_service_key(
             "KMS rotation requires reconciliation before another attempt.",
         ));
     }
+    let global_fence = match store.acquire_global_rotation_fence(&lease).await {
+        Ok(Some(fence)) => fence,
+        Ok(None) => finish_with_lease!(public_error(
+            StatusCode::CONFLICT,
+            "Another signing service rotation is in progress.",
+        )),
+        Err(_) => finish_with_lease!(public_error(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "Signing rotation ownership check is unavailable.",
+        )),
+    };
+    let ownership = tokio::time::timeout(
+        std::time::Duration::from_secs(20),
+        store.ensure_exclusive_rotation_identity(&scope.organization_id, &service, &global_fence),
+    )
+    .await;
+    if !matches!(ownership, Ok(Ok(()))) {
+        let _ = global_fence.release().await;
+        finish_with_lease!(public_error(
+            if matches!(ownership, Ok(Err(registry::RegistryError::Conflict))) {
+                StatusCode::FORBIDDEN
+            } else {
+                StatusCode::SERVICE_UNAVAILABLE
+            },
+            "The KMS key is not exclusively bound to this tenant for rotation.",
+        ));
+    }
+    if !renew_rotation_fences(&lease, &global_fence).await {
+        let _ = global_fence.release().await;
+        finish_with_lease!(public_error(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "Signing rotation ownership check expired before KMS use.",
+        ));
+    }
     let publish_updates = body.publish_updates.unwrap_or(true);
     let activate_at = body.activate_at.unwrap_or_else(|| rotated_at.clone());
     let task_store = store.clone();
@@ -2119,6 +2153,7 @@ async fn rotate_public_service_key(
         rotate_and_record_public_service(
             task_store,
             lease,
+            global_fence,
             task_organization_id,
             task_service_id,
             registry,
@@ -2189,6 +2224,10 @@ fn registered_service_mut<'a>(registry: &'a mut Value, service_id: &str) -> Opti
                 .iter_mut()
                 .find(|service| service.get("id").and_then(Value::as_str) == Some(service_id))
         })
+}
+
+async fn renew_rotation_fences(tenant: &RotationLease, global: &RotationLease) -> bool {
+    matches!(tenant.renew().await, Ok(true)) && matches!(global.renew().await, Ok(true))
 }
 
 async fn registry_rotation_reconcile_status(
@@ -2420,6 +2459,7 @@ async fn reconcile_registry_rotation(
 async fn rotate_and_record_public_service(
     store: RegistryStore,
     lease: RotationLease,
+    global_fence: RotationLease,
     organization_id: String,
     service_id: String,
     mut registry: Value,
@@ -2506,6 +2546,12 @@ async fn rotate_and_record_public_service(
                 "Pending rotation storage is uncertain; KMS was not called. Check reconciliation status before retrying.",
             ));
         }
+        if !renew_rotation_fences(&lease, &global_fence).await {
+            return Err(public_error(
+                StatusCode::SERVICE_UNAVAILABLE,
+                "Rotation ownership expired before the KMS request; reconcile before retrying.",
+            ));
+        }
         let provider_rotation = match kms::rotate_openbao(ProviderRequest {
             service_config: service.clone(),
         })
@@ -2523,6 +2569,12 @@ async fn rotate_and_record_public_service(
                         }
                 );
                 if definitely_unrotated {
+                    if !renew_rotation_fences(&lease, &global_fence).await {
+                        return Err(public_error(
+                            StatusCode::SERVICE_UNAVAILABLE,
+                            "Rotation ownership expired; reconcile before retrying.",
+                        ));
+                    }
                     if let Some(recorded) = registered_service_mut(&mut registry, &service_id) {
                         recorded["rotation_state"] = prior_state.clone();
                     }
@@ -2573,6 +2625,12 @@ async fn rotate_and_record_public_service(
             return Err(public_error(
                 StatusCode::SERVICE_UNAVAILABLE,
                 "KMS rotation version is uncertain; reconcile before retrying.",
+            ));
+        }
+        if !renew_rotation_fences(&lease, &global_fence).await {
+            return Err(public_error(
+                StatusCode::SERVICE_UNAVAILABLE,
+                "Rotation ownership expired after the KMS request; reconcile before retrying.",
             ));
         }
         rotation_state = prior_state;
@@ -2627,6 +2685,7 @@ async fn rotate_and_record_public_service(
         Ok((rotation_state, rotated_at))
     }
     .await;
+    let _ = tokio::time::timeout(std::time::Duration::from_secs(5), global_fence.release()).await;
     let _ = tokio::time::timeout(std::time::Duration::from_secs(5), lease.release()).await;
     outcome
 }

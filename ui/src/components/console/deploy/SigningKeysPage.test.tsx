@@ -77,12 +77,12 @@ vi.mock('../../../contexts/ConsoleContext', () => ({
 
 describe('SigningKeysPage', () => {
   const CurrentPath = () => <span data-testid="current-path">{useLocation().pathname}</span>
-  const configureRotatableService = () => mockGetKeyManagementConfig.mockResolvedValue({
+  const configureRotatableService = (authMode = 'token') => mockGetKeyManagementConfig.mockResolvedValue({
     supports_native_key_management: false,
     default_service_id: 'svc-transit',
     services: [{
       id: 'svc-transit', name: 'Registered OpenBao', service_type: 'openbao-transit',
-      provider: 'openbao', endpoint: 'http://openbao:8200', mount: 'transit',
+      provider: 'openbao', endpoint: 'http://openbao:8200', mount: 'transit', auth_mode: authMode,
       key_reference: 'registered-key', key_aliases: ['registered-key'],
       algorithms: ['ES256'], managed: false, read_only: false,
     }],
@@ -294,6 +294,17 @@ describe('SigningKeysPage', () => {
       expect(mockRotateServiceKey).toHaveBeenCalledWith('svc-transit', { organization_id: 'org-123' })
       expect(mockShowNotification).toHaveBeenCalledWith('Key rotation completed successfully.', 'success')
     })
+  })
+
+  it('does not offer rotation for an alias using the shared service token', async () => {
+    configureRotatableService('service_token')
+    renderWithRouter(<SigningKeysPage />, {
+      initialEntries: ['/console/org/deploy/key-management'],
+    })
+    await waitFor(() => {
+      expect(screen.getByText('Registered OpenBao')).toBeInTheDocument()
+    })
+    expect(screen.queryByRole('button', { name: 'Rotate key' })).not.toBeInTheDocument()
   })
 
   it('warns when KMS rotation succeeds but public key publication fails', async () => {
