@@ -230,10 +230,14 @@ impl GatewayConfig {
             let url = url::Url::parse(configured)
                 .map_err(|_| error("PASSPORT_PROVIDER_INGRESS_SERVICE_URL is invalid"))?;
             let host = url.host_str().unwrap_or_default();
-            let private_host = host == "passport-provider-ingress"
-                || (host.starts_with("passport-provider-ingress.")
-                    && host.ends_with(".svc.cluster.local"))
-                || matches!(host, "127.0.0.1" | "localhost" | "::1");
+            let private_host = matches!(
+                host,
+                "passport-provider-ingress"
+                    | "passport-provider-ingress.marty-prod.svc.cluster.local"
+                    | "127.0.0.1"
+                    | "localhost"
+                    | "::1"
+            );
             if !private_host || url.path() != "/" {
                 return Err(error(
                     "PASSPORT_PROVIDER_INGRESS_SERVICE_URL must name the private ingress service",
@@ -804,6 +808,11 @@ mod tests {
         values.insert(
             "PASSPORT_PROVIDER_INGRESS_SERVICE_URL".into(),
             "https://public.example".into(),
+        );
+        assert!(GatewayConfig::from_values(&values).is_err());
+        values.insert(
+            "PASSPORT_PROVIDER_INGRESS_SERVICE_URL".into(),
+            "https://passport-provider-ingress.foreign.svc.cluster.local".into(),
         );
         assert!(GatewayConfig::from_values(&values).is_err());
         values.insert(
