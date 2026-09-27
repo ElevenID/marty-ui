@@ -12,7 +12,7 @@
     "identity": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["organization_id", "source_job_id", "application_id", "flow_execution_id", "credential_template_id", "application_template_id", "delivery_destination_profile_id", "flow_execution_attestation_sha256"],
+      "required": ["organization_id", "source_job_id", "application_id", "flow_execution_id", "credential_template_id", "application_template_id", "delivery_destination_profile_id", "artifact_seal_flow_attestation_sha256"],
       "properties": {
         "organization_id": {"$ref": "#/$defs/identifier"},
         "source_job_id": {"$ref": "#/$defs/identifier"},
@@ -21,7 +21,7 @@
         "credential_template_id": {"$ref": "#/$defs/identifier"},
         "application_template_id": {"$ref": "#/$defs/identifier"},
         "delivery_destination_profile_id": {"type": "string", "minLength": 1, "maxLength": 128},
-        "flow_execution_attestation_sha256": {"$ref": "#/$defs/sha256"}
+        "artifact_seal_flow_attestation_sha256": {"$ref": "#/$defs/sha256"}
       }
     },
     "document": {
@@ -87,12 +87,15 @@
     "issuerProfile": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["profile_id", "registry_revision", "profile_record_sha256", "kms_key_reference_sha256"],
+      "required": ["profile_id", "registry_revision", "profile_record_sha256", "kms_key_reference_sha256", "public_key_spki_sha256", "certificate_sha256", "custody_receipt_sha256"],
       "properties": {
         "profile_id": {"$ref": "#/$defs/identifier"},
         "registry_revision": {"type": "integer", "minimum": 1},
         "profile_record_sha256": {"$ref": "#/$defs/sha256"},
-        "kms_key_reference_sha256": {"$ref": "#/$defs/sha256"}
+        "kms_key_reference_sha256": {"$ref": "#/$defs/sha256"},
+        "public_key_spki_sha256": {"$ref": "#/$defs/sha256"},
+        "certificate_sha256": {"$ref": "#/$defs/sha256"},
+        "custody_receipt_sha256": {"$ref": "#/$defs/sha256"}
       }
     }
   }
