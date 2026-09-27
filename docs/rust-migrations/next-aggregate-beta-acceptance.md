@@ -40,8 +40,10 @@ selected here.
 2. Select a fresh unused aggregate coordinate. Use
    `.github/workflows/prepare-stack-tag.yml` and `cd.yml`; retain the source,
    claim/transaction and run identities. Verify annotated tag/source, complete
-   checksums, signed manifest/provenance, release assets and all three OCI
-   digests. Do not overwrite earlier releases or reuse their acceptance evidence.
+   checksums, signed manifest/provenance, release assets and every OCI digest
+   listed in the signed aggregate manifest, including credentials issuance,
+   UI, services and migrations. Do not overwrite earlier releases or reuse
+   their acceptance evidence.
 3. From a clean released worktree, prepare one aggregate beta deployment using
    `scripts/deploy-local-beta-release.ps1 -OfficialStackRelease`, the reviewed
    recorder revision and fresh artifact paths. Verify backups, isolated
