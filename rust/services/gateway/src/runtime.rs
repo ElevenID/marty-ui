@@ -7141,7 +7141,7 @@ mod tests {
             Arc::new(NoOwner),
             recorder.clone(),
         ));
-        let forbidden = limited
+        let forbidden = limited.clone()
             .oneshot(
                 Request::builder()
                     .method("DELETE")
@@ -7154,6 +7154,20 @@ mod tests {
             .unwrap();
         assert_eq!(forbidden.status(), StatusCode::FORBIDDEN);
         assert!(recorder.0.lock().unwrap().is_empty());
+        let created = limited
+            .oneshot(
+                Request::builder()
+                    .method("PATCH")
+                    .uri("/v1/signing-keys/key-1")
+                    .header("cookie", "sessionId=valid")
+                    .header("content-type", "application/json")
+                    .body(Body::from(json!({"name": "New name"}).to_string()))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(created.status(), StatusCode::OK);
+        assert_eq!(recorder.0.lock().unwrap().len(), 1);
         struct KeyMetadataGrantProvider;
         #[async_trait]
         impl OrganizationMembershipProvider for KeyMetadataGrantProvider {
@@ -7166,6 +7180,7 @@ mod tests {
                     .get_membership(user_id, organization_id)
                     .await?;
                 if let Some(membership) = membership.as_mut() {
+                    membership.permissions.remove("signing-key:create");
                     membership.permissions.insert("signing-key:edit".into());
                     membership.permissions.insert("signing-key:delete".into());
                 }
@@ -7205,6 +7220,11 @@ mod tests {
             assert_eq!(denied.status(), StatusCode::UNAUTHORIZED);
             assert_eq!(recorder.0.lock().unwrap().len(), before);
             let accepted = router.clone().oneshot(request(true)).await.unwrap();
+            if method == HttpMethod::Patch {
+                assert_eq!(accepted.status(), StatusCode::FORBIDDEN);
+                assert_eq!(recorder.0.lock().unwrap().len(), before);
+                continue;
+            }
             assert_eq!(accepted.status(), StatusCode::OK);
             let calls = recorder.0.lock().unwrap();
             assert_eq!(calls.len(), before + 1);
