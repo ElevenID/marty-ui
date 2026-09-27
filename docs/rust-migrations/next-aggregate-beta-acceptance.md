@@ -115,7 +115,9 @@ selected here.
    tenant denial, the managed-service rotation boundary, one KMS rotation,
    and persisted version history. This is not issuer-profile key rotation:
    shared managed services are rejected by the service route, and a future
-   CSCA/DSC profile rotation needs its own reviewed contract and API. Rerun the
+   CSCA/DSC profile rotation needs its own reviewed contract and API. The
+   dedicated service CSR success route still needs a Gateway acceptance gate.
+   Rerun the
    route audit on protected main after the stack lands, and complete beta
    acceptance before describing the aggregate release as feature-complete.
 

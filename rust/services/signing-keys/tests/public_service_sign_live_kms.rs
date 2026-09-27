@@ -23,6 +23,75 @@ use std::sync::{
 use tower::ServiceExt;
 use uuid::Uuid;
 
+async fn disposable_redis_url() -> String {
+    let url = std::env::var("MARTY_TEST_REDIS_URL").expect("disposable Redis URL");
+    let parsed = reqwest::Url::parse(&url).expect("disposable Redis URL syntax");
+    assert!(matches!(
+        parsed.host_str(),
+        Some("127.0.0.1" | "localhost" | "::1")
+    ));
+    assert!(parsed
+        .path()
+        .trim_start_matches('/')
+        .parse::<u8>()
+        .is_ok_and(|db| db >= 13));
+    let nonce = std::env::var("MARTY_TEST_REDIS_DISPOSABLE_NONCE")
+        .expect("disposable Redis sentinel value");
+    assert!(nonce.len() >= 16, "disposable Redis sentinel is too short");
+    let client = redis::Client::open(url.as_str()).expect("disposable Redis client");
+    let mut connection = client
+        .get_multiplexed_async_connection()
+        .await
+        .expect("disposable Redis connection");
+    let observed: Option<String> = connection
+        .get("marty:tests:disposable-guard")
+        .await
+        .expect("disposable Redis sentinel read");
+    assert_eq!(observed.as_deref(), Some(nonce.as_str()));
+    url
+}
+
+async fn disposable_openbao() -> (String, String) {
+    let url = std::env::var("MARTY_TEST_OPENBAO_URL").expect("disposable OpenBao URL");
+    let parsed = reqwest::Url::parse(&url).expect("disposable OpenBao URL syntax");
+    assert!(parsed.scheme() == "http" && parsed.host_str() == Some("127.0.0.1"));
+    let token = std::env::var("MARTY_TEST_OPENBAO_TOKEN").expect("disposable OpenBao token");
+    assert_eq!(
+        std::env::var("BAO_TOKEN").ok().as_deref(),
+        Some(token.as_str())
+    );
+    let nonce = std::env::var("MARTY_TEST_OPENBAO_DISPOSABLE_NONCE")
+        .expect("pre-provisioned disposable OpenBao sentinel value");
+    assert!(
+        nonce.len() >= 16,
+        "disposable OpenBao sentinel is too short"
+    );
+    let client = reqwest::Client::new();
+    let marker = client
+        .get(
+            parsed
+                .join("/v1/secret/data/marty-test-disposable-guard")
+                .unwrap(),
+        )
+        .header("X-Vault-Token", &token)
+        .send()
+        .await
+        .expect("disposable OpenBao sentinel read");
+    assert!(
+        marker.status().is_success(),
+        "disposable OpenBao sentinel is absent"
+    );
+    let marker: Value = marker
+        .json()
+        .await
+        .expect("disposable OpenBao sentinel JSON");
+    assert_eq!(
+        marker["data"]["data"]["nonce"].as_str(),
+        Some(nonce.as_str())
+    );
+    (url.trim_end_matches('/').to_owned(), token)
+}
+
 async fn sign(app: &Router, organization_id: &str, payload: Value) -> (StatusCode, Value) {
     sign_service(app, organization_id, "service-a", payload).await
 }
@@ -47,19 +116,15 @@ async fn sign_service(
         .unwrap();
     let status = response.status();
     let bytes = to_bytes(response.into_body(), usize::MAX).await.unwrap();
-    let body = serde_json::from_slice(&bytes).unwrap_or_else(|error| {
-        panic!(
-            "sign route returned non-JSON status={status} parse={error} body={}",
-            String::from_utf8_lossy(&bytes)
-        )
-    });
+    let body = serde_json::from_slice(&bytes)
+        .unwrap_or_else(|_| panic!("sign route returned non-JSON status={status}"));
     (status, body)
 }
 
 #[tokio::test]
-#[ignore = "requires disposable MARTY_TEST_REDIS_URL"]
+#[ignore = "requires independently marked disposable loopback Redis"]
 async fn stale_managed_profile_binding_cannot_select_a_kms_key() {
-    let redis_url = std::env::var("MARTY_TEST_REDIS_URL").expect("disposable Redis URL");
+    let redis_url = disposable_redis_url().await;
     let calls = Arc::new(AtomicUsize::new(0));
     let kms = Router::new().route(
         "/v1/transit/sign/{reference}",
@@ -173,9 +238,9 @@ async fn stale_managed_profile_binding_cannot_select_a_kms_key() {
 }
 
 #[tokio::test]
-#[ignore = "requires disposable MARTY_TEST_REDIS_URL"]
+#[ignore = "requires independently marked disposable loopback Redis"]
 async fn public_config_cannot_replace_managed_kms_purpose_bindings() {
-    let redis_url = std::env::var("MARTY_TEST_REDIS_URL").expect("disposable Redis URL");
+    let redis_url = disposable_redis_url().await;
     let organization_id = format!("test-managed-config-{}", Uuid::new_v4().simple());
     let registry = RegistryStore::connect(&redis_url).await.unwrap();
     registry
@@ -252,9 +317,9 @@ async fn public_config_cannot_replace_managed_kms_purpose_bindings() {
 }
 
 #[tokio::test]
-#[ignore = "requires disposable MARTY_TEST_REDIS_URL and test-only BAO_TOKEN"]
+#[ignore = "requires independently marked disposable loopback Redis and test-only BAO_TOKEN"]
 async fn live_managed_alias_requires_tenant_purpose_and_algorithm_before_kms_sign() {
-    let redis_url = std::env::var("MARTY_TEST_REDIS_URL").expect("disposable Redis URL");
+    let redis_url = disposable_redis_url().await;
     std::env::var("BAO_TOKEN").expect("test-only managed OpenBao token");
     let organization_id = format!("test-managed-alias-{}", Uuid::new_v4().simple());
     let other_organization_id = format!("test-managed-other-{}", Uuid::new_v4().simple());
@@ -377,11 +442,10 @@ async fn live_managed_alias_requires_tenant_purpose_and_algorithm_before_kms_sig
 }
 
 #[tokio::test]
-#[ignore = "requires disposable MARTY_TEST_REDIS_URL, MARTY_TEST_OPENBAO_URL, and MARTY_TEST_OPENBAO_TOKEN"]
+#[ignore = "requires independently marked disposable loopback Redis and OpenBao"]
 async fn public_service_sign_uses_registered_kms_key_and_rejects_unbound_selection() {
-    let redis_url = std::env::var("MARTY_TEST_REDIS_URL").expect("disposable Redis URL");
-    let bao_url = std::env::var("MARTY_TEST_OPENBAO_URL").expect("disposable OpenBao URL");
-    let bao_token = std::env::var("MARTY_TEST_OPENBAO_TOKEN").expect("disposable OpenBao token");
+    let redis_url = disposable_redis_url().await;
+    let (bao_url, bao_token) = disposable_openbao().await;
     let suffix = Uuid::new_v4().simple().to_string();
     let key_name = format!("marty-public-sign-{suffix}");
     let profile_key_name = format!("marty-public-sign-profile-{suffix}");
@@ -393,16 +457,10 @@ async fn public_service_sign_uses_registered_kms_key_and_rejects_unbound_selecti
         .send()
         .await
         .unwrap();
-    if !mount.status().is_success() {
-        let enabled = client
-            .post(format!("{bao_url}/v1/sys/mounts/transit"))
-            .header("X-Vault-Token", &bao_token)
-            .json(&json!({"type":"transit"}))
-            .send()
-            .await
-            .unwrap();
-        assert!(enabled.status().is_success());
-    }
+    assert!(
+        mount.status().is_success(),
+        "disposable Transit mount is unavailable"
+    );
     let created = client
         .post(format!("{bao_url}/v1/transit/keys/{key_name}"))
         .header("X-Vault-Token", &bao_token)
