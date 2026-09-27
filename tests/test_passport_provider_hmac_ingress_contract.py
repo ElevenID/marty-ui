@@ -54,7 +54,8 @@ def test_provider_binding_and_new_kms_envelope_are_distinct() -> None:
     assert reference["provider_profile_id"] == durable["provider_profile_id"]
     assert provider_event["bureau_job_id"] == durable["bureau_job_id"]
     assert internal["organization_id"] == durable["organization_id"]
-    assert {key: value for key, value in internal.items() if key != "organization_id"} == (
+    assert internal["provider_profile_id"] == durable["provider_profile_id"]
+    assert {key: value for key, value in internal.items() if key not in {"organization_id", "provider_profile_id"}} == (
         provider_event
     )
     assert CONTRACT["job_resolution"]["lookup_key"] == [
@@ -90,6 +91,10 @@ def test_contract_requires_fail_closed_provider_resolution() -> None:
     handoff = CONTRACT["internal_handoff"]
     assert "unique non-null" in resolution["durable_binding"]
     assert "without requesting KMS signing" in resolution["zero_or_multiple_matches"]
+    assert "match signed organization_id, provider_profile_id, and bureau_job_id" in resolution[
+        "native_recheck"
+    ]
+    assert "callbacks without provider_profile_id" in resolution["native_recheck"]
     assert "before verifying the MAC" in CONTRACT["provider_authentication"][
         "profile_selection"
     ]

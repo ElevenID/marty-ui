@@ -36,10 +36,10 @@
     "tenant_source": "Read organization_id only from the uniquely matched durable job after provider HMAC verification.",
     "zero_or_multiple_matches": "Fail closed without requesting KMS signing or changing any job.",
     "provider_mismatch": "Fail closed without revealing a foreign organization_id or whether another provider owns the bureau_job_id.",
-    "native_recheck": "The existing native repository must still match both signed organization_id and bureau_job_id, and reject ambiguity within that tenant."
+    "native_recheck": "Provider ingress events must include provider_profile_id inside the KMS-signed internal body. The native repository must match signed organization_id, provider_profile_id, and bureau_job_id, rejecting zero or multiple matches. Existing beta or legacy callbacks without provider_profile_id retain the current organization_id plus bureau_job_id lookup and fail closed on ambiguity within that tenant."
   },
   "internal_handoff": {
-    "body": "Construct a new JSON callback from the trusted durable organization_id, signed bureau_job_id, status, and allowed metadata. The exact newly serialized bytes must be used for both KMS signing and native delivery.",
+    "body": "Construct a new JSON callback from the trusted durable organization_id, authenticated provider_profile_id, signed bureau_job_id, status, and allowed metadata. The exact newly serialized bytes must be used for both KMS signing and native delivery.",
     "sign_route": "/internal/documents/{organization_id}/passport-callbacks/sign",
     "sign_request": {"body_b64": "base64(exact internal callback body bytes)"},
     "signer": "Use the shared Rust passport callback signer implementation through an isolated signer process with a narrowly scoped internal service credential and private signing network. No public caller or bureau receives this credential or an OpenBao token.",
@@ -68,8 +68,8 @@
     "raw_body_hmac_sha256_hex": "7f4da6eec292c1326528a3445cb1311e79f88f8266a9ff489f3c0df080b8360c",
     "durable_match": {"provider_profile_id": "provider-reference", "bureau_job_id": "bureau-reference", "organization_id": "org-reference"},
     "forged_organization_id_case": {"bureau_body_organization_id": "org-foreign", "durable_organization_id": "org-reference", "outcome": "reject without KMS signing or job mutation"},
-    "internal_body_utf8": "{\"organization_id\":\"org-reference\",\"bureau_job_id\":\"bureau-reference\",\"status\":\"SHIPPED\",\"tracking_number\":\"TRACK-42\"}",
-    "kms_signed_input_b64": "bWFydHkucGFzc3BvcnQtYnVyZWF1LWNhbGxiYWNrL3YxAG9yZy1yZWZlcmVuY2UAeyJvcmdhbml6YXRpb25faWQiOiJvcmctcmVmZXJlbmNlIiwiYnVyZWF1X2pvYl9pZCI6ImJ1cmVhdS1yZWZlcmVuY2UiLCJzdGF0dXMiOiJTSElQUEVEIiwidHJhY2tpbmdfbnVtYmVyIjoiVFJBQ0stNDIifQ=="
+    "internal_body_utf8": "{\"organization_id\":\"org-reference\",\"provider_profile_id\":\"provider-reference\",\"bureau_job_id\":\"bureau-reference\",\"status\":\"SHIPPED\",\"tracking_number\":\"TRACK-42\"}",
+    "kms_signed_input_b64": "bWFydHkucGFzc3BvcnQtYnVyZWF1LWNhbGxiYWNrL3YxAG9yZy1yZWZlcmVuY2UAeyJvcmdhbml6YXRpb25faWQiOiJvcmctcmVmZXJlbmNlIiwicHJvdmlkZXJfcHJvZmlsZV9pZCI6InByb3ZpZGVyLXJlZmVyZW5jZSIsImJ1cmVhdV9qb2JfaWQiOiJidXJlYXUtcmVmZXJlbmNlIiwic3RhdHVzIjoiU0hJUFBFRCIsInRyYWNraW5nX251bWJlciI6IlRSQUNLLTQyIn0="
   },
   "fail_closed_cases": [
     "missing, empty, non-hex, uppercase, prefixed, wrong-length, or mismatched provider signature",
