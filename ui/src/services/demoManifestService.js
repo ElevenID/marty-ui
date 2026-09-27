@@ -2,7 +2,7 @@ import { DEMO_INDEX, DEMO_MANIFESTS } from '../generated/demoManifests.generated
 
 const MANIFEST_ROOT = '/demos/manifests';
 const STACK_VERSION_PATTERN = /^\d{4}\.\d{2}\.\d+$/;
-const MIP_VERSION_PATTERN = /^\d+\.\d+\.\d+$/;
+const MIP_VERSION_PATTERN = /^\d+\.\d+\.\d+(?:-beta\.\d+)?$/;
 const YOUTUBE_CHANNEL_ID_PATTERN = /^UC[A-Za-z0-9_-]{22}$/;
 const YOUTUBE_HANDLE_PATTERN = /^@[A-Za-z0-9._-]{3,30}$/;
 const YOUTUBE_PLAYLIST_ID_PATTERN = /^[A-Za-z0-9_-]{10,64}$/;

@@ -88,6 +88,14 @@ describe('demoManifestService', () => {
     })).not.toThrow();
   });
 
+  it('accepts a pinned beta MIP version for a candidate release', () => {
+    expect(() => validateDemoManifest({
+      ...manifest,
+      mip_version: '0.6.0-beta.1',
+      scenarios: [{ ...scenario, mip_version: '0.6.0-beta.1' }],
+    })).not.toThrow();
+  });
+
   it('rejects a published video before the ElevenID LLC channel and release playlist are verified', () => {
     expect(() => validateDemoManifest({
       ...manifest,
