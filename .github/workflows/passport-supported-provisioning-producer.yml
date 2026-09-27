@@ -56,9 +56,9 @@ jobs:
           esac
           work="$RUNNER_TEMP/passport-supported-producer-$GITHUB_RUN_ID"
           mkdir -p "$work"
-          gh run download "$PLAN_RUN_ID" --repo ElevenID/marty-ui \
+          gh run download "$PLAN_RUN_ID" --repo "$GITHUB_REPOSITORY" \
             --name "passport-supported-provisioning-plan-$PLAN_RUN_ID" --dir "$work"
-          gh release download "$RELEASE_TAG" --repo ElevenID/marty-ui \
+          gh release download "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" \
             --pattern stack-manifest.json --pattern SHA256SUMS --dir "$work"
           python3 scripts/passport_supported_provisioning_producer.py \
             --plan "$work/passport-supported-provisioning-plan-$PLAN_RUN_ID.json" \
