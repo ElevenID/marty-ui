@@ -1,11 +1,12 @@
 # Beta aggregate coordinate proposal: 1.1.218
 
 Signing Keys aggregate #913 merged to protected main at
-`c70aa64492f135d3ffd54dc10c8a9867fc39528f`. This local hold proposal is
-rebased on passport aggregate #919, which is still awaiting protected gates and
-merge. The proposal has no protected-main release authority. After the final
-intended passport wave merges, record the exact main SHA and verify that it
-contains the reviewed aggregate behavior before merging this coordinate. No
+`c70aa64492f135d3ffd54dc10c8a9867fc39528f`. Passport aggregate #919
+merged to protected main at `2cbbab9f37ab0fe7c17dcfd4c69212dc46eb9e3d`.
+This local hold proposal has no protected-main release authority. After the
+remaining digital handoff and Rust migration work merges, record the exact main
+SHA and verify that it contains the reviewed aggregate behavior before making
+this coordinate eligible. No
 tag, claim, image, release, deployment, or acceptance is created here.
 
 The lock selects `marty-ui@1.1.218` but keeps `release_state=hold`. The claim
@@ -24,9 +25,12 @@ including drafts, and no `1.1.218` registry manifest for any of the `ui`,
 `services`, or `migrations` images under `ghcr.io/elevenid/marty-ui-oss`.
 Absence is provisional and must be checked again by the protected claim workflow.
 
-After the final aggregate and this proposal merge, review an eligibility patch
-that changes only `release_state` to `eligible`, along with its exact assertion.
-Once that patch passes protected checks and merges, record the new protected
+After the remaining digital and Rust wave merges, review every held-lock
+component pin against the final protected source and its immutable artifacts;
+refresh stale pins in a separate reviewed patch while `release_state` stays
+`hold`. Only after that patch passes protected checks should an eligibility
+patch change `release_state` to `eligible`, with an exact assertion that all
+pins and acceptance gates still match. Once it merges, record the new protected
 main SHA and verify it includes the final aggregate. Then run the documented
 sequence in `docs/BETA_RELEASES.md`: dispatch `prepare-stack-tag.yml` with
 `tag=v1.1.218` and that exact main `source_sha`; retain the successful claim
@@ -40,5 +44,7 @@ tag if any coordinate appears before the claim.
 
 This coordinate patch does not approve a beta deployment, passport cutover,
 Python deletion, or production change. The disposable Rust-to-Python rollback,
-issuer-profile/KMS and provider inputs, protected beta lifecycle, and aggregate
-soak retain their separate runtime gates.
+KMS-backed CSCA/DSC issuer profiles, Marty-managed digital destination, exact
+encrypted package and independent review, protected beta lifecycle, and
+aggregate soak retain their separate runtime gates. External physical paperwork
+or bureau integration is optional and does not qualify the digital claim.

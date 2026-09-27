@@ -25,8 +25,16 @@ ROOT = Path(__file__).resolve().parents[1]
 PRIVATE = "synthetic-private-value-never-echo"
 
 
-def lock():
+def live_lock():
     return json.loads((ROOT / "release/stack-lock.json").read_text(encoding="utf-8"))
+
+
+def eligible_lock():
+    """Model the later reviewed eligibility patch without changing the live hold."""
+    value = live_lock()
+    assert value["release_state"] == "hold"
+    value["release_state"] = "eligible"
+    return value
 
 
 def issuance(value):
@@ -37,7 +45,7 @@ def issuance(value):
 
 def canonical():
     artifact = next(
-        item for item in issuance(lock())["artifacts"] if item["type"] == "oci"
+        item for item in issuance(eligible_lock())["artifacts"] if item["type"] == "oci"
     )
     return artifact["uri"] + "@" + artifact["digest"]
 
@@ -60,7 +68,7 @@ def test_exact_content_digest_accepts_canonical_and_explicit_mirrors_unchanged(
     repository,
 ):
     reference = mirror(repository)
-    original = lock()
+    original = eligible_lock()
     before = deepcopy(original)
     assert binding.validate_issuance_binding(reference, original) == reference
     assert original == before
@@ -99,7 +107,7 @@ def test_exact_content_digest_accepts_canonical_and_explicit_mirrors_unchanged(
 )
 def test_bad_reference_fails_with_only_fixed_diagnostic(reference):
     with pytest.raises(ValueError) as error:
-        binding.validate_issuance_binding(reference, lock())
+        binding.validate_issuance_binding(reference, eligible_lock())
     assert str(error.value) == binding.REFUSAL
     assert PRIVATE not in str(error.value)
 
@@ -128,7 +136,7 @@ def test_bad_reference_fails_with_only_fixed_diagnostic(reference):
     ],
 )
 def test_reviewed_lock_authority_is_required_and_not_mutated(mutation):
-    value = lock()
+    value = eligible_lock()
     component = issuance(value)
     artifact = next(item for item in component["artifacts"] if item["type"] == "oci")
     if mutation == "schema":
@@ -173,14 +181,21 @@ def test_reviewed_lock_authority_is_required_and_not_mutated(mutation):
 
 
 def test_official_formatter_keeps_ghcr_policy_and_existing_alias():
-    artifact = deepcopy(issuance(lock())["artifacts"][0])
+    artifact = deepcopy(issuance(eligible_lock())["artifacts"][0])
     assert official.image_reference(
         artifact, binding.COMPONENT_NAME
     ) == official._image_reference(artifact, binding.COMPONENT_NAME)
     artifact["uri"] = "registry.example/marty-credentials-issuance"
     with pytest.raises(official.OfficialReleaseError):
         official.image_reference(artifact, binding.COMPONENT_NAME)
-    assert binding.validate_issuance_binding(mirror(), lock()) == mirror()
+    assert binding.validate_issuance_binding(mirror(), eligible_lock()) == mirror()
+
+
+def test_live_held_lock_rejects_even_an_exact_issuance_image():
+    actual = live_lock()
+    assert actual["release_state"] == "hold"
+    with pytest.raises(ValueError, match=re.escape(binding.REFUSAL)):
+        binding.validate_issuance_binding(canonical(), actual)
 
 
 @pytest.mark.parametrize(
@@ -204,7 +219,7 @@ def test_cli_fixed_lock_bounded_strict_json_and_private_errors(
     script = tmp_path / "scripts/check_kubernetes_issuance_image.py"
     target = tmp_path / "release/stack-lock.json"
     target.parent.mkdir()
-    raw = json.dumps(lock()).encode()
+    raw = json.dumps(eligible_lock()).encode()
     if mode == "malformed":
         raw = (PRIVATE + "{").encode()
     elif mode == "duplicate":
@@ -266,6 +281,24 @@ def binaries():
     return bash, envsubst
 
 
+def eligible_checker(tmp_path: Path) -> Path:
+    """Run the unmodified CLI against a copied eligible lock in the shell harness."""
+    scripts = tmp_path / "eligible-release" / "scripts"
+    scripts.mkdir(parents=True)
+    for name in (
+        "check_kubernetes_issuance_image.py",
+        "build_stack_manifest.py",
+        "prepare_official_beta_release.py",
+    ):
+        shutil.copyfile(ROOT / "scripts" / name, scripts / name)
+    release = scripts.parent / "release"
+    release.mkdir()
+    (release / "stack-lock.json").write_text(
+        json.dumps(eligible_lock()), encoding="utf-8"
+    )
+    return scripts / "check_kubernetes_issuance_image.py"
+
+
 @pytest.mark.parametrize(
     "case",
     [
@@ -279,10 +312,16 @@ def binaries():
         "mutable-services",
         "misbound-services",
         "disabled-recovery",
+        "held",
     ],
 )
 def test_actual_full_deploy_validates_distinct_images_before_any_write(case, tmp_path):
     bash, envsubst = binaries()
+    checker = (
+        ROOT / "scripts/check_kubernetes_issuance_image.py"
+        if case == "held"
+        else eligible_checker(tmp_path)
+    )
     # No operator environment is inherited, and PATH cannot find real kubectl.
     env = {
         "PATH": tmp_path.as_posix(),
@@ -290,6 +329,7 @@ def test_actual_full_deploy_validates_distinct_images_before_any_write(case, tmp
         "K8S_DIR": (ROOT / "k8s/oracle").as_posix(),
         "PYTHON_BIN": "checked_python",
         "REAL_PYTHON": Path(sys.executable).as_posix(),
+        "ELIGIBLE_CHECKER": checker.as_posix(),
         "REAL_ENVSUBST": envsubst.as_posix(),
         "NAMESPACE": "marty-prod",
         "IMAGE_TAG": "2026.08.0",
@@ -334,7 +374,7 @@ command_not_found_handle() { return 91; }
 checked_python() {
   [[ $# == 1 && "$1" == "$REPO_ROOT/scripts/check_kubernetes_issuance_image.py" ]] || return 92
   printf 'validate\n' >> "$VALIDATIONS"
-  "$REAL_PYTHON" "$@"
+  "$REAL_PYTHON" "$ELIGIBLE_CHECKER"
 }
 cmd_setup_secrets() { printf 'setup-secrets\n' >> "$WRITES"; }
 resolve_secret_input() { [[ $# == 1 && "$1" == CLOUDFLARE_TUNNEL_TOKEN ]] || return 93; printf ''; }
@@ -524,4 +564,4 @@ readonly -f kubectl checked_python envsubst synthetic_native_issuance
     )
     assert container(worker)["command"] == ["/usr/local/bin/marty-canvas-sync-worker"]
     assert not container(worker).get("args")
-    assert lock()["release"] != "marty-ui@" + env["IMAGE_TAG"]
+    assert live_lock()["release"] != "marty-ui@" + env["IMAGE_TAG"]
