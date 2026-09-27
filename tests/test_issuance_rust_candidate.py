@@ -111,6 +111,23 @@ def test_issuance_executable_smoke_uses_an_isolated_migrated_database() -> None:
     assert "skipping executable smoke test" in executable
 
 
+def test_passport_bureau_postgres_contract_runs_in_ci() -> None:
+    workflow = text(".github/workflows/ci.yml")
+    bureau = text("rust/services/issuance/src/bin/passport_beta_bureau.rs")
+
+    assert "marty_passport_bureau_test" in workflow
+    assert (
+        "PASSPORT_BUREAU_TEST_DATABASE_URL=postgresql://postgres:postgres@127.0.0.1:5432/"
+        "marty_passport_bureau_test"
+    ) in workflow
+    assert "cargo test --locked --workspace" in workflow
+    assert "test = true" in text("rust/services/issuance/Cargo.toml")
+    assert (
+        "postgres_bureau_jobs_are_durable_idempotent_and_tenant_bound_when_configured"
+        in bureau
+    )
+
+
 def test_frozen_surface_provenance_and_coverage_are_complete() -> None:
     surface_bytes = (ROOT / "contracts/issuance-runtime-surface.json").read_bytes()
     surface = json.loads(surface_bytes)

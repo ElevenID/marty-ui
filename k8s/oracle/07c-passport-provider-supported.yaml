@@ -1,0 +1,256 @@
+# Explicit opt-in after physical-provider acceptance. deploy-kubernetes.sh does
+# not apply this file. Create the three separate Secrets before applying it.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: passport-callback-signer-supported
+  namespace: marty-prod
+  labels:
+    app: passport-callback-signer-supported
+    app.kubernetes.io/part-of: marty-platform
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: passport-callback-signer-supported
+  template:
+    metadata:
+      labels:
+        app: passport-callback-signer-supported
+    spec:
+      serviceAccountName: marty-app
+      automountServiceAccountToken: false
+      imagePullSecrets:
+        - name: ocir-secret
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 10001
+        runAsGroup: 10001
+        fsGroup: 10001
+      containers:
+        - name: passport-callback-signer-supported
+          image: ${MARTY_SERVICES_IMAGE}
+          imagePullPolicy: Always
+          command: ["/app/services/entrypoint.sh"]
+          env:
+            - name: SERVICE_NAME
+              value: passport_callback_signer_supported
+            - name: ENVIRONMENT
+              value: production
+            - name: PASSPORT_SUPPORTED_CALLBACK_SIGNER_ENABLED
+              value: "true"
+            - name: PASSPORT_CALLBACK_SIGNER_API_KEY_FILE
+              value: /run/secrets/signer-api/api_key
+            - name: PASSPORT_CALLBACK_SIGNER_BAO_TOKEN_FILE
+              value: /run/secrets/signer-bao/token
+            - name: BAO_ADDR
+              valueFrom:
+                configMapKeyRef:
+                  name: marty-config
+                  key: BAO_ADDR
+          ports:
+            - name: http
+              containerPort: 8018
+          volumeMounts:
+            - name: signer-api
+              mountPath: /run/secrets/signer-api
+              readOnly: true
+            - name: signer-bao
+              mountPath: /run/secrets/signer-bao
+              readOnly: true
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: 8018
+            periodSeconds: 10
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: 8018
+            periodSeconds: 15
+          resources:
+            requests:
+              cpu: 100m
+              memory: 128Mi
+            limits:
+              cpu: 400m
+              memory: 512Mi
+      volumes:
+        - name: signer-api
+          secret:
+            secretName: passport-callback-signer-api
+            defaultMode: 288
+            items:
+              - key: api_key
+                path: api_key
+        - name: signer-bao
+          secret:
+            secretName: passport-callback-signer-bao-token
+            defaultMode: 288
+            items:
+              - key: token
+                path: token
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: passport-callback-signer-supported
+  namespace: marty-prod
+spec:
+  type: ClusterIP
+  selector:
+    app: passport-callback-signer-supported
+  ports:
+    - name: http
+      port: 8018
+      targetPort: 8018
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: passport-callback-signer-supported-ingress
+  namespace: marty-prod
+spec:
+  podSelector:
+    matchLabels:
+      app: passport-callback-signer-supported
+  policyTypes: [Ingress]
+  ingress:
+    - from:
+        - podSelector:
+            matchLabels:
+              app: passport-provider-ingress
+      ports:
+        - protocol: TCP
+          port: 8018
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: passport-provider-ingress
+  namespace: marty-prod
+  labels:
+    app: passport-provider-ingress
+    app.kubernetes.io/part-of: marty-platform
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: passport-provider-ingress
+  template:
+    metadata:
+      labels:
+        app: passport-provider-ingress
+    spec:
+      serviceAccountName: marty-app
+      automountServiceAccountToken: false
+      imagePullSecrets:
+        - name: ocir-secret
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 10001
+        runAsGroup: 10001
+        fsGroup: 10001
+      containers:
+        - name: passport-provider-ingress
+          image: ${MARTY_SERVICES_IMAGE}
+          imagePullPolicy: Always
+          command: ["/app/services/entrypoint.sh"]
+          env:
+            - name: SERVICE_NAME
+              value: passport_provider_ingress
+            - name: PASSPORT_PROVIDER_INGRESS_ENABLED
+              value: "true"
+            - name: PERSONALIZATION_BUREAU_PROVIDER_PROFILE_ID
+              valueFrom:
+                configMapKeyRef:
+                  name: marty-config
+                  key: PERSONALIZATION_BUREAU_PROVIDER_PROFILE_ID
+            - name: PASSPORT_PROVIDER_WEBHOOK_SECRET_FILE
+              value: /run/secrets/provider-webhook/secret
+            - name: PASSPORT_PROVIDER_SIGNER_API_KEY_FILE
+              value: /run/secrets/signer-api/api_key
+            - name: PASSPORT_PROVIDER_SIGNER_URL
+              value: http://passport-callback-signer-supported:8018/internal/documents
+            - name: PASSPORT_PROVIDER_NATIVE_CALLBACK_URL
+              value: http://issuance-native:8005/v1/passport/webhooks/personalization
+            - name: DATABASE_URL
+              valueFrom:
+                secretKeyRef:
+                  name: marty-secrets
+                  key: DATABASE_SYNC_URL
+          ports:
+            - name: http
+              containerPort: 8021
+          volumeMounts:
+            - name: provider-webhook
+              mountPath: /run/secrets/provider-webhook
+              readOnly: true
+            - name: signer-api
+              mountPath: /run/secrets/signer-api
+              readOnly: true
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: 8021
+            periodSeconds: 10
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: 8021
+            periodSeconds: 15
+          resources:
+            requests:
+              cpu: 100m
+              memory: 128Mi
+            limits:
+              cpu: 400m
+              memory: 512Mi
+      volumes:
+        - name: provider-webhook
+          secret:
+            secretName: passport-provider-webhook
+            defaultMode: 288
+            items:
+              - key: secret
+                path: secret
+        - name: signer-api
+          secret:
+            secretName: passport-callback-signer-api
+            defaultMode: 288
+            items:
+              - key: api_key
+                path: api_key
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: passport-provider-ingress
+  namespace: marty-prod
+spec:
+  type: ClusterIP
+  selector:
+    app: passport-provider-ingress
+  ports:
+    - name: http
+      port: 8021
+      targetPort: 8021
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: passport-provider-ingress-gateway
+  namespace: marty-prod
+spec:
+  podSelector:
+    matchLabels:
+      app: passport-provider-ingress
+  policyTypes: [Ingress]
+  ingress:
+    - from:
+        - podSelector:
+            matchLabels:
+              app: gateway
+      ports:
+        - protocol: TCP
+          port: 8021

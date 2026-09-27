@@ -1,0 +1,22 @@
+# Base-surface selectors in an isolated disposable project.
+services:
+  gateway:
+    environment:
+      ENVIRONMENT: development
+      PASSPORT_ACCEPTANCE_SURFACE: base
+  flow:
+    environment:
+      ENVIRONMENT: development
+      PASSPORT_ACCEPTANCE_SURFACE: base
+  issuance-native:
+    environment:
+      ENVIRONMENT: development
+      PASSPORT_ACCEPTANCE_SURFACE: base
+  passport-callback-signer-supported:
+    environment:
+      ENVIRONMENT: development
+      PASSPORT_ACCEPTANCE_SURFACE: base
+  passport-provider-ingress:
+    environment:
+      ENVIRONMENT: development
+      PASSPORT_ACCEPTANCE_SURFACE: base

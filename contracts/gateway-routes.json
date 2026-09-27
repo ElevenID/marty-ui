@@ -21,7 +21,7 @@
       "MIPVersionMiddleware"
     ]
   },
-  "route_count": 442,
+  "route_count": 444,
   "routes": [
     {
       "include_in_schema": true,
@@ -2271,6 +2271,18 @@
       "include_in_schema": true,
       "method": "PUT",
       "path": "/v1/signing-keys/issuer-identities/csca-certificate",
+      "status_code": 200
+    },
+    {
+      "include_in_schema": true,
+      "method": "POST",
+      "path": "/v1/signing-keys/issuer-identities/dsc-certificate",
+      "status_code": 200
+    },
+    {
+      "include_in_schema": true,
+      "method": "POST",
+      "path": "/v1/signing-keys/issuer-identities/csca-self-signed-certificate",
       "status_code": 200
     },
     {

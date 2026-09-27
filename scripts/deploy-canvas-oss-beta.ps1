@@ -10,6 +10,10 @@ param(
 
     [string]$RecorderRevision,
 
+    [switch]$EnablePassportNative,
+
+    [switch]$EnableDidcommAuthcrypt,
+
     [string]$TunnelEnvFile,
 
     [string]$GeneratedEnvFile,
@@ -103,6 +107,38 @@ function Compare-SelfhostProductionInvariant([object[]]$Before, [object[]]$After
     return @($changes)
 }
 
+function New-BetaDeployArguments {
+    param(
+        [string]$ArtifactDir,
+        [switch]$OfficialStackRelease,
+        [string]$RecorderRevision,
+        [switch]$EnablePassportNative,
+        [switch]$EnableDidcommAuthcrypt,
+        [string]$TunnelEnvFile,
+        [string]$GeneratedEnvFile
+    )
+    $arguments = @{
+        ArtifactDir = $ArtifactDir
+        BetaOrigin = "https://beta.elevenidllc.com"
+        EnablePortableCanvas = $true
+        CanvasOrigin = "https://canvas-test.elevenidllc.com"
+        PilotOrganizationId = "00000000-0000-0000-0000-000000000001"
+    }
+    if ($OfficialStackRelease) {
+        $arguments.OfficialStackRelease = $true
+        $arguments.RecorderRevision = $RecorderRevision
+    }
+    if ($EnablePassportNative) { $arguments.EnablePassportNative = $true }
+    if ($EnableDidcommAuthcrypt) { $arguments.EnableDidcommAuthcrypt = $true }
+    if (-not [string]::IsNullOrWhiteSpace($TunnelEnvFile)) {
+        $arguments.TunnelEnvFile = $TunnelEnvFile
+    }
+    if (-not [string]::IsNullOrWhiteSpace($GeneratedEnvFile)) {
+        $arguments.GeneratedEnvFile = $GeneratedEnvFile
+    }
+    return $arguments
+}
+
 $repoRoot = (Resolve-Path (Join-Path $PSScriptRoot "..")).Path
 $allowedRoot = (Resolve-Path (Join-Path $repoRoot "tests\artifacts")).Path
 $resolvedArtifacts = (Resolve-Path $ArtifactDir).Path
@@ -157,23 +193,14 @@ $invariantError = $null
 $exitCode = 1
 $outcome = "failed"
 try {
-    $deployArguments = @{
-        ArtifactDir = $resolvedArtifacts
-        BetaOrigin = "https://beta.elevenidllc.com"
-        EnablePortableCanvas = $true
-        CanvasOrigin = "https://canvas-test.elevenidllc.com"
-        PilotOrganizationId = "00000000-0000-0000-0000-000000000001"
-    }
-    if ($OfficialStackRelease) {
-        $deployArguments.OfficialStackRelease = $true
-        $deployArguments.RecorderRevision = $RecorderRevision
-    }
-    if (-not [string]::IsNullOrWhiteSpace($TunnelEnvFile)) {
-        $deployArguments.TunnelEnvFile = $TunnelEnvFile
-    }
-    if (-not [string]::IsNullOrWhiteSpace($GeneratedEnvFile)) {
-        $deployArguments.GeneratedEnvFile = $GeneratedEnvFile
-    }
+    $deployArguments = New-BetaDeployArguments `
+        -ArtifactDir $resolvedArtifacts `
+        -OfficialStackRelease:$OfficialStackRelease `
+        -RecorderRevision $RecorderRevision `
+        -EnablePassportNative:$EnablePassportNative `
+        -EnableDidcommAuthcrypt:$EnableDidcommAuthcrypt `
+        -TunnelEnvFile $TunnelEnvFile `
+        -GeneratedEnvFile $GeneratedEnvFile
     & (Join-Path $PSScriptRoot "deploy-local-beta-release.ps1") @deployArguments
     $exitCode = 0
     $outcome = "passed"

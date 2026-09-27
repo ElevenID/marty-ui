@@ -1,0 +1,71 @@
+# Opt-in physical bureau callback path for docker-compose.selfhost.prod.yml.
+# The signer reaches the external OpenBao address by outbound connection only.
+services:
+  gateway:
+    environment:
+      PASSPORT_PROVIDER_INGRESS_SERVICE_URL: ${PASSPORT_PROVIDER_INGRESS_SERVICE_URL:-}
+
+  passport-callback-signer-supported:
+    image: ${MARTY_SERVICES_IMAGE:?set MARTY_SERVICES_IMAGE to the immutable services image digest}
+    environment:
+      SERVICE_NAME: passport_callback_signer_supported
+      ENVIRONMENT: production
+      PASSPORT_SUPPORTED_CALLBACK_SIGNER_ENABLED: "true"
+      PASSPORT_CALLBACK_SIGNER_API_KEY_FILE: /run/secrets/passport_callback_signer_api_key
+      PASSPORT_CALLBACK_SIGNER_BAO_TOKEN_FILE: /run/secrets/passport_callback_signer_bao_token
+      BAO_ADDR: ${BAO_ADDR:?set the external OpenBao address}
+    secrets:
+      - passport_callback_signer_api_key
+      - passport_callback_signer_bao_token
+    healthcheck:
+      test: ["CMD", "curl", "--fail", "http://localhost:8018/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+    networks:
+      - passport-provider-signing
+    restart: unless-stopped
+
+  passport-provider-ingress:
+    image: ${MARTY_SERVICES_IMAGE:?set MARTY_SERVICES_IMAGE to the immutable services image digest}
+    environment:
+      SERVICE_NAME: passport_provider_ingress
+      PASSPORT_PROVIDER_INGRESS_ENABLED: "true"
+      PERSONALIZATION_BUREAU_PROVIDER_PROFILE_ID: ${PERSONALIZATION_BUREAU_PROVIDER_PROFILE_ID:?select a registered physical provider profile}
+      PASSPORT_PROVIDER_WEBHOOK_SECRET_FILE: /run/secrets/passport_provider_webhook_secret
+      PASSPORT_PROVIDER_SIGNER_API_KEY_FILE: /run/secrets/passport_callback_signer_api_key
+      PASSPORT_PROVIDER_SIGNER_URL: http://passport-callback-signer-supported:8018/internal/documents
+      PASSPORT_PROVIDER_NATIVE_CALLBACK_URL: http://issuance-native:8005/v1/passport/webhooks/personalization
+      MARTY_DB_PASSWORD_FILE: /run/secrets/marty_db_password
+      DATABASE_URL_TEMPLATE: postgresql://marty:$${MARTY_DB_PASSWORD}@postgres:5432/marty
+    secrets:
+      - passport_provider_webhook_secret
+      - passport_callback_signer_api_key
+      - marty_db_password
+    depends_on:
+      postgres:
+        condition: service_healthy
+      passport-callback-signer-supported:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "--fail", "http://localhost:8021/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+    networks:
+      - default
+      - passport-provider-signing
+    restart: unless-stopped
+
+secrets:
+  passport_provider_webhook_secret:
+    file: ${SELFHOST_SECRET_DIR:?set SELFHOST_SECRET_DIR}/passport_provider_webhook_secret
+  passport_callback_signer_api_key:
+    file: ${SELFHOST_SECRET_DIR:?set SELFHOST_SECRET_DIR}/passport_callback_signer_api_key
+  passport_callback_signer_bao_token:
+    file: ${SELFHOST_SECRET_DIR:?set SELFHOST_SECRET_DIR}/passport_callback_signer_bao_token
+  marty_db_password:
+    file: ${SELFHOST_SECRET_DIR:?set SELFHOST_SECRET_DIR}/marty_db_password
+
+networks:
+  passport-provider-signing: {}

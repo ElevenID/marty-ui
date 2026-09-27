@@ -7,7 +7,7 @@ use std::{
     path::PathBuf,
 };
 
-use marty_passport_auth::PassportTenantKeyring;
+use marty_passport_auth::{PassportTenantCredentialSource, PassportTenantKeyring};
 use thiserror::Error;
 
 use crate::discovery::ReleaseIdentity;
@@ -106,9 +106,12 @@ pub struct GatewayConfig {
     pub grpc_insecure_allowed: bool,
     pub grpc_service_token: Option<String>,
     pub signing_internal_api_key: String,
+    pub dsc_issue_gateway_key: Option<String>,
+    pub csca_issue_gateway_key: Option<String>,
     pub issuance_api_key: String,
     pub passport_native_gateway_enabled: bool,
-    pub passport_tenant_keys: Option<PassportTenantKeyring>,
+    pub passport_provider_ingress_gateway_enabled: bool,
+    pub passport_tenant_keys: Option<PassportTenantCredentialSource>,
     pub redis_url: Option<String>,
     pub cors_origins: Vec<String>,
     pub issuer_base_url: String,
@@ -143,10 +146,22 @@ impl fmt::Debug for GatewayConfig {
                 &self.grpc_service_token.is_some(),
             )
             .field("signing_internal_api_key_configured", &true)
+            .field(
+                "dsc_issue_gateway_key_configured",
+                &self.dsc_issue_gateway_key.is_some(),
+            )
+            .field(
+                "csca_issue_gateway_key_configured",
+                &self.csca_issue_gateway_key.is_some(),
+            )
             .field("issuance_api_key_configured", &true)
             .field(
                 "passport_native_gateway_enabled",
                 &self.passport_native_gateway_enabled,
+            )
+            .field(
+                "passport_provider_ingress_gateway_enabled",
+                &self.passport_provider_ingress_gateway_enabled,
             )
             .field(
                 "passport_tenant_keys_configured",
@@ -189,6 +204,10 @@ impl GatewayConfig {
             environment.to_ascii_lowercase().as_str(),
             "development" | "dev" | "local" | "test"
         );
+        let passport_native_gateway_enabled =
+            boolean(values, "PASSPORT_NATIVE_GATEWAY_ENABLED", false)?;
+        let passport_provider_ingress_gateway_enabled =
+            boolean(values, "PASSPORT_PROVIDER_INGRESS_GATEWAY_ENABLED", false)?;
         let port = parse(values, "GATEWAY_PORT", 8000_u16)?;
         let mut service_urls = SERVICE_URLS
             .iter()
@@ -202,6 +221,33 @@ impl GatewayConfig {
         let issuance_native_url = value(values, "ISSUANCE_NATIVE_SERVICE_URL")
             .unwrap_or_else(|| service_urls["issuance"].clone());
         service_urls.insert("issuance-native".into(), issuance_native_url);
+        let provider_ingress_url = value(values, "PASSPORT_PROVIDER_INGRESS_SERVICE_URL");
+        if passport_provider_ingress_gateway_enabled && provider_ingress_url.is_none() {
+            return Err(error("PASSPORT_PROVIDER_INGRESS_SERVICE_URL is required when provider ingress routing is enabled"));
+        }
+        if passport_provider_ingress_gateway_enabled {
+            let configured = provider_ingress_url.as_deref().unwrap_or_default();
+            let url = url::Url::parse(configured)
+                .map_err(|_| error("PASSPORT_PROVIDER_INGRESS_SERVICE_URL is invalid"))?;
+            let host = url.host_str().unwrap_or_default();
+            let private_host = matches!(
+                host,
+                "passport-provider-ingress"
+                    | "passport-provider-ingress.marty-prod.svc.cluster.local"
+                    | "127.0.0.1"
+                    | "localhost"
+                    | "::1"
+            );
+            if !private_host || url.path() != "/" {
+                return Err(error(
+                    "PASSPORT_PROVIDER_INGRESS_SERVICE_URL must name the private ingress service",
+                ));
+            }
+        }
+        service_urls.insert(
+            "passport-provider-ingress".into(),
+            provider_ingress_url.unwrap_or_else(|| "http://localhost:8021".into()),
+        );
         validate_service_urls(&service_urls)?;
 
         let grpc_service_token = secret(values, "GRPC_SERVICE_TOKEN")?;
@@ -218,20 +264,114 @@ impl GatewayConfig {
                 16,
             )?;
         }
+        let dsc_issue_gateway_key = secret(values, "SIGNING_KEYS_DSC_ISSUE_GATEWAY_KEY")?;
+        if value(values, "SIGNING_KEYS_CSCA_ISSUE_GATEWAY_KEY_FILE").is_some() {
+            return Err(error(
+                "SIGNING_KEYS_CSCA_ISSUE_GATEWAY_KEY_FILE is not allowed for beta passport issuance",
+            ));
+        }
+        let csca_issue_gateway_key = secret(values, "SIGNING_KEYS_CSCA_ISSUE_GATEWAY_KEY")?;
+        if csca_issue_gateway_key.is_some() && !environment.eq_ignore_ascii_case("beta") {
+            return Err(error("CSCA issuance credential is beta-only"));
+        }
+        if (environment.eq_ignore_ascii_case("beta") && passport_native_gateway_enabled)
+            || dsc_issue_gateway_key.is_some()
+        {
+            validate_production_secret(
+                "SIGNING_KEYS_DSC_ISSUE_GATEWAY_KEY",
+                dsc_issue_gateway_key.as_deref(),
+                32,
+            )?;
+        }
+        if dsc_issue_gateway_key.as_deref() == Some(signing_internal_api_key.as_str()) {
+            return Err(error(
+                "DSC issuance credential must differ from the shared Signing Keys key",
+            ));
+        }
+        if (environment.eq_ignore_ascii_case("beta") && passport_native_gateway_enabled)
+            || csca_issue_gateway_key.is_some()
+        {
+            validate_production_secret(
+                "SIGNING_KEYS_CSCA_ISSUE_GATEWAY_KEY",
+                csca_issue_gateway_key.as_deref(),
+                32,
+            )?;
+        }
+        if csca_issue_gateway_key.as_deref() == Some(signing_internal_api_key.as_str())
+            || csca_issue_gateway_key.as_deref() == dsc_issue_gateway_key.as_deref()
+                && csca_issue_gateway_key.is_some()
+        {
+            return Err(error(
+                "CSCA issuance credential must differ from shared and DSC Signing Keys credentials",
+            ));
+        }
         let issuance_api_key = secret(values, "ISSUANCE_API_KEY")?
             .or_else(|| (!production).then(|| "dev-issuance-api-key".into()))
             .ok_or_else(|| error("ISSUANCE_API_KEY is required"))?;
         if production {
             validate_production_secret("ISSUANCE_API_KEY", Some(&issuance_api_key), 16)?;
         }
+        if let Some(dsc_key) = dsc_issue_gateway_key.as_deref() {
+            let reused_in_environment = values.iter().any(|(name, value)| {
+                name != "SIGNING_KEYS_DSC_ISSUE_GATEWAY_KEY"
+                    && name != "SIGNING_KEYS_DSC_ISSUE_GATEWAY_KEY_FILE"
+                    && value.contains(dsc_key)
+            });
+            if reused_in_environment
+                || grpc_service_token.as_deref() == Some(dsc_key)
+                || issuance_api_key == dsc_key
+            {
+                return Err(error(
+                    "DSC issuance credential must not be reused by another configuration value",
+                ));
+            }
+        }
+        if let Some(csca_key) = csca_issue_gateway_key.as_deref() {
+            let reused_in_environment = values.iter().any(|(name, value)| {
+                name != "SIGNING_KEYS_CSCA_ISSUE_GATEWAY_KEY"
+                    && name != "SIGNING_KEYS_CSCA_ISSUE_GATEWAY_KEY_FILE"
+                    && value.contains(csca_key)
+            });
+            if reused_in_environment
+                || grpc_service_token.as_deref() == Some(csca_key)
+                || issuance_api_key == csca_key
+            {
+                return Err(error(
+                    "CSCA issuance credential must not be reused by another configuration value",
+                ));
+            }
+        }
+        let passport_internal_service_auth_enabled =
+            boolean(values, "PASSPORT_INTERNAL_SERVICE_AUTH_ENABLED", false)?;
+        if passport_internal_service_auth_enabled
+            && (value(values, "PASSPORT_TENANT_API_KEYS").is_some()
+                || value(values, "PASSPORT_TENANT_API_KEYS_FILE").is_some())
+        {
+            return Err(error(
+                "internal passport service authentication cannot be combined with a tenant keyring",
+            ));
+        }
         let passport_tenant_keys = secret(values, "PASSPORT_TENANT_API_KEYS")?
             .map(|value| {
                 PassportTenantKeyring::from_json(&value)
                     .map_err(|_| error("PASSPORT_TENANT_API_KEYS must be a valid tenant keyring"))
             })
-            .transpose()?;
-        let passport_native_gateway_enabled =
-            boolean(values, "PASSPORT_NATIVE_GATEWAY_ENABLED", false)?;
+            .transpose()?
+            .map(Into::into);
+        let passport_tenant_keys = if passport_internal_service_auth_enabled {
+            Some(
+                PassportTenantCredentialSource::internal_service_token(
+                    grpc_service_token.as_deref().ok_or_else(|| {
+                        error("GRPC_SERVICE_TOKEN is required for internal passport authentication")
+                    })?,
+                )
+                .map_err(|_| {
+                    error("GRPC_SERVICE_TOKEN is invalid for internal passport authentication")
+                })?,
+            )
+        } else {
+            passport_tenant_keys
+        };
         if passport_native_gateway_enabled && passport_tenant_keys.is_none() {
             return Err(error(
                 "PASSPORT_TENANT_API_KEYS is required when PASSPORT_NATIVE_GATEWAY_ENABLED is true",
@@ -334,8 +474,11 @@ impl GatewayConfig {
             grpc_insecure_allowed,
             grpc_service_token,
             signing_internal_api_key,
+            dsc_issue_gateway_key,
+            csca_issue_gateway_key,
             issuance_api_key,
             passport_native_gateway_enabled,
+            passport_provider_ingress_gateway_enabled,
             passport_tenant_keys,
             redis_url,
             cors_origins,
@@ -558,6 +701,7 @@ mod tests {
         assert!(config.redis_url.is_none());
         assert!(config.passport_tenant_keys.is_none());
         assert!(!config.passport_native_gateway_enabled);
+        assert!(!config.passport_provider_ingress_gateway_enabled);
         assert!(config.release_identity.component_revisions.is_empty());
     }
 
@@ -590,6 +734,50 @@ mod tests {
     }
 
     #[test]
+    fn internal_passport_auth_uses_existing_service_token_without_loading_a_keyring() {
+        let token = "g".repeat(32);
+        let mut values = BTreeMap::from([
+            ("PASSPORT_NATIVE_GATEWAY_ENABLED".into(), "true".into()),
+            (
+                "PASSPORT_INTERNAL_SERVICE_AUTH_ENABLED".into(),
+                "true".into(),
+            ),
+            ("GRPC_SERVICE_TOKEN".into(), token.clone()),
+        ]);
+        let config = GatewayConfig::from_values(&values).unwrap();
+        assert_eq!(
+            config
+                .passport_tenant_keys
+                .as_ref()
+                .unwrap()
+                .key_for("org-a"),
+            Some(token.as_str())
+        );
+        assert!(!format!("{config:?}").contains(&token));
+        values.insert(
+            "PASSPORT_TENANT_API_KEYS_FILE".into(),
+            "nonexistent-keyring".into(),
+        );
+        assert!(GatewayConfig::from_values(&values)
+            .unwrap_err()
+            .to_string()
+            .contains("cannot be combined"));
+        values.remove("PASSPORT_TENANT_API_KEYS_FILE");
+        values.remove("GRPC_SERVICE_TOKEN");
+        assert!(GatewayConfig::from_values(&values).is_err());
+    }
+
+    #[test]
+    fn grpc_target_rejects_embedded_credentials_before_configuration_can_be_logged() {
+        let values = BTreeMap::from([(
+            "ORG_GRPC_TARGET".into(),
+            "http://synthetic-private-value@organization:9002".into(),
+        )]);
+        let error = GatewayConfig::from_values(&values).unwrap_err();
+        assert!(!error.to_string().contains("synthetic-private-value"));
+    }
+
+    #[test]
     fn passport_native_gateway_switch_is_default_off_and_requires_tenant_keys() {
         let mut values =
             BTreeMap::from([("PASSPORT_NATIVE_GATEWAY_ENABLED".into(), "true".into())]);
@@ -608,6 +796,32 @@ mod tests {
         );
         values.insert("PASSPORT_NATIVE_GATEWAY_ENABLED".into(), "invalid".into());
         assert!(GatewayConfig::from_values(&values).is_err());
+    }
+
+    #[test]
+    fn provider_ingress_routing_requires_an_explicit_private_service() {
+        let mut values = BTreeMap::from([(
+            "PASSPORT_PROVIDER_INGRESS_GATEWAY_ENABLED".into(),
+            "true".into(),
+        )]);
+        assert!(GatewayConfig::from_values(&values).is_err());
+        values.insert(
+            "PASSPORT_PROVIDER_INGRESS_SERVICE_URL".into(),
+            "https://public.example".into(),
+        );
+        assert!(GatewayConfig::from_values(&values).is_err());
+        values.insert(
+            "PASSPORT_PROVIDER_INGRESS_SERVICE_URL".into(),
+            "https://passport-provider-ingress.foreign.svc.cluster.local".into(),
+        );
+        assert!(GatewayConfig::from_values(&values).is_err());
+        values.insert(
+            "PASSPORT_PROVIDER_INGRESS_SERVICE_URL".into(),
+            "http://passport-provider-ingress:8021".into(),
+        );
+        let config = GatewayConfig::from_values(&values).unwrap();
+        assert!(config.passport_provider_ingress_gateway_enabled);
+        assert!(!config.passport_native_gateway_enabled);
     }
 
     #[test]
@@ -637,6 +851,10 @@ mod tests {
                 "SIGNING_KEYS_INTERNAL_API_KEY".into(),
                 "synthetic-signing-key".into(),
             ),
+            (
+                "SIGNING_KEYS_DSC_ISSUE_GATEWAY_KEY".into(),
+                "synthetic-dsc-gateway-only-credential-000001".into(),
+            ),
             ("ISSUANCE_API_KEY".into(), "synthetic-issuance-key".into()),
             (
                 "REDIS_URL".into(),
@@ -648,6 +866,7 @@ mod tests {
             "private-organization",
             "synthetic-grpc-token",
             "synthetic-signing-key",
+            "synthetic-dsc-gateway-only-credential-000001",
             "synthetic-issuance-key",
             "synthetic-redis-password",
             "synthetic-service-path-token",
@@ -706,6 +925,62 @@ mod tests {
             .to_string()
             .contains("GRPC_TLS_CA_CERT"));
         values.insert("GRPC_INSECURE_ALLOWED".into(), "true".into());
+        assert!(GatewayConfig::from_values(&values).is_ok());
+    }
+
+    #[test]
+    fn beta_passport_requires_a_distinct_dsc_gateway_credential() {
+        let mut values = BTreeMap::from([
+            ("ENVIRONMENT".into(), "beta".into()),
+            ("PASSPORT_NATIVE_GATEWAY_ENABLED".into(), "true".into()),
+            (
+                "PASSPORT_INTERNAL_SERVICE_AUTH_ENABLED".into(),
+                "true".into(),
+            ),
+            ("GRPC_SERVICE_TOKEN".into(), "g".repeat(32)),
+            ("SIGNING_KEYS_INTERNAL_API_KEY".into(), "s".repeat(32)),
+            ("ISSUANCE_API_KEY".into(), "i".repeat(32)),
+            ("GRPC_INSECURE_ALLOWED".into(), "true".into()),
+        ]);
+        assert!(GatewayConfig::from_values(&values)
+            .unwrap_err()
+            .to_string()
+            .contains("SIGNING_KEYS_DSC_ISSUE_GATEWAY_KEY"));
+        values.insert("SIGNING_KEYS_DSC_ISSUE_GATEWAY_KEY".into(), "s".repeat(32));
+        assert!(GatewayConfig::from_values(&values).is_err());
+        values.insert("SIGNING_KEYS_DSC_ISSUE_GATEWAY_KEY".into(), "g".repeat(32));
+        assert!(GatewayConfig::from_values(&values).is_err());
+        values.insert("SIGNING_KEYS_DSC_ISSUE_GATEWAY_KEY".into(), "i".repeat(32));
+        assert!(GatewayConfig::from_values(&values).is_err());
+        values.insert("SIGNING_KEYS_DSC_ISSUE_GATEWAY_KEY".into(), "d".repeat(32));
+        values.insert(
+            "OTHER_SERVICE_URL".into(),
+            format!("https://example/?token={}", "d".repeat(32)),
+        );
+        assert!(GatewayConfig::from_values(&values).is_err());
+        values.remove("OTHER_SERVICE_URL");
+        assert!(GatewayConfig::from_values(&values)
+            .unwrap_err()
+            .to_string()
+            .contains("SIGNING_KEYS_CSCA_ISSUE_GATEWAY_KEY"));
+        values.insert("SIGNING_KEYS_CSCA_ISSUE_GATEWAY_KEY".into(), "s".repeat(32));
+        assert!(GatewayConfig::from_values(&values).is_err());
+        values.insert("SIGNING_KEYS_CSCA_ISSUE_GATEWAY_KEY".into(), "d".repeat(32));
+        assert!(GatewayConfig::from_values(&values).is_err());
+        values.insert("SIGNING_KEYS_CSCA_ISSUE_GATEWAY_KEY".into(), "c".repeat(32));
+        assert!(GatewayConfig::from_values(&values).is_ok());
+        values.insert(
+            "SIGNING_KEYS_CSCA_ISSUE_GATEWAY_KEY_FILE".into(),
+            "C:\\beta-csca-key.txt".into(),
+        );
+        assert!(GatewayConfig::from_values(&values)
+            .unwrap_err()
+            .to_string()
+            .contains("SIGNING_KEYS_CSCA_ISSUE_GATEWAY_KEY_FILE"));
+        values.remove("SIGNING_KEYS_CSCA_ISSUE_GATEWAY_KEY_FILE");
+        values.insert("PASSPORT_NATIVE_GATEWAY_ENABLED".into(), "false".into());
+        values.remove("SIGNING_KEYS_DSC_ISSUE_GATEWAY_KEY");
+        values.remove("SIGNING_KEYS_CSCA_ISSUE_GATEWAY_KEY");
         assert!(GatewayConfig::from_values(&values).is_ok());
     }
 

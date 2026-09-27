@@ -447,6 +447,16 @@
       "description": "Delete signing keys"
     },
     {
+      "resource": "passport-certificate",
+      "action": "issue",
+      "description": "Issue a passport document signer certificate from an active managed CSCA"
+    },
+    {
+      "resource": "passport-certificate",
+      "action": "issue-csca",
+      "description": "Bootstrap a beta CSCA certificate with its active managed issuer profile"
+    },
+    {
       "resource": "webhook",
       "action": "view",
       "description": "View webhooks"

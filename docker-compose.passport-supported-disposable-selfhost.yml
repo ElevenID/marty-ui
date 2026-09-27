@@ -1,0 +1,22 @@
+# Selfhost-surface selectors in an isolated disposable project.
+services:
+  gateway:
+    environment:
+      ENVIRONMENT: production
+      PASSPORT_ACCEPTANCE_SURFACE: selfhost
+  flow:
+    environment:
+      ENVIRONMENT: production
+      PASSPORT_ACCEPTANCE_SURFACE: selfhost
+  issuance-native:
+    environment:
+      ENVIRONMENT: production
+      PASSPORT_ACCEPTANCE_SURFACE: selfhost
+  passport-callback-signer-supported:
+    environment:
+      ENVIRONMENT: production
+      PASSPORT_ACCEPTANCE_SURFACE: selfhost
+  passport-provider-ingress:
+    environment:
+      ENVIRONMENT: production
+      PASSPORT_ACCEPTANCE_SURFACE: selfhost

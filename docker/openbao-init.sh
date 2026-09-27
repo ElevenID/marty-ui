@@ -70,8 +70,13 @@ bao write -address="${BAO_ADDR}" -f transit/keys/flow-response-envelope-marty-ae
     type=aes256-gcm96 exportable=false 2>/dev/null || echo "  flow-response-envelope-marty-aes256 already exists"
 bao write -address="${BAO_ADDR}" -f transit/keys/passport-artifact-marty-aes256 \
     type=aes256-gcm96 exportable=false 2>/dev/null || echo "  passport-artifact-marty-aes256 already exists"
-bao write -address="${BAO_ADDR}" -f transit/keys/passport-bureau-callback-marty-hmac \
-    type=hmac exportable=false 2>/dev/null || echo "  passport-bureau-callback-marty-hmac already exists"
+if [ "$(bao read -address="${BAO_ADDR}" -field=type transit/keys/passport-artifact-marty-aes256 2>/dev/null)" != "aes256-gcm96" ] || \
+   [ "$(bao read -address="${BAO_ADDR}" -field=exportable transit/keys/passport-artifact-marty-aes256 2>/dev/null)" != "false" ]; then
+    echo "Passport artifact Transit key must exist as a non-exportable AES-GCM key" >&2
+    exit 1
+fi
+bao write -address="${BAO_ADDR}" transit/keys/passport-bureau-callback-marty-hmac \
+    type=hmac key_size=32 exportable=false 2>/dev/null || echo "  passport-bureau-callback-marty-hmac already exists"
 if [ "$(bao read -address="${BAO_ADDR}" -field=type transit/keys/passport-bureau-callback-marty-hmac 2>/dev/null)" != "hmac" ] || \
    [ "$(bao read -address="${BAO_ADDR}" -field=exportable transit/keys/passport-bureau-callback-marty-hmac 2>/dev/null)" != "false" ]; then
     echo "Passport callback Transit key must exist as a non-exportable HMAC key" >&2
@@ -244,6 +249,15 @@ path "transit/decrypt/notification-webhook-envelope-marty-aes256" {
 }
 path "transit/keys/notification-webhook-envelope-marty-aes256" {
   capabilities = ["read"]
+}
+EOF
+
+# The supported-consumer callback signer only needs to MAC canonical callback
+# bytes. It cannot verify, read/export a transit key, or use generic signing.
+echo "Writing isolated passport callback HMAC policy..."
+bao policy write -address="${BAO_ADDR}" passport-callback-hmac-service - <<'EOF'
+path "transit/hmac/passport-bureau-callback-marty-hmac" {
+  capabilities = ["create", "update"]
 }
 EOF
 

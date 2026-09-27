@@ -156,6 +156,7 @@ pub fn system_role_templates(catalog: &[PermissionDefinition]) -> Vec<SystemRole
         "flow-instance:cancel".to_owned(),
         "issuance:initiate".to_owned(),
         "issuance:revoke".to_owned(),
+        "passport-certificate:issue".to_owned(),
         "verification:execute".to_owned(),
     ]);
     let viewer = keys_matching(catalog, |permission| permission.action == "view");

@@ -1,0 +1,11 @@
+# Rollback phase only. A protected producer must re-render and revalidate the
+# whole model, recreate only the recorded disposable services, and probe all
+# nine legacy routes before restoring the Rust-owner model.
+services:
+  gateway:
+    environment:
+      PASSPORT_NATIVE_GATEWAY_ENABLED: "false"
+      PASSPORT_PROVIDER_INGRESS_GATEWAY_ENABLED: "false"
+  flow:
+    environment:
+      PASSPORT_NATIVE_FLOW_ENABLED: "false"

@@ -1,9 +1,11 @@
 pub mod certificate_csr;
+pub mod certificate_issuance;
 pub mod compat;
 pub mod config;
 pub mod csca_lifecycle;
 pub mod documents;
 pub mod domain;
+pub mod dsc_issuance_store;
 pub mod flow_envelope;
 pub mod http;
 pub mod kms;

@@ -11,7 +11,8 @@ use axum::{
 };
 use chrono::Utc;
 use marty_passport_auth::{
-    PassportTenantAuthError, PassportTenantKeyring, PassportTenantPrincipal,
+    PassportTenantAuthError, PassportTenantCredentialSource, PassportTenantKeyring,
+    PassportTenantPrincipal,
 };
 use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
@@ -43,11 +44,12 @@ use crate::{
 
 #[derive(Clone)]
 pub struct PassportHttpService {
-    keyring: PassportTenantKeyring,
+    keyring: PassportTenantCredentialSource,
     repository: PostgresPassportRepository,
     cipher: ArtifactAvailability,
     signer: Option<PassportSigner>,
     bureau: Option<BureauClient>,
+    bureau_provider_profile_id: Option<String>,
     webhook_secret: Option<Vec<u8>>,
     webhook_kms: Option<KmsWebhookVerifier>,
 }
@@ -146,10 +148,21 @@ impl PassportHttpService {
         if !native.enabled {
             return Ok(None);
         }
-        let keyring = config
-            .passport_tenant_keys
-            .clone()
-            .ok_or(PassportStartupError::Missing("PASSPORT_TENANT_API_KEYS"))?;
+        let keyring = if native.internal_service_auth_enabled {
+            PassportTenantCredentialSource::internal_service_token(
+                config
+                    .internal_service_token
+                    .as_deref()
+                    .ok_or(PassportStartupError::Missing("GRPC_SERVICE_TOKEN"))?,
+            )
+            .map_err(|_| PassportStartupError::Missing("GRPC_SERVICE_TOKEN"))?
+        } else {
+            config
+                .passport_tenant_keys
+                .clone()
+                .ok_or(PassportStartupError::Missing("PASSPORT_TENANT_API_KEYS"))?
+                .into()
+        };
         let cipher = if native.kms_artifacts_enabled {
             let api_key = config.signing_keys_internal_api_key.as_deref().ok_or(
                 PassportStartupError::Missing("SIGNING_KEYS_INTERNAL_API_KEY"),
@@ -214,6 +227,7 @@ impl PassportHttpService {
             signer,
             bureau,
         );
+        service.bureau_provider_profile_id = native.bureau_provider_profile_id.clone();
         // Inbound callbacks from already-submitted jobs remain verifiable even
         // when outbound bureau submission is not configured.
         if native.kms_callbacks_enabled {
@@ -244,7 +258,7 @@ impl PassportHttpService {
         bureau: Option<BureauClient>,
     ) -> Self {
         Self::with_artifact_availability(
-            keyring,
+            keyring.into(),
             repository,
             cipher.map_or(ArtifactAvailability::Missing, |cipher| {
                 ArtifactAvailability::Ready(ArtifactCryptor::Legacy(cipher))
@@ -255,7 +269,7 @@ impl PassportHttpService {
     }
 
     fn with_artifact_availability(
-        keyring: PassportTenantKeyring,
+        keyring: PassportTenantCredentialSource,
         repository: PostgresPassportRepository,
         cipher: ArtifactAvailability,
         signer: Option<PassportSigner>,
@@ -271,6 +285,7 @@ impl PassportHttpService {
             cipher,
             signer,
             bureau,
+            bureau_provider_profile_id: None,
             webhook_secret,
             webhook_kms: None,
         }
@@ -351,6 +366,7 @@ impl PassportHttpService {
         (
             crate::passport_artifact::PassportSensitiveArtifact,
             SignedMaterial,
+            bool,
         ),
         PassportHttpError,
     > {
@@ -368,7 +384,13 @@ impl PassportHttpService {
             )
             .await
             .map_err(PassportHttpError::Signer)?;
-        Ok((artifact, signed))
+        let sod_verified = signed.verify_data_groups(&data_groups).is_ok();
+        if matches!(self.signer.as_ref(), Some(PassportSigner::Managed(_))) && !sod_verified {
+            return Err(PassportHttpError::Signer(
+                SignerError::InvalidManagedMaterial,
+            ));
+        }
+        Ok((artifact, signed, sod_verified))
     }
 }
 
@@ -425,6 +447,8 @@ enum PassportHttpError {
     Signer(SignerError),
     #[error("Personalization bureau not configured. Set PERSONALIZATION_BUREAU_URL environment variable.")]
     MissingBureau,
+    #[error("Personalization bureau provider is unavailable for this job")]
+    ProviderUnavailable,
     #[error("{0}")]
     Bureau(BureauError),
     #[error("Document is not ready for quality verification")]
@@ -441,6 +465,8 @@ enum PassportHttpError {
     Validation(Value),
     #[error("Physical document changed concurrently; retry the operation")]
     ConcurrentChange,
+    #[error("Physical document has already been submitted to the bureau")]
+    AlreadySubmitted,
     #[error("Physical document repository failed")]
     Storage(sqlx::Error),
     #[error("Physical document webhook repository failed")]
@@ -471,12 +497,14 @@ impl IntoResponse for PassportHttpError {
             | Self::ArtifactKmsUnavailable
             | Self::Signer(SignerError::NotConfigured)
             | Self::Signer(SignerError::ManagedUnavailable)
-            | Self::MissingBureau => StatusCode::SERVICE_UNAVAILABLE,
+            | Self::MissingBureau
+            | Self::ProviderUnavailable => StatusCode::SERVICE_UNAVAILABLE,
             Self::Signer(SignerError::InvalidManagedMaterial) => StatusCode::BAD_GATEWAY,
             Self::Signer(SignerError::UntrustedDsc)
             | Self::QualityNotReady
             | Self::ActivationNotReady
-            | Self::ConcurrentChange => StatusCode::CONFLICT,
+            | Self::ConcurrentChange
+            | Self::AlreadySubmitted => StatusCode::CONFLICT,
             Self::Bureau(BureauError::InvalidWebhookSignature) => StatusCode::UNAUTHORIZED,
             Self::Bureau(BureauError::InvalidWebhookEvent) => StatusCode::UNPROCESSABLE_ENTITY,
             Self::Bureau(
@@ -660,6 +688,9 @@ async fn generate_data_groups(
 ) -> Result<Json<Value>, PassportHttpError> {
     let principal = service.authenticate(&headers)?;
     let job = service.job(&principal, &application_id).await?;
+    if job.bureau_job_id.is_some() {
+        return Err(PassportHttpError::AlreadySubmitted);
+    }
     let groups = service
         .decrypt(&job)
         .await?
@@ -687,7 +718,10 @@ async fn generate_sod(
 ) -> Result<Json<Value>, PassportHttpError> {
     let principal = service.authenticate(&headers)?;
     let job = service.job(&principal, &application_id).await?;
-    let (_, signed) = service.sign(&job).await?;
+    if job.bureau_job_id.is_some() {
+        return Err(PassportHttpError::AlreadySubmitted);
+    }
+    let (_, signed, sod_verified) = service.sign(&job).await?;
     let sod = decode_python_validated_base64(&signed.sod_der_base64)
         .map_err(|_| PassportHttpError::Signer(SignerError::IncompleteMaterial))?;
     let hash = hex::encode(Sha256::digest(sod));
@@ -696,6 +730,7 @@ async fn generate_sod(
     let updated = service.update(&principal, &job, &patch).await?;
     let mut response = safe(&updated);
     response["sod_sha256"] = Value::String(hash);
+    response["sod_signature_verified"] = Value::Bool(sod_verified);
     Ok(Json(response))
 }
 
@@ -706,7 +741,10 @@ async fn submit_personalization(
 ) -> Result<Json<Value>, PassportHttpError> {
     let principal = service.authenticate(&headers)?;
     let job = service.job(&principal, &application_id).await?;
-    let (artifact, signed) = service.sign(&job).await?;
+    if job.bureau_job_id.is_some() {
+        return Ok(Json(safe(&job)));
+    }
+    let (artifact, signed, _) = service.sign(&job).await?;
     let document_type: DocumentType =
         serde_json::from_value(Value::String(job.document_type.clone()))
             .map_err(|_| PassportHttpError::InvalidDocumentType)?;
@@ -736,14 +774,31 @@ async fn submit_personalization(
         .await
         .map_err(PassportHttpError::Bureau)?;
     let mut patch = PassportJobPatch::new(status_from_bureau(outcome.status));
-    patch.bureau_job_id = Some(outcome.bureau_job_id);
+    patch.bureau_job_id = Some(outcome.bureau_job_id.clone());
+    patch.bureau_provider_profile_id = outcome
+        .bureau_job_id
+        .as_ref()
+        .and(service.bureau_provider_profile_id.clone());
     patch.tracking_number = Some(outcome.tracking_number);
     patch.error_code = Some(
         (outcome.status == ProductionStatus::Failed).then(|| "BUREAU_SUBMISSION_FAILED".to_owned()),
     );
     patch.error_message = Some(outcome.error_message);
     patch.submitted_at = Some(Utc::now());
-    let updated = service.update(&principal, &job, &patch).await?;
+    let updated = match service.update(&principal, &job, &patch).await {
+        Ok(updated) => updated,
+        Err(PassportHttpError::ConcurrentChange) => {
+            let current = service.job(&principal, &application_id).await?;
+            if outcome.bureau_job_id.is_none()
+                || current.bureau_job_id.as_deref() != outcome.bureau_job_id.as_deref()
+                || current.bureau_provider_profile_id != patch.bureau_provider_profile_id
+            {
+                return Err(PassportHttpError::ConcurrentChange);
+            }
+            current
+        }
+        Err(error) => return Err(error),
+    };
     Ok(Json(safe(&updated)))
 }
 
@@ -772,6 +827,9 @@ async fn production_status(
     };
     if matches!(job.status.as_str(), "ACTIVE" | "FAILED" | "CANCELLED") {
         return Ok(Json(safe(&job)));
+    }
+    if job.bureau_provider_profile_id.as_deref() != service.bureau_provider_profile_id.as_deref() {
+        return Err(PassportHttpError::ProviderUnavailable);
     }
     let outcome = service
         .bureau()?
@@ -932,6 +990,35 @@ mod tests {
             None,
             None,
         ))
+    }
+
+    #[tokio::test]
+    async fn internal_service_token_authenticates_only_the_presented_organization_context() {
+        let pool = PgPoolOptions::new()
+            .connect_lazy("postgresql://unused:unused@127.0.0.1:5432/unused")
+            .unwrap();
+        let token = "synthetic-internal-passport-token-00000001";
+        let service = PassportHttpService::with_artifact_availability(
+            PassportTenantCredentialSource::internal_service_token(token).unwrap(),
+            PostgresPassportRepository::new(pool),
+            ArtifactAvailability::Missing,
+            None,
+            None,
+        );
+        let mut headers = HeaderMap::new();
+        headers.insert("x-organization-id", "org-a".parse().unwrap());
+        headers.insert("x-api-key", token.parse().unwrap());
+        assert_eq!(
+            service.authenticate(&headers).unwrap().organization_id(),
+            "org-a"
+        );
+        headers.insert("x-api-key", "wrong-token".parse().unwrap());
+        assert!(service.authenticate(&headers).is_err());
+        headers.remove("x-api-key");
+        assert!(service.authenticate(&headers).is_err());
+        headers.insert("x-api-key", token.parse().unwrap());
+        headers.remove("x-organization-id");
+        assert!(service.authenticate(&headers).is_err());
     }
 
     fn authenticated_application_request() -> Request<Body> {

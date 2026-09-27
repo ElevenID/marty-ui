@@ -18,6 +18,11 @@ name = "marty-passport-callback-signer"
 path = "src/bin/passport_callback_signer.rs"
 test = false
 
+[[bin]]
+name = "marty-passport-callback-signer-supported"
+path = "src/bin/passport_callback_signer_supported.rs"
+test = false
+
 [dependencies]
 axum.workspace = true
 aws-config.workspace = true

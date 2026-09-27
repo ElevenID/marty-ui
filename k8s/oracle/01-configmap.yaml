@@ -47,6 +47,18 @@ data:
   ISSUANCE_SERVICE_URL: "http://issuance:8005"
   # Recovery-mode alias: selected rendering overrides this exact consumer key.
   ISSUANCE_NATIVE_SERVICE_URL: "http://issuance:8005"
+  PERSONALIZATION_BUREAU_PROVIDER_PROFILE_ID: ""
+  PASSPORT_PROVIDER_INGRESS_GATEWAY_ENABLED: "false"
+  PASSPORT_PROVIDER_INGRESS_SERVICE_URL: ""
+  # Passport owner selection is opt-in after native image, provider and rollback acceptance.
+  PASSPORT_NATIVE_GATEWAY_ENABLED: "false"
+  PASSPORT_NATIVE_FLOW_ENABLED: "false"
+  PASSPORT_NATIVE_HTTP_ENABLED: "false"
+  PASSPORT_INTERNAL_SERVICE_AUTH_ENABLED: "false"
+  PASSPORT_MANAGED_ISSUER_SIGNING_ENABLED: "false"
+  PASSPORT_KMS_ARTIFACTS_ENABLED: "false"
+  PASSPORT_KMS_CALLBACKS_ENABLED: "false"
+  PERSONALIZATION_BUREAU_URL: ""
   APPLICANT_SERVICE_URL: "http://applicant:8006"
   NOTIFICATION_SERVICE_URL: "http://notification:8007"
   COMPLIANCE_PROFILE_SERVICE_URL: "http://compliance-profile:8008"
