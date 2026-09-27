@@ -34,6 +34,11 @@ def test_language_neutral_contract_matches_closed_model() -> None:
     assert contract["status"] == "blocked"
     assert contract["resources"] == [f"{kind}/{name}" for kind, name in gate.RESOURCES]
     assert contract["rust_selectors"] == list(gate.FLAGS.values())
+    assert "clusterip_without_external_ips_load_balancer_or_node_ports" in contract["required_identity"]
+    assert contract["runtime_identity"] == [
+        "pod_replicaset_deployment_owner_uid_chain",
+        "second_full_identity_preflight_after_runtime_probe",
+    ]
     assert contract["runtime_accepted"] is False
     assert contract["rollback_accepted"] is False
 

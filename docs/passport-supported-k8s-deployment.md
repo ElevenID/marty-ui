@@ -47,6 +47,10 @@ and private Service UIDs. Its source commit and services image must match the
 signed aggregate manifest. The read-only preflight checks those identities,
 the selected Rust ConfigMap values, immutable services and frozen Python owner
 images, and a Python rollback model with all three passport selectors off.
+Services must be ClusterIP without external IPs, load balancer exposure, or
+node ports. Each observed Pod must be owned by a ReplicaSet owned by the
+expected Deployment UID. The collector repeats the full identity preflight
+after runtime inspection and rejects any identity drift.
 
 Pass the plan with `--kubernetes-identity-plan` to the supported-consumer
 collector, or run `scripts/check_passport_supported_kubernetes_model.py` on
