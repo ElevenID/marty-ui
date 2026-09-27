@@ -1,0 +1,75 @@
+{
+  "schema": "marty.passport-bureau-provider-ingress/v1",
+  "scope": "Trusted ingress for a configured physical personalization bureau using the released Python raw-body HMAC callback. This does not select a provider or enable a public route.",
+  "sources": [
+    "marty-credentials/contracts/physical-passport-provider-reference.json:webhook",
+    "marty-credentials/services/issuance/infrastructure/adapters/personalization_bureau_client.py:verify_webhook_signature",
+    "marty-ui/contracts/passport-bureau-callback-kms-behavior.json",
+    "marty-ui/contracts/passport-webhook-progress-behavior.json"
+  ],
+  "route": {
+    "method": "POST",
+    "path": "/v1/passport/webhooks/personalization",
+    "public_gateway_owner": "provider ingress only when explicitly selected; otherwise preserve existing route ownership",
+    "maximum_raw_body_bytes": 65536,
+    "signature_header": "x-personalization-signature"
+  },
+  "provider_authentication": {
+    "profile": "A configured provider profile selects the bureau webhook secret reference and provider_profile_id; neither value is accepted from callback JSON.",
+    "algorithm": "HMAC-SHA256 over the exact HTTP body bytes, with the provider's UTF-8 shared secret",
+    "signature_encoding": "64 lowercase ASCII hexadecimal characters without a prefix",
+    "comparison": "constant-time comparison of decoded MAC bytes",
+    "empty_secret": "reject",
+    "invalid_or_missing_signature": "reject before JSON parsing or database lookup",
+    "raw_body_reencoding": "forbidden before provider HMAC verification"
+  },
+  "event_projection": {
+    "required_provider_fields": ["bureau_job_id", "status"],
+    "allowed_statuses": ["QUEUED", "PRINTING", "ENCODING", "QUALITY_CHECK", "SHIPPED", "DELIVERED", "FAILED", "CANCELLED"],
+    "metadata": "Preserve released Python projection of fields other than bureau_job_id and status, subject to native callback body and field bounds.",
+    "untrusted_organization_id": "Never use an organization_id supplied by a bureau callback to select a tenant or form the internal signed event."
+  },
+  "job_resolution": {
+    "lookup_key": ["authenticated_provider_profile_id", "signed_bureau_job_id"],
+    "durable_binding": "Persist provider_profile_id with the physical document job at submission. Require a unique non-null (provider_profile_id, bureau_job_id) mapping for ingress-eligible jobs; audit existing duplicates before adding the constraint.",
+    "tenant_source": "Read organization_id only from the uniquely matched durable job after provider HMAC verification.",
+    "zero_or_multiple_matches": "Fail closed without requesting KMS signing or changing any job.",
+    "provider_mismatch": "Fail closed without revealing a foreign organization_id or whether another provider owns the bureau_job_id.",
+    "native_recheck": "The existing native repository must still match both signed organization_id and bureau_job_id, and reject ambiguity within that tenant."
+  },
+  "internal_handoff": {
+    "body": "Construct a new JSON callback from the trusted durable organization_id, signed bureau_job_id, status, and allowed metadata. The exact newly serialized bytes must be used for both KMS signing and native delivery.",
+    "sign_route": "/internal/documents/{organization_id}/passport-callbacks/sign",
+    "sign_request": {"body_b64": "base64(exact internal callback body bytes)"},
+    "signer": "Existing isolated passport callback signer only, using a narrowly scoped internal service credential. No public caller or bureau receives this credential or an OpenBao token.",
+    "signed_input": "base64(UTF8(marty.passport-bureau-callback/v1) || NUL || UTF8(durable organization_id) || NUL || exact internal callback body bytes)",
+    "signature_format": "vault:vN:...",
+    "native_route": "/v1/passport/webhooks/personalization",
+    "native_signature_header": "x-personalization-signature",
+    "kms_failure": "Fail closed without direct repository update or legacy-secret fallback."
+  },
+  "response_boundary": {
+    "unauthenticated": "Never parse or look up a job; return no tenant or job details.",
+    "authenticated_unresolved": "Return one generic unresolved response for missing, ambiguous, or provider-mismatched jobs; include no tenant or foreign-provider data.",
+    "accepted": {"accepted": true},
+    "logs": "Do not log raw body, signature, shared secret, internal service credential, OpenBao token, or organization_id in external errors."
+  },
+  "frozen_reference": {
+    "provider_profile_id": "provider-reference",
+    "webhook_secret": "synthetic-webhook-secret",
+    "raw_body_utf8": "{\"bureau_job_id\":\"bureau-reference\",\"status\":\"SHIPPED\",\"tracking_number\":\"TRACK-42\"}",
+    "raw_body_hmac_sha256_hex": "7f4da6eec292c1326528a3445cb1311e79f88f8266a9ff489f3c0df080b8360c",
+    "durable_match": {"provider_profile_id": "provider-reference", "bureau_job_id": "bureau-reference", "organization_id": "org-reference"},
+    "internal_body_utf8": "{\"organization_id\":\"org-reference\",\"bureau_job_id\":\"bureau-reference\",\"status\":\"SHIPPED\",\"tracking_number\":\"TRACK-42\"}",
+    "kms_signed_input_b64": "bWFydHkucGFzc3BvcnQtYnVyZWF1LWNhbGxiYWNrL3YxAG9yZy1yZWZlcmVuY2UAeyJvcmdhbml6YXRpb25faWQiOiJvcmctcmVmZXJlbmNlIiwiYnVyZWF1X2pvYl9pZCI6ImJ1cmVhdS1yZWZlcmVuY2UiLCJzdGF0dXMiOiJTSElQUEVEIiwidHJhY2tpbmdfbnVtYmVyIjoiVFJBQ0stNDIifQ=="
+  },
+  "fail_closed_cases": [
+    "missing, empty, non-hex, uppercase, prefixed, wrong-length, or mismatched provider signature",
+    "one-byte raw-body mutation after provider signing",
+    "empty or over-limit body; malformed JSON; missing bureau_job_id or status; unknown status",
+    "bureau-supplied organization_id differs from the durable tenant",
+    "unknown, ambiguous, or other-provider bureau_job_id",
+    "signer authentication failure, malformed vault signature, KMS outage, or native callback rejection",
+    "duplicate or stale delivery must obey the existing native progress contract"
+  ]
+}
