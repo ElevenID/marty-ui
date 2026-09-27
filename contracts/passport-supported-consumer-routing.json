@@ -1,0 +1,27 @@
+{
+  "schema": "marty.passport-supported-consumer-routing/v1",
+  "state": "opt_in_source_only_pending_acceptance",
+  "source_dependency": "ElevenID/marty-ui#881",
+  "retirement_dependency": "ElevenID/marty-credentials#305",
+  "routes": [
+    {"method": "GET", "path": "/v1/passport/capabilities"},
+    {"method": "GET", "path": "/v1/passport/applications/{application_id}/production-status"},
+    {"method": "POST", "path": "/v1/passport/applications"},
+    {"method": "POST", "path": "/v1/passport/applications/{application_id}/activate"},
+    {"method": "POST", "path": "/v1/passport/applications/{application_id}/generate-data-groups"},
+    {"method": "POST", "path": "/v1/passport/applications/{application_id}/generate-sod"},
+    {"method": "POST", "path": "/v1/passport/applications/{application_id}/quality-verify"},
+    {"method": "POST", "path": "/v1/passport/applications/{application_id}/submit-personalization"},
+    {"method": "POST", "path": "/v1/passport/webhooks/personalization"}
+  ],
+  "consumers": {
+    "base_compose": {"gateway": "PASSPORT_NATIVE_GATEWAY_ENABLED", "flow": "PASSPORT_NATIVE_FLOW_ENABLED", "owner": "PASSPORT_NATIVE_HTTP_ENABLED", "auth": "PASSPORT_INTERNAL_SERVICE_AUTH_ENABLED", "token": "GRPC_SERVICE_TOKEN"},
+    "selfhost_compose": {"gateway": "PASSPORT_NATIVE_GATEWAY_ENABLED", "flow": "PASSPORT_NATIVE_FLOW_ENABLED", "owner": "PASSPORT_NATIVE_HTTP_ENABLED", "auth": "PASSPORT_INTERNAL_SERVICE_AUTH_ENABLED", "token_file": "/run/secrets/grpc_service_token"},
+    "kubernetes": {"gateway": "PASSPORT_NATIVE_GATEWAY_ENABLED", "flow": "PASSPORT_NATIVE_FLOW_ENABLED", "owner": "PASSPORT_NATIVE_HTTP_ENABLED", "auth": "PASSPORT_INTERNAL_SERVICE_AUTH_ENABLED", "token_secret": "marty-secrets/GRPC_SERVICE_TOKEN"}
+  },
+  "activation_gates": [
+    "released native image and beta receipt",
+    "supported signer and bureau/callback provider",
+    "base, self-host and Kubernetes runtime and rollback acceptance"
+  ]
+}

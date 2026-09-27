@@ -17,14 +17,9 @@ NATIVE = ROOT / "rust/crates/release-evidence/src/kubernetes_native.rs"
 CONTRACT = json.loads(
     (ROOT / "contracts/kubernetes-native-image-reference.json").read_text()
 )
-# The passport selector remains disabled in Kubernetes until tenant keyring and
-# provider secrets have a closed Secret-backed binding in the renderer.
+# Provider settings remain unbound. Passport routing stays disabled by default;
+# opt-in needs a separately accepted native image and provider configuration.
 PASSPORT_NOT_KUBERNETES_BOUND = {
-    "PASSPORT_NATIVE_HTTP_ENABLED",
-    "PASSPORT_MANAGED_ISSUER_SIGNING_ENABLED",
-    "PASSPORT_INTERNAL_SERVICE_AUTH_ENABLED",
-    "PASSPORT_KMS_ARTIFACTS_ENABLED",
-    "PASSPORT_KMS_CALLBACKS_ENABLED",
     "PERSONALIZATION_BUREAU_WEBHOOK_SECRET_FILE",
     "PASSPORT_TENANT_API_KEYS",
     "PASSPORT_TENANT_API_KEYS_FILE",
@@ -72,7 +67,7 @@ def test_duplicate_common_organization_binding_cleanup_preserves_complete_mappin
     historical = historical.replace('  PASSPORT_PROVIDER_INGRESS_SERVICE_URL: ""\n', '')
     original = historical.replace(anchor, anchor + binding)
     assert hashlib.sha256(original.encode()).hexdigest() == (
-        "94188015aa6a471d6aba8c8713cd38ede22531676e588dd21da913bf266c3259"
+        "31868e16c09c815461cd42eb6b7d08ca35d251828428c7069bf05f1cd76a47d9"
     )
     # This historical parser overwrites the identical duplicate; the actual
     # Rust renderer's separate test still refuses duplicate mappings strictly.

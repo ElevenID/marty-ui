@@ -50,6 +50,31 @@ spec:
                 configMapKeyRef:
                   name: marty-config
                   key: PERSONALIZATION_BUREAU_PROVIDER_PROFILE_ID
+            - name: PASSPORT_NATIVE_HTTP_ENABLED
+              valueFrom:
+                configMapKeyRef:
+                  name: marty-config
+                  key: PASSPORT_NATIVE_HTTP_ENABLED
+            - name: PASSPORT_INTERNAL_SERVICE_AUTH_ENABLED
+              valueFrom:
+                configMapKeyRef:
+                  name: marty-config
+                  key: PASSPORT_INTERNAL_SERVICE_AUTH_ENABLED
+            - name: PASSPORT_MANAGED_ISSUER_SIGNING_ENABLED
+              valueFrom:
+                configMapKeyRef:
+                  name: marty-config
+                  key: PASSPORT_MANAGED_ISSUER_SIGNING_ENABLED
+            - name: PASSPORT_KMS_ARTIFACTS_ENABLED
+              valueFrom:
+                configMapKeyRef:
+                  name: marty-config
+                  key: PASSPORT_KMS_ARTIFACTS_ENABLED
+            - name: PASSPORT_KMS_CALLBACKS_ENABLED
+              valueFrom:
+                configMapKeyRef:
+                  name: marty-config
+                  key: PASSPORT_KMS_CALLBACKS_ENABLED
             - name: UI_BASE_URL
               valueFrom:
                 configMapKeyRef:
