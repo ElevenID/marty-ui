@@ -7843,7 +7843,7 @@ mod tests {
         assert_eq!(
             status,
             StatusCode::OK,
-            "service CSR request failed: {result}"
+            "dedicated service CSR request failed"
         );
         assert_eq!(result["ok"], true);
         assert_eq!(result["service_id"], service_id);
