@@ -97,6 +97,14 @@ before storage. `contracts/signing-holder-keys-behavior.json` freezes the
 behavior, and a disposable-Redis route test passed. The wallet-supplied public
 key does not create or import a signing key in KMS. This is not a
 through-Gateway or beta acceptance result.
-Thus 11 declared pairs remain without local public handlers. These new
+The `GET /services/{service_id}/audit-log` and `GET /compliance/keys-summary`
+adapters retain the released Python service's structured 501 MIP errors. The
+audit route still distinguishes a missing tenant service (404) from a
+registered service whose event store does not exist (501), and both routes
+carry an opaque message ID and the MIP version header. Their behavior is
+frozen in `contracts/signing-observability-unavailable-behavior.json` and
+verified against isolated Redis. These adapters do not implement audit-event
+storage or compliance metrics; no synthetic events or totals are returned.
+Thus 9 declared pairs remain without local public handlers. These new
 adapters still need authenticated through-Gateway runtime tests. The
 24-pair table above remains the protected-main audit baseline.
