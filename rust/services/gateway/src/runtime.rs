@@ -7438,7 +7438,8 @@ mod tests {
 
     struct DisposableDscIdentity {
         organization_id: String,
-        operator: bool,
+        dsc_operator: bool,
+        csca_operator: bool,
     }
 
     #[async_trait]
@@ -7482,15 +7483,19 @@ mod tests {
             let mut membership = RuntimeProvider
                 .get_membership(user_id, organization_id)
                 .await?;
-            if self.operator {
+            if self.dsc_operator || self.csca_operator {
                 if let Some(membership) = membership.as_mut() {
                     membership.role_names.insert("operator".into());
-                    membership
-                        .permissions
-                        .insert("passport-certificate:issue".into());
-                    membership
-                        .permissions
-                        .insert("passport-certificate:issue-csca".into());
+                    if self.dsc_operator {
+                        membership
+                            .permissions
+                            .insert("passport-certificate:issue".into());
+                    }
+                    if self.csca_operator {
+                        membership
+                            .permissions
+                            .insert("passport-certificate:issue-csca".into());
+                    }
                 }
             }
             Ok(membership)
@@ -7505,7 +7510,7 @@ mod tests {
         signing_url: String,
         dsc_key: Option<&str>,
         csca_key: Option<&str>,
-        disposable_org: Option<(&str, bool)>,
+        disposable_org: Option<(&str, bool, bool)>,
     ) -> Router {
         let upstream = Arc::new(crate::transport::ReqwestUpstream::new(1024 * 1024).unwrap());
         let mut state = runtime_state_with_upstream(Arc::new(NoOwner), upstream.clone());
@@ -7531,10 +7536,11 @@ mod tests {
             state.csca_issue_gateway_key = Some(csca_key.to_owned());
             state.passport_native_gateway_enabled = true;
         }
-        if let Some((organization_id, operator)) = disposable_org {
+        if let Some((organization_id, dsc_operator, csca_operator)) = disposable_org {
             let fixture = Arc::new(DisposableDscIdentity {
                 organization_id: organization_id.to_owned(),
-                operator,
+                dsc_operator,
+                csca_operator,
             });
             let state = Arc::get_mut(&mut state).unwrap();
             state.identities = fixture.clone();
@@ -8262,13 +8268,19 @@ mod tests {
             signing_url.clone(),
             Some(DSC_KEY),
             Some(CSCA_KEY),
-            Some((&organization_id, true)),
+            Some((&organization_id, true, true)),
         );
         let limited_gateway = gateway_with_signing_http_dsc(
             signing_url.clone(),
             Some(DSC_KEY),
             Some(CSCA_KEY),
-            Some((&organization_id, false)),
+            Some((&organization_id, false, false)),
+        );
+        let dsc_only_gateway = gateway_with_signing_http_dsc(
+            signing_url.clone(),
+            Some(DSC_KEY),
+            Some(CSCA_KEY),
+            Some((&organization_id, true, false)),
         );
         let issuer_did = format!("did:web:issuer.example:orgs:gateway-dsc-{suffix}");
         let identity = |purpose: &str| {
@@ -8347,6 +8359,20 @@ mod tests {
             "ordinary user must not issue CSCA"
         );
         let (status, _) = disposable_gateway_json(
+            &dsc_only_gateway,
+            "POST",
+            CSCA_ROUTE,
+            &csca_issue,
+            true,
+            None,
+        )
+        .await;
+        assert_eq!(
+            status,
+            StatusCode::FORBIDDEN,
+            "DSC operator grant must not authorize CSCA ceremony"
+        );
+        let (status, _) = disposable_gateway_json(
             &gateway,
             "POST",
             CSCA_ROUTE,
@@ -8361,6 +8387,12 @@ mod tests {
         assert_eq!(status, StatusCode::OK, "managed CSCA ceremony failed");
         assert_eq!(issued_csca["status"], "issued");
         assert_eq!(issued_csca["chain_pem"], "");
+        for secret in [&endpoint[..], token.as_str(), csca_reference] {
+            assert!(
+                !issued_csca.to_string().contains(secret),
+                "CSCA response exposed a custody locator or credential"
+            );
+        }
         let csca_pem = issued_csca["certificate_pem"].as_str().unwrap();
         let csca_der = load_certificate_pem(&csca_pem).unwrap();
         assert!(verify_certificate_signature(&csca_der, &csca_der).unwrap());
