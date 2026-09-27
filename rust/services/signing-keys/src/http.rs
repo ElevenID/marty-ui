@@ -2550,6 +2550,18 @@ fn compatible_public_key_algorithms(public_jwk: &Value) -> &'static [&'static st
     }
 }
 
+fn public_key_matches_algorithm(
+    provider_response: &Value,
+    algorithm: &str,
+) -> Result<bool, documents::DocumentError> {
+    let jwk = documents::sanitize_public_jwk(provider_response, None)?;
+    Ok(compatible_public_key_algorithms(&jwk).contains(&algorithm)
+        && jwk
+            .get("alg")
+            .and_then(Value::as_str)
+            .is_none_or(|declared| declared == algorithm))
+}
+
 async fn resolve_public_config(
     State(state): State<AppState>,
     Query(scope): Query<OrganizationScope>,
@@ -2774,15 +2786,11 @@ fn queue_key_discovery(
         })
         .await
         {
-            Ok(jwk) => {
-                let compatible = compatible_public_key_algorithms(&jwk)
-                    .contains(&algorithm.as_str())
-                    && jwk
-                        .get("alg")
-                        .and_then(Value::as_str)
-                        .is_none_or(|declared| declared == algorithm);
-                Ok(compatible.then(|| json!({"id": reference, "algorithm": algorithm})))
-            }
+            Ok(response) => public_key_matches_algorithm(&response, &algorithm)
+                .map(|compatible| {
+                    compatible.then(|| json!({"id": reference, "algorithm": algorithm}))
+                })
+                .map_err(|_| ()),
             Err(kms::KmsError::ProviderStatus {
                 status: StatusCode::NOT_FOUND,
                 ..
@@ -4671,6 +4679,26 @@ mod public_contract_tests {
     use super::*;
     use axum::{body::Body, http::Request};
     use tower::ServiceExt;
+
+    #[test]
+    fn resolver_projects_aws_and_gcp_public_key_envelopes() {
+        for provider in ["aws", "gcp"] {
+            let response = json!({
+                "provider": provider,
+                "public_jwk": {"kty": "EC", "crv": "P-256", "x": "AQ", "y": "AQ"}
+            });
+            assert!(public_key_matches_algorithm(&response, "ES256").unwrap());
+            assert!(!public_key_matches_algorithm(&response, "ES384").unwrap());
+            assert!(public_key_matches_algorithm(
+                &json!({
+                    "public_jwk": {"kty": "EC", "crv": "P-256", "alg": "ES384"}
+                }),
+                "ES256"
+            )
+            .is_ok_and(|compatible| !compatible));
+        }
+        assert!(public_key_matches_algorithm(&json!({"provider": "aws"}), "ES256").is_err());
+    }
 
     #[tokio::test]
     async fn public_config_resolver_discovers_only_existing_algorithm_compatible_keys() {

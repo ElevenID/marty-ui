@@ -21,6 +21,34 @@ use std::sync::{
 };
 use tower::ServiceExt;
 
+async fn disposable_redis_url() -> String {
+    let url = std::env::var("MARTY_TEST_REDIS_URL").expect("disposable Redis URL");
+    let parsed = reqwest::Url::parse(&url).expect("disposable Redis URL syntax");
+    assert!(matches!(
+        parsed.host_str(),
+        Some("127.0.0.1" | "localhost" | "::1")
+    ));
+    assert!(parsed
+        .path()
+        .trim_start_matches('/')
+        .parse::<u8>()
+        .is_ok_and(|db| db >= 13));
+    let nonce = std::env::var("MARTY_TEST_REDIS_DISPOSABLE_NONCE")
+        .expect("disposable Redis sentinel value");
+    assert!(nonce.len() >= 16, "disposable Redis sentinel is too short");
+    let client = redis::Client::open(url.as_str()).expect("disposable Redis client");
+    let mut connection = client
+        .get_multiplexed_async_connection()
+        .await
+        .expect("disposable Redis connection");
+    let observed: Option<String> = connection
+        .get("marty:tests:disposable-guard")
+        .await
+        .expect("disposable Redis sentinel read");
+    assert_eq!(observed.as_deref(), Some(nonce.as_str()));
+    url
+}
+
 async fn resolve(app: &Router, organization_id: &str, body: Value) -> (StatusCode, Value) {
     let response = app
         .clone()
@@ -42,7 +70,7 @@ async fn resolve(app: &Router, organization_id: &str, body: Value) -> (StatusCod
 #[tokio::test]
 #[ignore = "requires disposable MARTY_TEST_REDIS_URL"]
 async fn public_config_resolve_preserves_selection_and_redacts_kms_credentials() {
-    let redis_url = std::env::var("MARTY_TEST_REDIS_URL").expect("disposable Redis URL");
+    let redis_url = disposable_redis_url().await;
     let writes = Arc::new(AtomicUsize::new(0));
     let unavailable = Arc::new(AtomicBool::new(false));
     let kms = Router::new().route(
@@ -187,7 +215,7 @@ async fn public_config_resolve_preserves_selection_and_redacts_kms_credentials()
 #[tokio::test]
 #[ignore = "requires disposable MARTY_TEST_REDIS_URL"]
 async fn managed_config_resolve_does_not_revive_retired_tuple_binding() {
-    let redis_url = std::env::var("MARTY_TEST_REDIS_URL").expect("disposable Redis URL");
+    let redis_url = disposable_redis_url().await;
     let reads = Arc::new(AtomicUsize::new(0));
     let kms = Router::new()
         .route(
@@ -214,8 +242,7 @@ async fn managed_config_resolve_does_not_revive_retired_tuple_binding() {
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let endpoint = format!("http://{}", listener.local_addr().unwrap());
     let server = tokio::spawn(async move { axum::serve(listener, kms).await.unwrap() });
-    let previous_token = std::env::var("BAO_TOKEN").ok();
-    std::env::set_var("BAO_TOKEN", "test-only");
+    std::env::var("BAO_TOKEN").expect("test-only token for loopback mock KMS");
 
     let organization_id = format!("test-managed-resolve-{}", uuid::Uuid::new_v4().simple());
     let stale = "cred-issuer-0123456789abcdef0123-es256";
@@ -300,9 +327,5 @@ async fn managed_config_resolve_does_not_revive_retired_tuple_binding() {
         .query_async(&mut connection)
         .await
         .unwrap();
-    match previous_token {
-        Some(token) => std::env::set_var("BAO_TOKEN", token),
-        None => std::env::remove_var("BAO_TOKEN"),
-    }
     server.abort();
 }
