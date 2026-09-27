@@ -11,6 +11,7 @@ import pytest
 
 from scripts.collect_passport_beta_acceptance import (
     BETA_ORIGIN,
+    PHYSICAL_SERVICES,
     REQUIRED_PROBES,
     SERVICES,
     EvidenceError,
@@ -142,6 +143,51 @@ def test_optional_provider_ingress_must_match_signed_deployment_when_present(tmp
 
     with pytest.raises(EvidenceError, match="signed Marty services OCI"):
         collect(tmp_path, api_key="in-memory-only", inspect=foreign_inspect, probe=probe)
+
+
+def test_physical_profile_binds_exact_six_services_to_signed_runtime(tmp_path: Path) -> None:
+    _, _, deployment = fixture(tmp_path)
+    deployment["passport_provider_mode"] = "physical"
+    deployment["images"] = [
+        {**deployment["images"][0], "service": service,
+         "container_id": service + "-container", "compose_service": service}
+        for service in PHYSICAL_SERVICES
+    ]
+    write(tmp_path / "local-deployment-manifest.json", deployment)
+    report = collect(tmp_path, api_key="in-memory-only", inspect=inspect, probe=probe,
+                     attest=lambda *_: True)
+    assert report["status"] == "blocked"
+    assert report["deployment"]["provider_mode"] == "physical"
+    assert set(report["runtime_images"]) == set(PHYSICAL_SERVICES)
+    assert report["provider_ingress_runtime_image"] == report["runtime_images"]["passport-provider-ingress"]
+    assert report["probes"]["physical_bureau_submission"]["verified"] is False
+    assert "passport-beta-bureau" not in json.dumps(report)
+
+
+@pytest.mark.parametrize("tamper", ["missing_mode", "simulator", "missing_ingress", "duplicate_ingress", "foreign_image"])
+def test_physical_profile_rejects_simulator_or_incomplete_lineage(tmp_path: Path, tamper: str) -> None:
+    _, _, deployment = fixture(tmp_path)
+    deployment["passport_provider_mode"] = "physical"
+    deployment["images"] = [
+        {**deployment["images"][0], "service": service,
+         "container_id": service + "-container", "compose_service": service}
+        for service in PHYSICAL_SERVICES
+    ]
+    if tamper == "missing_mode":
+        deployment.pop("passport_provider_mode")
+    elif tamper == "simulator":
+        deployment["images"].append({**deployment["images"][0],
+                                     "service": "passport-beta-bureau",
+                                     "compose_service": "passport-beta-bureau"})
+    elif tamper == "missing_ingress":
+        deployment["images"].pop()
+    elif tamper == "duplicate_ingress":
+        deployment["images"].append(deployment["images"][-1].copy())
+    elif tamper == "foreign_image":
+        deployment["images"][-1]["configured_image"] = "ghcr.io/foreign/provider@" + OCI
+    write(tmp_path / "local-deployment-manifest.json", deployment)
+    with pytest.raises(EvidenceError):
+        collect(tmp_path, api_key="in-memory-only", inspect=inspect, probe=probe)
 
 
 def test_attestation_checks_checksum_and_each_immutable_oci(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:

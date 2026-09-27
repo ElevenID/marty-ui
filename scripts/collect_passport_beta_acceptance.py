@@ -30,10 +30,14 @@ BETA_ORIGIN = "https://beta.elevenidllc.com"
 SHA = re.compile(r"[0-9a-f]{40}\Z")
 DIGEST = re.compile(r"sha256:[0-9a-f]{64}\Z")
 SERVICES = ("gateway", "flow", "issuance-native", "signing-keys", "passport-callback-signer", "passport-beta-bureau")
+PHYSICAL_SERVICES = ("gateway", "flow", "issuance-native", "signing-keys",
+                     "passport-callback-signer-supported", "passport-provider-ingress")
+PASSPORT_PROFILE_SERVICES = set(SERVICES) | set(PHYSICAL_SERVICES)
 OPTIONAL_SERVICES = ("passport-provider-ingress",)
 REQUIRED_PROBES = (
     "managed_csca_dsc_chain", "sod_signature", "nine_route_gateway_flow",
-    "packaged_image", "physical_bureau_submission", "signed_bureau_callback",
+    "packaged_image", "physical_bureau_submission", "physical_bureau_batch",
+    "signed_bureau_callback",
     "legacy_drain", "rollback", "production_isolation", "physical_booklet_verified",
 )
 
@@ -178,10 +182,20 @@ def collect(
     require(isinstance(signed, bool), "Invalid attestation verification result")
     records = deployment.get("images")
     require(isinstance(records, list), "Deployment image records are missing")
+    provider_mode = deployment.get("passport_provider_mode", "simulator")
+    require(provider_mode in ("simulator", "physical"), "Passport provider mode is invalid")
+    selected_services = PHYSICAL_SERVICES if provider_mode == "physical" else SERVICES
+    selected_records = {record.get("service") for record in records if isinstance(record, dict)}
+    profile_records = selected_records & PASSPORT_PROFILE_SERVICES
+    expected = set(selected_services)
+    if provider_mode == "simulator" and "passport-provider-ingress" in profile_records:
+        expected.add("passport-provider-ingress")
+    require(profile_records == expected,
+            "Deployment passport service set does not match provider mode")
     runtime_images = {}
     provider_ingress_runtime_image = None
-    deployed_services = {record.get("service") for record in records if isinstance(record, dict)}
-    for service in (*SERVICES, *(service for service in OPTIONAL_SERVICES if service in deployed_services)):
+    for service in (*selected_services, *(OPTIONAL_SERVICES if provider_mode == "simulator"
+                                         and "passport-provider-ingress" in profile_records else ())):
         matches = [record for record in records if isinstance(record, dict) and record.get("service") == service]
         require(len(matches) == 1, f"Deployment service {service} is missing or ambiguous")
         saved = matches[0]
@@ -204,9 +218,9 @@ def collect(
         require(isinstance(image_ref, str) and image_ref in service_images, f"{service} is not pinned to the signed Marty services OCI digest")
         projection = {"container_id": container_id, "image_id": image_id,
                       "oci_reference": image_ref, "oci_digest": service_images[image_ref]}
-        if service in OPTIONAL_SERVICES:
+        if service == "passport-provider-ingress":
             provider_ingress_runtime_image = projection
-        else:
+        if provider_mode == "physical" or service != "passport-provider-ingress":
             runtime_images[service] = projection
     unauth_status, _ = probe(None)
     require(unauth_status in (401, 403), "Unauthenticated passport capability request was not denied")
@@ -225,7 +239,7 @@ def collect(
         "schema": "marty.passport-beta-acceptance/v1", "status": "blocked",
         "collected_at": datetime.now(timezone.utc).isoformat(), "beta_origin": BETA_ORIGIN,
         "release": {"source_commit": commit, "stack_manifest_sha256": manifest_digest.removeprefix("sha256:"), "oci_digests": oci_digests, "signed_manifest_verified": signed},
-        "deployment": {"local_deployment_manifest_sha256": digest_file(deployment_path).removeprefix("sha256:"), "source_manifest_sha256": digest_file(source_path).removeprefix("sha256:"), "release_version": deployment["release_version"]},
+        "deployment": {"local_deployment_manifest_sha256": digest_file(deployment_path).removeprefix("sha256:"), "source_manifest_sha256": digest_file(source_path).removeprefix("sha256:"), "release_version": deployment["release_version"], "provider_mode": provider_mode},
         "runtime_images": runtime_images, "probes": probes,
     }
     if provider_ingress_runtime_image is not None:
