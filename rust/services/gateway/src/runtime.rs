@@ -7395,21 +7395,22 @@ mod tests {
             gateway.clone().oneshot(request()).await.unwrap().status(),
             StatusCode::OK
         );
-        let calls = recorder.0.lock().unwrap();
-        assert_eq!(calls.len(), 1);
-        let (service, forwarded) = &calls[0];
-        assert_eq!(service, "signing-keys");
-        assert_eq!(forwarded.query["organization_id"], vec!["org-1"]);
-        assert_eq!(
-            forwarded.header("x-api-key"),
-            Some("dedicated-csca-gateway-credential-0001")
-        );
-        assert_eq!(forwarded.header("x-user-id"), Some("user-1"));
-        assert_eq!(
-            forwarded.header("x-required-permission"),
-            Some("passport-certificate:issue-csca")
-        );
-        drop(calls);
+        {
+            let calls = recorder.0.lock().unwrap();
+            assert_eq!(calls.len(), 1);
+            let (service, forwarded) = &calls[0];
+            assert_eq!(service, "signing-keys");
+            assert_eq!(forwarded.query["organization_id"], vec!["org-1"]);
+            assert_eq!(
+                forwarded.header("x-api-key"),
+                Some("dedicated-csca-gateway-credential-0001")
+            );
+            assert_eq!(forwarded.header("x-user-id"), Some("user-1"));
+            assert_eq!(
+                forwarded.header("x-required-permission"),
+                Some("passport-certificate:issue-csca")
+            );
+        }
         let denied = Request::post(PATH)
             .header("x-api-key", "passport-gateway-key-org-1")
             .header("content-type", "application/json")
@@ -8394,7 +8395,7 @@ mod tests {
             );
         }
         let csca_pem = issued_csca["certificate_pem"].as_str().unwrap();
-        let csca_der = load_certificate_pem(&csca_pem).unwrap();
+        let csca_der = load_certificate_pem(csca_pem).unwrap();
         assert!(verify_certificate_signature(&csca_der, &csca_der).unwrap());
         let parsed_csca = Certificate::from_der(&csca_der).unwrap();
         assert_eq!(parsed_csca.tbs_certificate.subject, csca_name);
