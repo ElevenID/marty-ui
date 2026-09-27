@@ -751,7 +751,10 @@ $requiredFlowSecrets = @(
     "SIGNING_KEYS_INTERNAL_API_KEY"
 )
 if ($EnablePassportNative) {
-    $requiredFlowSecrets += "SIGNING_KEYS_DSC_ISSUE_GATEWAY_KEY"
+    $requiredFlowSecrets += @(
+        "SIGNING_KEYS_DSC_ISSUE_GATEWAY_KEY",
+        "SIGNING_KEYS_CSCA_ISSUE_GATEWAY_KEY"
+    )
 }
 foreach ($name in $requiredFlowSecrets) {
     $secret = Get-DotEnvValue -Path $GeneratedEnvFile -Name $name
@@ -760,17 +763,19 @@ foreach ($name in $requiredFlowSecrets) {
     }
 }
 if ($EnablePassportNative) {
-    $dscGatewayKeyName = "SIGNING_KEYS_DSC_ISSUE_GATEWAY_KEY"
-    $dscGatewayKey = Get-DotEnvValue -Path $GeneratedEnvFile -Name $dscGatewayKeyName
-    foreach ($envFile in $script:EnvFiles) {
-        foreach ($line in Get-Content -LiteralPath $envFile) {
-            $entry = $line.Trim()
-            if (-not $entry -or $entry.StartsWith("#")) { continue }
-            $parts = $entry -split "=", 2
-            if ($parts.Count -ne 2) { continue }
-            if ($envFile -eq $GeneratedEnvFile -and $parts[0].Trim() -ceq $dscGatewayKeyName) { continue }
-            if ($parts[1].Contains($dscGatewayKey)) {
-                throw "Beta DSC operator credential is reused by another beta setting"
+    foreach ($purpose in @("DSC", "CSCA")) {
+        $gatewayKeyName = "SIGNING_KEYS_${purpose}_ISSUE_GATEWAY_KEY"
+        $gatewayKey = Get-DotEnvValue -Path $GeneratedEnvFile -Name $gatewayKeyName
+        foreach ($envFile in $script:EnvFiles) {
+            foreach ($line in Get-Content -LiteralPath $envFile) {
+                $entry = $line.Trim()
+                if (-not $entry -or $entry.StartsWith("#")) { continue }
+                $parts = $entry -split "=", 2
+                if ($parts.Count -ne 2) { continue }
+                if ($envFile -eq $GeneratedEnvFile -and $parts[0].Trim() -ceq $gatewayKeyName) { continue }
+                if ($parts[1].Contains($gatewayKey)) {
+                    throw "Beta $purpose operator credential is reused by another beta setting"
+                }
             }
         }
     }
@@ -803,15 +808,19 @@ foreach ($name in $workloadIdentityPathNames) {
     $workloadIdentityPaths[$name] = (Resolve-Path -LiteralPath $path).Path
 }
 if ($EnablePassportNative) {
-    foreach ($path in $workloadIdentityPaths.Values) {
-        try {
-            $mountedMaterial = Get-Content -LiteralPath $path -Raw -ErrorAction Stop
-        }
-        catch {
-            throw "Could not read a beta workload secret for DSC credential isolation"
-        }
-        if ($mountedMaterial.Contains($dscGatewayKey)) {
-            throw "Beta DSC operator credential is reused by a mounted workload secret"
+    foreach ($purpose in @("DSC", "CSCA")) {
+        $gatewayKeyName = "SIGNING_KEYS_${purpose}_ISSUE_GATEWAY_KEY"
+        $gatewayKey = Get-DotEnvValue -Path $GeneratedEnvFile -Name $gatewayKeyName
+        foreach ($path in $workloadIdentityPaths.Values) {
+            try {
+                $mountedMaterial = Get-Content -LiteralPath $path -Raw -ErrorAction Stop
+            }
+            catch {
+                throw "Could not read a beta workload secret for $purpose credential isolation"
+            }
+            if ($mountedMaterial.Contains($gatewayKey)) {
+                throw "Beta $purpose operator credential is reused by a mounted workload secret"
+            }
         }
     }
 }
