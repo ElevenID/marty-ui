@@ -1,0 +1,123 @@
+{
+  "schema": "marty.passport-digital-handoff-behavior/v1",
+  "scope": "Marty-owned digital passport preparation and controlled handoff; this contract does not attest physical personalization, a booklet, delivery, or travel-document acceptance",
+  "implementation_state": "behavior_freeze_only",
+  "existing_api": {
+    "frozen_reference": "contracts/issuance-physical-passport-native.json",
+    "route_count": 9,
+    "routes_unchanged": true,
+    "request_response_error_and_status_parity_unchanged": true,
+    "bureau_batch_poll_and_signed_webhook_behavior_retained": true,
+    "handoff_is_not_inferred_from_bureau_status": true
+  },
+  "protocol_alignment": {
+    "current_contract": "The Marty Protocol physical_document_issuance Flow and physical_production Delivery Destination Profile remain unchanged. Their existing provider, target, credential, connector and conformance requirements still apply to that Flow",
+    "digital_only_status": "A separate Marty Protocol draft proposes passport_digital_handoff with a marty_managed digital_handoff Delivery Destination Profile and privacy-safe evidence manifest. This UI freeze does not claim versioned protocol conformance until that amendment merges and executable conformance passes",
+    "required_amendment": "Before digital_package_prepared can use a Flow execution as accepted evidence, merge and version the separately reviewed Marty Protocol digital-only Flow and delivery-destination amendment with conformance fixtures. Do not relabel physical_document_issuance or relax its physical-production requirements",
+    "draft_flow_type": "passport_digital_handoff",
+    "draft_step_sequence": ["accept_application", "validate_evidence", "approval_decision", "generate_data_groups", "sign_sod", "verify_digital_package", "seal_handoff_package", "handoff_ready"],
+    "draft_delivery_profile": {"mode": "digital_handoff", "provider": "marty_managed", "delivery_target": "secure_artifact", "credential_format": "ICAO_EMRTD", "issuance_protocol": "DIGITAL_HANDOFF"},
+    "draft_evidence_schema": "marty-protocol/proposals/mip-0.6.0/passport-digital-handoff/schemas/passport-digital-handoff-package.json",
+    "repository_boundary": "No marty-protocol file is changed by this UI contract"
+  },
+  "digital_handoff_claim": {
+    "name": "digital_package_prepared",
+    "requires": [
+      "same_tenant_and_source_job",
+      "managed_csca_dsc_chain",
+      "exact_package_sod_signature_and_data_group_hashes",
+      "mrz_format_check_digits_and_dg1_consistency",
+      "encrypted_package_and_artifact_binding",
+      "independent_digital_quality_review"
+    ],
+    "forbidden_inferences": [
+      "physical_booklet_personalized",
+      "physical_booklet_quality_verified",
+      "physical_document_shipped_or_delivered",
+      "external_ca_or_bureau_approved",
+      "icao_interoperability_certified"
+    ]
+  },
+  "package_manifest": {
+    "schema": "marty.passport-digital-package-manifest/v1",
+    "json_schema": "contracts/passport-digital-package-manifest.schema.json",
+    "custody": "private_encrypted_only",
+    "digest_encoding": "All SHA-256 fields in the schema are 64 lowercase hexadecimal characters over the named exact bytes; services_oci_digest is sha256: followed by 64 lowercase hexadecimal characters",
+    "canonicalization": "Encode the private manifest as RFC 8785 JSON Canonicalization Scheme UTF-8 bytes with no floating-point values, then SHA-256 those exact bytes. Hash the ciphertext envelope separately after encrypting the manifest and package payload to avoid a self-referential digest",
+    "immutability": "Once a package is accepted for handoff, the exact manifest and SOD bytes are immutable; a changed document, certificate, selected issuer profile record, or SOD creates a new reviewed package revision rather than silently updating the accepted one",
+    "source_binding": "Every field and encrypted artifact chunk belongs to the same authenticated organization and durable source job; organization, application, Flow execution, credential template, application template and delivery destination identifiers match both that job and a trusted Flow execution attestation. A foreign tenant, job, template, destination, or chunk fails closed",
+    "flow_binding": "A caller-supplied flow_execution_id copied into the passport job is not evidence. The private verifier must retrieve the actual Flow instance and step history through a trusted authenticated Flow read or verify an independently signed protected Flow attestation derived from that durable Flow record, never from a caller assertion. It must verify the same organization, instance ID, source job ID and application ID, credential_template_id, application_template_id and delivery_destination_profile_id against both the durable job and trusted Flow definition, and the reviewed versioned passport_digital_handoff Flow. The step history must prove successful execution of all eight draft_step_sequence steps in order, including verify_digital_package, seal_handoff_package and handoff_ready; configured steps or capability listings do not count. It must compute and compare flow_execution_attestation_sha256 over the exact protected attestation bytes. A matching stored string or simulated physical Flow is insufficient",
+    "issuer_profile_binding": "For each CSCA and DSC identity, registry_revision is the organization issuer-profile registry document's revision at resolution, not a per-profile revision. profile_record_sha256 is SHA-256 of RFC 8785 canonical bytes of the selected public profile record. Re-resolve both active profiles and current KMS public keys before accepting handoff; a changed selected record or key fails closed. An unrelated registry edit alone does not imply a changed selected profile",
+    "sod_binding": "Verify the signature, embedded DSC, active organization CSCA chain and every issued data-group hash against the exact DER SOD in the encrypted package. Capture the exact signed material for every package candidate, including the frozen direct submit-personalization from DRAFT where sod_sha256 may be null; that direct route remains compatible but cannot establish the draft digital-only Flow claim without its executed eight-step sequence. A prior generate-sod response digest may differ because later submission may re-sign; that difference is allowed. The final package SOD DER digest must equal the digest of the exact SOD DER bytes handed off. Neither a prior generate-sod call nor its response digest is sufficient",
+    "data_group_binding": "The draft digital-only protocol claim is TD3 with DG1 and DG2 required and any additional DG number limited to 3 through 16. Verify every data group present in the package and the exact SOD's complete data-group hash map; the two private maps must match. The frozen nine-route API still accepts TD1, TD2 and wider DG numbers for compatibility, but those inputs cannot satisfy this draft digital-only claim without a separately reviewed protocol amendment",
+    "mrz_binding": "Validate TD3 MRZ format and check digits and compare the MRZ represented in DG1 with the handed-off MRZ. Hash the exact 44 ASCII bytes of line 1 followed immediately by the exact 44 ASCII bytes of line 2, with no separator or trailing byte, for mrz_sha256; apply the same 88-byte encoding to the DG1-extracted MRZ for dg1_mrz_sha256. Both private digests must match. A string-only request validation result is insufficient",
+    "encryption": "Use the existing non-exportable Transit artifact key and frozen chunk binding to organization_id, artifact_id, chunk_index and chunk_count. For the source artifact, artifact_id is source_job_id; for the handoff package, derive a domain-separated artifact_id from source_job_id and package revision. source_encrypted_artifact_manifest_sha256 names the source payload chunk manifest already recorded by the durable job; handoff_encrypted_artifact_manifest_sha256 names the final handoff payload chunk manifest. Both are SHA-256 over canonical manifest bytes and neither is the digest of this private manifest or of its own ciphertext envelope. Verify each against the corresponding stored encrypted artifact and round-trip both under the same tenant before accepting handoff. Encrypt this private manifest separately after its fields are finalized. Authenticate and decrypt only inside an authorized private handoff verifier; never expose plaintext package material in a public route, log, or uploaded acceptance report"
+  },
+  "protocol_evidence_projection": {
+    "boundary": "The UI manifest and the draft protocol private manifest are authorized private encrypted evidence. The public passport-digital-handoff-package schema contains only a random opaque handoff_reference, the digest of the encrypted private manifest envelope, the digest of a protected signed attestation, and creation time; it must contain no raw or unkeyed MRZ, DG, SOD, certificate, source-job, or ciphertext-artifact digest and no bearer-capable artifact URL",
+    "identity_mapping": "Match organization_id, source_job_id, flow_execution_id, application_id, credential_template_id, application_template_id and delivery_destination_profile_id across the durable job, trusted Flow definition and execution, UI private manifest, and draft protocol private manifest before publication. Generate a new random UUID handoff_reference bound privately to source_job_id and package revision. No source or applicant identifiers are copied into the public object",
+    "document_mapping": "Inside the authorized private verifier only, map the matching TD3 document and 88-byte MRZ digests, complete DG and SOD DG maps, exact SOD DER digest, DSC and CSCA DER digests into the draft protocol private manifest. Prefix each UI private map key 1..16 with DG to form the protocol private key DG1..DG16; preserve the exact one-to-one entries and reject duplicate, aliased, missing or extra keys. Never project these digests into the public handoff object",
+    "receipt_mapping": "Inside the authorized private verifier, bind protected chain verification, source and handoff encrypted artifact round trips, quality approval, release lineage and the exact private manifest digest to the same organization, source job, Flow execution and package revision. Encrypt the finalized private manifest separately. Publish only the random handoff_reference, SHA-256 of the encrypted private manifest envelope, SHA-256 of the protected signed attestation, and created_at. The public reference is an identifier, not a bearer token, and cannot grant artifact access",
+    "not_proof_by_shape": "Passing either JSON Schema proves shape only; the verifier must recompute private digests, verify source and handoff artifact and issuer/Flow lineage, compare the two complete DG maps and MRZ digests, and validate receipt provenance before handoff_ready"
+  },
+  "digital_quality_review": {
+    "decision": ["approved", "rejected"],
+    "reviewer": "An organization-authorized reviewer distinct from the package preparer and certificate ceremony operators",
+    "binding": "The review names the exact package-manifest digest, organization, source job, package revision, checks performed, decision and time; a decision on another package or a boolean without source evidence is invalid",
+    "attestation": "A protected workflow verifies the reviewer's governed identity and distinctness, signs the review artifact, and binds it to the exact protected source, release image and private package-manifest digest",
+    "failure": "A rejected, absent, stale, or self-reviewed package cannot satisfy digital_package_prepared"
+  },
+  "private_verification_outcomes": {
+    "success": "Emit a digest-bound digital_package_prepared receipt only after every required same-job proof and independent approved review passes",
+    "schema_or_digest_invalid": "Reject the package; emit no handoff receipt and do not change the frozen public job status",
+    "tenant_job_application_flow_template_or_destination_mismatch": "Reject before disclosing package content; verify authenticated context and ciphertext binding before decryption, then compare the decrypted manifest with the durable source job and trusted Flow definition. Emit no handoff receipt and do not change the frozen public job status",
+    "flow_attestation_missing_forged_or_unexecuted": "Reject the digital claim if the Flow instance is not proven by trusted service read or protected attestation, even when the caller-supplied ID matches the passport job. Emit no handoff receipt and do not change the frozen public job status",
+    "sod_dg_mrz_or_chain_invalid": "Reject the package; emit no handoff receipt and do not change the frozen public job status",
+    "artifact_decryption_or_chunk_binding_failure": "Reject the package; emit no handoff receipt and do not change the frozen public job status",
+    "review_missing_rejected_stale_or_not_independent": "Reject the package; emit no handoff receipt and do not change the frozen public job status",
+    "kms_or_issuer_profile_unavailable": "Fail closed and retry only with the same source job and an explicitly versioned package; emit no handoff receipt and do not change the frozen public job status",
+    "simulator_or_physical_handoff_absent": "No effect on digital_package_prepared; retain a separate compatibility result and physical_claim=not_claimed"
+  },
+  "optional_physical_paperwork_handoff": {
+    "required_for_digital_package_prepared": false,
+    "enabled_by_default": false,
+    "bureau_profile_required_for_digital_claim": false,
+    "external_provider_or_ca_required_for_digital_claim": false,
+    "retained_adapter_contracts": [
+      "contracts/issuance-physical-passport-native.json",
+      "contracts/passport-webhook-progress-behavior.json"
+    ],
+    "separate_claim": "The digital package may be prepared, reviewed and accepted with no physical paperwork handoff configured or performed. If later requested, a physical handoff or booklet receipt has its own provider provenance and acceptance; it does not alter or retroactively prove the digital claim",
+    "simulator": "The beta bureau remains a non-physical route-parity fixture. Its SHIPPED or DELIVERED status, tracking number, signed callback, and operator quality-verify decision cannot prove a physical booklet"
+  },
+  "acceptance_evidence": {
+    "required_same_job_proofs": [
+      "authenticated_source_job_and_flow_binding",
+      "managed_kms_csca_dsc_chain",
+      "exact_package_cryptographic_verification",
+      "encrypted_artifact_round_trip_and_tenant_isolation",
+      "independent_digital_quality_review",
+      "source_and_release_image_lineage",
+      "supported_runtime_and_rollback"
+    ],
+    "separate_compatibility_gate": "Before Python retirement, exercise all nine frozen Gateway and Flow routes plus bureau batch, poll and signed callback behavior with an isolated simulator or fixture, including tenant binding and negative signature cases. This preserves Python feature parity but is separate from, and cannot be used as evidence for, digital_package_prepared",
+    "sanitized_report": "Publish only fixed probe outcomes, a random opaque handoff reference, nonreversible keyed commitments for any necessary identifiers, approved source and image lineage, the encrypted private-manifest envelope digest, the protected signed-attestation digest, a reviewer attestation reference, and explicit physical_claim=not_claimed. Exclude raw identifiers and their unkeyed hashes, plaintext private-manifest digest, MRZ/DG/SOD/certificate digests or bytes, ciphertext artifact digests, credentials, and decrypted artifacts from uploaded reports",
+    "negative_cases": [
+      "foreign_tenant_or_source_job",
+      "mismatched_application_or_flow",
+      "mismatched_credential_template_or_delivery_destination",
+      "forged_but_matching_caller_supplied_flow_execution_id",
+      "flow_instance_missing_or_eight_handoff_steps_not_executed_in_order",
+      "unmerged_or_unversioned_digital_flow_protocol_claim",
+      "replayed_or_reordered_encrypted_chunk",
+      "altered_or_missing_data_group",
+      "invalid_mrz_or_dg1_mismatch",
+      "wrong_or_stale_csca_dsc_or_selected_issuer_profile_record",
+      "direct_submit_without_prior_generate_sod_lacks_exact_package_sod",
+      "direct_submit_without_digital_flow_steps_claims_handoff_ready",
+      "final_package_sod_differs_from_handed_off_sod_bytes",
+      "unapproved_or_self_reviewed_package",
+      "simulator_status_or_operator_boolean_as_physical_evidence"
+    ]
+  }
+}
