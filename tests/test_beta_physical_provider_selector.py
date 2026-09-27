@@ -264,6 +264,19 @@ def test_physical_mode_plan_only_blocks_live_deploy_and_restore() -> None:
         "networks": {"marty-network": {}},
         "build": {"context": str(Path(candidate["secrets"][
             "passport_callback_signer_bao_token"]["file"]).parent)}}),
+    lambda candidate: candidate["services"].update(auth={
+        "networks": {"marty-network": {}},
+        "volumes": [{"type": "bind", "source": str(Path(candidate["secrets"][
+            "passport_callback_signer_bao_token"]["file"]).parent.parent),
+                     "target": "/tmp/all"}]}),
+    lambda candidate: candidate.update(volumes={"copy_token": {
+        "driver": "local", "driver_opts": {"type": "none", "o": "bind",
+            "device": str(Path(candidate["secrets"][
+                "passport_callback_signer_bao_token"]["file"]).parent)}}}),
+    lambda candidate: candidate["services"].update(auth={
+        "networks": {"marty-network": {}},
+        "build": {"context": str(ROOT), "args": {"BAO_TOKEN": Path(candidate[
+            "secrets"]["passport_callback_signer_bao_token"]["file"]).read_text()}}}),
 ])
 def test_physical_mode_rejects_regression(tmp_path: Path, change) -> None:
     candidate = deepcopy(model(tmp_path))
