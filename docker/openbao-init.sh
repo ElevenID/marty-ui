@@ -252,6 +252,15 @@ path "transit/keys/notification-webhook-envelope-marty-aes256" {
 }
 EOF
 
+# The supported-consumer callback signer only needs to MAC canonical callback
+# bytes. It cannot verify, read/export a transit key, or use generic signing.
+echo "Writing isolated passport callback HMAC policy..."
+bao policy write -address="${BAO_ADDR}" passport-callback-hmac-service - <<'EOF'
+path "transit/hmac/passport-bureau-callback-marty-hmac" {
+  capabilities = ["create", "update"]
+}
+EOF
+
 echo ""
 echo "=== OpenBao Initialization Complete ==="
 echo "Transit keys:"

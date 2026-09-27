@@ -22,6 +22,7 @@ BAO_TOKEN_FILE="${BAO_TOKEN_FILE:-}"
 SELFHOST_SECRET_DIR="${SELFHOST_SECRET_DIR:-${REPO_ROOT}/docker/secrets/selfhost.example}"
 SERVICE_TOKEN_OUTPUT_FILE="${SERVICE_TOKEN_OUTPUT_FILE:-${SELFHOST_SECRET_DIR}/openbao_service_token}"
 NOTIFICATION_TOKEN_OUTPUT_FILE="${NOTIFICATION_TOKEN_OUTPUT_FILE:-${SELFHOST_SECRET_DIR}/notification_openbao_token}"
+PASSPORT_CALLBACK_TOKEN_OUTPUT_FILE="${PASSPORT_CALLBACK_TOKEN_OUTPUT_FILE:-${SELFHOST_SECRET_DIR}/passport_callback_signer_bao_token}"
 
 if [ -z "${BAO_ADDR}" ]; then
     echo "BAO_ADDR must be set to the external Vault/OpenBao address." >&2
@@ -50,8 +51,10 @@ SERVICE_TOKEN_OUTPUT_DIR=$(dirname "${SERVICE_TOKEN_OUTPUT_FILE}")
 SERVICE_TOKEN_OUTPUT_BASENAME=$(basename "${SERVICE_TOKEN_OUTPUT_FILE}")
 NOTIFICATION_TOKEN_OUTPUT_DIR=$(dirname "${NOTIFICATION_TOKEN_OUTPUT_FILE}")
 NOTIFICATION_TOKEN_OUTPUT_BASENAME=$(basename "${NOTIFICATION_TOKEN_OUTPUT_FILE}")
+PASSPORT_CALLBACK_TOKEN_OUTPUT_DIR=$(dirname "${PASSPORT_CALLBACK_TOKEN_OUTPUT_FILE}")
+PASSPORT_CALLBACK_TOKEN_OUTPUT_BASENAME=$(basename "${PASSPORT_CALLBACK_TOKEN_OUTPUT_FILE}")
 
-mkdir -p "${SERVICE_TOKEN_OUTPUT_DIR}" "${NOTIFICATION_TOKEN_OUTPUT_DIR}"
+mkdir -p "${SERVICE_TOKEN_OUTPUT_DIR}" "${NOTIFICATION_TOKEN_OUTPUT_DIR}" "${PASSPORT_CALLBACK_TOKEN_OUTPUT_DIR}"
 
 echo "Configuring external Vault/OpenBao at ${BAO_ADDR}..."
 
@@ -60,9 +63,11 @@ docker run --rm \
     -e BAO_TOKEN="${BAO_TOKEN}" \
     -e SERVICE_TOKEN_OUTPUT_FILE="/work-service/${SERVICE_TOKEN_OUTPUT_BASENAME}" \
     -e NOTIFICATION_TOKEN_OUTPUT_FILE="/work-notification/${NOTIFICATION_TOKEN_OUTPUT_BASENAME}" \
+    -e PASSPORT_CALLBACK_TOKEN_OUTPUT_FILE="/work-callback/${PASSPORT_CALLBACK_TOKEN_OUTPUT_BASENAME}" \
     -v "${REPO_ROOT}/docker/openbao-init.sh:/scripts/openbao-init.sh:ro" \
     -v "${SERVICE_TOKEN_OUTPUT_DIR}:/work-service" \
     -v "${NOTIFICATION_TOKEN_OUTPUT_DIR}:/work-notification" \
+    -v "${PASSPORT_CALLBACK_TOKEN_OUTPUT_DIR}:/work-callback" \
     quay.io/openbao/openbao:2 \
     /bin/sh -ec '
 json_field() {
@@ -101,9 +106,22 @@ if [ -e "$NOTIFICATION_TOKEN_OUTPUT_FILE" ]; then
 fi
 printf "%s" "$notification_token" > "$NOTIFICATION_TOKEN_OUTPUT_FILE"
 chmod 0600 "$NOTIFICATION_TOKEN_OUTPUT_FILE"
+
+callback_token_json="$(bao token create -address="$BAO_ADDR" -policy=passport-callback-hmac-service -orphan -format=json)"
+callback_token="$(json_field "$callback_token_json" client_token)"
+if [ -z "$callback_token" ]; then
+    echo "Failed to mint passport callback HMAC token." >&2
+    exit 1
+fi
+if [ -e "$PASSPORT_CALLBACK_TOKEN_OUTPUT_FILE" ]; then
+    chmod u+w "$PASSPORT_CALLBACK_TOKEN_OUTPUT_FILE" 2>/dev/null || true
+fi
+printf "%s" "$callback_token" > "$PASSPORT_CALLBACK_TOKEN_OUTPUT_FILE"
+chmod 0600 "$PASSPORT_CALLBACK_TOKEN_OUTPUT_FILE"
 '
 
 echo "Wrote scoped credential-service token to ${SERVICE_TOKEN_OUTPUT_FILE}"
 echo "Use that file as the openbao_service_token secret in the self-host stack."
 echo "Wrote scoped Notification webhook token to ${NOTIFICATION_TOKEN_OUTPUT_FILE}"
 echo "Use that file as the notification_openbao_token secret in the self-host stack."
+echo "Wrote scoped passport callback HMAC token to ${PASSPORT_CALLBACK_TOKEN_OUTPUT_FILE}"
