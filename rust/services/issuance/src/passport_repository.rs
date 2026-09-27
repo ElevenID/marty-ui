@@ -342,10 +342,13 @@ impl PostgresPassportRepository {
         let mut transaction = self.pool.begin().await?;
         let matches = sqlx::query(
             "SELECT * FROM issuance_service.physical_document_jobs
-             WHERE bureau_job_id = $1 AND organization_id = $2 LIMIT 2 FOR UPDATE",
+             WHERE bureau_job_id = $1 AND organization_id = $2
+               AND ($3::text IS NULL OR bureau_provider_profile_id = $3)
+             LIMIT 2 FOR UPDATE",
         )
         .bind(event.bureau_job_id())
         .bind(event.organization_id())
+        .bind(event.provider_profile_id())
         .fetch_all(&mut *transaction)
         .await?;
         if matches.len() > 1 {
@@ -390,6 +393,7 @@ impl PostgresPassportRepository {
             "UPDATE issuance_service.physical_document_jobs
              SET status = $1, tracking_number = $2, error_message = $3, updated_at = $4
              WHERE id = $5 AND organization_id = $6 AND bureau_job_id = $7
+               AND ($8::text IS NULL OR bureau_provider_profile_id = $8)
              RETURNING *",
         )
         .bind(incoming_status)
@@ -399,6 +403,7 @@ impl PostgresPassportRepository {
         .bind(id)
         .bind(organization_id)
         .bind(event.bureau_job_id())
+        .bind(event.provider_profile_id())
         .fetch_optional(&mut *transaction)
         .await?;
         transaction.commit().await?;

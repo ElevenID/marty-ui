@@ -181,6 +181,8 @@ pub struct PollOutcome {
 #[derive(Clone, Debug, Deserialize, PartialEq)]
 struct WebhookEvent {
     organization_id: String,
+    #[serde(default)]
+    provider_profile_id: Option<String>,
     bureau_job_id: String,
     status: ProductionStatus,
     #[serde(flatten)]
@@ -195,6 +197,11 @@ impl VerifiedWebhookEvent {
     #[must_use]
     pub fn organization_id(&self) -> &str {
         &self.0.organization_id
+    }
+
+    #[must_use]
+    pub fn provider_profile_id(&self) -> Option<&str> {
+        self.0.provider_profile_id.as_deref()
     }
 
     #[must_use]
@@ -525,7 +532,15 @@ pub(crate) fn parse_verified_webhook(
 fn parse_webhook_event(body: &[u8]) -> Result<WebhookEvent, BureauError> {
     let event: WebhookEvent =
         serde_json::from_slice(body).map_err(|_| BureauError::InvalidWebhookEvent)?;
-    if event.organization_id.trim().is_empty() || event.bureau_job_id.trim().is_empty() {
+    if event.organization_id.trim().is_empty()
+        || event.bureau_job_id.trim().is_empty()
+        || event
+            .provider_profile_id
+            .as_deref()
+            .is_some_and(|profile_id| {
+                profile_id.is_empty() || profile_id.len() > 128 || profile_id.trim() != profile_id
+            })
+    {
         return Err(BureauError::InvalidWebhookEvent);
     }
     Ok(event)
@@ -572,12 +587,13 @@ mod tests {
             "synthetic-internal-key",
         )
         .unwrap();
-        let body = br#"{"organization_id":"org-a","bureau_job_id":"job-1","status":"SHIPPED"}"#;
+        let body = br#"{"organization_id":"org-a","provider_profile_id":"provider-a","bureau_job_id":"job-1","status":"SHIPPED"}"#;
         let event = verifier
             .verify(body, SYNTHETIC_KMS_SIGNATURE)
             .await
             .unwrap();
         assert_eq!(event.organization_id(), "org-a");
+        assert_eq!(event.provider_profile_id(), Some("provider-a"));
         assert_eq!(event.bureau_job_id(), "job-1");
         assert!(matches!(
             verifier

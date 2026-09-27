@@ -1436,6 +1436,79 @@ async fn passport_jobs_survive_restart_without_cross_tenant_reads() {
     .await
     .unwrap();
     migration::migrate_passport(&restarted_pool).await.unwrap();
+    // The same tenant can receive the same bureau job ID from two distinct
+    // providers. A signed provider claim selects only its bound row; an older
+    // two-field callback remains ambiguous and cannot update either row.
+    let colliding_job = PassportJobInsert {
+        id: "job-provider-c".into(),
+        application_id: "application-provider-c".into(),
+        flow_execution_id: "flow-provider-c".into(),
+        application_template_id: "template-provider-c".into(),
+        credential_template_id: "credential-provider-c".into(),
+        revocation_profile_id: None,
+        delivery_destination_profile_id: "destination-provider-c".into(),
+        document_type: "TD1".into(),
+        country_code: "USA".into(),
+        issuer_did: None,
+        secure_artifact_ciphertext: "synthetic-encrypted-artifact".into(),
+        secure_artifact_reference: "physical-artifact://provider-c".into(),
+    };
+    restarted.insert(&org_a, &colliding_job, now).await.unwrap();
+    let mut colliding_submission = PassportJobPatch::new(PassportJobStatus::Submitted);
+    colliding_submission.bureau_job_id = Some(Some("bureau-a".into()));
+    colliding_submission.bureau_provider_profile_id = Some("provider-c".into());
+    restarted
+        .update(
+            &org_a,
+            "application-provider-c",
+            "DRAFT",
+            &colliding_submission,
+            next,
+        )
+        .await
+        .unwrap()
+        .unwrap();
+    let signed_event = |provider_profile_id: Option<&str>| {
+        let mut body = serde_json::json!({
+            "organization_id": "org-a",
+            "bureau_job_id": "bureau-a",
+            "status": "SHIPPED",
+        });
+        if let Some(provider_profile_id) = provider_profile_id {
+            body["provider_profile_id"] = serde_json::json!(provider_profile_id);
+        }
+        let body = serde_json::to_vec(&body).unwrap();
+        let mut mac = Hmac::<Sha256>::new_from_slice(secret.as_bytes()).unwrap();
+        mac.update(&body);
+        bureau
+            .parse_webhook(&body, &hex::encode(mac.finalize().into_bytes()))
+            .unwrap()
+    };
+    assert!(restarted
+        .apply_verified_webhook(&signed_event(None), next)
+        .await
+        .is_err());
+    assert!(restarted
+        .apply_verified_webhook(&signed_event(Some("provider-foreign")), next)
+        .await
+        .unwrap()
+        .is_none());
+    let provider_c_updated = restarted
+        .apply_verified_webhook(&signed_event(Some("provider-c")), next)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(provider_c_updated.application_id, "application-provider-c");
+    assert_eq!(provider_c_updated.status, "READY_FOR_ACTIVATION");
+    assert_eq!(
+        restarted
+            .get(&org_a, "application-a")
+            .await
+            .unwrap()
+            .unwrap()
+            .status,
+        "ACTIVE"
+    );
     exercise_native_passport_http(restarted, keyring, cipher, &key_a, &key_b).await;
     #[cfg(feature = "passport-self-signed-test")]
     if let Ok(packaged_url) = std::env::var("MARTY_PASSPORT_PACKAGED_TEST_URL") {
