@@ -98,7 +98,7 @@ def render_model(
     surface: str, project: str, env_file: Path, disposable_root: Path,
     services_reference: str,
     runner: Callable[[list[str], dict[str, str]], str] = _run_config,
-    *, phase: str = "rust",
+    *, phase: str = "rust", owner_labels: dict[str, str] | None = None,
 ) -> dict:
     """Read Docker's resolved model using only fixed repo-owned Compose files."""
     match = PROJECT.fullmatch(project)
@@ -125,6 +125,11 @@ def render_model(
             "config", "--format", "json"]
     environment = os.environ.copy()
     environment["MARTY_SERVICES_IMAGE"] = services_reference
+    if owner_labels is not None:
+        environment["PASSPORT_ACCEPTANCE_PLAN_RUN_ID"] = owner_labels[
+            "com.marty.passport.acceptance.run-id"]
+        environment["PASSPORT_ACCEPTANCE_SOURCE_COMMIT"] = owner_labels[
+            "com.marty.passport.acceptance.source-commit"]
     for role, reference in qualified_images(verify_registry=False).items():
         environment[f"PASSPORT_ACCEPTANCE_{role.upper()}_IMAGE"] = reference
     try:
@@ -197,8 +202,11 @@ def preflight_attested_plan(
     require(current.tzinfo is not None and created.tzinfo is not None
             and expires.tzinfo is not None and created <= current < expires,
             "Protected plan lease has expired")
+    require(isinstance(plan.get("owner_labels"), dict),
+            "Protected plan owner labels are missing")
     model = render_model(surface, project, env_file, disposable_root,
-                         services_reference, runner)
+                         services_reference, runner,
+                         owner_labels=plan["owner_labels"])
     result = validate_planned_model(model, plan, disposable_root)
     return {"schema": "marty.passport-supported-rollback-preflight/v1",
             "status": "blocked", "model": result,
@@ -340,6 +348,19 @@ def validate_planned_model(model: dict, plan: dict, disposable_root: Path) -> di
     match = PROJECT.fullmatch(plan["project"])
     require(match is not None and match.group(1) == plan.get("surface"),
             "Protected plan surface/project mismatch")
+    labels = plan.get("owner_labels")
+    require(isinstance(labels, dict)
+            and labels == {
+                "com.marty.passport.acceptance.owner": "supported-consumer",
+                "com.marty.passport.acceptance.run-id": plan.get("run_id"),
+                "com.marty.passport.acceptance.source-commit": plan.get("source_commit"),
+                "com.marty.passport.acceptance.services-image": plan.get("services_reference"),
+            }, "Protected plan owner labels are invalid")
+    require(all(isinstance(model.get(section), dict)
+                and all(isinstance(item, dict) and item.get("labels") == labels
+                        for item in model[section].values())
+                for section in ("services", "networks", "volumes")),
+            "Resolved Compose resource labels differ from protected plan")
     return validate_model(model, plan["project"], plan["services_reference"],
                           disposable_root,
                           migrations_reference=plan["migrations_reference"],

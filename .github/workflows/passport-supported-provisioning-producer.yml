@@ -1,0 +1,66 @@
+name: Passport Supported Disposable Provisioning Producer
+
+# This protected entrypoint is deliberately blocked before Docker mutation.
+# Disposable KMS transit bootstrap, profile and provider secrets require
+# separate review before a live producer can be enabled.
+on:
+  workflow_dispatch:
+    inputs:
+      plan_run_id:
+        description: Protected provisioning-plan workflow run ID.
+        required: true
+      release_tag:
+        description: Official stack release bound by that plan.
+        required: true
+
+concurrency:
+  group: passport-supported-disposable-producer
+  cancel-in-progress: false
+
+permissions:
+  actions: read
+  contents: read
+  packages: read
+
+jobs:
+  producer:
+    if: github.ref == 'refs/heads/main'
+    runs-on: [self-hosted, linux, x64, canvas-oss-wsl2]
+    environment: beta-lifecycle
+    timeout-minutes: 20
+    env:
+      GH_TOKEN: ${{ github.token }}
+      PLAN_RUN_ID: ${{ inputs.plan_run_id }}
+      RELEASE_TAG: ${{ inputs.release_tag }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+      - name: Verify protected plan lineage and stop before provisioning
+        shell: bash
+        run: |
+          set -euo pipefail
+          [[ "$PLAN_RUN_ID" =~ ^[1-9][0-9]{0,19}$ ]]
+          plan_run="$(gh api "repos/ElevenID/marty-ui/actions/runs/$PLAN_RUN_ID")"
+          jq -e --arg sha "$GITHUB_SHA" \
+            '.status == "completed" and .conclusion == "success"
+             and .event == "workflow_dispatch" and .head_branch == "main"
+             and .head_sha == $sha and .repository.full_name == "ElevenID/marty-ui"' \
+            <<< "$plan_run"
+          plan_workflow_id="$(jq -er '.workflow_id' <<< "$plan_run")"
+          plan_workflow="$(gh api "repos/ElevenID/marty-ui/actions/workflows/$plan_workflow_id")"
+          jq -e '.path == ".github/workflows/passport-supported-provisioning-plan.yml"
+                 and .state == "active"' <<< "$plan_workflow"
+          case "$RELEASE_TAG" in
+            *[!a-zA-Z0-9._-]*|'') echo 'Invalid release tag' >&2; exit 1 ;;
+          esac
+          work="$RUNNER_TEMP/passport-supported-producer-$GITHUB_RUN_ID"
+          mkdir -p "$work"
+          gh run download "$PLAN_RUN_ID" --repo ElevenID/marty-ui \
+            --name "passport-supported-provisioning-plan-$PLAN_RUN_ID" --dir "$work"
+          gh release download "$RELEASE_TAG" --repo ElevenID/marty-ui \
+            --pattern stack-manifest.json --pattern SHA256SUMS --dir "$work"
+          python3 scripts/passport_supported_provisioning_producer.py \
+            --plan "$work/passport-supported-provisioning-plan-$PLAN_RUN_ID.json" \
+            --manifest "$work/stack-manifest.json" --plan-run-id "$PLAN_RUN_ID"
+          # The Python gate exits nonzero pending governed disposable bootstrap.

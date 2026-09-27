@@ -1,8 +1,15 @@
 # Dedicated, unprovisioned passport rollback rehearsal model. Both surface
 # overlays below select this topology; neither inherits production resources.
 # Image references and secret files must come from one protected release/run.
+x-acceptance-labels: &acceptance-labels
+  com.marty.passport.acceptance.owner: supported-consumer
+  com.marty.passport.acceptance.run-id: ${PASSPORT_ACCEPTANCE_PLAN_RUN_ID:?bind protected plan run}
+  com.marty.passport.acceptance.source-commit: ${PASSPORT_ACCEPTANCE_SOURCE_COMMIT:?bind protected source}
+  com.marty.passport.acceptance.services-image: ${MARTY_SERVICES_IMAGE:?bind released services image}
+
 services:
   postgres:
+    labels: *acceptance-labels
     image: ${PASSPORT_ACCEPTANCE_POSTGRES_IMAGE:?pin disposable PostgreSQL image by digest}
     environment:
       POSTGRES_DB: marty
@@ -15,6 +22,7 @@ services:
     networks: [private]
 
   redis:
+    labels: *acceptance-labels
     image: ${PASSPORT_ACCEPTANCE_REDIS_IMAGE:?pin disposable Redis image by digest}
     volumes: [redis_data:/data]
     healthcheck:
@@ -22,6 +30,7 @@ services:
     networks: [private]
 
   openbao:
+    labels: *acceptance-labels
     image: ${PASSPORT_ACCEPTANCE_OPENBAO_IMAGE:?pin disposable OpenBao image by digest}
     volumes: [openbao_data:/bao/data]
     healthcheck:
@@ -29,6 +38,7 @@ services:
     networks: [private]
 
   db-migrate:
+    labels: *acceptance-labels
     image: ${PASSPORT_ACCEPTANCE_MIGRATIONS_IMAGE:?pin signed migrations image by digest}
     environment:
       MARTY_DB_PASSWORD_FILE: /run/secrets/marty_db_password
@@ -42,6 +52,7 @@ services:
     restart: "no"
 
   signing-keys:
+    labels: *acceptance-labels
     image: ${MARTY_SERVICES_IMAGE:?pin signed services image by digest}
     environment:
       SERVICE_NAME: signing_keys
@@ -59,6 +70,7 @@ services:
     networks: [private]
 
   issuance:
+    labels: *acceptance-labels
     # Retained only for the bounded rollback rehearsal. Its digest and source
     # must be independently tied to the pre-retirement Marty Credentials release.
     image: ${PASSPORT_ACCEPTANCE_LEGACY_IMAGE:?pin legacy Python issuance image by digest}
@@ -74,6 +86,7 @@ services:
     networks: [private]
 
   issuance-native:
+    labels: *acceptance-labels
     image: ${MARTY_SERVICES_IMAGE:?pin signed services image by digest}
     environment:
       SERVICE_NAME: issuance_native
@@ -100,6 +113,7 @@ services:
     networks: [private]
 
   flow:
+    labels: *acceptance-labels
     image: ${MARTY_SERVICES_IMAGE:?pin signed services image by digest}
     environment:
       SERVICE_NAME: flow
@@ -123,6 +137,7 @@ services:
     networks: [private]
 
   passport-callback-signer-supported:
+    labels: *acceptance-labels
     image: ${MARTY_SERVICES_IMAGE:?pin signed services image by digest}
     environment:
       SERVICE_NAME: passport_callback_signer_supported
@@ -137,6 +152,7 @@ services:
     networks: [private]
 
   passport-provider-ingress:
+    labels: *acceptance-labels
     image: ${MARTY_SERVICES_IMAGE:?pin signed services image by digest}
     environment:
       SERVICE_NAME: passport_provider_ingress
@@ -157,6 +173,7 @@ services:
     networks: [private]
 
   gateway:
+    labels: *acceptance-labels
     image: ${MARTY_SERVICES_IMAGE:?pin signed services image by digest}
     environment:
       SERVICE_NAME: gateway
@@ -199,10 +216,14 @@ secrets:
     file: ${PASSPORT_ACCEPTANCE_SECRET_DIR:?use disposable secret root}/provider_webhook_secret
 
 volumes:
-  postgres_data: {}
-  redis_data: {}
-  openbao_data: {}
+  postgres_data:
+    labels: *acceptance-labels
+  redis_data:
+    labels: *acceptance-labels
+  openbao_data:
+    labels: *acceptance-labels
 
 networks:
   private:
     internal: true
+    labels: *acceptance-labels

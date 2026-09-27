@@ -35,6 +35,8 @@ def inputs(root: Path) -> Path:
         "PASSPORT_ACCEPTANCE_OPENBAO_IMAGE=quay.io/openbao/openbao@sha256:" + "f" * 64,
         "PASSPORT_ACCEPTANCE_MIGRATIONS_IMAGE=" + MIGRATIONS,
         "PASSPORT_ACCEPTANCE_LEGACY_IMAGE=" + LEGACY,
+        "PASSPORT_ACCEPTANCE_PLAN_RUN_ID=123456789",
+        "PASSPORT_ACCEPTANCE_SOURCE_COMMIT=" + "a" * 40,
         "PASSPORT_ACCEPTANCE_DATABASE_URL=postgresql+asyncpg://marty:synthetic-disposable-only@postgres:5432/marty",
         "PASSPORT_ACCEPTANCE_ADMIN_EMAIL=disposable@acceptance.invalid",
         "PASSPORT_ACCEPTANCE_PROVIDER_PROFILE_ID=disposable-physical-profile",
@@ -70,6 +72,11 @@ def test_real_compose_render_is_safe_but_not_accepted(
     assert model["services"]["issuance"]["image"] == LEGACY
     for role, reference in qualified_images(verify_registry=False).items():
         assert model["services"][role]["image"] == reference
+    labels = model["services"]["gateway"]["labels"]
+    assert labels["com.marty.passport.acceptance.run-id"] == "123456789"
+    assert labels["com.marty.passport.acceptance.source-commit"] == "a" * 40
+    for section in ("services", "networks", "volumes"):
+        assert all(item["labels"] == labels for item in model[section].values())
 
 
 @pytest.mark.skipif(shutil.which("docker") is None, reason="Docker Compose CLI unavailable")

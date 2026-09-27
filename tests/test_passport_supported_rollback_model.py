@@ -20,6 +20,12 @@ from scripts.passport_supported_infra_images import qualified_images
 
 PROJECT = "marty-passport-acceptance-base-abcdef"
 IMAGE = "ghcr.io/elevenid/marty-ui-oss/services@sha256:" + "a" * 64
+LABELS = {
+    "com.marty.passport.acceptance.owner": "supported-consumer",
+    "com.marty.passport.acceptance.run-id": "123456",
+    "com.marty.passport.acceptance.source-commit": "a" * 40,
+    "com.marty.passport.acceptance.services-image": IMAGE,
+}
 
 
 def safe_model(root: Path) -> dict:
@@ -37,9 +43,11 @@ def safe_model(root: Path) -> dict:
     services["signing-keys"] = {"image": IMAGE}
     services["db-migrate"] = {"image": "ghcr.io/elevenid/marty-ui-oss/migrations@sha256:" + "b" * 64}
     services["issuance"] = {"image": "ghcr.io/elevenid/marty-credentials-issuance@sha256:" + "c" * 64}
+    for service in services.values():
+        service["labels"] = LABELS
     return {"name": PROJECT, "services": services,
             "networks": {"default": {"name": PROJECT + "_default",
-                                     "internal": True}},
+                                     "internal": True, "labels": LABELS}},
             "volumes": {}, "secrets": {"db": {"file": str(root / "secrets/db")}}}
 
 
@@ -60,6 +68,8 @@ def test_attested_plan_binds_all_disposable_images(tmp_path: Path) -> None:
         "migrations_reference": model["services"]["db-migrate"]["image"],
         "legacy_reference": model["services"]["issuance"]["image"],
         "infra_images": qualified_images(verify_registry=False),
+        "run_id": "123456", "source_commit": "a" * 40,
+        "owner_labels": LABELS,
     }
     assert validate_planned_model(model, plan, tmp_path)["model_safe"] is True
     for role in ("postgres", "redis", "openbao", "db-migrate", "issuance", "signing-keys"):
@@ -71,6 +81,11 @@ def test_attested_plan_binds_all_disposable_images(tmp_path: Path) -> None:
     bad_plan["infra_images"]["redis"] = "docker.io/library/redis@sha256:" + "f" * 64
     with pytest.raises(ModelPreflightError, match="plan image bindings"):
         validate_planned_model(model, bad_plan, tmp_path)
+    for section, name in (("services", "gateway"), ("networks", "default")):
+        bad = deepcopy(model)
+        bad[section][name]["labels"]["com.marty.passport.acceptance.run-id"] = "other"
+        with pytest.raises(ModelPreflightError, match="resource labels"):
+            validate_planned_model(bad, plan, tmp_path)
 
 
 @pytest.mark.parametrize("change,match", [
@@ -161,6 +176,7 @@ def test_executable_planned_preflight_rejects_unsigned_and_mutated_images(
         "migrations_reference": model["services"]["db-migrate"]["image"],
         "legacy_reference": model["services"]["issuance"]["image"],
         "infra_images": qualified_images(verify_registry=False),
+        "run_id": "123456", "owner_labels": LABELS,
         "created_at": (now - timedelta(minutes=5)).isoformat(),
         "expires_at": (now + timedelta(minutes=55)).isoformat(),
     }
