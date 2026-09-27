@@ -8387,7 +8387,7 @@ mod tests {
         assert_eq!(status, StatusCode::OK, "managed CSCA ceremony failed");
         assert_eq!(issued_csca["status"], "issued");
         assert_eq!(issued_csca["chain_pem"], "");
-        for secret in [&endpoint[..], token.as_str(), csca_reference] {
+        for secret in [&endpoint[..], token.as_str(), csca_reference, CSCA_KEY] {
             assert!(
                 !issued_csca.to_string().contains(secret),
                 "CSCA response exposed a custody locator or credential"
