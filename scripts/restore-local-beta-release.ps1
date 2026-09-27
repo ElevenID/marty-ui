@@ -12,12 +12,20 @@ param(
     [Parameter(Mandatory = $true)][string]$ArtifactDir,
     [string]$TunnelEnvFile,
     [string]$GeneratedEnvFile,
-    [Parameter(Mandatory = $true)][switch]$ConfirmBetaRestore
+    [switch]$ConfirmBetaRestore,
+    [switch]$PhysicalProviderSnapshot,
+    [switch]$PlanOnly
 )
 
 Set-StrictMode -Version Latest
 $ErrorActionPreference = "Stop"
-if (-not $ConfirmBetaRestore) { throw "-ConfirmBetaRestore is required" }
+if (-not $PlanOnly -and -not $ConfirmBetaRestore) { throw "-ConfirmBetaRestore is required" }
+if ($PhysicalProviderSnapshot -and -not $PlanOnly) {
+    throw "Physical provider beta restore is blocked pending an accepted recovery procedure; use -PlanOnly"
+}
+if ($PlanOnly -and -not $PhysicalProviderSnapshot) {
+    throw "Plan-only restore is reserved for the blocked physical provider path"
+}
 
 $repoRoot = (Resolve-Path (Join-Path $PSScriptRoot "..")).Path
 . (Join-Path $PSScriptRoot "beta-worker-launch-contract.ps1")
@@ -32,6 +40,18 @@ $resolvedArtifacts = (Resolve-Path $ArtifactDir).Path
 $allowedPrefix = $artifactRoot.TrimEnd('\') + '\'
 if (-not $resolvedArtifacts.StartsWith($allowedPrefix, [StringComparison]::OrdinalIgnoreCase) -or $resolvedArtifacts -match "selfhost|production|demo-release-candidate") {
     throw "Restore ArtifactDir must be a local beta artifact under tests/artifacts"
+}
+if ($PlanOnly) {
+    [ordered]@{
+        schema = "marty.passport-beta-physical-restore-plan/v1"
+        status = "blocked"
+        compose_project = "elevenid-beta"
+        physical_provider_profile = "docker-compose.profile.passport-native-physical-beta.yml"
+        provider_base_profile = "docker-compose.profile.passport-provider-base.yml"
+        application_services = @("gateway", "flow", "issuance-native", "signing-keys", "passport-callback-signer-supported", "passport-provider-ingress")
+        blocker = "Protected physical-provider recovery and runtime evidence are absent"
+    } | ConvertTo-Json -Depth 5
+    exit 0
 }
 
 $project = "elevenid-beta"

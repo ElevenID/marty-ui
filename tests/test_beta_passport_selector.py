@@ -699,10 +699,12 @@ def test_runner_validates_twice_before_mutation():
         encoding="utf-8"
     )
     assert "[switch]$EnablePassportNative" in source
+    assert "[switch]$EnablePassportPhysicalProvider" in source
     assert (
-        "$passportProfiles = @(Get-BetaPassportProfiles -Enabled ([bool]$EnablePassportNative))"
+        "$passportProfiles = @(Get-BetaPassportProfiles -Enabled ([bool]$EnablePassportNative)"
         in source
     )
+    assert "-PhysicalProvider ([bool]$EnablePassportPhysicalProvider))" in source
     assert "passport_configuration_validated = $false" in source
     assert '$script:SelectedApplicationServices += "passport-beta-bureau"' in source
     assert '$script:SelectedApplicationServices += "passport-callback-signer"' in source
