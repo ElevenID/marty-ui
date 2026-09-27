@@ -18,7 +18,7 @@ const BATCH_TIMEOUT: Duration = Duration::from_secs(60);
 const CALLBACK_KMS_MAX_BODY_BYTES: usize = 64 * 1024;
 const CALLBACK_KMS_MAX_SIGNATURE_BYTES: usize = 512;
 
-fn valid_kms_callback_signature(signature: &str) -> bool {
+pub(crate) fn valid_kms_callback_signature(signature: &str) -> bool {
     let Some((version, digest)) = signature
         .strip_prefix("vault:v")
         .and_then(|value| value.split_once(':'))

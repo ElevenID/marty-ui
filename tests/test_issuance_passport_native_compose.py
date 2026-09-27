@@ -24,6 +24,15 @@ def test_compose_exposes_both_passport_selectors_without_enabling_them() -> None
     selfhost = _environment("docker-compose.selfhost.prod.yml", "issuance-native")
     selfhost_gateway = _environment("docker-compose.selfhost.prod.yml", "gateway")
     selfhost_flow = _environment("docker-compose.selfhost.prod.yml", "flow")
+    for routed_gateway in (gateway, selfhost_gateway):
+        assert (
+            routed_gateway["PASSPORT_PROVIDER_INGRESS_GATEWAY_ENABLED"]
+            == "${PASSPORT_PROVIDER_INGRESS_GATEWAY_ENABLED:-false}"
+        )
+        assert (
+            routed_gateway["PASSPORT_PROVIDER_INGRESS_SERVICE_URL"]
+            == "${PASSPORT_PROVIDER_INGRESS_SERVICE_URL:-}"
+        )
     assert (
         flow["PASSPORT_NATIVE_FLOW_ENABLED"] == "${PASSPORT_NATIVE_FLOW_ENABLED:-false}"
     )

@@ -11,7 +11,9 @@ use axum::{
     routing::{get, post},
     Json, Router,
 };
+#[cfg(test)]
 use base64::{engine::general_purpose::STANDARD, Engine as _};
+use marty_issuance_service::passport_callback_handoff::sign_and_deliver;
 use reqwest::{redirect::Policy, Client, Url};
 use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
@@ -407,45 +409,16 @@ async fn deliver_one(state: &AppState) -> Result<bool, String> {
         callback["tracking_number"] = json!(format!("BETA-SIM-{}", bureau_job_id.simple()));
     }
     let body = serde_json::to_vec(&callback).map_err(|_| "callback serialization failed")?;
-    let mut sign_url = state.config.signing_url.clone();
-    sign_url
-        .path_segments_mut()
-        .map_err(|()| "invalid private signing URL")?
-        .push(&organization_id)
-        .push("passport-callbacks")
-        .push("sign");
-    let signed = state
-        .http
-        .post(sign_url)
-        .header("x-api-key", &state.config.signing_api_key)
-        .json(&json!({"body_b64": STANDARD.encode(&body)}))
-        .send()
-        .await
-        .map_err(|_| "KMS callback signing unavailable")?;
-    if !signed.status().is_success() {
-        return Err("KMS callback signing refused".into());
-    }
-    let signature = signed
-        .json::<Value>()
-        .await
-        .map_err(|_| "invalid KMS signing response")?
-        .get("signature")
-        .and_then(Value::as_str)
-        .filter(|signature| signature.starts_with("vault:v"))
-        .ok_or("missing KMS callback signature")?
-        .to_owned();
-    let delivered = state
-        .http
-        .post(state.config.callback_url.clone())
-        .header("x-personalization-signature", signature)
-        .header("content-type", "application/json")
-        .body(body)
-        .send()
-        .await
-        .map_err(|_| "native callback transport unavailable")?;
-    if !delivered.status().is_success() {
-        return Err("native callback refused signed event".into());
-    }
+    sign_and_deliver(
+        &state.http,
+        &state.config.signing_url,
+        &state.config.signing_api_key,
+        &state.config.callback_url,
+        &organization_id,
+        &body,
+    )
+    .await
+    .map_err(|error| error.to_string())?;
     let updated = sqlx::query(
         "UPDATE issuance_service.passport_beta_bureau_jobs SET status = $1,
              next_transition_at = CASE WHEN $1 = 'SHIPPED' THEN NULL ELSE NOW() + INTERVAL '5 seconds' END,

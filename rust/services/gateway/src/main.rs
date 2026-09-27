@@ -30,10 +30,14 @@ async fn main() -> Result<(), Box<dyn Error>> {
 
     let config = GatewayConfig::from_env()?;
     let contract = GatewayContract::load()?;
-    let routes = contract
-        .runtime_route_table_with_passport_native(config.passport_native_gateway_enabled)?;
-    let proxy_routes =
-        contract.proxy_route_table_with_passport_native(config.passport_native_gateway_enabled)?;
+    let routes = contract.runtime_route_table_with_passport_selectors(
+        config.passport_native_gateway_enabled,
+        config.passport_provider_ingress_gateway_enabled,
+    )?;
+    let proxy_routes = contract.proxy_route_table_with_passport_selectors(
+        config.passport_native_gateway_enabled,
+        config.passport_provider_ingress_gateway_enabled,
+    )?;
     let registry = StaticServiceRegistry::from_urls(&config.service_urls)?;
     let upstream = ReqwestUpstream::new(config.maximum_response_bytes)?;
     let proxy_config = ProxyConfig {

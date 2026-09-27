@@ -107,13 +107,25 @@ impl GatewayContract {
         &self,
         passport_native: bool,
     ) -> Result<RouteTable, PlatformError> {
+        self.route_table_with_passport_selectors(passport_native, false)
+    }
+
+    pub fn route_table_with_passport_selectors(
+        &self,
+        passport_native: bool,
+        provider_ingress: bool,
+    ) -> Result<RouteTable, PlatformError> {
         let mut table = RouteTable::default();
         for (index, declared) in self.routes.iter().enumerate() {
             let owner = route_ownership(&declared.path);
             let rewrite_path = upstream_rewrite(declared.method, &declared.path);
             let upstream_service = if owner.service == issuance_native::LEGACY_SERVICE {
                 let upstream_path = rewrite_path.as_deref().unwrap_or(&declared.path);
-                if passport_native
+                if provider_ingress
+                    && issuance_native::is_passport_signed_webhook(declared.method, upstream_path)
+                {
+                    "passport-provider-ingress"
+                } else if passport_native
                     && (issuance_native::is_passport_public_http(declared.method, upstream_path)
                         || issuance_native::is_passport_signed_webhook(
                             declared.method,
@@ -170,7 +182,16 @@ impl GatewayContract {
         &self,
         passport_native: bool,
     ) -> Result<RouteTable, PlatformError> {
-        let mut table = self.route_table_with_passport_native(passport_native)?;
+        self.proxy_route_table_with_passport_selectors(passport_native, false)
+    }
+
+    pub fn proxy_route_table_with_passport_selectors(
+        &self,
+        passport_native: bool,
+        provider_ingress: bool,
+    ) -> Result<RouteTable, PlatformError> {
+        let mut table =
+            self.route_table_with_passport_selectors(passport_native, provider_ingress)?;
         add_gateway_documentation_routes(&mut table)?;
         table.add(RouteConfig {
             name: "internal:compliance-profiles:discoverable".into(),
@@ -335,7 +356,16 @@ impl GatewayContract {
         &self,
         passport_native: bool,
     ) -> Result<RouteTable, PlatformError> {
-        let mut table = self.route_table_with_passport_native(passport_native)?;
+        self.runtime_route_table_with_passport_selectors(passport_native, false)
+    }
+
+    pub fn runtime_route_table_with_passport_selectors(
+        &self,
+        passport_native: bool,
+        provider_ingress: bool,
+    ) -> Result<RouteTable, PlatformError> {
+        let mut table =
+            self.route_table_with_passport_selectors(passport_native, provider_ingress)?;
         add_gateway_documentation_routes(&mut table)?;
         Ok(table)
     }
@@ -788,7 +818,11 @@ mod tests {
         let native = contract
             .proxy_route_table_with_passport_native(true)
             .unwrap();
+        let provider_ingress = contract
+            .proxy_route_table_with_passport_selectors(true, true)
+            .unwrap();
         assert_eq!(legacy.routes().len(), native.routes().len());
+        assert_eq!(provider_ingress.routes().len(), native.routes().len());
         let mut public_count = 0;
         for route in frozen.routes {
             let path = route.path.replace("{application_id}", "job-1");
@@ -797,6 +831,9 @@ mod tests {
                 let new = route_for(&native, route.method, &path).unwrap();
                 assert_eq!(old.route.upstream_service, issuance_native::LEGACY_SERVICE);
                 assert_eq!(new.route.upstream_service, issuance_native::NATIVE_SERVICE);
+                let ingress = route_for(&provider_ingress, route.method, &path).unwrap();
+                assert_eq!(ingress.route.upstream_service, "passport-provider-ingress");
+                assert!(!ingress.route.auth_required);
                 assert!(!old.route.auth_required);
                 assert!(!new.route.auth_required);
                 assert!(!requires_issuance_service_auth(&path));
@@ -807,6 +844,13 @@ mod tests {
             let new = route_for(&native, route.method, &path).unwrap();
             assert_eq!(old.route.upstream_service, issuance_native::LEGACY_SERVICE);
             assert_eq!(new.route.upstream_service, issuance_native::NATIVE_SERVICE);
+            assert_eq!(
+                route_for(&provider_ingress, route.method, &path)
+                    .unwrap()
+                    .route
+                    .upstream_service,
+                issuance_native::NATIVE_SERVICE
+            );
             assert!(new.route.auth_required, "{path} must stay authenticated");
         }
         assert_eq!(public_count, 8);

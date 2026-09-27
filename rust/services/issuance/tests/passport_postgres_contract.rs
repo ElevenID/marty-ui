@@ -4,12 +4,13 @@ use std::sync::{
 };
 
 use axum::{
-    body::{to_bytes, Body},
-    extract::State,
-    http::{Request, StatusCode},
+    body::{to_bytes, Body, Bytes},
+    extract::{Path, State},
+    http::{HeaderMap, Request, StatusCode},
     routing::{get, post},
     Json, Router,
 };
+use base64::{engine::general_purpose::STANDARD, Engine as _};
 use chrono::{TimeZone, Utc};
 use hmac::{Hmac, Mac};
 use marty_issuance_service::config::IssuanceServiceConfig;
@@ -19,6 +20,9 @@ use marty_issuance_service::passport_artifact::{
 };
 use marty_issuance_service::passport_bureau::BureauClient;
 use marty_issuance_service::passport_http::{router as passport_router, PassportHttpService};
+use marty_issuance_service::passport_provider_ingress::{
+    router as provider_ingress_router, ProviderIngressState,
+};
 use marty_issuance_service::passport_repository::{
     PassportJobInsert, PassportJobPatch, PassportJobStatus, PostgresPassportRepository,
 };
@@ -31,6 +35,29 @@ use sha2::{Digest, Sha256};
 use sqlx::postgres::PgPoolOptions;
 use tokio::sync::oneshot;
 use tower::ServiceExt;
+
+async fn provider_ingress_request(
+    app: &Router,
+    body: &[u8],
+    signature: &str,
+) -> (StatusCode, Value) {
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/v1/passport/webhooks/personalization")
+                .header("x-personalization-signature", signature)
+                .header("content-type", "application/json")
+                .body(Body::from(body.to_vec()))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let status = response.status();
+    let body = to_bytes(response.into_body(), 1024 * 1024).await.unwrap();
+    (status, serde_json::from_slice(&body).unwrap())
+}
 
 #[cfg(feature = "passport-self-signed-test")]
 #[path = "support/issuance_process.rs"]
@@ -1509,6 +1536,121 @@ async fn passport_jobs_survive_restart_without_cross_tenant_reads() {
             .status,
         "ACTIVE"
     );
+    type ObservedCallbacks = Arc<Mutex<Vec<Vec<u8>>>>;
+    async fn mock_callback_signer(
+        State((signed, _)): State<(ObservedCallbacks, ObservedCallbacks)>,
+        Path(organization_id): Path<String>,
+        headers: HeaderMap,
+        Json(request): Json<Value>,
+    ) -> (StatusCode, Json<Value>) {
+        assert_eq!(organization_id, "org-a");
+        if headers["x-api-key"] != "dedicated-ingress-signing-key" {
+            return (StatusCode::UNAUTHORIZED, Json(json!({"detail": "denied"})));
+        }
+        let body = STANDARD
+            .decode(request["body_b64"].as_str().unwrap())
+            .unwrap();
+        signed.lock().unwrap().push(body);
+        (
+            StatusCode::OK,
+            Json(json!({"signature": format!("vault:v1:{}", STANDARD.encode([7u8; 32]))})),
+        )
+    }
+    async fn mock_native_callback(
+        State((_, delivered)): State<(ObservedCallbacks, ObservedCallbacks)>,
+        headers: HeaderMap,
+        body: Bytes,
+    ) -> Json<Value> {
+        assert_eq!(
+            headers["x-personalization-signature"],
+            format!("vault:v1:{}", STANDARD.encode([7u8; 32]))
+        );
+        delivered.lock().unwrap().push(body.to_vec());
+        Json(json!({"accepted": true}))
+    }
+    let signed = Arc::new(Mutex::new(Vec::<Vec<u8>>::new()));
+    let delivered = Arc::new(Mutex::new(Vec::<Vec<u8>>::new()));
+    let mock = Router::new()
+        .route(
+            "/internal/documents/{organization_id}/passport-callbacks/sign",
+            post(mock_callback_signer),
+        )
+        .route(
+            "/v1/passport/webhooks/personalization",
+            post(mock_native_callback),
+        )
+        .with_state((signed.clone(), delivered.clone()));
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let base_url = format!("http://{}", listener.local_addr().unwrap());
+    let mock_server = tokio::spawn(async move { axum::serve(listener, mock).await.unwrap() });
+    let ingress_state = ProviderIngressState {
+        provider_profile_id: "provider-a".into(),
+        webhook_secret: b"synthetic-webhook-secret".to_vec(),
+        repository: PostgresPassportRepository::new(restarted_pool.clone()),
+        signing_base_url: url::Url::parse(&format!("{base_url}/internal/documents")).unwrap(),
+        signing_api_key: "dedicated-ingress-signing-key".into(),
+        native_callback_url: url::Url::parse(&format!(
+            "{base_url}/v1/passport/webhooks/personalization"
+        ))
+        .unwrap(),
+        http: reqwest::Client::new(),
+    };
+    let ingress = provider_ingress_router(ingress_state.clone());
+    let raw_provider_body =
+        br#"{"bureau_job_id":"bureau-a","status":"SHIPPED","tracking_number":"TRACK-42"}"#;
+    let mut provider_mac = Hmac::<Sha256>::new_from_slice(b"synthetic-webhook-secret").unwrap();
+    provider_mac.update(raw_provider_body);
+    let provider_signature = hex::encode(provider_mac.finalize().into_bytes());
+    let (status, _) = provider_ingress_request(&ingress, raw_provider_body, "00").await;
+    assert_eq!(status, StatusCode::UNAUTHORIZED);
+    assert!(signed.lock().unwrap().is_empty());
+    let forged =
+        br#"{"bureau_job_id":"bureau-a","status":"SHIPPED","organization_id":"org-foreign"}"#;
+    let mut forged_mac = Hmac::<Sha256>::new_from_slice(b"synthetic-webhook-secret").unwrap();
+    forged_mac.update(forged);
+    let (status, _) = provider_ingress_request(
+        &ingress,
+        forged,
+        &hex::encode(forged_mac.finalize().into_bytes()),
+    )
+    .await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+    assert!(signed.lock().unwrap().is_empty());
+    let mut foreign_state = ingress_state.clone();
+    foreign_state.provider_profile_id = "provider-foreign".into();
+    let (status, _) = provider_ingress_request(
+        &provider_ingress_router(foreign_state),
+        raw_provider_body,
+        &provider_signature,
+    )
+    .await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+    assert!(signed.lock().unwrap().is_empty());
+    let mut unavailable_signer = ingress_state;
+    unavailable_signer.signing_api_key = "wrong-credential".into();
+    let (status, _) = provider_ingress_request(
+        &provider_ingress_router(unavailable_signer),
+        raw_provider_body,
+        &provider_signature,
+    )
+    .await;
+    assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE);
+    assert!(signed.lock().unwrap().is_empty());
+    assert!(delivered.lock().unwrap().is_empty());
+    let (status, body) =
+        provider_ingress_request(&ingress, raw_provider_body, &provider_signature).await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(body, json!({"accepted": true}));
+    let expected_internal = br#"{"organization_id":"org-a","provider_profile_id":"provider-a","bureau_job_id":"bureau-a","status":"SHIPPED","tracking_number":"TRACK-42"}"#;
+    assert_eq!(
+        signed.lock().unwrap().as_slice(),
+        &[expected_internal.to_vec()]
+    );
+    assert_eq!(
+        delivered.lock().unwrap().as_slice(),
+        &[expected_internal.to_vec()]
+    );
+    mock_server.abort();
     exercise_native_passport_http(restarted, keyring, cipher, &key_a, &key_b).await;
     #[cfg(feature = "passport-self-signed-test")]
     if let Ok(packaged_url) = std::env::var("MARTY_PASSPORT_PACKAGED_TEST_URL") {

@@ -110,6 +110,7 @@ pub struct GatewayConfig {
     pub csca_issue_gateway_key: Option<String>,
     pub issuance_api_key: String,
     pub passport_native_gateway_enabled: bool,
+    pub passport_provider_ingress_gateway_enabled: bool,
     pub passport_tenant_keys: Option<PassportTenantCredentialSource>,
     pub redis_url: Option<String>,
     pub cors_origins: Vec<String>,
@@ -159,6 +160,10 @@ impl fmt::Debug for GatewayConfig {
                 &self.passport_native_gateway_enabled,
             )
             .field(
+                "passport_provider_ingress_gateway_enabled",
+                &self.passport_provider_ingress_gateway_enabled,
+            )
+            .field(
                 "passport_tenant_keys_configured",
                 &self.passport_tenant_keys.is_some(),
             )
@@ -201,6 +206,8 @@ impl GatewayConfig {
         );
         let passport_native_gateway_enabled =
             boolean(values, "PASSPORT_NATIVE_GATEWAY_ENABLED", false)?;
+        let passport_provider_ingress_gateway_enabled =
+            boolean(values, "PASSPORT_PROVIDER_INGRESS_GATEWAY_ENABLED", false)?;
         let port = parse(values, "GATEWAY_PORT", 8000_u16)?;
         let mut service_urls = SERVICE_URLS
             .iter()
@@ -214,6 +221,29 @@ impl GatewayConfig {
         let issuance_native_url = value(values, "ISSUANCE_NATIVE_SERVICE_URL")
             .unwrap_or_else(|| service_urls["issuance"].clone());
         service_urls.insert("issuance-native".into(), issuance_native_url);
+        let provider_ingress_url = value(values, "PASSPORT_PROVIDER_INGRESS_SERVICE_URL");
+        if passport_provider_ingress_gateway_enabled && provider_ingress_url.is_none() {
+            return Err(error("PASSPORT_PROVIDER_INGRESS_SERVICE_URL is required when provider ingress routing is enabled"));
+        }
+        if passport_provider_ingress_gateway_enabled {
+            let configured = provider_ingress_url.as_deref().unwrap_or_default();
+            let url = url::Url::parse(configured)
+                .map_err(|_| error("PASSPORT_PROVIDER_INGRESS_SERVICE_URL is invalid"))?;
+            let host = url.host_str().unwrap_or_default();
+            let private_host = host == "passport-provider-ingress"
+                || (host.starts_with("passport-provider-ingress.")
+                    && host.ends_with(".svc.cluster.local"))
+                || matches!(host, "127.0.0.1" | "localhost" | "::1");
+            if !private_host || url.path() != "/" {
+                return Err(error(
+                    "PASSPORT_PROVIDER_INGRESS_SERVICE_URL must name the private ingress service",
+                ));
+            }
+        }
+        service_urls.insert(
+            "passport-provider-ingress".into(),
+            provider_ingress_url.unwrap_or_else(|| "http://localhost:8021".into()),
+        );
         validate_service_urls(&service_urls)?;
 
         let grpc_service_token = secret(values, "GRPC_SERVICE_TOKEN")?;
@@ -444,6 +474,7 @@ impl GatewayConfig {
             csca_issue_gateway_key,
             issuance_api_key,
             passport_native_gateway_enabled,
+            passport_provider_ingress_gateway_enabled,
             passport_tenant_keys,
             redis_url,
             cors_origins,
@@ -666,6 +697,7 @@ mod tests {
         assert!(config.redis_url.is_none());
         assert!(config.passport_tenant_keys.is_none());
         assert!(!config.passport_native_gateway_enabled);
+        assert!(!config.passport_provider_ingress_gateway_enabled);
         assert!(config.release_identity.component_revisions.is_empty());
     }
 
@@ -760,6 +792,27 @@ mod tests {
         );
         values.insert("PASSPORT_NATIVE_GATEWAY_ENABLED".into(), "invalid".into());
         assert!(GatewayConfig::from_values(&values).is_err());
+    }
+
+    #[test]
+    fn provider_ingress_routing_requires_an_explicit_private_service() {
+        let mut values = BTreeMap::from([(
+            "PASSPORT_PROVIDER_INGRESS_GATEWAY_ENABLED".into(),
+            "true".into(),
+        )]);
+        assert!(GatewayConfig::from_values(&values).is_err());
+        values.insert(
+            "PASSPORT_PROVIDER_INGRESS_SERVICE_URL".into(),
+            "https://public.example".into(),
+        );
+        assert!(GatewayConfig::from_values(&values).is_err());
+        values.insert(
+            "PASSPORT_PROVIDER_INGRESS_SERVICE_URL".into(),
+            "http://passport-provider-ingress:8021".into(),
+        );
+        let config = GatewayConfig::from_values(&values).unwrap();
+        assert!(config.passport_provider_ingress_gateway_enabled);
+        assert!(!config.passport_native_gateway_enabled);
     }
 
     #[test]
