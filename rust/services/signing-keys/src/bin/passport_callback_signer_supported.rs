@@ -45,11 +45,14 @@ fn required_configuration() -> Result<(SocketAddr, String, String, String), Stri
     if token == key {
         return Err("callback signer API key and OpenBao token must differ".into());
     }
-    for ordinary_key in ["SIGNING_KEYS_INTERNAL_API_KEY", "ISSUANCE_API_KEY"] {
-        if env::var(ordinary_key).as_deref() == Ok(key.as_str()) {
-            return Err(
-                "callback signer credential must differ from ordinary service credentials".into(),
-            );
+    for ordinary_key in [
+        "SIGNING_KEYS_INTERNAL_API_KEY",
+        "SIGNING_KEYS_INTERNAL_API_KEY_FILE",
+        "ISSUANCE_API_KEY",
+        "ISSUANCE_API_KEY_FILE",
+    ] {
+        if env::var_os(ordinary_key).is_some() {
+            return Err("ordinary service credentials are forbidden on callback signer".into());
         }
     }
     let addr = env::var("PASSPORT_CALLBACK_SIGNER_BIND")
