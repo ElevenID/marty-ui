@@ -1,0 +1,68 @@
+name: Passport Beta Prerequisite Evidence
+
+on:
+  workflow_dispatch:
+    inputs:
+      beta_artifact_dir:
+        description: Absolute path on the beta runner to the official aggregate deployment artifacts.
+        required: true
+      exercise_application:
+        description: Exercise a private test application's lifecycle against beta Gateway.
+        required: true
+        type: boolean
+        default: false
+
+concurrency:
+  group: passport-beta-prerequisite
+  cancel-in-progress: false
+
+permissions:
+  actions: read
+  contents: read
+  attestations: read
+  packages: read
+
+jobs:
+  collect:
+    if: github.ref == 'refs/heads/main'
+    runs-on: [self-hosted, linux, x64, canvas-oss-wsl2]
+    environment: beta-lifecycle
+    timeout-minutes: 45
+    env:
+      GH_TOKEN: ${{ github.token }}
+      PASSPORT_ACCEPTANCE_API_KEY: ${{ secrets.PASSPORT_ACCEPTANCE_API_KEY }}
+      PASSPORT_ACCEPTANCE_APPLICATION_JSON: ${{ secrets.PASSPORT_ACCEPTANCE_APPLICATION_JSON }}
+      BETA_ARTIFACT_DIR: ${{ inputs.beta_artifact_dir }}
+      EXERCISE_APPLICATION: ${{ inputs.exercise_application }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - name: Collect exact beta prerequisite evidence
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p tests/artifacts/passport-beta-prerequisite
+          rm -f tests/artifacts/passport-beta-prerequisite/report.json
+          args=(
+            --artifact-dir "$BETA_ARTIFACT_DIR"
+            --output tests/artifacts/passport-beta-prerequisite/report.json
+            --verify-attestation
+          )
+          if [[ "$EXERCISE_APPLICATION" == true ]]; then
+            test -n "$PASSPORT_ACCEPTANCE_API_KEY"
+            test -n "$PASSPORT_ACCEPTANCE_APPLICATION_JSON"
+            application_file="$RUNNER_TEMP/passport-beta-application-$GITHUB_RUN_ID.json"
+            trap 'rm -f "$application_file"' EXIT
+            printf '%s' "$PASSPORT_ACCEPTANCE_APPLICATION_JSON" > "$application_file"
+            chmod 600 "$application_file"
+            args+=(--application-file "$application_file")
+          fi
+          python3 scripts/collect_passport_beta_acceptance.py "${args[@]}"
+          python3 -c 'import json; from pathlib import Path; report=json.loads(Path("tests/artifacts/passport-beta-prerequisite/report.json").read_text()); assert report["schema"] == "marty.passport-beta-acceptance/v1" and report["status"] == "blocked"'
+      - name: Upload sanitized blocked prerequisite report
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: passport-beta-prerequisite-${{ github.run_id }}
+          path: tests/artifacts/passport-beta-prerequisite/report.json
+          if-no-files-found: error
+          retention-days: 30
