@@ -147,13 +147,20 @@ def _assert_python_service_job_preserves_full_suite(document) -> None:
         "run": "python -m pytest -v --tb=short -x",
     }
     rust = document["jobs"]["test-rust-services"]
-    assert set(rust["services"]) == {"postgres", "redis"}
+    assert set(rust["services"]) == {"postgres", "redis", "openbao"}
     for service, port in (("postgres", 5432), ("redis", 6379)):
         fixture = rust["services"][service]
         assert fixture["image"].startswith(f"{service}:")
         assert "@sha256:" in fixture["image"]
         assert fixture["ports"] == [f"{port}:{port}"]
         assert "--health-cmd" in fixture["options"]
+    openbao = rust["services"]["openbao"]
+    assert openbao["image"].startswith("quay.io/openbao/openbao@sha256:")
+    assert openbao["ports"] == ["8200:8200"]
+    assert openbao["env"] == {
+        "BAO_DEV_ROOT_TOKEN_ID": "test-only",
+        "BAO_DEV_LISTEN_ADDRESS": "0.0.0.0:8200",
+    }
     assert rust["env"]["FLOW_POSTGRES_TEST_URL"].endswith(
         "localhost:5432/marty_atomic_test"
     )
@@ -179,6 +186,7 @@ def test_python_service_job_retires_only_unused_fixture_provisioning() -> None:
         "restore-url",
         "drop-rust-postgres",
         "drop-rust-redis",
+        "drop-rust-openbao",
         "wrong-directory",
     ],
 )
