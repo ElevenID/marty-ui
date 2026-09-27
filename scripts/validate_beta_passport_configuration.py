@@ -210,6 +210,10 @@ def validate_model(model, *, passport_enabled, files):
         bureau = services["passport-beta-bureau"]
         callback_signer = services["passport-callback-signer"]
         signing = environment(services["signing-keys"])
+        if signing.get("ENVIRONMENT") != "beta":
+            raise PassportConfigurationError(
+                "Beta CSCA signing service must run with ENVIRONMENT=beta"
+            )
         gateway = environment(targets["gateway"])
         flow = environment(targets["flow"])
         if flow.get("ISSUANCE_NATIVE_SERVICE_URL") != "http://issuance-native:8005":

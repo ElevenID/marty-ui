@@ -73,6 +73,7 @@ def model(enabled=True):
     )
     services["signing-keys"] = {
         "environment": {
+            "ENVIRONMENT": "beta",
             "SIGNING_KEYS_INTERNAL_API_KEY": "synthetic-signing-credential",
             "SIGNING_KEYS_DSC_ISSUE_GATEWAY_KEY": DSC_GATEWAY_KEY,
             "SIGNING_KEYS_CSCA_ISSUE_GATEWAY_KEY": CSCA_GATEWAY_KEY,
@@ -202,6 +203,8 @@ def test_rendered_compose_environment_list_is_supported():
         "signing_key_mismatch",
         "gateway_signing_key_mismatch",
         "service_signing_key_mismatch",
+        "signing_environment_missing",
+        "signing_environment_production",
         "missing_dsc_gateway_key",
         "missing_csca_gateway_key",
         "short_csca_gateway_key",
@@ -302,6 +305,10 @@ def test_partial_or_unsafe_selection_fails_closed(mutation):
         services["signing-keys"]["environment"]["SIGNING_KEYS_INTERNAL_API_KEY"] = (
             "synthetic-other-credential"
         )
+    elif mutation == "signing_environment_missing":
+        del services["signing-keys"]["environment"]["ENVIRONMENT"]
+    elif mutation == "signing_environment_production":
+        services["signing-keys"]["environment"]["ENVIRONMENT"] = "production"
     elif mutation == "missing_dsc_gateway_key":
         del services["gateway"]["environment"]["SIGNING_KEYS_DSC_ISSUE_GATEWAY_KEY"]
     elif mutation == "missing_csca_gateway_key":
@@ -870,6 +877,7 @@ def test_actual_beta_compose_merge_preserves_default_off_and_kms_selection(tmp_p
     enabled_signing = VALIDATOR["environment"](enabled["services"]["signing-keys"])
     assert "SIGNING_KEYS_BETA_CSCA_ISSUANCE_ENABLED" not in disabled_signing
     assert enabled_signing["SIGNING_KEYS_BETA_CSCA_ISSUANCE_ENABLED"] == "true"
+    assert enabled_signing["ENVIRONMENT"] == "beta"
     for name in ("gateway", "signing-keys"):
         env = VALIDATOR["environment"](enabled["services"][name])
         assert env["SIGNING_KEYS_CSCA_ISSUE_GATEWAY_KEY"] == CSCA_GATEWAY_KEY

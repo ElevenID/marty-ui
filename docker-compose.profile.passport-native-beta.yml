@@ -17,6 +17,7 @@ services:
 
   signing-keys:
     environment:
+      ENVIRONMENT: beta
       SIGNING_KEYS_DSC_ISSUE_GATEWAY_KEY: ${SIGNING_KEYS_DSC_ISSUE_GATEWAY_KEY:?SIGNING_KEYS_DSC_ISSUE_GATEWAY_KEY must be set for beta passport issuance}
       SIGNING_KEYS_CSCA_ISSUE_GATEWAY_KEY: ${SIGNING_KEYS_CSCA_ISSUE_GATEWAY_KEY:?SIGNING_KEYS_CSCA_ISSUE_GATEWAY_KEY must be set for beta passport issuance}
       SIGNING_KEYS_BETA_CSCA_ISSUANCE_ENABLED: "true"
