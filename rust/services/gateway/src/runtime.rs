@@ -4507,6 +4507,7 @@ mod tests {
         UpstreamClient,
     };
     use mmf_security::InMemoryRateLimiter;
+    use redis::AsyncCommands;
     use tower::ServiceExt;
 
     use crate::{
@@ -4695,6 +4696,56 @@ mod tests {
     }
 
     struct RuntimeProvider;
+
+    async fn disposable_signing_redis_url() -> String {
+        let url = std::env::var("MARTY_TEST_REDIS_URL").expect("disposable Redis URL");
+        let parsed = reqwest::Url::parse(&url).expect("disposable Redis URL syntax");
+        assert!(matches!(
+            parsed.host_str(),
+            Some("127.0.0.1" | "localhost" | "::1")
+        ));
+        assert!(parsed
+            .path()
+            .trim_start_matches('/')
+            .parse::<u8>()
+            .is_ok_and(|db| db >= 13));
+        let nonce = std::env::var("MARTY_TEST_REDIS_DISPOSABLE_NONCE")
+            .expect("disposable Redis sentinel value");
+        assert!(nonce.len() >= 16, "disposable Redis sentinel is too short");
+        let client = redis::Client::open(url.as_str()).expect("disposable Redis client");
+        let mut connection = client.get_multiplexed_async_connection().await.unwrap();
+        let observed: Option<String> = connection
+            .get("marty:tests:disposable-guard")
+            .await
+            .unwrap();
+        assert_eq!(observed.as_deref(), Some(nonce.as_str()));
+        url
+    }
+
+    struct IsolatedSigningSession {
+        organization_id: String,
+    }
+
+    #[async_trait]
+    impl GatewayIdentityProvider for IsolatedSigningSession {
+        async fn validate_session(
+            &self,
+            session_id: &str,
+        ) -> Result<Option<SessionIdentity>, SecurityError> {
+            let mut identity = RuntimeProvider.validate_session(session_id).await?;
+            if let Some(identity) = identity.as_mut() {
+                identity.organization_id = Some(self.organization_id.clone());
+            }
+            Ok(identity)
+        }
+
+        async fn validate_api_key(
+            &self,
+            key: &str,
+        ) -> Result<Option<ApiKeyIdentity>, SecurityError> {
+            RuntimeProvider.validate_api_key(key).await
+        }
+    }
 
     #[async_trait]
     impl GatewayIdentityProvider for RuntimeProvider {
@@ -7109,7 +7160,8 @@ mod tests {
     #[ignore = "requires disposable MARTY_TEST_REDIS_URL and BAO_TOKEN=test-only"]
     async fn authenticated_gateway_reaches_rust_managed_key_route_without_custody() {
         assert_eq!(std::env::var("BAO_TOKEN").as_deref(), Ok("test-only"));
-        let redis_url = std::env::var("MARTY_TEST_REDIS_URL").expect("disposable Redis URL");
+        let redis_url = disposable_signing_redis_url().await;
+        let organization_id = format!("gateway-managed-{}", uuid::Uuid::new_v4().simple());
         let fixture = GatewayTransitFixture::default();
         let kms = Router::new()
             .route("/v1/transit/keys", get(gateway_transit_list))
@@ -7130,11 +7182,15 @@ mod tests {
             .unwrap()
             .with_managed_openbao(Some(endpoint.clone()));
         store
-            .save("org-1", &marty_signing_keys::registry::empty_registry())
+            .save(
+                &organization_id,
+                &marty_signing_keys::registry::empty_registry(),
+            )
             .await
             .unwrap();
         let profiles = SigningProfileStore::from_connection(store.connection());
         let documents = SigningDocumentStore::from_connection(store.connection());
+        let cleanup_store = store.clone();
         let signing = signing_router(
             "internal-signing-key".into(),
             Some(store),
@@ -7150,6 +7206,9 @@ mod tests {
             tokio::spawn(async move { axum::serve(signing_listener, signing).await.unwrap() });
         let upstream = Arc::new(crate::transport::ReqwestUpstream::new(1024 * 1024).unwrap());
         let mut state = runtime_state_with_upstream(Arc::new(NoOwner), upstream.clone());
+        Arc::get_mut(&mut state).unwrap().identities = Arc::new(IsolatedSigningSession {
+            organization_id: organization_id.clone(),
+        });
         let routes = GatewayContract::load()
             .unwrap()
             .proxy_route_table_with_passport_native(false)
@@ -7176,6 +7235,12 @@ mod tests {
         };
         let denied = gateway.clone().oneshot(create(false)).await.unwrap();
         assert_eq!(denied.status(), StatusCode::UNAUTHORIZED);
+        assert!(
+            cleanup_store.load(&organization_id).await.unwrap()["key_reference_purposes"]
+                .as_object()
+                .unwrap()
+                .is_empty()
+        );
         let cross_tenant = gateway
             .clone()
             .oneshot(
@@ -7188,6 +7253,12 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(cross_tenant.status(), StatusCode::FORBIDDEN);
+        assert!(
+            cleanup_store.load(&organization_id).await.unwrap()["key_reference_purposes"]
+                .as_object()
+                .unwrap()
+                .is_empty()
+        );
         let created = gateway.clone().oneshot(create(true)).await.unwrap();
         assert_eq!(created.status(), StatusCode::OK);
         let created: Value = serde_json::from_slice(
@@ -7247,11 +7318,11 @@ mod tests {
         assert_eq!(detail["public_jwk"]["crv"], "P-256");
         assert!(!detail.to_string().contains("test-only"));
         let issuer_did = format!(
-            "did:web:issuer.example:orgs:org-1-{}",
+            "did:web:issuer.example:orgs:{organization_id}-{}",
             uuid::Uuid::new_v4().simple()
         );
         let identity = json!({
-            "organization_id": "org-1", "issuer_did": issuer_did,
+            "organization_id": organization_id, "issuer_did": issuer_did,
             "key_purpose": "vc_jwt_issuer", "credential_format": "SD_JWT_VC",
             "algorithm": "EdDSA"
         });
@@ -7297,7 +7368,7 @@ mod tests {
         assert_eq!(status, StatusCode::OK, "{created}");
         assert_eq!(created["created"], true);
         assert_eq!(created["identity"]["issuer_did"], issuer_did);
-        let profile = profiles.list("org-1").await.unwrap()["profiles"]
+        let profile = profiles.list(&organization_id).await.unwrap()["profiles"]
             .as_array()
             .unwrap()
             .iter()
@@ -7343,10 +7414,12 @@ mod tests {
         let denied_sign = gateway
             .clone()
             .oneshot(
-                Request::post("/internal/signing-keys/issuer-dids/sign?organization_id=org-1")
-                    .header("content-type", "application/json")
-                    .body(Body::from(sign_body.to_string()))
-                    .unwrap(),
+                Request::post(format!(
+                    "/internal/signing-keys/issuer-dids/sign?organization_id={organization_id}"
+                ))
+                .header("content-type", "application/json")
+                .body(Body::from(sign_body.to_string()))
+                .unwrap(),
             )
             .await
             .unwrap();
@@ -7355,11 +7428,13 @@ mod tests {
         let signed = gateway
             .clone()
             .oneshot(
-                Request::post("/internal/signing-keys/issuer-dids/sign?organization_id=org-1")
-                    .header("x-api-key", "internal-signing-key")
-                    .header("content-type", "application/json")
-                    .body(Body::from(sign_body.to_string()))
-                    .unwrap(),
+                Request::post(format!(
+                    "/internal/signing-keys/issuer-dids/sign?organization_id={organization_id}"
+                ))
+                .header("x-api-key", "internal-signing-key")
+                .header("content-type", "application/json")
+                .body(Body::from(sign_body.to_string()))
+                .unwrap(),
             )
             .await
             .unwrap();
@@ -7385,6 +7460,33 @@ mod tests {
                 assert!(!public.to_string().contains(secret), "{public}");
             }
         }
+        let mut cleanup = cleanup_store.connection();
+        let _: () = cleanup
+            .del(marty_signing_keys::registry::storage_key(&organization_id))
+            .await
+            .unwrap();
+        let _: () = cleanup
+            .del(marty_signing_keys::profiles::storage_key(&organization_id))
+            .await
+            .unwrap();
+        let _: usize = redis::cmd("DEL")
+            .arg(marty_signing_keys::documents::jwks_storage_key(
+                &organization_id,
+            ))
+            .arg(marty_signing_keys::documents::did_storage_key(
+                &organization_id,
+                None,
+            ))
+            .arg(marty_signing_keys::documents::did_storage_key(
+                &organization_id,
+                Some(&issuer_did),
+            ))
+            .arg(marty_signing_keys::documents::slug_storage_key(
+                issuer_did.rsplit(':').next().unwrap(),
+            ))
+            .query_async(&mut cleanup)
+            .await
+            .unwrap();
         signing_server.abort();
         kms_server.abort();
     }
@@ -7392,16 +7494,20 @@ mod tests {
     #[tokio::test]
     #[ignore = "requires disposable MARTY_TEST_REDIS_URL"]
     async fn authenticated_gateway_reaches_remaining_rust_signing_handlers() {
-        let redis_url = std::env::var("MARTY_TEST_REDIS_URL").expect("disposable Redis URL");
+        let redis_url = disposable_signing_redis_url().await;
+        let organization_id = format!("gateway-signing-{}", uuid::Uuid::new_v4().simple());
         let store = SigningRegistryStore::connect(&redis_url).await.unwrap();
         store
-            .save("org-1", &marty_signing_keys::registry::empty_registry())
+            .save(
+                &organization_id,
+                &marty_signing_keys::registry::empty_registry(),
+            )
             .await
             .unwrap();
         let documents = SigningDocumentStore::from_connection(store.connection());
         documents
             .publish_jwk(
-                "org-1",
+                &organization_id,
                 "gateway-fixture",
                 PublishJwkRequest {
                     jwk: json!({"kty":"OKP","crv":"Ed25519","x":"AQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQE","kid":"gateway-published"}),
@@ -7430,6 +7536,9 @@ mod tests {
             tokio::spawn(async move { axum::serve(listener, signing).await.unwrap() });
         let upstream = Arc::new(crate::transport::ReqwestUpstream::new(1024 * 1024).unwrap());
         let mut state = runtime_state_with_upstream(Arc::new(NoOwner), upstream.clone());
+        Arc::get_mut(&mut state).unwrap().identities = Arc::new(IsolatedSigningSession {
+            organization_id: organization_id.clone(),
+        });
         let routes = GatewayContract::load()
             .unwrap()
             .proxy_route_table_with_passport_native(false)
@@ -7455,7 +7564,6 @@ mod tests {
                     .get_membership(user_id, organization_id)
                     .await?;
                 if let Some(membership) = membership.as_mut() {
-                    membership.permissions.insert("signing-key:edit".into());
                     membership.permissions.insert("signing-key:delete".into());
                 }
                 Ok(membership)
@@ -7591,14 +7699,14 @@ mod tests {
                 "/v1/signing-keys/did-document",
                 None,
                 StatusCode::OK,
-                "did:web:beta.example:orgs:org-1",
+                "did:web:beta.example:orgs:",
             ),
             ("GET", "/v1/signing-keys/jwks", None, StatusCode::OK, "keys"),
             (
                 "PUT",
                 "/v1/signing-keys/issuer-identities/didcomm-key-agreement",
                 Some(
-                    json!({"organization_id":"org-1","issuer_did":"did:web:beta.example:orgs:org-1","key_purpose":"vc_jwt_issuer","credential_format":"VC_JWT","algorithm":"EdDSA","public_jwk":{"kty":"OKP","crv":"X25519","x":"AQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQE"}}),
+                    json!({"organization_id":organization_id.clone(),"issuer_did":format!("did:web:beta.example:orgs:{organization_id}"),"key_purpose":"vc_jwt_issuer","credential_format":"VC_JWT","algorithm":"EdDSA","public_jwk":{"kty":"OKP","crv":"X25519","x":"AQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQE"}}),
                 ),
                 StatusCode::NOT_FOUND,
                 "issuer",
@@ -7607,7 +7715,7 @@ mod tests {
                 "POST",
                 "/v1/signing-keys/issuer-identities/resolve",
                 Some(
-                    json!({"issuer_did":"did:web:beta.example:orgs:org-1","key_purpose":"vc_jwt_issuer","credential_format":"VC_JWT","algorithm":"EdDSA"}),
+                    json!({"issuer_did":format!("did:web:beta.example:orgs:{organization_id}"),"key_purpose":"vc_jwt_issuer","credential_format":"VC_JWT","algorithm":"EdDSA"}),
                 ),
                 StatusCode::NOT_FOUND,
                 "issuer",
@@ -7670,22 +7778,28 @@ mod tests {
             let text = String::from_utf8_lossy(&payload);
             assert_eq!(status, expected_status, "{method} {path}: {text}");
             assert!(text.contains(expected_fragment), "{method} {path}: {text}");
+            if method == "GET" && path == "/v1/signing-keys/did-document" {
+                assert!(
+                    text.contains(&format!("did:web:beta.example:orgs:{organization_id}")),
+                    "{method} {path}: {text}"
+                );
+            }
             assert!(!text.contains("test-secret"), "{method} {path}: {text}");
             if method == "PATCH" && path == "/v1/signing-keys/gateway-published" {
-                let jwks = verify_documents.jwks("org-1").await.unwrap();
+                let jwks = verify_documents.jwks(&organization_id).await.unwrap();
                 assert!(jwks["keys"].as_array().unwrap().iter().any(|key| {
                     key["kid"] == "gateway-published" && key["name"] == "Gateway renamed"
                 }));
             }
         }
-        let jwks = verify_documents.jwks("org-1").await.unwrap();
+        let jwks = verify_documents.jwks(&organization_id).await.unwrap();
         assert!(jwks["keys"]
             .as_array()
             .unwrap()
             .iter()
             .all(|key| key["kid"] != "gateway-published"));
         let holder_keys = verify_documents
-            .holder_keys("org-1", Some("device-gateway-acceptance"))
+            .holder_keys(&organization_id, Some("device-gateway-acceptance"))
             .await
             .unwrap();
         assert!(holder_keys["keys"]
@@ -7693,7 +7807,7 @@ mod tests {
             .unwrap()
             .iter()
             .any(|key| { key["credential_id"] == "credential-gateway-acceptance" }));
-        let registry = verify_registry.load("org-1").await.unwrap();
+        let registry = verify_registry.load(&organization_id).await.unwrap();
         assert!(registry["services"]
             .as_array()
             .unwrap()
@@ -7761,7 +7875,7 @@ mod tests {
         });
         verify_registry
             .save(
-                "org-1",
+                &organization_id,
                 &json!({
                     "services": [{
                         "id": "gateway-service", "name": "Gateway mDoc Signer",
@@ -7782,7 +7896,7 @@ mod tests {
             )
             .await
             .unwrap();
-        let seeded = verify_registry.load("org-1").await.unwrap();
+        let seeded = verify_registry.load(&organization_id).await.unwrap();
         assert_eq!(
             seeded["key_reference_purposes"]["gateway-service"]
                 ["projects/p/locations/l/keyRings/r/cryptoKeys/k/cryptoKeyVersions/1"],
@@ -7972,15 +8086,44 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(non_signing.status(), StatusCode::NOT_FOUND);
-        let calls = kms_calls.lock().unwrap();
-        assert!(calls.len() >= 4, "expected live KMS checks: {calls:?}");
-        assert!(calls.iter().all(|(method, path, authorization)| {
-            method == "GET"
-                && path
-                    == "/v1/projects/p/locations/l/keyRings/r/cryptoKeys/k/cryptoKeyVersions/1/publicKey"
-                && authorization == "Bearer internal-test-credential"
-        }));
+        {
+            let calls = kms_calls.lock().unwrap();
+            assert!(calls.len() >= 4, "expected live KMS checks: {calls:?}");
+            assert!(calls.iter().all(|(method, path, authorization)| {
+                method == "GET"
+                    && path
+                        == "/v1/projects/p/locations/l/keyRings/r/cryptoKeys/k/cryptoKeyVersions/1/publicKey"
+                    && authorization == "Bearer internal-test-credential"
+            }));
+        }
         kms_server.abort();
+        let mut connection = verify_registry.connection();
+        let _: usize = redis::cmd("DEL")
+            .arg(marty_signing_keys::registry::storage_key(&organization_id))
+            .arg(marty_signing_keys::documents::jwks_storage_key(
+                &organization_id,
+            ))
+            .arg(marty_signing_keys::documents::holder_keys_storage_key(
+                &organization_id,
+            ))
+            .arg(marty_signing_keys::documents::certificate_storage_key(
+                &organization_id,
+            ))
+            .arg(marty_signing_keys::documents::did_storage_key(
+                &organization_id,
+                None,
+            ))
+            .arg(marty_signing_keys::documents::did_storage_key(
+                &organization_id,
+                Some(&format!("did:web:beta.example:orgs:{organization_id}")),
+            ))
+            .arg(marty_signing_keys::documents::slug_storage_key(
+                &organization_id,
+            ))
+            .arg(marty_signing_keys::profiles::storage_key(&organization_id))
+            .query_async(&mut connection)
+            .await
+            .unwrap();
         signing_server.abort();
     }
 
@@ -7992,6 +8135,7 @@ mod tests {
             recorder.clone(),
         ));
         let forbidden = limited
+            .clone()
             .oneshot(
                 Request::builder()
                     .method("DELETE")
@@ -8004,6 +8148,20 @@ mod tests {
             .unwrap();
         assert_eq!(forbidden.status(), StatusCode::FORBIDDEN);
         assert!(recorder.0.lock().unwrap().is_empty());
+        let created = limited
+            .oneshot(
+                Request::builder()
+                    .method("PATCH")
+                    .uri("/v1/signing-keys/key-1")
+                    .header("cookie", "sessionId=valid")
+                    .header("content-type", "application/json")
+                    .body(Body::from(json!({"name": "New name"}).to_string()))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(created.status(), StatusCode::OK);
+        assert_eq!(recorder.0.lock().unwrap().len(), 1);
         struct KeyMetadataGrantProvider;
         #[async_trait]
         impl OrganizationMembershipProvider for KeyMetadataGrantProvider {
@@ -8016,6 +8174,7 @@ mod tests {
                     .get_membership(user_id, organization_id)
                     .await?;
                 if let Some(membership) = membership.as_mut() {
+                    membership.permissions.remove("signing-key:create");
                     membership.permissions.insert("signing-key:edit".into());
                     membership.permissions.insert("signing-key:delete".into());
                 }
@@ -8055,6 +8214,11 @@ mod tests {
             assert_eq!(denied.status(), StatusCode::UNAUTHORIZED);
             assert_eq!(recorder.0.lock().unwrap().len(), before);
             let accepted = router.clone().oneshot(request(true)).await.unwrap();
+            if method == HttpMethod::Patch {
+                assert_eq!(accepted.status(), StatusCode::FORBIDDEN);
+                assert_eq!(recorder.0.lock().unwrap().len(), before);
+                continue;
+            }
             assert_eq!(accepted.status(), StatusCode::OK);
             let calls = recorder.0.lock().unwrap();
             assert_eq!(calls.len(), before + 1);

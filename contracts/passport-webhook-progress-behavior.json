@@ -1,0 +1,29 @@
+{
+  "schema_version": 1,
+  "description": "An authenticated bureau callback or poll may advance production status or report a terminal failure, but cannot rewind progress or change a terminal document. A repeated mapped status preserves existing metadata and timestamp, except that nonblank metadata may fill an empty field.",
+  "sources": ["verified_callback", "authenticated_poll"],
+  "accepted_transitions": [
+    ["SUBMITTED", "IN_PRODUCTION"],
+    ["IN_PRODUCTION", "QUALITY_CHECK"],
+    ["QUALITY_CHECK", "READY_FOR_ACTIVATION"],
+    ["QUALITY_CHECK", "FAILED"],
+    ["IN_PRODUCTION", "CANCELLED"]
+  ],
+  "ignored_transitions": [
+    ["SUBMITTED", "SUBMITTED"],
+    ["IN_PRODUCTION", "IN_PRODUCTION"],
+    ["QUALITY_CHECK", "QUALITY_CHECK"],
+    ["READY_FOR_ACTIVATION", "READY_FOR_ACTIVATION"],
+    ["QUALITY_CHECK", "IN_PRODUCTION"],
+    ["READY_FOR_ACTIVATION", "IN_PRODUCTION"],
+    ["READY_FOR_ACTIVATION", "QUALITY_CHECK"],
+    ["READY_FOR_ACTIVATION", "SUBMITTED"],
+    ["ACTIVE", "READY_FOR_ACTIVATION"],
+    ["FAILED", "READY_FOR_ACTIVATION"],
+    ["CANCELLED", "READY_FOR_ACTIVATION"]
+  ],
+  "ignored_result": "Return the unchanged, tenant-bound job as an idempotent accepted callback, except for the permitted same-rank metadata fill.",
+  "same_rank_metadata": "A repeated mapped status may fill a blank tracking_number or error_message from a nonblank incoming value. It must not clear or replace a nonblank value. If neither field is filled, updated_at is unchanged.",
+  "forward_metadata": "A forward or terminal status update keeps the stored tracking_number when incoming tracking is missing or blank, and replaces it when incoming tracking is nonblank. The new status's error_message replaces the previous one; an absent error clears it.",
+  "poll_response": "After an awaited bureau poll produces a stale or same-rank no-op result, the tenant-scoped job is read again before the HTTP response so a callback committed during the poll is visible."
+}

@@ -4663,6 +4663,7 @@ dependencies = [
  "percent-encoding",
  "prost",
  "protoc-bin-vendored",
+ "redis",
  "regex",
  "reqwest",
  "serde",

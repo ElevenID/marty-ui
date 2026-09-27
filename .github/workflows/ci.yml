@@ -965,11 +965,14 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          MARTY_TEST_REDIS_URL=redis://127.0.0.1:6379/14 \
+          nonce="$(openssl rand -hex 16)"
+          docker exec "${{ job.services.redis.id }}" redis-cli -n 14 SET marty:tests:disposable-guard "$nonce" >/dev/null
+          docker exec "${{ job.services.redis.id }}" redis-cli -n 13 SET marty:tests:disposable-guard "$nonce" >/dev/null
+          MARTY_TEST_REDIS_URL=redis://127.0.0.1:6379/14 MARTY_TEST_REDIS_DISPOSABLE_NONCE="$nonce" \
             cargo test --locked -p marty-gateway --lib \
               runtime::tests::authenticated_gateway_reaches_remaining_rust_signing_handlers \
               -- --ignored --exact
-          MARTY_TEST_REDIS_URL=redis://127.0.0.1:6379/13 BAO_TOKEN=test-only \
+          MARTY_TEST_REDIS_URL=redis://127.0.0.1:6379/13 MARTY_TEST_REDIS_DISPOSABLE_NONCE="$nonce" BAO_TOKEN=test-only \
             cargo test --locked -p marty-gateway --lib \
               runtime::tests::authenticated_gateway_reaches_rust_managed_key_route_without_custody \
               -- --ignored --exact
