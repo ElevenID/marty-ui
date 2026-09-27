@@ -84,7 +84,7 @@ function validateProtectedReceipt(run, artifact, bytes, archiveBytes) {
 function deriveBehaviorAssertions(receipt) {
   const probes = receipt.probes || {};
   const required = [
-    'managed_csca_dsc_chain', 'nine_route_gateway_flow', 'physical_bureau_submission',
+    'managed_csca_dsc_chain', 'sod_signature', 'nine_route_gateway_flow', 'physical_bureau_submission',
     'physical_bureau_batch', 'signed_bureau_callback', 'physical_booklet_verified',
     'unauthenticated_denial',
   ];
@@ -101,7 +101,7 @@ function deriveBehaviorAssertions(receipt) {
     fail('nine steps do not share one completed tenant, instance, application, and job');
   }
   const bound = [
-    probes.managed_csca_dsc_chain.evidence,
+    probes.sod_signature.evidence,
     probes.physical_bureau_submission.evidence,
     probes.physical_bureau_batch.evidence,
     probes.signed_bureau_callback.evidence,
@@ -112,9 +112,11 @@ function deriveBehaviorAssertions(receipt) {
       && item.source_commit === receipt.release.source_commit
       && item.stack_manifest_sha256 === receipt.release.stack_manifest_sha256
       && DIGEST.test(item.proof_sha256 || ''))
-      || probes.managed_csca_dsc_chain.evidence.signer_mode !== 'MANAGED_ISSUER_PROFILE'
-      || !ID.test(probes.managed_csca_dsc_chain.evidence.issuer_profile_id || '')
-      || probes.managed_csca_dsc_chain.evidence.kms_backed !== true
+      || probes.sod_signature.evidence.sod_signature_verified !== true
+      || !DIGEST.test(probes.sod_signature.evidence.sod_sha256 || '')
+      || probes.sod_signature.evidence.dsc_signature_verified !== true
+      || probes.physical_booklet_verified.evidence.sod_sha256
+        !== probes.sod_signature.evidence.sod_sha256
       || probes.physical_bureau_batch.evidence.provider_mode !== 'physical'
       || probes.signed_bureau_callback.evidence.signature_verified !== true
       || probes.physical_booklet_verified.evidence.booklet_verified !== true
@@ -123,9 +125,27 @@ function deriveBehaviorAssertions(receipt) {
       || execution.synthetic_test_data_verified !== true) {
     fail('governed profile, physical booklet, callback, denial, or synthetic privacy binding is absent');
   }
+  const chain = probes.managed_csca_dsc_chain.evidence;
+  if (chain.organization_id !== identity.organization_id
+      || chain.source_commit !== receipt.release.source_commit
+      || chain.stack_manifest_sha256 !== receipt.release.stack_manifest_sha256
+      || !DIGEST.test(chain.proof_sha256 || '')
+      || !ID.test(chain.csca_issuer_profile_id || '')
+      || !ID.test(chain.dsc_issuer_profile_id || '')
+      || chain.csca_issuer_profile_id === chain.dsc_issuer_profile_id
+      || chain.csca_kms_backed !== true || chain.dsc_kms_backed !== true
+      || chain.signer_mode !== 'MANAGED_ISSUER_PROFILE'
+      || !DIGEST.test(chain.csca_certificate_sha256 || '')
+      || !DIGEST.test(chain.dsc_certificate_sha256 || '')
+      || chain.csca_certificate_sha256 === chain.dsc_certificate_sha256
+      || chain.chain_verified_by !== 'openssl-x509-strict'
+      || probes.sod_signature.evidence.dsc_certificate_sha256
+        !== chain.dsc_certificate_sha256) {
+    fail('distinct KMS issuer profiles are not cryptographically linked to this job SOD');
+  }
   return {
     identity,
-    issuerProfileId: probes.managed_csca_dsc_chain.evidence.issuer_profile_id,
+    issuerProfileIds: [chain.csca_issuer_profile_id, chain.dsc_issuer_profile_id],
     behaviorAssertions: Object.fromEntries(ASSERTIONS.map((name) => [name, true])),
   };
 }

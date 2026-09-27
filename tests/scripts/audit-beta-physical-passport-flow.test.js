@@ -47,13 +47,23 @@ function fixture() {
         steps: STEPS.map((step) => ({ ...bound(), step, status: 'completed' })),
       } },
       managed_csca_dsc_chain: { verified: true, evidence: {
-        ...bound(), signer_mode: 'MANAGED_ISSUER_PROFILE', issuer_profile_id: 'profile-synthetic',
-        kms_backed: true,
+        organization_id: identity.organization_id, source_commit: SOURCE,
+        stack_manifest_sha256: 'c'.repeat(64), proof_sha256: 'f'.repeat(64),
+        signer_mode: 'MANAGED_ISSUER_PROFILE', csca_issuer_profile_id: 'csca-profile',
+        dsc_issuer_profile_id: 'dsc-profile', csca_kms_backed: true, dsc_kms_backed: true,
+        csca_certificate_sha256: '1'.repeat(64), dsc_certificate_sha256: '2'.repeat(64),
+        chain_verified_by: 'openssl-x509-strict',
+      } },
+      sod_signature: { verified: true, evidence: {
+        ...bound(), sod_signature_verified: true, dsc_signature_verified: true,
+        sod_sha256: '3'.repeat(64), dsc_certificate_sha256: '2'.repeat(64),
       } },
       physical_bureau_submission: { verified: true, evidence: bound() },
       physical_bureau_batch: { verified: true, evidence: { ...bound(), provider_mode: 'physical' } },
       signed_bureau_callback: { verified: true, evidence: { ...bound(), signature_verified: true } },
-      physical_booklet_verified: { verified: true, evidence: { ...bound(), booklet_verified: true } },
+      physical_booklet_verified: { verified: true, evidence: {
+        ...bound(), booklet_verified: true, sod_sha256: '3'.repeat(64),
+      } },
       unauthenticated_denial: { verified: true, evidence: {
         ...bound(), unsigned_rejected: true, foreign_rejected: true,
       } },
@@ -78,6 +88,7 @@ test('D-12 derives all six assertions from one protected physical job', () => {
   assert.deepEqual(Object.keys(result.behaviorAssertions), ASSERTIONS);
   assert.ok(Object.values(result.behaviorAssertions).every((value) => value === true));
   assert.deepEqual(result.identity, IDENTITY);
+  assert.deepEqual(result.issuerProfileIds, ['csca-profile', 'dsc-profile']);
 });
 
 test('D-12 rejects blocked, unsigned, simulator, foreign and altered artifacts', () => {
@@ -105,7 +116,11 @@ test('D-12 rejects cross-job and cross-tenant joins and absent physical proofs',
     (receipt) => { receipt.probes.physical_booklet_verified.evidence.organization_id = 'foreign'; },
     (receipt) => { receipt.probes.signed_bureau_callback.verified = false; },
     (receipt) => { receipt.probes.unauthenticated_denial.evidence.foreign_rejected = false; },
-    (receipt) => { receipt.probes.managed_csca_dsc_chain.evidence.kms_backed = false; },
+    (receipt) => { receipt.probes.managed_csca_dsc_chain.evidence.csca_kms_backed = false; },
+    (receipt) => { receipt.probes.managed_csca_dsc_chain.evidence.dsc_issuer_profile_id = ''; },
+    (receipt) => { receipt.probes.managed_csca_dsc_chain.evidence.dsc_issuer_profile_id = 'csca-profile'; },
+    (receipt) => { receipt.probes.sod_signature.evidence.dsc_certificate_sha256 = '4'.repeat(64); },
+    (receipt) => { receipt.probes.sod_signature.evidence.job_id = 'other-job'; },
     (receipt) => { receipt.probes.physical_bureau_batch.evidence.provider_mode = 'simulator'; },
     (receipt) => { receipt.probes.signed_bureau_callback.evidence.proof_sha256 = ''; },
     (receipt) => { receipt.probes.physical_booklet_verified.evidence.source_commit = 'e'.repeat(40); },
