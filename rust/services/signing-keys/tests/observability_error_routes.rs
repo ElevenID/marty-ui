@@ -13,9 +13,32 @@ async fn body(response: axum::response::Response) -> Value {
 }
 
 #[tokio::test]
-#[ignore = "requires MARTY_TEST_REDIS_URL"]
+#[ignore = "requires disposable loopback MARTY_TEST_REDIS_URL and nonce sentinel"]
 async fn public_observability_errors_preserve_status_scope_and_mip_fields() {
     let redis_url = std::env::var("MARTY_TEST_REDIS_URL").expect("disposable Redis URL");
+    let parsed = reqwest::Url::parse(&redis_url).expect("disposable Redis URL syntax");
+    assert!(matches!(
+        parsed.host_str(),
+        Some("127.0.0.1" | "localhost" | "::1")
+    ));
+    assert!(parsed
+        .path()
+        .trim_start_matches('/')
+        .parse::<u8>()
+        .is_ok_and(|db| db >= 13));
+    let nonce = std::env::var("MARTY_TEST_REDIS_DISPOSABLE_NONCE")
+        .expect("disposable Redis sentinel value");
+    assert!(nonce.len() >= 16, "disposable Redis sentinel is too short");
+    let client = redis::Client::open(redis_url.as_str()).expect("disposable Redis client");
+    let mut sentinel_connection = client
+        .get_multiplexed_async_connection()
+        .await
+        .expect("disposable Redis connection");
+    let observed: Option<String> = sentinel_connection
+        .get("marty:tests:disposable-guard")
+        .await
+        .expect("disposable Redis sentinel read");
+    assert_eq!(observed.as_deref(), Some(nonce.as_str()));
     let organization_id = format!("rust-signing-observability-{}", Uuid::new_v4().simple());
     let other_organization_id = format!("rust-signing-other-{}", Uuid::new_v4().simple());
     let registry = RegistryStore::connect(&redis_url).await.unwrap();

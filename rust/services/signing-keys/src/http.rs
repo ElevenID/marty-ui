@@ -1275,7 +1275,20 @@ async fn publish_public_issuer_didcomm_key_agreement(
     if let Err(error) = documents::validate_x25519_public_jwk(&input.public_jwk) {
         return public_publication_error(error);
     }
-    if let Err(error) = one_matching_profile(&state, &scope.organization_id, &identity).await {
+    let profile = match one_matching_profile(&state, &scope.organization_id, &identity).await {
+        Ok(profile) => profile,
+        Err(error) => return error.into_response(),
+    };
+    if let Err(error) = validated_issuer_service(
+        &state,
+        &scope.organization_id,
+        &profile,
+        &input.credential_format,
+        &input.key_purpose,
+        &input.algorithm,
+    )
+    .await
+    {
         return error.into_response();
     }
     let Some(public_domain) = state.public_domain.as_deref() else {
@@ -1762,11 +1775,11 @@ fn validate_service_scope(
     Ok(())
 }
 
-async fn registered_service(
+async fn registered_service_with_registry(
     state: &AppState,
     organization_id: &str,
     service_id: &str,
-) -> Result<Value, PublicSigningError> {
+) -> Result<(Value, Value), PublicSigningError> {
     let store = state.registry_store.as_ref().ok_or_else(|| {
         public_failure(
             StatusCode::SERVICE_UNAVAILABLE,
@@ -1794,7 +1807,96 @@ async fn registered_service(
                 &format!("Service '{service_id}' not found."),
             )
         })?;
-    Ok(service)
+    Ok((registry, service))
+}
+
+async fn registered_service(
+    state: &AppState,
+    organization_id: &str,
+    service_id: &str,
+) -> Result<Value, PublicSigningError> {
+    registered_service_with_registry(state, organization_id, service_id)
+        .await
+        .map(|(_, service)| service)
+}
+
+fn service_supports_issuer_value(service: &Value, field: &str, requested: &str) -> bool {
+    service
+        .get(field)
+        .and_then(Value::as_array)
+        .is_none_or(|values| {
+            values.is_empty() || values.iter().any(|value| value.as_str() == Some(requested))
+        })
+}
+
+async fn validated_issuer_service(
+    state: &AppState,
+    organization_id: &str,
+    profile: &Value,
+    credential_format: &str,
+    key_purpose: &str,
+    algorithm: &str,
+) -> Result<(), PublicSigningError> {
+    let service_id = profile
+        .get("signing_service_id")
+        .and_then(Value::as_str)
+        .filter(|id| !id.trim().is_empty())
+        .ok_or_else(|| {
+            public_failure(
+                StatusCode::NOT_FOUND,
+                "No active issuer identity matches the requested tuple.",
+            )
+        })?;
+    let (registry, mut service) =
+        registered_service_with_registry(state, organization_id, service_id)
+            .await
+            .map_err(|error| {
+                if error.status == StatusCode::NOT_FOUND {
+                    public_failure(
+                        StatusCode::NOT_FOUND,
+                        "No active issuer identity matches the requested tuple.",
+                    )
+                } else {
+                    error
+                }
+            })?;
+    let wire_format = profiles::custody_format(&CustodyFormatRequest {
+        credential_format: credential_format.to_owned(),
+        key_purpose: key_purpose.to_owned(),
+    })
+    .map_err(|error| public_failure(StatusCode::UNPROCESSABLE_ENTITY, &error.to_string()))?
+    .wire_format;
+    if !service_supports_issuer_value(&service, "credential_formats", &wire_format)
+        || !service_supports_issuer_value(&service, "key_purposes", key_purpose)
+        || !service_supports_issuer_value(&service, "algorithms", algorithm)
+    {
+        return Err(public_failure(
+            StatusCode::NOT_FOUND,
+            "No active issuer identity matches the requested tuple.",
+        ));
+    }
+    let key_reference = profile
+        .get("signing_key_reference")
+        .and_then(Value::as_str)
+        .filter(|reference| !reference.trim().is_empty())
+        .ok_or_else(|| {
+            public_failure(
+                StatusCode::NOT_FOUND,
+                "No active issuer identity matches the requested tuple.",
+            )
+        })?;
+    service["key_reference"] = json!(key_reference);
+    profiles::validate_binding(&ValidateBindingRequest {
+        profile: profile.clone(),
+        service,
+        registry,
+    })
+    .map_err(|_| {
+        public_failure(
+            StatusCode::UNPROCESSABLE_ENTITY,
+            "Issuer signing service binding is incompatible.",
+        )
+    })
 }
 
 async fn registered_certificate_service(
@@ -2228,6 +2330,40 @@ async fn rotate_public_service_key(
             "KMS rotation requires reconciliation before another attempt.",
         ));
     }
+    let global_fence = match store.acquire_global_rotation_fence(&lease).await {
+        Ok(Some(fence)) => fence,
+        Ok(None) => finish_with_lease!(public_error(
+            StatusCode::CONFLICT,
+            "Another signing service rotation is in progress.",
+        )),
+        Err(_) => finish_with_lease!(public_error(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "Signing rotation ownership check is unavailable.",
+        )),
+    };
+    let ownership = tokio::time::timeout(
+        std::time::Duration::from_secs(20),
+        store.ensure_exclusive_rotation_identity(&scope.organization_id, &service, &global_fence),
+    )
+    .await;
+    if !matches!(ownership, Ok(Ok(()))) {
+        let _ = global_fence.release().await;
+        finish_with_lease!(public_error(
+            if matches!(ownership, Ok(Err(registry::RegistryError::Conflict))) {
+                StatusCode::FORBIDDEN
+            } else {
+                StatusCode::SERVICE_UNAVAILABLE
+            },
+            "The KMS key is not exclusively bound to this tenant for rotation.",
+        ));
+    }
+    if !renew_rotation_fences(&lease, &global_fence).await {
+        let _ = global_fence.release().await;
+        finish_with_lease!(public_error(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "Signing rotation ownership check expired before KMS use.",
+        ));
+    }
     let publish_updates = body.publish_updates.unwrap_or(true);
     let activate_at = body.activate_at.unwrap_or_else(|| rotated_at.clone());
     let task_store = store.clone();
@@ -2238,6 +2374,7 @@ async fn rotate_public_service_key(
         rotate_and_record_public_service(
             task_store,
             lease,
+            global_fence,
             task_organization_id,
             task_service_id,
             registry,
@@ -2308,6 +2445,10 @@ fn registered_service_mut<'a>(registry: &'a mut Value, service_id: &str) -> Opti
                 .iter_mut()
                 .find(|service| service.get("id").and_then(Value::as_str) == Some(service_id))
         })
+}
+
+async fn renew_rotation_fences(tenant: &RotationLease, global: &RotationLease) -> bool {
+    matches!(tenant.renew().await, Ok(true)) && matches!(global.renew().await, Ok(true))
 }
 
 async fn registry_rotation_reconcile_status(
@@ -2539,6 +2680,7 @@ async fn reconcile_registry_rotation(
 async fn rotate_and_record_public_service(
     store: RegistryStore,
     lease: RotationLease,
+    global_fence: RotationLease,
     organization_id: String,
     service_id: String,
     mut registry: Value,
@@ -2625,6 +2767,12 @@ async fn rotate_and_record_public_service(
                 "Pending rotation storage is uncertain; KMS was not called. Check reconciliation status before retrying.",
             ));
         }
+        if !renew_rotation_fences(&lease, &global_fence).await {
+            return Err(public_error(
+                StatusCode::SERVICE_UNAVAILABLE,
+                "Rotation ownership expired before the KMS request; reconcile before retrying.",
+            ));
+        }
         let provider_rotation = match kms::rotate_openbao(ProviderRequest {
             service_config: service.clone(),
         })
@@ -2642,6 +2790,12 @@ async fn rotate_and_record_public_service(
                         }
                 );
                 if definitely_unrotated {
+                    if !renew_rotation_fences(&lease, &global_fence).await {
+                        return Err(public_error(
+                            StatusCode::SERVICE_UNAVAILABLE,
+                            "Rotation ownership expired; reconcile before retrying.",
+                        ));
+                    }
                     if let Some(recorded) = registered_service_mut(&mut registry, &service_id) {
                         recorded["rotation_state"] = prior_state.clone();
                     }
@@ -2692,6 +2846,12 @@ async fn rotate_and_record_public_service(
             return Err(public_error(
                 StatusCode::SERVICE_UNAVAILABLE,
                 "KMS rotation version is uncertain; reconcile before retrying.",
+            ));
+        }
+        if !renew_rotation_fences(&lease, &global_fence).await {
+            return Err(public_error(
+                StatusCode::SERVICE_UNAVAILABLE,
+                "Rotation ownership expired after the KMS request; reconcile before retrying.",
             ));
         }
         rotation_state = prior_state;
@@ -2746,6 +2906,7 @@ async fn rotate_and_record_public_service(
         Ok((rotation_state, rotated_at))
     }
     .await;
+    let _ = tokio::time::timeout(std::time::Duration::from_secs(5), global_fence.release()).await;
     let _ = tokio::time::timeout(std::time::Duration::from_secs(5), lease.release()).await;
     outcome
 }
@@ -3479,6 +3640,18 @@ fn compatible_public_key_algorithms(public_jwk: &Value) -> &'static [&'static st
     }
 }
 
+fn public_key_matches_algorithm(
+    provider_response: &Value,
+    algorithm: &str,
+) -> Result<bool, documents::DocumentError> {
+    let jwk = documents::sanitize_public_jwk(provider_response, None)?;
+    Ok(compatible_public_key_algorithms(&jwk).contains(&algorithm)
+        && jwk
+            .get("alg")
+            .and_then(Value::as_str)
+            .is_none_or(|declared| declared == algorithm))
+}
+
 async fn resolve_public_config(
     State(state): State<AppState>,
     Query(scope): Query<OrganizationScope>,
@@ -3703,15 +3876,11 @@ fn queue_key_discovery(
         })
         .await
         {
-            Ok(jwk) => {
-                let compatible = compatible_public_key_algorithms(&jwk)
-                    .contains(&algorithm.as_str())
-                    && jwk
-                        .get("alg")
-                        .and_then(Value::as_str)
-                        .is_none_or(|declared| declared == algorithm);
-                Ok(compatible.then(|| json!({"id": reference, "algorithm": algorithm})))
-            }
+            Ok(response) => public_key_matches_algorithm(&response, &algorithm)
+                .map(|compatible| {
+                    compatible.then(|| json!({"id": reference, "algorithm": algorithm}))
+                })
+                .map_err(|_| ()),
             Err(kms::KmsError::ProviderStatus {
                 status: StatusCode::NOT_FOUND,
                 ..
@@ -5675,6 +5844,26 @@ mod public_contract_tests {
         }
     }
 
+    #[test]
+    fn resolver_projects_aws_and_gcp_public_key_envelopes() {
+        for provider in ["aws", "gcp"] {
+            let response = json!({
+                "provider": provider,
+                "public_jwk": {"kty": "EC", "crv": "P-256", "x": "AQ", "y": "AQ"}
+            });
+            assert!(public_key_matches_algorithm(&response, "ES256").unwrap());
+            assert!(!public_key_matches_algorithm(&response, "ES384").unwrap());
+            assert!(public_key_matches_algorithm(
+                &json!({
+                    "public_jwk": {"kty": "EC", "crv": "P-256", "alg": "ES384"}
+                }),
+                "ES256"
+            )
+            .is_ok_and(|compatible| !compatible));
+        }
+        assert!(public_key_matches_algorithm(&json!({"provider": "aws"}), "ES256").is_err());
+    }
+
     #[tokio::test]
     #[ignore = "requires disposable MARTY_TEST_REDIS_URL"]
     async fn publication_discovery_preserves_intervening_config_edit() {
@@ -6802,6 +6991,10 @@ mod public_contract_tests {
         assert_eq!(contract["published_relationship"], "keyAgreement");
         assert_eq!(contract["published_fragment"], "didcomm-authcrypt-x25519");
         assert_eq!(contract["private_key_material_allowed"], false);
+        assert_eq!(
+            contract["requires_compatible_registered_signing_service"],
+            true
+        );
         assert_eq!(contract["kms_key_agreement_follow_up"], "DIDCOMM-KMS-001");
         let public_jwk = json!({
             "kty": "OKP", "crv": "X25519",
