@@ -133,11 +133,30 @@ def test_fixture_overlay_is_addresses_and_paths_not_new_service_graph(spec):
 def test_actual_base_compose_render_keeps_provider_ingress_out_of_peer_overlay(spec):
     if shutil.which("docker") is None:
         pytest.skip("Docker Compose is unavailable")
-    rendered = FIXTURE["render"](spec, ["docker", "compose"])
-    gateway = rendered["gateway_environment"]
+    gate = FIXTURE["GATE"]
+    required = {
+        key: "synthetic-required-artifact"
+        for key in re.findall(
+            r"\$\{([A-Z0-9_]+):\?", (ROOT / "docker-compose.base.yml").read_text()
+        )
+    }
+    inputs = {**required, **spec["inputs"]}
+    directory = Path(spec["policy_directory"])
+    (directory / "images.env").write_text(
+        "".join(f"{key}={value}\n" for key, value in sorted(inputs.items())),
+        encoding="utf-8",
+    )
+    selected = gate["BIND"]["render_binding"](
+        directory,
+        ["docker", "compose"],
+        *gate["files"](native=True, local=True, authcrypt=False),
+        project=gate["PROJECT"],
+    )
+    gateway = selected["services"]["gateway"]["environment"]
     assert gateway["PASSPORT_PROVIDER_INGRESS_GATEWAY_ENABLED"] == "false"
     assert "PASSPORT_PROVIDER_INGRESS_SERVICE_URL" not in gateway
-    assert "PASSPORT_PROVIDER_INGRESS_SERVICE_URL" not in rendered["overlay"]["services"]["gateway"]["environment"]
+    overlay = FIXTURE["fixture_overlay"](spec, selected)
+    assert "PASSPORT_PROVIDER_INGRESS_SERVICE_URL" not in overlay["services"]["gateway"]["environment"]
 
 
 def test_native_launch_has_no_post_render_smoke_overrides():
