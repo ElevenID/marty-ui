@@ -61,6 +61,12 @@ def test_provider_binding_and_new_kms_envelope_are_distinct() -> None:
         "authenticated_provider_profile_id",
         "signed_bureau_job_id",
     ]
+    forged = reference["forged_organization_id_case"]
+    assert forged["bureau_body_organization_id"] != durable["organization_id"]
+    assert forged["durable_organization_id"] == durable["organization_id"]
+    assert forged["outcome"] == "reject without KMS signing or job mutation"
+    assert "sole source" in CONTRACT["event_projection"]["untrusted_organization_id"]
+    assert "excluding organization_id" in CONTRACT["event_projection"]["metadata"]
 
     internal_bytes = reference["internal_body_utf8"].encode("utf-8")
     signed_input = base64.b64decode(reference["kms_signed_input_b64"], validate=True)
@@ -84,14 +90,31 @@ def test_contract_requires_fail_closed_provider_resolution() -> None:
     handoff = CONTRACT["internal_handoff"]
     assert "unique non-null" in resolution["durable_binding"]
     assert "without requesting KMS signing" in resolution["zero_or_multiple_matches"]
-    assert "Never use an organization_id" in CONTRACT["event_projection"][
-        "untrusted_organization_id"
+    assert "before verifying the MAC" in CONTRACT["provider_authentication"][
+        "profile_selection"
     ]
+    assert "Never use a bureau-supplied organization_id" in CONTRACT[
+        "event_projection"
+    ]["untrusted_organization_id"]
     assert "exact" in handoff["body"]
     assert "without direct repository update" in handoff["kms_failure"]
+
+
+def test_existing_beta_signer_does_not_qualify_supported_consumers() -> None:
+    deployment = CONTRACT["deployment_gate"]
+    assert deployment["supported_consumers"] == ["base", "selfhost", "K8s"]
+    assert "beta-only" in deployment["existing_beta_signer"]
+    gate = deployment["required_before_python_retirement"]
+    assert "same shared Rust implementation" in gate
+    assert "narrow signer credential and KMS key policy" in gate
+    assert "private signer-to-ingress network" in gate
+    assert "no public sign route" in gate
+    assert "no OpenBao token exposure" in gate
+    assert "marty-credentials #305" in gate
 
 
 if __name__ == "__main__":
     test_frozen_python_provider_raw_body_hmac()
     test_provider_binding_and_new_kms_envelope_are_distinct()
     test_contract_requires_fail_closed_provider_resolution()
+    test_existing_beta_signer_does_not_qualify_supported_consumers()
