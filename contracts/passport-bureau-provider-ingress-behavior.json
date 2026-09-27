@@ -55,6 +55,14 @@
     "required_before_python_retirement": "For each accepted base, selfhost, and K8s environment, separately review and deploy an isolated KMS callback signer process using the same shared Rust implementation. Prove a narrow signer credential and KMS key policy, a private signer-to-ingress network, no public sign route, and no OpenBao token exposure to the bureau or public ingress before marty-credentials #305 cutover.",
     "default": "No physical bureau ingress or production-mode callback signer is enabled by this contract."
   },
+  "supported_signer_runtime": {
+    "process": "A separate production-mode binary calls the same shared Rust isolated_signer_router as the beta-only process; the beta binary remains ENVIRONMENT=beta guarded.",
+    "enablement": "Require ENVIRONMENT=production and PASSPORT_SUPPORTED_CALLBACK_SIGNER_ENABLED=true exactly; absent or any other value fails before binding a listener.",
+    "credential": "Require a dedicated at-least-32-character signer API credential supplied only to the trusted ingress and signer. It must differ from the ordinary signing-keys service credential and all provider secrets.",
+    "kms": "Require a dedicated OpenBao token whose only transit capability is create/update on transit/hmac/passport-bureau-callback-marty-hmac. The signer has no export or generic transit permission.",
+    "network": "Publish no host port or public gateway sign route. Place only the trusted ingress, signer, and KMS peer on the isolated signing network; keep the OpenBao token out of ingress.",
+    "rollback": "Disable signer and provider ingress together and route supported consumers back to the existing Python owner until the full physical-provider cutover gate passes."
+  },
   "response_boundary": {
     "unauthenticated": "Never parse or look up a job; return no tenant or job details.",
     "authenticated_unresolved": "Return one generic unresolved response for missing, ambiguous, or provider-mismatched jobs; include no tenant or foreign-provider data.",
