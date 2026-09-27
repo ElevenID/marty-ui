@@ -59,17 +59,20 @@ selected here.
    Resolve an active, organization-scoped `ICAO_EMRTD` X.509 document-signer
    identity created through the existing issuer UI; bind it to the passport
    job and use its managed Signing Keys/KMS reference and published certificate
-   for opaque CMS/SOD signing. Configure its active public CSCA trust anchor
-   through the existing Rust CSCA lifecycle import and verify the DSC chain
-   before accepting a passport job. This review branch extends the issuer
-   UI to enroll a public CSCA lifecycle trust anchor against its managed CSCA
-   identity, deriving the KMS key binding server-side. This is not yet merged
-   or deployed. A read-only beta check on
+   for opaque CMS/SOD signing. Create a separate managed `ICAO_EMRTD` CSCA
+   issuer profile and obtain its public certificate through the reviewed
+   beta-only CSCA ceremony. Gateway requires `passport-certificate:issue-csca`
+   and a credential distinct from the DSC issuance credential; Signing Keys
+   signs the CSR and self-signed CA certificate through the active KMS profile,
+   verifies both signatures, and enrolls the public trust anchor with a
+   profile-revision fence. The older public CSCA import remains available.
+   Verify the active CSCA-to-DSC chain before accepting a passport job. This
+   review branch is not yet merged or deployed. A read-only beta check on
    2026-09-26 found no CSCA lifecycle record for the pilot organization; its
    six existing issuer profiles include no `ICAO_EMRTD` document signer. This
-   remains a cutover gate: obtain a valid CA/DSC certificate chain whose keys
-   remain in KMS, import only the public CSCA material through the governed
-   tenant-scoped operator route, and verify the active trust-anchor projection before
+   remains a cutover gate: create separate managed CSCA and DSC keys, issue
+   the beta CSCA certificate through the governed operator route, issue the
+   DSC from that active CSCA, and verify the trust-anchor projection before
    starting passport issuance. Do not treat a created issuer profile or an
    attached DSC alone as proof that the chain gate is ready. The beta bureau
    is a synthetic, non-physical handoff; do not present its tracking result as
@@ -123,9 +126,12 @@ selected here.
    A further opt-in Gateway test now creates separate CSCA and DSC issuer
    profiles with a disposable OpenBao Transit instance, requests both PKCS#10
    CSRs, and compares each parsed CSR public key with the resolved issuer key.
-   It exercises KMS signing and Rust signature verification through Gateway;
-   it does not issue CA certificates or prove the DSC-to-CSCA chain. A further
-   opt-in Gateway test rotates a dedicated registered Transit service, checking
+   It exercises KMS signing and Rust signature verification through Gateway.
+   A further guarded Gateway/OpenBao/Redis acceptance now invokes the governed
+   CSCA ceremony and DSC issuance routes, verifies their certificate chain,
+   and checks replay, changed-input conflict, operator separation, and public
+   custody redaction. This is disposable test evidence, not live beta enrollment.
+   A further opt-in Gateway test rotates a dedicated registered Transit service, checking
    tenant denial, the managed-service rotation boundary, one KMS rotation,
    and persisted version history. This is not issuer-profile key rotation:
    shared managed services are rejected by the service route, and a future
@@ -155,9 +161,9 @@ selected here.
    to the shared service. This review branch contains a distinct
    issuer-scoped Rust PKCS#10 CSR route and UI action that verifies the
    signature against the current KMS public key. Before beta acceptance,
-   exercise it against beta KMS, complete the CA issuance/chain enrollment
-   path, and verify the new
-   tenant-scoped operator path for public CSCA lifecycle import; no private key or raw signing
+   exercise it against beta KMS, complete the managed beta CSCA ceremony and
+   DSC chain enrollment, and verify the separate tenant-scoped operator
+   permission and trust-anchor projection; no private key or raw signing
    secret may pass through the UI, repository, or deployment files.
 
    Read-only beta inventory on 2026-09-26 found the existing pilot
