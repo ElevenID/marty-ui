@@ -1,6 +1,8 @@
 """The opt-in K8s callback pair exposes only the intended secret and peers."""
 
 from pathlib import Path
+import subprocess
+import sys
 
 import yaml
 
@@ -91,3 +93,29 @@ def test_supported_k8s_network_policies_admit_only_intended_peers() -> None:
                 "ports": [{"protocol": "TCP", "port": port}],
             }
         ]
+
+
+def test_supported_k8s_renderer_requires_digest_and_binds_both_pods() -> None:
+    script = ROOT / "scripts/render_passport_provider_k8s.py"
+    image = "example.invalid/marty@sha256:" + "a" * 64
+    rendered = subprocess.run(
+        [sys.executable, str(script), "--image", image],
+        cwd=ROOT,
+        check=True,
+        capture_output=True,
+        text=True,
+    ).stdout
+    documents = list(yaml.safe_load_all(rendered))
+    deployments = [item for item in documents if item["kind"] == "Deployment"]
+    assert len(deployments) == 2
+    assert {container(item)["image"] for item in deployments} == {image}
+    assert "${" not in rendered
+
+    mutable = subprocess.run(
+        [sys.executable, str(script), "--image", "example.invalid/marty:latest"],
+        cwd=ROOT,
+        capture_output=True,
+        text=True,
+    )
+    assert mutable.returncode != 0
+    assert mutable.stdout == ""

@@ -20,8 +20,17 @@ manifest admits only Gateway to ingress and only ingress to signer; the signer
 uses outbound access to the configured external OpenBao endpoint. Neither
 service is publicly exposed.
 
-Apply the private manifest in a controlled beta environment, run a callback
-smoke test through an internal route, then explicitly set
+Render and validate the private manifest before applying it in a controlled
+beta environment:
+
+```sh
+python scripts/render_passport_provider_k8s.py --image "$MARTY_SERVICES_IMAGE" > /tmp/passport-provider-supported.yaml
+kubectl apply --dry-run=server -f /tmp/passport-provider-supported.yaml
+kubectl apply -f /tmp/passport-provider-supported.yaml
+```
+
+The renderer rejects mutable tags, missing digests, and unresolved variables.
+Run a callback smoke test through an internal route, then explicitly set
 `PASSPORT_PROVIDER_INGRESS_GATEWAY_ENABLED=true` and
 `PASSPORT_PROVIDER_INGRESS_SERVICE_URL=http://passport-provider-ingress:8021`
 for the physical-provider acceptance run. Keep Python as the rollback owner
