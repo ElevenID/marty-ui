@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { useNavigate } from 'react-router';
 import {
   Alert,
@@ -71,6 +71,7 @@ export default function DidIdentitiesPage() {
   const [csrSubject, setCsrSubject] = useState({ country: '', organization: '', common_name: '' });
   const [csrPem, setCsrPem] = useState('');
   const [submitting, setSubmitting] = useState(false);
+  const [issueSubmitting, setIssueSubmitting] = useState(false);
   const [issuing, setIssuing] = useState(null);
   const [issueForm, setIssueForm] = useState({
     certificate_id: '', csca_issuer_did: '', csca_certificate_id: '',
@@ -78,6 +79,15 @@ export default function DidIdentitiesPage() {
   });
   const [issuedCertificate, setIssuedCertificate] = useState(null);
   const [issueError, setIssueError] = useState('');
+  const issueEpochRef = useRef(0);
+  const loadRequestRef = useRef(0);
+  useLayoutEffect(() => {
+    issueEpochRef.current += 1;
+    setIssuing(null);
+    setIssuedCertificate(null);
+    setIssueError('');
+    setIssueSubmitting(false);
+  }, [activeOrgId]);
   const csrSupported = certifying && CSR_ALGORITHMS.has(certifying.algorithm);
   const issueValidityDays = Number(issueForm.validity_days);
   const issueFormValid = Boolean(issuing)
@@ -91,6 +101,8 @@ export default function DidIdentitiesPage() {
         && /^[A-Za-z0-9._-]{1,128}$/.test(issueForm.idempotency_key));
 
   const openIssuance = (identity) => {
+    if (!activeOrgId || identity.organization_id !== activeOrgId) return;
+    issueEpochRef.current += 1;
     setIssuing(identity);
     setIssuedCertificate(null);
     setIssueError('');
@@ -103,11 +115,12 @@ export default function DidIdentitiesPage() {
   };
 
   const issueCertificate = async () => {
-    if (!issuing || !activeOrgId) return;
+    if (!issuing || !activeOrgId || issuing.organization_id !== activeOrgId) return;
+    const issueEpoch = issueEpochRef.current;
     const csca = issuing.key_purpose === 'csca';
     if (!(csca ? canIssueCsca : canIssueDsc)) return;
     if (!issueFormValid) return;
-    setSubmitting(true);
+    setIssueSubmitting(true);
     setIssueError('');
     try {
       const subject = {
@@ -127,16 +140,21 @@ export default function DidIdentitiesPage() {
           csca_certificate_id: issueForm.csca_certificate_id.trim(),
           idempotency_key: issueForm.idempotency_key,
         });
-      setIssuedCertificate(result);
-      showNotification?.(csca ? 'CSCA certificate issued.' : 'Document signer certificate issued.', 'success');
+      if (issueEpoch === issueEpochRef.current) {
+        setIssuedCertificate(result);
+        showNotification?.(csca ? 'CSCA certificate issued.' : 'Document signer certificate issued.', 'success');
+      }
     } catch {
-      setIssueError('Passport certificate could not be issued. Check the selected profiles and certificate details, then retry.');
+      if (issueEpoch === issueEpochRef.current) {
+        setIssueError('Passport certificate could not be issued. Check the selected profiles and certificate details, then retry.');
+      }
     } finally {
-      setSubmitting(false);
+      if (issueEpoch === issueEpochRef.current) setIssueSubmitting(false);
     }
   };
 
   const load = useCallback(async () => {
+    const requestId = ++loadRequestRef.current;
     if (!activeOrgId) {
       setIdentities([]);
       setError('Select an organization before loading issuer identities.');
@@ -152,12 +170,14 @@ export default function DidIdentitiesPage() {
           credential_format: credentialFormat,
         });
         const values = Array.isArray(response?.identities) ? response.identities : [];
-        return values.map((identity) => ({ ...identity, credential_format: credentialFormat }));
+        return values.map((identity) => ({ ...identity, credential_format: credentialFormat, organization_id: activeOrgId }));
       }));
+      if (requestId !== loadRequestRef.current) return;
       const unique = new Map();
       results.flat().forEach((identity) => unique.set(identityKey(identity), identity));
       setIdentities([...unique.values()].sort((left, right) => identityKey(left).localeCompare(identityKey(right))));
     } catch (requestError) {
+      if (requestId !== loadRequestRef.current) return;
       setError(
         requestError?.response?.error?.message
         || requestError?.response?.detail
@@ -165,7 +185,7 @@ export default function DidIdentitiesPage() {
         || 'Issuer identities could not be loaded.',
       );
     } finally {
-      setLoading(false);
+      if (requestId === loadRequestRef.current) setLoading(false);
     }
   }, [activeOrgId]);
 
@@ -390,10 +410,10 @@ export default function DidIdentitiesPage() {
                 <TableCell>{identity.algorithm}</TableCell>
                 <TableCell><Chip size="small" color="success" label={identity.status} /></TableCell>
                 <TableCell align="right">
-                  {identity.credential_format === 'ICAO_EMRTD' && identity.key_purpose === 'csca' && identity.algorithm === 'ES256' && identity.status === 'active' && canIssueCsca && (
+                  {identity.organization_id === activeOrgId && identity.credential_format === 'ICAO_EMRTD' && identity.key_purpose === 'csca' && identity.algorithm === 'ES256' && identity.status === 'active' && canIssueCsca && (
                     <Button size="small" onClick={() => openIssuance(identity)}>Issue CSCA</Button>
                   )}
-                  {identity.credential_format === 'ICAO_EMRTD' && identity.key_purpose === 'x509_doc_signer' && identity.algorithm === 'ES256' && identity.status === 'active' && canIssueDsc && (
+                  {identity.organization_id === activeOrgId && identity.credential_format === 'ICAO_EMRTD' && identity.key_purpose === 'x509_doc_signer' && identity.algorithm === 'ES256' && identity.status === 'active' && canIssueDsc && (
                     <Button size="small" onClick={() => openIssuance(identity)}>Issue DSC</Button>
                   )}
                   {identity.credential_format === 'ICAO_EMRTD' && identity.key_purpose === 'x509_doc_signer' && (
@@ -443,7 +463,7 @@ export default function DidIdentitiesPage() {
         </Table>
       </TableContainer>
 
-      <Dialog open={Boolean(issuing)} onClose={() => !submitting && setIssuing(null)} maxWidth="md" fullWidth>
+      <Dialog open={Boolean(issuing) && issuing?.organization_id === activeOrgId} onClose={() => !issueSubmitting && setIssuing(null)} maxWidth="md" fullWidth>
         <DialogTitle>{issuing?.key_purpose === 'csca' ? 'Issue beta CSCA certificate' : 'Issue beta document signer certificate'}</DialogTitle>
         <DialogContent>
           <Stack spacing={2} sx={{ mt: 1 }}>
@@ -493,9 +513,9 @@ export default function DidIdentitiesPage() {
           </Stack>
         </DialogContent>
         <DialogActions>
-          <Button onClick={() => setIssuing(null)} disabled={submitting}>Close</Button>
-          {!issuedCertificate && <Button variant="contained" onClick={issueCertificate} disabled={submitting || !issueFormValid}>
-            {submitting ? <CircularProgress size={20} /> : (issuing?.key_purpose === 'csca' ? 'Issue CSCA certificate' : 'Issue DSC certificate')}
+          <Button onClick={() => setIssuing(null)} disabled={issueSubmitting}>Close</Button>
+          {!issuedCertificate && <Button variant="contained" onClick={issueCertificate} disabled={issueSubmitting || !issueFormValid}>
+            {issueSubmitting ? <CircularProgress size={20} /> : (issuing?.key_purpose === 'csca' ? 'Issue CSCA certificate' : 'Issue DSC certificate')}
           </Button>}
         </DialogActions>
       </Dialog>

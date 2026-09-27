@@ -1,9 +1,10 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { act } from '@testing-library/react';
 import { renderWithRouter, screen, waitFor } from '@test/utils';
 
 import DidIdentitiesPage from './DidIdentitiesPage';
 
-const { listPublicIssuerIdentities, rebindIssuerIdentity, deleteIssuerIdentity, storeIssuerIdentityCertificate, enrollCscaCertificate, generateIssuerIdentityCsr, issueCscaSelfSignedCertificate, issueDscCertificate, can, permissionState, showNotification } = vi.hoisted(() => ({
+const { listPublicIssuerIdentities, rebindIssuerIdentity, deleteIssuerIdentity, storeIssuerIdentityCertificate, enrollCscaCertificate, generateIssuerIdentityCsr, issueCscaSelfSignedCertificate, issueDscCertificate, can, permissionState, orgState, showNotification } = vi.hoisted(() => ({
   listPublicIssuerIdentities: vi.fn(),
   rebindIssuerIdentity: vi.fn(),
   deleteIssuerIdentity: vi.fn(),
@@ -14,6 +15,7 @@ const { listPublicIssuerIdentities, rebindIssuerIdentity, deleteIssuerIdentity, 
   issueDscCertificate: vi.fn(),
   can: vi.fn(),
   permissionState: { isLoading: false },
+  orgState: { activeOrgId: 'org-test-1' },
   showNotification: vi.fn(),
 }));
 
@@ -35,7 +37,7 @@ vi.mock('../../../hooks/useNotifications', () => ({
 }));
 
 vi.mock('../../../contexts/ConsoleContext', () => ({
-  useConsole: () => ({ activeOrgId: 'org-test-1' }),
+  useConsole: () => ({ activeOrgId: orgState.activeOrgId }),
 }));
 
 vi.mock('../../../hooks/usePermissions', () => ({
@@ -46,6 +48,7 @@ describe('DidIdentitiesPage', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     permissionState.isLoading = false;
+    orgState.activeOrgId = 'org-test-1';
     can.mockReturnValue(false);
     listPublicIssuerIdentities.mockImplementation(async ({ credential_format: credentialFormat }) => ({
       identities: credentialFormat === 'SD_JWT_VC'
@@ -347,5 +350,54 @@ describe('DidIdentitiesPage', () => {
     await screen.findByText('did:web:issuer.example:inactive-csca');
     expect(screen.queryByRole('button', { name: 'Issue CSCA' })).not.toBeInTheDocument();
     expect(screen.queryByRole('button', { name: 'Issue DSC' })).not.toBeInTheDocument();
+  });
+
+  it('closes issuance and discards an in-flight certificate result after organization switch', async () => {
+    can.mockReturnValue(true);
+    listPublicIssuerIdentities.mockImplementation(async ({ organization_id: organizationId, credential_format: format }) => ({
+      identities: organizationId === 'org-test-1' && format === 'ICAO_EMRTD'
+        ? [{ issuer_did: 'did:web:issuer.example:csca', key_purpose: 'csca', algorithm: 'ES256', status: 'active' }]
+        : [],
+    }));
+    let resolveIssue: (value: unknown) => void = () => {};
+    issueCscaSelfSignedCertificate.mockImplementation(() => new Promise((resolve) => { resolveIssue = resolve; }));
+    const { user, rerender } = renderWithRouter(<DidIdentitiesPage />);
+    await screen.findByText('did:web:issuer.example:csca');
+    await user.click(screen.getByRole('button', { name: 'Issue CSCA' }));
+    await user.type(screen.getByRole('textbox', { name: 'CSCA certificate ID' }), 'beta-csca-1');
+    await user.type(screen.getByRole('textbox', { name: 'Country code (C)' }), 'US');
+    await user.type(screen.getByRole('textbox', { name: 'Organization (O)' }), 'Beta Issuer');
+    await user.type(screen.getByRole('textbox', { name: 'Common name (CN)' }), 'Beta CSCA');
+    await user.click(screen.getByRole('button', { name: 'Issue CSCA certificate' }));
+    await waitFor(() => expect(issueCscaSelfSignedCertificate).toHaveBeenCalledTimes(1));
+    orgState.activeOrgId = 'org-test-2';
+    rerender(<DidIdentitiesPage />);
+    await waitFor(() => expect(screen.queryByRole('button', { name: 'Issue CSCA' })).not.toBeInTheDocument());
+    await act(async () => resolveIssue({ certificate_pem: 'old-tenant-public-certificate' }));
+    expect(screen.queryByRole('textbox', { name: 'Issued certificate PEM' })).not.toBeInTheDocument();
+    expect(showNotification).not.toHaveBeenCalledWith('CSCA certificate issued.', 'success');
+  });
+
+  it('discards an old organization identity list that finishes after a switch', async () => {
+    can.mockReturnValue(true);
+    let resolveOld: (value: unknown) => void = () => {};
+    listPublicIssuerIdentities.mockImplementation(({ organization_id: organizationId, credential_format: format }) => {
+      if (organizationId === 'org-test-1' && format === 'ICAO_EMRTD') {
+        return new Promise((resolve) => { resolveOld = resolve; });
+      }
+      return Promise.resolve({ identities: [] });
+    });
+    const { rerender } = renderWithRouter(<DidIdentitiesPage />);
+    await waitFor(() => expect(listPublicIssuerIdentities).toHaveBeenCalledWith({
+      organization_id: 'org-test-1', credential_format: 'ICAO_EMRTD',
+    }));
+    orgState.activeOrgId = 'org-test-2';
+    rerender(<DidIdentitiesPage />);
+    await screen.findByText(/No active issuer identities/);
+    await act(async () => resolveOld({ identities: [
+      { issuer_did: 'did:web:issuer.example:old-csca', key_purpose: 'csca', algorithm: 'ES256', status: 'active' },
+    ] }));
+    expect(screen.queryByText('did:web:issuer.example:old-csca')).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Issue CSCA' })).not.toBeInTheDocument();
   });
 });
