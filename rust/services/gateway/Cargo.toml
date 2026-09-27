@@ -43,7 +43,12 @@ url.workspace = true
 uuid.workspace = true
 
 [dev-dependencies]
+der.workspace = true
+marty-crypto.workspace = true
+marty-signing-keys = { path = "../signing-keys" }
+redis.workspace = true
 tower.workspace = true
+x509-cert.workspace = true
 
 [build-dependencies]
 protoc-bin-vendored.workspace = true
