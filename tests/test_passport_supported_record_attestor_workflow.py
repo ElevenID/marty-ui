@@ -20,10 +20,11 @@ def contract(source: str) -> None:
         "workflows": ["Passport Supported Disposable Provisioning Producer"],
         "types": ["completed"],
     }}
-    permissions = value["permissions"]
+    assert "permissions" not in value
+    job = value["jobs"]["attest-record"]
+    permissions = job["permissions"]
     assert permissions == {"actions": "read", "attestations": "write",
                            "contents": "read", "id-token": "write"}
-    job = value["jobs"]["attest-record"]
     assert job["runs-on"] == "ubuntu-latest"
     assert job["environment"] == "beta-lifecycle"
     condition = job["if"]
@@ -77,6 +78,7 @@ def test_attestor_has_exact_producer_and_plan_handoff() -> None:
     ("passport-supported-compose-ownership-$PRODUCER_RUN_ID", "any-record"),
     ("passport-supported-provisioning-plan-$plan_run_id", "any-plan"),
     ("scripts/check_passport_supported_record_handoff.py", "true"),
+    ("attestations: write", "attestations: read"),
 ])
 def test_attestor_contract_rejects_unsafe_changes(old: str, new: str) -> None:
     source = WORKFLOW.read_text(encoding="utf-8")

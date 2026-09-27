@@ -16,15 +16,14 @@ concurrency:
   group: passport-supported-provisioning-plan
   cancel-in-progress: false
 
-permissions:
-  actions: read
-  contents: read
-  attestations: write
-  id-token: write
-  packages: read
-
 jobs:
   plan:
+    permissions:
+      actions: read
+      contents: read
+      attestations: write
+      id-token: write
+      packages: read
     if: github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
     environment: beta-lifecycle
