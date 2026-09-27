@@ -1,4 +1,7 @@
+import json
 import re
+import shutil
+import subprocess
 from pathlib import Path
 
 import pytest
@@ -15,7 +18,9 @@ def test_local_release_runner_is_backup_and_rehearsal_gated() -> None:
     script = text("scripts/deploy-local-beta-release.ps1")
 
     assert 'if ($BetaOrigin -cne "https://beta.elevenidllc.com")' in script
-    assert script.index('if ($BetaOrigin -cne "https://beta.elevenidllc.com")') < script.index('if ($PlanOnly)')
+    assert script.index(
+        'if ($BetaOrigin -cne "https://beta.elevenidllc.com")'
+    ) < script.index("if ($PlanOnly)")
     assert 'source_kind -ne "local-worktree-snapshot"' in script
     assert "promotion_eligible -ne $false" in script
     assert '"--verify-manifest", $sourceManifestPath' in script
@@ -384,9 +389,74 @@ def test_official_beta_wrapper_requires_release_bundle_and_recorder_revision() -
     assert "[switch]$OfficialStackRelease" in script
     assert "[string]$RecorderRevision" in script
     assert '@("stack-manifest.json", "SHA256SUMS")' in script
-    assert "$deployArguments.OfficialStackRelease = $true" in script
-    assert "$deployArguments.RecorderRevision = $RecorderRevision" in script
+    assert "$arguments.OfficialStackRelease = $true" in script
+    assert "$arguments.RecorderRevision = $RecorderRevision" in script
     assert "source_kind = $source.source_kind" in script
+
+
+def test_governed_beta_wrapper_forwards_independent_opt_in_selectors(tmp_path) -> None:
+    contract = json.loads(text("contracts/beta-release-wrapper-selectors.json"))
+    assert contract["schema"] == "marty.beta-release-wrapper-selectors/v1"
+    assert contract["beta_origin"] == "https://beta.elevenidllc.com"
+    assert set(contract["selectors"]) == {
+        "EnablePassportNative",
+        "EnableDidcommAuthcrypt",
+    }
+    assert all(not selector["default"] for selector in contract["selectors"].values())
+
+    script = text(contract["wrapper"])
+    runner = text(contract["runner"])
+    for selector in contract["selectors"]:
+        assert f"[switch]${selector}" in script
+        assert f"-{selector}:${selector}" in script
+        assert f"[switch]${selector}" in runner
+    assert (
+        '& (Join-Path $PSScriptRoot "deploy-local-beta-release.ps1") @deployArguments'
+        in script
+    )
+
+    powershell = shutil.which("pwsh") or shutil.which("powershell.exe")
+    if powershell is None:
+        pytest.skip("PowerShell is unavailable")
+    function = re.search(r"(?ms)^function New-BetaDeployArguments \{.*?^\}", script)
+    assert function is not None
+    harness = tmp_path / "beta-wrapper-selectors.ps1"
+    harness.write_text(
+        function.group()
+        + "\n"
+        + r"""
+$default = New-BetaDeployArguments -ArtifactDir 'C:\synthetic'
+$passport = New-BetaDeployArguments -ArtifactDir 'C:\synthetic' -EnablePassportNative
+$didcomm = New-BetaDeployArguments -ArtifactDir 'C:\synthetic' -EnableDidcommAuthcrypt
+$both = New-BetaDeployArguments -ArtifactDir 'C:\synthetic' -EnablePassportNative -EnableDidcommAuthcrypt
+$official = New-BetaDeployArguments -ArtifactDir 'C:\synthetic' -OfficialStackRelease -RecorderRevision ('a' * 40) -TunnelEnvFile 'C:\tunnel.env' -GeneratedEnvFile 'C:\generated.env'
+@{ default=$default; passport=$passport; didcomm=$didcomm; both=$both; official=$official } | ConvertTo-Json -Compress -Depth 4
+""",
+        encoding="utf-8",
+    )
+    result = subprocess.run(
+        [powershell, "-NoProfile", "-NonInteractive", "-File", str(harness)],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert result.returncode == 0, result.stderr
+    cases = json.loads(result.stdout)
+    for name, expected_passport, expected_didcomm in (
+        ("default", False, False),
+        ("passport", True, False),
+        ("didcomm", False, True),
+        ("both", True, True),
+    ):
+        arguments = cases[name]
+        assert arguments.get("EnablePassportNative", False) is expected_passport
+        assert arguments.get("EnableDidcommAuthcrypt", False) is expected_didcomm
+        assert arguments["EnablePortableCanvas"] is True
+        assert arguments["BetaOrigin"] == contract["beta_origin"]
+    assert cases["official"]["OfficialStackRelease"] is True
+    assert cases["official"]["RecorderRevision"] == "a" * 40
+    assert cases["official"]["TunnelEnvFile"] == r"C:\tunnel.env"
+    assert cases["official"]["GeneratedEnvFile"] == r"C:\generated.env"
 
 
 def test_beta_inventory_tolerates_services_added_by_the_release() -> None:
@@ -562,38 +632,54 @@ def test_passport_bureau_is_optional_but_included_in_beta_recovery() -> None:
     assert 'Invoke-Checked docker @("rm", $currentBureau)' in restore
     assert 'Invoke-Checked docker @("stop", $currentSigner)' in restore
     assert 'Invoke-Checked docker @("rm", $currentSigner)' in restore
-    assert 'Assert-BetaCallbackSignerNetwork -AttachOpenBao' in deploy
-    assert deploy.index('Assert-BetaCallbackSignerNetwork -AttachOpenBao') < deploy.index(
+    assert "Assert-BetaCallbackSignerNetwork -AttachOpenBao" in deploy
+    assert deploy.index(
+        "Assert-BetaCallbackSignerNetwork -AttachOpenBao"
+    ) < deploy.index(
         'Invoke-Compose -Arguments (@("up", "--detach", "--no-build", "--no-deps", "--force-recreate") + $remainingServices)'
     )
-    assert restore.count('Assert-RestoredPassportCallbackNetwork') == 3
+    assert restore.count("Assert-RestoredPassportCallbackNetwork") == 3
     for script in (deploy, restore):
         assert '"openbao" -notin @($openbaoEndpoint.Value.Aliases)' in script
-    assert deploy.index('Invoke-Checked -FilePath docker -Arguments (@("stop") + $maintenanceContainers)') < deploy.index(
-        'Assert-NoInFlightPassportJobs\n'
-    ) < deploy.index('Write-Step "Capture quiesced maintenance snapshot"')
+    assert (
+        deploy.index(
+            'Invoke-Checked -FilePath docker -Arguments (@("stop") + $maintenanceContainers)'
+        )
+        < deploy.index("Assert-NoInFlightPassportJobs\n")
+        < deploy.index('Write-Step "Capture quiesced maintenance snapshot"')
+    )
     assert "WHERE status NOT IN ('ACTIVE', 'FAILED', 'CANCELLED')" in deploy
     assert 'if ($existingPassportServices["passport-beta-bureau"] -gt 0 -and' in deploy
     assert '$existingPassportServices["passport-callback-signer"] -eq 0)' in deploy
     assert "this release cannot restore that legacy passport snapshot" in deploy
-    assert deploy.index("this release cannot restore that legacy passport snapshot") < deploy.index(
-        'Invoke-Checked -FilePath docker -Arguments @("pull",'
+    assert deploy.index(
+        "this release cannot restore that legacy passport snapshot"
+    ) < deploy.index('Invoke-Checked -FilePath docker -Arguments @("pull",')
+    assert "$priorSigner.Count -ne $priorBureau.Count" in restore
+    assert (
+        "Beta passport callback recovery records must contain both bureau and signer"
+        in restore
     )
-    assert '$priorSigner.Count -ne $priorBureau.Count' in restore
-    assert "Beta passport callback recovery records must contain both bureau and signer" in restore
     assert '"passport-callback-network-before.json"' in deploy
     assert '"passport-callback-network-before.json"' in restore
-    assert 'schema_version = 1\n        exists = $matchingNetworks.Count -eq 1' in deploy
-    assert '$callbackNetworkBefore.id = [string]$network[0].Id' in deploy
-    assert '$callbackNetworkBefore.members = @($network[0].Containers.PSObject.Properties.Name)' in deploy
-    assert 'Unexpected member blocks beta callback network restore' in restore
-    assert 'function Restore-PriorPassportCallbackNetwork' in restore
-    assert restore.index('Invoke-Checked docker @("rm", $currentSigner)') < restore.index(
-        'Restore-PriorPassportCallbackNetwork\n'
+    assert (
+        "schema_version = 1\n        exists = $matchingNetworks.Count -eq 1" in deploy
     )
-    assert 'Invoke-Checked docker @("network", "disconnect", $name, $openbaoId)' in restore
+    assert "$callbackNetworkBefore.id = [string]$network[0].Id" in deploy
+    assert (
+        "$callbackNetworkBefore.members = @($network[0].Containers.PSObject.Properties.Name)"
+        in deploy
+    )
+    assert "Unexpected member blocks beta callback network restore" in restore
+    assert "function Restore-PriorPassportCallbackNetwork" in restore
+    assert restore.index(
+        'Invoke-Checked docker @("rm", $currentSigner)'
+    ) < restore.index("Restore-PriorPassportCallbackNetwork\n")
+    assert (
+        'Invoke-Checked docker @("network", "disconnect", $name, $openbaoId)' in restore
+    )
     assert 'Invoke-Checked docker @("network", "rm", [string]$network[0].Id)' in restore
-    assert '$network[0].Labels.\'com.docker.compose.project\' -ne $project' in restore
+    assert "$network[0].Labels.'com.docker.compose.project' -ne $project" in restore
 
 
 def assert_beta_service_authentication(beta, shared):
