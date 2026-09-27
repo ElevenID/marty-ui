@@ -1,0 +1,14 @@
+{
+  "schema": "marty.passport-beta-physical-flow-proof/v1",
+  "flow_type": "physical_document_issuance",
+  "steps_source": "contracts/flow-service-behavior.json:flow_types.physical_document_issuance.steps",
+  "source_binding": ["signed_stack_manifest_sha256", "marty_ui_source_commit", "physical_provider_deployment_mode"],
+  "instance_binding": ["organization_id", "flow_definition_id", "generated_external_reference", "instance_id"],
+  "physical_input_reference": "contracts/issuance-physical-passport-native.json:application_validation_base_input",
+  "physical_input_preflight": "Before either lifecycle mutates beta, require three uppercase country letters, applicant object, string-valued MRZ, optional TD1/TD2/TD3, DG1 and DG2 plus only ASCII-numbered DG keys with nonempty canonical base64. This deliberately narrows acceptance inputs; it does not change the released application parser.",
+  "successful_execution": "Each of the nine ordered steps is read and advanced through Gateway; the terminal instance is COMPLETED and the track-production result reached QUALITY_CHECK or READY_FOR_ACTIVATION.",
+  "execution_relationship": "The existing direct Gateway lifecycle and this Flow execution create separate jobs. Even when tenant and release match, their evidence must remain distinct and cannot qualify a single nine-route end-to-end chain.",
+  "provider_callback": "A public job state cannot authenticate callback origin. Require a future protected ingress receipt binding the real provider profile, tenant, bureau job, signed-body digest, signing policy, and deployed source before this gate can be verified.",
+  "simulator": "The beta bureau is nonphysical and cannot satisfy the real-provider callback gate.",
+  "default": "The physical Flow probe is opt-in; the aggregate beta acceptance remains blocked."
+}
