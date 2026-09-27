@@ -50,7 +50,24 @@ def contains_credential(value, credential):
     if isinstance(value, (list, tuple)):
         return any(contains_credential(item, credential) for item in value)
     if isinstance(value, dict):
-        return any(contains_credential(item, credential) for item in value.values())
+        return any(
+            contains_credential(item, credential)
+            for pair in value.items()
+            for item in pair
+        )
+    return False
+
+
+def service_reuses_credential(service_name, service, credential, dedicated_name):
+    for field, value in service.items():
+        if field == "environment" and service_name in {"gateway", "signing-keys"}:
+            value = {
+                name: entry
+                for name, entry in environment(service).items()
+                if name != dedicated_name
+            }
+        if contains_credential(value, credential):
+            return True
     return False
 
 
@@ -66,6 +83,29 @@ def validate_mounted_sources(model, services, credential):
     for service_name, service in services.items():
         if service_name in {"gateway", "signing-keys"}:
             continue
+        configs = service.get("configs", [])
+        if not isinstance(configs, list):
+            raise PassportConfigurationError(
+                "Beta DSC operator credential isolation cannot verify mounted files"
+            )
+        definitions = model.get("configs", {})
+        if not isinstance(definitions, dict):
+            raise PassportConfigurationError(
+                "Beta DSC operator credential isolation cannot verify mounted files"
+            )
+        for config in configs:
+            name = (
+                config
+                if isinstance(config, str)
+                else (config.get("source") if isinstance(config, dict) else None)
+            )
+            definition = definitions.get(name) if isinstance(name, str) else None
+            path = definition.get("file") if isinstance(definition, dict) else None
+            if not isinstance(path, str) or definition.get("external"):
+                raise PassportConfigurationError(
+                    "Beta DSC operator credential isolation cannot verify mounted files"
+                )
+            sources.append(path)
         volumes = service.get("volumes", [])
         if not isinstance(volumes, list):
             raise PassportConfigurationError(
@@ -158,7 +198,10 @@ def validate_model(model, *, passport_enabled, files):
                     "Beta passport owner selection is inconsistent"
                 )
         if not passport_enabled:
-            if "passport-beta-bureau" in services or "passport-callback-signer" in services:
+            if (
+                "passport-beta-bureau" in services
+                or "passport-callback-signer" in services
+            ):
                 raise PassportConfigurationError(
                     "Beta passport callback services selected without profile"
                 )
@@ -245,19 +288,11 @@ def validate_model(model, *, passport_enabled, files):
             if service.get("environment") is not None
             and environment(service).get(dsc_gateway_key_name)
         }
-        dsc_value_reused = isinstance(dsc_gateway_key, str) and (
-            any(
-                contains_credential(value, dsc_gateway_key)
-                for service in services.values()
-                if service.get("environment") is not None
-                for name, value in environment(service).items()
-                if name != dsc_gateway_key_name
+        dsc_value_reused = isinstance(dsc_gateway_key, str) and any(
+            service_reuses_credential(
+                service_name, service, dsc_gateway_key, dsc_gateway_key_name
             )
-            or any(
-                contains_credential(service.get(field), dsc_gateway_key)
-                for service in services.values()
-                for field in ("command", "entrypoint")
-            )
+            for service_name, service in services.items()
         )
         if not (
             isinstance(dsc_gateway_key, str)
@@ -272,7 +307,9 @@ def validate_model(model, *, passport_enabled, files):
                 if service.get("environment") is not None
             )
         ):
-            raise PassportConfigurationError("Beta DSC operator credential isolation is invalid")
+            raise PassportConfigurationError(
+                "Beta DSC operator credential isolation is invalid"
+            )
         validate_mounted_sources(model, services, dsc_gateway_key)
         callback_signer_env = environment(callback_signer)
         if not (
@@ -301,7 +338,9 @@ def validate_model(model, *, passport_enabled, files):
         if not (
             callback_signer_env.get("SERVICE_NAME") == "passport_callback_signer"
             and callback_signer_env.get("ENVIRONMENT") == "beta"
-            and str(callback_signer_env.get("PASSPORT_CALLBACK_SIGNER_ENABLED", "false")).lower()
+            and str(
+                callback_signer_env.get("PASSPORT_CALLBACK_SIGNER_ENABLED", "false")
+            ).lower()
             == "true"
             and str(callback_signer_env.get("SIGNING_KEYS_SERVICE_PORT")) == "8018"
             and callback_signer_env.get("SIGNING_KEYS_INTERNAL_API_KEY") == signing_key
@@ -309,7 +348,9 @@ def validate_model(model, *, passport_enabled, files):
             and callback_signer_env.get("BAO_TOKEN")
             and callback_signer_env.get("BAO_TOKEN") == signing.get("BAO_TOKEN")
         ):
-            raise PassportConfigurationError("Beta callback signer configuration is invalid")
+            raise PassportConfigurationError(
+                "Beta callback signer configuration is invalid"
+            )
         if not re.fullmatch(
             r"ghcr\.io/elevenid/marty-ui-oss/services@sha256:[0-9a-f]{64}",
             str(bureau.get("image", "")),
@@ -318,7 +359,9 @@ def validate_model(model, *, passport_enabled, files):
                 "Beta passport bureau image must be immutable"
             )
         if callback_signer.get("image") != bureau.get("image"):
-            raise PassportConfigurationError("Beta callback signer image must be immutable")
+            raise PassportConfigurationError(
+                "Beta callback signer image must be immutable"
+            )
         if (
             bureau.get("ports")
             or bureau.get("secrets")
@@ -335,26 +378,39 @@ def validate_model(model, *, passport_enabled, files):
         if any(
             callback_signer.get(name)
             for name in (
-                "ports", "secrets", "volumes", "build", "entrypoint", "command",
-                "privileged", "network_mode",
+                "ports",
+                "secrets",
+                "volumes",
+                "build",
+                "entrypoint",
+                "command",
+                "privileged",
+                "network_mode",
             )
         ):
-            raise PassportConfigurationError("Beta callback signer exposure is forbidden")
+            raise PassportConfigurationError(
+                "Beta callback signer exposure is forbidden"
+            )
         networks = bureau.get("networks", {})
         if not isinstance(networks, dict) or set(networks) != {
-            "marty-network", PRIVATE_SIGNING_NETWORK
+            "marty-network",
+            PRIVATE_SIGNING_NETWORK,
         }:
             raise PassportConfigurationError("Beta passport bureau network is invalid")
         isolated = model.get("networks", {}).get(PRIVATE_SIGNING_NETWORK, {})
         if isolated.get("internal") is not True:
-            raise PassportConfigurationError("Beta callback signer network is not internal")
+            raise PassportConfigurationError(
+                "Beta callback signer network is not internal"
+            )
         members = {
             name
             for name, service in services.items()
             if PRIVATE_SIGNING_NETWORK in service.get("networks", {})
         }
         if members != {"openbao", "passport-beta-bureau", "passport-callback-signer"}:
-            raise PassportConfigurationError("Beta callback signer network membership is invalid")
+            raise PassportConfigurationError(
+                "Beta callback signer network membership is invalid"
+            )
         if set(callback_signer.get("networks", {})) != {PRIVATE_SIGNING_NETWORK}:
             raise PassportConfigurationError("Beta callback signer network is invalid")
         forbidden = {

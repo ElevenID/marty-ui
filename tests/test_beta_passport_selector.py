@@ -64,7 +64,9 @@ def model(enabled=True):
     services["gateway"]["environment"]["SIGNING_KEYS_INTERNAL_API_KEY"] = (
         "synthetic-signing-credential"
     )
-    services["gateway"]["environment"]["SIGNING_KEYS_DSC_ISSUE_GATEWAY_KEY"] = DSC_GATEWAY_KEY
+    services["gateway"]["environment"]["SIGNING_KEYS_DSC_ISSUE_GATEWAY_KEY"] = (
+        DSC_GATEWAY_KEY
+    )
     services["signing-keys"] = {
         "environment": {
             "SIGNING_KEYS_INTERNAL_API_KEY": "synthetic-signing-credential",
@@ -246,12 +248,20 @@ def test_partial_or_unsafe_selection_fails_closed(mutation):
     elif mutation == "missing_dsc_gateway_key":
         del services["gateway"]["environment"]["SIGNING_KEYS_DSC_ISSUE_GATEWAY_KEY"]
     elif mutation == "shared_dsc_gateway_key":
-        services["gateway"]["environment"]["SIGNING_KEYS_DSC_ISSUE_GATEWAY_KEY"] = "synthetic-signing-credential"
-        services["signing-keys"]["environment"]["SIGNING_KEYS_DSC_ISSUE_GATEWAY_KEY"] = "synthetic-signing-credential"
+        services["gateway"]["environment"]["SIGNING_KEYS_DSC_ISSUE_GATEWAY_KEY"] = (
+            "synthetic-signing-credential"
+        )
+        services["signing-keys"]["environment"][
+            "SIGNING_KEYS_DSC_ISSUE_GATEWAY_KEY"
+        ] = "synthetic-signing-credential"
     elif mutation == "leaked_dsc_gateway_key":
-        services["flow"]["environment"]["SIGNING_KEYS_DSC_ISSUE_GATEWAY_KEY"] = DSC_GATEWAY_KEY
+        services["flow"]["environment"]["SIGNING_KEYS_DSC_ISSUE_GATEWAY_KEY"] = (
+            DSC_GATEWAY_KEY
+        )
     elif mutation == "dsc_gateway_key_file":
-        services["issuance-native"]["environment"]["SIGNING_KEYS_DSC_ISSUE_GATEWAY_KEY_FILE"] = "/tmp/dsc-gateway-key"
+        services["issuance-native"]["environment"][
+            "SIGNING_KEYS_DSC_ISSUE_GATEWAY_KEY_FILE"
+        ] = "/tmp/dsc-gateway-key"
     elif mutation == "dsc_key_as_issuance_credential":
         services["issuance-native"]["environment"]["ISSUANCE_API_KEY"] = DSC_GATEWAY_KEY
     elif mutation == "dsc_key_as_unrelated_credential":
@@ -262,7 +272,9 @@ def test_partial_or_unsafe_selection_fails_closed(mutation):
         )
     elif mutation == "dsc_key_as_bao_token":
         services["signing-keys"]["environment"]["BAO_TOKEN"] = DSC_GATEWAY_KEY
-        services["passport-callback-signer"]["environment"]["BAO_TOKEN"] = DSC_GATEWAY_KEY
+        services["passport-callback-signer"]["environment"]["BAO_TOKEN"] = (
+            DSC_GATEWAY_KEY
+        )
     elif mutation == "dsc_key_embedded_in_database_password":
         for name in ("issuance-native", "passport-beta-bureau"):
             database_url = services[name]["environment"]["DATABASE_URL"]
@@ -280,9 +292,7 @@ def test_partial_or_unsafe_selection_fails_closed(mutation):
             "postgresql://marty:synthetic@production.example:5432/marty"
         )
     elif mutation == "native_database_target":
-        native["DATABASE_URL"] = (
-            "postgresql+asyncpg://marty:other@postgres:5432/marty"
-        )
+        native["DATABASE_URL"] = "postgresql+asyncpg://marty:other@postgres:5432/marty"
     elif mutation == "signing_route":
         bureau["environment"]["SIGNING_KEYS_INTERNAL_URL"] = (
             "https://public.example.test"
@@ -312,11 +322,15 @@ def test_partial_or_unsafe_selection_fails_closed(mutation):
     elif mutation == "callback_signer_shared_network":
         services["passport-callback-signer"]["networks"]["marty-network"] = None
     elif mutation == "callback_signer_disabled":
-        services["passport-callback-signer"]["environment"]["PASSPORT_CALLBACK_SIGNER_ENABLED"] = "false"
+        services["passport-callback-signer"]["environment"][
+            "PASSPORT_CALLBACK_SIGNER_ENABLED"
+        ] = "false"
     elif mutation == "callback_signer_image":
         services["passport-callback-signer"]["image"] = "services:latest"
     elif mutation == "callback_signer_key_mismatch":
-        services["passport-callback-signer"]["environment"]["SIGNING_KEYS_INTERNAL_API_KEY"] = "another-key"
+        services["passport-callback-signer"]["environment"][
+            "SIGNING_KEYS_INTERNAL_API_KEY"
+        ] = "another-key"
     elif mutation == "callback_signer_extra_member":
         services["gateway"]["networks"] = {"passport-callback-signing": None}
     with pytest.raises(VALIDATOR["PassportConfigurationError"]) as error:
@@ -349,6 +363,64 @@ def test_mounted_secret_cannot_reuse_dsc_gateway_credential(tmp_path):
     with pytest.raises(
         VALIDATOR["PassportConfigurationError"],
         match="cannot verify mounted files",
+    ):
+        validate(candidate)
+
+
+@pytest.mark.parametrize("source_kind", ["file", "external", "missing", "oversize"])
+def test_non_owner_compose_config_is_scanned_or_rejected(tmp_path, source_kind):
+    candidate = model()
+    mounted = tmp_path / "flow-config"
+    if source_kind == "file":
+        mounted.write_text(f"credential={DSC_GATEWAY_KEY}", encoding="utf-8")
+    elif source_kind == "oversize":
+        mounted.write_bytes(b"x" * (VALIDATOR["MAX_MOUNT_FILE_BYTES"] + 1))
+    candidate["configs"] = {
+        "flow-config": (
+            {"external": True} if source_kind == "external" else {"file": str(mounted)}
+        )
+    }
+    candidate["services"]["flow"]["configs"] = [
+        {"source": "flow-config", "target": "/run/config/flow"}
+    ]
+    expected = "is invalid" if source_kind == "file" else "cannot verify mounted files"
+    with pytest.raises(VALIDATOR["PassportConfigurationError"], match=expected):
+        validate(candidate)
+
+
+def test_non_owner_compose_config_unknown_source_fails_closed():
+    candidate = model()
+    candidate["services"]["flow"]["configs"] = [{"source": "unknown"}]
+    with pytest.raises(
+        VALIDATOR["PassportConfigurationError"], match="cannot verify mounted files"
+    ):
+        validate(candidate)
+
+
+def test_file_backed_compose_config_without_credential_is_allowed(tmp_path):
+    candidate = model()
+    mounted = tmp_path / "flow-config"
+    mounted.write_text("ordinary configuration", encoding="utf-8")
+    candidate["configs"] = {"flow-config": {"file": str(mounted)}}
+    candidate["services"]["flow"]["configs"] = ["flow-config"]
+    validate(candidate)
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [
+        ("healthcheck", {"test": ["CMD", "check", DSC_GATEWAY_KEY]}),
+        ("labels", {"operator-credential": DSC_GATEWAY_KEY}),
+        ("labels", {DSC_GATEWAY_KEY: "enabled"}),
+        ("logging", {"options": {"token": DSC_GATEWAY_KEY}}),
+    ],
+)
+def test_non_owner_rendered_metadata_cannot_reuse_dsc_credential(field, value):
+    candidate = model()
+    candidate["services"]["flow"][field] = value
+    with pytest.raises(
+        VALIDATOR["PassportConfigurationError"],
+        match="Beta DSC operator credential isolation is invalid",
     ):
         validate(candidate)
 
@@ -497,7 +569,9 @@ def test_runner_validates_twice_before_mutation():
     )
     assert "WHERE status NOT IN ('ACTIVE', 'FAILED', 'CANCELLED')" in source
     assert "Assert-BetaCallbackSignerNetwork -AttachOpenBao" in source
-    assert source.index("Assert-BetaCallbackSignerNetwork -AttachOpenBao") < source.index(
+    assert source.index(
+        "Assert-BetaCallbackSignerNetwork -AttachOpenBao"
+    ) < source.index(
         'Invoke-Compose -Arguments (@("up", "--detach", "--no-build", "--no-deps", "--force-recreate") + $remainingServices)'
     )
     assert "Unexpected container joined the beta callback network" in source
@@ -541,7 +615,9 @@ def test_restore_reconstitutes_isolated_signer_before_applications():
     )
     assert '"passport-callback-signer"' in source
     assert source.count("Assert-RestoredPassportCallbackNetwork") >= 3
-    assert "Unexpected container joined the restored passport callback network" in source
+    assert (
+        "Unexpected container joined the restored passport callback network" in source
+    )
     assert '"openbao" -notin @($openbaoEndpoint.Value.Aliases)' in source
 
 
