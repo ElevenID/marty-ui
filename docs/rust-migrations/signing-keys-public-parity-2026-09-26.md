@@ -131,6 +131,108 @@ private key material enters this route. An isolated Redis/OpenBao route test
 passed for a real KMS-held signature and the unregistered-key, tenant,
 private-field, and empty-payload denials. Authenticated through-Gateway
 acceptance is still required before cutover.
-Thus 7 declared pairs remain without local public handlers. These new
-adapters still need authenticated through-Gateway runtime tests. The
-24-pair table above remains the protected-main audit baseline.
+The local `POST /config/resolve` adapter restores the released service-default
+order and purpose-bound key selection in
+`contracts/signing-public-config-resolve-behavior.json`. Algorithm filtering
+reads only existing public KMS key metadata and never creates a missing
+managed key. The response keeps the released `service`, `resolved_by`, and
+`mdoc_signing_hints` fields, with a deliberate credential-redaction and
+certificate/key-match tightening. Frozen-selection and mock-KMS unit tests
+pass, and the isolated Redis/mock-KMS Rust-route test passed for tenant
+isolation, algorithm selection, redaction, no key provisioning, malformed
+certificate rejection, and KMS-outage status. A Gateway runtime test also
+passes for session authorization and trusted tenant forwarding to the
+Signing Keys upstream. The combined Gateway-to-Rust and beta gates remain
+open.
+
+The local `POST /services/{service_id}/rotate` adapter now rotates an existing
+registered Transit key inside KMS, reads only its new public version, and
+records overlap metadata only after a successful provider operation. It
+optionally reuses the existing Rust JWKS and DID publication handlers; those
+handlers recheck any service certificate against the current KMS public key.
+The released response fields are frozen in
+`contracts/signing-service-rotation-behavior.json`; its deliberate failure
+integrity tightening is documented there. An isolated Redis/mock-KMS route
+test passed for success, failure-without-state-change, tenant isolation, and
+caller key-selector rejection. Future `activate_at` values are rejected because
+Transit rotates immediately and cannot schedule that activation. A Gateway
+runtime test passed for session
+authorization and trusted tenant forwarding. The console hides rotation for
+read-only shared services and warns if KMS rotation succeeds but publication
+does not. Combined Gateway-to-Rust and beta acceptance remain open.
+
+The local `POST /services/vdsnc/register` adapter preserves the released
+tenant-scoped registration workflow and deterministic VDS-NC KMS reference
+without creating or reading key material. It keeps existing service defaults,
+returns a credential-redacted service, and retains the released `mso_mdoc`
+format while adding the actual `vds_nc` format. The behavior is frozen in
+`contracts/signing-vdsnc-registration-behavior.json`. An isolated Redis route
+test covers persistence, tenant isolation, default preservation, redaction,
+and invalid input. Gateway session/trusted-scope tests cover forwarding.
+Combined Gateway-to-Rust and beta acceptance remain open.
+
+The local `GET`, `PATCH`, and `DELETE /{key_id}` adapters reuse the Rust
+tenant inventory and JWKS document kernels. GET returns only a public
+inventory entry; PATCH edits only published name/status/alias metadata; DELETE
+removes only a published JWKS entry and leaves the KMS key and service
+registration untouched. Their released distinctions and response fields are
+frozen in `contracts/signing-public-key-metadata-behavior.json`. An isolated
+Redis route test covers tenant isolation, metadata persistence, private-field
+rejection, and the JWKS-only deletion boundary; Gateway tests cover session
+authorization and trusted tenant forwarding. Combined Gateway-to-Rust and
+beta acceptance remain open.
+
+The issuer identity/profile create route is the primary KMS-abstracted
+signing path. Callers provide an issuer DID, purpose, format, and algorithm;
+the Rust custody resolver selects a tenant service and provisions the
+deterministic managed key when that service is managed OpenBao. The resulting
+profile publishes an opaque DID verification method, then resolves and signs
+without a caller KMS locator. `contracts/signing-issuer-profile-managed-provision-behavior.json`
+freezes this flow. Its disposable Redis/mock-KMS route gate covers fresh
+create, resolve, DID-mediated sign, custody-free public responses and DID
+document, CSCA and `x509_doc_signer` `ICAO_EMRTD` profiles, reuse of a live key with KMS read/sign
+permission but no create permission, and failed provisioning without an active profile. Nonmanaged
+custody selection and existing published verification method IDs remain in
+place. The issuer-scoped CSR resolver uses
+the stored method ID and compares public key coordinates, so the opaque
+fragment is compatible with its lookup; a real OpenBao CSR signature and
+chain still need the beta gate. Combined Gateway-to-Rust and beta acceptance
+for this profile flow remain open.
+
+The local direct `POST /v1/signing-keys` route remains the released
+compatibility/admin key-inventory API. It returns public metadata, preserves
+the released four algorithms, purpose binding, LTI isolation, and response
+fields, and includes a deterministic organization namespace in provider key
+names. The released Gateway omitted that namespace and could select the same
+KMS key for same-name requests from two tenants.
+`contracts/signing-managed-key-create-behavior.json` freezes the released
+behavior and this reviewed correction. The disposable Redis/mock-KMS route
+test covers all four algorithms, all advertised purposes through create,
+resolve, and sign, same-name tenant isolation, read-after-create inventory,
+existing-key reuse, rejected algorithms before KMS, stale/foreign inventory
+exclusion, and failed writes leaving registry bindings unchanged.
+An opt-in authenticated Gateway-to-Rust route test now verifies session denial,
+foreign-tenant denial, trusted tenant forwarding through the real HTTP
+upstream transport, managed creation, and public-only inventory against
+disposable Redis and a mock Transit provider. It also reads the new key back
+by ID through the Gateway. The beta deployment gate remains.
+
+All 24 originally missing declared pairs now have local Rust handlers in the
+stacked review branches. A data-driven route-layer test verifies that all 37
+Gateway-declared Signing Keys method/path pairs match Rust public routes and
+do not return method-not-allowed. An opt-in real Gateway-to-Rust HTTP suite now
+traverses the other 22 restored pairs with session denial, foreign-tenant
+denial, and Rust-specific responses. It verifies successful JWKS PATCH/DELETE,
+holder-key POST, and VDS-NC registration without returning a provider secret.
+The earlier real-upstream test covers managed key POST and detail GET. CI runs
+both opt-in tests against separate disposable Redis databases.
+
+Most remaining service, certificate, publication, discovery, and issuer probes
+currently reach Rust through missing-service or missing-profile responses.
+Their successful end-to-end behavior still needs seeded service/profile,
+certificate, and KMS fixtures through Gateway. The deliberate audit and
+compliance 501 responses retain their frozen unavailable contracts. Protected
+CI, re-audit on main, those success paths, and aggregate beta acceptance
+remain gates before Python retirement or a migration-complete claim. The
+24-pair table above remains the protected-main audit baseline until the stack
+lands.

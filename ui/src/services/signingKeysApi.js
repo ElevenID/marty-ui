@@ -80,15 +80,14 @@ export async function getSigningKey(keyId, params = {}) {
 }
 
 /**
- * Upload/create a new signing key
- * @param {Object} keyData - Key configuration
- * @param {string} keyData.name - Key name
- * @param {string} keyData.algorithm - Algorithm (e.g., 'ES256', 'RS256')
- * @param {string} keyData.public_key - Public key in PEM format
- * @param {string} keyData.key_type - Key type: 'local', 'hsm', 'vault'
- * @param {Object} keyData.hsm_config - HSM configuration (if key_type === 'hsm')
- * @param {Object} keyData.vault_config - Vault configuration (if key_type === 'vault')
- * @returns {Promise<Object>} Created signing key
+ * Create a signing key in the tenant's managed OpenBao Transit service.
+ * This endpoint does not import key material or accept provider credentials.
+ * @param {Object} keyData - Managed-key request
+ * @param {string} keyData.name - Key name (key_name is a compatibility alias)
+ * @param {string} [keyData.algorithm='ES256'] - ES256, ES384, RS256, or EdDSA
+ * @param {string} [keyData.key_purpose='vc_jwt_issuer'] - Canonical signing purpose
+ * @param {string} [keyData.service_id] - Managed service ID when not the tenant default
+ * @returns {Promise<Object>} Created key's public metadata
  */
 export async function createSigningKey(keyData) {
   const body = withoutOrganizationFields(keyData);
