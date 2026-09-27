@@ -1184,7 +1184,20 @@ async fn publish_public_issuer_didcomm_key_agreement(
     if let Err(error) = documents::validate_x25519_public_jwk(&input.public_jwk) {
         return public_publication_error(error);
     }
-    if let Err(error) = one_matching_profile(&state, &scope.organization_id, &identity).await {
+    let profile = match one_matching_profile(&state, &scope.organization_id, &identity).await {
+        Ok(profile) => profile,
+        Err(error) => return error.into_response(),
+    };
+    if let Err(error) = validated_issuer_service(
+        &state,
+        &scope.organization_id,
+        &profile,
+        &input.credential_format,
+        &input.key_purpose,
+        &input.algorithm,
+    )
+    .await
+    {
         return error.into_response();
     }
     let Some(public_domain) = state.public_domain.as_deref() else {
@@ -1671,11 +1684,11 @@ fn validate_service_scope(
     Ok(())
 }
 
-async fn registered_service(
+async fn registered_service_with_registry(
     state: &AppState,
     organization_id: &str,
     service_id: &str,
-) -> Result<Value, PublicSigningError> {
+) -> Result<(Value, Value), PublicSigningError> {
     let store = state.registry_store.as_ref().ok_or_else(|| {
         public_failure(
             StatusCode::SERVICE_UNAVAILABLE,
@@ -1703,7 +1716,96 @@ async fn registered_service(
                 &format!("Service '{service_id}' not found."),
             )
         })?;
-    Ok(service)
+    Ok((registry, service))
+}
+
+async fn registered_service(
+    state: &AppState,
+    organization_id: &str,
+    service_id: &str,
+) -> Result<Value, PublicSigningError> {
+    registered_service_with_registry(state, organization_id, service_id)
+        .await
+        .map(|(_, service)| service)
+}
+
+fn service_supports_issuer_value(service: &Value, field: &str, requested: &str) -> bool {
+    service
+        .get(field)
+        .and_then(Value::as_array)
+        .is_none_or(|values| {
+            values.is_empty() || values.iter().any(|value| value.as_str() == Some(requested))
+        })
+}
+
+async fn validated_issuer_service(
+    state: &AppState,
+    organization_id: &str,
+    profile: &Value,
+    credential_format: &str,
+    key_purpose: &str,
+    algorithm: &str,
+) -> Result<(), PublicSigningError> {
+    let service_id = profile
+        .get("signing_service_id")
+        .and_then(Value::as_str)
+        .filter(|id| !id.trim().is_empty())
+        .ok_or_else(|| {
+            public_failure(
+                StatusCode::NOT_FOUND,
+                "No active issuer identity matches the requested tuple.",
+            )
+        })?;
+    let (registry, mut service) =
+        registered_service_with_registry(state, organization_id, service_id)
+            .await
+            .map_err(|error| {
+                if error.status == StatusCode::NOT_FOUND {
+                    public_failure(
+                        StatusCode::NOT_FOUND,
+                        "No active issuer identity matches the requested tuple.",
+                    )
+                } else {
+                    error
+                }
+            })?;
+    let wire_format = profiles::custody_format(&CustodyFormatRequest {
+        credential_format: credential_format.to_owned(),
+        key_purpose: key_purpose.to_owned(),
+    })
+    .map_err(|error| public_failure(StatusCode::UNPROCESSABLE_ENTITY, &error.to_string()))?
+    .wire_format;
+    if !service_supports_issuer_value(&service, "credential_formats", &wire_format)
+        || !service_supports_issuer_value(&service, "key_purposes", key_purpose)
+        || !service_supports_issuer_value(&service, "algorithms", algorithm)
+    {
+        return Err(public_failure(
+            StatusCode::NOT_FOUND,
+            "No active issuer identity matches the requested tuple.",
+        ));
+    }
+    let key_reference = profile
+        .get("signing_key_reference")
+        .and_then(Value::as_str)
+        .filter(|reference| !reference.trim().is_empty())
+        .ok_or_else(|| {
+            public_failure(
+                StatusCode::NOT_FOUND,
+                "No active issuer identity matches the requested tuple.",
+            )
+        })?;
+    service["key_reference"] = json!(key_reference);
+    profiles::validate_binding(&ValidateBindingRequest {
+        profile: profile.clone(),
+        service,
+        registry,
+    })
+    .map_err(|_| {
+        public_failure(
+            StatusCode::UNPROCESSABLE_ENTITY,
+            "Issuer signing service binding is incompatible.",
+        )
+    })
 }
 
 async fn registered_certificate_service(
@@ -5094,6 +5196,10 @@ mod public_contract_tests {
         assert_eq!(contract["published_relationship"], "keyAgreement");
         assert_eq!(contract["published_fragment"], "didcomm-authcrypt-x25519");
         assert_eq!(contract["private_key_material_allowed"], false);
+        assert_eq!(
+            contract["requires_compatible_registered_signing_service"],
+            true
+        );
         assert_eq!(contract["kms_key_agreement_follow_up"], "DIDCOMM-KMS-001");
         let public_jwk = json!({
             "kty": "OKP", "crv": "X25519",

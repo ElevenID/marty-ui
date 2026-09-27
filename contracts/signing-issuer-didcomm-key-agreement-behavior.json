@@ -5,6 +5,7 @@
   "path": "/v1/signing-keys/issuer-identities/didcomm-key-agreement",
   "selector": ["organization_id", "issuer_did", "key_purpose", "credential_format", "algorithm"],
   "requires_exactly_one_active_issuer_profile": true,
+  "requires_compatible_registered_signing_service": true,
   "requires_local_managed_did_web_issuer": true,
   "request_public_jwk": {
     "required_fields": ["kty", "crv", "x"],
