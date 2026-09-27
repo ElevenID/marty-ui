@@ -157,6 +157,28 @@ impl PassportNativeConfig {
             bureau_webhook_secret: secret_value(values, "PERSONALIZATION_BUREAU_WEBHOOK_SECRET")?,
             self_signed_test_enabled,
         };
+        let production = values
+            .get("ENVIRONMENT")
+            .or_else(|| values.get("APP_ENV"))
+            .is_some_and(|value| {
+                matches!(
+                    value.trim().to_ascii_lowercase().as_str(),
+                    "production" | "prod"
+                )
+            });
+        if production
+            && config.bureau_url.as_deref().is_some_and(|value| {
+                url::Url::parse(value).ok().is_some_and(|url| {
+                    url.host_str()
+                        .is_some_and(|host| host.trim_end_matches('.') == "passport-beta-bureau")
+                })
+            })
+        {
+            return Err(MmfError::new(
+                ErrorCode::Configuration,
+                "beta passport bureau simulator cannot be selected as a production provider",
+            ));
+        }
         if config.managed_issuer_signing_enabled
             && (config.signer_url.is_some() || config.self_signed_test_enabled)
         {
@@ -1525,7 +1547,44 @@ mod tests {
     use crate::canvas_network_timeout::CanvasNetworkTimeout;
     use mmf_core::ErrorCode;
 
-    use super::{validate_production_grpc_service_token, IssuanceServiceConfig};
+    use super::{
+        validate_production_grpc_service_token, IssuanceServiceConfig, PassportNativeConfig,
+    };
+
+    #[test]
+    fn production_passport_refuses_beta_simulator_without_qualifying_an_external_provider() {
+        let contract: serde_json::Value = serde_json::from_str(include_str!(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../../../contracts/passport-production-bureau-boundary.json"
+        )))
+        .unwrap();
+        assert!(contract["external_provider_receipt"].is_null());
+        for case in contract["cases"].as_array().unwrap() {
+            let values = std::collections::BTreeMap::from([
+                (
+                    "ENVIRONMENT".into(),
+                    case["environment"].as_str().unwrap().into(),
+                ),
+                (
+                    "PASSPORT_NATIVE_HTTP_ENABLED".into(),
+                    case["native_enabled"]
+                        .as_bool()
+                        .map_or("true", |enabled| if enabled { "true" } else { "false" })
+                        .into(),
+                ),
+                (
+                    "PERSONALIZATION_BUREAU_URL".into(),
+                    case["url"].as_str().unwrap().into(),
+                ),
+            ]);
+            let result = PassportNativeConfig::from_values(&values, true);
+            assert_eq!(
+                result.is_ok(),
+                case["accepted"].as_bool().unwrap(),
+                "{case}"
+            );
+        }
+    }
 
     fn values(entries: &[(&str, &str)]) -> Vec<(String, String)> {
         entries
