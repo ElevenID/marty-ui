@@ -47,6 +47,7 @@ vi.mock('../../../hooks/usePermissions', () => ({
 describe('DidIdentitiesPage', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    window.sessionStorage.clear();
     permissionState.isLoading = false;
     orgState.activeOrgId = 'org-test-1';
     can.mockReturnValue(false);
@@ -319,6 +320,42 @@ describe('DidIdentitiesPage', () => {
     expect(screen.getByRole('textbox', { name: 'Issued certificate PEM' })).toHaveValue('public-dsc-pem');
     expect(screen.getByRole('textbox', { name: 'Issued certificate chain PEM' })).toHaveValue('public-csca-pem');
     expect(issueCscaSelfSignedCertificate).not.toHaveBeenCalled();
+  });
+
+  it('restores an uncertain DSC request after refresh and retries its exact payload', async () => {
+    can.mockImplementation((resource: string, action: string) => resource === 'passport-certificate' && action === 'issue');
+    issueDscCertificate.mockRejectedValueOnce(new Error('response lost'));
+    listPublicIssuerIdentities.mockImplementation(async ({ credential_format: format }) => ({
+      identities: format === 'ICAO_EMRTD'
+        ? [{ issuer_did: 'did:web:issuer.example:dsc', key_purpose: 'x509_doc_signer', algorithm: 'ES256', status: 'active' }]
+        : [],
+    }));
+    const first = renderWithRouter(<DidIdentitiesPage />);
+    await screen.findByText('did:web:issuer.example:dsc');
+    await first.user.click(screen.getByRole('button', { name: 'Issue DSC' }));
+    await first.user.type(screen.getByRole('textbox', { name: 'CSCA issuer DID' }), 'did:web:issuer.example:csca');
+    await first.user.type(screen.getByRole('textbox', { name: 'CSCA certificate ID' }), 'beta-csca-1');
+    await first.user.type(screen.getByRole('textbox', { name: 'Country code (C)' }), 'US');
+    await first.user.type(screen.getByRole('textbox', { name: 'Organization (O)' }), 'Beta Issuer');
+    await first.user.type(screen.getByRole('textbox', { name: 'Common name (CN)' }), 'Beta DSC');
+    await first.user.click(screen.getByRole('button', { name: 'Issue DSC certificate' }));
+    await screen.findByText(/could not be issued/i);
+    const firstRequest = issueDscCertificate.mock.calls[0][0];
+    expect(window.sessionStorage.length).toBe(1);
+    first.unmount();
+
+    const second = renderWithRouter(<DidIdentitiesPage />);
+    await screen.findByText('did:web:issuer.example:dsc');
+    await second.user.click(screen.getByRole('button', { name: 'Issue DSC' }));
+    expect(screen.getByRole('textbox', { name: 'DSC request reference' })).toHaveValue(firstRequest.idempotency_key);
+    expect(screen.getByRole('textbox', { name: 'DSC request reference' })).toBeDisabled();
+    expect(screen.getByRole('textbox', { name: 'Common name (CN)' })).toHaveValue('Beta DSC');
+    expect(screen.getByText(/request is pending or its response was lost/i)).toBeInTheDocument();
+    await second.user.click(screen.getByRole('button', { name: 'Issue DSC certificate' }));
+    await waitFor(() => expect(issueDscCertificate).toHaveBeenCalledTimes(2));
+    expect(issueDscCertificate.mock.calls[1][0]).toEqual(firstRequest);
+    await screen.findByRole('textbox', { name: 'Issued certificate PEM' });
+    expect(window.sessionStorage.length).toBe(0);
   });
 
   it('hides both issuance actions while permissions are loading or missing', async () => {
