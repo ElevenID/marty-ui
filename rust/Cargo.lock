@@ -4659,7 +4659,7 @@ dependencies = [
  "hex",
  "hmac 0.12.1",
  "http 1.5.0",
- "marty-crypto 0.1.61",
+ "marty-crypto 0.1.62",
  "marty-deployment-profile",
  "marty-issuance-service",
  "marty-oid4vci",
