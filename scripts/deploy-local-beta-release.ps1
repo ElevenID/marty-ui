@@ -287,7 +287,25 @@ END
     $activeFlowsSql = @'
 SELECT count(*) FROM flow_service.flow_instances AS instance
 LEFT JOIN flow_service.flow_definitions AS definition ON definition.id = instance.flow_definition_id
-WHERE (definition.id IS NULL
+WHERE ((definition.id IS NULL AND NOT COALESCE((
+        instance.status = 'awaiting_wallet'
+        AND instance.expires_at < clock_timestamp()
+        AND instance.current_step_id IS NULL
+        AND instance.application_flow_key_hash IS NULL
+        AND instance.context::jsonb->>'flow_definition_reference' = '__verification__'
+        AND instance.context::jsonb->>'flow_type' = 'verification'
+        AND instance.context::jsonb->>'protocol_flow_type' = 'oid4vp_presentation'
+        AND instance.context::jsonb ? 'auth_request'
+        AND instance.context::jsonb ? 'oid4vp_profile'
+        AND instance.context::jsonb ? 'request_uri'
+        AND instance.context::jsonb::text NOT ILIKE '%physical_document%'
+        AND instance.context::jsonb::text NOT ILIKE '%passport%'
+        AND ((instance.subject_type = 'holder'
+                AND instance.state_history::jsonb->0->>'event' = 'verification_started'
+                AND instance.state_history::jsonb->0->>'actor' = 'verification_api')
+            OR (instance.subject_type = 'applicant'
+                AND instance.state_history::jsonb = '[]'::jsonb))
+    ), false))
     OR lower(definition.flow_type) = 'physical_document_issuance'
     OR (lower(definition.flow_type) = 'custom'
         AND definition.extension::jsonb->>'extends_flow_type' = 'physical_document_issuance')

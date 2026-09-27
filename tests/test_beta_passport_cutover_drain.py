@@ -38,6 +38,8 @@ def test_drain_preflight_counts_artifacts_and_flows_before_backup():
     assert "jsonb_array_elements" in function
     assert "LEFT JOIN flow_service.flow_definitions" in function
     assert "definition.id IS NULL" in function
+    assert "flow_definition_reference' = '__verification__'" in function
+    assert "instance.expires_at < clock_timestamp()" in function
     assert "physical_document_issuance" in function
     assert "definition.extension::jsonb->>'extends_flow_type'" in function
     assert "physical_document_job" in function
@@ -158,9 +160,34 @@ CREATE TABLE issuance_service.physical_document_jobs (
 );
 CREATE TABLE flow_service.flow_definitions (id text, flow_type text, extension json);
 CREATE TABLE flow_service.flow_instances (
-    flow_definition_id text, status text, context json
+    flow_definition_id text, status text, context json,
+    current_step_id text, application_flow_key_hash text,
+    subject_type text DEFAULT 'applicant', state_history json DEFAULT '[]',
+    expires_at timestamptz
 );
 """
+    verification_context = (
+        '{"flow_definition_reference":"__verification__",'
+        '"flow_type":"verification",'
+        '"protocol_flow_type":"oid4vp_presentation",'
+        '"auth_request":{},"oid4vp_profile":"standard","request_uri":"local"}'
+    )
+    modern_history = '[{"event":"verification_started","actor":"verification_api"}]'
+
+    def verification_row(
+        *,
+        context=verification_context,
+        subject_type="holder",
+        history=modern_history,
+        expiry="now()-interval '1 day'",
+    ):
+        return (
+            "INSERT INTO flow_service.flow_instances "
+            "(flow_definition_id,status,context,subject_type,state_history,expires_at) "
+            f"VALUES ('missing','awaiting_wallet','{context}','{subject_type}',"
+            f"'{history}',{expiry});"
+        )
+
     fixtures = [
         (
             "INSERT INTO issuance_service.physical_document_jobs VALUES ('ACTIVE', 'gAAAAlegacy');",
@@ -183,27 +210,49 @@ CREATE TABLE flow_service.flow_instances (
             1,
         ),
         (
-            "INSERT INTO flow_service.flow_definitions (id, flow_type) VALUES ('physical', 'physical_document_issuance'); INSERT INTO flow_service.flow_instances VALUES ('physical', 'in_progress', '{}');",
+            "INSERT INTO flow_service.flow_definitions (id, flow_type) VALUES ('physical', 'physical_document_issuance'); INSERT INTO flow_service.flow_instances (flow_definition_id,status,context) VALUES ('physical', 'in_progress', '{}');",
             flow_sql,
             1,
         ),
         (
-            "INSERT INTO flow_service.flow_definitions (id, flow_type) VALUES ('physical', 'physical_document_issuance'); INSERT INTO flow_service.flow_instances VALUES ('physical', 'completed', '{}');",
+            "INSERT INTO flow_service.flow_definitions (id, flow_type) VALUES ('physical', 'physical_document_issuance'); INSERT INTO flow_service.flow_instances (flow_definition_id,status,context) VALUES ('physical', 'completed', '{}');",
             flow_sql,
             0,
         ),
         (
-            "INSERT INTO flow_service.flow_definitions VALUES ('custom', 'custom', '{\"extends_flow_type\":\"physical_document_issuance\"}'); INSERT INTO flow_service.flow_instances VALUES ('custom', 'in_progress', '{}');",
+            "INSERT INTO flow_service.flow_definitions VALUES ('custom', 'custom', '{\"extends_flow_type\":\"physical_document_issuance\"}'); INSERT INTO flow_service.flow_instances (flow_definition_id,status,context) VALUES ('custom', 'in_progress', '{}');",
             flow_sql,
             1,
         ),
         (
-            "INSERT INTO flow_service.flow_instances VALUES ('missing', 'in_progress', '{}');",
+            "INSERT INTO flow_service.flow_instances (flow_definition_id,status,context) VALUES ('missing', 'in_progress', '{}');",
             flow_sql,
             1,
         ),
         (
-            "INSERT INTO flow_service.flow_definitions (id, flow_type) VALUES ('custom', 'custom'); INSERT INTO flow_service.flow_instances VALUES ('custom', 'created', '{\"physical_document_job\":{}}');",
+            "INSERT INTO flow_service.flow_definitions (id, flow_type) VALUES ('custom', 'custom'); INSERT INTO flow_service.flow_instances (flow_definition_id,status,context) VALUES ('custom', 'created', '{\"physical_document_job\":{}}');",
+            flow_sql,
+            1,
+        ),
+        (verification_row(), flow_sql, 0),
+        (verification_row(subject_type="applicant", history="[]"), flow_sql, 0),
+        (verification_row(expiry="now()+interval '1 day'"), flow_sql, 1),
+        (
+            verification_row(
+                context=verification_context.replace(
+                    '"request_uri"', '"physical_document_job":{},"request_uri"'
+                )
+            ),
+            flow_sql,
+            1,
+        ),
+        (
+            verification_row(
+                context=verification_context.replace(
+                    '"protocol_flow_type":"oid4vp_presentation"',
+                    '"protocol_flow_type":"physical_document_issuance"',
+                )
+            ),
             flow_sql,
             1,
         ),
