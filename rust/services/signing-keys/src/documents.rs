@@ -198,6 +198,71 @@ impl DocumentStore {
             .unwrap_or_else(|| json!({"services": {}})))
     }
 
+    async fn mutate_certificates<T, F>(
+        &self,
+        organization_id: &str,
+        mutation: F,
+    ) -> Result<T, DocumentError>
+    where
+        F: Fn(Value) -> Result<(Value, T), DocumentError>,
+    {
+        let key = certificate_storage_key(organization_id);
+        for _ in 0..128 {
+            let mut connection = self.connection.clone();
+            let previous: Option<String> = connection
+                .get(&key)
+                .await
+                .map_err(|error| DocumentError::Storage(error.to_string()))?;
+            let document = match previous.as_deref() {
+                Some(payload) => {
+                    let value: Value = serde_json::from_str(payload)
+                        .map_err(|error| DocumentError::Corrupt(error.to_string()))?;
+                    if !value.is_object() {
+                        return Err(DocumentError::Corrupt(
+                            "certificate document must be a JSON object".into(),
+                        ));
+                    }
+                    value
+                }
+                None => json!({"services": {}}),
+            };
+            for field in ["passport_dsc_issuance", "passport_dsc_serials"] {
+                if document.get(field).is_some_and(|value| !value.is_object()) {
+                    return Err(DocumentError::Corrupt(
+                        "passport DSC certificate ledger is malformed".into(),
+                    ));
+                }
+            }
+            let (document, result) = mutation(document)?;
+            let replacement = serde_json::to_string(&document)
+                .map_err(|error| DocumentError::Invalid(error.to_string()))?;
+            let saved: i32 = redis::Script::new(
+                "local current = redis.call('GET', KEYS[1])
+                 if ARGV[1] == '0' then
+                   if current then return 0 end
+                 elseif current ~= ARGV[2] then
+                   return 0
+                 end
+                 redis.call('SET', KEYS[1], ARGV[3])
+                 return 1",
+            )
+            .key(&key)
+            .arg(if previous.is_some() { "1" } else { "0" })
+            .arg(previous.as_deref().unwrap_or_default())
+            .arg(replacement)
+            .invoke_async(&mut connection)
+            .await
+            .map_err(|error| DocumentError::Storage(error.to_string()))?;
+            if saved == 1 {
+                return Ok(result);
+            }
+            tokio::task::yield_now().await;
+        }
+        Err(DocumentError::Conflict(
+            "Concurrent certificate updates did not settle.".into(),
+        ))
+    }
+
     pub async fn store_certificate(
         &self,
         organization_id: &str,
@@ -205,22 +270,22 @@ impl DocumentStore {
         request: InspectCertificateRequest,
     ) -> Result<StoredCertificate, DocumentError> {
         let attachment = checked_certificate(request)?;
-        let mut document = self.certificate_overrides(organization_id).await?;
-        insert_certificate(
-            &mut document,
-            "services",
-            service_id,
-            json!({
-                "cert_pem": attachment.cert_pem,
-                "cert_chain_pem": attachment.cert_chain_pem,
-                "cert_expires_at": attachment.cert_expires_at,
-                "updated_at": attachment.updated_at,
-                "x5c": attachment.x5c,
-            }),
-        )?;
-        self.save(&certificate_storage_key(organization_id), &document)
-            .await?;
-        Ok(attachment)
+        self.mutate_certificates(organization_id, |mut document| {
+            insert_certificate(
+                &mut document,
+                "services",
+                service_id,
+                json!({
+                    "cert_pem": attachment.cert_pem,
+                    "cert_chain_pem": attachment.cert_chain_pem,
+                    "cert_expires_at": attachment.cert_expires_at,
+                    "updated_at": attachment.updated_at,
+                    "x5c": attachment.x5c,
+                }),
+            )?;
+            Ok((document, attachment.clone()))
+        })
+        .await
     }
 
     pub async fn store_profile_certificate(
@@ -231,24 +296,57 @@ impl DocumentStore {
         request: InspectCertificateRequest,
     ) -> Result<StoredCertificate, DocumentError> {
         let attachment = checked_certificate(request)?;
-        let mut document = self.certificate_overrides(organization_id).await?;
-        insert_certificate(
-            &mut document,
-            "profiles",
-            profile_id,
-            json!({
-                "cert_pem": attachment.cert_pem,
-                "cert_chain_pem": attachment.cert_chain_pem,
-                "cert_expires_at": attachment.cert_expires_at,
-                "updated_at": attachment.updated_at,
-                "x5c": attachment.x5c,
-                "public_jwk": attachment.public_jwk,
-                "signing_key_reference": key_reference,
-            }),
-        )?;
-        self.save(&certificate_storage_key(organization_id), &document)
-            .await?;
-        Ok(attachment)
+        self.mutate_certificates(organization_id, |mut document| {
+            let issued = document
+                .get("passport_dsc_issuance")
+                .and_then(Value::as_object)
+                .is_some_and(|receipts| {
+                    receipts.values().any(|receipt| {
+                        receipt.get("dsc_profile_id").and_then(Value::as_str) == Some(profile_id)
+                    })
+                });
+            if issued {
+                let prior = document
+                    .get("profiles")
+                    .and_then(Value::as_object)
+                    .and_then(|profiles| profiles.get(profile_id))
+                    .ok_or_else(|| {
+                        DocumentError::Corrupt("issued DSC attachment is missing".into())
+                    })?;
+                let same = prior.get("cert_pem").and_then(Value::as_str)
+                    == Some(attachment.cert_pem.as_str())
+                    && prior.get("cert_chain_pem").and_then(Value::as_str)
+                        == Some(attachment.cert_chain_pem.as_str())
+                    && prior.get("cert_expires_at").and_then(Value::as_str)
+                        == Some(attachment.cert_expires_at.as_str())
+                    && prior.get("signing_key_reference").and_then(Value::as_str)
+                        == Some(key_reference)
+                    && prior.get("public_jwk") == Some(&attachment.public_jwk)
+                    && prior.get("x5c") == Some(&json!(attachment.x5c));
+                if !same {
+                    return Err(DocumentError::Conflict(
+                        "Issued passport DSC certificate requires governed replacement.".into(),
+                    ));
+                }
+                return Ok((document, attachment.clone()));
+            }
+            insert_certificate(
+                &mut document,
+                "profiles",
+                profile_id,
+                json!({
+                    "cert_pem": attachment.cert_pem,
+                    "cert_chain_pem": attachment.cert_chain_pem,
+                    "cert_expires_at": attachment.cert_expires_at,
+                    "updated_at": attachment.updated_at,
+                    "x5c": attachment.x5c,
+                    "public_jwk": attachment.public_jwk,
+                    "signing_key_reference": key_reference,
+                }),
+            )?;
+            Ok((document, attachment.clone()))
+        })
+        .await
     }
 
     pub async fn jwks(&self, organization_id: &str) -> Result<Value, DocumentError> {
@@ -445,12 +543,12 @@ impl DocumentStore {
                 -1 => {
                     return Err(DocumentError::Conflict(
                         "Signing registry lease expired before DID publication.".into(),
-                    ))
+                    ));
                 }
                 -2 => {
                     return Err(DocumentError::Conflict(
                         "DID web slug is already in use.".into(),
-                    ))
+                    ));
                 }
                 _ => tokio::task::yield_now().await,
             }

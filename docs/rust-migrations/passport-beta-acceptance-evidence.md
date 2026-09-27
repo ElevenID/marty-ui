@@ -1,0 +1,125 @@
+# Passport beta acceptance evidence
+
+`scripts/collect_passport_beta_acceptance.py` records a bounded prerequisite
+report from an already deployed **official aggregate beta** release. Run it on
+the beta host with the deployment's artifact directory:
+
+```powershell
+$env:PASSPORT_ACCEPTANCE_API_KEY = '<organization-scoped key from governed beta secrets>'
+py -3.12 scripts/collect_passport_beta_acceptance.py --artifact-dir C:\path\to\beta-artifacts --output C:\path\to\private-evidence\passport-beta-prerequisite.json --verify-attestation
+Remove-Item Env:PASSPORT_ACCEPTANCE_API_KEY
+```
+
+The collector checks the exact source and `marty.stack/v1` manifest identity,
+each required running beta Compose container and digest-pinned image, and the
+public Gateway's authenticated capability response and unauthenticated denial.
+It does not write Docker environment values, the API key, or HTTP bodies to the
+report. Keep the report in a private evidence directory. A local worktree
+snapshot, missing passport service, drifted image, unready capability, or
+unexpectedly open endpoint makes collection fail.
+
+After the protected release is deployed and managed issuer profiles plus the
+CSCA/DSC chain are enrolled, add `--application-file` with a private test
+application JSON. This opt-in mode requires `--verify-attestation` and a ready
+authenticated KMS issuer capability before it mutates beta. It creates one
+application through Gateway, generates data groups and SOD, submits to the
+bureau, polls production status, records an operator quality decision, and
+activates the result. The report records exact route outcomes and hashes of
+the input and job identifiers; it never writes applicant fields. This covers
+seven application route identities. Capability checks add an eighth. Flow
+ownership and the signed provider webhook remain separate probes. A passing
+quality decision is not evidence of physical booklet quality. A failed run
+writes a minimal `blocked` report and exits nonzero.
+
+The protected manual `Passport Beta Prerequisite Evidence` workflow runs on
+the beta WSL2 runner with the `beta-lifecycle` environment. Its input points
+to the official deployment artifact directory on that runner. The optional
+application exercise reads the beta organization's key and synthetic test
+application from environment secrets. The workflow uploads only the sanitized
+report, never the application file. It rechecks release and container identity
+after the mutating probe so a concurrent beta change cannot be hidden.
+
+The emitted schema is `marty.passport-beta-acceptance/v1` and its status is
+always `blocked`. `--verify-attestation` checks the release checksum and
+GitHub attestations for the manifest and all three UI OCI images; the result
+sets `release.signed_manifest_verified`. Verification constrains the signer to
+the official `cd.yml` workflow on protected main at the exact deployed source
+commit and rejects self-hosted signer provenance. It requires authenticated `gh`
+access to the release repository. The following probe keys
+remain unverified until protected acceptance runs execute and publish exact
+artifact lineage: `managed_csca_dsc_chain`, `sod_signature`,
+`nine_route_gateway_flow`, `packaged_image`, `physical_bureau_submission`,
+`signed_bureau_callback`, `legacy_drain`, `rollback`,
+`production_isolation`, and `physical_booklet_verified`. The last key requires
+independent provider evidence of a real personalized booklet. The beta bureau
+simulator's status and callback cannot establish it. Separate supported base
+Compose, self-host, and Kubernetes acceptance remains mandatory before Python
+retirement.
+
+## Protected beta acceptance run
+
+The manual `passport-beta-acceptance.yml` workflow uses the same protected
+`beta-lifecycle` environment and local beta runner. It requires the official
+released deployment artifact directory, beta API key, and synthetic test
+application. The runner authenticates the stack manifest and all three UI OCI
+images, checks six live beta services, and confirms KMS managed issuer mode.
+It then takes a read-only snapshot of both production Compose projects, queries
+beta PostgreSQL for in-flight jobs, legacy or malformed artifact rows, and
+active physical-document Flows using the deployment preflight's narrow
+expired verification orphan exemption,
+executes the seven application route identities, and repeats the beta and
+production checks. Only the beta Gateway receives mutating requests. The
+private application file is removed before artifact upload.
+
+The runner also reads the three live beta containers' native routing and
+internal-auth selectors without publishing their environment. It requires
+Gateway, Flow, and issuance-native to select the native owner and Flow to
+target `http://issuance-native:8005`. A Gateway request to
+`/v1/flows/capabilities` must expose the nine physical-document steps. A
+second Gateway request sends `{}` to the bureau webhook without a signature.
+The live Gateway selector determines whether the signed deployment's native
+owner must return its exact missing-header 422 response or the separately
+selected provider ingress must return its exact invalid-signature 401 response.
+This checks an ingress guard, not a valid signed callback. The report records
+these outcomes as partial `nine_route_gateway_flow` evidence and keeps that
+required probe false until a signed provider callback and an executed physical
+document Flow are verified. Only fixed route names, counts, statuses, and
+selector booleans enter the report.
+
+The full run can also perform the managed beta CSCA and DSC ceremonies when
+the protected `beta-lifecycle` environment supplies
+`PASSPORT_ACCEPTANCE_CERTIFICATE_PLAN_JSON` and separate governed operator
+session cookies in `PASSPORT_ACCEPTANCE_CSCA_OPERATOR_COOKIE` and
+`PASSPORT_ACCEPTANCE_DSC_OPERATOR_COOKIE`. The plan is a JSON object with
+`organization_id`, a `csca` request for the public self-signed ceremony, and
+a `dsc` request bound to its `issuer_did` and `certificate_id`. Both requests
+use `ICAO_EMRTD` and the official Gateway routes; issuer profile purposes
+distinguish CSCA from DSC even if the DID is the same. The runner checks the
+returned public certificates against the selected CSCA with OpenSSL strict
+chain and self-signature verification. The plan and both session cookies are
+validated before any beta mutation, and the plan's tenant and DSC issuer must
+match the private test application. The probe follows the issuer console's
+cookie-based Gateway request and organization query; it does not supply an API
+key or asserted user identity. Evidence contains certificate and DID hashes, never
+session cookies or certificate bodies. Partial ceremony input fails before
+any application or certificate mutation. If no ceremony input exists, the
+`managed_csca_dsc_chain` probe remains false.
+
+The production snapshot proves continuity **during this acceptance run**. It
+does not replace the deployment wrapper's before/after production comparison.
+The report sets `legacy_drain` and the additional
+`production_continuity_during_probe` probe when those live checks pass, while
+`production_isolation` remains false. The workflow fails while the report is
+`blocked`, but uploads the sanitized report from an attempted probe. The
+acceptance report remains `blocked` until SOD signature verification, full nine
+route Gateway/Flow and signed callback proof, physical provider submission,
+rollback, deployment-wide production isolation, and independently verified
+physical booklet receipt have executable evidence. It cannot qualify Python
+retirement on its own.
+
+The protected run uploads a GitHub artifact named
+`passport-beta-acceptance-<run-id>` containing the same name plus `.json`.
+A future retirement receipt uses
+`evidence_artifact: passport-beta-acceptance-<run-id>.json` and the exact file
+SHA-256, together with that successful run ID and its protected source SHA.
+This receipt must not be marked qualified while the report is `blocked`.

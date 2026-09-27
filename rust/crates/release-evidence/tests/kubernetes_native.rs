@@ -887,6 +887,8 @@ fn custom_shared_secret_and_control_plane_entries_are_paired_not_overwritten() {
         "DATABASE_URL",
         "TOKEN_HMAC_KEY",
         "CANVAS_CREDENTIALS_API_TOKEN",
+        "PERSONALIZATION_BUREAU_API_KEY",
+        "PERSONALIZATION_BUREAU_URL",
         "ISSUER_BASE_URL",
         "ORG_GRPC_TARGET",
         "CT_GRPC_TARGET",
@@ -897,6 +899,7 @@ fn custom_shared_secret_and_control_plane_entries_are_paired_not_overwritten() {
         let i = index(&baseline, "Deployment", "issuance");
         let custom = if native::SECRET_SETTINGS.contains(&name)
             || name == "CANVAS_CREDENTIALS_API_TOKEN"
+            || name == "PERSONALIZATION_BUREAU_API_KEY"
         {
             json!({"name":name,"valueFrom":{"secretKeyRef":{"name":"existing-custom-credentials","key":name}}})
         } else {

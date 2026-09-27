@@ -4,20 +4,25 @@ use std::sync::{
 };
 
 use axum::{
-    body::{to_bytes, Body},
-    extract::State,
-    http::{Request, StatusCode},
+    body::{to_bytes, Body, Bytes},
+    extract::{Path, State},
+    http::{HeaderMap, Request, StatusCode},
     routing::{get, post},
     Json, Router,
 };
+use base64::{engine::general_purpose::STANDARD, Engine as _};
 use chrono::{TimeZone, Utc};
 use hmac::{Hmac, Mac};
+use marty_issuance_service::config::IssuanceServiceConfig;
 use marty_issuance_service::migration;
 use marty_issuance_service::passport_artifact::{
     PassportArtifactCipher, PassportSensitiveArtifact,
 };
 use marty_issuance_service::passport_bureau::BureauClient;
 use marty_issuance_service::passport_http::{router as passport_router, PassportHttpService};
+use marty_issuance_service::passport_provider_ingress::{
+    router as provider_ingress_router, ProviderIngressState,
+};
 use marty_issuance_service::passport_repository::{
     PassportJobInsert, PassportJobPatch, PassportJobStatus, PostgresPassportRepository,
 };
@@ -30,6 +35,29 @@ use sha2::{Digest, Sha256};
 use sqlx::postgres::PgPoolOptions;
 use tokio::sync::oneshot;
 use tower::ServiceExt;
+
+async fn provider_ingress_request(
+    app: &Router,
+    body: &[u8],
+    signature: &str,
+) -> (StatusCode, Value) {
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/v1/passport/webhooks/personalization")
+                .header("x-personalization-signature", signature)
+                .header("content-type", "application/json")
+                .body(Body::from(body.to_vec()))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let status = response.status();
+    let body = to_bytes(response.into_body(), 1024 * 1024).await.unwrap();
+    (status, serde_json::from_slice(&body).unwrap())
+}
 
 #[cfg(feature = "passport-self-signed-test")]
 #[path = "support/issuance_process.rs"]
@@ -131,6 +159,7 @@ async fn exercise_packaged_self_signed_test_mode(database_url: &str, key_a: &str
     assert_eq!(signed.status(), StatusCode::OK);
     let signed: Value = signed.json().await.unwrap();
     assert_eq!(signed["status"], "SOD_SIGNED");
+    assert_eq!(signed["sod_signature_verified"], true);
     assert_eq!(signed["sod_sha256"].as_str().unwrap().len(), 64);
     drop(child);
     let pool = PgPoolOptions::new().connect(database_url).await.unwrap();
@@ -190,11 +219,17 @@ async fn exercise_native_passport_http(
         assert_eq!(body["data_groups"], json!({"DG1":"YQ==","DG2":"Yg=="}));
         Json(json!({"sod_der_base64":"U09E", "dsc_cert_pem":"synthetic-cert"}))
     }
+    type SubmitGate = Arc<Mutex<Option<(oneshot::Sender<()>, oneshot::Receiver<()>)>>>;
     async fn submit(
-        State(observed): State<Arc<Mutex<Vec<Value>>>>,
+        State((observed, gate)): State<(Arc<Mutex<Vec<Value>>>, SubmitGate)>,
         Json(body): Json<Value>,
     ) -> (StatusCode, Json<Value>) {
         observed.lock().unwrap().push(body);
+        let gated = { gate.lock().unwrap().take() };
+        if let Some((entered, release)) = gated {
+            entered.send(()).unwrap();
+            release.await.unwrap();
+        }
         (
             StatusCode::ACCEPTED,
             Json(json!({"bureau_job_id":"bureau-http", "status":"QUEUED"})),
@@ -216,6 +251,7 @@ async fn exercise_native_passport_http(
         .await
     }
     let observed = Arc::new(Mutex::new(Vec::new()));
+    let submit_gate: SubmitGate = Arc::new(Mutex::new(None));
     let stale_poll = Arc::new(AtomicBool::new(false));
     let poll_state = stale_poll.clone();
     let same_rank_poll = Arc::new(AtomicBool::new(false));
@@ -249,7 +285,7 @@ async fn exercise_native_passport_http(
                 }
             }),
         )
-        .with_state(observed.clone());
+        .with_state((observed.clone(), submit_gate.clone()));
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let base_url = format!("http://{}", listener.local_addr().unwrap());
     let server = tokio::spawn(async move { axum::serve(listener, mock).await.unwrap() });
@@ -353,10 +389,30 @@ async fn exercise_native_passport_http(
     .await;
     assert_eq!(status, StatusCode::OK);
     assert_eq!(signed["status"], "SOD_SIGNED");
+    assert_eq!(signed["sod_signature_verified"], false);
     assert_eq!(
         signed["sod_sha256"],
         hex::encode(sha2::Sha256::digest(b"SOD"))
     );
+    let (entered_tx, entered_rx) = oneshot::channel();
+    let (release_tx, release_rx) = oneshot::channel();
+    *submit_gate.lock().unwrap() = Some((entered_tx, release_rx));
+    let pending_app = app.clone();
+    let pending_path = format!("{path}/submit-personalization");
+    let pending_key = key_a.to_owned();
+    let pending_submit = tokio::spawn(async move {
+        passport_http_request(
+            &pending_app,
+            "POST",
+            &pending_path,
+            Some("org-a"),
+            Some(&pending_key),
+            json!({}),
+            None,
+        )
+        .await
+    });
+    entered_rx.await.unwrap();
     let (status, submitted) = passport_http_request(
         &app,
         "POST",
@@ -369,6 +425,12 @@ async fn exercise_native_passport_http(
     .await;
     assert_eq!(status, StatusCode::OK);
     assert_eq!(submitted["status"], "SUBMITTED");
+    release_tx.send(()).unwrap();
+    let (status, raced_submit) = pending_submit.await.unwrap();
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(raced_submit["bureau_job_id"], submitted["bureau_job_id"]);
+    assert_eq!(raced_submit["status"], "SUBMITTED");
+    assert_eq!(observed.lock().unwrap().len(), 2);
     assert_eq!(observed.lock().unwrap()[0]["document_type"], "TD1");
     let (status, _) = passport_http_request(
         &app,
@@ -393,6 +455,34 @@ async fn exercise_native_passport_http(
     .await;
     assert_eq!(status, StatusCode::OK);
     assert_eq!(polled["status"], "READY_FOR_ACTIVATION");
+    for operation in ["generate-data-groups", "generate-sod"] {
+        let (status, _) = passport_http_request(
+            &app,
+            "POST",
+            &format!("{path}/{operation}"),
+            Some("org-a"),
+            Some(key_a),
+            json!({}),
+            None,
+        )
+        .await;
+        assert_eq!(status, StatusCode::CONFLICT);
+    }
+    let (status, repeated) = passport_http_request(
+        &app,
+        "POST",
+        &format!("{path}/submit-personalization"),
+        Some("org-a"),
+        Some(key_a),
+        json!({}),
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(repeated["status"], "READY_FOR_ACTIVATION");
+    assert_eq!(repeated["bureau_job_id"], "bureau-http");
+    assert_eq!(repeated, polled);
+    assert_eq!(observed.lock().unwrap().len(), 2);
     let webhook = json!({"organization_id":"org-a", "bureau_job_id":"bureau-http", "status":"SHIPPED", "tracking_number":"webhook-tracking"});
     let (status, _) = passport_http_request(
         &app,
@@ -471,6 +561,20 @@ async fn exercise_native_passport_http(
     .await;
     assert_eq!(status, StatusCode::OK);
     assert_eq!(active["status"], "ACTIVE");
+    let (status, repeated_active) = passport_http_request(
+        &app,
+        "POST",
+        &format!("{path}/submit-personalization"),
+        Some("org-a"),
+        Some(key_a),
+        json!({}),
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(repeated_active["status"], "ACTIVE");
+    assert_eq!(repeated_active, active);
+    assert_eq!(observed.lock().unwrap().len(), 2);
     let job = repository
         .get(
             &keyring.authenticate(Some("org-a"), Some(key_a)).unwrap(),
@@ -555,6 +659,30 @@ async fn exercise_native_passport_http(
         .await
         .unwrap()
         .unwrap();
+    let mut stale_no_id = PassportJobPatch::new(PassportJobStatus::Submitted);
+    stale_no_id.bureau_job_id = Some(None);
+    stale_no_id.error_code = Some(Some("BUREAU_SUBMISSION_FAILED".into()));
+    assert!(repository
+        .update(
+            &principal,
+            &race_job.application_id,
+            "SUBMITTED",
+            &stale_no_id,
+            Utc::now(),
+        )
+        .await
+        .unwrap()
+        .is_none());
+    let still_bound = repository
+        .get(&principal, &race_job.application_id)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(
+        still_bound.bureau_job_id.as_deref(),
+        Some("bureau-poll-race")
+    );
+    assert!(still_bound.error_code.is_none());
     let race_path = format!(
         "/v1/passport/applications/{}/production-status",
         race_job.application_id
@@ -756,6 +884,61 @@ async fn passport_jobs_survive_restart_without_cross_tenant_reads() {
         .unwrap()
         .is_none());
 
+    // The opt-in internal handoff must retain the same PostgreSQL tenant
+    // boundary as the frozen per-tenant keyring, even though both trusted
+    // callers now present the same workload credential.
+    let internal_token = "synthetic-internal-passport-token-00000001";
+    let config = IssuanceServiceConfig::from_values(vec![
+        ("PASSPORT_NATIVE_HTTP_ENABLED".into(), "true".into()),
+        (
+            "PASSPORT_INTERNAL_SERVICE_AUTH_ENABLED".into(),
+            "true".into(),
+        ),
+        ("GRPC_SERVICE_TOKEN".into(), internal_token.into()),
+        ("DATABASE_URL".into(), database_url.clone()),
+    ])
+    .unwrap();
+    let internal = passport_router(
+        PassportHttpService::from_config(&config, pool.clone())
+            .unwrap()
+            .unwrap(),
+    );
+    let path = "/v1/passport/applications/application-a/production-status";
+    let (status, body) = passport_http_request(
+        &internal,
+        "GET",
+        path,
+        Some("org-a"),
+        Some(internal_token),
+        json!(null),
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(body["organization_id"], "org-a");
+    let (status, _) = passport_http_request(
+        &internal,
+        "GET",
+        path,
+        Some("org-b"),
+        Some(internal_token),
+        json!(null),
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+    let (status, _) = passport_http_request(
+        &internal,
+        "GET",
+        path,
+        Some("org-a"),
+        Some("wrong-token"),
+        json!(null),
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::UNAUTHORIZED);
+
     pool.close().await;
     let restarted_pool = PgPoolOptions::new()
         .max_connections(2)
@@ -824,12 +1007,64 @@ async fn passport_jobs_survive_restart_without_cross_tenant_reads() {
 
     let mut submitted = PassportJobPatch::new(PassportJobStatus::Submitted);
     submitted.bureau_job_id = Some(Some("bureau-a".into()));
+    submitted.bureau_provider_profile_id = Some("provider-a".into());
     submitted.tracking_number = Some(Some("submitted-tracking".into()));
     let submitted_job = restarted
         .update(&org_a, "application-a", "SOD_SIGNED", &submitted, next)
         .await
         .unwrap()
         .unwrap();
+    let rotated_provider = IssuanceServiceConfig::from_values(vec![
+        ("PASSPORT_NATIVE_HTTP_ENABLED".into(), "true".into()),
+        (
+            "PASSPORT_INTERNAL_SERVICE_AUTH_ENABLED".into(),
+            "true".into(),
+        ),
+        ("GRPC_SERVICE_TOKEN".into(), internal_token.into()),
+        ("DATABASE_URL".into(), database_url.clone()),
+        (
+            "PERSONALIZATION_BUREAU_URL".into(),
+            "http://127.0.0.1:1".into(),
+        ),
+        (
+            "PERSONALIZATION_BUREAU_PROVIDER_PROFILE_ID".into(),
+            "provider-b".into(),
+        ),
+    ])
+    .unwrap();
+    let rotated_router = passport_router(
+        PassportHttpService::from_config(&rotated_provider, restarted_pool.clone())
+            .unwrap()
+            .unwrap(),
+    );
+    let (rotation_status, rotation_body) = passport_http_request(
+        &rotated_router,
+        "GET",
+        "/v1/passport/applications/application-a/production-status",
+        Some("org-a"),
+        Some(internal_token),
+        json!(null),
+        None,
+    )
+    .await;
+    assert_eq!(
+        rotation_status,
+        StatusCode::SERVICE_UNAVAILABLE,
+        "{rotation_body}"
+    );
+    assert_eq!(
+        rotation_body["detail"],
+        "Personalization bureau provider is unavailable for this job"
+    );
+    assert_eq!(
+        restarted
+            .get(&org_a, "application-a")
+            .await
+            .unwrap()
+            .unwrap()
+            .status,
+        submitted_job.status
+    );
     let secret = "synthetic-bureau-webhook-secret";
     let bureau = BureauClient::new("http://127.0.0.1:1", "synthetic-key", Some(secret)).unwrap();
     let foreign_body = serde_json::to_vec(&serde_json::json!({
@@ -1049,6 +1284,7 @@ async fn passport_jobs_survive_restart_without_cross_tenant_reads() {
     restarted.insert(&org_b, &second_job, now).await.unwrap();
     let mut second_submitted = PassportJobPatch::new(PassportJobStatus::Submitted);
     second_submitted.bureau_job_id = Some(Some("bureau-a".into()));
+    second_submitted.bureau_provider_profile_id = Some("provider-b".into());
     let second_submitted_job = restarted
         .update(&org_b, "application-b", "DRAFT", &second_submitted, next)
         .await
@@ -1136,6 +1372,287 @@ async fn passport_jobs_survive_restart_without_cross_tenant_reads() {
             .status,
         "ACTIVE"
     );
+    assert_eq!(
+        restarted
+            .resolve_provider_callback_tenant("provider-a", "bureau-a")
+            .await
+            .unwrap()
+            .as_deref(),
+        Some("org-a")
+    );
+    assert_eq!(
+        restarted
+            .resolve_provider_callback_tenant("provider-b", "bureau-a")
+            .await
+            .unwrap()
+            .as_deref(),
+        Some("org-b")
+    );
+    assert!(restarted
+        .resolve_provider_callback_tenant("provider-foreign", "bureau-a")
+        .await
+        .unwrap()
+        .is_none());
+    assert!(restarted
+        .resolve_provider_callback_tenant("provider-a", "missing")
+        .await
+        .unwrap()
+        .is_none());
+    assert!(restarted
+        .resolve_provider_callback_tenant("", "bureau-a")
+        .await
+        .is_err());
+    assert!(sqlx::query(
+        "UPDATE issuance_service.physical_document_jobs
+         SET bureau_provider_profile_id='provider-a' WHERE id='job-b'",
+    )
+    .execute(&restarted_pool)
+    .await
+    .is_err());
+    assert_eq!(
+        restarted
+            .resolve_provider_callback_tenant("provider-b", "bureau-a")
+            .await
+            .unwrap()
+            .as_deref(),
+        Some("org-b")
+    );
+
+    // A same-name but nonunique partial-upgrade index cannot bypass the
+    // provider/job uniqueness gate on restart.
+    sqlx::query("DROP INDEX issuance_service.ux_physical_document_jobs_bureau_provider_job")
+        .execute(&restarted_pool)
+        .await
+        .unwrap();
+    sqlx::query(
+        "CREATE INDEX ux_physical_document_jobs_bureau_provider_job
+         ON issuance_service.physical_document_jobs (bureau_provider_profile_id, bureau_job_id)
+         WHERE bureau_provider_profile_id IS NOT NULL AND bureau_job_id IS NOT NULL",
+    )
+    .execute(&restarted_pool)
+    .await
+    .unwrap();
+    assert!(migration::migrate_passport(&restarted_pool).await.is_err());
+    sqlx::query("DROP INDEX issuance_service.ux_physical_document_jobs_bureau_provider_job")
+        .execute(&restarted_pool)
+        .await
+        .unwrap();
+    migration::migrate_passport(&restarted_pool).await.unwrap();
+
+    // Simulate a partially upgraded database with duplicate bound provider
+    // jobs. Both lookup and restart migration must fail before choosing a tenant.
+    sqlx::query("DROP INDEX issuance_service.ux_physical_document_jobs_bureau_provider_job")
+        .execute(&restarted_pool)
+        .await
+        .unwrap();
+    sqlx::query(
+        "UPDATE issuance_service.physical_document_jobs
+         SET bureau_provider_profile_id='provider-a' WHERE id='job-b'",
+    )
+    .execute(&restarted_pool)
+    .await
+    .unwrap();
+    assert!(restarted
+        .resolve_provider_callback_tenant("provider-a", "bureau-a")
+        .await
+        .is_err());
+    assert!(migration::migrate_passport(&restarted_pool).await.is_err());
+    sqlx::query(
+        "UPDATE issuance_service.physical_document_jobs
+         SET bureau_provider_profile_id='provider-b' WHERE id='job-b'",
+    )
+    .execute(&restarted_pool)
+    .await
+    .unwrap();
+    migration::migrate_passport(&restarted_pool).await.unwrap();
+    // The same tenant can receive the same bureau job ID from two distinct
+    // providers. A signed provider claim selects only its bound row; an older
+    // two-field callback remains ambiguous and cannot update either row.
+    let colliding_job = PassportJobInsert {
+        id: "job-provider-c".into(),
+        application_id: "application-provider-c".into(),
+        flow_execution_id: "flow-provider-c".into(),
+        application_template_id: "template-provider-c".into(),
+        credential_template_id: "credential-provider-c".into(),
+        revocation_profile_id: None,
+        delivery_destination_profile_id: "destination-provider-c".into(),
+        document_type: "TD1".into(),
+        country_code: "USA".into(),
+        issuer_did: None,
+        secure_artifact_ciphertext: "synthetic-encrypted-artifact".into(),
+        secure_artifact_reference: "physical-artifact://provider-c".into(),
+    };
+    restarted.insert(&org_a, &colliding_job, now).await.unwrap();
+    let mut colliding_submission = PassportJobPatch::new(PassportJobStatus::Submitted);
+    colliding_submission.bureau_job_id = Some(Some("bureau-a".into()));
+    colliding_submission.bureau_provider_profile_id = Some("provider-c".into());
+    restarted
+        .update(
+            &org_a,
+            "application-provider-c",
+            "DRAFT",
+            &colliding_submission,
+            next,
+        )
+        .await
+        .unwrap()
+        .unwrap();
+    let signed_event = |provider_profile_id: Option<&str>| {
+        let mut body = serde_json::json!({
+            "organization_id": "org-a",
+            "bureau_job_id": "bureau-a",
+            "status": "SHIPPED",
+        });
+        if let Some(provider_profile_id) = provider_profile_id {
+            body["provider_profile_id"] = serde_json::json!(provider_profile_id);
+        }
+        let body = serde_json::to_vec(&body).unwrap();
+        let mut mac = Hmac::<Sha256>::new_from_slice(secret.as_bytes()).unwrap();
+        mac.update(&body);
+        bureau
+            .parse_webhook(&body, &hex::encode(mac.finalize().into_bytes()))
+            .unwrap()
+    };
+    assert!(restarted
+        .apply_verified_webhook(&signed_event(None), next)
+        .await
+        .is_err());
+    assert!(restarted
+        .apply_verified_webhook(&signed_event(Some("provider-foreign")), next)
+        .await
+        .unwrap()
+        .is_none());
+    let provider_c_updated = restarted
+        .apply_verified_webhook(&signed_event(Some("provider-c")), next)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(provider_c_updated.application_id, "application-provider-c");
+    assert_eq!(provider_c_updated.status, "READY_FOR_ACTIVATION");
+    assert_eq!(
+        restarted
+            .get(&org_a, "application-a")
+            .await
+            .unwrap()
+            .unwrap()
+            .status,
+        "ACTIVE"
+    );
+    type ObservedCallbacks = Arc<Mutex<Vec<Vec<u8>>>>;
+    async fn mock_callback_signer(
+        State((signed, _)): State<(ObservedCallbacks, ObservedCallbacks)>,
+        Path(organization_id): Path<String>,
+        headers: HeaderMap,
+        Json(request): Json<Value>,
+    ) -> (StatusCode, Json<Value>) {
+        assert_eq!(organization_id, "org-a");
+        if headers["x-api-key"] != "dedicated-ingress-signing-key" {
+            return (StatusCode::UNAUTHORIZED, Json(json!({"detail": "denied"})));
+        }
+        let body = STANDARD
+            .decode(request["body_b64"].as_str().unwrap())
+            .unwrap();
+        signed.lock().unwrap().push(body);
+        (
+            StatusCode::OK,
+            Json(json!({"signature": format!("vault:v1:{}", STANDARD.encode([7u8; 32]))})),
+        )
+    }
+    async fn mock_native_callback(
+        State((_, delivered)): State<(ObservedCallbacks, ObservedCallbacks)>,
+        headers: HeaderMap,
+        body: Bytes,
+    ) -> Json<Value> {
+        assert_eq!(
+            headers["x-personalization-signature"],
+            format!("vault:v1:{}", STANDARD.encode([7u8; 32]))
+        );
+        delivered.lock().unwrap().push(body.to_vec());
+        Json(json!({"accepted": true}))
+    }
+    let signed = Arc::new(Mutex::new(Vec::<Vec<u8>>::new()));
+    let delivered = Arc::new(Mutex::new(Vec::<Vec<u8>>::new()));
+    let mock = Router::new()
+        .route(
+            "/internal/documents/{organization_id}/passport-callbacks/sign",
+            post(mock_callback_signer),
+        )
+        .route(
+            "/v1/passport/webhooks/personalization",
+            post(mock_native_callback),
+        )
+        .with_state((signed.clone(), delivered.clone()));
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let base_url = format!("http://{}", listener.local_addr().unwrap());
+    let mock_server = tokio::spawn(async move { axum::serve(listener, mock).await.unwrap() });
+    let ingress_state = ProviderIngressState {
+        provider_profile_id: "provider-a".into(),
+        webhook_secret: b"synthetic-webhook-secret".to_vec(),
+        repository: PostgresPassportRepository::new(restarted_pool.clone()),
+        signing_base_url: url::Url::parse(&format!("{base_url}/internal/documents")).unwrap(),
+        signing_api_key: "dedicated-ingress-signing-key".into(),
+        native_callback_url: url::Url::parse(&format!(
+            "{base_url}/v1/passport/webhooks/personalization"
+        ))
+        .unwrap(),
+        http: reqwest::Client::new(),
+    };
+    let ingress = provider_ingress_router(ingress_state.clone());
+    let raw_provider_body =
+        br#"{"bureau_job_id":"bureau-a","status":"SHIPPED","tracking_number":"TRACK-42"}"#;
+    let mut provider_mac = Hmac::<Sha256>::new_from_slice(b"synthetic-webhook-secret").unwrap();
+    provider_mac.update(raw_provider_body);
+    let provider_signature = hex::encode(provider_mac.finalize().into_bytes());
+    let (status, _) = provider_ingress_request(&ingress, raw_provider_body, "00").await;
+    assert_eq!(status, StatusCode::UNAUTHORIZED);
+    assert!(signed.lock().unwrap().is_empty());
+    let forged =
+        br#"{"bureau_job_id":"bureau-a","status":"SHIPPED","organization_id":"org-foreign"}"#;
+    let mut forged_mac = Hmac::<Sha256>::new_from_slice(b"synthetic-webhook-secret").unwrap();
+    forged_mac.update(forged);
+    let (status, _) = provider_ingress_request(
+        &ingress,
+        forged,
+        &hex::encode(forged_mac.finalize().into_bytes()),
+    )
+    .await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+    assert!(signed.lock().unwrap().is_empty());
+    let mut foreign_state = ingress_state.clone();
+    foreign_state.provider_profile_id = "provider-foreign".into();
+    let (status, _) = provider_ingress_request(
+        &provider_ingress_router(foreign_state),
+        raw_provider_body,
+        &provider_signature,
+    )
+    .await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+    assert!(signed.lock().unwrap().is_empty());
+    let mut unavailable_signer = ingress_state;
+    unavailable_signer.signing_api_key = "wrong-credential".into();
+    let (status, _) = provider_ingress_request(
+        &provider_ingress_router(unavailable_signer),
+        raw_provider_body,
+        &provider_signature,
+    )
+    .await;
+    assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE);
+    assert!(signed.lock().unwrap().is_empty());
+    assert!(delivered.lock().unwrap().is_empty());
+    let (status, body) =
+        provider_ingress_request(&ingress, raw_provider_body, &provider_signature).await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(body, json!({"accepted": true}));
+    let expected_internal = br#"{"organization_id":"org-a","provider_profile_id":"provider-a","bureau_job_id":"bureau-a","status":"SHIPPED","tracking_number":"TRACK-42"}"#;
+    assert_eq!(
+        signed.lock().unwrap().as_slice(),
+        &[expected_internal.to_vec()]
+    );
+    assert_eq!(
+        delivered.lock().unwrap().as_slice(),
+        &[expected_internal.to_vec()]
+    );
+    mock_server.abort();
     exercise_native_passport_http(restarted, keyring, cipher, &key_a, &key_b).await;
     #[cfg(feature = "passport-self-signed-test")]
     if let Ok(packaged_url) = std::env::var("MARTY_PASSPORT_PACKAGED_TEST_URL") {
@@ -1162,6 +1679,34 @@ async fn passport_jobs_survive_restart_without_cross_tenant_reads() {
     .await
     .unwrap();
     assert_eq!(released, ("DRAFT".into(), None, "TD2".into(), None));
+    let legacy_provider: Option<String> = sqlx::query_scalar(
+        "SELECT bureau_provider_profile_id FROM issuance_service.physical_document_jobs
+         WHERE id='released-python-job'",
+    )
+    .fetch_one(&restarted_pool)
+    .await
+    .unwrap();
+    assert!(legacy_provider.is_none());
+    sqlx::query(
+        "UPDATE issuance_service.physical_document_jobs
+         SET bureau_job_id='bureau-a' WHERE id='released-python-job'",
+    )
+    .execute(&restarted_pool)
+    .await
+    .unwrap();
+    // The fixture drops and recreates the table with the released varchar
+    // shape, so use a new connection without the pre-upgrade prepared plan.
+    let upgraded_pool = PgPoolOptions::new()
+        .max_connections(1)
+        .connect(&database_url)
+        .await
+        .unwrap();
+    assert!(PostgresPassportRepository::new(upgraded_pool.clone())
+        .resolve_provider_callback_tenant("provider-a", "bureau-a")
+        .await
+        .unwrap()
+        .is_none());
+    upgraded_pool.close().await;
     let id_type: String = sqlx::query_scalar(
         "SELECT data_type FROM information_schema.columns \
          WHERE table_schema='issuance_service' AND table_name='physical_document_jobs' \
@@ -1183,6 +1728,7 @@ async fn passport_jobs_survive_restart_without_cross_tenant_reads() {
         "ix_physical_document_jobs_flow_execution_id",
         "ix_physical_document_jobs_status",
         "ix_physical_document_jobs_bureau_job_id",
+        "ux_physical_document_jobs_bureau_provider_job",
     ] {
         assert!(indexes.iter().any(|existing| existing == index));
     }

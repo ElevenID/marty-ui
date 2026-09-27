@@ -1,0 +1,232 @@
+# Dedicated, unprovisioned passport rollback rehearsal model. Both surface
+# overlays below select this topology; neither inherits production resources.
+# Image references and secret files must come from one protected release/run.
+x-acceptance-labels: &acceptance-labels
+  com.marty.passport.acceptance.owner: supported-consumer
+  com.marty.passport.acceptance.run-id: ${PASSPORT_ACCEPTANCE_PLAN_RUN_ID:?bind protected plan run}
+  com.marty.passport.acceptance.source-commit: ${PASSPORT_ACCEPTANCE_SOURCE_COMMIT:?bind protected source}
+  com.marty.passport.acceptance.services-image: ${MARTY_SERVICES_IMAGE:?bind released services image}
+
+services:
+  postgres:
+    labels: *acceptance-labels
+    image: ${PASSPORT_ACCEPTANCE_POSTGRES_IMAGE:?pin disposable PostgreSQL image by digest}
+    environment:
+      POSTGRES_DB: marty
+      POSTGRES_USER: marty
+      POSTGRES_PASSWORD_FILE: /run/secrets/marty_db_password
+    secrets: [marty_db_password]
+    volumes: [postgres_data:/var/lib/postgresql/data]
+    healthcheck:
+      test: [CMD-SHELL, "pg_isready -U marty -d marty"]
+    networks: [private]
+
+  redis:
+    labels: *acceptance-labels
+    image: ${PASSPORT_ACCEPTANCE_REDIS_IMAGE:?pin disposable Redis image by digest}
+    volumes: [redis_data:/data]
+    healthcheck:
+      test: [CMD, redis-cli, ping]
+    networks: [private]
+
+  openbao:
+    labels: *acceptance-labels
+    image: ${PASSPORT_ACCEPTANCE_OPENBAO_IMAGE:?pin disposable OpenBao image by digest}
+    volumes: [openbao_data:/bao/data]
+    healthcheck:
+      test: [CMD, bao, status, -address=http://127.0.0.1:8200]
+    networks: [private]
+
+  db-migrate:
+    labels: *acceptance-labels
+    image: ${PASSPORT_ACCEPTANCE_MIGRATIONS_IMAGE:?pin signed migrations image by digest}
+    environment:
+      MARTY_DB_PASSWORD_FILE: /run/secrets/marty_db_password
+      MARTY_ORG_ADMIN_EMAIL: ${PASSPORT_ACCEPTANCE_ADMIN_EMAIL:?supply disposable admin email}
+      DATABASE_URL_TEMPLATE: postgresql+asyncpg://marty:$${MARTY_DB_PASSWORD}@postgres:5432/marty
+    secrets: [marty_db_password]
+    depends_on:
+      postgres:
+        condition: service_healthy
+    networks: [private]
+    restart: "no"
+
+  signing-keys:
+    labels: *acceptance-labels
+    image: ${MARTY_SERVICES_IMAGE:?pin signed services image by digest}
+    environment:
+      SERVICE_NAME: signing_keys
+      SIGNING_KEYS_REDIS_URL: redis://redis:6379/2
+      DATABASE_URL_TEMPLATE: postgresql+asyncpg://marty:$${MARTY_DB_PASSWORD}@postgres:5432/marty
+      MARTY_DB_PASSWORD_FILE: /run/secrets/marty_db_password
+      BAO_ADDR: http://openbao:8200
+      BAO_TOKEN_FILE: /run/secrets/bao_token
+      SIGNING_KEYS_INTERNAL_API_KEY_FILE: /run/secrets/signing_keys_internal_api_key
+    secrets: [marty_db_password, bao_token, signing_keys_internal_api_key]
+    depends_on:
+      db-migrate:
+        condition: service_completed_successfully
+      openbao:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    networks: [private]
+
+  issuance:
+    labels: *acceptance-labels
+    # Retained only for the bounded rollback rehearsal. Its digest and source
+    # must be independently tied to the pre-retirement Marty Credentials release.
+    image: ${PASSPORT_ACCEPTANCE_LEGACY_IMAGE:?pin legacy Python issuance image by digest}
+    environment:
+      DATABASE_URL: ${PASSPORT_ACCEPTANCE_DATABASE_URL:?bind disposable PostgreSQL URL}
+      ISSUANCE_SERVICE_PORT: "8005"
+      ISSUANCE_NATIVE_SERVICE_URL: http://issuance-native:8005
+      DIDCOMM_DELIVERY_OWNER: native
+      REDIS_URL: redis://redis:6379
+    depends_on:
+      db-migrate:
+        condition: service_completed_successfully
+    networks: [private]
+
+  issuance-native:
+    labels: *acceptance-labels
+    image: ${MARTY_SERVICES_IMAGE:?pin signed services image by digest}
+    environment:
+      SERVICE_NAME: issuance_native
+      ISSUANCE_SERVICE_PORT: "8005"
+      PASSPORT_NATIVE_HTTP_ENABLED: "true"
+      PASSPORT_INTERNAL_SERVICE_AUTH_ENABLED: "true"
+      PASSPORT_MANAGED_ISSUER_SIGNING_ENABLED: "true"
+      PASSPORT_KMS_ARTIFACTS_ENABLED: "true"
+      PASSPORT_KMS_CALLBACKS_ENABLED: "true"
+      DATABASE_URL_TEMPLATE: postgresql+asyncpg://marty:$${MARTY_DB_PASSWORD}@postgres:5432/marty
+      MARTY_DB_PASSWORD_FILE: /run/secrets/marty_db_password
+      BAO_ADDR: http://openbao:8200
+      BAO_TOKEN_FILE: /run/secrets/bao_token
+      SIGNING_KEYS_INTERNAL_URL: http://signing-keys:8017/internal
+      SIGNING_KEYS_INTERNAL_API_KEY_FILE: /run/secrets/signing_keys_internal_api_key
+      PERSONALIZATION_BUREAU_PROVIDER_PROFILE_ID: ${PASSPORT_ACCEPTANCE_PROVIDER_PROFILE_ID:?bind a disposable provider profile}
+      PASSPORT_TENANT_API_KEYS_FILE: /run/secrets/passport_tenant_api_keys
+    secrets: [marty_db_password, bao_token, signing_keys_internal_api_key, passport_tenant_api_keys]
+    depends_on:
+      signing-keys:
+        condition: service_started
+      db-migrate:
+        condition: service_completed_successfully
+    networks: [private]
+
+  flow:
+    labels: *acceptance-labels
+    image: ${MARTY_SERVICES_IMAGE:?pin signed services image by digest}
+    environment:
+      SERVICE_NAME: flow
+      FLOW_SERVICE_PORT: "8011"
+      PASSPORT_NATIVE_FLOW_ENABLED: "true"
+      PASSPORT_INTERNAL_SERVICE_AUTH_ENABLED: "true"
+      DATABASE_URL_TEMPLATE: postgresql+asyncpg://marty:$${MARTY_DB_PASSWORD}@postgres:5432/marty
+      MARTY_DB_PASSWORD_FILE: /run/secrets/marty_db_password
+      REDIS_URL: redis://redis:6379
+      ISSUANCE_NATIVE_SERVICE_URL: http://issuance-native:8005
+      ISSUANCE_SERVICE_URL: http://issuance:8005
+      SIGNING_KEYS_INTERNAL_URL: http://signing-keys:8017/internal
+      SIGNING_KEYS_INTERNAL_API_KEY_FILE: /run/secrets/signing_keys_internal_api_key
+      PASSPORT_TENANT_API_KEYS_FILE: /run/secrets/passport_tenant_api_keys
+    secrets: [marty_db_password, signing_keys_internal_api_key, passport_tenant_api_keys]
+    depends_on:
+      issuance-native:
+        condition: service_started
+      redis:
+        condition: service_healthy
+    networks: [private]
+
+  passport-callback-signer-supported:
+    labels: *acceptance-labels
+    image: ${MARTY_SERVICES_IMAGE:?pin signed services image by digest}
+    environment:
+      SERVICE_NAME: passport_callback_signer_supported
+      PASSPORT_SUPPORTED_CALLBACK_SIGNER_ENABLED: "true"
+      BAO_ADDR: http://openbao:8200
+      PASSPORT_CALLBACK_SIGNER_BAO_TOKEN_FILE: /run/secrets/bao_token
+      PASSPORT_CALLBACK_SIGNER_API_KEY_FILE: /run/secrets/callback_signer_api_key
+    secrets: [bao_token, callback_signer_api_key]
+    depends_on:
+      openbao:
+        condition: service_healthy
+    networks: [private]
+
+  passport-provider-ingress:
+    labels: *acceptance-labels
+    image: ${MARTY_SERVICES_IMAGE:?pin signed services image by digest}
+    environment:
+      SERVICE_NAME: passport_provider_ingress
+      PASSPORT_PROVIDER_INGRESS_ENABLED: "true"
+      PERSONALIZATION_BUREAU_PROVIDER_PROFILE_ID: ${PASSPORT_ACCEPTANCE_PROVIDER_PROFILE_ID:?bind a disposable provider profile}
+      PASSPORT_PROVIDER_WEBHOOK_SECRET_FILE: /run/secrets/provider_webhook_secret
+      PASSPORT_PROVIDER_SIGNER_API_KEY_FILE: /run/secrets/callback_signer_api_key
+      PASSPORT_PROVIDER_SIGNER_URL: http://passport-callback-signer-supported:8018/internal/documents
+      PASSPORT_PROVIDER_NATIVE_CALLBACK_URL: http://issuance-native:8005/v1/passport/webhooks/personalization
+      DATABASE_URL_TEMPLATE: postgresql://marty:$${MARTY_DB_PASSWORD}@postgres:5432/marty
+      MARTY_DB_PASSWORD_FILE: /run/secrets/marty_db_password
+    secrets: [provider_webhook_secret, callback_signer_api_key, marty_db_password]
+    depends_on:
+      passport-callback-signer-supported:
+        condition: service_started
+      issuance-native:
+        condition: service_started
+    networks: [private]
+
+  gateway:
+    labels: *acceptance-labels
+    image: ${MARTY_SERVICES_IMAGE:?pin signed services image by digest}
+    environment:
+      SERVICE_NAME: gateway
+      GATEWAY_PORT: "8000"
+      PASSPORT_NATIVE_GATEWAY_ENABLED: "true"
+      PASSPORT_PROVIDER_INGRESS_GATEWAY_ENABLED: "true"
+      PASSPORT_INTERNAL_SERVICE_AUTH_ENABLED: "true"
+      PASSPORT_PROVIDER_INGRESS_SERVICE_URL: http://passport-provider-ingress:8021
+      FLOW_SERVICE_URL: http://flow:8011
+      ISSUANCE_NATIVE_SERVICE_URL: http://issuance-native:8005
+      ISSUANCE_SERVICE_URL: http://issuance:8005
+      SIGNING_KEYS_SERVICE_URL: http://signing-keys:8017
+      GATEWAY_REQUIRED_READY_SERVICES: flows,issuance-native,signing-keys
+      REDIS_URL: redis://redis:6379
+      BAO_ADDR: http://openbao:8200
+      BAO_TOKEN_FILE: /run/secrets/bao_token
+      PASSPORT_TENANT_API_KEYS_FILE: /run/secrets/passport_tenant_api_keys
+    secrets: [bao_token, passport_tenant_api_keys]
+    depends_on:
+      flow:
+        condition: service_started
+      passport-provider-ingress:
+        condition: service_started
+    ports:
+      - "127.0.0.1:${PASSPORT_ACCEPTANCE_GATEWAY_PORT:?reserve disposable loopback port}:8000"
+    networks: [private]
+
+secrets:
+  marty_db_password:
+    file: ${PASSPORT_ACCEPTANCE_SECRET_DIR:?use disposable secret root}/marty_db_password
+  bao_token:
+    file: ${PASSPORT_ACCEPTANCE_SECRET_DIR:?use disposable secret root}/bao_token
+  signing_keys_internal_api_key:
+    file: ${PASSPORT_ACCEPTANCE_SECRET_DIR:?use disposable secret root}/signing_keys_internal_api_key
+  passport_tenant_api_keys:
+    file: ${PASSPORT_ACCEPTANCE_SECRET_DIR:?use disposable secret root}/passport_tenant_api_keys
+  callback_signer_api_key:
+    file: ${PASSPORT_ACCEPTANCE_SECRET_DIR:?use disposable secret root}/callback_signer_api_key
+  provider_webhook_secret:
+    file: ${PASSPORT_ACCEPTANCE_SECRET_DIR:?use disposable secret root}/provider_webhook_secret
+
+volumes:
+  postgres_data:
+    labels: *acceptance-labels
+  redis_data:
+    labels: *acceptance-labels
+  openbao_data:
+    labels: *acceptance-labels
+
+networks:
+  private:
+    internal: true
+    labels: *acceptance-labels

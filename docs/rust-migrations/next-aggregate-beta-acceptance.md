@@ -40,35 +40,46 @@ selected here.
 2. Select a fresh unused aggregate coordinate. Use
    `.github/workflows/prepare-stack-tag.yml` and `cd.yml`; retain the source,
    claim/transaction and run identities. Verify annotated tag/source, complete
-   checksums, signed manifest/provenance, release assets and all three OCI
-   digests. Do not overwrite earlier releases or reuse their acceptance evidence.
+   checksums, signed manifest/provenance, release assets and every OCI digest
+   listed in the signed aggregate manifest, including credentials issuance,
+   UI, services and migrations. Do not overwrite earlier releases or reuse
+   their acceptance evidence.
 3. From a clean released worktree, prepare one aggregate beta deployment using
    `scripts/deploy-local-beta-release.ps1 -OfficialStackRelease`, the reviewed
    recorder revision and fresh artifact paths. Verify backups, isolated
    migration rehearsal, workload identity, actual rendered configuration and
    authcrypt policy/CA pairing. `-PlanOnly` explicitly reports
    `didcomm_configuration_validated=false`; it is not runtime qualification.
-   Native passport remains off. The current `-EnablePassportNative` selector
-   and `docker-compose.profile.passport-native-beta.yml` still require five
-   file-backed tenant, artifact, signer, bureau, and callback secrets. **Do not
-   provision those files or select that profile:** the configuration does not
-   meet the KMS-only custody requirement. Its render checks and `-PlanOnly`
-   result (`passport_configuration_validated=false`) are not acceptance.
-   Replace the selector and service configuration before passport activation.
+   Native passport remains off until the protected passport PR chain and this
+   KMS-only selector have merged, the exact beta image digest is available,
+   and the runtime gates below pass. The former five-file passport overlay has
+   been replaced in the integration branch by managed issuer signing, Transit
+   artifact encryption, Transit callback MAC, an existing internal service
+   credential handoff, and a beta-only non-physical bureau simulator. **Do not
+   provision the old passport key files or select an older profile.** Render
+   checks and `-PlanOnly` are not runtime acceptance.
    Resolve an active, organization-scoped `ICAO_EMRTD` X.509 document-signer
    identity created through the existing issuer UI; bind it to the passport
    job and use its managed Signing Keys/KMS reference and published certificate
-   for opaque CMS/SOD signing. Configure its active public CSCA trust anchor
-   through the existing Rust CSCA lifecycle import and verify the DSC chain
-   before accepting a passport job. This review branch extends the issuer
-   UI to enroll a public CSCA lifecycle trust anchor against its managed CSCA
-   identity, deriving the KMS key binding server-side. This is not yet merged
-   or deployed. A read-only beta check on
+   for opaque CMS/SOD signing. Create a separate managed `ICAO_EMRTD` CSCA
+   issuer profile and obtain its public certificate through the reviewed
+   beta-only CSCA ceremony. Gateway requires `passport-certificate:issue-csca`
+   and a credential distinct from the DSC issuance credential; Signing Keys
+   signs the CSR and self-signed CA certificate through the active KMS profile,
+   verifies both signatures, and enrolls the public trust anchor with a
+   profile-revision fence. The older public CSCA import remains available.
+   With no external CA for this beta, use the issuer console's **Issue CSCA**
+   action on the active ES256 CSCA profile, record its certificate ID, then use
+   **Issue DSC** on the separate active ES256 document-signer profile with that
+   CSCA DID and certificate ID. Retain the displayed DSC request reference with
+   the exact request details so a lost response can be retried idempotently.
+   Verify the active CSCA-to-DSC chain before accepting a passport job. This
+   review branch is not yet merged or deployed. A read-only beta check on
    2026-09-26 found no CSCA lifecycle record for the pilot organization; its
    six existing issuer profiles include no `ICAO_EMRTD` document signer. This
-   remains a cutover gate: obtain a valid CA/DSC certificate chain whose keys
-   remain in KMS, import only the public CSCA material through the governed
-   tenant-scoped operator route, and verify the active trust-anchor projection before
+   remains a cutover gate: create separate managed CSCA and DSC keys, issue
+   the beta CSCA certificate through the governed operator route, issue the
+   DSC from that active CSCA, and verify the trust-anchor projection before
    starting passport issuance. Do not treat a created issuer profile or an
    attached DSC alone as proof that the chain gate is ready. The beta bureau
    is a synthetic, non-physical handoff; do not present its tracking result as
@@ -79,6 +90,19 @@ selected here.
    before adding any bureau provider; do not deploy a duplicate ICAO signer.
    No native cutover or Python retirement is permitted until these gates and
    their language-neutral behavior tests pass.
+
+   The integration branch puts callback HMAC signing on a beta-only signer
+   listener; the ordinary Signing Keys and Gateway listeners have no signing
+   route. Compose limits the listener to an internal network shared only by
+   OpenBao and the bureau, with no published port. Before the remaining apps
+   start, deployment attaches the existing OpenBao container and checks the
+   live network is internal, has exactly those three running containers, and
+   gives OpenBao its required DNS alias. Restore repeats that gate. These
+   script and Compose checks have not yet been exercised in a beta deployment.
+   The shared Rust image builds both beta-only binaries and its closed entrypoint
+   dispatches `passport-callback-signer` and `passport-beta-bureau` explicitly.
+   The exact-head protected image and release-contract jobs must pass before
+   selecting an aggregate beta release.
 
    The [Signing Keys public-route parity audit](signing-keys-public-parity-2026-09-26.md)
    found 24 Gateway-declared method/path pairs without Rust public handlers on
@@ -109,9 +133,15 @@ selected here.
    A further opt-in Gateway test now creates separate CSCA and DSC issuer
    profiles with a disposable OpenBao Transit instance, requests both PKCS#10
    CSRs, and compares each parsed CSR public key with the resolved issuer key.
-   It exercises KMS signing and Rust signature verification through Gateway;
-   it does not issue CA certificates or prove the DSC-to-CSCA chain. A further
-   opt-in Gateway test rotates a dedicated registered Transit service, checking
+   It exercises KMS signing and Rust signature verification through Gateway.
+   A further guarded Gateway/OpenBao/Redis acceptance now invokes the governed
+   CSCA ceremony and DSC issuance routes, verifies their certificate chain,
+   and checks replay, changed-input conflict, operator separation, and public
+   custody redaction. This is disposable test evidence, not live beta enrollment.
+   The same marked CI step now runs the Rust issuance managed-profile chain
+   test through a real disposable OpenBao signer and verifies its SOD signature,
+   data-group hash, tenant isolation, revocation, and stale-key rejection.
+   A further opt-in Gateway test rotates a dedicated registered Transit service, checking
    tenant denial, the managed-service rotation boundary, one KMS rotation,
    and persisted version history. This is not issuer-profile key rotation:
    shared managed services are rejected by the service route, and a future
@@ -121,6 +151,14 @@ selected here.
    denial and custody redaction. Rerun the route audit on protected main after
    the stack lands, and complete beta
    acceptance before describing the aggregate release as feature-complete.
+
+   A read-only Redis inventory on 2026-09-26 found zero beta and production
+   managed `cred-issuer-*` bindings or active profiles for `holder_binding`,
+   `presentation_signing`, or `oid4vp_request_signing`. The dedicated managed
+   prefixes can therefore retain purpose isolation without a current legacy
+   generic-prefix migration. Recheck both environments immediately before
+   cutover; if that inventory changes, preserve exact tenant-bound live keys
+   before retiring Python.
 
    Certificate-enrollment follow-up: the protected baseline's service CSR UI
    action lacked a matching public service route. This review branch restores
@@ -136,9 +174,9 @@ selected here.
    to the shared service. This review branch contains a distinct
    issuer-scoped Rust PKCS#10 CSR route and UI action that verifies the
    signature against the current KMS public key. Before beta acceptance,
-   exercise it against beta KMS, complete the CA issuance/chain enrollment
-   path, and verify the new
-   tenant-scoped operator path for public CSCA lifecycle import; no private key or raw signing
+   exercise it against beta KMS, complete the managed beta CSCA ceremony and
+   DSC chain enrollment, and verify the separate tenant-scoped operator
+   permission and trust-anchor projection; no private key or raw signing
    secret may pass through the UI, repository, or deployment files.
 
    Read-only beta inventory on 2026-09-26 found the existing pilot
@@ -151,9 +189,15 @@ selected here.
    chat), and verify the `credentials:issue` scope maps to passport initiation.
    No new tenant or passport-specific static keyring is required for the
    existing pilot organization. Recheck these counts at actual cutover.
-4. Explicitly hold `BetaOrigin` at `https://beta.elevenidllc.com`. The wrapper's
-   HTTPS syntax check alone does not establish that an origin is beta. Retain
-   fixed beta Compose projects/network and labeled-volume ownership checks.
+   At cutover, deployment stops and verifies application writers, then requires
+   zero in-flight legacy bureau jobs before switching to KMS callback
+   verification. The deployment preflight rejects an existing bureau without
+   the isolated signer: the current restore script cannot recover such a
+   pre-isolation passport snapshot. The inventoried beta has no bureau, so
+   this release is eligible for a first passport cutover only; recheck that
+   condition before deployment and keep the restore constraint visible.
+4. The wrapper requires `BetaOrigin` to equal `https://beta.elevenidllc.com`.
+   Retain fixed beta Compose projects/network and labeled-volume ownership checks.
    Capture and compare production's exact before/after identity and state;
    beta isolation checks do not independently prove production unchanged.
    Do not deploy, restore, reset or probe mutating endpoints on production.

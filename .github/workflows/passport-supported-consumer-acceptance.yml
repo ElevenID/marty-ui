@@ -1,0 +1,99 @@
+name: Passport Supported Consumer Acceptance
+
+on:
+  workflow_dispatch:
+    inputs:
+      release_tag:
+        description: Official aggregate release tag at the exact protected main commit.
+        required: true
+      base_project:
+        description: Existing disposable base Compose project, if provisioned.
+        required: false
+      selfhost_project:
+        description: Existing disposable selfhost Compose project, if provisioned.
+        required: false
+      kubernetes_namespace:
+        description: Existing disposable test namespace, if provisioned.
+        required: false
+      kubernetes_context:
+        description: Dedicated test cluster context. No production context is allowed.
+        required: false
+      base_origin:
+        description: Loopback origin published by the inspected base Gateway.
+        required: false
+      selfhost_origin:
+        description: Loopback origin published by the inspected selfhost Gateway.
+        required: false
+
+concurrency:
+  group: passport-supported-consumer-acceptance
+  cancel-in-progress: false
+
+permissions:
+  actions: read
+  contents: read
+  attestations: read
+  packages: read
+
+jobs:
+  collect:
+    if: github.ref == 'refs/heads/main'
+    runs-on: [self-hosted, linux, x64, canvas-oss-wsl2]
+    environment: beta-lifecycle
+    timeout-minutes: 30
+    env:
+      GH_TOKEN: ${{ github.token }}
+      RELEASE_TAG: ${{ inputs.release_tag }}
+      BASE_PROJECT: ${{ inputs.base_project }}
+      SELFHOST_PROJECT: ${{ inputs.selfhost_project }}
+      KUBERNETES_NAMESPACE: ${{ inputs.kubernetes_namespace }}
+      KUBERNETES_CONTEXT: ${{ inputs.kubernetes_context }}
+      BASE_ORIGIN: ${{ inputs.base_origin }}
+      SELFHOST_ORIGIN: ${{ inputs.selfhost_origin }}
+      PASSPORT_SUPPORTED_ACCEPTANCE_API_KEY: ${{ secrets.PASSPORT_SUPPORTED_ACCEPTANCE_API_KEY }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - name: Inspect disposable supported consumers against official release
+        id: collect
+        shell: bash
+        run: |
+          set -euo pipefail
+          release_dir="$RUNNER_TEMP/passport-supported-release-$GITHUB_RUN_ID"
+          mkdir -p "$release_dir"
+          report="passport-supported-consumer-acceptance-$GITHUB_RUN_ID.json"
+          rm -f "$report"
+          gh release download "$RELEASE_TAG" --repo ElevenID/marty-ui \
+            --pattern stack-manifest.json --pattern SHA256SUMS --dir "$release_dir"
+          args=(
+            --stack-manifest "$release_dir/stack-manifest.json"
+            --source-commit "$GITHUB_SHA"
+            --output "$report"
+          )
+          if [[ -n "$BASE_PROJECT" ]]; then args+=(--base-project "$BASE_PROJECT"); fi
+          if [[ -n "$SELFHOST_PROJECT" ]]; then args+=(--selfhost-project "$SELFHOST_PROJECT"); fi
+          if [[ -n "$KUBERNETES_NAMESPACE" ]]; then
+            args+=(--kubernetes-namespace "$KUBERNETES_NAMESPACE")
+          fi
+          if [[ -n "$KUBERNETES_CONTEXT" ]]; then
+            args+=(--kubernetes-context "$KUBERNETES_CONTEXT")
+          fi
+          if [[ -n "$BASE_ORIGIN" ]]; then args+=(--base-origin "$BASE_ORIGIN"); fi
+          if [[ -n "$SELFHOST_ORIGIN" ]]; then args+=(--selfhost-origin "$SELFHOST_ORIGIN"); fi
+          if [[ -n "$PASSPORT_SUPPORTED_ACCEPTANCE_API_KEY" ]]; then
+            key_file="$RUNNER_TEMP/passport-supported-key-$GITHUB_RUN_ID"
+            trap 'rm -f "$key_file"' EXIT
+            printf '%s' "$PASSPORT_SUPPORTED_ACCEPTANCE_API_KEY" > "$key_file"
+            chmod 600 "$key_file"
+            args+=(--api-key-file "$key_file")
+          fi
+          python3 scripts/collect_passport_supported_acceptance.py "${args[@]}"
+          jq -e '.schema == "marty.passport-supported-consumer-acceptance/v1"
+            and .status == "accepted"' "$report"
+      - name: Upload blocked supported consumer receipt
+        if: always() && (steps.collect.outcome == 'success' || steps.collect.outcome == 'failure')
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: passport-supported-consumer-acceptance-${{ github.run_id }}
+          path: passport-supported-consumer-acceptance-${{ github.run_id }}.json
+          if-no-files-found: error
+          retention-days: 30

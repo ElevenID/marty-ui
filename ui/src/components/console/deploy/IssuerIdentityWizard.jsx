@@ -34,7 +34,7 @@ const FORMATS_BY_PURPOSE = {
   vc_jwt_issuer: ['SD_JWT_VC', 'VC_JWT', 'JSON_LD'],
   mdoc_dsc: ['MDOC', 'ZK_MDOC'],
   x509_doc_signer: ['MDOC', 'ZK_MDOC', 'ICAO_EMRTD'],
-  csca: ['MDOC', 'ZK_MDOC'],
+  csca: ['MDOC', 'ZK_MDOC', 'ICAO_EMRTD'],
   jwks_signing: ['VC_JWT', 'SD_JWT_VC'],
 };
 

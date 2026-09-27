@@ -1,0 +1,15 @@
+{
+  "schema": "marty.passport-production-bureau-boundary/v1",
+  "qualification": "source configuration guard only; no physical bureau accepted",
+  "external_provider_receipt": null,
+  "cases": [
+    {"environment": "production", "url": "http://passport-beta-bureau:8020", "accepted": false},
+    {"environment": "prod", "url": "HTTP://PASSPORT-BETA-BUREAU:8020/", "accepted": false},
+    {"environment": "production", "url": "https://passport-beta-bureau./", "accepted": false},
+    {"environment": "production", "url": "https://passport-beta-bureau:443", "accepted": false},
+    {"environment": "production", "url": "http://passport-beta-bureau:8020", "native_enabled": false, "accepted": true},
+    {"environment": "beta", "url": "http://passport-beta-bureau:8020", "accepted": true},
+    {"environment": "production", "url": "https://passport-beta-bureau.example.test", "accepted": true},
+    {"environment": "production", "url": "https://physical-provider.example.test", "accepted": true}
+  ]
+}

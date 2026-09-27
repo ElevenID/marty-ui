@@ -1,0 +1,22 @@
+{
+  "schema": "marty.passport-supported-disposable-infra-images/v1",
+  "scope": "disposable-passport-acceptance-only",
+  "platform": "linux/amd64",
+  "images": {
+    "postgres": {
+      "reference": "docker.io/library/postgres@sha256:fceb6f86328c36f2438fae3b851b0cc57c4a7e69a58c866d9ce24281f2cf0c9c",
+      "version": "15.17-alpine3.23",
+      "source_revision": "21d696495924e89b0b6c43088e2783fabdef94be"
+    },
+    "redis": {
+      "reference": "docker.io/library/redis@sha256:8b81dd37ff027bec4e516d41acfbe9fe2460070dc6d4a4570a2ac5b9d59df065",
+      "version": "7.4.8-alpine",
+      "source_revision": "9d9b74b729d555ef784db63c1941b73d1c47a6f9"
+    },
+    "openbao": {
+      "reference": "quay.io/openbao/openbao@sha256:6c75c97223873807260352f269640935a07db0c26b3dbf12a98a36ec43ad9878",
+      "version": "2.5.2",
+      "source_revision": "932fcf892eba8d646a9bfc58a59ea3b2475b17fa"
+    }
+  }
+}

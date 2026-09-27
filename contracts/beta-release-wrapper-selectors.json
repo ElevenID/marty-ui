@@ -1,0 +1,20 @@
+{
+  "schema": "marty.beta-release-wrapper-selectors/v1",
+  "wrapper": "scripts/deploy-canvas-oss-beta.ps1",
+  "runner": "scripts/deploy-local-beta-release.ps1",
+  "beta_origin": "https://beta.elevenidllc.com",
+  "selectors": {
+    "EnablePassportNative": {
+      "default": false,
+      "explicit_true": "forward unchanged to the runner; select the KMS-only native passport profile",
+      "omitted": "do not forward; preserve the runner's default-off passport profile"
+    },
+    "EnableDidcommAuthcrypt": {
+      "default": false,
+      "explicit_true": "forward unchanged to the runner; apply the separately validated DIDComm authcrypt profile",
+      "omitted": "do not forward; preserve the runner's existing DIDComm default"
+    }
+  },
+  "independence": "The two selectors are independent. Enabling passport must not silently change DIDComm mode, and enabling DIDComm must not silently enable passport.",
+  "audit": "The runner records both effective selector values in its release plan and validates each selected Compose profile before mutation."
+}

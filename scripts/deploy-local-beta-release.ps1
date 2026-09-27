@@ -11,6 +11,8 @@ param(
 
     [switch]$EnablePassportNative,
 
+    [switch]$EnablePassportPhysicalProvider,
+
     [string]$CanvasOrigin = "https://canvas-test.elevenidllc.com",
 
     [string]$PilotOrganizationId = "00000000-0000-0000-0000-000000000001",
@@ -28,6 +30,12 @@ param(
 
 Set-StrictMode -Version Latest
 $ErrorActionPreference = "Stop"
+if ($EnablePassportPhysicalProvider -and -not $EnablePassportNative) {
+    throw "Physical provider beta mode requires -EnablePassportNative"
+}
+if ($EnablePassportPhysicalProvider -and -not $PlanOnly) {
+    throw "Physical provider beta deployment is blocked pending accepted provider and rollback evidence; use -PlanOnly"
+}
 if (Get-Variable PSNativeCommandUseErrorActionPreference -ErrorAction SilentlyContinue) {
     # Docker and Alembic emit normal progress logs on stderr. Native failures
     # remain fail-closed through the explicit $LASTEXITCODE checks below.
@@ -70,7 +78,8 @@ $didcommProfiles = @(Get-BetaDidcommProfiles -Enabled ([bool]$EnableDidcommAuthc
 foreach ($profile in $didcommProfiles) {
     $script:ComposeFiles += (Join-Path $script:RepoRoot $profile)
 }
-$passportProfiles = @(Get-BetaPassportProfiles -Enabled ([bool]$EnablePassportNative))
+$passportProfiles = @(Get-BetaPassportProfiles -Enabled ([bool]$EnablePassportNative) `
+    -PhysicalProvider ([bool]$EnablePassportPhysicalProvider))
 foreach ($profile in $passportProfiles) {
     $script:ComposeFiles += (Join-Path $script:RepoRoot $profile)
 }
@@ -95,6 +104,17 @@ $script:ApplicationServices = @(
     "canvas-sync-worker",
     "gateway"
 )
+$script:SelectedApplicationServices = @($script:ApplicationServices)
+if ($EnablePassportNative) {
+    if ($EnablePassportPhysicalProvider) {
+        $script:SelectedApplicationServices += "passport-callback-signer-supported"
+        $script:SelectedApplicationServices += "passport-provider-ingress"
+    }
+    else {
+        $script:SelectedApplicationServices += "passport-callback-signer"
+        $script:SelectedApplicationServices += "passport-beta-bureau"
+    }
+}
 $script:InfrastructureWriterServices = @("keycloak")
 
 function Write-Step([string]$Message) {
@@ -217,6 +237,160 @@ function Get-ComposeContainerId {
     if ($ids.Count -gt 1) { throw "Compose service resolved to multiple containers: $Service" }
     if ($ids.Count -eq 1) { return [string]$ids[0] }
     return $null
+}
+
+function Assert-NoInFlightPassportJobs {
+    $postgres = Get-ComposeContainerId -Service "postgres"
+    if (-not $postgres) { throw "Beta PostgreSQL container is unavailable for passport drain preflight" }
+    $exists = @(& docker exec $postgres psql -U postgres -d marty -At -v ON_ERROR_STOP=1 `
+        -c "SELECT to_regclass('issuance_service.physical_document_jobs') IS NOT NULL")
+    if ($LASTEXITCODE -ne 0 -or $exists.Count -ne 1 -or $exists[0] -notin @("t", "f")) {
+        throw "Could not verify the beta passport job table"
+    }
+    if ($exists[0] -eq "t") {
+        $pending = @(& docker exec $postgres psql -U postgres -d marty -At -v ON_ERROR_STOP=1 `
+            -c "SELECT count(*) FROM issuance_service.physical_document_jobs WHERE status NOT IN ('ACTIVE', 'FAILED', 'CANCELLED')")
+        if ($LASTEXITCODE -ne 0 -or $pending.Count -ne 1 -or $pending[0] -notmatch '^[0-9]+$') {
+            throw "Could not count in-flight passport jobs"
+        }
+        if ([int64]$pending[0] -ne 0) {
+            throw "In-flight passport jobs must drain before enabling KMS callback verification"
+        }
+
+        # A terminal Python Fernet row can still be selected by a later
+        # request. Native beta uses a Transit manifest and has no Fernet key.
+        # Parse only within PostgreSQL and return a count, never ciphertext.
+        $legacyArtifactSql = @'
+WITH artifacts AS (
+    SELECT CASE WHEN left(secure_artifact_ciphertext, 1) = '{'
+        THEN secure_artifact_ciphertext::jsonb ELSE NULL END AS manifest,
+        CASE WHEN left(secure_artifact_ciphertext, 1) = '{'
+        THEN secure_artifact_ciphertext::json ELSE NULL END AS raw_manifest
+    FROM issuance_service.physical_document_jobs
+)
+SELECT count(*) FROM artifacts WHERE CASE
+    WHEN manifest IS NULL THEN true
+    WHEN jsonb_typeof(manifest) IS DISTINCT FROM 'object' THEN true
+    WHEN (SELECT count(*) FROM json_each(raw_manifest)) <> 2 THEN true
+    WHEN manifest->>'schema' IS DISTINCT FROM 'marty.passport-artifact-manifest/v1'
+        OR jsonb_typeof(manifest->'chunks') IS DISTINCT FROM 'array'
+        OR manifest - 'schema' - 'chunks' <> '{}'::jsonb THEN true
+    WHEN jsonb_array_length(manifest->'chunks') NOT BETWEEN 1 AND 4096 THEN true
+    WHEN EXISTS (
+        SELECT 1 FROM jsonb_array_elements(manifest->'chunks') AS chunk(value)
+        WHERE jsonb_typeof(chunk.value) <> 'string'
+            OR left(chunk.value #>> '{}', 7) <> 'vault:v'
+            OR length(chunk.value #>> '{}') > 2000000
+    ) THEN true
+    ELSE false
+END
+'@
+        $legacyArtifacts = @(& docker exec $postgres psql -U postgres -d marty -At -v ON_ERROR_STOP=1 -c $legacyArtifactSql 2>$null)
+        if ($LASTEXITCODE -ne 0 -or $legacyArtifacts.Count -ne 1 -or $legacyArtifacts[0] -notmatch '^[0-9]+$') {
+            throw "Could not verify stored passport artifact format"
+        }
+        if ([int64]$legacyArtifacts[0] -ne 0) {
+            throw "Legacy or unknown passport artifacts block KMS-only cutover"
+        }
+    }
+
+    $flowTables = @(& docker exec $postgres psql -U postgres -d marty -At -v ON_ERROR_STOP=1 `
+        -c "SELECT to_regclass('flow_service.flow_instances') IS NOT NULL AND to_regclass('flow_service.flow_definitions') IS NOT NULL")
+    if ($LASTEXITCODE -ne 0 -or $flowTables.Count -ne 1 -or $flowTables[0] -ne "t") {
+        throw "Could not verify beta physical-document Flow storage"
+    }
+    $activeFlowsSql = @'
+SELECT count(*) FROM flow_service.flow_instances AS instance
+LEFT JOIN flow_service.flow_definitions AS definition ON definition.id = instance.flow_definition_id
+WHERE ((definition.id IS NULL AND NOT COALESCE((
+        instance.status = 'awaiting_wallet'
+        AND instance.expires_at < clock_timestamp()
+        AND instance.current_step_id IS NULL
+        AND instance.application_flow_key_hash IS NULL
+        AND instance.step_history::jsonb = '[]'::jsonb
+        AND instance.context::jsonb->>'flow_definition_reference' = '__verification__'
+        AND instance.context::jsonb->>'flow_type' = 'verification'
+        AND instance.context::jsonb->>'protocol_flow_type' = 'oid4vp_presentation'
+        AND jsonb_typeof(instance.context::jsonb->'auth_request') = 'string'
+        AND nullif(btrim(instance.context::jsonb->>'auth_request'), '') IS NOT NULL
+        AND jsonb_typeof(instance.context::jsonb->'oid4vp_profile') = 'string'
+        AND nullif(btrim(instance.context::jsonb->>'oid4vp_profile'), '') IS NOT NULL
+        AND jsonb_typeof(instance.context::jsonb->'request_uri') = 'string'
+        AND nullif(btrim(instance.context::jsonb->>'request_uri'), '') IS NOT NULL
+        AND instance.context::jsonb::text NOT ILIKE '%physical_document%'
+        AND instance.context::jsonb::text NOT ILIKE '%passport%'
+        AND ((instance.subject_type = 'holder'
+                AND instance.state_history::jsonb->0->>'event' = 'verification_started'
+                AND instance.state_history::jsonb->0->>'actor' = 'verification_api')
+            OR (instance.subject_type = 'applicant'
+                AND instance.state_history::jsonb = '[]'::jsonb))
+    ), false))
+    OR lower(definition.flow_type) = 'physical_document_issuance'
+    OR (lower(definition.flow_type) = 'custom'
+        AND definition.extension::jsonb->>'extends_flow_type' = 'physical_document_issuance')
+    OR instance.context::jsonb ? 'physical_document_job')
+    AND lower(instance.status) NOT IN ('completed', 'failed', 'cancelled', 'expired')
+'@
+    $activeFlows = @(& docker exec $postgres psql -U postgres -d marty -At -v ON_ERROR_STOP=1 -c $activeFlowsSql)
+    if ($LASTEXITCODE -ne 0 -or $activeFlows.Count -ne 1 -or $activeFlows[0] -notmatch '^[0-9]+$') {
+        throw "Could not count active physical-document Flows"
+    }
+    if ([int64]$activeFlows[0] -ne 0) {
+        throw "Active physical-document Flows must drain before KMS-only cutover"
+    }
+}
+
+function Assert-BetaCallbackSignerNetwork {
+    param([switch]$AttachOpenBao)
+    $name = "elevenid-beta-passport-callback-signing"
+    $expectedServices = @("openbao", "passport-beta-bureau", "passport-callback-signer")
+    $ids = @{}
+    foreach ($service in $expectedServices) {
+        $container = Get-ComposeContainerId -Service $service
+        if (-not $container) { throw "Missing beta callback network service: $service" }
+        $id = & docker inspect $container --format '{{.Id}}'
+        if ($LASTEXITCODE -ne 0 -or $id -notmatch '^[0-9a-f]{64}$') {
+            throw "Could not resolve beta callback network member: $service"
+        }
+        $running = & docker inspect $container --format '{{.State.Running}}'
+        if ($LASTEXITCODE -ne 0 -or $running -ne "true") {
+            throw "Beta callback network service is not running: $service"
+        }
+        $ids[$service] = [string]$id
+    }
+    $allowedIds = @($ids.Values | ForEach-Object { [string]$_ })
+    if ($AttachOpenBao) {
+        $beforeRaw = & docker network inspect $name
+        if ($LASTEXITCODE -ne 0) { throw "Isolated beta callback network is unavailable" }
+        $before = @(($beforeRaw -join "`n") | ConvertFrom-Json)
+        if ($before.Count -ne 1 -or $before[0].Internal -ne $true) {
+            throw "Isolated beta callback network is unavailable"
+        }
+        $beforeMembers = @($before[0].Containers.PSObject.Properties.Name)
+        if (@($beforeMembers | Where-Object { $_ -notin $allowedIds }).Count -ne 0) {
+            throw "Unexpected container joined the beta callback network"
+        }
+        if ($ids["openbao"] -notin $beforeMembers) {
+            Invoke-Checked -FilePath docker -Arguments @("network", "connect", "--alias", "openbao", $name, $ids["openbao"])
+        }
+    }
+    $networkRaw = & docker network inspect $name
+    if ($LASTEXITCODE -ne 0) { throw "Isolated beta callback network is unavailable" }
+    $network = @(($networkRaw -join "`n") | ConvertFrom-Json)
+    if ($network.Count -ne 1 -or $network[0].Internal -ne $true) {
+        throw "Isolated beta callback network is unavailable"
+    }
+    $members = @($network[0].Containers.PSObject.Properties.Name)
+    if ($members.Count -ne 3 -or @($members | Where-Object { $_ -notin $allowedIds }).Count -ne 0) {
+        throw "Beta callback network membership is not limited to OpenBao, bureau and signer"
+    }
+    $openbaoNetworksRaw = & docker inspect $ids["openbao"] --format '{{json .NetworkSettings.Networks}}'
+    if ($LASTEXITCODE -ne 0) { throw "Could not inspect OpenBao callback network aliases" }
+    $openbaoNetworks = ($openbaoNetworksRaw -join "`n") | ConvertFrom-Json
+    $openbaoEndpoint = $openbaoNetworks.PSObject.Properties[$name]
+    if (-not $openbaoEndpoint -or "openbao" -notin @($openbaoEndpoint.Value.Aliases)) {
+        throw "OpenBao must have the openbao alias on the isolated beta callback network"
+    }
 }
 
 function Assert-BetaVolume([string]$Name) {
@@ -544,8 +718,8 @@ $artifactPrefix = $script:ArtifactRoot.TrimEnd([IO.Path]::DirectorySeparatorChar
 if (-not $script:ArtifactDir.StartsWith($artifactPrefix, [System.StringComparison]::OrdinalIgnoreCase)) {
     throw "ArtifactDir must stay under $script:ArtifactRoot"
 }
-if ($BetaOrigin -notmatch '^https://[^/]+$') {
-    throw "BetaOrigin must be an absolute HTTPS origin without a path"
+if ($BetaOrigin -cne "https://beta.elevenidllc.com") {
+    throw "BetaOrigin must be https://beta.elevenidllc.com for the beta-only release"
 }
 if ($EnablePortableCanvas -and $CanvasOrigin -notmatch '^https://[^/]+$') {
     throw "CanvasOrigin must be an absolute HTTPS origin without a path"
@@ -591,10 +765,34 @@ $requiredFlowSecrets = @(
     "ISSUANCE_API_KEY",
     "SIGNING_KEYS_INTERNAL_API_KEY"
 )
+if ($EnablePassportNative) {
+    $requiredFlowSecrets += @(
+        "SIGNING_KEYS_DSC_ISSUE_GATEWAY_KEY",
+        "SIGNING_KEYS_CSCA_ISSUE_GATEWAY_KEY"
+    )
+}
 foreach ($name in $requiredFlowSecrets) {
     $secret = Get-DotEnvValue -Path $GeneratedEnvFile -Name $name
     if ($secret.Length -lt 32 -or $secret -match '^(?i:change[-_]?me|changeme|replace[-_]?me)') {
         throw "$name must be a non-placeholder value of at least 32 characters"
+    }
+}
+if ($EnablePassportNative) {
+    foreach ($purpose in @("DSC", "CSCA")) {
+        $gatewayKeyName = "SIGNING_KEYS_${purpose}_ISSUE_GATEWAY_KEY"
+        $gatewayKey = Get-DotEnvValue -Path $GeneratedEnvFile -Name $gatewayKeyName
+        foreach ($envFile in $script:EnvFiles) {
+            foreach ($line in Get-Content -LiteralPath $envFile) {
+                $entry = $line.Trim()
+                if (-not $entry -or $entry.StartsWith("#")) { continue }
+                $parts = $entry -split "=", 2
+                if ($parts.Count -ne 2) { continue }
+                if ($envFile -eq $GeneratedEnvFile -and $parts[0].Trim() -ceq $gatewayKeyName) { continue }
+                if ($parts[1].Contains($gatewayKey)) {
+                    throw "Beta $purpose operator credential is reused by another beta setting"
+                }
+            }
+        }
     }
 }
 $workloadIdentityPathNames = @(
@@ -623,6 +821,23 @@ foreach ($name in $workloadIdentityPathNames) {
         throw "$name does not identify a readable workload identity file"
     }
     $workloadIdentityPaths[$name] = (Resolve-Path -LiteralPath $path).Path
+}
+if ($EnablePassportNative) {
+    foreach ($purpose in @("DSC", "CSCA")) {
+        $gatewayKeyName = "SIGNING_KEYS_${purpose}_ISSUE_GATEWAY_KEY"
+        $gatewayKey = Get-DotEnvValue -Path $GeneratedEnvFile -Name $gatewayKeyName
+        foreach ($path in $workloadIdentityPaths.Values) {
+            try {
+                $mountedMaterial = Get-Content -LiteralPath $path -Raw -ErrorAction Stop
+            }
+            catch {
+                throw "Could not read a beta workload secret for $purpose credential isolation"
+            }
+            if ($mountedMaterial.Contains($gatewayKey)) {
+                throw "Beta $purpose operator credential is reused by a mounted workload secret"
+            }
+        }
+    }
 }
 if (-not (Get-Command openssl -ErrorAction SilentlyContinue)) {
     throw "OpenSSL is required to validate beta workload identity certificates"
@@ -724,6 +939,7 @@ Write-Host "Promotion eligible: $promotionEligible"
 Write-Host "Portable Canvas enabled: $([bool]$EnablePortableCanvas)"
 Write-Host "DIDComm authcrypt enabled: $([bool]$EnableDidcommAuthcrypt)"
 Write-Host "Native passport enabled: $([bool]$EnablePassportNative)"
+Write-Host "Physical provider beta mode: $([bool]$EnablePassportPhysicalProvider)"
 Write-Host "Compose project: $script:BetaProject"
 Write-Host "UI Compose project: $script:BetaUiProject"
 Write-Host "Network: $script:BetaNetwork"
@@ -741,6 +957,8 @@ if ($PlanOnly) {
         didcomm_profiles = $didcommProfiles
         didcomm_configuration_validated = $false
         passport_native_enabled = [bool]$EnablePassportNative
+        passport_physical_provider_enabled = [bool]$EnablePassportPhysicalProvider
+        passport_mode = if ($EnablePassportPhysicalProvider) { "physical_provider_blocked" } elseif ($EnablePassportNative) { "simulator" } else { "off" }
         passport_profiles = $passportProfiles
         passport_configuration_validated = $false
         canvas_origin = if ($EnablePortableCanvas) { $CanvasOrigin } else { $null }
@@ -748,7 +966,7 @@ if ($PlanOnly) {
         compose_project = $script:BetaProject
         ui_compose_project = $script:BetaUiProject
         network = $script:BetaNetwork
-        application_services = $script:ApplicationServices
+        application_services = $script:SelectedApplicationServices
         steps = @(
             "backup",
             $plannedImageStep,
@@ -768,7 +986,7 @@ if ($OfficialStackRelease) {
 }
 $releaseComposeFile = Join-Path $script:ArtifactDir "local-release-images.yml"
 $applicationImageArguments = @{
-    Services = $script:ApplicationServices
+    Services = $script:SelectedApplicationServices
     ReleaseVersion = $releaseVersion
     OfficialStackRelease = [bool]$OfficialStackRelease
     IssuanceReference = "$($martyIssuance.Uri)@$($martyIssuance.Digest)"
@@ -825,7 +1043,87 @@ Write-Step "Validate paired DIDComm configuration before image or service mutati
 Assert-BetaDidcommConfiguration -RepoRoot $script:RepoRoot -EnvFiles $script:EnvFiles `
     -ComposeFiles $script:ComposeFiles -AuthcryptEnabled ([bool]$EnableDidcommAuthcrypt)
 Assert-BetaPassportConfiguration -RepoRoot $script:RepoRoot -EnvFiles $script:EnvFiles `
-    -ComposeFiles $script:ComposeFiles -PassportEnabled ([bool]$EnablePassportNative)
+    -ComposeFiles $script:ComposeFiles -PassportEnabled ([bool]$EnablePassportNative) `
+    -PhysicalProvider ([bool]$EnablePassportPhysicalProvider)
+if ($EnablePassportNative) {
+    $existingPassportServices = @{}
+    foreach ($passportService in @("passport-beta-bureau", "passport-callback-signer")) {
+        $existing = @(& docker ps -a `
+            --filter "label=com.docker.compose.project=$script:BetaProject" `
+            --filter "label=com.docker.compose.service=$passportService" `
+            --format '{{.ID}}')
+        if ($LASTEXITCODE -ne 0) { throw "Could not inspect beta passport callback service state" }
+        $existing = @($existing | Where-Object { -not [string]::IsNullOrWhiteSpace($_) })
+        if ($existing.Count -gt 1) { throw "Ambiguous beta passport callback service state" }
+        if ($existing.Count -eq 1) {
+            $running = & docker inspect $existing[0] --format '{{.State.Running}}'
+            if ($LASTEXITCODE -ne 0 -or $running -ne "true") {
+                throw "Existing beta passport callback service must be running before deployment"
+            }
+        }
+        $existingPassportServices[$passportService] = $existing.Count
+    }
+    if ($existingPassportServices["passport-beta-bureau"] -gt 0 -and
+        $existingPassportServices["passport-callback-signer"] -eq 0) {
+        throw "Existing beta bureau has no isolated callback signer; this release cannot restore that legacy passport snapshot"
+    }
+    if ($existingPassportServices["passport-callback-signer"] -gt 0 -and
+        $existingPassportServices["passport-beta-bureau"] -eq 0) {
+        throw "Existing beta callback signer has no bureau; reconcile callback services before deploying"
+    }
+}
+if (-not $EnablePassportNative) {
+    foreach ($passportService in @("passport-beta-bureau", "passport-callback-signer")) {
+        $existing = @(& docker ps -a `
+            --filter "label=com.docker.compose.project=$script:BetaProject" `
+            --filter "label=com.docker.compose.service=$passportService" `
+            --format '{{.ID}}')
+        if ($LASTEXITCODE -ne 0) { throw "Could not inspect beta passport callback service state" }
+        if (@($existing | Where-Object { -not [string]::IsNullOrWhiteSpace($_) }).Count -ne 0) {
+            throw "Beta passport callback services exist; retire them explicitly before deploying without the passport profile"
+        }
+    }
+}
+if ($EnablePassportNative) {
+    $callbackNetworkName = "elevenid-beta-passport-callback-signing"
+    $networkNames = @(& docker network ls --format '{{.Name}}')
+    if ($LASTEXITCODE -ne 0) { throw "Could not inventory beta callback networks" }
+    $matchingNetworks = @($networkNames | Where-Object { $_ -ceq $callbackNetworkName })
+    if ($matchingNetworks.Count -gt 1) { throw "Ambiguous beta callback network" }
+    $callbackNetworkBefore = [ordered]@{
+        schema_version = 1
+        exists = $matchingNetworks.Count -eq 1
+        id = $null
+        members = @()
+    }
+    if ($callbackNetworkBefore.exists) {
+        $networkRaw = & docker network inspect $callbackNetworkName
+        if ($LASTEXITCODE -ne 0) { throw "Could not inspect existing beta callback network" }
+        $network = @(($networkRaw -join "`n") | ConvertFrom-Json)
+        if ($network.Count -ne 1 -or $network[0].Internal -ne $true -or
+            $network[0].Id -notmatch '^[0-9a-f]{64}$' -or
+            $network[0].Labels.'com.docker.compose.project' -ne $script:BetaProject) {
+            throw "Existing beta callback network is not an isolated beta Compose network"
+        }
+        $callbackNetworkBefore.id = [string]$network[0].Id
+        $callbackNetworkBefore.members = @($network[0].Containers.PSObject.Properties.Name)
+        $allowedBefore = @()
+        foreach ($service in @("openbao", "passport-beta-bureau", "passport-callback-signer")) {
+            $container = Get-ComposeContainerId -Service $service
+            if ($container) {
+                $id = & docker inspect $container --format '{{.Id}}'
+                if ($LASTEXITCODE -ne 0 -or $id -notmatch '^[0-9a-f]{64}$') {
+                    throw "Could not identify existing beta callback container: $service"
+                }
+                $allowedBefore += [string]$id
+            }
+        }
+        if (@($callbackNetworkBefore.members | Where-Object { $_ -notin $allowedBefore }).Count -ne 0) {
+            throw "Existing beta callback network has an unexpected member"
+        }
+    }
+    $callbackNetworkBefore | ConvertTo-Json -Depth 4 | Set-Content -LiteralPath (Join-Path $script:ArtifactDir "passport-callback-network-before.json") -Encoding utf8
+}
 if ($OfficialStackRelease) {
     $migrationImage = [string]$officialPlan.images.migrations.reference
     $uiImage = [string]$officialPlan.images.ui.reference
@@ -849,7 +1147,7 @@ $uiContainer = Get-ComposeContainerId -Service "ui-prod" -Ui
 if (-not $uiContainer) { throw "Required beta UI service is absent" }
 Invoke-Checked -FilePath docker -Arguments @("inspect", $uiContainer, "--format", "{{.State.Status}}")
 
-$preDeployContainers = Get-ServiceRecords ($script:ApplicationServices + $script:InfrastructureWriterServices) -IncludeUi
+$preDeployContainers = Get-ServiceRecords ($script:SelectedApplicationServices + $script:InfrastructureWriterServices) -IncludeUi
 $preDeployContainers | ConvertTo-Json -Depth 5 | Set-Content -LiteralPath (Join-Path $script:ArtifactDir "pre-deploy-containers.json") -Encoding utf8
 
 Write-Step "Capture preflight backup for isolated migration rehearsal"
@@ -1083,9 +1381,10 @@ Write-Step "Enter maintenance window and apply live migration"
 Assert-BetaDidcommConfiguration -RepoRoot $script:RepoRoot -EnvFiles $script:EnvFiles `
     -ComposeFiles $script:ComposeFiles -AuthcryptEnabled ([bool]$EnableDidcommAuthcrypt)
 Assert-BetaPassportConfiguration -RepoRoot $script:RepoRoot -EnvFiles $script:EnvFiles `
-    -ComposeFiles $script:ComposeFiles -PassportEnabled ([bool]$EnablePassportNative)
+    -ComposeFiles $script:ComposeFiles -PassportEnabled ([bool]$EnablePassportNative) `
+    -PhysicalProvider ([bool]$EnablePassportPhysicalProvider)
 $canvasLtiIssuerDid = $null
-$maintenanceServices = $script:ApplicationServices + $script:InfrastructureWriterServices + @("ui-prod")
+$maintenanceServices = $script:SelectedApplicationServices + $script:InfrastructureWriterServices + @("ui-prod")
 $maintenanceContainers = @($preDeployContainers | Where-Object { $_.running -and $_.service -in $maintenanceServices } | ForEach-Object { $_.container_id })
 if ($maintenanceContainers.Count -gt 0) {
     Invoke-Checked -FilePath docker -Arguments (@("stop") + $maintenanceContainers)
@@ -1097,6 +1396,10 @@ try {
         if ($LASTEXITCODE -ne 0 -or $running -ne "false") {
             throw "Beta writer did not stop cleanly: $container"
         }
+    }
+
+    if ($EnablePassportNative) {
+        Assert-NoInFlightPassportJobs
     }
 
     Write-Step "Capture quiesced maintenance snapshot"
@@ -1178,8 +1481,17 @@ try {
     Wait-ForServiceHealth $script:InfrastructureWriterServices
 
     Write-Step "Recreate application containers from coordinated images"
-    Invoke-Compose -Arguments (@("up", "--detach", "--no-build", "--no-deps", "--force-recreate") + $script:ApplicationServices)
-    Wait-ForServiceHealth $script:ApplicationServices
+    $remainingServices = @($script:SelectedApplicationServices)
+    if ($EnablePassportNative) {
+        $callbackServices = @("passport-callback-signer", "passport-beta-bureau")
+        Invoke-Compose -Arguments (@("up", "--detach", "--no-build", "--no-deps", "--force-recreate") + $callbackServices)
+        Wait-ForServiceHealth $callbackServices
+        Assert-BetaCallbackSignerNetwork -AttachOpenBao
+        $remainingServices = @($remainingServices | Where-Object { $_ -notin $callbackServices })
+    }
+    Invoke-Compose -Arguments (@("up", "--detach", "--no-build", "--no-deps", "--force-recreate") + $remainingServices)
+    Wait-ForServiceHealth $script:SelectedApplicationServices
+    if ($EnablePassportNative) { Assert-BetaCallbackSignerNetwork }
 
     Write-Step "Recreate public UI from immutable image"
     $env:MARTY_UI_RELEASE_IMAGE = $uiImage
@@ -1262,7 +1574,7 @@ Invoke-Checked -FilePath python -Arguments @(
     "--output", $deployedDemoManifestPath
 )
 
-$postDeployContainers = Get-ServiceRecords $script:ApplicationServices -IncludeUi
+$postDeployContainers = Get-ServiceRecords $script:SelectedApplicationServices -IncludeUi
 $deploymentManifest = [ordered]@{
     schema_version = 1
     release_version = $releaseVersion
@@ -1271,6 +1583,7 @@ $deploymentManifest = [ordered]@{
     source_kind = $sourceKind
     marty_ui_sha = $sourceId
     beta_origin = $BetaOrigin
+    passport_provider_mode = if ($EnablePassportPhysicalProvider) { "physical" } elseif ($EnablePassportNative) { "simulator" } else { "off" }
     compose_project = $script:BetaProject
     ui_compose_project = $script:BetaUiProject
     network = $script:BetaNetwork

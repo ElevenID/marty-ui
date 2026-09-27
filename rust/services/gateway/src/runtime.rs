@@ -26,6 +26,8 @@ use axum::{
 };
 use chrono::Utc;
 use futures_core::Stream;
+use marty_passport_auth::PassportTenantCredentialSource;
+#[cfg(test)]
 use marty_passport_auth::PassportTenantKeyring;
 use mmf_platform::{
     ContentTypeDecision, EntityTagDecision, EntityTagPolicy, GatewayProxy, GatewayRequest,
@@ -93,9 +95,11 @@ pub struct GatewayRuntimeState {
     pub did_web_authority: String,
     pub default_organization_id: Option<String>,
     pub signing_service_api_key: String,
+    pub dsc_issue_gateway_key: Option<String>,
+    pub csca_issue_gateway_key: Option<String>,
     pub issuance_service_api_key: String,
     pub passport_native_gateway_enabled: bool,
-    pub passport_tenant_keys: Option<PassportTenantKeyring>,
+    pub passport_tenant_keys: Option<PassportTenantCredentialSource>,
     pub service_token: Option<String>,
     pub release_identity: ReleaseIdentity,
     pub maximum_body_bytes: usize,
@@ -202,6 +206,8 @@ impl GatewayRuntimeState {
                 .map(|value| value.trim().to_owned())
                 .filter(|value| !value.is_empty()),
             signing_service_api_key,
+            dsc_issue_gateway_key: None,
+            csca_issue_gateway_key: None,
             issuance_service_api_key,
             passport_native_gateway_enabled: false,
             passport_tenant_keys: None,
@@ -224,10 +230,43 @@ impl GatewayRuntimeState {
         Ok(self)
     }
 
+    pub fn with_dsc_issue_gateway_key(
+        mut self,
+        key: Option<String>,
+    ) -> Result<Self, mmf_platform::PlatformError> {
+        if let Some(key) = &key {
+            if key.len() < 32 || key == &self.signing_service_api_key {
+                return Err(mmf_platform::PlatformError::InvalidConfiguration(
+                    "DSC issuance credential must be distinct and at least 32 bytes".into(),
+                ));
+            }
+        }
+        self.dsc_issue_gateway_key = key;
+        Ok(self)
+    }
+
+    pub fn with_csca_issue_gateway_key(
+        mut self,
+        key: Option<String>,
+    ) -> Result<Self, mmf_platform::PlatformError> {
+        if let Some(key) = &key {
+            if key.len() < 32
+                || key == &self.signing_service_api_key
+                || self.dsc_issue_gateway_key.as_ref() == Some(key)
+            {
+                return Err(mmf_platform::PlatformError::InvalidConfiguration(
+                    "CSCA issuance credential must be distinct and at least 32 bytes".into(),
+                ));
+            }
+        }
+        self.csca_issue_gateway_key = key;
+        Ok(self)
+    }
+
     pub fn with_passport_native_gateway(
         mut self,
         enabled: bool,
-        tenant_keys: Option<PassportTenantKeyring>,
+        tenant_keys: Option<PassportTenantCredentialSource>,
     ) -> Result<Self, mmf_platform::PlatformError> {
         if enabled && tenant_keys.is_none() {
             return Err(mmf_platform::PlatformError::InvalidConfiguration(
@@ -989,6 +1028,16 @@ async fn proxy_handler(
             Ok(path) => path,
             Err((status, detail)) => return detail_response(status, detail),
         };
+    if public_path == "/v1/signing-keys/issuer-identities/dsc-certificate"
+        && state.dsc_issue_gateway_key.is_none()
+    {
+        return detail_response(503, "DSC issuance authority is unavailable");
+    }
+    if public_path == "/v1/signing-keys/issuer-identities/csca-self-signed-certificate"
+        && (!state.passport_native_gateway_enabled || state.csca_issue_gateway_key.is_none())
+    {
+        return detail_response(503, "Beta CSCA issuance authority is unavailable");
+    }
     let mut gateway_request = GatewayRequest::new(method, &upstream_path, now_ms());
     gateway_request.query = query_pairs(parts.uri.query());
     gateway_request.headers = request_headers(&parts.headers);
@@ -2929,6 +2978,30 @@ fn proxy_overrides(
             .headers
             .insert("x-api-key".into(), state.issuance_service_api_key.clone());
     }
+    // Only the exact Gateway-authorized DSC issuance action receives the
+    // internal Signing Keys credential. GatewayProxy strips caller identity
+    // and credential headers before applying these trusted overrides.
+    if path == "/v1/signing-keys/issuer-identities/dsc-certificate"
+        && identity.required_permission.as_deref() == Some("passport-certificate:issue")
+        && identity.organization_id.is_some()
+        && identity.user_id.is_some()
+        && identity.api_key_id.is_none()
+    {
+        if let Some(key) = &state.dsc_issue_gateway_key {
+            overrides.headers.insert("x-api-key".into(), key.clone());
+        }
+    }
+    if path == "/v1/signing-keys/issuer-identities/csca-self-signed-certificate"
+        && state.passport_native_gateway_enabled
+        && identity.required_permission.as_deref() == Some("passport-certificate:issue-csca")
+        && identity.organization_id.is_some()
+        && identity.user_id.is_some()
+        && identity.api_key_id.is_none()
+    {
+        if let Some(key) = &state.csca_issue_gateway_key {
+            overrides.headers.insert("x-api-key".into(), key.clone());
+        }
+    }
     let owner = route_ownership(path);
     if requires_gateway_service_token(owner.service) {
         if let Some(service_token) = &state.service_token {
@@ -4329,8 +4402,32 @@ pub async fn authorize_tenant_request(
         return TenantAuthorizationOutcome::Bypass;
     };
     let Some(organization_id) = organization_id.and_then(normalize_id) else {
-        return TenantAuthorizationOutcome::Bypass;
+        return if matches!(
+            required.permission,
+            "passport-certificate:issue" | "passport-certificate:issue-csca"
+        ) {
+            TenantAuthorizationOutcome::Denied(TenantAuthorizationError {
+                status: 403,
+                detail: "Authenticated organization context is required".into(),
+            })
+        } else {
+            TenantAuthorizationOutcome::Bypass
+        };
     };
+    if matches!(
+        required.permission,
+        "passport-certificate:issue" | "passport-certificate:issue-csca"
+    ) && identity
+        .filter(|identity| identity.source == AuthenticationSource::Session)
+        .and_then(|identity| identity.session_organization_id.as_deref())
+        .and_then(normalize_id)
+        != Some(organization_id)
+    {
+        return TenantAuthorizationOutcome::Denied(TenantAuthorizationError {
+            status: 403,
+            detail: "Authenticated organization context is required".into(),
+        });
+    }
     authorize_required_tenant(required, organization_id, identity, memberships).await
 }
 
@@ -4487,6 +4584,10 @@ fn map_failure(
 
 #[cfg(test)]
 mod tests {
+    mod passport_gateway_postgres {
+        include!("runtime/passport_gateway_postgres.rs");
+    }
+
     use super::*;
     use axum::extract::Path;
     use axum::http::HeaderMap;
@@ -4497,8 +4598,11 @@ mod tests {
     };
 
     use marty_signing_keys::{
+        csca_lifecycle::CscaLifecycleStore,
         documents::{DocumentStore as SigningDocumentStore, PublishJwkRequest},
-        http::router_with_dependencies as signing_router,
+        http::{
+            router_with_dependencies as signing_router, router_with_dependencies_and_ceremony_keys,
+        },
         profiles::ProfileStore as SigningProfileStore,
         registry::RegistryStore as SigningRegistryStore,
     };
@@ -6044,6 +6148,7 @@ mod tests {
                     r#"{"org-1":"native-passport-key-for-org-1-00000001","org-2":"native-passport-key-for-org-2-00000002"}"#,
                 )
                 .expect("test tenant keys")
+                .into()
             }),
         )
         .expect("passport gateway");
@@ -6487,6 +6592,70 @@ mod tests {
             upstream.headers.get("x-api-key").map(String::as_str),
             Some("native-passport-key-for-org-1-00000001")
         );
+    }
+
+    #[tokio::test]
+    async fn internal_passport_handoff_keeps_public_api_key_organizations_isolated() {
+        let recorder = Arc::new(ActorRecordingUpstream::default());
+        let mut state =
+            runtime_state_with_upstream_and_passport(Arc::new(NoOwner), recorder.clone(), true);
+        let internal_token = "synthetic-internal-passport-token-00000001";
+        Arc::get_mut(&mut state).unwrap().passport_tenant_keys =
+            Some(PassportTenantCredentialSource::internal_service_token(internal_token).unwrap());
+        let router = gateway_router(state);
+        for (public_key, organization_id) in [
+            ("passport-gateway-key-org-1", "org-1"),
+            ("passport-gateway-key-org-2", "org-2"),
+        ] {
+            let response = router
+                .clone()
+                .oneshot(
+                    Request::builder()
+                        .method("POST")
+                        .uri("/v1/passport/applications")
+                        .header("content-type", "application/json")
+                        .header("x-api-key", public_key)
+                        .body(Body::from(
+                            json!({"organization_id": organization_id}).to_string(),
+                        ))
+                        .unwrap(),
+                )
+                .await
+                .unwrap();
+            assert_eq!(response.status(), StatusCode::OK);
+            let captured = recorder.0.lock().unwrap();
+            let (_, upstream) = captured.last().unwrap();
+            assert_eq!(
+                upstream
+                    .headers
+                    .get("x-organization-id")
+                    .map(String::as_str),
+                Some(organization_id)
+            );
+            assert_eq!(
+                upstream.headers.get("x-api-key").map(String::as_str),
+                Some(internal_token)
+            );
+            assert_ne!(
+                upstream.headers.get("x-api-key").map(String::as_str),
+                Some(public_key)
+            );
+        }
+        let before = recorder.0.lock().unwrap().len();
+        let response = router
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/v1/passport/applications")
+                    .header("content-type", "application/json")
+                    .header("x-api-key", "passport-gateway-key-org-1")
+                    .body(Body::from(r#"{"organization_id":"org-2"}"#))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::FORBIDDEN);
+        assert_eq!(recorder.0.lock().unwrap().len(), before);
     }
 
     fn forged_actor_request(authentication: Option<(&str, &str)>, public: bool) -> Request {
@@ -7056,6 +7225,255 @@ mod tests {
         }
     }
 
+    #[tokio::test]
+    async fn dsc_certificate_issuance_requires_operator_grant_and_forwards_only_trusted_authority()
+    {
+        const PATH: &str = "/v1/signing-keys/issuer-identities/dsc-certificate";
+        let recorder = Arc::new(ActorRecordingUpstream::default());
+        let limited = gateway_router(runtime_state_with_upstream(
+            Arc::new(NoOwner),
+            recorder.clone(),
+        ));
+        let body = json!({"issuer_did": "did:web:issuer.example", "csca_profile_id": "csca-1"});
+        let request = || {
+            Request::post(PATH)
+                .header("cookie", "sessionId=valid")
+                .header("content-type", "application/json")
+                .header("x-required-permission", "passport-certificate:issue")
+                .header("x-org-permissions", "signing-key:delete")
+                .body(Body::from(body.to_string()))
+                .unwrap()
+        };
+        assert_eq!(
+            limited.clone().oneshot(request()).await.unwrap().status(),
+            StatusCode::FORBIDDEN
+        );
+        assert!(recorder.0.lock().unwrap().is_empty());
+        let api_key = Request::post(PATH)
+            .header("x-api-key", "passport-gateway-key-org-1")
+            .header("x-required-permission", "passport-certificate:issue")
+            .header("content-type", "application/json")
+            .body(Body::from(body.to_string()))
+            .unwrap();
+        assert_eq!(
+            limited.clone().oneshot(api_key).await.unwrap().status(),
+            StatusCode::FORBIDDEN
+        );
+        assert!(recorder.0.lock().unwrap().is_empty());
+        let no_tenant = Request::post(PATH)
+            .header("cookie", "sessionId=valid-no-org")
+            .header("content-type", "application/json")
+            .body(Body::from(body.to_string()))
+            .unwrap();
+        assert_eq!(
+            limited.oneshot(no_tenant).await.unwrap().status(),
+            StatusCode::FORBIDDEN
+        );
+        assert!(recorder.0.lock().unwrap().is_empty());
+        let chosen_tenant_without_session = Request::post(format!("{PATH}?organization_id=org-1"))
+            .header("cookie", "sessionId=valid-no-org")
+            .header("content-type", "application/json")
+            .body(Body::from(body.to_string()))
+            .unwrap();
+        assert_eq!(
+            gateway_router(runtime_state_with_upstream(
+                Arc::new(NoOwner),
+                recorder.clone()
+            ))
+            .oneshot(chosen_tenant_without_session)
+            .await
+            .unwrap()
+            .status(),
+            StatusCode::FORBIDDEN
+        );
+        assert!(recorder.0.lock().unwrap().is_empty());
+
+        struct CertificateOperator;
+        #[async_trait]
+        impl OrganizationMembershipProvider for CertificateOperator {
+            async fn get_membership(
+                &self,
+                user_id: &str,
+                organization_id: &str,
+            ) -> Result<Option<OrganizationMembership>, SecurityError> {
+                let mut membership = RuntimeProvider
+                    .get_membership(user_id, organization_id)
+                    .await?;
+                if let Some(membership) = membership.as_mut() {
+                    membership.role_names.insert("operator".into());
+                    membership
+                        .permissions
+                        .insert("passport-certificate:issue".into());
+                }
+                Ok(membership)
+            }
+        }
+        let mut unavailable = runtime_state_with_upstream(Arc::new(NoOwner), recorder.clone());
+        Arc::get_mut(&mut unavailable)
+            .expect("unique runtime state")
+            .memberships = Arc::new(CertificateOperator);
+        assert_eq!(
+            gateway_router(unavailable)
+                .oneshot(request())
+                .await
+                .unwrap()
+                .status(),
+            StatusCode::SERVICE_UNAVAILABLE
+        );
+        assert!(recorder.0.lock().unwrap().is_empty());
+        let mut state = runtime_state_with_upstream(Arc::new(NoOwner), recorder.clone());
+        Arc::get_mut(&mut state)
+            .expect("unique runtime state")
+            .memberships = Arc::new(CertificateOperator);
+        Arc::get_mut(&mut state)
+            .expect("unique runtime state")
+            .dsc_issue_gateway_key = Some("dedicated-dsc-gateway-credential-000001".into());
+        let gateway = gateway_router(state);
+        assert_eq!(
+            gateway.clone().oneshot(request()).await.unwrap().status(),
+            StatusCode::OK
+        );
+        {
+            let calls = recorder.0.lock().unwrap();
+            assert_eq!(calls.len(), 1);
+            let (service, forwarded) = &calls[0];
+            assert_eq!(service, "signing-keys");
+            assert_eq!(forwarded.path, PATH);
+            assert_eq!(forwarded.query["organization_id"], vec!["org-1"]);
+            assert_eq!(
+                forwarded.header("x-api-key"),
+                Some("dedicated-dsc-gateway-credential-000001")
+            );
+            assert_eq!(forwarded.header("x-user-id"), Some("user-1"));
+            assert!(forwarded
+                .header("x-org-roles")
+                .unwrap()
+                .split(',')
+                .any(|role| role == "operator"));
+            assert_eq!(
+                forwarded.header("x-required-permission"),
+                Some("passport-certificate:issue")
+            );
+            let permissions = forwarded.header("x-org-permissions").unwrap();
+            assert!(permissions
+                .split(',')
+                .any(|permission| permission == "passport-certificate:issue"));
+            assert!(!permissions
+                .split(',')
+                .any(|permission| permission == "signing-key:delete"));
+        }
+        let foreign = Request::post(format!("{PATH}?organization_id=org-other"))
+            .header("cookie", "sessionId=valid")
+            .header("content-type", "application/json")
+            .body(Body::from(body.to_string()))
+            .unwrap();
+        assert_eq!(
+            gateway.oneshot(foreign).await.unwrap().status(),
+            StatusCode::FORBIDDEN
+        );
+        assert_eq!(recorder.0.lock().unwrap().len(), 1);
+        let forged_body = Request::post(PATH)
+            .header("cookie", "sessionId=valid")
+            .header("content-type", "application/json")
+            .body(Body::from(
+                json!({"organization_id":"org-other"}).to_string(),
+            ))
+            .unwrap();
+        let gateway = gateway_router(runtime_state_with_upstream(
+            Arc::new(NoOwner),
+            recorder.clone(),
+        ));
+        assert_eq!(
+            gateway.oneshot(forged_body).await.unwrap().status(),
+            StatusCode::FORBIDDEN
+        );
+        assert_eq!(recorder.0.lock().unwrap().len(), 1);
+    }
+
+    #[tokio::test]
+    async fn beta_csca_ceremony_requires_its_own_operator_grant_and_gateway_credential() {
+        const PATH: &str = "/v1/signing-keys/issuer-identities/csca-self-signed-certificate";
+        struct CscaOperator;
+        #[async_trait]
+        impl OrganizationMembershipProvider for CscaOperator {
+            async fn get_membership(
+                &self,
+                user_id: &str,
+                organization_id: &str,
+            ) -> Result<Option<OrganizationMembership>, SecurityError> {
+                let mut membership = RuntimeProvider
+                    .get_membership(user_id, organization_id)
+                    .await?;
+                if let Some(membership) = membership.as_mut() {
+                    membership
+                        .permissions
+                        .insert("passport-certificate:issue-csca".into());
+                }
+                Ok(membership)
+            }
+        }
+        let recorder = Arc::new(ActorRecordingUpstream::default());
+        let body = json!({"organization_id":"org-1","issuer_did":"did:web:issuer.example"});
+        let request = || {
+            Request::post(PATH)
+                .header("cookie", "sessionId=valid")
+                .header("content-type", "application/json")
+                .header("x-user-id", "forged-user")
+                .body(Body::from(body.to_string()))
+                .unwrap()
+        };
+        let mut disabled = runtime_state_with_upstream(Arc::new(NoOwner), recorder.clone());
+        Arc::get_mut(&mut disabled).unwrap().memberships = Arc::new(CscaOperator);
+        Arc::get_mut(&mut disabled).unwrap().csca_issue_gateway_key =
+            Some("dedicated-csca-gateway-credential-0001".into());
+        assert_eq!(
+            gateway_router(disabled)
+                .oneshot(request())
+                .await
+                .unwrap()
+                .status(),
+            StatusCode::SERVICE_UNAVAILABLE
+        );
+        let mut enabled = runtime_state_with_upstream(Arc::new(NoOwner), recorder.clone());
+        Arc::get_mut(&mut enabled).unwrap().memberships = Arc::new(CscaOperator);
+        Arc::get_mut(&mut enabled)
+            .unwrap()
+            .passport_native_gateway_enabled = true;
+        Arc::get_mut(&mut enabled).unwrap().csca_issue_gateway_key =
+            Some("dedicated-csca-gateway-credential-0001".into());
+        let gateway = gateway_router(enabled);
+        assert_eq!(
+            gateway.clone().oneshot(request()).await.unwrap().status(),
+            StatusCode::OK
+        );
+        {
+            let calls = recorder.0.lock().unwrap();
+            assert_eq!(calls.len(), 1);
+            let (service, forwarded) = &calls[0];
+            assert_eq!(service, "signing-keys");
+            assert_eq!(forwarded.query["organization_id"], vec!["org-1"]);
+            assert_eq!(
+                forwarded.header("x-api-key"),
+                Some("dedicated-csca-gateway-credential-0001")
+            );
+            assert_eq!(forwarded.header("x-user-id"), Some("user-1"));
+            assert_eq!(
+                forwarded.header("x-required-permission"),
+                Some("passport-certificate:issue-csca")
+            );
+        }
+        let denied = Request::post(PATH)
+            .header("x-api-key", "passport-gateway-key-org-1")
+            .header("content-type", "application/json")
+            .body(Body::from(body.to_string()))
+            .unwrap();
+        assert_eq!(
+            gateway.oneshot(denied).await.unwrap().status(),
+            StatusCode::FORBIDDEN
+        );
+        assert_eq!(recorder.0.lock().unwrap().len(), 1);
+    }
+
     #[derive(Clone, Default)]
     struct GatewayTransitFixture {
         keys: Arc<std::sync::Mutex<BTreeMap<String, String>>>,
@@ -7070,12 +7488,75 @@ mod tests {
             == Some("test-only")
     }
 
-    fn gateway_with_signing_http(signing_url: String, organization_id: &str) -> Router {
+    struct DisposableDscIdentity {
+        organization_id: String,
+        dsc_operator: bool,
+        csca_operator: bool,
+    }
+
+    #[async_trait]
+    impl GatewayIdentityProvider for DisposableDscIdentity {
+        async fn validate_session(
+            &self,
+            session_id: &str,
+        ) -> Result<Option<SessionIdentity>, SecurityError> {
+            Ok((session_id == "valid").then(|| SessionIdentity {
+                user_id: "disposable-gateway-operator".into(),
+                organization_id: Some(self.organization_id.clone()),
+                ..SessionIdentity::default()
+            }))
+        }
+
+        async fn validate_api_key(
+            &self,
+            api_key: &str,
+        ) -> Result<Option<ApiKeyIdentity>, SecurityError> {
+            Ok(
+                (api_key == "disposable-gateway-internal-key").then(|| ApiKeyIdentity {
+                    api_key_id: "disposable-api-key".into(),
+                    organization_id: Some(self.organization_id.clone()),
+                    key_prefix: None,
+                    scopes: vec!["admin:full".into()],
+                }),
+            )
+        }
+    }
+
+    #[async_trait]
+    impl OrganizationMembershipProvider for DisposableDscIdentity {
+        async fn get_membership(
+            &self,
+            user_id: &str,
+            organization_id: &str,
+        ) -> Result<Option<OrganizationMembership>, SecurityError> {
+            if organization_id != self.organization_id {
+                return Ok(None);
+            }
+            let mut membership = RuntimeProvider
+                .get_membership(user_id, organization_id)
+                .await?;
+            if self.dsc_operator || self.csca_operator {
+                if let Some(membership) = membership.as_mut() {
+                    membership.role_names.insert("operator".into());
+                    if self.dsc_operator {
+                        membership
+                            .permissions
+                            .insert("passport-certificate:issue".into());
+                    }
+                    if self.csca_operator {
+                        membership
+                            .permissions
+                            .insert("passport-certificate:issue-csca".into());
+                    }
+                }
+            }
+            Ok(membership)
+        }
+    }
+
+    fn signing_gateway_state(signing_url: String) -> Arc<GatewayRuntimeState> {
         let upstream = Arc::new(crate::transport::ReqwestUpstream::new(1024 * 1024).unwrap());
         let mut state = runtime_state_with_upstream(Arc::new(NoOwner), upstream.clone());
-        Arc::get_mut(&mut state).unwrap().identities = Arc::new(IsolatedSigningSession {
-            organization_id: organization_id.to_owned(),
-        });
         let routes = GatewayContract::load()
             .unwrap()
             .proxy_route_table_with_passport_native(false)
@@ -7089,6 +7570,43 @@ mod tests {
             GatewayProxy::new(routes, Arc::new(registry), upstream, ProxyConfig::default())
                 .unwrap(),
         );
+        state
+    }
+
+    fn gateway_with_signing_http(signing_url: String, organization_id: &str) -> Router {
+        let mut state = signing_gateway_state(signing_url);
+        Arc::get_mut(&mut state).unwrap().identities = Arc::new(IsolatedSigningSession {
+            organization_id: organization_id.to_owned(),
+        });
+        gateway_router(state)
+    }
+
+    fn gateway_with_signing_http_dsc(
+        signing_url: String,
+        dsc_key: Option<&str>,
+        csca_key: Option<&str>,
+        disposable_org: Option<(&str, bool, bool)>,
+    ) -> Router {
+        let mut state = signing_gateway_state(signing_url);
+        if let Some(dsc_key) = dsc_key {
+            let state = Arc::get_mut(&mut state).unwrap();
+            state.dsc_issue_gateway_key = Some(dsc_key.to_owned());
+        }
+        if let Some(csca_key) = csca_key {
+            let state = Arc::get_mut(&mut state).unwrap();
+            state.csca_issue_gateway_key = Some(csca_key.to_owned());
+            state.passport_native_gateway_enabled = true;
+        }
+        if let Some((organization_id, dsc_operator, csca_operator)) = disposable_org {
+            let fixture = Arc::new(DisposableDscIdentity {
+                organization_id: organization_id.to_owned(),
+                dsc_operator,
+                csca_operator,
+            });
+            let state = Arc::get_mut(&mut state).unwrap();
+            state.identities = fixture.clone();
+            state.memberships = fixture;
+        }
         gateway_router(state)
     }
 
@@ -7878,6 +8396,389 @@ mod tests {
             .query_async(&mut cleanup)
             .await
             .unwrap();
+        signing_server.abort();
+    }
+
+    async fn disposable_gateway_json(
+        gateway: &Router,
+        method: &str,
+        path: &str,
+        body: &Value,
+        session: bool,
+        api_key: Option<&str>,
+    ) -> (StatusCode, Value) {
+        let mut request = Request::builder()
+            .method(method)
+            .uri(path)
+            .header("content-type", "application/json");
+        if session {
+            request = request.header("cookie", "sessionId=valid");
+        }
+        if let Some(api_key) = api_key {
+            request = request.header("x-api-key", api_key);
+        }
+        let response = gateway
+            .clone()
+            .oneshot(request.body(Body::from(body.to_string())).unwrap())
+            .await
+            .unwrap();
+        let status = response.status();
+        let bytes = to_bytes(response.into_body(), DEFAULT_MAXIMUM_BODY_BYTES)
+            .await
+            .unwrap();
+        (
+            status,
+            serde_json::from_slice(&bytes).unwrap_or(Value::Null),
+        )
+    }
+
+    #[tokio::test]
+    #[ignore = "requires independently marked disposable Redis and OpenBao instances"]
+    async fn authenticated_gateway_issues_dsc_with_operator_grant_and_dedicated_key() {
+        use der::{Decode, DecodePem};
+        use marty_crypto::certificate::{load_certificate_pem, verify_certificate_signature};
+        use x509_cert::{request::CertReq, Certificate};
+
+        const DSC_KEY: &str = "disposable-gateway-dsc-issue-key-32-characters";
+        const CSCA_KEY: &str = "disposable-gateway-csca-issue-key-32-characters";
+        const INTERNAL_KEY: &str = "disposable-gateway-internal-key";
+        const DSC_ROUTE: &str = "/v1/signing-keys/issuer-identities/dsc-certificate";
+        const CSCA_ROUTE: &str = "/v1/signing-keys/issuer-identities/csca-self-signed-certificate";
+
+        let redis_url = disposable_signing_redis_url().await;
+        let endpoint = std::env::var("MARTY_TEST_OPENBAO_URL").expect("disposable OpenBao URL");
+        let parsed_bao = url::Url::parse(&endpoint).expect("disposable OpenBao URL syntax");
+        assert!(
+            parsed_bao.scheme() == "http" && parsed_bao.host_str() == Some("127.0.0.1"),
+            "DSC test requires a loopback disposable OpenBao instance"
+        );
+        let token = std::env::var("MARTY_TEST_OPENBAO_TOKEN").expect("disposable OpenBao token");
+        assert!(
+            std::env::var("BAO_TOKEN").ok().as_deref() == Some(token.as_str()),
+            "disposable OpenBao token binding does not match"
+        );
+        let bao_nonce = std::env::var("MARTY_TEST_OPENBAO_DISPOSABLE_NONCE")
+            .expect("pre-provisioned disposable OpenBao sentinel value");
+        assert!(
+            bao_nonce.len() >= 16,
+            "disposable OpenBao sentinel is too short"
+        );
+        let marker = reqwest::Client::new()
+            .get(
+                parsed_bao
+                    .join("/v1/secret/data/marty-test-disposable-guard")
+                    .unwrap(),
+            )
+            .header("X-Vault-Token", &token)
+            .send()
+            .await
+            .expect("disposable OpenBao sentinel read");
+        assert!(
+            marker.status().is_success(),
+            "disposable OpenBao sentinel is absent"
+        );
+        let marker: Value = marker
+            .json()
+            .await
+            .expect("disposable OpenBao sentinel JSON");
+        assert!(
+            marker["data"]["data"]["nonce"].as_str() == Some(bao_nonce.as_str()),
+            "disposable OpenBao sentinel does not match"
+        );
+
+        let registry = SigningRegistryStore::connect(&redis_url)
+            .await
+            .unwrap()
+            .with_managed_openbao(Some(endpoint.clone()));
+        let profiles = SigningProfileStore::from_connection(registry.connection());
+        let documents = SigningDocumentStore::from_connection(registry.connection());
+        let lifecycle = CscaLifecycleStore::from_connection(registry.connection());
+        let signing = router_with_dependencies_and_ceremony_keys(
+            INTERNAL_KEY.into(),
+            Some(DSC_KEY.into()),
+            Some(CSCA_KEY.into()),
+            true,
+            Some(registry),
+            Some(documents),
+            Some(lifecycle),
+            Some(profiles.clone()),
+            None,
+            Some("issuer.example".into()),
+        );
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let signing_url = format!("http://{}", listener.local_addr().unwrap());
+        let signing_server =
+            tokio::spawn(async move { axum::serve(listener, signing).await.unwrap() });
+        let suffix = uuid::Uuid::new_v4().simple().to_string();
+        let organization_id = format!("test-gateway-dsc-{suffix}");
+        let gateway = gateway_with_signing_http_dsc(
+            signing_url.clone(),
+            Some(DSC_KEY),
+            Some(CSCA_KEY),
+            Some((&organization_id, true, true)),
+        );
+        let limited_gateway = gateway_with_signing_http_dsc(
+            signing_url.clone(),
+            Some(DSC_KEY),
+            Some(CSCA_KEY),
+            Some((&organization_id, false, false)),
+        );
+        let dsc_only_gateway = gateway_with_signing_http_dsc(
+            signing_url.clone(),
+            Some(DSC_KEY),
+            Some(CSCA_KEY),
+            Some((&organization_id, true, false)),
+        );
+        let issuer_did = format!("did:web:issuer.example:orgs:gateway-dsc-{suffix}");
+        let identity = |purpose: &str| {
+            json!({
+                "organization_id":organization_id, "issuer_did":issuer_did,
+                "key_purpose":purpose, "credential_format":"ICAO_EMRTD", "algorithm":"ES256"
+            })
+        };
+        for purpose in ["csca", "x509_doc_signer"] {
+            let (status, created) = disposable_gateway_json(
+                &gateway,
+                "POST",
+                "/v1/signing-keys/issuer-identities",
+                &identity(purpose),
+                true,
+                None,
+            )
+            .await;
+            assert_eq!(status, StatusCode::OK, "{purpose} profile creation failed");
+            assert_eq!(created["created"], true);
+        }
+        let mut csca_csr_input = identity("csca");
+        csca_csr_input["country"] = json!("US");
+        csca_csr_input["organization"] = json!("ElevenID Beta");
+        csca_csr_input["common_name"] = json!("Disposable Gateway CSCA");
+        let (status, csca_csr) = disposable_gateway_json(
+            &gateway,
+            "PUT",
+            "/v1/signing-keys/issuer-identities/certificate-csr",
+            &csca_csr_input,
+            true,
+            None,
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "CSCA CSR creation failed");
+        let csca_profile = profiles.list(&organization_id).await.unwrap()["profiles"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|profile| profile["issuer_did"] == issuer_did && profile["key_purpose"] == "csca")
+            .unwrap()
+            .clone();
+        let dsc_profile = profiles.list(&organization_id).await.unwrap()["profiles"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|profile| {
+                profile["issuer_did"] == issuer_did && profile["key_purpose"] == "x509_doc_signer"
+            })
+            .unwrap()
+            .clone();
+        let csca_reference = csca_profile["signing_key_reference"].as_str().unwrap();
+        let dsc_reference = dsc_profile["signing_key_reference"].as_str().unwrap();
+        assert_ne!(csca_reference, dsc_reference);
+        let csr_pem = csca_csr["csr_pem"].as_str().unwrap();
+        let csca_name = CertReq::from_pem(csr_pem).unwrap().info.subject;
+        let certificate_id = format!("gateway-csca-{suffix}");
+        let csca_issue = json!({
+            "organization_id":organization_id, "issuer_did":issuer_did,
+            "certificate_id":certificate_id, "credential_format":"ICAO_EMRTD",
+            "country":"US", "organization":"ElevenID Beta",
+            "common_name":"Disposable Gateway CSCA", "validity_days":365
+        });
+        let (status, _) = disposable_gateway_json(
+            &limited_gateway,
+            "POST",
+            CSCA_ROUTE,
+            &csca_issue,
+            true,
+            None,
+        )
+        .await;
+        assert_eq!(
+            status,
+            StatusCode::FORBIDDEN,
+            "ordinary user must not issue CSCA"
+        );
+        let (status, _) = disposable_gateway_json(
+            &dsc_only_gateway,
+            "POST",
+            CSCA_ROUTE,
+            &csca_issue,
+            true,
+            None,
+        )
+        .await;
+        assert_eq!(
+            status,
+            StatusCode::FORBIDDEN,
+            "DSC operator grant must not authorize CSCA ceremony"
+        );
+        let (status, _) = disposable_gateway_json(
+            &gateway,
+            "POST",
+            CSCA_ROUTE,
+            &csca_issue,
+            false,
+            Some(INTERNAL_KEY),
+        )
+        .await;
+        assert_eq!(status, StatusCode::FORBIDDEN, "API key must not issue CSCA");
+        let (status, issued_csca) =
+            disposable_gateway_json(&gateway, "POST", CSCA_ROUTE, &csca_issue, true, None).await;
+        assert_eq!(status, StatusCode::OK, "managed CSCA ceremony failed");
+        assert_eq!(issued_csca["status"], "issued");
+        assert_eq!(issued_csca["chain_pem"], "");
+        for secret in [&endpoint[..], token.as_str(), csca_reference, CSCA_KEY] {
+            assert!(
+                !issued_csca.to_string().contains(secret),
+                "CSCA response exposed a custody locator or credential"
+            );
+        }
+        let csca_pem = issued_csca["certificate_pem"].as_str().unwrap();
+        let csca_der = load_certificate_pem(csca_pem).unwrap();
+        assert!(verify_certificate_signature(&csca_der, &csca_der).unwrap());
+        let parsed_csca = Certificate::from_der(&csca_der).unwrap();
+        assert_eq!(parsed_csca.tbs_certificate.subject, csca_name);
+        assert_eq!(parsed_csca.tbs_certificate.issuer, csca_name);
+        let (status, replay) =
+            disposable_gateway_json(&gateway, "POST", CSCA_ROUTE, &csca_issue, true, None).await;
+        assert_eq!(status, StatusCode::OK, "CSCA ceremony replay failed");
+        assert_eq!(replay, issued_csca);
+        let mut changed = csca_issue.clone();
+        changed["common_name"] = json!("Changed Gateway CSCA");
+        let (status, _) =
+            disposable_gateway_json(&gateway, "POST", CSCA_ROUTE, &changed, true, None).await;
+        assert_eq!(status, StatusCode::CONFLICT);
+
+        let issue = json!({
+            "organization_id":organization_id, "dsc_issuer_did":issuer_did,
+            "csca_issuer_did":issuer_did, "csca_certificate_id":certificate_id,
+            "credential_format":"ICAO_EMRTD", "country":"US",
+            "organization":"ElevenID Beta", "common_name":"Disposable Gateway DSC",
+            "validity_days":30, "idempotency_key":format!("gateway-{suffix}")
+        });
+        let (status, _) = disposable_gateway_json(
+            &limited_gateway,
+            "POST",
+            DSC_ROUTE,
+            &issue,
+            true,
+            Some(INTERNAL_KEY),
+        )
+        .await;
+        assert_eq!(
+            status,
+            StatusCode::FORBIDDEN,
+            "ordinary signed-in user must not issue DSC"
+        );
+        let (status, _) = disposable_gateway_json(
+            &gateway,
+            "POST",
+            DSC_ROUTE,
+            &issue,
+            false,
+            Some(INTERNAL_KEY),
+        )
+        .await;
+        assert_eq!(
+            status,
+            StatusCode::FORBIDDEN,
+            "API key must not satisfy operator grant"
+        );
+        let (status, _) =
+            disposable_gateway_json(&gateway, "POST", DSC_ROUTE, &issue, false, None).await;
+        assert_eq!(status, StatusCode::UNAUTHORIZED);
+        let foreign = format!("{DSC_ROUTE}?organization_id=org-other");
+        let (status, _) =
+            disposable_gateway_json(&gateway, "POST", &foreign, &issue, true, None).await;
+        assert_eq!(
+            status,
+            StatusCode::FORBIDDEN,
+            "foreign tenant must be rejected"
+        );
+        let direct = reqwest::Client::new()
+            .post(format!(
+                "{signing_url}{DSC_ROUTE}?organization_id={organization_id}"
+            ))
+            .header("x-api-key", INTERNAL_KEY)
+            .header("x-user-id", "forged-operator")
+            .json(&issue)
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(
+            direct.status(),
+            StatusCode::UNAUTHORIZED,
+            "generic internal key must not issue DSC"
+        );
+
+        // The operator session succeeds because Gateway injects its dedicated
+        // credential and identity. A direct call above proved the shared key fails.
+        let response = gateway
+            .clone()
+            .oneshot(
+                Request::post(DSC_ROUTE)
+                    .header("cookie", "sessionId=valid")
+                    .header("content-type", "application/json")
+                    .header("x-user-id", "forged-operator")
+                    .header("x-org-permissions", "passport-certificate:issue")
+                    .body(Body::from(issue.to_string()))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        let status = response.status();
+        let issued: Value = serde_json::from_slice(
+            &to_bytes(response.into_body(), DEFAULT_MAXIMUM_BODY_BYTES)
+                .await
+                .unwrap(),
+        )
+        .unwrap();
+        assert_eq!(status, StatusCode::OK, "governed DSC issuance failed");
+        assert_eq!(issued["status"], "issued");
+        let snapshot = profiles
+            .dsc_issuance_store()
+            .snapshot(&organization_id)
+            .await
+            .unwrap();
+        let receipts = snapshot.certificates["passport_dsc_issuance"]
+            .as_object()
+            .unwrap();
+        assert_eq!(receipts.len(), 1);
+        assert_eq!(
+            receipts.values().next().unwrap()["actor_id"],
+            "disposable-gateway-operator",
+            "Gateway must replace caller-supplied operator identity"
+        );
+        let dsc_pem = issued["certificate_pem"].as_str().unwrap();
+        let dsc_der = load_certificate_pem(dsc_pem).unwrap();
+        assert!(verify_certificate_signature(&dsc_der, &csca_der).unwrap());
+        let (status, replayed) =
+            disposable_gateway_json(&gateway, "POST", DSC_ROUTE, &issue, true, None).await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(
+            replayed, issued,
+            "retry must return the immutable issuance receipt"
+        );
+        for secret in [
+            &endpoint[..],
+            token.as_str(),
+            csca_reference,
+            dsc_reference,
+            DSC_KEY,
+            INTERNAL_KEY,
+        ] {
+            assert!(
+                !issued.to_string().contains(secret),
+                "public DSC response exposed custody metadata"
+            );
+        }
         signing_server.abort();
     }
 

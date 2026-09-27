@@ -824,6 +824,14 @@ impl SigningCompatibilityService {
             .get(&request.organization_id, profile_id)
             .await
             .map_err(map_profile_error)?;
+        let current_jwk = self
+            .provider_public_key_for_profile(&request.organization_id, &profile)
+            .await?;
+        if !documents::same_public_jwk(&identity["public_jwk"], &current_jwk) {
+            return Err(CompatibilityError::Conflict(
+                "Published issuer identity does not match its current managed KMS key.".into(),
+            ));
+        }
         let key_reference = required(&profile, "signing_key_reference")?;
         let cert_pem = request
             .body
@@ -842,7 +850,7 @@ impl SigningCompatibilityService {
                     cert_chain_pem: clean(
                         request.body.get("cert_chain_pem").and_then(Value::as_str),
                     ),
-                    expected_public_jwk: Some(identity["public_jwk"].clone()),
+                    expected_public_jwk: Some(current_jwk),
                 },
             )
             .await

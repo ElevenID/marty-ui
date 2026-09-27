@@ -231,6 +231,24 @@ def test_actual_plan_covers_inventory_builds_selectors_and_evidence(
         )
 
 
+def test_opt_in_passport_bureau_uses_the_same_immutable_services_image(gate, exercise):
+    [base] = exercise([gate["inputs"]("official")])
+    case = gate["inputs"]("official")
+    case["services"] = [*base["services"], "passport-beta-bureau"]
+    [report] = exercise([case])
+    assert report["caught"] is False, report
+    assert len(report["plan"]) == len(base["services"]) + 1
+    [bureau] = [
+        item for item in report["plan"] if item["service"] == "passport-beta-bureau"
+    ]
+    assert bureau["image_expression"] == "${MARTY_SERVICES_IMAGE}"
+    assert bureau["effective_reference"] == gate["SERVICES_IMAGE"]
+    assert bureau["known_digest"] == gate["SERVICES_DIGEST"]
+    assert bureau["selector"] == "passport_beta_bureau"
+    assert bureau["build_eligible"] is False
+    assert report["digests"]["passport-beta-bureau"] == gate["SERVICES_DIGEST"]
+
+
 def test_independent_projection_rejects_retagged_evidence_and_missing_build(
     gate, exercise
 ):

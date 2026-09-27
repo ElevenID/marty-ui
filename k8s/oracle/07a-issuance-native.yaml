@@ -45,6 +45,41 @@ spec:
                 configMapKeyRef:
                   name: marty-config
                   key: ENVIRONMENT
+            - name: PERSONALIZATION_BUREAU_PROVIDER_PROFILE_ID
+              valueFrom:
+                configMapKeyRef:
+                  name: marty-config
+                  key: PERSONALIZATION_BUREAU_PROVIDER_PROFILE_ID
+            - name: PASSPORT_NATIVE_HTTP_ENABLED
+              valueFrom:
+                configMapKeyRef:
+                  name: marty-config
+                  key: PASSPORT_NATIVE_HTTP_ENABLED
+            - name: PASSPORT_INTERNAL_SERVICE_AUTH_ENABLED
+              valueFrom:
+                configMapKeyRef:
+                  name: marty-config
+                  key: PASSPORT_INTERNAL_SERVICE_AUTH_ENABLED
+            - name: PASSPORT_MANAGED_ISSUER_SIGNING_ENABLED
+              valueFrom:
+                configMapKeyRef:
+                  name: marty-config
+                  key: PASSPORT_MANAGED_ISSUER_SIGNING_ENABLED
+            - name: PASSPORT_KMS_ARTIFACTS_ENABLED
+              valueFrom:
+                configMapKeyRef:
+                  name: marty-config
+                  key: PASSPORT_KMS_ARTIFACTS_ENABLED
+            - name: PASSPORT_KMS_CALLBACKS_ENABLED
+              valueFrom:
+                configMapKeyRef:
+                  name: marty-config
+                  key: PASSPORT_KMS_CALLBACKS_ENABLED
+            - name: PERSONALIZATION_BUREAU_URL
+              valueFrom:
+                configMapKeyRef:
+                  name: marty-config
+                  key: PERSONALIZATION_BUREAU_URL
             - name: UI_BASE_URL
               valueFrom:
                 configMapKeyRef:
@@ -216,6 +251,12 @@ spec:
                 secretKeyRef:
                   name: marty-secrets
                   key: SIGNING_KEYS_INTERNAL_API_KEY
+            - name: PERSONALIZATION_BUREAU_API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: marty-secrets
+                  key: PERSONALIZATION_BUREAU_API_KEY
+                  optional: true
             - name: GRPC_SERVICE_TOKEN
               valueFrom:
                 secretKeyRef:

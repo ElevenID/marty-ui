@@ -632,6 +632,28 @@ impl CscaLifecycleStore {
     }
 
     pub async fn save(&self, document: &CscaLifecycleDocument) -> Result<(), CscaLifecycleError> {
+        self.save_guarded(document, None).await
+    }
+
+    /// Commit a new certificate only while the tenant signing lease still belongs to this caller.
+    pub async fn save_with_rotation_lease(
+        &self,
+        document: &CscaLifecycleDocument,
+        lease: &crate::registry::RotationLease,
+        expected_profile_revision: u64,
+    ) -> Result<(), CscaLifecycleError> {
+        if !lease.covers_organization(&document.organization_id) {
+            return Err(CscaLifecycleError::ConcurrentModification);
+        }
+        self.save_guarded(document, Some((lease, expected_profile_revision)))
+            .await
+    }
+
+    async fn save_guarded(
+        &self,
+        document: &CscaLifecycleDocument,
+        lease: Option<(&crate::registry::RotationLease, u64)>,
+    ) -> Result<(), CscaLifecycleError> {
         validate_identifier("organization_id", &document.organization_id)?;
         validate_stored_document(document)?;
         let payload = serde_json::to_string(document)
@@ -645,6 +667,23 @@ impl CscaLifecycleStore {
         let script = redis::Script::new(
             r#"
 local existing = redis.call('GET', KEYS[1])
+if ARGV[3] ~= '' and redis.call('GET', KEYS[2]) ~= ARGV[3] then
+  return 0
+end
+if ARGV[3] ~= '' then
+  local profiles = redis.call('GET', KEYS[3])
+  local profile_revision = 0
+  if profiles then
+    local ok, decoded = pcall(cjson.decode, profiles)
+    if not ok or type(decoded) ~= 'table' then
+      return redis.error_reply('stored issuer profile document is malformed')
+    end
+    profile_revision = tonumber(decoded.revision or 0)
+  end
+  if profile_revision ~= tonumber(ARGV[4]) then
+    return 0
+  end
+end
 local current_revision = 0
 if existing then
   local ok, decoded = pcall(cjson.decode, existing)
@@ -663,8 +702,16 @@ return 1
         let mut connection = self.connection.clone();
         let saved: i64 = script
             .key(csca_lifecycle_storage_key(&document.organization_id))
+            .key(lease.map(|(lease, _)| lease.redis_key()).unwrap_or(""))
+            .key(
+                lease
+                    .map(|_| crate::profiles::storage_key(&document.organization_id))
+                    .unwrap_or_default(),
+            )
             .arg(expected_revision)
             .arg(payload)
+            .arg(lease.map(|(lease, _)| lease.owner()).unwrap_or(""))
+            .arg(lease.map(|(_, revision)| revision).unwrap_or_default())
             .invoke_async(&mut connection)
             .await
             .map_err(|error| CscaLifecycleError::Storage(error.to_string()))?;
@@ -1017,4 +1064,104 @@ fn parse_time(field: &str, value: &str) -> Result<DateTime<Utc>, CscaLifecycleEr
 
 fn timestamp(value: DateTime<Utc>) -> String {
     value.to_rfc3339_opts(chrono::SecondsFormat::Secs, true)
+}
+
+#[cfg(test)]
+mod ceremony_tests {
+    use super::*;
+    use der::{Decode, EncodePem};
+    use marty_crypto::{cert_builder::create_csca_certificate, keygen::KeyType};
+    use x509_cert::Certificate;
+
+    #[tokio::test]
+    #[ignore = "requires disposable loopback MARTY_TEST_REDIS_URL and nonce sentinel"]
+    async fn ceremony_commit_requires_current_tenant_lease_and_profile_revision() {
+        let url = std::env::var("MARTY_TEST_REDIS_URL").expect("disposable Redis URL");
+        let parsed = reqwest::Url::parse(&url).expect("Redis URL");
+        assert!(matches!(
+            parsed.host_str(),
+            Some("127.0.0.1" | "localhost" | "::1")
+        ));
+        assert!(parsed
+            .path()
+            .trim_start_matches('/')
+            .parse::<u8>()
+            .is_ok_and(|db| db >= 13));
+        let nonce = std::env::var("MARTY_TEST_REDIS_DISPOSABLE_NONCE").expect("disposable nonce");
+        let registry = crate::registry::RegistryStore::connect(&url).await.unwrap();
+        let mut connection = registry.connection();
+        let marker: Option<String> = connection
+            .get("marty:tests:disposable-guard")
+            .await
+            .unwrap();
+        assert_eq!(marker.as_deref(), Some(nonce.as_str()));
+        let tenant = format!("test-csca-ceremony-{}", uuid::Uuid::new_v4().simple());
+        let foreign = format!("test-csca-foreign-{}", uuid::Uuid::new_v4().simple());
+        let store = CscaLifecycleStore::from_connection(registry.connection());
+        let (der, _) =
+            create_csca_certificate("US", "Disposable CSCA", 365, KeyType::EcdsaP256).unwrap();
+        let pem = Certificate::from_der(&der)
+            .unwrap()
+            .to_pem(der::pem::LineEnding::LF)
+            .unwrap();
+        let jwk = serde_json::to_value(certificate_pem_to_jwk(&pem).unwrap()).unwrap();
+        let request = || ImportCscaCertificateRequest {
+            cert_pem: pem.clone(),
+            cert_chain_pem: String::new(),
+            key_reference: "disposable-managed-csca".into(),
+            expected_public_jwk: jwk.clone(),
+            metadata: serde_json::json!({"issuer_did": "did:web:beta.example:orgs:disposable"}),
+        };
+        connection
+            .set::<_, _, ()>(
+                crate::profiles::storage_key(&tenant),
+                serde_json::json!({"profiles": [], "revision": 1}).to_string(),
+            )
+            .await
+            .unwrap();
+        let now = Utc::now();
+        let mut document = store.load(&tenant, now).await.unwrap();
+        document.import("csca-1", request(), now).unwrap();
+        let wrong_lease = registry
+            .acquire_rotation_lease(&foreign)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            store
+                .save_with_rotation_lease(&document, &wrong_lease, 1)
+                .await,
+            Err(CscaLifecycleError::ConcurrentModification)
+        );
+        wrong_lease.release().await.unwrap();
+        let lease = registry
+            .acquire_rotation_lease(&tenant)
+            .await
+            .unwrap()
+            .unwrap();
+        store
+            .save_with_rotation_lease(&document, &lease, 1)
+            .await
+            .unwrap();
+        let mut stale = store.load(&tenant, Utc::now()).await.unwrap();
+        stale.import("csca-2", request(), Utc::now()).unwrap();
+        connection
+            .set::<_, _, ()>(
+                crate::profiles::storage_key(&tenant),
+                serde_json::json!({"profiles": [], "revision": 2}).to_string(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(
+            store.save_with_rotation_lease(&stale, &lease, 1).await,
+            Err(CscaLifecycleError::ConcurrentModification)
+        );
+        assert!(!store
+            .load(&tenant, Utc::now())
+            .await
+            .unwrap()
+            .certificates
+            .contains_key("csca-2"));
+        lease.release().await.unwrap();
+    }
 }

@@ -37,6 +37,11 @@ if [ "$MODULE_NAME" = "passport_callback_signer" ]; then
 	exec /usr/local/bin/marty-passport-callback-signer
 fi
 
+if [ "$MODULE_NAME" = "passport_callback_signer_supported" ]; then
+	echo "Starting isolated supported-consumer passport callback signer"
+	exec /usr/local/bin/marty-passport-callback-signer-supported
+fi
+
 if [ "$MODULE_NAME" = "notification" ]; then
 	echo "Starting canonical Rust service: $SERVICE_NAME"
 	exec /usr/local/bin/marty-notification
@@ -90,6 +95,16 @@ fi
 if [ "$MODULE_NAME" = "issuance_native" ]; then
 	echo "Starting canonical Rust service: $SERVICE_NAME"
 	exec /usr/local/bin/marty-issuance-service
+fi
+
+if [ "$MODULE_NAME" = "passport_beta_bureau" ]; then
+	echo "Starting beta-only Rust service: $SERVICE_NAME"
+	exec /usr/local/bin/marty-passport-beta-bureau
+fi
+
+if [ "$MODULE_NAME" = "passport_provider_ingress" ]; then
+	echo "Starting provider ingress Rust service: $SERVICE_NAME"
+	exec /usr/local/bin/marty-passport-provider-ingress
 fi
 
 if [ "$MODULE_NAME" = "canvas_sync_worker" ]; then

@@ -940,6 +940,7 @@ mod tests {
             secure_artifact_reference: "physical-artifact://job-1".into(),
             sod_sha256: Some("secret-sod".into()),
             bureau_job_id: None,
+            bureau_provider_profile_id: None,
             tracking_number: None,
             status: "DRAFT".into(),
             quality_result: None,

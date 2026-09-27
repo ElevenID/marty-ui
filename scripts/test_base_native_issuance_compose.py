@@ -37,6 +37,7 @@ NATIVE_ONLY = {
     "ENVIRONMENT": "${ENVIRONMENT:-development}",
     "ISSUANCE_GRPC_ENABLED": "true",
     "PASSPORT_NATIVE_HTTP_ENABLED": "${PASSPORT_NATIVE_HTTP_ENABLED:-false}",
+    "PASSPORT_INTERNAL_SERVICE_AUTH_ENABLED": "${PASSPORT_INTERNAL_SERVICE_AUTH_ENABLED:-false}",
     "PASSPORT_MANAGED_ISSUER_SIGNING_ENABLED": "${PASSPORT_MANAGED_ISSUER_SIGNING_ENABLED:-false}",
     "PASSPORT_KMS_ARTIFACTS_ENABLED": "${PASSPORT_KMS_ARTIFACTS_ENABLED:-false}",
     "PASSPORT_KMS_CALLBACKS_ENABLED": "${PASSPORT_KMS_CALLBACKS_ENABLED:-false}",
@@ -213,6 +214,10 @@ def expected_model(baseline, *, local, authcrypt, inputs, policy_directory):
             "ENVIRONMENT": inputs.get("ENVIRONMENT") or "development",
             "ISSUANCE_GRPC_ENABLED": "true",
             "PASSPORT_NATIVE_HTTP_ENABLED": inputs.get("PASSPORT_NATIVE_HTTP_ENABLED")
+            or "false",
+            "PASSPORT_INTERNAL_SERVICE_AUTH_ENABLED": inputs.get(
+                "PASSPORT_INTERNAL_SERVICE_AUTH_ENABLED"
+            )
             or "false",
             "PASSPORT_MANAGED_ISSUER_SIGNING_ENABLED": inputs.get(
                 "PASSPORT_MANAGED_ISSUER_SIGNING_ENABLED"
