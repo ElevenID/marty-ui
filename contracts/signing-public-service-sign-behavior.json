@@ -1,0 +1,19 @@
+{
+  "schema_version": 1,
+  "source": "pre-Rust services/gateway/routes/signing_keys.py at parent of e1ebad979; contracts/gateway-signing-authorization-behavior.json",
+  "method": "POST",
+  "path": "/v1/signing-keys/services/{service_id}/sign",
+  "request_fields": ["payload_b64", "payload_hex", "algorithm", "key_reference", "key_purpose"],
+  "payload_precedence": ["payload_b64", "payload_hex"],
+  "empty_or_missing_payload_status": 400,
+  "missing_service_status": 404,
+  "purpose_and_lti_isolation": "contracts/gateway-signing-authorization-behavior.json",
+  "response_required_fields": ["ok", "service_id", "algorithm", "payload_length", "signature_encoding", "signature_b64", "signature_hex", "signed_at"],
+  "response_optional_fields": ["signature_raw_b64", "signature_raw_hex"],
+  "signing_private_key_location": "KMS only",
+  "public_request_private_key_fields_allowed": false,
+  "managed_reference_rule": "A caller-selected managed KMS reference requires either an active profile for the same tenant, service, requested purpose and algorithm, or a live tenant-namespaced managed inventory alias with a matching registered purpose, purpose-category prefix and per-key algorithm. A registry purpose binding alone cannot authorize a managed reference.",
+  "managed_binding_update_rule": "Public configuration updates, including legacy-shaped bodies without a services array, preserve existing managed KMS purpose bindings and cannot create or change them; managed key creation and issuer profile binding own those records.",
+  "non_object_config_update_status": 422,
+  "reviewed_security_tightening": "A caller-selected key_reference must be the registered default, a registered service alias, a registry purpose binding, or a reference on an active issuer profile for the same tenant and service; an unknown KMS name is rejected before signing. Internal signing compatibility is unchanged."
+}

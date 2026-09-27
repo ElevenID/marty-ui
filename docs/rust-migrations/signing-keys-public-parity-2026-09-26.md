@@ -117,6 +117,20 @@ the separately tracked `DIDCOMM-KMS-001` follow-up, not a claim made by this
 adapter. An isolated-Redis Rust-route test passed for publication, private-JWK
 rejection, tenant isolation, absent and ambiguous profiles, and public-only
 stored output. Authenticated through-Gateway acceptance remains before cutover.
-Thus 8 declared pairs remain without local public handlers. These new
+The `POST /services/{service_id}/sign` adapter now delegates to the same Rust
+KMS signing and purpose-isolation kernel as the internal service route. It
+retains the released payload selection and signature response shape, frozen in
+`contracts/signing-public-service-sign-behavior.json` and the existing
+`contracts/gateway-signing-authorization-behavior.json`. The reviewer-required
+security tightening on this public route rejects a caller-selected KMS key
+reference unless it is the tenant service's default, a registered alias,
+purpose-bound in its registry, or bound by an active tenant issuer profile;
+arbitrary unregistered KMS names are not a public capability. The internal
+signing kernel's existing compatibility behavior is unchanged. No
+private key material enters this route. An isolated Redis/OpenBao route test
+passed for a real KMS-held signature and the unregistered-key, tenant,
+private-field, and empty-payload denials. Authenticated through-Gateway
+acceptance is still required before cutover.
+Thus 7 declared pairs remain without local public handlers. These new
 adapters still need authenticated through-Gateway runtime tests. The
 24-pair table above remains the protected-main audit baseline.
