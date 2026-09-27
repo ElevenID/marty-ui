@@ -292,12 +292,16 @@ WHERE ((definition.id IS NULL AND NOT COALESCE((
         AND instance.expires_at < clock_timestamp()
         AND instance.current_step_id IS NULL
         AND instance.application_flow_key_hash IS NULL
+        AND instance.step_history::jsonb = '[]'::jsonb
         AND instance.context::jsonb->>'flow_definition_reference' = '__verification__'
         AND instance.context::jsonb->>'flow_type' = 'verification'
         AND instance.context::jsonb->>'protocol_flow_type' = 'oid4vp_presentation'
-        AND instance.context::jsonb ? 'auth_request'
-        AND instance.context::jsonb ? 'oid4vp_profile'
-        AND instance.context::jsonb ? 'request_uri'
+        AND jsonb_typeof(instance.context::jsonb->'auth_request') = 'string'
+        AND nullif(btrim(instance.context::jsonb->>'auth_request'), '') IS NOT NULL
+        AND jsonb_typeof(instance.context::jsonb->'oid4vp_profile') = 'string'
+        AND nullif(btrim(instance.context::jsonb->>'oid4vp_profile'), '') IS NOT NULL
+        AND jsonb_typeof(instance.context::jsonb->'request_uri') = 'string'
+        AND nullif(btrim(instance.context::jsonb->>'request_uri'), '') IS NOT NULL
         AND instance.context::jsonb::text NOT ILIKE '%physical_document%'
         AND instance.context::jsonb::text NOT ILIKE '%passport%'
         AND ((instance.subject_type = 'holder'

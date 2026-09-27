@@ -40,6 +40,10 @@ def test_drain_preflight_counts_artifacts_and_flows_before_backup():
     assert "definition.id IS NULL" in function
     assert "flow_definition_reference' = '__verification__'" in function
     assert "instance.expires_at < clock_timestamp()" in function
+    assert "instance.step_history::jsonb = '[]'::jsonb" in function
+    assert (
+        "jsonb_typeof(instance.context::jsonb->'auth_request') = 'string'" in function
+    )
     assert "physical_document_issuance" in function
     assert "definition.extension::jsonb->>'extends_flow_type'" in function
     assert "physical_document_job" in function
@@ -163,6 +167,7 @@ CREATE TABLE flow_service.flow_instances (
     flow_definition_id text, status text, context json,
     current_step_id text, application_flow_key_hash text,
     subject_type text DEFAULT 'applicant', state_history json DEFAULT '[]',
+    step_history json DEFAULT '[]',
     expires_at timestamptz
 );
 """
@@ -170,7 +175,7 @@ CREATE TABLE flow_service.flow_instances (
         '{"flow_definition_reference":"__verification__",'
         '"flow_type":"verification",'
         '"protocol_flow_type":"oid4vp_presentation",'
-        '"auth_request":{},"oid4vp_profile":"standard","request_uri":"local"}'
+        '"auth_request":"request","oid4vp_profile":"standard","request_uri":"local"}'
     )
     modern_history = '[{"event":"verification_started","actor":"verification_api"}]'
 
@@ -179,13 +184,14 @@ CREATE TABLE flow_service.flow_instances (
         context=verification_context,
         subject_type="holder",
         history=modern_history,
+        step_history="[]",
         expiry="now()-interval '1 day'",
     ):
         return (
             "INSERT INTO flow_service.flow_instances "
-            "(flow_definition_id,status,context,subject_type,state_history,expires_at) "
+            "(flow_definition_id,status,context,subject_type,state_history,step_history,expires_at) "
             f"VALUES ('missing','awaiting_wallet','{context}','{subject_type}',"
-            f"'{history}',{expiry});"
+            f"'{history}','{step_history}',{expiry});"
         )
 
     fixtures = [
@@ -237,6 +243,34 @@ CREATE TABLE flow_service.flow_instances (
         (verification_row(), flow_sql, 0),
         (verification_row(subject_type="applicant", history="[]"), flow_sql, 0),
         (verification_row(expiry="now()+interval '1 day'"), flow_sql, 1),
+        (
+            verification_row(
+                context=verification_context.replace(
+                    '"auth_request":"request"', '"auth_request":{}'
+                )
+            ),
+            flow_sql,
+            1,
+        ),
+        (
+            verification_row(
+                context=verification_context.replace(
+                    '"oid4vp_profile":"standard"', '"oid4vp_profile":null'
+                )
+            ),
+            flow_sql,
+            1,
+        ),
+        (
+            verification_row(
+                context=verification_context.replace(
+                    '"request_uri":"local"', '"request_uri":""'
+                )
+            ),
+            flow_sql,
+            1,
+        ),
+        (verification_row(step_history='["entered"]'), flow_sql, 1),
         (
             verification_row(
                 context=verification_context.replace(
