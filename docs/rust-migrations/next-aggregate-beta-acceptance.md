@@ -66,6 +66,11 @@ selected here.
    signs the CSR and self-signed CA certificate through the active KMS profile,
    verifies both signatures, and enrolls the public trust anchor with a
    profile-revision fence. The older public CSCA import remains available.
+   With no external CA for this beta, use the issuer console's **Issue CSCA**
+   action on the active ES256 CSCA profile, record its certificate ID, then use
+   **Issue DSC** on the separate active ES256 document-signer profile with that
+   CSCA DID and certificate ID. Retain the displayed DSC request reference with
+   the exact request details so a lost response can be retried idempotently.
    Verify the active CSCA-to-DSC chain before accepting a passport job. This
    review branch is not yet merged or deployed. A read-only beta check on
    2026-09-26 found no CSCA lifecycle record for the pilot organization; its
