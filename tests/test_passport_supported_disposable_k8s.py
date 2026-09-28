@@ -61,7 +61,11 @@ def test_disposable_kubernetes_selects_marty_simulator_without_provider() -> Non
         assert env["SERVICE_NAME"] == role
         assert env["ENVIRONMENT"] == "beta"
         assert env[flag] == "true"
-        assert objects[("Service", name)]["spec"]["selector"] == {"app": name}
+        service = objects[("Service", name)]
+        assert service["spec"]["selector"] == {"app": name}
+        assert all(service["metadata"]["labels"][key] == value
+                   for key, value in OWNER_LABELS.items())
+        assert service["metadata"]["annotations"]["com.marty.passport.acceptance.services-image"] == IMAGE
 
     bureau_env = {item["name"]: item["value"] for item in objects[
         ("Deployment", "passport-beta-bureau")]["spec"]["template"]["spec"]["containers"][0]["env"]}

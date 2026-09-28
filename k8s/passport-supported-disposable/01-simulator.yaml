@@ -78,6 +78,13 @@ kind: Service
 metadata:
   name: passport-callback-signer
   namespace: ${PASSPORT_ACCEPTANCE_NAMESPACE}
+  labels:
+    app: passport-callback-signer
+    com.marty.passport.acceptance.owner: supported-consumer
+    com.marty.passport.acceptance.run-id: ${PASSPORT_ACCEPTANCE_PLAN_RUN_ID}
+    com.marty.passport.acceptance.source-commit: ${PASSPORT_ACCEPTANCE_SOURCE_COMMIT}
+  annotations:
+    com.marty.passport.acceptance.services-image: ${MARTY_SERVICES_IMAGE}
 spec:
   type: ClusterIP
   selector: {app: passport-callback-signer}
@@ -167,6 +174,13 @@ kind: Service
 metadata:
   name: passport-beta-bureau
   namespace: ${PASSPORT_ACCEPTANCE_NAMESPACE}
+  labels:
+    app: passport-beta-bureau
+    com.marty.passport.acceptance.owner: supported-consumer
+    com.marty.passport.acceptance.run-id: ${PASSPORT_ACCEPTANCE_PLAN_RUN_ID}
+    com.marty.passport.acceptance.source-commit: ${PASSPORT_ACCEPTANCE_SOURCE_COMMIT}
+  annotations:
+    com.marty.passport.acceptance.services-image: ${MARTY_SERVICES_IMAGE}
 spec:
   type: ClusterIP
   selector: {app: passport-beta-bureau}
