@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from contextlib import nullcontext
 import json
 from pathlib import Path
 import re
@@ -102,7 +103,8 @@ def test_keeps_partial_acceptance_blocked_after_actual_probe_functions() -> None
     assert result["probes"]["physical_booklet_verified"]["verified"] is False
 
 
-def test_opt_in_executed_flow_keeps_real_provider_callback_blocked() -> None:
+@pytest.mark.parametrize("same_job", [False, True])
+def test_opt_in_executed_flow_keeps_real_provider_callback_blocked(same_job: bool) -> None:
     selected = report()
     selected["release"]["stack_manifest_sha256"] = "b" * 64
     selected["deployment"]["provider_mode"] = "physical"
@@ -120,27 +122,38 @@ def test_opt_in_executed_flow_keeps_real_provider_callback_blocked() -> None:
         assert session == "operator-session" and api_key == "k" * 32
         return {"verified": True, "evidence": {"signed_provider_callback_verified": False,
                                                "instance_id_sha256": "d" * 64,
+                                               "application_id_sha256": "1" * 64,
+                                               "job_id_sha256": ("5" if same_job else "2") * 64,
+                                               "bureau_job_id_sha256": "3" * 64,
                                                "source_commit": "a" * 40,
                                                "stack_manifest_sha256": "b" * 64,
                                                "steps": list(PHYSICAL_STEPS),
-                                               "execution_relationship": "separate_job_from_gateway_lifecycle"}}
+                                               "execution_relationship": "not_compared_to_gateway_lifecycle"}}
 
-    result = run(
-        Path("beta-artifacts"), {"organization_id": "org-beta"}, "k" * 32,
-        collector=lambda *args, **kwargs: selected,
-        snapshot=lambda: {"sha256": "c" * 64, "container_counts": {}},
-        drain=lambda: {"verified": True, "evidence": {}},
-        lifecycle=lambda *args: {"verified": True, "evidence": {"sod_signature_verified": True,
-                                                                 "sod_sha256": "f" * 64}},
-        routing=lambda *args: {"verified": True, "evidence": {"webhook_owner": "passport-provider-ingress"}},
-        flow=lambda owner: {"verified": True, "evidence": {"unsigned_webhook_owner": owner,
-                                                           "signature_denial_verified": True}},
-        physical_flow_plan=plan, flow_session="operator-session", physical_flow=physical_flow,
-        checkout_checker=lambda source: source == "a" * 40 or pytest.fail("source drift"),
-    )
+    with (pytest.raises(EvidenceError, match="job identities are not distinct")
+          if same_job else nullcontext()):
+        result = run(
+            Path("beta-artifacts"), {"organization_id": "org-beta"}, "k" * 32,
+            collector=lambda *args, **kwargs: selected,
+            snapshot=lambda: {"sha256": "c" * 64, "container_counts": {}},
+            drain=lambda: {"verified": True, "evidence": {}},
+            lifecycle=lambda *args: {"verified": True, "evidence": {"sod_signature_verified": True,
+                                                                     "sod_sha256": "f" * 64,
+                                                                     "application_id_sha256": "4" * 64,
+                                                                     "job_id_sha256": "5" * 64,
+                                                                     "bureau_job_id_sha256": "6" * 64}},
+            routing=lambda *args: {"verified": True, "evidence": {"webhook_owner": "passport-provider-ingress"}},
+            flow=lambda owner: {"verified": True, "evidence": {"unsigned_webhook_owner": owner,
+                                                               "signature_denial_verified": True}},
+            physical_flow_plan=plan, flow_session="operator-session", physical_flow=physical_flow,
+            checkout_checker=lambda source: source == "a" * 40 or pytest.fail("source drift"),
+        )
     assert calls == ["physical"]
+    if same_job:
+        return
     assert result["status"] == "blocked"
     assert result["probes"]["executed_physical_document_flow"]["verified"] is True
+    assert result["probes"]["executed_physical_document_flow"]["evidence"]["execution_relationship"] == "separate_job_from_gateway_lifecycle"
     assert result["probes"]["signed_bureau_callback"]["verified"] is False
     assert result["probes"]["nine_route_gateway_flow"]["verified"] is False
     assert result["probes"]["nine_route_gateway_flow"]["evidence"]["execution_relationship"] == "separate_jobs"
@@ -157,6 +170,23 @@ def test_invalid_physical_plan_blocks_before_snapshot_or_mutation() -> None:
             drain=lambda: pytest.fail("drain should not start"),
             lifecycle=lambda *args: pytest.fail("lifecycle should not start"),
             physical_flow_plan={}, flow_session=None)
+
+
+def test_invalid_physical_operator_cookie_blocks_before_beta_mutation() -> None:
+    selected = report()
+    selected["release"]["stack_manifest_sha256"] = "b" * 64
+    plan = {"source_commit": "a" * 40, "stack_manifest_sha256": "b" * 64,
+            "organization_id": "org-beta", "flow_definition_id": "flow-physical",
+            "physical_document": {"country_code": "USA", "applicant": {"name": "Test"},
+                                  "mrz": {"line_1": "P<USA"},
+                                  "data_groups": {"DG1": "YQ==", "DG2": "Yg=="}}}
+    with pytest.raises(PhysicalFlowProbeError, match="operator session is invalid"):
+        run(Path("beta-artifacts"), {"organization_id": "org-beta"}, "k" * 32,
+            collector=lambda *args, **kwargs: selected,
+            snapshot=lambda: pytest.fail("snapshot must not start"),
+            drain=lambda: pytest.fail("drain must not start"),
+            lifecycle=lambda *args: pytest.fail("direct lifecycle must not mutate beta"),
+            physical_flow_plan=plan, flow_session="cookie\r\ninjection")
 
 
 def test_physical_source_checkout_drift_blocks_all_beta_mutation() -> None:
@@ -188,6 +218,8 @@ def test_physical_source_checkout_drift_blocks_all_beta_mutation() -> None:
     lambda p: p["physical_document"].update(country_code="US"),
     lambda p: p["physical_document"].update(document_type="TD4"),
     lambda p: p["physical_document"].update(mrz={"line_1": 12}),
+    lambda p: p["physical_document"].update(mrz={}),
+    lambda p: p["physical_document"].update(applicant={}),
 ])
 def test_invalid_physical_document_blocks_before_direct_lifecycle(mutate) -> None:
     selected = report()
@@ -195,7 +227,8 @@ def test_invalid_physical_document_blocks_before_direct_lifecycle(mutate) -> Non
     selected["deployment"]["provider_mode"] = "physical"
     plan = {"source_commit": "a" * 40, "stack_manifest_sha256": "b" * 64,
             "organization_id": "org-beta", "flow_definition_id": "flow-physical",
-            "physical_document": {"country_code": "USA", "applicant": {}, "mrz": {},
+            "physical_document": {"country_code": "USA", "applicant": {"name": "Test"},
+                                  "mrz": {"line_1": "P<USA"},
                                   "data_groups": {"DG1": "YQ==", "DG2": "Yg=="}}}
     mutate(plan)
     with pytest.raises(PhysicalFlowProbeError):
@@ -215,7 +248,8 @@ def test_physical_plan_tenant_differs_from_direct_lifecycle_before_mutation() ->
     selected["deployment"]["provider_mode"] = "physical"
     plan = {"source_commit": "a" * 40, "stack_manifest_sha256": "b" * 64,
             "organization_id": "other-org", "flow_definition_id": "flow-physical",
-            "physical_document": {"country_code": "USA", "applicant": {}, "mrz": {},
+            "physical_document": {"country_code": "USA", "applicant": {"name": "Test"},
+                                  "mrz": {"line_1": "P<USA"},
                                   "data_groups": {"DG1": "YQ==", "DG2": "Yg=="}}}
     with pytest.raises(EvidenceError, match="tenant differ"):
         run(Path("beta-artifacts"), {"organization_id": "org-beta"}, "k" * 32,

@@ -28,12 +28,14 @@ def inputs() -> tuple[dict, dict, dict]:
 
 
 class FakeFlow:
-    def __init__(self, *, wrong_step: bool = False, stale_job: bool = False) -> None:
+    def __init__(self, *, wrong_step: bool = False, stale_job: bool = False,
+                 late_bureau: bool = False) -> None:
         self.calls: list[tuple[str, str]] = []
         self.index = 0
         self.reference = ""
         self.wrong_step = wrong_step
         self.stale_job = stale_job
+        self.late_bureau = late_bureau
 
     def payload(self) -> dict:
         step = PHYSICAL_STEPS[min(self.index, len(PHYSICAL_STEPS) - 1)]
@@ -44,7 +46,9 @@ class FakeFlow:
                 "status": "COMPLETED" if self.index == len(PHYSICAL_STEPS) else "IN_PROGRESS",
                 "metadata": {"external_reference": self.reference},
                 "context_data": {"physical_document_job": {"application_id": "application-1",
-                                                          "id": "job-1", "bureau_job_id": "bureau-1",
+                                                          "id": "job-1", "bureau_job_id": (
+                                                              None if self.late_bureau and self.index < 6
+                                                              else "bureau-1"),
                     "status": "SUBMITTED" if self.stale_job else "QUALITY_CHECK"}}}
 
     def __call__(self, method: str, path: str, body: dict | None, session: str) -> tuple[int, dict]:
@@ -79,11 +83,22 @@ def test_executed_flow_is_source_bound_but_callback_stays_unverified() -> None:
     assert result["evidence"]["steps"] == list(PHYSICAL_STEPS)
     assert result["evidence"]["source_commit"] == release["source_commit"]
     assert result["evidence"]["signed_provider_callback_verified"] is False
-    assert result["evidence"]["execution_relationship"] == "separate_job_from_gateway_lifecycle"
+    assert result["evidence"]["execution_relationship"] == "not_compared_to_gateway_lifecycle"
+    for field in ("application_id_sha256", "job_id_sha256", "bureau_job_id_sha256"):
+        assert len(result["evidence"][field]) == 64
     assert result["evidence"]["missing"] == ["protected_real_provider_ingress_receipt"]
     assert len(fake.calls) == 2 + 2 * len(PHYSICAL_STEPS)
     assert "operator-session" not in str(result)
     assert "Test" not in str(result)
+
+
+def test_bureau_job_can_bind_when_submission_completes() -> None:
+    plan, release, deployment = inputs()
+    result = exercise(plan, release, deployment, "operator-session", "k" * 32,
+                      request=FakeFlow(late_bureau=True), status_request=ready_status,
+                      nonce=lambda: "c" * 32, source_checker=lambda source: None)
+    assert result["verified"] is True
+    assert len(result["evidence"]["bureau_job_id_sha256"]) == 64
 
 
 @pytest.mark.parametrize("field,value", [
@@ -107,11 +122,13 @@ def test_unsigned_or_simulator_release_fails_before_mutation() -> None:
             validate_plan(plan, changed_release, changed_deployment)
 
 
-def test_frozen_empty_applicant_and_mrz_objects_are_valid_plan_inputs() -> None:
+@pytest.mark.parametrize("field", ["applicant", "mrz"])
+def test_empty_required_document_objects_fail_before_mutation(field: str) -> None:
     plan, release, deployment = inputs()
-    plan["physical_document"]["applicant"] = {}
-    plan["physical_document"]["mrz"] = {}
-    validate_plan(plan, release, deployment)
+    plan["physical_document"][field] = {}
+    with pytest.raises(PhysicalFlowProbeError, match="inputs are incomplete"):
+        exercise(plan, release, deployment, "operator-session", "k" * 32,
+                 request=lambda *args: pytest.fail("invalid plan must not mutate beta"))
 
 
 @pytest.mark.parametrize("fake", [FakeFlow(wrong_step=True), FakeFlow(stale_job=True)])
@@ -174,6 +191,26 @@ def test_different_bureau_job_cannot_qualify_callback_progress() -> None:
     with pytest.raises(PhysicalFlowProbeError, match="identity drifted"):
         exercise(plan, release, deployment, "operator-session", "k" * 32,
                  request=fake, status_request=wrong_bureau, nonce=lambda: "c" * 32,
+                 source_checker=lambda source: None)
+
+
+@pytest.mark.parametrize("drift_index", [1, 4, 6, 7, 8, 9])
+@pytest.mark.parametrize("field", ["application_id", "id", "bureau_job_id"])
+def test_durable_job_binding_survives_quality_activation_and_final_read(
+    drift_index: int, field: str,
+) -> None:
+    plan, release, deployment = inputs()
+    fake = FakeFlow()
+
+    def swapped(method: str, path: str, body: dict | None, session: str) -> tuple[int, dict]:
+        status, payload = fake(method, path, body, session)
+        if fake.index >= drift_index:
+            payload["context_data"]["physical_document_job"][field] = "foreign-job"
+        return status, payload
+
+    with pytest.raises(PhysicalFlowProbeError, match="durable job identity drifted"):
+        exercise(plan, release, deployment, "operator-session", "k" * 32,
+                 request=swapped, status_request=ready_status, nonce=lambda: "c" * 32,
                  source_checker=lambda source: None)
 
 
