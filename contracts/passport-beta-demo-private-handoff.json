@@ -17,7 +17,9 @@
     "source_job_commitment": "source-job",
     "bureau_job_commitment": "bureau-job"
   },
+  "issuer_profile_commitments": "The protected producer uses the SAME 'issuer-profile' HMAC label for both CSCA and DSC profile IDs. Unequal commitments then prove unequal selected IDs without publishing them. It also attests managed KMS custody and chain/SOD binding.",
   "recorder_rule": "The protected preliminary receipt must pass release, deployment, route, chain, material, batch, callback, and negative-video checks. Every public same-job commitment must match the selected route commitments. The private plan's exact IDs must recompute those commitments before browser navigation, and the live Flow definition, instance, application, and source job must match the private plan. Missing or conflicting evidence blocks recording.",
   "foreign_denial": "The foreign organization is represented publicly by an organization HMAC commitment distinct from the selected organization; both negative runs use the selected source and bureau commitments.",
+  "unchanged_job_state": "The protected negative producer computes SHA-256 over the same exact native job-state projection before and after each denial, then publishes only HMAC-SHA256 with the beta organization API key over ASCII 'job-state:' plus that lowercase digest. All four commitments must match. The raw digest and state remain private.",
   "final_report": "D-12 records only selected commitments, source and deployment digests, preliminary receipt lineage, privacy/media digests, and behavior assertions. It does not emit flowInstanceSha256 or any raw identifier."
 }
