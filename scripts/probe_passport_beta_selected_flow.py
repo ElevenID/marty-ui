@@ -1,0 +1,215 @@
+#!/usr/bin/env python3
+"""Exercise one governed beta passport Flow and bind its durable native job."""
+
+from __future__ import annotations
+
+import json
+import re
+import time
+from collections.abc import Callable
+from typing import Any
+from urllib.error import HTTPError, URLError
+from urllib.parse import quote
+from urllib.request import HTTPRedirectHandler, Request, build_opener
+
+if __package__:
+    from .probe_passport_beta_flow import PHYSICAL_STEPS
+    from .probe_passport_beta_gateway import request_beta as request_passport
+else:
+    from probe_passport_beta_flow import PHYSICAL_STEPS
+    from probe_passport_beta_gateway import request_beta as request_passport
+
+
+ORIGIN = "https://beta.elevenidllc.com"
+IDENTIFIER = re.compile(r"[A-Za-z0-9._:-]{1,255}\Z")
+SHA256 = re.compile(r"[0-9a-f]{64}\Z")
+REFERENCES = ("application_template_id", "credential_template_id",
+              "delivery_destination_profile_id")
+
+
+class SelectedFlowError(ValueError):
+    pass
+
+
+class NoRedirect(HTTPRedirectHandler):
+    def redirect_request(self, req, fp, code, msg, headers, newurl):  # type: ignore[no-untyped-def]
+        return None
+
+
+def request_flow(method: str, path: str, body: dict[str, Any] | None,
+                 operator_cookie: str) -> tuple[int, dict[str, Any]]:
+    if (not path.startswith("/v1/flows/") or ".." in path
+            or not operator_cookie or any(character in operator_cookie for character in "\r\n")):
+        raise SelectedFlowError("Selected Flow request is invalid")
+    url = ORIGIN + path
+    headers = {"Accept": "application/json", "Cache-Control": "no-cache",
+               "User-Agent": "passport-beta-flow-acceptance/1", "Cookie": operator_cookie}
+    encoded = None
+    if body is not None:
+        headers["Content-Type"] = "application/json"
+        encoded = json.dumps(body, separators=(",", ":")).encode("utf-8")
+    try:
+        with build_opener(NoRedirect).open(Request(url, data=encoded, headers=headers, method=method),
+                                             timeout=60) as response:
+            if response.geturl() != url:
+                raise SelectedFlowError("Selected Flow route redirected")
+            raw = response.read(128 * 1024 + 1)
+            if len(raw) > 128 * 1024:
+                raise SelectedFlowError("Selected Flow response is oversized")
+            payload = json.loads(raw)
+            if not isinstance(payload, dict):
+                raise SelectedFlowError("Selected Flow response is invalid")
+            return response.status, payload
+    except HTTPError as exc:
+        return exc.code, {}
+    except (OSError, URLError, ValueError) as exc:
+        raise SelectedFlowError("Selected Flow request failed") from exc
+
+
+def exercise(
+    flow_definition_id: str,
+    organization_id: str,
+    issuer_did: str,
+    references: dict[str, str],
+    physical_document: dict[str, Any],
+    operator_cookie: str,
+    api_key: str,
+    *,
+    on_submission: Callable[[str, str, str, str], dict[str, Any]],
+    request: Callable[[str, str, dict[str, Any] | None, str], tuple[int, dict[str, Any]]] = request_flow,
+    passport_request: Callable[[str, str, dict[str, Any] | None, str], tuple[int, dict[str, Any]]] = request_passport,
+    max_polls: int = 90,
+    poll_interval_seconds: float = 10,
+    sleep: Callable[[float], None] = time.sleep,
+) -> dict[str, Any]:
+    if (not isinstance(flow_definition_id, str) or not IDENTIFIER.fullmatch(flow_definition_id)
+            or not isinstance(organization_id, str) or not organization_id
+            or not isinstance(issuer_did, str) or not issuer_did.startswith("did:")
+            or not isinstance(references, dict)
+            or any(not isinstance(references.get(key), str) or not references[key] for key in REFERENCES)
+            or not isinstance(physical_document, dict)
+            or any(not physical_document.get(key) for key in ("country_code", "applicant", "mrz", "data_groups"))
+            or not isinstance(operator_cookie, str) or not operator_cookie
+            or any(character in operator_cookie for character in "\r\n")
+            or not isinstance(api_key, str) or len(api_key) < 32
+            or not 1 <= max_polls <= 180 or poll_interval_seconds < 0):
+        raise SelectedFlowError("Selected Flow inputs are incomplete")
+
+    definition_path = f"/v1/flows/definitions/{quote(flow_definition_id, safe='')}"
+    status, definition = request("GET", definition_path, None, operator_cookie)
+    if (status != 200 or definition.get("id") != flow_definition_id
+            or definition.get("organization_id") != organization_id
+            or definition.get("flow_type") != "physical_document_issuance"
+            or str(definition.get("status")).upper() != "ACTIVE"
+            or definition.get("resolved_steps") != list(PHYSICAL_STEPS)
+            or any(definition.get(key) != references[key] for key in REFERENCES)):
+        raise SelectedFlowError("Active beta passport Flow definition does not match the selected organization and templates")
+
+    start_body = {"organization_id": organization_id, "flow_definition_id": flow_definition_id,
+                  "initial_context": {"physical_document": physical_document}}
+    status, current = request("POST", "/v1/flows/instances", start_body, operator_cookie)
+    instance_id = current.get("id")
+    if status != 200 or not isinstance(instance_id, str) or not IDENTIFIER.fullmatch(instance_id):
+        raise SelectedFlowError("Selected beta passport Flow did not start")
+    application_id = None
+    source_job_id = None
+    bureau_job_id = None
+    sod_sha256 = None
+    receipt = None
+
+    def checked_job(response: dict[str, Any], expected_step: str | None) -> dict[str, Any]:
+        nonlocal application_id, source_job_id
+        context = response.get("context_data")
+        job = context.get("physical_document_job") if isinstance(context, dict) else None
+        if (response.get("id") != instance_id or response.get("flow_id") != flow_definition_id
+                or response.get("organization_id") != organization_id
+                or response.get("flow_type") != "physical_document_issuance"
+                or response.get("current_step") != expected_step
+                or not isinstance(job, dict)
+                or job.get("organization_id") != organization_id
+                or job.get("flow_execution_id") != instance_id
+                or job.get("issuer_did") != issuer_did):
+            raise SelectedFlowError("Selected Flow instance or managed issuer binding changed")
+        if application_id is None:
+            application_id = job.get("application_id")
+            source_job_id = job.get("id")
+            if not all(isinstance(value, str) and value for value in (application_id, source_job_id)):
+                raise SelectedFlowError("Selected Flow created no passport job")
+        if (job.get("application_id") != application_id or job.get("id") != source_job_id
+                or context.get("application_id") != application_id):
+            raise SelectedFlowError("Selected Flow passport job changed")
+        return job
+
+    checked_job(current, PHYSICAL_STEPS[0])
+    instance_path = f"/v1/flows/instances/{quote(instance_id, safe='')}"
+    for index, step in enumerate(PHYSICAL_STEPS):
+        if current.get("current_step") != step:
+            raise SelectedFlowError("Selected Flow step order changed")
+        if step == "track_production":
+            status_path = f"/v1/passport/applications/{quote(application_id, safe='')}/production-status"
+            for poll in range(max_polls):
+                code, native = passport_request("GET", status_path, None, api_key)
+                if (code != 200 or native.get("organization_id") != organization_id
+                        or native.get("application_id") != application_id
+                        or native.get("id") != source_job_id
+                        or native.get("bureau_job_id") != bureau_job_id):
+                    raise SelectedFlowError("Selected Flow native job status changed")
+                if native.get("status") in ("QUALITY_CHECK", "READY_FOR_ACTIVATION"):
+                    break
+                if native.get("status") in ("FAILED", "CANCELLED", "ACTIVE"):
+                    raise SelectedFlowError("Selected Flow bureau reached an invalid status")
+                if poll + 1 < max_polls:
+                    sleep(poll_interval_seconds)
+            else:
+                raise SelectedFlowError("Selected Flow bureau did not reach quality check")
+        body = {"step_result": "success", "data": ({"passed": True, "failure_codes": []}
+                                                   if step == "quality_verify" else {})}
+        status, current = request("POST", instance_path + "/advance", body, operator_cookie)
+        if status != 200:
+            raise SelectedFlowError("Selected Flow step did not advance")
+        # The Flow projection retains the last protocol step name after the
+        # kernel enters COMPLETED with no next graph edge.
+        next_step = PHYSICAL_STEPS[index + 1] if index + 1 < len(PHYSICAL_STEPS) else step
+        job = checked_job(current, next_step)
+        if step == "sign_sod":
+            sod_sha256 = job.get("sod_sha256")
+            if (not isinstance(sod_sha256, str) or not SHA256.fullmatch(sod_sha256)
+                    or job.get("sod_signature_verified") is not True):
+                raise SelectedFlowError("Selected Flow SOD signature is unverified")
+        if step == "submit_to_personalization":
+            bureau_job_id = job.get("bureau_job_id")
+            if (not isinstance(bureau_job_id, str) or not bureau_job_id
+                    or job.get("sod_sha256") != sod_sha256):
+                raise SelectedFlowError("Selected Flow submitted different SOD material")
+            receipt = on_submission(organization_id, source_job_id, bureau_job_id, sod_sha256)
+            evidence = receipt.get("evidence") if isinstance(receipt, dict) else None
+            if (not isinstance(receipt, dict) or receipt.get("verified") is not True
+                    or not isinstance(evidence, dict)
+                    or evidence.get("tenant_and_job_binding") is not True
+                    or evidence.get("first_accepted_sod_der_matches_native") is not True
+                    or evidence.get("first_accepted_dsc_der_matches_selected_chain") is not True
+                    or evidence.get("first_accepted_dsc_pem_wire_matches_selected_chain") is not True
+                    or any(not isinstance(evidence.get(key), str) or not SHA256.fullmatch(evidence[key])
+                           for key in ("source_job_id_commitment", "bureau_job_id_commitment"))):
+                raise SelectedFlowError("Selected Flow simulator material receipt is unverified")
+
+    results = current.get("step_results")
+    job = current["context_data"]["physical_document_job"]
+    if (str(current.get("status")).upper() != "COMPLETED"
+            or not current.get("completed_at") or job.get("status") != "ACTIVE"
+            or job.get("bureau_job_id") != bureau_job_id or not job.get("completed_at")
+            or not isinstance(results, dict) or set(results) != set(PHYSICAL_STEPS)
+            or any(str(value.get("result", value.get("status", ""))).upper() not in ("SUCCESS", "COMPLETED")
+                   for value in results.values() if isinstance(value, dict))
+            or any(not isinstance(value, dict) for value in results.values())):
+        raise SelectedFlowError("Selected Flow did not complete all nine durable steps")
+    return {"verified": True, "evidence": {
+        "organization_id": organization_id, "flow_id": flow_definition_id,
+        "flow_instance_id": instance_id, "application_id": application_id,
+        "job_id": source_job_id, "bureau_job_id": bureau_job_id,
+        "sod_sha256": sod_sha256, "ordered_steps": list(PHYSICAL_STEPS),
+        "completed_steps": len(PHYSICAL_STEPS),
+        "source_job_commitment": receipt["evidence"]["source_job_id_commitment"],
+        "bureau_job_commitment": receipt["evidence"]["bureau_job_id_commitment"],
+        "physical_claim": "not_claimed",
+    }}
