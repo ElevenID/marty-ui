@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Exercise the authenticated beta passport application lifecycle through Gateway.
 
-The signed provider webhook and KMS/ICAO verification need separate probes.
+The signed simulator callback and KMS/ICAO verification need separate probes.
 This module deliberately records only the public job projection's state and
 hashes, never applicant data, API keys, or response bodies.
 """
@@ -111,6 +111,8 @@ def exercise(
             or sod.get("sod_signature_verified") is not True):
         raise ProbeError("SOD operation did not return verified signature evidence")
     submitted = call("POST", base + "/submit-personalization", None, 200)
+    if submitted.get("sod_sha256") != sod["sod_sha256"]:
+        raise ProbeError("Submitted SOD differs from the verified generated SOD")
     bureau_job_id = submitted.get("bureau_job_id")
     if not isinstance(bureau_job_id, str) or not bureau_job_id:
         raise ProbeError("Bureau submission has no durable job identity")

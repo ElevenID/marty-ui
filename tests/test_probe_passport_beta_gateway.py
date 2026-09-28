@@ -20,6 +20,8 @@ KEY = "a" * 32
 def gateway(*, wrong_tenant: bool = False, no_quality: bool = False,
             wrong_job: bool = False, missing_sod: bool = False,
             missing_verified_sod: bool = False,
+            missing_submitted_sod: bool = False,
+            wrong_submitted_sod: bool = False,
             failed_bureau: bool = False):
     calls = []
     states = ["DRAFT", "DATA_GENERATED", "SOD_SIGNED", "SUBMITTED",
@@ -38,6 +40,8 @@ def gateway(*, wrong_tenant: bool = False, no_quality: bool = False,
             payload["sod_sha256"] = "f" * 64
             if not missing_verified_sod:
                 payload["sod_signature_verified"] = True
+        if state == "SUBMITTED" and not missing_submitted_sod:
+            payload["sod_sha256"] = "e" * 64 if wrong_submitted_sod else "f" * 64
         if state == "READY_FOR_ACTIVATION":
             payload["quality_result"] = {"passed": True}
         if state == "ACTIVE":
@@ -78,7 +82,8 @@ def test_rejects_unfinished_bureau_lifecycle() -> None:
     assert len(calls) == 5
 
 
-@pytest.mark.parametrize("defect", ["wrong_job", "missing_sod", "missing_verified_sod", "failed_bureau"])
+@pytest.mark.parametrize("defect", ["wrong_job", "missing_sod", "missing_verified_sod",
+                                     "missing_submitted_sod", "wrong_submitted_sod", "failed_bureau"])
 def test_rejects_missing_or_inconsistent_runtime_outcome(defect: str) -> None:
     calls, request = gateway(**{defect: True})
     with pytest.raises(ProbeError):
