@@ -387,8 +387,8 @@ def validate_model(
     )
     require(
         all(settings.get("PASSPORT_INTERNAL_SERVICE_AUTH_ENABLED") == "true"
-            and not settings.get("PASSPORT_TENANT_API_KEYS")
-            and not settings.get("PASSPORT_TENANT_API_KEYS_FILE")
+            and "PASSPORT_TENANT_API_KEYS" not in settings
+            and "PASSPORT_TENANT_API_KEYS_FILE" not in settings
             for settings in (gateway, flow, native))
         and "passport_tenant_api_keys" not in secrets,
         "Disposable internal passport authentication conflicts with tenant keyring",

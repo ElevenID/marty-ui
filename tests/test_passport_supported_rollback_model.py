@@ -242,6 +242,9 @@ def test_attested_plan_binds_all_disposable_images(tmp_path: Path) -> None:
     (lambda model, root: model["services"]["gateway"]["environment"].update(
         PASSPORT_TENANT_API_KEYS_FILE="/run/secrets/tenant_keys"),
      "internal passport authentication"),
+    (lambda model, root: model["services"]["gateway"]["environment"].update(
+        PASSPORT_TENANT_API_KEYS_FILE=""),
+     "internal passport authentication"),
     (lambda model, root: model["services"]["flow"]["environment"].update(
         PASSPORT_INTERNAL_SERVICE_AUTH_ENABLED="false"),
      "internal passport authentication"),
