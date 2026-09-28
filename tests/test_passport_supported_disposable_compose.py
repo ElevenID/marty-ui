@@ -78,7 +78,18 @@ def test_real_compose_render_is_safe_but_not_accepted(
     assert model["services"]["issuance"]["image"] == LEGACY
     signing = model["services"]["signing-keys"]
     assert signing["environment"]["SIGNING_KEYS_REDIS_URL"] == "redis://redis:6379/2"
+    assert signing["environment"]["PUBLIC_DOMAIN"] == "localhost"
     assert signing["depends_on"]["redis"]["condition"] == "service_healthy"
+    migration = model["services"]["db-migrate"]
+    assert migration["environment"]["REDIS_URL"] == signing["environment"][
+        "SIGNING_KEYS_REDIS_URL"]
+    assert migration["environment"]["PUBLIC_DOMAIN"] == model["services"][
+        "gateway"]["environment"]["PUBLIC_DOMAIN"]
+    assert migration["environment"]["MARTY_ISSUER_DID"] == model["services"][
+        "flow"]["environment"]["MARTY_ISSUER_DID"] == model["services"][
+        "issuance-native"]["environment"]["MARTY_ISSUER_DID"]
+    assert migration["environment"]["MARTY_ISSUER_BASE_URL"] == model["services"][
+        "gateway"]["environment"]["ISSUER_BASE_URL"]
     for role, reference in qualified_images(verify_registry=False).items():
         assert model["services"][role]["image"] == reference
     labels = model["services"]["gateway"]["labels"]

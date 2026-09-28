@@ -44,9 +44,20 @@ services:
       MARTY_DB_PASSWORD_FILE: /run/secrets/marty_db_password
       MARTY_ORG_ADMIN_EMAIL: ${PASSPORT_ACCEPTANCE_ADMIN_EMAIL:?supply disposable admin email}
       DATABASE_URL_TEMPLATE: postgresql+asyncpg://marty:$${MARTY_DB_PASSWORD}@postgres:5432/marty
-    secrets: [marty_db_password]
+      REDIS_URL: redis://redis:6379/2
+      BAO_ADDR: http://openbao:8200
+      BAO_TOKEN_FILE: /run/secrets/bao_token
+      MARTY_KMS_BOOTSTRAP_ENABLED: "true"
+      PUBLIC_DOMAIN: localhost
+      MARTY_ISSUER_BASE_URL: http://gateway:8000
+      MARTY_ISSUER_DID: did:web:localhost:orgs:marty
+    secrets: [marty_db_password, bao_token]
     depends_on:
       postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      openbao:
         condition: service_healthy
     networks: [private]
     restart: "no"
@@ -61,6 +72,7 @@ services:
       MARTY_DB_PASSWORD_FILE: /run/secrets/marty_db_password
       BAO_ADDR: http://openbao:8200
       BAO_TOKEN_FILE: /run/secrets/bao_token
+      PUBLIC_DOMAIN: localhost
       SIGNING_KEYS_INTERNAL_API_KEY_FILE: /run/secrets/signing_keys_internal_api_key
     secrets: [marty_db_password, bao_token, signing_keys_internal_api_key]
     depends_on:
@@ -99,6 +111,7 @@ services:
       PASSPORT_MANAGED_ISSUER_SIGNING_ENABLED: "true"
       PASSPORT_KMS_ARTIFACTS_ENABLED: "true"
       PASSPORT_KMS_CALLBACKS_ENABLED: "true"
+      MARTY_ISSUER_DID: did:web:localhost:orgs:marty
       GRPC_SERVICE_TOKEN_FILE: /run/secrets/grpc_service_token
       DATABASE_URL_TEMPLATE: postgresql+asyncpg://marty:$${MARTY_DB_PASSWORD}@postgres:5432/marty
       MARTY_DB_PASSWORD_FILE: /run/secrets/marty_db_password
@@ -126,6 +139,7 @@ services:
       FLOW_SERVICE_PORT: "8011"
       PASSPORT_NATIVE_FLOW_ENABLED: "true"
       PASSPORT_INTERNAL_SERVICE_AUTH_ENABLED: "true"
+      MARTY_ISSUER_DID: did:web:localhost:orgs:marty
       GRPC_SERVICE_TOKEN_FILE: /run/secrets/grpc_service_token
       DATABASE_URL_TEMPLATE: postgresql+asyncpg://marty:$${MARTY_DB_PASSWORD}@postgres:5432/marty
       MARTY_DB_PASSWORD_FILE: /run/secrets/marty_db_password
@@ -195,6 +209,8 @@ services:
       PASSPORT_NATIVE_GATEWAY_ENABLED: "true"
       PASSPORT_PROVIDER_INGRESS_GATEWAY_ENABLED: "false"
       PASSPORT_INTERNAL_SERVICE_AUTH_ENABLED: "true"
+      PUBLIC_DOMAIN: localhost
+      ISSUER_BASE_URL: http://gateway:8000
       GRPC_SERVICE_TOKEN_FILE: /run/secrets/grpc_service_token
       FLOW_SERVICE_URL: http://flow:8011
       ISSUANCE_NATIVE_SERVICE_URL: http://issuance-native:8005

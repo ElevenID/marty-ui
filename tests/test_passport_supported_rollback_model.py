@@ -53,15 +53,21 @@ def safe_model(root: Path) -> dict:
     services["passport-beta-bureau"]["networks"] = ["private", "callback_signing"]
     services["issuance-native"]["environment"].update({
         "ENVIRONMENT": "development",
+        "MARTY_ISSUER_DID": "did:web:localhost:orgs:marty",
         "PERSONALIZATION_BUREAU_URL": "http://passport-beta-bureau:8020",
         "PERSONALIZATION_BUREAU_API_KEY_FILE": "/run/secrets/grpc_service_token",
         "PERSONALIZATION_BUREAU_PROVIDER_PROFILE_ID": "passport-beta-bureau",
     })
     services["gateway"]["environment"].update({
         "ENVIRONMENT": "development",
+        "PUBLIC_DOMAIN": "localhost",
+        "ISSUER_BASE_URL": "http://gateway:8000",
         "PASSPORT_PROVIDER_INGRESS_GATEWAY_ENABLED": "false",
     })
-    services["flow"]["environment"]["ENVIRONMENT"] = "development"
+    services["flow"]["environment"].update({
+        "ENVIRONMENT": "development",
+        "MARTY_ISSUER_DID": "did:web:localhost:orgs:marty",
+    })
     infra = qualified_images(verify_registry=False)
     services["postgres"] = {"image": infra["postgres"], "networks": ["private"], "volumes": [
         {"type": "bind", "source": str(root / "postgres"),
@@ -73,11 +79,26 @@ def safe_model(root: Path) -> dict:
     services["signing-keys"] = {
         "image": IMAGE,
         "networks": ["private"],
-        "environment": {"SIGNING_KEYS_REDIS_URL": "redis://redis:6379/2"},
+        "environment": {"SIGNING_KEYS_REDIS_URL": "redis://redis:6379/2",
+                        "PUBLIC_DOMAIN": "localhost"},
         "depends_on": {"redis": {"condition": "service_healthy"}},
     }
-    services["db-migrate"] = {"image": "ghcr.io/elevenid/marty-ui-oss/migrations@sha256:" + "b" * 64,
-                              "networks": ["private"]}
+    services["db-migrate"] = {
+        "image": "ghcr.io/elevenid/marty-ui-oss/migrations@sha256:" + "b" * 64,
+        "networks": ["private"],
+        "environment": {
+            "REDIS_URL": "redis://redis:6379/2",
+            "BAO_ADDR": "http://openbao:8200",
+            "BAO_TOKEN_FILE": "/run/secrets/bao_token",
+            "MARTY_KMS_BOOTSTRAP_ENABLED": "true",
+            "PUBLIC_DOMAIN": "localhost",
+            "MARTY_ISSUER_BASE_URL": "http://gateway:8000",
+            "MARTY_ISSUER_DID": "did:web:localhost:orgs:marty",
+        },
+        "depends_on": {name: {"condition": "service_healthy"}
+                       for name in ("postgres", "redis", "openbao")},
+        "secrets": [{"source": "bao_token"}],
+    }
     services["issuance"] = {"image": "ghcr.io/elevenid/marty-credentials-issuance@sha256:" + "c" * 64,
                             "networks": ["private"]}
     for service in services.values():
@@ -89,7 +110,10 @@ def safe_model(root: Path) -> dict:
                 "callback_signing": {"name": PROJECT + "_callback_signing",
                                      "internal": True, "labels": LABELS},
             },
-            "volumes": {}, "secrets": {"db": {"file": str(root / "secrets/db")}}}
+            "volumes": {}, "secrets": {
+                "db": {"file": str(root / "secrets/db")},
+                "bao_token": {"file": str(root / "secrets/bao_token")},
+            }}
 
 
 def test_isolated_resolved_compose_model_passes_only_static_preflight(
@@ -196,6 +220,24 @@ def test_attested_plan_binds_all_disposable_images(tmp_path: Path) -> None:
         BAO_TOKEN="raw-secret"), "isolated beta KMS"),
     (lambda model, root: model["services"]["passport-beta-bureau"]["environment"].update(
         GRPC_SERVICE_TOKEN="raw-secret"), "private Marty simulator"),
+    (lambda model, root: model["services"]["db-migrate"]["environment"].pop(
+        "REDIS_URL"), "issuer profile bootstrap"),
+    (lambda model, root: model["services"]["db-migrate"]["environment"].update(
+        REDIS_URL="redis://redis:6379/0"), "issuer profile bootstrap"),
+    (lambda model, root: model["services"]["db-migrate"]["environment"].update(
+        MARTY_KMS_BOOTSTRAP_ENABLED="false"), "issuer profile bootstrap"),
+    (lambda model, root: model["services"]["db-migrate"]["depends_on"].pop(
+        "openbao"), "issuer profile bootstrap"),
+    (lambda model, root: model["services"]["db-migrate"]["secrets"].clear(),
+     "issuer profile bootstrap"),
+    (lambda model, root: model["services"]["gateway"]["environment"].update(
+        PUBLIC_DOMAIN="gateway"), "managed issuer DID"),
+    (lambda model, root: model["services"]["signing-keys"]["environment"].pop(
+        "PUBLIC_DOMAIN"), "managed issuer DID"),
+    (lambda model, root: model["services"]["flow"]["environment"].update(
+        MARTY_ISSUER_DID="did:web:other:orgs:marty"), "managed issuer DID"),
+    (lambda model, root: model["services"]["db-migrate"]["environment"].update(
+        MARTY_ISSUER_DID="did:web:localhost%3A8000:orgs:marty"), "managed issuer DID"),
 ])
 def test_model_rejects_production_escape(tmp_path: Path, change, match: str) -> None:
     model = deepcopy(safe_model(tmp_path))

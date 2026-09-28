@@ -351,6 +351,40 @@ def validate_model(
     native = services["issuance-native"]["environment"]
     gateway = services["gateway"]["environment"]
     flow = services["flow"]["environment"]
+    migration = services["db-migrate"]
+    migration_env = migration.get("environment")
+    dependencies = migration.get("depends_on")
+    migration_secrets = migration.get("secrets")
+    require(
+        isinstance(migration_env, dict)
+        and migration_env.get("REDIS_URL") == services["signing-keys"]["environment"].get(
+            "SIGNING_KEYS_REDIS_URL") == "redis://redis:6379/2"
+        and migration_env.get("BAO_ADDR") == "http://openbao:8200"
+        and migration_env.get("BAO_TOKEN_FILE") == "/run/secrets/bao_token"
+        and migration_env.get("MARTY_KMS_BOOTSTRAP_ENABLED") == "true"
+        and migration_env.get("PUBLIC_DOMAIN") == "localhost"
+        and migration_env.get("MARTY_ISSUER_BASE_URL") == "http://gateway:8000"
+        and isinstance(dependencies, dict)
+        and all(isinstance(dependencies.get(role), dict)
+                and dependencies[role].get("condition") == "service_healthy"
+                for role in ("postgres", "redis", "openbao"))
+        and isinstance(migration_secrets, list)
+        and any(isinstance(secret, dict) and secret.get("source") == "bao_token"
+                for secret in migration_secrets),
+        "Disposable migrations could skip managed issuer profile bootstrap",
+    )
+    issuer_did = "did:web:localhost:orgs:marty"
+    require(
+        migration_env.get("MARTY_ISSUER_DID") == issuer_did
+        and migration_env.get("PUBLIC_DOMAIN") == gateway.get("PUBLIC_DOMAIN")
+        == services["signing-keys"]["environment"].get("PUBLIC_DOMAIN")
+        == "localhost"
+        and migration_env.get("MARTY_ISSUER_BASE_URL")
+        == gateway.get("ISSUER_BASE_URL") == "http://gateway:8000"
+        and flow.get("MARTY_ISSUER_DID") == issuer_did
+        and native.get("MARTY_ISSUER_DID") == issuer_did,
+        "Disposable managed issuer DID differs across profile and runtime services",
+    )
     require(native.get("ENVIRONMENT") == ("beta" if surface == "selfhost" else "development")
             and gateway.get("ENVIRONMENT") == ("production" if surface == "selfhost" else "development")
             and flow.get("ENVIRONMENT") == ("production" if surface == "selfhost" else "development"),
