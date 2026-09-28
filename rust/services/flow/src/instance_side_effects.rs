@@ -209,15 +209,23 @@ async fn initialize_physical_document(
                 "physical document definition references are required",
             ))
     };
+    let template_id = required_reference(&definition.credential_template_id)?;
+    let template_provider =
+        providers
+            .credential_template
+            .as_ref()
+            .ok_or(FlowProviderError::Unavailable {
+                provider: "credential_template",
+            })?;
+    let template = template_provider.get_template(&template_id).await?;
+    validate_template(&template, &template_id, &instance.organization_id)?;
     let data = BTreeMap::from([
         (
             "application_template_id".into(),
             json!(required_reference(&definition.application_template_id)?),
         ),
-        (
-            "credential_template_id".into(),
-            json!(required_reference(&definition.credential_template_id)?),
-        ),
+        ("credential_template_id".into(), json!(template_id)),
+        ("issuer_did".into(), json!(template.issuer_did)),
         (
             "delivery_destination_profile_id".into(),
             json!(required_reference(
