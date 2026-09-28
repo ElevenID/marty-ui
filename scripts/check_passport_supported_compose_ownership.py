@@ -18,12 +18,12 @@ from typing import Callable
 
 if __package__:
     from .check_passport_supported_rollback_model import (
-        DISPOSABLE_SERVICES, PROJECT, SELECTED,
+        DISPOSABLE_SERVICES, PROJECT, RUST_DEPENDENCIES, SELECTED,
     )
     from .passport_supported_infra_images import ROLES
 else:
     from check_passport_supported_rollback_model import (
-        DISPOSABLE_SERVICES, PROJECT, SELECTED,
+        DISPOSABLE_SERVICES, PROJECT, RUST_DEPENDENCIES, SELECTED,
     )
     from passport_supported_infra_images import ROLES
 
@@ -54,6 +54,8 @@ SECRET_MOUNTS = {
     "db-migrate": ("marty_db_password", "bao_token"),
     "signing-keys": ("marty_db_password", "bao_token", "signing_keys_internal_api_key"),
     "issuance": (),
+    "event-stream": (),
+    "organization": ("marty_db_password", "grpc_service_token"),
     "issuance-native": ("marty_db_password", "bao_token", "signing_keys_internal_api_key",
                         "issuance_api_key", "grpc_service_token", "token_hmac_key",
                         "integration_secret_master_key"),
@@ -264,7 +266,7 @@ def verify(record: dict, surface: str, now: datetime,
         expected_image = (
             record["legacy_reference"] if service == "issuance" else
             record["migrations_reference"] if service == "db-migrate" else
-            record["services_reference"] if service in SELECTED | {"signing-keys"}
+            record["services_reference"] if service in SELECTED | RUST_DEPENDENCIES | {"signing-keys"}
             else infra_images.get(service)
         )
         require(expected_image is not None and config.get("Image") == expected_image,

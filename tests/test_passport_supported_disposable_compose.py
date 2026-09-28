@@ -58,6 +58,7 @@ def test_real_compose_render_is_safe_but_not_accepted(
         "gateway", "flow", "issuance-native", "issuance",
         "passport-callback-signer", "passport-beta-bureau",
         "signing-keys", "db-migrate", "postgres", "redis", "openbao",
+        "organization", "event-stream",
     }
     result = validate_model(model, project, SERVICES, tmp_path)
     assert result["model_safe"] is True
@@ -85,6 +86,10 @@ def test_real_compose_render_is_safe_but_not_accepted(
         "PERSONALIZATION_BUREAU_PROVIDER_PROFILE_ID"] == "passport-beta-bureau"
     assert model["services"]["gateway"]["environment"][
         "PASSPORT_PROVIDER_INGRESS_GATEWAY_ENABLED"] == "false"
+    assert model["services"]["gateway"]["environment"][
+        "ORG_GRPC_TARGET"] == "organization:9002"
+    assert model["services"]["organization"]["environment"][
+        "ES_GRPC_TARGET"] == "event-stream:9015"
     assert model["services"]["issuance"]["image"] == LEGACY
     signing = model["services"]["signing-keys"]
     assert signing["environment"]["SIGNING_KEYS_REDIS_URL"] == "redis://redis:6379/2"

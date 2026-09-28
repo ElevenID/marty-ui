@@ -29,7 +29,8 @@ SELECTED = frozenset({
     "passport-beta-bureau",
 })
 ISOLATED_DEPENDENCIES = frozenset({"postgres", "openbao", "redis"})
-DISPOSABLE_SERVICES = SELECTED | ISOLATED_DEPENDENCIES | frozenset({
+RUST_DEPENDENCIES = frozenset({"organization", "event-stream"})
+DISPOSABLE_SERVICES = SELECTED | ISOLATED_DEPENDENCIES | RUST_DEPENDENCIES | frozenset({
     "db-migrate", "issuance", "signing-keys",
 })
 ALLOWED_SERVICES = frozenset({
@@ -293,11 +294,12 @@ def validate_model(
                 and isinstance(service.get("image"), str)
                 and IMMUTABLE_IMAGE.fullmatch(service["image"]) is not None,
                 f"Compose {name} image is not immutable")
-        if name in SELECTED:
+        if name in SELECTED | RUST_DEPENDENCIES:
             require(service.get("image") == services_reference,
                     f"Compose {name} is not pinned to the signed services image")
         expected_image = (infra_images.get(name)
-                          or (services_reference if name == "signing-keys" else None)
+                          or (services_reference if name in RUST_DEPENDENCIES | {"signing-keys"}
+                              else None)
                           or (migrations_reference if name == "db-migrate" else None)
                           or (legacy_reference if name == "issuance" else None))
         if expected_image is not None:
@@ -400,6 +402,59 @@ def validate_model(
     native = services["issuance-native"]["environment"]
     gateway = services["gateway"]["environment"]
     flow = services["flow"]["environment"]
+    organization = services["organization"]
+    organization_env = organization["environment"]
+    event_stream_env = services["event-stream"]["environment"]
+    require(
+        event_stream_env.get("SERVICE_NAME") == "event_stream"
+        and event_stream_env.get("EVENT_STREAM_SERVICE_PORT") == "8015"
+        and event_stream_env.get("EVENT_STREAM_GRPC_ENABLED") == "true"
+        and event_stream_env.get("EVENT_STREAM_GRPC_PORT") == "9015"
+        and organization_env.get("SERVICE_NAME") == "organization"
+        and organization_env.get("ORGANIZATION_SERVICE_PORT") == "8002"
+        and organization_env.get("ORG_GRPC_PORT") == "9002"
+        and organization_env.get("DATABASE_URL_TEMPLATE")
+        == flow.get("DATABASE_URL_TEMPLATE")
+        == native.get("DATABASE_URL_TEMPLATE")
+        and organization_env.get("DATABASE_URL_TEMPLATE", "").startswith(
+            "postgresql+asyncpg://marty:")
+        and organization_env.get("DATABASE_URL_TEMPLATE", "").endswith(
+            "@postgres:5432/marty")
+        and organization_env.get("MARTY_DB_PASSWORD_FILE")
+        == "/run/secrets/marty_db_password"
+        and organization_env.get("GRPC_SERVICE_TOKEN_FILE")
+        == "/run/secrets/grpc_service_token"
+        and organization_env.get("REDIS_URL") == "redis://redis:6379"
+        and organization_env.get("ES_GRPC_TARGET") == "event-stream:9015"
+        and isinstance(organization_env.get("MARTY_ORG_ADMIN_EMAIL"), str)
+        and "@" in organization_env["MARTY_ORG_ADMIN_EMAIL"]
+        and organization_env["MARTY_ORG_ADMIN_EMAIL"]
+        == services["db-migrate"]["environment"].get("MARTY_ORG_ADMIN_EMAIL")
+        and all(key not in organization_env for key in (
+            "MARTY_DB_PASSWORD", "GRPC_SERVICE_TOKEN"))
+        and {secret.get("source") for secret in organization.get("secrets", [])}
+        == {"marty_db_password", "grpc_service_token"}
+        and isinstance(organization.get("depends_on"), dict)
+        and all(isinstance(organization["depends_on"].get(name), dict)
+                and organization["depends_on"][name].get("condition") == condition
+                for name, condition in (
+                    ("db-migrate", "service_completed_successfully"),
+                    ("redis", "service_healthy"),
+                    ("event-stream", "service_healthy")))
+        and gateway.get("ORGANIZATION_SERVICE_URL") == "http://organization:8002"
+        and gateway.get("ORG_GRPC_TARGET") == "organization:9002"
+        and gateway.get("ES_GRPC_TARGET") == "event-stream:9015"
+        and gateway.get("GRPC_SERVICE_TOKEN_FILE") == "/run/secrets/grpc_service_token",
+        "Disposable Organization API-key authority is not isolated and ready",
+    )
+    require(
+        isinstance(services["gateway"].get("depends_on"), dict)
+        and isinstance(services["gateway"]["depends_on"].get("organization"), dict)
+        and services["gateway"]["depends_on"]["organization"].get("condition")
+        == "service_healthy"
+        and flow.get("ORG_GRPC_TARGET") == "organization:9002",
+        "Disposable passport services do not use the Organization authority",
+    )
     migration = services["db-migrate"]
     migration_env = migration.get("environment")
     dependencies = migration.get("depends_on")

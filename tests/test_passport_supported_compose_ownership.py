@@ -15,7 +15,7 @@ from scripts.check_passport_supported_compose_ownership import (
     OwnershipError, REQUIRED_ROLLBACK, verify,
 )
 from scripts.check_passport_supported_rollback_model import (
-    ISOLATED_DEPENDENCIES, SELECTED,
+    ISOLATED_DEPENDENCIES, RUST_DEPENDENCIES, SELECTED,
 )
 
 
@@ -44,6 +44,8 @@ SECRETS = {
     "db-migrate": ("marty_db_password", "bao_token"),
     "signing-keys": ("marty_db_password", "bao_token", "signing_keys_internal_api_key"),
     "issuance": (),
+    "event-stream": (),
+    "organization": ("marty_db_password", "grpc_service_token"),
     "issuance-native": ("marty_db_password", "bao_token", "signing_keys_internal_api_key",
                         "issuance_api_key", "grpc_service_token", "token_hmac_key",
                         "integration_secret_master_key"),
@@ -87,7 +89,7 @@ def mounts_for(service: str) -> list[dict]:
 
 def fixture() -> tuple[dict, dict[tuple[str, ...], str]]:
     containers = {name: format(i + 1, "064x") for i, name in
-                  enumerate(sorted(SELECTED | ISOLATED_DEPENDENCIES | REQUIRED_ROLLBACK))}
+                  enumerate(sorted(SELECTED | RUST_DEPENDENCIES | ISOLATED_DEPENDENCIES | REQUIRED_ROLLBACK))}
     network_name = PROJECT + "_private"
     network_id = "e" * 64
     volume_names = [f"{PROJECT}_{name}" for name, _ in DATA.values()]
@@ -119,7 +121,7 @@ def fixture() -> tuple[dict, dict[tuple[str, ...], str]]:
             "Config": {"Labels": {**LABELS, "com.docker.compose.service": service},
                        "Image": (LEGACY if service == "issuance" else
                                  MIGRATIONS if service == "db-migrate" else
-                                 IMAGE if service in SELECTED | {"signing-keys"} else
+                                 IMAGE if service in SELECTED | RUST_DEPENDENCIES | {"signing-keys"} else
                                  INFRA[service])},
             "NetworkSettings": {"Networks": {network_name: {"NetworkID": network_id}}},
             "Mounts": mounts_for(service),

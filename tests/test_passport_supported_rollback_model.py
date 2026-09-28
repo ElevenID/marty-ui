@@ -31,6 +31,7 @@ LABELS = {
 def safe_model(root: Path) -> dict:
     services = {name: {"image": IMAGE, "environment": {
         "DATABASE_URL": "postgresql://postgres:5432/test",
+        "DATABASE_URL_TEMPLATE": "postgresql+asyncpg://marty:${MARTY_DB_PASSWORD}@postgres:5432/marty",
         "BAO_ADDR": "http://openbao:8200",
         "PASSPORT_INTERNAL_SERVICE_AUTH_ENABLED": "true",
     }, "networks": ["private"]} for name in SELECTED}
@@ -66,10 +67,18 @@ def safe_model(root: Path) -> dict:
         "PUBLIC_DOMAIN": "localhost",
         "ISSUER_BASE_URL": "http://gateway:8000",
         "PASSPORT_PROVIDER_INGRESS_GATEWAY_ENABLED": "false",
+        "ORGANIZATION_SERVICE_URL": "http://organization:8002",
+        "ORG_GRPC_TARGET": "organization:9002",
+        "ES_GRPC_TARGET": "event-stream:9015",
+        "GRPC_SERVICE_TOKEN_FILE": "/run/secrets/grpc_service_token",
     })
+    services["gateway"]["depends_on"] = {
+        "organization": {"condition": "service_healthy"},
+    }
     services["flow"]["environment"].update({
         "ENVIRONMENT": "development",
         "MARTY_ISSUER_DID": "did:web:localhost:orgs:marty",
+        "ORG_GRPC_TARGET": "organization:9002",
     })
     for name in ("gateway", "flow", "issuance-native"):
         services[name]["environment"].update({
@@ -106,6 +115,37 @@ def safe_model(root: Path) -> dict:
     services["redis"] = {"image": infra["redis"], "networks": ["private"],
                          "volumes": [{"type": "volume", "source": "redis_data",
                                       "target": "/data"}]}
+    services["event-stream"] = {
+        "image": IMAGE,
+        "networks": ["private"],
+        "environment": {"SERVICE_NAME": "event_stream",
+                        "EVENT_STREAM_SERVICE_PORT": "8015",
+                        "EVENT_STREAM_GRPC_ENABLED": "true",
+                        "EVENT_STREAM_GRPC_PORT": "9015"},
+    }
+    services["organization"] = {
+        "image": IMAGE,
+        "networks": ["private"],
+        "environment": {
+            "SERVICE_NAME": "organization",
+            "ORGANIZATION_SERVICE_PORT": "8002",
+            "ORG_GRPC_PORT": "9002",
+            "DATABASE_URL_TEMPLATE":
+                "postgresql+asyncpg://marty:${MARTY_DB_PASSWORD}@postgres:5432/marty",
+            "MARTY_DB_PASSWORD_FILE": "/run/secrets/marty_db_password",
+            "GRPC_SERVICE_TOKEN_FILE": "/run/secrets/grpc_service_token",
+            "REDIS_URL": "redis://redis:6379",
+            "ES_GRPC_TARGET": "event-stream:9015",
+            "MARTY_ORG_ADMIN_EMAIL": "admin@example.invalid",
+        },
+        "secrets": [{"source": "marty_db_password"},
+                    {"source": "grpc_service_token"}],
+        "depends_on": {
+            "db-migrate": {"condition": "service_completed_successfully"},
+            "redis": {"condition": "service_healthy"},
+            "event-stream": {"condition": "service_healthy"},
+        },
+    }
     services["signing-keys"] = {
         "image": IMAGE,
         "networks": ["private"],
@@ -124,6 +164,7 @@ def safe_model(root: Path) -> dict:
             "BAO_ADDR": "http://openbao:8200",
             "BAO_TOKEN_FILE": "/run/secrets/bao_token",
             "MARTY_KMS_BOOTSTRAP_ENABLED": "true",
+            "MARTY_ORG_ADMIN_EMAIL": "admin@example.invalid",
             "PUBLIC_DOMAIN": "localhost",
             "MARTY_ISSUER_BASE_URL": "http://gateway:8000",
             "MARTY_ISSUER_DID": "did:web:localhost:orgs:marty",
@@ -148,6 +189,8 @@ def safe_model(root: Path) -> dict:
                                      "openbao_file", "openbao_logs")},
             "secrets": {
                 "db": {"file": str(root / "secrets/db")},
+                "marty_db_password": {"file": str(root / "secrets/marty_db_password")},
+                "grpc_service_token": {"file": str(root / "secrets/grpc_service_token")},
                 "bao_root_token": {"file": str(root / "secrets/bao_root_token")},
                 "bao_token": {"file": str(root / "secrets/bao_token")},
                 "issuance_api_key": {"file": str(root / "secrets/issuance_api_key")},
@@ -183,7 +226,8 @@ def test_attested_plan_binds_all_disposable_images(tmp_path: Path) -> None:
         "owner_labels": LABELS,
     }
     assert validate_planned_model(model, plan, tmp_path)["model_safe"] is True
-    for role in ("postgres", "redis", "openbao", "db-migrate", "issuance", "signing-keys"):
+    for role in ("postgres", "redis", "openbao", "db-migrate", "issuance",
+                 "signing-keys", "organization", "event-stream"):
         bad = deepcopy(model)
         bad["services"][role]["image"] = "other@sha256:" + "f" * 64
         with pytest.raises(ModelPreflightError, match="protected image|signed services"):
@@ -317,6 +361,26 @@ def test_attested_plan_binds_all_disposable_images(tmp_path: Path) -> None:
         INTEGRATION_SECRET_MASTER_KEY="raw-secret"), "native issuance startup secrets"),
     (lambda model, root: model["services"]["issuance-native"]["secrets"].pop(),
      "native issuance startup secrets"),
+    (lambda model, root: model["services"]["organization"]["environment"].update(
+        ES_GRPC_TARGET="production-events:9015"), "endpoint"),
+    (lambda model, root: model["services"]["organization"]["environment"].update(
+        GRPC_SERVICE_TOKEN="raw-secret"), "Organization API-key authority"),
+    (lambda model, root: model["services"]["organization"]["environment"].pop(
+        "DATABASE_URL_TEMPLATE"), "Organization API-key authority"),
+    (lambda model, root: model["services"]["organization"]["environment"].update(
+        ORG_GRPC_PORT="9902"), "Organization API-key authority"),
+    (lambda model, root: model["services"]["organization"]["environment"].update(
+        MARTY_ORG_ADMIN_EMAIL="other@example.invalid"), "Organization API-key authority"),
+    (lambda model, root: model["services"]["organization"]["secrets"].pop(),
+     "Organization API-key authority"),
+    (lambda model, root: model["services"]["event-stream"]["environment"].update(
+        EVENT_STREAM_GRPC_ENABLED="false"), "Organization API-key authority"),
+    (lambda model, root: model["services"]["gateway"]["environment"].update(
+        ORG_GRPC_TARGET="flow:9002"), "Organization API-key authority"),
+    (lambda model, root: model["services"]["gateway"]["depends_on"].pop(
+        "organization"), "Organization authority"),
+    (lambda model, root: model["services"]["flow"]["environment"].update(
+        ORG_GRPC_TARGET="gateway:9002"), "Organization authority"),
 ])
 def test_model_rejects_production_escape(tmp_path: Path, change, match: str) -> None:
     model = deepcopy(safe_model(tmp_path))
