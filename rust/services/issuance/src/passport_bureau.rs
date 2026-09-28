@@ -2,7 +2,10 @@
 //! The Python reference is pinned by Credentials PR #296. Unlike that reference,
 //! the document type is forwarded from the durable job instead of forced to TD3.
 
-use std::{collections::BTreeMap, time::Duration};
+use std::{
+    collections::{BTreeMap, BTreeSet},
+    time::Duration,
+};
 
 use base64::{engine::general_purpose::STANDARD, Engine as _};
 use chrono::{DateTime, Utc};
@@ -12,9 +15,11 @@ use reqwest::{Client, StatusCode, Url};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use sha2::Sha256;
+use uuid::Uuid;
 
 const BATCH_PATH: &str = "v1/personalization/batches";
 const BATCH_TIMEOUT: Duration = Duration::from_secs(60);
+const BETA_BATCH_MAX_RESPONSE_BYTES: usize = 64 * 1024;
 const CALLBACK_KMS_MAX_BODY_BYTES: usize = 64 * 1024;
 const CALLBACK_KMS_MAX_SIGNATURE_BYTES: usize = 512;
 
@@ -405,20 +410,11 @@ impl BureauClient {
         &self,
         batch: &PersonalizationBatch,
     ) -> Result<PersonalizationBatch, BureauError> {
-        let jobs = batch
-            .jobs
-            .iter()
-            .map(PersonalizationJob::batch_payload)
-            .collect::<Vec<_>>();
         let response = self
             .http
             .post(self.endpoint(BATCH_PATH)?)
             .bearer_auth(&self.api_key)
-            .json(&json!({
-                "batch_id": batch.id,
-                "organization_id": batch.organization_id,
-                "jobs": jobs,
-            }))
+            .json(&batch_payload(batch))
             .timeout(BATCH_TIMEOUT)
             .send()
             .await?;
@@ -451,6 +447,110 @@ impl BureauClient {
                 }
             }
         }
+        Ok(outcome)
+    }
+
+    /// Strict transport for the isolated beta acceptance batch. Keep the
+    /// historical generic adapter's partial-response behavior unchanged.
+    pub async fn submit_beta_batch(
+        &self,
+        batch: &PersonalizationBatch,
+    ) -> Result<PersonalizationBatch, BureauError> {
+        if batch.jobs.len() != 2
+            || !Uuid::parse_str(&batch.id).is_ok_and(|id| id.to_string() == batch.id)
+            || batch.jobs.iter().any(|job| {
+                job.id.is_empty()
+                    || job.application_id.is_empty()
+                    || job.organization_id != batch.organization_id
+                    || job.bureau_job_id.is_some()
+            })
+            || batch.jobs[0].id == batch.jobs[1].id
+            || batch.jobs[0].application_id == batch.jobs[1].application_id
+        {
+            return Err(BureauError::InvalidResponse(
+                "invalid beta batch input".into(),
+            ));
+        }
+        let http = Client::builder()
+            .redirect(reqwest::redirect::Policy::none())
+            .build()?;
+        let mut response = http
+            .post(self.endpoint(BATCH_PATH)?)
+            .bearer_auth(&self.api_key)
+            .json(&batch_payload(batch))
+            .timeout(BATCH_TIMEOUT)
+            .send()
+            .await?;
+        if response.status() != StatusCode::ACCEPTED {
+            return Err(BureauError::InvalidResponse(
+                "beta batch was not accepted".into(),
+            ));
+        }
+        if response
+            .content_length()
+            .is_some_and(|length| length > BETA_BATCH_MAX_RESPONSE_BYTES as u64)
+        {
+            return Err(BureauError::InvalidResponse(
+                "beta batch response is oversized".into(),
+            ));
+        }
+        let mut bytes = Vec::new();
+        while let Some(chunk) = response.chunk().await? {
+            if chunk.len() > BETA_BATCH_MAX_RESPONSE_BYTES - bytes.len() {
+                return Err(BureauError::InvalidResponse(
+                    "beta batch response is oversized".into(),
+                ));
+            }
+            bytes.extend_from_slice(&chunk);
+        }
+        let body: Value = serde_json::from_slice(&bytes)
+            .map_err(|_| BureauError::InvalidResponse("invalid beta batch JSON".into()))?;
+        if body.get("status").and_then(Value::as_str) != Some("QUEUED") {
+            return Err(BureauError::InvalidResponse(
+                "beta batch status is invalid".into(),
+            ));
+        }
+        let reported = body
+            .get("jobs")
+            .and_then(Value::as_array)
+            .filter(|jobs| jobs.len() == 2)
+            .ok_or_else(|| {
+                BureauError::InvalidResponse("beta batch mapping is incomplete".into())
+            })?;
+        let requested = batch
+            .jobs
+            .iter()
+            .map(|job| job.id.as_str())
+            .collect::<BTreeSet<_>>();
+        let mut mapping = BTreeMap::new();
+        let mut bureau_ids = BTreeSet::new();
+        for job in reported {
+            let source_id = job.get("job_id").and_then(Value::as_str).ok_or_else(|| {
+                BureauError::InvalidResponse("beta batch source identity is missing".into())
+            })?;
+            let bureau_id = job
+                .get("bureau_job_id")
+                .and_then(Value::as_str)
+                .ok_or_else(|| {
+                    BureauError::InvalidResponse("beta batch bureau identity is missing".into())
+                })?;
+            if !requested.contains(source_id)
+                || job.get("status").and_then(Value::as_str) != Some("QUEUED")
+                || !Uuid::parse_str(bureau_id).is_ok_and(|id| id.to_string() == bureau_id)
+                || mapping.insert(source_id, bureau_id).is_some()
+                || !bureau_ids.insert(bureau_id)
+            {
+                return Err(BureauError::InvalidResponse(
+                    "beta batch mapping is invalid".into(),
+                ));
+            }
+        }
+        let mut outcome = batch.clone();
+        for job in &mut outcome.jobs {
+            job.bureau_job_id = Some(mapping[job.id.as_str()].to_owned());
+            job.status = ProductionStatus::Queued;
+        }
+        outcome.status = ProductionStatus::Queued;
         Ok(outcome)
     }
 
@@ -488,6 +588,14 @@ impl BureauClient {
     ) -> Result<VerifiedWebhookEvent, BureauError> {
         parse_verified_webhook(self.webhook_secret(), body, signature)
     }
+}
+
+fn batch_payload(batch: &PersonalizationBatch) -> Value {
+    json!({
+        "batch_id": batch.id,
+        "organization_id": batch.organization_id,
+        "jobs": batch.jobs.iter().map(PersonalizationJob::batch_payload).collect::<Vec<_>>(),
+    })
 }
 
 #[must_use]
@@ -928,6 +1036,113 @@ mod tests {
         );
         assert_eq!(failed.jobs[1].status, ProductionStatus::Queued);
         assert!(failed.jobs[1].bureau_job_id.is_none());
+        server.abort();
+    }
+
+    #[tokio::test]
+    async fn beta_batch_requires_exact_distinct_mapping_without_changing_generic_adapter() {
+        use std::sync::{Arc, Mutex};
+
+        use axum::{extract::State, routing::post, Json, Router};
+
+        type Stub = Arc<Mutex<(Value, Vec<Value>)>>;
+        async fn submit(
+            State(stub): State<Stub>,
+            Json(payload): Json<Value>,
+        ) -> (StatusCode, Json<Value>) {
+            let mut state = stub.lock().unwrap();
+            state.1.push(payload);
+            (StatusCode::ACCEPTED, Json(state.0.clone()))
+        }
+        let first_bureau = "11111111-1111-4111-8111-111111111111";
+        let second_bureau = "22222222-2222-4222-8222-222222222222";
+        let valid = json!({"status":"QUEUED","jobs":[
+            {"job_id":"job-2","bureau_job_id":second_bureau,"status":"QUEUED"},
+            {"job_id":"job-1","bureau_job_id":first_bureau,"status":"QUEUED"}
+        ]});
+        let stub: Stub = Arc::new(Mutex::new((valid.clone(), Vec::new())));
+        let app = Router::new()
+            .route(&format!("/{BATCH_PATH}"), post(submit))
+            .with_state(stub.clone());
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let server = tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+        let client = BureauClient::new(&format!("http://{address}"), "private-key", None).unwrap();
+        let mut second = job(DocumentType::TD1);
+        second.id = "job-2".into();
+        second.application_id = "application-2".into();
+        let batch = PersonalizationBatch {
+            id: "33333333-3333-4333-8333-333333333333".into(),
+            organization_id: "organization-1".into(),
+            jobs: vec![job(DocumentType::TD3), second],
+            status: ProductionStatus::Queued,
+            submitted_at: Utc::now(),
+        };
+        let outcome = client.submit_beta_batch(&batch).await.unwrap();
+        assert_eq!(outcome.jobs[0].bureau_job_id.as_deref(), Some(first_bureau));
+        assert_eq!(
+            outcome.jobs[1].bureau_job_id.as_deref(),
+            Some(second_bureau)
+        );
+        let observed = stub.lock().unwrap().1[0].clone();
+        assert_eq!(observed["organization_id"], "organization-1");
+        assert_eq!(observed["jobs"][0]["job_id"], "job-1");
+        assert!(observed["jobs"][0].get("document_type").is_none());
+        assert!(observed["jobs"][0].get("organization_id").is_none());
+
+        for malformed in [
+            json!({"status":"QUEUED","jobs":[valid["jobs"][0]]}),
+            json!({"status":"QUEUED","jobs":[valid["jobs"][0],valid["jobs"][0]]}),
+            json!({"status":"QUEUED","jobs":[
+                {"job_id":"unknown","bureau_job_id":first_bureau,"status":"QUEUED"},
+                valid["jobs"][1]]}),
+            json!({"status":"QUEUED","jobs":[
+                {"job_id":"job-2","bureau_job_id":first_bureau,"status":"QUEUED"},
+                valid["jobs"][1]]}),
+            json!({"status":"QUEUED","jobs":[
+                {"job_id":"job-2","bureau_job_id":"not-a-uuid","status":"QUEUED"},
+                valid["jobs"][1]]}),
+            json!({"status":"SHIPPED","jobs":valid["jobs"]}),
+        ] {
+            stub.lock().unwrap().0 = malformed;
+            assert!(matches!(
+                client.submit_beta_batch(&batch).await,
+                Err(BureauError::InvalidResponse(_))
+            ));
+        }
+        let mut duplicate = batch.clone();
+        duplicate.jobs[1].id = duplicate.jobs[0].id.clone();
+        let calls = stub.lock().unwrap().1.len();
+        assert!(matches!(
+            client.submit_beta_batch(&duplicate).await,
+            Err(BureauError::InvalidResponse(_))
+        ));
+        assert_eq!(stub.lock().unwrap().1.len(), calls);
+        server.abort();
+
+        async fn oversized_stream() -> axum::response::Response {
+            use std::convert::Infallible;
+
+            use axum::body::{Body, Bytes};
+
+            let chunks = [
+                Ok::<Bytes, Infallible>(Bytes::from(vec![b'x'; 40 * 1024])),
+                Ok(Bytes::from(vec![b'x'; 40 * 1024])),
+            ];
+            axum::response::Response::builder()
+                .status(StatusCode::ACCEPTED)
+                .body(Body::from_stream(futures_util::stream::iter(chunks)))
+                .unwrap()
+        }
+        let app = Router::new().route(&format!("/{BATCH_PATH}"), post(oversized_stream));
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let server = tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+        let client = BureauClient::new(&format!("http://{address}"), "private-key", None).unwrap();
+        assert!(matches!(
+            client.submit_beta_batch(&batch).await,
+            Err(BureauError::InvalidResponse(message)) if message == "beta batch response is oversized"
+        ));
         server.abort();
     }
 

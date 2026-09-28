@@ -789,38 +789,32 @@ async fn generate_sod(
     Ok(Json(response))
 }
 
-async fn submit_personalization(
-    State(service): State<PassportHttpService>,
-    Path(application_id): Path<String>,
-    headers: HeaderMap,
-) -> Result<Json<Value>, PassportHttpError> {
-    let principal = service.authenticate(&headers)?;
-    let job = service.job(&principal, &application_id).await?;
-    if job.bureau_job_id.is_some() {
-        return Ok(Json(safe(&job)));
-    }
-    let artifact = service.decrypt(&job).await?;
+async fn prepared_personalization_job(
+    service: &PassportHttpService,
+    job: &PassportJob,
+    require_cached: bool,
+) -> Result<(PersonalizationJob, String), PassportHttpError> {
+    let artifact = service.decrypt(job).await?;
     let signed = if let Some(signed) = artifact.signed_material.clone() {
         if job.sod_sha256.as_deref() != Some(signed_sod_sha256(&signed)?.as_str()) {
             return Err(PassportHttpError::SignedMaterialUnavailable);
         }
         service
-            .validate_cached_signed_material(&job, &artifact, &signed)
+            .validate_cached_signed_material(job, &artifact, &signed)
             .await?;
         signed
     } else {
-        if job.sod_sha256.is_some() {
+        if require_cached || job.sod_sha256.is_some() {
             return Err(PassportHttpError::SignedMaterialUnavailable);
         }
-        service.sign(&job).await?.1
+        service.sign(job).await?.1
     };
     let submitted_sod_sha256 = signed_sod_sha256(&signed)?;
     let document_type: DocumentType =
         serde_json::from_value(Value::String(job.document_type.clone()))
             .map_err(|_| PassportHttpError::InvalidDocumentType)?;
-    let outcome = service
-        .bureau()?
-        .submit(&PersonalizationJob {
+    Ok((
+        PersonalizationJob {
             id: job.id.clone(),
             application_id: job.application_id.clone(),
             organization_id: job.organization_id.clone(),
@@ -840,7 +834,26 @@ async fn submit_personalization(
             submitted_at: Utc::now(),
             updated_at: Utc::now(),
             completed_at: None,
-        })
+        },
+        submitted_sod_sha256,
+    ))
+}
+
+async fn submit_personalization(
+    State(service): State<PassportHttpService>,
+    Path(application_id): Path<String>,
+    headers: HeaderMap,
+) -> Result<Json<Value>, PassportHttpError> {
+    let principal = service.authenticate(&headers)?;
+    let job = service.job(&principal, &application_id).await?;
+    if job.bureau_job_id.is_some() {
+        return Ok(Json(safe(&job)));
+    }
+    let (prepared, submitted_sod_sha256) =
+        prepared_personalization_job(&service, &job, false).await?;
+    let outcome = service
+        .bureau()?
+        .submit(&prepared)
         .await
         .map_err(PassportHttpError::Bureau)?;
     let mut patch = PassportJobPatch::new(status_from_bureau(outcome.status));
