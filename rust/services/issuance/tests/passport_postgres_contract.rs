@@ -215,19 +215,18 @@ async fn exercise_native_passport_http(
 ) {
     type SubmitGate = Arc<Mutex<Option<(oneshot::Sender<()>, oneshot::Receiver<()>)>>>;
     type SignGate = Arc<Mutex<Option<Arc<Barrier>>>>;
-    async fn sign(
-        State((_, _, sign_calls, sign_gate)): State<(
-            Arc<Mutex<Vec<Value>>>,
-            SubmitGate,
-            Arc<AtomicUsize>,
-            SignGate,
-        )>,
-        Json(body): Json<Value>,
-    ) -> Json<Value> {
+    #[derive(Clone)]
+    struct MockState {
+        observed: Arc<Mutex<Vec<Value>>>,
+        submit_gate: SubmitGate,
+        sign_calls: Arc<AtomicUsize>,
+        sign_gate: SignGate,
+    }
+    async fn sign(State(state): State<MockState>, Json(body): Json<Value>) -> Json<Value> {
         assert_eq!(body["country_code"], "USA");
         assert_eq!(body["organization"], "org-a");
         assert_eq!(body["data_groups"], json!({"DG1":"YQ==","DG2":"Yg=="}));
-        let call = sign_calls.fetch_add(1, Ordering::SeqCst);
+        let call = state.sign_calls.fetch_add(1, Ordering::SeqCst);
         let sod = if call == 0 {
             "U09E".to_owned()
         } else if call <= 2 {
@@ -235,23 +234,18 @@ async fn exercise_native_passport_http(
         } else {
             STANDARD.encode(format!("SOD{}", call + 1))
         };
-        let gated = { sign_gate.lock().unwrap().clone() };
+        let gated = { state.sign_gate.lock().unwrap().clone() };
         if let Some(barrier) = gated {
             barrier.wait().await;
         }
         Json(json!({"sod_der_base64":sod, "dsc_cert_pem":"synthetic-cert"}))
     }
     async fn submit(
-        State((observed, gate, _, _)): State<(
-            Arc<Mutex<Vec<Value>>>,
-            SubmitGate,
-            Arc<AtomicUsize>,
-            SignGate,
-        )>,
+        State(state): State<MockState>,
         Json(body): Json<Value>,
     ) -> (StatusCode, Json<Value>) {
-        observed.lock().unwrap().push(body);
-        let gated = { gate.lock().unwrap().take() };
+        state.observed.lock().unwrap().push(body);
+        let gated = { state.submit_gate.lock().unwrap().take() };
         if let Some((entered, release)) = gated {
             entered.send(()).unwrap();
             release.await.unwrap();
@@ -313,12 +307,12 @@ async fn exercise_native_passport_http(
                 }
             }),
         )
-        .with_state((
-            observed.clone(),
-            submit_gate.clone(),
-            sign_calls.clone(),
-            sign_gate.clone(),
-        ));
+        .with_state(MockState {
+            observed: observed.clone(),
+            submit_gate: submit_gate.clone(),
+            sign_calls: sign_calls.clone(),
+            sign_gate: sign_gate.clone(),
+        });
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let base_url = format!("http://{}", listener.local_addr().unwrap());
     let server = tokio::spawn(async move { axum::serve(listener, mock).await.unwrap() });
