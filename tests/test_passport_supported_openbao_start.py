@@ -3,8 +3,10 @@
 from __future__ import annotations
 
 from pathlib import Path
+import os
 import secrets
 import shutil
+import stat
 import subprocess
 import time
 import uuid
@@ -33,6 +35,8 @@ def disposable_openbao(tmp_path: Path) -> tuple[str, str, Path, str, str]:
     token = secrets.token_hex(32)
     token_file = tmp_path / "bao_root_token"
     token_file.write_text(token, encoding="ascii")
+    if os.name == "posix":
+        token_file.chmod(0o600)
     try:
         docker("network", "create", "--internal", network)
         docker(
@@ -80,8 +84,12 @@ def test_disposable_openbao_bootstrap_mints_scoped_tokens(
     for index in range(2):
         output_dir = tmp_path / f"output-{index}"
         output_dir.mkdir()
+        # The bootstrap writes service tokens readable by nonroot bind-mount
+        # consumers. Its host output directory remains private to this run.
+        host_user = (["--user", f"{os.getuid()}:{os.getgid()}"]
+                     if hasattr(os, "getuid") else [])
         result = docker(
-            "run", "--rm", "--network", network, "--entrypoint", "/bin/sh",
+            "run", "--rm", *host_user, "--network", network, "--entrypoint", "/bin/sh",
             "--env", "BAO_ADDR=http://openbao:8200",
             "--mount", "type=bind,src=" + str(ROOT / "scripts/passport_supported_openbao_bootstrap.sh")
             + ",dst=/scripts/passport_supported_openbao_bootstrap.sh,readonly",
@@ -96,6 +104,17 @@ def test_disposable_openbao_bootstrap_mints_scoped_tokens(
         service = (output_dir / "bao_token").read_text(encoding="ascii")
         callback = (output_dir / "callback_signer_bao_token").read_text(encoding="ascii")
         assert service and callback and service != callback
+        if os.name == "posix":
+            assert stat.S_IMODE((output_dir / "bao_token").stat().st_mode) == 0o644
+            assert stat.S_IMODE((output_dir / "callback_signer_bao_token").stat().st_mode) == 0o644
+            for filename in ("bao_token", "callback_signer_bao_token"):
+                docker(
+                    "run", "--rm", "--user", "10001:10001",
+                    "--entrypoint", "/bin/sh",
+                    "--mount", "type=bind,src=" + str(output_dir / filename)
+                    + ",dst=/tmp/" + filename + ",readonly",
+                    image, "-c", "test -r /tmp/" + filename,
+                )
         assert root_token not in (service, callback, result.stdout, result.stderr)
         for purpose, expected in (
             ("csca", "cred-dsc-5fc5bffec62456e58552-es256"),

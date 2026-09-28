@@ -23,7 +23,7 @@ from typing import Callable
 
 if __package__:
     from .check_passport_supported_compose_ownership import (
-        _inspect, docker, verify as verify_ownership,
+        _inspect, _labels, docker, verify as verify_ownership,
     )
     from .check_passport_supported_rollback_model import (
         DISPOSABLE_SERVICES, PROJECT, ModelPreflightError, preflight_attested_plan,
@@ -34,7 +34,7 @@ if __package__:
     )
 else:
     from check_passport_supported_compose_ownership import (
-        _inspect, docker, verify as verify_ownership,
+        _inspect, _labels, docker, verify as verify_ownership,
     )
     from check_passport_supported_rollback_model import (
         DISPOSABLE_SERVICES, PROJECT, ModelPreflightError, preflight_attested_plan,
@@ -262,7 +262,13 @@ def stage_disposable_inputs(
         require(all("\n" not in value and "\r" not in value for value in env.values()),
                 "Disposable environment input is invalid")
         for name, value in values.items():
-            _write_private(secret_dir / name, value.encode("ascii"))
+            # File-backed Compose secrets are bind mounts. Marty services run as
+            # UID 10001 and infrastructure images use other UIDs; a host-owned
+            # 0600 file is unreadable there. The 0700 parent keeps host peers
+            # out, while Compose exposes each read-only file only to its
+            # intended containers. OpenBao's pinned image starts as root.
+            mode = 0o600 if name == "bao_root_token" else 0o644
+            _write_private(secret_dir / name, value.encode("ascii"), mode=mode)
         require(all(not (secret_dir / name).exists() for name in BOOTSTRAPPED_SECRETS),
                 "Disposable OpenBao tokens were prepopulated")
         env_file = root / "acceptance.env"
@@ -290,7 +296,8 @@ def _remove_staged_inputs(root: Path) -> None:
     root.rmdir()
 
 
-def _write_private(path: Path, value: bytes) -> None:
+def _write_private(path: Path, value: bytes, *, mode: int = 0o600) -> None:
+    require(mode in (0o600, 0o644), "Disposable secret file mode is invalid")
     flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_NOFOLLOW", 0)
     descriptor = os.open(path, flags, 0o600)
     with os.fdopen(descriptor, "wb") as output:
@@ -298,8 +305,9 @@ def _write_private(path: Path, value: bytes) -> None:
         output.flush()
         os.fsync(output.fileno())
     if os.name == "posix":
+        os.chmod(path, mode)
         require(path.stat().st_uid == os.getuid()
-                and stat.S_IMODE(path.stat().st_mode) == 0o600,
+                and stat.S_IMODE(path.stat().st_mode) == mode,
                 "Disposable secret file is not private")
 
 
@@ -386,16 +394,42 @@ def destroy_disposable_project(
     networks = record.get("networks")
     volumes = record.get("volumes")
     require(isinstance(project, str) and PROJECT.fullmatch(project) is not None
+            and record.get("schema") == "marty.passport-supported-compose-ownership/v1"
             and isinstance(containers, dict) and set(containers) == DISPOSABLE_SERVICES
             and all(isinstance(value, str) and RESOURCE_ID.fullmatch(value)
                     for value in containers.values())
+            and len(set(containers.values())) == len(containers)
             and isinstance(networks, dict) and bool(networks)
             and all(isinstance(name, str) and name.startswith(project + "_")
                     and isinstance(value, str) and RESOURCE_ID.fullmatch(value)
                     for name, value in networks.items())
+            and len(set(networks.values())) == len(networks)
             and isinstance(volumes, list) and all(isinstance(name, str)
-                    and name.startswith(project + "_") for name in volumes),
+                    and name.startswith(project + "_") for name in volumes)
+            and len(set(volumes)) == len(volumes),
             "Disposable teardown record is invalid")
+    try:
+        for service, identifier in containers.items():
+            item = _inspect("container", identifier, inspector)
+            config = item.get("Config")
+            require(item.get("Id") == identifier and isinstance(config, dict),
+                    "Recorded disposable container changed identity")
+            labels = config.get("Labels")
+            _labels(labels, record, project)
+            require(labels.get("com.docker.compose.service") == service,
+                    "Recorded disposable container changed service")
+        for name, identifier in networks.items():
+            item = _inspect("network", identifier, inspector)
+            require(item.get("Id") == identifier and item.get("Name") == name,
+                    "Recorded disposable network changed identity")
+            _labels(item.get("Labels"), record, project)
+        for name in volumes:
+            item = _inspect("volume", name, inspector)
+            require(item.get("Name") == name,
+                    "Recorded disposable volume changed identity")
+            _labels(item.get("Labels"), record, project)
+    except (OSError, ValueError, KeyError, TypeError):
+        return False
     executor(["container", "rm", "-f", *containers.values()], None)
     executor(["network", "rm", *networks.values()], None)
     if volumes:

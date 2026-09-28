@@ -17,6 +17,7 @@ BASE = "marty-passport-acceptance-base-abcdef"
 SELFHOST = "marty-passport-acceptance-selfhost-abcdef"
 NAMESPACE = "marty-passport-acceptance-abcdef"
 CONTEXT = "marty-passport-acceptance-testxyz"
+PLAN_RUN_ID = "123456"
 
 
 def manifest(tmp_path: Path) -> Path:
@@ -125,17 +126,34 @@ def test_live_compose_prerequisite_still_does_not_claim_routes_or_rollback(
     assert report["physical_claim"] == "not_claimed"
 
 
-def kubernetes_runtime_runner(bad_owner: bool = False):
+def kubernetes_runner(*, mixed_provider: bool = False,
+                      wrong_profile: bool = False,
+                      provider_enabled: bool = False,
+                      second_configmap: bool = False,
+                      bad_owner: bool = False):
     def run(args: list[str]) -> str:
         assert args[1:5] == ["--context", CONTEXT, "-n", NAMESPACE]
         if args[6] == "configmap":
-            return json.dumps({"data": {flag: "true" for names in gate.KUBERNETES_FLAGS.values()
-                                        for flag in names}})
+            data = {flag: "true" for names in gate.KUBERNETES_FLAGS.values()
+                    for flag in names}
+            data.update({"PASSPORT_PROVIDER_INGRESS_GATEWAY_ENABLED":
+                         "true" if provider_enabled else "false",
+                         "PASSPORT_PROVIDER_INGRESS_SERVICE_URL": "",
+                         "PERSONALIZATION_BUREAU_URL":
+                         "http://passport-beta-bureau:8020",
+                         "PERSONALIZATION_BUREAU_PROVIDER_PROFILE_ID":
+                         "external-provider" if wrong_profile else "passport-beta-bureau"})
+            return json.dumps({"data": data})
+        if args[6] in ("deployment", "service") and args[7] == "passport-provider-ingress":
+            return json.dumps({"kind": args[6]}) if mixed_provider else ""
         if args[6] == "pods":
             service = args[8].removeprefix("app=")
+            if service == "passport-provider-ingress":
+                return json.dumps({"items": []})
+            selected = gate.selector_for(service, PLAN_RUN_ID)
             return json.dumps({"items": [{
                 "metadata": {"namespace": NAMESPACE, "uid": service + "-pod",
-                             "labels": {"app": service},
+                             "labels": selected,
                              "ownerReferences": [{"kind": "ReplicaSet",
                                                   "name": service + "-rs",
                                                   "uid": service + "-rs-uid",
@@ -151,36 +169,64 @@ def kubernetes_runtime_runner(bad_owner: bool = False):
             service = args[7].removesuffix("-rs")
             return json.dumps({"metadata": {
                 "name": args[7], "namespace": NAMESPACE, "uid": service + "-rs-uid",
-                "labels": {"app": service},
+                "labels": gate.selector_for(service, PLAN_RUN_ID),
                 "ownerReferences": [{"kind": "Deployment", "name": service,
                                      "uid": ("wrong-uid" if bad_owner else service + "-uid"),
                                      "controller": True}],
             }})
         service = args[7]
+        container = {
+            "image": REFERENCE,
+            "env": [{"name": flag, "value": "true"}
+                    for flag in gate.KUBERNETES_FLAGS[service]],
+        }
+        if service == "gateway":
+            container["envFrom"] = [{"configMapRef": {"name": "marty-config"}}]
+            if second_configmap:
+                container["envFrom"].append({"configMapRef": {"name": "override-config"}})
+        if service == "issuance-native":
+            container["env"].extend({"name": name,
+                                     "valueFrom": {"configMapKeyRef": {
+                                         "name": "marty-config", "key": name}}}
+                                    for name in ("PERSONALIZATION_BUREAU_URL",
+                                                 "PERSONALIZATION_BUREAU_PROVIDER_PROFILE_ID"))
         return json.dumps({
-            "metadata": {"namespace": NAMESPACE, "uid": service + "-uid"},
+            "metadata": {"namespace": NAMESPACE, "uid": service + "-uid",
+                         "labels": {gate.RUN_LABEL: PLAN_RUN_ID}},
             "status": {"readyReplicas": 1},
-            "spec": {"selector": {"matchLabels": {"app": service}},
-                     "template": {"metadata": {"labels": {"app": service}},
-                                  "spec": {"containers": [{
-                "name": service, "image": REFERENCE,
-                "env": [{"name": flag, "value": "true"} for flag in gate.KUBERNETES_FLAGS[service]],
-            }]}}},
+            "spec": {"selector": {"matchLabels": gate.selector_for(service, PLAN_RUN_ID)},
+                     "template": {"metadata": {"labels":
+                                               gate.selector_for(service, PLAN_RUN_ID)},
+                                  "spec": {"containers": [{"name": service, **container}]}}},
         })
-
     return run
 
 
 def test_kubernetes_inspection_is_bounded_to_disposable_namespace() -> None:
-    observed = gate.observe_kubernetes(
-        NAMESPACE, CONTEXT, REFERENCE, kubernetes_runtime_runner())
+    observed = gate.observe_kubernetes(NAMESPACE, CONTEXT, REFERENCE,
+                                       kubernetes_runner())
     assert set(observed) == set(gate.KUBERNETES_SERVICES)
 
 
 def test_kubernetes_pod_must_be_owned_by_expected_deployment() -> None:
     with pytest.raises(gate.SupportedEvidenceError, match="ReplicaSet owner"):
         gate.observe_kubernetes(
-            NAMESPACE, CONTEXT, REFERENCE, kubernetes_runtime_runner(bad_owner=True))
+            NAMESPACE, CONTEXT, REFERENCE, kubernetes_runner(bad_owner=True))
+
+
+def test_kubernetes_mixed_provider_is_rejected() -> None:
+    with pytest.raises(gate.SupportedEvidenceError, match="physical provider ingress"):
+        gate.observe_kubernetes(NAMESPACE, CONTEXT, REFERENCE,
+                                kubernetes_runner(mixed_provider=True))
+    with pytest.raises(gate.SupportedEvidenceError, match="bound to the Marty simulator"):
+        gate.observe_kubernetes(NAMESPACE, CONTEXT, REFERENCE,
+                                kubernetes_runner(wrong_profile=True))
+    with pytest.raises(gate.SupportedEvidenceError, match="bound to the Marty simulator"):
+        gate.observe_kubernetes(NAMESPACE, CONTEXT, REFERENCE,
+                                kubernetes_runner(provider_enabled=True))
+    with pytest.raises(gate.SupportedEvidenceError, match="ConfigMap source is ambiguous"):
+        gate.observe_kubernetes(NAMESPACE, CONTEXT, REFERENCE,
+                                kubernetes_runner(second_configmap=True))
 
 
 def test_capability_origin_must_match_inspected_gateway_port(tmp_path: Path) -> None:

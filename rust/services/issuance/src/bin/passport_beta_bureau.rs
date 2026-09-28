@@ -383,7 +383,7 @@ async fn poll(
 ) -> Result<impl IntoResponse, ApiError> {
     authorize(&headers, &state.config.service_token)?;
     let row = sqlx::query(
-        "SELECT status FROM issuance_service.passport_beta_bureau_jobs WHERE bureau_job_id = $1",
+        "SELECT status, callback_receipt_sha256 FROM issuance_service.passport_beta_bureau_jobs WHERE bureau_job_id = $1",
     )
     .bind(bureau_job_id)
     .fetch_optional(&state.pool)
@@ -392,7 +392,16 @@ async fn poll(
     .ok_or(ApiError::Invalid)?;
     let status: String = row.try_get("status").map_err(|_| ApiError::Unavailable)?;
     let tracking = (status == "SHIPPED").then(|| format!("BETA-SIM-{}", bureau_job_id.simple()));
-    Ok(Json(json!({"status": status, "tracking_number": tracking})))
+    let stored_receipt: Option<Vec<u8>> = row
+        .try_get("callback_receipt_sha256")
+        .map_err(|_| ApiError::Unavailable)?;
+    let receipt = match stored_receipt {
+        Some(digest) if digest.len() == 32 => Some(hex::encode(digest)),
+        Some(_) => return Err(ApiError::Unavailable),
+        None => None, // Existing simulator jobs predate signed receipt recording.
+    };
+    Ok(Json(json!({"status": status, "tracking_number": tracking,
+        "callback_receipt_sha256": receipt})))
 }
 
 fn next_status(status: &str) -> Option<&'static str> {
@@ -441,7 +450,7 @@ async fn deliver_one(state: &AppState) -> Result<bool, String> {
         callback["tracking_number"] = json!(format!("BETA-SIM-{}", bureau_job_id.simple()));
     }
     let body = serde_json::to_vec(&callback).map_err(|_| "callback serialization failed")?;
-    sign_and_deliver(
+    let receipt = sign_and_deliver(
         &state.http,
         &state.config.signing_url,
         &state.config.signing_api_key,
@@ -454,10 +463,11 @@ async fn deliver_one(state: &AppState) -> Result<bool, String> {
     let updated = sqlx::query(
         "UPDATE issuance_service.passport_beta_bureau_jobs SET status = $1,
              next_transition_at = CASE WHEN $1 = 'SHIPPED' THEN NULL ELSE NOW() + INTERVAL '5 seconds' END,
-             callback_lease_token = NULL, callback_lease_until = NULL, updated_at = NOW()
+             callback_lease_token = NULL, callback_lease_until = NULL,
+             callback_receipt_sha256 = $5, updated_at = NOW()
          WHERE bureau_job_id = $2 AND callback_lease_token = $3 AND status = $4",
     )
-    .bind(next).bind(bureau_job_id).bind(lease).bind(&status)
+    .bind(next).bind(bureau_job_id).bind(lease).bind(&status).bind(receipt.sha256.as_slice())
     .execute(&state.pool).await.map_err(|_| "database transition failed")?;
     if updated.rows_affected() != 1 {
         return Err("callback lease was lost".into());
@@ -562,6 +572,20 @@ mod tests {
         )
         .is_err());
         fs::remove_file(path).unwrap();
+    }
+
+    async fn ensure_test_schema(pool: &PgPool) {
+        let mut transaction = pool.begin().await.unwrap();
+        sqlx::query("SELECT pg_advisory_xact_lock($1)")
+            .bind(0x6d617274795f7062_i64)
+            .execute(&mut *transaction)
+            .await
+            .unwrap();
+        sqlx::query("CREATE SCHEMA IF NOT EXISTS issuance_service")
+            .execute(&mut *transaction)
+            .await
+            .unwrap();
+        transaction.commit().await.unwrap();
     }
 
     fn disposable_database_url(value: &str) -> bool {
@@ -716,12 +740,94 @@ mod tests {
         let frozen = contract["status_sequence"].as_array().unwrap();
         let actual = ["QUEUED", "PRINTING", "ENCODING", "QUALITY_CHECK", "SHIPPED"];
         assert_eq!(frozen, &actual.map(|status| json!(status)));
+        assert_eq!(
+            contract["callback"]["signed_receipt_digest"]["algorithm"],
+            "SHA-256"
+        );
+        assert!(contract["persisted_fields"]
+            .as_array()
+            .unwrap()
+            .contains(&json!("callback_receipt_sha256")));
         assert_eq!(next_status("QUEUED"), Some("PRINTING"));
         assert_eq!(next_status("PRINTING"), Some("ENCODING"));
         assert_eq!(next_status("ENCODING"), Some("QUALITY_CHECK"));
         assert_eq!(next_status("QUALITY_CHECK"), Some("SHIPPED"));
         assert_eq!(next_status("SHIPPED"), None);
         assert_eq!(next_status("FAILED"), None);
+    }
+
+    #[tokio::test]
+    async fn prior_beta_table_gains_receipt_constraint_when_configured() {
+        let Ok(database_url) = env::var("PASSPORT_BUREAU_TEST_DATABASE_URL") else {
+            return;
+        };
+        assert!(disposable_database_url(&database_url));
+        let pool = PgPoolOptions::new()
+            .max_connections(1)
+            .connect(&database_url)
+            .await
+            .unwrap();
+        let nonce = Uuid::new_v4().simple().to_string();
+        let table = format!("passport_bureau_mig_{}", &nonce[..12]);
+        let index = format!("ix_passport_bureau_mig_{}", &nonce[..12]);
+        ensure_test_schema(&pool).await;
+        let mut transaction = pool.begin().await.unwrap();
+        let old_table = format!(
+            "CREATE TABLE issuance_service.{table} (
+                bureau_job_id uuid PRIMARY KEY,
+                organization_id varchar(256) NOT NULL,
+                source_job_id varchar(256) NOT NULL,
+                request_sha256 bytea NOT NULL,
+                status varchar(32) NOT NULL,
+                next_transition_at timestamptz,
+                callback_lease_token uuid,
+                callback_lease_until timestamptz,
+                created_at timestamptz NOT NULL DEFAULT NOW(),
+                updated_at timestamptz NOT NULL DEFAULT NOW(),
+                UNIQUE (organization_id, source_job_id)
+            )"
+        );
+        // Identifiers below are derived only from a freshly generated UUID;
+        // SQL data values remain bound parameters.
+        sqlx::query(sqlx::AssertSqlSafe(old_table))
+            .execute(&mut *transaction)
+            .await
+            .unwrap();
+        let migrated_schema = SCHEMA
+            .replace("passport_beta_bureau_jobs", &table)
+            .replace("ix_passport_beta_bureau_due", &index);
+        sqlx::raw_sql(sqlx::AssertSqlSafe(migrated_schema.as_str()))
+            .execute(&mut *transaction)
+            .await
+            .unwrap();
+        sqlx::raw_sql(sqlx::AssertSqlSafe(migrated_schema.as_str()))
+            .execute(&mut *transaction)
+            .await
+            .unwrap();
+        let relation = format!("issuance_service.{table}");
+        let count: i64 = sqlx::query_scalar(
+            "SELECT COUNT(*) FROM pg_constraint
+             WHERE conrelid = $1::regclass
+               AND conname = 'ck_passport_beta_bureau_callback_receipt_sha256'",
+        )
+        .bind(&relation)
+        .fetch_one(&mut *transaction)
+        .await
+        .unwrap();
+        assert_eq!(count, 1);
+        let invalid_insert = format!(
+            "INSERT INTO issuance_service.{table}
+             (bureau_job_id, organization_id, source_job_id, request_sha256, status, callback_receipt_sha256)
+             VALUES ($1, 'test-org', 'test-job', $2, 'QUEUED', $3)"
+        );
+        assert!(sqlx::query(sqlx::AssertSqlSafe(invalid_insert))
+            .bind(Uuid::new_v4())
+            .bind(vec![7_u8; 32])
+            .bind(vec![9_u8; 1])
+            .execute(&mut *transaction)
+            .await
+            .is_err());
+        transaction.rollback().await.unwrap();
     }
 
     #[tokio::test]
@@ -738,10 +844,7 @@ mod tests {
             .connect(&database_url)
             .await
             .unwrap();
-        sqlx::query("CREATE SCHEMA IF NOT EXISTS issuance_service")
-            .execute(&pool)
-            .await
-            .unwrap();
+        ensure_test_schema(&pool).await;
         sqlx::raw_sql(SCHEMA).execute(&pool).await.unwrap();
         let source = format!("test-{}", Uuid::new_v4());
         let first = JobInput {
@@ -824,6 +927,32 @@ mod tests {
             .bind(second_id).fetch_one(&pool).await.unwrap();
         assert_eq!(first_status, "PRINTING");
         assert_eq!(other_status, "QUEUED");
+        let stored_receipt: Vec<u8> = sqlx::query_scalar(
+            "SELECT callback_receipt_sha256 FROM issuance_service.passport_beta_bureau_jobs WHERE bureau_job_id = $1",
+        )
+        .bind(first_id)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert_eq!(stored_receipt.len(), 32);
+        let signed_poll = router(state.clone())
+            .oneshot(
+                Request::builder()
+                    .uri(format!("/v1/personalization/jobs/{first_id}"))
+                    .header("authorization", "Bearer synthetic-bureau-auth")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(signed_poll.status(), StatusCode::OK);
+        let signed_poll: Value =
+            serde_json::from_slice(&to_bytes(signed_poll.into_body(), 8192).await.unwrap())
+                .unwrap();
+        assert_eq!(
+            signed_poll["callback_receipt_sha256"],
+            hex::encode(stored_receipt)
+        );
         let http_source = format!("{source}-http");
         let payload = json!({
             "job_id": http_source, "application_id": "app-1", "organization_id": "test-org-a",
@@ -928,6 +1057,7 @@ mod tests {
         let polled: Value =
             serde_json::from_slice(&to_bytes(polled.into_body(), 8192).await.unwrap()).unwrap();
         assert_eq!(polled["status"], "PRINTING");
+        assert!(polled["callback_receipt_sha256"].is_null());
         let batch_job_id = format!("{source}-batch");
         let batch = json!({"batch_id": "synthetic-batch", "organization_id": "test-org-a", "jobs": [{
             "job_id": batch_job_id, "application_id": "app-2", "country_code": "USA",

@@ -26,6 +26,7 @@ COMMIT = re.compile(r"[0-9a-f]{40}\Z")
 DIGEST = re.compile(r"sha256:[0-9a-f]{64}\Z")
 NAME = re.compile(r"marty-passport-acceptance-[a-z0-9]{6,32}\Z")
 UID = re.compile(r"[a-zA-Z0-9][a-zA-Z0-9-]{7,127}\Z")
+RUN_ID = re.compile(r"[1-9][0-9]{0,19}\Z")
 SERVICES = (
     "gateway",
     "flow",
@@ -45,6 +46,8 @@ FLAGS = {
 }
 OWNER_LABEL = "com.marty.passport.acceptance.owner"
 SOURCE_LABEL = "com.marty.passport.acceptance.source-commit"
+RUN_LABEL = "com.marty.passport.acceptance.run-id"
+SIMULATOR_SERVICES = frozenset({"passport-callback-signer", "passport-beta-bureau"})
 
 
 class KubernetesPreflightError(ValueError):
@@ -54,6 +57,39 @@ class KubernetesPreflightError(ValueError):
 def require(ok: bool, message: str) -> None:
     if not ok:
         raise KubernetesPreflightError(message)
+
+
+def selector_for(name: str, plan_run_id: str) -> dict[str, str]:
+    selector = {"app": name}
+    if name in SIMULATOR_SERVICES:
+        selector.update({OWNER_LABEL: "supported-consumer", RUN_LABEL: plan_run_id})
+    return selector
+
+
+def kubernetes_config_value(container: dict, data: dict, name: str) -> object:
+    """Resolve a required setting without accepting an envFrom override."""
+    entries = container.get("env", [])
+    require(isinstance(entries, list), "Kubernetes passport environment is invalid")
+    matches = [entry for entry in entries
+               if isinstance(entry, dict) and entry.get("name") == name]
+    require(len(matches) <= 1, "Kubernetes passport environment is ambiguous")
+    if matches:
+        entry = matches[0]
+        if "value" in entry:
+            return entry["value"]
+        value_from = entry.get("valueFrom")
+        source = value_from.get("configMapKeyRef") if isinstance(value_from, dict) else None
+        require(isinstance(source, dict) and source.get("name") == "marty-config"
+                and source.get("key") == name,
+                "Kubernetes passport configuration source is invalid")
+        return data.get(name)
+    env_from = container.get("envFrom", [])
+    require(isinstance(env_from, list), "Kubernetes passport environment source is invalid")
+    require(len(env_from) == 1 and isinstance(env_from[0], dict)
+            and isinstance(env_from[0].get("configMapRef"), dict)
+            and env_from[0]["configMapRef"].get("name") == "marty-config",
+            "Kubernetes passport ConfigMap source is ambiguous")
+    return data.get(name)
 
 
 def command(args: list[str]) -> str:
@@ -97,6 +133,7 @@ def validate_plan(plan: dict, source_commit: str, services_reference: str) -> No
             "schema",
             "status",
             "source_commit",
+            "plan_run_id",
             "services_reference",
             "legacy_reference",
             "cluster",
@@ -108,6 +145,8 @@ def validate_plan(plan: dict, source_commit: str, services_reference: str) -> No
         and plan["status"] == "blocked"
         and COMMIT.fullmatch(source_commit) is not None
         and plan["source_commit"] == source_commit
+        and isinstance(plan["plan_run_id"], str)
+        and RUN_ID.fullmatch(plan["plan_run_id"]) is not None
         and plan["services_reference"] == services_reference
         and re.fullmatch(
             r"ghcr\.io/elevenid/marty-ui-oss/services@sha256:[0-9a-f]{64}",
@@ -250,12 +289,25 @@ def inspect(
         and metadata.get("uid") == namespace["uid"]
         and isinstance(metadata.get("labels"), dict)
         and metadata["labels"].get(OWNER_LABEL) == "supported-consumer"
+        and metadata["labels"].get(RUN_LABEL) == plan["plan_run_id"]
         and metadata["labels"].get(SOURCE_LABEL) == source_commit
         and isinstance(ns.get("status"), dict)
         and ns["status"].get("phase") == "Active",
         "Disposable Kubernetes namespace identity changed",
     )
     observed = {}
+    config_data: dict | None = None
+    for kind in ("deployment", "service"):
+        provider = runner([*prefix, "-n", namespace["name"], "get", kind,
+                           "passport-provider-ingress", "--ignore-not-found",
+                           "-o", "json"])
+        require(not provider.strip(),
+                "Disposable Kubernetes physical provider ingress remains")
+    provider_pods = object_command(
+        [*prefix, "-n", namespace["name"], "get", "pods", "-l",
+         "app=passport-provider-ingress", "-o", "json"], runner)
+    require(provider_pods.get("items") == [],
+            "Disposable Kubernetes physical provider Pod remains")
     for kind, name in RESOURCES:
         item = object_command(
             [*prefix, "-n", namespace["name"], "get", kind, name, "-o", "json"], runner
@@ -268,6 +320,7 @@ def inspect(
             and metadata.get("uid") == plan["resources"][f"{kind}/{name}"]
             and isinstance(metadata.get("labels"), dict)
             and metadata["labels"].get(OWNER_LABEL) == "supported-consumer"
+            and metadata["labels"].get(RUN_LABEL) == plan["plan_run_id"]
             and metadata["labels"].get(SOURCE_LABEL) == source_commit,
             f"Disposable Kubernetes {kind}/{name} identity changed",
         )
@@ -294,12 +347,33 @@ def inspect(
                 and spec.get("automountServiceAccountToken") is False,
                 f"Disposable Kubernetes deployment/{name} is unsafe",
             )
+            selector = deployment.get("selector")
+            labels = template.get("metadata", {}).get("labels")
+            expected = selector_for(name, plan["plan_run_id"])
+            require(isinstance(selector, dict)
+                    and selector.get("matchLabels") == expected
+                    and isinstance(labels, dict)
+                    and all(labels.get(key) == value for key, value in expected.items()),
+                    f"Disposable Kubernetes deployment/{name} selector is invalid")
+            if name in ("gateway", "issuance-native"):
+                require(isinstance(config_data, dict),
+                        "Disposable Kubernetes ConfigMap is unavailable")
+                expected_config = ({
+                    "PASSPORT_PROVIDER_INGRESS_GATEWAY_ENABLED": "false",
+                    "PASSPORT_PROVIDER_INGRESS_SERVICE_URL": "",
+                } if name == "gateway" else {
+                    "PERSONALIZATION_BUREAU_URL": "http://passport-beta-bureau:8020",
+                    "PERSONALIZATION_BUREAU_PROVIDER_PROFILE_ID": "passport-beta-bureau",
+                })
+                require(all(kubernetes_config_value(containers[0], config_data, key) == value
+                            for key, value in expected_config.items()),
+                        f"Disposable Kubernetes deployment/{name} is not simulator-bound")
         elif kind == "service":
             spec = item.get("spec")
             require(
                 isinstance(spec, dict)
                 and spec.get("type") == "ClusterIP"
-                and spec.get("selector") == {"app": name}
+                and spec.get("selector") == selector_for(name, plan["plan_run_id"])
                 and isinstance(spec.get("clusterIP"), str)
                 and bool(spec["clusterIP"])
                 and not spec.get("externalIPs")
@@ -318,9 +392,16 @@ def inspect(
                 isinstance(data, dict)
                 and all(data.get(flag) == "true" for flag in FLAGS.values())
                 and data.get("ISSUANCE_NATIVE_SERVICE_URL")
-                == "http://issuance-native:8005",
+                == "http://issuance-native:8005"
+                and data.get("PASSPORT_PROVIDER_INGRESS_GATEWAY_ENABLED") == "false"
+                and data.get("PASSPORT_PROVIDER_INGRESS_SERVICE_URL") == ""
+                and data.get("PERSONALIZATION_BUREAU_URL")
+                == "http://passport-beta-bureau:8020"
+                and data.get("PERSONALIZATION_BUREAU_PROVIDER_PROFILE_ID")
+                == "passport-beta-bureau",
                 "Disposable Kubernetes Rust selector model is invalid",
             )
+            config_data = data
         observed[f"{kind}/{name}"] = metadata["uid"]
     return {
         "schema": "marty.passport-supported-kubernetes-preflight/v1",

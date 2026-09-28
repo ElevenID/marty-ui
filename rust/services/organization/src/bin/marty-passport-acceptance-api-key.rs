@@ -167,6 +167,12 @@ async fn issue(
     let (application, _run_lock) = locked_application(context, database_url).await?;
     let now = Utc::now();
     let command = key_command(context, now)?;
+    let existing = application.list_api_keys(context.organization_id).await?;
+    if existing.iter().any(|key| claims_run_name(key, context)) {
+        return Err(Box::new(invalid(
+            "PASSPORT_ACCEPTANCE_RUN_ID already issued",
+        )));
+    }
     let created_by = command.created_by.clone();
     let creation = application.create_api_key(command).await?;
     let result = (|| -> io::Result<()> {
@@ -237,8 +243,7 @@ fn run_lock_key(context: &AcceptanceContext) -> i64 {
 }
 
 fn belongs_to_run(key: &ApiKey, context: &AcceptanceContext) -> bool {
-    key.organization_id == context.organization_id
-        && key.name == format!("passport-acceptance-{}", context.run_id)
+    claims_run_name(key, context)
         && key.created_by == format!("passport-acceptance:{}:{}", context.project, context.run_id)
         && key.description.as_deref()
             == Some(&format!("Disposable source {}", context.source_commit))
@@ -247,6 +252,11 @@ fn belongs_to_run(key: &ApiKey, context: &AcceptanceContext) -> bool {
         && key
             .expires_at
             .is_some_and(|expires| expires <= context.expires_at)
+}
+
+fn claims_run_name(key: &ApiKey, context: &AcceptanceContext) -> bool {
+    key.organization_id == context.organization_id
+        && key.name == format!("passport-acceptance-{}", context.run_id)
 }
 
 fn key_command(context: &AcceptanceContext, now: DateTime<Utc>) -> io::Result<CreateApiKeyCommand> {
@@ -364,6 +374,7 @@ mod tests {
             true,
         );
         assert!(belongs_to_run(&key, &context));
+        assert!(claims_run_name(&key, &context));
         let mut unrelated = key.clone();
         unrelated.created_by.push_str("-other");
         assert!(!belongs_to_run(&unrelated, &context));
@@ -373,5 +384,9 @@ mod tests {
         let mut unrelated = key.clone();
         unrelated.scopes.push("admin".into());
         assert!(!belongs_to_run(&unrelated, &context));
+        assert!(claims_run_name(&unrelated, &context));
+        let mut unrelated = key.clone();
+        unrelated.name.push_str("-another-run");
+        assert!(!claims_run_name(&unrelated, &context));
     }
 }

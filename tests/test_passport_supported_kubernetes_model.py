@@ -18,6 +18,7 @@ LEGACY = "ghcr.io/elevenid/marty-credentials-issuance@" + gate.FROZEN_LEGACY_REL
 NAMESPACE = "marty-passport-acceptance-abcdef"
 CONTEXT = "marty-passport-acceptance-context1"
 CA = b"disposable test CA"
+PLAN_RUN_ID = "123456"
 
 
 def test_language_neutral_contract_matches_closed_model() -> None:
@@ -36,11 +37,15 @@ def test_language_neutral_contract_matches_closed_model() -> None:
     assert gate.SERVICES == collector.KUBERNETES_SERVICES
     assert gate.OWNER_LABEL == "com.marty.passport.acceptance.owner"
     assert gate.SOURCE_LABEL == "com.marty.passport.acceptance.source-commit"
+    assert gate.RUN_LABEL == "com.marty.passport.acceptance.run-id"
     assert contract["rust_selectors"] == list(gate.FLAGS.values())
     assert "clusterip_without_external_ips_load_balancer_or_node_ports" in contract["required_identity"]
+    assert "plan_run_id_and_run_bound_simulator_selectors" in contract["required_identity"]
+    assert "simulator_profile_routing_and_no_physical_provider_ingress" in contract["required_identity"]
     assert contract["runtime_identity"] == [
         "pod_replicaset_deployment_owner_uid_chain",
         "second_full_identity_preflight_after_runtime_probe",
+        "second_simulator_runtime_probe_after_identity_preflight",
     ]
     assert contract["runtime_accepted"] is False
     assert contract["rollback_accepted"] is False
@@ -51,6 +56,7 @@ def plan() -> dict:
         "schema": "marty.passport-supported-kubernetes-model/v1",
         "status": "blocked",
         "source_commit": COMMIT,
+        "plan_run_id": PLAN_RUN_ID,
         "services_reference": REFERENCE,
         "legacy_reference": LEGACY,
         "cluster": {
@@ -102,6 +108,7 @@ def runner(expected: dict, *, file_backed_ca: bool = False):
                         "uid": "namespace-uid-1234",
                         "labels": {
                             gate.OWNER_LABEL: "supported-consumer",
+                            gate.RUN_LABEL: PLAN_RUN_ID,
                             gate.SOURCE_LABEL: COMMIT,
                         },
                     },
@@ -110,6 +117,10 @@ def runner(expected: dict, *, file_backed_ca: bool = False):
             )
         assert args[3:5] == ["-n", NAMESPACE]
         kind, name = args[6:8]
+        if kind in ("deployment", "service") and name == "passport-provider-ingress":
+            return ""
+        if kind == "pods" and name == "-l":
+            return json.dumps({"items": []})
         item = {
             "metadata": {
                 "name": name,
@@ -117,6 +128,7 @@ def runner(expected: dict, *, file_backed_ca: bool = False):
                 "uid": expected["resources"][f"{kind}/{name}"],
                 "labels": {
                     gate.OWNER_LABEL: "supported-consumer",
+                    gate.RUN_LABEL: PLAN_RUN_ID,
                     gate.SOURCE_LABEL: COMMIT,
                 },
             }
@@ -125,22 +137,35 @@ def runner(expected: dict, *, file_backed_ca: bool = False):
             item["data"] = {
                 **{flag: "true" for flag in gate.FLAGS.values()},
                 "ISSUANCE_NATIVE_SERVICE_URL": "http://issuance-native:8005",
+                "PASSPORT_PROVIDER_INGRESS_GATEWAY_ENABLED": "false",
+                "PASSPORT_PROVIDER_INGRESS_SERVICE_URL": "",
+                "PERSONALIZATION_BUREAU_URL": "http://passport-beta-bureau:8020",
+                "PERSONALIZATION_BUREAU_PROVIDER_PROFILE_ID": "passport-beta-bureau",
             }
         elif kind == "service":
             item["spec"] = {
                 "type": "ClusterIP",
-                "selector": {"app": name},
+                "selector": gate.selector_for(name, PLAN_RUN_ID),
                 "clusterIP": "10.0.0.1",
             }
         else:
             item["spec"] = {
+                "selector": {"matchLabels": gate.selector_for(name, PLAN_RUN_ID)},
                 "template": {
+                    "metadata": {"labels": gate.selector_for(name, PLAN_RUN_ID)},
                     "spec": {
                         "automountServiceAccountToken": False,
                         "containers": [
                             {
                                 "name": name,
                                 "image": (LEGACY if name == "issuance" else REFERENCE),
+                                **({"envFrom": [{"configMapRef": {"name": "marty-config"}}]}
+                                   if name == "gateway" else {}),
+                                **({"env": [{"name": key, "valueFrom": {"configMapKeyRef": {
+                                    "name": "marty-config", "key": key}}}
+                                    for key in ("PERSONALIZATION_BUREAU_URL",
+                                                "PERSONALIZATION_BUREAU_PROVIDER_PROFILE_ID")]}
+                                   if name == "issuance-native" else {}),
                             }
                         ],
                     }
@@ -175,6 +200,7 @@ def test_file_backed_kubeconfig_ca_is_checked_after_flattening() -> None:
         (lambda p: p["cluster"].update(ca_sha256="sha256:" + "f" * 64), "CA digest"),
         (lambda p: p["cluster"].update(server="https://prod.example:6443"), "server"),
         (lambda p: p["namespace"].update(name="marty-prod"), "namespace identity"),
+        (lambda p: p.update(plan_run_id="0"), "source or images"),
         (
             lambda p: p["namespace"].update(uid="wrong-namespace-uid"),
             "namespace identity",
@@ -226,6 +252,11 @@ def test_identity_or_rollback_drift_fails_closed(mutate, match: str) -> None:
             "namespace identity",
         ),
         (
+            "namespace",
+            lambda x: x["metadata"]["labels"].update(**{gate.RUN_LABEL: "987654"}),
+            "namespace identity",
+        ),
+        (
             "deployment/gateway",
             lambda x: x["spec"]["template"]["spec"].update(hostNetwork=True),
             "deployment/gateway is unsafe",
@@ -248,8 +279,30 @@ def test_identity_or_rollback_drift_fails_closed(mutate, match: str) -> None:
             "service/gateway is not private",
         ),
         (
+            "service/passport-beta-bureau",
+            lambda x: x["spec"].update(selector={"app": "passport-beta-bureau"}),
+            "service/passport-beta-bureau is not private",
+        ),
+        (
+            "deployment/passport-callback-signer",
+            lambda x: x["spec"]["selector"].update(
+                matchLabels={"app": "passport-callback-signer"}),
+            "deployment/passport-callback-signer selector is invalid",
+        ),
+        (
             "configmap/marty-config",
             lambda x: x["data"].update(PASSPORT_NATIVE_FLOW_ENABLED="false"),
+            "Rust selector model",
+        ),
+        (
+            "configmap/marty-config",
+            lambda x: x["data"].update(PASSPORT_PROVIDER_INGRESS_GATEWAY_ENABLED="true"),
+            "Rust selector model",
+        ),
+        (
+            "configmap/marty-config",
+            lambda x: x["data"].update(
+                PERSONALIZATION_BUREAU_PROVIDER_PROFILE_ID="external-provider"),
             "Rust selector model",
         ),
     ],
@@ -266,13 +319,33 @@ def test_live_cluster_drift_fails_closed(target, change, match: str) -> None:
             if args[3:5] == ["get", "namespace"]
             else "/".join(args[6:8])
         )
-        value = json.loads(baseline(args))
+        raw = baseline(args)
+        if not raw.strip():
+            return raw
+        value = json.loads(raw)
         if key == target:
             change(value)
         return json.dumps(value)
 
     with pytest.raises(gate.KubernetesPreflightError, match=match):
         gate.inspect(expected, COMMIT, REFERENCE, changed)
+
+
+@pytest.mark.parametrize("kind", ["deployment", "service", "pods"])
+def test_preflight_rejects_physical_provider_in_disposable_namespace(kind: str) -> None:
+    expected = plan()
+    baseline = runner(expected)
+
+    def mixed(args: list[str]) -> str:
+        if args[3:5] == ["-n", NAMESPACE] and args[6] == kind:
+            if kind == "pods" and args[8] == "app=passport-provider-ingress":
+                return json.dumps({"items": [{"metadata": {"name": "foreign-provider"}}]})
+            if len(args) > 7 and args[7] == "passport-provider-ingress":
+                return json.dumps({"kind": kind})
+        return baseline(args)
+
+    with pytest.raises(gate.KubernetesPreflightError, match="physical provider"):
+        gate.inspect(expected, COMMIT, REFERENCE, mixed)
 
 
 def manifest_file(tmp_path: Path) -> Path:
@@ -398,4 +471,36 @@ def test_collector_rejects_service_replacement_during_runtime_probe(
     surface = report["surfaces"]["kubernetes"]
     assert surface["runtime_images"] is None
     assert surface["runtime_accepted"] is False
+    assert surface["blocker"] == "disposable runtime probe failed"
+
+
+def test_collector_rechecks_simulator_routing_after_identity_preflight(
+    tmp_path: Path,
+) -> None:
+    expected = plan()
+    identity = tmp_path / "identity.json"
+    identity.write_text(json.dumps(expected), encoding="utf-8")
+    model = gate.inspect(expected, COMMIT, REFERENCE, runner(expected))
+    calls = []
+
+    def probe(*args):
+        calls.append("probe")
+        runtime = {
+            name: {"deployment_uid": model["resource_uids"][f"deployment/{name}"],
+                   "oci_reference": REFERENCE}
+            for name in collector.KUBERNETES_SERVICES
+        }
+        if len(calls) == 2:
+            runtime["gateway"]["simulator_binding"] = "replaced"
+        return runtime
+
+    report = collector.collect(
+        manifest_file(tmp_path), COMMIT, namespace=NAMESPACE,
+        kubernetes_context=CONTEXT, kubernetes_identity_plan=identity,
+        kubernetes_preflight=lambda *args: model, kubernetes_probe=probe,
+        attest=lambda *args: True,
+    )
+    assert calls == ["probe", "probe"]
+    surface = report["surfaces"]["kubernetes"]
+    assert surface["runtime_images"] is None
     assert surface["blocker"] == "disposable runtime probe failed"

@@ -33,13 +33,16 @@
     "exact_context_and_cluster_name",
     "exact_https_server_and_ca_digest",
     "disposable_namespace_name_uid_and_source_labels",
+    "plan_run_id_and_run_bound_simulator_selectors",
     "exact_configmap_deployment_and_private_service_uids",
+    "simulator_profile_routing_and_no_physical_provider_ingress",
     "clusterip_without_external_ips_load_balancer_or_node_ports",
     "signed_services_image_and_frozen_legacy_image"
   ],
   "runtime_identity": [
     "pod_replicaset_deployment_owner_uid_chain",
-    "second_full_identity_preflight_after_runtime_probe"
+    "second_full_identity_preflight_after_runtime_probe",
+    "second_simulator_runtime_probe_after_identity_preflight"
   ],
   "runtime_accepted": false,
   "rollback_accepted": false

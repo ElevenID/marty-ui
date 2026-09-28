@@ -43,14 +43,18 @@ The supported-consumer collector requires a Kubernetes identity plan before
 it inspects a disposable namespace. The plan follows
 `contracts/passport-supported-kubernetes-preflight.json` and records the exact
 context, HTTPS API server, CA digest, namespace UID, and ConfigMap, Deployment,
-and private Service UIDs. Its source commit and services image must match the
+and private Service UIDs. It binds the plan run ID to ownership labels and
+simulator selectors. Its source commit and services image must match the
 signed aggregate manifest. The read-only preflight checks those identities,
 the selected Rust ConfigMap values, immutable services and frozen Python owner
 images, and a Python rollback model with all three passport selectors off.
 Services must be ClusterIP without external IPs, load balancer exposure, or
 node ports. Each observed Pod must be owned by a ReplicaSet owned by the
 expected Deployment UID. The collector repeats the full identity preflight
-after runtime inspection and rejects any identity drift.
+after runtime inspection, then repeats the simulator runtime probe. Both
+passes reject physical-provider ingress and require Gateway and native
+issuance to select Marty's simulator profile. Identity or routing drift blocks
+the report.
 
 Pass the plan with `--kubernetes-identity-plan` to the supported-consumer
 collector, or run `scripts/check_passport_supported_kubernetes_model.py` on

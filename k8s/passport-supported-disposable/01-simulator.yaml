@@ -18,6 +18,8 @@ spec:
   selector:
     matchLabels:
       app: passport-callback-signer
+      com.marty.passport.acceptance.owner: supported-consumer
+      com.marty.passport.acceptance.run-id: ${PASSPORT_ACCEPTANCE_PLAN_RUN_ID}
   template:
     metadata:
       labels:
@@ -87,7 +89,10 @@ metadata:
     com.marty.passport.acceptance.services-image: ${MARTY_SERVICES_IMAGE}
 spec:
   type: ClusterIP
-  selector: {app: passport-callback-signer}
+  selector:
+    app: passport-callback-signer
+    com.marty.passport.acceptance.owner: supported-consumer
+    com.marty.passport.acceptance.run-id: ${PASSPORT_ACCEPTANCE_PLAN_RUN_ID}
   ports:
     - {name: http, port: 8018, targetPort: 8018}
 ---
@@ -108,6 +113,8 @@ spec:
   selector:
     matchLabels:
       app: passport-beta-bureau
+      com.marty.passport.acceptance.owner: supported-consumer
+      com.marty.passport.acceptance.run-id: ${PASSPORT_ACCEPTANCE_PLAN_RUN_ID}
   template:
     metadata:
       labels:
@@ -183,7 +190,10 @@ metadata:
     com.marty.passport.acceptance.services-image: ${MARTY_SERVICES_IMAGE}
 spec:
   type: ClusterIP
-  selector: {app: passport-beta-bureau}
+  selector:
+    app: passport-beta-bureau
+    com.marty.passport.acceptance.owner: supported-consumer
+    com.marty.passport.acceptance.run-id: ${PASSPORT_ACCEPTANCE_PLAN_RUN_ID}
   ports:
     - {name: http, port: 8020, targetPort: 8020}
 ---
@@ -194,11 +204,17 @@ metadata:
   namespace: ${PASSPORT_ACCEPTANCE_NAMESPACE}
 spec:
   podSelector:
-    matchLabels: {app: passport-callback-signer}
+    matchLabels:
+      app: passport-callback-signer
+      com.marty.passport.acceptance.owner: supported-consumer
+      com.marty.passport.acceptance.run-id: ${PASSPORT_ACCEPTANCE_PLAN_RUN_ID}
   policyTypes: [Ingress]
   ingress:
     - from:
         - podSelector:
-            matchLabels: {app: passport-beta-bureau}
+            matchLabels:
+              app: passport-beta-bureau
+              com.marty.passport.acceptance.owner: supported-consumer
+              com.marty.passport.acceptance.run-id: ${PASSPORT_ACCEPTANCE_PLAN_RUN_ID}
       ports:
         - {protocol: TCP, port: 8018}

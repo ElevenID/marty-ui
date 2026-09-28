@@ -1108,15 +1108,17 @@ mod tests {
         let provider =
             HttpPhysicalDocumentProvider::new(&format!("http://{address}"), &key).unwrap();
 
-        provider
-            .execute(&request(PhysicalDocumentOperation::Initialize))
-            .await
-            .unwrap();
+        let mut create = request(PhysicalDocumentOperation::Initialize);
+        create
+            .data
+            .insert("issuer_did".into(), json!("did:web:issuer.example"));
+        provider.execute(&create).await.unwrap();
         let (headers, uri, body) = captured.lock().unwrap().take().unwrap();
         assert_eq!(uri.path(), "/v1/passport/applications");
         assert_eq!(headers.get("x-api-key").unwrap().to_str().unwrap(), key);
         assert_eq!(headers.get("x-organization-id").unwrap(), "org-1");
         assert_eq!(body["organization_id"], "org-1");
+        assert_eq!(body["issuer_did"], "did:web:issuer.example");
 
         provider
             .execute(&request(PhysicalDocumentOperation::TrackProduction))
