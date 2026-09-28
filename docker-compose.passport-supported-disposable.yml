@@ -37,7 +37,10 @@ services:
       - source: passport_supported_openbao_start
         target: /usr/local/bin/passport-supported-openbao-start
     secrets: [bao_root_token]
-    volumes: [openbao_data:/bao/data]
+    volumes:
+      - openbao_data:/bao/data
+      - openbao_file:/openbao/file
+      - openbao_logs:/openbao/logs
     healthcheck:
       test: [CMD, bao, status, -address=http://127.0.0.1:8200]
     networks: [private, callback_signing]
@@ -262,6 +265,10 @@ volumes:
   redis_data:
     labels: *acceptance-labels
   openbao_data:
+    labels: *acceptance-labels
+  openbao_file:
+    labels: *acceptance-labels
+  openbao_logs:
     labels: *acceptance-labels
 
 configs:

@@ -136,7 +136,8 @@ def test_record_assembly_uses_live_ids_then_requires_ownership(
         observed.append((surface, now, runner))
         return {"live_ownership_verified": True, "rollback_accepted": False}
 
-    record = collect_record(path, plan, "987654", NOW, docker, ownership=ownership)
+    record = collect_record(path, plan, "987654", tmp_path, NOW, docker,
+                            ownership=ownership)
     assert record["containers"] == containers
     assert record["networks"] == {network_name: network_id}
     assert record["volumes"] == [volume]
@@ -144,7 +145,7 @@ def test_record_assembly_uses_live_ids_then_requires_ownership(
     assert record["producer_run_id"] == "987654"
     assert observed[0][:2] == ("base", NOW)
     with pytest.raises(ProducerError, match="ownership proof"):
-        collect_record(path, plan, "987654", NOW, docker,
+        collect_record(path, plan, "987654", tmp_path, NOW, docker,
                        ownership=lambda *args: {"live_ownership_verified": False})
 
 

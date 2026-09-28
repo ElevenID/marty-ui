@@ -5,9 +5,12 @@ from __future__ import annotations
 from copy import deepcopy
 from datetime import datetime, timedelta, timezone
 import json
+from pathlib import Path
+import tempfile
 
 import pytest
 
+from scripts import check_passport_supported_compose_ownership as ownership_module
 from scripts.check_passport_supported_compose_ownership import (
     OwnershipError, REQUIRED_ROLLBACK, verify,
 )
@@ -33,6 +36,52 @@ LABELS = {
     "com.marty.passport.acceptance.source-commit": "b" * 40,
     "com.marty.passport.acceptance.services-image": IMAGE,
 }
+ROOT = Path(tempfile.gettempdir()) / PROJECT
+SECRETS = {
+    "postgres": ("marty_db_password",),
+    "redis": (),
+    "openbao": ("bao_root_token",),
+    "db-migrate": ("marty_db_password", "bao_token"),
+    "signing-keys": ("marty_db_password", "bao_token", "signing_keys_internal_api_key"),
+    "issuance": (),
+    "issuance-native": ("marty_db_password", "bao_token", "signing_keys_internal_api_key",
+                        "issuance_api_key", "grpc_service_token"),
+    "flow": ("marty_db_password", "signing_keys_internal_api_key", "issuance_api_key",
+             "grpc_service_token"),
+    "passport-callback-signer": ("callback_signer_bao_token", "callback_signer_api_key"),
+    "passport-beta-bureau": ("bureau_database_url", "grpc_service_token",
+                             "callback_signer_api_key"),
+    "gateway": ("bao_token", "signing_keys_internal_api_key", "issuance_api_key",
+                "grpc_service_token"),
+}
+DATA = {
+    "postgres": ("postgres_data", "/var/lib/postgresql/data"),
+    "redis": ("redis_data", "/data"),
+    "openbao": ("openbao_data", "/bao/data"),
+    "openbao-file": ("openbao_file", "/openbao/file"),
+    "openbao-logs": ("openbao_logs", "/openbao/logs"),
+}
+
+
+def mounts_for(service: str) -> list[dict]:
+    mounts = [{"Type": "bind", "Source": str(ROOT / "secrets" / name),
+               "Destination": f"/run/secrets/{name}", "RW": False}
+              for name in SECRETS[service]]
+    if service == "openbao":
+        mounts.append({
+            "Type": "bind",
+            "Source": str(Path(__file__).resolve().parents[1]
+                          / "scripts/passport_supported_openbao_start.sh"),
+            "Destination": "/usr/local/bin/passport-supported-openbao-start",
+            "RW": False,
+        })
+    for key in ((service,) if service != "openbao" else
+                ("openbao", "openbao-file", "openbao-logs")):
+        if key in DATA:
+            name, destination = DATA[key]
+            mounts.append({"Type": "volume", "Name": f"{PROJECT}_{name}",
+                           "Destination": destination, "RW": True})
+    return mounts
 
 
 def fixture() -> tuple[dict, dict[tuple[str, ...], str]]:
@@ -40,7 +89,7 @@ def fixture() -> tuple[dict, dict[tuple[str, ...], str]]:
                   enumerate(sorted(SELECTED | ISOLATED_DEPENDENCIES | REQUIRED_ROLLBACK))}
     network_name = PROJECT + "_private"
     network_id = "e" * 64
-    volume_name = PROJECT + "_postgres"
+    volume_names = [f"{PROJECT}_{name}" for name, _ in DATA.values()]
     record = {
         "schema": "marty.passport-supported-compose-ownership/v1",
         "project": PROJECT, "run_id": "123456", "source_commit": "b" * 40,
@@ -49,8 +98,9 @@ def fixture() -> tuple[dict, dict[tuple[str, ...], str]]:
         "infra_images": INFRA,
         "created_at": (NOW - timedelta(minutes=5)).isoformat(),
         "expires_at": (NOW + timedelta(minutes=55)).isoformat(),
+        "disposable_root": str(ROOT),
         "containers": containers, "networks": {network_name: network_id},
-        "volumes": [volume_name],
+        "volumes": volume_names,
     }
     calls: dict[tuple[str, ...], str] = {
         ("ps", "-aq", "--no-trunc", "--filter", f"label=com.docker.compose.project={PROJECT}"):
@@ -58,7 +108,7 @@ def fixture() -> tuple[dict, dict[tuple[str, ...], str]]:
         ("network", "ls", "-q", "--no-trunc", "--filter",
          f"label=com.docker.compose.project={PROJECT}"): network_id,
         ("volume", "ls", "-q", "--filter",
-         f"label=com.docker.compose.project={PROJECT}"): volume_name,
+         f"label=com.docker.compose.project={PROJECT}"): "\n".join(volume_names),
     }
     for service, identifier in containers.items():
         calls[("container", "inspect", identifier)] = json.dumps([{
@@ -71,16 +121,18 @@ def fixture() -> tuple[dict, dict[tuple[str, ...], str]]:
                                  IMAGE if service in SELECTED | {"signing-keys"} else
                                  INFRA[service])},
             "NetworkSettings": {"Networks": {network_name: {"NetworkID": network_id}}},
+            "Mounts": mounts_for(service),
         }])
     calls[("network", "inspect", network_id)] = json.dumps([{
         "Id": network_id, "Name": network_name, "Driver": "bridge",
         "Internal": True, "Labels": LABELS,
         "Containers": {identifier: {} for identifier in containers.values()},
     }])
-    calls[("volume", "inspect", volume_name)] = json.dumps([{
-        "Name": volume_name, "Driver": "local", "Options": None,
-        "Labels": LABELS,
-    }])
+    for volume_name in volume_names:
+        calls[("volume", "inspect", volume_name)] = json.dumps([{
+            "Name": volume_name, "Driver": "local", "Options": None,
+            "Labels": LABELS,
+        }])
     return record, calls
 
 
@@ -131,6 +183,69 @@ def test_exact_live_project_ownership_is_read_only_and_still_blocked() -> None:
             f"label=com.docker.compose.project={PROJECT}"] in observed
     assert ["network", "ls", "-q", "--no-trunc", "--filter",
             f"label=com.docker.compose.project={PROJECT}"] in observed
+
+
+@pytest.mark.parametrize("mutation", [
+    lambda mounts: mounts[0].update(Source="/srv/production/marty_db_password"),
+    lambda mounts: mounts[0].update(Destination="/run/secrets/other"),
+    lambda mounts: mounts[0].update(RW=True),
+    lambda mounts: mounts.append({"Type": "bind", "Source": "/srv/production/key",
+                                 "Destination": "/run/secrets/extra", "RW": False}),
+    lambda mounts: mounts.pop(),
+])
+def test_secret_mounts_must_match_exact_read_only_project_paths(mutation) -> None:
+    record, calls = fixture()
+    key = ("container", "inspect", record["containers"]["postgres"])
+    item = json.loads(calls[key])
+    mutation(item[0]["Mounts"])
+    calls[key] = json.dumps(item)
+    with pytest.raises(OwnershipError, match="mount"):
+        run(record, calls)
+
+
+def test_disposable_root_must_be_the_project_temp_directory() -> None:
+    record, calls = fixture()
+    record["disposable_root"] = "/srv/production/marty-passport-acceptance-base-abcdef"
+    with pytest.raises(OwnershipError, match="Disposable root"):
+        run(record, calls)
+
+
+def test_docker_desktop_forward_slash_bind_sources_are_accepted() -> None:
+    record, calls = fixture()
+    for service in record["containers"]:
+        key = ("container", "inspect", record["containers"][service])
+        item = json.loads(calls[key])
+        for mount in item[0]["Mounts"]:
+            if mount["Type"] == "bind":
+                mount["Source"] = Path(mount["Source"]).as_posix()
+        calls[key] = json.dumps(item)
+    assert run(record, calls)["live_ownership_verified"] is True
+
+
+def test_secret_file_symlink_cannot_redirect_a_project_mount(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    record, calls = fixture()
+    root = tmp_path / PROJECT
+    secrets = root / "secrets"
+    secrets.mkdir(parents=True)
+    foreign = tmp_path / "foreign-secret"
+    foreign.write_text("synthetic", encoding="utf-8")
+    try:
+        (secrets / "marty_db_password").symlink_to(foreign)
+    except OSError:
+        pytest.skip("Host does not permit test symlinks")
+    monkeypatch.setattr(ownership_module.tempfile, "gettempdir", lambda: str(tmp_path))
+    record["disposable_root"] = str(root)
+    for service in record["containers"]:
+        key = ("container", "inspect", record["containers"][service])
+        item = json.loads(calls[key])
+        for mount in item[0]["Mounts"]:
+            if mount["Type"] == "bind" and mount["Source"].startswith(str(ROOT)):
+                mount["Source"] = str(root) + mount["Source"][len(str(ROOT)):]
+        calls[key] = json.dumps(item)
+    with pytest.raises(OwnershipError, match="unowned mount"):
+        run(record, calls)
 
 
 def test_successful_completed_migration_service_is_allowed() -> None:
@@ -261,7 +376,7 @@ def test_rejects_cross_project_or_shared_resource(resource, change, match: str) 
     if resource == "network":
         key = ("network", "inspect", "e" * 64)
     elif resource == "volume":
-        key = ("volume", "inspect", PROJECT + "_postgres")
+        key = ("volume", "inspect", PROJECT + "_postgres_data")
     else:
         key = ("container", "inspect", record["containers"][resource])
     item = deepcopy(json.loads(calls[key]))

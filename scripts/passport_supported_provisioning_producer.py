@@ -143,7 +143,7 @@ def verify_pre_mutation(
 
 
 def collect_record(
-    plan_path: Path, plan: dict, producer_run_id: str,
+    plan_path: Path, plan: dict, producer_run_id: str, disposable_root: Path,
     now: datetime, runner: Callable[[list[str]], str] = docker,
     *, ownership: Callable[..., dict] = verify_ownership,
 ) -> dict:
@@ -190,6 +190,7 @@ def collect_record(
         "schema": "marty.passport-supported-compose-ownership/v1",
         "plan_sha256": hashlib.sha256(plan_path.read_bytes()).hexdigest(),
         "producer_run_id": producer_run_id,
+        "disposable_root": str(disposable_root),
         "containers": containers, "networks": networks, "volumes": volumes,
         **{key: plan[key] for key in (
             "run_id", "project", "source_commit", "services_reference",

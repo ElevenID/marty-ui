@@ -13,6 +13,7 @@ import json
 from pathlib import Path
 import re
 import subprocess
+import tempfile
 from typing import Callable
 
 if __package__:
@@ -46,6 +47,30 @@ COMPLETED_INIT = frozenset({
     "db-migrate", "issuance-migrations", "verification-migrations",
     "revocation-profile-migrate", "keycloak-configurator", "openbao-init",
 })
+SECRET_MOUNTS = {
+    "postgres": ("marty_db_password",),
+    "redis": (),
+    "openbao": ("bao_root_token",),
+    "db-migrate": ("marty_db_password", "bao_token"),
+    "signing-keys": ("marty_db_password", "bao_token", "signing_keys_internal_api_key"),
+    "issuance": (),
+    "issuance-native": ("marty_db_password", "bao_token", "signing_keys_internal_api_key",
+                        "issuance_api_key", "grpc_service_token"),
+    "flow": ("marty_db_password", "signing_keys_internal_api_key",
+             "issuance_api_key", "grpc_service_token"),
+    "passport-callback-signer": ("callback_signer_bao_token", "callback_signer_api_key"),
+    "passport-beta-bureau": ("bureau_database_url", "grpc_service_token",
+                             "callback_signer_api_key"),
+    "gateway": ("bao_token", "signing_keys_internal_api_key", "issuance_api_key",
+                "grpc_service_token"),
+}
+DATA_MOUNTS = {
+    "postgres": (("postgres_data", "/var/lib/postgresql/data"),),
+    "redis": (("redis_data", "/data"),),
+    "openbao": (("openbao_data", "/bao/data"),
+                ("openbao_file", "/openbao/file"),
+                ("openbao_logs", "/openbao/logs")),
+}
 
 
 class OwnershipError(ValueError):
@@ -97,6 +122,22 @@ def _ids(value: object, name: str) -> dict[str, str]:
             and len(set(value.values())) == len(value),
             f"Disposable {name} identities are invalid")
     return value
+
+
+def _expected_mounts(service: str, project: str, disposable_root: Path) -> set[tuple[str, str, str, bool]]:
+    expected = {
+        ("bind", str(disposable_root / "secrets" / secret),
+         f"/run/secrets/{secret}", False)
+        for secret in SECRET_MOUNTS[service]
+    }
+    if service == "openbao":
+        expected.add(("bind", str(Path(__file__).resolve().parents[1]
+                                   / "scripts/passport_supported_openbao_start.sh"),
+                      "/usr/local/bin/passport-supported-openbao-start", False))
+    if service in DATA_MOUNTS:
+        expected.update(("volume", f"{project}_{name}", destination, True)
+                        for name, destination in DATA_MOUNTS[service])
+    return expected
 
 
 def verify(record: dict, surface: str, now: datetime,
@@ -153,6 +194,14 @@ def verify(record: dict, surface: str, now: datetime,
             "Disposable service ownership is incomplete")
     require(all(name.startswith(project + "_") for name in networks),
             "Disposable network identity escapes the project")
+    disposable_root = Path(record.get("disposable_root", ""))
+    require(disposable_root.is_absolute()
+            and disposable_root == Path(tempfile.gettempdir()) / project
+            and disposable_root.resolve() == disposable_root
+            and (disposable_root / "secrets").resolve() == disposable_root / "secrets",
+            "Disposable root is not the isolated project directory")
+    require(set(SECRET_MOUNTS) == DISPOSABLE_SERVICES,
+            "Disposable secret mount contract is incomplete")
 
     listed = set(runner(["ps", "-aq", "--no-trunc", "--filter",
                          f"label=com.docker.compose.project={project}"]).split())
@@ -221,11 +270,27 @@ def verify(record: dict, surface: str, now: datetime,
                 "Passport container image differs from signed release")
         mounts = item.get("Mounts", [])
         require(isinstance(mounts, list), "Disposable container mounts are invalid")
+        expected_mounts = _expected_mounts(service, project, disposable_root)
+        observed_mounts: set[tuple[str, str, str, bool]] = set()
         for mount in mounts:
             require(isinstance(mount, dict)
-                    and mount.get("Type") == "volume"
-                    and mount.get("Name") in volumes,
+                    and mount.get("Type") in {"bind", "volume"}
+                    and isinstance(mount.get("Destination"), str)
+                    and isinstance(mount.get("RW"), bool),
                     "Disposable container uses an unowned mount")
+            kind = mount["Type"]
+            source = mount.get("Source") if kind == "bind" else mount.get("Name")
+            require(isinstance(source, str), "Disposable container uses an unowned mount")
+            require(kind != "bind" or Path(source).resolve() == Path(source),
+                    "Disposable container uses an unowned mount")
+            identity = (kind, str(Path(source)) if kind == "bind" else source,
+                        mount["Destination"], mount["RW"])
+            require(identity in expected_mounts and identity not in observed_mounts
+                    and (kind != "volume" or source in volumes),
+                    "Disposable container uses an unowned mount")
+            observed_mounts.add(identity)
+        require(observed_mounts == expected_mounts,
+                "Disposable container mount set is incomplete")
     for name, identifier in networks.items():
         item = _inspect("network", identifier, runner)
         require(item.get("Id") == identifier and item.get("Name") == name

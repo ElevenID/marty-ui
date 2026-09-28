@@ -301,18 +301,25 @@ def validate_model(
                     f"Compose {name} differs from the protected image reference")
         mounts = service.get("volumes", [])
         expected_mounts = {
-            "postgres": ("postgres_data", "/var/lib/postgresql/data"),
-            "redis": ("redis_data", "/data"),
-            "openbao": ("openbao_data", "/bao/data"),
+            "postgres": {("postgres_data", "/var/lib/postgresql/data")},
+            "redis": {("redis_data", "/data")},
+            "openbao": {
+                ("openbao_data", "/bao/data"),
+                ("openbao_file", "/openbao/file"),
+                ("openbao_logs", "/openbao/logs"),
+            },
         }
         require(isinstance(mounts, list), f"Compose {name} mounts are invalid")
         if name in expected_mounts:
-            source, target = expected_mounts[name]
-            require(len(mounts) == 1 and isinstance(mounts[0], dict)
-                    and mounts[0].get("type") == "volume"
-                    and mounts[0].get("source") == source
-                    and mounts[0].get("target") == target
-                    and source in volumes,
+            require(len(mounts) == len(expected_mounts[name])
+                    and all(isinstance(mount, dict)
+                            and mount.get("type") == "volume"
+                            and (mount.get("source"), mount.get("target"))
+                            in expected_mounts[name]
+                            and mount.get("source") in volumes
+                            for mount in mounts)
+                    and {(mount["source"], mount["target"]) for mount in mounts}
+                    == expected_mounts[name],
                     f"Compose {name} has an unexpected bind mount or volume")
         else:
             require(not mounts, f"Compose {name} has an unexpected bind mount or volume")

@@ -86,7 +86,11 @@ def safe_model(root: Path) -> dict:
     services["openbao"] = {
         "image": infra["openbao"],
         "networks": ["private", "callback_signing"],
-        "volumes": [{"type": "volume", "source": "openbao_data", "target": "/bao/data"}],
+        "volumes": [
+            {"type": "volume", "source": "openbao_data", "target": "/bao/data"},
+            {"type": "volume", "source": "openbao_file", "target": "/openbao/file"},
+            {"type": "volume", "source": "openbao_logs", "target": "/openbao/logs"},
+        ],
         "entrypoint": ["/bin/sh", "/usr/local/bin/passport-supported-openbao-start"],
         "configs": [{"source": "passport_supported_openbao_start",
                      "target": "/usr/local/bin/passport-supported-openbao-start"}],
@@ -133,7 +137,8 @@ def safe_model(root: Path) -> dict:
                                      "internal": True, "labels": LABELS},
             },
             "volumes": {name: {"name": PROJECT + "_" + name, "labels": LABELS}
-                        for name in ("postgres_data", "redis_data", "openbao_data")},
+                        for name in ("postgres_data", "redis_data", "openbao_data",
+                                     "openbao_file", "openbao_logs")},
             "secrets": {
                 "db": {"file": str(root / "secrets/db")},
                 "bao_root_token": {"file": str(root / "secrets/bao_root_token")},
