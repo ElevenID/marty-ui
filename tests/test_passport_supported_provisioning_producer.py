@@ -6,7 +6,9 @@ from copy import deepcopy
 from datetime import datetime, timedelta, timezone
 import hashlib
 import json
+import os
 from pathlib import Path
+import stat
 import subprocess
 
 import pytest
@@ -14,7 +16,9 @@ import yaml
 
 from scripts.check_passport_supported_rollback_model import DISPOSABLE_SERVICES
 from scripts.passport_supported_provisioning_producer import (
-    ProducerError, WORKFLOW_REF, collect_record, verify_plan_release,
+    ProducerError, WORKFLOW_REF, collect_record, destroy_disposable_project,
+    issue_disposable_api_key,
+    verify_plan_release,
 )
 
 
@@ -147,6 +151,188 @@ def test_record_assembly_uses_live_ids_then_requires_ownership(
     with pytest.raises(ProducerError, match="ownership proof"):
         collect_record(path, plan, "987654", tmp_path, NOW, docker,
                        ownership=lambda *args: {"live_ownership_verified": False})
+
+
+def test_disposable_api_key_is_extracted_only_after_live_ownership(
+    tmp_path: Path,
+) -> None:
+    secrets = tmp_path / "secrets"
+    secrets.mkdir(mode=0o700)
+    container = "e" * 64
+    record = {"disposable_root": str(tmp_path),
+              "containers": {"organization": container}}
+    calls = []
+
+    def executor(args: list[str], output: object) -> bool:
+        calls.append(args)
+        if args[-2:] == ["cat", "/app/data/passport-acceptance-api-key"]:
+            output.write(b"mk_test_" + b"a" * 43 + b"\n")
+        return True
+
+    def ownership(*args):
+        assert calls == []
+        return {"live_ownership_verified": True, "rollback_accepted": False}
+
+    key = issue_disposable_api_key(record, "base", NOW,
+                                   executor=executor, ownership=ownership)
+    assert key == secrets / "passport_acceptance_api_key"
+    assert key.read_bytes() == b"mk_test_" + b"a" * 43 + b"\n"
+    if os.name == "posix":
+        assert stat.S_IMODE(key.stat().st_mode) == 0o600
+    assert calls == [
+        ["exec", "--user", "10001:10001", container,
+         "/usr/local/bin/marty-passport-acceptance-api-key"],
+        ["exec", "--user", "10001:10001", container,
+         "cat", "/app/data/passport-acceptance-api-key"],
+        ["exec", "--user", "10001:10001", container,
+         "rm", "-f", "/app/data/passport-acceptance-api-key"],
+    ]
+    with pytest.raises(ProducerError, match="ownership proof"):
+        issue_disposable_api_key(record, "base", NOW, executor=executor,
+                                 ownership=lambda *args: {"live_ownership_verified": False})
+    assert len(calls) == 3
+
+
+def test_disposable_api_key_failure_erases_container_copy_and_preserves_existing_file(
+    tmp_path: Path,
+) -> None:
+    secrets = tmp_path / "secrets"
+    secrets.mkdir(mode=0o700)
+    record = {"disposable_root": str(tmp_path),
+              "containers": {"organization": "e" * 64}}
+    calls = []
+
+    def executor(args: list[str], output: object) -> bool:
+        calls.append(args)
+        if args[-2:] == ["cat", "/app/data/passport-acceptance-api-key"]:
+            output.write(b"invalid-key\n")
+        return True
+
+    def ownership(*args):
+        return {"live_ownership_verified": True, "rollback_accepted": False}
+    with pytest.raises(ProducerError, match="key output is invalid"):
+        issue_disposable_api_key(record, "base", NOW,
+                                 executor=executor, ownership=ownership,
+                                 teardown=lambda *args: True)
+    assert calls[-2][-2:] == ["/usr/local/bin/marty-passport-acceptance-api-key",
+                            "--revoke-run"]
+    assert calls[-1][-3:] == ["rm", "-f", "/app/data/passport-acceptance-api-key"]
+    destination = secrets / "passport_acceptance_api_key"
+    assert not destination.exists()
+    destination.write_text("prior private key", encoding="utf-8")
+    with pytest.raises(FileExistsError):
+        issue_disposable_api_key(record, "base", NOW,
+                                 executor=executor, ownership=ownership,
+                                 teardown=lambda *args: True)
+    assert destination.read_text(encoding="utf-8") == "prior private key"
+
+
+def test_failed_issuer_still_erases_possible_container_output(tmp_path: Path) -> None:
+    (tmp_path / "secrets").mkdir(mode=0o700)
+    record = {"disposable_root": str(tmp_path),
+              "containers": {"organization": "e" * 64}}
+    calls = []
+
+    def executor(args: list[str], output: object) -> bool:
+        calls.append(args)
+        return (args[-3:] == ["rm", "-f", "/app/data/passport-acceptance-api-key"]
+                or args[-1] == "--revoke-run")
+
+    with pytest.raises(ProducerError, match="issuer failed"):
+        issue_disposable_api_key(
+            record, "base", NOW, executor=executor,
+            teardown=lambda *args: True,
+            ownership=lambda *args: {"live_ownership_verified": True,
+                                     "rollback_accepted": False})
+    assert len(calls) == 3
+    assert calls[-2][-1] == "--revoke-run"
+    assert calls[-1][-3:] == ["rm", "-f", "/app/data/passport-acceptance-api-key"]
+    assert not (tmp_path / "secrets" / "passport_acceptance_api_key").exists()
+
+
+def test_uncertain_issuer_requires_proven_project_teardown(tmp_path: Path) -> None:
+    (tmp_path / "secrets").mkdir(mode=0o700)
+    record = {"disposable_root": str(tmp_path),
+              "containers": {"organization": "e" * 64}}
+    observed = []
+
+    def executor(args: list[str], output: object) -> bool:
+        return args[-1] != "/usr/local/bin/marty-passport-acceptance-api-key"
+
+    def teardown(*args) -> bool:
+        observed.append(args)
+        return False
+
+    with pytest.raises(ProducerError, match="teardown is unverified"):
+        issue_disposable_api_key(
+            record, "base", NOW, executor=executor, teardown=teardown,
+            ownership=lambda *args: {"live_ownership_verified": True,
+                                     "rollback_accepted": False})
+    assert len(observed) == 1
+
+
+def test_teardown_targets_only_recorded_disposable_resources() -> None:
+    containers = {name: format(index + 1, "064x")
+                  for index, name in enumerate(sorted(DISPOSABLE_SERVICES))}
+    record = {"project": PROJECT, "containers": containers,
+              "networks": {PROJECT + "_private": "e" * 64},
+              "volumes": [PROJECT + "_postgres_data"]}
+    calls = []
+
+    def executor(args: list[str], output: object) -> bool:
+        calls.append(args)
+        return True
+
+    def inspector(args: list[str]) -> str:
+        return ""
+
+    assert destroy_disposable_project(record, inspector, executor)
+    assert calls == [
+        ["container", "rm", "-f", *containers.values()],
+        ["network", "rm", "e" * 64],
+        ["volume", "rm", PROJECT + "_postgres_data"],
+    ]
+    assert not destroy_disposable_project(
+        record, lambda args: "still-present", executor)
+
+    def missing_labels_but_live_volume(args: list[str]) -> str:
+        return record["volumes"][0] if args == ["volume", "ls", "-q"] else ""
+
+    assert not destroy_disposable_project(
+        record, missing_labels_but_live_volume, executor)
+
+
+def test_host_key_unlink_failure_still_forces_teardown(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    (tmp_path / "secrets").mkdir(mode=0o700)
+    record = {"disposable_root": str(tmp_path),
+              "containers": {"organization": "e" * 64}}
+    destination = tmp_path / "secrets" / "passport_acceptance_api_key"
+    original_unlink = Path.unlink
+    torn_down = []
+
+    def fail_unlink(path: Path, *args, **kwargs) -> None:
+        if path == destination:
+            raise OSError("host unlink failed")
+        original_unlink(path, *args, **kwargs)
+
+    def executor(args: list[str], output: object) -> bool:
+        if args[-2:] == ["cat", "/app/data/passport-acceptance-api-key"]:
+            output.write(b"invalid\n")
+        return True
+
+    def teardown(*args) -> bool:
+        torn_down.append(True)
+        return True
+
+    monkeypatch.setattr(Path, "unlink", fail_unlink)
+    with pytest.raises(OSError, match="host unlink failed"):
+        issue_disposable_api_key(
+            record, "base", NOW, executor=executor, teardown=teardown,
+            ownership=lambda *args: {"live_ownership_verified": True,
+                                     "rollback_accepted": False})
+    assert torn_down == [True]
 
 
 def test_producer_workflow_is_protected_and_cannot_mutate_docker() -> None:

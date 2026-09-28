@@ -15,11 +15,13 @@ use std::os::unix::fs::OpenOptionsExt;
 
 use chrono::{DateTime, Duration, Utc};
 use marty_organization::{
-    postgres::PostgresOrganizationStore, ApiKeyScopeType, CreateApiKeyCommand,
-    OrganizationApplication, OrganizationCache, RevokeApiKeyCommand,
+    postgres::PostgresOrganizationStore, ApiKey, ApiKeyScopeType, ApiKeyStatus,
+    CreateApiKeyCommand, OrganizationApplication, OrganizationCache, RevokeApiKeyCommand,
 };
 use mmf_data::MemoryCache;
+use sha2::{Digest, Sha256};
 use sqlx::postgres::PgPoolOptions;
+use sqlx::{Postgres, Transaction};
 use url::Url;
 use uuid::Uuid;
 
@@ -139,7 +141,15 @@ fn disposable_database_url() -> io::Result<String> {
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn Error>> {
     let context = AcceptanceContext::from_environment(&env::vars().collect())?;
+    let revoke = match env::args().skip(1).collect::<Vec<_>>().as_slice() {
+        [] => false,
+        [argument] if argument == "--revoke-run" => true,
+        _ => return Err(Box::<dyn Error>::from(invalid("command"))),
+    };
     let database_url = disposable_database_url()?;
+    if revoke {
+        return revoke_run(&context, &database_url).await;
+    }
     let mut output = output_file()?;
     let result = issue(&context, &database_url, &mut output).await;
     if result.is_err() {
@@ -154,16 +164,7 @@ async fn issue(
     database_url: &str,
     output: &mut File,
 ) -> Result<(), Box<dyn Error>> {
-    let pool = PgPoolOptions::new()
-        .max_connections(2)
-        .connect(database_url)
-        .await?;
-    let cache = OrganizationCache::new(
-        Arc::new(MemoryCache::default()),
-        Arc::new(MemoryCache::default()),
-        Arc::new(MemoryCache::default()),
-    );
-    let application = OrganizationApplication::new(PostgresOrganizationStore::new(pool), cache)?;
+    let (application, _run_lock) = locked_application(context, database_url).await?;
     let now = Utc::now();
     let command = key_command(context, now)?;
     let created_by = command.created_by.clone();
@@ -185,6 +186,67 @@ async fn issue(
         return Err(Box::new(error));
     }
     Ok(())
+}
+
+async fn locked_application(
+    context: &AcceptanceContext,
+    database_url: &str,
+) -> Result<(OrganizationApplication, Transaction<'static, Postgres>), Box<dyn Error>> {
+    let pool = PgPoolOptions::new()
+        .max_connections(2)
+        .connect(database_url)
+        .await?;
+    let mut run_lock = pool.begin().await?;
+    sqlx::query("SELECT pg_advisory_xact_lock($1)")
+        .bind(run_lock_key(context))
+        .execute(&mut *run_lock)
+        .await?;
+    let cache = OrganizationCache::new(
+        Arc::new(MemoryCache::default()),
+        Arc::new(MemoryCache::default()),
+        Arc::new(MemoryCache::default()),
+    );
+    let application = OrganizationApplication::new(PostgresOrganizationStore::new(pool), cache)?;
+    Ok((application, run_lock))
+}
+
+async fn revoke_run(context: &AcceptanceContext, database_url: &str) -> Result<(), Box<dyn Error>> {
+    let (application, _run_lock) = locked_application(context, database_url).await?;
+    for key in application.list_api_keys(context.organization_id).await? {
+        if belongs_to_run(&key, context) && key.status == ApiKeyStatus::Active {
+            application
+                .revoke_api_key(RevokeApiKeyCommand {
+                    organization_id: context.organization_id,
+                    api_key_id: key.id,
+                    revoked_by: format!(
+                        "passport-acceptance:{}:{}",
+                        context.project, context.run_id
+                    ),
+                    now: Utc::now(),
+                })
+                .await?;
+        }
+    }
+    Ok(())
+}
+
+fn run_lock_key(context: &AcceptanceContext) -> i64 {
+    let identity = format!("{}/{}", context.project, context.run_id);
+    let digest = Sha256::digest(identity.as_bytes());
+    i64::from_be_bytes(digest[..8].try_into().expect("SHA-256 has eight bytes"))
+}
+
+fn belongs_to_run(key: &ApiKey, context: &AcceptanceContext) -> bool {
+    key.organization_id == context.organization_id
+        && key.name == format!("passport-acceptance-{}", context.run_id)
+        && key.created_by == format!("passport-acceptance:{}:{}", context.project, context.run_id)
+        && key.description.as_deref()
+            == Some(&format!("Disposable source {}", context.source_commit))
+        && key.key_prefix == "mk_test_"
+        && key.scopes == ["credentials:read", "credentials:issue"]
+        && key
+            .expires_at
+            .is_some_and(|expires| expires <= context.expires_at)
 }
 
 fn key_command(context: &AcceptanceContext, now: DateTime<Utc>) -> io::Result<CreateApiKeyCommand> {
@@ -213,6 +275,7 @@ fn key_command(context: &AcceptanceContext, now: DateTime<Utc>) -> io::Result<Cr
 #[cfg(test)]
 mod tests {
     use super::*;
+    use marty_organization::ApiKeySpec;
 
     fn values() -> BTreeMap<String, String> {
         BTreeMap::from([
@@ -282,5 +345,33 @@ mod tests {
         );
         let context = AcceptanceContext::from_environment(&environment).unwrap();
         assert!(key_command(&context, Utc::now()).is_err());
+    }
+
+    #[test]
+    fn cleanup_selects_only_the_attested_run_key() {
+        let context = AcceptanceContext::from_environment(&values()).unwrap();
+        let command = key_command(&context, Utc::now()).unwrap();
+        let (key, _) = ApiKey::create(
+            ApiKeySpec {
+                organization_id: command.organization_id,
+                name: command.name,
+                created_by: command.created_by,
+                scopes: command.scopes,
+                description: command.description,
+                expires_at: command.expires_at,
+                now: command.now,
+            },
+            true,
+        );
+        assert!(belongs_to_run(&key, &context));
+        let mut unrelated = key.clone();
+        unrelated.created_by.push_str("-other");
+        assert!(!belongs_to_run(&unrelated, &context));
+        let mut unrelated = key.clone();
+        unrelated.description = Some("Disposable source other".into());
+        assert!(!belongs_to_run(&unrelated, &context));
+        let mut unrelated = key.clone();
+        unrelated.scopes.push("admin".into());
+        assert!(!belongs_to_run(&unrelated, &context));
     }
 }

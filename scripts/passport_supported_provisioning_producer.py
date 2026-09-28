@@ -1,9 +1,8 @@
 #!/usr/bin/env python3
-"""Fail-closed pre-mutation gates and read-only record collection for a future producer.
+"""Fail-closed gates and private helpers for a future disposable producer.
 
-No function in this module creates or removes Docker resources. The protected
-workflow deliberately stops before provisioning until disposable KMS,
-issuer profiles, and simulator secret files are governed and available.
+The protected workflow deliberately stops before provisioning until disposable
+KMS, issuer profiles, and simulator secret files are governed and available.
 """
 
 from __future__ import annotations
@@ -15,6 +14,8 @@ import json
 import os
 from pathlib import Path
 import re
+import stat
+import subprocess
 from typing import Callable
 
 if __package__:
@@ -22,7 +23,7 @@ if __package__:
         _inspect, docker, verify as verify_ownership,
     )
     from .check_passport_supported_rollback_model import (
-        DISPOSABLE_SERVICES, ModelPreflightError, preflight_attested_plan,
+        DISPOSABLE_SERVICES, PROJECT, ModelPreflightError, preflight_attested_plan,
         source_identity,
     )
     from .passport_supported_provisioning_plan import (
@@ -33,7 +34,7 @@ else:
         _inspect, docker, verify as verify_ownership,
     )
     from check_passport_supported_rollback_model import (
-        DISPOSABLE_SERVICES, ModelPreflightError, preflight_attested_plan,
+        DISPOSABLE_SERVICES, PROJECT, ModelPreflightError, preflight_attested_plan,
         source_identity,
     )
     from passport_supported_provisioning_plan import (
@@ -46,6 +47,9 @@ WORKFLOW_REF = (
     "passport-supported-provisioning-producer.yml@refs/heads/main"
 )
 RESOURCE_ID = re.compile(r"[0-9a-f]{64}\Z")
+TEST_KEY = re.compile(rb"mk_test_[A-Za-z0-9]{43}\n\Z")
+KEY_COMMAND = "/usr/local/bin/marty-passport-acceptance-api-key"
+CONTAINER_KEY = "/app/data/passport-acceptance-api-key"
 
 
 class ProducerError(ValueError):
@@ -203,6 +207,127 @@ def collect_record(
             and proof.get("rollback_accepted") is False,
             "Disposable live ownership proof failed")
     return record
+
+
+def _exec_docker(args: list[str], output: object = None) -> bool:
+    """Run a fixed Docker command without returning its output or stderr."""
+    try:
+        result = subprocess.run(["docker", *args], stdout=output or subprocess.DEVNULL,
+                                stderr=subprocess.DEVNULL, check=False, timeout=30)
+    except (OSError, subprocess.SubprocessError):
+        return False
+    return result.returncode == 0
+
+
+def destroy_disposable_project(
+    record: dict, inspector: Callable[[list[str]], str] = docker,
+    executor: Callable[[list[str], object], bool] = _exec_docker,
+) -> bool:
+    """Remove only recorded disposable resources and prove their project is absent."""
+    project = record.get("project")
+    containers = record.get("containers")
+    networks = record.get("networks")
+    volumes = record.get("volumes")
+    require(isinstance(project, str) and PROJECT.fullmatch(project) is not None
+            and isinstance(containers, dict) and set(containers) == DISPOSABLE_SERVICES
+            and all(isinstance(value, str) and RESOURCE_ID.fullmatch(value)
+                    for value in containers.values())
+            and isinstance(networks, dict) and bool(networks)
+            and all(isinstance(name, str) and name.startswith(project + "_")
+                    and isinstance(value, str) and RESOURCE_ID.fullmatch(value)
+                    for name, value in networks.items())
+            and isinstance(volumes, list) and all(isinstance(name, str)
+                    and name.startswith(project + "_") for name in volumes),
+            "Disposable teardown record is invalid")
+    executor(["container", "rm", "-f", *containers.values()], None)
+    executor(["network", "rm", *networks.values()], None)
+    if volumes:
+        executor(["volume", "rm", *volumes], None)
+    try:
+        project_absent = all(not inspector(args).split() for args in (
+            ["ps", "-aq", "--no-trunc", "--filter",
+             f"label=com.docker.compose.project={project}"],
+            ["network", "ls", "-q", "--no-trunc", "--filter",
+             f"label=com.docker.compose.project={project}"],
+            ["volume", "ls", "-q", "--filter",
+             f"label=com.docker.compose.project={project}"],
+        ))
+        live_containers = set(inspector(["ps", "-aq", "--no-trunc"]).split())
+        live_networks = set(inspector(["network", "ls", "-q", "--no-trunc"]).split())
+        live_volumes = set(inspector(["volume", "ls", "-q"]).split())
+        return (project_absent
+                and not set(containers.values()) & live_containers
+                and not set(networks.values()) & live_networks
+                and not set(volumes) & live_volumes)
+    except (OSError, ValueError, KeyError):
+        return False
+
+
+def issue_disposable_api_key(
+    record: dict, surface: str, now: datetime,
+    inspector: Callable[[list[str]], str] = docker,
+    executor: Callable[[list[str], object], bool] = _exec_docker,
+    *, ownership: Callable[..., dict] = verify_ownership,
+    teardown: Callable[..., bool] = destroy_disposable_project,
+) -> Path:
+    """Issue and extract a lease-bound key from the proven Organization container."""
+    proof = ownership(record, surface, now, inspector)
+    require(proof.get("live_ownership_verified") is True
+            and proof.get("rollback_accepted") is False,
+            "Disposable live ownership proof failed before key issuance")
+    container = record["containers"]["organization"]
+    require(RESOURCE_ID.fullmatch(container) is not None,
+            "Disposable Organization container ID is invalid")
+    root = Path(record["disposable_root"])
+    secrets = root / "secrets"
+    info = secrets.lstat()
+    require(stat.S_ISDIR(info.st_mode) and not secrets.is_symlink(),
+            "Disposable key directory is invalid")
+    if os.name == "posix":
+        require(info.st_uid == os.getuid() and stat.S_IMODE(info.st_mode) == 0o700,
+                "Disposable key directory is not private")
+    destination = secrets / "passport_acceptance_api_key"
+    flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_NOFOLLOW", 0)
+    base = ["exec", "--user", "10001:10001", container]
+    attempted = False
+    erased = False
+    created = False
+    succeeded = False
+    try:
+        descriptor = os.open(destination, flags, 0o600)
+        created = True
+        with os.fdopen(descriptor, "wb") as output:
+            attempted = True
+            require(executor([*base, KEY_COMMAND], None),
+                    "Disposable Organization key issuer failed")
+            require(executor([*base, "cat", CONTAINER_KEY], output),
+                    "Disposable Organization key extraction failed")
+            output.flush()
+            os.fsync(output.fileno())
+        require(destination.stat().st_size == 52
+                and TEST_KEY.fullmatch(destination.read_bytes()) is not None,
+                "Disposable Organization key output is invalid")
+        erased = executor([*base, "rm", "-f", CONTAINER_KEY], None)
+        require(erased, "Disposable Organization key erasure failed")
+        succeeded = True
+        return destination
+    finally:
+        if attempted and not succeeded:
+            try:
+                try:
+                    executor([*base, KEY_COMMAND, "--revoke-run"], None)
+                finally:
+                    try:
+                        if not erased:
+                            executor([*base, "rm", "-f", CONTAINER_KEY], None)
+                    finally:
+                        if created:
+                            destination.unlink(missing_ok=True)
+            finally:
+                require(teardown(record, inspector, executor),
+                        "Disposable project teardown is unverified after key issuance failure")
+        elif created and not succeeded:
+            destination.unlink(missing_ok=True)
 
 
 def main() -> int:
