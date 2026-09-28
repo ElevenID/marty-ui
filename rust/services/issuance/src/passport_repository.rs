@@ -6,6 +6,7 @@ use serde_json::Value;
 use sqlx::{postgres::PgRow, PgConnection, PgPool, Postgres, QueryBuilder, Row};
 use uuid::Uuid;
 
+use crate::passport_beta_material::PassportBetaMaterialDigests;
 use crate::passport_bureau::VerifiedWebhookEvent;
 
 #[derive(Debug, thiserror::Error)]
@@ -125,6 +126,17 @@ pub struct PassportBetaMaterialReceipt {
     pub dsc_pem_wire_sha256: Option<Vec<u8>>,
     pub document_type: Option<String>,
     pub first_accepted_at: DateTime<Utc>,
+}
+
+/// Exact signed material supplied by the beta batch caller for receipt checks.
+pub struct PassportBetaBatchBinding<'a> {
+    pub bureau_job_id: Uuid,
+    pub material_digests: &'a PassportBetaMaterialDigests,
+}
+
+pub struct PassportBetaBatchDestination<'a> {
+    pub provider_profile_id: &'a str,
+    pub endpoint_sha256: &'a str,
 }
 
 /// The ciphertext is intentionally kept out of Debug and HTTP projections.
@@ -331,16 +343,25 @@ impl PostgresPassportRepository {
         principal: &PassportTenantPrincipal,
         source_job_id: &str,
     ) -> Result<Option<PassportBetaMaterialReceipt>, sqlx::Error> {
+        let mut connection = self.pool.acquire().await?;
+        Self::beta_material_receipt_on(&mut connection, principal, source_job_id).await
+    }
+
+    async fn beta_material_receipt_on(
+        connection: &mut PgConnection,
+        principal: &PassportTenantPrincipal,
+        source_job_id: &str,
+    ) -> Result<Option<PassportBetaMaterialReceipt>, sqlx::Error> {
         let row = sqlx::query(
             "SELECT bureau_job_id, content_sha256, sod_der_sha256,
                     dsc_der_sha256, dsc_pem_wire_sha256, document_type,
                     created_at
              FROM issuance_service.passport_beta_bureau_jobs
-             WHERE organization_id=$1 AND source_job_id=$2",
+             WHERE organization_id=$1 AND source_job_id=$2 FOR SHARE",
         )
         .bind(principal.organization_id())
         .bind(source_job_id)
-        .fetch_optional(&self.pool)
+        .fetch_optional(connection)
         .await?;
         row.map(|row| {
             Ok(PassportBetaMaterialReceipt {
@@ -360,6 +381,136 @@ impl PostgresPassportRepository {
         &self,
         principal: &PassportTenantPrincipal,
         application_id: &str,
+        expected_status: &str,
+        patch: &PassportJobPatch,
+        now: DateTime<Utc>,
+    ) -> Result<Option<PassportJob>, sqlx::Error> {
+        let mut connection = self.pool.acquire().await?;
+        Self::update_on(
+            &mut connection,
+            principal,
+            application_id,
+            None,
+            expected_status,
+            patch,
+            now,
+        )
+        .await
+    }
+
+    /// Persist both beta bureau IDs only when the first-accepted simulator
+    /// receipts still match the exact material and pinned destination.
+    pub async fn bind_batch_submissions(
+        &self,
+        principal: &PassportTenantPrincipal,
+        jobs: [&PassportJob; 2],
+        patches: [&PassportJobPatch; 2],
+        bindings: [&PassportBetaBatchBinding<'_>; 2],
+        destination: &PassportBetaBatchDestination<'_>,
+        now: DateTime<Utc>,
+    ) -> Result<Option<[PassportJob; 2]>, sqlx::Error> {
+        let ids = patches.map(|patch| {
+            patch
+                .bureau_job_id
+                .as_ref()
+                .and_then(Option::as_deref)
+                .and_then(|value| {
+                    Uuid::parse_str(value)
+                        .ok()
+                        .filter(|id| id.to_string() == value)
+                })
+        });
+        if jobs[0].id == jobs[1].id
+            || jobs[0].application_id == jobs[1].application_id
+            || jobs
+                .iter()
+                .any(|job| job.organization_id != principal.organization_id())
+            || destination.provider_profile_id.is_empty()
+            || destination.endpoint_sha256.len() != 64
+            || ids[0].is_none()
+            || ids[1].is_none()
+            || ids[0] == ids[1]
+            || jobs.iter().zip(patches).zip(bindings).enumerate().any(
+                |(index, ((job, patch), binding))| {
+                    patch.status != PassportJobStatus::Submitted
+                        || !patch.clear_submission_intent
+                        || patch.sod_sha256.is_some()
+                        || patch.secure_artifact_ciphertext.is_some()
+                        || patch.expected_submission_intent_id != job.submission_intent_id
+                        || job.submission_intent_id.is_none()
+                        || job.submission_intent_provider_profile_id.as_deref()
+                            != Some(destination.provider_profile_id)
+                        || job.submission_intent_bureau_endpoint_sha256.as_deref()
+                            != Some(destination.endpoint_sha256)
+                        || patch.expected_sod_sha256.as_ref() != Some(&job.sod_sha256)
+                        || patch.expected_secure_artifact_ciphertext.as_deref()
+                            != Some(job.secure_artifact_ciphertext.as_str())
+                        || patch.bureau_provider_profile_id.as_deref()
+                            != Some(destination.provider_profile_id)
+                        || ids[index] != Some(binding.bureau_job_id)
+                        || patch.submitted_at.is_none()
+                },
+            )
+        {
+            return Ok(None);
+        }
+        let mut transaction = self.pool.begin().await?;
+        let mut bound: [Option<PassportJob>; 2] = [None, None];
+        let order = if jobs[0].id <= jobs[1].id {
+            [0, 1]
+        } else {
+            [1, 0]
+        };
+        for index in order {
+            let receipt =
+                Self::beta_material_receipt_on(&mut transaction, principal, &jobs[index].id)
+                    .await?;
+            let digests = bindings[index].material_digests;
+            if !receipt.is_some_and(|receipt| {
+                receipt.bureau_job_id == bindings[index].bureau_job_id
+                    && receipt.content_sha256.as_deref() == Some(digests.content_sha256.as_slice())
+                    && receipt.sod_der_sha256.as_deref() == digests.sod_der_sha256.as_deref()
+                    && receipt.dsc_der_sha256.as_deref() == digests.dsc_der_sha256.as_deref()
+                    && receipt.dsc_pem_wire_sha256.as_deref()
+                        == Some(digests.dsc_pem_wire_sha256.as_slice())
+                    && digests.sod_der_sha256.is_some()
+                    && digests.dsc_der_sha256.is_some()
+                    && receipt.sod_der_sha256.as_ref().is_some_and(|digest| {
+                        jobs[index].sod_sha256.as_deref() == Some(hex::encode(digest).as_str())
+                    })
+                    && receipt.document_type.as_deref() == Some(jobs[index].document_type.as_str())
+            }) {
+                transaction.rollback().await?;
+                return Ok(None);
+            }
+            let Some(job) = Self::update_on(
+                &mut transaction,
+                principal,
+                &jobs[index].application_id,
+                Some(&jobs[index].id),
+                &jobs[index].status,
+                patches[index],
+                now,
+            )
+            .await?
+            else {
+                transaction.rollback().await?;
+                return Ok(None);
+            };
+            bound[index] = Some(job);
+        }
+        transaction.commit().await?;
+        Ok(Some([
+            bound[0].take().expect("first bind succeeded"),
+            bound[1].take().expect("second bind succeeded"),
+        ]))
+    }
+
+    async fn update_on(
+        connection: &mut PgConnection,
+        principal: &PassportTenantPrincipal,
+        application_id: &str,
+        expected_job_id: Option<&str>,
         expected_status: &str,
         patch: &PassportJobPatch,
         now: DateTime<Utc>,
@@ -410,6 +561,9 @@ impl PostgresPassportRepository {
             .push_bind(application_id)
             .push(" AND status = ")
             .push_bind(expected_status);
+        if let Some(job_id) = expected_job_id {
+            query.push(" AND id = ").push_bind(job_id);
+        }
         if let Some(expected) = &patch.expected_sod_sha256 {
             query
                 .push(" AND sod_sha256 IS NOT DISTINCT FROM ")
@@ -441,7 +595,7 @@ impl PostgresPassportRepository {
         query.push(" RETURNING *");
         query
             .build()
-            .fetch_optional(&self.pool)
+            .fetch_optional(connection)
             .await?
             .as_ref()
             .map(row_to_job)

@@ -18,14 +18,15 @@ use marty_issuance_service::migration;
 use marty_issuance_service::passport_artifact::{
     PassportArtifactCipher, PassportSensitiveArtifact,
 };
+use marty_issuance_service::passport_beta_material::PassportBetaMaterialDigests;
 use marty_issuance_service::passport_bureau::BureauClient;
 use marty_issuance_service::passport_http::{router as passport_router, PassportHttpService};
 use marty_issuance_service::passport_provider_ingress::{
     router as provider_ingress_router, ProviderIngressState,
 };
 use marty_issuance_service::passport_repository::{
-    PassportJobInsert, PassportJobPatch, PassportJobStatus, PassportSubmissionReservation,
-    PostgresPassportRepository,
+    PassportBetaBatchBinding, PassportBetaBatchDestination, PassportJobInsert, PassportJobPatch,
+    PassportJobStatus, PassportSubmissionReservation, PostgresPassportRepository,
 };
 #[cfg(feature = "passport-self-signed-test")]
 use marty_issuance_service::passport_signer::PassportSigner;
@@ -2336,7 +2337,7 @@ async fn passport_jobs_survive_restart_without_cross_tenant_reads() {
     let batch_reservations = [
         PassportSubmissionReservation {
             intent_id: first_batch_intent,
-            sod_sha256: "batch-sod-a",
+            sod_sha256: "0202020202020202020202020202020202020202020202020202020202020202",
             signed_artifact_ciphertext: None,
             provider_profile_id: Some("passport-beta-bureau"),
             bureau_endpoint_sha256: &endpoint_sha256,
@@ -2345,7 +2346,7 @@ async fn passport_jobs_survive_restart_without_cross_tenant_reads() {
         },
         PassportSubmissionReservation {
             intent_id: second_batch_intent,
-            sod_sha256: "batch-sod-b",
+            sod_sha256: "1212121212121212121212121212121212121212121212121212121212121212",
             signed_artifact_ciphertext: None,
             provider_profile_id: Some("passport-beta-bureau"),
             bureau_endpoint_sha256: &endpoint_sha256,
@@ -2418,8 +2419,183 @@ async fn passport_jobs_survive_restart_without_cross_tenant_reads() {
         reserved_pair[1].submission_intent_id,
         Some(second_batch_intent)
     );
-    assert_eq!(reserved_pair[0].sod_sha256.as_deref(), Some("batch-sod-a"));
-    assert_eq!(reserved_pair[1].sod_sha256.as_deref(), Some("batch-sod-b"));
+    assert_eq!(
+        reserved_pair[0].sod_sha256.as_deref(),
+        Some(batch_reservations[0].sod_sha256)
+    );
+    assert_eq!(
+        reserved_pair[1].sod_sha256.as_deref(),
+        Some(batch_reservations[1].sod_sha256)
+    );
+    let mut batch_bind_patches = [
+        PassportJobPatch::new(PassportJobStatus::Submitted),
+        PassportJobPatch::new(PassportJobStatus::Submitted),
+    ];
+    for (index, (patch, job)) in batch_bind_patches
+        .iter_mut()
+        .zip(reserved_pair.iter())
+        .enumerate()
+    {
+        patch.expected_submission_intent_id = job.submission_intent_id;
+        patch.expected_sod_sha256 = Some(job.sod_sha256.clone());
+        patch.expected_secure_artifact_ciphertext = Some(job.secure_artifact_ciphertext.clone());
+        patch.clear_submission_intent = true;
+        patch.bureau_job_id = Some(Some(uuid::Uuid::new_v4().to_string()));
+        patch.bureau_provider_profile_id = Some("passport-beta-bureau".into());
+        patch.submitted_at = Some(batch_time);
+        assert_eq!(job.application_id, pair[index].application_id);
+    }
+    let batch_digests = [
+        PassportBetaMaterialDigests {
+            content_sha256: vec![1; 32],
+            legacy_request_sha256: vec![9; 32],
+            sod_der_sha256: Some(vec![2; 32]),
+            dsc_der_sha256: Some(vec![3; 32]),
+            dsc_pem_wire_sha256: vec![4; 32],
+        },
+        PassportBetaMaterialDigests {
+            content_sha256: vec![11; 32],
+            legacy_request_sha256: vec![19; 32],
+            sod_der_sha256: Some(vec![18; 32]),
+            dsc_der_sha256: Some(vec![13; 32]),
+            dsc_pem_wire_sha256: vec![14; 32],
+        },
+    ];
+    let batch_bindings = [
+        PassportBetaBatchBinding {
+            bureau_job_id: uuid::Uuid::parse_str(
+                batch_bind_patches[0]
+                    .bureau_job_id
+                    .as_ref()
+                    .unwrap()
+                    .as_ref()
+                    .unwrap(),
+            )
+            .unwrap(),
+            material_digests: &batch_digests[0],
+        },
+        PassportBetaBatchBinding {
+            bureau_job_id: uuid::Uuid::parse_str(
+                batch_bind_patches[1]
+                    .bureau_job_id
+                    .as_ref()
+                    .unwrap()
+                    .as_ref()
+                    .unwrap(),
+            )
+            .unwrap(),
+            material_digests: &batch_digests[1],
+        },
+    ];
+    let batch_destination = PassportBetaBatchDestination {
+        provider_profile_id: "passport-beta-bureau",
+        endpoint_sha256: &endpoint_sha256,
+    };
+    assert!(profile_repository
+        .bind_batch_submissions(
+            &org_a,
+            [&reserved_pair[0], &reserved_pair[1]],
+            [&batch_bind_patches[0], &batch_bind_patches[1]],
+            [&batch_bindings[0], &batch_bindings[1]],
+            &batch_destination,
+            batch_time,
+        )
+        .await
+        .unwrap()
+        .is_none());
+    for (index, binding) in batch_bindings.iter().enumerate() {
+        let digests = binding.material_digests;
+        sqlx::query(
+            "INSERT INTO issuance_service.passport_beta_bureau_jobs
+             (bureau_job_id, organization_id, source_job_id, request_sha256,
+              content_sha256, sod_der_sha256, dsc_der_sha256, dsc_pem_wire_sha256,
+              document_type, status)
+             VALUES ($1, 'org-a', $2, $3, $4, $5, $6, $7, 'TD1', 'QUEUED')",
+        )
+        .bind(binding.bureau_job_id)
+        .bind(&reserved_pair[index].id)
+        .bind(&digests.legacy_request_sha256)
+        .bind(&digests.content_sha256)
+        .bind(digests.sod_der_sha256.as_ref().unwrap())
+        .bind(digests.dsc_der_sha256.as_ref().unwrap())
+        .bind(&digests.dsc_pem_wire_sha256)
+        .execute(&restarted_pool)
+        .await
+        .unwrap();
+    }
+    let wrong_digests = PassportBetaMaterialDigests {
+        content_sha256: vec![99; 32],
+        legacy_request_sha256: batch_digests[1].legacy_request_sha256.clone(),
+        sod_der_sha256: batch_digests[1].sod_der_sha256.clone(),
+        dsc_der_sha256: batch_digests[1].dsc_der_sha256.clone(),
+        dsc_pem_wire_sha256: batch_digests[1].dsc_pem_wire_sha256.clone(),
+    };
+    let wrong_binding = PassportBetaBatchBinding {
+        bureau_job_id: batch_bindings[1].bureau_job_id,
+        material_digests: &wrong_digests,
+    };
+    assert!(profile_repository
+        .bind_batch_submissions(
+            &org_a,
+            [&reserved_pair[0], &reserved_pair[1]],
+            [&batch_bind_patches[0], &batch_bind_patches[1]],
+            [&batch_bindings[0], &wrong_binding],
+            &batch_destination,
+            batch_time,
+        )
+        .await
+        .unwrap()
+        .is_none());
+    let mut stale_second = profile_repository
+        .get(&org_a, &reserved_pair[1].application_id)
+        .await
+        .unwrap()
+        .unwrap();
+    stale_second.id = "stale-batch-bind-source-id".into();
+    assert!(profile_repository
+        .bind_batch_submissions(
+            &org_a,
+            [&reserved_pair[0], &stale_second],
+            [&batch_bind_patches[0], &batch_bind_patches[1]],
+            [&batch_bindings[0], &batch_bindings[1]],
+            &batch_destination,
+            batch_time,
+        )
+        .await
+        .unwrap()
+        .is_none());
+    let first_after_failed_bind = profile_repository
+        .get(&org_a, &reserved_pair[0].application_id)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(first_after_failed_bind.status, reserved_pair[0].status);
+    assert_eq!(
+        first_after_failed_bind.submission_intent_id,
+        reserved_pair[0].submission_intent_id
+    );
+    assert!(first_after_failed_bind.bureau_job_id.is_none());
+    let bound_pair = profile_repository
+        .bind_batch_submissions(
+            &org_a,
+            [&reserved_pair[0], &reserved_pair[1]],
+            [&batch_bind_patches[0], &batch_bind_patches[1]],
+            [&batch_bindings[0], &batch_bindings[1]],
+            &batch_destination,
+            batch_time,
+        )
+        .await
+        .unwrap()
+        .unwrap();
+    for (job, patch) in bound_pair.iter().zip(batch_bind_patches.iter()) {
+        assert_eq!(job.status, "SUBMITTED");
+        assert_eq!(job.submission_intent_id, None);
+        assert_eq!(job.bureau_job_id, patch.bureau_job_id.clone().flatten());
+        assert_eq!(
+            job.submitted_at,
+            reserved_pair[0].submission_intent_started_at
+        );
+    }
     #[cfg(feature = "passport-self-signed-test")]
     if let Ok(packaged_url) = std::env::var("MARTY_PASSPORT_PACKAGED_TEST_URL") {
         exercise_packaged_self_signed_test_mode(&packaged_url, &key_a).await;
