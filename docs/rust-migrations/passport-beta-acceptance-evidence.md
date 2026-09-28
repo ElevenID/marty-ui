@@ -50,11 +50,12 @@ remain unverified until protected acceptance runs execute and publish exact
 artifact lineage: `managed_csca_dsc_chain`, `sod_signature`,
 `nine_route_gateway_flow`, `packaged_image`, `physical_bureau_submission`,
 `signed_bureau_callback`, `legacy_drain`, `rollback`,
-`production_isolation`, and `physical_booklet_verified`. The last key requires
-independent provider evidence of a real personalized booklet. The beta bureau
-simulator's status and callback cannot establish it. Separate supported base
-Compose, self-host, and Kubernetes acceptance remains mandatory before Python
-retirement.
+`production_isolation`, and `physical_booklet_verified`. The last key remains
+false for simulator evidence; it is not a prerequisite for retiring Python's
+software route owner under the v2 retirement qualification contract. A future
+physical-booklet claim would require independent evidence beyond the beta
+simulator. Separate supported base Compose, self-host, and Kubernetes
+acceptance remains mandatory before Python retirement.
 
 ## Protected beta acceptance run
 
@@ -82,9 +83,17 @@ owner must return its exact missing-header 422 response or the separately
 selected provider ingress must return its exact invalid-signature 401 response.
 This checks an ingress guard, not a valid signed callback. The report records
 these outcomes as partial `nine_route_gateway_flow` evidence and keeps that
-required probe false until a signed provider callback and an executed physical
+required probe false until a signed simulator callback and an executed physical
 document Flow are verified. Only fixed route names, counts, statuses, and
 selector booleans enter the report.
+
+The beta simulator now stores a 32-byte digest of the exact callback body and
+KMS signature only after native issuance accepts the signed callback and the
+status transition commits. Its authenticated private job poll returns the
+lowercase hex digest as `callback_receipt_sha256`; preexisting jobs can return
+`null`. The simulator never stores or returns the callback body or signature.
+This digest is a source for a future protected acceptance producer. The current
+workflow does not collect it or establish a successful signed callback run.
 
 The full run can also perform the managed beta CSCA and DSC ceremonies when
 the protected `beta-lifecycle` environment supplies
@@ -111,10 +120,10 @@ The report sets `legacy_drain` and the additional
 `production_continuity_during_probe` probe when those live checks pass, while
 `production_isolation` remains false. The workflow fails while the report is
 `blocked`, but uploads the sanitized report from an attempted probe. The
-acceptance report remains `blocked` until SOD signature verification, full nine
-route Gateway/Flow and signed callback proof, physical provider submission,
-rollback, deployment-wide production isolation, and independently verified
-physical booklet receipt have executable evidence. It cannot qualify Python
+acceptance report remains `blocked` until full nine-route Gateway/Flow proof,
+a live signed simulator callback and batch receipt, rollback, and deployment-wide
+production isolation have executable evidence. A simulator acceptance must set
+`physical_claim=not_claimed`. The current report cannot qualify Python
 retirement on its own.
 
 The protected run uploads a GitHub artifact named
