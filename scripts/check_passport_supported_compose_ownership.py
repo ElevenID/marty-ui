@@ -128,6 +128,36 @@ def _ids(value: object, name: str) -> dict[str, str]:
     return value
 
 
+def _organization_environment(actual: object, record: dict) -> None:
+    require(isinstance(actual, list)
+            and all(isinstance(entry, str) and "=" in entry
+                    and bool(entry.partition("=")[0]) for entry in actual),
+            "Organization runtime identity is invalid")
+    entries = [entry.partition("=") for entry in actual]
+    environment = {key: value for key, _, value in entries}
+    require(len(environment) == len(entries),
+            "Organization runtime identity has duplicate environment keys")
+    expected = {
+        "SERVICE_NAME": "organization",
+        "ORGANIZATION_SERVICE_PORT": "8002",
+        "ORG_GRPC_PORT": "9002",
+        "DATABASE_URL_TEMPLATE": (
+            "postgresql+asyncpg://marty:${MARTY_DB_PASSWORD}@postgres:5432/marty"),
+        "MARTY_DB_PASSWORD_FILE": "/run/secrets/marty_db_password",
+        "GRPC_SERVICE_TOKEN_FILE": "/run/secrets/grpc_service_token",
+        "ES_GRPC_TARGET": "event-stream:9015",
+        "MARTY_ORG_ID": "00000000-0000-0000-0000-000000000001",
+        "PASSPORT_ACCEPTANCE_PROJECT": record["project"],
+        "PASSPORT_ACCEPTANCE_RUN_ID": record["run_id"],
+        "PASSPORT_ACCEPTANCE_SOURCE_COMMIT": record["source_commit"],
+        "PASSPORT_ACCEPTANCE_EXPIRES_AT": record["expires_at"],
+    }
+    require(all(environment.get(key) == value for key, value in expected.items())
+            and "MARTY_DB_PASSWORD" not in environment
+            and "GRPC_SERVICE_TOKEN" not in environment,
+            "Organization runtime identity differs from protected run")
+
+
 def _expected_mounts(service: str, project: str, disposable_root: Path) -> set[tuple[str, str, str, bool]]:
     expected = {
         ("bind", str(disposable_root / "secrets" / secret),
@@ -245,6 +275,8 @@ def verify(record: dict, surface: str, now: datetime,
         _labels(labels, record, project)
         require(labels.get("com.docker.compose.service") == service,
                 "Disposable container service identity changed")
+        if service == "organization":
+            _organization_environment(config.get("Env"), record)
         require(re.fullmatch(r"/" + re.escape(project) + "-"
                              + re.escape(service) + r"-[1-9][0-9]*",
                              item.get("Name", "")) is not None

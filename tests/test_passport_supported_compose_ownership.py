@@ -115,11 +115,28 @@ def fixture() -> tuple[dict, dict[tuple[str, ...], str]]:
          f"label=com.docker.compose.project={PROJECT}"): "\n".join(volume_names),
     }
     for service, identifier in containers.items():
+        organization_env = {
+            "SERVICE_NAME": "organization",
+            "ORGANIZATION_SERVICE_PORT": "8002",
+            "ORG_GRPC_PORT": "9002",
+            "DATABASE_URL_TEMPLATE": (
+                "postgresql+asyncpg://marty:${MARTY_DB_PASSWORD}@postgres:5432/marty"),
+            "MARTY_DB_PASSWORD_FILE": "/run/secrets/marty_db_password",
+            "GRPC_SERVICE_TOKEN_FILE": "/run/secrets/grpc_service_token",
+            "ES_GRPC_TARGET": "event-stream:9015",
+            "MARTY_ORG_ID": "00000000-0000-0000-0000-000000000001",
+            "PASSPORT_ACCEPTANCE_PROJECT": PROJECT,
+            "PASSPORT_ACCEPTANCE_RUN_ID": record["run_id"],
+            "PASSPORT_ACCEPTANCE_SOURCE_COMMIT": record["source_commit"],
+            "PASSPORT_ACCEPTANCE_EXPIRES_AT": record["expires_at"],
+        }
         calls[("container", "inspect", identifier)] = json.dumps([{
             "Id": identifier, "Name": f"/{PROJECT}-{service}-1",
             "State": {"Running": True, "Status": "running",
                       "Health": {"Status": "healthy"}},
             "Config": {"Labels": {**LABELS, "com.docker.compose.service": service},
+                       "Env": [f"{key}={value}" for key, value in organization_env.items()]
+                       if service == "organization" else [],
                        "Image": (LEGACY if service == "issuance" else
                                  MIGRATIONS if service == "db-migrate" else
                                  IMAGE if service in SELECTED | RUST_DEPENDENCIES | {"signing-keys"} else
@@ -138,6 +155,38 @@ def fixture() -> tuple[dict, dict[tuple[str, ...], str]]:
             "Labels": LABELS,
         }])
     return record, calls
+
+
+@pytest.mark.parametrize("mutation", [
+    lambda env: env.remove(next(item for item in env if item.startswith("PASSPORT_ACCEPTANCE_PROJECT="))),
+    lambda env: env.append("PASSPORT_ACCEPTANCE_PROJECT=another-project"),
+    lambda env: env.__setitem__(next(i for i, item in enumerate(env)
+                                  if item.startswith("PASSPORT_ACCEPTANCE_RUN_ID=")),
+                                "PASSPORT_ACCEPTANCE_RUN_ID=999999"),
+    lambda env: env.__setitem__(next(i for i, item in enumerate(env)
+                                  if item.startswith("PASSPORT_ACCEPTANCE_SOURCE_COMMIT=")),
+                                "PASSPORT_ACCEPTANCE_SOURCE_COMMIT=" + "c" * 40),
+    lambda env: env.__setitem__(next(i for i, item in enumerate(env)
+                                  if item.startswith("PASSPORT_ACCEPTANCE_EXPIRES_AT=")),
+                                "PASSPORT_ACCEPTANCE_EXPIRES_AT=2026-09-28T13:00:00+00:00"),
+    lambda env: env.__setitem__(next(i for i, item in enumerate(env)
+                                  if item.startswith("GRPC_SERVICE_TOKEN_FILE=")),
+                                "GRPC_SERVICE_TOKEN_FILE=/srv/production/token"),
+    lambda env: env.append("MARTY_DB_PASSWORD=secret"),
+    lambda env: env.append("GRPC_SERVICE_TOKEN=secret"),
+    lambda env: env.remove(next(item for item in env if item.startswith("DATABASE_URL_TEMPLATE="))),
+    lambda env: env.__setitem__(next(i for i, item in enumerate(env)
+                                  if item.startswith("DATABASE_URL_TEMPLATE=")),
+                                "DATABASE_URL_TEMPLATE=postgresql+asyncpg://marty:secret@production:5432/marty"),
+])
+def test_organization_runtime_environment_must_match_protected_run(mutation) -> None:
+    record, calls = fixture()
+    key = ("container", "inspect", record["containers"]["organization"])
+    item = json.loads(calls[key])
+    mutation(item[0]["Config"]["Env"])
+    calls[key] = json.dumps(item)
+    with pytest.raises(OwnershipError, match="Organization runtime identity"):
+        run(record, calls)
 
 
 def run(record: dict, calls: dict[tuple[str, ...], str]) -> dict:
