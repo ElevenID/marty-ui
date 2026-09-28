@@ -2,9 +2,11 @@
 
 use base64::{engine::general_purpose::STANDARD, Engine as _};
 use marty_crypto::certificate::load_certificate_pem;
+use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
 
+#[derive(Clone, Deserialize, Serialize)]
 pub struct PassportBetaMaterialDigests {
     pub content_sha256: Vec<u8>,
     pub legacy_request_sha256: Vec<u8>,

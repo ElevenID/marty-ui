@@ -63,6 +63,7 @@ pub struct PassportJobPatch {
     pub sod_sha256: Option<Option<String>>,
     pub bureau_job_id: Option<Option<String>>,
     pub bureau_provider_profile_id: Option<String>,
+    pub submission_batch_material_digests: Option<Value>,
     pub tracking_number: Option<Option<String>>,
     pub quality_result: Option<Option<Value>>,
     pub error_code: Option<Option<String>>,
@@ -84,6 +85,7 @@ impl PassportJobPatch {
             sod_sha256: None,
             bureau_job_id: None,
             bureau_provider_profile_id: None,
+            submission_batch_material_digests: None,
             tracking_number: None,
             quality_result: None,
             error_code: None,
@@ -176,6 +178,9 @@ pub struct PassportJob {
     pub submission_batch_selected_flow_instance_id: Option<String>,
     pub submission_batch_selected_job_id: Option<String>,
     pub submission_batch_companion_job_id: Option<String>,
+    pub submission_batch_signing_provenance: Option<Value>,
+    pub submission_batch_bureau_endpoint_sha256: Option<String>,
+    pub submission_batch_material_digests: Option<Value>,
     pub tracking_number: Option<String>,
     pub status: String,
     pub quality_result: Option<Value>,
@@ -311,8 +316,8 @@ impl PostgresPassportRepository {
         let claimed = sqlx::query_scalar::<_, Uuid>(
             "INSERT INTO issuance_service.passport_beta_batch_intents
              (batch_id, organization_id, selected_flow_instance_id,
-              selected_job_id, companion_job_id, created_at)
-             VALUES ($1,$2,$3,$4,$5,$6)
+              selected_job_id, companion_job_id, created_at, last_send_started_at)
+             VALUES ($1,$2,$3,$4,$5,$6,$6)
              ON CONFLICT (batch_id) DO NOTHING RETURNING batch_id",
         )
         .bind(identity.batch_id)
@@ -332,7 +337,8 @@ impl PostgresPassportRepository {
             principal,
             jobs[0],
             identity,
-            reservations[0],
+            reservations[0].sod_sha256,
+            reservations[0].signing_provenance,
         )
         .await?
         {
@@ -367,12 +373,87 @@ impl PostgresPassportRepository {
         ]))
     }
 
+    /// Fence concurrent operator retries and allow only one exact replay after
+    /// the full batch plus two single-job transport windows have elapsed.
+    pub async fn claim_beta_batch_replay(
+        &self,
+        principal: &PassportTenantPrincipal,
+        batch_id: Uuid,
+        now: DateTime<Utc>,
+    ) -> Result<bool, sqlx::Error> {
+        Ok(sqlx::query_scalar::<_, Uuid>(
+            "UPDATE issuance_service.passport_beta_batch_intents
+             SET send_attempts=2, last_send_started_at=$3
+             WHERE batch_id=$1 AND organization_id=$2
+               AND send_attempts=1
+               AND last_send_started_at <= $3 - INTERVAL '130 seconds'
+             RETURNING batch_id",
+        )
+        .bind(batch_id)
+        .bind(principal.organization_id())
+        .bind(now)
+        .fetch_optional(&self.pool)
+        .await?
+        .is_some())
+    }
+
+    /// Both exact simulator rows already exist. Consume the batch replay right
+    /// before a type-fill send, fencing a stale one-receipt caller. Space
+    /// receipt-backed idempotent completion attempts and count them for audit.
+    pub async fn claim_beta_batch_receipt_completion(
+        &self,
+        principal: &PassportTenantPrincipal,
+        batch_id: Uuid,
+        now: DateTime<Utc>,
+    ) -> Result<bool, sqlx::Error> {
+        Ok(sqlx::query_scalar::<_, Uuid>(
+            "UPDATE issuance_service.passport_beta_batch_intents
+             SET send_attempts=2,
+                 receipt_completion_attempts=receipt_completion_attempts+1,
+                 last_receipt_completion_started_at=$3
+             WHERE batch_id=$1 AND organization_id=$2
+               AND last_send_started_at <= $3 - INTERVAL '130 seconds'
+               AND (last_receipt_completion_started_at IS NULL OR
+                    last_receipt_completion_started_at <= $3 - INTERVAL '65 seconds')
+             RETURNING batch_id",
+        )
+        .bind(batch_id)
+        .bind(principal.organization_id())
+        .bind(now)
+        .fetch_optional(&self.pool)
+        .await?
+        .is_some())
+    }
+
+    pub async fn selected_flow_ready(
+        &self,
+        principal: &PassportTenantPrincipal,
+        job: &PassportJob,
+        identity: &PassportBatchIdentity<'_>,
+        sod_sha256: &str,
+        signing_provenance: Option<&Value>,
+    ) -> Result<bool, sqlx::Error> {
+        let mut transaction = self.pool.begin().await?;
+        let ready = Self::selected_flow_ready_on(
+            &mut transaction,
+            principal,
+            job,
+            identity,
+            sod_sha256,
+            signing_provenance,
+        )
+        .await?;
+        transaction.rollback().await?;
+        Ok(ready)
+    }
+
     async fn selected_flow_ready_on(
         connection: &mut PgConnection,
         principal: &PassportTenantPrincipal,
         job: &PassportJob,
         identity: &PassportBatchIdentity<'_>,
-        reservation: &PassportSubmissionReservation<'_>,
+        sod_sha256: &str,
+        signing_provenance: Option<&Value>,
     ) -> Result<bool, sqlx::Error> {
         let row = sqlx::query(
             "SELECT instance.status AS instance_status, instance.current_step_id,
@@ -470,10 +551,9 @@ impl PostgresPassportRepository {
             && projection["application_id"].as_str() == Some(job.application_id.as_str())
             && projection["issuer_did"].as_str() == job.issuer_did.as_deref()
             && projection["issuer_profile_id"].as_str()
-                == reservation
-                    .signing_provenance
+                == signing_provenance
                     .and_then(|provenance| provenance["issuer_profile_id"].as_str())
-            && projection["sod_sha256"].as_str() == Some(reservation.sod_sha256)
+            && projection["sod_sha256"].as_str() == Some(sod_sha256)
             && projection["sod_signature_verified"].as_bool() == Some(true)
             && projection["status"].as_str() == Some("SOD_SIGNED")
             && row
@@ -661,6 +741,8 @@ impl PostgresPassportRepository {
                             != Some(job.secure_artifact_ciphertext.as_str())
                         || patch.bureau_provider_profile_id.as_deref()
                             != Some(destination.provider_profile_id)
+                        || patch.submission_batch_material_digests
+                            != serde_json::to_value(binding.material_digests).ok()
                         || ids[index] != Some(binding.bureau_job_id)
                         || patch.submitted_at.is_none()
                 },
@@ -720,6 +802,186 @@ impl PostgresPassportRepository {
         ]))
     }
 
+    /// Finish a previously accepted pair when only one native job was bound.
+    /// The bound row and both immutable simulator receipts are checked in the
+    /// same transaction as the unresolved job's intent-token CAS.
+    pub async fn bind_partial_batch_submission(
+        &self,
+        principal: &PassportTenantPrincipal,
+        jobs: [&PassportJob; 2],
+        patch: &PassportJobPatch,
+        binding: &PassportBetaBatchBinding<'_>,
+        destination: &PassportBetaBatchDestination<'_>,
+        now: DateTime<Utc>,
+    ) -> Result<Option<PassportJob>, sqlx::Error> {
+        let [bound, unresolved] = jobs;
+        let batch_id = bound.submission_batch_id;
+        let parsed_patch_id = patch
+            .bureau_job_id
+            .as_ref()
+            .and_then(Option::as_deref)
+            .and_then(|id| {
+                Uuid::parse_str(id)
+                    .ok()
+                    .filter(|parsed| parsed.to_string() == id)
+            });
+        if batch_id.is_none()
+            || unresolved.submission_batch_id != batch_id
+            || bound.id == unresolved.id
+            || bound.application_id == unresolved.application_id
+            || [bound, unresolved]
+                .iter()
+                .any(|job| job.organization_id != principal.organization_id())
+            || bound.submission_batch_selected_job_id != unresolved.submission_batch_selected_job_id
+            || bound.submission_batch_companion_job_id
+                != unresolved.submission_batch_companion_job_id
+            || bound.submission_batch_selected_flow_instance_id
+                != unresolved.submission_batch_selected_flow_instance_id
+            || bound.bureau_provider_profile_id.as_deref() != Some(destination.provider_profile_id)
+            || bound.submission_batch_bureau_endpoint_sha256.as_deref()
+                != Some(destination.endpoint_sha256)
+            || bound.bureau_job_id.is_none()
+            || bound.submission_intent_id.is_some()
+            || unresolved.bureau_job_id.is_some()
+            || unresolved.submission_intent_id.is_none()
+            || unresolved.submission_intent_provider_profile_id.as_deref()
+                != Some(destination.provider_profile_id)
+            || unresolved
+                .submission_intent_bureau_endpoint_sha256
+                .as_deref()
+                != Some(destination.endpoint_sha256)
+            || patch.status != PassportJobStatus::Submitted
+            || !patch.clear_submission_intent
+            || patch.sod_sha256.is_some()
+            || patch.secure_artifact_ciphertext.is_some()
+            || patch.expected_submission_intent_id != unresolved.submission_intent_id
+            || patch.expected_sod_sha256.as_ref() != Some(&unresolved.sod_sha256)
+            || patch.expected_secure_artifact_ciphertext.as_deref()
+                != Some(unresolved.secure_artifact_ciphertext.as_str())
+            || patch.bureau_provider_profile_id.as_deref() != Some(destination.provider_profile_id)
+            || patch.submission_batch_material_digests
+                != serde_json::to_value(binding.material_digests).ok()
+            || parsed_patch_id != Some(binding.bureau_job_id)
+            || patch.submitted_at.is_none()
+        {
+            return Ok(None);
+        }
+        let bound_digests = bound
+            .submission_batch_material_digests
+            .clone()
+            .and_then(|value| serde_json::from_value::<PassportBetaMaterialDigests>(value).ok());
+        let Some(bound_digests) = bound_digests else {
+            return Ok(None);
+        };
+        let mut transaction = self.pool.begin().await?;
+        let live_bound = sqlx::query(
+            "SELECT * FROM issuance_service.physical_document_jobs
+             WHERE organization_id=$1 AND id=$2 AND submission_batch_id=$3 FOR SHARE",
+        )
+        .bind(principal.organization_id())
+        .bind(&bound.id)
+        .bind(batch_id)
+        .fetch_optional(&mut *transaction)
+        .await?
+        .as_ref()
+        .map(row_to_job)
+        .transpose()?;
+        if !live_bound.is_some_and(|live| {
+            live.application_id == bound.application_id
+                && live.flow_execution_id == bound.flow_execution_id
+                && live.country_code == bound.country_code
+                && live.document_type == bound.document_type
+                && live.issuer_did == bound.issuer_did
+                && live.bureau_job_id == bound.bureau_job_id
+                && live.bureau_provider_profile_id == bound.bureau_provider_profile_id
+                && live.submission_batch_selected_job_id == bound.submission_batch_selected_job_id
+                && live.submission_batch_companion_job_id == bound.submission_batch_companion_job_id
+                && live.submission_batch_selected_flow_instance_id
+                    == bound.submission_batch_selected_flow_instance_id
+                && live.submission_batch_bureau_endpoint_sha256
+                    == bound.submission_batch_bureau_endpoint_sha256
+                && live.submission_batch_signing_provenance
+                    == bound.submission_batch_signing_provenance
+                && live.submission_batch_material_digests == bound.submission_batch_material_digests
+                && live.sod_sha256 == bound.sod_sha256
+                && live.submission_intent_id.is_none()
+        }) {
+            transaction.rollback().await?;
+            return Ok(None);
+        }
+        let live_unresolved = sqlx::query(
+            "SELECT * FROM issuance_service.physical_document_jobs
+             WHERE organization_id=$1 AND id=$2 AND submission_batch_id=$3 FOR UPDATE",
+        )
+        .bind(principal.organization_id())
+        .bind(&unresolved.id)
+        .bind(batch_id)
+        .fetch_optional(&mut *transaction)
+        .await?
+        .as_ref()
+        .map(row_to_job)
+        .transpose()?;
+        if !live_unresolved.is_some_and(|live| {
+            live.application_id == unresolved.application_id
+                && live.flow_execution_id == unresolved.flow_execution_id
+                && live.country_code == unresolved.country_code
+                && live.document_type == unresolved.document_type
+                && live.issuer_did == unresolved.issuer_did
+                && live.status == unresolved.status
+                && live.sod_sha256 == unresolved.sod_sha256
+                && live.secure_artifact_ciphertext == unresolved.secure_artifact_ciphertext
+                && live.submission_intent_id == unresolved.submission_intent_id
+                && live.submission_intent_provider_profile_id
+                    == unresolved.submission_intent_provider_profile_id
+                && live.submission_intent_bureau_endpoint_sha256
+                    == unresolved.submission_intent_bureau_endpoint_sha256
+                && live.submission_intent_signing_provenance
+                    == unresolved.submission_intent_signing_provenance
+                && live.submission_batch_selected_job_id
+                    == unresolved.submission_batch_selected_job_id
+                && live.submission_batch_companion_job_id
+                    == unresolved.submission_batch_companion_job_id
+                && live.submission_batch_selected_flow_instance_id
+                    == unresolved.submission_batch_selected_flow_instance_id
+                && live.bureau_job_id.is_none()
+                && live.bureau_provider_profile_id.is_none()
+        }) {
+            transaction.rollback().await?;
+            return Ok(None);
+        }
+        let bound_receipt =
+            Self::beta_material_receipt_on(&mut transaction, principal, &bound.id).await?;
+        let pending_receipt =
+            Self::beta_material_receipt_on(&mut transaction, principal, &unresolved.id).await?;
+        if !bound_receipt.is_some_and(|receipt| {
+            bound.bureau_job_id.as_deref() == Some(receipt.bureau_job_id.to_string().as_str())
+                && beta_receipt_matches_job(&receipt, &bound_digests, bound)
+        }) || !pending_receipt.is_some_and(|receipt| {
+            receipt.bureau_job_id == binding.bureau_job_id
+                && beta_receipt_matches_job(&receipt, binding.material_digests, unresolved)
+        }) || bound.bureau_job_id.as_deref() == Some(binding.bureau_job_id.to_string().as_str())
+        {
+            transaction.rollback().await?;
+            return Ok(None);
+        }
+        let result = Self::update_on(
+            &mut transaction,
+            principal,
+            &unresolved.application_id,
+            Some(&unresolved.id),
+            &unresolved.status,
+            patch,
+            now,
+        )
+        .await?;
+        if result.is_none() {
+            transaction.rollback().await?;
+            return Ok(None);
+        }
+        transaction.commit().await?;
+        Ok(result)
+    }
+
     async fn update_on(
         connection: &mut PgConnection,
         principal: &PassportTenantPrincipal,
@@ -750,6 +1012,11 @@ impl PostgresPassportRepository {
                 .push(", bureau_provider_profile_id = ")
                 .push_bind(value);
         }
+        if let Some(value) = &patch.submission_batch_material_digests {
+            query
+                .push(", submission_batch_material_digests = ")
+                .push_bind(value);
+        }
         nullable_change!(tracking_number);
         nullable_change!(quality_result);
         nullable_change!(error_code);
@@ -766,7 +1033,7 @@ impl PostgresPassportRepository {
                 .push_bind(value);
         }
         if patch.clear_submission_intent {
-            query.push(", submission_intent_id = NULL, submission_intent_started_at = NULL, submission_intent_provider_profile_id = NULL, submission_intent_bureau_endpoint_sha256 = NULL, submission_intent_signing_provenance = NULL");
+            query.push(", submission_batch_signing_provenance = CASE WHEN submission_batch_id IS NOT NULL THEN submission_intent_signing_provenance ELSE NULL END, submission_batch_bureau_endpoint_sha256 = CASE WHEN submission_batch_id IS NOT NULL THEN submission_intent_bureau_endpoint_sha256 ELSE NULL END, submission_intent_id = NULL, submission_intent_started_at = NULL, submission_intent_provider_profile_id = NULL, submission_intent_bureau_endpoint_sha256 = NULL, submission_intent_signing_provenance = NULL");
         }
         query
             .push(" WHERE organization_id = ")
@@ -1065,6 +1332,24 @@ fn flow_result_success(value: &Value) -> bool {
         .is_some_and(|result| result.trim().eq_ignore_ascii_case("success"))
 }
 
+fn beta_receipt_matches_job(
+    receipt: &PassportBetaMaterialReceipt,
+    digests: &PassportBetaMaterialDigests,
+    job: &PassportJob,
+) -> bool {
+    receipt.content_sha256.as_deref() == Some(digests.content_sha256.as_slice())
+        && digests.sod_der_sha256.is_some()
+        && receipt.sod_der_sha256.as_deref() == digests.sod_der_sha256.as_deref()
+        && digests.dsc_der_sha256.is_some()
+        && receipt.dsc_der_sha256.as_deref() == digests.dsc_der_sha256.as_deref()
+        && receipt.dsc_pem_wire_sha256.as_deref() == Some(digests.dsc_pem_wire_sha256.as_slice())
+        && receipt
+            .sod_der_sha256
+            .as_ref()
+            .is_some_and(|digest| job.sod_sha256.as_deref() == Some(hex::encode(digest).as_str()))
+        && receipt.document_type.as_deref() == Some(job.document_type.as_str())
+}
+
 fn row_to_job(row: &PgRow) -> Result<PassportJob, sqlx::Error> {
     Ok(PassportJob {
         id: row.try_get("id")?,
@@ -1096,6 +1381,10 @@ fn row_to_job(row: &PgRow) -> Result<PassportJob, sqlx::Error> {
             .try_get("submission_batch_selected_flow_instance_id")?,
         submission_batch_selected_job_id: row.try_get("submission_batch_selected_job_id")?,
         submission_batch_companion_job_id: row.try_get("submission_batch_companion_job_id")?,
+        submission_batch_signing_provenance: row.try_get("submission_batch_signing_provenance")?,
+        submission_batch_bureau_endpoint_sha256: row
+            .try_get("submission_batch_bureau_endpoint_sha256")?,
+        submission_batch_material_digests: row.try_get("submission_batch_material_digests")?,
         tracking_number: row.try_get("tracking_number")?,
         status: row.try_get("status")?,
         quality_result: row.try_get("quality_result")?,

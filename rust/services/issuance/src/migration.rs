@@ -102,6 +102,9 @@ pub async fn migrate_passport(pool: &PgPool) -> Result<(), sqlx::Error> {
         "submission_batch_selected_flow_instance_id",
         "submission_batch_selected_job_id",
         "submission_batch_companion_job_id",
+        "submission_batch_signing_provenance",
+        "submission_batch_bureau_endpoint_sha256",
+        "submission_batch_material_digests",
         "tracking_number",
         "status",
         "quality_result",
@@ -138,6 +141,11 @@ pub async fn migrate_passport(pool: &PgPool) -> Result<(), sqlx::Error> {
     .await?;
     sqlx::raw_sql(include_str!(
         "../migrations/0006_passport_beta_batch_identity.sql"
+    ))
+    .execute(&mut *transaction)
+    .await?;
+    sqlx::raw_sql(include_str!(
+        "../migrations/0007_passport_beta_batch_provenance.sql"
     ))
     .execute(&mut *transaction)
     .await?;

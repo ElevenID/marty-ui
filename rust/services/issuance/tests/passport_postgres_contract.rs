@@ -2640,8 +2640,95 @@ async fn passport_jobs_survive_restart_without_cross_tenant_reads() {
         reserved_pair[1].submission_intent_id,
         Some(second_batch_intent)
     );
+    assert!(!profile_repository
+        .claim_beta_batch_replay(&org_a, batch_identity.batch_id, Utc::now())
+        .await
+        .unwrap());
+    sqlx::query(
+        "UPDATE issuance_service.passport_beta_batch_intents
+         SET last_send_started_at=$2 WHERE batch_id=$1",
+    )
+    .bind(batch_identity.batch_id)
+    .bind(Utc::now() - chrono::Duration::seconds(131))
+    .execute(&restarted_pool)
+    .await
+    .unwrap();
+    assert!(profile_repository
+        .claim_beta_batch_receipt_completion(&org_a, batch_identity.batch_id, Utc::now())
+        .await
+        .unwrap());
+    assert!(!profile_repository
+        .claim_beta_batch_receipt_completion(&org_a, batch_identity.batch_id, Utc::now())
+        .await
+        .unwrap());
+    sqlx::query(
+        "UPDATE issuance_service.passport_beta_batch_intents
+         SET last_receipt_completion_started_at=$2 WHERE batch_id=$1",
+    )
+    .bind(batch_identity.batch_id)
+    .bind(Utc::now() - chrono::Duration::seconds(66))
+    .execute(&restarted_pool)
+    .await
+    .unwrap();
+    assert!(profile_repository
+        .claim_beta_batch_receipt_completion(&org_a, batch_identity.batch_id, Utc::now())
+        .await
+        .unwrap());
+    assert!(!profile_repository
+        .claim_beta_batch_receipt_completion(&org_a, batch_identity.batch_id, Utc::now())
+        .await
+        .unwrap());
+    sqlx::query(
+        "UPDATE issuance_service.passport_beta_batch_intents
+         SET last_receipt_completion_started_at=$2 WHERE batch_id=$1",
+    )
+    .bind(batch_identity.batch_id)
+    .bind(Utc::now() - chrono::Duration::seconds(66))
+    .execute(&restarted_pool)
+    .await
+    .unwrap();
+    assert!(profile_repository
+        .claim_beta_batch_receipt_completion(&org_a, batch_identity.batch_id, Utc::now())
+        .await
+        .unwrap());
+    let completion_attempts: i64 = sqlx::query_scalar(
+        "SELECT receipt_completion_attempts
+         FROM issuance_service.passport_beta_batch_intents WHERE batch_id=$1",
+    )
+    .bind(batch_identity.batch_id)
+    .fetch_one(&restarted_pool)
+    .await
+    .unwrap();
+    assert_eq!(completion_attempts, 3);
+    assert!(!profile_repository
+        .claim_beta_batch_replay(&org_a, batch_identity.batch_id, Utc::now())
+        .await
+        .unwrap());
+    // Reset this disposable row to exercise the alternative one-batch replay.
+    sqlx::query(
+        "UPDATE issuance_service.passport_beta_batch_intents
+         SET send_attempts=1, receipt_completion_attempts=0,
+             last_receipt_completion_started_at=NULL, last_send_started_at=$2
+         WHERE batch_id=$1",
+    )
+    .bind(batch_identity.batch_id)
+    .bind(Utc::now() - chrono::Duration::seconds(131))
+    .execute(&restarted_pool)
+    .await
+    .unwrap();
+    assert!(profile_repository
+        .claim_beta_batch_replay(&org_a, batch_identity.batch_id, Utc::now())
+        .await
+        .unwrap());
+    assert!(!profile_repository
+        .claim_beta_batch_replay(&org_a, batch_identity.batch_id, Utc::now())
+        .await
+        .unwrap());
     for job in &reserved_pair {
         assert_eq!(job.submission_batch_id, Some(batch_identity.batch_id));
+        assert!(job.submission_batch_signing_provenance.is_none());
+        assert!(job.submission_batch_bureau_endpoint_sha256.is_none());
+        assert!(job.submission_batch_material_digests.is_none());
         assert_eq!(
             job.submission_batch_selected_flow_instance_id.as_deref(),
             Some(batch_identity.selected_flow_instance_id)
@@ -2802,6 +2889,9 @@ async fn passport_jobs_survive_restart_without_cross_tenant_reads() {
             dsc_pem_wire_sha256: vec![14; 32],
         },
     ];
+    for (patch, digests) in batch_bind_patches.iter_mut().zip(&batch_digests) {
+        patch.submission_batch_material_digests = Some(serde_json::to_value(digests).unwrap());
+    }
     let batch_bindings = [
         PassportBetaBatchBinding {
             bureau_job_id: uuid::Uuid::parse_str(
@@ -2932,6 +3022,18 @@ async fn passport_jobs_survive_restart_without_cross_tenant_reads() {
         assert_eq!(job.status, "SUBMITTED");
         assert_eq!(job.submission_intent_id, None);
         assert_eq!(job.submission_batch_id, Some(batch_identity.batch_id));
+        assert_eq!(
+            job.submission_batch_signing_provenance.as_ref(),
+            Some(&batch_signing_provenance)
+        );
+        assert_eq!(
+            job.submission_batch_bureau_endpoint_sha256.as_deref(),
+            Some(endpoint_sha256.as_str())
+        );
+        assert_eq!(
+            job.submission_batch_material_digests.as_ref(),
+            patch.submission_batch_material_digests.as_ref()
+        );
         assert_eq!(job.bureau_job_id, patch.bureau_job_id.clone().flatten());
         assert_eq!(
             job.submitted_at,

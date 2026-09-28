@@ -19,6 +19,7 @@ use marty_passport_auth::{
     PassportTenantAuthError, PassportTenantCredentialSource, PassportTenantKeyring,
     PassportTenantPrincipal,
 };
+use serde::Deserialize;
 use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
 use std::time::Duration;
@@ -33,7 +34,7 @@ use crate::{
     passport_beta_material::{material_digests, PassportBetaMaterialDigests},
     passport_bureau::{
         parse_verified_webhook, BureauClient, BureauError, DocumentType, KmsWebhookVerifier,
-        PersonalizationJob, ProductionStatus,
+        PersonalizationBatch, PersonalizationJob, ProductionStatus,
     },
     passport_contract::{
         application_nested_field_orders, decode_python_validated_base64, json_field_order,
@@ -41,7 +42,8 @@ use crate::{
         QualityResultRequest,
     },
     passport_repository::{
-        fill_missing_bureau_metadata, should_apply_bureau_status, PassportBetaMaterialReceipt,
+        fill_missing_bureau_metadata, should_apply_bureau_status, PassportBatchIdentity,
+        PassportBetaBatchBinding, PassportBetaBatchDestination, PassportBetaMaterialReceipt,
         PassportJob, PassportJobInsert, PassportJobPatch, PassportJobStatus,
         PassportSubmissionReservation, PassportWebhookRepositoryError, PostgresPassportRepository,
     },
@@ -130,7 +132,12 @@ impl SubmissionSigningProvenance {
             && self.validated_at >= job.created_at
             && job
                 .submission_intent_started_at
-                .is_some_and(|started| self.validated_at <= started)
+                .or_else(|| {
+                    (job.submission_batch_id.is_some() && job.bureau_job_id.is_some())
+                        .then_some(job.submitted_at)
+                        .flatten()
+                })
+                .is_some_and(|deadline| self.validated_at <= deadline)
             && Self::managed_kms(job, signed, self.validated_at).is_ok_and(|actual| {
                 actual.dsc_der_sha256 == self.dsc_der_sha256
                     && actual.csca_der_sha256 == self.csca_der_sha256
@@ -737,6 +744,10 @@ pub fn router(service: PassportHttpService) -> Router {
             post(reconcile_beta_submission),
         )
         .route(
+            "/internal/passport/beta-batches/{batch_id}/submit",
+            post(submit_beta_batch),
+        )
+        .route(
             "/v1/passport/applications/{application_id}/production-status",
             get(production_status),
         )
@@ -1166,6 +1177,661 @@ async fn submit_personalization(
         response["sod_sha256"] = Value::String(hash.clone());
     }
     Ok(Json(response))
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct BetaBatchSubmitRequest {
+    selected_flow_instance_id: String,
+    selected_application_id: String,
+    companion_application_id: String,
+}
+
+async fn submit_beta_batch(
+    State(service): State<PassportHttpService>,
+    Path(batch_id): Path<String>,
+    headers: HeaderMap,
+    Json(request): Json<BetaBatchSubmitRequest>,
+) -> Result<Json<Value>, PassportHttpError> {
+    if !service.beta_reconciliation_enabled
+        || service.bureau_provider_profile_id.as_deref() != Some("passport-beta-bureau")
+        || !matches!(
+            (&service.signer, &service.cipher),
+            (
+                Some(PassportSigner::Managed(_)),
+                ArtifactAvailability::Ready(ArtifactCryptor::Kms(_))
+            )
+        )
+    {
+        return Err(PassportHttpError::ProviderUnavailable);
+    }
+    let principal = service.authenticate_beta_reconciliation_operator(&headers)?;
+    let batch_id = Uuid::parse_str(&batch_id)
+        .ok()
+        .filter(|parsed| parsed.to_string() == batch_id)
+        .ok_or(PassportHttpError::ConcurrentChange)?;
+    if request.selected_flow_instance_id.trim().is_empty()
+        || request.selected_application_id.trim().is_empty()
+        || request.companion_application_id.trim().is_empty()
+        || request.selected_application_id == request.companion_application_id
+    {
+        return Err(PassportHttpError::ConcurrentChange);
+    }
+    let bureau = service.bureau()?;
+    let endpoint_sha256 = bureau.endpoint_sha256();
+    let existing = service
+        .repository
+        .beta_batch_jobs(&principal, batch_id)
+        .await
+        .map_err(PassportHttpError::Storage)?;
+    let had_existing = existing.is_some();
+    let jobs = if let Some(jobs) = existing {
+        jobs
+    } else {
+        [
+            service
+                .job(&principal, &request.selected_application_id)
+                .await?,
+            service
+                .job(&principal, &request.companion_application_id)
+                .await?,
+        ]
+    };
+    if jobs[0].id == jobs[1].id
+        || jobs[0].application_id != request.selected_application_id
+        || jobs[1].application_id != request.companion_application_id
+        || jobs[0].flow_execution_id != request.selected_flow_instance_id
+        || jobs
+            .iter()
+            .any(|job| job.organization_id != principal.organization_id())
+        || !had_existing
+            && jobs.iter().any(|job| {
+                job.status != PassportJobStatus::SodSigned.as_str()
+                    || job.bureau_job_id.is_some()
+                    || job.submission_intent_id.is_some()
+                    || job.submission_batch_id.is_some()
+            })
+        || had_existing
+            && jobs.iter().any(|job| {
+                job.submission_batch_id != Some(batch_id)
+                    || job.submission_batch_selected_flow_instance_id.as_deref()
+                        != Some(request.selected_flow_instance_id.as_str())
+                    || if job.bureau_job_id.is_some() {
+                        job.bureau_provider_profile_id.as_deref() != Some("passport-beta-bureau")
+                            || job.submission_intent_id.is_some()
+                            || job.submission_intent_provider_profile_id.is_some()
+                            || job.submission_intent_bureau_endpoint_sha256.is_some()
+                            || job.submission_batch_bureau_endpoint_sha256.as_deref()
+                                != Some(endpoint_sha256.as_str())
+                    } else {
+                        job.bureau_provider_profile_id.is_some()
+                            || job.submission_intent_id.is_none()
+                            || job.submission_intent_provider_profile_id.as_deref()
+                                != Some("passport-beta-bureau")
+                            || job.submission_intent_bureau_endpoint_sha256.as_deref()
+                                != Some(endpoint_sha256.as_str())
+                    }
+            })
+    {
+        return Err(PassportHttpError::ConcurrentChange);
+    }
+    if had_existing && jobs.iter().all(|job| job.bureau_job_id.is_some()) {
+        let mut selected_profile_id: Option<String> = None;
+        for job in &jobs {
+            let profile_id = verified_bound_batch_job(&service, &principal, job).await?;
+            if selected_profile_id
+                .as_deref()
+                .is_some_and(|selected| selected != profile_id)
+            {
+                return Err(PassportHttpError::ConcurrentChange);
+            }
+            selected_profile_id = Some(profile_id);
+        }
+        return Ok(Json(beta_batch_safe_response(batch_id, &jobs)));
+    }
+    if had_existing
+        && jobs
+            .iter()
+            .filter(|job| job.bureau_job_id.is_some())
+            .count()
+            == 1
+    {
+        return recover_partial_beta_batch(
+            &service,
+            &principal,
+            batch_id,
+            &request,
+            &jobs,
+            &endpoint_sha256,
+            bureau,
+        )
+        .await;
+    }
+    let historical = if had_existing {
+        Some([
+            serde_json::from_value::<SubmissionSigningProvenance>(
+                jobs[0]
+                    .submission_intent_signing_provenance
+                    .as_ref()
+                    .or(jobs[0].submission_batch_signing_provenance.as_ref())
+                    .cloned()
+                    .ok_or(PassportHttpError::ConcurrentChange)?,
+            )
+            .map_err(|_| PassportHttpError::ConcurrentChange)?,
+            serde_json::from_value::<SubmissionSigningProvenance>(
+                jobs[1]
+                    .submission_intent_signing_provenance
+                    .as_ref()
+                    .or(jobs[1].submission_batch_signing_provenance.as_ref())
+                    .cloned()
+                    .ok_or(PassportHttpError::ConcurrentChange)?,
+            )
+            .map_err(|_| PassportHttpError::ConcurrentChange)?,
+        ])
+    } else {
+        None
+    };
+    let prepared_selected = prepared_personalization_job(
+        &service,
+        &jobs[0],
+        true,
+        historical.as_ref().map(|values| &values[0]),
+    )
+    .await?;
+    let prepared_companion = prepared_personalization_job(
+        &service,
+        &jobs[1],
+        true,
+        historical.as_ref().map(|values| &values[1]),
+    )
+    .await?;
+    let prepared = [prepared_selected.0, prepared_companion.0];
+    let sod_hashes = [prepared_selected.1, prepared_companion.1];
+    let signed = [prepared_selected.3, prepared_companion.3];
+    if prepared_selected.2.is_some()
+        || prepared_companion.2.is_some()
+        || jobs
+            .iter()
+            .zip(&sod_hashes)
+            .any(|(job, hash)| job.sod_sha256.as_deref() != Some(hash.as_str()))
+        || signed[0].issuer_profile_id.is_none()
+        || signed[0].issuer_profile_id != signed[1].issuer_profile_id
+    {
+        return Err(PassportHttpError::ConcurrentChange);
+    }
+    if had_existing
+        && !service
+            .repository
+            .selected_flow_ready(
+                &principal,
+                &jobs[0],
+                &PassportBatchIdentity {
+                    batch_id,
+                    selected_flow_instance_id: &request.selected_flow_instance_id,
+                    selected_job_id: &jobs[0].id,
+                    companion_job_id: &jobs[1].id,
+                },
+                &sod_hashes[0],
+                jobs[0].submission_intent_signing_provenance.as_ref(),
+            )
+            .await
+            .map_err(PassportHttpError::Storage)?
+    {
+        return Err(PassportHttpError::ConcurrentChange);
+    }
+    let digests = [
+        material_digests(
+            &prepared[0].payload(),
+            &jobs[0].organization_id,
+            &jobs[0].id,
+            &jobs[0].country_code,
+            Some(&jobs[0].document_type),
+        )
+        .map_err(|_| PassportHttpError::InvalidArtifact)?,
+        material_digests(
+            &prepared[1].payload(),
+            &jobs[1].organization_id,
+            &jobs[1].id,
+            &jobs[1].country_code,
+            Some(&jobs[1].document_type),
+        )
+        .map_err(|_| PassportHttpError::InvalidArtifact)?,
+    ];
+    let existing_receipts = if had_existing {
+        [
+            service
+                .repository
+                .beta_material_receipt(&principal, &jobs[0].id)
+                .await
+                .map_err(PassportHttpError::Storage)?,
+            service
+                .repository
+                .beta_material_receipt(&principal, &jobs[1].id)
+                .await
+                .map_err(PassportHttpError::Storage)?,
+        ]
+    } else {
+        [None, None]
+    };
+    for index in 0..2 {
+        if existing_receipts[index].as_ref().is_some_and(|receipt| {
+            !beta_receipt_material_matches(receipt, &digests[index])
+                || receipt
+                    .document_type
+                    .as_deref()
+                    .is_some_and(|document_type| document_type != jobs[index].document_type)
+        }) {
+            return Err(PassportHttpError::ConcurrentChange);
+        }
+    }
+    if !had_existing {
+        for job in &jobs {
+            if service
+                .repository
+                .beta_material_receipt(&principal, &job.id)
+                .await
+                .map_err(PassportHttpError::Storage)?
+                .is_some()
+            {
+                return Err(PassportHttpError::ConcurrentChange);
+            }
+        }
+        let now = database_precision_now();
+        let provenance = [
+            serde_json::to_value(SubmissionSigningProvenance::managed_kms(
+                &jobs[0], &signed[0], now,
+            )?)
+            .map_err(|_| PassportHttpError::InvalidArtifact)?,
+            serde_json::to_value(SubmissionSigningProvenance::managed_kms(
+                &jobs[1], &signed[1], now,
+            )?)
+            .map_err(|_| PassportHttpError::InvalidArtifact)?,
+        ];
+        let reservations = [
+            PassportSubmissionReservation {
+                intent_id: Uuid::new_v4(),
+                sod_sha256: &sod_hashes[0],
+                signed_artifact_ciphertext: None,
+                provider_profile_id: Some("passport-beta-bureau"),
+                bureau_endpoint_sha256: &endpoint_sha256,
+                signing_provenance: Some(&provenance[0]),
+                now,
+            },
+            PassportSubmissionReservation {
+                intent_id: Uuid::new_v4(),
+                sod_sha256: &sod_hashes[1],
+                signed_artifact_ciphertext: None,
+                provider_profile_id: Some("passport-beta-bureau"),
+                bureau_endpoint_sha256: &endpoint_sha256,
+                signing_provenance: Some(&provenance[1]),
+                now,
+            },
+        ];
+        service
+            .repository
+            .reserve_batch_submissions(
+                &principal,
+                [&jobs[0], &jobs[1]],
+                [&reservations[0], &reservations[1]],
+                &PassportBatchIdentity {
+                    batch_id,
+                    selected_flow_instance_id: &request.selected_flow_instance_id,
+                    selected_job_id: &jobs[0].id,
+                    companion_job_id: &jobs[1].id,
+                },
+            )
+            .await
+            .map_err(PassportHttpError::Storage)?
+            .ok_or(PassportHttpError::ConcurrentChange)?;
+    }
+    if had_existing && jobs.iter().any(|job| job.bureau_job_id.is_some()) {
+        return Err(PassportHttpError::ConcurrentChange);
+    }
+    let mapped_ids = if let [Some(first), Some(second)] = &existing_receipts {
+        if first.bureau_job_id == second.bureau_job_id {
+            return Err(PassportHttpError::ConcurrentChange);
+        }
+        if had_existing
+            && (first.document_type.is_none() || second.document_type.is_none())
+            && !service
+                .repository
+                .claim_beta_batch_receipt_completion(&principal, batch_id, database_precision_now())
+                .await
+                .map_err(PassportHttpError::Storage)?
+        {
+            return Err(PassportHttpError::ConcurrentChange);
+        }
+        [first.bureau_job_id, second.bureau_job_id]
+    } else {
+        if had_existing
+            && !service
+                .repository
+                .claim_beta_batch_replay(&principal, batch_id, database_precision_now())
+                .await
+                .map_err(PassportHttpError::Storage)?
+        {
+            return Err(PassportHttpError::ConcurrentChange);
+        }
+        let batch = PersonalizationBatch {
+            id: batch_id.to_string(),
+            organization_id: principal.organization_id().to_owned(),
+            jobs: prepared.to_vec(),
+            status: ProductionStatus::Queued,
+            submitted_at: Utc::now(),
+        };
+        let outcome = bureau
+            .submit_beta_batch(&batch)
+            .await
+            .map_err(|_| PassportHttpError::ConcurrentChange)?;
+        [
+            outcome.jobs[0]
+                .bureau_job_id
+                .as_deref()
+                .and_then(|id| Uuid::parse_str(id).ok())
+                .ok_or(PassportHttpError::ConcurrentChange)?,
+            outcome.jobs[1]
+                .bureau_job_id
+                .as_deref()
+                .and_then(|id| Uuid::parse_str(id).ok())
+                .ok_or(PassportHttpError::ConcurrentChange)?,
+        ]
+    };
+    // The frozen batch wire omits document_type. Once its exact mapping is
+    // known, the simulator's single-job idempotency path fills that field
+    // without replacing either first-accepted bureau UUID or material digest.
+    for index in 0..2 {
+        if existing_receipts[index]
+            .as_ref()
+            .is_none_or(|receipt| receipt.document_type.is_none())
+        {
+            let confirmed = bureau.submit(&prepared[index]).await;
+            if let Ok(confirmed) = confirmed {
+                if confirmed
+                    .bureau_job_id
+                    .as_deref()
+                    .is_some_and(|reported| reported != mapped_ids[index].to_string().as_str())
+                {
+                    return Err(PassportHttpError::ConcurrentChange);
+                }
+            }
+        }
+    }
+    let mut receipts = Vec::with_capacity(2);
+    for index in 0..2 {
+        let receipt = service
+            .repository
+            .beta_material_receipt(&principal, &jobs[index].id)
+            .await
+            .map_err(PassportHttpError::Storage)?
+            .ok_or(PassportHttpError::ConcurrentChange)?;
+        if receipt.bureau_job_id != mapped_ids[index]
+            || !beta_receipt_matches(&receipt, &digests[index], &jobs[index].document_type)
+        {
+            return Err(PassportHttpError::ConcurrentChange);
+        }
+        receipts.push(receipt);
+    }
+    let reserved = service
+        .repository
+        .beta_batch_jobs(&principal, batch_id)
+        .await
+        .map_err(PassportHttpError::Storage)?
+        .ok_or(PassportHttpError::ConcurrentChange)?;
+    let digest_snapshots = [
+        serde_json::to_value(&digests[0]).map_err(|_| PassportHttpError::InvalidArtifact)?,
+        serde_json::to_value(&digests[1]).map_err(|_| PassportHttpError::InvalidArtifact)?,
+    ];
+    let patches: [PassportJobPatch; 2] = std::array::from_fn(|index| {
+        let mut patch = PassportJobPatch::new(PassportJobStatus::Submitted);
+        patch.expected_sod_sha256 = Some(reserved[index].sod_sha256.clone());
+        patch.expected_secure_artifact_ciphertext =
+            Some(reserved[index].secure_artifact_ciphertext.clone());
+        patch.expected_submission_intent_id = reserved[index].submission_intent_id;
+        patch.clear_submission_intent = true;
+        patch.bureau_job_id = Some(Some(mapped_ids[index].to_string()));
+        patch.bureau_provider_profile_id = Some("passport-beta-bureau".to_owned());
+        patch.submission_batch_material_digests = Some(digest_snapshots[index].clone());
+        patch.submitted_at = Some(receipts[index].first_accepted_at);
+        patch
+    });
+    let bindings = [
+        PassportBetaBatchBinding {
+            bureau_job_id: mapped_ids[0],
+            material_digests: &digests[0],
+        },
+        PassportBetaBatchBinding {
+            bureau_job_id: mapped_ids[1],
+            material_digests: &digests[1],
+        },
+    ];
+    let bound = service
+        .repository
+        .bind_batch_submissions(
+            &principal,
+            [&reserved[0], &reserved[1]],
+            [&patches[0], &patches[1]],
+            [&bindings[0], &bindings[1]],
+            &PassportBetaBatchDestination {
+                provider_profile_id: "passport-beta-bureau",
+                endpoint_sha256: &endpoint_sha256,
+            },
+            Utc::now(),
+        )
+        .await
+        .map_err(PassportHttpError::Storage)?
+        .ok_or(PassportHttpError::ConcurrentChange)?;
+    Ok(Json(beta_batch_safe_response(batch_id, &bound)))
+}
+
+async fn verified_bound_batch_job(
+    service: &PassportHttpService,
+    principal: &PassportTenantPrincipal,
+    job: &PassportJob,
+) -> Result<String, PassportHttpError> {
+    let provenance: SubmissionSigningProvenance = serde_json::from_value(
+        job.submission_batch_signing_provenance
+            .clone()
+            .ok_or(PassportHttpError::ConcurrentChange)?,
+    )
+    .map_err(|_| PassportHttpError::ConcurrentChange)?;
+    let digests: PassportBetaMaterialDigests = serde_json::from_value(
+        job.submission_batch_material_digests
+            .clone()
+            .ok_or(PassportHttpError::ConcurrentChange)?,
+    )
+    .map_err(|_| PassportHttpError::ConcurrentChange)?;
+    let profile_id = provenance
+        .issuer_profile_id
+        .as_deref()
+        .filter(|id| !id.trim().is_empty())
+        .ok_or(PassportHttpError::ConcurrentChange)?;
+    if provenance.signing_mode != "managed-issuer-profile"
+        || provenance.artifact_custody != "kms"
+        || job.issuer_did.as_deref() != Some(provenance.issuer_did.as_str())
+        || provenance.validated_at < job.created_at
+        || job
+            .submitted_at
+            .is_none_or(|at| provenance.validated_at > at)
+        || digests
+            .sod_der_sha256
+            .as_ref()
+            .is_none_or(|digest| job.sod_sha256.as_deref() != Some(hex::encode(digest).as_str()))
+        || digests
+            .dsc_der_sha256
+            .as_ref()
+            .is_none_or(|digest| provenance.dsc_der_sha256 != hex::encode(digest))
+    {
+        return Err(PassportHttpError::ConcurrentChange);
+    }
+    let receipt = service
+        .repository
+        .beta_material_receipt(principal, &job.id)
+        .await
+        .map_err(PassportHttpError::Storage)?
+        .ok_or(PassportHttpError::ConcurrentChange)?;
+    if job.bureau_job_id.as_deref() != Some(receipt.bureau_job_id.to_string().as_str())
+        || !beta_receipt_matches(&receipt, &digests, &job.document_type)
+    {
+        return Err(PassportHttpError::ConcurrentChange);
+    }
+    Ok(profile_id.to_owned())
+}
+
+async fn recover_partial_beta_batch(
+    service: &PassportHttpService,
+    principal: &PassportTenantPrincipal,
+    batch_id: Uuid,
+    request: &BetaBatchSubmitRequest,
+    jobs: &[PassportJob; 2],
+    endpoint_sha256: &str,
+    bureau: &BureauClient,
+) -> Result<Json<Value>, PassportHttpError> {
+    let bound_index = usize::from(jobs[0].bureau_job_id.is_none());
+    let pending_index = 1 - bound_index;
+    let bound = &jobs[bound_index];
+    let pending = &jobs[pending_index];
+    let bound_profile = verified_bound_batch_job(service, principal, bound).await?;
+    if pending.status != PassportJobStatus::SodSigned.as_str() {
+        return Err(PassportHttpError::ConcurrentChange);
+    }
+    let provenance: SubmissionSigningProvenance = serde_json::from_value(
+        pending
+            .submission_intent_signing_provenance
+            .clone()
+            .ok_or(PassportHttpError::ConcurrentChange)?,
+    )
+    .map_err(|_| PassportHttpError::ConcurrentChange)?;
+    if provenance.issuer_profile_id.as_deref() != Some(bound_profile.as_str()) {
+        return Err(PassportHttpError::ConcurrentChange);
+    }
+    let (prepared, sod_sha256, newly_signed, signed) =
+        prepared_personalization_job(service, pending, true, Some(&provenance)).await?;
+    if newly_signed.is_some()
+        || pending.sod_sha256.as_deref() != Some(sod_sha256.as_str())
+        || signed.issuer_profile_id.as_deref() != Some(bound_profile.as_str())
+    {
+        return Err(PassportHttpError::ConcurrentChange);
+    }
+    if pending_index == 0
+        && !service
+            .repository
+            .selected_flow_ready(
+                principal,
+                pending,
+                &PassportBatchIdentity {
+                    batch_id,
+                    selected_flow_instance_id: &request.selected_flow_instance_id,
+                    selected_job_id: &jobs[0].id,
+                    companion_job_id: &jobs[1].id,
+                },
+                &sod_sha256,
+                pending.submission_intent_signing_provenance.as_ref(),
+            )
+            .await
+            .map_err(PassportHttpError::Storage)?
+    {
+        return Err(PassportHttpError::ConcurrentChange);
+    }
+    let digests = material_digests(
+        &prepared.payload(),
+        &pending.organization_id,
+        &pending.id,
+        &pending.country_code,
+        Some(&pending.document_type),
+    )
+    .map_err(|_| PassportHttpError::InvalidArtifact)?;
+    // A missing row cannot prove this source was accepted by the two-job
+    // batch. Do not create it through the single-job endpoint.
+    let mut receipt = service
+        .repository
+        .beta_material_receipt(principal, &pending.id)
+        .await
+        .map_err(PassportHttpError::Storage)?
+        .ok_or(PassportHttpError::ConcurrentChange)?;
+    if !beta_receipt_material_matches(&receipt, &digests)
+        || receipt
+            .document_type
+            .as_deref()
+            .is_some_and(|value| value != pending.document_type)
+        || bound.bureau_job_id.as_deref() == Some(receipt.bureau_job_id.to_string().as_str())
+    {
+        return Err(PassportHttpError::ConcurrentChange);
+    }
+    if receipt.document_type.is_none() {
+        if !service
+            .repository
+            .claim_beta_batch_receipt_completion(principal, batch_id, database_precision_now())
+            .await
+            .map_err(PassportHttpError::Storage)?
+        {
+            return Err(PassportHttpError::ConcurrentChange);
+        }
+        let result = bureau.submit(&prepared).await;
+        receipt = service
+            .repository
+            .beta_material_receipt(principal, &pending.id)
+            .await
+            .map_err(PassportHttpError::Storage)?
+            .ok_or(PassportHttpError::ConcurrentChange)?;
+        if let Ok(outcome) = result {
+            if outcome
+                .bureau_job_id
+                .as_deref()
+                .is_some_and(|reported| reported != receipt.bureau_job_id.to_string())
+            {
+                return Err(PassportHttpError::ConcurrentChange);
+            }
+        }
+    }
+    if !beta_receipt_matches(&receipt, &digests, &pending.document_type) {
+        return Err(PassportHttpError::ConcurrentChange);
+    }
+    let mut patch = PassportJobPatch::new(PassportJobStatus::Submitted);
+    patch.expected_sod_sha256 = Some(pending.sod_sha256.clone());
+    patch.expected_secure_artifact_ciphertext = Some(pending.secure_artifact_ciphertext.clone());
+    patch.expected_submission_intent_id = pending.submission_intent_id;
+    patch.clear_submission_intent = true;
+    patch.bureau_job_id = Some(Some(receipt.bureau_job_id.to_string()));
+    patch.bureau_provider_profile_id = Some("passport-beta-bureau".to_owned());
+    patch.submission_batch_material_digests =
+        Some(serde_json::to_value(&digests).map_err(|_| PassportHttpError::InvalidArtifact)?);
+    patch.submitted_at = Some(receipt.first_accepted_at);
+    service
+        .repository
+        .bind_partial_batch_submission(
+            principal,
+            [bound, pending],
+            &patch,
+            &PassportBetaBatchBinding {
+                bureau_job_id: receipt.bureau_job_id,
+                material_digests: &digests,
+            },
+            &PassportBetaBatchDestination {
+                provider_profile_id: "passport-beta-bureau",
+                endpoint_sha256,
+            },
+            Utc::now(),
+        )
+        .await
+        .map_err(PassportHttpError::Storage)?
+        .ok_or(PassportHttpError::ConcurrentChange)?;
+    let pair = service
+        .repository
+        .beta_batch_jobs(principal, batch_id)
+        .await
+        .map_err(PassportHttpError::Storage)?
+        .ok_or(PassportHttpError::ConcurrentChange)?;
+    if pair.iter().any(|job| job.bureau_job_id.is_none()) {
+        return Err(PassportHttpError::ConcurrentChange);
+    }
+    Ok(Json(beta_batch_safe_response(batch_id, &pair)))
+}
+
+fn beta_batch_safe_response(batch_id: Uuid, jobs: &[PassportJob; 2]) -> Value {
+    json!({
+        "batch_id": batch_id,
+        "jobs": [safe(&jobs[0]), safe(&jobs[1])]
+    })
 }
 
 async fn wait_for_submission(
