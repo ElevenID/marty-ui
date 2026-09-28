@@ -97,6 +97,27 @@ def test_disposable_openbao_bootstrap_mints_scoped_tokens(
         callback = (output_dir / "callback_signer_bao_token").read_text(encoding="ascii")
         assert service and callback and service != callback
         assert root_token not in (service, callback, result.stdout, result.stderr)
+        for purpose, expected in (
+            ("csca", "cred-dsc-5fc5bffec62456e58552-es256"),
+            ("x509_doc_signer", "cred-dsc-86997e8fa454582d8bb5-es256"),
+        ):
+            source = "|".join(("00000000-0000-0000-0000-000000000001",
+                               "did:web:localhost:orgs:marty", purpose,
+                               "ICAO_EMRTD", "ES256"))
+            assert expected == "cred-dsc-" + uuid.uuid5(
+                uuid.NAMESPACE_URL, source).hex[:20] + "-es256"
+            probe = docker(
+                "run", "--rm", "--network", network, "--entrypoint", "/bin/sh",
+                "--env", "BAO_ADDR=http://openbao:8200",
+                "--mount", "type=bind,src=" + str(output_dir / "bao_token")
+                + ",dst=/run/secrets/bao_token,readonly",
+                image, "-c", "BAO_TOKEN=$(cat /run/secrets/bao_token); "
+                "export BAO_TOKEN; "
+                f"bao read -field=type transit/keys/{expected}; printf '\\n'; "
+                f"bao read -field=exportable transit/keys/{expected}; printf '\\n'; "
+                f"bao token capabilities transit/keys/{expected}",
+            )
+            assert probe.stdout.splitlines() == ["ecdsa-p256", "false", "read"]
     inspection = docker("inspect", name, "--format", "{{json .Config.Env}}").stdout
     logs = docker("logs", name)
     assert root_token not in inspection + logs.stdout + logs.stderr

@@ -65,10 +65,12 @@ impl Config {
                     )
                 }
             };
-        if value(values, "SIGNING_KEYS_CSCA_ISSUE_GATEWAY_KEY_FILE").is_some() {
-            return Err("SIGNING_KEYS_CSCA_ISSUE_GATEWAY_KEY_FILE is unsupported".into());
+        if value(values, "SIGNING_KEYS_CSCA_ISSUE_GATEWAY_KEY").is_some()
+            && value(values, "SIGNING_KEYS_CSCA_ISSUE_GATEWAY_KEY_FILE").is_some()
+        {
+            return Err("CSCA certificate ceremony key must use one secret source".into());
         }
-        let csca_issue_gateway_key = value(values, "SIGNING_KEYS_CSCA_ISSUE_GATEWAY_KEY");
+        let csca_issue_gateway_key = secret_value(values, "SIGNING_KEYS_CSCA_ISSUE_GATEWAY_KEY")?;
         if (beta_csca_issuance_enabled || csca_issue_gateway_key.is_some())
             && value(values, "ENVIRONMENT").as_deref() != Some("beta")
         {
@@ -310,5 +312,41 @@ mod tests {
             "C:/not-a-key".into(),
         );
         assert!(Config::from_values(&values).is_err());
+    }
+
+    #[test]
+    fn csca_ceremony_accepts_only_one_private_file_secret_source() {
+        let path =
+            std::env::temp_dir().join(format!("marty-signing-csca-{}", uuid::Uuid::new_v4()));
+        std::fs::write(&path, "file-backed-csca-operator-key-32-characters\n").unwrap();
+        let mut values = HashMap::from([
+            ("ENVIRONMENT".into(), "beta".into()),
+            (
+                "SIGNING_KEYS_BETA_CSCA_ISSUANCE_ENABLED".into(),
+                "true".into(),
+            ),
+            (
+                "SIGNING_KEYS_INTERNAL_API_KEY".into(),
+                "independent-internal-key-32-characters".into(),
+            ),
+            (
+                "SIGNING_KEYS_CSCA_ISSUE_GATEWAY_KEY_FILE".into(),
+                path.to_string_lossy().into_owned(),
+            ),
+        ]);
+        let config = Config::from_values(&values).expect("file-backed CSCA ceremony key");
+        assert_eq!(
+            config.csca_issue_gateway_key.as_deref(),
+            Some("file-backed-csca-operator-key-32-characters")
+        );
+        values.insert(
+            "SIGNING_KEYS_CSCA_ISSUE_GATEWAY_KEY".into(),
+            "another-operator-key-32-characters".into(),
+        );
+        assert!(Config::from_values(&values).is_err());
+        values.remove("SIGNING_KEYS_CSCA_ISSUE_GATEWAY_KEY");
+        values.insert("ENVIRONMENT".into(), "production".into());
+        assert!(Config::from_values(&values).is_err());
+        std::fs::remove_file(path).unwrap();
     }
 }
