@@ -1,0 +1,190 @@
+# Apply only inside a protected disposable acceptance namespace and context.
+# The producer must render and verify all source, image, namespace, secret,
+# ownership, and cluster identities before applying this component.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: passport-callback-signer
+  namespace: ${PASSPORT_ACCEPTANCE_NAMESPACE}
+  labels:
+    app: passport-callback-signer
+    com.marty.passport.acceptance.owner: supported-consumer
+    com.marty.passport.acceptance.run-id: ${PASSPORT_ACCEPTANCE_PLAN_RUN_ID}
+    com.marty.passport.acceptance.source-commit: ${PASSPORT_ACCEPTANCE_SOURCE_COMMIT}
+  annotations:
+    com.marty.passport.acceptance.services-image: ${MARTY_SERVICES_IMAGE}
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: passport-callback-signer
+  template:
+    metadata:
+      labels:
+        app: passport-callback-signer
+        com.marty.passport.acceptance.owner: supported-consumer
+        com.marty.passport.acceptance.run-id: ${PASSPORT_ACCEPTANCE_PLAN_RUN_ID}
+        com.marty.passport.acceptance.source-commit: ${PASSPORT_ACCEPTANCE_SOURCE_COMMIT}
+      annotations:
+        com.marty.passport.acceptance.services-image: ${MARTY_SERVICES_IMAGE}
+    spec:
+      automountServiceAccountToken: false
+      imagePullSecrets:
+        - name: passport-acceptance-registry
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 10001
+        runAsGroup: 10001
+        fsGroup: 10001
+      containers:
+        - name: passport-callback-signer
+          image: ${MARTY_SERVICES_IMAGE}
+          imagePullPolicy: IfNotPresent
+          command: ["/app/services/entrypoint.sh"]
+          env:
+            - {name: SERVICE_NAME, value: passport_callback_signer}
+            - {name: ENVIRONMENT, value: beta}
+            - {name: PASSPORT_CALLBACK_SIGNER_ENABLED, value: "true"}
+            - {name: SIGNING_KEYS_SERVICE_PORT, value: "8018"}
+            - {name: BAO_ADDR, value: "http://openbao:8200"}
+            - {name: BAO_TOKEN_FILE, value: /run/secrets/callback-bao/token}
+            - {name: SIGNING_KEYS_INTERNAL_API_KEY_FILE, value: /run/secrets/callback-api/api_key}
+          ports:
+            - {name: http, containerPort: 8018}
+          volumeMounts:
+            - {name: callback-bao, mountPath: /run/secrets/callback-bao, readOnly: true}
+            - {name: callback-api, mountPath: /run/secrets/callback-api, readOnly: true}
+          readinessProbe:
+            httpGet: {path: /health, port: 8018}
+            periodSeconds: 10
+          livenessProbe:
+            httpGet: {path: /health, port: 8018}
+            periodSeconds: 15
+          resources:
+            requests: {cpu: 100m, memory: 128Mi}
+            limits: {cpu: 400m, memory: 512Mi}
+      volumes:
+        - name: callback-bao
+          secret:
+            secretName: passport-acceptance-callback-bao-token
+            items: [{key: token, path: token}]
+        - name: callback-api
+          secret:
+            secretName: passport-acceptance-callback-api-key
+            items: [{key: api_key, path: api_key}]
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: passport-callback-signer
+  namespace: ${PASSPORT_ACCEPTANCE_NAMESPACE}
+spec:
+  type: ClusterIP
+  selector: {app: passport-callback-signer}
+  ports:
+    - {name: http, port: 8018, targetPort: 8018}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: passport-beta-bureau
+  namespace: ${PASSPORT_ACCEPTANCE_NAMESPACE}
+  labels:
+    app: passport-beta-bureau
+    com.marty.passport.acceptance.owner: supported-consumer
+    com.marty.passport.acceptance.run-id: ${PASSPORT_ACCEPTANCE_PLAN_RUN_ID}
+    com.marty.passport.acceptance.source-commit: ${PASSPORT_ACCEPTANCE_SOURCE_COMMIT}
+  annotations:
+    com.marty.passport.acceptance.services-image: ${MARTY_SERVICES_IMAGE}
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: passport-beta-bureau
+  template:
+    metadata:
+      labels:
+        app: passport-beta-bureau
+        com.marty.passport.acceptance.owner: supported-consumer
+        com.marty.passport.acceptance.run-id: ${PASSPORT_ACCEPTANCE_PLAN_RUN_ID}
+        com.marty.passport.acceptance.source-commit: ${PASSPORT_ACCEPTANCE_SOURCE_COMMIT}
+      annotations:
+        com.marty.passport.acceptance.services-image: ${MARTY_SERVICES_IMAGE}
+    spec:
+      automountServiceAccountToken: false
+      imagePullSecrets:
+        - name: passport-acceptance-registry
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 10001
+        runAsGroup: 10001
+        fsGroup: 10001
+      containers:
+        - name: passport-beta-bureau
+          image: ${MARTY_SERVICES_IMAGE}
+          imagePullPolicy: IfNotPresent
+          command: ["/app/services/entrypoint.sh"]
+          env:
+            - {name: SERVICE_NAME, value: passport_beta_bureau}
+            - {name: ENVIRONMENT, value: beta}
+            - {name: PASSPORT_BETA_BUREAU_ENABLED, value: "true"}
+            - {name: DATABASE_URL_FILE, value: /run/secrets/bureau-db/url}
+            - {name: GRPC_SERVICE_TOKEN_FILE, value: /run/secrets/grpc-token/token}
+            - {name: SIGNING_KEYS_INTERNAL_API_KEY_FILE, value: /run/secrets/callback-api/api_key}
+            - {name: SIGNING_KEYS_INTERNAL_URL, value: "http://passport-callback-signer:8018/internal/documents"}
+            - {name: PASSPORT_BUREAU_CALLBACK_URL, value: "http://issuance-native:8005/v1/passport/webhooks/personalization"}
+          ports:
+            - {name: http, containerPort: 8020}
+          volumeMounts:
+            - {name: bureau-db, mountPath: /run/secrets/bureau-db, readOnly: true}
+            - {name: grpc-token, mountPath: /run/secrets/grpc-token, readOnly: true}
+            - {name: callback-api, mountPath: /run/secrets/callback-api, readOnly: true}
+          readinessProbe:
+            httpGet: {path: /health, port: 8020}
+            periodSeconds: 10
+          livenessProbe:
+            httpGet: {path: /health, port: 8020}
+            periodSeconds: 15
+          resources:
+            requests: {cpu: 100m, memory: 128Mi}
+            limits: {cpu: 400m, memory: 512Mi}
+      volumes:
+        - name: bureau-db
+          secret:
+            secretName: passport-acceptance-bureau-database-url
+            items: [{key: url, path: url}]
+        - name: grpc-token
+          secret:
+            secretName: passport-acceptance-grpc-token
+            items: [{key: token, path: token}]
+        - name: callback-api
+          secret:
+            secretName: passport-acceptance-callback-api-key
+            items: [{key: api_key, path: api_key}]
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: passport-beta-bureau
+  namespace: ${PASSPORT_ACCEPTANCE_NAMESPACE}
+spec:
+  type: ClusterIP
+  selector: {app: passport-beta-bureau}
+  ports:
+    - {name: http, port: 8020, targetPort: 8020}
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: passport-acceptance-callback-signer-ingress
+  namespace: ${PASSPORT_ACCEPTANCE_NAMESPACE}
+spec:
+  podSelector:
+    matchLabels: {app: passport-callback-signer}
+  policyTypes: [Ingress]
+  ingress:
+    - from:
+        - podSelector:
+            matchLabels: {app: passport-beta-bureau}
+      ports:
+        - {protocol: TCP, port: 8018}

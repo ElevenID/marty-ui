@@ -34,10 +34,7 @@ COMPOSE_SERVICES = (
     "gateway", "flow", "issuance-native", "passport-callback-signer",
     "passport-beta-bureau",
 )
-KUBERNETES_SERVICES = (
-    "gateway", "flow", "issuance-native", "passport-callback-signer-supported",
-    "passport-provider-ingress",
-)
+KUBERNETES_SERVICES = COMPOSE_SERVICES
 COMMON_FLAGS = {
     "gateway": ("PASSPORT_NATIVE_GATEWAY_ENABLED", "PASSPORT_INTERNAL_SERVICE_AUTH_ENABLED"),
     "flow": ("PASSPORT_NATIVE_FLOW_ENABLED", "PASSPORT_INTERNAL_SERVICE_AUTH_ENABLED"),
@@ -51,10 +48,7 @@ COMPOSE_FLAGS = COMMON_FLAGS | {
     "passport-callback-signer": ("PASSPORT_CALLBACK_SIGNER_ENABLED",),
     "passport-beta-bureau": ("PASSPORT_BETA_BUREAU_ENABLED",),
 }
-KUBERNETES_FLAGS = COMMON_FLAGS | {
-    "passport-callback-signer-supported": ("PASSPORT_SUPPORTED_CALLBACK_SIGNER_ENABLED",),
-    "passport-provider-ingress": ("PASSPORT_PROVIDER_INGRESS_ENABLED",),
-}
+KUBERNETES_FLAGS = COMPOSE_FLAGS
 PROBES = (
     "nine_route_gateway_flow", "managed_signer", "signed_bureau_callback",
     "released_image", "rollback",
@@ -350,7 +344,7 @@ def collect(
             surfaces[name] = report_surface(None, "disposable runtime probe failed",
                                             source_commit)
         else:
-            pending = ("nine-route/Kubernetes provider/rollback acceptance is pending"
+            pending = ("nine-route/Kubernetes simulator/rollback acceptance is pending"
                        if name == "kubernetes" else
                        "nine-route/simulator/rollback acceptance is pending")
             observed = report_surface(runtime, pending, source_commit)
