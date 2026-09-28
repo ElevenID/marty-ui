@@ -84,6 +84,8 @@ def run(
                 "Physical Flow plan and managed application identity differ")
         checkout_checker(physical_flow_plan["source_commit"])
     chain_requested = any(value is not None for value in (certificate_plan, csca_session, dsc_session))
+    if physical_flow_plan is not None:
+        require(chain_requested, "Physical Flow requires the governed CSCA and DSC ceremony")
     if chain_requested:
         require(isinstance(certificate_plan, dict) and bool(csca_session) and bool(dsc_session),
                 "Governed CSCA and DSC ceremony inputs are incomplete")
@@ -103,7 +105,12 @@ def run(
             "Beta native route ownership did not verify")
     before_production = snapshot()
     before_drain = drain()
+    chain_result = None
     try:
+        if chain_requested:
+            chain_result = chain(certificate_plan, csca_session, dsc_session)
+            require(chain_result.get("verified") is True and isinstance(chain_result.get("evidence"), dict),
+                    "Managed CSCA and DSC chain did not verify")
         flow_result = flow(webhook_owner)
         flow_evidence = flow_result.get("evidence")
         require(flow_result.get("verified") is True and isinstance(flow_evidence, dict)
@@ -186,11 +193,6 @@ def run(
                             and physical_evidence[key] != direct_evidence[key]
                             for key in ("application_id_sha256", "job_id_sha256", "bureau_job_id_sha256")),
                     "One Flow job did not bind its SOD, simulator receipt, and terminal state")
-        chain_result = None
-        if chain_requested:
-            chain_result = chain(certificate_plan, csca_session, dsc_session)
-            require(chain_result.get("verified") is True and chain_result.get("evidence") is not None,
-                    "Managed CSCA and DSC chain did not verify")
     finally:
         after_production = snapshot()
         production_window = assert_production_unchanged(before_production, after_production)
@@ -260,7 +262,14 @@ def run(
         "missing": [] if physical_result is not None else ["executed_physical_document_flow"],
     }}
     if chain_result is not None:
-        report["probes"]["managed_csca_dsc_chain"] = chain_result
+        # The ceremony validates the selected public CSCA/DSC chain. This
+        # runner cannot prove that either job's signed SOD used that exact DSC
+        # until the private first-accepted material receipt is reconciled.
+        report["probes"]["managed_csca_dsc_chain"] = {"verified": False, "evidence": {
+            **chain_result["evidence"],
+            "ceremony_verified": True,
+            "sod_dsc_binding_verified": False,
+        }}
     report["probes"]["legacy_drain"] = {
         "verified": before_drain.get("verified") is True and after_drain.get("verified") is True,
         "evidence": {"before": before_drain.get("evidence"), "after": after_drain.get("evidence")},

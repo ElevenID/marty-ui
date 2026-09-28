@@ -149,7 +149,26 @@ def test_opt_in_executed_flow_binds_its_own_simulator_receipt(same_job: bool) ->
             "physical_document": {"country_code": "USA", "applicant": {"name": "Test"},
                                   "mrz": {"line_1": "P<USA"},
                                   "data_groups": {"DG1": "MQ==", "DG2": "Mg=="}}}
+    ceremony = certificate_plan()
+    ceremony["organization_id"] = plan["organization_id"]
+    ceremony["dsc"]["dsc_issuer_did"] = plan["issuer_did"]
     calls = []
+
+    def selected_chain(*args) -> dict:
+        calls.append("chain")
+        return {"verified": True, "evidence": {"dsc_certificate_sha256": "b" * 64}}
+
+    def direct_lifecycle(*args) -> dict:
+        calls.append("lifecycle")
+        return {"verified": True, "evidence": {"sod_signature_verified": True,
+                                                  "sod_sha256": "f" * 64,
+                                                  "application_id_sha256": "4" * 64,
+                                                  "job_id_sha256": "5" * 64,
+                                                  "bureau_job_id_sha256": "6" * 64}}
+
+    def selected_batch(*args) -> dict:
+        calls.append("batch")
+        return accepted_batch()
 
     def physical_flow(flow_plan, release, deployment, container, session, api_key):
         calls.append("physical")
@@ -180,19 +199,17 @@ def test_opt_in_executed_flow_binds_its_own_simulator_receipt(same_job: bool) ->
             collector=lambda *args, **kwargs: selected,
             snapshot=lambda: {"sha256": "c" * 64, "container_counts": {}},
             drain=lambda: {"verified": True, "evidence": {}},
-            lifecycle=lambda *args: {"verified": True, "evidence": {"sod_signature_verified": True,
-                                                                     "sod_sha256": "f" * 64,
-                                                                     "application_id_sha256": "4" * 64,
-                                                                     "job_id_sha256": "5" * 64,
-                                                                     "bureau_job_id_sha256": "6" * 64}},
+            lifecycle=direct_lifecycle,
             routing=lambda *args: {"verified": True, "evidence": {"webhook_owner": "issuance-native"}},
             flow=lambda owner: {"verified": True, "evidence": {"unsigned_webhook_owner": owner,
                                                                "signature_denial_verified": True}},
-            batch=lambda *args: accepted_batch(),
+            batch=selected_batch,
             physical_flow_plan=plan, flow_session="operator-session", physical_flow=physical_flow,
+            certificate_plan=ceremony, csca_session="csca-session", dsc_session="dsc-session",
+            chain=selected_chain,
             checkout_checker=lambda source: source == "a" * 40 or pytest.fail("source drift"),
         )
-    assert calls == ["physical"]
+    assert calls == ["chain", "lifecycle", "batch", "physical"]
     if same_job:
         return
     assert result["status"] == "blocked"
@@ -354,9 +371,32 @@ def test_governed_chain_runs_with_complete_inputs_and_stays_blocked() -> None:
         dsc_session="dsc-session", chain=chain,
     )
     assert calls == ["collect", "chain", "collect"]
-    assert result["probes"]["managed_csca_dsc_chain"]["verified"] is True
+    assert result["probes"]["managed_csca_dsc_chain"] == {"verified": False, "evidence": {
+        "csca_certificate_sha256": "b" * 64,
+        "ceremony_verified": True,
+        "sod_dsc_binding_verified": False,
+    }}
     assert result["probes"]["sod_signature"]["verified"] is True
     assert result["status"] == "blocked"
+
+
+def test_failed_governed_chain_blocks_before_passport_jobs() -> None:
+    selected = certificate_plan()
+    with pytest.raises(EvidenceError, match="chain did not verify"):
+        run(
+            Path("beta-artifacts"),
+            {"organization_id": selected["organization_id"],
+             "issuer_did": selected["dsc"]["dsc_issuer_did"]}, "a" * 32,
+            collector=lambda *args, **kwargs: report(),
+            snapshot=lambda: {"sha256": "c" * 64, "container_counts": {}},
+            drain=lambda: {"verified": True, "evidence": {"in_flight_jobs": 0}},
+            routing=lambda *args: {"verified": True, "evidence": {"webhook_owner": "issuance-native"}},
+            chain=lambda *args: {"verified": False, "evidence": None},
+            flow=lambda *args: pytest.fail("Flow probe must wait for the selected DSC"),
+            lifecycle=lambda *args: pytest.fail("Passport job must wait for the selected DSC"),
+            batch=lambda *args: pytest.fail("Simulator batch must wait for the selected DSC"),
+            certificate_plan=selected, csca_session="csca-session", dsc_session="dsc-session",
+        )
 
 
 def test_incomplete_governed_chain_inputs_fail_closed_before_ceremony() -> None:

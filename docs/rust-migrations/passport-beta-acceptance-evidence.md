@@ -134,6 +134,11 @@ key or asserted user identity. Evidence contains certificate and DID hashes, nev
 session cookies or certificate bodies. Partial ceremony input fails before
 any application or certificate mutation. If no ceremony input exists, the
 `managed_csca_dsc_chain` probe remains false.
+The ceremony now runs before the direct, batch, or Flow passport jobs. Its
+public chain check alone does not prove that their signed SODs used the exact
+selected DSC, so this probe remains unverified with
+`sod_dsc_binding_verified=false` until the immutable simulator material
+receipt is reconciled with the selected job.
 
 The production snapshot proves continuity **during this acceptance run**. It
 does not replace the deployment wrapper's before/after production comparison.
