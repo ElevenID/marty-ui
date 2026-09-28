@@ -68,7 +68,7 @@ export const DEMO_MANIFESTS = {
     "release_differences": {
       "previous_stack_version": "2026.07.0",
       "ux": [
-        "Adds an eleven-scenario release catalog, including a gateway-only external admissions integration, without removing historical wallet demonstrations. The proposed digital passport D-13 requires its own pinned MIP 0.6 beta release."
+        "Adds a twelve-scenario release catalog, including gateway-only external admissions and beta passport simulator evidence, without removing historical wallet demonstrations. The proposed digital passport D-13 requires its own pinned MIP 0.6 beta release."
       ],
       "services": [
         "Qualifies the Rust-native platform through explicit happy and denial paths."
@@ -2264,6 +2264,209 @@ export const DEMO_MANIFESTS = {
         ],
         "limitations": [
           "Fresh release-bound positive, insufficient-scope, invalid-signature, and duplicate-event runs are required before publication."
+        ],
+        "published_at": null,
+        "publication_attestation": null,
+        "inherited_evidence": null
+      },
+      {
+        "demo_id": "D-12",
+        "slug": "physical-passport-issuance-evidence",
+        "title": "Passport Issuance Simulator Evidence",
+        "summary": "Follow one synthetic passport job through managed issuer profiles, nine Rust Flow steps, and Marty's signed bureau simulator callback.",
+        "scenario_revision": 1,
+        "recording_classification": "FIRST_PARTY_CONTROL",
+        "revision_history": [],
+        "mip_version": "0.5.0",
+        "state": "DRAFT",
+        "audiences": [
+          "Passport software reviewer",
+          "Issuer operator",
+          "Security architect"
+        ],
+        "capabilities": [
+          "Distinct KMS-backed CSCA and DSC issuer profiles",
+          "Nine-step Rust passport Flow",
+          "Correlated Marty bureau simulator job",
+          "Signed native personalization callback",
+          "Unsigned and foreign-organization callback denial",
+          "Physical claim: not claimed; no booklet verified"
+        ],
+        "protocols": [
+          "https-webhooks"
+        ],
+        "recording_plan": {
+          "fresh_recording_required": true,
+          "happy_path": [
+            "managed_csca_dsc_issuer_profiles",
+            "nine_step_passport_issuance_flow",
+            "simulator_bureau_job_correlated",
+            "signed_simulator_callback_verified",
+            "physical_claim_boundary_verified",
+            "physical_booklet_not_verified"
+          ],
+          "failure_paths": [
+            "unsigned_or_foreign_callback_denied"
+          ]
+        },
+        "poster": {
+          "src": "/images/demos/2026.08.0/portfolio-draft.svg",
+          "sha256": "af7f7880ff5dead5eff3a00db4108fe59d771fa831358d98dbbed2c657288db9",
+          "alt": "Draft release card for Passport Issuance Simulator Evidence; fresh recording pending"
+        },
+        "youtube_id": null,
+        "media_evidence": null,
+        "transcript": {
+          "language": "en",
+          "segments": [
+            {
+              "start_seconds": 0,
+              "speaker": "Narrator",
+              "text": "One synthetic passport job uses distinct KMS-backed CSCA and DSC issuer profiles."
+            },
+            {
+              "start_seconds": 12,
+              "speaker": "Narrator",
+              "text": "The live Rust Flow completes nine ordered passport issuance steps for that job."
+            },
+            {
+              "start_seconds": 24,
+              "speaker": "Narrator",
+              "text": "Marty's bureau simulator returns a correlated job and signs the native callback."
+            },
+            {
+              "start_seconds": 36,
+              "speaker": "Narrator",
+              "text": "Unsigned and foreign-organization callbacks are denied without changing the job."
+            },
+            {
+              "start_seconds": 48,
+              "speaker": "Narrator",
+              "text": "Physical claim: not claimed. No physical booklet has been verified."
+            }
+          ]
+        },
+        "chapters": [
+          {
+            "start_seconds": 0,
+            "title": "Managed passport issuer profiles",
+            "role": "Issuer operator",
+            "mip_primitives": [
+              "Issuer profiles",
+              "KMS signing"
+            ],
+            "standards": [
+              "ICAO eMRTD"
+            ],
+            "documentation_links": [
+              {
+                "label": "Marty API",
+                "href": "/docs/api"
+              }
+            ]
+          },
+          {
+            "start_seconds": 12,
+            "title": "Nine-step Rust passport Flow",
+            "role": "Passport software reviewer",
+            "mip_primitives": [
+              "Issuance Flow"
+            ],
+            "standards": [
+              "ICAO eMRTD"
+            ],
+            "documentation_links": [
+              {
+                "label": "Marty API",
+                "href": "/docs/api"
+              }
+            ]
+          },
+          {
+            "start_seconds": 24,
+            "title": "Signed Marty simulator callback",
+            "role": "Security architect",
+            "mip_primitives": [
+              "Personalization callback"
+            ],
+            "standards": [
+              "HTTPS",
+              "HMAC-SHA256"
+            ],
+            "documentation_links": [
+              {
+                "label": "Marty API",
+                "href": "/docs/api"
+              }
+            ]
+          },
+          {
+            "start_seconds": 36,
+            "title": "Callback denial and physical claim boundary",
+            "role": "Security architect",
+            "mip_primitives": [
+              "Organization binding"
+            ],
+            "standards": [
+              "HTTPS",
+              "HMAC-SHA256"
+            ],
+            "documentation_links": [
+              {
+                "label": "Marty API",
+                "href": "/docs/api"
+              }
+            ]
+          }
+        ],
+        "wallets": [],
+        "assertions": [
+          {
+            "id": "managed_csca_dsc_issuer_profiles",
+            "label": "Managed csca dsc issuer profiles",
+            "result": "NOT_RUN",
+            "evidence_sha256": null
+          },
+          {
+            "id": "nine_step_passport_issuance_flow",
+            "label": "Nine step passport issuance flow",
+            "result": "NOT_RUN",
+            "evidence_sha256": null
+          },
+          {
+            "id": "simulator_bureau_job_correlated",
+            "label": "Simulator bureau job correlated",
+            "result": "NOT_RUN",
+            "evidence_sha256": null
+          },
+          {
+            "id": "signed_simulator_callback_verified",
+            "label": "Signed simulator callback verified",
+            "result": "NOT_RUN",
+            "evidence_sha256": null
+          },
+          {
+            "id": "physical_claim_boundary_verified",
+            "label": "Physical claim boundary verified",
+            "result": "NOT_RUN",
+            "evidence_sha256": null
+          },
+          {
+            "id": "physical_booklet_not_verified",
+            "label": "Physical booklet not verified",
+            "result": "NOT_RUN",
+            "evidence_sha256": null
+          },
+          {
+            "id": "unsigned_or_foreign_callback_denied",
+            "label": "Unsigned or foreign callback denied",
+            "result": "NOT_RUN",
+            "evidence_sha256": null
+          }
+        ],
+        "limitations": [
+          "Beta simulator evidence covers passport software only. Physical claim is not claimed and no booklet has been verified.",
+          "Fresh source-bound recording, callback denial evidence, privacy review, and YouTube publication are required before this scenario can be published."
         ],
         "published_at": null,
         "publication_attestation": null,

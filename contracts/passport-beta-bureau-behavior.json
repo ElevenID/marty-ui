@@ -12,28 +12,71 @@
     "poll": "GET /v1/personalization/jobs/{bureau_job_id}"
   },
   "durability": "PostgreSQL organization_id plus source_job_id idempotency; a changed document identity digest returns 409, while a retry with a different SOD signature or public DSC certificate returns the original bureau job ID",
-  "document_identity_digest_fields": ["organization_id", "job_id", "application_id", "country_code", "document_type (if present)", "data_groups", "mrz"],
+  "document_identity_digest_fields": ["organization_id", "job_id", "application_id", "country_code", "data_groups", "mrz"],
+  "document_type_replay_rule": "The frozen batch wire omits document_type. Single and batch submissions for the same tenant and content share one bureau job; the first explicit TD1/TD2/TD3 type is retained, and a different later explicit type returns 409. Legacy rows without the type-neutral digest fail closed on replay.",
   "retry_semantics": "The first accepted document identity is authoritative. SOD and DSC are validated as present on every submission but excluded from the identity digest because re-signing may change them. A retry does not reset bureau status or create another job.",
+  "managed_ceremony_order": "Issue and verify the selected organization CSCA and DSC before generating the passport SOD or submitting the native passport job; compare the immutable simulator receipt to that preselected DSC and the generated/submitted SOD for the same tenant, source job and bureau job",
+  "first_accepted_material_receipt": {
+    "binding": ["organization_id", "source_job_id", "bureau_job_id"],
+    "digests": ["sod_der_sha256", "dsc_der_sha256", "dsc_pem_wire_sha256"],
+    "source": "Hash the decoded SOD DER, parsed DSC DER and exact UTF-8 DSC PEM wire value on the first accepted single or batch submission; store only their digests in the private simulator row",
+    "compatibility": "Keep the frozen nonempty-field acceptance rule: malformed synthetic SOD or certificate values may be accepted but have null canonical DER digests and cannot satisfy beta evidence",
+    "retry": "The first accepted digests are immutable when the same document is replayed with another signature or certificate; legacy rows without digests cannot qualify",
+    "protected_read": "Read only inside the protected beta host using all three binding fields; do not add a public receipt route or upload raw material or these unkeyed digests",
+    "public_evidence": "Publish only verified comparison outcomes and keyed source-job/bureau-job commitments after the protected read",
+    "commitment_algorithm": {
+      "name": "HMAC-SHA256",
+      "key": "UTF-8 bytes of the private organization-scoped beta acceptance API key; never upload this key",
+      "source_job_preimage": "UTF-8 bytes of ASCII source-job: followed by the exact source job ID",
+      "bureau_job_preimage": "UTF-8 bytes of ASCII bureau-job: followed by the canonical lowercase hyphenated bureau UUID",
+      "encoding": "lowercase hexadecimal",
+      "test_vector": {
+        "key_utf8": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "source_job_id": "job-1",
+        "bureau_job_id": "c3ddfe4d-e67e-473e-a278-c95a27459344",
+        "source_job_commitment": "500391b26fdf0235e61a075f06a7a58a0ee48faf4765bedf0482656bcb425908",
+        "bureau_job_commitment": "1ab8276ee9595c34609b514f29449d474d1256ea15168966ad333db16d385916"
+      }
+    }
+  },
   "persisted_fields": [
     "bureau_job_id",
     "organization_id",
     "source_job_id",
     "request_sha256",
+    "content_sha256",
+    "sod_der_sha256",
+    "dsc_der_sha256",
+    "dsc_pem_wire_sha256",
+    "document_type",
     "status",
     "next_transition_at",
     "callback_lease_token",
     "callback_lease_until",
+    "callback_receipt_sha256",
     "created_at",
     "updated_at"
   ],
-  "prohibited_persistence": ["MRZ", "data groups", "SOD", "DSC certificate", "raw job payload"],
+  "prohibited_persistence": ["MRZ", "data groups", "SOD", "DSC certificate", "raw job payload", "callback body", "callback signature"],
   "status_sequence": ["QUEUED", "PRINTING", "ENCODING", "QUALITY_CHECK", "SHIPPED"],
   "callback": {
-    "body_fields": ["organization_id", "bureau_job_id", "status"],
+    "body_fields": ["organization_id", "provider_profile_id", "bureau_job_id", "status"],
+    "provider_profile_id": "passport-beta-bureau",
     "signature": "KMS-held passport-bureau-callback HMAC via internal signing-keys gateway",
     "advance_only_after_accepted_callback": true,
     "retry_after_provider_failure": true,
-    "tracking_prefix": "BETA-SIM-"
+    "tracking_prefix": "BETA-SIM-",
+    "signed_receipt_digest": {
+      "when_recorded": "only after the private native callback accepts the exact signed body and the simulator status transition commits",
+      "preimage": "ASCII marty.passport-callback-receipt/v1 followed by NUL, u32 big-endian body byte length, exact callback body bytes, u32 big-endian signature byte length, exact x-personalization-signature UTF-8 bytes",
+      "algorithm": "SHA-256",
+      "test_vector": {
+        "body_utf8": "{\"status\":\"SHIPPED\"}",
+        "signature_utf8": "vault:v1:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=",
+        "digest_hex": "c509d5f0acf805a581db9430b376d4ec99c3bc017853e3c7bc7ca37954b4d3cd"
+      },
+      "publication": "lowercase hex digest in authenticated private poll; never persist or publish the signature or callback body"
+    }
   },
   "security": {
     "maximum_request_bytes": 33554432,

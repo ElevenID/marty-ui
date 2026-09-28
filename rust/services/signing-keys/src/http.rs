@@ -8988,6 +8988,24 @@ mod public_contract_tests {
     }
 
     #[test]
+    fn disposable_passport_key_references_match_root_only_bootstrap() {
+        let organization_id = "00000000-0000-0000-0000-000000000001";
+        let mut request = identity("csca", "ES256");
+        request.organization_id = Some(organization_id.into());
+        request.issuer_did = "did:web:localhost:orgs:marty".into();
+        request.credential_format = "ICAO_EMRTD".into();
+        assert_eq!(
+            managed_key_reference(organization_id, &request),
+            "cred-dsc-5fc5bffec62456e58552-es256"
+        );
+        request.key_purpose = "x509_doc_signer".into();
+        assert_eq!(
+            managed_key_reference(organization_id, &request),
+            "cred-dsc-86997e8fa454582d8bb5-es256"
+        );
+    }
+
+    #[test]
     fn managed_identity_scope_requires_the_local_path_scoped_did() {
         assert!(local_managed_did(
             Some("beta.example"),

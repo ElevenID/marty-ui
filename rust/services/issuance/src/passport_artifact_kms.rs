@@ -82,6 +82,18 @@ impl KmsPassportArtifactCipher {
         artifact_id: &str,
         ciphertext: &str,
     ) -> Result<PassportSensitiveArtifact, KmsArtifactError> {
+        let plaintext = self
+            .decrypt_bytes(organization_id, artifact_id, ciphertext)
+            .await?;
+        serde_json::from_slice(&plaintext).map_err(|_| KmsArtifactError::InvalidArtifact)
+    }
+
+    pub(crate) async fn decrypt_bytes(
+        &self,
+        organization_id: &str,
+        artifact_id: &str,
+        ciphertext: &str,
+    ) -> Result<Zeroizing<Vec<u8>>, KmsArtifactError> {
         let manifest: ArtifactManifest =
             serde_json::from_str(ciphertext).map_err(|_| KmsArtifactError::InvalidArtifact)?;
         if manifest.schema != MANIFEST_SCHEMA
@@ -123,7 +135,7 @@ impl KmsPassportArtifactCipher {
             }
             plaintext.extend_from_slice(&chunk);
         }
-        serde_json::from_slice(&plaintext).map_err(|_| KmsArtifactError::InvalidArtifact)
+        Ok(plaintext)
     }
 
     pub async fn encrypted_scrubbed_artifact(
@@ -135,7 +147,7 @@ impl KmsPassportArtifactCipher {
             .await
     }
 
-    async fn encrypt_bytes(
+    pub(crate) async fn encrypt_bytes(
         &self,
         organization_id: &str,
         artifact_id: &str,
@@ -346,6 +358,7 @@ mod tests {
             applicant: json!({"synthetic": "test-person"}),
             mrz: BTreeMap::from([("line_1".into(), "P<TEST".into())]),
             data_groups: BTreeMap::from([("DG2".into(), "A".repeat(MAX_CHUNK_BYTES))]),
+            signed_material: None,
         };
         let encrypted = cipher
             .encrypt("org-a", "artifact-1", &artifact)

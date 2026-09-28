@@ -3,7 +3,7 @@
 
 This collector records running service, image, and selector observations.
 It has no rollback transition command.
-Physical provider and nine-route acceptance require a later protected harness.
+Signed simulator callback and nine-route acceptance require a later protected harness.
 """
 
 from __future__ import annotations
@@ -30,11 +30,15 @@ ROOT = Path(__file__).resolve().parents[1]
 PROJECT = re.compile(r"marty-passport-acceptance-(base|selfhost)-[a-z0-9]{6,32}\Z")
 NAMESPACE = re.compile(r"marty-passport-acceptance-[a-z0-9]{6,32}\Z")
 KUBE_CONTEXT = re.compile(r"marty-passport-acceptance-[a-z0-9]{6,32}\Z")
-SERVICES = (
+COMPOSE_SERVICES = (
+    "gateway", "flow", "issuance-native", "passport-callback-signer",
+    "passport-beta-bureau",
+)
+KUBERNETES_SERVICES = (
     "gateway", "flow", "issuance-native", "passport-callback-signer-supported",
     "passport-provider-ingress",
 )
-FLAGS = {
+COMMON_FLAGS = {
     "gateway": ("PASSPORT_NATIVE_GATEWAY_ENABLED", "PASSPORT_INTERNAL_SERVICE_AUTH_ENABLED"),
     "flow": ("PASSPORT_NATIVE_FLOW_ENABLED", "PASSPORT_INTERNAL_SERVICE_AUTH_ENABLED"),
     "issuance-native": (
@@ -42,11 +46,17 @@ FLAGS = {
         "PASSPORT_MANAGED_ISSUER_SIGNING_ENABLED", "PASSPORT_KMS_ARTIFACTS_ENABLED",
         "PASSPORT_KMS_CALLBACKS_ENABLED",
     ),
+}
+COMPOSE_FLAGS = COMMON_FLAGS | {
+    "passport-callback-signer": ("PASSPORT_CALLBACK_SIGNER_ENABLED",),
+    "passport-beta-bureau": ("PASSPORT_BETA_BUREAU_ENABLED",),
+}
+KUBERNETES_FLAGS = COMMON_FLAGS | {
     "passport-callback-signer-supported": ("PASSPORT_SUPPORTED_CALLBACK_SIGNER_ENABLED",),
     "passport-provider-ingress": ("PASSPORT_PROVIDER_INGRESS_ENABLED",),
 }
 PROBES = (
-    "nine_route_gateway_flow", "managed_signer", "physical_bureau_callback",
+    "nine_route_gateway_flow", "managed_signer", "signed_bureau_callback",
     "released_image", "rollback",
 )
 
@@ -99,10 +109,11 @@ def disposable_context(value: str) -> str:
     return value
 
 
-def environment_flags(values: object, service: str) -> dict[str, bool]:
+def environment_flags(values: object, service: str,
+                      flags: dict[str, tuple[str, ...]]) -> dict[str, bool]:
     require(isinstance(values, list), f"Missing {service} runtime environment")
     result: dict[str, bool] = {}
-    for name in FLAGS[service]:
+    for name in flags[service]:
         matches = [entry.partition("=")[2] for entry in values
                    if isinstance(entry, str) and entry.partition("=")[0] == name]
         require(len(matches) == 1 and matches[0] in ("true", "false"),
@@ -117,7 +128,7 @@ def observe_compose(
 ) -> dict[str, Any]:
     disposable_project(project, surface)
     observed: dict[str, Any] = {}
-    for service in SERVICES:
+    for service in COMPOSE_SERVICES:
         ids = runner(["docker", "ps", "-aq", "--filter",
                       f"label=com.docker.compose.project={project}", "--filter",
                       f"label=com.docker.compose.service={service}"]).split()
@@ -143,7 +154,7 @@ def observe_compose(
                 and isinstance(record.get("Image"), str)
                 and DIGEST.fullmatch(record["Image"]) is not None,
                 f"{surface} {service} is not running the released services image")
-        flags = environment_flags(config.get("Env"), service)
+        flags = environment_flags(config.get("Env"), service, COMPOSE_FLAGS)
         require(all(flags.values()), f"{surface} {service} did not select Rust passport")
         observed[service] = {"container_id": ids[0], "image_id": record["Image"],
                              "oci_reference": services_reference, "selectors": flags}
@@ -170,7 +181,7 @@ def observe_kubernetes(
     data = config.get("data")
     require(isinstance(data, dict), "Kubernetes passport ConfigMap is missing")
     observed: dict[str, Any] = {}
-    for service in SERVICES:
+    for service in KUBERNETES_SERVICES:
         deployment = json_command(["kubectl", "--context", context, "-n", namespace,
                                    "get", "deployment",
                                    service, "-o", "json"], runner)
@@ -189,7 +200,7 @@ def observe_kubernetes(
         require(isinstance(container_env, list),
                 f"Kubernetes {service} environment is invalid")
         selected = {}
-        for flag in FLAGS[service]:
+        for flag in KUBERNETES_FLAGS[service]:
             matching = [entry for entry in container_env
                         if isinstance(entry, dict) and entry.get("name") == flag]
             require(len(matching) == 1,
@@ -339,9 +350,10 @@ def collect(
             surfaces[name] = report_surface(None, "disposable runtime probe failed",
                                             source_commit)
         else:
-            observed = report_surface(runtime,
-                                      "nine-route/provider/rollback acceptance is pending",
-                                      source_commit)
+            pending = ("nine-route/Kubernetes provider/rollback acceptance is pending"
+                       if name == "kubernetes" else
+                       "nine-route/simulator/rollback acceptance is pending")
+            observed = report_surface(runtime, pending, source_commit)
             bound_port = runtime.get("gateway", {}).get("loopback_port")
             parsed_origin = urlsplit(origin) if origin is not None else None
             if (name != "kubernetes" and origin is not None and api_key is not None
@@ -369,6 +381,7 @@ def collect(
             surfaces[name] = observed
     return {"schema": "marty.passport-supported-consumer-acceptance/v1",
             "status": "blocked", "source_commit": source_commit,
+            "physical_claim": "not_claimed",
             "stack_manifest_sha256": digest_file(manifest_path).removeprefix("sha256:"),
             "oci_digests": images, "surfaces": surfaces}
 

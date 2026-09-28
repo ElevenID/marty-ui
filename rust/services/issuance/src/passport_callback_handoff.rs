@@ -3,10 +3,37 @@
 use base64::{engine::general_purpose::STANDARD, Engine as _};
 use reqwest::{Client, Url};
 use serde_json::{json, Value};
+use sha2::{Digest, Sha256};
 
 use crate::passport_bureau::valid_kms_callback_signature;
 
 const MAX_CALLBACK_BODY_BYTES: usize = 64 * 1024;
+const RECEIPT_DOMAIN: &[u8] = b"marty.passport-callback-receipt/v1\0";
+
+/// Digest of the exact callback body and KMS signature accepted by native issuance.
+/// The signature and body must not be stored in the beta simulator's job table.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct SignedCallbackReceipt {
+    pub sha256: [u8; 32],
+}
+
+fn receipt_digest(
+    body: &[u8],
+    signature: &str,
+) -> Result<SignedCallbackReceipt, CallbackHandoffError> {
+    let body_len = u32::try_from(body.len()).map_err(|_| CallbackHandoffError::InvalidBody)?;
+    let signature_len =
+        u32::try_from(signature.len()).map_err(|_| CallbackHandoffError::InvalidBody)?;
+    let mut hash = Sha256::new();
+    hash.update(RECEIPT_DOMAIN);
+    hash.update(body_len.to_be_bytes());
+    hash.update(body);
+    hash.update(signature_len.to_be_bytes());
+    hash.update(signature.as_bytes());
+    Ok(SignedCallbackReceipt {
+        sha256: hash.finalize().into(),
+    })
+}
 
 #[derive(Debug, thiserror::Error)]
 pub enum CallbackHandoffError {
@@ -29,7 +56,7 @@ pub async fn sign_and_deliver(
     native_callback_url: &Url,
     organization_id: &str,
     body: &[u8],
-) -> Result<(), CallbackHandoffError> {
+) -> Result<SignedCallbackReceipt, CallbackHandoffError> {
     if organization_id.trim().is_empty() || body.is_empty() || body.len() > MAX_CALLBACK_BODY_BYTES
     {
         return Err(CallbackHandoffError::InvalidBody);
@@ -60,6 +87,7 @@ pub async fn sign_and_deliver(
         .filter(|signature| valid_kms_callback_signature(signature))
         .ok_or(CallbackHandoffError::SigningUnavailable)?
         .to_owned();
+    let receipt = receipt_digest(body, &signature)?;
     let delivered = http
         .post(native_callback_url.clone())
         .header("x-personalization-signature", signature)
@@ -71,5 +99,41 @@ pub async fn sign_and_deliver(
     if !delivered.status().is_success() {
         return Err(CallbackHandoffError::NativeUnavailable);
     }
-    Ok(())
+    Ok(receipt)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn receipt_digest_binds_exact_body_and_signature_without_revealing_them() {
+        let signature = "vault:v1:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=";
+        assert!(valid_kms_callback_signature(signature));
+        let first = receipt_digest(br#"{"status":"SHIPPED"}"#, signature).unwrap();
+        // Independently calculated from the language-neutral u32-length preimage.
+        let expected = "c509d5f0acf805a581db9430b376d4ec99c3bc017853e3c7bc7ca37954b4d3cd";
+        assert_eq!(hex::encode(first.sha256), expected);
+        let contract: Value = serde_json::from_str(include_str!(
+            "../../../../contracts/passport-beta-bureau-behavior.json"
+        ))
+        .unwrap();
+        let vector = &contract["callback"]["signed_receipt_digest"]["test_vector"];
+        assert_eq!(vector["body_utf8"], r#"{"status":"SHIPPED"}"#);
+        assert_eq!(vector["signature_utf8"], signature);
+        assert_eq!(vector["digest_hex"], expected);
+        assert_ne!(
+            first,
+            receipt_digest(br#"{"status":"PRINTING"}"#, signature).unwrap()
+        );
+        assert_ne!(
+            first,
+            receipt_digest(
+                br#"{"status":"SHIPPED"}"#,
+                "vault:v1:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAE=",
+            )
+            .unwrap()
+        );
+        assert_eq!(first.sha256.len(), 32);
+    }
 }

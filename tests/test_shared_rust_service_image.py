@@ -33,6 +33,7 @@ RUST_SERVICES = {
 }
 UNROUTED_RUST_BINARIES = {
     "marty-verifier-positive-gate",
+    "marty-passport-acceptance-api-key",
 }
 ALL_RUST_BINARIES = set(RUST_SERVICES.values()) | UNROUTED_RUST_BINARIES
 

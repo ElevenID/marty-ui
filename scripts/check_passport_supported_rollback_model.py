@@ -25,11 +25,15 @@ else:
 
 PROJECT = re.compile(r"marty-passport-acceptance-(base|selfhost)-[a-z0-9]{6,32}\Z")
 SELECTED = frozenset({
-    "gateway", "flow", "issuance-native", "passport-callback-signer-supported",
-    "passport-provider-ingress",
+    "gateway", "flow", "issuance-native", "passport-callback-signer",
+    "passport-beta-bureau",
 })
 ISOLATED_DEPENDENCIES = frozenset({"postgres", "openbao", "redis"})
-DISPOSABLE_SERVICES = SELECTED | ISOLATED_DEPENDENCIES | frozenset({
+RUST_DEPENDENCIES = frozenset({
+    "organization", "event-stream", "revocation-profile", "revocation-profile-migrate",
+    "credential-template", "trust-profile", "presentation-policy", "deployment-profile",
+})
+DISPOSABLE_SERVICES = SELECTED | ISOLATED_DEPENDENCIES | RUST_DEPENDENCIES | frozenset({
     "db-migrate", "issuance", "signing-keys",
 })
 ALLOWED_SERVICES = frozenset({
@@ -38,8 +42,8 @@ ALLOWED_SERVICES = frozenset({
     "device-registration", "event-stream", "flow", "gateway", "issuance",
     "issuance-migrations", "issuance-native", "keycloak",
     "keycloak-configurator", "mailpit", "notification", "openbao",
-    "openbao-init", "organization", "passport-callback-signer-supported",
-    "passport-provider-ingress", "postgres", "presentation-policy", "redis",
+    "openbao-init", "organization", "passport-callback-signer",
+    "passport-beta-bureau", "postgres", "presentation-policy", "redis",
     "revocation-profile", "revocation-profile-migrate", "signing-keys",
     "trust-profile", "ui", "verification", "verification-migrations",
 })
@@ -65,6 +69,15 @@ def _within(path: str, root: Path) -> bool:
 
 def _endpoint_host(value: str) -> str | None:
     return urlsplit(value).hostname
+
+
+def _aware_datetime(value: object) -> bool:
+    if not isinstance(value, str):
+        return False
+    try:
+        return datetime.fromisoformat(value).tzinfo is not None
+    except ValueError:
+        return False
 
 
 def _run_config(args: list[str], environment: dict[str, str]) -> str:
@@ -99,6 +112,7 @@ def render_model(
     services_reference: str,
     runner: Callable[[list[str], dict[str, str]], str] = _run_config,
     *, phase: str = "rust", owner_labels: dict[str, str] | None = None,
+    plan_expires_at: str | None = None,
 ) -> dict:
     """Read Docker's resolved model using only fixed repo-owned Compose files."""
     match = PROJECT.fullmatch(project)
@@ -125,6 +139,9 @@ def render_model(
             "config", "--format", "json"]
     environment = os.environ.copy()
     environment["MARTY_SERVICES_IMAGE"] = services_reference
+    environment["PASSPORT_ACCEPTANCE_PROJECT"] = project
+    if plan_expires_at is not None:
+        environment["PASSPORT_ACCEPTANCE_EXPIRES_AT"] = plan_expires_at
     if owner_labels is not None:
         environment["PASSPORT_ACCEPTANCE_PLAN_RUN_ID"] = owner_labels[
             "com.marty.passport.acceptance.run-id"]
@@ -206,7 +223,8 @@ def preflight_attested_plan(
             "Protected plan owner labels are missing")
     model = render_model(surface, project, env_file, disposable_root,
                          services_reference, runner,
-                         owner_labels=plan["owner_labels"])
+                         owner_labels=plan["owner_labels"],
+                         plan_expires_at=plan["expires_at"])
     result = validate_planned_model(model, plan, disposable_root)
     return {"schema": "marty.passport-supported-rollback-preflight/v1",
             "status": "blocked", "model": result,
@@ -218,7 +236,9 @@ def validate_model(
     *, migrations_reference: str | None = None, legacy_reference: str | None = None,
 ) -> dict[str, object]:
     """Reject resolved configurations that can touch shared production resources."""
-    require(PROJECT.fullmatch(project) is not None, "Disposable project name is required")
+    project_match = PROJECT.fullmatch(project)
+    require(project_match is not None, "Disposable project name is required")
+    surface = project_match.group(1)
     require(disposable_root.is_absolute() and disposable_root.is_dir(),
             "Disposable resource root is missing")
     require(isinstance(model, dict) and model.get("name") == project,
@@ -251,61 +271,121 @@ def validate_model(
                 "Compose volume is external or shared")
     secrets = model.get("secrets", {})
     require(isinstance(secrets, dict), "Compose secrets are invalid")
-    for secret in secrets.values():
-        require(isinstance(secret, dict)
+    for name, secret in secrets.items():
+        expected_file = disposable_root / "secrets" / name
+        require(isinstance(name, str) and re.fullmatch(r"[a-z][a-z0-9_]*", name)
+                and isinstance(secret, dict)
                 and secret.get("external") not in (True, "true")
                 and isinstance(secret.get("file"), str)
+                and Path(secret["file"]) == expected_file
+                and Path(secret["file"]).resolve() == expected_file
                 and _within(secret["file"], disposable_root),
-                "Compose secret is outside the disposable root")
+                "Compose secret does not match its private project file")
     configs = model.get("configs", {})
-    require(isinstance(configs, dict), "Compose configs are invalid")
-    for config in configs.values():
-        require(isinstance(config, dict)
-                and config.get("external") not in (True, "true")
-                and isinstance(config.get("file"), str)
-                and _within(config["file"], disposable_root),
-                "Compose config is outside the disposable root")
+    require(isinstance(configs, dict)
+            and set(configs) == {"passport_supported_openbao_start"},
+            "Compose configs are invalid")
+    start_config = configs["passport_supported_openbao_start"]
+    require(isinstance(start_config, dict)
+            and start_config.get("external") not in (True, "true")
+            and isinstance(start_config.get("file"), str)
+            and Path(start_config["file"]).resolve()
+            == (ROOT / "scripts/passport_supported_openbao_start.sh").resolve()
+            and (ROOT / "scripts/passport_supported_openbao_start.sh").is_file(),
+            "Compose OpenBao start config differs from protected source")
+    gateway_candidate = services.get("gateway")
+    gateway_candidate_ports = (gateway_candidate.get("ports")
+                               if isinstance(gateway_candidate, dict) else None)
+    gateway_candidate_port = (gateway_candidate_ports[0].get("published")
+                              if isinstance(gateway_candidate_ports, list)
+                              and len(gateway_candidate_ports) == 1
+                              and isinstance(gateway_candidate_ports[0], dict) else None)
+    public_origin = (f"http://localhost:{gateway_candidate_port}"
+                     if isinstance(gateway_candidate_port, str)
+                     and gateway_candidate_port.isdigit() else None)
     for name, service in services.items():
         require(isinstance(service, dict), "Compose service is invalid")
         for forbidden in ("container_name", "network_mode", "pid", "ipc",
                           "privileged", "devices", "extra_hosts", "volumes_from",
-                          "build", "command", "entrypoint"):
+                          "build", "command"):
             require(not service.get(forbidden),
                     f"Compose {name} has a shared-host or fixed-name setting")
+        if name == "openbao":
+            require(service.get("entrypoint") == [
+                "/bin/sh", "/usr/local/bin/passport-supported-openbao-start"],
+                "Compose OpenBao start command differs from protected source")
+        else:
+            require(not service.get("entrypoint"),
+                    f"Compose {name} has an unexpected entrypoint")
         require(service.get("pull_policy") != "build"
                 and isinstance(service.get("image"), str)
                 and IMMUTABLE_IMAGE.fullmatch(service["image"]) is not None,
                 f"Compose {name} image is not immutable")
-        if name in SELECTED:
+        if name in SELECTED | RUST_DEPENDENCIES:
             require(service.get("image") == services_reference,
                     f"Compose {name} is not pinned to the signed services image")
         expected_image = (infra_images.get(name)
-                          or (services_reference if name == "signing-keys" else None)
+                          or (services_reference if name in RUST_DEPENDENCIES | {"signing-keys"}
+                              else None)
                           or (migrations_reference if name == "db-migrate" else None)
                           or (legacy_reference if name == "issuance" else None))
         if expected_image is not None:
             require(service.get("image") == expected_image,
                     f"Compose {name} differs from the protected image reference")
         mounts = service.get("volumes", [])
+        expected_mounts = {
+            "postgres": {("postgres_data", "/var/lib/postgresql/data")},
+            "redis": {("redis_data", "/data")},
+            "openbao": {
+                ("openbao_data", "/bao/data"),
+                ("openbao_file", "/openbao/file"),
+                ("openbao_logs", "/openbao/logs"),
+            },
+        }
         require(isinstance(mounts, list), f"Compose {name} mounts are invalid")
-        for mount in mounts:
-            require(isinstance(mount, dict), f"Compose {name} mount is invalid")
-            if mount.get("type") == "bind":
-                require(isinstance(mount.get("source"), str)
-                        and _within(mount["source"], disposable_root),
-                        f"Compose {name} bind mount escapes the disposable root")
-            else:
-                require(mount.get("type") == "volume"
-                        and mount.get("source") in volumes,
-                        f"Compose {name} uses an unknown mount")
+        if name in expected_mounts:
+            require(len(mounts) == len(expected_mounts[name])
+                    and all(isinstance(mount, dict)
+                            and mount.get("type") == "volume"
+                            and (mount.get("source"), mount.get("target"))
+                            in expected_mounts[name]
+                            and mount.get("source") in volumes
+                            for mount in mounts)
+                    and {(mount["source"], mount["target"]) for mount in mounts}
+                    == expected_mounts[name],
+                    f"Compose {name} has an unexpected bind mount or volume")
+        else:
+            require(not mounts, f"Compose {name} has an unexpected bind mount or volume")
         for kind, available in (("secrets", secrets), ("configs", configs)):
             references = service.get(kind, [])
             require(isinstance(references, list),
                     f"Compose {name} {kind} are invalid")
             for reference in references:
                 require(isinstance(reference, dict)
-                        and reference.get("source") in available,
+                        and reference.get("source") in available
+                        and (kind != "secrets" or (
+                            set(reference) <= {"source", "target"}
+                            and reference.get("target", f"/run/secrets/{reference['source']}")
+                            == f"/run/secrets/{reference['source']}")),
                         f"Compose {name} uses an unknown {kind} source")
+            require(len({reference["source"] for reference in references}) == len(references),
+                    f"Compose {name} has duplicate {kind} sources")
+        if name == "openbao":
+            require(service.get("configs") == [{
+                "source": "passport_supported_openbao_start",
+                "target": "/usr/local/bin/passport-supported-openbao-start",
+            }] and {secret.get("source") for secret in service.get("secrets", [])}
+            == {"bao_root_token"},
+            "Compose OpenBao start secrets or config differ from protected source")
+            require(not any(key in service.get("environment", {}) for key in (
+                "BAO_DEV_ROOT_TOKEN_ID", "BAO_TOKEN", "VAULT_TOKEN")),
+                "Compose OpenBao root token is exposed in the resolved environment")
+        else:
+            require(not service.get("configs"),
+                    f"Compose {name} has an unexpected config")
+            require(all(secret.get("source") != "bao_root_token"
+                        for secret in service.get("secrets", [])),
+                    f"Compose {name} mounts the OpenBao root token")
         ports = service.get("ports", [])
         require(isinstance(ports, list), f"Compose {name} ports are invalid")
         for port in ports:
@@ -324,6 +404,15 @@ def validate_model(
             require(isinstance(key, str), f"Compose {name} environment key is invalid")
             if not isinstance(value, str):
                 continue
+            if (name in {"revocation-profile", "revocation-profile-migrate"}
+                    and key == "STATUS_LIST_BASE_URL"):
+                continue
+            if (name in {"credential-template", "trust-profile",
+                         "presentation-policy", "flow"}
+                    and key in {"PUBLIC_API_URL", "MARTY_ISSUER_BASE_URL",
+                                "PUBLIC_BASE_URL", "ISSUER_BASE_URL"}
+                    and value == public_origin):
+                continue
             for url in URLS.findall(value):
                 require(_endpoint_host(url) in services,
                         f"Compose {name} endpoint leaves disposable services")
@@ -334,6 +423,410 @@ def validate_model(
                 require(value in {"localhost", "127.0.0.1"}
                         | set(services),
                         f"Compose {name} domain leaves disposable services")
+    callback_networks = {
+        "passport-callback-signer": {"callback_signing"},
+        "passport-beta-bureau": {"private", "callback_signing"},
+        "openbao": {"private", "callback_signing"},
+    }
+    for name in services:
+        expected = callback_networks.get(name, {"private"})
+        joined = services[name].get("networks")
+        require(isinstance(joined, (list, dict)) and set(joined) == expected,
+                f"Compose {name} leaves the dedicated callback signing boundary")
+    signer = services["passport-callback-signer"]["environment"]
+    bureau = services["passport-beta-bureau"]["environment"]
+    native = services["issuance-native"]["environment"]
+    gateway = services["gateway"]["environment"]
+    flow = services["flow"]["environment"]
+    organization = services["organization"]
+    organization_env = organization["environment"]
+    event_stream_env = services["event-stream"]["environment"]
+    require(
+        event_stream_env.get("SERVICE_NAME") == "event_stream"
+        and event_stream_env.get("EVENT_STREAM_SERVICE_PORT") == "8015"
+        and event_stream_env.get("EVENT_STREAM_GRPC_ENABLED") == "true"
+        and event_stream_env.get("EVENT_STREAM_GRPC_PORT") == "9015"
+        and organization_env.get("SERVICE_NAME") == "organization"
+        and organization_env.get("ORGANIZATION_SERVICE_PORT") == "8002"
+        and organization_env.get("ORG_GRPC_PORT") == "9002"
+        and organization_env.get("DATABASE_URL_TEMPLATE")
+        == flow.get("DATABASE_URL_TEMPLATE")
+        == native.get("DATABASE_URL_TEMPLATE")
+        and organization_env.get("DATABASE_URL_TEMPLATE", "").startswith(
+            "postgresql+asyncpg://marty:")
+        and organization_env.get("DATABASE_URL_TEMPLATE", "").endswith(
+            "@postgres:5432/marty")
+        and organization_env.get("MARTY_DB_PASSWORD_FILE")
+        == "/run/secrets/marty_db_password"
+        and organization_env.get("GRPC_SERVICE_TOKEN_FILE")
+        == "/run/secrets/grpc_service_token"
+        and organization_env.get("REDIS_URL") == "redis://redis:6379"
+        and organization_env.get("ES_GRPC_TARGET") == "event-stream:9015"
+        and isinstance(organization_env.get("MARTY_ORG_ADMIN_EMAIL"), str)
+        and "@" in organization_env["MARTY_ORG_ADMIN_EMAIL"]
+        and organization_env["MARTY_ORG_ADMIN_EMAIL"]
+        == services["db-migrate"]["environment"].get("MARTY_ORG_ADMIN_EMAIL")
+        and isinstance(organization.get("labels"), dict)
+        and organization_env.get("PASSPORT_ACCEPTANCE_PROJECT") == project
+        and organization_env.get("PASSPORT_ACCEPTANCE_RUN_ID")
+        == organization["labels"].get("com.marty.passport.acceptance.run-id")
+        and organization_env.get("PASSPORT_ACCEPTANCE_SOURCE_COMMIT")
+        == organization["labels"].get("com.marty.passport.acceptance.source-commit")
+        and _aware_datetime(organization_env.get("PASSPORT_ACCEPTANCE_EXPIRES_AT"))
+        and all(key not in organization_env for key in (
+            "MARTY_DB_PASSWORD", "GRPC_SERVICE_TOKEN"))
+        and {secret.get("source") for secret in organization.get("secrets", [])}
+        == {"marty_db_password", "grpc_service_token"}
+        and isinstance(organization.get("depends_on"), dict)
+        and all(isinstance(organization["depends_on"].get(name), dict)
+                and organization["depends_on"][name].get("condition") == condition
+                for name, condition in (
+                    ("db-migrate", "service_completed_successfully"),
+                    ("redis", "service_healthy"),
+                    ("event-stream", "service_healthy")))
+        and gateway.get("ORGANIZATION_SERVICE_URL") == "http://organization:8002"
+        and gateway.get("ORG_GRPC_TARGET") == "organization:9002"
+        and gateway.get("ES_GRPC_TARGET") == "event-stream:9015"
+        and gateway.get("GRPC_SERVICE_TOKEN_FILE") == "/run/secrets/grpc_service_token",
+        "Disposable Organization API-key authority is not isolated and ready",
+    )
+    require(
+        isinstance(services["gateway"].get("depends_on"), dict)
+        and isinstance(services["gateway"]["depends_on"].get("organization"), dict)
+        and services["gateway"]["depends_on"]["organization"].get("condition")
+        == "service_healthy"
+        and flow.get("ORG_GRPC_TARGET") == "organization:9002",
+        "Disposable passport services do not use the Organization authority",
+    )
+    gateway_ports = services["gateway"].get("ports")
+    require(isinstance(gateway_ports, list) and len(gateway_ports) == 1
+            and isinstance(gateway_ports[0], dict)
+            and gateway_ports[0].get("host_ip") == "127.0.0.1"
+            and gateway_ports[0].get("target") == 8000
+            and isinstance(gateway_ports[0].get("published"), str)
+            and gateway_ports[0]["published"].isdigit()
+            and 1024 <= int(gateway_ports[0]["published"]) <= 65535,
+            "Disposable status list origin lacks a reserved loopback Gateway port")
+    status_origin = f"http://127.0.0.1:{gateway_ports[0]['published']}"
+    public_origin = f"http://localhost:{gateway_ports[0]['published']}"
+    shared_rust = {
+        "ENVIRONMENT": "development",
+        "DATABASE_URL_TEMPLATE": organization_env["DATABASE_URL_TEMPLATE"],
+        "MARTY_DB_PASSWORD_FILE": "/run/secrets/marty_db_password",
+        "GRPC_SERVICE_TOKEN_FILE": "/run/secrets/grpc_service_token",
+        "ORG_GRPC_TARGET": "organization:9002",
+    }
+    rust_requirements = {
+        "trust-profile": ({
+            **shared_rust, "SERVICE_NAME": "trust_profile",
+            "TRUST_PROFILE_SERVICE_PORT": "8004",
+            "SIGNING_KEYS_INTERNAL_API_KEY_FILE":
+                "/run/secrets/signing_keys_internal_api_key",
+            "MARTY_ORG_ID": organization_env["MARTY_ORG_ID"],
+            "MARTY_ORG_SLUG": "marty", "MARTY_ISSUER_DID": "did:web:localhost:orgs:marty",
+            "MARTY_ISSUER_BASE_URL": public_origin, "PUBLIC_DOMAIN": "localhost",
+            "DID_RESOLUTION_BASE_URL": "http://gateway:8000",
+        }, {"marty_db_password", "grpc_service_token", "signing_keys_internal_api_key"},
+         {"db-migrate": "service_completed_successfully", "organization": "service_healthy"},
+         8004),
+        "credential-template": ({
+            **shared_rust, "SERVICE_NAME": "credential_template",
+            "CREDENTIAL_TEMPLATE_SERVICE_PORT": "8003", "CT_GRPC_PORT": "9003",
+            "RP_GRPC_TARGET": "revocation-profile:9013",
+            "SIGNING_KEYS_INTERNAL_URL": "http://signing-keys:8017/internal",
+            "SIGNING_KEYS_INTERNAL_API_KEY_FILE":
+                "/run/secrets/signing_keys_internal_api_key",
+            "TRUST_PROFILE_SERVICE_URL": "http://trust-profile:8004",
+            "PUBLIC_API_URL": public_origin,
+            "MARTY_ORG_ID": organization_env["MARTY_ORG_ID"],
+            "MARTY_MIGRATION_PROFILE": "dev",
+        }, {"marty_db_password", "grpc_service_token", "signing_keys_internal_api_key"},
+         {"db-migrate": "service_completed_successfully", "organization": "service_healthy",
+          "revocation-profile": "service_healthy", "trust-profile": "service_healthy",
+          "signing-keys": "service_healthy"}, 8003),
+        "presentation-policy": ({
+            **shared_rust, "SERVICE_NAME": "presentation_policy",
+            "PRESENTATION_POLICY_SERVICE_PORT": "8009", "PP_GRPC_PORT": "9009",
+            "ISSUANCE_API_KEY_FILE": "/run/secrets/issuance_api_key",
+            "DID_RESOLUTION_BASE_URL": "http://gateway:8000",
+            "TRUST_PROFILE_SERVICE_URL": "http://trust-profile:8004",
+            "ISSUANCE_NATIVE_SERVICE_URL": "http://issuance-native:8005",
+            "PUBLIC_DOMAIN": "localhost", "PUBLIC_BASE_URL": public_origin,
+            "ISSUER_BASE_URL": public_origin, "MARTY_ORG_SLUG": "marty",
+        }, {"marty_db_password", "grpc_service_token", "issuance_api_key"},
+         {"db-migrate": "service_completed_successfully", "organization": "service_healthy",
+          "trust-profile": "service_healthy", "issuance-native": "service_healthy"}, 8009),
+        "deployment-profile": ({
+            **shared_rust, "SERVICE_NAME": "deployment_profile",
+            "DEPLOYMENT_PROFILE_SERVICE_PORT": "8010",
+        }, {"marty_db_password", "grpc_service_token"},
+         {"db-migrate": "service_completed_successfully", "organization": "service_healthy"},
+         8010),
+    }
+    for name, (expected_env, expected_secrets, expected_dependencies, port) in rust_requirements.items():
+        service = services[name]
+        environment = service.get("environment")
+        references = service.get("secrets")
+        depends_on = service.get("depends_on")
+        require(isinstance(environment, dict)
+                and all(environment.get(key) == value for key, value in expected_env.items())
+                and all(key not in environment for key in (
+                    "MARTY_DB_PASSWORD", "GRPC_SERVICE_TOKEN", "ISSUANCE_API_KEY",
+                    "SIGNING_KEYS_INTERNAL_API_KEY"))
+                and isinstance(references, list)
+                and {secret.get("source") for secret in references} == expected_secrets
+                and isinstance(depends_on, dict)
+                and set(depends_on) == set(expected_dependencies)
+                and all(isinstance(depends_on[dependency], dict)
+                        and depends_on[dependency].get("condition") == condition
+                        for dependency, condition in expected_dependencies.items())
+                and service.get("healthcheck", {}).get("test")
+                == ["CMD", "curl", "--fail", f"http://localhost:{port}/health"],
+                f"Disposable {name} runtime is not isolated and ready")
+    require(all(flow.get(key) == value for key, value in {
+        "PUBLIC_BASE_URL": public_origin,
+        "CT_GRPC_TARGET": "credential-template:9003",
+        "PP_GRPC_TARGET": "presentation-policy:9009",
+        "ISSUANCE_GRPC_TARGET": "issuance-native:9005",
+        "CREDENTIAL_TEMPLATE_SERVICE_URL": "http://credential-template:8003",
+        "TRUST_PROFILE_SERVICE_URL": "http://trust-profile:8004",
+        "DEPLOYMENT_PROFILE_SERVICE_URL": "http://deployment-profile:8010",
+    }.items())
+            and isinstance(services["flow"].get("depends_on"), dict)
+            and all(services["flow"]["depends_on"].get(name, {}).get("condition")
+                    == "service_healthy" for name in (
+                        "credential-template", "trust-profile", "presentation-policy",
+                        "deployment-profile", "issuance-native", "signing-keys"))
+            and all(services[name].get("healthcheck", {}).get("test")
+                    == ["CMD", "curl", "--fail", f"http://localhost:{port}/health"]
+                    for name, port in (("issuance-native", 8005), ("signing-keys", 8017))),
+            "Disposable Flow startup dependencies are incomplete")
+    require(native.get("ISSUANCE_GRPC_ENABLED") == "true"
+            and native.get("ISSUANCE_GRPC_PORT") == "9005"
+            and native.get("CT_GRPC_TARGET") == "credential-template:9003"
+            and native.get("CREDENTIAL_TEMPLATE_SERVICE_URL")
+            == "http://credential-template:8003"
+            and services["issuance-native"].get("depends_on", {}).get(
+                "credential-template", {}).get("condition") == "service_healthy"
+            and all(gateway.get(key) == f"http://{name}:{port}"
+                    and services["gateway"].get("depends_on", {}).get(
+                        name, {}).get("condition") == "service_healthy"
+                    for key, name, port in (
+                        ("CREDENTIAL_TEMPLATE_SERVICE_URL", "credential-template", 8003),
+                        ("TRUST_PROFILE_SERVICE_URL", "trust-profile", 8004),
+                        ("PRESENTATION_POLICY_SERVICE_URL", "presentation-policy", 8009),
+                        ("DEPLOYMENT_PROFILE_SERVICE_URL", "deployment-profile", 8010))),
+            "Disposable passport routing lacks the Rust support services")
+    migration = services["db-migrate"]
+    migration_env = migration.get("environment")
+    dependencies = migration.get("depends_on")
+    migration_secrets = migration.get("secrets")
+    revocation_migration = services["revocation-profile-migrate"]
+    revocation_env = revocation_migration.get("environment")
+    revocation_dependencies = revocation_migration.get("depends_on")
+    require(
+        isinstance(revocation_env, dict)
+        and revocation_env.get("SERVICE_NAME") == "revocation_profile"
+        and revocation_env.get("RP_MIGRATE_ONLY") == "true"
+        and revocation_env.get("ENVIRONMENT") == "development"
+        and revocation_env.get("DATABASE_URL_TEMPLATE")
+        in {
+            "postgresql://marty:${MARTY_DB_PASSWORD}@postgres:5432/marty",
+            "postgresql://marty:$${MARTY_DB_PASSWORD}@postgres:5432/marty",
+        }
+        and revocation_env.get("MARTY_DB_PASSWORD_FILE")
+        == "/run/secrets/marty_db_password"
+        and revocation_env.get("PUBLIC_API_URL") == "http://gateway:8000"
+        and revocation_env.get("STATUS_LIST_BASE_URL") == status_origin
+        and revocation_env.get("MARTY_ORG_ID")
+        == "00000000-0000-0000-0000-000000000001"
+        and {secret.get("source") for secret in revocation_migration.get("secrets", [])}
+        == {"marty_db_password"}
+        and isinstance(revocation_dependencies, dict)
+        and isinstance(revocation_dependencies.get("postgres"), dict)
+        and revocation_dependencies["postgres"].get("condition") == "service_healthy"
+        and revocation_migration.get("healthcheck") == {"disable": True}
+        and revocation_migration.get("restart") == "no"
+        and isinstance(dependencies, dict)
+        and isinstance(dependencies.get("revocation-profile-migrate"), dict)
+        and dependencies["revocation-profile-migrate"].get("condition")
+        == "service_completed_successfully",
+        "Disposable revocation schema migration is not ordered before shared migrations",
+    )
+    revocation = services["revocation-profile"]
+    revocation_runtime = revocation.get("environment")
+    require(
+        isinstance(revocation_runtime, dict)
+        and revocation_runtime.get("SERVICE_NAME") == "revocation_profile"
+        and "RP_MIGRATE_ONLY" not in revocation_runtime
+        and revocation_runtime.get("ENVIRONMENT") == "development"
+        and revocation_runtime.get("REVOCATION_PROFILE_SERVICE_PORT") == "8013"
+        and revocation_runtime.get("RP_GRPC_ENABLED") == "true"
+        and revocation_runtime.get("RP_GRPC_PORT") == "9013"
+        and revocation_runtime.get("DATABASE_URL_TEMPLATE")
+        == revocation_env.get("DATABASE_URL_TEMPLATE")
+        and revocation_runtime.get("MARTY_DB_PASSWORD_FILE")
+        == "/run/secrets/marty_db_password"
+        and revocation_runtime.get("GRPC_SERVICE_TOKEN_FILE")
+        == "/run/secrets/grpc_service_token"
+        and revocation_runtime.get("REDIS_URL") == "redis://redis:6379/4"
+        and revocation_runtime.get("ORG_GRPC_TARGET") == "organization:9002"
+        and revocation_runtime.get("PUBLIC_API_URL") == "http://gateway:8000"
+        and revocation_runtime.get("STATUS_LIST_BASE_URL") == status_origin
+        and revocation_runtime.get("MARTY_ORG_ID") == revocation_env.get("MARTY_ORG_ID")
+        and {secret.get("source") for secret in revocation.get("secrets", [])}
+        == {"marty_db_password", "grpc_service_token"}
+        and isinstance(revocation.get("depends_on"), dict)
+        and all(isinstance(revocation["depends_on"].get(name), dict)
+                and revocation["depends_on"][name].get("condition") == condition
+                for name, condition in (
+                    ("db-migrate", "service_completed_successfully"),
+                    ("organization", "service_healthy"),
+                    ("redis", "service_healthy")))
+        and isinstance(revocation.get("healthcheck"), dict)
+        and revocation["healthcheck"].get("test")
+        == ["CMD", "curl", "--fail", "http://localhost:8013/health"],
+        "Disposable revocation runtime is not isolated and ready",
+    )
+    require(
+        native.get("REVOCATION_PROFILE_SERVICE_URL")
+        == gateway.get("REVOCATION_PROFILE_SERVICE_URL")
+        == "http://revocation-profile:8013"
+        and native.get("RP_GRPC_TARGET") == "revocation-profile:9013"
+        and all(isinstance(services[name].get("depends_on"), dict)
+                and isinstance(services[name]["depends_on"].get("revocation-profile"), dict)
+                and services[name]["depends_on"]["revocation-profile"].get("condition")
+                == "service_healthy" for name in ("issuance-native", "gateway")),
+        "Disposable passport services do not use the revocation runtime",
+    )
+    require(
+        isinstance(migration_env, dict)
+        and migration_env.get("REDIS_URL") == services["signing-keys"]["environment"].get(
+            "SIGNING_KEYS_REDIS_URL") == "redis://redis:6379/2"
+        and migration_env.get("BAO_ADDR") == "http://openbao:8200"
+        and migration_env.get("BAO_TOKEN_FILE") == "/run/secrets/bao_token"
+        and migration_env.get("MARTY_KMS_BOOTSTRAP_ENABLED") == "true"
+        and migration_env.get("PUBLIC_DOMAIN") == "localhost"
+        and migration_env.get("MARTY_ORG_ID") == revocation_env.get("MARTY_ORG_ID")
+        == organization_env.get("MARTY_ORG_ID")
+        and migration_env.get("MARTY_ISSUER_BASE_URL") == "http://gateway:8000"
+        and isinstance(dependencies, dict)
+        and all(isinstance(dependencies.get(role), dict)
+                and dependencies[role].get("condition") == "service_healthy"
+                for role in ("postgres", "redis", "openbao"))
+        and isinstance(migration_secrets, list)
+        and any(isinstance(secret, dict) and secret.get("source") == "bao_token"
+                for secret in migration_secrets),
+        "Disposable migrations could skip managed issuer profile bootstrap",
+    )
+    issuer_did = "did:web:localhost:orgs:marty"
+    require(
+        migration_env.get("MARTY_ISSUER_DID") == issuer_did
+        and migration_env.get("PUBLIC_DOMAIN") == gateway.get("PUBLIC_DOMAIN")
+        == services["signing-keys"]["environment"].get("PUBLIC_DOMAIN")
+        == "localhost"
+        and migration_env.get("MARTY_ISSUER_BASE_URL")
+        == gateway.get("ISSUER_BASE_URL") == "http://gateway:8000"
+        and flow.get("MARTY_ISSUER_DID") == issuer_did,
+        "Disposable managed issuer DID differs across profile and runtime services",
+    )
+    require(
+        all(settings.get("PASSPORT_INTERNAL_SERVICE_AUTH_ENABLED") == "true"
+            and "PASSPORT_TENANT_API_KEYS" not in settings
+            and "PASSPORT_TENANT_API_KEYS_FILE" not in settings
+            for settings in (gateway, flow, native))
+        and "passport_tenant_api_keys" not in secrets,
+        "Disposable internal passport authentication conflicts with tenant keyring",
+    )
+    require(
+        all(settings.get("ISSUANCE_API_KEY_FILE") == "/run/secrets/issuance_api_key"
+            and settings.get("SIGNING_KEYS_INTERNAL_API_KEY_FILE")
+            == "/run/secrets/signing_keys_internal_api_key"
+            for settings in (gateway, flow, native))
+        and services["signing-keys"]["environment"].get(
+            "SIGNING_KEYS_INTERNAL_API_KEY_FILE")
+        == "/run/secrets/signing_keys_internal_api_key"
+        and all({"issuance_api_key", "signing_keys_internal_api_key"}
+                <= {secret.get("source") for secret in services[name].get("secrets", [])
+                    if isinstance(secret, dict)}
+                for name in ("gateway", "flow", "issuance-native"))
+        and any(secret.get("source") == "signing_keys_internal_api_key"
+                for secret in services["signing-keys"].get("secrets", [])
+                if isinstance(secret, dict)),
+        "Disposable Gateway and signing services do not share project credentials",
+    )
+    require(
+        native.get("TOKEN_HMAC_KEY_FILE") == "/run/secrets/token_hmac_key"
+        and native.get("INTEGRATION_SECRET_MASTER_KEY_FILE")
+        == "/run/secrets/integration_secret_master_key"
+        and "TOKEN_HMAC_KEY" not in native
+        and "INTEGRATION_SECRET_MASTER_KEY" not in native
+        and {"token_hmac_key", "integration_secret_master_key"}
+        <= {secret.get("source") for secret in services["issuance-native"].get("secrets", [])
+            if isinstance(secret, dict)},
+        "Disposable native issuance startup secrets are missing",
+    )
+    require(native.get("ENVIRONMENT") == ("beta" if surface == "selfhost" else "development")
+            and gateway.get("ENVIRONMENT") == ("production" if surface == "selfhost" else "beta")
+            and flow.get("ENVIRONMENT") == ("production" if surface == "selfhost" else "development"),
+            "Disposable surface environment selectors are incompatible with the beta simulator")
+    ceremony_secrets = {
+        "SIGNING_KEYS_DSC_ISSUE_GATEWAY_KEY": "dsc_issue_gateway_key",
+        "SIGNING_KEYS_CSCA_ISSUE_GATEWAY_KEY": "csca_issue_gateway_key",
+    }
+    signing = services["signing-keys"]
+    signing_env = signing.get("environment")
+    require(isinstance(signing_env, dict)
+            and all(key not in service.get("environment", {})
+                    for service in services.values()
+                    for key in ceremony_secrets),
+            "Disposable certificate operator key is exposed in Compose environment")
+    for key, secret in ceremony_secrets.items():
+        file_key = key + "_FILE"
+        holders = {name for name, service in services.items()
+                   if file_key in service.get("environment", {})}
+        mounts = {name for name, service in services.items()
+                  if secret in {item.get("source") for item in service.get("secrets", [])}}
+        expected = {"gateway", "signing-keys"} if surface == "base" else set()
+        require(holders == mounts == expected
+                and all(services[name]["environment"].get(file_key)
+                        == f"/run/secrets/{secret}" for name in holders),
+                "Disposable certificate operator key holders are invalid")
+    require((surface == "base"
+             and signing_env.get("ENVIRONMENT") == "beta"
+             and signing_env.get("SIGNING_KEYS_BETA_CSCA_ISSUANCE_ENABLED") == "true"
+             and gateway.get("GRPC_INSECURE_ALLOWED") == "true")
+            or (surface == "selfhost"
+                and "SIGNING_KEYS_BETA_CSCA_ISSUANCE_ENABLED" not in signing_env
+                and "GRPC_INSECURE_ALLOWED" not in gateway),
+            "Disposable certificate ceremony mode differs from surface")
+    require(signer.get("ENVIRONMENT") == "beta"
+            and signer.get("PASSPORT_CALLBACK_SIGNER_ENABLED") == "true"
+            and signer.get("SIGNING_KEYS_INTERNAL_API_KEY_FILE") == "/run/secrets/callback_signer_api_key"
+            and signer.get("BAO_TOKEN_FILE") == "/run/secrets/callback_signer_bao_token"
+            and "SIGNING_KEYS_INTERNAL_API_KEY" not in signer
+            and "BAO_TOKEN" not in signer,
+            "Disposable callback signer is not isolated beta KMS mode")
+    require(bureau.get("ENVIRONMENT") == "beta"
+            and bureau.get("PASSPORT_BETA_BUREAU_ENABLED") == "true"
+            and bureau.get("DATABASE_URL_FILE") == "/run/secrets/bureau_database_url"
+            and bureau.get("GRPC_SERVICE_TOKEN_FILE") == "/run/secrets/grpc_service_token"
+            and bureau.get("SIGNING_KEYS_INTERNAL_API_KEY_FILE") == "/run/secrets/callback_signer_api_key"
+            and bureau.get("SIGNING_KEYS_INTERNAL_URL")
+            == "http://passport-callback-signer:8018/internal/documents"
+            and bureau.get("PASSPORT_BUREAU_CALLBACK_URL")
+            == "http://issuance-native:8005/v1/passport/webhooks/personalization"
+            and all(key not in bureau for key in (
+                "DATABASE_URL", "GRPC_SERVICE_TOKEN", "SIGNING_KEYS_INTERNAL_API_KEY")),
+            "Disposable bureau is not the private Marty simulator")
+    require(native.get("PERSONALIZATION_BUREAU_URL") == "http://passport-beta-bureau:8020"
+            and native.get("PERSONALIZATION_BUREAU_API_KEY_FILE") == "/run/secrets/grpc_service_token"
+            and native.get("PERSONALIZATION_BUREAU_PROVIDER_PROFILE_ID") == "passport-beta-bureau"
+            and gateway.get("PASSPORT_PROVIDER_INGRESS_GATEWAY_ENABLED") == "false"
+            and "PASSPORT_PROVIDER_INGRESS_SERVICE_URL" not in gateway,
+            "Disposable passport owner selects an external provider")
+    require("provider_webhook_secret" not in secrets,
+            "Disposable simulator model includes a physical provider secret")
     return {"project": project, "services": sorted(SELECTED),
             "model_safe": True, "rollback_accepted": False}
 
@@ -368,6 +861,13 @@ def validate_planned_model(model: dict, plan: dict, disposable_root: Path) -> di
                         for item in model[section].values())
                 for section in ("services", "networks", "volumes")),
             "Resolved Compose resource labels differ from protected plan")
+    organization = model["services"].get("organization")
+    require(_aware_datetime(plan.get("expires_at"))
+            and isinstance(organization, dict)
+            and isinstance(organization.get("environment"), dict)
+            and organization["environment"].get(
+                "PASSPORT_ACCEPTANCE_EXPIRES_AT") == plan["expires_at"],
+            "Disposable API key lease differs from protected plan")
     return validate_model(model, plan["project"], plan["services_reference"],
                           disposable_root,
                           migrations_reference=plan["migrations_reference"],

@@ -192,7 +192,7 @@ function InstanceDetail({ instance, loading, error, reload }) {
               <RelatedRecord icon={AccountTreeIcon} label="Flow definition" value={instance.flowName} path={instance.flowId ? `/console/org/flows/definitions/${instance.flowId}` : null} />
               <RelatedRecord icon={AssignmentIcon} label="Application" value={instance.applicationId} path={instance.applicationId ? `/console/org/operate/applications/${instance.applicationId}` : null} />
               <RelatedRecord icon={BadgeIcon} label="Issued credential" value={instance.credentialId} path={instance.credentialId ? `/console/org/operate/issuance/${instance.credentialId}` : null} />
-              <RelatedRecord icon={LocalShippingIcon} label="Physical production job" value={jobId ? `${jobId}${jobStatus ? ` (${jobStatus})` : ''}` : null} />
+              <RelatedRecord icon={LocalShippingIcon} label="Passport job" value={jobId ? `${jobId}${jobStatus ? ` (${jobStatus})` : ''}` : null} />
             </Box>
           </Paper>
 

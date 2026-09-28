@@ -19,11 +19,12 @@ VALIDATOR = runpy.run_path(
 PROFILE = "docker-compose.profile.passport-native-beta.yml"
 IMAGE = "ghcr.io/elevenid/marty-ui-oss/services@sha256:" + "a" * 64
 TOKEN = "synthetic-internal-passport-token-00000001"
+RECONCILIATION_TOKEN = "synthetic-beta-reconciliation-operator-token-00000001"
 DSC_GATEWAY_KEY = "synthetic-dsc-gateway-only-credential-000001"
 CSCA_GATEWAY_KEY = "synthetic-csca-gateway-only-credential-00001"
 
 
-def model(enabled=True):
+def model(tmp_path, enabled=True):
     services = {
         name: {"environment": {}, "secrets": []}
         for name in ("gateway", "flow", "issuance-native")
@@ -51,6 +52,9 @@ def model(enabled=True):
     )
     services["issuance-native"]["environment"].update(
         {
+            "ENVIRONMENT": "beta",
+            "PASSPORT_BETA_RECONCILIATION_ENABLED": "true",
+            "PASSPORT_BETA_RECONCILIATION_OPERATOR_TOKEN": RECONCILIATION_TOKEN,
             "PASSPORT_MANAGED_ISSUER_SIGNING_ENABLED": "true",
             "PASSPORT_KMS_ARTIFACTS_ENABLED": "true",
             "PASSPORT_KMS_CALLBACKS_ENABLED": "true",
@@ -65,18 +69,10 @@ def model(enabled=True):
     services["gateway"]["environment"]["SIGNING_KEYS_INTERNAL_API_KEY"] = (
         "synthetic-signing-credential"
     )
-    services["gateway"]["environment"]["SIGNING_KEYS_DSC_ISSUE_GATEWAY_KEY"] = (
-        DSC_GATEWAY_KEY
-    )
-    services["gateway"]["environment"]["SIGNING_KEYS_CSCA_ISSUE_GATEWAY_KEY"] = (
-        CSCA_GATEWAY_KEY
-    )
     services["signing-keys"] = {
         "environment": {
             "ENVIRONMENT": "beta",
             "SIGNING_KEYS_INTERNAL_API_KEY": "synthetic-signing-credential",
-            "SIGNING_KEYS_DSC_ISSUE_GATEWAY_KEY": DSC_GATEWAY_KEY,
-            "SIGNING_KEYS_CSCA_ISSUE_GATEWAY_KEY": CSCA_GATEWAY_KEY,
             "SIGNING_KEYS_BETA_CSCA_ISSUANCE_ENABLED": "true",
             "BAO_TOKEN": "synthetic-existing-openbao-token",
         }
@@ -113,6 +109,20 @@ def model(enabled=True):
         "networks": {"marty-network": None, "passport-callback-signing": None},
     }
     result["networks"] = {"passport-callback-signing": {"internal": True}}
+    root = tmp_path / "elevenid-beta-passport-ceremony"
+    root.mkdir(exist_ok=True)
+    for purpose, value in (("dsc", DSC_GATEWAY_KEY),
+                           ("csca", CSCA_GATEWAY_KEY)):
+        name = f"{purpose}_issue_gateway_key"
+        source = root / name
+        source.write_text(value, encoding="ascii")
+        result["secrets"][name] = {"file": str(source)}
+        key = f"SIGNING_KEYS_{purpose.upper()}_ISSUE_GATEWAY_KEY"
+        for holder in ("gateway", "signing-keys"):
+            service = result["services"][holder]
+            service["environment"][f"{key}_FILE"] = f"/run/secrets/{name}"
+            service.setdefault("secrets", []).append(
+                {"source": name, "target": name})
     return result
 
 
@@ -124,14 +134,83 @@ def validate(candidate, enabled=True):
     )
 
 
-def test_opt_in_kms_only_and_bureau_is_absent_when_disabled():
-    validate(model())
-    validate(model(False), False)
+@pytest.mark.parametrize("mutation", [
+    "wrong_target", "other_holder", "inline_key", "same_key", "missing_file",
+    "other_setting", "line_ending", "wrong_root", "wrong_source",
+    "wrong_mount_target", "inline_only", "secret_alias",
+])
+def test_file_operator_credentials_are_holder_scoped(tmp_path, mutation):
+    candidate = model(tmp_path)
+    validate(candidate)
+    services = candidate["services"]
+    secrets = candidate["secrets"]
+    csca = secrets["csca_issue_gateway_key"]["file"]
+    if mutation == "wrong_target":
+        services["gateway"]["environment"][
+            "SIGNING_KEYS_CSCA_ISSUE_GATEWAY_KEY_FILE"] = "/run/secrets/other"
+    elif mutation == "other_holder":
+        services["flow"]["secrets"].append({"source": "csca_issue_gateway_key"})
+    elif mutation == "inline_key":
+        services["gateway"]["environment"][
+            "SIGNING_KEYS_CSCA_ISSUE_GATEWAY_KEY"] = CSCA_GATEWAY_KEY
+    elif mutation == "same_key":
+        Path(csca).write_text(DSC_GATEWAY_KEY, encoding="ascii")
+    elif mutation == "missing_file":
+        Path(csca).unlink()
+    elif mutation == "other_setting":
+        services["flow"]["environment"]["OTHER_SECRET"] = CSCA_GATEWAY_KEY
+    elif mutation == "line_ending":
+        Path(csca).write_text(CSCA_GATEWAY_KEY + "\n", encoding="ascii")
+    elif mutation == "wrong_root":
+        source = tmp_path / "csca_issue_gateway_key"
+        source.write_text(CSCA_GATEWAY_KEY, encoding="ascii")
+        secrets["csca_issue_gateway_key"]["file"] = str(source)
+    elif mutation == "wrong_source":
+        secrets["csca_issue_gateway_key"]["file"] = secrets[
+            "dsc_issue_gateway_key"]["file"]
+    elif mutation == "wrong_mount_target":
+        services["gateway"]["secrets"][1]["target"] = "other"
+    elif mutation == "inline_only":
+        for holder in ("gateway", "signing-keys"):
+            env = services[holder]["environment"]
+            env.pop("SIGNING_KEYS_DSC_ISSUE_GATEWAY_KEY_FILE")
+            env.pop("SIGNING_KEYS_CSCA_ISSUE_GATEWAY_KEY_FILE")
+            env["SIGNING_KEYS_DSC_ISSUE_GATEWAY_KEY"] = DSC_GATEWAY_KEY
+            env["SIGNING_KEYS_CSCA_ISSUE_GATEWAY_KEY"] = CSCA_GATEWAY_KEY
+    elif mutation == "secret_alias":
+        secrets["csca_alias"] = {"file": csca}
+        services["flow"]["secrets"].append({"source": "csca_alias"})
     with pytest.raises(VALIDATOR["PassportConfigurationError"]):
-        VALIDATOR["validate_model"](model(), passport_enabled=False, files=[PROFILE])
+        validate(candidate)
 
 
-def test_beta_csca_credential_contract_and_default_off():
+def test_opt_in_kms_only_and_bureau_is_absent_when_disabled(tmp_path):
+    validate(model(tmp_path))
+    validate(model(tmp_path, False), False)
+    with pytest.raises(VALIDATOR["PassportConfigurationError"]):
+        VALIDATOR["validate_model"](model(tmp_path), passport_enabled=False, files=[PROFILE])
+
+
+@pytest.mark.parametrize("operator_token", [None, "short", TOKEN, "synthetic-signing-credential"])
+def test_beta_reconciliation_requires_a_distinct_operator_token(tmp_path, operator_token):
+    candidate = model(tmp_path)
+    native = candidate["services"]["issuance-native"]["environment"]
+    if operator_token is None:
+        native.pop("PASSPORT_BETA_RECONCILIATION_OPERATOR_TOKEN")
+    else:
+        native["PASSPORT_BETA_RECONCILIATION_OPERATOR_TOKEN"] = operator_token
+    with pytest.raises(VALIDATOR["PassportConfigurationError"]):
+        validate(candidate)
+
+
+def test_beta_reconciliation_operator_token_stays_in_issuance_native(tmp_path):
+    candidate = model(tmp_path)
+    candidate["services"]["flow"]["environment"]["OTHER_KEY"] = RECONCILIATION_TOKEN
+    with pytest.raises(VALIDATOR["PassportConfigurationError"]):
+        validate(candidate)
+
+
+def test_beta_csca_credential_contract_and_default_off(tmp_path):
     contract = json.loads(
         (ROOT / "contracts/passport-beta-csca-credential-isolation.json").read_text(
             encoding="utf-8"
@@ -141,10 +220,10 @@ def test_beta_csca_credential_contract_and_default_off():
     assert contract["enabled"]["holders"] == ["gateway", "signing-keys"]
     profile = (ROOT / PROFILE).read_text(encoding="utf-8")
     assert (
-        len(re.findall(r"^\s+SIGNING_KEYS_CSCA_ISSUE_GATEWAY_KEY:", profile, re.M)) == 2
+        len(re.findall(r"^\s+SIGNING_KEYS_CSCA_ISSUE_GATEWAY_KEY_FILE:", profile, re.M)) == 2
     )
     assert 'SIGNING_KEYS_BETA_CSCA_ISSUANCE_ENABLED: "true"' in profile
-    disabled = model(False)
+    disabled = model(tmp_path, False)
     validate(disabled, False)
     disabled["services"]["gateway"]["environment"][
         "SIGNING_KEYS_CSCA_ISSUE_GATEWAY_KEY"
@@ -168,11 +247,12 @@ def test_csca_beta_preflight_is_gated_and_precedes_mutation():
     assert source.rfind("if ($EnablePassportNative) {", 0, mounted) < mounted
     assert required < collision < mounted < mutate
     assert '"SIGNING_KEYS_CSCA_ISSUE_GATEWAY_KEY"' in source[required:collision]
+    assert '"PASSPORT_BETA_CEREMONY_SECRET_DIR"' in source[required:collision]
     assert '"SIGNING_KEYS_${purpose}_ISSUE_GATEWAY_KEY"' in source[collision:mounted]
 
 
-def test_rendered_compose_environment_list_is_supported():
-    candidate = model()
+def test_rendered_compose_environment_list_is_supported(tmp_path):
+    candidate = model(tmp_path)
     for service in candidate["services"].values():
         service["environment"] = [
             f"{key}={value}" for key, value in service["environment"].items()
@@ -247,8 +327,8 @@ def test_rendered_compose_environment_list_is_supported():
         "callback_signer_extra_member",
     ),
 )
-def test_partial_or_unsafe_selection_fails_closed(mutation):
-    candidate = model()
+def test_partial_or_unsafe_selection_fails_closed(tmp_path, mutation):
+    candidate = model(tmp_path)
     services = candidate["services"]
     native = services["issuance-native"]["environment"]
     bureau = services["passport-beta-bureau"]
@@ -310,27 +390,19 @@ def test_partial_or_unsafe_selection_fails_closed(mutation):
     elif mutation == "signing_environment_production":
         services["signing-keys"]["environment"]["ENVIRONMENT"] = "production"
     elif mutation == "missing_dsc_gateway_key":
-        del services["gateway"]["environment"]["SIGNING_KEYS_DSC_ISSUE_GATEWAY_KEY"]
+        del services["gateway"]["environment"]["SIGNING_KEYS_DSC_ISSUE_GATEWAY_KEY_FILE"]
     elif mutation == "missing_csca_gateway_key":
-        del services["gateway"]["environment"]["SIGNING_KEYS_CSCA_ISSUE_GATEWAY_KEY"]
+        del services["gateway"]["environment"]["SIGNING_KEYS_CSCA_ISSUE_GATEWAY_KEY_FILE"]
     elif mutation == "short_csca_gateway_key":
-        services["gateway"]["environment"]["SIGNING_KEYS_CSCA_ISSUE_GATEWAY_KEY"] = (
-            "short"
-        )
-        services["signing-keys"]["environment"][
-            "SIGNING_KEYS_CSCA_ISSUE_GATEWAY_KEY"
-        ] = "short"
+        Path(candidate["secrets"]["csca_issue_gateway_key"]["file"]).write_text(
+            "short", encoding="ascii")
     elif mutation == "placeholder_csca_gateway_key":
-        services["gateway"]["environment"]["SIGNING_KEYS_CSCA_ISSUE_GATEWAY_KEY"] = (
-            "change-me-csca-operator-credential-00001"
-        )
-        services["signing-keys"]["environment"][
-            "SIGNING_KEYS_CSCA_ISSUE_GATEWAY_KEY"
-        ] = "change-me-csca-operator-credential-00001"
+        Path(candidate["secrets"]["csca_issue_gateway_key"]["file"]).write_text(
+            "change-me-csca-operator-credential-00001", encoding="ascii")
     elif mutation == "mismatched_csca_gateway_key":
         services["signing-keys"]["environment"][
-            "SIGNING_KEYS_CSCA_ISSUE_GATEWAY_KEY"
-        ] = "another-dedicated-csca-operator-credential"
+            "SIGNING_KEYS_CSCA_ISSUE_GATEWAY_KEY_FILE"
+        ] = "/run/secrets/other"
     elif mutation == "csca_flag_disabled":
         services["signing-keys"]["environment"][
             "SIGNING_KEYS_BETA_CSCA_ISSUANCE_ENABLED"
@@ -340,19 +412,11 @@ def test_partial_or_unsafe_selection_fails_closed(mutation):
             "SIGNING_KEYS_BETA_CSCA_ISSUANCE_ENABLED"
         ] = "true"
     elif mutation == "shared_csca_gateway_key":
-        services["gateway"]["environment"]["SIGNING_KEYS_CSCA_ISSUE_GATEWAY_KEY"] = (
-            "synthetic-signing-credential"
-        )
-        services["signing-keys"]["environment"][
-            "SIGNING_KEYS_CSCA_ISSUE_GATEWAY_KEY"
-        ] = "synthetic-signing-credential"
+        Path(candidate["secrets"]["csca_issue_gateway_key"]["file"]).write_text(
+            "synthetic-signing-credential", encoding="ascii")
     elif mutation == "csca_equals_dsc_gateway_key":
-        services["gateway"]["environment"]["SIGNING_KEYS_CSCA_ISSUE_GATEWAY_KEY"] = (
-            DSC_GATEWAY_KEY
-        )
-        services["signing-keys"]["environment"][
-            "SIGNING_KEYS_CSCA_ISSUE_GATEWAY_KEY"
-        ] = DSC_GATEWAY_KEY
+        Path(candidate["secrets"]["csca_issue_gateway_key"]["file"]).write_text(
+            DSC_GATEWAY_KEY, encoding="ascii")
     elif mutation == "leaked_csca_gateway_key":
         services["flow"]["environment"]["SIGNING_KEYS_CSCA_ISSUE_GATEWAY_KEY"] = (
             CSCA_GATEWAY_KEY
@@ -366,12 +430,8 @@ def test_partial_or_unsafe_selection_fails_closed(mutation):
             f"https://service.example/?token={CSCA_GATEWAY_KEY}"
         )
     elif mutation == "shared_dsc_gateway_key":
-        services["gateway"]["environment"]["SIGNING_KEYS_DSC_ISSUE_GATEWAY_KEY"] = (
-            "synthetic-signing-credential"
-        )
-        services["signing-keys"]["environment"][
-            "SIGNING_KEYS_DSC_ISSUE_GATEWAY_KEY"
-        ] = "synthetic-signing-credential"
+        Path(candidate["secrets"]["dsc_issue_gateway_key"]["file"]).write_text(
+            "synthetic-signing-credential", encoding="ascii")
     elif mutation == "leaked_dsc_gateway_key":
         services["flow"]["environment"]["SIGNING_KEYS_DSC_ISSUE_GATEWAY_KEY"] = (
             DSC_GATEWAY_KEY
@@ -474,11 +534,11 @@ def test_partial_or_unsafe_selection_fails_closed(mutation):
 
 
 def test_mounted_secret_cannot_reuse_dsc_gateway_credential(tmp_path):
-    candidate = model()
+    candidate = model(tmp_path)
     mounted = tmp_path / "flow-secret"
     mounted.write_text(f"prefix:{DSC_GATEWAY_KEY}:suffix", encoding="utf-8")
     candidate["secrets"]["flow-secret"] = {"file": str(mounted)}
-    candidate["services"]["flow"]["secrets"] = [{"source": "flow-secret"}]
+    candidate["services"]["flow"]["secrets"].append({"source": "flow-secret"})
     with pytest.raises(
         VALIDATOR["PassportConfigurationError"],
         match="Beta DSC operator credential isolation is invalid",
@@ -494,11 +554,12 @@ def test_mounted_secret_cannot_reuse_dsc_gateway_credential(tmp_path):
 
 @pytest.mark.parametrize("service_name", ["gateway", "signing-keys", "flow"])
 def test_mounted_secret_cannot_reuse_csca_gateway_credential(tmp_path, service_name):
-    candidate = model()
+    candidate = model(tmp_path)
     mounted = tmp_path / "csca-credential"
     mounted.write_text(f"prefix:{CSCA_GATEWAY_KEY}:suffix", encoding="utf-8")
     candidate["secrets"]["csca-credential"] = {"file": str(mounted)}
-    candidate["services"][service_name]["secrets"] = [{"source": "csca-credential"}]
+    candidate["services"][service_name].setdefault("secrets", []).append(
+        {"source": "csca-credential"})
     with pytest.raises(
         VALIDATOR["PassportConfigurationError"],
         match="Beta CSCA operator credential isolation is invalid",
@@ -508,7 +569,7 @@ def test_mounted_secret_cannot_reuse_csca_gateway_credential(tmp_path, service_n
 
 @pytest.mark.parametrize("source_kind", ["file", "external", "missing", "oversize"])
 def test_non_owner_compose_config_is_scanned_or_rejected(tmp_path, source_kind):
-    candidate = model()
+    candidate = model(tmp_path)
     mounted = tmp_path / "flow-config"
     if source_kind == "file":
         mounted.write_text(f"credential={DSC_GATEWAY_KEY}", encoding="utf-8")
@@ -527,8 +588,8 @@ def test_non_owner_compose_config_is_scanned_or_rejected(tmp_path, source_kind):
         validate(candidate)
 
 
-def test_non_owner_compose_config_unknown_source_fails_closed():
-    candidate = model()
+def test_non_owner_compose_config_unknown_source_fails_closed(tmp_path):
+    candidate = model(tmp_path)
     candidate["services"]["flow"]["configs"] = [{"source": "unknown"}]
     with pytest.raises(
         VALIDATOR["PassportConfigurationError"], match="cannot verify mounted files"
@@ -537,7 +598,7 @@ def test_non_owner_compose_config_unknown_source_fails_closed():
 
 
 def test_file_backed_compose_config_without_credential_is_allowed(tmp_path):
-    candidate = model()
+    candidate = model(tmp_path)
     mounted = tmp_path / "flow-config"
     mounted.write_text("ordinary configuration", encoding="utf-8")
     candidate["configs"] = {"flow-config": {"file": str(mounted)}}
@@ -546,7 +607,7 @@ def test_file_backed_compose_config_without_credential_is_allowed(tmp_path):
 
 
 def test_csca_credential_in_owner_bind_mount_is_rejected(tmp_path):
-    candidate = model()
+    candidate = model(tmp_path)
     mounted = tmp_path / "gateway-config"
     mounted.write_text(f"credential={CSCA_GATEWAY_KEY}", encoding="utf-8")
     candidate["services"]["gateway"]["volumes"] = [
@@ -568,8 +629,8 @@ def test_csca_credential_in_owner_bind_mount_is_rejected(tmp_path):
         ("logging", {"options": {"token": DSC_GATEWAY_KEY}}),
     ],
 )
-def test_non_owner_rendered_metadata_cannot_reuse_dsc_credential(field, value):
-    candidate = model()
+def test_non_owner_rendered_metadata_cannot_reuse_dsc_credential(tmp_path, field, value):
+    candidate = model(tmp_path)
     candidate["services"]["flow"][field] = value
     with pytest.raises(
         VALIDATOR["PassportConfigurationError"],
@@ -580,7 +641,7 @@ def test_non_owner_rendered_metadata_cannot_reuse_dsc_credential(field, value):
 
 @pytest.mark.parametrize("kind", ["file", "directory"])
 def test_bind_mount_cannot_reuse_dsc_gateway_credential(tmp_path, kind):
-    candidate = model()
+    candidate = model(tmp_path)
     source = tmp_path / "non-owner-config"
     if kind == "directory":
         source.mkdir()
@@ -600,7 +661,7 @@ def test_bind_mount_cannot_reuse_dsc_gateway_credential(tmp_path, kind):
 
 @pytest.mark.parametrize("failure", ["missing", "oversize", "too_many"])
 def test_bind_mount_scan_fails_closed_with_fixed_error(tmp_path, failure):
-    candidate = model()
+    candidate = model(tmp_path)
     source = tmp_path / "non-owner-config"
     if failure == "oversize":
         source.write_bytes(b"x" * (VALIDATOR["MAX_MOUNT_FILE_BYTES"] + 1))
@@ -620,7 +681,7 @@ def test_bind_mount_scan_fails_closed_with_fixed_error(tmp_path, failure):
 
 
 def test_named_volume_is_not_treated_as_a_host_bind(tmp_path):
-    candidate = model()
+    candidate = model(tmp_path)
     candidate["services"]["flow"]["volumes"] = [
         {"type": "volume", "source": "flow-data", "target": "/data"}
     ]
@@ -629,7 +690,7 @@ def test_named_volume_is_not_treated_as_a_host_bind(tmp_path):
 
 @pytest.mark.parametrize("link_location", ["source", "child"])
 def test_bind_mount_symlink_fails_closed(tmp_path, link_location):
-    candidate = model()
+    candidate = model(tmp_path)
     target = tmp_path / "safe-config"
     target.write_text("public fixture", encoding="utf-8")
     source = tmp_path / "mounted"
@@ -651,8 +712,8 @@ def test_bind_mount_symlink_fails_closed(tmp_path, link_location):
         validate(candidate)
 
 
-def test_compose_call_is_read_only_and_closed():
-    candidate = model()
+def test_compose_call_is_read_only_and_closed(tmp_path):
+    candidate = model(tmp_path)
     calls = []
 
     def run(command, **kwargs):
@@ -816,9 +877,13 @@ def synthetic_beta_compose_env(tmp_path):
             fixture.write_text("synthetic-workload-material", encoding="utf-8")
             values[name] = str(fixture)
     values["GRPC_SERVICE_TOKEN"] = TOKEN
+    values["PASSPORT_BETA_RECONCILIATION_OPERATOR_TOKEN"] = RECONCILIATION_TOKEN
     values["MARTY_SERVICES_IMAGE"] = IMAGE
-    values["SIGNING_KEYS_DSC_ISSUE_GATEWAY_KEY"] = DSC_GATEWAY_KEY
-    values["SIGNING_KEYS_CSCA_ISSUE_GATEWAY_KEY"] = CSCA_GATEWAY_KEY
+    ceremony = tmp_path / "elevenid-beta-passport-ceremony"
+    ceremony.mkdir()
+    (ceremony / "dsc_issue_gateway_key").write_text(DSC_GATEWAY_KEY, encoding="ascii")
+    (ceremony / "csca_issue_gateway_key").write_text(CSCA_GATEWAY_KEY, encoding="ascii")
+    values["PASSPORT_BETA_CEREMONY_SECRET_DIR"] = str(ceremony)
     env_file = tmp_path / "synthetic-beta.env"
     env_file.write_text(
         "\n".join(f"{name}={value}" for name, value in sorted(values.items())) + "\n",
@@ -886,7 +951,10 @@ def test_actual_beta_compose_merge_preserves_default_off_and_kms_selection(tmp_p
     assert enabled_signing["ENVIRONMENT"] == "beta"
     for name in ("gateway", "signing-keys"):
         env = VALIDATOR["environment"](enabled["services"][name])
-        assert env["SIGNING_KEYS_CSCA_ISSUE_GATEWAY_KEY"] == CSCA_GATEWAY_KEY
+        assert env["SIGNING_KEYS_CSCA_ISSUE_GATEWAY_KEY_FILE"] == (
+            "/run/secrets/csca_issue_gateway_key"
+        )
+        assert "SIGNING_KEYS_CSCA_ISSUE_GATEWAY_KEY" not in env
     for name, flag in (
         ("gateway", "PASSPORT_NATIVE_GATEWAY_ENABLED"),
         ("flow", "PASSPORT_NATIVE_FLOW_ENABLED"),

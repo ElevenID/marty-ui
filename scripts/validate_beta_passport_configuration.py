@@ -111,13 +111,16 @@ def valid_operator_credential(value):
     )
 
 
-def validate_mounted_sources(model, services, credential, purpose):
+def validate_mounted_sources(model, services, credential, purpose, *,
+                             excluded_secret_names=()):
     unavailable = (
         f"Beta {purpose} operator credential isolation cannot verify mounted files"
     )
     invalid = f"Beta {purpose} operator credential isolation is invalid"
     sources = []
-    for secret in model.get("secrets", {}).values():
+    for name, secret in model.get("secrets", {}).items():
+        if name in excluded_secret_names:
+            continue
         path = secret.get("file") if isinstance(secret, dict) else None
         if not isinstance(path, str):
             raise PassportConfigurationError(unavailable)
@@ -189,6 +192,82 @@ def validate_mounted_sources(model, services, credential, purpose):
                 raise PassportConfigurationError(unavailable)
     except OSError:
         raise PassportConfigurationError(unavailable) from None
+
+
+def validate_file_operator_credentials(model, services, gateway, signing,
+                                       signing_key):
+    """Validate the beta simulator's two private, holder-scoped operator files."""
+    definitions = model.get("secrets")
+    if not isinstance(definitions, dict):
+        raise PassportConfigurationError("Beta operator secrets are missing")
+    values = {}
+    paths = {}
+    for purpose, key_name, secret_name in (
+        ("DSC", "SIGNING_KEYS_DSC_ISSUE_GATEWAY_KEY", "dsc_issue_gateway_key"),
+        ("CSCA", "SIGNING_KEYS_CSCA_ISSUE_GATEWAY_KEY", "csca_issue_gateway_key"),
+    ):
+        file_name = f"{key_name}_FILE"
+        target = f"/run/secrets/{secret_name}"
+        holders = {name for name, service in services.items()
+                   if service.get("environment") is not None
+                   and environment(service).get(file_name)}
+        mounts = set()
+        for name, service in services.items():
+            entries = service.get("secrets", [])
+            if not isinstance(entries, list):
+                raise PassportConfigurationError("Beta operator secret mounts are invalid")
+            selected = [entry for entry in entries if (
+                entry == secret_name if isinstance(entry, str)
+                else isinstance(entry, dict) and entry.get("source") == secret_name)]
+            if selected:
+                if (len(selected) != 1 or isinstance(selected[0], dict)
+                        and selected[0].get("target") not in
+                        {secret_name, f"/run/secrets/{secret_name}"}):
+                    raise PassportConfigurationError(
+                        f"Beta {purpose} operator secret mount is invalid")
+                mounts.add(name)
+        definition = definitions.get(secret_name)
+        source = definition.get("file") if isinstance(definition, dict) else None
+        if not (holders == mounts == {"gateway", "signing-keys"}
+                and gateway.get(file_name) == signing.get(file_name) == target
+                and all(key_name not in environment(service)
+                        for service in services.values()
+                        if service.get("environment") is not None)
+                and isinstance(source, str) and Path(source).is_absolute()):
+            raise PassportConfigurationError(
+                f"Beta {purpose} operator file binding is invalid")
+        path = Path(source)
+        resolved = path.resolve()
+        if (path.parent.name != "elevenid-beta-passport-ceremony"
+                or resolved.parent.name != "elevenid-beta-passport-ceremony"
+                or path.name != secret_name or path.is_symlink()
+                or path.parent.is_symlink() or resolved != path
+                or not path.is_file()):
+            raise PassportConfigurationError(
+                f"Beta {purpose} operator file root is not isolated")
+        try:
+            with path.open("rb") as credential_file:
+                raw = credential_file.read(4097)
+            credential = raw.decode("ascii")
+        except (OSError, UnicodeError) as exc:
+            raise PassportConfigurationError(
+                f"Beta {purpose} operator file is unreadable") from exc
+        if (not valid_operator_credential(credential)
+                or re.fullmatch(r"[A-Za-z0-9._-]{32,256}", credential) is None
+                or len(raw) > 4096):
+            raise PassportConfigurationError(
+                f"Beta {purpose} operator file is invalid")
+        values[purpose] = credential
+        paths[purpose] = source
+        if (credential == signing_key
+                or any(service_reuses_credential(name, service, credential, key_name)
+                       for name, service in services.items())):
+            raise PassportConfigurationError(
+                f"Beta {purpose} operator credential isolation is invalid")
+        validate_mounted_sources(model, services, credential, purpose,
+                                 excluded_secret_names=(secret_name,))
+    if values["DSC"] == values["CSCA"] or paths["DSC"] == paths["CSCA"]:
+        raise PassportConfigurationError("Beta operator credentials are reused")
 
 
 def physical_require(condition, message):
@@ -645,6 +724,7 @@ def validate_model(model, *, passport_enabled, files, physical_provider=False,
                 )
                 if (
                     "SIGNING_KEYS_CSCA_ISSUE_GATEWAY_KEY" in env
+                    or "SIGNING_KEYS_CSCA_ISSUE_GATEWAY_KEY_FILE" in env
                     or str(
                         env.get("SIGNING_KEYS_BETA_CSCA_ISSUANCE_ENABLED", "false")
                     ).lower()
@@ -688,6 +768,23 @@ def validate_model(model, *, passport_enabled, files, physical_provider=False,
                     "Beta passport tenant keyring is forbidden"
                 )
         native = environment(targets["issuance-native"])
+        operator_token = native.get("PASSPORT_BETA_RECONCILIATION_OPERATOR_TOKEN")
+        if (
+            native.get("ENVIRONMENT") != "beta"
+            or str(native.get("PASSPORT_BETA_RECONCILIATION_ENABLED", "false")).lower()
+            != "true"
+            or not valid_operator_credential(operator_token)
+            or operator_token == native.get("GRPC_SERVICE_TOKEN")
+            or operator_token == native.get("SIGNING_KEYS_INTERNAL_API_KEY")
+            or any(
+                contains_credential(service, operator_token)
+                for name, service in services.items()
+                if name != "issuance-native"
+            )
+        ):
+            raise PassportConfigurationError(
+                "Beta passport reconciliation operator binding is invalid"
+            )
         for name in (
             "PASSPORT_MANAGED_ISSUER_SIGNING_ENABLED",
             "PASSPORT_KMS_ARTIFACTS_ENABLED",
@@ -751,37 +848,8 @@ def validate_model(model, *, passport_enabled, files, physical_provider=False,
             or str(signing.get(csca_flag)).lower() != "true"
         ):
             raise PassportConfigurationError("Beta CSCA ceremony selection is invalid")
-        for purpose, key_name in (
-            ("DSC", "SIGNING_KEYS_DSC_ISSUE_GATEWAY_KEY"),
-            ("CSCA", "SIGNING_KEYS_CSCA_ISSUE_GATEWAY_KEY"),
-        ):
-            credential = gateway.get(key_name)
-            holders = {
-                name
-                for name, service in services.items()
-                if service.get("environment") is not None
-                and environment(service).get(key_name)
-            }
-            reused = isinstance(credential, str) and any(
-                service_reuses_credential(service_name, service, credential, key_name)
-                for service_name, service in services.items()
-            )
-            if not (
-                valid_operator_credential(credential)
-                and credential == signing.get(key_name)
-                and credential != signing_key
-                and holders == {"gateway", "signing-keys"}
-                and not reused
-                and all(
-                    not environment(service).get(f"{key_name}_FILE")
-                    for service in services.values()
-                    if service.get("environment") is not None
-                )
-            ):
-                raise PassportConfigurationError(
-                    f"Beta {purpose} operator credential isolation is invalid"
-                )
-            validate_mounted_sources(model, services, credential, purpose)
+        validate_file_operator_credentials(
+            model, services, gateway, signing, signing_key)
         callback_signer_env = environment(callback_signer)
         if not (
             bureau_env.get("SERVICE_NAME") == "passport_beta_bureau"

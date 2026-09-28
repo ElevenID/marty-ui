@@ -23,6 +23,9 @@
     "activate_credential"
   ],
   "physical_success_side_effects": "before_state_transition",
+  "physical_create_issuer_did_source": "active_tenant_bound_credential_template_reference",
+  "physical_create_issuer_did_override": "initial_context_cannot_override_template_issuer",
+  "physical_create_invalid_template": "reject_before_native_application_create",
   "provider_identity_mismatch": "fail_closed",
   "missing_offer_uri": "fail_closed"
 }

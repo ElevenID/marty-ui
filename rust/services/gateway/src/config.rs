@@ -265,11 +265,6 @@ impl GatewayConfig {
             )?;
         }
         let dsc_issue_gateway_key = secret(values, "SIGNING_KEYS_DSC_ISSUE_GATEWAY_KEY")?;
-        if value(values, "SIGNING_KEYS_CSCA_ISSUE_GATEWAY_KEY_FILE").is_some() {
-            return Err(error(
-                "SIGNING_KEYS_CSCA_ISSUE_GATEWAY_KEY_FILE is not allowed for beta passport issuance",
-            ));
-        }
         let csca_issue_gateway_key = secret(values, "SIGNING_KEYS_CSCA_ISSUE_GATEWAY_KEY")?;
         if csca_issue_gateway_key.is_some() && !environment.eq_ignore_ascii_case("beta") {
             return Err(error("CSCA issuance credential is beta-only"));
@@ -977,7 +972,26 @@ mod tests {
             .unwrap_err()
             .to_string()
             .contains("SIGNING_KEYS_CSCA_ISSUE_GATEWAY_KEY_FILE"));
+        let path =
+            std::env::temp_dir().join(format!("marty-gateway-csca-{}", uuid::Uuid::new_v4()));
+        std::fs::write(&path, format!("{}\n", "c".repeat(32))).unwrap();
+        values.remove("SIGNING_KEYS_CSCA_ISSUE_GATEWAY_KEY");
+        values.insert(
+            "SIGNING_KEYS_CSCA_ISSUE_GATEWAY_KEY_FILE".into(),
+            path.to_string_lossy().into_owned(),
+        );
+        assert_eq!(
+            GatewayConfig::from_values(&values)
+                .unwrap()
+                .csca_issue_gateway_key
+                .as_deref(),
+            Some("cccccccccccccccccccccccccccccccc")
+        );
+        values.insert("ENVIRONMENT".into(), "production".into());
+        assert!(GatewayConfig::from_values(&values).is_err());
+        values.insert("ENVIRONMENT".into(), "beta".into());
         values.remove("SIGNING_KEYS_CSCA_ISSUE_GATEWAY_KEY_FILE");
+        std::fs::remove_file(path).unwrap();
         values.insert("PASSPORT_NATIVE_GATEWAY_ENABLED".into(), "false".into());
         values.remove("SIGNING_KEYS_DSC_ISSUE_GATEWAY_KEY");
         values.remove("SIGNING_KEYS_CSCA_ISSUE_GATEWAY_KEY");
