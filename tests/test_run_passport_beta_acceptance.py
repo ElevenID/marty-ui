@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from contextlib import nullcontext
 import json
+import os
 from pathlib import Path
 import re
 import subprocess
@@ -43,6 +44,13 @@ def accepted_batch() -> dict:
         "simulator_marker_verified": True, "callback_receipt_sha256": "e" * 64,
         "native_binding_verified": True, "native_completed_jobs": 2,
         "callback_receipts_sha256": ["e" * 64, "f" * 64],
+        "source_commit": "a" * 40, "stack_manifest_sha256": "b" * 64,
+        "services_oci_reference": "ghcr.io/elevenid/marty-ui-oss/services@sha256:" + "d" * 64,
+        "commitment_scheme": "HMAC-SHA256", "http_status": 202, "batch_status": "QUEUED",
+        "request_commitment": "1" * 64, "response_commitment": "2" * 64,
+        "submitted_job_commitments": ["3" * 64, "4" * 64],
+        "returned_jobs": [{"source_job_commitment": "3" * 64},
+                          {"source_job_commitment": "4" * 64}],
     }}
 
 
@@ -96,11 +104,39 @@ def test_keeps_partial_acceptance_blocked_after_actual_probe_functions() -> None
     assert result["probes"]["nine_route_gateway_flow"]["verified"] is False
     assert result["probes"]["sod_signature"]["verified"] is True
     assert result["probes"]["physical_bureau_batch"]["verified"] is True
+    assert result["probes"]["packaged_image"]["verified"] is True
+    assert result["probes"]["physical_bureau_submission"]["verified"] is True
+    assert result["probes"]["physical_bureau_submission"]["evidence"]["submitted_job_commitments"] == ["3" * 64, "4" * 64]
     assert result["probes"]["signed_bureau_callback"]["verified"] is True
     assert result["physical_claim"] == "not_claimed"
     assert result["probes"]["physical_claim_boundary"]["evidence"]["booklet_verified"] is False
     assert result["probes"]["nine_route_gateway_flow"]["evidence"]["missing"] == ["executed_physical_document_flow"]
     assert result["probes"]["physical_booklet_verified"]["verified"] is False
+
+
+@pytest.mark.parametrize("mutate", [
+    lambda evidence: evidence.update(source_commit="f" * 40),
+    lambda evidence: evidence.update(stack_manifest_sha256="f" * 64),
+    lambda evidence: evidence.update(services_oci_reference="ghcr.io/elevenid/marty-ui-oss/services@sha256:" + "f" * 64),
+    lambda evidence: evidence.update(http_status=200),
+    lambda evidence: evidence["returned_jobs"][1].update(source_job_commitment="3" * 64),
+], ids=["source", "stack", "image", "http_status", "job_mapping"])
+def test_batch_submission_requires_signed_source_binding(mutate) -> None:
+    batch = accepted_batch()
+    mutate(batch["evidence"])
+    with pytest.raises(EvidenceError, match="not bound to the signed release"):
+        run(
+            Path("beta-artifacts"), {"organization_id": "beta"}, "k" * 32,
+            collector=lambda *args, **kwargs: report(),
+            snapshot=lambda: {"sha256": "c" * 64, "container_counts": {}},
+            drain=lambda: {"verified": True, "evidence": {}},
+            lifecycle=lambda *args: {"verified": True, "evidence": {"sod_signature_verified": True,
+                                                                     "sod_sha256": "f" * 64}},
+            routing=lambda *args: {"verified": True, "evidence": {"webhook_owner": "issuance-native"}},
+            flow=lambda owner: {"verified": True, "evidence": {
+                "unsigned_webhook_owner": owner, "signature_denial_verified": True}},
+            batch=lambda *args: batch,
+        )
 
 
 @pytest.mark.parametrize("same_job", [False, True])
@@ -398,9 +434,8 @@ def test_workflow_artifact_matches_credentials_retirement_receipt_convention() -
     assert environment["PASSPORT_ACCEPTANCE_DSC_OPERATOR_COOKIE"] == "${{ secrets.PASSPORT_ACCEPTANCE_DSC_OPERATOR_COOKIE }}"
     assert environment["PASSPORT_ACCEPTANCE_PHYSICAL_FLOW_PLAN_JSON"] == "${{ secrets.PASSPORT_ACCEPTANCE_PHYSICAL_FLOW_PLAN_JSON }}"
     assert environment["PASSPORT_ACCEPTANCE_FLOW_OPERATOR_COOKIE"] == "${{ secrets.PASSPORT_ACCEPTANCE_FLOW_OPERATOR_COOKIE }}"
-    assert 'certificate_args+=(--certificate-plan-file "$certificate_plan_file")' in probe["run"]
-    assert "--certificate-plan-file" in probe["run"]
-    assert 'flow_args+=(--physical-flow-plan-file "$physical_flow_plan_file")' in probe["run"]
+    assert '--certificate-plan-file "$certificate_plan_file"' in probe["run"]
+    assert '--physical-flow-plan-file "$physical_flow_plan_file"' in probe["run"]
     assert 'chmod 600 "$physical_flow_plan_file"' in probe["run"]
     assert upload["with"]["name"] == "passport-beta-acceptance-${{ github.run_id }}"
     assert upload["with"]["path"] == (
@@ -412,6 +447,41 @@ def test_workflow_artifact_matches_credentials_retirement_receipt_convention() -
     prerequisite_steps = prerequisite["jobs"]["collect"]["steps"]
     prerequisite_upload = next(step for step in prerequisite_steps if step.get("name") == "Upload sanitized blocked prerequisite report")
     assert prerequisite_upload["if"] == "always() && (steps.collect.outcome == 'success' || steps.collect.outcome == 'failure')"
+
+
+@pytest.mark.parametrize("missing", ["ceremony", "flow"])
+def test_protected_entrypoint_blocks_missing_required_inputs_before_beta_access(
+    tmp_path: Path, missing: str,
+) -> None:
+    output = tmp_path / "acceptance.json"
+    application = tmp_path / "application.json"
+    ceremony = tmp_path / "ceremony.json"
+    physical_flow = tmp_path / "physical-flow.json"
+    for path in (application, ceremony, physical_flow):
+        path.write_text("{}", encoding="utf-8")
+    env = os.environ.copy()
+    env.update({"PASSPORT_ACCEPTANCE_API_KEY": "k" * 32,
+                "PASSPORT_ACCEPTANCE_CSCA_OPERATOR_COOKIE": "sessionId=csca",
+                "PASSPORT_ACCEPTANCE_DSC_OPERATOR_COOKIE": "sessionId=dsc",
+                "PASSPORT_ACCEPTANCE_FLOW_OPERATOR_COOKIE": "sessionId=flow"})
+    if missing == "ceremony":
+        env.pop("PASSPORT_ACCEPTANCE_DSC_OPERATOR_COOKIE")
+    else:
+        env.pop("PASSPORT_ACCEPTANCE_FLOW_OPERATOR_COOKIE")
+    result = subprocess.run(
+        [sys.executable, "scripts/run_passport_beta_acceptance.py",
+         "--artifact-dir", str(tmp_path / "nonexistent-beta-artifacts"),
+         "--application-file", str(application),
+         "--certificate-plan-file", str(ceremony),
+         "--physical-flow-plan-file", str(physical_flow),
+         "--output", str(output)],
+        cwd=Path(__file__).resolve().parents[1], env=env,
+        capture_output=True, text=True, check=False,
+    )
+    assert result.returncode != 0
+    report = json.loads(output.read_text(encoding="utf-8"))
+    assert report["status"] == "blocked"
+    assert "requires" in report["blocker"]
 
 
 @pytest.mark.parametrize("workflow_name,expected_status", [

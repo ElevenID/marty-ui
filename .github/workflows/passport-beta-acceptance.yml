@@ -50,23 +50,15 @@ jobs:
           trap 'rm -f "$application_file" "$certificate_plan_file" "$physical_flow_plan_file"' EXIT
           printf '%s' "$PASSPORT_ACCEPTANCE_APPLICATION_JSON" > "$application_file"
           chmod 600 "$application_file"
-          certificate_args=()
-          if [[ -n "$PASSPORT_ACCEPTANCE_CERTIFICATE_PLAN_JSON" ]]; then
-            printf '%s' "$PASSPORT_ACCEPTANCE_CERTIFICATE_PLAN_JSON" > "$certificate_plan_file"
-            chmod 600 "$certificate_plan_file"
-            certificate_args+=(--certificate-plan-file "$certificate_plan_file")
-          fi
-          flow_args=()
-          if [[ -n "$PASSPORT_ACCEPTANCE_PHYSICAL_FLOW_PLAN_JSON" ]]; then
-            printf '%s' "$PASSPORT_ACCEPTANCE_PHYSICAL_FLOW_PLAN_JSON" > "$physical_flow_plan_file"
-            chmod 600 "$physical_flow_plan_file"
-            flow_args+=(--physical-flow-plan-file "$physical_flow_plan_file")
-          fi
+          printf '%s' "$PASSPORT_ACCEPTANCE_CERTIFICATE_PLAN_JSON" > "$certificate_plan_file"
+          chmod 600 "$certificate_plan_file"
+          printf '%s' "$PASSPORT_ACCEPTANCE_PHYSICAL_FLOW_PLAN_JSON" > "$physical_flow_plan_file"
+          chmod 600 "$physical_flow_plan_file"
           python3 scripts/run_passport_beta_acceptance.py \
             --artifact-dir "$BETA_ARTIFACT_DIR" \
             --application-file "$application_file" \
-            "${certificate_args[@]}" \
-            "${flow_args[@]}" \
+            --certificate-plan-file "$certificate_plan_file" \
+            --physical-flow-plan-file "$physical_flow_plan_file" \
             --output "$report_file"
           # A protected success must mean the whole acceptance gate passed.
           # Until simulator Flow, recovery, and supported-consumer proof exist,

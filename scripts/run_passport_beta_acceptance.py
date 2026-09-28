@@ -136,6 +136,26 @@ def run(
                 and batch_evidence.get("callback_receipt_sha256")
                 == batch_evidence["callback_receipts_sha256"][0],
                 "Live beta simulator batch and signed callback receipt did not verify")
+        require(batch_evidence.get("source_commit") == report["release"]["source_commit"]
+                and batch_evidence.get("stack_manifest_sha256") == report["release"]["stack_manifest_sha256"]
+                and batch_evidence.get("services_oci_reference") == bureau["oci_reference"]
+                and batch_evidence.get("commitment_scheme") == "HMAC-SHA256"
+                and batch_evidence.get("http_status") == 202
+                and batch_evidence.get("batch_status") == "QUEUED"
+                and isinstance(batch_evidence.get("request_commitment"), str)
+                and SHA256.fullmatch(batch_evidence["request_commitment"]) is not None
+                and isinstance(batch_evidence.get("response_commitment"), str)
+                and SHA256.fullmatch(batch_evidence["response_commitment"]) is not None
+                and isinstance(batch_evidence.get("submitted_job_commitments"), list)
+                and len(batch_evidence["submitted_job_commitments"]) == 2
+                and all(isinstance(value, str) and SHA256.fullmatch(value) is not None
+                        for value in batch_evidence["submitted_job_commitments"])
+                and len(set(batch_evidence["submitted_job_commitments"])) == 2
+                and isinstance(batch_evidence.get("returned_jobs"), list)
+                and len(batch_evidence["returned_jobs"]) == 2
+                and {job.get("source_job_commitment") for job in batch_evidence["returned_jobs"]
+                     if isinstance(job, dict)} == set(batch_evidence["submitted_job_commitments"]),
+                "Beta simulator submission is not bound to the signed release and both jobs")
         physical_result = None
         if physical_flow_plan is not None:
             physical_result = physical_flow(
@@ -195,6 +215,24 @@ def run(
     report["probes"]["beta_native_route_ownership"] = route_ownership
     report["probes"]["flow_capability_and_webhook_denial"] = flow_result
     report["probes"]["physical_bureau_batch"] = batch_result
+    report["probes"]["packaged_image"] = {"verified": True, "evidence": {
+        "source_commit": report["release"]["source_commit"],
+        "stack_manifest_sha256": report["release"]["stack_manifest_sha256"],
+        "services_oci_reference": bureau["oci_reference"],
+        "runtime_container_id": bureau["container_id"],
+    }}
+    report["probes"]["physical_bureau_submission"] = {"verified": True, "evidence": {
+        "provider_kind": "simulator", "physical_claim": "not_claimed",
+        "source_commit": batch_evidence["source_commit"],
+        "stack_manifest_sha256": batch_evidence["stack_manifest_sha256"],
+        "services_oci_reference": batch_evidence["services_oci_reference"],
+        "http_status": batch_evidence["http_status"],
+        "batch_status": batch_evidence["batch_status"],
+        "request_commitment": batch_evidence["request_commitment"],
+        "response_commitment": batch_evidence["response_commitment"],
+        "submitted_job_commitments": batch_evidence["submitted_job_commitments"],
+        "returned_jobs": batch_evidence["returned_jobs"],
+    }}
     report["physical_claim"] = "not_claimed"
     report["probes"]["physical_claim_boundary"] = {"verified": True, "evidence": {
         "physical_claim": "not_claimed", "booklet_verified": False,
@@ -245,16 +283,23 @@ def main() -> int:
     try:
         api_key = os.environ.get("PASSPORT_ACCEPTANCE_API_KEY")
         require(isinstance(api_key, str) and len(api_key) >= 32, "Passport beta API key is unavailable")
+        require(args.certificate_plan_file is not None
+                and all(os.environ.get(name, "").strip() for name in (
+                    "PASSPORT_ACCEPTANCE_CSCA_OPERATOR_COOKIE",
+                    "PASSPORT_ACCEPTANCE_DSC_OPERATOR_COOKIE",
+                )), "Protected acceptance requires the managed CSCA and DSC ceremony")
+        require(args.physical_flow_plan_file is not None
+                and os.environ.get("PASSPORT_ACCEPTANCE_FLOW_OPERATOR_COOKIE", "").strip(),
+                "Protected acceptance requires the simulator-backed physical Flow probe")
         application = read_json(args.application_file)
-        certificate_plan = read_json(args.certificate_plan_file) if args.certificate_plan_file else None
-        physical_flow_plan = read_json(args.physical_flow_plan_file) if args.physical_flow_plan_file else None
+        certificate_plan = read_json(args.certificate_plan_file)
+        physical_flow_plan = read_json(args.physical_flow_plan_file)
         report = run(
             args.artifact_dir, application, api_key, certificate_plan=certificate_plan,
             csca_session=os.environ.get("PASSPORT_ACCEPTANCE_CSCA_OPERATOR_COOKIE"),
             dsc_session=os.environ.get("PASSPORT_ACCEPTANCE_DSC_OPERATOR_COOKIE"),
             physical_flow_plan=physical_flow_plan,
-            flow_session=os.environ.get("PASSPORT_ACCEPTANCE_FLOW_OPERATOR_COOKIE")
-            if physical_flow_plan is not None else None,
+            flow_session=os.environ.get("PASSPORT_ACCEPTANCE_FLOW_OPERATOR_COOKIE"),
         )
         args.output.write_text(json.dumps(report, indent=2, sort_keys=True) + "\n", encoding="utf-8")
     except (EvidenceError, ProbeError, ChainProbeError, FlowProbeError, BatchProbeError,
