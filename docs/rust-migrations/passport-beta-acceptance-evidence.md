@@ -135,6 +135,22 @@ out of published evidence. `physical_bureau_batch` and its signed callback
 evidence become verified only for this same selected job, with
 `physical_claim=not_claimed` and no booklet claim.
 
+The private native batch route requires a base64-encoded 32-byte
+`x-passport-batch-wire-key` header from the protected acceptance process
+before mutation. After a strict first HTTP 202, it attempts to KMS-encrypt
+the exact request and response bodies as tenant-bound private evidence and
+store their keyed commitments before document-type completion or native binding. A
+recovery using the same run key decrypts the retained bodies and recomputes
+both HMACs before reporting `wire_evidence_status=verified`; it never
+promotes replay bytes into first-dispatch proof. If retention fails or the
+first attempt is ambiguous, immutable receipt-backed binding may complete
+after its lease, but the route reports `wire_evidence_status=unavailable`
+without commitments. That run cannot qualify acceptance or recording and
+requires a fresh reviewed acceptance run. The key must stay inside the
+protected run and out of request logs and uploaded artifacts. The acceptance
+runner does not yet supply this header or consume the returned commitments,
+so its native wire gate remains unverified.
+
 The full run requires the managed beta CSCA and DSC ceremonies before it
 creates a passport job. The protected `beta-lifecycle` environment supplies
 `PASSPORT_ACCEPTANCE_CERTIFICATE_PLAN_JSON` and separate governed operator

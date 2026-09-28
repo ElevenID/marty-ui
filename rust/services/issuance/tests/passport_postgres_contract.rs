@@ -19,7 +19,7 @@ use marty_issuance_service::passport_artifact::{
     PassportArtifactCipher, PassportSensitiveArtifact,
 };
 use marty_issuance_service::passport_beta_material::PassportBetaMaterialDigests;
-use marty_issuance_service::passport_bureau::BureauClient;
+use marty_issuance_service::passport_bureau::{BetaBatchWireCommitments, BureauClient};
 use marty_issuance_service::passport_http::{router as passport_router, PassportHttpService};
 use marty_issuance_service::passport_provider_ingress::{
     router as provider_ingress_router, ProviderIngressState,
@@ -2654,6 +2654,70 @@ async fn passport_jobs_survive_restart_without_cross_tenant_reads() {
     .await
     .unwrap();
     assert!(profile_repository
+        .mark_beta_batch_first_response(&org_a, &batch_identity, Utc::now())
+        .await
+        .unwrap());
+    assert!(!profile_repository
+        .claim_beta_batch_receipt_completion(&org_a, batch_identity.batch_id, Utc::now())
+        .await
+        .unwrap());
+    assert!(!profile_repository
+        .mark_beta_batch_first_response(&org_a, &batch_identity, Utc::now())
+        .await
+        .unwrap());
+    assert!(!profile_repository
+        .claim_beta_batch_replay(&org_a, batch_identity.batch_id, Utc::now())
+        .await
+        .unwrap());
+    let wire_key_sha256 = "a".repeat(64);
+    let wire_commitments = BetaBatchWireCommitments {
+        request_commitment: "b".repeat(64),
+        response_commitment: "c".repeat(64),
+    };
+    assert!(profile_repository
+        .retain_beta_batch_first_wire(
+            &org_a,
+            &batch_identity,
+            "kms-manifest-string",
+            &wire_key_sha256,
+            &wire_commitments,
+        )
+        .await
+        .unwrap());
+    assert!(!profile_repository
+        .retain_beta_batch_first_wire(
+            &org_a,
+            &batch_identity,
+            "replacement-kms-manifest",
+            &wire_key_sha256,
+            &wire_commitments,
+        )
+        .await
+        .unwrap());
+    let retained = profile_repository
+        .beta_batch_first_wire_commitments(&org_a, batch_identity.batch_id, &wire_key_sha256)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(
+        retained.request_commitment,
+        wire_commitments.request_commitment
+    );
+    assert_eq!(
+        retained.response_commitment,
+        wire_commitments.response_commitment
+    );
+    assert!(profile_repository
+        .beta_batch_first_wire_commitments(&org_a, batch_identity.batch_id, &"d".repeat(64))
+        .await
+        .unwrap()
+        .is_none());
+    assert!(profile_repository
+        .beta_batch_first_wire_commitments(&org_b, batch_identity.batch_id, &wire_key_sha256)
+        .await
+        .unwrap()
+        .is_none());
+    assert!(profile_repository
         .claim_beta_batch_receipt_completion(&org_a, batch_identity.batch_id, Utc::now())
         .await
         .unwrap());
@@ -2708,7 +2772,12 @@ async fn passport_jobs_survive_restart_without_cross_tenant_reads() {
     sqlx::query(
         "UPDATE issuance_service.passport_beta_batch_intents
          SET send_attempts=1, receipt_completion_attempts=0,
-             last_receipt_completion_started_at=NULL, last_send_started_at=$2
+             last_receipt_completion_started_at=NULL, last_send_started_at=$2,
+             first_dispatch_response_seen_at=NULL,
+             first_dispatch_wire_ciphertext=NULL,
+             first_dispatch_wire_key_sha256=NULL,
+             first_dispatch_request_commitment=NULL,
+             first_dispatch_response_commitment=NULL
          WHERE batch_id=$1",
     )
     .bind(batch_identity.batch_id)

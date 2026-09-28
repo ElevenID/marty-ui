@@ -1,5 +1,5 @@
 use std::sync::{
-    atomic::{AtomicUsize, Ordering},
+    atomic::{AtomicBool, AtomicUsize, Ordering},
     Arc, Mutex,
 };
 
@@ -12,6 +12,7 @@ use axum::{
 };
 use base64::{engine::general_purpose::STANDARD, Engine as _};
 use chrono::Duration as ChronoDuration;
+use hmac::{Hmac, Mac};
 use marty_emrtd_issuance::{prepare_sod, SodSignatureAlgorithm};
 use marty_passport_auth::PassportTenantCredentialSource;
 use num_bigint::BigUint;
@@ -160,6 +161,47 @@ async fn kms_decrypt(
     Json(_request): Json<Value>,
 ) -> Json<Value> {
     Json(json!({"plaintext_b64": STANDARD.encode(artifact.as_slice())}))
+}
+
+async fn kms_encrypt_batch_wire(
+    axum::Extension(observed): axum::Extension<Arc<Mutex<Option<Vec<u8>>>>>,
+    axum::Extension(fail): axum::Extension<Arc<AtomicBool>>,
+    Json(request): Json<Value>,
+) -> (StatusCode, Json<Value>) {
+    if fail.load(Ordering::SeqCst) {
+        return (
+            StatusCode::SERVICE_UNAVAILABLE,
+            Json(json!({"error": "test outage"})),
+        );
+    }
+    assert!(request["artifact_id"]
+        .as_str()
+        .unwrap()
+        .starts_with("passport-beta-batch-"));
+    let plaintext = STANDARD
+        .decode(request["plaintext_b64"].as_str().unwrap())
+        .unwrap();
+    *observed.lock().unwrap() = Some(plaintext);
+    (
+        StatusCode::OK,
+        Json(json!({"ciphertext": "vault:v1:synthetic-batch-wire"})),
+    )
+}
+
+async fn kms_decrypt_batch_wire_or_artifact(
+    State(artifact): State<Arc<Vec<u8>>>,
+    axum::Extension(observed): axum::Extension<Arc<Mutex<Option<Vec<u8>>>>>,
+    Json(request): Json<Value>,
+) -> Json<Value> {
+    let plaintext = if request["artifact_id"]
+        .as_str()
+        .is_some_and(|id| id.starts_with("passport-beta-batch-"))
+    {
+        observed.lock().unwrap().clone().unwrap()
+    } else {
+        artifact.as_ref().clone()
+    };
+    Json(json!({"plaintext_b64": STANDARD.encode(plaintext)}))
 }
 
 async fn kms_verify_callback(Json(request): Json<Value>) -> Json<Value> {
@@ -609,6 +651,15 @@ async fn beta_reconciliation_replays_only_exact_material_and_binds_first_receipt
 
 #[tokio::test]
 async fn beta_batch_http_binds_exact_flow_pair_and_replays_after_artifact_scrub() {
+    run_beta_batch_http_recovery(false).await;
+}
+
+#[tokio::test]
+async fn beta_batch_http_completes_receipts_when_wire_kms_fails() {
+    run_beta_batch_http_recovery(true).await;
+}
+
+async fn run_beta_batch_http_recovery(fail_wire_kms: bool) {
     let Ok(database_url) = std::env::var("MARTY_PASSPORT_RECONCILIATION_TEST_URL") else {
         return;
     };
@@ -694,10 +745,16 @@ async fn beta_batch_http_binds_exact_flow_pair_and_replays_after_artifact_scrub(
             }
         }
     };
+    let wire_capture: Arc<Mutex<Option<Vec<u8>>>> = Arc::new(Mutex::new(None));
+    let wire_kms_failure = Arc::new(AtomicBool::new(fail_wire_kms));
     let kms = Router::new()
         .route(
             "/internal/signing-keys/passport-artifacts/decrypt",
-            post(kms_decrypt),
+            post(kms_decrypt_batch_wire_or_artifact),
+        )
+        .route(
+            "/internal/signing-keys/passport-artifacts/encrypt",
+            post(kms_encrypt_batch_wire),
         )
         .route(
             "/internal/signing-keys/resolve-issuer-did",
@@ -707,7 +764,9 @@ async fn beta_batch_http_binds_exact_flow_pair_and_replays_after_artifact_scrub(
             "/internal/signing-keys/csca-trust-anchors",
             axum::routing::get(trust),
         )
-        .with_state(Arc::new(serde_json::to_vec(&artifact).unwrap()));
+        .with_state(Arc::new(serde_json::to_vec(&artifact).unwrap()))
+        .layer(axum::Extension(wire_capture.clone()))
+        .layer(axum::Extension(wire_kms_failure));
     let kms_listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let kms_address = kms_listener.local_addr().unwrap();
     let kms_server = tokio::spawn(async move { axum::serve(kms_listener, kms).await.unwrap() });
@@ -856,6 +915,28 @@ async fn beta_batch_http_binds_exact_flow_pair_and_replays_after_artifact_scrub(
         "selected_application_id": jobs[0].application_id,
         "companion_application_id": jobs[1].application_id
     });
+    let wire_key = STANDARD.encode([0x5au8; 32]);
+    let invalid_key = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri(format!("/internal/passport/beta-batches/{batch_id}/submit"))
+                .header("content-type", "application/json")
+                .header("x-organization-id", "org-a")
+                .header("x-api-key", service_token)
+                .header(
+                    "x-passport-reconciliation-token",
+                    "synthetic-operator-reconciliation-token-00000001",
+                )
+                .header("x-passport-batch-wire-key", "invalid")
+                .body(Body::from(body.to_string()))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(invalid_key.status(), StatusCode::CONFLICT);
+    assert_eq!(mock.calls.load(Ordering::SeqCst), 0);
     let call = |app: &Router| {
         app.clone().oneshot(
             Request::builder()
@@ -868,6 +949,7 @@ async fn beta_batch_http_binds_exact_flow_pair_and_replays_after_artifact_scrub(
                     "x-passport-reconciliation-token",
                     "synthetic-operator-reconciliation-token-00000001",
                 )
+                .header("x-passport-batch-wire-key", wire_key.as_str())
                 .body(Body::from(body.to_string()))
                 .unwrap(),
         )
@@ -937,9 +1019,64 @@ async fn beta_batch_http_binds_exact_flow_pair_and_replays_after_artifact_scrub(
     .execute(&pool)
     .await
     .unwrap();
+    if fail_wire_kms {
+        sqlx::query(
+            "UPDATE issuance_service.passport_beta_batch_intents
+             SET first_dispatch_response_seen_at=$2 WHERE batch_id=$1",
+        )
+        .bind(batch_id)
+        .bind(Utc::now() - ChronoDuration::seconds(66))
+        .execute(&pool)
+        .await
+        .unwrap();
+    }
     let recovered = call(&app).await.unwrap();
     assert_eq!(recovered.status(), StatusCode::OK);
     assert_eq!(mock.calls.load(Ordering::SeqCst), 4);
+    let recovered_body = axum::body::to_bytes(recovered.into_body(), 64 * 1024)
+        .await
+        .unwrap();
+    let recovered_body: Value = serde_json::from_slice(&recovered_body).unwrap();
+    let stored_wire: Option<String> = sqlx::query_scalar(
+        "SELECT first_dispatch_wire_ciphertext
+         FROM issuance_service.passport_beta_batch_intents WHERE batch_id=$1",
+    )
+    .bind(batch_id)
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    if fail_wire_kms {
+        assert!(wire_capture.lock().unwrap().is_none());
+        assert!(stored_wire.is_none());
+        assert_eq!(recovered_body["wire_evidence_status"], "unavailable");
+        assert!(recovered_body.get("wire_commitments").is_none());
+    } else {
+        let retained_wire = wire_capture.lock().unwrap().clone().unwrap();
+        assert_eq!(&retained_wire[..4], b"PBW1");
+        let request_len = u32::from_be_bytes(retained_wire[4..8].try_into().unwrap()) as usize;
+        let request_bytes = &retained_wire[8..8 + request_len];
+        let response_bytes = &retained_wire[8 + request_len..];
+        let sent: Value = serde_json::from_slice(request_bytes).unwrap();
+        assert_eq!(sent["jobs"][0]["job_id"], jobs[0].id);
+        assert_eq!(sent["jobs"][1]["job_id"], jobs[1].id);
+        assert!(sent["jobs"][0].get("document_type").is_none());
+        let accepted: Value = serde_json::from_slice(response_bytes).unwrap();
+        assert_eq!(accepted["status"], "QUEUED");
+        let key = STANDARD.decode(&wire_key).unwrap();
+        for (field, bytes) in [("request", request_bytes), ("response", response_bytes)] {
+            let mut mac = Hmac::<Sha256>::new_from_slice(&key).unwrap();
+            mac.update(format!("passport-retirement/v2:{field}\0").as_bytes());
+            mac.update(bytes);
+            assert_eq!(
+                recovered_body["wire_commitments"][format!("{field}_commitment")],
+                hex::encode(mac.finalize().into_bytes())
+            );
+        }
+        assert_eq!(recovered_body["wire_evidence_status"], "verified");
+        let stored_wire = stored_wire.unwrap();
+        assert!(stored_wire.contains("marty.passport-artifact-manifest/v1"));
+        assert!(!stored_wire.contains(&jobs[0].id));
+    }
     let bound = repository
         .beta_batch_jobs(&principal, batch_id)
         .await

@@ -16,6 +16,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
 use uuid::Uuid;
+use zeroize::Zeroizing;
 
 const BATCH_PATH: &str = "v1/personalization/batches";
 const BATCH_TIMEOUT: Duration = Duration::from_secs(60);
@@ -133,6 +134,27 @@ pub struct PersonalizationBatch {
     pub jobs: Vec<PersonalizationJob>,
     pub status: ProductionStatus,
     pub submitted_at: DateTime<Utc>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+pub struct BetaBatchWireCommitments {
+    pub request_commitment: String,
+    pub response_commitment: String,
+}
+
+pub struct BetaBatchWireEvidence {
+    pub commitments: BetaBatchWireCommitments,
+    pub request_bytes: Zeroizing<Vec<u8>>,
+    pub response_bytes: Zeroizing<Vec<u8>>,
+}
+
+pub(crate) fn beta_batch_wire_commitment(key: &[u8; 32], field: &[u8], body: &[u8]) -> String {
+    let mut mac = Hmac::<Sha256>::new_from_slice(key).expect("fixed 256-bit HMAC key");
+    mac.update(b"passport-retirement/v2:");
+    mac.update(field);
+    mac.update(&[0]);
+    mac.update(body);
+    hex::encode(mac.finalize().into_bytes())
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -464,6 +486,18 @@ impl BureauClient {
         &self,
         batch: &PersonalizationBatch,
     ) -> Result<PersonalizationBatch, BureauError> {
+        self.submit_beta_batch_with_wire_evidence(batch, None)
+            .await
+            .map(|(outcome, _)| outcome)
+    }
+
+    /// Commit the exact bytes this strict beta transport sends and receives.
+    /// The caller keeps the per-run HMAC key inside the protected trust boundary.
+    pub async fn submit_beta_batch_with_wire_evidence(
+        &self,
+        batch: &PersonalizationBatch,
+        wire_key: Option<&[u8; 32]>,
+    ) -> Result<(PersonalizationBatch, Option<BetaBatchWireEvidence>), BureauError> {
         if batch.jobs.len() != 2
             || !Uuid::parse_str(&batch.id).is_ok_and(|id| id.to_string() == batch.id)
             || batch.jobs.iter().any(|job| {
@@ -481,17 +515,36 @@ impl BureauClient {
         }
         let http = Client::builder()
             .redirect(reqwest::redirect::Policy::none())
+            .no_gzip()
+            .no_brotli()
+            .no_zstd()
+            .no_deflate()
             .build()?;
+        let request_bytes = Zeroizing::new(
+            serde_json::to_vec(&batch_payload(batch))
+                .map_err(|_| BureauError::InvalidResponse("invalid beta batch input".into()))?,
+        );
         let mut response = http
             .post(self.endpoint(BATCH_PATH)?)
             .bearer_auth(&self.api_key)
-            .json(&batch_payload(batch))
+            .header(reqwest::header::CONTENT_TYPE, "application/json")
+            .header(reqwest::header::ACCEPT_ENCODING, "identity")
+            .body(request_bytes.to_vec())
             .timeout(BATCH_TIMEOUT)
             .send()
             .await?;
         if response.status() != StatusCode::ACCEPTED {
             return Err(BureauError::InvalidResponse(
                 "beta batch was not accepted".into(),
+            ));
+        }
+        if response
+            .headers()
+            .get(reqwest::header::CONTENT_ENCODING)
+            .is_some_and(|value| !value.as_bytes().eq_ignore_ascii_case(b"identity"))
+        {
+            return Err(BureauError::InvalidResponse(
+                "beta batch response encoding is unsupported".into(),
             ));
         }
         if response
@@ -559,7 +612,15 @@ impl BureauClient {
             job.status = ProductionStatus::Queued;
         }
         outcome.status = ProductionStatus::Queued;
-        Ok(outcome)
+        let evidence = wire_key.map(|key| BetaBatchWireEvidence {
+            commitments: BetaBatchWireCommitments {
+                request_commitment: beta_batch_wire_commitment(key, b"request", &request_bytes),
+                response_commitment: beta_batch_wire_commitment(key, b"response", &bytes),
+            },
+            request_bytes,
+            response_bytes: Zeroizing::new(bytes),
+        });
+        Ok((outcome, evidence))
     }
 
     pub async fn poll(&self, bureau_job_id: &str) -> Result<PollOutcome, BureauError> {
@@ -1151,6 +1212,73 @@ mod tests {
             client.submit_beta_batch(&batch).await,
             Err(BureauError::InvalidResponse(message)) if message == "beta batch response is oversized"
         ));
+        server.abort();
+    }
+
+    #[tokio::test]
+    async fn beta_batch_wire_commitments_cover_exact_sent_and_received_bytes() {
+        use std::sync::{Arc, Mutex};
+
+        use axum::{body::Bytes, extract::State, routing::post, Router};
+
+        const RESPONSE: &str = "{ \"jobs\": [{\"status\":\"QUEUED\",\"bureau_job_id\":\"11111111-1111-4111-8111-111111111111\",\"job_id\":\"job-1\"},{\"job_id\":\"job-2\",\"bureau_job_id\":\"22222222-2222-4222-8222-222222222222\",\"status\":\"QUEUED\"}], \"status\": \"QUEUED\" }";
+        async fn submit(
+            State(observed): State<Arc<Mutex<Vec<u8>>>>,
+            body: Bytes,
+        ) -> axum::response::Response {
+            *observed.lock().unwrap() = body.to_vec();
+            axum::response::Response::builder()
+                .status(StatusCode::ACCEPTED)
+                .header(reqwest::header::CONTENT_TYPE, "application/json")
+                .body(axum::body::Body::from(RESPONSE))
+                .unwrap()
+        }
+        let observed = Arc::new(Mutex::new(Vec::new()));
+        let app = Router::new()
+            .route(&format!("/{BATCH_PATH}"), post(submit))
+            .with_state(observed.clone());
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let server = tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+        let client = BureauClient::new(&format!("http://{address}"), "private-key", None).unwrap();
+        let mut second = job(DocumentType::TD1);
+        second.id = "job-2".into();
+        second.application_id = "application-2".into();
+        let batch = PersonalizationBatch {
+            id: "33333333-3333-4333-8333-333333333333".into(),
+            organization_id: "organization-1".into(),
+            jobs: vec![job(DocumentType::TD3), second],
+            status: ProductionStatus::Queued,
+            submitted_at: Utc::now(),
+        };
+        let key = [0x5au8; 32];
+        let (outcome, evidence) = client
+            .submit_beta_batch_with_wire_evidence(&batch, Some(&key))
+            .await
+            .unwrap();
+        assert_eq!(outcome.jobs.len(), 2);
+        let evidence = evidence.unwrap();
+        let proof = evidence.commitments;
+        let sent = observed.lock().unwrap().clone();
+        assert_eq!(evidence.request_bytes.as_slice(), sent);
+        assert_eq!(evidence.response_bytes.as_slice(), RESPONSE.as_bytes());
+        let parsed: Value = serde_json::from_slice(&sent).unwrap();
+        assert_eq!(parsed["jobs"][0]["job_id"], "job-1");
+        assert!(parsed["jobs"][0].get("document_type").is_none());
+        let mut request_mac = Hmac::<Sha256>::new_from_slice(&key).unwrap();
+        request_mac.update(b"passport-retirement/v2:request\0");
+        request_mac.update(&sent);
+        assert_eq!(
+            proof.request_commitment,
+            hex::encode(request_mac.finalize().into_bytes())
+        );
+        let mut response_mac = Hmac::<Sha256>::new_from_slice(&key).unwrap();
+        response_mac.update(b"passport-retirement/v2:response\0");
+        response_mac.update(RESPONSE.as_bytes());
+        assert_eq!(
+            proof.response_commitment,
+            hex::encode(response_mac.finalize().into_bytes())
+        );
         server.abort();
     }
 

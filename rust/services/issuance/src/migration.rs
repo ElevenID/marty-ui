@@ -149,6 +149,11 @@ pub async fn migrate_passport(pool: &PgPool) -> Result<(), sqlx::Error> {
     ))
     .execute(&mut *transaction)
     .await?;
+    sqlx::raw_sql(include_str!(
+        "../migrations/0008_passport_beta_batch_wire_evidence.sql"
+    ))
+    .execute(&mut *transaction)
+    .await?;
     let columns = sqlx::query_scalar::<_, String>(
         "SELECT column_name FROM information_schema.columns \
          WHERE table_schema='issuance_service' AND table_name='physical_document_jobs'",

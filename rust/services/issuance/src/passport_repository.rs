@@ -9,7 +9,7 @@ use sqlx::{postgres::PgRow, PgConnection, PgPool, Postgres, QueryBuilder, Row};
 use uuid::Uuid;
 
 use crate::passport_beta_material::PassportBetaMaterialDigests;
-use crate::passport_bureau::VerifiedWebhookEvent;
+use crate::passport_bureau::{BetaBatchWireCommitments, VerifiedWebhookEvent};
 
 #[derive(Debug, thiserror::Error)]
 pub enum PassportWebhookRepositoryError {
@@ -386,6 +386,7 @@ impl PostgresPassportRepository {
              SET send_attempts=2, last_send_started_at=$3
              WHERE batch_id=$1 AND organization_id=$2
                AND send_attempts=1
+               AND first_dispatch_response_seen_at IS NULL
                AND last_send_started_at <= $3 - INTERVAL '130 seconds'
              RETURNING batch_id",
         )
@@ -413,6 +414,9 @@ impl PostgresPassportRepository {
                  last_receipt_completion_started_at=$3
              WHERE batch_id=$1 AND organization_id=$2
                AND last_send_started_at <= $3 - INTERVAL '130 seconds'
+               AND (first_dispatch_response_seen_at IS NULL OR
+                    first_dispatch_wire_ciphertext IS NOT NULL OR
+                    first_dispatch_response_seen_at <= $3 - INTERVAL '65 seconds')
                AND (last_receipt_completion_started_at IS NULL OR
                     last_receipt_completion_started_at <= $3 - INTERVAL '65 seconds')
              RETURNING batch_id",
@@ -423,6 +427,137 @@ impl PostgresPassportRepository {
         .fetch_optional(&self.pool)
         .await?
         .is_some())
+    }
+
+    /// Fence batch replay as soon as the strict first HTTP 202 mapping is
+    /// validated, before KMS retention or document-type completion begins.
+    pub async fn mark_beta_batch_first_response(
+        &self,
+        principal: &PassportTenantPrincipal,
+        identity: &PassportBatchIdentity<'_>,
+        now: DateTime<Utc>,
+    ) -> Result<bool, sqlx::Error> {
+        Ok(sqlx::query_scalar::<_, Uuid>(
+            "UPDATE issuance_service.passport_beta_batch_intents
+             SET first_dispatch_response_seen_at=$6
+             WHERE batch_id=$1 AND organization_id=$2
+               AND selected_flow_instance_id=$3
+               AND selected_job_id=$4 AND companion_job_id=$5
+               AND send_attempts=1 AND first_dispatch_response_seen_at IS NULL
+             RETURNING batch_id",
+        )
+        .bind(identity.batch_id)
+        .bind(principal.organization_id())
+        .bind(identity.selected_flow_instance_id)
+        .bind(identity.selected_job_id)
+        .bind(identity.companion_job_id)
+        .bind(now)
+        .fetch_optional(&self.pool)
+        .await?
+        .is_some())
+    }
+
+    /// Retain encrypted exact first-dispatch bodies and their keyed proof.
+    /// An exact replay cannot overwrite or create first-dispatch evidence.
+    pub async fn retain_beta_batch_first_wire(
+        &self,
+        principal: &PassportTenantPrincipal,
+        identity: &PassportBatchIdentity<'_>,
+        ciphertext: &str,
+        key_sha256: &str,
+        commitments: &BetaBatchWireCommitments,
+    ) -> Result<bool, sqlx::Error> {
+        Ok(sqlx::query_scalar::<_, Uuid>(
+            "UPDATE issuance_service.passport_beta_batch_intents
+             SET first_dispatch_wire_ciphertext=$6,
+                 first_dispatch_wire_key_sha256=$7,
+                 first_dispatch_request_commitment=$8,
+                 first_dispatch_response_commitment=$9
+             WHERE batch_id=$1 AND organization_id=$2
+               AND selected_flow_instance_id=$3
+               AND selected_job_id=$4 AND companion_job_id=$5
+               AND send_attempts=1
+               AND first_dispatch_response_seen_at IS NOT NULL
+               AND first_dispatch_wire_ciphertext IS NULL
+             RETURNING batch_id",
+        )
+        .bind(identity.batch_id)
+        .bind(principal.organization_id())
+        .bind(identity.selected_flow_instance_id)
+        .bind(identity.selected_job_id)
+        .bind(identity.companion_job_id)
+        .bind(ciphertext)
+        .bind(key_sha256)
+        .bind(&commitments.request_commitment)
+        .bind(&commitments.response_commitment)
+        .fetch_optional(&self.pool)
+        .await?
+        .is_some())
+    }
+
+    pub async fn beta_batch_first_wire_commitments(
+        &self,
+        principal: &PassportTenantPrincipal,
+        batch_id: Uuid,
+        key_sha256: &str,
+    ) -> Result<Option<BetaBatchWireCommitments>, sqlx::Error> {
+        sqlx::query(
+            "SELECT first_dispatch_request_commitment,
+                    first_dispatch_response_commitment
+             FROM issuance_service.passport_beta_batch_intents
+             WHERE batch_id=$1 AND organization_id=$2
+               AND first_dispatch_wire_key_sha256=$3
+               AND first_dispatch_wire_ciphertext IS NOT NULL",
+        )
+        .bind(batch_id)
+        .bind(principal.organization_id())
+        .bind(key_sha256)
+        .fetch_optional(&self.pool)
+        .await?
+        .map(|row| {
+            Ok(BetaBatchWireCommitments {
+                request_commitment: row.try_get("first_dispatch_request_commitment")?,
+                response_commitment: row.try_get("first_dispatch_response_commitment")?,
+            })
+        })
+        .transpose()
+    }
+
+    pub async fn beta_batch_first_wire_ciphertext(
+        &self,
+        principal: &PassportTenantPrincipal,
+        batch_id: Uuid,
+        key_sha256: &str,
+    ) -> Result<Option<String>, sqlx::Error> {
+        sqlx::query_scalar(
+            "SELECT first_dispatch_wire_ciphertext
+             FROM issuance_service.passport_beta_batch_intents
+             WHERE batch_id=$1 AND organization_id=$2
+               AND first_dispatch_wire_key_sha256=$3
+               AND first_dispatch_wire_ciphertext IS NOT NULL",
+        )
+        .bind(batch_id)
+        .bind(principal.organization_id())
+        .bind(key_sha256)
+        .fetch_optional(&self.pool)
+        .await
+    }
+
+    pub async fn beta_batch_has_first_wire(
+        &self,
+        principal: &PassportTenantPrincipal,
+        batch_id: Uuid,
+    ) -> Result<bool, sqlx::Error> {
+        sqlx::query_scalar::<_, bool>(
+            "SELECT first_dispatch_wire_ciphertext IS NOT NULL
+             FROM issuance_service.passport_beta_batch_intents
+             WHERE batch_id=$1 AND organization_id=$2",
+        )
+        .bind(batch_id)
+        .bind(principal.organization_id())
+        .fetch_optional(&self.pool)
+        .await
+        .map(|value| value.unwrap_or(false))
     }
 
     pub async fn selected_flow_ready(
