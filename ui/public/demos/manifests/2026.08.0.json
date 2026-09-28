@@ -41,7 +41,7 @@
   "release_differences": {
     "previous_stack_version": "2026.07.0",
     "ux": [
-      "Adds an eleven-scenario release catalog, including a gateway-only external admissions integration, without removing historical wallet demonstrations. The proposed digital passport D-12 requires its own pinned MIP 0.6 beta release."
+      "Adds an eleven-scenario release catalog, including a gateway-only external admissions integration, without removing historical wallet demonstrations. The proposed digital passport D-13 requires its own pinned MIP 0.6 beta release."
     ],
     "services": [
       "Qualifies the Rust-native platform through explicit happy and denial paths."

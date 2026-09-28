@@ -10,7 +10,7 @@ const SHA256_PATTERN = /^[a-f0-9]{64}$/;
 const ISO_DATE_TIME_PATTERN = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{1,3})?(?:Z|[+-]\d{2}:\d{2})$/;
 const PENDING_PUBLICATION_LANGUAGE = /\b(awaiting|must pass before|not completed|not run|pending)\b/i;
 const DIGITAL_PASSPORT_CANDIDATE = {
-  demoId: 'D-12',
+  demoId: 'D-13',
   slug: 'passport-digital-handoff-evidence',
   mipVersion: '0.6.0-beta.1',
 };
@@ -168,10 +168,10 @@ export function validateDemoManifest(manifest) {
       assert(
         scenario.demo_id === DIGITAL_PASSPORT_CANDIDATE.demoId
           && scenario.slug === DIGITAL_PASSPORT_CANDIDATE.slug,
-        'The digital passport candidate requires its reserved D-12 ID and slug.',
+        'The digital passport candidate requires its reserved D-13 ID and slug.',
       );
-      assert(!manifest.stack_version.startsWith('2026.07.'), 'D-12 cannot appear in a historical release.');
-      assert(manifest.mip_version === DIGITAL_PASSPORT_CANDIDATE.mipVersion, 'D-12 requires MIP 0.6.0-beta.1.');
+      assert(!manifest.stack_version.startsWith('2026.07.'), 'D-13 cannot appear in a historical release.');
+      assert(manifest.mip_version === DIGITAL_PASSPORT_CANDIDATE.mipVersion, 'D-13 requires MIP 0.6.0-beta.1.');
     }
     assert(scenario.mip_version === manifest.mip_version, `${scenario.slug}: MIP metadata does not match its ElevenID LLC release.`);
     assert(!slugs.has(scenario.slug), `${scenario.slug}: duplicate scenario.`);

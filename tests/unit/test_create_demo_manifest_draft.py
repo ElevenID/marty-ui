@@ -76,7 +76,7 @@ def test_digital_passport_demo_waits_for_a_pinned_beta_protocol_release() -> Non
     manifest = build_manifest()
 
     assert len(candidate) == 1
-    assert candidate[0]["demo_id"] == "D-12"
+    assert candidate[0]["demo_id"] == "D-13"
     assert candidate[0]["slug"] == "passport-digital-handoff-evidence"
     assert candidate[0]["required_mip_version"] == "0.6.0-beta.1"
     assert candidate[0]["happy_path"] == [

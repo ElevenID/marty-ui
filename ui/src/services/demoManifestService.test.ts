@@ -96,16 +96,16 @@ describe('demoManifestService', () => {
     })).not.toThrow();
   });
 
-  it('reserves both the D-12 ID and digital passport slug for the pinned candidate', () => {
-    const reserved = { ...scenario, demo_id: 'D-12', slug: 'passport-digital-handoff-evidence' };
+  it('reserves both the D-13 ID and digital passport slug for the pinned candidate', () => {
+    const reserved = { ...scenario, demo_id: 'D-13', slug: 'passport-digital-handoff-evidence' };
     expect(() => validateDemoManifest({
       ...manifest,
       scenarios: [{ ...reserved, slug: 'passport-digital-handoff-alias' }],
-    })).toThrow('reserved D-12 ID and slug');
+    })).toThrow('reserved D-13 ID and slug');
     expect(() => validateDemoManifest({
       ...manifest,
       scenarios: [{ ...reserved, demo_id: 'D-99' }],
-    })).toThrow('reserved D-12 ID and slug');
+    })).toThrow('reserved D-13 ID and slug');
     expect(() => validateDemoManifest({ ...manifest, scenarios: [reserved] })).toThrow('historical release');
     expect(() => validateDemoManifest({
       ...manifest,

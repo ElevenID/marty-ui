@@ -70,7 +70,7 @@ class DemoManifestValidationTests(unittest.TestCase):
         manifest = json.loads(PORTFOLIO_MANIFEST_PATH.read_text(encoding="utf-8"))
         candidate = copy.deepcopy(manifest["scenarios"][0])
         candidate["slug"] = "passport-digital-handoff-evidence"
-        candidate["demo_id"] = "D-12"
+        candidate["demo_id"] = "D-13"
         manifest["scenarios"].append(candidate)
 
         with self.assertRaisesRegex(ManifestValidationError, "candidate requires MIP 0.6.0-beta.1"):
@@ -106,7 +106,7 @@ class DemoManifestValidationTests(unittest.TestCase):
             scenario["mip_version"] = "0.6.0-beta.1"
         candidate = copy.deepcopy(manifest["scenarios"][0])
         candidate["slug"] = "passport-digital-handoff-evidence"
-        candidate["demo_id"] = "D-12"
+        candidate["demo_id"] = "D-13"
         manifest["scenarios"].append(candidate)
 
         with self.assertRaisesRegex(ManifestValidationError, "candidate cannot appear in a historical"):
@@ -143,7 +143,7 @@ class DemoManifestValidationTests(unittest.TestCase):
             manifest = copy.deepcopy(source)
             candidate = copy.deepcopy(manifest["scenarios"][0])
             candidate["slug"] = "passport-digital-handoff-alias"
-            candidate["demo_id"] = "D-12"
+            candidate["demo_id"] = "D-13"
             manifest["scenarios"].append(candidate)
             with self.subTest(stack_version=manifest["stack_version"]):
                 with self.assertRaisesRegex(ManifestValidationError, "candidate demo ID and slug must match"):
