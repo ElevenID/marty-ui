@@ -27,7 +27,7 @@
     "created_at",
     "updated_at"
   ],
-  "prohibited_persistence": ["MRZ", "data groups", "SOD", "DSC certificate", "raw job payload"],
+  "prohibited_persistence": ["MRZ", "data groups", "SOD", "DSC certificate", "raw job payload", "callback body", "callback signature"],
   "status_sequence": ["QUEUED", "PRINTING", "ENCODING", "QUALITY_CHECK", "SHIPPED"],
   "callback": {
     "body_fields": ["organization_id", "bureau_job_id", "status"],
