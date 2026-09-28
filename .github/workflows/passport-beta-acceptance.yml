@@ -45,18 +45,23 @@ jobs:
           application_file="$RUNNER_TEMP/passport-beta-application-$GITHUB_RUN_ID.json"
           certificate_plan_file="$RUNNER_TEMP/passport-beta-certificates-$GITHUB_RUN_ID.json"
           trap 'rm -f "$application_file" "$certificate_plan_file"' EXIT
+          for required in PASSPORT_ACCEPTANCE_API_KEY PASSPORT_ACCEPTANCE_APPLICATION_JSON \
+                          PASSPORT_ACCEPTANCE_CERTIFICATE_PLAN_JSON \
+                          PASSPORT_ACCEPTANCE_CSCA_OPERATOR_COOKIE \
+                          PASSPORT_ACCEPTANCE_DSC_OPERATOR_COOKIE; do
+            if [[ -z "${!required}" ]]; then
+              echo "$required is unavailable for governed passport acceptance" >&2
+              exit 1
+            fi
+          done
           printf '%s' "$PASSPORT_ACCEPTANCE_APPLICATION_JSON" > "$application_file"
           chmod 600 "$application_file"
-          certificate_args=()
-          if [[ -n "$PASSPORT_ACCEPTANCE_CERTIFICATE_PLAN_JSON" ]]; then
-            printf '%s' "$PASSPORT_ACCEPTANCE_CERTIFICATE_PLAN_JSON" > "$certificate_plan_file"
-            chmod 600 "$certificate_plan_file"
-            certificate_args+=(--certificate-plan-file "$certificate_plan_file")
-          fi
+          printf '%s' "$PASSPORT_ACCEPTANCE_CERTIFICATE_PLAN_JSON" > "$certificate_plan_file"
+          chmod 600 "$certificate_plan_file"
           python3 scripts/run_passport_beta_acceptance.py \
             --artifact-dir "$BETA_ARTIFACT_DIR" \
             --application-file "$application_file" \
-            "${certificate_args[@]}" \
+            --certificate-plan-file "$certificate_plan_file" \
             --output "$report_file"
           # A protected success must mean the whole acceptance gate passed.
           # Until signed simulator callback, rollback, and demo proof exist, preserve the

@@ -66,15 +66,13 @@ def run(
             and boundary.get("evidence") == {
                 "physical_claim": "not_claimed", "booklet_verified": False},
             "Beta passport report must not claim physical issuance")
-    chain_requested = any(value is not None for value in (certificate_plan, csca_session, dsc_session))
-    if chain_requested:
-        require(isinstance(certificate_plan, dict) and bool(csca_session) and bool(dsc_session),
-                "Governed CSCA and DSC ceremony inputs are incomplete")
-        validate_sessions(csca_session, dsc_session)
-        validate_plan(certificate_plan)
-        require(certificate_plan["organization_id"] == application.get("organization_id")
-                and certificate_plan["dsc"]["dsc_issuer_did"] == application.get("issuer_did"),
-                "Certificate plan does not match the passport application")
+    require(isinstance(certificate_plan, dict) and bool(csca_session) and bool(dsc_session),
+            "Governed CSCA and DSC ceremony inputs are incomplete")
+    validate_sessions(csca_session, dsc_session)
+    validate_plan(certificate_plan)
+    require(certificate_plan["organization_id"] == application.get("organization_id")
+            and certificate_plan["dsc"]["dsc_issuer_did"] == application.get("issuer_did"),
+            "Certificate plan does not match the passport application")
     route_ownership = routing(report["runtime_images"], report.get("provider_ingress_runtime_image"))
     route_evidence = route_ownership.get("evidence")
     webhook_owner = route_evidence.get("webhook_owner") if isinstance(route_evidence, dict) else None
@@ -84,6 +82,9 @@ def run(
     before_production = snapshot()
     before_drain = drain()
     try:
+        chain_result = chain(certificate_plan, csca_session, dsc_session)
+        require(chain_result.get("verified") is True and chain_result.get("evidence") is not None,
+                "Managed CSCA and DSC chain did not verify")
         flow_result = flow(webhook_owner)
         flow_evidence = flow_result.get("evidence")
         require(flow_result.get("verified") is True and isinstance(flow_evidence, dict)
@@ -91,11 +92,6 @@ def run(
                 and flow_evidence.get("signature_denial_verified") is True,
                 "Beta Flow and webhook probe did not verify")
         lifecycle_result = lifecycle(application, api_key)
-        chain_result = None
-        if chain_requested:
-            chain_result = chain(certificate_plan, csca_session, dsc_session)
-            require(chain_result.get("verified") is True and chain_result.get("evidence") is not None,
-                    "Managed CSCA and DSC chain did not verify")
     finally:
         after_production = snapshot()
         production_window = assert_production_unchanged(before_production, after_production)
@@ -126,8 +122,7 @@ def run(
         "native_route_ownership": route_ownership.get("evidence"),
         "missing": ["signed_simulator_webhook", "executed_simulator_flow"],
     }}
-    if chain_result is not None:
-        report["probes"]["managed_csca_dsc_chain"] = chain_result
+    report["probes"]["managed_csca_dsc_chain"] = chain_result
     report["probes"]["legacy_drain"] = {
         "verified": before_drain.get("verified") is True and after_drain.get("verified") is True,
         "evidence": {"before": before_drain.get("evidence"), "after": after_drain.get("evidence")},

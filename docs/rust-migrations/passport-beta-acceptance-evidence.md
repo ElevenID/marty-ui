@@ -88,8 +88,8 @@ required probe false until a signed Marty simulator callback and an executed
 simulator Flow are verified. Only fixed route names, counts, statuses, and
 selector booleans enter the report.
 
-The full run can also perform the managed beta CSCA and DSC ceremonies when
-the protected `beta-lifecycle` environment supplies
+The full run requires the managed beta CSCA and DSC ceremonies before it
+creates a passport job. The protected `beta-lifecycle` environment supplies
 `PASSPORT_ACCEPTANCE_CERTIFICATE_PLAN_JSON` and separate governed operator
 session cookies in `PASSPORT_ACCEPTANCE_CSCA_OPERATOR_COOKIE` and
 `PASSPORT_ACCEPTANCE_DSC_OPERATOR_COOKIE`. The plan is a JSON object with

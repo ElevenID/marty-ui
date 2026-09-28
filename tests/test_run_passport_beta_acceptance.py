@@ -65,10 +65,18 @@ def test_keeps_partial_acceptance_blocked_after_actual_probe_functions() -> None
                                                "unsigned_webhook_owner": owner,
                                                "signature_denial_verified": True}}
 
-    result = run(Path("beta-artifacts"), {"organization_id": "beta"}, "a" * 32,
+    def chain(*args: object) -> dict:
+        calls.append("chain")
+        return {"verified": True, "evidence": {"dsc_certificate_sha256": "b" * 64}}
+
+    plan = certificate_plan()
+    result = run(Path("beta-artifacts"), {"organization_id": plan["organization_id"],
+                                              "issuer_did": plan["dsc"]["dsc_issuer_did"]}, "a" * 32,
                  collector=collect, attestor=lambda *args: True, snapshot=snapshot,
-                 drain=drain, lifecycle=lifecycle, routing=routing, flow=flow)
-    assert calls == ["collect", "routing", "snapshot", "drain", "flow", "lifecycle", "snapshot", "drain", "collect", "routing"]
+                 drain=drain, lifecycle=lifecycle, routing=routing, flow=flow,
+                 certificate_plan=plan, csca_session="csca-session",
+                 dsc_session="dsc-session", chain=chain)
+    assert calls == ["collect", "routing", "snapshot", "drain", "chain", "flow", "lifecycle", "snapshot", "drain", "collect", "routing"]
     assert result["status"] == "blocked"
     assert result["probes"]["legacy_drain"]["verified"] is True
     assert result["probes"]["production_continuity_during_probe"]["verified"] is True
@@ -80,6 +88,18 @@ def test_keeps_partial_acceptance_blocked_after_actual_probe_functions() -> None
     ]
     assert result["probes"]["physical_claim_boundary"]["verified"] is True
     assert result["physical_claim"] == "not_claimed"
+
+
+def test_missing_governed_chain_inputs_block_before_beta_mutation() -> None:
+    with pytest.raises(EvidenceError, match="ceremony inputs are incomplete"):
+        run(
+            Path("beta-artifacts"), {"organization_id": "org-a"}, "a" * 32,
+            collector=lambda *args, **kwargs: report(),
+            snapshot=lambda: pytest.fail("Production snapshot must wait for chain inputs"),
+            drain=lambda: pytest.fail("Beta drain must wait for chain inputs"),
+            flow=lambda *args: pytest.fail("Flow probe must wait for chain inputs"),
+            lifecycle=lambda *args: pytest.fail("Passport lifecycle must wait for chain inputs"),
+        )
 
 
 def test_does_not_mutate_beta_before_signed_release_and_managed_capability() -> None:
@@ -130,13 +150,18 @@ def test_governed_chain_runs_with_complete_inputs_and_stays_blocked() -> None:
         assert (plan, csca, dsc) == (certificate_plan(), "csca-session", "dsc-session")
         return {"verified": True, "evidence": {"csca_certificate_sha256": "b" * 64}}
 
+    def lifecycle(*args: object) -> dict:
+        calls.append("lifecycle")
+        assert "chain" in calls
+        return {"verified": True, "evidence": {"routes": [],
+                                                "sod_signature_verified": True,
+                                                "sod_sha256": "f" * 64}}
+
     result = run(
         Path("beta-artifacts"), {"organization_id": "org-a", "issuer_did": certificate_plan()["dsc"]["dsc_issuer_did"]}, "a" * 32,
         collector=collect, snapshot=lambda: {"sha256": "c" * 64, "container_counts": {}},
         drain=lambda: {"verified": True, "evidence": {"in_flight_jobs": 0}},
-        lifecycle=lambda *args: {"verified": True, "evidence": {"routes": [],
-                                                                 "sod_signature_verified": True,
-                                                                 "sod_sha256": "f" * 64}},
+        lifecycle=lifecycle,
         routing=lambda *args: {"verified": True, "evidence": {"native_selectors": True,
                                                                "webhook_owner": "issuance-native"}},
         flow=lambda owner: {"verified": True, "evidence": {"unsigned_webhook_http_status": 422,
@@ -145,10 +170,28 @@ def test_governed_chain_runs_with_complete_inputs_and_stays_blocked() -> None:
         certificate_plan=certificate_plan(), csca_session="csca-session",
         dsc_session="dsc-session", chain=chain,
     )
-    assert calls == ["collect", "chain", "collect"]
+    assert calls == ["collect", "chain", "lifecycle", "collect"]
     assert result["probes"]["managed_csca_dsc_chain"]["verified"] is True
     assert result["probes"]["sod_signature"]["verified"] is True
     assert result["status"] == "blocked"
+
+
+def test_failed_governed_chain_cannot_create_a_passport_job() -> None:
+    with pytest.raises(EvidenceError, match="chain did not verify"):
+        run(
+            Path("beta-artifacts"),
+            {"organization_id": "org-a", "issuer_did": certificate_plan()["dsc"]["dsc_issuer_did"]},
+            "a" * 32,
+            collector=lambda *args, **kwargs: report(),
+            snapshot=lambda: {"sha256": "c" * 64, "container_counts": {}},
+            drain=lambda: {"verified": True, "evidence": {"in_flight_jobs": 0}},
+            routing=lambda *args: {"verified": True, "evidence": {"webhook_owner": "issuance-native"}},
+            chain=lambda *args: {"verified": False, "evidence": None},
+            flow=lambda *args: pytest.fail("Flow probe must wait for the selected chain"),
+            lifecycle=lambda *args: pytest.fail("Passport lifecycle must wait for the selected chain"),
+            certificate_plan=certificate_plan(),
+            csca_session="csca-session", dsc_session="dsc-session",
+        )
 
 
 def test_incomplete_governed_chain_inputs_fail_closed_before_ceremony() -> None:
@@ -224,8 +267,8 @@ def test_workflow_artifact_matches_credentials_retirement_receipt_convention() -
     assert environment["PASSPORT_ACCEPTANCE_CERTIFICATE_PLAN_JSON"] == "${{ secrets.PASSPORT_ACCEPTANCE_CERTIFICATE_PLAN_JSON }}"
     assert environment["PASSPORT_ACCEPTANCE_CSCA_OPERATOR_COOKIE"] == "${{ secrets.PASSPORT_ACCEPTANCE_CSCA_OPERATOR_COOKIE }}"
     assert environment["PASSPORT_ACCEPTANCE_DSC_OPERATOR_COOKIE"] == "${{ secrets.PASSPORT_ACCEPTANCE_DSC_OPERATOR_COOKIE }}"
-    assert 'certificate_args+=(--certificate-plan-file "$certificate_plan_file")' in probe["run"]
-    assert "--certificate-plan-file" in probe["run"]
+    assert 'if [[ -z "${!required}" ]]; then' in probe["run"]
+    assert '--certificate-plan-file "$certificate_plan_file"' in probe["run"]
     assert upload["with"]["name"] == "passport-beta-acceptance-${{ github.run_id }}"
     assert upload["with"]["path"] == (
         "tests/artifacts/passport-beta-acceptance/"
