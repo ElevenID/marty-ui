@@ -11,8 +11,8 @@ use axum::{
     routing::{get, post},
     Json, Router,
 };
-#[cfg(test)]
 use base64::{engine::general_purpose::STANDARD, Engine as _};
+use marty_crypto::certificate::load_certificate_pem;
 use marty_issuance_service::passport_callback_handoff::sign_and_deliver;
 use reqwest::{redirect::Policy, Client, Url};
 use serde_json::{json, Value};
@@ -218,6 +218,9 @@ struct JobInput<'a> {
     job_id: &'a str,
     content_digest: Vec<u8>,
     legacy_digest: Vec<u8>,
+    sod_der_sha256: Option<Vec<u8>>,
+    dsc_der_sha256: Option<Vec<u8>>,
+    dsc_pem_wire_sha256: Vec<u8>,
     document_type: Option<&'a str>,
 }
 
@@ -292,11 +295,23 @@ fn validate_job<'a>(
     let legacy_digest =
         Sha256::digest(serde_json::to_vec(&legacy_identity).map_err(|_| ApiError::Invalid)?)
             .to_vec();
+    let sod_der_sha256 = value["sod_der_base64"]
+        .as_str()
+        .and_then(|encoded| STANDARD.decode(encoded).ok())
+        .map(|der| Sha256::digest(der).to_vec());
+    let dsc_pem = value["dsc_cert_pem"].as_str().ok_or(ApiError::Invalid)?;
+    let dsc_der_sha256 = load_certificate_pem(dsc_pem)
+        .ok()
+        .map(|der| Sha256::digest(der).to_vec());
+    let dsc_pem_wire_sha256 = Sha256::digest(dsc_pem.as_bytes()).to_vec();
     Ok(JobInput {
         organization_id,
         job_id,
         content_digest,
         legacy_digest,
+        sod_der_sha256,
+        dsc_der_sha256,
+        dsc_pem_wire_sha256,
         document_type,
     })
 }
@@ -306,8 +321,9 @@ async fn upsert_job(pool: &PgPool, job: &JobInput<'_>) -> Result<Uuid, ApiError>
     let row = sqlx::query(
         "INSERT INTO issuance_service.passport_beta_bureau_jobs
          (bureau_job_id, organization_id, source_job_id, request_sha256,
-          content_sha256, document_type, status, next_transition_at)
-         VALUES ($1, $2, $3, $4, $5, $6, 'QUEUED', NOW() + INTERVAL '5 seconds')
+          content_sha256, sod_der_sha256, dsc_der_sha256, dsc_pem_wire_sha256,
+          document_type, status, next_transition_at)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, 'QUEUED', NOW() + INTERVAL '5 seconds')
          ON CONFLICT (organization_id, source_job_id) DO UPDATE
          SET document_type = COALESCE(
              issuance_service.passport_beta_bureau_jobs.document_type,
@@ -323,6 +339,9 @@ async fn upsert_job(pool: &PgPool, job: &JobInput<'_>) -> Result<Uuid, ApiError>
     .bind(job.job_id)
     .bind(&job.legacy_digest)
     .bind(&job.content_digest)
+    .bind(&job.sod_der_sha256)
+    .bind(&job.dsc_der_sha256)
+    .bind(&job.dsc_pem_wire_sha256)
     .bind(job.document_type)
     .fetch_optional(pool)
     .await
@@ -691,6 +710,12 @@ mod tests {
         assert_eq!(job.organization_id, "org-1");
         assert_eq!(job.content_digest.len(), 32);
         assert_eq!(job.legacy_digest.len(), 32);
+        assert_eq!(job.sod_der_sha256, Some(Sha256::digest(b"sod").to_vec()));
+        assert_eq!(job.dsc_der_sha256, None);
+        assert_eq!(
+            job.dsc_pem_wire_sha256,
+            Sha256::digest(b"public-cert").to_vec()
+        );
         assert!(!job.content_digest.windows(7).any(|part| part == b"private"));
         let mut resigned = value.clone();
         resigned["sod_der_base64"] = json!("other-signature");
@@ -714,6 +739,41 @@ mod tests {
         let mut wrong = value;
         wrong["document_type"] = json!("VISA");
         assert!(validate_job(&wrong, None).is_err());
+    }
+
+    #[test]
+    fn canonical_material_receipt_hashes_the_received_sod_and_dsc() {
+        let certificate = rcgen::generate_simple_self_signed(vec!["passport.test".into()])
+            .unwrap()
+            .cert;
+        let encoded = STANDARD.encode(certificate.der().as_ref());
+        let lines = encoded
+            .as_bytes()
+            .chunks(64)
+            .map(|chunk| std::str::from_utf8(chunk).unwrap())
+            .collect::<Vec<_>>()
+            .join("\n");
+        let dsc = format!("-----BEGIN CERTIFICATE-----\n{lines}\n-----END CERTIFICATE-----\n");
+        let value = json!({
+            "job_id": "job-1", "application_id": "app-1", "organization_id": "org-1",
+            "country_code": "USA", "document_type": "TD3", "data_groups": {"DG1": "sensitive"},
+            "sod_der_base64": STANDARD.encode(b"signed-sod"), "dsc_cert_pem": dsc,
+            "mrz": {"line_1": "private-1", "line_2": "private-2"}
+        });
+        let job = validate_job(&value, None).unwrap();
+        assert_eq!(
+            job.sod_der_sha256,
+            Some(Sha256::digest(b"signed-sod").to_vec())
+        );
+        let expected_dsc_der = load_certificate_pem(&dsc).unwrap();
+        assert_eq!(
+            job.dsc_der_sha256,
+            Some(Sha256::digest(expected_dsc_der).to_vec())
+        );
+        assert_eq!(
+            job.dsc_pem_wire_sha256,
+            Sha256::digest(dsc.as_bytes()).to_vec()
+        );
     }
 
     #[test]
@@ -767,6 +827,9 @@ mod tests {
             job_id: &source,
             content_digest: vec![7; 32],
             legacy_digest: vec![7; 32],
+            sod_der_sha256: Some(vec![1; 32]),
+            dsc_der_sha256: Some(vec![2; 32]),
+            dsc_pem_wire_sha256: vec![3; 32],
             document_type: Some("TD3"),
         };
         let other = JobInput {
@@ -774,17 +837,58 @@ mod tests {
             job_id: &source,
             content_digest: vec![8; 32],
             legacy_digest: vec![8; 32],
+            sod_der_sha256: Some(vec![4; 32]),
+            dsc_der_sha256: Some(vec![5; 32]),
+            dsc_pem_wire_sha256: vec![6; 32],
             document_type: Some("TD3"),
         };
         let first_id = upsert_job(&pool, &first).await.unwrap();
         assert_eq!(upsert_job(&pool, &first).await.unwrap(), first_id);
         let second_id = upsert_job(&pool, &other).await.unwrap();
         assert_ne!(first_id, second_id);
+        let race_source = format!("{source}-receipt-race");
+        let race_a = JobInput {
+            organization_id: "test-org-a",
+            job_id: &race_source,
+            content_digest: vec![21; 32],
+            legacy_digest: vec![21; 32],
+            sod_der_sha256: Some(vec![22; 32]),
+            dsc_der_sha256: Some(vec![23; 32]),
+            dsc_pem_wire_sha256: vec![24; 32],
+            document_type: Some("TD3"),
+        };
+        let race_b = JobInput {
+            organization_id: "test-org-a",
+            job_id: &race_source,
+            content_digest: vec![21; 32],
+            legacy_digest: vec![21; 32],
+            sod_der_sha256: Some(vec![32; 32]),
+            dsc_der_sha256: Some(vec![33; 32]),
+            dsc_pem_wire_sha256: vec![34; 32],
+            document_type: Some("TD3"),
+        };
+        let (race_a_result, race_b_result) =
+            tokio::join!(upsert_job(&pool, &race_a), upsert_job(&pool, &race_b));
+        assert_eq!(race_a_result.unwrap(), race_b_result.unwrap());
+        let race_receipt = sqlx::query("SELECT sod_der_sha256, dsc_der_sha256, dsc_pem_wire_sha256 FROM issuance_service.passport_beta_bureau_jobs WHERE organization_id = 'test-org-a' AND source_job_id = $1")
+            .bind(&race_source).fetch_one(&pool).await.unwrap();
+        let observed = (
+            race_receipt.get::<Vec<u8>, _>("sod_der_sha256"),
+            race_receipt.get::<Vec<u8>, _>("dsc_der_sha256"),
+            race_receipt.get::<Vec<u8>, _>("dsc_pem_wire_sha256"),
+        );
+        assert!(
+            observed == (vec![22; 32], vec![23; 32], vec![24; 32])
+                || observed == (vec![32; 32], vec![33; 32], vec![34; 32])
+        );
         let conflicting = JobInput {
             organization_id: "test-org-a",
             job_id: &source,
             content_digest: vec![9; 32],
             legacy_digest: vec![9; 32],
+            sod_der_sha256: Some(vec![9; 32]),
+            dsc_der_sha256: Some(vec![9; 32]),
+            dsc_pem_wire_sha256: vec![9; 32],
             document_type: Some("TD3"),
         };
         assert!(matches!(
@@ -796,6 +900,9 @@ mod tests {
             job_id: first.job_id,
             content_digest: first.content_digest.clone(),
             legacy_digest: vec![10; 32],
+            sod_der_sha256: Some(vec![10; 32]),
+            dsc_der_sha256: Some(vec![10; 32]),
+            dsc_pem_wire_sha256: vec![10; 32],
             document_type: None,
         };
         assert_eq!(upsert_job(&pool, &missing_type).await.unwrap(), first_id);
@@ -804,6 +911,9 @@ mod tests {
             job_id: first.job_id,
             content_digest: first.content_digest.clone(),
             legacy_digest: first.legacy_digest.clone(),
+            sod_der_sha256: first.sod_der_sha256.clone(),
+            dsc_der_sha256: first.dsc_der_sha256.clone(),
+            dsc_pem_wire_sha256: first.dsc_pem_wire_sha256.clone(),
             document_type: Some("TD1"),
         };
         assert!(matches!(
@@ -816,11 +926,17 @@ mod tests {
             job_id: &batch_first_source,
             content_digest: vec![11; 32],
             legacy_digest: vec![12; 32],
+            sod_der_sha256: Some(vec![11; 32]),
+            dsc_der_sha256: Some(vec![12; 32]),
+            dsc_pem_wire_sha256: vec![13; 32],
             document_type: None,
         };
         let batch_first_id = upsert_job(&pool, &batch_first).await.unwrap();
         let single_after_batch = JobInput {
             document_type: Some("TD2"),
+            sod_der_sha256: Some(vec![14; 32]),
+            dsc_der_sha256: Some(vec![15; 32]),
+            dsc_pem_wire_sha256: vec![16; 32],
             ..batch_first
         };
         assert_eq!(
@@ -855,19 +971,46 @@ mod tests {
             job_id: &legacy_source,
             content_digest: vec![13; 32],
             legacy_digest: vec![13; 32],
+            sod_der_sha256: Some(vec![13; 32]),
+            dsc_der_sha256: Some(vec![13; 32]),
+            dsc_pem_wire_sha256: vec![13; 32],
             document_type: Some("TD3"),
         };
         assert!(matches!(
             upsert_job(&pool, &legacy_replay).await,
             Err(ApiError::Conflict)
         ));
-        let rows = sqlx::query("SELECT organization_id, source_job_id, request_sha256, content_sha256, document_type, status FROM issuance_service.passport_beta_bureau_jobs WHERE source_job_id = $1 ORDER BY organization_id")
+        let rows = sqlx::query("SELECT organization_id, source_job_id, request_sha256, content_sha256, sod_der_sha256, dsc_der_sha256, dsc_pem_wire_sha256, document_type, status FROM issuance_service.passport_beta_bureau_jobs WHERE source_job_id = $1 ORDER BY organization_id")
             .bind(&source).fetch_all(&pool).await.unwrap();
         assert_eq!(rows.len(), 2);
         assert_eq!(rows[0].get::<String, _>("organization_id"), "test-org-a");
         assert_eq!(rows[1].get::<String, _>("organization_id"), "test-org-b");
         assert_eq!(rows[0].get::<String, _>("status"), "QUEUED");
         assert_eq!(rows[0].get::<String, _>("document_type"), "TD3");
+        assert_eq!(rows[0].get::<Vec<u8>, _>("sod_der_sha256"), vec![1; 32]);
+        assert_eq!(rows[0].get::<Vec<u8>, _>("dsc_der_sha256"), vec![2; 32]);
+        assert_eq!(
+            rows[0].get::<Vec<u8>, _>("dsc_pem_wire_sha256"),
+            vec![3; 32]
+        );
+        assert_eq!(rows[1].get::<Vec<u8>, _>("sod_der_sha256"), vec![4; 32]);
+        let batch_receipt = sqlx::query("SELECT sod_der_sha256, dsc_der_sha256, dsc_pem_wire_sha256 FROM issuance_service.passport_beta_bureau_jobs WHERE bureau_job_id = $1")
+            .bind(batch_first_id).fetch_one(&pool).await.unwrap();
+        assert_eq!(
+            batch_receipt.get::<Vec<u8>, _>("sod_der_sha256"),
+            vec![11; 32]
+        );
+        assert_eq!(
+            batch_receipt.get::<Vec<u8>, _>("dsc_der_sha256"),
+            vec![12; 32]
+        );
+        assert_eq!(
+            batch_receipt.get::<Vec<u8>, _>("dsc_pem_wire_sha256"),
+            vec![13; 32]
+        );
+        let legacy_receipt: Option<Vec<u8>> = sqlx::query_scalar("SELECT sod_der_sha256 FROM issuance_service.passport_beta_bureau_jobs WHERE source_job_id = $1")
+            .bind(&legacy_source).fetch_one(&pool).await.unwrap();
+        assert!(legacy_receipt.is_none());
         let columns: Vec<String> = sqlx::query_scalar("SELECT column_name FROM information_schema.columns WHERE table_schema = 'issuance_service' AND table_name = 'passport_beta_bureau_jobs'")
             .fetch_all(&pool).await.unwrap();
         for forbidden in [
@@ -1083,7 +1226,7 @@ mod tests {
             batch_response["jobs"][0]["bureau_job_id"]
         );
         server.abort();
-        sqlx::query("DELETE FROM issuance_service.passport_beta_bureau_jobs WHERE source_job_id IN ($1, $2, $3, $4, $5) AND organization_id IN ('test-org-a', 'test-org-b')")
-            .bind(&source).bind(&http_source).bind(&batch_job_id).bind(&batch_first_source).bind(&legacy_source).execute(&pool).await.unwrap();
+        sqlx::query("DELETE FROM issuance_service.passport_beta_bureau_jobs WHERE source_job_id IN ($1, $2, $3, $4, $5, $6) AND organization_id IN ('test-org-a', 'test-org-b')")
+            .bind(&source).bind(&http_source).bind(&batch_job_id).bind(&batch_first_source).bind(&legacy_source).bind(&race_source).execute(&pool).await.unwrap();
     }
 }
