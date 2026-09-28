@@ -48,6 +48,7 @@ COMPLETED_INIT = frozenset({
     "revocation-profile-migrate", "keycloak-configurator", "openbao-init",
 })
 SECRET_MOUNTS = {
+    "edge": ("passport_edge_tls_cert", "passport_edge_tls_key"),
     "postgres": ("marty_db_password",),
     "redis": (),
     "openbao": ("bao_root_token",),
@@ -197,7 +198,8 @@ def _revocation_environment(actual: object, status_origin: str) -> None:
             "Revocation Profile runtime identity differs from disposable model")
 
 
-def _support_environment(actual: object, service: str, status_origin: str) -> None:
+def _support_environment(actual: object, service: str, status_origin: str,
+                         surface: str) -> None:
     environment = _runtime_environment(actual, service)
     database = "postgresql+asyncpg://marty:${MARTY_DB_PASSWORD}@postgres:5432/marty"
     common = {
@@ -207,16 +209,18 @@ def _support_environment(actual: object, service: str, status_origin: str) -> No
         "GRPC_SERVICE_TOKEN_FILE": "/run/secrets/grpc_service_token",
         "ORG_GRPC_TARGET": "organization:9002",
     }
-    public_origin = status_origin.replace("127.0.0.1", "localhost")
+    public_origin = status_origin
     expected = {
         "trust-profile": {
             **common, "SERVICE_NAME": "trust_profile", "TRUST_PROFILE_SERVICE_PORT": "8004",
             "SIGNING_KEYS_INTERNAL_API_KEY_FILE":
                 "/run/secrets/signing_keys_internal_api_key",
-            "MARTY_ISSUER_DID": "did:web:localhost:orgs:marty",
+            "MARTY_ISSUER_DID":
+                f"did:web:localhost%3A{status_origin.rsplit(':', 1)[1]}:orgs:marty",
             "MARTY_ISSUER_BASE_URL": public_origin,
             "MARTY_ORG_ID": "00000000-0000-0000-0000-000000000001",
-            "MARTY_ORG_SLUG": "marty", "PUBLIC_DOMAIN": "localhost",
+            "MARTY_ORG_SLUG": "marty",
+            "PUBLIC_DOMAIN": f"localhost:{status_origin.rsplit(':', 1)[1]}",
             "DID_RESOLUTION_BASE_URL": "http://gateway:8000",
         },
         "credential-template": {
@@ -240,13 +244,21 @@ def _support_environment(actual: object, service: str, status_origin: str) -> No
             "PUBLIC_BASE_URL": public_origin,
             "ISSUER_BASE_URL": public_origin,
             "DID_RESOLUTION_BASE_URL": "http://gateway:8000",
-            "PUBLIC_DOMAIN": "localhost", "MARTY_ORG_SLUG": "marty",
+            "PUBLIC_DOMAIN": f"localhost:{status_origin.rsplit(':', 1)[1]}",
+            "MARTY_ORG_SLUG": "marty",
         },
         "deployment-profile": {
             **common, "SERVICE_NAME": "deployment_profile",
             "DEPLOYMENT_PROFILE_SERVICE_PORT": "8010",
         },
     }[service]
+    if service == "presentation-policy" and surface == "selfhost":
+        expected.update({
+            "ENVIRONMENT": "production",
+            "GRPC_WORKLOAD_TLS_SERVER_CERT": "/run/secrets/pp_workload_server_cert",
+            "GRPC_WORKLOAD_TLS_SERVER_KEY": "/run/secrets/pp_workload_server_key",
+            "GRPC_WORKLOAD_TLS_CA_CERT": "/run/secrets/workload_identity_ca_cert",
+        })
     require(all(environment.get(key) == value for key, value in expected.items())
             and all(key not in environment for key in (
                 "MARTY_DB_PASSWORD", "GRPC_SERVICE_TOKEN", "ISSUANCE_API_KEY",
@@ -257,10 +269,35 @@ def _support_environment(actual: object, service: str, status_origin: str) -> No
 def _issuer_origin_environment(actual: object, service: str,
                                status_origin: str) -> None:
     environment = _runtime_environment(actual, service)
-    origin = status_origin.replace("127.0.0.1", "localhost")
+    origin = status_origin
     key = "MARTY_ISSUER_BASE_URL" if service == "db-migrate" else "ISSUER_BASE_URL"
     require(environment.get(key) == origin,
             f"{service} issuer origin differs from disposable Gateway")
+
+
+def _flow_surface_environment(actual: object, surface: str) -> None:
+    environment = _runtime_environment(actual, "Flow")
+    expected = {
+        "FLOW_CALLBACK_DESTINATIONS": (
+            "00000000-0000-0000-0000-000000000001|"
+            "https://edge:8443/__disposable/flow-callback?nonce=__MARTY_TOKEN__"),
+        "FLOW_WEBHOOK_SECRET_FILE": "/run/secrets/flow_webhook_secret",
+        "FLOW_APPLICATION_EVENT_HMAC_KEY_FILE":
+            "/run/secrets/flow_application_event_hmac_key",
+        "FLOW_CALLBACK_CA_CERT_FILE": "/run/secrets/workload_identity_ca_cert",
+        "GRPC_WORKLOAD_TLS_CLIENT_CERT": "/run/secrets/flow_workload_client_cert",
+        "GRPC_WORKLOAD_TLS_CLIENT_KEY": "/run/secrets/flow_workload_client_key",
+        "GRPC_WORKLOAD_TLS_SERVER_CERT": "/run/secrets/flow_workload_server_cert",
+        "GRPC_WORKLOAD_TLS_SERVER_KEY": "/run/secrets/flow_workload_server_key",
+        "GRPC_WORKLOAD_TLS_CA_CERT": "/run/secrets/workload_identity_ca_cert",
+    }
+    require((surface == "selfhost"
+             and environment.get("ENVIRONMENT") == "production"
+             and all(environment.get(key) == value for key, value in expected.items()))
+            or (surface == "base"
+                and environment.get("ENVIRONMENT") == "development"
+                and not any(key in environment for key in expected)),
+            "Disposable Flow callback or workload TLS runtime differs from surface")
 
 
 def _ceremony_environment(actual: object, service: str, surface: str) -> None:
@@ -286,27 +323,27 @@ def _ceremony_environment(actual: object, service: str, surface: str) -> None:
                 "Selfhost runtime carries a beta certificate ceremony credential")
 
 
-def _status_origin(gateway: dict) -> str:
-    host = gateway.get("HostConfig")
-    networks = gateway.get("NetworkSettings")
+def _status_origin(edge: dict) -> str:
+    host = edge.get("HostConfig")
+    networks = edge.get("NetworkSettings")
     bindings = host.get("PortBindings") if isinstance(host, dict) else None
     published = networks.get("Ports") if isinstance(networks, dict) else None
-    require(isinstance(bindings, dict) and set(bindings) == {"8000/tcp"}
-            and isinstance(bindings["8000/tcp"], list)
-            and len(bindings["8000/tcp"]) == 1
-            and isinstance(bindings["8000/tcp"][0], dict)
+    require(isinstance(bindings, dict) and set(bindings) == {"8443/tcp"}
+            and isinstance(bindings["8443/tcp"], list)
+            and len(bindings["8443/tcp"]) == 1
+            and isinstance(bindings["8443/tcp"][0], dict)
             and isinstance(published, dict)
-            and published.get("8000/tcp") == bindings["8000/tcp"]
+            and published.get("8443/tcp") == bindings["8443/tcp"]
             and all(value is None for key, value in published.items()
-                    if key != "8000/tcp"),
-            "Disposable Gateway published port identity is invalid")
-    binding = bindings["8000/tcp"][0]
+                    if key != "8443/tcp"),
+            "Disposable HTTPS edge published port identity is invalid")
+    binding = bindings["8443/tcp"][0]
     port = binding.get("HostPort")
     require(binding.get("HostIp") == "127.0.0.1"
             and isinstance(port, str) and port.isdigit()
             and 1024 <= int(port) <= 65535,
-            "Disposable Gateway published port leaves loopback")
-    return f"http://127.0.0.1:{port}"
+            "Disposable HTTPS edge published port leaves loopback")
+    return f"https://localhost:{port}"
 
 
 def _expected_mounts(service: str, project: str, disposable_root: Path,
@@ -318,10 +355,25 @@ def _expected_mounts(service: str, project: str, disposable_root: Path,
                        + (BASE_CEREMONY_MOUNTS if surface == "base"
                           and service in {"gateway", "signing-keys"} else ()))
     }
+    if surface == "selfhost":
+        extra = {
+            "flow": ("flow_webhook_secret", "flow_application_event_hmac_key",
+                     "flow_workload_client_cert", "flow_workload_client_key",
+                     "flow_workload_server_cert", "flow_workload_server_key",
+                     "workload_identity_ca_cert"),
+            "presentation-policy": ("pp_workload_server_cert", "pp_workload_server_key",
+                                    "workload_identity_ca_cert"),
+        }.get(service, ())
+        expected.update(("bind", str(disposable_root / "secrets" / name),
+                         f"/run/secrets/{name}", False) for name in extra)
     if service == "openbao":
         expected.add(("bind", str(Path(__file__).resolve().parents[1]
                                    / "scripts/passport_supported_openbao_start.sh"),
                       "/usr/local/bin/passport-supported-openbao-start", False))
+    if service == "edge":
+        expected.add(("bind", str(Path(__file__).resolve().parents[1]
+                                   / "scripts/passport_supported_edge.conf"),
+                      "/etc/nginx/conf.d/default.conf", False))
     if service in DATA_MOUNTS:
         expected.update(("volume", f"{project}_{name}", destination, True)
                         for name, destination in DATA_MOUNTS[service])
@@ -391,8 +443,16 @@ def verify(record: dict, surface: str, now: datetime,
     require(set(SECRET_MOUNTS) == DISPOSABLE_SERVICES,
             "Disposable secret mount contract is incomplete")
 
+    edge = _inspect("container", containers["edge"], runner)
+    status_origin = _status_origin(edge)
     gateway = _inspect("container", containers["gateway"], runner)
-    status_origin = _status_origin(gateway)
+    gateway_host = gateway.get("HostConfig")
+    gateway_networks = gateway.get("NetworkSettings")
+    require(isinstance(gateway_host, dict) and isinstance(gateway_networks, dict)
+            and not gateway_host.get("PortBindings")
+            and isinstance(gateway_networks.get("Ports"), dict)
+            and not any(value for value in gateway_networks["Ports"].values()),
+            "Disposable Gateway bypasses HTTPS edge")
 
     listed = set(runner(["ps", "-aq", "--no-trunc", "--filter",
                          f"label=com.docker.compose.project={project}"]).split())
@@ -436,21 +496,33 @@ def verify(record: dict, surface: str, now: datetime,
             _organization_environment(config.get("Env"), record)
         elif service in {"gateway", "signing-keys"}:
             _ceremony_environment(config.get("Env"), service, surface)
+            environment = _runtime_environment(config.get("Env"), service)
+            require(environment.get("PUBLIC_DOMAIN")
+                    == f"localhost:{status_origin.rsplit(':', 1)[1]}",
+                    "Disposable runtime public domain differs from managed issuer DID")
             if service == "gateway":
                 _issuer_origin_environment(config.get("Env"), service, status_origin)
         elif service == "issuance-native":
             _issuer_origin_environment(config.get("Env"), service, status_origin)
+        elif service == "flow":
+            _flow_surface_environment(config.get("Env"), surface)
         elif service == "revocation-profile":
             _revocation_environment(config.get("Env"), status_origin)
         elif service in {"credential-template", "trust-profile",
                          "presentation-policy", "deployment-profile"}:
-            _support_environment(config.get("Env"), service, status_origin)
+            _support_environment(config.get("Env"), service, status_origin, surface)
         elif service == "revocation-profile-migrate":
             migration_env = _runtime_environment(config.get("Env"), "Revocation migration")
             require(migration_env.get("STATUS_LIST_BASE_URL") == status_origin,
                     "Revocation migration status origin differs from Gateway")
         elif service == "db-migrate":
             _issuer_origin_environment(config.get("Env"), service, status_origin)
+            environment = _runtime_environment(config.get("Env"), service)
+            require(environment.get("PUBLIC_DOMAIN")
+                    == f"localhost:{status_origin.rsplit(':', 1)[1]}"
+                    and environment.get("MARTY_ISSUER_DID")
+                    == f"did:web:localhost%3A{status_origin.rsplit(':', 1)[1]}:orgs:marty",
+                    "Disposable issuer bootstrap DID differs from public domain")
         require(re.fullmatch(r"/" + re.escape(project) + "-"
                              + re.escape(service) + r"-[1-9][0-9]*",
                              item.get("Name", "")) is not None

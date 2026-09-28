@@ -11,17 +11,21 @@ from __future__ import annotations
 import argparse
 import json
 import re
+import ssl
 import subprocess
+import tempfile
 from pathlib import Path
 from typing import Any, Callable
 from urllib.error import HTTPError, URLError
 from urllib.parse import urlsplit
-from urllib.request import HTTPRedirectHandler, Request, build_opener
+from urllib.request import HTTPRedirectHandler, HTTPSHandler, ProxyHandler, Request, build_opener
 
 if __package__:
     from .collect_passport_beta_acceptance import digest_file, verify_attestations
+    from .passport_supported_infra_images import qualified_images
 else:
     from collect_passport_beta_acceptance import digest_file, verify_attestations
+    from passport_supported_infra_images import qualified_images
 
 
 SHA = re.compile(r"[0-9a-f]{40}\Z")
@@ -159,13 +163,39 @@ def observe_compose(
         observed[service] = {"container_id": ids[0], "image_id": record["Image"],
                              "oci_reference": services_reference, "selectors": flags}
         if service == "gateway":
-            ports = record.get("NetworkSettings", {}).get("Ports", {}).get("8000/tcp")
-            require(isinstance(ports, list) and len(ports) == 1
-                    and isinstance(ports[0], dict)
-                    and ports[0].get("HostIp") == "127.0.0.1"
-                    and str(ports[0].get("HostPort", "")).isdigit(),
-                    f"{surface} gateway has no unique loopback port")
-            observed[service]["loopback_port"] = int(ports[0]["HostPort"])
+            require(not record.get("HostConfig", {}).get("PortBindings")
+                    and not any(value for value in record.get("NetworkSettings", {})
+                                .get("Ports", {}).values()),
+                    f"{surface} Gateway bypasses disposable HTTPS edge")
+    ids = runner(["docker", "ps", "-aq", "--filter",
+                  f"label=com.docker.compose.project={project}", "--filter",
+                  "label=com.docker.compose.service=edge"]).split()
+    require(len(ids) == 1, f"{surface} HTTPS edge is missing or ambiguous")
+    payload = json.loads(runner(["docker", "inspect", ids[0]]))
+    require(isinstance(payload, list) and len(payload) == 1
+            and isinstance(payload[0], dict),
+            f"{surface} HTTPS edge inspection is ambiguous")
+    edge = payload[0]
+    config = edge.get("Config")
+    state = edge.get("State")
+    labels = config.get("Labels") if isinstance(config, dict) else None
+    require(isinstance(labels, dict)
+            and labels.get("com.docker.compose.project") == project
+            and labels.get("com.docker.compose.service") == "edge"
+            and isinstance(state, dict) and state.get("Running") is True
+            and state.get("Status") == "running"
+            and config.get("Image") == qualified_images(verify_registry=False)["edge"],
+            f"{surface} HTTPS edge is not the isolated pinned image")
+    ports = edge.get("NetworkSettings", {}).get("Ports", {}).get("8443/tcp")
+    bindings = edge.get("HostConfig", {}).get("PortBindings", {}).get("8443/tcp")
+    require(isinstance(ports, list) and len(ports) == 1
+            and ports == bindings and isinstance(ports[0], dict)
+            and ports[0].get("HostIp") == "127.0.0.1"
+            and str(ports[0].get("HostPort", "")).isdigit(),
+            f"{surface} HTTPS edge has no unique loopback port")
+    observed["edge"] = {"container_id": ids[0],
+                        "oci_reference": config["Image"],
+                        "loopback_port": int(ports[0]["HostPort"])}
     return observed
 
 
@@ -242,7 +272,8 @@ def observe_kubernetes(
 
 def loopback_origin(origin: str) -> str:
     parsed = urlsplit(origin)
-    require(parsed.scheme == "http" and parsed.hostname == "127.0.0.1"
+    require((parsed.scheme, parsed.hostname) in {
+                ("http", "127.0.0.1"), ("https", "localhost")}
             and parsed.port is not None and not parsed.path and not parsed.query
             and not parsed.fragment and not parsed.username and not parsed.password,
             "Supported probe origin must be an isolated loopback forward")
@@ -254,14 +285,22 @@ class NoRedirect(HTTPRedirectHandler):
         return None
 
 
-def capability_status(origin: str, api_key: str | None) -> tuple[int, dict | None]:
+def capability_status(origin: str, api_key: str | None,
+                      ca_cert_file: Path | None = None) -> tuple[int, dict | None]:
     loopback_origin(origin)
+    use_https = urlsplit(origin).scheme == "https"
+    require(not use_https or ca_cert_file is not None,
+            "Disposable HTTPS capability probe has no CA certificate")
     headers = {"Accept": "application/json", "Cache-Control": "no-cache"}
     if api_key:
         headers["x-api-key"] = api_key
     url = origin + "/v1/passport/capabilities"
     try:
-        with build_opener(NoRedirect).open(Request(url, headers=headers, method="GET"),
+        handlers = [NoRedirect(), ProxyHandler({})]
+        if use_https:
+            handlers.append(HTTPSHandler(context=ssl.create_default_context(
+                cafile=str(ca_cert_file))))
+        with build_opener(*handlers).open(Request(url, headers=headers, method="GET"),
                                           timeout=20) as response:
             require(response.geturl() == url, "Supported passport capability redirected")
             raw = response.read(64 * 1024 + 1)
@@ -270,7 +309,7 @@ def capability_status(origin: str, api_key: str | None) -> tuple[int, dict | Non
             return response.status, body if isinstance(body, dict) else None
     except HTTPError as exc:
         return exc.code, None
-    except (OSError, URLError, ValueError) as exc:
+    except (OSError, URLError, ValueError, ssl.SSLError) as exc:
         raise SupportedEvidenceError("Supported passport capability probe failed") from exc
 
 
@@ -297,7 +336,7 @@ def collect(
     kubernetes_origin: str | None = None, api_key: str | None = None,
     compose_probe: Callable[[str, str, str], dict] = observe_compose,
     kubernetes_probe: Callable[[str, str, str], dict] = observe_kubernetes,
-    capability_probe: Callable[[str, str | None], tuple[int, dict | None]] = capability_status,
+    capability_probe: Callable[[str, str | None, Path | None], tuple[int, dict | None]] = capability_status,
     attest: Callable[[Path, dict[str, str], str], bool] = verify_attestations,
 ) -> dict:
     require(SHA.fullmatch(source_commit) is not None, "Protected source commit is invalid")
@@ -354,13 +393,22 @@ def collect(
                        if name == "kubernetes" else
                        "nine-route/simulator/rollback acceptance is pending")
             observed = report_surface(runtime, pending, source_commit)
-            bound_port = runtime.get("gateway", {}).get("loopback_port")
+            bound_port = runtime.get("edge", {}).get("loopback_port")
             parsed_origin = urlsplit(origin) if origin is not None else None
             if (name != "kubernetes" and origin is not None and api_key is not None
+                    and parsed_origin.scheme == "https"
+                    and parsed_origin.hostname == "localhost"
                     and parsed_origin.port == bound_port):
+                ca_cert_file = (Path(tempfile.gettempdir()) / target / "secrets"
+                                / "workload_identity_ca_cert")
                 try:
-                    anonymous, _ = capability_probe(origin, None)
-                    authenticated, body = capability_probe(origin, api_key)
+                    require(ca_cert_file.parent.parent.resolve() == ca_cert_file.parent.parent
+                            and ca_cert_file.parent.resolve() == ca_cert_file.parent
+                            and ca_cert_file.is_file()
+                            and ca_cert_file.resolve() == ca_cert_file,
+                            "Disposable HTTPS CA is outside the project")
+                    anonymous, _ = capability_probe(origin, None, ca_cert_file)
+                    authenticated, body = capability_probe(origin, api_key, ca_cert_file)
                     require(anonymous in (401, 403)
                             and authenticated == 200 and isinstance(body, dict)
                             and body.get("supported") is True
@@ -377,7 +425,7 @@ def collect(
                     observed["unauthenticated_denial"] = {"verified": True,
                                                             "evidence": {"http_status": anonymous}}
             elif origin is not None:
-                observed["blocker"] = "probe origin is not bound to the inspected gateway"
+                observed["blocker"] = "probe origin is not bound to the inspected HTTPS edge"
             surfaces[name] = observed
     return {"schema": "marty.passport-supported-consumer-acceptance/v1",
             "status": "blocked", "source_commit": source_commit,

@@ -32,6 +32,8 @@ if __package__:
     from .passport_supported_provisioning_plan import (
         COMMIT, PLAN_WORKFLOW, RUN_ID, PlanError, _attest, release_inputs,
     )
+    from .passport_supported_infra_images import ROLES
+    from .stage_passport_disposable_tls import TLS_FILES, stage_tls
 else:
     from check_passport_supported_compose_ownership import (
         _inspect, _labels, docker, verify as verify_ownership,
@@ -43,6 +45,8 @@ else:
     from passport_supported_provisioning_plan import (
         COMMIT, PLAN_WORKFLOW, RUN_ID, PlanError, _attest, release_inputs,
     )
+    from passport_supported_infra_images import ROLES
+    from stage_passport_disposable_tls import TLS_FILES, stage_tls
 
 
 WORKFLOW_REF = (
@@ -57,12 +61,14 @@ RESOURCE_ID = re.compile(r"[0-9a-f]{64}\Z")
 TEST_KEY = re.compile(rb"mk_test_[A-Za-z0-9]{43}\n\Z")
 KEY_COMMAND = "/usr/local/bin/marty-passport-acceptance-api-key"
 CONTAINER_KEY = "/app/data/passport-acceptance-api-key"
-STAGED_SECRETS = frozenset({
+TEXT_SECRETS = frozenset({
     "bao_root_token", "marty_db_password", "signing_keys_internal_api_key",
     "dsc_issue_gateway_key", "csca_issue_gateway_key",
     "issuance_api_key", "callback_signer_api_key", "grpc_service_token",
     "bureau_database_url", "token_hmac_key", "integration_secret_master_key",
+    "flow_webhook_secret", "flow_application_event_hmac_key",
 })
+STAGED_SECRETS = TEXT_SECRETS | TLS_FILES
 BOOTSTRAPPED_SECRETS = frozenset({"bao_token", "callback_signer_bao_token"})
 EPHEMERAL_SECRETS = BOOTSTRAPPED_SECRETS | frozenset({"passport_acceptance_api_key"})
 DISPOSABLE_NETWORKS = frozenset({"private", "callback_signing"})
@@ -213,7 +219,7 @@ def stage_disposable_inputs(
             and created <= current < expires <= created + timedelta(hours=2),
             "Disposable input lease is invalid")
     images = plan.get("infra_images")
-    require(isinstance(images, dict) and set(images) == {"postgres", "redis", "openbao"},
+    require(isinstance(images, dict) and set(images) == set(ROLES),
             "Disposable infrastructure image set is invalid")
     references = {
         "MARTY_SERVICES_IMAGE": plan.get("services_reference"),
@@ -259,8 +265,10 @@ def stage_disposable_inputs(
             "bureau_database_url": f"postgresql://marty:{database_password}@postgres:5432/marty",
             "token_hmac_key": secrets.token_hex(32),
             "integration_secret_master_key": base64.b64encode(secrets.token_bytes(32)).decode("ascii"),
+            "flow_webhook_secret": secrets.token_hex(32),
+            "flow_application_event_hmac_key": secrets.token_hex(32),
         }
-        require(set(values) == STAGED_SECRETS, "Disposable secret set is incomplete")
+        require(set(values) == TEXT_SECRETS, "Disposable secret set is incomplete")
         env = {
             **references,
             "PASSPORT_ACCEPTANCE_PROJECT": project,
@@ -284,6 +292,9 @@ def stage_disposable_inputs(
             # intended containers. OpenBao's pinned image starts as root.
             mode = 0o600 if name == "bao_root_token" else 0o644
             _write_private(secret_dir / name, value.encode("ascii"), mode=mode)
+        stage_tls(secret_dir)
+        require({path.name for path in secret_dir.iterdir()} == STAGED_SECRETS,
+                "Disposable TLS and secret set is incomplete")
         require(all(not (secret_dir / name).exists() for name in BOOTSTRAPPED_SECRETS),
                 "Disposable OpenBao tokens were prepopulated")
         env_file = root / "acceptance.env"

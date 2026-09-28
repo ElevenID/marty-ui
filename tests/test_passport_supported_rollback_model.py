@@ -55,7 +55,7 @@ def safe_model(root: Path) -> dict:
     services["passport-beta-bureau"]["networks"] = ["private", "callback_signing"]
     services["issuance-native"]["environment"].update({
         "ENVIRONMENT": "development",
-        "ISSUER_BASE_URL": "http://localhost:29876",
+        "ISSUER_BASE_URL": "https://localhost:29876",
         "ISSUANCE_GRPC_ENABLED": "true", "ISSUANCE_GRPC_PORT": "9005",
         "CT_GRPC_TARGET": "credential-template:9003",
         "CREDENTIAL_TEMPLATE_SERVICE_URL": "http://credential-template:8003",
@@ -78,8 +78,8 @@ def safe_model(root: Path) -> dict:
         "GRPC_INSECURE_ALLOWED": "true",
         "SIGNING_KEYS_DSC_ISSUE_GATEWAY_KEY_FILE": "/run/secrets/dsc_issue_gateway_key",
         "SIGNING_KEYS_CSCA_ISSUE_GATEWAY_KEY_FILE": "/run/secrets/csca_issue_gateway_key",
-        "PUBLIC_DOMAIN": "localhost",
-        "ISSUER_BASE_URL": "http://localhost:29876",
+        "PUBLIC_DOMAIN": "localhost:29876",
+        "ISSUER_BASE_URL": "https://localhost:29876",
         "PASSPORT_PROVIDER_INGRESS_GATEWAY_ENABLED": "false",
         "ORGANIZATION_SERVICE_URL": "http://organization:8002",
         "ORG_GRPC_TARGET": "organization:9002",
@@ -91,8 +91,16 @@ def safe_model(root: Path) -> dict:
         "PRESENTATION_POLICY_SERVICE_URL": "http://presentation-policy:8009",
         "DEPLOYMENT_PROFILE_SERVICE_URL": "http://deployment-profile:8010",
     })
-    services["gateway"]["ports"] = [
-        {"host_ip": "127.0.0.1", "published": "29876", "target": 8000}]
+    services["edge"] = {
+        "image": qualified_images(verify_registry=False)["edge"],
+        "networks": ["private"],
+        "ports": [{"host_ip": "127.0.0.1", "published": "29876", "target": 8443}],
+        "depends_on": {"gateway": {"condition": "service_started"}},
+        "configs": [{"source": "passport_supported_edge",
+                     "target": "/etc/nginx/conf.d/default.conf"}],
+        "secrets": [{"source": "passport_edge_tls_cert"},
+                    {"source": "passport_edge_tls_key"}],
+    }
     services["gateway"]["depends_on"] = {
         "organization": {"condition": "service_healthy"},
         "revocation-profile": {"condition": "service_healthy"},
@@ -102,7 +110,7 @@ def safe_model(root: Path) -> dict:
     }
     services["flow"]["environment"].update({
         "ENVIRONMENT": "development",
-        "MARTY_ISSUER_DID": "did:web:localhost:orgs:marty",
+        "MARTY_ISSUER_DID": "did:web:localhost%3A29876:orgs:marty",
         "ORG_GRPC_TARGET": "organization:9002",
     })
     for name in ("gateway", "flow", "issuance-native"):
@@ -154,7 +162,7 @@ def safe_model(root: Path) -> dict:
                 "postgresql://marty:${MARTY_DB_PASSWORD}@postgres:5432/marty",
             "MARTY_DB_PASSWORD_FILE": "/run/secrets/marty_db_password",
             "PUBLIC_API_URL": "http://gateway:8000",
-            "STATUS_LIST_BASE_URL": "http://127.0.0.1:29876",
+            "STATUS_LIST_BASE_URL": "https://localhost:29876",
             "MARTY_ORG_ID": "00000000-0000-0000-0000-000000000001",
         },
         "secrets": [{"source": "marty_db_password"}],
@@ -214,7 +222,7 @@ def safe_model(root: Path) -> dict:
             "REDIS_URL": "redis://redis:6379/4",
             "ORG_GRPC_TARGET": "organization:9002",
             "PUBLIC_API_URL": "http://gateway:8000",
-            "STATUS_LIST_BASE_URL": "http://127.0.0.1:29876",
+            "STATUS_LIST_BASE_URL": "https://localhost:29876",
             "MARTY_ORG_ID": "00000000-0000-0000-0000-000000000001",
         },
         "secrets": [{"source": "marty_db_password"},
@@ -249,16 +257,16 @@ def safe_model(root: Path) -> dict:
         "SIGNING_KEYS_INTERNAL_URL": "http://signing-keys:8017/internal",
         "SIGNING_KEYS_INTERNAL_API_KEY_FILE": "/run/secrets/signing_keys_internal_api_key",
         "TRUST_PROFILE_SERVICE_URL": "http://trust-profile:8004",
-        "PUBLIC_API_URL": "http://localhost:29876",
+        "PUBLIC_API_URL": "https://localhost:29876",
         "MARTY_ORG_ID": "00000000-0000-0000-0000-000000000001",
         "MARTY_MIGRATION_PROFILE": "dev",
     })
     services["trust-profile"]["environment"].update({
         "SIGNING_KEYS_INTERNAL_API_KEY_FILE": "/run/secrets/signing_keys_internal_api_key",
         "MARTY_ORG_ID": "00000000-0000-0000-0000-000000000001",
-        "MARTY_ORG_SLUG": "marty", "MARTY_ISSUER_DID": "did:web:localhost:orgs:marty",
-        "MARTY_ISSUER_BASE_URL": "http://localhost:29876",
-        "PUBLIC_DOMAIN": "localhost", "DID_RESOLUTION_BASE_URL": "http://gateway:8000",
+        "MARTY_ORG_SLUG": "marty", "MARTY_ISSUER_DID": "did:web:localhost%3A29876:orgs:marty",
+        "MARTY_ISSUER_BASE_URL": "https://localhost:29876",
+        "PUBLIC_DOMAIN": "localhost:29876", "DID_RESOLUTION_BASE_URL": "http://gateway:8000",
     })
     for service in ("credential-template", "trust-profile"):
         services[service]["secrets"].append(
@@ -268,8 +276,8 @@ def safe_model(root: Path) -> dict:
         "DID_RESOLUTION_BASE_URL": "http://gateway:8000",
         "TRUST_PROFILE_SERVICE_URL": "http://trust-profile:8004",
         "ISSUANCE_NATIVE_SERVICE_URL": "http://issuance-native:8005",
-        "PUBLIC_DOMAIN": "localhost", "PUBLIC_BASE_URL": "http://localhost:29876",
-        "ISSUER_BASE_URL": "http://localhost:29876", "MARTY_ORG_SLUG": "marty",
+        "PUBLIC_DOMAIN": "localhost:29876", "PUBLIC_BASE_URL": "https://localhost:29876",
+        "ISSUER_BASE_URL": "https://localhost:29876", "MARTY_ORG_SLUG": "marty",
     })
     services["presentation-policy"]["secrets"].append({"source": "issuance_api_key"})
     for service, port, dependencies in (
@@ -289,7 +297,7 @@ def safe_model(root: Path) -> dict:
         services[service]["healthcheck"] = {
             "test": ["CMD", "curl", "--fail", f"http://localhost:{port}/health"]}
     services["flow"]["environment"].update({
-        "PUBLIC_BASE_URL": "http://localhost:29876",
+        "PUBLIC_BASE_URL": "https://localhost:29876",
         "CT_GRPC_TARGET": "credential-template:9003",
         "PP_GRPC_TARGET": "presentation-policy:9009",
         "ISSUANCE_GRPC_TARGET": "issuance-native:9005",
@@ -313,7 +321,7 @@ def safe_model(root: Path) -> dict:
                             "/run/secrets/dsc_issue_gateway_key",
                         "SIGNING_KEYS_CSCA_ISSUE_GATEWAY_KEY_FILE":
                             "/run/secrets/csca_issue_gateway_key",
-                        "PUBLIC_DOMAIN": "localhost",
+                        "PUBLIC_DOMAIN": "localhost:29876",
                         "SIGNING_KEYS_INTERNAL_API_KEY_FILE":
                             "/run/secrets/signing_keys_internal_api_key"},
         "secrets": [{"source": "signing_keys_internal_api_key"}],
@@ -331,9 +339,9 @@ def safe_model(root: Path) -> dict:
             "MARTY_KMS_BOOTSTRAP_ENABLED": "true",
             "MARTY_ORG_ADMIN_EMAIL": "admin@example.invalid",
             "MARTY_ORG_ID": "00000000-0000-0000-0000-000000000001",
-            "PUBLIC_DOMAIN": "localhost",
-            "MARTY_ISSUER_BASE_URL": "http://localhost:29876",
-            "MARTY_ISSUER_DID": "did:web:localhost:orgs:marty",
+            "PUBLIC_DOMAIN": "localhost:29876",
+            "MARTY_ISSUER_BASE_URL": "https://localhost:29876",
+            "MARTY_ISSUER_DID": "did:web:localhost%3A29876:orgs:marty",
         },
         "depends_on": {**{name: {"condition": "service_healthy"}
                           for name in ("postgres", "redis", "openbao")},
@@ -386,9 +394,15 @@ def safe_model(root: Path) -> dict:
                 "token_hmac_key": {"file": str(root / "secrets/token_hmac_key")},
                 "integration_secret_master_key": {
                     "file": str(root / "secrets/integration_secret_master_key")},
+                "passport_edge_tls_cert": {
+                    "file": str(root / "secrets/passport_edge_tls_cert")},
+                "passport_edge_tls_key": {
+                    "file": str(root / "secrets/passport_edge_tls_key")},
             },
             "configs": {"passport_supported_openbao_start": {
-                "file": str(preflight.ROOT / "scripts/passport_supported_openbao_start.sh")}},
+                "file": str(preflight.ROOT / "scripts/passport_supported_openbao_start.sh")},
+                "passport_supported_edge": {
+                    "file": str(preflight.ROOT / "scripts/passport_supported_edge.conf")}},
             }
 
 

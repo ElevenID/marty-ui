@@ -35,12 +35,12 @@ RUST_DEPENDENCIES = frozenset({
     "credential-template", "trust-profile", "presentation-policy", "deployment-profile",
 })
 DISPOSABLE_SERVICES = SELECTED | ISOLATED_DEPENDENCIES | RUST_DEPENDENCIES | frozenset({
-    "db-migrate", "issuance", "signing-keys",
+    "db-migrate", "issuance", "signing-keys", "edge",
 })
 ALLOWED_SERVICES = frozenset({
     "applicant", "auth", "canvas-sync-worker", "compliance-profile",
     "credential-template", "db-migrate", "deployment-profile",
-    "device-registration", "event-stream", "flow", "gateway", "issuance",
+    "device-registration", "edge", "event-stream", "flow", "gateway", "issuance",
     "issuance-migrations", "issuance-native", "keycloak",
     "keycloak-configurator", "mailpit", "notification", "openbao",
     "openbao-init", "organization", "passport-callback-signer",
@@ -300,7 +300,7 @@ def validate_model(
                 "Compose secret does not match its private project file")
     configs = model.get("configs", {})
     require(isinstance(configs, dict)
-            and set(configs) == {"passport_supported_openbao_start"},
+            and set(configs) == {"passport_supported_openbao_start", "passport_supported_edge"},
             "Compose configs are invalid")
     start_config = configs["passport_supported_openbao_start"]
     require(isinstance(start_config, dict)
@@ -310,16 +310,26 @@ def validate_model(
             == (ROOT / "scripts/passport_supported_openbao_start.sh").resolve()
             and (ROOT / "scripts/passport_supported_openbao_start.sh").is_file(),
             "Compose OpenBao start config differs from protected source")
-    gateway_candidate = services.get("gateway")
-    gateway_candidate_ports = (gateway_candidate.get("ports")
-                               if isinstance(gateway_candidate, dict) else None)
-    gateway_candidate_port = (gateway_candidate_ports[0].get("published")
-                              if isinstance(gateway_candidate_ports, list)
-                              and len(gateway_candidate_ports) == 1
-                              and isinstance(gateway_candidate_ports[0], dict) else None)
-    public_origin = (f"http://localhost:{gateway_candidate_port}"
-                     if isinstance(gateway_candidate_port, str)
-                     and gateway_candidate_port.isdigit() else None)
+    edge_config = configs["passport_supported_edge"]
+    require(isinstance(edge_config, dict)
+            and edge_config.get("external") not in (True, "true")
+            and isinstance(edge_config.get("file"), str)
+            and Path(edge_config["file"]).resolve()
+            == (ROOT / "scripts/passport_supported_edge.conf").resolve()
+            and (ROOT / "scripts/passport_supported_edge.conf").is_file(),
+            "Compose HTTPS edge config differs from protected source")
+    edge_candidate = services.get("edge")
+    edge_candidate_ports = (edge_candidate.get("ports")
+                            if isinstance(edge_candidate, dict) else None)
+    edge_candidate_port = (edge_candidate_ports[0].get("published")
+                           if isinstance(edge_candidate_ports, list)
+                           and len(edge_candidate_ports) == 1
+                           and isinstance(edge_candidate_ports[0], dict) else None)
+    public_origin = (f"https://localhost:{edge_candidate_port}"
+                     if isinstance(edge_candidate_port, str)
+                     and edge_candidate_port.isdigit() else None)
+    public_domain = (f"localhost:{edge_candidate_port}"
+                     if public_origin is not None else None)
     for name, service in services.items():
         require(isinstance(service, dict), "Compose service is invalid")
         for forbidden in ("container_name", "network_mode", "pid", "ipc",
@@ -397,6 +407,13 @@ def validate_model(
             require(not any(key in service.get("environment", {}) for key in (
                 "BAO_DEV_ROOT_TOKEN_ID", "BAO_TOKEN", "VAULT_TOKEN")),
                 "Compose OpenBao root token is exposed in the resolved environment")
+        elif name == "edge":
+            require(service.get("configs") == [{
+                "source": "passport_supported_edge",
+                "target": "/etc/nginx/conf.d/default.conf",
+            }] and {secret.get("source") for secret in service.get("secrets", [])}
+            == {"passport_edge_tls_cert", "passport_edge_tls_key"},
+            "Compose HTTPS edge config or TLS secrets differ from protected source")
         else:
             require(not service.get("configs"),
                     f"Compose {name} has an unexpected config")
@@ -442,7 +459,7 @@ def validate_model(
                 require(value.split(":", 1)[0] in services,
                         f"Compose {name} endpoint leaves disposable services")
             if key.endswith(("DOMAIN", "HOSTNAME")) and value:
-                require(value in {"localhost", "127.0.0.1"}
+                require(value in {"localhost", "127.0.0.1", public_domain}
                         | set(services),
                         f"Compose {name} domain leaves disposable services")
     callback_networks = {
@@ -539,17 +556,20 @@ def validate_model(
         and flow.get("ORG_GRPC_TARGET") == "organization:9002",
         "Disposable passport services do not use the Organization authority",
     )
-    gateway_ports = services["gateway"].get("ports")
-    require(isinstance(gateway_ports, list) and len(gateway_ports) == 1
-            and isinstance(gateway_ports[0], dict)
-            and gateway_ports[0].get("host_ip") == "127.0.0.1"
-            and gateway_ports[0].get("target") == 8000
-            and isinstance(gateway_ports[0].get("published"), str)
-            and gateway_ports[0]["published"].isdigit()
-            and 1024 <= int(gateway_ports[0]["published"]) <= 65535,
-            "Disposable status list origin lacks a reserved loopback Gateway port")
-    status_origin = f"http://127.0.0.1:{gateway_ports[0]['published']}"
-    public_origin = f"http://localhost:{gateway_ports[0]['published']}"
+    edge_ports = services["edge"].get("ports")
+    require(not services["gateway"].get("ports")
+            and isinstance(edge_ports, list) and len(edge_ports) == 1
+            and isinstance(edge_ports[0], dict)
+            and edge_ports[0].get("host_ip") == "127.0.0.1"
+            and edge_ports[0].get("target") == 8443
+            and isinstance(edge_ports[0].get("published"), str)
+            and edge_ports[0]["published"].isdigit()
+            and 1024 <= int(edge_ports[0]["published"]) <= 65535
+            and services["edge"].get("depends_on", {}).get("gateway", {}).get("condition")
+            == "service_started",
+            "Disposable HTTPS edge lacks a reserved loopback port or Gateway peer")
+    status_origin = f"https://localhost:{edge_ports[0]['published']}"
+    public_origin = status_origin
     shared_rust = {
         "ENVIRONMENT": "development",
         "DATABASE_URL_TEMPLATE": organization_env["DATABASE_URL_TEMPLATE"],
@@ -564,8 +584,9 @@ def validate_model(
             "SIGNING_KEYS_INTERNAL_API_KEY_FILE":
                 "/run/secrets/signing_keys_internal_api_key",
             "MARTY_ORG_ID": organization_env["MARTY_ORG_ID"],
-            "MARTY_ORG_SLUG": "marty", "MARTY_ISSUER_DID": "did:web:localhost:orgs:marty",
-            "MARTY_ISSUER_BASE_URL": public_origin, "PUBLIC_DOMAIN": "localhost",
+            "MARTY_ORG_SLUG": "marty", "MARTY_ISSUER_DID":
+                f"did:web:localhost%3A{edge_ports[0]['published']}:orgs:marty",
+            "MARTY_ISSUER_BASE_URL": public_origin, "PUBLIC_DOMAIN": public_domain,
             "DID_RESOLUTION_BASE_URL": "http://gateway:8000",
         }, {"marty_db_password", "grpc_service_token", "signing_keys_internal_api_key"},
          {"db-migrate": "service_completed_successfully", "organization": "service_healthy"},
@@ -587,14 +608,22 @@ def validate_model(
           "signing-keys": "service_healthy"}, 8003),
         "presentation-policy": ({
             **shared_rust, "SERVICE_NAME": "presentation_policy",
+            **({
+                "ENVIRONMENT": "production",
+                "GRPC_WORKLOAD_TLS_SERVER_CERT": "/run/secrets/pp_workload_server_cert",
+                "GRPC_WORKLOAD_TLS_SERVER_KEY": "/run/secrets/pp_workload_server_key",
+                "GRPC_WORKLOAD_TLS_CA_CERT": "/run/secrets/workload_identity_ca_cert",
+            } if surface == "selfhost" else {}),
             "PRESENTATION_POLICY_SERVICE_PORT": "8009", "PP_GRPC_PORT": "9009",
             "ISSUANCE_API_KEY_FILE": "/run/secrets/issuance_api_key",
             "DID_RESOLUTION_BASE_URL": "http://gateway:8000",
             "TRUST_PROFILE_SERVICE_URL": "http://trust-profile:8004",
             "ISSUANCE_NATIVE_SERVICE_URL": "http://issuance-native:8005",
-            "PUBLIC_DOMAIN": "localhost", "PUBLIC_BASE_URL": public_origin,
+            "PUBLIC_DOMAIN": public_domain, "PUBLIC_BASE_URL": public_origin,
             "ISSUER_BASE_URL": public_origin, "MARTY_ORG_SLUG": "marty",
-        }, {"marty_db_password", "grpc_service_token", "issuance_api_key"},
+        }, {"marty_db_password", "grpc_service_token", "issuance_api_key"}
+        | ({"pp_workload_server_cert", "pp_workload_server_key",
+            "workload_identity_ca_cert"} if surface == "selfhost" else set()),
          {"db-migrate": "service_completed_successfully", "organization": "service_healthy",
           "trust-profile": "service_healthy", "issuance-native": "service_healthy"}, 8009),
         "deployment-profile": ({
@@ -642,6 +671,34 @@ def validate_model(
                     == ["CMD", "curl", "--fail", f"http://localhost:{port}/health"]
                     for name, port in (("issuance-native", 8005), ("signing-keys", 8017))),
             "Disposable Flow startup dependencies are incomplete")
+    flow_selfhost = {
+        "FLOW_CALLBACK_DESTINATIONS": (
+            "00000000-0000-0000-0000-000000000001|"
+            "https://edge:8443/__disposable/flow-callback?nonce=__MARTY_TOKEN__"),
+        "FLOW_WEBHOOK_SECRET_FILE": "/run/secrets/flow_webhook_secret",
+        "FLOW_APPLICATION_EVENT_HMAC_KEY_FILE":
+            "/run/secrets/flow_application_event_hmac_key",
+        "FLOW_CALLBACK_CA_CERT_FILE": "/run/secrets/workload_identity_ca_cert",
+        "GRPC_WORKLOAD_TLS_CLIENT_CERT": "/run/secrets/flow_workload_client_cert",
+        "GRPC_WORKLOAD_TLS_CLIENT_KEY": "/run/secrets/flow_workload_client_key",
+        "GRPC_WORKLOAD_TLS_SERVER_CERT": "/run/secrets/flow_workload_server_cert",
+        "GRPC_WORKLOAD_TLS_SERVER_KEY": "/run/secrets/flow_workload_server_key",
+        "GRPC_WORKLOAD_TLS_CA_CERT": "/run/secrets/workload_identity_ca_cert",
+    }
+    flow_secret_names = {
+        "flow_webhook_secret", "flow_application_event_hmac_key",
+        "flow_workload_client_cert", "flow_workload_client_key",
+        "flow_workload_server_cert", "flow_workload_server_key",
+        "workload_identity_ca_cert",
+    }
+    actual_flow_secrets = {item.get("source") for item in services["flow"].get("secrets", [])}
+    require((surface == "selfhost"
+             and all(flow.get(key) == value for key, value in flow_selfhost.items())
+             and flow_secret_names <= actual_flow_secrets)
+            or (surface == "base"
+                and not any(key in flow for key in flow_selfhost)
+                and not (flow_secret_names & actual_flow_secrets)),
+            "Disposable Flow callback or workload TLS configuration differs from surface")
     require(native.get("ISSUANCE_GRPC_ENABLED") == "true"
             and native.get("ISSUANCE_GRPC_PORT") == "9005"
             and native.get("CT_GRPC_TARGET") == "credential-template:9003"
@@ -758,7 +815,7 @@ def validate_model(
         and migration_env.get("BAO_ADDR") == "http://openbao:8200"
         and migration_env.get("BAO_TOKEN_FILE") == "/run/secrets/bao_token"
         and migration_env.get("MARTY_KMS_BOOTSTRAP_ENABLED") == "true"
-        and migration_env.get("PUBLIC_DOMAIN") == "localhost"
+        and migration_env.get("PUBLIC_DOMAIN") == public_domain
         and migration_env.get("MARTY_ORG_ID") == revocation_env.get("MARTY_ORG_ID")
         == organization_env.get("MARTY_ORG_ID")
         and migration_env.get("MARTY_ISSUER_BASE_URL") == public_origin
@@ -771,12 +828,12 @@ def validate_model(
                 for secret in migration_secrets),
         "Disposable migrations could skip managed issuer profile bootstrap",
     )
-    issuer_did = "did:web:localhost:orgs:marty"
+    issuer_did = f"did:web:localhost%3A{edge_ports[0]['published']}:orgs:marty"
     require(
         migration_env.get("MARTY_ISSUER_DID") == issuer_did
         and migration_env.get("PUBLIC_DOMAIN") == gateway.get("PUBLIC_DOMAIN")
         == services["signing-keys"]["environment"].get("PUBLIC_DOMAIN")
-        == "localhost"
+        == public_domain
         and migration_env.get("MARTY_ISSUER_BASE_URL")
         == gateway.get("ISSUER_BASE_URL") == native.get("ISSUER_BASE_URL")
         == public_origin
