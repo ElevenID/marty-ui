@@ -40,6 +40,7 @@ def inputs(root: Path) -> Path:
         "PASSPORT_ACCEPTANCE_SOURCE_COMMIT=" + "a" * 40,
         "PASSPORT_ACCEPTANCE_DATABASE_URL=postgresql+asyncpg://marty:synthetic-disposable-only@postgres:5432/marty",
         "PASSPORT_ACCEPTANCE_ADMIN_EMAIL=disposable@acceptance.invalid",
+        "PASSPORT_ACCEPTANCE_EXPIRES_AT=2026-09-27T12:55:00+00:00",
         "PASSPORT_ACCEPTANCE_GATEWAY_PORT=29876",
         "PASSPORT_ACCEPTANCE_SECRET_DIR=" + secrets.as_posix(),
     ]) + "\n", encoding="utf-8")
@@ -91,6 +92,8 @@ def test_real_compose_render_is_safe_but_not_accepted(
         "ORG_GRPC_TARGET"] == "organization:9002"
     assert model["services"]["organization"]["environment"][
         "ES_GRPC_TARGET"] == "event-stream:9015"
+    assert model["services"]["organization"]["environment"][
+        "PASSPORT_ACCEPTANCE_PROJECT"] == project
     assert model["services"]["issuance"]["image"] == LEGACY
     signing = model["services"]["signing-keys"]
     assert signing["environment"]["SIGNING_KEYS_REDIS_URL"] == "redis://redis:6379/2"

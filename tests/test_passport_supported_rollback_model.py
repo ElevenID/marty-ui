@@ -156,6 +156,10 @@ def safe_model(root: Path) -> dict:
             "ES_GRPC_TARGET": "event-stream:9015",
             "MARTY_ORG_ADMIN_EMAIL": "admin@example.invalid",
             "MARTY_ORG_ID": "00000000-0000-0000-0000-000000000001",
+            "PASSPORT_ACCEPTANCE_PROJECT": PROJECT,
+            "PASSPORT_ACCEPTANCE_RUN_ID": "123456",
+            "PASSPORT_ACCEPTANCE_SOURCE_COMMIT": "a" * 40,
+            "PASSPORT_ACCEPTANCE_EXPIRES_AT": "2026-09-27T12:55:00+00:00",
         },
         "secrets": [{"source": "marty_db_password"},
                     {"source": "grpc_service_token"}],
@@ -245,9 +249,14 @@ def test_attested_plan_binds_all_disposable_images(tmp_path: Path) -> None:
         "legacy_reference": model["services"]["issuance"]["image"],
         "infra_images": qualified_images(verify_registry=False),
         "run_id": "123456", "source_commit": "a" * 40,
+        "expires_at": "2026-09-27T12:55:00+00:00",
         "owner_labels": LABELS,
     }
     assert validate_planned_model(model, plan, tmp_path)["model_safe"] is True
+    changed_lease = deepcopy(plan)
+    changed_lease["expires_at"] = "2026-09-27T12:56:00+00:00"
+    with pytest.raises(ModelPreflightError, match="API key lease"):
+        validate_planned_model(model, changed_lease, tmp_path)
     for role in ("postgres", "redis", "openbao", "db-migrate", "issuance",
                  "signing-keys", "organization", "event-stream",
                  "revocation-profile-migrate"):
@@ -394,6 +403,13 @@ def test_attested_plan_binds_all_disposable_images(tmp_path: Path) -> None:
         ORG_GRPC_PORT="9902"), "Organization API-key authority"),
     (lambda model, root: model["services"]["organization"]["environment"].update(
         MARTY_ORG_ADMIN_EMAIL="other@example.invalid"), "Organization API-key authority"),
+    (lambda model, root: model["services"]["organization"]["environment"].update(
+        PASSPORT_ACCEPTANCE_PROJECT="marty-passport-acceptance-base-ffffff"),
+     "Organization API-key authority"),
+    (lambda model, root: model["services"]["organization"]["environment"].update(
+        PASSPORT_ACCEPTANCE_RUN_ID="999999"), "Organization API-key authority"),
+    (lambda model, root: model["services"]["organization"]["environment"].update(
+        PASSPORT_ACCEPTANCE_EXPIRES_AT="never"), "Organization API-key authority"),
     (lambda model, root: model["services"]["revocation-profile-migrate"][
         "environment"].update(RP_MIGRATE_ONLY="false"), "revocation schema migration"),
     (lambda model, root: model["services"]["revocation-profile-migrate"][

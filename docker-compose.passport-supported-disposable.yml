@@ -141,6 +141,10 @@ services:
       ES_GRPC_TARGET: event-stream:9015
       MARTY_ORG_ADMIN_EMAIL: ${PASSPORT_ACCEPTANCE_ADMIN_EMAIL:?supply disposable admin email}
       MARTY_ORG_ID: 00000000-0000-0000-0000-000000000001
+      PASSPORT_ACCEPTANCE_PROJECT: ${PASSPORT_ACCEPTANCE_PROJECT:?bind disposable project}
+      PASSPORT_ACCEPTANCE_RUN_ID: ${PASSPORT_ACCEPTANCE_PLAN_RUN_ID:?bind protected plan run}
+      PASSPORT_ACCEPTANCE_SOURCE_COMMIT: ${PASSPORT_ACCEPTANCE_SOURCE_COMMIT:?bind protected source}
+      PASSPORT_ACCEPTANCE_EXPIRES_AT: ${PASSPORT_ACCEPTANCE_EXPIRES_AT:?bind protected plan expiry}
     secrets: [marty_db_password, grpc_service_token]
     depends_on:
       db-migrate:

@@ -69,6 +69,15 @@ def _endpoint_host(value: str) -> str | None:
     return urlsplit(value).hostname
 
 
+def _aware_datetime(value: object) -> bool:
+    if not isinstance(value, str):
+        return False
+    try:
+        return datetime.fromisoformat(value).tzinfo is not None
+    except ValueError:
+        return False
+
+
 def _run_config(args: list[str], environment: dict[str, str]) -> str:
     try:
         result = subprocess.run(args, env=environment, capture_output=True,
@@ -101,6 +110,7 @@ def render_model(
     services_reference: str,
     runner: Callable[[list[str], dict[str, str]], str] = _run_config,
     *, phase: str = "rust", owner_labels: dict[str, str] | None = None,
+    plan_expires_at: str | None = None,
 ) -> dict:
     """Read Docker's resolved model using only fixed repo-owned Compose files."""
     match = PROJECT.fullmatch(project)
@@ -127,6 +137,9 @@ def render_model(
             "config", "--format", "json"]
     environment = os.environ.copy()
     environment["MARTY_SERVICES_IMAGE"] = services_reference
+    environment["PASSPORT_ACCEPTANCE_PROJECT"] = project
+    if plan_expires_at is not None:
+        environment["PASSPORT_ACCEPTANCE_EXPIRES_AT"] = plan_expires_at
     if owner_labels is not None:
         environment["PASSPORT_ACCEPTANCE_PLAN_RUN_ID"] = owner_labels[
             "com.marty.passport.acceptance.run-id"]
@@ -208,7 +221,8 @@ def preflight_attested_plan(
             "Protected plan owner labels are missing")
     model = render_model(surface, project, env_file, disposable_root,
                          services_reference, runner,
-                         owner_labels=plan["owner_labels"])
+                         owner_labels=plan["owner_labels"],
+                         plan_expires_at=plan["expires_at"])
     result = validate_planned_model(model, plan, disposable_root)
     return {"schema": "marty.passport-supported-rollback-preflight/v1",
             "status": "blocked", "model": result,
@@ -431,6 +445,13 @@ def validate_model(
         and "@" in organization_env["MARTY_ORG_ADMIN_EMAIL"]
         and organization_env["MARTY_ORG_ADMIN_EMAIL"]
         == services["db-migrate"]["environment"].get("MARTY_ORG_ADMIN_EMAIL")
+        and isinstance(organization.get("labels"), dict)
+        and organization_env.get("PASSPORT_ACCEPTANCE_PROJECT") == project
+        and organization_env.get("PASSPORT_ACCEPTANCE_RUN_ID")
+        == organization["labels"].get("com.marty.passport.acceptance.run-id")
+        and organization_env.get("PASSPORT_ACCEPTANCE_SOURCE_COMMIT")
+        == organization["labels"].get("com.marty.passport.acceptance.source-commit")
+        and _aware_datetime(organization_env.get("PASSPORT_ACCEPTANCE_EXPIRES_AT"))
         and all(key not in organization_env for key in (
             "MARTY_DB_PASSWORD", "GRPC_SERVICE_TOKEN"))
         and {secret.get("source") for secret in organization.get("secrets", [])}
@@ -623,6 +644,13 @@ def validate_planned_model(model: dict, plan: dict, disposable_root: Path) -> di
                         for item in model[section].values())
                 for section in ("services", "networks", "volumes")),
             "Resolved Compose resource labels differ from protected plan")
+    organization = model["services"].get("organization")
+    require(_aware_datetime(plan.get("expires_at"))
+            and isinstance(organization, dict)
+            and isinstance(organization.get("environment"), dict)
+            and organization["environment"].get(
+                "PASSPORT_ACCEPTANCE_EXPIRES_AT") == plan["expires_at"],
+            "Disposable API key lease differs from protected plan")
     return validate_model(model, plan["project"], plan["services_reference"],
                           disposable_root,
                           migrations_reference=plan["migrations_reference"],
