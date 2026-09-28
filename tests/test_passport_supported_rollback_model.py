@@ -80,12 +80,21 @@ def safe_model(root: Path) -> dict:
         ]
     infra = qualified_images(verify_registry=False)
     services["postgres"] = {"image": infra["postgres"], "networks": ["private"], "volumes": [
-        {"type": "bind", "source": str(root / "postgres"),
+        {"type": "volume", "source": "postgres_data",
          "target": "/var/lib/postgresql/data"},
     ]}
-    services["openbao"] = {"image": infra["openbao"],
-                           "networks": ["private", "callback_signing"]}
-    services["redis"] = {"image": infra["redis"], "networks": ["private"]}
+    services["openbao"] = {
+        "image": infra["openbao"],
+        "networks": ["private", "callback_signing"],
+        "volumes": [{"type": "volume", "source": "openbao_data", "target": "/bao/data"}],
+        "entrypoint": ["/bin/sh", "/usr/local/bin/passport-supported-openbao-start"],
+        "configs": [{"source": "passport_supported_openbao_start",
+                     "target": "/usr/local/bin/passport-supported-openbao-start"}],
+        "secrets": [{"source": "bao_root_token"}],
+    }
+    services["redis"] = {"image": infra["redis"], "networks": ["private"],
+                         "volumes": [{"type": "volume", "source": "redis_data",
+                                      "target": "/data"}]}
     services["signing-keys"] = {
         "image": IMAGE,
         "networks": ["private"],
@@ -123,13 +132,19 @@ def safe_model(root: Path) -> dict:
                 "callback_signing": {"name": PROJECT + "_callback_signing",
                                      "internal": True, "labels": LABELS},
             },
-            "volumes": {}, "secrets": {
+            "volumes": {name: {"name": PROJECT + "_" + name, "labels": LABELS}
+                        for name in ("postgres_data", "redis_data", "openbao_data")},
+            "secrets": {
                 "db": {"file": str(root / "secrets/db")},
+                "bao_root_token": {"file": str(root / "secrets/bao_root_token")},
                 "bao_token": {"file": str(root / "secrets/bao_token")},
                 "issuance_api_key": {"file": str(root / "secrets/issuance_api_key")},
                 "signing_keys_internal_api_key": {
                     "file": str(root / "secrets/signing_keys_internal_api_key")},
-            }}
+            },
+            "configs": {"passport_supported_openbao_start": {
+                "file": str(preflight.ROOT / "scripts/passport_supported_openbao_start.sh")}},
+            }
 
 
 def test_isolated_resolved_compose_model_passes_only_static_preflight(

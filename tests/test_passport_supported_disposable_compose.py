@@ -23,7 +23,7 @@ def inputs(root: Path) -> Path:
     secrets = root / "secrets"
     secrets.mkdir()
     for name in (
-        "marty_db_password", "bao_token", "signing_keys_internal_api_key",
+        "marty_db_password", "bao_root_token", "bao_token", "signing_keys_internal_api_key",
         "issuance_api_key",
         "callback_signer_api_key",
         "callback_signer_bao_token", "grpc_service_token", "bureau_database_url",
@@ -90,6 +90,11 @@ def test_real_compose_render_is_safe_but_not_accepted(
     assert signing["environment"]["SIGNING_KEYS_REDIS_URL"] == "redis://redis:6379/2"
     assert signing["environment"]["PUBLIC_DOMAIN"] == "localhost"
     assert signing["depends_on"]["redis"]["condition"] == "service_healthy"
+    openbao = model["services"]["openbao"]
+    assert openbao["entrypoint"] == [
+        "/bin/sh", "/usr/local/bin/passport-supported-openbao-start"]
+    assert {secret["source"] for secret in openbao["secrets"]} == {"bao_root_token"}
+    assert "BAO_DEV_ROOT_TOKEN_ID" not in openbao.get("environment", {})
     migration = model["services"]["db-migrate"]
     assert migration["environment"]["REDIS_URL"] == signing["environment"][
         "SIGNING_KEYS_REDIS_URL"]
@@ -149,4 +154,25 @@ def test_rendered_model_rejects_escape_and_mutated_legacy_image(tmp_path: Path) 
     bad = deepcopy(model)
     bad["services"]["issuance"]["image"] = "marty-credentials:latest"
     with pytest.raises(ModelPreflightError, match="immutable"):
+        validate_model(bad, project, SERVICES, tmp_path)
+    bad = deepcopy(model)
+    bad["services"]["openbao"]["entrypoint"] = ["/bin/sh", "/tmp/start.sh"]
+    with pytest.raises(ModelPreflightError, match="OpenBao start command"):
+        validate_model(bad, project, SERVICES, tmp_path)
+    bad = deepcopy(model)
+    bad["configs"]["passport_supported_openbao_start"]["file"] = (
+        tmp_path / "unreviewed-start.sh").as_posix()
+    with pytest.raises(ModelPreflightError, match="OpenBao start config"):
+        validate_model(bad, project, SERVICES, tmp_path)
+    bad = deepcopy(model)
+    bad["services"]["openbao"]["environment"] = {
+        "BAO_DEV_ROOT_TOKEN_ID": "visible-in-docker-inspect"}
+    with pytest.raises(ModelPreflightError, match="OpenBao root token"):
+        validate_model(bad, project, SERVICES, tmp_path)
+    bad = deepcopy(model)
+    bad["services"]["openbao"]["volumes"].append({
+        "type": "bind", "source": str(tmp_path / "replacement.sh"),
+        "target": "/usr/local/bin/passport-supported-openbao-start",
+    })
+    with pytest.raises(ModelPreflightError, match="bind mount"):
         validate_model(bad, project, SERVICES, tmp_path)

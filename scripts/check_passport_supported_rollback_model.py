@@ -260,20 +260,31 @@ def validate_model(
                 and _within(secret["file"], disposable_root),
                 "Compose secret is outside the disposable root")
     configs = model.get("configs", {})
-    require(isinstance(configs, dict), "Compose configs are invalid")
-    for config in configs.values():
-        require(isinstance(config, dict)
-                and config.get("external") not in (True, "true")
-                and isinstance(config.get("file"), str)
-                and _within(config["file"], disposable_root),
-                "Compose config is outside the disposable root")
+    require(isinstance(configs, dict)
+            and set(configs) == {"passport_supported_openbao_start"},
+            "Compose configs are invalid")
+    start_config = configs["passport_supported_openbao_start"]
+    require(isinstance(start_config, dict)
+            and start_config.get("external") not in (True, "true")
+            and isinstance(start_config.get("file"), str)
+            and Path(start_config["file"]).resolve()
+            == (ROOT / "scripts/passport_supported_openbao_start.sh").resolve()
+            and (ROOT / "scripts/passport_supported_openbao_start.sh").is_file(),
+            "Compose OpenBao start config differs from protected source")
     for name, service in services.items():
         require(isinstance(service, dict), "Compose service is invalid")
         for forbidden in ("container_name", "network_mode", "pid", "ipc",
                           "privileged", "devices", "extra_hosts", "volumes_from",
-                          "build", "command", "entrypoint"):
+                          "build", "command"):
             require(not service.get(forbidden),
                     f"Compose {name} has a shared-host or fixed-name setting")
+        if name == "openbao":
+            require(service.get("entrypoint") == [
+                "/bin/sh", "/usr/local/bin/passport-supported-openbao-start"],
+                "Compose OpenBao start command differs from protected source")
+        else:
+            require(not service.get("entrypoint"),
+                    f"Compose {name} has an unexpected entrypoint")
         require(service.get("pull_policy") != "build"
                 and isinstance(service.get("image"), str)
                 and IMMUTABLE_IMAGE.fullmatch(service["image"]) is not None,
@@ -289,17 +300,22 @@ def validate_model(
             require(service.get("image") == expected_image,
                     f"Compose {name} differs from the protected image reference")
         mounts = service.get("volumes", [])
+        expected_mounts = {
+            "postgres": ("postgres_data", "/var/lib/postgresql/data"),
+            "redis": ("redis_data", "/data"),
+            "openbao": ("openbao_data", "/bao/data"),
+        }
         require(isinstance(mounts, list), f"Compose {name} mounts are invalid")
-        for mount in mounts:
-            require(isinstance(mount, dict), f"Compose {name} mount is invalid")
-            if mount.get("type") == "bind":
-                require(isinstance(mount.get("source"), str)
-                        and _within(mount["source"], disposable_root),
-                        f"Compose {name} bind mount escapes the disposable root")
-            else:
-                require(mount.get("type") == "volume"
-                        and mount.get("source") in volumes,
-                        f"Compose {name} uses an unknown mount")
+        if name in expected_mounts:
+            source, target = expected_mounts[name]
+            require(len(mounts) == 1 and isinstance(mounts[0], dict)
+                    and mounts[0].get("type") == "volume"
+                    and mounts[0].get("source") == source
+                    and mounts[0].get("target") == target
+                    and source in volumes,
+                    f"Compose {name} has an unexpected bind mount or volume")
+        else:
+            require(not mounts, f"Compose {name} has an unexpected bind mount or volume")
         for kind, available in (("secrets", secrets), ("configs", configs)):
             references = service.get(kind, [])
             require(isinstance(references, list),
@@ -308,6 +324,22 @@ def validate_model(
                 require(isinstance(reference, dict)
                         and reference.get("source") in available,
                         f"Compose {name} uses an unknown {kind} source")
+        if name == "openbao":
+            require(service.get("configs") == [{
+                "source": "passport_supported_openbao_start",
+                "target": "/usr/local/bin/passport-supported-openbao-start",
+            }] and {secret.get("source") for secret in service.get("secrets", [])}
+            == {"bao_root_token"},
+            "Compose OpenBao start secrets or config differ from protected source")
+            require(not any(key in service.get("environment", {}) for key in (
+                "BAO_DEV_ROOT_TOKEN_ID", "BAO_TOKEN", "VAULT_TOKEN")),
+                "Compose OpenBao root token is exposed in the resolved environment")
+        else:
+            require(not service.get("configs"),
+                    f"Compose {name} has an unexpected config")
+            require(all(secret.get("source") != "bao_root_token"
+                        for secret in service.get("secrets", [])),
+                    f"Compose {name} mounts the OpenBao root token")
         ports = service.get("ports", [])
         require(isinstance(ports, list), f"Compose {name} ports are invalid")
         for port in ports:

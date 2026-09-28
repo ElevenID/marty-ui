@@ -32,6 +32,11 @@ services:
   openbao:
     labels: *acceptance-labels
     image: ${PASSPORT_ACCEPTANCE_OPENBAO_IMAGE:?pin disposable OpenBao image by digest}
+    entrypoint: [/bin/sh, /usr/local/bin/passport-supported-openbao-start]
+    configs:
+      - source: passport_supported_openbao_start
+        target: /usr/local/bin/passport-supported-openbao-start
+    secrets: [bao_root_token]
     volumes: [openbao_data:/bao/data]
     healthcheck:
       test: [CMD, bao, status, -address=http://127.0.0.1:8200]
@@ -232,6 +237,8 @@ services:
     networks: [private]
 
 secrets:
+  bao_root_token:
+    file: ${PASSPORT_ACCEPTANCE_SECRET_DIR:?use disposable secret root}/bao_root_token
   marty_db_password:
     file: ${PASSPORT_ACCEPTANCE_SECRET_DIR:?use disposable secret root}/marty_db_password
   bao_token:
@@ -256,6 +263,10 @@ volumes:
     labels: *acceptance-labels
   openbao_data:
     labels: *acceptance-labels
+
+configs:
+  passport_supported_openbao_start:
+    file: ./scripts/passport_supported_openbao_start.sh
 
 networks:
   private:
