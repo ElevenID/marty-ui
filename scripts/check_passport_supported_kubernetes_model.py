@@ -355,13 +355,16 @@ def inspect(
                     and isinstance(labels, dict)
                     and all(labels.get(key) == value for key, value in expected.items()),
                     f"Disposable Kubernetes deployment/{name} selector is invalid")
-            if name in ("gateway", "issuance-native"):
+            if name in ("gateway", "flow", "issuance-native"):
                 require(isinstance(config_data, dict),
                         "Disposable Kubernetes ConfigMap is unavailable")
                 expected_config = ({
                     "PASSPORT_PROVIDER_INGRESS_GATEWAY_ENABLED": "false",
                     "PASSPORT_PROVIDER_INGRESS_SERVICE_URL": "",
+                    "ISSUANCE_NATIVE_SERVICE_URL": "http://issuance-native:8005",
                 } if name == "gateway" else {
+                    "ISSUANCE_NATIVE_SERVICE_URL": "http://issuance-native:8005",
+                } if name == "flow" else {
                     "PERSONALIZATION_BUREAU_URL": "http://passport-beta-bureau:8020",
                     "PERSONALIZATION_BUREAU_PROVIDER_PROFILE_ID": "passport-beta-bureau",
                 })

@@ -303,7 +303,10 @@ def observe_kubernetes(
         expected = ({
             "PASSPORT_PROVIDER_INGRESS_GATEWAY_ENABLED": "false",
             "PASSPORT_PROVIDER_INGRESS_SERVICE_URL": "",
+            "ISSUANCE_NATIVE_SERVICE_URL": "http://issuance-native:8005",
         } if service == "gateway" else {
+            "ISSUANCE_NATIVE_SERVICE_URL": "http://issuance-native:8005",
+        } if service == "flow" else {
             "PERSONALIZATION_BUREAU_URL": "http://passport-beta-bureau:8020",
             "PERSONALIZATION_BUREAU_PROVIDER_PROFILE_ID": "passport-beta-bureau",
         } if service == "issuance-native" else {})

@@ -164,7 +164,7 @@ def runner(expected: dict, *, file_backed_ca: bool = False):
                                 "name": name,
                                 "image": (LEGACY if name == "issuance" else REFERENCE),
                                 **({"envFrom": [{"configMapRef": {"name": "marty-config"}}]}
-                                   if name == "gateway" else {}),
+                                   if name in ("gateway", "flow") else {}),
                                 **({"env": [{"name": key, "valueFrom": {"configMapKeyRef": {
                                     "name": "marty-config", "key": key}}}
                                     for key in ("PERSONALIZATION_BUREAU_URL",
@@ -292,6 +292,13 @@ def test_identity_or_rollback_drift_fails_closed(mutate, match: str) -> None:
             lambda x: x["spec"]["selector"].update(
                 matchLabels={"app": "passport-callback-signer"}),
             "deployment/passport-callback-signer selector is invalid",
+        ),
+        (
+            "deployment/flow",
+            lambda x: x["spec"]["template"]["spec"]["containers"][0]
+            .setdefault("env", []).append({"name": "ISSUANCE_NATIVE_SERVICE_URL",
+                                         "value": "http://issuance:8005"}),
+            "deployment/flow is not simulator-bound",
         ),
         (
             "configmap/marty-config",

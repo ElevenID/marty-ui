@@ -134,13 +134,18 @@ def kubernetes_runner(*, mixed_provider: bool = False,
                       mutable_config: bool = False,
                       stale_pod: bool = False,
                       incomplete_rollout: bool = False,
-                      stale_process_env: bool = False):
+                      stale_process_env: bool = False,
+                      stale_native_url: bool = False):
     def run(args: list[str]) -> str:
         assert args[1:5] == ["--context", CONTEXT, "-n", NAMESPACE]
         if args[5] == "exec":
             assert args[6].endswith("-pod")
             assert args[7:9] == ["-c", args[6].removesuffix("-pod")]
             assert "/proc/1/environ" in args[-1]
+            if args[8] in ("gateway", "flow"):
+                assert "ISSUANCE_NATIVE_SERVICE_URL=http://issuance-native:8005" in args[-1]
+                if stale_native_url:
+                    return "stale"
             return "stale" if stale_process_env else "verified"
         if args[6] == "configmap":
             data = {flag: "true" for names in gate.KUBERNETES_FLAGS.values()
@@ -148,6 +153,7 @@ def kubernetes_runner(*, mixed_provider: bool = False,
             data.update({"PASSPORT_PROVIDER_INGRESS_GATEWAY_ENABLED":
                          "true" if provider_enabled else "false",
                          "PASSPORT_PROVIDER_INGRESS_SERVICE_URL": "",
+                         "ISSUANCE_NATIVE_SERVICE_URL": "http://issuance-native:8005",
                          "PERSONALIZATION_BUREAU_URL":
                          "http://passport-beta-bureau:8020",
                          "PERSONALIZATION_BUREAU_PROVIDER_PROFILE_ID":
@@ -194,9 +200,9 @@ def kubernetes_runner(*, mixed_provider: bool = False,
             "env": [{"name": flag, "value": "true"}
                     for flag in gate.KUBERNETES_FLAGS[service]],
         }
-        if service == "gateway":
+        if service in ("gateway", "flow"):
             container["envFrom"] = [{"configMapRef": {"name": "marty-config"}}]
-            if second_configmap:
+            if service == "gateway" and second_configmap:
                 container["envFrom"].append({"configMapRef": {"name": "override-config"}})
         if service == "issuance-native":
             container["env"].extend({"name": name,
@@ -245,6 +251,9 @@ def test_kubernetes_runtime_rejects_stale_configuration_or_rollout() -> None:
     with pytest.raises(gate.SupportedEvidenceError, match="running process routing"):
         gate.observe_kubernetes(NAMESPACE, CONTEXT, REFERENCE,
                                 kubernetes_runner(stale_process_env=True))
+    with pytest.raises(gate.SupportedEvidenceError, match="running process routing"):
+        gate.observe_kubernetes(NAMESPACE, CONTEXT, REFERENCE,
+                                kubernetes_runner(stale_native_url=True))
 
 
 def test_kubernetes_mixed_provider_is_rejected() -> None:
