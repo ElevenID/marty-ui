@@ -83,6 +83,7 @@ DISPOSABLE_VOLUMES = frozenset({
 })
 PARTIAL_ONLY_SERVICES = frozenset({
     "passport-openbao-bootstrap", "passport-certificate-bootstrap",
+    "passport-bureau-poll",
 })
 
 
