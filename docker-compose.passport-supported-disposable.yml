@@ -122,8 +122,7 @@ services:
       PERSONALIZATION_BUREAU_URL: http://passport-beta-bureau:8020
       PERSONALIZATION_BUREAU_API_KEY_FILE: /run/secrets/grpc_service_token
       PERSONALIZATION_BUREAU_PROVIDER_PROFILE_ID: passport-beta-bureau
-      PASSPORT_TENANT_API_KEYS_FILE: /run/secrets/passport_tenant_api_keys
-    secrets: [marty_db_password, bao_token, signing_keys_internal_api_key, passport_tenant_api_keys, grpc_service_token]
+    secrets: [marty_db_password, bao_token, signing_keys_internal_api_key, grpc_service_token]
     depends_on:
       signing-keys:
         condition: service_started
@@ -148,8 +147,7 @@ services:
       ISSUANCE_SERVICE_URL: http://issuance:8005
       SIGNING_KEYS_INTERNAL_URL: http://signing-keys:8017/internal
       SIGNING_KEYS_INTERNAL_API_KEY_FILE: /run/secrets/signing_keys_internal_api_key
-      PASSPORT_TENANT_API_KEYS_FILE: /run/secrets/passport_tenant_api_keys
-    secrets: [marty_db_password, signing_keys_internal_api_key, passport_tenant_api_keys, grpc_service_token]
+    secrets: [marty_db_password, signing_keys_internal_api_key, grpc_service_token]
     depends_on:
       issuance-native:
         condition: service_started
@@ -220,8 +218,7 @@ services:
       REDIS_URL: redis://redis:6379
       BAO_ADDR: http://openbao:8200
       BAO_TOKEN_FILE: /run/secrets/bao_token
-      PASSPORT_TENANT_API_KEYS_FILE: /run/secrets/passport_tenant_api_keys
-    secrets: [bao_token, passport_tenant_api_keys, grpc_service_token]
+    secrets: [bao_token, grpc_service_token]
     depends_on:
       flow:
         condition: service_started
@@ -238,8 +235,6 @@ secrets:
     file: ${PASSPORT_ACCEPTANCE_SECRET_DIR:?use disposable secret root}/bao_token
   signing_keys_internal_api_key:
     file: ${PASSPORT_ACCEPTANCE_SECRET_DIR:?use disposable secret root}/signing_keys_internal_api_key
-  passport_tenant_api_keys:
-    file: ${PASSPORT_ACCEPTANCE_SECRET_DIR:?use disposable secret root}/passport_tenant_api_keys
   callback_signer_api_key:
     file: ${PASSPORT_ACCEPTANCE_SECRET_DIR:?use disposable secret root}/callback_signer_api_key
   callback_signer_bao_token:

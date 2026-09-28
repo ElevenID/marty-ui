@@ -32,6 +32,7 @@ def safe_model(root: Path) -> dict:
     services = {name: {"image": IMAGE, "environment": {
         "DATABASE_URL": "postgresql://postgres:5432/test",
         "BAO_ADDR": "http://openbao:8200",
+        "PASSPORT_INTERNAL_SERVICE_AUTH_ENABLED": "true",
     }, "networks": ["private"]} for name in SELECTED}
     services["passport-callback-signer"]["environment"].update({
         "ENVIRONMENT": "beta",
@@ -238,6 +239,15 @@ def test_attested_plan_binds_all_disposable_images(tmp_path: Path) -> None:
         MARTY_ISSUER_DID="did:web:other:orgs:marty"), "managed issuer DID"),
     (lambda model, root: model["services"]["db-migrate"]["environment"].update(
         MARTY_ISSUER_DID="did:web:localhost%3A8000:orgs:marty"), "managed issuer DID"),
+    (lambda model, root: model["services"]["gateway"]["environment"].update(
+        PASSPORT_TENANT_API_KEYS_FILE="/run/secrets/tenant_keys"),
+     "internal passport authentication"),
+    (lambda model, root: model["services"]["flow"]["environment"].update(
+        PASSPORT_INTERNAL_SERVICE_AUTH_ENABLED="false"),
+     "internal passport authentication"),
+    (lambda model, root: model["services"]["issuance-native"]["environment"].update(
+        PASSPORT_TENANT_API_KEYS="raw-secret"),
+     "internal passport authentication"),
 ])
 def test_model_rejects_production_escape(tmp_path: Path, change, match: str) -> None:
     model = deepcopy(safe_model(tmp_path))

@@ -24,7 +24,7 @@ def inputs(root: Path) -> Path:
     secrets.mkdir()
     for name in (
         "marty_db_password", "bao_token", "signing_keys_internal_api_key",
-        "passport_tenant_api_keys", "callback_signer_api_key",
+        "callback_signer_api_key",
         "callback_signer_bao_token", "grpc_service_token", "bureau_database_url",
     ):
         (secrets / name).write_text("synthetic-disposable-only", encoding="utf-8")
@@ -71,6 +71,12 @@ def test_real_compose_render_is_safe_but_not_accepted(
             or (surface == "selfhost" and name == "issuance-native")
             else "development" if surface == "base" else "production"
         )
+    for name in ("gateway", "flow", "issuance-native"):
+        env = model["services"][name]["environment"]
+        assert env["PASSPORT_INTERNAL_SERVICE_AUTH_ENABLED"] == "true"
+        assert "PASSPORT_TENANT_API_KEYS" not in env
+        assert "PASSPORT_TENANT_API_KEYS_FILE" not in env
+    assert "passport_tenant_api_keys" not in model["secrets"]
     assert model["services"]["issuance-native"]["environment"][
         "PERSONALIZATION_BUREAU_PROVIDER_PROFILE_ID"] == "passport-beta-bureau"
     assert model["services"]["gateway"]["environment"][

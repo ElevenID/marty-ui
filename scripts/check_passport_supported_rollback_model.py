@@ -385,6 +385,14 @@ def validate_model(
         and native.get("MARTY_ISSUER_DID") == issuer_did,
         "Disposable managed issuer DID differs across profile and runtime services",
     )
+    require(
+        all(settings.get("PASSPORT_INTERNAL_SERVICE_AUTH_ENABLED") == "true"
+            and not settings.get("PASSPORT_TENANT_API_KEYS")
+            and not settings.get("PASSPORT_TENANT_API_KEYS_FILE")
+            for settings in (gateway, flow, native))
+        and "passport_tenant_api_keys" not in secrets,
+        "Disposable internal passport authentication conflicts with tenant keyring",
+    )
     require(native.get("ENVIRONMENT") == ("beta" if surface == "selfhost" else "development")
             and gateway.get("ENVIRONMENT") == ("production" if surface == "selfhost" else "development")
             and flow.get("ENVIRONMENT") == ("production" if surface == "selfhost" else "development"),
