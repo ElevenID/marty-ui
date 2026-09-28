@@ -33,6 +33,10 @@ const NEGATIVE_MEDIA = {
   unsigned: 'unsigned-callback-uncut.webm',
   foreign: 'foreign-callback-uncut.webm',
 };
+const NEGATIVE_SCANS = {
+  unsigned: 'unsigned-callback-privacy-scan.json',
+  foreign: 'foreign-callback-privacy-scan.json',
+};
 
 function requireProof(condition, message) {
   if (!condition) throw new Error(message);
@@ -59,7 +63,22 @@ function verifyNegativeMedia(report, directory) {
       `Protected ${name} callback video is missing or oversized`);
     requireProof(sha256(videoPath) === declared.video_sha256,
       `Protected ${name} callback video digest mismatch`);
-    output[name] = fs.readFileSync(videoPath);
+    const scanPath = path.join(directory, NEGATIVE_SCANS[name]);
+    const scanFile = fs.lstatSync(scanPath);
+    requireProof(scanFile.isFile() && scanFile.size > 0 && scanFile.size <= 1024 * 1024,
+      `Protected ${name} callback privacy scan is missing or oversized`);
+    requireProof(sha256(scanPath) === declared.privacy_scan_report_sha256,
+      `Protected ${name} callback privacy scan digest mismatch`);
+    const scan = readJson(scanPath);
+    requireProof(scan.schemaVersion === 1 && scan.passed === true
+      && Array.isArray(scan.findings) && scan.findings.length === 0
+      && scan.videoSha256 === declared.video_sha256
+      && Number(scan.frameSamplingFps) >= 2,
+    `Protected ${name} callback privacy scan did not pass for its exact video`);
+    output[name] = {
+      video: fs.readFileSync(videoPath),
+      privacyScan: fs.readFileSync(scanPath),
+    };
   }
   return output;
 }
@@ -181,6 +200,17 @@ function validatePreliminary(report, deployment, artifactDir) {
     && batch.native_binding_verified === true
     && SHA256.test(batch.selected_source_job_commitment)
     && Array.isArray(batch.submitted_job_commitments)
+    && batch.submitted_job_commitments.length === 2
+    && new Set(batch.submitted_job_commitments).size === 2
+    && batch.submitted_job_commitments.every((commitment) => SHA256.test(commitment))
+    && Array.isArray(batch.returned_jobs)
+    && batch.returned_jobs.length === 2
+    && batch.returned_jobs.every((job) =>
+      SHA256.test(job?.source_job_commitment) && SHA256.test(job?.bureau_job_commitment))
+    && new Set(batch.returned_jobs.map((job) => job.source_job_commitment)).size === 2
+    && new Set(batch.returned_jobs.map((job) => job.bureau_job_commitment)).size === 2
+    && batch.returned_jobs.every((job) =>
+      batch.submitted_job_commitments.includes(job.source_job_commitment))
     && batch.submitted_job_commitments.includes(batch.selected_source_job_commitment)
     && batch.selected_source_job_commitment === route.source_job_commitment
     && selectedBureauJobs.length === 1
@@ -286,7 +316,9 @@ async function main() {
   );
   const proof = validatePreliminary(receipt, deployment, deploymentDir);
   for (const [name, filename] of Object.entries(NEGATIVE_MEDIA)) {
-    fs.writeFileSync(path.join(artifactDir, filename), negativeMedia[name], { flag: 'wx' });
+    fs.writeFileSync(path.join(artifactDir, filename), negativeMedia[name].video, { flag: 'wx' });
+    fs.writeFileSync(path.join(artifactDir, NEGATIVE_SCANS[name]),
+      negativeMedia[name].privacyScan, { flag: 'wx' });
   }
   const { chromium } = require('@playwright/test');
   const { login } = require('./audit-beta-credential-lifecycle');

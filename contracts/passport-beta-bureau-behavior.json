@@ -12,13 +12,16 @@
     "poll": "GET /v1/personalization/jobs/{bureau_job_id}"
   },
   "durability": "PostgreSQL organization_id plus source_job_id idempotency; a changed document identity digest returns 409, while a retry with a different SOD signature or public DSC certificate returns the original bureau job ID",
-  "document_identity_digest_fields": ["organization_id", "job_id", "application_id", "country_code", "document_type (if present)", "data_groups", "mrz"],
+  "document_identity_digest_fields": ["organization_id", "job_id", "application_id", "country_code", "data_groups", "mrz"],
+  "document_type_replay_rule": "The frozen batch wire omits document_type. Single and batch submissions for the same tenant and content share one bureau job; the first explicit TD1/TD2/TD3 type is retained, and a different later explicit type returns 409. Legacy rows without the type-neutral digest fail closed on replay.",
   "retry_semantics": "The first accepted document identity is authoritative. SOD and DSC are validated as present on every submission but excluded from the identity digest because re-signing may change them. A retry does not reset bureau status or create another job.",
   "persisted_fields": [
     "bureau_job_id",
     "organization_id",
     "source_job_id",
     "request_sha256",
+    "content_sha256",
+    "document_type",
     "status",
     "next_transition_at",
     "callback_lease_token",

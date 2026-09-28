@@ -5,6 +5,8 @@ CREATE TABLE IF NOT EXISTS issuance_service.passport_beta_bureau_jobs (
     organization_id varchar(256) NOT NULL,
     source_job_id varchar(256) NOT NULL,
     request_sha256 bytea NOT NULL CHECK (octet_length(request_sha256) = 32),
+    content_sha256 bytea CHECK (octet_length(content_sha256) = 32),
+    document_type varchar(3) CHECK (document_type IN ('TD1', 'TD2', 'TD3')),
     status varchar(32) NOT NULL CHECK (status IN (
         'QUEUED', 'PRINTING', 'ENCODING', 'QUALITY_CHECK', 'SHIPPED'
     )),
@@ -15,6 +17,12 @@ CREATE TABLE IF NOT EXISTS issuance_service.passport_beta_bureau_jobs (
     updated_at timestamptz NOT NULL DEFAULT NOW(),
     UNIQUE (organization_id, source_job_id)
 );
+-- Existing simulator rows have no type-neutral content digest. Replay of those
+-- rows fails closed; new rows can reconcile the frozen batch and single wires.
+ALTER TABLE issuance_service.passport_beta_bureau_jobs
+    ADD COLUMN IF NOT EXISTS content_sha256 bytea CHECK (octet_length(content_sha256) = 32);
+ALTER TABLE issuance_service.passport_beta_bureau_jobs
+    ADD COLUMN IF NOT EXISTS document_type varchar(3) CHECK (document_type IN ('TD1', 'TD2', 'TD3'));
 CREATE INDEX IF NOT EXISTS ix_passport_beta_bureau_due
     ON issuance_service.passport_beta_bureau_jobs (next_transition_at)
     WHERE status <> 'SHIPPED';

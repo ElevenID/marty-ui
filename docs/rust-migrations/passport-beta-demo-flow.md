@@ -18,7 +18,8 @@ Flow steps, two-job simulator batch and selected job commitment, signed native
 callback, physical claim boundary, and separate unsigned and
 foreign-organization callback denials. It must include separately captured,
 privacy-scanned uncut unsigned and foreign callback videos with hashes in the
-preliminary report. The workflow must keep raw passport data, tokens, private
+preliminary report, plus two matching privacy-scan JSON artifacts whose digests
+and passing results the recorder verifies. The workflow must keep raw passport data, tokens, private
 keys, and the HMAC commitment key out of its artifact.
 The unsigned native webhook must return the frozen missing-signature-header
 HTTP 422 response; a signed foreign-organization callback for the same bureau

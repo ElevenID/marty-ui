@@ -17,6 +17,10 @@ const steps = [
 
 const digest = (value) => createHash('sha256').update(value).digest('hex');
 const sha = (character) => character.repeat(64);
+const privacyScan = (video) => `${JSON.stringify({
+  schemaVersion: 1, passed: true, findings: [],
+  videoSha256: digest(video), frameSamplingFps: 2,
+})}\n`;
 
 function fixture() {
   const artifactDir = fs.mkdtempSync(path.join(os.tmpdir(), 'passport-demo-audit-test-'));
@@ -55,7 +59,7 @@ function fixture() {
         organization_id: flow.organization_id, job_id: flow.job_id,
         source_job_commitment: sha('2'), bureau_job_commitment: sha('8'),
         video_sha256: digest('unsigned video'),
-        privacy_scan_report_sha256: sha('5'),
+        privacy_scan_report_sha256: digest(privacyScan('unsigned video')),
         job_state_before_sha256: sha('6'), job_state_after_sha256: sha('6'),
       },
       foreign: {
@@ -67,7 +71,7 @@ function fixture() {
         bureau_job_commitment: sha('8'),
         response_projection: { webhook_job_not_found: true },
         video_sha256: digest('foreign video'),
-        privacy_scan_report_sha256: sha('7'),
+        privacy_scan_report_sha256: digest(privacyScan('foreign video')),
         job_state_before_sha256: sha('6'), job_state_after_sha256: sha('6'),
       },
     },
@@ -144,6 +148,8 @@ test('D-12 preliminary report requires exact simulator lineage and job proof', (
       (value) => { value.probes.nine_route_gateway_flow.evidence.completed_steps = 8; },
       (value) => { value.probes.nine_route_gateway_flow.evidence.ordered_steps.reverse(); },
       (value) => { value.probes.physical_bureau_batch.evidence.selected_source_job_commitment = sha('4'); },
+      (value) => { value.probes.physical_bureau_batch.evidence.submitted_job_commitments.pop(); value.probes.physical_bureau_batch.evidence.returned_jobs.shift(); },
+      (value) => { value.probes.physical_bureau_batch.evidence.returned_jobs[0].source_job_commitment = sha('2'); },
       (value) => { value.probes.physical_bureau_submission.evidence.application_id = 'other-app'; },
       (value) => { value.probes.signed_bureau_callback.evidence.job_id = 'other-job'; },
       (value) => { value.probes.unsigned_or_foreign_callback_denied.evidence.job_unchanged = false; },
@@ -175,7 +181,14 @@ test('D-12 retains two distinct uncut protected negative recordings', () => {
   try {
     fs.writeFileSync(path.join(artifactDir, 'unsigned-callback-uncut.webm'), 'unsigned video');
     fs.writeFileSync(path.join(artifactDir, 'foreign-callback-uncut.webm'), 'foreign video');
+    fs.writeFileSync(path.join(artifactDir, 'unsigned-callback-privacy-scan.json'), privacyScan('unsigned video'));
+    fs.writeFileSync(path.join(artifactDir, 'foreign-callback-privacy-scan.json'), privacyScan('foreign video'));
     assert.deepEqual(Object.keys(verifyNegativeMedia(report, artifactDir)), ['unsigned', 'foreign']);
+    const failedScan = JSON.parse(privacyScan('foreign video'));
+    failedScan.passed = false;
+    fs.writeFileSync(path.join(artifactDir, 'foreign-callback-privacy-scan.json'), `${JSON.stringify(failedScan)}\n`);
+    assert.throws(() => verifyNegativeMedia(report, artifactDir));
+    fs.writeFileSync(path.join(artifactDir, 'foreign-callback-privacy-scan.json'), privacyScan('foreign video'));
     fs.writeFileSync(path.join(artifactDir, 'foreign-callback-uncut.webm'), 'swapped video');
     assert.throws(() => verifyNegativeMedia(report, artifactDir));
   } finally {

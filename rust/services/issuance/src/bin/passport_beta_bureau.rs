@@ -216,7 +216,9 @@ fn authorize(headers: &HeaderMap, expected: &str) -> Result<(), ApiError> {
 struct JobInput<'a> {
     organization_id: &'a str,
     job_id: &'a str,
-    digest: Vec<u8>,
+    content_digest: Vec<u8>,
+    legacy_digest: Vec<u8>,
+    document_type: Option<&'a str>,
 }
 
 fn nonempty_field<'a>(value: &'a Value, field: &str) -> Result<&'a str, ApiError> {
@@ -274,56 +276,59 @@ fn validate_job<'a>(
     // SOD signatures and the accompanying public DSC may change when an
     // accepted request is retried after its response is lost. The document
     // content and tenant-bound source job must remain identical.
-    let document_identity = json!({
+    let content_identity = json!({
         "organization_id": organization_id,
         "job_id": job_id,
         "application_id": value["application_id"],
         "country_code": country,
-        "document_type": document_type,
         "data_groups": value["data_groups"],
         "mrz": value["mrz"],
     });
-    let digest =
-        Sha256::digest(serde_json::to_vec(&document_identity).map_err(|_| ApiError::Invalid)?)
+    let content_digest =
+        Sha256::digest(serde_json::to_vec(&content_identity).map_err(|_| ApiError::Invalid)?)
+            .to_vec();
+    let mut legacy_identity = content_identity;
+    legacy_identity["document_type"] = json!(document_type);
+    let legacy_digest =
+        Sha256::digest(serde_json::to_vec(&legacy_identity).map_err(|_| ApiError::Invalid)?)
             .to_vec();
     Ok(JobInput {
         organization_id,
         job_id,
-        digest,
+        content_digest,
+        legacy_digest,
+        document_type,
     })
 }
 
 async fn upsert_job(pool: &PgPool, job: &JobInput<'_>) -> Result<Uuid, ApiError> {
     let proposed = Uuid::new_v4();
-    sqlx::query(
+    let row = sqlx::query(
         "INSERT INTO issuance_service.passport_beta_bureau_jobs
-         (bureau_job_id, organization_id, source_job_id, request_sha256, status, next_transition_at)
-         VALUES ($1, $2, $3, $4, 'QUEUED', NOW() + INTERVAL '5 seconds')
-         ON CONFLICT (organization_id, source_job_id) DO NOTHING",
+         (bureau_job_id, organization_id, source_job_id, request_sha256,
+          content_sha256, document_type, status, next_transition_at)
+         VALUES ($1, $2, $3, $4, $5, $6, 'QUEUED', NOW() + INTERVAL '5 seconds')
+         ON CONFLICT (organization_id, source_job_id) DO UPDATE
+         SET document_type = COALESCE(
+             issuance_service.passport_beta_bureau_jobs.document_type,
+             EXCLUDED.document_type)
+         WHERE issuance_service.passport_beta_bureau_jobs.content_sha256 = EXCLUDED.content_sha256
+           AND (issuance_service.passport_beta_bureau_jobs.document_type IS NULL
+             OR EXCLUDED.document_type IS NULL
+             OR issuance_service.passport_beta_bureau_jobs.document_type = EXCLUDED.document_type)
+         RETURNING bureau_job_id",
     )
     .bind(proposed)
     .bind(job.organization_id)
     .bind(job.job_id)
-    .bind(&job.digest)
-    .execute(pool)
+    .bind(&job.legacy_digest)
+    .bind(&job.content_digest)
+    .bind(job.document_type)
+    .fetch_optional(pool)
     .await
     .map_err(|_| ApiError::Unavailable)?;
-    let row = sqlx::query(
-        "SELECT bureau_job_id, request_sha256 FROM issuance_service.passport_beta_bureau_jobs
-         WHERE organization_id = $1 AND source_job_id = $2",
-    )
-    .bind(job.organization_id)
-    .bind(job.job_id)
-    .fetch_one(pool)
-    .await
-    .map_err(|_| ApiError::Unavailable)?;
-    let existing_digest: Vec<u8> = row
-        .try_get("request_sha256")
-        .map_err(|_| ApiError::Unavailable)?;
-    if existing_digest != job.digest {
-        return Err(ApiError::Conflict);
-    }
-    row.try_get("bureau_job_id")
+    row.ok_or(ApiError::Conflict)?
+        .try_get("bureau_job_id")
         .map_err(|_| ApiError::Unavailable)
 }
 
@@ -684,14 +689,27 @@ mod tests {
         });
         let job = validate_job(&value, None).unwrap();
         assert_eq!(job.organization_id, "org-1");
-        assert_eq!(job.digest.len(), 32);
-        assert!(!job.digest.windows(7).any(|part| part == b"private"));
+        assert_eq!(job.content_digest.len(), 32);
+        assert_eq!(job.legacy_digest.len(), 32);
+        assert!(!job.content_digest.windows(7).any(|part| part == b"private"));
         let mut resigned = value.clone();
         resigned["sod_der_base64"] = json!("other-signature");
         resigned["dsc_cert_pem"] = json!("renewed-public-cert");
-        assert_eq!(validate_job(&resigned, None).unwrap().digest, job.digest);
+        assert_eq!(
+            validate_job(&resigned, None).unwrap().content_digest,
+            job.content_digest
+        );
         resigned["mrz"]["line_2"] = json!("changed-document");
-        assert_ne!(validate_job(&resigned, None).unwrap().digest, job.digest);
+        assert_ne!(
+            validate_job(&resigned, None).unwrap().content_digest,
+            job.content_digest
+        );
+        let mut batch_wire = value.clone();
+        batch_wire.as_object_mut().unwrap().remove("document_type");
+        let batch = validate_job(&batch_wire, Some("org-1")).unwrap();
+        assert_eq!(batch.content_digest, job.content_digest);
+        assert_ne!(batch.legacy_digest, job.legacy_digest);
+        assert_eq!(batch.document_type, None);
         assert!(validate_job(&value, Some("foreign-org")).is_err());
         let mut wrong = value;
         wrong["document_type"] = json!("VISA");
@@ -747,12 +765,16 @@ mod tests {
         let first = JobInput {
             organization_id: "test-org-a",
             job_id: &source,
-            digest: vec![7; 32],
+            content_digest: vec![7; 32],
+            legacy_digest: vec![7; 32],
+            document_type: Some("TD3"),
         };
         let other = JobInput {
             organization_id: "test-org-b",
             job_id: &source,
-            digest: vec![8; 32],
+            content_digest: vec![8; 32],
+            legacy_digest: vec![8; 32],
+            document_type: Some("TD3"),
         };
         let first_id = upsert_job(&pool, &first).await.unwrap();
         assert_eq!(upsert_job(&pool, &first).await.unwrap(), first_id);
@@ -761,18 +783,91 @@ mod tests {
         let conflicting = JobInput {
             organization_id: "test-org-a",
             job_id: &source,
-            digest: vec![9; 32],
+            content_digest: vec![9; 32],
+            legacy_digest: vec![9; 32],
+            document_type: Some("TD3"),
         };
         assert!(matches!(
             upsert_job(&pool, &conflicting).await,
             Err(ApiError::Conflict)
         ));
-        let rows = sqlx::query("SELECT organization_id, source_job_id, request_sha256, status FROM issuance_service.passport_beta_bureau_jobs WHERE source_job_id = $1 ORDER BY organization_id")
+        let missing_type = JobInput {
+            organization_id: first.organization_id,
+            job_id: first.job_id,
+            content_digest: first.content_digest.clone(),
+            legacy_digest: vec![10; 32],
+            document_type: None,
+        };
+        assert_eq!(upsert_job(&pool, &missing_type).await.unwrap(), first_id);
+        let wrong_type = JobInput {
+            organization_id: first.organization_id,
+            job_id: first.job_id,
+            content_digest: first.content_digest.clone(),
+            legacy_digest: first.legacy_digest.clone(),
+            document_type: Some("TD1"),
+        };
+        assert!(matches!(
+            upsert_job(&pool, &wrong_type).await,
+            Err(ApiError::Conflict)
+        ));
+        let batch_first_source = format!("{source}-batch-first");
+        let batch_first = JobInput {
+            organization_id: "test-org-a",
+            job_id: &batch_first_source,
+            content_digest: vec![11; 32],
+            legacy_digest: vec![12; 32],
+            document_type: None,
+        };
+        let batch_first_id = upsert_job(&pool, &batch_first).await.unwrap();
+        let single_after_batch = JobInput {
+            document_type: Some("TD2"),
+            ..batch_first
+        };
+        assert_eq!(
+            upsert_job(&pool, &single_after_batch).await.unwrap(),
+            batch_first_id
+        );
+        assert!(matches!(
+            upsert_job(
+                &pool,
+                &JobInput {
+                    document_type: Some("TD3"),
+                    ..single_after_batch
+                }
+            )
+            .await,
+            Err(ApiError::Conflict)
+        ));
+        let legacy_source = format!("{source}-legacy");
+        sqlx::query(
+            "INSERT INTO issuance_service.passport_beta_bureau_jobs
+            (bureau_job_id, organization_id, source_job_id, request_sha256, status)
+            VALUES ($1, 'test-org-a', $2, $3, 'QUEUED')",
+        )
+        .bind(Uuid::new_v4())
+        .bind(&legacy_source)
+        .bind(vec![13u8; 32])
+        .execute(&pool)
+        .await
+        .unwrap();
+        let legacy_replay = JobInput {
+            organization_id: "test-org-a",
+            job_id: &legacy_source,
+            content_digest: vec![13; 32],
+            legacy_digest: vec![13; 32],
+            document_type: Some("TD3"),
+        };
+        assert!(matches!(
+            upsert_job(&pool, &legacy_replay).await,
+            Err(ApiError::Conflict)
+        ));
+        let rows = sqlx::query("SELECT organization_id, source_job_id, request_sha256, content_sha256, document_type, status FROM issuance_service.passport_beta_bureau_jobs WHERE source_job_id = $1 ORDER BY organization_id")
             .bind(&source).fetch_all(&pool).await.unwrap();
         assert_eq!(rows.len(), 2);
         assert_eq!(rows[0].get::<String, _>("organization_id"), "test-org-a");
         assert_eq!(rows[1].get::<String, _>("organization_id"), "test-org-b");
         assert_eq!(rows[0].get::<String, _>("status"), "QUEUED");
+        assert_eq!(rows[0].get::<String, _>("document_type"), "TD3");
         let columns: Vec<String> = sqlx::query_scalar("SELECT column_name FROM information_schema.columns WHERE table_schema = 'issuance_service' AND table_name = 'passport_beta_bureau_jobs'")
             .fetch_all(&pool).await.unwrap();
         for forbidden in [
@@ -929,12 +1024,20 @@ mod tests {
             serde_json::from_slice(&to_bytes(polled.into_body(), 8192).await.unwrap()).unwrap();
         assert_eq!(polled["status"], "PRINTING");
         let batch_job_id = format!("{source}-batch");
-        let batch = json!({"batch_id": "synthetic-batch", "organization_id": "test-org-a", "jobs": [{
+        let mut replay_wire = payload.clone();
+        replay_wire
+            .as_object_mut()
+            .unwrap()
+            .remove("organization_id");
+        replay_wire.as_object_mut().unwrap().remove("document_type");
+        let batch_job = json!({
             "job_id": batch_job_id, "application_id": "app-2", "country_code": "USA",
             "data_groups": {"DG1": "synthetic"}, "sod_der_base64": "c29k",
             "dsc_cert_pem": "public-cert", "mrz": {"line_1": "synthetic-1", "line_2": "synthetic-2"}
-        }]});
-        let accepted_batch = router(state)
+        });
+        let batch = json!({"batch_id": "synthetic-batch", "organization_id": "test-org-a",
+            "jobs": [batch_job, replay_wire]});
+        let accepted_batch = router(state.clone())
             .oneshot(
                 Request::builder()
                     .method("POST")
@@ -951,8 +1054,36 @@ mod tests {
             serde_json::from_slice(&to_bytes(accepted_batch.into_body(), 8192).await.unwrap())
                 .unwrap();
         assert_eq!(batch_response["jobs"][0]["job_id"], batch_job_id);
+        assert_eq!(batch_response["jobs"][1]["job_id"], http_source);
+        assert_eq!(batch_response["jobs"][1]["bureau_job_id"], bureau_job_id);
+        let mut explicit_after_batch = batch["jobs"][0].clone();
+        explicit_after_batch["organization_id"] = json!("test-org-a");
+        explicit_after_batch["document_type"] = json!("TD1");
+        let single_after_batch = router(state)
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/v1/personalization/jobs")
+                    .header("content-type", "application/json")
+                    .header("authorization", "Bearer synthetic-bureau-auth")
+                    .body(Body::from(explicit_after_batch.to_string()))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(single_after_batch.status(), StatusCode::ACCEPTED);
+        let single_response: Value = serde_json::from_slice(
+            &to_bytes(single_after_batch.into_body(), 8192)
+                .await
+                .unwrap(),
+        )
+        .unwrap();
+        assert_eq!(
+            single_response["bureau_job_id"],
+            batch_response["jobs"][0]["bureau_job_id"]
+        );
         server.abort();
-        sqlx::query("DELETE FROM issuance_service.passport_beta_bureau_jobs WHERE source_job_id IN ($1, $2, $3) AND organization_id IN ('test-org-a', 'test-org-b')")
-            .bind(&source).bind(&http_source).bind(&batch_job_id).execute(&pool).await.unwrap();
+        sqlx::query("DELETE FROM issuance_service.passport_beta_bureau_jobs WHERE source_job_id IN ($1, $2, $3, $4, $5) AND organization_id IN ('test-org-a', 'test-org-b')")
+            .bind(&source).bind(&http_source).bind(&batch_job_id).bind(&batch_first_source).bind(&legacy_source).execute(&pool).await.unwrap();
     }
 }
