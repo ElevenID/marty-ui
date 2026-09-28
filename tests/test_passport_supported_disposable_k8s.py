@@ -78,9 +78,11 @@ def test_disposable_kubernetes_selects_marty_simulator_without_provider() -> Non
         assert template["metadata"]["annotations"]["com.marty.passport.acceptance.services-image"] == IMAGE
         pod = template["spec"]
         assert pod["automountServiceAccountToken"] is False
+        assert pod["hostNetwork"] is False
         assert pod["securityContext"]["runAsNonRoot"] is True
         container, = pod["containers"]
         assert container["image"] == IMAGE
+        assert all("hostPort" not in port for port in container["ports"])
         env = {item["name"]: item["value"] for item in container["env"]}
         assert env["SERVICE_NAME"] == role
         assert env["ENVIRONMENT"] == "beta"

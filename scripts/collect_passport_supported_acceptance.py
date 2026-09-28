@@ -37,6 +37,8 @@ COMPOSE_SERVICES = (
     "passport-beta-bureau",
 )
 KUBERNETES_SERVICES = COMPOSE_SERVICES
+PRIVATE_KUBERNETES_PORTS = {"passport-beta-bureau": 8020,
+                            "passport-callback-signer": 8018}
 COMMON_FLAGS = {
     "gateway": ("PASSPORT_NATIVE_GATEWAY_ENABLED", "PASSPORT_INTERNAL_SERVICE_AUTH_ENABLED"),
     "flow": ("PASSPORT_NATIVE_FLOW_ENABLED", "PASSPORT_INTERNAL_SERVICE_AUTH_ENABLED"),
@@ -179,6 +181,21 @@ def kubernetes_pod_ips(pod: dict, service: str) -> set:
     return addresses
 
 
+def kubernetes_private_network(spec: object, service: str, port: int) -> None:
+    require(isinstance(spec, dict) and spec.get("hostNetwork") in (None, False),
+            f"Kubernetes {service} private Pod uses the host network")
+    containers = spec.get("containers")
+    require(isinstance(containers, list) and len(containers) == 1
+            and isinstance(containers[0], dict),
+            f"Kubernetes {service} private container is invalid")
+    ports = containers[0].get("ports")
+    require(isinstance(ports, list) and len(ports) == 1
+            and isinstance(ports[0], dict)
+            and ports[0].get("containerPort") == port
+            and ports[0].get("hostPort") in (None, 0),
+            f"Kubernetes {service} private port is exposed on the host")
+
+
 def observe_compose(
     surface: str, project: str, services_reference: str,
     runner: Callable[[list[str]], str] = command,
@@ -286,6 +303,9 @@ def observe_kubernetes(
                             "com.marty.passport.acceptance.source-commit": source_commit}.items()),
                 f"Kubernetes {service} Deployment selector or template is unowned")
         containers = spec.get("template", {}).get("spec", {}).get("containers")
+        if service in PRIVATE_KUBERNETES_PORTS:
+            kubernetes_private_network(
+                template.get("spec"), service, PRIVATE_KUBERNETES_PORTS[service])
         require(isinstance(containers, list) and len(containers) == 1
                 and containers[0].get("image") == services_reference,
                 f"Kubernetes {service} is not pinned to the released services image")
@@ -358,6 +378,9 @@ def observe_kubernetes(
                 and statuses[0]["imageID"].endswith(services_reference.split("@", 1)[1]),
                 f"Kubernetes {service} pod is not ready on the released image")
         pod_containers = pod.get("spec", {}).get("containers")
+        if service in PRIVATE_KUBERNETES_PORTS:
+            kubernetes_private_network(
+                pod.get("spec"), service, PRIVATE_KUBERNETES_PORTS[service])
         require(isinstance(pod_containers, list) and len(pod_containers) == 1
                 and pod_containers[0].get("image") == services_reference,
                 f"Kubernetes {service} Pod spec is not pinned to the released image")

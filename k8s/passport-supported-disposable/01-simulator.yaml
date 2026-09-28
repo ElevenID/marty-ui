@@ -30,6 +30,7 @@ spec:
       annotations:
         com.marty.passport.acceptance.services-image: ${MARTY_SERVICES_IMAGE}
     spec:
+      hostNetwork: false
       automountServiceAccountToken: false
       imagePullSecrets:
         - name: passport-acceptance-registry
@@ -125,6 +126,7 @@ spec:
       annotations:
         com.marty.passport.acceptance.services-image: ${MARTY_SERVICES_IMAGE}
     spec:
+      hostNetwork: false
       automountServiceAccountToken: false
       imagePullSecrets:
         - name: passport-acceptance-registry

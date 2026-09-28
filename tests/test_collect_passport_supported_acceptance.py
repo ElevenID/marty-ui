@@ -139,8 +139,12 @@ def kubernetes_runner(*, mixed_provider: bool = False,
                        foreign_address: bool = False,
                        historical_replicaset: bool = False,
                        dual_stack: bool = False,
-                       external_ip: bool = False):
-    def container_for(service: str) -> dict:
+                       external_ip: bool = False,
+                       template_host_network: bool = False,
+                       pod_host_network: bool = False,
+                       template_host_port: bool = False,
+                       pod_host_port: bool = False):
+    def container_for(service: str, *, is_pod: bool = False) -> dict:
         values = {flag: "true" for flag in gate.KUBERNETES_FLAGS[service]}
         if service == "gateway":
             values.update({"PASSPORT_PROVIDER_INGRESS_GATEWAY_ENABLED":
@@ -159,9 +163,16 @@ def kubernetes_runner(*, mixed_provider: bool = False,
                 "PASSPORT_BUREAU_CALLBACK_URL":
                     "http://issuance-native:8005/v1/passport/webhooks/personalization",
             })
-        return {"image": REFERENCE,
-                "env": [{"name": name, "value": value}
-                        for name, value in values.items()]}
+        container = {"image": REFERENCE,
+                     "env": [{"name": name, "value": value}
+                             for name, value in values.items()]}
+        if service in ("passport-beta-bureau", "passport-callback-signer"):
+            port = 8020 if service == "passport-beta-bureau" else 8018
+            binding = {"name": "http", "containerPort": port}
+            if (pod_host_port if is_pod else template_host_port):
+                binding["hostPort"] = port
+            container["ports"] = [binding]
+        return container
 
     def metadata_for(service: str, kind: str) -> dict:
         labels = {"app": service,
@@ -215,13 +226,14 @@ def kubernetes_runner(*, mixed_provider: bool = False,
             service = args[8].removeprefix("app=")
             if service == "passport-provider-ingress":
                 return json.dumps({"items": []})
-            pod_container = container_for(service)
+            pod_container = container_for(service, is_pod=True)
             if service == "issuance-native" and stale_pod_profile:
                 next(entry for entry in pod_container["env"] if entry["name"] ==
                      "PERSONALIZATION_BUREAU_PROVIDER_PROFILE_ID")["value"] = "external-provider"
             return json.dumps({"items": [{
                 "metadata": metadata_for(service, "Pod"),
-                "spec": {"containers": [pod_container]},
+                "spec": {"hostNetwork": pod_host_network,
+                         "containers": [pod_container]},
                 "status": {"phase": "Running", "podIP": "10.1.2.3",
                            "podIPs": ([{"ip": "10.1.2.3"}, {"ip": "fd00::3"}]
                                       if dual_stack else [{"ip": "10.1.2.3"}]),
@@ -286,7 +298,8 @@ def kubernetes_runner(*, mixed_provider: bool = False,
                 "com.marty.passport.acceptance.run-id": RUN_ID}},
                      "template": {"metadata": {"labels": metadata_for(
                          service, "Deployment")["labels"]},
-                                  "spec": {"containers": [container]}}},
+                                  "spec": {"hostNetwork": template_host_network,
+                                           "containers": [container]}}},
         })
     return run
 
@@ -315,6 +328,10 @@ def test_kubernetes_accepts_retained_replicasets_and_dual_stack_routes() -> None
     ("foreign_address", "Service routes to another address"),
     ("external_ip", "Service route is outside"),
     ("wrong_source", "owner labels are invalid"),
+    ("template_host_network", "private Pod uses the host network"),
+    ("pod_host_network", "private Pod uses the host network"),
+    ("template_host_port", "private port is exposed"),
+    ("pod_host_port", "private port is exposed"),
 ])
 def test_kubernetes_rejects_foreign_pod_or_routing(
     defect: str, pattern: str,
