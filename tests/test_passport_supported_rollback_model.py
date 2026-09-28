@@ -55,6 +55,7 @@ def safe_model(root: Path) -> dict:
     services["passport-beta-bureau"]["networks"] = ["private", "callback_signing"]
     services["issuance-native"]["environment"].update({
         "ENVIRONMENT": "development",
+        "ISSUER_BASE_URL": "http://localhost:29876",
         "ISSUANCE_GRPC_ENABLED": "true", "ISSUANCE_GRPC_PORT": "9005",
         "CT_GRPC_TARGET": "credential-template:9003",
         "CREDENTIAL_TEMPLATE_SERVICE_URL": "http://credential-template:8003",
@@ -77,7 +78,7 @@ def safe_model(root: Path) -> dict:
         "SIGNING_KEYS_DSC_ISSUE_GATEWAY_KEY_FILE": "/run/secrets/dsc_issue_gateway_key",
         "SIGNING_KEYS_CSCA_ISSUE_GATEWAY_KEY_FILE": "/run/secrets/csca_issue_gateway_key",
         "PUBLIC_DOMAIN": "localhost",
-        "ISSUER_BASE_URL": "http://gateway:8000",
+        "ISSUER_BASE_URL": "http://localhost:29876",
         "PASSPORT_PROVIDER_INGRESS_GATEWAY_ENABLED": "false",
         "ORGANIZATION_SERVICE_URL": "http://organization:8002",
         "ORG_GRPC_TARGET": "organization:9002",
@@ -327,7 +328,7 @@ def safe_model(root: Path) -> dict:
             "MARTY_ORG_ADMIN_EMAIL": "admin@example.invalid",
             "MARTY_ORG_ID": "00000000-0000-0000-0000-000000000001",
             "PUBLIC_DOMAIN": "localhost",
-            "MARTY_ISSUER_BASE_URL": "http://gateway:8000",
+            "MARTY_ISSUER_BASE_URL": "http://localhost:29876",
             "MARTY_ISSUER_DID": "did:web:localhost:orgs:marty",
         },
         "depends_on": {**{name: {"condition": "service_healthy"}
@@ -548,6 +549,12 @@ def test_attested_plan_binds_all_disposable_images(tmp_path: Path) -> None:
         MARTY_ISSUER_DID="did:web:other:orgs:marty"), "managed issuer DID"),
     (lambda model, root: model["services"]["db-migrate"]["environment"].update(
         MARTY_ISSUER_DID="did:web:localhost%3A8000:orgs:marty"), "managed issuer DID"),
+    (lambda model, root: model["services"]["db-migrate"]["environment"].update(
+        MARTY_ISSUER_BASE_URL="http://gateway:8000"), "issuer profile bootstrap"),
+    (lambda model, root: model["services"]["gateway"]["environment"].update(
+        ISSUER_BASE_URL="http://gateway:8000"), "managed issuer DID"),
+    (lambda model, root: model["services"]["issuance-native"]["environment"].update(
+        ISSUER_BASE_URL="https://beta.elevenidllc.com"), "endpoint leaves disposable services"),
     (lambda model, root: model["services"]["gateway"]["environment"].update(
         PASSPORT_TENANT_API_KEYS_FILE="/run/secrets/tenant_keys"),
      "internal passport authentication"),
