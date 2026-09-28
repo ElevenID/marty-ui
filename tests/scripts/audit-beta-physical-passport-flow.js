@@ -5,7 +5,7 @@
 const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
-const { createHash } = require('node:crypto');
+const { createHash, createHmac } = require('node:crypto');
 const { execFileSync } = require('node:child_process');
 
 const { VIDEO_SIZE, createArtifactDir, finalizeVideo, showStep } = require('./demo-recording');
@@ -14,6 +14,48 @@ const ROOT = path.resolve(__dirname, '..', '..');
 const BETA_ORIGIN = 'https://beta.elevenidllc.com';
 const SHA256 = /^[0-9a-f]{64}$/;
 const COMMIT = /^[0-9a-f]{40}$/;
+const IDENTIFIER = /^[A-Za-z0-9._:-]{1,255}$/;
+const CANONICAL_UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
+const PRIVATE_HANDOFF = require('../../contracts/passport-beta-demo-private-handoff.json');
+const PROHIBITED_PUBLIC_KEYS = new Set([
+  'organization_id', 'flow_id', 'flow_definition_id', 'flow_instance_id',
+  'application_id', 'job_id', 'source_job_id', 'bureau_job_id', 'batch_id',
+  'csca_issuer_profile_id', 'dsc_issuer_profile_id', 'issuer_profile_id',
+  'csca_certificate_id', 'kms_key_id', 'kms_key_arn',
+  'application_input_sha256', 'job_id_sha256', 'application_id_sha256',
+  'bureau_job_id_sha256', 'flowInstanceSha256', 'job_state_before_sha256',
+  'job_state_after_sha256', 'mrz', 'data_groups', 'sod_der_base64',
+  'dsc_cert_pem', 'dsc_certificate_pem', 'certificate_bytes',
+  'kms_key_reference', 'callback_body', 'callback_signature',
+  'private_receipt', 'batch_request', 'batch_response',
+  'request_body', 'response_body', 'applicant', 'passport_document',
+  'document_data', 'personalization_payload', 'portrait', 'photo',
+]);
+const ALLOWED_PUBLIC_SHA256_KEYS = new Set([
+  'stack_manifest_sha256', 'local_deployment_manifest_sha256',
+  'source_manifest_sha256', 'official_stack_manifest_sha256',
+  'csca_certificate_sha256', 'dsc_certificate_sha256',
+  'sod_dsc_certificate_sha256', 'sod_sha256',
+  'callback_receipt_sha256', 'selected_callback_receipt_sha256',
+  'companion_callback_receipt_sha256', 'video_sha256',
+  'privacy_scan_report_sha256', 'unsigned_uncut_video_sha256',
+  'foreign_uncut_video_sha256',
+]);
+
+function prohibitedPublicKey(key) {
+  const normalized = key.replace(/([a-z])([A-Z])/g, '$1_$2').toLowerCase();
+  if (/(?:_sha256|_hash)$/.test(normalized)
+      && !ALLOWED_PUBLIC_SHA256_KEYS.has(normalized)) return true;
+  return PROHIBITED_PUBLIC_KEYS.has(key) || PROHIBITED_PUBLIC_KEYS.has(normalized)
+    || /(?:^|_)(?:api_key|password|token|secret|cookie|wire_key|hmac_key|private_key|mrz|data_groups?)(?:_|$)/.test(normalized)
+    || /(?:^|_)(?:raw|private)(?:_|$)/.test(normalized)
+    || /^dg[0-9]+$/.test(normalized)
+    || /(?:^|_)issuer_profile_id$/.test(normalized)
+    || /(?:^|_)kms_key_(?:id|arn|reference)$/.test(normalized)
+    || /(?:^|_)(?:certificate_pem|certificate_bytes|kms_key_reference|callback_body|callback_signature|batch_request|batch_response|request_body|response_body)(?:_|$)/.test(normalized)
+    || /^(?:raw_)?(?:sod_der|dsc_pem|dsc_pem_wire)(?:_base64|_bytes|_hex)?$/.test(normalized)
+    || /(?:^|_)(?:job|application|organization|flow|bureau|batch)_id_(?:sha256|hash)$/.test(normalized);
+}
 const REQUIRED_PROBES = [
   'managed_csca_dsc_chain', 'sod_signature', 'simulator_material_receipt',
   'nine_route_gateway_flow',
@@ -53,6 +95,70 @@ function readJson(filePath) {
   return value;
 }
 
+function commitment(key, label, value) {
+  requireProof(typeof key === 'string' && key.length >= 32 && !/[\r\n\0]/.test(key)
+    && typeof value === 'string' && IDENTIFIER.test(value),
+  'Private passport commitment input is invalid');
+  return createHmac('sha256', key).update(`${label}:${value}`, 'utf8').digest('hex');
+}
+
+function assertPublicPrivacy(report, privatePlan, apiKey) {
+  const privateIds = ['organization_id', 'flow_definition_id', 'flow_instance_id',
+    'application_id', 'source_job_id', 'bureau_job_id'].map((field) => privatePlan[field]);
+  function visit(value) {
+    if (Array.isArray(value)) return value.forEach(visit);
+    if (value && typeof value === 'object') {
+      for (const [key, nested] of Object.entries(value)) {
+        requireProof(!prohibitedPublicKey(key),
+          'Preliminary receipt contains a raw or unkeyed identifier field');
+        requireProof(!key.includes(apiKey)
+          && privateIds.every((identifier) => !key.includes(identifier)),
+        'Preliminary receipt contains a private identifier or key');
+        visit(nested);
+      }
+    } else if (typeof value === 'string') {
+      requireProof(!value.includes('-----BEGIN ') && !/P<[A-Z0-9<]{15,}/.test(value),
+        'Preliminary receipt contains raw passport material');
+      requireProof(!value.includes(apiKey)
+        && privateIds.every((identifier) => !value.includes(identifier)),
+      'Preliminary receipt contains a private identifier or key');
+    }
+  }
+  visit(report);
+}
+
+function readPrivatePlan(filePath, artifactDir) {
+  try {
+    requireProof(typeof filePath === 'string' && path.isAbsolute(filePath),
+      'Private passport demo handoff path is invalid');
+    const resolved = path.resolve(filePath);
+    const real = fs.realpathSync(resolved);
+    const checkout = path.resolve(ROOT);
+    const artifacts = path.resolve(artifactDir);
+    requireProof(real !== checkout && !real.startsWith(`${checkout}${path.sep}`)
+      && real !== artifacts && !real.startsWith(`${artifacts}${path.sep}`),
+    'Private passport demo handoff must be outside checkout and artifacts');
+    const stat = fs.lstatSync(resolved);
+    requireProof(stat.isFile() && !stat.isSymbolicLink() && stat.size > 0 && stat.size <= 16 * 1024
+      && (process.platform === 'win32' || (stat.mode & 0o077) === 0),
+    'Private passport demo handoff file is not protected');
+    const plan = readJson(resolved);
+    const keys = PRIVATE_HANDOFF.private_plan_fields;
+    requireProof(Object.keys(plan).length === keys.length
+      && Object.keys(plan).every((key) => keys.includes(key))
+      && plan.schema === PRIVATE_HANDOFF.private_plan_schema
+      && COMMIT.test(plan.source_commit) && SHA256.test(plan.stack_manifest_sha256)
+      && ['organization_id', 'flow_definition_id', 'flow_instance_id',
+        'application_id', 'source_job_id', 'bureau_job_id']
+        .every((key) => typeof plan[key] === 'string' && IDENTIFIER.test(plan[key]))
+      && CANONICAL_UUID.test(plan.bureau_job_id),
+    'Private passport demo handoff is incomplete');
+    return plan;
+  } catch {
+    throw new Error('Private passport demo handoff is invalid');
+  }
+}
+
 function verifyNegativeMedia(report, directory) {
   const output = {};
   for (const [name, filename] of Object.entries(NEGATIVE_MEDIA)) {
@@ -71,7 +177,10 @@ function verifyNegativeMedia(report, directory) {
     requireProof(sha256(scanPath) === declared.privacy_scan_report_sha256,
       `Protected ${name} callback privacy scan digest mismatch`);
     const scan = readJson(scanPath);
-    requireProof(scan.schemaVersion === 1 && scan.passed === true
+    requireProof(Object.keys(scan).length === 5
+      && ['schemaVersion', 'passed', 'findings', 'videoSha256', 'frameSamplingFps']
+        .every((key) => Object.hasOwn(scan, key))
+      && scan.schemaVersion === 1 && scan.passed === true
       && Array.isArray(scan.findings) && scan.findings.length === 0
       && scan.videoSha256 === declared.video_sha256
       && Number(scan.frameSamplingFps) >= 2,
@@ -116,12 +225,17 @@ function protectedReceipt(runId, expectedSha256, sourceCommit) {
   }
 }
 
-function validatePreliminary(report, deployment, artifactDir) {
+function validatePreliminary(report, deployment, artifactDir, privatePlan, apiKey) {
   const stackDigest = sha256(path.join(artifactDir, 'stack-manifest.json'));
   const deploymentDigest = sha256(path.join(artifactDir, 'local-deployment-manifest.json'));
   const sourceDigest = sha256(path.join(artifactDir, 'source-manifest.json'));
   const sourceCommit = deployment.marty_ui_sha;
   requireProof(COMMIT.test(sourceCommit), 'Deployed source commit is invalid');
+  requireProof(privatePlan?.schema === PRIVATE_HANDOFF.private_plan_schema
+    && privatePlan.source_commit === sourceCommit
+    && privatePlan.stack_manifest_sha256 === stackDigest,
+  'Private passport demo handoff differs from the deployed release');
+  assertPublicPrivacy(report, privatePlan, apiKey);
   requireProof(
     report.schema === 'marty.passport-beta-preliminary/v1'
     && report.status === 'qualified_for_recording'
@@ -154,9 +268,10 @@ function validatePreliminary(report, deployment, artifactDir) {
     'Preliminary receipt claims a physical booklet');
   const chain = report.probes.managed_csca_dsc_chain.evidence;
   requireProof(
-    typeof chain.csca_issuer_profile_id === 'string'
-    && typeof chain.dsc_issuer_profile_id === 'string'
-    && chain.csca_issuer_profile_id !== chain.dsc_issuer_profile_id
+    SHA256.test(chain.csca_issuer_profile_commitment)
+    && SHA256.test(chain.dsc_issuer_profile_commitment)
+    && chain.csca_issuer_profile_commitment !== chain.dsc_issuer_profile_commitment
+    && chain.managed_kms_custody_verified === true
     && chain.chain_verified === true && chain.sod_dsc_binding_verified === true,
     'Distinct managed issuer profiles and same-job SOD binding are unproven',
   );
@@ -172,21 +287,33 @@ function validatePreliminary(report, deployment, artifactDir) {
     && route.gateway_owner === 'rust' && route.flow_owner === 'rust'
     && route.completed_steps === 9
     && JSON.stringify(route.ordered_steps) === JSON.stringify(FROZEN_STEPS)
-    && typeof route.organization_id === 'string' && route.organization_id
-    && typeof route.flow_id === 'string' && route.flow_id
-    && typeof route.flow_instance_id === 'string' && route.flow_instance_id
-    && typeof route.application_id === 'string' && route.application_id
-    && typeof route.job_id === 'string' && route.job_id
-    && SHA256.test(route.source_job_commitment),
+    && SHA256.test(route.organization_commitment)
+    && SHA256.test(route.flow_definition_commitment)
+    && SHA256.test(route.flow_instance_commitment)
+    && SHA256.test(route.application_commitment)
+    && SHA256.test(route.source_job_commitment)
+    && SHA256.test(route.bureau_job_commitment),
     'Nine-route Rust flow or exact instance correlation is unproven',
   );
+  for (const [field, label] of Object.entries(PRIVATE_HANDOFF.labels)) {
+    const privateField = {
+      organization_commitment: 'organization_id',
+      flow_definition_commitment: 'flow_definition_id',
+      flow_instance_commitment: 'flow_instance_id',
+      application_commitment: 'application_id',
+      source_job_commitment: 'source_job_id',
+      bureau_job_commitment: 'bureau_job_id',
+    }[field];
+    requireProof(route[field] === commitment(apiKey, label, privatePlan[privateField]),
+      'Private passport identities do not match the protected preliminary receipt');
+  }
   requireProof(
-    chain.organization_id === route.organization_id
-    && chain.application_id === route.application_id
-    && chain.job_id === route.job_id
+    chain.organization_commitment === route.organization_commitment
+    && chain.application_commitment === route.application_commitment
+    && chain.source_job_commitment === route.source_job_commitment
     && SHA256.test(chain.sod_dsc_certificate_sha256)
     && chain.sod_dsc_certificate_sha256 === sod.dsc_certificate_sha256
-    && sod.job_id === route.job_id,
+    && sod.source_job_commitment === route.source_job_commitment,
     'Managed issuer chain and SOD do not match the recorded passport job',
   );
   const batch = report.probes.physical_bureau_batch.evidence;
@@ -211,6 +338,13 @@ function validatePreliminary(report, deployment, artifactDir) {
   requireProof(
     batch.provider_kind === 'simulator' && batch.physical_claim === 'not_claimed'
     && batch.native_binding_verified === true
+    && batch.selected_flow_in_two_job_batch === true
+    && batch.native_completed_jobs === 2
+    && batch.first_accepted_material_verified === true
+    && batch.selected_flow_callback_verified === true
+    && batch.http_status === 202 && batch.batch_status === 'QUEUED'
+    && SHA256.test(batch.request_commitment)
+    && SHA256.test(batch.response_commitment)
     && SHA256.test(batch.selected_source_job_commitment)
     && Array.isArray(batch.submitted_job_commitments)
     && batch.submitted_job_commitments.length === 2
@@ -226,22 +360,25 @@ function validatePreliminary(report, deployment, artifactDir) {
       batch.submitted_job_commitments.includes(job.source_job_commitment))
     && batch.submitted_job_commitments.includes(batch.selected_source_job_commitment)
     && batch.selected_source_job_commitment === route.source_job_commitment
+    && batch.selected_bureau_job_commitment === route.bureau_job_commitment
     && selectedBureauJobs.length === 1
     && SHA256.test(selectedBureauJobs[0].bureau_job_commitment)
     && batch.selected_bureau_job_commitment === selectedBureauJobs[0].bureau_job_commitment
     && submission.provider_kind === 'simulator' && submission.physical_claim === 'not_claimed'
     && submission.selected_source_job_commitment === batch.selected_source_job_commitment
     && submission.selected_bureau_job_commitment === batch.selected_bureau_job_commitment
-    && submission.organization_id === route.organization_id
-    && submission.application_id === route.application_id
-    && submission.job_id === route.job_id
+    && submission.organization_commitment === route.organization_commitment
+    && submission.application_commitment === route.application_commitment
+    && submission.flow_instance_commitment === route.flow_instance_commitment
     && callback.provider_kind === 'simulator' && callback.physical_claim === 'not_claimed'
     && callback.signature_verified === true && callback.organization_bound === true
     && callback.source_job_commitment === batch.selected_source_job_commitment
     && callback.bureau_job_commitment === batch.selected_bureau_job_commitment
-    && callback.organization_id === route.organization_id
-    && callback.application_id === route.application_id
-    && callback.job_id === route.job_id,
+    && callback.organization_commitment === route.organization_commitment
+    && callback.application_commitment === route.application_commitment
+    && callback.flow_instance_commitment === route.flow_instance_commitment
+    && callback.callback_receipt_sha256 === batch.selected_callback_receipt_sha256
+    && SHA256.test(callback.callback_receipt_sha256),
     'Simulator batch and signed native callback do not match the recorded job',
   );
   const denial = report.probes.unsigned_or_foreign_callback_denied.evidence;
@@ -251,13 +388,13 @@ function validatePreliminary(report, deployment, artifactDir) {
     denial.unsigned_denied === true
     && denial.foreign_organization_denied === true
     && denial.job_unchanged === true
-    && denial.job_id === route.job_id
+    && denial.source_job_commitment === route.source_job_commitment
+    && denial.bureau_job_commitment === route.bureau_job_commitment
     && unsigned?.http_status === 422
     && unsigned.webhook_owner === 'issuance-native'
     && unsigned.request_kind === 'missing_signature_header'
     && unsigned.response_projection?.missing_signature_header === true
-    && unsigned.organization_id === route.organization_id
-    && unsigned.job_id === route.job_id
+    && unsigned.organization_commitment === route.organization_commitment
     && unsigned.source_job_commitment === route.source_job_commitment
     && unsigned.bureau_job_commitment === batch.selected_bureau_job_commitment
     && foreign?.http_status === 404
@@ -265,9 +402,8 @@ function validatePreliminary(report, deployment, artifactDir) {
     && foreign.request_kind === 'signed_foreign_organization'
     && foreign.signature_valid === true
     && foreign.foreign_organization === true
-    && typeof foreign.organization_id === 'string'
-    && foreign.organization_id !== route.organization_id
-    && foreign.job_id === route.job_id
+    && SHA256.test(foreign.organization_commitment)
+    && foreign.organization_commitment !== route.organization_commitment
     && foreign.source_job_commitment === route.source_job_commitment
     && foreign.bureau_job_commitment === batch.selected_bureau_job_commitment
     && foreign.response_projection?.webhook_job_not_found === true
@@ -276,36 +412,43 @@ function validatePreliminary(report, deployment, artifactDir) {
     && unsigned.video_sha256 !== foreign.video_sha256
     && SHA256.test(unsigned?.privacy_scan_report_sha256)
     && SHA256.test(foreign?.privacy_scan_report_sha256)
-    && SHA256.test(unsigned?.job_state_before_sha256)
-    && unsigned.job_state_before_sha256 === unsigned.job_state_after_sha256
-    && foreign?.job_state_before_sha256 === unsigned.job_state_before_sha256
-    && foreign.job_state_after_sha256 === unsigned.job_state_before_sha256
+    && SHA256.test(unsigned?.job_state_before_commitment)
+    && unsigned.job_state_before_commitment === unsigned.job_state_after_commitment
+    && foreign?.job_state_before_commitment === unsigned.job_state_before_commitment
+    && foreign.job_state_after_commitment === unsigned.job_state_before_commitment
     && denial.unsigned_uncut_video_sha256 === unsigned.video_sha256
     && denial.foreign_uncut_video_sha256 === foreign.video_sha256,
     'Unsigned and foreign simulator callback denials are unproven',
   );
   requireProof(report.synthetic_identities_only === true,
     'Preliminary receipt does not attest synthetic identity inputs');
-  return { sourceCommit, stackDigest, flow: route };
+  return { sourceCommit, stackDigest, flow: privatePlan, publicFlow: route };
 }
 
-function validateLiveInstance(instance, definition, flow) {
+function validateLiveInstance(instance, definition, flow, expectedSodSha256) {
   const context = instance?.context_data;
   const job = context?.physical_document_job;
   const results = instance?.step_results;
   const observedSteps = results && typeof results === 'object' ? Object.keys(results) : [];
   requireProof(
     instance?.id === flow.flow_instance_id
-    && instance?.flow_id === flow.flow_id
+    && instance?.flow_id === flow.flow_definition_id
     && instance?.organization_id === flow.organization_id
     && instance?.flow_type === 'physical_document_issuance'
     && String(instance?.status).toUpperCase() === 'COMPLETED'
-    && definition?.id === flow.flow_id
+    && definition?.id === flow.flow_definition_id
     && definition?.organization_id === flow.organization_id
     && definition?.flow_type === 'physical_document_issuance'
     && JSON.stringify(definition?.resolved_steps) === JSON.stringify(FROZEN_STEPS)
     && context?.application_id === flow.application_id
-    && job && (job.id || job.job_id) === flow.job_id
+    && job && (job.id || job.job_id) === flow.source_job_id
+    && job.application_id === flow.application_id
+    && job.bureau_job_id === flow.bureau_job_id
+    && job.flow_execution_id === flow.flow_instance_id
+    && job.organization_id === flow.organization_id
+    && job.status === 'ACTIVE'
+    && SHA256.test(expectedSodSha256)
+    && job.sod_sha256 === expectedSodSha256
     && observedSteps.length === FROZEN_STEPS.length
     && FROZEN_STEPS.every((step) => observedSteps.includes(step))
     && Object.values(results).every((step) =>
@@ -314,20 +457,73 @@ function validateLiveInstance(instance, definition, flow) {
   );
 }
 
+async function hideRecordedPage(context) {
+  await context.addInitScript(() => {
+    const sheet = new CSSStyleSheet();
+    sheet.replaceSync('html { opacity: 0 !important; }');
+    document.adoptedStyleSheets = [...document.adoptedStyleSheets, sheet];
+    window.__passportRecordingPrivacySheet = sheet;
+  });
+}
+
+async function revealRedactedPage(page, privatePlan) {
+  const privateIds = ['organization_id', 'flow_definition_id', 'flow_instance_id',
+    'application_id', 'source_job_id', 'bureau_job_id']
+    .map((field) => privatePlan[field]).sort((left, right) => right.length - left.length);
+  const safe = await page.evaluate((identifiers) => {
+    if (!document.body) return false;
+    const replace = (value) => identifiers.reduce(
+      (text, identifier) => text.replaceAll(identifier, '[protected id]'), value);
+    const scrub = (root) => {
+      if (root.nodeType === Node.TEXT_NODE) {
+        const value = root.nodeValue || '';
+        const sanitized = replace(value);
+        if (sanitized !== value) root.nodeValue = sanitized;
+      } else if (root.nodeType === Node.ELEMENT_NODE) {
+        const element = root;
+        if (element instanceof HTMLInputElement || element instanceof HTMLTextAreaElement) {
+          const sanitized = replace(element.value);
+          if (sanitized !== element.value) element.value = sanitized;
+        }
+        for (const child of element.childNodes) scrub(child);
+      }
+    };
+    const observer = new MutationObserver((records) => {
+      for (const record of records) {
+        if (record.type === 'characterData') scrub(record.target);
+        else for (const node of record.addedNodes) scrub(node);
+      }
+    });
+    observer.observe(document.body, { subtree: true, childList: true, characterData: true });
+    scrub(document.body);
+    const visible = document.body.innerText
+      + Array.from(document.querySelectorAll('input,textarea')).map((input) => input.value).join(' ');
+    if (identifiers.some((identifier) => visible.includes(identifier))) return false;
+    document.adoptedStyleSheets = document.adoptedStyleSheets.filter(
+      (sheet) => sheet !== window.__passportRecordingPrivacySheet);
+    return true;
+  }, privateIds);
+  requireProof(safe === true, 'Recorded beta page could not redact protected identifiers');
+}
+
 async function main() {
   const artifactDir = createArtifactDir(ROOT, 'beta-passport-simulator-demo');
   const deploymentDir = process.env.PASSPORT_BETA_ARTIFACT_DIR;
   const runId = Number(process.env.PASSPORT_BETA_PRELIMINARY_RUN_ID);
   const expectedSha256 = process.env.PASSPORT_BETA_PRELIMINARY_SHA256 || '';
+  const privatePlanFile = process.env.PASSPORT_BETA_PRIVATE_PLAN_FILE;
+  const apiKey = process.env.PASSPORT_BETA_API_KEY;
   const email = process.env.TEST_VENDOR_EMAIL || process.env.TEST_ADMIN_EMAIL;
   const password = process.env.TEST_VENDOR_PASSWORD || process.env.TEST_ADMIN_PASSWORD;
-  requireProof(deploymentDir && email && password && process.env.RECORD_VIDEO === '1',
-    'Beta deployment, operator session, and recorder inputs are required');
+  requireProof(deploymentDir && email && password && privatePlanFile
+    && apiKey && process.env.RECORD_VIDEO === '1',
+  'Beta deployment, private handoff, operator session, and recorder inputs are required');
   const deployment = readJson(path.join(deploymentDir, 'local-deployment-manifest.json'));
+  const privatePlan = readPrivatePlan(privatePlanFile, artifactDir);
   const { report: receipt, negativeMedia } = protectedReceipt(
     runId, expectedSha256, deployment.marty_ui_sha,
   );
-  const proof = validatePreliminary(receipt, deployment, deploymentDir);
+  const proof = validatePreliminary(receipt, deployment, deploymentDir, privatePlan, apiKey);
   for (const [name, filename] of Object.entries(NEGATIVE_MEDIA)) {
     fs.writeFileSync(path.join(artifactDir, filename), negativeMedia[name].video, { flag: 'wx' });
     fs.writeFileSync(path.join(artifactDir, NEGATIVE_SCANS[name]),
@@ -359,6 +555,7 @@ async function main() {
       ignoreHTTPSErrors: localProxy,
       recordVideo: { dir: artifactDir, size: VIDEO_SIZE },
     });
+    await hideRecordedPage(context);
     const page = await context.newPage();
     const video = page.video();
     const pageErrors = [];
@@ -374,8 +571,10 @@ async function main() {
     const instanceId = proof.flow.flow_instance_id;
     await page.goto(`${BETA_ORIGIN}/console/org/operate/flow-instances/${encodeURIComponent(instanceId)}`,
       { waitUntil: 'domcontentloaded', timeout: 60_000 });
-    await page.getByText(`Flow Instance ${instanceId}`, { exact: true }).waitFor({ timeout: 30_000 });
-    await page.getByText(proof.flow.job_id, { exact: false }).first().waitFor({ timeout: 30_000 });
+    await page.getByText(`Flow Instance ${instanceId}`, { exact: true })
+      .waitFor({ state: 'attached', timeout: 30_000 });
+    await page.getByText(proof.flow.source_job_id, { exact: false }).first()
+      .waitFor({ state: 'attached', timeout: 30_000 });
     const instance = await page.evaluate(async (id) => {
       const response = await fetch(`/v1/flows/instances/${encodeURIComponent(id)}`, { credentials: 'include' });
       return response.ok ? response.json() : null;
@@ -383,8 +582,10 @@ async function main() {
     const definition = await page.evaluate(async (id) => {
       const response = await fetch(`/v1/flows/definitions/${encodeURIComponent(id)}`, { credentials: 'include' });
       return response.ok ? response.json() : null;
-    }, proof.flow.flow_id);
-    validateLiveInstance(instance, definition, proof.flow);
+    }, proof.flow.flow_definition_id);
+    validateLiveInstance(instance, definition, proof.flow,
+      receipt.probes.sod_signature.evidence.sod_sha256);
+    await revealRedactedPage(page, proof.flow);
     await showStep(page, 'Managed CSCA and DSC issuer profiles',
       'Distinct KMS-backed profiles sign and verify the same synthetic passport job.',
       { enabled: true, eyebrow: 'Marty beta passport simulator' });
@@ -413,7 +614,9 @@ async function main() {
         unsigned: receipt.negative_runs.unsigned.video_sha256,
         foreign: receipt.negative_runs.foreign.video_sha256,
       },
-      flowInstanceSha256: createHash('sha256').update(instanceId).digest('hex'),
+      selectedSourceJobCommitment: proof.publicFlow.source_job_commitment,
+      selectedBureauJobCommitment: proof.publicFlow.bureau_job_commitment,
+      flowInstanceCommitment: proof.publicFlow.flow_instance_commitment,
       behaviorAssertions: {
         managed_csca_dsc_issuer_profiles: true,
         nine_step_passport_issuance_flow: true,
@@ -433,10 +636,11 @@ async function main() {
 }
 
 if (require.main === module) {
-  main().catch((error) => {
-    console.error(`Passport simulator demo blocked: ${error.message}`);
+  main().catch(() => {
+    console.error('Passport simulator demo blocked; inspect protected run state');
     process.exitCode = 1;
   });
 }
 
-module.exports = { protectedReceipt, verifyNegativeMedia, validatePreliminary, validateLiveInstance };
+module.exports = { protectedReceipt, verifyNegativeMedia, readPrivatePlan,
+  validatePreliminary, validateLiveInstance, hideRecordedPage, revealRedactedPage };
