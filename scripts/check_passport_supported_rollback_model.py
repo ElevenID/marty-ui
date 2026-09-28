@@ -29,7 +29,8 @@ SELECTED = frozenset({
     "passport-beta-bureau",
 })
 ISOLATED_DEPENDENCIES = frozenset({"postgres", "openbao", "redis"})
-RUST_DEPENDENCIES = frozenset({"organization", "event-stream"})
+RUST_DEPENDENCIES = frozenset({"organization", "event-stream",
+                               "revocation-profile-migrate"})
 DISPOSABLE_SERVICES = SELECTED | ISOLATED_DEPENDENCIES | RUST_DEPENDENCIES | frozenset({
     "db-migrate", "issuance", "signing-keys",
 })
@@ -459,6 +460,37 @@ def validate_model(
     migration_env = migration.get("environment")
     dependencies = migration.get("depends_on")
     migration_secrets = migration.get("secrets")
+    revocation_migration = services["revocation-profile-migrate"]
+    revocation_env = revocation_migration.get("environment")
+    revocation_dependencies = revocation_migration.get("depends_on")
+    require(
+        isinstance(revocation_env, dict)
+        and revocation_env.get("SERVICE_NAME") == "revocation_profile"
+        and revocation_env.get("RP_MIGRATE_ONLY") == "true"
+        and revocation_env.get("ENVIRONMENT") == "development"
+        and revocation_env.get("DATABASE_URL_TEMPLATE")
+        in {
+            "postgresql://marty:${MARTY_DB_PASSWORD}@postgres:5432/marty",
+            "postgresql://marty:$${MARTY_DB_PASSWORD}@postgres:5432/marty",
+        }
+        and revocation_env.get("MARTY_DB_PASSWORD_FILE")
+        == "/run/secrets/marty_db_password"
+        and revocation_env.get("PUBLIC_API_URL") == "http://gateway:8000"
+        and revocation_env.get("MARTY_ORG_ID")
+        == "00000000-0000-0000-0000-000000000001"
+        and {secret.get("source") for secret in revocation_migration.get("secrets", [])}
+        == {"marty_db_password"}
+        and isinstance(revocation_dependencies, dict)
+        and isinstance(revocation_dependencies.get("postgres"), dict)
+        and revocation_dependencies["postgres"].get("condition") == "service_healthy"
+        and revocation_migration.get("healthcheck") == {"disable": True}
+        and revocation_migration.get("restart") == "no"
+        and isinstance(dependencies, dict)
+        and isinstance(dependencies.get("revocation-profile-migrate"), dict)
+        and dependencies["revocation-profile-migrate"].get("condition")
+        == "service_completed_successfully",
+        "Disposable revocation schema migration is not ordered before shared migrations",
+    )
     require(
         isinstance(migration_env, dict)
         and migration_env.get("REDIS_URL") == services["signing-keys"]["environment"].get(
@@ -467,6 +499,8 @@ def validate_model(
         and migration_env.get("BAO_TOKEN_FILE") == "/run/secrets/bao_token"
         and migration_env.get("MARTY_KMS_BOOTSTRAP_ENABLED") == "true"
         and migration_env.get("PUBLIC_DOMAIN") == "localhost"
+        and migration_env.get("MARTY_ORG_ID") == revocation_env.get("MARTY_ORG_ID")
+        == organization_env.get("MARTY_ORG_ID")
         and migration_env.get("MARTY_ISSUER_BASE_URL") == "http://gateway:8000"
         and isinstance(dependencies, dict)
         and all(isinstance(dependencies.get(role), dict)

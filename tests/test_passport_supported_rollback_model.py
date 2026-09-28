@@ -115,6 +115,24 @@ def safe_model(root: Path) -> dict:
     services["redis"] = {"image": infra["redis"], "networks": ["private"],
                          "volumes": [{"type": "volume", "source": "redis_data",
                                       "target": "/data"}]}
+    services["revocation-profile-migrate"] = {
+        "image": IMAGE,
+        "networks": ["private"],
+        "environment": {
+            "SERVICE_NAME": "revocation_profile",
+            "RP_MIGRATE_ONLY": "true",
+            "ENVIRONMENT": "development",
+            "DATABASE_URL_TEMPLATE":
+                "postgresql://marty:${MARTY_DB_PASSWORD}@postgres:5432/marty",
+            "MARTY_DB_PASSWORD_FILE": "/run/secrets/marty_db_password",
+            "PUBLIC_API_URL": "http://gateway:8000",
+            "MARTY_ORG_ID": "00000000-0000-0000-0000-000000000001",
+        },
+        "secrets": [{"source": "marty_db_password"}],
+        "depends_on": {"postgres": {"condition": "service_healthy"}},
+        "healthcheck": {"disable": True},
+        "restart": "no",
+    }
     services["event-stream"] = {
         "image": IMAGE,
         "networks": ["private"],
@@ -137,6 +155,7 @@ def safe_model(root: Path) -> dict:
             "REDIS_URL": "redis://redis:6379",
             "ES_GRPC_TARGET": "event-stream:9015",
             "MARTY_ORG_ADMIN_EMAIL": "admin@example.invalid",
+            "MARTY_ORG_ID": "00000000-0000-0000-0000-000000000001",
         },
         "secrets": [{"source": "marty_db_password"},
                     {"source": "grpc_service_token"}],
@@ -165,12 +184,15 @@ def safe_model(root: Path) -> dict:
             "BAO_TOKEN_FILE": "/run/secrets/bao_token",
             "MARTY_KMS_BOOTSTRAP_ENABLED": "true",
             "MARTY_ORG_ADMIN_EMAIL": "admin@example.invalid",
+            "MARTY_ORG_ID": "00000000-0000-0000-0000-000000000001",
             "PUBLIC_DOMAIN": "localhost",
             "MARTY_ISSUER_BASE_URL": "http://gateway:8000",
             "MARTY_ISSUER_DID": "did:web:localhost:orgs:marty",
         },
-        "depends_on": {name: {"condition": "service_healthy"}
-                       for name in ("postgres", "redis", "openbao")},
+        "depends_on": {**{name: {"condition": "service_healthy"}
+                          for name in ("postgres", "redis", "openbao")},
+                       "revocation-profile-migrate": {
+                           "condition": "service_completed_successfully"}},
         "secrets": [{"source": "bao_token"}],
     }
     services["issuance"] = {"image": "ghcr.io/elevenid/marty-credentials-issuance@sha256:" + "c" * 64,
@@ -227,7 +249,8 @@ def test_attested_plan_binds_all_disposable_images(tmp_path: Path) -> None:
     }
     assert validate_planned_model(model, plan, tmp_path)["model_safe"] is True
     for role in ("postgres", "redis", "openbao", "db-migrate", "issuance",
-                 "signing-keys", "organization", "event-stream"):
+                 "signing-keys", "organization", "event-stream",
+                 "revocation-profile-migrate"):
         bad = deepcopy(model)
         bad["services"][role]["image"] = "other@sha256:" + "f" * 64
         with pytest.raises(ModelPreflightError, match="protected image|signed services"):
@@ -371,6 +394,14 @@ def test_attested_plan_binds_all_disposable_images(tmp_path: Path) -> None:
         ORG_GRPC_PORT="9902"), "Organization API-key authority"),
     (lambda model, root: model["services"]["organization"]["environment"].update(
         MARTY_ORG_ADMIN_EMAIL="other@example.invalid"), "Organization API-key authority"),
+    (lambda model, root: model["services"]["revocation-profile-migrate"][
+        "environment"].update(RP_MIGRATE_ONLY="false"), "revocation schema migration"),
+    (lambda model, root: model["services"]["revocation-profile-migrate"][
+        "environment"].update(DATABASE_URL_TEMPLATE=
+                              "postgresql://marty:other@postgres:5432/marty"),
+     "revocation schema migration"),
+    (lambda model, root: model["services"]["db-migrate"]["depends_on"].pop(
+        "revocation-profile-migrate"), "revocation schema migration"),
     (lambda model, root: model["services"]["organization"]["secrets"].pop(),
      "Organization API-key authority"),
     (lambda model, root: model["services"]["event-stream"]["environment"].update(

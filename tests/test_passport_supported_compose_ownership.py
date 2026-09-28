@@ -44,6 +44,7 @@ SECRETS = {
     "db-migrate": ("marty_db_password", "bao_token"),
     "signing-keys": ("marty_db_password", "bao_token", "signing_keys_internal_api_key"),
     "issuance": (),
+    "revocation-profile-migrate": ("marty_db_password",),
     "event-stream": (),
     "organization": ("marty_db_password", "grpc_service_token"),
     "issuance-native": ("marty_db_password", "bao_token", "signing_keys_internal_api_key",

@@ -59,6 +59,7 @@ def test_real_compose_render_is_safe_but_not_accepted(
         "passport-callback-signer", "passport-beta-bureau",
         "signing-keys", "db-migrate", "postgres", "redis", "openbao",
         "organization", "event-stream",
+        "revocation-profile-migrate",
     }
     result = validate_model(model, project, SERVICES, tmp_path)
     assert result["model_safe"] is True
@@ -101,6 +102,10 @@ def test_real_compose_render_is_safe_but_not_accepted(
     assert {secret["source"] for secret in openbao["secrets"]} == {"bao_root_token"}
     assert "BAO_DEV_ROOT_TOKEN_ID" not in openbao.get("environment", {})
     migration = model["services"]["db-migrate"]
+    assert migration["depends_on"]["revocation-profile-migrate"]["condition"] == (
+        "service_completed_successfully")
+    assert model["services"]["revocation-profile-migrate"]["environment"][
+        "RP_MIGRATE_ONLY"] == "true"
     assert migration["environment"]["REDIS_URL"] == signing["environment"][
         "SIGNING_KEYS_REDIS_URL"]
     assert migration["environment"]["PUBLIC_DOMAIN"] == model["services"][
