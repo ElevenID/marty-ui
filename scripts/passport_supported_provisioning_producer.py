@@ -60,6 +60,11 @@ STAGED_SECRETS = frozenset({
     "bureau_database_url", "token_hmac_key", "integration_secret_master_key",
 })
 BOOTSTRAPPED_SECRETS = frozenset({"bao_token", "callback_signer_bao_token"})
+EPHEMERAL_SECRETS = BOOTSTRAPPED_SECRETS | frozenset({"passport_acceptance_api_key"})
+DISPOSABLE_NETWORKS = frozenset({"private", "callback_signing"})
+DISPOSABLE_VOLUMES = frozenset({
+    "postgres_data", "redis_data", "openbao_data", "openbao_file", "openbao_logs",
+})
 
 
 class ProducerError(ValueError):
@@ -289,7 +294,7 @@ def _remove_staged_inputs(root: Path) -> None:
     if secret_dir.exists():
         require(secret_dir.resolve() == secret_dir and not secret_dir.is_symlink(),
                 "Disposable input cleanup secret directory changed identity")
-        for name in STAGED_SECRETS:
+        for name in STAGED_SECRETS | EPHEMERAL_SECRETS:
             (secret_dir / name).unlink(missing_ok=True)
         secret_dir.rmdir()
     (root / "acceptance.env").unlink(missing_ok=True)
@@ -384,22 +389,24 @@ def _exec_docker(args: list[str], output: object = None) -> bool:
     return result.returncode == 0
 
 
-def destroy_disposable_project(
-    record: dict, inspector: Callable[[list[str]], str] = docker,
-    executor: Callable[[list[str], object], bool] = _exec_docker,
+def _destroy_recorded_project(
+    record: dict, inspector: Callable[[list[str]], str],
+    executor: Callable[[list[str], object], bool], *, complete: bool,
 ) -> bool:
-    """Remove only recorded disposable resources and prove their project is absent."""
+    """Reinspect exact resource IDs before deletion, then prove their absence."""
     project = record.get("project")
     containers = record.get("containers")
     networks = record.get("networks")
     volumes = record.get("volumes")
     require(isinstance(project, str) and PROJECT.fullmatch(project) is not None
             and record.get("schema") == "marty.passport-supported-compose-ownership/v1"
-            and isinstance(containers, dict) and set(containers) == DISPOSABLE_SERVICES
+            and isinstance(containers, dict)
+            and (set(containers) == DISPOSABLE_SERVICES if complete
+                 else set(containers) <= DISPOSABLE_SERVICES)
             and all(isinstance(value, str) and RESOURCE_ID.fullmatch(value)
                     for value in containers.values())
             and len(set(containers.values())) == len(containers)
-            and isinstance(networks, dict) and bool(networks)
+            and isinstance(networks, dict) and (bool(networks) if complete else True)
             and all(isinstance(name, str) and name.startswith(project + "_")
                     and isinstance(value, str) and RESOURCE_ID.fullmatch(value)
                     for name, value in networks.items())
@@ -430,8 +437,10 @@ def destroy_disposable_project(
             _labels(item.get("Labels"), record, project)
     except (OSError, ValueError, KeyError, TypeError):
         return False
-    executor(["container", "rm", "-f", *containers.values()], None)
-    executor(["network", "rm", *networks.values()], None)
+    if containers:
+        executor(["container", "rm", "-f", *containers.values()], None)
+    if networks:
+        executor(["network", "rm", *networks.values()], None)
     if volumes:
         executor(["volume", "rm", *volumes], None)
     try:
@@ -452,6 +461,96 @@ def destroy_disposable_project(
                 and not set(volumes) & live_volumes)
     except (OSError, ValueError, KeyError):
         return False
+
+
+def destroy_disposable_project(
+    record: dict, inspector: Callable[[list[str]], str] = docker,
+    executor: Callable[[list[str], object], bool] = _exec_docker,
+) -> bool:
+    """Remove only the complete recorded project after accepted ownership proof."""
+    return _destroy_recorded_project(record, inspector, executor, complete=True)
+
+
+def destroy_partial_disposable_project(
+    plan: dict, inspector: Callable[[list[str]], str] = docker,
+    executor: Callable[[list[str], object], bool] = _exec_docker,
+) -> bool:
+    """Clean a failed startup using the previously verified protected plan.
+
+    Every discovered resource must have the exact plan labels and one of the
+    fixed disposable service/network/volume names. Unknown project resources
+    fail closed before any deletion; the caller must retain the plan artifact.
+    """
+    project = plan.get("project")
+    surface = plan.get("surface")
+    owner_labels = plan.get("owner_labels")
+    require(isinstance(project, str) and (match := PROJECT.fullmatch(project))
+            and match.group(1) == surface
+            and plan.get("schema") == "marty.passport-supported-provisioning-plan/v1"
+            and plan.get("status") == "blocked"
+            and isinstance(plan.get("run_id"), str)
+            and RUN_ID.fullmatch(plan["run_id"]) is not None
+            and isinstance(plan.get("source_commit"), str)
+            and COMMIT.fullmatch(plan["source_commit"]) is not None
+            and isinstance(plan.get("services_reference"), str)
+            and re.fullmatch(r"ghcr\.io/elevenid/marty-ui-oss/services@sha256:[0-9a-f]{64}",
+                             plan["services_reference"]) is not None
+            and isinstance(owner_labels, dict)
+            and owner_labels == {
+                "com.marty.passport.acceptance.owner": "supported-consumer",
+                "com.marty.passport.acceptance.run-id": plan["run_id"],
+                "com.marty.passport.acceptance.source-commit": plan["source_commit"],
+                "com.marty.passport.acceptance.services-image": plan["services_reference"],
+            }, "Partial teardown plan is invalid")
+    try:
+        containers = {}
+        for identifier in inspector(["ps", "-aq", "--no-trunc", "--filter",
+                                     f"label=com.docker.compose.project={project}"]).split():
+            require(RESOURCE_ID.fullmatch(identifier) is not None,
+                    "Partial disposable container ID is invalid")
+            item = _inspect("container", identifier, inspector)
+            config = item.get("Config")
+            require(isinstance(config, dict),
+                    "Partial disposable container config is invalid")
+            labels = config.get("Labels")
+            _labels(labels, plan, project)
+            service = labels.get("com.docker.compose.service")
+            require(item.get("Id") == identifier and service in DISPOSABLE_SERVICES
+                    and service not in containers,
+                    "Partial disposable service identity is invalid")
+            containers[service] = identifier
+        networks = {}
+        for identifier in inspector(["network", "ls", "-q", "--no-trunc", "--filter",
+                                     f"label=com.docker.compose.project={project}"]).split():
+            require(RESOURCE_ID.fullmatch(identifier) is not None,
+                    "Partial disposable network ID is invalid")
+            item = _inspect("network", identifier, inspector)
+            _labels(item.get("Labels"), plan, project)
+            name = item.get("Name")
+            require(item.get("Id") == identifier
+                    and name in {f"{project}_{suffix}" for suffix in DISPOSABLE_NETWORKS}
+                    and name not in networks,
+                    "Partial disposable network identity is invalid")
+            networks[name] = identifier
+        volumes = inspector(["volume", "ls", "-q", "--filter",
+                             f"label=com.docker.compose.project={project}"]).split()
+        require(len(volumes) == len(set(volumes)),
+                "Partial disposable volume set is invalid")
+        for name in volumes:
+            require(name in {f"{project}_{suffix}" for suffix in DISPOSABLE_VOLUMES},
+                    "Partial disposable volume name is invalid")
+            item = _inspect("volume", name, inspector)
+            _labels(item.get("Labels"), plan, project)
+            require(item.get("Name") == name,
+                    "Partial disposable volume identity is invalid")
+    except (OSError, ValueError, KeyError, TypeError):
+        return False
+    record = {"schema": "marty.passport-supported-compose-ownership/v1",
+              "project": project, "run_id": plan["run_id"],
+              "source_commit": plan["source_commit"],
+              "services_reference": plan["services_reference"],
+              "containers": containers, "networks": networks, "volumes": volumes}
+    return _destroy_recorded_project(record, inspector, executor, complete=False)
 
 
 def issue_disposable_api_key(

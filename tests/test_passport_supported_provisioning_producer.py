@@ -25,6 +25,7 @@ from scripts.check_passport_supported_rollback_model import (
 from scripts.passport_supported_infra_images import qualified_images
 from scripts.passport_supported_provisioning_producer import (
     ProducerError, WORKFLOW_REF, collect_record, destroy_disposable_project,
+    destroy_partial_disposable_project,
     issue_disposable_api_key, stage_disposable_inputs,
     verify_plan_release,
 )
@@ -220,6 +221,16 @@ def test_disposable_input_write_failure_erases_only_its_new_root(monkeypatch) ->
     monkeypatch.setattr(producer, "_write_private", fail_after_open)
     with pytest.raises(OSError, match="synthetic partial secret write"):
         stage_disposable_inputs(plan, 29876, now=NOW)
+    assert not root.exists()
+
+
+def test_staged_input_cleanup_includes_post_bootstrap_secrets() -> None:
+    plan = input_plan()
+    root, _ = stage_disposable_inputs(plan, 29876, now=NOW)
+    for name in ("bao_token", "callback_signer_bao_token",
+                 "passport_acceptance_api_key"):
+        (root / "secrets" / name).write_text("disposable", encoding="ascii")
+    producer._remove_staged_inputs(root)
     assert not root.exists()
 
 
@@ -514,6 +525,77 @@ def test_teardown_targets_only_recorded_disposable_resources() -> None:
         record, stale_inspector,
         lambda args, output: stale_calls.append(args) or True)
     assert not stale_calls
+
+
+def test_partial_teardown_removes_only_plan_owned_startup_resources() -> None:
+    plan = input_plan()
+    project = plan["project"]
+    container = "1" * 64
+    network = "2" * 64
+    volume = project + "_openbao_data"
+    present = {"containers": [container], "networks": [network],
+               "volumes": [volume]}
+    labels = {**plan["owner_labels"], "com.docker.compose.project": project}
+    calls = []
+
+    def inspector(args: list[str]) -> str:
+        if args[:2] == ["container", "inspect"]:
+            return json.dumps([{"Id": args[2], "Config": {"Labels": {
+                **labels, "com.docker.compose.service": "openbao"}}}])
+        if args[:2] == ["network", "inspect"]:
+            return json.dumps([{"Id": args[2], "Name": project + "_private",
+                                "Labels": labels}])
+        if args[:2] == ["volume", "inspect"]:
+            return json.dumps([{"Name": args[2], "Labels": labels}])
+        if args[0] == "ps":
+            return "\n".join(present["containers"])
+        if args[:2] == ["network", "ls"]:
+            return "\n".join(present["networks"])
+        if args[:2] == ["volume", "ls"]:
+            return "\n".join(present["volumes"])
+        raise AssertionError(args)
+
+    def executor(args: list[str], output: object) -> bool:
+        calls.append(args)
+        if args[:2] == ["container", "rm"]:
+            present["containers"].clear()
+        elif args[:2] == ["network", "rm"]:
+            present["networks"].clear()
+        elif args[:2] == ["volume", "rm"]:
+            present["volumes"].clear()
+        return True
+
+    assert destroy_partial_disposable_project(plan, inspector, executor)
+    assert calls == [
+        ["container", "rm", "-f", container],
+        ["network", "rm", network],
+        ["volume", "rm", volume],
+    ]
+    assert destroy_partial_disposable_project(plan, inspector, executor)
+    assert len(calls) == 3
+
+
+def test_partial_teardown_fails_closed_before_mutating_unknown_resource() -> None:
+    plan = input_plan()
+    project = plan["project"]
+    container = "1" * 64
+    labels = {**plan["owner_labels"], "com.docker.compose.project": project}
+    calls = []
+
+    def inspector(args: list[str]) -> str:
+        if args[0] == "ps":
+            return container
+        if args[:2] == ["container", "inspect"]:
+            return json.dumps([{"Id": container, "Config": {"Labels": {
+                **labels, "com.docker.compose.service": "unrelated-service"}}}])
+        return ""
+
+    assert not destroy_partial_disposable_project(
+        plan, inspector, lambda args, output: calls.append(args) or True)
+    assert calls == []
+    with pytest.raises(ProducerError, match="plan is invalid"):
+        destroy_partial_disposable_project({**plan, "project": "marty-prod"},
+                                           inspector)
 
 
 def test_host_key_unlink_failure_still_forces_teardown(
