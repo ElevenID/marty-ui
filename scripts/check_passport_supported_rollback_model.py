@@ -253,12 +253,16 @@ def validate_model(
                 "Compose volume is external or shared")
     secrets = model.get("secrets", {})
     require(isinstance(secrets, dict), "Compose secrets are invalid")
-    for secret in secrets.values():
-        require(isinstance(secret, dict)
+    for name, secret in secrets.items():
+        expected_file = disposable_root / "secrets" / name
+        require(isinstance(name, str) and re.fullmatch(r"[a-z][a-z0-9_]*", name)
+                and isinstance(secret, dict)
                 and secret.get("external") not in (True, "true")
                 and isinstance(secret.get("file"), str)
+                and Path(secret["file"]) == expected_file
+                and Path(secret["file"]).resolve() == expected_file
                 and _within(secret["file"], disposable_root),
-                "Compose secret is outside the disposable root")
+                "Compose secret does not match its private project file")
     configs = model.get("configs", {})
     require(isinstance(configs, dict)
             and set(configs) == {"passport_supported_openbao_start"},
@@ -329,8 +333,14 @@ def validate_model(
                     f"Compose {name} {kind} are invalid")
             for reference in references:
                 require(isinstance(reference, dict)
-                        and reference.get("source") in available,
+                        and reference.get("source") in available
+                        and (kind != "secrets" or (
+                            set(reference) <= {"source", "target"}
+                            and reference.get("target", f"/run/secrets/{reference['source']}")
+                            == f"/run/secrets/{reference['source']}")),
                         f"Compose {name} uses an unknown {kind} source")
+            require(len({reference["source"] for reference in references}) == len(references),
+                    f"Compose {name} has duplicate {kind} sources")
         if name == "openbao":
             require(service.get("configs") == [{
                 "source": "passport_supported_openbao_start",
@@ -447,6 +457,17 @@ def validate_model(
                 for secret in services["signing-keys"].get("secrets", [])
                 if isinstance(secret, dict)),
         "Disposable Gateway and signing services do not share project credentials",
+    )
+    require(
+        native.get("TOKEN_HMAC_KEY_FILE") == "/run/secrets/token_hmac_key"
+        and native.get("INTEGRATION_SECRET_MASTER_KEY_FILE")
+        == "/run/secrets/integration_secret_master_key"
+        and "TOKEN_HMAC_KEY" not in native
+        and "INTEGRATION_SECRET_MASTER_KEY" not in native
+        and {"token_hmac_key", "integration_secret_master_key"}
+        <= {secret.get("source") for secret in services["issuance-native"].get("secrets", [])
+            if isinstance(secret, dict)},
+        "Disposable native issuance startup secrets are missing",
     )
     require(native.get("ENVIRONMENT") == ("beta" if surface == "selfhost" else "development")
             and gateway.get("ENVIRONMENT") == ("production" if surface == "selfhost" else "development")

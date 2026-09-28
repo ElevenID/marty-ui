@@ -121,6 +121,8 @@ services:
       PASSPORT_KMS_CALLBACKS_ENABLED: "true"
       GRPC_SERVICE_TOKEN_FILE: /run/secrets/grpc_service_token
       ISSUANCE_API_KEY_FILE: /run/secrets/issuance_api_key
+      TOKEN_HMAC_KEY_FILE: /run/secrets/token_hmac_key
+      INTEGRATION_SECRET_MASTER_KEY_FILE: /run/secrets/integration_secret_master_key
       DATABASE_URL_TEMPLATE: postgresql+asyncpg://marty:$${MARTY_DB_PASSWORD}@postgres:5432/marty
       MARTY_DB_PASSWORD_FILE: /run/secrets/marty_db_password
       BAO_ADDR: http://openbao:8200
@@ -130,7 +132,7 @@ services:
       PERSONALIZATION_BUREAU_URL: http://passport-beta-bureau:8020
       PERSONALIZATION_BUREAU_API_KEY_FILE: /run/secrets/grpc_service_token
       PERSONALIZATION_BUREAU_PROVIDER_PROFILE_ID: passport-beta-bureau
-    secrets: [marty_db_password, bao_token, signing_keys_internal_api_key, issuance_api_key, grpc_service_token]
+    secrets: [marty_db_password, bao_token, signing_keys_internal_api_key, issuance_api_key, grpc_service_token, token_hmac_key, integration_secret_master_key]
     depends_on:
       signing-keys:
         condition: service_started
@@ -258,6 +260,10 @@ secrets:
     file: ${PASSPORT_ACCEPTANCE_SECRET_DIR:?use disposable secret root}/grpc_service_token
   bureau_database_url:
     file: ${PASSPORT_ACCEPTANCE_SECRET_DIR:?use disposable secret root}/bureau_database_url
+  token_hmac_key:
+    file: ${PASSPORT_ACCEPTANCE_SECRET_DIR:?use disposable secret root}/token_hmac_key
+  integration_secret_master_key:
+    file: ${PASSPORT_ACCEPTANCE_SECRET_DIR:?use disposable secret root}/integration_secret_master_key
 
 volumes:
   postgres_data:

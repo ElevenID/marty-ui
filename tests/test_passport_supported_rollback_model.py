@@ -57,6 +57,9 @@ def safe_model(root: Path) -> dict:
         "PERSONALIZATION_BUREAU_URL": "http://passport-beta-bureau:8020",
         "PERSONALIZATION_BUREAU_API_KEY_FILE": "/run/secrets/grpc_service_token",
         "PERSONALIZATION_BUREAU_PROVIDER_PROFILE_ID": "passport-beta-bureau",
+        "TOKEN_HMAC_KEY_FILE": "/run/secrets/token_hmac_key",
+        "INTEGRATION_SECRET_MASTER_KEY_FILE":
+            "/run/secrets/integration_secret_master_key",
     })
     services["gateway"]["environment"].update({
         "ENVIRONMENT": "development",
@@ -78,6 +81,10 @@ def safe_model(root: Path) -> dict:
             {"source": "issuance_api_key"},
             {"source": "signing_keys_internal_api_key"},
         ]
+    services["issuance-native"]["secrets"].extend([
+        {"source": "token_hmac_key"},
+        {"source": "integration_secret_master_key"},
+    ])
     infra = qualified_images(verify_registry=False)
     services["postgres"] = {"image": infra["postgres"], "networks": ["private"], "volumes": [
         {"type": "volume", "source": "postgres_data",
@@ -146,6 +153,9 @@ def safe_model(root: Path) -> dict:
                 "issuance_api_key": {"file": str(root / "secrets/issuance_api_key")},
                 "signing_keys_internal_api_key": {
                     "file": str(root / "secrets/signing_keys_internal_api_key")},
+                "token_hmac_key": {"file": str(root / "secrets/token_hmac_key")},
+                "integration_secret_master_key": {
+                    "file": str(root / "secrets/integration_secret_master_key")},
             },
             "configs": {"passport_supported_openbao_start": {
                 "file": str(preflight.ROOT / "scripts/passport_supported_openbao_start.sh")}},
@@ -222,6 +232,14 @@ def test_attested_plan_binds_all_disposable_images(tmp_path: Path) -> None:
                               "device": "/srv/marty-selfhost-prod"}}), "volume"),
     (lambda model, root: model["secrets"]["db"].update(
         file="/etc/marty-selfhost-prod/secrets/db"), "secret"),
+    (lambda model, root: model["secrets"]["token_hmac_key"].update(
+        file=str(root / "secrets/bao_root_token")), "secret"),
+    (lambda model, root: model["secrets"]["integration_secret_master_key"].update(
+        file=str(root / "secrets/bao_root_token")), "secret"),
+    (lambda model, root: next(secret for secret in
+        model["services"]["issuance-native"]["secrets"]
+        if secret["source"] == "token_hmac_key").update(
+            target="/run/secrets/not_token_hmac_key"), "secret"),
     (lambda model, root: model["services"]["gateway"].update(
         volumes=[{"type": "bind", "source": "/srv/marty-selfhost-prod/db",
                   "target": "/data"}]), "bind mount"),
@@ -293,6 +311,12 @@ def test_attested_plan_binds_all_disposable_images(tmp_path: Path) -> None:
     (lambda model, root: model["services"]["signing-keys"]["environment"].update(
         SIGNING_KEYS_INTERNAL_API_KEY_FILE="/run/secrets/other"),
      "share project credentials"),
+    (lambda model, root: model["services"]["issuance-native"]["environment"].pop(
+        "TOKEN_HMAC_KEY_FILE"), "native issuance startup secrets"),
+    (lambda model, root: model["services"]["issuance-native"]["environment"].update(
+        INTEGRATION_SECRET_MASTER_KEY="raw-secret"), "native issuance startup secrets"),
+    (lambda model, root: model["services"]["issuance-native"]["secrets"].pop(),
+     "native issuance startup secrets"),
 ])
 def test_model_rejects_production_escape(tmp_path: Path, change, match: str) -> None:
     model = deepcopy(safe_model(tmp_path))
