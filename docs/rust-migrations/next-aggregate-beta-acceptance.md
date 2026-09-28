@@ -54,13 +54,16 @@ evidence cannot qualify it.
    migration rehearsal, workload identity, actual rendered configuration and
    authcrypt policy/CA pairing. `-PlanOnly` explicitly reports
    `didcomm_configuration_validated=false`; it is not runtime qualification.
-   Native passport remains off until the reviewed digital handoff protocol,
-   Rust implementation, KMS issuer-profile selector, exact beta image digest,
-   and runtime gates pass. The intended digital path uses Marty-managed issuer
-   signing, Transit artifact encryption, and a Marty-managed secure-artifact
-   Delivery Destination Profile. The existing bureau simulator and callback MAC
-   remain optional physical-route compatibility checks for Python retirement;
-   they do not establish digital acceptance or prove a booklet. **Do not
+   The current native passport route remains off until the reviewed Rust
+   implementation, KMS issuer-profile selector, exact beta image digest, and
+   simulator runtime gates pass. Its Marty bureau simulator, signed same-job
+   callback, and nine-step Flow are required parity evidence before retiring
+   the migrated physical-passport Python. The protected two-job native batch,
+   D-12 recording, rollback, and production-isolation checks must also pass.
+   This synthetic route proves no physical booklet. The later digital handoff
+   adds its own reviewed protocol and Rust gates, Marty-managed issuer signing,
+   Transit artifact encryption, and a Marty-managed secure-artifact Delivery
+   Destination Profile. **Do not
    provision the old passport key files or select an older profile.** Render
    checks and `-PlanOnly` are not runtime acceptance.
    Resolve an active, organization-scoped `ICAO_EMRTD` X.509 document-signer
@@ -86,24 +89,25 @@ evidence cannot qualify it.
    the beta CSCA certificate through the governed operator route, issue the
    DSC from that active CSCA, and verify the trust-anchor projection before
    starting passport issuance. Do not treat a created issuer profile or an
-   attached DSC alone as proof that the chain gate is ready. Digital acceptance
-   also requires one trusted eight-step Flow, exact verified TD3 MRZ/DG/SOD and
+   attached DSC alone as proof that the chain gate is ready. Later digital acceptance
+   additionally requires one trusted eight-step Flow, exact verified TD3 MRZ/DG/SOD and
    CSCA/DSC bindings, encrypted source and handoff artifact round trips,
    independent quality review, and a protected opaque receipt. Keep artifact
-   encryption keys and any optional callback MAC keys inside KMS. If an
-   optional bureau adapter is tested, authenticate internal calls without new
-   static passport bearer-token files and require signed organization identity
-   on callbacks. Its synthetic tracking result is no physical booklet proof.
-   Inventory beta again before enabling that optional adapter; do not deploy
+   encryption keys and callback MAC keys inside KMS. For the current simulator,
+   authenticate internal calls without new static passport bearer-token files
+   and require signed organization identity on callbacks. Its synthetic
+   tracking result is no physical booklet proof. Inventory beta again before
+   enabling the simulator; do not deploy
    a duplicate ICAO signer.
-   No native cutover or Python retirement is permitted until these gates and
-   their language-neutral behavior tests pass.
+   No current-route native cutover or Python retirement is permitted until the
+   simulator, batch, callback, rollback, and language-neutral behavior gates
+   pass. Digital activation retains its additional gates.
 
-   For optional physical-route parity, the callback HMAC signer uses a beta-only
+   For required current-route parity, the callback HMAC signer uses a beta-only
    internal listener; ordinary Signing Keys and Gateway listeners have no such
    route. Compose isolates that listener with OpenBao and the bureau and has no
    published port. Deployment and restore must verify the isolated network
-   before enabling the adapter. These checks are separate from digital handoff
+   before enabling the simulator. These checks are separate from digital handoff
    acceptance and have not yet run in beta. The exact-head protected image and
    release-contract jobs must pass before selecting an aggregate beta release.
 
@@ -191,12 +195,12 @@ evidence cannot qualify it.
    chat), and verify the `credentials:issue` scope maps to passport initiation.
    No new tenant or passport-specific static keyring is required for the
    existing pilot organization. Recheck these counts at actual cutover.
-   For an optional physical-route cutover, deployment stops and verifies
+   For the current simulator-route cutover, deployment stops and verifies
    application writers and requires zero in-flight legacy bureau jobs before
    switching to KMS callback verification. The preflight rejects an existing
    bureau without the isolated signer because restore cannot recover that
    pre-isolation snapshot. The earlier inventory found no bureau; recheck before
-   enabling the optional adapter. This held coordinate is not release-eligible
+   enabling the simulator. This held coordinate is not release-eligible
    and none of these physical checks establishes digital handoff acceptance.
 4. The wrapper requires `BetaOrigin` to equal `https://beta.elevenidllc.com`.
    Retain fixed beta Compose projects/network and labeled-volume ownership checks.

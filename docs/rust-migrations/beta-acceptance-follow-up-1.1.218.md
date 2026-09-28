@@ -43,8 +43,10 @@ only after the gates pass. Do not manually create a release draft or reuse a
 tag if any coordinate appears before the claim.
 
 This coordinate patch does not approve a beta deployment, passport cutover,
-Python deletion, or production change. The disposable Rust-to-Python rollback,
-KMS-backed CSCA/DSC issuer profiles, Marty-managed digital destination, exact
-encrypted package and independent review, protected beta lifecycle, and
-aggregate soak retain their separate runtime gates. External physical paperwork
-or bureau integration is optional and does not qualify the digital claim.
+Python deletion, or production change. The current passport Python retirement
+requires the disposable Rust-to-Python rollback, KMS-backed CSCA/DSC issuer
+profiles, exact native two-job simulator batch with signed same-job callback,
+nine-step Flow, D-12 recording, protected beta lifecycle, production-isolation
+proof, and aggregate soak. The later digital handoff adds its managed delivery
+destination, exact encrypted package, and independent review gates. External
+physical paperwork is outside Marty and neither route claims a real booklet.
