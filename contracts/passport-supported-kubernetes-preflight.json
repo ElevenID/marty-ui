@@ -7,14 +7,14 @@
     "deployment/gateway",
     "deployment/flow",
     "deployment/issuance-native",
-    "deployment/passport-callback-signer-supported",
-    "deployment/passport-provider-ingress",
+    "deployment/passport-callback-signer",
+    "deployment/passport-beta-bureau",
     "deployment/issuance",
     "service/gateway",
     "service/flow",
     "service/issuance-native",
-    "service/passport-callback-signer-supported",
-    "service/passport-provider-ingress",
+    "service/passport-callback-signer",
+    "service/passport-beta-bureau",
     "service/issuance"
   ],
   "rust_selectors": [

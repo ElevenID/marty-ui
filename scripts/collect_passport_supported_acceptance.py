@@ -425,11 +425,11 @@ def collect(
             runtime = (kubernetes_probe(target, kubernetes_context, services_reference)
                        if name == "kubernetes" else compose_probe(name, target, services_reference))
             if name == "kubernetes":
-                require(isinstance(runtime, dict) and set(runtime) == set(SERVICES)
+                require(isinstance(runtime, dict) and set(runtime) == set(KUBERNETES_SERVICES)
                         and all(isinstance(runtime[service], dict)
                                 and runtime[service].get("deployment_uid") ==
                                 model["resource_uids"][f"deployment/{service}"]
-                                for service in SERVICES),
+                                for service in KUBERNETES_SERVICES),
                         "disposable Kubernetes deployment identity changed during inspection")
                 post_model = kubernetes_preflight(identity, source_commit,
                                                   services_reference)

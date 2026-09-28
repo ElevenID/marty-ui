@@ -33,6 +33,9 @@ def test_language_neutral_contract_matches_closed_model() -> None:
     )
     assert contract["status"] == "blocked"
     assert contract["resources"] == [f"{kind}/{name}" for kind, name in gate.RESOURCES]
+    assert gate.SERVICES == collector.KUBERNETES_SERVICES
+    assert gate.OWNER_LABEL == "com.marty.passport.acceptance.owner"
+    assert gate.SOURCE_LABEL == "com.marty.passport.acceptance.source-commit"
     assert contract["rust_selectors"] == list(gate.FLAGS.values())
     assert "clusterip_without_external_ips_load_balancer_or_node_ports" in contract["required_identity"]
     assert contract["runtime_identity"] == [
@@ -382,7 +385,7 @@ def test_collector_rejects_service_replacement_during_runtime_probe(
         return {
             name: {"deployment_uid": model["resource_uids"][f"deployment/{name}"],
                    "oci_reference": REFERENCE}
-            for name in collector.SERVICES
+            for name in collector.KUBERNETES_SERVICES
         }
 
     report = collector.collect(

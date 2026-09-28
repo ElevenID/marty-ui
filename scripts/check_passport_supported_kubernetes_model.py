@@ -30,8 +30,8 @@ SERVICES = (
     "gateway",
     "flow",
     "issuance-native",
-    "passport-callback-signer-supported",
-    "passport-provider-ingress",
+    "passport-callback-signer",
+    "passport-beta-bureau",
 )
 RESOURCES = (
     ("configmap", "marty-config"),
@@ -43,8 +43,8 @@ FLAGS = {
     "flow": "PASSPORT_NATIVE_FLOW_ENABLED",
     "issuance-native": "PASSPORT_NATIVE_HTTP_ENABLED",
 }
-OWNER_LABEL = "marty.elevenid.io/passport-acceptance"
-SOURCE_LABEL = "marty.elevenid.io/source-commit"
+OWNER_LABEL = "com.marty.passport.acceptance.owner"
+SOURCE_LABEL = "com.marty.passport.acceptance.source-commit"
 
 
 class KubernetesPreflightError(ValueError):
