@@ -254,6 +254,15 @@ def _support_environment(actual: object, service: str, status_origin: str) -> No
             f"{service} runtime identity differs from disposable model")
 
 
+def _issuer_origin_environment(actual: object, service: str,
+                               status_origin: str) -> None:
+    environment = _runtime_environment(actual, service)
+    origin = status_origin.replace("127.0.0.1", "localhost")
+    key = "MARTY_ISSUER_BASE_URL" if service == "db-migrate" else "ISSUER_BASE_URL"
+    require(environment.get(key) == origin,
+            f"{service} issuer origin differs from disposable Gateway")
+
+
 def _ceremony_environment(actual: object, service: str, surface: str) -> None:
     environment = _runtime_environment(actual, service)
     credentials = {
@@ -427,6 +436,10 @@ def verify(record: dict, surface: str, now: datetime,
             _organization_environment(config.get("Env"), record)
         elif service in {"gateway", "signing-keys"}:
             _ceremony_environment(config.get("Env"), service, surface)
+            if service == "gateway":
+                _issuer_origin_environment(config.get("Env"), service, status_origin)
+        elif service == "issuance-native":
+            _issuer_origin_environment(config.get("Env"), service, status_origin)
         elif service == "revocation-profile":
             _revocation_environment(config.get("Env"), status_origin)
         elif service in {"credential-template", "trust-profile",
@@ -436,6 +449,8 @@ def verify(record: dict, surface: str, now: datetime,
             migration_env = _runtime_environment(config.get("Env"), "Revocation migration")
             require(migration_env.get("STATUS_LIST_BASE_URL") == status_origin,
                     "Revocation migration status origin differs from Gateway")
+        elif service == "db-migrate":
+            _issuer_origin_environment(config.get("Env"), service, status_origin)
         require(re.fullmatch(r"/" + re.escape(project) + "-"
                              + re.escape(service) + r"-[1-9][0-9]*",
                              item.get("Name", "")) is not None

@@ -159,6 +159,10 @@ def test_real_compose_render_is_safe_but_not_accepted(
         "flow"]["environment"]["MARTY_ISSUER_DID"]
     assert migration["environment"]["MARTY_ISSUER_BASE_URL"] == model["services"][
         "gateway"]["environment"]["ISSUER_BASE_URL"]
+    assert migration["environment"]["MARTY_ISSUER_BASE_URL"] == model["services"][
+        "issuance-native"]["environment"]["ISSUER_BASE_URL"]
+    assert migration["environment"]["MARTY_ISSUER_BASE_URL"] == (
+        "http://localhost:29876")
     for role, reference in qualified_images(verify_registry=False).items():
         assert model["services"][role]["image"] == reference
     labels = model["services"]["gateway"]["labels"]

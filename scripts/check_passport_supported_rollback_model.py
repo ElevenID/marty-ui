@@ -413,6 +413,11 @@ def validate_model(
                                 "PUBLIC_BASE_URL", "ISSUER_BASE_URL"}
                     and value == public_origin):
                 continue
+            if ((name, key) in {("db-migrate", "MARTY_ISSUER_BASE_URL"),
+                                ("gateway", "ISSUER_BASE_URL"),
+                                ("issuance-native", "ISSUER_BASE_URL")}
+                    and value == public_origin):
+                continue
             for url in URLS.findall(value):
                 require(_endpoint_host(url) in services,
                         f"Compose {name} endpoint leaves disposable services")
@@ -709,7 +714,7 @@ def validate_model(
         and migration_env.get("PUBLIC_DOMAIN") == "localhost"
         and migration_env.get("MARTY_ORG_ID") == revocation_env.get("MARTY_ORG_ID")
         == organization_env.get("MARTY_ORG_ID")
-        and migration_env.get("MARTY_ISSUER_BASE_URL") == "http://gateway:8000"
+        and migration_env.get("MARTY_ISSUER_BASE_URL") == public_origin
         and isinstance(dependencies, dict)
         and all(isinstance(dependencies.get(role), dict)
                 and dependencies[role].get("condition") == "service_healthy"
@@ -726,7 +731,8 @@ def validate_model(
         == services["signing-keys"]["environment"].get("PUBLIC_DOMAIN")
         == "localhost"
         and migration_env.get("MARTY_ISSUER_BASE_URL")
-        == gateway.get("ISSUER_BASE_URL") == "http://gateway:8000"
+        == gateway.get("ISSUER_BASE_URL") == native.get("ISSUER_BASE_URL")
+        == public_origin
         and flow.get("MARTY_ISSUER_DID") == issuer_did,
         "Disposable managed issuer DID differs across profile and runtime services",
     )
