@@ -15,7 +15,11 @@ from pathlib import Path
 import re
 import stat
 import subprocess
+import sys
 from typing import Callable
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+from services.passport_disposable_identity import managed_key_reference
 
 if __package__:
     from .passport_supported_provisioning_producer import (
@@ -163,7 +167,8 @@ def _require_empty_project(project: str, inspector: Callable[[list[str]], str]) 
         raise ProducerError("Disposable volume namespace is already occupied")
 
 
-def _bootstrap_args(plan: dict, root: Path, output_dir: Path) -> list[str]:
+def _bootstrap_args(plan: dict, root: Path, output_dir: Path,
+                    gateway_port: int) -> list[str]:
     project = plan["project"]
     labels = {"com.docker.compose.project": project,
               "com.docker.compose.service": "passport-openbao-bootstrap",
@@ -184,7 +189,12 @@ def _bootstrap_args(plan: dict, root: Path, output_dir: Path) -> list[str]:
                     + ",dst=/scripts/passport_supported_openbao_bootstrap.sh,readonly"),
         "--mount", ("type=bind,src=" + str(initializer)
                     + ",dst=/scripts/openbao-init.sh,readonly"),
-        "--env", "BAO_ADDR=http://openbao:8200", "--entrypoint", "/bin/sh",
+        "--env", "BAO_ADDR=http://openbao:8200",
+        "--env", "PASSPORT_ACCEPTANCE_CSCA_KEY_REFERENCE="
+        + managed_key_reference(gateway_port, "csca"),
+        "--env", "PASSPORT_ACCEPTANCE_DSC_KEY_REFERENCE="
+        + managed_key_reference(gateway_port, "x509_doc_signer"),
+        "--entrypoint", "/bin/sh",
         plan["infra_images"]["openbao"],
         "/scripts/passport_supported_openbao_bootstrap.sh",
     ]
@@ -284,7 +294,7 @@ def rehearse_infrastructure(
         if not run([*compose, "up", "-d", "--no-deps", "--wait",
                     "--wait-timeout", "120", *INFRA], staged_env, 300):
             raise ProducerError("Disposable infrastructure startup failed")
-        if not run(_bootstrap_args(plan, root, output_dir), staged_env, 180):
+        if not run(_bootstrap_args(plan, root, output_dir, gateway_port), staged_env, 180):
             raise ProducerError("Disposable OpenBao bootstrap failed")
         _accept_bootstrap_files(root, output_dir)
         return {"schema": "marty.passport-supported-infra-rehearsal/v1",

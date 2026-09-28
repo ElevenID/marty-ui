@@ -14,6 +14,7 @@ import uuid
 import pytest
 
 from scripts.passport_supported_infra_images import qualified_images
+from services.passport_disposable_identity import managed_key_reference
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -91,6 +92,10 @@ def test_disposable_openbao_bootstrap_mints_scoped_tokens(
         result = docker(
             "run", "--rm", *host_user, "--network", network, "--entrypoint", "/bin/sh",
             "--env", "BAO_ADDR=http://openbao:8200",
+            "--env", "PASSPORT_ACCEPTANCE_CSCA_KEY_REFERENCE="
+            + managed_key_reference(29876, "csca"),
+            "--env", "PASSPORT_ACCEPTANCE_DSC_KEY_REFERENCE="
+            + managed_key_reference(29876, "x509_doc_signer"),
             "--mount", "type=bind,src=" + str(ROOT / "scripts/passport_supported_openbao_bootstrap.sh")
             + ",dst=/scripts/passport_supported_openbao_bootstrap.sh,readonly",
             "--mount", "type=bind,src=" + str(ROOT / "docker/openbao-init.sh")
@@ -116,12 +121,10 @@ def test_disposable_openbao_bootstrap_mints_scoped_tokens(
                     image, "-c", "test -r /tmp/" + filename,
                 )
         assert root_token not in (service, callback, result.stdout, result.stderr)
-        for purpose, expected in (
-            ("csca", "cred-dsc-5fc5bffec62456e58552-es256"),
-            ("x509_doc_signer", "cred-dsc-86997e8fa454582d8bb5-es256"),
-        ):
+        for purpose in ("csca", "x509_doc_signer"):
+            expected = managed_key_reference(29876, purpose)
             source = "|".join(("00000000-0000-0000-0000-000000000001",
-                               "did:web:localhost:orgs:marty", purpose,
+                               "did:web:localhost%3A29876:orgs:marty", purpose,
                                "ICAO_EMRTD", "ES256"))
             assert expected == "cred-dsc-" + uuid.uuid5(
                 uuid.NAMESPACE_URL, source).hex[:20] + "-es256"

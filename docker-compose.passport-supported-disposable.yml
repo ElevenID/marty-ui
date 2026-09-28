@@ -92,6 +92,9 @@ services:
       BAO_ADDR: http://openbao:8200
       BAO_TOKEN_FILE: /run/secrets/bao_token
       MARTY_KMS_BOOTSTRAP_ENABLED: "true"
+      PASSPORT_DISPOSABLE_ICAO_BOOTSTRAP: "true"
+      PASSPORT_ACCEPTANCE_PROJECT: ${PASSPORT_ACCEPTANCE_PROJECT:?bind disposable project}
+      PASSPORT_ACCEPTANCE_GATEWAY_PORT: ${PASSPORT_ACCEPTANCE_GATEWAY_PORT:?reserve disposable loopback port}
       PUBLIC_DOMAIN: localhost:${PASSPORT_ACCEPTANCE_GATEWAY_PORT:?reserve disposable loopback port}
       MARTY_ISSUER_BASE_URL: https://localhost:${PASSPORT_ACCEPTANCE_GATEWAY_PORT:?reserve disposable loopback port}
       MARTY_ISSUER_DID: did:web:localhost%3A${PASSPORT_ACCEPTANCE_GATEWAY_PORT:?reserve disposable loopback port}:orgs:marty

@@ -75,7 +75,9 @@ DISPOSABLE_NETWORKS = frozenset({"private", "callback_signing"})
 DISPOSABLE_VOLUMES = frozenset({
     "postgres_data", "redis_data", "openbao_data", "openbao_file", "openbao_logs",
 })
-PARTIAL_ONLY_SERVICES = frozenset({"passport-openbao-bootstrap"})
+PARTIAL_ONLY_SERVICES = frozenset({
+    "passport-openbao-bootstrap", "passport-certificate-bootstrap",
+})
 
 
 class ProducerError(ValueError):
