@@ -97,6 +97,9 @@ def test_infra_rehearsal_starts_only_private_infra_and_always_cleans(
         "postgres", "redis", "openbao",
     ]
     assert calls[1][0][:2] == ["docker", "run"]
+    assert calls[1][0][2:5] == [
+        "--rm", "--name", f"{selected['project']}-passport-openbao-bootstrap-1",
+    ]
     assert calls[1][0][-2:] == [selected["infra_images"]["openbao"],
                                "/scripts/passport_supported_openbao_bootstrap.sh"]
     assert [call[2] for call in calls] == [300, 180]

@@ -173,7 +173,9 @@ def _bootstrap_args(plan: dict, root: Path, output_dir: Path) -> list[str]:
     if not script.is_file() or not initializer.is_file():
         raise ProducerError("Disposable OpenBao bootstrap source is missing")
     return [
-        "docker", "run", "--rm", "--network", f"{project}_private",
+        "docker", "run", "--rm", "--name",
+        f"{project}-passport-openbao-bootstrap-1",
+        "--network", f"{project}_private",
         *(argument for key, value in sorted(labels.items())
           for argument in ("--label", f"{key}={value}")),
         "--mount", ("type=bind,src=" + str(root / "secrets" / "bao_root_token")

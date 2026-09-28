@@ -58,7 +58,8 @@ def source_plan(tmp_path: Path) -> tuple[Path, Path, dict]:
         "services_reference": SERVICES,
         "migrations_reference": "migrations@sha256:" + "c" * 64,
         "legacy_reference": "legacy@sha256:" + "d" * 64,
-        "infra_images": {"postgres": "postgres@sha256:" + "e" * 64},
+        "infra_images": {"postgres": "postgres@sha256:" + "e" * 64,
+                         "openbao": "openbao@sha256:" + "f" * 64},
     }
     plan = {
         "schema": "marty.passport-supported-provisioning-plan/v1",
@@ -506,6 +507,9 @@ def test_teardown_targets_only_recorded_disposable_resources() -> None:
               "networks": {PROJECT + "_private": "e" * 64},
               "volumes": [PROJECT + "_postgres_data"]}
     calls = []
+    present = {"containers": list(containers.values()),
+               "networks": ["e" * 64],
+               "volumes": [PROJECT + "_postgres_data"]}
     labels = {
         "com.docker.compose.project": PROJECT,
         "com.marty.passport.acceptance.owner": "supported-consumer",
@@ -516,6 +520,12 @@ def test_teardown_targets_only_recorded_disposable_resources() -> None:
 
     def executor(args: list[str], output: object) -> bool:
         calls.append(args)
+        if args[:2] == ["container", "rm"]:
+            present["containers"].clear()
+        elif args[:2] == ["network", "rm"]:
+            present["networks"].clear()
+        elif args[:2] == ["volume", "rm"]:
+            present["volumes"].clear()
         return True
 
     def inspector(args: list[str]) -> str:
@@ -529,6 +539,12 @@ def test_teardown_targets_only_recorded_disposable_resources() -> None:
                                 "Labels": labels}])
         if args[:2] == ["volume", "inspect"]:
             return json.dumps([{"Name": args[2], "Labels": labels}])
+        if args[0] == "ps":
+            return "\n".join(present["containers"])
+        if args[:2] == ["network", "ls"]:
+            return "\n".join(present["networks"])
+        if args[:2] == ["volume", "ls"]:
+            return "\n".join(present["volumes"])
         return ""
 
     assert destroy_disposable_project(record, inspector, executor)
@@ -568,22 +584,49 @@ def test_partial_teardown_removes_only_plan_owned_startup_resources(
     project = plan["project"]
     container = "1" * 64
     network = "2" * 64
-    volume = project + "_openbao_data"
+    volume = project + "_postgres_data"
     present = {"containers": [container], "networks": [network],
                "volumes": [volume]}
     labels = {**plan["owner_labels"], "com.docker.compose.project": project}
     calls = []
+    state = {"image": plan["infra_images"]["postgres"],
+             "extra_mount": False, "network_driver": "bridge",
+             "network_member": container, "volume_driver": "local",
+             "late_resource": False, "list_calls": 0}
 
     def inspector(args: list[str]) -> str:
         if args[:2] == ["container", "inspect"]:
-            return json.dumps([{"Id": args[2], "Config": {"Labels": {
-                **labels, "com.docker.compose.service": "openbao"}}}])
+            return json.dumps([{"Id": args[2], "Name": f"/{project}-postgres-1",
+                                "Config": {"Image": state["image"],
+                                           "Labels": {
+                                               **labels, "com.docker.compose.service": "postgres"}},
+                                "NetworkSettings": {"Networks": {
+                                    project + "_private": {"NetworkID": network}}},
+                                "Mounts": [
+                                    {"Type": "bind", "Source": str(
+                                        Path(tempfile.gettempdir()) / project / "secrets"
+                                        / "marty_db_password"),
+                                     "Destination": "/run/secrets/marty_db_password",
+                                     "RW": False},
+                                    {"Type": "volume", "Name": volume,
+                                     "Destination": "/var/lib/postgresql/data",
+                                     "RW": True}] + ([
+                                         {"Type": "bind", "Source": "C:/outside",
+                                          "Destination": "/outside", "RW": True},
+                                     ] if state["extra_mount"] else [])}])
         if args[:2] == ["network", "inspect"]:
             return json.dumps([{"Id": args[2], "Name": project + "_private",
+                                "Driver": state["network_driver"], "Internal": True,
+                                "Containers": {state["network_member"]: {}},
                                 "Labels": labels}])
         if args[:2] == ["volume", "inspect"]:
-            return json.dumps([{"Name": args[2], "Labels": labels}])
+            return json.dumps([{"Name": args[2], "Driver": state["volume_driver"],
+                                "Options": {}, "Labels": labels}])
         if args[0] == "ps":
+            if "--filter" in args:
+                state["list_calls"] += 1
+                if state["late_resource"] and state["list_calls"] == 2:
+                    return "\n".join([*present["containers"], "f" * 64])
             return "\n".join(present["containers"])
         if args[:2] == ["network", "ls"]:
             return "\n".join(present["networks"])
@@ -611,6 +654,26 @@ def test_partial_teardown_removes_only_plan_owned_startup_resources(
     assert destroy_partial_disposable_project(
         *arguments, inspector, executor, **gates)
     assert len(calls) == 3
+
+    for field, bad in (
+        ("image", plan["services_reference"]),
+        ("extra_mount", True),
+        ("network_driver", "overlay"),
+        ("network_member", "f" * 64),
+        ("volume_driver", "nfs"),
+        ("late_resource", True),
+    ):
+        present.update(containers=[container], networks=[network], volumes=[volume])
+        state[field] = bad
+        state["list_calls"] = 0
+        assert not destroy_partial_disposable_project(
+            *arguments, inspector, executor, **gates), field
+        assert len(calls) == 3, field
+        state[field] = False if field in ("extra_mount", "late_resource") else {
+            "image": plan["infra_images"]["postgres"],
+            "network_driver": "bridge", "network_member": container,
+            "volume_driver": "local",
+        }[field]
 
 
 def test_partial_teardown_fails_closed_before_mutating_unknown_resource(
@@ -646,6 +709,82 @@ def test_partial_teardown_fails_closed_before_mutating_unknown_resource(
     arguments[0].write_text(json.dumps(bad), encoding="utf-8")
     with pytest.raises(ProducerError, match="plan is invalid"):
         destroy_partial_disposable_project(*arguments, inspector, **gates)
+
+
+def test_partial_teardown_recognizes_interrupted_openbao_bootstrap(
+    tmp_path: Path,
+) -> None:
+    arguments, plan, gates = partial_teardown_context(tmp_path)
+    project = plan["project"]
+    container = "1" * 64
+    network = "2" * 64
+    network_name = project + "_private"
+    root = Path(tempfile.gettempdir()) / project
+    source = Path(__file__).resolve().parents[1]
+    labels = {**plan["owner_labels"], "com.docker.compose.project": project,
+              "com.docker.compose.service": "passport-openbao-bootstrap"}
+    mounts = [
+        {"Type": "bind", "Source": str(path), "Destination": destination,
+         "RW": writable}
+        for path, destination, writable in (
+            (root / "secrets" / "bao_root_token", "/run/secrets/bao_root_token", False),
+            (root / "bootstrap-output", "/work/secrets", True),
+            (source / "scripts/passport_supported_openbao_bootstrap.sh",
+             "/scripts/passport_supported_openbao_bootstrap.sh", False),
+            (source / "docker/openbao-init.sh", "/scripts/openbao-init.sh", False),
+        )
+    ]
+    present = {"container": True, "network": True}
+    state = {"image": plan["infra_images"]["openbao"],
+             "name": f"/{project}-passport-openbao-bootstrap-1",
+             "mounts": mounts, "attachments": {network_name: {"NetworkID": network}}}
+    calls = []
+
+    def inspector(args: list[str]) -> str:
+        if args[:2] == ["container", "inspect"]:
+            return json.dumps([{"Id": container, "Name": state["name"],
+                                "Config": {"Image": state["image"], "Labels": labels},
+                                "NetworkSettings": {"Networks": state["attachments"]},
+                                "Mounts": state["mounts"]}])
+        if args[:2] == ["network", "inspect"]:
+            return json.dumps([{"Id": network, "Name": network_name,
+                                "Driver": "bridge", "Internal": True,
+                                "Containers": {container: {}}, "Labels": labels}])
+        if args[0] == "ps":
+            return container if present["container"] else ""
+        if args[:2] == ["network", "ls"]:
+            return network if present["network"] else ""
+        if args[:2] == ["volume", "ls"]:
+            return ""
+        raise AssertionError(args)
+
+    def executor(args: list[str], output: object) -> bool:
+        calls.append(args)
+        if args[:2] == ["container", "rm"]:
+            present["container"] = False
+        elif args[:2] == ["network", "rm"]:
+            present["network"] = False
+        return True
+
+    for field, bad in (
+        ("image", plan["services_reference"]),
+        ("name", f"/{project}-passport-openbao-bootstrap-random"),
+        ("mounts", mounts[:-1]),
+        ("attachments", {}),
+    ):
+        original = state[field]
+        state[field] = bad
+        assert not destroy_partial_disposable_project(
+            *arguments, inspector, executor, **gates), field
+        assert calls == [], field
+        state[field] = original
+
+    assert destroy_partial_disposable_project(
+        *arguments, inspector, executor, **gates)
+    assert calls == [
+        ["container", "rm", "-f", container],
+        ["network", "rm", network],
+    ]
 
 
 def test_host_key_unlink_failure_still_forces_teardown(
