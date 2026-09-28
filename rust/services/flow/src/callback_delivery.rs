@@ -1,4 +1,4 @@
-use std::{collections::BTreeMap, time::Duration as StdDuration};
+use std::{collections::BTreeMap, path::Path, time::Duration as StdDuration};
 
 use chrono::{Duration, Utc};
 use mmf_push::WebhookDestinationRegistry;
@@ -16,6 +16,7 @@ const REQUEST_TIMEOUT_SECONDS: u64 = 10;
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct CallbackDeliveryConfig {
+    pub callback_ca_certificate_pem: Option<Vec<u8>>,
     pub max_attempts: u32,
     pub lease_seconds: u64,
     pub poll_milliseconds: u64,
@@ -28,6 +29,7 @@ pub struct CallbackDeliveryConfig {
 impl Default for CallbackDeliveryConfig {
     fn default() -> Self {
         Self {
+            callback_ca_certificate_pem: None,
             max_attempts: CALLBACK_MAX_ATTEMPTS,
             lease_seconds: CALLBACK_LEASE_SECONDS,
             poll_milliseconds: CALLBACK_POLL_MILLISECONDS,
@@ -48,7 +50,29 @@ impl CallbackDeliveryConfig {
         values: impl IntoIterator<Item = (String, String)>,
     ) -> Result<Self, CallbackDeliveryError> {
         let values = values.into_iter().collect::<BTreeMap<_, _>>();
+        let callback_ca_certificate_pem = values
+            .get("FLOW_CALLBACK_CA_CERT_FILE")
+            .map(|path| {
+                if !Path::new(path).is_absolute() {
+                    return Err(CallbackDeliveryError::Configuration(
+                        "FLOW_CALLBACK_CA_CERT_FILE must be an absolute path".into(),
+                    ));
+                }
+                let pem = std::fs::read(path).map_err(|_| {
+                    CallbackDeliveryError::Configuration(
+                        "FLOW_CALLBACK_CA_CERT_FILE is unreadable".into(),
+                    )
+                })?;
+                if pem.len() > 64 * 1024 || reqwest::Certificate::from_pem(&pem).is_err() {
+                    return Err(CallbackDeliveryError::Configuration(
+                        "FLOW_CALLBACK_CA_CERT_FILE is not a valid CA certificate".into(),
+                    ));
+                }
+                Ok(pem)
+            })
+            .transpose()?;
         Ok(Self {
+            callback_ca_certificate_pem,
             max_attempts: bounded(
                 &values,
                 "FLOW_CALLBACK_MAX_ATTEMPTS",
@@ -131,10 +155,16 @@ pub async fn deliver_due_callbacks(
             "FLOW_WEBHOOK_SECRET must contain at least 32 bytes".into(),
         ));
     }
-    let client = reqwest::Client::builder()
+    let mut client_builder = reqwest::Client::builder()
         .redirect(reqwest::redirect::Policy::none())
         .connect_timeout(StdDuration::from_secs(CONNECT_TIMEOUT_SECONDS))
-        .timeout(StdDuration::from_secs(REQUEST_TIMEOUT_SECONDS))
+        .timeout(StdDuration::from_secs(REQUEST_TIMEOUT_SECONDS));
+    if let Some(pem) = &config.callback_ca_certificate_pem {
+        let certificate = reqwest::Certificate::from_pem(pem)
+            .map_err(|_| CallbackDeliveryError::HttpConfiguration)?;
+        client_builder = client_builder.add_root_certificate(certificate);
+    }
+    let client = client_builder
         .build()
         .map_err(|_| CallbackDeliveryError::HttpConfiguration)?;
     let now = Utc::now();
@@ -347,6 +377,11 @@ mod tests {
         assert_eq!(configured.retention_seconds, 86_400);
         assert_eq!(configured.retry_base_seconds, 60);
         assert_eq!(configured.retry_cap_seconds, 900);
+        assert!(CallbackDeliveryConfig::from_values([(
+            "FLOW_CALLBACK_CA_CERT_FILE".into(),
+            "relative-ca.pem".into()
+        )])
+        .is_err());
         assert!(CallbackDeliveryConfig::from_values([(
             "FLOW_CALLBACK_LEASE_SECONDS".into(),
             "4".into()

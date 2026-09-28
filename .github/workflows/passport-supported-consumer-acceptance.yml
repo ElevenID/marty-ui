@@ -19,10 +19,10 @@ on:
         description: Dedicated test cluster context. No production context is allowed.
         required: false
       base_origin:
-        description: Loopback origin published by the inspected base Gateway.
+        description: HTTPS localhost origin published by the inspected base edge.
         required: false
       selfhost_origin:
-        description: Loopback origin published by the inspected selfhost Gateway.
+        description: HTTPS localhost origin published by the inspected selfhost edge.
         required: false
 
 concurrency:

@@ -30,6 +30,12 @@ def inputs(root: Path) -> Path:
         "issuance_api_key", "dsc_issue_gateway_key", "csca_issue_gateway_key",
         "callback_signer_api_key",
         "callback_signer_bao_token", "grpc_service_token", "bureau_database_url",
+        "passport_edge_tls_cert", "passport_edge_tls_key",
+        "flow_webhook_secret", "flow_application_event_hmac_key",
+        "workload_identity_ca_cert", "flow_workload_client_cert",
+        "flow_workload_client_key", "flow_workload_server_cert",
+        "flow_workload_server_key", "pp_workload_server_cert",
+        "pp_workload_server_key",
     ):
         (secrets / name).write_text("synthetic-disposable-only", encoding="utf-8")
     env_file = root / "acceptance.env"
@@ -37,6 +43,7 @@ def inputs(root: Path) -> Path:
         "PASSPORT_ACCEPTANCE_POSTGRES_IMAGE=postgres@sha256:" + "d" * 64,
         "PASSPORT_ACCEPTANCE_REDIS_IMAGE=redis@sha256:" + "e" * 64,
         "PASSPORT_ACCEPTANCE_OPENBAO_IMAGE=quay.io/openbao/openbao@sha256:" + "f" * 64,
+        "PASSPORT_ACCEPTANCE_EDGE_IMAGE=docker.io/library/nginx@sha256:" + "1" * 64,
         "PASSPORT_ACCEPTANCE_MIGRATIONS_IMAGE=" + MIGRATIONS,
         "PASSPORT_ACCEPTANCE_LEGACY_IMAGE=" + LEGACY,
         "PASSPORT_ACCEPTANCE_PLAN_RUN_ID=123456789",
@@ -124,6 +131,18 @@ def test_real_compose_render_is_safe_but_not_accepted(
     else:
         assert "SIGNING_KEYS_BETA_CSCA_ISSUANCE_ENABLED" not in model["services"][
             "signing-keys"]["environment"]
+        for service, key in (
+            ("flow", "FLOW_CALLBACK_DESTINATIONS"),
+            ("flow", "GRPC_WORKLOAD_TLS_CA_CERT"),
+            ("presentation-policy", "GRPC_WORKLOAD_TLS_SERVER_CERT"),
+        ):
+            broken = deepcopy(model)
+            broken["services"][service]["environment"].pop(key)
+            with pytest.raises(ModelPreflightError, match="Flow callback|presentation-policy runtime"):
+                validate_model(broken, project, SERVICES, tmp_path)
+        assert model["services"]["flow"]["environment"][
+            "FLOW_CALLBACK_DESTINATIONS"].startswith(
+                "00000000-0000-0000-0000-000000000001|https://edge:8443/")
     assert "passport_tenant_api_keys" not in model["secrets"]
     assert model["services"]["issuance-native"]["environment"][
         "PERSONALIZATION_BUREAU_PROVIDER_PROFILE_ID"] == "passport-beta-bureau"
@@ -138,7 +157,7 @@ def test_real_compose_render_is_safe_but_not_accepted(
     assert model["services"]["issuance"]["image"] == LEGACY
     signing = model["services"]["signing-keys"]
     assert signing["environment"]["SIGNING_KEYS_REDIS_URL"] == "redis://redis:6379/2"
-    assert signing["environment"]["PUBLIC_DOMAIN"] == "localhost"
+    assert signing["environment"]["PUBLIC_DOMAIN"] == "localhost:29876"
     assert signing["depends_on"]["redis"]["condition"] == "service_healthy"
     openbao = model["services"]["openbao"]
     assert openbao["entrypoint"] == [
@@ -154,7 +173,7 @@ def test_real_compose_render_is_safe_but_not_accepted(
     assert revocation["depends_on"]["organization"]["condition"] == "service_healthy"
     assert revocation["environment"]["ORG_GRPC_TARGET"] == "organization:9002"
     assert revocation["environment"]["STATUS_LIST_BASE_URL"] == (
-        "http://127.0.0.1:29876")
+        "https://localhost:29876")
     assert model["services"]["revocation-profile-migrate"]["environment"][
         "STATUS_LIST_BASE_URL"] == revocation["environment"]["STATUS_LIST_BASE_URL"]
     assert {secret["source"] for secret in revocation["secrets"]} == {
@@ -174,7 +193,7 @@ def test_real_compose_render_is_safe_but_not_accepted(
     assert migration["environment"]["MARTY_ISSUER_BASE_URL"] == model["services"][
         "issuance-native"]["environment"]["ISSUER_BASE_URL"]
     assert migration["environment"]["MARTY_ISSUER_BASE_URL"] == (
-        "http://localhost:29876")
+        "https://localhost:29876")
     for role, reference in qualified_images(verify_registry=False).items():
         assert model["services"][role]["image"] == reference
     labels = model["services"]["gateway"]["labels"]

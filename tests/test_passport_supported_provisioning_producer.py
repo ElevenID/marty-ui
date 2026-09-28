@@ -23,6 +23,7 @@ from scripts.check_passport_supported_rollback_model import (
     DISPOSABLE_SERVICES, render_model, validate_planned_model,
 )
 from scripts.passport_supported_infra_images import qualified_images
+from scripts.stage_passport_disposable_tls import TLS_FILES, stage_tls
 from scripts.passport_supported_provisioning_producer import (
     INFRA_WORKFLOW_REF, ProducerError, WORKFLOW_REF, collect_record, destroy_disposable_project,
     destroy_partial_disposable_project,
@@ -47,6 +48,32 @@ ENV = {
     "GITHUB_WORKFLOW_REF": WORKFLOW_REF, "GITHUB_SHA": SOURCE,
     "GITHUB_RUN_ID": "987654",
 }
+
+
+def test_disposable_tls_identities_are_ca_bound_and_short_lived(tmp_path: Path) -> None:
+    stage_tls(tmp_path)
+    assert {path.name for path in tmp_path.iterdir()} == TLS_FILES
+    ca = tmp_path / "workload_identity_ca_cert"
+    for certificate, verification in (
+        ("passport_edge_tls_cert", ["-verify_hostname", "localhost"]),
+        ("flow_workload_server_cert", ["-verify_hostname", "flow"]),
+        ("pp_workload_server_cert", ["-verify_hostname", "presentation-policy"]),
+        ("flow_workload_client_cert", ["-purpose", "sslclient"]),
+    ):
+        result = subprocess.run(
+            ["openssl", "verify", "-CAfile", str(ca), *verification,
+             str(tmp_path / certificate)], capture_output=True, text=True, check=False,
+        )
+        assert result.returncode == 0, result.stderr
+    for certificate in ("passport_edge_tls_cert", "flow_workload_client_cert"):
+        result = subprocess.run(
+            ["openssl", "x509", "-in", str(tmp_path / certificate),
+             "-noout", "-dates", "-ext", "subjectAltName"],
+            capture_output=True, text=True, check=True,
+        )
+        assert "notAfter=" in result.stdout
+        assert ("DNS:localhost" if certificate == "passport_edge_tls_cert"
+                else "URI:spiffe://marty.internal/service/flow") in result.stdout
 
 
 def source_plan(tmp_path: Path) -> tuple[Path, Path, dict]:
@@ -151,7 +178,8 @@ def test_disposable_inputs_are_fresh_private_and_plan_bound() -> None:
             "dsc_issue_gateway_key", "csca_issue_gateway_key",
             "issuance_api_key", "callback_signer_api_key", "grpc_service_token",
             "bureau_database_url", "token_hmac_key", "integration_secret_master_key",
-        }
+            "flow_webhook_secret", "flow_application_event_hmac_key",
+        } | TLS_FILES
         assert len((secret_dir / "bao_root_token").read_text(encoding="ascii")) == 64
         ceremony_keys = [(secret_dir / name).read_text(encoding="ascii") for name in (
             "dsc_issue_gateway_key", "csca_issue_gateway_key")]
