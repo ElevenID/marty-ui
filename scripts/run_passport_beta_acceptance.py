@@ -57,6 +57,15 @@ def run(
     report = collector(artifact_dir, api_key=api_key, attest=attestor)
     require(report.get("status") == "blocked" and report.get("release", {}).get("signed_manifest_verified") is True, "Official beta release is not authenticated")
     require(report.get("probes", {}).get("capabilities_http", {}).get("verified") is True, "Managed issuer capability is not ready")
+    require(report.get("deployment", {}).get("provider_mode") == "simulator"
+            and report.get("provider_ingress_runtime_image") is None,
+            "Beta passport acceptance requires Marty's isolated simulator")
+    boundary = report.get("probes", {}).get("physical_claim_boundary", {})
+    require(report.get("physical_claim") == "not_claimed"
+            and boundary.get("verified") is True
+            and boundary.get("evidence") == {
+                "physical_claim": "not_claimed", "booklet_verified": False},
+            "Beta passport report must not claim physical issuance")
     chain_requested = any(value is not None for value in (certificate_plan, csca_session, dsc_session))
     if chain_requested:
         require(isinstance(certificate_plan, dict) and bool(csca_session) and bool(dsc_session),
@@ -70,7 +79,7 @@ def run(
     route_evidence = route_ownership.get("evidence")
     webhook_owner = route_evidence.get("webhook_owner") if isinstance(route_evidence, dict) else None
     require(route_ownership.get("verified") is True
-            and webhook_owner in ("issuance-native", "passport-provider-ingress"),
+            and webhook_owner == "issuance-native",
             "Beta native route ownership did not verify")
     before_production = snapshot()
     before_drain = drain()
@@ -115,7 +124,7 @@ def run(
         "application_lifecycle": lifecycle_result.get("evidence"),
         "flow_and_webhook_denial": flow_result.get("evidence"),
         "native_route_ownership": route_ownership.get("evidence"),
-        "missing": ["signed_provider_webhook", "executed_physical_document_flow"],
+        "missing": ["signed_simulator_webhook", "executed_simulator_flow"],
     }}
     if chain_result is not None:
         report["probes"]["managed_csca_dsc_chain"] = chain_result

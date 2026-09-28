@@ -49,10 +49,12 @@ access to the release repository. The following probe keys
 remain unverified until protected acceptance runs execute and publish exact
 artifact lineage: `managed_csca_dsc_chain`, `sod_signature`,
 `nine_route_gateway_flow`, `packaged_image`, `physical_bureau_submission`,
-`signed_bureau_callback`, `legacy_drain`, `rollback`,
-`production_isolation`, and `physical_booklet_verified`. The last key requires
-independent provider evidence of a real personalized booklet. The beta bureau
-simulator's status and callback cannot establish it. Separate supported base
+`physical_bureau_batch`, `signed_bureau_callback`, `legacy_drain`, `rollback`,
+`production_isolation`, and `recorded_demo`. The two `physical_bureau_*` names
+are retained for the frozen simulator route-compatibility receipt; they do not
+assert physical production. `physical_claim_boundary` records
+`physical_claim=not_claimed` and `booklet_verified=false` only for the isolated
+Marty simulator. Separate supported base
 Compose, self-host, and Kubernetes acceptance remains mandatory before Python
 retirement.
 
@@ -82,8 +84,8 @@ owner must return its exact missing-header 422 response or the separately
 selected provider ingress must return its exact invalid-signature 401 response.
 This checks an ingress guard, not a valid signed callback. The report records
 these outcomes as partial `nine_route_gateway_flow` evidence and keeps that
-required probe false until a signed provider callback and an executed physical
-document Flow are verified. Only fixed route names, counts, statuses, and
+required probe false until a signed Marty simulator callback and an executed
+simulator Flow are verified. Only fixed route names, counts, statuses, and
 selector booleans enter the report.
 
 The full run can also perform the managed beta CSCA and DSC ceremonies when
@@ -107,14 +109,14 @@ any application or certificate mutation. If no ceremony input exists, the
 
 The production snapshot proves continuity **during this acceptance run**. It
 does not replace the deployment wrapper's before/after production comparison.
-The report sets `legacy_drain` and the additional
+The report requires the isolated simulator mode and sets `legacy_drain` and the additional
 `production_continuity_during_probe` probe when those live checks pass, while
 `production_isolation` remains false. The workflow fails while the report is
 `blocked`, but uploads the sanitized report from an attempted probe. The
 acceptance report remains `blocked` until SOD signature verification, full nine
-route Gateway/Flow and signed callback proof, physical provider submission,
-rollback, deployment-wide production isolation, and independently verified
-physical booklet receipt have executable evidence. It cannot qualify Python
+route Gateway/Flow and signed simulator callback proof, simulator batch
+compatibility, rollback, deployment-wide production isolation, and recorded
+demo evidence have executable receipts. It cannot qualify Python
 retirement on its own.
 
 The protected run uploads a GitHub artifact named
