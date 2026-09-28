@@ -63,9 +63,11 @@ artifact lineage: `managed_csca_dsc_chain`, `sod_signature`,
 are retained for the frozen simulator route-compatibility receipt; they do not
 assert physical production. `physical_claim_boundary` records
 `physical_claim=not_claimed` and `booklet_verified=false` only for the isolated
-Marty simulator. A future physical-booklet claim requires independent evidence;
-the simulator makes no such claim. Separate supported base Compose, self-host,
-and Kubernetes acceptance remains mandatory before Python retirement.
+Marty simulator. `physical_booklet_verified` remains false and is not a
+prerequisite for retiring Python's software route owner under the v2
+retirement qualification contract. A future physical-booklet claim requires
+independent evidence. Separate supported base Compose, self-host, and
+Kubernetes acceptance remains mandatory before Python retirement.
 
 ## Protected beta acceptance run
 

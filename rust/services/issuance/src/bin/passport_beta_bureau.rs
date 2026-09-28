@@ -576,6 +576,20 @@ mod tests {
         fs::remove_file(path).unwrap();
     }
 
+    async fn ensure_test_schema(pool: &PgPool) {
+        let mut transaction = pool.begin().await.unwrap();
+        sqlx::query("SELECT pg_advisory_xact_lock($1)")
+            .bind(0x6d617274795f7062_i64)
+            .execute(&mut *transaction)
+            .await
+            .unwrap();
+        sqlx::query("CREATE SCHEMA IF NOT EXISTS issuance_service")
+            .execute(&mut *transaction)
+            .await
+            .unwrap();
+        transaction.commit().await.unwrap();
+    }
+
     fn disposable_database_url(value: &str) -> bool {
         Url::parse(value).ok().is_some_and(|url| {
             matches!(url.scheme(), "postgres" | "postgresql")
@@ -812,11 +826,8 @@ mod tests {
         let nonce = Uuid::new_v4().simple().to_string();
         let table = format!("passport_bureau_mig_{}", &nonce[..12]);
         let index = format!("ix_passport_bureau_mig_{}", &nonce[..12]);
+        ensure_test_schema(&pool).await;
         let mut transaction = pool.begin().await.unwrap();
-        sqlx::query("CREATE SCHEMA IF NOT EXISTS issuance_service")
-            .execute(&mut *transaction)
-            .await
-            .unwrap();
         let old_table = format!(
             "CREATE TABLE issuance_service.{table} (
                 bureau_job_id uuid PRIMARY KEY,
@@ -889,10 +900,7 @@ mod tests {
             .connect(&database_url)
             .await
             .unwrap();
-        sqlx::query("CREATE SCHEMA IF NOT EXISTS issuance_service")
-            .execute(&pool)
-            .await
-            .unwrap();
+        ensure_test_schema(&pool).await;
         sqlx::raw_sql(SCHEMA).execute(&pool).await.unwrap();
         let source = format!("test-{}", Uuid::new_v4());
         let first = JobInput {
