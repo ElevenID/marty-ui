@@ -54,9 +54,11 @@ artifact lineage: `managed_csca_dsc_chain`, `sod_signature`,
 are retained for the frozen simulator route-compatibility receipt; they do not
 assert physical production. `physical_claim_boundary` records
 `physical_claim=not_claimed` and `booklet_verified=false` only for the isolated
-Marty simulator. Separate supported base
-Compose, self-host, and Kubernetes acceptance remains mandatory before Python
-retirement.
+Marty simulator. `physical_booklet_verified` remains false and is not a
+prerequisite for retiring Python's software route owner under the v2
+retirement qualification contract. A future physical-booklet claim requires
+independent evidence. Separate supported base Compose, self-host, and
+Kubernetes acceptance remains mandatory before Python retirement.
 
 ## Protected beta acceptance run
 
@@ -88,6 +90,14 @@ required probe false until a signed Marty simulator callback and an executed
 simulator Flow are verified. Only fixed route names, counts, statuses, and
 selector booleans enter the report.
 
+The beta simulator now stores a 32-byte digest of the exact callback body and
+KMS signature only after native issuance accepts the signed callback and the
+status transition commits. Its authenticated private job poll returns the
+lowercase hex digest as `callback_receipt_sha256`; preexisting jobs can return
+`null`. The simulator never stores or returns the callback body or signature.
+This digest is a source for a future protected acceptance producer. The current
+workflow does not collect it or establish a successful signed callback run.
+
 The full run can also perform the managed beta CSCA and DSC ceremonies when
 the protected `beta-lifecycle` environment supplies
 `PASSPORT_ACCEPTANCE_CERTIFICATE_PLAN_JSON` and separate governed operator
@@ -116,7 +126,8 @@ The report requires the isolated simulator mode and sets `legacy_drain` and the 
 acceptance report remains `blocked` until SOD signature verification, full nine
 route Gateway/Flow and signed simulator callback proof, simulator batch
 compatibility, rollback, deployment-wide production isolation, and recorded
-demo evidence have executable receipts. It cannot qualify Python
+demo evidence have executable receipts. A simulator acceptance must set
+`physical_claim=not_claimed`. The current report cannot qualify Python
 retirement on its own.
 
 The protected run uploads a GitHub artifact named

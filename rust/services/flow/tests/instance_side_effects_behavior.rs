@@ -30,6 +30,9 @@ struct Contract {
     physical_initial_context: String,
     physical_operations: Vec<String>,
     physical_success_side_effects: String,
+    physical_create_issuer_did_source: String,
+    physical_create_issuer_did_override: String,
+    physical_create_invalid_template: String,
     provider_identity_mismatch: String,
     missing_offer_uri: String,
 }
@@ -198,6 +201,18 @@ async fn language_neutral_contract_drives_oid4vci_and_mip_behavior() {
         contract.physical_success_side_effects,
         "before_state_transition"
     );
+    assert_eq!(
+        contract.physical_create_issuer_did_source,
+        "active_tenant_bound_credential_template_reference"
+    );
+    assert_eq!(
+        contract.physical_create_issuer_did_override,
+        "initial_context_cannot_override_template_issuer"
+    );
+    assert_eq!(
+        contract.physical_create_invalid_template,
+        "reject_before_native_application_create"
+    );
     assert_eq!(contract.provider_identity_mismatch, "fail_closed");
     assert_eq!(contract.missing_offer_uri, "fail_closed");
 
@@ -294,11 +309,15 @@ async fn physical_inputs_are_consumed_and_every_operation_is_typed() {
             "country_code": "USA",
             "applicant": {"name": "Example"},
             "mrz": {"line1": "P<USA"},
-            "data_groups": {"DG1": "MQ==", "DG2": "Mg=="}
+            "data_groups": {"DG1": "MQ==", "DG2": "Mg=="},
+            "issuer_did": "did:web:untrusted.example"
         }}),
     );
     let prepared = prepare_instance_start(
         &FlowProviderRegistry {
+            credential_template: Some(Arc::new(Templates {
+                organization_id: "org-1",
+            })),
             physical_document: Some(Arc::new(physical.clone())),
             ..Default::default()
         },
@@ -314,6 +333,10 @@ async fn physical_inputs_are_consumed_and_every_operation_is_typed() {
     assert_eq!(
         physical.requests.lock().unwrap()[0].operation,
         PhysicalDocumentOperation::Initialize
+    );
+    assert_eq!(
+        physical.requests.lock().unwrap()[0].data["issuer_did"],
+        json!("did:web:issuer.example")
     );
 
     let providers = FlowProviderRegistry {
@@ -361,6 +384,38 @@ async fn physical_inputs_are_consumed_and_every_operation_is_typed() {
     }
     assert!(advanced.context["physical_document_job"].is_object());
     assert_eq!(physical.requests.lock().unwrap().len(), 7);
+}
+
+#[tokio::test]
+async fn physical_create_rejects_cross_tenant_template_before_native_call() {
+    let physical = Physical::default();
+    let definition = definition("physical_document_issuance");
+    let instance = start(
+        &definition,
+        json!({"physical_document": {
+            "country_code": "USA",
+            "applicant": {"name": "Example"},
+            "mrz": {"line1": "P<USA"},
+            "data_groups": {"DG1": "MQ=="}
+        }}),
+    );
+    let error = prepare_instance_start(
+        &FlowProviderRegistry {
+            credential_template: Some(Arc::new(Templates {
+                organization_id: "org-2",
+            })),
+            physical_document: Some(Arc::new(physical.clone())),
+            ..Default::default()
+        },
+        &definition,
+        instance,
+        "https://issuer.example",
+        now(),
+    )
+    .await
+    .unwrap_err();
+    assert!(error.to_string().contains("credential template binding"));
+    assert!(physical.requests.lock().unwrap().is_empty());
 }
 
 #[tokio::test]
