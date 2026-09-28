@@ -1,0 +1,42 @@
+{
+  "schema": "marty.passport-beta-batch-acceptance/v1",
+  "scope": "protected beta simulator software-route compatibility; no physical booklet claim",
+  "target": {
+    "owner": "signed passport-beta-bureau service image in the deployed beta stack",
+    "route": "POST /v1/personalization/batches",
+    "poll_route": "GET /v1/personalization/jobs/{bureau_job_id}",
+    "transport": "authenticated private in-container loopback through the inspected beta container ID"
+  },
+  "input": {
+    "minimum_jobs": 2,
+    "document_material": "synthetic, fixed-format data only",
+    "organization_id": "same tenant as the protected beta acceptance application"
+  },
+  "output": {
+    "http_status": 202,
+    "batch_status": "QUEUED",
+    "job_mapping": "exact one-to-one source job ID to distinct bureau job ID",
+    "final_job_status": "SHIPPED",
+    "tracking_prefix": "BETA-SIM-",
+    "callback_receipt_sha256": "distinct lowercase hex digest from authenticated final poll for every job"
+  },
+  "commitments": {
+    "scheme": "HMAC-SHA256",
+    "key": "new private 256-bit random key per acceptance run; never upload or log",
+    "preimage": "ASCII passport-retirement/v2:<field> followed by NUL and exact UTF-8 ID or exact HTTP body bytes",
+    "fields": ["source_job", "bureau_job", "request", "response"]
+  },
+  "published_evidence": [
+    "source_commit",
+    "stack_manifest_sha256",
+    "services_oci_reference",
+    "provider_kind=simulator",
+    "physical_claim=not_claimed",
+    "request_commitment",
+    "response_commitment",
+    "submitted_job_commitments",
+    "returned_jobs",
+    "callback_receipt_sha256"
+  ],
+  "prohibited_evidence": ["commitment key", "raw job IDs", "request body", "response body", "MRZ", "data groups", "SOD", "DSC certificate", "callback body", "callback signature"]
+}
