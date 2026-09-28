@@ -109,6 +109,17 @@ mod tests {
     #[test]
     fn receipt_digest_binds_exact_body_and_signature_without_revealing_them() {
         let first = receipt_digest(br#"{"status":"SHIPPED"}"#, "vault:v1:signature-a").unwrap();
+        // Independently calculated from the language-neutral u32-length preimage.
+        let expected = "a7b40930f879a0e56291c4d52f001d17edf39d50bde153ea9ac131232121b22e";
+        assert_eq!(hex::encode(first.sha256), expected);
+        let contract: Value = serde_json::from_str(include_str!(
+            "../../../../contracts/passport-beta-bureau-behavior.json"
+        ))
+        .unwrap();
+        let vector = &contract["callback"]["signed_receipt_digest"]["test_vector"];
+        assert_eq!(vector["body_utf8"], r#"{"status":"SHIPPED"}"#);
+        assert_eq!(vector["signature_utf8"], "vault:v1:signature-a");
+        assert_eq!(vector["digest_hex"], expected);
         assert_ne!(
             first,
             receipt_digest(br#"{"status":"PRINTING"}"#, "vault:v1:signature-a").unwrap()
