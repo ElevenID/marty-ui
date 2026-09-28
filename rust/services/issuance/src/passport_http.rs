@@ -35,9 +35,9 @@ use crate::{
     passport_artifact_kms::{KmsArtifactError, KmsPassportArtifactCipher},
     passport_beta_material::{material_digests, PassportBetaMaterialDigests},
     passport_bureau::{
-        beta_batch_wire_commitment, parse_verified_webhook, BetaBatchWireEvidence, BureauClient,
-        BureauError, DocumentType, KmsWebhookVerifier, PersonalizationBatch, PersonalizationJob,
-        ProductionStatus,
+        beta_batch_wire_commitment, parse_beta_batch_mapping, parse_verified_webhook,
+        BetaBatchWireCommitments, BetaBatchWireEvidence, BureauClient, BureauError, DocumentType,
+        KmsWebhookVerifier, PersonalizationBatch, PersonalizationJob, ProductionStatus,
     },
     passport_contract::{
         application_nested_field_orders, decode_python_validated_base64, json_field_order,
@@ -1513,16 +1513,6 @@ async fn submit_beta_batch(
         if first.bureau_job_id == second.bureau_job_id {
             return Err(PassportHttpError::ConcurrentChange);
         }
-        if had_existing
-            && (first.document_type.is_none() || second.document_type.is_none())
-            && !service
-                .repository
-                .claim_beta_batch_receipt_completion(&principal, batch_id, database_precision_now())
-                .await
-                .map_err(PassportHttpError::Storage)?
-        {
-            return Err(PassportHttpError::ConcurrentChange);
-        }
         [first.bureau_job_id, second.bureau_job_id]
     } else {
         if had_existing
@@ -1588,14 +1578,56 @@ async fn submit_beta_batch(
                 .ok_or(PassportHttpError::ConcurrentChange)?,
         ]
     };
-    // The frozen batch wire omits document_type. Once its exact mapping is
-    // known, the simulator's single-job idempotency path fills that field
-    // without replacing either first-accepted bureau UUID or material digest.
+    // A single-job submit is an upsert. Prove that both batch rows already
+    // exist before allowing it to fill a missing document_type on either row.
+    let mut receipts =
+        beta_batch_receipts(&service, &principal, &jobs, &digests, &mapped_ids).await?;
+    beta_batch_first_wire_commitments(
+        &service,
+        &principal,
+        batch_id,
+        &jobs,
+        &mapped_ids,
+        &wire_key,
+    )
+    .await?;
+    if receipts
+        .iter()
+        .any(|receipt| receipt.document_type.is_none())
+        && !service
+            .repository
+            .claim_beta_batch_receipt_completion(&principal, batch_id, database_precision_now())
+            .await
+            .map_err(PassportHttpError::Storage)?
+    {
+        return Err(PassportHttpError::ConcurrentChange);
+    }
     for index in 0..2 {
-        if existing_receipts[index]
-            .as_ref()
-            .is_none_or(|receipt| receipt.document_type.is_none())
-        {
+        if receipts[index].document_type.is_none() {
+            receipts =
+                beta_batch_receipts(&service, &principal, &jobs, &digests, &mapped_ids).await?;
+            let reserved = service
+                .repository
+                .beta_batch_jobs(&principal, batch_id)
+                .await
+                .map_err(PassportHttpError::Storage)?
+                .ok_or(PassportHttpError::ConcurrentChange)?;
+            if reserved.iter().enumerate().any(|(i, job)| {
+                job.id != jobs[i].id
+                    || job.submission_batch_id != Some(batch_id)
+                    || job.submission_intent_id.is_none()
+                    || had_existing && job.submission_intent_id != jobs[i].submission_intent_id
+                    || job.submission_intent_provider_profile_id.as_deref()
+                        != Some("passport-beta-bureau")
+                    || job.submission_intent_bureau_endpoint_sha256.as_deref()
+                        != Some(endpoint_sha256.as_str())
+                    || job.bureau_job_id.is_some()
+            }) {
+                return Err(PassportHttpError::ConcurrentChange);
+            }
+            if receipts[index].document_type.is_some() {
+                continue;
+            }
             let confirmed = bureau.submit(&prepared[index]).await;
             if let Ok(confirmed) = confirmed {
                 if confirmed
@@ -1608,20 +1640,15 @@ async fn submit_beta_batch(
             }
         }
     }
-    let mut receipts = Vec::with_capacity(2);
+    receipts = beta_batch_receipts(&service, &principal, &jobs, &digests, &mapped_ids).await?;
     for index in 0..2 {
-        let receipt = service
-            .repository
-            .beta_material_receipt(&principal, &jobs[index].id)
-            .await
-            .map_err(PassportHttpError::Storage)?
-            .ok_or(PassportHttpError::ConcurrentChange)?;
-        if receipt.bureau_job_id != mapped_ids[index]
-            || !beta_receipt_matches(&receipt, &digests[index], &jobs[index].document_type)
-        {
+        if !beta_receipt_matches(
+            &receipts[index],
+            &digests[index],
+            &jobs[index].document_type,
+        ) {
             return Err(PassportHttpError::ConcurrentChange);
         }
-        receipts.push(receipt);
     }
     let reserved = service
         .repository
@@ -1954,61 +1981,121 @@ async fn beta_batch_safe_wire_response(
     jobs: &[PassportJob; 2],
     wire_key: &[u8; 32],
 ) -> Result<Json<Value>, PassportHttpError> {
+    let mapped_ids = std::array::from_fn(|index| {
+        jobs[index]
+            .bureau_job_id
+            .as_deref()
+            .and_then(|value| Uuid::parse_str(value).ok())
+    });
+    let [Some(first), Some(second)] = mapped_ids else {
+        return Err(PassportHttpError::ConcurrentChange);
+    };
+    let commitments = beta_batch_first_wire_commitments(
+        service,
+        principal,
+        batch_id,
+        jobs,
+        &[first, second],
+        wire_key,
+    )
+    .await?;
+    let mut response = beta_batch_safe_response(batch_id, jobs);
+    if let Some(commitments) = commitments {
+        response["wire_evidence_status"] = json!("verified");
+        response["http_status"] = json!(202);
+        response["batch_status"] = json!("QUEUED");
+        response["wire_commitments"] =
+            serde_json::to_value(commitments).map_err(|_| PassportHttpError::ConcurrentChange)?;
+        return Ok(Json(response));
+    }
+    response["wire_evidence_status"] = json!("unavailable");
+    Ok(Json(response))
+}
+
+async fn beta_batch_first_wire_commitments(
+    service: &PassportHttpService,
+    principal: &PassportTenantPrincipal,
+    batch_id: Uuid,
+    jobs: &[PassportJob; 2],
+    mapped_ids: &[Uuid; 2],
+    wire_key: &[u8; 32],
+) -> Result<Option<BetaBatchWireCommitments>, PassportHttpError> {
     let wire_key_sha256 = hex::encode(Sha256::digest(wire_key));
     let commitments = service
         .repository
         .beta_batch_first_wire_commitments(principal, batch_id, &wire_key_sha256)
         .await
         .map_err(PassportHttpError::Storage)?;
-    let mut response = beta_batch_safe_response(batch_id, jobs);
-    if let Some(commitments) = commitments {
-        let ciphertext = service
+    let Some(commitments) = commitments else {
+        if service
             .repository
-            .beta_batch_first_wire_ciphertext(principal, batch_id, &wire_key_sha256)
+            .beta_batch_has_first_wire(principal, batch_id)
             .await
             .map_err(PassportHttpError::Storage)?
-            .ok_or(PassportHttpError::ConcurrentChange)?;
-        let ArtifactCryptor::Kms(cipher) = service.cipher()? else {
-            return Err(PassportHttpError::ProviderUnavailable);
-        };
-        if let Ok(plaintext) = cipher
-            .decrypt_bytes(
-                principal.organization_id(),
-                &format!("passport-beta-batch-{batch_id}-wire"),
-                &ciphertext,
-            )
-            .await
         {
-            if plaintext.len() >= 9 && &plaintext[..4] == b"PBW1" {
-                let request_len = u32::from_be_bytes(plaintext[4..8].try_into().unwrap()) as usize;
-                if let Some(split) = 8usize.checked_add(request_len) {
-                    if split < plaintext.len()
-                        && beta_batch_wire_commitment(wire_key, b"request", &plaintext[8..split])
-                            == commitments.request_commitment
-                        && beta_batch_wire_commitment(wire_key, b"response", &plaintext[split..])
-                            == commitments.response_commitment
-                    {
-                        response["wire_evidence_status"] = json!("verified");
-                        response["http_status"] = json!(202);
-                        response["batch_status"] = json!("QUEUED");
-                        response["wire_commitments"] = serde_json::to_value(commitments)
-                            .map_err(|_| PassportHttpError::ConcurrentChange)?;
-                        return Ok(Json(response));
-                    }
-                }
-            }
+            return Err(PassportHttpError::ConcurrentChange);
         }
-        error!("first beta batch wire evidence could not be verified");
-    } else if service
+        return Ok(None);
+    };
+    let ciphertext = service
         .repository
-        .beta_batch_has_first_wire(principal, batch_id)
+        .beta_batch_first_wire_ciphertext(principal, batch_id, &wire_key_sha256)
         .await
         .map_err(PassportHttpError::Storage)?
+        .ok_or(PassportHttpError::ConcurrentChange)?;
+    let ArtifactCryptor::Kms(cipher) = service.cipher()? else {
+        return Err(PassportHttpError::ProviderUnavailable);
+    };
+    let plaintext = cipher
+        .decrypt_bytes(
+            principal.organization_id(),
+            &format!("passport-beta-batch-{batch_id}-wire"),
+            &ciphertext,
+        )
+        .await
+        .map_err(kms_artifact_error)?;
+    if plaintext.len() < 9 || &plaintext[..4] != b"PBW1" {
+        return Err(PassportHttpError::ConcurrentChange);
+    }
+    let request_len = u32::from_be_bytes(
+        plaintext[4..8]
+            .try_into()
+            .map_err(|_| PassportHttpError::ConcurrentChange)?,
+    ) as usize;
+    let split = 8usize
+        .checked_add(request_len)
+        .filter(|split| *split < plaintext.len())
+        .ok_or(PassportHttpError::ConcurrentChange)?;
+    let request_bytes = &plaintext[8..split];
+    let response_bytes = &plaintext[split..];
+    if beta_batch_wire_commitment(wire_key, b"request", request_bytes)
+        != commitments.request_commitment
+        || beta_batch_wire_commitment(wire_key, b"response", response_bytes)
+            != commitments.response_commitment
     {
         return Err(PassportHttpError::ConcurrentChange);
     }
-    response["wire_evidence_status"] = json!("unavailable");
-    Ok(Json(response))
+    let request: Value =
+        serde_json::from_slice(request_bytes).map_err(|_| PassportHttpError::ConcurrentChange)?;
+    if request["batch_id"] != batch_id.to_string()
+        || request["organization_id"] != principal.organization_id()
+        || request["jobs"].as_array().is_none_or(|items| {
+            items.len() != 2 || items[0]["job_id"] != jobs[0].id || items[1]["job_id"] != jobs[1].id
+        })
+        || !beta_batch_wire_response_matches(response_bytes, [&jobs[0].id, &jobs[1].id], mapped_ids)
+    {
+        return Err(PassportHttpError::ConcurrentChange);
+    }
+    Ok(Some(commitments))
+}
+
+fn beta_batch_wire_response_matches(
+    response_bytes: &[u8],
+    source_ids: [&str; 2],
+    mapped_ids: &[Uuid; 2],
+) -> bool {
+    parse_beta_batch_mapping(response_bytes, source_ids)
+        .is_ok_and(|first_response_ids| first_response_ids == *mapped_ids)
 }
 
 async fn wait_for_submission(
@@ -2036,6 +2123,59 @@ async fn wait_for_submission(
         }
         tokio::time::sleep(Duration::from_millis(100)).await;
     }
+}
+
+async fn beta_batch_receipts(
+    service: &PassportHttpService,
+    principal: &PassportTenantPrincipal,
+    jobs: &[PassportJob; 2],
+    digests: &[PassportBetaMaterialDigests; 2],
+    mapped_ids: &[Uuid; 2],
+) -> Result<[PassportBetaMaterialReceipt; 2], PassportHttpError> {
+    let receipts = [
+        service
+            .repository
+            .beta_material_receipt(principal, &jobs[0].id)
+            .await
+            .map_err(PassportHttpError::Storage)?,
+        service
+            .repository
+            .beta_material_receipt(principal, &jobs[1].id)
+            .await
+            .map_err(PassportHttpError::Storage)?,
+    ];
+    verified_beta_batch_receipts(
+        receipts,
+        [&jobs[0].document_type, &jobs[1].document_type],
+        digests,
+        mapped_ids,
+    )
+}
+
+fn verified_beta_batch_receipts(
+    receipts: [Option<PassportBetaMaterialReceipt>; 2],
+    document_types: [&str; 2],
+    digests: &[PassportBetaMaterialDigests; 2],
+    mapped_ids: &[Uuid; 2],
+) -> Result<[PassportBetaMaterialReceipt; 2], PassportHttpError> {
+    let [Some(first), Some(second)] = receipts else {
+        return Err(PassportHttpError::ConcurrentChange);
+    };
+    if first.bureau_job_id == second.bureau_job_id {
+        return Err(PassportHttpError::ConcurrentChange);
+    }
+    for (index, receipt) in [&first, &second].iter().enumerate() {
+        if receipt.bureau_job_id != mapped_ids[index]
+            || !beta_receipt_material_matches(receipt, &digests[index])
+            || receipt
+                .document_type
+                .as_deref()
+                .is_some_and(|document_type| document_type != document_types[index])
+        {
+            return Err(PassportHttpError::ConcurrentChange);
+        }
+    }
+    Ok([first, second])
 }
 
 fn beta_receipt_material_matches(
@@ -2400,6 +2540,75 @@ mod tests {
         receipt.document_type = None;
         assert!(beta_receipt_material_matches(&receipt, &digests));
         assert!(!beta_receipt_matches(&receipt, &digests, "TD1"));
+    }
+
+    #[test]
+    fn beta_batch_type_completion_requires_both_first_accepted_rows() {
+        let ids = [Uuid::new_v4(), Uuid::new_v4()];
+        let digests = std::array::from_fn(|index| PassportBetaMaterialDigests {
+            content_sha256: vec![index as u8 + 1; 32],
+            legacy_request_sha256: vec![9; 32],
+            sod_der_sha256: Some(vec![2; 32]),
+            dsc_der_sha256: Some(vec![3; 32]),
+            dsc_pem_wire_sha256: vec![4; 32],
+        });
+        let receipt = |index: usize| PassportBetaMaterialReceipt {
+            bureau_job_id: ids[index],
+            content_sha256: Some(digests[index].content_sha256.clone()),
+            sod_der_sha256: digests[index].sod_der_sha256.clone(),
+            dsc_der_sha256: digests[index].dsc_der_sha256.clone(),
+            dsc_pem_wire_sha256: Some(digests[index].dsc_pem_wire_sha256.clone()),
+            document_type: None,
+            first_accepted_at: Utc::now(),
+        };
+        assert!(matches!(
+            verified_beta_batch_receipts([Some(receipt(0)), None], ["TD1", "TD1"], &digests, &ids),
+            Err(PassportHttpError::ConcurrentChange)
+        ));
+        assert!(matches!(
+            verified_beta_batch_receipts(
+                [Some(receipt(0)), Some(receipt(0))],
+                ["TD1", "TD1"],
+                &digests,
+                &ids,
+            ),
+            Err(PassportHttpError::ConcurrentChange)
+        ));
+        assert!(verified_beta_batch_receipts(
+            [Some(receipt(0)), Some(receipt(1))],
+            ["TD1", "TD1"],
+            &digests,
+            &ids,
+        )
+        .is_ok());
+    }
+
+    #[test]
+    fn beta_batch_retained_response_must_match_receipt_mapping() {
+        let ids = [Uuid::new_v4(), Uuid::new_v4()];
+        let reversed = serde_json::to_vec(&json!({
+            "status": "QUEUED",
+            "jobs": [
+                {"job_id": "companion", "bureau_job_id": ids[1], "status": "QUEUED"},
+                {"job_id": "selected", "bureau_job_id": ids[0], "status": "QUEUED"},
+            ]
+        }))
+        .unwrap();
+        assert!(beta_batch_wire_response_matches(
+            &reversed,
+            ["selected", "companion"],
+            &ids,
+        ));
+        assert!(!beta_batch_wire_response_matches(
+            &reversed,
+            ["selected", "companion"],
+            &[ids[1], ids[0]],
+        ));
+        assert!(!beta_batch_wire_response_matches(
+            &reversed,
+            ["selected", "other"],
+            &ids,
+        ));
     }
 
     fn test_router() -> Router {

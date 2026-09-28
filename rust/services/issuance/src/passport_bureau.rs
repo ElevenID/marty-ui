@@ -564,51 +564,10 @@ impl BureauClient {
             }
             bytes.extend_from_slice(&chunk);
         }
-        let body: Value = serde_json::from_slice(&bytes)
-            .map_err(|_| BureauError::InvalidResponse("invalid beta batch JSON".into()))?;
-        if body.get("status").and_then(Value::as_str) != Some("QUEUED") {
-            return Err(BureauError::InvalidResponse(
-                "beta batch status is invalid".into(),
-            ));
-        }
-        let reported = body
-            .get("jobs")
-            .and_then(Value::as_array)
-            .filter(|jobs| jobs.len() == 2)
-            .ok_or_else(|| {
-                BureauError::InvalidResponse("beta batch mapping is incomplete".into())
-            })?;
-        let requested = batch
-            .jobs
-            .iter()
-            .map(|job| job.id.as_str())
-            .collect::<BTreeSet<_>>();
-        let mut mapping = BTreeMap::new();
-        let mut bureau_ids = BTreeSet::new();
-        for job in reported {
-            let source_id = job.get("job_id").and_then(Value::as_str).ok_or_else(|| {
-                BureauError::InvalidResponse("beta batch source identity is missing".into())
-            })?;
-            let bureau_id = job
-                .get("bureau_job_id")
-                .and_then(Value::as_str)
-                .ok_or_else(|| {
-                    BureauError::InvalidResponse("beta batch bureau identity is missing".into())
-                })?;
-            if !requested.contains(source_id)
-                || job.get("status").and_then(Value::as_str) != Some("QUEUED")
-                || !Uuid::parse_str(bureau_id).is_ok_and(|id| id.to_string() == bureau_id)
-                || mapping.insert(source_id, bureau_id).is_some()
-                || !bureau_ids.insert(bureau_id)
-            {
-                return Err(BureauError::InvalidResponse(
-                    "beta batch mapping is invalid".into(),
-                ));
-            }
-        }
+        let mapped_ids = parse_beta_batch_mapping(&bytes, [&batch.jobs[0].id, &batch.jobs[1].id])?;
         let mut outcome = batch.clone();
-        for job in &mut outcome.jobs {
-            job.bureau_job_id = Some(mapping[job.id.as_str()].to_owned());
+        for (job, bureau_id) in outcome.jobs.iter_mut().zip(mapped_ids) {
+            job.bureau_job_id = Some(bureau_id.to_string());
             job.status = ProductionStatus::Queued;
         }
         outcome.status = ProductionStatus::Queued;
@@ -657,6 +616,54 @@ impl BureauClient {
     ) -> Result<VerifiedWebhookEvent, BureauError> {
         parse_verified_webhook(self.webhook_secret(), body, signature)
     }
+}
+
+/// The strict beta parser is shared by initial transport and retained-wire
+/// verification so retries cannot accept a different source-to-bureau map.
+pub(crate) fn parse_beta_batch_mapping(
+    bytes: &[u8],
+    requested: [&str; 2],
+) -> Result<[Uuid; 2], BureauError> {
+    let body: Value = serde_json::from_slice(bytes)
+        .map_err(|_| BureauError::InvalidResponse("invalid beta batch JSON".into()))?;
+    if body.get("status").and_then(Value::as_str) != Some("QUEUED") {
+        return Err(BureauError::InvalidResponse(
+            "beta batch status is invalid".into(),
+        ));
+    }
+    let reported = body
+        .get("jobs")
+        .and_then(Value::as_array)
+        .filter(|jobs| jobs.len() == 2)
+        .ok_or_else(|| BureauError::InvalidResponse("beta batch mapping is incomplete".into()))?;
+    let requested_set = requested.into_iter().collect::<BTreeSet<_>>();
+    let mut mapping = BTreeMap::new();
+    let mut bureau_ids = BTreeSet::new();
+    for job in reported {
+        let source_id = job.get("job_id").and_then(Value::as_str).ok_or_else(|| {
+            BureauError::InvalidResponse("beta batch source identity is missing".into())
+        })?;
+        let bureau_id = job
+            .get("bureau_job_id")
+            .and_then(Value::as_str)
+            .ok_or_else(|| {
+                BureauError::InvalidResponse("beta batch bureau identity is missing".into())
+            })?;
+        let parsed_id = Uuid::parse_str(bureau_id)
+            .ok()
+            .filter(|id| id.to_string() == bureau_id)
+            .ok_or_else(|| BureauError::InvalidResponse("beta batch mapping is invalid".into()))?;
+        if !requested_set.contains(source_id)
+            || job.get("status").and_then(Value::as_str) != Some("QUEUED")
+            || mapping.insert(source_id, parsed_id).is_some()
+            || !bureau_ids.insert(bureau_id)
+        {
+            return Err(BureauError::InvalidResponse(
+                "beta batch mapping is invalid".into(),
+            ));
+        }
+    }
+    Ok([mapping[requested[0]], mapping[requested[1]]])
 }
 
 fn batch_payload(batch: &PersonalizationBatch) -> Value {

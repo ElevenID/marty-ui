@@ -39,6 +39,8 @@ struct BureauMock {
     calls: Arc<AtomicUsize>,
     clear_intent_for: Arc<Mutex<Option<String>>>,
     reject_single_for: Arc<Mutex<Option<String>>>,
+    misreport_batch_mapping: Arc<AtomicBool>,
+    omit_batch_companion_row: Arc<AtomicBool>,
 }
 
 async fn beta_bureau_submit(
@@ -117,8 +119,16 @@ async fn beta_bureau_batch_submit(
     mock.calls.fetch_add(1, Ordering::SeqCst);
     let organization = payload["organization_id"].as_str().unwrap();
     let mut mapped = Vec::new();
-    for source in payload["jobs"].as_array().unwrap() {
+    for (index, source) in payload["jobs"].as_array().unwrap().iter().enumerate() {
         let source_id = source["job_id"].as_str().unwrap();
+        if index == 1 && mock.omit_batch_companion_row.load(Ordering::SeqCst) {
+            mapped.push(json!({
+                "job_id": source_id,
+                "bureau_job_id": Uuid::new_v4(),
+                "status": "QUEUED"
+            }));
+            continue;
+        }
         let country = source["country_code"].as_str().unwrap();
         let digests = material_digests(source, organization, source_id, country, None).unwrap();
         let proposed = Uuid::new_v4();
@@ -149,6 +159,9 @@ async fn beta_bureau_batch_submit(
         };
         let id: Uuid = row.try_get("bureau_job_id").unwrap();
         mapped.push(json!({"job_id": source_id, "bureau_job_id": id, "status": "QUEUED"}));
+    }
+    if mock.misreport_batch_mapping.load(Ordering::SeqCst) {
+        mapped[0]["bureau_job_id"] = json!(Uuid::new_v4());
     }
     (
         StatusCode::ACCEPTED,
@@ -407,6 +420,8 @@ async fn beta_reconciliation_replays_only_exact_material_and_binds_first_receipt
         calls: Arc::new(AtomicUsize::new(0)),
         clear_intent_for: Arc::new(Mutex::new(None)),
         reject_single_for: Arc::new(Mutex::new(None)),
+        misreport_batch_mapping: Arc::new(AtomicBool::new(false)),
+        omit_batch_companion_row: Arc::new(AtomicBool::new(false)),
     };
     let bureau = Router::new()
         .route("/v1/personalization/jobs", post(beta_bureau_submit))
@@ -651,15 +666,29 @@ async fn beta_reconciliation_replays_only_exact_material_and_binds_first_receipt
 
 #[tokio::test]
 async fn beta_batch_http_binds_exact_flow_pair_and_replays_after_artifact_scrub() {
-    run_beta_batch_http_recovery(false).await;
+    run_beta_batch_http_recovery(false, false, false).await;
 }
 
 #[tokio::test]
 async fn beta_batch_http_completes_receipts_when_wire_kms_fails() {
-    run_beta_batch_http_recovery(true).await;
+    run_beta_batch_http_recovery(true, false, false).await;
 }
 
-async fn run_beta_batch_http_recovery(fail_wire_kms: bool) {
+#[tokio::test]
+async fn beta_batch_http_rejects_retained_response_with_wrong_receipt_mapping() {
+    run_beta_batch_http_recovery(false, true, false).await;
+}
+
+#[tokio::test]
+async fn beta_batch_http_never_creates_a_missing_batch_row_through_single_submit() {
+    run_beta_batch_http_recovery(false, false, true).await;
+}
+
+async fn run_beta_batch_http_recovery(
+    fail_wire_kms: bool,
+    misreport_batch_mapping: bool,
+    omit_batch_companion_row: bool,
+) {
     let Ok(database_url) = std::env::var("MARTY_PASSPORT_RECONCILIATION_TEST_URL") else {
         return;
     };
@@ -776,6 +805,8 @@ async fn run_beta_batch_http_recovery(fail_wire_kms: bool) {
         calls: Arc::new(AtomicUsize::new(0)),
         clear_intent_for: Arc::new(Mutex::new(None)),
         reject_single_for: Arc::new(Mutex::new(None)),
+        misreport_batch_mapping: Arc::new(AtomicBool::new(misreport_batch_mapping)),
+        omit_batch_companion_row: Arc::new(AtomicBool::new(omit_batch_companion_row)),
     };
     let bureau = Router::new()
         .route(
@@ -987,7 +1018,7 @@ async fn run_beta_batch_http_recovery(fail_wire_kms: bool) {
     *mock.reject_single_for.lock().unwrap() = Some(jobs[0].id.clone());
     let first = call(&app).await.unwrap();
     assert_eq!(first.status(), StatusCode::CONFLICT);
-    assert_eq!(mock.calls.load(Ordering::SeqCst), 3);
+    assert_eq!(mock.calls.load(Ordering::SeqCst), 1);
     let pending = repository
         .beta_batch_jobs(&principal, batch_id)
         .await
@@ -1002,6 +1033,75 @@ async fn run_beta_batch_http_recovery(fail_wire_kms: bool) {
         .unwrap()
         .document_type
         .is_none());
+    if omit_batch_companion_row {
+        assert!(repository
+            .beta_material_receipt(&principal, &pending[1].id)
+            .await
+            .unwrap()
+            .is_none());
+        sqlx::query(
+            "UPDATE issuance_service.passport_beta_batch_intents
+             SET last_send_started_at=$2 WHERE batch_id=$1",
+        )
+        .bind(batch_id)
+        .bind(Utc::now() - ChronoDuration::seconds(131))
+        .execute(&pool)
+        .await
+        .unwrap();
+        assert_eq!(call(&app).await.unwrap().status(), StatusCode::CONFLICT);
+        assert_eq!(mock.calls.load(Ordering::SeqCst), 1);
+        assert!(repository
+            .beta_material_receipt(&principal, &pending[1].id)
+            .await
+            .unwrap()
+            .is_none());
+        assert!(repository
+            .beta_batch_jobs(&principal, batch_id)
+            .await
+            .unwrap()
+            .unwrap()
+            .iter()
+            .all(|job| job.bureau_job_id.is_none() && job.submission_intent_id.is_some()));
+        kms_server.abort();
+        bureau_server.abort();
+        return;
+    }
+    if misreport_batch_mapping {
+        let retained = wire_capture.lock().unwrap().clone().unwrap();
+        let request_len = u32::from_be_bytes(retained[4..8].try_into().unwrap()) as usize;
+        let reported: Value = serde_json::from_slice(&retained[8 + request_len..]).unwrap();
+        let actual = repository
+            .beta_material_receipt(&principal, &pending[0].id)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_ne!(
+            reported["jobs"][0]["bureau_job_id"],
+            actual.bureau_job_id.to_string()
+        );
+        sqlx::query(
+            "UPDATE issuance_service.passport_beta_batch_intents
+             SET last_send_started_at=$2 WHERE batch_id=$1",
+        )
+        .bind(batch_id)
+        .bind(Utc::now() - ChronoDuration::seconds(131))
+        .execute(&pool)
+        .await
+        .unwrap();
+        let retry = call(&app).await.unwrap();
+        assert_eq!(retry.status(), StatusCode::CONFLICT);
+        assert_eq!(mock.calls.load(Ordering::SeqCst), 1);
+        let pending = repository
+            .beta_batch_jobs(&principal, batch_id)
+            .await
+            .unwrap()
+            .unwrap();
+        assert!(pending.iter().all(|job| job.bureau_job_id.is_none()));
+        assert!(pending.iter().all(|job| job.submission_intent_id.is_some()));
+        kms_server.abort();
+        bureau_server.abort();
+        return;
+    }
     sqlx::query(
         "UPDATE issuance_service.passport_beta_bureau_jobs
          SET document_type='TD1' WHERE organization_id='org-a' AND source_job_id=$1",
@@ -1013,7 +1113,7 @@ async fn run_beta_batch_http_recovery(fail_wire_kms: bool) {
     *mock.reject_single_for.lock().unwrap() = None;
     let incompatible_type = call(&app).await.unwrap();
     assert_eq!(incompatible_type.status(), StatusCode::CONFLICT);
-    assert_eq!(mock.calls.load(Ordering::SeqCst), 3);
+    assert_eq!(mock.calls.load(Ordering::SeqCst), 1);
     sqlx::query(
         "UPDATE issuance_service.passport_beta_bureau_jobs
          SET document_type='TD3' WHERE organization_id='org-a' AND source_job_id=$1",
@@ -1030,7 +1130,7 @@ async fn run_beta_batch_http_recovery(fail_wire_kms: bool) {
     .unwrap();
     let cancelled = call(&app).await.unwrap();
     assert_eq!(cancelled.status(), StatusCode::CONFLICT);
-    assert_eq!(mock.calls.load(Ordering::SeqCst), 3);
+    assert_eq!(mock.calls.load(Ordering::SeqCst), 1);
     sqlx::query(
         "UPDATE flow_service.flow_instances SET status='in_progress' WHERE id='batch-http-flow'",
     )
@@ -1039,7 +1139,7 @@ async fn run_beta_batch_http_recovery(fail_wire_kms: bool) {
     .unwrap();
     let early_retry = call(&app).await.unwrap();
     assert_eq!(early_retry.status(), StatusCode::CONFLICT);
-    assert_eq!(mock.calls.load(Ordering::SeqCst), 3);
+    assert_eq!(mock.calls.load(Ordering::SeqCst), 1);
     sqlx::query(
         "UPDATE issuance_service.passport_beta_batch_intents
          SET last_send_started_at=$2 WHERE batch_id=$1",
@@ -1062,7 +1162,7 @@ async fn run_beta_batch_http_recovery(fail_wire_kms: bool) {
     }
     let recovered = call(&app).await.unwrap();
     assert_eq!(recovered.status(), StatusCode::OK);
-    assert_eq!(mock.calls.load(Ordering::SeqCst), 4);
+    assert_eq!(mock.calls.load(Ordering::SeqCst), 2);
     let recovered_body = axum::body::to_bytes(recovered.into_body(), 64 * 1024)
         .await
         .unwrap();
@@ -1159,7 +1259,7 @@ async fn run_beta_batch_http_recovery(fail_wire_kms: bool) {
     .unwrap();
     let mixed = call(&app).await.unwrap();
     assert_eq!(mixed.status(), StatusCode::OK);
-    assert_eq!(mock.calls.load(Ordering::SeqCst), 4);
+    assert_eq!(mock.calls.load(Ordering::SeqCst), 2);
     let rebound = repository
         .beta_batch_jobs(&principal, batch_id)
         .await
@@ -1170,7 +1270,7 @@ async fn run_beta_batch_http_recovery(fail_wire_kms: bool) {
     assert!(rebound.iter().all(|job| job.submission_intent_id.is_none()));
     let replay = call(&app).await.unwrap();
     assert_eq!(replay.status(), StatusCode::OK);
-    assert_eq!(mock.calls.load(Ordering::SeqCst), 4);
+    assert_eq!(mock.calls.load(Ordering::SeqCst), 2);
     for job in &bound {
         let mut patch = PassportJobPatch::new(PassportJobStatus::Active);
         patch.secure_artifact_ciphertext = Some("scrubbed-after-activation".into());
@@ -1188,7 +1288,7 @@ async fn run_beta_batch_http_recovery(fail_wire_kms: bool) {
     }
     let after_scrub = call(&app).await.unwrap();
     assert_eq!(after_scrub.status(), StatusCode::OK);
-    assert_eq!(mock.calls.load(Ordering::SeqCst), 4);
+    assert_eq!(mock.calls.load(Ordering::SeqCst), 2);
     kms_server.abort();
     bureau_server.abort();
 }
