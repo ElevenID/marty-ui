@@ -20,15 +20,26 @@ from tests.test_probe_passport_beta_chain import plan as certificate_plan
 def report(*, ready: bool = True) -> dict:
     return {
         "schema": "marty.passport-beta-acceptance/v1", "status": "blocked",
-        "release": {"signed_manifest_verified": ready, "source_commit": "a" * 40},
-        "deployment": {"release_version": "1.1.999"},
-        "runtime_images": {"gateway": {"image_id": "sha256:" + "b" * 64}},
+        "release": {"signed_manifest_verified": ready, "source_commit": "a" * 40,
+                    "stack_manifest_sha256": "b" * 64},
+        "deployment": {"release_version": "1.1.999", "provider_mode": "simulator"},
+        "runtime_images": {"gateway": {"image_id": "sha256:" + "b" * 64},
+                           "passport-beta-bureau": {"container_id": "c" * 12,
+                                                    "oci_reference": "ghcr.io/elevenid/marty-ui-oss/services@sha256:" + "d" * 64}},
         "probes": {"capabilities_http": {"verified": ready},
                    "sod_signature": {"verified": False, "evidence": None},
                    "nine_route_gateway_flow": {"verified": False, "evidence": None},
                    "physical_booklet_verified": {"verified": False, "evidence": None},
                    "production_isolation": {"verified": False, "evidence": None}},
     }
+
+
+def accepted_batch() -> dict:
+    return {"verified": True, "evidence": {
+        "provider_kind": "simulator", "physical_claim": "not_claimed",
+        "simulator_marker_verified": True, "callback_receipt_sha256": "e" * 64,
+        "callback_receipts_sha256": ["e" * 64, "f" * 64],
+    }}
 
 
 def test_keeps_partial_acceptance_blocked_after_actual_probe_functions() -> None:
@@ -65,17 +76,20 @@ def test_keeps_partial_acceptance_blocked_after_actual_probe_functions() -> None
 
     result = run(Path("beta-artifacts"), {"organization_id": "beta"}, "a" * 32,
                  collector=collect, attestor=lambda *args: True, snapshot=snapshot,
-                 drain=drain, lifecycle=lifecycle, routing=routing, flow=flow)
-    assert calls == ["collect", "routing", "snapshot", "drain", "flow", "lifecycle", "snapshot", "drain", "collect", "routing"]
+                 drain=drain, lifecycle=lifecycle, routing=routing, flow=flow,
+                 batch=lambda *args: calls.append("batch") or accepted_batch())
+    assert calls == ["collect", "routing", "snapshot", "drain", "flow", "lifecycle", "batch", "snapshot", "drain", "collect", "routing"]
     assert result["status"] == "blocked"
     assert result["probes"]["legacy_drain"]["verified"] is True
     assert result["probes"]["production_continuity_during_probe"]["verified"] is True
     assert result["probes"]["production_isolation"]["verified"] is False
     assert result["probes"]["nine_route_gateway_flow"]["verified"] is False
     assert result["probes"]["sod_signature"]["verified"] is True
-    assert result["probes"]["nine_route_gateway_flow"]["evidence"]["missing"] == [
-        "signed_provider_webhook", "executed_physical_document_flow",
-    ]
+    assert result["probes"]["physical_bureau_batch"]["verified"] is True
+    assert result["probes"]["signed_bureau_callback"]["verified"] is True
+    assert result["physical_claim"] == "not_claimed"
+    assert result["probes"]["physical_claim_boundary"]["evidence"]["booklet_verified"] is False
+    assert result["probes"]["nine_route_gateway_flow"]["evidence"]["missing"] == ["executed_physical_document_flow"]
     assert result["probes"]["physical_booklet_verified"]["verified"] is False
 
 
@@ -120,6 +134,7 @@ def test_governed_chain_runs_with_complete_inputs_and_stays_blocked() -> None:
         flow=lambda owner: {"verified": True, "evidence": {"unsigned_webhook_http_status": 422,
                                                            "unsigned_webhook_owner": owner,
                                                            "signature_denial_verified": True}},
+        batch=lambda *args: accepted_batch(),
         certificate_plan=certificate_plan(), csca_session="csca-session",
         dsc_session="dsc-session", chain=chain,
     )

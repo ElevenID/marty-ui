@@ -18,6 +18,7 @@ if __package__:
         ChainProbeError, exercise as exercise_chain, validate_plan, validate_sessions,
     )
     from .probe_passport_beta_flow import FlowProbeError, exercise as exercise_flow
+    from .probe_passport_beta_batch import BatchProbeError, exercise as exercise_batch
     from .probe_passport_beta_host import (
         HostProbeError, assert_production_unchanged, beta_legacy_drain, beta_native_route_ownership,
         production_snapshot,
@@ -31,6 +32,7 @@ else:
         ChainProbeError, exercise as exercise_chain, validate_plan, validate_sessions,
     )
     from probe_passport_beta_flow import FlowProbeError, exercise as exercise_flow
+    from probe_passport_beta_batch import BatchProbeError, exercise as exercise_batch
     from probe_passport_beta_host import (
         HostProbeError, assert_production_unchanged, beta_legacy_drain, beta_native_route_ownership,
         production_snapshot,
@@ -53,10 +55,13 @@ def run(
     chain: Callable[..., dict[str, Any]] = exercise_chain,
     routing: Callable[[dict[str, dict[str, Any]], dict[str, Any] | None], dict[str, Any]] = beta_native_route_ownership,
     flow: Callable[[str], dict[str, Any]] = exercise_flow,
+    batch: Callable[..., dict[str, Any]] = exercise_batch,
 ) -> dict[str, Any]:
     report = collector(artifact_dir, api_key=api_key, attest=attestor)
     require(report.get("status") == "blocked" and report.get("release", {}).get("signed_manifest_verified") is True, "Official beta release is not authenticated")
     require(report.get("probes", {}).get("capabilities_http", {}).get("verified") is True, "Managed issuer capability is not ready")
+    require(report.get("deployment", {}).get("provider_mode") == "simulator",
+            "Beta software-route acceptance requires the Marty simulator")
     chain_requested = any(value is not None for value in (certificate_plan, csca_session, dsc_session))
     if chain_requested:
         require(isinstance(certificate_plan, dict) and bool(csca_session) and bool(dsc_session),
@@ -66,6 +71,9 @@ def run(
         require(certificate_plan["organization_id"] == application.get("organization_id")
                 and certificate_plan["dsc"]["dsc_issuer_did"] == application.get("issuer_did"),
                 "Certificate plan does not match the passport application")
+    require(isinstance(application.get("organization_id"), str)
+            and bool(application["organization_id"]),
+            "Beta acceptance application has no organization identity")
     route_ownership = routing(report["runtime_images"], report.get("provider_ingress_runtime_image"))
     route_evidence = route_ownership.get("evidence")
     webhook_owner = route_evidence.get("webhook_owner") if isinstance(route_evidence, dict) else None
@@ -82,6 +90,29 @@ def run(
                 and flow_evidence.get("signature_denial_verified") is True,
                 "Beta Flow and webhook probe did not verify")
         lifecycle_result = lifecycle(application, api_key)
+        bureau = report["runtime_images"].get("passport-beta-bureau")
+        require(isinstance(bureau, dict)
+                and all(isinstance(bureau.get(key), str)
+                        for key in ("container_id", "oci_reference")),
+                "Inspected beta simulator is missing")
+        batch_result = batch(
+            application["organization_id"], bureau["container_id"],
+            report["release"]["source_commit"], report["release"]["stack_manifest_sha256"],
+            bureau["oci_reference"],
+        )
+        batch_evidence = batch_result.get("evidence") if isinstance(batch_result, dict) else None
+        require(isinstance(batch_result, dict) and batch_result.get("verified") is True
+                and isinstance(batch_evidence, dict)
+                and batch_evidence.get("provider_kind") == "simulator"
+                and batch_evidence.get("physical_claim") == "not_claimed"
+                and batch_evidence.get("simulator_marker_verified") is True
+                and isinstance(batch_evidence.get("callback_receipts_sha256"), list)
+                and len(batch_evidence["callback_receipts_sha256"]) >= 2
+                and all(isinstance(value, str) and SHA256.fullmatch(value) is not None
+                        for value in batch_evidence["callback_receipts_sha256"])
+                and batch_evidence.get("callback_receipt_sha256")
+                == batch_evidence["callback_receipts_sha256"][0],
+                "Live beta simulator batch and signed callback receipt did not verify")
         chain_result = None
         if chain_requested:
             chain_result = chain(certificate_plan, csca_session, dsc_session)
@@ -110,12 +141,25 @@ def run(
     }}
     report["probes"]["beta_native_route_ownership"] = route_ownership
     report["probes"]["flow_capability_and_webhook_denial"] = flow_result
+    report["probes"]["physical_bureau_batch"] = batch_result
+    report["physical_claim"] = "not_claimed"
+    report["probes"]["physical_claim_boundary"] = {"verified": True, "evidence": {
+        "physical_claim": "not_claimed", "booklet_verified": False,
+        "provider_kind": "simulator",
+    }}
+    report["probes"]["signed_bureau_callback"] = {"verified": True, "evidence": {
+        "provider_kind": "simulator", "physical_claim": "not_claimed",
+        "unsigned_signature_denied": True,
+        "callback_receipts_sha256": batch_evidence["callback_receipts_sha256"],
+        "accepted_by_native_callback": True,
+    }}
     report["probes"]["nine_route_gateway_flow"] = {"verified": False, "evidence": {
         "capabilities_http": report["probes"]["capabilities_http"].get("evidence"),
         "application_lifecycle": lifecycle_result.get("evidence"),
         "flow_and_webhook_denial": flow_result.get("evidence"),
         "native_route_ownership": route_ownership.get("evidence"),
-        "missing": ["signed_provider_webhook", "executed_physical_document_flow"],
+        "signed_simulator_callback": report["probes"]["signed_bureau_callback"]["evidence"],
+        "missing": ["executed_physical_document_flow"],
     }}
     if chain_result is not None:
         report["probes"]["managed_csca_dsc_chain"] = chain_result
@@ -148,7 +192,7 @@ def main() -> int:
             dsc_session=os.environ.get("PASSPORT_ACCEPTANCE_DSC_OPERATOR_COOKIE"),
         )
         args.output.write_text(json.dumps(report, indent=2, sort_keys=True) + "\n", encoding="utf-8")
-    except (EvidenceError, ProbeError, ChainProbeError, FlowProbeError, HostProbeError, OSError) as exc:
+    except (EvidenceError, ProbeError, ChainProbeError, FlowProbeError, BatchProbeError, HostProbeError, OSError) as exc:
         args.output.write_text(json.dumps({"schema": "marty.passport-beta-acceptance/v1", "status": "blocked", "blocker": str(exc)}, indent=2) + "\n", encoding="utf-8")
         parser.exit(1, f"Passport beta acceptance blocked: {exc}\n")
     print(f"Wrote blocked passport beta acceptance evidence: {args.output}")
