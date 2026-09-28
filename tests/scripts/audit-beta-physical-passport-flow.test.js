@@ -93,6 +93,13 @@ function fixture() {
         job_id: flow.job_id, sod_dsc_certificate_sha256: sha('4'),
       }),
       sod_signature: probe({ sod_sha256: sha('1'), dsc_certificate_sha256: sha('4'), job_id: flow.job_id }),
+      simulator_material_receipt: probe({
+        tenant_and_job_binding: true,
+        first_accepted_sod_der_matches_native: true,
+        first_accepted_dsc_der_matches_selected_chain: true,
+        first_accepted_dsc_pem_wire_matches_selected_chain: true,
+        source_job_id_commitment: sha('2'), bureau_job_id_commitment: sha('8'),
+      }),
       nine_route_gateway_flow: probe(flow),
       physical_bureau_submission: probe({
         provider_kind: 'simulator', physical_claim: 'not_claimed',
@@ -144,6 +151,9 @@ test('D-12 preliminary report requires exact simulator lineage and job proof', (
       (value) => { value.probes.sod_signature.evidence.sod_sha256 = 'bad'; },
       (value) => { value.probes.managed_csca_dsc_chain.evidence.job_id = 'other-job'; },
       (value) => { value.probes.sod_signature.evidence.dsc_certificate_sha256 = sha('5'); },
+      (value) => { value.probes.simulator_material_receipt.evidence.first_accepted_sod_der_matches_native = false; },
+      (value) => { value.probes.simulator_material_receipt.evidence.source_job_id_commitment = sha('9'); },
+      (value) => { value.probes.simulator_material_receipt.evidence.bureau_job_id_commitment = sha('9'); },
       (value) => { value.probes.nine_route_gateway_flow.evidence.routes.pop(); },
       (value) => { value.probes.nine_route_gateway_flow.evidence.completed_steps = 8; },
       (value) => { value.probes.nine_route_gateway_flow.evidence.ordered_steps.reverse(); },

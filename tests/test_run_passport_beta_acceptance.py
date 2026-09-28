@@ -48,8 +48,9 @@ def test_keeps_partial_acceptance_blocked_after_actual_probe_functions() -> None
         calls.append("drain")
         return {"verified": True, "evidence": {"in_flight_jobs": 0, "legacy_or_unknown_artifacts": 0}}
 
-    def lifecycle(*args: object) -> dict:
+    def lifecycle(*args: object, on_submission) -> dict:
         calls.append("lifecycle")
+        on_submission("org-a", "source-job", "bureau-job", "f" * 64)
         return {"verified": True, "evidence": {"routes": [], "sod_signature_verified": True,
                                                 "sod_sha256": "f" * 64}}
 
@@ -65,9 +66,16 @@ def test_keeps_partial_acceptance_blocked_after_actual_probe_functions() -> None
                                                "unsigned_webhook_owner": owner,
                                                "signature_denial_verified": True}}
 
-    def chain(*args: object) -> dict:
+    def chain(*args: object, on_dsc_material) -> dict:
         calls.append("chain")
+        on_dsc_material("b" * 64, "c" * 64)
         return {"verified": True, "evidence": {"dsc_certificate_sha256": "b" * 64}}
+
+    receipt_arguments = []
+
+    def material_receipt(*args: object) -> dict:
+        receipt_arguments.append(args)
+        return {"verified": True, "evidence": {"tenant_and_job_binding": True}}
 
     plan = certificate_plan()
     result = run(Path("beta-artifacts"), {"organization_id": plan["organization_id"],
@@ -75,7 +83,8 @@ def test_keeps_partial_acceptance_blocked_after_actual_probe_functions() -> None
                  collector=collect, attestor=lambda *args: True, snapshot=snapshot,
                  drain=drain, lifecycle=lifecycle, routing=routing, flow=flow,
                  certificate_plan=plan, csca_session="csca-session",
-                 dsc_session="dsc-session", chain=chain)
+                 dsc_session="dsc-session", chain=chain,
+                 material_receipt=material_receipt)
     assert calls == ["collect", "routing", "snapshot", "drain", "chain", "flow", "lifecycle", "snapshot", "drain", "collect", "routing"]
     assert result["status"] == "blocked"
     assert result["probes"]["legacy_drain"]["verified"] is True
@@ -83,6 +92,10 @@ def test_keeps_partial_acceptance_blocked_after_actual_probe_functions() -> None
     assert result["probes"]["production_isolation"]["verified"] is False
     assert result["probes"]["nine_route_gateway_flow"]["verified"] is False
     assert result["probes"]["sod_signature"]["verified"] is True
+    assert result["probes"]["simulator_material_receipt"]["verified"] is True
+    assert receipt_arguments == [("org-a", "source-job", "bureau-job", "f" * 64,
+                                  "b" * 64, "c" * 64, b"a" * 32)]
+    assert "source-job" not in str(result) and "bureau-job" not in str(result)
     assert result["probes"]["nine_route_gateway_flow"]["evidence"]["missing"] == [
         "signed_simulator_webhook", "executed_simulator_flow",
     ]
@@ -145,14 +158,17 @@ def test_governed_chain_runs_with_complete_inputs_and_stays_blocked() -> None:
         result["probes"]["managed_csca_dsc_chain"] = {"verified": False, "evidence": None}
         return result
 
-    def chain(plan: dict, csca: str, dsc: str) -> dict:
+    def chain(plan: dict, csca: str, dsc: str, *, on_dsc_material) -> dict:
         calls.append("chain")
         assert (plan, csca, dsc) == (certificate_plan(), "csca-session", "dsc-session")
-        return {"verified": True, "evidence": {"csca_certificate_sha256": "b" * 64}}
+        on_dsc_material("b" * 64, "c" * 64)
+        return {"verified": True, "evidence": {"csca_certificate_sha256": "b" * 64,
+                                               "dsc_certificate_sha256": "b" * 64}}
 
-    def lifecycle(*args: object) -> dict:
+    def lifecycle(*args: object, on_submission) -> dict:
         calls.append("lifecycle")
         assert "chain" in calls
+        on_submission("org-a", "source-job", "bureau-job", "f" * 64)
         return {"verified": True, "evidence": {"routes": [],
                                                 "sod_signature_verified": True,
                                                 "sod_sha256": "f" * 64}}
@@ -169,6 +185,7 @@ def test_governed_chain_runs_with_complete_inputs_and_stays_blocked() -> None:
                                                            "signature_denial_verified": True}},
         certificate_plan=certificate_plan(), csca_session="csca-session",
         dsc_session="dsc-session", chain=chain,
+        material_receipt=lambda *args: {"verified": True, "evidence": {"tenant_and_job_binding": True}},
     )
     assert calls == ["collect", "chain", "lifecycle", "collect"]
     assert result["probes"]["managed_csca_dsc_chain"]["verified"] is True
@@ -186,7 +203,7 @@ def test_failed_governed_chain_cannot_create_a_passport_job() -> None:
             snapshot=lambda: {"sha256": "c" * 64, "container_counts": {}},
             drain=lambda: {"verified": True, "evidence": {"in_flight_jobs": 0}},
             routing=lambda *args: {"verified": True, "evidence": {"webhook_owner": "issuance-native"}},
-            chain=lambda *args: {"verified": False, "evidence": None},
+            chain=lambda *args, **kwargs: {"verified": False, "evidence": None},
             flow=lambda *args: pytest.fail("Flow probe must wait for the selected chain"),
             lifecycle=lambda *args: pytest.fail("Passport lifecycle must wait for the selected chain"),
             certificate_plan=certificate_plan(),

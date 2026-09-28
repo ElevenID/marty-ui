@@ -48,6 +48,7 @@ commit and rejects self-hosted signer provenance. It requires authenticated `gh`
 access to the release repository. The following probe keys
 remain unverified until protected acceptance runs execute and publish exact
 artifact lineage: `managed_csca_dsc_chain`, `sod_signature`,
+`simulator_material_receipt`,
 `nine_route_gateway_flow`, `packaged_image`, `physical_bureau_submission`,
 `physical_bureau_batch`, `signed_bureau_callback`, `legacy_drain`, `rollback`,
 `production_isolation`, and `recorded_demo`. The two `physical_bureau_*` names
@@ -106,6 +107,14 @@ key or asserted user identity. Evidence contains certificate and DID hashes, nev
 session cookies or certificate bodies. Partial ceremony input fails before
 any application or certificate mutation. If no ceremony input exists, the
 `managed_csca_dsc_chain` probe remains false.
+
+After native submission, the protected runner reads the private beta simulator
+row for the same tenant, source job, and bureau job. It compares the first
+accepted decoded SOD and parsed DSC hashes with the native SOD and the
+preselected governed DSC, and checks the exact DSC PEM wire hash. The first
+receipt is immutable across replay. Legacy rows or malformed synthetic
+material cannot satisfy this probe. The uploaded report contains only match
+results and API-key HMAC job commitments, not raw material or receipt digests.
 
 The production snapshot proves continuity **during this acceptance run**. It
 does not replace the deployment wrapper's before/after production comparison.

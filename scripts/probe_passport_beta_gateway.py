@@ -66,6 +66,7 @@ def exercise(
     max_polls: int = 90,
     poll_interval_seconds: float = 10,
     sleep: Callable[[float], None] = time.sleep,
+    on_submission: Callable[[str, str, str, str], None] | None = None,
 ) -> dict[str, Any]:
     organization_id = application.get("organization_id")
     issuer_did = application.get("issuer_did")
@@ -116,6 +117,8 @@ def exercise(
     bureau_job_id = submitted.get("bureau_job_id")
     if not isinstance(bureau_job_id, str) or not bureau_job_id:
         raise ProbeError("Bureau submission has no durable job identity")
+    if on_submission is not None:
+        on_submission(organization_id, job_id, bureau_job_id, sod["sod_sha256"])
     status_body = None
     for poll_number in range(max_polls):
         status_body = call("GET", base + "/production-status", None, 200)

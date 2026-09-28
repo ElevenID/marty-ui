@@ -53,7 +53,9 @@ def gateway(*, wrong_tenant: bool = False, no_quality: bool = False,
 
 def test_exercises_lifecycle_but_does_not_claim_nine_routes_or_physical_booklet() -> None:
     calls, request = gateway()
-    result = exercise(APPLICATION, KEY, request=request, poll_interval_seconds=0)
+    submitted = []
+    result = exercise(APPLICATION, KEY, request=request, poll_interval_seconds=0,
+                      on_submission=lambda *details: submitted.append(details))
     assert result["verified"] is True
     assert len(calls) == 7
     assert [call[0] for call in calls] == ["POST", "POST", "POST", "POST", "GET", "POST", "POST"]
@@ -61,6 +63,7 @@ def test_exercises_lifecycle_but_does_not_claim_nine_routes_or_physical_booklet(
     assert calls[5][2] == {"passed": True, "failure_codes": []}
     assert result["evidence"]["sod_sha256"] == "f" * 64
     assert result["evidence"]["sod_signature_verified"] is True
+    assert submitted == [("beta-org", "job-1", "bureau-1", "f" * 64)]
     assert result["evidence"]["routes"][-1]["job_status"] == "ACTIVE"
     assert "physical_booklet_verified" not in result
     assert "nine_route_gateway_flow" not in result

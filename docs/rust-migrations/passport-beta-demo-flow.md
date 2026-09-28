@@ -15,7 +15,8 @@ itself requires `recorded_demo`. A protected main workflow named
 It must attest the official signed stack, exact beta deployment manifests,
 distinct managed issuer profiles, same-job SOD, nine Rust routes and completed
 Flow steps, two-job simulator batch and selected job commitment, signed native
-callback, physical claim boundary, and separate unsigned and
+callback, physical claim boundary, the private first-accepted simulator
+SOD/DSC receipt for that same job, and separate unsigned and
 foreign-organization callback denials. It must include separately captured,
 privacy-scanned uncut unsigned and foreign callback videos with hashes in the
 preliminary report, plus two matching privacy-scan JSON artifacts whose digests
@@ -49,3 +50,5 @@ other beta and supported-consumer probes pass.
 The preliminary workflow, full signed callback/rollback producer, D-12
 publication inputs, and final demo receipt producer are still outstanding.
 No beta recording or YouTube upload has occurred under this plan.
+The disposable model rehearses the stack and does not replace this live beta
+recording or its protected preliminary receipt.

@@ -20,7 +20,7 @@ if __package__:
     from .probe_passport_beta_flow import FlowProbeError, exercise as exercise_flow
     from .probe_passport_beta_host import (
         HostProbeError, assert_production_unchanged, beta_legacy_drain, beta_native_route_ownership,
-        production_snapshot,
+        beta_material_receipt, production_snapshot,
     )
 else:
     from collect_passport_beta_acceptance import (
@@ -33,7 +33,7 @@ else:
     from probe_passport_beta_flow import FlowProbeError, exercise as exercise_flow
     from probe_passport_beta_host import (
         HostProbeError, assert_production_unchanged, beta_legacy_drain, beta_native_route_ownership,
-        production_snapshot,
+        beta_material_receipt, production_snapshot,
     )
 
 
@@ -53,6 +53,7 @@ def run(
     chain: Callable[..., dict[str, Any]] = exercise_chain,
     routing: Callable[[dict[str, dict[str, Any]], dict[str, Any] | None], dict[str, Any]] = beta_native_route_ownership,
     flow: Callable[[str], dict[str, Any]] = exercise_flow,
+    material_receipt: Callable[..., dict[str, Any]] = beta_material_receipt,
 ) -> dict[str, Any]:
     report = collector(artifact_dir, api_key=api_key, attest=attestor)
     require(report.get("status") == "blocked" and report.get("release", {}).get("signed_manifest_verified") is True, "Official beta release is not authenticated")
@@ -81,17 +82,34 @@ def run(
             "Beta native route ownership did not verify")
     before_production = snapshot()
     before_drain = drain()
+    selected_dsc: dict[str, str] = {}
+    receipt_result: dict[str, Any] | None = None
+
+    def capture_dsc(der_sha256: str, pem_wire_sha256: str) -> None:
+        selected_dsc.update(der_sha256=der_sha256, pem_wire_sha256=pem_wire_sha256)
+
+    def compare_submission(org: str, source_job: str, bureau_job: str, sod_sha256: str) -> None:
+        nonlocal receipt_result
+        require(org == application["organization_id"] and len(selected_dsc) == 2,
+                "Selected DSC material is unavailable for the simulator receipt")
+        receipt_result = material_receipt(org, source_job, bureau_job, sod_sha256,
+                                          selected_dsc["der_sha256"], selected_dsc["pem_wire_sha256"],
+                                          api_key.encode("utf-8"))
+        require(receipt_result.get("verified") is True, "Simulator first accepted material receipt did not verify")
+
     try:
-        chain_result = chain(certificate_plan, csca_session, dsc_session)
-        require(chain_result.get("verified") is True and chain_result.get("evidence") is not None,
+        chain_result = chain(certificate_plan, csca_session, dsc_session, on_dsc_material=capture_dsc)
+        require(chain_result.get("verified") is True and isinstance(chain_result.get("evidence"), dict),
                 "Managed CSCA and DSC chain did not verify")
+        require(selected_dsc.get("der_sha256") == chain_result["evidence"].get("dsc_certificate_sha256"),
+                "Selected DSC material differs from the verified chain")
         flow_result = flow(webhook_owner)
         flow_evidence = flow_result.get("evidence")
         require(flow_result.get("verified") is True and isinstance(flow_evidence, dict)
                 and flow_evidence.get("unsigned_webhook_owner") == webhook_owner
                 and flow_evidence.get("signature_denial_verified") is True,
                 "Beta Flow and webhook probe did not verify")
-        lifecycle_result = lifecycle(application, api_key)
+        lifecycle_result = lifecycle(application, api_key, on_submission=compare_submission)
     finally:
         after_production = snapshot()
         production_window = assert_production_unchanged(before_production, after_production)
@@ -103,6 +121,9 @@ def run(
     require(route_ownership == routing(after["runtime_images"], after.get("provider_ingress_runtime_image")),
             "Beta native route selectors drifted during passport acceptance")
     report["probes"]["gateway_application_lifecycle"] = lifecycle_result
+    require(receipt_result is not None and receipt_result.get("verified") is True,
+            "Simulator first accepted material receipt is unavailable")
+    report["probes"]["simulator_material_receipt"] = receipt_result
     lifecycle_evidence = lifecycle_result.get("evidence")
     require(lifecycle_result.get("verified") is True and isinstance(lifecycle_evidence, dict)
             and lifecycle_evidence.get("sod_signature_verified") is True

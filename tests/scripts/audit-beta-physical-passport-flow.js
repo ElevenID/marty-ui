@@ -15,7 +15,8 @@ const BETA_ORIGIN = 'https://beta.elevenidllc.com';
 const SHA256 = /^[0-9a-f]{64}$/;
 const COMMIT = /^[0-9a-f]{40}$/;
 const REQUIRED_PROBES = [
-  'managed_csca_dsc_chain', 'sod_signature', 'nine_route_gateway_flow',
+  'managed_csca_dsc_chain', 'sod_signature', 'simulator_material_receipt',
+  'nine_route_gateway_flow',
   'physical_bureau_submission', 'physical_bureau_batch',
   'signed_bureau_callback', 'physical_claim_boundary',
   'unsigned_or_foreign_callback_denied',
@@ -191,10 +192,22 @@ function validatePreliminary(report, deployment, artifactDir) {
   const batch = report.probes.physical_bureau_batch.evidence;
   const submission = report.probes.physical_bureau_submission.evidence;
   const callback = report.probes.signed_bureau_callback.evidence;
+  const material = report.probes.simulator_material_receipt.evidence;
   const selectedBureauJobs = Array.isArray(batch.returned_jobs)
     ? batch.returned_jobs.filter((job) =>
       job?.source_job_commitment === route.source_job_commitment)
     : [];
+  requireProof(
+    material.tenant_and_job_binding === true
+    && material.first_accepted_sod_der_matches_native === true
+    && material.first_accepted_dsc_der_matches_selected_chain === true
+    && material.first_accepted_dsc_pem_wire_matches_selected_chain === true
+    && SHA256.test(material.source_job_id_commitment)
+    && SHA256.test(material.bureau_job_id_commitment)
+    && material.source_job_id_commitment === route.source_job_commitment
+    && material.bureau_job_id_commitment === batch.selected_bureau_job_commitment,
+    'First accepted simulator SOD and DSC do not match the selected passport job',
+  );
   requireProof(
     batch.provider_kind === 'simulator' && batch.physical_claim === 'not_claimed'
     && batch.native_binding_verified === true

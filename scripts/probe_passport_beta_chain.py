@@ -151,6 +151,7 @@ def exercise(
     *,
     request: Callable[[str, dict[str, Any], str], tuple[int, dict[str, Any]]] = post_beta,
     verify: Callable[[str, str], tuple[str, str]] = openssl_verify,
+    on_dsc_material: Callable[[str, str], None] | None = None,
 ) -> dict[str, Any]:
     validate_sessions(csca_session, dsc_session)
     validate_plan(plan)
@@ -184,6 +185,8 @@ def exercise(
         raise ChainProbeError("DSC chain is not PEM X.509") from exc
     if chain_pem.count("-----BEGIN CERTIFICATE-----") != 1 or ssl.PEM_cert_to_DER_cert(csca_pem) != chain_der:
         raise ChainProbeError("DSC chain does not publish the selected CSCA")
+    if on_dsc_material is not None:
+        on_dsc_material(dsc_hash, hashlib.sha256(dsc_pem.encode("utf-8")).hexdigest())
     return {"verified": True, "evidence": {
         "csca_certificate_id": certificate_id,
         "csca_certificate_sha256": csca_hash,
