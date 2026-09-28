@@ -722,6 +722,17 @@ def validate_model(
         "Disposable passport services do not use the revocation runtime",
     )
     require(
+        native.get("SIGNING_KEYS_INTERNAL_URL")
+        == "http://gateway:8000/internal/signing-keys"
+        and native.get("SIGNING_KEYS_INTERNAL_API_KEY_FILE")
+        == "/run/secrets/signing_keys_internal_api_key"
+        and "signing_keys_internal_api_key" in {
+            secret.get("source") for secret in services["issuance-native"].get("secrets", [])
+            if isinstance(secret, dict)
+        },
+        "Disposable native managed issuer signer bypasses the Gateway compatibility API",
+    )
+    require(
         isinstance(migration_env, dict)
         and migration_env.get("REDIS_URL") == services["signing-keys"]["environment"].get(
             "SIGNING_KEYS_REDIS_URL") == "redis://redis:6379/2"

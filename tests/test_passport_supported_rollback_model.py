@@ -118,6 +118,9 @@ def safe_model(root: Path) -> dict:
         {"source": "token_hmac_key"},
         {"source": "integration_secret_master_key"},
     ])
+    services["issuance-native"]["environment"]["SIGNING_KEYS_INTERNAL_URL"] = (
+        "http://gateway:8000/internal/signing-keys"
+    )
     infra = qualified_images(verify_registry=False)
     services["postgres"] = {"image": infra["postgres"], "networks": ["private"], "volumes": [
         {"type": "volume", "source": "postgres_data",

@@ -70,6 +70,15 @@ def test_real_compose_render_is_safe_but_not_accepted(
     result = validate_model(model, project, SERVICES, tmp_path)
     assert result["model_safe"] is True
     assert result["rollback_accepted"] is False
+    assert model["services"]["issuance-native"]["environment"]["SIGNING_KEYS_INTERNAL_URL"] == (
+        "http://gateway:8000/internal/signing-keys"
+    )
+    bypass = deepcopy(model)
+    bypass["services"]["issuance-native"]["environment"]["SIGNING_KEYS_INTERNAL_URL"] = (
+        "http://signing-keys:8017/internal"
+    )
+    with pytest.raises(ModelPreflightError, match="managed issuer signer bypasses"):
+        validate_model(bypass, project, SERVICES, tmp_path)
     selected = ("gateway", "flow", "issuance-native",
                 "passport-callback-signer", "passport-beta-bureau")
     for name in selected:

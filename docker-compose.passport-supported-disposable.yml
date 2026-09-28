@@ -290,7 +290,9 @@ services:
       MARTY_DB_PASSWORD_FILE: /run/secrets/marty_db_password
       BAO_ADDR: http://openbao:8200
       BAO_TOKEN_FILE: /run/secrets/bao_token
-      SIGNING_KEYS_INTERNAL_URL: http://signing-keys:8017/internal
+      # Managed DSC resolution/signing and artifact encryption share the
+      # Gateway compatibility routes, which authorize the organization scope.
+      SIGNING_KEYS_INTERNAL_URL: http://gateway:8000/internal/signing-keys
       SIGNING_KEYS_INTERNAL_API_KEY_FILE: /run/secrets/signing_keys_internal_api_key
       PERSONALIZATION_BUREAU_URL: http://passport-beta-bureau:8020
       PERSONALIZATION_BUREAU_API_KEY_FILE: /run/secrets/grpc_service_token
