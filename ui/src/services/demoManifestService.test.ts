@@ -96,6 +96,24 @@ describe('demoManifestService', () => {
     })).not.toThrow();
   });
 
+  it('reserves both the D-12 ID and digital passport slug for the pinned candidate', () => {
+    const reserved = { ...scenario, demo_id: 'D-12', slug: 'passport-digital-handoff-evidence' };
+    expect(() => validateDemoManifest({
+      ...manifest,
+      scenarios: [{ ...reserved, slug: 'passport-digital-handoff-alias' }],
+    })).toThrow('reserved D-12 ID and slug');
+    expect(() => validateDemoManifest({
+      ...manifest,
+      scenarios: [{ ...reserved, demo_id: 'D-99' }],
+    })).toThrow('reserved D-12 ID and slug');
+    expect(() => validateDemoManifest({ ...manifest, scenarios: [reserved] })).toThrow('historical release');
+    expect(() => validateDemoManifest({
+      ...manifest,
+      stack_version: '2026.08.0',
+      scenarios: [{ ...reserved, poster: { src: '/images/demos/2026.08.0/passport-digital-handoff-evidence.png' } }],
+    })).toThrow('requires MIP 0.6.0-beta.1');
+  });
+
   it('rejects a published video before the ElevenID LLC channel and release playlist are verified', () => {
     expect(() => validateDemoManifest({
       ...manifest,

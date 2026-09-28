@@ -112,6 +112,26 @@ class DemoManifestValidationTests(unittest.TestCase):
         with self.assertRaisesRegex(ManifestValidationError, "candidate cannot appear in a historical"):
             validate_manifest(manifest)
 
+    def test_reserved_d12_id_cannot_hide_under_an_alias(self):
+        for source in (self.manifest, json.loads(PORTFOLIO_MANIFEST_PATH.read_text(encoding="utf-8"))):
+            manifest = copy.deepcopy(source)
+            candidate = copy.deepcopy(manifest["scenarios"][0])
+            candidate["slug"] = "passport-digital-handoff-alias"
+            candidate["demo_id"] = "D-12"
+            manifest["scenarios"].append(candidate)
+            with self.subTest(stack_version=manifest["stack_version"]):
+                with self.assertRaisesRegex(ManifestValidationError, "candidate demo ID and slug must match"):
+                    validate_manifest(manifest)
+
+    def test_reserved_digital_slug_requires_d12_id(self):
+        manifest = json.loads(PORTFOLIO_MANIFEST_PATH.read_text(encoding="utf-8"))
+        candidate = copy.deepcopy(manifest["scenarios"][0])
+        candidate["slug"] = "passport-digital-handoff-evidence"
+        candidate["demo_id"] = "D-99"
+        manifest["scenarios"].append(candidate)
+        with self.assertRaisesRegex(ManifestValidationError, "candidate demo ID and slug must match"):
+            validate_manifest(manifest)
+
     def test_pending_deployment_draft_cannot_claim_release_evidence(self):
         manifest = copy.deepcopy(self.manifest)
         manifest["binding_state"] = "PENDING_DEPLOYMENT"

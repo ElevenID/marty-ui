@@ -65,6 +65,9 @@ PORTFOLIO_SCENARIOS = {scenario["slug"] for scenario in PORTFOLIO["scenarios"]}
 CANDIDATE_SCENARIOS = {
     scenario["slug"]: scenario for scenario in PORTFOLIO.get("candidate_scenarios", [])
 }
+CANDIDATE_SCENARIOS_BY_ID = {
+    scenario["demo_id"]: scenario for scenario in CANDIDATE_SCENARIOS.values()
+}
 PRESERVED_LEGACY_SCENARIOS = set(PORTFOLIO["preserved_legacy_scenarios"])
 SCENARIO_PUBLICATION_CHECKS = {
     "accessibility", "captions", "evidence", "links", "playback", "privacy", "thumbnail", "transcript",
@@ -225,8 +228,15 @@ def validate_manifest(manifest: dict[str, Any]) -> None:
     require(isinstance(scenarios, list) and scenarios, "scenarios cannot be empty")
     slugs = [scenario.get("slug") for scenario in scenarios]
     require(len(slugs) == len(set(slugs)), "scenario slugs must be unique")
-    for slug, candidate in CANDIDATE_SCENARIOS.items():
-        if slug in slugs:
+    for scenario in scenarios:
+        slug = scenario.get("slug")
+        demo_id = scenario.get("demo_id")
+        candidate = CANDIDATE_SCENARIOS.get(slug) or CANDIDATE_SCENARIOS_BY_ID.get(demo_id)
+        if candidate is not None:
+            require(
+                slug == candidate["slug"] and demo_id == candidate["demo_id"],
+                f"{slug}: candidate demo ID and slug must match the reserved pair",
+            )
             require(
                 not manifest["stack_version"].startswith("2026.07."),
                 f"{slug}: candidate cannot appear in a historical 2026.07 release",
