@@ -1,10 +1,11 @@
 {
   "schema": "marty.passport-beta-native-flow-batch/v1",
-  "status": "frozen behavior for a future beta-gated Rust implementation; no implementation or live acceptance is claimed",
+  "status": "frozen native behavior implemented in a draft Rust port; disposable tests pass, but deployed beta acceptance is unproven",
   "scope": "protected beta acceptance with Marty-managed issuer profiles and the non-physical passport-beta-bureau simulator; no external CA, provider, or physical booklet claim",
   "references": [
     "contracts/issuance-physical-passport-native.json:bureau_batch_provider.frozen_exchange",
-    "contracts/passport-beta-batch-acceptance.json",
+    "contracts/passport-beta-batch-acceptance.json (simulator diagnostic only)",
+    "contracts/passport-beta-native-acceptance.json (release and demo gate)",
     "contracts/passport-beta-bureau-behavior.json",
     "contracts/passport-beta-physical-flow-proof.json",
     "contracts/flow-service-behavior.json:flow_types.physical_document_issuance.steps"
@@ -25,7 +26,7 @@
     },
     "authorization": "Authenticate the operator and tenant through existing protected Gateway/native service mechanisms before loading either encrypted artifact. Caller input contains identifiers only; never accept caller-supplied SOD, DSC, MRZ, data groups, job status, or bureau UUID as authority.",
     "flow_state": "The selected Flow has completed sign_sod and is paused at submit_to_personalization. Its durable context and the native job agree on organization_id, application_id, source job ID, issuer DID, flow execution ID, selected issuer profile, and SOD digest. Reject a caller-provided matching string without the durable Flow read.",
-    "jobs": "Exactly two distinct native source jobs and application IDs, one selected Flow job and one companion job. Both are SOD_SIGNED on first dispatch, or already bound to the same bureau UUID on exact replay; both are tenant-bound and have valid encrypted artifacts. Select the same Marty-managed CSCA/DSC ceremony and issuer-profile custody evidence as the existing single-job gate. The configured Marty beta simulator bureau provider profile ID is required and must bind both jobs; it is an internal routing identity, not an external provider. No external CA is required.",
+    "jobs": "Exactly two distinct native source jobs and application IDs, one selected Flow job and one companion job. Both are SOD_SIGNED on first dispatch, or each remains bound to its own original distinct bureau UUID on exact replay; both are tenant-bound and have valid encrypted artifacts before dispatch. Retained signing provenance and first-accepted receipts prove a bound replay after artifact scrubbing. Select the same Marty-managed CSCA/DSC ceremony and issuer-profile custody evidence as the existing single-job gate. The configured Marty beta simulator bureau provider profile ID is required and must bind both jobs; it is an internal routing identity, not an external provider. No external CA is required.",
     "material": "Inside the native trust boundary, read each job's encrypted artifact and exact signed SOD DER and DSC PEM used by the submit path. Verify the SOD signature, its DSC and active organization CSCA chain, data-group hashes, generated SOD digest, selected DSC DER, and exact DSC PEM wire bytes before sending. The selected Flow and companion may have different SODs; each must match its own job. Never use the synthetic SOD or DSC fixture for this gate.",
     "before_mutation": "Reject missing, cross-tenant, duplicate, stale, unsigned, invalid-chain, inconsistent-flow, or non-simulator input before creating any bureau row. On first dispatch, re-read durable state and atomically reserve both unbound exact signed jobs with the inspected internal simulator provider profile and endpoint digest under the native concurrency guard before sending. On exact replay or partial reconciliation, verify each already-bound tuple and its first-accepted material without re-reserving that job; retain or acquire an intent for each unresolved job under the same pinned destination. No job may be re-signed or submitted elsewhere while reserved."
   },
@@ -41,7 +42,7 @@
     "job_order": "selected Flow job first and companion second for request commitment stability; response order is irrelevant",
     "source": "Build both job objects from the same native encrypted artifacts and signed material used by single submit, not from the acceptance script, Flow context, or caller-provided document fields. Preserve exact base64 SOD and UTF-8 DSC PEM wire values without re-signing between preflight and send.",
     "identity": "The top-level tenant, job ID, application ID, country code, data groups, and MRZ must equal each native job. These are the existing simulator idempotency fields; SOD and DSC are present and validated but do not change that identity digest on replay.",
-    "transport": "One private request for the two jobs; no second batch and no per-job submit before the batch response is validated. Retain existing 32 MiB simulator request limit and disabled redirects."
+    "transport": "One private request for the two jobs; no second batch and no per-job submit before the batch response is validated or both immutable first-accepted receipts prove the exact accepted pair. Only one bounded exact batch replay may follow an ambiguous outcome. Receipt-backed single-job type completion follows replay_and_failure.receipt_backed_type_completion. Retain existing 32 MiB simulator request limit and disabled redirects."
   },
   "bureau_response": {
     "http_status": 202,

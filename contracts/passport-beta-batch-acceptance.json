@@ -1,6 +1,7 @@
 {
   "schema": "marty.passport-beta-batch-acceptance/v1",
-  "scope": "protected beta simulator software-route compatibility; no physical booklet claim",
+  "status": "retained simulator diagnostic; superseded for release acceptance by passport-beta-native-acceptance.json",
+  "scope": "protected beta simulator software-route compatibility diagnostic; no selected-Flow batch, release acceptance, or physical booklet claim",
   "target": {
     "owner": "signed passport-beta-bureau service image in the deployed beta stack",
     "route": "POST /v1/personalization/batches",

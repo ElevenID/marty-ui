@@ -1,0 +1,56 @@
+{
+  "schema": "marty.passport-beta-native-acceptance/v1",
+  "status": "frozen release and recording behavior; live beta acceptance and recording remain unproven",
+  "scope": "one selected physical-document Flow job and one companion native passport job in the same real Rust-dispatched two-job batch on the aggregate beta deployment; no external CA, external bureau, or physical booklet claim",
+  "supersedes_for_release": "contracts/passport-beta-batch-acceptance.json",
+  "retained_diagnostic": "The v1 synthetic direct-simulator batch probe may continue as a compatibility diagnostic, but cannot set physical_bureau_batch, nine_route_gateway_flow, recorded_demo, or a Python-retirement gate to verified.",
+  "references": [
+    "contracts/passport-beta-native-flow-batch.json",
+    "contracts/passport-beta-physical-flow-proof.json",
+    "contracts/passport-beta-bureau-behavior.json",
+    "contracts/flow-service-behavior.json:flow_types.physical_document_issuance.steps",
+    "docs/rust-migrations/passport-beta-demo-flow.md"
+  ],
+  "runtime": {
+    "environment": "the single aggregate signed beta deployment that will be soaked and recorded; production image, routing, data, and configuration remain unchanged",
+    "provider_profile": "passport-beta-bureau is a pinned internal simulator routing profile; issuer profiles abstract Marty-managed CSCA/DSC and KMS custody",
+    "authorization": "the protected acceptance operator authenticates the tenant and supplies the separate issuance-native reconciliation operator credential; neither credential, the private wire key, nor raw document material enters published evidence",
+    "source": "prove the deployed source commit, signed stack manifest, services image digest, native Gateway/Flow/issuance ownership, simulator container, and private beta destination before the first mutation"
+  },
+  "ordered_flow": [
+    "Create the selected physical_document_issuance Flow and execute through sign_sod; read its durable tenant, instance, application, source job, issuer DID, selected issuer profile, and SOD digest. Pause before submit_to_personalization.",
+    "Create one distinct companion native application in the same tenant and generate its data groups and managed signed SOD through native routes. Its issuer profile must match the selected managed ceremony; neither job uses synthetic SOD or DSC bytes.",
+    "Choose one canonical batch UUID and retain it with the exact selected and companion application identities for every private retry. Call issuance-native POST /internal/passport/beta-batches/{batch_id}/submit with only selected_flow_instance_id, selected_application_id, and companion_application_id.",
+    "The native service verifies durable selected Flow state, both encrypted signed artifacts and issuer/KMS provenance, atomically reserves both jobs, then dispatches the selected-first pair to the pinned simulator. The protected acceptance operator never constructs or sends the simulator batch body.",
+    "Verify the native result contains the exact selected and companion source jobs, two distinct canonical bureau UUIDs, their pinned simulator profile, and tenant-bound native bindings. Repeat the same batch UUID and identities to prove idempotent mapping without a new bureau job.",
+    "Verify both immutable first-accepted content, SOD DER, DSC DER, and DSC PEM wire digests against each corresponding native signed job and managed chain, with explicit compatible document type. An absent, legacy, changed, or cross-tenant receipt fails the gate.",
+    "Resume the selected Flow submit_to_personalization step. Its existing single-submit route must observe its already bound bureau UUID without creating another simulator job. Complete the remaining Flow steps and prove durable terminal status, nine Rust-owned routes, and selected source/application/Flow/bureau identity continuity.",
+    "For each bureau UUID, observe SHIPPED, its own BETA-SIM tracking marker, and authenticated signed callback receipt after native callback acceptance; verify native production, quality, and activation. The selected callback and selected first-accepted receipt must match the selected Flow job; the companion cannot substitute for it.",
+    "Perform the frozen unsigned callback HTTP 422 and signed foreign-organization callback HTTP 404 denials against the same selected bureau job, with no selected-job state change. Capture the required separate uncut negative videos privately and privacy-scan each."
+  ],
+  "exact_wire_proof": {
+    "source": "the exact bytes sent and received by the native Rust batch transport on the first dispatch, captured inside the protected beta trust boundary; script-generated JSON, a reconstructed serializer output, or a replay response is not a substitute",
+    "private_retention": "retain the exact batch request and HTTP 202 response, source-to-bureau map, selected-first order, signed material, and a fresh secret 256-bit wire HMAC key for the run only under protected acceptance retention and access controls",
+    "public_commitment": "HMAC-SHA256 with the private run key over ASCII passport-retirement/v2:<request|response> followed by NUL and the exact respective HTTP body bytes; publish lowercase request_commitment and response_commitment only after verifying the native dispatch and both receipts",
+    "unavailable": "if native transport cannot provide first-dispatch exact wire proof, keep request_commitment, response_commitment, preliminary recording qualification, and retirement gates unverified; do not reuse the synthetic diagnostic's commitments"
+  },
+  "recovery": {
+    "ambiguous_batch": "retain the same UUID, source jobs, signed bytes, intents, pinned destination, and private wire evidence; the native route may perform only its bounded exact two-job batch replay after the durable lease. Withhold release evidence until both first-accepted receipts and native bindings prove the original pair",
+    "receipt_completion": "after both exact first-accepted rows exist, the native route may use its spaced receipt-backed single-job idempotency path solely to fill missing document_type; it cannot create a missing row or change the original bureau UUID or material digest",
+    "partial_binding": "verify the already-bound native job from retained signing provenance and its immutable receipt, then bind only the unresolved job under its intent token when its own exact first-accepted receipt exists; missing or conflicting evidence fails closed",
+    "restart": "a changed source job, tenant, destination, signed material, explicit document identity, first-accepted digest, or bureau UUID requires a fresh reviewed acceptance run and cannot be hidden by replacement jobs"
+  },
+  "public_evidence": {
+    "identity": "use the existing API-key HMAC source-job and bureau-job commitments to correlate the selected Flow, batch, first-accepted receipt, callback, nine-route trace, and recorder; raw IDs remain protected",
+    "batch": ["provider_kind=simulator", "physical_claim=not_claimed", "selected_flow_in_two_job_batch=true", "native_binding_verified=true", "native_completed_jobs=2", "first_accepted_material_verified=true", "selected_flow_callback_verified=true", "request_commitment", "response_commitment", "selected_source_job_commitment", "selected_bureau_job_commitment", "companion_source_job_commitment", "companion_bureau_job_commitment"],
+    "same_job": "nine_route_gateway_flow, physical_bureau_batch, physical_bureau_submission, simulator_material_receipt, signed_bureau_callback, managed_csca_dsc_chain, and sod_signature must each refer to the selected Flow source job and its own bureau UUID where applicable",
+    "physical_boundary": "physical_claim=not_claimed and booklet_verified=false"
+  },
+  "preliminary_recording_gate": {
+    "producer": "a protected main-branch workflow publishes passport-beta-preliminary-<run_id>.json with schema marty.passport-beta-preliminary/v1 and status qualified_for_recording only after the deployed same-job proof, signed callback, two negative callback denials, production isolation, and exact wire commitments verify",
+    "negative_media": "publish separately captured uncut unsigned and foreign-callback videos and matching passing privacy-scan JSON digests; keep raw passport material, credentials, private keys, and HMAC key out of the artifact",
+    "recorder": "the D-12 recorder verifies that exact protected preliminary run, digest, deployment, selected commitments, both negative videos and privacy scans, then records the live beta Flow and emits the sanitized report and physical-passport-issuance-evidence.webm"
+  },
+  "final_release_gate": "verify the recorder's protected run, review files, media and privacy hashes, approved ElevenID LLC YouTube channel and playlist, live publication result, source commit, stack manifest, both deployment manifest hashes, beta origin, and physical boundary before recorded_demo.verified=true; keep overall beta acceptance blocked until all supported-consumer, rollback, production-isolation, soak, and Python-retirement gates pass",
+  "prohibited_public_evidence": ["API key", "operator or service token", "wire HMAC key", "raw Flow, application, source job, bureau job, or batch ID", "unkeyed identifier hash", "raw batch request or response", "MRZ", "data groups", "SOD DER", "DSC PEM or certificate bytes", "KMS key reference", "private receipt", "callback body or signature"]
+}

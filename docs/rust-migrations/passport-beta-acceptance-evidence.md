@@ -1,5 +1,12 @@
 # Passport beta acceptance evidence
 
+`contracts/passport-beta-native-acceptance.json` is the release and D-12
+recording gate. The earlier `passport-beta-batch-acceptance.json` and its
+synthetic direct-simulator probe remain a simulator compatibility diagnostic.
+They cannot establish that the selected Flow job entered the native batch, so
+their result cannot qualify recording or Python retirement. The protected
+acceptance runner still needs to be ported to the frozen native gate.
+
 `scripts/collect_passport_beta_acceptance.py` records a bounded prerequisite
 report from an already deployed **official aggregate beta** release. Run it on
 the beta host with the deployment's artifact directory:
@@ -71,9 +78,11 @@ beta PostgreSQL for in-flight jobs, legacy or malformed artifact rows, and
 active physical-document Flows using the deployment preflight's narrow
 expired verification orphan exemption,
 executes the seven application route identities, and repeats the beta and
-production checks. Mutating requests target only beta Gateway and the
-inspected beta simulator's private batch route. The private application file
-is removed before artifact upload.
+production checks. Its current diagnostic mutates only beta Gateway and the
+inspected beta simulator. The native release gate will dispatch the batch
+through issuance-native's protected operator route, using tenant
+authentication and a separate reconciliation token. The private application
+file is removed before artifact upload.
 
 The runner also reads the three live beta containers' native routing and
 internal-auth selectors without publishing their environment. It requires
@@ -99,28 +108,32 @@ KMS signature only after native issuance accepts the signed callback and the
 status transition commits. Its authenticated private job poll returns the
 lowercase hex digest as `callback_receipt_sha256`; preexisting jobs can return
 `null`. The simulator never stores or returns the callback body or signature.
-The protected runner also creates two distinct native passport jobs through Gateway,
-generates their data groups and managed SODs, then submits those exact job identities
-to the inspected beta simulator's private batch route. It binds each returned bureau
-job ID through native single-job submission before accepting callbacks. It checks
-the one-to-one mapping, polls both jobs to `SHIPPED` with simulator tracking markers,
-requires two distinct callback receipt digests, and finishes each native job through
-quality and activation. The batch uses an explicit document type for simulator
-idempotency with native submission; the frozen Rust batch adapter's historical wire
-shape is tested separately. If a native binding fails after batch submission, the
-fresh simulator and native jobs may remain in the beta runtime. The run fails
-closed, and the nonterminal-job drain blocks cutover until the synthetic jobs
-are quarantined and remediated under the existing beta rollback procedure.
-The probe never tears down the durable `elevenid-beta` project. It publishes per-run keyed HMAC
-commitments for the exact batch request and response. Source and bureau job ID
-commitments use the acceptance API key and the frozen material-receipt preimages,
-so they can be compared across probes. The keys, raw IDs, document material,
-callback body, and signature stay out of evidence.
-The report marks `physical_bureau_batch` and its signed callback evidence
-verified only after these checks, with `physical_claim=not_claimed` and no
-booklet claim. Each returned batch job must map to its own submitted native
-job and private signed receipt; two independent callback receipts cannot
-substitute for the governed Flow job's same-job callback proof.
+The current batch diagnostic creates two separate native jobs, posts synthetic
+SOD and DSC material directly to the simulator, then binds through two native
+single submissions. This verifies simulator compatibility but cannot set the
+release `physical_bureau_batch` probe to verified. For release acceptance, the
+runner must pause the selected Flow after `sign_sod`, prepare one companion
+native job, and call the private native two-job batch route with identifiers
+only. Native code supplies both signed artifacts, dispatches the selected
+Flow job first, and binds each original bureau UUID under durable intent and
+first-accepted receipt checks. The frozen batch wire omits `document_type`;
+receipt-backed idempotent native calls may fill it after the exact pair is
+accepted. The selected Flow then resumes and observes its already bound job
+without creating another bureau job. Both jobs must reach `SHIPPED` with their
+own simulator markers and signed callback receipts before quality and
+activation. An ambiguous or partial send holds its intent and blocks
+acceptance until exact private reconciliation. The runner never tears down
+the durable `elevenid-beta` project.
+
+The release report must use keyed HMAC commitments over the exact native
+batch transport request and first-dispatch response bytes, captured inside
+the protected trust boundary. The synthetic diagnostic's wire commitments
+cannot substitute. API-key HMAC source and bureau commitments correlate the
+selected Flow, batch, material receipt, callback, route trace, and D-12
+recorder. Keys, raw IDs, document material, callback body, and signature stay
+out of published evidence. `physical_bureau_batch` and its signed callback
+evidence become verified only for this same selected job, with
+`physical_claim=not_claimed` and no booklet claim.
 
 The full run requires the managed beta CSCA and DSC ceremonies before it
 creates a passport job. The protected `beta-lifecycle` environment supplies
@@ -160,9 +173,14 @@ template/profile `references` (`application_template_id`,
 `credential_template_id`, and `delivery_destination_profile_id`), and
 synthetic `physical_document` input. The
 runner rejects issuer or profile overrides in that input before the ceremony.
-After the direct Gateway job, it executes a distinct nine-step Flow job using
-the selected DSC. That one Flow job must match its first accepted simulator
-material receipt, private signed callback receipt, and final native status.
+After the direct Gateway job, the native acceptance target executes a
+distinct selected nine-step Flow job using the selected DSC. It pauses after
+`sign_sod`, joins that same job to the two-job native batch, then completes
+the Flow against its original bureau UUID. That one Flow job must match its
+first-accepted simulator material receipt, private signed callback receipt,
+route trace, and final native status. The current runner completes this Flow
+before an unrelated synthetic batch and therefore does not yet prove the
+release target.
 The uploaded report omits raw Flow, application, source-job, bureau-job,
 applicant, MRZ, and operator-session values. A selected SOD/material match
 alone does not establish `nine_route_gateway_flow` or recording qualification.
