@@ -53,6 +53,7 @@ use crate::{
 #[derive(Clone)]
 pub struct PassportHttpService {
     keyring: PassportTenantCredentialSource,
+    internal_service_token: Option<String>,
     repository: PostgresPassportRepository,
     cipher: ArtifactAvailability,
     signer: Option<PassportSigner>,
@@ -82,6 +83,8 @@ struct SubmissionSigningProvenance {
     signing_mode: String,
     artifact_custody: String,
     issuer_did: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    issuer_profile_id: Option<String>,
     dsc_der_sha256: String,
     csca_der_sha256: String,
     validated_at: DateTime<Utc>,
@@ -113,6 +116,7 @@ impl SubmissionSigningProvenance {
             signing_mode: "managed-issuer-profile".into(),
             artifact_custody: "kms".into(),
             issuer_did,
+            issuer_profile_id: signed.issuer_profile_id.clone(),
             dsc_der_sha256: hex::encode(Sha256::digest(dsc)),
             csca_der_sha256: hex::encode(Sha256::digest(csca)),
             validated_at,
@@ -130,6 +134,7 @@ impl SubmissionSigningProvenance {
             && Self::managed_kms(job, signed, self.validated_at).is_ok_and(|actual| {
                 actual.dsc_der_sha256 == self.dsc_der_sha256
                     && actual.csca_der_sha256 == self.csca_der_sha256
+                    && actual.issuer_profile_id == self.issuer_profile_id
             })
     }
 }
@@ -302,6 +307,7 @@ impl PassportHttpService {
             signer,
             bureau,
         );
+        service.internal_service_token = config.internal_service_token.clone();
         service.bureau_provider_profile_id = native.bureau_provider_profile_id.clone();
         service.beta_reconciliation_enabled = native.beta_reconciliation_enabled;
         service.beta_reconciliation_operator_token =
@@ -359,6 +365,7 @@ impl PassportHttpService {
             .map(<[u8]>::to_vec);
         Self {
             keyring,
+            internal_service_token: None,
             repository,
             cipher,
             signer,
@@ -381,6 +388,23 @@ impl PassportHttpService {
                 header(headers, "x-api-key"),
             )
             .map_err(PassportHttpError::Auth)
+    }
+
+    fn authenticate_internal_flow(
+        &self,
+        headers: &HeaderMap,
+    ) -> Result<PassportTenantPrincipal, PassportHttpError> {
+        let principal = self.authenticate(headers)?;
+        let expected = self
+            .internal_service_token
+            .as_deref()
+            .ok_or(PassportHttpError::OperatorUnauthorized)?;
+        let supplied =
+            header(headers, "x-service-token").ok_or(PassportHttpError::OperatorUnauthorized)?;
+        if !bool::from(expected.as_bytes().ct_eq(supplied.as_bytes())) {
+            return Err(PassportHttpError::OperatorUnauthorized);
+        }
+        Ok(principal)
     }
 
     fn authenticate_beta_reconciliation_operator(
@@ -701,6 +725,10 @@ pub fn router(service: PassportHttpService) -> Router {
             post(generate_sod),
         )
         .route(
+            "/internal/passport/applications/{application_id}/generate-sod",
+            post(generate_sod_for_flow),
+        )
+        .route(
             "/v1/passport/applications/{application_id}/submit-personalization",
             post(submit_personalization),
         )
@@ -852,6 +880,24 @@ async fn generate_sod(
     headers: HeaderMap,
 ) -> Result<Json<Value>, PassportHttpError> {
     let principal = service.authenticate(&headers)?;
+    generate_sod_authenticated(service, application_id, principal, false).await
+}
+
+async fn generate_sod_for_flow(
+    State(service): State<PassportHttpService>,
+    Path(application_id): Path<String>,
+    headers: HeaderMap,
+) -> Result<Json<Value>, PassportHttpError> {
+    let principal = service.authenticate_internal_flow(&headers)?;
+    generate_sod_authenticated(service, application_id, principal, true).await
+}
+
+async fn generate_sod_authenticated(
+    service: PassportHttpService,
+    application_id: String,
+    principal: PassportTenantPrincipal,
+    include_profile_id: bool,
+) -> Result<Json<Value>, PassportHttpError> {
     let job = service.job(&principal, &application_id).await?;
     if job.bureau_job_id.is_some() || job.submission_intent_id.is_some() {
         return Err(PassportHttpError::AlreadySubmitted);
@@ -868,6 +914,11 @@ async fn generate_sod(
                     let mut response = safe(&job);
                     response["sod_sha256"] = Value::String(hash);
                     response["sod_signature_verified"] = Value::Bool(verified);
+                    if include_profile_id {
+                        if let Some(profile_id) = &signed.issuer_profile_id {
+                            response["issuer_profile_id"] = Value::String(profile_id.clone());
+                        }
+                    }
                     return Ok(Json(response));
                 }
             }
@@ -875,6 +926,7 @@ async fn generate_sod(
     }
     let (mut artifact, signed, sod_verified) = service.sign(&job).await?;
     let hash = signed_sod_sha256(&signed)?;
+    let issuer_profile_id = signed.issuer_profile_id.clone();
     artifact.signed_material = Some(signed);
     let mut patch = PassportJobPatch::new(PassportJobStatus::SodSigned);
     patch.expected_sod_sha256 = Some(job.sod_sha256.clone());
@@ -890,6 +942,11 @@ async fn generate_sod(
     let mut response = safe(&updated);
     response["sod_sha256"] = Value::String(hash);
     response["sod_signature_verified"] = Value::Bool(sod_verified);
+    if include_profile_id {
+        if let Some(profile_id) = issuer_profile_id {
+            response["issuer_profile_id"] = Value::String(profile_id);
+        }
+    }
     Ok(Json(response))
 }
 
@@ -1546,6 +1603,47 @@ mod tests {
         headers.insert("x-api-key", token.parse().unwrap());
         headers.remove("x-organization-id");
         assert!(service.authenticate(&headers).is_err());
+    }
+
+    #[tokio::test]
+    async fn private_flow_signing_requires_tenant_and_service_credentials() {
+        let pool = PgPoolOptions::new()
+            .connect_lazy("postgresql://unused:unused@127.0.0.1:5432/unused")
+            .unwrap();
+        let keyring = PassportTenantKeyring::from_json(
+            r#"{"org-1":"passport-tenant-test-key-00000000000001"}"#,
+        )
+        .unwrap();
+        let mut service = PassportHttpService::new(
+            keyring,
+            PostgresPassportRepository::new(pool),
+            None,
+            None,
+            None,
+        );
+        service.internal_service_token = Some("flow-service-test-token-00000000000001".into());
+        let mut headers = HeaderMap::new();
+        headers.insert("x-organization-id", "org-1".parse().unwrap());
+        headers.insert(
+            "x-api-key",
+            "passport-tenant-test-key-00000000000001".parse().unwrap(),
+        );
+        assert!(service.authenticate_internal_flow(&headers).is_err());
+        headers.insert("x-service-token", "wrong-flow-token".parse().unwrap());
+        assert!(service.authenticate_internal_flow(&headers).is_err());
+        headers.insert(
+            "x-service-token",
+            "flow-service-test-token-00000000000001".parse().unwrap(),
+        );
+        assert_eq!(
+            service
+                .authenticate_internal_flow(&headers)
+                .unwrap()
+                .organization_id(),
+            "org-1"
+        );
+        headers.insert("x-api-key", "wrong-tenant-key".parse().unwrap());
+        assert!(service.authenticate_internal_flow(&headers).is_err());
     }
 
     #[tokio::test]

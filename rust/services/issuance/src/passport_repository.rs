@@ -1,5 +1,7 @@
 //! Durable physical-document jobs, scoped by an authenticated passport tenant.
 
+use std::collections::BTreeSet;
+
 use chrono::{DateTime, Utc};
 use marty_passport_auth::PassportTenantPrincipal;
 use serde_json::Value;
@@ -279,9 +281,29 @@ impl PostgresPassportRepository {
             || identity.selected_job_id != jobs[0].id
             || identity.companion_job_id != jobs[1].id
             || identity.selected_flow_instance_id != jobs[0].flow_execution_id
+            || jobs
+                .iter()
+                .any(|job| job.status != "SOD_SIGNED" || job.issuer_did.is_none())
+            || jobs
+                .iter()
+                .zip(reservations)
+                .any(|(job, reservation)| job.sod_sha256.as_deref() != Some(reservation.sod_sha256))
             || reservations[0].provider_profile_id.is_none()
             || reservations[0].provider_profile_id != reservations[1].provider_profile_id
             || reservations[0].bureau_endpoint_sha256 != reservations[1].bureau_endpoint_sha256
+            || reservations.iter().any(|reservation| {
+                !reservation.signing_provenance.is_some_and(|provenance| {
+                    provenance["issuer_profile_id"]
+                        .as_str()
+                        .is_some_and(|id| !id.trim().is_empty())
+                })
+            })
+            || reservations[0]
+                .signing_provenance
+                .and_then(|provenance| provenance["issuer_profile_id"].as_str())
+                != reservations[1]
+                    .signing_provenance
+                    .and_then(|provenance| provenance["issuer_profile_id"].as_str())
         {
             return Ok(None);
         }
@@ -302,6 +324,18 @@ impl PostgresPassportRepository {
         .fetch_optional(&mut *transaction)
         .await?;
         if claimed.is_none() {
+            transaction.rollback().await?;
+            return Ok(None);
+        }
+        if !Self::selected_flow_ready_on(
+            &mut transaction,
+            principal,
+            jobs[0],
+            identity,
+            reservations[0],
+        )
+        .await?
+        {
             transaction.rollback().await?;
             return Ok(None);
         }
@@ -331,6 +365,129 @@ impl PostgresPassportRepository {
             reserved[0].take().expect("first claim succeeded"),
             reserved[1].take().expect("second claim succeeded"),
         ]))
+    }
+
+    async fn selected_flow_ready_on(
+        connection: &mut PgConnection,
+        principal: &PassportTenantPrincipal,
+        job: &PassportJob,
+        identity: &PassportBatchIdentity<'_>,
+        reservation: &PassportSubmissionReservation<'_>,
+    ) -> Result<bool, sqlx::Error> {
+        let row = sqlx::query(
+            "SELECT instance.status AS instance_status, instance.current_step_id,
+                    instance.context, instance.step_history,
+                    definition.status AS definition_status, definition.flow_type,
+                    definition.steps, definition.credential_template_id,
+                    definition.application_template_id,
+                    definition.delivery_destination_profile_id
+             FROM flow_service.flow_instances AS instance
+             JOIN flow_service.flow_definitions AS definition
+               ON definition.id=instance.flow_definition_id
+              AND definition.organization_id=instance.organization_id
+             WHERE instance.id=$1 AND instance.organization_id=$2
+             FOR SHARE OF instance, definition",
+        )
+        .bind(identity.selected_flow_instance_id)
+        .bind(principal.organization_id())
+        .fetch_optional(connection)
+        .await?;
+        let Some(row) = row else {
+            return Ok(false);
+        };
+        let instance_status: String = row.try_get("instance_status")?;
+        let definition_status: String = row.try_get("definition_status")?;
+        let flow_type: String = row.try_get("flow_type")?;
+        let current_step_id: Option<String> = row.try_get("current_step_id")?;
+        let context: Value = row.try_get("context")?;
+        let history: Value = row.try_get("step_history")?;
+        let steps: Value = row.try_get("steps")?;
+        let expected_steps = [
+            "accept_application",
+            "validate_evidence",
+            "approval_decision",
+            "generate_data_groups",
+            "sign_sod",
+            "submit_to_personalization",
+            "track_production",
+            "quality_verify",
+            "activate_credential",
+        ];
+        let mut step_ids = BTreeSet::new();
+        if !steps.as_array().is_some_and(|steps| {
+            steps.len() == expected_steps.len()
+                && steps.iter().zip(expected_steps).all(|(step, name)| {
+                    step["config"]["protocol_step"].as_str() == Some(name)
+                        && step["id"]
+                            .as_str()
+                            .is_some_and(|id| !id.is_empty() && step_ids.insert(id))
+                })
+        }) {
+            return Ok(false);
+        }
+        let step_id = |name: &str| -> Option<&str> {
+            let matches = steps
+                .as_array()?
+                .iter()
+                .filter(|step| step["config"]["protocol_step"].as_str() == Some(name))
+                .collect::<Vec<_>>();
+            (matches.len() == 1)
+                .then(|| matches[0]["id"].as_str())
+                .flatten()
+        };
+        let Some(sign_step_id) = step_id("sign_sod") else {
+            return Ok(false);
+        };
+        let Some(submit_step_id) = step_id("submit_to_personalization") else {
+            return Ok(false);
+        };
+        let projection = &context["physical_document_job"];
+        let last_history = history.as_array().and_then(|entries| entries.last());
+        Ok(instance_status == "in_progress"
+            && definition_status == "ACTIVE"
+            && flow_type == "physical_document_issuance"
+            && current_step_id.as_deref() == Some(submit_step_id)
+            && last_history.is_some_and(|entry| {
+                entry["step_id"].as_str() == Some(submit_step_id)
+                    && entry["status"].as_str() == Some("entered")
+                    && entry.get("completed_at").is_none()
+            })
+            && history.as_array().is_some_and(|entries| {
+                entries.iter().any(|entry| {
+                    entry["step_id"].as_str() == Some(sign_step_id)
+                        && flow_result_success(&entry["result"])
+                        && entry["completed_at"].as_str().is_some()
+                })
+            })
+            && flow_result_success(&context["step_results"]["sign_sod"]["result"])
+            && context["step_results"]["sign_sod"]["completed_at"]
+                .as_str()
+                .is_some()
+            && context["application_id"].as_str() == Some(job.application_id.as_str())
+            && projection["id"].as_str() == Some(job.id.as_str())
+            && projection["organization_id"].as_str() == Some(principal.organization_id())
+            && projection["flow_execution_id"].as_str() == Some(identity.selected_flow_instance_id)
+            && projection["application_id"].as_str() == Some(job.application_id.as_str())
+            && projection["issuer_did"].as_str() == job.issuer_did.as_deref()
+            && projection["issuer_profile_id"].as_str()
+                == reservation
+                    .signing_provenance
+                    .and_then(|provenance| provenance["issuer_profile_id"].as_str())
+            && projection["sod_sha256"].as_str() == Some(reservation.sod_sha256)
+            && projection["sod_signature_verified"].as_bool() == Some(true)
+            && projection["status"].as_str() == Some("SOD_SIGNED")
+            && row
+                .try_get::<Option<String>, _>("credential_template_id")?
+                .as_deref()
+                == Some(job.credential_template_id.as_str())
+            && row
+                .try_get::<Option<String>, _>("application_template_id")?
+                .as_deref()
+                == Some(job.application_template_id.as_str())
+            && row
+                .try_get::<Option<String>, _>("delivery_destination_profile_id")?
+                .as_deref()
+                == Some(job.delivery_destination_profile_id.as_str()))
     }
 
     async fn reserve_submission_on(
@@ -900,6 +1057,12 @@ pub(crate) fn fill_missing_bureau_metadata(
         tracking_fill.or(current_tracking).map(str::to_owned),
         error_fill.or(current_error).map(str::to_owned),
     ))
+}
+
+fn flow_result_success(value: &Value) -> bool {
+    value
+        .as_str()
+        .is_some_and(|result| result.trim().eq_ignore_ascii_case("success"))
 }
 
 fn row_to_job(row: &PgRow) -> Result<PassportJob, sqlx::Error> {

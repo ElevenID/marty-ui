@@ -160,6 +160,7 @@ fn signed_material() -> SignedMaterial {
         sod_der_base64: STANDARD.encode(prepared.assemble(signature.to_der().as_bytes()).unwrap()),
         dsc_cert_pem: certificate_pem(dsc_cert.der()),
         csca_cert_pem: Some(certificate_pem(csca_cert.der())),
+        issuer_profile_id: Some("issuer-profile-test".into()),
     };
     signed
         .verify_data_groups(&std::collections::BTreeMap::from([

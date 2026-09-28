@@ -33,6 +33,8 @@ pub struct SignedMaterial {
     pub dsc_cert_pem: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub csca_cert_pem: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub issuer_profile_id: Option<String>,
 }
 
 impl SignedMaterial {
@@ -205,6 +207,7 @@ fn self_signed_test_sign(
             csca.cert_pem()
                 .map_err(|_| SignerError::TestSigningFailed)?,
         ),
+        issuer_profile_id: None,
     })
 }
 
@@ -219,6 +222,7 @@ pub struct ManagedProfileSigner {
 }
 
 struct ManagedSigningContext {
+    issuer_profile_id: String,
     algorithm: SodSignatureAlgorithm,
     method_id: String,
     leaf: String,
@@ -351,6 +355,7 @@ impl ManagedProfileSigner {
             sod_der_base64: STANDARD.encode(sod),
             dsc_cert_pem: pem_certificate(&context.leaf),
             csca_cert_pem: Some(context.trusted_csca),
+            issuer_profile_id: Some(context.issuer_profile_id),
         })
     }
 
@@ -376,7 +381,13 @@ impl ManagedProfileSigner {
             })?;
         let active_csca = load_certificate_pem(&context.trusted_csca)
             .map_err(|_| SignerError::InvalidManagedMaterial)?;
-        if signed_dsc != context.certificate_der || signed_csca != active_csca {
+        if signed_dsc != context.certificate_der
+            || signed_csca != active_csca
+            || signed
+                .issuer_profile_id
+                .as_ref()
+                .is_some_and(|profile_id| profile_id != &context.issuer_profile_id)
+        {
             return Err(SignerError::InvalidManagedMaterial);
         }
         signed.verify_data_groups(data_groups)
@@ -410,6 +421,24 @@ impl ManagedProfileSigner {
         {
             return Err(SignerError::InvalidManagedMaterial);
         }
+        let top_profile_id = identity
+            .get("issuer_profile_id")
+            .and_then(Value::as_str)
+            .filter(|value| !value.trim().is_empty());
+        let nested_profile_id = identity
+            .pointer("/issuer_profile/id")
+            .and_then(Value::as_str)
+            .filter(|value| !value.trim().is_empty());
+        if top_profile_id.is_some()
+            && nested_profile_id.is_some()
+            && top_profile_id != nested_profile_id
+        {
+            return Err(SignerError::InvalidManagedMaterial);
+        }
+        let issuer_profile_id = top_profile_id
+            .or(nested_profile_id)
+            .ok_or(SignerError::InvalidManagedMaterial)?
+            .to_owned();
         let algorithm = identity
             .get("algorithm")
             .and_then(Value::as_str)
@@ -440,6 +469,7 @@ impl ManagedProfileSigner {
             &self.trust.active(organization_id).await?,
         )?;
         Ok(ManagedSigningContext {
+            issuer_profile_id,
             algorithm,
             method_id,
             leaf,
@@ -591,6 +621,7 @@ impl RemoteSigner {
                 .get("csca_cert_pem")
                 .and_then(Value::as_str)
                 .map(str::to_owned),
+            issuer_profile_id: None,
         })
     }
 }
@@ -750,7 +781,7 @@ mod tests {
                 "key_purpose": "x509_doc_signer",
                 "algorithm": "ES256",
                 "verification_method_id": "did:web:issuer.example:orgs:org-1#dsc",
-                "issuer_profile": {"credential_format": "ICAO_EMRTD"},
+                "issuer_profile": {"id": "passport-profile-1", "credential_format": "ICAO_EMRTD"},
                 "issuer_x5c": [dsc, csca]
             }))
         }
@@ -840,6 +871,10 @@ mod tests {
             .sign("USA", "org-1", "did:web:issuer.example:orgs:org-1", &groups)
             .await
             .unwrap();
+        assert_eq!(
+            signed.issuer_profile_id.as_deref(),
+            Some("passport-profile-1")
+        );
         signed.verify_data_groups(&groups).unwrap();
         signer
             .validate_existing(
@@ -859,6 +894,20 @@ mod tests {
         let mut wrong_dsc = signed.clone();
         wrong_dsc.dsc_cert_pem = state.csca_pem.clone();
         assert!(wrong_dsc.verify_data_groups(&groups).is_err());
+        let mut wrong_profile = signed.clone();
+        wrong_profile.issuer_profile_id = Some("wrong-profile".into());
+        assert!(matches!(
+            signer
+                .validate_existing(
+                    "USA",
+                    "org-1",
+                    "did:web:issuer.example:orgs:org-1",
+                    &groups,
+                    &wrong_profile,
+                )
+                .await,
+            Err(SignerError::InvalidManagedMaterial)
+        ));
         let sod = STANDARD.decode(&signed.sod_der_base64).unwrap();
         let mut tampered_sod = signed.clone();
         let mut altered_sod = sod.clone();
@@ -956,7 +1005,7 @@ mod tests {
                 "key_purpose": "x509_doc_signer",
                 "algorithm": "ES256",
                 "verification_method_id": "did:web:issuer.example:orgs:org-1#dsc",
-                "issuer_profile": {"credential_format": "ICAO_EMRTD"},
+                "issuer_profile": {"id": "passport-profile-1", "credential_format": "ICAO_EMRTD"},
                 "issuer_x5c": []
             }))
         }
@@ -991,7 +1040,7 @@ mod tests {
             "key_purpose": "x509_doc_signer",
             "algorithm": "ES256",
             "verification_method_id": "did:web:issuer.example:orgs:org-1#dsc",
-            "issuer_profile": {"credential_format": "ICAO_EMRTD"},
+            "issuer_profile": {"id": "passport-profile-1", "credential_format": "ICAO_EMRTD"},
             "issuer_x5c": ["not-reached"]
         });
         for (pointer, replacement) in [

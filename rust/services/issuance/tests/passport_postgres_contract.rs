@@ -2302,7 +2302,7 @@ async fn passport_jobs_survive_restart_without_cross_tenant_reads() {
                         delivery_destination_profile_id: "profile-destination".into(),
                         document_type: "TD1".into(),
                         country_code: "USA".into(),
-                        issuer_did: None,
+                        issuer_did: Some("did:web:issuer.example:orgs:org-a".into()),
                         secure_artifact_ciphertext: "encrypted-pair-test".into(),
                         secure_artifact_reference: format!(
                             "physical-artifact://batch-reservation-job-{suffix}"
@@ -2314,6 +2314,89 @@ async fn passport_jobs_survive_restart_without_cross_tenant_reads() {
                 .unwrap(),
         );
     }
+    for (index, job) in pair.iter_mut().enumerate() {
+        let mut signed = PassportJobPatch::new(PassportJobStatus::SodSigned);
+        signed.sod_sha256 = Some(Some(if index == 0 { "02" } else { "12" }.repeat(32)));
+        *job = profile_repository
+            .update(
+                &org_a,
+                &job.application_id,
+                &job.status,
+                &signed,
+                Utc::now(),
+            )
+            .await
+            .unwrap()
+            .unwrap();
+    }
+    sqlx::raw_sql(include_str!("../../flow/migrations/0001_flow_schema.sql"))
+        .execute(&restarted_pool)
+        .await
+        .unwrap();
+    let physical_steps = [
+        "accept_application",
+        "validate_evidence",
+        "approval_decision",
+        "generate_data_groups",
+        "sign_sod",
+        "submit_to_personalization",
+        "track_production",
+        "quality_verify",
+        "activate_credential",
+    ];
+    let flow_steps = physical_steps
+        .iter()
+        .map(|name| json!({"id": name, "config": {"protocol_step": name}}))
+        .collect::<Vec<_>>();
+    sqlx::query(
+        "INSERT INTO flow_service.flow_definitions
+         (id, organization_id, name, status, flow_type, steps,
+          credential_template_id, application_template_id,
+          delivery_destination_profile_id)
+         VALUES ('batch-flow-definition','org-a','Beta batch Flow','ACTIVE',
+                 'physical_document_issuance',$1,$2,$3,$4)",
+    )
+    .bind(json!(flow_steps))
+    .bind(&pair[0].credential_template_id)
+    .bind(&pair[0].application_template_id)
+    .bind(&pair[0].delivery_destination_profile_id)
+    .execute(&restarted_pool)
+    .await
+    .unwrap();
+    let flow_context = json!({
+        "application_id": pair[0].application_id,
+        "physical_document_job": {
+            "id": pair[0].id,
+            "organization_id": "org-a",
+            "flow_execution_id": pair[0].flow_execution_id,
+            "application_id": pair[0].application_id,
+            "issuer_did": pair[0].issuer_did,
+            "issuer_profile_id": "synthetic-passport-issuer-profile",
+            "sod_sha256": pair[0].sod_sha256,
+            "sod_signature_verified": true,
+            "status": "SOD_SIGNED",
+        },
+        "step_results": {"sign_sod": {"result": " SUCCESS ", "completed_at": Utc::now().to_rfc3339()}},
+    });
+    let flow_history = json!([
+        {"step_id": "sign_sod", "status": "entered", "result": " Success ",
+         "completed_at": Utc::now().to_rfc3339()},
+        {"step_id": "submit_to_personalization", "status": "entered",
+         "entered_at": Utc::now().to_rfc3339()},
+    ]);
+    sqlx::query(
+        "INSERT INTO flow_service.flow_instances
+         (id, flow_definition_id, organization_id, status, current_step_id,
+          context, step_history)
+         VALUES ($1,'batch-flow-definition','org-a','in_progress',
+                 'submit_to_personalization',$2,$3)",
+    )
+    .bind(&pair[0].flow_execution_id)
+    .bind(&flow_context)
+    .bind(flow_history)
+    .execute(&restarted_pool)
+    .await
+    .unwrap();
     let occupied_intent = uuid::Uuid::new_v4();
     let occupied = profile_repository
         .reserve_submission(
@@ -2335,6 +2418,12 @@ async fn passport_jobs_survive_restart_without_cross_tenant_reads() {
     let first_batch_intent = uuid::Uuid::new_v4();
     let second_batch_intent = uuid::Uuid::new_v4();
     let batch_time = Utc::now();
+    let batch_signing_provenance = json!({
+        "signing_mode": "managed-issuer-profile",
+        "artifact_custody": "kms",
+        "issuer_did": "did:web:issuer.example:orgs:org-a",
+        "issuer_profile_id": "synthetic-passport-issuer-profile",
+    });
     let batch_reservations = [
         PassportSubmissionReservation {
             intent_id: first_batch_intent,
@@ -2342,7 +2431,7 @@ async fn passport_jobs_survive_restart_without_cross_tenant_reads() {
             signed_artifact_ciphertext: None,
             provider_profile_id: Some("passport-beta-bureau"),
             bureau_endpoint_sha256: &endpoint_sha256,
-            signing_provenance: None,
+            signing_provenance: Some(&batch_signing_provenance),
             now: batch_time,
         },
         PassportSubmissionReservation {
@@ -2351,7 +2440,7 @@ async fn passport_jobs_survive_restart_without_cross_tenant_reads() {
             signed_artifact_ciphertext: None,
             provider_profile_id: Some("passport-beta-bureau"),
             bureau_endpoint_sha256: &endpoint_sha256,
-            signing_provenance: None,
+            signing_provenance: Some(&batch_signing_provenance),
             now: batch_time,
         },
     ];
@@ -2381,16 +2470,135 @@ async fn passport_jobs_survive_restart_without_cross_tenant_reads() {
         .unwrap()
         .submission_intent_id
         .is_none());
-    let mut release = PassportJobPatch::new(PassportJobStatus::Draft);
+    let mut release = PassportJobPatch::new(PassportJobStatus::SodSigned);
     release.expected_submission_intent_id = Some(occupied_intent);
     release.clear_submission_intent = true;
-    release.sod_sha256 = Some(None);
+    release.sod_sha256 = Some(Some("12".repeat(32)));
     let released = profile_repository
         .update(
             &org_a,
             &occupied.application_id,
             &occupied.status,
             &release,
+            Utc::now(),
+        )
+        .await
+        .unwrap()
+        .unwrap();
+    sqlx::query("UPDATE flow_service.flow_instances SET status='cancelled' WHERE id=$1")
+        .bind(&pair[0].flow_execution_id)
+        .execute(&restarted_pool)
+        .await
+        .unwrap();
+    assert!(profile_repository
+        .reserve_batch_submissions(
+            &org_a,
+            [&pair[0], &released],
+            [&batch_reservations[0], &batch_reservations[1]],
+            &batch_identity,
+        )
+        .await
+        .unwrap()
+        .is_none());
+    let premature_batch_identity_count: i64 = sqlx::query_scalar(
+        "SELECT COUNT(*) FROM issuance_service.passport_beta_batch_intents WHERE batch_id=$1",
+    )
+    .bind(batch_identity.batch_id)
+    .fetch_one(&restarted_pool)
+    .await
+    .unwrap();
+    assert_eq!(premature_batch_identity_count, 0);
+    sqlx::query("UPDATE flow_service.flow_instances SET status='in_progress' WHERE id=$1")
+        .bind(&pair[0].flow_execution_id)
+        .execute(&restarted_pool)
+        .await
+        .unwrap();
+    sqlx::query(
+        "UPDATE flow_service.flow_instances
+         SET context=jsonb_set(context::jsonb, '{physical_document_job,sod_sha256}',
+                               to_jsonb('wrong-flow-sod'::text))::json
+         WHERE id=$1",
+    )
+    .bind(&pair[0].flow_execution_id)
+    .execute(&restarted_pool)
+    .await
+    .unwrap();
+    assert!(profile_repository
+        .reserve_batch_submissions(
+            &org_a,
+            [&pair[0], &released],
+            [&batch_reservations[0], &batch_reservations[1]],
+            &batch_identity,
+        )
+        .await
+        .unwrap()
+        .is_none());
+    sqlx::query("UPDATE flow_service.flow_instances SET context=$2 WHERE id=$1")
+        .bind(&pair[0].flow_execution_id)
+        .bind(&flow_context)
+        .execute(&restarted_pool)
+        .await
+        .unwrap();
+    sqlx::query(
+        "UPDATE flow_service.flow_instances
+         SET context=jsonb_set(context::jsonb, '{physical_document_job,issuer_profile_id}',
+                               to_jsonb('wrong-issuer-profile'::text))::json
+         WHERE id=$1",
+    )
+    .bind(&pair[0].flow_execution_id)
+    .execute(&restarted_pool)
+    .await
+    .unwrap();
+    assert!(profile_repository
+        .reserve_batch_submissions(
+            &org_a,
+            [&pair[0], &released],
+            [&batch_reservations[0], &batch_reservations[1]],
+            &batch_identity,
+        )
+        .await
+        .unwrap()
+        .is_none());
+    sqlx::query("UPDATE flow_service.flow_instances SET context=$2 WHERE id=$1")
+        .bind(&pair[0].flow_execution_id)
+        .bind(&flow_context)
+        .execute(&restarted_pool)
+        .await
+        .unwrap();
+    let original_selected_sod = pair[0].sod_sha256.clone();
+    let mut conflicting_sod = PassportJobPatch::new(PassportJobStatus::SodSigned);
+    conflicting_sod.expected_sod_sha256 = Some(original_selected_sod.clone());
+    conflicting_sod.sod_sha256 = Some(Some("33".repeat(32)));
+    pair[0] = profile_repository
+        .update(
+            &org_a,
+            &pair[0].application_id,
+            &pair[0].status,
+            &conflicting_sod,
+            Utc::now(),
+        )
+        .await
+        .unwrap()
+        .unwrap();
+    assert!(profile_repository
+        .reserve_batch_submissions(
+            &org_a,
+            [&pair[0], &released],
+            [&batch_reservations[0], &batch_reservations[1]],
+            &batch_identity,
+        )
+        .await
+        .unwrap()
+        .is_none());
+    let mut restore_sod = PassportJobPatch::new(PassportJobStatus::SodSigned);
+    restore_sod.expected_sod_sha256 = Some(pair[0].sod_sha256.clone());
+    restore_sod.sod_sha256 = Some(original_selected_sod);
+    pair[0] = profile_repository
+        .update(
+            &org_a,
+            &pair[0].application_id,
+            &pair[0].status,
+            &restore_sod,
             Utc::now(),
         )
         .await
@@ -2475,7 +2683,7 @@ async fn passport_jobs_survive_restart_without_cross_tenant_reads() {
                         delivery_destination_profile_id: "profile-destination".into(),
                         document_type: "TD1".into(),
                         country_code: "USA".into(),
-                        issuer_did: None,
+                        issuer_did: Some("did:web:issuer.example:orgs:org-a".into()),
                         secure_artifact_ciphertext: "encrypted-pair-test".into(),
                         secure_artifact_reference: format!(
                             "physical-artifact://batch-reservation-job-{suffix}"
@@ -2486,6 +2694,21 @@ async fn passport_jobs_survive_restart_without_cross_tenant_reads() {
                 .await
                 .unwrap(),
         );
+    }
+    for (index, job) in collision_pair.iter_mut().enumerate() {
+        let mut signed = PassportJobPatch::new(PassportJobStatus::SodSigned);
+        signed.sod_sha256 = Some(Some(if index == 0 { "02" } else { "12" }.repeat(32)));
+        *job = profile_repository
+            .update(
+                &org_a,
+                &job.application_id,
+                &job.status,
+                &signed,
+                Utc::now(),
+            )
+            .await
+            .unwrap()
+            .unwrap();
     }
     let collision_identity = PassportBatchIdentity {
         batch_id: batch_identity.batch_id,

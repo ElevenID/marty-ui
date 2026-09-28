@@ -90,6 +90,7 @@ mod tests {
             sod_der_base64: "U09E".into(),
             dsc_cert_pem: "synthetic-dsc".into(),
             csca_cert_pem: None,
+            issuer_profile_id: None,
         };
         let mut signed_artifact = artifact.clone();
         signed_artifact.signed_material = Some(signed.clone());
