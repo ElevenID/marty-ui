@@ -4,6 +4,7 @@ use chrono::{DateTime, Utc};
 use marty_passport_auth::PassportTenantPrincipal;
 use serde_json::Value;
 use sqlx::{postgres::PgRow, PgPool, Postgres, QueryBuilder, Row};
+use uuid::Uuid;
 
 use crate::passport_bureau::VerifiedWebhookEvent;
 
@@ -54,6 +55,8 @@ pub struct PassportJobPatch {
     /// Optional compare-and-swap guard for in-place SOD refreshes.
     pub expected_sod_sha256: Option<Option<String>>,
     pub expected_secure_artifact_ciphertext: Option<String>,
+    pub expected_submission_intent_id: Option<Uuid>,
+    pub clear_submission_intent: bool,
     pub sod_sha256: Option<Option<String>>,
     pub bureau_job_id: Option<Option<String>>,
     pub bureau_provider_profile_id: Option<String>,
@@ -73,6 +76,8 @@ impl PassportJobPatch {
             status,
             expected_sod_sha256: None,
             expected_secure_artifact_ciphertext: None,
+            expected_submission_intent_id: None,
+            clear_submission_intent: false,
             sod_sha256: None,
             bureau_job_id: None,
             bureau_provider_profile_id: None,
@@ -102,6 +107,15 @@ pub struct PassportJobInsert {
     pub secure_artifact_reference: String,
 }
 
+pub struct PassportSubmissionReservation<'a> {
+    pub intent_id: Uuid,
+    pub sod_sha256: &'a str,
+    pub signed_artifact_ciphertext: Option<&'a str>,
+    pub provider_profile_id: Option<&'a str>,
+    pub bureau_endpoint_sha256: &'a str,
+    pub now: DateTime<Utc>,
+}
+
 /// The ciphertext is intentionally kept out of Debug and HTTP projections.
 pub struct PassportJob {
     pub id: String,
@@ -120,6 +134,10 @@ pub struct PassportJob {
     pub sod_sha256: Option<String>,
     pub bureau_job_id: Option<String>,
     pub bureau_provider_profile_id: Option<String>,
+    pub submission_intent_id: Option<Uuid>,
+    pub submission_intent_started_at: Option<DateTime<Utc>>,
+    pub submission_intent_provider_profile_id: Option<String>,
+    pub submission_intent_bureau_endpoint_sha256: Option<String>,
     pub tracking_number: Option<String>,
     pub status: String,
     pub quality_result: Option<Value>,
@@ -195,6 +213,46 @@ impl PostgresPassportRepository {
         .transpose()
     }
 
+    /// Claim the exact signed material before an external send. A timed-out
+    /// request deliberately keeps this claim for private reconciliation.
+    pub async fn reserve_submission(
+        &self,
+        principal: &PassportTenantPrincipal,
+        job: &PassportJob,
+        reservation: &PassportSubmissionReservation<'_>,
+    ) -> Result<Option<PassportJob>, sqlx::Error> {
+        sqlx::query(
+            "UPDATE issuance_service.physical_document_jobs
+             SET submission_intent_id=$1, submission_intent_started_at=$2,
+                 submission_intent_provider_profile_id=$10,
+                 submission_intent_bureau_endpoint_sha256=$11,
+                 sod_sha256=$3,
+                 secure_artifact_ciphertext=COALESCE($4, secure_artifact_ciphertext),
+                 updated_at=$2
+             WHERE organization_id=$5 AND application_id=$6 AND status=$7
+               AND sod_sha256 IS NOT DISTINCT FROM $8
+               AND secure_artifact_ciphertext=$9
+               AND bureau_job_id IS NULL AND submission_intent_id IS NULL
+             RETURNING *",
+        )
+        .bind(reservation.intent_id)
+        .bind(reservation.now)
+        .bind(reservation.sod_sha256)
+        .bind(reservation.signed_artifact_ciphertext)
+        .bind(principal.organization_id())
+        .bind(&job.application_id)
+        .bind(&job.status)
+        .bind(&job.sod_sha256)
+        .bind(&job.secure_artifact_ciphertext)
+        .bind(reservation.provider_profile_id)
+        .bind(reservation.bureau_endpoint_sha256)
+        .fetch_optional(&self.pool)
+        .await?
+        .as_ref()
+        .map(row_to_job)
+        .transpose()
+    }
+
     pub async fn update(
         &self,
         principal: &PassportTenantPrincipal,
@@ -239,6 +297,9 @@ impl PostgresPassportRepository {
                 .push(", secure_artifact_ciphertext = ")
                 .push_bind(value);
         }
+        if patch.clear_submission_intent {
+            query.push(", submission_intent_id = NULL, submission_intent_started_at = NULL, submission_intent_provider_profile_id = NULL, submission_intent_bureau_endpoint_sha256 = NULL");
+        }
         query
             .push(" WHERE organization_id = ")
             .push_bind(principal.organization_id())
@@ -255,6 +316,13 @@ impl PostgresPassportRepository {
             query
                 .push(" AND secure_artifact_ciphertext = ")
                 .push_bind(expected);
+        }
+        if let Some(intent_id) = patch.expected_submission_intent_id {
+            query
+                .push(" AND submission_intent_id = ")
+                .push_bind(intent_id);
+        } else {
+            query.push(" AND submission_intent_id IS NULL");
         }
         if patch.bureau_job_id.is_some()
             || matches!(
@@ -493,6 +561,12 @@ fn row_to_job(row: &PgRow) -> Result<PassportJob, sqlx::Error> {
         sod_sha256: row.try_get("sod_sha256")?,
         bureau_job_id: row.try_get("bureau_job_id")?,
         bureau_provider_profile_id: row.try_get("bureau_provider_profile_id")?,
+        submission_intent_id: row.try_get("submission_intent_id")?,
+        submission_intent_started_at: row.try_get("submission_intent_started_at")?,
+        submission_intent_provider_profile_id: row
+            .try_get("submission_intent_provider_profile_id")?,
+        submission_intent_bureau_endpoint_sha256: row
+            .try_get("submission_intent_bureau_endpoint_sha256")?,
         tracking_number: row.try_get("tracking_number")?,
         status: row.try_get("status")?,
         quality_result: row.try_get("quality_result")?,

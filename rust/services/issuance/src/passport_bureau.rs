@@ -14,7 +14,7 @@ use num_bigint::BigUint;
 use reqwest::{Client, StatusCode, Url};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
-use sha2::Sha256;
+use sha2::{Digest, Sha256};
 use uuid::Uuid;
 
 const BATCH_PATH: &str = "v1/personalization/batches";
@@ -345,6 +345,11 @@ pub struct BureauClient {
 }
 
 impl BureauClient {
+    #[must_use]
+    pub fn endpoint_sha256(&self) -> String {
+        hex::encode(Sha256::digest(self.base_url.as_str().as_bytes()))
+    }
+
     pub fn new(
         base_url: &str,
         api_key: &str,
@@ -382,8 +387,11 @@ impl BureauClient {
     }
 
     pub async fn submit(&self, job: &PersonalizationJob) -> Result<SubmissionOutcome, BureauError> {
-        let response = self
-            .http
+        // Signed passport material must reach only the pinned endpoint.
+        let http = Client::builder()
+            .redirect(reqwest::redirect::Policy::none())
+            .build()?;
+        let response = http
             .post(self.endpoint("v1/personalization/jobs")?)
             .bearer_auth(&self.api_key)
             .json(&job.payload())
@@ -1231,6 +1239,48 @@ mod tests {
         assert_eq!(requests[1].0, "GET");
         assert_eq!(requests[1].1, "Bearer bureau-key");
         assert_eq!(requests[1].2["job_id"], "bureau-1");
+        server.abort();
+    }
+
+    #[tokio::test]
+    async fn single_submit_does_not_redirect_signed_material() {
+        use axum::{extract::State, routing::post, Json, Router};
+        use std::sync::{
+            atomic::{AtomicUsize, Ordering},
+            Arc,
+        };
+
+        let redirected_posts = Arc::new(AtomicUsize::new(0));
+        let app = Router::new()
+            .route(
+                "/v1/personalization/jobs",
+                post(|| async {
+                    (
+                        StatusCode::TEMPORARY_REDIRECT,
+                        [("location", "/redirect-target")],
+                    )
+                }),
+            )
+            .route(
+                "/redirect-target",
+                post(|State(hits): State<Arc<AtomicUsize>>| async move {
+                    hits.fetch_add(1, Ordering::SeqCst);
+                    (
+                        StatusCode::ACCEPTED,
+                        Json(json!({"bureau_job_id":"wrong-target"})),
+                    )
+                }),
+            )
+            .with_state(redirected_posts.clone());
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let server = tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+        let client = BureauClient::new(&format!("http://{address}"), "bureau-key", None).unwrap();
+
+        let result = client.submit(&job(DocumentType::TD1)).await.unwrap();
+        assert_eq!(result.status, ProductionStatus::Failed);
+        assert!(result.bureau_job_id.is_none());
+        assert_eq!(redirected_posts.load(Ordering::SeqCst), 0);
         server.abort();
     }
 }

@@ -24,7 +24,8 @@ use marty_issuance_service::passport_provider_ingress::{
     router as provider_ingress_router, ProviderIngressState,
 };
 use marty_issuance_service::passport_repository::{
-    PassportJobInsert, PassportJobPatch, PassportJobStatus, PostgresPassportRepository,
+    PassportJobInsert, PassportJobPatch, PassportJobStatus, PassportSubmissionReservation,
+    PostgresPassportRepository,
 };
 #[cfg(feature = "passport-self-signed-test")]
 use marty_issuance_service::passport_signer::PassportSigner;
@@ -207,6 +208,7 @@ async fn passport_http_request(
 }
 
 async fn exercise_native_passport_http(
+    pool: &sqlx::PgPool,
     repository: PostgresPassportRepository,
     keyring: PassportTenantKeyring,
     cipher: PassportArtifactCipher,
@@ -219,6 +221,9 @@ async fn exercise_native_passport_http(
     struct MockState {
         observed: Arc<Mutex<Vec<Value>>>,
         submit_gate: SubmitGate,
+        reject_next_submit: Arc<AtomicBool>,
+        server_error_next_submit: Arc<AtomicBool>,
+        omit_next_bureau_id: Arc<AtomicBool>,
         sign_calls: Arc<AtomicUsize>,
         sign_gate: SignGate,
     }
@@ -250,6 +255,21 @@ async fn exercise_native_passport_http(
             entered.send(()).unwrap();
             release.await.unwrap();
         }
+        if state.reject_next_submit.swap(false, Ordering::SeqCst) {
+            return (
+                StatusCode::UNPROCESSABLE_ENTITY,
+                Json(json!({"private":"bureau failure"})),
+            );
+        }
+        if state.server_error_next_submit.swap(false, Ordering::SeqCst) {
+            return (
+                StatusCode::SERVICE_UNAVAILABLE,
+                Json(json!({"private":"bureau failure"})),
+            );
+        }
+        if state.omit_next_bureau_id.swap(false, Ordering::SeqCst) {
+            return (StatusCode::ACCEPTED, Json(json!({"status":"QUEUED"})));
+        }
         (
             StatusCode::ACCEPTED,
             Json(json!({"bureau_job_id":"bureau-http", "status":"QUEUED"})),
@@ -274,6 +294,9 @@ async fn exercise_native_passport_http(
     let sign_calls = Arc::new(AtomicUsize::new(0));
     let sign_gate: SignGate = Arc::new(Mutex::new(None));
     let submit_gate: SubmitGate = Arc::new(Mutex::new(None));
+    let reject_next_submit = Arc::new(AtomicBool::new(false));
+    let server_error_next_submit = Arc::new(AtomicBool::new(false));
+    let omit_next_bureau_id = Arc::new(AtomicBool::new(false));
     let stale_poll = Arc::new(AtomicBool::new(false));
     let poll_state = stale_poll.clone();
     let same_rank_poll = Arc::new(AtomicBool::new(false));
@@ -310,6 +333,9 @@ async fn exercise_native_passport_http(
         .with_state(MockState {
             observed: observed.clone(),
             submit_gate: submit_gate.clone(),
+            reject_next_submit: reject_next_submit.clone(),
+            server_error_next_submit: server_error_next_submit.clone(),
+            omit_next_bureau_id: omit_next_bureau_id.clone(),
             sign_calls: sign_calls.clone(),
             sign_gate: sign_gate.clone(),
         });
@@ -471,28 +497,34 @@ async fn exercise_native_passport_http(
         .await
     });
     entered_rx.await.unwrap();
-    let (status, submitted) = passport_http_request(
-        &app,
-        "POST",
-        &format!("{path}/submit-personalization"),
-        Some("org-a"),
-        Some(key_a),
-        json!({}),
-        None,
-    )
-    .await;
-    assert_eq!(status, StatusCode::OK);
-    assert_eq!(submitted["status"], "SUBMITTED");
+    let retry_app = app.clone();
+    let retry_path = format!("{path}/submit-personalization");
+    let retry_key = key_a.to_owned();
+    let concurrent_retry = tokio::spawn(async move {
+        passport_http_request(
+            &retry_app,
+            "POST",
+            &retry_path,
+            Some("org-a"),
+            Some(&retry_key),
+            json!({}),
+            None,
+        )
+        .await
+    });
+    tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+    assert!(!concurrent_retry.is_finished());
     release_tx.send(()).unwrap();
     let (status, raced_submit) = pending_submit.await.unwrap();
     assert_eq!(status, StatusCode::OK);
-    assert_eq!(raced_submit["bureau_job_id"], submitted["bureau_job_id"]);
     assert_eq!(raced_submit["status"], "SUBMITTED");
-    assert_eq!(observed.lock().unwrap().len(), 2);
+    let (status, submitted) = concurrent_retry.await.unwrap();
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(submitted["bureau_job_id"], raced_submit["bureau_job_id"]);
+    assert_eq!(observed.lock().unwrap().len(), 1);
     assert_eq!(observed.lock().unwrap()[0]["document_type"], "TD1");
     assert_eq!(observed.lock().unwrap()[0]["sod_der_base64"], "U09E");
-    assert_eq!(observed.lock().unwrap()[1]["sod_der_base64"], "U09E");
-    assert_eq!(submitted["sod_sha256"], signed["sod_sha256"]);
+    assert_eq!(raced_submit["sod_sha256"], signed["sod_sha256"]);
     assert_eq!(sign_calls.load(Ordering::SeqCst), 1);
     let (status, _) = passport_http_request(
         &app,
@@ -544,7 +576,7 @@ async fn exercise_native_passport_http(
     assert_eq!(repeated["status"], "READY_FOR_ACTIVATION");
     assert_eq!(repeated["bureau_job_id"], "bureau-http");
     assert_eq!(repeated, polled);
-    assert_eq!(observed.lock().unwrap().len(), 2);
+    assert_eq!(observed.lock().unwrap().len(), 1);
     let webhook = json!({"organization_id":"org-a", "bureau_job_id":"bureau-http", "status":"SHIPPED", "tracking_number":"webhook-tracking"});
     let (status, _) = passport_http_request(
         &app,
@@ -636,7 +668,7 @@ async fn exercise_native_passport_http(
     assert_eq!(status, StatusCode::OK);
     assert_eq!(repeated_active["status"], "ACTIVE");
     assert_eq!(repeated_active, active);
-    assert_eq!(observed.lock().unwrap().len(), 2);
+    assert_eq!(observed.lock().unwrap().len(), 1);
     let job = repository
         .get(
             &keyring.authenticate(Some("org-a"), Some(key_a)).unwrap(),
@@ -986,6 +1018,285 @@ async fn exercise_native_passport_http(
         .unwrap()
         .unwrap();
     assert_eq!(successes[0].1["sod_sha256"], raced_job.sod_sha256.unwrap());
+
+    // A rejected direct submit has no bureau binding and must keep the
+    // historical ability to sign again on retry.
+    let (status, retry_created) = passport_http_request(
+        &app,
+        "POST",
+        "/v1/passport/applications",
+        Some("org-a"),
+        Some(key_a),
+        json!({"organization_id":"org-a", "flow_execution_id":"retry-direct",
+            "application_template_id":"template-http", "credential_template_id":"credential-http",
+            "delivery_destination_profile_id":"destination-http", "document_type":"TD1",
+            "country_code":"USA", "applicant":{}, "mrz":{"line_1":"P<TEST","line_2":"SYNTHETIC"},
+            "data_groups":{"DG1":"YQ==","DG2":"Yg=="}}),
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED);
+    let retry_path = format!(
+        "/v1/passport/applications/{}/submit-personalization",
+        retry_created["application_id"].as_str().unwrap()
+    );
+    let retry_job = repository
+        .get(
+            &principal,
+            retry_created["application_id"].as_str().unwrap(),
+        )
+        .await
+        .unwrap()
+        .unwrap();
+    let retry_artifact = cipher
+        .decrypt(&retry_job.secure_artifact_ciphertext)
+        .unwrap();
+    assert_eq!(
+        retry_artifact.data_groups.get("DG1").map(String::as_str),
+        Some("YQ==")
+    );
+    assert!(retry_artifact.numbered_data_groups().is_ok());
+    reject_next_submit.store(true, Ordering::SeqCst);
+    let (status, rejected) = passport_http_request(
+        &app,
+        "POST",
+        &retry_path,
+        Some("org-a"),
+        Some(key_a),
+        json!({}),
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::CONFLICT, "{rejected}");
+    assert!(rejected["bureau_job_id"].is_null());
+    let rejected_job = repository
+        .get(
+            &principal,
+            retry_created["application_id"].as_str().unwrap(),
+        )
+        .await
+        .unwrap()
+        .unwrap();
+    assert!(rejected_job.submission_intent_id.is_some());
+    assert!(rejected_job.sod_sha256.is_some());
+    assert!(cipher
+        .decrypt(&rejected_job.secure_artifact_ciphertext)
+        .unwrap()
+        .signed_material
+        .is_some());
+
+    let (status, server_error_created) = passport_http_request(
+        &app,
+        "POST",
+        "/v1/passport/applications",
+        Some("org-a"),
+        Some(key_a),
+        json!({"organization_id":"org-a", "flow_execution_id":"server-error-submit",
+            "application_template_id":"template-http", "credential_template_id":"credential-http",
+            "delivery_destination_profile_id":"destination-http", "document_type":"TD1",
+            "country_code":"USA", "applicant":{}, "mrz":{"line_1":"P<TEST","line_2":"SYNTHETIC"},
+            "data_groups":{"DG1":"YQ==","DG2":"Yg=="}}),
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED);
+    let server_error_id = server_error_created["application_id"].as_str().unwrap();
+    let server_error_path =
+        format!("/v1/passport/applications/{server_error_id}/submit-personalization");
+    server_error_next_submit.store(true, Ordering::SeqCst);
+    assert_eq!(
+        passport_http_request(
+            &app,
+            "POST",
+            &server_error_path,
+            Some("org-a"),
+            Some(key_a),
+            json!({}),
+            None,
+        )
+        .await
+        .0,
+        StatusCode::CONFLICT
+    );
+    let server_error_job = repository
+        .get(&principal, server_error_id)
+        .await
+        .unwrap()
+        .unwrap();
+    assert!(server_error_job.submission_intent_id.is_some());
+    assert!(server_error_job.sod_sha256.is_some());
+    assert!(
+        Utc::now().signed_duration_since(server_error_job.submission_intent_started_at.unwrap())
+            < chrono::Duration::seconds(35),
+        "intent started at {:?}, now {:?}",
+        server_error_job.submission_intent_started_at,
+        Utc::now()
+    );
+    let bureau_calls_before_retry = observed.lock().unwrap().len();
+    let wait_result = tokio::time::timeout(
+        std::time::Duration::from_millis(200),
+        passport_http_request(
+            &app,
+            "POST",
+            &server_error_path,
+            Some("org-a"),
+            Some(key_a),
+            json!({}),
+            None,
+        ),
+    )
+    .await;
+    assert!(wait_result.is_err(), "{wait_result:?}");
+    assert_eq!(observed.lock().unwrap().len(), bureau_calls_before_retry);
+
+    // A success response without an identity is ambiguous: keep the claim
+    // and exact material so a later private reconciliation can prove it.
+    let (status, ambiguous_created) = passport_http_request(
+        &app,
+        "POST",
+        "/v1/passport/applications",
+        Some("org-a"),
+        Some(key_a),
+        json!({"organization_id":"org-a", "flow_execution_id":"ambiguous-submit",
+            "application_template_id":"template-http", "credential_template_id":"credential-http",
+            "delivery_destination_profile_id":"destination-http", "document_type":"TD1",
+            "country_code":"USA", "applicant":{}, "mrz":{"line_1":"P<TEST","line_2":"SYNTHETIC"},
+            "data_groups":{"DG1":"YQ==","DG2":"Yg=="}}),
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED);
+    let ambiguous_id = ambiguous_created["application_id"].as_str().unwrap();
+    let ambiguous_path = format!("/v1/passport/applications/{ambiguous_id}");
+    omit_next_bureau_id.store(true, Ordering::SeqCst);
+    assert_eq!(
+        passport_http_request(
+            &app,
+            "POST",
+            &format!("{ambiguous_path}/submit-personalization"),
+            Some("org-a"),
+            Some(key_a),
+            json!({}),
+            None,
+        )
+        .await
+        .0,
+        StatusCode::CONFLICT
+    );
+    let ambiguous_job = repository
+        .get(&principal, ambiguous_id)
+        .await
+        .unwrap()
+        .unwrap();
+    assert!(ambiguous_job.submission_intent_id.is_some());
+    assert!(ambiguous_job.bureau_job_id.is_none());
+    assert!(ambiguous_job.sod_sha256.is_some());
+    assert!(cipher
+        .decrypt(&ambiguous_job.secure_artifact_ciphertext)
+        .unwrap()
+        .signed_material
+        .is_some());
+    for operation in ["generate-data-groups", "generate-sod"] {
+        assert_eq!(
+            passport_http_request(
+                &app,
+                "POST",
+                &format!("{ambiguous_path}/{operation}"),
+                Some("org-a"),
+                Some(key_a),
+                json!({}),
+                None,
+            )
+            .await
+            .0,
+            StatusCode::CONFLICT
+        );
+    }
+
+    // A reserved submission blocks both native and older writers from
+    // replacing the accepted bureau's exact signed material.
+    let (status, race_created) = passport_http_request(
+        &app,
+        "POST",
+        "/v1/passport/applications",
+        Some("org-a"),
+        Some(key_a),
+        json!({"organization_id":"org-a", "flow_execution_id":"race-submit",
+            "application_template_id":"template-http", "credential_template_id":"credential-http",
+            "delivery_destination_profile_id":"destination-http", "document_type":"TD1",
+            "country_code":"USA", "applicant":{}, "mrz":{"line_1":"P<TEST","line_2":"SYNTHETIC"},
+            "data_groups":{"DG1":"YQ==","DG2":"Yg=="}}),
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED);
+    let race_id = race_created["application_id"].as_str().unwrap();
+    let race_base = format!("/v1/passport/applications/{race_id}");
+    let (status, _) = passport_http_request(
+        &app,
+        "POST",
+        &format!("{race_base}/generate-sod"),
+        Some("org-a"),
+        Some(key_a),
+        json!({}),
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    let (entered_tx, entered_rx) = oneshot::channel();
+    let (release_tx, release_rx) = oneshot::channel();
+    *submit_gate.lock().unwrap() = Some((entered_tx, release_rx));
+    let pending_app = app.clone();
+    let pending_key = key_a.to_owned();
+    let pending_path = format!("{race_base}/submit-personalization");
+    let pending = tokio::spawn(async move {
+        passport_http_request(
+            &pending_app,
+            "POST",
+            &pending_path,
+            Some("org-a"),
+            Some(&pending_key),
+            json!({}),
+            None,
+        )
+        .await
+    });
+    entered_rx.await.unwrap();
+    let before = repository.get(&principal, race_id).await.unwrap().unwrap();
+    assert!(before.submission_intent_id.is_some());
+    let mut replacement = cipher.decrypt(&before.secure_artifact_ciphertext).unwrap();
+    replacement.signed_material.as_mut().unwrap().sod_der_base64 = STANDARD.encode(b"SOD-refresh");
+    let new_hash = hex::encode(Sha256::digest(b"SOD-refresh"));
+    let new_ciphertext = cipher.encrypt(&replacement).unwrap();
+    let mut refresh = PassportJobPatch::new(PassportJobStatus::SodSigned);
+    refresh.expected_sod_sha256 = Some(before.sod_sha256.clone());
+    refresh.expected_secure_artifact_ciphertext = Some(before.secure_artifact_ciphertext.clone());
+    refresh.sod_sha256 = Some(Some(new_hash.clone()));
+    refresh.secure_artifact_ciphertext = Some(new_ciphertext.clone());
+    assert!(repository
+        .update(&principal, race_id, &before.status, &refresh, Utc::now())
+        .await
+        .unwrap()
+        .is_none());
+    let old_writer = sqlx::query(
+        "UPDATE issuance_service.physical_document_jobs SET sod_sha256=$1 WHERE application_id=$2",
+    )
+    .bind(&new_hash)
+    .bind(race_id)
+    .execute(pool)
+    .await;
+    assert!(old_writer.is_err());
+    release_tx.send(()).unwrap();
+    assert_eq!(pending.await.unwrap().0, StatusCode::OK);
+    let after = repository.get(&principal, race_id).await.unwrap().unwrap();
+    assert_eq!(after.sod_sha256, before.sod_sha256);
+    assert_eq!(
+        after.secure_artifact_ciphertext,
+        before.secure_artifact_ciphertext
+    );
+    assert_eq!(after.bureau_job_id.as_deref(), Some("bureau-http"));
+    assert!(after.submission_intent_id.is_none());
+
     #[cfg(feature = "passport-self-signed-test")]
     {
         let local = passport_router(PassportHttpService::new(
@@ -1878,7 +2189,54 @@ async fn passport_jobs_survive_restart_without_cross_tenant_reads() {
         &[expected_internal.to_vec()]
     );
     mock_server.abort();
-    exercise_native_passport_http(restarted, keyring, cipher, &key_a, &key_b).await;
+    exercise_native_passport_http(&pool, restarted, keyring, cipher, &key_a, &key_b).await;
+    let profile_repository = PostgresPassportRepository::new(restarted_pool.clone());
+    let profile_job = profile_repository
+        .insert(
+            &org_a,
+            &PassportJobInsert {
+                id: "profile-intent-job".into(),
+                application_id: "profile-intent-application".into(),
+                flow_execution_id: "profile-intent-flow".into(),
+                application_template_id: "profile-template".into(),
+                credential_template_id: "profile-credential".into(),
+                revocation_profile_id: None,
+                delivery_destination_profile_id: "profile-destination".into(),
+                document_type: "TD1".into(),
+                country_code: "USA".into(),
+                issuer_did: None,
+                secure_artifact_ciphertext: "encrypted-test".into(),
+                secure_artifact_reference: "physical-artifact://profile-intent-job".into(),
+            },
+            Utc::now(),
+        )
+        .await
+        .unwrap();
+    let endpoint_sha256 = "a".repeat(64);
+    let pinned = profile_repository
+        .reserve_submission(
+            &org_a,
+            &profile_job,
+            &PassportSubmissionReservation {
+                intent_id: uuid::Uuid::new_v4(),
+                sod_sha256: "b",
+                signed_artifact_ciphertext: None,
+                provider_profile_id: Some("passport-beta-bureau"),
+                bureau_endpoint_sha256: &endpoint_sha256,
+                now: Utc::now(),
+            },
+        )
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(
+        pinned.submission_intent_provider_profile_id.as_deref(),
+        Some("passport-beta-bureau")
+    );
+    assert_eq!(
+        pinned.submission_intent_bureau_endpoint_sha256.as_deref(),
+        Some(endpoint_sha256.as_str())
+    );
     #[cfg(feature = "passport-self-signed-test")]
     if let Ok(packaged_url) = std::env::var("MARTY_PASSPORT_PACKAGED_TEST_URL") {
         exercise_packaged_self_signed_test_mode(&packaged_url, &key_a).await;
@@ -1912,6 +2270,14 @@ async fn passport_jobs_survive_restart_without_cross_tenant_reads() {
     .await
     .unwrap();
     assert!(legacy_provider.is_none());
+    let legacy_intent: (Option<uuid::Uuid>, Option<chrono::DateTime<Utc>>) = sqlx::query_as(
+        "SELECT submission_intent_id, submission_intent_started_at
+         FROM issuance_service.physical_document_jobs WHERE id='released-python-job'",
+    )
+    .fetch_one(&restarted_pool)
+    .await
+    .unwrap();
+    assert_eq!(legacy_intent, (None, None));
     sqlx::query(
         "UPDATE issuance_service.physical_document_jobs
          SET bureau_job_id='bureau-a' WHERE id='released-python-job'",

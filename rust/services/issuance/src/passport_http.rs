@@ -16,6 +16,7 @@ use marty_passport_auth::{
 };
 use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
+use std::time::Duration;
 use tracing::error;
 use uuid::Uuid;
 
@@ -34,8 +35,8 @@ use crate::{
     },
     passport_repository::{
         fill_missing_bureau_metadata, should_apply_bureau_status, PassportJob, PassportJobInsert,
-        PassportJobPatch, PassportJobStatus, PassportWebhookRepositoryError,
-        PostgresPassportRepository,
+        PassportJobPatch, PassportJobStatus, PassportSubmissionReservation,
+        PassportWebhookRepositoryError, PostgresPassportRepository,
     },
     passport_signer::{
         ManagedProfileSigner, PassportSigner, RemoteSigner, SignedMaterial, SignerError,
@@ -719,7 +720,7 @@ async fn generate_data_groups(
 ) -> Result<Json<Value>, PassportHttpError> {
     let principal = service.authenticate(&headers)?;
     let job = service.job(&principal, &application_id).await?;
-    if job.bureau_job_id.is_some() {
+    if job.bureau_job_id.is_some() || job.submission_intent_id.is_some() {
         return Err(PassportHttpError::AlreadySubmitted);
     }
     let groups = service
@@ -749,7 +750,7 @@ async fn generate_sod(
 ) -> Result<Json<Value>, PassportHttpError> {
     let principal = service.authenticate(&headers)?;
     let job = service.job(&principal, &application_id).await?;
-    if job.bureau_job_id.is_some() {
+    if job.bureau_job_id.is_some() || job.submission_intent_id.is_some() {
         return Err(PassportHttpError::AlreadySubmitted);
     }
     if job.status == PassportJobStatus::SodSigned.as_str() {
@@ -793,8 +794,9 @@ async fn prepared_personalization_job(
     service: &PassportHttpService,
     job: &PassportJob,
     require_cached: bool,
-) -> Result<(PersonalizationJob, String), PassportHttpError> {
-    let artifact = service.decrypt(job).await?;
+) -> Result<(PersonalizationJob, String, Option<String>), PassportHttpError> {
+    let mut artifact = service.decrypt(job).await?;
+    let mut newly_signed = false;
     let signed = if let Some(signed) = artifact.signed_material.clone() {
         if job.sod_sha256.as_deref() != Some(signed_sod_sha256(&signed)?.as_str()) {
             return Err(PassportHttpError::SignedMaterialUnavailable);
@@ -807,9 +809,21 @@ async fn prepared_personalization_job(
         if require_cached || job.sod_sha256.is_some() {
             return Err(PassportHttpError::SignedMaterialUnavailable);
         }
+        newly_signed = true;
         service.sign(job).await?.1
     };
     let submitted_sod_sha256 = signed_sod_sha256(&signed)?;
+    let signed_artifact_ciphertext = if newly_signed {
+        artifact.signed_material = Some(signed.clone());
+        Some(
+            service
+                .cipher()?
+                .encrypt(&job.organization_id, &job.id, &artifact)
+                .await?,
+        )
+    } else {
+        None
+    };
     let document_type: DocumentType =
         serde_json::from_value(Value::String(job.document_type.clone()))
             .map_err(|_| PassportHttpError::InvalidDocumentType)?;
@@ -836,6 +850,7 @@ async fn prepared_personalization_job(
             completed_at: None,
         },
         submitted_sod_sha256,
+        signed_artifact_ciphertext,
     ))
 }
 
@@ -849,15 +864,54 @@ async fn submit_personalization(
     if job.bureau_job_id.is_some() {
         return Ok(Json(safe(&job)));
     }
-    let (prepared, submitted_sod_sha256) =
+    if job.submission_intent_id.is_some() {
+        return wait_for_submission(&service, &principal, &application_id).await;
+    }
+    let (prepared, submitted_sod_sha256, signed_artifact_ciphertext) =
         prepared_personalization_job(&service, &job, false).await?;
-    let outcome = service
-        .bureau()?
+    let bureau = service.bureau()?;
+    let intent_id = Uuid::new_v4();
+    let endpoint_sha256 = bureau.endpoint_sha256();
+    let reserved = service
+        .repository
+        .reserve_submission(
+            &principal,
+            &job,
+            &PassportSubmissionReservation {
+                intent_id,
+                sod_sha256: &submitted_sod_sha256,
+                signed_artifact_ciphertext: signed_artifact_ciphertext.as_deref(),
+                provider_profile_id: service.bureau_provider_profile_id.as_deref(),
+                bureau_endpoint_sha256: &endpoint_sha256,
+                now: Utc::now(),
+            },
+        )
+        .await
+        .map_err(PassportHttpError::Storage)?;
+    let Some(reserved) = reserved else {
+        return wait_for_submission(&service, &principal, &application_id).await;
+    };
+    if reserved.submission_intent_provider_profile_id != service.bureau_provider_profile_id
+        || reserved.submission_intent_bureau_endpoint_sha256.as_deref()
+            != Some(endpoint_sha256.as_str())
+    {
+        return Err(PassportHttpError::ConcurrentChange);
+    }
+    let outcome = bureau
         .submit(&prepared)
         .await
         .map_err(PassportHttpError::Bureau)?;
     let mut patch = PassportJobPatch::new(status_from_bureau(outcome.status));
-    patch.sod_sha256 = Some(Some(submitted_sod_sha256));
+    patch.expected_sod_sha256 = Some(reserved.sod_sha256.clone());
+    patch.expected_secure_artifact_ciphertext = Some(reserved.secure_artifact_ciphertext.clone());
+    patch.expected_submission_intent_id = Some(intent_id);
+    patch.clear_submission_intent = true;
+    // Generic bureau endpoints do not prove that any HTTP error happened
+    // before the provider accepted the source job. Keep the reservation and
+    // exact signed bytes for private reconciliation on every no-ID outcome.
+    if outcome.bureau_job_id.is_none() {
+        return Err(PassportHttpError::ConcurrentChange);
+    }
     patch.bureau_job_id = Some(outcome.bureau_job_id.clone());
     patch.bureau_provider_profile_id = outcome
         .bureau_job_id
@@ -869,15 +923,14 @@ async fn submit_personalization(
     );
     patch.error_message = Some(outcome.error_message);
     patch.submitted_at = Some(Utc::now());
-    let updated = match service.update(&principal, &job, &patch).await {
+    let updated = match service.update(&principal, &reserved, &patch).await {
         Ok(updated) => updated,
         Err(PassportHttpError::ConcurrentChange) => {
             let current = service.job(&principal, &application_id).await?;
             if outcome.bureau_job_id.is_none()
                 || current.bureau_job_id.as_deref() != outcome.bureau_job_id.as_deref()
                 || current.bureau_provider_profile_id != patch.bureau_provider_profile_id
-                || current.sod_sha256.as_deref()
-                    != patch.sod_sha256.as_ref().and_then(|value| value.as_deref())
+                || current.sod_sha256.as_deref() != Some(submitted_sod_sha256.as_str())
             {
                 return Err(PassportHttpError::ConcurrentChange);
             }
@@ -886,13 +939,37 @@ async fn submit_personalization(
         Err(error) => return Err(error),
     };
     let mut response = safe(&updated);
-    response["sod_sha256"] = Value::String(
-        updated
-            .sod_sha256
-            .clone()
-            .ok_or(PassportHttpError::InvalidArtifact)?,
-    );
+    if let Some(hash) = &updated.sod_sha256 {
+        response["sod_sha256"] = Value::String(hash.clone());
+    }
     Ok(Json(response))
+}
+
+async fn wait_for_submission(
+    service: &PassportHttpService,
+    principal: &PassportTenantPrincipal,
+    application_id: &str,
+) -> Result<Json<Value>, PassportHttpError> {
+    // Preserve the released route's concurrent retry result when the first
+    // submit binds successfully. A durable ambiguous intent is never retried
+    // or silently cleared; it becomes a conflict after the send window.
+    let max_age = chrono::Duration::seconds(35);
+    let local_deadline = tokio::time::Instant::now() + Duration::from_secs(35);
+    loop {
+        let current = service.job(principal, application_id).await?;
+        if current.bureau_job_id.is_some() {
+            return Ok(Json(safe(&current)));
+        }
+        let Some(started_at) = current.submission_intent_started_at else {
+            return Err(PassportHttpError::ConcurrentChange);
+        };
+        if Utc::now().signed_duration_since(started_at) >= max_age
+            || tokio::time::Instant::now() >= local_deadline
+        {
+            return Err(PassportHttpError::ConcurrentChange);
+        }
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
 }
 
 fn signed_sod_sha256(signed: &SignedMaterial) -> Result<String, PassportHttpError> {
