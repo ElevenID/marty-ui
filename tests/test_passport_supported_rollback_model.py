@@ -61,7 +61,12 @@ def safe_model(root: Path) -> dict:
         "TOKEN_HMAC_KEY_FILE": "/run/secrets/token_hmac_key",
         "INTEGRATION_SECRET_MASTER_KEY_FILE":
             "/run/secrets/integration_secret_master_key",
+        "REVOCATION_PROFILE_SERVICE_URL": "http://revocation-profile:8013",
+        "RP_GRPC_TARGET": "revocation-profile:9013",
     })
+    services["issuance-native"]["depends_on"] = {
+        "revocation-profile": {"condition": "service_healthy"},
+    }
     services["gateway"]["environment"].update({
         "ENVIRONMENT": "development",
         "PUBLIC_DOMAIN": "localhost",
@@ -71,9 +76,13 @@ def safe_model(root: Path) -> dict:
         "ORG_GRPC_TARGET": "organization:9002",
         "ES_GRPC_TARGET": "event-stream:9015",
         "GRPC_SERVICE_TOKEN_FILE": "/run/secrets/grpc_service_token",
+        "REVOCATION_PROFILE_SERVICE_URL": "http://revocation-profile:8013",
     })
+    services["gateway"]["ports"] = [
+        {"host_ip": "127.0.0.1", "published": "29876", "target": 8000}]
     services["gateway"]["depends_on"] = {
         "organization": {"condition": "service_healthy"},
+        "revocation-profile": {"condition": "service_healthy"},
     }
     services["flow"]["environment"].update({
         "ENVIRONMENT": "development",
@@ -126,6 +135,7 @@ def safe_model(root: Path) -> dict:
                 "postgresql://marty:${MARTY_DB_PASSWORD}@postgres:5432/marty",
             "MARTY_DB_PASSWORD_FILE": "/run/secrets/marty_db_password",
             "PUBLIC_API_URL": "http://gateway:8000",
+            "STATUS_LIST_BASE_URL": "http://127.0.0.1:29876",
             "MARTY_ORG_ID": "00000000-0000-0000-0000-000000000001",
         },
         "secrets": [{"source": "marty_db_password"}],
@@ -168,6 +178,35 @@ def safe_model(root: Path) -> dict:
             "redis": {"condition": "service_healthy"},
             "event-stream": {"condition": "service_healthy"},
         },
+    }
+    services["revocation-profile"] = {
+        "image": IMAGE,
+        "networks": ["private"],
+        "environment": {
+            "SERVICE_NAME": "revocation_profile",
+            "ENVIRONMENT": "development",
+            "REVOCATION_PROFILE_SERVICE_PORT": "8013",
+            "RP_GRPC_ENABLED": "true",
+            "RP_GRPC_PORT": "9013",
+            "DATABASE_URL_TEMPLATE":
+                "postgresql://marty:${MARTY_DB_PASSWORD}@postgres:5432/marty",
+            "MARTY_DB_PASSWORD_FILE": "/run/secrets/marty_db_password",
+            "GRPC_SERVICE_TOKEN_FILE": "/run/secrets/grpc_service_token",
+            "REDIS_URL": "redis://redis:6379/4",
+            "ORG_GRPC_TARGET": "organization:9002",
+            "PUBLIC_API_URL": "http://gateway:8000",
+            "STATUS_LIST_BASE_URL": "http://127.0.0.1:29876",
+            "MARTY_ORG_ID": "00000000-0000-0000-0000-000000000001",
+        },
+        "secrets": [{"source": "marty_db_password"},
+                    {"source": "grpc_service_token"}],
+        "depends_on": {
+            "db-migrate": {"condition": "service_completed_successfully"},
+            "organization": {"condition": "service_healthy"},
+            "redis": {"condition": "service_healthy"},
+        },
+        "healthcheck": {"test": ["CMD", "curl", "--fail",
+                                 "http://localhost:8013/health"]},
     }
     services["signing-keys"] = {
         "image": IMAGE,
@@ -259,7 +298,7 @@ def test_attested_plan_binds_all_disposable_images(tmp_path: Path) -> None:
         validate_planned_model(model, changed_lease, tmp_path)
     for role in ("postgres", "redis", "openbao", "db-migrate", "issuance",
                  "signing-keys", "organization", "event-stream",
-                 "revocation-profile-migrate"):
+                 "revocation-profile", "revocation-profile-migrate"):
         bad = deepcopy(model)
         bad["services"][role]["image"] = "other@sha256:" + "f" * 64
         with pytest.raises(ModelPreflightError, match="protected image|signed services"):
@@ -418,6 +457,30 @@ def test_attested_plan_binds_all_disposable_images(tmp_path: Path) -> None:
      "revocation schema migration"),
     (lambda model, root: model["services"]["db-migrate"]["depends_on"].pop(
         "revocation-profile-migrate"), "revocation schema migration"),
+    (lambda model, root: model["services"]["revocation-profile"][
+        "environment"].update(RP_MIGRATE_ONLY="true"), "revocation runtime"),
+    (lambda model, root: model["services"]["revocation-profile"][
+        "environment"].update(DATABASE_URL_TEMPLATE=
+                              "postgresql://marty:other@postgres:5432/marty"),
+     "revocation runtime"),
+    (lambda model, root: model["services"]["revocation-profile"][
+        "environment"].update(ORG_GRPC_TARGET="gateway:9002"), "revocation runtime"),
+    (lambda model, root: model["services"]["revocation-profile"][
+        "environment"].update(RP_GRPC_ENABLED="false"), "revocation runtime"),
+    (lambda model, root: model["services"]["revocation-profile"][
+        "environment"].update(STATUS_LIST_BASE_URL="http://gateway:8000"),
+     "revocation runtime"),
+    (lambda model, root: model["services"]["revocation-profile-migrate"][
+        "environment"].update(STATUS_LIST_BASE_URL="http://gateway:8000"),
+     "revocation schema migration"),
+    (lambda model, root: model["services"]["revocation-profile"][
+        "secrets"].pop(), "revocation runtime"),
+    (lambda model, root: model["services"]["revocation-profile"][
+        "depends_on"].pop("organization"), "revocation runtime"),
+    (lambda model, root: model["services"]["gateway"]["environment"].update(
+        REVOCATION_PROFILE_SERVICE_URL="http://gateway:8013"), "revocation runtime"),
+    (lambda model, root: model["services"]["issuance-native"]["depends_on"].pop(
+        "revocation-profile"), "revocation runtime"),
     (lambda model, root: model["services"]["organization"]["secrets"].pop(),
      "Organization API-key authority"),
     (lambda model, root: model["services"]["event-stream"]["environment"].update(

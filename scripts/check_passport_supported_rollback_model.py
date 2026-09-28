@@ -30,7 +30,7 @@ SELECTED = frozenset({
 })
 ISOLATED_DEPENDENCIES = frozenset({"postgres", "openbao", "redis"})
 RUST_DEPENDENCIES = frozenset({"organization", "event-stream",
-                               "revocation-profile-migrate"})
+                               "revocation-profile", "revocation-profile-migrate"})
 DISPOSABLE_SERVICES = SELECTED | ISOLATED_DEPENDENCIES | RUST_DEPENDENCIES | frozenset({
     "db-migrate", "issuance", "signing-keys",
 })
@@ -392,6 +392,9 @@ def validate_model(
             require(isinstance(key, str), f"Compose {name} environment key is invalid")
             if not isinstance(value, str):
                 continue
+            if (name in {"revocation-profile", "revocation-profile-migrate"}
+                    and key == "STATUS_LIST_BASE_URL"):
+                continue
             for url in URLS.findall(value):
                 require(_endpoint_host(url) in services,
                         f"Compose {name} endpoint leaves disposable services")
@@ -477,6 +480,16 @@ def validate_model(
         and flow.get("ORG_GRPC_TARGET") == "organization:9002",
         "Disposable passport services do not use the Organization authority",
     )
+    gateway_ports = services["gateway"].get("ports")
+    require(isinstance(gateway_ports, list) and len(gateway_ports) == 1
+            and isinstance(gateway_ports[0], dict)
+            and gateway_ports[0].get("host_ip") == "127.0.0.1"
+            and gateway_ports[0].get("target") == 8000
+            and isinstance(gateway_ports[0].get("published"), str)
+            and gateway_ports[0]["published"].isdigit()
+            and 1024 <= int(gateway_ports[0]["published"]) <= 65535,
+            "Disposable status list origin lacks a reserved loopback Gateway port")
+    status_origin = f"http://127.0.0.1:{gateway_ports[0]['published']}"
     migration = services["db-migrate"]
     migration_env = migration.get("environment")
     dependencies = migration.get("depends_on")
@@ -497,6 +510,7 @@ def validate_model(
         and revocation_env.get("MARTY_DB_PASSWORD_FILE")
         == "/run/secrets/marty_db_password"
         and revocation_env.get("PUBLIC_API_URL") == "http://gateway:8000"
+        and revocation_env.get("STATUS_LIST_BASE_URL") == status_origin
         and revocation_env.get("MARTY_ORG_ID")
         == "00000000-0000-0000-0000-000000000001"
         and {secret.get("source") for secret in revocation_migration.get("secrets", [])}
@@ -511,6 +525,52 @@ def validate_model(
         and dependencies["revocation-profile-migrate"].get("condition")
         == "service_completed_successfully",
         "Disposable revocation schema migration is not ordered before shared migrations",
+    )
+    revocation = services["revocation-profile"]
+    revocation_runtime = revocation.get("environment")
+    require(
+        isinstance(revocation_runtime, dict)
+        and revocation_runtime.get("SERVICE_NAME") == "revocation_profile"
+        and "RP_MIGRATE_ONLY" not in revocation_runtime
+        and revocation_runtime.get("ENVIRONMENT") == "development"
+        and revocation_runtime.get("REVOCATION_PROFILE_SERVICE_PORT") == "8013"
+        and revocation_runtime.get("RP_GRPC_ENABLED") == "true"
+        and revocation_runtime.get("RP_GRPC_PORT") == "9013"
+        and revocation_runtime.get("DATABASE_URL_TEMPLATE")
+        == revocation_env.get("DATABASE_URL_TEMPLATE")
+        and revocation_runtime.get("MARTY_DB_PASSWORD_FILE")
+        == "/run/secrets/marty_db_password"
+        and revocation_runtime.get("GRPC_SERVICE_TOKEN_FILE")
+        == "/run/secrets/grpc_service_token"
+        and revocation_runtime.get("REDIS_URL") == "redis://redis:6379/4"
+        and revocation_runtime.get("ORG_GRPC_TARGET") == "organization:9002"
+        and revocation_runtime.get("PUBLIC_API_URL") == "http://gateway:8000"
+        and revocation_runtime.get("STATUS_LIST_BASE_URL") == status_origin
+        and revocation_runtime.get("MARTY_ORG_ID") == revocation_env.get("MARTY_ORG_ID")
+        and {secret.get("source") for secret in revocation.get("secrets", [])}
+        == {"marty_db_password", "grpc_service_token"}
+        and isinstance(revocation.get("depends_on"), dict)
+        and all(isinstance(revocation["depends_on"].get(name), dict)
+                and revocation["depends_on"][name].get("condition") == condition
+                for name, condition in (
+                    ("db-migrate", "service_completed_successfully"),
+                    ("organization", "service_healthy"),
+                    ("redis", "service_healthy")))
+        and isinstance(revocation.get("healthcheck"), dict)
+        and revocation["healthcheck"].get("test")
+        == ["CMD", "curl", "--fail", "http://localhost:8013/health"],
+        "Disposable revocation runtime is not isolated and ready",
+    )
+    require(
+        native.get("REVOCATION_PROFILE_SERVICE_URL")
+        == gateway.get("REVOCATION_PROFILE_SERVICE_URL")
+        == "http://revocation-profile:8013"
+        and native.get("RP_GRPC_TARGET") == "revocation-profile:9013"
+        and all(isinstance(services[name].get("depends_on"), dict)
+                and isinstance(services[name]["depends_on"].get("revocation-profile"), dict)
+                and services[name]["depends_on"]["revocation-profile"].get("condition")
+                == "service_healthy" for name in ("issuance-native", "gateway")),
+        "Disposable passport services do not use the revocation runtime",
     )
     require(
         isinstance(migration_env, dict)

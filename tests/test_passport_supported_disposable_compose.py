@@ -60,7 +60,7 @@ def test_real_compose_render_is_safe_but_not_accepted(
         "passport-callback-signer", "passport-beta-bureau",
         "signing-keys", "db-migrate", "postgres", "redis", "openbao",
         "organization", "event-stream",
-        "revocation-profile-migrate",
+        "revocation-profile", "revocation-profile-migrate",
     }
     result = validate_model(model, project, SERVICES, tmp_path)
     assert result["model_safe"] is True
@@ -109,6 +109,19 @@ def test_real_compose_render_is_safe_but_not_accepted(
         "service_completed_successfully")
     assert model["services"]["revocation-profile-migrate"]["environment"][
         "RP_MIGRATE_ONLY"] == "true"
+    revocation = model["services"]["revocation-profile"]
+    assert revocation["depends_on"]["organization"]["condition"] == "service_healthy"
+    assert revocation["environment"]["ORG_GRPC_TARGET"] == "organization:9002"
+    assert revocation["environment"]["STATUS_LIST_BASE_URL"] == (
+        "http://127.0.0.1:29876")
+    assert model["services"]["revocation-profile-migrate"]["environment"][
+        "STATUS_LIST_BASE_URL"] == revocation["environment"]["STATUS_LIST_BASE_URL"]
+    assert {secret["source"] for secret in revocation["secrets"]} == {
+        "marty_db_password", "grpc_service_token"}
+    assert model["services"]["gateway"]["environment"][
+        "REVOCATION_PROFILE_SERVICE_URL"] == "http://revocation-profile:8013"
+    assert model["services"]["issuance-native"]["environment"][
+        "RP_GRPC_TARGET"] == "revocation-profile:9013"
     assert migration["environment"]["REDIS_URL"] == signing["environment"][
         "SIGNING_KEYS_REDIS_URL"]
     assert migration["environment"]["PUBLIC_DOMAIN"] == model["services"][

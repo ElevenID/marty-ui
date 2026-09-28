@@ -45,6 +45,7 @@ SECRETS = {
     "signing-keys": ("marty_db_password", "bao_token", "signing_keys_internal_api_key"),
     "issuance": (),
     "revocation-profile-migrate": ("marty_db_password",),
+    "revocation-profile": ("marty_db_password", "grpc_service_token"),
     "event-stream": (),
     "organization": ("marty_db_password", "grpc_service_token"),
     "issuance-native": ("marty_db_password", "bao_token", "signing_keys_internal_api_key",
@@ -130,18 +131,42 @@ def fixture() -> tuple[dict, dict[tuple[str, ...], str]]:
             "PASSPORT_ACCEPTANCE_SOURCE_COMMIT": record["source_commit"],
             "PASSPORT_ACCEPTANCE_EXPIRES_AT": record["expires_at"],
         }
+        revocation_env = {
+            "SERVICE_NAME": "revocation_profile",
+            "ENVIRONMENT": "development",
+            "REVOCATION_PROFILE_SERVICE_PORT": "8013",
+            "RP_GRPC_ENABLED": "true",
+            "RP_GRPC_PORT": "9013",
+            "DATABASE_URL_TEMPLATE": (
+                "postgresql://marty:${MARTY_DB_PASSWORD}@postgres:5432/marty"),
+            "MARTY_DB_PASSWORD_FILE": "/run/secrets/marty_db_password",
+            "GRPC_SERVICE_TOKEN_FILE": "/run/secrets/grpc_service_token",
+            "REDIS_URL": "redis://redis:6379/4",
+            "ORG_GRPC_TARGET": "organization:9002",
+            "PUBLIC_API_URL": "http://gateway:8000",
+            "STATUS_LIST_BASE_URL": "http://127.0.0.1:29876",
+            "MARTY_ORG_ID": "00000000-0000-0000-0000-000000000001",
+        }
+        migration_env = {"STATUS_LIST_BASE_URL": "http://127.0.0.1:29876"}
+        runtime_env = (organization_env if service == "organization" else
+                       revocation_env if service == "revocation-profile" else
+                       migration_env if service == "revocation-profile-migrate" else {})
+        gateway_binding = [{"HostIp": "127.0.0.1", "HostPort": "29876"}]
         calls[("container", "inspect", identifier)] = json.dumps([{
             "Id": identifier, "Name": f"/{PROJECT}-{service}-1",
+            "HostConfig": {"PortBindings": {"8000/tcp": gateway_binding}}
+            if service == "gateway" else {},
             "State": {"Running": True, "Status": "running",
                       "Health": {"Status": "healthy"}},
             "Config": {"Labels": {**LABELS, "com.docker.compose.service": service},
-                       "Env": [f"{key}={value}" for key, value in organization_env.items()]
-                       if service == "organization" else [],
+                       "Env": [f"{key}={value}" for key, value in runtime_env.items()],
                        "Image": (LEGACY if service == "issuance" else
                                  MIGRATIONS if service == "db-migrate" else
                                  IMAGE if service in SELECTED | RUST_DEPENDENCIES | {"signing-keys"} else
                                  INFRA[service])},
-            "NetworkSettings": {"Networks": {network_name: {"NetworkID": network_id}}},
+            "NetworkSettings": {"Networks": {network_name: {"NetworkID": network_id}},
+                                "Ports": {"8000/tcp": gateway_binding}
+                                if service == "gateway" else {}},
             "Mounts": mounts_for(service),
         }])
     calls[("network", "inspect", network_id)] = json.dumps([{
@@ -186,6 +211,47 @@ def test_organization_runtime_environment_must_match_protected_run(mutation) -> 
     mutation(item[0]["Config"]["Env"])
     calls[key] = json.dumps(item)
     with pytest.raises(OwnershipError, match="Organization runtime identity"):
+        run(record, calls)
+
+
+@pytest.mark.parametrize("mutation", [
+    lambda env: env.remove(next(item for item in env if item.startswith("DATABASE_URL_TEMPLATE="))),
+    lambda env: env.__setitem__(next(i for i, item in enumerate(env)
+                                  if item.startswith("DATABASE_URL_TEMPLATE=")),
+                                "DATABASE_URL_TEMPLATE=postgresql://marty:secret@production:5432/marty"),
+    lambda env: env.append("RP_MIGRATE_ONLY=true"),
+    lambda env: env.append("GRPC_SERVICE_TOKEN=raw-secret"),
+    lambda env: env.append("ORG_GRPC_TARGET=gateway:9002"),
+    lambda env: env.__setitem__(next(i for i, item in enumerate(env)
+                                  if item.startswith("STATUS_LIST_BASE_URL=")),
+                                "STATUS_LIST_BASE_URL=http://gateway:8000"),
+])
+def test_revocation_runtime_environment_stays_disposable(mutation) -> None:
+    record, calls = fixture()
+    key = ("container", "inspect", record["containers"]["revocation-profile"])
+    item = json.loads(calls[key])
+    mutation(item[0]["Config"]["Env"])
+    calls[key] = json.dumps(item)
+    with pytest.raises(OwnershipError, match="Revocation Profile runtime identity"):
+        run(record, calls)
+
+
+def test_live_gateway_port_and_seeded_status_origin_are_bound() -> None:
+    record, calls = fixture()
+    gateway_key = ("container", "inspect", record["containers"]["gateway"])
+    gateway = json.loads(calls[gateway_key])
+    gateway[0]["HostConfig"]["PortBindings"]["8000/tcp"][0]["HostPort"] = "29999"
+    calls[gateway_key] = json.dumps(gateway)
+    with pytest.raises(OwnershipError, match="published port"):
+        run(record, calls)
+
+    record, calls = fixture()
+    migration_key = ("container", "inspect", record["containers"][
+        "revocation-profile-migrate"])
+    migration = json.loads(calls[migration_key])
+    migration[0]["Config"]["Env"] = ["STATUS_LIST_BASE_URL=http://gateway:8000"]
+    calls[migration_key] = json.dumps(migration)
+    with pytest.raises(OwnershipError, match="status origin"):
         run(record, calls)
 
 
@@ -392,7 +458,7 @@ def test_rejects_bad_lease_identity_and_resource_sets(mutate, match: str) -> Non
     ("gateway", lambda item: item["NetworkSettings"]["Networks"].update({
         "marty-selfhost-prod_default": {}}), "unowned network"),
     ("gateway", lambda item: item.update(NetworkSettings=None),
-     "network state is missing"),
+     "published port identity"),
     ("gateway", lambda item: item["NetworkSettings"]["Networks"][
         PROJECT + "_private"].update(NetworkID="f" * 64), "network identity"),
     ("gateway", lambda item: item["Config"].update({

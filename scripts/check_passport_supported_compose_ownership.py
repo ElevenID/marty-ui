@@ -55,6 +55,7 @@ SECRET_MOUNTS = {
     "signing-keys": ("marty_db_password", "bao_token", "signing_keys_internal_api_key"),
     "issuance": (),
     "revocation-profile-migrate": ("marty_db_password",),
+    "revocation-profile": ("marty_db_password", "grpc_service_token"),
     "event-stream": (),
     "organization": ("marty_db_password", "grpc_service_token"),
     "issuance-native": ("marty_db_password", "bao_token", "signing_keys_internal_api_key",
@@ -128,15 +129,20 @@ def _ids(value: object, name: str) -> dict[str, str]:
     return value
 
 
-def _organization_environment(actual: object, record: dict) -> None:
+def _runtime_environment(actual: object, service: str) -> dict[str, str]:
     require(isinstance(actual, list)
             and all(isinstance(entry, str) and "=" in entry
                     and bool(entry.partition("=")[0]) for entry in actual),
-            "Organization runtime identity is invalid")
+            f"{service} runtime identity is invalid")
     entries = [entry.partition("=") for entry in actual]
     environment = {key: value for key, _, value in entries}
     require(len(environment) == len(entries),
-            "Organization runtime identity has duplicate environment keys")
+            f"{service} runtime identity has duplicate environment keys")
+    return environment
+
+
+def _organization_environment(actual: object, record: dict) -> None:
+    environment = _runtime_environment(actual, "Organization")
     expected = {
         "SERVICE_NAME": "organization",
         "ORGANIZATION_SERVICE_PORT": "8002",
@@ -156,6 +162,54 @@ def _organization_environment(actual: object, record: dict) -> None:
             and "MARTY_DB_PASSWORD" not in environment
             and "GRPC_SERVICE_TOKEN" not in environment,
             "Organization runtime identity differs from protected run")
+
+
+def _revocation_environment(actual: object, status_origin: str) -> None:
+    environment = _runtime_environment(actual, "Revocation Profile")
+    expected = {
+        "SERVICE_NAME": "revocation_profile",
+        "ENVIRONMENT": "development",
+        "REVOCATION_PROFILE_SERVICE_PORT": "8013",
+        "RP_GRPC_ENABLED": "true",
+        "RP_GRPC_PORT": "9013",
+        "DATABASE_URL_TEMPLATE": (
+            "postgresql://marty:${MARTY_DB_PASSWORD}@postgres:5432/marty"),
+        "MARTY_DB_PASSWORD_FILE": "/run/secrets/marty_db_password",
+        "GRPC_SERVICE_TOKEN_FILE": "/run/secrets/grpc_service_token",
+        "REDIS_URL": "redis://redis:6379/4",
+        "ORG_GRPC_TARGET": "organization:9002",
+        "PUBLIC_API_URL": "http://gateway:8000",
+        "STATUS_LIST_BASE_URL": status_origin,
+        "MARTY_ORG_ID": "00000000-0000-0000-0000-000000000001",
+    }
+    require(all(environment.get(key) == value for key, value in expected.items())
+            and "RP_MIGRATE_ONLY" not in environment
+            and "MARTY_DB_PASSWORD" not in environment
+            and "GRPC_SERVICE_TOKEN" not in environment,
+            "Revocation Profile runtime identity differs from disposable model")
+
+
+def _status_origin(gateway: dict) -> str:
+    host = gateway.get("HostConfig")
+    networks = gateway.get("NetworkSettings")
+    bindings = host.get("PortBindings") if isinstance(host, dict) else None
+    published = networks.get("Ports") if isinstance(networks, dict) else None
+    require(isinstance(bindings, dict) and set(bindings) == {"8000/tcp"}
+            and isinstance(bindings["8000/tcp"], list)
+            and len(bindings["8000/tcp"]) == 1
+            and isinstance(bindings["8000/tcp"][0], dict)
+            and isinstance(published, dict)
+            and published.get("8000/tcp") == bindings["8000/tcp"]
+            and all(value is None for key, value in published.items()
+                    if key != "8000/tcp"),
+            "Disposable Gateway published port identity is invalid")
+    binding = bindings["8000/tcp"][0]
+    port = binding.get("HostPort")
+    require(binding.get("HostIp") == "127.0.0.1"
+            and isinstance(port, str) and port.isdigit()
+            and 1024 <= int(port) <= 65535,
+            "Disposable Gateway published port leaves loopback")
+    return f"http://127.0.0.1:{port}"
 
 
 def _expected_mounts(service: str, project: str, disposable_root: Path) -> set[tuple[str, str, str, bool]]:
@@ -237,6 +291,9 @@ def verify(record: dict, surface: str, now: datetime,
     require(set(SECRET_MOUNTS) == DISPOSABLE_SERVICES,
             "Disposable secret mount contract is incomplete")
 
+    gateway = _inspect("container", containers["gateway"], runner)
+    status_origin = _status_origin(gateway)
+
     listed = set(runner(["ps", "-aq", "--no-trunc", "--filter",
                          f"label=com.docker.compose.project={project}"]).split())
     require(listed == set(containers.values()),
@@ -277,6 +334,12 @@ def verify(record: dict, surface: str, now: datetime,
                 "Disposable container service identity changed")
         if service == "organization":
             _organization_environment(config.get("Env"), record)
+        elif service == "revocation-profile":
+            _revocation_environment(config.get("Env"), status_origin)
+        elif service == "revocation-profile-migrate":
+            migration_env = _runtime_environment(config.get("Env"), "Revocation migration")
+            require(migration_env.get("STATUS_LIST_BASE_URL") == status_origin,
+                    "Revocation migration status origin differs from Gateway")
         require(re.fullmatch(r"/" + re.escape(project) + "-"
                              + re.escape(service) + r"-[1-9][0-9]*",
                              item.get("Name", "")) is not None
