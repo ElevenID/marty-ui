@@ -202,6 +202,7 @@ def inspect(
             "view",
             "--minify",
             "--raw",
+            "--flatten",
             "-o",
             "json",
         ],

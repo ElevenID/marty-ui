@@ -70,10 +70,15 @@ def plan() -> dict:
     }
 
 
-def runner(expected: dict):
+def runner(expected: dict, *, file_backed_ca: bool = False):
     def run(args: list[str]) -> str:
         assert args[:3] == ["kubectl", "--context", CONTEXT]
         if args[3:5] == ["config", "view"]:
+            connection = {"server": "https://disposable.example:6443"}
+            if file_backed_ca and "--flatten" not in args:
+                connection["certificate-authority"] = "C:/disposable/ca.pem"
+            else:
+                connection["certificate-authority-data"] = base64.b64encode(CA).decode()
             return json.dumps(
                 {
                     "current-context": CONTEXT,
@@ -81,12 +86,7 @@ def runner(expected: dict):
                     "clusters": [
                         {
                             "name": CONTEXT,
-                            "cluster": {
-                                "server": "https://disposable.example:6443",
-                                "certificate-authority-data": base64.b64encode(
-                                    CA
-                                ).decode(),
-                            },
+                            "cluster": connection,
                         }
                     ],
                 }
@@ -156,6 +156,13 @@ def test_exact_disposable_identity_stays_blocked_without_rollout() -> None:
     assert report["rollback_accepted"] is False
     assert report["status"] == "blocked"
     assert report["resource_uids"] == expected["resources"]
+
+
+def test_file_backed_kubeconfig_ca_is_checked_after_flattening() -> None:
+    expected = plan()
+    report = gate.inspect(expected, COMMIT, REFERENCE, runner(expected, file_backed_ca=True))
+    assert report["static_identity_verified"] is True
+    assert report["status"] == "blocked"
 
 
 @pytest.mark.parametrize(
