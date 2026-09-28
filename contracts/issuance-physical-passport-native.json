@@ -24,6 +24,13 @@
     "stale_key_behavior": "If KMS uses a key different from the attached DSC, fail closed until a matching DSC is enrolled",
     "production_selector_default": false
   },
+  "sod_material_continuity": {
+    "python_observation": "The retained Python generate-sod and submit-personalization routes each call the signer independently, so a preliminary hash does not bind the submitted bytes",
+    "native_requirement": "After generate-sod, store the signed SOD and DSC only inside the encrypted, tenant-bound artifact; submit-personalization must use those exact bytes and persist their SHA-256 as sod_sha256",
+    "mixed_version_recovery": "If a legacy signed row has no cached material, another writer changes its hash without updating the encrypted artifact, or the active managed issuer profile rotates, submission fails closed until generate-sod explicitly refreshes the cached material; concurrent refreshes use a hash and ciphertext compare-and-swap guard",
+    "direct_submit": "If generate-sod was not called, sign once for submission and persist the submitted SOD SHA-256",
+    "privacy": "The successful submit response may expose the submitted SOD SHA-256; do not return raw SOD, DSC, or applicant material; activation scrubs the encrypted artifact"
+  },
   "self_signed_test_signer": {
     "python_flag": "PHYSICAL_DOCUMENT_ALLOW_SELF_SIGNED=true",
     "python_behavior": "When no remote signer URL is set, issue a single-use CSCA and DSC for testing and offline fixtures only",

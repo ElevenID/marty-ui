@@ -392,6 +392,34 @@ impl PassportHttpService {
         }
         Ok((artifact, signed, sod_verified))
     }
+
+    async fn validate_cached_signed_material(
+        &self,
+        job: &PassportJob,
+        artifact: &crate::passport_artifact::PassportSensitiveArtifact,
+        signed: &SignedMaterial,
+    ) -> Result<bool, PassportHttpError> {
+        let groups = artifact
+            .numbered_data_groups()
+            .map_err(|_| PassportHttpError::InvalidArtifact)?;
+        if let Some(PassportSigner::Managed(managed)) = self.signer.as_ref() {
+            managed
+                .validate_existing(
+                    &job.country_code,
+                    &job.organization_id,
+                    job.issuer_did
+                        .as_deref()
+                        .ok_or(PassportHttpError::Signer(SignerError::MissingIssuerDid))?,
+                    &groups,
+                    signed,
+                )
+                .await
+                .map_err(PassportHttpError::Signer)?;
+            Ok(true)
+        } else {
+            Ok(signed.verify_data_groups(&groups).is_ok())
+        }
+    }
 }
 
 fn header<'a>(headers: &'a HeaderMap, name: &str) -> Option<&'a str> {
@@ -467,6 +495,8 @@ enum PassportHttpError {
     ConcurrentChange,
     #[error("Physical document has already been submitted to the bureau")]
     AlreadySubmitted,
+    #[error("Previously signed SOD material is unavailable; regenerate SOD before submission")]
+    SignedMaterialUnavailable,
     #[error("Physical document repository failed")]
     Storage(sqlx::Error),
     #[error("Physical document webhook repository failed")]
@@ -504,7 +534,8 @@ impl IntoResponse for PassportHttpError {
             | Self::QualityNotReady
             | Self::ActivationNotReady
             | Self::ConcurrentChange
-            | Self::AlreadySubmitted => StatusCode::CONFLICT,
+            | Self::AlreadySubmitted
+            | Self::SignedMaterialUnavailable => StatusCode::CONFLICT,
             Self::Bureau(BureauError::InvalidWebhookSignature) => StatusCode::UNAUTHORIZED,
             Self::Bureau(BureauError::InvalidWebhookEvent) => StatusCode::UNPROCESSABLE_ENTITY,
             Self::Bureau(
@@ -721,12 +752,36 @@ async fn generate_sod(
     if job.bureau_job_id.is_some() {
         return Err(PassportHttpError::AlreadySubmitted);
     }
-    let (_, signed, sod_verified) = service.sign(&job).await?;
-    let sod = decode_python_validated_base64(&signed.sod_der_base64)
-        .map_err(|_| PassportHttpError::Signer(SignerError::IncompleteMaterial))?;
-    let hash = hex::encode(Sha256::digest(sod));
+    if job.status == PassportJobStatus::SodSigned.as_str() {
+        let artifact = service.decrypt(&job).await?;
+        if let Some(signed) = artifact.signed_material.as_ref() {
+            let hash = signed_sod_sha256(signed)?;
+            if job.sod_sha256.as_deref() == Some(hash.as_str()) {
+                if let Ok(verified) = service
+                    .validate_cached_signed_material(&job, &artifact, signed)
+                    .await
+                {
+                    let mut response = safe(&job);
+                    response["sod_sha256"] = Value::String(hash);
+                    response["sod_signature_verified"] = Value::Bool(verified);
+                    return Ok(Json(response));
+                }
+            }
+        }
+    }
+    let (mut artifact, signed, sod_verified) = service.sign(&job).await?;
+    let hash = signed_sod_sha256(&signed)?;
+    artifact.signed_material = Some(signed);
     let mut patch = PassportJobPatch::new(PassportJobStatus::SodSigned);
+    patch.expected_sod_sha256 = Some(job.sod_sha256.clone());
+    patch.expected_secure_artifact_ciphertext = Some(job.secure_artifact_ciphertext.clone());
     patch.sod_sha256 = Some(Some(hash.clone()));
+    patch.secure_artifact_ciphertext = Some(
+        service
+            .cipher()?
+            .encrypt(&job.organization_id, &job.id, &artifact)
+            .await?,
+    );
     let updated = service.update(&principal, &job, &patch).await?;
     let mut response = safe(&updated);
     response["sod_sha256"] = Value::String(hash);
@@ -744,7 +799,22 @@ async fn submit_personalization(
     if job.bureau_job_id.is_some() {
         return Ok(Json(safe(&job)));
     }
-    let (artifact, signed, _) = service.sign(&job).await?;
+    let artifact = service.decrypt(&job).await?;
+    let signed = if let Some(signed) = artifact.signed_material.clone() {
+        if job.sod_sha256.as_deref() != Some(signed_sod_sha256(&signed)?.as_str()) {
+            return Err(PassportHttpError::SignedMaterialUnavailable);
+        }
+        service
+            .validate_cached_signed_material(&job, &artifact, &signed)
+            .await?;
+        signed
+    } else {
+        if job.sod_sha256.is_some() {
+            return Err(PassportHttpError::SignedMaterialUnavailable);
+        }
+        service.sign(&job).await?.1
+    };
+    let submitted_sod_sha256 = signed_sod_sha256(&signed)?;
     let document_type: DocumentType =
         serde_json::from_value(Value::String(job.document_type.clone()))
             .map_err(|_| PassportHttpError::InvalidDocumentType)?;
@@ -774,6 +844,7 @@ async fn submit_personalization(
         .await
         .map_err(PassportHttpError::Bureau)?;
     let mut patch = PassportJobPatch::new(status_from_bureau(outcome.status));
+    patch.sod_sha256 = Some(Some(submitted_sod_sha256));
     patch.bureau_job_id = Some(outcome.bureau_job_id.clone());
     patch.bureau_provider_profile_id = outcome
         .bureau_job_id
@@ -792,6 +863,8 @@ async fn submit_personalization(
             if outcome.bureau_job_id.is_none()
                 || current.bureau_job_id.as_deref() != outcome.bureau_job_id.as_deref()
                 || current.bureau_provider_profile_id != patch.bureau_provider_profile_id
+                || current.sod_sha256.as_deref()
+                    != patch.sod_sha256.as_ref().and_then(|value| value.as_deref())
             {
                 return Err(PassportHttpError::ConcurrentChange);
             }
@@ -799,7 +872,20 @@ async fn submit_personalization(
         }
         Err(error) => return Err(error),
     };
-    Ok(Json(safe(&updated)))
+    let mut response = safe(&updated);
+    response["sod_sha256"] = Value::String(
+        updated
+            .sod_sha256
+            .clone()
+            .ok_or(PassportHttpError::InvalidArtifact)?,
+    );
+    Ok(Json(response))
+}
+
+fn signed_sod_sha256(signed: &SignedMaterial) -> Result<String, PassportHttpError> {
+    let sod = decode_python_validated_base64(&signed.sod_der_base64)
+        .map_err(|_| PassportHttpError::Signer(SignerError::IncompleteMaterial))?;
+    Ok(hex::encode(Sha256::digest(sod)))
 }
 
 fn status_from_bureau(status: ProductionStatus) -> PassportJobStatus {

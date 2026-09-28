@@ -270,6 +270,7 @@ impl PassportApplicationRequest {
             applicant: Value::Object(self.applicant.clone()),
             mrz: self.mrz.clone(),
             data_groups: self.data_groups.clone(),
+            signed_material: None,
         }
     }
 }
