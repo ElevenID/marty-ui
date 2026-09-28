@@ -16,6 +16,7 @@ from scripts.passport_supported_infra_rehearsal import (
     rehearse_infrastructure,
 )
 from scripts.passport_supported_infra_images import qualified_images
+from services.passport_disposable_identity import managed_key_reference
 from scripts.passport_supported_provisioning_producer import (
     INFRA_WORKFLOW_REF, ProducerError,
 )
@@ -104,6 +105,10 @@ def test_infra_rehearsal_starts_only_private_infra_and_always_cleans(
     ]
     assert calls[1][0][-2:] == [selected["infra_images"]["openbao"],
                                "/scripts/passport_supported_openbao_bootstrap.sh"]
+    assert "PASSPORT_ACCEPTANCE_CSCA_KEY_REFERENCE=" + managed_key_reference(
+        29876, "csca") in calls[1][0]
+    assert "PASSPORT_ACCEPTANCE_DSC_KEY_REFERENCE=" + managed_key_reference(
+        29876, "x509_doc_signer") in calls[1][0]
     assert [call[2] for call in calls] == [300, 180]
     assert len(cleanup) == 1
     assert not (Path(calls[0][1]["PASSPORT_ACCEPTANCE_SECRET_DIR"]).parent).exists()

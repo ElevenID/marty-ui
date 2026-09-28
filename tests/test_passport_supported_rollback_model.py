@@ -336,6 +336,9 @@ def safe_model(root: Path) -> dict:
             "BAO_ADDR": "http://openbao:8200",
             "BAO_TOKEN_FILE": "/run/secrets/bao_token",
             "MARTY_KMS_BOOTSTRAP_ENABLED": "true",
+            "PASSPORT_DISPOSABLE_ICAO_BOOTSTRAP": "true",
+            "PASSPORT_ACCEPTANCE_PROJECT": PROJECT,
+            "PASSPORT_ACCEPTANCE_GATEWAY_PORT": "29876",
             "MARTY_ORG_ADMIN_EMAIL": "admin@example.invalid",
             "MARTY_ORG_ID": "00000000-0000-0000-0000-000000000001",
             "PUBLIC_DOMAIN": "localhost:29876",
@@ -554,6 +557,10 @@ def test_attested_plan_binds_all_disposable_images(tmp_path: Path) -> None:
         REDIS_URL="redis://redis:6379/0"), "issuer profile bootstrap"),
     (lambda model, root: model["services"]["db-migrate"]["environment"].update(
         MARTY_KMS_BOOTSTRAP_ENABLED="false"), "issuer profile bootstrap"),
+    (lambda model, root: model["services"]["db-migrate"]["environment"].update(
+        PASSPORT_DISPOSABLE_ICAO_BOOTSTRAP="false"), "issuer profile bootstrap"),
+    (lambda model, root: model["services"]["db-migrate"]["environment"].update(
+        PASSPORT_ACCEPTANCE_GATEWAY_PORT="29877"), "issuer profile bootstrap"),
     (lambda model, root: model["services"]["db-migrate"]["depends_on"].pop(
         "openbao"), "issuer profile bootstrap"),
     (lambda model, root: model["services"]["db-migrate"]["secrets"].clear(),

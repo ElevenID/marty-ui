@@ -796,6 +796,9 @@ def validate_model(
         and migration_env.get("BAO_ADDR") == "http://openbao:8200"
         and migration_env.get("BAO_TOKEN_FILE") == "/run/secrets/bao_token"
         and migration_env.get("MARTY_KMS_BOOTSTRAP_ENABLED") == "true"
+        and migration_env.get("PASSPORT_DISPOSABLE_ICAO_BOOTSTRAP") == "true"
+        and migration_env.get("PASSPORT_ACCEPTANCE_PROJECT") == project
+        and migration_env.get("PASSPORT_ACCEPTANCE_GATEWAY_PORT") == edge_ports[0]["published"]
         and migration_env.get("PUBLIC_DOMAIN") == public_domain
         and migration_env.get("MARTY_ORG_ID") == revocation_env.get("MARTY_ORG_ID")
         == organization_env.get("MARTY_ORG_ID")

@@ -6287,7 +6287,12 @@ fn local_managed_did(public_domain: Option<&str>, issuer_did: &str) -> bool {
     public_domain
         .map(str::trim)
         .filter(|domain| !domain.is_empty())
-        .is_some_and(|domain| issuer_did.starts_with(&format!("did:web:{domain}:orgs:")))
+        .is_some_and(|domain| {
+            // A did:web authority percent-encodes the colon in its port.
+            // PUBLIC_DOMAIN keeps the ordinary host:port form used by HTTP.
+            let did_authority = domain.replace(':', "%3A");
+            issuer_did.starts_with(&format!("did:web:{did_authority}:orgs:"))
+        })
 }
 
 fn validate_identity_operation_fields(
@@ -9003,10 +9008,33 @@ mod public_contract_tests {
             managed_key_reference(organization_id, &request),
             "cred-dsc-86997e8fa454582d8bb5-es256"
         );
+        request.issuer_did = "did:web:localhost%3A29876:orgs:marty".into();
+        request.key_purpose = "csca".into();
+        assert_eq!(
+            managed_key_reference(organization_id, &request),
+            "cred-dsc-12003bce3b8a5d59814b-es256"
+        );
+        request.key_purpose = "x509_doc_signer".into();
+        assert_eq!(
+            managed_key_reference(organization_id, &request),
+            "cred-dsc-22f8cf60394c5f1f88a0-es256"
+        );
     }
 
     #[test]
     fn managed_identity_scope_requires_the_local_path_scoped_did() {
+        assert!(local_managed_did(
+            Some("localhost:29876"),
+            "did:web:localhost%3A29876:orgs:marty"
+        ));
+        assert!(!local_managed_did(
+            Some("localhost:29876"),
+            "did:web:localhost%3A29877:orgs:marty"
+        ));
+        assert!(!local_managed_did(
+            Some("localhost:29876"),
+            "did:web:localhost:29876:orgs:marty"
+        ));
         assert!(local_managed_did(
             Some("beta.example"),
             "did:web:beta.example:orgs:acme"
