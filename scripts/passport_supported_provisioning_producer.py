@@ -452,6 +452,8 @@ def _destroy_recorded_project(
                 attachments = network_settings.get("Networks")
                 require(isinstance(attachments, dict)
                         and set(attachments) <= set(networks)
+                        and (service != "passport-openbao-bootstrap"
+                             or set(attachments) == {f"{project}_private"})
                         and all(isinstance(endpoint, dict)
                                 and endpoint.get("NetworkID") in (networks[name], None, "")
                                 for name, endpoint in attachments.items()),

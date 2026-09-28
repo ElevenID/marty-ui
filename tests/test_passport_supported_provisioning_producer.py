@@ -58,7 +58,8 @@ def source_plan(tmp_path: Path) -> tuple[Path, Path, dict]:
         "services_reference": SERVICES,
         "migrations_reference": "migrations@sha256:" + "c" * 64,
         "legacy_reference": "legacy@sha256:" + "d" * 64,
-        "infra_images": {"postgres": "postgres@sha256:" + "e" * 64},
+        "infra_images": {"postgres": "postgres@sha256:" + "e" * 64,
+                         "openbao": "openbao@sha256:" + "f" * 64},
     }
     plan = {
         "schema": "marty.passport-supported-provisioning-plan/v1",
@@ -688,6 +689,82 @@ def test_partial_teardown_fails_closed_before_mutating_unknown_resource(
     arguments[0].write_text(json.dumps(bad), encoding="utf-8")
     with pytest.raises(ProducerError, match="plan is invalid"):
         destroy_partial_disposable_project(*arguments, inspector, **gates)
+
+
+def test_partial_teardown_recognizes_interrupted_openbao_bootstrap(
+    tmp_path: Path,
+) -> None:
+    arguments, plan, gates = partial_teardown_context(tmp_path)
+    project = plan["project"]
+    container = "1" * 64
+    network = "2" * 64
+    network_name = project + "_private"
+    root = Path(tempfile.gettempdir()) / project
+    source = Path(__file__).resolve().parents[1]
+    labels = {**plan["owner_labels"], "com.docker.compose.project": project,
+              "com.docker.compose.service": "passport-openbao-bootstrap"}
+    mounts = [
+        {"Type": "bind", "Source": str(path), "Destination": destination,
+         "RW": writable}
+        for path, destination, writable in (
+            (root / "secrets" / "bao_root_token", "/run/secrets/bao_root_token", False),
+            (root / "bootstrap-output", "/work/secrets", True),
+            (source / "scripts/passport_supported_openbao_bootstrap.sh",
+             "/scripts/passport_supported_openbao_bootstrap.sh", False),
+            (source / "docker/openbao-init.sh", "/scripts/openbao-init.sh", False),
+        )
+    ]
+    present = {"container": True, "network": True}
+    state = {"image": plan["infra_images"]["openbao"],
+             "name": f"/{project}-passport-openbao-bootstrap-1",
+             "mounts": mounts, "attachments": {network_name: {"NetworkID": network}}}
+    calls = []
+
+    def inspector(args: list[str]) -> str:
+        if args[:2] == ["container", "inspect"]:
+            return json.dumps([{"Id": container, "Name": state["name"],
+                                "Config": {"Image": state["image"], "Labels": labels},
+                                "NetworkSettings": {"Networks": state["attachments"]},
+                                "Mounts": state["mounts"]}])
+        if args[:2] == ["network", "inspect"]:
+            return json.dumps([{"Id": network, "Name": network_name,
+                                "Driver": "bridge", "Internal": True,
+                                "Containers": {container: {}}, "Labels": labels}])
+        if args[0] == "ps":
+            return container if present["container"] else ""
+        if args[:2] == ["network", "ls"]:
+            return network if present["network"] else ""
+        if args[:2] == ["volume", "ls"]:
+            return ""
+        raise AssertionError(args)
+
+    def executor(args: list[str], output: object) -> bool:
+        calls.append(args)
+        if args[:2] == ["container", "rm"]:
+            present["container"] = False
+        elif args[:2] == ["network", "rm"]:
+            present["network"] = False
+        return True
+
+    for field, bad in (
+        ("image", plan["services_reference"]),
+        ("name", f"/{project}-passport-openbao-bootstrap-random"),
+        ("mounts", mounts[:-1]),
+        ("attachments", {}),
+    ):
+        original = state[field]
+        state[field] = bad
+        assert not destroy_partial_disposable_project(
+            *arguments, inspector, executor, **gates), field
+        assert calls == [], field
+        state[field] = original
+
+    assert destroy_partial_disposable_project(
+        *arguments, inspector, executor, **gates)
+    assert calls == [
+        ["container", "rm", "-f", container],
+        ["network", "rm", network],
+    ]
 
 
 def test_host_key_unlink_failure_still_forces_teardown(
