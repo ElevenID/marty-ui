@@ -82,8 +82,14 @@ The live Gateway selector determines whether the signed deployment's native
 owner must return its exact missing-header 422 response or the separately
 selected provider ingress must return its exact invalid-signature 401 response.
 This checks the ingress guard. The runner separately requires a live signed
-simulator callback receipt. The report keeps `nine_route_gateway_flow` false
-until an executed physical-document Flow is verified. Only fixed route names,
+simulator callback receipt. With an optional protected Flow plan and operator
+session, the runner checks one Flow-created native job from managed SOD through
+the simulator's private signed receipt to terminal `ACTIVE`. The Flow job must
+retain its organization, issuer DID, application, job, and bureau UUID binding.
+This requires the Flow issuer-DID fix in PR #929 in the deployed aggregate image.
+The report verifies `nine_route_gateway_flow` only after that same-job proof;
+it still reports overall acceptance as blocked until the other gates pass.
+Only fixed route names,
 counts, statuses, selector booleans, and sanitized receipt evidence enter the
 report.
 

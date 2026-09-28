@@ -104,36 +104,43 @@ def test_keeps_partial_acceptance_blocked_after_actual_probe_functions() -> None
 
 
 @pytest.mark.parametrize("same_job", [False, True])
-def test_opt_in_executed_flow_keeps_real_provider_callback_blocked(same_job: bool) -> None:
+def test_opt_in_executed_flow_binds_its_own_simulator_receipt(same_job: bool) -> None:
     selected = report()
     selected["release"]["stack_manifest_sha256"] = "b" * 64
-    selected["deployment"]["provider_mode"] = "physical"
     plan = {"source_commit": "a" * 40, "stack_manifest_sha256": "b" * 64,
             "organization_id": "org-beta", "flow_definition_id": "flow-physical",
+            "issuer_did": "did:example:issuer",
             "physical_document": {"country_code": "USA", "applicant": {"name": "Test"},
                                   "mrz": {"line_1": "P<USA"},
                                   "data_groups": {"DG1": "MQ==", "DG2": "Mg=="}}}
     calls = []
 
-    def physical_flow(flow_plan, release, deployment, session, api_key):
+    def physical_flow(flow_plan, release, deployment, container, session, api_key):
         calls.append("physical")
         assert flow_plan == plan and release == selected["release"]
         assert deployment == selected["deployment"]
+        assert container == "c" * 12
         assert session == "operator-session" and api_key == "k" * 32
-        return {"verified": True, "evidence": {"signed_provider_callback_verified": False,
+        return {"verified": True, "evidence": {"signed_simulator_callback_verified": True,
+                                               "provider_kind": "simulator",
+                                               "physical_claim": "not_claimed",
+                                               "terminal_native_status": "ACTIVE",
+                                               "sod_signature_verified": True,
+                                               "sod_sha256": "a" * 64,
+                                               "callback_receipt_sha256": "d" * 64,
                                                "instance_id_sha256": "d" * 64,
                                                "application_id_sha256": "1" * 64,
                                                "job_id_sha256": ("5" if same_job else "2") * 64,
                                                "bureau_job_id_sha256": "3" * 64,
                                                "source_commit": "a" * 40,
                                                "stack_manifest_sha256": "b" * 64,
-                                               "steps": list(PHYSICAL_STEPS),
-                                               "execution_relationship": "not_compared_to_gateway_lifecycle"}}
+                                               "steps": list(PHYSICAL_STEPS)}}
 
-    with (pytest.raises(EvidenceError, match="job identities are not distinct")
+    with (pytest.raises(EvidenceError, match="did not bind its SOD")
           if same_job else nullcontext()):
         result = run(
-            Path("beta-artifacts"), {"organization_id": "org-beta"}, "k" * 32,
+            Path("beta-artifacts"), {"organization_id": "org-beta",
+                                     "issuer_did": "did:example:issuer"}, "k" * 32,
             collector=lambda *args, **kwargs: selected,
             snapshot=lambda: {"sha256": "c" * 64, "container_counts": {}},
             drain=lambda: {"verified": True, "evidence": {}},
@@ -142,9 +149,10 @@ def test_opt_in_executed_flow_keeps_real_provider_callback_blocked(same_job: boo
                                                                      "application_id_sha256": "4" * 64,
                                                                      "job_id_sha256": "5" * 64,
                                                                      "bureau_job_id_sha256": "6" * 64}},
-            routing=lambda *args: {"verified": True, "evidence": {"webhook_owner": "passport-provider-ingress"}},
+            routing=lambda *args: {"verified": True, "evidence": {"webhook_owner": "issuance-native"}},
             flow=lambda owner: {"verified": True, "evidence": {"unsigned_webhook_owner": owner,
                                                                "signature_denial_verified": True}},
+            batch=lambda *args: accepted_batch(),
             physical_flow_plan=plan, flow_session="operator-session", physical_flow=physical_flow,
             checkout_checker=lambda source: source == "a" * 40 or pytest.fail("source drift"),
         )
@@ -153,13 +161,11 @@ def test_opt_in_executed_flow_keeps_real_provider_callback_blocked(same_job: boo
         return
     assert result["status"] == "blocked"
     assert result["probes"]["executed_physical_document_flow"]["verified"] is True
-    assert result["probes"]["executed_physical_document_flow"]["evidence"]["execution_relationship"] == "separate_job_from_gateway_lifecycle"
-    assert result["probes"]["signed_bureau_callback"]["verified"] is False
-    assert result["probes"]["nine_route_gateway_flow"]["verified"] is False
-    assert result["probes"]["nine_route_gateway_flow"]["evidence"]["execution_relationship"] == "separate_jobs"
-    assert result["probes"]["nine_route_gateway_flow"]["evidence"]["missing"] == [
-        "signed_provider_webhook", "unified_job_nine_route_proof",
-    ]
+    assert result["probes"]["signed_bureau_callback"]["verified"] is True
+    assert result["probes"]["nine_route_gateway_flow"]["verified"] is True
+    assert result["probes"]["nine_route_gateway_flow"]["evidence"]["execution_relationship"] == (
+        "flow_job_end_to_end_with_separate_direct_lifecycle")
+    assert result["probes"]["nine_route_gateway_flow"]["evidence"]["missing"] == []
 
 
 def test_invalid_physical_plan_blocks_before_snapshot_or_mutation() -> None:
@@ -177,11 +183,13 @@ def test_invalid_physical_operator_cookie_blocks_before_beta_mutation() -> None:
     selected["release"]["stack_manifest_sha256"] = "b" * 64
     plan = {"source_commit": "a" * 40, "stack_manifest_sha256": "b" * 64,
             "organization_id": "org-beta", "flow_definition_id": "flow-physical",
+            "issuer_did": "did:example:issuer",
             "physical_document": {"country_code": "USA", "applicant": {"name": "Test"},
                                   "mrz": {"line_1": "P<USA"},
                                   "data_groups": {"DG1": "YQ==", "DG2": "Yg=="}}}
     with pytest.raises(PhysicalFlowProbeError, match="operator session is invalid"):
-        run(Path("beta-artifacts"), {"organization_id": "org-beta"}, "k" * 32,
+        run(Path("beta-artifacts"), {"organization_id": "org-beta",
+                                     "issuer_did": "did:example:issuer"}, "k" * 32,
             collector=lambda *args, **kwargs: selected,
             snapshot=lambda: pytest.fail("snapshot must not start"),
             drain=lambda: pytest.fail("drain must not start"),
@@ -192,9 +200,9 @@ def test_invalid_physical_operator_cookie_blocks_before_beta_mutation() -> None:
 def test_physical_source_checkout_drift_blocks_all_beta_mutation() -> None:
     selected = report()
     selected["release"]["stack_manifest_sha256"] = "b" * 64
-    selected["deployment"]["provider_mode"] = "physical"
     plan = {"source_commit": "a" * 40, "stack_manifest_sha256": "b" * 64,
             "organization_id": "org-beta", "flow_definition_id": "flow-physical",
+            "issuer_did": "did:example:issuer",
             "physical_document": {"country_code": "USA", "applicant": {"name": "Test"},
                                   "mrz": {"line_1": "P<USA"},
                                   "data_groups": {"DG1": "MQ==", "DG2": "Mg=="}}}
@@ -203,7 +211,8 @@ def test_physical_source_checkout_drift_blocks_all_beta_mutation() -> None:
         raise PhysicalFlowProbeError("Physical Flow probe source checkout drifted")
 
     with pytest.raises(PhysicalFlowProbeError, match="checkout drifted"):
-        run(Path("beta-artifacts"), {"organization_id": "org-beta"}, "k" * 32,
+        run(Path("beta-artifacts"), {"organization_id": "org-beta",
+                                     "issuer_did": "did:example:issuer"}, "k" * 32,
             collector=lambda *args, **kwargs: selected,
             snapshot=lambda: pytest.fail("production snapshot must not start"),
             drain=lambda: pytest.fail("beta drain must not start"),
@@ -224,15 +233,16 @@ def test_physical_source_checkout_drift_blocks_all_beta_mutation() -> None:
 def test_invalid_physical_document_blocks_before_direct_lifecycle(mutate) -> None:
     selected = report()
     selected["release"]["stack_manifest_sha256"] = "b" * 64
-    selected["deployment"]["provider_mode"] = "physical"
     plan = {"source_commit": "a" * 40, "stack_manifest_sha256": "b" * 64,
             "organization_id": "org-beta", "flow_definition_id": "flow-physical",
+            "issuer_did": "did:example:issuer",
             "physical_document": {"country_code": "USA", "applicant": {"name": "Test"},
                                   "mrz": {"line_1": "P<USA"},
                                   "data_groups": {"DG1": "YQ==", "DG2": "Yg=="}}}
     mutate(plan)
     with pytest.raises(PhysicalFlowProbeError):
-        run(Path("beta-artifacts"), {"organization_id": "org-beta"}, "k" * 32,
+        run(Path("beta-artifacts"), {"organization_id": "org-beta",
+                                     "issuer_did": "did:example:issuer"}, "k" * 32,
             collector=lambda *args, **kwargs: selected,
             snapshot=lambda: pytest.fail("snapshot must not start"),
             drain=lambda: pytest.fail("drain must not start"),
@@ -245,14 +255,15 @@ def test_invalid_physical_document_blocks_before_direct_lifecycle(mutate) -> Non
 def test_physical_plan_tenant_differs_from_direct_lifecycle_before_mutation() -> None:
     selected = report()
     selected["release"]["stack_manifest_sha256"] = "b" * 64
-    selected["deployment"]["provider_mode"] = "physical"
     plan = {"source_commit": "a" * 40, "stack_manifest_sha256": "b" * 64,
             "organization_id": "other-org", "flow_definition_id": "flow-physical",
+            "issuer_did": "did:example:issuer",
             "physical_document": {"country_code": "USA", "applicant": {"name": "Test"},
                                   "mrz": {"line_1": "P<USA"},
                                   "data_groups": {"DG1": "YQ==", "DG2": "Yg=="}}}
-    with pytest.raises(EvidenceError, match="tenant differ"):
-        run(Path("beta-artifacts"), {"organization_id": "org-beta"}, "k" * 32,
+    with pytest.raises(EvidenceError, match="identity differ"):
+        run(Path("beta-artifacts"), {"organization_id": "org-beta",
+                                     "issuer_did": "did:example:issuer"}, "k" * 32,
             collector=lambda *args, **kwargs: selected,
             snapshot=lambda: pytest.fail("snapshot must not start"),
             drain=lambda: pytest.fail("drain must not start"),

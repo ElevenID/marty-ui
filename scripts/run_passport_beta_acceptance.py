@@ -17,8 +17,12 @@ if __package__:
     from .probe_passport_beta_chain import (
         ChainProbeError, exercise as exercise_chain, validate_plan, validate_sessions,
     )
-    from .probe_passport_beta_flow import FlowProbeError, exercise as exercise_flow
+    from .probe_passport_beta_flow import PHYSICAL_STEPS, FlowProbeError, exercise as exercise_flow
     from .probe_passport_beta_batch import BatchProbeError, exercise as exercise_batch
+    from .probe_passport_beta_physical_flow import (
+        PhysicalFlowProbeError, exercise as exercise_physical_flow, require_source_checkout,
+        validate_operator_session, validate_plan as validate_physical_flow_plan,
+    )
     from .probe_passport_beta_host import (
         HostProbeError, assert_production_unchanged, beta_legacy_drain, beta_native_route_ownership,
         production_snapshot,
@@ -31,8 +35,12 @@ else:
     from probe_passport_beta_chain import (
         ChainProbeError, exercise as exercise_chain, validate_plan, validate_sessions,
     )
-    from probe_passport_beta_flow import FlowProbeError, exercise as exercise_flow
+    from probe_passport_beta_flow import PHYSICAL_STEPS, FlowProbeError, exercise as exercise_flow
     from probe_passport_beta_batch import BatchProbeError, exercise as exercise_batch
+    from probe_passport_beta_physical_flow import (
+        PhysicalFlowProbeError, exercise as exercise_physical_flow, require_source_checkout,
+        validate_operator_session, validate_plan as validate_physical_flow_plan,
+    )
     from probe_passport_beta_host import (
         HostProbeError, assert_production_unchanged, beta_legacy_drain, beta_native_route_ownership,
         production_snapshot,
@@ -56,12 +64,25 @@ def run(
     routing: Callable[[dict[str, dict[str, Any]], dict[str, Any] | None], dict[str, Any]] = beta_native_route_ownership,
     flow: Callable[[str], dict[str, Any]] = exercise_flow,
     batch: Callable[..., dict[str, Any]] = exercise_batch,
+    physical_flow_plan: dict[str, Any] | None = None,
+    flow_session: str | None = None,
+    physical_flow: Callable[..., dict[str, Any]] = exercise_physical_flow,
+    checkout_checker: Callable[[str], None] = require_source_checkout,
 ) -> dict[str, Any]:
     report = collector(artifact_dir, api_key=api_key, attest=attestor)
     require(report.get("status") == "blocked" and report.get("release", {}).get("signed_manifest_verified") is True, "Official beta release is not authenticated")
     require(report.get("probes", {}).get("capabilities_http", {}).get("verified") is True, "Managed issuer capability is not ready")
     require(report.get("deployment", {}).get("provider_mode") == "simulator",
             "Beta software-route acceptance requires the Marty simulator")
+    if physical_flow_plan is not None or flow_session is not None:
+        require(isinstance(physical_flow_plan, dict) and bool(flow_session),
+                "Physical Flow probe inputs are incomplete")
+        validate_operator_session(flow_session)
+        validate_physical_flow_plan(physical_flow_plan, report["release"], report["deployment"])
+        require(physical_flow_plan["organization_id"] == application.get("organization_id")
+                and physical_flow_plan["issuer_did"] == application.get("issuer_did"),
+                "Physical Flow plan and managed application identity differ")
+        checkout_checker(physical_flow_plan["source_commit"])
     chain_requested = any(value is not None for value in (certificate_plan, csca_session, dsc_session))
     if chain_requested:
         require(isinstance(certificate_plan, dict) and bool(csca_session) and bool(dsc_session),
@@ -115,6 +136,36 @@ def run(
                 and batch_evidence.get("callback_receipt_sha256")
                 == batch_evidence["callback_receipts_sha256"][0],
                 "Live beta simulator batch and signed callback receipt did not verify")
+        physical_result = None
+        if physical_flow_plan is not None:
+            physical_result = physical_flow(
+                physical_flow_plan, report["release"], report["deployment"],
+                bureau["container_id"], flow_session, api_key,
+            )
+            physical_evidence = physical_result.get("evidence") if isinstance(physical_result, dict) else None
+            direct_evidence = lifecycle_result.get("evidence")
+            require(isinstance(physical_result, dict) and physical_result.get("verified") is True
+                    and isinstance(physical_evidence, dict)
+                    and physical_evidence.get("source_commit") == report["release"]["source_commit"]
+                    and physical_evidence.get("stack_manifest_sha256") == report["release"]["stack_manifest_sha256"]
+                    and physical_evidence.get("steps") == list(PHYSICAL_STEPS)
+                    and physical_evidence.get("provider_kind") == "simulator"
+                    and physical_evidence.get("physical_claim") == "not_claimed"
+                    and physical_evidence.get("sod_signature_verified") is True
+                    and isinstance(physical_evidence.get("sod_sha256"), str)
+                    and SHA256.fullmatch(physical_evidence["sod_sha256"]) is not None
+                    and physical_evidence.get("signed_simulator_callback_verified") is True
+                    and isinstance(physical_evidence.get("callback_receipt_sha256"), str)
+                    and SHA256.fullmatch(physical_evidence["callback_receipt_sha256"]) is not None
+                    and physical_evidence.get("terminal_native_status") == "ACTIVE"
+                    and isinstance(direct_evidence, dict)
+                    and all(isinstance(physical_evidence.get(key), str)
+                            and SHA256.fullmatch(physical_evidence[key]) is not None
+                            and isinstance(direct_evidence.get(key), str)
+                            and SHA256.fullmatch(direct_evidence[key]) is not None
+                            and physical_evidence[key] != direct_evidence[key]
+                            for key in ("application_id_sha256", "job_id_sha256", "bureau_job_id_sha256")),
+                    "One Flow job did not bind its SOD, simulator receipt, and terminal state")
         chain_result = None
         if chain_requested:
             chain_result = chain(certificate_plan, csca_session, dsc_session)
@@ -154,14 +205,21 @@ def run(
         "unsigned_signature_denied": True,
         "callback_receipts_sha256": batch_evidence["callback_receipts_sha256"],
         "accepted_by_native_callback": True,
+        "flow_callback_receipt_sha256": (physical_result["evidence"]["callback_receipt_sha256"]
+                                         if physical_result is not None else None),
     }}
-    report["probes"]["nine_route_gateway_flow"] = {"verified": False, "evidence": {
+    if physical_result is not None:
+        report["probes"]["executed_physical_document_flow"] = physical_result
+    report["probes"]["nine_route_gateway_flow"] = {"verified": physical_result is not None, "evidence": {
         "capabilities_http": report["probes"]["capabilities_http"].get("evidence"),
         "application_lifecycle": lifecycle_result.get("evidence"),
         "flow_and_webhook_denial": flow_result.get("evidence"),
         "native_route_ownership": route_ownership.get("evidence"),
         "signed_simulator_callback": report["probes"]["signed_bureau_callback"]["evidence"],
-        "missing": ["executed_physical_document_flow"],
+        "physical_flow": physical_result.get("evidence") if physical_result is not None else None,
+        "execution_relationship": ("flow_job_end_to_end_with_separate_direct_lifecycle"
+                                   if physical_result is not None else "physical_flow_absent"),
+        "missing": [] if physical_result is not None else ["executed_physical_document_flow"],
     }}
     if chain_result is not None:
         report["probes"]["managed_csca_dsc_chain"] = chain_result
@@ -181,6 +239,7 @@ def main() -> int:
     parser.add_argument("--artifact-dir", type=Path, required=True)
     parser.add_argument("--application-file", type=Path, required=True)
     parser.add_argument("--certificate-plan-file", type=Path)
+    parser.add_argument("--physical-flow-plan-file", type=Path)
     parser.add_argument("--output", type=Path, required=True)
     args = parser.parse_args()
     try:
@@ -188,13 +247,18 @@ def main() -> int:
         require(isinstance(api_key, str) and len(api_key) >= 32, "Passport beta API key is unavailable")
         application = read_json(args.application_file)
         certificate_plan = read_json(args.certificate_plan_file) if args.certificate_plan_file else None
+        physical_flow_plan = read_json(args.physical_flow_plan_file) if args.physical_flow_plan_file else None
         report = run(
             args.artifact_dir, application, api_key, certificate_plan=certificate_plan,
             csca_session=os.environ.get("PASSPORT_ACCEPTANCE_CSCA_OPERATOR_COOKIE"),
             dsc_session=os.environ.get("PASSPORT_ACCEPTANCE_DSC_OPERATOR_COOKIE"),
+            physical_flow_plan=physical_flow_plan,
+            flow_session=os.environ.get("PASSPORT_ACCEPTANCE_FLOW_OPERATOR_COOKIE")
+            if physical_flow_plan is not None else None,
         )
         args.output.write_text(json.dumps(report, indent=2, sort_keys=True) + "\n", encoding="utf-8")
-    except (EvidenceError, ProbeError, ChainProbeError, FlowProbeError, BatchProbeError, HostProbeError, OSError) as exc:
+    except (EvidenceError, ProbeError, ChainProbeError, FlowProbeError, BatchProbeError,
+            PhysicalFlowProbeError, HostProbeError, OSError) as exc:
         args.output.write_text(json.dumps({"schema": "marty.passport-beta-acceptance/v1", "status": "blocked", "blocker": str(exc)}, indent=2) + "\n", encoding="utf-8")
         parser.exit(1, f"Passport beta acceptance blocked: {exc}\n")
     print(f"Wrote blocked passport beta acceptance evidence: {args.output}")

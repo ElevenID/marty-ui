@@ -10,7 +10,36 @@ import pytest
 
 from scripts.probe_passport_beta_flow import PHYSICAL_STEPS
 from scripts import probe_passport_beta_physical_flow as probe
-from scripts.probe_passport_beta_physical_flow import PhysicalFlowProbeError, exercise, validate_plan
+from scripts.probe_passport_beta_physical_flow import (
+    PhysicalFlowProbeError, exercise as live_exercise, validate_plan,
+)
+
+CONTAINER = "a" * 12
+BUREAU = "00000000-0000-0000-0000-000000000001"
+
+
+def simulator_request(container: str, method: str, path: str) -> tuple[int, bytes, dict]:
+    assert container == CONTAINER and method == "GET"
+    assert path == "/v1/personalization/jobs/" + BUREAU
+    return 200, b"", {"status": "SHIPPED", "tracking_number": "BETA-SIM-" + "0" * 31 + "1",
+                      "callback_receipt_sha256": "e" * 64}
+
+
+def exercise(plan, release, deployment, session, api_key, **kwargs):
+    original_status = kwargs.pop("status_request", ready_status)
+    calls = 0
+
+    def status(*args):
+        nonlocal calls
+        calls += 1
+        code, payload = original_status(*args)
+        if (original_status is ready_status and calls > 1 and code == 200
+                and payload.get("flow_execution_id") == "instance-1"):
+            payload = {**payload, "status": "ACTIVE", "completed_at": "2026-09-28T00:00:00Z"}
+        return code, payload
+
+    return live_exercise(plan, release, deployment, CONTAINER, session, api_key,
+                         status_request=status, simulator_request=simulator_request, **kwargs)
 
 
 def inputs() -> tuple[dict, dict, dict]:
@@ -18,12 +47,13 @@ def inputs() -> tuple[dict, dict, dict]:
     manifest = "b" * 64
     plan = {"source_commit": source, "stack_manifest_sha256": manifest,
             "organization_id": "org-beta", "flow_definition_id": "flow-physical",
+            "issuer_did": "did:example:issuer",
             "physical_document": {"country_code": "USA", "applicant": {"name": "Test"},
                                   "mrz": {"line_1": "P<USA"},
                                   "data_groups": {"DG1": "MQ==", "DG2": "Mg=="}}}
     release = {"source_commit": source, "stack_manifest_sha256": manifest,
                "signed_manifest_verified": True}
-    deployment = {"provider_mode": "physical"}
+    deployment = {"provider_mode": "simulator"}
     return plan, release, deployment
 
 
@@ -46,9 +76,14 @@ class FakeFlow:
                 "status": "COMPLETED" if self.index == len(PHYSICAL_STEPS) else "IN_PROGRESS",
                 "metadata": {"external_reference": self.reference},
                 "context_data": {"physical_document_job": {"application_id": "application-1",
+                                                          "organization_id": "org-beta",
+                                                          "flow_execution_id": "instance-1",
+                                                          "issuer_did": "did:example:issuer",
+                                                          "sod_sha256": "f" * 64,
+                                                          "sod_signature_verified": True,
                                                           "id": "job-1", "bureau_job_id": (
                                                               None if self.late_bureau and self.index < 6
-                                                              else "bureau-1"),
+                                                              else BUREAU),
                     "status": "SUBMITTED" if self.stale_job else "QUALITY_CHECK"}}}
 
     def __call__(self, method: str, path: str, body: dict | None, session: str) -> tuple[int, dict]:
@@ -69,7 +104,7 @@ class FakeFlow:
         return 200, self.payload()
 
 
-def test_executed_flow_is_source_bound_but_callback_stays_unverified() -> None:
+def test_executed_flow_binds_managed_sod_and_simulator_receipt() -> None:
     contract = json.loads((Path(__file__).resolve().parents[1] / "contracts/flow-service-behavior.json").read_text())
     assert list(PHYSICAL_STEPS) == contract["flow_types"]["physical_document_issuance"]["steps"]
     physical_contract = json.loads((Path(__file__).resolve().parents[1] / "contracts/issuance-physical-passport-native.json").read_text())
@@ -82,11 +117,13 @@ def test_executed_flow_is_source_bound_but_callback_stays_unverified() -> None:
     assert result["verified"] is True
     assert result["evidence"]["steps"] == list(PHYSICAL_STEPS)
     assert result["evidence"]["source_commit"] == release["source_commit"]
-    assert result["evidence"]["signed_provider_callback_verified"] is False
+    assert result["evidence"]["signed_simulator_callback_verified"] is True
+    assert result["evidence"]["callback_receipt_sha256"] == "e" * 64
+    assert result["evidence"]["sod_signature_verified"] is True
     assert result["evidence"]["execution_relationship"] == "not_compared_to_gateway_lifecycle"
     for field in ("application_id_sha256", "job_id_sha256", "bureau_job_id_sha256"):
         assert len(result["evidence"][field]) == 64
-    assert result["evidence"]["missing"] == ["protected_real_provider_ingress_receipt"]
+    assert result["evidence"]["terminal_native_status"] == "ACTIVE"
     assert len(fake.calls) == 2 + 2 * len(PHYSICAL_STEPS)
     assert "operator-session" not in str(result)
     assert "Test" not in str(result)
@@ -107,18 +144,18 @@ def test_bureau_job_can_bind_when_submission_completes() -> None:
 def test_source_drift_fails_before_any_request(field: str, value: str) -> None:
     plan, release, deployment = inputs()
     plan[field] = value
-    with pytest.raises(PhysicalFlowProbeError, match="signed physical release"):
+    with pytest.raises(PhysicalFlowProbeError, match="signed simulator release"):
         exercise(plan, release, deployment, "operator-session",
                  "k" * 32, request=lambda *args: pytest.fail("no request before source binding"))
 
 
-def test_unsigned_or_simulator_release_fails_before_mutation() -> None:
+def test_unsigned_or_physical_provider_release_fails_before_mutation() -> None:
     plan, release, deployment = inputs()
     for changed_release, changed_deployment in [
         ({**release, "signed_manifest_verified": False}, deployment),
-        (release, {"provider_mode": "simulator"}),
+        (release, {"provider_mode": "physical"}),
     ]:
-        with pytest.raises(PhysicalFlowProbeError, match="signed physical release"):
+        with pytest.raises(PhysicalFlowProbeError, match="signed simulator release"):
             validate_plan(plan, changed_release, changed_deployment)
 
 
@@ -145,7 +182,9 @@ def ready_status(method: str, path: str, body: dict | None, api_key: str) -> tup
     assert body is None and api_key == "k" * 32
     return 200, {"organization_id": "org-beta", "application_id": "application-1",
                  "flow_execution_id": "instance-1", "id": "job-1",
-                 "bureau_job_id": "bureau-1", "status": "QUALITY_CHECK"}
+                 "bureau_job_id": BUREAU, "issuer_did": "did:example:issuer",
+                 "tracking_number": "BETA-SIM-" + "0" * 31 + "1",
+                 "status": "QUALITY_CHECK"}
 
 
 @pytest.mark.parametrize("head,status", [("f" * 40, ""), ("a" * 40, " M scripts/probe.py")])

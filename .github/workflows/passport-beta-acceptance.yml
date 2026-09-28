@@ -69,8 +69,8 @@ jobs:
             "${flow_args[@]}" \
             --output "$report_file"
           # A protected success must mean the whole acceptance gate passed.
-          # Until physical provider and recovery proof exist, preserve the
-          # blocked artifact and fail this workflow.
+          # Until simulator Flow, recovery, and supported-consumer proof exist,
+          # preserve the blocked artifact and fail this workflow.
           python3 -c 'import json,sys; from pathlib import Path; report=json.loads(Path(sys.argv[1]).read_text()); sys.exit(0 if report.get("schema") == "marty.passport-beta-acceptance/v1" and report.get("status") == "accepted" else "Passport beta acceptance remains blocked")' "$report_file"
       - name: Upload sanitized beta evidence
         if: always() && (steps.probe.outcome == 'success' || steps.probe.outcome == 'failure')

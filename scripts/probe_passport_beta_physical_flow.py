@@ -1,10 +1,5 @@
 #!/usr/bin/env python3
-"""Execute the frozen physical Flow on beta; do not infer provider authentication.
-
-The callback can change the public job state, but that state does not reveal
-whether the trusted ingress authenticated a real physical provider. Its proof
-remains a separate blocked gate until a protected ingress receipt exists.
-"""
+"""Bind one beta physical-document Flow to its native simulator receipt."""
 
 from __future__ import annotations
 
@@ -20,13 +15,20 @@ from typing import Any, Callable
 from urllib.error import HTTPError, URLError
 from urllib.parse import quote
 from urllib.request import HTTPRedirectHandler, Request, build_opener
+from uuid import UUID
 
 if __package__:
     from .probe_passport_beta_flow import PHYSICAL_STEPS
     from .probe_passport_beta_gateway import request_beta as request_passport
+    from .probe_passport_beta_batch import (
+        CONTAINER_ID, SHA256, STATUS_ORDER, _request as request_simulator,
+    )
 else:
     from probe_passport_beta_flow import PHYSICAL_STEPS
     from probe_passport_beta_gateway import request_beta as request_passport
+    from probe_passport_beta_batch import (
+        CONTAINER_ID, SHA256, STATUS_ORDER, _request as request_simulator,
+    )
 
 ORIGIN = "https://beta.elevenidllc.com"
 SHA = re.compile(r"[0-9a-f]{40}\Z")
@@ -94,20 +96,22 @@ def request_beta(method: str, path: str, body: dict[str, Any] | None, session: s
 
 def validate_plan(plan: dict[str, Any], release: dict[str, Any], deployment: dict[str, Any]) -> None:
     if (not isinstance(plan, dict) or set(plan) != {"source_commit", "stack_manifest_sha256",
-            "organization_id", "flow_definition_id", "physical_document"}):
+            "organization_id", "flow_definition_id", "issuer_did", "physical_document"}):
         raise PhysicalFlowProbeError("Physical Flow plan is incomplete")
     if (release.get("signed_manifest_verified") is not True
-            or deployment.get("provider_mode") != "physical"
+            or deployment.get("provider_mode") != "simulator"
             or not isinstance(plan["source_commit"], str)
             or SHA.fullmatch(plan["source_commit"]) is None
             or plan["source_commit"] != release.get("source_commit")
             or not isinstance(plan["stack_manifest_sha256"], str)
             or DIGEST.fullmatch(plan["stack_manifest_sha256"]) is None
             or plan["stack_manifest_sha256"] != release.get("stack_manifest_sha256")):
-        raise PhysicalFlowProbeError("Physical Flow plan does not match signed physical release")
+        raise PhysicalFlowProbeError("Physical Flow plan does not match signed simulator release")
     for key in ("organization_id", "flow_definition_id"):
         if not isinstance(plan[key], str) or IDENTIFIER.fullmatch(plan[key]) is None:
             raise PhysicalFlowProbeError("Physical Flow identity is invalid")
+    if not isinstance(plan["issuer_did"], str) or not plan["issuer_did"].startswith("did:"):
+        raise PhysicalFlowProbeError("Physical Flow managed issuer DID is invalid")
     physical = plan["physical_document"]
     if (not isinstance(physical, dict)
             or set(physical) not in (
@@ -138,9 +142,11 @@ def validate_plan(plan: dict[str, Any], release: dict[str, Any], deployment: dic
 
 
 def exercise(
-    plan: dict[str, Any], release: dict[str, Any], deployment: dict[str, Any], session: str, api_key: str,
+    plan: dict[str, Any], release: dict[str, Any], deployment: dict[str, Any],
+    simulator_container_id: str, session: str, api_key: str,
     *, request: Callable[[str, str, dict[str, Any] | None, str], tuple[int, dict[str, Any]]] = request_beta,
     status_request: Callable[[str, str, dict[str, Any] | None, str], tuple[int, dict[str, Any]]] = request_passport,
+    simulator_request: Callable[..., tuple[int, bytes, dict[str, Any]]] = request_simulator,
     nonce: Callable[[], str] = lambda: secrets.token_hex(16),
     source_checker: Callable[[str], None] = require_source_checkout,
     max_polls: int = 90,
@@ -148,12 +154,14 @@ def exercise(
     sleep: Callable[[float], None] = time.sleep,
 ) -> dict[str, Any]:
     validate_plan(plan, release, deployment)
+    if CONTAINER_ID.fullmatch(simulator_container_id) is None:
+        raise PhysicalFlowProbeError("Inspected beta simulator identity is invalid")
     source_checker(plan["source_commit"])
     validate_operator_session(session)
     if not isinstance(api_key, str) or len(api_key) < 32:
         raise PhysicalFlowProbeError("Flow operator session or passport API key is unavailable")
     if not 1 <= max_polls <= 180 or poll_interval_seconds < 0:
-        raise PhysicalFlowProbeError("Invalid bounded provider polling policy")
+        raise PhysicalFlowProbeError("Invalid bounded simulator polling policy")
     run_id = nonce()
     if not isinstance(run_id, str) or re.fullmatch(r"[0-9a-f]{32}", run_id) is None:
         raise PhysicalFlowProbeError("Physical Flow run identity is invalid")
@@ -170,6 +178,8 @@ def exercise(
 
     bound_job: tuple[str, str] | None = None
     bound_bureau_job_id: str | None = None
+    sod_sha256: str | None = None
+    callback_receipt_sha256: str | None = None
 
     def check(payload: dict[str, Any], step: str | None, expected_status: str) -> None:
         nonlocal bound_job, bound_bureau_job_id
@@ -186,7 +196,10 @@ def exercise(
         job_id = job.get("id") if isinstance(job, dict) else None
         bureau_job_id = job.get("bureau_job_id") if isinstance(job, dict) else None
         if (not isinstance(application_id, str) or IDENTIFIER.fullmatch(application_id) is None
-                or not isinstance(job_id, str) or not job_id):
+                or not isinstance(job_id, str) or not job_id
+                or job.get("issuer_did") != plan["issuer_did"]
+                or job.get("flow_execution_id") != instance_id
+                or job.get("organization_id") != organization_id):
             raise PhysicalFlowProbeError("Physical Flow has no durable job binding")
         current_job = (application_id, job_id)
         if bound_job is None:
@@ -215,6 +228,36 @@ def exercise(
                 raise PhysicalFlowProbeError("Physical Flow has no durable bureau job binding")
             application_id, job_id = bound_job
             bureau_job_id = bound_bureau_job_id
+            try:
+                canonical_bureau_id = str(UUID(bureau_job_id))
+            except ValueError as exc:
+                raise PhysicalFlowProbeError("Physical Flow bureau job ID is not canonical") from exc
+            if canonical_bureau_id != bureau_job_id:
+                raise PhysicalFlowProbeError("Physical Flow bureau job ID is not canonical")
+            prior_order = -1
+            for poll in range(max_polls):
+                private_status, _, private_job = simulator_request(
+                    simulator_container_id, "GET",
+                    "/v1/personalization/jobs/" + bureau_job_id,
+                )
+                state = private_job.get("status")
+                if (private_status != 200 or state not in STATUS_ORDER
+                        or STATUS_ORDER[state] < prior_order):
+                    raise PhysicalFlowProbeError("Private simulator job poll failed")
+                prior_order = STATUS_ORDER[state]
+                if state == "SHIPPED":
+                    receipt = private_job.get("callback_receipt_sha256")
+                    if (private_job.get("tracking_number")
+                            != "BETA-SIM-" + UUID(bureau_job_id).hex
+                            or not isinstance(receipt, str)
+                            or SHA256.fullmatch(receipt) is None):
+                        raise PhysicalFlowProbeError("Flow simulator signed receipt is missing")
+                    callback_receipt_sha256 = receipt
+                    break
+                if poll + 1 < max_polls:
+                    sleep(poll_interval_seconds)
+            else:
+                raise PhysicalFlowProbeError("Flow simulator callback did not reach SHIPPED")
             status_path = "/v1/passport/applications/" + quote(application_id, safe="") + "/production-status"
             for poll in range(max_polls):
                 http_status, production = status_request("GET", status_path, None, api_key)
@@ -222,34 +265,54 @@ def exercise(
                         or production.get("application_id") != application_id
                         or production.get("flow_execution_id") != instance_id
                         or production.get("id") != job_id
-                        or production.get("bureau_job_id") != bureau_job_id):
-                    raise PhysicalFlowProbeError("Physical provider job identity drifted")
+                        or production.get("bureau_job_id") != bureau_job_id
+                        or production.get("issuer_did") != plan["issuer_did"]):
+                    raise PhysicalFlowProbeError("Physical simulator job identity drifted")
                 if production.get("status") in ("QUALITY_CHECK", "READY_FOR_ACTIVATION"):
                     break
                 if production.get("status") in ("FAILED", "CANCELLED", "ACTIVE"):
-                    raise PhysicalFlowProbeError("Physical provider job reached invalid state")
+                    raise PhysicalFlowProbeError("Physical simulator job reached invalid state")
                 if poll + 1 < max_polls:
                     sleep(poll_interval_seconds)
             else:
-                raise PhysicalFlowProbeError("Physical provider callback did not reach quality check")
+                raise PhysicalFlowProbeError("Physical simulator callback did not reach quality check")
         data = {"passed": True, "failure_codes": []} if step == "quality_verify" else {}
         status, advanced = request("POST", path + "/advance", {"step_result": "success", "data": data}, session)
         if status != 200:
             raise PhysicalFlowProbeError("Physical Flow advance failed")
         next_step = PHYSICAL_STEPS[index + 1] if index + 1 < len(PHYSICAL_STEPS) else step
         check(advanced, next_step, "COMPLETED" if index + 1 == len(PHYSICAL_STEPS) else "IN_PROGRESS")
+        if step == "sign_sod":
+            job = advanced.get("context_data", {}).get("physical_document_job")
+            digest = job.get("sod_sha256") if isinstance(job, dict) else None
+            if (not isinstance(digest, str) or SHA256.fullmatch(digest) is None
+                    or job.get("sod_signature_verified") is not True):
+                raise PhysicalFlowProbeError("Flow managed SOD signature was not verified")
+            sod_sha256 = digest
         if step == "track_production":
             context = advanced.get("context_data")
             job = context.get("physical_document_job") if isinstance(context, dict) else None
             if not isinstance(job, dict) or job.get("status") not in ("QUALITY_CHECK", "READY_FOR_ACTIVATION"):
-                raise PhysicalFlowProbeError("Provider callback has not reached quality check")
+                raise PhysicalFlowProbeError("Simulator callback has not reached quality check")
         observed.append(step)
     status, final = request("GET", path, None, session)
     if status != 200:
         raise PhysicalFlowProbeError("Physical Flow final read failed")
     check(final, PHYSICAL_STEPS[-1], "COMPLETED")
-    if bound_job is None or bound_bureau_job_id is None:
+    if (bound_job is None or bound_bureau_job_id is None or sod_sha256 is None
+            or callback_receipt_sha256 is None):
         raise PhysicalFlowProbeError("Physical Flow has no durable bureau job binding")
+    terminal_path = "/v1/passport/applications/" + quote(bound_job[0], safe="") + "/production-status"
+    terminal_status, terminal = status_request("GET", terminal_path, None, api_key)
+    if (terminal_status != 200 or terminal.get("organization_id") != organization_id
+            or terminal.get("flow_execution_id") != instance_id
+            or terminal.get("application_id") != bound_job[0]
+            or terminal.get("id") != bound_job[1]
+            or terminal.get("issuer_did") != plan["issuer_did"]
+            or terminal.get("bureau_job_id") != bound_bureau_job_id
+            or terminal.get("tracking_number") != "BETA-SIM-" + UUID(bound_bureau_job_id).hex
+            or terminal.get("status") != "ACTIVE" or not terminal.get("completed_at")):
+        raise PhysicalFlowProbeError("Flow terminal native passport job did not persist")
     return {"verified": True, "evidence": {
         "source_commit": plan["source_commit"],
         "stack_manifest_sha256": plan["stack_manifest_sha256"],
@@ -257,9 +320,14 @@ def exercise(
         "application_id_sha256": hashlib.sha256(bound_job[0].encode()).hexdigest(),
         "job_id_sha256": hashlib.sha256(bound_job[1].encode()).hexdigest(),
         "bureau_job_id_sha256": hashlib.sha256(bound_bureau_job_id.encode()).hexdigest(),
+        "sod_sha256": sod_sha256,
+        "sod_signature_verified": True,
+        "callback_receipt_sha256": callback_receipt_sha256,
+        "provider_kind": "simulator",
+        "physical_claim": "not_claimed",
         "run_id_sha256": hashlib.sha256(run_id.encode()).hexdigest(),
         "steps": observed,
         "execution_relationship": "not_compared_to_gateway_lifecycle",
-        "signed_provider_callback_verified": False,
-        "missing": ["protected_real_provider_ingress_receipt"],
+        "signed_simulator_callback_verified": True,
+        "terminal_native_status": "ACTIVE",
     }}
