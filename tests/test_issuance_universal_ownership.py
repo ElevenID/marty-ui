@@ -146,7 +146,12 @@ def test_production_and_kms_boundaries_remain_explicit() -> None:
     for service_name in ("auth", "applicant", "presentation-policy", "flow"):
         environment = services[service_name]["environment"]
         assert environment["ISSUANCE_SERVICE_URL"] == "http://issuance:8005"
-        assert "ISSUANCE_NATIVE_SERVICE_URL" not in environment
+        if service_name == "flow":
+            assert environment["ISSUANCE_NATIVE_SERVICE_URL"] == (
+                "${ISSUANCE_NATIVE_SERVICE_URL:-http://issuance:8005}"
+            )
+        else:
+            assert "ISSUANCE_NATIVE_SERVICE_URL" not in environment
 
     presentation_environment = services["presentation-policy"]["environment"]
     assert presentation_environment["MIP_CREDENTIAL_STATUS_URL_TEMPLATE"] == (
