@@ -9,7 +9,7 @@
   },
   "input": {
     "minimum_jobs": 2,
-    "document_material": "synthetic, fixed-format data only",
+    "document_material": "fixed synthetic document fixture in probe_passport_beta_batch.SYNTHETIC_DOCUMENT; ignore caller applicant, MRZ, and data-group fields",
     "organization_id": "same tenant as the protected beta acceptance application",
     "native_binding": "Create two distinct native passport jobs through Gateway, generate data groups and managed SOD for each, submit both to the simulator batch, then submit each through native to persist the exact returned bureau job ID before accepting any callback receipt",
     "batch_identity": "The private batch and native single submit carry the same organization, native source job ID, application ID, country, document type, data groups, and MRZ; changing SOD or public DSC on native re-sign does not change simulator idempotency identity"
@@ -35,6 +35,8 @@
     "services_oci_reference",
     "provider_kind=simulator",
     "physical_claim=not_claimed",
+    "native_binding_verified",
+    "native_completed_jobs",
     "request_commitment",
     "response_commitment",
     "submitted_job_commitments",

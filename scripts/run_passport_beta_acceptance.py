@@ -96,7 +96,7 @@ def run(
                         for key in ("container_id", "oci_reference")),
                 "Inspected beta simulator is missing")
         batch_result = batch(
-            application["organization_id"], bureau["container_id"],
+            application, api_key, bureau["container_id"],
             report["release"]["source_commit"], report["release"]["stack_manifest_sha256"],
             bureau["oci_reference"],
         )
@@ -106,6 +106,8 @@ def run(
                 and batch_evidence.get("provider_kind") == "simulator"
                 and batch_evidence.get("physical_claim") == "not_claimed"
                 and batch_evidence.get("simulator_marker_verified") is True
+                and batch_evidence.get("native_binding_verified") is True
+                and batch_evidence.get("native_completed_jobs") == 2
                 and isinstance(batch_evidence.get("callback_receipts_sha256"), list)
                 and len(batch_evidence["callback_receipts_sha256"]) >= 2
                 and all(isinstance(value, str) and SHA256.fullmatch(value) is not None

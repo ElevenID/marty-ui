@@ -92,10 +92,19 @@ KMS signature only after native issuance accepts the signed callback and the
 status transition commits. Its authenticated private job poll returns the
 lowercase hex digest as `callback_receipt_sha256`; preexisting jobs can return
 `null`. The simulator never stores or returns the callback body or signature.
-The protected runner submits two synthetic jobs to the inspected beta simulator
-through its private, authenticated route. It checks the one-to-one job mapping,
-polls both jobs to `SHIPPED` with their simulator tracking markers, and requires
-two distinct callback receipt digests. It publishes per-run keyed HMAC
+The protected runner first creates two distinct native passport jobs through Gateway,
+generates their data groups and managed SODs, then submits those exact job identities
+to the inspected beta simulator's private batch route. It binds each returned bureau
+job ID through native single-job submission before accepting callbacks. It checks
+the one-to-one mapping, polls both jobs to `SHIPPED` with simulator tracking markers,
+requires two distinct callback receipt digests, and finishes each native job through
+quality and activation. The batch uses an explicit document type for simulator
+idempotency with native submission; the frozen Rust batch adapter's historical wire
+shape is tested separately. If a native binding fails after batch submission, the
+fresh simulator and native jobs may remain in the beta runtime. The run fails
+closed, and the nonterminal-job drain blocks cutover until the synthetic jobs
+are quarantined and remediated under the existing beta rollback procedure.
+The probe never tears down the durable `elevenid-beta` project. It publishes per-run keyed HMAC
 commitments for the exact batch request, response, and job IDs; the key, raw
 IDs, document material, callback body, and signature stay out of evidence.
 The report marks `physical_bureau_batch` and `signed_bureau_callback` verified

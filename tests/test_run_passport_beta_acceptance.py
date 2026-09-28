@@ -38,6 +38,7 @@ def accepted_batch() -> dict:
     return {"verified": True, "evidence": {
         "provider_kind": "simulator", "physical_claim": "not_claimed",
         "simulator_marker_verified": True, "callback_receipt_sha256": "e" * 64,
+        "native_binding_verified": True, "native_completed_jobs": 2,
         "callback_receipts_sha256": ["e" * 64, "f" * 64],
     }}
 
@@ -74,10 +75,16 @@ def test_keeps_partial_acceptance_blocked_after_actual_probe_functions() -> None
                                                "unsigned_webhook_owner": owner,
                                                "signature_denial_verified": True}}
 
-    result = run(Path("beta-artifacts"), {"organization_id": "beta"}, "a" * 32,
+    application = {"organization_id": "beta"}
+    def batch(*args: object) -> dict:
+        calls.append("batch")
+        assert args[:2] == (application, "a" * 32)
+        return accepted_batch()
+
+    result = run(Path("beta-artifacts"), application, "a" * 32,
                  collector=collect, attestor=lambda *args: True, snapshot=snapshot,
                  drain=drain, lifecycle=lifecycle, routing=routing, flow=flow,
-                 batch=lambda *args: calls.append("batch") or accepted_batch())
+                 batch=batch)
     assert calls == ["collect", "routing", "snapshot", "drain", "flow", "lifecycle", "batch", "snapshot", "drain", "collect", "routing"]
     assert result["status"] == "blocked"
     assert result["probes"]["legacy_drain"]["verified"] is True
