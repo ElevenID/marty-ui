@@ -97,6 +97,7 @@ pub async fn migrate_passport(pool: &PgPool) -> Result<(), sqlx::Error> {
         "submission_intent_started_at",
         "submission_intent_provider_profile_id",
         "submission_intent_bureau_endpoint_sha256",
+        "submission_intent_signing_provenance",
         "tracking_number",
         "status",
         "quality_result",
@@ -123,6 +124,11 @@ pub async fn migrate_passport(pool: &PgPool) -> Result<(), sqlx::Error> {
     .await?;
     sqlx::raw_sql(include_str!(
         "../migrations/0004_passport_submission_intent.sql"
+    ))
+    .execute(&mut *transaction)
+    .await?;
+    sqlx::raw_sql(include_str!(
+        "../migrations/0005_passport_submission_provenance.sql"
     ))
     .execute(&mut *transaction)
     .await?;

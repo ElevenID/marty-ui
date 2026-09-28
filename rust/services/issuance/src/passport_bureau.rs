@@ -99,7 +99,7 @@ impl PersonalizationJob {
             .collect()
     }
 
-    fn payload(&self) -> Value {
+    pub(crate) fn payload(&self) -> Value {
         json!({
             "job_id": self.id,
             "application_id": self.application_id,

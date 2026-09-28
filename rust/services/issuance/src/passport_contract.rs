@@ -946,6 +946,7 @@ mod tests {
             submission_intent_started_at: None,
             submission_intent_provider_profile_id: None,
             submission_intent_bureau_endpoint_sha256: None,
+            submission_intent_signing_provenance: None,
             tracking_number: None,
             status: "DRAFT".into(),
             quality_result: None,

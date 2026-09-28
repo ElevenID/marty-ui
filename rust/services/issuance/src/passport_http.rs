@@ -9,7 +9,8 @@ use axum::{
     routing::{get, post},
     Json, Router,
 };
-use chrono::Utc;
+use chrono::{DateTime, Utc};
+use marty_crypto::certificate::load_certificate_pem;
 use marty_passport_auth::{
     PassportTenantAuthError, PassportTenantCredentialSource, PassportTenantKeyring,
     PassportTenantPrincipal,
@@ -17,6 +18,7 @@ use marty_passport_auth::{
 use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
 use std::time::Duration;
+use subtle::ConstantTimeEq;
 use tracing::error;
 use uuid::Uuid;
 
@@ -24,6 +26,7 @@ use crate::{
     config::IssuanceServiceConfig,
     passport_artifact::{PassportArtifactCipher, PassportArtifactError},
     passport_artifact_kms::{KmsArtifactError, KmsPassportArtifactCipher},
+    passport_beta_material::{material_digests, PassportBetaMaterialDigests},
     passport_bureau::{
         parse_verified_webhook, BureauClient, BureauError, DocumentType, KmsWebhookVerifier,
         PersonalizationJob, ProductionStatus,
@@ -34,9 +37,9 @@ use crate::{
         QualityResultRequest,
     },
     passport_repository::{
-        fill_missing_bureau_metadata, should_apply_bureau_status, PassportJob, PassportJobInsert,
-        PassportJobPatch, PassportJobStatus, PassportSubmissionReservation,
-        PassportWebhookRepositoryError, PostgresPassportRepository,
+        fill_missing_bureau_metadata, should_apply_bureau_status, PassportBetaMaterialReceipt,
+        PassportJob, PassportJobInsert, PassportJobPatch, PassportJobStatus,
+        PassportSubmissionReservation, PassportWebhookRepositoryError, PostgresPassportRepository,
     },
     passport_signer::{
         ManagedProfileSigner, PassportSigner, RemoteSigner, SignedMaterial, SignerError,
@@ -51,6 +54,8 @@ pub struct PassportHttpService {
     signer: Option<PassportSigner>,
     bureau: Option<BureauClient>,
     bureau_provider_profile_id: Option<String>,
+    beta_reconciliation_enabled: bool,
+    beta_reconciliation_operator_token: Option<String>,
     webhook_secret: Option<Vec<u8>>,
     webhook_kms: Option<KmsWebhookVerifier>,
 }
@@ -66,6 +71,63 @@ enum ArtifactAvailability {
 enum ArtifactCryptor {
     Legacy(PassportArtifactCipher),
     Kms(KmsPassportArtifactCipher),
+}
+
+#[derive(serde::Deserialize, serde::Serialize)]
+struct SubmissionSigningProvenance {
+    signing_mode: String,
+    artifact_custody: String,
+    issuer_did: String,
+    dsc_der_sha256: String,
+    csca_der_sha256: String,
+    validated_at: DateTime<Utc>,
+}
+
+impl SubmissionSigningProvenance {
+    fn managed_kms(
+        job: &PassportJob,
+        signed: &SignedMaterial,
+        validated_at: DateTime<Utc>,
+    ) -> Result<Self, PassportHttpError> {
+        let issuer_did = job
+            .issuer_did
+            .clone()
+            .ok_or(PassportHttpError::Signer(SignerError::MissingIssuerDid))?;
+        let dsc = load_certificate_pem(&signed.dsc_cert_pem)
+            .map_err(|_| PassportHttpError::Signer(SignerError::InvalidManagedMaterial))?;
+        let csca = signed
+            .csca_cert_pem
+            .as_deref()
+            .ok_or(PassportHttpError::Signer(
+                SignerError::InvalidManagedMaterial,
+            ))
+            .and_then(|pem| {
+                load_certificate_pem(pem)
+                    .map_err(|_| PassportHttpError::Signer(SignerError::InvalidManagedMaterial))
+            })?;
+        Ok(Self {
+            signing_mode: "managed-issuer-profile".into(),
+            artifact_custody: "kms".into(),
+            issuer_did,
+            dsc_der_sha256: hex::encode(Sha256::digest(dsc)),
+            csca_der_sha256: hex::encode(Sha256::digest(csca)),
+            validated_at,
+        })
+    }
+
+    fn matches(&self, job: &PassportJob, signed: &SignedMaterial) -> bool {
+        self.signing_mode == "managed-issuer-profile"
+            && self.artifact_custody == "kms"
+            && job.issuer_did.as_deref() == Some(self.issuer_did.as_str())
+            && self.validated_at >= job.created_at
+            && job
+                .submission_intent_started_at
+                .is_some_and(|started| self.validated_at <= started)
+            && Self::managed_kms(job, signed, self.validated_at).is_ok_and(|actual| {
+                actual.dsc_der_sha256 == self.dsc_der_sha256
+                    && actual.csca_der_sha256 == self.csca_der_sha256
+            })
+    }
 }
 
 impl ArtifactCryptor {
@@ -132,6 +194,8 @@ fn kms_artifact_error(error: KmsArtifactError) -> PassportHttpError {
 pub enum PassportStartupError {
     #[error("{0} is required for native passport HTTP")]
     Missing(&'static str),
+    #[error("beta reconciliation operator token must differ from the shared service token")]
+    SharedOperatorToken,
     #[error(transparent)]
     Signer(#[from] SignerError),
     #[error(transparent)]
@@ -148,6 +212,12 @@ impl PassportHttpService {
         let native = &config.passport_native;
         if !native.enabled {
             return Ok(None);
+        }
+        if native.beta_reconciliation_enabled
+            && native.beta_reconciliation_operator_token.as_deref()
+                == config.internal_service_token.as_deref()
+        {
+            return Err(PassportStartupError::SharedOperatorToken);
         }
         let keyring = if native.internal_service_auth_enabled {
             PassportTenantCredentialSource::internal_service_token(
@@ -229,6 +299,9 @@ impl PassportHttpService {
             bureau,
         );
         service.bureau_provider_profile_id = native.bureau_provider_profile_id.clone();
+        service.beta_reconciliation_enabled = native.beta_reconciliation_enabled;
+        service.beta_reconciliation_operator_token =
+            native.beta_reconciliation_operator_token.clone();
         // Inbound callbacks from already-submitted jobs remain verifiable even
         // when outbound bureau submission is not configured.
         if native.kms_callbacks_enabled {
@@ -287,6 +360,8 @@ impl PassportHttpService {
             signer,
             bureau,
             bureau_provider_profile_id: None,
+            beta_reconciliation_enabled: false,
+            beta_reconciliation_operator_token: None,
             webhook_secret,
             webhook_kms: None,
         }
@@ -302,6 +377,23 @@ impl PassportHttpService {
                 header(headers, "x-api-key"),
             )
             .map_err(PassportHttpError::Auth)
+    }
+
+    fn authenticate_beta_reconciliation_operator(
+        &self,
+        headers: &HeaderMap,
+    ) -> Result<PassportTenantPrincipal, PassportHttpError> {
+        let principal = self.authenticate(headers)?;
+        let expected = self
+            .beta_reconciliation_operator_token
+            .as_deref()
+            .ok_or(PassportHttpError::OperatorUnauthorized)?;
+        let supplied = header(headers, "x-passport-reconciliation-token")
+            .ok_or(PassportHttpError::OperatorUnauthorized)?;
+        if !bool::from(expected.as_bytes().ct_eq(supplied.as_bytes())) {
+            return Err(PassportHttpError::OperatorUnauthorized);
+        }
+        Ok(principal)
     }
 
     fn cipher(&self) -> Result<&ArtifactCryptor, PassportHttpError> {
@@ -456,6 +548,8 @@ fn python_model_body(body: &[u8], headers: &HeaderMap) -> Result<Value, Passport
 enum PassportHttpError {
     #[error("{0}")]
     Auth(PassportTenantAuthError),
+    #[error("Passport beta reconciliation operator credential is invalid")]
+    OperatorUnauthorized,
     #[error("Organization context does not match requested organization")]
     OrganizationMismatch,
     #[error("{0}")]
@@ -517,7 +611,8 @@ impl IntoResponse for PassportHttpError {
                 PassportTenantAuthError::MissingOrganization
                 | PassportTenantAuthError::MissingKey
                 | PassportTenantAuthError::InvalidKey,
-            ) => StatusCode::UNAUTHORIZED,
+            )
+            | Self::OperatorUnauthorized => StatusCode::UNAUTHORIZED,
             Self::OrganizationMismatch => StatusCode::FORBIDDEN,
             Self::InvalidRequest(_)
             | Self::MissingDataGroups
@@ -604,6 +699,10 @@ pub fn router(service: PassportHttpService) -> Router {
         .route(
             "/v1/passport/applications/{application_id}/submit-personalization",
             post(submit_personalization),
+        )
+        .route(
+            "/internal/passport/applications/{application_id}/reconcile-submission",
+            post(reconcile_beta_submission),
         )
         .route(
             "/v1/passport/applications/{application_id}/production-status",
@@ -794,16 +893,30 @@ async fn prepared_personalization_job(
     service: &PassportHttpService,
     job: &PassportJob,
     require_cached: bool,
-) -> Result<(PersonalizationJob, String, Option<String>), PassportHttpError> {
+    historical_provenance: Option<&SubmissionSigningProvenance>,
+) -> Result<(PersonalizationJob, String, Option<String>, SignedMaterial), PassportHttpError> {
     let mut artifact = service.decrypt(job).await?;
     let mut newly_signed = false;
     let signed = if let Some(signed) = artifact.signed_material.clone() {
         if job.sod_sha256.as_deref() != Some(signed_sod_sha256(&signed)?.as_str()) {
             return Err(PassportHttpError::SignedMaterialUnavailable);
         }
-        service
-            .validate_cached_signed_material(job, &artifact, &signed)
-            .await?;
+        if let Some(provenance) = historical_provenance {
+            if !provenance.matches(job, &signed) {
+                return Err(PassportHttpError::SignedMaterialUnavailable);
+            }
+            signed
+                .verify_data_groups(
+                    &artifact
+                        .numbered_data_groups()
+                        .map_err(|_| PassportHttpError::InvalidArtifact)?,
+                )
+                .map_err(PassportHttpError::Signer)?;
+        } else {
+            service
+                .validate_cached_signed_material(job, &artifact, &signed)
+                .await?;
+        }
         signed
     } else {
         if require_cached || job.sod_sha256.is_some() {
@@ -837,8 +950,8 @@ async fn prepared_personalization_job(
             data_groups: artifact
                 .numbered_data_groups()
                 .map_err(|_| PassportHttpError::InvalidArtifact)?,
-            sod_der_base64: signed.sod_der_base64,
-            dsc_cert_pem: signed.dsc_cert_pem,
+            sod_der_base64: signed.sod_der_base64.clone(),
+            dsc_cert_pem: signed.dsc_cert_pem.clone(),
             mrz_line_1: artifact.mrz.get("line_1").cloned().unwrap_or_default(),
             mrz_line_2: artifact.mrz.get("line_2").cloned().unwrap_or_default(),
             bureau_job_id: None,
@@ -851,6 +964,7 @@ async fn prepared_personalization_job(
         },
         submitted_sod_sha256,
         signed_artifact_ciphertext,
+        signed,
     ))
 }
 
@@ -867,11 +981,30 @@ async fn submit_personalization(
     if job.submission_intent_id.is_some() {
         return wait_for_submission(&service, &principal, &application_id).await;
     }
-    let (prepared, submitted_sod_sha256, signed_artifact_ciphertext) =
-        prepared_personalization_job(&service, &job, false).await?;
+    let (prepared, submitted_sod_sha256, signed_artifact_ciphertext, signed) =
+        prepared_personalization_job(&service, &job, false, None).await?;
     let bureau = service.bureau()?;
     let intent_id = Uuid::new_v4();
     let endpoint_sha256 = bureau.endpoint_sha256();
+    let reserved_at = Utc::now();
+    let signing_provenance = if matches!(
+        (&service.signer, &service.cipher),
+        (
+            Some(PassportSigner::Managed(_)),
+            ArtifactAvailability::Ready(ArtifactCryptor::Kms(_))
+        )
+    ) {
+        Some(
+            serde_json::to_value(SubmissionSigningProvenance::managed_kms(
+                &job,
+                &signed,
+                reserved_at,
+            )?)
+            .map_err(|_| PassportHttpError::InvalidArtifact)?,
+        )
+    } else {
+        None
+    };
     let reserved = service
         .repository
         .reserve_submission(
@@ -883,7 +1016,8 @@ async fn submit_personalization(
                 signed_artifact_ciphertext: signed_artifact_ciphertext.as_deref(),
                 provider_profile_id: service.bureau_provider_profile_id.as_deref(),
                 bureau_endpoint_sha256: &endpoint_sha256,
-                now: Utc::now(),
+                signing_provenance: signing_provenance.as_ref(),
+                now: reserved_at,
             },
         )
         .await
@@ -912,6 +1046,30 @@ async fn submit_personalization(
     if outcome.bureau_job_id.is_none() {
         return Err(PassportHttpError::ConcurrentChange);
     }
+    let beta_receipt = if service.beta_reconciliation_enabled {
+        let digests = material_digests(
+            &prepared.payload(),
+            &job.organization_id,
+            &job.id,
+            &job.country_code,
+            Some(&job.document_type),
+        )
+        .map_err(|_| PassportHttpError::InvalidArtifact)?;
+        let receipt = service
+            .repository
+            .beta_material_receipt(&principal, &job.id)
+            .await
+            .map_err(PassportHttpError::Storage)?
+            .ok_or(PassportHttpError::ConcurrentChange)?;
+        if outcome.bureau_job_id.as_deref() != Some(receipt.bureau_job_id.to_string().as_str())
+            || !beta_receipt_matches(&receipt, &digests, &job.document_type)
+        {
+            return Err(PassportHttpError::ConcurrentChange);
+        }
+        Some(receipt)
+    } else {
+        None
+    };
     patch.bureau_job_id = Some(outcome.bureau_job_id.clone());
     patch.bureau_provider_profile_id = outcome
         .bureau_job_id
@@ -922,7 +1080,8 @@ async fn submit_personalization(
         (outcome.status == ProductionStatus::Failed).then(|| "BUREAU_SUBMISSION_FAILED".to_owned()),
     );
     patch.error_message = Some(outcome.error_message);
-    patch.submitted_at = Some(Utc::now());
+    patch.submitted_at =
+        Some(beta_receipt.map_or_else(Utc::now, |receipt| receipt.first_accepted_at));
     let updated = match service.update(&principal, &reserved, &patch).await {
         Ok(updated) => updated,
         Err(PassportHttpError::ConcurrentChange) => {
@@ -970,6 +1129,152 @@ async fn wait_for_submission(
         }
         tokio::time::sleep(Duration::from_millis(100)).await;
     }
+}
+
+fn beta_receipt_material_matches(
+    receipt: &PassportBetaMaterialReceipt,
+    digests: &PassportBetaMaterialDigests,
+) -> bool {
+    let Some(sod_der_sha256) = digests.sod_der_sha256.as_deref() else {
+        return false;
+    };
+    let Some(dsc_der_sha256) = digests.dsc_der_sha256.as_deref() else {
+        return false;
+    };
+    receipt.content_sha256.as_deref() == Some(digests.content_sha256.as_slice())
+        && receipt.sod_der_sha256.as_deref() == Some(sod_der_sha256)
+        && receipt.dsc_der_sha256.as_deref() == Some(dsc_der_sha256)
+        && receipt.dsc_pem_wire_sha256.as_deref() == Some(digests.dsc_pem_wire_sha256.as_slice())
+}
+
+fn beta_receipt_matches(
+    receipt: &PassportBetaMaterialReceipt,
+    digests: &PassportBetaMaterialDigests,
+    document_type: &str,
+) -> bool {
+    beta_receipt_material_matches(receipt, digests)
+        && receipt.document_type.as_deref() == Some(document_type)
+}
+
+async fn reconcile_beta_submission(
+    State(service): State<PassportHttpService>,
+    Path(application_id): Path<String>,
+    headers: HeaderMap,
+) -> Result<Json<Value>, PassportHttpError> {
+    if !service.beta_reconciliation_enabled {
+        return Err(PassportHttpError::ProviderUnavailable);
+    }
+    let principal = service.authenticate_beta_reconciliation_operator(&headers)?;
+    let job = service.job(&principal, &application_id).await?;
+    if job.bureau_job_id.is_some() {
+        return Ok(Json(safe(&job)));
+    }
+    let intent_id = job
+        .submission_intent_id
+        .ok_or(PassportHttpError::ConcurrentChange)?;
+    let started_at = job
+        .submission_intent_started_at
+        .ok_or(PassportHttpError::ConcurrentChange)?;
+    if Utc::now().signed_duration_since(started_at) < chrono::Duration::seconds(35) {
+        return Err(PassportHttpError::ConcurrentChange);
+    }
+    let bureau = service.bureau()?;
+    if job.submission_intent_provider_profile_id.as_deref() != Some("passport-beta-bureau")
+        || job.submission_intent_bureau_endpoint_sha256.as_deref()
+            != Some(bureau.endpoint_sha256().as_str())
+    {
+        return Err(PassportHttpError::ConcurrentChange);
+    }
+    if !matches!(
+        (&service.signer, &service.cipher),
+        (
+            Some(PassportSigner::Managed(_)),
+            ArtifactAvailability::Ready(ArtifactCryptor::Kms(_))
+        )
+    ) {
+        return Err(PassportHttpError::ProviderUnavailable);
+    }
+    let provenance: SubmissionSigningProvenance = job
+        .submission_intent_signing_provenance
+        .clone()
+        .and_then(|value| serde_json::from_value(value).ok())
+        .ok_or(PassportHttpError::ConcurrentChange)?;
+    let (prepared, sod_sha256, newly_signed, _) =
+        prepared_personalization_job(&service, &job, true, Some(&provenance)).await?;
+    if newly_signed.is_some() || job.sod_sha256.as_deref() != Some(sod_sha256.as_str()) {
+        return Err(PassportHttpError::ConcurrentChange);
+    }
+    let digests = material_digests(
+        &prepared.payload(),
+        &job.organization_id,
+        &job.id,
+        &job.country_code,
+        Some(&job.document_type),
+    )
+    .map_err(|_| PassportHttpError::InvalidArtifact)?;
+    let mut receipt = service
+        .repository
+        .beta_material_receipt(&principal, &job.id)
+        .await
+        .map_err(PassportHttpError::Storage)?;
+    let needs_replay = match receipt.as_ref() {
+        None => true,
+        Some(existing) if existing.document_type.is_none() => {
+            if !beta_receipt_material_matches(existing, &digests) {
+                return Err(PassportHttpError::ConcurrentChange);
+            }
+            true
+        }
+        Some(_) => false,
+    };
+    if needs_replay {
+        // The simulator is idempotent by tenant and source ID. One exact replay
+        // can fill a missing row or return its first accepted UUID. Its HTTP
+        // outcome alone is never proof: read the immutable receipt afterward.
+        let replay = bureau.submit(&prepared).await;
+        receipt = service
+            .repository
+            .beta_material_receipt(&principal, &job.id)
+            .await
+            .map_err(PassportHttpError::Storage)?;
+        if let (Ok(outcome), Some(receipt)) = (&replay, &receipt) {
+            if outcome
+                .bureau_job_id
+                .as_deref()
+                .is_some_and(|reported| reported != receipt.bureau_job_id.to_string())
+            {
+                return Err(PassportHttpError::ConcurrentChange);
+            }
+        }
+    }
+    let receipt = receipt.ok_or(PassportHttpError::ConcurrentChange)?;
+    if !beta_receipt_matches(&receipt, &digests, &job.document_type) {
+        return Err(PassportHttpError::ConcurrentChange);
+    }
+    let mut patch = PassportJobPatch::new(PassportJobStatus::Submitted);
+    patch.expected_sod_sha256 = Some(job.sod_sha256.clone());
+    patch.expected_secure_artifact_ciphertext = Some(job.secure_artifact_ciphertext.clone());
+    patch.expected_submission_intent_id = Some(intent_id);
+    patch.clear_submission_intent = true;
+    patch.bureau_job_id = Some(Some(receipt.bureau_job_id.to_string()));
+    patch.bureau_provider_profile_id = Some("passport-beta-bureau".to_owned());
+    patch.submitted_at = Some(receipt.first_accepted_at);
+    let updated = match service.update(&principal, &job, &patch).await {
+        Ok(updated) => updated,
+        Err(PassportHttpError::ConcurrentChange) => {
+            let current = service.job(&principal, &application_id).await?;
+            if current.bureau_job_id.as_deref() != Some(receipt.bureau_job_id.to_string().as_str())
+                || current.bureau_provider_profile_id.as_deref() != Some("passport-beta-bureau")
+                || current.sod_sha256 != job.sod_sha256
+                || current.submission_intent_id.is_some()
+            {
+                return Err(PassportHttpError::ConcurrentChange);
+            }
+            current
+        }
+        Err(error) => return Err(error),
+    };
+    Ok(Json(safe(&updated)))
 }
 
 fn signed_sod_sha256(signed: &SignedMaterial) -> Result<String, PassportHttpError> {
@@ -1151,6 +1456,37 @@ mod tests {
 
     use super::*;
 
+    #[test]
+    fn beta_receipt_requires_every_first_accepted_digest() {
+        let digests = PassportBetaMaterialDigests {
+            content_sha256: vec![1; 32],
+            legacy_request_sha256: vec![9; 32],
+            sod_der_sha256: Some(vec![2; 32]),
+            dsc_der_sha256: Some(vec![3; 32]),
+            dsc_pem_wire_sha256: vec![4; 32],
+        };
+        let mut receipt = PassportBetaMaterialReceipt {
+            bureau_job_id: Uuid::new_v4(),
+            content_sha256: Some(vec![1; 32]),
+            sod_der_sha256: Some(vec![2; 32]),
+            dsc_der_sha256: Some(vec![3; 32]),
+            dsc_pem_wire_sha256: Some(vec![4; 32]),
+            document_type: Some("TD1".into()),
+            first_accepted_at: Utc::now(),
+        };
+        assert!(beta_receipt_matches(&receipt, &digests, "TD1"));
+        receipt.dsc_der_sha256 = None;
+        assert!(!beta_receipt_matches(&receipt, &digests, "TD1"));
+        receipt.dsc_der_sha256 = Some(vec![3; 32]);
+        receipt.content_sha256 = None;
+        assert!(!beta_receipt_matches(&receipt, &digests, "TD1"));
+        receipt.content_sha256 = Some(vec![1; 32]);
+        assert!(!beta_receipt_matches(&receipt, &digests, "TD2"));
+        receipt.document_type = None;
+        assert!(beta_receipt_material_matches(&receipt, &digests));
+        assert!(!beta_receipt_matches(&receipt, &digests, "TD1"));
+    }
+
     fn test_router() -> Router {
         let pool = PgPoolOptions::new()
             .connect_lazy("postgresql://unused:unused@127.0.0.1:5432/unused")
@@ -1195,6 +1531,51 @@ mod tests {
         headers.insert("x-api-key", token.parse().unwrap());
         headers.remove("x-organization-id");
         assert!(service.authenticate(&headers).is_err());
+    }
+
+    #[tokio::test]
+    async fn beta_reconciliation_requires_a_second_operator_credential() {
+        let pool = PgPoolOptions::new()
+            .connect_lazy("postgresql://unused:unused@127.0.0.1:5432/unused")
+            .unwrap();
+        let service_token = "synthetic-internal-passport-token-00000001";
+        let mut service = PassportHttpService::with_artifact_availability(
+            PassportTenantCredentialSource::internal_service_token(service_token).unwrap(),
+            PostgresPassportRepository::new(pool),
+            ArtifactAvailability::Missing,
+            None,
+            None,
+        );
+        service.beta_reconciliation_operator_token =
+            Some("synthetic-reconciliation-operator-token-00000001".into());
+        let mut headers = HeaderMap::new();
+        headers.insert("x-organization-id", "org-a".parse().unwrap());
+        headers.insert("x-api-key", service_token.parse().unwrap());
+        assert!(matches!(
+            service.authenticate_beta_reconciliation_operator(&headers),
+            Err(PassportHttpError::OperatorUnauthorized)
+        ));
+        headers.insert(
+            "x-passport-reconciliation-token",
+            service_token.parse().unwrap(),
+        );
+        assert!(matches!(
+            service.authenticate_beta_reconciliation_operator(&headers),
+            Err(PassportHttpError::OperatorUnauthorized)
+        ));
+        headers.insert(
+            "x-passport-reconciliation-token",
+            "synthetic-reconciliation-operator-token-00000001"
+                .parse()
+                .unwrap(),
+        );
+        assert_eq!(
+            service
+                .authenticate_beta_reconciliation_operator(&headers)
+                .unwrap()
+                .organization_id(),
+            "org-a"
+        );
     }
 
     fn authenticated_application_request() -> Request<Body> {

@@ -113,7 +113,18 @@ pub struct PassportSubmissionReservation<'a> {
     pub signed_artifact_ciphertext: Option<&'a str>,
     pub provider_profile_id: Option<&'a str>,
     pub bureau_endpoint_sha256: &'a str,
+    pub signing_provenance: Option<&'a Value>,
     pub now: DateTime<Utc>,
+}
+
+pub struct PassportBetaMaterialReceipt {
+    pub bureau_job_id: Uuid,
+    pub content_sha256: Option<Vec<u8>>,
+    pub sod_der_sha256: Option<Vec<u8>>,
+    pub dsc_der_sha256: Option<Vec<u8>>,
+    pub dsc_pem_wire_sha256: Option<Vec<u8>>,
+    pub document_type: Option<String>,
+    pub first_accepted_at: DateTime<Utc>,
 }
 
 /// The ciphertext is intentionally kept out of Debug and HTTP projections.
@@ -138,6 +149,7 @@ pub struct PassportJob {
     pub submission_intent_started_at: Option<DateTime<Utc>>,
     pub submission_intent_provider_profile_id: Option<String>,
     pub submission_intent_bureau_endpoint_sha256: Option<String>,
+    pub submission_intent_signing_provenance: Option<Value>,
     pub tracking_number: Option<String>,
     pub status: String,
     pub quality_result: Option<Value>,
@@ -226,6 +238,7 @@ impl PostgresPassportRepository {
              SET submission_intent_id=$1, submission_intent_started_at=$2,
                  submission_intent_provider_profile_id=$10,
                  submission_intent_bureau_endpoint_sha256=$11,
+                 submission_intent_signing_provenance=$12,
                  sod_sha256=$3,
                  secure_artifact_ciphertext=COALESCE($4, secure_artifact_ciphertext),
                  updated_at=$2
@@ -246,10 +259,43 @@ impl PostgresPassportRepository {
         .bind(&job.secure_artifact_ciphertext)
         .bind(reservation.provider_profile_id)
         .bind(reservation.bureau_endpoint_sha256)
+        .bind(reservation.signing_provenance)
         .fetch_optional(&self.pool)
         .await?
         .as_ref()
         .map(row_to_job)
+        .transpose()
+    }
+
+    /// The simulator table is deliberately absent from production migrations.
+    /// Calling this outside the inspected beta stack fails closed in storage.
+    pub async fn beta_material_receipt(
+        &self,
+        principal: &PassportTenantPrincipal,
+        source_job_id: &str,
+    ) -> Result<Option<PassportBetaMaterialReceipt>, sqlx::Error> {
+        let row = sqlx::query(
+            "SELECT bureau_job_id, content_sha256, sod_der_sha256,
+                    dsc_der_sha256, dsc_pem_wire_sha256, document_type,
+                    created_at
+             FROM issuance_service.passport_beta_bureau_jobs
+             WHERE organization_id=$1 AND source_job_id=$2",
+        )
+        .bind(principal.organization_id())
+        .bind(source_job_id)
+        .fetch_optional(&self.pool)
+        .await?;
+        row.map(|row| {
+            Ok(PassportBetaMaterialReceipt {
+                bureau_job_id: row.try_get("bureau_job_id")?,
+                content_sha256: row.try_get("content_sha256")?,
+                sod_der_sha256: row.try_get("sod_der_sha256")?,
+                dsc_der_sha256: row.try_get("dsc_der_sha256")?,
+                dsc_pem_wire_sha256: row.try_get("dsc_pem_wire_sha256")?,
+                document_type: row.try_get("document_type")?,
+                first_accepted_at: row.try_get("created_at")?,
+            })
+        })
         .transpose()
     }
 
@@ -298,7 +344,7 @@ impl PostgresPassportRepository {
                 .push_bind(value);
         }
         if patch.clear_submission_intent {
-            query.push(", submission_intent_id = NULL, submission_intent_started_at = NULL, submission_intent_provider_profile_id = NULL, submission_intent_bureau_endpoint_sha256 = NULL");
+            query.push(", submission_intent_id = NULL, submission_intent_started_at = NULL, submission_intent_provider_profile_id = NULL, submission_intent_bureau_endpoint_sha256 = NULL, submission_intent_signing_provenance = NULL");
         }
         query
             .push(" WHERE organization_id = ")
@@ -567,6 +613,8 @@ fn row_to_job(row: &PgRow) -> Result<PassportJob, sqlx::Error> {
             .try_get("submission_intent_provider_profile_id")?,
         submission_intent_bureau_endpoint_sha256: row
             .try_get("submission_intent_bureau_endpoint_sha256")?,
+        submission_intent_signing_provenance: row
+            .try_get("submission_intent_signing_provenance")?,
         tracking_number: row.try_get("tracking_number")?,
         status: row.try_get("status")?,
         quality_result: row.try_get("quality_result")?,

@@ -11,12 +11,10 @@ use axum::{
     routing::{get, post},
     Json, Router,
 };
-use base64::{engine::general_purpose::STANDARD, Engine as _};
-use marty_crypto::certificate::load_certificate_pem;
+use marty_issuance_service::passport_beta_material::material_digests;
 use marty_issuance_service::passport_callback_handoff::sign_and_deliver;
 use reqwest::{redirect::Policy, Client, Url};
 use serde_json::{json, Value};
-use sha2::{Digest, Sha256};
 use sqlx::{postgres::PgPoolOptions, PgPool, Row};
 use subtle::ConstantTimeEq;
 use tokio::{net::TcpListener, time::interval};
@@ -279,39 +277,16 @@ fn validate_job<'a>(
     // SOD signatures and the accompanying public DSC may change when an
     // accepted request is retried after its response is lost. The document
     // content and tenant-bound source job must remain identical.
-    let content_identity = json!({
-        "organization_id": organization_id,
-        "job_id": job_id,
-        "application_id": value["application_id"],
-        "country_code": country,
-        "data_groups": value["data_groups"],
-        "mrz": value["mrz"],
-    });
-    let content_digest =
-        Sha256::digest(serde_json::to_vec(&content_identity).map_err(|_| ApiError::Invalid)?)
-            .to_vec();
-    let mut legacy_identity = content_identity;
-    legacy_identity["document_type"] = json!(document_type);
-    let legacy_digest =
-        Sha256::digest(serde_json::to_vec(&legacy_identity).map_err(|_| ApiError::Invalid)?)
-            .to_vec();
-    let sod_der_sha256 = value["sod_der_base64"]
-        .as_str()
-        .and_then(|encoded| STANDARD.decode(encoded).ok())
-        .map(|der| Sha256::digest(der).to_vec());
-    let dsc_pem = value["dsc_cert_pem"].as_str().ok_or(ApiError::Invalid)?;
-    let dsc_der_sha256 = load_certificate_pem(dsc_pem)
-        .ok()
-        .map(|der| Sha256::digest(der).to_vec());
-    let dsc_pem_wire_sha256 = Sha256::digest(dsc_pem.as_bytes()).to_vec();
+    let digests = material_digests(value, organization_id, job_id, country, document_type)
+        .map_err(|_| ApiError::Invalid)?;
     Ok(JobInput {
         organization_id,
         job_id,
-        content_digest,
-        legacy_digest,
-        sod_der_sha256,
-        dsc_der_sha256,
-        dsc_pem_wire_sha256,
+        content_digest: digests.content_sha256,
+        legacy_digest: digests.legacy_request_sha256,
+        sod_der_sha256: digests.sod_der_sha256,
+        dsc_der_sha256: digests.dsc_der_sha256,
+        dsc_pem_wire_sha256: digests.dsc_pem_wire_sha256,
         document_type,
     })
 }
@@ -569,6 +544,9 @@ mod tests {
         body::{to_bytes, Body},
         http::Request,
     };
+    use base64::{engine::general_purpose::STANDARD, Engine as _};
+    use marty_crypto::certificate::load_certificate_pem;
+    use sha2::{Digest, Sha256};
     use tower::ServiceExt;
 
     #[test]

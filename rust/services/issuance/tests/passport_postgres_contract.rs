@@ -2213,6 +2213,14 @@ async fn passport_jobs_survive_restart_without_cross_tenant_reads() {
         .await
         .unwrap();
     let endpoint_sha256 = "a".repeat(64);
+    let signing_provenance = serde_json::json!({
+        "signing_mode": "managed-issuer-profile",
+        "artifact_custody": "kms",
+        "issuer_did": "did:web:issuer.example:orgs:org-a",
+        "dsc_der_sha256": "dsc-digest",
+        "csca_der_sha256": "csca-digest",
+        "validated_at": Utc::now(),
+    });
     let pinned = profile_repository
         .reserve_submission(
             &org_a,
@@ -2223,6 +2231,7 @@ async fn passport_jobs_survive_restart_without_cross_tenant_reads() {
                 signed_artifact_ciphertext: None,
                 provider_profile_id: Some("passport-beta-bureau"),
                 bureau_endpoint_sha256: &endpoint_sha256,
+                signing_provenance: Some(&signing_provenance),
                 now: Utc::now(),
             },
         )
@@ -2237,6 +2246,44 @@ async fn passport_jobs_survive_restart_without_cross_tenant_reads() {
         pinned.submission_intent_bureau_endpoint_sha256.as_deref(),
         Some(endpoint_sha256.as_str())
     );
+    assert_eq!(
+        pinned.submission_intent_signing_provenance,
+        Some(signing_provenance)
+    );
+    sqlx::raw_sql(include_str!("../src/bin/passport_beta_bureau_schema.sql"))
+        .execute(&restarted_pool)
+        .await
+        .unwrap();
+    let beta_uuid = uuid::Uuid::new_v4();
+    sqlx::query(
+        "INSERT INTO issuance_service.passport_beta_bureau_jobs
+         (bureau_job_id, organization_id, source_job_id, request_sha256,
+          content_sha256, sod_der_sha256, dsc_der_sha256, dsc_pem_wire_sha256,
+          document_type, status)
+         VALUES ($1,'org-a','profile-intent-job',$2,$3,$4,$5,$6,'TD1','QUEUED')",
+    )
+    .bind(beta_uuid)
+    .bind(vec![9_u8; 32])
+    .bind(vec![1_u8; 32])
+    .bind(vec![2_u8; 32])
+    .bind(vec![3_u8; 32])
+    .bind(vec![4_u8; 32])
+    .execute(&restarted_pool)
+    .await
+    .unwrap();
+    assert!(profile_repository
+        .beta_material_receipt(&org_b, "profile-intent-job")
+        .await
+        .unwrap()
+        .is_none());
+    let receipt = profile_repository
+        .beta_material_receipt(&org_a, "profile-intent-job")
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(receipt.bureau_job_id, beta_uuid);
+    assert_eq!(receipt.sod_der_sha256, Some(vec![2_u8; 32]));
+    assert!(receipt.first_accepted_at <= Utc::now());
     #[cfg(feature = "passport-self-signed-test")]
     if let Ok(packaged_url) = std::env::var("MARTY_PASSPORT_PACKAGED_TEST_URL") {
         exercise_packaged_self_signed_test_mode(&packaged_url, &key_a).await;
