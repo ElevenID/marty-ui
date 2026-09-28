@@ -3,16 +3,18 @@
 from __future__ import annotations
 
 import json
-from pathlib import Path
 import re
 import subprocess
 import sys
+from pathlib import Path
 
 import pytest
 import yaml
 
 from scripts.collect_passport_beta_acceptance import EvidenceError
 from scripts.probe_passport_beta_chain import ChainProbeError
+from scripts.probe_passport_beta_flow import PHYSICAL_STEPS
+from scripts.probe_passport_beta_selected_flow import SelectedFlowError
 from scripts.run_passport_beta_acceptance import run
 from tests.test_probe_passport_beta_chain import plan as certificate_plan
 
@@ -101,6 +103,93 @@ def test_keeps_partial_acceptance_blocked_after_actual_probe_functions() -> None
     ]
     assert result["probes"]["physical_claim_boundary"]["verified"] is True
     assert result["physical_claim"] == "not_claimed"
+
+
+def test_protected_runner_executes_selected_flow_after_chain_and_direct_job() -> None:
+    calls = []
+    plan = certificate_plan()
+    application = {"organization_id": plan["organization_id"],
+                   "issuer_did": plan["dsc"]["dsc_issuer_did"]}
+    selected_plan = {"flow_definition_id": "governed-flow",
+                     "references": {"application_template_id": "app-template",
+                                    "credential_template_id": "credential-template",
+                                    "delivery_destination_profile_id": "destination-profile"},
+                     "physical_document": {"country_code": "USA", "applicant": {"name": "Synthetic"},
+                                           "mrz": {"line_1": "synthetic"}, "data_groups": {"DG1": "YQ=="}}}
+
+    def chain(*args, on_dsc_material):
+        calls.append("chain")
+        on_dsc_material("b" * 64, "c" * 64)
+        return {"verified": True, "evidence": {"dsc_certificate_sha256": "b" * 64}}
+
+    def lifecycle(*args, on_submission):
+        calls.append("lifecycle")
+        on_submission(plan["organization_id"], "direct-job", "direct-bureau", "f" * 64)
+        return {"verified": True, "evidence": {"sod_signature_verified": True,
+                                                "sod_sha256": "f" * 64}}
+
+    def receipt(org, source, bureau, sod, dsc_der, dsc_pem, key):
+        calls.append(("receipt", source))
+        assert (org, dsc_der, dsc_pem, key) == (plan["organization_id"], "b" * 64,
+                                               "c" * 64, b"a" * 32)
+        return {"verified": True, "evidence": {
+            "source_job_id_commitment": ("1" if source == "direct-job" else "2") * 64,
+            "bureau_job_id_commitment": ("3" if bureau == "direct-bureau" else "4") * 64}}
+
+    def selected(*args, on_submission):
+        calls.append("selected")
+        assert args == ("governed-flow", plan["organization_id"], application["issuer_did"],
+                        selected_plan["references"], selected_plan["physical_document"],
+                        "governed-cookie", "a" * 32)
+        on_submission(plan["organization_id"], "selected-job", "selected-bureau", "e" * 64)
+        return {"verified": True, "evidence": {"flow_instance_id": "selected-instance",
+                                                "job_id": "selected-job", "sod_sha256": "e" * 64,
+                                                "ordered_steps": list(PHYSICAL_STEPS),
+                                                "completed_steps": 9, "physical_claim": "not_claimed",
+                                                "source_job_commitment": "2" * 64,
+                                                "bureau_job_commitment": "4" * 64}}
+
+    result = run(
+        Path("beta-artifacts"), application, "a" * 32,
+        collector=lambda *args, **kwargs: report(),
+        snapshot=lambda: {"sha256": "c" * 64, "container_counts": {}},
+        drain=lambda: {"verified": True, "evidence": {"in_flight_jobs": 0}},
+        routing=lambda *args: {"verified": True, "evidence": {"webhook_owner": "issuance-native"}},
+        flow=lambda owner: {"verified": True, "evidence": {
+            "unsigned_webhook_owner": owner, "signature_denial_verified": True}},
+        chain=chain, lifecycle=lifecycle, material_receipt=receipt,
+        certificate_plan=plan, csca_session="csca-session", dsc_session="dsc-session",
+        selected_flow_plan=selected_plan, flow_operator_cookie="governed-cookie",
+        selected_flow=selected,
+    )
+    assert calls == ["chain", "lifecycle", ("receipt", "direct-job"),
+                     "selected", ("receipt", "selected-job")]
+    assert result["probes"]["selected_physical_flow"]["evidence"] == {
+        "sod_sha256": "e" * 64, "ordered_steps": list(PHYSICAL_STEPS),
+        "completed_steps": 9, "source_job_commitment": "2" * 64,
+        "bureau_job_commitment": "4" * 64, "physical_claim": "not_claimed"}
+    assert result["probes"]["simulator_material_receipt"]["evidence"]["source_job_id_commitment"] == "2" * 64
+    assert result["probes"]["sod_signature"]["evidence"] == {
+        "sod_sha256": "e" * 64, "native_generate_sod_verified": True,
+        "dsc_certificate_sha256": "b" * 64, "source_job_commitment": "2" * 64}
+    assert result["probes"]["gateway_application_lifecycle"]["evidence"]["source_job_commitment"] == "1" * 64
+    assert "selected-job" not in str(result) and "selected-instance" not in str(result)
+    assert result["probes"]["nine_route_gateway_flow"]["verified"] is False
+    assert result["probes"]["nine_route_gateway_flow"]["evidence"]["missing"] == [
+        "signed_simulator_webhook", "same_job_gateway_route_trace"]
+    assert result["status"] == "blocked"
+
+
+def test_malformed_selected_flow_plan_blocks_before_beta_mutation() -> None:
+    plan = certificate_plan()
+    with pytest.raises(SelectedFlowError, match="inputs are incomplete"):
+        run(Path("beta-artifacts"),
+            {"organization_id": plan["organization_id"], "issuer_did": plan["dsc"]["dsc_issuer_did"]},
+            "a" * 32, collector=lambda *args, **kwargs: report(),
+            snapshot=lambda: pytest.fail("Production snapshot must wait for Flow input validation"),
+            certificate_plan=plan, csca_session="csca-session", dsc_session="dsc-session",
+            selected_flow_plan={"flow_definition_id": "governed-flow", "references": {},
+                                "physical_document": {}}, flow_operator_cookie="governed-cookie")
 
 
 def test_missing_governed_chain_inputs_block_before_beta_mutation() -> None:
@@ -322,8 +411,8 @@ def test_workflow_report_gate_survives_python_optimization(
         args = []
     for status in ("blocked", "accepted"):
         report_path.write_text(json.dumps({"schema": "marty.passport-beta-acceptance/v1", "status": status}))
-        result = subprocess.run([sys.executable, "-O", "-c", code, *args], cwd=tmp_path, capture_output=True, text=True)
+        result = subprocess.run([sys.executable, "-O", "-c", code, *args], cwd=tmp_path, capture_output=True, text=True, check=False)
         assert (result.returncode == 0) is (status == expected_status)
     report_path.write_text(json.dumps({"schema": "wrong", "status": expected_status}))
-    result = subprocess.run([sys.executable, "-O", "-c", code, *args], cwd=tmp_path, capture_output=True, text=True)
+    result = subprocess.run([sys.executable, "-O", "-c", code, *args], cwd=tmp_path, capture_output=True, text=True, check=False)
     assert result.returncode != 0

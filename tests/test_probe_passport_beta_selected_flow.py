@@ -151,6 +151,15 @@ def test_selected_flow_requires_governed_inputs_before_start() -> None:
     assert calls == []
 
 
+def test_selected_flow_rejects_profile_override_in_document_payload() -> None:
+    calls, flow_request, native_request, receipt = model()
+    physical = {**PHYSICAL, "issuer_did": "did:example:override"}
+    with pytest.raises(SelectedFlowError, match="inputs are incomplete"):
+        exercise(DEFINITION, ORGANIZATION, ISSUER, REFERENCES, physical, COOKIE, KEY,
+                 on_submission=receipt, request=flow_request, passport_request=native_request)
+    assert calls == []
+
+
 def test_flow_http_request_keeps_operator_cookie_private_and_rejects_redirect(monkeypatch) -> None:
     seen = []
 

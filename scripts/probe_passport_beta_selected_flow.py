@@ -66,6 +66,34 @@ def request_flow(method: str, path: str, body: dict[str, Any] | None,
         raise SelectedFlowError("Selected Flow request failed") from exc
 
 
+def validate_inputs(
+    flow_definition_id: str,
+    organization_id: str,
+    issuer_did: str,
+    references: dict[str, str],
+    physical_document: dict[str, Any],
+    operator_cookie: str,
+    api_key: str,
+    max_polls: int = 90,
+    poll_interval_seconds: float = 10,
+) -> None:
+    if (not isinstance(flow_definition_id, str) or not IDENTIFIER.fullmatch(flow_definition_id)
+            or not isinstance(organization_id, str) or not organization_id
+            or not isinstance(issuer_did, str) or not issuer_did.startswith("did:")
+            or not isinstance(references, dict)
+            or any(not isinstance(references.get(key), str) or not references[key] for key in REFERENCES)
+            or not isinstance(physical_document, dict)
+            or any(not physical_document.get(key) for key in ("country_code", "applicant", "mrz", "data_groups"))
+            or any(key in physical_document for key in ("issuer_did", "organization_id",
+                                                   "application_template_id", "credential_template_id",
+                                                   "delivery_destination_profile_id"))
+            or not isinstance(operator_cookie, str) or not operator_cookie
+            or any(character in operator_cookie for character in "\r\n")
+            or not isinstance(api_key, str) or len(api_key) < 32
+            or not 1 <= max_polls <= 180 or poll_interval_seconds < 0):
+        raise SelectedFlowError("Selected Flow inputs are incomplete")
+
+
 def exercise(
     flow_definition_id: str,
     organization_id: str,
@@ -82,18 +110,8 @@ def exercise(
     poll_interval_seconds: float = 10,
     sleep: Callable[[float], None] = time.sleep,
 ) -> dict[str, Any]:
-    if (not isinstance(flow_definition_id, str) or not IDENTIFIER.fullmatch(flow_definition_id)
-            or not isinstance(organization_id, str) or not organization_id
-            or not isinstance(issuer_did, str) or not issuer_did.startswith("did:")
-            or not isinstance(references, dict)
-            or any(not isinstance(references.get(key), str) or not references[key] for key in REFERENCES)
-            or not isinstance(physical_document, dict)
-            or any(not physical_document.get(key) for key in ("country_code", "applicant", "mrz", "data_groups"))
-            or not isinstance(operator_cookie, str) or not operator_cookie
-            or any(character in operator_cookie for character in "\r\n")
-            or not isinstance(api_key, str) or len(api_key) < 32
-            or not 1 <= max_polls <= 180 or poll_interval_seconds < 0):
-        raise SelectedFlowError("Selected Flow inputs are incomplete")
+    validate_inputs(flow_definition_id, organization_id, issuer_did, references,
+                    physical_document, operator_cookie, api_key, max_polls, poll_interval_seconds)
 
     definition_path = f"/v1/flows/definitions/{quote(flow_definition_id, safe='')}"
     status, definition = request("GET", definition_path, None, operator_cookie)

@@ -116,6 +116,19 @@ receipt is immutable across replay. Legacy rows or malformed synthetic
 material cannot satisfy this probe. The uploaded report contains only match
 results and API-key HMAC job commitments, not raw material or receipt digests.
 
+The protected full run also requires `PASSPORT_ACCEPTANCE_FLOW_PLAN_JSON` and
+`PASSPORT_ACCEPTANCE_FLOW_OPERATOR_COOKIE`. The Flow plan names one active
+physical-document Flow definition, its three governed template/profile
+references, and synthetic `physical_document` input. The runner rejects issuer
+or profile overrides in that input before the ceremony. After the direct
+Gateway job, it executes a distinct nine-step Flow job using the same selected
+DSC, checks the first accepted simulator receipt for that Flow job, and binds
+the selected SOD and receipt to one HMAC job commitment. The uploaded report
+omits raw Flow, application, source-job, bureau-job, applicant, MRZ, and
+operator-session values. Its `nine_route_gateway_flow` probe remains false
+until the protected producer proves the same-job Gateway route trace and
+signed simulator callback.
+
 The production snapshot proves continuity **during this acceptance run**. It
 does not replace the deployment wrapper's before/after production comparison.
 The report requires the isolated simulator mode and sets `legacy_drain` and the additional
