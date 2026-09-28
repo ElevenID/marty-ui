@@ -1083,7 +1083,8 @@ jobs:
         working-directory: rust
         env:
           MARTY_PASSPORT_RECONCILIATION_TEST_URL: postgresql://postgres:postgres@127.0.0.1:5432/marty_passport_reconciliation_test
-        run: cargo test --locked -p marty-issuance-service --lib passport_http::reconciliation_tests:: -- --test-threads=1
+        run: |
+          cargo test --locked -p marty-issuance-service --lib passport_http::reconciliation_tests:: -- --test-threads=1
       - name: Test native passport Gateway signed webhook on PostgreSQL
         working-directory: rust
         env:
