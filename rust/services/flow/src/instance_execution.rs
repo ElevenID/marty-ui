@@ -23,6 +23,8 @@ pub enum FlowInstanceExecutionError {
     Record(#[from] FlowRecordError),
     #[error("FLOW.DEFINITION_NOT_ACTIVE")]
     DefinitionNotActive,
+    #[error("FLOW.CANDIDATE_UNAVAILABLE")]
+    CandidateUnavailable,
     #[error("FLOW.DEFINITION_TENANT_MISMATCH")]
     DefinitionTenantMismatch,
     #[error("FLOW.INSTANCE_DEFINITION_MISMATCH")]
@@ -57,6 +59,9 @@ pub fn start_instance_record_with_trusted_context(
     now: DateTime<Utc>,
     trusted_context: Map<String, Value>,
 ) -> Result<FlowInstanceRecord, FlowInstanceExecutionError> {
+    if definition.flow_type.is_beta_candidate() {
+        return Err(FlowInstanceExecutionError::CandidateUnavailable);
+    }
     request.validate()?;
     if request.organization_id != definition.organization_id {
         return Err(FlowInstanceExecutionError::DefinitionTenantMismatch);
@@ -167,6 +172,9 @@ pub fn advance_instance_record(
     actor: &str,
     now: DateTime<Utc>,
 ) -> Result<FlowInstanceRecord, FlowInstanceExecutionError> {
+    if definition.flow_type.is_beta_candidate() {
+        return Err(FlowInstanceExecutionError::CandidateUnavailable);
+    }
     request.validate()?;
     if instance.flow_definition_id != definition.id
         || instance.organization_id != definition.organization_id

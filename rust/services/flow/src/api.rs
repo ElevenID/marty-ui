@@ -128,6 +128,12 @@ impl FlowExtensionRequest {
                 "must be a standard flow type",
             ));
         }
+        if self.extends_flow_type == FlowType::PassportDigitalHandoff {
+            return Err(invalid(
+                "extension.extends_flow_type",
+                "requires the pinned MIP 0.6.0-beta.1 candidate",
+            ));
+        }
         absolute_uri(&self.extension_uri, "extension.extension_uri")?;
         bounded_required(&self.extension_version, 64, "extension.extension_version")?;
         for (index, step) in self.steps.iter().enumerate() {
@@ -242,6 +248,12 @@ impl ValidateRequest for CreateFlowDefinitionRequest {
     fn validate(&self) -> Result<(), FlowApiError> {
         bounded_required(&self.organization_id, 255, "organization_id")?;
         bounded_required(&self.name, 255, "name")?;
+        if self.flow_type == FlowType::PassportDigitalHandoff {
+            return Err(invalid(
+                "flow_type",
+                "requires the pinned MIP 0.6.0-beta.1 candidate",
+            ));
+        }
         optional_max(&self.description, 2_000, "description")?;
         optional_max(&self.credential_template_id, 255, "credential_template_id")?;
         optional_max(
@@ -387,6 +399,15 @@ impl ValidateRequest for UpdateFlowDefinitionRequest {
             if null {
                 return Err(invalid(field, "cannot be null"));
             }
+        }
+        if matches!(
+            self.flow_type,
+            Patch::Value(FlowType::PassportDigitalHandoff)
+        ) {
+            return Err(invalid(
+                "flow_type",
+                "requires the pinned MIP 0.6.0-beta.1 candidate",
+            ));
         }
         if let Patch::Value(hooks) = &self.hooks {
             let flow_type = match &self.flow_type {
@@ -697,7 +718,10 @@ impl ValidateRequest for ApplicationApprovedWebhook {
 fn validate_flow_references(request: &CreateFlowDefinitionRequest) -> Result<(), FlowApiError> {
     if request.credential_template_id.is_some()
         && request.application_template_id.is_some()
-        && request.flow_type != FlowType::PhysicalDocumentIssuance
+        && !matches!(
+            request.flow_type,
+            FlowType::PhysicalDocumentIssuance | FlowType::PassportDigitalHandoff
+        )
     {
         return Err(invalid(
             "body",
@@ -768,6 +792,7 @@ fn validate_hooks(
                 "submit_to_personalization",
                 "quality_verify",
             ][..],
+            FlowType::PassportDigitalHandoff => &["approval_decision"][..],
             FlowType::Custom => &[][..],
             _ => &[][..],
         };

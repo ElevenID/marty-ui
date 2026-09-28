@@ -261,6 +261,11 @@ impl FlowService for FlowGrpcService {
                 "flow-definition:activate",
             )
             .await?;
+        if record.flow_type.is_beta_candidate() {
+            return Err(Status::failed_precondition(
+                "Digital passport handoff is not available in MIP 0.5",
+            ));
+        }
         record.kernel().map_err(record_status)?;
         crate::validate_definition_references(
             &self.providers,
@@ -980,6 +985,11 @@ fn parse_flow_type(value: &str) -> Result<crate::FlowType, Status> {
         "siop_v2" => "siopv2",
         other => other,
     };
+    if canonical == "passport_digital_handoff" {
+        return Err(Status::failed_precondition(
+            "passport_digital_handoff requires the pinned MIP 0.6.0-beta.1 candidate",
+        ));
+    }
     serde_json::from_value(Value::String(canonical.into()))
         .map_err(|_| Status::invalid_argument("flow_type is invalid"))
 }
@@ -1192,6 +1202,7 @@ fn provider_status(error: FlowProviderError) -> Status {
 fn execution_status(error: FlowInstanceExecutionError) -> Status {
     match error {
         FlowInstanceExecutionError::DefinitionNotActive
+        | FlowInstanceExecutionError::CandidateUnavailable
         | FlowInstanceExecutionError::NotAdvanceable(_)
         | FlowInstanceExecutionError::PreconditionsNotMet(_)
         | FlowInstanceExecutionError::NoCurrentStep => {
@@ -1296,6 +1307,20 @@ mod tests {
         let response = proto_definition(&record).expect("response");
         assert_eq!(response.steps.len(), 2);
         assert_eq!(response.transitions.len(), 1);
+    }
+
+    #[test]
+    fn grpc_definition_cannot_claim_the_unavailable_beta_handoff() {
+        let input = ProtoCreate {
+            organization_id: "org-1".into(),
+            name: "Premature digital handoff".into(),
+            flow_type: "passport_digital_handoff".into(),
+            ..ProtoCreate::default()
+        };
+        assert_eq!(
+            definition_from_proto(input, Utc::now()).unwrap_err().code(),
+            tonic::Code::FailedPrecondition
+        );
     }
 
     #[test]

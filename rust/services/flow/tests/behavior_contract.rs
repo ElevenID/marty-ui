@@ -100,7 +100,7 @@ fn all_flow_types_references_and_sequences_match_the_behavior_contract() {
             case.steps.iter().map(String::as_str).collect::<Vec<_>>()
         );
     }
-    assert_eq!(FlowType::all().count(), 12);
+    assert_eq!(FlowType::public_05().count(), 12);
 }
 
 #[test]
