@@ -2,11 +2,12 @@
 """Bounded disposable infrastructure rehearsal for protected passport plans.
 
 This module does not qualify supported-consumer rollback or Python retirement.
-The protected producer workflow does not invoke it yet.
+The separate protected infra workflow invokes it; the full producer remains blocked.
 """
 
 from __future__ import annotations
 
+import argparse
 from datetime import datetime, timedelta, timezone
 import json
 import os
@@ -18,13 +19,15 @@ from typing import Callable
 
 if __package__:
     from .passport_supported_provisioning_producer import (
-        ProducerError, _remove_staged_inputs, destroy_partial_disposable_project,
-        stage_disposable_inputs, verify_plan_release, verify_pre_mutation,
+        INFRA_WORKFLOW_REF, ProducerError, _remove_staged_inputs, _write_private,
+        destroy_partial_disposable_project, stage_disposable_inputs,
+        verify_plan_release, verify_pre_mutation,
     )
 else:
     from passport_supported_provisioning_producer import (
-        ProducerError, _remove_staged_inputs, destroy_partial_disposable_project,
-        stage_disposable_inputs, verify_plan_release, verify_pre_mutation,
+        INFRA_WORKFLOW_REF, ProducerError, _remove_staged_inputs, _write_private,
+        destroy_partial_disposable_project, stage_disposable_inputs,
+        verify_plan_release, verify_pre_mutation,
     )
 
 
@@ -89,7 +92,7 @@ def protected_job_deadline(
     """Bind remaining budget to this exact GitHub job attempt's start time."""
     run_id = environment.get("GITHUB_RUN_ID")
     attempt = environment.get("GITHUB_RUN_ATTEMPT")
-    if (environment.get("GITHUB_JOB") != "producer"
+    if (environment.get("GITHUB_JOB") != "infra"
         or not isinstance(run_id, str)
         or re.fullmatch(r"[1-9][0-9]{0,19}", run_id) is None
         or not isinstance(attempt, str)
@@ -100,8 +103,8 @@ def protected_job_deadline(
     if not isinstance(jobs, list) or payload.get("total_count") != 1 or len(jobs) != 1:
         raise ProducerError("Protected job attempt is ambiguous")
     job = jobs[0]
-    if (not isinstance(job, dict) or job.get("name") != "producer"
-        or job.get("workflow_name") != "Passport Supported Disposable Provisioning Producer"
+    if (not isinstance(job, dict) or job.get("name") != "infra"
+        or job.get("workflow_name") != "Passport Supported Disposable Infra Rehearsal"
         or job.get("run_id") != int(run_id)
         or job.get("run_attempt") != int(attempt)
         or job.get("head_sha") != environment.get("GITHUB_SHA")
@@ -243,7 +246,8 @@ def rehearse_infrastructure(
     """Start only isolated infra, bootstrap Transit, then always destroy it."""
     read_clock = clock or (lambda: datetime.now(timezone.utc))
     current = now or read_clock()
-    plan = verify(plan_path, manifest_path, plan_run_id, environment, now=current)
+    plan = verify(plan_path, manifest_path, plan_run_id, environment, now=current,
+                  workflow_ref=INFRA_WORKFLOW_REF)
     job_deadline = deadline_lookup(environment)
     if job_deadline.tzinfo is None:
         raise ProducerError("Protected job deadline is invalid")
@@ -255,7 +259,8 @@ def rehearse_infrastructure(
     mutation_started = False
     try:
         checked = preflight(plan_path, manifest_path, plan_run_id, environment,
-                            env_file, root, now=current)
+                            env_file, root, now=current,
+                            workflow_ref=INFRA_WORKFLOW_REF)
         if checked != plan:
             raise ProducerError("Disposable pre-mutation plan differs")
         staged_env = _local_docker_environment(_staged_environment(env_file))
@@ -293,6 +298,7 @@ def rehearse_infrastructure(
                 inspector=inspector,
                 executor=lambda args, output: run(["docker", *args], staged_env, 30),
                 now=now,
+                workflow_ref=INFRA_WORKFLOW_REF,
             ):
                 raise ProducerError("Disposable infrastructure teardown is unverified")
         finally:
@@ -300,3 +306,29 @@ def rehearse_infrastructure(
                 _remove_bootstrap_output(output_dir)
             finally:
                 _remove_staged_inputs(root)
+
+
+def main() -> int:
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--plan", type=Path, required=True)
+    parser.add_argument("--manifest", type=Path, required=True)
+    parser.add_argument("--plan-run-id", required=True)
+    parser.add_argument("--gateway-port", type=int, required=True)
+    parser.add_argument("--output", type=Path, required=True)
+    args = parser.parse_args()
+    try:
+        if args.output.resolve().is_relative_to(ROOT.resolve()) or not args.output.parent.is_dir():
+            raise ProducerError("Protected rehearsal output path is invalid")
+        report = rehearse_infrastructure(
+            args.plan, args.manifest, args.plan_run_id, os.environ,
+            args.gateway_port,
+        )
+        _write_private(args.output, (json.dumps(report, sort_keys=True) + "\n").encode(
+            "utf-8"))
+    except (ProducerError, OSError, ValueError) as exc:
+        parser.exit(1, f"Protected disposable infrastructure rehearsal blocked: {exc}\n")
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

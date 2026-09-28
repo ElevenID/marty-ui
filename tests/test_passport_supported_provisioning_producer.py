@@ -24,7 +24,7 @@ from scripts.check_passport_supported_rollback_model import (
 )
 from scripts.passport_supported_infra_images import qualified_images
 from scripts.passport_supported_provisioning_producer import (
-    ProducerError, WORKFLOW_REF, collect_record, destroy_disposable_project,
+    INFRA_WORKFLOW_REF, ProducerError, WORKFLOW_REF, collect_record, destroy_disposable_project,
     destroy_partial_disposable_project,
     issue_disposable_api_key, stage_disposable_inputs,
     verify_plan_release,
@@ -85,6 +85,26 @@ def verify(path: Path, manifest: Path, plan: dict, **kwargs) -> dict:
         checkout=kwargs.pop("checkout", lambda: (SOURCE, False)),
         now=kwargs.pop("now", NOW), **kwargs,
     )
+
+
+def test_infra_rehearsal_requires_its_exact_protected_workflow(tmp_path: Path) -> None:
+    path, manifest, plan = source_plan(tmp_path)
+    official = {key: plan[key] for key in (
+        "source_commit", "stack_manifest_sha256", "services_reference",
+        "migrations_reference", "legacy_reference", "infra_images",
+    )}
+    gates = {"attest": lambda *args: True,
+             "release": lambda *args: official,
+             "checkout": lambda: (SOURCE, False), "now": NOW}
+    infra_env = {**ENV, "GITHUB_WORKFLOW_REF": INFRA_WORKFLOW_REF}
+    assert verify_plan_release(path, manifest, "123456", infra_env,
+                               workflow_ref=INFRA_WORKFLOW_REF, **gates) == plan
+    with pytest.raises(ProducerError, match="workflow identity"):
+        verify_plan_release(path, manifest, "123456", ENV,
+                            workflow_ref=INFRA_WORKFLOW_REF, **gates)
+    with pytest.raises(ProducerError, match="not allowed"):
+        verify_plan_release(path, manifest, "123456", infra_env,
+                            workflow_ref="unreviewed-workflow", **gates)
 
 
 def partial_teardown_context(tmp_path: Path) -> tuple[tuple, dict, dict]:

@@ -49,6 +49,10 @@ WORKFLOW_REF = (
     "ElevenID/marty-ui/.github/workflows/"
     "passport-supported-provisioning-producer.yml@refs/heads/main"
 )
+INFRA_WORKFLOW_REF = (
+    "ElevenID/marty-ui/.github/workflows/"
+    "passport-supported-infra-rehearsal.yml@refs/heads/main"
+)
 RESOURCE_ID = re.compile(r"[0-9a-f]{64}\Z")
 TEST_KEY = re.compile(rb"mk_test_[A-Za-z0-9]{43}\n\Z")
 KEY_COMMAND = "/usr/local/bin/marty-passport-acceptance-api-key"
@@ -77,12 +81,15 @@ def require(ok: bool, message: str) -> None:
         raise ProducerError(message)
 
 
-def protected_context(environment: dict[str, str]) -> tuple[str, str]:
+def protected_context(environment: dict[str, str], *,
+                      workflow_ref: str = WORKFLOW_REF) -> tuple[str, str]:
+    require(workflow_ref in {WORKFLOW_REF, INFRA_WORKFLOW_REF},
+            "Protected producer workflow is not allowed")
     require(environment.get("GITHUB_ACTIONS") == "true"
             and environment.get("GITHUB_REPOSITORY") == "ElevenID/marty-ui"
             and environment.get("GITHUB_REF") == "refs/heads/main"
             and environment.get("GITHUB_EVENT_NAME") == "workflow_dispatch"
-            and environment.get("GITHUB_WORKFLOW_REF") == WORKFLOW_REF,
+            and environment.get("GITHUB_WORKFLOW_REF") == workflow_ref,
             "Protected producer workflow identity is invalid")
     source, run_id = environment.get("GITHUB_SHA"), environment.get("GITHUB_RUN_ID")
     require(isinstance(source, str) and COMMIT.fullmatch(source) is not None
@@ -98,9 +105,10 @@ def verify_plan_release(
     release: Callable[..., dict] = release_inputs,
     now: datetime | None = None,
     checkout: Callable[[], tuple[str, bool]] = source_identity,
+    workflow_ref: str = WORKFLOW_REF,
 ) -> dict:
     """Verify source, exact plan run, lease and release before any model read."""
-    source, _ = protected_context(environment)
+    source, _ = protected_context(environment, workflow_ref=workflow_ref)
     require(RUN_ID.fullmatch(plan_run_id) is not None,
             "Protected plan run ID is invalid")
     try:
@@ -149,10 +157,11 @@ def verify_pre_mutation(
     plan_path: Path, manifest_path: Path, plan_run_id: str,
     environment: dict[str, str], env_file: Path, disposable_root: Path,
     *, now: datetime | None = None,
+    workflow_ref: str = WORKFLOW_REF,
 ) -> dict:
     """Complete release and model gates for a future explicitly enabled producer."""
     plan = verify_plan_release(plan_path, manifest_path, plan_run_id,
-                               environment, now=now)
+                               environment, now=now, workflow_ref=workflow_ref)
     report = preflight_attested_plan(
         plan["surface"], plan["project"], env_file, disposable_root,
         plan["services_reference"], plan_path, now=now)
@@ -487,6 +496,7 @@ def destroy_partial_disposable_project(
     attest: Callable[[str, str, str, str, str], bool] = _attest,
     release: Callable[..., dict] = release_inputs,
     checkout: Callable[[], tuple[str, bool]] = source_identity,
+    workflow_ref: str = WORKFLOW_REF,
 ) -> bool:
     """Clean a failed startup only after rechecking protected plan provenance.
 
@@ -497,6 +507,7 @@ def destroy_partial_disposable_project(
     plan = verify_plan_release(
         plan_path, manifest_path, plan_run_id, environment, now=now,
         attest=attest, release=release, checkout=checkout,
+        workflow_ref=workflow_ref,
     )
     project = plan.get("project")
     surface = plan.get("surface")

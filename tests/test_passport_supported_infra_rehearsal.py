@@ -2,6 +2,7 @@
 
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
+import subprocess
 import tempfile
 import uuid
 
@@ -13,7 +14,9 @@ from scripts.passport_supported_infra_rehearsal import (
     _local_docker_environment, protected_job_deadline, rehearse_infrastructure,
 )
 from scripts.passport_supported_infra_images import qualified_images
-from scripts.passport_supported_provisioning_producer import ProducerError
+from scripts.passport_supported_provisioning_producer import (
+    INFRA_WORKFLOW_REF, ProducerError,
+)
 
 
 NOW = datetime(2026, 9, 28, 17, tzinfo=timezone.utc)
@@ -232,18 +235,18 @@ def test_late_job_cannot_start_even_while_plan_lease_is_valid(
 
 def test_protected_job_timeout_leaves_lease_for_cleanup() -> None:
     workflow = (Path(__file__).resolve().parents[1] / ".github/workflows"
-                / "passport-supported-provisioning-producer.yml")
-    job = yaml.safe_load(workflow.read_text(encoding="utf-8"))["jobs"]["producer"]
+                / "passport-supported-infra-rehearsal.yml")
+    job = yaml.safe_load(workflow.read_text(encoding="utf-8"))["jobs"]["infra"]
     assert job["timeout-minutes"] == JOB_TIMEOUT.total_seconds() / 60
     assert job["timeout-minutes"] <= MIN_TEARDOWN_LEASE.total_seconds() / 60 - 15
     assert MIN_JOB_BUDGET < MIN_TEARDOWN_LEASE
 
 
 def test_job_deadline_is_bound_to_exact_run_attempt() -> None:
-    environment = {"GITHUB_JOB": "producer", "GITHUB_RUN_ID": "987654",
+    environment = {"GITHUB_JOB": "infra", "GITHUB_RUN_ID": "987654",
                    "GITHUB_RUN_ATTEMPT": "2", "GITHUB_SHA": SOURCE}
-    job = {"name": "producer",
-           "workflow_name": "Passport Supported Disposable Provisioning Producer",
+    job = {"name": "infra",
+           "workflow_name": "Passport Supported Disposable Infra Rehearsal",
            "run_id": 987654, "run_attempt": 2, "head_sha": SOURCE,
            "status": "in_progress", "started_at": NOW.isoformat()}
     response = {"total_count": 1, "jobs": [job]}
@@ -258,6 +261,7 @@ def test_job_deadline_is_bound_to_exact_run_attempt() -> None:
     for mutation in ({**job, "head_sha": "b" * 40},
                      {**job, "run_attempt": 1},
                      {**job, "name": "other"},
+                     {**job, "workflow_name": "Passport Supported Disposable Provisioning Producer"},
                      {**job, "status": "completed"}):
         with pytest.raises(ProducerError, match="job identity differs"):
             protected_job_deadline(
@@ -269,3 +273,40 @@ def test_job_deadline_is_bound_to_exact_run_attempt() -> None:
         protected_job_deadline(
             environment, lambda *args: {"total_count": 1, "jobs": [
                 {**job, "started_at": "invalid"}]})
+
+
+def test_infra_workflow_cannot_trigger_provisioning_record_attestor() -> None:
+    root = Path(__file__).resolve().parents[1] / ".github/workflows"
+    workflow = yaml.safe_load((root / "passport-supported-infra-rehearsal.yml").read_text(
+        encoding="utf-8"))
+    trigger = workflow.get("on", workflow.get(True))
+    assert set(trigger) == {"workflow_dispatch"}
+    assert set(trigger["workflow_dispatch"]["inputs"]) == {"plan_run_id", "release_tag"}
+    assert workflow["name"] == "Passport Supported Disposable Infra Rehearsal"
+    assert workflow["permissions"] == {"actions": "read", "contents": "read",
+                                       "packages": "read"}
+    job = workflow["jobs"]["infra"]
+    assert job["if"] == "github.ref == 'refs/heads/main'"
+    assert job["runs-on"] == ["self-hosted", "linux", "x64", "canvas-oss-wsl2"]
+    assert job["environment"] == "beta-lifecycle"
+    assert job["steps"][0]["with"]["persist-credentials"] is False
+    run = job["steps"][1]["run"]
+    assert '.path == ".github/workflows/passport-supported-provisioning-plan.yml"' in run
+    assert 'and .head_sha == $sha' in run
+    assert "gh run download \"$PLAN_RUN_ID\"" in run
+    assert "scripts/passport_supported_infra_rehearsal.py" in run
+    assert "passport-supported-infra-rehearsal-$GITHUB_RUN_ID.json" in run
+    assert "docker " not in run
+    assert subprocess.run(["bash", "-n"], input=run.encode(),
+                          capture_output=True, check=False).returncode == 0
+    artifact = job["steps"][2]["with"]
+    assert artifact["name"] == (
+        "passport-supported-infra-rehearsal-${{ github.run_id }}-${{ github.run_attempt }}")
+    assert artifact["if-no-files-found"] == "error"
+    attestor = yaml.safe_load((root / "passport-supported-provisioning-record.yml").read_text(
+        encoding="utf-8"))
+    attestor_trigger = attestor.get("on", attestor.get(True))
+    assert attestor_trigger["workflow_run"]["workflows"] == [
+        "Passport Supported Disposable Provisioning Producer"]
+    assert INFRA_WORKFLOW_REF.endswith(
+        "passport-supported-infra-rehearsal.yml@refs/heads/main")
