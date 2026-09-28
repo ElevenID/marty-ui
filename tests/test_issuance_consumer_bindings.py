@@ -13,6 +13,7 @@ PRIVATE = "DIDCOMM_ALLOW_PRIVATE_IPS"
 UNUSED_PRIVATE = "DIDCOMM_ALLOW_PRIVATE_ENDPOINTS"
 NATIVE_URL = "http://issuance-native:8005"
 LEGACY_URL = "http://issuance:8005"
+SELFHOST_NATIVE_URL = "${ISSUANCE_NATIVE_SERVICE_URL:-http://issuance:8005}"
 
 
 class UniqueKeyLoader(yaml.SafeLoader):
@@ -259,6 +260,7 @@ def assert_selfhost_bindings(compose):
     for name in ("auth", "applicant", "presentation-policy"):
         expected[name]["ISSUANCE_SERVICE_URL"] = LEGACY_URL
     expected["flow"]["ISSUANCE_SERVICE_URL"] = LEGACY_URL
+    expected["flow"]["ISSUANCE_NATIVE_SERVICE_URL"] = SELFHOST_NATIVE_URL
     expected["gateway"]["AUTH_GRPC_TARGET"] = "auth:9001"
     expected["flow"][TARGET] = "issuance-native:9005"
     expected["issuance-native"] = {
@@ -289,7 +291,10 @@ def assert_compose_owner_split(compose, *, production=False):
             "auth": {"ISSUANCE_SERVICE_URL": LEGACY_URL},
             "applicant": {"ISSUANCE_SERVICE_URL": LEGACY_URL},
             "presentation-policy": {"ISSUANCE_SERVICE_URL": LEGACY_URL},
-            "flow": {"ISSUANCE_SERVICE_URL": LEGACY_URL},
+            "flow": {
+                "ISSUANCE_SERVICE_URL": LEGACY_URL,
+                "ISSUANCE_NATIVE_SERVICE_URL": SELFHOST_NATIVE_URL,
+            },
         }
         if production
         else {
@@ -493,6 +498,7 @@ def test_selfhost_flow_requires_paired_existing_secret_identity(mutation):
         ("selfhost", "applicant", "ISSUANCE_SERVICE_URL"),
         ("selfhost", "presentation-policy", "ISSUANCE_SERVICE_URL"),
         ("selfhost", "flow", "ISSUANCE_SERVICE_URL"),
+        ("selfhost", "flow", "ISSUANCE_NATIVE_SERVICE_URL"),
         ("selfhost", "gateway", "ISSUANCE_SERVICE_URL"),
         ("selfhost", "gateway", "ISSUANCE_NATIVE_SERVICE_URL"),
     ],
