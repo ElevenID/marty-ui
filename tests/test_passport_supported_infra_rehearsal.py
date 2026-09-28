@@ -1,6 +1,7 @@
 """Disposable infrastructure rehearsal stops before passport acceptance."""
 
 from datetime import datetime, timedelta, timezone
+import json
 from pathlib import Path
 import subprocess
 import tempfile
@@ -11,7 +12,8 @@ import yaml
 
 from scripts.passport_supported_infra_rehearsal import (
     JOB_TIMEOUT, MIN_JOB_BUDGET, MIN_TEARDOWN_LEASE,
-    _local_docker_environment, protected_job_deadline, rehearse_infrastructure,
+    _local_docker_environment, protected_job_deadline, recover_infrastructure,
+    rehearse_infrastructure,
 )
 from scripts.passport_supported_infra_images import qualified_images
 from scripts.passport_supported_provisioning_producer import (
@@ -97,6 +99,9 @@ def test_infra_rehearsal_starts_only_private_infra_and_always_cleans(
         "postgres", "redis", "openbao",
     ]
     assert calls[1][0][:2] == ["docker", "run"]
+    assert calls[1][0][2:5] == [
+        "--rm", "--name", f"{selected['project']}-passport-openbao-bootstrap-1",
+    ]
     assert calls[1][0][-2:] == [selected["infra_images"]["openbao"],
                                "/scripts/passport_supported_openbao_bootstrap.sh"]
     assert [call[2] for call in calls] == [300, 180]
@@ -118,6 +123,48 @@ def test_failed_startup_still_tears_down_partial_project(tmp_path: Path) -> None
         )
     assert cleanup == [True]
     assert not (Path(tempfile.gettempdir()) / selected["project"]).exists()
+
+
+def test_independent_recovery_requires_verified_teardown_before_erasing_secrets(
+    tmp_path: Path,
+) -> None:
+    selected = plan()
+    plan_path = tmp_path / "plan.json"
+    plan_path.write_text(json.dumps(selected), encoding="utf-8")
+    root = Path(tempfile.gettempdir()) / selected["project"]
+    (root / "secrets").mkdir(parents=True)
+    (root / "secrets" / "bao_root_token").write_text("test-token", encoding="ascii")
+    (root / "acceptance.env").write_text("test=value\n", encoding="ascii")
+    calls = []
+
+    def teardown(*args, **kwargs) -> bool:
+        calls.append(kwargs)
+        assert kwargs["workflow_ref"].endswith(
+            "passport-supported-infra-rehearsal.yml@refs/heads/main")
+        if len(calls) == 2:
+            plan_path.write_text(json.dumps({**selected, "run_id": "different"}),
+                                 encoding="utf-8")
+        return len(calls) > 1
+
+    try:
+        with pytest.raises(ProducerError, match="recovery is unverified"):
+            recover_infrastructure(plan_path, Path("manifest"), "123456", {},
+                                   teardown=teardown)
+        assert (root / "secrets" / "bao_root_token").is_file()
+        with pytest.raises(ProducerError, match="plan changed"):
+            recover_infrastructure(plan_path, Path("manifest"), "123456", {},
+                                   teardown=teardown)
+        assert (root / "secrets" / "bao_root_token").is_file()
+        plan_path.write_text(json.dumps(selected), encoding="utf-8")
+        recover_infrastructure(plan_path, Path("manifest"), "123456", {},
+                               teardown=teardown)
+        assert not root.exists()
+    finally:
+        if root.exists():
+            (root / "secrets" / "bao_root_token").unlink(missing_ok=True)
+            (root / "secrets").rmdir()
+            (root / "acceptance.env").unlink(missing_ok=True)
+            root.rmdir()
 
 
 def test_failed_preflight_never_starts_docker(tmp_path: Path) -> None:
@@ -290,16 +337,24 @@ def test_infra_workflow_cannot_trigger_provisioning_record_attestor() -> None:
     assert job["runs-on"] == ["self-hosted", "linux", "x64", "canvas-oss-wsl2"]
     assert job["environment"] == "beta-lifecycle"
     assert job["steps"][0]["with"]["persist-credentials"] is False
-    run = job["steps"][1]["run"]
-    assert '.path == ".github/workflows/passport-supported-provisioning-plan.yml"' in run
-    assert 'and .head_sha == $sha' in run
-    assert "gh run download \"$PLAN_RUN_ID\"" in run
-    assert "scripts/passport_supported_infra_rehearsal.py" in run
-    assert "passport-supported-infra-rehearsal-$GITHUB_RUN_ID.json" in run
-    assert "docker " not in run
-    assert subprocess.run(["bash", "-n"], input=run.encode(),
-                          capture_output=True, check=False).returncode == 0
-    artifact = job["steps"][2]["with"]
+    prepare, rehearse, recover, upload = job["steps"][1:]
+    assert '.path == ".github/workflows/passport-supported-provisioning-plan.yml"' in prepare["run"]
+    assert 'and .head_sha == $sha' in prepare["run"]
+    assert "gh run download \"$PLAN_RUN_ID\"" in prepare["run"]
+    assert "PASSPORT_INFRA_WORK=$work" in prepare["run"]
+    assert "timeout --signal=INT --kill-after=30s 1200s" in rehearse["run"]
+    assert "scripts/passport_supported_infra_rehearsal.py" in rehearse["run"]
+    assert "passport-supported-infra-rehearsal-$GITHUB_RUN_ID.json" in rehearse["run"]
+    assert recover["if"] == "always() && steps.prepare.outcome == 'success'"
+    assert "timeout --signal=INT --kill-after=10s 240s" in recover["run"]
+    assert "--recover-only" in recover["run"]
+    assert upload["if"] == (
+        "steps.rehearse.outcome == 'success' && steps.recover.outcome == 'success'")
+    for step in (prepare, rehearse, recover):
+        assert "docker " not in step["run"]
+        assert subprocess.run(["bash", "-n"], input=step["run"].encode(),
+                              capture_output=True, check=False).returncode == 0
+    artifact = upload["with"]
     assert artifact["name"] == (
         "passport-supported-infra-rehearsal-${{ github.run_id }}-${{ github.run_attempt }}")
     assert artifact["if-no-files-found"] == "error"

@@ -311,6 +311,18 @@ def _status_origin(gateway: dict) -> str:
 
 def _expected_mounts(service: str, project: str, disposable_root: Path,
                      surface: str) -> set[tuple[str, str, str, bool]]:
+    if service == "passport-openbao-bootstrap":
+        source = Path(__file__).resolve().parents[1]
+        return {
+            ("bind", str(disposable_root / "secrets" / "bao_root_token"),
+             "/run/secrets/bao_root_token", False),
+            ("bind", str(disposable_root / "bootstrap-output"),
+             "/work/secrets", True),
+            ("bind", str(source / "scripts/passport_supported_openbao_bootstrap.sh"),
+             "/scripts/passport_supported_openbao_bootstrap.sh", False),
+            ("bind", str(source / "docker/openbao-init.sh"),
+             "/scripts/openbao-init.sh", False),
+        }
     expected = {
         ("bind", str(disposable_root / "secrets" / secret),
          f"/run/secrets/{secret}", False)
@@ -326,6 +338,17 @@ def _expected_mounts(service: str, project: str, disposable_root: Path,
         expected.update(("volume", f"{project}_{name}", destination, True)
                         for name, destination in DATA_MOUNTS[service])
     return expected
+
+
+def _expected_image(record: dict, service: str) -> str | None:
+    """Use the same plan-bound image role for live and partial ownership."""
+    if service == "passport-openbao-bootstrap":
+        return record.get("infra_images", {}).get("openbao")
+    return (record.get("legacy_reference") if service == "issuance" else
+            record.get("migrations_reference") if service == "db-migrate" else
+            record.get("services_reference")
+            if service in SELECTED | RUST_DEPENDENCIES | {"signing-keys"} else
+            record.get("infra_images", {}).get(service))
 
 
 def verify(record: dict, surface: str, now: datetime,
@@ -470,12 +493,7 @@ def verify(record: dict, surface: str, now: datetime,
                     "Disposable container network identity changed")
             if running:
                 expected_network_members[name].add(identifier)
-        expected_image = (
-            record["legacy_reference"] if service == "issuance" else
-            record["migrations_reference"] if service == "db-migrate" else
-            record["services_reference"] if service in SELECTED | RUST_DEPENDENCIES | {"signing-keys"}
-            else infra_images.get(service)
-        )
+        expected_image = _expected_image(record, service)
         require(expected_image is not None and config.get("Image") == expected_image,
                 "Passport container image differs from signed release")
         mounts = item.get("Mounts", [])
