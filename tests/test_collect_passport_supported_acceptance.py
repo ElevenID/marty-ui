@@ -126,14 +126,29 @@ def test_live_compose_prerequisite_still_does_not_claim_routes_or_rollback(
     assert report["physical_claim"] == "not_claimed"
 
 
-def test_kubernetes_inspection_is_bounded_to_disposable_namespace() -> None:
+def kubernetes_runner(*, mixed_provider: bool = False,
+                      wrong_profile: bool = False,
+                      provider_enabled: bool = False,
+                      second_configmap: bool = False):
     def run(args: list[str]) -> str:
         assert args[1:5] == ["--context", CONTEXT, "-n", NAMESPACE]
         if args[6] == "configmap":
-            return json.dumps({"data": {flag: "true" for names in gate.KUBERNETES_FLAGS.values()
-                                        for flag in names}})
+            data = {flag: "true" for names in gate.KUBERNETES_FLAGS.values()
+                    for flag in names}
+            data.update({"PASSPORT_PROVIDER_INGRESS_GATEWAY_ENABLED":
+                         "true" if provider_enabled else "false",
+                         "PASSPORT_PROVIDER_INGRESS_SERVICE_URL": "",
+                         "PERSONALIZATION_BUREAU_URL":
+                         "http://passport-beta-bureau:8020",
+                         "PERSONALIZATION_BUREAU_PROVIDER_PROFILE_ID":
+                         "external-provider" if wrong_profile else "passport-beta-bureau"})
+            return json.dumps({"data": data})
+        if args[6] in ("deployment", "service") and args[7] == "passport-provider-ingress":
+            return json.dumps({"kind": args[6]}) if mixed_provider else ""
         if args[6] == "pods":
             service = args[8].removeprefix("app=")
+            if service == "passport-provider-ingress":
+                return json.dumps({"items": []})
             return json.dumps({"items": [{
                 "metadata": {"namespace": NAMESPACE, "uid": service + "-pod"},
                 "status": {"phase": "Running", "containerStatuses": [{
@@ -142,16 +157,48 @@ def test_kubernetes_inspection_is_bounded_to_disposable_namespace() -> None:
                 }]},
             }]})
         service = args[7]
+        container = {
+            "image": REFERENCE,
+            "env": [{"name": flag, "value": "true"}
+                    for flag in gate.KUBERNETES_FLAGS[service]],
+        }
+        if service == "gateway":
+            container["envFrom"] = [{"configMapRef": {"name": "marty-config"}}]
+            if second_configmap:
+                container["envFrom"].append({"configMapRef": {"name": "override-config"}})
+        if service == "issuance-native":
+            container["env"].extend({"name": name,
+                                     "valueFrom": {"configMapKeyRef": {
+                                         "name": "marty-config", "key": name}}}
+                                    for name in ("PERSONALIZATION_BUREAU_URL",
+                                                 "PERSONALIZATION_BUREAU_PROVIDER_PROFILE_ID"))
         return json.dumps({
             "metadata": {"namespace": NAMESPACE, "uid": service + "-uid"},
             "status": {"readyReplicas": 1},
-            "spec": {"template": {"spec": {"containers": [{
-                "image": REFERENCE,
-                "env": [{"name": flag, "value": "true"} for flag in gate.KUBERNETES_FLAGS[service]],
-            }]}}},
+            "spec": {"template": {"spec": {"containers": [container]}}},
         })
-    observed = gate.observe_kubernetes(NAMESPACE, CONTEXT, REFERENCE, run)
+    return run
+
+
+def test_kubernetes_inspection_is_bounded_to_disposable_namespace() -> None:
+    observed = gate.observe_kubernetes(NAMESPACE, CONTEXT, REFERENCE,
+                                       kubernetes_runner())
     assert set(observed) == set(gate.KUBERNETES_SERVICES)
+
+
+def test_kubernetes_mixed_provider_is_rejected() -> None:
+    with pytest.raises(gate.SupportedEvidenceError, match="physical provider ingress"):
+        gate.observe_kubernetes(NAMESPACE, CONTEXT, REFERENCE,
+                                kubernetes_runner(mixed_provider=True))
+    with pytest.raises(gate.SupportedEvidenceError, match="bound to the Marty simulator"):
+        gate.observe_kubernetes(NAMESPACE, CONTEXT, REFERENCE,
+                                kubernetes_runner(wrong_profile=True))
+    with pytest.raises(gate.SupportedEvidenceError, match="bound to the Marty simulator"):
+        gate.observe_kubernetes(NAMESPACE, CONTEXT, REFERENCE,
+                                kubernetes_runner(provider_enabled=True))
+    with pytest.raises(gate.SupportedEvidenceError, match="ConfigMap source is ambiguous"):
+        gate.observe_kubernetes(NAMESPACE, CONTEXT, REFERENCE,
+                                kubernetes_runner(second_configmap=True))
 
 
 def test_capability_origin_must_match_inspected_gateway_port(tmp_path: Path) -> None:

@@ -116,6 +116,32 @@ def environment_flags(values: object, service: str,
     return result
 
 
+def kubernetes_config_value(container: dict, data: dict, name: str) -> object:
+    """Resolve one deployed value from explicit env or the inspected ConfigMap."""
+    entries = container.get("env", [])
+    require(isinstance(entries, list), "Kubernetes passport environment is invalid")
+    matches = [entry for entry in entries
+               if isinstance(entry, dict) and entry.get("name") == name]
+    require(len(matches) <= 1, "Kubernetes passport environment is ambiguous")
+    if matches:
+        entry = matches[0]
+        if "value" in entry:
+            return entry["value"]
+        value_from = entry.get("valueFrom")
+        source = value_from.get("configMapKeyRef") if isinstance(value_from, dict) else None
+        require(isinstance(source, dict) and source.get("name") == "marty-config"
+                and source.get("key") == name,
+                "Kubernetes passport configuration source is invalid")
+        return data.get(name)
+    env_from = container.get("envFrom", [])
+    require(isinstance(env_from, list), "Kubernetes passport environment source is invalid")
+    require(len(env_from) == 1 and isinstance(env_from[0], dict)
+            and isinstance(env_from[0].get("configMapRef"), dict)
+            and env_from[0]["configMapRef"].get("name") == "marty-config",
+            "Kubernetes passport ConfigMap source is ambiguous")
+    return data.get(name)
+
+
 def observe_compose(
     surface: str, project: str, services_reference: str,
     runner: Callable[[list[str]], str] = command,
@@ -174,6 +200,17 @@ def observe_kubernetes(
                            "-o", "json"], runner)
     data = config.get("data")
     require(isinstance(data, dict), "Kubernetes passport ConfigMap is missing")
+    for kind in ("deployment", "service"):
+        provider = runner(["kubectl", "--context", context, "-n", namespace,
+                           "get", kind, "passport-provider-ingress",
+                           "--ignore-not-found", "-o", "json"])
+        require(not provider.strip(),
+                "Kubernetes physical provider ingress remains in simulator namespace")
+    provider_pods = json_command(["kubectl", "--context", context, "-n", namespace,
+                                  "get", "pods", "-l", "app=passport-provider-ingress",
+                                  "-o", "json"], runner)
+    require(provider_pods.get("items") == [],
+            "Kubernetes physical provider Pod remains in simulator namespace")
     observed: dict[str, Any] = {}
     for service in KUBERNETES_SERVICES:
         deployment = json_command(["kubectl", "--context", context, "-n", namespace,
@@ -208,6 +245,16 @@ def observe_kubernetes(
                      and source.get("key") == flag else None)
             require(value == "true", f"Kubernetes {service} did not select Rust passport")
             selected[flag] = True
+        expected = ({
+            "PASSPORT_PROVIDER_INGRESS_GATEWAY_ENABLED": "false",
+            "PASSPORT_PROVIDER_INGRESS_SERVICE_URL": "",
+        } if service == "gateway" else {
+            "PERSONALIZATION_BUREAU_URL": "http://passport-beta-bureau:8020",
+            "PERSONALIZATION_BUREAU_PROVIDER_PROFILE_ID": "passport-beta-bureau",
+        } if service == "issuance-native" else {})
+        require(all(kubernetes_config_value(containers[0], data, name) == value
+                    for name, value in expected.items()),
+                f"Kubernetes {service} is not bound to the Marty simulator")
         pods = json_command(["kubectl", "--context", context, "-n", namespace,
                              "get", "pods", "-l",
                              f"app={service}", "-o", "json"], runner)

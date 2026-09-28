@@ -62,7 +62,15 @@ def test_disposable_kubernetes_selects_marty_simulator_without_provider() -> Non
         assert env["ENVIRONMENT"] == "beta"
         assert env[flag] == "true"
         service = objects[("Service", name)]
-        assert service["spec"]["selector"] == {"app": name}
+        selected_labels = {"app": name,
+                           "com.marty.passport.acceptance.owner": "supported-consumer",
+                           "com.marty.passport.acceptance.run-id":
+                           "${PASSPORT_ACCEPTANCE_PLAN_RUN_ID}"}
+        assert deployment["spec"]["selector"]["matchLabels"] == selected_labels
+        assert service["spec"]["selector"] == selected_labels
+        stale_run = dict(template["metadata"]["labels"])
+        stale_run["com.marty.passport.acceptance.run-id"] = "different-run"
+        assert not all(stale_run.get(key) == value for key, value in selected_labels.items())
         assert all(service["metadata"]["labels"][key] == value
                    for key, value in OWNER_LABELS.items())
         assert service["metadata"]["annotations"]["com.marty.passport.acceptance.services-image"] == IMAGE
@@ -74,6 +82,11 @@ def test_disposable_kubernetes_selects_marty_simulator_without_provider() -> Non
     assert bureau_env["SIGNING_KEYS_INTERNAL_URL"] == (
         "http://passport-callback-signer:8018/internal/documents")
     policy = objects[("NetworkPolicy", "passport-acceptance-callback-signer-ingress")]
-    assert policy["spec"]["podSelector"]["matchLabels"] == {"app": "passport-callback-signer"}
+    assert policy["spec"]["podSelector"]["matchLabels"] == {
+        "app": "passport-callback-signer",
+        "com.marty.passport.acceptance.owner": "supported-consumer",
+        "com.marty.passport.acceptance.run-id": "${PASSPORT_ACCEPTANCE_PLAN_RUN_ID}"}
     assert policy["spec"]["ingress"][0]["from"][0]["podSelector"]["matchLabels"] == {
-        "app": "passport-beta-bureau"}
+        "app": "passport-beta-bureau",
+        "com.marty.passport.acceptance.owner": "supported-consumer",
+        "com.marty.passport.acceptance.run-id": "${PASSPORT_ACCEPTANCE_PLAN_RUN_ID}"}
