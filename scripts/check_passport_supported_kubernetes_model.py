@@ -387,6 +387,8 @@ def inspect(
                 f"Disposable Kubernetes service/{name} is not private",
             )
         else:
+            require(item.get("immutable") is True,
+                    "Disposable Kubernetes ConfigMap must be immutable")
             data = item.get("data")
             require(
                 isinstance(data, dict)

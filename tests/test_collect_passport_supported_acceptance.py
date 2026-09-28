@@ -130,9 +130,18 @@ def kubernetes_runner(*, mixed_provider: bool = False,
                       wrong_profile: bool = False,
                       provider_enabled: bool = False,
                       second_configmap: bool = False,
-                      bad_owner: bool = False):
+                      bad_owner: bool = False,
+                      mutable_config: bool = False,
+                      stale_pod: bool = False,
+                      incomplete_rollout: bool = False,
+                      stale_process_env: bool = False):
     def run(args: list[str]) -> str:
         assert args[1:5] == ["--context", CONTEXT, "-n", NAMESPACE]
+        if args[5] == "exec":
+            assert args[6].endswith("-pod")
+            assert args[7:9] == ["-c", args[6].removesuffix("-pod")]
+            assert "/proc/1/environ" in args[-1]
+            return "stale" if stale_process_env else "verified"
         if args[6] == "configmap":
             data = {flag: "true" for names in gate.KUBERNETES_FLAGS.values()
                     for flag in names}
@@ -143,7 +152,9 @@ def kubernetes_runner(*, mixed_provider: bool = False,
                          "http://passport-beta-bureau:8020",
                          "PERSONALIZATION_BUREAU_PROVIDER_PROFILE_ID":
                          "external-provider" if wrong_profile else "passport-beta-bureau"})
-            return json.dumps({"data": data})
+            return json.dumps({"data": data, "immutable": not mutable_config,
+                               "metadata": {"creationTimestamp":
+                                            "2026-09-28T12:00:00.123Z"}})
         if args[6] in ("deployment", "service") and args[7] == "passport-provider-ingress":
             return json.dumps({"kind": args[6]}) if mixed_provider else ""
         if args[6] == "pods":
@@ -152,7 +163,10 @@ def kubernetes_runner(*, mixed_provider: bool = False,
                 return json.dumps({"items": []})
             selected = gate.selector_for(service, PLAN_RUN_ID)
             return json.dumps({"items": [{
-                "metadata": {"namespace": NAMESPACE, "uid": service + "-pod",
+                "metadata": {"name": service + "-pod", "namespace": NAMESPACE,
+                             "uid": service + "-pod",
+                             "creationTimestamp": ("2026-09-28T11:59:59Z" if stale_pod
+                                                   else "2026-09-28T12:00:01+00:00"),
                              "labels": selected,
                              "ownerReferences": [{"kind": "ReplicaSet",
                                                   "name": service + "-rs",
@@ -192,9 +206,13 @@ def kubernetes_runner(*, mixed_provider: bool = False,
                                                  "PERSONALIZATION_BUREAU_PROVIDER_PROFILE_ID"))
         return json.dumps({
             "metadata": {"namespace": NAMESPACE, "uid": service + "-uid",
+                         "generation": 2,
                          "labels": {gate.RUN_LABEL: PLAN_RUN_ID}},
-            "status": {"readyReplicas": 1},
-            "spec": {"selector": {"matchLabels": gate.selector_for(service, PLAN_RUN_ID)},
+            "status": {"observedGeneration": 1 if incomplete_rollout else 2,
+                       "replicas": 1, "updatedReplicas": 1,
+                       "readyReplicas": 1, "availableReplicas": 1},
+            "spec": {"replicas": 1,
+                     "selector": {"matchLabels": gate.selector_for(service, PLAN_RUN_ID)},
                      "template": {"metadata": {"labels":
                                                gate.selector_for(service, PLAN_RUN_ID)},
                                   "spec": {"containers": [{"name": service, **container}]}}},
@@ -212,6 +230,21 @@ def test_kubernetes_pod_must_be_owned_by_expected_deployment() -> None:
     with pytest.raises(gate.SupportedEvidenceError, match="ReplicaSet owner"):
         gate.observe_kubernetes(
             NAMESPACE, CONTEXT, REFERENCE, kubernetes_runner(bad_owner=True))
+
+
+def test_kubernetes_runtime_rejects_stale_configuration_or_rollout() -> None:
+    with pytest.raises(gate.SupportedEvidenceError, match="ConfigMap must be immutable"):
+        gate.observe_kubernetes(NAMESPACE, CONTEXT, REFERENCE,
+                                kubernetes_runner(mutable_config=True))
+    with pytest.raises(gate.SupportedEvidenceError, match="predates the immutable ConfigMap"):
+        gate.observe_kubernetes(NAMESPACE, CONTEXT, REFERENCE,
+                                kubernetes_runner(stale_pod=True))
+    with pytest.raises(gate.SupportedEvidenceError, match="rollout is incomplete"):
+        gate.observe_kubernetes(NAMESPACE, CONTEXT, REFERENCE,
+                                kubernetes_runner(incomplete_rollout=True))
+    with pytest.raises(gate.SupportedEvidenceError, match="running process routing"):
+        gate.observe_kubernetes(NAMESPACE, CONTEXT, REFERENCE,
+                                kubernetes_runner(stale_process_env=True))
 
 
 def test_kubernetes_mixed_provider_is_rejected() -> None:

@@ -11,8 +11,10 @@ from __future__ import annotations
 import argparse
 import json
 import re
+import shlex
 import subprocess
 from collections.abc import Callable
+from datetime import datetime
 from pathlib import Path
 from typing import Any
 from urllib.error import HTTPError, URLError
@@ -196,6 +198,17 @@ def observe_compose(
     return observed
 
 
+def kubernetes_timestamp(value: Any) -> datetime:
+    require(isinstance(value, str), "Kubernetes creation timestamp is missing")
+    try:
+        parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except ValueError as exc:
+        raise SupportedEvidenceError("Kubernetes creation timestamp is invalid") from exc
+    require(parsed.tzinfo is not None,
+            "Kubernetes creation timestamp has no timezone")
+    return parsed
+
+
 def observe_kubernetes(
     namespace: str, context: str, services_reference: str,
     runner: Callable[[list[str]], str] = command,
@@ -207,6 +220,12 @@ def observe_kubernetes(
                            "-o", "json"], runner)
     data = config.get("data")
     require(isinstance(data, dict), "Kubernetes passport ConfigMap is missing")
+    require(config.get("immutable") is True,
+            "Kubernetes passport ConfigMap must be immutable")
+    config_metadata = config.get("metadata")
+    require(isinstance(config_metadata, dict),
+            "Kubernetes passport ConfigMap identity is missing")
+    config_created = kubernetes_timestamp(config_metadata.get("creationTimestamp"))
     for kind in ("deployment", "service"):
         provider = runner(["kubectl", "--context", context, "-n", namespace,
                            "get", kind, "passport-provider-ingress",
@@ -228,9 +247,18 @@ def observe_kubernetes(
         spec = deployment.get("spec")
         require(isinstance(metadata, dict) and metadata.get("namespace") == namespace
                 and isinstance(metadata.get("uid"), str) and bool(metadata["uid"])
-                and isinstance(status, dict) and status.get("readyReplicas", 0) >= 1
+                and isinstance(status, dict)
                 and isinstance(spec, dict),
                 f"Kubernetes {service} is not ready in the disposable namespace")
+        require(isinstance(metadata.get("generation"), int)
+                and metadata["generation"] > 0
+                and isinstance(status.get("observedGeneration"), int)
+                and status["observedGeneration"] >= metadata["generation"]
+                and spec.get("replicas") == 1
+                and all(status.get(key) == 1 for key in
+                        ("replicas", "updatedReplicas", "readyReplicas",
+                         "availableReplicas")),
+                f"Kubernetes {service} rollout is incomplete")
         selector = spec.get("selector")
         template = spec.get("template")
         labels = metadata.get("labels")
@@ -292,6 +320,10 @@ def observe_kubernetes(
         pod = pod_items[0]
         pod_metadata = pod.get("metadata")
         require(isinstance(pod_metadata, dict)
+                and kubernetes_timestamp(pod_metadata.get("creationTimestamp"))
+                >= config_created,
+                f"Kubernetes {service} pod predates the immutable ConfigMap")
+        require(isinstance(pod_metadata, dict)
                 and isinstance(pod_metadata.get("labels"), dict)
                 and all(pod_metadata["labels"].get(key) == value
                         for key, value in expected_selector.items())
@@ -346,6 +378,24 @@ def observe_kubernetes(
                 and isinstance(statuses[0].get("imageID"), str)
                 and statuses[0]["imageID"].endswith(services_reference.split("@", 1)[1]),
                 f"Kubernetes {service} pod is not ready on the released image")
+        pod_name = pod_metadata.get("name")
+        require(isinstance(pod_name, str)
+                and re.fullmatch(r"[a-z0-9]([-a-z0-9]*[a-z0-9])?", pod_name),
+                f"Kubernetes {service} pod name is invalid")
+        # Check the service process environment, not just today's ConfigMap and
+        # deployment template: ConfigMap values are captured when a Pod starts.
+        runtime_values = {flag: "true" for flag in KUBERNETES_FLAGS[service]}
+        runtime_values.update(expected)
+        checks = ["set -eu"]
+        checks.extend("tr '\\000' '\\n' < /proc/1/environ | grep -Fqx -- "
+                      + shlex.quote(f"{name}={value}")
+                      for name, value in runtime_values.items())
+        checks.append("printf verified")
+        result = runner(["kubectl", "--context", context, "-n", namespace,
+                         "exec", pod_name, "-c", service, "--", "/bin/sh", "-c",
+                         "; ".join(checks)])
+        require(result == "verified",
+                f"Kubernetes {service} running process routing differs from the simulator")
         observed[service] = {"deployment_uid": metadata.get("uid"),
                              "pod_uid": pod.get("metadata", {}).get("uid"),
                              "container_id": statuses[0]["containerID"],

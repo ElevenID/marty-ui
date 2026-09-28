@@ -41,9 +41,12 @@ def test_language_neutral_contract_matches_closed_model() -> None:
     assert contract["rust_selectors"] == list(gate.FLAGS.values())
     assert "clusterip_without_external_ips_load_balancer_or_node_ports" in contract["required_identity"]
     assert "plan_run_id_and_run_bound_simulator_selectors" in contract["required_identity"]
+    assert "immutable_run_scoped_configmap" in contract["required_identity"]
     assert "simulator_profile_routing_and_no_physical_provider_ingress" in contract["required_identity"]
     assert contract["runtime_identity"] == [
         "pod_replicaset_deployment_owner_uid_chain",
+        "completed_current_rollout_and_pod_created_after_configmap",
+        "running_process_routing_checked_without_emitting_environment",
         "second_full_identity_preflight_after_runtime_probe",
         "second_simulator_runtime_probe_after_identity_preflight",
     ]
@@ -134,6 +137,7 @@ def runner(expected: dict, *, file_backed_ca: bool = False):
             }
         }
         if kind == "configmap":
+            item["immutable"] = True
             item["data"] = {
                 **{flag: "true" for flag in gate.FLAGS.values()},
                 "ISSUANCE_NATIVE_SERVICE_URL": "http://issuance-native:8005",
@@ -288,6 +292,11 @@ def test_identity_or_rollback_drift_fails_closed(mutate, match: str) -> None:
             lambda x: x["spec"]["selector"].update(
                 matchLabels={"app": "passport-callback-signer"}),
             "deployment/passport-callback-signer selector is invalid",
+        ),
+        (
+            "configmap/marty-config",
+            lambda x: x.update(immutable=False),
+            "ConfigMap must be immutable",
         ),
         (
             "configmap/marty-config",

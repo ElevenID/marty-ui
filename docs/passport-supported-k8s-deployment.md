@@ -46,11 +46,18 @@ context, HTTPS API server, CA digest, namespace UID, and ConfigMap, Deployment,
 and private Service UIDs. It binds the plan run ID to ownership labels and
 simulator selectors. Its source commit and services image must match the
 signed aggregate manifest. The read-only preflight checks those identities,
-the selected Rust ConfigMap values, immutable services and frozen Python owner
-images, and a Python rollback model with all three passport selectors off.
+the selected Rust values in an immutable, run-scoped ConfigMap, services
+images pinned by digest, the frozen Python owner image, and a Python rollback
+model with all three passport selectors off.
 Services must be ClusterIP without external IPs, load balancer exposure, or
 node ports. Each observed Pod must be owned by a ReplicaSet owned by the
-expected Deployment UID. The collector repeats the full identity preflight
+expected Deployment UID. The collector requires a completed current rollout
+with each Pod created after the
+ConfigMap. It checks the running service process's routing flags through a
+bounded Pod exec that emits only a fixed success marker, never environment
+values. The disposable services image includes the shell and utilities used
+for this check; a missing exec permission or utility blocks acceptance.
+The collector repeats the full identity preflight
 after runtime inspection, then repeats the simulator runtime probe. Both
 passes reject physical-provider ingress and require Gateway and native
 issuance to select Marty's simulator profile. Identity or routing drift blocks
