@@ -39,6 +39,11 @@
       "when_recorded": "only after the private native callback accepts the exact signed body and the simulator status transition commits",
       "preimage": "ASCII marty.passport-callback-receipt/v1 followed by NUL, u32 big-endian body byte length, exact callback body bytes, u32 big-endian signature byte length, exact x-personalization-signature UTF-8 bytes",
       "algorithm": "SHA-256",
+      "test_vector": {
+        "body_utf8": "{\"status\":\"SHIPPED\"}",
+        "signature_utf8": "vault:v1:signature-a",
+        "digest_hex": "a7b40930f879a0e56291c4d52f001d17edf39d50bde153ea9ac131232121b22e"
+      },
       "publication": "lowercase hex digest in authenticated private poll; never persist or publish the signature or callback body"
     }
   },
