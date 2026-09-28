@@ -17,8 +17,9 @@ NATIVE = ROOT / "rust/crates/release-evidence/src/kubernetes_native.rs"
 CONTRACT = json.loads(
     (ROOT / "contracts/kubernetes-native-image-reference.json").read_text()
 )
-# Callback and legacy signer settings remain unbound. Passport routing stays
-# disabled by default; opt-in needs a separately accepted provider and image.
+# Callback, beta reconciliation, and legacy signer settings remain unbound.
+# Passport routing stays disabled by default; opt-in needs separately accepted
+# simulator, issuer profiles, and images.
 PASSPORT_NOT_KUBERNETES_BOUND = {
     "PERSONALIZATION_BUREAU_WEBHOOK_SECRET_FILE",
     "PASSPORT_TENANT_API_KEYS",
@@ -29,6 +30,8 @@ PASSPORT_NOT_KUBERNETES_BOUND = {
     "PHYSICAL_DOCUMENT_ARTIFACT_KEY",
     "PHYSICAL_DOCUMENT_ARTIFACT_KEY_FILE",
     "PERSONALIZATION_BUREAU_WEBHOOK_SECRET",
+    "PASSPORT_BETA_RECONCILIATION_ENABLED",
+    "PASSPORT_BETA_RECONCILIATION_OPERATOR_TOKEN",
 }
 
 
