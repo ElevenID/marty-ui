@@ -19,6 +19,7 @@ VALIDATOR = runpy.run_path(
 PROFILE = "docker-compose.profile.passport-native-beta.yml"
 IMAGE = "ghcr.io/elevenid/marty-ui-oss/services@sha256:" + "a" * 64
 TOKEN = "synthetic-internal-passport-token-00000001"
+RECONCILIATION_TOKEN = "synthetic-beta-reconciliation-operator-token-00000001"
 DSC_GATEWAY_KEY = "synthetic-dsc-gateway-only-credential-000001"
 CSCA_GATEWAY_KEY = "synthetic-csca-gateway-only-credential-00001"
 
@@ -51,6 +52,9 @@ def model(tmp_path, enabled=True):
     )
     services["issuance-native"]["environment"].update(
         {
+            "ENVIRONMENT": "beta",
+            "PASSPORT_BETA_RECONCILIATION_ENABLED": "true",
+            "PASSPORT_BETA_RECONCILIATION_OPERATOR_TOKEN": RECONCILIATION_TOKEN,
             "PASSPORT_MANAGED_ISSUER_SIGNING_ENABLED": "true",
             "PASSPORT_KMS_ARTIFACTS_ENABLED": "true",
             "PASSPORT_KMS_CALLBACKS_ENABLED": "true",
@@ -185,6 +189,25 @@ def test_opt_in_kms_only_and_bureau_is_absent_when_disabled(tmp_path):
     validate(model(tmp_path, False), False)
     with pytest.raises(VALIDATOR["PassportConfigurationError"]):
         VALIDATOR["validate_model"](model(tmp_path), passport_enabled=False, files=[PROFILE])
+
+
+@pytest.mark.parametrize("operator_token", [None, "short", TOKEN, "synthetic-signing-credential"])
+def test_beta_reconciliation_requires_a_distinct_operator_token(tmp_path, operator_token):
+    candidate = model(tmp_path)
+    native = candidate["services"]["issuance-native"]["environment"]
+    if operator_token is None:
+        native.pop("PASSPORT_BETA_RECONCILIATION_OPERATOR_TOKEN")
+    else:
+        native["PASSPORT_BETA_RECONCILIATION_OPERATOR_TOKEN"] = operator_token
+    with pytest.raises(VALIDATOR["PassportConfigurationError"]):
+        validate(candidate)
+
+
+def test_beta_reconciliation_operator_token_stays_in_issuance_native(tmp_path):
+    candidate = model(tmp_path)
+    candidate["services"]["flow"]["environment"]["OTHER_KEY"] = RECONCILIATION_TOKEN
+    with pytest.raises(VALIDATOR["PassportConfigurationError"]):
+        validate(candidate)
 
 
 def test_beta_csca_credential_contract_and_default_off(tmp_path):
@@ -854,6 +877,7 @@ def synthetic_beta_compose_env(tmp_path):
             fixture.write_text("synthetic-workload-material", encoding="utf-8")
             values[name] = str(fixture)
     values["GRPC_SERVICE_TOKEN"] = TOKEN
+    values["PASSPORT_BETA_RECONCILIATION_OPERATOR_TOKEN"] = RECONCILIATION_TOKEN
     values["MARTY_SERVICES_IMAGE"] = IMAGE
     ceremony = tmp_path / "elevenid-beta-passport-ceremony"
     ceremony.mkdir()

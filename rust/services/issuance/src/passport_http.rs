@@ -1,6 +1,10 @@
 //! Tenant-authenticated native physical-document routes. This router is opt-in:
 //! production traffic must not reach it until all provider and parity gates pass.
 
+#[cfg(test)]
+#[path = "passport_http_reconciliation_tests.rs"]
+mod reconciliation_tests;
+
 use axum::{
     body::Bytes,
     extract::{Path, State},
@@ -986,7 +990,7 @@ async fn submit_personalization(
     let bureau = service.bureau()?;
     let intent_id = Uuid::new_v4();
     let endpoint_sha256 = bureau.endpoint_sha256();
-    let reserved_at = Utc::now();
+    let reserved_at = database_precision_now();
     let signing_provenance = if matches!(
         (&service.signer, &service.cipher),
         (
@@ -1281,6 +1285,11 @@ fn signed_sod_sha256(signed: &SignedMaterial) -> Result<String, PassportHttpErro
     let sod = decode_python_validated_base64(&signed.sod_der_base64)
         .map_err(|_| PassportHttpError::Signer(SignerError::IncompleteMaterial))?;
     Ok(hex::encode(Sha256::digest(sod)))
+}
+
+fn database_precision_now() -> DateTime<Utc> {
+    DateTime::<Utc>::from_timestamp_micros(Utc::now().timestamp_micros())
+        .expect("current UTC timestamp fits PostgreSQL timestamp range")
 }
 
 fn status_from_bureau(status: ProductionStatus) -> PassportJobStatus {
