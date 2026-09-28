@@ -224,6 +224,19 @@ pub enum PassportStartupError {
 }
 
 impl PassportHttpService {
+    fn beta_batch_ready(&self) -> bool {
+        self.beta_reconciliation_enabled
+            && self.bureau_provider_profile_id.as_deref() == Some("passport-beta-bureau")
+            && self.bureau.is_some()
+            && matches!(
+                (&self.signer, &self.cipher),
+                (
+                    Some(PassportSigner::Managed(_)),
+                    ArtifactAvailability::Ready(ArtifactCryptor::Kms(_))
+                )
+            )
+    }
+
     pub fn from_config(
         config: &IssuanceServiceConfig,
         pool: sqlx::PgPool,
@@ -751,6 +764,10 @@ pub fn router(service: PassportHttpService) -> Router {
             post(submit_beta_batch),
         )
         .route(
+            "/internal/passport/beta-batches/preflight",
+            get(beta_batch_preflight),
+        )
+        .route(
             "/v1/passport/applications/{application_id}/production-status",
             get(production_status),
         )
@@ -1196,19 +1213,10 @@ async fn submit_beta_batch(
     headers: HeaderMap,
     Json(request): Json<BetaBatchSubmitRequest>,
 ) -> Result<Json<Value>, PassportHttpError> {
-    if !service.beta_reconciliation_enabled
-        || service.bureau_provider_profile_id.as_deref() != Some("passport-beta-bureau")
-        || !matches!(
-            (&service.signer, &service.cipher),
-            (
-                Some(PassportSigner::Managed(_)),
-                ArtifactAvailability::Ready(ArtifactCryptor::Kms(_))
-            )
-        )
-    {
+    let principal = service.authenticate_beta_reconciliation_operator(&headers)?;
+    if !service.beta_batch_ready() {
         return Err(PassportHttpError::ProviderUnavailable);
     }
-    let principal = service.authenticate_beta_reconciliation_operator(&headers)?;
     let wire_key = header(&headers, "x-passport-batch-wire-key")
         .ok_or(PassportHttpError::ConcurrentChange)
         .and_then(|encoded| {
@@ -1667,6 +1675,22 @@ async fn submit_beta_batch(
     beta_batch_safe_wire_response(&service, &principal, batch_id, &bound, &wire_key).await
 }
 
+async fn beta_batch_preflight(
+    State(service): State<PassportHttpService>,
+    headers: HeaderMap,
+) -> Result<Json<Value>, PassportHttpError> {
+    service.authenticate_beta_reconciliation_operator(&headers)?;
+    if !service.beta_batch_ready() {
+        return Err(PassportHttpError::ProviderUnavailable);
+    }
+    Ok(Json(json!({
+        "ready": true,
+        "provider_profile_id": "passport-beta-bureau",
+        "issuer_mode": "managed-issuer-profile",
+        "artifact_custody": "kms",
+    })))
+}
+
 async fn verified_bound_batch_job(
     service: &PassportHttpService,
     principal: &PassportTenantPrincipal,
@@ -1965,6 +1989,8 @@ async fn beta_batch_safe_wire_response(
                             == commitments.response_commitment
                     {
                         response["wire_evidence_status"] = json!("verified");
+                        response["http_status"] = json!(202);
+                        response["batch_status"] = json!("QUEUED");
                         response["wire_commitments"] = serde_json::to_value(commitments)
                             .map_err(|_| PassportHttpError::ConcurrentChange)?;
                         return Ok(Json(response));

@@ -32,6 +32,8 @@ jobs:
       PASSPORT_ACCEPTANCE_DSC_OPERATOR_COOKIE: ${{ secrets.PASSPORT_ACCEPTANCE_DSC_OPERATOR_COOKIE }}
       PASSPORT_ACCEPTANCE_FLOW_OPERATOR_COOKIE: ${{ secrets.PASSPORT_ACCEPTANCE_FLOW_OPERATOR_COOKIE }}
       PASSPORT_ACCEPTANCE_FLOW_PLAN_JSON: ${{ secrets.PASSPORT_ACCEPTANCE_FLOW_PLAN_JSON }}
+      PASSPORT_ACCEPTANCE_INTERNAL_SERVICE_TOKEN: ${{ secrets.PASSPORT_ACCEPTANCE_INTERNAL_SERVICE_TOKEN }}
+      PASSPORT_ACCEPTANCE_RECONCILIATION_OPERATOR_TOKEN: ${{ secrets.PASSPORT_ACCEPTANCE_RECONCILIATION_OPERATOR_TOKEN }}
       BETA_ARTIFACT_DIR: ${{ inputs.beta_artifact_dir }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
@@ -53,7 +55,9 @@ jobs:
                           PASSPORT_ACCEPTANCE_CSCA_OPERATOR_COOKIE \
                           PASSPORT_ACCEPTANCE_DSC_OPERATOR_COOKIE \
                           PASSPORT_ACCEPTANCE_FLOW_OPERATOR_COOKIE \
-                          PASSPORT_ACCEPTANCE_FLOW_PLAN_JSON; do
+                          PASSPORT_ACCEPTANCE_FLOW_PLAN_JSON \
+                          PASSPORT_ACCEPTANCE_INTERNAL_SERVICE_TOKEN \
+                          PASSPORT_ACCEPTANCE_RECONCILIATION_OPERATOR_TOKEN; do
             if [[ -z "${!required}" ]]; then
               echo "$required is unavailable for governed passport acceptance" >&2
               exit 1

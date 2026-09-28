@@ -65,7 +65,7 @@ def model(*, wrong_definition: bool = False, wrong_issuer: bool = False,
             finished.append(PHYSICAL_STEPS[index])
         job = {"id": "job-1", "application_id": "app-1", "organization_id": ORGANIZATION,
                "flow_execution_id": "instance-1", "issuer_did": "did:example:wrong" if wrong_issuer else ISSUER,
-               "status": "DRAFT"}
+               "issuer_profile_id": "managed-issuer-profile", "status": "DRAFT"}
         if index >= 4:
             job.update(status="SOD_SIGNED", sod_sha256=SOD, sod_signature_verified=True)
         if index >= 5:
@@ -157,6 +157,42 @@ def test_selected_flow_completes_nine_steps_on_one_receipt_bound_job() -> None:
     assert [call[:2] for call in calls].count(("GET", "/v1/flows/instances/instance-1")) == 10
     assert ("simulator", CONTAINER, "GET", "/v1/personalization/jobs/" + BUREAU) in calls
     assert all(private not in str(result) for private in ("Synthetic", "P<UTO", "123456789", COOKIE, KEY))
+
+
+def test_native_batch_is_inserted_after_durable_signed_sod_before_flow_submit() -> None:
+    calls, flow_request, native_request, simulator_request, receipt = model()
+
+    def native_batch(instance: str, application: str, source: str, sod: str, profile: str) -> str:
+        assert (instance, application, source, sod, profile) == (
+            "instance-1", "app-1", "job-1", SOD, "managed-issuer-profile")
+        calls.append(("native-batch", source))
+        return BUREAU
+
+    result = exercise(
+        DEFINITION, ORGANIZATION, ISSUER, REFERENCES, PHYSICAL, COOKIE, KEY,
+        simulator_container_id=CONTAINER, on_submission=receipt,
+        on_signed_sod=native_batch, request=flow_request,
+        passport_request=native_request, simulator_request=simulator_request,
+        poll_interval_seconds=0,
+    )
+    assert result["verified"] is True
+    batch_index = calls.index(("native-batch", "job-1"))
+    assert calls[batch_index - 1][:2] == ("GET", "/v1/flows/instances/instance-1")
+    assert calls[batch_index + 1][:2] == ("GET", "/v1/flows/instances/instance-1")
+    assert all(call[0] != "native-batch" for call in calls[batch_index + 1:])
+
+
+def test_native_batch_selected_bureau_mismatch_stops_flow() -> None:
+    calls, flow_request, native_request, simulator_request, receipt = model()
+    with pytest.raises(SelectedFlowError, match="submitted different"):
+        exercise(
+            DEFINITION, ORGANIZATION, ISSUER, REFERENCES, PHYSICAL, COOKIE, KEY,
+            simulator_container_id=CONTAINER, on_submission=receipt,
+            on_signed_sod=lambda *args: "b49974d5-af27-49ad-99a3-c433af3c3cb0",
+            request=flow_request, passport_request=native_request,
+            simulator_request=simulator_request, poll_interval_seconds=0,
+        )
+    assert ("receipt", ORGANIZATION, "job-1", BUREAU, SOD) not in calls
 
 
 @pytest.mark.parametrize("defect", ["wrong_definition", "wrong_issuer", "wrong_submitted_sod",

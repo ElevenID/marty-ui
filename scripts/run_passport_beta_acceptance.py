@@ -39,6 +39,13 @@ if __package__:
         beta_native_route_ownership,
         production_snapshot,
     )
+    from .probe_passport_beta_native_batch import (
+        NativeBatchProbeError,
+        clear_private_state,
+        ensure_private_state_available,
+        exercise as exercise_native_batch,
+        request_private_preflight,
+    )
     from .probe_passport_beta_physical_flow import (
         PhysicalFlowProbeError,
         require_source_checkout,
@@ -84,6 +91,13 @@ else:
         beta_native_route_ownership,
         production_snapshot,
     )
+    from probe_passport_beta_native_batch import (
+        NativeBatchProbeError,
+        clear_private_state,
+        ensure_private_state_available,
+        exercise as exercise_native_batch,
+        request_private_preflight,
+    )
     from probe_passport_beta_physical_flow import (
         PhysicalFlowProbeError,
         require_source_checkout,
@@ -122,6 +136,11 @@ def run(
     selected_flow_plan: dict[str, Any] | None = None,
     flow_operator_cookie: str | None = None,
     selected_flow: Callable[..., dict[str, Any]] = exercise_selected_flow,
+    native_batch: Callable[..., tuple[str, dict[str, Any]]] = exercise_native_batch,
+    native_preflight: Callable[..., None] = request_private_preflight,
+    native_service_token: str | None = None,
+    native_operator_token: str | None = None,
+    private_state_path: Path | None = None,
     batch: Callable[..., dict[str, Any]] = exercise_batch,
     checkout_checker: Callable[[str], None] = require_source_checkout,
 ) -> dict[str, Any]:
@@ -149,6 +168,7 @@ def run(
             and all(isinstance(bureau.get(key), str)
                     for key in ("container_id", "oci_reference")),
             "Inspected beta simulator is missing")
+    native_image = report["runtime_images"].get("issuance-native")
     if selected_flow_plan is not None:
         require(isinstance(selected_flow_plan, dict)
                 and set(selected_flow_plan) == {"source_commit", "stack_manifest_sha256",
@@ -184,6 +204,21 @@ def run(
         if selected_flow_plan is not None:
             require(selected_flow_plan["references"][name] == application[name],
                     "Selected Flow references differ from the managed application")
+    if selected_flow_plan is not None:
+        require(isinstance(native_image, dict)
+                and isinstance(native_image.get("container_id"), str)
+                and isinstance(native_service_token, str)
+                and len(native_service_token) >= 32
+                and isinstance(native_operator_token, str)
+                and len(native_operator_token) >= 32
+                and native_service_token != native_operator_token
+                and all(character not in native_operator_token for character in "\r\n\0"),
+                "Protected native batch operator credential or image is unavailable")
+        require(isinstance(private_state_path, Path),
+                "Protected native batch state path is unavailable")
+        ensure_private_state_available(private_state_path)
+        native_preflight(native_image["container_id"], application["organization_id"],
+                         native_service_token, native_operator_token)
     route_ownership = routing(report["runtime_images"], report.get("provider_ingress_runtime_image"))
     route_evidence = route_ownership.get("evidence")
     webhook_owner = route_evidence.get("webhook_owner") if isinstance(route_evidence, dict) else None
@@ -196,6 +231,7 @@ def run(
     receipt_result: dict[str, Any] | None = None
     selected_result: dict[str, Any] | None = None
     batch_result: dict[str, Any] | None = None
+    native_batch_result: dict[str, Any] | None = None
 
     def capture_dsc(der_sha256: str, pem_wire_sha256: str) -> None:
         selected_dsc.update(der_sha256=der_sha256, pem_wire_sha256=pem_wire_sha256)
@@ -229,11 +265,30 @@ def run(
                     and isinstance(direct_receipt.get("evidence"), dict)
                     and isinstance(direct_receipt["evidence"].get("source_job_id_commitment"), str),
                     "Direct passport job commitment is unavailable")
+            def bind_native_batch(
+                instance_id: str, application_id: str, source_job_id: str,
+                sod_sha256: str, issuer_profile_id: str,
+            ) -> str:
+                nonlocal native_batch_result
+                require(len(selected_dsc) == 2,
+                        "Selected DSC material is unavailable for the native batch")
+                selected_bureau_id, native_batch_result = native_batch(
+                    application, selected_flow_plan["physical_document"], api_key,
+                    native_service_token, native_operator_token,
+                    native_image["container_id"], bureau["container_id"],
+                    instance_id, application_id, source_job_id, sod_sha256,
+                    issuer_profile_id, selected_dsc["der_sha256"],
+                    selected_dsc["pem_wire_sha256"], material_receipt,
+                    private_state_path,
+                )
+                return selected_bureau_id
+
             selected_result = selected_flow(
                 selected_flow_plan["flow_definition_id"], application["organization_id"],
                 application["issuer_did"], selected_flow_plan["references"],
                 selected_flow_plan["physical_document"], flow_operator_cookie, api_key,
                 simulator_container_id=bureau["container_id"], on_submission=compare_submission,
+                on_signed_sod=bind_native_batch,
             )
             selected_evidence = selected_result.get("evidence") if isinstance(selected_result, dict) else None
             require(isinstance(selected_result, dict) and selected_result.get("verified") is True
@@ -254,49 +309,84 @@ def run(
                     and selected_evidence.get("bureau_job_commitment") == receipt_result["evidence"].get("bureau_job_id_commitment")
                     and selected_evidence.get("source_job_commitment") != direct_receipt["evidence"]["source_job_id_commitment"],
                     "Selected Flow did not produce a distinct receipt-bound passport job")
-        batch_result = batch(
-            application, api_key, bureau["container_id"],
-            report["release"]["source_commit"], report["release"]["stack_manifest_sha256"],
-            bureau["oci_reference"],
-        )
-        batch_evidence = batch_result.get("evidence") if isinstance(batch_result, dict) else None
-        require(isinstance(batch_result, dict) and batch_result.get("verified") is True
-                and isinstance(batch_evidence, dict)
-                and batch_evidence.get("provider_kind") == "simulator"
-                and batch_evidence.get("physical_claim") == "not_claimed"
-                and batch_evidence.get("simulator_marker_verified") is True
-                and batch_evidence.get("native_binding_verified") is True
-                and batch_evidence.get("native_completed_jobs") == 2
-                and batch_evidence.get("source_commit") == report["release"]["source_commit"]
-                and batch_evidence.get("stack_manifest_sha256") == report["release"]["stack_manifest_sha256"]
-                and batch_evidence.get("services_oci_reference") == bureau["oci_reference"]
-                and batch_evidence.get("commitment_scheme") == "HMAC-SHA256"
-                and batch_evidence.get("http_status") == 202
-                and batch_evidence.get("batch_status") == "QUEUED"
-                and isinstance(batch_evidence.get("request_commitment"), str)
-                and SHA256.fullmatch(batch_evidence["request_commitment"])
-                and isinstance(batch_evidence.get("response_commitment"), str)
-                and SHA256.fullmatch(batch_evidence["response_commitment"])
-                and isinstance(batch_evidence.get("submitted_job_commitments"), list)
-                and len(batch_evidence["submitted_job_commitments"]) == 2
-                and len(set(batch_evidence["submitted_job_commitments"])) == 2
-                and all(isinstance(value, str) and SHA256.fullmatch(value)
-                        for value in batch_evidence["submitted_job_commitments"])
-                and isinstance(batch_evidence.get("returned_jobs"), list)
-                and len(batch_evidence["returned_jobs"]) == 2
-                and {item.get("source_job_commitment") for item in batch_evidence["returned_jobs"]
-                     if isinstance(item, dict)} == set(batch_evidence["submitted_job_commitments"])
-                and all(isinstance(item, dict)
-                        and isinstance(item.get("bureau_job_commitment"), str)
-                        and SHA256.fullmatch(item["bureau_job_commitment"])
-                        and item.get("status") == "SHIPPED"
-                        for item in batch_evidence["returned_jobs"])
-                and isinstance(batch_evidence.get("callback_receipts_sha256"), list)
-                and len(batch_evidence["callback_receipts_sha256"]) == 2
-                and all(isinstance(value, str) and SHA256.fullmatch(value)
-                        for value in batch_evidence["callback_receipts_sha256"])
-                and batch_evidence.get("callback_receipt_sha256") == batch_evidence["callback_receipts_sha256"][0],
-                "Live beta simulator batch and signed callback receipt did not verify")
+            native_evidence = native_batch_result.get("evidence") if isinstance(native_batch_result, dict) else None
+            require(isinstance(native_batch_result, dict)
+                    and native_batch_result.get("verified") is True
+                    and isinstance(native_evidence, dict)
+                    and native_evidence.get("provider_kind") == "simulator"
+                    and native_evidence.get("physical_claim") == "not_claimed"
+                    and native_evidence.get("http_status") == 202
+                    and native_evidence.get("batch_status") == "QUEUED"
+                    and native_evidence.get("selected_flow_in_two_job_batch") is True
+                    and native_evidence.get("native_binding_verified") is True
+                    and native_evidence.get("first_accepted_material_verified") is True
+                    and native_evidence.get("companion_native_completed") is True
+                    and native_evidence.get("selected_source_job_commitment") == selected_evidence["source_job_commitment"]
+                    and native_evidence.get("selected_bureau_job_commitment") == selected_evidence["bureau_job_commitment"]
+                    and isinstance(native_evidence.get("companion_source_job_commitment"), str)
+                    and SHA256.fullmatch(native_evidence["companion_source_job_commitment"])
+                    and native_evidence["companion_source_job_commitment"] != native_evidence["selected_source_job_commitment"]
+                    and isinstance(native_evidence.get("companion_bureau_job_commitment"), str)
+                    and SHA256.fullmatch(native_evidence["companion_bureau_job_commitment"])
+                    and native_evidence["companion_bureau_job_commitment"] != native_evidence["selected_bureau_job_commitment"]
+                    and native_evidence.get("submitted_job_commitments") == [
+                        native_evidence["selected_source_job_commitment"],
+                        native_evidence["companion_source_job_commitment"]]
+                    and native_evidence.get("returned_jobs") == [
+                        {"source_job_commitment": native_evidence["selected_source_job_commitment"],
+                         "bureau_job_commitment": native_evidence["selected_bureau_job_commitment"]},
+                        {"source_job_commitment": native_evidence["companion_source_job_commitment"],
+                         "bureau_job_commitment": native_evidence["companion_bureau_job_commitment"]}]
+                    and all(isinstance(native_evidence.get(field), str)
+                            and SHA256.fullmatch(native_evidence[field])
+                            for field in ("request_commitment", "response_commitment",
+                                          "companion_callback_receipt_sha256")),
+                    "Selected Flow native batch proof did not verify")
+        else:
+            batch_result = batch(
+                application, api_key, bureau["container_id"],
+                report["release"]["source_commit"], report["release"]["stack_manifest_sha256"],
+                bureau["oci_reference"],
+            )
+        if batch_result is not None:
+            batch_evidence = batch_result.get("evidence") if isinstance(batch_result, dict) else None
+            require(isinstance(batch_result, dict) and batch_result.get("verified") is True
+                    and isinstance(batch_evidence, dict)
+                    and batch_evidence.get("provider_kind") == "simulator"
+                    and batch_evidence.get("physical_claim") == "not_claimed"
+                    and batch_evidence.get("simulator_marker_verified") is True
+                    and batch_evidence.get("native_binding_verified") is True
+                    and batch_evidence.get("native_completed_jobs") == 2
+                    and batch_evidence.get("source_commit") == report["release"]["source_commit"]
+                    and batch_evidence.get("stack_manifest_sha256") == report["release"]["stack_manifest_sha256"]
+                    and batch_evidence.get("services_oci_reference") == bureau["oci_reference"]
+                    and batch_evidence.get("commitment_scheme") == "HMAC-SHA256"
+                    and batch_evidence.get("http_status") == 202
+                    and batch_evidence.get("batch_status") == "QUEUED"
+                    and isinstance(batch_evidence.get("request_commitment"), str)
+                    and SHA256.fullmatch(batch_evidence["request_commitment"])
+                    and isinstance(batch_evidence.get("response_commitment"), str)
+                    and SHA256.fullmatch(batch_evidence["response_commitment"])
+                    and isinstance(batch_evidence.get("submitted_job_commitments"), list)
+                    and len(batch_evidence["submitted_job_commitments"]) == 2
+                    and len(set(batch_evidence["submitted_job_commitments"])) == 2
+                    and all(isinstance(value, str) and SHA256.fullmatch(value)
+                            for value in batch_evidence["submitted_job_commitments"])
+                    and isinstance(batch_evidence.get("returned_jobs"), list)
+                    and len(batch_evidence["returned_jobs"]) == 2
+                    and {item.get("source_job_commitment") for item in batch_evidence["returned_jobs"]
+                         if isinstance(item, dict)} == set(batch_evidence["submitted_job_commitments"])
+                    and all(isinstance(item, dict)
+                            and isinstance(item.get("bureau_job_commitment"), str)
+                            and SHA256.fullmatch(item["bureau_job_commitment"])
+                            and item.get("status") == "SHIPPED"
+                            for item in batch_evidence["returned_jobs"])
+                    and isinstance(batch_evidence.get("callback_receipts_sha256"), list)
+                    and len(batch_evidence["callback_receipts_sha256"]) == 2
+                    and all(isinstance(value, str) and SHA256.fullmatch(value)
+                            for value in batch_evidence["callback_receipts_sha256"])
+                    and batch_evidence.get("callback_receipt_sha256") == batch_evidence["callback_receipts_sha256"][0],
+                    "Live beta simulator batch and signed callback receipt did not verify")
     finally:
         after_production = snapshot()
         production_window = assert_production_unchanged(before_production, after_production)
@@ -307,20 +397,38 @@ def run(
             "Beta provider ingress drifted during passport acceptance")
     require(route_ownership == routing(after["runtime_images"], after.get("provider_ingress_runtime_image")),
             "Beta native route selectors drifted during passport acceptance")
-    report["probes"]["gateway_application_lifecycle"] = lifecycle_result
     require(receipt_result is not None and receipt_result.get("verified") is True,
             "Simulator first accepted material receipt is unavailable")
     report["probes"]["simulator_material_receipt"] = receipt_result
     # The retained simulator diagnostic sends synthetic material outside the
     # selected Flow. Keep its evidence, but do not qualify release probes from
     # a pair that the native batch route did not dispatch and bind.
-    report["probes"]["simulator_batch_diagnostic"] = batch_result
-    report["probes"]["physical_bureau_batch"] = {"verified": False, "evidence": {
-        "missing": ["selected_flow_in_native_batch", "exact_native_batch_wire_proof"],
-    }}
-    report["probes"]["physical_bureau_submission"] = {"verified": False, "evidence": {
-        "missing": ["selected_flow_batch_binding"],
-    }}
+    report["probes"]["simulator_batch_diagnostic"] = (
+        batch_result if batch_result is not None else
+        {"verified": False, "evidence": {"missing": ["diagnostic_not_run"]}}
+    )
+    if native_batch_result is not None:
+        native_evidence = native_batch_result["evidence"]
+        report["probes"]["physical_bureau_batch"] = {"verified": True, "evidence": {
+            **native_evidence,
+            "source_commit": report["release"]["source_commit"],
+            "stack_manifest_sha256": report["release"]["stack_manifest_sha256"],
+            "services_oci_reference": bureau["oci_reference"],
+            "native_completed_jobs": 2,
+            "selected_flow_callback_verified": True,
+            "selected_callback_receipt_sha256": selected_result["evidence"]["callback_receipt_sha256"],
+        }}
+        report["probes"]["physical_bureau_submission"] = {"verified": False, "evidence": {
+            "selected_flow_in_two_job_batch": True,
+            "missing": ["protected_recorder_identity_correlation"],
+        }}
+    else:
+        report["probes"]["physical_bureau_batch"] = {"verified": False, "evidence": {
+            "missing": ["selected_flow_in_native_batch", "exact_native_batch_wire_proof"],
+        }}
+        report["probes"]["physical_bureau_submission"] = {"verified": False, "evidence": {
+            "missing": ["selected_flow_batch_binding"],
+        }}
     report["probes"]["packaged_image"] = {"verified": True, "evidence": {
         "source_commit": report["release"]["source_commit"],
         "stack_manifest_sha256": report["release"]["stack_manifest_sha256"],
@@ -328,7 +436,9 @@ def run(
         "runtime_container_id": bureau["container_id"],
     }}
     report["probes"]["signed_bureau_callback"] = {"verified": False, "evidence": {
-        "missing": ["selected_flow_batch_callback", "same_job_negative_callback_denials"],
+        "selected_flow_batch_callback": native_batch_result is not None,
+        "missing": ["same_job_negative_callback_denials"] if native_batch_result is not None
+                   else ["selected_flow_batch_callback", "same_job_negative_callback_denials"],
     }}
     if selected_result is not None:
         selected_evidence = selected_result["evidence"]
@@ -348,11 +458,37 @@ def run(
             and isinstance(lifecycle_evidence.get("sod_sha256"), str)
             and SHA256.fullmatch(lifecycle_evidence["sod_sha256"]) is not None,
             "Native SOD signature evidence is unavailable")
+    safe_lifecycle_evidence = {
+        "sod_sha256": lifecycle_evidence["sod_sha256"],
+        "sod_signature_verified": True,
+    }
+    route_statuses = {
+        ("POST", "/v1/passport/applications", 201),
+        ("POST", "/v1/passport/applications/{application_id}/generate-data-groups", 200),
+        ("POST", "/v1/passport/applications/{application_id}/generate-sod", 200),
+        ("POST", "/v1/passport/applications/{application_id}/submit-personalization", 200),
+        ("GET", "/v1/passport/applications/{application_id}/production-status", 200),
+        ("POST", "/v1/passport/applications/{application_id}/quality-verify", 200),
+        ("POST", "/v1/passport/applications/{application_id}/activate", 200),
+    }
+    routes = lifecycle_evidence.get("routes")
     if selected_result is not None:
-        report["probes"]["gateway_application_lifecycle"] = {"verified": True, "evidence": {
-            **lifecycle_evidence,
-            "source_job_commitment": direct_receipt["evidence"]["source_job_id_commitment"],
-        }}
+        require(isinstance(routes, list) and len(routes) >= len(route_statuses)
+                and all(isinstance(item, dict)
+                        and set(item) == {"method", "route", "http_status", "job_status"}
+                        and (item["method"], item["route"], item["http_status"]) in route_statuses
+                        and item["job_status"] in {
+                            "DRAFT", "DATA_GENERATED", "SOD_SIGNED", "SUBMITTED",
+                            "IN_PRODUCTION", "QUALITY_CHECK", "READY_FOR_ACTIVATION", "ACTIVE"}
+                        for item in routes)
+                and {(item["method"], item["route"], item["http_status"])
+                     for item in routes} == route_statuses,
+                "Direct passport route evidence is incomplete")
+        safe_lifecycle_evidence["routes"] = routes
+    if selected_result is not None:
+        safe_lifecycle_evidence["source_job_commitment"] = direct_receipt["evidence"]["source_job_id_commitment"]
+    report["probes"]["gateway_application_lifecycle"] = {
+        "verified": True, "evidence": safe_lifecycle_evidence}
     selected_evidence = selected_result["evidence"] if selected_result is not None else None
     report["probes"]["sod_signature"] = {"verified": True, "evidence": {
         "sod_sha256": (selected_evidence["sod_sha256"] if selected_evidence is not None
@@ -366,14 +502,19 @@ def run(
     report["probes"]["flow_capability_and_webhook_denial"] = flow_result
     report["probes"]["nine_route_gateway_flow"] = {"verified": False, "evidence": {
         "capabilities_http": report["probes"]["capabilities_http"].get("evidence"),
-        "application_lifecycle": lifecycle_result.get("evidence"),
+        "application_lifecycle": safe_lifecycle_evidence,
         "flow_and_webhook_denial": flow_result.get("evidence"),
         "native_route_ownership": route_ownership.get("evidence"),
-        "missing": (["selected_flow_in_two_job_batch", "same_job_gateway_route_trace"]
-                    if selected_result is not None else ["executed_simulator_flow",
-                                                     "selected_flow_in_two_job_batch"]),
+        "missing": (["same_job_gateway_route_trace"] if native_batch_result is not None
+                    else ["executed_simulator_flow", "selected_flow_in_two_job_batch"]),
     }}
-    report["probes"]["managed_csca_dsc_chain"] = chain_result
+    chain_evidence = chain_result["evidence"]
+    report["probes"]["managed_csca_dsc_chain"] = {"verified": True, "evidence": {
+        key: chain_evidence[key] for key in (
+            "csca_certificate_sha256", "dsc_certificate_sha256",
+            "csca_http_status", "dsc_http_status", "chain_verified_by")
+        if key in chain_evidence
+    }}
     report["probes"]["legacy_drain"] = {
         "verified": before_drain.get("verified") is True and after_drain.get("verified") is True,
         "evidence": {"before": before_drain.get("evidence"), "after": after_drain.get("evidence")},
@@ -382,6 +523,8 @@ def run(
     # The required production-isolation gate spans deployment and rollback,
     # which this workflow does not control. Preserve it as unverified.
     report["status"] = "blocked"
+    if native_batch_result is not None:
+        clear_private_state(private_state_path)
     return report
 
 
@@ -413,10 +556,14 @@ def main() -> int:
             dsc_session=os.environ.get("PASSPORT_ACCEPTANCE_DSC_OPERATOR_COOKIE"),
             selected_flow_plan=selected_flow_plan,
             flow_operator_cookie=os.environ.get("PASSPORT_ACCEPTANCE_FLOW_OPERATOR_COOKIE"),
+            native_service_token=os.environ.get("PASSPORT_ACCEPTANCE_INTERNAL_SERVICE_TOKEN"),
+            native_operator_token=os.environ.get("PASSPORT_ACCEPTANCE_RECONCILIATION_OPERATOR_TOKEN"),
+            private_state_path=Path.home() / ".local" / "state" / "marty" / "passport-beta-native-pending.json",
         )
         args.output.write_text(json.dumps(report, indent=2, sort_keys=True) + "\n", encoding="utf-8")
     except (EvidenceError, ProbeError, ChainProbeError, FlowProbeError, SelectedFlowError,
-            BatchProbeError, PhysicalFlowProbeError, HostProbeError, OSError) as exc:
+            BatchProbeError, NativeBatchProbeError, PhysicalFlowProbeError,
+            HostProbeError, OSError) as exc:
         args.output.write_text(json.dumps({"schema": "marty.passport-beta-acceptance/v1", "status": "blocked", "blocker": str(exc)}, indent=2) + "\n", encoding="utf-8")
         parser.exit(1, f"Passport beta acceptance blocked: {exc}\n")
     print(f"Wrote blocked passport beta acceptance evidence: {args.output}")

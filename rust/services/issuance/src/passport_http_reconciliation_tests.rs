@@ -909,6 +909,36 @@ async fn run_beta_batch_http_recovery(fail_wire_kms: bool) {
     service.beta_reconciliation_operator_token =
         Some("synthetic-operator-reconciliation-token-00000001".into());
     let app = router(service);
+    for (key, operator, expected) in [
+        (service_token, "wrong-operator", StatusCode::UNAUTHORIZED),
+        (
+            "wrong-service-token",
+            "synthetic-operator-reconciliation-token-00000001",
+            StatusCode::UNAUTHORIZED,
+        ),
+        (
+            service_token,
+            "synthetic-operator-reconciliation-token-00000001",
+            StatusCode::OK,
+        ),
+    ] {
+        let response = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("GET")
+                    .uri("/internal/passport/beta-batches/preflight")
+                    .header("x-organization-id", "org-a")
+                    .header("x-api-key", key)
+                    .header("x-passport-reconciliation-token", operator)
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), expected);
+    }
+    assert_eq!(mock.calls.load(Ordering::SeqCst), 0);
     let batch_id = Uuid::new_v4();
     let body = json!({
         "selected_flow_instance_id": "batch-http-flow",

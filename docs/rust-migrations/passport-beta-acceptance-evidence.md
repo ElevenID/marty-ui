@@ -5,7 +5,8 @@ recording gate. The earlier `passport-beta-batch-acceptance.json` and its
 synthetic direct-simulator probe remain a simulator compatibility diagnostic.
 They cannot establish that the selected Flow job entered the native batch, so
 their result cannot qualify recording or Python retirement. The protected
-acceptance runner still needs to be ported to the frozen native gate.
+runner now joins the selected Flow job to the native batch, but the remaining
+release probes and live beta run have not passed.
 
 `scripts/collect_passport_beta_acceptance.py` records a bounded prerequisite
 report from an already deployed **official aggregate beta** release. Run it on
@@ -73,16 +74,18 @@ The manual `passport-beta-acceptance.yml` workflow uses the same protected
 released deployment artifact directory, beta API key, and synthetic test
 application. The runner authenticates the stack manifest and all three UI OCI
 images, checks six live beta services, and confirms KMS managed issuer mode.
-It then takes a read-only snapshot of both production Compose projects, queries
+The selected Flow run first authenticates the native internal service token
+and distinct reconciliation operator token through a read-only native
+preflight. It then takes a read-only snapshot of both production Compose projects, queries
 beta PostgreSQL for in-flight jobs, legacy or malformed artifact rows, and
 active physical-document Flows using the deployment preflight's narrow
 expired verification orphan exemption,
 executes the seven application route identities, and repeats the beta and
-production checks. Its current diagnostic mutates only beta Gateway and the
-inspected beta simulator. The native release gate will dispatch the batch
-through issuance-native's protected operator route, using tenant
-authentication and a separate reconciliation token. The private application
-file is removed before artifact upload.
+production checks. The selected Flow batch uses the inspected native container's
+private operator route with its deployed `GRPC_SERVICE_TOKEN` as `x-api-key`,
+the distinct `PASSPORT_ACCEPTANCE_RECONCILIATION_OPERATOR_TOKEN`, and the
+organization header. The private application file is removed before artifact
+upload.
 
 The runner also reads the three live beta containers' native routing and
 internal-auth selectors without publishing their environment. It requires
@@ -146,10 +149,15 @@ promotes replay bytes into first-dispatch proof. If retention fails or the
 first attempt is ambiguous, immutable receipt-backed binding may complete
 after its lease, but the route reports `wire_evidence_status=unavailable`
 without commitments. That run cannot qualify acceptance or recording and
-requires a fresh reviewed acceptance run. The key must stay inside the
-protected run and out of request logs and uploaded artifacts. The acceptance
-runner does not yet supply this header or consume the returned commitments,
-so its native wire gate remains unverified.
+requires a fresh reviewed acceptance run. The key stays in a mode-0600
+pending-state file under the beta runner's private `~/.local/state/marty/`
+directory, outside the checkout and uploaded artifacts. The file is created
+before companion mutation, updated before dispatch, and cleared only after
+selected Flow completion and proof validation. If a run fails or is
+interrupted, a new run is blocked until an operator privately reconciles the
+retained batch UUID, key, Flow/job identities, and native intent. Never delete
+an unresolved pending file to make the probe pass. The report contains only
+sanitized commitments. The native wire gate still needs a protected live beta run.
 
 The full run requires the managed beta CSCA and DSC ceremonies before it
 creates a passport job. The protected `beta-lifecycle` environment supplies
@@ -194,12 +202,16 @@ distinct selected nine-step Flow job using the selected DSC. It pauses after
 `sign_sod`, joins that same job to the two-job native batch, then completes
 the Flow against its original bureau UUID. That one Flow job must match its
 first-accepted simulator material receipt, private signed callback receipt,
-route trace, and final native status. The current runner completes this Flow
-before an unrelated synthetic batch and therefore does not yet prove the
-release target.
+route trace, and final native status. The runner now joins the selected Flow
+job to a companion in the native two-job batch, checks the first dispatch's
+private wire proof and both immutable material receipts, and then completes
+the Flow. The synthetic batch remains a separate diagnostic.
 The uploaded report omits raw Flow, application, source-job, bureau-job,
 applicant, MRZ, and operator-session values. A selected SOD/material match
 alone does not establish `nine_route_gateway_flow` or recording qualification.
+The public `physical_bureau_submission` probe remains unverified until the
+D-12 recorder can correlate selected identities through protected commitments
+without publishing raw identifiers.
 
 The production snapshot proves continuity **during this acceptance run**. It
 does not replace the deployment wrapper's before/after production comparison.

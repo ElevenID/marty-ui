@@ -115,6 +115,7 @@ def exercise(
     *,
     simulator_container_id: str,
     on_submission: Callable[[str, str, str, str], dict[str, Any]],
+    on_signed_sod: Callable[[str, str, str, str, str], str] | None = None,
     request: Callable[[str, str, dict[str, Any] | None, str], tuple[int, dict[str, Any]]] = request_flow,
     passport_request: Callable[[str, str, dict[str, Any] | None, str], tuple[int, dict[str, Any]]] = request_passport,
     simulator_request: Callable[[str, str, str], tuple[int, bytes, dict[str, Any]]] = request_simulator,
@@ -148,6 +149,7 @@ def exercise(
     sod_sha256 = None
     receipt = None
     callback_receipt_sha256 = None
+    expected_batch_bureau_job_id = None
 
     def checked_job(response: dict[str, Any], expected_step: str | None,
                     expected_state: str) -> dict[str, Any]:
@@ -244,10 +246,29 @@ def exercise(
             if (not isinstance(sod_sha256, str) or not SHA256.fullmatch(sod_sha256)
                     or job.get("sod_signature_verified") is not True):
                 raise SelectedFlowError("Selected Flow SOD signature is unverified")
+            if on_signed_sod is not None:
+                paused_status, paused = request("GET", instance_path, None, operator_cookie)
+                paused_job = checked_job(paused, "submit_to_personalization", "IN_PROGRESS")
+                issuer_profile_id = paused_job.get("issuer_profile_id")
+                if (paused_status != 200 or paused_job.get("status") != "SOD_SIGNED"
+                        or paused_job.get("sod_sha256") != sod_sha256
+                        or paused_job.get("sod_signature_verified") is not True
+                        or not isinstance(issuer_profile_id, str) or not issuer_profile_id):
+                    raise SelectedFlowError("Selected Flow signed job is not durably paused")
+                expected_batch_bureau_job_id = on_signed_sod(
+                    instance_id, application_id, source_job_id, sod_sha256, issuer_profile_id)
+                try:
+                    canonical_bureau_id = str(UUID(expected_batch_bureau_job_id))
+                except (TypeError, ValueError, AttributeError) as exc:
+                    raise SelectedFlowError("Native batch did not bind the selected Flow job") from exc
+                if canonical_bureau_id != expected_batch_bureau_job_id:
+                    raise SelectedFlowError("Native batch selected bureau identity is not canonical")
         if step == "submit_to_personalization":
             bureau_job_id = job.get("bureau_job_id")
             if (not isinstance(bureau_job_id, str) or not bureau_job_id
-                    or job.get("sod_sha256") != sod_sha256):
+                    or job.get("sod_sha256") != sod_sha256
+                    or (expected_batch_bureau_job_id is not None
+                        and bureau_job_id != expected_batch_bureau_job_id)):
                 raise SelectedFlowError("Selected Flow submitted different SOD material")
             receipt = on_submission(organization_id, source_job_id, bureau_job_id, sod_sha256)
             evidence = receipt.get("evidence") if isinstance(receipt, dict) else None
