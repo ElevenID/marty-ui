@@ -61,6 +61,7 @@ async fn request(
     }
     if method == "POST" && path == "/v1/passport/applications" {
         assert_eq!(body["organization_id"], "org-1");
+        assert_eq!(body["issuer_did"], "did:web:issuer.example");
         let flow = body["flow_execution_id"].as_str().unwrap().to_owned();
         let mut stored = peer.flow.lock().unwrap();
         assert!(stored.is_none(), "physical initialization occurs once");
@@ -134,6 +135,7 @@ pub(super) async fn run(legacy: &Legacy) {
     provider.health_check().await.unwrap();
     let providers = FlowProviderRegistry {
         physical_document: Some(provider),
+        credential_template: Some(Arc::new(super::Templates { tenant: "org-1" })),
         ..Default::default()
     };
     let definition = definition("physical_document_issuance");
@@ -166,6 +168,7 @@ pub(super) async fn run(legacy: &Legacy) {
             json!({
                 "organization_id":"org-1","flow_execution_id":instance.id,
                 "application_template_id":"application-template-1","credential_template_id":"template-1",
+                "issuer_did":"did:web:issuer.example",
                 "delivery_destination_profile_id":"destination-1","document_type":"TD3",
                 "country_code":physical["country_code"],"applicant":physical["applicant"],
                 "mrz":physical["mrz"],"data_groups":physical["data_groups"]
