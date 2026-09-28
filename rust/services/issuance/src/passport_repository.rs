@@ -51,6 +51,9 @@ impl PassportJobStatus {
 
 pub struct PassportJobPatch {
     pub status: PassportJobStatus,
+    /// Optional compare-and-swap guard for in-place SOD refreshes.
+    pub expected_sod_sha256: Option<Option<String>>,
+    pub expected_secure_artifact_ciphertext: Option<String>,
     pub sod_sha256: Option<Option<String>>,
     pub bureau_job_id: Option<Option<String>>,
     pub bureau_provider_profile_id: Option<String>,
@@ -68,6 +71,8 @@ impl PassportJobPatch {
     pub fn new(status: PassportJobStatus) -> Self {
         Self {
             status,
+            expected_sod_sha256: None,
+            expected_secure_artifact_ciphertext: None,
             sod_sha256: None,
             bureau_job_id: None,
             bureau_provider_profile_id: None,
@@ -241,6 +246,16 @@ impl PostgresPassportRepository {
             .push_bind(application_id)
             .push(" AND status = ")
             .push_bind(expected_status);
+        if let Some(expected) = &patch.expected_sod_sha256 {
+            query
+                .push(" AND sod_sha256 IS NOT DISTINCT FROM ")
+                .push_bind(expected);
+        }
+        if let Some(expected) = &patch.expected_secure_artifact_ciphertext {
+            query
+                .push(" AND secure_artifact_ciphertext = ")
+                .push_bind(expected);
+        }
         if patch.bureau_job_id.is_some()
             || matches!(
                 patch.status,

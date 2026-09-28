@@ -346,6 +346,7 @@ mod tests {
             applicant: json!({"synthetic": "test-person"}),
             mrz: BTreeMap::from([("line_1".into(), "P<TEST".into())]),
             data_groups: BTreeMap::from([("DG2".into(), "A".repeat(MAX_CHUNK_BYTES))]),
+            signed_material: None,
         };
         let encrypted = cipher
             .encrypt("org-a", "artifact-1", &artifact)

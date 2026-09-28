@@ -1,5 +1,5 @@
 use std::sync::{
-    atomic::{AtomicBool, Ordering},
+    atomic::{AtomicBool, AtomicUsize, Ordering},
     Arc, Mutex,
 };
 
@@ -33,7 +33,7 @@ use marty_passport_auth::PassportTenantKeyring;
 use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
 use sqlx::postgres::PgPoolOptions;
-use tokio::sync::oneshot;
+use tokio::sync::{oneshot, Barrier};
 use tower::ServiceExt;
 
 async fn provider_ingress_request(
@@ -213,19 +213,39 @@ async fn exercise_native_passport_http(
     key_a: &str,
     key_b: &str,
 ) {
-    async fn sign(Json(body): Json<Value>) -> Json<Value> {
+    type SubmitGate = Arc<Mutex<Option<(oneshot::Sender<()>, oneshot::Receiver<()>)>>>;
+    type SignGate = Arc<Mutex<Option<Arc<Barrier>>>>;
+    #[derive(Clone)]
+    struct MockState {
+        observed: Arc<Mutex<Vec<Value>>>,
+        submit_gate: SubmitGate,
+        sign_calls: Arc<AtomicUsize>,
+        sign_gate: SignGate,
+    }
+    async fn sign(State(state): State<MockState>, Json(body): Json<Value>) -> Json<Value> {
         assert_eq!(body["country_code"], "USA");
         assert_eq!(body["organization"], "org-a");
         assert_eq!(body["data_groups"], json!({"DG1":"YQ==","DG2":"Yg=="}));
-        Json(json!({"sod_der_base64":"U09E", "dsc_cert_pem":"synthetic-cert"}))
+        let call = state.sign_calls.fetch_add(1, Ordering::SeqCst);
+        let sod = if call == 0 {
+            "U09E".to_owned()
+        } else if call <= 2 {
+            "U09EMg==".to_owned()
+        } else {
+            STANDARD.encode(format!("SOD{}", call + 1))
+        };
+        let gated = { state.sign_gate.lock().unwrap().clone() };
+        if let Some(barrier) = gated {
+            barrier.wait().await;
+        }
+        Json(json!({"sod_der_base64":sod, "dsc_cert_pem":"synthetic-cert"}))
     }
-    type SubmitGate = Arc<Mutex<Option<(oneshot::Sender<()>, oneshot::Receiver<()>)>>>;
     async fn submit(
-        State((observed, gate)): State<(Arc<Mutex<Vec<Value>>>, SubmitGate)>,
+        State(state): State<MockState>,
         Json(body): Json<Value>,
     ) -> (StatusCode, Json<Value>) {
-        observed.lock().unwrap().push(body);
-        let gated = { gate.lock().unwrap().take() };
+        state.observed.lock().unwrap().push(body);
+        let gated = { state.submit_gate.lock().unwrap().take() };
         if let Some((entered, release)) = gated {
             entered.send(()).unwrap();
             release.await.unwrap();
@@ -251,6 +271,8 @@ async fn exercise_native_passport_http(
         .await
     }
     let observed = Arc::new(Mutex::new(Vec::new()));
+    let sign_calls = Arc::new(AtomicUsize::new(0));
+    let sign_gate: SignGate = Arc::new(Mutex::new(None));
     let submit_gate: SubmitGate = Arc::new(Mutex::new(None));
     let stale_poll = Arc::new(AtomicBool::new(false));
     let poll_state = stale_poll.clone();
@@ -285,7 +307,12 @@ async fn exercise_native_passport_http(
                 }
             }),
         )
-        .with_state((observed.clone(), submit_gate.clone()));
+        .with_state(MockState {
+            observed: observed.clone(),
+            submit_gate: submit_gate.clone(),
+            sign_calls: sign_calls.clone(),
+            sign_gate: sign_gate.clone(),
+        });
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let base_url = format!("http://{}", listener.local_addr().unwrap());
     let server = tokio::spawn(async move { axum::serve(listener, mock).await.unwrap() });
@@ -394,6 +421,37 @@ async fn exercise_native_passport_http(
         signed["sod_sha256"],
         hex::encode(sha2::Sha256::digest(b"SOD"))
     );
+    let (status, repeated_signed) = passport_http_request(
+        &app,
+        "POST",
+        &format!("{path}/generate-sod"),
+        Some("org-a"),
+        Some(key_a),
+        json!({}),
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(repeated_signed["sod_sha256"], signed["sod_sha256"]);
+    assert_eq!(sign_calls.load(Ordering::SeqCst), 1);
+    let signed_job = repository
+        .get(
+            &keyring.authenticate(Some("org-a"), Some(key_a)).unwrap(),
+            application_id,
+        )
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(
+        cipher
+            .decrypt(&signed_job.secure_artifact_ciphertext)
+            .unwrap()
+            .signed_material
+            .unwrap()
+            .sod_der_base64,
+        "U09E"
+    );
+    assert!(!signed_job.secure_artifact_ciphertext.contains("U09E"));
     let (entered_tx, entered_rx) = oneshot::channel();
     let (release_tx, release_rx) = oneshot::channel();
     *submit_gate.lock().unwrap() = Some((entered_tx, release_rx));
@@ -432,6 +490,10 @@ async fn exercise_native_passport_http(
     assert_eq!(raced_submit["status"], "SUBMITTED");
     assert_eq!(observed.lock().unwrap().len(), 2);
     assert_eq!(observed.lock().unwrap()[0]["document_type"], "TD1");
+    assert_eq!(observed.lock().unwrap()[0]["sod_der_base64"], "U09E");
+    assert_eq!(observed.lock().unwrap()[1]["sod_der_base64"], "U09E");
+    assert_eq!(submitted["sod_sha256"], signed["sod_sha256"]);
+    assert_eq!(sign_calls.load(Ordering::SeqCst), 1);
     let (status, _) = passport_http_request(
         &app,
         "POST",
@@ -761,6 +823,169 @@ async fn exercise_native_passport_http(
     assert_eq!(after_stale_poll["status"], "FAILED");
     assert_eq!(after_stale_poll["tracking_number"], "race-tracking");
     assert_eq!(after_stale_poll["error_message"], "production failed");
+    let (status, legacy_created) = passport_http_request(
+        &app,
+        "POST",
+        "/v1/passport/applications",
+        Some("org-a"),
+        Some(key_a),
+        json!({
+            "organization_id":"org-a", "flow_execution_id":"legacy-sod",
+            "application_template_id":"template-http", "credential_template_id":"credential-http",
+            "delivery_destination_profile_id":"destination-http", "country_code":"USA",
+            "applicant":{}, "mrz":{}, "data_groups":{"DG1":"YQ==", "DG2":"Yg=="}
+        }),
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED);
+    let legacy_id = legacy_created["application_id"].as_str().unwrap();
+    let principal = keyring.authenticate(Some("org-a"), Some(key_a)).unwrap();
+    let legacy_job = repository
+        .get(&principal, legacy_id)
+        .await
+        .unwrap()
+        .unwrap();
+    let mut legacy_patch = PassportJobPatch::new(PassportJobStatus::SodSigned);
+    legacy_patch.sod_sha256 = Some(Some("a".repeat(64)));
+    repository
+        .update(
+            &principal,
+            legacy_id,
+            &legacy_job.status,
+            &legacy_patch,
+            Utc::now(),
+        )
+        .await
+        .unwrap()
+        .unwrap();
+    let legacy_path = format!("/v1/passport/applications/{legacy_id}");
+    let (status, _) = passport_http_request(
+        &app,
+        "POST",
+        &format!("{legacy_path}/submit-personalization"),
+        Some("org-a"),
+        Some(key_a),
+        json!({}),
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::CONFLICT);
+    assert_eq!(sign_calls.load(Ordering::SeqCst), 1);
+    let (status, recovered) = passport_http_request(
+        &app,
+        "POST",
+        &format!("{legacy_path}/generate-sod"),
+        Some("org-a"),
+        Some(key_a),
+        json!({}),
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(
+        recovered["sod_sha256"],
+        hex::encode(Sha256::digest(b"SOD2"))
+    );
+    let recovered_job = repository
+        .get(&principal, legacy_id)
+        .await
+        .unwrap()
+        .unwrap();
+    let mut python_resigned = PassportJobPatch::new(PassportJobStatus::SodSigned);
+    python_resigned.sod_sha256 = Some(Some("b".repeat(64)));
+    repository
+        .update(
+            &principal,
+            legacy_id,
+            &recovered_job.status,
+            &python_resigned,
+            Utc::now(),
+        )
+        .await
+        .unwrap()
+        .unwrap();
+    let (status, _) = passport_http_request(
+        &app,
+        "POST",
+        &format!("{legacy_path}/submit-personalization"),
+        Some("org-a"),
+        Some(key_a),
+        json!({}),
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::CONFLICT);
+    let (status, refreshed) = passport_http_request(
+        &app,
+        "POST",
+        &format!("{legacy_path}/generate-sod"),
+        Some("org-a"),
+        Some(key_a),
+        json!({}),
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(
+        refreshed["sod_sha256"],
+        hex::encode(Sha256::digest(b"SOD2"))
+    );
+    assert_eq!(sign_calls.load(Ordering::SeqCst), 3);
+    let refreshed_job = repository
+        .get(&principal, legacy_id)
+        .await
+        .unwrap()
+        .unwrap();
+    let mut stale_writer = PassportJobPatch::new(PassportJobStatus::SodSigned);
+    stale_writer.sod_sha256 = Some(Some("c".repeat(64)));
+    repository
+        .update(
+            &principal,
+            legacy_id,
+            &refreshed_job.status,
+            &stale_writer,
+            Utc::now(),
+        )
+        .await
+        .unwrap()
+        .unwrap();
+    *sign_gate.lock().unwrap() = Some(Arc::new(Barrier::new(2)));
+    let regenerate_path = format!("{legacy_path}/generate-sod");
+    let (first, second) = tokio::join!(
+        passport_http_request(
+            &app,
+            "POST",
+            &regenerate_path,
+            Some("org-a"),
+            Some(key_a),
+            json!({}),
+            None,
+        ),
+        passport_http_request(
+            &app,
+            "POST",
+            &regenerate_path,
+            Some("org-a"),
+            Some(key_a),
+            json!({}),
+            None,
+        )
+    );
+    *sign_gate.lock().unwrap() = None;
+    assert_eq!(sign_calls.load(Ordering::SeqCst), 5);
+    let successes = [&first, &second]
+        .into_iter()
+        .filter(|(status, _)| *status == StatusCode::OK)
+        .collect::<Vec<_>>();
+    assert_eq!(successes.len(), 1);
+    assert!([first.0, second.0].contains(&StatusCode::CONFLICT));
+    let raced_job = repository
+        .get(&principal, legacy_id)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(successes[0].1["sod_sha256"], raced_job.sod_sha256.unwrap());
     #[cfg(feature = "passport-self-signed-test")]
     {
         let local = passport_router(PassportHttpService::new(

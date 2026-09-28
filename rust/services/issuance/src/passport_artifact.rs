@@ -7,12 +7,16 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use zeroize::Zeroizing;
 
+use crate::passport_signer::SignedMaterial;
+
 #[derive(Clone, Deserialize, PartialEq, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct PassportSensitiveArtifact {
     pub applicant: Value,
     pub mrz: BTreeMap<String, String>,
     pub data_groups: BTreeMap<String, String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub signed_material: Option<SignedMaterial>,
 }
 
 #[derive(Clone)]
@@ -82,6 +86,19 @@ mod tests {
             cipher.decrypt(&native_token).unwrap().data_groups,
             artifact.data_groups
         );
+        let signed = SignedMaterial {
+            sod_der_base64: "U09E".into(),
+            dsc_cert_pem: "synthetic-dsc".into(),
+            csca_cert_pem: None,
+        };
+        let mut signed_artifact = artifact.clone();
+        signed_artifact.signed_material = Some(signed.clone());
+        let signed_token = cipher.encrypt(&signed_artifact).unwrap();
+        assert_eq!(
+            cipher.decrypt(&signed_token).unwrap().signed_material,
+            Some(signed)
+        );
+        assert!(!signed_token.contains("synthetic-dsc"));
         let scrubbed = cipher.encrypted_scrubbed_artifact();
         assert_eq!(cipher.fernet.decrypt(&scrubbed).unwrap(), b"{}");
         assert!(matches!(

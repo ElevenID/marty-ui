@@ -218,6 +218,14 @@ pub struct ManagedProfileSigner {
     trust: CscaTrustAnchorClient,
 }
 
+struct ManagedSigningContext {
+    algorithm: SodSignatureAlgorithm,
+    method_id: String,
+    leaf: String,
+    certificate_der: Vec<u8>,
+    trusted_csca: String,
+}
+
 #[derive(Clone)]
 struct CscaTrustAnchorClient {
     client: Client,
@@ -299,6 +307,87 @@ impl ManagedProfileSigner {
         issuer_did: &str,
         data_groups: &BTreeMap<BigUint, String>,
     ) -> Result<SignedMaterial, SignerError> {
+        let context = self
+            .current_signing_context(country_code, organization_id, issuer_did)
+            .await?;
+        let groups = data_groups
+            .iter()
+            .map(|(number, content)| {
+                let number = number.to_u8().ok_or(SignerError::InvalidManagedMaterial)?;
+                let content = decode_python_validated_base64(content)
+                    .map_err(|_| SignerError::InvalidManagedMaterial)?;
+                Ok((number, content))
+            })
+            .collect::<Result<Vec<_>, SignerError>>()?;
+        let prepared = prepare_sod(&groups, &context.certificate_der, context.algorithm)
+            .map_err(|_| SignerError::InvalidManagedMaterial)?;
+        let signature = self
+            .signer
+            .sign_did(SignRequest {
+                organization_id: organization_id.into(),
+                issuer_did: issuer_did.into(),
+                credential_format: "ICAO_EMRTD".into(),
+                key_purpose: "x509_doc_signer".into(),
+                payload: prepared.signing_input().to_vec(),
+                algorithm: context.algorithm.as_str().into(),
+                verification_method_id: context.method_id,
+            })
+            .await
+            .map_err(|_| SignerError::ManagedUnavailable)?;
+        // CMS requires the provider-native signature: ASN.1 DER for ECDSA,
+        // not the JOSE/P1363 signature used by VC and JWT consumers.
+        let signature = signature
+            .signature_native_b64
+            .ok_or(SignerError::InvalidManagedMaterial)?;
+        let signature = URL_SAFE_NO_PAD
+            .decode(signature)
+            .map_err(|_| SignerError::InvalidManagedMaterial)?;
+        let signature = cms_signature(&signature, context.algorithm)?;
+        // Shared eMRTD assembly verifies this KMS signature against the DSC.
+        let sod = prepared
+            .assemble(&signature)
+            .map_err(|_| SignerError::InvalidManagedMaterial)?;
+        Ok(SignedMaterial {
+            sod_der_base64: STANDARD.encode(sod),
+            dsc_cert_pem: pem_certificate(&context.leaf),
+            csca_cert_pem: Some(context.trusted_csca),
+        })
+    }
+
+    pub async fn validate_existing(
+        &self,
+        country_code: &str,
+        organization_id: &str,
+        issuer_did: &str,
+        data_groups: &BTreeMap<BigUint, String>,
+        signed: &SignedMaterial,
+    ) -> Result<(), SignerError> {
+        let context = self
+            .current_signing_context(country_code, organization_id, issuer_did)
+            .await?;
+        let signed_dsc = load_certificate_pem(&signed.dsc_cert_pem)
+            .map_err(|_| SignerError::InvalidManagedMaterial)?;
+        let signed_csca = signed
+            .csca_cert_pem
+            .as_deref()
+            .ok_or(SignerError::InvalidManagedMaterial)
+            .and_then(|pem| {
+                load_certificate_pem(pem).map_err(|_| SignerError::InvalidManagedMaterial)
+            })?;
+        let active_csca = load_certificate_pem(&context.trusted_csca)
+            .map_err(|_| SignerError::InvalidManagedMaterial)?;
+        if signed_dsc != context.certificate_der || signed_csca != active_csca {
+            return Err(SignerError::InvalidManagedMaterial);
+        }
+        signed.verify_data_groups(data_groups)
+    }
+
+    async fn current_signing_context(
+        &self,
+        country_code: &str,
+        organization_id: &str,
+        issuer_did: &str,
+    ) -> Result<ManagedSigningContext, SignerError> {
         let identity = self
             .resolver
             .resolve_raw(
@@ -330,7 +419,8 @@ impl ManagedProfileSigner {
             .get("verification_method_id")
             .and_then(Value::as_str)
             .filter(|value| value.starts_with(&format!("{issuer_did}#")))
-            .ok_or(SignerError::InvalidManagedMaterial)?;
+            .ok_or(SignerError::InvalidManagedMaterial)?
+            .to_owned();
         let chain = identity
             .get("issuer_x5c")
             .and_then(Value::as_array)
@@ -338,9 +428,10 @@ impl ManagedProfileSigner {
             .ok_or(SignerError::InvalidManagedMaterial)?;
         let leaf = chain[0]
             .as_str()
-            .ok_or(SignerError::InvalidManagedMaterial)?;
+            .ok_or(SignerError::InvalidManagedMaterial)?
+            .to_owned();
         let certificate_der = STANDARD
-            .decode(leaf)
+            .decode(&leaf)
             .map_err(|_| SignerError::InvalidManagedMaterial)?;
         let trusted_csca = trusted_csca_for_dsc(
             &certificate_der,
@@ -348,47 +439,12 @@ impl ManagedProfileSigner {
             chain.get(1).and_then(Value::as_str),
             &self.trust.active(organization_id).await?,
         )?;
-        let groups = data_groups
-            .iter()
-            .map(|(number, content)| {
-                let number = number.to_u8().ok_or(SignerError::InvalidManagedMaterial)?;
-                let content = decode_python_validated_base64(content)
-                    .map_err(|_| SignerError::InvalidManagedMaterial)?;
-                Ok((number, content))
-            })
-            .collect::<Result<Vec<_>, SignerError>>()?;
-        let prepared = prepare_sod(&groups, &certificate_der, algorithm)
-            .map_err(|_| SignerError::InvalidManagedMaterial)?;
-        let signature = self
-            .signer
-            .sign_did(SignRequest {
-                organization_id: organization_id.into(),
-                issuer_did: issuer_did.into(),
-                credential_format: "ICAO_EMRTD".into(),
-                key_purpose: "x509_doc_signer".into(),
-                payload: prepared.signing_input().to_vec(),
-                algorithm: algorithm.as_str().into(),
-                verification_method_id: method_id.into(),
-            })
-            .await
-            .map_err(|_| SignerError::ManagedUnavailable)?;
-        // CMS requires the provider-native signature: ASN.1 DER for ECDSA,
-        // not the JOSE/P1363 signature used by VC and JWT consumers.
-        let signature = signature
-            .signature_native_b64
-            .ok_or(SignerError::InvalidManagedMaterial)?;
-        let signature = URL_SAFE_NO_PAD
-            .decode(signature)
-            .map_err(|_| SignerError::InvalidManagedMaterial)?;
-        let signature = cms_signature(&signature, algorithm)?;
-        // Shared eMRTD assembly verifies this KMS signature against the DSC.
-        let sod = prepared
-            .assemble(&signature)
-            .map_err(|_| SignerError::InvalidManagedMaterial)?;
-        Ok(SignedMaterial {
-            sod_der_base64: STANDARD.encode(sod),
-            dsc_cert_pem: pem_certificate(leaf),
-            csca_cert_pem: Some(trusted_csca),
+        Ok(ManagedSigningContext {
+            algorithm,
+            method_id,
+            leaf,
+            certificate_der,
+            trusted_csca,
         })
     }
 }
@@ -670,14 +726,23 @@ mod tests {
             dsc_b64: String,
             csca_b64: String,
             csca_pem: String,
+            next_dsc_b64: String,
+            next_csca_b64: String,
+            next_csca_pem: String,
             signer: SigningKey,
             rotated_signer: SigningKey,
             rotated: Arc<AtomicBool>,
+            profile_rotated: Arc<AtomicBool>,
             requests: Arc<Mutex<Vec<Value>>>,
             trust_available: Arc<AtomicBool>,
         }
         async fn resolve(State(state): State<ManagedMock>, headers: HeaderMap) -> Json<Value> {
             assert_eq!(headers["x-api-key"], "existing-internal-auth");
+            let (dsc, csca) = if state.profile_rotated.load(Ordering::SeqCst) {
+                (&state.next_dsc_b64, &state.next_csca_b64)
+            } else {
+                (&state.dsc_b64, &state.csca_b64)
+            };
             Json(json!({
                 "ok": true,
                 "organization_id": "org-1",
@@ -686,7 +751,7 @@ mod tests {
                 "algorithm": "ES256",
                 "verification_method_id": "did:web:issuer.example:orgs:org-1#dsc",
                 "issuer_profile": {"credential_format": "ICAO_EMRTD"},
-                "issuer_x5c": [state.dsc_b64, state.csca_b64]
+                "issuer_x5c": [dsc, csca]
             }))
         }
         async fn trust(
@@ -702,9 +767,12 @@ mod tests {
             if !state.trust_available.load(Ordering::SeqCst) {
                 return Json(json!([]));
             }
-            Json(
-                json!([{"certificate_id": "csca-1", "certificate_data": state.csca_pem, "status": "VALID"}]),
-            )
+            let csca = if state.profile_rotated.load(Ordering::SeqCst) {
+                &state.next_csca_pem
+            } else {
+                &state.csca_pem
+            };
+            Json(json!([{"certificate_id": "csca-1", "certificate_data": csca, "status": "VALID"}]))
         }
         async fn sign(
             State(state): State<ManagedMock>,
@@ -716,7 +784,9 @@ mod tests {
             let input = URL_SAFE_NO_PAD
                 .decode(request["payload_b64"].as_str().unwrap())
                 .unwrap();
-            let signing_key = if state.rotated.load(Ordering::SeqCst) {
+            let signing_key = if state.rotated.load(Ordering::SeqCst)
+                || state.profile_rotated.load(Ordering::SeqCst)
+            {
                 &state.rotated_signer
             } else {
                 &state.signer
@@ -734,14 +804,18 @@ mod tests {
             }))
         }
         let (dsc_b64, csca_b64, csca_pem, signer) = synthetic_dsc_chain();
-        let (_, _, _, rotated_signer) = synthetic_dsc_chain();
+        let (next_dsc_b64, next_csca_b64, next_csca_pem, rotated_signer) = synthetic_dsc_chain();
         let state = ManagedMock {
             dsc_b64,
             csca_b64,
             csca_pem,
+            next_dsc_b64,
+            next_csca_b64,
+            next_csca_pem,
             signer,
             rotated_signer,
             rotated: Arc::new(AtomicBool::new(false)),
+            profile_rotated: Arc::new(AtomicBool::new(false)),
             requests: Arc::new(Mutex::new(Vec::new())),
             trust_available: Arc::new(AtomicBool::new(true)),
         };
@@ -767,6 +841,16 @@ mod tests {
             .await
             .unwrap();
         signed.verify_data_groups(&groups).unwrap();
+        signer
+            .validate_existing(
+                "USA",
+                "org-1",
+                "did:web:issuer.example:orgs:org-1",
+                &groups,
+                &signed,
+            )
+            .await
+            .unwrap();
         let altered_groups = BTreeMap::from([
             (BigUint::from(1u8), "Aw==".into()),
             (BigUint::from(2u8), "Ag==".into()),
@@ -810,14 +894,54 @@ mod tests {
         ));
         assert_eq!(state.requests.lock().unwrap().len(), 2);
         state.rotated.store(false, Ordering::SeqCst);
+        state.profile_rotated.store(true, Ordering::SeqCst);
+        assert!(matches!(
+            signer
+                .validate_existing(
+                    "USA",
+                    "org-1",
+                    "did:web:issuer.example:orgs:org-1",
+                    &groups,
+                    &signed,
+                )
+                .await,
+            Err(SignerError::InvalidManagedMaterial)
+        ));
+        let refreshed = signer
+            .sign("USA", "org-1", "did:web:issuer.example:orgs:org-1", &groups)
+            .await
+            .unwrap();
+        signer
+            .validate_existing(
+                "USA",
+                "org-1",
+                "did:web:issuer.example:orgs:org-1",
+                &groups,
+                &refreshed,
+            )
+            .await
+            .unwrap();
+        state.profile_rotated.store(false, Ordering::SeqCst);
         state.trust_available.store(false, Ordering::SeqCst);
+        assert!(matches!(
+            signer
+                .validate_existing(
+                    "USA",
+                    "org-1",
+                    "did:web:issuer.example:orgs:org-1",
+                    &groups,
+                    &signed,
+                )
+                .await,
+            Err(SignerError::UntrustedDsc)
+        ));
         assert!(matches!(
             signer
                 .sign("USA", "org-1", "did:web:issuer.example:orgs:org-1", &groups)
                 .await,
             Err(SignerError::UntrustedDsc)
         ));
-        assert_eq!(state.requests.lock().unwrap().len(), 2);
+        assert_eq!(state.requests.lock().unwrap().len(), 3);
         server.abort();
     }
 
