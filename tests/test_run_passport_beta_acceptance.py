@@ -147,6 +147,10 @@ def test_keeps_partial_acceptance_blocked_after_actual_probe_functions() -> None
     assert result["probes"]["production_continuity_during_probe"]["verified"] is True
     assert result["probes"]["production_isolation"]["verified"] is False
     assert result["probes"]["nine_route_gateway_flow"]["verified"] is False
+    assert result["probes"]["simulator_batch_diagnostic"] == accepted_batch()
+    assert result["probes"]["physical_bureau_batch"]["verified"] is False
+    assert result["probes"]["physical_bureau_submission"]["verified"] is False
+    assert result["probes"]["signed_bureau_callback"]["verified"] is False
     assert result["probes"]["sod_signature"]["verified"] is True
     assert result["probes"]["simulator_material_receipt"]["verified"] is True
     assert receipt_arguments == [("org-a", "source-job", "bureau-job", "f" * 64,
@@ -238,6 +242,10 @@ def test_protected_runner_executes_selected_flow_after_chain_and_direct_job() ->
     assert result["probes"]["gateway_application_lifecycle"]["evidence"]["source_job_commitment"] == "1" * 64
     assert "selected-job" not in str(result) and "selected-instance" not in str(result)
     assert result["probes"]["nine_route_gateway_flow"]["verified"] is False
+    assert result["probes"]["simulator_batch_diagnostic"] == accepted_batch()
+    assert result["probes"]["physical_bureau_batch"]["verified"] is False
+    assert result["probes"]["physical_bureau_submission"]["verified"] is False
+    assert result["probes"]["signed_bureau_callback"]["verified"] is False
     assert result["probes"]["nine_route_gateway_flow"]["evidence"]["missing"] == [
         "selected_flow_in_two_job_batch", "same_job_gateway_route_trace"]
     assert result["status"] == "blocked"

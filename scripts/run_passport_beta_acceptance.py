@@ -311,18 +311,15 @@ def run(
     require(receipt_result is not None and receipt_result.get("verified") is True,
             "Simulator first accepted material receipt is unavailable")
     report["probes"]["simulator_material_receipt"] = receipt_result
-    report["probes"]["physical_bureau_batch"] = batch_result
-    report["probes"]["physical_bureau_submission"] = {"verified": True, "evidence": {
-        "provider_kind": "simulator", "physical_claim": "not_claimed",
-        "source_commit": batch_evidence["source_commit"],
-        "stack_manifest_sha256": batch_evidence["stack_manifest_sha256"],
-        "services_oci_reference": batch_evidence["services_oci_reference"],
-        "http_status": batch_evidence["http_status"],
-        "batch_status": batch_evidence["batch_status"],
-        "request_commitment": batch_evidence["request_commitment"],
-        "response_commitment": batch_evidence["response_commitment"],
-        "submitted_job_commitments": batch_evidence["submitted_job_commitments"],
-        "returned_jobs": batch_evidence["returned_jobs"],
+    # The retained simulator diagnostic sends synthetic material outside the
+    # selected Flow. Keep its evidence, but do not qualify release probes from
+    # a pair that the native batch route did not dispatch and bind.
+    report["probes"]["simulator_batch_diagnostic"] = batch_result
+    report["probes"]["physical_bureau_batch"] = {"verified": False, "evidence": {
+        "missing": ["selected_flow_in_native_batch", "exact_native_batch_wire_proof"],
+    }}
+    report["probes"]["physical_bureau_submission"] = {"verified": False, "evidence": {
+        "missing": ["selected_flow_batch_binding"],
     }}
     report["probes"]["packaged_image"] = {"verified": True, "evidence": {
         "source_commit": report["release"]["source_commit"],
@@ -330,14 +327,8 @@ def run(
         "services_oci_reference": bureau["oci_reference"],
         "runtime_container_id": bureau["container_id"],
     }}
-    report["probes"]["signed_bureau_callback"] = {"verified": True, "evidence": {
-        "provider_kind": "simulator", "physical_claim": "not_claimed",
-        "unsigned_signature_denied": True,
-        "callback_receipts_sha256": batch_evidence["callback_receipts_sha256"],
-        "accepted_by_native_callback": True,
-        "selected_flow_callback_receipt_sha256": (
-            selected_result["evidence"]["callback_receipt_sha256"]
-            if selected_result is not None else None),
+    report["probes"]["signed_bureau_callback"] = {"verified": False, "evidence": {
+        "missing": ["selected_flow_batch_callback", "same_job_negative_callback_denials"],
     }}
     if selected_result is not None:
         selected_evidence = selected_result["evidence"]
