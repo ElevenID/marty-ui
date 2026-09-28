@@ -328,6 +328,15 @@ def _expected_mounts(service: str, project: str, disposable_root: Path,
     return expected
 
 
+def _expected_image(record: dict, service: str) -> str | None:
+    """Use the same plan-bound image role for live and partial ownership."""
+    return (record.get("legacy_reference") if service == "issuance" else
+            record.get("migrations_reference") if service == "db-migrate" else
+            record.get("services_reference")
+            if service in SELECTED | RUST_DEPENDENCIES | {"signing-keys"} else
+            record.get("infra_images", {}).get(service))
+
+
 def verify(record: dict, surface: str, now: datetime,
            runner: Callable[[list[str]], str] = docker) -> dict:
     """Compare a short-lived run record against every live project resource."""
@@ -470,12 +479,7 @@ def verify(record: dict, surface: str, now: datetime,
                     "Disposable container network identity changed")
             if running:
                 expected_network_members[name].add(identifier)
-        expected_image = (
-            record["legacy_reference"] if service == "issuance" else
-            record["migrations_reference"] if service == "db-migrate" else
-            record["services_reference"] if service in SELECTED | RUST_DEPENDENCIES | {"signing-keys"}
-            else infra_images.get(service)
-        )
+        expected_image = _expected_image(record, service)
         require(expected_image is not None and config.get("Image") == expected_image,
                 "Passport container image differs from signed release")
         mounts = item.get("Mounts", [])
