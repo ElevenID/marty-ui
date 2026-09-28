@@ -65,6 +65,7 @@ DISPOSABLE_NETWORKS = frozenset({"private", "callback_signing"})
 DISPOSABLE_VOLUMES = frozenset({
     "postgres_data", "redis_data", "openbao_data", "openbao_file", "openbao_logs",
 })
+PARTIAL_ONLY_SERVICES = frozenset({"passport-openbao-bootstrap"})
 
 
 class ProducerError(ValueError):
@@ -296,6 +297,13 @@ def _remove_staged_inputs(root: Path) -> None:
                 "Disposable input cleanup secret directory changed identity")
         for name in STAGED_SECRETS | EPHEMERAL_SECRETS:
             (secret_dir / name).unlink(missing_ok=True)
+        for path in secret_dir.iterdir():
+            require(re.fullmatch(
+                r"\.(?:bao_token|callback_signer_bao_token)\.[A-Za-z0-9]{6}",
+                path.name,
+            ) is not None,
+                "Disposable secret directory has an unexpected file")
+            path.unlink()
         secret_dir.rmdir()
     (root / "acceptance.env").unlink(missing_ok=True)
     root.rmdir()
@@ -402,7 +410,7 @@ def _destroy_recorded_project(
             and record.get("schema") == "marty.passport-supported-compose-ownership/v1"
             and isinstance(containers, dict)
             and (set(containers) == DISPOSABLE_SERVICES if complete
-                 else set(containers) <= DISPOSABLE_SERVICES)
+                 else set(containers) <= DISPOSABLE_SERVICES | PARTIAL_ONLY_SERVICES)
             and all(isinstance(value, str) and RESOURCE_ID.fullmatch(value)
                     for value in containers.values())
             and len(set(containers.values())) == len(containers)
@@ -524,7 +532,8 @@ def destroy_partial_disposable_project(
             labels = config.get("Labels")
             _labels(labels, plan, project)
             service = labels.get("com.docker.compose.service")
-            require(item.get("Id") == identifier and service in DISPOSABLE_SERVICES
+            require(item.get("Id") == identifier
+                    and service in DISPOSABLE_SERVICES | PARTIAL_ONLY_SERVICES
                     and service not in containers,
                     "Partial disposable service identity is invalid")
             containers[service] = identifier

@@ -242,6 +242,8 @@ def test_staged_input_cleanup_includes_post_bootstrap_secrets() -> None:
     for name in ("bao_token", "callback_signer_bao_token",
                  "passport_acceptance_api_key"):
         (root / "secrets" / name).write_text("disposable", encoding="ascii")
+    for name in (".bao_token.Abc123", ".callback_signer_bao_token.Xyz789"):
+        (root / "secrets" / name).write_text("partial-token", encoding="ascii")
     producer._remove_staged_inputs(root)
     assert not root.exists()
 
