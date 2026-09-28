@@ -49,6 +49,7 @@ jobs:
           application_file="$RUNNER_TEMP/passport-beta-application-$GITHUB_RUN_ID.json"
           certificate_plan_file="$RUNNER_TEMP/passport-beta-certificates-$GITHUB_RUN_ID.json"
           selected_flow_plan_file="$RUNNER_TEMP/passport-beta-flow-$GITHUB_RUN_ID.json"
+          private_handoff_file="$HOME/.local/state/marty/passport-beta-demo-selected-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT.json"
           trap 'rm -f "$application_file" "$certificate_plan_file" "$selected_flow_plan_file"' EXIT
           for required in PASSPORT_ACCEPTANCE_API_KEY PASSPORT_ACCEPTANCE_APPLICATION_JSON \
                           PASSPORT_ACCEPTANCE_CERTIFICATE_PLAN_JSON \
@@ -74,6 +75,7 @@ jobs:
             --application-file "$application_file" \
             --certificate-plan-file "$certificate_plan_file" \
             --selected-flow-plan-file "$selected_flow_plan_file" \
+            --private-demo-handoff-file "$private_handoff_file" \
             --output "$report_file"
           # A protected success must mean the whole acceptance gate passed.
           # The report remains blocked until deployment-wide recovery, supported

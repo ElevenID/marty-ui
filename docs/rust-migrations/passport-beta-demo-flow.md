@@ -37,7 +37,13 @@ and `PASSPORT_BETA_API_KEY` from protected secrets. The plan has schema
 `marty.passport-beta-demo-private/v1`, the exact selected organization, Flow
 definition and instance, application, source job and canonical bureau UUID,
 plus the deployed source and stack digests. It is a mode-0600 local file on
-the Linux recorder and is never uploaded. The recorder checks every plan
+the Linux recorder and is never uploaded. The beta acceptance runner writes
+the plan only after the selected Flow and native batch receipts verify, under
+`~/.local/state/marty/passport-beta-demo-selected-<run-id>-<attempt>.json` on
+the protected beta runner. It refuses to overwrite an existing plan or start a
+new batch while unresolved native state exists. The operator transfers the
+file to the recorder through the governed private handoff and retains it until
+recording is reconciled. The recorder checks every plan
 identity against the preliminary API-key HMAC commitments before navigating
 to beta. CSCA and DSC profile commitments use one `issuer-profile` HMAC
 label so an identical profile cannot masquerade as two, and both negative

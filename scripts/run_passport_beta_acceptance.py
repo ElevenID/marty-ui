@@ -19,6 +19,7 @@ if __package__:
         verify_attestations,
     )
     from .probe_passport_beta_batch import BatchProbeError
+    from .probe_passport_beta_batch import _identity_commit
     from .probe_passport_beta_batch import exercise as exercise_batch
     from .probe_passport_beta_chain import (
         ChainProbeError,
@@ -45,6 +46,7 @@ if __package__:
         ensure_private_state_available,
         exercise as exercise_native_batch,
         request_private_preflight,
+        write_private_demo_handoff,
     )
     from .probe_passport_beta_physical_flow import (
         PhysicalFlowProbeError,
@@ -71,6 +73,7 @@ else:
         verify_attestations,
     )
     from probe_passport_beta_batch import BatchProbeError
+    from probe_passport_beta_batch import _identity_commit
     from probe_passport_beta_batch import exercise as exercise_batch
     from probe_passport_beta_chain import (
         ChainProbeError,
@@ -97,6 +100,7 @@ else:
         ensure_private_state_available,
         exercise as exercise_native_batch,
         request_private_preflight,
+        write_private_demo_handoff,
     )
     from probe_passport_beta_physical_flow import (
         PhysicalFlowProbeError,
@@ -141,6 +145,7 @@ def run(
     native_service_token: str | None = None,
     native_operator_token: str | None = None,
     private_state_path: Path | None = None,
+    private_handoff_path: Path | None = None,
     batch: Callable[..., dict[str, Any]] = exercise_batch,
     checkout_checker: Callable[[str], None] = require_source_checkout,
 ) -> dict[str, Any]:
@@ -214,9 +219,12 @@ def run(
                 and native_service_token != native_operator_token
                 and all(character not in native_operator_token for character in "\r\n\0"),
                 "Protected native batch operator credential or image is unavailable")
-        require(isinstance(private_state_path, Path),
-                "Protected native batch state path is unavailable")
+        require(isinstance(private_state_path, Path)
+                and isinstance(private_handoff_path, Path)
+                and private_handoff_path != private_state_path,
+                "Protected native batch and demo handoff paths are unavailable")
         ensure_private_state_available(private_state_path)
+        ensure_private_state_available(private_handoff_path)
         native_preflight(native_image["container_id"], application["organization_id"],
                          native_service_token, native_operator_token)
     route_ownership = routing(report["runtime_images"], report.get("provider_ingress_runtime_image"))
@@ -232,6 +240,7 @@ def run(
     selected_result: dict[str, Any] | None = None
     batch_result: dict[str, Any] | None = None
     native_batch_result: dict[str, Any] | None = None
+    selected_bureau_id: str | None = None
 
     def capture_dsc(der_sha256: str, pem_wire_sha256: str) -> None:
         selected_dsc.update(der_sha256=der_sha256, pem_wire_sha256=pem_wire_sha256)
@@ -269,7 +278,7 @@ def run(
                 instance_id: str, application_id: str, source_job_id: str,
                 sod_sha256: str, issuer_profile_id: str,
             ) -> str:
-                nonlocal native_batch_result
+                nonlocal native_batch_result, selected_bureau_id
                 require(len(selected_dsc) == 2,
                         "Selected DSC material is unavailable for the native batch")
                 selected_bureau_id, native_batch_result = native_batch(
@@ -300,6 +309,11 @@ def run(
                     and selected_evidence.get("ordered_steps") == list(PHYSICAL_STEPS)
                     and selected_evidence.get("completed_steps") == len(PHYSICAL_STEPS)
                     and selected_evidence.get("physical_claim") == "not_claimed"
+                    and selected_evidence.get("organization_id") == application["organization_id"]
+                    and selected_evidence.get("flow_id") == selected_flow_plan["flow_definition_id"]
+                    and isinstance(selected_evidence.get("flow_instance_id"), str)
+                    and isinstance(selected_evidence.get("application_id"), str)
+                    and selected_evidence.get("bureau_job_id") == selected_bureau_id
                     and selected_evidence.get("signed_simulator_callback_verified") is True
                     and selected_evidence.get("terminal_native_status") == "ACTIVE"
                     and isinstance(selected_evidence.get("callback_receipt_sha256"), str)
@@ -407,6 +421,24 @@ def run(
         batch_result if batch_result is not None else
         {"verified": False, "evidence": {"missing": ["diagnostic_not_run"]}}
     )
+    selected_commitments: dict[str, str] = {}
+    if selected_result is not None:
+        selected_evidence = selected_result["evidence"]
+        selected_commitments = {
+            "organization_commitment": _identity_commit(
+                api_key, "organization", selected_evidence["organization_id"]),
+            "flow_definition_commitment": _identity_commit(
+                api_key, "flow-definition", selected_evidence["flow_id"]),
+            "flow_instance_commitment": _identity_commit(
+                api_key, "flow-instance", selected_evidence["flow_instance_id"]),
+            "application_commitment": _identity_commit(
+                api_key, "application", selected_evidence["application_id"]),
+        }
+        require(selected_evidence["source_job_commitment"] == _identity_commit(
+                    api_key, "source-job", selected_evidence["job_id"])
+                and selected_evidence["bureau_job_commitment"] == _identity_commit(
+                    api_key, "bureau-job", selected_evidence["bureau_job_id"]),
+                "Selected Flow public commitments differ from private identities")
     if native_batch_result is not None:
         native_evidence = native_batch_result["evidence"]
         report["probes"]["physical_bureau_batch"] = {"verified": True, "evidence": {
@@ -420,6 +452,7 @@ def run(
         }}
         report["probes"]["physical_bureau_submission"] = {"verified": False, "evidence": {
             "selected_flow_in_two_job_batch": True,
+            **selected_commitments,
             "missing": ["protected_recorder_identity_correlation"],
         }}
     else:
@@ -437,6 +470,7 @@ def run(
     }}
     report["probes"]["signed_bureau_callback"] = {"verified": False, "evidence": {
         "selected_flow_batch_callback": native_batch_result is not None,
+        **selected_commitments,
         "missing": ["same_job_negative_callback_denials"] if native_batch_result is not None
                    else ["selected_flow_batch_callback", "same_job_negative_callback_denials"],
     }}
@@ -448,6 +482,7 @@ def run(
             "completed_steps": selected_evidence["completed_steps"],
             "source_job_commitment": selected_evidence["source_job_commitment"],
             "bureau_job_commitment": selected_evidence["bureau_job_commitment"],
+            **selected_commitments,
             "callback_receipt_sha256": selected_evidence["callback_receipt_sha256"],
             "terminal_native_status": selected_evidence["terminal_native_status"],
             "physical_claim": selected_evidence["physical_claim"],
@@ -501,6 +536,7 @@ def run(
     report["probes"]["beta_native_route_ownership"] = route_ownership
     report["probes"]["flow_capability_and_webhook_denial"] = flow_result
     report["probes"]["nine_route_gateway_flow"] = {"verified": False, "evidence": {
+        **selected_commitments,
         "capabilities_http": report["probes"]["capabilities_http"].get("evidence"),
         "application_lifecycle": safe_lifecycle_evidence,
         "flow_and_webhook_denial": flow_result.get("evidence"),
@@ -524,6 +560,17 @@ def run(
     # which this workflow does not control. Preserve it as unverified.
     report["status"] = "blocked"
     if native_batch_result is not None:
+        write_private_demo_handoff(private_handoff_path, {
+            "schema": "marty.passport-beta-demo-private/v1",
+            "source_commit": report["release"]["source_commit"],
+            "stack_manifest_sha256": report["release"]["stack_manifest_sha256"],
+            "organization_id": selected_evidence["organization_id"],
+            "flow_definition_id": selected_evidence["flow_id"],
+            "flow_instance_id": selected_evidence["flow_instance_id"],
+            "application_id": selected_evidence["application_id"],
+            "source_job_id": selected_evidence["job_id"],
+            "bureau_job_id": selected_evidence["bureau_job_id"],
+        })
         clear_private_state(private_state_path)
     return report
 
@@ -534,6 +581,7 @@ def main() -> int:
     parser.add_argument("--application-file", type=Path, required=True)
     parser.add_argument("--certificate-plan-file", type=Path)
     parser.add_argument("--selected-flow-plan-file", type=Path)
+    parser.add_argument("--private-demo-handoff-file", type=Path)
     parser.add_argument("--output", type=Path, required=True)
     args = parser.parse_args()
     try:
@@ -559,6 +607,7 @@ def main() -> int:
             native_service_token=os.environ.get("PASSPORT_ACCEPTANCE_INTERNAL_SERVICE_TOKEN"),
             native_operator_token=os.environ.get("PASSPORT_ACCEPTANCE_RECONCILIATION_OPERATOR_TOKEN"),
             private_state_path=Path.home() / ".local" / "state" / "marty" / "passport-beta-native-pending.json",
+            private_handoff_path=args.private_demo_handoff_file,
         )
         args.output.write_text(json.dumps(report, indent=2, sort_keys=True) + "\n", encoding="utf-8")
     except (EvidenceError, ProbeError, ChainProbeError, FlowProbeError, SelectedFlowError,

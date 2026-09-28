@@ -19,6 +19,7 @@ from scripts.probe_passport_beta_native_batch import (
     ensure_private_state_available,
     exercise,
     request_private_batch,
+    write_private_demo_handoff,
 )
 
 
@@ -209,6 +210,27 @@ def test_private_request_keeps_credentials_out_of_docker_argv() -> None:
     assert b"x-passport-reconciliation-token:" in config
     assert b"x-passport-batch-wire-key:" in config
     assert b"selected_flow_instance_id" in config
+
+
+def test_private_demo_handoff_is_exclusive_and_protected(tmp_path: Path) -> None:
+    path = tmp_path / "private" / "selected.json"
+    record = {
+        "schema": "marty.passport-beta-demo-private/v1",
+        "source_commit": "a" * 40,
+        "stack_manifest_sha256": "b" * 64,
+        "organization_id": ORG,
+        "flow_definition_id": "governed-flow",
+        "flow_instance_id": "selected-flow",
+        "application_id": "selected-app",
+        "source_job_id": "selected-job",
+        "bureau_job_id": SELECTED_BUREAU,
+    }
+    write_private_demo_handoff(path, record)
+    assert json.loads(path.read_text(encoding="utf-8")) == record
+    if os.name == "posix":
+        assert path.stat().st_mode & 0o077 == 0
+    with pytest.raises(NativeBatchProbeError, match="Pending native batch"):
+        write_private_demo_handoff(path, record)
 
 
 @pytest.mark.skipif(shutil.which("curl") is None, reason="curl is unavailable")

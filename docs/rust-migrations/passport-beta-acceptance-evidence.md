@@ -158,6 +158,12 @@ interrupted, a new run is blocked until an operator privately reconciles the
 retained batch UUID, key, Flow/job identities, and native intent. Never delete
 an unresolved pending file to make the probe pass. The report contains only
 sanitized commitments. The native wire gate still needs a protected live beta run.
+After a verified selected Flow run, the runner writes a separate mode-0600
+private D-12 identity handoff for that run and attempt. It never uploads the
+file or its path; the public report contains only API-key HMAC commitments
+for the selected organization, Flow definition and instance, application,
+source job, and bureau job. The handoff is not a preliminary qualification
+and cannot replace the remaining callback denial, nine-route, or beta gates.
 
 The full run requires the managed beta CSCA and DSC ceremonies before it
 creates a passport job. The protected `beta-lifecycle` environment supplies

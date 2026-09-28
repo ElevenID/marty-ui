@@ -102,11 +102,20 @@ def _wire_commit(key: bytes, field: str, value: bytes) -> str:
                     hashlib.sha256).hexdigest()
 
 
-def _job_commit(api_key: str, field: str, job_id: str) -> str:
-    _require(field in {"source-job", "bureau-job"} and isinstance(job_id, str) and job_id,
-             "Private job commitment input is invalid")
-    return hmac.new(api_key.encode("utf-8"), (field + ":" + job_id).encode("utf-8"),
+def _identity_commit(api_key: str, field: str, value: str) -> str:
+    _require(isinstance(api_key, str) and len(api_key) >= 32
+             and field in {"organization", "flow-definition", "flow-instance",
+                           "application", "source-job", "bureau-job", "issuer-profile"}
+             and isinstance(value, str) and bool(value),
+             "Private identity commitment input is invalid")
+    return hmac.new(api_key.encode("utf-8"), (field + ":" + value).encode("utf-8"),
                     hashlib.sha256).hexdigest()
+
+
+def _job_commit(api_key: str, field: str, job_id: str) -> str:
+    _require(field in {"source-job", "bureau-job"},
+             "Private job commitment input is invalid")
+    return _identity_commit(api_key, field, job_id)
 
 
 def _synthetic_job(job_id: str, application_id: str, application: dict[str, Any]) -> dict[str, Any]:

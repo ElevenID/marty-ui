@@ -13,6 +13,7 @@ import yaml
 
 from scripts.collect_passport_beta_acceptance import EvidenceError
 from scripts.probe_passport_beta_chain import ChainProbeError
+from scripts.probe_passport_beta_batch import _identity_commit
 from scripts.probe_passport_beta_flow import PHYSICAL_STEPS
 from scripts.probe_passport_beta_native_batch import NativeBatchProbeError
 from scripts.run_passport_beta_acceptance import run
@@ -171,6 +172,11 @@ def test_keeps_partial_acceptance_blocked_after_actual_probe_functions() -> None
 def test_protected_runner_executes_selected_flow_after_chain_and_direct_job(tmp_path: Path) -> None:
     calls = []
     private_state_path = tmp_path / "private" / "pending.json"
+    private_handoff_path = tmp_path / "private" / "demo-selected.json"
+    selected_bureau = "76a7baef-368a-4722-95a4-df70ea1dfefa"
+    selected_source_commitment = _identity_commit("a" * 32, "source-job", "selected-job")
+    selected_bureau_commitment = _identity_commit("a" * 32, "bureau-job", selected_bureau)
+    direct_source_commitment = _identity_commit("a" * 32, "source-job", "direct-job")
     plan = certificate_plan()
     application = managed_application(plan)
     selected_plan = {"source_commit": "a" * 40, "stack_manifest_sha256": "d" * 64,
@@ -218,8 +224,8 @@ def test_protected_runner_executes_selected_flow_after_chain_and_direct_job(tmp_
         assert (org, dsc_der, dsc_pem, key) == (plan["organization_id"], "b" * 64,
                                                "c" * 64, b"a" * 32)
         return {"verified": True, "evidence": {
-            "source_job_id_commitment": ("1" if source == "direct-job" else "2") * 64,
-            "bureau_job_id_commitment": ("3" if bureau == "direct-bureau" else "4") * 64}}
+            "source_job_id_commitment": _identity_commit("a" * 32, "source-job", source),
+            "bureau_job_id_commitment": _identity_commit("a" * 32, "bureau-job", bureau)}}
 
     def native_batch(*args):
         calls.append("native-batch")
@@ -228,18 +234,19 @@ def test_protected_runner_executes_selected_flow_after_chain_and_direct_job(tmp_
                               "e" * 64, "managed-profile")
         assert args[-1] == private_state_path
         private_state_path.write_text("pending", encoding="utf-8")
-        return "selected-bureau", {"verified": True, "evidence": {
+        return selected_bureau, {"verified": True, "evidence": {
             "provider_kind": "simulator", "physical_claim": "not_claimed",
             "http_status": 202, "batch_status": "QUEUED",
             "selected_flow_in_two_job_batch": True, "native_binding_verified": True,
             "first_accepted_material_verified": True, "companion_native_completed": True,
-            "selected_source_job_commitment": "2" * 64,
-            "selected_bureau_job_commitment": "4" * 64,
+            "selected_source_job_commitment": selected_source_commitment,
+            "selected_bureau_job_commitment": selected_bureau_commitment,
             "companion_source_job_commitment": "6" * 64,
             "companion_bureau_job_commitment": "7" * 64,
-            "submitted_job_commitments": ["2" * 64, "6" * 64],
+            "submitted_job_commitments": [selected_source_commitment, "6" * 64],
             "returned_jobs": [
-                {"source_job_commitment": "2" * 64, "bureau_job_commitment": "4" * 64},
+                {"source_job_commitment": selected_source_commitment,
+                 "bureau_job_commitment": selected_bureau_commitment},
                 {"source_job_commitment": "6" * 64, "bureau_job_commitment": "7" * 64}],
             "request_commitment": "8" * 64, "response_commitment": "9" * 64,
             "companion_callback_receipt_sha256": "a" * 64,
@@ -252,14 +259,18 @@ def test_protected_runner_executes_selected_flow_after_chain_and_direct_job(tmp_
                         selected_plan["references"], selected_plan["physical_document"],
                         "governed-cookie", "a" * 32)
         assert on_signed_sod("selected-instance", "selected-app", "selected-job",
-                             "e" * 64, "managed-profile") == "selected-bureau"
-        on_submission(plan["organization_id"], "selected-job", "selected-bureau", "e" * 64)
+                             "e" * 64, "managed-profile") == selected_bureau
+        on_submission(plan["organization_id"], "selected-job", selected_bureau, "e" * 64)
         return {"verified": True, "evidence": {"flow_instance_id": "selected-instance",
+                                                "flow_id": "governed-flow",
+                                                "organization_id": plan["organization_id"],
+                                                "application_id": "selected-app",
                                                 "job_id": "selected-job", "sod_sha256": "e" * 64,
+                                                "bureau_job_id": selected_bureau,
                                                 "ordered_steps": list(PHYSICAL_STEPS),
                                                 "completed_steps": 9, "physical_claim": "not_claimed",
-                                                "source_job_commitment": "2" * 64,
-                                                "bureau_job_commitment": "4" * 64,
+                                                "source_job_commitment": selected_source_commitment,
+                                                "bureau_job_commitment": selected_bureau_commitment,
                                                 "callback_receipt_sha256": "5" * 64,
                                                 "signed_simulator_callback_verified": True,
                                                 "terminal_native_status": "ACTIVE"}}
@@ -279,6 +290,7 @@ def test_protected_runner_executes_selected_flow_after_chain_and_direct_job(tmp_
         native_preflight=lambda *args: calls.append("preflight"),
         native_service_token="s" * 32, native_operator_token="z" * 32,
         private_state_path=private_state_path,
+        private_handoff_path=private_handoff_path,
         batch=lambda *args: pytest.fail("Synthetic batch must remain diagnostic"),
         checkout_checker=lambda source: calls.append("checkout"),
     )
@@ -286,14 +298,19 @@ def test_protected_runner_executes_selected_flow_after_chain_and_direct_job(tmp_
                      "selected", "native-batch", ("receipt", "selected-job")]
     assert result["probes"]["selected_physical_flow"]["evidence"] == {
         "sod_sha256": "e" * 64, "ordered_steps": list(PHYSICAL_STEPS),
-        "completed_steps": 9, "source_job_commitment": "2" * 64,
-        "bureau_job_commitment": "4" * 64, "callback_receipt_sha256": "5" * 64,
+        "completed_steps": 9, "source_job_commitment": selected_source_commitment,
+        "bureau_job_commitment": selected_bureau_commitment,
+        "organization_commitment": _identity_commit("a" * 32, "organization", plan["organization_id"]),
+        "flow_definition_commitment": _identity_commit("a" * 32, "flow-definition", "governed-flow"),
+        "flow_instance_commitment": _identity_commit("a" * 32, "flow-instance", "selected-instance"),
+        "application_commitment": _identity_commit("a" * 32, "application", "selected-app"),
+        "callback_receipt_sha256": "5" * 64,
         "terminal_native_status": "ACTIVE", "physical_claim": "not_claimed"}
-    assert result["probes"]["simulator_material_receipt"]["evidence"]["source_job_id_commitment"] == "2" * 64
+    assert result["probes"]["simulator_material_receipt"]["evidence"]["source_job_id_commitment"] == selected_source_commitment
     assert result["probes"]["sod_signature"]["evidence"] == {
         "sod_sha256": "e" * 64, "native_generate_sod_verified": True,
-        "dsc_certificate_sha256": "b" * 64, "source_job_commitment": "2" * 64}
-    assert result["probes"]["gateway_application_lifecycle"]["evidence"]["source_job_commitment"] == "1" * 64
+        "dsc_certificate_sha256": "b" * 64, "source_job_commitment": selected_source_commitment}
+    assert result["probes"]["gateway_application_lifecycle"]["evidence"]["source_job_commitment"] == direct_source_commitment
     assert len(result["probes"]["gateway_application_lifecycle"]["evidence"]["routes"]) == 7
     assert "selected-job" not in str(result) and "selected-instance" not in str(result)
     serialized = json.dumps(result)
@@ -307,6 +324,16 @@ def test_protected_runner_executes_selected_flow_after_chain_and_direct_job(tmp_
     assert result["probes"]["physical_bureau_batch"]["evidence"]["selected_flow_in_two_job_batch"] is True
     assert result["probes"]["physical_bureau_submission"]["verified"] is False
     assert not private_state_path.exists()
+    handoff = json.loads(private_handoff_path.read_text(encoding="utf-8"))
+    assert handoff == {
+        "schema": "marty.passport-beta-demo-private/v1",
+        "source_commit": "a" * 40, "stack_manifest_sha256": "d" * 64,
+        "organization_id": plan["organization_id"],
+        "flow_definition_id": "governed-flow", "flow_instance_id": "selected-instance",
+        "application_id": "selected-app", "source_job_id": "selected-job",
+        "bureau_job_id": selected_bureau,
+    }
+    assert "selected-app" not in serialized and selected_bureau not in serialized
     assert result["probes"]["signed_bureau_callback"]["verified"] is False
     assert result["probes"]["nine_route_gateway_flow"]["evidence"]["missing"] == [
         "same_job_gateway_route_trace"]
@@ -335,6 +362,7 @@ def test_native_credential_preflight_blocks_before_ceremony_or_flow_mutation(tmp
             selected_flow_plan=selected_plan(), flow_operator_cookie="governed-cookie",
             native_service_token="s" * 32, native_operator_token="z" * 32,
             private_state_path=tmp_path / "private" / "pending.json",
+            private_handoff_path=tmp_path / "private" / "demo-selected.json",
             native_preflight=lambda *args: (_ for _ in ()).throw(
                 NativeBatchProbeError("Private credentials are rejected")),
             checkout_checker=lambda source: None,
@@ -623,6 +651,8 @@ def test_workflow_artifact_matches_credentials_retirement_receipt_convention() -
     assert environment["PASSPORT_ACCEPTANCE_DSC_OPERATOR_COOKIE"] == "${{ secrets.PASSPORT_ACCEPTANCE_DSC_OPERATOR_COOKIE }}"
     assert 'if [[ -z "${!required}" ]]; then' in probe["run"]
     assert '--certificate-plan-file "$certificate_plan_file"' in probe["run"]
+    assert '--private-demo-handoff-file "$private_handoff_file"' in probe["run"]
+    assert 'passport-beta-demo-selected-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT.json' in probe["run"]
     assert upload["with"]["name"] == "passport-beta-acceptance-${{ github.run_id }}"
     assert upload["with"]["path"] == (
         "tests/artifacts/passport-beta-acceptance/"

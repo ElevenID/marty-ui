@@ -98,6 +98,25 @@ def clear_private_state(path: Path) -> None:
         raise NativeBatchProbeError("Completed native batch state could not be cleared") from exc
 
 
+def write_private_demo_handoff(path: Path, record: dict[str, str]) -> None:
+    required = {"schema", "source_commit", "stack_manifest_sha256", "organization_id",
+                "flow_definition_id", "flow_instance_id", "application_id",
+                "source_job_id", "bureau_job_id"}
+    _require(isinstance(record, dict) and set(record) == required
+             and record.get("schema") == "marty.passport-beta-demo-private/v1"
+             and all(isinstance(record.get(key), str) and bool(record[key])
+                     for key in required)
+             and re.fullmatch(r"[0-9a-f]{40}", record["source_commit"]) is not None
+             and SHA256.fullmatch(record["stack_manifest_sha256"]) is not None
+             and all(IDENTIFIER.fullmatch(record[key]) is not None for key in (
+                 "organization_id", "flow_definition_id", "flow_instance_id",
+                 "application_id", "source_job_id")),
+             "Protected demo handoff is incomplete")
+    _canonical_uuid(record["bureau_job_id"])
+    ensure_private_state_available(path)
+    _write_private_state(path, record, initial=True)
+
+
 def _curl_value(value: str) -> str:
     _require("\r" not in value and "\n" not in value and "\0" not in value,
              "Native batch private request contains invalid control characters")
