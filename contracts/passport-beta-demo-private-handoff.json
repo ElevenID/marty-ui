@@ -1,0 +1,25 @@
+{
+  "schema": "marty.passport-beta-demo-private-handoff-contract/v1",
+  "status": "frozen before D-12 recorder adaptation; live producer and recording remain unproven",
+  "private_plan_schema": "marty.passport-beta-demo-private/v1",
+  "private_plan_fields": [
+    "schema", "source_commit", "stack_manifest_sha256", "organization_id",
+    "flow_definition_id", "flow_instance_id", "application_id", "source_job_id",
+    "bureau_job_id"
+  ],
+  "private_boundary": "The acceptance producer retains the exact selected identities in a mode-0600 local file outside the checkout and artifact directory. D-12 reads it with the beta organization's API key from a protected secret. Neither the file, key, raw identifiers, nor an unkeyed identifier hash is uploaded or printed.",
+  "commitment": "For each label, lowercase HMAC-SHA256 with the beta organization API key over UTF-8 label + ':' + UTF-8 raw identifier. Existing source-job and bureau-job commitments keep their current bytes.",
+  "labels": {
+    "organization_commitment": "organization",
+    "flow_definition_commitment": "flow-definition",
+    "flow_instance_commitment": "flow-instance",
+    "application_commitment": "application",
+    "source_job_commitment": "source-job",
+    "bureau_job_commitment": "bureau-job"
+  },
+  "issuer_profile_commitments": "The protected producer uses the SAME 'issuer-profile' HMAC label for both CSCA and DSC profile IDs. Unequal commitments then prove unequal selected IDs without publishing them. It also attests managed KMS custody and chain/SOD binding.",
+  "recorder_rule": "The protected preliminary receipt must pass release, deployment, route, chain, material, batch, callback, and negative-video checks. Every public same-job commitment must match the selected route commitments. The private plan's exact IDs must recompute those commitments before browser navigation, and the live Flow definition, instance, application, and source job must match the private plan. Missing or conflicting evidence blocks recording.",
+  "foreign_denial": "The foreign organization is represented publicly by an organization HMAC commitment distinct from the selected organization; both negative runs use the selected source and bureau commitments.",
+  "unchanged_job_state": "The protected negative producer computes SHA-256 over the same exact native job-state projection before and after each denial, then publishes only HMAC-SHA256 with the beta organization API key over ASCII 'job-state:' plus that lowercase digest. All four commitments must match. The raw digest and state remain private.",
+  "final_report": "D-12 records only selected commitments, source and deployment digests, preliminary receipt lineage, privacy/media digests, and behavior assertions. It does not emit flowInstanceSha256 or any raw identifier."
+}

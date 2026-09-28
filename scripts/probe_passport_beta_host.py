@@ -4,9 +4,11 @@
 from __future__ import annotations
 
 import hashlib
+import hmac
 import json
 import re
 import subprocess
+import uuid
 from typing import Any, Callable
 
 
@@ -22,6 +24,7 @@ NATIVE_ROUTE_FLAGS = {
     "issuance-native": "PASSPORT_NATIVE_HTTP_ENABLED",
 }
 COUNT = re.compile(r"[0-9]+\Z")
+SHA256 = re.compile(r"[0-9a-f]{64}\Z")
 LEGACY_ARTIFACT_SQL = """
 WITH artifacts AS (
     SELECT CASE WHEN left(secure_artifact_ciphertext, 1) = '{'
@@ -246,21 +249,82 @@ def beta_native_route_ownership(
     }}
 
 
-def beta_legacy_drain(runner: Callable[[list[str]], str] = run) -> dict[str, Any]:
+def beta_postgres_container(runner: Callable[[list[str]], str]) -> str:
     postgres_ids = []
     for container_id in ids(BETA_PROJECT, runner):
         record = inspect(container_id, runner)
         config = record.get("Config")
         labels = config.get("Labels") if isinstance(config, dict) else None
-        if isinstance(labels, dict) and labels.get("com.docker.compose.service") == "postgres":
+        if (isinstance(labels, dict) and labels.get("com.docker.compose.project") == BETA_PROJECT
+                and labels.get("com.docker.compose.service") == "postgres"):
+            state = record.get("State")
+            if not isinstance(state, dict) or state.get("Running") is not True or state.get("Status") != "running":
+                raise HostProbeError("Beta PostgreSQL service is not running")
             postgres_ids.append(container_id)
     if len(postgres_ids) != 1:
         raise HostProbeError("Beta PostgreSQL service is missing or ambiguous")
-    container_id = postgres_ids[0]
+    return postgres_ids[0]
+
+
+def beta_psql(sql: str, runner: Callable[[list[str]], str], container_id: str) -> str:
+    return runner(["docker", "exec", container_id, "psql", "-U", "postgres", "-d", "marty",
+                   "-At", "-v", "ON_ERROR_STOP=1", "-c", sql])
+
+
+def beta_material_receipt(
+    organization_id: str,
+    source_job_id: str,
+    bureau_job_id: str,
+    sod_der_sha256: str,
+    dsc_der_sha256: str,
+    dsc_pem_wire_sha256: str,
+    commitment_key: bytes,
+    runner: Callable[[list[str]], str] = run,
+) -> dict[str, Any]:
+    """Compare the first accepted material in private beta PostgreSQL."""
+    if (not all(isinstance(value, str) and 0 < len(value) <= 256 for value in (organization_id, source_job_id))
+            or not all(isinstance(value, str) and SHA256.fullmatch(value) for value in
+                       (sod_der_sha256, dsc_der_sha256, dsc_pem_wire_sha256))
+            or not isinstance(commitment_key, bytes) or len(commitment_key) < 32):
+        raise HostProbeError("Beta material receipt inputs are invalid")
+    try:
+        bureau_uuid = uuid.UUID(bureau_job_id)
+    except (TypeError, ValueError, AttributeError) as exc:
+        raise HostProbeError("Beta bureau job identity is invalid") from exc
+    # Hex encoding keeps tenant and source identifiers out of SQL string syntax.
+    org_hex = organization_id.encode("utf-8").hex()
+    source_hex = source_job_id.encode("utf-8").hex()
+    sql = (
+        "SELECT count(*), "
+        f"COALESCE(bool_and(sod_der_sha256 = decode('{sod_der_sha256}', 'hex')), false), "
+        f"COALESCE(bool_and(dsc_der_sha256 = decode('{dsc_der_sha256}', 'hex')), false), "
+        f"COALESCE(bool_and(dsc_pem_wire_sha256 = decode('{dsc_pem_wire_sha256}', 'hex')), false) "
+        "FROM issuance_service.passport_beta_bureau_jobs "
+        f"WHERE organization_id = convert_from(decode('{org_hex}', 'hex'), 'UTF8') "
+        f"AND source_job_id = convert_from(decode('{source_hex}', 'hex'), 'UTF8') "
+        f"AND bureau_job_id = '{bureau_uuid}'::uuid"
+    )
+    parts = beta_psql(sql, runner, beta_postgres_container(runner)).split("|")
+    if parts != ["1", "t", "t", "t"]:
+        raise HostProbeError("Beta first accepted SOD and DSC material did not match the selected job and chain")
+    def commitment(label: str, value: str) -> str:
+        return hmac.new(commitment_key, f"{label}:{value}".encode(), hashlib.sha256).hexdigest()
+    return {"verified": True, "evidence": {
+        "source_job_id_commitment": commitment("source-job", source_job_id),
+        "bureau_job_id_commitment": commitment("bureau-job", str(bureau_uuid)),
+        "tenant_and_job_binding": True,
+        "first_accepted_sod_der_matches_native": True,
+        "first_accepted_dsc_der_matches_selected_chain": True,
+        "first_accepted_dsc_pem_wire_matches_selected_chain": True,
+        "source": "private beta PostgreSQL",
+    }}
+
+
+def beta_legacy_drain(runner: Callable[[list[str]], str] = run) -> dict[str, Any]:
+    container_id = beta_postgres_container(runner)
 
     def query(sql: str) -> str:
-        return runner(["docker", "exec", container_id, "psql", "-U", "postgres", "-d", "marty",
-                       "-At", "-v", "ON_ERROR_STOP=1", "-c", sql])
+        return beta_psql(sql, runner, container_id)
 
     if query("SELECT to_regclass('issuance_service.physical_document_jobs') IS NOT NULL") != "t":
         raise HostProbeError("Beta physical document job table is missing")

@@ -51,7 +51,9 @@ def test_compose_exposes_both_passport_selectors_without_enabling_them() -> None
         selfhost_flow["PASSPORT_NATIVE_FLOW_ENABLED"]
         == "${PASSPORT_NATIVE_FLOW_ENABLED:-false}"
     )
-    assert "ISSUANCE_NATIVE_SERVICE_URL" not in selfhost_flow
+    assert selfhost_flow["ISSUANCE_NATIVE_SERVICE_URL"] == (
+        "${ISSUANCE_NATIVE_SERVICE_URL:-http://issuance:8005}"
+    )
     assert (
         selfhost_gateway["ISSUANCE_NATIVE_SERVICE_URL"] == "http://issuance-native:8005"
     )

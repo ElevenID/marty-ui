@@ -68,3 +68,33 @@ def test_external_admissions_draft_uses_the_public_webhook_protocol() -> None:
         "invalid_signature_rejected",
         "duplicate_event_ignored",
     }
+
+
+def test_passport_simulator_draft_matches_recorder_evidence_boundary() -> None:
+    scenario = next(
+        item
+        for item in build_manifest()["scenarios"]
+        if item["slug"] == "physical-passport-issuance-evidence"
+    )
+
+    assert scenario["demo_id"] == "D-12"
+    assert scenario["state"] == "DRAFT"
+    assert scenario["youtube_id"] is None
+    assert scenario["media_evidence"] is None
+    assert scenario["protocols"] == ["https-webhooks"]
+    assert scenario["recording_plan"]["happy_path"] == [
+        "managed_csca_dsc_issuer_profiles",
+        "nine_step_passport_issuance_flow",
+        "simulator_bureau_job_correlated",
+        "signed_simulator_callback_verified",
+        "physical_claim_boundary_verified",
+        "physical_booklet_not_verified",
+    ]
+    assert scenario["recording_plan"]["failure_paths"] == [
+        "unsigned_or_foreign_callback_denied",
+    ]
+    assert all(item["result"] == "NOT_RUN" for item in scenario["assertions"])
+    assert any("Physical claim: not claimed" in segment["text"]
+               for segment in scenario["transcript"]["segments"])
+    assert any("no booklet" in limitation.lower()
+               for limitation in scenario["limitations"])

@@ -765,7 +765,7 @@ $requiredFlowSecrets = @(
     "ISSUANCE_API_KEY",
     "SIGNING_KEYS_INTERNAL_API_KEY"
 )
-if ($EnablePassportNative) {
+if ($EnablePassportNative -and $EnablePassportPhysicalProvider) {
     $requiredFlowSecrets += @(
         "SIGNING_KEYS_DSC_ISSUE_GATEWAY_KEY",
         "SIGNING_KEYS_CSCA_ISSUE_GATEWAY_KEY"
@@ -777,22 +777,61 @@ foreach ($name in $requiredFlowSecrets) {
         throw "$name must be a non-placeholder value of at least 32 characters"
     }
 }
+$operatorGatewayKeys = @{}
 if ($EnablePassportNative) {
+    $ceremonyRoot = $null
+    if (-not $EnablePassportPhysicalProvider) {
+        $ceremonyRoot = Get-DotEnvValue -Path $GeneratedEnvFile -Name "PASSPORT_BETA_CEREMONY_SECRET_DIR"
+        $ceremonyPathRoot = [System.IO.Path]::GetPathRoot($ceremonyRoot)
+        $absoluteCeremonyRoot = [System.IO.Path]::IsPathRooted($ceremonyRoot) -and (
+            $ceremonyPathRoot -eq "/" -or
+            $ceremonyPathRoot -match '^[A-Za-z]:[\\/]$' -or
+            $ceremonyPathRoot -match '^\\\\[^\\]+\\[^\\]+\\?$'
+        )
+        if (-not $absoluteCeremonyRoot -or
+            (Split-Path -Path $ceremonyRoot -Leaf) -cne "elevenid-beta-passport-ceremony" -or
+            -not (Test-Path -LiteralPath $ceremonyRoot -PathType Container)) {
+            throw "Beta ceremony secret directory must be an isolated absolute directory"
+        }
+    }
     foreach ($purpose in @("DSC", "CSCA")) {
         $gatewayKeyName = "SIGNING_KEYS_${purpose}_ISSUE_GATEWAY_KEY"
-        $gatewayKey = Get-DotEnvValue -Path $GeneratedEnvFile -Name $gatewayKeyName
+        if ($EnablePassportPhysicalProvider) {
+            $gatewayKey = Get-DotEnvValue -Path $GeneratedEnvFile -Name $gatewayKeyName
+        }
+        else {
+            $keyPath = Join-Path $ceremonyRoot ($purpose.ToLowerInvariant() + "_issue_gateway_key")
+            if (-not (Test-Path -LiteralPath $keyPath -PathType Leaf)) {
+                throw "Beta $purpose operator credential file is missing"
+            }
+            $gatewayKey = Get-Content -LiteralPath $keyPath -Raw -ErrorAction Stop
+            if ($gatewayKey.Contains("`r") -or $gatewayKey.Contains("`n")) {
+                throw "Beta $purpose operator credential file contains a line ending"
+            }
+        }
+        if ($gatewayKey.Length -lt 32 -or $gatewayKey -match '^(?i:change[-_]?me|changeme|replace[-_]?me)') {
+            throw "Beta $purpose operator credential is invalid"
+        }
+        $operatorGatewayKeys[$purpose] = $gatewayKey
         foreach ($envFile in $script:EnvFiles) {
             foreach ($line in Get-Content -LiteralPath $envFile) {
                 $entry = $line.Trim()
                 if (-not $entry -or $entry.StartsWith("#")) { continue }
                 $parts = $entry -split "=", 2
                 if ($parts.Count -ne 2) { continue }
-                if ($envFile -eq $GeneratedEnvFile -and $parts[0].Trim() -ceq $gatewayKeyName) { continue }
+                if ($EnablePassportPhysicalProvider -and $envFile -eq $GeneratedEnvFile -and
+                    $parts[0].Trim() -ceq $gatewayKeyName) { continue }
+                if (-not $EnablePassportPhysicalProvider -and $parts[0].Trim() -ceq $gatewayKeyName) {
+                    throw "Beta $purpose operator credential must be file-backed"
+                }
                 if ($parts[1].Contains($gatewayKey)) {
                     throw "Beta $purpose operator credential is reused by another beta setting"
                 }
             }
         }
+    }
+    if ($operatorGatewayKeys["DSC"] -ceq $operatorGatewayKeys["CSCA"]) {
+        throw "Beta DSC and CSCA operator credentials must differ"
     }
 }
 $workloadIdentityPathNames = @(
@@ -825,7 +864,7 @@ foreach ($name in $workloadIdentityPathNames) {
 if ($EnablePassportNative) {
     foreach ($purpose in @("DSC", "CSCA")) {
         $gatewayKeyName = "SIGNING_KEYS_${purpose}_ISSUE_GATEWAY_KEY"
-        $gatewayKey = Get-DotEnvValue -Path $GeneratedEnvFile -Name $gatewayKeyName
+        $gatewayKey = $operatorGatewayKeys[$purpose]
         foreach ($path in $workloadIdentityPaths.Values) {
             try {
                 $mountedMaterial = Get-Content -LiteralPath $path -Raw -ErrorAction Stop

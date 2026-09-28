@@ -8,19 +8,21 @@ services:
 
   gateway:
     environment:
-      SIGNING_KEYS_DSC_ISSUE_GATEWAY_KEY: ${SIGNING_KEYS_DSC_ISSUE_GATEWAY_KEY:?SIGNING_KEYS_DSC_ISSUE_GATEWAY_KEY must be set for beta passport issuance}
-      SIGNING_KEYS_CSCA_ISSUE_GATEWAY_KEY: ${SIGNING_KEYS_CSCA_ISSUE_GATEWAY_KEY:?SIGNING_KEYS_CSCA_ISSUE_GATEWAY_KEY must be set for beta passport issuance}
+      SIGNING_KEYS_DSC_ISSUE_GATEWAY_KEY_FILE: /run/secrets/dsc_issue_gateway_key
+      SIGNING_KEYS_CSCA_ISSUE_GATEWAY_KEY_FILE: /run/secrets/csca_issue_gateway_key
       PASSPORT_NATIVE_GATEWAY_ENABLED: "true"
       PASSPORT_INTERNAL_SERVICE_AUTH_ENABLED: "true"
       PASSPORT_TENANT_API_KEYS: ""
       PASSPORT_TENANT_API_KEYS_FILE: ""
+    secrets: [dsc_issue_gateway_key, csca_issue_gateway_key]
 
   signing-keys:
     environment:
       ENVIRONMENT: beta
-      SIGNING_KEYS_DSC_ISSUE_GATEWAY_KEY: ${SIGNING_KEYS_DSC_ISSUE_GATEWAY_KEY:?SIGNING_KEYS_DSC_ISSUE_GATEWAY_KEY must be set for beta passport issuance}
-      SIGNING_KEYS_CSCA_ISSUE_GATEWAY_KEY: ${SIGNING_KEYS_CSCA_ISSUE_GATEWAY_KEY:?SIGNING_KEYS_CSCA_ISSUE_GATEWAY_KEY must be set for beta passport issuance}
+      SIGNING_KEYS_DSC_ISSUE_GATEWAY_KEY_FILE: /run/secrets/dsc_issue_gateway_key
+      SIGNING_KEYS_CSCA_ISSUE_GATEWAY_KEY_FILE: /run/secrets/csca_issue_gateway_key
       SIGNING_KEYS_BETA_CSCA_ISSUANCE_ENABLED: "true"
+    secrets: [dsc_issue_gateway_key, csca_issue_gateway_key]
 
   flow:
     environment:
@@ -32,7 +34,10 @@ services:
 
   issuance-native:
     environment:
+      ENVIRONMENT: beta
       PASSPORT_NATIVE_HTTP_ENABLED: "true"
+      PASSPORT_BETA_RECONCILIATION_ENABLED: "true"
+      PASSPORT_BETA_RECONCILIATION_OPERATOR_TOKEN: ${PASSPORT_BETA_RECONCILIATION_OPERATOR_TOKEN:?set a dedicated beta reconciliation operator token}
       PASSPORT_INTERNAL_SERVICE_AUTH_ENABLED: "true"
       PASSPORT_MANAGED_ISSUER_SIGNING_ENABLED: "true"
       PASSPORT_KMS_ARTIFACTS_ENABLED: "true"
@@ -106,3 +111,9 @@ networks:
   passport-callback-signing:
     name: elevenid-beta-passport-callback-signing
     internal: true
+
+secrets:
+  dsc_issue_gateway_key:
+    file: ${PASSPORT_BETA_CEREMONY_SECRET_DIR:?set isolated beta ceremony secret directory}/dsc_issue_gateway_key
+  csca_issue_gateway_key:
+    file: ${PASSPORT_BETA_CEREMONY_SECRET_DIR:?set isolated beta ceremony secret directory}/csca_issue_gateway_key

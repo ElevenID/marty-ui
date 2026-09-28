@@ -140,6 +140,7 @@ pub mod oid4vci_management_http;
 pub mod oid4vci_management_postgres;
 pub mod passport_artifact;
 pub mod passport_artifact_kms;
+pub mod passport_beta_material;
 pub mod passport_bureau;
 pub mod passport_callback_handoff;
 pub mod passport_contract;

@@ -29,6 +29,8 @@ pub struct PassportNativeConfig {
     pub bureau_url: Option<String>,
     pub bureau_api_key: Option<String>,
     pub bureau_provider_profile_id: Option<String>,
+    pub beta_reconciliation_enabled: bool,
+    pub beta_reconciliation_operator_token: Option<String>,
     pub bureau_webhook_secret: Option<String>,
     pub self_signed_test_enabled: bool,
 }
@@ -56,6 +58,14 @@ impl std::fmt::Debug for PassportNativeConfig {
             .field(
                 "bureau_provider_profile_id",
                 &self.bureau_provider_profile_id,
+            )
+            .field(
+                "beta_reconciliation_enabled",
+                &self.beta_reconciliation_enabled,
+            )
+            .field(
+                "beta_reconciliation_operator_token_configured",
+                &self.beta_reconciliation_operator_token.is_some(),
             )
             .field(
                 "bureau_webhook_secret_configured",
@@ -87,6 +97,8 @@ impl PassportNativeConfig {
                 bureau_url: None,
                 bureau_api_key: None,
                 bureau_provider_profile_id: None,
+                beta_reconciliation_enabled: false,
+                beta_reconciliation_operator_token: None,
                 bureau_webhook_secret: None,
                 self_signed_test_enabled,
             });
@@ -112,6 +124,29 @@ impl PassportNativeConfig {
         let kms_callbacks_enabled = environment_flag(values, "PASSPORT_KMS_CALLBACKS_ENABLED");
         let bureau_provider_profile_id = configured("PERSONALIZATION_BUREAU_PROVIDER_PROFILE_ID");
         let bureau_url = configured("PERSONALIZATION_BUREAU_URL");
+        let beta_reconciliation_enabled =
+            environment_flag(values, "PASSPORT_BETA_RECONCILIATION_ENABLED");
+        let beta_reconciliation_operator_token =
+            secret_value(values, "PASSPORT_BETA_RECONCILIATION_OPERATOR_TOKEN")?;
+        if beta_reconciliation_enabled
+            && !(values
+                .get("ENVIRONMENT")
+                .is_some_and(|value| value == "beta")
+                && environment_flag(values, "PASSPORT_INTERNAL_SERVICE_AUTH_ENABLED")
+                && environment_flag(values, "PASSPORT_MANAGED_ISSUER_SIGNING_ENABLED")
+                && kms_artifacts_enabled
+                && environment_flag(values, "PASSPORT_KMS_CALLBACKS_ENABLED")
+                && bureau_provider_profile_id.as_deref() == Some("passport-beta-bureau")
+                && bureau_url.as_deref() == Some("http://passport-beta-bureau:8020")
+                && beta_reconciliation_operator_token
+                    .as_deref()
+                    .is_some_and(|token| token.len() >= 32))
+        {
+            return Err(MmfError::new(
+                ErrorCode::Configuration,
+                "passport beta reconciliation requires the isolated beta KMS and simulator profile",
+            ));
+        }
         if bureau_provider_profile_id
             .as_deref()
             .is_some_and(|profile_id| profile_id.len() > 128)
@@ -154,6 +189,8 @@ impl PassportNativeConfig {
             bureau_url,
             bureau_api_key: secret_value(values, "PERSONALIZATION_BUREAU_API_KEY")?,
             bureau_provider_profile_id,
+            beta_reconciliation_enabled,
+            beta_reconciliation_operator_token,
             bureau_webhook_secret: secret_value(values, "PERSONALIZATION_BUREAU_WEBHOOK_SECRET")?,
             self_signed_test_enabled,
         };
@@ -1846,6 +1883,76 @@ mod tests {
             "provider-reference".into(),
         ));
         assert!(IssuanceServiceConfig::from_values(kms_bureau).is_ok());
+    }
+
+    #[test]
+    fn beta_passport_reconciliation_requires_exact_internal_profile_and_kms() {
+        let mut beta = values(&[
+            ("ENVIRONMENT", "beta"),
+            ("PASSPORT_NATIVE_HTTP_ENABLED", "true"),
+            ("PASSPORT_INTERNAL_SERVICE_AUTH_ENABLED", "true"),
+            ("PASSPORT_MANAGED_ISSUER_SIGNING_ENABLED", "true"),
+            ("PASSPORT_KMS_ARTIFACTS_ENABLED", "true"),
+            ("PASSPORT_KMS_CALLBACKS_ENABLED", "true"),
+            ("PASSPORT_BETA_RECONCILIATION_ENABLED", "true"),
+            (
+                "PASSPORT_BETA_RECONCILIATION_OPERATOR_TOKEN",
+                "synthetic-reconciliation-operator-token-00000001",
+            ),
+            (
+                "GRPC_SERVICE_TOKEN",
+                "synthetic-internal-passport-token-00000001",
+            ),
+            (
+                "PERSONALIZATION_BUREAU_URL",
+                "http://passport-beta-bureau:8020",
+            ),
+            (
+                "PERSONALIZATION_BUREAU_PROVIDER_PROFILE_ID",
+                "passport-beta-bureau",
+            ),
+        ]);
+        assert!(
+            IssuanceServiceConfig::from_values(beta.clone())
+                .unwrap()
+                .passport_native
+                .beta_reconciliation_enabled
+        );
+        for (name, replacement) in [
+            ("ENVIRONMENT", "production"),
+            ("PASSPORT_INTERNAL_SERVICE_AUTH_ENABLED", "false"),
+            ("PASSPORT_KMS_ARTIFACTS_ENABLED", "false"),
+            ("PERSONALIZATION_BUREAU_URL", "https://bureau.example.test"),
+            (
+                "PERSONALIZATION_BUREAU_PROVIDER_PROFILE_ID",
+                "other-profile",
+            ),
+        ] {
+            let replaced = beta
+                .iter()
+                .map(|(key, value)| {
+                    (
+                        key.clone(),
+                        if key == name {
+                            replacement.to_owned()
+                        } else {
+                            value.clone()
+                        },
+                    )
+                })
+                .collect::<Vec<_>>();
+            assert!(
+                IssuanceServiceConfig::from_values(replaced).is_err(),
+                "{name}"
+            );
+        }
+        beta.retain(|(key, _)| key != "PASSPORT_BETA_RECONCILIATION_ENABLED");
+        assert!(
+            !IssuanceServiceConfig::from_values(beta)
+                .unwrap()
+                .passport_native
+                .beta_reconciliation_enabled
+        );
     }
 
     #[test]

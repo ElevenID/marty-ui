@@ -93,6 +93,18 @@ pub async fn migrate_passport(pool: &PgPool) -> Result<(), sqlx::Error> {
         "sod_sha256",
         "bureau_job_id",
         "bureau_provider_profile_id",
+        "submission_intent_id",
+        "submission_intent_started_at",
+        "submission_intent_provider_profile_id",
+        "submission_intent_bureau_endpoint_sha256",
+        "submission_intent_signing_provenance",
+        "submission_batch_id",
+        "submission_batch_selected_flow_instance_id",
+        "submission_batch_selected_job_id",
+        "submission_batch_companion_job_id",
+        "submission_batch_signing_provenance",
+        "submission_batch_bureau_endpoint_sha256",
+        "submission_batch_material_digests",
         "tracking_number",
         "status",
         "quality_result",
@@ -114,6 +126,31 @@ pub async fn migrate_passport(pool: &PgPool) -> Result<(), sqlx::Error> {
     .await?;
     sqlx::raw_sql(include_str!(
         "../migrations/0003_passport_bureau_provider_binding.sql"
+    ))
+    .execute(&mut *transaction)
+    .await?;
+    sqlx::raw_sql(include_str!(
+        "../migrations/0004_passport_submission_intent.sql"
+    ))
+    .execute(&mut *transaction)
+    .await?;
+    sqlx::raw_sql(include_str!(
+        "../migrations/0005_passport_submission_provenance.sql"
+    ))
+    .execute(&mut *transaction)
+    .await?;
+    sqlx::raw_sql(include_str!(
+        "../migrations/0006_passport_beta_batch_identity.sql"
+    ))
+    .execute(&mut *transaction)
+    .await?;
+    sqlx::raw_sql(include_str!(
+        "../migrations/0007_passport_beta_batch_provenance.sql"
+    ))
+    .execute(&mut *transaction)
+    .await?;
+    sqlx::raw_sql(include_str!(
+        "../migrations/0008_passport_beta_batch_wire_evidence.sql"
     ))
     .execute(&mut *transaction)
     .await?;

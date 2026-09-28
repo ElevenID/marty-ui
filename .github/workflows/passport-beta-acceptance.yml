@@ -30,6 +30,10 @@ jobs:
       PASSPORT_ACCEPTANCE_CERTIFICATE_PLAN_JSON: ${{ secrets.PASSPORT_ACCEPTANCE_CERTIFICATE_PLAN_JSON }}
       PASSPORT_ACCEPTANCE_CSCA_OPERATOR_COOKIE: ${{ secrets.PASSPORT_ACCEPTANCE_CSCA_OPERATOR_COOKIE }}
       PASSPORT_ACCEPTANCE_DSC_OPERATOR_COOKIE: ${{ secrets.PASSPORT_ACCEPTANCE_DSC_OPERATOR_COOKIE }}
+      PASSPORT_ACCEPTANCE_FLOW_OPERATOR_COOKIE: ${{ secrets.PASSPORT_ACCEPTANCE_FLOW_OPERATOR_COOKIE }}
+      PASSPORT_ACCEPTANCE_FLOW_PLAN_JSON: ${{ secrets.PASSPORT_ACCEPTANCE_FLOW_PLAN_JSON }}
+      PASSPORT_ACCEPTANCE_INTERNAL_SERVICE_TOKEN: ${{ secrets.PASSPORT_ACCEPTANCE_INTERNAL_SERVICE_TOKEN }}
+      PASSPORT_ACCEPTANCE_RECONCILIATION_OPERATOR_TOKEN: ${{ secrets.PASSPORT_ACCEPTANCE_RECONCILIATION_OPERATOR_TOKEN }}
       BETA_ARTIFACT_DIR: ${{ inputs.beta_artifact_dir }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
@@ -44,23 +48,38 @@ jobs:
           rm -f "$report_file"
           application_file="$RUNNER_TEMP/passport-beta-application-$GITHUB_RUN_ID.json"
           certificate_plan_file="$RUNNER_TEMP/passport-beta-certificates-$GITHUB_RUN_ID.json"
-          trap 'rm -f "$application_file" "$certificate_plan_file"' EXIT
+          selected_flow_plan_file="$RUNNER_TEMP/passport-beta-flow-$GITHUB_RUN_ID.json"
+          private_handoff_file="$HOME/.local/state/marty/passport-beta-demo-selected-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT.json"
+          trap 'rm -f "$application_file" "$certificate_plan_file" "$selected_flow_plan_file"' EXIT
+          for required in PASSPORT_ACCEPTANCE_API_KEY PASSPORT_ACCEPTANCE_APPLICATION_JSON \
+                          PASSPORT_ACCEPTANCE_CERTIFICATE_PLAN_JSON \
+                          PASSPORT_ACCEPTANCE_CSCA_OPERATOR_COOKIE \
+                          PASSPORT_ACCEPTANCE_DSC_OPERATOR_COOKIE \
+                          PASSPORT_ACCEPTANCE_FLOW_OPERATOR_COOKIE \
+                          PASSPORT_ACCEPTANCE_FLOW_PLAN_JSON \
+                          PASSPORT_ACCEPTANCE_INTERNAL_SERVICE_TOKEN \
+                          PASSPORT_ACCEPTANCE_RECONCILIATION_OPERATOR_TOKEN; do
+            if [[ -z "${!required}" ]]; then
+              echo "$required is unavailable for governed passport acceptance" >&2
+              exit 1
+            fi
+          done
           printf '%s' "$PASSPORT_ACCEPTANCE_APPLICATION_JSON" > "$application_file"
           chmod 600 "$application_file"
-          certificate_args=()
-          if [[ -n "$PASSPORT_ACCEPTANCE_CERTIFICATE_PLAN_JSON" ]]; then
-            printf '%s' "$PASSPORT_ACCEPTANCE_CERTIFICATE_PLAN_JSON" > "$certificate_plan_file"
-            chmod 600 "$certificate_plan_file"
-            certificate_args+=(--certificate-plan-file "$certificate_plan_file")
-          fi
+          printf '%s' "$PASSPORT_ACCEPTANCE_CERTIFICATE_PLAN_JSON" > "$certificate_plan_file"
+          chmod 600 "$certificate_plan_file"
+          printf '%s' "$PASSPORT_ACCEPTANCE_FLOW_PLAN_JSON" > "$selected_flow_plan_file"
+          chmod 600 "$selected_flow_plan_file"
           python3 scripts/run_passport_beta_acceptance.py \
             --artifact-dir "$BETA_ARTIFACT_DIR" \
             --application-file "$application_file" \
-            "${certificate_args[@]}" \
+            --certificate-plan-file "$certificate_plan_file" \
+            --selected-flow-plan-file "$selected_flow_plan_file" \
+            --private-demo-handoff-file "$private_handoff_file" \
             --output "$report_file"
           # A protected success must mean the whole acceptance gate passed.
-          # Until physical provider and recovery proof exist, preserve the
-          # blocked artifact and fail this workflow.
+          # The report remains blocked until deployment-wide recovery, supported
+          # consumers, and recorded-demo evidence satisfy the aggregate gate.
           python3 -c 'import json,sys; from pathlib import Path; report=json.loads(Path(sys.argv[1]).read_text()); sys.exit(0 if report.get("schema") == "marty.passport-beta-acceptance/v1" and report.get("status") == "accepted" else "Passport beta acceptance remains blocked")' "$report_file"
       - name: Upload sanitized beta evidence
         if: always() && (steps.probe.outcome == 'success' || steps.probe.outcome == 'failure')

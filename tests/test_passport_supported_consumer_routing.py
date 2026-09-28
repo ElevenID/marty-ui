@@ -1,8 +1,13 @@
 """Source checks for the opt-in passport route consumer handoff."""
 
 import json
+import os
 from pathlib import Path
+import re
+import shutil
+import subprocess
 
+import pytest
 import yaml
 
 
@@ -43,6 +48,11 @@ def test_route_fixture_matches_native_contract_and_gateway_declaration() -> None
         (route["method"], route["path"])
         for route in gateway["routes"]
     }
+    acceptance = CONTRACT["software_route_acceptance"]
+    assert acceptance["provider_kind"] == "simulator"
+    assert acceptance["physical_claim"] == "not_claimed"
+    assert acceptance["bureau_profile_id"] == "passport-beta-bureau"
+    assert acceptance["physical_booklet_required"] is False
 
 
 def test_compose_consumers_keep_selectors_off_and_share_token_source() -> None:
@@ -60,7 +70,7 @@ def test_compose_consumers_keep_selectors_off_and_share_token_source() -> None:
         )
         assert gateway["ISSUANCE_NATIVE_SERVICE_URL"] == "http://issuance-native:8005"
         if file == "docker-compose.selfhost.prod.yml":
-            assert "ISSUANCE_NATIVE_SERVICE_URL" not in flow
+            assert flow["ISSUANCE_NATIVE_SERVICE_URL"] == CONTRACT["consumers"]["selfhost_compose"]["native_url_passthrough_default"]
             assert all(
                 env["GRPC_SERVICE_TOKEN_FILE"] == "/run/secrets/grpc_service_token"
                 for env in (gateway, flow, owner)
@@ -75,7 +85,7 @@ def test_compose_consumers_keep_selectors_off_and_share_token_source() -> None:
 
 def test_selfhost_flow_keeps_legacy_default_until_beta_profile_selects_native() -> None:
     flow = compose_environment("docker-compose.selfhost.prod.yml", "flow")
-    assert "ISSUANCE_NATIVE_SERVICE_URL" not in flow
+    assert flow["ISSUANCE_NATIVE_SERVICE_URL"] == "${ISSUANCE_NATIVE_SERVICE_URL:-http://issuance:8005}"
     assert flow["ISSUANCE_SERVICE_URL"] == "http://issuance:8005"
     assert flow["PASSPORT_NATIVE_FLOW_ENABLED"] == "${PASSPORT_NATIVE_FLOW_ENABLED:-false}"
     for profile in ("docker-compose.profile.passport-native-beta.yml",
@@ -91,6 +101,50 @@ def test_selfhost_flow_keeps_legacy_default_until_beta_profile_selects_native() 
     assert "if passport_native_flow_enabled && issuance_native_url == issuance_url" in config
     assert "else if environment == Environment::Production" in config
     assert "issuance_url.clone()" in config
+
+
+@pytest.mark.parametrize(
+    ("native_url", "enabled", "expected"),
+    [
+        (None, "false", "http://issuance:8005"),
+        ("http://issuance-native:8005", "true", "http://issuance-native:8005"),
+    ],
+)
+def test_standalone_selfhost_compose_renders_native_flow_override(
+    tmp_path: Path, native_url: str | None, enabled: str, expected: str
+) -> None:
+    if shutil.which("docker") is None:
+        pytest.skip("Docker Compose is unavailable")
+    source = (ROOT / "docker-compose.selfhost.prod.yml").read_text(encoding="utf-8")
+    environment = os.environ.copy()
+    environment.pop("ISSUANCE_NATIVE_SERVICE_URL", None)
+    for name in re.findall(r"\$\{([A-Z][A-Z0-9_]*):\?", source):
+        environment.setdefault(name, "synthetic-contract-value")
+    environment.update(
+        SELFHOST_STATE_DIR=str(tmp_path / "state"),
+        SELFHOST_SECRET_DIR=str(tmp_path / "secrets"),
+        KEYCLOAK_SOCIAL_LOGIN_ENABLED="false",
+        PASSPORT_NATIVE_GATEWAY_ENABLED=enabled,
+        PASSPORT_NATIVE_FLOW_ENABLED=enabled,
+        PASSPORT_NATIVE_HTTP_ENABLED=enabled,
+    )
+    if native_url is not None:
+        environment["ISSUANCE_NATIVE_SERVICE_URL"] = native_url
+    rendered = subprocess.run(
+        ["docker", "compose", "-f", "docker-compose.selfhost.prod.yml", "config", "--format", "json"],
+        cwd=ROOT,
+        env=environment,
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+    services = json.loads(rendered.stdout)["services"]
+    flow = services["flow"]["environment"]
+    assert flow["ISSUANCE_SERVICE_URL"] == "http://issuance:8005"
+    assert flow["ISSUANCE_NATIVE_SERVICE_URL"] == expected
+    assert flow["PASSPORT_NATIVE_FLOW_ENABLED"] == enabled
+    assert services["gateway"]["environment"]["PASSPORT_NATIVE_GATEWAY_ENABLED"] == enabled
+    assert services["issuance-native"]["environment"]["PASSPORT_NATIVE_HTTP_ENABLED"] == enabled
 
 
 def test_kubernetes_consumers_default_off_and_use_exact_token_secret() -> None:

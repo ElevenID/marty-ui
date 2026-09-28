@@ -10,13 +10,12 @@ services:
       PASSPORT_ACCEPTANCE_SURFACE: selfhost
   issuance-native:
     environment:
-      ENVIRONMENT: production
+      # The disposable Marty simulator is deliberately rejected in production mode.
+      ENVIRONMENT: beta
       PASSPORT_ACCEPTANCE_SURFACE: selfhost
-  passport-callback-signer-supported:
+  passport-callback-signer:
     environment:
-      ENVIRONMENT: production
       PASSPORT_ACCEPTANCE_SURFACE: selfhost
-  passport-provider-ingress:
+  passport-beta-bureau:
     environment:
-      ENVIRONMENT: production
       PASSPORT_ACCEPTANCE_SURFACE: selfhost
