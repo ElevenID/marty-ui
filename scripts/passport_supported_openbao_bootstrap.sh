@@ -114,5 +114,5 @@ fi
 
 mv "$service_tmp" /work/secrets/bao_token
 mv "$callback_tmp" /work/secrets/callback_signer_bao_token
-chmod 0600 /work/secrets/bao_token /work/secrets/callback_signer_bao_token
+chmod 0644 /work/secrets/bao_token /work/secrets/callback_signer_bao_token
 echo "Disposable OpenBao transit and scoped tokens initialized"

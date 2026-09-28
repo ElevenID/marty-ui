@@ -145,8 +145,11 @@ def test_disposable_inputs_are_fresh_private_and_plan_bound() -> None:
         if os.name == "posix":
             assert stat.S_IMODE(root.stat().st_mode) == 0o700
             assert stat.S_IMODE(secret_dir.stat().st_mode) == 0o700
-            assert all(stat.S_IMODE(path.stat().st_mode) == 0o600
-                       for path in (*secret_dir.iterdir(), env_file))
+            assert stat.S_IMODE(env_file.stat().st_mode) == 0o600
+            assert stat.S_IMODE((secret_dir / "bao_root_token").stat().st_mode) == 0o600
+            assert all(stat.S_IMODE(path.stat().st_mode) == 0o644
+                       for path in secret_dir.iterdir()
+                       if path.name != "bao_root_token")
         with pytest.raises(FileExistsError):
             stage_disposable_inputs(plan, 29876, now=NOW)
     finally:
@@ -171,20 +174,48 @@ def test_disposable_input_guard_rejects_unbound_project_and_images() -> None:
     assert not (Path(tempfile.gettempdir()) / plan["project"]).exists()
 
 
+def test_disposable_secret_bind_mount_is_readable_by_nonroot_only_when_mounted() -> None:
+    if os.name != "posix" or shutil.which("docker") is None:
+        pytest.skip("Linux Docker bind-mount permission check")
+    image = qualified_images(verify_registry=False)["openbao"]
+    plan = input_plan()
+    root, _ = stage_disposable_inputs(plan, 29876, now=NOW)
+    try:
+        secret = root / "secrets" / "marty_db_password"
+        root_token = root / "secrets" / "bao_root_token"
+        commands = (
+            (["--mount", f"type=bind,src={secret},dst=/tmp/marty_db_password,readonly"],
+             "test -r /tmp/marty_db_password"),
+            (["--mount", f"type=bind,src={root_token},dst=/tmp/bao_root_token,readonly"],
+             "test ! -r /tmp/bao_root_token"),
+            (["--mount", f"type=bind,src={root},dst=/private,readonly"],
+             "test ! -r /private/secrets/marty_db_password"),
+        )
+        for mounts, check in commands:
+            result = subprocess.run(
+                ["docker", "run", "--rm", "--user", "10001:10001",
+                 "--entrypoint", "/bin/sh", *mounts, image, "-c", check],
+                capture_output=True, text=True, check=False, timeout=120,
+            )
+            assert result.returncode == 0, check
+    finally:
+        producer._remove_staged_inputs(root)
+
+
 def test_disposable_input_write_failure_erases_only_its_new_root(monkeypatch) -> None:
     plan = input_plan()
     root = Path(tempfile.gettempdir()) / plan["project"]
     actual_write = producer._write_private
     writes = 0
 
-    def fail_after_open(path: Path, value: bytes) -> None:
+    def fail_after_open(path: Path, value: bytes, *, mode: int = 0o600) -> None:
         nonlocal writes
         writes += 1
         if writes == 4:
             descriptor = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
             os.close(descriptor)
             raise OSError("synthetic partial secret write")
-        actual_write(path, value)
+        actual_write(path, value, mode=mode)
 
     monkeypatch.setattr(producer, "_write_private", fail_after_open)
     with pytest.raises(OSError, match="synthetic partial secret write"):
@@ -423,16 +454,36 @@ def test_uncertain_issuer_requires_proven_project_teardown(tmp_path: Path) -> No
 def test_teardown_targets_only_recorded_disposable_resources() -> None:
     containers = {name: format(index + 1, "064x")
                   for index, name in enumerate(sorted(DISPOSABLE_SERVICES))}
-    record = {"project": PROJECT, "containers": containers,
+    record = {"schema": "marty.passport-supported-compose-ownership/v1",
+              "project": PROJECT, "run_id": "123456", "source_commit": "a" * 40,
+              "services_reference": "ghcr.io/elevenid/marty-ui-oss/services@sha256:" + "b" * 64,
+              "containers": containers,
               "networks": {PROJECT + "_private": "e" * 64},
               "volumes": [PROJECT + "_postgres_data"]}
     calls = []
+    labels = {
+        "com.docker.compose.project": PROJECT,
+        "com.marty.passport.acceptance.owner": "supported-consumer",
+        "com.marty.passport.acceptance.run-id": record["run_id"],
+        "com.marty.passport.acceptance.source-commit": record["source_commit"],
+        "com.marty.passport.acceptance.services-image": record["services_reference"],
+    }
 
     def executor(args: list[str], output: object) -> bool:
         calls.append(args)
         return True
 
     def inspector(args: list[str]) -> str:
+        if args[:2] == ["container", "inspect"]:
+            service = next(name for name, identifier in containers.items()
+                           if identifier == args[2])
+            return json.dumps([{"Id": args[2], "Config": {"Labels": {
+                **labels, "com.docker.compose.service": service}}}])
+        if args[:2] == ["network", "inspect"]:
+            return json.dumps([{"Id": args[2], "Name": PROJECT + "_private",
+                                "Labels": labels}])
+        if args[:2] == ["volume", "inspect"]:
+            return json.dumps([{"Name": args[2], "Labels": labels}])
         return ""
 
     assert destroy_disposable_project(record, inspector, executor)
@@ -449,6 +500,20 @@ def test_teardown_targets_only_recorded_disposable_resources() -> None:
 
     assert not destroy_disposable_project(
         record, missing_labels_but_live_volume, executor)
+
+    stale_calls = []
+    def stale_inspector(args: list[str]) -> str:
+        response = inspector(args)
+        if args[:2] == ["container", "inspect"]:
+            item = json.loads(response)
+            item[0]["Config"]["Labels"]["com.docker.compose.project"] = "other-project"
+            return json.dumps(item)
+        return response
+
+    assert not destroy_disposable_project(
+        record, stale_inspector,
+        lambda args, output: stale_calls.append(args) or True)
+    assert not stale_calls
 
 
 def test_host_key_unlink_failure_still_forces_teardown(
