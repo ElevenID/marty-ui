@@ -9,6 +9,7 @@ Signed simulator callback and nine-route acceptance require a later protected ha
 from __future__ import annotations
 
 import argparse
+import ipaddress
 import json
 import re
 import subprocess
@@ -158,6 +159,26 @@ def kubernetes_labels(item: dict, namespace: str, service: str,
     return uid
 
 
+def kubernetes_pod_ips(pod: dict, service: str) -> set:
+    status = pod.get("status")
+    require(isinstance(status, dict) and isinstance(status.get("podIP"), str),
+            f"Kubernetes {service} Pod has no IP address")
+    values = status.get("podIPs")
+    require(values is None or (isinstance(values, list) and bool(values)
+            and all(isinstance(item, dict) and isinstance(item.get("ip"), str)
+                    for item in values)),
+            f"Kubernetes {service} Pod IP set is invalid")
+    try:
+        primary = ipaddress.ip_address(status["podIP"])
+        addresses = ({ipaddress.ip_address(item["ip"]) for item in values}
+                     if values is not None else {primary})
+    except ValueError as error:
+        raise SupportedEvidenceError(
+            f"Kubernetes {service} Pod IP set is invalid") from error
+    require(primary in addresses, f"Kubernetes {service} Pod IP set is inconsistent")
+    return addresses
+
+
 def observe_compose(
     surface: str, project: str, services_reference: str,
     runner: Callable[[list[str]], str] = command,
@@ -225,6 +246,7 @@ def observe_kubernetes(
     require(provider_pods.get("items") == [],
             "Kubernetes physical provider Pod remains in simulator namespace")
     observed: dict[str, Any] = {}
+    pod_ips: dict[str, set] = {}
     run_id: str | None = None
     for service in KUBERNETES_SERVICES:
         deployment = json_command(["kubectl", "--context", context, "-n", namespace,
@@ -291,20 +313,9 @@ def observe_kubernetes(
                                     "get", "replicasets", "-l", f"app={service}",
                                     "-o", "json"], runner)
         replica_items = replicasets.get("items")
-        require(isinstance(replica_items, list) and len(replica_items) == 1
-                and isinstance(replica_items[0], dict),
-                f"Kubernetes {service} ReplicaSet is missing or ambiguous")
-        replica = replica_items[0]
-        replica_uid = kubernetes_labels(
-            replica, namespace, service, run_id, source_commit)
-        replica_name = replica["metadata"].get("name")
-        replica_selector = replica.get("spec", {}).get("selector", {}).get("matchLabels")
-        require(isinstance(replica_name, str) and bool(replica_name)
-                and kubernetes_owner(replica, "Deployment", service, deployment_uid)
-                and isinstance(replica_selector, dict)
-                and all(replica_selector.get(name) == value
-                        for name, value in selector.items()),
-                f"Kubernetes {service} ReplicaSet is not owned by the Deployment")
+        require(isinstance(replica_items, list)
+                and all(isinstance(item, dict) for item in replica_items),
+                f"Kubernetes {service} ReplicaSet list is invalid")
         pods = json_command(["kubectl", "--context", context, "-n", namespace,
                              "get", "pods", "-l",
                              f"app={service}", "-o", "json"], runner)
@@ -314,6 +325,25 @@ def observe_kubernetes(
                 f"Kubernetes {service} pod is missing or ambiguous")
         pod = pod_items[0]
         pod_uid = kubernetes_labels(pod, namespace, service, run_id, source_commit)
+        matching_replicas = [item for item in replica_items
+                             if isinstance(item.get("metadata"), dict)
+                             and isinstance(item["metadata"].get("uid"), str)
+                             and isinstance(item["metadata"].get("name"), str)
+                             and kubernetes_owner(pod, "ReplicaSet",
+                                                  item["metadata"]["name"],
+                                                  item["metadata"]["uid"])]
+        require(len(matching_replicas) == 1,
+                f"Kubernetes {service} Pod ReplicaSet is missing or ambiguous")
+        replica = matching_replicas[0]
+        replica_uid = kubernetes_labels(
+            replica, namespace, service, run_id, source_commit)
+        replica_name = replica["metadata"]["name"]
+        replica_selector = replica.get("spec", {}).get("selector", {}).get("matchLabels")
+        require(kubernetes_owner(replica, "Deployment", service, deployment_uid)
+                and isinstance(replica_selector, dict)
+                and all(replica_selector.get(name) == value
+                        for name, value in selector.items()),
+                f"Kubernetes {service} ReplicaSet is not owned by the Deployment")
         require(kubernetes_owner(pod, "ReplicaSet", replica_name, replica_uid)
                 and all(pod["metadata"]["labels"].get(name) == value
                         for name, value in replica_selector.items()),
@@ -337,6 +367,7 @@ def observe_kubernetes(
         require(all(kubernetes_literal_value(pod_containers[0], name) == value
                     for name, value in expected.items()),
                 f"Kubernetes {service} Pod is not bound to the Marty simulator")
+        pod_ips[service] = kubernetes_pod_ips(pod, service)
         observed[service] = {"deployment_uid": deployment_uid,
                              "replicaset_uid": replica_uid, "pod_uid": pod_uid,
                              "container_id": statuses[0]["containerID"],
@@ -355,6 +386,7 @@ def observe_kubernetes(
         route_ports = route_spec.get("ports") if isinstance(route_spec, dict) else None
         require(isinstance(route_spec, dict)
                 and route_spec.get("type") == "ClusterIP"
+                and not route_spec.get("externalIPs")
                 and route_spec.get("selector") == selector
                 and isinstance(route_ports, list) and len(route_ports) == 1
                 and isinstance(route_ports[0], dict)
@@ -367,34 +399,64 @@ def observe_kubernetes(
                                f"kubernetes.io/service-name={service}",
                                "-o", "json"], runner)
         items = slices.get("items")
-        require(isinstance(items, list) and len(items) == 1
-                and isinstance(items[0], dict),
+        require(isinstance(items, list) and bool(items)
+                and all(isinstance(item, dict) for item in items),
                 f"Kubernetes {service} EndpointSlice is missing or ambiguous")
-        endpoint_slice = items[0]
-        slice_metadata = endpoint_slice.get("metadata")
-        endpoints = endpoint_slice.get("endpoints")
-        slice_ports = endpoint_slice.get("ports")
-        require(isinstance(slice_metadata, dict)
-                and slice_metadata.get("namespace") == namespace
-                and isinstance(slice_metadata.get("uid"), str)
-                and bool(slice_metadata["uid"])
-                and isinstance(slice_metadata.get("labels"), dict)
-                and slice_metadata["labels"].get("kubernetes.io/service-name")
-                == service
-                and kubernetes_owner(endpoint_slice, "Service", service, route_uid)
-                and isinstance(slice_ports, list) and len(slice_ports) == 1
-                and isinstance(slice_ports[0], dict)
-                and all(slice_ports[0].get(name) == value for name, value in {
-                    "name": "http", "port": port, "protocol": "TCP"}.items())
-                and isinstance(endpoints, list) and len(endpoints) == 1
-                and isinstance(endpoints[0], dict)
-                and endpoints[0].get("conditions", {}).get("ready") is True
-                and endpoints[0].get("targetRef", {}).get("kind") == "Pod"
-                and endpoints[0]["targetRef"].get("uid") == observed[service]["pod_uid"]
-                and endpoints[0]["targetRef"].get("namespace") == namespace,
-                f"Kubernetes {service} Service does not route to its inspected Pod")
+        ready_addresses = 0
+        slice_uids = []
+        for endpoint_slice in items:
+            slice_metadata = endpoint_slice.get("metadata")
+            endpoints = endpoint_slice.get("endpoints")
+            slice_ports = endpoint_slice.get("ports")
+            address_type = endpoint_slice.get("addressType")
+            require(isinstance(slice_metadata, dict)
+                    and slice_metadata.get("namespace") == namespace
+                    and isinstance(slice_metadata.get("uid"), str)
+                    and bool(slice_metadata["uid"])
+                    and isinstance(slice_metadata.get("labels"), dict)
+                    and slice_metadata["labels"].get("kubernetes.io/service-name")
+                    == service
+                    and slice_metadata["labels"].get(
+                        "endpointslice.kubernetes.io/managed-by")
+                    == "endpointslice-controller.k8s.io"
+                    and kubernetes_owner(endpoint_slice, "Service", service, route_uid)
+                    and address_type in ("IPv4", "IPv6")
+                    and isinstance(slice_ports, list) and len(slice_ports) == 1
+                    and isinstance(slice_ports[0], dict)
+                    and all(slice_ports[0].get(name) == value for name, value in {
+                        "name": "http", "port": port, "protocol": "TCP"}.items())
+                    and isinstance(endpoints, list),
+                    f"Kubernetes {service} EndpointSlice is outside the owned Service")
+            family = 4 if address_type == "IPv4" else 6
+            for endpoint in endpoints:
+                require(isinstance(endpoint, dict)
+                        and isinstance(endpoint.get("targetRef"), dict)
+                        and endpoint["targetRef"].get("kind") == "Pod"
+                        and endpoint["targetRef"].get("uid") == observed[service]["pod_uid"]
+                        and endpoint["targetRef"].get("namespace") == namespace
+                        and isinstance(endpoint.get("conditions"), dict)
+                        and isinstance(endpoint.get("addresses"), list)
+                        and bool(endpoint["addresses"])
+                        and all(isinstance(value, str)
+                                for value in endpoint["addresses"]),
+                        f"Kubernetes {service} Service targets another Pod")
+                try:
+                    addresses = {ipaddress.ip_address(value)
+                                 for value in endpoint["addresses"]}
+                except ValueError as error:
+                    raise SupportedEvidenceError(
+                        f"Kubernetes {service} EndpointSlice address is invalid") from error
+                require(len(addresses) == len(endpoint["addresses"])
+                        and all(address.version == family
+                                and address in pod_ips[service] for address in addresses),
+                        f"Kubernetes {service} Service routes to another address")
+                if endpoint["conditions"].get("ready") is True:
+                    ready_addresses += len(addresses)
+            slice_uids.append(slice_metadata["uid"])
+        require(ready_addresses > 0,
+                f"Kubernetes {service} Service has no ready owned address")
         observed[service]["service_uid"] = route_uid
-        observed[service]["endpoint_slice_uid"] = slice_metadata["uid"]
+        observed[service]["endpoint_slice_uids"] = slice_uids
     return observed
 
 

@@ -9,8 +9,8 @@ metadata:
   labels:
     app: passport-callback-signer
     com.marty.passport.acceptance.owner: supported-consumer
-    com.marty.passport.acceptance.run-id: ${PASSPORT_ACCEPTANCE_PLAN_RUN_ID}
-    com.marty.passport.acceptance.source-commit: ${PASSPORT_ACCEPTANCE_SOURCE_COMMIT}
+    com.marty.passport.acceptance.run-id: "${PASSPORT_ACCEPTANCE_PLAN_RUN_ID}"
+    com.marty.passport.acceptance.source-commit: "${PASSPORT_ACCEPTANCE_SOURCE_COMMIT}"
   annotations:
     com.marty.passport.acceptance.services-image: ${MARTY_SERVICES_IMAGE}
 spec:
@@ -19,14 +19,14 @@ spec:
     matchLabels:
       app: passport-callback-signer
       com.marty.passport.acceptance.owner: supported-consumer
-      com.marty.passport.acceptance.run-id: ${PASSPORT_ACCEPTANCE_PLAN_RUN_ID}
+      com.marty.passport.acceptance.run-id: "${PASSPORT_ACCEPTANCE_PLAN_RUN_ID}"
   template:
     metadata:
       labels:
         app: passport-callback-signer
         com.marty.passport.acceptance.owner: supported-consumer
-        com.marty.passport.acceptance.run-id: ${PASSPORT_ACCEPTANCE_PLAN_RUN_ID}
-        com.marty.passport.acceptance.source-commit: ${PASSPORT_ACCEPTANCE_SOURCE_COMMIT}
+        com.marty.passport.acceptance.run-id: "${PASSPORT_ACCEPTANCE_PLAN_RUN_ID}"
+        com.marty.passport.acceptance.source-commit: "${PASSPORT_ACCEPTANCE_SOURCE_COMMIT}"
       annotations:
         com.marty.passport.acceptance.services-image: ${MARTY_SERVICES_IMAGE}
     spec:
@@ -83,8 +83,8 @@ metadata:
   labels:
     app: passport-callback-signer
     com.marty.passport.acceptance.owner: supported-consumer
-    com.marty.passport.acceptance.run-id: ${PASSPORT_ACCEPTANCE_PLAN_RUN_ID}
-    com.marty.passport.acceptance.source-commit: ${PASSPORT_ACCEPTANCE_SOURCE_COMMIT}
+    com.marty.passport.acceptance.run-id: "${PASSPORT_ACCEPTANCE_PLAN_RUN_ID}"
+    com.marty.passport.acceptance.source-commit: "${PASSPORT_ACCEPTANCE_SOURCE_COMMIT}"
   annotations:
     com.marty.passport.acceptance.services-image: ${MARTY_SERVICES_IMAGE}
 spec:
@@ -92,7 +92,7 @@ spec:
   selector:
     app: passport-callback-signer
     com.marty.passport.acceptance.owner: supported-consumer
-    com.marty.passport.acceptance.run-id: ${PASSPORT_ACCEPTANCE_PLAN_RUN_ID}
+    com.marty.passport.acceptance.run-id: "${PASSPORT_ACCEPTANCE_PLAN_RUN_ID}"
   ports:
     - {name: http, port: 8018, targetPort: 8018}
 ---
@@ -104,8 +104,8 @@ metadata:
   labels:
     app: passport-beta-bureau
     com.marty.passport.acceptance.owner: supported-consumer
-    com.marty.passport.acceptance.run-id: ${PASSPORT_ACCEPTANCE_PLAN_RUN_ID}
-    com.marty.passport.acceptance.source-commit: ${PASSPORT_ACCEPTANCE_SOURCE_COMMIT}
+    com.marty.passport.acceptance.run-id: "${PASSPORT_ACCEPTANCE_PLAN_RUN_ID}"
+    com.marty.passport.acceptance.source-commit: "${PASSPORT_ACCEPTANCE_SOURCE_COMMIT}"
   annotations:
     com.marty.passport.acceptance.services-image: ${MARTY_SERVICES_IMAGE}
 spec:
@@ -114,14 +114,14 @@ spec:
     matchLabels:
       app: passport-beta-bureau
       com.marty.passport.acceptance.owner: supported-consumer
-      com.marty.passport.acceptance.run-id: ${PASSPORT_ACCEPTANCE_PLAN_RUN_ID}
+      com.marty.passport.acceptance.run-id: "${PASSPORT_ACCEPTANCE_PLAN_RUN_ID}"
   template:
     metadata:
       labels:
         app: passport-beta-bureau
         com.marty.passport.acceptance.owner: supported-consumer
-        com.marty.passport.acceptance.run-id: ${PASSPORT_ACCEPTANCE_PLAN_RUN_ID}
-        com.marty.passport.acceptance.source-commit: ${PASSPORT_ACCEPTANCE_SOURCE_COMMIT}
+        com.marty.passport.acceptance.run-id: "${PASSPORT_ACCEPTANCE_PLAN_RUN_ID}"
+        com.marty.passport.acceptance.source-commit: "${PASSPORT_ACCEPTANCE_SOURCE_COMMIT}"
       annotations:
         com.marty.passport.acceptance.services-image: ${MARTY_SERVICES_IMAGE}
     spec:
@@ -184,8 +184,8 @@ metadata:
   labels:
     app: passport-beta-bureau
     com.marty.passport.acceptance.owner: supported-consumer
-    com.marty.passport.acceptance.run-id: ${PASSPORT_ACCEPTANCE_PLAN_RUN_ID}
-    com.marty.passport.acceptance.source-commit: ${PASSPORT_ACCEPTANCE_SOURCE_COMMIT}
+    com.marty.passport.acceptance.run-id: "${PASSPORT_ACCEPTANCE_PLAN_RUN_ID}"
+    com.marty.passport.acceptance.source-commit: "${PASSPORT_ACCEPTANCE_SOURCE_COMMIT}"
   annotations:
     com.marty.passport.acceptance.services-image: ${MARTY_SERVICES_IMAGE}
 spec:
@@ -193,7 +193,7 @@ spec:
   selector:
     app: passport-beta-bureau
     com.marty.passport.acceptance.owner: supported-consumer
-    com.marty.passport.acceptance.run-id: ${PASSPORT_ACCEPTANCE_PLAN_RUN_ID}
+    com.marty.passport.acceptance.run-id: "${PASSPORT_ACCEPTANCE_PLAN_RUN_ID}"
   ports:
     - {name: http, port: 8020, targetPort: 8020}
 ---
@@ -207,7 +207,7 @@ spec:
     matchLabels:
       app: passport-callback-signer
       com.marty.passport.acceptance.owner: supported-consumer
-      com.marty.passport.acceptance.run-id: ${PASSPORT_ACCEPTANCE_PLAN_RUN_ID}
+      com.marty.passport.acceptance.run-id: "${PASSPORT_ACCEPTANCE_PLAN_RUN_ID}"
   policyTypes: [Ingress]
   ingress:
     - from:
@@ -215,6 +215,6 @@ spec:
             matchLabels:
               app: passport-beta-bureau
               com.marty.passport.acceptance.owner: supported-consumer
-              com.marty.passport.acceptance.run-id: ${PASSPORT_ACCEPTANCE_PLAN_RUN_ID}
+              com.marty.passport.acceptance.run-id: "${PASSPORT_ACCEPTANCE_PLAN_RUN_ID}"
       ports:
         - {protocol: TCP, port: 8018}

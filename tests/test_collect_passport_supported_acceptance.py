@@ -135,7 +135,11 @@ def kubernetes_runner(*, mixed_provider: bool = False,
                        wrong_owner: bool = False,
                        wrong_route: bool = False,
                        wrong_endpoint: bool = False,
-                       wrong_source: bool = False):
+                       wrong_source: bool = False,
+                       foreign_address: bool = False,
+                       historical_replicaset: bool = False,
+                       dual_stack: bool = False,
+                       external_ip: bool = False):
     def container_for(service: str) -> dict:
         values = {flag: "true" for flag in gate.KUBERNETES_FLAGS[service]}
         if service == "gateway":
@@ -197,10 +201,16 @@ def kubernetes_runner(*, mixed_provider: bool = False,
                         "com.marty.passport.acceptance.owner": "supported-consumer",
                         "com.marty.passport.acceptance.run-id": RUN_ID,
                         "pod-template-hash": "owned-hash"}
-            return json.dumps({"items": [{
+            current = {
                 "metadata": metadata_for(service, "ReplicaSet"),
                 "spec": {"selector": {"matchLabels": selector}},
-            }]})
+            }
+            old = {"metadata": {**metadata_for(service, "ReplicaSet"),
+                                "name": service + "-old-rs",
+                                "uid": service + "-old-rs-uid"},
+                   "spec": {"replicas": 0}}
+            return json.dumps({"items": [current, old] if historical_replicaset
+                               else [current]})
         if args[6] == "pods":
             service = args[8].removeprefix("app=")
             if service == "passport-provider-ingress":
@@ -212,7 +222,10 @@ def kubernetes_runner(*, mixed_provider: bool = False,
             return json.dumps({"items": [{
                 "metadata": metadata_for(service, "Pod"),
                 "spec": {"containers": [pod_container]},
-                "status": {"phase": "Running", "containerStatuses": [{
+                "status": {"phase": "Running", "podIP": "10.1.2.3",
+                           "podIPs": ([{"ip": "10.1.2.3"}, {"ip": "fd00::3"}]
+                                      if dual_stack else [{"ip": "10.1.2.3"}]),
+                           "containerStatuses": [{
                     "ready": True, "imageID": "docker-pullable://" + REFERENCE,
                     "containerID": "containerd://" + service + "-container",
                 }]},
@@ -228,21 +241,34 @@ def kubernetes_runner(*, mixed_provider: bool = False,
             return json.dumps({
                 "metadata": metadata_for(service, "Service"),
                 "spec": {"type": "ClusterIP", "selector": selector,
+                         "externalIPs": (["198.51.100.32"] if external_ip and service ==
+                                         "passport-beta-bureau" else []),
                          "ports": [{"name": "http", "port": port,
                                     "protocol": "TCP", "targetPort": port}]},
             })
         if args[6] == "endpointslices":
             service = args[8].removeprefix("kubernetes.io/service-name=")
             port = 8020 if service == "passport-beta-bureau" else 8018
-            return json.dumps({"items": [{
-                "metadata": metadata_for(service, "EndpointSlice"),
-                "ports": [{"name": "http", "port": port, "protocol": "TCP"}],
-                "endpoints": [{"conditions": {"ready": True},
-                               "targetRef": {"kind": "Pod", "namespace": NAMESPACE,
-                                             "uid": ("foreign" if wrong_endpoint
-                                                     and service == "passport-beta-bureau"
-                                                     else service + "-pod-uid")}}],
-            }]})
+            items = []
+            for family, address in ([('IPv4', '10.1.2.3'), ('IPv6', 'fd00::3')]
+                                    if dual_stack else [('IPv4', '10.1.2.3')]):
+                metadata = metadata_for(service, "EndpointSlice")
+                metadata["uid"] += "-" + family.lower()
+                metadata["labels"]["endpointslice.kubernetes.io/managed-by"] = (
+                    "endpointslice-controller.k8s.io")
+                items.append({
+                    "metadata": metadata, "addressType": family,
+                    "ports": [{"name": "http", "port": port, "protocol": "TCP"}],
+                    "endpoints": [{"addresses": [
+                        "10.9.9.9" if foreign_address and service ==
+                        "passport-beta-bureau" else address],
+                        "conditions": {"ready": True},
+                        "targetRef": {"kind": "Pod", "namespace": NAMESPACE,
+                                      "uid": ("foreign" if wrong_endpoint
+                                              and service == "passport-beta-bureau"
+                                              else service + "-pod-uid")}}],
+                })
+            return json.dumps({"items": items})
         service = args[7]
         container = container_for(service)
         if service == "issuance-native" and indirect_profile:
@@ -275,10 +301,19 @@ def test_kubernetes_inspection_is_bounded_to_disposable_namespace() -> None:
         "passport-callback-signer-replicaset-uid")
 
 
+def test_kubernetes_accepts_retained_replicasets_and_dual_stack_routes() -> None:
+    observed = gate.observe_kubernetes(
+        NAMESPACE, CONTEXT, REFERENCE, COMMIT,
+        kubernetes_runner(historical_replicaset=True, dual_stack=True))
+    assert len(observed["passport-beta-bureau"]["endpoint_slice_uids"]) == 2
+
+
 @pytest.mark.parametrize("defect,pattern", [
-    ("wrong_owner", "Pod is not owned"),
+    ("wrong_owner", "Pod ReplicaSet is missing"),
     ("wrong_route", "Service route is outside"),
-    ("wrong_endpoint", "Service does not route"),
+    ("wrong_endpoint", "Service targets another Pod"),
+    ("foreign_address", "Service routes to another address"),
+    ("external_ip", "Service route is outside"),
     ("wrong_source", "owner labels are invalid"),
 ])
 def test_kubernetes_rejects_foreign_pod_or_routing(
