@@ -138,7 +138,7 @@ class DemoManifestValidationTests(unittest.TestCase):
         with self.assertRaisesRegex(ManifestValidationError, "every present candidate scenario to be PUBLIC"):
             validate_manifest(manifest)
 
-    def test_reserved_d12_id_cannot_hide_under_an_alias(self):
+    def test_reserved_d13_id_cannot_hide_under_an_alias(self):
         for source in (self.manifest, json.loads(PORTFOLIO_MANIFEST_PATH.read_text(encoding="utf-8"))):
             manifest = copy.deepcopy(source)
             candidate = copy.deepcopy(manifest["scenarios"][0])
@@ -149,7 +149,7 @@ class DemoManifestValidationTests(unittest.TestCase):
                 with self.assertRaisesRegex(ManifestValidationError, "candidate demo ID and slug must match"):
                     validate_manifest(manifest)
 
-    def test_reserved_digital_slug_requires_d12_id(self):
+    def test_reserved_digital_slug_requires_d13_id(self):
         manifest = json.loads(PORTFOLIO_MANIFEST_PATH.read_text(encoding="utf-8"))
         candidate = copy.deepcopy(manifest["scenarios"][0])
         candidate["slug"] = "passport-digital-handoff-evidence"
