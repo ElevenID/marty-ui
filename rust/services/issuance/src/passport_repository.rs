@@ -3,7 +3,7 @@
 use chrono::{DateTime, Utc};
 use marty_passport_auth::PassportTenantPrincipal;
 use serde_json::Value;
-use sqlx::{postgres::PgRow, PgPool, Postgres, QueryBuilder, Row};
+use sqlx::{postgres::PgRow, PgConnection, PgPool, Postgres, QueryBuilder, Row};
 use uuid::Uuid;
 
 use crate::passport_bureau::VerifiedWebhookEvent;
@@ -233,6 +233,61 @@ impl PostgresPassportRepository {
         job: &PassportJob,
         reservation: &PassportSubmissionReservation<'_>,
     ) -> Result<Option<PassportJob>, sqlx::Error> {
+        let mut connection = self.pool.acquire().await?;
+        Self::reserve_submission_on(&mut connection, principal, job, reservation).await
+    }
+
+    /// Claim both signed source jobs in one transaction before a beta batch
+    /// send. A failed second claim rolls back the first claim as well.
+    pub async fn reserve_batch_submissions(
+        &self,
+        principal: &PassportTenantPrincipal,
+        jobs: [&PassportJob; 2],
+        reservations: [&PassportSubmissionReservation<'_>; 2],
+    ) -> Result<Option<[PassportJob; 2]>, sqlx::Error> {
+        if jobs[0].id == jobs[1].id
+            || jobs[0].application_id == jobs[1].application_id
+            || jobs
+                .iter()
+                .any(|job| job.organization_id != principal.organization_id())
+            || reservations[0].intent_id == reservations[1].intent_id
+        {
+            return Ok(None);
+        }
+        let mut transaction = self.pool.begin().await?;
+        let mut reserved: [Option<PassportJob>; 2] = [None, None];
+        let order = if jobs[0].id <= jobs[1].id {
+            [0, 1]
+        } else {
+            [1, 0]
+        };
+        for index in order {
+            let Some(job) = Self::reserve_submission_on(
+                &mut transaction,
+                principal,
+                jobs[index],
+                reservations[index],
+            )
+            .await?
+            else {
+                transaction.rollback().await?;
+                return Ok(None);
+            };
+            reserved[index] = Some(job);
+        }
+        transaction.commit().await?;
+        Ok(Some([
+            reserved[0].take().expect("first claim succeeded"),
+            reserved[1].take().expect("second claim succeeded"),
+        ]))
+    }
+
+    async fn reserve_submission_on(
+        connection: &mut PgConnection,
+        principal: &PassportTenantPrincipal,
+        job: &PassportJob,
+        reservation: &PassportSubmissionReservation<'_>,
+    ) -> Result<Option<PassportJob>, sqlx::Error> {
         sqlx::query(
             "UPDATE issuance_service.physical_document_jobs
              SET submission_intent_id=$1, submission_intent_started_at=$2,
@@ -245,6 +300,7 @@ impl PostgresPassportRepository {
              WHERE organization_id=$5 AND application_id=$6 AND status=$7
                AND sod_sha256 IS NOT DISTINCT FROM $8
                AND secure_artifact_ciphertext=$9
+               AND id=$13
                AND bureau_job_id IS NULL AND submission_intent_id IS NULL
              RETURNING *",
         )
@@ -260,7 +316,8 @@ impl PostgresPassportRepository {
         .bind(reservation.provider_profile_id)
         .bind(reservation.bureau_endpoint_sha256)
         .bind(reservation.signing_provenance)
-        .fetch_optional(&self.pool)
+        .bind(&job.id)
+        .fetch_optional(connection)
         .await?
         .as_ref()
         .map(row_to_job)

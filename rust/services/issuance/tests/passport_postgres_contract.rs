@@ -2284,6 +2284,142 @@ async fn passport_jobs_survive_restart_without_cross_tenant_reads() {
     assert_eq!(receipt.bureau_job_id, beta_uuid);
     assert_eq!(receipt.sod_der_sha256, Some(vec![2_u8; 32]));
     assert!(receipt.first_accepted_at <= Utc::now());
+    let mut pair = Vec::new();
+    for suffix in ["a", "b"] {
+        pair.push(
+            profile_repository
+                .insert(
+                    &org_a,
+                    &PassportJobInsert {
+                        id: format!("batch-reservation-job-{suffix}"),
+                        application_id: format!("batch-reservation-application-{suffix}"),
+                        flow_execution_id: format!("batch-reservation-flow-{suffix}"),
+                        application_template_id: "profile-template".into(),
+                        credential_template_id: "profile-credential".into(),
+                        revocation_profile_id: None,
+                        delivery_destination_profile_id: "profile-destination".into(),
+                        document_type: "TD1".into(),
+                        country_code: "USA".into(),
+                        issuer_did: None,
+                        secure_artifact_ciphertext: "encrypted-pair-test".into(),
+                        secure_artifact_reference: format!(
+                            "physical-artifact://batch-reservation-job-{suffix}"
+                        ),
+                    },
+                    Utc::now(),
+                )
+                .await
+                .unwrap(),
+        );
+    }
+    let occupied_intent = uuid::Uuid::new_v4();
+    let occupied = profile_repository
+        .reserve_submission(
+            &org_a,
+            &pair[1],
+            &PassportSubmissionReservation {
+                intent_id: occupied_intent,
+                sod_sha256: "occupied-sod",
+                signed_artifact_ciphertext: None,
+                provider_profile_id: Some("passport-beta-bureau"),
+                bureau_endpoint_sha256: &endpoint_sha256,
+                signing_provenance: None,
+                now: Utc::now(),
+            },
+        )
+        .await
+        .unwrap()
+        .unwrap();
+    let first_batch_intent = uuid::Uuid::new_v4();
+    let second_batch_intent = uuid::Uuid::new_v4();
+    let batch_time = Utc::now();
+    let batch_reservations = [
+        PassportSubmissionReservation {
+            intent_id: first_batch_intent,
+            sod_sha256: "batch-sod-a",
+            signed_artifact_ciphertext: None,
+            provider_profile_id: Some("passport-beta-bureau"),
+            bureau_endpoint_sha256: &endpoint_sha256,
+            signing_provenance: None,
+            now: batch_time,
+        },
+        PassportSubmissionReservation {
+            intent_id: second_batch_intent,
+            sod_sha256: "batch-sod-b",
+            signed_artifact_ciphertext: None,
+            provider_profile_id: Some("passport-beta-bureau"),
+            bureau_endpoint_sha256: &endpoint_sha256,
+            signing_provenance: None,
+            now: batch_time,
+        },
+    ];
+    assert!(profile_repository
+        .reserve_batch_submissions(
+            &org_a,
+            [&pair[0], &pair[1]],
+            [&batch_reservations[0], &batch_reservations[1]],
+        )
+        .await
+        .unwrap()
+        .is_none());
+    assert!(profile_repository
+        .get(&org_a, &pair[0].application_id)
+        .await
+        .unwrap()
+        .unwrap()
+        .submission_intent_id
+        .is_none());
+    let mut release = PassportJobPatch::new(PassportJobStatus::Draft);
+    release.expected_submission_intent_id = Some(occupied_intent);
+    release.clear_submission_intent = true;
+    release.sod_sha256 = Some(None);
+    let released = profile_repository
+        .update(
+            &org_a,
+            &occupied.application_id,
+            &occupied.status,
+            &release,
+            Utc::now(),
+        )
+        .await
+        .unwrap()
+        .unwrap();
+    let correct_source_id = pair[0].id.clone();
+    pair[0].id = "stale-preflight-source-id".into();
+    assert!(profile_repository
+        .reserve_submission(&org_a, &pair[0], &batch_reservations[0])
+        .await
+        .unwrap()
+        .is_none());
+    assert!(profile_repository
+        .reserve_batch_submissions(
+            &org_a,
+            [&pair[0], &released],
+            [&batch_reservations[0], &batch_reservations[1]],
+        )
+        .await
+        .unwrap()
+        .is_none());
+    pair[0].id = correct_source_id;
+    let reserved_pair = profile_repository
+        .reserve_batch_submissions(
+            &org_a,
+            [&pair[0], &released],
+            [&batch_reservations[0], &batch_reservations[1]],
+        )
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(
+        reserved_pair[0].submission_intent_id,
+        Some(first_batch_intent)
+    );
+    assert_eq!(
+        reserved_pair[1].submission_intent_id,
+        Some(second_batch_intent)
+    );
+    assert_eq!(reserved_pair[0].sod_sha256.as_deref(), Some("batch-sod-a"));
+    assert_eq!(reserved_pair[1].sod_sha256.as_deref(), Some("batch-sod-b"));
     #[cfg(feature = "passport-self-signed-test")]
     if let Ok(packaged_url) = std::env::var("MARTY_PASSPORT_PACKAGED_TEST_URL") {
         exercise_packaged_self_signed_test_mode(&packaged_url, &key_a).await;
