@@ -41,8 +41,8 @@
       "algorithm": "SHA-256",
       "test_vector": {
         "body_utf8": "{\"status\":\"SHIPPED\"}",
-        "signature_utf8": "vault:v1:signature-a",
-        "digest_hex": "a7b40930f879a0e56291c4d52f001d17edf39d50bde153ea9ac131232121b22e"
+        "signature_utf8": "vault:v1:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=",
+        "digest_hex": "c509d5f0acf805a581db9430b376d4ec99c3bc017853e3c7bc7ca37954b4d3cd"
       },
       "publication": "lowercase hex digest in authenticated private poll; never persist or publish the signature or callback body"
     }
