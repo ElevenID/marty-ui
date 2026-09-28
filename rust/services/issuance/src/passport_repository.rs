@@ -118,6 +118,14 @@ pub struct PassportSubmissionReservation<'a> {
     pub now: DateTime<Utc>,
 }
 
+/// Durable correlation for an inspected beta Flow job and its companion.
+pub struct PassportBatchIdentity<'a> {
+    pub batch_id: Uuid,
+    pub selected_flow_instance_id: &'a str,
+    pub selected_job_id: &'a str,
+    pub companion_job_id: &'a str,
+}
+
 pub struct PassportBetaMaterialReceipt {
     pub bureau_job_id: Uuid,
     pub content_sha256: Option<Vec<u8>>,
@@ -162,6 +170,10 @@ pub struct PassportJob {
     pub submission_intent_provider_profile_id: Option<String>,
     pub submission_intent_bureau_endpoint_sha256: Option<String>,
     pub submission_intent_signing_provenance: Option<Value>,
+    pub submission_batch_id: Option<Uuid>,
+    pub submission_batch_selected_flow_instance_id: Option<String>,
+    pub submission_batch_selected_job_id: Option<String>,
+    pub submission_batch_companion_job_id: Option<String>,
     pub tracking_number: Option<String>,
     pub status: String,
     pub quality_result: Option<Value>,
@@ -246,7 +258,7 @@ impl PostgresPassportRepository {
         reservation: &PassportSubmissionReservation<'_>,
     ) -> Result<Option<PassportJob>, sqlx::Error> {
         let mut connection = self.pool.acquire().await?;
-        Self::reserve_submission_on(&mut connection, principal, job, reservation).await
+        Self::reserve_submission_on(&mut connection, principal, job, reservation, None).await
     }
 
     /// Claim both signed source jobs in one transaction before a beta batch
@@ -256,6 +268,7 @@ impl PostgresPassportRepository {
         principal: &PassportTenantPrincipal,
         jobs: [&PassportJob; 2],
         reservations: [&PassportSubmissionReservation<'_>; 2],
+        identity: &PassportBatchIdentity<'_>,
     ) -> Result<Option<[PassportJob; 2]>, sqlx::Error> {
         if jobs[0].id == jobs[1].id
             || jobs[0].application_id == jobs[1].application_id
@@ -263,10 +276,35 @@ impl PostgresPassportRepository {
                 .iter()
                 .any(|job| job.organization_id != principal.organization_id())
             || reservations[0].intent_id == reservations[1].intent_id
+            || identity.selected_job_id != jobs[0].id
+            || identity.companion_job_id != jobs[1].id
+            || identity.selected_flow_instance_id != jobs[0].flow_execution_id
+            || reservations[0].provider_profile_id.is_none()
+            || reservations[0].provider_profile_id != reservations[1].provider_profile_id
+            || reservations[0].bureau_endpoint_sha256 != reservations[1].bureau_endpoint_sha256
         {
             return Ok(None);
         }
         let mut transaction = self.pool.begin().await?;
+        let claimed = sqlx::query_scalar::<_, Uuid>(
+            "INSERT INTO issuance_service.passport_beta_batch_intents
+             (batch_id, organization_id, selected_flow_instance_id,
+              selected_job_id, companion_job_id, created_at)
+             VALUES ($1,$2,$3,$4,$5,$6)
+             ON CONFLICT (batch_id) DO NOTHING RETURNING batch_id",
+        )
+        .bind(identity.batch_id)
+        .bind(principal.organization_id())
+        .bind(identity.selected_flow_instance_id)
+        .bind(identity.selected_job_id)
+        .bind(identity.companion_job_id)
+        .bind(reservations[0].now)
+        .fetch_optional(&mut *transaction)
+        .await?;
+        if claimed.is_none() {
+            transaction.rollback().await?;
+            return Ok(None);
+        }
         let mut reserved: [Option<PassportJob>; 2] = [None, None];
         let order = if jobs[0].id <= jobs[1].id {
             [0, 1]
@@ -279,6 +317,7 @@ impl PostgresPassportRepository {
                 principal,
                 jobs[index],
                 reservations[index],
+                Some(identity),
             )
             .await?
             else {
@@ -299,6 +338,7 @@ impl PostgresPassportRepository {
         principal: &PassportTenantPrincipal,
         job: &PassportJob,
         reservation: &PassportSubmissionReservation<'_>,
+        batch: Option<&PassportBatchIdentity<'_>>,
     ) -> Result<Option<PassportJob>, sqlx::Error> {
         sqlx::query(
             "UPDATE issuance_service.physical_document_jobs
@@ -306,6 +346,10 @@ impl PostgresPassportRepository {
                  submission_intent_provider_profile_id=$10,
                  submission_intent_bureau_endpoint_sha256=$11,
                  submission_intent_signing_provenance=$12,
+                 submission_batch_id=$14,
+                 submission_batch_selected_flow_instance_id=$15,
+                 submission_batch_selected_job_id=$16,
+                 submission_batch_companion_job_id=$17,
                  sod_sha256=$3,
                  secure_artifact_ciphertext=COALESCE($4, secure_artifact_ciphertext),
                  updated_at=$2
@@ -314,6 +358,7 @@ impl PostgresPassportRepository {
                AND secure_artifact_ciphertext=$9
                AND id=$13
                AND bureau_job_id IS NULL AND submission_intent_id IS NULL
+               AND submission_batch_id IS NULL
              RETURNING *",
         )
         .bind(reservation.intent_id)
@@ -329,6 +374,10 @@ impl PostgresPassportRepository {
         .bind(reservation.bureau_endpoint_sha256)
         .bind(reservation.signing_provenance)
         .bind(&job.id)
+        .bind(batch.map(|value| value.batch_id))
+        .bind(batch.map(|value| value.selected_flow_instance_id))
+        .bind(batch.map(|value| value.selected_job_id))
+        .bind(batch.map(|value| value.companion_job_id))
         .fetch_optional(connection)
         .await?
         .as_ref()
@@ -422,6 +471,14 @@ impl PostgresPassportRepository {
         });
         if jobs[0].id == jobs[1].id
             || jobs[0].application_id == jobs[1].application_id
+            || jobs[0].submission_batch_id.is_none()
+            || jobs[0].submission_batch_id != jobs[1].submission_batch_id
+            || jobs.iter().any(|job| {
+                job.submission_batch_selected_job_id.as_deref() != Some(jobs[0].id.as_str())
+                    || job.submission_batch_companion_job_id.as_deref() != Some(jobs[1].id.as_str())
+                    || job.submission_batch_selected_flow_instance_id.as_deref()
+                        != Some(jobs[0].flow_execution_id.as_str())
+            })
             || jobs
                 .iter()
                 .any(|job| job.organization_id != principal.organization_id())
@@ -600,6 +657,51 @@ impl PostgresPassportRepository {
             .as_ref()
             .map(row_to_job)
             .transpose()
+    }
+
+    /// Read the stable selected-first pair for a private beta batch retry.
+    pub async fn beta_batch_jobs(
+        &self,
+        principal: &PassportTenantPrincipal,
+        batch_id: Uuid,
+    ) -> Result<Option<[PassportJob; 2]>, sqlx::Error> {
+        let rows = sqlx::query(
+            "SELECT job.* FROM issuance_service.physical_document_jobs AS job
+             JOIN issuance_service.passport_beta_batch_intents AS batch
+               ON batch.batch_id=job.submission_batch_id
+              AND batch.organization_id=job.organization_id
+              AND batch.selected_flow_instance_id=job.submission_batch_selected_flow_instance_id
+              AND batch.selected_job_id=job.submission_batch_selected_job_id
+              AND batch.companion_job_id=job.submission_batch_companion_job_id
+             WHERE job.organization_id=$1 AND batch.batch_id=$2 LIMIT 3",
+        )
+        .bind(principal.organization_id())
+        .bind(batch_id)
+        .fetch_all(&self.pool)
+        .await?;
+        if rows.len() != 2 {
+            return Ok(None);
+        }
+        let mut jobs = rows.iter().map(row_to_job).collect::<Result<Vec<_>, _>>()?;
+        let selected = jobs
+            .iter()
+            .position(|job| {
+                job.submission_batch_selected_job_id.as_deref() == Some(job.id.as_str())
+            })
+            .ok_or_else(|| sqlx::Error::Protocol("beta batch selected job is missing".into()))?;
+        if selected != 0 {
+            jobs.swap(0, 1);
+        }
+        if jobs.iter().any(|job| {
+            job.submission_batch_id != Some(batch_id)
+                || job.submission_batch_selected_job_id.as_deref() != Some(jobs[0].id.as_str())
+                || job.submission_batch_companion_job_id.as_deref() != Some(jobs[1].id.as_str())
+                || job.submission_batch_selected_flow_instance_id.as_deref()
+                    != Some(jobs[0].flow_execution_id.as_str())
+        }) {
+            return Ok(None);
+        }
+        Ok(Some([jobs.remove(0), jobs.remove(0)]))
     }
 
     pub async fn fill_missing_bureau_metadata(
@@ -826,6 +928,11 @@ fn row_to_job(row: &PgRow) -> Result<PassportJob, sqlx::Error> {
             .try_get("submission_intent_bureau_endpoint_sha256")?,
         submission_intent_signing_provenance: row
             .try_get("submission_intent_signing_provenance")?,
+        submission_batch_id: row.try_get("submission_batch_id")?,
+        submission_batch_selected_flow_instance_id: row
+            .try_get("submission_batch_selected_flow_instance_id")?,
+        submission_batch_selected_job_id: row.try_get("submission_batch_selected_job_id")?,
+        submission_batch_companion_job_id: row.try_get("submission_batch_companion_job_id")?,
         tracking_number: row.try_get("tracking_number")?,
         status: row.try_get("status")?,
         quality_result: row.try_get("quality_result")?,

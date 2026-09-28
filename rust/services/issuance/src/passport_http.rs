@@ -982,6 +982,9 @@ async fn submit_personalization(
     if job.bureau_job_id.is_some() {
         return Ok(Json(safe(&job)));
     }
+    if job.submission_batch_id.is_some() {
+        return Err(PassportHttpError::ConcurrentChange);
+    }
     if job.submission_intent_id.is_some() {
         return wait_for_submission(&service, &principal, &application_id).await;
     }
@@ -1170,6 +1173,9 @@ async fn reconcile_beta_submission(
     }
     let principal = service.authenticate_beta_reconciliation_operator(&headers)?;
     let job = service.job(&principal, &application_id).await?;
+    if job.submission_batch_id.is_some() {
+        return Err(PassportHttpError::ConcurrentChange);
+    }
     if job.bureau_job_id.is_some() {
         return Ok(Json(safe(&job)));
     }

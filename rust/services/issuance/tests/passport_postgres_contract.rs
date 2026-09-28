@@ -25,8 +25,9 @@ use marty_issuance_service::passport_provider_ingress::{
     router as provider_ingress_router, ProviderIngressState,
 };
 use marty_issuance_service::passport_repository::{
-    PassportBetaBatchBinding, PassportBetaBatchDestination, PassportJobInsert, PassportJobPatch,
-    PassportJobStatus, PassportSubmissionReservation, PostgresPassportRepository,
+    PassportBatchIdentity, PassportBetaBatchBinding, PassportBetaBatchDestination,
+    PassportJobInsert, PassportJobPatch, PassportJobStatus, PassportSubmissionReservation,
+    PostgresPassportRepository,
 };
 #[cfg(feature = "passport-self-signed-test")]
 use marty_issuance_service::passport_signer::PassportSigner;
@@ -2354,11 +2355,21 @@ async fn passport_jobs_survive_restart_without_cross_tenant_reads() {
             now: batch_time,
         },
     ];
+    let batch_selected_flow = pair[0].flow_execution_id.clone();
+    let batch_selected_id = pair[0].id.clone();
+    let batch_companion_id = pair[1].id.clone();
+    let batch_identity = PassportBatchIdentity {
+        batch_id: uuid::Uuid::new_v4(),
+        selected_flow_instance_id: &batch_selected_flow,
+        selected_job_id: &batch_selected_id,
+        companion_job_id: &batch_companion_id,
+    };
     assert!(profile_repository
         .reserve_batch_submissions(
             &org_a,
             [&pair[0], &pair[1]],
             [&batch_reservations[0], &batch_reservations[1]],
+            &batch_identity,
         )
         .await
         .unwrap()
@@ -2397,6 +2408,7 @@ async fn passport_jobs_survive_restart_without_cross_tenant_reads() {
             &org_a,
             [&pair[0], &released],
             [&batch_reservations[0], &batch_reservations[1]],
+            &batch_identity,
         )
         .await
         .unwrap()
@@ -2407,6 +2419,7 @@ async fn passport_jobs_survive_restart_without_cross_tenant_reads() {
             &org_a,
             [&pair[0], &released],
             [&batch_reservations[0], &batch_reservations[1]],
+            &batch_identity,
         )
         .await
         .unwrap()
@@ -2419,6 +2432,111 @@ async fn passport_jobs_survive_restart_without_cross_tenant_reads() {
         reserved_pair[1].submission_intent_id,
         Some(second_batch_intent)
     );
+    for job in &reserved_pair {
+        assert_eq!(job.submission_batch_id, Some(batch_identity.batch_id));
+        assert_eq!(
+            job.submission_batch_selected_flow_instance_id.as_deref(),
+            Some(batch_identity.selected_flow_instance_id)
+        );
+        assert_eq!(
+            job.submission_batch_selected_job_id.as_deref(),
+            Some(batch_identity.selected_job_id)
+        );
+        assert_eq!(
+            job.submission_batch_companion_job_id.as_deref(),
+            Some(batch_identity.companion_job_id)
+        );
+    }
+    assert!(profile_repository
+        .beta_batch_jobs(&org_b, batch_identity.batch_id)
+        .await
+        .unwrap()
+        .is_none());
+    let replay_pair = profile_repository
+        .beta_batch_jobs(&org_a, batch_identity.batch_id)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(replay_pair[0].id, reserved_pair[0].id);
+    assert_eq!(replay_pair[1].id, reserved_pair[1].id);
+    let mut collision_pair = Vec::new();
+    for suffix in ["c", "d"] {
+        collision_pair.push(
+            profile_repository
+                .insert(
+                    &org_a,
+                    &PassportJobInsert {
+                        id: format!("batch-reservation-job-{suffix}"),
+                        application_id: format!("batch-reservation-application-{suffix}"),
+                        flow_execution_id: format!("batch-reservation-flow-{suffix}"),
+                        application_template_id: "profile-template".into(),
+                        credential_template_id: "profile-credential".into(),
+                        revocation_profile_id: None,
+                        delivery_destination_profile_id: "profile-destination".into(),
+                        document_type: "TD1".into(),
+                        country_code: "USA".into(),
+                        issuer_did: None,
+                        secure_artifact_ciphertext: "encrypted-pair-test".into(),
+                        secure_artifact_reference: format!(
+                            "physical-artifact://batch-reservation-job-{suffix}"
+                        ),
+                    },
+                    Utc::now(),
+                )
+                .await
+                .unwrap(),
+        );
+    }
+    let collision_identity = PassportBatchIdentity {
+        batch_id: batch_identity.batch_id,
+        selected_flow_instance_id: &collision_pair[0].flow_execution_id,
+        selected_job_id: &collision_pair[0].id,
+        companion_job_id: &collision_pair[1].id,
+    };
+    assert!(profile_repository
+        .reserve_batch_submissions(
+            &org_a,
+            [&collision_pair[0], &collision_pair[1]],
+            [&batch_reservations[0], &batch_reservations[1]],
+            &collision_identity,
+        )
+        .await
+        .unwrap()
+        .is_none());
+    for job in &collision_pair {
+        assert!(profile_repository
+            .get(&org_a, &job.application_id)
+            .await
+            .unwrap()
+            .unwrap()
+            .submission_intent_id
+            .is_none());
+    }
+    let batch_guard_keyring = PassportTenantKeyring::from_json(&format!(
+        "{{\"org-a\":\"{key_a}\",\"org-b\":\"{key_b}\"}}"
+    ))
+    .unwrap();
+    let batch_guard_router = passport_router(PassportHttpService::new(
+        batch_guard_keyring,
+        profile_repository.clone(),
+        None,
+        None,
+        None,
+    ));
+    let (blocked_batch_single_submit, _) = passport_http_request(
+        &batch_guard_router,
+        "POST",
+        &format!(
+            "/v1/passport/applications/{}/submit-personalization",
+            reserved_pair[0].application_id
+        ),
+        Some("org-a"),
+        Some(&key_a),
+        json!({}),
+        None,
+    )
+    .await;
+    assert_eq!(blocked_batch_single_submit, StatusCode::CONFLICT);
     assert_eq!(
         reserved_pair[0].sod_sha256.as_deref(),
         Some(batch_reservations[0].sod_sha256)
@@ -2590,12 +2708,38 @@ async fn passport_jobs_survive_restart_without_cross_tenant_reads() {
     for (job, patch) in bound_pair.iter().zip(batch_bind_patches.iter()) {
         assert_eq!(job.status, "SUBMITTED");
         assert_eq!(job.submission_intent_id, None);
+        assert_eq!(job.submission_batch_id, Some(batch_identity.batch_id));
         assert_eq!(job.bureau_job_id, patch.bureau_job_id.clone().flatten());
         assert_eq!(
             job.submitted_at,
             reserved_pair[0].submission_intent_started_at
         );
     }
+    let bound_replay_pair = profile_repository
+        .beta_batch_jobs(&org_a, batch_identity.batch_id)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(bound_replay_pair[0].id, bound_pair[0].id);
+    assert_eq!(bound_replay_pair[1].id, bound_pair[1].id);
+    let (bound_batch_single_submit, bound_response) = passport_http_request(
+        &batch_guard_router,
+        "POST",
+        &format!(
+            "/v1/passport/applications/{}/submit-personalization",
+            bound_pair[0].application_id
+        ),
+        Some("org-a"),
+        Some(&key_a),
+        json!({}),
+        None,
+    )
+    .await;
+    assert_eq!(bound_batch_single_submit, StatusCode::OK);
+    assert_eq!(
+        bound_response["bureau_job_id"].as_str(),
+        bound_pair[0].bureau_job_id.as_deref()
+    );
     #[cfg(feature = "passport-self-signed-test")]
     if let Ok(packaged_url) = std::env::var("MARTY_PASSPORT_PACKAGED_TEST_URL") {
         exercise_packaged_self_signed_test_mode(&packaged_url, &key_a).await;
