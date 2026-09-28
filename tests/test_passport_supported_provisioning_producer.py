@@ -114,10 +114,16 @@ def test_disposable_inputs_are_fresh_private_and_plan_bound() -> None:
         names = {item.name for item in secret_dir.iterdir()}
         assert names == {
             "bao_root_token", "marty_db_password", "signing_keys_internal_api_key",
+            "dsc_issue_gateway_key", "csca_issue_gateway_key",
             "issuance_api_key", "callback_signer_api_key", "grpc_service_token",
             "bureau_database_url", "token_hmac_key", "integration_secret_master_key",
         }
         assert len((secret_dir / "bao_root_token").read_text(encoding="ascii")) == 64
+        ceremony_keys = [(secret_dir / name).read_text(encoding="ascii") for name in (
+            "dsc_issue_gateway_key", "csca_issue_gateway_key")]
+        assert all(len(key) == 64 for key in ceremony_keys)
+        assert len(set(ceremony_keys + [
+            (secret_dir / "signing_keys_internal_api_key").read_text(encoding="ascii")])) == 3
         password = (secret_dir / "marty_db_password").read_text(encoding="ascii")
         assert (secret_dir / "bureau_database_url").read_text(encoding="ascii") == (
             f"postgresql://marty:{password}@postgres:5432/marty"

@@ -55,6 +55,7 @@ KEY_COMMAND = "/usr/local/bin/marty-passport-acceptance-api-key"
 CONTAINER_KEY = "/app/data/passport-acceptance-api-key"
 STAGED_SECRETS = frozenset({
     "bao_root_token", "marty_db_password", "signing_keys_internal_api_key",
+    "dsc_issue_gateway_key", "csca_issue_gateway_key",
     "issuance_api_key", "callback_signer_api_key", "grpc_service_token",
     "bureau_database_url", "token_hmac_key", "integration_secret_master_key",
 })
@@ -235,6 +236,8 @@ def stage_disposable_inputs(
             "bao_root_token": secrets.token_hex(32),
             "marty_db_password": database_password,
             "signing_keys_internal_api_key": secrets.token_hex(32),
+            "dsc_issue_gateway_key": secrets.token_hex(32),
+            "csca_issue_gateway_key": secrets.token_hex(32),
             "issuance_api_key": secrets.token_hex(32),
             "callback_signer_api_key": secrets.token_hex(32),
             "grpc_service_token": secrets.token_hex(32),

@@ -24,7 +24,7 @@ def inputs(root: Path) -> Path:
     secrets.mkdir()
     for name in (
         "marty_db_password", "bao_root_token", "bao_token", "signing_keys_internal_api_key",
-        "issuance_api_key",
+        "issuance_api_key", "dsc_issue_gateway_key", "csca_issue_gateway_key",
         "callback_signer_api_key",
         "callback_signer_bao_token", "grpc_service_token", "bureau_database_url",
     ):
@@ -74,6 +74,7 @@ def test_real_compose_render_is_safe_but_not_accepted(
         assert env["PASSPORT_ACCEPTANCE_SURFACE"] == surface
         assert env["ENVIRONMENT"] == (
             "beta" if name in {"passport-callback-signer", "passport-beta-bureau"}
+            or (surface == "base" and name == "gateway")
             or (surface == "selfhost" and name == "issuance-native")
             else "development" if surface == "base" else "production"
         )
@@ -85,6 +86,32 @@ def test_real_compose_render_is_safe_but_not_accepted(
         assert env["ISSUANCE_API_KEY_FILE"] == "/run/secrets/issuance_api_key"
         assert env["SIGNING_KEYS_INTERNAL_API_KEY_FILE"] == (
             "/run/secrets/signing_keys_internal_api_key")
+    ceremony_keys = {
+        "SIGNING_KEYS_DSC_ISSUE_GATEWAY_KEY_FILE": "dsc_issue_gateway_key",
+        "SIGNING_KEYS_CSCA_ISSUE_GATEWAY_KEY_FILE": "csca_issue_gateway_key",
+    }
+    for name in ("gateway", "signing-keys"):
+        service = model["services"][name]
+        env = service["environment"]
+        mounts = {item["source"] for item in service["secrets"]}
+        if surface == "base":
+            assert all(env[key] == f"/run/secrets/{secret}"
+                       and secret in mounts for key, secret in ceremony_keys.items())
+            assert all(key.removesuffix("_FILE") not in env for key in ceremony_keys)
+        else:
+            assert all(key not in env and key.removesuffix("_FILE") not in env
+                       for key in ceremony_keys)
+            assert not (set(ceremony_keys.values()) & mounts)
+    if surface == "base":
+        assert model["services"]["gateway"]["environment"][
+            "GRPC_INSECURE_ALLOWED"] == "true"
+        assert model["services"]["signing-keys"]["environment"][
+            "SIGNING_KEYS_BETA_CSCA_ISSUANCE_ENABLED"] == "true"
+        assert model["services"]["signing-keys"]["environment"][
+            "ENVIRONMENT"] == "beta"
+    else:
+        assert "SIGNING_KEYS_BETA_CSCA_ISSUANCE_ENABLED" not in model["services"][
+            "signing-keys"]["environment"]
     assert "passport_tenant_api_keys" not in model["secrets"]
     assert model["services"]["issuance-native"]["environment"][
         "PERSONALIZATION_BUREAU_PROVIDER_PROFILE_ID"] == "passport-beta-bureau"

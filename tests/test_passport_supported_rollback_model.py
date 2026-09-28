@@ -72,7 +72,10 @@ def safe_model(root: Path) -> dict:
         "credential-template": {"condition": "service_healthy"},
     }
     services["gateway"]["environment"].update({
-        "ENVIRONMENT": "development",
+        "ENVIRONMENT": "beta",
+        "GRPC_INSECURE_ALLOWED": "true",
+        "SIGNING_KEYS_DSC_ISSUE_GATEWAY_KEY_FILE": "/run/secrets/dsc_issue_gateway_key",
+        "SIGNING_KEYS_CSCA_ISSUE_GATEWAY_KEY_FILE": "/run/secrets/csca_issue_gateway_key",
         "PUBLIC_DOMAIN": "localhost",
         "ISSUER_BASE_URL": "http://gateway:8000",
         "PASSPORT_PROVIDER_INGRESS_GATEWAY_ENABLED": "false",
@@ -299,6 +302,12 @@ def safe_model(root: Path) -> dict:
         "image": IMAGE,
         "networks": ["private"],
         "environment": {"SIGNING_KEYS_REDIS_URL": "redis://redis:6379/2",
+                        "ENVIRONMENT": "beta",
+                        "SIGNING_KEYS_BETA_CSCA_ISSUANCE_ENABLED": "true",
+                        "SIGNING_KEYS_DSC_ISSUE_GATEWAY_KEY_FILE":
+                            "/run/secrets/dsc_issue_gateway_key",
+                        "SIGNING_KEYS_CSCA_ISSUE_GATEWAY_KEY_FILE":
+                            "/run/secrets/csca_issue_gateway_key",
                         "PUBLIC_DOMAIN": "localhost",
                         "SIGNING_KEYS_INTERNAL_API_KEY_FILE":
                             "/run/secrets/signing_keys_internal_api_key"},
@@ -329,6 +338,11 @@ def safe_model(root: Path) -> dict:
     }
     services["issuance"] = {"image": "ghcr.io/elevenid/marty-credentials-issuance@sha256:" + "c" * 64,
                             "networks": ["private"]}
+    for name in ("gateway", "signing-keys"):
+        services[name]["secrets"].extend([
+            {"source": "dsc_issue_gateway_key"},
+            {"source": "csca_issue_gateway_key"},
+        ])
     for service in services.values():
         service["labels"] = LABELS
     return {"name": PROJECT, "services": services,
@@ -350,6 +364,10 @@ def safe_model(root: Path) -> dict:
                 "issuance_api_key": {"file": str(root / "secrets/issuance_api_key")},
                 "signing_keys_internal_api_key": {
                     "file": str(root / "secrets/signing_keys_internal_api_key")},
+                "dsc_issue_gateway_key": {
+                    "file": str(root / "secrets/dsc_issue_gateway_key")},
+                "csca_issue_gateway_key": {
+                    "file": str(root / "secrets/csca_issue_gateway_key")},
                 "token_hmac_key": {"file": str(root / "secrets/token_hmac_key")},
                 "integration_secret_master_key": {
                     "file": str(root / "secrets/integration_secret_master_key")},
@@ -379,6 +397,24 @@ def test_rust_support_runtime_binding_is_required(
 ) -> None:
     model = safe_model(tmp_path)
     model["services"][service]["environment"][key] = value
+    with pytest.raises(ModelPreflightError):
+        validate_model(model, PROJECT, IMAGE, tmp_path)
+
+
+@pytest.mark.parametrize("service,change", [
+    ("gateway", lambda item: item["environment"].update(
+        SIGNING_KEYS_CSCA_ISSUE_GATEWAY_KEY="raw-in-docker-inspect")),
+    ("gateway", lambda item: item["environment"].update(
+        SIGNING_KEYS_CSCA_ISSUE_GATEWAY_KEY_FILE="/run/secrets/other")),
+    ("signing-keys", lambda item: item["secrets"].pop()),
+    ("signing-keys", lambda item: item["environment"].update(
+        SIGNING_KEYS_BETA_CSCA_ISSUANCE_ENABLED="false")),
+])
+def test_disposable_ceremony_credential_isolation_is_required(
+    tmp_path: Path, service: str, change,
+) -> None:
+    model = safe_model(tmp_path)
+    change(model["services"][service])
     with pytest.raises(ModelPreflightError):
         validate_model(model, PROJECT, IMAGE, tmp_path)
 

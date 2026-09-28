@@ -42,7 +42,8 @@ SECRETS = {
     "redis": (),
     "openbao": ("bao_root_token",),
     "db-migrate": ("marty_db_password", "bao_token"),
-    "signing-keys": ("marty_db_password", "bao_token", "signing_keys_internal_api_key"),
+    "signing-keys": ("marty_db_password", "bao_token", "signing_keys_internal_api_key",
+                     "dsc_issue_gateway_key", "csca_issue_gateway_key"),
     "issuance": (),
     "revocation-profile-migrate": ("marty_db_password",),
     "revocation-profile": ("marty_db_password", "grpc_service_token"),
@@ -64,7 +65,7 @@ SECRETS = {
     "passport-beta-bureau": ("bureau_database_url", "grpc_service_token",
                              "callback_signer_api_key"),
     "gateway": ("bao_token", "signing_keys_internal_api_key", "issuance_api_key",
-                "grpc_service_token"),
+                "grpc_service_token", "dsc_issue_gateway_key", "csca_issue_gateway_key"),
 }
 DATA = {
     "postgres": ("postgres_data", "/var/lib/postgresql/data"),
@@ -155,6 +156,16 @@ def fixture() -> tuple[dict, dict[tuple[str, ...], str]]:
             "MARTY_ORG_ID": "00000000-0000-0000-0000-000000000001",
         }
         migration_env = {"STATUS_LIST_BASE_URL": "http://127.0.0.1:29876"}
+        ceremony_env = {
+            "ENVIRONMENT": "beta",
+            "SIGNING_KEYS_DSC_ISSUE_GATEWAY_KEY_FILE":
+                "/run/secrets/dsc_issue_gateway_key",
+            "SIGNING_KEYS_CSCA_ISSUE_GATEWAY_KEY_FILE":
+                "/run/secrets/csca_issue_gateway_key",
+        }
+        gateway_env = {**ceremony_env, "GRPC_INSECURE_ALLOWED": "true"}
+        signing_env = {**ceremony_env,
+                       "SIGNING_KEYS_BETA_CSCA_ISSUANCE_ENABLED": "true"}
         support_common = {
             "ENVIRONMENT": "development",
             "DATABASE_URL_TEMPLATE": (
@@ -206,6 +217,8 @@ def fixture() -> tuple[dict, dict[tuple[str, ...], str]]:
         runtime_env = (organization_env if service == "organization" else
                        revocation_env if service == "revocation-profile" else
                        migration_env if service == "revocation-profile-migrate" else
+                       gateway_env if service == "gateway" else
+                       signing_env if service == "signing-keys" else
                        support_env.get(service, {}))
         gateway_binding = [{"HostIp": "127.0.0.1", "HostPort": "29876"}]
         calls[("container", "inspect", identifier)] = json.dumps([{
@@ -259,6 +272,27 @@ def test_live_rust_support_binding_matches_disposable_project(
     item[0]["Config"]["Env"].append(f"{key}={value}")
     calls[inspect_key] = json.dumps(item)
     with pytest.raises(OwnershipError, match="runtime identity"):
+        run(record, calls)
+
+
+@pytest.mark.parametrize("service,key,value", [
+    ("gateway", "SIGNING_KEYS_CSCA_ISSUE_GATEWAY_KEY_FILE", "/run/secrets/other"),
+    ("gateway", "ENVIRONMENT", "production"),
+    ("signing-keys", "SIGNING_KEYS_BETA_CSCA_ISSUANCE_ENABLED", "false"),
+    ("signing-keys", "SIGNING_KEYS_DSC_ISSUE_GATEWAY_KEY_FILE", "/run/secrets/other"),
+])
+def test_live_ceremony_secret_binding_is_exact(
+    service: str, key: str, value: str,
+) -> None:
+    record, calls = fixture()
+    identifier = record["containers"][service]
+    inspect_key = ("container", "inspect", identifier)
+    item = json.loads(calls[inspect_key])
+    item[0]["Config"]["Env"] = [entry for entry in item[0]["Config"]["Env"]
+                               if not entry.startswith(key + "=")]
+    item[0]["Config"]["Env"].append(f"{key}={value}")
+    calls[inspect_key] = json.dumps(item)
+    with pytest.raises(OwnershipError, match="certificate ceremony runtime"):
         run(record, calls)
 
 

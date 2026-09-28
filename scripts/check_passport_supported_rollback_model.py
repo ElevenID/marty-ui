@@ -767,9 +767,39 @@ def validate_model(
         "Disposable native issuance startup secrets are missing",
     )
     require(native.get("ENVIRONMENT") == ("beta" if surface == "selfhost" else "development")
-            and gateway.get("ENVIRONMENT") == ("production" if surface == "selfhost" else "development")
+            and gateway.get("ENVIRONMENT") == ("production" if surface == "selfhost" else "beta")
             and flow.get("ENVIRONMENT") == ("production" if surface == "selfhost" else "development"),
             "Disposable surface environment selectors are incompatible with the beta simulator")
+    ceremony_secrets = {
+        "SIGNING_KEYS_DSC_ISSUE_GATEWAY_KEY": "dsc_issue_gateway_key",
+        "SIGNING_KEYS_CSCA_ISSUE_GATEWAY_KEY": "csca_issue_gateway_key",
+    }
+    signing = services["signing-keys"]
+    signing_env = signing.get("environment")
+    require(isinstance(signing_env, dict)
+            and all(key not in service.get("environment", {})
+                    for service in services.values()
+                    for key in ceremony_secrets),
+            "Disposable certificate operator key is exposed in Compose environment")
+    for key, secret in ceremony_secrets.items():
+        file_key = key + "_FILE"
+        holders = {name for name, service in services.items()
+                   if file_key in service.get("environment", {})}
+        mounts = {name for name, service in services.items()
+                  if secret in {item.get("source") for item in service.get("secrets", [])}}
+        expected = {"gateway", "signing-keys"} if surface == "base" else set()
+        require(holders == mounts == expected
+                and all(services[name]["environment"].get(file_key)
+                        == f"/run/secrets/{secret}" for name in holders),
+                "Disposable certificate operator key holders are invalid")
+    require((surface == "base"
+             and signing_env.get("ENVIRONMENT") == "beta"
+             and signing_env.get("SIGNING_KEYS_BETA_CSCA_ISSUANCE_ENABLED") == "true"
+             and gateway.get("GRPC_INSECURE_ALLOWED") == "true")
+            or (surface == "selfhost"
+                and "SIGNING_KEYS_BETA_CSCA_ISSUANCE_ENABLED" not in signing_env
+                and "GRPC_INSECURE_ALLOWED" not in gateway),
+            "Disposable certificate ceremony mode differs from surface")
     require(signer.get("ENVIRONMENT") == "beta"
             and signer.get("PASSPORT_CALLBACK_SIGNER_ENABLED") == "true"
             and signer.get("SIGNING_KEYS_INTERNAL_API_KEY_FILE") == "/run/secrets/callback_signer_api_key"

@@ -76,6 +76,7 @@ SECRET_MOUNTS = {
     "gateway": ("bao_token", "signing_keys_internal_api_key", "issuance_api_key",
                 "grpc_service_token"),
 }
+BASE_CEREMONY_MOUNTS = ("dsc_issue_gateway_key", "csca_issue_gateway_key")
 DATA_MOUNTS = {
     "postgres": (("postgres_data", "/var/lib/postgresql/data"),),
     "redis": (("redis_data", "/data"),),
@@ -253,6 +254,29 @@ def _support_environment(actual: object, service: str, status_origin: str) -> No
             f"{service} runtime identity differs from disposable model")
 
 
+def _ceremony_environment(actual: object, service: str, surface: str) -> None:
+    environment = _runtime_environment(actual, service)
+    credentials = {
+        "SIGNING_KEYS_DSC_ISSUE_GATEWAY_KEY_FILE": "/run/secrets/dsc_issue_gateway_key",
+        "SIGNING_KEYS_CSCA_ISSUE_GATEWAY_KEY_FILE": "/run/secrets/csca_issue_gateway_key",
+    }
+    require(all(key.removesuffix("_FILE") not in environment for key in credentials),
+            "Disposable certificate operator key appears in runtime environment")
+    if surface == "base":
+        expected = {**credentials, "ENVIRONMENT": "beta"}
+        if service == "gateway":
+            expected["GRPC_INSECURE_ALLOWED"] = "true"
+        else:
+            expected["SIGNING_KEYS_BETA_CSCA_ISSUANCE_ENABLED"] = "true"
+        require(all(environment.get(key) == value for key, value in expected.items()),
+                "Disposable certificate ceremony runtime differs from protected model")
+    else:
+        require(all(key not in environment for key in credentials)
+                and "SIGNING_KEYS_BETA_CSCA_ISSUANCE_ENABLED" not in environment
+                and (service != "gateway" or environment.get("ENVIRONMENT") == "production"),
+                "Selfhost runtime carries a beta certificate ceremony credential")
+
+
 def _status_origin(gateway: dict) -> str:
     host = gateway.get("HostConfig")
     networks = gateway.get("NetworkSettings")
@@ -276,11 +300,14 @@ def _status_origin(gateway: dict) -> str:
     return f"http://127.0.0.1:{port}"
 
 
-def _expected_mounts(service: str, project: str, disposable_root: Path) -> set[tuple[str, str, str, bool]]:
+def _expected_mounts(service: str, project: str, disposable_root: Path,
+                     surface: str) -> set[tuple[str, str, str, bool]]:
     expected = {
         ("bind", str(disposable_root / "secrets" / secret),
          f"/run/secrets/{secret}", False)
-        for secret in SECRET_MOUNTS[service]
+        for secret in (SECRET_MOUNTS[service]
+                       + (BASE_CEREMONY_MOUNTS if surface == "base"
+                          and service in {"gateway", "signing-keys"} else ()))
     }
     if service == "openbao":
         expected.add(("bind", str(Path(__file__).resolve().parents[1]
@@ -398,6 +425,8 @@ def verify(record: dict, surface: str, now: datetime,
                 "Disposable container service identity changed")
         if service == "organization":
             _organization_environment(config.get("Env"), record)
+        elif service in {"gateway", "signing-keys"}:
+            _ceremony_environment(config.get("Env"), service, surface)
         elif service == "revocation-profile":
             _revocation_environment(config.get("Env"), status_origin)
         elif service in {"credential-template", "trust-profile",
@@ -436,7 +465,7 @@ def verify(record: dict, surface: str, now: datetime,
                 "Passport container image differs from signed release")
         mounts = item.get("Mounts", [])
         require(isinstance(mounts, list), "Disposable container mounts are invalid")
-        expected_mounts = _expected_mounts(service, project, disposable_root)
+        expected_mounts = _expected_mounts(service, project, disposable_root, surface)
         observed_mounts: set[tuple[str, str, str, bool]] = set()
         for mount in mounts:
             require(isinstance(mount, dict)
