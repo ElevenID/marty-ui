@@ -8,6 +8,7 @@ The protected producer workflow does not invoke it yet.
 from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
+import json
 import os
 from pathlib import Path
 import re
@@ -30,6 +31,9 @@ else:
 ROOT = Path(__file__).resolve().parents[1]
 INFRA = ("postgres", "redis", "openbao")
 TOKEN = re.compile(r"[!-~]{8,512}\Z")
+MIN_TEARDOWN_LEASE = timedelta(minutes=90)
+MIN_JOB_BUDGET = timedelta(minutes=45)
+JOB_TIMEOUT = timedelta(minutes=60)
 
 
 def _run(args: list[str], environment: dict[str, str], timeout: int) -> bool:
@@ -60,6 +64,56 @@ def _inspect_local(args: list[str], environment: dict[str, str]) -> str:
     if len(result.stdout) > 1024 * 1024:
         raise ProducerError("Disposable local Docker inspection is oversized")
     return result.stdout
+
+
+def _run_attempt_jobs(run_id: str, attempt: str) -> dict:
+    try:
+        result = subprocess.run([
+            "gh", "api", "repos/ElevenID/marty-ui/actions/runs/"
+            f"{run_id}/attempts/{attempt}/jobs",
+        ], capture_output=True, text=True, encoding="utf-8", check=True, timeout=30)
+        if len(result.stdout) > 1024 * 1024:
+            raise ProducerError("Protected job response is oversized")
+        payload = json.loads(result.stdout)
+    except (OSError, subprocess.SubprocessError, ValueError) as exc:
+        raise ProducerError("Protected job identity cannot be verified") from exc
+    if not isinstance(payload, dict):
+        raise ProducerError("Protected job response is invalid")
+    return payload
+
+
+def protected_job_deadline(
+    environment: dict[str, str],
+    lookup: Callable[[str, str], dict] = _run_attempt_jobs,
+) -> datetime:
+    """Bind remaining budget to this exact GitHub job attempt's start time."""
+    run_id = environment.get("GITHUB_RUN_ID")
+    attempt = environment.get("GITHUB_RUN_ATTEMPT")
+    if (environment.get("GITHUB_JOB") != "producer"
+        or not isinstance(run_id, str)
+        or re.fullmatch(r"[1-9][0-9]{0,19}", run_id) is None
+        or not isinstance(attempt, str)
+        or re.fullmatch(r"[1-9][0-9]{0,9}", attempt) is None):
+        raise ProducerError("Protected job context is invalid")
+    payload = lookup(run_id, attempt)
+    jobs = payload.get("jobs") if isinstance(payload, dict) else None
+    if not isinstance(jobs, list) or payload.get("total_count") != 1 or len(jobs) != 1:
+        raise ProducerError("Protected job attempt is ambiguous")
+    job = jobs[0]
+    if (not isinstance(job, dict) or job.get("name") != "producer"
+        or job.get("workflow_name") != "Passport Supported Disposable Provisioning Producer"
+        or job.get("run_id") != int(run_id)
+        or job.get("run_attempt") != int(attempt)
+        or job.get("head_sha") != environment.get("GITHUB_SHA")
+        or job.get("status") != "in_progress"):
+        raise ProducerError("Protected job identity differs from the current run")
+    try:
+        started = datetime.fromisoformat(job["started_at"])
+    except (KeyError, TypeError, ValueError) as exc:
+        raise ProducerError("Protected job start time is invalid") from exc
+    if started.tzinfo is None:
+        raise ProducerError("Protected job start time is not timezone aware")
+    return started + JOB_TIMEOUT
 
 
 def _staged_environment(env_file: Path) -> dict[str, str]:
@@ -179,6 +233,7 @@ def rehearse_infrastructure(
     environment: dict[str, str], gateway_port: int, *,
     now: datetime | None = None,
     clock: Callable[[], datetime] | None = None,
+    deadline_lookup: Callable[[dict[str, str]], datetime] = protected_job_deadline,
     verify: Callable[..., dict] = verify_plan_release,
     preflight: Callable[..., dict] = verify_pre_mutation,
     inspect: Callable[[list[str]], str] | None = None,
@@ -189,8 +244,11 @@ def rehearse_infrastructure(
     read_clock = clock or (lambda: datetime.now(timezone.utc))
     current = now or read_clock()
     plan = verify(plan_path, manifest_path, plan_run_id, environment, now=current)
+    job_deadline = deadline_lookup(environment)
+    if job_deadline.tzinfo is None:
+        raise ProducerError("Protected job deadline is invalid")
     expires = datetime.fromisoformat(plan["expires_at"])
-    if expires - current < timedelta(minutes=30):
+    if expires - current < MIN_TEARDOWN_LEASE:
         raise ProducerError("Disposable plan has insufficient teardown lease")
     root, env_file = stage_disposable_inputs(plan, gateway_port, now=current)
     output_dir = root / "bootstrap-output"
@@ -205,8 +263,10 @@ def rehearse_infrastructure(
         _require_empty_project(plan["project"], inspector)
         compose = _compose_args(plan, env_file)
         admission = read_clock() if clock is not None or now is None else now
-        if admission.tzinfo is None or expires - admission < timedelta(minutes=30):
+        if admission.tzinfo is None or expires - admission < MIN_TEARDOWN_LEASE:
             raise ProducerError("Disposable plan has insufficient teardown lease")
+        if job_deadline - admission < MIN_JOB_BUDGET:
+            raise ProducerError("Protected job has insufficient teardown budget")
         output_dir.mkdir(mode=0o700)
         if output_dir.is_symlink() or output_dir.resolve() != output_dir:
             raise ProducerError("Disposable OpenBao output directory is invalid")
