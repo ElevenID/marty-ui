@@ -18,6 +18,7 @@ BASE = "marty-passport-acceptance-base-abcdef"
 SELFHOST = "marty-passport-acceptance-selfhost-abcdef"
 NAMESPACE = "marty-passport-acceptance-abcdef"
 CONTEXT = "marty-passport-acceptance-testxyz"
+RUN_ID = "123456"
 
 
 def manifest(tmp_path: Path) -> Path:
@@ -127,10 +128,14 @@ def test_live_compose_prerequisite_still_does_not_claim_routes_or_rollback(
 
 
 def kubernetes_runner(*, mixed_provider: bool = False,
-                      wrong_profile: bool = False,
-                      provider_enabled: bool = False,
-                      stale_pod_profile: bool = False,
-                      indirect_profile: bool = False):
+                       wrong_profile: bool = False,
+                       provider_enabled: bool = False,
+                       stale_pod_profile: bool = False,
+                       indirect_profile: bool = False,
+                       wrong_owner: bool = False,
+                       wrong_route: bool = False,
+                       wrong_endpoint: bool = False,
+                       wrong_source: bool = False):
     def container_for(service: str) -> dict:
         values = {flag: "true" for flag in gate.KUBERNETES_FLAGS[service]}
         if service == "gateway":
@@ -143,14 +148,59 @@ def kubernetes_runner(*, mixed_provider: bool = False,
                            "PERSONALIZATION_BUREAU_PROVIDER_PROFILE_ID":
                            "external-provider" if wrong_profile else
                            "passport-beta-bureau"})
+        if service == "passport-beta-bureau":
+            values.update({
+                "SIGNING_KEYS_INTERNAL_URL":
+                    "http://passport-callback-signer:8018/internal/documents",
+                "PASSPORT_BUREAU_CALLBACK_URL":
+                    "http://issuance-native:8005/v1/passport/webhooks/personalization",
+            })
         return {"image": REFERENCE,
                 "env": [{"name": name, "value": value}
                         for name, value in values.items()]}
+
+    def metadata_for(service: str, kind: str) -> dict:
+        labels = {"app": service,
+                  "com.marty.passport.acceptance.owner": "supported-consumer",
+                  "com.marty.passport.acceptance.run-id": RUN_ID,
+                  "com.marty.passport.acceptance.source-commit": COMMIT}
+        name = (service + "-rs" if kind == "ReplicaSet" else service)
+        uid = service + "-" + kind.lower() + "-uid"
+        metadata = {"name": name, "namespace": NAMESPACE,
+                    "uid": uid, "labels": labels}
+        if wrong_source and kind == "Pod" and service == "passport-beta-bureau":
+            metadata["labels"]["com.marty.passport.acceptance.source-commit"] = "f" * 40
+        if kind == "ReplicaSet":
+            metadata["ownerReferences"] = [{
+                "kind": "Deployment", "name": service,
+                "uid": service + "-deployment-uid", "controller": True}]
+        elif kind == "Pod":
+            metadata["labels"]["pod-template-hash"] = "owned-hash"
+            metadata["ownerReferences"] = [{
+                "kind": "ReplicaSet", "name": service + "-rs",
+                "uid": ("foreign" if wrong_owner else service + "-replicaset-uid"),
+                "controller": True}]
+        elif kind == "EndpointSlice":
+            metadata["labels"]["kubernetes.io/service-name"] = service
+            metadata["ownerReferences"] = [{
+                "kind": "Service", "name": service,
+                "uid": service + "-service-uid", "controller": True}]
+        return metadata
 
     def run(args: list[str]) -> str:
         assert args[1:5] == ["--context", CONTEXT, "-n", NAMESPACE]
         if args[6] in ("deployment", "service") and args[7] == "passport-provider-ingress":
             return json.dumps({"kind": args[6]}) if mixed_provider else ""
+        if args[6] == "replicasets":
+            service = args[8].removeprefix("app=")
+            selector = {"app": service,
+                        "com.marty.passport.acceptance.owner": "supported-consumer",
+                        "com.marty.passport.acceptance.run-id": RUN_ID,
+                        "pod-template-hash": "owned-hash"}
+            return json.dumps({"items": [{
+                "metadata": metadata_for(service, "ReplicaSet"),
+                "spec": {"selector": {"matchLabels": selector}},
+            }]})
         if args[6] == "pods":
             service = args[8].removeprefix("app=")
             if service == "passport-provider-ingress":
@@ -160,12 +210,38 @@ def kubernetes_runner(*, mixed_provider: bool = False,
                 next(entry for entry in pod_container["env"] if entry["name"] ==
                      "PERSONALIZATION_BUREAU_PROVIDER_PROFILE_ID")["value"] = "external-provider"
             return json.dumps({"items": [{
-                "metadata": {"namespace": NAMESPACE, "uid": service + "-pod"},
+                "metadata": metadata_for(service, "Pod"),
                 "spec": {"containers": [pod_container]},
                 "status": {"phase": "Running", "containerStatuses": [{
                     "ready": True, "imageID": "docker-pullable://" + REFERENCE,
                     "containerID": "containerd://" + service + "-container",
                 }]},
+            }]})
+        if args[6] == "service":
+            service = args[7]
+            port = 8020 if service == "passport-beta-bureau" else 8018
+            selector = {"app": service,
+                        "com.marty.passport.acceptance.owner": "supported-consumer",
+                        "com.marty.passport.acceptance.run-id": RUN_ID}
+            if wrong_route and service == "passport-beta-bureau":
+                selector["com.marty.passport.acceptance.run-id"] = "999999"
+            return json.dumps({
+                "metadata": metadata_for(service, "Service"),
+                "spec": {"type": "ClusterIP", "selector": selector,
+                         "ports": [{"name": "http", "port": port,
+                                    "protocol": "TCP", "targetPort": port}]},
+            })
+        if args[6] == "endpointslices":
+            service = args[8].removeprefix("kubernetes.io/service-name=")
+            port = 8020 if service == "passport-beta-bureau" else 8018
+            return json.dumps({"items": [{
+                "metadata": metadata_for(service, "EndpointSlice"),
+                "ports": [{"name": "http", "port": port, "protocol": "TCP"}],
+                "endpoints": [{"conditions": {"ready": True},
+                               "targetRef": {"kind": "Pod", "namespace": NAMESPACE,
+                                             "uid": ("foreign" if wrong_endpoint
+                                                     and service == "passport-beta-bureau"
+                                                     else service + "-pod-uid")}}],
             }]})
         service = args[7]
         container = container_for(service)
@@ -176,37 +252,61 @@ def kubernetes_runner(*, mixed_provider: bool = False,
             entry["valueFrom"] = {"configMapKeyRef": {
                 "name": "marty-config", "key": "PERSONALIZATION_BUREAU_PROVIDER_PROFILE_ID"}}
         return json.dumps({
-            "metadata": {"namespace": NAMESPACE, "uid": service + "-uid"},
+            "metadata": metadata_for(service, "Deployment"),
             "status": {"readyReplicas": 1},
-            "spec": {"template": {"spec": {"containers": [container]}}},
+            "spec": {"selector": {"matchLabels": {
+                "app": service,
+                "com.marty.passport.acceptance.owner": "supported-consumer",
+                "com.marty.passport.acceptance.run-id": RUN_ID}},
+                     "template": {"metadata": {"labels": metadata_for(
+                         service, "Deployment")["labels"]},
+                                  "spec": {"containers": [container]}}},
         })
     return run
 
 
 def test_kubernetes_inspection_is_bounded_to_disposable_namespace() -> None:
-    observed = gate.observe_kubernetes(NAMESPACE, CONTEXT, REFERENCE,
+    observed = gate.observe_kubernetes(NAMESPACE, CONTEXT, REFERENCE, COMMIT,
                                        kubernetes_runner())
     assert set(observed) == set(gate.KUBERNETES_SERVICES)
+    assert observed["passport-beta-bureau"]["service_uid"] == (
+        "passport-beta-bureau-service-uid")
+    assert observed["passport-callback-signer"]["replicaset_uid"] == (
+        "passport-callback-signer-replicaset-uid")
+
+
+@pytest.mark.parametrize("defect,pattern", [
+    ("wrong_owner", "Pod is not owned"),
+    ("wrong_route", "Service route is outside"),
+    ("wrong_endpoint", "Service does not route"),
+    ("wrong_source", "owner labels are invalid"),
+])
+def test_kubernetes_rejects_foreign_pod_or_routing(
+    defect: str, pattern: str,
+) -> None:
+    with pytest.raises(gate.SupportedEvidenceError, match=pattern):
+        gate.observe_kubernetes(NAMESPACE, CONTEXT, REFERENCE, COMMIT,
+                                kubernetes_runner(**{defect: True}))
 
 
 def test_kubernetes_mixed_provider_is_rejected() -> None:
     with pytest.raises(gate.SupportedEvidenceError, match="physical provider ingress"):
-        gate.observe_kubernetes(NAMESPACE, CONTEXT, REFERENCE,
+        gate.observe_kubernetes(NAMESPACE, CONTEXT, REFERENCE, COMMIT,
                                 kubernetes_runner(mixed_provider=True))
     with pytest.raises(gate.SupportedEvidenceError, match="bound to the Marty simulator"):
-        gate.observe_kubernetes(NAMESPACE, CONTEXT, REFERENCE,
+        gate.observe_kubernetes(NAMESPACE, CONTEXT, REFERENCE, COMMIT,
                                 kubernetes_runner(wrong_profile=True))
     with pytest.raises(gate.SupportedEvidenceError, match="bound to the Marty simulator"):
-        gate.observe_kubernetes(NAMESPACE, CONTEXT, REFERENCE,
+        gate.observe_kubernetes(NAMESPACE, CONTEXT, REFERENCE, COMMIT,
                                 kubernetes_runner(provider_enabled=True))
     with pytest.raises(gate.SupportedEvidenceError, match="requires one literal"):
-        gate.observe_kubernetes(NAMESPACE, CONTEXT, REFERENCE,
+        gate.observe_kubernetes(NAMESPACE, CONTEXT, REFERENCE, COMMIT,
                                 kubernetes_runner(indirect_profile=True))
 
 
 def test_kubernetes_rejects_pod_with_stale_provider_profile() -> None:
     with pytest.raises(gate.SupportedEvidenceError, match="Pod is not bound"):
-        gate.observe_kubernetes(NAMESPACE, CONTEXT, REFERENCE,
+        gate.observe_kubernetes(NAMESPACE, CONTEXT, REFERENCE, COMMIT,
                                 kubernetes_runner(stale_pod_profile=True))
 
 
