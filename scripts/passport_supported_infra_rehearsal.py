@@ -41,6 +41,10 @@ TOKEN = re.compile(r"[!-~]{8,512}\Z")
 MIN_TEARDOWN_LEASE = timedelta(minutes=90)
 MIN_JOB_BUDGET = timedelta(minutes=45)
 JOB_TIMEOUT = timedelta(minutes=60)
+JOB_IDENTITIES = frozenset({
+    ("infra", "Passport Supported Disposable Infra Rehearsal"),
+    ("certificates", "Passport Supported Disposable Certificate Rehearsal"),
+})
 
 
 def _run(args: list[str], environment: dict[str, str], timeout: int) -> bool:
@@ -92,11 +96,14 @@ def _run_attempt_jobs(run_id: str, attempt: str) -> dict:
 def protected_job_deadline(
     environment: dict[str, str],
     lookup: Callable[[str, str], dict] = _run_attempt_jobs,
+    *, job_name: str = "infra",
+    workflow_name: str = "Passport Supported Disposable Infra Rehearsal",
 ) -> datetime:
     """Bind remaining budget to this exact GitHub job attempt's start time."""
     run_id = environment.get("GITHUB_RUN_ID")
     attempt = environment.get("GITHUB_RUN_ATTEMPT")
-    if (environment.get("GITHUB_JOB") != "infra"
+    if ((job_name, workflow_name) not in JOB_IDENTITIES
+        or environment.get("GITHUB_JOB") != job_name
         or not isinstance(run_id, str)
         or re.fullmatch(r"[1-9][0-9]{0,19}", run_id) is None
         or not isinstance(attempt, str)
@@ -107,8 +114,8 @@ def protected_job_deadline(
     if not isinstance(jobs, list) or payload.get("total_count") != 1 or len(jobs) != 1:
         raise ProducerError("Protected job attempt is ambiguous")
     job = jobs[0]
-    if (not isinstance(job, dict) or job.get("name") != "infra"
-        or job.get("workflow_name") != "Passport Supported Disposable Infra Rehearsal"
+    if (not isinstance(job, dict) or job.get("name") != job_name
+        or job.get("workflow_name") != workflow_name
         or job.get("run_id") != int(run_id)
         or job.get("run_attempt") != int(attempt)
         or job.get("head_sha") != environment.get("GITHUB_SHA")
@@ -241,6 +248,17 @@ def _remove_bootstrap_output(output_dir: Path) -> None:
     output_dir.rmdir()
 
 
+def _prepare_bootstrap_output(output_dir: Path) -> None:
+    output_dir.mkdir(mode=0o700)
+    if output_dir.is_symlink() or output_dir.resolve() != output_dir:
+        raise ProducerError("Disposable OpenBao output directory is invalid")
+    if os.name == "posix" and (
+        output_dir.stat().st_uid != os.getuid()
+        or stat.S_IMODE(output_dir.stat().st_mode) != 0o700
+    ):
+        raise ProducerError("Disposable OpenBao output directory is not private")
+
+
 def rehearse_infrastructure(
     plan_path: Path, manifest_path: Path, plan_run_id: str,
     environment: dict[str, str], gateway_port: int, *,
@@ -282,14 +300,7 @@ def rehearse_infrastructure(
             raise ProducerError("Disposable plan has insufficient teardown lease")
         if job_deadline - admission < MIN_JOB_BUDGET:
             raise ProducerError("Protected job has insufficient teardown budget")
-        output_dir.mkdir(mode=0o700)
-        if output_dir.is_symlink() or output_dir.resolve() != output_dir:
-            raise ProducerError("Disposable OpenBao output directory is invalid")
-        if os.name == "posix" and (
-            output_dir.stat().st_uid != os.getuid()
-            or stat.S_IMODE(output_dir.stat().st_mode) != 0o700
-        ):
-            raise ProducerError("Disposable OpenBao output directory is not private")
+        _prepare_bootstrap_output(output_dir)
         mutation_started = True
         if not run([*compose, "up", "-d", "--no-deps", "--wait",
                     "--wait-timeout", "120", *INFRA], staged_env, 300):

@@ -57,6 +57,10 @@ INFRA_WORKFLOW_REF = (
     "ElevenID/marty-ui/.github/workflows/"
     "passport-supported-infra-rehearsal.yml@refs/heads/main"
 )
+CERTIFICATE_WORKFLOW_REF = (
+    "ElevenID/marty-ui/.github/workflows/"
+    "passport-supported-certificate-rehearsal.yml@refs/heads/main"
+)
 RESOURCE_ID = re.compile(r"[0-9a-f]{64}\Z")
 TEST_KEY = re.compile(rb"mk_test_[A-Za-z0-9]{43}\n\Z")
 KEY_COMMAND = "/usr/local/bin/marty-passport-acceptance-api-key"
@@ -91,7 +95,8 @@ def require(ok: bool, message: str) -> None:
 
 def protected_context(environment: dict[str, str], *,
                       workflow_ref: str = WORKFLOW_REF) -> tuple[str, str]:
-    require(workflow_ref in {WORKFLOW_REF, INFRA_WORKFLOW_REF},
+    require(workflow_ref in {WORKFLOW_REF, INFRA_WORKFLOW_REF,
+                             CERTIFICATE_WORKFLOW_REF},
             "Protected producer workflow is not allowed")
     require(environment.get("GITHUB_ACTIONS") == "true"
             and environment.get("GITHUB_REPOSITORY") == "ElevenID/marty-ui"
