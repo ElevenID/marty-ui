@@ -8,14 +8,17 @@ KMS, issuer profiles, and simulator secret files are governed and available.
 from __future__ import annotations
 
 import argparse
+import base64
 from datetime import datetime, timedelta, timezone
 import hashlib
 import json
 import os
 from pathlib import Path
 import re
+import secrets
 import stat
 import subprocess
+import tempfile
 from typing import Callable
 
 if __package__:
@@ -50,6 +53,12 @@ RESOURCE_ID = re.compile(r"[0-9a-f]{64}\Z")
 TEST_KEY = re.compile(rb"mk_test_[A-Za-z0-9]{43}\n\Z")
 KEY_COMMAND = "/usr/local/bin/marty-passport-acceptance-api-key"
 CONTAINER_KEY = "/app/data/passport-acceptance-api-key"
+STAGED_SECRETS = frozenset({
+    "bao_root_token", "marty_db_password", "signing_keys_internal_api_key",
+    "issuance_api_key", "callback_signer_api_key", "grpc_service_token",
+    "bureau_database_url", "token_hmac_key", "integration_secret_master_key",
+})
+BOOTSTRAPPED_SECRETS = frozenset({"bao_token", "callback_signer_bao_token"})
 
 
 class ProducerError(ValueError):
@@ -144,6 +153,151 @@ def verify_pre_mutation(
             and report.get("model", {}).get("model_safe") is True,
             "Disposable model preflight failed")
     return plan
+
+
+def stage_disposable_inputs(
+    plan: dict, gateway_port: int, *, now: datetime | None = None,
+) -> tuple[Path, Path]:
+    """Create fresh, project-owned inputs before the isolated KMS bootstrap.
+
+    The caller must first verify the protected plan and release. No Docker
+    resource is created here. OpenBao service tokens are intentionally absent
+    until the project-scoped bootstrap mints them.
+    """
+    project = plan.get("project")
+    match = PROJECT.fullmatch(project) if isinstance(project, str) else None
+    require(match is not None and match.group(1) == plan.get("surface"),
+            "Disposable input project is invalid")
+    require(type(gateway_port) is int and 1024 <= gateway_port <= 65535,
+            "Disposable Gateway port is invalid")
+    require(plan.get("schema") == "marty.passport-supported-provisioning-plan/v1"
+            and plan.get("status") == "blocked"
+            and plan.get("surface") in {"base", "selfhost"}
+            and plan.get("run_id") is not None
+            and RUN_ID.fullmatch(str(plan["run_id"])) is not None
+            and isinstance(plan.get("source_commit"), str)
+            and COMMIT.fullmatch(plan["source_commit"]) is not None,
+            "Disposable input plan is invalid")
+    labels = plan.get("owner_labels")
+    require(isinstance(labels, dict)
+            and labels == {
+                "com.marty.passport.acceptance.owner": "supported-consumer",
+                "com.marty.passport.acceptance.run-id": str(plan["run_id"]),
+                "com.marty.passport.acceptance.source-commit": plan["source_commit"],
+                "com.marty.passport.acceptance.services-image": plan.get("services_reference"),
+            }, "Disposable input owner labels are invalid")
+    try:
+        created = datetime.fromisoformat(plan["created_at"])
+        expires = datetime.fromisoformat(plan["expires_at"])
+    except (KeyError, TypeError, ValueError) as exc:
+        raise ProducerError("Disposable input lease is invalid") from exc
+    current = now or datetime.now(timezone.utc)
+    require(current.tzinfo is not None and created.tzinfo is not None
+            and expires.tzinfo is not None
+            and created <= current < expires <= created + timedelta(hours=2),
+            "Disposable input lease is invalid")
+    images = plan.get("infra_images")
+    require(isinstance(images, dict) and set(images) == {"postgres", "redis", "openbao"},
+            "Disposable infrastructure image set is invalid")
+    references = {
+        "MARTY_SERVICES_IMAGE": plan.get("services_reference"),
+        "PASSPORT_ACCEPTANCE_MIGRATIONS_IMAGE": plan.get("migrations_reference"),
+        "PASSPORT_ACCEPTANCE_LEGACY_IMAGE": plan.get("legacy_reference"),
+        **{f"PASSPORT_ACCEPTANCE_{name.upper()}_IMAGE": image
+           for name, image in images.items()},
+    }
+    require(all(isinstance(value, str)
+                and re.fullmatch(r"[^\s]+@sha256:[0-9a-f]{64}", value) is not None
+                for value in references.values()),
+            "Disposable image reference is invalid")
+    expires_at = plan.get("expires_at")
+    require(isinstance(expires_at, str) and "\r" not in expires_at
+            and "\n" not in expires_at,
+            "Disposable expiry is invalid")
+
+    root = Path(tempfile.gettempdir()) / project
+    require(root.is_absolute() and root.parent.resolve() == root.parent,
+            "Disposable temporary root is invalid")
+    root.mkdir(mode=0o700)
+    try:
+        secret_dir = root / "secrets"
+        secret_dir.mkdir(mode=0o700)
+        require(root.resolve() == root and secret_dir.resolve() == secret_dir,
+                "Disposable secret root is not isolated")
+        if os.name == "posix":
+            require(all(path.stat().st_uid == os.getuid()
+                        and stat.S_IMODE(path.stat().st_mode) == 0o700
+                        for path in (root, secret_dir)),
+                    "Disposable secret directory is not private")
+
+        database_password = secrets.token_hex(24)
+        values = {
+            "bao_root_token": secrets.token_hex(32),
+            "marty_db_password": database_password,
+            "signing_keys_internal_api_key": secrets.token_hex(32),
+            "issuance_api_key": secrets.token_hex(32),
+            "callback_signer_api_key": secrets.token_hex(32),
+            "grpc_service_token": secrets.token_hex(32),
+            "bureau_database_url": f"postgresql://marty:{database_password}@postgres:5432/marty",
+            "token_hmac_key": secrets.token_hex(32),
+            "integration_secret_master_key": base64.b64encode(secrets.token_bytes(32)).decode("ascii"),
+        }
+        require(set(values) == STAGED_SECRETS, "Disposable secret set is incomplete")
+        env = {
+            **references,
+            "PASSPORT_ACCEPTANCE_PROJECT": project,
+            "PASSPORT_ACCEPTANCE_PLAN_RUN_ID": str(plan["run_id"]),
+            "PASSPORT_ACCEPTANCE_SOURCE_COMMIT": plan["source_commit"],
+            "PASSPORT_ACCEPTANCE_EXPIRES_AT": expires_at,
+            "PASSPORT_ACCEPTANCE_SECRET_DIR": secret_dir.as_posix(),
+            "PASSPORT_ACCEPTANCE_GATEWAY_PORT": str(gateway_port),
+            "PASSPORT_ACCEPTANCE_ADMIN_EMAIL": "disposable-passport@acceptance.invalid",
+            "PASSPORT_ACCEPTANCE_DATABASE_URL": (
+                f"postgresql+asyncpg://marty:{database_password}@postgres:5432/marty"
+            ),
+        }
+        require(all("\n" not in value and "\r" not in value for value in env.values()),
+                "Disposable environment input is invalid")
+        for name, value in values.items():
+            _write_private(secret_dir / name, value.encode("ascii"))
+        require(all(not (secret_dir / name).exists() for name in BOOTSTRAPPED_SECRETS),
+                "Disposable OpenBao tokens were prepopulated")
+        env_file = root / "acceptance.env"
+        _write_private(env_file, "".join(
+            f"{key}={value}\n" for key, value in sorted(env.items())
+        ).encode("ascii"))
+        return root, env_file
+    except BaseException:
+        _remove_staged_inputs(root)
+        raise
+
+
+def _remove_staged_inputs(root: Path) -> None:
+    """Erase only files under the root this staging call just created."""
+    require(root.resolve() == root and not root.is_symlink(),
+            "Disposable input cleanup root changed identity")
+    secret_dir = root / "secrets"
+    if secret_dir.exists():
+        require(secret_dir.resolve() == secret_dir and not secret_dir.is_symlink(),
+                "Disposable input cleanup secret directory changed identity")
+        for name in STAGED_SECRETS:
+            (secret_dir / name).unlink(missing_ok=True)
+        secret_dir.rmdir()
+    (root / "acceptance.env").unlink(missing_ok=True)
+    root.rmdir()
+
+
+def _write_private(path: Path, value: bytes) -> None:
+    flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_NOFOLLOW", 0)
+    descriptor = os.open(path, flags, 0o600)
+    with os.fdopen(descriptor, "wb") as output:
+        output.write(value)
+        output.flush()
+        os.fsync(output.fileno())
+    if os.name == "posix":
+        require(path.stat().st_uid == os.getuid()
+                and stat.S_IMODE(path.stat().st_mode) == 0o600,
+                "Disposable secret file is not private")
 
 
 def collect_record(

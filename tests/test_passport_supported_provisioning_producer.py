@@ -3,21 +3,29 @@
 from __future__ import annotations
 
 from copy import deepcopy
+import base64
 from datetime import datetime, timedelta, timezone
 import hashlib
 import json
 import os
 from pathlib import Path
+import shutil
 import stat
 import subprocess
+import tempfile
+import uuid
 
 import pytest
 import yaml
 
-from scripts.check_passport_supported_rollback_model import DISPOSABLE_SERVICES
+from scripts import passport_supported_provisioning_producer as producer
+from scripts.check_passport_supported_rollback_model import (
+    DISPOSABLE_SERVICES, render_model, validate_planned_model,
+)
+from scripts.passport_supported_infra_images import qualified_images
 from scripts.passport_supported_provisioning_producer import (
     ProducerError, WORKFLOW_REF, collect_record, destroy_disposable_project,
-    issue_disposable_api_key,
+    issue_disposable_api_key, stage_disposable_inputs,
     verify_plan_release,
 )
 
@@ -76,6 +84,141 @@ def verify(path: Path, manifest: Path, plan: dict, **kwargs) -> dict:
         checkout=kwargs.pop("checkout", lambda: (SOURCE, False)),
         now=kwargs.pop("now", NOW), **kwargs,
     )
+
+
+def input_plan() -> dict:
+    project = "marty-passport-acceptance-base-" + uuid.uuid4().hex[:12]
+    return {
+        "schema": "marty.passport-supported-provisioning-plan/v1",
+        "status": "blocked", "surface": "base", "project": project,
+        "run_id": "123456", "source_commit": SOURCE,
+        "created_at": (NOW - timedelta(minutes=5)).isoformat(),
+        "expires_at": (NOW + timedelta(minutes=55)).isoformat(),
+        "services_reference": SERVICES,
+        "migrations_reference": "ghcr.io/elevenid/marty-ui-oss/migrations@sha256:" + "c" * 64,
+        "legacy_reference": "ghcr.io/elevenid/marty-credentials/issuance@sha256:" + "d" * 64,
+        "infra_images": qualified_images(verify_registry=False),
+        "owner_labels": LABELS,
+    }
+
+
+def test_disposable_inputs_are_fresh_private_and_plan_bound() -> None:
+    plan = input_plan()
+    project = plan["project"]
+    root = Path(tempfile.gettempdir()) / project
+    try:
+        actual_root, env_file = stage_disposable_inputs(plan, 29876, now=NOW)
+        assert actual_root == root
+        assert env_file == root / "acceptance.env"
+        secret_dir = root / "secrets"
+        names = {item.name for item in secret_dir.iterdir()}
+        assert names == {
+            "bao_root_token", "marty_db_password", "signing_keys_internal_api_key",
+            "issuance_api_key", "callback_signer_api_key", "grpc_service_token",
+            "bureau_database_url", "token_hmac_key", "integration_secret_master_key",
+        }
+        assert len((secret_dir / "bao_root_token").read_text(encoding="ascii")) == 64
+        password = (secret_dir / "marty_db_password").read_text(encoding="ascii")
+        assert (secret_dir / "bureau_database_url").read_text(encoding="ascii") == (
+            f"postgresql://marty:{password}@postgres:5432/marty"
+        )
+        assert len(base64.b64decode(
+            (secret_dir / "integration_secret_master_key").read_text(encoding="ascii"),
+            validate=True,
+        )) == 32
+        env = dict(line.split("=", 1) for line in env_file.read_text(
+            encoding="ascii").splitlines())
+        assert env["PASSPORT_ACCEPTANCE_PROJECT"] == project
+        assert env["PASSPORT_ACCEPTANCE_GATEWAY_PORT"] == "29876"
+        assert env["PASSPORT_ACCEPTANCE_EXPIRES_AT"] == plan["expires_at"]
+        assert env["PASSPORT_ACCEPTANCE_SECRET_DIR"] == secret_dir.as_posix()
+        assert env["PASSPORT_ACCEPTANCE_DATABASE_URL"] == (
+            f"postgresql+asyncpg://marty:{password}@postgres:5432/marty"
+        )
+        assert env["MARTY_SERVICES_IMAGE"] == SERVICES
+        if os.name == "posix":
+            assert stat.S_IMODE(root.stat().st_mode) == 0o700
+            assert stat.S_IMODE(secret_dir.stat().st_mode) == 0o700
+            assert all(stat.S_IMODE(path.stat().st_mode) == 0o600
+                       for path in (*secret_dir.iterdir(), env_file))
+        with pytest.raises(FileExistsError):
+            stage_disposable_inputs(plan, 29876, now=NOW)
+    finally:
+        secret_dir = root / "secrets"
+        if secret_dir.is_dir():
+            for item in secret_dir.iterdir():
+                item.unlink()
+            secret_dir.rmdir()
+        (root / "acceptance.env").unlink(missing_ok=True)
+        if root.is_dir():
+            root.rmdir()
+
+
+def test_disposable_input_guard_rejects_unbound_project_and_images() -> None:
+    plan = input_plan()
+    plan["project"] = "marty-selfhost-prod"
+    with pytest.raises(ProducerError, match="project"):
+        stage_disposable_inputs(plan, 29876)
+    plan["project"] = "marty-passport-acceptance-base-" + uuid.uuid4().hex[:12]
+    with pytest.raises(ProducerError, match="Gateway port"):
+        stage_disposable_inputs(plan, 80)
+    assert not (Path(tempfile.gettempdir()) / plan["project"]).exists()
+
+
+def test_disposable_input_write_failure_erases_only_its_new_root(monkeypatch) -> None:
+    plan = input_plan()
+    root = Path(tempfile.gettempdir()) / plan["project"]
+    actual_write = producer._write_private
+    writes = 0
+
+    def fail_after_open(path: Path, value: bytes) -> None:
+        nonlocal writes
+        writes += 1
+        if writes == 4:
+            descriptor = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+            os.close(descriptor)
+            raise OSError("synthetic partial secret write")
+        actual_write(path, value)
+
+    monkeypatch.setattr(producer, "_write_private", fail_after_open)
+    with pytest.raises(OSError, match="synthetic partial secret write"):
+        stage_disposable_inputs(plan, 29876, now=NOW)
+    assert not root.exists()
+
+
+def test_disposable_inputs_reject_surface_and_label_mismatch_before_creation() -> None:
+    plan = input_plan()
+    root = Path(tempfile.gettempdir()) / plan["project"]
+    plan["surface"] = "selfhost"
+    with pytest.raises(ProducerError, match="project"):
+        stage_disposable_inputs(plan, 29876, now=NOW)
+    plan["surface"] = "base"
+    plan["owner_labels"] = {**LABELS, "com.marty.passport.acceptance.run-id": "other"}
+    with pytest.raises(ProducerError, match="owner labels"):
+        stage_disposable_inputs(plan, 29876, now=NOW)
+    assert not root.exists()
+
+
+@pytest.mark.skipif(shutil.which("docker") is None, reason="Docker Compose CLI unavailable")
+def test_staged_inputs_render_the_exact_disposable_compose_plan() -> None:
+    plan = input_plan()
+    root = Path(tempfile.gettempdir()) / plan["project"]
+    try:
+        _, env_file = stage_disposable_inputs(plan, 29876, now=NOW)
+        model = render_model(
+            "base", plan["project"], env_file, root, plan["services_reference"],
+            owner_labels=plan["owner_labels"], plan_expires_at=plan["expires_at"],
+        )
+        assert validate_planned_model(model, plan, root)["model_safe"] is True
+    finally:
+        secret_dir = root / "secrets"
+        if secret_dir.is_dir():
+            for item in secret_dir.iterdir():
+                item.unlink()
+            secret_dir.rmdir()
+        (root / "acceptance.env").unlink(missing_ok=True)
+        if root.is_dir():
+            root.rmdir()
 
 
 def test_protected_plan_release_gate_accepts_only_exact_short_lease(
