@@ -110,6 +110,7 @@ pub struct GatewayConfig {
     pub csca_issue_gateway_key: Option<String>,
     pub issuance_api_key: String,
     pub passport_native_gateway_enabled: bool,
+    pub passport_python_rollback_gateway_enabled: bool,
     pub passport_provider_ingress_gateway_enabled: bool,
     pub passport_tenant_keys: Option<PassportTenantCredentialSource>,
     pub redis_url: Option<String>,
@@ -160,6 +161,10 @@ impl fmt::Debug for GatewayConfig {
                 &self.passport_native_gateway_enabled,
             )
             .field(
+                "passport_python_rollback_gateway_enabled",
+                &self.passport_python_rollback_gateway_enabled,
+            )
+            .field(
                 "passport_provider_ingress_gateway_enabled",
                 &self.passport_provider_ingress_gateway_enabled,
             )
@@ -206,8 +211,17 @@ impl GatewayConfig {
         );
         let passport_native_gateway_enabled =
             boolean(values, "PASSPORT_NATIVE_GATEWAY_ENABLED", false)?;
+        let passport_python_rollback_gateway_enabled =
+            boolean(values, "PASSPORT_PYTHON_ROLLBACK_GATEWAY_ENABLED", false)?;
         let passport_provider_ingress_gateway_enabled =
             boolean(values, "PASSPORT_PROVIDER_INGRESS_GATEWAY_ENABLED", false)?;
+        if passport_python_rollback_gateway_enabled
+            && (passport_native_gateway_enabled || passport_provider_ingress_gateway_enabled)
+        {
+            return Err(error(
+                "Python passport rollback cannot combine with native or provider ingress routing",
+            ));
+        }
         let port = parse(values, "GATEWAY_PORT", 8000_u16)?;
         let mut service_urls = SERVICE_URLS
             .iter()
@@ -367,9 +381,11 @@ impl GatewayConfig {
         } else {
             passport_tenant_keys
         };
-        if passport_native_gateway_enabled && passport_tenant_keys.is_none() {
+        if (passport_native_gateway_enabled || passport_python_rollback_gateway_enabled)
+            && passport_tenant_keys.is_none()
+        {
             return Err(error(
-                "PASSPORT_TENANT_API_KEYS is required when PASSPORT_NATIVE_GATEWAY_ENABLED is true",
+                "PASSPORT_TENANT_API_KEYS is required for guarded passport Gateway routing",
             ));
         }
 
@@ -473,6 +489,7 @@ impl GatewayConfig {
             csca_issue_gateway_key,
             issuance_api_key,
             passport_native_gateway_enabled,
+            passport_python_rollback_gateway_enabled,
             passport_provider_ingress_gateway_enabled,
             passport_tenant_keys,
             redis_url,
@@ -790,6 +807,24 @@ mod tests {
                 .passport_native_gateway_enabled
         );
         values.insert("PASSPORT_NATIVE_GATEWAY_ENABLED".into(), "invalid".into());
+        assert!(GatewayConfig::from_values(&values).is_err());
+    }
+
+    #[test]
+    fn python_passport_rollback_requires_legacy_owner_and_tenant_authentication() {
+        let mut values = BTreeMap::from([(
+            "PASSPORT_PYTHON_ROLLBACK_GATEWAY_ENABLED".into(),
+            "true".into(),
+        )]);
+        assert!(GatewayConfig::from_values(&values).is_err());
+        values.insert(
+            "PASSPORT_TENANT_API_KEYS".into(),
+            r#"{"org-a":"passport-gateway-tenant-key-00000001"}"#.into(),
+        );
+        let config = GatewayConfig::from_values(&values).unwrap();
+        assert!(config.passport_python_rollback_gateway_enabled);
+        assert!(!config.passport_native_gateway_enabled);
+        values.insert("PASSPORT_NATIVE_GATEWAY_ENABLED".into(), "true".into());
         assert!(GatewayConfig::from_values(&values).is_err());
     }
 

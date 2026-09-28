@@ -186,7 +186,7 @@ def test_real_compose_render_is_safe_but_not_accepted(
 
 @pytest.mark.skipif(shutil.which("docker") is None, reason="Docker Compose CLI unavailable")
 @pytest.mark.parametrize("surface", ["base", "selfhost"])
-def test_python_owner_phase_changes_only_two_frozen_selectors(
+def test_python_owner_phase_changes_only_owner_selectors_and_preserves_tenant_guard(
     tmp_path: Path, surface: str,
 ) -> None:
     env_file = inputs(tmp_path)
@@ -196,13 +196,14 @@ def test_python_owner_phase_changes_only_two_frozen_selectors(
                           phase="python")
     assert validate_model(python, project, SERVICES, tmp_path)["rollback_accepted"] is False
     differences = {
-        (service, key, rust["services"][service]["environment"][key], value)
+        (service, key, rust["services"][service]["environment"].get(key), value)
         for service, item in python["services"].items()
         for key, value in item.get("environment", {}).items()
         if value != rust["services"][service].get("environment", {}).get(key)
     }
     assert differences == {
         ("gateway", "PASSPORT_NATIVE_GATEWAY_ENABLED", "true", "false"),
+        ("gateway", "PASSPORT_PYTHON_ROLLBACK_GATEWAY_ENABLED", None, "true"),
         ("flow", "PASSPORT_NATIVE_FLOW_ENABLED", "true", "false"),
     }
     assert set(rust["services"]) == set(python["services"])

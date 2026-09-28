@@ -99,6 +99,7 @@ pub struct GatewayRuntimeState {
     pub csca_issue_gateway_key: Option<String>,
     pub issuance_service_api_key: String,
     pub passport_native_gateway_enabled: bool,
+    pub passport_python_rollback_gateway_enabled: bool,
     pub passport_tenant_keys: Option<PassportTenantCredentialSource>,
     pub service_token: Option<String>,
     pub release_identity: ReleaseIdentity,
@@ -210,6 +211,7 @@ impl GatewayRuntimeState {
             csca_issue_gateway_key: None,
             issuance_service_api_key,
             passport_native_gateway_enabled: false,
+            passport_python_rollback_gateway_enabled: false,
             passport_tenant_keys: None,
             service_token: None,
             release_identity,
@@ -275,6 +277,20 @@ impl GatewayRuntimeState {
         }
         self.passport_native_gateway_enabled = enabled;
         self.passport_tenant_keys = tenant_keys;
+        Ok(self)
+    }
+
+    pub fn with_passport_python_rollback_gateway(
+        mut self,
+        enabled: bool,
+    ) -> Result<Self, mmf_platform::PlatformError> {
+        if enabled && (self.passport_native_gateway_enabled || self.passport_tenant_keys.is_none())
+        {
+            return Err(mmf_platform::PlatformError::InvalidConfiguration(
+                "Python passport rollback requires the legacy owner and tenant keys".into(),
+            ));
+        }
+        self.passport_python_rollback_gateway_enabled = enabled;
         Ok(self)
     }
 }
@@ -570,7 +586,7 @@ async fn tenant_authorization_middleware(
     }
     let identity = parts.extensions.get::<GatewayIdentity>().cloned();
     if let Some(method) = http_method(parts.method.as_str()).filter(|method| {
-        state.passport_native_gateway_enabled
+        (state.passport_native_gateway_enabled || state.passport_python_rollback_gateway_enabled)
             && issuance_native::is_passport_public_http(*method, parts.uri.path())
     }) {
         let outcome = authorize_native_passport_tenant(
@@ -1009,9 +1025,10 @@ async fn proxy_handler(
         }
     };
     let public_path = parts.uri.path().to_owned();
-    let native_passport_public = state.passport_native_gateway_enabled
+    let guarded_passport_public = (state.passport_native_gateway_enabled
+        || state.passport_python_rollback_gateway_enabled)
         && issuance_native::is_passport_public_http(method, &public_path);
-    if native_passport_public && passport_auth.is_none() {
+    if guarded_passport_public && passport_auth.is_none() {
         return detail_response(403, "Passport tenant authorization is required");
     }
     if issuance_native::is_canvas_mirror_public_batch(parts.method.as_str(), &public_path)
@@ -1041,7 +1058,7 @@ async fn proxy_handler(
     let mut gateway_request = GatewayRequest::new(method, &upstream_path, now_ms());
     gateway_request.query = query_pairs(parts.uri.query());
     gateway_request.headers = request_headers(&parts.headers);
-    if native_passport_public {
+    if guarded_passport_public {
         gateway_request.headers.remove("x-api-key");
         gateway_request.headers.remove("x-organization-id");
         gateway_request.headers.remove("x-user-id");
@@ -1158,10 +1175,15 @@ async fn proxy_handler(
     // overrides from the upstream path can lose the authenticated tenant or
     // misread a compatibility segment (for example `organizations/audit`).
     let mut overrides = proxy_overrides(&state, &public_path, &identity);
-    if let Some(passport_auth) = passport_auth.filter(|_| native_passport_public) {
+    if let Some(passport_auth) = passport_auth.filter(|_| guarded_passport_public) {
+        let upstream_key = if state.passport_python_rollback_gateway_enabled {
+            &state.issuance_service_api_key
+        } else {
+            passport_auth.api_key()
+        };
         overrides
             .headers
-            .insert("x-api-key".into(), passport_auth.api_key().into());
+            .insert("x-api-key".into(), upstream_key.into());
         overrides.headers.insert(
             "x-organization-id".into(),
             passport_auth.organization_id().into(),
@@ -6071,6 +6093,20 @@ mod tests {
         upstream: Arc<dyn UpstreamClient>,
         passport_native: bool,
     ) -> Arc<GatewayRuntimeState> {
+        runtime_state_with_upstream_and_passport_mode(
+            event_streams,
+            upstream,
+            passport_native,
+            false,
+        )
+    }
+
+    fn runtime_state_with_upstream_and_passport_mode(
+        event_streams: Arc<dyn EventStreamProvider>,
+        upstream: Arc<dyn UpstreamClient>,
+        passport_native: bool,
+        python_rollback: bool,
+    ) -> Arc<GatewayRuntimeState> {
         let routes = GatewayContract::load()
             .expect("contract")
             .runtime_route_table_with_passport_native(passport_native)
@@ -6143,7 +6179,7 @@ mod tests {
         .expect("service token")
         .with_passport_native_gateway(
             passport_native,
-            passport_native.then(|| {
+            (passport_native || python_rollback).then(|| {
                 PassportTenantKeyring::from_json(
                     r#"{"org-1":"native-passport-key-for-org-1-00000001","org-2":"native-passport-key-for-org-2-00000002"}"#,
                 )
@@ -6151,7 +6187,9 @@ mod tests {
                 .into()
             }),
         )
-        .expect("passport gateway");
+        .expect("passport gateway")
+        .with_passport_python_rollback_gateway(python_rollback)
+        .expect("Python passport rollback gateway");
         Arc::new(state)
     }
 
@@ -6369,18 +6407,116 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn python_passport_rollback_keeps_eight_public_routes_tenant_bound() {
+        let recorder = Arc::new(ActorRecordingUpstream::default());
+        let router = gateway_router(runtime_state_with_upstream_and_passport_mode(
+            Arc::new(NoOwner),
+            recorder.clone(),
+            false,
+            true,
+        ));
+        for (index, (method, path)) in [
+            ("GET", "/v1/passport/capabilities"),
+            ("POST", "/v1/passport/applications"),
+            (
+                "POST",
+                "/v1/passport/applications/job-1/generate-data-groups",
+            ),
+            ("POST", "/v1/passport/applications/job-1/generate-sod"),
+            (
+                "POST",
+                "/v1/passport/applications/job-1/submit-personalization",
+            ),
+            ("GET", "/v1/passport/applications/job-1/production-status"),
+            ("POST", "/v1/passport/applications/job-1/quality-verify"),
+            ("POST", "/v1/passport/applications/job-1/activate"),
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            let response = router
+                .clone()
+                .oneshot(
+                    Request::builder()
+                        .method(method)
+                        .uri(path)
+                        .header("content-type", "application/json")
+                        .header("x-api-key", "passport-gateway-key-org-1")
+                        .header("x-organization-id", "org-1")
+                        .body(if method == "POST" {
+                            Body::from(r#"{"organization_id":"org-1"}"#)
+                        } else {
+                            Body::empty()
+                        })
+                        .unwrap(),
+                )
+                .await
+                .unwrap();
+            assert_eq!(response.status(), StatusCode::OK, "{method} {path}");
+            let captured = recorder.0.lock().unwrap();
+            assert_eq!(captured.len(), index + 1);
+            let (service, upstream) = captured.last().unwrap();
+            assert_eq!(service, issuance_native::LEGACY_SERVICE);
+            assert_eq!(upstream.path, path);
+            assert_eq!(
+                upstream.headers.get("x-api-key").map(String::as_str),
+                Some("issuance-service-key")
+            );
+            assert_eq!(
+                upstream
+                    .headers
+                    .get("x-organization-id")
+                    .map(String::as_str),
+                Some("org-1")
+            );
+        }
+        for (header_org, body_org) in [("org-2", "org-1"), ("org-1", "org-2")] {
+            let response = router
+                .clone()
+                .oneshot(
+                    Request::builder()
+                        .method("POST")
+                        .uri("/v1/passport/applications")
+                        .header("content-type", "application/json")
+                        .header("x-api-key", "passport-gateway-key-org-1")
+                        .header("x-organization-id", header_org)
+                        .body(Body::from(json!({"organization_id": body_org}).to_string()))
+                        .unwrap(),
+                )
+                .await
+                .unwrap();
+            assert_eq!(response.status(), StatusCode::FORBIDDEN);
+        }
+        let response = router
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("GET")
+                    .uri("/v1/passport/capabilities")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+        assert_eq!(recorder.0.lock().unwrap().len(), 8);
+    }
+
+    #[tokio::test]
     async fn signed_passport_webhook_preserves_raw_body_and_switches_owner_without_tenant_key() {
         let body = br#"{ "bureau_job_id" : "bureau-1", "status":"PRINTING" }"#;
         let signature = "sha256=synthetic-signature";
-        for (native, expected_service) in [
-            (false, issuance_native::LEGACY_SERVICE),
-            (true, issuance_native::NATIVE_SERVICE),
+        for (native, python_rollback, expected_service) in [
+            (false, false, issuance_native::LEGACY_SERVICE),
+            (true, false, issuance_native::NATIVE_SERVICE),
+            (false, true, issuance_native::LEGACY_SERVICE),
         ] {
             let recorder = Arc::new(ActorRecordingUpstream::default());
-            let router = gateway_router(runtime_state_with_upstream_and_passport(
+            let router = gateway_router(runtime_state_with_upstream_and_passport_mode(
                 Arc::new(NoOwner),
                 recorder.clone(),
                 native,
+                python_rollback,
             ));
             let response = router
                 .oneshot(

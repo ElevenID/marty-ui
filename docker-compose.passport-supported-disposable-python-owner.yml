@@ -5,6 +5,7 @@ services:
   gateway:
     environment:
       PASSPORT_NATIVE_GATEWAY_ENABLED: "false"
+      PASSPORT_PYTHON_ROLLBACK_GATEWAY_ENABLED: "true"
       PASSPORT_PROVIDER_INGRESS_GATEWAY_ENABLED: "false"
   flow:
     environment:

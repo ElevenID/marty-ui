@@ -106,7 +106,8 @@ async fn main() -> Result<(), Box<dyn Error>> {
         .with_passport_native_gateway(
             config.passport_native_gateway_enabled,
             config.passport_tenant_keys.clone(),
-        )?,
+        )?
+        .with_passport_python_rollback_gateway(config.passport_python_rollback_gateway_enabled)?,
     );
 
     let purge_task = if config.hosted_pilot_auto_purge_enabled {

@@ -263,6 +263,10 @@ services:
       ISSUANCE_NATIVE_SERVICE_URL: http://issuance-native:8005
       DIDCOMM_DELIVERY_OWNER: native
       REDIS_URL: redis://redis:6379
+      ISSUANCE_API_KEY_FILE: /run/secrets/issuance_api_key
+      SIGNING_KEYS_INTERNAL_URL: http://signing-keys:8017/internal
+      SIGNING_KEYS_INTERNAL_API_KEY_FILE: /run/secrets/signing_keys_internal_api_key
+    secrets: [issuance_api_key, signing_keys_internal_api_key]
     depends_on:
       db-migrate:
         condition: service_completed_successfully

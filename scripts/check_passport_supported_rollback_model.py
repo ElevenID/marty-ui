@@ -460,6 +460,25 @@ def validate_model(
     native = services["issuance-native"]["environment"]
     gateway = services["gateway"]["environment"]
     flow = services["flow"]["environment"]
+    legacy = services["issuance"]["environment"]
+    require(
+        legacy.get("ISSUANCE_API_KEY_FILE") == "/run/secrets/issuance_api_key"
+        and legacy.get("SIGNING_KEYS_INTERNAL_URL") == "http://signing-keys:8017/internal"
+        and legacy.get("SIGNING_KEYS_INTERNAL_API_KEY_FILE")
+        == "/run/secrets/signing_keys_internal_api_key"
+        and {secret.get("source") for secret in services["issuance"].get("secrets", [])}
+        == {"issuance_api_key", "signing_keys_internal_api_key"}
+        and "ISSUANCE_API_KEY" not in legacy
+        and "SIGNING_KEYS_INTERNAL_API_KEY" not in legacy,
+        "Disposable Python rollback credentials or issuer resolver are invalid",
+    )
+    require(
+        (gateway.get("PASSPORT_NATIVE_GATEWAY_ENABLED") == "true"
+         and gateway.get("PASSPORT_PYTHON_ROLLBACK_GATEWAY_ENABLED") is None)
+        or (gateway.get("PASSPORT_NATIVE_GATEWAY_ENABLED") == "false"
+            and gateway.get("PASSPORT_PYTHON_ROLLBACK_GATEWAY_ENABLED") == "true"),
+        "Disposable Python rollback must retain Gateway tenant authorization",
+    )
     organization = services["organization"]
     organization_env = organization["environment"]
     event_stream_env = services["event-stream"]["environment"]

@@ -74,6 +74,7 @@ def safe_model(root: Path) -> dict:
     }
     services["gateway"]["environment"].update({
         "ENVIRONMENT": "beta",
+        "PASSPORT_NATIVE_GATEWAY_ENABLED": "true",
         "GRPC_INSECURE_ALLOWED": "true",
         "SIGNING_KEYS_DSC_ISSUE_GATEWAY_KEY_FILE": "/run/secrets/dsc_issue_gateway_key",
         "SIGNING_KEYS_CSCA_ISSUE_GATEWAY_KEY_FILE": "/run/secrets/csca_issue_gateway_key",
@@ -341,7 +342,17 @@ def safe_model(root: Path) -> dict:
         "secrets": [{"source": "bao_token"}],
     }
     services["issuance"] = {"image": "ghcr.io/elevenid/marty-credentials-issuance@sha256:" + "c" * 64,
-                            "networks": ["private"]}
+                            "networks": ["private"],
+                            "environment": {
+                                "ISSUANCE_API_KEY_FILE": "/run/secrets/issuance_api_key",
+                                "SIGNING_KEYS_INTERNAL_URL": "http://signing-keys:8017/internal",
+                                "SIGNING_KEYS_INTERNAL_API_KEY_FILE":
+                                    "/run/secrets/signing_keys_internal_api_key",
+                            },
+                            "secrets": [
+                                {"source": "issuance_api_key"},
+                                {"source": "signing_keys_internal_api_key"},
+                            ]}
     for name in ("gateway", "signing-keys"):
         services[name]["secrets"].extend([
             {"source": "dsc_issue_gateway_key"},
