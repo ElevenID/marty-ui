@@ -92,3 +92,33 @@ async fn complete_system_catalog_is_idempotent_and_repairs_managed_issuer_deriva
         "icao_pkd"
     );
 }
+
+#[tokio::test]
+async fn disposable_loopback_issuer_origin_is_accepted_without_remote_http() {
+    let repository = MemoryTrustProfileRepository::default();
+    for issuer_url in ["http://localhost:29876", "http://localhost:1024"] {
+        let mut bootstrap = config("did:web:localhost:orgs:marty");
+        bootstrap.issuer_url = issuer_url.into();
+        bootstrap_system_catalog(&repository, &bootstrap, now())
+            .await
+            .unwrap();
+    }
+    for issuer_url in [
+        "http://gateway:8000",
+        "http://beta.example.test",
+        "http://localhost",
+        "http://localhost:80",
+        "http://localhost:29876/other",
+        "http://localhost:29876?x=1",
+        "http://user@localhost:29876",
+    ] {
+        let mut bootstrap = config("did:web:localhost:orgs:marty");
+        bootstrap.issuer_url = issuer_url.into();
+        assert!(
+            bootstrap_system_catalog(&repository, &bootstrap, now())
+                .await
+                .is_err(),
+            "accepted {issuer_url}"
+        );
+    }
+}

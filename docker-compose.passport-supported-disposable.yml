@@ -79,7 +79,7 @@ services:
       BAO_TOKEN_FILE: /run/secrets/bao_token
       MARTY_KMS_BOOTSTRAP_ENABLED: "true"
       PUBLIC_DOMAIN: localhost
-      MARTY_ISSUER_BASE_URL: http://gateway:8000
+      MARTY_ISSUER_BASE_URL: http://localhost:${PASSPORT_ACCEPTANCE_GATEWAY_PORT:?reserve disposable loopback port}
       MARTY_ISSUER_DID: did:web:localhost:orgs:marty
     secrets: [marty_db_password, bao_token]
     depends_on:
@@ -276,6 +276,7 @@ services:
       ISSUANCE_SERVICE_PORT: "8005"
       ISSUANCE_GRPC_ENABLED: "true"
       ISSUANCE_GRPC_PORT: "9005"
+      ISSUER_BASE_URL: http://localhost:${PASSPORT_ACCEPTANCE_GATEWAY_PORT:?reserve disposable loopback port}
       PASSPORT_NATIVE_HTTP_ENABLED: "true"
       PASSPORT_INTERNAL_SERVICE_AUTH_ENABLED: "true"
       PASSPORT_MANAGED_ISSUER_SIGNING_ENABLED: "true"
@@ -465,7 +466,7 @@ services:
       PASSPORT_PROVIDER_INGRESS_GATEWAY_ENABLED: "false"
       PASSPORT_INTERNAL_SERVICE_AUTH_ENABLED: "true"
       PUBLIC_DOMAIN: localhost
-      ISSUER_BASE_URL: http://gateway:8000
+      ISSUER_BASE_URL: http://localhost:${PASSPORT_ACCEPTANCE_GATEWAY_PORT:?reserve disposable loopback port}
       GRPC_SERVICE_TOKEN_FILE: /run/secrets/grpc_service_token
       ISSUANCE_API_KEY_FILE: /run/secrets/issuance_api_key
       ORGANIZATION_SERVICE_URL: http://organization:8002
