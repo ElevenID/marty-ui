@@ -6,6 +6,7 @@
   "retained_diagnostic": "The v1 synthetic direct-simulator batch probe may continue as a compatibility diagnostic, but cannot set physical_bureau_batch, nine_route_gateway_flow, recorded_demo, or a Python-retirement gate to verified.",
   "references": [
     "contracts/passport-beta-native-flow-batch.json",
+    "contracts/passport-beta-demo-private-handoff.json",
     "contracts/passport-beta-physical-flow-proof.json",
     "contracts/passport-beta-bureau-behavior.json",
     "contracts/flow-service-behavior.json:flow_types.physical_document_issuance.steps",
