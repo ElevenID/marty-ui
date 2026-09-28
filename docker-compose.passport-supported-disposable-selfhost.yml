@@ -3,6 +3,8 @@ services:
   gateway:
     environment:
       ENVIRONMENT: production
+      # This project has only private disposable gRPC peers and no TLS CA.
+      GRPC_INSECURE_ALLOWED: "true"
       PASSPORT_ACCEPTANCE_SURFACE: selfhost
   flow:
     environment:

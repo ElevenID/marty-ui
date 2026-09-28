@@ -8,6 +8,7 @@ but never sufficient, for a later protected rollback rehearsal.
 from __future__ import annotations
 
 import argparse
+from copy import deepcopy
 from datetime import datetime, timezone
 import json
 import os
@@ -125,13 +126,19 @@ def render_model(
     require(re.fullmatch(r"ghcr\.io/elevenid/marty-ui-oss/services@sha256:[0-9a-f]{64}",
                          services_reference) is not None,
             "Signed services image reference is invalid")
-    require(phase in {"rust", "python"}, "Disposable owner phase is invalid")
+    require(phase in {"rust", "python", "selfhost_ceremony"},
+            "Disposable owner phase is invalid")
+    require(phase != "selfhost_ceremony" or surface == "selfhost",
+            "Disposable certificate ceremony requires the selfhost surface")
     compose = ROOT / "docker-compose.passport-supported-disposable.yml"
     surface_overlay = ROOT / f"docker-compose.passport-supported-disposable-{surface}.yml"
     owner_overlay = ROOT / "docker-compose.passport-supported-disposable-python-owner.yml"
+    ceremony_overlay = (ROOT / "docker-compose.passport-supported-disposable-selfhost-ceremony.yml")
     files = [compose, surface_overlay]
     if phase == "python":
         files.append(owner_overlay)
+    elif phase == "selfhost_ceremony":
+        files.append(ceremony_overlay)
     require(all(path.is_file() for path in files),
             "Protected Compose source is missing")
     args = ["docker", "compose", "--project-name", project, "--env-file", str(env_file),
@@ -226,8 +233,18 @@ def preflight_attested_plan(
                          owner_labels=plan["owner_labels"],
                          plan_expires_at=plan["expires_at"])
     result = validate_planned_model(model, plan, disposable_root)
+    ceremony_result = None
+    if surface == "selfhost":
+        ceremony = render_model(surface, project, env_file, disposable_root,
+                                services_reference, runner,
+                                phase="selfhost_ceremony",
+                                owner_labels=plan["owner_labels"],
+                                plan_expires_at=plan["expires_at"])
+        ceremony_result = validate_selfhost_ceremony_model(
+            ceremony, model, project, services_reference, disposable_root)
     return {"schema": "marty.passport-supported-rollback-preflight/v1",
             "status": "blocked", "model": result,
+            "ceremony_model": ceremony_result,
             "blocker": "live ownership and Rust-to-Python rollback proof are absent"}
 
 
@@ -772,7 +789,8 @@ def validate_model(
             if isinstance(secret, dict)},
         "Disposable native issuance startup secrets are missing",
     )
-    require(native.get("ENVIRONMENT") == ("beta" if surface == "selfhost" else "development")
+    require(gateway.get("GRPC_INSECURE_ALLOWED") == "true"
+            and native.get("ENVIRONMENT") == ("beta" if surface == "selfhost" else "development")
             and gateway.get("ENVIRONMENT") == ("production" if surface == "selfhost" else "beta")
             and flow.get("ENVIRONMENT") == ("production" if surface == "selfhost" else "development"),
             "Disposable surface environment selectors are incompatible with the beta simulator")
@@ -804,7 +822,7 @@ def validate_model(
              and gateway.get("GRPC_INSECURE_ALLOWED") == "true")
             or (surface == "selfhost"
                 and "SIGNING_KEYS_BETA_CSCA_ISSUANCE_ENABLED" not in signing_env
-                and "GRPC_INSECURE_ALLOWED" not in gateway),
+                and gateway.get("GRPC_INSECURE_ALLOWED") == "true"),
             "Disposable certificate ceremony mode differs from surface")
     require(signer.get("ENVIRONMENT") == "beta"
             and signer.get("PASSPORT_CALLBACK_SIGNER_ENABLED") == "true"
@@ -835,6 +853,52 @@ def validate_model(
             "Disposable simulator model includes a physical provider secret")
     return {"project": project, "services": sorted(SELECTED),
             "model_safe": True, "rollback_accepted": False}
+
+
+def validate_selfhost_ceremony_model(
+    ceremony: dict, final: dict, project: str, services_reference: str,
+    disposable_root: Path,
+) -> dict:
+    """Permit only a temporary beta certificate phase before selfhost runtime.
+
+    The protected producer must replace both affected containers using the
+    normal final model and inspect their new identities before acceptance.
+    """
+    require(PROJECT.fullmatch(project) is not None
+            and project.startswith("marty-passport-acceptance-selfhost-"),
+            "Disposable ceremony requires a selfhost project")
+    validated = validate_model(final, project, services_reference, disposable_root)
+    require(validated.get("model_safe") is True,
+            "Disposable final selfhost model is unsafe")
+    expected = deepcopy(final)
+    additions = {
+        "gateway": {
+            "ENVIRONMENT": "beta",
+            "SIGNING_KEYS_DSC_ISSUE_GATEWAY_KEY_FILE": "/run/secrets/dsc_issue_gateway_key",
+            "SIGNING_KEYS_CSCA_ISSUE_GATEWAY_KEY_FILE": "/run/secrets/csca_issue_gateway_key",
+        },
+        "signing-keys": {
+            "ENVIRONMENT": "beta",
+            "SIGNING_KEYS_BETA_CSCA_ISSUANCE_ENABLED": "true",
+            "SIGNING_KEYS_DSC_ISSUE_GATEWAY_KEY_FILE": "/run/secrets/dsc_issue_gateway_key",
+            "SIGNING_KEYS_CSCA_ISSUE_GATEWAY_KEY_FILE": "/run/secrets/csca_issue_gateway_key",
+        },
+    }
+    for service, environment in additions.items():
+        expected["services"][service]["environment"].update(environment)
+        expected["services"][service]["secrets"].extend(
+            {"source": name, "target": f"/run/secrets/{name}"}
+            for name in ("dsc_issue_gateway_key", "csca_issue_gateway_key")
+        )
+    for name in ("dsc_issue_gateway_key", "csca_issue_gateway_key"):
+        expected["secrets"][name] = {
+            "file": (disposable_root / "secrets" / name).as_posix(),
+            "name": f"{project}_{name}",
+        }
+    require(ceremony == expected,
+            "Disposable certificate ceremony changes more than the isolated beta phase")
+    return {"project": project, "model_safe": True,
+            "ceremony_only": True, "rollback_accepted": False}
 
 
 def validate_planned_model(model: dict, plan: dict, disposable_root: Path) -> dict:

@@ -3,13 +3,16 @@
 from __future__ import annotations
 
 from copy import deepcopy
+from datetime import datetime, timedelta, timezone
+import json
 from pathlib import Path
 import shutil
 
 import pytest
 
 from scripts.check_passport_supported_rollback_model import (
-    ModelPreflightError, render_model, validate_model,
+    ModelPreflightError, preflight_attested_plan, render_model, validate_model,
+    validate_selfhost_ceremony_model,
 )
 from scripts.passport_supported_infra_images import qualified_images
 
@@ -194,6 +197,70 @@ def test_python_owner_phase_changes_only_two_frozen_selectors(
         ("flow", "PASSPORT_NATIVE_FLOW_ENABLED", "true", "false"),
     }
     assert set(rust["services"]) == set(python["services"])
+
+
+@pytest.mark.skipif(shutil.which("docker") is None, reason="Docker Compose CLI unavailable")
+def test_selfhost_ceremony_is_temporary_and_exact(tmp_path: Path) -> None:
+    env_file = inputs(tmp_path)
+    project = "marty-passport-acceptance-selfhost-abcdef"
+    final = render_model("selfhost", project, env_file, tmp_path, SERVICES)
+    ceremony = render_model("selfhost", project, env_file, tmp_path, SERVICES,
+                            phase="selfhost_ceremony")
+    assert validate_selfhost_ceremony_model(
+        ceremony, final, project, SERVICES, tmp_path) == {
+            "project": project, "model_safe": True,
+            "ceremony_only": True, "rollback_accepted": False,
+        }
+    assert final["services"]["gateway"]["environment"]["ENVIRONMENT"] == "production"
+    assert ceremony["services"]["gateway"]["environment"]["ENVIRONMENT"] == "beta"
+    assert final["services"]["signing-keys"]["environment"].get(
+        "SIGNING_KEYS_BETA_CSCA_ISSUANCE_ENABLED") is None
+    assert ceremony["services"]["signing-keys"]["environment"][
+        "SIGNING_KEYS_BETA_CSCA_ISSUANCE_ENABLED"] == "true"
+    with pytest.raises(ModelPreflightError, match="selfhost surface"):
+        render_model("base", "marty-passport-acceptance-base-abcdef",
+                     env_file, tmp_path, SERVICES, phase="selfhost_ceremony")
+    changed = deepcopy(ceremony)
+    changed["services"]["gateway"]["environment"]["PASSPORT_PROVIDER_INGRESS_GATEWAY_ENABLED"] = "true"
+    with pytest.raises(ModelPreflightError, match="changes more"):
+        validate_selfhost_ceremony_model(changed, final, project, SERVICES, tmp_path)
+    with pytest.raises(ModelPreflightError, match="surface environment"):
+        validate_model(ceremony, project, SERVICES, tmp_path)
+
+
+@pytest.mark.skipif(shutil.which("docker") is None, reason="Docker Compose CLI unavailable")
+def test_attested_selfhost_preflight_includes_ceremony_model(tmp_path: Path) -> None:
+    env_file = inputs(tmp_path)
+    project = "marty-passport-acceptance-selfhost-abcdef"
+    now = datetime(2026, 9, 27, 12, tzinfo=timezone.utc)
+    plan = {
+        "schema": "marty.passport-supported-provisioning-plan/v1",
+        "status": "blocked", "surface": "selfhost", "project": project,
+        "source_commit": "a" * 40, "run_id": "123456789",
+        "services_reference": SERVICES,
+        "migrations_reference": MIGRATIONS,
+        "legacy_reference": LEGACY,
+        "infra_images": qualified_images(verify_registry=False),
+        "owner_labels": {
+            "com.marty.passport.acceptance.owner": "supported-consumer",
+            "com.marty.passport.acceptance.run-id": "123456789",
+            "com.marty.passport.acceptance.source-commit": "a" * 40,
+            "com.marty.passport.acceptance.services-image": SERVICES,
+        },
+        "created_at": (now - timedelta(minutes=5)).isoformat(),
+        "expires_at": (now + timedelta(minutes=55)).isoformat(),
+    }
+    plan_path = tmp_path / "plan.json"
+    plan_path.write_text(json.dumps(plan), encoding="utf-8")
+    report = preflight_attested_plan(
+        "selfhost", project, env_file, tmp_path, SERVICES, plan_path,
+        attest=lambda *args: True, now=now,
+        checkout=lambda: (plan["source_commit"], False),
+    )
+    assert report["status"] == "blocked"
+    assert report["model"]["model_safe"] is True
+    assert report["ceremony_model"]["ceremony_only"] is True
+    assert report["ceremony_model"]["rollback_accepted"] is False
 
 
 @pytest.mark.skipif(shutil.which("docker") is None, reason="Docker Compose CLI unavailable")
