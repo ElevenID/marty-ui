@@ -16,6 +16,7 @@ CREATE TABLE IF NOT EXISTS issuance_service.passport_beta_bureau_jobs (
     next_transition_at timestamptz,
     callback_lease_token uuid,
     callback_lease_until timestamptz,
+    callback_receipt_sha256 bytea,
     created_at timestamptz NOT NULL DEFAULT NOW(),
     updated_at timestamptz NOT NULL DEFAULT NOW(),
     UNIQUE (organization_id, source_job_id)
@@ -34,6 +35,22 @@ ALTER TABLE issuance_service.passport_beta_bureau_jobs
     ADD COLUMN IF NOT EXISTS dsc_der_sha256 bytea CHECK (octet_length(dsc_der_sha256) = 32);
 ALTER TABLE issuance_service.passport_beta_bureau_jobs
     ADD COLUMN IF NOT EXISTS dsc_pem_wire_sha256 bytea CHECK (octet_length(dsc_pem_wire_sha256) = 32);
+-- Existing simulator rows predate signed callback receipts. The digest is
+-- recorded only after the native callback accepts the KMS signature.
+ALTER TABLE issuance_service.passport_beta_bureau_jobs
+    ADD COLUMN IF NOT EXISTS callback_receipt_sha256 bytea;
+DO $$
+BEGIN
+    IF NOT EXISTS (
+        SELECT 1 FROM pg_constraint
+        WHERE conrelid = 'issuance_service.passport_beta_bureau_jobs'::regclass
+          AND conname = 'ck_passport_beta_bureau_callback_receipt_sha256'
+    ) THEN
+        ALTER TABLE issuance_service.passport_beta_bureau_jobs
+            ADD CONSTRAINT ck_passport_beta_bureau_callback_receipt_sha256
+            CHECK (callback_receipt_sha256 IS NULL OR octet_length(callback_receipt_sha256) = 32);
+    END IF;
+END $$;
 CREATE INDEX IF NOT EXISTS ix_passport_beta_bureau_due
     ON issuance_service.passport_beta_bureau_jobs (next_transition_at)
     WHERE status <> 'SHIPPED';

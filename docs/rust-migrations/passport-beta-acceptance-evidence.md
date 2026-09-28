@@ -55,9 +55,9 @@ artifact lineage: `managed_csca_dsc_chain`, `sod_signature`,
 are retained for the frozen simulator route-compatibility receipt; they do not
 assert physical production. `physical_claim_boundary` records
 `physical_claim=not_claimed` and `booklet_verified=false` only for the isolated
-Marty simulator. Separate supported base
-Compose, self-host, and Kubernetes acceptance remains mandatory before Python
-retirement.
+Marty simulator. A future physical-booklet claim requires independent evidence;
+the simulator makes no such claim. Separate supported base Compose, self-host,
+and Kubernetes acceptance remains mandatory before Python retirement.
 
 ## Protected beta acceptance run
 
@@ -71,8 +71,9 @@ beta PostgreSQL for in-flight jobs, legacy or malformed artifact rows, and
 active physical-document Flows using the deployment preflight's narrow
 expired verification orphan exemption,
 executes the seven application route identities, and repeats the beta and
-production checks. Only the beta Gateway receives mutating requests. The
-private application file is removed before artifact upload.
+production checks. Mutating requests target only beta Gateway and the
+inspected beta simulator's private batch route. The private application file
+is removed before artifact upload.
 
 The runner also reads the three live beta containers' native routing and
 internal-auth selectors without publishing their environment. It requires
@@ -83,11 +84,43 @@ second Gateway request sends `{}` to the bureau webhook without a signature.
 The live Gateway selector determines whether the signed deployment's native
 owner must return its exact missing-header 422 response or the separately
 selected provider ingress must return its exact invalid-signature 401 response.
-This checks an ingress guard, not a valid signed callback. The report records
-these outcomes as partial `nine_route_gateway_flow` evidence and keeps that
-required probe false until a signed Marty simulator callback and an executed
-simulator Flow are verified. Only fixed route names, counts, statuses, and
-selector booleans enter the report.
+This checks an ingress guard, not a valid signed callback. The governed Flow
+probe must separately execute all nine steps for one native job and bind its
+managed SOD, first accepted simulator material, private signed callback receipt,
+and terminal `ACTIVE` state to the same organization, issuer DID, application,
+source job, and bureau job. It requires the Flow issuer-DID fix in PR #929 in
+the deployed aggregate image. The `nine_route_gateway_flow` probe stays false
+until the selected Flow job is one of the two batch jobs and its Gateway route trace is verified. Only
+fixed route names, counts, statuses, selector booleans, and sanitized receipt
+evidence enter the report.
+
+The beta simulator now stores a 32-byte digest of the exact callback body and
+KMS signature only after native issuance accepts the signed callback and the
+status transition commits. Its authenticated private job poll returns the
+lowercase hex digest as `callback_receipt_sha256`; preexisting jobs can return
+`null`. The simulator never stores or returns the callback body or signature.
+The protected runner also creates two distinct native passport jobs through Gateway,
+generates their data groups and managed SODs, then submits those exact job identities
+to the inspected beta simulator's private batch route. It binds each returned bureau
+job ID through native single-job submission before accepting callbacks. It checks
+the one-to-one mapping, polls both jobs to `SHIPPED` with simulator tracking markers,
+requires two distinct callback receipt digests, and finishes each native job through
+quality and activation. The batch uses an explicit document type for simulator
+idempotency with native submission; the frozen Rust batch adapter's historical wire
+shape is tested separately. If a native binding fails after batch submission, the
+fresh simulator and native jobs may remain in the beta runtime. The run fails
+closed, and the nonterminal-job drain blocks cutover until the synthetic jobs
+are quarantined and remediated under the existing beta rollback procedure.
+The probe never tears down the durable `elevenid-beta` project. It publishes per-run keyed HMAC
+commitments for the exact batch request and response. Source and bureau job ID
+commitments use the acceptance API key and the frozen material-receipt preimages,
+so they can be compared across probes. The keys, raw IDs, document material,
+callback body, and signature stay out of evidence.
+The report marks `physical_bureau_batch` and its signed callback evidence
+verified only after these checks, with `physical_claim=not_claimed` and no
+booklet claim. Each returned batch job must map to its own submitted native
+job and private signed receipt; two independent callback receipts cannot
+substitute for the governed Flow job's same-job callback proof.
 
 The full run requires the managed beta CSCA and DSC ceremonies before it
 creates a passport job. The protected `beta-lifecycle` environment supplies
@@ -104,9 +137,12 @@ validated before any beta mutation, and the plan's tenant and DSC issuer must
 match the private test application. The probe follows the issuer console's
 cookie-based Gateway request and organization query; it does not supply an API
 key or asserted user identity. Evidence contains certificate and DID hashes, never
-session cookies or certificate bodies. Partial ceremony input fails before
-any application or certificate mutation. If no ceremony input exists, the
-`managed_csca_dsc_chain` probe remains false.
+session cookies or certificate bodies. Missing or partial ceremony input fails
+before any application or certificate mutation.
+The ceremony now runs before the direct, batch, or Flow passport jobs. Its
+public chain check alone does not prove that their signed SODs used the exact
+selected DSC. The protected runner reports the chain verified only after it
+reconciles the selected job's immutable simulator material receipt with that DSC.
 
 After native submission, the protected runner reads the private beta simulator
 row for the same tenant, source job, and bureau job. It compares the first
@@ -116,18 +152,20 @@ receipt is immutable across replay. Legacy rows or malformed synthetic
 material cannot satisfy this probe. The uploaded report contains only match
 results and API-key HMAC job commitments, not raw material or receipt digests.
 
-The protected full run also requires `PASSPORT_ACCEPTANCE_FLOW_PLAN_JSON` and
-`PASSPORT_ACCEPTANCE_FLOW_OPERATOR_COOKIE`. The Flow plan names one active
-physical-document Flow definition, its three governed template/profile
-references, and synthetic `physical_document` input. The runner rejects issuer
-or profile overrides in that input before the ceremony. After the direct
-Gateway job, it executes a distinct nine-step Flow job using the same selected
-DSC, checks the first accepted simulator receipt for that Flow job, and binds
-the selected SOD and receipt to one HMAC job commitment. The uploaded report
-omits raw Flow, application, source-job, bureau-job, applicant, MRZ, and
-operator-session values. Its `nine_route_gateway_flow` probe remains false
-until the protected producer proves the same-job Gateway route trace and
-signed simulator callback.
+The protected full run also requires one `PASSPORT_ACCEPTANCE_FLOW_PLAN_JSON`
+and `PASSPORT_ACCEPTANCE_FLOW_OPERATOR_COOKIE`. The Flow plan binds the signed
+release's `source_commit` and `stack_manifest_sha256`, `organization_id`,
+`issuer_did`, one active `flow_definition_id`, its three governed
+template/profile `references` (`application_template_id`,
+`credential_template_id`, and `delivery_destination_profile_id`), and
+synthetic `physical_document` input. The
+runner rejects issuer or profile overrides in that input before the ceremony.
+After the direct Gateway job, it executes a distinct nine-step Flow job using
+the selected DSC. That one Flow job must match its first accepted simulator
+material receipt, private signed callback receipt, and final native status.
+The uploaded report omits raw Flow, application, source-job, bureau-job,
+applicant, MRZ, and operator-session values. A selected SOD/material match
+alone does not establish `nine_route_gateway_flow` or recording qualification.
 
 The production snapshot proves continuity **during this acceptance run**. It
 does not replace the deployment wrapper's before/after production comparison.
@@ -135,11 +173,14 @@ The report requires the isolated simulator mode and sets `legacy_drain` and the 
 `production_continuity_during_probe` probe when those live checks pass, while
 `production_isolation` remains false. The workflow fails while the report is
 `blocked`, but uploads the sanitized report from an attempted probe. The
-acceptance report remains `blocked` until SOD signature verification, full nine
-route Gateway/Flow and signed simulator callback proof, simulator batch
-compatibility, rollback, deployment-wide production isolation, and recorded
-demo evidence have executable receipts. It cannot qualify Python
-retirement on its own.
+acceptance report remains `blocked` until the live run verifies SOD signature,
+the selected Flow job in the two-job batch, full nine-route Gateway/Flow proof,
+same-job signed simulator callback, simulator batch compatibility, rollback,
+deployment-wide production isolation, supported
+consumer acceptance, and recorded demo evidence have executable receipts.
+D-12 recording and publication remain blocked while these gates are open.
+No live beta deployment or protected successful acceptance run is claimed by
+this guide. The current report cannot qualify Python retirement on its own.
 
 The protected run uploads a GitHub artifact named
 `passport-beta-acceptance-<run-id>` containing the same name plus `.json`.

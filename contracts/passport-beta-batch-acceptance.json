@@ -1,0 +1,57 @@
+{
+  "schema": "marty.passport-beta-batch-acceptance/v1",
+  "scope": "protected beta simulator software-route compatibility; no physical booklet claim",
+  "target": {
+    "owner": "signed passport-beta-bureau service image in the deployed beta stack",
+    "route": "POST /v1/personalization/batches",
+    "poll_route": "GET /v1/personalization/jobs/{bureau_job_id}",
+    "transport": "authenticated private in-container loopback through the inspected beta container ID"
+  },
+  "input": {
+    "minimum_jobs": 2,
+    "document_material": "fixed synthetic document fixture in probe_passport_beta_batch.SYNTHETIC_DOCUMENT; ignore caller applicant, MRZ, and data-group fields",
+    "organization_id": "same tenant as the protected beta acceptance application",
+    "native_binding": "Create two distinct native passport jobs through Gateway, generate data groups and managed SOD for each, submit both to the simulator batch, then submit each through native to persist the exact returned bureau job ID before accepting any callback receipt",
+    "batch_identity": "The private batch and native single submit carry the same organization, native source job ID, application ID, country, document type, data groups, and MRZ; changing SOD or public DSC on native re-sign does not change simulator idempotency identity"
+  },
+  "output": {
+    "http_status": 202,
+    "batch_status": "QUEUED",
+    "job_mapping": "exact one-to-one source job ID to distinct bureau job ID",
+    "native_binding": "each native submit returns its corresponding batch bureau job ID; private SHIPPED receipt and native production state refer to that same job",
+    "final_job_status": "SHIPPED",
+    "tracking_prefix": "BETA-SIM-",
+    "callback_receipt_sha256": "distinct lowercase hex digest from authenticated final poll for every job"
+  },
+  "commitments": {
+    "scheme": "HMAC-SHA256",
+    "job_identity": {
+      "key": "UTF-8 bytes of the private organization-scoped beta acceptance API key; never upload this key",
+      "source_job_preimage": "UTF-8 bytes of ASCII source-job: followed by the exact source job ID",
+      "bureau_job_preimage": "UTF-8 bytes of ASCII bureau-job: followed by the canonical lowercase hyphenated bureau UUID",
+      "contract": "passport-beta-bureau-behavior.json first_accepted_material_receipt.commitment_algorithm; use the same keyed commitments for D-12 same-job correlation"
+    },
+    "wire": {
+      "key": "new private 256-bit random key per acceptance run; never upload or log",
+      "preimage": "ASCII passport-retirement/v2:<field> followed by NUL and exact HTTP body bytes",
+      "fields": ["request", "response"],
+      "purpose": "Bind the exact private batch request and response within this run; these commitments do not correlate job identities across evidence artifacts"
+    },
+    "encoding": "lowercase hexadecimal"
+  },
+  "published_evidence": [
+    "source_commit",
+    "stack_manifest_sha256",
+    "services_oci_reference",
+    "provider_kind=simulator",
+    "physical_claim=not_claimed",
+    "native_binding_verified",
+    "native_completed_jobs",
+    "request_commitment",
+    "response_commitment",
+    "submitted_job_commitments",
+    "returned_jobs",
+    "callback_receipt_sha256"
+  ],
+  "prohibited_evidence": ["API key", "wire commitment key", "raw job IDs", "request body", "response body", "MRZ", "data groups", "SOD", "DSC certificate", "callback body", "callback signature"]
+}
