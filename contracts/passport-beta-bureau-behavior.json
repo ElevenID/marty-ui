@@ -23,6 +23,7 @@
     "next_transition_at",
     "callback_lease_token",
     "callback_lease_until",
+    "callback_receipt_sha256",
     "created_at",
     "updated_at"
   ],
@@ -33,7 +34,13 @@
     "signature": "KMS-held passport-bureau-callback HMAC via internal signing-keys gateway",
     "advance_only_after_accepted_callback": true,
     "retry_after_provider_failure": true,
-    "tracking_prefix": "BETA-SIM-"
+    "tracking_prefix": "BETA-SIM-",
+    "signed_receipt_digest": {
+      "when_recorded": "only after the private native callback accepts the exact signed body and the simulator status transition commits",
+      "preimage": "ASCII marty.passport-callback-receipt/v1 followed by NUL, u32 big-endian body byte length, exact callback body bytes, u32 big-endian signature byte length, exact x-personalization-signature UTF-8 bytes",
+      "algorithm": "SHA-256",
+      "publication": "lowercase hex digest in authenticated private poll; never persist or publish the signature or callback body"
+    }
   },
   "security": {
     "maximum_request_bytes": 33554432,
