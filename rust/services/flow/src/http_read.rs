@@ -139,7 +139,7 @@ struct FlowCapabilities {
 }
 
 async fn capabilities() -> Json<FlowCapabilities> {
-    let flow_types = FlowType::all().collect::<Vec<_>>();
+    let flow_types = FlowType::public_05().collect::<Vec<_>>();
     let standard_flow_types = flow_types
         .iter()
         .copied()
@@ -147,14 +147,14 @@ async fn capabilities() -> Json<FlowCapabilities> {
         .collect::<Vec<_>>();
     Json(FlowCapabilities {
         protocol_version: MIP_VERSION,
-        sequences: FlowType::all()
+        sequences: FlowType::public_05()
             .filter(|flow_type| *flow_type != FlowType::Custom)
             .map(|flow_type| (flow_type, flow_type.sequence()))
             .collect(),
-        required_references: FlowType::all()
+        required_references: FlowType::public_05()
             .map(|flow_type| (flow_type, flow_type.required_references()))
             .collect(),
-        extensible_steps: FlowType::all()
+        extensible_steps: FlowType::public_05()
             .filter_map(|flow_type| {
                 let steps = extensible_steps(flow_type);
                 (!steps.is_empty()).then_some((flow_type, steps))
@@ -946,6 +946,11 @@ impl From<FlowInstanceExecutionError> for FlowHttpError {
             FlowInstanceExecutionError::NotAdvanceable(_) => Self::new(
                 StatusCode::CONFLICT,
                 "flow_instance_not_advanceable",
+                error.to_string(),
+            ),
+            FlowInstanceExecutionError::CandidateUnavailable => Self::new(
+                StatusCode::PRECONDITION_FAILED,
+                "flow_candidate_unavailable",
                 error.to_string(),
             ),
             _ => Self::new(

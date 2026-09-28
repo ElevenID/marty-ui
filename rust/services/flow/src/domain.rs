@@ -58,6 +58,7 @@ pub enum FlowType {
     CredentialRenewal,
     CredentialRevocation,
     PhysicalDocumentIssuance,
+    PassportDigitalHandoff,
     Combined,
     Custom,
 }
@@ -154,13 +155,19 @@ pub enum FlowDomainError {
 
 impl FlowType {
     #[must_use]
+    pub const fn is_beta_candidate(self) -> bool {
+        matches!(self, Self::PassportDigitalHandoff)
+    }
+
+    #[must_use]
     pub const fn category(self) -> Option<FlowCategory> {
         match self {
             Self::Oid4vciPreAuthorized
             | Self::Oid4vciAuthorizationCode
             | Self::MdlIssuance
             | Self::ApplicationApprovalIssuance
-            | Self::PhysicalDocumentIssuance => Some(FlowCategory::Issuance),
+            | Self::PhysicalDocumentIssuance
+            | Self::PassportDigitalHandoff => Some(FlowCategory::Issuance),
             Self::Oid4vpPresentation | Self::MdlPresentation | Self::Siopv2 => {
                 Some(FlowCategory::Verification)
             }
@@ -183,7 +190,7 @@ impl FlowType {
                 &["presentation_policy_id"]
             }
             Self::ApplicationApprovalIssuance => &["application_template_id"],
-            Self::PhysicalDocumentIssuance => &[
+            Self::PhysicalDocumentIssuance | Self::PassportDigitalHandoff => &[
                 "credential_template_id",
                 "application_template_id",
                 "delivery_destination_profile_id",
@@ -265,6 +272,16 @@ impl FlowType {
                 "quality_verify",
                 "activate_credential",
             ],
+            Self::PassportDigitalHandoff => &[
+                "accept_application",
+                "validate_evidence",
+                "approval_decision",
+                "generate_data_groups",
+                "sign_sod",
+                "verify_digital_package",
+                "seal_handoff_package",
+                "handoff_ready",
+            ],
             Self::Combined => &[
                 "accept_application",
                 "approval_decision",
@@ -277,7 +294,7 @@ impl FlowType {
         }
     }
 
-    pub fn all() -> impl Iterator<Item = Self> {
+    pub fn public_05() -> impl Iterator<Item = Self> {
         [
             Self::Oid4vciPreAuthorized,
             Self::Oid4vciAuthorizationCode,

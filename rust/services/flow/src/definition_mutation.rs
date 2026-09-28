@@ -98,6 +98,13 @@ pub async fn validate_definition_record(
     record: &FlowDefinitionRecord,
 ) -> FlowDefinitionValidationResult {
     let mut errors = Vec::new();
+    if record.flow_type.is_beta_candidate() {
+        errors.push(FlowDefinitionValidationIssue {
+            code: "CANDIDATE_UNAVAILABLE",
+            field: "flow_type",
+            message: "Digital passport handoff is not available in MIP 0.5".into(),
+        });
+    }
     if let Err(error) = record.kernel() {
         errors.push(FlowDefinitionValidationIssue {
             code: "INVALID_FLOW",
