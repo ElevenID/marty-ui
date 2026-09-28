@@ -48,6 +48,13 @@ SECRETS = {
     "revocation-profile": ("marty_db_password", "grpc_service_token"),
     "event-stream": (),
     "organization": ("marty_db_password", "grpc_service_token"),
+    "credential-template": ("marty_db_password", "grpc_service_token",
+                            "signing_keys_internal_api_key"),
+    "trust-profile": ("marty_db_password", "grpc_service_token",
+                      "signing_keys_internal_api_key"),
+    "presentation-policy": ("marty_db_password", "grpc_service_token",
+                            "issuance_api_key"),
+    "deployment-profile": ("marty_db_password", "grpc_service_token"),
     "issuance-native": ("marty_db_password", "bao_token", "signing_keys_internal_api_key",
                         "issuance_api_key", "grpc_service_token", "token_hmac_key",
                         "integration_secret_master_key"),
@@ -148,9 +155,58 @@ def fixture() -> tuple[dict, dict[tuple[str, ...], str]]:
             "MARTY_ORG_ID": "00000000-0000-0000-0000-000000000001",
         }
         migration_env = {"STATUS_LIST_BASE_URL": "http://127.0.0.1:29876"}
+        support_common = {
+            "ENVIRONMENT": "development",
+            "DATABASE_URL_TEMPLATE": (
+                "postgresql+asyncpg://marty:${MARTY_DB_PASSWORD}@postgres:5432/marty"),
+            "MARTY_DB_PASSWORD_FILE": "/run/secrets/marty_db_password",
+            "GRPC_SERVICE_TOKEN_FILE": "/run/secrets/grpc_service_token",
+            "ORG_GRPC_TARGET": "organization:9002",
+        }
+        support_env = {
+            "trust-profile": {
+                **support_common, "SERVICE_NAME": "trust_profile",
+                "TRUST_PROFILE_SERVICE_PORT": "8004",
+                "SIGNING_KEYS_INTERNAL_API_KEY_FILE":
+                    "/run/secrets/signing_keys_internal_api_key",
+                "MARTY_ISSUER_DID": "did:web:localhost:orgs:marty",
+                "MARTY_ISSUER_BASE_URL": "http://localhost:29876",
+                "MARTY_ORG_ID": "00000000-0000-0000-0000-000000000001",
+                "MARTY_ORG_SLUG": "marty", "PUBLIC_DOMAIN": "localhost",
+                "DID_RESOLUTION_BASE_URL": "http://gateway:8000",
+            },
+            "credential-template": {
+                **support_common, "SERVICE_NAME": "credential_template",
+                "CREDENTIAL_TEMPLATE_SERVICE_PORT": "8003", "CT_GRPC_PORT": "9003",
+                "RP_GRPC_TARGET": "revocation-profile:9013",
+                "SIGNING_KEYS_INTERNAL_URL": "http://signing-keys:8017/internal",
+                "SIGNING_KEYS_INTERNAL_API_KEY_FILE":
+                    "/run/secrets/signing_keys_internal_api_key",
+                "TRUST_PROFILE_SERVICE_URL": "http://trust-profile:8004",
+                "PUBLIC_API_URL": "http://localhost:29876",
+                "MARTY_ORG_ID": "00000000-0000-0000-0000-000000000001",
+                "MARTY_MIGRATION_PROFILE": "dev",
+            },
+            "presentation-policy": {
+                **support_common, "SERVICE_NAME": "presentation_policy",
+                "PRESENTATION_POLICY_SERVICE_PORT": "8009", "PP_GRPC_PORT": "9009",
+                "ISSUANCE_API_KEY_FILE": "/run/secrets/issuance_api_key",
+                "TRUST_PROFILE_SERVICE_URL": "http://trust-profile:8004",
+                "ISSUANCE_NATIVE_SERVICE_URL": "http://issuance-native:8005",
+                "PUBLIC_BASE_URL": "http://localhost:29876",
+                "ISSUER_BASE_URL": "http://localhost:29876",
+                "DID_RESOLUTION_BASE_URL": "http://gateway:8000",
+                "PUBLIC_DOMAIN": "localhost", "MARTY_ORG_SLUG": "marty",
+            },
+            "deployment-profile": {
+                **support_common, "SERVICE_NAME": "deployment_profile",
+                "DEPLOYMENT_PROFILE_SERVICE_PORT": "8010",
+            },
+        }
         runtime_env = (organization_env if service == "organization" else
                        revocation_env if service == "revocation-profile" else
-                       migration_env if service == "revocation-profile-migrate" else {})
+                       migration_env if service == "revocation-profile-migrate" else
+                       support_env.get(service, {}))
         gateway_binding = [{"HostIp": "127.0.0.1", "HostPort": "29876"}]
         calls[("container", "inspect", identifier)] = json.dumps([{
             "Id": identifier, "Name": f"/{PROJECT}-{service}-1",
@@ -180,6 +236,30 @@ def fixture() -> tuple[dict, dict[tuple[str, ...], str]]:
             "Labels": LABELS,
         }])
     return record, calls
+
+
+@pytest.mark.parametrize("service,key,value", [
+    ("credential-template", "PUBLIC_API_URL", "http://localhost:8000"),
+    ("credential-template", "MARTY_MIGRATION_PROFILE", "other"),
+    ("trust-profile", "MARTY_ISSUER_BASE_URL", "http://production.example"),
+    ("trust-profile", "MARTY_ORG_ID", "00000000-0000-0000-0000-000000000002"),
+    ("presentation-policy", "ISSUANCE_NATIVE_SERVICE_URL", "http://issuance:8005"),
+    ("presentation-policy", "DID_RESOLUTION_BASE_URL", "http://production.example"),
+    ("deployment-profile", "ORG_GRPC_TARGET", "gateway:9002"),
+])
+def test_live_rust_support_binding_matches_disposable_project(
+    service: str, key: str, value: str,
+) -> None:
+    record, calls = fixture()
+    identifier = record["containers"][service]
+    inspect_key = ("container", "inspect", identifier)
+    item = json.loads(calls[inspect_key])
+    item[0]["Config"]["Env"] = [entry for entry in item[0]["Config"]["Env"]
+                               if not entry.startswith(key + "=")]
+    item[0]["Config"]["Env"].append(f"{key}={value}")
+    calls[inspect_key] = json.dumps(item)
+    with pytest.raises(OwnershipError, match="runtime identity"):
+        run(record, calls)
 
 
 @pytest.mark.parametrize("mutation", [

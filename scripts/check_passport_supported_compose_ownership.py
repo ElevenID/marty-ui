@@ -58,6 +58,13 @@ SECRET_MOUNTS = {
     "revocation-profile": ("marty_db_password", "grpc_service_token"),
     "event-stream": (),
     "organization": ("marty_db_password", "grpc_service_token"),
+    "credential-template": ("marty_db_password", "grpc_service_token",
+                            "signing_keys_internal_api_key"),
+    "trust-profile": ("marty_db_password", "grpc_service_token",
+                      "signing_keys_internal_api_key"),
+    "presentation-policy": ("marty_db_password", "grpc_service_token",
+                            "issuance_api_key"),
+    "deployment-profile": ("marty_db_password", "grpc_service_token"),
     "issuance-native": ("marty_db_password", "bao_token", "signing_keys_internal_api_key",
                         "issuance_api_key", "grpc_service_token", "token_hmac_key",
                         "integration_secret_master_key"),
@@ -187,6 +194,63 @@ def _revocation_environment(actual: object, status_origin: str) -> None:
             and "MARTY_DB_PASSWORD" not in environment
             and "GRPC_SERVICE_TOKEN" not in environment,
             "Revocation Profile runtime identity differs from disposable model")
+
+
+def _support_environment(actual: object, service: str, status_origin: str) -> None:
+    environment = _runtime_environment(actual, service)
+    database = "postgresql+asyncpg://marty:${MARTY_DB_PASSWORD}@postgres:5432/marty"
+    common = {
+        "ENVIRONMENT": "development",
+        "DATABASE_URL_TEMPLATE": database,
+        "MARTY_DB_PASSWORD_FILE": "/run/secrets/marty_db_password",
+        "GRPC_SERVICE_TOKEN_FILE": "/run/secrets/grpc_service_token",
+        "ORG_GRPC_TARGET": "organization:9002",
+    }
+    public_origin = status_origin.replace("127.0.0.1", "localhost")
+    expected = {
+        "trust-profile": {
+            **common, "SERVICE_NAME": "trust_profile", "TRUST_PROFILE_SERVICE_PORT": "8004",
+            "SIGNING_KEYS_INTERNAL_API_KEY_FILE":
+                "/run/secrets/signing_keys_internal_api_key",
+            "MARTY_ISSUER_DID": "did:web:localhost:orgs:marty",
+            "MARTY_ISSUER_BASE_URL": public_origin,
+            "MARTY_ORG_ID": "00000000-0000-0000-0000-000000000001",
+            "MARTY_ORG_SLUG": "marty", "PUBLIC_DOMAIN": "localhost",
+            "DID_RESOLUTION_BASE_URL": "http://gateway:8000",
+        },
+        "credential-template": {
+            **common, "SERVICE_NAME": "credential_template",
+            "CREDENTIAL_TEMPLATE_SERVICE_PORT": "8003", "CT_GRPC_PORT": "9003",
+            "RP_GRPC_TARGET": "revocation-profile:9013",
+            "SIGNING_KEYS_INTERNAL_URL": "http://signing-keys:8017/internal",
+            "SIGNING_KEYS_INTERNAL_API_KEY_FILE":
+                "/run/secrets/signing_keys_internal_api_key",
+            "TRUST_PROFILE_SERVICE_URL": "http://trust-profile:8004",
+            "PUBLIC_API_URL": public_origin,
+            "MARTY_ORG_ID": "00000000-0000-0000-0000-000000000001",
+            "MARTY_MIGRATION_PROFILE": "dev",
+        },
+        "presentation-policy": {
+            **common, "SERVICE_NAME": "presentation_policy",
+            "PRESENTATION_POLICY_SERVICE_PORT": "8009", "PP_GRPC_PORT": "9009",
+            "ISSUANCE_API_KEY_FILE": "/run/secrets/issuance_api_key",
+            "TRUST_PROFILE_SERVICE_URL": "http://trust-profile:8004",
+            "ISSUANCE_NATIVE_SERVICE_URL": "http://issuance-native:8005",
+            "PUBLIC_BASE_URL": public_origin,
+            "ISSUER_BASE_URL": public_origin,
+            "DID_RESOLUTION_BASE_URL": "http://gateway:8000",
+            "PUBLIC_DOMAIN": "localhost", "MARTY_ORG_SLUG": "marty",
+        },
+        "deployment-profile": {
+            **common, "SERVICE_NAME": "deployment_profile",
+            "DEPLOYMENT_PROFILE_SERVICE_PORT": "8010",
+        },
+    }[service]
+    require(all(environment.get(key) == value for key, value in expected.items())
+            and all(key not in environment for key in (
+                "MARTY_DB_PASSWORD", "GRPC_SERVICE_TOKEN", "ISSUANCE_API_KEY",
+                "SIGNING_KEYS_INTERNAL_API_KEY")),
+            f"{service} runtime identity differs from disposable model")
 
 
 def _status_origin(gateway: dict) -> str:
@@ -336,6 +400,9 @@ def verify(record: dict, surface: str, now: datetime,
             _organization_environment(config.get("Env"), record)
         elif service == "revocation-profile":
             _revocation_environment(config.get("Env"), status_origin)
+        elif service in {"credential-template", "trust-profile",
+                         "presentation-policy", "deployment-profile"}:
+            _support_environment(config.get("Env"), service, status_origin)
         elif service == "revocation-profile-migrate":
             migration_env = _runtime_environment(config.get("Env"), "Revocation migration")
             require(migration_env.get("STATUS_LIST_BASE_URL") == status_origin,

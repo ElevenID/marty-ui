@@ -29,8 +29,10 @@ SELECTED = frozenset({
     "passport-beta-bureau",
 })
 ISOLATED_DEPENDENCIES = frozenset({"postgres", "openbao", "redis"})
-RUST_DEPENDENCIES = frozenset({"organization", "event-stream",
-                               "revocation-profile", "revocation-profile-migrate"})
+RUST_DEPENDENCIES = frozenset({
+    "organization", "event-stream", "revocation-profile", "revocation-profile-migrate",
+    "credential-template", "trust-profile", "presentation-policy", "deployment-profile",
+})
 DISPOSABLE_SERVICES = SELECTED | ISOLATED_DEPENDENCIES | RUST_DEPENDENCIES | frozenset({
     "db-migrate", "issuance", "signing-keys",
 })
@@ -291,6 +293,16 @@ def validate_model(
             == (ROOT / "scripts/passport_supported_openbao_start.sh").resolve()
             and (ROOT / "scripts/passport_supported_openbao_start.sh").is_file(),
             "Compose OpenBao start config differs from protected source")
+    gateway_candidate = services.get("gateway")
+    gateway_candidate_ports = (gateway_candidate.get("ports")
+                               if isinstance(gateway_candidate, dict) else None)
+    gateway_candidate_port = (gateway_candidate_ports[0].get("published")
+                              if isinstance(gateway_candidate_ports, list)
+                              and len(gateway_candidate_ports) == 1
+                              and isinstance(gateway_candidate_ports[0], dict) else None)
+    public_origin = (f"http://localhost:{gateway_candidate_port}"
+                     if isinstance(gateway_candidate_port, str)
+                     and gateway_candidate_port.isdigit() else None)
     for name, service in services.items():
         require(isinstance(service, dict), "Compose service is invalid")
         for forbidden in ("container_name", "network_mode", "pid", "ipc",
@@ -395,6 +407,12 @@ def validate_model(
             if (name in {"revocation-profile", "revocation-profile-migrate"}
                     and key == "STATUS_LIST_BASE_URL"):
                 continue
+            if (name in {"credential-template", "trust-profile",
+                         "presentation-policy", "flow"}
+                    and key in {"PUBLIC_API_URL", "MARTY_ISSUER_BASE_URL",
+                                "PUBLIC_BASE_URL", "ISSUER_BASE_URL"}
+                    and value == public_origin):
+                continue
             for url in URLS.findall(value):
                 require(_endpoint_host(url) in services,
                         f"Compose {name} endpoint leaves disposable services")
@@ -490,6 +508,115 @@ def validate_model(
             and 1024 <= int(gateway_ports[0]["published"]) <= 65535,
             "Disposable status list origin lacks a reserved loopback Gateway port")
     status_origin = f"http://127.0.0.1:{gateway_ports[0]['published']}"
+    public_origin = f"http://localhost:{gateway_ports[0]['published']}"
+    shared_rust = {
+        "ENVIRONMENT": "development",
+        "DATABASE_URL_TEMPLATE": organization_env["DATABASE_URL_TEMPLATE"],
+        "MARTY_DB_PASSWORD_FILE": "/run/secrets/marty_db_password",
+        "GRPC_SERVICE_TOKEN_FILE": "/run/secrets/grpc_service_token",
+        "ORG_GRPC_TARGET": "organization:9002",
+    }
+    rust_requirements = {
+        "trust-profile": ({
+            **shared_rust, "SERVICE_NAME": "trust_profile",
+            "TRUST_PROFILE_SERVICE_PORT": "8004",
+            "SIGNING_KEYS_INTERNAL_API_KEY_FILE":
+                "/run/secrets/signing_keys_internal_api_key",
+            "MARTY_ORG_ID": organization_env["MARTY_ORG_ID"],
+            "MARTY_ORG_SLUG": "marty", "MARTY_ISSUER_DID": "did:web:localhost:orgs:marty",
+            "MARTY_ISSUER_BASE_URL": public_origin, "PUBLIC_DOMAIN": "localhost",
+            "DID_RESOLUTION_BASE_URL": "http://gateway:8000",
+        }, {"marty_db_password", "grpc_service_token", "signing_keys_internal_api_key"},
+         {"db-migrate": "service_completed_successfully", "organization": "service_healthy"},
+         8004),
+        "credential-template": ({
+            **shared_rust, "SERVICE_NAME": "credential_template",
+            "CREDENTIAL_TEMPLATE_SERVICE_PORT": "8003", "CT_GRPC_PORT": "9003",
+            "RP_GRPC_TARGET": "revocation-profile:9013",
+            "SIGNING_KEYS_INTERNAL_URL": "http://signing-keys:8017/internal",
+            "SIGNING_KEYS_INTERNAL_API_KEY_FILE":
+                "/run/secrets/signing_keys_internal_api_key",
+            "TRUST_PROFILE_SERVICE_URL": "http://trust-profile:8004",
+            "PUBLIC_API_URL": public_origin,
+            "MARTY_ORG_ID": organization_env["MARTY_ORG_ID"],
+            "MARTY_MIGRATION_PROFILE": "dev",
+        }, {"marty_db_password", "grpc_service_token", "signing_keys_internal_api_key"},
+         {"db-migrate": "service_completed_successfully", "organization": "service_healthy",
+          "revocation-profile": "service_healthy", "trust-profile": "service_healthy",
+          "signing-keys": "service_healthy"}, 8003),
+        "presentation-policy": ({
+            **shared_rust, "SERVICE_NAME": "presentation_policy",
+            "PRESENTATION_POLICY_SERVICE_PORT": "8009", "PP_GRPC_PORT": "9009",
+            "ISSUANCE_API_KEY_FILE": "/run/secrets/issuance_api_key",
+            "DID_RESOLUTION_BASE_URL": "http://gateway:8000",
+            "TRUST_PROFILE_SERVICE_URL": "http://trust-profile:8004",
+            "ISSUANCE_NATIVE_SERVICE_URL": "http://issuance-native:8005",
+            "PUBLIC_DOMAIN": "localhost", "PUBLIC_BASE_URL": public_origin,
+            "ISSUER_BASE_URL": public_origin, "MARTY_ORG_SLUG": "marty",
+        }, {"marty_db_password", "grpc_service_token", "issuance_api_key"},
+         {"db-migrate": "service_completed_successfully", "organization": "service_healthy",
+          "trust-profile": "service_healthy", "issuance-native": "service_healthy"}, 8009),
+        "deployment-profile": ({
+            **shared_rust, "SERVICE_NAME": "deployment_profile",
+            "DEPLOYMENT_PROFILE_SERVICE_PORT": "8010",
+        }, {"marty_db_password", "grpc_service_token"},
+         {"db-migrate": "service_completed_successfully", "organization": "service_healthy"},
+         8010),
+    }
+    for name, (expected_env, expected_secrets, expected_dependencies, port) in rust_requirements.items():
+        service = services[name]
+        environment = service.get("environment")
+        references = service.get("secrets")
+        depends_on = service.get("depends_on")
+        require(isinstance(environment, dict)
+                and all(environment.get(key) == value for key, value in expected_env.items())
+                and all(key not in environment for key in (
+                    "MARTY_DB_PASSWORD", "GRPC_SERVICE_TOKEN", "ISSUANCE_API_KEY",
+                    "SIGNING_KEYS_INTERNAL_API_KEY"))
+                and isinstance(references, list)
+                and {secret.get("source") for secret in references} == expected_secrets
+                and isinstance(depends_on, dict)
+                and set(depends_on) == set(expected_dependencies)
+                and all(isinstance(depends_on[dependency], dict)
+                        and depends_on[dependency].get("condition") == condition
+                        for dependency, condition in expected_dependencies.items())
+                and service.get("healthcheck", {}).get("test")
+                == ["CMD", "curl", "--fail", f"http://localhost:{port}/health"],
+                f"Disposable {name} runtime is not isolated and ready")
+    require(all(flow.get(key) == value for key, value in {
+        "PUBLIC_BASE_URL": public_origin,
+        "CT_GRPC_TARGET": "credential-template:9003",
+        "PP_GRPC_TARGET": "presentation-policy:9009",
+        "ISSUANCE_GRPC_TARGET": "issuance-native:9005",
+        "CREDENTIAL_TEMPLATE_SERVICE_URL": "http://credential-template:8003",
+        "TRUST_PROFILE_SERVICE_URL": "http://trust-profile:8004",
+        "DEPLOYMENT_PROFILE_SERVICE_URL": "http://deployment-profile:8010",
+    }.items())
+            and isinstance(services["flow"].get("depends_on"), dict)
+            and all(services["flow"]["depends_on"].get(name, {}).get("condition")
+                    == "service_healthy" for name in (
+                        "credential-template", "trust-profile", "presentation-policy",
+                        "deployment-profile", "issuance-native", "signing-keys"))
+            and all(services[name].get("healthcheck", {}).get("test")
+                    == ["CMD", "curl", "--fail", f"http://localhost:{port}/health"]
+                    for name, port in (("issuance-native", 8005), ("signing-keys", 8017))),
+            "Disposable Flow startup dependencies are incomplete")
+    require(native.get("ISSUANCE_GRPC_ENABLED") == "true"
+            and native.get("ISSUANCE_GRPC_PORT") == "9005"
+            and native.get("CT_GRPC_TARGET") == "credential-template:9003"
+            and native.get("CREDENTIAL_TEMPLATE_SERVICE_URL")
+            == "http://credential-template:8003"
+            and services["issuance-native"].get("depends_on", {}).get(
+                "credential-template", {}).get("condition") == "service_healthy"
+            and all(gateway.get(key) == f"http://{name}:{port}"
+                    and services["gateway"].get("depends_on", {}).get(
+                        name, {}).get("condition") == "service_healthy"
+                    for key, name, port in (
+                        ("CREDENTIAL_TEMPLATE_SERVICE_URL", "credential-template", 8003),
+                        ("TRUST_PROFILE_SERVICE_URL", "trust-profile", 8004),
+                        ("PRESENTATION_POLICY_SERVICE_URL", "presentation-policy", 8009),
+                        ("DEPLOYMENT_PROFILE_SERVICE_URL", "deployment-profile", 8010))),
+            "Disposable passport routing lacks the Rust support services")
     migration = services["db-migrate"]
     migration_env = migration.get("environment")
     dependencies = migration.get("depends_on")

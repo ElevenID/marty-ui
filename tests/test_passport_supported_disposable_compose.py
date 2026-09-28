@@ -61,6 +61,8 @@ def test_real_compose_render_is_safe_but_not_accepted(
         "signing-keys", "db-migrate", "postgres", "redis", "openbao",
         "organization", "event-stream",
         "revocation-profile", "revocation-profile-migrate",
+        "credential-template", "trust-profile", "presentation-policy",
+        "deployment-profile",
     }
     result = validate_model(model, project, SERVICES, tmp_path)
     assert result["model_safe"] is True

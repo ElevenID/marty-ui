@@ -55,6 +55,9 @@ def safe_model(root: Path) -> dict:
     services["passport-beta-bureau"]["networks"] = ["private", "callback_signing"]
     services["issuance-native"]["environment"].update({
         "ENVIRONMENT": "development",
+        "ISSUANCE_GRPC_ENABLED": "true", "ISSUANCE_GRPC_PORT": "9005",
+        "CT_GRPC_TARGET": "credential-template:9003",
+        "CREDENTIAL_TEMPLATE_SERVICE_URL": "http://credential-template:8003",
         "PERSONALIZATION_BUREAU_URL": "http://passport-beta-bureau:8020",
         "PERSONALIZATION_BUREAU_API_KEY_FILE": "/run/secrets/grpc_service_token",
         "PERSONALIZATION_BUREAU_PROVIDER_PROFILE_ID": "passport-beta-bureau",
@@ -66,6 +69,7 @@ def safe_model(root: Path) -> dict:
     })
     services["issuance-native"]["depends_on"] = {
         "revocation-profile": {"condition": "service_healthy"},
+        "credential-template": {"condition": "service_healthy"},
     }
     services["gateway"]["environment"].update({
         "ENVIRONMENT": "development",
@@ -77,12 +81,19 @@ def safe_model(root: Path) -> dict:
         "ES_GRPC_TARGET": "event-stream:9015",
         "GRPC_SERVICE_TOKEN_FILE": "/run/secrets/grpc_service_token",
         "REVOCATION_PROFILE_SERVICE_URL": "http://revocation-profile:8013",
+        "CREDENTIAL_TEMPLATE_SERVICE_URL": "http://credential-template:8003",
+        "TRUST_PROFILE_SERVICE_URL": "http://trust-profile:8004",
+        "PRESENTATION_POLICY_SERVICE_URL": "http://presentation-policy:8009",
+        "DEPLOYMENT_PROFILE_SERVICE_URL": "http://deployment-profile:8010",
     })
     services["gateway"]["ports"] = [
         {"host_ip": "127.0.0.1", "published": "29876", "target": 8000}]
     services["gateway"]["depends_on"] = {
         "organization": {"condition": "service_healthy"},
         "revocation-profile": {"condition": "service_healthy"},
+        **{name: {"condition": "service_healthy"} for name in (
+            "credential-template", "trust-profile", "presentation-policy",
+            "deployment-profile")},
     }
     services["flow"]["environment"].update({
         "ENVIRONMENT": "development",
@@ -208,6 +219,82 @@ def safe_model(root: Path) -> dict:
         "healthcheck": {"test": ["CMD", "curl", "--fail",
                                  "http://localhost:8013/health"]},
     }
+    shared = {
+        "ENVIRONMENT": "development",
+        "DATABASE_URL_TEMPLATE": (
+            "postgresql+asyncpg://marty:${MARTY_DB_PASSWORD}@postgres:5432/marty"),
+        "MARTY_DB_PASSWORD_FILE": "/run/secrets/marty_db_password",
+        "GRPC_SERVICE_TOKEN_FILE": "/run/secrets/grpc_service_token",
+        "ORG_GRPC_TARGET": "organization:9002",
+    }
+    for service, port in (("credential-template", 8003), ("trust-profile", 8004),
+                          ("presentation-policy", 8009), ("deployment-profile", 8010)):
+        services[service] = {
+            "image": IMAGE, "networks": ["private"],
+            "environment": {**shared, "SERVICE_NAME": service.replace("-", "_"),
+                            f"{service.replace('-', '_').upper()}_SERVICE_PORT": str(port)},
+            "secrets": [{"source": "marty_db_password"},
+                        {"source": "grpc_service_token"}],
+        }
+    services["credential-template"]["environment"].update({
+        "CT_GRPC_PORT": "9003", "RP_GRPC_TARGET": "revocation-profile:9013",
+        "SIGNING_KEYS_INTERNAL_URL": "http://signing-keys:8017/internal",
+        "SIGNING_KEYS_INTERNAL_API_KEY_FILE": "/run/secrets/signing_keys_internal_api_key",
+        "TRUST_PROFILE_SERVICE_URL": "http://trust-profile:8004",
+        "PUBLIC_API_URL": "http://localhost:29876",
+        "MARTY_ORG_ID": "00000000-0000-0000-0000-000000000001",
+        "MARTY_MIGRATION_PROFILE": "dev",
+    })
+    services["trust-profile"]["environment"].update({
+        "SIGNING_KEYS_INTERNAL_API_KEY_FILE": "/run/secrets/signing_keys_internal_api_key",
+        "MARTY_ORG_ID": "00000000-0000-0000-0000-000000000001",
+        "MARTY_ORG_SLUG": "marty", "MARTY_ISSUER_DID": "did:web:localhost:orgs:marty",
+        "MARTY_ISSUER_BASE_URL": "http://localhost:29876",
+        "PUBLIC_DOMAIN": "localhost", "DID_RESOLUTION_BASE_URL": "http://gateway:8000",
+    })
+    for service in ("credential-template", "trust-profile"):
+        services[service]["secrets"].append(
+            {"source": "signing_keys_internal_api_key"})
+    services["presentation-policy"]["environment"].update({
+        "PP_GRPC_PORT": "9009", "ISSUANCE_API_KEY_FILE": "/run/secrets/issuance_api_key",
+        "DID_RESOLUTION_BASE_URL": "http://gateway:8000",
+        "TRUST_PROFILE_SERVICE_URL": "http://trust-profile:8004",
+        "ISSUANCE_NATIVE_SERVICE_URL": "http://issuance-native:8005",
+        "PUBLIC_DOMAIN": "localhost", "PUBLIC_BASE_URL": "http://localhost:29876",
+        "ISSUER_BASE_URL": "http://localhost:29876", "MARTY_ORG_SLUG": "marty",
+    })
+    services["presentation-policy"]["secrets"].append({"source": "issuance_api_key"})
+    for service, port, dependencies in (
+        ("trust-profile", 8004, ("db-migrate", "organization")),
+        ("credential-template", 8003, ("db-migrate", "organization",
+                                       "revocation-profile", "trust-profile",
+                                       "signing-keys")),
+        ("presentation-policy", 8009, ("db-migrate", "organization",
+                                        "trust-profile", "issuance-native")),
+        ("deployment-profile", 8010, ("db-migrate", "organization")),
+    ):
+        services[service]["depends_on"] = {
+            name: {"condition": "service_completed_successfully"
+                   if name == "db-migrate" else "service_healthy"}
+            for name in dependencies
+        }
+        services[service]["healthcheck"] = {
+            "test": ["CMD", "curl", "--fail", f"http://localhost:{port}/health"]}
+    services["flow"]["environment"].update({
+        "PUBLIC_BASE_URL": "http://localhost:29876",
+        "CT_GRPC_TARGET": "credential-template:9003",
+        "PP_GRPC_TARGET": "presentation-policy:9009",
+        "ISSUANCE_GRPC_TARGET": "issuance-native:9005",
+        "CREDENTIAL_TEMPLATE_SERVICE_URL": "http://credential-template:8003",
+        "TRUST_PROFILE_SERVICE_URL": "http://trust-profile:8004",
+        "DEPLOYMENT_PROFILE_SERVICE_URL": "http://deployment-profile:8010",
+    })
+    services["flow"]["depends_on"] = {
+        name: {"condition": "service_healthy"} for name in (
+            "credential-template", "trust-profile", "presentation-policy",
+            "deployment-profile", "issuance-native", "signing-keys")}
+    services["issuance-native"]["healthcheck"] = {
+        "test": ["CMD", "curl", "--fail", "http://localhost:8005/health"]}
     services["signing-keys"] = {
         "image": IMAGE,
         "networks": ["private"],
@@ -217,6 +304,8 @@ def safe_model(root: Path) -> dict:
                             "/run/secrets/signing_keys_internal_api_key"},
         "secrets": [{"source": "signing_keys_internal_api_key"}],
         "depends_on": {"redis": {"condition": "service_healthy"}},
+        "healthcheck": {"test": ["CMD", "curl", "--fail",
+                                 "http://localhost:8017/health"]},
     }
     services["db-migrate"] = {
         "image": "ghcr.io/elevenid/marty-ui-oss/migrations@sha256:" + "b" * 64,
@@ -276,6 +365,22 @@ def test_isolated_resolved_compose_model_passes_only_static_preflight(
     report = validate_model(safe_model(tmp_path), PROJECT, IMAGE, tmp_path)
     assert report["model_safe"] is True
     assert report["rollback_accepted"] is False
+
+
+@pytest.mark.parametrize("service,key,value", [
+    ("flow", "ISSUANCE_GRPC_TARGET", "issuance:9006"),
+    ("credential-template", "PUBLIC_API_URL", "http://gateway:8000"),
+    ("trust-profile", "MARTY_ISSUER_BASE_URL", "http://localhost:8000"),
+    ("presentation-policy", "ISSUANCE_NATIVE_SERVICE_URL", "http://issuance:8005"),
+    ("deployment-profile", "ORG_GRPC_TARGET", "gateway:9002"),
+])
+def test_rust_support_runtime_binding_is_required(
+    tmp_path: Path, service: str, key: str, value: str,
+) -> None:
+    model = safe_model(tmp_path)
+    model["services"][service]["environment"][key] = value
+    with pytest.raises(ModelPreflightError):
+        validate_model(model, PROJECT, IMAGE, tmp_path)
 
 
 def test_attested_plan_binds_all_disposable_images(tmp_path: Path) -> None:
@@ -380,7 +485,7 @@ def test_attested_plan_binds_all_disposable_images(tmp_path: Path) -> None:
         "prod": {"file": "/etc/marty-selfhost-prod/secret"}}), "config"),
     (lambda model, root: model["services"]["gateway"].update(
         ports=[{"host_ip": "0.0.0.0", "published": "8000", "target": 8000}]),
-     "loopback"),
+     "loopback|endpoint"),
     (lambda model, root: model["services"]["gateway"]["environment"].update(
         PASSPORT_PROVIDER_INGRESS_GATEWAY_ENABLED="true"), "external provider"),
     (lambda model, root: model["services"]["issuance-native"]["environment"].update(
