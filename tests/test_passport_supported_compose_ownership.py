@@ -163,7 +163,9 @@ def fixture() -> tuple[dict, dict[tuple[str, ...], str]]:
             "SIGNING_KEYS_CSCA_ISSUE_GATEWAY_KEY_FILE":
                 "/run/secrets/csca_issue_gateway_key",
         }
-        gateway_env = {**ceremony_env, "GRPC_INSECURE_ALLOWED": "true"}
+        gateway_env = {**ceremony_env, "GRPC_INSECURE_ALLOWED": "true",
+                       "ISSUER_BASE_URL": "http://localhost:29876"}
+        native_env = {"ISSUER_BASE_URL": "http://localhost:29876"}
         signing_env = {**ceremony_env,
                        "SIGNING_KEYS_BETA_CSCA_ISSUANCE_ENABLED": "true"}
         support_common = {
@@ -215,9 +217,12 @@ def fixture() -> tuple[dict, dict[tuple[str, ...], str]]:
             },
         }
         runtime_env = (organization_env if service == "organization" else
+                       {"MARTY_ISSUER_BASE_URL": "http://localhost:29876"}
+                       if service == "db-migrate" else
                        revocation_env if service == "revocation-profile" else
                        migration_env if service == "revocation-profile-migrate" else
                        gateway_env if service == "gateway" else
+                       native_env if service == "issuance-native" else
                        signing_env if service == "signing-keys" else
                        support_env.get(service, {}))
         gateway_binding = [{"HostIp": "127.0.0.1", "HostPort": "29876"}]
@@ -366,6 +371,23 @@ def test_live_gateway_port_and_seeded_status_origin_are_bound() -> None:
     migration[0]["Config"]["Env"] = ["STATUS_LIST_BASE_URL=http://gateway:8000"]
     calls[migration_key] = json.dumps(migration)
     with pytest.raises(OwnershipError, match="status origin"):
+        run(record, calls)
+
+
+@pytest.mark.parametrize(("service", "key"), [
+    ("db-migrate", "MARTY_ISSUER_BASE_URL"),
+    ("gateway", "ISSUER_BASE_URL"),
+    ("issuance-native", "ISSUER_BASE_URL"),
+])
+def test_live_issuer_origin_matches_disposable_gateway(service: str, key: str) -> None:
+    record, calls = fixture()
+    container_key = ("container", "inspect", record["containers"][service])
+    item = json.loads(calls[container_key])
+    environment = item[0]["Config"]["Env"]
+    environment[environment.index(f"{key}=http://localhost:29876")] = (
+        f"{key}=https://beta.elevenidllc.com")
+    calls[container_key] = json.dumps(item)
+    with pytest.raises(OwnershipError, match="issuer origin"):
         run(record, calls)
 
 
