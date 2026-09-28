@@ -134,6 +134,21 @@ def test_private_material_receipt_binds_first_write_to_exact_tenant_job_and_chai
         beta_material_receipt(organization, source, bureau, *digests, b"short", runner=execute)
 
 
+def test_material_receipt_commitments_follow_frozen_cross_language_vector() -> None:
+    contract = json.loads((Path(__file__).resolve().parents[1] / "contracts/passport-beta-bureau-behavior.json").read_text())
+    vector = contract["first_accepted_material_receipt"]["commitment_algorithm"]["test_vector"]
+    _, base = runner()
+
+    def accepted(command: list[str]) -> str:
+        return "1|t|t|t" if command[1] == "exec" else base(command)
+
+    result = beta_material_receipt("beta-org", vector["source_job_id"], vector["bureau_job_id"],
+                                   "a" * 64, "b" * 64, "c" * 64,
+                                   vector["key_utf8"].encode(), runner=accepted)
+    assert result["evidence"]["source_job_id_commitment"] == vector["source_job_commitment"]
+    assert result["evidence"]["bureau_job_id_commitment"] == vector["bureau_job_commitment"]
+
+
 def test_active_flow_drain_stays_equal_to_beta_cutover_preflight() -> None:
     deploy = (Path(__file__).resolve().parents[1] / "scripts/deploy-local-beta-release.ps1").read_text(encoding="utf-8")
     match = re.search(r"\$activeFlowsSql = @'\s*(.*?)\s*'@", deploy, re.DOTALL)

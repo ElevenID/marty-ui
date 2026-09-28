@@ -23,7 +23,21 @@
     "compatibility": "Keep the frozen nonempty-field acceptance rule: malformed synthetic SOD or certificate values may be accepted but have null canonical DER digests and cannot satisfy beta evidence",
     "retry": "The first accepted digests are immutable when the same document is replayed with another signature or certificate; legacy rows without digests cannot qualify",
     "protected_read": "Read only inside the protected beta host using all three binding fields; do not add a public receipt route or upload raw material or these unkeyed digests",
-    "public_evidence": "Publish only verified comparison outcomes and keyed source-job/bureau-job commitments after the protected read"
+    "public_evidence": "Publish only verified comparison outcomes and keyed source-job/bureau-job commitments after the protected read",
+    "commitment_algorithm": {
+      "name": "HMAC-SHA256",
+      "key": "UTF-8 bytes of the private organization-scoped beta acceptance API key; never upload this key",
+      "source_job_preimage": "UTF-8 bytes of ASCII source-job: followed by the exact source job ID",
+      "bureau_job_preimage": "UTF-8 bytes of ASCII bureau-job: followed by the canonical lowercase hyphenated bureau UUID",
+      "encoding": "lowercase hexadecimal",
+      "test_vector": {
+        "key_utf8": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "source_job_id": "job-1",
+        "bureau_job_id": "c3ddfe4d-e67e-473e-a278-c95a27459344",
+        "source_job_commitment": "500391b26fdf0235e61a075f06a7a58a0ee48faf4765bedf0482656bcb425908",
+        "bureau_job_commitment": "1ab8276ee9595c34609b514f29449d474d1256ea15168966ad333db16d385916"
+      }
+    }
   },
   "persisted_fields": [
     "bureau_job_id",
