@@ -12,11 +12,9 @@ services:
     environment:
       ENVIRONMENT: development
       PASSPORT_ACCEPTANCE_SURFACE: base
-  passport-callback-signer-supported:
+  passport-callback-signer:
     environment:
-      ENVIRONMENT: development
       PASSPORT_ACCEPTANCE_SURFACE: base
-  passport-provider-ingress:
+  passport-beta-bureau:
     environment:
-      ENVIRONMENT: development
       PASSPORT_ACCEPTANCE_SURFACE: base

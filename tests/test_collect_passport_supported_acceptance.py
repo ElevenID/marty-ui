@@ -65,7 +65,7 @@ def docker_runner(project: str, *, wrong_image: bool = False):
             service = args[-1].split("=")[-1]
             return service + "-container\n"
         service = args[-1].removesuffix("-container")
-        flags = [f"{name}=true" for name in gate.FLAGS[service]]
+        flags = [f"{name}=true" for name in gate.COMPOSE_FLAGS[service]]
         record = {
             "Image": "sha256:" + "e" * 64,
             "Config": {
@@ -87,7 +87,7 @@ def docker_runner(project: str, *, wrong_image: bool = False):
 
 def test_compose_runtime_reads_five_exact_running_service_images() -> None:
     observed = gate.observe_compose("base", BASE, REFERENCE, docker_runner(BASE))
-    assert set(observed) == set(gate.SERVICES)
+    assert set(observed) == set(gate.COMPOSE_SERVICES)
     assert all(item["oci_reference"] == REFERENCE for item in observed.values())
     with pytest.raises(gate.SupportedEvidenceError, match="released services image"):
         gate.observe_compose("base", BASE, REFERENCE, docker_runner(BASE, wrong_image=True))
@@ -120,16 +120,17 @@ def test_live_compose_prerequisite_still_does_not_claim_routes_or_rollback(
         "container_id": "gateway-container",
     }
     assert base["probes"]["nine_route_gateway_flow"]["verified"] is False
-    assert base["probes"]["physical_bureau_callback"]["verified"] is False
+    assert base["probes"]["signed_bureau_callback"]["verified"] is False
     assert base["rollback_accepted"] is False
     assert report["status"] == "blocked"
+    assert report["physical_claim"] == "not_claimed"
 
 
 def test_kubernetes_inspection_is_bounded_to_disposable_namespace() -> None:
     def run(args: list[str]) -> str:
         assert args[1:5] == ["--context", CONTEXT, "-n", NAMESPACE]
         if args[6] == "configmap":
-            return json.dumps({"data": {flag: "true" for names in gate.FLAGS.values()
+            return json.dumps({"data": {flag: "true" for names in gate.KUBERNETES_FLAGS.values()
                                         for flag in names}})
         if args[6] == "pods":
             service = args[8].removeprefix("app=")
@@ -146,11 +147,11 @@ def test_kubernetes_inspection_is_bounded_to_disposable_namespace() -> None:
             "status": {"readyReplicas": 1},
             "spec": {"template": {"spec": {"containers": [{
                 "image": REFERENCE,
-                "env": [{"name": flag, "value": "true"} for flag in gate.FLAGS[service]],
+                "env": [{"name": flag, "value": "true"} for flag in gate.KUBERNETES_FLAGS[service]],
             }]}}},
         })
     observed = gate.observe_kubernetes(NAMESPACE, CONTEXT, REFERENCE, run)
-    assert set(observed) == set(gate.SERVICES)
+    assert set(observed) == set(gate.KUBERNETES_SERVICES)
 
 
 def test_capability_origin_must_match_inspected_gateway_port(tmp_path: Path) -> None:

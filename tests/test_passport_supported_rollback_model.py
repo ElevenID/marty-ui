@@ -32,26 +32,63 @@ def safe_model(root: Path) -> dict:
     services = {name: {"image": IMAGE, "environment": {
         "DATABASE_URL": "postgresql://postgres:5432/test",
         "BAO_ADDR": "http://openbao:8200",
-    }} for name in SELECTED}
+    }, "networks": ["private"]} for name in SELECTED}
+    services["passport-callback-signer"]["environment"].update({
+        "ENVIRONMENT": "beta",
+        "PASSPORT_CALLBACK_SIGNER_ENABLED": "true",
+        "SIGNING_KEYS_INTERNAL_API_KEY_FILE": "/run/secrets/callback_signer_api_key",
+        "BAO_TOKEN_FILE": "/run/secrets/callback_signer_bao_token",
+    })
+    services["passport-callback-signer"]["networks"] = ["callback_signing"]
+    services["passport-beta-bureau"]["environment"].update({
+        "ENVIRONMENT": "beta",
+        "PASSPORT_BETA_BUREAU_ENABLED": "true",
+        "DATABASE_URL_FILE": "/run/secrets/bureau_database_url",
+        "GRPC_SERVICE_TOKEN_FILE": "/run/secrets/grpc_service_token",
+        "SIGNING_KEYS_INTERNAL_API_KEY_FILE": "/run/secrets/callback_signer_api_key",
+        "SIGNING_KEYS_INTERNAL_URL": "http://passport-callback-signer:8018/internal/documents",
+        "PASSPORT_BUREAU_CALLBACK_URL": "http://issuance-native:8005/v1/passport/webhooks/personalization",
+    })
+    services["passport-beta-bureau"]["environment"].pop("DATABASE_URL")
+    services["passport-beta-bureau"]["networks"] = ["private", "callback_signing"]
+    services["issuance-native"]["environment"].update({
+        "ENVIRONMENT": "development",
+        "PERSONALIZATION_BUREAU_URL": "http://passport-beta-bureau:8020",
+        "PERSONALIZATION_BUREAU_API_KEY_FILE": "/run/secrets/grpc_service_token",
+        "PERSONALIZATION_BUREAU_PROVIDER_PROFILE_ID": "passport-beta-bureau",
+    })
+    services["gateway"]["environment"].update({
+        "ENVIRONMENT": "development",
+        "PASSPORT_PROVIDER_INGRESS_GATEWAY_ENABLED": "false",
+    })
+    services["flow"]["environment"]["ENVIRONMENT"] = "development"
     infra = qualified_images(verify_registry=False)
-    services["postgres"] = {"image": infra["postgres"], "volumes": [
+    services["postgres"] = {"image": infra["postgres"], "networks": ["private"], "volumes": [
         {"type": "bind", "source": str(root / "postgres"),
          "target": "/var/lib/postgresql/data"},
     ]}
-    services["openbao"] = {"image": infra["openbao"]}
-    services["redis"] = {"image": infra["redis"]}
+    services["openbao"] = {"image": infra["openbao"],
+                           "networks": ["private", "callback_signing"]}
+    services["redis"] = {"image": infra["redis"], "networks": ["private"]}
     services["signing-keys"] = {
         "image": IMAGE,
+        "networks": ["private"],
         "environment": {"SIGNING_KEYS_REDIS_URL": "redis://redis:6379/2"},
         "depends_on": {"redis": {"condition": "service_healthy"}},
     }
-    services["db-migrate"] = {"image": "ghcr.io/elevenid/marty-ui-oss/migrations@sha256:" + "b" * 64}
-    services["issuance"] = {"image": "ghcr.io/elevenid/marty-credentials-issuance@sha256:" + "c" * 64}
+    services["db-migrate"] = {"image": "ghcr.io/elevenid/marty-ui-oss/migrations@sha256:" + "b" * 64,
+                              "networks": ["private"]}
+    services["issuance"] = {"image": "ghcr.io/elevenid/marty-credentials-issuance@sha256:" + "c" * 64,
+                            "networks": ["private"]}
     for service in services.values():
         service["labels"] = LABELS
     return {"name": PROJECT, "services": services,
-            "networks": {"default": {"name": PROJECT + "_default",
-                                     "internal": True, "labels": LABELS}},
+            "networks": {
+                "private": {"name": PROJECT + "_private",
+                            "internal": True, "labels": LABELS},
+                "callback_signing": {"name": PROJECT + "_callback_signing",
+                                     "internal": True, "labels": LABELS},
+            },
             "volumes": {}, "secrets": {"db": {"file": str(root / "secrets/db")}}}
 
 
@@ -85,7 +122,7 @@ def test_attested_plan_binds_all_disposable_images(tmp_path: Path) -> None:
     bad_plan["infra_images"]["redis"] = "docker.io/library/redis@sha256:" + "f" * 64
     with pytest.raises(ModelPreflightError, match="plan image bindings"):
         validate_planned_model(model, bad_plan, tmp_path)
-    for section, name in (("services", "gateway"), ("networks", "default")):
+    for section, name in (("services", "gateway"), ("networks", "private")):
         bad = deepcopy(model)
         bad[section][name]["labels"]["com.marty.passport.acceptance.run-id"] = "other"
         with pytest.raises(ModelPreflightError, match="resource labels"):
@@ -113,8 +150,12 @@ def test_attested_plan_binds_all_disposable_images(tmp_path: Path) -> None:
         image="postgres:15-alpine"), "immutable"),
     (lambda model, root: model["services"]["gateway"].update(
         network_mode="host"), "shared-host"),
-    (lambda model, root: model["networks"]["default"].update(
+    (lambda model, root: model["networks"]["private"].update(
         name="marty-selfhost-prod_default"), "network"),
+    (lambda model, root: model["services"]["passport-callback-signer"].update(
+        networks=["private", "callback_signing"]), "callback signing boundary"),
+    (lambda model, root: model["services"]["issuance-native"].update(
+        networks=["private", "callback_signing"]), "callback signing boundary"),
     (lambda model, root: model["volumes"].update(
         data={"name": PROJECT + "_data", "driver": "local",
               "driver_opts": {"type": "none", "o": "bind",
@@ -147,6 +188,14 @@ def test_attested_plan_binds_all_disposable_images(tmp_path: Path) -> None:
     (lambda model, root: model["services"]["gateway"].update(
         ports=[{"host_ip": "0.0.0.0", "published": "8000", "target": 8000}]),
      "loopback"),
+    (lambda model, root: model["services"]["gateway"]["environment"].update(
+        PASSPORT_PROVIDER_INGRESS_GATEWAY_ENABLED="true"), "external provider"),
+    (lambda model, root: model["services"]["issuance-native"]["environment"].update(
+        PERSONALIZATION_BUREAU_PROVIDER_PROFILE_ID="unbound-provider"), "external provider"),
+    (lambda model, root: model["services"]["passport-callback-signer"]["environment"].update(
+        BAO_TOKEN="raw-secret"), "isolated beta KMS"),
+    (lambda model, root: model["services"]["passport-beta-bureau"]["environment"].update(
+        GRPC_SERVICE_TOKEN="raw-secret"), "private Marty simulator"),
 ])
 def test_model_rejects_production_escape(tmp_path: Path, change, match: str) -> None:
     model = deepcopy(safe_model(tmp_path))

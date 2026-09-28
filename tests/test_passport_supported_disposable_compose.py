@@ -25,7 +25,7 @@ def inputs(root: Path) -> Path:
     for name in (
         "marty_db_password", "bao_token", "signing_keys_internal_api_key",
         "passport_tenant_api_keys", "callback_signer_api_key",
-        "provider_webhook_secret",
+        "callback_signer_bao_token", "grpc_service_token", "bureau_database_url",
     ):
         (secrets / name).write_text("synthetic-disposable-only", encoding="utf-8")
     env_file = root / "acceptance.env"
@@ -39,7 +39,6 @@ def inputs(root: Path) -> Path:
         "PASSPORT_ACCEPTANCE_SOURCE_COMMIT=" + "a" * 40,
         "PASSPORT_ACCEPTANCE_DATABASE_URL=postgresql+asyncpg://marty:synthetic-disposable-only@postgres:5432/marty",
         "PASSPORT_ACCEPTANCE_ADMIN_EMAIL=disposable@acceptance.invalid",
-        "PASSPORT_ACCEPTANCE_PROVIDER_PROFILE_ID=disposable-physical-profile",
         "PASSPORT_ACCEPTANCE_GATEWAY_PORT=29876",
         "PASSPORT_ACCEPTANCE_SECRET_DIR=" + secrets.as_posix(),
     ]) + "\n", encoding="utf-8")
@@ -56,19 +55,26 @@ def test_real_compose_render_is_safe_but_not_accepted(
     model = render_model(surface, project, env_file, tmp_path, SERVICES)
     assert set(model["services"]) >= {
         "gateway", "flow", "issuance-native", "issuance",
-        "passport-callback-signer-supported", "passport-provider-ingress",
+        "passport-callback-signer", "passport-beta-bureau",
         "signing-keys", "db-migrate", "postgres", "redis", "openbao",
     }
     result = validate_model(model, project, SERVICES, tmp_path)
     assert result["model_safe"] is True
     assert result["rollback_accepted"] is False
     selected = ("gateway", "flow", "issuance-native",
-                "passport-callback-signer-supported", "passport-provider-ingress")
+                "passport-callback-signer", "passport-beta-bureau")
     for name in selected:
         env = model["services"][name]["environment"]
         assert env["PASSPORT_ACCEPTANCE_SURFACE"] == surface
-        assert env["ENVIRONMENT"] == ("development" if surface == "base"
-                                       else "production")
+        assert env["ENVIRONMENT"] == (
+            "beta" if name in {"passport-callback-signer", "passport-beta-bureau"}
+            or (surface == "selfhost" and name == "issuance-native")
+            else "development" if surface == "base" else "production"
+        )
+    assert model["services"]["issuance-native"]["environment"][
+        "PERSONALIZATION_BUREAU_PROVIDER_PROFILE_ID"] == "passport-beta-bureau"
+    assert model["services"]["gateway"]["environment"][
+        "PASSPORT_PROVIDER_INGRESS_GATEWAY_ENABLED"] == "false"
     assert model["services"]["issuance"]["image"] == LEGACY
     signing = model["services"]["signing-keys"]
     assert signing["environment"]["SIGNING_KEYS_REDIS_URL"] == "redis://redis:6379/2"
@@ -84,7 +90,7 @@ def test_real_compose_render_is_safe_but_not_accepted(
 
 @pytest.mark.skipif(shutil.which("docker") is None, reason="Docker Compose CLI unavailable")
 @pytest.mark.parametrize("surface", ["base", "selfhost"])
-def test_python_owner_phase_changes_only_three_frozen_selectors(
+def test_python_owner_phase_changes_only_two_frozen_selectors(
     tmp_path: Path, surface: str,
 ) -> None:
     env_file = inputs(tmp_path)
@@ -101,7 +107,6 @@ def test_python_owner_phase_changes_only_three_frozen_selectors(
     }
     assert differences == {
         ("gateway", "PASSPORT_NATIVE_GATEWAY_ENABLED", "true", "false"),
-        ("gateway", "PASSPORT_PROVIDER_INGRESS_GATEWAY_ENABLED", "true", "false"),
         ("flow", "PASSPORT_NATIVE_FLOW_ENABLED", "true", "false"),
     }
     assert set(rust["services"]) == set(python["services"])

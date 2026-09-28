@@ -2,8 +2,8 @@
 """Fail-closed pre-mutation gates and read-only record collection for a future producer.
 
 No function in this module creates or removes Docker resources. The protected
-workflow deliberately stops before provisioning until disposable KMS and
-provider credentials are governed and available.
+workflow deliberately stops before provisioning until disposable KMS,
+issuer profiles, and simulator secret files are governed and available.
 """
 
 from __future__ import annotations
@@ -214,7 +214,7 @@ def main() -> int:
         verify_plan_release(args.plan, args.manifest, args.plan_run_id, os.environ)
     except (ProducerError, ModelPreflightError, OSError, ValueError) as exc:
         parser.exit(1, f"Protected disposable provisioning blocked: {exc}\n")
-    parser.exit(1, "Protected disposable provisioning blocked: governed KMS/bootstrap and provider inputs are absent\n")
+    parser.exit(1, "Protected disposable provisioning blocked: governed KMS/bootstrap and simulator inputs are absent\n")
 
 
 if __name__ == "__main__":

@@ -48,6 +48,11 @@ def test_route_fixture_matches_native_contract_and_gateway_declaration() -> None
         (route["method"], route["path"])
         for route in gateway["routes"]
     }
+    acceptance = CONTRACT["software_route_acceptance"]
+    assert acceptance["provider_kind"] == "simulator"
+    assert acceptance["physical_claim"] == "not_claimed"
+    assert acceptance["bureau_profile_id"] == "passport-beta-bureau"
+    assert acceptance["physical_booklet_required"] is False
 
 
 def test_compose_consumers_keep_selectors_off_and_share_token_source() -> None:

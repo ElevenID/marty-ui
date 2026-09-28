@@ -25,8 +25,8 @@ else:
 
 PROJECT = re.compile(r"marty-passport-acceptance-(base|selfhost)-[a-z0-9]{6,32}\Z")
 SELECTED = frozenset({
-    "gateway", "flow", "issuance-native", "passport-callback-signer-supported",
-    "passport-provider-ingress",
+    "gateway", "flow", "issuance-native", "passport-callback-signer",
+    "passport-beta-bureau",
 })
 ISOLATED_DEPENDENCIES = frozenset({"postgres", "openbao", "redis"})
 DISPOSABLE_SERVICES = SELECTED | ISOLATED_DEPENDENCIES | frozenset({
@@ -38,8 +38,8 @@ ALLOWED_SERVICES = frozenset({
     "device-registration", "event-stream", "flow", "gateway", "issuance",
     "issuance-migrations", "issuance-native", "keycloak",
     "keycloak-configurator", "mailpit", "notification", "openbao",
-    "openbao-init", "organization", "passport-callback-signer-supported",
-    "passport-provider-ingress", "postgres", "presentation-policy", "redis",
+    "openbao-init", "organization", "passport-callback-signer",
+    "passport-beta-bureau", "postgres", "presentation-policy", "redis",
     "revocation-profile", "revocation-profile-migrate", "signing-keys",
     "trust-profile", "ui", "verification", "verification-migrations",
 })
@@ -218,7 +218,9 @@ def validate_model(
     *, migrations_reference: str | None = None, legacy_reference: str | None = None,
 ) -> dict[str, object]:
     """Reject resolved configurations that can touch shared production resources."""
-    require(PROJECT.fullmatch(project) is not None, "Disposable project name is required")
+    project_match = PROJECT.fullmatch(project)
+    require(project_match is not None, "Disposable project name is required")
+    surface = project_match.group(1)
     require(disposable_root.is_absolute() and disposable_root.is_dir(),
             "Disposable resource root is missing")
     require(isinstance(model, dict) and model.get("name") == project,
@@ -334,6 +336,52 @@ def validate_model(
                 require(value in {"localhost", "127.0.0.1"}
                         | set(services),
                         f"Compose {name} domain leaves disposable services")
+    callback_networks = {
+        "passport-callback-signer": {"callback_signing"},
+        "passport-beta-bureau": {"private", "callback_signing"},
+        "openbao": {"private", "callback_signing"},
+    }
+    for name in services:
+        expected = callback_networks.get(name, {"private"})
+        joined = services[name].get("networks")
+        require(isinstance(joined, (list, dict)) and set(joined) == expected,
+                f"Compose {name} leaves the dedicated callback signing boundary")
+    signer = services["passport-callback-signer"]["environment"]
+    bureau = services["passport-beta-bureau"]["environment"]
+    native = services["issuance-native"]["environment"]
+    gateway = services["gateway"]["environment"]
+    flow = services["flow"]["environment"]
+    require(native.get("ENVIRONMENT") == ("beta" if surface == "selfhost" else "development")
+            and gateway.get("ENVIRONMENT") == ("production" if surface == "selfhost" else "development")
+            and flow.get("ENVIRONMENT") == ("production" if surface == "selfhost" else "development"),
+            "Disposable surface environment selectors are incompatible with the beta simulator")
+    require(signer.get("ENVIRONMENT") == "beta"
+            and signer.get("PASSPORT_CALLBACK_SIGNER_ENABLED") == "true"
+            and signer.get("SIGNING_KEYS_INTERNAL_API_KEY_FILE") == "/run/secrets/callback_signer_api_key"
+            and signer.get("BAO_TOKEN_FILE") == "/run/secrets/callback_signer_bao_token"
+            and "SIGNING_KEYS_INTERNAL_API_KEY" not in signer
+            and "BAO_TOKEN" not in signer,
+            "Disposable callback signer is not isolated beta KMS mode")
+    require(bureau.get("ENVIRONMENT") == "beta"
+            and bureau.get("PASSPORT_BETA_BUREAU_ENABLED") == "true"
+            and bureau.get("DATABASE_URL_FILE") == "/run/secrets/bureau_database_url"
+            and bureau.get("GRPC_SERVICE_TOKEN_FILE") == "/run/secrets/grpc_service_token"
+            and bureau.get("SIGNING_KEYS_INTERNAL_API_KEY_FILE") == "/run/secrets/callback_signer_api_key"
+            and bureau.get("SIGNING_KEYS_INTERNAL_URL")
+            == "http://passport-callback-signer:8018/internal/documents"
+            and bureau.get("PASSPORT_BUREAU_CALLBACK_URL")
+            == "http://issuance-native:8005/v1/passport/webhooks/personalization"
+            and all(key not in bureau for key in (
+                "DATABASE_URL", "GRPC_SERVICE_TOKEN", "SIGNING_KEYS_INTERNAL_API_KEY")),
+            "Disposable bureau is not the private Marty simulator")
+    require(native.get("PERSONALIZATION_BUREAU_URL") == "http://passport-beta-bureau:8020"
+            and native.get("PERSONALIZATION_BUREAU_API_KEY_FILE") == "/run/secrets/grpc_service_token"
+            and native.get("PERSONALIZATION_BUREAU_PROVIDER_PROFILE_ID") == "passport-beta-bureau"
+            and gateway.get("PASSPORT_PROVIDER_INGRESS_GATEWAY_ENABLED") == "false"
+            and "PASSPORT_PROVIDER_INGRESS_SERVICE_URL" not in gateway,
+            "Disposable passport owner selects an external provider")
+    require("provider_webhook_secret" not in secrets,
+            "Disposable simulator model includes a physical provider secret")
     return {"project": project, "services": sorted(SELECTED),
             "model_safe": True, "rollback_accepted": False}
 

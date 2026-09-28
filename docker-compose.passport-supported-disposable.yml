@@ -35,7 +35,7 @@ services:
     volumes: [openbao_data:/bao/data]
     healthcheck:
       test: [CMD, bao, status, -address=http://127.0.0.1:8200]
-    networks: [private]
+    networks: [private, callback_signing]
 
   db-migrate:
     labels: *acceptance-labels
@@ -99,15 +99,18 @@ services:
       PASSPORT_MANAGED_ISSUER_SIGNING_ENABLED: "true"
       PASSPORT_KMS_ARTIFACTS_ENABLED: "true"
       PASSPORT_KMS_CALLBACKS_ENABLED: "true"
+      GRPC_SERVICE_TOKEN_FILE: /run/secrets/grpc_service_token
       DATABASE_URL_TEMPLATE: postgresql+asyncpg://marty:$${MARTY_DB_PASSWORD}@postgres:5432/marty
       MARTY_DB_PASSWORD_FILE: /run/secrets/marty_db_password
       BAO_ADDR: http://openbao:8200
       BAO_TOKEN_FILE: /run/secrets/bao_token
       SIGNING_KEYS_INTERNAL_URL: http://signing-keys:8017/internal
       SIGNING_KEYS_INTERNAL_API_KEY_FILE: /run/secrets/signing_keys_internal_api_key
-      PERSONALIZATION_BUREAU_PROVIDER_PROFILE_ID: ${PASSPORT_ACCEPTANCE_PROVIDER_PROFILE_ID:?bind a disposable provider profile}
+      PERSONALIZATION_BUREAU_URL: http://passport-beta-bureau:8020
+      PERSONALIZATION_BUREAU_API_KEY_FILE: /run/secrets/grpc_service_token
+      PERSONALIZATION_BUREAU_PROVIDER_PROFILE_ID: passport-beta-bureau
       PASSPORT_TENANT_API_KEYS_FILE: /run/secrets/passport_tenant_api_keys
-    secrets: [marty_db_password, bao_token, signing_keys_internal_api_key, passport_tenant_api_keys]
+    secrets: [marty_db_password, bao_token, signing_keys_internal_api_key, passport_tenant_api_keys, grpc_service_token]
     depends_on:
       signing-keys:
         condition: service_started
@@ -123,6 +126,7 @@ services:
       FLOW_SERVICE_PORT: "8011"
       PASSPORT_NATIVE_FLOW_ENABLED: "true"
       PASSPORT_INTERNAL_SERVICE_AUTH_ENABLED: "true"
+      GRPC_SERVICE_TOKEN_FILE: /run/secrets/grpc_service_token
       DATABASE_URL_TEMPLATE: postgresql+asyncpg://marty:$${MARTY_DB_PASSWORD}@postgres:5432/marty
       MARTY_DB_PASSWORD_FILE: /run/secrets/marty_db_password
       REDIS_URL: redis://redis:6379
@@ -131,7 +135,7 @@ services:
       SIGNING_KEYS_INTERNAL_URL: http://signing-keys:8017/internal
       SIGNING_KEYS_INTERNAL_API_KEY_FILE: /run/secrets/signing_keys_internal_api_key
       PASSPORT_TENANT_API_KEYS_FILE: /run/secrets/passport_tenant_api_keys
-    secrets: [marty_db_password, signing_keys_internal_api_key, passport_tenant_api_keys]
+    secrets: [marty_db_password, signing_keys_internal_api_key, passport_tenant_api_keys, grpc_service_token]
     depends_on:
       issuance-native:
         condition: service_started
@@ -139,41 +143,48 @@ services:
         condition: service_healthy
     networks: [private]
 
-  passport-callback-signer-supported:
+  passport-callback-signer:
     labels: *acceptance-labels
     image: ${MARTY_SERVICES_IMAGE:?pin signed services image by digest}
     environment:
-      SERVICE_NAME: passport_callback_signer_supported
-      PASSPORT_SUPPORTED_CALLBACK_SIGNER_ENABLED: "true"
+      SERVICE_NAME: passport_callback_signer
+      ENVIRONMENT: beta
+      PASSPORT_CALLBACK_SIGNER_ENABLED: "true"
+      SIGNING_KEYS_SERVICE_PORT: "8018"
       BAO_ADDR: http://openbao:8200
-      PASSPORT_CALLBACK_SIGNER_BAO_TOKEN_FILE: /run/secrets/bao_token
-      PASSPORT_CALLBACK_SIGNER_API_KEY_FILE: /run/secrets/callback_signer_api_key
-    secrets: [bao_token, callback_signer_api_key]
+      BAO_TOKEN_FILE: /run/secrets/callback_signer_bao_token
+      SIGNING_KEYS_INTERNAL_API_KEY_FILE: /run/secrets/callback_signer_api_key
+    secrets: [callback_signer_bao_token, callback_signer_api_key]
     depends_on:
       openbao:
         condition: service_healthy
-    networks: [private]
+    healthcheck:
+      test: [CMD, curl, --fail, http://localhost:8018/health]
+    networks: [callback_signing]
 
-  passport-provider-ingress:
+  passport-beta-bureau:
     labels: *acceptance-labels
     image: ${MARTY_SERVICES_IMAGE:?pin signed services image by digest}
     environment:
-      SERVICE_NAME: passport_provider_ingress
-      PASSPORT_PROVIDER_INGRESS_ENABLED: "true"
-      PERSONALIZATION_BUREAU_PROVIDER_PROFILE_ID: ${PASSPORT_ACCEPTANCE_PROVIDER_PROFILE_ID:?bind a disposable provider profile}
-      PASSPORT_PROVIDER_WEBHOOK_SECRET_FILE: /run/secrets/provider_webhook_secret
-      PASSPORT_PROVIDER_SIGNER_API_KEY_FILE: /run/secrets/callback_signer_api_key
-      PASSPORT_PROVIDER_SIGNER_URL: http://passport-callback-signer-supported:8018/internal/documents
-      PASSPORT_PROVIDER_NATIVE_CALLBACK_URL: http://issuance-native:8005/v1/passport/webhooks/personalization
-      DATABASE_URL_TEMPLATE: postgresql://marty:$${MARTY_DB_PASSWORD}@postgres:5432/marty
-      MARTY_DB_PASSWORD_FILE: /run/secrets/marty_db_password
-    secrets: [provider_webhook_secret, callback_signer_api_key, marty_db_password]
+      SERVICE_NAME: passport_beta_bureau
+      ENVIRONMENT: beta
+      PASSPORT_BETA_BUREAU_ENABLED: "true"
+      DATABASE_URL_FILE: /run/secrets/bureau_database_url
+      GRPC_SERVICE_TOKEN_FILE: /run/secrets/grpc_service_token
+      SIGNING_KEYS_INTERNAL_API_KEY_FILE: /run/secrets/callback_signer_api_key
+      SIGNING_KEYS_INTERNAL_URL: http://passport-callback-signer:8018/internal/documents
+      PASSPORT_BUREAU_CALLBACK_URL: http://issuance-native:8005/v1/passport/webhooks/personalization
+    secrets: [bureau_database_url, grpc_service_token, callback_signer_api_key]
     depends_on:
-      passport-callback-signer-supported:
-        condition: service_started
+      postgres:
+        condition: service_healthy
+      passport-callback-signer:
+        condition: service_healthy
       issuance-native:
         condition: service_started
-    networks: [private]
+    healthcheck:
+      test: [CMD, curl, --fail, http://localhost:8020/health]
+    networks: [private, callback_signing]
 
   gateway:
     labels: *acceptance-labels
@@ -182,9 +193,9 @@ services:
       SERVICE_NAME: gateway
       GATEWAY_PORT: "8000"
       PASSPORT_NATIVE_GATEWAY_ENABLED: "true"
-      PASSPORT_PROVIDER_INGRESS_GATEWAY_ENABLED: "true"
+      PASSPORT_PROVIDER_INGRESS_GATEWAY_ENABLED: "false"
       PASSPORT_INTERNAL_SERVICE_AUTH_ENABLED: "true"
-      PASSPORT_PROVIDER_INGRESS_SERVICE_URL: http://passport-provider-ingress:8021
+      GRPC_SERVICE_TOKEN_FILE: /run/secrets/grpc_service_token
       FLOW_SERVICE_URL: http://flow:8011
       ISSUANCE_NATIVE_SERVICE_URL: http://issuance-native:8005
       ISSUANCE_SERVICE_URL: http://issuance:8005
@@ -194,11 +205,11 @@ services:
       BAO_ADDR: http://openbao:8200
       BAO_TOKEN_FILE: /run/secrets/bao_token
       PASSPORT_TENANT_API_KEYS_FILE: /run/secrets/passport_tenant_api_keys
-    secrets: [bao_token, passport_tenant_api_keys]
+    secrets: [bao_token, passport_tenant_api_keys, grpc_service_token]
     depends_on:
       flow:
         condition: service_started
-      passport-provider-ingress:
+      passport-beta-bureau:
         condition: service_started
     ports:
       - "127.0.0.1:${PASSPORT_ACCEPTANCE_GATEWAY_PORT:?reserve disposable loopback port}:8000"
@@ -215,8 +226,12 @@ secrets:
     file: ${PASSPORT_ACCEPTANCE_SECRET_DIR:?use disposable secret root}/passport_tenant_api_keys
   callback_signer_api_key:
     file: ${PASSPORT_ACCEPTANCE_SECRET_DIR:?use disposable secret root}/callback_signer_api_key
-  provider_webhook_secret:
-    file: ${PASSPORT_ACCEPTANCE_SECRET_DIR:?use disposable secret root}/provider_webhook_secret
+  callback_signer_bao_token:
+    file: ${PASSPORT_ACCEPTANCE_SECRET_DIR:?use disposable secret root}/callback_signer_bao_token
+  grpc_service_token:
+    file: ${PASSPORT_ACCEPTANCE_SECRET_DIR:?use disposable secret root}/grpc_service_token
+  bureau_database_url:
+    file: ${PASSPORT_ACCEPTANCE_SECRET_DIR:?use disposable secret root}/bureau_database_url
 
 volumes:
   postgres_data:
@@ -228,5 +243,8 @@ volumes:
 
 networks:
   private:
+    internal: true
+    labels: *acceptance-labels
+  callback_signing:
     internal: true
     labels: *acceptance-labels

@@ -25,6 +25,8 @@
     "bureau_profile_id": "passport-beta-bureau",
     "bureau_service": "passport-beta-bureau",
     "callback_signer_service": "passport-callback-signer",
+    "disposable_selfhost_native_environment": "beta",
+    "disposable_selfhost_gateway_flow_environment": "production",
     "disposable_credentials": "project_scoped_secret_files_only",
     "legacy_beta_environment_credentials": "remain_supported_outside_disposable_model",
     "callback_result": "native_accepted_signed_receipt_for_same_bureau_job",
