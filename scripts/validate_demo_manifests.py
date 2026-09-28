@@ -326,6 +326,10 @@ def validate_manifest(manifest: dict[str, Any]) -> None:
 
     if manifest["coverage_state"] == "COMPLETE":
         require(manifest["publication_state"] == "PUBLIC" and manifest["public_demo_ready"], "COMPLETE coverage must be publicly approved")
+        require(
+            all(scenario.get("state") == "PUBLIC" for scenario in scenarios if scenario.get("slug") in CANDIDATE_SCENARIOS),
+            "COMPLETE coverage requires every present candidate scenario to be PUBLIC",
+        )
         require(all(scenario.get("state") == "PUBLIC" for scenario in scenarios if scenario.get("slug") in required_scenarios), "COMPLETE coverage requires all required scenarios to be PUBLIC")
         independent = next(item for item in scenarios if item.get("slug") == "independent-wallet-interoperability")
         require(any(wallet.get("classification") == "INDEPENDENT" and wallet.get("result") == "PASS" for wallet in independent.get("wallets", [])), "COMPLETE coverage requires passing independent-wallet evidence")
