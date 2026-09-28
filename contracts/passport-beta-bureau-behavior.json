@@ -30,7 +30,8 @@
   "prohibited_persistence": ["MRZ", "data groups", "SOD", "DSC certificate", "raw job payload", "callback body", "callback signature"],
   "status_sequence": ["QUEUED", "PRINTING", "ENCODING", "QUALITY_CHECK", "SHIPPED"],
   "callback": {
-    "body_fields": ["organization_id", "bureau_job_id", "status"],
+    "body_fields": ["organization_id", "provider_profile_id", "bureau_job_id", "status"],
+    "provider_profile_id": "passport-beta-bureau",
     "signature": "KMS-held passport-bureau-callback HMAC via internal signing-keys gateway",
     "advance_only_after_accepted_callback": true,
     "retry_after_provider_failure": true,

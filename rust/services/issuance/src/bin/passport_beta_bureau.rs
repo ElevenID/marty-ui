@@ -1,7 +1,7 @@
 //! Beta-only, non-physical personalization simulator. It never stores MRZ,
 //! data groups, certificates, or SOD bytes and cannot start outside beta.
 
-use std::{env, net::SocketAddr, time::Duration};
+use std::{env, fs, net::SocketAddr, time::Duration};
 
 use axum::{
     body::Bytes,
@@ -25,6 +25,7 @@ use tracing_subscriber::EnvFilter;
 use uuid::Uuid;
 
 const MAX_REQUEST_BYTES: usize = 32 * 1024 * 1024;
+const BETA_PROVIDER_PROFILE_ID: &str = "passport-beta-bureau";
 const SCHEMA: &str = include_str!("passport_beta_bureau_schema.sql");
 
 #[derive(Clone)]
@@ -47,11 +48,11 @@ impl Config {
                 "passport bureau simulator is beta-only and must be explicitly enabled".into(),
             );
         }
-        let service_token = required("GRPC_SERVICE_TOKEN")?;
+        let service_token = required_secret("GRPC_SERVICE_TOKEN")?;
         if service_token.len() < 32 || service_token.starts_with("dev-") {
             return Err("a non-development internal service token is required".into());
         }
-        let signing_api_key = required("SIGNING_KEYS_INTERNAL_API_KEY")?;
+        let signing_api_key = required_secret("SIGNING_KEYS_INTERNAL_API_KEY")?;
         if signing_api_key.starts_with("dev-") {
             return Err("a non-development signing-keys internal credential is required".into());
         }
@@ -72,7 +73,7 @@ impl Config {
             .parse()
             .map_err(|_| "invalid PASSPORT_BETA_BUREAU_LISTEN")?;
         let database_url =
-            required("DATABASE_URL")?.replacen("postgresql+asyncpg://", "postgresql://", 1);
+            required_secret("DATABASE_URL")?.replacen("postgresql+asyncpg://", "postgresql://", 1);
         if !private_beta_database(&database_url) {
             return Err("DATABASE_URL must name the private beta database".into());
         }
@@ -117,6 +118,36 @@ fn required(name: &str) -> Result<String, String> {
         .ok()
         .filter(|value| !value.trim().is_empty())
         .ok_or_else(|| format!("{name} is required"))
+}
+
+fn required_secret(name: &str) -> Result<String, String> {
+    secret_value(
+        name,
+        env::var(name).ok(),
+        env::var(format!("{name}_FILE")).ok(),
+    )
+}
+
+fn secret_value(
+    name: &str,
+    direct: Option<String>,
+    file: Option<String>,
+) -> Result<String, String> {
+    match (direct, file) {
+        (Some(_), Some(_)) => Err(format!("{name} and {name}_FILE are mutually exclusive")),
+        (Some(value), None) if !value.trim().is_empty() => Ok(value),
+        (None, Some(path)) if !path.trim().is_empty() => {
+            let value = fs::read_to_string(path)
+                .map_err(|_| format!("{name}_FILE is not a readable UTF-8 file"))?;
+            let value = value.trim_end_matches(['\r', '\n']);
+            if value.trim().is_empty() {
+                Err(format!("{name}_FILE is empty"))
+            } else {
+                Ok(value.to_owned())
+            }
+        }
+        _ => Err(format!("{name} or {name}_FILE is required")),
+    }
 }
 
 fn required_url(name: &str) -> Result<Url, String> {
@@ -411,6 +442,7 @@ async fn deliver_one(state: &AppState) -> Result<bool, String> {
     let next = next_status(&status).ok_or("invalid database status")?;
     let mut callback = json!({
         "organization_id": organization_id,
+        "provider_profile_id": BETA_PROVIDER_PROFILE_ID,
         "bureau_job_id": bureau_job_id,
         "status": next
     });
@@ -515,6 +547,33 @@ mod tests {
     };
     use tower::ServiceExt;
 
+    #[test]
+    fn disposable_secret_files_preserve_beta_environment_compatibility() {
+        let path = env::temp_dir().join(format!("passport-bureau-secret-{}", Uuid::new_v4()));
+        fs::write(&path, "synthetic-file-secret\n").unwrap();
+        let mounted = path.to_str().unwrap().to_owned();
+        assert_eq!(
+            secret_value("GRPC_SERVICE_TOKEN", None, Some(mounted.clone())).unwrap(),
+            "synthetic-file-secret"
+        );
+        assert_eq!(
+            secret_value(
+                "GRPC_SERVICE_TOKEN",
+                Some("synthetic-env-secret".into()),
+                None
+            )
+            .unwrap(),
+            "synthetic-env-secret"
+        );
+        assert!(secret_value(
+            "GRPC_SERVICE_TOKEN",
+            Some("synthetic-env-secret".into()),
+            Some(mounted)
+        )
+        .is_err());
+        fs::remove_file(path).unwrap();
+    }
+
     async fn ensure_test_schema(pool: &PgPool) {
         let mut transaction = pool.begin().await.unwrap();
         sqlx::query("SELECT pg_advisory_xact_lock($1)")
@@ -589,6 +648,7 @@ mod tests {
             .unwrap();
         let event: Value = serde_json::from_slice(&body).unwrap();
         assert_eq!(event["organization_id"], "test-org-a");
+        assert_eq!(event["provider_profile_id"], BETA_PROVIDER_PROFILE_ID);
         assert_eq!(event["status"], "PRINTING");
         Json(json!({"signature": format!("vault:v1:{}", STANDARD.encode([7u8; 32]))}))
     }
@@ -602,6 +662,7 @@ mod tests {
             .starts_with("vault:v1:"));
         let event: Value = serde_json::from_slice(&body).unwrap();
         assert_eq!(event["organization_id"], "test-org-a");
+        assert_eq!(event["provider_profile_id"], BETA_PROVIDER_PROFILE_ID);
         assert_eq!(event["status"], "PRINTING");
         StatusCode::NO_CONTENT
     }
@@ -668,6 +729,10 @@ mod tests {
         ))
         .unwrap();
         assert_eq!(contract["startup_gate"]["ENVIRONMENT"], "beta");
+        assert_eq!(
+            contract["callback"]["provider_profile_id"],
+            BETA_PROVIDER_PROFILE_ID
+        );
         assert_eq!(
             contract["security"]["maximum_request_bytes"],
             MAX_REQUEST_BYTES

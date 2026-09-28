@@ -1,7 +1,7 @@
 name: Passport Supported Disposable Provisioning Producer
 
 # This protected entrypoint is deliberately blocked before Docker mutation.
-# Disposable KMS transit bootstrap, profile and provider secrets require
+# Disposable KMS transit bootstrap, issuer profiles and simulator secrets require
 # separate review before a live producer can be enabled.
 on:
   workflow_dispatch:

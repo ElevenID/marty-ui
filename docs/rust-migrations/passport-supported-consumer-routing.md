@@ -19,10 +19,12 @@ native renderer passes its passport flags from `marty-config` to the native
 deployment. The Kubernetes native issuance image selection must be completed
 before its passport flags are changed.
 
-These source bindings do not qualify a provider or authorize Python route
-deletion. A released native image, managed signer, supported bureau and callback
-provider, job and artifact drain, live behavior for all nine routes, and
-per-composition rollback acceptance remain required by
-`ElevenID/marty-credentials#305`. The beta bureau is synthetic and is not a
-production personalization provider. Do not activate these flags in production
-from this source change alone.
+These source bindings do not authorize Python route deletion. The software
+route retirement gate in `ElevenID/marty-credentials#305` uses Marty's
+simulator profile, a managed issuer signer, a native accepted signed callback,
+job and artifact drain, live behavior for all nine routes, and rollback
+acceptance in each supported composition. It records
+`physical_claim=not_claimed`; an external provider or physical booklet is not
+required to retire the migrated software routes. The simulator does not prove
+physical personalization. Do not activate these flags in production from this
+source change alone.

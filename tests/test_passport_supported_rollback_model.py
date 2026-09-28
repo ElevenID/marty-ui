@@ -31,28 +31,351 @@ LABELS = {
 def safe_model(root: Path) -> dict:
     services = {name: {"image": IMAGE, "environment": {
         "DATABASE_URL": "postgresql://postgres:5432/test",
+        "DATABASE_URL_TEMPLATE": "postgresql+asyncpg://marty:${MARTY_DB_PASSWORD}@postgres:5432/marty",
         "BAO_ADDR": "http://openbao:8200",
-    }} for name in SELECTED}
+        "PASSPORT_INTERNAL_SERVICE_AUTH_ENABLED": "true",
+    }, "networks": ["private"]} for name in SELECTED}
+    services["passport-callback-signer"]["environment"].update({
+        "ENVIRONMENT": "beta",
+        "PASSPORT_CALLBACK_SIGNER_ENABLED": "true",
+        "SIGNING_KEYS_INTERNAL_API_KEY_FILE": "/run/secrets/callback_signer_api_key",
+        "BAO_TOKEN_FILE": "/run/secrets/callback_signer_bao_token",
+    })
+    services["passport-callback-signer"]["networks"] = ["callback_signing"]
+    services["passport-beta-bureau"]["environment"].update({
+        "ENVIRONMENT": "beta",
+        "PASSPORT_BETA_BUREAU_ENABLED": "true",
+        "DATABASE_URL_FILE": "/run/secrets/bureau_database_url",
+        "GRPC_SERVICE_TOKEN_FILE": "/run/secrets/grpc_service_token",
+        "SIGNING_KEYS_INTERNAL_API_KEY_FILE": "/run/secrets/callback_signer_api_key",
+        "SIGNING_KEYS_INTERNAL_URL": "http://passport-callback-signer:8018/internal/documents",
+        "PASSPORT_BUREAU_CALLBACK_URL": "http://issuance-native:8005/v1/passport/webhooks/personalization",
+    })
+    services["passport-beta-bureau"]["environment"].pop("DATABASE_URL")
+    services["passport-beta-bureau"]["networks"] = ["private", "callback_signing"]
+    services["issuance-native"]["environment"].update({
+        "ENVIRONMENT": "development",
+        "ISSUER_BASE_URL": "http://localhost:29876",
+        "ISSUANCE_GRPC_ENABLED": "true", "ISSUANCE_GRPC_PORT": "9005",
+        "CT_GRPC_TARGET": "credential-template:9003",
+        "CREDENTIAL_TEMPLATE_SERVICE_URL": "http://credential-template:8003",
+        "PERSONALIZATION_BUREAU_URL": "http://passport-beta-bureau:8020",
+        "PERSONALIZATION_BUREAU_API_KEY_FILE": "/run/secrets/grpc_service_token",
+        "PERSONALIZATION_BUREAU_PROVIDER_PROFILE_ID": "passport-beta-bureau",
+        "TOKEN_HMAC_KEY_FILE": "/run/secrets/token_hmac_key",
+        "INTEGRATION_SECRET_MASTER_KEY_FILE":
+            "/run/secrets/integration_secret_master_key",
+        "REVOCATION_PROFILE_SERVICE_URL": "http://revocation-profile:8013",
+        "RP_GRPC_TARGET": "revocation-profile:9013",
+    })
+    services["issuance-native"]["depends_on"] = {
+        "revocation-profile": {"condition": "service_healthy"},
+        "credential-template": {"condition": "service_healthy"},
+    }
+    services["gateway"]["environment"].update({
+        "ENVIRONMENT": "beta",
+        "GRPC_INSECURE_ALLOWED": "true",
+        "SIGNING_KEYS_DSC_ISSUE_GATEWAY_KEY_FILE": "/run/secrets/dsc_issue_gateway_key",
+        "SIGNING_KEYS_CSCA_ISSUE_GATEWAY_KEY_FILE": "/run/secrets/csca_issue_gateway_key",
+        "PUBLIC_DOMAIN": "localhost",
+        "ISSUER_BASE_URL": "http://localhost:29876",
+        "PASSPORT_PROVIDER_INGRESS_GATEWAY_ENABLED": "false",
+        "ORGANIZATION_SERVICE_URL": "http://organization:8002",
+        "ORG_GRPC_TARGET": "organization:9002",
+        "ES_GRPC_TARGET": "event-stream:9015",
+        "GRPC_SERVICE_TOKEN_FILE": "/run/secrets/grpc_service_token",
+        "REVOCATION_PROFILE_SERVICE_URL": "http://revocation-profile:8013",
+        "CREDENTIAL_TEMPLATE_SERVICE_URL": "http://credential-template:8003",
+        "TRUST_PROFILE_SERVICE_URL": "http://trust-profile:8004",
+        "PRESENTATION_POLICY_SERVICE_URL": "http://presentation-policy:8009",
+        "DEPLOYMENT_PROFILE_SERVICE_URL": "http://deployment-profile:8010",
+    })
+    services["gateway"]["ports"] = [
+        {"host_ip": "127.0.0.1", "published": "29876", "target": 8000}]
+    services["gateway"]["depends_on"] = {
+        "organization": {"condition": "service_healthy"},
+        "revocation-profile": {"condition": "service_healthy"},
+        **{name: {"condition": "service_healthy"} for name in (
+            "credential-template", "trust-profile", "presentation-policy",
+            "deployment-profile")},
+    }
+    services["flow"]["environment"].update({
+        "ENVIRONMENT": "development",
+        "MARTY_ISSUER_DID": "did:web:localhost:orgs:marty",
+        "ORG_GRPC_TARGET": "organization:9002",
+    })
+    for name in ("gateway", "flow", "issuance-native"):
+        services[name]["environment"].update({
+            "ISSUANCE_API_KEY_FILE": "/run/secrets/issuance_api_key",
+            "SIGNING_KEYS_INTERNAL_API_KEY_FILE":
+                "/run/secrets/signing_keys_internal_api_key",
+        })
+        services[name]["secrets"] = [
+            {"source": "issuance_api_key"},
+            {"source": "signing_keys_internal_api_key"},
+        ]
+    services["issuance-native"]["secrets"].extend([
+        {"source": "token_hmac_key"},
+        {"source": "integration_secret_master_key"},
+    ])
     infra = qualified_images(verify_registry=False)
-    services["postgres"] = {"image": infra["postgres"], "volumes": [
-        {"type": "bind", "source": str(root / "postgres"),
+    services["postgres"] = {"image": infra["postgres"], "networks": ["private"], "volumes": [
+        {"type": "volume", "source": "postgres_data",
          "target": "/var/lib/postgresql/data"},
     ]}
-    services["openbao"] = {"image": infra["openbao"]}
-    services["redis"] = {"image": infra["redis"]}
+    services["openbao"] = {
+        "image": infra["openbao"],
+        "networks": ["private", "callback_signing"],
+        "volumes": [
+            {"type": "volume", "source": "openbao_data", "target": "/bao/data"},
+            {"type": "volume", "source": "openbao_file", "target": "/openbao/file"},
+            {"type": "volume", "source": "openbao_logs", "target": "/openbao/logs"},
+        ],
+        "entrypoint": ["/bin/sh", "/usr/local/bin/passport-supported-openbao-start"],
+        "configs": [{"source": "passport_supported_openbao_start",
+                     "target": "/usr/local/bin/passport-supported-openbao-start"}],
+        "secrets": [{"source": "bao_root_token"}],
+    }
+    services["redis"] = {"image": infra["redis"], "networks": ["private"],
+                         "volumes": [{"type": "volume", "source": "redis_data",
+                                      "target": "/data"}]}
+    services["revocation-profile-migrate"] = {
+        "image": IMAGE,
+        "networks": ["private"],
+        "environment": {
+            "SERVICE_NAME": "revocation_profile",
+            "RP_MIGRATE_ONLY": "true",
+            "ENVIRONMENT": "development",
+            "DATABASE_URL_TEMPLATE":
+                "postgresql://marty:${MARTY_DB_PASSWORD}@postgres:5432/marty",
+            "MARTY_DB_PASSWORD_FILE": "/run/secrets/marty_db_password",
+            "PUBLIC_API_URL": "http://gateway:8000",
+            "STATUS_LIST_BASE_URL": "http://127.0.0.1:29876",
+            "MARTY_ORG_ID": "00000000-0000-0000-0000-000000000001",
+        },
+        "secrets": [{"source": "marty_db_password"}],
+        "depends_on": {"postgres": {"condition": "service_healthy"}},
+        "healthcheck": {"disable": True},
+        "restart": "no",
+    }
+    services["event-stream"] = {
+        "image": IMAGE,
+        "networks": ["private"],
+        "environment": {"SERVICE_NAME": "event_stream",
+                        "EVENT_STREAM_SERVICE_PORT": "8015",
+                        "EVENT_STREAM_GRPC_ENABLED": "true",
+                        "EVENT_STREAM_GRPC_PORT": "9015"},
+    }
+    services["organization"] = {
+        "image": IMAGE,
+        "networks": ["private"],
+        "environment": {
+            "SERVICE_NAME": "organization",
+            "ORGANIZATION_SERVICE_PORT": "8002",
+            "ORG_GRPC_PORT": "9002",
+            "DATABASE_URL_TEMPLATE":
+                "postgresql+asyncpg://marty:${MARTY_DB_PASSWORD}@postgres:5432/marty",
+            "MARTY_DB_PASSWORD_FILE": "/run/secrets/marty_db_password",
+            "GRPC_SERVICE_TOKEN_FILE": "/run/secrets/grpc_service_token",
+            "REDIS_URL": "redis://redis:6379",
+            "ES_GRPC_TARGET": "event-stream:9015",
+            "MARTY_ORG_ADMIN_EMAIL": "admin@example.invalid",
+            "MARTY_ORG_ID": "00000000-0000-0000-0000-000000000001",
+            "PASSPORT_ACCEPTANCE_PROJECT": PROJECT,
+            "PASSPORT_ACCEPTANCE_RUN_ID": "123456",
+            "PASSPORT_ACCEPTANCE_SOURCE_COMMIT": "a" * 40,
+            "PASSPORT_ACCEPTANCE_EXPIRES_AT": "2026-09-27T12:55:00+00:00",
+        },
+        "secrets": [{"source": "marty_db_password"},
+                    {"source": "grpc_service_token"}],
+        "depends_on": {
+            "db-migrate": {"condition": "service_completed_successfully"},
+            "redis": {"condition": "service_healthy"},
+            "event-stream": {"condition": "service_healthy"},
+        },
+    }
+    services["revocation-profile"] = {
+        "image": IMAGE,
+        "networks": ["private"],
+        "environment": {
+            "SERVICE_NAME": "revocation_profile",
+            "ENVIRONMENT": "development",
+            "REVOCATION_PROFILE_SERVICE_PORT": "8013",
+            "RP_GRPC_ENABLED": "true",
+            "RP_GRPC_PORT": "9013",
+            "DATABASE_URL_TEMPLATE":
+                "postgresql://marty:${MARTY_DB_PASSWORD}@postgres:5432/marty",
+            "MARTY_DB_PASSWORD_FILE": "/run/secrets/marty_db_password",
+            "GRPC_SERVICE_TOKEN_FILE": "/run/secrets/grpc_service_token",
+            "REDIS_URL": "redis://redis:6379/4",
+            "ORG_GRPC_TARGET": "organization:9002",
+            "PUBLIC_API_URL": "http://gateway:8000",
+            "STATUS_LIST_BASE_URL": "http://127.0.0.1:29876",
+            "MARTY_ORG_ID": "00000000-0000-0000-0000-000000000001",
+        },
+        "secrets": [{"source": "marty_db_password"},
+                    {"source": "grpc_service_token"}],
+        "depends_on": {
+            "db-migrate": {"condition": "service_completed_successfully"},
+            "organization": {"condition": "service_healthy"},
+            "redis": {"condition": "service_healthy"},
+        },
+        "healthcheck": {"test": ["CMD", "curl", "--fail",
+                                 "http://localhost:8013/health"]},
+    }
+    shared = {
+        "ENVIRONMENT": "development",
+        "DATABASE_URL_TEMPLATE": (
+            "postgresql+asyncpg://marty:${MARTY_DB_PASSWORD}@postgres:5432/marty"),
+        "MARTY_DB_PASSWORD_FILE": "/run/secrets/marty_db_password",
+        "GRPC_SERVICE_TOKEN_FILE": "/run/secrets/grpc_service_token",
+        "ORG_GRPC_TARGET": "organization:9002",
+    }
+    for service, port in (("credential-template", 8003), ("trust-profile", 8004),
+                          ("presentation-policy", 8009), ("deployment-profile", 8010)):
+        services[service] = {
+            "image": IMAGE, "networks": ["private"],
+            "environment": {**shared, "SERVICE_NAME": service.replace("-", "_"),
+                            f"{service.replace('-', '_').upper()}_SERVICE_PORT": str(port)},
+            "secrets": [{"source": "marty_db_password"},
+                        {"source": "grpc_service_token"}],
+        }
+    services["credential-template"]["environment"].update({
+        "CT_GRPC_PORT": "9003", "RP_GRPC_TARGET": "revocation-profile:9013",
+        "SIGNING_KEYS_INTERNAL_URL": "http://signing-keys:8017/internal",
+        "SIGNING_KEYS_INTERNAL_API_KEY_FILE": "/run/secrets/signing_keys_internal_api_key",
+        "TRUST_PROFILE_SERVICE_URL": "http://trust-profile:8004",
+        "PUBLIC_API_URL": "http://localhost:29876",
+        "MARTY_ORG_ID": "00000000-0000-0000-0000-000000000001",
+        "MARTY_MIGRATION_PROFILE": "dev",
+    })
+    services["trust-profile"]["environment"].update({
+        "SIGNING_KEYS_INTERNAL_API_KEY_FILE": "/run/secrets/signing_keys_internal_api_key",
+        "MARTY_ORG_ID": "00000000-0000-0000-0000-000000000001",
+        "MARTY_ORG_SLUG": "marty", "MARTY_ISSUER_DID": "did:web:localhost:orgs:marty",
+        "MARTY_ISSUER_BASE_URL": "http://localhost:29876",
+        "PUBLIC_DOMAIN": "localhost", "DID_RESOLUTION_BASE_URL": "http://gateway:8000",
+    })
+    for service in ("credential-template", "trust-profile"):
+        services[service]["secrets"].append(
+            {"source": "signing_keys_internal_api_key"})
+    services["presentation-policy"]["environment"].update({
+        "PP_GRPC_PORT": "9009", "ISSUANCE_API_KEY_FILE": "/run/secrets/issuance_api_key",
+        "DID_RESOLUTION_BASE_URL": "http://gateway:8000",
+        "TRUST_PROFILE_SERVICE_URL": "http://trust-profile:8004",
+        "ISSUANCE_NATIVE_SERVICE_URL": "http://issuance-native:8005",
+        "PUBLIC_DOMAIN": "localhost", "PUBLIC_BASE_URL": "http://localhost:29876",
+        "ISSUER_BASE_URL": "http://localhost:29876", "MARTY_ORG_SLUG": "marty",
+    })
+    services["presentation-policy"]["secrets"].append({"source": "issuance_api_key"})
+    for service, port, dependencies in (
+        ("trust-profile", 8004, ("db-migrate", "organization")),
+        ("credential-template", 8003, ("db-migrate", "organization",
+                                       "revocation-profile", "trust-profile",
+                                       "signing-keys")),
+        ("presentation-policy", 8009, ("db-migrate", "organization",
+                                        "trust-profile", "issuance-native")),
+        ("deployment-profile", 8010, ("db-migrate", "organization")),
+    ):
+        services[service]["depends_on"] = {
+            name: {"condition": "service_completed_successfully"
+                   if name == "db-migrate" else "service_healthy"}
+            for name in dependencies
+        }
+        services[service]["healthcheck"] = {
+            "test": ["CMD", "curl", "--fail", f"http://localhost:{port}/health"]}
+    services["flow"]["environment"].update({
+        "PUBLIC_BASE_URL": "http://localhost:29876",
+        "CT_GRPC_TARGET": "credential-template:9003",
+        "PP_GRPC_TARGET": "presentation-policy:9009",
+        "ISSUANCE_GRPC_TARGET": "issuance-native:9005",
+        "CREDENTIAL_TEMPLATE_SERVICE_URL": "http://credential-template:8003",
+        "TRUST_PROFILE_SERVICE_URL": "http://trust-profile:8004",
+        "DEPLOYMENT_PROFILE_SERVICE_URL": "http://deployment-profile:8010",
+    })
+    services["flow"]["depends_on"] = {
+        name: {"condition": "service_healthy"} for name in (
+            "credential-template", "trust-profile", "presentation-policy",
+            "deployment-profile", "issuance-native", "signing-keys")}
+    services["issuance-native"]["healthcheck"] = {
+        "test": ["CMD", "curl", "--fail", "http://localhost:8005/health"]}
     services["signing-keys"] = {
         "image": IMAGE,
-        "environment": {"SIGNING_KEYS_REDIS_URL": "redis://redis:6379/2"},
+        "networks": ["private"],
+        "environment": {"SIGNING_KEYS_REDIS_URL": "redis://redis:6379/2",
+                        "ENVIRONMENT": "beta",
+                        "SIGNING_KEYS_BETA_CSCA_ISSUANCE_ENABLED": "true",
+                        "SIGNING_KEYS_DSC_ISSUE_GATEWAY_KEY_FILE":
+                            "/run/secrets/dsc_issue_gateway_key",
+                        "SIGNING_KEYS_CSCA_ISSUE_GATEWAY_KEY_FILE":
+                            "/run/secrets/csca_issue_gateway_key",
+                        "PUBLIC_DOMAIN": "localhost",
+                        "SIGNING_KEYS_INTERNAL_API_KEY_FILE":
+                            "/run/secrets/signing_keys_internal_api_key"},
+        "secrets": [{"source": "signing_keys_internal_api_key"}],
         "depends_on": {"redis": {"condition": "service_healthy"}},
+        "healthcheck": {"test": ["CMD", "curl", "--fail",
+                                 "http://localhost:8017/health"]},
     }
-    services["db-migrate"] = {"image": "ghcr.io/elevenid/marty-ui-oss/migrations@sha256:" + "b" * 64}
-    services["issuance"] = {"image": "ghcr.io/elevenid/marty-credentials-issuance@sha256:" + "c" * 64}
+    services["db-migrate"] = {
+        "image": "ghcr.io/elevenid/marty-ui-oss/migrations@sha256:" + "b" * 64,
+        "networks": ["private"],
+        "environment": {
+            "REDIS_URL": "redis://redis:6379/2",
+            "BAO_ADDR": "http://openbao:8200",
+            "BAO_TOKEN_FILE": "/run/secrets/bao_token",
+            "MARTY_KMS_BOOTSTRAP_ENABLED": "true",
+            "MARTY_ORG_ADMIN_EMAIL": "admin@example.invalid",
+            "MARTY_ORG_ID": "00000000-0000-0000-0000-000000000001",
+            "PUBLIC_DOMAIN": "localhost",
+            "MARTY_ISSUER_BASE_URL": "http://localhost:29876",
+            "MARTY_ISSUER_DID": "did:web:localhost:orgs:marty",
+        },
+        "depends_on": {**{name: {"condition": "service_healthy"}
+                          for name in ("postgres", "redis", "openbao")},
+                       "revocation-profile-migrate": {
+                           "condition": "service_completed_successfully"}},
+        "secrets": [{"source": "bao_token"}],
+    }
+    services["issuance"] = {"image": "ghcr.io/elevenid/marty-credentials-issuance@sha256:" + "c" * 64,
+                            "networks": ["private"]}
+    for name in ("gateway", "signing-keys"):
+        services[name]["secrets"].extend([
+            {"source": "dsc_issue_gateway_key"},
+            {"source": "csca_issue_gateway_key"},
+        ])
     for service in services.values():
         service["labels"] = LABELS
     return {"name": PROJECT, "services": services,
-            "networks": {"default": {"name": PROJECT + "_default",
-                                     "internal": True, "labels": LABELS}},
-            "volumes": {}, "secrets": {"db": {"file": str(root / "secrets/db")}}}
+            "networks": {
+                "private": {"name": PROJECT + "_private",
+                            "internal": True, "labels": LABELS},
+                "callback_signing": {"name": PROJECT + "_callback_signing",
+                                     "internal": True, "labels": LABELS},
+            },
+            "volumes": {name: {"name": PROJECT + "_" + name, "labels": LABELS}
+                        for name in ("postgres_data", "redis_data", "openbao_data",
+                                     "openbao_file", "openbao_logs")},
+            "secrets": {
+                "db": {"file": str(root / "secrets/db")},
+                "marty_db_password": {"file": str(root / "secrets/marty_db_password")},
+                "grpc_service_token": {"file": str(root / "secrets/grpc_service_token")},
+                "bao_root_token": {"file": str(root / "secrets/bao_root_token")},
+                "bao_token": {"file": str(root / "secrets/bao_token")},
+                "issuance_api_key": {"file": str(root / "secrets/issuance_api_key")},
+                "signing_keys_internal_api_key": {
+                    "file": str(root / "secrets/signing_keys_internal_api_key")},
+                "dsc_issue_gateway_key": {
+                    "file": str(root / "secrets/dsc_issue_gateway_key")},
+                "csca_issue_gateway_key": {
+                    "file": str(root / "secrets/csca_issue_gateway_key")},
+                "token_hmac_key": {"file": str(root / "secrets/token_hmac_key")},
+                "integration_secret_master_key": {
+                    "file": str(root / "secrets/integration_secret_master_key")},
+            },
+            "configs": {"passport_supported_openbao_start": {
+                "file": str(preflight.ROOT / "scripts/passport_supported_openbao_start.sh")}},
+            }
 
 
 def test_isolated_resolved_compose_model_passes_only_static_preflight(
@@ -61,6 +384,40 @@ def test_isolated_resolved_compose_model_passes_only_static_preflight(
     report = validate_model(safe_model(tmp_path), PROJECT, IMAGE, tmp_path)
     assert report["model_safe"] is True
     assert report["rollback_accepted"] is False
+
+
+@pytest.mark.parametrize("service,key,value", [
+    ("flow", "ISSUANCE_GRPC_TARGET", "issuance:9006"),
+    ("credential-template", "PUBLIC_API_URL", "http://gateway:8000"),
+    ("trust-profile", "MARTY_ISSUER_BASE_URL", "http://localhost:8000"),
+    ("presentation-policy", "ISSUANCE_NATIVE_SERVICE_URL", "http://issuance:8005"),
+    ("deployment-profile", "ORG_GRPC_TARGET", "gateway:9002"),
+])
+def test_rust_support_runtime_binding_is_required(
+    tmp_path: Path, service: str, key: str, value: str,
+) -> None:
+    model = safe_model(tmp_path)
+    model["services"][service]["environment"][key] = value
+    with pytest.raises(ModelPreflightError):
+        validate_model(model, PROJECT, IMAGE, tmp_path)
+
+
+@pytest.mark.parametrize("service,change", [
+    ("gateway", lambda item: item["environment"].update(
+        SIGNING_KEYS_CSCA_ISSUE_GATEWAY_KEY="raw-in-docker-inspect")),
+    ("gateway", lambda item: item["environment"].update(
+        SIGNING_KEYS_CSCA_ISSUE_GATEWAY_KEY_FILE="/run/secrets/other")),
+    ("signing-keys", lambda item: item["secrets"].pop()),
+    ("signing-keys", lambda item: item["environment"].update(
+        SIGNING_KEYS_BETA_CSCA_ISSUANCE_ENABLED="false")),
+])
+def test_disposable_ceremony_credential_isolation_is_required(
+    tmp_path: Path, service: str, change,
+) -> None:
+    model = safe_model(tmp_path)
+    change(model["services"][service])
+    with pytest.raises(ModelPreflightError):
+        validate_model(model, PROJECT, IMAGE, tmp_path)
 
 
 def test_attested_plan_binds_all_disposable_images(tmp_path: Path) -> None:
@@ -73,10 +430,17 @@ def test_attested_plan_binds_all_disposable_images(tmp_path: Path) -> None:
         "legacy_reference": model["services"]["issuance"]["image"],
         "infra_images": qualified_images(verify_registry=False),
         "run_id": "123456", "source_commit": "a" * 40,
+        "expires_at": "2026-09-27T12:55:00+00:00",
         "owner_labels": LABELS,
     }
     assert validate_planned_model(model, plan, tmp_path)["model_safe"] is True
-    for role in ("postgres", "redis", "openbao", "db-migrate", "issuance", "signing-keys"):
+    changed_lease = deepcopy(plan)
+    changed_lease["expires_at"] = "2026-09-27T12:56:00+00:00"
+    with pytest.raises(ModelPreflightError, match="API key lease"):
+        validate_planned_model(model, changed_lease, tmp_path)
+    for role in ("postgres", "redis", "openbao", "db-migrate", "issuance",
+                 "signing-keys", "organization", "event-stream",
+                 "revocation-profile", "revocation-profile-migrate"):
         bad = deepcopy(model)
         bad["services"][role]["image"] = "other@sha256:" + "f" * 64
         with pytest.raises(ModelPreflightError, match="protected image|signed services"):
@@ -85,7 +449,7 @@ def test_attested_plan_binds_all_disposable_images(tmp_path: Path) -> None:
     bad_plan["infra_images"]["redis"] = "docker.io/library/redis@sha256:" + "f" * 64
     with pytest.raises(ModelPreflightError, match="plan image bindings"):
         validate_planned_model(model, bad_plan, tmp_path)
-    for section, name in (("services", "gateway"), ("networks", "default")):
+    for section, name in (("services", "gateway"), ("networks", "private")):
         bad = deepcopy(model)
         bad[section][name]["labels"]["com.marty.passport.acceptance.run-id"] = "other"
         with pytest.raises(ModelPreflightError, match="resource labels"):
@@ -113,14 +477,26 @@ def test_attested_plan_binds_all_disposable_images(tmp_path: Path) -> None:
         image="postgres:15-alpine"), "immutable"),
     (lambda model, root: model["services"]["gateway"].update(
         network_mode="host"), "shared-host"),
-    (lambda model, root: model["networks"]["default"].update(
+    (lambda model, root: model["networks"]["private"].update(
         name="marty-selfhost-prod_default"), "network"),
+    (lambda model, root: model["services"]["passport-callback-signer"].update(
+        networks=["private", "callback_signing"]), "callback signing boundary"),
+    (lambda model, root: model["services"]["issuance-native"].update(
+        networks=["private", "callback_signing"]), "callback signing boundary"),
     (lambda model, root: model["volumes"].update(
         data={"name": PROJECT + "_data", "driver": "local",
               "driver_opts": {"type": "none", "o": "bind",
                               "device": "/srv/marty-selfhost-prod"}}), "volume"),
     (lambda model, root: model["secrets"]["db"].update(
         file="/etc/marty-selfhost-prod/secrets/db"), "secret"),
+    (lambda model, root: model["secrets"]["token_hmac_key"].update(
+        file=str(root / "secrets/bao_root_token")), "secret"),
+    (lambda model, root: model["secrets"]["integration_secret_master_key"].update(
+        file=str(root / "secrets/bao_root_token")), "secret"),
+    (lambda model, root: next(secret for secret in
+        model["services"]["issuance-native"]["secrets"]
+        if secret["source"] == "token_hmac_key").update(
+            target="/run/secrets/not_token_hmac_key"), "secret"),
     (lambda model, root: model["services"]["gateway"].update(
         volumes=[{"type": "bind", "source": "/srv/marty-selfhost-prod/db",
                   "target": "/data"}]), "bind mount"),
@@ -146,7 +522,123 @@ def test_attested_plan_binds_all_disposable_images(tmp_path: Path) -> None:
         "prod": {"file": "/etc/marty-selfhost-prod/secret"}}), "config"),
     (lambda model, root: model["services"]["gateway"].update(
         ports=[{"host_ip": "0.0.0.0", "published": "8000", "target": 8000}]),
-     "loopback"),
+     "loopback|endpoint"),
+    (lambda model, root: model["services"]["gateway"]["environment"].update(
+        PASSPORT_PROVIDER_INGRESS_GATEWAY_ENABLED="true"), "external provider"),
+    (lambda model, root: model["services"]["issuance-native"]["environment"].update(
+        PERSONALIZATION_BUREAU_PROVIDER_PROFILE_ID="unbound-provider"), "external provider"),
+    (lambda model, root: model["services"]["passport-callback-signer"]["environment"].update(
+        BAO_TOKEN="raw-secret"), "isolated beta KMS"),
+    (lambda model, root: model["services"]["passport-beta-bureau"]["environment"].update(
+        GRPC_SERVICE_TOKEN="raw-secret"), "private Marty simulator"),
+    (lambda model, root: model["services"]["db-migrate"]["environment"].pop(
+        "REDIS_URL"), "issuer profile bootstrap"),
+    (lambda model, root: model["services"]["db-migrate"]["environment"].update(
+        REDIS_URL="redis://redis:6379/0"), "issuer profile bootstrap"),
+    (lambda model, root: model["services"]["db-migrate"]["environment"].update(
+        MARTY_KMS_BOOTSTRAP_ENABLED="false"), "issuer profile bootstrap"),
+    (lambda model, root: model["services"]["db-migrate"]["depends_on"].pop(
+        "openbao"), "issuer profile bootstrap"),
+    (lambda model, root: model["services"]["db-migrate"]["secrets"].clear(),
+     "issuer profile bootstrap"),
+    (lambda model, root: model["services"]["gateway"]["environment"].update(
+        PUBLIC_DOMAIN="gateway"), "managed issuer DID"),
+    (lambda model, root: model["services"]["signing-keys"]["environment"].pop(
+        "PUBLIC_DOMAIN"), "managed issuer DID"),
+    (lambda model, root: model["services"]["flow"]["environment"].update(
+        MARTY_ISSUER_DID="did:web:other:orgs:marty"), "managed issuer DID"),
+    (lambda model, root: model["services"]["db-migrate"]["environment"].update(
+        MARTY_ISSUER_DID="did:web:localhost%3A8000:orgs:marty"), "managed issuer DID"),
+    (lambda model, root: model["services"]["db-migrate"]["environment"].update(
+        MARTY_ISSUER_BASE_URL="http://gateway:8000"), "issuer profile bootstrap"),
+    (lambda model, root: model["services"]["gateway"]["environment"].update(
+        ISSUER_BASE_URL="http://gateway:8000"), "managed issuer DID"),
+    (lambda model, root: model["services"]["issuance-native"]["environment"].update(
+        ISSUER_BASE_URL="https://beta.elevenidllc.com"), "endpoint leaves disposable services"),
+    (lambda model, root: model["services"]["gateway"]["environment"].update(
+        PASSPORT_TENANT_API_KEYS_FILE="/run/secrets/tenant_keys"),
+     "internal passport authentication"),
+    (lambda model, root: model["services"]["gateway"]["environment"].update(
+        PASSPORT_TENANT_API_KEYS_FILE=""),
+     "internal passport authentication"),
+    (lambda model, root: model["services"]["flow"]["environment"].update(
+        PASSPORT_INTERNAL_SERVICE_AUTH_ENABLED="false"),
+     "internal passport authentication"),
+    (lambda model, root: model["services"]["issuance-native"]["environment"].update(
+        PASSPORT_TENANT_API_KEYS="raw-secret"),
+     "internal passport authentication"),
+    (lambda model, root: model["services"]["gateway"]["environment"].pop(
+        "SIGNING_KEYS_INTERNAL_API_KEY_FILE"), "share project credentials"),
+    (lambda model, root: model["services"]["flow"]["secrets"].pop(),
+     "share project credentials"),
+    (lambda model, root: model["services"]["signing-keys"]["environment"].update(
+        SIGNING_KEYS_INTERNAL_API_KEY_FILE="/run/secrets/other"),
+     "share project credentials"),
+    (lambda model, root: model["services"]["issuance-native"]["environment"].pop(
+        "TOKEN_HMAC_KEY_FILE"), "native issuance startup secrets"),
+    (lambda model, root: model["services"]["issuance-native"]["environment"].update(
+        INTEGRATION_SECRET_MASTER_KEY="raw-secret"), "native issuance startup secrets"),
+    (lambda model, root: model["services"]["issuance-native"]["secrets"].pop(),
+     "native issuance startup secrets"),
+    (lambda model, root: model["services"]["organization"]["environment"].update(
+        ES_GRPC_TARGET="production-events:9015"), "endpoint"),
+    (lambda model, root: model["services"]["organization"]["environment"].update(
+        GRPC_SERVICE_TOKEN="raw-secret"), "Organization API-key authority"),
+    (lambda model, root: model["services"]["organization"]["environment"].pop(
+        "DATABASE_URL_TEMPLATE"), "Organization API-key authority"),
+    (lambda model, root: model["services"]["organization"]["environment"].update(
+        ORG_GRPC_PORT="9902"), "Organization API-key authority"),
+    (lambda model, root: model["services"]["organization"]["environment"].update(
+        MARTY_ORG_ADMIN_EMAIL="other@example.invalid"), "Organization API-key authority"),
+    (lambda model, root: model["services"]["organization"]["environment"].update(
+        PASSPORT_ACCEPTANCE_PROJECT="marty-passport-acceptance-base-ffffff"),
+     "Organization API-key authority"),
+    (lambda model, root: model["services"]["organization"]["environment"].update(
+        PASSPORT_ACCEPTANCE_RUN_ID="999999"), "Organization API-key authority"),
+    (lambda model, root: model["services"]["organization"]["environment"].update(
+        PASSPORT_ACCEPTANCE_EXPIRES_AT="never"), "Organization API-key authority"),
+    (lambda model, root: model["services"]["revocation-profile-migrate"][
+        "environment"].update(RP_MIGRATE_ONLY="false"), "revocation schema migration"),
+    (lambda model, root: model["services"]["revocation-profile-migrate"][
+        "environment"].update(DATABASE_URL_TEMPLATE=
+                              "postgresql://marty:other@postgres:5432/marty"),
+     "revocation schema migration"),
+    (lambda model, root: model["services"]["db-migrate"]["depends_on"].pop(
+        "revocation-profile-migrate"), "revocation schema migration"),
+    (lambda model, root: model["services"]["revocation-profile"][
+        "environment"].update(RP_MIGRATE_ONLY="true"), "revocation runtime"),
+    (lambda model, root: model["services"]["revocation-profile"][
+        "environment"].update(DATABASE_URL_TEMPLATE=
+                              "postgresql://marty:other@postgres:5432/marty"),
+     "revocation runtime"),
+    (lambda model, root: model["services"]["revocation-profile"][
+        "environment"].update(ORG_GRPC_TARGET="gateway:9002"), "revocation runtime"),
+    (lambda model, root: model["services"]["revocation-profile"][
+        "environment"].update(RP_GRPC_ENABLED="false"), "revocation runtime"),
+    (lambda model, root: model["services"]["revocation-profile"][
+        "environment"].update(STATUS_LIST_BASE_URL="http://gateway:8000"),
+     "revocation runtime"),
+    (lambda model, root: model["services"]["revocation-profile-migrate"][
+        "environment"].update(STATUS_LIST_BASE_URL="http://gateway:8000"),
+     "revocation schema migration"),
+    (lambda model, root: model["services"]["revocation-profile"][
+        "secrets"].pop(), "revocation runtime"),
+    (lambda model, root: model["services"]["revocation-profile"][
+        "depends_on"].pop("organization"), "revocation runtime"),
+    (lambda model, root: model["services"]["gateway"]["environment"].update(
+        REVOCATION_PROFILE_SERVICE_URL="http://gateway:8013"), "revocation runtime"),
+    (lambda model, root: model["services"]["issuance-native"]["depends_on"].pop(
+        "revocation-profile"), "revocation runtime"),
+    (lambda model, root: model["services"]["organization"]["secrets"].pop(),
+     "Organization API-key authority"),
+    (lambda model, root: model["services"]["event-stream"]["environment"].update(
+        EVENT_STREAM_GRPC_ENABLED="false"), "Organization API-key authority"),
+    (lambda model, root: model["services"]["gateway"]["environment"].update(
+        ORG_GRPC_TARGET="flow:9002"), "Organization API-key authority"),
+    (lambda model, root: model["services"]["gateway"]["depends_on"].pop(
+        "organization"), "Organization authority"),
+    (lambda model, root: model["services"]["flow"]["environment"].update(
+        ORG_GRPC_TARGET="gateway:9002"), "Organization authority"),
 ])
 def test_model_rejects_production_escape(tmp_path: Path, change, match: str) -> None:
     model = deepcopy(safe_model(tmp_path))

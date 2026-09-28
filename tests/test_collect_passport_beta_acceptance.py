@@ -94,6 +94,7 @@ def test_collects_live_beta_prerequisites_without_qualifying_retirement(tmp_path
     report = collect(tmp_path, api_key="in-memory-only", inspect=inspect, probe=probe)
     assert report["schema"] == "marty.passport-beta-acceptance/v1"
     assert report["status"] == "blocked"
+    assert report["physical_claim"] == "not_claimed"
     assert report["release"]["source_commit"] == COMMIT
     assert report["release"]["stack_manifest_sha256"] == hashlib.sha256((tmp_path / "stack-manifest.json").read_bytes()).hexdigest()
     assert report["release"]["oci_digests"][REFERENCE.split("@")[0]] == OCI
@@ -102,7 +103,12 @@ def test_collects_live_beta_prerequisites_without_qualifying_retirement(tmp_path
     assert report["release"]["signed_manifest_verified"] is False
     assert report["probes"]["capabilities_http"]["verified"] is True
     assert report["probes"]["unauthenticated_denial"]["verified"] is True
-    assert all(report["probes"][key] == {"verified": False, "evidence": None} for key in REQUIRED_PROBES)
+    assert report["probes"]["physical_claim_boundary"] == {
+        "verified": True,
+        "evidence": {"physical_claim": "not_claimed", "booklet_verified": False},
+    }
+    assert all(report["probes"][key] == {"verified": False, "evidence": None}
+               for key in REQUIRED_PROBES if key != "physical_claim_boundary")
     assert set(report["runtime_images"]) == set(SERVICES)
     assert "in-memory-only" not in json.dumps(report)
 
@@ -158,6 +164,7 @@ def test_physical_profile_binds_exact_six_services_to_signed_runtime(tmp_path: P
                      attest=lambda *_: True)
     assert report["status"] == "blocked"
     assert report["deployment"]["provider_mode"] == "physical"
+    assert report["probes"]["physical_claim_boundary"]["verified"] is False
     assert set(report["runtime_images"]) == set(PHYSICAL_SERVICES)
     assert report["provider_ingress_runtime_image"] == report["runtime_images"]["passport-provider-ingress"]
     assert report["probes"]["physical_bureau_submission"]["verified"] is False

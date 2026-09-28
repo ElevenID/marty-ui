@@ -21,12 +21,14 @@ def report(*, ready: bool = True) -> dict:
     return {
         "schema": "marty.passport-beta-acceptance/v1", "status": "blocked",
         "release": {"signed_manifest_verified": ready, "source_commit": "a" * 40},
-        "deployment": {"release_version": "1.1.999"},
+        "deployment": {"release_version": "1.1.999", "provider_mode": "simulator"},
+        "physical_claim": "not_claimed",
         "runtime_images": {"gateway": {"image_id": "sha256:" + "b" * 64}},
         "probes": {"capabilities_http": {"verified": ready},
                    "sod_signature": {"verified": False, "evidence": None},
                    "nine_route_gateway_flow": {"verified": False, "evidence": None},
-                   "physical_booklet_verified": {"verified": False, "evidence": None},
+                   "physical_claim_boundary": {"verified": True, "evidence": {
+                       "physical_claim": "not_claimed", "booklet_verified": False}},
                    "production_isolation": {"verified": False, "evidence": None}},
     }
 
@@ -74,9 +76,10 @@ def test_keeps_partial_acceptance_blocked_after_actual_probe_functions() -> None
     assert result["probes"]["nine_route_gateway_flow"]["verified"] is False
     assert result["probes"]["sod_signature"]["verified"] is True
     assert result["probes"]["nine_route_gateway_flow"]["evidence"]["missing"] == [
-        "signed_provider_webhook", "executed_physical_document_flow",
+        "signed_simulator_webhook", "executed_simulator_flow",
     ]
-    assert result["probes"]["physical_booklet_verified"]["verified"] is False
+    assert result["probes"]["physical_claim_boundary"]["verified"] is True
+    assert result["physical_claim"] == "not_claimed"
 
 
 def test_does_not_mutate_beta_before_signed_release_and_managed_capability() -> None:
@@ -92,6 +95,25 @@ def test_does_not_mutate_beta_before_signed_release_and_managed_capability() -> 
             drain=lambda: calls.append("drain"),
             lifecycle=lambda *args: calls.append("lifecycle"))
     assert calls == ["collect"]
+
+
+@pytest.mark.parametrize("mutation", ["physical_provider", "mixed_ingress", "physical_claim"])
+def test_simulator_boundary_fails_before_beta_mutation(mutation: str) -> None:
+    collected = report()
+    if mutation == "physical_provider":
+        collected["deployment"]["provider_mode"] = "physical"
+    elif mutation == "mixed_ingress":
+        collected["provider_ingress_runtime_image"] = {"image_id": "sha256:" + "b" * 64}
+    else:
+        collected["physical_claim"] = "verified"
+    with pytest.raises(EvidenceError):
+        run(
+            Path("beta-artifacts"), {}, "a" * 32,
+            collector=lambda *args, **kwargs: collected,
+            snapshot=lambda: pytest.fail("production snapshot should not start"),
+            drain=lambda: pytest.fail("beta drain should not start"),
+            lifecycle=lambda *args: pytest.fail("application lifecycle should not start"),
+        )
 
 
 def test_governed_chain_runs_with_complete_inputs_and_stays_blocked() -> None:

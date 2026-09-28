@@ -5,14 +5,17 @@ from __future__ import annotations
 from copy import deepcopy
 from datetime import datetime, timedelta, timezone
 import json
+from pathlib import Path
+import tempfile
 
 import pytest
 
+from scripts import check_passport_supported_compose_ownership as ownership_module
 from scripts.check_passport_supported_compose_ownership import (
     OwnershipError, REQUIRED_ROLLBACK, verify,
 )
 from scripts.check_passport_supported_rollback_model import (
-    ISOLATED_DEPENDENCIES, SELECTED,
+    ISOLATED_DEPENDENCIES, RUST_DEPENDENCIES, SELECTED,
 )
 
 
@@ -33,14 +36,73 @@ LABELS = {
     "com.marty.passport.acceptance.source-commit": "b" * 40,
     "com.marty.passport.acceptance.services-image": IMAGE,
 }
+ROOT = Path(tempfile.gettempdir()) / PROJECT
+SECRETS = {
+    "postgres": ("marty_db_password",),
+    "redis": (),
+    "openbao": ("bao_root_token",),
+    "db-migrate": ("marty_db_password", "bao_token"),
+    "signing-keys": ("marty_db_password", "bao_token", "signing_keys_internal_api_key",
+                     "dsc_issue_gateway_key", "csca_issue_gateway_key"),
+    "issuance": (),
+    "revocation-profile-migrate": ("marty_db_password",),
+    "revocation-profile": ("marty_db_password", "grpc_service_token"),
+    "event-stream": (),
+    "organization": ("marty_db_password", "grpc_service_token"),
+    "credential-template": ("marty_db_password", "grpc_service_token",
+                            "signing_keys_internal_api_key"),
+    "trust-profile": ("marty_db_password", "grpc_service_token",
+                      "signing_keys_internal_api_key"),
+    "presentation-policy": ("marty_db_password", "grpc_service_token",
+                            "issuance_api_key"),
+    "deployment-profile": ("marty_db_password", "grpc_service_token"),
+    "issuance-native": ("marty_db_password", "bao_token", "signing_keys_internal_api_key",
+                        "issuance_api_key", "grpc_service_token", "token_hmac_key",
+                        "integration_secret_master_key"),
+    "flow": ("marty_db_password", "signing_keys_internal_api_key", "issuance_api_key",
+             "grpc_service_token"),
+    "passport-callback-signer": ("callback_signer_bao_token", "callback_signer_api_key"),
+    "passport-beta-bureau": ("bureau_database_url", "grpc_service_token",
+                             "callback_signer_api_key"),
+    "gateway": ("bao_token", "signing_keys_internal_api_key", "issuance_api_key",
+                "grpc_service_token", "dsc_issue_gateway_key", "csca_issue_gateway_key"),
+}
+DATA = {
+    "postgres": ("postgres_data", "/var/lib/postgresql/data"),
+    "redis": ("redis_data", "/data"),
+    "openbao": ("openbao_data", "/bao/data"),
+    "openbao-file": ("openbao_file", "/openbao/file"),
+    "openbao-logs": ("openbao_logs", "/openbao/logs"),
+}
+
+
+def mounts_for(service: str) -> list[dict]:
+    mounts = [{"Type": "bind", "Source": str(ROOT / "secrets" / name),
+               "Destination": f"/run/secrets/{name}", "RW": False}
+              for name in SECRETS[service]]
+    if service == "openbao":
+        mounts.append({
+            "Type": "bind",
+            "Source": str(Path(__file__).resolve().parents[1]
+                          / "scripts/passport_supported_openbao_start.sh"),
+            "Destination": "/usr/local/bin/passport-supported-openbao-start",
+            "RW": False,
+        })
+    for key in ((service,) if service != "openbao" else
+                ("openbao", "openbao-file", "openbao-logs")):
+        if key in DATA:
+            name, destination = DATA[key]
+            mounts.append({"Type": "volume", "Name": f"{PROJECT}_{name}",
+                           "Destination": destination, "RW": True})
+    return mounts
 
 
 def fixture() -> tuple[dict, dict[tuple[str, ...], str]]:
     containers = {name: format(i + 1, "064x") for i, name in
-                  enumerate(sorted(SELECTED | ISOLATED_DEPENDENCIES | REQUIRED_ROLLBACK))}
+                  enumerate(sorted(SELECTED | RUST_DEPENDENCIES | ISOLATED_DEPENDENCIES | REQUIRED_ROLLBACK))}
     network_name = PROJECT + "_private"
     network_id = "e" * 64
-    volume_name = PROJECT + "_postgres"
+    volume_names = [f"{PROJECT}_{name}" for name, _ in DATA.values()]
     record = {
         "schema": "marty.passport-supported-compose-ownership/v1",
         "project": PROJECT, "run_id": "123456", "source_commit": "b" * 40,
@@ -49,8 +111,9 @@ def fixture() -> tuple[dict, dict[tuple[str, ...], str]]:
         "infra_images": INFRA,
         "created_at": (NOW - timedelta(minutes=5)).isoformat(),
         "expires_at": (NOW + timedelta(minutes=55)).isoformat(),
+        "disposable_root": str(ROOT),
         "containers": containers, "networks": {network_name: network_id},
-        "volumes": [volume_name],
+        "volumes": volume_names,
     }
     calls: dict[tuple[str, ...], str] = {
         ("ps", "-aq", "--no-trunc", "--filter", f"label=com.docker.compose.project={PROJECT}"):
@@ -58,30 +121,274 @@ def fixture() -> tuple[dict, dict[tuple[str, ...], str]]:
         ("network", "ls", "-q", "--no-trunc", "--filter",
          f"label=com.docker.compose.project={PROJECT}"): network_id,
         ("volume", "ls", "-q", "--filter",
-         f"label=com.docker.compose.project={PROJECT}"): volume_name,
+         f"label=com.docker.compose.project={PROJECT}"): "\n".join(volume_names),
     }
     for service, identifier in containers.items():
+        organization_env = {
+            "SERVICE_NAME": "organization",
+            "ORGANIZATION_SERVICE_PORT": "8002",
+            "ORG_GRPC_PORT": "9002",
+            "DATABASE_URL_TEMPLATE": (
+                "postgresql+asyncpg://marty:${MARTY_DB_PASSWORD}@postgres:5432/marty"),
+            "MARTY_DB_PASSWORD_FILE": "/run/secrets/marty_db_password",
+            "GRPC_SERVICE_TOKEN_FILE": "/run/secrets/grpc_service_token",
+            "ES_GRPC_TARGET": "event-stream:9015",
+            "MARTY_ORG_ID": "00000000-0000-0000-0000-000000000001",
+            "PASSPORT_ACCEPTANCE_PROJECT": PROJECT,
+            "PASSPORT_ACCEPTANCE_RUN_ID": record["run_id"],
+            "PASSPORT_ACCEPTANCE_SOURCE_COMMIT": record["source_commit"],
+            "PASSPORT_ACCEPTANCE_EXPIRES_AT": record["expires_at"],
+        }
+        revocation_env = {
+            "SERVICE_NAME": "revocation_profile",
+            "ENVIRONMENT": "development",
+            "REVOCATION_PROFILE_SERVICE_PORT": "8013",
+            "RP_GRPC_ENABLED": "true",
+            "RP_GRPC_PORT": "9013",
+            "DATABASE_URL_TEMPLATE": (
+                "postgresql://marty:${MARTY_DB_PASSWORD}@postgres:5432/marty"),
+            "MARTY_DB_PASSWORD_FILE": "/run/secrets/marty_db_password",
+            "GRPC_SERVICE_TOKEN_FILE": "/run/secrets/grpc_service_token",
+            "REDIS_URL": "redis://redis:6379/4",
+            "ORG_GRPC_TARGET": "organization:9002",
+            "PUBLIC_API_URL": "http://gateway:8000",
+            "STATUS_LIST_BASE_URL": "http://127.0.0.1:29876",
+            "MARTY_ORG_ID": "00000000-0000-0000-0000-000000000001",
+        }
+        migration_env = {"STATUS_LIST_BASE_URL": "http://127.0.0.1:29876"}
+        ceremony_env = {
+            "ENVIRONMENT": "beta",
+            "SIGNING_KEYS_DSC_ISSUE_GATEWAY_KEY_FILE":
+                "/run/secrets/dsc_issue_gateway_key",
+            "SIGNING_KEYS_CSCA_ISSUE_GATEWAY_KEY_FILE":
+                "/run/secrets/csca_issue_gateway_key",
+        }
+        gateway_env = {**ceremony_env, "GRPC_INSECURE_ALLOWED": "true",
+                       "ISSUER_BASE_URL": "http://localhost:29876"}
+        native_env = {"ISSUER_BASE_URL": "http://localhost:29876"}
+        signing_env = {**ceremony_env,
+                       "SIGNING_KEYS_BETA_CSCA_ISSUANCE_ENABLED": "true"}
+        support_common = {
+            "ENVIRONMENT": "development",
+            "DATABASE_URL_TEMPLATE": (
+                "postgresql+asyncpg://marty:${MARTY_DB_PASSWORD}@postgres:5432/marty"),
+            "MARTY_DB_PASSWORD_FILE": "/run/secrets/marty_db_password",
+            "GRPC_SERVICE_TOKEN_FILE": "/run/secrets/grpc_service_token",
+            "ORG_GRPC_TARGET": "organization:9002",
+        }
+        support_env = {
+            "trust-profile": {
+                **support_common, "SERVICE_NAME": "trust_profile",
+                "TRUST_PROFILE_SERVICE_PORT": "8004",
+                "SIGNING_KEYS_INTERNAL_API_KEY_FILE":
+                    "/run/secrets/signing_keys_internal_api_key",
+                "MARTY_ISSUER_DID": "did:web:localhost:orgs:marty",
+                "MARTY_ISSUER_BASE_URL": "http://localhost:29876",
+                "MARTY_ORG_ID": "00000000-0000-0000-0000-000000000001",
+                "MARTY_ORG_SLUG": "marty", "PUBLIC_DOMAIN": "localhost",
+                "DID_RESOLUTION_BASE_URL": "http://gateway:8000",
+            },
+            "credential-template": {
+                **support_common, "SERVICE_NAME": "credential_template",
+                "CREDENTIAL_TEMPLATE_SERVICE_PORT": "8003", "CT_GRPC_PORT": "9003",
+                "RP_GRPC_TARGET": "revocation-profile:9013",
+                "SIGNING_KEYS_INTERNAL_URL": "http://signing-keys:8017/internal",
+                "SIGNING_KEYS_INTERNAL_API_KEY_FILE":
+                    "/run/secrets/signing_keys_internal_api_key",
+                "TRUST_PROFILE_SERVICE_URL": "http://trust-profile:8004",
+                "PUBLIC_API_URL": "http://localhost:29876",
+                "MARTY_ORG_ID": "00000000-0000-0000-0000-000000000001",
+                "MARTY_MIGRATION_PROFILE": "dev",
+            },
+            "presentation-policy": {
+                **support_common, "SERVICE_NAME": "presentation_policy",
+                "PRESENTATION_POLICY_SERVICE_PORT": "8009", "PP_GRPC_PORT": "9009",
+                "ISSUANCE_API_KEY_FILE": "/run/secrets/issuance_api_key",
+                "TRUST_PROFILE_SERVICE_URL": "http://trust-profile:8004",
+                "ISSUANCE_NATIVE_SERVICE_URL": "http://issuance-native:8005",
+                "PUBLIC_BASE_URL": "http://localhost:29876",
+                "ISSUER_BASE_URL": "http://localhost:29876",
+                "DID_RESOLUTION_BASE_URL": "http://gateway:8000",
+                "PUBLIC_DOMAIN": "localhost", "MARTY_ORG_SLUG": "marty",
+            },
+            "deployment-profile": {
+                **support_common, "SERVICE_NAME": "deployment_profile",
+                "DEPLOYMENT_PROFILE_SERVICE_PORT": "8010",
+            },
+        }
+        runtime_env = (organization_env if service == "organization" else
+                       {"MARTY_ISSUER_BASE_URL": "http://localhost:29876"}
+                       if service == "db-migrate" else
+                       revocation_env if service == "revocation-profile" else
+                       migration_env if service == "revocation-profile-migrate" else
+                       gateway_env if service == "gateway" else
+                       native_env if service == "issuance-native" else
+                       signing_env if service == "signing-keys" else
+                       support_env.get(service, {}))
+        gateway_binding = [{"HostIp": "127.0.0.1", "HostPort": "29876"}]
         calls[("container", "inspect", identifier)] = json.dumps([{
             "Id": identifier, "Name": f"/{PROJECT}-{service}-1",
+            "HostConfig": {"PortBindings": {"8000/tcp": gateway_binding}}
+            if service == "gateway" else {},
             "State": {"Running": True, "Status": "running",
                       "Health": {"Status": "healthy"}},
             "Config": {"Labels": {**LABELS, "com.docker.compose.service": service},
+                       "Env": [f"{key}={value}" for key, value in runtime_env.items()],
                        "Image": (LEGACY if service == "issuance" else
                                  MIGRATIONS if service == "db-migrate" else
-                                 IMAGE if service in SELECTED | {"signing-keys"} else
+                                 IMAGE if service in SELECTED | RUST_DEPENDENCIES | {"signing-keys"} else
                                  INFRA[service])},
-            "NetworkSettings": {"Networks": {network_name: {"NetworkID": network_id}}},
+            "NetworkSettings": {"Networks": {network_name: {"NetworkID": network_id}},
+                                "Ports": {"8000/tcp": gateway_binding}
+                                if service == "gateway" else {}},
+            "Mounts": mounts_for(service),
         }])
     calls[("network", "inspect", network_id)] = json.dumps([{
         "Id": network_id, "Name": network_name, "Driver": "bridge",
         "Internal": True, "Labels": LABELS,
         "Containers": {identifier: {} for identifier in containers.values()},
     }])
-    calls[("volume", "inspect", volume_name)] = json.dumps([{
-        "Name": volume_name, "Driver": "local", "Options": None,
-        "Labels": LABELS,
-    }])
+    for volume_name in volume_names:
+        calls[("volume", "inspect", volume_name)] = json.dumps([{
+            "Name": volume_name, "Driver": "local", "Options": None,
+            "Labels": LABELS,
+        }])
     return record, calls
+
+
+@pytest.mark.parametrize("service,key,value", [
+    ("credential-template", "PUBLIC_API_URL", "http://localhost:8000"),
+    ("credential-template", "MARTY_MIGRATION_PROFILE", "other"),
+    ("trust-profile", "MARTY_ISSUER_BASE_URL", "http://production.example"),
+    ("trust-profile", "MARTY_ORG_ID", "00000000-0000-0000-0000-000000000002"),
+    ("presentation-policy", "ISSUANCE_NATIVE_SERVICE_URL", "http://issuance:8005"),
+    ("presentation-policy", "DID_RESOLUTION_BASE_URL", "http://production.example"),
+    ("deployment-profile", "ORG_GRPC_TARGET", "gateway:9002"),
+])
+def test_live_rust_support_binding_matches_disposable_project(
+    service: str, key: str, value: str,
+) -> None:
+    record, calls = fixture()
+    identifier = record["containers"][service]
+    inspect_key = ("container", "inspect", identifier)
+    item = json.loads(calls[inspect_key])
+    item[0]["Config"]["Env"] = [entry for entry in item[0]["Config"]["Env"]
+                               if not entry.startswith(key + "=")]
+    item[0]["Config"]["Env"].append(f"{key}={value}")
+    calls[inspect_key] = json.dumps(item)
+    with pytest.raises(OwnershipError, match="runtime identity"):
+        run(record, calls)
+
+
+@pytest.mark.parametrize("service,key,value", [
+    ("gateway", "SIGNING_KEYS_CSCA_ISSUE_GATEWAY_KEY_FILE", "/run/secrets/other"),
+    ("gateway", "ENVIRONMENT", "production"),
+    ("signing-keys", "SIGNING_KEYS_BETA_CSCA_ISSUANCE_ENABLED", "false"),
+    ("signing-keys", "SIGNING_KEYS_DSC_ISSUE_GATEWAY_KEY_FILE", "/run/secrets/other"),
+])
+def test_live_ceremony_secret_binding_is_exact(
+    service: str, key: str, value: str,
+) -> None:
+    record, calls = fixture()
+    identifier = record["containers"][service]
+    inspect_key = ("container", "inspect", identifier)
+    item = json.loads(calls[inspect_key])
+    item[0]["Config"]["Env"] = [entry for entry in item[0]["Config"]["Env"]
+                               if not entry.startswith(key + "=")]
+    item[0]["Config"]["Env"].append(f"{key}={value}")
+    calls[inspect_key] = json.dumps(item)
+    with pytest.raises(OwnershipError, match="certificate ceremony runtime"):
+        run(record, calls)
+
+
+@pytest.mark.parametrize("mutation", [
+    lambda env: env.remove(next(item for item in env if item.startswith("PASSPORT_ACCEPTANCE_PROJECT="))),
+    lambda env: env.append("PASSPORT_ACCEPTANCE_PROJECT=another-project"),
+    lambda env: env.__setitem__(next(i for i, item in enumerate(env)
+                                  if item.startswith("PASSPORT_ACCEPTANCE_RUN_ID=")),
+                                "PASSPORT_ACCEPTANCE_RUN_ID=999999"),
+    lambda env: env.__setitem__(next(i for i, item in enumerate(env)
+                                  if item.startswith("PASSPORT_ACCEPTANCE_SOURCE_COMMIT=")),
+                                "PASSPORT_ACCEPTANCE_SOURCE_COMMIT=" + "c" * 40),
+    lambda env: env.__setitem__(next(i for i, item in enumerate(env)
+                                  if item.startswith("PASSPORT_ACCEPTANCE_EXPIRES_AT=")),
+                                "PASSPORT_ACCEPTANCE_EXPIRES_AT=2026-09-28T13:00:00+00:00"),
+    lambda env: env.__setitem__(next(i for i, item in enumerate(env)
+                                  if item.startswith("GRPC_SERVICE_TOKEN_FILE=")),
+                                "GRPC_SERVICE_TOKEN_FILE=/srv/production/token"),
+    lambda env: env.append("MARTY_DB_PASSWORD=secret"),
+    lambda env: env.append("GRPC_SERVICE_TOKEN=secret"),
+    lambda env: env.remove(next(item for item in env if item.startswith("DATABASE_URL_TEMPLATE="))),
+    lambda env: env.__setitem__(next(i for i, item in enumerate(env)
+                                  if item.startswith("DATABASE_URL_TEMPLATE=")),
+                                "DATABASE_URL_TEMPLATE=postgresql+asyncpg://marty:secret@production:5432/marty"),
+])
+def test_organization_runtime_environment_must_match_protected_run(mutation) -> None:
+    record, calls = fixture()
+    key = ("container", "inspect", record["containers"]["organization"])
+    item = json.loads(calls[key])
+    mutation(item[0]["Config"]["Env"])
+    calls[key] = json.dumps(item)
+    with pytest.raises(OwnershipError, match="Organization runtime identity"):
+        run(record, calls)
+
+
+@pytest.mark.parametrize("mutation", [
+    lambda env: env.remove(next(item for item in env if item.startswith("DATABASE_URL_TEMPLATE="))),
+    lambda env: env.__setitem__(next(i for i, item in enumerate(env)
+                                  if item.startswith("DATABASE_URL_TEMPLATE=")),
+                                "DATABASE_URL_TEMPLATE=postgresql://marty:secret@production:5432/marty"),
+    lambda env: env.append("RP_MIGRATE_ONLY=true"),
+    lambda env: env.append("GRPC_SERVICE_TOKEN=raw-secret"),
+    lambda env: env.append("ORG_GRPC_TARGET=gateway:9002"),
+    lambda env: env.__setitem__(next(i for i, item in enumerate(env)
+                                  if item.startswith("STATUS_LIST_BASE_URL=")),
+                                "STATUS_LIST_BASE_URL=http://gateway:8000"),
+])
+def test_revocation_runtime_environment_stays_disposable(mutation) -> None:
+    record, calls = fixture()
+    key = ("container", "inspect", record["containers"]["revocation-profile"])
+    item = json.loads(calls[key])
+    mutation(item[0]["Config"]["Env"])
+    calls[key] = json.dumps(item)
+    with pytest.raises(OwnershipError, match="Revocation Profile runtime identity"):
+        run(record, calls)
+
+
+def test_live_gateway_port_and_seeded_status_origin_are_bound() -> None:
+    record, calls = fixture()
+    gateway_key = ("container", "inspect", record["containers"]["gateway"])
+    gateway = json.loads(calls[gateway_key])
+    gateway[0]["HostConfig"]["PortBindings"]["8000/tcp"][0]["HostPort"] = "29999"
+    calls[gateway_key] = json.dumps(gateway)
+    with pytest.raises(OwnershipError, match="published port"):
+        run(record, calls)
+
+    record, calls = fixture()
+    migration_key = ("container", "inspect", record["containers"][
+        "revocation-profile-migrate"])
+    migration = json.loads(calls[migration_key])
+    migration[0]["Config"]["Env"] = ["STATUS_LIST_BASE_URL=http://gateway:8000"]
+    calls[migration_key] = json.dumps(migration)
+    with pytest.raises(OwnershipError, match="status origin"):
+        run(record, calls)
+
+
+@pytest.mark.parametrize(("service", "key"), [
+    ("db-migrate", "MARTY_ISSUER_BASE_URL"),
+    ("gateway", "ISSUER_BASE_URL"),
+    ("issuance-native", "ISSUER_BASE_URL"),
+])
+def test_live_issuer_origin_matches_disposable_gateway(service: str, key: str) -> None:
+    record, calls = fixture()
+    container_key = ("container", "inspect", record["containers"][service])
+    item = json.loads(calls[container_key])
+    environment = item[0]["Config"]["Env"]
+    environment[environment.index(f"{key}=http://localhost:29876")] = (
+        f"{key}=https://beta.elevenidllc.com")
+    calls[container_key] = json.dumps(item)
+    with pytest.raises(OwnershipError, match="issuer origin"):
+        run(record, calls)
 
 
 def run(record: dict, calls: dict[tuple[str, ...], str]) -> dict:
@@ -131,6 +438,69 @@ def test_exact_live_project_ownership_is_read_only_and_still_blocked() -> None:
             f"label=com.docker.compose.project={PROJECT}"] in observed
     assert ["network", "ls", "-q", "--no-trunc", "--filter",
             f"label=com.docker.compose.project={PROJECT}"] in observed
+
+
+@pytest.mark.parametrize("mutation", [
+    lambda mounts: mounts[0].update(Source="/srv/production/marty_db_password"),
+    lambda mounts: mounts[0].update(Destination="/run/secrets/other"),
+    lambda mounts: mounts[0].update(RW=True),
+    lambda mounts: mounts.append({"Type": "bind", "Source": "/srv/production/key",
+                                 "Destination": "/run/secrets/extra", "RW": False}),
+    lambda mounts: mounts.pop(),
+])
+def test_secret_mounts_must_match_exact_read_only_project_paths(mutation) -> None:
+    record, calls = fixture()
+    key = ("container", "inspect", record["containers"]["postgres"])
+    item = json.loads(calls[key])
+    mutation(item[0]["Mounts"])
+    calls[key] = json.dumps(item)
+    with pytest.raises(OwnershipError, match="mount"):
+        run(record, calls)
+
+
+def test_disposable_root_must_be_the_project_temp_directory() -> None:
+    record, calls = fixture()
+    record["disposable_root"] = "/srv/production/marty-passport-acceptance-base-abcdef"
+    with pytest.raises(OwnershipError, match="Disposable root"):
+        run(record, calls)
+
+
+def test_docker_desktop_forward_slash_bind_sources_are_accepted() -> None:
+    record, calls = fixture()
+    for service in record["containers"]:
+        key = ("container", "inspect", record["containers"][service])
+        item = json.loads(calls[key])
+        for mount in item[0]["Mounts"]:
+            if mount["Type"] == "bind":
+                mount["Source"] = Path(mount["Source"]).as_posix()
+        calls[key] = json.dumps(item)
+    assert run(record, calls)["live_ownership_verified"] is True
+
+
+def test_secret_file_symlink_cannot_redirect_a_project_mount(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    record, calls = fixture()
+    root = tmp_path / PROJECT
+    secrets = root / "secrets"
+    secrets.mkdir(parents=True)
+    foreign = tmp_path / "foreign-secret"
+    foreign.write_text("synthetic", encoding="utf-8")
+    try:
+        (secrets / "marty_db_password").symlink_to(foreign)
+    except OSError:
+        pytest.skip("Host does not permit test symlinks")
+    monkeypatch.setattr(ownership_module.tempfile, "gettempdir", lambda: str(tmp_path))
+    record["disposable_root"] = str(root)
+    for service in record["containers"]:
+        key = ("container", "inspect", record["containers"][service])
+        item = json.loads(calls[key])
+        for mount in item[0]["Mounts"]:
+            if mount["Type"] == "bind" and mount["Source"].startswith(str(ROOT)):
+                mount["Source"] = str(root) + mount["Source"][len(str(ROOT)):]
+        calls[key] = json.dumps(item)
+    with pytest.raises(OwnershipError, match="unowned mount"):
+        run(record, calls)
 
 
 def test_successful_completed_migration_service_is_allowed() -> None:
@@ -224,7 +594,7 @@ def test_rejects_bad_lease_identity_and_resource_sets(mutate, match: str) -> Non
     ("gateway", lambda item: item["NetworkSettings"]["Networks"].update({
         "marty-selfhost-prod_default": {}}), "unowned network"),
     ("gateway", lambda item: item.update(NetworkSettings=None),
-     "network state is missing"),
+     "published port identity"),
     ("gateway", lambda item: item["NetworkSettings"]["Networks"][
         PROJECT + "_private"].update(NetworkID="f" * 64), "network identity"),
     ("gateway", lambda item: item["Config"].update({
@@ -261,7 +631,7 @@ def test_rejects_cross_project_or_shared_resource(resource, change, match: str) 
     if resource == "network":
         key = ("network", "inspect", "e" * 64)
     elif resource == "volume":
-        key = ("volume", "inspect", PROJECT + "_postgres")
+        key = ("volume", "inspect", PROJECT + "_postgres_data")
     else:
         key = ("container", "inspect", record["containers"][resource])
     item = deepcopy(json.loads(calls[key]))

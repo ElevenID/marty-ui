@@ -13,16 +13,17 @@ import json
 from pathlib import Path
 import re
 import subprocess
+import tempfile
 from typing import Callable
 
 if __package__:
     from .check_passport_supported_rollback_model import (
-        DISPOSABLE_SERVICES, PROJECT, SELECTED,
+        DISPOSABLE_SERVICES, PROJECT, RUST_DEPENDENCIES, SELECTED,
     )
     from .passport_supported_infra_images import ROLES
 else:
     from check_passport_supported_rollback_model import (
-        DISPOSABLE_SERVICES, PROJECT, SELECTED,
+        DISPOSABLE_SERVICES, PROJECT, RUST_DEPENDENCIES, SELECTED,
     )
     from passport_supported_infra_images import ROLES
 
@@ -46,6 +47,43 @@ COMPLETED_INIT = frozenset({
     "db-migrate", "issuance-migrations", "verification-migrations",
     "revocation-profile-migrate", "keycloak-configurator", "openbao-init",
 })
+SECRET_MOUNTS = {
+    "postgres": ("marty_db_password",),
+    "redis": (),
+    "openbao": ("bao_root_token",),
+    "db-migrate": ("marty_db_password", "bao_token"),
+    "signing-keys": ("marty_db_password", "bao_token", "signing_keys_internal_api_key"),
+    "issuance": (),
+    "revocation-profile-migrate": ("marty_db_password",),
+    "revocation-profile": ("marty_db_password", "grpc_service_token"),
+    "event-stream": (),
+    "organization": ("marty_db_password", "grpc_service_token"),
+    "credential-template": ("marty_db_password", "grpc_service_token",
+                            "signing_keys_internal_api_key"),
+    "trust-profile": ("marty_db_password", "grpc_service_token",
+                      "signing_keys_internal_api_key"),
+    "presentation-policy": ("marty_db_password", "grpc_service_token",
+                            "issuance_api_key"),
+    "deployment-profile": ("marty_db_password", "grpc_service_token"),
+    "issuance-native": ("marty_db_password", "bao_token", "signing_keys_internal_api_key",
+                        "issuance_api_key", "grpc_service_token", "token_hmac_key",
+                        "integration_secret_master_key"),
+    "flow": ("marty_db_password", "signing_keys_internal_api_key",
+             "issuance_api_key", "grpc_service_token"),
+    "passport-callback-signer": ("callback_signer_bao_token", "callback_signer_api_key"),
+    "passport-beta-bureau": ("bureau_database_url", "grpc_service_token",
+                             "callback_signer_api_key"),
+    "gateway": ("bao_token", "signing_keys_internal_api_key", "issuance_api_key",
+                "grpc_service_token"),
+}
+BASE_CEREMONY_MOUNTS = ("dsc_issue_gateway_key", "csca_issue_gateway_key")
+DATA_MOUNTS = {
+    "postgres": (("postgres_data", "/var/lib/postgresql/data"),),
+    "redis": (("redis_data", "/data"),),
+    "openbao": (("openbao_data", "/bao/data"),
+                ("openbao_file", "/openbao/file"),
+                ("openbao_logs", "/openbao/logs")),
+}
 
 
 class OwnershipError(ValueError):
@@ -97,6 +135,197 @@ def _ids(value: object, name: str) -> dict[str, str]:
             and len(set(value.values())) == len(value),
             f"Disposable {name} identities are invalid")
     return value
+
+
+def _runtime_environment(actual: object, service: str) -> dict[str, str]:
+    require(isinstance(actual, list)
+            and all(isinstance(entry, str) and "=" in entry
+                    and bool(entry.partition("=")[0]) for entry in actual),
+            f"{service} runtime identity is invalid")
+    entries = [entry.partition("=") for entry in actual]
+    environment = {key: value for key, _, value in entries}
+    require(len(environment) == len(entries),
+            f"{service} runtime identity has duplicate environment keys")
+    return environment
+
+
+def _organization_environment(actual: object, record: dict) -> None:
+    environment = _runtime_environment(actual, "Organization")
+    expected = {
+        "SERVICE_NAME": "organization",
+        "ORGANIZATION_SERVICE_PORT": "8002",
+        "ORG_GRPC_PORT": "9002",
+        "DATABASE_URL_TEMPLATE": (
+            "postgresql+asyncpg://marty:${MARTY_DB_PASSWORD}@postgres:5432/marty"),
+        "MARTY_DB_PASSWORD_FILE": "/run/secrets/marty_db_password",
+        "GRPC_SERVICE_TOKEN_FILE": "/run/secrets/grpc_service_token",
+        "ES_GRPC_TARGET": "event-stream:9015",
+        "MARTY_ORG_ID": "00000000-0000-0000-0000-000000000001",
+        "PASSPORT_ACCEPTANCE_PROJECT": record["project"],
+        "PASSPORT_ACCEPTANCE_RUN_ID": record["run_id"],
+        "PASSPORT_ACCEPTANCE_SOURCE_COMMIT": record["source_commit"],
+        "PASSPORT_ACCEPTANCE_EXPIRES_AT": record["expires_at"],
+    }
+    require(all(environment.get(key) == value for key, value in expected.items())
+            and "MARTY_DB_PASSWORD" not in environment
+            and "GRPC_SERVICE_TOKEN" not in environment,
+            "Organization runtime identity differs from protected run")
+
+
+def _revocation_environment(actual: object, status_origin: str) -> None:
+    environment = _runtime_environment(actual, "Revocation Profile")
+    expected = {
+        "SERVICE_NAME": "revocation_profile",
+        "ENVIRONMENT": "development",
+        "REVOCATION_PROFILE_SERVICE_PORT": "8013",
+        "RP_GRPC_ENABLED": "true",
+        "RP_GRPC_PORT": "9013",
+        "DATABASE_URL_TEMPLATE": (
+            "postgresql://marty:${MARTY_DB_PASSWORD}@postgres:5432/marty"),
+        "MARTY_DB_PASSWORD_FILE": "/run/secrets/marty_db_password",
+        "GRPC_SERVICE_TOKEN_FILE": "/run/secrets/grpc_service_token",
+        "REDIS_URL": "redis://redis:6379/4",
+        "ORG_GRPC_TARGET": "organization:9002",
+        "PUBLIC_API_URL": "http://gateway:8000",
+        "STATUS_LIST_BASE_URL": status_origin,
+        "MARTY_ORG_ID": "00000000-0000-0000-0000-000000000001",
+    }
+    require(all(environment.get(key) == value for key, value in expected.items())
+            and "RP_MIGRATE_ONLY" not in environment
+            and "MARTY_DB_PASSWORD" not in environment
+            and "GRPC_SERVICE_TOKEN" not in environment,
+            "Revocation Profile runtime identity differs from disposable model")
+
+
+def _support_environment(actual: object, service: str, status_origin: str) -> None:
+    environment = _runtime_environment(actual, service)
+    database = "postgresql+asyncpg://marty:${MARTY_DB_PASSWORD}@postgres:5432/marty"
+    common = {
+        "ENVIRONMENT": "development",
+        "DATABASE_URL_TEMPLATE": database,
+        "MARTY_DB_PASSWORD_FILE": "/run/secrets/marty_db_password",
+        "GRPC_SERVICE_TOKEN_FILE": "/run/secrets/grpc_service_token",
+        "ORG_GRPC_TARGET": "organization:9002",
+    }
+    public_origin = status_origin.replace("127.0.0.1", "localhost")
+    expected = {
+        "trust-profile": {
+            **common, "SERVICE_NAME": "trust_profile", "TRUST_PROFILE_SERVICE_PORT": "8004",
+            "SIGNING_KEYS_INTERNAL_API_KEY_FILE":
+                "/run/secrets/signing_keys_internal_api_key",
+            "MARTY_ISSUER_DID": "did:web:localhost:orgs:marty",
+            "MARTY_ISSUER_BASE_URL": public_origin,
+            "MARTY_ORG_ID": "00000000-0000-0000-0000-000000000001",
+            "MARTY_ORG_SLUG": "marty", "PUBLIC_DOMAIN": "localhost",
+            "DID_RESOLUTION_BASE_URL": "http://gateway:8000",
+        },
+        "credential-template": {
+            **common, "SERVICE_NAME": "credential_template",
+            "CREDENTIAL_TEMPLATE_SERVICE_PORT": "8003", "CT_GRPC_PORT": "9003",
+            "RP_GRPC_TARGET": "revocation-profile:9013",
+            "SIGNING_KEYS_INTERNAL_URL": "http://signing-keys:8017/internal",
+            "SIGNING_KEYS_INTERNAL_API_KEY_FILE":
+                "/run/secrets/signing_keys_internal_api_key",
+            "TRUST_PROFILE_SERVICE_URL": "http://trust-profile:8004",
+            "PUBLIC_API_URL": public_origin,
+            "MARTY_ORG_ID": "00000000-0000-0000-0000-000000000001",
+            "MARTY_MIGRATION_PROFILE": "dev",
+        },
+        "presentation-policy": {
+            **common, "SERVICE_NAME": "presentation_policy",
+            "PRESENTATION_POLICY_SERVICE_PORT": "8009", "PP_GRPC_PORT": "9009",
+            "ISSUANCE_API_KEY_FILE": "/run/secrets/issuance_api_key",
+            "TRUST_PROFILE_SERVICE_URL": "http://trust-profile:8004",
+            "ISSUANCE_NATIVE_SERVICE_URL": "http://issuance-native:8005",
+            "PUBLIC_BASE_URL": public_origin,
+            "ISSUER_BASE_URL": public_origin,
+            "DID_RESOLUTION_BASE_URL": "http://gateway:8000",
+            "PUBLIC_DOMAIN": "localhost", "MARTY_ORG_SLUG": "marty",
+        },
+        "deployment-profile": {
+            **common, "SERVICE_NAME": "deployment_profile",
+            "DEPLOYMENT_PROFILE_SERVICE_PORT": "8010",
+        },
+    }[service]
+    require(all(environment.get(key) == value for key, value in expected.items())
+            and all(key not in environment for key in (
+                "MARTY_DB_PASSWORD", "GRPC_SERVICE_TOKEN", "ISSUANCE_API_KEY",
+                "SIGNING_KEYS_INTERNAL_API_KEY")),
+            f"{service} runtime identity differs from disposable model")
+
+
+def _issuer_origin_environment(actual: object, service: str,
+                               status_origin: str) -> None:
+    environment = _runtime_environment(actual, service)
+    origin = status_origin.replace("127.0.0.1", "localhost")
+    key = "MARTY_ISSUER_BASE_URL" if service == "db-migrate" else "ISSUER_BASE_URL"
+    require(environment.get(key) == origin,
+            f"{service} issuer origin differs from disposable Gateway")
+
+
+def _ceremony_environment(actual: object, service: str, surface: str) -> None:
+    environment = _runtime_environment(actual, service)
+    credentials = {
+        "SIGNING_KEYS_DSC_ISSUE_GATEWAY_KEY_FILE": "/run/secrets/dsc_issue_gateway_key",
+        "SIGNING_KEYS_CSCA_ISSUE_GATEWAY_KEY_FILE": "/run/secrets/csca_issue_gateway_key",
+    }
+    require(all(key.removesuffix("_FILE") not in environment for key in credentials),
+            "Disposable certificate operator key appears in runtime environment")
+    if surface == "base":
+        expected = {**credentials, "ENVIRONMENT": "beta"}
+        if service == "gateway":
+            expected["GRPC_INSECURE_ALLOWED"] = "true"
+        else:
+            expected["SIGNING_KEYS_BETA_CSCA_ISSUANCE_ENABLED"] = "true"
+        require(all(environment.get(key) == value for key, value in expected.items()),
+                "Disposable certificate ceremony runtime differs from protected model")
+    else:
+        require(all(key not in environment for key in credentials)
+                and "SIGNING_KEYS_BETA_CSCA_ISSUANCE_ENABLED" not in environment
+                and (service != "gateway" or environment.get("ENVIRONMENT") == "production"),
+                "Selfhost runtime carries a beta certificate ceremony credential")
+
+
+def _status_origin(gateway: dict) -> str:
+    host = gateway.get("HostConfig")
+    networks = gateway.get("NetworkSettings")
+    bindings = host.get("PortBindings") if isinstance(host, dict) else None
+    published = networks.get("Ports") if isinstance(networks, dict) else None
+    require(isinstance(bindings, dict) and set(bindings) == {"8000/tcp"}
+            and isinstance(bindings["8000/tcp"], list)
+            and len(bindings["8000/tcp"]) == 1
+            and isinstance(bindings["8000/tcp"][0], dict)
+            and isinstance(published, dict)
+            and published.get("8000/tcp") == bindings["8000/tcp"]
+            and all(value is None for key, value in published.items()
+                    if key != "8000/tcp"),
+            "Disposable Gateway published port identity is invalid")
+    binding = bindings["8000/tcp"][0]
+    port = binding.get("HostPort")
+    require(binding.get("HostIp") == "127.0.0.1"
+            and isinstance(port, str) and port.isdigit()
+            and 1024 <= int(port) <= 65535,
+            "Disposable Gateway published port leaves loopback")
+    return f"http://127.0.0.1:{port}"
+
+
+def _expected_mounts(service: str, project: str, disposable_root: Path,
+                     surface: str) -> set[tuple[str, str, str, bool]]:
+    expected = {
+        ("bind", str(disposable_root / "secrets" / secret),
+         f"/run/secrets/{secret}", False)
+        for secret in (SECRET_MOUNTS[service]
+                       + (BASE_CEREMONY_MOUNTS if surface == "base"
+                          and service in {"gateway", "signing-keys"} else ()))
+    }
+    if service == "openbao":
+        expected.add(("bind", str(Path(__file__).resolve().parents[1]
+                                   / "scripts/passport_supported_openbao_start.sh"),
+                      "/usr/local/bin/passport-supported-openbao-start", False))
+    if service in DATA_MOUNTS:
+        expected.update(("volume", f"{project}_{name}", destination, True)
+                        for name, destination in DATA_MOUNTS[service])
+    return expected
 
 
 def verify(record: dict, surface: str, now: datetime,
@@ -153,6 +382,17 @@ def verify(record: dict, surface: str, now: datetime,
             "Disposable service ownership is incomplete")
     require(all(name.startswith(project + "_") for name in networks),
             "Disposable network identity escapes the project")
+    disposable_root = Path(record.get("disposable_root", ""))
+    require(disposable_root.is_absolute()
+            and disposable_root == Path(tempfile.gettempdir()) / project
+            and disposable_root.resolve() == disposable_root
+            and (disposable_root / "secrets").resolve() == disposable_root / "secrets",
+            "Disposable root is not the isolated project directory")
+    require(set(SECRET_MOUNTS) == DISPOSABLE_SERVICES,
+            "Disposable secret mount contract is incomplete")
+
+    gateway = _inspect("container", containers["gateway"], runner)
+    status_origin = _status_origin(gateway)
 
     listed = set(runner(["ps", "-aq", "--no-trunc", "--filter",
                          f"label=com.docker.compose.project={project}"]).split())
@@ -192,6 +432,25 @@ def verify(record: dict, surface: str, now: datetime,
         _labels(labels, record, project)
         require(labels.get("com.docker.compose.service") == service,
                 "Disposable container service identity changed")
+        if service == "organization":
+            _organization_environment(config.get("Env"), record)
+        elif service in {"gateway", "signing-keys"}:
+            _ceremony_environment(config.get("Env"), service, surface)
+            if service == "gateway":
+                _issuer_origin_environment(config.get("Env"), service, status_origin)
+        elif service == "issuance-native":
+            _issuer_origin_environment(config.get("Env"), service, status_origin)
+        elif service == "revocation-profile":
+            _revocation_environment(config.get("Env"), status_origin)
+        elif service in {"credential-template", "trust-profile",
+                         "presentation-policy", "deployment-profile"}:
+            _support_environment(config.get("Env"), service, status_origin)
+        elif service == "revocation-profile-migrate":
+            migration_env = _runtime_environment(config.get("Env"), "Revocation migration")
+            require(migration_env.get("STATUS_LIST_BASE_URL") == status_origin,
+                    "Revocation migration status origin differs from Gateway")
+        elif service == "db-migrate":
+            _issuer_origin_environment(config.get("Env"), service, status_origin)
         require(re.fullmatch(r"/" + re.escape(project) + "-"
                              + re.escape(service) + r"-[1-9][0-9]*",
                              item.get("Name", "")) is not None
@@ -214,18 +473,34 @@ def verify(record: dict, surface: str, now: datetime,
         expected_image = (
             record["legacy_reference"] if service == "issuance" else
             record["migrations_reference"] if service == "db-migrate" else
-            record["services_reference"] if service in SELECTED | {"signing-keys"}
+            record["services_reference"] if service in SELECTED | RUST_DEPENDENCIES | {"signing-keys"}
             else infra_images.get(service)
         )
         require(expected_image is not None and config.get("Image") == expected_image,
                 "Passport container image differs from signed release")
         mounts = item.get("Mounts", [])
         require(isinstance(mounts, list), "Disposable container mounts are invalid")
+        expected_mounts = _expected_mounts(service, project, disposable_root, surface)
+        observed_mounts: set[tuple[str, str, str, bool]] = set()
         for mount in mounts:
             require(isinstance(mount, dict)
-                    and mount.get("Type") == "volume"
-                    and mount.get("Name") in volumes,
+                    and mount.get("Type") in {"bind", "volume"}
+                    and isinstance(mount.get("Destination"), str)
+                    and isinstance(mount.get("RW"), bool),
                     "Disposable container uses an unowned mount")
+            kind = mount["Type"]
+            source = mount.get("Source") if kind == "bind" else mount.get("Name")
+            require(isinstance(source, str), "Disposable container uses an unowned mount")
+            require(kind != "bind" or Path(source).resolve() == Path(source),
+                    "Disposable container uses an unowned mount")
+            identity = (kind, str(Path(source)) if kind == "bind" else source,
+                        mount["Destination"], mount["RW"])
+            require(identity in expected_mounts and identity not in observed_mounts
+                    and (kind != "volume" or source in volumes),
+                    "Disposable container uses an unowned mount")
+            observed_mounts.add(identity)
+        require(observed_mounts == expected_mounts,
+                "Disposable container mount set is incomplete")
     for name, identifier in networks.items():
         item = _inspect("network", identifier, runner)
         require(item.get("Id") == identifier and item.get("Name") == name

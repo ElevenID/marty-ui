@@ -3,7 +3,7 @@
 
 This prerequisite collector only performs GET requests and Docker inspection. A
 separate, protected acceptance run must supply the mutating ceremony, issuance,
-provider, recovery, and production-isolation evidence before retirement.
+simulator callback, recovery, demo, and production-isolation evidence before retirement.
 """
 
 from __future__ import annotations
@@ -38,7 +38,8 @@ REQUIRED_PROBES = (
     "managed_csca_dsc_chain", "sod_signature", "nine_route_gateway_flow",
     "packaged_image", "physical_bureau_submission", "physical_bureau_batch",
     "signed_bureau_callback",
-    "legacy_drain", "rollback", "production_isolation", "physical_booklet_verified",
+    "legacy_drain", "rollback", "production_isolation", "physical_claim_boundary",
+    "recorded_demo",
 )
 
 
@@ -233,11 +234,16 @@ def collect(
         require(body.get("blockers") == [] and body["signer"].get("blockers") == [], "Passport capability reports blockers")
         authenticated = {"verified": True, "evidence": {"http_status": status, "supported": True, "signer_mode": "MANAGED_ISSUER_PROFILE"}}
     probes = {key: {"verified": False, "evidence": None} for key in REQUIRED_PROBES}
+    if provider_mode == "simulator" and provider_ingress_runtime_image is None:
+        probes["physical_claim_boundary"] = {"verified": True, "evidence": {
+            "physical_claim": "not_claimed", "booklet_verified": False,
+        }}
     probes["capabilities_http"] = authenticated
     probes["unauthenticated_denial"] = {"verified": True, "evidence": {"http_status": unauth_status}}
     report = {
         "schema": "marty.passport-beta-acceptance/v1", "status": "blocked",
         "collected_at": datetime.now(timezone.utc).isoformat(), "beta_origin": BETA_ORIGIN,
+        "physical_claim": "not_claimed",
         "release": {"source_commit": commit, "stack_manifest_sha256": manifest_digest.removeprefix("sha256:"), "oci_digests": oci_digests, "signed_manifest_verified": signed},
         "deployment": {"local_deployment_manifest_sha256": digest_file(deployment_path).removeprefix("sha256:"), "source_manifest_sha256": digest_file(source_path).removeprefix("sha256:"), "release_version": deployment["release_version"], "provider_mode": provider_mode},
         "runtime_images": runtime_images, "probes": probes,

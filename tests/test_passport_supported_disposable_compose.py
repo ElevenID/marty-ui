@@ -23,9 +23,10 @@ def inputs(root: Path) -> Path:
     secrets = root / "secrets"
     secrets.mkdir()
     for name in (
-        "marty_db_password", "bao_token", "signing_keys_internal_api_key",
-        "passport_tenant_api_keys", "callback_signer_api_key",
-        "provider_webhook_secret",
+        "marty_db_password", "bao_root_token", "bao_token", "signing_keys_internal_api_key",
+        "issuance_api_key", "dsc_issue_gateway_key", "csca_issue_gateway_key",
+        "callback_signer_api_key",
+        "callback_signer_bao_token", "grpc_service_token", "bureau_database_url",
     ):
         (secrets / name).write_text("synthetic-disposable-only", encoding="utf-8")
     env_file = root / "acceptance.env"
@@ -39,7 +40,7 @@ def inputs(root: Path) -> Path:
         "PASSPORT_ACCEPTANCE_SOURCE_COMMIT=" + "a" * 40,
         "PASSPORT_ACCEPTANCE_DATABASE_URL=postgresql+asyncpg://marty:synthetic-disposable-only@postgres:5432/marty",
         "PASSPORT_ACCEPTANCE_ADMIN_EMAIL=disposable@acceptance.invalid",
-        "PASSPORT_ACCEPTANCE_PROVIDER_PROFILE_ID=disposable-physical-profile",
+        "PASSPORT_ACCEPTANCE_EXPIRES_AT=2026-09-27T12:55:00+00:00",
         "PASSPORT_ACCEPTANCE_GATEWAY_PORT=29876",
         "PASSPORT_ACCEPTANCE_SECRET_DIR=" + secrets.as_posix(),
     ]) + "\n", encoding="utf-8")
@@ -56,23 +57,112 @@ def test_real_compose_render_is_safe_but_not_accepted(
     model = render_model(surface, project, env_file, tmp_path, SERVICES)
     assert set(model["services"]) >= {
         "gateway", "flow", "issuance-native", "issuance",
-        "passport-callback-signer-supported", "passport-provider-ingress",
+        "passport-callback-signer", "passport-beta-bureau",
         "signing-keys", "db-migrate", "postgres", "redis", "openbao",
+        "organization", "event-stream",
+        "revocation-profile", "revocation-profile-migrate",
+        "credential-template", "trust-profile", "presentation-policy",
+        "deployment-profile",
     }
     result = validate_model(model, project, SERVICES, tmp_path)
     assert result["model_safe"] is True
     assert result["rollback_accepted"] is False
     selected = ("gateway", "flow", "issuance-native",
-                "passport-callback-signer-supported", "passport-provider-ingress")
+                "passport-callback-signer", "passport-beta-bureau")
     for name in selected:
         env = model["services"][name]["environment"]
         assert env["PASSPORT_ACCEPTANCE_SURFACE"] == surface
-        assert env["ENVIRONMENT"] == ("development" if surface == "base"
-                                       else "production")
+        assert env["ENVIRONMENT"] == (
+            "beta" if name in {"passport-callback-signer", "passport-beta-bureau"}
+            or (surface == "base" and name == "gateway")
+            or (surface == "selfhost" and name == "issuance-native")
+            else "development" if surface == "base" else "production"
+        )
+    for name in ("gateway", "flow", "issuance-native"):
+        env = model["services"][name]["environment"]
+        assert env["PASSPORT_INTERNAL_SERVICE_AUTH_ENABLED"] == "true"
+        assert "PASSPORT_TENANT_API_KEYS" not in env
+        assert "PASSPORT_TENANT_API_KEYS_FILE" not in env
+        assert env["ISSUANCE_API_KEY_FILE"] == "/run/secrets/issuance_api_key"
+        assert env["SIGNING_KEYS_INTERNAL_API_KEY_FILE"] == (
+            "/run/secrets/signing_keys_internal_api_key")
+    ceremony_keys = {
+        "SIGNING_KEYS_DSC_ISSUE_GATEWAY_KEY_FILE": "dsc_issue_gateway_key",
+        "SIGNING_KEYS_CSCA_ISSUE_GATEWAY_KEY_FILE": "csca_issue_gateway_key",
+    }
+    for name in ("gateway", "signing-keys"):
+        service = model["services"][name]
+        env = service["environment"]
+        mounts = {item["source"] for item in service["secrets"]}
+        if surface == "base":
+            assert all(env[key] == f"/run/secrets/{secret}"
+                       and secret in mounts for key, secret in ceremony_keys.items())
+            assert all(key.removesuffix("_FILE") not in env for key in ceremony_keys)
+        else:
+            assert all(key not in env and key.removesuffix("_FILE") not in env
+                       for key in ceremony_keys)
+            assert not (set(ceremony_keys.values()) & mounts)
+    if surface == "base":
+        assert model["services"]["gateway"]["environment"][
+            "GRPC_INSECURE_ALLOWED"] == "true"
+        assert model["services"]["signing-keys"]["environment"][
+            "SIGNING_KEYS_BETA_CSCA_ISSUANCE_ENABLED"] == "true"
+        assert model["services"]["signing-keys"]["environment"][
+            "ENVIRONMENT"] == "beta"
+    else:
+        assert "SIGNING_KEYS_BETA_CSCA_ISSUANCE_ENABLED" not in model["services"][
+            "signing-keys"]["environment"]
+    assert "passport_tenant_api_keys" not in model["secrets"]
+    assert model["services"]["issuance-native"]["environment"][
+        "PERSONALIZATION_BUREAU_PROVIDER_PROFILE_ID"] == "passport-beta-bureau"
+    assert model["services"]["gateway"]["environment"][
+        "PASSPORT_PROVIDER_INGRESS_GATEWAY_ENABLED"] == "false"
+    assert model["services"]["gateway"]["environment"][
+        "ORG_GRPC_TARGET"] == "organization:9002"
+    assert model["services"]["organization"]["environment"][
+        "ES_GRPC_TARGET"] == "event-stream:9015"
+    assert model["services"]["organization"]["environment"][
+        "PASSPORT_ACCEPTANCE_PROJECT"] == project
     assert model["services"]["issuance"]["image"] == LEGACY
     signing = model["services"]["signing-keys"]
     assert signing["environment"]["SIGNING_KEYS_REDIS_URL"] == "redis://redis:6379/2"
+    assert signing["environment"]["PUBLIC_DOMAIN"] == "localhost"
     assert signing["depends_on"]["redis"]["condition"] == "service_healthy"
+    openbao = model["services"]["openbao"]
+    assert openbao["entrypoint"] == [
+        "/bin/sh", "/usr/local/bin/passport-supported-openbao-start"]
+    assert {secret["source"] for secret in openbao["secrets"]} == {"bao_root_token"}
+    assert "BAO_DEV_ROOT_TOKEN_ID" not in openbao.get("environment", {})
+    migration = model["services"]["db-migrate"]
+    assert migration["depends_on"]["revocation-profile-migrate"]["condition"] == (
+        "service_completed_successfully")
+    assert model["services"]["revocation-profile-migrate"]["environment"][
+        "RP_MIGRATE_ONLY"] == "true"
+    revocation = model["services"]["revocation-profile"]
+    assert revocation["depends_on"]["organization"]["condition"] == "service_healthy"
+    assert revocation["environment"]["ORG_GRPC_TARGET"] == "organization:9002"
+    assert revocation["environment"]["STATUS_LIST_BASE_URL"] == (
+        "http://127.0.0.1:29876")
+    assert model["services"]["revocation-profile-migrate"]["environment"][
+        "STATUS_LIST_BASE_URL"] == revocation["environment"]["STATUS_LIST_BASE_URL"]
+    assert {secret["source"] for secret in revocation["secrets"]} == {
+        "marty_db_password", "grpc_service_token"}
+    assert model["services"]["gateway"]["environment"][
+        "REVOCATION_PROFILE_SERVICE_URL"] == "http://revocation-profile:8013"
+    assert model["services"]["issuance-native"]["environment"][
+        "RP_GRPC_TARGET"] == "revocation-profile:9013"
+    assert migration["environment"]["REDIS_URL"] == signing["environment"][
+        "SIGNING_KEYS_REDIS_URL"]
+    assert migration["environment"]["PUBLIC_DOMAIN"] == model["services"][
+        "gateway"]["environment"]["PUBLIC_DOMAIN"]
+    assert migration["environment"]["MARTY_ISSUER_DID"] == model["services"][
+        "flow"]["environment"]["MARTY_ISSUER_DID"]
+    assert migration["environment"]["MARTY_ISSUER_BASE_URL"] == model["services"][
+        "gateway"]["environment"]["ISSUER_BASE_URL"]
+    assert migration["environment"]["MARTY_ISSUER_BASE_URL"] == model["services"][
+        "issuance-native"]["environment"]["ISSUER_BASE_URL"]
+    assert migration["environment"]["MARTY_ISSUER_BASE_URL"] == (
+        "http://localhost:29876")
     for role, reference in qualified_images(verify_registry=False).items():
         assert model["services"][role]["image"] == reference
     labels = model["services"]["gateway"]["labels"]
@@ -84,7 +174,7 @@ def test_real_compose_render_is_safe_but_not_accepted(
 
 @pytest.mark.skipif(shutil.which("docker") is None, reason="Docker Compose CLI unavailable")
 @pytest.mark.parametrize("surface", ["base", "selfhost"])
-def test_python_owner_phase_changes_only_three_frozen_selectors(
+def test_python_owner_phase_changes_only_two_frozen_selectors(
     tmp_path: Path, surface: str,
 ) -> None:
     env_file = inputs(tmp_path)
@@ -101,7 +191,6 @@ def test_python_owner_phase_changes_only_three_frozen_selectors(
     }
     assert differences == {
         ("gateway", "PASSPORT_NATIVE_GATEWAY_ENABLED", "true", "false"),
-        ("gateway", "PASSPORT_PROVIDER_INGRESS_GATEWAY_ENABLED", "true", "false"),
         ("flow", "PASSPORT_NATIVE_FLOW_ENABLED", "true", "false"),
     }
     assert set(rust["services"]) == set(python["services"])
@@ -124,4 +213,25 @@ def test_rendered_model_rejects_escape_and_mutated_legacy_image(tmp_path: Path) 
     bad = deepcopy(model)
     bad["services"]["issuance"]["image"] = "marty-credentials:latest"
     with pytest.raises(ModelPreflightError, match="immutable"):
+        validate_model(bad, project, SERVICES, tmp_path)
+    bad = deepcopy(model)
+    bad["services"]["openbao"]["entrypoint"] = ["/bin/sh", "/tmp/start.sh"]
+    with pytest.raises(ModelPreflightError, match="OpenBao start command"):
+        validate_model(bad, project, SERVICES, tmp_path)
+    bad = deepcopy(model)
+    bad["configs"]["passport_supported_openbao_start"]["file"] = (
+        tmp_path / "unreviewed-start.sh").as_posix()
+    with pytest.raises(ModelPreflightError, match="OpenBao start config"):
+        validate_model(bad, project, SERVICES, tmp_path)
+    bad = deepcopy(model)
+    bad["services"]["openbao"]["environment"] = {
+        "BAO_DEV_ROOT_TOKEN_ID": "visible-in-docker-inspect"}
+    with pytest.raises(ModelPreflightError, match="OpenBao root token"):
+        validate_model(bad, project, SERVICES, tmp_path)
+    bad = deepcopy(model)
+    bad["services"]["openbao"]["volumes"].append({
+        "type": "bind", "source": str(tmp_path / "replacement.sh"),
+        "target": "/usr/local/bin/passport-supported-openbao-start",
+    })
+    with pytest.raises(ModelPreflightError, match="bind mount"):
         validate_model(bad, project, SERVICES, tmp_path)

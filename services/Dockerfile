@@ -18,7 +18,7 @@ RUN case "$PASSPORT_SELF_SIGNED_TEST" in \
     -p marty-signing-keys --bin marty-signing-keys --bin marty-passport-callback-signer --bin marty-passport-callback-signer-supported \
     -p marty-notification --bin marty-notification \
     -p marty-flow --bin marty-flow \
-    -p marty-organization --bin marty-organization \
+    -p marty-organization --bin marty-organization --bin marty-passport-acceptance-api-key \
     -p marty-auth --bin marty-auth \
     -p marty-credential-template --bin marty-credential-template \
     -p marty-presentation-policy --bin marty-presentation-policy --bin marty-verifier-positive-gate \
@@ -59,6 +59,7 @@ COPY --from=rust-service-builder /build/rust/target/release/marty-passport-callb
 COPY --from=rust-service-builder /build/rust/target/release/marty-notification /usr/local/bin/marty-notification
 COPY --from=rust-service-builder /build/rust/target/release/marty-flow /usr/local/bin/marty-flow
 COPY --from=rust-service-builder /build/rust/target/release/marty-organization /usr/local/bin/marty-organization
+COPY --from=rust-service-builder /build/rust/target/release/marty-passport-acceptance-api-key /usr/local/bin/marty-passport-acceptance-api-key
 COPY --from=rust-service-builder /build/rust/target/release/marty-auth /usr/local/bin/marty-auth
 COPY --from=rust-service-builder /build/rust/target/release/marty-credential-template /usr/local/bin/marty-credential-template
 COPY --from=rust-service-builder /build/rust/target/release/marty-presentation-policy /usr/local/bin/marty-presentation-policy
