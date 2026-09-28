@@ -87,6 +87,18 @@ def verify(path: Path, manifest: Path, plan: dict, **kwargs) -> dict:
     )
 
 
+def partial_teardown_context(tmp_path: Path) -> tuple[tuple, dict, dict]:
+    path, manifest, plan = source_plan(tmp_path)
+    official = {key: plan[key] for key in (
+        "source_commit", "stack_manifest_sha256", "services_reference",
+        "migrations_reference", "legacy_reference", "infra_images",
+    )}
+    gates = {"now": NOW, "attest": lambda *args: True,
+             "release": lambda *args: official,
+             "checkout": lambda: (SOURCE, False)}
+    return (path, manifest, "123456", ENV), plan, gates
+
+
 def input_plan() -> dict:
     project = "marty-passport-acceptance-base-" + uuid.uuid4().hex[:12]
     return {
@@ -527,8 +539,10 @@ def test_teardown_targets_only_recorded_disposable_resources() -> None:
     assert not stale_calls
 
 
-def test_partial_teardown_removes_only_plan_owned_startup_resources() -> None:
-    plan = input_plan()
+def test_partial_teardown_removes_only_plan_owned_startup_resources(
+    tmp_path: Path,
+) -> None:
+    arguments, plan, gates = partial_teardown_context(tmp_path)
     project = plan["project"]
     container = "1" * 64
     network = "2" * 64
@@ -565,18 +579,22 @@ def test_partial_teardown_removes_only_plan_owned_startup_resources() -> None:
             present["volumes"].clear()
         return True
 
-    assert destroy_partial_disposable_project(plan, inspector, executor)
+    assert destroy_partial_disposable_project(
+        *arguments, inspector, executor, **gates)
     assert calls == [
         ["container", "rm", "-f", container],
         ["network", "rm", network],
         ["volume", "rm", volume],
     ]
-    assert destroy_partial_disposable_project(plan, inspector, executor)
+    assert destroy_partial_disposable_project(
+        *arguments, inspector, executor, **gates)
     assert len(calls) == 3
 
 
-def test_partial_teardown_fails_closed_before_mutating_unknown_resource() -> None:
-    plan = input_plan()
+def test_partial_teardown_fails_closed_before_mutating_unknown_resource(
+    tmp_path: Path,
+) -> None:
+    arguments, plan, gates = partial_teardown_context(tmp_path)
     project = plan["project"]
     container = "1" * 64
     labels = {**plan["owner_labels"], "com.docker.compose.project": project}
@@ -591,11 +609,21 @@ def test_partial_teardown_fails_closed_before_mutating_unknown_resource() -> Non
         return ""
 
     assert not destroy_partial_disposable_project(
-        plan, inspector, lambda args, output: calls.append(args) or True)
+        *arguments, inspector,
+        lambda args, output: calls.append(args) or True, **gates)
     assert calls == []
+    with pytest.raises(ProducerError, match="attestation"):
+        destroy_partial_disposable_project(
+            *arguments, inspector, attest=lambda *args: False,
+            release=gates["release"], checkout=gates["checkout"], now=NOW)
+    with pytest.raises(ProducerError, match="lease"):
+        destroy_partial_disposable_project(
+            *arguments, inspector, **{**gates, "now": NOW + timedelta(hours=2)})
+    assert calls == []
+    bad = {**plan, "project": "marty-prod"}
+    arguments[0].write_text(json.dumps(bad), encoding="utf-8")
     with pytest.raises(ProducerError, match="plan is invalid"):
-        destroy_partial_disposable_project({**plan, "project": "marty-prod"},
-                                           inspector)
+        destroy_partial_disposable_project(*arguments, inspector, **gates)
 
 
 def test_host_key_unlink_failure_still_forces_teardown(

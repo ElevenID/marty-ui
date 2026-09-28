@@ -472,15 +472,24 @@ def destroy_disposable_project(
 
 
 def destroy_partial_disposable_project(
-    plan: dict, inspector: Callable[[list[str]], str] = docker,
+    plan_path: Path, manifest_path: Path, plan_run_id: str,
+    environment: dict[str, str], inspector: Callable[[list[str]], str] = docker,
     executor: Callable[[list[str], object], bool] = _exec_docker,
+    *, now: datetime | None = None,
+    attest: Callable[[str, str, str, str, str], bool] = _attest,
+    release: Callable[..., dict] = release_inputs,
+    checkout: Callable[[], tuple[str, bool]] = source_identity,
 ) -> bool:
-    """Clean a failed startup using the previously verified protected plan.
+    """Clean a failed startup only after rechecking protected plan provenance.
 
     Every discovered resource must have the exact plan labels and one of the
     fixed disposable service/network/volume names. Unknown project resources
-    fail closed before any deletion; the caller must retain the plan artifact.
+    fail closed before any deletion; the caller must retain the plan and release.
     """
+    plan = verify_plan_release(
+        plan_path, manifest_path, plan_run_id, environment, now=now,
+        attest=attest, release=release, checkout=checkout,
+    )
     project = plan.get("project")
     surface = plan.get("surface")
     owner_labels = plan.get("owner_labels")
