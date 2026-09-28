@@ -24,6 +24,7 @@ def inputs(root: Path) -> Path:
     secrets.mkdir()
     for name in (
         "marty_db_password", "bao_token", "signing_keys_internal_api_key",
+        "issuance_api_key",
         "callback_signer_api_key",
         "callback_signer_bao_token", "grpc_service_token", "bureau_database_url",
     ):
@@ -76,6 +77,9 @@ def test_real_compose_render_is_safe_but_not_accepted(
         assert env["PASSPORT_INTERNAL_SERVICE_AUTH_ENABLED"] == "true"
         assert "PASSPORT_TENANT_API_KEYS" not in env
         assert "PASSPORT_TENANT_API_KEYS_FILE" not in env
+        assert env["ISSUANCE_API_KEY_FILE"] == "/run/secrets/issuance_api_key"
+        assert env["SIGNING_KEYS_INTERNAL_API_KEY_FILE"] == (
+            "/run/secrets/signing_keys_internal_api_key")
     assert "passport_tenant_api_keys" not in model["secrets"]
     assert model["services"]["issuance-native"]["environment"][
         "PERSONALIZATION_BUREAU_PROVIDER_PROFILE_ID"] == "passport-beta-bureau"
@@ -92,8 +96,7 @@ def test_real_compose_render_is_safe_but_not_accepted(
     assert migration["environment"]["PUBLIC_DOMAIN"] == model["services"][
         "gateway"]["environment"]["PUBLIC_DOMAIN"]
     assert migration["environment"]["MARTY_ISSUER_DID"] == model["services"][
-        "flow"]["environment"]["MARTY_ISSUER_DID"] == model["services"][
-        "issuance-native"]["environment"]["MARTY_ISSUER_DID"]
+        "flow"]["environment"]["MARTY_ISSUER_DID"]
     assert migration["environment"]["MARTY_ISSUER_BASE_URL"] == model["services"][
         "gateway"]["environment"]["ISSUER_BASE_URL"]
     for role, reference in qualified_images(verify_registry=False).items():

@@ -381,8 +381,7 @@ def validate_model(
         == "localhost"
         and migration_env.get("MARTY_ISSUER_BASE_URL")
         == gateway.get("ISSUER_BASE_URL") == "http://gateway:8000"
-        and flow.get("MARTY_ISSUER_DID") == issuer_did
-        and native.get("MARTY_ISSUER_DID") == issuer_did,
+        and flow.get("MARTY_ISSUER_DID") == issuer_did,
         "Disposable managed issuer DID differs across profile and runtime services",
     )
     require(
@@ -392,6 +391,23 @@ def validate_model(
             for settings in (gateway, flow, native))
         and "passport_tenant_api_keys" not in secrets,
         "Disposable internal passport authentication conflicts with tenant keyring",
+    )
+    require(
+        all(settings.get("ISSUANCE_API_KEY_FILE") == "/run/secrets/issuance_api_key"
+            and settings.get("SIGNING_KEYS_INTERNAL_API_KEY_FILE")
+            == "/run/secrets/signing_keys_internal_api_key"
+            for settings in (gateway, flow, native))
+        and services["signing-keys"]["environment"].get(
+            "SIGNING_KEYS_INTERNAL_API_KEY_FILE")
+        == "/run/secrets/signing_keys_internal_api_key"
+        and all({"issuance_api_key", "signing_keys_internal_api_key"}
+                <= {secret.get("source") for secret in services[name].get("secrets", [])
+                    if isinstance(secret, dict)}
+                for name in ("gateway", "flow", "issuance-native"))
+        and any(secret.get("source") == "signing_keys_internal_api_key"
+                for secret in services["signing-keys"].get("secrets", [])
+                if isinstance(secret, dict)),
+        "Disposable Gateway and signing services do not share project credentials",
     )
     require(native.get("ENVIRONMENT") == ("beta" if surface == "selfhost" else "development")
             and gateway.get("ENVIRONMENT") == ("production" if surface == "selfhost" else "development")

@@ -54,7 +54,6 @@ def safe_model(root: Path) -> dict:
     services["passport-beta-bureau"]["networks"] = ["private", "callback_signing"]
     services["issuance-native"]["environment"].update({
         "ENVIRONMENT": "development",
-        "MARTY_ISSUER_DID": "did:web:localhost:orgs:marty",
         "PERSONALIZATION_BUREAU_URL": "http://passport-beta-bureau:8020",
         "PERSONALIZATION_BUREAU_API_KEY_FILE": "/run/secrets/grpc_service_token",
         "PERSONALIZATION_BUREAU_PROVIDER_PROFILE_ID": "passport-beta-bureau",
@@ -69,6 +68,16 @@ def safe_model(root: Path) -> dict:
         "ENVIRONMENT": "development",
         "MARTY_ISSUER_DID": "did:web:localhost:orgs:marty",
     })
+    for name in ("gateway", "flow", "issuance-native"):
+        services[name]["environment"].update({
+            "ISSUANCE_API_KEY_FILE": "/run/secrets/issuance_api_key",
+            "SIGNING_KEYS_INTERNAL_API_KEY_FILE":
+                "/run/secrets/signing_keys_internal_api_key",
+        })
+        services[name]["secrets"] = [
+            {"source": "issuance_api_key"},
+            {"source": "signing_keys_internal_api_key"},
+        ]
     infra = qualified_images(verify_registry=False)
     services["postgres"] = {"image": infra["postgres"], "networks": ["private"], "volumes": [
         {"type": "bind", "source": str(root / "postgres"),
@@ -81,7 +90,10 @@ def safe_model(root: Path) -> dict:
         "image": IMAGE,
         "networks": ["private"],
         "environment": {"SIGNING_KEYS_REDIS_URL": "redis://redis:6379/2",
-                        "PUBLIC_DOMAIN": "localhost"},
+                        "PUBLIC_DOMAIN": "localhost",
+                        "SIGNING_KEYS_INTERNAL_API_KEY_FILE":
+                            "/run/secrets/signing_keys_internal_api_key"},
+        "secrets": [{"source": "signing_keys_internal_api_key"}],
         "depends_on": {"redis": {"condition": "service_healthy"}},
     }
     services["db-migrate"] = {
@@ -114,6 +126,9 @@ def safe_model(root: Path) -> dict:
             "volumes": {}, "secrets": {
                 "db": {"file": str(root / "secrets/db")},
                 "bao_token": {"file": str(root / "secrets/bao_token")},
+                "issuance_api_key": {"file": str(root / "secrets/issuance_api_key")},
+                "signing_keys_internal_api_key": {
+                    "file": str(root / "secrets/signing_keys_internal_api_key")},
             }}
 
 
@@ -251,6 +266,13 @@ def test_attested_plan_binds_all_disposable_images(tmp_path: Path) -> None:
     (lambda model, root: model["services"]["issuance-native"]["environment"].update(
         PASSPORT_TENANT_API_KEYS="raw-secret"),
      "internal passport authentication"),
+    (lambda model, root: model["services"]["gateway"]["environment"].pop(
+        "SIGNING_KEYS_INTERNAL_API_KEY_FILE"), "share project credentials"),
+    (lambda model, root: model["services"]["flow"]["secrets"].pop(),
+     "share project credentials"),
+    (lambda model, root: model["services"]["signing-keys"]["environment"].update(
+        SIGNING_KEYS_INTERNAL_API_KEY_FILE="/run/secrets/other"),
+     "share project credentials"),
 ])
 def test_model_rejects_production_escape(tmp_path: Path, change, match: str) -> None:
     model = deepcopy(safe_model(tmp_path))

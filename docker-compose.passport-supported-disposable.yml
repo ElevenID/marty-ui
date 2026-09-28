@@ -111,8 +111,8 @@ services:
       PASSPORT_MANAGED_ISSUER_SIGNING_ENABLED: "true"
       PASSPORT_KMS_ARTIFACTS_ENABLED: "true"
       PASSPORT_KMS_CALLBACKS_ENABLED: "true"
-      MARTY_ISSUER_DID: did:web:localhost:orgs:marty
       GRPC_SERVICE_TOKEN_FILE: /run/secrets/grpc_service_token
+      ISSUANCE_API_KEY_FILE: /run/secrets/issuance_api_key
       DATABASE_URL_TEMPLATE: postgresql+asyncpg://marty:$${MARTY_DB_PASSWORD}@postgres:5432/marty
       MARTY_DB_PASSWORD_FILE: /run/secrets/marty_db_password
       BAO_ADDR: http://openbao:8200
@@ -122,7 +122,7 @@ services:
       PERSONALIZATION_BUREAU_URL: http://passport-beta-bureau:8020
       PERSONALIZATION_BUREAU_API_KEY_FILE: /run/secrets/grpc_service_token
       PERSONALIZATION_BUREAU_PROVIDER_PROFILE_ID: passport-beta-bureau
-    secrets: [marty_db_password, bao_token, signing_keys_internal_api_key, grpc_service_token]
+    secrets: [marty_db_password, bao_token, signing_keys_internal_api_key, issuance_api_key, grpc_service_token]
     depends_on:
       signing-keys:
         condition: service_started
@@ -140,6 +140,7 @@ services:
       PASSPORT_INTERNAL_SERVICE_AUTH_ENABLED: "true"
       MARTY_ISSUER_DID: did:web:localhost:orgs:marty
       GRPC_SERVICE_TOKEN_FILE: /run/secrets/grpc_service_token
+      ISSUANCE_API_KEY_FILE: /run/secrets/issuance_api_key
       DATABASE_URL_TEMPLATE: postgresql+asyncpg://marty:$${MARTY_DB_PASSWORD}@postgres:5432/marty
       MARTY_DB_PASSWORD_FILE: /run/secrets/marty_db_password
       REDIS_URL: redis://redis:6379
@@ -147,7 +148,7 @@ services:
       ISSUANCE_SERVICE_URL: http://issuance:8005
       SIGNING_KEYS_INTERNAL_URL: http://signing-keys:8017/internal
       SIGNING_KEYS_INTERNAL_API_KEY_FILE: /run/secrets/signing_keys_internal_api_key
-    secrets: [marty_db_password, signing_keys_internal_api_key, grpc_service_token]
+    secrets: [marty_db_password, signing_keys_internal_api_key, issuance_api_key, grpc_service_token]
     depends_on:
       issuance-native:
         condition: service_started
@@ -210,6 +211,7 @@ services:
       PUBLIC_DOMAIN: localhost
       ISSUER_BASE_URL: http://gateway:8000
       GRPC_SERVICE_TOKEN_FILE: /run/secrets/grpc_service_token
+      ISSUANCE_API_KEY_FILE: /run/secrets/issuance_api_key
       FLOW_SERVICE_URL: http://flow:8011
       ISSUANCE_NATIVE_SERVICE_URL: http://issuance-native:8005
       ISSUANCE_SERVICE_URL: http://issuance:8005
@@ -218,7 +220,8 @@ services:
       REDIS_URL: redis://redis:6379
       BAO_ADDR: http://openbao:8200
       BAO_TOKEN_FILE: /run/secrets/bao_token
-    secrets: [bao_token, grpc_service_token]
+      SIGNING_KEYS_INTERNAL_API_KEY_FILE: /run/secrets/signing_keys_internal_api_key
+    secrets: [bao_token, signing_keys_internal_api_key, issuance_api_key, grpc_service_token]
     depends_on:
       flow:
         condition: service_started
@@ -235,6 +238,8 @@ secrets:
     file: ${PASSPORT_ACCEPTANCE_SECRET_DIR:?use disposable secret root}/bao_token
   signing_keys_internal_api_key:
     file: ${PASSPORT_ACCEPTANCE_SECRET_DIR:?use disposable secret root}/signing_keys_internal_api_key
+  issuance_api_key:
+    file: ${PASSPORT_ACCEPTANCE_SECRET_DIR:?use disposable secret root}/issuance_api_key
   callback_signer_api_key:
     file: ${PASSPORT_ACCEPTANCE_SECRET_DIR:?use disposable secret root}/callback_signer_api_key
   callback_signer_bao_token:
