@@ -1,6 +1,7 @@
 use chrono::{DateTime, Utc};
 use serde_json::{json, Map};
 use thiserror::Error;
+use url::Url;
 use uuid::Uuid;
 
 use crate::{
@@ -519,7 +520,16 @@ fn validate_config(config: &MartyBootstrapConfig) -> Result<(), TrustCatalogErro
     if !config.issuer_did.starts_with("did:") {
         return Err(TrustCatalogError::InvalidConfig("issuer_did"));
     }
-    if !config.issuer_url.starts_with("https://") {
+    // The disposable acceptance model publishes Gateway on a local loopback port.
+    // Deployed environments also reject HTTP in TrustProfileServiceConfig.
+    let local_http = Url::parse(&config.issuer_url).is_ok_and(|url| {
+        url.scheme() == "http"
+            && url.host_str() == Some("localhost")
+            && url.port().is_some_and(|port| {
+                port >= 1024 && config.issuer_url == format!("http://localhost:{port}")
+            })
+    });
+    if !config.issuer_url.starts_with("https://") && !local_http {
         return Err(TrustCatalogError::InvalidConfig("issuer_url"));
     }
     Ok(())
