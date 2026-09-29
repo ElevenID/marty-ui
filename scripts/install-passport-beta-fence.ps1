@@ -222,7 +222,8 @@ try {
     finally { $outputStream.Dispose() }
     # A completed host marker binds later snapshots to these exact receipt
     # bytes. An interrupted write leaves the original intent marker and fails
-    # closed; only the protected installer can complete this record.
+    # closed. This mutable host record is continuity evidence; the later
+    # protected producer must attest installer provenance before acceptance.
     $receiptHasher = [Security.Cryptography.SHA256]::Create()
     try {
         $receiptHash = $receiptHasher.ComputeHash(

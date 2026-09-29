@@ -5,6 +5,7 @@ from __future__ import annotations
 from copy import deepcopy
 import hashlib
 import json
+from types import SimpleNamespace
 
 import pytest
 
@@ -171,3 +172,17 @@ def test_zero_count_and_watermark_are_read_together_after_direct_probe() -> None
                      direct_probe=probe, runner=lambda _args: "unused",
                      verify_sql="SELECT 1")
     assert calls == ["verify", "direct_probe", "count_with_watermark"]
+
+
+def test_host_record_uses_os_known_folder_not_programdata_env(monkeypatch) -> None:
+    monkeypatch.setenv("ProgramData", "C:/forged")
+
+    def known_folder(_hwnd, folder, _token, _flags, buffer):
+        assert folder == 35
+        buffer.value = "C:/trusted-program-data"
+        return 0
+
+    monkeypatch.setattr(snapshot.ctypes, "windll", SimpleNamespace(
+        shell32=SimpleNamespace(SHGetFolderPathW=known_folder)), raising=False)
+    assert snapshot.host_fence_marker() == snapshot.Path(
+        "C:/trusted-program-data/ElevenID-Marty-elevenid-beta-passport-fence.pending")
