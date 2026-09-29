@@ -283,7 +283,11 @@ services:
       ISSUANCE_API_KEY_FILE: /run/secrets/issuance_api_key
       SIGNING_KEYS_INTERNAL_URL: http://signing-keys:8017/internal
       SIGNING_KEYS_INTERNAL_API_KEY_FILE: /run/secrets/signing_keys_internal_api_key
-    secrets: [issuance_api_key, signing_keys_internal_api_key]
+      PHYSICAL_DOCUMENT_ARTIFACT_KEY_FILE: /run/secrets/physical_document_artifact_key
+      PERSONALIZATION_BUREAU_URL: http://passport-beta-bureau:8020
+      PERSONALIZATION_BUREAU_API_KEY_FILE: /run/secrets/grpc_service_token
+      PERSONALIZATION_BUREAU_PROVIDER_PROFILE_ID: passport-beta-bureau
+    secrets: [issuance_api_key, signing_keys_internal_api_key, physical_document_artifact_key, grpc_service_token]
     depends_on:
       db-migrate:
         condition: service_completed_successfully
@@ -544,6 +548,8 @@ secrets:
     file: ${PASSPORT_ACCEPTANCE_SECRET_DIR:?use disposable secret root}/csca_issue_gateway_key
   issuance_api_key:
     file: ${PASSPORT_ACCEPTANCE_SECRET_DIR:?use disposable secret root}/issuance_api_key
+  physical_document_artifact_key:
+    file: ${PASSPORT_ACCEPTANCE_SECRET_DIR:?use disposable secret root}/physical_document_artifact_key
   callback_signer_api_key:
     file: ${PASSPORT_ACCEPTANCE_SECRET_DIR:?use disposable secret root}/callback_signer_api_key
   callback_signer_bao_token:
