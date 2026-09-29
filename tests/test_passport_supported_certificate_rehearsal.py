@@ -1,6 +1,7 @@
 """Protected certificate setup is scoped, exercised, and always cleaned."""
 
 from datetime import datetime, timedelta, timezone
+import json
 from pathlib import Path
 import subprocess
 import tempfile
@@ -12,7 +13,7 @@ import yaml
 from scripts.passport_supported_certificate_rehearsal import (
     WORKFLOW_NAME, rehearse_certificates,
 )
-from scripts.passport_supported_infra_rehearsal import JOB_TIMEOUT
+from scripts.passport_supported_infra_rehearsal import JOB_TIMEOUT, recover_infrastructure
 from scripts.passport_supported_infra_images import qualified_images
 from scripts.passport_supported_provisioning_producer import (
     CERTIFICATE_WORKFLOW_REF, ProducerError, protected_context,
@@ -176,11 +177,20 @@ def test_certificate_job_identity_and_workflow_cannot_trigger_attestor() -> None
     assert job["timeout-minutes"] == JOB_TIMEOUT.total_seconds() / 60
     assert job["environment"] == "beta-lifecycle"
     assert job["steps"][0]["with"]["persist-credentials"] is False
-    script = job["steps"][1]["run"]
-    assert "scripts/passport_supported_certificate_rehearsal.py" in script
-    assert 'and .head_sha == $sha' in script
-    assert subprocess.run(["bash", "-n"], input=script.encode(),
-                          capture_output=True).returncode == 0
+    prepare, rehearse, recover, upload = job["steps"][1:]
+    assert 'and .head_sha == $sha' in prepare["run"]
+    assert rehearse["id"] == "rehearse"
+    assert "timeout --signal=INT --kill-after=30s 1200s" in rehearse["run"]
+    assert "scripts/passport_supported_certificate_rehearsal.py" in rehearse["run"]
+    assert recover["id"] == "recover"
+    assert recover["if"] == "always() && steps.prepare.outcome == 'success'"
+    assert "timeout --signal=INT --kill-after=10s 240s" in recover["run"]
+    assert "--recover-only" in recover["run"]
+    assert upload["if"] == (
+        "steps.rehearse.outcome == 'success' && steps.recover.outcome == 'success'")
+    for step in (prepare, rehearse, recover):
+        assert subprocess.run(["bash", "-n"], input=step["run"].encode(),
+                              capture_output=True).returncode == 0
     attestor = yaml.safe_load((root / "passport-supported-provisioning-record.yml").read_text())
     attestor_trigger = attestor.get("on", attestor.get(True))
     assert attestor_trigger["workflow_run"]["workflows"] == [
@@ -191,6 +201,37 @@ def test_certificate_job_identity_and_workflow_cannot_trigger_attestor() -> None
                    "GITHUB_SHA": SOURCE, "GITHUB_RUN_ID": "987654"}
     assert protected_context(environment, workflow_ref=CERTIFICATE_WORKFLOW_REF) == (
         SOURCE, "987654")
+
+
+def test_certificate_recovery_uses_its_protected_workflow_and_erases_staging(
+    tmp_path: Path,
+) -> None:
+    selected = plan()
+    plan_path = tmp_path / "plan.json"
+    plan_path.write_text(json.dumps(selected), encoding="utf-8")
+    root = Path(tempfile.gettempdir()) / selected["project"]
+    (root / "secrets").mkdir(parents=True)
+    (root / "secrets" / "bao_root_token").write_text("test-token", encoding="ascii")
+    (root / "acceptance.env").write_text("test=value\n", encoding="ascii")
+    calls = []
+
+    def teardown(*args, **kwargs) -> bool:
+        calls.append(kwargs)
+        assert kwargs["workflow_ref"] == CERTIFICATE_WORKFLOW_REF
+        return True
+
+    try:
+        recover_infrastructure(plan_path, tmp_path / "manifest.json", "123456",
+                               {}, teardown=teardown,
+                               workflow_ref=CERTIFICATE_WORKFLOW_REF)
+        assert len(calls) == 1
+        assert not root.exists()
+    finally:
+        if root.exists():
+            (root / "secrets" / "bao_root_token").unlink(missing_ok=True)
+            (root / "secrets").rmdir()
+            (root / "acceptance.env").unlink(missing_ok=True)
+            root.rmdir()
 
 
 def test_certificate_job_deadline_requires_exact_attempt() -> None:

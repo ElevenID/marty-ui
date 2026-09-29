@@ -348,7 +348,8 @@ def _status_origin(edge: dict) -> str:
 
 
 def _expected_mounts(service: str, project: str, disposable_root: Path,
-                     surface: str) -> set[tuple[str, str, str, bool]]:
+                     surface: str, *, ceremony: bool = False,
+                     ) -> set[tuple[str, str, str, bool]]:
     if service == "passport-certificate-bootstrap":
         return set()
     if service == "passport-openbao-bootstrap":
@@ -367,7 +368,7 @@ def _expected_mounts(service: str, project: str, disposable_root: Path,
         ("bind", str(disposable_root / "secrets" / secret),
          f"/run/secrets/{secret}", False)
         for secret in (SECRET_MOUNTS[service]
-                       + (BASE_CEREMONY_MOUNTS if surface == "base"
+                       + (BASE_CEREMONY_MOUNTS if (surface == "base" or ceremony)
                           and service in {"gateway", "signing-keys"} else ()))
     }
     if surface == "selfhost":

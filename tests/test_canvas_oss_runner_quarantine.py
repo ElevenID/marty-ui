@@ -99,6 +99,9 @@ def test_docker_inventory_forces_local_socket(
     "python3 python3 scripts/passport_supported_infra_rehearsal.py --plan plan",
     "timeout timeout 1200s python3 scripts/passport_supported_infra_rehearsal.py",
     "bash bash -c python3 scripts/passport_supported_infra_rehearsal.py",
+    "python3 python3 scripts/passport_supported_certificate_rehearsal.py --plan plan",
+    "timeout timeout 1200s python3 scripts/passport_supported_certificate_rehearsal.py",
+    "bash bash -c python3 scripts/passport_supported_certificate_rehearsal.py",
     "docker docker compose --project-name marty-passport-acceptance-base-123456abcdef up",
 ])
 def test_quarantine_rejects_orphaned_runner_process(process: str) -> None:

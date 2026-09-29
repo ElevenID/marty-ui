@@ -94,7 +94,10 @@ def check_runner_process_quiescence(runner=runner_process_inventory) -> None:
         active_runner = command in {"Runner.Listener", "Runner.Worker"}
         active_rehearsal = (
             command.startswith("python") or command in {"timeout", "bash", "sh"}
-        ) and "passport_supported_infra_rehearsal.py" in arguments
+        ) and any(name in arguments for name in (
+            "passport_supported_infra_rehearsal.py",
+            "passport_supported_certificate_rehearsal.py",
+        ))
         active_docker = (command in {"docker", "docker.exe"}
                          and PASSPORT_PROJECT_PREFIX in arguments)
         if active_runner or active_rehearsal or active_docker:

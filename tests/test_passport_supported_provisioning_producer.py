@@ -816,12 +816,22 @@ def test_partial_teardown_recognizes_interrupted_openbao_bootstrap(
     ]
 
 
+@pytest.mark.parametrize("ceremony", [False, True])
 def test_partial_teardown_recognizes_interrupted_certificate_helper(
-    tmp_path: Path,
+    tmp_path: Path, ceremony: bool,
 ) -> None:
     from scripts.check_passport_supported_compose_ownership import _expected_mounts
 
     arguments, plan, gates = partial_teardown_context(tmp_path)
+    workflow_ref = (producer.CERTIFICATE_WORKFLOW_REF if ceremony
+                    else producer.WORKFLOW_REF)
+    if ceremony:
+        plan["surface"] = "selfhost"
+        plan["project"] = plan["project"].replace("-base-", "-selfhost-")
+        arguments[0].write_text(json.dumps(plan), encoding="utf-8")
+        arguments = (*arguments[:3], {
+            **arguments[3], "GITHUB_WORKFLOW_REF": producer.CERTIFICATE_WORKFLOW_REF,
+        })
     project = plan["project"]
     signer, helper, network = "1" * 64, "2" * 64, "3" * 64
     network_name = project + "_private"
@@ -829,7 +839,8 @@ def test_partial_teardown_recognizes_interrupted_certificate_helper(
     signer_mounts = [
         {"Type": kind, "Source": source, "Destination": destination, "RW": writable}
         for kind, source, destination, writable in _expected_mounts(
-            "signing-keys", project, Path(tempfile.gettempdir()) / project, "base")
+            "signing-keys", project, Path(tempfile.gettempdir()) / project,
+            plan["surface"], ceremony=ceremony)
     ]
     state = {
         "image": plan["migrations_reference"],
@@ -891,12 +902,25 @@ def test_partial_teardown_recognizes_interrupted_certificate_helper(
         original = state[field]
         state[field] = bad
         assert not destroy_partial_disposable_project(
-            *arguments, inspector, executor, **gates), field
+            *arguments, inspector, executor, workflow_ref=workflow_ref,
+            **gates), field
         assert calls == [], field
         state[field] = original
 
+    if ceremony:
+        assert not destroy_partial_disposable_project(
+            *arguments[:3], ENV, inspector, executor, **gates)
+        assert calls == []
+        original_mounts = signer_mounts[:]
+        signer_mounts.pop()
+        assert not destroy_partial_disposable_project(
+            *arguments, inspector, executor,
+            workflow_ref=producer.CERTIFICATE_WORKFLOW_REF, **gates)
+        assert calls == []
+        signer_mounts[:] = original_mounts
+
     assert destroy_partial_disposable_project(
-        *arguments, inspector, executor, **gates)
+        *arguments, inspector, executor, workflow_ref=workflow_ref, **gates)
     assert calls == [
         ["container", "rm", "-f", signer, helper],
         ["network", "rm", network],
