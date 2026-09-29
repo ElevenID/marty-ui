@@ -479,25 +479,40 @@ def _destroy_recorded_project(
                         and labels.get("com.docker.compose.oneoff") != "True",
                         "Partial disposable container is outside the plan model")
                 network_settings = item.get("NetworkSettings")
+                host_config = item.get("HostConfig")
+                shared_helper = service in {"passport-certificate-bootstrap",
+                                            "passport-bureau-poll"}
+                parent_service = ("signing-keys" if service == "passport-certificate-bootstrap"
+                                  else "passport-beta-bureau")
+                parent_id = containers.get(parent_service) if shared_helper else None
+                expected_mode = (f"container:{parent_id}" if shared_helper
+                                 else project + "_callback_signing"
+                                 if service == "passport-callback-signer"
+                                 else project + "_private")
+                require(isinstance(host_config, dict)
+                        and host_config.get("NetworkMode") == expected_mode
+                        and (isinstance(parent_id, str) and not host_config.get("PortBindings")
+                             if shared_helper else expected_mode in networks),
+                        "Partial disposable container uses an unowned network mode")
                 require(isinstance(network_settings, dict),
                         "Partial disposable container network state is invalid")
-                if service in {"passport-certificate-bootstrap", "passport-bureau-poll"}:
-                    host = item.get("HostConfig")
-                    parent_service = ("signing-keys" if service ==
-                                      "passport-certificate-bootstrap" else
-                                      "passport-beta-bureau")
-                    parent_id = containers.get(parent_service)
-                    require(isinstance(host, dict) and isinstance(parent_id, str)
-                            and host.get("NetworkMode") == f"container:{parent_id}"
-                            and not host.get("PortBindings"),
-                            "Partial helper leaves its recorded service network")
                 attachments = network_settings.get("Networks")
+                expected_networks = set() if shared_helper else {expected_mode}
+                if service in {"openbao", "passport-beta-bureau"}:
+                    expected_networks.add(project + "_callback_signing")
+                state = item.get("State")
+                created = isinstance(state, dict) and state.get("Status") == "created"
+                detached_startup = (isinstance(state, dict)
+                                    and (created
+                                         or (state.get("Status") == "exited"
+                                             and service in {"db-migrate",
+                                                             "revocation-profile-migrate"})))
                 require(isinstance(attachments, dict)
-                        and set(attachments) <= set(networks)
-                        and (service != "passport-openbao-bootstrap"
-                             or set(attachments) == {f"{project}_private"})
+                        and (set(attachments) == expected_networks
+                             or (not attachments and detached_startup))
                         and all(isinstance(endpoint, dict)
-                                and endpoint.get("NetworkID") in (networks[name], None, "")
+                                and (endpoint.get("NetworkID") == networks.get(name)
+                                     or (created and endpoint.get("NetworkID") == ""))
                                 for name, endpoint in attachments.items()),
                         "Partial disposable container joins an unowned network")
                 mounts = item.get("Mounts")
