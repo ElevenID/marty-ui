@@ -13,6 +13,7 @@ import argparse
 import ctypes
 import hashlib
 import json
+import os
 import re
 from pathlib import Path
 from typing import Any, Callable
@@ -57,16 +58,47 @@ def digest(value: dict[str, Any]) -> str:
     ).hexdigest()
 
 
-def host_fence_marker() -> Path:
+def host_fence_marker(
+    runner: Callable[[list[str]], str] = run,
+) -> Path:
     """Use the same OS known folder as the PowerShell installer, not an env var."""
-    buffer = ctypes.create_unicode_buffer(32768)
-    try:
-        status = ctypes.windll.shell32.SHGetFolderPathW(None, 35, None, 0, buffer)
-    except (AttributeError, OSError) as exc:
-        raise HostProbeError("Windows beta host fence record location is unavailable") from exc
-    require(status == 0 and bool(buffer.value),
-            "Windows beta host fence record location is unavailable")
-    return Path(buffer.value) / "ElevenID-Marty-elevenid-beta-passport-fence.pending"
+    if os.name == "nt":
+        buffer = ctypes.create_unicode_buffer(32768)
+        try:
+            status = ctypes.windll.shell32.SHGetFolderPathW(None, 35, None, 0, buffer)
+        except (AttributeError, OSError) as exc:
+            raise HostProbeError("Windows beta host fence record location is unavailable") from exc
+        require(status == 0 and bool(buffer.value),
+                "Windows beta host fence record location is unavailable")
+        directory = Path(buffer.value)
+    else:
+        require("microsoft" in os.uname().release.lower(),
+                "Beta host fence snapshot requires Windows or WSL")
+        win_dir = runner([
+            "powershell.exe", "-NoProfile", "-NonInteractive", "-Command",
+            "[Environment]::GetFolderPath([System.Environment+SpecialFolder]::CommonApplicationData)",
+        ])
+        require(bool(win_dir) and "\n" not in win_dir and "\r" not in win_dir,
+                "Windows beta host fence record location is ambiguous")
+        linux_dir = runner(["wslpath", "-u", win_dir])
+        require(bool(linux_dir) and linux_dir.startswith("/")
+                and "\n" not in linux_dir and "\r" not in linux_dir,
+                "WSL beta host fence record location is invalid")
+        directory = Path(linux_dir)
+    return directory / "ElevenID-Marty-elevenid-beta-passport-fence.pending"
+
+
+def host_receipt_path(value: str, runner: Callable[[list[str]], str] = run) -> Path:
+    """Map the installer's Windows absolute receipt path into the caller OS."""
+    require(isinstance(value, str) and re.fullmatch(r"[A-Za-z]:\\[^\r\n]+", value)
+            is not None, "Fence host record receipt path is invalid")
+    if os.name == "nt":
+        return Path(value)
+    mapped = runner(["wslpath", "-u", value])
+    require(bool(mapped) and mapped.startswith("/")
+            and "\n" not in mapped and "\r" not in mapped,
+            "WSL fence receipt path is invalid")
+    return Path(mapped)
 
 
 def validate_direct_probe(probe: dict[str, Any], *, postgres: str,
@@ -270,7 +302,7 @@ def main() -> int:
         require(isinstance(record, dict)
                 and record.get("schema") == "marty.passport-beta-fence-host-record/v1"
                 and isinstance(record.get("receipt_path"), str)
-                and Path(record.get("receipt_path", "")).resolve()
+                and host_receipt_path(record["receipt_path"]).resolve()
                     == args.fence_installation_receipt.resolve()
                 and record.get("source_commit") == head,
                 "Completed protected beta host fence record is invalid")
