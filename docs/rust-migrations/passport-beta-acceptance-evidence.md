@@ -117,10 +117,18 @@ probe must separately execute all nine steps for one native job and bind its
 managed SOD, first accepted simulator material, private signed callback receipt,
 and terminal `ACTIVE` state to the same organization, issuer DID, application,
 source job, and bureau job. It requires the Flow issuer-DID fix in PR #929 in
-the deployed aggregate image. The `nine_route_gateway_flow` probe stays false
-until the selected Flow job is one of the two batch jobs and its Gateway route trace is verified. Only
-fixed route names, counts, statuses, selector booleans, and sanitized receipt
-evidence enter the report.
+the deployed aggregate image. The `nine_route_gateway_flow` probe is a composite
+proof for the nine public passport route names. Seven selected-job operations
+run from Flow directly to native issuance. Flow records their route sequence
+only after native responses, and the probe checks it against the same
+application and source job. A live authenticated Gateway capability response
+proves the capability route. The signed simulator callback receipt, its
+inspected Gateway target, and a live unsigned denial prove the webhook route
+and owner. The seven Flow calls do not traverse Gateway. The composite probe
+becomes verified only when the selected Flow job is in the two-job native
+batch and all these observations agree. Only fixed route names, counts,
+statuses, selector booleans, commitments, and sanitized receipt evidence
+enter the report.
 
 The beta simulator now stores a 32-byte digest of the exact callback body and
 KMS signature only after native issuance accepts the signed callback and the
@@ -235,6 +243,10 @@ the Flow. The synthetic batch remains a separate diagnostic.
 The uploaded report omits raw Flow, application, source-job, bureau-job,
 applicant, MRZ, and operator-session values. A selected SOD/material match
 alone does not establish `nine_route_gateway_flow` or recording qualification.
+The composite route probe requires the server-recorded selected Flow sequence,
+live Gateway capability and webhook checks, and the selected signed callback
+receipt. Its `route_provenance` fields distinguish the Gateway observations
+from the Flow-to-native calls.
 The public `physical_bureau_submission` probe remains unverified until the
 D-12 recorder can correlate selected identities through protected commitments
 without publishing raw identifiers.
@@ -246,7 +258,7 @@ The report requires the isolated simulator mode and sets `legacy_drain` and the 
 `production_isolation` remains false. The workflow fails while the report is
 `blocked`, but uploads the sanitized report from an attempted probe. The
 acceptance report remains `blocked` until the live run verifies SOD signature,
-the selected Flow job in the two-job batch, full nine-route Gateway/Flow proof,
+the selected Flow job in the two-job batch, full nine-route composite Gateway/Flow proof,
 same-job signed simulator callback, simulator batch compatibility,
 deployment-wide production isolation, and recorded demo evidence have
 executable receipts. Supported consumer acceptance and Rust restart/resume

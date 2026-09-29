@@ -54,7 +54,9 @@ def report(*, ready: bool = True) -> dict:
                            "signing-keys": {"container_id": "c" * 64},
                            "passport-beta-bureau": {"container_id": "a" * 64,
                                "oci_reference": "ghcr.io/elevenid/marty-ui-oss/services@sha256:" + "e" * 64}},
-        "probes": {"capabilities_http": {"verified": ready},
+        "probes": {"capabilities_http": {"verified": ready, "evidence": {
+                       "http_status": 200, "supported": True,
+                       "signer_mode": "MANAGED_ISSUER_PROFILE"}},
                    "sod_signature": {"verified": False, "evidence": None},
                    "nine_route_gateway_flow": {"verified": False, "evidence": None},
                    "physical_claim_boundary": {"verified": True, "evidence": {
@@ -379,8 +381,15 @@ def test_protected_runner_executes_selected_flow_after_chain_and_direct_job(tmp_
         collector=lambda *args, **kwargs: report(),
         snapshot=lambda: {"sha256": "c" * 64, "container_counts": {}},
         drain=lambda: {"verified": True, "evidence": {"in_flight_jobs": 0}},
-        routing=lambda *args: {"verified": True, "evidence": {"webhook_owner": "issuance-native"}},
+        routing=lambda *args: {"verified": True, "evidence": {
+            "native_selectors": True, "flow_native_target": True,
+            "simulator_callback_gateway_target": True,
+            "webhook_owner": "issuance-native"}},
         flow=lambda owner: {"verified": True, "evidence": {
+            "flow_capability_route": "/v1/flows/capabilities",
+            "flow_http_status": 200, "physical_step_count": 9,
+            "unsigned_webhook_route": "/v1/passport/webhooks/personalization",
+            "unsigned_webhook_http_status": 422,
             "unsigned_webhook_owner": owner, "signature_denial_verified": True}},
         chain=chain, lifecycle=lifecycle, material_receipt=receipt,
         profile_resolver=resolver, profile_signer=signer, profile_verifier=verifier,
@@ -424,7 +433,9 @@ def test_protected_runner_executes_selected_flow_after_chain_and_direct_job(tmp_
     for key in ("application_input_sha256", "job_id_sha256", "application_id_sha256",
                 "bureau_job_id_sha256", "dsc_issuer_did_sha256"):
         assert key not in serialized
-    assert result["probes"]["nine_route_gateway_flow"]["verified"] is False
+    assert result["probes"]["nine_route_gateway_flow"]["verified"] is True
+    assert result["probes"]["nine_route_gateway_flow"]["evidence"]["route_provenance"][
+        "job_operations"] == "selected_flow_server_trace_to_native_issuance"
     assert result["probes"]["simulator_batch_diagnostic"]["verified"] is False
     assert result["probes"]["physical_bureau_batch"]["verified"] is True
     assert result["probes"]["physical_bureau_batch"]["evidence"]["selected_flow_in_two_job_batch"] is True
@@ -441,8 +452,6 @@ def test_protected_runner_executes_selected_flow_after_chain_and_direct_job(tmp_
     }
     assert "selected-app" not in serialized and selected_bureau not in serialized
     assert result["probes"]["signed_bureau_callback"]["verified"] is False
-    assert result["probes"]["nine_route_gateway_flow"]["evidence"]["missing"] == [
-        "same_job_gateway_route_trace"]
     assert result["status"] == "blocked"
 
 

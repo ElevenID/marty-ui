@@ -72,6 +72,9 @@ if __package__:
         IssuerProfileEvidenceError, resolve_in_container, sign_in_container,
         verify_live_signatures,
     )
+    from .prove_passport_beta_composite_routes import (
+        CompositeRouteError, prove_composite_routes,
+    )
 else:
     from collect_passport_beta_acceptance import (
         EvidenceError,
@@ -133,6 +136,9 @@ else:
     from verify_passport_beta_issuer_profiles import (
         IssuerProfileEvidenceError, resolve_in_container, sign_in_container,
         verify_live_signatures,
+    )
+    from prove_passport_beta_composite_routes import (
+        CompositeRouteError, prove_composite_routes,
     )
 
 
@@ -624,17 +630,17 @@ def run(
     }}
     report["probes"]["beta_native_route_ownership"] = route_ownership
     report["probes"]["flow_capability_and_webhook_denial"] = flow_result
-    report["probes"]["nine_route_gateway_flow"] = {"verified": False, "evidence": {
-        **selected_commitments,
-        "capabilities_http": report["probes"]["capabilities_http"].get("evidence"),
-        "application_lifecycle": safe_lifecycle_evidence,
-        "flow_and_webhook_denial": flow_result.get("evidence"),
-        "native_route_ownership": route_ownership.get("evidence"),
-        **({"selected_flow_routes": selected_result["evidence"]["flow_routes"]}
-           if selected_result is not None else {}),
-        "missing": (["same_job_gateway_route_trace"] if native_batch_result is not None
-                    else ["executed_simulator_flow", "selected_flow_in_two_job_batch"]),
-    }}
+    report["probes"]["nine_route_gateway_flow"] = (
+        prove_composite_routes(
+            selected_result, selected_commitments | {
+                "source_job_commitment": selected_result["evidence"]["source_job_commitment"],
+                "bureau_job_commitment": selected_result["evidence"]["bureau_job_commitment"],
+            }, native_batch_result,
+            route_ownership, flow_result, report["probes"]["capabilities_http"],
+        ) if selected_result is not None and native_batch_result is not None
+        else {"verified": False, "evidence": {
+            "missing": ["executed_simulator_flow", "selected_flow_in_two_job_batch"]}}
+    )
     chain_evidence = chain_result["evidence"]
     report["probes"]["managed_csca_dsc_chain"] = {"verified": True, "evidence": {
         key: chain_evidence[key] for key in (
@@ -708,7 +714,7 @@ def main() -> int:
         )
         args.output.write_text(json.dumps(report, indent=2, sort_keys=True) + "\n", encoding="utf-8")
     except (EvidenceError, ProbeError, ChainProbeError, IssuerProfileEvidenceError,
-            FlowProbeError, SelectedFlowError,
+            FlowProbeError, SelectedFlowError, CompositeRouteError,
             BatchProbeError, NativeBatchProbeError, PhysicalFlowProbeError,
             HostProbeError, OSError) as exc:
         args.output.write_text(json.dumps({"schema": "marty.passport-beta-acceptance/v1", "status": "blocked", "blocker": str(exc)}, indent=2) + "\n", encoding="utf-8")
