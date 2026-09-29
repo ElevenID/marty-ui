@@ -55,6 +55,8 @@ PROTECTED_FILES = (
     "scripts/sql/passport-beta-batch-acl-finalize.sql",
     "scripts/sql/passport-beta-db-maintenance-start.sql",
     "scripts/prepare_passport_beta_native_migrations.py",
+    "scripts/prepare_passport_beta_db_maintenance.py",
+    "scripts/start-passport-beta-db-maintenance.ps1",
     "services/Dockerfile.migrations",
     "rust/services/issuance/migrations/0001_oid4vci_public_protocol.sql",
     "rust/services/issuance/migrations/0002_physical_document_jobs.sql",
