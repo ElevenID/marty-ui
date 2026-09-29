@@ -64,6 +64,8 @@ def test_private_poll_binds_owned_container_without_argv_secret() -> None:
         assert status == 200 and body["callback_receipt_sha256"] == "d" * 64
         assert "passport-bureau-poll" in PARTIAL_ONLY_SERVICES
         command, options = calls[0]
+        assert command[command.index("--name") + 1] == (
+            record["project"] + "-passport-bureau-poll-1")
         assert "--network" in command
         assert "container:" + "c" * 64 in command
         assert token not in " ".join(command)

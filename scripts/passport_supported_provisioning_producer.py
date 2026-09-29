@@ -477,21 +477,23 @@ def _destroy_recorded_project(
                         "Partial disposable container is outside the plan model")
                 network_settings = item.get("NetworkSettings")
                 host_config = item.get("HostConfig")
-                certificate_helper = service == "passport-certificate-bootstrap"
-                signer_id = containers.get("signing-keys") if certificate_helper else None
-                expected_mode = (f"container:{signer_id}" if certificate_helper
+                helper_parent = ({"passport-certificate-bootstrap": "signing-keys",
+                                  "passport-bureau-poll": "passport-beta-bureau"}
+                                 .get(service))
+                parent_id = containers.get(helper_parent) if helper_parent else None
+                expected_mode = (f"container:{parent_id}" if helper_parent
                                  else project + "_callback_signing"
                                  if service == "passport-callback-signer"
                                  else project + "_private")
                 require(isinstance(host_config, dict)
                         and host_config.get("NetworkMode") == expected_mode
-                        and (isinstance(signer_id, str) and not host_config.get("PortBindings")
-                             if certificate_helper else expected_mode in networks),
+                        and (isinstance(parent_id, str) and not host_config.get("PortBindings")
+                             if helper_parent else expected_mode in networks),
                         "Partial disposable container uses an unowned network mode")
                 require(isinstance(network_settings, dict),
                         "Partial disposable container network state is invalid")
                 attachments = network_settings.get("Networks")
-                expected_networks = set() if certificate_helper else {expected_mode}
+                expected_networks = set() if helper_parent else {expected_mode}
                 if service in {"openbao", "passport-beta-bureau"}:
                     expected_networks.add(project + "_callback_signing")
                 state = item.get("State")
