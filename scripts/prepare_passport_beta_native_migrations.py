@@ -137,10 +137,25 @@ def checked_receipt(path: Path, source_commit: str) -> dict[str, str]:
             "fence_epoch": epoch, "container_id": container_id}
 
 
-def build_sql(receipt: dict[str, str], migrations: tuple[tuple[str, bytes], ...]) -> bytes:
+def migration_set_sha256(migrations: tuple[tuple[str, bytes], ...]) -> str:
+    hasher = hashlib.sha256()
+    for relative, data in migrations:
+        hasher.update(relative.encode("utf-8") + b"\0")
+        hasher.update(len(data).to_bytes(8, "big"))
+        hasher.update(data)
+    return hasher.hexdigest()
+
+
+def build_sql(
+    receipt: dict[str, str], migrations: tuple[tuple[str, bytes], ...],
+    source_commit: str,
+) -> bytes:
     for key in ("system_id", "database_oid", "fence_epoch"):
         require(NUMBER.fullmatch(receipt[key]) is not None,
                 f"Invalid migration target {key}")
+    require(re.fullmatch(r"[0-9a-f]{40}", source_commit) is not None,
+            "Invalid protected migration source commit")
+    migration_digest = migration_set_sha256(migrations)
     prefix = (
         "SET marty.passport_beta_verified_project = 'elevenid-beta';\n"
         f"SET marty.passport_beta_expected_system_identifier = '{receipt['system_id']}';\n"
@@ -181,6 +196,23 @@ def build_sql(receipt: dict[str, str], migrations: tuple[tuple[str, bytes], ...]
         payload.extend(f"\n-- protected native migration: {relative}\n".encode("ascii"))
         payload.extend(data)
         payload.extend(b"\n")
+    payload.extend((
+        "\n-- Commit evidence in the same transaction as every native migration.\n"
+        "CREATE TABLE passport_cutover.native_migration_receipt (\n"
+        "    singleton boolean PRIMARY KEY DEFAULT true CHECK (singleton),\n"
+        "    fence_epoch bigint NOT NULL,\n"
+        "    source_commit text NOT NULL,\n"
+        "    migration_set_sha256 text NOT NULL,\n"
+        "    installed_at timestamptz NOT NULL DEFAULT clock_timestamp()\n"
+        ");\n"
+        "ALTER TABLE passport_cutover.native_migration_receipt\n"
+        "    OWNER TO marty_passport_fence_owner;\n"
+        "REVOKE ALL ON passport_cutover.native_migration_receipt FROM PUBLIC, marty;\n"
+        "INSERT INTO passport_cutover.native_migration_receipt\n"
+        "    (singleton, fence_epoch, source_commit, migration_set_sha256)\n"
+        f"VALUES (true, {receipt['fence_epoch']}, '{source_commit}',"
+        f" '{migration_digest}');\n"
+    ).encode("ascii"))
     payload.extend(b"COMMIT;\n")
     return bytes(payload)
 
@@ -194,7 +226,7 @@ def prepare(manifest: Path, fence_receipt: Path) -> tuple[dict[str, object], byt
     digest = signed["oci_digests"][IMAGE_REPOSITORY]
     image = f"{IMAGE_REPOSITORY}@{digest}"
     migrations = checked_migrations(ROOT, image)
-    payload = build_sql(receipt, migrations)
+    payload = build_sql(receipt, migrations, head)
     plan = {
         "schema": "marty.passport-beta-native-migration-plan/v1",
         "source_commit": head,
@@ -203,6 +235,7 @@ def prepare(manifest: Path, fence_receipt: Path) -> tuple[dict[str, object], byt
         "postgres_system_identifier": receipt["system_id"],
         "database_oid": receipt["database_oid"],
         "fence_epoch": receipt["fence_epoch"],
+        "migration_set_sha256": migration_set_sha256(migrations),
         "migrations": [
             {"path": relative, "sha256": hashlib.sha256(data).hexdigest()}
             for relative, data in migrations

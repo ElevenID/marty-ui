@@ -54,6 +54,7 @@ PROTECTED_FILES = (
     "scripts/sql/passport-beta-fence-verify.sql",
     "scripts/sql/passport-beta-batch-acl-finalize.sql",
     "scripts/sql/passport-beta-db-maintenance-start.sql",
+    "scripts/sql/passport-beta-db-enable-app-login.sql",
     "scripts/prepare_passport_beta_native_migrations.py",
     "scripts/prepare_passport_beta_db_maintenance.py",
     "scripts/start-passport-beta-db-maintenance.ps1",

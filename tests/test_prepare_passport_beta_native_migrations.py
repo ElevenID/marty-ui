@@ -66,10 +66,13 @@ def test_receipt_binds_protected_source_and_sql_attests_database(tmp_path):
     path = tmp_path / "receipt.json"
     path.write_text(json.dumps(receipt), encoding="utf-8")
     target = checked_receipt(path, "b" * 40)
-    payload = build_sql(target, ((MIGRATIONS[0], b"SELECT 1;\n"),))
+    payload = build_sql(target, ((MIGRATIONS[0], b"SELECT 1;\n"),), "b" * 40)
     assert payload.count(b"BEGIN;") == 1
     assert b"DO $target$\nBEGIN\n" in payload
-    assert payload.endswith(b"SELECT 1;\n\nCOMMIT;\n")
+    assert b"SELECT 1;\n" in payload
+    assert payload.endswith(b"COMMIT;\n")
+    assert b"CREATE TABLE passport_cutover.native_migration_receipt" in payload
+    assert b"source_commit, migration_set_sha256" in payload
     assert b"expected_system_identifier = '123456'" in payload
     assert b"expected_fence_epoch = '345'" in payload
     assert b"pg_stat_activity" in payload
@@ -106,4 +109,5 @@ def test_prepare_binds_protected_main_receipt_and_signed_image(monkeypatch, tmp_
     assert plan["source_commit"] == "b" * 40
     assert plan["migration_image"] == IMAGE
     assert plan["migrations"][0]["path"] == MIGRATIONS[0]
-    assert payload.endswith(b"SELECT 1;\n\nCOMMIT;\n")
+    assert payload.endswith(b"COMMIT;\n")
+    assert plan["migration_set_sha256"] in payload.decode("ascii")

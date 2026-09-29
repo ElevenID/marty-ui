@@ -9,3 +9,4 @@ rust/services/issuance/migrations/*.sql text eol=lf
 rust/services/flow/migrations/*.sql text eol=lf
 scripts/sql/passport-beta-batch-acl-finalize.sql text eol=lf
 scripts/sql/passport-beta-db-maintenance-start.sql text eol=lf
+scripts/sql/passport-beta-db-enable-app-login.sql text eol=lf

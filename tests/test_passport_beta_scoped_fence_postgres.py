@@ -14,6 +14,9 @@ import pytest
 from scripts.probe_passport_beta_fence_direct_writes import (
     FenceProbeError, candidate_sql, probe_direct_writes,
 )
+from scripts.prepare_passport_beta_native_migrations import (
+    build_sql, migration_set_sha256,
+)
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -23,6 +26,7 @@ DRAIN = ROOT / "scripts/sql/passport-beta-fence-drain.sql"
 VERIFY = ROOT / "scripts/sql/passport-beta-fence-verify.sql"
 FINALIZE_BATCH_ACL = ROOT / "scripts/sql/passport-beta-batch-acl-finalize.sql"
 START_MAINTENANCE = ROOT / "scripts/sql/passport-beta-db-maintenance-start.sql"
+ENABLE_APP_LOGIN = ROOT / "scripts/sql/passport-beta-db-enable-app-login.sql"
 POSTGRES_IMAGE = "postgres:15-alpine@sha256:fceb6f86328c36f2438fae3b851b0cc57c4a7e69a58c866d9ce24281f2cf0c9c"
 
 
@@ -59,10 +63,16 @@ def script_args(container: str, path: Path, *, attested: bool = True) -> list[st
             "-c", f"SET marty.passport_beta_expected_system_identifier = '{system_id}'",
             "-c", f"SET marty.passport_beta_expected_database_oid = '{database_oid}'",
         ]
-        if path in (FINALIZE_BATCH_ACL, START_MAINTENANCE):
+        if path in (FINALIZE_BATCH_ACL, START_MAINTENANCE, ENABLE_APP_LOGIN):
             epoch = sql(container, "SELECT epoch FROM passport_cutover.state").strip()
             target += [
                 "-c", f"SET marty.passport_beta_expected_fence_epoch = '{epoch}'",
+            ]
+        if path == ENABLE_APP_LOGIN:
+            target += [
+                "-c", "SET marty.passport_beta_expected_source_commit = '" + "b" * 40 + "'",
+                "-c", "SET marty.passport_beta_expected_native_migration_sha256 = '"
+                      + migration_set_sha256((("disposable.sql", b"SELECT 1;\n"),)) + "'",
             ]
     return [
         "exec", container, "psql", "-U", "postgres", "-d", "marty",
@@ -254,6 +264,45 @@ def test_maintenance_start_rejects_role_membership_without_disabling_login(datab
     assert refused.returncode != 0
     assert "lacks exact fenced beta target" in refused.stderr
     assert sql(database, "SELECT rolcanlogin FROM pg_roles WHERE rolname='marty'").strip() == "t"
+
+
+def test_app_login_requires_finalized_batch_access_and_drained_sessions(
+    database: str, tmp_path: Path,
+):
+    assert script(database, INSTALL).returncode == 0
+    assert script(database, START_MAINTENANCE).returncode == 0
+    sql(database, """
+        CREATE TABLE issuance_service.passport_beta_batch_intents (
+            batch_id uuid PRIMARY KEY
+        )
+    """)
+    premature = script(database, ENABLE_APP_LOGIN)
+    assert premature.returncode != 0
+    assert "lacks committed native migrations" in premature.stderr
+    assert sql(database, "SELECT rolcanlogin FROM pg_roles WHERE rolname='marty'").strip() == "f"
+    assert script(database, FINALIZE_BATCH_ACL).returncode == 0
+    missing_native = script(database, ENABLE_APP_LOGIN)
+    assert missing_native.returncode != 0
+    assert "lacks committed native migrations" in missing_native.stderr
+    target = {
+        "system_id": sql(database, "SELECT system_identifier FROM pg_control_system()").strip(),
+        "database_oid": sql(database, "SELECT oid FROM pg_database WHERE datname='marty'").strip(),
+        "fence_epoch": sql(database, "SELECT epoch FROM passport_cutover.state").strip(),
+    }
+    disposable_bundle = build_sql(target, (("disposable.sql", b"SELECT 1;\n"),), "b" * 40)
+    payload = tmp_path / "passport-beta-disposable-native-marker.sql"
+    payload.write_bytes(disposable_bundle)
+    native = script(database, payload)
+    assert native.returncode == 0, native.stderr
+    missing_target = script(database, ENABLE_APP_LOGIN, attested=False)
+    assert missing_target.returncode != 0
+    assert "lacks exact drained beta target" in missing_target.stderr
+    opened = script(database, ENABLE_APP_LOGIN)
+    assert opened.returncode == 0, opened.stderr
+    assert sql(database, "SELECT rolcanlogin FROM pg_roles WHERE rolname='marty'").strip() == "t"
+    assert script(database, VERIFY).returncode == 0
+    repeated = script(database, ENABLE_APP_LOGIN)
+    assert repeated.returncode == 0, repeated.stderr
 
 
 def test_scoped_fence_and_drain(database: str):
