@@ -1371,6 +1371,33 @@ async fn passport_jobs_survive_restart_without_cross_tenant_reads() {
         .unwrap();
     migration::migrate_passport(&pool).await.unwrap();
     sqlx::query(
+        "ALTER TABLE issuance_service.physical_document_jobs
+         DROP CONSTRAINT physical_document_jobs_pkey",
+    )
+    .execute(&pool)
+    .await
+    .unwrap();
+    assert!(migration::validate_passport(&pool).await.is_err());
+    sqlx::query("ALTER TABLE issuance_service.physical_document_jobs ADD PRIMARY KEY (id)")
+        .execute(&pool)
+        .await
+        .unwrap();
+    sqlx::query(
+        "ALTER TABLE issuance_service.physical_document_jobs
+         DROP CONSTRAINT physical_document_jobs_application_id_key",
+    )
+    .execute(&pool)
+    .await
+    .unwrap();
+    assert!(migration::validate_passport(&pool).await.is_err());
+    sqlx::query(
+        "ALTER TABLE issuance_service.physical_document_jobs
+         ADD UNIQUE (application_id)",
+    )
+    .execute(&pool)
+    .await
+    .unwrap();
+    sqlx::query(
         "DROP TRIGGER trg_physical_document_submission_intent
          ON issuance_service.physical_document_jobs",
     )

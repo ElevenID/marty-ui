@@ -10,6 +10,8 @@ from pathlib import Path
 import re
 import subprocess
 from typing import Any, Callable
+import yaml
+from yaml.nodes import MappingNode, ScalarNode
 
 try:
     from .collect_passport_beta_acceptance import verify_attestations
@@ -28,6 +30,7 @@ APPROVAL = ROOT / "deploy-config/passport-beta-fence-approved-target.json"
 INSTALL = ROOT / "scripts/sql/passport-beta-fence-install.sql"
 DRAIN = ROOT / "scripts/sql/passport-beta-fence-drain.sql"
 VERIFY = ROOT / "scripts/sql/passport-beta-fence-verify.sql"
+PREMIGRATED = ROOT / "docker-compose.profile.passport-premigrated-beta.yml"
 SHA = re.compile(r"[0-9a-f]{40}\Z")
 SHA256 = re.compile(r"[0-9a-f]{64}\Z")
 DIGEST = re.compile(r"sha256:[0-9a-f]{64}\Z")
@@ -63,6 +66,7 @@ PROTECTED_FILES = (
     "scripts/prepare_passport_beta_aggregate_compose.py",
     "scripts/verify_passport_beta_aggregate_runtime.py",
     "scripts/run-passport-beta-aggregate-deploy.ps1",
+    "scripts/probe_passport_beta_cutover_snapshot.py",
     "docker-compose.base.yml",
     "docker-compose.beta.yml",
     "docker-compose.profile.dev.yml",
@@ -85,6 +89,34 @@ PROTECTED_FILES = (
     "rust/services/flow/migrations/0001_flow_schema.sql",
     "rust/services/flow/migrations/0002_builtin_flows.sql",
 )
+RELEASE_SCHEMA_VALIDATION_MARKERS = {
+    "rust/crates/schema-startup/src/lib.rs": (
+        'std::env::var("MARTY_SCHEMA_STARTUP_MODE")',
+        'Some("validate") => Ok(Self::Validate)',
+    ),
+    "rust/services/flow/src/connections.rs": (
+        "SchemaStartupMode::from_env()",
+        "SchemaStartupMode::Validate => crate::validate_flow_schema(&pool).await?",
+    ),
+    "rust/services/flow/src/migration.rs": (
+        "SET TRANSACTION READ ONLY", "pub async fn validate_flow_schema",
+    ),
+    "rust/services/issuance/src/main.rs": (
+        "SchemaStartupMode::from_env()",
+        "SchemaStartupMode::Validate => migration::validate(&pool).await",
+        "SchemaStartupMode::Validate => migration::validate_passport(&pool).await",
+    ),
+    "rust/services/issuance/src/migration.rs": (
+        "SET TRANSACTION READ ONLY", "pub async fn validate_passport",
+    ),
+    "scripts/prepare_passport_beta_aggregate_compose.py": (
+        '"docker-compose.profile.passport-premigrated-beta.yml"',
+        '"MARTY_SCHEMA_STARTUP_MODE": "validate"',
+    ),
+    "scripts/run-passport-beta-aggregate-deploy.ps1": (
+        "docker-compose.profile.passport-premigrated-beta.yml",
+    ),
+}
 
 
 def require(condition: bool, message: str) -> None:
@@ -224,6 +256,51 @@ def protected_file(relative: str, runner: Callable[[list[str]], str]) -> None:
             f"Protected file content differs from remote main: {relative}")
 
 
+def require_release_schema_validation_capability(
+    source_commit: str, runner: Callable[[list[str]], str],
+) -> None:
+    """Bind the signed Rust image source to shared DDL-free startup paths."""
+    for relative, markers in RELEASE_SCHEMA_VALIDATION_MARKERS.items():
+        try:
+            contents = runner(["git", "-C", str(ROOT), "show",
+                               f"{source_commit}:{relative}"])
+        except HostProbeError as exc:
+            raise HostProbeError("Signed Rust release lacks schema validation source") from exc
+        require(all(marker in contents for marker in markers),
+                "Signed Rust release lacks DDL-free schema validation")
+
+
+def require_premigrated_compose_validation(contents: str) -> None:
+    """Require the protected post-migration overlay to select both Rust services."""
+    try:
+        root = yaml.compose(contents)
+    except yaml.YAMLError as exc:
+        raise HostProbeError("Signed premigrated beta Compose is invalid") from exc
+
+    def one_value(node: MappingNode | None, name: str) -> Any:
+        require(isinstance(node, MappingNode),
+                "Signed premigrated beta Compose has invalid service structure")
+        matches = [value for key, value in node.value
+                   if isinstance(key, ScalarNode) and key.value == name]
+        require(len(matches) == 1,
+                f"Signed premigrated beta Compose has ambiguous {name}")
+        return matches[0]
+
+    services = one_value(root, "services")
+    require(isinstance(services, MappingNode)
+            and {key.value for key, _ in services.value
+                 if isinstance(key, ScalarNode)} == {"flow", "issuance-native"},
+            "Signed premigrated beta Compose selects unexpected services")
+    for service in ("flow", "issuance-native"):
+        entry = one_value(services, service)
+        environment = one_value(entry, "environment")
+        selector = one_value(environment, "MARTY_SCHEMA_STARTUP_MODE")
+        require(isinstance(selector, ScalarNode)
+                and selector.tag == "tag:yaml.org,2002:str"
+                and selector.value == "validate",
+                f"Signed premigrated beta {service} does not use DDL-free startup")
+
+
 def check_authority(
     approval_path: Path, manifest_path: Path, beta_baseline_manifest_path: Path,
     runner: Callable[[list[str]], str] = run,
@@ -256,6 +333,8 @@ def check_authority(
                 is not None,
             "Protected beta target approval fields are invalid")
     source = manifest_source(manifest_path, head, attest, attest_issuance)
+    require_release_schema_validation_capability(source["source_commit"], runner)
+    require_premigrated_compose_validation(PREMIGRATED.read_text(encoding="utf-8"))
     require(file_sha256(beta_baseline_manifest_path)
             == approval["beta_baseline_manifest_sha256"],
             "Deployed beta baseline manifest differs from protected approval")

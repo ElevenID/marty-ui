@@ -324,17 +324,46 @@ async fn validate_passport_connection(
             )));
         }
     }
-    let batch_key: Option<String> = sqlx::query_scalar(
-        "SELECT pg_get_constraintdef(oid) FROM pg_constraint
-         WHERE conrelid=to_regclass('issuance_service.passport_beta_batch_intents')
-           AND contype='p' AND convalidated",
+    const REQUIRED_KEYS: &[(&str, &str, &str)] = &[
+        ("physical_document_jobs", "id", "p"),
+        ("physical_document_jobs", "application_id", "u"),
+        ("passport_beta_batch_intents", "batch_id", "p"),
+    ];
+    let keys = sqlx::query(
+        "SELECT relation.relname AS table_name, rule.contype::text AS key_type,
+                index.indisunique, index.indisprimary, index.indisvalid,
+                index.indisready, index.indnkeyatts, index.indnatts,
+                index.indpred IS NULL AS unfiltered,
+                index.indexprs IS NULL AS plain_columns,
+                pg_get_indexdef(index.indexrelid, 1, false) AS first_key
+         FROM pg_constraint AS rule
+         JOIN pg_class AS relation ON relation.oid = rule.conrelid
+         JOIN pg_namespace AS namespace ON namespace.oid = relation.relnamespace
+         JOIN pg_index AS index ON index.indexrelid = rule.conindid
+         WHERE namespace.nspname = 'issuance_service'
+           AND relation.relname IN ('physical_document_jobs', 'passport_beta_batch_intents')
+           AND rule.contype IN ('p', 'u')",
     )
-    .fetch_optional(&mut *connection)
+    .fetch_all(&mut *connection)
     .await?;
-    if batch_key.as_deref() != Some("PRIMARY KEY (batch_id)") {
-        return Err(sqlx::Error::Protocol(
-            "passport beta batch claim primary key is missing".into(),
-        ));
+    for &(table, column, kind) in REQUIRED_KEYS {
+        if !keys.iter().any(|key| {
+            matches!(key.try_get::<String, _>("table_name"), Ok(value) if value == table)
+                && matches!(key.try_get::<String, _>("key_type"), Ok(value) if value == kind)
+                && matches!(key.try_get::<String, _>("first_key"), Ok(value) if normalize_catalog_expression(&value) == column)
+                && matches!(key.try_get::<bool, _>("indisunique"), Ok(true))
+                && matches!(key.try_get::<bool, _>("indisprimary"), Ok(value) if value == (kind == "p"))
+                && matches!(key.try_get::<bool, _>("indisvalid"), Ok(true))
+                && matches!(key.try_get::<bool, _>("indisready"), Ok(true))
+                && matches!(key.try_get::<bool, _>("unfiltered"), Ok(true))
+                && matches!(key.try_get::<bool, _>("plain_columns"), Ok(true))
+                && matches!(key.try_get::<i16, _>("indnkeyatts"), Ok(1))
+                && matches!(key.try_get::<i16, _>("indnatts"), Ok(1))
+        }) {
+            return Err(sqlx::Error::Protocol(format!(
+                "passport schema is missing compatible {table}.{column} key"
+            )));
+        }
     }
     let intent_guard = sqlx::query(
         "SELECT t.tgenabled::text AS tgenabled, t.tgtype::integer AS trigger_type,

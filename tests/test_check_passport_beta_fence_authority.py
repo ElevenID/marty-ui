@@ -86,6 +86,12 @@ def fixture(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     install.write_text("install", encoding="utf-8")
     drain.write_text("drain", encoding="utf-8")
     verify.write_text("verify", encoding="utf-8")
+    premigrated = root / "docker-compose.profile.passport-premigrated-beta.yml"
+    premigrated.write_text(
+        'services:\n  flow:\n    environment:\n      MARTY_SCHEMA_STARTUP_MODE: validate\n'
+        '  issuance-native:\n    environment:\n      MARTY_SCHEMA_STARTUP_MODE: validate\n',
+        encoding="utf-8",
+    )
     for relative in authority.PROTECTED_FILES:
         path = root / relative
         if not path.exists():
@@ -102,6 +108,7 @@ def fixture(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     monkeypatch.setattr(authority, "INSTALL", install)
     monkeypatch.setattr(authority, "DRAIN", drain)
     monkeypatch.setattr(authority, "VERIFY", verify)
+    monkeypatch.setattr(authority, "PREMIGRATED", premigrated)
     values = {
         "branch": "main", "status": "", "protected": True, "remote_head": HEAD,
         "tracked": True, "custom_filter": False,
@@ -110,6 +117,10 @@ def fixture(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
         "deletion_state": "OPEN", "deletion_draft": True,
         "deletion_head": DELETION_HEAD,
         "baseline": baseline,
+        "release_files": {
+            relative: "\n".join(markers)
+            for relative, markers in authority.RELEASE_SCHEMA_VALIDATION_MARKERS.items()
+        },
     }
 
     def runner(command: list[str]) -> str:
@@ -142,6 +153,8 @@ def fixture(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
                 return values["tag_type"]
             if args == ["rev-parse", "refs/tags/v1.2.3^{commit}"]:
                 return values["tag_commit"]
+            if args[:1] == ["show"] and args[1].startswith(HEAD + ":"):
+                return values["release_files"][args[1].split(":", 1)[1]]
         if command[:3] == ["gh", "api", "repos/ElevenID/marty-ui/branches/main"]:
             return json.dumps({"protected": values["protected"],
                                "commit": {"sha": values["remote_head"]}})
@@ -199,6 +212,33 @@ def test_authority_plan_binds_all_four_sources(
     assert plan["postgres_runtime"]["server_version_num"] == "150017"
     assert plan["production_snapshot_sha256"] == "1" * 64
     assert plan["verify_sql_sha256"] == hashlib.sha256(b"verify").hexdigest()
+
+
+def test_authority_requires_signed_shared_validation_source(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    approval, manifest, values, target, runner = fixture(tmp_path, monkeypatch)
+    values["release_files"]["rust/services/issuance/src/main.rs"] = "migration::migrate(&pool).await"
+    with pytest.raises(HostProbeError, match="DDL-free schema validation"):
+        authority.check_authority(approval, manifest, values["baseline"], runner,
+                                  lambda: target, lambda *_: True, lambda *_: True)
+
+
+def test_authority_requires_exact_two_service_premigrated_overlay(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    approval, manifest, values, target, runner = fixture(tmp_path, monkeypatch)
+    authority.PREMIGRATED.write_text(
+        'services:\n  flow:\n    environment:\n      MARTY_SCHEMA_STARTUP_MODE: validate\n'
+        '  issuance-native:\n    environment:\n      MARTY_SCHEMA_STARTUP_MODE: migrate\n',
+        encoding="utf-8",
+    )
+    with pytest.raises(HostProbeError, match="content differs"):
+        authority.check_authority(approval, manifest, values["baseline"], runner,
+                                  lambda: target, lambda *_: True, lambda *_: True)
+    with pytest.raises(HostProbeError, match="does not use DDL-free startup"):
+        authority.require_premigrated_compose_validation(
+            authority.PREMIGRATED.read_text(encoding="utf-8"))
 
 
 def test_hidden_worktree_change_cannot_replace_protected_approval(
