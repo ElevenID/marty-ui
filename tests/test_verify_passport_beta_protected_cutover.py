@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import json
+import hashlib
+from pathlib import Path
 
 import pytest
 
@@ -39,6 +41,7 @@ def fixture(tmp_path):
         "cutover_snapshot_sha256": snapshot["snapshot_sha256"],
         "supported_acceptance_run_id": 10,
         "predeletion_acceptance_run_id": 11,
+        "checked_at_utc": "2026-09-29T03:30:00Z",
         "legacy_source": {
             "environment": "beta", "database_uid": snapshot["database_uid"],
             "beta_cluster_uid": snapshot["beta_cluster_uid"],
@@ -50,6 +53,7 @@ def fixture(tmp_path):
             "writer_started_at": snapshot["writer_started_at"],
             "writer_generation": 0, "writer_running": True,
             "final_watermark": snapshot["observation_watermark"],
+            "final_snapshot_attestation_sha256": "4" * 64,
         },
         "write_fence": {
             "enabled": True, "database_uid": snapshot["database_uid"],
@@ -76,20 +80,38 @@ def fixture(tmp_path):
         "id": 42, "status": "completed", "conclusion": "success",
         "event": "workflow_dispatch", "path": cutover.WORKFLOW,
         "head_branch": "main", "head_sha": HEAD,
+        "created_at": "2026-09-29T03:00:00Z",
+        "updated_at": "2026-09-29T04:00:00Z",
         "repository": {"full_name": cutover.REPOSITORY},
         "head_repository": {"full_name": cutover.REPOSITORY},
     }
-    return path, snapshot, report, run
+    supported = {**run, "id": 10,
+                 "path": ".github/workflows/passport-supported-consumer-acceptance.yml",
+                 "created_at": "2026-09-29T00:00:00Z",
+                 "updated_at": "2026-09-29T01:00:00Z"}
+    predeletion = {**run, "id": 11,
+                   "path": ".github/workflows/passport-rust-predeletion-acceptance.yml",
+                   "created_at": "2026-09-29T01:30:00Z",
+                   "updated_at": "2026-09-29T02:30:00Z"}
+    return path, snapshot, report, {42: run, 10: supported, 11: predeletion}
 
 
-def execute_for(run, calls):
+def execute_for(path, runs, calls):
     def execute(args):
         calls.append(args)
-        return json.dumps(run) if args[:2] == ["gh", "api"] else "verified"
+        if args[:2] == ["gh", "api"]:
+            if args[2].endswith("/pulls/305"):
+                return json.dumps({"head": {"sha": DELETION, "repo": {
+                    "full_name": "ElevenID/marty-credentials"}}})
+            return json.dumps(runs[int(args[2].rsplit("/", 1)[-1])])
+        if args[:3] == ["gh", "run", "download"]:
+            target = Path(args[args.index("--dir") + 1])
+            (target / path.name).write_bytes(path.read_bytes())
+        return "verified"
     return execute
 
 
-def verify(path, snapshot, run, execute):
+def verify(path, snapshot, execute):
     return cutover.verify(
         path, source_commit=HEAD, deletion_head=DELETION,
         snapshot=snapshot, snapshot_file_sha256=FILE_HASH,
@@ -98,35 +120,65 @@ def verify(path, snapshot, run, execute):
 
 
 def test_exact_protected_report_binds_snapshot_and_source(tmp_path):
-    path, snapshot, _report, run = fixture(tmp_path)
+    path, snapshot, _report, runs = fixture(tmp_path)
     calls = []
-    result = verify(path, snapshot, run, execute_for(run, calls))
+    result = verify(path, snapshot, execute_for(path, runs, calls))
     assert result["cutover_report_run_id"] == 42
-    assert result["cutover_report_file_sha256"] == cutover.file_sha256(path)
-    assert calls[1] == [
-        "gh", "attestation", "verify", str(path), "--repo", cutover.REPOSITORY,
+    assert result["cutover_report_file_sha256"] == hashlib.sha256(
+        path.read_bytes()).hexdigest()
+    assert calls[-1][:3] == ["gh", "attestation", "verify"]
+    assert calls[-1][4:] == [
+        "--repo", cutover.REPOSITORY,
         "--signer-workflow", f"{cutover.REPOSITORY}/{cutover.WORKFLOW}",
         "--source-digest", HEAD, "--source-ref", "refs/heads/main",
     ]
 
 
 def test_wrong_workflow_or_writer_fails_closed(tmp_path):
-    path, snapshot, report, run = fixture(tmp_path)
-    run["path"] = ".github/workflows/other.yml"
+    path, snapshot, report, runs = fixture(tmp_path)
+    runs[42]["path"] = ".github/workflows/other.yml"
     with pytest.raises(cutover.HostProbeError, match="protected main"):
-        verify(path, snapshot, run, execute_for(run, []))
-    run["path"] = cutover.WORKFLOW
+        verify(path, snapshot, execute_for(path, runs, []))
+    runs[42]["path"] = cutover.WORKFLOW
     report["legacy_source"]["writer_generation"] = 1
     path.write_text(json.dumps(report), encoding="utf-8")
     with pytest.raises(cutover.HostProbeError, match="live cutover snapshot"):
-        verify(path, snapshot, run, execute_for(run, []))
+        verify(path, snapshot, execute_for(path, runs, []))
 
 
 def test_missing_attestation_fails_closed(tmp_path):
-    path, snapshot, _report, run = fixture(tmp_path)
+    path, snapshot, _report, runs = fixture(tmp_path)
     def execute(args):
         if args[:2] == ["gh", "api"]:
-            return json.dumps(run)
+            return execute_for(path, runs, [])(args)
+        if args[:3] == ["gh", "run", "download"]:
+            return execute_for(path, runs, [])(args)
         raise cutover.HostProbeError("Protected passport report verification failed")
     with pytest.raises(cutover.HostProbeError, match="verification failed"):
-        verify(path, snapshot, run, execute)
+        verify(path, snapshot, execute)
+
+
+def test_downloaded_artifact_must_match_local_bytes(tmp_path):
+    path, snapshot, _report, runs = fixture(tmp_path)
+    def execute(args):
+        if args[:3] == ["gh", "run", "download"]:
+            target = Path(args[args.index("--dir") + 1])
+            (target / path.name).write_text('{"forged":true}', encoding="utf-8")
+            return ""
+        return execute_for(path, runs, [])(args)
+    with pytest.raises(cutover.HostProbeError, match="differs from protected run"):
+        verify(path, snapshot, execute)
+
+
+def test_local_file_swap_cannot_change_approved_report(tmp_path):
+    path, snapshot, _report, runs = fixture(tmp_path)
+    original = path.read_bytes()
+    def execute(args):
+        if args[:3] == ["gh", "run", "download"]:
+            target = Path(args[args.index("--dir") + 1])
+            (target / path.name).write_bytes(original)
+            path.write_text('{"forged":true}', encoding="utf-8")
+            return ""
+        return execute_for(path, runs, [])(args)
+    result = verify(path, snapshot, execute)
+    assert result["cutover_report_file_sha256"] == hashlib.sha256(original).hexdigest()

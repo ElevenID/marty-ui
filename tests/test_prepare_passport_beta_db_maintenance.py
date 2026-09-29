@@ -251,7 +251,8 @@ def test_resume_verifies_full_ids_and_requires_every_service_stopped(monkeypatch
         "production_attachments_sha256": "0" * 64,
         "post_install_observation_sha256": "e" * 64,
         "cutover_snapshot_path": str(snapshot_path.resolve()),
-        "cutover_snapshot_file_sha256": "d" * 64,
+        "cutover_snapshot_file_sha256": hashlib.sha256(
+            snapshot_path.read_bytes()).hexdigest(),
         "cutover_snapshot_sha256": snap["snapshot_sha256"],
         "cutover_report_path": str(report_path.resolve()),
         "cutover_report_file_sha256": "8" * 64,

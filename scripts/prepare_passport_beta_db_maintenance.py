@@ -60,10 +60,11 @@ def require(condition: bool, message: str) -> None:
         raise HostProbeError(message)
 
 
-def checked_snapshot(path: Path, receipt: dict[str, Any]) -> dict[str, Any]:
+def checked_snapshot(path: Path, receipt: dict[str, Any]) -> tuple[dict[str, Any], str]:
     """Bind observed continuity bytes; a protected producer must attest them."""
     try:
-        raw = json.loads(path.read_text(encoding="utf-8"))
+        snapshot_bytes = path.read_bytes()
+        raw = json.loads(snapshot_bytes)
     except (OSError, ValueError) as exc:
         raise HostProbeError("Beta cutover snapshot is unreadable") from exc
     require(isinstance(raw, dict)
@@ -90,7 +91,7 @@ def checked_snapshot(path: Path, receipt: dict[str, Any]) -> dict[str, Any]:
             and raw["observation_watermark"]
                 > raw["direct_database_probe"]["observation_watermark"],
             "Beta cutover snapshot or fence receipt differs")
-    return raw
+    return raw, hashlib.sha256(snapshot_bytes).hexdigest()
 
 
 def running_beta_generation(
@@ -188,11 +189,11 @@ def prepare(
             and runner(["docker", "info", "--format", "{{.ID}}"])
                 == docker.get("daemon_id"),
             "Docker context changed during maintenance planning")
-    snapshot = checked_snapshot(snapshot_path, receipt)
+    snapshot, snapshot_file_sha256 = checked_snapshot(snapshot_path, receipt)
     report = verify_cutover_report(
         report_path, source_commit=head,
         deletion_head=receipt.get("credentials_deletion_head", ""),
-        snapshot=snapshot, snapshot_file_sha256=file_sha256(snapshot_path),
+        snapshot=snapshot, snapshot_file_sha256=snapshot_file_sha256,
         receipt=receipt,
     )
     database_uid = f"postgresql:{receipt_target['system_id']}:{receipt_target['database_oid']}"
@@ -276,7 +277,7 @@ def prepare(
         "production_attachments_sha256": receipt["production_attachments_sha256"],
         "post_install_observation_sha256": observed["observation_sha256"],
         "cutover_snapshot_path": str(snapshot_path.resolve(strict=True)),
-        "cutover_snapshot_file_sha256": file_sha256(snapshot_path),
+        "cutover_snapshot_file_sha256": snapshot_file_sha256,
         "cutover_snapshot_sha256": snapshot["snapshot_sha256"],
         "cutover_report_path": str(report_path.resolve(strict=True)),
         "cutover_report_file_sha256": report["cutover_report_file_sha256"],
@@ -326,11 +327,11 @@ def verify_plan(
             and plan.get("post_install_observation_sha256")
                 == receipt_raw.get("post_install_observation_sha256"),
             "Maintenance intent differs from fence installation receipt")
-    snapshot = checked_snapshot(snapshot_path, receipt_raw)
+    snapshot, snapshot_file_sha256 = checked_snapshot(snapshot_path, receipt_raw)
     report = verify_cutover_report(
         report_path, source_commit=head,
         deletion_head=receipt_raw.get("credentials_deletion_head", ""),
-        snapshot=snapshot, snapshot_file_sha256=file_sha256(snapshot_path),
+        snapshot=snapshot, snapshot_file_sha256=snapshot_file_sha256,
         receipt=receipt_raw,
     )
     docker = plan.get("docker")
@@ -345,7 +346,7 @@ def verify_plan(
                           database_uid=database_uid,
                           epoch=int(receipt["fence_epoch"]), docker=docker)
     require(plan.get("cutover_snapshot_path") == str(snapshot_path.resolve(strict=True))
-            and plan.get("cutover_snapshot_file_sha256") == file_sha256(snapshot_path)
+            and plan.get("cutover_snapshot_file_sha256") == snapshot_file_sha256
             and plan.get("cutover_snapshot_sha256") == snapshot["snapshot_sha256"]
             and plan.get("cutover_report_path") == str(report_path.resolve(strict=True))
             and plan.get("cutover_report_file_sha256")
