@@ -97,14 +97,17 @@ def service_inventory(
         image_id = record.get("Image")
         image_ref = config.get("Image")
         started_at = state.get("StartedAt")
+        restart_count = record.get("RestartCount")
         if (not isinstance(full_id, str) or not DOCKER_ID.fullmatch(full_id)
                 or not isinstance(image_id, str) or not IMAGE_ID.fullmatch(image_id)
                 or not isinstance(image_ref, str) or not image_ref
-                or not isinstance(started_at, str) or not started_at):
+                or not isinstance(started_at, str) or not started_at
+                or type(restart_count) is not int or restart_count < 0):
             raise HostProbeError(f"Beta {service} image or runtime identity is invalid")
         selected[service] = {
             "container_id": full_id, "image_id": image_id,
             "configured_image": image_ref, "started_at": started_at,
+            "restart_count": restart_count,
         }
         environment = config.get("Env")
         if not isinstance(environment, list) or any(

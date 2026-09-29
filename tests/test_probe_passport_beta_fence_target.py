@@ -22,6 +22,7 @@ def records() -> dict[str, dict]:
         result[container_id] = {
             "Id": container_id,
             "Image": "sha256:" + "a" * 64,
+            "RestartCount": 0,
             "Config": {
                 "Image": "ghcr.io/elevenid/test@sha256:" + "a" * 64,
                 "Labels": {
@@ -48,6 +49,7 @@ def test_inventory_pins_beta_services_and_redacts_database_password(
     assert set(found) == set(target.REQUIRED_SERVICES)
     assert found["issuance"]["database_target"] == "postgres:5432/marty"
     assert found["gateway"]["passport_route_selector"] == "unset"
+    assert found["issuance"]["restart_count"] == 0
     assert "do-not-print" not in repr(found)
 
 
@@ -86,6 +88,7 @@ def test_fenced_observer_uses_postinstall_identity_without_prefence_acl(
 
 @pytest.mark.parametrize("drift", (
     "foreign_project", "prod_db", "query_host_override", "duplicate_env", "stopped",
+    "missing_restart_count", "negative_restart_count",
 ))
 def test_inventory_rejects_wrong_target_or_ambiguous_configuration(
     monkeypatch: pytest.MonkeyPatch, drift: str,
@@ -106,6 +109,10 @@ def test_inventory_rejects_wrong_target_or_ambiguous_configuration(
         flow["Config"]["Env"][1] += "?host=production"
     elif drift == "duplicate_env":
         flow["Config"]["Env"].append(flow["Config"]["Env"][1])
+    elif drift == "missing_restart_count":
+        flow.pop("RestartCount")
+    elif drift == "negative_restart_count":
+        flow["RestartCount"] = -1
     else:
         flow["State"]["Running"] = False
     with pytest.raises(HostProbeError):
