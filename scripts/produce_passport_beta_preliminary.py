@@ -258,6 +258,7 @@ def verify_positive_job(report: dict[str, Any], private_plan: dict[str, Any],
     selected = {field: _commitment(api_key, label, private_plan[private_field])
                 for field, (label, private_field) in PRIVATE_LABELS.items()}
     flow = _probe(report, "selected_physical_flow")
+    gateway_trace = _probe(report, "nine_route_gateway_flow")
     route_owner = _probe(report, "beta_native_route_ownership")
     capability = _probe(report, "capabilities_http")
     webhook = _probe(report, "flow_capability_and_webhook_denial")
@@ -268,6 +269,15 @@ def verify_positive_job(report: dict[str, Any], private_plan: dict[str, Any],
             and all(flow.get(field) == commitment for field, commitment in selected.items())
             and flow.get("terminal_native_status") == "ACTIVE"
             and flow.get("physical_claim") == "not_claimed"
+            and gateway_trace.get("source_job_commitment") == selected["source_job_commitment"]
+            and gateway_trace.get("application_commitment") == selected["application_commitment"]
+            and gateway_trace.get("flow_instance_commitment") == selected["flow_instance_commitment"]
+            and gateway_trace.get("routes") == [
+                {"method": method, "path": path} for method, path in ROUTES]
+            and gateway_trace.get("ordered_steps") == list(PHYSICAL_STEPS)
+            and gateway_trace.get("completed_steps") == len(PHYSICAL_STEPS)
+            and gateway_trace.get("gateway_owner") == "rust"
+            and gateway_trace.get("flow_owner") == "rust"
             and route_owner.get("native_selectors") is True
             and route_owner.get("flow_native_target") is True
             and route_owner.get("webhook_owner") == "issuance-native"
@@ -373,9 +383,11 @@ def verify_positive_job(report: dict[str, Any], private_plan: dict[str, Any],
                     "first_accepted_dsc_pem_wire_matches_selected_chain",
                     "source_job_id_commitment", "bureau_job_id_commitment")}},
             "nine_route_gateway_flow": {"verified": True, "evidence": {
-                "routes": [{"method": method, "path": path} for method, path in ROUTES],
-                "gateway_owner": "rust", "flow_owner": "rust",
-                "ordered_steps": flow["ordered_steps"], "completed_steps": flow["completed_steps"],
+                "routes": gateway_trace["routes"],
+                "gateway_owner": gateway_trace["gateway_owner"],
+                "flow_owner": gateway_trace["flow_owner"],
+                "ordered_steps": gateway_trace["ordered_steps"],
+                "completed_steps": gateway_trace["completed_steps"],
                 **selected}},
             "physical_bureau_batch": {"verified": True, "evidence": {
                 field: batch[field] for field in BATCH_PUBLIC_FIELDS if field in batch}},

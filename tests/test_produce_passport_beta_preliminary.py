@@ -12,7 +12,7 @@ import pytest
 from scripts.probe_passport_beta_flow import PHYSICAL_STEPS
 from scripts.probe_passport_beta_selected_flow import PASSPORT_FLOW_ROUTES
 from scripts.produce_passport_beta_preliminary import (
-    PreliminaryEvidenceError, verify_negative_media, verify_positive_job,
+    ROUTES, PreliminaryEvidenceError, verify_negative_media, verify_positive_job,
 )
 
 
@@ -201,6 +201,11 @@ def positive_fixture() -> tuple[dict, dict]:
                                       for method, path in PASSPORT_FLOW_ROUTES],
                       "terminal_native_status": "ACTIVE", "physical_claim": "not_claimed",
                       "sod_sha256": "e" * 64, "callback_receipt_sha256": callback}),
+                  "nine_route_gateway_flow": probe({
+                      **selected,
+                      "routes": [{"method": method, "path": path} for method, path in ROUTES],
+                      "gateway_owner": "rust", "flow_owner": "rust",
+                      "ordered_steps": list(PHYSICAL_STEPS), "completed_steps": 9}),
                   "beta_native_route_ownership": probe({
                       "native_selectors": True, "flow_native_target": True,
                       "webhook_owner": "issuance-native",
@@ -232,9 +237,19 @@ def test_positive_join_proves_one_selected_rust_passport_job() -> None:
     assert "76a7baef" not in str(result)
 
 
+def test_positive_join_rejects_runner_route_inventory_without_same_job_trace() -> None:
+    report, private = positive_fixture()
+    report["probes"]["nine_route_gateway_flow"] = {
+        "verified": False, "evidence": {"missing": ["same_job_gateway_route_trace"]}}
+    with pytest.raises(PreliminaryEvidenceError, match="nine_route_gateway_flow"):
+        verify_positive_job(report, private, "k" * 32)
+
+
 @pytest.mark.parametrize("probe,field,value", [
     ("selected_physical_flow", "completed_steps", 8),
     ("selected_physical_flow", "source_job_commitment", "f" * 64),
+    ("nine_route_gateway_flow", "source_job_commitment", "f" * 64),
+    ("nine_route_gateway_flow", "routes", []),
     ("beta_native_route_ownership", "webhook_owner", "passport-provider-ingress"),
     ("managed_csca_dsc_chain", "managed_kms_custody_verified", False),
     ("managed_csca_dsc_chain", "sod_dsc_certificate_sha256", "f" * 64),
