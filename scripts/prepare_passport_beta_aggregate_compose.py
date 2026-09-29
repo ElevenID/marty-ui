@@ -486,6 +486,7 @@ def verify_render_plan(recorded: dict[str, Any]) -> dict[str, Any]:
     for relative in PROTECTED_FILES:
         protected_file(relative, run)
     beta, ui, fresh = render_candidate(recorded)
+    validate_model(beta, passport_enabled=True, files=COMPOSE_FILES)
     require(all(recorded.get(key) == fresh[key] for key in RENDER_EVIDENCE),
             "Aggregate Compose render or input changed")
     require(beta.get("name") == "elevenid-beta"
@@ -833,6 +834,7 @@ def main() -> None:
             intent = json.loads(intent_path.read_text(encoding="utf-8"))
             require(isinstance(intent, dict), "Aggregate Compose input is invalid")
             rendered, ui_rendered, evidence = render_candidate(handoff)
+            validate_model(rendered, passport_enabled=True, files=COMPOSE_FILES)
             result = prepare(handoff, intent, rendered, ui_rendered)
             result.update(evidence)
             if args.verify_plan:

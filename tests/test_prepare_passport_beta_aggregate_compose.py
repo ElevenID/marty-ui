@@ -270,7 +270,23 @@ def test_render_recheck_rejects_environment_drift(monkeypatch):
     monkeypatch.setattr(compose, "PROTECTED_FILES", ())
     monkeypatch.setattr(compose, "render_candidate", lambda _: (
         beta, ui, {key: "b" for key in compose.RENDER_EVIDENCE}))
+    monkeypatch.setattr(compose, "validate_model", lambda *_args, **_kwargs: None)
     with pytest.raises(ComposePlanError, match="render or input changed"):
+        compose.verify_render_plan(plan)
+
+
+def test_render_recheck_rejects_rotated_invalid_credentials(monkeypatch):
+    handoff, intent, beta, ui = candidate()
+    plan = prepare(handoff, intent, beta, ui)
+    plan.update({key: "a" for key in compose.RENDER_EVIDENCE})
+    monkeypatch.setattr(compose, "protected_source", lambda _runner: handoff["source_commit"])
+    monkeypatch.setattr(compose, "PROTECTED_FILES", ())
+    monkeypatch.setattr(compose, "render_candidate", lambda _: (
+        beta, ui, {key: "a" for key in compose.RENDER_EVIDENCE}))
+    def invalid_credentials(_model, **_kwargs):
+        raise ValueError("Beta operator credential isolation is invalid")
+    monkeypatch.setattr(compose, "validate_model", invalid_credentials)
+    with pytest.raises(ValueError, match="credential isolation"):
         compose.verify_render_plan(plan)
 
 
