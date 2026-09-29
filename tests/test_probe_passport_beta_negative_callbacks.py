@@ -11,6 +11,7 @@ from urllib.error import HTTPError
 import pytest
 
 from scripts import probe_passport_beta_negative_callbacks as negative
+from scripts import collect_passport_beta_acceptance as collector
 from scripts.probe_passport_beta_negative_callbacks import (
     NegativeCallbackError, exercise,
 )
@@ -113,6 +114,7 @@ def test_signer_adapter_keeps_internal_key_out_of_host_process_args(monkeypatch)
                                   b'{"organization_id":"foreign-org"}') == SIGNATURE
     assert seen["command"][:4] == ["docker", "exec", "-i", "c" * 64]
     assert "SIGNING_KEYS_INTERNAL_API_KEY" in seen["command"][7]
+    assert "SIGNING_KEYS_INTERNAL_API_KEY_FILE" in seen["command"][7]
     assert KEY not in str(seen["command"])
     assert seen["request"].keys() == {"body_b64"}
 
@@ -122,7 +124,9 @@ def test_cli_blocks_private_handoff_from_another_aggregate_release(
 ) -> None:
     private_path = tmp_path / "private.json"
     private_path.write_text(json.dumps(handoff()), encoding="utf-8")
-    (tmp_path / "aggregate-deployment.json").write_text("{}", encoding="utf-8")
+    artifact_dir = tmp_path / "artifacts"
+    artifact_dir.mkdir()
+    (artifact_dir / "aggregate-deployment.json").write_text("{}", encoding="utf-8")
     output = tmp_path / "blocked.json"
     monkeypatch.setenv("PASSPORT_ACCEPTANCE_API_KEY", KEY)
     monkeypatch.setattr(negative, "collect", lambda *_args, **_kwargs: {
@@ -133,7 +137,7 @@ def test_cli_blocks_private_handoff_from_another_aggregate_release(
     })
     monkeypatch.setattr(negative, "exercise", lambda *_args: pytest.fail("No callback"))
     monkeypatch.setattr(sys, "argv", ["probe", "--private-handoff", str(private_path),
-                                      "--artifact-dir", str(tmp_path),
+                                      "--artifact-dir", str(artifact_dir),
                                       "--output", str(output)])
     with pytest.raises(SystemExit) as exc:
         negative.main()
@@ -180,3 +184,125 @@ def test_negative_probe_requires_original_production_baselines(monkeypatch) -> N
                         lambda: "c" * 64)
     with pytest.raises(NegativeCallbackError, match="Production differs"):
         negative._check_production(KEY, deployment)
+
+
+def test_cli_rechecks_production_and_beta_after_failed_callback(
+    tmp_path, monkeypatch,
+) -> None:
+    private_path = tmp_path / "private.json"
+    private_path.write_text(json.dumps(handoff()), encoding="utf-8")
+    artifact_dir = tmp_path / "artifacts"
+    artifact_dir.mkdir()
+    (artifact_dir / "aggregate-deployment.json").write_text("{}", encoding="utf-8")
+    output = tmp_path / "blocked.json"
+    observed = []
+    deployed = {
+        "release": {"signed_manifest_verified": True, "source_commit": "a" * 40,
+                    "stack_manifest_sha256": "b" * 64},
+        "deployment": {"provider_mode": "simulator"},
+        "runtime_images": {"passport-beta-bureau": {"container_id": "c" * 64}},
+    }
+
+    def collect(*_args, **_kwargs):
+        observed.append("collect")
+        return deployed
+
+    def exercise(*_args):
+        observed.append("callback")
+        raise NegativeCallbackError("Denied callback did not verify")
+
+    monkeypatch.setenv("PASSPORT_ACCEPTANCE_API_KEY", KEY)
+    monkeypatch.setattr(negative, "collect", collect)
+    monkeypatch.setattr(negative, "exercise", exercise)
+    monkeypatch.setattr(negative, "_check_production",
+                        lambda *_args: observed.append("production"))
+    monkeypatch.setattr(negative, "beta_native_route_ownership",
+                        lambda *_args: {"verified": True, "evidence": {
+                            "webhook_owner": "issuance-native"}})
+    monkeypatch.setattr(sys, "argv", ["probe", "--private-handoff", str(private_path),
+                                      "--artifact-dir", str(artifact_dir),
+                                      "--output", str(output)])
+    with pytest.raises(SystemExit):
+        negative.main()
+    assert observed == ["collect", "production", "callback", "production", "collect"]
+    assert json.loads(output.read_text())["verified"] is False
+
+
+@pytest.mark.parametrize("unsafe", ["private_in_artifacts", "overwrite_private",
+                                     "overwrite_aggregate"])
+def test_cli_preserves_private_and_aggregate_inputs_on_unsafe_paths(
+    tmp_path, monkeypatch, unsafe,
+) -> None:
+    artifact_dir = tmp_path / "artifacts"
+    artifact_dir.mkdir()
+    aggregate = artifact_dir / "aggregate-deployment.json"
+    aggregate.write_text("aggregate-original", encoding="utf-8")
+    private_path = (artifact_dir if unsafe == "private_in_artifacts" else tmp_path) / "private.json"
+    private_path.write_text(json.dumps(handoff()), encoding="utf-8")
+    original_private = private_path.read_bytes()
+    output = (private_path if unsafe == "overwrite_private" else
+              aggregate if unsafe == "overwrite_aggregate" else tmp_path / "blocked.json")
+    monkeypatch.setattr(negative, "collect",
+                        lambda *_args, **_kwargs: pytest.fail("No beta request"))
+    monkeypatch.setattr(sys, "argv", ["probe", "--private-handoff", str(private_path),
+                                      "--artifact-dir", str(artifact_dir),
+                                      "--output", str(output)])
+    with pytest.raises(SystemExit):
+        negative.main()
+    assert private_path.read_bytes() == original_private
+    assert aggregate.read_text(encoding="utf-8") == "aggregate-original"
+
+
+def test_direct_beta_opener_disables_environment_proxy(monkeypatch) -> None:
+    handlers = []
+    monkeypatch.setattr(negative, "build_opener",
+                        lambda *args: handlers.extend(args))
+    negative._direct_opener()
+    assert isinstance(handlers[0], negative.ProxyHandler)
+    assert handlers[0].proxies == {}
+    assert handlers[1] is negative.NoRedirect
+
+
+def test_capability_probe_also_disables_environment_proxy(monkeypatch) -> None:
+    handlers = []
+
+    class Response:
+        status = 200
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_):
+            return None
+
+        def geturl(self):
+            return collector.BETA_ORIGIN + "/v1/passport/capabilities"
+
+        def read(self, _limit):
+            return b"{}"
+
+    def opener(*args):
+        handlers.extend(args)
+        return SimpleNamespace(open=lambda *_args, **_kwargs: Response())
+
+    monkeypatch.setattr(collector, "build_opener", opener)
+    assert collector.get_capabilities(None) == (200, {})
+    assert isinstance(handlers[0], collector.ProxyHandler)
+    assert handlers[0].proxies == {}
+
+
+def test_cli_rejects_local_beta_proxy_flag_before_collection(tmp_path, monkeypatch) -> None:
+    artifact_dir = tmp_path / "artifacts"
+    artifact_dir.mkdir()
+    private_path = tmp_path / "private.json"
+    private_path.write_text(json.dumps(handoff()), encoding="utf-8")
+    output = tmp_path / "blocked.json"
+    monkeypatch.setenv("BETA_LOCAL_PROXY", "1")
+    monkeypatch.setattr(negative, "collect",
+                        lambda *_args, **_kwargs: pytest.fail("No proxy-backed collection"))
+    monkeypatch.setattr(sys, "argv", ["probe", "--private-handoff", str(private_path),
+                                      "--artifact-dir", str(artifact_dir),
+                                      "--output", str(output)])
+    with pytest.raises(SystemExit):
+        negative.main()
+    assert json.loads(output.read_text())["verified"] is False

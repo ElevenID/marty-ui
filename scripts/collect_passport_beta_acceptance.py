@@ -19,7 +19,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable
 from urllib.error import HTTPError, URLError
-from urllib.request import HTTPRedirectHandler, Request, build_opener
+from urllib.request import HTTPRedirectHandler, ProxyHandler, Request, build_opener
 
 if __package__:
     from .probe_passport_beta_gateway import ProbeError, exercise
@@ -145,7 +145,7 @@ def get_capabilities(api_key: str | None) -> tuple[int, dict[str, Any] | None]:
         headers["x-api-key"] = api_key
     request = Request(url, headers=headers, method="GET")
     try:
-        with build_opener(NoRedirect).open(request, timeout=20) as response:
+        with build_opener(ProxyHandler({}), NoRedirect).open(request, timeout=20) as response:
             require(response.geturl() == url, "Passport capability probe redirected")
             raw = response.read(64 * 1024 + 1)
             require(len(raw) <= 64 * 1024, "Passport capability response is oversized")

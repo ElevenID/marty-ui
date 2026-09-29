@@ -19,28 +19,28 @@ from pathlib import Path
 from typing import Any, Callable
 from urllib.error import HTTPError, URLError
 from urllib.parse import quote
-from urllib.request import HTTPRedirectHandler, Request, build_opener
+from urllib.request import HTTPRedirectHandler, ProxyHandler, Request, build_opener
 from uuid import UUID, uuid4
 
 try:
     from .collect_passport_beta_acceptance import (
-        collect, production_attachment_commitment,
+        collect, get_capabilities, production_attachment_commitment,
         production_snapshot_commitment, verify_attestations,
     )
     from .probe_passport_beta_batch import _identity_commit
-    from .probe_passport_beta_gateway import request_beta as request_job
     from .probe_passport_beta_host import (
-        production_attachment_sha256, production_snapshot,
+        beta_native_route_ownership, production_attachment_sha256,
+        production_snapshot,
     )
 except ImportError:
     from collect_passport_beta_acceptance import (
-        collect, production_attachment_commitment,
+        collect, get_capabilities, production_attachment_commitment,
         production_snapshot_commitment, verify_attestations,
     )
     from probe_passport_beta_batch import _identity_commit
-    from probe_passport_beta_gateway import request_beta as request_job
     from probe_passport_beta_host import (
-        production_attachment_sha256, production_snapshot,
+        beta_native_route_ownership, production_attachment_sha256,
+        production_snapshot,
     )
 
 
@@ -64,6 +64,35 @@ def require(condition: bool, message: str) -> None:
 class NoRedirect(HTTPRedirectHandler):
     def redirect_request(self, req, fp, code, msg, headers, newurl):  # type: ignore[no-untyped-def]
         return None
+
+
+def _direct_opener():
+    return build_opener(ProxyHandler({}), NoRedirect)
+
+
+def _request_job_direct(
+    method: str, path: str, body: dict[str, Any] | None, api_key: str,
+) -> tuple[int, dict[str, Any]]:
+    require(method == "GET" and body is None
+            and re.fullmatch(r"/v1/passport/applications/[A-Za-z0-9._%:-]+/production-status",
+                             path) is not None,
+            "Unexpected beta passport state route")
+    url = ORIGIN + path
+    headers = {"Accept": "application/json", "Cache-Control": "no-cache",
+               "User-Agent": "passport-beta-negative-proof/1", "x-api-key": api_key}
+    try:
+        with _direct_opener().open(Request(url, headers=headers, method="GET"),
+                                   timeout=20) as response:
+            require(response.geturl() == url, "Beta passport state route redirected")
+            raw = response.read(64 * 1024 + 1)
+            require(len(raw) <= 64 * 1024, "Beta passport state response is oversized")
+            payload = json.loads(raw)
+            require(isinstance(payload, dict), "Beta passport state response is invalid")
+            return response.status, payload
+    except HTTPError as exc:
+        return exc.code, {}
+    except (OSError, URLError, ValueError) as exc:
+        raise NegativeCallbackError("Direct beta passport state request failed") from exc
 
 
 def _state(application_id: str, organization_id: str, source_job_id: str,
@@ -91,9 +120,13 @@ def _sign_foreign(bureau_container_id: str, organization_id: str,
     # Neither the credential nor the callback body is placed in process args.
     command = [
         "docker", "exec", "-i", bureau_container_id, "sh", "-eu", "-c",
+        'key="${SIGNING_KEYS_INTERNAL_API_KEY:-}"; '
+        'if [ -z "$key" ] && [ -n "${SIGNING_KEYS_INTERNAL_API_KEY_FILE:-}" ]; '
+        'then key="$(cat "$SIGNING_KEYS_INTERNAL_API_KEY_FILE")"; fi; '
+        '[ -n "$key" ] || exit 4; '
         'exec curl --fail --silent --show-error --max-time 20 '
         '-H "Content-Type: application/json" '
-        '-H "x-api-key: $SIGNING_KEYS_INTERNAL_API_KEY" '
+        '-H "x-api-key: $key" '
         '--data-binary @- "$1/$2/passport-callbacks/sign"',
         "passport-negative-proof", SIGNER_URL, quote(organization_id, safe=""),
     ]
@@ -116,7 +149,7 @@ def _post_callback(body: bytes, signature: str | None) -> tuple[int, dict[str, b
         headers["x-personalization-signature"] = signature
     url = ORIGIN + WEBHOOK
     try:
-        with build_opener(NoRedirect).open(
+        with _direct_opener().open(
             Request(url, data=body, headers=headers, method="POST"), timeout=20,
         ) as response:
             require(response.geturl() == url, "Beta callback redirected")
@@ -153,7 +186,7 @@ def _check_production(api_key: str, deployment: dict[str, Any]) -> None:
 
 def exercise(
     private: dict[str, str], api_key: str, bureau_container_id: str, *,
-    request: Callable[..., tuple[int, dict[str, Any]]] = request_job,
+    request: Callable[..., tuple[int, dict[str, Any]]] = _request_job_direct,
     post: Callable[[bytes, str | None], tuple[int, dict[str, bool]]] = _post_callback,
     sign: Callable[[str, str, bytes], str] = _sign_foreign,
     foreign_organization: str | None = None,
@@ -241,14 +274,23 @@ def main() -> int:
     parser.add_argument("--output", type=Path, required=True)
     args = parser.parse_args()
     try:
-        require(not args.private_handoff.resolve().is_relative_to(ROOT),
-                "Private callback handoff must be outside the source checkout")
-        private = json.loads(args.private_handoff.read_text(encoding="utf-8"))
+        require(not os.environ.get("BETA_LOCAL_PROXY"),
+                "Negative callback proof requires direct beta TLS and DNS")
+        artifact_dir = args.artifact_dir.resolve(strict=True)
+        private_path = args.private_handoff.resolve(strict=True)
+        output_path = args.output.resolve(strict=False)
+        require(not private_path.is_relative_to(ROOT)
+                and not private_path.is_relative_to(artifact_dir)
+                and not output_path.is_relative_to(artifact_dir)
+                and output_path != private_path
+                and not output_path.exists(),
+                "Protected callback input and output paths overlap")
+        private = json.loads(private_path.read_text(encoding="utf-8"))
         api_key = os.environ.get("PASSPORT_ACCEPTANCE_API_KEY", "")
-        require((args.artifact_dir / "aggregate-deployment.json").is_file(),
+        require((artifact_dir / "aggregate-deployment.json").is_file(),
                 "Negative callback proof requires the aggregate beta deployment")
-        deployed = collect(args.artifact_dir, api_key=api_key,
-                           attest=verify_attestations)
+        deployed = collect(artifact_dir, api_key=api_key,
+                           attest=verify_attestations, probe=get_capabilities)
         bureau = deployed.get("runtime_images", {}).get("passport-beta-bureau")
         require(deployed.get("release", {}).get("signed_manifest_verified") is True
                 and deployed.get("deployment", {}).get("provider_mode") == "simulator"
@@ -258,14 +300,22 @@ def main() -> int:
                 and isinstance(bureau, dict)
                 and isinstance(bureau.get("container_id"), str),
                 "Private callback handoff differs from signed aggregate beta")
+        ownership = beta_native_route_ownership(deployed["runtime_images"])
+        require(ownership.get("verified") is True
+                and ownership.get("evidence", {}).get("webhook_owner") == "issuance-native",
+                "Selected beta callback route is not Rust issuance")
         _check_production(api_key, deployed["deployment"])
-        result = exercise(private, api_key, bureau["container_id"])
-        _check_production(api_key, deployed["deployment"])
-        after = collect(args.artifact_dir, api_key=api_key,
-                        attest=verify_attestations)
-        require(all(deployed[key] == after[key]
-                    for key in ("release", "deployment", "runtime_images")),
-                "Aggregate beta runtime changed during negative callback proof")
+        try:
+            result = exercise(private, api_key, bureau["container_id"])
+        finally:
+            _check_production(api_key, deployed["deployment"])
+            after = collect(artifact_dir, api_key=api_key,
+                            attest=verify_attestations, probe=get_capabilities)
+            require(all(deployed[key] == after[key]
+                        for key in ("release", "deployment", "runtime_images")),
+                    "Aggregate beta runtime changed during negative callback proof")
+            require(beta_native_route_ownership(after["runtime_images"]) == ownership,
+                    "Beta native callback route changed during negative callback proof")
         result["release"] = {
             "source_commit": deployed["release"]["source_commit"],
             "stack_manifest_sha256": deployed["release"]["stack_manifest_sha256"],
@@ -275,13 +325,16 @@ def main() -> int:
                 deployed["deployment"]["aggregate_deployment_receipt_sha256"],
             "aggregate_plan_sha256": deployed["deployment"]["aggregate_plan_sha256"],
         }
-        args.output.write_text(json.dumps(result, sort_keys=True, indent=2) + "\n",
-                               encoding="utf-8")
+        with output_path.open("x", encoding="utf-8") as output:
+            output.write(json.dumps(result, sort_keys=True, indent=2) + "\n")
     except (OSError, ValueError, subprocess.SubprocessError):
-        args.output.write_text(json.dumps({"schema": "marty.passport-beta-negative-callbacks/v1",
-                                           "verified": False,
-                                           "blocker": "Protected negative callback proof failed"}) + "\n",
-                               encoding="utf-8")
+        if not args.output.exists():
+            with args.output.open("x", encoding="utf-8") as output:
+                output.write(json.dumps({
+                    "schema": "marty.passport-beta-negative-callbacks/v1",
+                    "verified": False,
+                    "blocker": "Protected negative callback proof failed",
+                }) + "\n")
         parser.exit(1, "Protected beta negative callback proof blocked\n")
     return 0
 

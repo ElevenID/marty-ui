@@ -33,6 +33,10 @@ handoff. It signs the foreign callback through the isolated beta signer and
 emits only keyed identity and state commitments. Its JSON result is diagnostic
 until the separate uncut videos and privacy scans are captured and verified;
 it cannot qualify the preliminary recording gate on its own.
+The private handoff must remain outside the deployment artifact directory and
+source checkout. The probe writes a new result file outside that directory,
+rejects the local beta proxy mode, and uses direct beta HTTPS for its job and
+callback requests.
 
 The D-12 recorder's `externalQualification` runs
 `tests/scripts/audit-beta-physical-passport-flow.js`. Supply
