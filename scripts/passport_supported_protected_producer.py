@@ -87,7 +87,7 @@ def _application(gateway_port: int) -> dict:
         "credential_template_id": "disposable-passport-credential",
         "delivery_destination_profile_id": "passport-beta-bureau",
         "country_code": "USA", "applicant": {}, "mrz": {},
-        "data_groups": {"DG1": "YQ=="},
+        "data_groups": {"DG1": "YQ==", "DG2": "Yg=="},
     }
 
 

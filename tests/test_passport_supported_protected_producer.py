@@ -95,6 +95,7 @@ def test_producer_orders_real_gates_and_tears_down(surface: str, tmp_path: Path)
     def probe(*args, **kwargs):
         calls.append(("probe", args))
         assert args[2]["issuer_did"] == issuer_did(29877)
+        assert set(args[2]["data_groups"]) == {"DG1", "DG2"}
         return {"verified": True, "flow_execution_verified": False,
                 "evidence": {"signed_gateway_callback_verified": False,
                              "routes": [{"method": "GET", "route": "synthetic"}] * 9}}

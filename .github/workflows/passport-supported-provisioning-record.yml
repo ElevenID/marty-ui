@@ -36,10 +36,11 @@ jobs:
         run: |
           set -euo pipefail
           producer="$(gh api "repos/ElevenID/marty-ui/actions/runs/$PRODUCER_RUN_ID")"
-          jq -e --arg sha "$GITHUB_SHA" \
+          jq -e --arg sha "$GITHUB_SHA" --argjson attempt "$PRODUCER_RUN_ATTEMPT" \
             '.status == "completed" and .conclusion == "success"
              and .event == "workflow_dispatch" and .head_branch == "main"
-             and .head_sha == $sha and .repository.full_name == "ElevenID/marty-ui"' \
+             and .head_sha == $sha and .run_attempt == $attempt
+             and .repository.full_name == "ElevenID/marty-ui"' \
             <<< "$producer"
           workflow="$(gh api "repos/ElevenID/marty-ui/actions/workflows/$PRODUCER_WORKFLOW_ID")"
           jq -e '.path == ".github/workflows/passport-supported-provisioning-producer.yml"
