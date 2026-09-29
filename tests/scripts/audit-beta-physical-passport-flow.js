@@ -85,6 +85,11 @@ function requireProof(condition, message) {
   if (!condition) throw new Error(message);
 }
 
+function requireDirectBetaTransport(environment) {
+  requireProof(!environment.BETA_LOCAL_PROXY,
+    'Protected passport recording requires direct beta TLS and DNS');
+}
+
 function sha256(filePath) {
   return createHash('sha256').update(fs.readFileSync(filePath)).digest('hex');
 }
@@ -524,6 +529,7 @@ async function revealRedactedPage(page, privatePlan) {
 }
 
 async function main() {
+  requireDirectBetaTransport(process.env);
   const artifactDir = createArtifactDir(ROOT, 'beta-passport-simulator-demo');
   const deploymentDir = process.env.PASSPORT_BETA_ARTIFACT_DIR;
   const runId = Number(process.env.PASSPORT_BETA_PRELIMINARY_RUN_ID);
@@ -549,16 +555,12 @@ async function main() {
   const { chromium } = require('@playwright/test');
   const { login } = require('./audit-beta-credential-lifecycle');
   const { selectOrganization } = require('./beta-demo-resource-helpers');
-  const localProxy = process.env.BETA_LOCAL_PROXY === '1';
   const browser = await chromium.launch({
     headless: process.env.HEADED !== '1',
-    args: localProxy
-      ? ['--host-resolver-rules=MAP beta.elevenidllc.com 127.0.0.1', '--no-proxy-server']
-      : [],
   });
   let context;
   try {
-    const loginContext = await browser.newContext({ ignoreHTTPSErrors: localProxy });
+    const loginContext = await browser.newContext();
     const loginPage = await loginContext.newPage();
     await login(loginPage, email, password);
     const organization = await selectOrganization(loginPage, {
@@ -569,7 +571,6 @@ async function main() {
     await loginContext.close();
     context = await browser.newContext({
       storageState, viewport: VIDEO_SIZE,
-      ignoreHTTPSErrors: localProxy,
       recordVideo: { dir: artifactDir, size: VIDEO_SIZE },
     });
     await hideRecordedPage(context);
@@ -662,4 +663,5 @@ if (require.main === module) {
 }
 
 module.exports = { protectedReceipt, verifyNegativeMedia, readPrivatePlan,
-  validatePreliminary, validateLiveInstance, hideRecordedPage, revealRedactedPage };
+  validatePreliminary, validateLiveInstance, hideRecordedPage, revealRedactedPage,
+  requireDirectBetaTransport };
