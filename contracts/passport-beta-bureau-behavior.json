@@ -36,6 +36,7 @@
     "disposable_gateway_transport": {
       "enabled_by": "PASSPORT_BETA_BUREAU_GATEWAY_CALLBACK_ENABLED=true",
       "exact_url": "http://gateway:8000/v1/passport/webhooks/personalization",
+      "network_proof": "owned private Docker network with the gateway alias unique to the Rust Gateway container; no proxy, custom DNS, or extra host mapping",
       "acceptance": "the same-job authenticated private receipt is recorded only after the signed callback succeeds through Rust Gateway and native issuance"
     },
     "advance_only_after_accepted_callback": true,
