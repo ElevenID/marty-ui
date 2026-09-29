@@ -189,23 +189,33 @@ def test_host_record_uses_os_known_folder_not_programdata_env(monkeypatch) -> No
         "C:/trusted-program-data/ElevenID-Marty-elevenid-beta-passport-fence.pending")
 
 
-def test_wsl_host_record_resolves_windows_known_folder(monkeypatch) -> None:
+def test_wsl_host_record_resolves_windows_known_folder(monkeypatch, tmp_path) -> None:
     monkeypatch.setenv("ProgramData", "C:/forged")
     monkeypatch.setattr(snapshot, "os", SimpleNamespace(
         name="posix", uname=lambda: SimpleNamespace(release="6.6.0-microsoft-standard-WSL2")))
+    powershell = tmp_path / "powershell.exe"
+    wslpath = tmp_path / "wslpath"
+    powershell.touch()
+    wslpath.touch()
+    monkeypatch.setattr(snapshot, "WSL_POWERSHELL", str(powershell))
+    monkeypatch.setattr(snapshot, "WSL_PATH", str(wslpath))
     commands: list[list[str]] = []
 
     def runner(command: list[str]) -> str:
         commands.append(command)
-        return "D:\\SystemData" if command[0] == "powershell.exe" else "/mnt/d/SystemData"
+        return "D:\\SystemData" if command[0] == str(powershell) else "/mnt/d/SystemData"
 
     assert snapshot.host_fence_marker(runner) == snapshot.Path(
         "/mnt/d/SystemData/ElevenID-Marty-elevenid-beta-passport-fence.pending")
-    assert commands[1] == ["wslpath", "-u", "D:\\SystemData"]
+    assert commands[0][0] == str(powershell)
+    assert commands[1] == [str(wslpath), "-u", "D:\\SystemData"]
 
 
-def test_wsl_receipt_path_maps_installer_windows_path(monkeypatch) -> None:
+def test_wsl_receipt_path_maps_installer_windows_path(monkeypatch, tmp_path) -> None:
     monkeypatch.setattr(snapshot, "os", SimpleNamespace(name="posix"))
+    wslpath = tmp_path / "wslpath"
+    wslpath.touch()
+    monkeypatch.setattr(snapshot, "WSL_PATH", str(wslpath))
     commands: list[list[str]] = []
 
     def runner(command: list[str]) -> str:
@@ -214,4 +224,4 @@ def test_wsl_receipt_path_maps_installer_windows_path(monkeypatch) -> None:
 
     assert snapshot.host_receipt_path("D:\\evidence\\fence.json", runner) == snapshot.Path(
         "/mnt/d/evidence/fence.json")
-    assert commands == [["wslpath", "-u", "D:\\evidence\\fence.json"]]
+    assert commands == [[str(wslpath), "-u", "D:\\evidence\\fence.json"]]

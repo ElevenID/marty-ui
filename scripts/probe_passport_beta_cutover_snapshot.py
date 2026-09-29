@@ -32,6 +32,8 @@ except ImportError:
 
 ROOT = Path(__file__).resolve().parents[1]
 VERIFY = ROOT / "scripts/sql/passport-beta-fence-verify.sql"
+WSL_POWERSHELL = "/mnt/c/Windows/System32/WindowsPowerShell/v1.0/powershell.exe"
+WSL_PATH = "/usr/bin/wslpath"
 SHA256 = re.compile(r"[0-9a-f]{64}\Z")
 SHA = re.compile(r"[0-9a-f]{40}\Z")
 DECIMAL = re.compile(r"[0-9]+\Z")
@@ -74,13 +76,15 @@ def host_fence_marker(
     else:
         require("microsoft" in os.uname().release.lower(),
                 "Beta host fence snapshot requires Windows or WSL")
+        require(Path(WSL_POWERSHELL).is_file() and Path(WSL_PATH).is_file(),
+                "Pinned WSL beta host bridge is unavailable")
         win_dir = runner([
-            "powershell.exe", "-NoProfile", "-NonInteractive", "-Command",
+            WSL_POWERSHELL, "-NoProfile", "-NonInteractive", "-Command",
             "[Environment]::GetFolderPath([System.Environment+SpecialFolder]::CommonApplicationData)",
         ])
         require(bool(win_dir) and "\n" not in win_dir and "\r" not in win_dir,
                 "Windows beta host fence record location is ambiguous")
-        linux_dir = runner(["wslpath", "-u", win_dir])
+        linux_dir = runner([WSL_PATH, "-u", win_dir])
         require(bool(linux_dir) and linux_dir.startswith("/")
                 and "\n" not in linux_dir and "\r" not in linux_dir,
                 "WSL beta host fence record location is invalid")
@@ -94,7 +98,8 @@ def host_receipt_path(value: str, runner: Callable[[list[str]], str] = run) -> P
             is not None, "Fence host record receipt path is invalid")
     if os.name == "nt":
         return Path(value)
-    mapped = runner(["wslpath", "-u", value])
+    require(Path(WSL_PATH).is_file(), "Pinned WSL receipt path bridge is unavailable")
+    mapped = runner([WSL_PATH, "-u", value])
     require(bool(mapped) and mapped.startswith("/")
             and "\n" not in mapped and "\r" not in mapped,
             "WSL fence receipt path is invalid")
