@@ -52,6 +52,7 @@ PROTECTED_FILES = (
     "scripts/sql/passport-beta-fence-install.sql",
     "scripts/sql/passport-beta-fence-drain.sql",
     "scripts/sql/passport-beta-fence-verify.sql",
+    "scripts/sql/passport-beta-batch-acl-finalize.sql",
 )
 
 

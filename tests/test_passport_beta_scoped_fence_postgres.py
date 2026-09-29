@@ -21,6 +21,7 @@ SCHEMA = ROOT / "tests/fixtures/passport-beta-fence-schema.sql"
 INSTALL = ROOT / "scripts/sql/passport-beta-fence-install.sql"
 DRAIN = ROOT / "scripts/sql/passport-beta-fence-drain.sql"
 VERIFY = ROOT / "scripts/sql/passport-beta-fence-verify.sql"
+FINALIZE_BATCH_ACL = ROOT / "scripts/sql/passport-beta-batch-acl-finalize.sql"
 POSTGRES_IMAGE = "postgres:15-alpine@sha256:fceb6f86328c36f2438fae3b851b0cc57c4a7e69a58c866d9ce24281f2cf0c9c"
 
 
@@ -57,6 +58,11 @@ def script_args(container: str, path: Path, *, attested: bool = True) -> list[st
             "-c", f"SET marty.passport_beta_expected_system_identifier = '{system_id}'",
             "-c", f"SET marty.passport_beta_expected_database_oid = '{database_oid}'",
         ]
+        if path == FINALIZE_BATCH_ACL:
+            epoch = sql(container, "SELECT epoch FROM passport_cutover.state").strip()
+            target += [
+                "-c", f"SET marty.passport_beta_expected_fence_epoch = '{epoch}'",
+            ]
     return [
         "exec", container, "psql", "-U", "postgres", "-d", "marty",
         "-qAt", "-v", "ON_ERROR_STOP=1", *target,
@@ -120,6 +126,49 @@ def database():
         yield name
     finally:
         docker("stop", name, check=False)
+
+
+def test_batch_acl_finalizer_requires_exact_fence_and_grants_app_access(database: str):
+    installed = script(database, INSTALL)
+    assert installed.returncode == 0, installed.stderr
+    sql(database, """
+        CREATE TABLE issuance_service.passport_beta_batch_intents (
+            batch_id uuid PRIMARY KEY
+        )
+    """)
+    missing_target = script(database, FINALIZE_BATCH_ACL, attested=False)
+    assert missing_target.returncode != 0
+    assert "lacks exact fenced beta target" in missing_target.stderr
+    assert sql(database, """
+        SELECT pg_get_userbyid(relowner)
+        FROM pg_class
+        WHERE oid='issuance_service.passport_beta_batch_intents'::regclass
+    """).strip() == "postgres"
+
+    wrong_epoch = script_args(database, FINALIZE_BATCH_ACL)
+    wrong_epoch = [
+        arg.replace("SET marty.passport_beta_expected_fence_epoch = '",
+                    "SET marty.passport_beta_expected_fence_epoch = '0")
+        if arg.startswith("SET marty.passport_beta_expected_fence_epoch = '") else arg
+        for arg in wrong_epoch
+    ]
+    refused = docker(*wrong_epoch, check=False)
+    assert refused.returncode != 0
+    assert "lacks exact fenced beta target" in refused.stderr
+
+    finalized = script(database, FINALIZE_BATCH_ACL)
+    assert finalized.returncode == 0, finalized.stderr
+    assert sql(database, """
+        SELECT pg_get_userbyid(relowner) || ':' ||
+               has_table_privilege('marty',oid,'SELECT') || ':' ||
+               has_table_privilege('marty',oid,'INSERT') || ':' ||
+               has_table_privilege('marty',oid,'UPDATE') || ':' ||
+               has_table_privilege('marty',oid,'DELETE') || ':' ||
+               has_table_privilege('marty',oid,'TRUNCATE,TRIGGER')
+        FROM pg_class
+        WHERE oid='issuance_service.passport_beta_batch_intents'::regclass
+    """).strip() == "marty_passport_fence_owner:true:true:true:true:false"
+    assert script(database, VERIFY).returncode == 0
 
 
 def test_scoped_fence_and_drain(database: str):
@@ -321,10 +370,11 @@ def test_one_shot_migration_role_preserves_fence_at_rest(
     mutation_marker.write_text("test", encoding="utf-8")
     fence_marker.write_text("test", encoding="utf-8")
     lease_file = ROOT / "scripts/beta-passport-migration-lease.ps1"
+    escaped_lease_file = str(lease_file).replace("'", "''")
     def lease(verb: str) -> None:
         code = f"""
             $ErrorActionPreference = 'Stop'
-            . '{str(lease_file).replace("'", "''")}'
+            . '{escaped_lease_file}'
             function Get-BetaMutationMarkerPath {{ return $env:BETA_TEST_MUTATION_MARKER }}
             function Get-BetaPassportFenceMarkerPath {{ return $env:BETA_TEST_FENCE_MARKER }}
             {verb}-BetaPassportMigrationLease `
