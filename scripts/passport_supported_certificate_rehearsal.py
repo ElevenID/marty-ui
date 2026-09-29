@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import argparse
 from datetime import datetime, timedelta, timezone
+import hashlib
 import json
 import os
 from pathlib import Path
@@ -16,7 +17,9 @@ import re
 from typing import Callable
 
 if __package__:
-    from .passport_supported_disposable_ceremony import bootstrap_certificate_chain
+    from .passport_supported_disposable_ceremony import (
+        bootstrap_certificate_chain, issuer_did,
+    )
     from .passport_supported_infra_rehearsal import (
         INFRA, MIN_JOB_BUDGET, MIN_TEARDOWN_LEASE, ROOT,
         _accept_bootstrap_files, _bootstrap_args, _compose_args,
@@ -30,7 +33,9 @@ if __package__:
         stage_disposable_inputs, verify_plan_release, verify_pre_mutation,
     )
 else:
-    from passport_supported_disposable_ceremony import bootstrap_certificate_chain
+    from passport_supported_disposable_ceremony import (
+        bootstrap_certificate_chain, issuer_did,
+    )
     from passport_supported_infra_rehearsal import (
         INFRA, MIN_JOB_BUDGET, MIN_TEARDOWN_LEASE, ROOT,
         _accept_bootstrap_files, _bootstrap_args, _compose_args,
@@ -134,9 +139,14 @@ def rehearse_certificates(
             or not isinstance(certificate.get("evidence"), dict)):
             raise ProducerError("Disposable certificate setup evidence is invalid")
         evidence = certificate["evidence"]
+        expected_did_hash = hashlib.sha256(issuer_did(gateway_port).encode()).hexdigest()
         if (any(type(evidence.get(field)) is not str
                 or SHA256.fullmatch(evidence[field]) is None
                 for field in CERTIFICATE_HASHES)
+            or evidence.get("csca_certificate_id") != f"csca-disposable-{plan['run_id']}"
+            or evidence["csca_certificate_sha256"] == evidence["dsc_certificate_sha256"]
+            or evidence["csca_issuer_did_sha256"] != expected_did_hash
+            or evidence["dsc_issuer_did_sha256"] != expected_did_hash
             or evidence.get("chain_verified_by") != "openssl-x509-strict"
             or type(evidence.get("csca_http_status")) is not int
             or evidence["csca_http_status"] != 200

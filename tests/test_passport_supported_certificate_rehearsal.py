@@ -1,6 +1,7 @@
 """Protected certificate setup is scoped, exercised, and always cleaned."""
 
 from datetime import datetime, timedelta, timezone
+import hashlib
 import json
 from pathlib import Path
 import subprocess
@@ -10,6 +11,7 @@ import uuid
 import pytest
 import yaml
 
+from services.passport_disposable_identity import issuer_did
 from scripts.passport_supported_certificate_rehearsal import (
     WORKFLOW_NAME, rehearse_certificates,
 )
@@ -49,14 +51,16 @@ def plan(surface: str = "selfhost") -> dict:
 
 
 def setup_report(selected: dict) -> dict:
+    did_hash = hashlib.sha256(issuer_did(29877).encode()).hexdigest()
     return {
         "schema": "marty.passport-supported-disposable-certificate-setup/v1",
         "status": "setup_only", "gateway_operator_authorization_verified": False,
         "project": selected["project"], "source_commit": SOURCE,
-        "evidence": {"csca_certificate_sha256": "1" * 64,
+        "evidence": {"csca_certificate_id": f"csca-disposable-{selected['run_id']}",
+                     "csca_certificate_sha256": "1" * 64,
                      "dsc_certificate_sha256": "2" * 64,
-                     "csca_issuer_did_sha256": "3" * 64,
-                     "dsc_issuer_did_sha256": "4" * 64,
+                     "csca_issuer_did_sha256": did_hash,
+                     "dsc_issuer_did_sha256": did_hash,
                      "csca_http_status": 200, "dsc_http_status": 200,
                      "chain_verified_by": "openssl-x509-strict"},
     }
@@ -156,6 +160,10 @@ def test_failed_certificate_setup_forces_teardown(tmp_path: Path) -> None:
     {"csca_certificate_sha256": "not-a-hash"},
     {"chain_verified_by": "unverified"},
     {"dsc_http_status": 500},
+    {"csca_certificate_id": "csca-disposable-previous-run"},
+    {"csca_issuer_did_sha256": "3" * 64},
+    {"dsc_issuer_did_sha256": "4" * 64},
+    {"dsc_certificate_sha256": "1" * 64},
 ])
 def test_invalid_certificate_proof_forces_teardown(
     tmp_path: Path, invalid_evidence: dict,
