@@ -534,6 +534,18 @@ def main() -> int:
         require(args.output.parent.is_dir() and not args.output.parent.is_symlink()
                 and not args.output.is_symlink(),
                 "Preliminary output directory is invalid")
+        output_path = args.output.resolve()
+        protected_inputs = (
+            args.acceptance_report_file,
+            args.private_demo_handoff_file,
+            args.selected_flow_plan_file,
+            Path(__file__).resolve().parents[1] / "contracts"
+            / "passport-beta-synthetic-document.json",
+        )
+        require(all(output_path != source.resolve() for source in protected_inputs)
+                and not output_path.is_relative_to(args.artifact_dir.resolve())
+                and not output_path.is_relative_to(args.negative_media_dir.resolve()),
+                "Preliminary output overlaps protected evidence")
         if args.output.exists():
             require(args.output.is_file(), "Preliminary output path is invalid")
             args.output.unlink()

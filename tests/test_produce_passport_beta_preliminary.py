@@ -422,6 +422,31 @@ def test_qualified_cli_writes_only_after_complete_join(tmp_path: Path) -> None:
     assert not output_path.exists()
 
 
+def test_qualified_cli_preserves_private_handoff_on_output_collision(tmp_path: Path) -> None:
+    report, private, selected_plan, artifacts, media = qualification_fixture(tmp_path)
+    report_path = tmp_path / "acceptance.json"
+    private_path = tmp_path / "private.json"
+    selected_path = tmp_path / "selected.json"
+    for path, value in ((report_path, report), (private_path, private),
+                        (selected_path, selected_plan)):
+        write_json(path, value)
+    before = private_path.read_bytes()
+    environment = os.environ | {"PASSPORT_ACCEPTANCE_API_KEY": "k" * 32}
+    command = [
+        sys.executable, "scripts/produce_passport_beta_preliminary.py",
+        "--artifact-dir", str(artifacts),
+        "--acceptance-report-file", str(report_path),
+        "--private-demo-handoff-file", str(private_path),
+        "--selected-flow-plan-file", str(selected_path),
+        "--negative-media-dir", str(media),
+        "--output", str(private_path),
+    ]
+    completed = subprocess.run(command, cwd=Path(__file__).resolve().parents[1],
+                               env=environment, capture_output=True, text=True, check=False)
+    assert completed.returncode != 0
+    assert private_path.read_bytes() == before
+
+
 @pytest.mark.parametrize("change", [
     lambda args: args[2]["physical_document"]["applicant"].update(given_name="REAL"),
     lambda args: args[3].joinpath("stack-manifest.json").write_text("{}"),
