@@ -1,11 +1,12 @@
 {
-  "schema_version": 1,
+  "schema_version": 2,
   "draft_status_behavior": "existence_and_tenant_binding_required",
   "activation_status_behavior": "all_references_active",
   "identity_behavior": "exact_id_kind_and_tenant",
   "delivery_destination_tenant_exception": "system_owned_only",
   "presentation_policy_behavior": "validate_each_direct_credential_template_requirement",
   "template_issuer_behavior": "public_did_format_purpose_algorithm_and_key_bound",
+  "physical_document_template": {"format":"ICAO_EMRTD","issuance_protocol":"PHYSICAL_DOCUMENT","key_purpose":"x509_doc_signer"},
   "template_cache_behavior": "resolve_each_template_once_per_validation",
   "catalog_active_statuses": ["active", "enabled"],
   "credential_active_statuses": ["active"],
@@ -19,7 +20,8 @@
     "w3c_vcdm_v2_jwt_vc": "jwt_vc_json",
     "json_ld": "ldp_vc",
     "json-ld": "ldp_vc",
-    "mdoc": "mso_mdoc"
+    "mdoc": "mso_mdoc",
+    "icao_emrtd": "ICAO_EMRTD"
   },
   "failure_behavior": "fail_closed"
 }

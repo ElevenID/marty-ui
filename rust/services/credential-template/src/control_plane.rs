@@ -436,6 +436,7 @@ fn key_purpose(credential_format: &str) -> &'static str {
     {
         "mso_mdoc" | "mdoc" | "zk_mdoc" => "mdoc_dsc",
         "vds_nc" | "vdsnc" => "vdsnc_signing",
+        "icao_emrtd" => "x509_doc_signer",
         _ => "vc_jwt_issuer",
     }
 }
@@ -607,6 +608,7 @@ mod tests {
 
     #[test]
     fn signing_identity_rejects_mismatches_and_private_jwk_material() {
+        assert_eq!(key_purpose("icao_emrtd"), "x509_doc_signer");
         let valid = fixture()["signing_identity"].clone();
         assert_eq!(
             issuer_identity(&valid, "org-1", "did:web:issuer.example", "vc_jwt_issuer")

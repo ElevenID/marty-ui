@@ -1,5 +1,5 @@
 {
-  "schema_version": 3,
+  "schema_version": 4,
   "required_providers": [
     "tenant_membership",
     "credential_template",
@@ -14,7 +14,7 @@
     "application_template": {
       "method": "GET",
       "path": "v1/application-templates/{id}",
-      "headers": ["x-api-key"]
+      "headers": ["x-api-key", "x-organization-id"]
     },
     "delivery_destination": {
       "method": "GET",

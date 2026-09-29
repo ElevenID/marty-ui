@@ -153,6 +153,28 @@ def exercise(
     verify: Callable[[str, str], tuple[str, str]] = openssl_verify,
 ) -> dict[str, Any]:
     validate_sessions(csca_session, dsc_session)
+    return exercise_with_authorities(
+        plan, csca_session, dsc_session, request=request, verify=verify,
+    )
+
+
+def exercise_with_authorities(
+    plan: dict[str, Any],
+    csca_authority: str,
+    dsc_authority: str,
+    *,
+    request: Callable[[str, dict[str, Any], str], tuple[int, dict[str, Any]]],
+    verify: Callable[[str, str], tuple[str, str]] = openssl_verify,
+) -> dict[str, Any]:
+    """Check a chain from two distinct authorities; transport sets their policy.
+
+    The public beta caller first validates human sessions. An isolated
+    disposable setup may use project-only operator credentials directly with
+    Signing Keys, but that does not prove Gateway authorization.
+    """
+    if (not csca_authority or not dsc_authority
+            or csca_authority == dsc_authority):
+        raise ChainProbeError("Distinct certificate authorities are required")
     validate_plan(plan)
     organization_id = plan["organization_id"]
     csca = plan["csca"]
@@ -163,12 +185,12 @@ def exercise(
     csca_body = {**csca, "organization_id": organization_id}
     dsc_body = {**dsc, "organization_id": organization_id}
     csca_status, csca_result = request(
-        "/v1/signing-keys/issuer-identities/csca-self-signed-certificate", csca_body, csca_session,
+        "/v1/signing-keys/issuer-identities/csca-self-signed-certificate", csca_body, csca_authority,
     )
     if csca_status != 200 or csca_result.get("status") != "issued" or csca_result.get("certificate_id") != certificate_id or csca_result.get("issuer_did") != csca_did:
         raise ChainProbeError("Governed CSCA ceremony did not issue the selected certificate")
     dsc_status, dsc_result = request(
-        "/v1/signing-keys/issuer-identities/dsc-certificate", dsc_body, dsc_session,
+        "/v1/signing-keys/issuer-identities/dsc-certificate", dsc_body, dsc_authority,
     )
     if dsc_status != 200 or dsc_result.get("status") != "issued" or dsc_result.get("dsc_issuer_did") != dsc_did or dsc_result.get("csca_issuer_did") != csca_did:
         raise ChainProbeError("Governed DSC ceremony did not issue the selected chain")

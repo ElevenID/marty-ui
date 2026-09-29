@@ -19,14 +19,16 @@ import pytest
 import yaml
 
 from scripts import passport_supported_provisioning_producer as producer
-from scripts.check_passport_supported_rollback_model import (
+from scripts.check_passport_supported_rust_model import (
     DISPOSABLE_SERVICES, render_model, validate_planned_model,
 )
 from scripts.passport_supported_infra_images import qualified_images
+from scripts.stage_passport_disposable_tls import TLS_FILES, stage_tls
 from scripts.passport_supported_provisioning_producer import (
-    ProducerError, WORKFLOW_REF, collect_record, destroy_disposable_project,
+    INFRA_WORKFLOW_REF, ProducerError, WORKFLOW_REF, collect_record, destroy_disposable_project,
     destroy_partial_disposable_project,
-    issue_disposable_api_key, stage_disposable_inputs,
+    issue_disposable_api_key, issue_disposable_operator_key,
+    stage_disposable_inputs,
     verify_plan_release,
 )
 
@@ -49,6 +51,32 @@ ENV = {
 }
 
 
+def test_disposable_tls_identities_are_ca_bound_and_short_lived(tmp_path: Path) -> None:
+    stage_tls(tmp_path)
+    assert {path.name for path in tmp_path.iterdir()} == TLS_FILES
+    ca = tmp_path / "workload_identity_ca_cert"
+    for certificate, verification in (
+        ("passport_edge_tls_cert", ["-verify_hostname", "localhost"]),
+        ("flow_workload_server_cert", ["-verify_hostname", "flow"]),
+        ("pp_workload_server_cert", ["-verify_hostname", "presentation-policy"]),
+        ("flow_workload_client_cert", ["-purpose", "sslclient"]),
+    ):
+        result = subprocess.run(
+            ["openssl", "verify", "-CAfile", str(ca), *verification,
+             str(tmp_path / certificate)], capture_output=True, text=True, check=False,
+        )
+        assert result.returncode == 0, result.stderr
+    for certificate in ("passport_edge_tls_cert", "flow_workload_client_cert"):
+        result = subprocess.run(
+            ["openssl", "x509", "-in", str(tmp_path / certificate),
+             "-noout", "-dates", "-ext", "subjectAltName"],
+            capture_output=True, text=True, check=True,
+        )
+        assert "notAfter=" in result.stdout
+        assert ("DNS:localhost" if certificate == "passport_edge_tls_cert"
+                else "URI:spiffe://marty.internal/service/flow") in result.stdout
+
+
 def source_plan(tmp_path: Path) -> tuple[Path, Path, dict]:
     manifest = tmp_path / "stack-manifest.json"
     manifest.write_text('{"schema":"marty.stack/v1"}', encoding="utf-8")
@@ -57,8 +85,8 @@ def source_plan(tmp_path: Path) -> tuple[Path, Path, dict]:
         "stack_manifest_sha256": hashlib.sha256(manifest.read_bytes()).hexdigest(),
         "services_reference": SERVICES,
         "migrations_reference": "migrations@sha256:" + "c" * 64,
-        "legacy_reference": "legacy@sha256:" + "d" * 64,
-        "infra_images": {"postgres": "postgres@sha256:" + "e" * 64},
+        "infra_images": {"postgres": "postgres@sha256:" + "e" * 64,
+                         "openbao": "openbao@sha256:" + "f" * 64},
     }
     plan = {
         "schema": "marty.passport-supported-provisioning-plan/v1",
@@ -76,7 +104,7 @@ def source_plan(tmp_path: Path) -> tuple[Path, Path, dict]:
 def verify(path: Path, manifest: Path, plan: dict, **kwargs) -> dict:
     inputs = {key: plan[key] for key in (
         "source_commit", "stack_manifest_sha256", "services_reference",
-        "migrations_reference", "legacy_reference", "infra_images",
+        "migrations_reference", "infra_images",
     )}
     return verify_plan_release(
         path, manifest, "123456", ENV,
@@ -87,11 +115,31 @@ def verify(path: Path, manifest: Path, plan: dict, **kwargs) -> dict:
     )
 
 
+def test_infra_rehearsal_requires_its_exact_protected_workflow(tmp_path: Path) -> None:
+    path, manifest, plan = source_plan(tmp_path)
+    official = {key: plan[key] for key in (
+        "source_commit", "stack_manifest_sha256", "services_reference",
+        "migrations_reference", "infra_images",
+    )}
+    gates = {"attest": lambda *args: True,
+             "release": lambda *args: official,
+             "checkout": lambda: (SOURCE, False), "now": NOW}
+    infra_env = {**ENV, "GITHUB_WORKFLOW_REF": INFRA_WORKFLOW_REF}
+    assert verify_plan_release(path, manifest, "123456", infra_env,
+                               workflow_ref=INFRA_WORKFLOW_REF, **gates) == plan
+    with pytest.raises(ProducerError, match="workflow identity"):
+        verify_plan_release(path, manifest, "123456", ENV,
+                            workflow_ref=INFRA_WORKFLOW_REF, **gates)
+    with pytest.raises(ProducerError, match="not allowed"):
+        verify_plan_release(path, manifest, "123456", infra_env,
+                            workflow_ref="unreviewed-workflow", **gates)
+
+
 def partial_teardown_context(tmp_path: Path) -> tuple[tuple, dict, dict]:
     path, manifest, plan = source_plan(tmp_path)
     official = {key: plan[key] for key in (
         "source_commit", "stack_manifest_sha256", "services_reference",
-        "migrations_reference", "legacy_reference", "infra_images",
+        "migrations_reference", "infra_images",
     )}
     gates = {"now": NOW, "attest": lambda *args: True,
              "release": lambda *args: official,
@@ -109,7 +157,6 @@ def input_plan() -> dict:
         "expires_at": (NOW + timedelta(minutes=55)).isoformat(),
         "services_reference": SERVICES,
         "migrations_reference": "ghcr.io/elevenid/marty-ui-oss/migrations@sha256:" + "c" * 64,
-        "legacy_reference": "ghcr.io/elevenid/marty-credentials/issuance@sha256:" + "d" * 64,
         "infra_images": qualified_images(verify_registry=False),
         "owner_labels": LABELS,
     }
@@ -130,7 +177,8 @@ def test_disposable_inputs_are_fresh_private_and_plan_bound() -> None:
             "dsc_issue_gateway_key", "csca_issue_gateway_key",
             "issuance_api_key", "callback_signer_api_key", "grpc_service_token",
             "bureau_database_url", "token_hmac_key", "integration_secret_master_key",
-        }
+            "flow_webhook_secret", "flow_application_event_hmac_key",
+        } | TLS_FILES
         assert len((secret_dir / "bao_root_token").read_text(encoding="ascii")) == 64
         ceremony_keys = [(secret_dir / name).read_text(encoding="ascii") for name in (
             "dsc_issue_gateway_key", "csca_issue_gateway_key")]
@@ -151,9 +199,7 @@ def test_disposable_inputs_are_fresh_private_and_plan_bound() -> None:
         assert env["PASSPORT_ACCEPTANCE_GATEWAY_PORT"] == "29876"
         assert env["PASSPORT_ACCEPTANCE_EXPIRES_AT"] == plan["expires_at"]
         assert env["PASSPORT_ACCEPTANCE_SECRET_DIR"] == secret_dir.as_posix()
-        assert env["PASSPORT_ACCEPTANCE_DATABASE_URL"] == (
-            f"postgresql+asyncpg://marty:{password}@postgres:5432/marty"
-        )
+        assert "PASSPORT_ACCEPTANCE_DATABASE_URL" not in env
         assert env["MARTY_SERVICES_IMAGE"] == SERVICES
         if os.name == "posix":
             assert stat.S_IMODE(root.stat().st_mode) == 0o700
@@ -242,6 +288,8 @@ def test_staged_input_cleanup_includes_post_bootstrap_secrets() -> None:
     for name in ("bao_token", "callback_signer_bao_token",
                  "passport_acceptance_api_key"):
         (root / "secrets" / name).write_text("disposable", encoding="ascii")
+    for name in (".bao_token.Abc123", ".callback_signer_bao_token.Xyz789"):
+        (root / "secrets" / name).write_text("partial-token", encoding="ascii")
     producer._remove_staged_inputs(root)
     assert not root.exists()
 
@@ -341,7 +389,7 @@ def test_record_assembly_uses_live_ids_then_requires_ownership(
 
     def ownership(record, surface, now, runner):
         observed.append((surface, now, runner))
-        return {"live_ownership_verified": True, "rollback_accepted": False}
+        return {"live_ownership_verified": True}
 
     record = collect_record(path, plan, "987654", tmp_path, NOW, docker,
                             ownership=ownership)
@@ -374,7 +422,7 @@ def test_disposable_api_key_is_extracted_only_after_live_ownership(
 
     def ownership(*args):
         assert calls == []
-        return {"live_ownership_verified": True, "rollback_accepted": False}
+        return {"live_ownership_verified": True}
 
     key = issue_disposable_api_key(record, "base", NOW,
                                    executor=executor, ownership=ownership)
@@ -396,6 +444,49 @@ def test_disposable_api_key_is_extracted_only_after_live_ownership(
     assert len(calls) == 3
 
 
+def test_disposable_operator_key_has_separate_private_output_and_revoke_on_failure(
+    tmp_path: Path,
+) -> None:
+    secrets = tmp_path / "secrets"
+    secrets.mkdir(mode=0o700)
+    record = {"disposable_root": str(tmp_path),
+              "containers": {"organization": "e" * 64}}
+    calls: list[list[str]] = []
+
+    def executor(args: list[str], output: object) -> bool:
+        calls.append(args)
+        if args[-2:] == ["cat", producer.CONTAINER_OPERATOR_KEY]:
+            output.write(b"mk_test_" + b"b" * 43 + b"\n")
+        return True
+
+    key = issue_disposable_operator_key(
+        record, "base", NOW, executor=executor,
+        ownership=lambda *args: {"live_ownership_verified": True},
+    )
+    assert key == secrets / "passport_acceptance_operator_api_key"
+    assert key.read_bytes() == b"mk_test_" + b"b" * 43 + b"\n"
+    assert calls[0][-2:] == [producer.KEY_COMMAND, "--operator"]
+    assert calls[1][-2:] == ["cat", producer.CONTAINER_OPERATOR_KEY]
+    assert calls[2][-3:] == ["rm", "-f", producer.CONTAINER_OPERATOR_KEY]
+
+    key.unlink()
+    calls.clear()
+
+    def failed_extraction(args: list[str], output: object) -> bool:
+        calls.append(args)
+        return args[-2:] != ["cat", producer.CONTAINER_OPERATOR_KEY]
+
+    with pytest.raises(ProducerError, match="key extraction failed"):
+        issue_disposable_operator_key(
+            record, "base", NOW, executor=failed_extraction,
+            ownership=lambda *args: {"live_ownership_verified": True},
+            teardown=lambda *args: True,
+        )
+    assert calls[-2][-1] == "--revoke-run"
+    assert calls[-1][-3:] == ["rm", "-f", producer.CONTAINER_OPERATOR_KEY]
+    assert not key.exists()
+
+
 def test_disposable_api_key_failure_erases_container_copy_and_preserves_existing_file(
     tmp_path: Path,
 ) -> None:
@@ -412,7 +503,7 @@ def test_disposable_api_key_failure_erases_container_copy_and_preserves_existing
         return True
 
     def ownership(*args):
-        return {"live_ownership_verified": True, "rollback_accepted": False}
+        return {"live_ownership_verified": True}
     with pytest.raises(ProducerError, match="key output is invalid"):
         issue_disposable_api_key(record, "base", NOW,
                                  executor=executor, ownership=ownership,
@@ -445,8 +536,7 @@ def test_failed_issuer_still_erases_possible_container_output(tmp_path: Path) ->
         issue_disposable_api_key(
             record, "base", NOW, executor=executor,
             teardown=lambda *args: True,
-            ownership=lambda *args: {"live_ownership_verified": True,
-                                     "rollback_accepted": False})
+            ownership=lambda *args: {"live_ownership_verified": True})
     assert len(calls) == 3
     assert calls[-2][-1] == "--revoke-run"
     assert calls[-1][-3:] == ["rm", "-f", "/app/data/passport-acceptance-api-key"]
@@ -469,8 +559,7 @@ def test_uncertain_issuer_requires_proven_project_teardown(tmp_path: Path) -> No
     with pytest.raises(ProducerError, match="teardown is unverified"):
         issue_disposable_api_key(
             record, "base", NOW, executor=executor, teardown=teardown,
-            ownership=lambda *args: {"live_ownership_verified": True,
-                                     "rollback_accepted": False})
+            ownership=lambda *args: {"live_ownership_verified": True})
     assert len(observed) == 1
 
 
@@ -720,6 +809,220 @@ def test_partial_teardown_fails_closed_before_mutating_unknown_resource(
         destroy_partial_disposable_project(*arguments, inspector, **gates)
 
 
+def test_partial_teardown_recognizes_interrupted_openbao_bootstrap(
+    tmp_path: Path,
+) -> None:
+    arguments, plan, gates = partial_teardown_context(tmp_path)
+    project = plan["project"]
+    container = "1" * 64
+    network = "2" * 64
+    network_name = project + "_private"
+    root = Path(tempfile.gettempdir()) / project
+    source = Path(__file__).resolve().parents[1]
+    labels = {**plan["owner_labels"], "com.docker.compose.project": project,
+              "com.docker.compose.service": "passport-openbao-bootstrap"}
+    mounts = [
+        {"Type": "bind", "Source": str(path), "Destination": destination,
+         "RW": writable}
+        for path, destination, writable in (
+            (root / "secrets" / "bao_root_token", "/run/secrets/bao_root_token", False),
+            (root / "bootstrap-output", "/work/secrets", True),
+            (source / "scripts/passport_supported_openbao_bootstrap.sh",
+             "/scripts/passport_supported_openbao_bootstrap.sh", False),
+            (source / "docker/openbao-init.sh", "/scripts/openbao-init.sh", False),
+        )
+    ]
+    present = {"container": True, "network": True}
+    state = {"image": plan["infra_images"]["openbao"],
+             "name": f"/{project}-passport-openbao-bootstrap-1",
+             "mounts": mounts, "attachments": {network_name: {"NetworkID": network}}}
+    calls = []
+
+    def inspector(args: list[str]) -> str:
+        if args[:2] == ["container", "inspect"]:
+                return json.dumps([{"Id": container, "Name": state["name"],
+                                    "Config": {"Image": state["image"], "Labels": labels},
+                                    "HostConfig": {"NetworkMode": network_name},
+                                    "State": {"Status": "running"},
+                                    "NetworkSettings": {"Networks": state["attachments"]},
+                                "Mounts": state["mounts"]}])
+        if args[:2] == ["network", "inspect"]:
+            return json.dumps([{"Id": network, "Name": network_name,
+                                "Driver": "bridge", "Internal": True,
+                                "Containers": {container: {}}, "Labels": labels}])
+        if args[0] == "ps":
+            return container if present["container"] else ""
+        if args[:2] == ["network", "ls"]:
+            return network if present["network"] else ""
+        if args[:2] == ["volume", "ls"]:
+            return ""
+        raise AssertionError(args)
+
+    def executor(args: list[str], output: object) -> bool:
+        calls.append(args)
+        if args[:2] == ["container", "rm"]:
+            present["container"] = False
+        elif args[:2] == ["network", "rm"]:
+            present["network"] = False
+        return True
+
+    for field, bad in (
+        ("image", plan["services_reference"]),
+        ("name", f"/{project}-passport-openbao-bootstrap-random"),
+        ("mounts", mounts[:-1]),
+        ("attachments", {}),
+    ):
+        original = state[field]
+        state[field] = bad
+        assert not destroy_partial_disposable_project(
+            *arguments, inspector, executor, **gates), field
+        assert calls == [], field
+        state[field] = original
+
+    assert destroy_partial_disposable_project(
+        *arguments, inspector, executor, **gates)
+    assert calls == [
+        ["container", "rm", "-f", container],
+        ["network", "rm", network],
+    ]
+
+
+@pytest.mark.parametrize("helper_service,ceremony", [
+    ("passport-certificate-bootstrap", False),
+    ("passport-certificate-bootstrap", True),
+    ("passport-bureau-poll", False),
+])
+def test_partial_teardown_recognizes_interrupted_certificate_helper(
+    tmp_path: Path, helper_service: str, ceremony: bool,
+) -> None:
+    from scripts.check_passport_supported_compose_ownership import _expected_mounts
+
+    arguments, plan, gates = partial_teardown_context(tmp_path)
+    workflow_ref = (producer.CERTIFICATE_WORKFLOW_REF if ceremony
+                    else producer.WORKFLOW_REF)
+    if ceremony or helper_service == "passport-bureau-poll":
+        plan["surface"] = "selfhost"
+        plan["project"] = plan["project"].replace("-base-", "-selfhost-")
+        arguments[0].write_text(json.dumps(plan), encoding="utf-8")
+    if ceremony:
+        arguments = (*arguments[:3], {
+            **arguments[3], "GITHUB_WORKFLOW_REF": producer.CERTIFICATE_WORKFLOW_REF,
+        })
+    project = plan["project"]
+    parent_service = ("signing-keys" if helper_service ==
+                      "passport-certificate-bootstrap" else "passport-beta-bureau")
+    parent, helper, network = "1" * 64, "2" * 64, "3" * 64
+    network_name = project + "_private"
+    callback_network = "4" * 64
+    callback_name = project + "_callback_signing"
+    parent_networks = {network_name: {"NetworkID": network}}
+    if parent_service == "passport-beta-bureau":
+        parent_networks[callback_name] = {"NetworkID": callback_network}
+    labels = {**plan["owner_labels"], "com.docker.compose.project": project}
+    signer_mounts = [
+        {"Type": kind, "Source": source, "Destination": destination, "RW": writable}
+        for kind, source, destination, writable in _expected_mounts(
+            parent_service, project, Path(tempfile.gettempdir()) / project,
+            plan["surface"], ceremony=ceremony)
+    ]
+    state = {
+        "image": plan["migrations_reference"],
+        "name": f"/{project}-{helper_service}-1",
+        "network_mode": f"container:{parent}",
+        "port_bindings": None,
+        "attachments": {},
+        "mounts": [],
+    }
+    present = {"containers": True, "network": True}
+    calls: list[list[str]] = []
+
+    def inspector(args: list[str]) -> str:
+        if args[:2] == ["container", "inspect"]:
+            identifier = args[2]
+            if identifier == parent:
+                return json.dumps([{
+                    "Id": parent, "Name": f"/{project}-{parent_service}-1",
+                    "Config": {"Image": plan["services_reference"], "Labels": {
+                        **labels, "com.docker.compose.service": parent_service}},
+                    "HostConfig": {"NetworkMode": network_name},
+                    "State": {"Status": "running"},
+                    "NetworkSettings": {"Networks": parent_networks},
+                    "Mounts": signer_mounts,
+                }])
+            assert identifier == helper
+            return json.dumps([{
+                "Id": helper, "Name": state["name"],
+                "Config": {"Image": state["image"], "Labels": {
+                    **labels, "com.docker.compose.service": helper_service}},
+                "HostConfig": {"NetworkMode": state["network_mode"],
+                               "PortBindings": state["port_bindings"]},
+                "NetworkSettings": {"Networks": state["attachments"]},
+                "Mounts": state["mounts"],
+            }])
+        if args[:2] == ["network", "inspect"]:
+            selected_network = args[2]
+            selected_name = (network_name if selected_network == network
+                             else callback_name)
+            assert selected_network in {network, callback_network}
+            return json.dumps([{
+                "Id": selected_network, "Name": selected_name, "Driver": "bridge",
+                "Internal": True, "Containers": {parent: {}}, "Labels": labels,
+            }])
+        if args[0] == "ps":
+            return f"{parent}\n{helper}" if present["containers"] else ""
+        if args[:2] == ["network", "ls"]:
+            return ("\n".join([network, callback_network]
+                             if parent_service == "passport-beta-bureau" else [network])
+                    if present["network"] else "")
+        if args[:2] == ["volume", "ls"]:
+            return ""
+        raise AssertionError(args)
+
+    def executor(args: list[str], output: object) -> bool:
+        calls.append(args)
+        if args[:2] == ["container", "rm"]:
+            present["containers"] = False
+        elif args[:2] == ["network", "rm"]:
+            present["network"] = False
+        return True
+
+    for field, bad in (
+        ("image", plan["services_reference"]),
+        ("name", f"/{project}-{helper_service}-random"),
+        ("network_mode", "bridge"),
+        ("port_bindings", {"8020/tcp": [{"HostPort": "8020"}]}),
+        ("attachments", {network_name: {"NetworkID": network}}),
+        ("mounts", [{"Type": "bind", "Source": str(tmp_path),
+                     "Destination": "/unowned", "RW": True}]),
+    ):
+        original = state[field]
+        state[field] = bad
+        assert not destroy_partial_disposable_project(
+            *arguments, inspector, executor, workflow_ref=workflow_ref,
+            **gates), field
+        assert calls == [], field
+        state[field] = original
+
+    if ceremony:
+        # The protected producer can now be interrupted during the ceremony.
+        # It must accept either exact mount set while cleaning the same project.
+        original_mounts = signer_mounts[:]
+        signer_mounts.pop()
+        assert not destroy_partial_disposable_project(
+            *arguments, inspector, executor,
+            workflow_ref=producer.CERTIFICATE_WORKFLOW_REF, **gates)
+        assert calls == []
+        signer_mounts[:] = original_mounts
+
+    assert destroy_partial_disposable_project(
+        *arguments, inspector, executor, workflow_ref=workflow_ref, **gates)
+    assert calls == [
+        ["container", "rm", "-f", parent, helper],
+        ["network", "rm", *([network, callback_network]
+                            if parent_service == "passport-beta-bureau" else [network])],
+    ]
+
+
 def test_host_key_unlink_failure_still_forces_teardown(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -748,12 +1051,11 @@ def test_host_key_unlink_failure_still_forces_teardown(
     with pytest.raises(OSError, match="host unlink failed"):
         issue_disposable_api_key(
             record, "base", NOW, executor=executor, teardown=teardown,
-            ownership=lambda *args: {"live_ownership_verified": True,
-                                     "rollback_accepted": False})
+            ownership=lambda *args: {"live_ownership_verified": True})
     assert torn_down == [True]
 
 
-def test_producer_workflow_is_protected_and_cannot_mutate_docker() -> None:
+def test_producer_workflow_is_protected_and_scoped() -> None:
     workflow = (Path(__file__).resolve().parents[1] / ".github/workflows"
                 / "passport-supported-provisioning-producer.yml")
     value = yaml.safe_load(workflow.read_text(encoding="utf-8"))
@@ -763,11 +1065,11 @@ def test_producer_workflow_is_protected_and_cannot_mutate_docker() -> None:
     assert job["if"] == "github.ref == 'refs/heads/main'"
     assert job["runs-on"] == ["self-hosted", "linux", "x64", "canvas-oss-wsl2"]
     assert job["environment"] == "beta-lifecycle"
-    assert value["permissions"] == {"actions": "read", "contents": "read",
-                                    "packages": "read"}
+    assert value["permissions"] == {"actions": "read", "attestations": "read",
+                                    "contents": "read", "packages": "read"}
     assert job["steps"][0]["with"]["persist-credentials"] is False
     run = job["steps"][1]["run"]
-    assert "scripts/passport_supported_provisioning_producer.py" in run
+    assert "scripts/passport_supported_protected_producer.py" in job["steps"][2]["run"]
     assert "passport-supported-provisioning-plan-$PLAN_RUN_ID" in run
     assert '.path == ".github/workflows/passport-supported-provisioning-plan.yml"' in run
     assert 'and .head_sha == $sha' in run
@@ -784,7 +1086,7 @@ def test_producer_workflow_is_protected_and_cannot_mutate_docker() -> None:
     ("canvas-oss-wsl2", "ubuntu-latest"),
     ('and .head_sha == $sha', 'and .head_sha != $sha'),
     ('passport-supported-provisioning-plan.yml', 'any-plan.yml'),
-    ('scripts/passport_supported_provisioning_producer.py', 'true'),
+    ('scripts/passport_supported_protected_producer.py', 'true'),
 ])
 def test_producer_workflow_contract_rejects_unsafe_mutation(old: str, new: str) -> None:
     workflow = (Path(__file__).resolve().parents[1] / ".github/workflows"
@@ -800,4 +1102,4 @@ def test_producer_workflow_contract_rejects_unsafe_mutation(old: str, new: str) 
         assert job["runs-on"] == ["self-hosted", "linux", "x64", "canvas-oss-wsl2"]
         assert 'and .head_sha == $sha' in run
         assert '.path == ".github/workflows/passport-supported-provisioning-plan.yml"' in run
-        assert "scripts/passport_supported_provisioning_producer.py" in run
+        assert "scripts/passport_supported_protected_producer.py" in job["steps"][2]["run"]

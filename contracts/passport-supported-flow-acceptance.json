@@ -1,0 +1,95 @@
+{
+  "schema": "marty.passport-supported-flow-acceptance/v1",
+  "purpose": "Protected disposable proof that Rust Flow executed the physical passport lifecycle against the Rust issuance owner",
+  "flow_type": "physical_document_issuance",
+  "operator_authority": {
+    "issuer": "disposable_organization_application_in_the_owned_project",
+    "credential": "separate_short_lived_test_key_from_the_credentials_issuance_key",
+    "api_key_scopes": ["flows:write", "templates:write", "applications:write"],
+    "principal": "api_key:<issued_operator_key_id>",
+    "organization_role": {
+      "is_system": false,
+      "is_default_for_new_members": false,
+      "permissions": [
+        "flow-definition:view",
+        "flow-definition:create",
+        "flow-definition:edit",
+        "flow-definition:activate",
+        "flow-instance:view",
+        "flow-instance:start",
+        "flow-instance:advance"
+      ]
+    },
+    "lease": "expires_at_or_two_hours_whichever_is_earlier",
+    "teardown": "revoke_both_run_keys_remove_operator_member_delete_operator_role_and_fail_if_owned_cleanup_is_incomplete"
+  },
+  "references": {
+    "credential_template_id": "created_in_the_owned_project_and_tenant_bound",
+    "application_template_id": "created_in_the_owned_project_and_tenant_bound",
+    "delivery_destination_profile_id": "created_in_the_owned_project_and_tenant_bound",
+    "issuer_did": "resolved_from_the_credential_template_not_caller_context",
+    "credential_format": "ICAO_EMRTD",
+    "supported_formats": ["ICAO_EMRTD"],
+    "issuance_protocol": "PHYSICAL_DOCUMENT",
+    "issuer_profile_purpose": "x509_doc_signer",
+    "issuer_profile_custody": "KMS",
+    "definition_status": "ACTIVE"
+  },
+  "start": {
+    "route": "POST /v1/flows/instances",
+    "initial_context": "synthetic_physical_document_consumed_before_persistence",
+    "result": "durable_instance_and_same_tenant_native_passport_job",
+    "job_flow_execution_id": "actual_flow_instance_id"
+  },
+  "execution": {
+    "route": "POST /v1/flows/instances/{instance_id}/advance",
+    "steps": [
+      "accept_application",
+      "validate_evidence",
+      "approval_decision",
+      "generate_data_groups",
+      "sign_sod",
+      "submit_to_personalization",
+      "track_production",
+      "quality_verify",
+      "activate_credential"
+    ],
+    "step_proof": "each_advance_moves_to_the_next_expected_step_and_owned_flow_storage_records_the_canonical_step_history_in_order",
+    "flow_only_steps": ["accept_application", "validate_evidence", "approval_decision"],
+    "same_job_native_side_effects": [
+      "generate_data_groups",
+      "sign_sod",
+      "submit_to_personalization",
+      "track_production",
+      "quality_verify",
+      "activate_credential"
+    ],
+    "side_effect_proof": "observe_each_typed_native_operation_response_and_durable_same_job_state_or_metadata_before_the_corresponding_flow_transition_is_accepted;_require_a_status_change_only_when_the_operation_defines_one",
+    "terminal_status": "COMPLETED",
+    "native_job_status": "ACTIVE",
+    "signed_callback": "same_job_simulator_to_gateway_to_native_before_track_production_succeeds"
+  },
+  "evidence": {
+    "source": "protected_same_run_authenticated_gateway_and_private_owned_service_reads",
+    "must_bind": [
+      "organization_id",
+      "flow_definition_id",
+      "flow_instance_id",
+      "durable_step_history",
+      "native_job_id",
+      "application_id",
+      "bureau_job_id",
+      "issuer_profile_and_kms_signer",
+      "signed_gateway_callback_receipt"
+    ],
+    "reject": [
+      "capability_only",
+      "caller_supplied_flow_execution_id",
+      "unresolved_or_foreign_reference",
+      "advance_calls_without_durable_ordered_steps_and_native_side_effects",
+      "flow_and_passport_jobs_from_different_runs",
+      "unsigned_or_different_job_callback"
+    ],
+    "public_receipt": "only_fixed_booleans_statuses_and_identity_digests"
+  }
+}

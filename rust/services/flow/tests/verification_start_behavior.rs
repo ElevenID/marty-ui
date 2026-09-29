@@ -90,6 +90,7 @@ impl CredentialTemplateProvider for Templates {
             }],
             issuer_did: "did:web:issuer.example".into(),
             credential_format: "dc+sd-jwt".into(),
+            issuance_protocol: "OID4VCI_PRE_AUTH".into(),
             wallet_configurations: Vec::new(),
             issuer_algorithm: Some("ES256".into()),
         })

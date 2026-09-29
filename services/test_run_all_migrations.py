@@ -2,6 +2,7 @@ import json
 import inspect
 import sys
 import types
+import pytest
 
 if "marty_common.migration" not in sys.modules:
     migration_stub = types.ModuleType("marty_common.migration")
@@ -9,7 +10,20 @@ if "marty_common.migration" not in sys.modules:
     migration_stub.MigrationError = RuntimeError
     sys.modules["marty_common.migration"] = migration_stub
 
+if "marty_common.migration_profile" not in sys.modules:
+    profile_stub = types.ModuleType("marty_common.migration_profile")
+    profile_stub.migration_profile = lambda: None
+    profile_stub.migration_profile_settings = lambda: None
+    sys.modules["marty_common.migration_profile"] = profile_stub
+
+if "marty_common.system_ids" not in sys.modules:
+    ids_stub = types.ModuleType("marty_common.system_ids")
+    ids_stub.MARTY_DEFAULT_ORG_ID = "00000000-0000-0000-0000-000000000001"
+    ids_stub.MARTY_DEFAULT_ORG_SLUG = "marty"
+    sys.modules["marty_common.system_ids"] = ids_stub
+
 import run_all_migrations as migrations
+from services.passport_disposable_identity import managed_key_reference
 
 
 class FakeRedis:
@@ -22,6 +36,57 @@ class FakeRedis:
     def set(self, key, value):
         self.store[key] = value
         return True
+
+
+def test_disposable_icao_registry_is_scoped_to_exact_project_and_issuer(monkeypatch) -> None:
+    monkeypatch.delenv("PASSPORT_DISPOSABLE_ICAO_BOOTSTRAP", raising=False)
+    assert migrations._disposable_passport_key_specs(
+        "00000000-0000-0000-0000-000000000001",
+        "did:web:beta.elevenidllc.com:orgs:marty",
+        "https://beta.elevenidllc.com",
+    ) == []
+    for name, value in {
+        "PASSPORT_DISPOSABLE_ICAO_BOOTSTRAP": "true",
+        "PASSPORT_ACCEPTANCE_PROJECT": "marty-passport-acceptance-base-abcdef",
+        "PASSPORT_ACCEPTANCE_GATEWAY_PORT": "29876",
+        "PUBLIC_DOMAIN": "localhost:29876",
+    }.items():
+        monkeypatch.setenv(name, value)
+    specs = migrations._disposable_passport_key_specs(
+        "00000000-0000-0000-0000-000000000001",
+        "did:web:localhost%3A29876:orgs:marty",
+        "https://localhost:29876",
+    )
+    assert [spec["id"] for spec in specs] == [
+        managed_key_reference(29876, "csca"),
+        managed_key_reference(29876, "x509_doc_signer"),
+    ]
+    redis = FakeRedis()
+    migrations._seed_signing_registry(
+        redis, "00000000-0000-0000-0000-000000000001",
+        [*migrations.MARTY_KMS_KEY_SPECS, *specs],
+    )
+    payload = json.loads(redis.store[migrations._storage_key(
+        "00000000-0000-0000-0000-000000000001")])
+    managed = payload["services"][0]
+    assert {"csca", "x509_doc_signer"} <= set(managed["key_purposes"])
+    assert "icao_emrtd" in managed["credential_formats"]
+    assert payload["format_defaults"]["icao_emrtd"] == migrations.MANAGED_OPENBAO_SERVICE_ID
+    assert payload["key_reference_purposes"][migrations.MANAGED_OPENBAO_SERVICE_ID][specs[1]["id"]] == ["x509_doc_signer"]
+
+    with pytest.raises(ValueError, match="issuer scope"):
+        migrations._disposable_passport_key_specs(
+            "00000000-0000-0000-0000-000000000001",
+            "did:web:localhost%3A29877:orgs:marty",
+            "https://localhost:29876",
+        )
+    monkeypatch.setenv("PASSPORT_ACCEPTANCE_PROJECT", "marty-passport-acceptance-base-other")
+    with pytest.raises(ValueError, match="project"):
+        migrations._disposable_passport_key_specs(
+            "00000000-0000-0000-0000-000000000001",
+            "did:web:localhost%3A29876:orgs:marty",
+            "https://localhost:29876",
+        )
 
 
 def test_revocation_schema_is_removed_from_the_python_migration_graph() -> None:

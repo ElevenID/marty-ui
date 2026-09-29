@@ -35,13 +35,30 @@ export VAULT_TOKEN="$BAO_TOKEN"
 # PKI root is not the passport CSCA; that certificate needs a managed profile.
 /bin/sh /scripts/openbao-init.sh >&2
 
-# The disposable tenant and did:web identity are fixed by the protected model.
-# These UUIDv5-derived names match Signing Keys' managed_key_reference tuple
-# for csca and x509_doc_signer, ICAO_EMRTD, ES256. Only this root-token phase
-# may create them; the credential-service token remains read/sign scoped.
-for key in \
-    cred-dsc-5fc5bffec62456e58552-es256 \
-    cred-dsc-86997e8fa454582d8bb5-es256; do
+# The protected producer derives these UUIDv5 names from its port-qualified
+# did:web identity using Signing Keys' managed_key_reference tuple. Only this
+# root-token phase may create them; the service token remains read/sign scoped.
+csca_key=${PASSPORT_ACCEPTANCE_CSCA_KEY_REFERENCE:-}
+dsc_key=${PASSPORT_ACCEPTANCE_DSC_KEY_REFERENCE:-}
+if [ "$csca_key" = "$dsc_key" ]; then
+    echo "Disposable passport key references are not distinct" >&2
+    exit 1
+fi
+for key in "$csca_key" "$dsc_key"; do
+    token=${key#cred-dsc-}
+    token=${token%-es256}
+    case "$key" in
+        cred-dsc-*-es256) ;;
+        *) echo "Disposable passport key reference is invalid" >&2; exit 1 ;;
+    esac
+    case "$token" in
+        *[!0123456789abcdef]* | "")
+            echo "Disposable passport key reference is invalid" >&2; exit 1 ;;
+    esac
+    if [ "${#token}" -ne 20 ]; then
+        echo "Disposable passport key reference is invalid" >&2
+        exit 1
+    fi
     if ! bao read -field=type "transit/keys/$key" >/dev/null 2>&1; then
         bao write -f "transit/keys/$key" type=ecdsa-p256 exportable=false >/dev/null
     fi
@@ -55,8 +72,8 @@ for spec in \
     oid4vp-verifier-marty-es256:ecdsa-p256 \
     cred-issuer-marty-eddsa:ed25519 \
     cred-dsc-marty-primary:ecdsa-p256 \
-    cred-dsc-5fc5bffec62456e58552-es256:ecdsa-p256 \
-    cred-dsc-86997e8fa454582d8bb5-es256:ecdsa-p256 \
+    "$csca_key":ecdsa-p256 \
+    "$dsc_key":ecdsa-p256 \
     passport-artifact-marty-aes256:aes256-gcm96 \
     flow-response-envelope-marty-aes256:aes256-gcm96; do
     key=${spec%%:*}

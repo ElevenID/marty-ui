@@ -1,4 +1,4 @@
-"""Resolved rollback models cannot use shared production resources."""
+"""Resolved Rust acceptance models cannot use shared production resources."""
 
 from __future__ import annotations
 
@@ -10,8 +10,8 @@ import sys
 
 import pytest
 
-from scripts import check_passport_supported_rollback_model as preflight
-from scripts.check_passport_supported_rollback_model import (
+from scripts import check_passport_supported_rust_model as preflight
+from scripts.check_passport_supported_rust_model import (
     ModelPreflightError, SELECTED, preflight_attested_plan, preflight_read_only, validate_model,
     validate_planned_model,
 )
@@ -49,13 +49,18 @@ def safe_model(root: Path) -> dict:
         "GRPC_SERVICE_TOKEN_FILE": "/run/secrets/grpc_service_token",
         "SIGNING_KEYS_INTERNAL_API_KEY_FILE": "/run/secrets/callback_signer_api_key",
         "SIGNING_KEYS_INTERNAL_URL": "http://passport-callback-signer:8018/internal/documents",
-        "PASSPORT_BUREAU_CALLBACK_URL": "http://issuance-native:8005/v1/passport/webhooks/personalization",
+        "PASSPORT_BETA_BUREAU_GATEWAY_CALLBACK_ENABLED": "true",
+        "PASSPORT_BUREAU_CALLBACK_URL": "http://gateway:8000/v1/passport/webhooks/personalization",
     })
     services["passport-beta-bureau"]["environment"].pop("DATABASE_URL")
     services["passport-beta-bureau"]["networks"] = ["private", "callback_signing"]
     services["issuance-native"]["environment"].update({
         "ENVIRONMENT": "development",
-        "ISSUER_BASE_URL": "http://localhost:29876",
+        "PASSPORT_NATIVE_HTTP_ENABLED": "true",
+        "PASSPORT_MANAGED_ISSUER_SIGNING_ENABLED": "true",
+        "PASSPORT_KMS_ARTIFACTS_ENABLED": "true",
+        "PASSPORT_KMS_CALLBACKS_ENABLED": "true",
+        "ISSUER_BASE_URL": "https://localhost:29876",
         "ISSUANCE_GRPC_ENABLED": "true", "ISSUANCE_GRPC_PORT": "9005",
         "CT_GRPC_TARGET": "credential-template:9003",
         "CREDENTIAL_TEMPLATE_SERVICE_URL": "http://credential-template:8003",
@@ -74,11 +79,14 @@ def safe_model(root: Path) -> dict:
     }
     services["gateway"]["environment"].update({
         "ENVIRONMENT": "beta",
+        "PASSPORT_NATIVE_GATEWAY_ENABLED": "true",
+        "ISSUANCE_SERVICE_URL": "http://issuance-native:8005",
+        "ISSUANCE_NATIVE_SERVICE_URL": "http://issuance-native:8005",
         "GRPC_INSECURE_ALLOWED": "true",
         "SIGNING_KEYS_DSC_ISSUE_GATEWAY_KEY_FILE": "/run/secrets/dsc_issue_gateway_key",
         "SIGNING_KEYS_CSCA_ISSUE_GATEWAY_KEY_FILE": "/run/secrets/csca_issue_gateway_key",
-        "PUBLIC_DOMAIN": "localhost",
-        "ISSUER_BASE_URL": "http://localhost:29876",
+        "PUBLIC_DOMAIN": "localhost:29876",
+        "ISSUER_BASE_URL": "https://localhost:29876",
         "PASSPORT_PROVIDER_INGRESS_GATEWAY_ENABLED": "false",
         "ORGANIZATION_SERVICE_URL": "http://organization:8002",
         "ORG_GRPC_TARGET": "organization:9002",
@@ -90,8 +98,16 @@ def safe_model(root: Path) -> dict:
         "PRESENTATION_POLICY_SERVICE_URL": "http://presentation-policy:8009",
         "DEPLOYMENT_PROFILE_SERVICE_URL": "http://deployment-profile:8010",
     })
-    services["gateway"]["ports"] = [
-        {"host_ip": "127.0.0.1", "published": "29876", "target": 8000}]
+    services["edge"] = {
+        "image": qualified_images(verify_registry=False)["edge"],
+        "networks": ["private"],
+        "ports": [{"host_ip": "127.0.0.1", "published": "29876", "target": 8443}],
+        "depends_on": {"gateway": {"condition": "service_started"}},
+        "configs": [{"source": "passport_supported_edge",
+                     "target": "/etc/nginx/conf.d/default.conf"}],
+        "secrets": [{"source": "passport_edge_tls_cert"},
+                    {"source": "passport_edge_tls_key"}],
+    }
     services["gateway"]["depends_on"] = {
         "organization": {"condition": "service_healthy"},
         "revocation-profile": {"condition": "service_healthy"},
@@ -101,7 +117,10 @@ def safe_model(root: Path) -> dict:
     }
     services["flow"]["environment"].update({
         "ENVIRONMENT": "development",
-        "MARTY_ISSUER_DID": "did:web:localhost:orgs:marty",
+        "PASSPORT_NATIVE_FLOW_ENABLED": "true",
+        "ISSUANCE_SERVICE_URL": "http://issuance-native:8005",
+        "ISSUANCE_NATIVE_SERVICE_URL": "http://issuance-native:8005",
+        "MARTY_ISSUER_DID": "did:web:localhost%3A29876:orgs:marty",
         "ORG_GRPC_TARGET": "organization:9002",
     })
     for name in ("gateway", "flow", "issuance-native"):
@@ -118,6 +137,9 @@ def safe_model(root: Path) -> dict:
         {"source": "token_hmac_key"},
         {"source": "integration_secret_master_key"},
     ])
+    services["issuance-native"]["environment"]["SIGNING_KEYS_INTERNAL_URL"] = (
+        "http://gateway:8000/internal/signing-keys"
+    )
     infra = qualified_images(verify_registry=False)
     services["postgres"] = {"image": infra["postgres"], "networks": ["private"], "volumes": [
         {"type": "volume", "source": "postgres_data",
@@ -150,7 +172,7 @@ def safe_model(root: Path) -> dict:
                 "postgresql://marty:${MARTY_DB_PASSWORD}@postgres:5432/marty",
             "MARTY_DB_PASSWORD_FILE": "/run/secrets/marty_db_password",
             "PUBLIC_API_URL": "http://gateway:8000",
-            "STATUS_LIST_BASE_URL": "http://127.0.0.1:29876",
+            "STATUS_LIST_BASE_URL": "https://localhost:29876",
             "MARTY_ORG_ID": "00000000-0000-0000-0000-000000000001",
         },
         "secrets": [{"source": "marty_db_password"}],
@@ -210,7 +232,7 @@ def safe_model(root: Path) -> dict:
             "REDIS_URL": "redis://redis:6379/4",
             "ORG_GRPC_TARGET": "organization:9002",
             "PUBLIC_API_URL": "http://gateway:8000",
-            "STATUS_LIST_BASE_URL": "http://127.0.0.1:29876",
+            "STATUS_LIST_BASE_URL": "https://localhost:29876",
             "MARTY_ORG_ID": "00000000-0000-0000-0000-000000000001",
         },
         "secrets": [{"source": "marty_db_password"},
@@ -245,16 +267,16 @@ def safe_model(root: Path) -> dict:
         "SIGNING_KEYS_INTERNAL_URL": "http://signing-keys:8017/internal",
         "SIGNING_KEYS_INTERNAL_API_KEY_FILE": "/run/secrets/signing_keys_internal_api_key",
         "TRUST_PROFILE_SERVICE_URL": "http://trust-profile:8004",
-        "PUBLIC_API_URL": "http://localhost:29876",
+        "PUBLIC_API_URL": "https://localhost:29876",
         "MARTY_ORG_ID": "00000000-0000-0000-0000-000000000001",
         "MARTY_MIGRATION_PROFILE": "dev",
     })
     services["trust-profile"]["environment"].update({
         "SIGNING_KEYS_INTERNAL_API_KEY_FILE": "/run/secrets/signing_keys_internal_api_key",
         "MARTY_ORG_ID": "00000000-0000-0000-0000-000000000001",
-        "MARTY_ORG_SLUG": "marty", "MARTY_ISSUER_DID": "did:web:localhost:orgs:marty",
-        "MARTY_ISSUER_BASE_URL": "http://localhost:29876",
-        "PUBLIC_DOMAIN": "localhost", "DID_RESOLUTION_BASE_URL": "http://gateway:8000",
+        "MARTY_ORG_SLUG": "marty", "MARTY_ISSUER_DID": "did:web:localhost%3A29876:orgs:marty",
+        "MARTY_ISSUER_BASE_URL": "https://localhost:29876",
+        "PUBLIC_DOMAIN": "localhost:29876", "DID_RESOLUTION_BASE_URL": "http://gateway:8000",
     })
     for service in ("credential-template", "trust-profile"):
         services[service]["secrets"].append(
@@ -264,8 +286,8 @@ def safe_model(root: Path) -> dict:
         "DID_RESOLUTION_BASE_URL": "http://gateway:8000",
         "TRUST_PROFILE_SERVICE_URL": "http://trust-profile:8004",
         "ISSUANCE_NATIVE_SERVICE_URL": "http://issuance-native:8005",
-        "PUBLIC_DOMAIN": "localhost", "PUBLIC_BASE_URL": "http://localhost:29876",
-        "ISSUER_BASE_URL": "http://localhost:29876", "MARTY_ORG_SLUG": "marty",
+        "PUBLIC_DOMAIN": "localhost:29876", "PUBLIC_BASE_URL": "https://localhost:29876",
+        "ISSUER_BASE_URL": "https://localhost:29876", "MARTY_ORG_SLUG": "marty",
     })
     services["presentation-policy"]["secrets"].append({"source": "issuance_api_key"})
     for service, port, dependencies in (
@@ -285,7 +307,7 @@ def safe_model(root: Path) -> dict:
         services[service]["healthcheck"] = {
             "test": ["CMD", "curl", "--fail", f"http://localhost:{port}/health"]}
     services["flow"]["environment"].update({
-        "PUBLIC_BASE_URL": "http://localhost:29876",
+        "PUBLIC_BASE_URL": "https://localhost:29876",
         "CT_GRPC_TARGET": "credential-template:9003",
         "PP_GRPC_TARGET": "presentation-policy:9009",
         "ISSUANCE_GRPC_TARGET": "issuance-native:9005",
@@ -309,7 +331,7 @@ def safe_model(root: Path) -> dict:
                             "/run/secrets/dsc_issue_gateway_key",
                         "SIGNING_KEYS_CSCA_ISSUE_GATEWAY_KEY_FILE":
                             "/run/secrets/csca_issue_gateway_key",
-                        "PUBLIC_DOMAIN": "localhost",
+                        "PUBLIC_DOMAIN": "localhost:29876",
                         "SIGNING_KEYS_INTERNAL_API_KEY_FILE":
                             "/run/secrets/signing_keys_internal_api_key"},
         "secrets": [{"source": "signing_keys_internal_api_key"}],
@@ -325,11 +347,14 @@ def safe_model(root: Path) -> dict:
             "BAO_ADDR": "http://openbao:8200",
             "BAO_TOKEN_FILE": "/run/secrets/bao_token",
             "MARTY_KMS_BOOTSTRAP_ENABLED": "true",
+            "PASSPORT_DISPOSABLE_ICAO_BOOTSTRAP": "true",
+            "PASSPORT_ACCEPTANCE_PROJECT": PROJECT,
+            "PASSPORT_ACCEPTANCE_GATEWAY_PORT": "29876",
             "MARTY_ORG_ADMIN_EMAIL": "admin@example.invalid",
             "MARTY_ORG_ID": "00000000-0000-0000-0000-000000000001",
-            "PUBLIC_DOMAIN": "localhost",
-            "MARTY_ISSUER_BASE_URL": "http://localhost:29876",
-            "MARTY_ISSUER_DID": "did:web:localhost:orgs:marty",
+            "PUBLIC_DOMAIN": "localhost:29876",
+            "MARTY_ISSUER_BASE_URL": "https://localhost:29876",
+            "MARTY_ISSUER_DID": "did:web:localhost%3A29876:orgs:marty",
         },
         "depends_on": {**{name: {"condition": "service_healthy"}
                           for name in ("postgres", "redis", "openbao")},
@@ -337,8 +362,6 @@ def safe_model(root: Path) -> dict:
                            "condition": "service_completed_successfully"}},
         "secrets": [{"source": "bao_token"}],
     }
-    services["issuance"] = {"image": "ghcr.io/elevenid/marty-credentials-issuance@sha256:" + "c" * 64,
-                            "networks": ["private"]}
     for name in ("gateway", "signing-keys"):
         services[name]["secrets"].extend([
             {"source": "dsc_issue_gateway_key"},
@@ -372,9 +395,15 @@ def safe_model(root: Path) -> dict:
                 "token_hmac_key": {"file": str(root / "secrets/token_hmac_key")},
                 "integration_secret_master_key": {
                     "file": str(root / "secrets/integration_secret_master_key")},
+                "passport_edge_tls_cert": {
+                    "file": str(root / "secrets/passport_edge_tls_cert")},
+                "passport_edge_tls_key": {
+                    "file": str(root / "secrets/passport_edge_tls_key")},
             },
             "configs": {"passport_supported_openbao_start": {
-                "file": str(preflight.ROOT / "scripts/passport_supported_openbao_start.sh")}},
+                "file": str(preflight.ROOT / "scripts/passport_supported_openbao_start.sh")},
+                "passport_supported_edge": {
+                    "file": str(preflight.ROOT / "scripts/passport_supported_edge.conf")}},
             }
 
 
@@ -383,7 +412,60 @@ def test_isolated_resolved_compose_model_passes_only_static_preflight(
 ) -> None:
     report = validate_model(safe_model(tmp_path), PROJECT, IMAGE, tmp_path)
     assert report["model_safe"] is True
-    assert report["rollback_accepted"] is False
+    assert "issuance" not in report["services"]
+
+
+@pytest.mark.parametrize("changed", [
+    {"PASSPORT_BETA_BUREAU_GATEWAY_CALLBACK_ENABLED": "false"},
+    {"PASSPORT_BUREAU_CALLBACK_URL":
+     "http://issuance-native:8005/v1/passport/webhooks/personalization"},
+    {"PASSPORT_BUREAU_CALLBACK_URL":
+     "https://external.example/v1/passport/webhooks/personalization"},
+])
+def test_disposable_bureau_requires_signed_gateway_callback_route(
+    tmp_path: Path, changed: dict[str, str],
+) -> None:
+    model = safe_model(tmp_path)
+    model["services"]["passport-beta-bureau"]["environment"].update(changed)
+    with pytest.raises(ModelPreflightError,
+                       match="private Marty simulator|endpoint leaves disposable services"):
+        validate_model(model, PROJECT, IMAGE, tmp_path)
+
+
+@pytest.mark.parametrize("change", [
+    lambda service: service["environment"].update(HTTP_PROXY="http://gateway:8000"),
+    lambda service: service.update(extra_hosts=["gateway:10.0.0.9"]),
+    lambda service: service.update(dns=["10.0.0.9"]),
+    lambda service: service.update(networks={"private": {"aliases": ["gateway"]},
+                                    "callback_signing": None}),
+])
+def test_disposable_bureau_cannot_redirect_private_gateway_callback(
+    tmp_path: Path, change,
+) -> None:
+    model = safe_model(tmp_path)
+    change(model["services"]["passport-beta-bureau"])
+    with pytest.raises(ModelPreflightError):
+        validate_model(model, PROJECT, IMAGE, tmp_path)
+
+
+@pytest.mark.parametrize("service,key,value", [
+    ("gateway", "PASSPORT_NATIVE_GATEWAY_ENABLED", "false"),
+    ("flow", "PASSPORT_NATIVE_FLOW_ENABLED", "false"),
+    ("issuance-native", "PASSPORT_MANAGED_ISSUER_SIGNING_ENABLED", "false"),
+    ("issuance-native", "PASSPORT_KMS_ARTIFACTS_ENABLED", "false"),
+    ("issuance-native", "PASSPORT_KMS_CALLBACKS_ENABLED", "false"),
+    ("gateway", "ISSUANCE_SERVICE_URL", "http://flow:8011"),
+    ("gateway", "ISSUANCE_NATIVE_SERVICE_URL", "http://flow:8011"),
+    ("flow", "ISSUANCE_SERVICE_URL", "http://gateway:8000"),
+    ("flow", "ISSUANCE_NATIVE_SERVICE_URL", "http://gateway:8000"),
+])
+def test_disposable_model_requires_one_rust_passport_owner(
+    tmp_path: Path, service: str, key: str, value: str,
+) -> None:
+    model = safe_model(tmp_path)
+    model["services"][service]["environment"][key] = value
+    with pytest.raises(ModelPreflightError, match="one Rust owner"):
+        validate_model(model, PROJECT, IMAGE, tmp_path)
 
 
 @pytest.mark.parametrize("service,key,value", [
@@ -427,7 +509,6 @@ def test_attested_plan_binds_all_disposable_images(tmp_path: Path) -> None:
         "status": "blocked", "surface": "base", "project": PROJECT,
         "services_reference": IMAGE,
         "migrations_reference": model["services"]["db-migrate"]["image"],
-        "legacy_reference": model["services"]["issuance"]["image"],
         "infra_images": qualified_images(verify_registry=False),
         "run_id": "123456", "source_commit": "a" * 40,
         "expires_at": "2026-09-27T12:55:00+00:00",
@@ -438,7 +519,7 @@ def test_attested_plan_binds_all_disposable_images(tmp_path: Path) -> None:
     changed_lease["expires_at"] = "2026-09-27T12:56:00+00:00"
     with pytest.raises(ModelPreflightError, match="API key lease"):
         validate_planned_model(model, changed_lease, tmp_path)
-    for role in ("postgres", "redis", "openbao", "db-migrate", "issuance",
+    for role in ("postgres", "redis", "openbao", "db-migrate",
                  "signing-keys", "organization", "event-stream",
                  "revocation-profile", "revocation-profile-migrate"):
         bad = deepcopy(model)
@@ -537,6 +618,10 @@ def test_attested_plan_binds_all_disposable_images(tmp_path: Path) -> None:
         REDIS_URL="redis://redis:6379/0"), "issuer profile bootstrap"),
     (lambda model, root: model["services"]["db-migrate"]["environment"].update(
         MARTY_KMS_BOOTSTRAP_ENABLED="false"), "issuer profile bootstrap"),
+    (lambda model, root: model["services"]["db-migrate"]["environment"].update(
+        PASSPORT_DISPOSABLE_ICAO_BOOTSTRAP="false"), "issuer profile bootstrap"),
+    (lambda model, root: model["services"]["db-migrate"]["environment"].update(
+        PASSPORT_ACCEPTANCE_GATEWAY_PORT="29877"), "issuer profile bootstrap"),
     (lambda model, root: model["services"]["db-migrate"]["depends_on"].pop(
         "openbao"), "issuer profile bootstrap"),
     (lambda model, root: model["services"]["db-migrate"]["secrets"].clear(),
@@ -662,12 +747,21 @@ def test_render_uses_fixed_repo_compose_files_and_never_transitions(
     assert report["status"] == "blocked"
     assert report["model"]["static_isolation_verified"] is True
     assert report["model"]["model_safe"] is False
-    assert report["model"]["rollback_accepted"] is False
     args, environment = captured[0]
     assert args[:4] == ["docker", "compose", "--project-name", PROJECT]
     assert args[-3:] == ["config", "--format", "json"]
     assert "up" not in args and "down" not in args
     assert environment["MARTY_SERVICES_IMAGE"] == IMAGE
+
+
+def test_render_rejects_python_owner_phase_before_docker(tmp_path: Path) -> None:
+    env_file = tmp_path / "acceptance.env"
+    env_file.write_text("MARTY_SERVICES_IMAGE=" + IMAGE, encoding="utf-8")
+    called = []
+    with pytest.raises(ModelPreflightError, match="owner phase is invalid"):
+        preflight.render_model("base", PROJECT, env_file, tmp_path, IMAGE,
+                               lambda *args: called.append(args), phase="python")
+    assert called == []
 
 
 def test_executable_planned_preflight_rejects_unsigned_and_mutated_images(
@@ -681,7 +775,6 @@ def test_executable_planned_preflight_rejects_unsigned_and_mutated_images(
         "source_commit": "a" * 40,
         "services_reference": IMAGE,
         "migrations_reference": model["services"]["db-migrate"]["image"],
-        "legacy_reference": model["services"]["issuance"]["image"],
         "infra_images": qualified_images(verify_registry=False),
         "run_id": "123456", "owner_labels": LABELS,
         "created_at": (now - timedelta(minutes=5)).isoformat(),
@@ -708,7 +801,7 @@ def test_executable_planned_preflight_rejects_unsigned_and_mutated_images(
     assert report["status"] == "blocked"
     assert report["model"]["model_safe"] is True
     bad = deepcopy(model)
-    bad["services"]["issuance"]["image"] = "other@sha256:" + "f" * 64
+    bad["services"]["db-migrate"]["image"] = "other@sha256:" + "f" * 64
     with pytest.raises(ModelPreflightError, match="protected image"):
         preflight_attested_plan("base", PROJECT, env_file, tmp_path, IMAGE,
                                 plan_path, lambda *args: json.dumps(bad),
@@ -762,9 +855,8 @@ def test_cli_remains_red_even_if_static_model_is_safe(
 ) -> None:
     report_file = tmp_path / "report.json"
     monkeypatch.setattr(preflight, "preflight_read_only", lambda *args: {
-        "schema": "marty.passport-supported-rollback-preflight/v1",
-        "status": "blocked", "model": {"model_safe": True,
-                                      "rollback_accepted": False},
+        "schema": "marty.passport-supported-rust-model-preflight/v1",
+        "status": "blocked", "model": {"model_safe": True},
     })
     monkeypatch.setattr(sys, "argv", [
         "preflight", "--surface", "base", "--project", PROJECT,

@@ -1,4 +1,4 @@
-# Dedicated, unprovisioned passport rollback rehearsal model. Both surface
+# Dedicated, unprovisioned passport Rust acceptance model. Both surface
 # overlays below select this topology; neither inherits production resources.
 # Image references and secret files must come from one protected release/run.
 x-acceptance-labels: &acceptance-labels
@@ -8,6 +8,20 @@ x-acceptance-labels: &acceptance-labels
   com.marty.passport.acceptance.services-image: ${MARTY_SERVICES_IMAGE:?bind released services image}
 
 services:
+  edge:
+    labels: *acceptance-labels
+    image: ${PASSPORT_ACCEPTANCE_EDGE_IMAGE:?pin disposable HTTPS edge image by digest}
+    configs:
+      - source: passport_supported_edge
+        target: /etc/nginx/conf.d/default.conf
+    secrets: [passport_edge_tls_cert, passport_edge_tls_key]
+    depends_on:
+      gateway:
+        condition: service_started
+    ports:
+      - "127.0.0.1:${PASSPORT_ACCEPTANCE_GATEWAY_PORT:?reserve disposable loopback port}:8443"
+    networks: [private]
+
   postgres:
     labels: *acceptance-labels
     image: ${PASSPORT_ACCEPTANCE_POSTGRES_IMAGE:?pin disposable PostgreSQL image by digest}
@@ -55,7 +69,7 @@ services:
       DATABASE_URL_TEMPLATE: postgresql://marty:$${MARTY_DB_PASSWORD}@postgres:5432/marty
       MARTY_DB_PASSWORD_FILE: /run/secrets/marty_db_password
       PUBLIC_API_URL: http://gateway:8000
-      STATUS_LIST_BASE_URL: http://127.0.0.1:${PASSPORT_ACCEPTANCE_GATEWAY_PORT:?reserve disposable loopback port}
+      STATUS_LIST_BASE_URL: https://localhost:${PASSPORT_ACCEPTANCE_GATEWAY_PORT:?reserve disposable loopback port}
       MARTY_ORG_ID: 00000000-0000-0000-0000-000000000001
     secrets: [marty_db_password]
     depends_on:
@@ -78,9 +92,12 @@ services:
       BAO_ADDR: http://openbao:8200
       BAO_TOKEN_FILE: /run/secrets/bao_token
       MARTY_KMS_BOOTSTRAP_ENABLED: "true"
-      PUBLIC_DOMAIN: localhost
-      MARTY_ISSUER_BASE_URL: http://localhost:${PASSPORT_ACCEPTANCE_GATEWAY_PORT:?reserve disposable loopback port}
-      MARTY_ISSUER_DID: did:web:localhost:orgs:marty
+      PASSPORT_DISPOSABLE_ICAO_BOOTSTRAP: "true"
+      PASSPORT_ACCEPTANCE_PROJECT: ${PASSPORT_ACCEPTANCE_PROJECT:?bind disposable project}
+      PASSPORT_ACCEPTANCE_GATEWAY_PORT: ${PASSPORT_ACCEPTANCE_GATEWAY_PORT:?reserve disposable loopback port}
+      PUBLIC_DOMAIN: localhost:${PASSPORT_ACCEPTANCE_GATEWAY_PORT:?reserve disposable loopback port}
+      MARTY_ISSUER_BASE_URL: https://localhost:${PASSPORT_ACCEPTANCE_GATEWAY_PORT:?reserve disposable loopback port}
+      MARTY_ISSUER_DID: did:web:localhost%3A${PASSPORT_ACCEPTANCE_GATEWAY_PORT:?reserve disposable loopback port}:orgs:marty
     secrets: [marty_db_password, bao_token]
     depends_on:
       revocation-profile-migrate:
@@ -104,7 +121,7 @@ services:
       MARTY_DB_PASSWORD_FILE: /run/secrets/marty_db_password
       BAO_ADDR: http://openbao:8200
       BAO_TOKEN_FILE: /run/secrets/bao_token
-      PUBLIC_DOMAIN: localhost
+      PUBLIC_DOMAIN: localhost:${PASSPORT_ACCEPTANCE_GATEWAY_PORT:?reserve disposable loopback port}
       SIGNING_KEYS_INTERNAL_API_KEY_FILE: /run/secrets/signing_keys_internal_api_key
     secrets: [marty_db_password, bao_token, signing_keys_internal_api_key]
     depends_on:
@@ -175,7 +192,7 @@ services:
       REDIS_URL: redis://redis:6379/4
       ORG_GRPC_TARGET: organization:9002
       PUBLIC_API_URL: http://gateway:8000
-      STATUS_LIST_BASE_URL: http://127.0.0.1:${PASSPORT_ACCEPTANCE_GATEWAY_PORT:?reserve disposable loopback port}
+      STATUS_LIST_BASE_URL: https://localhost:${PASSPORT_ACCEPTANCE_GATEWAY_PORT:?reserve disposable loopback port}
       MARTY_ORG_ID: 00000000-0000-0000-0000-000000000001
     secrets: [marty_db_password, grpc_service_token]
     depends_on:
@@ -203,9 +220,9 @@ services:
       ORG_GRPC_TARGET: organization:9002
       MARTY_ORG_ID: 00000000-0000-0000-0000-000000000001
       MARTY_ORG_SLUG: marty
-      MARTY_ISSUER_DID: did:web:localhost:orgs:marty
-      MARTY_ISSUER_BASE_URL: http://localhost:${PASSPORT_ACCEPTANCE_GATEWAY_PORT:?reserve disposable loopback port}
-      PUBLIC_DOMAIN: localhost
+      MARTY_ISSUER_DID: did:web:localhost%3A${PASSPORT_ACCEPTANCE_GATEWAY_PORT:?reserve disposable loopback port}:orgs:marty
+      MARTY_ISSUER_BASE_URL: https://localhost:${PASSPORT_ACCEPTANCE_GATEWAY_PORT:?reserve disposable loopback port}
+      PUBLIC_DOMAIN: localhost:${PASSPORT_ACCEPTANCE_GATEWAY_PORT:?reserve disposable loopback port}
       DID_RESOLUTION_BASE_URL: http://gateway:8000
     secrets: [marty_db_password, grpc_service_token, signing_keys_internal_api_key]
     depends_on:
@@ -233,7 +250,7 @@ services:
       RP_GRPC_TARGET: revocation-profile:9013
       SIGNING_KEYS_INTERNAL_URL: http://signing-keys:8017/internal
       TRUST_PROFILE_SERVICE_URL: http://trust-profile:8004
-      PUBLIC_API_URL: http://localhost:${PASSPORT_ACCEPTANCE_GATEWAY_PORT:?reserve disposable loopback port}
+      PUBLIC_API_URL: https://localhost:${PASSPORT_ACCEPTANCE_GATEWAY_PORT:?reserve disposable loopback port}
       MARTY_ORG_ID: 00000000-0000-0000-0000-000000000001
       MARTY_MIGRATION_PROFILE: dev
     secrets: [marty_db_password, grpc_service_token, signing_keys_internal_api_key]
@@ -252,22 +269,6 @@ services:
       test: [CMD, curl, --fail, http://localhost:8003/health]
     networks: [private]
 
-  issuance:
-    labels: *acceptance-labels
-    # Retained only for the bounded rollback rehearsal. Its digest and source
-    # must be independently tied to the pre-retirement Marty Credentials release.
-    image: ${PASSPORT_ACCEPTANCE_LEGACY_IMAGE:?pin legacy Python issuance image by digest}
-    environment:
-      DATABASE_URL: ${PASSPORT_ACCEPTANCE_DATABASE_URL:?bind disposable PostgreSQL URL}
-      ISSUANCE_SERVICE_PORT: "8005"
-      ISSUANCE_NATIVE_SERVICE_URL: http://issuance-native:8005
-      DIDCOMM_DELIVERY_OWNER: native
-      REDIS_URL: redis://redis:6379
-    depends_on:
-      db-migrate:
-        condition: service_completed_successfully
-    networks: [private]
-
   issuance-native:
     labels: *acceptance-labels
     image: ${MARTY_SERVICES_IMAGE:?pin signed services image by digest}
@@ -276,7 +277,7 @@ services:
       ISSUANCE_SERVICE_PORT: "8005"
       ISSUANCE_GRPC_ENABLED: "true"
       ISSUANCE_GRPC_PORT: "9005"
-      ISSUER_BASE_URL: http://localhost:${PASSPORT_ACCEPTANCE_GATEWAY_PORT:?reserve disposable loopback port}
+      ISSUER_BASE_URL: https://localhost:${PASSPORT_ACCEPTANCE_GATEWAY_PORT:?reserve disposable loopback port}
       PASSPORT_NATIVE_HTTP_ENABLED: "true"
       PASSPORT_INTERNAL_SERVICE_AUTH_ENABLED: "true"
       PASSPORT_MANAGED_ISSUER_SIGNING_ENABLED: "true"
@@ -290,7 +291,9 @@ services:
       MARTY_DB_PASSWORD_FILE: /run/secrets/marty_db_password
       BAO_ADDR: http://openbao:8200
       BAO_TOKEN_FILE: /run/secrets/bao_token
-      SIGNING_KEYS_INTERNAL_URL: http://signing-keys:8017/internal
+      # Managed DSC resolution/signing and artifact encryption share the
+      # Gateway compatibility routes, which authorize the organization scope.
+      SIGNING_KEYS_INTERNAL_URL: http://gateway:8000/internal/signing-keys
       SIGNING_KEYS_INTERNAL_API_KEY_FILE: /run/secrets/signing_keys_internal_api_key
       PERSONALIZATION_BUREAU_URL: http://passport-beta-bureau:8020
       PERSONALIZATION_BUREAU_API_KEY_FILE: /run/secrets/grpc_service_token
@@ -329,9 +332,9 @@ services:
       DID_RESOLUTION_BASE_URL: http://gateway:8000
       TRUST_PROFILE_SERVICE_URL: http://trust-profile:8004
       ISSUANCE_NATIVE_SERVICE_URL: http://issuance-native:8005
-      PUBLIC_DOMAIN: localhost
-      PUBLIC_BASE_URL: http://localhost:${PASSPORT_ACCEPTANCE_GATEWAY_PORT:?reserve disposable loopback port}
-      ISSUER_BASE_URL: http://localhost:${PASSPORT_ACCEPTANCE_GATEWAY_PORT:?reserve disposable loopback port}
+      PUBLIC_DOMAIN: localhost:${PASSPORT_ACCEPTANCE_GATEWAY_PORT:?reserve disposable loopback port}
+      PUBLIC_BASE_URL: https://localhost:${PASSPORT_ACCEPTANCE_GATEWAY_PORT:?reserve disposable loopback port}
+      ISSUER_BASE_URL: https://localhost:${PASSPORT_ACCEPTANCE_GATEWAY_PORT:?reserve disposable loopback port}
       MARTY_ORG_SLUG: marty
     secrets: [marty_db_password, grpc_service_token, issuance_api_key]
     depends_on:
@@ -377,8 +380,8 @@ services:
       FLOW_SERVICE_PORT: "8011"
       PASSPORT_NATIVE_FLOW_ENABLED: "true"
       PASSPORT_INTERNAL_SERVICE_AUTH_ENABLED: "true"
-      MARTY_ISSUER_DID: did:web:localhost:orgs:marty
-      PUBLIC_BASE_URL: http://localhost:${PASSPORT_ACCEPTANCE_GATEWAY_PORT:?reserve disposable loopback port}
+      MARTY_ISSUER_DID: did:web:localhost%3A${PASSPORT_ACCEPTANCE_GATEWAY_PORT:?reserve disposable loopback port}:orgs:marty
+      PUBLIC_BASE_URL: https://localhost:${PASSPORT_ACCEPTANCE_GATEWAY_PORT:?reserve disposable loopback port}
       GRPC_SERVICE_TOKEN_FILE: /run/secrets/grpc_service_token
       ISSUANCE_API_KEY_FILE: /run/secrets/issuance_api_key
       DATABASE_URL_TEMPLATE: postgresql+asyncpg://marty:$${MARTY_DB_PASSWORD}@postgres:5432/marty
@@ -392,7 +395,7 @@ services:
       TRUST_PROFILE_SERVICE_URL: http://trust-profile:8004
       DEPLOYMENT_PROFILE_SERVICE_URL: http://deployment-profile:8010
       ISSUANCE_NATIVE_SERVICE_URL: http://issuance-native:8005
-      ISSUANCE_SERVICE_URL: http://issuance:8005
+      ISSUANCE_SERVICE_URL: http://issuance-native:8005
       SIGNING_KEYS_INTERNAL_URL: http://signing-keys:8017/internal
       SIGNING_KEYS_INTERNAL_API_KEY_FILE: /run/secrets/signing_keys_internal_api_key
     secrets: [marty_db_password, signing_keys_internal_api_key, issuance_api_key, grpc_service_token]
@@ -443,7 +446,8 @@ services:
       GRPC_SERVICE_TOKEN_FILE: /run/secrets/grpc_service_token
       SIGNING_KEYS_INTERNAL_API_KEY_FILE: /run/secrets/callback_signer_api_key
       SIGNING_KEYS_INTERNAL_URL: http://passport-callback-signer:8018/internal/documents
-      PASSPORT_BUREAU_CALLBACK_URL: http://issuance-native:8005/v1/passport/webhooks/personalization
+      PASSPORT_BETA_BUREAU_GATEWAY_CALLBACK_ENABLED: "true"
+      PASSPORT_BUREAU_CALLBACK_URL: http://gateway:8000/v1/passport/webhooks/personalization
     secrets: [bureau_database_url, grpc_service_token, callback_signer_api_key]
     depends_on:
       postgres:
@@ -465,8 +469,8 @@ services:
       PASSPORT_NATIVE_GATEWAY_ENABLED: "true"
       PASSPORT_PROVIDER_INGRESS_GATEWAY_ENABLED: "false"
       PASSPORT_INTERNAL_SERVICE_AUTH_ENABLED: "true"
-      PUBLIC_DOMAIN: localhost
-      ISSUER_BASE_URL: http://localhost:${PASSPORT_ACCEPTANCE_GATEWAY_PORT:?reserve disposable loopback port}
+      PUBLIC_DOMAIN: localhost:${PASSPORT_ACCEPTANCE_GATEWAY_PORT:?reserve disposable loopback port}
+      ISSUER_BASE_URL: https://localhost:${PASSPORT_ACCEPTANCE_GATEWAY_PORT:?reserve disposable loopback port}
       GRPC_SERVICE_TOKEN_FILE: /run/secrets/grpc_service_token
       ISSUANCE_API_KEY_FILE: /run/secrets/issuance_api_key
       ORGANIZATION_SERVICE_URL: http://organization:8002
@@ -479,7 +483,7 @@ services:
       ES_GRPC_TARGET: event-stream:9015
       FLOW_SERVICE_URL: http://flow:8011
       ISSUANCE_NATIVE_SERVICE_URL: http://issuance-native:8005
-      ISSUANCE_SERVICE_URL: http://issuance:8005
+      ISSUANCE_SERVICE_URL: http://issuance-native:8005
       SIGNING_KEYS_SERVICE_URL: http://signing-keys:8017
       GATEWAY_REQUIRED_READY_SERVICES: flows,issuance-native,signing-keys
       REDIS_URL: redis://redis:6379
@@ -504,8 +508,6 @@ services:
         condition: service_started
       passport-beta-bureau:
         condition: service_started
-    ports:
-      - "127.0.0.1:${PASSPORT_ACCEPTANCE_GATEWAY_PORT:?reserve disposable loopback port}:8000"
     networks: [private]
 
 secrets:
@@ -535,6 +537,28 @@ secrets:
     file: ${PASSPORT_ACCEPTANCE_SECRET_DIR:?use disposable secret root}/token_hmac_key
   integration_secret_master_key:
     file: ${PASSPORT_ACCEPTANCE_SECRET_DIR:?use disposable secret root}/integration_secret_master_key
+  passport_edge_tls_cert:
+    file: ${PASSPORT_ACCEPTANCE_SECRET_DIR:?use disposable secret root}/passport_edge_tls_cert
+  passport_edge_tls_key:
+    file: ${PASSPORT_ACCEPTANCE_SECRET_DIR:?use disposable secret root}/passport_edge_tls_key
+  flow_webhook_secret:
+    file: ${PASSPORT_ACCEPTANCE_SECRET_DIR:?use disposable secret root}/flow_webhook_secret
+  flow_application_event_hmac_key:
+    file: ${PASSPORT_ACCEPTANCE_SECRET_DIR:?use disposable secret root}/flow_application_event_hmac_key
+  workload_identity_ca_cert:
+    file: ${PASSPORT_ACCEPTANCE_SECRET_DIR:?use disposable secret root}/workload_identity_ca_cert
+  flow_workload_client_cert:
+    file: ${PASSPORT_ACCEPTANCE_SECRET_DIR:?use disposable secret root}/flow_workload_client_cert
+  flow_workload_client_key:
+    file: ${PASSPORT_ACCEPTANCE_SECRET_DIR:?use disposable secret root}/flow_workload_client_key
+  flow_workload_server_cert:
+    file: ${PASSPORT_ACCEPTANCE_SECRET_DIR:?use disposable secret root}/flow_workload_server_cert
+  flow_workload_server_key:
+    file: ${PASSPORT_ACCEPTANCE_SECRET_DIR:?use disposable secret root}/flow_workload_server_key
+  pp_workload_server_cert:
+    file: ${PASSPORT_ACCEPTANCE_SECRET_DIR:?use disposable secret root}/pp_workload_server_cert
+  pp_workload_server_key:
+    file: ${PASSPORT_ACCEPTANCE_SECRET_DIR:?use disposable secret root}/pp_workload_server_key
 
 volumes:
   postgres_data:
@@ -551,6 +575,8 @@ volumes:
 configs:
   passport_supported_openbao_start:
     file: ./scripts/passport_supported_openbao_start.sh
+  passport_supported_edge:
+    file: ./scripts/passport_supported_edge.conf
 
 networks:
   private:

@@ -19,6 +19,7 @@ import base64
 import hashlib
 import json
 import os
+import re
 import sys
 import time
 from datetime import datetime, timezone
@@ -43,6 +44,11 @@ from marty_common.migration_profile import (  # noqa: E402 - services path is bo
 from marty_common.system_ids import (  # noqa: E402 - services path is bootstrapped above
     MARTY_DEFAULT_ORG_ID,
     MARTY_DEFAULT_ORG_SLUG,
+)
+from passport_disposable_identity import (  # noqa: E402 - services path is bootstrapped above
+    ORGANIZATION_ID as DISPOSABLE_ORGANIZATION_ID,
+    issuer_did as disposable_issuer_did,
+    managed_key_reference,
 )
 
 
@@ -118,6 +124,46 @@ MARTY_KMS_KEY_SPECS: list[dict[str, Any]] = [
         "credential_formats": ["mso_mdoc", "vds_nc"],
     },
 ]
+
+
+def _disposable_passport_key_specs(
+    organization_id: str, issuer_did: str, issuer_url: str
+) -> list[dict[str, Any]]:
+    """Enable precreated ICAO keys only inside the protected disposable project."""
+    flag = os.environ.get("PASSPORT_DISPOSABLE_ICAO_BOOTSTRAP")
+    if flag is None:
+        return []
+    if flag != "true":
+        raise ValueError("Disposable ICAO bootstrap flag must be true")
+    project = os.environ.get("PASSPORT_ACCEPTANCE_PROJECT", "")
+    if not re.fullmatch(r"marty-passport-acceptance-(base|selfhost)-[a-z0-9]{6,32}", project):
+        raise ValueError("Disposable ICAO project is invalid")
+    port_text = os.environ.get("PASSPORT_ACCEPTANCE_GATEWAY_PORT", "")
+    if not port_text.isdecimal():
+        raise ValueError("Disposable ICAO Gateway port is invalid")
+    port = int(port_text)
+    expected_did = disposable_issuer_did(port)
+    if (
+        organization_id != DISPOSABLE_ORGANIZATION_ID
+        or issuer_did != expected_did
+        or issuer_url != f"https://localhost:{port}"
+        or _public_domain() != f"localhost:{port}"
+    ):
+        raise ValueError("Disposable ICAO issuer scope is invalid")
+    return [
+        {
+            "id": managed_key_reference(port, purpose),
+            "name": f"Disposable passport {purpose} key",
+            "type": "ecdsa-p256",
+            "algorithm": "ES256",
+            "key_purposes": [purpose],
+            "credential_formats": [credential_format],
+        }
+        for purpose, credential_format in (
+            ("csca", "mso_mdoc"),
+            ("x509_doc_signer", "icao_emrtd"),
+        )
+    ]
 
 MARTY_ISSUER_PROFILE_SPECS: list[dict[str, str]] = [
     {
@@ -722,15 +768,7 @@ def _seed_signing_registry(
         if isinstance(registry.get("format_defaults"), dict)
         else {}
     )
-    for credential_format in (
-        "jwt_vc_json",
-        "dc+sd-jwt",
-        "ldp_vc",
-        "mso_mdoc",
-        "vds_nc",
-        "lti_tool_jwt",
-        "oauth-authz-req+jwt",
-    ):
+    for credential_format in credential_formats:
         format_defaults.setdefault(credential_format, MANAGED_OPENBAO_SERVICE_ID)
 
     type_defaults = (
@@ -738,14 +776,7 @@ def _seed_signing_registry(
         if isinstance(registry.get("type_defaults"), dict)
         else {}
     )
-    for key_purpose in (
-        "vc_jwt_issuer",
-        "jwks_signing",
-        "lti_tool_signing",
-        "oid4vp_request_signing",
-        "mdoc_dsc",
-        "vdsnc_signing",
-    ):
+    for key_purpose in key_purposes:
         type_defaults.setdefault(key_purpose, MANAGED_OPENBAO_SERVICE_ID)
 
     registry["services"] = services
@@ -1001,12 +1032,19 @@ def bootstrap_marty_kms_identity() -> bool:
         )
         issuer_did = _issuer_did()
         issuer_url = _issuer_base_url()
+        disposable_specs = _disposable_passport_key_specs(
+            organization_id, issuer_did, issuer_url
+        )
 
         _ensure_transit_mount(bao_addr, bao_token)
         _ensure_openbao_envelope_key(bao_addr, bao_token)
+        for spec in disposable_specs:
+            data = _read_openbao_transit_key(bao_addr, bao_token, spec["id"])
+            if not isinstance(data, dict) or data.get("type") != spec["type"] or data.get("exportable") is not False:
+                raise ValueError("Disposable ICAO key must be precreated and non-exportable")
         key_records = [
             _ensure_openbao_key(bao_addr, bao_token, spec)
-            for spec in MARTY_KMS_KEY_SPECS
+            for spec in [*MARTY_KMS_KEY_SPECS, *disposable_specs]
         ]
 
         _seed_signing_registry(redis_client, organization_id, key_records)

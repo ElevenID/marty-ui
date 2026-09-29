@@ -15,6 +15,7 @@ struct Contract {
     payload_defaults: Vec<PayloadDefaultCase>,
     payload_aliases: Vec<PayloadAliasCase>,
     issuance_protocols: Vec<IssuanceProtocolCase>,
+    format_protocol_pairs: Vec<FormatProtocolPairCase>,
     protocol_requirements: Vec<ProtocolRequirementCase>,
     inner_uris: Vec<InnerUriCase>,
     wallet_links: Vec<WalletLinkCase>,
@@ -45,6 +46,13 @@ struct PayloadAliasCase {
 struct IssuanceProtocolCase {
     input: String,
     wire: String,
+}
+
+#[derive(Deserialize)]
+struct FormatProtocolPairCase {
+    format: String,
+    protocol: String,
+    accepted: bool,
 }
 
 #[derive(Deserialize)]
@@ -90,7 +98,7 @@ fn contract() -> Contract {
 #[test]
 fn credential_format_and_protocol_aliases_are_canonical() {
     let contract = contract();
-    assert_eq!(contract.schema_version, 1);
+    assert_eq!(contract.schema_version, 2);
     for case in contract.formats {
         let format = CredentialFormat::parse(&case.input).unwrap_or_else(|error| {
             panic!("{}: {error}", case.input);
@@ -135,11 +143,37 @@ fn credential_format_and_protocol_aliases_are_canonical() {
 
 #[test]
 fn protocol_requirements_fail_closed() {
-    for case in contract().protocol_requirements {
+    let contract = contract();
+    for case in contract.format_protocol_pairs {
+        let format = CredentialFormat::parse(&case.format).expect("fixture format");
+        let protocol = IssuanceProtocol::parse(Some(&case.protocol)).expect("fixture protocol");
+        let result = validate_protocol_requirements(
+            Some("profile-1"),
+            format,
+            protocol,
+            &if format == CredentialFormat::IcaoEmrtd {
+                vec![CredentialFormat::IcaoEmrtd]
+            } else {
+                vec![format]
+            },
+            Some("urn:example:credential"),
+            Some("org.iso.18013.5.1.mDL"),
+        );
+        assert_eq!(
+            result.is_ok(),
+            case.accepted,
+            "{} {}",
+            case.format,
+            case.protocol
+        );
+    }
+    for case in contract.protocol_requirements {
         let format = CredentialFormat::parse(&case.format).expect("fixture format");
         let result = validate_protocol_requirements(
             case.compliance_profile_id.as_deref(),
             format,
+            IssuanceProtocol::Oid4vciPreAuth,
+            &[format],
             case.vct.as_deref(),
             case.doctype.as_deref(),
         );

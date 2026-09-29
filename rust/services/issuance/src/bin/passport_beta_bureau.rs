@@ -63,9 +63,14 @@ impl Config {
             );
         }
         let callback_url = required_url("PASSPORT_BUREAU_CALLBACK_URL")?;
-        if !private_native_callback(&callback_url) {
+        if !private_selected_callback(
+            &callback_url,
+            env::var("PASSPORT_BETA_BUREAU_GATEWAY_CALLBACK_ENABLED")
+                .ok()
+                .as_deref(),
+        )? {
             return Err(
-                "PASSPORT_BUREAU_CALLBACK_URL must name the private native callback route".into(),
+                "PASSPORT_BUREAU_CALLBACK_URL must name the selected private callback route".into(),
             );
         }
         let listen = env::var("PASSPORT_BETA_BUREAU_LISTEN")
@@ -98,6 +103,18 @@ fn private_signing_gateway(url: &Url) -> bool {
 
 fn private_native_callback(url: &Url) -> bool {
     url.as_str() == "http://issuance-native:8005/v1/passport/webhooks/personalization"
+}
+
+fn private_gateway_callback(url: &Url) -> bool {
+    url.as_str() == "http://gateway:8000/v1/passport/webhooks/personalization"
+}
+
+fn private_selected_callback(url: &Url, gateway_enabled: Option<&str>) -> Result<bool, String> {
+    match gateway_enabled {
+        None | Some("false") => Ok(private_native_callback(url)),
+        Some("true") => Ok(private_gateway_callback(url)),
+        _ => Err("PASSPORT_BETA_BUREAU_GATEWAY_CALLBACK_ENABLED is invalid".into()),
+    }
 }
 
 fn private_beta_database(value: &str) -> bool {
@@ -525,6 +542,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .await?;
     sqlx::raw_sql(SCHEMA).execute(&pool).await?;
     let http = Client::builder()
+        .no_proxy()
         .redirect(Policy::none())
         .timeout(Duration::from_secs(5))
         .build()?;
@@ -696,6 +714,33 @@ mod tests {
         assert!(!private_native_callback(
             &Url::parse("http://external.example/v1/passport/webhooks/personalization").unwrap()
         ));
+        let contract: Value = serde_json::from_str(include_str!(
+            "../../../../../contracts/passport-beta-bureau-behavior.json"
+        ))
+        .unwrap();
+        let disposable = &contract["callback"]["disposable_gateway_transport"];
+        assert_eq!(
+            disposable["enabled_by"],
+            "PASSPORT_BETA_BUREAU_GATEWAY_CALLBACK_ENABLED=true"
+        );
+        assert_eq!(
+            disposable["exact_url"],
+            "http://gateway:8000/v1/passport/webhooks/personalization"
+        );
+        assert!(private_gateway_callback(
+            &Url::parse(disposable["exact_url"].as_str().unwrap()).unwrap()
+        ));
+        assert!(!private_gateway_callback(
+            &Url::parse("http://external.example/v1/passport/webhooks/personalization").unwrap()
+        ));
+        let gateway = Url::parse(disposable["exact_url"].as_str().unwrap()).unwrap();
+        let native =
+            Url::parse("http://issuance-native:8005/v1/passport/webhooks/personalization").unwrap();
+        assert_eq!(private_selected_callback(&gateway, Some("true")), Ok(true));
+        assert_eq!(private_selected_callback(&native, Some("true")), Ok(false));
+        assert_eq!(private_selected_callback(&native, None), Ok(true));
+        assert_eq!(private_selected_callback(&gateway, None), Ok(false));
+        assert!(private_selected_callback(&gateway, Some("TRUE")).is_err());
     }
 
     #[test]
