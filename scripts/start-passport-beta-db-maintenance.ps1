@@ -98,6 +98,32 @@ function Assert-DockerIdentity {
     }
 }
 
+function Stop-BetaGeneration {
+    param($Plan)
+    $ingress = @('cloudflared', 'nginx-proxy', 'envoy', 'gateway', 'waltid-nginx')
+    $ordered = @($Plan.beta_generation | Where-Object { $_.service -in $ingress } |
+        Sort-Object { [Array]::IndexOf($ingress, [string]$_.service) }) +
+        @($Plan.beta_generation | Where-Object {
+            $_.service -ne 'postgres' -and $_.service -notin $ingress
+        })
+    foreach ($service in $ordered) {
+        $id = [string]$service.container_id
+        if ($id -notmatch '^[0-9a-f]{64}$') {
+            throw 'Beta maintenance stop target is invalid'
+        }
+        Assert-DockerIdentity -Plan $Plan
+        $current = @(& docker inspect --format '{{.State.Running}}' $id 2>$null)
+        if ($LASTEXITCODE -ne 0 -or $current.Count -ne 1 -or
+            $current[0] -notin @('true', 'false')) {
+            throw 'Beta maintenance container state is unavailable'
+        }
+        if ($current[0] -eq 'true') {
+            & docker stop --time 60 $id | Out-Null
+            if ($LASTEXITCODE -ne 0) { throw 'Beta service did not stop cleanly' }
+        }
+    }
+}
+
 $lock = Enter-BetaDeploymentLock -AllowPending:$ResumePending
 try {
     if (-not (Test-Path -LiteralPath (Get-BetaPassportFenceMarkerPath)) -or
@@ -171,28 +197,7 @@ try {
     $state = Invoke-MaintenancePython -Arguments ($baseArgs + @(
         '--verify-plan', $intentAbsolute))
     if ($state.verified -ne $true) { throw 'Beta maintenance intent changed' }
-    $ingress = @('cloudflared', 'nginx-proxy', 'envoy', 'gateway', 'waltid-nginx')
-    $ordered = @($plan.beta_generation | Where-Object { $_.service -in $ingress } |
-        Sort-Object { [Array]::IndexOf($ingress, [string]$_.service) }) +
-        @($plan.beta_generation | Where-Object {
-            $_.service -ne 'postgres' -and $_.service -notin $ingress
-        })
-    foreach ($service in $ordered) {
-        $id = [string]$service.container_id
-        if ($id -notmatch '^[0-9a-f]{64}$') {
-            throw 'Beta maintenance stop target is invalid'
-        }
-        Assert-DockerIdentity -Plan $plan
-        $current = @(& docker inspect --format '{{.State.Running}}' $id 2>$null)
-        if ($LASTEXITCODE -ne 0 -or $current.Count -ne 1 -or
-            $current[0] -notin @('true', 'false')) {
-            throw 'Beta maintenance container state is unavailable'
-        }
-        if ($current[0] -eq 'true') {
-            & docker stop --time 60 $id | Out-Null
-            if ($LASTEXITCODE -ne 0) { throw 'Beta service did not stop cleanly' }
-        }
-    }
+    Stop-BetaGeneration -Plan $plan
     $stopped = Invoke-MaintenancePython -Arguments ($baseArgs + @(
         '--verify-plan', $intentAbsolute, '--require-stopped'))
     if ($stopped.verified -ne $true -or
