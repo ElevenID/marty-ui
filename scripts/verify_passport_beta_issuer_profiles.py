@@ -13,11 +13,13 @@ import hashlib
 import hmac
 import json
 import re
+import secrets
 import subprocess
-from typing import Any
+from typing import Any, Callable
 
 from cryptography import x509
-from cryptography.hazmat.primitives import serialization
+from cryptography.exceptions import InvalidSignature
+from cryptography.hazmat.primitives import hashes, serialization
 from cryptography.hazmat.primitives.asymmetric import ec
 
 
@@ -28,21 +30,12 @@ class IssuerProfileEvidenceError(ValueError):
 CONTAINER_ID = re.compile(r"[0-9a-f]{64}\Z")
 
 
-def resolve_in_container(container_id: str, organization_id: str,
-                         issuer_did: str, key_purpose: str) -> dict[str, Any]:
-    """Resolve through the private Rust service without exporting its token."""
+def _post_in_container(container_id: str, route: str, body: dict[str, Any]) -> dict[str, Any]:
     if (not isinstance(container_id, str) or CONTAINER_ID.fullmatch(container_id) is None
-            or not isinstance(organization_id, str) or not organization_id
-            or not isinstance(issuer_did, str) or not issuer_did.startswith("did:")
-            or key_purpose not in ("csca", "x509_doc_signer")):
-        raise IssuerProfileEvidenceError("Private issuer resolution input is invalid")
-    body = json.dumps({
-        "organization_id": organization_id,
-        "issuer_did": issuer_did,
-        "credential_format": "ICAO_EMRTD",
-        "key_purpose": key_purpose,
-        "algorithm": "ES256",
-    }, separators=(",", ":")).encode("utf-8")
+            or route not in ("/internal/compat/resolve-issuer-did",
+                             "/internal/compat/issuer-dids/sign")):
+        raise IssuerProfileEvidenceError("Private issuer request input is invalid")
+    payload = json.dumps(body, separators=(",", ":")).encode("utf-8")
     command = [
         "docker", "exec", "-i", container_id, "sh", "-eu", "-c",
         'key="${SIGNING_KEYS_INTERNAL_API_KEY:-}"; '
@@ -51,19 +44,53 @@ def resolve_in_container(container_id: str, organization_id: str,
         '[ -n "$key" ] || exit 4; '
         'exec curl --fail --silent --show-error --max-time 20 '
         '-H "Content-Type: application/json" -H "x-api-key: $key" '
-        '--data-binary @- http://127.0.0.1:8017/internal/compat/resolve-issuer-did',
+        f'--data-binary @- http://127.0.0.1:8017{route}',
     ]
     try:
-        result = subprocess.run(command, input=body, capture_output=True,
+        result = subprocess.run(command, input=payload, capture_output=True,
                                 timeout=30, check=True)
         if len(result.stdout) > 256 * 1024:
-            raise IssuerProfileEvidenceError("Private issuer resolution is oversized")
+            raise IssuerProfileEvidenceError("Private issuer response is oversized")
         response = json.loads(result.stdout)
     except (OSError, ValueError, subprocess.SubprocessError) as exc:
-        raise IssuerProfileEvidenceError("Private issuer resolution failed") from exc
+        raise IssuerProfileEvidenceError("Private issuer request failed") from exc
     if not isinstance(response, dict):
-        raise IssuerProfileEvidenceError("Private issuer resolution is invalid")
+        raise IssuerProfileEvidenceError("Private issuer response is invalid")
     return response
+
+
+def resolve_in_container(container_id: str, organization_id: str,
+                         issuer_did: str, key_purpose: str) -> dict[str, Any]:
+    """Resolve through the private Rust service without exporting its token."""
+    if (not isinstance(container_id, str) or CONTAINER_ID.fullmatch(container_id) is None
+            or not isinstance(organization_id, str) or not organization_id
+            or not isinstance(issuer_did, str) or not issuer_did.startswith("did:")
+            or key_purpose not in ("csca", "x509_doc_signer")):
+        raise IssuerProfileEvidenceError("Private issuer resolution input is invalid")
+    return _post_in_container(container_id, "/internal/compat/resolve-issuer-did", {
+        "organization_id": organization_id,
+        "issuer_did": issuer_did,
+        "credential_format": "ICAO_EMRTD",
+        "key_purpose": key_purpose,
+        "algorithm": "ES256",
+    })
+
+
+def sign_in_container(container_id: str, organization_id: str, issuer_did: str,
+                      key_purpose: str, challenge: bytes) -> dict[str, Any]:
+    if (not isinstance(organization_id, str) or not organization_id
+            or not isinstance(issuer_did, str) or not issuer_did.startswith("did:")
+            or key_purpose not in ("csca", "x509_doc_signer")
+            or not isinstance(challenge, bytes) or len(challenge) != 48):
+        raise IssuerProfileEvidenceError("Private issuer signing input is invalid")
+    return _post_in_container(container_id, "/internal/compat/issuer-dids/sign", {
+        "organization_id": organization_id,
+        "issuer_did": issuer_did,
+        "credential_format": "ICAO_EMRTD",
+        "key_purpose": key_purpose,
+        "algorithm": "ES256",
+        "payload_b64": base64.urlsafe_b64encode(challenge).decode("ascii").rstrip("="),
+    })
 
 
 def _required(value: dict[str, Any], field: str) -> str:
@@ -151,7 +178,7 @@ def verify_profile_certificates(
     csca_certificate_pem: str,
     api_key: str,
 ) -> dict[str, Any]:
-    """Bind managed profiles to two successful ceremonies and the public chain."""
+    """Bind profile certificates to ceremonies; live key proof is separate."""
     binding = verify_profiles(organization_id, csca_issuer_did, dsc_issuer_did,
                               csca_resolution, dsc_resolution, api_key)
     if (not isinstance(chain_evidence, dict)
@@ -193,6 +220,57 @@ def verify_profile_certificates(
         raise IssuerProfileEvidenceError("DSC profile certificate is invalid") from exc
     if hashlib.sha256(dsc_der).hexdigest() != dsc_expected:
         raise IssuerProfileEvidenceError("DSC profile certificate differs from ceremony")
+    return {
+        "csca_issuer_profile_commitment": binding["csca_issuer_profile_commitment"],
+        "dsc_issuer_profile_commitment": binding["dsc_issuer_profile_commitment"],
+        "profile_certificate_binding_verified": True,
+        "chain_verified": True,
+    }
+
+
+def verify_live_signatures(
+    organization_id: str,
+    csca_issuer_did: str,
+    dsc_issuer_did: str,
+    csca_resolution: dict[str, Any],
+    dsc_resolution: dict[str, Any],
+    chain_evidence: dict[str, Any],
+    csca_certificate_pem: str,
+    api_key: str,
+    *,
+    signer: Callable[[str, str, str, bytes], dict[str, Any]],
+) -> dict[str, Any]:
+    """Prove that both current DID-selected KMS keys sign for the selected chain."""
+    binding = verify_profile_certificates(
+        organization_id, csca_issuer_did, dsc_issuer_did,
+        csca_resolution, dsc_resolution, chain_evidence, csca_certificate_pem, api_key,
+    )
+    csca_certificate = x509.load_pem_x509_certificate(csca_certificate_pem.encode("ascii"))
+    dsc_der = base64.b64decode(dsc_resolution["issuer_x5c"][0], validate=True)
+    dsc_certificate = x509.load_der_x509_certificate(dsc_der)
+    for role, did, resolution, certificate in (
+        ("csca", csca_issuer_did, csca_resolution, csca_certificate),
+        ("x509_doc_signer", dsc_issuer_did, dsc_resolution, dsc_certificate),
+    ):
+        challenge = secrets.token_bytes(48)
+        signed = signer(organization_id, did, role, challenge)
+        if (not isinstance(signed, dict) or signed.get("ok") is not True
+                or signed.get("algorithm") != "ES256"
+                or signed.get("signature_encoding") != "der"
+                or signed.get("payload_length") != len(challenge)
+                or signed.get("issuer_did") != did
+                or signed.get("verification_method_id") != resolution.get("verification_method_id")
+                or not isinstance(signed.get("signature_b64"), str)):
+            raise IssuerProfileEvidenceError("Current managed issuer signing proof is incomplete")
+        try:
+            signature_text = signed["signature_b64"]
+            signature = base64.urlsafe_b64decode(signature_text + "=" * (-len(signature_text) % 4))
+            public_key = certificate.public_key()
+            if not isinstance(public_key, ec.EllipticCurvePublicKey):
+                raise IssuerProfileEvidenceError("Managed issuer certificate key is not ES256")
+            public_key.verify(signature, challenge, ec.ECDSA(hashes.SHA256()))
+        except (ValueError, binascii.Error, InvalidSignature) as exc:
+            raise IssuerProfileEvidenceError("Current managed key cannot sign for selected certificate") from exc
     return {
         "csca_issuer_profile_commitment": binding["csca_issuer_profile_commitment"],
         "dsc_issuer_profile_commitment": binding["dsc_issuer_profile_commitment"],
