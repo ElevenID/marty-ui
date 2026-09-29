@@ -1,11 +1,12 @@
 # Next aggregate beta: acceptance checklist
 
-Source-readiness audit: the protected source and this pending Signing Keys
-public-parity branch; record their exact protected merge SHAs before
-selecting a release. This is a pending checklist, not a release reservation,
-deployment authorization for production, or an acceptance claim. Historical
-beta 1.1.217 evidence cannot qualify a new candidate. No candidate coordinate is
-selected here.
+Source-readiness audit: Signing Keys #913 and the passport aggregate #919 are
+on protected main. The remaining aggregate correction and deployment writer fence
+must pass protected checks and merge before a release claim. The
+[held 1.1.218 coordinate](passport-predeletion-release-1.1.218.md) is for
+reviewed Rust pre-deletion qualification; it does not authorize a claim or
+deployment. Historical beta 1.1.217 evidence cannot qualify the new source.
+The final beta release must come from the source after Python passport deletion.
 
 ## Protected configuration audit — 2026-09-20
 
@@ -37,23 +38,46 @@ selected here.
    changes. Resolve remaining source-qualification and consumer-acceptance gates
    before claiming whole-goal completion. Keep DIDComm KMS redesign separately
    deferred.
-2. Select a fresh unused aggregate coordinate. Use
-   `.github/workflows/prepare-stack-tag.yml` and `cd.yml`; retain the source,
+2. Keep 1.1.218 on hold until the remaining Rust source and component pins are
+   reviewed on protected main. Then separately make it eligible and use
+   `.github/workflows/prepare-stack-tag.yml` and `cd.yml` to claim and publish
+   the immutable **pre-deletion qualification** release. Retain the source,
    claim/transaction and run identities. Verify annotated tag/source, complete
    checksums, signed manifest/provenance, release assets and every OCI digest
    listed in the signed aggregate manifest, including credentials issuance,
-   UI, services and migrations. Do not overwrite earlier releases or reuse
-   their acceptance evidence.
-3. From a clean released worktree, prepare one aggregate beta deployment using
-   `scripts/deploy-local-beta-release.ps1 -OfficialStackRelease`, the reviewed
-   recorder revision and fresh artifact paths. Verify backups, isolated
-   migration rehearsal, workload identity, actual rendered configuration and
-   authcrypt policy/CA pairing. `-PlanOnly` explicitly reports
-   `didcomm_configuration_validated=false`; it is not runtime qualification.
+   UI, services and migrations. This release is for protected disposable
+   runtime proof; do not deploy it to beta or reuse earlier acceptance evidence.
+3. Pass the reviewed base Compose, selfhost Compose, and independent Kubernetes
+   Rust passport proofs, KMS chain and certificate gates, signed callback,
+   two-job batch, and job restart/resume in the protected disposable
+   environments. Separately install and attest a durable passport-scoped
+   write fence on real beta, then inventory the shared Python issuance service,
+   attest the live cutover drain, and preserve or resolve every job and artifact.
+   The service also owns unrelated routes and must remain available; its
+   passport write paths must be blocked. Verify the exact head of the
+   [Credentials deletion PR](https://github.com/ElevenID/marty-credentials/pull/305),
+   whose gate now calls for the scoped fence, and implement its missing
+   protected final cutover producer. Attest the
+   later beta drain watermark against that head, pass its post-cutover CI,
+   and resolve review findings before merging the deletion. The producer and
+   live receipts are absent today, so this gate is still blocked.
+4. Select a fresh unused coordinate for the **post-deletion** source, refresh
+   all component pins, and repeat the protected claim and release sequence.
+   Verify that the final signed images contain the reviewed Rust owner and no
+   superseded Python passport route.
+5. After the protected aggregate operator has merged and the final signed
+   post-deletion release is available, perform the one beta cutover with
+   `scripts/run-passport-beta-aggregate-deploy.ps1` from a clean released
+   worktree. Supply the signed stack manifest and the attested fence,
+   maintenance, and native migration receipts; write a fresh aggregate receipt
+   outside protected source. Verify its exact Compose render, signed images,
+   preserved beta state, KMS custody, and production isolation before accepting
+   the runtime. The older `deploy-local-beta-release.ps1 -OfficialStackRelease`
+   still invokes Python migrations and is not the Rust-only cutover operator.
    Native passport remains off until the protected passport PR chain and this
    KMS-only selector have merged, the exact beta image digest is available,
    and the runtime gates below pass. The former five-file passport overlay has
-   been replaced in the integration branch by managed issuer signing, Transit
+   been replaced in the Rust candidate by managed issuer signing, Transit
    artifact encryption, Transit callback MAC, an existing internal service
    credential handoff, and a beta-only non-physical bureau simulator. **Do not
    provision the old passport key files or select an older profile.** Render
@@ -102,7 +126,7 @@ selected here.
    The shared Rust image builds both beta-only binaries and its closed entrypoint
    dispatches `passport-callback-signer` and `passport-beta-bureau` explicitly.
    The exact-head protected image and release-contract jobs must pass before
-   selecting an aggregate beta release.
+   claiming an aggregate release.
 
    The [Signing Keys public-route parity audit](signing-keys-public-parity-2026-09-26.md)
    found 24 Gateway-declared method/path pairs without Rust public handlers on
@@ -189,30 +213,31 @@ selected here.
    chat), and verify the `credentials:issue` scope maps to passport initiation.
    No new tenant or passport-specific static keyring is required for the
    existing pilot organization. Recheck these counts at actual cutover.
-   At cutover, deployment stops and verifies application writers, then requires
-   zero in-flight legacy bureau jobs before switching to KMS callback
+   At cutover, deployment verifies the passport-scoped write fence and stops
+   old application writers during the Rust owner switch. It requires zero
+   in-flight legacy bureau jobs before switching to KMS callback
    verification. The deployment preflight rejects an existing bureau without
    the isolated signer: the current restore script cannot recover such a
    pre-isolation passport snapshot. The inventoried beta has no bureau, so
-   this release is eligible for a first passport cutover only; recheck that
+   the first passport cutover remains conditional; recheck that
    condition before deployment and keep the restore constraint visible.
-4. The wrapper requires `BetaOrigin` to equal `https://beta.elevenidllc.com`.
+6. Require the beta origin to equal `https://beta.elevenidllc.com`.
    Retain fixed beta Compose projects/network and labeled-volume ownership checks.
    Capture and compare production's exact before/after identity and state;
    beta isolation checks do not independently prove production unchanged.
    Do not deploy, restore, reset or probe mutating endpoints on production.
-5. Preserve the original three deployment evidence files and package them with
+7. Preserve the original three deployment evidence files and package them with
    the released `beta-evidence-bundle` utility. Complete private recorder
    `release-qualification.yml`, then public `.github/workflows/e2e-tests.yml`
    with exact run/SHA/receipt hashes. Retain full browser, demo and credential
    lifecycle results, including fresh custom-themed Keycloak/KMS switching
    recordings. Portfolio qualification alone is not all-demo acceptance.
-6. Complete `.github/workflows/wallet-conformance.yml` using protected evidence
+8. Complete `.github/workflows/wallet-conformance.yml` using protected evidence
    URL/hash, verified attachments and exact release/lifecycle lineage. Preserve
    genuine Spruce issuance/login recordings, signed-request capture and the
    seven native-wallet handoffs required by the catalog. Keep the inactive
    Walt.id blocker visible; do not replace device evidence with mocks.
-7. Start a new uninterrupted release/source-bound soak. Existing
+9. Start a new uninterrupted release/source-bound soak. Existing
    `collect_rust_beta_soak_evidence.py` and `verify_rust_beta_soak_window.py`
    implement the governed 7/14-day windows and maximum 26-hour sample gaps for
    event-stream/revocation. Those samples do not cover every newly migrated

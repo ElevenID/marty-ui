@@ -29,6 +29,12 @@ def lock():
     return json.loads((ROOT / "release/stack-lock.json").read_text(encoding="utf-8"))
 
 
+def eligible_lock():
+    value = lock()
+    value["release_state"] = "eligible"
+    return value
+
+
 def issuance(value):
     return next(
         item for item in value["components"] if item["name"] == binding.COMPONENT_NAME
@@ -46,6 +52,12 @@ def mirror(repository="registry.example:5443/renamed/nested/external-api"):
     return repository + "@" + canonical().split("@", 1)[1]
 
 
+def test_checked_in_hold_lock_rejects_deployment():
+    assert lock()["release_state"] == "hold"
+    with pytest.raises(ValueError, match=binding.REFUSAL):
+        binding.validate_issuance_binding(canonical(), lock())
+
+
 @pytest.mark.parametrize(
     "repository",
     [
@@ -60,7 +72,7 @@ def test_exact_content_digest_accepts_canonical_and_explicit_mirrors_unchanged(
     repository,
 ):
     reference = mirror(repository)
-    original = lock()
+    original = eligible_lock()
     before = deepcopy(original)
     assert binding.validate_issuance_binding(reference, original) == reference
     assert original == before
@@ -99,7 +111,7 @@ def test_exact_content_digest_accepts_canonical_and_explicit_mirrors_unchanged(
 )
 def test_bad_reference_fails_with_only_fixed_diagnostic(reference):
     with pytest.raises(ValueError) as error:
-        binding.validate_issuance_binding(reference, lock())
+        binding.validate_issuance_binding(reference, eligible_lock())
     assert str(error.value) == binding.REFUSAL
     assert PRIVATE not in str(error.value)
 
@@ -128,7 +140,7 @@ def test_bad_reference_fails_with_only_fixed_diagnostic(reference):
     ],
 )
 def test_reviewed_lock_authority_is_required_and_not_mutated(mutation):
-    value = lock()
+    value = eligible_lock()
     component = issuance(value)
     artifact = next(item for item in component["artifacts"] if item["type"] == "oci")
     if mutation == "schema":
@@ -180,13 +192,14 @@ def test_official_formatter_keeps_ghcr_policy_and_existing_alias():
     artifact["uri"] = "registry.example/marty-credentials-issuance"
     with pytest.raises(official.OfficialReleaseError):
         official.image_reference(artifact, binding.COMPONENT_NAME)
-    assert binding.validate_issuance_binding(mirror(), lock()) == mirror()
+    assert binding.validate_issuance_binding(mirror(), eligible_lock()) == mirror()
 
 
 @pytest.mark.parametrize(
     "mode",
     [
         "valid",
+        "hold",
         "missing",
         "malformed",
         "duplicate",
@@ -204,8 +217,10 @@ def test_cli_fixed_lock_bounded_strict_json_and_private_errors(
     script = tmp_path / "scripts/check_kubernetes_issuance_image.py"
     target = tmp_path / "release/stack-lock.json"
     target.parent.mkdir()
-    raw = json.dumps(lock()).encode()
-    if mode == "malformed":
+    raw = json.dumps(eligible_lock()).encode()
+    if mode == "hold":
+        raw = json.dumps(lock()).encode()
+    elif mode == "malformed":
         raw = (PRIVATE + "{").encode()
     elif mode == "duplicate":
         raw = b'{"schema":"private","schema":"private"}'
@@ -283,10 +298,32 @@ def binaries():
 )
 def test_actual_full_deploy_validates_distinct_images_before_any_write(case, tmp_path):
     bash, envsubst = binaries()
+    fixture_root = tmp_path / "eligible-repo"
+    fixture_scripts = fixture_root / "scripts"
+    fixture_scripts.mkdir(parents=True)
+    for name in (
+        "check_kubernetes_issuance_image.py",
+        "build_stack_manifest.py",
+        "prepare_official_beta_release.py",
+    ):
+        shutil.copyfile(ROOT / "scripts" / name, fixture_scripts / name)
+    fixture_release = fixture_root / "release"
+    fixture_release.mkdir()
+    (fixture_release / "stack-lock.json").write_text(
+        json.dumps(eligible_lock()), encoding="utf-8"
+    )
+    (fixture_root / "config/keycloak").mkdir(parents=True)
+    for name in (
+        "setup-keycloak-selfhost-production.sh",
+        "setup-keycloak.sh",
+        "load-secrets-env.sh",
+        "load-openbao-token-and-start.sh",
+    ):
+        (fixture_scripts / name).touch()
     # No operator environment is inherited, and PATH cannot find real kubectl.
     env = {
         "PATH": tmp_path.as_posix(),
-        "REPO_ROOT": ROOT.as_posix(),
+        "REPO_ROOT": fixture_root.as_posix(),
         "K8S_DIR": (ROOT / "k8s/oracle").as_posix(),
         "PYTHON_BIN": "checked_python",
         "REAL_PYTHON": Path(sys.executable).as_posix(),
