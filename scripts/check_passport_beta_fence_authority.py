@@ -53,6 +53,17 @@ PROTECTED_FILES = (
     "scripts/sql/passport-beta-fence-drain.sql",
     "scripts/sql/passport-beta-fence-verify.sql",
 )
+BASELINE_SCHEMA_VALIDATION_MARKERS = {
+    "rust/services/flow/src/config.rs": (
+        "PASSPORT_BETA_SCHEMA_VALIDATE_ONLY", "beta_schema_validate_only"),
+    "rust/services/flow/src/connections.rs": (
+        "if config.beta_schema_validate_only", "validate_flow_schema(&pool).await?"),
+    "rust/services/issuance/src/config.rs": (
+        "PASSPORT_BETA_SCHEMA_VALIDATE_ONLY", "beta_schema_validate_only"),
+    "rust/services/issuance/src/main.rs": (
+        "if config.beta_schema_validate_only", "migration::validate(&pool).await",
+        "migration::validate_passport(&pool).await"),
+}
 
 
 def require(condition: bool, message: str) -> None:
@@ -170,6 +181,20 @@ def protected_file(relative: str, runner: Callable[[list[str]], str]) -> None:
             f"Protected file content differs from remote main: {relative}")
 
 
+def require_baseline_schema_validation_capability(
+    source_commit: str, runner: Callable[[list[str]], str],
+) -> None:
+    """Bind the attested live services image to the DDL-free Rust startup paths."""
+    for relative, markers in BASELINE_SCHEMA_VALIDATION_MARKERS.items():
+        try:
+            contents = runner(["git", "-C", str(ROOT), "show",
+                               f"{source_commit}:{relative}"])
+        except HostProbeError as exc:
+            raise HostProbeError("Attested beta image lacks schema validation source") from exc
+        require(all(marker in contents for marker in markers),
+                "Attested beta image lacks DDL-free schema validation")
+
+
 def check_authority(
     approval_path: Path, manifest_path: Path, beta_baseline_manifest_path: Path,
     runner: Callable[[list[str]], str] = run,
@@ -208,6 +233,7 @@ def check_authority(
     baseline = manifest_source(beta_baseline_manifest_path,
                                approval["beta_baseline_source_commit"], attest,
                                attest_issuance)
+    require_baseline_schema_validation_capability(baseline["source_commit"], runner)
     version = source["release"].split("@", 1)[1]
     tag = f"v{version}"
     local_tag_object = runner(["git", "-C", str(ROOT), "rev-parse", f"refs/tags/{tag}"])

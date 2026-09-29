@@ -110,6 +110,7 @@ def fixture(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
         "deletion_state": "OPEN", "deletion_draft": True,
         "deletion_head": DELETION_HEAD,
         "baseline": baseline,
+        "schema_validation_source": True,
     }
 
     def runner(command: list[str]) -> str:
@@ -142,6 +143,11 @@ def fixture(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
                 return values["tag_type"]
             if args == ["rev-parse", "refs/tags/v1.2.3^{commit}"]:
                 return values["tag_commit"]
+            if args[:1] == ["show"] and args[1].startswith("9" * 40 + ":"):
+                if not values["schema_validation_source"]:
+                    return "old startup without DDL-free validation"
+                relative = args[1].split(":", 1)[1]
+                return " ".join(authority.BASELINE_SCHEMA_VALIDATION_MARKERS[relative])
         if command[:3] == ["gh", "api", "repos/ElevenID/marty-ui/branches/main"]:
             return json.dumps({"protected": values["protected"],
                                "commit": {"sha": values["remote_head"]}})
@@ -196,6 +202,17 @@ def test_authority_plan_binds_all_four_sources(
     assert plan["postgres_runtime"]["server_version_num"] == "150017"
     assert plan["production_snapshot_sha256"] == "1" * 64
     assert plan["verify_sql_sha256"] == hashlib.sha256(b"verify").hexdigest()
+
+
+def test_authority_rejects_old_services_image_that_ignores_validation_mode(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    approval, manifest, values, target, runner = fixture(tmp_path, monkeypatch)
+    values["schema_validation_source"] = False
+    with pytest.raises(HostProbeError, match="lacks DDL-free schema validation"):
+        authority.check_authority(approval, manifest, values["baseline"], runner,
+                                  lambda: target, lambda path, digests, commit: True,
+                                  lambda image, commit, version: True)
 
 
 def test_hidden_worktree_change_cannot_replace_protected_approval(
