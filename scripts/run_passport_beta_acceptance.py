@@ -68,6 +68,10 @@ if __package__:
     from .probe_passport_beta_selected_flow import (
         validate_inputs as validate_selected_flow_inputs,
     )
+    from .verify_passport_beta_issuer_profiles import (
+        IssuerProfileEvidenceError, resolve_in_container, sign_in_container,
+        verify_live_signatures,
+    )
 else:
     from collect_passport_beta_acceptance import (
         EvidenceError,
@@ -126,6 +130,10 @@ else:
     from probe_passport_beta_selected_flow import (
         validate_inputs as validate_selected_flow_inputs,
     )
+    from verify_passport_beta_issuer_profiles import (
+        IssuerProfileEvidenceError, resolve_in_container, sign_in_container,
+        verify_live_signatures,
+    )
 
 
 def run(
@@ -143,6 +151,9 @@ def run(
     csca_session: str | None = None,
     dsc_session: str | None = None,
     chain: Callable[..., dict[str, Any]] = exercise_chain,
+    profile_resolver: Callable[..., dict[str, Any]] = resolve_in_container,
+    profile_signer: Callable[..., dict[str, Any]] = sign_in_container,
+    profile_verifier: Callable[..., dict[str, Any]] = verify_live_signatures,
     routing: Callable[[dict[str, dict[str, Any]], dict[str, Any] | None], dict[str, Any]] = beta_native_route_ownership,
     flow: Callable[[str], dict[str, Any]] = exercise_flow,
     material_receipt: Callable[..., dict[str, Any]] = beta_material_receipt,
@@ -269,6 +280,8 @@ def run(
                 "Production attachments changed since aggregate beta deployment")
     before_drain = drain()
     selected_dsc: dict[str, str] = {}
+    selected_csca: list[str] = []
+    profile_proof: dict[str, Any] | None = None
     receipt_result: dict[str, Any] | None = None
     selected_result: dict[str, Any] | None = None
     batch_result: dict[str, Any] | None = None
@@ -289,7 +302,10 @@ def run(
         return receipt_result
 
     try:
-        chain_result = chain(certificate_plan, csca_session, dsc_session, on_dsc_material=capture_dsc)
+        chain_kwargs = {"on_dsc_material": capture_dsc}
+        if selected_flow_plan is not None:
+            chain_kwargs["on_csca_material"] = selected_csca.append
+        chain_result = chain(certificate_plan, csca_session, dsc_session, **chain_kwargs)
         require(chain_result.get("verified") is True and isinstance(chain_result.get("evidence"), dict),
                 "Managed CSCA and DSC chain did not verify")
         require(selected_dsc.get("der_sha256") == chain_result["evidence"].get("dsc_certificate_sha256"),
@@ -392,6 +408,38 @@ def run(
                             for field in ("request_commitment", "response_commitment",
                                           "companion_callback_receipt_sha256")),
                     "Selected Flow native batch proof did not verify")
+            signing_image = report["runtime_images"].get("signing-keys")
+            require(isinstance(signing_image, dict)
+                    and isinstance(signing_image.get("container_id"), str)
+                    and len(selected_csca) == 1,
+                    "Selected Signing Keys container or CSCA material is unavailable")
+            signing_container = signing_image["container_id"]
+            csca_did = certificate_plan["csca"]["issuer_did"]
+            dsc_did = certificate_plan["dsc"]["dsc_issuer_did"]
+            csca_resolution = profile_resolver(
+                signing_container, application["organization_id"], csca_did, "csca")
+            dsc_resolution = profile_resolver(
+                signing_container, application["organization_id"], dsc_did, "x509_doc_signer")
+            profile_proof = profile_verifier(
+                application["organization_id"], csca_did, dsc_did,
+                csca_resolution, dsc_resolution, chain_result["evidence"],
+                selected_csca[0], api_key,
+                signer=lambda org, did, purpose, challenge: profile_signer(
+                    signing_container, org, did, purpose, challenge),
+            )
+            require(isinstance(profile_proof, dict)
+                    and set(profile_proof) == {
+                        "managed_kms_custody_verified", "chain_verified",
+                        "csca_issuer_profile_commitment", "dsc_issuer_profile_commitment"}
+                    and profile_proof.get("managed_kms_custody_verified") is True
+                    and profile_proof.get("chain_verified") is True
+                    and all(isinstance(profile_proof.get(field), str)
+                            and SHA256.fullmatch(profile_proof[field]) is not None
+                            for field in ("csca_issuer_profile_commitment",
+                                          "dsc_issuer_profile_commitment"))
+                    and profile_proof["csca_issuer_profile_commitment"]
+                    != profile_proof["dsc_issuer_profile_commitment"],
+                    "Selected managed issuer profile and live KMS proof did not verify")
         else:
             batch_result = batch(
                 application, api_key, bureau["container_id"],
@@ -593,7 +641,13 @@ def run(
             "csca_certificate_sha256", "dsc_certificate_sha256",
             "csca_http_status", "dsc_http_status", "chain_verified_by")
         if key in chain_evidence
-    }}
+    } | (profile_proof or {}) | ({
+        "organization_commitment": selected_commitments["organization_commitment"],
+        "application_commitment": selected_commitments["application_commitment"],
+        "source_job_commitment": selected_evidence["source_job_commitment"],
+        "sod_dsc_binding_verified": True,
+        "sod_dsc_certificate_sha256": chain_evidence["dsc_certificate_sha256"],
+    } if selected_evidence is not None and profile_proof is not None else {})}
     report["probes"]["legacy_drain"] = {
         "verified": before_drain.get("verified") is True and after_drain.get("verified") is True,
         "evidence": {"before": before_drain.get("evidence"), "after": after_drain.get("evidence")},
@@ -653,7 +707,8 @@ def main() -> int:
             private_handoff_path=args.private_demo_handoff_file,
         )
         args.output.write_text(json.dumps(report, indent=2, sort_keys=True) + "\n", encoding="utf-8")
-    except (EvidenceError, ProbeError, ChainProbeError, FlowProbeError, SelectedFlowError,
+    except (EvidenceError, ProbeError, ChainProbeError, IssuerProfileEvidenceError,
+            FlowProbeError, SelectedFlowError,
             BatchProbeError, NativeBatchProbeError, PhysicalFlowProbeError,
             HostProbeError, OSError) as exc:
         args.output.write_text(json.dumps({"schema": "marty.passport-beta-acceptance/v1", "status": "blocked", "blocker": str(exc)}, indent=2) + "\n", encoding="utf-8")

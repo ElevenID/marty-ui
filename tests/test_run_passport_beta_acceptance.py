@@ -51,6 +51,7 @@ def report(*, ready: bool = True) -> dict:
         "physical_claim": "not_claimed",
         "runtime_images": {"gateway": {"image_id": "sha256:" + "b" * 64},
                            "issuance-native": {"container_id": "b" * 64},
+                           "signing-keys": {"container_id": "c" * 64},
                            "passport-beta-bureau": {"container_id": "a" * 64,
                                "oci_reference": "ghcr.io/elevenid/marty-ui-oss/services@sha256:" + "e" * 64}},
         "probes": {"capabilities_http": {"verified": ready},
@@ -256,10 +257,39 @@ def test_protected_runner_executes_selected_flow_after_chain_and_direct_job(tmp_
                                            "mrz": {"line_1": "synthetic"},
                                            "data_groups": {"DG1": "YQ==", "DG2": "Yg=="}}}
 
-    def chain(*args, on_dsc_material):
+    def chain(*args, on_dsc_material, on_csca_material):
         calls.append("chain")
+        on_csca_material("private-csca-pem")
         on_dsc_material("b" * 64, "c" * 64)
         return {"verified": True, "evidence": {"dsc_certificate_sha256": "b" * 64}}
+
+    def resolver(container, org, did, purpose):
+        calls.append(("resolve", purpose))
+        assert (container, org) == ("c" * 64, plan["organization_id"])
+        assert did == plan["csca"]["issuer_did"]
+        return {"selected_purpose": purpose}
+
+    def signer(container, org, did, purpose, challenge):
+        calls.append(("sign", purpose))
+        assert (container, org, did, challenge) == (
+            "c" * 64, plan["organization_id"], plan["csca"]["issuer_did"], b"q" * 48)
+        return {"signed": purpose}
+
+    def verifier(org, csca_did, dsc_did, csca, dsc, chain_evidence,
+                 csca_pem, key, *, signer):
+        calls.append("verify-profiles")
+        assert (org, csca_did, dsc_did, csca_pem, key) == (
+            plan["organization_id"], plan["csca"]["issuer_did"],
+            plan["dsc"]["dsc_issuer_did"], "private-csca-pem", "a" * 32)
+        assert (csca, dsc) == ({"selected_purpose": "csca"},
+                               {"selected_purpose": "x509_doc_signer"})
+        assert chain_evidence["dsc_certificate_sha256"] == "b" * 64
+        assert signer(org, csca_did, "csca", b"q" * 48) == {"signed": "csca"}
+        assert signer(org, dsc_did, "x509_doc_signer", b"q" * 48) == {
+            "signed": "x509_doc_signer"}
+        return {"managed_kms_custody_verified": True, "chain_verified": True,
+                "csca_issuer_profile_commitment": "1" * 64,
+                "dsc_issuer_profile_commitment": "2" * 64}
 
     def lifecycle(*args, on_submission):
         calls.append("lifecycle")
@@ -353,6 +383,7 @@ def test_protected_runner_executes_selected_flow_after_chain_and_direct_job(tmp_
         flow=lambda owner: {"verified": True, "evidence": {
             "unsigned_webhook_owner": owner, "signature_denial_verified": True}},
         chain=chain, lifecycle=lifecycle, material_receipt=receipt,
+        profile_resolver=resolver, profile_signer=signer, profile_verifier=verifier,
         certificate_plan=plan, csca_session="csca-session", dsc_session="dsc-session",
         selected_flow_plan=selected_plan, flow_operator_cookie="governed-cookie",
         selected_flow=selected, native_batch=native_batch,
@@ -364,7 +395,9 @@ def test_protected_runner_executes_selected_flow_after_chain_and_direct_job(tmp_
         checkout_checker=lambda source: calls.append("checkout"),
     )
     assert calls == ["checkout", "preflight", "chain", "lifecycle", ("receipt", "direct-job"),
-                     "selected", "native-batch", ("receipt", "selected-job")]
+                     "selected", "native-batch", ("receipt", "selected-job"),
+                     ("resolve", "csca"), ("resolve", "x509_doc_signer"), "verify-profiles",
+                     ("sign", "csca"), ("sign", "x509_doc_signer")]
     assert result["probes"]["selected_physical_flow"]["evidence"] == {
         "sod_sha256": "e" * 64, "ordered_steps": list(PHYSICAL_STEPS),
         "completed_steps": 9,
@@ -381,6 +414,8 @@ def test_protected_runner_executes_selected_flow_after_chain_and_direct_job(tmp_
     assert result["probes"]["sod_signature"]["evidence"] == {
         "sod_sha256": "e" * 64, "native_generate_sod_verified": True,
         "dsc_certificate_sha256": "b" * 64, "source_job_commitment": selected_source_commitment}
+    assert result["probes"]["managed_csca_dsc_chain"]["evidence"]["managed_kms_custody_verified"] is True
+    assert result["probes"]["managed_csca_dsc_chain"]["evidence"]["sod_dsc_binding_verified"] is True
     assert result["probes"]["gateway_application_lifecycle"]["evidence"]["source_job_commitment"] == direct_source_commitment
     assert len(result["probes"]["gateway_application_lifecycle"]["evidence"]["routes"]) == 7
     assert "selected-job" not in str(result) and "selected-instance" not in str(result)
