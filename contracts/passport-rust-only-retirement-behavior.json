@@ -1,0 +1,74 @@
+{
+  "schema": "marty.passport-rust-only-retirement/v1",
+  "decision": "The supported passport route owner is Rust only. A Rust-to-Python-to-Rust rollback rehearsal and compatibility with old signing modes are not retirement requirements.",
+  "scope": "Retire Python passport routes and adapters after Rust parity and protected disposable acceptance, then deploy one aggregate Rust-only beta release and soak it; production is unchanged during this wave.",
+  "parity_reference": {
+    "route_count": 9,
+    "sources": [
+      "contracts/issuance-physical-passport-native.json",
+      "contracts/passport-supported-consumer-routing.json",
+      "contracts/passport-beta-bureau-behavior.json",
+      "contracts/passport-webhook-progress-behavior.json",
+      "contracts/passport-beta-cutover-drain-behavior.json",
+      "ElevenID/marty-credentials:contracts/physical-passport-python-route-reference.json",
+      "ElevenID/marty-credentials:contracts/physical-passport-provider-reference.json"
+    ],
+    "standard": "Preserve the public application lifecycle, tenant authorization, state and error behavior, data groups, bureau submission and polling, and signed callback effects; documented Rust improvements may extend that behavior without losing supported features.",
+    "signing": "Managed ICAO_EMRTD issuer profile with active organization-bound DSC and CSCA; the signing key remains in KMS.",
+    "evidence": "Maintainer-reviewed Rust unit, HTTP, database, and contract tests plus a packaged release gate. The optional reusable integration/compliance fixture is not required for retirement."
+  },
+  "obsolete_gates": {
+    "remove": [
+      "Rust-to-Python-to-Rust live owner transition and rollback_accepted receipt",
+      "rollback probe in supported-consumer and beta acceptance collectors",
+      "legacy Python OCI image pin and attestation in the protected disposable plan",
+      "disposable Python issuance service, Python owner phase overlay, and Python-specific artifact-key and bureau credential mounts/wiring; retain the shared simulator token and KMS callback credentials used by Rust"
+    ],
+    "retain": [
+      "cutover drain of Python jobs, artifacts, and active passport Flows",
+      "fixed Rust Gateway and Flow ownership and exact native route targets",
+      "project and cluster resource identity, bounded teardown, and production isolation",
+      "Marty simulator submission, batch, and signed callback evidence"
+    ]
+  },
+  "pre_deletion_gates": {
+    "tests": "Frozen route/provider parity, KMS issuer profile and certificate verification, tenant isolation, persistence, signed callback, and packaged Rust image tests pass and have no unresolved maintainer review findings.",
+    "supported_consumers": [
+      "accepted disposable base Compose Rust runtime and nine-route proof",
+      "accepted disposable selfhost Compose Rust runtime and nine-route proof",
+      "independently governed disposable Kubernetes Rust runtime, cluster identity, and nine-route proof using the Marty simulator without external provider ingress"
+    ],
+    "continuity": "Exercise Rust service restart and resume an existing KMS-backed job in the protected disposable runtime; prove exact owner identity before and after without a Python phase.",
+    "drain": "Stop Python passport writers and prove the cutover-drain contract. Preserve or resolve every existing job; do not discard an in-flight job or an unreadable legacy artifact.",
+    "deletion": "Delete superseded Python passport code and runtime wiring immediately after these gates pass, before the aggregate beta deployment."
+  },
+  "first_cutover": {
+    "legacy_jobs": "A failed drain or other pre-deletion gate prevents selecting the Rust owner.",
+    "routing": "Select Rust Gateway and Flow ownership together for all nine routes; do not expose a mixed owner or a Python signing fallback.",
+    "custody": "New passport artifacts, managed signing, and callback verification use the governed KMS paths.",
+    "failure": "A failed preflight blocks cutover. A failed post-deployment beta probe halts new beta passport writes, preserves existing jobs and evidence, and requires a reviewed Rust fix and retest; it does not switch to Python."
+  },
+  "beta_acceptance": {
+    "deployment": "One official aggregate beta-only release with signed source and image digests; production deployment, resources, and routing remain unchanged.",
+    "software_probes": [
+      "managed_csca_dsc_chain",
+      "sod_signature",
+      "nine_route_gateway_flow",
+      "packaged_image",
+      "physical_bureau_submission",
+      "physical_bureau_batch",
+      "signed_bureau_callback",
+      "legacy_drain",
+      "production_isolation",
+      "physical_claim_boundary",
+      "recorded_demo"
+    ],
+    "simulator": "The physical_bureau_* probe names mean Marty synthetic bureau route-compatibility evidence; physical personalization and paperwork are not claimed and physical_booklet_verified is not a Python retirement gate.",
+    "soak": "Run and record the aggregate beta acceptance soak after Python passport deletion and the official Rust-only deployment."
+  },
+  "retirement": {
+    "delete": "Remove superseded Python passport route, signing, bureau, and associated runtime wiring immediately after the pre-deletion gates pass.",
+    "review": "Independent maintainers review code, commits, and PRs; fix findings and repeat review until no actionable regression remains.",
+    "out_of_scope": "A live Python fallback phase, old remote or self-signed signing compatibility, production deployment, and the optional future integration/compliance fixture."
+  }
+}
