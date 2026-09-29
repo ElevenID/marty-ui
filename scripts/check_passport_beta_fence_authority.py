@@ -249,6 +249,7 @@ def check_authority(
         "postgres_container_id": beta["services"]["postgres"]["container_id"],
         "docker": target["docker"],
         "database_route": beta["database_route"],
+        "postgres_runtime": beta["postgres_runtime"],
         "postgres_system_identifier": beta["postgres_system_identifier"],
         "database_oid": beta["database_oid"],
         "install_sql_sha256": file_sha256(INSTALL),

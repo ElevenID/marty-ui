@@ -25,6 +25,10 @@ REQUIRED_SERVICES = (
     "postgres", "issuance", "gateway", "flow", "issuance-native", "signing-keys"
 )
 BETA_NETWORK = "elevenid-beta-network"
+QUALIFIED_POSTGRES_IMAGE_ID = (
+    "sha256:fceb6f86328c36f2438fae3b851b0cc57c4a7e69a58c866d9ce24281f2cf0c9c"
+)
+QUALIFIED_POSTGRES_VERSION_NUM = "150017"
 DATABASE_SERVICES = {"issuance", "flow", "issuance-native"}
 ROUTE_SELECTORS = {
     "gateway": "PASSPORT_NATIVE_GATEWAY_ENABLED",
@@ -203,6 +207,14 @@ def database_network_binding(
             "postgres_container_id": selected["postgres"]["container_id"]}
 
 
+def qualified_postgres_runtime(image_id: str, server_version_num: str) -> dict[str, str]:
+    """The frozen verifier definitions were qualified on this exact PG15 image."""
+    if (image_id != QUALIFIED_POSTGRES_IMAGE_ID
+            or server_version_num != QUALIFIED_POSTGRES_VERSION_NUM):
+        raise HostProbeError("Beta PostgreSQL runtime differs from fence qualification")
+    return {"image_id": image_id, "server_version_num": server_version_num}
+
+
 def observe(runner: Callable[[list[str]], str] = run) -> dict[str, Any]:
     """Require stable beta/production identities across all read-only probes."""
     context = runner(["docker", "context", "show"])
@@ -215,6 +227,10 @@ def observe(runner: Callable[[list[str]], str] = run) -> dict[str, Any]:
     postgres_id = beta_postgres_container(runner)
     if before["postgres"]["container_id"] != inspect(postgres_id, runner).get("Id"):
         raise HostProbeError("Beta PostgreSQL identity changed during inventory")
+    postgres_runtime = qualified_postgres_runtime(
+        before["postgres"]["image_id"],
+        beta_psql("SHOW server_version_num", runner, postgres_id),
+    )
     identity = beta_psql(
         "SELECT system_identifier::text || '|' || "
         "(SELECT oid::text FROM pg_database WHERE datname=current_database()) "
@@ -290,6 +306,7 @@ def observe(runner: Callable[[list[str]], str] = run) -> dict[str, Any]:
             "login_roles": roles, "guarded_owners": owners,
             "login_role_memberships": 0, "drain": drain,
             "database_route": database_route,
+            "postgres_runtime": postgres_runtime,
         },
         "production": production_after,
     }

@@ -161,6 +161,8 @@ def fixture(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
             "postgres_system_identifier": "12345", "database_oid": "87774",
             "database_route": {"name": "elevenid-beta-network", "id": "a" * 64,
                                "postgres_container_id": "f" * 64},
+            "postgres_runtime": {"image_id": "sha256:" + "f" * 64,
+                                 "server_version_num": "150017"},
             "services": {"postgres": {"container_id": "f" * 64}},
         },
         "production": {"sha256": "1" * 64},
@@ -189,6 +191,7 @@ def test_authority_plan_binds_all_four_sources(
     assert plan["postgres_container_id"] == "f" * 64
     assert plan["database_route"]["postgres_container_id"] == plan["postgres_container_id"]
     assert plan["docker"] == {"context": "test", "daemon_id": "daemon"}
+    assert plan["postgres_runtime"]["server_version_num"] == "150017"
     assert plan["production_snapshot_sha256"] == "1" * 64
     assert plan["verify_sql_sha256"] == hashlib.sha256(b"verify").hexdigest()
 

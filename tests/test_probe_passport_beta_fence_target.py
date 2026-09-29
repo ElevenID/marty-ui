@@ -180,3 +180,14 @@ def test_database_network_binding_rejects_client_dns_override(
         flow["HostConfig"]["Links"] = ["foreign:postgres"]
     with pytest.raises(HostProbeError, match="overrides the bound postgres DNS route"):
         target.database_network_binding(selected, lambda command: "\n".join(items))
+
+
+def test_postgres_runtime_matches_frozen_verifier_qualification() -> None:
+    assert target.qualified_postgres_runtime(
+        target.QUALIFIED_POSTGRES_IMAGE_ID,
+        target.QUALIFIED_POSTGRES_VERSION_NUM,
+    )["server_version_num"] == "150017"
+    with pytest.raises(HostProbeError, match="differs from fence qualification"):
+        target.qualified_postgres_runtime(target.QUALIFIED_POSTGRES_IMAGE_ID, "160000")
+    with pytest.raises(HostProbeError, match="differs from fence qualification"):
+        target.qualified_postgres_runtime("sha256:" + "a" * 64, "150017")
