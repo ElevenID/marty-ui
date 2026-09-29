@@ -55,9 +55,9 @@ The final beta release must come from the source after Python passport deletion.
    attest the live cutover drain, and preserve or resolve every job and artifact.
    The service also owns unrelated routes and must remain available; its
    passport write paths must be blocked. Verify the exact head of the
-   [Credentials deletion PR](https://github.com/ElevenID/marty-credentials/pull/305)
-   revise its whole-container-stop gate for the scoped fence, and implement
-   the missing protected final cutover producer. Attest the
+   [Credentials deletion PR](https://github.com/ElevenID/marty-credentials/pull/305),
+   whose gate now calls for the scoped fence, and implement its missing
+   protected final cutover producer. Attest the
    later beta drain watermark against that head, pass its post-cutover CI,
    and resolve review findings before merging the deletion. The producer and
    live receipts are absent today, so this gate is still blocked.
@@ -213,8 +213,9 @@ The final beta release must come from the source after Python passport deletion.
    chat), and verify the `credentials:issue` scope maps to passport initiation.
    No new tenant or passport-specific static keyring is required for the
    existing pilot organization. Recheck these counts at actual cutover.
-   At cutover, deployment stops and verifies application writers, then requires
-   zero in-flight legacy bureau jobs before switching to KMS callback
+   At cutover, deployment verifies the passport-scoped write fence and stops
+   old application writers during the Rust owner switch. It requires zero
+   in-flight legacy bureau jobs before switching to KMS callback
    verification. The deployment preflight rejects an existing bureau without
    the isolated signer: the current restore script cannot recover such a
    pre-isolation passport snapshot. The inventoried beta has no bureau, so
