@@ -195,6 +195,9 @@ try {
     }
     if (($after.beta.services | ConvertTo-Json -Depth 20 -Compress) -cne
             ($plan.beta_services | ConvertTo-Json -Depth 20 -Compress) -or
+        $after.beta.ui_project -cne $before.beta.ui_project -or
+        ($after.beta.ui_service | ConvertTo-Json -Depth 20 -Compress) -cne
+            ($before.beta.ui_service | ConvertTo-Json -Depth 20 -Compress) -or
         ($after.beta.database_route | ConvertTo-Json -Depth 20 -Compress) -cne
             ($plan.database_route | ConvertTo-Json -Depth 20 -Compress) -or
         ($after.beta.postgres_runtime | ConvertTo-Json -Depth 20 -Compress) -cne

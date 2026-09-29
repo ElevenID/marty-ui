@@ -281,4 +281,6 @@ def test_fence_operator_rechecks_old_generation_before_mutation() -> None:
         "Start-BetaMutation\n")
     assert "$before.observation_sha256 -cne $plan.target_observation_sha256" in operator
     assert "Approved beta service generation or database route changed before fence" in operator
+    assert "$after.beta.ui_project -cne $before.beta.ui_project" in operator
+    assert "($before.beta.ui_service | ConvertTo-Json -Depth 20 -Compress)" in operator
 
