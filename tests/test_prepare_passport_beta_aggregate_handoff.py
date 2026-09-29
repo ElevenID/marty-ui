@@ -33,6 +33,8 @@ def fixture(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
         "postgres_system_identifier": "100", "database_oid": "200",
         "verify_sql_sha256": handoff.file_sha256(handoff.VERIFY),
         "stop_container_ids": STOPPED,
+        "beta_generation": [{"service": "docs", "container_id": STOPPED[0],
+                             "image_id": "sha256:" + "6" * 64}],
     })
     write(maintenance, {
         "schema": "marty.passport-beta-db-maintenance-start/v1",
@@ -60,6 +62,12 @@ def fixture(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
         "issuance_image": "issuance@sha256:" + "3" * 64,
         "manifest_sha256": handoff.file_sha256(manifest),
         "oci_digests": {handoff.UI_REPOSITORY: "sha256:" + "5" * 64},
+        "build_only_artifacts": {
+            f"MARTY_{name}_{field}": (
+                f"https://example.test/{name.lower()}.whl" if field == "URI"
+                else "sha256:" + "8" * 64)
+            for name in ("COMMON", "RS", "VERIFICATION", "ISO18013")
+            for field in ("URI", "DIGEST")},
     })
     monkeypatch.setattr(handoff, "verify_plan", lambda *args, **kwargs: {
         "verified": True, "stopped_container_ids": STOPPED,
@@ -75,6 +83,11 @@ def fixture(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
         "enable_login_sql_sha256": "4" * 64,
     }, b"native SQL"))
     monkeypatch.setattr(handoff, "beta_psql", lambda *_: f"7|{HEAD}|{DIGEST}|false|false")
+    monkeypatch.setattr(handoff, "inspect", lambda *_: {
+        "Id": STOPPED[0], "Image": "sha256:" + "6" * 64,
+        "Config": {"Image": "sha256:" + "6" * 64,
+                   "Labels": {"com.docker.compose.project": "elevenid-beta",
+                              "com.docker.compose.service": "docs"}}})
     def runner(command):
         if "-qAt" in command:
             return json.dumps({"schema": "marty.passport-beta-fence-verification/v1",
@@ -92,6 +105,7 @@ def test_handoff_requires_stopped_signed_native_state(tmp_path, monkeypatch):
     assert plan["native_receipt_sha256"] == handoff.file_sha256(paths[-1])
     assert plan["services_image"].startswith("services@sha256:")
     assert plan["ui_image"] == handoff.UI_REPOSITORY + "@sha256:" + "5" * 64
+    assert plan["docs_image"] == "sha256:" + "6" * 64
 
 
 def test_handoff_rejects_changed_native_receipt(tmp_path, monkeypatch):
@@ -100,6 +114,22 @@ def test_handoff_rejects_changed_native_receipt(tmp_path, monkeypatch):
     receipt["app_login_enabled"] = True
     write(paths[-1], receipt)
     with pytest.raises(handoff.HostProbeError, match="Native database receipt differs"):
+        handoff.prepare(*paths, runner=runner)
+
+
+def test_handoff_rejects_docs_image_outside_stopped_generation(tmp_path, monkeypatch):
+    paths, runner = fixture(tmp_path, monkeypatch)
+    intent_path = tmp_path / "maintenance.json.intent.json"
+    intent = json.loads(intent_path.read_text(encoding="utf-8"))
+    intent["beta_generation"][0]["image_id"] = "sha256:" + "7" * 64
+    write(intent_path, intent)
+    maintenance = json.loads(paths[2].read_text(encoding="utf-8"))
+    maintenance["intent_sha256"] = handoff.file_sha256(intent_path)
+    write(paths[2], maintenance)
+    native = json.loads(paths[3].read_text(encoding="utf-8"))
+    native["maintenance_receipt_sha256"] = handoff.file_sha256(paths[2])
+    write(paths[3], native)
+    with pytest.raises(handoff.HostProbeError, match="docs image"):
         handoff.prepare(*paths, runner=runner)
 
 

@@ -410,6 +410,24 @@ try {
     $env:MARTY_SERVICES_IMAGE = [string]$script:plan.services_image
     $env:MARTY_ISSUANCE_IMAGE = [string]$script:plan.issuance_image
     $env:MARTY_UI_RELEASE_IMAGE = [string]$script:plan.ui_image
+    $expectedBuildVars = @(
+        'MARTY_COMMON_URI', 'MARTY_COMMON_DIGEST',
+        'MARTY_RS_URI', 'MARTY_RS_DIGEST',
+        'MARTY_VERIFICATION_URI', 'MARTY_VERIFICATION_DIGEST',
+        'MARTY_ISO18013_URI', 'MARTY_ISO18013_DIGEST')
+    $actualBuildVars = @($script:plan.build_only_artifacts.PSObject.Properties.Name)
+    if ($actualBuildVars.Count -ne $expectedBuildVars.Count -or
+        @($actualBuildVars | Where-Object { $_ -notin $expectedBuildVars }).Count -ne 0) {
+        throw 'Signed beta build-only artifact bindings are invalid'
+    }
+    foreach ($name in $expectedBuildVars) {
+        [Environment]::SetEnvironmentVariable(
+            $name, [string]$script:plan.build_only_artifacts.$name, 'Process')
+    }
+    if ([string]$script:plan.docs_image -notmatch '^sha256:[0-9a-f]{64}$') {
+        throw 'Preserved beta docs image is not immutable'
+    }
+    $env:MARTY_DOCS_IMAGE = [string]$script:plan.docs_image
     $env:MARTY_NETWORK_NAME = 'elevenid-beta-network'
     Assert-Render
     Assert-PreservedIngressOrigin

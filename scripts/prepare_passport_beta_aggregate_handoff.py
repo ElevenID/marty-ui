@@ -17,7 +17,7 @@ try:
     from .prepare_passport_beta_native_migrations import (
         NativeMigrationError, prepare as native_prepare,
     )
-    from .probe_passport_beta_host import HostProbeError, beta_psql, run
+    from .probe_passport_beta_host import HostProbeError, beta_psql, inspect, run
 except ImportError:
     from check_passport_beta_fence_authority import (
         PROTECTED_FILES, file_sha256, manifest_source, protected_file, protected_source,
@@ -26,7 +26,7 @@ except ImportError:
     from prepare_passport_beta_native_migrations import (
         NativeMigrationError, prepare as native_prepare,
     )
-    from probe_passport_beta_host import HostProbeError, beta_psql, run
+    from probe_passport_beta_host import HostProbeError, beta_psql, inspect, run
 
 
 SHA256 = re.compile(r"[0-9a-f]{64}\Z")
@@ -93,6 +93,22 @@ def prepare(
     signed = manifest_source(stack_manifest, source_commit)
     intent_path = Path(str(maintenance_receipt) + ".intent.json")
     intent = read_object(intent_path, "marty.passport-beta-db-maintenance-plan/v1")
+    docs = [item for item in intent.get("beta_generation", [])
+            if isinstance(item, dict) and item.get("service") == "docs"]
+    require(len(docs) == 1 and re.fullmatch(r"[0-9a-f]{64}",
+            str(docs[0].get("container_id"))) is not None,
+            "Exact beta docs container is absent from maintenance")
+    docs_record = inspect(docs[0]["container_id"], runner)
+    docs_config = docs_record.get("Config")
+    docs_labels = docs_config.get("Labels") if isinstance(docs_config, dict) else None
+    docs_image = docs_config.get("Image") if isinstance(docs_config, dict) else None
+    require(docs_record.get("Id") == docs[0]["container_id"]
+            and docs_record.get("Image") == docs[0].get("image_id")
+            and isinstance(docs_labels, dict)
+            and docs_labels.get("com.docker.compose.project") == "elevenid-beta"
+            and docs_labels.get("com.docker.compose.service") == "docs"
+            and re.fullmatch(r"sha256:[0-9a-f]{64}", str(docs_image)) is not None,
+            "Preserved beta docs image is not immutable")
     stopped = verify_plan(intent, stack_manifest, fence_receipt,
                           require_stopped=True, runner=runner)
     require(stopped.get("verified") is True
@@ -163,6 +179,8 @@ def prepare(
         "release": signed["release"],
         "ui_image": f"{UI_REPOSITORY}@{signed['oci_digests'][UI_REPOSITORY]}",
         "services_image": signed["services_image"],
+        "build_only_artifacts": signed["build_only_artifacts"],
+        "docs_image": docs_image,
         "issuance_image": signed["issuance_image"],
         "migration_image": plan["migration_image"],
     }

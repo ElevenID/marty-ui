@@ -150,11 +150,33 @@ def manifest_source(
     require(attest_issuance(images["issuance"]["reference"], credentials["commit"],
                             credentials["version"]) is True,
             "Credentials issuance image attestation is invalid")
+    build_only = {}
+    for variable, component_name in (
+        ("MARTY_COMMON", "marty-common"),
+        ("MARTY_RS", "marty-core-python"),
+        ("MARTY_VERIFICATION", "marty-verification-python"),
+        ("MARTY_ISO18013", "marty-iso18013-python"),
+    ):
+        matches = [item for item in manifest["components"]
+                   if item.get("name") == component_name]
+        require(len(matches) == 1,
+                "Signed beta build-only component is ambiguous")
+        artifacts = [item for item in matches[0].get("artifacts", [])
+                     if isinstance(item, dict) and item.get("type") == "python"]
+        require(len(artifacts) == 1
+                and isinstance(artifacts[0].get("uri"), str)
+                and artifacts[0]["uri"].startswith("https://")
+                and re.fullmatch(r"sha256:[0-9a-f]{64}",
+                                 str(artifacts[0].get("digest"))) is not None,
+                "Signed beta build-only wheel is invalid")
+        build_only[variable + "_URI"] = artifacts[0]["uri"]
+        build_only[variable + "_DIGEST"] = artifacts[0]["digest"]
     return {
         "release": release, "source_commit": expected_commit,
         "manifest_sha256": file_sha256(path), "oci_digests": digests,
         "issuance_image": images["issuance"]["reference"],
         "services_image": images["services"]["reference"],
+        "build_only_artifacts": build_only,
         "issuance_source_commit": credentials["commit"],
         "signed_manifest_verified": True,
     }

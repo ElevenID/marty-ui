@@ -103,6 +103,11 @@ BETA_ORIGIN = "https://beta.elevenidllc.com"
 BETA_DOMAIN = "beta.elevenidllc.com"
 PUBLIC_URL_KEYS = frozenset({"PUBLIC_API_URL", "ISSUER_BASE_URL",
                              "PUBLIC_BASE_URL", "UI_BASE_URL"})
+BUILD_ONLY_VARS = frozenset(
+    f"MARTY_{component}_{field}"
+    for component in ("COMMON", "RS", "VERIFICATION", "ISO18013")
+    for field in ("URI", "DIGEST")
+)
 
 
 class ComposePlanError(ValueError):
@@ -193,7 +198,19 @@ def render_candidate(handoff: dict[str, Any]) -> tuple[dict[str, Any], dict[str,
             "Protected aggregate Compose inputs are absent or redirected")
     before = {path.name: sha256(path) for path in paths}
     override = image_override(handoff)
+    build_only = handoff.get("build_only_artifacts")
+    docs_image = handoff.get("docs_image")
+    require(isinstance(build_only, dict) and set(build_only) == BUILD_ONLY_VARS
+            and all(isinstance(value, str) and value.startswith("https://")
+                    if key.endswith("_URI") else
+                    isinstance(value, str) and DIGEST.fullmatch(value) is not None
+                    for key, value in build_only.items())
+            and isinstance(docs_image, str)
+            and DIGEST.fullmatch(docs_image) is not None,
+            "Signed beta build-only artifacts or preserved docs image are invalid")
     environment_values = {**os.environ,
+                          **build_only,
+                          "MARTY_DOCS_IMAGE": docs_image,
                           "MARTY_SERVICES_IMAGE": handoff["services_image"],
                           "MARTY_ISSUANCE_IMAGE": handoff["issuance_image"],
                           "MARTY_UI_RELEASE_IMAGE": handoff["ui_image"],
@@ -398,6 +415,8 @@ def prepare(handoff: dict[str, Any], maintenance_intent: dict[str, Any],
         "production_snapshot_sha256": handoff["production_snapshot_sha256"],
         "production_attachments_sha256": handoff["production_attachments_sha256"],
         "services_image": handoff["services_image"],
+        "build_only_artifacts": handoff["build_only_artifacts"],
+        "docs_image": handoff["docs_image"],
         "issuance_image": handoff["issuance_image"],
         "restart_infrastructure": sorted(restart - INGRESS),
         "preserved_infrastructure": ["openbao"],
