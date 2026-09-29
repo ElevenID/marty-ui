@@ -205,7 +205,7 @@ def verify(
                 == snapshot.get("writer_generation")
             and legacy.get("writer_running") is True
             and legacy.get("final_watermark")
-                == snapshot.get("observation_watermark")
+                == final_probe.get("observation_watermark")
             and fence.get("enabled") is True
             and fence.get("scope")
                 == "physical_document_jobs_and_physical_flows"

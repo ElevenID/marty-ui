@@ -87,8 +87,8 @@ def service_inventory(
         if labels.get("com.docker.compose.project") != BETA_PROJECT:
             raise HostProbeError("Beta container has foreign Compose identity")
         service = labels.get("com.docker.compose.service")
-        if service not in REQUIRED_SERVICES:
-            continue
+        if not isinstance(service, str) or not service:
+            raise HostProbeError("Beta container has no Compose service identity")
         if service in selected:
             raise HostProbeError(f"Beta {service} has ambiguous container generations")
         if state.get("Running") is not True or state.get("Status") != "running":
@@ -139,7 +139,7 @@ def service_inventory(
             if value not in ("unset", "true", "false", "1", "0"):
                 raise HostProbeError(f"Beta {service} passport route selector is invalid")
             selected[service]["passport_route_selector"] = value
-    if set(selected) != set(REQUIRED_SERVICES):
+    if not set(REQUIRED_SERVICES).issubset(selected):
         raise HostProbeError("Required beta fence services are missing")
     return selected
 

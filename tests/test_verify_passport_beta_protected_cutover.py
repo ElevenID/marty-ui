@@ -57,7 +57,7 @@ def fixture(tmp_path):
             "writer_container_id": snapshot["writer_container_id"],
             "writer_started_at": snapshot["writer_started_at"],
             "writer_generation": 0, "writer_running": True,
-            "final_watermark": snapshot["observation_watermark"],
+            "final_watermark": snapshot["direct_database_probe"]["observation_watermark"],
             "final_snapshot_attestation_sha256": "4" * 64,
         },
         "write_fence": {

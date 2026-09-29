@@ -54,6 +54,19 @@ def test_inventory_pins_beta_services_and_redacts_database_password(
     assert "do-not-print" not in repr(found)
 
 
+def test_inventory_includes_other_beta_compose_services(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    items = records()
+    extra = deepcopy(next(iter(items.values())))
+    extra["Id"] = "f" * 64
+    extra["Config"]["Labels"]["com.docker.compose.service"] = "docs"
+    items[extra["Id"]] = extra
+    found = inventory(monkeypatch, items)
+    assert set(found) == {*target.REQUIRED_SERVICES, "docs"}
+    assert found["docs"]["container_id"] == "f" * 64
+
+
 def test_fenced_observer_uses_postinstall_identity_without_prefence_acl(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
