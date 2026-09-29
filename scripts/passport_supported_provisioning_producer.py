@@ -23,7 +23,8 @@ from typing import Callable
 
 if __package__:
     from .check_passport_supported_compose_ownership import (
-        _inspect, _labels, docker, verify as verify_ownership,
+        _expected_image, _expected_mounts, _inspect, _labels, docker,
+        verify as verify_ownership,
     )
     from .check_passport_supported_rollback_model import (
         DISPOSABLE_SERVICES, PROJECT, ModelPreflightError, preflight_attested_plan,
@@ -36,7 +37,8 @@ if __package__:
     from .stage_passport_disposable_tls import TLS_FILES, stage_tls
 else:
     from check_passport_supported_compose_ownership import (
-        _inspect, _labels, docker, verify as verify_ownership,
+        _expected_image, _expected_mounts, _inspect, _labels, docker,
+        verify as verify_ownership,
     )
     from check_passport_supported_rollback_model import (
         DISPOSABLE_SERVICES, PROJECT, ModelPreflightError, preflight_attested_plan,
@@ -67,6 +69,7 @@ TEXT_SECRETS = frozenset({
     "issuance_api_key", "callback_signer_api_key", "grpc_service_token",
     "bureau_database_url", "token_hmac_key", "integration_secret_master_key",
     "flow_webhook_secret", "flow_application_event_hmac_key",
+    "physical_document_artifact_key",
 })
 STAGED_SECRETS = TEXT_SECRETS | TLS_FILES
 BOOTSTRAPPED_SECRETS = frozenset({"bao_token", "callback_signer_bao_token"})
@@ -267,6 +270,8 @@ def stage_disposable_inputs(
             "integration_secret_master_key": base64.b64encode(secrets.token_bytes(32)).decode("ascii"),
             "flow_webhook_secret": secrets.token_hex(32),
             "flow_application_event_hmac_key": secrets.token_hex(32),
+            "physical_document_artifact_key": base64.urlsafe_b64encode(
+                secrets.token_bytes(32)).decode("ascii"),
         }
         require(set(values) == TEXT_SECRETS, "Disposable secret set is incomplete")
         env = {
@@ -443,6 +448,8 @@ def _destroy_recorded_project(
                     and name.startswith(project + "_") for name in volumes)
             and len(set(volumes)) == len(volumes),
             "Disposable teardown record is invalid")
+    surface = PROJECT.fullmatch(project).group(1)
+    disposable_root = Path(tempfile.gettempdir()) / project
     try:
         for service, identifier in containers.items():
             item = _inspect("container", identifier, inspector)
@@ -453,16 +460,83 @@ def _destroy_recorded_project(
             _labels(labels, record, project)
             require(labels.get("com.docker.compose.service") == service,
                     "Recorded disposable container changed service")
+            if not complete:
+                expected_image = _expected_image(record, service)
+                require(isinstance(expected_image, str)
+                        and config.get("Image") == expected_image
+                        and re.fullmatch(r"/" + re.escape(project) + "-"
+                                         + re.escape(service) + r"-[1-9][0-9]*",
+                                         item.get("Name", "")) is not None
+                        and labels.get("com.docker.compose.oneoff") != "True",
+                        "Partial disposable container is outside the plan model")
+                network_settings = item.get("NetworkSettings")
+                require(isinstance(network_settings, dict),
+                        "Partial disposable container network state is invalid")
+                attachments = network_settings.get("Networks")
+                require(isinstance(attachments, dict)
+                        and set(attachments) <= set(networks)
+                        and (service != "passport-openbao-bootstrap"
+                             or set(attachments) == {f"{project}_private"})
+                        and all(isinstance(endpoint, dict)
+                                and endpoint.get("NetworkID") in (networks[name], None, "")
+                                for name, endpoint in attachments.items()),
+                        "Partial disposable container joins an unowned network")
+                mounts = item.get("Mounts")
+                require(isinstance(mounts, list),
+                        "Partial disposable container mounts are invalid")
+                expected_mounts = _expected_mounts(
+                    service, project, disposable_root, surface)
+                observed_mounts: set[tuple[str, str, str, bool]] = set()
+                for mount in mounts:
+                    require(isinstance(mount, dict)
+                            and mount.get("Type") in {"bind", "volume"}
+                            and isinstance(mount.get("Destination"), str)
+                            and isinstance(mount.get("RW"), bool),
+                            "Partial disposable container uses an unowned mount")
+                    kind = mount["Type"]
+                    source = mount.get("Source") if kind == "bind" else mount.get("Name")
+                    require(isinstance(source, str)
+                            and (kind != "bind" or Path(source).resolve() == Path(source)),
+                            "Partial disposable container uses an unowned mount")
+                    identity = (kind, str(Path(source)) if kind == "bind" else source,
+                                mount["Destination"], mount["RW"])
+                    require(identity in expected_mounts and identity not in observed_mounts
+                            and (kind != "volume" or source in volumes),
+                            "Partial disposable container uses an unowned mount")
+                    observed_mounts.add(identity)
+                require(observed_mounts == expected_mounts,
+                        "Partial disposable container mount set is incomplete")
         for name, identifier in networks.items():
             item = _inspect("network", identifier, inspector)
             require(item.get("Id") == identifier and item.get("Name") == name,
                     "Recorded disposable network changed identity")
             _labels(item.get("Labels"), record, project)
+            if not complete:
+                members = item.get("Containers", {})
+                require(item.get("Driver") == "bridge" and item.get("Internal") is True
+                        and isinstance(members, dict)
+                        and set(members) <= set(containers.values()),
+                        "Partial disposable network is not isolated")
         for name in volumes:
             item = _inspect("volume", name, inspector)
             require(item.get("Name") == name,
                     "Recorded disposable volume changed identity")
             _labels(item.get("Labels"), record, project)
+            if not complete:
+                require(item.get("Driver") == "local" and not item.get("Options"),
+                        "Partial disposable volume is outside the storage model")
+        expected = (set(containers.values()), set(networks.values()), set(volumes))
+        listed = (
+            inspector(["ps", "-aq", "--no-trunc", "--filter",
+                       f"label=com.docker.compose.project={project}"]).split(),
+            inspector(["network", "ls", "-q", "--no-trunc", "--filter",
+                       f"label=com.docker.compose.project={project}"]).split(),
+            inspector(["volume", "ls", "-q", "--filter",
+                       f"label=com.docker.compose.project={project}"]).split(),
+        )
+        require(all(len(found) == len(set(found)) and set(found) == wanted
+                    for found, wanted in zip(listed, expected)),
+                "Disposable project changed before teardown")
     except (OSError, ValueError, KeyError, TypeError):
         return False
     if containers:
@@ -511,9 +585,10 @@ def destroy_partial_disposable_project(
 ) -> bool:
     """Clean a failed startup only after rechecking protected plan provenance.
 
-    Every discovered resource must have the exact plan labels and one of the
-    fixed disposable service/network/volume names. Unknown project resources
-    fail closed before any deletion; the caller must retain the plan and release.
+    Every discovered resource must match the plan's image, mounts, network,
+    volume, labels, and fixed names. The caller must quiesce startup first;
+    the final project inventory rejects added resources before deletion.
+    The caller must retain the plan and release.
     """
     plan = verify_plan_release(
         plan_path, manifest_path, plan_run_id, environment, now=now,
@@ -589,6 +664,9 @@ def destroy_partial_disposable_project(
               "project": project, "run_id": plan["run_id"],
               "source_commit": plan["source_commit"],
               "services_reference": plan["services_reference"],
+              "migrations_reference": plan["migrations_reference"],
+              "legacy_reference": plan["legacy_reference"],
+              "infra_images": plan["infra_images"],
               "containers": containers, "networks": networks, "volumes": volumes}
     return _destroy_recorded_project(record, inspector, executor, complete=False)
 

@@ -8,6 +8,24 @@ param(
 Set-StrictMode -Version Latest
 $ErrorActionPreference = "Stop"
 
+# Every runner directory shares the same Docker Desktop host. Hold one lock
+# until the foreground one-job runner exits.
+$hostMutex = [System.Threading.Mutex]::new($false, "Global\ElevenIDMartyDockerRunner")
+$mutexHeld = $false
+$markerCreated = $false
+$markerPath = Join-Path $env:ProgramData 'ElevenID\Marty\canvas-oss-runner-active'
+try {
+    try {
+        $mutexHeld = $hostMutex.WaitOne(0)
+    } catch [System.Threading.AbandonedMutexException] {
+        # A crashed wrapper released the mutex. The checks below still have
+        # to prove that its runner and passport resources are gone.
+        $mutexHeld = $true
+    }
+    if (-not $mutexHeld) {
+        throw "Another one-job runner wrapper owns this Docker host"
+    }
+
 if ($Repository -notmatch '^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$') {
     throw "Repository must use owner/name syntax"
 }
@@ -99,6 +117,13 @@ if ($LASTEXITCODE -eq 0) {
     $removeToken = $null
 }
 
+# A prior cancelled or crashed passport rehearsal can outlive this one-job
+# runner on Docker Desktop. Refuse new registration until the host is clean.
+Invoke-WslBash "python3 '$wslRepoRoot/scripts/check_canvas_oss_runner.py' --host-setup --output /tmp/canvas-oss-runner-host-preflight.json && rm -f /tmp/canvas-oss-runner-host-preflight.json"
+if (Test-Path -LiteralPath $markerPath) {
+    throw "A prior one-job runner ended without verified host cleanup; host is quarantined"
+}
+
 $registrationToken = (& gh api --method POST "repos/$Repository/actions/runners/registration-token" --jq .token).Trim()
 if (-not $registrationToken) { throw "Could not obtain short-lived runner registration token" }
 
@@ -130,4 +155,28 @@ if ($missingLabels.Count -gt 0) {
 # Foreground execution is intentional. A Windows Scheduled Task launched at
 # 01:50 Denver remains alive until the admitted 02:07 job finishes. The marker
 # is inherited by the runner process and is rechecked inside the workflow.
+New-Item -ItemType Directory -Path (Split-Path -Parent $markerPath) -Force | Out-Null
+$markerStream = [System.IO.File]::Open(
+    $markerPath, [System.IO.FileMode]::CreateNew,
+    [System.IO.FileAccess]::Write, [System.IO.FileShare]::None)
+$markerStream.Dispose()
+$markerCreated = $true
 Invoke-WslBash "export CANVAS_OSS_RUNNER_LABELS_VERIFIED='$runnerName'; cd '$wslRunnerDirectory' && exec ./run.sh"
+} finally {
+    $postRunError = $null
+    if ($markerCreated) {
+        try {
+            Invoke-WslBash "python3 '$wslRepoRoot/scripts/check_canvas_oss_runner.py' --host-setup --output /tmp/canvas-oss-runner-host-preflight.json && rm -f /tmp/canvas-oss-runner-host-preflight.json"
+            Remove-Item -LiteralPath $markerPath
+        } catch {
+            $postRunError = $_
+        }
+    }
+    if ($mutexHeld) {
+        $hostMutex.ReleaseMutex()
+    }
+    $hostMutex.Dispose()
+    if ($null -ne $postRunError) {
+        throw "Runner host remains quarantined after the job: $postRunError"
+    }
+}
