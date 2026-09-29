@@ -105,6 +105,23 @@ def test_rejects_changed_video_or_scan(tmp_path: Path) -> None:
                               selected=SELECTED)
 
 
+@pytest.mark.parametrize("field,value", [
+    ("schemaVersion", True),
+    ("frameSamplingFps", float("inf")),
+])
+def test_rejects_scan_json_recorder_would_reject(tmp_path: Path, field: str, value: object) -> None:
+    media = media_fixture(tmp_path)
+    scan_path = tmp_path / "unsigned-callback-privacy-scan.json"
+    scan = json.loads(scan_path.read_text(encoding="utf-8"))
+    scan[field] = value
+    write_json(scan_path, scan)
+    media["negative_runs"]["unsigned"]["privacy_scan_report_sha256"] = digest(scan_path.read_bytes())
+    write_json(tmp_path / "negative-callback-media.json", media)
+    with pytest.raises(PreliminaryEvidenceError):
+        verify_negative_media(tmp_path, release=RELEASE, deployment=DEPLOYMENT,
+                              selected=SELECTED)
+
+
 def test_rejects_symlink_media(tmp_path: Path) -> None:
     media_fixture(tmp_path)
     video = tmp_path / "unsigned-callback-uncut.webm"

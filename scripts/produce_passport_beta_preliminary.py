@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import math
 import re
 from pathlib import Path
 from typing import Any
@@ -49,7 +50,8 @@ def _digest(path: Path, limit: int) -> str:
 def _read_json(path: Path, limit: int) -> dict[str, Any]:
     _digest(path, limit)
     try:
-        value = json.loads(path.read_text(encoding="utf-8"))
+        value = json.loads(path.read_text(encoding="utf-8"),
+                           parse_constant=lambda _: require(False, "Nonfinite JSON number is invalid"))
     except (OSError, ValueError) as exc:
         raise PreliminaryEvidenceError("Negative callback evidence is invalid") from exc
     require(isinstance(value, dict), "Negative callback evidence is invalid")
@@ -137,11 +139,13 @@ def verify_negative_media(
         scan = _read_json(scan_path, 1024 * 1024)
         require(set(scan) == {"schemaVersion", "passed", "findings", "videoSha256",
                               "frameSamplingFps"}
-                and scan.get("schemaVersion") == 1 and scan.get("passed") is True
+                and type(scan.get("schemaVersion")) is int and scan["schemaVersion"] == 1
+                and scan.get("passed") is True
                 and scan.get("findings") == []
                 and scan.get("videoSha256") == video_digest
                 and isinstance(scan.get("frameSamplingFps"), (int, float))
                 and not isinstance(scan["frameSamplingFps"], bool)
+                and math.isfinite(scan["frameSamplingFps"])
                 and scan["frameSamplingFps"] >= 2,
                 f"{name} callback privacy scan is incomplete")
     unsigned, foreign = runs["unsigned"], runs["foreign"]
