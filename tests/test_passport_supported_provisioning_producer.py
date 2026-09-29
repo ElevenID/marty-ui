@@ -613,6 +613,7 @@ def test_partial_teardown_removes_only_plan_owned_startup_resources(
     project = plan["project"]
     container = "1" * 64
     network = "2" * 64
+    callback_network = "3" * 64
     volume = project + "_postgres_data"
     present = {"containers": [container], "networks": [network],
                "volumes": [volume]}
@@ -620,6 +621,9 @@ def test_partial_teardown_removes_only_plan_owned_startup_resources(
     calls = []
     state = {"image": plan["infra_images"]["postgres"],
              "extra_mount": False, "network_driver": "bridge",
+             "network_mode": project + "_private",
+             "extra_network": False,
+             "attached": True, "status": "running", "network_id": network,
              "network_member": container, "volume_driver": "local",
              "late_resource": False, "list_calls": 0}
 
@@ -629,8 +633,14 @@ def test_partial_teardown_removes_only_plan_owned_startup_resources(
                                 "Config": {"Image": state["image"],
                                            "Labels": {
                                                **labels, "com.docker.compose.service": "postgres"}},
-                                "NetworkSettings": {"Networks": {
-                                    project + "_private": {"NetworkID": network}}},
+                                "HostConfig": {"NetworkMode": state["network_mode"]},
+                                "State": {"Status": state["status"]},
+                                "NetworkSettings": {"Networks": ({
+                                    project + "_private": {"NetworkID": state["network_id"]},
+                                    **({project + "_callback_signing": {
+                                        "NetworkID": callback_network}}
+                                       if state["extra_network"] else {})}
+                                    if state["attached"] else {})},
                                 "Mounts": [
                                     {"Type": "bind", "Source": str(
                                         Path(tempfile.gettempdir()) / project / "secrets"
@@ -644,7 +654,8 @@ def test_partial_teardown_removes_only_plan_owned_startup_resources(
                                           "Destination": "/outside", "RW": True},
                                      ] if state["extra_mount"] else [])}])
         if args[:2] == ["network", "inspect"]:
-            return json.dumps([{"Id": args[2], "Name": project + "_private",
+            return json.dumps([{"Id": args[2], "Name": project + (
+                "_callback_signing" if args[2] == callback_network else "_private"),
                                 "Driver": state["network_driver"], "Internal": True,
                                 "Containers": {state["network_member"]: {}},
                                 "Labels": labels}])
@@ -688,21 +699,42 @@ def test_partial_teardown_removes_only_plan_owned_startup_resources(
         ("image", plan["services_reference"]),
         ("extra_mount", True),
         ("network_driver", "overlay"),
+        ("network_mode", "host"),
+        ("network_mode", "container:" + "f" * 64),
+        ("network_mode", "none"),
+        ("attached", False),
+        ("extra_network", True),
         ("network_member", "f" * 64),
         ("volume_driver", "nfs"),
         ("late_resource", True),
     ):
-        present.update(containers=[container], networks=[network], volumes=[volume])
+        present.update(containers=[container],
+                       networks=[network, callback_network] if field == "extra_network"
+                       else [network], volumes=[volume])
         state[field] = bad
         state["list_calls"] = 0
         assert not destroy_partial_disposable_project(
             *arguments, inspector, executor, **gates), field
         assert len(calls) == 3, field
-        state[field] = False if field in ("extra_mount", "late_resource") else {
+        state[field] = False if field in ("extra_mount", "extra_network", "late_resource") else {
+            "attached": True,
             "image": plan["infra_images"]["postgres"],
             "network_driver": "bridge", "network_member": container,
+            "network_mode": project + "_private",
             "volume_driver": "local",
         }[field]
+
+    present.update(containers=[container], networks=[network], volumes=[volume])
+    state.update(attached=False, status="created")
+    assert destroy_partial_disposable_project(
+        *arguments, inspector, executor, **gates)
+    assert len(calls) == 6
+
+    present.update(containers=[container], networks=[network], volumes=[volume])
+    state.update(attached=True, network_id="")
+    assert destroy_partial_disposable_project(
+        *arguments, inspector, executor, **gates)
+    assert len(calls) == 9
 
 
 def test_partial_teardown_fails_closed_before_mutating_unknown_resource(
@@ -771,9 +803,11 @@ def test_partial_teardown_recognizes_interrupted_openbao_bootstrap(
 
     def inspector(args: list[str]) -> str:
         if args[:2] == ["container", "inspect"]:
-            return json.dumps([{"Id": container, "Name": state["name"],
-                                "Config": {"Image": state["image"], "Labels": labels},
-                                "NetworkSettings": {"Networks": state["attachments"]},
+                return json.dumps([{"Id": container, "Name": state["name"],
+                                    "Config": {"Image": state["image"], "Labels": labels},
+                                    "HostConfig": {"NetworkMode": network_name},
+                                    "State": {"Status": "running"},
+                                    "NetworkSettings": {"Networks": state["attachments"]},
                                 "Mounts": state["mounts"]}])
         if args[:2] == ["network", "inspect"]:
             return json.dumps([{"Id": network, "Name": network_name,
@@ -841,6 +875,7 @@ def test_partial_teardown_recognizes_interrupted_certificate_helper(
     parent_service = ("signing-keys" if helper_service ==
                       "passport-certificate-bootstrap" else "passport-beta-bureau")
     parent, helper, network = "1" * 64, "2" * 64, "3" * 64
+    callback_network = "4" * 64
     network_name = project + "_private"
     labels = {**plan["owner_labels"], "com.docker.compose.project": project}
     signer_mounts = [
@@ -853,6 +888,8 @@ def test_partial_teardown_recognizes_interrupted_certificate_helper(
         "image": plan["migrations_reference"],
         "name": f"/{project}-{helper_service}-1",
         "network_mode": f"container:{parent}",
+        "port_bindings": None,
+        "attachments": {},
         "mounts": [],
     }
     present = {"containers": True, "network": True}
@@ -866,8 +903,12 @@ def test_partial_teardown_recognizes_interrupted_certificate_helper(
                     "Id": parent, "Name": f"/{project}-{parent_service}-1",
                     "Config": {"Image": plan["services_reference"], "Labels": {
                         **labels, "com.docker.compose.service": parent_service}},
+                    "HostConfig": {"NetworkMode": network_name},
+                    "State": {"Status": "running"},
                     "NetworkSettings": {"Networks": {
-                        network_name: {"NetworkID": network}}},
+                        network_name: {"NetworkID": network},
+                        **({project + "_callback_signing": {"NetworkID": callback_network}}
+                           if parent_service == "passport-beta-bureau" else {})}},
                     "Mounts": signer_mounts,
                 }])
             assert identifier == helper
@@ -875,18 +916,24 @@ def test_partial_teardown_recognizes_interrupted_certificate_helper(
                 "Id": helper, "Name": state["name"],
                 "Config": {"Image": state["image"], "Labels": {
                     **labels, "com.docker.compose.service": helper_service}},
-                "HostConfig": {"NetworkMode": state["network_mode"]},
-                "NetworkSettings": {"Networks": {}}, "Mounts": state["mounts"],
+                "HostConfig": {"NetworkMode": state["network_mode"],
+                               "PortBindings": state["port_bindings"]},
+                "NetworkSettings": {"Networks": state["attachments"]},
+                "Mounts": state["mounts"],
             }])
         if args[:2] == ["network", "inspect"]:
             return json.dumps([{
-                "Id": network, "Name": network_name, "Driver": "bridge",
+                "Id": args[2], "Name": (project + "_callback_signing"
+                                        if args[2] == callback_network else network_name),
+                "Driver": "bridge",
                 "Internal": True, "Containers": {parent: {}}, "Labels": labels,
             }])
         if args[0] == "ps":
             return f"{parent}\n{helper}" if present["containers"] else ""
         if args[:2] == ["network", "ls"]:
-            return network if present["network"] else ""
+            return "\n".join([network, callback_network]
+                             if parent_service == "passport-beta-bureau" else [network]
+                             ) if present["network"] else ""
         if args[:2] == ["volume", "ls"]:
             return ""
         raise AssertionError(args)
@@ -903,6 +950,8 @@ def test_partial_teardown_recognizes_interrupted_certificate_helper(
         ("image", plan["services_reference"]),
         ("name", f"/{project}-{helper_service}-random"),
         ("network_mode", "bridge"),
+        ("port_bindings", {"8020/tcp": [{"HostPort": "8020"}]}),
+        ("attachments", {network_name: {"NetworkID": network}}),
         ("mounts", [{"Type": "bind", "Source": str(tmp_path),
                      "Destination": "/unowned", "RW": True}]),
     ):
@@ -930,7 +979,8 @@ def test_partial_teardown_recognizes_interrupted_certificate_helper(
         *arguments, inspector, executor, workflow_ref=workflow_ref, **gates)
     assert calls == [
         ["container", "rm", "-f", parent, helper],
-        ["network", "rm", network],
+        ["network", "rm", network, callback_network]
+        if parent_service == "passport-beta-bureau" else ["network", "rm", network],
     ]
 
 
