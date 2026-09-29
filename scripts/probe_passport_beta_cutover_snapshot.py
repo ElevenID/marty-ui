@@ -1,16 +1,18 @@
 #!/usr/bin/env python3
-"""Read-only, source-bound beta passport snapshot after the scoped fence.
+"""Read-only beta passport continuity snapshot after the scoped fence.
 
 This is a component of the later protected predeletion/final producers. It
-does not by itself qualify Python deletion or claim Rust acceptance.
+does not authenticate historical installer execution, qualify Python deletion,
+or claim Rust acceptance. A protected producer must separately attest the
+installation before consuming this observed snapshot for acceptance.
 """
 
 from __future__ import annotations
 
 import argparse
+import ctypes
 import hashlib
 import json
-import os
 import re
 from pathlib import Path
 from typing import Any, Callable
@@ -53,6 +55,18 @@ def digest(value: dict[str, Any]) -> str:
     return hashlib.sha256(
         json.dumps(value, sort_keys=True, separators=(",", ":")).encode()
     ).hexdigest()
+
+
+def host_fence_marker() -> Path:
+    """Use the same OS known folder as the PowerShell installer, not an env var."""
+    buffer = ctypes.create_unicode_buffer(32768)
+    try:
+        status = ctypes.windll.shell32.SHGetFolderPathW(None, 35, None, 0, buffer)
+    except (AttributeError, OSError) as exc:
+        raise HostProbeError("Windows beta host fence record location is unavailable") from exc
+    require(status == 0 and bool(buffer.value),
+            "Windows beta host fence record location is unavailable")
+    return Path(buffer.value) / "ElevenID-Marty-elevenid-beta-passport-fence.pending"
 
 
 def validate_direct_probe(probe: dict[str, Any], *, postgres: str,
@@ -204,6 +218,7 @@ def collect(
     result = {
         "schema": "marty.passport-beta-cutover-snapshot/v1",
         "status": "observed",
+        "installation_provenance": "local_host_continuity_only",
         "installation_receipt_sha256": digest(installation),
         "database_uid": database_uid,
         "beta_cluster_uid": f"docker:{docker['daemon_id']}",
@@ -250,9 +265,7 @@ def main() -> int:
         protected_file("scripts/probe_passport_beta_fence_direct_writes.py", run)
         protected_file("scripts/probe_passport_beta_host.py", run)
         protected_file("deploy-config/passport-beta-fence-approved-target.json", run)
-        program_data = os.environ.get("ProgramData", "")
-        require(bool(program_data), "Windows beta host fence record location is unavailable")
-        marker = Path(program_data) / "ElevenID-Marty-elevenid-beta-passport-fence.pending"
+        marker = host_fence_marker()
         record = json.loads(marker.read_text(encoding="utf-8"))
         require(isinstance(record, dict)
                 and record.get("schema") == "marty.passport-beta-fence-host-record/v1"
