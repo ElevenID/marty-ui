@@ -22,6 +22,7 @@ INSTALL = ROOT / "scripts/sql/passport-beta-fence-install.sql"
 DRAIN = ROOT / "scripts/sql/passport-beta-fence-drain.sql"
 VERIFY = ROOT / "scripts/sql/passport-beta-fence-verify.sql"
 FINALIZE_BATCH_ACL = ROOT / "scripts/sql/passport-beta-batch-acl-finalize.sql"
+START_MAINTENANCE = ROOT / "scripts/sql/passport-beta-db-maintenance-start.sql"
 POSTGRES_IMAGE = "postgres:15-alpine@sha256:fceb6f86328c36f2438fae3b851b0cc57c4a7e69a58c866d9ce24281f2cf0c9c"
 
 
@@ -58,7 +59,7 @@ def script_args(container: str, path: Path, *, attested: bool = True) -> list[st
             "-c", f"SET marty.passport_beta_expected_system_identifier = '{system_id}'",
             "-c", f"SET marty.passport_beta_expected_database_oid = '{database_oid}'",
         ]
-        if path == FINALIZE_BATCH_ACL:
+        if path in (FINALIZE_BATCH_ACL, START_MAINTENANCE):
             epoch = sql(container, "SELECT epoch FROM passport_cutover.state").strip()
             target += [
                 "-c", f"SET marty.passport_beta_expected_fence_epoch = '{epoch}'",
@@ -173,6 +174,86 @@ def test_batch_acl_finalizer_requires_exact_fence_and_grants_app_access(database
         WHERE oid='issuance_service.passport_beta_batch_intents'::regclass
     """).strip() == "marty_passport_fence_owner:true:true:true:true:false"
     assert script(database, VERIFY).returncode == 0
+
+
+def test_maintenance_start_requires_fence_and_drains_existing_login(database: str):
+    unfenced = script(database, START_MAINTENANCE, attested=False)
+    assert unfenced.returncode != 0
+    assert sql(database, "SELECT rolcanlogin FROM pg_roles WHERE rolname='marty'").strip() == "t"
+
+    installed = script(database, INSTALL)
+    assert installed.returncode == 0, installed.stderr
+    missing_target = script(database, START_MAINTENANCE, attested=False)
+    assert missing_target.returncode != 0
+    assert "lacks exact fenced beta target" in missing_target.stderr
+    assert sql(database, "SELECT rolcanlogin FROM pg_roles WHERE rolname='marty'").strip() == "t"
+
+    idle_client = subprocess.Popen(
+        ["docker", "exec", "-i", database, "psql", "-U", "marty", "-d", "marty",
+         "-v", "ON_ERROR_STOP=1", "-At"],
+        stdin=subprocess.PIPE, stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE, text=True,
+    )
+    try:
+        for _ in range(40):
+            if sql(database, "SELECT count(*) FROM pg_stat_activity "
+                             "WHERE usename='marty' AND state='idle'").strip() == "1":
+                break
+            time.sleep(0.1)
+        else:
+            pytest.fail("disposable marty session did not open")
+        started = script(database, START_MAINTENANCE)
+        assert started.returncode == 0, started.stderr
+        assert sql(database, "SELECT rolcanlogin FROM pg_roles WHERE rolname='marty'").strip() == "f"
+        assert sql(database, "SELECT count(*) FROM pg_stat_activity "
+                             "WHERE usename='marty'").strip() == "0"
+        assert script(database, VERIFY).returncode == 0
+        _out, err = idle_client.communicate("SELECT 1;\n", timeout=10)
+        assert idle_client.returncode != 0
+        assert "server closed the connection" in err
+        retried = script(database, START_MAINTENANCE)
+        assert retried.returncode == 0, retried.stderr
+    finally:
+        if idle_client.poll() is None:
+            idle_client.terminate()
+        idle_client.communicate(timeout=10)
+
+
+def test_maintenance_start_refuses_active_session_without_disabling_login(database: str):
+    installed = script(database, INSTALL)
+    assert installed.returncode == 0, installed.stderr
+    sleeper = subprocess.Popen(
+        ["docker", "exec", database, "psql", "-U", "marty", "-d", "marty",
+         "-v", "ON_ERROR_STOP=1", "-c", "SELECT pg_sleep(30)"],
+        stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
+    )
+    try:
+        for _ in range(40):
+            if sql(database, "SELECT count(*) FROM pg_stat_activity "
+                             "WHERE usename='marty' AND state='active'").strip() == "1":
+                break
+            time.sleep(0.1)
+        else:
+            pytest.fail("disposable active marty session did not open")
+        refused = script(database, START_MAINTENANCE)
+        assert refused.returncode != 0
+        assert "lacks exact fenced beta target" in refused.stderr
+        assert sql(database, "SELECT rolcanlogin FROM pg_roles WHERE rolname='marty'").strip() == "t"
+    finally:
+        if sleeper.poll() is None:
+            sleeper.terminate()
+        sleeper.communicate(timeout=10)
+
+
+def test_maintenance_start_rejects_role_membership_without_disabling_login(database: str):
+    installed = script(database, INSTALL)
+    assert installed.returncode == 0, installed.stderr
+    sql(database, "CREATE ROLE disposable_member LOGIN")
+    sql(database, "GRANT marty TO disposable_member")
+    refused = script(database, START_MAINTENANCE)
+    assert refused.returncode != 0
+    assert "lacks exact fenced beta target" in refused.stderr
+    assert sql(database, "SELECT rolcanlogin FROM pg_roles WHERE rolname='marty'").strip() == "t"
 
 
 def test_scoped_fence_and_drain(database: str):

@@ -53,6 +53,7 @@ PROTECTED_FILES = (
     "scripts/sql/passport-beta-fence-drain.sql",
     "scripts/sql/passport-beta-fence-verify.sql",
     "scripts/sql/passport-beta-batch-acl-finalize.sql",
+    "scripts/sql/passport-beta-db-maintenance-start.sql",
     "scripts/prepare_passport_beta_native_migrations.py",
     "services/Dockerfile.migrations",
     "rust/services/issuance/migrations/0001_oid4vci_public_protocol.sql",
