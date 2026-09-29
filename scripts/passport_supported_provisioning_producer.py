@@ -26,7 +26,7 @@ if __package__:
         _expected_image, _expected_mounts, _inspect, _labels, docker,
         verify as verify_ownership,
     )
-    from .check_passport_supported_rollback_model import (
+    from .check_passport_supported_rust_model import (
         DISPOSABLE_SERVICES, PROJECT, ModelPreflightError, preflight_attested_plan,
         source_identity,
     )
@@ -40,7 +40,7 @@ else:
         _expected_image, _expected_mounts, _inspect, _labels, docker,
         verify as verify_ownership,
     )
-    from check_passport_supported_rollback_model import (
+    from check_passport_supported_rust_model import (
         DISPOSABLE_SERVICES, PROJECT, ModelPreflightError, preflight_attested_plan,
         source_identity,
     )
@@ -234,7 +234,6 @@ def stage_disposable_inputs(
     references = {
         "MARTY_SERVICES_IMAGE": plan.get("services_reference"),
         "PASSPORT_ACCEPTANCE_MIGRATIONS_IMAGE": plan.get("migrations_reference"),
-        "PASSPORT_ACCEPTANCE_LEGACY_IMAGE": plan.get("legacy_reference"),
         **{f"PASSPORT_ACCEPTANCE_{name.upper()}_IMAGE": image
            for name, image in images.items()},
     }
@@ -288,9 +287,6 @@ def stage_disposable_inputs(
             "PASSPORT_ACCEPTANCE_SECRET_DIR": secret_dir.as_posix(),
             "PASSPORT_ACCEPTANCE_GATEWAY_PORT": str(gateway_port),
             "PASSPORT_ACCEPTANCE_ADMIN_EMAIL": "disposable-passport@acceptance.invalid",
-            "PASSPORT_ACCEPTANCE_DATABASE_URL": (
-                f"postgresql+asyncpg://marty:{database_password}@postgres:5432/marty"
-            ),
         }
         require(all("\n" not in value and "\r" not in value for value in env.values()),
                 "Disposable environment input is invalid")
@@ -406,13 +402,12 @@ def collect_record(
         "containers": containers, "networks": networks, "volumes": volumes,
         **{key: plan[key] for key in (
             "run_id", "project", "source_commit", "services_reference",
-            "migrations_reference", "legacy_reference", "infra_images",
+            "migrations_reference", "infra_images",
             "created_at", "expires_at", "owner_labels",
         )},
     }
     proof = ownership(record, plan["surface"], now, runner)
-    require(proof.get("live_ownership_verified") is True
-            and proof.get("rollback_accepted") is False,
+    require(proof.get("live_ownership_verified") is True,
             "Disposable live ownership proof failed")
     return record
 
@@ -695,7 +690,6 @@ def destroy_partial_disposable_project(
               "source_commit": plan["source_commit"],
               "services_reference": plan["services_reference"],
               "migrations_reference": plan["migrations_reference"],
-              "legacy_reference": plan["legacy_reference"],
               "infra_images": plan["infra_images"],
               "containers": containers, "networks": networks, "volumes": volumes}
     return _destroy_recorded_project(
@@ -713,8 +707,7 @@ def issue_disposable_api_key(
 ) -> Path:
     """Issue and extract a lease-bound key from the proven Organization container."""
     proof = ownership(record, surface, now, inspector)
-    require(proof.get("live_ownership_verified") is True
-            and proof.get("rollback_accepted") is False,
+    require(proof.get("live_ownership_verified") is True,
             "Disposable live ownership proof failed before key issuance")
     container = record["containers"]["organization"]
     require(RESOURCE_ID.fullmatch(container) is not None,

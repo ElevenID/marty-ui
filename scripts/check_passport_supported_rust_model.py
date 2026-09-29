@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
-"""Validate an already rendered disposable Compose model before rollback.
+"""Validate an already rendered disposable Rust Compose model.
 
 This module has no mutation command. Passing its model check is necessary,
-but never sufficient, for a later protected rollback rehearsal.
+but never sufficient, for protected Rust acceptance.
 """
 
 from __future__ import annotations
@@ -35,12 +35,12 @@ RUST_DEPENDENCIES = frozenset({
     "credential-template", "trust-profile", "presentation-policy", "deployment-profile",
 })
 DISPOSABLE_SERVICES = SELECTED | ISOLATED_DEPENDENCIES | RUST_DEPENDENCIES | frozenset({
-    "db-migrate", "issuance", "signing-keys", "edge",
+    "db-migrate", "signing-keys", "edge",
 })
 ALLOWED_SERVICES = frozenset({
     "applicant", "auth", "canvas-sync-worker", "compliance-profile",
     "credential-template", "db-migrate", "deployment-profile",
-    "device-registration", "edge", "event-stream", "flow", "gateway", "issuance",
+    "device-registration", "edge", "event-stream", "flow", "gateway",
     "issuance-migrations", "issuance-native", "keycloak",
     "keycloak-configurator", "mailpit", "notification", "openbao",
     "openbao-init", "organization", "passport-callback-signer",
@@ -126,18 +126,15 @@ def render_model(
     require(re.fullmatch(r"ghcr\.io/elevenid/marty-ui-oss/services@sha256:[0-9a-f]{64}",
                          services_reference) is not None,
             "Signed services image reference is invalid")
-    require(phase in {"rust", "python", "selfhost_ceremony"},
+    require(phase in {"rust", "selfhost_ceremony"},
             "Disposable owner phase is invalid")
     require(phase != "selfhost_ceremony" or surface == "selfhost",
             "Disposable certificate ceremony requires the selfhost surface")
     compose = ROOT / "docker-compose.passport-supported-disposable.yml"
     surface_overlay = ROOT / f"docker-compose.passport-supported-disposable-{surface}.yml"
-    owner_overlay = ROOT / "docker-compose.passport-supported-disposable-python-owner.yml"
     ceremony_overlay = (ROOT / "docker-compose.passport-supported-disposable-selfhost-ceremony.yml")
     files = [compose, surface_overlay]
-    if phase == "python":
-        files.append(owner_overlay)
-    elif phase == "selfhost_ceremony":
+    if phase == "selfhost_ceremony":
         files.append(ceremony_overlay)
     require(all(path.is_file() for path in files),
             "Protected Compose source is missing")
@@ -174,7 +171,7 @@ def preflight_read_only(
     result = validate_model(model, project, services_reference, disposable_root)
     result["static_isolation_verified"] = result.pop("model_safe")
     result["model_safe"] = False
-    return {"schema": "marty.passport-supported-rollback-preflight/v1",
+    return {"schema": "marty.passport-supported-rust-model-preflight/v1",
             "status": "blocked", "model": result,
             "blocker": "protected plan attestation and live ownership proof are absent"}
 
@@ -242,15 +239,15 @@ def preflight_attested_plan(
                                 plan_expires_at=plan["expires_at"])
         ceremony_result = validate_selfhost_ceremony_model(
             ceremony, model, project, services_reference, disposable_root)
-    return {"schema": "marty.passport-supported-rollback-preflight/v1",
+    return {"schema": "marty.passport-supported-rust-model-preflight/v1",
             "status": "blocked", "model": result,
             "ceremony_model": ceremony_result,
-            "blocker": "live ownership and Rust-to-Python rollback proof are absent"}
+            "blocker": "live ownership and Rust route proof are absent"}
 
 
 def validate_model(
     model: dict, project: str, services_reference: str, disposable_root: Path,
-    *, migrations_reference: str | None = None, legacy_reference: str | None = None,
+    *, migrations_reference: str | None = None,
 ) -> dict[str, object]:
     """Reject resolved configurations that can touch shared production resources."""
     project_match = PROJECT.fullmatch(project)
@@ -354,8 +351,7 @@ def validate_model(
         expected_image = (infra_images.get(name)
                           or (services_reference if name in RUST_DEPENDENCIES | {"signing-keys"}
                               else None)
-                          or (migrations_reference if name == "db-migrate" else None)
-                          or (legacy_reference if name == "issuance" else None))
+                          or (migrations_reference if name == "db-migrate" else None))
         if expected_image is not None:
             require(service.get("image") == expected_image,
                     f"Compose {name} differs from the protected image reference")
@@ -825,6 +821,19 @@ def validate_model(
         "Disposable managed issuer DID differs across profile and runtime services",
     )
     require(
+        gateway.get("PASSPORT_NATIVE_GATEWAY_ENABLED") == "true"
+        and flow.get("PASSPORT_NATIVE_FLOW_ENABLED") == "true"
+        and native.get("PASSPORT_NATIVE_HTTP_ENABLED") == "true"
+        and native.get("PASSPORT_MANAGED_ISSUER_SIGNING_ENABLED") == "true"
+        and native.get("PASSPORT_KMS_ARTIFACTS_ENABLED") == "true"
+        and native.get("PASSPORT_KMS_CALLBACKS_ENABLED") == "true"
+        and all(settings.get("ISSUANCE_SERVICE_URL")
+                == settings.get("ISSUANCE_NATIVE_SERVICE_URL")
+                == "http://issuance-native:8005"
+                for settings in (gateway, flow)),
+        "Disposable passport routes do not have one Rust owner",
+    )
+    require(
         all(settings.get("PASSPORT_INTERNAL_SERVICE_AUTH_ENABLED") == "true"
             and "PASSPORT_TENANT_API_KEYS" not in settings
             and "PASSPORT_TENANT_API_KEYS_FILE" not in settings
@@ -923,7 +932,7 @@ def validate_model(
     require("provider_webhook_secret" not in secrets,
             "Disposable simulator model includes a physical provider secret")
     return {"project": project, "services": sorted(SELECTED),
-            "model_safe": True, "rollback_accepted": False}
+            "model_safe": True}
 
 
 def validate_selfhost_ceremony_model(
@@ -969,7 +978,7 @@ def validate_selfhost_ceremony_model(
     require(ceremony == expected,
             "Disposable certificate ceremony changes more than the isolated beta phase")
     return {"project": project, "model_safe": True,
-            "ceremony_only": True, "rollback_accepted": False}
+            "ceremony_only": True}
 
 
 def validate_planned_model(model: dict, plan: dict, disposable_root: Path) -> dict:
@@ -983,7 +992,6 @@ def validate_planned_model(model: dict, plan: dict, disposable_root: Path) -> di
             and isinstance(plan.get("project"), str)
             and isinstance(plan.get("services_reference"), str)
             and isinstance(plan.get("migrations_reference"), str)
-            and isinstance(plan.get("legacy_reference"), str)
             and plan.get("infra_images") == qualified_images(verify_registry=False),
             "Protected plan image bindings are invalid")
     match = PROJECT.fullmatch(plan["project"])
@@ -1011,8 +1019,7 @@ def validate_planned_model(model: dict, plan: dict, disposable_root: Path) -> di
             "Disposable API key lease differs from protected plan")
     return validate_model(model, plan["project"], plan["services_reference"],
                           disposable_root,
-                          migrations_reference=plan["migrations_reference"],
-                          legacy_reference=plan["legacy_reference"])
+                          migrations_reference=plan["migrations_reference"])
 
 
 def main() -> int:
@@ -1034,14 +1041,14 @@ def main() -> int:
             report = preflight_read_only(args.surface, args.project, args.env_file,
                                          args.disposable_root, args.services_reference)
     except ModelPreflightError as exc:
-        report = {"schema": "marty.passport-supported-rollback-preflight/v1",
+        report = {"schema": "marty.passport-supported-rust-model-preflight/v1",
                   "status": "blocked", "blocker": str(exc)}
         args.output.write_text(json.dumps(report, sort_keys=True) + "\n",
                                encoding="utf-8")
-        parser.exit(1, f"Supported rollback preflight blocked: {exc}\n")
+        parser.exit(1, f"Supported Rust model preflight blocked: {exc}\n")
     args.output.write_text(json.dumps(report, indent=2, sort_keys=True) + "\n",
                            encoding="utf-8")
-    parser.exit(1, "Supported rollback preflight blocked pending protected provisioning\n")
+    parser.exit(1, "Supported Rust model preflight blocked pending protected provisioning\n")
 
 
 if __name__ == "__main__":

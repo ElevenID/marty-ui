@@ -1,4 +1,4 @@
-# Dedicated, unprovisioned passport rollback rehearsal model. Both surface
+# Dedicated, unprovisioned passport Rust acceptance model. Both surface
 # overlays below select this topology; neither inherits production resources.
 # Image references and secret files must come from one protected release/run.
 x-acceptance-labels: &acceptance-labels
@@ -269,22 +269,6 @@ services:
       test: [CMD, curl, --fail, http://localhost:8003/health]
     networks: [private]
 
-  issuance:
-    labels: *acceptance-labels
-    # Retained only for the bounded rollback rehearsal. Its digest and source
-    # must be independently tied to the pre-retirement Marty Credentials release.
-    image: ${PASSPORT_ACCEPTANCE_LEGACY_IMAGE:?pin legacy Python issuance image by digest}
-    environment:
-      DATABASE_URL: ${PASSPORT_ACCEPTANCE_DATABASE_URL:?bind disposable PostgreSQL URL}
-      ISSUANCE_SERVICE_PORT: "8005"
-      ISSUANCE_NATIVE_SERVICE_URL: http://issuance-native:8005
-      DIDCOMM_DELIVERY_OWNER: native
-      REDIS_URL: redis://redis:6379
-    depends_on:
-      db-migrate:
-        condition: service_completed_successfully
-    networks: [private]
-
   issuance-native:
     labels: *acceptance-labels
     image: ${MARTY_SERVICES_IMAGE:?pin signed services image by digest}
@@ -411,7 +395,7 @@ services:
       TRUST_PROFILE_SERVICE_URL: http://trust-profile:8004
       DEPLOYMENT_PROFILE_SERVICE_URL: http://deployment-profile:8010
       ISSUANCE_NATIVE_SERVICE_URL: http://issuance-native:8005
-      ISSUANCE_SERVICE_URL: http://issuance:8005
+      ISSUANCE_SERVICE_URL: http://issuance-native:8005
       SIGNING_KEYS_INTERNAL_URL: http://signing-keys:8017/internal
       SIGNING_KEYS_INTERNAL_API_KEY_FILE: /run/secrets/signing_keys_internal_api_key
     secrets: [marty_db_password, signing_keys_internal_api_key, issuance_api_key, grpc_service_token]
@@ -498,7 +482,7 @@ services:
       ES_GRPC_TARGET: event-stream:9015
       FLOW_SERVICE_URL: http://flow:8011
       ISSUANCE_NATIVE_SERVICE_URL: http://issuance-native:8005
-      ISSUANCE_SERVICE_URL: http://issuance:8005
+      ISSUANCE_SERVICE_URL: http://issuance-native:8005
       SIGNING_KEYS_SERVICE_URL: http://signing-keys:8017
       GATEWAY_REQUIRED_READY_SERVICES: flows,issuance-native,signing-keys
       REDIS_URL: redis://redis:6379

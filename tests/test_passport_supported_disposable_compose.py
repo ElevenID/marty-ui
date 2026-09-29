@@ -10,7 +10,7 @@ import shutil
 
 import pytest
 
-from scripts.check_passport_supported_rollback_model import (
+from scripts.check_passport_supported_rust_model import (
     ModelPreflightError, preflight_attested_plan, render_model, validate_model,
     validate_selfhost_ceremony_model,
 )
@@ -19,7 +19,6 @@ from scripts.passport_supported_infra_images import qualified_images
 
 SERVICES = "ghcr.io/elevenid/marty-ui-oss/services@sha256:" + "a" * 64
 MIGRATIONS = "ghcr.io/elevenid/marty-ui-oss/migrations@sha256:" + "b" * 64
-LEGACY = "ghcr.io/elevenid/marty-credentials/issuance@sha256:" + "c" * 64
 
 
 def inputs(root: Path) -> Path:
@@ -45,10 +44,8 @@ def inputs(root: Path) -> Path:
         "PASSPORT_ACCEPTANCE_OPENBAO_IMAGE=quay.io/openbao/openbao@sha256:" + "f" * 64,
         "PASSPORT_ACCEPTANCE_EDGE_IMAGE=docker.io/library/nginx@sha256:" + "1" * 64,
         "PASSPORT_ACCEPTANCE_MIGRATIONS_IMAGE=" + MIGRATIONS,
-        "PASSPORT_ACCEPTANCE_LEGACY_IMAGE=" + LEGACY,
         "PASSPORT_ACCEPTANCE_PLAN_RUN_ID=123456789",
         "PASSPORT_ACCEPTANCE_SOURCE_COMMIT=" + "a" * 40,
-        "PASSPORT_ACCEPTANCE_DATABASE_URL=postgresql+asyncpg://marty:synthetic-disposable-only@postgres:5432/marty",
         "PASSPORT_ACCEPTANCE_ADMIN_EMAIL=disposable@acceptance.invalid",
         "PASSPORT_ACCEPTANCE_EXPIRES_AT=2026-09-27T12:55:00+00:00",
         "PASSPORT_ACCEPTANCE_GATEWAY_PORT=29876",
@@ -66,7 +63,7 @@ def test_real_compose_render_is_safe_but_not_accepted(
     project = f"marty-passport-acceptance-{surface}-abcdef"
     model = render_model(surface, project, env_file, tmp_path, SERVICES)
     assert set(model["services"]) >= {
-        "gateway", "flow", "issuance-native", "issuance",
+        "gateway", "flow", "issuance-native",
         "passport-callback-signer", "passport-beta-bureau",
         "signing-keys", "db-migrate", "postgres", "redis", "openbao",
         "organization", "event-stream",
@@ -76,7 +73,7 @@ def test_real_compose_render_is_safe_but_not_accepted(
     }
     result = validate_model(model, project, SERVICES, tmp_path)
     assert result["model_safe"] is True
-    assert result["rollback_accepted"] is False
+    assert "issuance" not in model["services"]
     assert model["services"]["issuance-native"]["environment"]["SIGNING_KEYS_INTERNAL_URL"] == (
         "http://gateway:8000/internal/signing-keys"
     )
@@ -154,7 +151,10 @@ def test_real_compose_render_is_safe_but_not_accepted(
         "ES_GRPC_TARGET"] == "event-stream:9015"
     assert model["services"]["organization"]["environment"][
         "PASSPORT_ACCEPTANCE_PROJECT"] == project
-    assert model["services"]["issuance"]["image"] == LEGACY
+    assert model["services"]["gateway"]["environment"][
+        "ISSUANCE_SERVICE_URL"] == "http://issuance-native:8005"
+    assert model["services"]["flow"]["environment"][
+        "ISSUANCE_SERVICE_URL"] == "http://issuance-native:8005"
     signing = model["services"]["signing-keys"]
     assert signing["environment"]["SIGNING_KEYS_REDIS_URL"] == "redis://redis:6379/2"
     assert signing["environment"]["PUBLIC_DOMAIN"] == "localhost:29876"
@@ -204,30 +204,6 @@ def test_real_compose_render_is_safe_but_not_accepted(
 
 
 @pytest.mark.skipif(shutil.which("docker") is None, reason="Docker Compose CLI unavailable")
-@pytest.mark.parametrize("surface", ["base", "selfhost"])
-def test_python_owner_phase_changes_only_two_frozen_selectors(
-    tmp_path: Path, surface: str,
-) -> None:
-    env_file = inputs(tmp_path)
-    project = f"marty-passport-acceptance-{surface}-abcdef"
-    rust = render_model(surface, project, env_file, tmp_path, SERVICES)
-    python = render_model(surface, project, env_file, tmp_path, SERVICES,
-                          phase="python")
-    assert validate_model(python, project, SERVICES, tmp_path)["rollback_accepted"] is False
-    differences = {
-        (service, key, rust["services"][service]["environment"][key], value)
-        for service, item in python["services"].items()
-        for key, value in item.get("environment", {}).items()
-        if value != rust["services"][service].get("environment", {}).get(key)
-    }
-    assert differences == {
-        ("gateway", "PASSPORT_NATIVE_GATEWAY_ENABLED", "true", "false"),
-        ("flow", "PASSPORT_NATIVE_FLOW_ENABLED", "true", "false"),
-    }
-    assert set(rust["services"]) == set(python["services"])
-
-
-@pytest.mark.skipif(shutil.which("docker") is None, reason="Docker Compose CLI unavailable")
 def test_selfhost_ceremony_is_temporary_and_exact(tmp_path: Path) -> None:
     env_file = inputs(tmp_path)
     project = "marty-passport-acceptance-selfhost-abcdef"
@@ -237,7 +213,7 @@ def test_selfhost_ceremony_is_temporary_and_exact(tmp_path: Path) -> None:
     assert validate_selfhost_ceremony_model(
         ceremony, final, project, SERVICES, tmp_path) == {
             "project": project, "model_safe": True,
-            "ceremony_only": True, "rollback_accepted": False,
+            "ceremony_only": True,
         }
     assert final["services"]["gateway"]["environment"]["ENVIRONMENT"] == "production"
     assert ceremony["services"]["gateway"]["environment"]["ENVIRONMENT"] == "beta"
@@ -267,7 +243,6 @@ def test_attested_selfhost_preflight_includes_ceremony_model(tmp_path: Path) -> 
         "source_commit": "a" * 40, "run_id": "123456789",
         "services_reference": SERVICES,
         "migrations_reference": MIGRATIONS,
-        "legacy_reference": LEGACY,
         "infra_images": qualified_images(verify_registry=False),
         "owner_labels": {
             "com.marty.passport.acceptance.owner": "supported-consumer",
@@ -288,11 +263,10 @@ def test_attested_selfhost_preflight_includes_ceremony_model(tmp_path: Path) -> 
     assert report["status"] == "blocked"
     assert report["model"]["model_safe"] is True
     assert report["ceremony_model"]["ceremony_only"] is True
-    assert report["ceremony_model"]["rollback_accepted"] is False
 
 
 @pytest.mark.skipif(shutil.which("docker") is None, reason="Docker Compose CLI unavailable")
-def test_rendered_model_rejects_escape_and_mutated_legacy_image(tmp_path: Path) -> None:
+def test_rendered_model_rejects_escape_and_mutated_rust_image(tmp_path: Path) -> None:
     model = render_model("base", "marty-passport-acceptance-base-abcdef",
                          inputs(tmp_path), tmp_path, SERVICES)
     project = "marty-passport-acceptance-base-abcdef"
@@ -301,12 +275,12 @@ def test_rendered_model_rejects_escape_and_mutated_legacy_image(tmp_path: Path) 
     with pytest.raises(ModelPreflightError, match="network"):
         validate_model(bad, project, SERVICES, tmp_path)
     bad = deepcopy(model)
-    bad["services"]["issuance"]["environment"]["DATABASE_URL"] = (
+    bad["services"]["issuance-native"]["environment"]["DATABASE_URL_TEMPLATE"] = (
         "postgresql://marty@prod-db.example:5432/marty")
     with pytest.raises(ModelPreflightError, match="endpoint"):
         validate_model(bad, project, SERVICES, tmp_path)
     bad = deepcopy(model)
-    bad["services"]["issuance"]["image"] = "marty-credentials:latest"
+    bad["services"]["issuance-native"]["image"] = "marty-credentials:latest"
     with pytest.raises(ModelPreflightError, match="immutable"):
         validate_model(bad, project, SERVICES, tmp_path)
     bad = deepcopy(model)

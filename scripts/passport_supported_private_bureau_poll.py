@@ -18,13 +18,13 @@ if __package__:
     from .check_passport_supported_compose_ownership import (
         IDENTIFIER, MIGRATIONS_IMAGE, docker, verify as verify_ownership,
     )
-    from .check_passport_supported_rollback_model import PROJECT
+    from .check_passport_supported_rust_model import PROJECT
     from .passport_supported_disposable_ceremony import _local_docker_env
 else:
     from check_passport_supported_compose_ownership import (
         IDENTIFIER, MIGRATIONS_IMAGE, docker, verify as verify_ownership,
     )
-    from check_passport_supported_rollback_model import PROJECT
+    from check_passport_supported_rust_model import PROJECT
     from passport_supported_disposable_ceremony import _local_docker_env
 
 

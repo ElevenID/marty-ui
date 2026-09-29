@@ -19,7 +19,7 @@ import pytest
 import yaml
 
 from scripts import passport_supported_provisioning_producer as producer
-from scripts.check_passport_supported_rollback_model import (
+from scripts.check_passport_supported_rust_model import (
     DISPOSABLE_SERVICES, render_model, validate_planned_model,
 )
 from scripts.passport_supported_infra_images import qualified_images
@@ -84,7 +84,6 @@ def source_plan(tmp_path: Path) -> tuple[Path, Path, dict]:
         "stack_manifest_sha256": hashlib.sha256(manifest.read_bytes()).hexdigest(),
         "services_reference": SERVICES,
         "migrations_reference": "migrations@sha256:" + "c" * 64,
-        "legacy_reference": "legacy@sha256:" + "d" * 64,
         "infra_images": {"postgres": "postgres@sha256:" + "e" * 64,
                          "openbao": "openbao@sha256:" + "f" * 64},
     }
@@ -104,7 +103,7 @@ def source_plan(tmp_path: Path) -> tuple[Path, Path, dict]:
 def verify(path: Path, manifest: Path, plan: dict, **kwargs) -> dict:
     inputs = {key: plan[key] for key in (
         "source_commit", "stack_manifest_sha256", "services_reference",
-        "migrations_reference", "legacy_reference", "infra_images",
+        "migrations_reference", "infra_images",
     )}
     return verify_plan_release(
         path, manifest, "123456", ENV,
@@ -119,7 +118,7 @@ def test_infra_rehearsal_requires_its_exact_protected_workflow(tmp_path: Path) -
     path, manifest, plan = source_plan(tmp_path)
     official = {key: plan[key] for key in (
         "source_commit", "stack_manifest_sha256", "services_reference",
-        "migrations_reference", "legacy_reference", "infra_images",
+        "migrations_reference", "infra_images",
     )}
     gates = {"attest": lambda *args: True,
              "release": lambda *args: official,
@@ -139,7 +138,7 @@ def partial_teardown_context(tmp_path: Path) -> tuple[tuple, dict, dict]:
     path, manifest, plan = source_plan(tmp_path)
     official = {key: plan[key] for key in (
         "source_commit", "stack_manifest_sha256", "services_reference",
-        "migrations_reference", "legacy_reference", "infra_images",
+        "migrations_reference", "infra_images",
     )}
     gates = {"now": NOW, "attest": lambda *args: True,
              "release": lambda *args: official,
@@ -157,7 +156,6 @@ def input_plan() -> dict:
         "expires_at": (NOW + timedelta(minutes=55)).isoformat(),
         "services_reference": SERVICES,
         "migrations_reference": "ghcr.io/elevenid/marty-ui-oss/migrations@sha256:" + "c" * 64,
-        "legacy_reference": "ghcr.io/elevenid/marty-credentials/issuance@sha256:" + "d" * 64,
         "infra_images": qualified_images(verify_registry=False),
         "owner_labels": LABELS,
     }
@@ -200,9 +198,7 @@ def test_disposable_inputs_are_fresh_private_and_plan_bound() -> None:
         assert env["PASSPORT_ACCEPTANCE_GATEWAY_PORT"] == "29876"
         assert env["PASSPORT_ACCEPTANCE_EXPIRES_AT"] == plan["expires_at"]
         assert env["PASSPORT_ACCEPTANCE_SECRET_DIR"] == secret_dir.as_posix()
-        assert env["PASSPORT_ACCEPTANCE_DATABASE_URL"] == (
-            f"postgresql+asyncpg://marty:{password}@postgres:5432/marty"
-        )
+        assert "PASSPORT_ACCEPTANCE_DATABASE_URL" not in env
         assert env["MARTY_SERVICES_IMAGE"] == SERVICES
         if os.name == "posix":
             assert stat.S_IMODE(root.stat().st_mode) == 0o700
@@ -392,7 +388,7 @@ def test_record_assembly_uses_live_ids_then_requires_ownership(
 
     def ownership(record, surface, now, runner):
         observed.append((surface, now, runner))
-        return {"live_ownership_verified": True, "rollback_accepted": False}
+        return {"live_ownership_verified": True}
 
     record = collect_record(path, plan, "987654", tmp_path, NOW, docker,
                             ownership=ownership)
@@ -425,7 +421,7 @@ def test_disposable_api_key_is_extracted_only_after_live_ownership(
 
     def ownership(*args):
         assert calls == []
-        return {"live_ownership_verified": True, "rollback_accepted": False}
+        return {"live_ownership_verified": True}
 
     key = issue_disposable_api_key(record, "base", NOW,
                                    executor=executor, ownership=ownership)
@@ -463,7 +459,7 @@ def test_disposable_api_key_failure_erases_container_copy_and_preserves_existing
         return True
 
     def ownership(*args):
-        return {"live_ownership_verified": True, "rollback_accepted": False}
+        return {"live_ownership_verified": True}
     with pytest.raises(ProducerError, match="key output is invalid"):
         issue_disposable_api_key(record, "base", NOW,
                                  executor=executor, ownership=ownership,
@@ -496,8 +492,7 @@ def test_failed_issuer_still_erases_possible_container_output(tmp_path: Path) ->
         issue_disposable_api_key(
             record, "base", NOW, executor=executor,
             teardown=lambda *args: True,
-            ownership=lambda *args: {"live_ownership_verified": True,
-                                     "rollback_accepted": False})
+            ownership=lambda *args: {"live_ownership_verified": True})
     assert len(calls) == 3
     assert calls[-2][-1] == "--revoke-run"
     assert calls[-1][-3:] == ["rm", "-f", "/app/data/passport-acceptance-api-key"]
@@ -520,8 +515,7 @@ def test_uncertain_issuer_requires_proven_project_teardown(tmp_path: Path) -> No
     with pytest.raises(ProducerError, match="teardown is unverified"):
         issue_disposable_api_key(
             record, "base", NOW, executor=executor, teardown=teardown,
-            ownership=lambda *args: {"live_ownership_verified": True,
-                                     "rollback_accepted": False})
+            ownership=lambda *args: {"live_ownership_verified": True})
     assert len(observed) == 1
 
 
@@ -1014,8 +1008,7 @@ def test_host_key_unlink_failure_still_forces_teardown(
     with pytest.raises(OSError, match="host unlink failed"):
         issue_disposable_api_key(
             record, "base", NOW, executor=executor, teardown=teardown,
-            ownership=lambda *args: {"live_ownership_verified": True,
-                                     "rollback_accepted": False})
+            ownership=lambda *args: {"live_ownership_verified": True})
     assert torn_down == [True]
 
 

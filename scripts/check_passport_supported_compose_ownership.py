@@ -2,7 +2,7 @@
 """Read-only ownership proof for an already provisioned passport Compose project.
 
 The caller's record is not an attestation. A protected provisioner must create
-and bind it to a release before this can become a rollback authorization.
+and bind it to a release before this can support Rust acceptance.
 """
 
 from __future__ import annotations
@@ -17,12 +17,12 @@ import tempfile
 from typing import Callable
 
 if __package__:
-    from .check_passport_supported_rollback_model import (
+    from .check_passport_supported_rust_model import (
         DISPOSABLE_SERVICES, PROJECT, RUST_DEPENDENCIES, SELECTED,
     )
     from .passport_supported_infra_images import ROLES
 else:
-    from check_passport_supported_rollback_model import (
+    from check_passport_supported_rust_model import (
         DISPOSABLE_SERVICES, PROJECT, RUST_DEPENDENCIES, SELECTED,
     )
     from passport_supported_infra_images import ROLES
@@ -34,9 +34,6 @@ IDENTIFIER = re.compile(r"[0-9a-f]{64}\Z")
 RUN_ID = re.compile(r"[1-9][0-9]{0,19}\Z")
 MIGRATIONS_IMAGE = re.compile(
     r"ghcr\.io/elevenid/marty-ui-oss/migrations@sha256:[0-9a-f]{64}\Z")
-LEGACY_IMAGE = re.compile(
-    r"ghcr\.io/elevenid/marty-credentials-issuance@sha256:[0-9a-f]{64}\Z")
-REQUIRED_ROLLBACK = frozenset({"issuance", "db-migrate", "signing-keys"})
 OWNER_LABELS = {
     "com.marty.passport.acceptance.owner": "supported-consumer",
     "com.marty.passport.acceptance.run-id": "run_id",
@@ -54,7 +51,6 @@ SECRET_MOUNTS = {
     "openbao": ("bao_root_token",),
     "db-migrate": ("marty_db_password", "bao_token"),
     "signing-keys": ("marty_db_password", "bao_token", "signing_keys_internal_api_key"),
-    "issuance": (),
     "revocation-profile-migrate": ("marty_db_password",),
     "revocation-profile": ("marty_db_password", "grpc_service_token"),
     "event-stream": (),
@@ -401,8 +397,7 @@ def _expected_image(record: dict, service: str) -> str | None:
         return record.get("infra_images", {}).get("openbao")
     if service in {"passport-certificate-bootstrap", "passport-bureau-poll"}:
         return record.get("migrations_reference")
-    return (record.get("legacy_reference") if service == "issuance" else
-            record.get("migrations_reference") if service == "db-migrate" else
+    return (record.get("migrations_reference") if service == "db-migrate" else
             record.get("services_reference")
             if service in SELECTED | RUST_DEPENDENCIES | {"signing-keys"} else
             record.get("infra_images", {}).get(service))
@@ -428,10 +423,8 @@ def verify(record: dict, surface: str, now: datetime,
             and IMAGE.fullmatch(record["services_reference"]) is not None,
             "Released services image is invalid")
     require(isinstance(record.get("migrations_reference"), str)
-            and MIGRATIONS_IMAGE.fullmatch(record["migrations_reference"]) is not None
-            and isinstance(record.get("legacy_reference"), str)
-            and LEGACY_IMAGE.fullmatch(record["legacy_reference"]) is not None,
-            "Released migration or legacy rollback image is invalid")
+            and MIGRATIONS_IMAGE.fullmatch(record["migrations_reference"]) is not None,
+            "Released migration image is invalid")
     infra_images = record.get("infra_images")
     require(isinstance(infra_images, dict) and set(infra_images) == set(ROLES)
             and all(isinstance(infra_images[role], str)
@@ -460,7 +453,7 @@ def verify(record: dict, surface: str, now: datetime,
     require(set(containers) == DISPOSABLE_SERVICES
             and all(re.fullmatch(r"[a-z][a-z0-9-]+", name) for name in containers),
             "Disposable service ownership is incomplete")
-    require(all(name.startswith(project + "_") for name in networks),
+    require(set(networks) == {project + "_private", project + "_callback_signing"},
             "Disposable network identity escapes the project")
     disposable_root = Path(record.get("disposable_root", ""))
     require(disposable_root.is_absolute()
@@ -563,6 +556,18 @@ def verify(record: dict, surface: str, now: datetime,
         require(isinstance(attached, dict) and (bool(attached) or completed_init)
                 and set(attached) <= set(networks),
                 "Disposable container joins an unowned network")
+        expected_mode = (project + "_callback_signing"
+                         if service == "passport-callback-signer" else project + "_private")
+        expected_attached = {expected_mode}
+        if service in {"openbao", "passport-beta-bureau"}:
+            expected_attached.add(project + "_callback_signing")
+        host_config = item.get("HostConfig")
+        require(isinstance(host_config, dict)
+                and host_config.get("NetworkMode") == expected_mode,
+                "Disposable container network mode differs from Rust model")
+        require(set(attached) == expected_attached
+                or (completed_init and not attached),
+                "Disposable container network attachments differ from Rust model")
         for name, endpoint in attached.items():
             require(isinstance(endpoint, dict)
                     and (endpoint.get("NetworkID") == networks[name]
@@ -617,8 +622,8 @@ def verify(record: dict, surface: str, now: datetime,
 
     return {"schema": "marty.passport-supported-compose-ownership-proof/v1",
             "status": "blocked", "project": project,
-            "live_ownership_verified": True, "rollback_accepted": False,
-            "blocker": "protected provisioning provenance and live rollback transition are absent"}
+            "live_ownership_verified": True,
+            "blocker": "protected provisioning provenance and Rust route proof are absent"}
 
 
 def main() -> int:

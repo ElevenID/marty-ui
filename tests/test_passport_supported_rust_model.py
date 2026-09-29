@@ -1,4 +1,4 @@
-"""Resolved rollback models cannot use shared production resources."""
+"""Resolved Rust acceptance models cannot use shared production resources."""
 
 from __future__ import annotations
 
@@ -10,8 +10,8 @@ import sys
 
 import pytest
 
-from scripts import check_passport_supported_rollback_model as preflight
-from scripts.check_passport_supported_rollback_model import (
+from scripts import check_passport_supported_rust_model as preflight
+from scripts.check_passport_supported_rust_model import (
     ModelPreflightError, SELECTED, preflight_attested_plan, preflight_read_only, validate_model,
     validate_planned_model,
 )
@@ -55,6 +55,10 @@ def safe_model(root: Path) -> dict:
     services["passport-beta-bureau"]["networks"] = ["private", "callback_signing"]
     services["issuance-native"]["environment"].update({
         "ENVIRONMENT": "development",
+        "PASSPORT_NATIVE_HTTP_ENABLED": "true",
+        "PASSPORT_MANAGED_ISSUER_SIGNING_ENABLED": "true",
+        "PASSPORT_KMS_ARTIFACTS_ENABLED": "true",
+        "PASSPORT_KMS_CALLBACKS_ENABLED": "true",
         "ISSUER_BASE_URL": "https://localhost:29876",
         "ISSUANCE_GRPC_ENABLED": "true", "ISSUANCE_GRPC_PORT": "9005",
         "CT_GRPC_TARGET": "credential-template:9003",
@@ -74,6 +78,9 @@ def safe_model(root: Path) -> dict:
     }
     services["gateway"]["environment"].update({
         "ENVIRONMENT": "beta",
+        "PASSPORT_NATIVE_GATEWAY_ENABLED": "true",
+        "ISSUANCE_SERVICE_URL": "http://issuance-native:8005",
+        "ISSUANCE_NATIVE_SERVICE_URL": "http://issuance-native:8005",
         "GRPC_INSECURE_ALLOWED": "true",
         "SIGNING_KEYS_DSC_ISSUE_GATEWAY_KEY_FILE": "/run/secrets/dsc_issue_gateway_key",
         "SIGNING_KEYS_CSCA_ISSUE_GATEWAY_KEY_FILE": "/run/secrets/csca_issue_gateway_key",
@@ -109,6 +116,9 @@ def safe_model(root: Path) -> dict:
     }
     services["flow"]["environment"].update({
         "ENVIRONMENT": "development",
+        "PASSPORT_NATIVE_FLOW_ENABLED": "true",
+        "ISSUANCE_SERVICE_URL": "http://issuance-native:8005",
+        "ISSUANCE_NATIVE_SERVICE_URL": "http://issuance-native:8005",
         "MARTY_ISSUER_DID": "did:web:localhost%3A29876:orgs:marty",
         "ORG_GRPC_TARGET": "organization:9002",
     })
@@ -351,8 +361,6 @@ def safe_model(root: Path) -> dict:
                            "condition": "service_completed_successfully"}},
         "secrets": [{"source": "bao_token"}],
     }
-    services["issuance"] = {"image": "ghcr.io/elevenid/marty-credentials-issuance@sha256:" + "c" * 64,
-                            "networks": ["private"]}
     for name in ("gateway", "signing-keys"):
         services[name]["secrets"].extend([
             {"source": "dsc_issue_gateway_key"},
@@ -403,7 +411,27 @@ def test_isolated_resolved_compose_model_passes_only_static_preflight(
 ) -> None:
     report = validate_model(safe_model(tmp_path), PROJECT, IMAGE, tmp_path)
     assert report["model_safe"] is True
-    assert report["rollback_accepted"] is False
+    assert "issuance" not in report["services"]
+
+
+@pytest.mark.parametrize("service,key,value", [
+    ("gateway", "PASSPORT_NATIVE_GATEWAY_ENABLED", "false"),
+    ("flow", "PASSPORT_NATIVE_FLOW_ENABLED", "false"),
+    ("issuance-native", "PASSPORT_MANAGED_ISSUER_SIGNING_ENABLED", "false"),
+    ("issuance-native", "PASSPORT_KMS_ARTIFACTS_ENABLED", "false"),
+    ("issuance-native", "PASSPORT_KMS_CALLBACKS_ENABLED", "false"),
+    ("gateway", "ISSUANCE_SERVICE_URL", "http://flow:8011"),
+    ("gateway", "ISSUANCE_NATIVE_SERVICE_URL", "http://flow:8011"),
+    ("flow", "ISSUANCE_SERVICE_URL", "http://gateway:8000"),
+    ("flow", "ISSUANCE_NATIVE_SERVICE_URL", "http://gateway:8000"),
+])
+def test_disposable_model_requires_one_rust_passport_owner(
+    tmp_path: Path, service: str, key: str, value: str,
+) -> None:
+    model = safe_model(tmp_path)
+    model["services"][service]["environment"][key] = value
+    with pytest.raises(ModelPreflightError, match="one Rust owner"):
+        validate_model(model, PROJECT, IMAGE, tmp_path)
 
 
 @pytest.mark.parametrize("service,key,value", [
@@ -447,7 +475,6 @@ def test_attested_plan_binds_all_disposable_images(tmp_path: Path) -> None:
         "status": "blocked", "surface": "base", "project": PROJECT,
         "services_reference": IMAGE,
         "migrations_reference": model["services"]["db-migrate"]["image"],
-        "legacy_reference": model["services"]["issuance"]["image"],
         "infra_images": qualified_images(verify_registry=False),
         "run_id": "123456", "source_commit": "a" * 40,
         "expires_at": "2026-09-27T12:55:00+00:00",
@@ -458,7 +485,7 @@ def test_attested_plan_binds_all_disposable_images(tmp_path: Path) -> None:
     changed_lease["expires_at"] = "2026-09-27T12:56:00+00:00"
     with pytest.raises(ModelPreflightError, match="API key lease"):
         validate_planned_model(model, changed_lease, tmp_path)
-    for role in ("postgres", "redis", "openbao", "db-migrate", "issuance",
+    for role in ("postgres", "redis", "openbao", "db-migrate",
                  "signing-keys", "organization", "event-stream",
                  "revocation-profile", "revocation-profile-migrate"):
         bad = deepcopy(model)
@@ -686,12 +713,21 @@ def test_render_uses_fixed_repo_compose_files_and_never_transitions(
     assert report["status"] == "blocked"
     assert report["model"]["static_isolation_verified"] is True
     assert report["model"]["model_safe"] is False
-    assert report["model"]["rollback_accepted"] is False
     args, environment = captured[0]
     assert args[:4] == ["docker", "compose", "--project-name", PROJECT]
     assert args[-3:] == ["config", "--format", "json"]
     assert "up" not in args and "down" not in args
     assert environment["MARTY_SERVICES_IMAGE"] == IMAGE
+
+
+def test_render_rejects_python_owner_phase_before_docker(tmp_path: Path) -> None:
+    env_file = tmp_path / "acceptance.env"
+    env_file.write_text("MARTY_SERVICES_IMAGE=" + IMAGE, encoding="utf-8")
+    called = []
+    with pytest.raises(ModelPreflightError, match="owner phase is invalid"):
+        preflight.render_model("base", PROJECT, env_file, tmp_path, IMAGE,
+                               lambda *args: called.append(args), phase="python")
+    assert called == []
 
 
 def test_executable_planned_preflight_rejects_unsigned_and_mutated_images(
@@ -705,7 +741,6 @@ def test_executable_planned_preflight_rejects_unsigned_and_mutated_images(
         "source_commit": "a" * 40,
         "services_reference": IMAGE,
         "migrations_reference": model["services"]["db-migrate"]["image"],
-        "legacy_reference": model["services"]["issuance"]["image"],
         "infra_images": qualified_images(verify_registry=False),
         "run_id": "123456", "owner_labels": LABELS,
         "created_at": (now - timedelta(minutes=5)).isoformat(),
@@ -732,7 +767,7 @@ def test_executable_planned_preflight_rejects_unsigned_and_mutated_images(
     assert report["status"] == "blocked"
     assert report["model"]["model_safe"] is True
     bad = deepcopy(model)
-    bad["services"]["issuance"]["image"] = "other@sha256:" + "f" * 64
+    bad["services"]["db-migrate"]["image"] = "other@sha256:" + "f" * 64
     with pytest.raises(ModelPreflightError, match="protected image"):
         preflight_attested_plan("base", PROJECT, env_file, tmp_path, IMAGE,
                                 plan_path, lambda *args: json.dumps(bad),
@@ -786,9 +821,8 @@ def test_cli_remains_red_even_if_static_model_is_safe(
 ) -> None:
     report_file = tmp_path / "report.json"
     monkeypatch.setattr(preflight, "preflight_read_only", lambda *args: {
-        "schema": "marty.passport-supported-rollback-preflight/v1",
-        "status": "blocked", "model": {"model_safe": True,
-                                      "rollback_accepted": False},
+        "schema": "marty.passport-supported-rust-model-preflight/v1",
+        "status": "blocked", "model": {"model_safe": True},
     })
     monkeypatch.setattr(sys, "argv", [
         "preflight", "--surface", "base", "--project", PROJECT,

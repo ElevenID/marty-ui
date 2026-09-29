@@ -34,21 +34,6 @@ DIGEST = re.compile(r"sha256:[0-9a-f]{64}\Z")
 RUN_ID = re.compile(r"[1-9][0-9]{0,19}\Z")
 UI_SERVICES = "ghcr.io/elevenid/marty-ui-oss/services"
 UI_MIGRATIONS = "ghcr.io/elevenid/marty-ui-oss/migrations"
-LEGACY = "ghcr.io/elevenid/marty-credentials-issuance"
-# The v0.1.78 release source matches all three SHA256 values in
-# marty-credentials/contracts/physical-passport-python-route-reference.json:
-# physical_document_routes.py 2206f15dfd8a8040e997cba0e4a7f27cc8e3f4e84d6094c62ae71beae5d90e37,
-# emrtd_signer_client.py 8064185f747bae091c5164a32915f83b435ccd6526434f5ddca5114cc6661472,
-# personalization_bureau_client.py 31d70c676c2b4e5e09d0e0ea6aa7bea37432b98984a5adffd5fea7e18ede9afb.
-# Its release digest asset, checksum manifest,
-# and hosted release-images.yml OCI attestation were verified together.
-# A signed older image with the nine routes is insufficient for rollback when
-# its route or bureau behavior differs from that frozen reference.
-FROZEN_LEGACY_RELEASE = (
-    "0.1.78",
-    "efd5da1e2d41419ce93721f98d314c7b911e6b5e",
-    "sha256:e7bb482120837c68af6cec2f6d1d5276488de440b93fc811987860b7b99b4657",
-)
 PLAN_WORKFLOW = "ElevenID/marty-ui/.github/workflows/passport-supported-provisioning-plan.yml"
 # This hosted attestor does not exist yet. The current acceptance workflow runs
 # on a self-hosted runner and cannot satisfy --deny-self-hosted-runners.
@@ -103,7 +88,6 @@ def _component(manifest: dict, name: str, repository: str,
 
 def release_inputs(manifest_path: Path, source_commit: str, *,
                    verify_ui: Callable[[Path, dict[str, str], str], bool] = verify_attestations,
-                   attest: Callable[[str, str, str, str, str], bool] = _attest,
                    infra: Callable[[], dict[str, str]] = qualified_images) -> dict:
     require(COMMIT.fullmatch(source_commit) is not None,
             "Protected UI source commit is invalid")
@@ -119,11 +103,6 @@ def release_inputs(manifest_path: Path, source_commit: str, *,
             "Official stack UI source differs from protected main")
     _, _, migrations_digest = _component(
         manifest, "marty-ui", "ElevenID/marty-ui", UI_MIGRATIONS)
-    legacy_commit, legacy_version, legacy_digest = _component(
-        manifest, "marty-credentials-issuance", "ElevenID/marty-credentials",
-        LEGACY)
-    require((legacy_version, legacy_commit, legacy_digest) == FROZEN_LEGACY_RELEASE,
-            "Legacy issuance release differs from frozen Python route reference")
     ui_images = {artifact.get("uri"): artifact.get("digest")
                  for component in manifest["components"] if isinstance(component, dict)
                  and component.get("name") == "marty-ui"
@@ -136,20 +115,12 @@ def release_inputs(manifest_path: Path, source_commit: str, *,
             "Official stack UI image roles are incomplete")
     require(verify_ui(manifest_path, ui_images, source_commit) is True,
             "Official stack UI attestations are unverified")
-    require(attest(f"oci://{LEGACY}@{legacy_digest}",
-                   "ElevenID/marty-credentials",
-                   "ElevenID/marty-credentials/.github/workflows/release-images.yml",
-                   legacy_commit, f"refs/tags/v{legacy_version}") is True,
-            "Legacy issuance image attestation is unverified")
     infra_images = infra()
     return {
         "source_commit": source_commit,
         "stack_manifest_sha256": hashlib.sha256(manifest_path.read_bytes()).hexdigest(),
         "services_reference": f"{UI_SERVICES}@{services_digest}",
         "migrations_reference": f"{UI_MIGRATIONS}@{migrations_digest}",
-        "legacy_reference": f"{LEGACY}@{legacy_digest}",
-        "legacy_commit": legacy_commit,
-        "legacy_version": legacy_version,
         "infra_images": infra_images,
     }
 
@@ -194,7 +165,7 @@ def build_plan(surface: str, run_id: str, inputs: dict,
             "com.marty.passport.acceptance.source-commit": inputs["source_commit"],
             "com.marty.passport.acceptance.services-image": inputs["services_reference"],
         },
-        "blocker": "no protected disposable provisioning or live rollback record",
+        "blocker": "no protected disposable provisioning or live Rust route record",
     }
 
 
@@ -222,13 +193,12 @@ def verify_record(plan_path: Path, record_path: Path, now: datetime, *,
             "Protected resource record attestation is missing")
     _require_record_binding(plan_path, plan, record)
     result = ownership(record, plan["surface"], now)
-    require(result.get("live_ownership_verified") is True
-            and result.get("rollback_accepted") is False,
+    require(result.get("live_ownership_verified") is True,
             "Disposable resource ownership was not verified")
     return {"schema": "marty.passport-supported-provisioning-record-check/v1",
             "status": "blocked", "project": plan["project"],
-            "live_ownership_verified": True, "rollback_accepted": False,
-            "blocker": "live Rust-to-Python-to-Rust route proof is absent"}
+            "live_ownership_verified": True,
+            "blocker": "live Rust route proof is absent"}
 
 
 def _require_record_binding(plan_path: Path, plan: dict, record: dict) -> None:
@@ -239,7 +209,6 @@ def _require_record_binding(plan_path: Path, plan: dict, record: dict) -> None:
             and record.get("source_commit") == plan.get("source_commit")
             and record.get("services_reference") == plan.get("services_reference")
             and record.get("migrations_reference") == plan.get("migrations_reference")
-            and record.get("legacy_reference") == plan.get("legacy_reference")
             and record.get("infra_images") == plan.get("infra_images")
             and record.get("created_at") == plan.get("created_at")
             and record.get("expires_at") == plan.get("expires_at")
@@ -278,7 +247,7 @@ def verify_handoff(plan_path: Path, record_path: Path, source_commit: str,
     return {"schema": "marty.passport-supported-record-handoff/v1",
             "status": "blocked", "project": plan["project"],
             "producer_run_id": producer_run_id,
-            "blocker": "live ownership and rollback have not been verified"}
+            "blocker": "live ownership and Rust route proof have not been verified"}
 
 
 def main() -> int:

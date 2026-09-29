@@ -74,7 +74,6 @@ jobs:
           jq -e '.schema == "marty.passport-supported-certificate-rehearsal/v1"
                  and .status == "setup_only" and .certificate_setup_passed == true
                  and .gateway_operator_authorization_verified == false
-                 and .rollback_accepted == false
                  and .source_commit == env.GITHUB_SHA
                  and .plan_run_id == env.PLAN_RUN_ID' \
             "$PASSPORT_CERTIFICATE_WORK/passport-supported-certificate-rehearsal-$GITHUB_RUN_ID.json"

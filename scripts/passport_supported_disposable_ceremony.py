@@ -25,11 +25,11 @@ from services.passport_disposable_identity import ORGANIZATION_ID, issuer_did
 
 if __package__:
     from .check_passport_supported_compose_ownership import _inspect, _labels
-    from .check_passport_supported_rollback_model import PROJECT
+    from .check_passport_supported_rust_model import PROJECT
     from .probe_passport_beta_chain import exercise_with_authorities
 else:
     from check_passport_supported_compose_ownership import _inspect, _labels
-    from check_passport_supported_rollback_model import PROJECT
+    from check_passport_supported_rust_model import PROJECT
     from probe_passport_beta_chain import exercise_with_authorities
 
 

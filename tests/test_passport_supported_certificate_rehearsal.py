@@ -38,8 +38,6 @@ def plan(surface: str = "selfhost") -> dict:
         "services_reference": SERVICES,
         "migrations_reference": (
             "ghcr.io/elevenid/marty-ui-oss/migrations@sha256:" + "c" * 64),
-        "legacy_reference": (
-            "ghcr.io/elevenid/marty-credentials-issuance@sha256:" + "d" * 64),
         "infra_images": qualified_images(verify_registry=False),
         "owner_labels": {
             "com.marty.passport.acceptance.owner": "supported-consumer",
@@ -109,7 +107,6 @@ def test_certificate_rehearsal_calls_setup_after_signer_and_cleans(
     assert report["status"] == "setup_only"
     assert report["certificate_setup_passed"] is True
     assert report["gateway_operator_authorization_verified"] is False
-    assert report["rollback_accepted"] is False
     assert calls[0][0][-9:] == [
         "up", "-d", "--no-deps", "--wait", "--wait-timeout", "120",
         "postgres", "redis", "openbao",

@@ -2,7 +2,7 @@
 """Run and destroy an isolated selfhost certificate fixture under a protected plan.
 
 This rehearsal verifies the managed CSCA/DSC setup. It does not qualify public
-Gateway authorization, the nine passport routes, rollback, or beta acceptance.
+Gateway authorization, the nine passport routes, or beta acceptance.
 """
 
 from __future__ import annotations
@@ -157,7 +157,7 @@ def rehearse_certificates(
             "schema": "marty.passport-supported-certificate-rehearsal/v1",
             "status": "setup_only", "certificate_setup_passed": True,
             "gateway_operator_authorization_verified": False,
-            "rollback_accepted": False, "project": plan["project"],
+            "project": plan["project"],
             "source_commit": plan["source_commit"],
             "plan_run_id": plan_run_id, "certificate": certificate,
         }

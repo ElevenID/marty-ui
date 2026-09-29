@@ -1,4 +1,4 @@
-"""A rollback must never trust an unowned disposable Compose project."""
+"""Rust acceptance must never trust an unowned disposable Compose project."""
 
 from __future__ import annotations
 
@@ -12,17 +12,16 @@ import pytest
 
 from scripts import check_passport_supported_compose_ownership as ownership_module
 from scripts.check_passport_supported_compose_ownership import (
-    OwnershipError, REQUIRED_ROLLBACK, verify,
+    OwnershipError, verify,
 )
-from scripts.check_passport_supported_rollback_model import (
-    ISOLATED_DEPENDENCIES, RUST_DEPENDENCIES, SELECTED,
+from scripts.check_passport_supported_rust_model import (
+    DISPOSABLE_SERVICES, RUST_DEPENDENCIES, SELECTED,
 )
 
 
 PROJECT = "marty-passport-acceptance-base-abcdef"
 IMAGE = "ghcr.io/elevenid/marty-ui-oss/services@sha256:" + "a" * 64
 MIGRATIONS = "ghcr.io/elevenid/marty-ui-oss/migrations@sha256:" + "b" * 64
-LEGACY = "ghcr.io/elevenid/marty-credentials-issuance@sha256:" + "c" * 64
 INFRA = {
     "edge": "docker.io/library/nginx@sha256:" + "4" * 64,
     "postgres": "docker.io/library/postgres@sha256:" + "1" * 64,
@@ -46,7 +45,6 @@ SECRETS = {
     "db-migrate": ("marty_db_password", "bao_token"),
     "signing-keys": ("marty_db_password", "bao_token", "signing_keys_internal_api_key",
                      "dsc_issue_gateway_key", "csca_issue_gateway_key"),
-    "issuance": (),
     "revocation-profile-migrate": ("marty_db_password",),
     "revocation-profile": ("marty_db_password", "grpc_service_token"),
     "event-stream": (),
@@ -109,28 +107,31 @@ def mounts_for(service: str) -> list[dict]:
 
 def fixture() -> tuple[dict, dict[tuple[str, ...], str]]:
     containers = {name: format(i + 1, "064x") for i, name in
-                  enumerate(sorted(SELECTED | RUST_DEPENDENCIES | ISOLATED_DEPENDENCIES
-                                   | REQUIRED_ROLLBACK | {"edge"}))}
+                  enumerate(sorted(DISPOSABLE_SERVICES))}
     network_name = PROJECT + "_private"
     network_id = "e" * 64
+    callback_network_name = PROJECT + "_callback_signing"
+    callback_network_id = "f" * 64
     volume_names = [f"{PROJECT}_{name}" for name, _ in DATA.values()]
     record = {
         "schema": "marty.passport-supported-compose-ownership/v1",
         "project": PROJECT, "run_id": "123456", "source_commit": "b" * 40,
         "services_reference": IMAGE,
-        "migrations_reference": MIGRATIONS, "legacy_reference": LEGACY,
+        "migrations_reference": MIGRATIONS,
         "infra_images": INFRA,
         "created_at": (NOW - timedelta(minutes=5)).isoformat(),
         "expires_at": (NOW + timedelta(minutes=55)).isoformat(),
         "disposable_root": str(ROOT),
-        "containers": containers, "networks": {network_name: network_id},
+        "containers": containers, "networks": {
+            network_name: network_id, callback_network_name: callback_network_id},
         "volumes": volume_names,
     }
     calls: dict[tuple[str, ...], str] = {
         ("ps", "-aq", "--no-trunc", "--filter", f"label=com.docker.compose.project={PROJECT}"):
             "\n".join(containers.values()),
         ("network", "ls", "-q", "--no-trunc", "--filter",
-         f"label=com.docker.compose.project={PROJECT}"): network_id,
+         f"label=com.docker.compose.project={PROJECT}"):
+            "\n".join((network_id, callback_network_id)),
         ("volume", "ls", "-q", "--filter",
          f"label=com.docker.compose.project={PROJECT}"): "\n".join(volume_names),
     }
@@ -242,19 +243,25 @@ def fixture() -> tuple[dict, dict[tuple[str, ...], str]]:
                        if service == "signing-keys" else
                        support_env.get(service, {}))
         edge_binding = [{"HostIp": "127.0.0.1", "HostPort": "29876"}]
+        primary_network = (callback_network_name if service == "passport-callback-signer"
+                           else network_name)
+        attached_networks = {primary_network: {"NetworkID": (
+            callback_network_id if primary_network == callback_network_name else network_id)}}
+        if service in {"openbao", "passport-beta-bureau"}:
+            attached_networks[callback_network_name] = {"NetworkID": callback_network_id}
         calls[("container", "inspect", identifier)] = json.dumps([{
             "Id": identifier, "Name": f"/{PROJECT}-{service}-1",
-            "HostConfig": {"PortBindings": {"8443/tcp": edge_binding}}
-            if service == "edge" else {},
+            "HostConfig": {"NetworkMode": primary_network,
+                           **({"PortBindings": {"8443/tcp": edge_binding}}
+                              if service == "edge" else {})},
             "State": {"Running": True, "Status": "running",
                       "Health": {"Status": "healthy"}},
             "Config": {"Labels": {**LABELS, "com.docker.compose.service": service},
                        "Env": [f"{key}={value}" for key, value in runtime_env.items()],
-                       "Image": (LEGACY if service == "issuance" else
-                                 MIGRATIONS if service == "db-migrate" else
+                       "Image": (MIGRATIONS if service == "db-migrate" else
                                  IMAGE if service in SELECTED | RUST_DEPENDENCIES | {"signing-keys"} else
                                  INFRA[service])},
-            "NetworkSettings": {"Networks": {network_name: {"NetworkID": network_id}},
+            "NetworkSettings": {"Networks": attached_networks,
                                 "Ports": {"8443/tcp": edge_binding}
                                 if service == "edge" else {}},
             "Mounts": mounts_for(service),
@@ -262,7 +269,15 @@ def fixture() -> tuple[dict, dict[tuple[str, ...], str]]:
     calls[("network", "inspect", network_id)] = json.dumps([{
         "Id": network_id, "Name": network_name, "Driver": "bridge",
         "Internal": True, "Labels": LABELS,
-        "Containers": {identifier: {} for identifier in containers.values()},
+        "Containers": {identifier: {} for service, identifier in containers.items()
+                       if service != "passport-callback-signer"},
+    }])
+    calls[("network", "inspect", callback_network_id)] = json.dumps([{
+        "Id": callback_network_id, "Name": callback_network_name,
+        "Driver": "bridge", "Internal": True, "Labels": LABELS,
+        "Containers": {identifier: {} for service, identifier in containers.items()
+                       if service in {"passport-callback-signer", "openbao",
+                                      "passport-beta-bureau"}},
     }])
     for volume_name in volume_names:
         calls[("volume", "inspect", volume_name)] = json.dumps([{
@@ -447,13 +462,40 @@ def test_exact_live_project_ownership_is_read_only_and_still_blocked() -> None:
     report = verify(record, "base", NOW, runner)
     assert report["live_ownership_verified"] is True
     assert report["status"] == "blocked"
-    assert report["rollback_accepted"] is False
+    assert report["blocker"] == "protected provisioning provenance and Rust route proof are absent"
     assert all(args[0] in {"ps", "container", "network", "volume"}
                and "rm" not in args and "up" not in args for args in observed)
     assert ["ps", "-aq", "--no-trunc", "--filter",
             f"label=com.docker.compose.project={PROJECT}"] in observed
     assert ["network", "ls", "-q", "--no-trunc", "--filter",
             f"label=com.docker.compose.project={PROJECT}"] in observed
+
+
+@pytest.mark.parametrize("service,mutation,match", [
+    ("passport-callback-signer",
+     lambda item: item["NetworkSettings"]["Networks"].update({
+         PROJECT + "_private": {"NetworkID": "e" * 64}}), "network attachments"),
+    ("issuance-native",
+     lambda item: item["NetworkSettings"]["Networks"].update({
+         PROJECT + "_callback_signing": {"NetworkID": "f" * 64}}),
+     "network attachments"),
+    ("passport-beta-bureau",
+     lambda item: item["NetworkSettings"]["Networks"].pop(
+         PROJECT + "_callback_signing"), "network attachments"),
+    ("passport-callback-signer",
+     lambda item: item["HostConfig"].update(
+         NetworkMode=PROJECT + "_private"), "network mode"),
+])
+def test_runtime_network_membership_matches_rust_model(
+    service: str, mutation, match: str,
+) -> None:
+    record, calls = fixture()
+    key = ("container", "inspect", record["containers"][service])
+    item = json.loads(calls[key])
+    mutation(item[0])
+    calls[key] = json.dumps(item)
+    with pytest.raises(OwnershipError, match=match):
+        run(record, calls)
 
 
 @pytest.mark.parametrize("mutation", [
@@ -615,8 +657,6 @@ def test_rejects_bad_lease_identity_and_resource_sets(mutate, match: str) -> Non
         PROJECT + "_private"].update(NetworkID="f" * 64), "network identity"),
     ("gateway", lambda item: item["Config"].update({
         "Image": "ghcr.io/other/services@sha256:" + "a" * 64}), "signed release"),
-    ("issuance", lambda item: item["Config"].update({
-        "Image": "ghcr.io/other/issuance@sha256:" + "c" * 64}), "signed release"),
     ("db-migrate", lambda item: item["Config"].update({
         "Image": "ghcr.io/other/migrations@sha256:" + "b" * 64}), "signed release"),
     ("signing-keys", lambda item: item["Config"].update({
