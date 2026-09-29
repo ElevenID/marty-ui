@@ -64,7 +64,7 @@ def service_record(container_id: str, project: str,
     return record
 
 
-def selected_environment(config: dict[str, Any], name: str) -> None:
+def environment_values(config: dict[str, Any]) -> dict[str, str]:
     env = config.get("Env")
     require(isinstance(env, list) and all(isinstance(item, str) and "=" in item
                                           for item in env),
@@ -74,6 +74,11 @@ def selected_environment(config: dict[str, Any], name: str) -> None:
         key, value = item.split("=", 1)
         require(key not in values, "Aggregate beta runtime environment is duplicated")
         values[key] = value
+    return values
+
+
+def selected_environment(config: dict[str, Any], name: str) -> None:
+    values = environment_values(config)
     require(values.get("SERVICE_NAME") == name.replace("-", "_"),
             "Aggregate beta runtime service dispatch differs")
     for key, expected in RUNTIME_ENV.get(name, {}).items():
@@ -87,6 +92,7 @@ def verify(plan: dict[str, Any], intent: dict[str, Any],
            render_verifier: Callable[[dict[str, Any]], dict[str, Any]] = verify_render_plan,
 ) -> dict[str, Any]:
     require(plan.get("schema") == "marty.passport-beta-aggregate-compose-plan/v1"
+            and plan.get("beta_origin") == "https://beta.elevenidllc.com"
             and intent.get("schema") == "marty.passport-beta-db-maintenance-plan/v1"
             and plan.get("source_commit") == intent.get("source_commit")
             and SHA.fullmatch(str(plan.get("source_commit"))) is not None,
@@ -124,6 +130,14 @@ def verify(plan: dict[str, Any], intent: dict[str, Any],
     require(set(observed) == set(targets) | {"postgres"}
             and observed["postgres"]["Id"] == old["postgres"],
             "Aggregate beta generation differs from signed plan")
+    keycloak_env = environment_values(observed["keycloak"]["Config"])
+    nginx_env = environment_values(observed["nginx-proxy"]["Config"])
+    require(keycloak_env.get("KC_HOSTNAME") == plan["beta_origin"]
+            and keycloak_env.get("UI_BASE_URL") == plan["beta_origin"]
+            and keycloak_env.get("PUBLIC_DOMAIN") == "beta.elevenidllc.com"
+            and nginx_env.get("PUBLIC_DOMAIN") == "beta.elevenidllc.com"
+            and nginx_env.get("GATEWAY_UPSTREAM") == "gateway:8000",
+            "Aggregate beta ingress points outside the beta origin")
     expected_networks = plan.get("expected_networks_by_service")
     require(isinstance(expected_networks, dict)
             and set(expected_networks) == set(observed),
@@ -263,6 +277,7 @@ def verify(plan: dict[str, Any], intent: dict[str, Any],
             "Production network or host ports changed during aggregate beta verification")
     return {"schema": "marty.passport-beta-aggregate-runtime/v1",
             "verified": True, "source_commit": source,
+            "beta_origin": plan["beta_origin"],
             "postgres_container_id": container,
             "production_snapshot_sha256": plan["production_snapshot_sha256"],
             "beta_services": sorted(observed), "ui_container_id": ui["Id"]}

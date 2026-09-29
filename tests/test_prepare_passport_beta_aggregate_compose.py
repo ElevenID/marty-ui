@@ -11,7 +11,7 @@ import pytest
 
 from scripts import prepare_passport_beta_aggregate_compose as compose
 from scripts.prepare_passport_beta_aggregate_compose import (
-    ComposePlanError, ISSUANCE_IMAGE, RUNTIME_ENV, SERVICES_IMAGE, UI_IMAGE,
+    BETA_ORIGIN, ComposePlanError, ISSUANCE_IMAGE, RUNTIME_ENV, SERVICES_IMAGE, UI_IMAGE,
     SIGNED_APPLICATIONS, NEW_SERVICES, prepare,
 )
 
@@ -21,7 +21,8 @@ def candidate():
     services_image = SERVICES_IMAGE + "b" * 64
     issuance_image = ISSUANCE_IMAGE + "c" * 64
     old_names = sorted((SIGNED_APPLICATIONS - NEW_SERVICES) | {
-        "issuance", "postgres", "openbao", "redis", "cloudflared", "nginx-proxy", "envoy",
+        "issuance", "postgres", "openbao", "redis", "keycloak",
+        "cloudflared", "nginx-proxy", "envoy",
     })
     generation = [{"service": name, "container_id": f"{index + 1:064x}"}
                   for index, name in enumerate(old_names)]
@@ -64,6 +65,23 @@ def candidate():
     services["passport-beta-bureau"]["networks"] = {
         "marty-network": None, "passport-callback-signing": None}
     services["issuance"] = {"image": issuance_image}
+    services["auth"]["environment"].update({
+        "UI_BASE_URL": BETA_ORIGIN,
+        "OIDC_EXTERNAL_ISSUER_URL": BETA_ORIGIN + "/realms/11id",
+        "OIDC_REDIRECT_URI": BETA_ORIGIN + "/v1/auth/callback",
+        "OIDC_POST_LOGOUT_REDIRECT_URI": BETA_ORIGIN + "/",
+    })
+    services["gateway"]["environment"]["ISSUER_BASE_URL"] = BETA_ORIGIN
+    services["flow"]["environment"]["PUBLIC_BASE_URL"] = BETA_ORIGIN
+    services["signing-keys"]["environment"]["PUBLIC_DOMAIN"] = "beta.elevenidllc.com"
+    services["issuance"]["environment"] = {"ISSUER_BASE_URL": BETA_ORIGIN}
+    services["keycloak"]["environment"] = {
+        "KC_HOSTNAME": BETA_ORIGIN, "PUBLIC_DOMAIN": "beta.elevenidllc.com",
+        "UI_BASE_URL": BETA_ORIGIN,
+    }
+    services["nginx-proxy"]["environment"] = {
+        "PUBLIC_DOMAIN": "beta.elevenidllc.com", "GATEWAY_UPSTREAM": "gateway:8000",
+    }
     rendered = {"name": "elevenid-beta", "services": services,
                 "networks": {
                     "marty-network": {"name": "elevenid-beta-network"},
@@ -80,6 +98,7 @@ def candidate():
 def test_rendered_compose_assigns_signed_rust_start_groups():
     plan = prepare(*candidate())
     assert plan["schema"] == "marty.passport-beta-aggregate-compose-plan/v1"
+    assert plan["beta_origin"] == BETA_ORIGIN
     assert plan["schema_startup_mode"] == "validate"
     assert "gateway" in plan["recreate_ingress_last"]
     assert "cloudflared" in plan["restart_ingress_last"]
@@ -88,6 +107,23 @@ def test_rendered_compose_assigns_signed_rust_start_groups():
     assert plan["preserved_infrastructure"] == ["openbao"]
     assert "openbao" not in plan["restart_infrastructure"]
     assert plan["ui_project"] == "elevenid-beta-ui"
+
+
+@pytest.mark.parametrize("service,key,value", [
+    ("gateway", "ISSUER_BASE_URL", "https://prod.elevenidllc.com"),
+    ("flow", "PUBLIC_BASE_URL", "https://prod.elevenidllc.com"),
+    ("auth", "OIDC_REDIRECT_URI", "https://prod.elevenidllc.com/v1/auth/callback"),
+    ("keycloak", "KC_HOSTNAME", "https://prod.elevenidllc.com"),
+    ("nginx-proxy", "GATEWAY_UPSTREAM", "prod-gateway:8000"),
+    ("signing-keys", "PUBLIC_DOMAIN", "prod.elevenidllc.com"),
+    ("issuance", "ISSUER_BASE_URL", "https://prod.elevenidllc.com"),
+    ("credential-template", "PUBLIC_API_URL", "https://prod.elevenidllc.com"),
+])
+def test_rendered_beta_origin_rejects_other_destination(service, key, value):
+    handoff, intent, rendered, ui = candidate()
+    rendered["services"][service].setdefault("environment", {})[key] = value
+    with pytest.raises(ComposePlanError, match="public origin|public domain"):
+        prepare(handoff, intent, rendered, ui)
 
 
 @pytest.mark.parametrize("service,key,value", [

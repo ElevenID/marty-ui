@@ -14,6 +14,8 @@ P = "1" * 64
 OLD_FLOW = "2" * 64
 NEW_FLOW = "3" * 64
 REDIS = "4" * 64
+KEYCLOAK = "8" * 64
+NGINX = "a" * 64
 CALLBACK = "5" * 64
 BUREAU = "6" * 64
 UI = "7" * 64
@@ -40,9 +42,10 @@ def record(container_id, project, service, image, env=None, networks=None):
 
 def fixture(monkeypatch):
     old = {"postgres": P, "flow": OLD_FLOW, "redis": REDIS,
-           "openbao": OPENBAO}
+           "openbao": OPENBAO, "keycloak": KEYCLOAK, "nginx-proxy": NGINX}
     plan = {
         "schema": "marty.passport-beta-aggregate-compose-plan/v1",
+        "beta_origin": "https://beta.elevenidllc.com",
         "source_commit": HEAD, "postgres_container_id": P,
         "production_snapshot_sha256": "e" * 64,
         "production_attachments_sha256": "f" * 64,
@@ -51,7 +54,8 @@ def fixture(monkeypatch):
                                    "passport-beta-bureau")},
         "ui_config_hash": "0" * 64,
         "old_container_ids_by_service": old,
-        "target_services": ["flow", "redis", "openbao", "passport-callback-signer",
+        "target_services": ["flow", "redis", "openbao", "keycloak",
+                            "nginx-proxy", "passport-callback-signer",
                             "passport-beta-bureau"],
         "expected_networks_by_service": {
             name: (["elevenid-beta-passport-callback-signing"]
@@ -59,13 +63,14 @@ def fixture(monkeypatch):
                    ["elevenid-beta-network", "elevenid-beta-passport-callback-signing"]
                    if name in {"openbao", "passport-beta-bureau"} else
                    ["elevenid-beta-network"])
-            for name in ("postgres", "flow", "redis", "openbao",
+            for name in ("postgres", "flow", "redis", "openbao", "keycloak",
+                         "nginx-proxy",
                          "passport-callback-signer", "passport-beta-bureau")},
-        "restart_infrastructure": ["redis"],
+        "restart_infrastructure": ["redis", "keycloak"],
         "preserved_infrastructure": ["openbao"],
         "recreate_applications": ["flow", "passport-callback-signer",
                                   "passport-beta-bureau"],
-        "restart_ingress_last": [], "recreate_ingress_last": [],
+        "restart_ingress_last": ["nginx-proxy"], "recreate_ingress_last": [],
         "services_image": SERVICES, "issuance_image": "unused",
         "ui_image": UI_IMAGE, "fence_epoch": "7",
         "migration_set_sha256": DIGEST,
@@ -81,6 +86,13 @@ def fixture(monkeypatch):
         NEW_FLOW: record(NEW_FLOW, "elevenid-beta", "flow", SERVICES,
                          {"SERVICE_NAME": "flow", **runtime.RUNTIME_ENV["flow"]}),
         REDIS: record(REDIS, "elevenid-beta", "redis", "redis:7"),
+        KEYCLOAK: record(KEYCLOAK, "elevenid-beta", "keycloak", "keycloak:25",
+                         {"KC_HOSTNAME": "https://beta.elevenidllc.com",
+                          "UI_BASE_URL": "https://beta.elevenidllc.com",
+                          "PUBLIC_DOMAIN": "beta.elevenidllc.com"}),
+        NGINX: record(NGINX, "elevenid-beta", "nginx-proxy", "nginx:alpine",
+                      {"PUBLIC_DOMAIN": "beta.elevenidllc.com",
+                       "GATEWAY_UPSTREAM": "gateway:8000"}),
         OPENBAO: record(OPENBAO, "elevenid-beta", "openbao", "openbao:2",
                         {"BAO_DEV_ROOT_TOKEN_ID": "test-token"},
                         networks={"elevenid-beta-network": {"NetworkID": "e" * 64},
@@ -130,7 +142,17 @@ def test_runtime_requires_replaced_signed_generation(monkeypatch):
     evidence = runtime.verify(plan, intent, "f" * 64, runner,
                               lambda _: {"verified": True})
     assert evidence["verified"] is True
+    assert evidence["beta_origin"] == "https://beta.elevenidllc.com"
     assert evidence["ui_container_id"] == UI
+
+
+def test_runtime_rejects_preserved_ingress_pointing_elsewhere(monkeypatch):
+    plan, intent, records, runner = fixture(monkeypatch)
+    records[NGINX]["Config"]["Env"] = [
+        "GATEWAY_UPSTREAM=prod-gateway:8000" if item.startswith("GATEWAY_UPSTREAM=")
+        else item for item in records[NGINX]["Config"]["Env"]]
+    with pytest.raises(runtime.HostProbeError, match="outside the beta origin"):
+        runtime.verify(plan, intent, "f" * 64, runner, lambda _: {"verified": True})
 
 
 def test_runtime_rejects_old_flow_restart(monkeypatch):

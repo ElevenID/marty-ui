@@ -85,6 +85,38 @@ function Assert-Render {
     Assert-DockerIdentity -Intent $script:intent
 }
 
+function Assert-PreservedIngressOrigin {
+    foreach ($service in @('keycloak', 'nginx-proxy')) {
+        $id = [string]$script:plan.old_container_ids_by_service.$service
+        if ($id -notmatch '^[0-9a-f]{64}$') {
+            throw "Old beta ingress identity is invalid: $service"
+        }
+        $raw = @(& docker inspect $id --format '{{json .Config.Env}}' 2>$null)
+        if ($LASTEXITCODE -ne 0 -or $raw.Count -ne 1) {
+            throw "Old beta ingress environment is unavailable: $service"
+        }
+        $entries = ConvertFrom-Json -InputObject $raw[0] -ErrorAction Stop
+        $values = @{}
+        foreach ($entry in $entries) {
+            if ($entry -notmatch '^([^=]+)=(.*)$' -or $values.ContainsKey($Matches[1])) {
+                throw "Old beta ingress environment is ambiguous: $service"
+            }
+            $values[$Matches[1]] = $Matches[2]
+        }
+        if ($service -ceq 'keycloak') {
+            if ($values['KC_HOSTNAME'] -cne 'https://beta.elevenidllc.com' -or
+                $values['UI_BASE_URL'] -cne 'https://beta.elevenidllc.com' -or
+                $values['PUBLIC_DOMAIN'] -cne 'beta.elevenidllc.com') {
+                throw 'Old beta Keycloak points outside the beta origin'
+            }
+        }
+        elseif ($values['PUBLIC_DOMAIN'] -cne 'beta.elevenidllc.com' -or
+                $values['GATEWAY_UPSTREAM'] -cne 'gateway:8000') {
+            throw 'Old beta Nginx points outside the beta gateway'
+        }
+    }
+}
+
 function Assert-OpenBaoToken {
     $check = Invoke-Plan -Arguments ($script:plannerArgs + @(
         '--verify-openbao-token', $planPath))
@@ -372,11 +404,15 @@ try {
     if ([string]$script:plan.production_attachments_sha256 -notmatch '^[0-9a-f]{64}$') {
         throw 'Maintenance-bound production network baseline is invalid'
     }
+    if ([string]$script:plan.beta_origin -cne 'https://beta.elevenidllc.com') {
+        throw 'Aggregate deployment plan has the wrong public beta origin'
+    }
     $env:MARTY_SERVICES_IMAGE = [string]$script:plan.services_image
     $env:MARTY_ISSUANCE_IMAGE = [string]$script:plan.issuance_image
     $env:MARTY_UI_RELEASE_IMAGE = [string]$script:plan.ui_image
     $env:MARTY_NETWORK_NAME = 'elevenid-beta-network'
     Assert-Render
+    Assert-PreservedIngressOrigin
     Assert-PreservedOpenBao
     Assert-OpenBaoToken
     foreach ($image in @($script:plan.services_image, $script:plan.issuance_image,
@@ -441,6 +477,7 @@ try {
     }
     $receipt = [ordered]@{
         schema = 'marty.passport-beta-aggregate-deployment/v1'
+        beta_origin = $script:plan.beta_origin
         source_commit = $script:plan.source_commit
         plan_sha256 = (Get-FileHash -LiteralPath $planPath -Algorithm SHA256).Hash.ToLowerInvariant()
         native_receipt_sha256 = $script:plan.native_receipt_sha256

@@ -99,6 +99,10 @@ COMPOSE_FILES = (
 )
 UI_COMPOSE_FILE = "docker-compose.ui-release.yml"
 ENV_FILES = (".env.tunnel.beta.local", ".env.beta.generated.local")
+BETA_ORIGIN = "https://beta.elevenidllc.com"
+BETA_DOMAIN = "beta.elevenidllc.com"
+PUBLIC_URL_KEYS = frozenset({"PUBLIC_API_URL", "ISSUER_BASE_URL",
+                             "PUBLIC_BASE_URL", "UI_BASE_URL"})
 
 
 class ComposePlanError(ValueError):
@@ -117,6 +121,45 @@ def environment(service: dict[str, Any]) -> dict[str, str]:
                     for k, v in value.items()),
             "Rendered beta service environment is invalid")
     return value
+
+
+def assert_beta_origin(services: dict[str, Any]) -> None:
+    """Reject a rendered beta release that advertises another public origin."""
+    for name, service in services.items():
+        require(isinstance(service, dict),
+                f"Rendered beta service is invalid: {name}")
+        env = environment(service)
+        for key in PUBLIC_URL_KEYS:
+            if key in env:
+                require(env[key] == BETA_ORIGIN,
+                        f"Rendered beta public origin differs: {name}.{key}")
+        if "PUBLIC_DOMAIN" in env:
+            require(env["PUBLIC_DOMAIN"] == BETA_DOMAIN,
+                    f"Rendered beta public domain differs: {name}")
+    required = {
+        "auth": {"UI_BASE_URL": BETA_ORIGIN,
+                 "OIDC_REDIRECT_URI": BETA_ORIGIN + "/v1/auth/callback",
+                 "OIDC_POST_LOGOUT_REDIRECT_URI": BETA_ORIGIN + "/"},
+        "gateway": {"ISSUER_BASE_URL": BETA_ORIGIN},
+        "flow": {"PUBLIC_BASE_URL": BETA_ORIGIN},
+        "keycloak": {"KC_HOSTNAME": BETA_ORIGIN,
+                     "PUBLIC_DOMAIN": BETA_DOMAIN,
+                     "UI_BASE_URL": BETA_ORIGIN},
+        "nginx-proxy": {"PUBLIC_DOMAIN": BETA_DOMAIN,
+                        "GATEWAY_UPSTREAM": "gateway:8000"},
+        "signing-keys": {"PUBLIC_DOMAIN": BETA_DOMAIN},
+        "issuance": {"ISSUER_BASE_URL": BETA_ORIGIN},
+    }
+    for name, expected in required.items():
+        require(name in services, f"Rendered beta origin service is absent: {name}")
+        env = environment(services[name])
+        for key, value in expected.items():
+            require(env.get(key) == value,
+                    f"Rendered beta public origin differs: {name}.{key}")
+    issuer = environment(services["auth"]).get("OIDC_EXTERNAL_ISSUER_URL", "")
+    require(re.fullmatch(re.escape(BETA_ORIGIN) + r"/realms/[A-Za-z0-9_-]+", issuer)
+            is not None,
+            "Rendered beta OIDC issuer origin differs")
 
 
 def sha256(path: Path) -> str:
@@ -242,6 +285,7 @@ def prepare(handoff: dict[str, Any], maintenance_intent: dict[str, Any],
             and set(previous).issubset(services)
             and SIGNED_APPLICATIONS.issubset(services),
             "Rendered beta Compose omits required services")
+    assert_beta_origin(services)
     for name in SIGNED_APPLICATIONS:
         service = services[name]
         require(isinstance(service, dict), f"Rendered beta service is invalid: {name}")
@@ -331,6 +375,7 @@ def prepare(handoff: dict[str, Any], maintenance_intent: dict[str, Any],
         expected_networks[name] = sorted(names)
     return {
         "schema": "marty.passport-beta-aggregate-compose-plan/v1",
+        "beta_origin": BETA_ORIGIN,
         "source_commit": handoff["source_commit"],
         "stack_manifest_sha256": handoff["stack_manifest_sha256"],
         "fence_receipt_sha256": handoff["fence_receipt_sha256"],
