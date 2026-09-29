@@ -10,7 +10,7 @@ import pytest
 
 from scripts.probe_passport_beta_host import (
     ACTIVE_PHYSICAL_FLOWS_SQL, HostProbeError, assert_production_unchanged, beta_legacy_drain,
-    beta_native_route_ownership,
+    beta_material_receipt, beta_native_route_ownership,
     production_snapshot,
 )
 
@@ -87,6 +87,66 @@ def test_beta_drain_queries_live_table_and_rejects_nonzero_counts() -> None:
         _, unsafe = runner(pending=pending, legacy=legacy, active_flow=active_flow)
         with pytest.raises(HostProbeError):
             beta_legacy_drain(unsafe)
+
+
+def test_private_material_receipt_binds_first_write_to_exact_tenant_job_and_chain() -> None:
+    commands, base = runner()
+    organization = "beta-org"
+    source = "job'; DROP TABLE issuance_service.passport_beta_bureau_jobs; --"
+    bureau = "c3ddfe4d-e67e-473e-a278-c95a27459344"
+    digests = ("a" * 64, "b" * 64, "c" * 64)
+    expected = [*digests, organization.encode().hex(), source.encode().hex()]
+
+    def execute(command: list[str]) -> str:
+        if command[1] != "exec":
+            return base(command)
+        commands.append(command)
+        sql = command[-1]
+        actual = re.findall(r"decode\('([0-9a-f]+)', 'hex'\)", sql)
+        if actual[:5] != expected or f"'{bureau}'::uuid" not in sql:
+            return "0|f|f|f"
+        return "1|t|t|t"
+
+    def probe(org: str = organization, job: str = source, bureau_id: str = bureau,
+              values: tuple[str, str, str] = digests) -> dict:
+        return beta_material_receipt(org, job, bureau_id, *values, b"k" * 32, runner=execute)
+
+    result = probe()
+    assert result["verified"] is True
+    assert all(result["evidence"][key] is True for key in (
+        "tenant_and_job_binding", "first_accepted_sod_der_matches_native",
+        "first_accepted_dsc_der_matches_selected_chain",
+        "first_accepted_dsc_pem_wire_matches_selected_chain"))
+    assert all(raw not in str(result) for raw in (organization, source, bureau, *digests))
+    assert source not in commands[-1][-1]
+    for changed in ({"org": "foreign-org"}, {"job": "other-job"},
+                    {"bureau_id": "70f17506-808d-47e0-9fa0-f8ad2d4a5457"},
+                    {"values": (digests[1], digests[0], digests[2])}):
+        with pytest.raises(HostProbeError, match="did not match"):
+            probe(**changed)
+
+    def legacy(command: list[str]) -> str:
+        return "1|f|f|f" if command[1] == "exec" else base(command)
+
+    with pytest.raises(HostProbeError, match="did not match"):
+        beta_material_receipt(organization, source, bureau, *digests, b"k" * 32, runner=legacy)
+    with pytest.raises(HostProbeError, match="inputs are invalid"):
+        beta_material_receipt(organization, source, bureau, *digests, b"short", runner=execute)
+
+
+def test_material_receipt_commitments_follow_frozen_cross_language_vector() -> None:
+    contract = json.loads((Path(__file__).resolve().parents[1] / "contracts/passport-beta-bureau-behavior.json").read_text())
+    vector = contract["first_accepted_material_receipt"]["commitment_algorithm"]["test_vector"]
+    _, base = runner()
+
+    def accepted(command: list[str]) -> str:
+        return "1|t|t|t" if command[1] == "exec" else base(command)
+
+    result = beta_material_receipt("beta-org", vector["source_job_id"], vector["bureau_job_id"],
+                                   "a" * 64, "b" * 64, "c" * 64,
+                                   vector["key_utf8"].encode(), runner=accepted)
+    assert result["evidence"]["source_job_id_commitment"] == vector["source_job_commitment"]
+    assert result["evidence"]["bureau_job_id_commitment"] == vector["bureau_job_commitment"]
 
 
 def test_active_flow_drain_stays_equal_to_beta_cutover_preflight() -> None:

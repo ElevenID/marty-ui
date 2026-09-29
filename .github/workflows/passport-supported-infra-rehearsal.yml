@@ -1,0 +1,98 @@
+name: Passport Supported Disposable Infra Rehearsal
+
+# Infra-only evidence. This does not trigger the provisioning record attestor.
+on:
+  workflow_dispatch:
+    inputs:
+      plan_run_id:
+        description: Protected provisioning-plan workflow run ID.
+        required: true
+      release_tag:
+        description: Official stack release bound by that plan.
+        required: true
+
+concurrency:
+  group: passport-supported-disposable-infra
+  cancel-in-progress: false
+
+permissions:
+  actions: read
+  contents: read
+  packages: read
+
+jobs:
+  infra:
+    if: github.ref == 'refs/heads/main'
+    runs-on: [self-hosted, linux, x64, canvas-oss-wsl2]
+    environment: beta-lifecycle
+    timeout-minutes: 60
+    env:
+      GH_TOKEN: ${{ github.token }}
+      PLAN_RUN_ID: ${{ inputs.plan_run_id }}
+      RELEASE_TAG: ${{ inputs.release_tag }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+      - name: Verify lineage and prepare disposable infrastructure
+        id: prepare
+        shell: bash
+        run: |
+          set -euo pipefail
+          [[ "$PLAN_RUN_ID" =~ ^[1-9][0-9]{0,19}$ ]]
+          plan_run="$(gh api "repos/ElevenID/marty-ui/actions/runs/$PLAN_RUN_ID")"
+          jq -e --arg sha "$GITHUB_SHA" \
+            '.status == "completed" and .conclusion == "success"
+             and .event == "workflow_dispatch" and .head_branch == "main"
+             and .head_sha == $sha and .repository.full_name == "ElevenID/marty-ui"' \
+            <<< "$plan_run"
+          plan_workflow_id="$(jq -er '.workflow_id' <<< "$plan_run")"
+          plan_workflow="$(gh api "repos/ElevenID/marty-ui/actions/workflows/$plan_workflow_id")"
+          jq -e '.path == ".github/workflows/passport-supported-provisioning-plan.yml"
+                 and .state == "active"' <<< "$plan_workflow"
+          case "$RELEASE_TAG" in
+            *[!a-zA-Z0-9._-]*|'') echo 'Invalid release tag' >&2; exit 1 ;;
+          esac
+          work="$RUNNER_TEMP/passport-supported-infra-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT"
+          mkdir -m 700 "$work"
+          gh run download "$PLAN_RUN_ID" --repo "$GITHUB_REPOSITORY" \
+            --name "passport-supported-provisioning-plan-$PLAN_RUN_ID" --dir "$work"
+          gh release download "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" \
+            --pattern stack-manifest.json --pattern SHA256SUMS --dir "$work"
+          echo "PASSPORT_INFRA_WORK=$work" >> "$GITHUB_ENV"
+      - name: Rehearse disposable infrastructure within cleanup budget
+        id: rehearse
+        shell: bash
+        run: |
+          set -euo pipefail
+          timeout --signal=INT --kill-after=30s 1200s \
+            python3 scripts/passport_supported_infra_rehearsal.py \
+            --plan "$PASSPORT_INFRA_WORK/passport-supported-provisioning-plan-$PLAN_RUN_ID.json" \
+            --manifest "$PASSPORT_INFRA_WORK/stack-manifest.json" --plan-run-id "$PLAN_RUN_ID" \
+            --gateway-port 29876 \
+            --output "$PASSPORT_INFRA_WORK/passport-supported-infra-rehearsal-$GITHUB_RUN_ID.json"
+          jq -e '.schema == "marty.passport-supported-infra-rehearsal/v1"
+                 and .status == "blocked" and .infra_rehearsal_passed == true
+                 and .source_commit == env.GITHUB_SHA
+                 and .plan_run_id == env.PLAN_RUN_ID' \
+            "$PASSPORT_INFRA_WORK/passport-supported-infra-rehearsal-$GITHUB_RUN_ID.json"
+      - name: Independently verify teardown and erase staged secrets
+        id: recover
+        if: always() && steps.prepare.outcome == 'success'
+        shell: bash
+        run: |
+          set -euo pipefail
+          timeout --signal=INT --kill-after=10s 240s \
+            python3 scripts/passport_supported_infra_rehearsal.py \
+            --plan "$PASSPORT_INFRA_WORK/passport-supported-provisioning-plan-$PLAN_RUN_ID.json" \
+            --manifest "$PASSPORT_INFRA_WORK/stack-manifest.json" --plan-run-id "$PLAN_RUN_ID" \
+            --gateway-port 29876 \
+            --output "$PASSPORT_INFRA_WORK/passport-supported-infra-rehearsal-$GITHUB_RUN_ID.json" \
+            --recover-only
+      - if: steps.rehearse.outcome == 'success' && steps.recover.outcome == 'success'
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: passport-supported-infra-rehearsal-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/passport-supported-infra-${{ github.run_id }}-${{ github.run_attempt }}/passport-supported-infra-rehearsal-${{ github.run_id }}.json
+          if-no-files-found: error
+          retention-days: 30

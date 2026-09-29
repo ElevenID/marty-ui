@@ -10,7 +10,7 @@ use crate::passport_bureau::valid_kms_callback_signature;
 const MAX_CALLBACK_BODY_BYTES: usize = 64 * 1024;
 const RECEIPT_DOMAIN: &[u8] = b"marty.passport-callback-receipt/v1\0";
 
-/// Digest of the exact callback body and KMS signature accepted by native issuance.
+/// Digest of the exact callback body and KMS signature accepted by the callback route.
 /// The signature and body must not be stored in the beta simulator's job table.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct SignedCallbackReceipt {
@@ -43,17 +43,17 @@ pub enum CallbackHandoffError {
     InvalidSigningEndpoint,
     #[error("KMS callback signing unavailable")]
     SigningUnavailable,
-    #[error("native passport callback unavailable")]
-    NativeUnavailable,
+    #[error("passport callback unavailable")]
+    CallbackUnavailable,
 }
 
-/// Sign the exact internal body bytes, then deliver those same bytes to native
-/// issuance. Neither the bureau nor the public ingress receives KMS material.
+/// Sign the exact internal body bytes, then deliver those same bytes to the
+/// selected private callback route. Neither caller receives KMS material.
 pub async fn sign_and_deliver(
     http: &Client,
     signing_base_url: &Url,
     signing_api_key: &str,
-    native_callback_url: &Url,
+    callback_url: &Url,
     organization_id: &str,
     body: &[u8],
 ) -> Result<SignedCallbackReceipt, CallbackHandoffError> {
@@ -89,15 +89,15 @@ pub async fn sign_and_deliver(
         .to_owned();
     let receipt = receipt_digest(body, &signature)?;
     let delivered = http
-        .post(native_callback_url.clone())
+        .post(callback_url.clone())
         .header("x-personalization-signature", signature)
         .header("content-type", "application/json")
         .body(body.to_vec())
         .send()
         .await
-        .map_err(|_| CallbackHandoffError::NativeUnavailable)?;
+        .map_err(|_| CallbackHandoffError::CallbackUnavailable)?;
     if !delivered.status().is_success() {
-        return Err(CallbackHandoffError::NativeUnavailable);
+        return Err(CallbackHandoffError::CallbackUnavailable);
     }
     Ok(receipt)
 }

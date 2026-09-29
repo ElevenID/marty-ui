@@ -53,6 +53,7 @@
     "software_probes": [
       "managed_csca_dsc_chain",
       "sod_signature",
+      "simulator_material_receipt",
       "nine_route_gateway_flow",
       "packaged_image",
       "physical_bureau_submission",

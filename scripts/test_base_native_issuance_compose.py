@@ -77,6 +77,9 @@ TOKEN_RATE_WINDOW VCDM_RELATED_RESOURCE_MAX_BYTES VCDM_RELATED_RESOURCE_TIMEOUT_
 INTEGRATION_SECRET_MASTER_KEY_ENV
 """.split()
 )
+BETA_OVERLAY_ONLY = frozenset(
+    {"PASSPORT_BETA_RECONCILIATION_ENABLED", "PASSPORT_BETA_RECONCILIATION_OPERATOR_TOKEN"}
+)
 EXPLICIT_MOUNTS = frozenset({"DIDCOMM_ENCRYPTION_POLICY_FILE", "DIDCOMM_TLS_CA_FILE"})
 FILE_SELECTORS = frozenset(
     {
@@ -182,7 +185,13 @@ def assert_sources(base, profile, runtime):
         .split("#[cfg(test)]")[0]
     )
     inputs = set(re.findall(r'"([A-Z][A-Z0-9_]+)"', text))
-    omitted = UNFORWARDED_LEGACY | EXPLICIT_MOUNTS | FILE_SELECTORS | NATIVE_CONFIG_META
+    omitted = (
+        UNFORWARDED_LEGACY
+        | BETA_OVERLAY_ONLY
+        | EXPLICIT_MOUNTS
+        | FILE_SELECTORS
+        | NATIVE_CONFIG_META
+    )
     actual_omitted = inputs - set(env)
     assert actual_omitted == omitted, (
         "Update the exhaustive native configuration inventory: "

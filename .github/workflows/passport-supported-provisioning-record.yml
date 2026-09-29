@@ -1,14 +1,13 @@
-name: Passport Supported Provisioning Record Attestor
+name: Passport Supported Rust Producer Receipt Attestor
 
-# This remains dormant until the named protected provisioning producer exists.
-# It signs a source-bound artifact on a hosted runner; it never runs Docker.
+# Sign the blocked, source-bound partial receipt on a hosted runner.
 on:
   workflow_run:
     workflows: [Passport Supported Disposable Provisioning Producer]
     types: [completed]
 
 jobs:
-  attest-record:
+  attest-receipt:
     permissions:
       actions: read
       attestations: write
@@ -26,6 +25,7 @@ jobs:
     env:
       GH_TOKEN: ${{ github.token }}
       PRODUCER_RUN_ID: ${{ github.event.workflow_run.id }}
+      PRODUCER_RUN_ATTEMPT: ${{ github.event.workflow_run.run_attempt }}
       PRODUCER_WORKFLOW_ID: ${{ github.event.workflow_run.workflow_id }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
@@ -36,22 +36,23 @@ jobs:
         run: |
           set -euo pipefail
           producer="$(gh api "repos/ElevenID/marty-ui/actions/runs/$PRODUCER_RUN_ID")"
-          jq -e --arg sha "$GITHUB_SHA" \
+          jq -e --arg sha "$GITHUB_SHA" --argjson attempt "$PRODUCER_RUN_ATTEMPT" \
             '.status == "completed" and .conclusion == "success"
              and .event == "workflow_dispatch" and .head_branch == "main"
-             and .head_sha == $sha and .repository.full_name == "ElevenID/marty-ui"' \
+             and .head_sha == $sha and .run_attempt == $attempt
+             and .repository.full_name == "ElevenID/marty-ui"' \
             <<< "$producer"
           workflow="$(gh api "repos/ElevenID/marty-ui/actions/workflows/$PRODUCER_WORKFLOW_ID")"
           jq -e '.path == ".github/workflows/passport-supported-provisioning-producer.yml"
                  and .state == "active"' <<< "$workflow"
-          record_dir="$RUNNER_TEMP/passport-supported-record-$PRODUCER_RUN_ID"
-          mkdir -p "$record_dir"
+          record_dir="$RUNNER_TEMP/passport-supported-receipt-$PRODUCER_RUN_ID"
+          mkdir -m 700 "$record_dir"
           gh run download "$PRODUCER_RUN_ID" --repo "$GITHUB_REPOSITORY" \
-            --name "passport-supported-compose-ownership-$PRODUCER_RUN_ID" \
+            --name "passport-supported-rust-producer-$PRODUCER_RUN_ID-$PRODUCER_RUN_ATTEMPT" \
             --dir "$record_dir"
-          record="$record_dir/passport-supported-compose-ownership-$PRODUCER_RUN_ID.json"
-          test -f "$record"
-          plan_run_id="$(jq -er '.run_id' "$record")"
+          receipt="$record_dir/passport-supported-rust-producer-$PRODUCER_RUN_ID.json"
+          test -f "$receipt"
+          plan_run_id="$(jq -er '.plan_run_id' "$receipt")"
           [[ "$plan_run_id" =~ ^[1-9][0-9]{0,19}$ ]]
           plan_run="$(gh api "repos/ElevenID/marty-ui/actions/runs/$plan_run_id")"
           jq -e --arg sha "$GITHUB_SHA" \
@@ -68,19 +69,20 @@ jobs:
             --dir "$record_dir"
           plan="$record_dir/passport-supported-provisioning-plan-$plan_run_id.json"
           test -f "$plan"
-          python3 scripts/check_passport_supported_record_handoff.py \
-            --plan "$plan" --record "$record" \
+          python3 scripts/check_passport_supported_producer_handoff.py \
+            --plan "$plan" --receipt "$receipt" \
             --source-commit "$GITHUB_SHA" --producer-run-id "$PRODUCER_RUN_ID" \
-            --output "$record_dir/handoff.json"
-          jq -e '.schema == "marty.passport-supported-record-handoff/v1"
-                 and .status == "blocked"' "$record_dir/handoff.json"
-          cp "$record" "passport-supported-compose-ownership-$PRODUCER_RUN_ID.json"
+            > "$record_dir/handoff.json"
+          jq -e '.schema == "marty.passport-supported-rust-producer-handoff/v1"
+                 and .status == "blocked" and .source_commit == env.GITHUB_SHA' \
+            "$record_dir/handoff.json"
+          cp "$receipt" "passport-supported-rust-producer-$PRODUCER_RUN_ID.json"
       - uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8
         with:
-          subject-path: passport-supported-compose-ownership-${{ github.event.workflow_run.id }}.json
+          subject-path: passport-supported-rust-producer-${{ github.event.workflow_run.id }}.json
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
-          name: passport-supported-compose-ownership-attested-${{ github.event.workflow_run.id }}
-          path: passport-supported-compose-ownership-${{ github.event.workflow_run.id }}.json
+          name: passport-supported-rust-producer-attested-${{ github.event.workflow_run.id }}
+          path: passport-supported-rust-producer-${{ github.event.workflow_run.id }}.json
           if-no-files-found: error
           retention-days: 30

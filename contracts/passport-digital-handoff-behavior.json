@@ -98,7 +98,7 @@
       "encrypted_artifact_round_trip_and_tenant_isolation",
       "independent_digital_quality_review",
       "source_and_release_image_lineage",
-      "supported_runtime_and_rollback"
+      "supported_rust_runtime_and_restart_resume"
     ],
     "separate_compatibility_gate": "Before Python retirement, exercise all nine frozen Gateway and Flow routes plus bureau batch, poll and signed callback behavior with an isolated simulator or fixture, including tenant binding and negative signature cases. This preserves Python feature parity but is separate from, and cannot be used as evidence for, digital_package_prepared",
     "sanitized_report": "Publish only fixed probe outcomes, a random opaque handoff reference, nonreversible keyed commitments for any necessary identifiers, approved source and image lineage, the encrypted private-manifest envelope digest, the protected signed-attestation digest, a reviewer attestation reference, and explicit physical_claim=not_claimed. Exclude raw identifiers and their unkeyed hashes, plaintext private-manifest digest, MRZ/DG/SOD/certificate digests or bytes, ciphertext artifact digests, credentials, and decrypted artifacts from uploaded reports",

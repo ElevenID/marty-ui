@@ -235,9 +235,12 @@ impl CredentialTemplateApplication {
             command.credential_payload_format.as_deref(),
             &command.supported_formats,
         )?;
+        let issuance_protocol = IssuanceProtocol::parse(command.issuance_protocol.as_deref())?;
         validate_protocol_requirements(
             Some(&command.compliance_profile_id),
             payload_format,
+            issuance_protocol,
+            &command.supported_formats,
             command.vct.as_deref(),
             command.doctype.as_deref(),
         )?;
@@ -276,9 +279,7 @@ impl CredentialTemplateApplication {
             revocation_profile_id: command.revocation_profile_id,
             issuer_algorithm: Some(issuer.issuer_algorithm),
             issuer_did: Some(issuer.issuer_did),
-            issuance_protocol: IssuanceProtocol::parse(command.issuance_protocol.as_deref())?
-                .wire()
-                .to_owned(),
+            issuance_protocol: issuance_protocol.wire().to_owned(),
             version: 1,
             created_at: command.now,
             updated_at: command.now,
@@ -347,9 +348,12 @@ impl CredentialTemplateApplication {
             Some(&candidate.credential_payload_format),
             &candidate.supported_formats,
         )?;
+        let issuance_protocol = IssuanceProtocol::parse(Some(&candidate.issuance_protocol))?;
         validate_protocol_requirements(
             candidate.compliance_profile_id.as_deref(),
             payload_format,
+            issuance_protocol,
+            &candidate.supported_formats,
             Some(&candidate.vct),
             candidate.doctype.as_deref(),
         )?;
@@ -380,9 +384,12 @@ impl CredentialTemplateApplication {
             Some(&template.credential_payload_format),
             &template.supported_formats,
         )?;
+        let issuance_protocol = IssuanceProtocol::parse(Some(&template.issuance_protocol))?;
         validate_protocol_requirements(
             template.compliance_profile_id.as_deref(),
             payload_format,
+            issuance_protocol,
+            &template.supported_formats,
             Some(&template.vct),
             template.doctype.as_deref(),
         )?;
@@ -597,6 +604,11 @@ fn validate_create_command(
 fn oid4vci_configuration(
     template: &CredentialTemplate,
 ) -> Result<Option<(String, Value)>, CredentialTemplateApplicationError> {
+    if IssuanceProtocol::parse(Some(&template.issuance_protocol))?
+        == IssuanceProtocol::PhysicalDocument
+    {
+        return Ok(None);
+    }
     let credential_type = template.credential_type.trim();
     if credential_type.is_empty() {
         return Ok(None);
@@ -646,7 +658,10 @@ fn oid4vci_configuration(
                 serde_json::json!({"type":["VerifiableCredential",credential_type]}),
             );
         }
-        CredentialFormat::JsonLd | CredentialFormat::ZkMdoc | CredentialFormat::VdsNc => {
+        CredentialFormat::JsonLd
+        | CredentialFormat::ZkMdoc
+        | CredentialFormat::VdsNc
+        | CredentialFormat::IcaoEmrtd => {
             return Ok(None);
         }
     }

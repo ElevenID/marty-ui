@@ -15,8 +15,10 @@ use std::os::unix::fs::OpenOptionsExt;
 
 use chrono::{DateTime, Duration, Utc};
 use marty_organization::{
-    postgres::PostgresOrganizationStore, ApiKey, ApiKeyScopeType, ApiKeyStatus,
-    CreateApiKeyCommand, OrganizationApplication, OrganizationCache, RevokeApiKeyCommand,
+    postgres::PostgresOrganizationStore, AddMemberDirectCommand, ApiKey, ApiKeyScopeType,
+    ApiKeyStatus, CreateApiKeyCommand, CreateRoleCommand, DeleteRoleCommand, MemberStatus,
+    OrganizationApplication, OrganizationCache, Permission, RemoveMemberCommand,
+    RevokeApiKeyCommand, Role,
 };
 use mmf_data::MemoryCache;
 use sha2::{Digest, Sha256};
@@ -27,8 +29,26 @@ use uuid::Uuid;
 
 const OUTPUT_DIR: &str = "/app/data";
 const OUTPUT_FILE: &str = "/app/data/passport-acceptance-api-key";
+const OPERATOR_OUTPUT_FILE: &str = "/app/data/passport-acceptance-operator-api-key";
 const ORGANIZATION_ID: &str = "00000000-0000-0000-0000-000000000001";
 const KEY_LIFETIME_HOURS: i64 = 2;
+const OPERATOR_SCOPES: &[&str] = &["flows:write", "templates:write", "applications:write"];
+const OPERATOR_PERMISSIONS: &[&str] = &[
+    "flow-definition:view",
+    "flow-definition:create",
+    "flow-definition:edit",
+    "flow-definition:activate",
+    "flow-instance:view",
+    "flow-instance:start",
+    "flow-instance:advance",
+];
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Command {
+    IssueCredential,
+    IssueOperator,
+    RevokeRun,
+}
 
 #[derive(Debug)]
 struct AcceptanceContext {
@@ -108,7 +128,7 @@ fn invalid(name: &'static str) -> io::Error {
     io::Error::new(io::ErrorKind::InvalidInput, format!("invalid {name}"))
 }
 
-fn output_file() -> io::Result<File> {
+fn output_file(path: &str) -> io::Result<File> {
     let directory = Path::new(OUTPUT_DIR);
     let metadata = fs::symlink_metadata(directory)?;
     if !metadata.file_type().is_dir() || metadata.file_type().is_symlink() {
@@ -118,7 +138,7 @@ fn output_file() -> io::Result<File> {
     options.write(true).create_new(true);
     #[cfg(unix)]
     options.mode(0o600);
-    options.open(OUTPUT_FILE)
+    options.open(path)
 }
 
 fn disposable_database_url() -> io::Result<String> {
@@ -141,20 +161,30 @@ fn disposable_database_url() -> io::Result<String> {
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn Error>> {
     let context = AcceptanceContext::from_environment(&env::vars().collect())?;
-    let revoke = match env::args().skip(1).collect::<Vec<_>>().as_slice() {
-        [] => false,
-        [argument] if argument == "--revoke-run" => true,
+    let command = match env::args().skip(1).collect::<Vec<_>>().as_slice() {
+        [] => Command::IssueCredential,
+        [argument] if argument == "--operator" => Command::IssueOperator,
+        [argument] if argument == "--revoke-run" => Command::RevokeRun,
         _ => return Err(Box::<dyn Error>::from(invalid("command"))),
     };
     let database_url = disposable_database_url()?;
-    if revoke {
+    if command == Command::RevokeRun {
         return revoke_run(&context, &database_url).await;
     }
-    let mut output = output_file()?;
-    let result = issue(&context, &database_url, &mut output).await;
+    let path = if command == Command::IssueOperator {
+        OPERATOR_OUTPUT_FILE
+    } else {
+        OUTPUT_FILE
+    };
+    let mut output = output_file(path)?;
+    let result = if command == Command::IssueOperator {
+        issue_operator(&context, &database_url, &mut output).await
+    } else {
+        issue(&context, &database_url, &mut output).await
+    };
     if result.is_err() {
         drop(output);
-        let _ = fs::remove_file(OUTPUT_FILE);
+        let _ = fs::remove_file(path);
     }
     result
 }
@@ -194,6 +224,257 @@ async fn issue(
     Ok(())
 }
 
+fn run_actor(context: &AcceptanceContext) -> String {
+    format!("passport-acceptance:{}:{}", context.project, context.run_id)
+}
+
+fn operator_name(context: &AcceptanceContext) -> String {
+    format!("passport-flow-operator-{}", context.run_id)
+}
+
+fn operator_role_name(context: &AcceptanceContext) -> String {
+    format!("passport-flow-operator-role-{}", context.run_id)
+}
+
+fn operator_description(context: &AcceptanceContext) -> String {
+    format!(
+        "Disposable source {} project {}",
+        context.source_commit, context.project
+    )
+}
+
+fn operator_key_command(
+    context: &AcceptanceContext,
+    now: DateTime<Utc>,
+) -> io::Result<CreateApiKeyCommand> {
+    if context.expires_at <= now {
+        return Err(invalid("PASSPORT_ACCEPTANCE_EXPIRES_AT"));
+    }
+    Ok(CreateApiKeyCommand {
+        organization_id: context.organization_id,
+        name: operator_name(context),
+        created_by: run_actor(context),
+        scopes: Some(
+            OPERATOR_SCOPES
+                .iter()
+                .map(|scope| (*scope).into())
+                .collect(),
+        ),
+        description: Some(operator_description(context)),
+        is_test: true,
+        scope_type: ApiKeyScopeType::Organization,
+        deployment_profile_id: None,
+        rate_limit: None,
+        expires_at: Some(
+            context
+                .expires_at
+                .min(now + Duration::hours(KEY_LIFETIME_HOURS)),
+        ),
+        now,
+    })
+}
+
+fn operator_permission_ids(permissions: &[Permission]) -> io::Result<Vec<Uuid>> {
+    OPERATOR_PERMISSIONS
+        .iter()
+        .map(|key| {
+            let mut matches = permissions
+                .iter()
+                .filter(|permission| permission.key() == *key);
+            match (matches.next(), matches.next()) {
+                (Some(permission), None) => Ok(permission.id),
+                _ => Err(invalid("operator permission catalog")),
+            }
+        })
+        .collect()
+}
+
+fn owned_operator_role(role: &Role, context: &AcceptanceContext) -> bool {
+    role.organization_id == context.organization_id
+        && role.name == operator_role_name(context)
+        && role.description.as_deref() == Some(operator_description(context).as_str())
+        && !role.is_system
+        && !role.is_default_for_new_members
+        && role.permission_keys()
+            == OPERATOR_PERMISSIONS
+                .iter()
+                .map(|key| (*key).to_owned())
+                .collect()
+}
+
+fn owned_operator_key(key: &ApiKey, context: &AcceptanceContext) -> bool {
+    operator_key_identity(key, context)
+        && key.name == operator_name(context)
+        && key.scopes == OPERATOR_SCOPES
+}
+
+fn operator_key_identity(key: &ApiKey, context: &AcceptanceContext) -> bool {
+    key.organization_id == context.organization_id
+        && key.created_by == run_actor(context)
+        && key.description.as_deref() == Some(operator_description(context).as_str())
+        && key.key_prefix == "mk_test_"
+        && key
+            .expires_at
+            .is_some_and(|expires| expires <= context.expires_at)
+}
+
+async fn issue_operator(
+    context: &AcceptanceContext,
+    database_url: &str,
+    output: &mut File,
+) -> Result<(), Box<dyn Error>> {
+    let (application, _run_lock) = locked_application(context, database_url).await?;
+    let now = Utc::now();
+    let key_command = operator_key_command(context, now)?;
+    if application
+        .list_api_keys(context.organization_id)
+        .await?
+        .iter()
+        .any(|key| key.name == operator_name(context))
+        || application
+            .list_roles(context.organization_id)
+            .await?
+            .iter()
+            .any(|role| role.name == operator_role_name(context))
+    {
+        return Err(Box::new(invalid("operator already issued")));
+    }
+    let role = application
+        .create_role(CreateRoleCommand {
+            organization_id: context.organization_id,
+            name: operator_role_name(context),
+            created_by: run_actor(context),
+            display_name: Some("Disposable passport Flow operator".into()),
+            description: Some(operator_description(context)),
+            permission_ids: operator_permission_ids(&application.list_permissions().await?)?,
+            is_default_for_new_members: false,
+            now,
+        })
+        .await?
+        .value;
+    let result: Result<(), Box<dyn Error>> = async {
+        let creation = application.create_api_key(key_command).await?.value;
+        let key = &creation.api_key;
+        let principal = format!("api_key:{}", key.id);
+        if application
+            .list_members(context.organization_id)
+            .await?
+            .iter()
+            .any(|member| member.user_id == principal)
+        {
+            return Err(Box::new(invalid("operator principal already exists")) as Box<dyn Error>);
+        }
+        let member = application
+            .add_member_direct(AddMemberDirectCommand {
+                organization_id: context.organization_id,
+                user_id: principal,
+                email: None,
+                role_ids: Some(vec![role.id]),
+                now,
+            })
+            .await?
+            .value;
+        if member.status != MemberStatus::Active
+            || member.roles.len() != 1
+            || member.roles[0].id != role.id
+        {
+            return Err(Box::new(invalid("operator membership")) as Box<dyn Error>);
+        }
+        output.write_all(creation.raw_key.as_bytes())?;
+        output.write_all(b"\n")?;
+        output.sync_all()?;
+        Ok(())
+    }
+    .await;
+    if let Err(error) = result {
+        cleanup_operator(&application, context).await?;
+        return Err(error);
+    }
+    Ok(())
+}
+
+async fn cleanup_operator(
+    application: &OrganizationApplication,
+    context: &AcceptanceContext,
+) -> Result<(), Box<dyn Error>> {
+    let keys = application.list_api_keys(context.organization_id).await?;
+    let roles = application.list_roles(context.organization_id).await?;
+    let matching_keys = keys
+        .iter()
+        .filter(|key| key.name == operator_name(context) || operator_key_identity(key, context))
+        .collect::<Vec<_>>();
+    let matching_roles = roles
+        .iter()
+        .filter(|role| role.name == operator_role_name(context))
+        .collect::<Vec<_>>();
+    for key in matching_keys
+        .iter()
+        .filter(|key| operator_key_identity(key, context) && key.status == ApiKeyStatus::Active)
+    {
+        application
+            .revoke_api_key(RevokeApiKeyCommand {
+                organization_id: context.organization_id,
+                api_key_id: key.id,
+                revoked_by: run_actor(context),
+                now: Utc::now(),
+            })
+            .await?;
+    }
+    if matching_keys
+        .iter()
+        .any(|key| !owned_operator_key(key, context))
+        || matching_roles
+            .iter()
+            .any(|role| !owned_operator_role(role, context))
+        || matching_keys.len() > 1
+        || matching_roles.len() > 1
+    {
+        return Err(Box::new(invalid("operator ownership")));
+    }
+    let members = application.list_members(context.organization_id).await?;
+    for key in matching_keys {
+        let principal = format!("api_key:{}", key.id);
+        for member in members.iter().filter(|member| member.user_id == principal) {
+            if member.roles.len() != 1
+                || matching_roles
+                    .first()
+                    .is_none_or(|role| member.roles[0].id != role.id)
+            {
+                return Err(Box::new(invalid("operator member ownership")));
+            }
+            application
+                .remove_member(RemoveMemberCommand {
+                    organization_id: context.organization_id,
+                    member_id: member.id,
+                    removed_by: run_actor(context),
+                    now: Utc::now(),
+                })
+                .await?;
+        }
+    }
+    for role in matching_roles {
+        if members.iter().any(|member| {
+            member.roles.iter().any(|assigned| assigned.id == role.id)
+                && !keys.iter().any(|key| {
+                    member.user_id == format!("api_key:{}", key.id)
+                        && owned_operator_key(key, context)
+                })
+        }) {
+            return Err(Box::new(invalid("operator role has foreign member")));
+        }
+        application
+            .delete_role(DeleteRoleCommand {
+                role_id: role.id,
+                organization_id: context.organization_id,
+                deleted_by: run_actor(context),
+                replacement_role_id: None,
+                now: Utc::now(),
+            })
+            .await?;
+    }
+    Ok(())
+}
+
 async fn locked_application(
     context: &AcceptanceContext,
     database_url: &str,
@@ -218,20 +499,36 @@ async fn locked_application(
 
 async fn revoke_run(context: &AcceptanceContext, database_url: &str) -> Result<(), Box<dyn Error>> {
     let (application, _run_lock) = locked_application(context, database_url).await?;
-    for key in application.list_api_keys(context.organization_id).await? {
-        if belongs_to_run(&key, context) && key.status == ApiKeyStatus::Active {
-            application
-                .revoke_api_key(RevokeApiKeyCommand {
-                    organization_id: context.organization_id,
-                    api_key_id: key.id,
-                    revoked_by: format!(
-                        "passport-acceptance:{}:{}",
-                        context.project, context.run_id
-                    ),
-                    now: Utc::now(),
-                })
-                .await?;
+    let keys = application.list_api_keys(context.organization_id).await?;
+    let mut errors = Vec::new();
+    for key in keys.iter().filter(|key| {
+        key.status == ApiKeyStatus::Active
+            && (operator_key_identity(key, context) || credential_key_identity(key, context))
+    }) {
+        if let Err(error) = application
+            .revoke_api_key(RevokeApiKeyCommand {
+                organization_id: context.organization_id,
+                api_key_id: key.id,
+                revoked_by: run_actor(context),
+                now: Utc::now(),
+            })
+            .await
+        {
+            errors.push(format!("key {} revocation failed: {error}", key.id));
         }
+    }
+    if let Err(error) = cleanup_operator(&application, context).await {
+        errors.push(format!("operator cleanup failed: {error}"));
+    }
+    let matching = keys
+        .iter()
+        .filter(|key| claims_run_name(key, context) || credential_key_identity(key, context))
+        .collect::<Vec<_>>();
+    if matching.len() > 1 || matching.iter().any(|key| !belongs_to_run(key, context)) {
+        errors.push("credential key ownership drift".into());
+    }
+    if !errors.is_empty() {
+        return Err(Box::new(io::Error::other(errors.join("; "))));
     }
     Ok(())
 }
@@ -244,11 +541,16 @@ fn run_lock_key(context: &AcceptanceContext) -> i64 {
 
 fn belongs_to_run(key: &ApiKey, context: &AcceptanceContext) -> bool {
     claims_run_name(key, context)
-        && key.created_by == format!("passport-acceptance:{}:{}", context.project, context.run_id)
+        && credential_key_identity(key, context)
+        && key.scopes == ["credentials:read", "credentials:issue"]
+}
+
+fn credential_key_identity(key: &ApiKey, context: &AcceptanceContext) -> bool {
+    key.organization_id == context.organization_id
+        && key.created_by == run_actor(context)
         && key.description.as_deref()
             == Some(&format!("Disposable source {}", context.source_commit))
         && key.key_prefix == "mk_test_"
-        && key.scopes == ["credentials:read", "credentials:issue"]
         && key
             .expires_at
             .is_some_and(|expires| expires <= context.expires_at)
@@ -384,9 +686,71 @@ mod tests {
         let mut unrelated = key.clone();
         unrelated.scopes.push("admin".into());
         assert!(!belongs_to_run(&unrelated, &context));
+        assert!(credential_key_identity(&unrelated, &context));
         assert!(claims_run_name(&unrelated, &context));
         let mut unrelated = key.clone();
         unrelated.name.push_str("-another-run");
         assert!(!claims_run_name(&unrelated, &context));
+    }
+
+    #[test]
+    fn operator_is_separate_from_issuance_and_has_only_flow_setup_authority() {
+        let context = AcceptanceContext::from_environment(&values()).unwrap();
+        let now = Utc::now();
+        let command = operator_key_command(&context, now).unwrap();
+        let narrow = key_command(&context, now).unwrap();
+        assert_ne!(command.name, narrow.name);
+        assert_eq!(
+            command.scopes.as_ref().unwrap(),
+            &OPERATOR_SCOPES
+                .iter()
+                .map(|scope| (*scope).to_owned())
+                .collect::<Vec<_>>()
+        );
+        assert_eq!(command.expires_at, Some(context.expires_at));
+        assert!(command.is_test);
+        assert_eq!(command.scope_type, ApiKeyScopeType::Organization);
+        let (key, _) = ApiKey::create(
+            ApiKeySpec {
+                organization_id: command.organization_id,
+                name: command.name,
+                created_by: command.created_by,
+                scopes: command.scopes,
+                description: command.description,
+                expires_at: command.expires_at,
+                now: command.now,
+            },
+            true,
+        );
+        assert!(owned_operator_key(&key, &context));
+        let mut overprivileged = key.clone();
+        overprivileged.scopes.push("admin:full".into());
+        assert!(!owned_operator_key(&overprivileged, &context));
+        assert!(operator_key_identity(&overprivileged, &context));
+        let mut foreign = key;
+        foreign.description = Some("foreign project".into());
+        assert!(!owned_operator_key(&foreign, &context));
+    }
+
+    #[test]
+    fn operator_permission_catalog_must_be_exact_and_complete() {
+        let seeded = marty_organization::catalog::permission_catalog()
+            .unwrap()
+            .into_iter()
+            .map(|definition| Permission::new(definition.resource, definition.action))
+            .collect::<Vec<_>>();
+        assert_eq!(operator_permission_ids(&seeded).unwrap().len(), 7);
+        let permissions = OPERATOR_PERMISSIONS
+            .iter()
+            .map(|key| {
+                let (resource, action) = key.split_once(':').unwrap();
+                Permission::new(resource, action)
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(operator_permission_ids(&permissions).unwrap().len(), 7);
+        assert!(operator_permission_ids(&permissions[..6]).is_err());
+        let mut duplicate = permissions;
+        duplicate.push(Permission::new("flow-instance", "advance"));
+        assert!(operator_permission_ids(&duplicate).is_err());
     }
 }

@@ -89,6 +89,10 @@ PASSPORT_BETA_ONLY_FILE_ALIASES = {
     "PHYSICAL_DOCUMENT_ARTIFACT_KEY_FILE",
     "PERSONALIZATION_BUREAU_WEBHOOK_SECRET_FILE",
 }
+PASSPORT_BETA_OVERLAY_ONLY = {
+    "PASSPORT_BETA_RECONCILIATION_ENABLED",
+    "PASSPORT_BETA_RECONCILIATION_OPERATOR_TOKEN",
+}
 CONFIG_META = {"CARGO_PKG_VERSION", "MARTY_ISSUANCE__"}
 SHARED_ADDITIONS = {
     "ALLOWED_REDIRECT_URIS": "${ALLOWED_REDIRECT_URIS:-}",
@@ -149,6 +153,16 @@ def assert_input_inventory():
     model = yaml.safe_load((ROOT / GATE["BASE"]).read_text())
     native = model["services"]["issuance-native"]["environment"]
     legacy = model["services"]["issuance"]["environment"]
+    beta_model = yaml.safe_load(
+        (ROOT / "docker-compose.profile.passport-native-beta.yml").read_text()
+    )
+    beta_native = beta_model["services"]["issuance-native"]["environment"]
+    assert beta_native.get("PASSPORT_BETA_RECONCILIATION_ENABLED") == "true"
+    assert beta_native.get("PASSPORT_BETA_RECONCILIATION_OPERATOR_TOKEN") == (
+        "${PASSPORT_BETA_RECONCILIATION_OPERATOR_TOKEN:?set a dedicated beta reconciliation operator token}"
+    )
+    assert not PASSPORT_BETA_OVERLAY_ONLY & set(native)
+    assert not PASSPORT_BETA_OVERLAY_ONLY & set(legacy)
     assert {
         key: model["x-issuance-application-env"].get(key) for key in SHARED_SETTINGS
     } == SHARED_SETTINGS
@@ -157,6 +171,7 @@ def assert_input_inventory():
         LOADED_INPUTS
         | EXPLICIT_POLICY
         | PASSPORT_BETA_ONLY_FILE_ALIASES
+        | PASSPORT_BETA_OVERLAY_ONLY
         | CONFIG_META
         | UNFORWARDED
     )

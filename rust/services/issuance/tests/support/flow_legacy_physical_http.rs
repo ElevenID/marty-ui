@@ -167,7 +167,7 @@ pub(super) async fn run(legacy: &Legacy) {
             "/v1/passport/applications".into(),
             json!({
                 "organization_id":"org-1","flow_execution_id":instance.id,
-                "application_template_id":"application-template-1","credential_template_id":"template-1",
+                "application_template_id":"application-template-1","credential_template_id":"template-physical",
                 "issuer_did":"did:web:issuer.example",
                 "delivery_destination_profile_id":"destination-1","document_type":"TD3",
                 "country_code":physical["country_code"],"applicant":physical["applicant"],

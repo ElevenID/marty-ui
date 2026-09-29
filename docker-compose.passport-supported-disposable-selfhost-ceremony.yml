@@ -1,0 +1,17 @@
+# Temporary certificate ceremony phase for the disposable selfhost project.
+# The protected producer must replace Gateway and Signing Keys with the normal
+# selfhost model before collecting runtime or rollback acceptance evidence.
+services:
+  gateway:
+    environment:
+      ENVIRONMENT: beta
+      SIGNING_KEYS_DSC_ISSUE_GATEWAY_KEY_FILE: /run/secrets/dsc_issue_gateway_key
+      SIGNING_KEYS_CSCA_ISSUE_GATEWAY_KEY_FILE: /run/secrets/csca_issue_gateway_key
+    secrets: [dsc_issue_gateway_key, csca_issue_gateway_key]
+  signing-keys:
+    environment:
+      ENVIRONMENT: beta
+      SIGNING_KEYS_BETA_CSCA_ISSUANCE_ENABLED: "true"
+      SIGNING_KEYS_DSC_ISSUE_GATEWAY_KEY_FILE: /run/secrets/dsc_issue_gateway_key
+      SIGNING_KEYS_CSCA_ISSUE_GATEWAY_KEY_FILE: /run/secrets/csca_issue_gateway_key
+    secrets: [dsc_issue_gateway_key, csca_issue_gateway_key]

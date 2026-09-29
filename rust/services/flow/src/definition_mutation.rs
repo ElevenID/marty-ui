@@ -84,6 +84,8 @@ pub fn update_definition_record(
 pub fn definition_references(record: &FlowDefinitionRecord) -> FlowDefinitionReferenceSet {
     FlowDefinitionReferenceSet {
         credential_template_id: record.credential_template_id.clone(),
+        physical_document_issuance: crate::effective_flow_type(record)
+            == crate::FlowType::PhysicalDocumentIssuance,
         application_template_id: record.application_template_id.clone(),
         presentation_policy_id: record.presentation_policy_id.clone(),
         delivery_destination_profile_id: record.delivery_destination_profile_id.clone(),

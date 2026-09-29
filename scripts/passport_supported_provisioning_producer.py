@@ -26,46 +26,67 @@ if __package__:
         _expected_image, _expected_mounts, _inspect, _labels, docker,
         verify as verify_ownership,
     )
-    from .check_passport_supported_rollback_model import (
+    from .check_passport_supported_rust_model import (
         DISPOSABLE_SERVICES, PROJECT, ModelPreflightError, preflight_attested_plan,
         source_identity,
     )
     from .passport_supported_provisioning_plan import (
         COMMIT, PLAN_WORKFLOW, RUN_ID, PlanError, _attest, release_inputs,
     )
+    from .passport_supported_infra_images import ROLES
+    from .stage_passport_disposable_tls import TLS_FILES, stage_tls
 else:
     from check_passport_supported_compose_ownership import (
         _expected_image, _expected_mounts, _inspect, _labels, docker,
         verify as verify_ownership,
     )
-    from check_passport_supported_rollback_model import (
+    from check_passport_supported_rust_model import (
         DISPOSABLE_SERVICES, PROJECT, ModelPreflightError, preflight_attested_plan,
         source_identity,
     )
     from passport_supported_provisioning_plan import (
         COMMIT, PLAN_WORKFLOW, RUN_ID, PlanError, _attest, release_inputs,
     )
+    from passport_supported_infra_images import ROLES
+    from stage_passport_disposable_tls import TLS_FILES, stage_tls
 
 
 WORKFLOW_REF = (
     "ElevenID/marty-ui/.github/workflows/"
     "passport-supported-provisioning-producer.yml@refs/heads/main"
 )
+INFRA_WORKFLOW_REF = (
+    "ElevenID/marty-ui/.github/workflows/"
+    "passport-supported-infra-rehearsal.yml@refs/heads/main"
+)
+CERTIFICATE_WORKFLOW_REF = (
+    "ElevenID/marty-ui/.github/workflows/"
+    "passport-supported-certificate-rehearsal.yml@refs/heads/main"
+)
 RESOURCE_ID = re.compile(r"[0-9a-f]{64}\Z")
 TEST_KEY = re.compile(rb"mk_test_[A-Za-z0-9]{43}\n\Z")
 KEY_COMMAND = "/usr/local/bin/marty-passport-acceptance-api-key"
 CONTAINER_KEY = "/app/data/passport-acceptance-api-key"
-STAGED_SECRETS = frozenset({
+CONTAINER_OPERATOR_KEY = "/app/data/passport-acceptance-operator-api-key"
+TEXT_SECRETS = frozenset({
     "bao_root_token", "marty_db_password", "signing_keys_internal_api_key",
     "dsc_issue_gateway_key", "csca_issue_gateway_key",
     "issuance_api_key", "callback_signer_api_key", "grpc_service_token",
     "bureau_database_url", "token_hmac_key", "integration_secret_master_key",
+    "flow_webhook_secret", "flow_application_event_hmac_key",
 })
+STAGED_SECRETS = TEXT_SECRETS | TLS_FILES
 BOOTSTRAPPED_SECRETS = frozenset({"bao_token", "callback_signer_bao_token"})
-EPHEMERAL_SECRETS = BOOTSTRAPPED_SECRETS | frozenset({"passport_acceptance_api_key"})
+EPHEMERAL_SECRETS = BOOTSTRAPPED_SECRETS | frozenset({
+    "passport_acceptance_api_key", "passport_acceptance_operator_api_key",
+})
 DISPOSABLE_NETWORKS = frozenset({"private", "callback_signing"})
 DISPOSABLE_VOLUMES = frozenset({
     "postgres_data", "redis_data", "openbao_data", "openbao_file", "openbao_logs",
+})
+PARTIAL_ONLY_SERVICES = frozenset({
+    "passport-openbao-bootstrap", "passport-certificate-bootstrap",
+    "passport-bureau-poll",
 })
 
 
@@ -78,12 +99,16 @@ def require(ok: bool, message: str) -> None:
         raise ProducerError(message)
 
 
-def protected_context(environment: dict[str, str]) -> tuple[str, str]:
+def protected_context(environment: dict[str, str], *,
+                      workflow_ref: str = WORKFLOW_REF) -> tuple[str, str]:
+    require(workflow_ref in {WORKFLOW_REF, INFRA_WORKFLOW_REF,
+                             CERTIFICATE_WORKFLOW_REF},
+            "Protected producer workflow is not allowed")
     require(environment.get("GITHUB_ACTIONS") == "true"
             and environment.get("GITHUB_REPOSITORY") == "ElevenID/marty-ui"
             and environment.get("GITHUB_REF") == "refs/heads/main"
             and environment.get("GITHUB_EVENT_NAME") == "workflow_dispatch"
-            and environment.get("GITHUB_WORKFLOW_REF") == WORKFLOW_REF,
+            and environment.get("GITHUB_WORKFLOW_REF") == workflow_ref,
             "Protected producer workflow identity is invalid")
     source, run_id = environment.get("GITHUB_SHA"), environment.get("GITHUB_RUN_ID")
     require(isinstance(source, str) and COMMIT.fullmatch(source) is not None
@@ -99,9 +124,10 @@ def verify_plan_release(
     release: Callable[..., dict] = release_inputs,
     now: datetime | None = None,
     checkout: Callable[[], tuple[str, bool]] = source_identity,
+    workflow_ref: str = WORKFLOW_REF,
 ) -> dict:
     """Verify source, exact plan run, lease and release before any model read."""
-    source, _ = protected_context(environment)
+    source, _ = protected_context(environment, workflow_ref=workflow_ref)
     require(RUN_ID.fullmatch(plan_run_id) is not None,
             "Protected plan run ID is invalid")
     try:
@@ -150,10 +176,11 @@ def verify_pre_mutation(
     plan_path: Path, manifest_path: Path, plan_run_id: str,
     environment: dict[str, str], env_file: Path, disposable_root: Path,
     *, now: datetime | None = None,
+    workflow_ref: str = WORKFLOW_REF,
 ) -> dict:
     """Complete release and model gates for a future explicitly enabled producer."""
     plan = verify_plan_release(plan_path, manifest_path, plan_run_id,
-                               environment, now=now)
+                               environment, now=now, workflow_ref=workflow_ref)
     report = preflight_attested_plan(
         plan["surface"], plan["project"], env_file, disposable_root,
         plan["services_reference"], plan_path, now=now)
@@ -205,12 +232,11 @@ def stage_disposable_inputs(
             and created <= current < expires <= created + timedelta(hours=2),
             "Disposable input lease is invalid")
     images = plan.get("infra_images")
-    require(isinstance(images, dict) and set(images) == {"postgres", "redis", "openbao"},
+    require(isinstance(images, dict) and set(images) == set(ROLES),
             "Disposable infrastructure image set is invalid")
     references = {
         "MARTY_SERVICES_IMAGE": plan.get("services_reference"),
         "PASSPORT_ACCEPTANCE_MIGRATIONS_IMAGE": plan.get("migrations_reference"),
-        "PASSPORT_ACCEPTANCE_LEGACY_IMAGE": plan.get("legacy_reference"),
         **{f"PASSPORT_ACCEPTANCE_{name.upper()}_IMAGE": image
            for name, image in images.items()},
     }
@@ -251,8 +277,10 @@ def stage_disposable_inputs(
             "bureau_database_url": f"postgresql://marty:{database_password}@postgres:5432/marty",
             "token_hmac_key": secrets.token_hex(32),
             "integration_secret_master_key": base64.b64encode(secrets.token_bytes(32)).decode("ascii"),
+            "flow_webhook_secret": secrets.token_hex(32),
+            "flow_application_event_hmac_key": secrets.token_hex(32),
         }
-        require(set(values) == STAGED_SECRETS, "Disposable secret set is incomplete")
+        require(set(values) == TEXT_SECRETS, "Disposable secret set is incomplete")
         env = {
             **references,
             "PASSPORT_ACCEPTANCE_PROJECT": project,
@@ -262,9 +290,6 @@ def stage_disposable_inputs(
             "PASSPORT_ACCEPTANCE_SECRET_DIR": secret_dir.as_posix(),
             "PASSPORT_ACCEPTANCE_GATEWAY_PORT": str(gateway_port),
             "PASSPORT_ACCEPTANCE_ADMIN_EMAIL": "disposable-passport@acceptance.invalid",
-            "PASSPORT_ACCEPTANCE_DATABASE_URL": (
-                f"postgresql+asyncpg://marty:{database_password}@postgres:5432/marty"
-            ),
         }
         require(all("\n" not in value and "\r" not in value for value in env.values()),
                 "Disposable environment input is invalid")
@@ -276,6 +301,9 @@ def stage_disposable_inputs(
             # intended containers. OpenBao's pinned image starts as root.
             mode = 0o600 if name == "bao_root_token" else 0o644
             _write_private(secret_dir / name, value.encode("ascii"), mode=mode)
+        stage_tls(secret_dir)
+        require({path.name for path in secret_dir.iterdir()} == STAGED_SECRETS,
+                "Disposable TLS and secret set is incomplete")
         require(all(not (secret_dir / name).exists() for name in BOOTSTRAPPED_SECRETS),
                 "Disposable OpenBao tokens were prepopulated")
         env_file = root / "acceptance.env"
@@ -298,6 +326,13 @@ def _remove_staged_inputs(root: Path) -> None:
                 "Disposable input cleanup secret directory changed identity")
         for name in STAGED_SECRETS | EPHEMERAL_SECRETS:
             (secret_dir / name).unlink(missing_ok=True)
+        for path in secret_dir.iterdir():
+            require(re.fullmatch(
+                r"\.(?:bao_token|callback_signer_bao_token)\.[A-Za-z0-9]{6}",
+                path.name,
+            ) is not None,
+                "Disposable secret directory has an unexpected file")
+            path.unlink()
         secret_dir.rmdir()
     (root / "acceptance.env").unlink(missing_ok=True)
     root.rmdir()
@@ -370,13 +405,12 @@ def collect_record(
         "containers": containers, "networks": networks, "volumes": volumes,
         **{key: plan[key] for key in (
             "run_id", "project", "source_commit", "services_reference",
-            "migrations_reference", "legacy_reference", "infra_images",
+            "migrations_reference", "infra_images",
             "created_at", "expires_at", "owner_labels",
         )},
     }
     proof = ownership(record, plan["surface"], now, runner)
-    require(proof.get("live_ownership_verified") is True
-            and proof.get("rollback_accepted") is False,
+    require(proof.get("live_ownership_verified") is True,
             "Disposable live ownership proof failed")
     return record
 
@@ -394,6 +428,7 @@ def _exec_docker(args: list[str], output: object = None) -> bool:
 def _destroy_recorded_project(
     record: dict, inspector: Callable[[list[str]], str],
     executor: Callable[[list[str], object], bool], *, complete: bool,
+    ceremony: bool | None = False,
 ) -> bool:
     """Reinspect exact resource IDs before deletion, then prove their absence."""
     project = record.get("project")
@@ -404,7 +439,7 @@ def _destroy_recorded_project(
             and record.get("schema") == "marty.passport-supported-compose-ownership/v1"
             and isinstance(containers, dict)
             and (set(containers) == DISPOSABLE_SERVICES if complete
-                 else set(containers) <= DISPOSABLE_SERVICES)
+                 else set(containers) <= DISPOSABLE_SERVICES | PARTIAL_ONLY_SERVICES)
             and all(isinstance(value, str) and RESOURCE_ID.fullmatch(value)
                     for value in containers.values())
             and len(set(containers.values())) == len(containers)
@@ -440,17 +475,23 @@ def _destroy_recorded_project(
                         "Partial disposable container is outside the plan model")
                 network_settings = item.get("NetworkSettings")
                 host_config = item.get("HostConfig")
-                expected_mode = (project + "_callback_signing"
+                helper_parent = ({"passport-certificate-bootstrap": "signing-keys",
+                                  "passport-bureau-poll": "passport-beta-bureau"}
+                                 .get(service))
+                parent_id = containers.get(helper_parent) if helper_parent else None
+                expected_mode = (f"container:{parent_id}" if helper_parent
+                                 else project + "_callback_signing"
                                  if service == "passport-callback-signer"
                                  else project + "_private")
                 require(isinstance(host_config, dict)
                         and host_config.get("NetworkMode") == expected_mode
-                        and expected_mode in networks,
+                        and (isinstance(parent_id, str) and not host_config.get("PortBindings")
+                             if helper_parent else expected_mode in networks),
                         "Partial disposable container uses an unowned network mode")
                 require(isinstance(network_settings, dict),
                         "Partial disposable container network state is invalid")
                 attachments = network_settings.get("Networks")
-                expected_networks = {expected_mode}
+                expected_networks = set() if helper_parent else {expected_mode}
                 if service in {"openbao", "passport-beta-bureau"}:
                     expected_networks.add(project + "_callback_signing")
                 state = item.get("State")
@@ -472,7 +513,15 @@ def _destroy_recorded_project(
                 require(isinstance(mounts, list),
                         "Partial disposable container mounts are invalid")
                 expected_mounts = _expected_mounts(
-                    service, project, disposable_root, surface)
+                    service, project, disposable_root, surface, ceremony=False)
+                allowed_mount_sets = (expected_mounts,)
+                if ceremony is None and service in {"gateway", "signing-keys"}:
+                    allowed_mount_sets += (_expected_mounts(
+                        service, project, disposable_root, surface, ceremony=True),)
+                elif ceremony is True:
+                    expected_mounts = _expected_mounts(
+                        service, project, disposable_root, surface, ceremony=True)
+                    allowed_mount_sets = (expected_mounts,)
                 observed_mounts: set[tuple[str, str, str, bool]] = set()
                 for mount in mounts:
                     require(isinstance(mount, dict)
@@ -487,11 +536,12 @@ def _destroy_recorded_project(
                             "Partial disposable container uses an unowned mount")
                     identity = (kind, str(Path(source)) if kind == "bind" else source,
                                 mount["Destination"], mount["RW"])
-                    require(identity in expected_mounts and identity not in observed_mounts
+                    require(any(identity in allowed for allowed in allowed_mount_sets)
+                            and identity not in observed_mounts
                             and (kind != "volume" or source in volumes),
                             "Partial disposable container uses an unowned mount")
                     observed_mounts.add(identity)
-                require(observed_mounts == expected_mounts,
+                require(observed_mounts in allowed_mount_sets,
                         "Partial disposable container mount set is incomplete")
         for name, identifier in networks.items():
             item = _inspect("network", identifier, inspector)
@@ -568,6 +618,7 @@ def destroy_partial_disposable_project(
     attest: Callable[[str, str, str, str, str], bool] = _attest,
     release: Callable[..., dict] = release_inputs,
     checkout: Callable[[], tuple[str, bool]] = source_identity,
+    workflow_ref: str = WORKFLOW_REF,
 ) -> bool:
     """Clean a failed startup only after rechecking protected plan provenance.
 
@@ -579,6 +630,7 @@ def destroy_partial_disposable_project(
     plan = verify_plan_release(
         plan_path, manifest_path, plan_run_id, environment, now=now,
         attest=attest, release=release, checkout=checkout,
+        workflow_ref=workflow_ref,
     )
     project = plan.get("project")
     surface = plan.get("surface")
@@ -614,7 +666,8 @@ def destroy_partial_disposable_project(
             labels = config.get("Labels")
             _labels(labels, plan, project)
             service = labels.get("com.docker.compose.service")
-            require(item.get("Id") == identifier and service in DISPOSABLE_SERVICES
+            require(item.get("Id") == identifier
+                    and service in DISPOSABLE_SERVICES | PARTIAL_ONLY_SERVICES
                     and service not in containers,
                     "Partial disposable service identity is invalid")
             containers[service] = identifier
@@ -649,10 +702,13 @@ def destroy_partial_disposable_project(
               "source_commit": plan["source_commit"],
               "services_reference": plan["services_reference"],
               "migrations_reference": plan["migrations_reference"],
-              "legacy_reference": plan["legacy_reference"],
               "infra_images": plan["infra_images"],
               "containers": containers, "networks": networks, "volumes": volumes}
-    return _destroy_recorded_project(record, inspector, executor, complete=False)
+    return _destroy_recorded_project(
+        record, inspector, executor, complete=False,
+        ceremony=(None if workflow_ref == WORKFLOW_REF and surface == "selfhost"
+                  else workflow_ref == CERTIFICATE_WORKFLOW_REF and surface == "selfhost"),
+    )
 
 
 def issue_disposable_api_key(
@@ -662,10 +718,37 @@ def issue_disposable_api_key(
     *, ownership: Callable[..., dict] = verify_ownership,
     teardown: Callable[..., bool] = destroy_disposable_project,
 ) -> Path:
-    """Issue and extract a lease-bound key from the proven Organization container."""
+    """Issue the narrow lease-bound credential key from the owned Organization."""
+    return _issue_disposable_key(
+        record, surface, now, inspector, executor, ownership=ownership,
+        teardown=teardown, operator=False,
+    )
+
+
+def issue_disposable_operator_key(
+    record: dict, surface: str, now: datetime,
+    inspector: Callable[[list[str]], str] = docker,
+    executor: Callable[[list[str], object], bool] = _exec_docker,
+    *, ownership: Callable[..., dict] = verify_ownership,
+    teardown: Callable[..., bool] = destroy_disposable_project,
+) -> Path:
+    """Issue the separate lease-bound Flow operator key and membership."""
+    return _issue_disposable_key(
+        record, surface, now, inspector, executor, ownership=ownership,
+        teardown=teardown, operator=True,
+    )
+
+
+def _issue_disposable_key(
+    record: dict, surface: str, now: datetime,
+    inspector: Callable[[list[str]], str],
+    executor: Callable[[list[str], object], bool],
+    *, ownership: Callable[..., dict], teardown: Callable[..., bool],
+    operator: bool,
+) -> Path:
+    """Extract one key with the same private file and failure cleanup rules."""
     proof = ownership(record, surface, now, inspector)
-    require(proof.get("live_ownership_verified") is True
-            and proof.get("rollback_accepted") is False,
+    require(proof.get("live_ownership_verified") is True,
             "Disposable live ownership proof failed before key issuance")
     container = record["containers"]["organization"]
     require(RESOURCE_ID.fullmatch(container) is not None,
@@ -678,7 +761,10 @@ def issue_disposable_api_key(
     if os.name == "posix":
         require(info.st_uid == os.getuid() and stat.S_IMODE(info.st_mode) == 0o700,
                 "Disposable key directory is not private")
-    destination = secrets / "passport_acceptance_api_key"
+    name = ("passport_acceptance_operator_api_key" if operator
+            else "passport_acceptance_api_key")
+    container_key = CONTAINER_OPERATOR_KEY if operator else CONTAINER_KEY
+    destination = secrets / name
     flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_NOFOLLOW", 0)
     base = ["exec", "--user", "10001:10001", container]
     attempted = False
@@ -690,16 +776,17 @@ def issue_disposable_api_key(
         created = True
         with os.fdopen(descriptor, "wb") as output:
             attempted = True
-            require(executor([*base, KEY_COMMAND], None),
+            issue = [*base, KEY_COMMAND, "--operator"] if operator else [*base, KEY_COMMAND]
+            require(executor(issue, None),
                     "Disposable Organization key issuer failed")
-            require(executor([*base, "cat", CONTAINER_KEY], output),
+            require(executor([*base, "cat", container_key], output),
                     "Disposable Organization key extraction failed")
             output.flush()
             os.fsync(output.fileno())
         require(destination.stat().st_size == 52
                 and TEST_KEY.fullmatch(destination.read_bytes()) is not None,
                 "Disposable Organization key output is invalid")
-        erased = executor([*base, "rm", "-f", CONTAINER_KEY], None)
+        erased = executor([*base, "rm", "-f", container_key], None)
         require(erased, "Disposable Organization key erasure failed")
         succeeded = True
         return destination
@@ -711,7 +798,7 @@ def issue_disposable_api_key(
                 finally:
                     try:
                         if not erased:
-                            executor([*base, "rm", "-f", CONTAINER_KEY], None)
+                            executor([*base, "rm", "-f", container_key], None)
                     finally:
                         if created:
                             destination.unlink(missing_ok=True)

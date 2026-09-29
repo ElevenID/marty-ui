@@ -134,7 +134,7 @@ impl CredentialTemplateControlPlane for ControlPlane {
         credential_format: &str,
     ) -> Result<IssuerIdentity, ControlPlaneError> {
         assert_eq!(organization_id, "org-1");
-        assert_eq!(credential_format, "sd_jwt_vc");
+        assert!(matches!(credential_format, "sd_jwt_vc" | "icao_emrtd"));
         Ok(IssuerIdentity {
             issuer_did: requested_issuer_did
                 .unwrap_or("did:web:issuer.example")
@@ -394,4 +394,37 @@ async fn internal_metadata_fails_closed_when_the_repository_is_unavailable() {
         error,
         marty_credential_template::application::CredentialTemplateApplicationError::Repository(_)
     ));
+}
+
+#[tokio::test]
+async fn physical_passport_template_uses_the_managed_issuer_and_stays_out_of_oid4vci() {
+    let (_repository, application) = build_application(ControlPlane {
+        deny_membership: false,
+        deny_revocation: false,
+        deny_trust: false,
+    });
+    let mut physical = command();
+    physical.name = "Physical passport".into();
+    physical.credential_type = "PhysicalPassport".into();
+    physical.vct = None;
+    physical.supported_formats = vec![CredentialFormat::IcaoEmrtd];
+    physical.credential_payload_format = Some("ICAO_EMRTD".into());
+    physical.issuance_protocol = Some("PHYSICAL_DOCUMENT".into());
+    let draft = application.create_template(physical.clone()).await.unwrap();
+    assert_eq!(draft.credential_payload_format, "ICAO_EMRTD");
+    assert_eq!(draft.issuance_protocol, "PHYSICAL_DOCUMENT");
+    assert_eq!(draft.issuer_did.as_deref(), Some("did:web:issuer.example"));
+    let active = application
+        .activate_template("user-1", &draft.id, Utc::now())
+        .await
+        .unwrap();
+    assert_eq!(active.status, TemplateStatus::Active);
+    assert!(application
+        .credential_configurations_internal()
+        .await
+        .unwrap()
+        .configurations
+        .is_empty());
+    physical.issuance_protocol = Some("OID4VCI_PRE_AUTH".into());
+    assert!(application.create_template(physical).await.is_err());
 }

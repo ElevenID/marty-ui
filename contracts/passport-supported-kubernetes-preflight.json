@@ -1,0 +1,47 @@
+{
+  "schema": "marty.passport-supported-kubernetes-preflight-contract/v1",
+  "status": "blocked",
+  "owner": "supported-consumer",
+  "resources": [
+    "configmap/marty-config",
+    "deployment/gateway",
+    "deployment/flow",
+    "deployment/issuance-native",
+    "deployment/passport-callback-signer",
+    "deployment/passport-beta-bureau",
+    "service/gateway",
+    "service/flow",
+    "service/issuance-native",
+    "service/passport-callback-signer",
+    "service/passport-beta-bureau",
+    "networkpolicy/passport-acceptance-callback-signer-ingress"
+  ],
+  "rust_selectors": [
+    "PASSPORT_NATIVE_GATEWAY_ENABLED",
+    "PASSPORT_NATIVE_FLOW_ENABLED",
+    "PASSPORT_NATIVE_HTTP_ENABLED"
+  ],
+  "required_identity": [
+    "exact_context_and_cluster_name",
+    "exact_https_server_and_ca_digest",
+    "disposable_namespace_name_uid_and_source_labels",
+    "plan_run_id_and_run_bound_service_selectors",
+    "exact_configmap_deployment_and_private_service_uids",
+    "immutable_run_scoped_configmap",
+    "simulator_profile_routing_and_no_physical_provider_ingress",
+    "clusterip_without_external_ips_load_balancer_or_node_ports",
+    "run_labeled_callback_network_policy_with_exact_private_ingress",
+    "no_host_alias_custom_dns_or_proxy_routing_overrides",
+    "signed_services_image_only"
+  ],
+  "runtime_identity": [
+    "pod_replicaset_deployment_owner_uid_chain",
+    "completed_current_rollout_and_pod_created_after_configmap",
+    "all_five_private_service_endpoint_slices_match_owned_pods",
+    "approved_entrypoint_unprivileged_runtime_and_secret_only_mounts",
+    "running_rust_binary_and_routing_checked_without_emitting_environment",
+    "second_full_identity_preflight_after_runtime_probe",
+    "second_simulator_runtime_probe_after_identity_preflight"
+  ],
+  "runtime_accepted": false
+}

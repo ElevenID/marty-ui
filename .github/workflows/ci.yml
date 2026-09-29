@@ -913,7 +913,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          for database in marty_verification_contract marty_db_contracts_test marty_issuance_executable_smoke_test marty_retention_contract_test marty_passport_contract_test marty_passport_packaged_test marty_passport_bureau_test marty_passport_gateway_test; do
+          for database in marty_verification_contract marty_db_contracts_test marty_issuance_executable_smoke_test marty_retention_contract_test marty_passport_contract_test marty_passport_reconciliation_test marty_passport_packaged_test marty_passport_bureau_test marty_passport_gateway_test; do
             docker exec "${{ job.services.postgres.id }}" createdb -U postgres "$database"
           done
           docker exec --interactive "${{ job.services.postgres.id }}" \
@@ -1079,6 +1079,12 @@ jobs:
           MARTY_PASSPORT_POSTGRES_TEST_URL: postgresql://postgres:postgres@127.0.0.1:5432/marty_passport_contract_test
           MARTY_PASSPORT_PACKAGED_TEST_URL: postgresql://postgres:postgres@127.0.0.1:5432/marty_passport_packaged_test
         run: cargo test --locked -p marty-issuance-service --features passport-self-signed-test --test passport_postgres_contract
+      - name: Test beta passport reconciliation and native batch on PostgreSQL
+        working-directory: rust
+        env:
+          MARTY_PASSPORT_RECONCILIATION_TEST_URL: postgresql://postgres:postgres@127.0.0.1:5432/marty_passport_reconciliation_test
+        run: |
+          cargo test --locked -p marty-issuance-service --lib passport_http::reconciliation_tests:: -- --test-threads=1
       - name: Test native passport Gateway signed webhook on PostgreSQL
         working-directory: rust
         env:

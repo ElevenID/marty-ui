@@ -12,9 +12,9 @@ use crate::{
     },
     normalize_payload_format, render_wallet_open_uri, validate_wallet_inner_uri,
     wallet::{
-        derive_wallet_profile, matching_wallet_overrides, merge_wallet_profile,
-        merge_wallet_profile_parts, normalize_issuance_protocol, wallet_route_template,
-        DerivedWalletProfile, WalletCompatibility,
+        derive_wallet_profile, is_physical_document, matching_wallet_overrides,
+        merge_wallet_profile, merge_wallet_profile_parts, normalize_issuance_protocol,
+        wallet_route_template, DerivedWalletProfile, WalletCompatibility,
     },
     CredentialTemplateRepositoryError, DeliveryDestinationEntry, DeliveryDestinationPolicy,
     MergeStrategy, PostgresCredentialTemplateStore, RuntimeEnvironment, WalletRegistryEntry,
@@ -362,6 +362,11 @@ impl CredentialTemplateRegistryApplication {
         self.control_plane
             .require_membership(user_id, organization_id)
             .await?;
+        if is_physical_document(credential_format, issuance_protocol) {
+            return Err(CredentialTemplateApplicationError::InvalidCommand(
+                "physical documents have no wallet compatibility profile",
+            ));
+        }
         let derived = derive_wallet_profile(
             credential_format,
             issuance_protocol,
@@ -393,6 +398,11 @@ impl CredentialTemplateRegistryApplication {
             Some(&template.credential_payload_format),
             &template.supported_formats,
         )?;
+        if is_physical_document(format.canonical(), &template.issuance_protocol) {
+            return Err(CredentialTemplateApplicationError::InvalidCommand(
+                "physical documents have no wallet compatibility profile",
+            ));
+        }
         let compliance = compliance_profile_code(&template.compliance_profile)
             .or_else(|| normalize_upper(template.compliance_profile_id.as_deref()));
         let derived = derive_wallet_profile(

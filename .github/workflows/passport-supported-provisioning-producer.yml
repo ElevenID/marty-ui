@@ -1,8 +1,6 @@
 name: Passport Supported Disposable Provisioning Producer
 
-# This protected entrypoint is deliberately blocked before Docker mutation.
-# Disposable KMS transit bootstrap, issuer profiles and simulator secrets require
-# separate review before a live producer can be enabled.
+# This job produces a scoped partial Rust receipt and destroys its project.
 on:
   workflow_dispatch:
     inputs:
@@ -19,6 +17,7 @@ concurrency:
 
 permissions:
   actions: read
+  attestations: read
   contents: read
   packages: read
 
@@ -27,7 +26,7 @@ jobs:
     if: github.ref == 'refs/heads/main'
     runs-on: [self-hosted, linux, x64, canvas-oss-wsl2]
     environment: beta-lifecycle
-    timeout-minutes: 20
+    timeout-minutes: 60
     env:
       GH_TOKEN: ${{ github.token }}
       PLAN_RUN_ID: ${{ inputs.plan_run_id }}
@@ -36,7 +35,8 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
           persist-credentials: false
-      - name: Verify protected plan lineage and stop before provisioning
+      - name: Verify protected plan lineage and prepare disposable producer
+        id: prepare
         shell: bash
         run: |
           set -euo pipefail
@@ -54,13 +54,51 @@ jobs:
           case "$RELEASE_TAG" in
             *[!a-zA-Z0-9._-]*|'') echo 'Invalid release tag' >&2; exit 1 ;;
           esac
-          work="$RUNNER_TEMP/passport-supported-producer-$GITHUB_RUN_ID"
-          mkdir -p "$work"
+          work="$RUNNER_TEMP/passport-supported-producer-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT"
+          mkdir -m 700 "$work"
           gh run download "$PLAN_RUN_ID" --repo "$GITHUB_REPOSITORY" \
             --name "passport-supported-provisioning-plan-$PLAN_RUN_ID" --dir "$work"
           gh release download "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" \
             --pattern stack-manifest.json --pattern SHA256SUMS --dir "$work"
-          python3 scripts/passport_supported_provisioning_producer.py \
-            --plan "$work/passport-supported-provisioning-plan-$PLAN_RUN_ID.json" \
-            --manifest "$work/stack-manifest.json" --plan-run-id "$PLAN_RUN_ID"
-          # The Python gate exits nonzero pending governed disposable bootstrap.
+          echo "PASSPORT_PRODUCER_WORK=$work" >> "$GITHUB_ENV"
+      - name: Exercise disposable Rust routes within cleanup budget
+        id: produce
+        shell: bash
+        run: |
+          set -euo pipefail
+          timeout --signal=INT --kill-after=30s 2400s \
+            python3 scripts/passport_supported_protected_producer.py \
+            --plan "$PASSPORT_PRODUCER_WORK/passport-supported-provisioning-plan-$PLAN_RUN_ID.json" \
+            --manifest "$PASSPORT_PRODUCER_WORK/stack-manifest.json" \
+            --plan-run-id "$PLAN_RUN_ID" --gateway-port 29877 \
+            --output "$PASSPORT_PRODUCER_WORK/passport-supported-rust-producer-$GITHUB_RUN_ID.json"
+          jq -e '.schema == "marty.passport-supported-rust-producer/v1"
+                 and .status == "blocked" and .rust_routes_verified == true
+                 and .certificate_setup_passed == true
+                 and .signed_gateway_callback_verified == true
+                 and .flow_start_verified == true
+                 and .flow_execution_verified == true
+                 and .rust_restart_resume_verified == true
+                 and .source_commit == env.GITHUB_SHA
+                 and .plan_run_id == env.PLAN_RUN_ID' \
+            "$PASSPORT_PRODUCER_WORK/passport-supported-rust-producer-$GITHUB_RUN_ID.json"
+      - name: Independently verify teardown and erase staged secrets
+        id: recover
+        if: always() && steps.prepare.outcome == 'success'
+        shell: bash
+        run: |
+          set -euo pipefail
+          timeout --signal=INT --kill-after=10s 240s \
+            python3 scripts/passport_supported_protected_producer.py \
+            --plan "$PASSPORT_PRODUCER_WORK/passport-supported-provisioning-plan-$PLAN_RUN_ID.json" \
+            --manifest "$PASSPORT_PRODUCER_WORK/stack-manifest.json" \
+            --plan-run-id "$PLAN_RUN_ID" --gateway-port 29877 \
+            --output "$PASSPORT_PRODUCER_WORK/passport-supported-rust-producer-$GITHUB_RUN_ID.json" \
+            --recover-only
+      - if: steps.produce.outcome == 'success' && steps.recover.outcome == 'success'
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: passport-supported-rust-producer-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/passport-supported-producer-${{ github.run_id }}-${{ github.run_attempt }}/passport-supported-rust-producer-${{ github.run_id }}.json
+          if-no-files-found: error
+          retention-days: 30

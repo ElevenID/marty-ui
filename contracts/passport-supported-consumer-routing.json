@@ -28,13 +28,12 @@
     "disposable_selfhost_native_environment": "beta",
     "disposable_selfhost_gateway_flow_environment": "production",
     "disposable_credentials": "project_scoped_secret_files_only",
-    "legacy_beta_environment_credentials": "remain_supported_outside_disposable_model",
-    "callback_result": "native_accepted_signed_receipt_for_same_bureau_job",
+    "callback_result": "gateway_routed_native_accepted_signed_receipt_for_same_bureau_job",
     "physical_booklet_required": false
   },
   "activation_gates": [
     "released native image and beta receipt",
     "managed issuer profile and Marty simulator signed callback",
-    "base, self-host and Kubernetes runtime and rollback acceptance"
+    "base, self-host and Kubernetes Rust runtime acceptance with restart and job resume"
   ]
 }
