@@ -156,8 +156,11 @@ def fixture(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     target = {
         "authority": "discovery_only_requires_protected_baseline",
         "observation_sha256": OBSERVATION,
+        "docker": {"context": "test", "daemon_id": "daemon"},
         "beta": {
             "postgres_system_identifier": "12345", "database_oid": "87774",
+            "database_route": {"name": "elevenid-beta-network", "id": "a" * 64,
+                               "postgres_container_id": "f" * 64},
             "services": {"postgres": {"container_id": "f" * 64}},
         },
         "production": {"sha256": "1" * 64},
@@ -184,6 +187,8 @@ def test_authority_plan_binds_all_four_sources(
     assert plan["credentials_deletion_head"] == DELETION_HEAD
     assert plan["target_observation_sha256"] == OBSERVATION
     assert plan["postgres_container_id"] == "f" * 64
+    assert plan["database_route"]["postgres_container_id"] == plan["postgres_container_id"]
+    assert plan["docker"] == {"context": "test", "daemon_id": "daemon"}
     assert plan["production_snapshot_sha256"] == "1" * 64
     assert plan["verify_sql_sha256"] == hashlib.sha256(b"verify").hexdigest()
 

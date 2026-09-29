@@ -39,6 +39,8 @@ OCI_ROLES = {
 PROTECTED_FILES = (
     "deploy-config/passport-beta-fence-approved-target.json",
     "scripts/check_passport_beta_fence_authority.py",
+    "scripts/beta-deployment-lock.ps1",
+    "scripts/beta-passport-fence-legacy-boundary.ps1",
     "scripts/probe_passport_beta_fence_target.py",
     "scripts/probe_passport_beta_host.py",
     "scripts/collect_passport_beta_acceptance.py",
@@ -245,6 +247,8 @@ def check_authority(
         "credentials_deletion_head": deletion["headRefOid"],
         "target_observation_sha256": target["observation_sha256"],
         "postgres_container_id": beta["services"]["postgres"]["container_id"],
+        "docker": target["docker"],
+        "database_route": beta["database_route"],
         "postgres_system_identifier": beta["postgres_system_identifier"],
         "database_oid": beta["database_oid"],
         "install_sql_sha256": file_sha256(INSTALL),
