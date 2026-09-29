@@ -69,6 +69,12 @@ def test_beta_mutations_hold_one_lock_and_recheck_live_writers() -> None:
         'Exit-BetaDeploymentLock -Lock $betaDeploymentLock')
     assert 'Start-BetaMutation -ResumePending' in restore
     assert 'Complete-BetaMutation' in restore
+    assert restore.index('Missing beta recovery input:') < restore.index(
+        'Start-BetaMutation -ResumePending')
+    assert restore.index('Beta backup checksum mismatch:') < restore.index(
+        'Start-BetaMutation -ResumePending')
+    assert restore.index('Start-BetaMutation -ResumePending') < restore.index(
+        'Invoke-Checked docker (Get-ComposeArgs (@("stop")')
     assert deploy.index('$runningWriters = @(Get-ServiceRecords') < deploy.index(
         'Assert-NoInFlightPassportJobs\n')
     assert deploy.index('Assert-NoInFlightPassportJobs\n') < deploy.index(

@@ -77,7 +77,6 @@ foreach ($service in $physicalServices) {
     }
 }
 
-Start-BetaMutation -ResumePending
 $project = "elevenid-beta"
 $uiProject = "elevenid-beta-ui"
 $volumeHelperImage = "alpine@sha256:d9e853e87e55526f6b2917df91a2115c36dd7c696a35be12163d44e6e2a4b6bc"
@@ -470,6 +469,7 @@ $redisVolumeName = Assert-BetaVolume "elevenid-beta_redis_data"
 $applicantVolumeName = Assert-BetaVolume "elevenid-beta_applicant_data"
 $yaml -join "`n" | Set-Content -LiteralPath $restoreImages -Encoding utf8
 $composeFiles += $restoreImages
+Start-BetaMutation -ResumePending
 Invoke-Checked docker (Get-ComposeArgs (@("stop") + $applicationServices + @("keycloak")))
 if ($priorBureau.Count -eq 0 -and $currentBureau) {
     Invoke-Checked docker @("stop", $currentBureau)
