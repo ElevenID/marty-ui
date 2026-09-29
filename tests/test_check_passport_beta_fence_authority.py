@@ -188,6 +188,9 @@ def test_authority_plan_binds_all_four_sources(
     assert plan["deployed_beta_baseline"]["source_commit"] == "9" * 40
     assert plan["source"]["services_image"] != plan["deployed_beta_baseline"]["services_image"]
     assert plan["source"]["signed_manifest_verified"] is True
+    assert plan["source"]["build_only_artifacts"]["MARTY_COMMON_URI"] == (
+        "https://example.test/artifact.whl")
+    assert plan["source"]["build_only_artifacts"]["MARTY_RS_DIGEST"] == DIGEST
     assert plan["credentials_deletion_head"] == DELETION_HEAD
     assert plan["target_observation_sha256"] == OBSERVATION
     assert plan["postgres_container_id"] == "f" * 64
