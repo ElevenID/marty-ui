@@ -27,7 +27,8 @@ from scripts.stage_passport_disposable_tls import TLS_FILES, stage_tls
 from scripts.passport_supported_provisioning_producer import (
     INFRA_WORKFLOW_REF, ProducerError, WORKFLOW_REF, collect_record, destroy_disposable_project,
     destroy_partial_disposable_project,
-    issue_disposable_api_key, stage_disposable_inputs,
+    issue_disposable_api_key, issue_disposable_operator_key,
+    stage_disposable_inputs,
     verify_plan_release,
 )
 
@@ -441,6 +442,49 @@ def test_disposable_api_key_is_extracted_only_after_live_ownership(
         issue_disposable_api_key(record, "base", NOW, executor=executor,
                                  ownership=lambda *args: {"live_ownership_verified": False})
     assert len(calls) == 3
+
+
+def test_disposable_operator_key_has_separate_private_output_and_revoke_on_failure(
+    tmp_path: Path,
+) -> None:
+    secrets = tmp_path / "secrets"
+    secrets.mkdir(mode=0o700)
+    record = {"disposable_root": str(tmp_path),
+              "containers": {"organization": "e" * 64}}
+    calls: list[list[str]] = []
+
+    def executor(args: list[str], output: object) -> bool:
+        calls.append(args)
+        if args[-2:] == ["cat", producer.CONTAINER_OPERATOR_KEY]:
+            output.write(b"mk_test_" + b"b" * 43 + b"\n")
+        return True
+
+    key = issue_disposable_operator_key(
+        record, "base", NOW, executor=executor,
+        ownership=lambda *args: {"live_ownership_verified": True},
+    )
+    assert key == secrets / "passport_acceptance_operator_api_key"
+    assert key.read_bytes() == b"mk_test_" + b"b" * 43 + b"\n"
+    assert calls[0][-2:] == [producer.KEY_COMMAND, "--operator"]
+    assert calls[1][-2:] == ["cat", producer.CONTAINER_OPERATOR_KEY]
+    assert calls[2][-3:] == ["rm", "-f", producer.CONTAINER_OPERATOR_KEY]
+
+    key.unlink()
+    calls.clear()
+
+    def failed_extraction(args: list[str], output: object) -> bool:
+        calls.append(args)
+        return args[-2:] != ["cat", producer.CONTAINER_OPERATOR_KEY]
+
+    with pytest.raises(ProducerError, match="key extraction failed"):
+        issue_disposable_operator_key(
+            record, "base", NOW, executor=failed_extraction,
+            ownership=lambda *args: {"live_ownership_verified": True},
+            teardown=lambda *args: True,
+        )
+    assert calls[-2][-1] == "--revoke-run"
+    assert calls[-1][-3:] == ["rm", "-f", producer.CONTAINER_OPERATOR_KEY]
+    assert not key.exists()
 
 
 def test_disposable_api_key_failure_erases_container_copy_and_preserves_existing_file(

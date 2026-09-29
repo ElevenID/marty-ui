@@ -67,6 +67,7 @@ RESOURCE_ID = re.compile(r"[0-9a-f]{64}\Z")
 TEST_KEY = re.compile(rb"mk_test_[A-Za-z0-9]{43}\n\Z")
 KEY_COMMAND = "/usr/local/bin/marty-passport-acceptance-api-key"
 CONTAINER_KEY = "/app/data/passport-acceptance-api-key"
+CONTAINER_OPERATOR_KEY = "/app/data/passport-acceptance-operator-api-key"
 TEXT_SECRETS = frozenset({
     "bao_root_token", "marty_db_password", "signing_keys_internal_api_key",
     "dsc_issue_gateway_key", "csca_issue_gateway_key",
@@ -76,7 +77,9 @@ TEXT_SECRETS = frozenset({
 })
 STAGED_SECRETS = TEXT_SECRETS | TLS_FILES
 BOOTSTRAPPED_SECRETS = frozenset({"bao_token", "callback_signer_bao_token"})
-EPHEMERAL_SECRETS = BOOTSTRAPPED_SECRETS | frozenset({"passport_acceptance_api_key"})
+EPHEMERAL_SECRETS = BOOTSTRAPPED_SECRETS | frozenset({
+    "passport_acceptance_api_key", "passport_acceptance_operator_api_key",
+})
 DISPOSABLE_NETWORKS = frozenset({"private", "callback_signing"})
 DISPOSABLE_VOLUMES = frozenset({
     "postgres_data", "redis_data", "openbao_data", "openbao_file", "openbao_logs",
@@ -715,7 +718,35 @@ def issue_disposable_api_key(
     *, ownership: Callable[..., dict] = verify_ownership,
     teardown: Callable[..., bool] = destroy_disposable_project,
 ) -> Path:
-    """Issue and extract a lease-bound key from the proven Organization container."""
+    """Issue the narrow lease-bound credential key from the owned Organization."""
+    return _issue_disposable_key(
+        record, surface, now, inspector, executor, ownership=ownership,
+        teardown=teardown, operator=False,
+    )
+
+
+def issue_disposable_operator_key(
+    record: dict, surface: str, now: datetime,
+    inspector: Callable[[list[str]], str] = docker,
+    executor: Callable[[list[str], object], bool] = _exec_docker,
+    *, ownership: Callable[..., dict] = verify_ownership,
+    teardown: Callable[..., bool] = destroy_disposable_project,
+) -> Path:
+    """Issue the separate lease-bound Flow operator key and membership."""
+    return _issue_disposable_key(
+        record, surface, now, inspector, executor, ownership=ownership,
+        teardown=teardown, operator=True,
+    )
+
+
+def _issue_disposable_key(
+    record: dict, surface: str, now: datetime,
+    inspector: Callable[[list[str]], str],
+    executor: Callable[[list[str], object], bool],
+    *, ownership: Callable[..., dict], teardown: Callable[..., bool],
+    operator: bool,
+) -> Path:
+    """Extract one key with the same private file and failure cleanup rules."""
     proof = ownership(record, surface, now, inspector)
     require(proof.get("live_ownership_verified") is True,
             "Disposable live ownership proof failed before key issuance")
@@ -730,7 +761,10 @@ def issue_disposable_api_key(
     if os.name == "posix":
         require(info.st_uid == os.getuid() and stat.S_IMODE(info.st_mode) == 0o700,
                 "Disposable key directory is not private")
-    destination = secrets / "passport_acceptance_api_key"
+    name = ("passport_acceptance_operator_api_key" if operator
+            else "passport_acceptance_api_key")
+    container_key = CONTAINER_OPERATOR_KEY if operator else CONTAINER_KEY
+    destination = secrets / name
     flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_NOFOLLOW", 0)
     base = ["exec", "--user", "10001:10001", container]
     attempted = False
@@ -742,16 +776,17 @@ def issue_disposable_api_key(
         created = True
         with os.fdopen(descriptor, "wb") as output:
             attempted = True
-            require(executor([*base, KEY_COMMAND], None),
+            issue = [*base, KEY_COMMAND, "--operator"] if operator else [*base, KEY_COMMAND]
+            require(executor(issue, None),
                     "Disposable Organization key issuer failed")
-            require(executor([*base, "cat", CONTAINER_KEY], output),
+            require(executor([*base, "cat", container_key], output),
                     "Disposable Organization key extraction failed")
             output.flush()
             os.fsync(output.fileno())
         require(destination.stat().st_size == 52
                 and TEST_KEY.fullmatch(destination.read_bytes()) is not None,
                 "Disposable Organization key output is invalid")
-        erased = executor([*base, "rm", "-f", CONTAINER_KEY], None)
+        erased = executor([*base, "rm", "-f", container_key], None)
         require(erased, "Disposable Organization key erasure failed")
         succeeded = True
         return destination
@@ -763,7 +798,7 @@ def issue_disposable_api_key(
                 finally:
                     try:
                         if not erased:
-                            executor([*base, "rm", "-f", CONTAINER_KEY], None)
+                            executor([*base, "rm", "-f", container_key], None)
                     finally:
                         if created:
                             destination.unlink(missing_ok=True)
