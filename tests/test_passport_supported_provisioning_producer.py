@@ -869,6 +869,8 @@ def test_partial_teardown_recognizes_interrupted_certificate_helper(
         "image": plan["migrations_reference"],
         "name": f"/{project}-passport-certificate-bootstrap-1",
         "network_mode": f"container:{signer}",
+        "port_bindings": None,
+        "attachments": {},
         "mounts": [],
     }
     present = {"containers": True, "network": True}
@@ -882,6 +884,8 @@ def test_partial_teardown_recognizes_interrupted_certificate_helper(
                     "Id": signer, "Name": f"/{project}-signing-keys-1",
                     "Config": {"Image": plan["services_reference"], "Labels": {
                         **labels, "com.docker.compose.service": "signing-keys"}},
+                    "HostConfig": {"NetworkMode": network_name},
+                    "State": {"Status": "running"},
                     "NetworkSettings": {"Networks": {
                         network_name: {"NetworkID": network}}},
                     "Mounts": signer_mounts,
@@ -891,8 +895,10 @@ def test_partial_teardown_recognizes_interrupted_certificate_helper(
                 "Id": helper, "Name": state["name"],
                 "Config": {"Image": state["image"], "Labels": {
                     **labels, "com.docker.compose.service": "passport-certificate-bootstrap"}},
-                "HostConfig": {"NetworkMode": state["network_mode"]},
-                "NetworkSettings": {"Networks": {}}, "Mounts": state["mounts"],
+                "HostConfig": {"NetworkMode": state["network_mode"],
+                               "PortBindings": state["port_bindings"]},
+                "NetworkSettings": {"Networks": state["attachments"]},
+                "Mounts": state["mounts"],
             }])
         if args[:2] == ["network", "inspect"]:
             return json.dumps([{
@@ -919,6 +925,8 @@ def test_partial_teardown_recognizes_interrupted_certificate_helper(
         ("image", plan["services_reference"]),
         ("name", f"/{project}-passport-certificate-bootstrap-random"),
         ("network_mode", "bridge"),
+        ("port_bindings", {"8020/tcp": [{"HostPort": "8020"}]}),
+        ("attachments", {network_name: {"NetworkID": network}}),
         ("mounts", [{"Type": "bind", "Source": str(tmp_path),
                      "Destination": "/unowned", "RW": True}]),
     ):
