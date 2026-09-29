@@ -30,6 +30,7 @@ except ImportError:
 
 
 SHA256 = re.compile(r"[0-9a-f]{64}\Z")
+UI_REPOSITORY = "ghcr.io/elevenid/marty-ui-oss/ui"
 ROOT = Path(__file__).resolve().parents[1]
 VERIFY = ROOT / "scripts/sql/passport-beta-fence-verify.sql"
 
@@ -110,6 +111,7 @@ def prepare(
                 == stopped.get("production_snapshot_sha256"),
             "Beta maintenance receipt differs from the stopped target")
     require(native.get("source_commit") == source_commit
+            and plan.get("source_commit") == source_commit
             and native.get("maintenance_receipt_sha256") == file_sha256(maintenance_receipt)
             and native.get("postgres_container_id") == plan.get("postgres_container_id")
             and native.get("postgres_system_identifier") == plan.get("postgres_system_identifier")
@@ -140,6 +142,8 @@ def prepare(
             == f"{epoch}|{source_commit}|{digest}|false|false",
             "Committed native migrations or closed app login differ")
     verify_fence(intent, runner)
+    require(signed["manifest_sha256"] == file_sha256(stack_manifest),
+            "Signed stack manifest changed during beta handoff")
     return {
         "schema": "marty.passport-beta-aggregate-handoff/v1",
         "source_commit": source_commit,
@@ -154,8 +158,10 @@ def prepare(
         "production_snapshot_sha256": stopped["production_snapshot_sha256"],
         "stopped_container_ids": stopped["stopped_container_ids"],
         "release": signed["release"],
+        "ui_image": f"{UI_REPOSITORY}@{signed['oci_digests'][UI_REPOSITORY]}",
         "services_image": signed["services_image"],
         "issuance_image": signed["issuance_image"],
+        "migration_image": plan["migration_image"],
     }
 
 

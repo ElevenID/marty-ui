@@ -56,12 +56,15 @@ def fixture(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     monkeypatch.setattr(handoff, "manifest_source", lambda *_: {
         "release": "marty-ui@1.2.3", "services_image": "services@sha256:" + "2" * 64,
         "issuance_image": "issuance@sha256:" + "3" * 64,
+        "manifest_sha256": handoff.file_sha256(manifest),
+        "oci_digests": {handoff.UI_REPOSITORY: "sha256:" + "5" * 64},
     })
     monkeypatch.setattr(handoff, "verify_plan", lambda *args, **kwargs: {
         "verified": True, "stopped_container_ids": STOPPED,
         "production_snapshot_sha256": SNAPSHOT,
     })
     monkeypatch.setattr(handoff, "native_prepare", lambda *_: ({
+        "source_commit": HEAD,
         "postgres_container_id": CONTAINER,
         "postgres_system_identifier": "100", "database_oid": "200",
         "fence_epoch": "7", "migration_image": "image@sha256:" + "f" * 64,
@@ -85,6 +88,7 @@ def test_handoff_requires_stopped_signed_native_state(tmp_path, monkeypatch):
     assert plan["stopped_container_ids"] == STOPPED
     assert plan["native_receipt_sha256"] == handoff.file_sha256(paths[-1])
     assert plan["services_image"].startswith("services@sha256:")
+    assert plan["ui_image"] == handoff.UI_REPOSITORY + "@sha256:" + "5" * 64
 
 
 def test_handoff_rejects_changed_native_receipt(tmp_path, monkeypatch):
