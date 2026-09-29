@@ -9,6 +9,7 @@ from pathlib import Path
 import tempfile
 
 import pytest
+import yaml
 
 from scripts import check_passport_supported_compose_ownership as ownership_module
 from scripts.check_passport_supported_compose_ownership import (
@@ -46,7 +47,8 @@ SECRETS = {
     "db-migrate": ("marty_db_password", "bao_token"),
     "signing-keys": ("marty_db_password", "bao_token", "signing_keys_internal_api_key",
                      "dsc_issue_gateway_key", "csca_issue_gateway_key"),
-    "issuance": (),
+    "issuance": ("issuance_api_key", "signing_keys_internal_api_key",
+                 "physical_document_artifact_key", "grpc_service_token"),
     "revocation-profile-migrate": ("marty_db_password",),
     "revocation-profile": ("marty_db_password", "grpc_service_token"),
     "event-stream": (),
@@ -105,6 +107,24 @@ def mounts_for(service: str) -> list[dict]:
             mounts.append({"Type": "volume", "Name": f"{PROJECT}_{name}",
                            "Destination": destination, "RW": True})
     return mounts
+
+
+def test_python_rollback_mounts_match_compose_and_live_inspect() -> None:
+    compose = yaml.safe_load((Path(__file__).resolve().parents[1]
+                              / "docker-compose.passport-supported-disposable.yml")
+                             .read_text(encoding="utf-8"))
+    assert set(compose["services"]["issuance"]["secrets"]) == set(SECRETS["issuance"])
+    assert SECRETS["issuance"] == ownership_module.SECRET_MOUNTS["issuance"]
+
+    record, calls = fixture()
+    identifier = record["containers"]["issuance"]
+    key = ("container", "inspect", identifier)
+    item = json.loads(calls[key])[0]
+    item["Mounts"] = [mount for mount in item["Mounts"]
+                      if mount["Destination"] != "/run/secrets/physical_document_artifact_key"]
+    calls[key] = json.dumps([item])
+    with pytest.raises(OwnershipError, match="mount set is incomplete"):
+        run(record, calls)
 
 
 def fixture() -> tuple[dict, dict[tuple[str, ...], str]]:

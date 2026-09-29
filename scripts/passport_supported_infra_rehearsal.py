@@ -16,6 +16,7 @@ import re
 import stat
 import subprocess
 import sys
+import tempfile
 from typing import Callable
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
@@ -23,13 +24,13 @@ from services.passport_disposable_identity import managed_key_reference
 
 if __package__:
     from .passport_supported_provisioning_producer import (
-        INFRA_WORKFLOW_REF, ProducerError, _remove_staged_inputs, _write_private,
+        INFRA_WORKFLOW_REF, PROJECT, ProducerError, _remove_staged_inputs, _write_private,
         destroy_partial_disposable_project, stage_disposable_inputs,
         verify_plan_release, verify_pre_mutation,
     )
 else:
     from passport_supported_provisioning_producer import (
-        INFRA_WORKFLOW_REF, ProducerError, _remove_staged_inputs, _write_private,
+        INFRA_WORKFLOW_REF, PROJECT, ProducerError, _remove_staged_inputs, _write_private,
         destroy_partial_disposable_project, stage_disposable_inputs,
         verify_plan_release, verify_pre_mutation,
     )
@@ -185,7 +186,9 @@ def _bootstrap_args(plan: dict, root: Path, output_dir: Path,
     if not script.is_file() or not initializer.is_file():
         raise ProducerError("Disposable OpenBao bootstrap source is missing")
     return [
-        "docker", "run", "--rm", "--network", f"{project}_private",
+        "docker", "run", "--rm", "--name",
+        f"{project}-passport-openbao-bootstrap-1",
+        "--network", f"{project}_private",
         *(argument for key, value in sorted(labels.items())
           for argument in ("--label", f"{key}={value}")),
         "--mount", ("type=bind,src=" + str(root / "secrets" / "bao_root_token")
@@ -329,6 +332,36 @@ def rehearse_infrastructure(
                 _remove_staged_inputs(root)
 
 
+def recover_infrastructure(
+    plan_path: Path, manifest_path: Path, plan_run_id: str,
+    environment: dict[str, str], *,
+    teardown: Callable[..., bool] = destroy_partial_disposable_project,
+    workflow_ref: str = INFRA_WORKFLOW_REF,
+) -> None:
+    """Independently prove teardown after the bounded rehearsal step exits."""
+    plan_bytes = plan_path.read_bytes()
+    plan = json.loads(plan_bytes)
+    project = plan.get("project") if isinstance(plan, dict) else None
+    if not isinstance(project, str) or PROJECT.fullmatch(project) is None:
+        raise ProducerError("Disposable infrastructure recovery plan is invalid")
+    staged_env = _local_docker_environment(environment)
+
+    def inspector(args: list[str]) -> str:
+        return _inspect_local(args, staged_env)
+
+    if not teardown(plan_path, manifest_path, plan_run_id, environment,
+                    inspector=inspector,
+                    executor=lambda args, output: _run(["docker", *args], staged_env, 30),
+                    workflow_ref=workflow_ref):
+        raise ProducerError("Disposable infrastructure recovery is unverified")
+    if plan_path.read_bytes() != plan_bytes:
+        raise ProducerError("Disposable infrastructure recovery plan changed")
+    root = Path(tempfile.gettempdir()) / project
+    if root.exists() or root.is_symlink():
+        _remove_bootstrap_output(root / "bootstrap-output")
+        _remove_staged_inputs(root)
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--plan", type=Path, required=True)
@@ -336,8 +369,13 @@ def main() -> int:
     parser.add_argument("--plan-run-id", required=True)
     parser.add_argument("--gateway-port", type=int, required=True)
     parser.add_argument("--output", type=Path, required=True)
+    parser.add_argument("--recover-only", action="store_true")
     args = parser.parse_args()
     try:
+        if args.recover_only:
+            recover_infrastructure(args.plan, args.manifest, args.plan_run_id,
+                                   os.environ)
+            return 0
         if args.output.resolve().is_relative_to(ROOT.resolve()) or not args.output.parent.is_dir():
             raise ProducerError("Protected rehearsal output path is invalid")
         report = rehearse_infrastructure(

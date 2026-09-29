@@ -483,10 +483,20 @@ def validate_model(
         and legacy.get("SIGNING_KEYS_INTERNAL_URL") == "http://signing-keys:8017/internal"
         and legacy.get("SIGNING_KEYS_INTERNAL_API_KEY_FILE")
         == "/run/secrets/signing_keys_internal_api_key"
+        and legacy.get("PHYSICAL_DOCUMENT_ARTIFACT_KEY_FILE")
+        == "/run/secrets/physical_document_artifact_key"
+        and legacy.get("PERSONALIZATION_BUREAU_URL")
+        == "http://passport-beta-bureau:8020"
+        and legacy.get("PERSONALIZATION_BUREAU_API_KEY_FILE")
+        == "/run/secrets/grpc_service_token"
+        and legacy.get("PERSONALIZATION_BUREAU_PROVIDER_PROFILE_ID")
+        == "passport-beta-bureau"
         and {secret.get("source") for secret in services["issuance"].get("secrets", [])}
-        == {"issuance_api_key", "signing_keys_internal_api_key"}
+        == {"issuance_api_key", "signing_keys_internal_api_key",
+            "physical_document_artifact_key", "grpc_service_token"}
         and "ISSUANCE_API_KEY" not in legacy
-        and "SIGNING_KEYS_INTERNAL_API_KEY" not in legacy,
+        and "SIGNING_KEYS_INTERNAL_API_KEY" not in legacy
+        and "PHYSICAL_DOCUMENT_ARTIFACT_KEY" not in legacy,
         "Disposable Python rollback credentials or issuer resolver are invalid",
     )
     require(
