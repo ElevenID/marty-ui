@@ -336,6 +336,7 @@ def recover_infrastructure(
     plan_path: Path, manifest_path: Path, plan_run_id: str,
     environment: dict[str, str], *,
     teardown: Callable[..., bool] = destroy_partial_disposable_project,
+    workflow_ref: str = INFRA_WORKFLOW_REF,
 ) -> None:
     """Independently prove teardown after the bounded rehearsal step exits."""
     plan_bytes = plan_path.read_bytes()
@@ -351,7 +352,7 @@ def recover_infrastructure(
     if not teardown(plan_path, manifest_path, plan_run_id, environment,
                     inspector=inspector,
                     executor=lambda args, output: _run(["docker", *args], staged_env, 30),
-                    workflow_ref=INFRA_WORKFLOW_REF):
+                    workflow_ref=workflow_ref):
         raise ProducerError("Disposable infrastructure recovery is unverified")
     if plan_path.read_bytes() != plan_bytes:
         raise ProducerError("Disposable infrastructure recovery plan changed")

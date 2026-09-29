@@ -21,7 +21,7 @@ if __package__:
         _accept_bootstrap_files, _bootstrap_args, _compose_args,
         _inspect_local, _local_docker_environment, _prepare_bootstrap_output,
         _remove_bootstrap_output, _require_empty_project, _run,
-        _staged_environment, protected_job_deadline,
+        _staged_environment, protected_job_deadline, recover_infrastructure,
     )
     from .passport_supported_provisioning_producer import (
         CERTIFICATE_WORKFLOW_REF, ProducerError, _remove_staged_inputs,
@@ -35,7 +35,7 @@ else:
         _accept_bootstrap_files, _bootstrap_args, _compose_args,
         _inspect_local, _local_docker_environment, _prepare_bootstrap_output,
         _remove_bootstrap_output, _require_empty_project, _run,
-        _staged_environment, protected_job_deadline,
+        _staged_environment, protected_job_deadline, recover_infrastructure,
     )
     from passport_supported_provisioning_producer import (
         CERTIFICATE_WORKFLOW_REF, ProducerError, _remove_staged_inputs,
@@ -158,8 +158,13 @@ def main() -> int:
     parser.add_argument("--plan-run-id", required=True)
     parser.add_argument("--gateway-port", type=int, required=True)
     parser.add_argument("--output", type=Path, required=True)
+    parser.add_argument("--recover-only", action="store_true")
     args = parser.parse_args()
     try:
+        if args.recover_only:
+            recover_infrastructure(args.plan, args.manifest, args.plan_run_id,
+                                   os.environ, workflow_ref=CERTIFICATE_WORKFLOW_REF)
+            return 0
         if (args.output.resolve().is_relative_to(ROOT.resolve())
             or not args.output.parent.is_dir()):
             raise ProducerError("Protected rehearsal output path is invalid")

@@ -429,6 +429,7 @@ def _exec_docker(args: list[str], output: object = None) -> bool:
 def _destroy_recorded_project(
     record: dict, inspector: Callable[[list[str]], str],
     executor: Callable[[list[str], object], bool], *, complete: bool,
+    ceremony: bool = False,
 ) -> bool:
     """Reinspect exact resource IDs before deletion, then prove their absence."""
     project = record.get("project")
@@ -511,7 +512,7 @@ def _destroy_recorded_project(
                 require(isinstance(mounts, list),
                         "Partial disposable container mounts are invalid")
                 expected_mounts = _expected_mounts(
-                    service, project, disposable_root, surface)
+                    service, project, disposable_root, surface, ceremony=ceremony)
                 observed_mounts: set[tuple[str, str, str, bool]] = set()
                 for mount in mounts:
                     require(isinstance(mount, dict)
@@ -694,7 +695,10 @@ def destroy_partial_disposable_project(
               "legacy_reference": plan["legacy_reference"],
               "infra_images": plan["infra_images"],
               "containers": containers, "networks": networks, "volumes": volumes}
-    return _destroy_recorded_project(record, inspector, executor, complete=False)
+    return _destroy_recorded_project(
+        record, inspector, executor, complete=False,
+        ceremony=workflow_ref == CERTIFICATE_WORKFLOW_REF and surface == "selfhost",
+    )
 
 
 def issue_disposable_api_key(
