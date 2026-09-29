@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+import json
 from pathlib import Path
 import subprocess
 import time
@@ -15,6 +16,7 @@ ROOT = Path(__file__).resolve().parents[1]
 SCHEMA = ROOT / "tests/fixtures/passport-beta-fence-schema.sql"
 INSTALL = ROOT / "scripts/sql/passport-beta-fence-install.sql"
 DRAIN = ROOT / "scripts/sql/passport-beta-fence-drain.sql"
+VERIFY = ROOT / "scripts/sql/passport-beta-fence-verify.sql"
 POSTGRES_IMAGE = "postgres:15-alpine@sha256:fceb6f86328c36f2438fae3b851b0cc57c4a7e69a58c866d9ce24281f2cf0c9c"
 
 
@@ -53,7 +55,7 @@ def script_args(container: str, path: Path, *, attested: bool = True) -> list[st
         ]
     return [
         "exec", container, "psql", "-U", "postgres", "-d", "marty",
-        "-v", "ON_ERROR_STOP=1", *target,
+        "-qAt", "-v", "ON_ERROR_STOP=1", *target,
         "-f", f"/tmp/{path.name}",
     ]
 
@@ -205,6 +207,98 @@ def test_scoped_fence_and_drain(database: str):
     sql(database, "SET ROLE marty; INSERT INTO flow_service.flow_instances (id,flow_definition_id,organization_id,context,status) VALUES ('unrelated','ordinary','org','{}','in_progress')")
     assert sql(database, "SELECT count(*) FROM issuance_service.physical_document_jobs") == "1\n"
     assert sql(database, "SELECT count(*) FROM flow_service.flow_instances") == "3\n"
+    unbound_verify = script(database, VERIFY, attested=False)
+    assert unbound_verify.returncode != 0 and "target attestation" in unbound_verify.stderr
+    verified = script(database, VERIFY)
+    assert verified.returncode == 0, verified.stderr
+    receipt = json.loads(verified.stdout.splitlines()[-1])
+    assert receipt["schema"] == "marty.passport-beta-fence-verification/v1"
+    assert receipt["phase"] == "fully_fenced"
+    assert receipt["epoch"] > 0
+    assert len(receipt["functions_md5"]) == 7
+    sql(database, "ALTER TABLE issuance_service.physical_document_jobs DISABLE TRIGGER passport_fence_job")
+    drifted = script(database, VERIFY)
+    assert drifted.returncode != 0 and "trigger changed" in drifted.stderr
+    sql(database, """
+        DROP TRIGGER passport_fence_job ON issuance_service.physical_document_jobs;
+        CREATE TRIGGER passport_fence_job BEFORE DELETE
+            ON issuance_service.physical_document_jobs FOR EACH ROW
+            EXECUTE FUNCTION passport_cutover.guard_job();
+        ALTER TABLE issuance_service.physical_document_jobs
+            ENABLE ALWAYS TRIGGER passport_fence_job;
+    """)
+    narrowed = script(database, VERIFY)
+    assert narrowed.returncode != 0 and "trigger changed" in narrowed.stderr
+
+
+def test_verifier_rejects_replaced_guard_body(database: str):
+    assert script(database, INSTALL).returncode == 0
+    assert script(database, VERIFY).returncode == 0
+    sql(database, """
+        CREATE OR REPLACE FUNCTION passport_cutover.guard_job()
+        RETURNS trigger LANGUAGE plpgsql SECURITY DEFINER
+        SET search_path = pg_catalog AS $body$
+        BEGIN RETURN NEW; END
+        $body$;
+    """)
+    changed = script(database, VERIFY)
+    assert changed.returncode != 0 and "function owner or security mode changed" in changed.stderr
+
+
+def test_verifier_rejects_companion_and_column_limited_triggers(database: str):
+    assert script(database, INSTALL).returncode == 0
+    sql(database, """
+        CREATE FUNCTION flow_service.test_mutate_context()
+        RETURNS trigger LANGUAGE plpgsql AS $body$
+        BEGIN NEW.context = '{"physical_document_job":{}}'; RETURN NEW; END
+        $body$;
+        CREATE TRIGGER zzz_mark_physical BEFORE INSERT OR UPDATE
+            ON flow_service.flow_instances FOR EACH ROW
+            EXECUTE FUNCTION flow_service.test_mutate_context();
+    """)
+    extra = script(database, VERIFY)
+    assert extra.returncode != 0 and "trigger inventory changed" in extra.stderr
+    sql(database, """
+        DROP TRIGGER zzz_mark_physical ON flow_service.flow_instances;
+        DROP TRIGGER passport_fence_instance ON flow_service.flow_instances;
+        CREATE TRIGGER passport_fence_instance
+            BEFORE INSERT OR UPDATE OF context OR DELETE
+            ON flow_service.flow_instances FOR EACH ROW
+            EXECUTE FUNCTION passport_cutover.guard_instance();
+        ALTER TABLE flow_service.flow_instances
+            ENABLE ALWAYS TRIGGER passport_fence_instance;
+    """)
+    narrowed = script(database, VERIFY)
+    assert narrowed.returncode != 0 and "trigger changed" in narrowed.stderr
+
+
+def test_verifier_rejects_app_role_escalation(database: str):
+    assert script(database, INSTALL).returncode == 0
+    sql(database, "ALTER ROLE marty CREATEROLE")
+    privileged = script(database, VERIFY)
+    assert privileged.returncode != 0 and "ownership or app ACL changed" in privileged.stderr
+
+
+def test_verifier_rejects_rogue_superuser(database: str):
+    assert script(database, INSTALL).returncode == 0
+    sql(database, "CREATE ROLE rogue_beta_writer LOGIN SUPERUSER")
+    result = script(database, VERIFY)
+    assert result.returncode != 0 and "unexpected passport writer role" in result.stderr
+
+
+def test_verifier_rejects_noinherit_writer_membership(database: str):
+    assert script(database, INSTALL).returncode == 0
+    sql(database, """
+        CREATE ROLE hidden_writer NOLOGIN;
+        ALTER ROLE marty NOINHERIT;
+        GRANT TRIGGER ON flow_service.flow_instances TO hidden_writer;
+        GRANT hidden_writer TO marty;
+    """)
+    assert sql(database, """
+        SELECT has_table_privilege('marty', 'flow_service.flow_instances', 'TRIGGER')
+    """) == "f\n"
+    result = script(database, VERIFY)
+    assert result.returncode != 0 and "role attributes or memberships changed" in result.stderr
 
 
 def test_install_waits_for_prior_writer_and_rechecks_drain(database: str):

@@ -81,8 +81,10 @@ def fixture(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     }), encoding="utf-8")
     install = root / "install.sql"
     drain = root / "drain.sql"
+    verify = root / "verify.sql"
     install.write_text("install", encoding="utf-8")
     drain.write_text("drain", encoding="utf-8")
+    verify.write_text("verify", encoding="utf-8")
     for relative in authority.PROTECTED_FILES:
         path = root / relative
         if not path.exists():
@@ -98,6 +100,7 @@ def fixture(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     monkeypatch.setattr(authority, "APPROVAL", approval)
     monkeypatch.setattr(authority, "INSTALL", install)
     monkeypatch.setattr(authority, "DRAIN", drain)
+    monkeypatch.setattr(authority, "VERIFY", verify)
     values = {
         "branch": "main", "status": "", "protected": True, "remote_head": HEAD,
         "tracked": True, "custom_filter": False,
@@ -182,6 +185,7 @@ def test_authority_plan_binds_all_four_sources(
     assert plan["target_observation_sha256"] == OBSERVATION
     assert plan["postgres_container_id"] == "f" * 64
     assert plan["production_snapshot_sha256"] == "1" * 64
+    assert plan["verify_sql_sha256"] == hashlib.sha256(b"verify").hexdigest()
 
 
 def test_hidden_worktree_change_cannot_replace_protected_approval(
@@ -189,6 +193,19 @@ def test_hidden_worktree_change_cannot_replace_protected_approval(
 ) -> None:
     approval, manifest, values, target, runner = fixture(tmp_path, monkeypatch)
     approval.write_text(approval.read_text(encoding="utf-8") + " ", encoding="utf-8")
+    with pytest.raises(HostProbeError, match="content differs"):
+        authority.check_authority(approval, manifest, values["baseline"], runner, lambda: target,
+                                  lambda path, digests, commit: True,
+                                  lambda image, commit, version: True)
+
+
+def test_hidden_worktree_change_cannot_replace_verifier(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    approval, manifest, values, target, runner = fixture(tmp_path, monkeypatch)
+    (authority.ROOT / "scripts/sql/passport-beta-fence-verify.sql").write_text(
+        "altered", encoding="utf-8"
+    )
     with pytest.raises(HostProbeError, match="content differs"):
         authority.check_authority(approval, manifest, values["baseline"], runner, lambda: target,
                                   lambda path, digests, commit: True,

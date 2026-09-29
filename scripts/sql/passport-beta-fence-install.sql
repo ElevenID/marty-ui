@@ -188,6 +188,21 @@ BEGIN
 END
 $function$;
 
+ALTER FUNCTION passport_cutover.phase()
+    OWNER TO marty_passport_fence_owner;
+ALTER FUNCTION passport_cutover.physical_definition(text)
+    OWNER TO marty_passport_fence_owner;
+ALTER FUNCTION passport_cutover.physical_context(json)
+    OWNER TO marty_passport_fence_owner;
+ALTER FUNCTION passport_cutover.guard_job()
+    OWNER TO marty_passport_fence_owner;
+ALTER FUNCTION passport_cutover.guard_definition()
+    OWNER TO marty_passport_fence_owner;
+ALTER FUNCTION passport_cutover.guard_instance()
+    OWNER TO marty_passport_fence_owner;
+ALTER FUNCTION passport_cutover.guard_truncate()
+    OWNER TO marty_passport_fence_owner;
+
 REVOKE ALL ON ALL FUNCTIONS IN SCHEMA passport_cutover FROM PUBLIC;
 REVOKE ALL ON ALL TABLES IN SCHEMA passport_cutover FROM PUBLIC;
 

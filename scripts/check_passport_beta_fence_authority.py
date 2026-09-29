@@ -27,6 +27,7 @@ ROOT = Path(__file__).resolve().parents[1]
 APPROVAL = ROOT / "deploy-config/passport-beta-fence-approved-target.json"
 INSTALL = ROOT / "scripts/sql/passport-beta-fence-install.sql"
 DRAIN = ROOT / "scripts/sql/passport-beta-fence-drain.sql"
+VERIFY = ROOT / "scripts/sql/passport-beta-fence-verify.sql"
 SHA = re.compile(r"[0-9a-f]{40}\Z")
 SHA256 = re.compile(r"[0-9a-f]{64}\Z")
 DIGEST = re.compile(r"sha256:[0-9a-f]{64}\Z")
@@ -44,6 +45,7 @@ PROTECTED_FILES = (
     "scripts/prepare_official_beta_release.py",
     "scripts/sql/passport-beta-fence-install.sql",
     "scripts/sql/passport-beta-fence-drain.sql",
+    "scripts/sql/passport-beta-fence-verify.sql",
 )
 
 
@@ -247,6 +249,7 @@ def check_authority(
         "database_oid": beta["database_oid"],
         "install_sql_sha256": file_sha256(INSTALL),
         "drain_sql_sha256": file_sha256(DRAIN),
+        "verify_sql_sha256": file_sha256(VERIFY),
         "production_snapshot_sha256": target["production"]["sha256"],
     }
 
