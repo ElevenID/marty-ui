@@ -20,7 +20,7 @@ try:
     from .probe_passport_beta_fence_target import REQUIRED_SERVICES, observe_fenced
     from .probe_passport_beta_host import (
         BETA_PROJECT, HostProbeError, beta_psql, ids, inspect,
-        production_snapshot, run,
+        production_attachment_sha256, production_snapshot, run,
     )
 except ImportError:
     from check_passport_beta_fence_authority import (
@@ -33,7 +33,7 @@ except ImportError:
     from probe_passport_beta_fence_target import REQUIRED_SERVICES, observe_fenced
     from probe_passport_beta_host import (
         BETA_PROJECT, HostProbeError, beta_psql, ids, inspect,
-        production_snapshot, run,
+        production_attachment_sha256, production_snapshot, run,
     )
 
 
@@ -42,6 +42,7 @@ START = "scripts/sql/passport-beta-db-maintenance-start.sql"
 VERIFY = "scripts/sql/passport-beta-fence-verify.sql"
 DOCKER_ID = re.compile(r"[0-9a-f]{64}\Z")
 SHA256 = re.compile(r"[0-9a-f]{64}\Z")
+PRESERVED_SERVICES = frozenset({"postgres", "openbao"})
 
 
 def require(condition: bool, message: str) -> None:
@@ -84,6 +85,8 @@ def running_beta_generation(
     require(sum(item["container_id"] == postgres_id and item["service"] == "postgres"
                 for item in result) == 1,
             "Fenced PostgreSQL is not the sole beta database container")
+    require("openbao" in seen_services,
+            "Fenced beta OpenBao is absent from the preserved generation")
     return sorted(result, key=lambda item: item["service"])
 
 
@@ -151,10 +154,11 @@ def prepare(
         "database_oid": receipt_target["database_oid"],
         "fence_epoch": receipt_target["fence_epoch"],
         "production_snapshot_sha256": production["sha256"],
+        "production_attachments_sha256": production_attachment_sha256(runner),
         "post_install_observation_sha256": observed["observation_sha256"],
         "beta_generation": generation,
         "stop_container_ids": [item["container_id"] for item in generation
-                               if item["service"] != "postgres"],
+                               if item["service"] not in PRESERVED_SERVICES],
     }
 
 
@@ -199,6 +203,9 @@ def verify_plan(
     production = production_snapshot(runner)
     require(production.get("sha256") == plan.get("production_snapshot_sha256"),
             "Production changed during beta maintenance")
+    require(production_attachment_sha256(runner)
+            == plan.get("production_attachments_sha256"),
+            "Production network or ports changed during beta maintenance")
     generation = plan.get("beta_generation")
     require(isinstance(generation, list) and generation,
             "Maintenance beta generation is invalid")
@@ -231,11 +238,13 @@ def verify_plan(
                 and isinstance(state, dict)
                 and state.get("StartedAt") == item.get("started_at"),
                 "Beta container identity changed during maintenance")
-        if item["service"] == "postgres":
-            require(container_id == receipt["container_id"]
-                    and state.get("Running") is True
+        if item["service"] in PRESERVED_SERVICES:
+            if item["service"] == "postgres":
+                require(container_id == receipt["container_id"],
+                        "Fenced beta PostgreSQL stopped or changed")
+            require(state.get("Running") is True
                     and state.get("Status") == "running",
-                    "Fenced beta PostgreSQL stopped or changed")
+                    f"Preserved beta {item['service']} stopped or changed")
         elif state.get("Running") is False and state.get("Status") == "exited":
             stopped.append(container_id)
         else:
@@ -243,7 +252,7 @@ def verify_plan(
                     and state.get("Status") == "running",
                     "Beta service is not in an allowed maintenance state")
     expected_stops = [item["container_id"] for item in generation
-                      if item["service"] != "postgres"]
+                      if item["service"] not in PRESERVED_SERVICES]
     require(plan.get("stop_container_ids") == expected_stops,
             "Maintenance stop inventory changed")
     identity = beta_psql(
@@ -256,7 +265,8 @@ def verify_plan(
     return {"schema": "marty.passport-beta-db-maintenance-state/v1",
             "verified": True, "stopped_container_ids": stopped,
             "postgres_container_id": receipt["container_id"],
-            "production_snapshot_sha256": production["sha256"]}
+            "production_snapshot_sha256": production["sha256"],
+            "production_attachments_sha256": plan["production_attachments_sha256"]}
 
 
 def main() -> None:

@@ -111,7 +111,7 @@ function Stop-BetaGeneration {
     $ordered = @($Plan.beta_generation | Where-Object { $_.service -in $ingress } |
         Sort-Object { [Array]::IndexOf($ingress, [string]$_.service) }) +
         @($Plan.beta_generation | Where-Object {
-            $_.service -ne 'postgres' -and $_.service -notin $ingress
+            $_.service -notin @('postgres', 'openbao') -and $_.service -notin $ingress
         })
     foreach ($service in $ordered) {
         $id = [string]$service.container_id
@@ -234,6 +234,7 @@ try {
         fence_epoch = $epoch
         stopped_container_ids = $plan.stop_container_ids
         production_snapshot_sha256 = $final.production_snapshot_sha256
+        production_attachments_sha256 = $final.production_attachments_sha256
         intent_sha256 = (Get-FileHash -LiteralPath $intentAbsolute -Algorithm SHA256).Hash.ToLowerInvariant()
     }
     Write-DurableJson -Path $outputAbsolute `
