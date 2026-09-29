@@ -15,6 +15,7 @@ UI_HEAD = "a" * 40
 DELETION_HEAD = "b" * 40
 ISSUANCE = "ghcr.io/elevenid/issuance@sha256:" + "c" * 64
 SERVICES = "ghcr.io/elevenid/services@sha256:" + "d" * 64
+UI = "ghcr.io/elevenid/ui@sha256:" + "1" * 64
 
 
 def fixture(tmp_path: Path):
@@ -30,7 +31,8 @@ def fixture(tmp_path: Path):
         "production_attachments_sha256": "f" * 64,
         "beta": {
             "postgres_system_identifier": "12345", "database_oid": "87774",
-            "ui_project": "elevenid-beta-ui", "ui_service": {},
+            "ui_project": "elevenid-beta-ui",
+            "ui_service": {"configured_image": UI},
             "services": {
                 "issuance": {"configured_image": ISSUANCE},
                 **{name: {"configured_image": SERVICES} for name in
@@ -40,6 +42,7 @@ def fixture(tmp_path: Path):
     }
     signed = {
         "source_commit": UI_HEAD, "issuance_image": ISSUANCE,
+        "ui_image": UI,
         "services_image": SERVICES,
     }
     deletion = {"state": "OPEN", "isDraft": True,
@@ -64,6 +67,8 @@ def test_prepare_binds_signed_live_target_and_deletion(tmp_path: Path) -> None:
     lambda target: target["beta"]["services"]["issuance"].update(
         configured_image="unreviewed-image"),
     lambda target: target["beta"]["services"].update(gateway=None),
+    lambda target: target["beta"]["ui_service"].update(
+        configured_image="unreviewed-ui"),
     lambda target: target["beta"].update(database_oid=None),
     lambda target: target.update(beta=None),
     lambda target: target.update(observation_sha256="bad"),

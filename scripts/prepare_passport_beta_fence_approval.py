@@ -69,7 +69,9 @@ def prepare(
                     == baseline["services_image"] for name in
                     ("gateway", "flow", "issuance-native", "signing-keys"))
             and beta.get("ui_project") == "elevenid-beta-ui"
-            and isinstance(beta.get("ui_service"), dict),
+            and isinstance(beta.get("ui_service"), dict)
+            and beta["ui_service"].get("configured_image")
+                == baseline["ui_image"],
             "Live beta target differs from signed deployed baseline")
     require(re.fullmatch(r"[0-9a-f]{64}",
                          str(target.get("observation_sha256"))) is not None
