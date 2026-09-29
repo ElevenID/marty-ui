@@ -22,7 +22,8 @@ from scripts.collect_passport_beta_acceptance import (
 
 def test_required_beta_probes_freeze_rust_only_set() -> None:
     assert set(REQUIRED_PROBES) == {
-        "managed_csca_dsc_chain", "sod_signature", "nine_route_gateway_flow",
+        "managed_csca_dsc_chain", "sod_signature", "simulator_material_receipt",
+        "nine_route_gateway_flow",
         "packaged_image", "physical_bureau_submission", "physical_bureau_batch",
         "signed_bureau_callback", "legacy_drain", "production_isolation",
         "physical_claim_boundary", "recorded_demo",

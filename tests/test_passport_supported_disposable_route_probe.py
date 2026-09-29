@@ -65,6 +65,8 @@ class Opener:
                     else None)}
         if state == "SOD_SIGNED":
             body.update(sod_sha256="f" * 64, sod_signature_verified=True)
+        if state == "SUBMITTED":
+            body["sod_sha256"] = "f" * 64
         if state == "READY_FOR_ACTIVATION":
             body["quality_result"] = {"passed": True}
         if state == "ACTIVE":

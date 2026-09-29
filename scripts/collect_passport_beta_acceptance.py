@@ -35,7 +35,8 @@ PHYSICAL_SERVICES = ("gateway", "flow", "issuance-native", "signing-keys",
 PASSPORT_PROFILE_SERVICES = set(SERVICES) | set(PHYSICAL_SERVICES)
 OPTIONAL_SERVICES = ("passport-provider-ingress",)
 REQUIRED_PROBES = (
-    "managed_csca_dsc_chain", "sod_signature", "nine_route_gateway_flow",
+    "managed_csca_dsc_chain", "sod_signature", "simulator_material_receipt",
+    "nine_route_gateway_flow",
     "packaged_image", "physical_bureau_submission", "physical_bureau_batch",
     "signed_bureau_callback",
     "legacy_drain", "production_isolation", "physical_claim_boundary",

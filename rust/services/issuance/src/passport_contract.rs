@@ -270,6 +270,7 @@ impl PassportApplicationRequest {
             applicant: Value::Object(self.applicant.clone()),
             mrz: self.mrz.clone(),
             data_groups: self.data_groups.clone(),
+            signed_material: None,
         }
     }
 }
@@ -941,6 +942,18 @@ mod tests {
             sod_sha256: Some("secret-sod".into()),
             bureau_job_id: None,
             bureau_provider_profile_id: None,
+            submission_intent_id: None,
+            submission_intent_started_at: None,
+            submission_intent_provider_profile_id: None,
+            submission_intent_bureau_endpoint_sha256: None,
+            submission_intent_signing_provenance: None,
+            submission_batch_id: None,
+            submission_batch_selected_flow_instance_id: None,
+            submission_batch_selected_job_id: None,
+            submission_batch_companion_job_id: None,
+            submission_batch_signing_provenance: None,
+            submission_batch_bureau_endpoint_sha256: None,
+            submission_batch_material_digests: None,
             tracking_number: None,
             status: "DRAFT".into(),
             quality_result: None,

@@ -47,6 +47,8 @@ def responses(*, wrong_job: bool = False, denied_status: int = 422,
                    "bureau_job_id": job}
         if state == "SOD_SIGNED":
             payload.update(sod_sha256="f" * 64, sod_signature_verified=True)
+        if state == "SUBMITTED":
+            payload["sod_sha256"] = "f" * 64
         if state == "READY_FOR_ACTIVATION":
             payload["quality_result"] = {"passed": True}
         if state == "ACTIVE":

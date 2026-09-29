@@ -95,7 +95,10 @@ def test_selfhost_flow_keeps_legacy_default_until_beta_profile_selects_native() 
         assert beta_flow["PASSPORT_NATIVE_FLOW_ENABLED"] == "true"
     connections = (ROOT / "rust/services/flow/src/connections.rs").read_text()
     assert "HttpFlowReferenceProvider::new(\n        &config.issuance_native_url," in connections
-    assert "HttpPhysicalDocumentProvider::new_tenant_bound(&config.issuance_native_url, keys)" in connections
+    assert ("HttpPhysicalDocumentProvider::new_tenant_bound_with_service_token(\n"
+            "            &config.issuance_native_url,\n"
+            "            keys,\n"
+            "            config.service_token.as_deref(),") in connections
     assert "HttpPhysicalDocumentProvider::new(\n            &config.issuance_url," in connections
     config = (ROOT / "rust/services/flow/src/config.rs").read_text()
     assert "if passport_native_flow_enabled && issuance_native_url == issuance_url" in config

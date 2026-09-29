@@ -94,6 +94,12 @@ PRESENTATION = {
         ["Administrator", "Integrator"],
         ["https-webhooks"],
     ),
+    "physical-passport-issuance-evidence": (
+        "Passport Issuance Simulator Evidence",
+        "Follow one synthetic passport job through managed issuer profiles, nine Rust Flow steps, and Marty's signed bureau simulator callback.",
+        ["Passport software reviewer", "Issuer operator", "Security architect"],
+        ["https-webhooks"],
+    ),
 }
 
 LEGACY_PRESENTATION = {
@@ -293,6 +299,43 @@ def draft_scenario(contract: dict[str, object]) -> dict[str, object]:
                 ],
             }
         )
+    if slug == "physical-passport-issuance-evidence":
+        scenario.update(
+            {
+                "capabilities": [
+                    "Distinct KMS-backed CSCA and DSC issuer profiles",
+                    "Nine-step Rust passport Flow",
+                    "Correlated Marty bureau simulator job",
+                    "Signed native personalization callback",
+                    "Unsigned and foreign-organization callback denial",
+                    "Physical claim: not claimed; no booklet verified",
+                ],
+                "transcript": {
+                    "language": "en",
+                    "segments": [
+                        {"start_seconds": 0, "speaker": "Narrator", "text": "One synthetic passport job uses distinct KMS-backed CSCA and DSC issuer profiles."},
+                        {"start_seconds": 12, "speaker": "Narrator", "text": "The live Rust Flow completes nine ordered passport issuance steps for that job."},
+                        {"start_seconds": 24, "speaker": "Narrator", "text": "Marty's bureau simulator returns a correlated job and signs the native callback."},
+                        {"start_seconds": 36, "speaker": "Narrator", "text": "Unsigned and foreign-organization callbacks are denied without changing the job."},
+                        {"start_seconds": 48, "speaker": "Narrator", "text": "Physical claim: not claimed. No physical booklet has been verified."},
+                    ],
+                },
+                "chapters": [
+                    {"start_seconds": 0, "title": "Managed passport issuer profiles", "role": "Issuer operator", "mip_primitives": ["Issuer profiles", "KMS signing"], "standards": ["ICAO eMRTD"], "documentation_links": [{"label": "Marty API", "href": "/docs/api"}]},
+                    {"start_seconds": 12, "title": "Nine-step Rust passport Flow", "role": "Passport software reviewer", "mip_primitives": ["Issuance Flow"], "standards": ["ICAO eMRTD"], "documentation_links": [{"label": "Marty API", "href": "/docs/api"}]},
+                    {"start_seconds": 24, "title": "Signed Marty simulator callback", "role": "Security architect", "mip_primitives": ["Personalization callback"], "standards": ["HTTPS", "HMAC-SHA256"], "documentation_links": [{"label": "Marty API", "href": "/docs/api"}]},
+                    {"start_seconds": 36, "title": "Callback denial and physical claim boundary", "role": "Security architect", "mip_primitives": ["Organization binding"], "standards": ["HTTPS", "HMAC-SHA256"], "documentation_links": [{"label": "Marty API", "href": "/docs/api"}]},
+                ],
+                "assertions": [
+                    {"id": item, "label": label(item), "result": "NOT_RUN", "evidence_sha256": None}
+                    for item in paths
+                ],
+                "limitations": [
+                    "Beta simulator evidence covers passport software only. Physical claim is not claimed and no booklet has been verified.",
+                    "Fresh source-bound recording, callback denial evidence, privacy review, and YouTube publication are required before this scenario can be published.",
+                ],
+            }
+        )
     return scenario
 
 
@@ -400,7 +443,7 @@ def build_manifest() -> dict[str, object]:
         "release_differences": {
             "previous_stack_version": "2026.07.0",
             "ux": [
-                "Adds an eleven-scenario release catalog, including a gateway-only external admissions integration, without removing historical wallet demonstrations."
+                "Adds a twelve-scenario release catalog, including gateway-only external admissions and beta passport simulator evidence, without removing historical wallet demonstrations."
             ],
             "services": [
                 "Qualifies the Rust-native platform through explicit happy and denial paths."

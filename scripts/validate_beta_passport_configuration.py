@@ -768,6 +768,23 @@ def validate_model(model, *, passport_enabled, files, physical_provider=False,
                     "Beta passport tenant keyring is forbidden"
                 )
         native = environment(targets["issuance-native"])
+        operator_token = native.get("PASSPORT_BETA_RECONCILIATION_OPERATOR_TOKEN")
+        if (
+            native.get("ENVIRONMENT") != "beta"
+            or str(native.get("PASSPORT_BETA_RECONCILIATION_ENABLED", "false")).lower()
+            != "true"
+            or not valid_operator_credential(operator_token)
+            or operator_token == native.get("GRPC_SERVICE_TOKEN")
+            or operator_token == native.get("SIGNING_KEYS_INTERNAL_API_KEY")
+            or any(
+                contains_credential(service, operator_token)
+                for name, service in services.items()
+                if name != "issuance-native"
+            )
+        ):
+            raise PassportConfigurationError(
+                "Beta passport reconciliation operator binding is invalid"
+            )
         for name in (
             "PASSPORT_MANAGED_ISSUER_SIGNING_ENABLED",
             "PASSPORT_KMS_ARTIFACTS_ENABLED",
