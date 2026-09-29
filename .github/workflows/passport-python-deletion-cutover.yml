@@ -53,18 +53,28 @@ jobs:
           test "$DELETION_HEAD" = "$(gh api repos/ElevenID/marty-credentials/pulls/305 --jq .head.sha)"
           test -f "$FENCE_RECEIPT"
           work="$RUNNER_TEMP/passport-final-cutover-$GITHUB_RUN_ID"
-          mkdir -p "$work/supported" "$work/predeletion"
+          mkdir -p "$work/supported" "$work/predeletion" "$work/installation"
           gh run download "$SUPPORTED_RUN" --repo ElevenID/marty-ui \
             --name "passport-supported-consumer-acceptance-$SUPPORTED_RUN" \
             --dir "$work/supported"
           gh run download "$PREDELETION_RUN" --repo ElevenID/marty-ui \
             --name "passport-rust-predeletion-acceptance-$PREDELETION_RUN" \
             --dir "$work/predeletion"
+          gh run download "$PREDELETION_RUN" --repo ElevenID/marty-ui \
+            --name "passport-beta-fence-installation-$PREDELETION_RUN" \
+            --dir "$work/installation"
           supported="$work/supported/passport-supported-consumer-acceptance-$SUPPORTED_RUN.json"
           predeletion="$work/predeletion/passport-rust-predeletion-acceptance-$PREDELETION_RUN.json"
+          installation="$work/installation/passport-beta-fence-installation-$PREDELETION_RUN.json"
           snapshot="$work/passport-beta-cutover-snapshot-$GITHUB_RUN_ID.json"
           report="$work/passport-python-deletion-cutover-$GITHUB_RUN_ID.json"
-          test -f "$supported" && test -f "$predeletion"
+          test -f "$supported" && test -f "$predeletion" && test -f "$installation"
+          test "$(find "$work/installation" -maxdepth 1 -type f | wc -l)" -eq 1
+          cmp -- "$installation" "$FENCE_RECEIPT"
+          gh attestation verify "$installation" --repo ElevenID/marty-ui \
+            --signer-workflow ElevenID/marty-ui/.github/workflows/passport-rust-predeletion-acceptance.yml \
+            --source-digest "$GITHUB_SHA" --source-ref refs/heads/main
+          cmp -- "$installation" "$FENCE_RECEIPT"
           python3 scripts/probe_passport_beta_cutover_snapshot.py \
             --fence-installation-receipt "$FENCE_RECEIPT" --output "$snapshot"
           python3 scripts/collect_passport_python_deletion_cutover.py \

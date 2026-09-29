@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 from datetime import datetime, timezone
+import hashlib
+import json
 
 import pytest
 
@@ -84,6 +86,8 @@ def fixture():
     predeletion = {
         "schema": "marty.passport-rust-predeletion-acceptance/v1",
         "status": "accepted", "release": {"source_commit": HEAD},
+        "fence_installation_receipt_sha256": hashlib.sha256(
+            (json.dumps(installation, sort_keys=True) + "\n").encode()).hexdigest(),
         "probes": {"legacy_drain": {"evidence": {
             "legacy_source": legacy, "passport_write_fence": fence,
         }}},
@@ -106,6 +110,8 @@ def run(supported, predeletion, snapshot, installation):
         supported=supported, predeletion=predeletion,
         snapshot=snapshot, snapshot_file_sha256="9" * 64,
         installation=installation,
+        installation_file_sha256=hashlib.sha256(
+            (json.dumps(installation, sort_keys=True) + "\n").encode()).hexdigest(),
         checked_at=datetime(2026, 9, 29, 3, 30, tzinfo=timezone.utc),
     )
 
@@ -115,7 +121,7 @@ def test_final_report_matches_predeletion_writer_and_zero_counts():
     report = run(supported, predeletion, snapshot, installation)
     assert report["status"] == "accepted"
     assert report["legacy_source"]["writer_container_id"] == WRITER
-    assert report["legacy_source"]["final_watermark"] == 200
+    assert report["legacy_source"]["final_watermark"] == 190
     assert report["write_fence"]["direct_database_probe"] == (
         snapshot["direct_database_probe"])
 
@@ -153,4 +159,11 @@ def test_same_drain_snapshot_attestation_is_rejected():
     predeletion["probes"]["legacy_drain"]["evidence"]["legacy_source"][
         "drain_snapshot_attestation_sha256"] = "9" * 64
     with pytest.raises(producer.HostProbeError, match="predeletion acceptance"):
+        run(supported, predeletion, snapshot, installation)
+
+
+def test_unbound_fence_installation_is_rejected():
+    supported, predeletion, snapshot, installation = fixture()
+    predeletion["fence_installation_receipt_sha256"] = "f" * 64
+    with pytest.raises(producer.HostProbeError, match="attested predeletion installation"):
         run(supported, predeletion, snapshot, installation)

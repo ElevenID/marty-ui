@@ -68,13 +68,18 @@ def collect(
     supported_run_id: int, predeletion_run_id: int,
     supported: dict[str, Any], predeletion: dict[str, Any],
     snapshot: dict[str, Any], snapshot_file_sha256: str,
-    installation: dict[str, Any], checked_at: datetime,
+    installation: dict[str, Any], installation_file_sha256: str,
+    checked_at: datetime,
 ) -> dict[str, Any]:
     require(SHA.fullmatch(source_commit) is not None
             and SHA.fullmatch(deletion_head) is not None
             and type(run_id) is int and run_id > 0
             and SHA256.fullmatch(snapshot_file_sha256) is not None,
             "Protected cutover source or snapshot identity is invalid")
+    require(SHA256.fullmatch(installation_file_sha256) is not None
+            and predeletion.get("fence_installation_receipt_sha256")
+                == installation_file_sha256,
+            "Protected fence receipt differs from attested predeletion installation")
     require(supported.get("schema") == "marty.passport-supported-consumer-acceptance/v1"
             and supported.get("status") == "accepted"
             and supported.get("source_commit") == source_commit
@@ -130,8 +135,11 @@ def collect(
     require(isinstance(prior_probe, dict) and isinstance(final_probe, dict)
             and isinstance(counts, dict)
             and type(legacy.get("drain_watermark")) is int
+            and type(final_probe.get("observation_watermark")) is int
+            and final_probe["observation_watermark"] > legacy["drain_watermark"]
             and type(snapshot.get("observation_watermark")) is int
-            and snapshot["observation_watermark"] > legacy["drain_watermark"]
+            and snapshot["observation_watermark"]
+                > final_probe["observation_watermark"]
             and SHA256.fullmatch(str(prior_probe.get("receipt_sha256"))) is not None
             and SHA256.fullmatch(str(final_probe.get("receipt_sha256"))) is not None
             and final_probe["receipt_sha256"] != prior_probe["receipt_sha256"]
@@ -188,7 +196,7 @@ def collect(
             "writer_generation": snapshot["writer_generation"],
             "writer_container_id": snapshot["writer_container_id"],
             "writer_running": True,
-            "final_watermark": snapshot["observation_watermark"],
+            "final_watermark": final_probe["observation_watermark"],
             "final_snapshot_attestation_sha256": snapshot_file_sha256,
         },
         "counts": {
@@ -252,13 +260,27 @@ def main() -> int:
             args.predeletion_run_id,
             ".github/workflows/passport-rust-predeletion-acceptance.yml",
             source, command)
+        current_run = json.loads(command([
+            "gh", "api", f"repos/ElevenID/marty-ui/actions/runs/{run_id}",
+        ]))
+        require(isinstance(current_run, dict)
+                and current_run.get("id") == run_id
+                and current_run.get("event") == "workflow_dispatch"
+                and current_run.get("path")
+                    == ".github/workflows/passport-python-deletion-cutover.yml"
+                and current_run.get("head_branch") == "main"
+                and current_run.get("head_sha") == source
+                and isinstance(current_run.get("repository"), dict)
+                and current_run["repository"].get("full_name") == "ElevenID/marty-ui",
+                "Final cutover workflow identity is invalid")
+        final_started = utc(current_run.get("created_at"))
         require(supported_started < supported_completed < predeletion_started
-                < predeletion_completed < datetime.now(timezone.utc),
+                < predeletion_completed < final_started < datetime.now(timezone.utc),
                 "Protected acceptance did not precede final cutover")
         supported, _ = read(args.supported_report)
         predeletion, _ = read(args.predeletion_report)
         snapshot, snapshot_file_sha256 = read(args.snapshot)
-        installation, _ = read(args.installation_receipt)
+        installation, installation_file_sha256 = read(args.installation_receipt)
         result = collect(
             source_commit=source, run_id=run_id,
             deletion_head=args.deletion_head,
@@ -267,6 +289,7 @@ def main() -> int:
             supported=supported, predeletion=predeletion,
             snapshot=snapshot, snapshot_file_sha256=snapshot_file_sha256,
             installation=installation,
+            installation_file_sha256=installation_file_sha256,
             checked_at=datetime.now(timezone.utc),
         )
         args.output.write_text(json.dumps(result, sort_keys=True, indent=2) + "\n",
