@@ -18,7 +18,7 @@ else:
 
 
 STACK_VERSION = re.compile(r"^\d{4}\.\d{2}\.\d+$")
-MIP_VERSION = re.compile(r"^\d+\.\d+\.\d+$")
+MIP_VERSION = re.compile(r"^\d+\.\d+\.\d+(?:-beta\.\d+)?$")
 GIT_REVISION = re.compile(r"^[a-f0-9]{40}$")
 SHA256 = re.compile(r"^[a-f0-9]{64}$")
 DIGEST = re.compile(r"^sha256:[a-f0-9]{64}$")
@@ -62,6 +62,12 @@ HISTORICAL_2026_07_SCENARIOS = {
 PORTFOLIO_PATH = Path(__file__).resolve().parents[1] / "deploy-config" / "catalog" / "demo-portfolio-v3.json"
 PORTFOLIO = json.loads(PORTFOLIO_PATH.read_text(encoding="utf-8"))
 PORTFOLIO_SCENARIOS = {scenario["slug"] for scenario in PORTFOLIO["scenarios"]}
+CANDIDATE_SCENARIOS = {
+    scenario["slug"]: scenario for scenario in PORTFOLIO.get("candidate_scenarios", [])
+}
+CANDIDATE_SCENARIOS_BY_ID = {
+    scenario["demo_id"]: scenario for scenario in CANDIDATE_SCENARIOS.values()
+}
 PRESERVED_LEGACY_SCENARIOS = set(PORTFOLIO["preserved_legacy_scenarios"])
 SCENARIO_PUBLICATION_CHECKS = {
     "accessibility", "captions", "evidence", "links", "playback", "privacy", "thumbnail", "transcript",
@@ -222,6 +228,23 @@ def validate_manifest(manifest: dict[str, Any]) -> None:
     require(isinstance(scenarios, list) and scenarios, "scenarios cannot be empty")
     slugs = [scenario.get("slug") for scenario in scenarios]
     require(len(slugs) == len(set(slugs)), "scenario slugs must be unique")
+    for scenario in scenarios:
+        slug = scenario.get("slug")
+        demo_id = scenario.get("demo_id")
+        candidate = CANDIDATE_SCENARIOS.get(slug) or CANDIDATE_SCENARIOS_BY_ID.get(demo_id)
+        if candidate is not None:
+            require(
+                slug == candidate["slug"] and demo_id == candidate["demo_id"],
+                f"{slug}: candidate demo ID and slug must match the reserved pair",
+            )
+            require(
+                not manifest["stack_version"].startswith("2026.07."),
+                f"{slug}: candidate cannot appear in a historical 2026.07 release",
+            )
+            require(
+                manifest["mip_version"] == candidate["required_mip_version"],
+                f"{slug}: candidate requires MIP {candidate['required_mip_version']}",
+            )
     required_scenarios = (
         HISTORICAL_2026_07_SCENARIOS
         if manifest["stack_version"].startswith("2026.07.")
@@ -230,7 +253,12 @@ def validate_manifest(manifest: dict[str, Any]) -> None:
     require(required_scenarios.issubset(set(slugs)), "all required portfolio and preserved legacy scenarios must be represented")
     if not manifest["stack_version"].startswith("2026.07."):
         scenario_by_slug = {scenario["slug"]: scenario for scenario in scenarios}
-        for contract in PORTFOLIO["scenarios"]:
+        present_candidates = [
+            candidate
+            for slug, candidate in CANDIDATE_SCENARIOS.items()
+            if slug in scenario_by_slug
+        ]
+        for contract in PORTFOLIO["scenarios"] + present_candidates:
             scenario = scenario_by_slug[contract["slug"]]
             require(scenario.get("demo_id") == contract["demo_id"], f"{contract['slug']}: demo ID differs from the portfolio contract")
             plan = scenario.get("recording_plan", {})
@@ -298,6 +326,10 @@ def validate_manifest(manifest: dict[str, Any]) -> None:
 
     if manifest["coverage_state"] == "COMPLETE":
         require(manifest["publication_state"] == "PUBLIC" and manifest["public_demo_ready"], "COMPLETE coverage must be publicly approved")
+        require(
+            all(scenario.get("state") == "PUBLIC" for scenario in scenarios if scenario.get("slug") in CANDIDATE_SCENARIOS),
+            "COMPLETE coverage requires every present candidate scenario to be PUBLIC",
+        )
         require(all(scenario.get("state") == "PUBLIC" for scenario in scenarios if scenario.get("slug") in required_scenarios), "COMPLETE coverage requires all required scenarios to be PUBLIC")
         independent = next(item for item in scenarios if item.get("slug") == "independent-wallet-interoperability")
         require(any(wallet.get("classification") == "INDEPENDENT" and wallet.get("result") == "PASS" for wallet in independent.get("wallets", [])), "COMPLETE coverage requires passing independent-wallet evidence")

@@ -66,6 +66,98 @@ class DemoManifestValidationTests(unittest.TestCase):
         with self.assertRaisesRegex(ManifestValidationError, "required portfolio and preserved legacy"):
             validate_manifest(manifest)
 
+    def test_mip_05_release_cannot_advertise_the_digital_passport_candidate(self):
+        manifest = json.loads(PORTFOLIO_MANIFEST_PATH.read_text(encoding="utf-8"))
+        candidate = copy.deepcopy(manifest["scenarios"][0])
+        candidate["slug"] = "passport-digital-handoff-evidence"
+        candidate["demo_id"] = "D-13"
+        manifest["scenarios"].append(candidate)
+
+        with self.assertRaisesRegex(ManifestValidationError, "candidate requires MIP 0.6.0-beta.1"):
+            validate_manifest(manifest)
+
+        manifest["mip_version"] = "0.6.0"
+        for scenario in manifest["scenarios"]:
+            scenario["mip_version"] = "0.6.0"
+        with self.assertRaisesRegex(ManifestValidationError, "candidate requires MIP 0.6.0-beta.1"):
+            validate_manifest(manifest)
+
+        manifest["mip_version"] = "0.6.0-beta.1"
+        for scenario in manifest["scenarios"]:
+            scenario["mip_version"] = "0.6.0-beta.1"
+        with self.assertRaisesRegex(ManifestValidationError, "happy path differs from the portfolio contract"):
+            validate_manifest(manifest)
+
+        contract = json.loads((ROOT / "deploy-config" / "catalog" / "demo-portfolio-v3.json").read_text(encoding="utf-8"))
+        planned = contract["candidate_scenarios"][0]
+        candidate["recording_plan"]["happy_path"] = planned["happy_path"]
+        candidate["recording_plan"]["failure_paths"] = planned["failure_paths"]
+        candidate["assertions"] = [
+            {"id": path, "label": path.replace("_", " "), "result": "NOT_RUN", "evidence_sha256": None}
+            for path in planned["happy_path"] + planned["failure_paths"]
+        ]
+        candidate["mip_version"] = "0.6.0-beta.1"
+        validate_manifest(manifest)
+
+    def test_historical_release_cannot_skip_digital_candidate_validation(self):
+        manifest = copy.deepcopy(self.manifest)
+        manifest["mip_version"] = "0.6.0-beta.1"
+        for scenario in manifest["scenarios"]:
+            scenario["mip_version"] = "0.6.0-beta.1"
+        candidate = copy.deepcopy(manifest["scenarios"][0])
+        candidate["slug"] = "passport-digital-handoff-evidence"
+        candidate["demo_id"] = "D-13"
+        manifest["scenarios"].append(candidate)
+
+        with self.assertRaisesRegex(ManifestValidationError, "candidate cannot appear in a historical"):
+            validate_manifest(manifest)
+
+    def test_complete_coverage_cannot_leave_present_digital_candidate_in_draft(self):
+        manifest = json.loads(PORTFOLIO_MANIFEST_PATH.read_text(encoding="utf-8"))
+        contract = json.loads((ROOT / "deploy-config" / "catalog" / "demo-portfolio-v3.json").read_text(encoding="utf-8"))["candidate_scenarios"][0]
+        candidate = copy.deepcopy(manifest["scenarios"][0])
+        candidate["slug"] = contract["slug"]
+        candidate["demo_id"] = contract["demo_id"]
+        candidate["recording_plan"]["happy_path"] = contract["happy_path"]
+        candidate["recording_plan"]["failure_paths"] = contract["failure_paths"]
+        candidate["assertions"] = [
+            {"id": path, "label": path.replace("_", " "), "result": "NOT_RUN", "evidence_sha256": None}
+            for path in contract["happy_path"] + contract["failure_paths"]
+        ]
+        manifest["scenarios"].append(candidate)
+        manifest["mip_version"] = "0.6.0-beta.1"
+        for scenario in manifest["scenarios"]:
+            scenario["mip_version"] = manifest["mip_version"]
+        manifest["coverage_state"] = "COMPLETE"
+        manifest["publication_state"] = "PUBLIC"
+        manifest["public_demo_ready"] = True
+        manifest["release_ready"] = True
+        manifest["binding_state"] = "BOUND"
+        for field in ("deployment_release_marker", "recorder_revision", "component_revisions", "image_digests", "release_evidence"):
+            manifest[field] = copy.deepcopy(self.manifest[field])
+        with self.assertRaisesRegex(ManifestValidationError, "every present candidate scenario to be PUBLIC"):
+            validate_manifest(manifest)
+
+    def test_reserved_d13_id_cannot_hide_under_an_alias(self):
+        for source in (self.manifest, json.loads(PORTFOLIO_MANIFEST_PATH.read_text(encoding="utf-8"))):
+            manifest = copy.deepcopy(source)
+            candidate = copy.deepcopy(manifest["scenarios"][0])
+            candidate["slug"] = "passport-digital-handoff-alias"
+            candidate["demo_id"] = "D-13"
+            manifest["scenarios"].append(candidate)
+            with self.subTest(stack_version=manifest["stack_version"]):
+                with self.assertRaisesRegex(ManifestValidationError, "candidate demo ID and slug must match"):
+                    validate_manifest(manifest)
+
+    def test_reserved_digital_slug_requires_d13_id(self):
+        manifest = json.loads(PORTFOLIO_MANIFEST_PATH.read_text(encoding="utf-8"))
+        candidate = copy.deepcopy(manifest["scenarios"][0])
+        candidate["slug"] = "passport-digital-handoff-evidence"
+        candidate["demo_id"] = "D-99"
+        manifest["scenarios"].append(candidate)
+        with self.assertRaisesRegex(ManifestValidationError, "candidate demo ID and slug must match"):
+            validate_manifest(manifest)
+
     def test_pending_deployment_draft_cannot_claim_release_evidence(self):
         manifest = copy.deepcopy(self.manifest)
         manifest["binding_state"] = "PENDING_DEPLOYMENT"

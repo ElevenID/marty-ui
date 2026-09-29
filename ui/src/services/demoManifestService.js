@@ -2,13 +2,18 @@ import { DEMO_INDEX, DEMO_MANIFESTS } from '../generated/demoManifests.generated
 
 const MANIFEST_ROOT = '/demos/manifests';
 const STACK_VERSION_PATTERN = /^\d{4}\.\d{2}\.\d+$/;
-const MIP_VERSION_PATTERN = /^\d+\.\d+\.\d+$/;
+const MIP_VERSION_PATTERN = /^\d+\.\d+\.\d+(?:-beta\.\d+)?$/;
 const YOUTUBE_CHANNEL_ID_PATTERN = /^UC[A-Za-z0-9_-]{22}$/;
 const YOUTUBE_HANDLE_PATTERN = /^@[A-Za-z0-9._-]{3,30}$/;
 const YOUTUBE_PLAYLIST_ID_PATTERN = /^[A-Za-z0-9_-]{10,64}$/;
 const SHA256_PATTERN = /^[a-f0-9]{64}$/;
 const ISO_DATE_TIME_PATTERN = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{1,3})?(?:Z|[+-]\d{2}:\d{2})$/;
 const PENDING_PUBLICATION_LANGUAGE = /\b(awaiting|must pass before|not completed|not run|pending)\b/i;
+const DIGITAL_PASSPORT_CANDIDATE = {
+  demoId: 'D-13',
+  slug: 'passport-digital-handoff-evidence',
+  mipVersion: '0.6.0-beta.1',
+};
 const SCENARIO_PUBLICATION_CHECKS = new Set([
   'accessibility', 'captions', 'evidence', 'links', 'playback', 'privacy', 'thumbnail', 'transcript',
 ]);
@@ -158,6 +163,16 @@ export function validateDemoManifest(manifest) {
   assert(Array.isArray(manifest.scenarios) && manifest.scenarios.length > 0, 'This release has no demo scenarios.');
   const slugs = new Set();
   manifest.scenarios.forEach((scenario) => {
+    if (scenario.demo_id === DIGITAL_PASSPORT_CANDIDATE.demoId
+        || scenario.slug === DIGITAL_PASSPORT_CANDIDATE.slug) {
+      assert(
+        scenario.demo_id === DIGITAL_PASSPORT_CANDIDATE.demoId
+          && scenario.slug === DIGITAL_PASSPORT_CANDIDATE.slug,
+        'The digital passport candidate requires its reserved D-13 ID and slug.',
+      );
+      assert(!manifest.stack_version.startsWith('2026.07.'), 'D-13 cannot appear in a historical release.');
+      assert(manifest.mip_version === DIGITAL_PASSPORT_CANDIDATE.mipVersion, 'D-13 requires MIP 0.6.0-beta.1.');
+    }
     assert(scenario.mip_version === manifest.mip_version, `${scenario.slug}: MIP metadata does not match its ElevenID LLC release.`);
     assert(!slugs.has(scenario.slug), `${scenario.slug}: duplicate scenario.`);
     slugs.add(scenario.slug);

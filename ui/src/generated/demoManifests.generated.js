@@ -68,7 +68,7 @@ export const DEMO_MANIFESTS = {
     "release_differences": {
       "previous_stack_version": "2026.07.0",
       "ux": [
-        "Adds a twelve-scenario release catalog, including gateway-only external admissions and beta passport simulator evidence, without removing historical wallet demonstrations."
+        "Adds a twelve-scenario release catalog, including gateway-only external admissions and beta passport simulator evidence, without removing historical wallet demonstrations. The proposed digital passport D-13 requires its own pinned MIP 0.6 beta release."
       ],
       "services": [
         "Qualifies the Rust-native platform through explicit happy and denial paths."

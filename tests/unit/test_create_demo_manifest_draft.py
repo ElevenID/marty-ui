@@ -70,6 +70,29 @@ def test_external_admissions_draft_uses_the_public_webhook_protocol() -> None:
     }
 
 
+def test_digital_passport_demo_waits_for_a_pinned_beta_protocol_release() -> None:
+    contract = json.loads(CONTRACT_PATH.read_text(encoding="utf-8"))
+    candidate = contract["candidate_scenarios"]
+    manifest = build_manifest()
+
+    assert len(candidate) == 1
+    assert candidate[0]["demo_id"] == "D-13"
+    assert candidate[0]["slug"] == "passport-digital-handoff-evidence"
+    assert candidate[0]["required_mip_version"] == "0.6.0-beta.1"
+    assert candidate[0]["happy_path"] == [
+        "managed_kms_csca_dsc_chain",
+        "eight_step_digital_handoff_flow",
+        "exact_package_cryptography_verified",
+        "encrypted_handoff_tenant_bound",
+        "independent_digital_quality_review",
+    ]
+    assert candidate[0]["failure_paths"] == ["foreign_or_tampered_package_denied"]
+    assert manifest["mip_version"] == "0.5.0"
+    assert "passport-digital-handoff-evidence" not in {
+        scenario["slug"] for scenario in manifest["scenarios"]
+    }
+
+
 def test_passport_simulator_draft_matches_recorder_evidence_boundary() -> None:
     scenario = next(
         item

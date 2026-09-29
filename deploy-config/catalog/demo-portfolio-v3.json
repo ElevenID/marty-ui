@@ -15,5 +15,8 @@
     { "demo_id": "D-10", "slug": "organization-primitives", "happy_path": ["configure_organization", "configure_issuer_profiles", "configure_trust_and_mip_primitives"], "failure_paths": ["unauthorized_administration_denied"] },
     { "demo_id": "D-11", "slug": "external-admissions-gateway-webhooks", "happy_path": ["gateway_only_summary", "scoped_approval", "signed_webhook_correlated"], "failure_paths": ["insufficient_scope_denied", "invalid_signature_rejected", "duplicate_event_ignored"] },
     { "demo_id": "D-12", "slug": "physical-passport-issuance-evidence", "happy_path": ["managed_csca_dsc_issuer_profiles", "nine_step_passport_issuance_flow", "simulator_bureau_job_correlated", "signed_simulator_callback_verified", "physical_claim_boundary_verified", "physical_booklet_not_verified"], "failure_paths": ["unsigned_or_foreign_callback_denied"] }
+  ],
+  "candidate_scenarios": [
+    { "demo_id": "D-13", "slug": "passport-digital-handoff-evidence", "required_mip_version": "0.6.0-beta.1", "happy_path": ["managed_kms_csca_dsc_chain", "eight_step_digital_handoff_flow", "exact_package_cryptography_verified", "encrypted_handoff_tenant_bound", "independent_digital_quality_review"], "failure_paths": ["foreign_or_tampered_package_denied"] }
   ]
 }
