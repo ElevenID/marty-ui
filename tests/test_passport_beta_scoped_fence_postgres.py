@@ -169,6 +169,17 @@ def test_scoped_fence_and_drain(database: str):
     installed = script(database, INSTALL)
     assert installed.returncode == 0, installed.stderr
     assert sql(database, "SELECT phase FROM passport_cutover.state") == "fully_fenced\n"
+    assert sql(database, """
+        SELECT rolcanlogin::text || '|' || rolinherit::text || '|' ||
+               rolsuper::text || '|' || rolcreaterole::text || '|' ||
+               rolcreatedb::text || '|' || rolbypassrls::text
+        FROM pg_roles WHERE rolname='marty_beta_migrator'
+    """) == "false|false|false|false|false|false\n"
+    assert sql(database, """
+        SELECT count(*) FROM pg_auth_members
+        WHERE roleid='marty_beta_migrator'::regrole
+           OR member='marty_beta_migrator'::regrole
+    """) == "0\n"
 
     for statement in (
         "INSERT INTO issuance_service.physical_document_jobs (id,organization_id,flow_execution_id,application_id,application_template_id,credential_template_id,delivery_destination_profile_id,document_type,country_code,status,secure_artifact_ciphertext,secure_artifact_reference,created_at,updated_at) VALUES ('new','org','flow-new','application-new','app-template','credential-template','destination','P','USA','DRAFT','{}','physical-artifact://new',clock_timestamp(),clock_timestamp())",
@@ -240,6 +251,7 @@ def test_install_waits_for_prior_writer_and_rechecks_drain(database: str):
         assert sql(database, "SELECT count(*) FROM issuance_service.physical_document_jobs") == "1\n"
         assert sql(database, "SELECT to_regnamespace('passport_cutover') IS NULL") == "t\n"
         assert sql(database, "SELECT count(*) FROM pg_roles WHERE rolname='marty_passport_fence_owner'") == "0\n"
+        assert sql(database, "SELECT count(*) FROM pg_roles WHERE rolname='marty_beta_migrator'") == "0\n"
     finally:
         if writer.poll() is None:
             writer.terminate()

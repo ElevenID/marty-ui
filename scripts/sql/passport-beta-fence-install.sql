@@ -49,8 +49,9 @@ BEGIN
     ) <> 3 THEN
         RAISE EXCEPTION 'guarded beta tables do not match the reviewed owner inventory';
     END IF;
-    IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'marty_passport_fence_owner') THEN
-        RAISE EXCEPTION 'passport fence guard role already exists';
+    IF EXISTS (SELECT 1 FROM pg_roles
+               WHERE rolname IN ('marty_passport_fence_owner', 'marty_beta_migrator')) THEN
+        RAISE EXCEPTION 'passport fence guard or migration role already exists';
     END IF;
     IF EXISTS (
         SELECT 1 FROM pg_roles AS role
@@ -77,6 +78,9 @@ END
 $preflight$;
 
 CREATE ROLE marty_passport_fence_owner NOLOGIN NOINHERIT;
+-- The later official release may temporarily activate this dedicated role
+-- inside maintenance. It has no login or memberships at rest.
+CREATE ROLE marty_beta_migrator NOLOGIN NOINHERIT;
 CREATE SCHEMA passport_cutover AUTHORIZATION marty_passport_fence_owner;
 REVOKE ALL ON SCHEMA passport_cutover FROM PUBLIC;
 CREATE TABLE passport_cutover.state (
@@ -246,8 +250,14 @@ BEGIN
         OR has_table_privilege('marty', 'flow_service.flow_definitions', 'TRUNCATE, TRIGGER')
         OR has_table_privilege('marty', 'flow_service.flow_instances', 'TRUNCATE, TRIGGER')
         OR EXISTS (SELECT 1 FROM pg_auth_members
-            WHERE roleid = 'marty_passport_fence_owner'::regrole) THEN
-        RAISE EXCEPTION 'live app retains guarded DDL or TRUNCATE privilege';
+            WHERE roleid IN ('marty_passport_fence_owner'::regrole,
+                             'marty_beta_migrator'::regrole))
+        OR EXISTS (SELECT 1 FROM pg_auth_members
+            WHERE member = 'marty_beta_migrator'::regrole)
+        OR EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'marty_beta_migrator'
+                   AND (rolcanlogin OR rolinherit OR rolsuper OR rolcreaterole
+                        OR rolcreatedb OR rolbypassrls)) THEN
+        RAISE EXCEPTION 'passport fence owner, migration role, or app ACL is unsafe';
     END IF;
 END
 $acl$;
