@@ -7,15 +7,20 @@
 // HTTP request and exact selected-job checks. No media is publishable until
 // this script's separate frame/OCR/QR scans and the preliminary gate pass.
 const fs = require('node:fs');
+const http = require('node:http');
 const path = require('node:path');
 const { spawn, execFileSync } = require('node:child_process');
-const { createHash } = require('node:crypto');
+const { createHash, randomBytes } = require('node:crypto');
 
 const ROOT = path.resolve(__dirname, '..', '..');
 const SHA256 = /^[0-9a-f]{64}$/;
 const COMMIT = /^[0-9a-f]{40}$/;
 const CASES = ['unsigned', 'foreign'];
 const MAX_VIDEO_BYTES = 128 * 1024 * 1024;
+const BETA_ORIGIN = 'https://beta.elevenidllc.com';
+const WEBHOOK = `${BETA_ORIGIN}/v1/passport/webhooks/personalization`;
+const BOOTSTRAP = `${BETA_ORIGIN}/__marty_negative_probe__`;
+const SAFE_PAGE = '<html><body style="background:#0f172a;color:#f8fafc;font:32px Arial;padding:60px"><main><h1>Protected Marty beta callback probe</h1><p id="case"></p><p id="status">Live beta request in progress</p></main></body></html>';
 
 function requireProof(condition, message) {
   if (!condition) throw new Error(message);
@@ -160,7 +165,7 @@ function preflight(args, environment = process.env) {
   return { artifactDir, privateHandoff, recorderRoot, outputDir };
 }
 
-function runProbe(name, paths) {
+function runProbe(name, paths, bridge) {
   return new Promise((resolve, reject) => {
     const output = path.join(paths.outputDir, `${name}-callback-result.json`);
     const child = spawn('python3', [
@@ -168,7 +173,10 @@ function runProbe(name, paths) {
       '--artifact-dir', paths.artifactDir,
       '--private-handoff', paths.privateHandoff,
       '--output', output, '--case', name,
-    ], { cwd: ROOT, stdio: 'ignore', shell: false });
+    ], { cwd: ROOT, stdio: 'ignore', shell: false,
+      env: { ...process.env,
+        PASSPORT_NEGATIVE_BROWSER_BRIDGE_PORT: String(bridge.port),
+        PASSPORT_NEGATIVE_BROWSER_BRIDGE_TOKEN: bridge.token } });
     let settled = false;
     const timer = setTimeout(() => child.kill(), 300_000);
     child.once('error', () => {
@@ -186,21 +194,101 @@ function runProbe(name, paths) {
   });
 }
 
-async function recordCase(browser, name, paths, probe = runProbe) {
+async function createBridge(page, name) {
+  const token = randomBytes(32).toString('hex');
+  let receipt = null;
+  let attempted = false;
+  const server = http.createServer(async (request, response) => {
+    try {
+      requireProof(!attempted && request.method === 'POST' && request.url === '/callback'
+        && request.headers['x-probe-bridge-token'] === token,
+      'Protected browser bridge rejected request');
+      attempted = true;
+      const chunks = [];
+      let size = 0;
+      for await (const chunk of request) {
+        size += chunk.length;
+        requireProof(size <= 8192, 'Protected browser bridge request is oversized');
+        chunks.push(chunk);
+      }
+      const payload = JSON.parse(Buffer.concat(chunks).toString('utf8'));
+      requireProof(payload && typeof payload === 'object'
+        && Object.keys(payload).sort().join(',') === 'body_b64,signature'
+        && typeof payload.body_b64 === 'string'
+        && /^[A-Za-z0-9+/]+={0,2}$/.test(payload.body_b64)
+        && (name === 'unsigned' ? payload.signature === null
+          : /^vault:v[0-9]+:[A-Za-z0-9+/]{43}=$/.test(payload.signature)),
+      'Protected browser bridge payload is invalid');
+      const body = Buffer.from(payload.body_b64, 'base64').toString('utf8');
+      const result = await page.evaluate(async ({ url, jsonBody, signature }) => {
+        const headers = { 'Content-Type': 'application/json', Accept: 'application/json' };
+        if (signature !== null) headers['x-personalization-signature'] = signature;
+        const observed = await fetch(url, { method: 'POST', headers, body: jsonBody,
+          credentials: 'omit', redirect: 'manual', cache: 'no-store' });
+        let detail = null;
+        try { detail = (await observed.json()).detail; } catch { /* invalid body fails below */ }
+        return {
+          http_status: observed.status,
+          response_projection: {
+            missing_signature_header: Array.isArray(detail) && detail.length === 1
+              && detail[0]?.type === 'missing'
+              && JSON.stringify(detail[0]?.loc) === JSON.stringify(['header', 'x-personalization-signature']),
+            webhook_job_not_found: detail === 'Physical document job not found',
+          },
+        };
+      }, { url: WEBHOOK, jsonBody: body, signature: payload.signature });
+      const projection = name === 'unsigned'
+        ? { missing_signature_header: true } : { webhook_job_not_found: true };
+      requireProof(result.http_status === (name === 'unsigned' ? 422 : 404)
+        && result.response_projection[Object.keys(projection)[0]] === true,
+      'Live browser callback denial is unproven');
+      receipt = { http_status: result.http_status, response_projection: projection };
+      await page.locator('#status').evaluate((node, value) => { node.textContent = value; },
+        name === 'unsigned' ? 'Live beta HTTP 422: missing signature header'
+          : 'Live beta HTTP 404: signed foreign organization denied');
+      response.writeHead(200, { 'Content-Type': 'application/json' });
+      response.end(JSON.stringify(receipt));
+    } catch {
+      response.writeHead(502, { 'Content-Type': 'application/json' });
+      response.end('{}');
+    }
+  });
+  await new Promise((resolve, reject) => {
+    server.once('error', reject);
+    server.listen(0, '127.0.0.1', resolve);
+  });
+  return { port: server.address().port, token,
+    get receipt() { return receipt; },
+    close: () => new Promise((resolve) => server.close(resolve)) };
+}
+
+async function recordCase(browser, name, paths, probe = runProbe,
+  bridgeFactory = createBridge) {
   const context = await browser.newContext({
     viewport: { width: 1280, height: 720 },
+    serviceWorkers: 'block',
     recordVideo: { dir: paths.outputDir, size: { width: 1280, height: 720 } },
   });
   let video;
+  let bridge;
   try {
+    await context.route(BOOTSTRAP, (route) => route.fulfill({ status: 200,
+      contentType: 'text/html', body: SAFE_PAGE }));
     const page = await context.newPage();
     video = page.video();
-    await page.setContent('<html><body style="background:#0f172a;color:#f8fafc;font:32px Arial;padding:60px"><main><h1>Protected Marty beta callback probe</h1><p id="case"></p><p id="status">Live request in progress</p></main></body></html>');
+    await page.goto(BOOTSTRAP, { waitUntil: 'domcontentloaded', timeout: 30_000 });
+    requireProof(new URL(page.url()).origin === BETA_ORIGIN,
+      'Protected browser probe did not retain beta origin');
     await page.locator('#case').evaluate((node, value) => { node.textContent = value; },
       name === 'unsigned' ? 'Unsigned callback: expected HTTP 422'
         : 'Signed foreign-organization callback: expected HTTP 404');
-    const result = await probe(name, paths);
+    bridge = await bridgeFactory(page, name);
+    const result = await probe(name, paths, bridge);
     validateCase(result, name);
+    requireProof(bridge.receipt?.http_status === result.evidence.http_status
+      && JSON.stringify(bridge.receipt.response_projection)
+        === JSON.stringify(result.evidence.response_projection),
+    'Recorded browser callback differs from protected job probe');
     await page.locator('#status').evaluate((node, value) => { node.textContent = value; },
       name === 'unsigned' ? 'HTTP 422 verified. Selected job unchanged.'
         : 'HTTP 404 verified. Selected job unchanged.');
@@ -218,6 +306,7 @@ async function recordCase(browser, name, paths, probe = runProbe) {
       'Negative callback video is missing or oversized');
     return { result, videoPath: file, videoSha256: fileDigest(file) };
   } finally {
+    if (bridge) await bridge.close();
     await context.close().catch(() => {});
   }
 }
@@ -241,7 +330,7 @@ async function main() {
   fs.mkdirSync(paths.outputDir, { mode: 0o700 });
   const scanner = require(path.join(paths.recorderRoot, 'src', 'secretScan.js'));
   const { chromium } = require('@playwright/test');
-  const browser = await chromium.launch({ headless: true });
+  const browser = await chromium.launch({ headless: true, args: ['--no-proxy-server'] });
   const runs = {};
   try {
     for (const name of CASES) {
@@ -272,4 +361,5 @@ if (require.main === module) {
   main().catch(() => { console.error('Protected negative callback media recording blocked'); process.exitCode = 1; });
 }
 
-module.exports = { validateCase, validatePair, scanCase, parseArgs, preflight, recordCase };
+module.exports = { validateCase, validatePair, scanCase, parseArgs, preflight,
+  recordCase, createBridge };

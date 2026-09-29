@@ -229,6 +229,37 @@ def test_http_adapter_projects_only_frozen_denial(
     assert "must-not-publish" not in str(evidence)
 
 
+def test_browser_bridge_sends_private_request_only_to_loopback(monkeypatch) -> None:
+    sent = {}
+
+    class Connection:
+        def __init__(self, host, port, timeout):
+            assert (host, port, timeout) == ("127.0.0.1", 49221, 30)
+
+        def request(self, method, route, body, headers):
+            sent.update(method=method, route=route, payload=json.loads(body), headers=headers)
+
+        def getresponse(self):
+            return SimpleNamespace(status=200, read=lambda _: json.dumps({
+                "http_status": 422,
+                "response_projection": {"missing_signature_header": True},
+            }).encode())
+
+        def close(self):
+            sent["closed"] = True
+
+    monkeypatch.setenv("PASSPORT_NEGATIVE_BROWSER_BRIDGE_PORT", "49221")
+    monkeypatch.setenv("PASSPORT_NEGATIVE_BROWSER_BRIDGE_TOKEN", "a" * 64)
+    monkeypatch.setattr(negative.http.client, "HTTPConnection", Connection)
+    assert negative._post_callback(b'{"private":"selected-job"}', None) == (
+        422, {"missing_signature_header": True})
+    assert sent["method"] == "POST" and sent["route"] == "/callback"
+    assert sent["headers"]["X-Probe-Bridge-Token"] == "a" * 64
+    assert sent["payload"]["signature"] is None
+    assert sent["payload"]["body_b64"] != "selected-job"
+    assert sent["closed"] is True
+
+
 def test_negative_probe_requires_original_production_baselines(monkeypatch) -> None:
     deployment = {
         "production_snapshot_commitment": production_snapshot_commitment(KEY, "a" * 64),

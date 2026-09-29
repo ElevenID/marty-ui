@@ -3,6 +3,7 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
+const http = require('node:http');
 const os = require('node:os');
 const path = require('node:path');
 const { createHash } = require('node:crypto');
@@ -86,10 +87,35 @@ test('one continuous browser clip spans the live probe result', {
 }, async () => {
   const { chromium } = require('@playwright/test');
   const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'passport-negative-video-test-'));
-  const browser = await chromium.launch({ headless: true });
+  const browser = await chromium.launch({ headless: true, args: ['--no-proxy-server'] });
   try {
-    const captured = await recordCase(browser, 'unsigned', { outputDir: directory },
-      async () => { await new Promise((resolve) => setTimeout(resolve, 1200)); return result('unsigned'); });
+    const routedBrowser = { newContext: async (options) => {
+      const context = await browser.newContext(options);
+      await context.route('https://beta.elevenidllc.com/v1/passport/webhooks/personalization',
+        (route) => route.fulfill({ status: 422, contentType: 'application/json',
+          body: JSON.stringify({ detail: [{ type: 'missing',
+            loc: ['header', 'x-personalization-signature'] }] }) }));
+      return context;
+    } };
+    const captured = await recordCase(routedBrowser, 'unsigned', { outputDir: directory },
+      async (_name, _paths, bridge) => {
+        const receipt = await new Promise((resolve, reject) => {
+          const request = http.request({ hostname: '127.0.0.1', port: bridge.port,
+            path: '/callback', method: 'POST', headers: {
+              'Content-Type': 'application/json', 'X-Probe-Bridge-Token': bridge.token,
+            } }, (response) => {
+            const chunks = [];
+            response.on('data', (chunk) => chunks.push(chunk));
+            response.on('end', () => resolve(JSON.parse(Buffer.concat(chunks).toString())));
+          });
+          request.once('error', reject);
+          request.end(JSON.stringify({ body_b64: Buffer.from('{}').toString('base64'),
+            signature: null }));
+        });
+        assert.deepEqual(receipt, { http_status: 422,
+          response_projection: { missing_signature_header: true } });
+        return result('unsigned');
+      });
     assert.equal(captured.result.case, 'unsigned');
     assert.equal(captured.videoSha256, digest(fs.readFileSync(captured.videoPath)));
     assert.ok(fs.statSync(captured.videoPath).size > 0);

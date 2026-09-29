@@ -12,6 +12,7 @@ import argparse
 import base64
 import hashlib
 import hmac
+import http.client
 import json
 import os
 import re
@@ -144,6 +145,38 @@ def _sign_foreign(bureau_container_id: str, organization_id: str,
 
 
 def _post_callback(body: bytes, signature: str | None) -> tuple[int, dict[str, bool]]:
+    bridge_port = os.environ.get("PASSPORT_NEGATIVE_BROWSER_BRIDGE_PORT")
+    if bridge_port is not None:
+        token = os.environ.get("PASSPORT_NEGATIVE_BROWSER_BRIDGE_TOKEN", "")
+        require(bridge_port.isascii() and bridge_port.isdecimal()
+                and 1 <= int(bridge_port) <= 65535
+                and re.fullmatch(r"[0-9a-f]{64}", token) is not None,
+                "Protected browser callback bridge is invalid")
+        connection = http.client.HTTPConnection("127.0.0.1", int(bridge_port), timeout=30)
+        request = json.dumps({"body_b64": base64.b64encode(body).decode("ascii"),
+                              "signature": signature}, separators=(",", ":")).encode()
+        try:
+            connection.request("POST", "/callback", body=request,
+                               headers={"Content-Type": "application/json",
+                                        "X-Probe-Bridge-Token": token})
+            response = connection.getresponse()
+            raw = response.read(4097)
+            require(response.status == 200 and len(raw) <= 4096,
+                    "Protected browser callback bridge failed")
+            observed = json.loads(raw)
+            require(isinstance(observed, dict)
+                    and set(observed) == {"http_status", "response_projection"}
+                    and isinstance(observed["http_status"], int)
+                    and isinstance(observed["response_projection"], dict)
+                    and set(observed["response_projection"]).issubset({
+                        "missing_signature_header", "webhook_job_not_found"})
+                    and all(value is True for value in observed["response_projection"].values()),
+                    "Protected browser callback bridge returned invalid evidence")
+            return observed["http_status"], observed["response_projection"]
+        except (OSError, ValueError, http.client.HTTPException) as exc:
+            raise NegativeCallbackError("Protected browser callback bridge failed") from exc
+        finally:
+            connection.close()
     headers = {"Content-Type": "application/json", "Accept": "application/json",
                "Cache-Control": "no-cache", "User-Agent": "passport-beta-negative-proof/1"}
     if signature is not None:

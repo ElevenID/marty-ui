@@ -41,7 +41,11 @@ single-case results agree on the selected source and bureau commitments and
 unchanged job-state commitment before it joins them with their exact videos
 and privacy scans. A single-case result is never a two-denial receipt.
 `tests/scripts/record-beta-passport-negative-callbacks.js` records each live
-case within one continuous browser clip, invokes the pinned demo recorder's
+case within one continuous browser clip. The protected Python probe sends its
+prepared request through a one-use loopback bridge; the browser makes the
+actual same-origin beta webhook request and displays only its returned HTTP
+status and fixed denial projection. Python then verifies the selected job is
+unchanged. The script invokes the pinned demo recorder's
 frame/OCR/QR privacy scanner, and emits `negative-callback-media.json` only if
 both cases have the same signed release, aggregate beta deployment, selected
 job, and unchanged-state commitment. It requires the private handoff and a new
