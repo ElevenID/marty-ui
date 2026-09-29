@@ -105,6 +105,60 @@ function Assert-DockerIdentity {
     }
 }
 
+function Assert-BetaPassportLaunchCredentials {
+    $generated = Join-Path $repo '.env.beta.generated.local'
+    if (-not (Test-Path -LiteralPath $generated -PathType Leaf)) {
+        throw 'Generated beta passport credentials are absent'
+    }
+    $settings = @{}
+    foreach ($line in Get-Content -LiteralPath $generated -ErrorAction Stop) {
+        if ($line -match '^(PASSPORT_BETA_CEREMONY_SECRET_DIR|PASSPORT_BETA_RECONCILIATION_OPERATOR_TOKEN)=(.*)$') {
+            if ($settings.ContainsKey($Matches[1])) {
+                throw 'Generated beta passport credential setting is duplicated'
+            }
+            $settings[$Matches[1]] = $Matches[2]
+        }
+    }
+    foreach ($name in @('PASSPORT_BETA_CEREMONY_SECRET_DIR',
+                        'PASSPORT_BETA_RECONCILIATION_OPERATOR_TOKEN')) {
+        if (-not $settings.ContainsKey($name) -or
+            [string]::IsNullOrWhiteSpace([string]$settings[$name])) {
+            throw "Generated beta passport credential setting is absent: $name"
+        }
+        $override = [Environment]::GetEnvironmentVariable($name, 'Process')
+        if ($null -ne $override -and $override -cne $settings[$name]) {
+            throw "Process beta passport credential override differs: $name"
+        }
+    }
+    $directory = [string]$settings['PASSPORT_BETA_CEREMONY_SECRET_DIR']
+    if (-not [IO.Path]::IsPathRooted($directory) -or
+        (Split-Path -Path $directory -Leaf) -cne 'elevenid-beta-passport-ceremony' -or
+        -not (Test-Path -LiteralPath $directory -PathType Container) -or
+        ((Get-Item -LiteralPath $directory).Attributes -band
+            [IO.FileAttributes]::ReparsePoint)) {
+        throw 'Beta passport ceremony directory is not isolated'
+    }
+    $credentials = @([string]$settings['PASSPORT_BETA_RECONCILIATION_OPERATOR_TOKEN'])
+    foreach ($name in @('dsc_issue_gateway_key', 'csca_issue_gateway_key')) {
+        $path = Join-Path $directory $name
+        if (-not (Test-Path -LiteralPath $path -PathType Leaf) -or
+            ((Get-Item -LiteralPath $path).Attributes -band
+                [IO.FileAttributes]::ReparsePoint)) {
+            throw "Beta passport ceremony credential file is absent: $name"
+        }
+        $credentials += [IO.File]::ReadAllText($path, [Text.Encoding]::ASCII)
+    }
+    foreach ($value in $credentials) {
+        if ($value -cnotmatch '^[A-Za-z0-9._-]{32,256}$' -or
+            $value -match '^(?i:change[-_]?me|replace[-_]?me)') {
+            throw 'Beta passport ceremony or reconciliation credential is invalid'
+        }
+    }
+    if (@($credentials | Select-Object -Unique).Count -ne $credentials.Count) {
+        throw 'Beta passport ceremony and reconciliation credentials must be distinct'
+    }
+}
+
 function Stop-BetaGeneration {
     param($Plan)
     $ingress = @('cloudflared', 'nginx-proxy', 'envoy', 'gateway', 'waltid-nginx')
@@ -196,6 +250,7 @@ try {
         $fence.phase -cne 'fully_fenced' -or [string]$fence.epoch -cne $epoch) {
         throw 'Protected beta fence changed before maintenance'
     }
+    Assert-BetaPassportLaunchCredentials
     if (-not $ResumePending) {
         Write-DurableJson -Path $intentAbsolute `
             -Json ($plan | ConvertTo-Json -Depth 20 -Compress)
