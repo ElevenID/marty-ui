@@ -410,7 +410,8 @@ def _expected_image(record: dict, service: str) -> str | None:
 
 
 def verify(record: dict, surface: str, now: datetime,
-           runner: Callable[[list[str]], str] = docker) -> dict:
+           runner: Callable[[list[str]], str] = docker, *,
+           phase: str = "rust") -> dict:
     """Compare a short-lived run record against every live project resource."""
     require(isinstance(record, dict)
             and record.get("schema") == "marty.passport-supported-compose-ownership/v1",
@@ -419,6 +420,7 @@ def verify(record: dict, surface: str, now: datetime,
     match = PROJECT.fullmatch(project) if isinstance(project, str) else None
     require(match is not None and match.group(1) == surface,
             "Disposable project/surface mismatch")
+    require(phase in {"rust", "python"}, "Disposable owner phase is invalid")
     require(isinstance(record.get("run_id"), str)
             and RUN_ID.fullmatch(record["run_id"]) is not None,
             "Protected run ID is invalid")
@@ -497,6 +499,7 @@ def verify(record: dict, surface: str, now: datetime,
             "Live project volume set differs from provisioning record")
 
     expected_network_members: dict[str, set[str]] = {name: set() for name in networks}
+    owner_selectors: dict[str, str] = {}
     completed_init_ids: set[str] = set()
     for service, identifier in containers.items():
         item = _inspect("container", identifier, runner)
@@ -531,10 +534,33 @@ def verify(record: dict, surface: str, now: datetime,
                     "Disposable runtime public domain differs from managed issuer DID")
             if service == "gateway":
                 _issuer_origin_environment(config.get("Env"), service, status_origin)
+                require(environment.get("PASSPORT_NATIVE_GATEWAY_ENABLED")
+                        == ("true" if phase == "rust" else "false")
+                        and environment.get("PASSPORT_PYTHON_ROLLBACK_GATEWAY_ENABLED")
+                        == (None if phase == "rust" else "true"),
+                        "Disposable Gateway passport owner differs from phase")
+                require(environment.get("ISSUANCE_NATIVE_SERVICE_URL")
+                        == "http://issuance-native:8005"
+                        and environment.get("ISSUANCE_SERVICE_URL")
+                        == "http://issuance:8005"
+                        and environment.get("PASSPORT_PROVIDER_INGRESS_GATEWAY_ENABLED")
+                        == "false",
+                        "Disposable Gateway passport owner target is invalid")
+                owner_selectors[service] = environment["PASSPORT_NATIVE_GATEWAY_ENABLED"]
         elif service == "issuance-native":
             _issuer_origin_environment(config.get("Env"), service, status_origin)
         elif service == "flow":
             _flow_surface_environment(config.get("Env"), surface)
+            environment = _runtime_environment(config.get("Env"), service)
+            require(environment.get("PASSPORT_NATIVE_FLOW_ENABLED")
+                == ("true" if phase == "rust" else "false"),
+                "Disposable Flow passport owner differs from phase")
+            require(environment.get("ISSUANCE_NATIVE_SERVICE_URL")
+                    == "http://issuance-native:8005"
+                    and environment.get("ISSUANCE_SERVICE_URL")
+                    == "http://issuance:8005",
+                    "Disposable Flow passport owner target is invalid")
+            owner_selectors[service] = environment["PASSPORT_NATIVE_FLOW_ENABLED"]
         elif service == "revocation-profile":
             _revocation_environment(config.get("Env"), status_origin)
         elif service in {"credential-template", "trust-profile",
@@ -618,6 +644,10 @@ def verify(record: dict, surface: str, now: datetime,
 
     return {"schema": "marty.passport-supported-compose-ownership-proof/v1",
             "status": "blocked", "project": project,
+            "phase": phase, "observed_at": now.isoformat(),
+            "owner_container_ids": {service: containers[service]
+                                    for service in ("gateway", "flow")},
+            "owner_selectors": owner_selectors,
             "live_ownership_verified": True, "rollback_accepted": False,
             "blocker": "protected provisioning provenance and live rollback transition are absent"}
 
@@ -626,11 +656,13 @@ def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--record", type=Path, required=True)
     parser.add_argument("--surface", choices=("base", "selfhost"), required=True)
+    parser.add_argument("--phase", choices=("rust", "python"), default="rust")
     parser.add_argument("--output", type=Path, required=True)
     args = parser.parse_args()
     try:
         record = json.loads(args.record.read_text(encoding="utf-8"))
-        report = verify(record, args.surface, datetime.now(timezone.utc))
+        report = verify(record, args.surface, datetime.now(timezone.utc),
+                        phase=args.phase)
     except (OSError, ValueError, OwnershipError) as exc:
         report = {"schema": "marty.passport-supported-compose-ownership-proof/v1",
                   "status": "blocked", "blocker": str(exc)}

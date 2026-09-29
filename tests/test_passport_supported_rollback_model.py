@@ -75,6 +75,8 @@ def safe_model(root: Path) -> dict:
     services["gateway"]["environment"].update({
         "ENVIRONMENT": "beta",
         "PASSPORT_NATIVE_GATEWAY_ENABLED": "true",
+        "ISSUANCE_NATIVE_SERVICE_URL": "http://issuance-native:8005",
+        "ISSUANCE_SERVICE_URL": "http://issuance:8005",
         "GRPC_INSECURE_ALLOWED": "true",
         "SIGNING_KEYS_DSC_ISSUE_GATEWAY_KEY_FILE": "/run/secrets/dsc_issue_gateway_key",
         "SIGNING_KEYS_CSCA_ISSUE_GATEWAY_KEY_FILE": "/run/secrets/csca_issue_gateway_key",
@@ -110,6 +112,9 @@ def safe_model(root: Path) -> dict:
     }
     services["flow"]["environment"].update({
         "ENVIRONMENT": "development",
+        "PASSPORT_NATIVE_FLOW_ENABLED": "true",
+        "ISSUANCE_NATIVE_SERVICE_URL": "http://issuance-native:8005",
+        "ISSUANCE_SERVICE_URL": "http://issuance:8005",
         "MARTY_ISSUER_DID": "did:web:localhost%3A29876:orgs:marty",
         "ORG_GRPC_TARGET": "organization:9002",
     })
@@ -427,6 +432,39 @@ def test_isolated_resolved_compose_model_passes_only_static_preflight(
     report = validate_model(safe_model(tmp_path), PROJECT, IMAGE, tmp_path)
     assert report["model_safe"] is True
     assert report["rollback_accepted"] is False
+
+
+@pytest.mark.parametrize("gateway_native,flow_native,python_guard", [
+    ("true", "false", None),
+    ("false", "true", "true"),
+    ("false", "false", None),
+])
+def test_static_model_rejects_mixed_or_unguarded_owner_phase(
+    tmp_path: Path, gateway_native: str, flow_native: str,
+    python_guard: str | None,
+) -> None:
+    model = safe_model(tmp_path)
+    gateway = model["services"]["gateway"]["environment"]
+    flow = model["services"]["flow"]["environment"]
+    gateway["PASSPORT_NATIVE_GATEWAY_ENABLED"] = gateway_native
+    flow["PASSPORT_NATIVE_FLOW_ENABLED"] = flow_native
+    if python_guard is not None:
+        gateway["PASSPORT_PYTHON_ROLLBACK_GATEWAY_ENABLED"] = python_guard
+    with pytest.raises(ModelPreflightError, match="owner selectors differ"):
+        validate_model(model, PROJECT, IMAGE, tmp_path)
+
+
+@pytest.mark.parametrize("service,key,value", [
+    ("gateway", "ISSUANCE_SERVICE_URL", "http://issuance-native:8005"),
+    ("flow", "ISSUANCE_NATIVE_SERVICE_URL", "http://issuance:8005"),
+])
+def test_static_model_rejects_swapped_owner_target(
+    tmp_path: Path, service: str, key: str, value: str,
+) -> None:
+    model = safe_model(tmp_path)
+    model["services"][service]["environment"][key] = value
+    with pytest.raises(ModelPreflightError, match="owner targets"):
+        validate_model(model, PROJECT, IMAGE, tmp_path)
 
 
 @pytest.mark.parametrize("key", [

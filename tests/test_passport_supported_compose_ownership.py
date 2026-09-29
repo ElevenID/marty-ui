@@ -195,6 +195,10 @@ def fixture() -> tuple[dict, dict[tuple[str, ...], str]]:
                 "/run/secrets/csca_issue_gateway_key",
         }
         gateway_env = {**ceremony_env, "GRPC_INSECURE_ALLOWED": "true",
+                       "PASSPORT_NATIVE_GATEWAY_ENABLED": "true",
+                       "PASSPORT_PROVIDER_INGRESS_GATEWAY_ENABLED": "false",
+                       "ISSUANCE_NATIVE_SERVICE_URL": "http://issuance-native:8005",
+                       "ISSUANCE_SERVICE_URL": "http://issuance:8005",
                        "PUBLIC_DOMAIN": "localhost:29876",
                        "ISSUER_BASE_URL": "https://localhost:29876"}
         native_env = {"ISSUER_BASE_URL": "https://localhost:29876"}
@@ -256,7 +260,10 @@ def fixture() -> tuple[dict, dict[tuple[str, ...], str]]:
                        revocation_env if service == "revocation-profile" else
                        migration_env if service == "revocation-profile-migrate" else
                        gateway_env if service == "gateway" else
-                       {"ENVIRONMENT": "development"} if service == "flow" else
+                       {"ENVIRONMENT": "development",
+                        "PASSPORT_NATIVE_FLOW_ENABLED": "true",
+                        "ISSUANCE_NATIVE_SERVICE_URL": "http://issuance-native:8005",
+                        "ISSUANCE_SERVICE_URL": "http://issuance:8005"} if service == "flow" else
                        native_env if service == "issuance-native" else
                        {**signing_env, "PUBLIC_DOMAIN": "localhost:29876"}
                        if service == "signing-keys" else
@@ -429,6 +436,60 @@ def test_live_issuer_origin_matches_disposable_gateway(service: str, key: str) -
 
 def run(record: dict, calls: dict[tuple[str, ...], str]) -> dict:
     return verify(record, "base", NOW, lambda args: calls[tuple(args)])
+
+
+def test_live_owner_phase_rejects_mixed_gateway_and_flow() -> None:
+    record, calls = fixture()
+
+    def owner_env(service: str, key: str, value: str | None) -> None:
+        inspect_key = ("container", "inspect", record["containers"][service])
+        item = json.loads(calls[inspect_key])
+        values = [entry for entry in item[0]["Config"]["Env"]
+                  if not entry.startswith(key + "=")]
+        if value is not None:
+            values.append(f"{key}={value}")
+        item[0]["Config"]["Env"] = values
+        calls[inspect_key] = json.dumps(item)
+
+    rust = run(record, calls)
+    assert rust["live_ownership_verified"] is True
+    assert rust["phase"] == "rust"
+    assert rust["owner_selectors"] == {"gateway": "true", "flow": "true"}
+    assert rust["owner_container_ids"] == {
+        service: record["containers"][service] for service in ("gateway", "flow")}
+    owner_env("gateway", "PASSPORT_NATIVE_GATEWAY_ENABLED", "false")
+    owner_env("gateway", "PASSPORT_PYTHON_ROLLBACK_GATEWAY_ENABLED", "true")
+    with pytest.raises(OwnershipError, match="Gateway passport owner"):
+        run(record, calls)
+    with pytest.raises(OwnershipError, match="Flow passport owner"):
+        verify(record, "base", NOW, lambda args: calls[tuple(args)], phase="python")
+    owner_env("flow", "PASSPORT_NATIVE_FLOW_ENABLED", "false")
+    python = verify(record, "base", NOW, lambda args: calls[tuple(args)],
+                    phase="python")
+    assert python["live_ownership_verified"] is True
+    assert python["phase"] == "python"
+    assert python["owner_selectors"] == {"gateway": "false", "flow": "false"}
+    with pytest.raises(OwnershipError, match="owner phase"):
+        verify(record, "base", NOW, lambda args: calls[tuple(args)], phase="mixed")
+
+
+@pytest.mark.parametrize("service,key,value", [
+    ("gateway", "ISSUANCE_SERVICE_URL", "http://issuance-native:8005"),
+    ("gateway", "PASSPORT_PROVIDER_INGRESS_GATEWAY_ENABLED", "true"),
+    ("flow", "ISSUANCE_NATIVE_SERVICE_URL", "http://issuance:8005"),
+])
+def test_live_owner_phase_rejects_swapped_targets(
+    service: str, key: str, value: str,
+) -> None:
+    record, calls = fixture()
+    inspect_key = ("container", "inspect", record["containers"][service])
+    item = json.loads(calls[inspect_key])
+    item[0]["Config"]["Env"] = [entry for entry in item[0]["Config"]["Env"]
+                               if not entry.startswith(key + "=")]
+    item[0]["Config"]["Env"].append(f"{key}={value}")
+    calls[inspect_key] = json.dumps(item)
+    with pytest.raises(OwnershipError, match="passport owner target"):
+        run(record, calls)
 
 
 def add_migration(record: dict, calls: dict[tuple[str, ...], str],

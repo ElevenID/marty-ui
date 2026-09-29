@@ -501,11 +501,19 @@ def validate_model(
     )
     require(
         (gateway.get("PASSPORT_NATIVE_GATEWAY_ENABLED") == "true"
-         and gateway.get("PASSPORT_PYTHON_ROLLBACK_GATEWAY_ENABLED") is None)
+         and gateway.get("PASSPORT_PYTHON_ROLLBACK_GATEWAY_ENABLED") is None
+         and flow.get("PASSPORT_NATIVE_FLOW_ENABLED") == "true")
         or (gateway.get("PASSPORT_NATIVE_GATEWAY_ENABLED") == "false"
-            and gateway.get("PASSPORT_PYTHON_ROLLBACK_GATEWAY_ENABLED") == "true"),
-        "Disposable Python rollback must retain Gateway tenant authorization",
+            and gateway.get("PASSPORT_PYTHON_ROLLBACK_GATEWAY_ENABLED") == "true"
+            and flow.get("PASSPORT_NATIVE_FLOW_ENABLED") == "false"),
+        "Disposable Gateway and Flow passport owner selectors differ",
     )
+    require(all(
+        environment.get("ISSUANCE_NATIVE_SERVICE_URL")
+        == "http://issuance-native:8005"
+        and environment.get("ISSUANCE_SERVICE_URL") == "http://issuance:8005"
+        for environment in (gateway, flow)
+    ), "Disposable passport owner targets leave the isolated project")
     organization = services["organization"]
     organization_env = organization["environment"]
     event_stream_env = services["event-stream"]["environment"]
