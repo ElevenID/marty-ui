@@ -69,7 +69,14 @@ function Assert-SourceSqlHash {
     if ($actual -cne $Expected) {
         throw "Protected beta fence SQL changed: $Relative"
     }
-    return [Text.Encoding]::UTF8.GetString($bytes)
+    $utf8 = [Text.UTF8Encoding]::new($false, $true)
+    $sql = $utf8.GetString($bytes).Replace("`r`n", "`n")
+    if ($sql.Contains("`r")) {
+        throw "Protected beta fence SQL has unsupported line endings: $Relative"
+    }
+    # PostgreSQL stores function bodies verbatim. Stable LF endings are part
+    # of the reviewed verifier's pg_get_functiondef hashes.
+    return $sql
 }
 
 $lock = Enter-BetaDeploymentLock

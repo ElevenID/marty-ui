@@ -37,6 +37,7 @@ OCI_ROLES = {
     "ghcr.io/elevenid/marty-ui-oss/migrations",
 }
 PROTECTED_FILES = (
+    ".gitattributes",
     "deploy-config/passport-beta-fence-approved-target.json",
     "scripts/check_passport_beta_fence_authority.py",
     "scripts/beta-deployment-lock.ps1",
