@@ -40,6 +40,16 @@ production continuity. The preliminary producer must verify that the two
 single-case results agree on the selected source and bureau commitments and
 unchanged job-state commitment before it joins them with their exact videos
 and privacy scans. A single-case result is never a two-denial receipt.
+`tests/scripts/record-beta-passport-negative-callbacks.js` records each live
+case within one continuous browser clip, invokes the pinned demo recorder's
+frame/OCR/QR privacy scanner, and emits `negative-callback-media.json` only if
+both cases have the same signed release, aggregate beta deployment, selected
+job, and unchanged-state commitment. It requires the private handoff and a new
+mode-0700 output directory outside the checkout and deployment artifacts. The
+scanner checkout must match `PASSPORT_DEMO_RECORDER_COMMIT`, which the protected
+workflow must derive from the signed official release. These media files remain
+diagnostic until the protected preliminary producer verifies them and qualifies
+the recording receipt.
 The private handoff must remain outside the deployment artifact directory and
 source checkout. The probe writes a new result file outside that directory,
 rejects the local beta proxy mode, and uses direct beta HTTPS for its job and
