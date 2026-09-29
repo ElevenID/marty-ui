@@ -118,7 +118,15 @@ def verify(
     except (ValueError, OSError, subprocess.TimeoutExpired) as exc:
         raise HostProbeError("Passport Python deletion pull request is unavailable") from exc
     head = pull.get("head") if isinstance(pull, dict) else None
-    require(isinstance(head, dict)
+    base = pull.get("base") if isinstance(pull, dict) else None
+    require(isinstance(pull, dict) and pull.get("number") == 305
+            and pull.get("state") == "closed" and pull.get("merged") is True
+            and isinstance(base, dict)
+            and base.get("ref") == "main"
+            and isinstance(base.get("repo"), dict)
+            and base["repo"].get("full_name") == "ElevenID/marty-credentials"
+            and isinstance(head, dict)
+            and isinstance(head.get("ref"), str) and bool(head["ref"])
             and isinstance(head.get("repo"), dict)
             and head["repo"].get("full_name") == "ElevenID/marty-credentials"
             and head.get("sha") == deletion_head,
@@ -152,6 +160,19 @@ def verify(
     legacy = report.get("legacy_source")
     fence = report.get("write_fence")
     counts = report.get("counts")
+    first_probe = snapshot.get("fence_first_probe")
+    final_probe = snapshot.get("direct_database_probe")
+    require(isinstance(legacy, dict) and isinstance(fence, dict)
+            and isinstance(counts, dict)
+            and isinstance(first_probe, dict)
+            and isinstance(final_probe, dict)
+            and SHA256.fullmatch(str(first_probe.get("receipt_sha256"))) is not None
+            and SHA256.fullmatch(str(final_probe.get("receipt_sha256"))) is not None
+            and final_probe["receipt_sha256"] != first_probe["receipt_sha256"]
+            and utc(first_probe.get("observed_at_utc"))
+                < utc(final_probe.get("observed_at_utc"))
+                <= utc(report.get("checked_at_utc")),
+            "Protected final report payload is invalid")
     require(report.get("schema") == "marty.passport-python-deletion-cutover/v1"
             and report.get("status") == "accepted"
             and report.get("rust_source_commit") == source_commit
@@ -167,8 +188,6 @@ def verify(
             and report["supported_acceptance_run_id"] > 0
             and type(report.get("predeletion_acceptance_run_id")) is int
             and report["predeletion_acceptance_run_id"] > 0
-            and isinstance(legacy, dict) and isinstance(fence, dict)
-            and isinstance(counts, dict)
             and legacy.get("environment") == "beta"
             and legacy.get("database_uid") == snapshot.get("database_uid")
             and legacy.get("beta_cluster_uid") == snapshot.get("beta_cluster_uid")
@@ -188,6 +207,9 @@ def verify(
             and legacy.get("final_watermark")
                 == snapshot.get("observation_watermark")
             and fence.get("enabled") is True
+            and fence.get("scope")
+                == "physical_document_jobs_and_physical_flows"
+            and fence.get("unrelated_issuance_continues") is True
             and fence.get("database_uid") == snapshot.get("database_uid")
             and fence.get("writer_deployment_uid")
                 == snapshot.get("writer_deployment_uid")
@@ -209,6 +231,10 @@ def verify(
                 == snapshot.get("production_snapshot_sha256")
             and report.get("production_unchanged") is True
             and report.get("other_beta_resources_unchanged") is True
+            and report.get("authorized_passport_fence_uid")
+                == snapshot.get("writer_deployment_uid")
+            and report.get("authorized_fence_epoch")
+                == snapshot.get("fence_epoch")
             and receipt.get("credentials_deletion_head") == deletion_head,
             "Protected final report differs from the live cutover snapshot")
     digest = hashlib.sha256(local_bytes).hexdigest()

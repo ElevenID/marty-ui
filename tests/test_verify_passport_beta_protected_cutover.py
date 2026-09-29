@@ -30,7 +30,12 @@ def fixture(tmp_path):
         "observation_watermark": 200,
         "fence_epoch": 7,
         "fence_verification_sha256": "2" * 64,
-        "direct_database_probe": {"observation_watermark": 199},
+        "fence_first_probe": {"observation_watermark": 100,
+                              "receipt_sha256": "5" * 64,
+                              "observed_at_utc": "2026-09-29T02:00:00.000Z"},
+        "direct_database_probe": {"observation_watermark": 199,
+                                  "receipt_sha256": "6" * 64,
+                                  "observed_at_utc": "2026-09-29T03:15:00.000Z"},
         "production_snapshot_sha256": "3" * 64,
     }
     report = {
@@ -57,6 +62,8 @@ def fixture(tmp_path):
         },
         "write_fence": {
             "enabled": True, "database_uid": snapshot["database_uid"],
+            "scope": "physical_document_jobs_and_physical_flows",
+            "unrelated_issuance_continues": True,
             "writer_deployment_uid": snapshot["writer_deployment_uid"],
             "writer_container_id": snapshot["writer_container_id"],
             "writer_generation": 0, "fence_epoch": 7,
@@ -73,6 +80,8 @@ def fixture(tmp_path):
         "production_snapshot_sha256": snapshot["production_snapshot_sha256"],
         "production_unchanged": True,
         "other_beta_resources_unchanged": True,
+        "authorized_passport_fence_uid": snapshot["writer_deployment_uid"],
+        "authorized_fence_epoch": 7,
     }
     path = tmp_path / "passport-python-deletion-cutover-42.json"
     path.write_text(json.dumps(report), encoding="utf-8")
@@ -101,8 +110,14 @@ def execute_for(path, runs, calls):
         calls.append(args)
         if args[:2] == ["gh", "api"]:
             if args[2].endswith("/pulls/305"):
-                return json.dumps({"head": {"sha": DELETION, "repo": {
-                    "full_name": "ElevenID/marty-credentials"}}})
+                return json.dumps({
+                    "number": 305, "state": "closed", "merged": True,
+                    "base": {"ref": "main", "repo": {
+                        "full_name": "ElevenID/marty-credentials"}},
+                    "head": {"ref": "feat/retire-python-passport-v1",
+                             "sha": DELETION, "repo": {
+                                 "full_name": "ElevenID/marty-credentials"}},
+                })
             return json.dumps(runs[int(args[2].rsplit("/", 1)[-1])])
         if args[:3] == ["gh", "run", "download"]:
             target = Path(args[args.index("--dir") + 1])
