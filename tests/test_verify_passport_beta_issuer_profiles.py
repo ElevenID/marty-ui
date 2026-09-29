@@ -8,12 +8,15 @@ import hashlib
 import hmac
 
 import pytest
+from cryptography import x509
+from cryptography.hazmat.primitives import serialization
 
 from scripts import verify_passport_beta_issuer_profiles as profile_evidence
 from scripts.verify_passport_beta_issuer_profiles import (
     IssuerProfileEvidenceError, resolve_in_container, verify_profile_certificates,
     verify_profiles,
 )
+from tests.test_probe_passport_beta_chain import certificates
 
 
 def resolution(role: str) -> dict:
@@ -88,8 +91,17 @@ def test_rejects_same_key_despite_distinct_profiles() -> None:
 
 def test_live_profile_certificates_bind_to_governed_chain() -> None:
     csca, dsc = resolution("csca"), resolution("dsc")
-    csca_der, dsc_der = b"synthetic-csca-der", b"synthetic-dsc-der"
-    csca["issuer_x5c"] = [base64.b64encode(csca_der).decode("ascii")]
+    csca_pem, dsc_pem, _ = certificates()
+    csca_certificate = x509.load_pem_x509_certificate(csca_pem.encode())
+    csca_der = csca_certificate.public_bytes(serialization.Encoding.DER)
+    dsc_der = x509.load_pem_x509_certificate(dsc_pem.encode()).public_bytes(serialization.Encoding.DER)
+    coordinates = csca_certificate.public_key().public_numbers()
+    csca["public_jwk"] = {
+        "kty": "EC", "crv": "P-256",
+        "x": base64.urlsafe_b64encode(coordinates.x.to_bytes(32, "big")).decode().rstrip("="),
+        "y": base64.urlsafe_b64encode(coordinates.y.to_bytes(32, "big")).decode().rstrip("="),
+    }
+    csca["issuer_x5c"] = []  # CSCA lifecycle storage does not populate this override.
     dsc["issuer_x5c"] = [base64.b64encode(dsc_der).decode("ascii")]
     chain = {
         "csca_http_status": 200, "dsc_http_status": 200,
@@ -100,7 +112,7 @@ def test_live_profile_certificates_bind_to_governed_chain() -> None:
 
     def check() -> dict:
         return verify_profile_certificates("org-a", csca["issuer_did"], dsc["issuer_did"],
-                                           csca, dsc, chain, "private-api-key")
+                                           csca, dsc, chain, csca_pem, "private-api-key")
 
     assert check()["managed_kms_custody_verified"] is True
     assert check()["chain_verified"] is True
@@ -111,6 +123,11 @@ def test_live_profile_certificates_bind_to_governed_chain() -> None:
     with pytest.raises(IssuerProfileEvidenceError, match="unavailable"):
         check()
     dsc["issuer_x5c"] = [base64.b64encode(dsc_der).decode("ascii")]
+    csca["public_jwk"]["x"] = "stale-x"
+    with pytest.raises(IssuerProfileEvidenceError, match="resolved managed key"):
+        check()
+    csca["public_jwk"]["x"] = base64.urlsafe_b64encode(
+        coordinates.x.to_bytes(32, "big")).decode().rstrip("=")
     chain["dsc_http_status"] = 503
     with pytest.raises(IssuerProfileEvidenceError, match="unverified"):
         check()

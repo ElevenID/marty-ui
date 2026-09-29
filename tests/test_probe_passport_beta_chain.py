@@ -85,12 +85,15 @@ def test_real_certificate_chain_and_governed_route_sequence() -> None:
                      "chain_pem": csca}
 
     captured = []
+    csca_material = []
     result = exercise(plan(), "sessionId=csca-secret", "sessionId=dsc-secret", request=request,
-                      on_dsc_material=lambda *digests: captured.append(digests))
+                      on_dsc_material=lambda *digests: captured.append(digests),
+                      on_csca_material=csca_material.append)
     assert result["verified"] is True
     assert result["evidence"]["csca_certificate_sha256"] == hashlib.sha256(ssl.PEM_cert_to_DER_cert(csca)).hexdigest()
     assert result["evidence"]["dsc_certificate_sha256"] == hashlib.sha256(ssl.PEM_cert_to_DER_cert(dsc)).hexdigest()
     assert captured == [(result["evidence"]["dsc_certificate_sha256"], hashlib.sha256(dsc.encode()).hexdigest())]
+    assert csca_material == [csca]
     assert len(calls) == 2
     assert calls[0][0].endswith("csca-self-signed-certificate")
     assert calls[1][0].endswith("dsc-certificate")

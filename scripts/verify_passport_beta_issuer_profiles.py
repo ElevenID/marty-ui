@@ -16,6 +16,10 @@ import re
 import subprocess
 from typing import Any
 
+from cryptography import x509
+from cryptography.hazmat.primitives import serialization
+from cryptography.hazmat.primitives.asymmetric import ec
+
 
 class IssuerProfileEvidenceError(ValueError):
     pass
@@ -144,6 +148,7 @@ def verify_profile_certificates(
     csca_resolution: dict[str, Any],
     dsc_resolution: dict[str, Any],
     chain_evidence: dict[str, Any],
+    csca_certificate_pem: str,
     api_key: str,
 ) -> dict[str, Any]:
     """Bind managed profiles to two successful ceremonies and the public chain."""
@@ -154,20 +159,40 @@ def verify_profile_certificates(
             or chain_evidence.get("dsc_http_status") != 200
             or chain_evidence.get("chain_verified_by") != "openssl-x509-strict"):
         raise IssuerProfileEvidenceError("Governed certificate chain is unverified")
-    for role, resolution in (("csca", csca_resolution), ("dsc", dsc_resolution)):
-        expected = chain_evidence.get(f"{role}_certificate_sha256")
-        x5c = resolution.get("issuer_x5c")
-        if (not isinstance(expected, str) or len(expected) != 64
-                or any(character not in "0123456789abcdef" for character in expected)
-                or not isinstance(x5c, list) or not x5c
-                or not isinstance(x5c[0], str)):
-            raise IssuerProfileEvidenceError(f"{role.upper()} profile certificate is unavailable")
-        try:
-            certificate_der = base64.b64decode(x5c[0], validate=True)
-        except (ValueError, binascii.Error) as exc:
-            raise IssuerProfileEvidenceError(f"{role.upper()} profile certificate is invalid") from exc
-        if hashlib.sha256(certificate_der).hexdigest() != expected:
-            raise IssuerProfileEvidenceError(f"{role.upper()} profile certificate differs from ceremony")
+    csca_expected = chain_evidence.get("csca_certificate_sha256")
+    dsc_expected = chain_evidence.get("dsc_certificate_sha256")
+    if any(not isinstance(digest, str) or len(digest) != 64
+           or any(character not in "0123456789abcdef" for character in digest)
+           for digest in (csca_expected, dsc_expected)):
+        raise IssuerProfileEvidenceError("Governed certificate digests are unavailable")
+    try:
+        if not isinstance(csca_certificate_pem, str):
+            raise ValueError("missing CSCA PEM")
+        csca_certificate = x509.load_pem_x509_certificate(csca_certificate_pem.encode("ascii"))
+        csca_der = csca_certificate.public_bytes(serialization.Encoding.DER)
+    except (ValueError, UnicodeError) as exc:
+        raise IssuerProfileEvidenceError("CSCA ceremony certificate is invalid") from exc
+    if hashlib.sha256(csca_der).hexdigest() != csca_expected:
+        raise IssuerProfileEvidenceError("CSCA certificate differs from ceremony")
+    jwk = csca_resolution.get("public_jwk")
+    public_key = csca_certificate.public_key()
+    if (not isinstance(jwk, dict) or jwk.get("kty") != "EC" or jwk.get("crv") != "P-256"
+            or not isinstance(public_key, ec.EllipticCurvePublicKey)
+            or not isinstance(public_key.curve, ec.SECP256R1)):
+        raise IssuerProfileEvidenceError("CSCA certificate does not use the resolved managed key")
+    coordinates = public_key.public_numbers()
+    if (jwk.get("x") != base64.urlsafe_b64encode(coordinates.x.to_bytes(32, "big")).decode().rstrip("=")
+            or jwk.get("y") != base64.urlsafe_b64encode(coordinates.y.to_bytes(32, "big")).decode().rstrip("=")):
+        raise IssuerProfileEvidenceError("CSCA certificate does not use the resolved managed key")
+    x5c = dsc_resolution.get("issuer_x5c")
+    if not isinstance(x5c, list) or not x5c or not isinstance(x5c[0], str):
+        raise IssuerProfileEvidenceError("DSC profile certificate is unavailable")
+    try:
+        dsc_der = base64.b64decode(x5c[0], validate=True)
+    except (ValueError, binascii.Error) as exc:
+        raise IssuerProfileEvidenceError("DSC profile certificate is invalid") from exc
+    if hashlib.sha256(dsc_der).hexdigest() != dsc_expected:
+        raise IssuerProfileEvidenceError("DSC profile certificate differs from ceremony")
     return {
         "csca_issuer_profile_commitment": binding["csca_issuer_profile_commitment"],
         "dsc_issuer_profile_commitment": binding["dsc_issuer_profile_commitment"],
