@@ -4611,6 +4611,7 @@ dependencies = [
  "marty-iso18013",
  "marty-oid4vci",
  "marty-passport-auth",
+ "marty-schema-startup",
  "marty-verification",
  "mmf-core",
  "mmf-messaging",
@@ -4756,6 +4757,7 @@ dependencies = [
  "marty-passport-auth",
  "marty-platform-clock",
  "marty-release-evidence",
+ "marty-schema-startup",
  "marty-selfhost-bundle",
  "marty-signing-keys",
  "marty-verification",
@@ -5026,6 +5028,10 @@ dependencies = [
  "tracing-subscriber",
  "uuid",
 ]
+
+[[package]]
+name = "marty-schema-startup"
+version = "0.1.0"
 
 [[package]]
 name = "marty-selfhost-bundle"

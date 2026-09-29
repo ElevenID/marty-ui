@@ -150,6 +150,7 @@ use marty_issuance_service::{
     validate_embedded_contract, IssuanceRuntime, IssuanceServiceConfig,
 };
 use marty_oid4vci::discovery::StaticDiscoveryDocuments;
+use marty_schema_startup::SchemaStartupMode;
 use tokio::{net::TcpListener, sync::watch};
 use tokio_stream::wrappers::TcpListenerStream;
 use tonic::transport::Server;
@@ -179,7 +180,12 @@ async fn main() -> Result<(), Box<dyn Error>> {
         .max_connections(5)
         .connect_lazy(&config.database_url)?;
     let passport_http = PassportHttpService::from_config(&config, pool.clone())?;
-    migration::migrate(&pool).await.map_err(|error| {
+    let schema_mode = SchemaStartupMode::from_env()?;
+    let schema_result = match schema_mode {
+        SchemaStartupMode::Migrate => migration::migrate(&pool).await,
+        SchemaStartupMode::Validate => migration::validate(&pool).await,
+    };
+    schema_result.map_err(|error| {
         if error
             .as_database_error()
             .and_then(|database| database.code())
@@ -197,7 +203,11 @@ async fn main() -> Result<(), Box<dyn Error>> {
         error
     })?;
     if config.passport_native.enabled {
-        migration::migrate_passport(&pool).await.map_err(|error| {
+        let passport_schema_result = match schema_mode {
+            SchemaStartupMode::Migrate => migration::migrate_passport(&pool).await,
+            SchemaStartupMode::Validate => migration::validate_passport(&pool).await,
+        };
+        passport_schema_result.map_err(|error| {
             error!(%error, "passport native schema migration failed");
             error
         })?;

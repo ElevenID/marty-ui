@@ -1,5 +1,6 @@
 use std::{sync::Arc, time::Duration};
 
+use marty_schema_startup::SchemaStartupMode;
 use redis::aio::ConnectionManager;
 use sqlx::{postgres::PgPoolOptions, PgPool};
 use thiserror::Error;
@@ -62,7 +63,12 @@ async fn connect_database(
         .acquire_timeout(Duration::from_secs(10))
         .connect(&config.database_url)
         .await?;
-    migrate_flow_schema(&pool).await?;
+    match SchemaStartupMode::from_env()
+        .map_err(|error| FlowConnectionError::Configuration(error.to_string()))?
+    {
+        SchemaStartupMode::Migrate => migrate_flow_schema(&pool).await?,
+        SchemaStartupMode::Validate => crate::validate_flow_schema(&pool).await?,
+    }
     sqlx::query_scalar::<_, i32>("SELECT 1")
         .fetch_one(&pool)
         .await?;

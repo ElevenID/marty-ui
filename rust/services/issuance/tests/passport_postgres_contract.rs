@@ -1370,7 +1370,66 @@ async fn passport_jobs_survive_restart_without_cross_tenant_reads() {
         .await
         .unwrap();
     migration::migrate_passport(&pool).await.unwrap();
+    sqlx::query(
+        "DROP TRIGGER trg_physical_document_submission_intent
+         ON issuance_service.physical_document_jobs",
+    )
+    .execute(&pool)
+    .await
+    .unwrap();
+    assert!(migration::validate_passport(&pool).await.is_err());
+    migration::migrate_passport(&pool).await.unwrap();
+    sqlx::query(
+        "ALTER TABLE issuance_service.passport_beta_batch_intents
+         DROP CONSTRAINT passport_beta_batch_intents_pkey",
+    )
+    .execute(&pool)
+    .await
+    .unwrap();
+    assert!(migration::validate_passport(&pool).await.is_err());
+    sqlx::query(
+        "ALTER TABLE issuance_service.passport_beta_batch_intents
+         ADD PRIMARY KEY (batch_id)",
+    )
+    .execute(&pool)
+    .await
+    .unwrap();
     migration::migrate_passport(&pool).await.unwrap(); // startup is idempotent
+    let read_only_pool = PgPoolOptions::new()
+        .max_connections(1)
+        .connect(&database_url)
+        .await
+        .unwrap();
+    sqlx::query("SET default_transaction_read_only = on")
+        .execute(&read_only_pool)
+        .await
+        .unwrap();
+    migration::validate_passport(&read_only_pool).await.unwrap();
+    read_only_pool.close().await;
+    sqlx::query("DROP TABLE issuance_service.passport_beta_batch_intents")
+        .execute(&pool)
+        .await
+        .unwrap();
+    assert!(migration::validate_passport(&pool).await.is_err());
+    migration::migrate_passport(&pool).await.unwrap();
+    sqlx::raw_sql(
+        "ALTER TABLE issuance_service.passport_beta_batch_intents
+           DROP CONSTRAINT ck_passport_beta_batch_send_attempts;
+         ALTER TABLE issuance_service.passport_beta_batch_intents
+           ADD CONSTRAINT ck_passport_beta_batch_send_attempts CHECK (true);",
+    )
+    .execute(&pool)
+    .await
+    .unwrap();
+    assert!(migration::validate_passport(&pool).await.is_err());
+    sqlx::query(
+        "ALTER TABLE issuance_service.passport_beta_batch_intents
+         DROP CONSTRAINT ck_passport_beta_batch_send_attempts",
+    )
+    .execute(&pool)
+    .await
+    .unwrap();
+    migration::migrate_passport(&pool).await.unwrap();
 
     let key_a = "a".repeat(32);
     let key_b = "b".repeat(32);

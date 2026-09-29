@@ -19,6 +19,7 @@ marty-didcomm.workspace = true
 marty-iso18013.workspace = true
 marty-oid4vci.workspace = true
 marty-passport-auth = { path = "../../crates/passport-auth" }
+marty-schema-startup = { path = "../../crates/schema-startup" }
 marty-verification.workspace = true
 percent-encoding.workspace = true
 rand.workspace = true
