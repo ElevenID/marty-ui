@@ -269,9 +269,8 @@ def verify_positive_job(report: dict[str, Any], private_plan: dict[str, Any],
             and all(flow.get(field) == commitment for field, commitment in selected.items())
             and flow.get("terminal_native_status") == "ACTIVE"
             and flow.get("physical_claim") == "not_claimed"
-            and gateway_trace.get("source_job_commitment") == selected["source_job_commitment"]
-            and gateway_trace.get("application_commitment") == selected["application_commitment"]
-            and gateway_trace.get("flow_instance_commitment") == selected["flow_instance_commitment"]
+            and all(gateway_trace.get(field) == commitment
+                    for field, commitment in selected.items())
             and gateway_trace.get("routes") == [
                 {"method": method, "path": path} for method, path in ROUTES]
             and gateway_trace.get("ordered_steps") == list(PHYSICAL_STEPS)
