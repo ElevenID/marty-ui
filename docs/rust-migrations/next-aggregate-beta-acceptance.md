@@ -65,12 +65,15 @@ The final beta release must come from the source after Python passport deletion.
    all component pins, and repeat the protected claim and release sequence.
    Verify that the final signed images contain the reviewed Rust owner and no
    superseded Python passport route.
-5. From a clean final released worktree, perform the one aggregate beta deployment using
-   `scripts/deploy-local-beta-release.ps1 -OfficialStackRelease`, the reviewed
-   recorder revision and fresh artifact paths. Verify backups, isolated
-   migration rehearsal, workload identity, actual rendered configuration and
-   authcrypt policy/CA pairing. `-PlanOnly` explicitly reports
-   `didcomm_configuration_validated=false`; it is not runtime qualification.
+5. After the protected aggregate operator has merged and the final signed
+   post-deletion release is available, perform the one beta cutover with
+   `scripts/run-passport-beta-aggregate-deploy.ps1` from a clean released
+   worktree. Supply the signed stack manifest and the attested fence,
+   maintenance, and native migration receipts; write a fresh aggregate receipt
+   outside protected source. Verify its exact Compose render, signed images,
+   preserved beta state, KMS custody, and production isolation before accepting
+   the runtime. The older `deploy-local-beta-release.ps1 -OfficialStackRelease`
+   still invokes Python migrations and is not the Rust-only cutover operator.
    Native passport remains off until the protected passport PR chain and this
    KMS-only selector have merged, the exact beta image digest is available,
    and the runtime gates below pass. The former five-file passport overlay has
@@ -217,7 +220,7 @@ The final beta release must come from the source after Python passport deletion.
    pre-isolation passport snapshot. The inventoried beta has no bureau, so
    the first passport cutover remains conditional; recheck that
    condition before deployment and keep the restore constraint visible.
-6. The wrapper requires `BetaOrigin` to equal `https://beta.elevenidllc.com`.
+6. Require the beta origin to equal `https://beta.elevenidllc.com`.
    Retain fixed beta Compose projects/network and labeled-volume ownership checks.
    Capture and compare production's exact before/after identity and state;
    beta isolation checks do not independently prove production unchanged.
