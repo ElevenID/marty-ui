@@ -73,6 +73,7 @@ def test_receipt_binds_protected_source_and_sql_attests_database(tmp_path):
     assert b"expected_system_identifier = '123456'" in payload
     assert b"expected_fence_epoch = '345'" in payload
     assert b"pg_stat_activity" in payload
+    assert b"rolcanlogin" in payload
     with pytest.raises(NativeMigrationError, match="protected source"):
         checked_receipt(path, "d" * 40)
     receipt["fence"]["epoch"] = "0'\nDROP SCHEMA issuance_service CASCADE;--"
