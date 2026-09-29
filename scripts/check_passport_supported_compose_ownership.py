@@ -348,6 +348,8 @@ def _status_origin(edge: dict) -> str:
 
 def _expected_mounts(service: str, project: str, disposable_root: Path,
                      surface: str) -> set[tuple[str, str, str, bool]]:
+    if service == "passport-certificate-bootstrap":
+        return set()
     if service == "passport-openbao-bootstrap":
         source = Path(__file__).resolve().parents[1]
         return {
@@ -396,6 +398,8 @@ def _expected_image(record: dict, service: str) -> str | None:
     """Use the same plan-bound image role for live and partial ownership."""
     if service == "passport-openbao-bootstrap":
         return record.get("infra_images", {}).get("openbao")
+    if service == "passport-certificate-bootstrap":
+        return record.get("migrations_reference")
     return (record.get("legacy_reference") if service == "issuance" else
             record.get("migrations_reference") if service == "db-migrate" else
             record.get("services_reference")
