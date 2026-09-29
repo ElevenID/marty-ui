@@ -49,6 +49,7 @@ def test_plan_binds_current_fence_source_and_production(monkeypatch, tmp_path):
     receipt = {
         "post_install_observation_sha256": "e" * 64,
         "production_snapshot_sha256": "f" * 64,
+        "production_attachments_sha256": "0" * 64,
     }
     receipt_path = tmp_path / "fence.json"
     receipt_path.write_text(json.dumps(receipt), encoding="utf-8")
@@ -78,6 +79,7 @@ def test_plan_binds_current_fence_source_and_production(monkeypatch, tmp_path):
     observed = {
         "schema": "marty.passport-beta-fence-postinstall-target/v1",
         "observation_sha256": "e" * 64,
+        "production_attachments_sha256": "0" * 64,
         "docker": {"context": "approved", "daemon_id": "daemon"},
         "production": {"sha256": "f" * 64},
         "beta": {
@@ -108,6 +110,7 @@ def test_resume_verifies_full_ids_and_requires_every_service_stopped(monkeypatch
     receipt_path = tmp_path / "fence.json"
     receipt_path.write_text(json.dumps({
         "production_snapshot_sha256": "f" * 64,
+        "production_attachments_sha256": "0" * 64,
         "post_install_observation_sha256": "e" * 64,
     }), encoding="utf-8")
     head = "b" * 40

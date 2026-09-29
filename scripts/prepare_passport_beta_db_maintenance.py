@@ -124,6 +124,10 @@ def prepare(
                 == receipt.get("post_install_observation_sha256")
             and production.get("sha256")
                 == receipt.get("production_snapshot_sha256")
+            and observed.get("production_attachments_sha256")
+                == receipt.get("production_attachments_sha256")
+            and production_attachment_sha256(runner)
+                == receipt.get("production_attachments_sha256")
             and SHA256.fullmatch(str(production.get("sha256"))) is not None,
             "Fenced beta or production differs from installation receipt")
     generation = running_beta_generation(receipt_target["container_id"], runner)
@@ -154,7 +158,7 @@ def prepare(
         "database_oid": receipt_target["database_oid"],
         "fence_epoch": receipt_target["fence_epoch"],
         "production_snapshot_sha256": production["sha256"],
-        "production_attachments_sha256": production_attachment_sha256(runner),
+        "production_attachments_sha256": receipt["production_attachments_sha256"],
         "post_install_observation_sha256": observed["observation_sha256"],
         "beta_generation": generation,
         "stop_container_ids": [item["container_id"] for item in generation
@@ -191,6 +195,8 @@ def verify_plan(
     require(isinstance(receipt_raw, dict)
             and plan.get("production_snapshot_sha256")
                 == receipt_raw.get("production_snapshot_sha256")
+            and plan.get("production_attachments_sha256")
+                == receipt_raw.get("production_attachments_sha256")
             and plan.get("post_install_observation_sha256")
                 == receipt_raw.get("post_install_observation_sha256"),
             "Maintenance intent differs from fence installation receipt")
