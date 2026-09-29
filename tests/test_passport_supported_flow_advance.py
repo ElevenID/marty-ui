@@ -132,6 +132,7 @@ def test_nine_advances_require_same_job_callback_and_durable_history():
         ORG, REFERENCES, STARTED, ISSUER, poll_interval_seconds=0)
     assert proof == {"flow_step_count": 9, "native_effect_count": 6,
                      "durable_history_verified": True,
+                     "restart_resume_verified": False,
                      "signed_callback_receipt_sha256": "b" * 64,
                      "bureau_job_id": BUREAU, "sod_sha256": "a" * 64}
     assert [item[0] for item in fixture.requests].count("POST") == 9
@@ -174,3 +175,45 @@ def test_foreign_native_job_is_rejected_before_advance():
             fixture.request, native, fixture.private, fixture.history,
             ORG, REFERENCES, STARTED, ISSUER, poll_interval_seconds=0)
     assert fixture.completed == 0
+
+
+def test_restart_resumes_same_persisted_flow_and_native_job():
+    fixture = Fixture()
+    restarts = []
+
+    def restart():
+        assert fixture.completed == 5
+        restarts.append(fixture.completed)
+        return True
+
+    proof = advance_physical_passport_flow(
+        fixture.request, fixture.native, fixture.private, fixture.history,
+        ORG, REFERENCES, STARTED, ISSUER, poll_interval_seconds=0,
+        restart=restart)
+    assert restarts == [5]
+    assert fixture.completed == 9
+    assert proof["restart_resume_verified"] is True
+
+
+def test_restart_checkpoint_drift_stops_before_bureau_submission():
+    fixture = Fixture()
+    original_request = fixture.request
+    restarted = False
+
+    def request(method, path, body):
+        status, value = original_request(method, path, body)
+        if restarted and method == "GET" and fixture.completed == 5:
+            value["step_results"].pop("sign_sod")
+        return status, value
+
+    def restart():
+        nonlocal restarted
+        restarted = True
+        return True
+
+    with pytest.raises(FlowAdvanceError, match="step results drifted"):
+        advance_physical_passport_flow(
+            request, fixture.native, fixture.private, fixture.history,
+            ORG, REFERENCES, STARTED, ISSUER, poll_interval_seconds=0,
+            restart=restart)
+    assert fixture.completed == 5

@@ -131,6 +131,7 @@ def advance_physical_passport_flow(
     references: dict[str, str], started: dict[str, str], issuer_did: str, *,
     max_polls: int = 36, poll_interval_seconds: float = 5,
     sleep: Callable[[float], None] = time.sleep,
+    restart: Callable[[], bool] | None = None,
 ) -> dict[str, Any]:
     """Require nine transitions, six native effects, one callback, and DB history."""
     _require(1 <= max_polls <= 90 and 0 <= poll_interval_seconds <= 30,
@@ -146,6 +147,7 @@ def advance_physical_passport_flow(
     bureau_job_id = None
     callback_receipt = None
     sod_sha256 = None
+    restart_verified = False
     for index, step in enumerate(STEPS):
         if step == "track_production":
             _require(bureau_job_id is not None,
@@ -192,6 +194,21 @@ def advance_physical_passport_flow(
             _require(isinstance(sod_sha256, str) and HEX64.fullmatch(sod_sha256)
                      and job.get("sod_signature_verified") is True,
                      "Flow SOD signature evidence is missing")
+            if restart is not None:
+                _require(restart() is True, "Owned Rust service restart failed")
+                resumed = _read(request, instance_path)
+                resumed_job = _instance(resumed, organization_id, started,
+                                        references, issuer_did, index + 1)
+                resumed_native = _bound_job(
+                    _read(native_request, application_path), organization_id,
+                    started, references, issuer_did)
+                _require(resumed.get("step_results") == persisted.get("step_results")
+                         and resumed_job.get("status") == "SOD_SIGNED"
+                         and resumed_native.get("status") == "SOD_SIGNED"
+                         and resumed_job.get("sod_sha256") == sod_sha256
+                         and resumed_job.get("sod_signature_verified") is True,
+                         "Flow checkpoint did not survive Rust restart")
+                restart_verified = True
         if step == "submit_to_personalization":
             bureau_job_id = _uuid(job.get("bureau_job_id"))
             _require(native.get("bureau_job_id") == bureau_job_id
@@ -221,5 +238,6 @@ def advance_physical_passport_flow(
              organization_id, started)
     return {"flow_step_count": len(STEPS), "native_effect_count": 6,
             "durable_history_verified": True,
+            "restart_resume_verified": restart_verified,
             "signed_callback_receipt_sha256": callback_receipt,
             "bureau_job_id": bureau_job_id, "sod_sha256": sod_sha256}

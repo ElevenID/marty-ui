@@ -35,7 +35,7 @@ class HandoffError(ValueError):
 
 
 HASH = re.compile(r"[0-9a-f]{64}\Z")
-BLOCKER = "Rust restart/resume remains unproven"
+BLOCKER = "Live protected beta acceptance remains unproven"
 RECEIPT_FIELDS = frozenset({
     "schema", "status", "project", "surface", "source_commit", "gateway_port",
     "physical_claim", "plan_run_id", "producer_run_id",
@@ -74,11 +74,13 @@ def _flow_execution_evidence(value: object) -> None:
         raise HandoffError("Protected Rust Flow IDs are not distinct")
     if (not isinstance(execution, dict)
         or set(execution) != {"nine_steps_verified", "six_native_effects_verified",
-                              "durable_history_verified", "bureau_job_id_sha256",
+                              "durable_history_verified", "restart_resume_verified",
+                              "bureau_job_id_sha256",
                               "signed_callback_receipt_sha256", "sod_sha256"}
         or execution.get("nine_steps_verified") is not True
         or execution.get("six_native_effects_verified") is not True
         or execution.get("durable_history_verified") is not True
+        or execution.get("restart_resume_verified") is not True
         or any(type(execution.get(name)) is not str
                or HASH.fullmatch(execution[name]) is None for name in (
                    "bureau_job_id_sha256", "signed_callback_receipt_sha256",
@@ -210,7 +212,7 @@ def verify_handoff(
         or receipt.get("signed_gateway_callback_verified") is not True
         or receipt.get("flow_start_verified") is not True
         or receipt.get("flow_execution_verified") is not True
-        or receipt.get("rust_restart_resume_verified") is not False):
+        or receipt.get("rust_restart_resume_verified") is not True):
         raise HandoffError("Protected Rust producer receipt differs from plan")
     certificate = receipt["certificate"]
     if (not isinstance(certificate, dict)

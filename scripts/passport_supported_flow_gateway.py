@@ -174,6 +174,7 @@ def owned_gateway_request(
 
 def exercise_owned_flow(
     record: dict[str, Any], surface: str, gateway_port: int, run_id: str, *,
+    restart: Callable[[], bool],
     inspector: Callable[[list[str]], str] = docker,
     request_factory: Callable[..., Any] = owned_gateway_request,
     bureau_poll: Callable[..., tuple[int, dict[str, Any]]] = poll_owned_bureau,
@@ -212,11 +213,13 @@ def exercise_owned_flow(
         lambda instance_id, definition_id: history_reader(
             record, surface, instance_id, definition_id, inspector=inspector),
         ORGANIZATION_ID, references, started, issuer_did(gateway_port),
+        restart=restart,
     )
     _require(isinstance(execution, dict)
              and execution.get("flow_step_count") == 9
              and execution.get("native_effect_count") == 6
-             and execution.get("durable_history_verified") is True,
+             and execution.get("durable_history_verified") is True
+             and execution.get("restart_resume_verified") is True,
              "Disposable Flow execution proof is incomplete")
     bureau_job_id = execution.pop("bureau_job_id")
     return {
@@ -228,6 +231,7 @@ def exercise_owned_flow(
             "nine_steps_verified": True,
             "six_native_effects_verified": True,
             "durable_history_verified": True,
+            "restart_resume_verified": True,
             "signed_callback_receipt_sha256": execution["signed_callback_receipt_sha256"],
             "sod_sha256": execution["sod_sha256"],
             "bureau_job_id_sha256": hashlib.sha256(bureau_job_id.encode()).hexdigest(),

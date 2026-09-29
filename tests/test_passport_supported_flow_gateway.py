@@ -174,25 +174,29 @@ def test_flow_start_uses_operator_for_references_and_native_key_for_job(monkeypa
     monkeypatch.setattr(gateway, "provision_physical_passport_references", references)
     monkeypatch.setattr(gateway, "start_physical_passport_flow", start)
     def advance(request, native_request, private_poll, history_read,
-                organization, refs, started, did):
+                organization, refs, started, did, *, restart):
+        assert restart() is True
         assert organization == "00000000-0000-0000-0000-000000000001"
         assert did == issuer_did(29877)
         assert started == {"native_job_id": IDENTIFIER}
         return {"flow_step_count": 9, "native_effect_count": 6,
                 "durable_history_verified": True,
+                "restart_resume_verified": True,
                 "signed_callback_receipt_sha256": "b" * 64,
                 "bureau_job_id": "d0000000-0000-4000-8000-000000000002",
                 "sod_sha256": "a" * 64}
 
     result = gateway.exercise_owned_flow(
         {"project": "owned"}, "base", 29877, "123456",
-        inspector=local_inspector, request_factory=factory, advance=advance)
+        inspector=local_inspector, request_factory=factory, advance=advance,
+        restart=lambda: True)
     digest = hashlib.sha256(IDENTIFIER.encode()).hexdigest()
     assert result == {"references": {"credential_template_id_sha256": digest},
                       "flow": {"native_job_id_sha256": digest},
                       "execution": {"nine_steps_verified": True,
                                     "six_native_effects_verified": True,
                                     "durable_history_verified": True,
+                                    "restart_resume_verified": True,
                                     "signed_callback_receipt_sha256": "b" * 64,
                                     "bureau_job_id_sha256": hashlib.sha256(
                                         b"d0000000-0000-4000-8000-000000000002").hexdigest(),

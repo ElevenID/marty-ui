@@ -38,6 +38,7 @@ def flow_receipt() -> dict:
         "execution": {"nine_steps_verified": True,
                       "six_native_effects_verified": True,
                       "durable_history_verified": True,
+                      "restart_resume_verified": True,
                       "bureau_job_id_sha256": "8" * 64,
                       "signed_callback_receipt_sha256": "9" * 64,
                       "sod_sha256": "a" * 64}}
@@ -118,6 +119,7 @@ def test_producer_orders_real_gates_and_tears_down(surface: str, tmp_path: Path)
     def prove_flow(*args, **kwargs):
         calls.append(("flow_proof", args))
         assert "inspector" in kwargs
+        assert "restart" in kwargs
         return flow_receipt()
 
     def probe(*args, **kwargs):
@@ -163,7 +165,7 @@ def test_producer_orders_real_gates_and_tears_down(surface: str, tmp_path: Path)
     assert report["flow_start_verified"] is True
     assert report["flow_execution"] == flow_receipt()
     assert report["flow_execution_verified"] is True
-    assert report["rust_restart_resume_verified"] is False
+    assert report["rust_restart_resume_verified"] is True
     assert report["producer_run_id"] == "987654"
     assert not (Path(tempfile.gettempdir()) / selected["project"]).exists()
 
@@ -254,7 +256,7 @@ def test_hosted_handoff_binds_partial_receipt_to_plan(tmp_path: Path) -> None:
         "certificate_setup_passed": True, "live_ownership_verified": True,
         "rust_routes_verified": True, "signed_gateway_callback_verified": True,
         "flow_start_verified": True,
-        "flow_execution_verified": True, "rust_restart_resume_verified": False,
+        "flow_execution_verified": True, "rust_restart_resume_verified": True,
         "certificate": certificate(selected, 29877),
         "route": {"verified": True, "flow_execution_verified": False,
                   "evidence": {"signed_gateway_callback_verified": True,
@@ -272,7 +274,7 @@ def test_hosted_handoff_binds_partial_receipt_to_plan(tmp_path: Path) -> None:
                                "sod_signature_verified": True,
                                "routes": routes}},
         "flow_execution": flow_receipt(),
-        "blocker": "Rust restart/resume remains unproven",
+        "blocker": "Live protected beta acceptance remains unproven",
     }
     receipt_path.write_text(json.dumps(receipt))
     assert verify_handoff(plan_path, receipt_path, SOURCE, "987654",
