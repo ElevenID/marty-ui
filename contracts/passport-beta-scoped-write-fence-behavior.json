@@ -41,7 +41,7 @@
   ],
   "protected_evidence": {
     "initial": "Attest source-bound beta Compose service/container/image identities, PostgreSQL system identifier and database OID, privileged guard ownership/grants, enabled trigger and function-definition hashes, transactionally installed intake and full fence epochs, frozen drain query/hash and zero counts, unchanged production resources, and unrelated beta service continuity. Prove a direct passport write is rejected while representative unrelated issuance writes remain possible.",
-    "final": "Revise Credentials PR #305's current whole-container-stop verifier and implement its missing protected producer together for this scoped fence; neither existing check can qualify this contract yet. The producer re-inspects the same database and running shared Python container generation, proves the full fence still exists, and attests a strictly later zero-count watermark and the exact Credentials deletion PR head. A changed head or missing fence requires a new final run.",
+    "final": "Credentials PR #305 now calls for a scoped fence, but its missing protected producer and exact-head receipts must be implemented before deletion. The producer re-inspects the same database and running shared Python container generation, proves the full fence still exists, and attests a strictly later zero-count watermark and the exact Credentials deletion PR head. A changed head or missing fence requires a new final run.",
     "absence": "A deployment mutex, static Compose render, disposable database, zero-count query before the fence, or operator assertion alone is not a retirement receipt."
   }
 }
