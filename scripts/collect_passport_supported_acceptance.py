@@ -12,18 +12,29 @@ import ipaddress
 import json
 import re
 import ssl
+import shlex
 import subprocess
 import tempfile
+from collections.abc import Callable
+from datetime import datetime
 from pathlib import Path
-from typing import Any, Callable
+from typing import Any
 from urllib.error import HTTPError, URLError
 from urllib.parse import urlsplit
 from urllib.request import HTTPRedirectHandler, HTTPSHandler, ProxyHandler, Request, build_opener
 
 if __package__:
+    from .check_passport_supported_kubernetes_model import (
+        approved_entrypoint, approved_runtime_spec, forbidden_routing_env,
+        inspect as inspect_kubernetes_model,
+    )
     from .collect_passport_beta_acceptance import digest_file, verify_attestations
     from .passport_supported_infra_images import qualified_images
 else:
+    from check_passport_supported_kubernetes_model import (
+        approved_entrypoint, approved_runtime_spec, forbidden_routing_env,
+        inspect as inspect_kubernetes_model,
+    )
     from collect_passport_beta_acceptance import digest_file, verify_attestations
     from passport_supported_infra_images import qualified_images
 
@@ -42,6 +53,20 @@ COMPOSE_SERVICES = (
 KUBERNETES_SERVICES = COMPOSE_SERVICES
 PRIVATE_KUBERNETES_PORTS = {"passport-beta-bureau": 8020,
                             "passport-callback-signer": 8018}
+KUBERNETES_SERVICE_PORTS = {
+    "gateway": (("http", 8000),),
+    "flow": (("http", 8011), ("grpc", 9011)),
+    "issuance-native": (("http", 8005), ("grpc", 9005)),
+    "passport-callback-signer": (("http", 8018),),
+    "passport-beta-bureau": (("http", 8020),),
+}
+KUBERNETES_BINARIES = {
+    "gateway": "/usr/local/bin/marty-gateway",
+    "flow": "/usr/local/bin/marty-flow",
+    "issuance-native": "/usr/local/bin/marty-issuance-service",
+    "passport-callback-signer": "/usr/local/bin/marty-passport-callback-signer",
+    "passport-beta-bureau": "/usr/local/bin/marty-passport-beta-bureau",
+}
 COMMON_FLAGS = {
     "gateway": ("PASSPORT_NATIVE_GATEWAY_ENABLED", "PASSPORT_INTERNAL_SERVICE_AUTH_ENABLED"),
     "flow": ("PASSPORT_NATIVE_FLOW_ENABLED", "PASSPORT_INTERNAL_SERVICE_AUTH_ENABLED"),
@@ -123,8 +148,36 @@ def environment_flags(values: object, service: str,
     return result
 
 
+def kubernetes_config_value(container: dict, data: dict, name: str) -> object:
+    """Resolve one deployed value from explicit env or the inspected ConfigMap."""
+    entries = container.get("env", [])
+    require(isinstance(entries, list), "Kubernetes passport environment is invalid")
+    matches = [entry for entry in entries
+               if isinstance(entry, dict) and entry.get("name") == name]
+    require(len(matches) <= 1, "Kubernetes passport environment is ambiguous")
+    if matches:
+        entry = matches[0]
+        if "value" in entry:
+            require("valueFrom" not in entry,
+                    "Kubernetes passport configuration source is ambiguous")
+            return entry["value"]
+        value_from = entry.get("valueFrom")
+        source = value_from.get("configMapKeyRef") if isinstance(value_from, dict) else None
+        require(isinstance(source, dict) and source.get("name") == "marty-config"
+                and source.get("key") == name,
+                "Kubernetes passport configuration source is invalid")
+        return data.get(name)
+    env_from = container.get("envFrom", [])
+    require(isinstance(env_from, list), "Kubernetes passport environment source is invalid")
+    require(len(env_from) == 1 and isinstance(env_from[0], dict)
+            and isinstance(env_from[0].get("configMapRef"), dict)
+            and env_from[0]["configMapRef"].get("name") == "marty-config",
+            "Kubernetes passport ConfigMap source is ambiguous")
+    return data.get(name)
+
+
 def kubernetes_literal_value(container: dict, name: str) -> object:
-    """Read a Pod-bound value, never a mutable ConfigMap snapshot."""
+    """Read a Pod-bound selector without relying on a later ConfigMap snapshot."""
     entries = container.get("env", [])
     require(isinstance(entries, list), "Kubernetes passport environment is invalid")
     matches = [entry for entry in entries
@@ -134,6 +187,11 @@ def kubernetes_literal_value(container: dict, name: str) -> object:
             and isinstance(matches[0]["value"], str),
             f"Kubernetes passport {name} requires one literal Pod environment value")
     return matches[0]["value"]
+
+
+def kubernetes_entrypoint(container: dict, service: str) -> None:
+    require(approved_entrypoint(container),
+            f"Kubernetes {service} entrypoint is overridden")
 
 
 def kubernetes_owner(item: dict, kind: str, name: str, uid: str) -> bool:
@@ -272,6 +330,17 @@ def observe_compose(
     return observed
 
 
+def kubernetes_timestamp(value: Any) -> datetime:
+    require(isinstance(value, str), "Kubernetes creation timestamp is missing")
+    try:
+        parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except ValueError as exc:
+        raise SupportedEvidenceError("Kubernetes creation timestamp is invalid") from exc
+    require(parsed.tzinfo is not None,
+            "Kubernetes creation timestamp has no timezone")
+    return parsed
+
+
 def observe_kubernetes(
     namespace: str, context: str, services_reference: str, source_commit: str,
     runner: Callable[[list[str]], str] = command,
@@ -280,6 +349,20 @@ def observe_kubernetes(
     disposable_context(context)
     require(SHA.fullmatch(source_commit) is not None,
             "Kubernetes release source commit is invalid")
+    config = json_command(["kubectl", "--context", context, "-n", namespace,
+                           "get", "configmap", "marty-config", "-o", "json"], runner)
+    data = config.get("data")
+    require(isinstance(data, dict), "Kubernetes passport ConfigMap is missing")
+    require(all(isinstance(key, str) and key != "PATH" and not key.startswith("LD_")
+                and not forbidden_routing_env(key)
+                for key in data),
+            "Kubernetes passport ConfigMap overrides runtime tools")
+    require(config.get("immutable") is True,
+            "Kubernetes passport ConfigMap must be immutable")
+    config_metadata = config.get("metadata")
+    require(isinstance(config_metadata, dict),
+            "Kubernetes passport ConfigMap identity is missing")
+    config_created = kubernetes_timestamp(config_metadata.get("creationTimestamp"))
     for kind in ("deployment", "service"):
         provider = runner(["kubectl", "--context", context, "-n", namespace,
                            "get", kind, "passport-provider-ingress",
@@ -302,9 +385,18 @@ def observe_kubernetes(
         status = deployment.get("status")
         spec = deployment.get("spec")
         require(isinstance(metadata, dict)
-                and isinstance(status, dict) and status.get("readyReplicas", 0) >= 1
+                and isinstance(status, dict)
                 and isinstance(spec, dict),
                 f"Kubernetes {service} is not ready in the disposable namespace")
+        require(isinstance(metadata.get("generation"), int)
+                and metadata["generation"] > 0
+                and isinstance(status.get("observedGeneration"), int)
+                and status["observedGeneration"] >= metadata["generation"]
+                and spec.get("replicas") == 1
+                and all(status.get(key) == 1 for key in
+                        ("replicas", "updatedReplicas", "readyReplicas",
+                         "availableReplicas")),
+                f"Kubernetes {service} rollout is incomplete")
         labels = metadata.get("labels")
         candidate_run_id = (labels.get("com.marty.passport.acceptance.run-id")
                             if isinstance(labels, dict) else None)
@@ -332,21 +424,31 @@ def observe_kubernetes(
                             "com.marty.passport.acceptance.source-commit": source_commit}.items()),
                 f"Kubernetes {service} Deployment selector or template is unowned")
         containers = spec.get("template", {}).get("spec", {}).get("containers")
+        require(approved_runtime_spec(template.get("spec")),
+                f"Kubernetes {service} Deployment runtime is unsafe")
         if service in PRIVATE_KUBERNETES_PORTS:
             kubernetes_private_network(
                 template.get("spec"), service, PRIVATE_KUBERNETES_PORTS[service])
         require(isinstance(containers, list) and len(containers) == 1
+                and isinstance(containers[0], dict)
+                and containers[0].get("name") == service
                 and containers[0].get("image") == services_reference,
                 f"Kubernetes {service} is not pinned to the released services image")
-        selected = {}
-        for flag in KUBERNETES_FLAGS[service]:
-            require(kubernetes_literal_value(containers[0], flag) == "true",
-                    f"Kubernetes {service} did not select Rust passport")
-            selected[flag] = True
+        kubernetes_entrypoint(containers[0], service)
+        container_env = containers[0].get("env", [])
+        require(isinstance(container_env, list),
+                f"Kubernetes {service} environment is invalid")
+        selected = {flag: kubernetes_literal_value(containers[0], flag) == "true"
+                    for flag in KUBERNETES_FLAGS[service]}
+        require(all(selected.values()),
+                f"Kubernetes {service} did not select Rust passport")
         expected = ({
             "PASSPORT_PROVIDER_INGRESS_GATEWAY_ENABLED": "false",
             "PASSPORT_PROVIDER_INGRESS_SERVICE_URL": "",
+            "ISSUANCE_NATIVE_SERVICE_URL": "http://issuance-native:8005",
         } if service == "gateway" else {
+            "ISSUANCE_NATIVE_SERVICE_URL": "http://issuance-native:8005",
+        } if service == "flow" else {
             "PERSONALIZATION_BUREAU_URL": "http://passport-beta-bureau:8020",
             "PERSONALIZATION_BUREAU_PROVIDER_PROFILE_ID": "passport-beta-bureau",
         } if service == "issuance-native" else {
@@ -355,7 +457,7 @@ def observe_kubernetes(
             "PASSPORT_BUREAU_CALLBACK_URL":
                 "http://issuance-native:8005/v1/passport/webhooks/personalization",
         } if service == "passport-beta-bureau" else {})
-        require(all(kubernetes_literal_value(containers[0], name) == value
+        require(all(kubernetes_config_value(containers[0], data, name) == value
                     for name, value in expected.items()),
                 f"Kubernetes {service} is not bound to the Marty simulator")
         replicasets = json_command(["kubectl", "--context", context, "-n", namespace,
@@ -374,6 +476,8 @@ def observe_kubernetes(
                 f"Kubernetes {service} pod is missing or ambiguous")
         pod = pod_items[0]
         pod_uid = kubernetes_labels(pod, namespace, service, run_id, source_commit)
+        require(kubernetes_timestamp(pod["metadata"].get("creationTimestamp")) >= config_created,
+                f"Kubernetes {service} pod predates the immutable ConfigMap")
         matching_replicas = [item for item in replica_items
                              if isinstance(item.get("metadata"), dict)
                              and isinstance(item["metadata"].get("uid"), str)
@@ -400,6 +504,8 @@ def observe_kubernetes(
         statuses = pod.get("status", {}).get("containerStatuses")
         require(pod.get("status", {}).get("phase") == "Running"
                 and isinstance(statuses, list) and len(statuses) == 1
+                and isinstance(statuses[0], dict)
+                and statuses[0].get("name") == service
                 and statuses[0].get("ready") is True
                 and isinstance(statuses[0].get("containerID"), str)
                 and bool(statuses[0]["containerID"])
@@ -407,18 +513,40 @@ def observe_kubernetes(
                 and statuses[0]["imageID"].endswith(services_reference.split("@", 1)[1]),
                 f"Kubernetes {service} pod is not ready on the released image")
         pod_containers = pod.get("spec", {}).get("containers")
+        require(approved_runtime_spec(pod.get("spec")),
+                f"Kubernetes {service} Pod runtime is unsafe")
         if service in PRIVATE_KUBERNETES_PORTS:
             kubernetes_private_network(
                 pod.get("spec"), service, PRIVATE_KUBERNETES_PORTS[service])
         require(isinstance(pod_containers, list) and len(pod_containers) == 1
                 and pod_containers[0].get("image") == services_reference,
                 f"Kubernetes {service} Pod spec is not pinned to the released image")
+        kubernetes_entrypoint(pod_containers[0], service)
         require(all(kubernetes_literal_value(pod_containers[0], flag) == "true"
                     for flag in KUBERNETES_FLAGS[service]),
                 f"Kubernetes {service} Pod did not select Rust passport")
-        require(all(kubernetes_literal_value(pod_containers[0], name) == value
+        require(all(kubernetes_config_value(pod_containers[0], data, name) == value
                     for name, value in expected.items()),
                 f"Kubernetes {service} Pod is not bound to the Marty simulator")
+        pod_name = pod["metadata"].get("name")
+        require(isinstance(pod_name, str)
+                and re.fullmatch(r"[a-z0-9]([-a-z0-9]*[a-z0-9])?", pod_name),
+                f"Kubernetes {service} pod name is invalid")
+        runtime_values = {flag: "true" for flag in KUBERNETES_FLAGS[service]}
+        runtime_values.update(expected)
+        checks = ["set -eu"]
+        binary = shlex.quote(KUBERNETES_BINARIES[service])
+        checks.append(f'test "$(/usr/bin/readlink /proc/1/exe)" = {binary}')
+        checks.append(f'test "$(/usr/bin/tr \'\\000\' \'\\n\' < /proc/1/cmdline)" = {binary}')
+        checks.extend("/usr/bin/tr '\\000' '\\n' < /proc/1/environ | /usr/bin/grep -Fqx -- "
+                      + shlex.quote(f"{name}={value}")
+                      for name, value in runtime_values.items())
+        checks.append("printf verified")
+        result = runner(["kubectl", "--context", context, "-n", namespace,
+                         "exec", pod_name, "-c", service, "--", "/bin/sh", "-c",
+                         "; ".join(checks)])
+        require(result == "verified",
+                f"Kubernetes {service} running process routing differs from the simulator")
         pod_ips[service] = kubernetes_pod_ips(pod, service)
         observed[service] = {"deployment_uid": deployment_uid,
                              "replicaset_uid": replica_uid, "pod_uid": pod_uid,
@@ -426,8 +554,7 @@ def observe_kubernetes(
                              "image_id": statuses[0]["imageID"],
                              "oci_reference": services_reference, "selectors": selected}
     require(run_id is not None, "Kubernetes acceptance run is missing")
-    for service, port in (("passport-beta-bureau", 8020),
-                          ("passport-callback-signer", 8018)):
+    for service, ports in KUBERNETES_SERVICE_PORTS.items():
         route = json_command(["kubectl", "--context", context, "-n", namespace,
                               "get", "service", service, "-o", "json"], runner)
         route_uid = kubernetes_labels(route, namespace, service, run_id, source_commit)
@@ -440,12 +567,12 @@ def observe_kubernetes(
                 and route_spec.get("type") == "ClusterIP"
                 and not route_spec.get("externalIPs")
                 and route_spec.get("selector") == selector
-                and isinstance(route_ports, list) and len(route_ports) == 1
-                and isinstance(route_ports[0], dict)
-                and all(route_ports[0].get(name) == value for name, value in {
-                    "name": "http", "port": port, "protocol": "TCP",
-                    "targetPort": port}.items()),
-                f"Kubernetes {service} Service route is outside the simulator run")
+                and isinstance(route_ports, list) and len(route_ports) == len(ports)
+                and all(isinstance(item, dict) for item in route_ports)
+                and {(item.get("name"), item.get("port"), item.get("targetPort"),
+                      item.get("protocol")) for item in route_ports}
+                == {(name, port, port, "TCP") for name, port in ports},
+                f"Kubernetes {service} Service route is outside the disposable Rust run")
         slices = json_command(["kubectl", "--context", context, "-n", namespace,
                                "get", "endpointslices", "-l",
                                f"kubernetes.io/service-name={service}",
@@ -473,10 +600,11 @@ def observe_kubernetes(
                     == "endpointslice-controller.k8s.io"
                     and kubernetes_owner(endpoint_slice, "Service", service, route_uid)
                     and address_type in ("IPv4", "IPv6")
-                    and isinstance(slice_ports, list) and len(slice_ports) == 1
-                    and isinstance(slice_ports[0], dict)
-                    and all(slice_ports[0].get(name) == value for name, value in {
-                        "name": "http", "port": port, "protocol": "TCP"}.items())
+                    and isinstance(slice_ports, list) and len(slice_ports) == len(ports)
+                    and all(isinstance(item, dict) for item in slice_ports)
+                    and {(item.get("name"), item.get("port"), item.get("protocol"))
+                         for item in slice_ports}
+                    == {(name, port, "TCP") for name, port in ports}
                     and isinstance(endpoints, list),
                     f"Kubernetes {service} EndpointSlice is outside the owned Service")
             family = 4 if address_type == "IPv4" else 6
@@ -576,8 +704,10 @@ def collect(
     kubernetes_context: str | None = None,
     base_origin: str | None = None, selfhost_origin: str | None = None,
     kubernetes_origin: str | None = None, api_key: str | None = None,
+    kubernetes_identity_plan: Path | None = None,
     compose_probe: Callable[[str, str, str], dict] = observe_compose,
     kubernetes_probe: Callable[[str, str, str, str], dict] = observe_kubernetes,
+    kubernetes_preflight: Callable[[dict, str, str], dict] = inspect_kubernetes_model,
     capability_probe: Callable[[str, str | None, Path | None], tuple[int, dict | None]] = capability_status,
     attest: Callable[[Path, dict[str, str], str], bool] = verify_attestations,
 ) -> dict:
@@ -624,11 +754,47 @@ def collect(
             surfaces[name] = report_surface(None, "disposable runtime target is absent",
                                             source_commit)
             continue
+        if name == "kubernetes":
+            if kubernetes_identity_plan is None:
+                surfaces[name] = report_surface(
+                    None, "disposable Kubernetes identity plan is absent", source_commit)
+                continue
+            try:
+                identity = json.loads(kubernetes_identity_plan.read_text(encoding="utf-8"))
+                require(isinstance(identity, dict)
+                        and identity.get("namespace", {}).get("name") == target
+                        and identity.get("cluster", {}).get("context") == kubernetes_context,
+                        "disposable Kubernetes identity plan target differs")
+                model = kubernetes_preflight(identity, source_commit, services_reference)
+                require(model.get("status") == "blocked"
+                        and model.get("static_identity_verified") is True,
+                        "disposable Kubernetes identity preflight failed")
+            except (OSError, ValueError, TypeError, AttributeError):
+                surfaces[name] = report_surface(
+                    None, "disposable Kubernetes identity preflight failed", source_commit)
+                continue
         try:
             runtime = (kubernetes_probe(target, kubernetes_context,
                                         services_reference, source_commit)
                        if name == "kubernetes" else compose_probe(name, target, services_reference))
-        except (SupportedEvidenceError, OSError, ValueError):
+            if name == "kubernetes":
+                require(isinstance(runtime, dict) and set(runtime) == set(KUBERNETES_SERVICES)
+                        and all(isinstance(runtime[service], dict)
+                                and runtime[service].get("deployment_uid") ==
+                                model["resource_uids"][f"deployment/{service}"]
+                                and runtime[service].get("service_uid") ==
+                                model["resource_uids"][f"service/{service}"]
+                                for service in KUBERNETES_SERVICES),
+                        "disposable Kubernetes deployment identity changed during inspection")
+                post_model = kubernetes_preflight(identity, source_commit,
+                                                  services_reference)
+                require(post_model == model,
+                        "disposable Kubernetes identity changed during runtime probe")
+                post_runtime = kubernetes_probe(target, kubernetes_context,
+                                                services_reference, source_commit)
+                require(post_runtime == runtime,
+                        "disposable Kubernetes simulator routing changed during runtime probe")
+        except (SupportedEvidenceError, OSError, ValueError, TypeError, AttributeError):
             surfaces[name] = report_surface(None, "disposable runtime probe failed",
                                             source_commit)
         else:
@@ -636,6 +802,8 @@ def collect(
                        if name == "kubernetes" else
                        "nine-route/simulator/restart acceptance is pending")
             observed = report_surface(runtime, pending, source_commit)
+            if name == "kubernetes":
+                observed["identity_preflight"] = model
             bound_port = runtime.get("edge", {}).get("loopback_port")
             parsed_origin = urlsplit(origin) if origin is not None else None
             if (name != "kubernetes" and origin is not None and api_key is not None
@@ -685,6 +853,7 @@ def main() -> int:
     parser.add_argument("--selfhost-project")
     parser.add_argument("--kubernetes-namespace")
     parser.add_argument("--kubernetes-context")
+    parser.add_argument("--kubernetes-identity-plan", type=Path)
     parser.add_argument("--base-origin")
     parser.add_argument("--selfhost-origin")
     parser.add_argument("--kubernetes-origin")
@@ -699,6 +868,7 @@ def main() -> int:
                          selfhost_project=args.selfhost_project,
                          namespace=args.kubernetes_namespace,
                          kubernetes_context=args.kubernetes_context,
+                         kubernetes_identity_plan=args.kubernetes_identity_plan,
                          base_origin=args.base_origin,
                          selfhost_origin=args.selfhost_origin,
                          kubernetes_origin=args.kubernetes_origin,

@@ -108,6 +108,8 @@ def test_disposable_kubernetes_selects_marty_simulator_without_provider() -> Non
     assert bureau_env["SIGNING_KEYS_INTERNAL_URL"] == (
         "http://passport-callback-signer:8018/internal/documents")
     policy = objects[("NetworkPolicy", "passport-acceptance-callback-signer-ingress")]
+    assert all(policy["metadata"]["labels"][key] == value
+               for key, value in OWNER_LABELS.items())
     assert policy["spec"]["podSelector"]["matchLabels"] == {
         "app": "passport-callback-signer",
         "com.marty.passport.acceptance.owner": "supported-consumer",
