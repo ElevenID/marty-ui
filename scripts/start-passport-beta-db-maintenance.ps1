@@ -77,14 +77,21 @@ function Read-ExactSql {
 
 function Write-DurableJson {
     param([string]$Path, [string]$Json)
-    $stream = [IO.File]::Open($Path, [IO.FileMode]::CreateNew,
-        [IO.FileAccess]::Write, [IO.FileShare]::None)
+    $temporary = $Path + '.stage-' + [Guid]::NewGuid().ToString('N')
     try {
-        $bytes = [Text.Encoding]::UTF8.GetBytes($Json + "`n")
-        $stream.Write($bytes, 0, $bytes.Length)
-        $stream.Flush($true)
+        $stream = [IO.File]::Open($temporary, [IO.FileMode]::CreateNew,
+            [IO.FileAccess]::Write, [IO.FileShare]::None)
+        try {
+            $bytes = [Text.Encoding]::UTF8.GetBytes($Json + "`n")
+            $stream.Write($bytes, 0, $bytes.Length)
+            $stream.Flush($true)
+        }
+        finally { $stream.Dispose() }
+        [IO.File]::Move($temporary, $Path)
     }
-    finally { $stream.Dispose() }
+    finally {
+        if ([IO.File]::Exists($temporary)) { [IO.File]::Delete($temporary) }
+    }
 }
 
 function Assert-DockerIdentity {
