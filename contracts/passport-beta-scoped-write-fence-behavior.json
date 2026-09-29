@@ -1,0 +1,47 @@
+{
+  "schema": "marty.passport-beta-scoped-write-fence-behavior/v1",
+  "scope": "Real elevenid-beta Python passport retirement before the single post-deletion Rust deployment; production is outside this operation",
+  "shared_service": "Beta issuance is one Python service for passport and unrelated issuance routes. Keep unrelated issuance available; the passport writer is the physical-document job and Flow write surface, not the whole container.",
+  "authority": {
+    "compose_project": "elevenid-beta",
+    "database": "marty",
+    "required_identity": [
+      "exact Python issuance container ID, immutable image digest and Compose labels",
+      "PostgreSQL container ID, cluster system identifier and database identity",
+      "Gateway and Flow container IDs, image digests and passport owner selectors",
+      "the protected main source, signed stack manifest and exact Credentials deletion PR head"
+    ],
+    "reject": "Ambiguous or changed identity, production labels, an already active unrelated mutation, or a missing protected release blocks the operation"
+  },
+  "database_enforcement": {
+    "ownership": "Enumerate every live application and migration database role with write or DDL access to guarded objects. Create a trusted guard owner with NOLOGIN and transfer ownership of the issuance_service and flow_service schemas and three fenced tables away from every live app role. Preserve the schema, table, sequence and function privileges needed for unrelated runtime behavior without granting trigger or guarded-object DDL control. No live app role may own, disable, drop, replace, or bypass fence triggers, functions, or state; verify owners, enabled triggers, memberships and effective grants before and after installation.",
+    "migrations": "Before installing the fence, prove a trusted migration path for the later official deployment. A separate privileged migration executor, unavailable to live application containers, may change non-guarded schema objects under the beta deployment lock. Any DDL on guarded tables or schemas must preserve the effective fence, revalidate its definitions and grants before applications restart, and leave it installed until the Rust-owner transition. Never grant temporary guarded-object DDL to a live app role or run the existing app-role migration unchanged if ownership would make it fail.",
+    "truncate": "Revoke TRUNCATE and ownership-derived TRUNCATE from every live application and migration role on the guarded tables, and install a rejecting TRUNCATE trigger for direct and CASCADE paths. Prove rows cannot be discarded by TRUNCATE after either fence phase.",
+    "predicate": "Guard the exact physical-document job table and physical-document Flow definitions/instances. Derive Flow selection from the frozen cutover-drain behavior, with both OLD and NEW rows considered. The only definitionless verification exemption is the exact expired synthetic OID4VP orphan shape in that contract; every other nonterminal definitionless instance remains a drain blocker. Do not deny unrelated defined Flows merely because context text contains the word passport.",
+    "phase_visibility": "Guard triggers read and lock the fence state so a transaction that began before promotion cannot commit a stale-phase passport write after the full fence is installed.",
+    "tests": "Exercise the fence against disposable PostgreSQL with competing transactions, direct application-role writes, DDL and TRUNCATE bypass attempts including CASCADE, physical and unrelated Flow fixtures, and crash/retry behavior before use on beta."
+  },
+  "phases": [
+    {
+      "name": "intake_closed",
+      "atomicity": "Under the beta deployment lock, transactionally install a durable PostgreSQL fence that rejects new physical-document job and physical-document Flow creation after existing write transactions finish. Also reject updates that reactivate terminal jobs, reclassify non-passport Flows, or change definitions so existing instances become physical-document Flows.",
+      "continuity": "Allow only progression of already in-flight passport jobs and Flows toward terminal through bounded updates, but reject deletion and truncation of their evidence; unrelated issuance and defined non-passport Flow writes continue. A failed or uncertain install cannot be reported as a completed fence."
+    },
+    {
+      "name": "fully_fenced",
+      "atomicity": "In one PostgreSQL transaction, lock the passport job and Flow write surfaces, promote the durable fence to reject every passport insert, update and delete, and verify the drain and artifact-format counts before commit.",
+      "drain": "Require zero nonterminal passport jobs, zero legacy or unknown artifacts, zero unreadable artifacts, and zero active physical-document Flows from the identified beta database. Preserve every existing job and artifact; an unresolved row blocks promotion.",
+      "continuity": "Unrelated issuance routes and non-passport Flow writes remain available; no live Python passport signing fallback is permitted."
+    },
+    {
+      "name": "rust_owner",
+      "atomicity": "During the later single official aggregate beta deployment, keep the full fence until all old application writers are stopped under the same deployment lock; exact post-deletion Rust images, Gateway/Flow selectors, and the running digest-pinned Credentials issuance image are verified. Prove that the Credentials image lacks the removed Python passport routes before removing or replacing the fence and resuming Rust passport writes; an uncertain cutover remains fail closed.",
+      "continuity": "No Python passport owner, mixed nine-route owner or production mutation is allowed."
+    }
+  ],
+  "protected_evidence": {
+    "initial": "Attest source-bound beta Compose service/container/image identities, PostgreSQL system identifier and database OID, privileged guard ownership/grants, enabled trigger and function-definition hashes, transactionally installed intake and full fence epochs, frozen drain query/hash and zero counts, unchanged production resources, and unrelated beta service continuity. Prove a direct passport write is rejected while representative unrelated issuance writes remain possible.",
+    "final": "Revise Credentials PR #305's current whole-container-stop verifier and implement its missing protected producer together for this scoped fence; neither existing check can qualify this contract yet. The producer re-inspects the same database and running shared Python container generation, proves the full fence still exists, and attests a strictly later zero-count watermark and the exact Credentials deletion PR head. A changed head or missing fence requires a new final run.",
+    "absence": "A deployment mutex, static Compose render, disposable database, zero-count query before the fence, or operator assertion alone is not a retirement receipt."
+  }
+}
