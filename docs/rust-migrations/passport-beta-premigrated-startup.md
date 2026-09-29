@@ -32,3 +32,24 @@ The protected operator still needs to bind the exact source, images, database
 identity, schema verification receipt, and service list before this call. It
 must not use the legacy deploy path or run the aggregate Compose command until
 those gates pass. Production is outside this beta command.
+
+## Guarded migration ownership gate
+
+The fence transfers both service schemas and the three passport tables to its
+NOLOGIN guard owner, while existing non-passport tables retain their `marty`
+owner. A rehearsal against a schema-only copy of beta PostgreSQL 15.17 showed
+that `marty` cannot run even the issuance OID4VCI migration after the fence:
+`CREATE INDEX` requires schema `CREATE`, which the fence revoked. The guard
+owner can run the passport SQL migrations only with a temporary database
+`CREATE` grant, and cannot run the complete Flow migration because it does not
+own the existing non-passport Flow tables. A superuser SQL replay establishes
+syntax compatibility but does not establish the intended migration permissions.
+
+The protected migration operator must therefore execute the reviewed Rust SQL
+under an explicit, bounded ownership plan, revoke any temporary privilege
+before verification, and verify the fence again. The newly created
+`issuance_service.passport_beta_batch_intents` table also needs
+`SELECT, INSERT, UPDATE, DELETE` granted to the beta `marty` application role;
+the guard owner otherwise owns it without granting runtime access. The release
+gate must check that access using the actual application role before Rust
+startup. None of these steps is supplied by the existing Compose overlay.
