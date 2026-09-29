@@ -59,6 +59,7 @@ PROTECTED_FILES = (
     "scripts/prepare_passport_beta_db_maintenance.py",
     "scripts/start-passport-beta-db-maintenance.ps1",
     "scripts/run-passport-beta-native-db-gates.ps1",
+    "scripts/prepare_passport_beta_aggregate_handoff.py",
     "services/Dockerfile.migrations",
     "rust/services/issuance/migrations/0001_oid4vci_public_protocol.sql",
     "rust/services/issuance/migrations/0002_physical_document_jobs.sql",
