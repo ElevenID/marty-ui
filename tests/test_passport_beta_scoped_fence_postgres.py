@@ -301,6 +301,41 @@ def test_verifier_rejects_noinherit_writer_membership(database: str):
     assert result.returncode != 0 and "role attributes or memberships changed" in result.stderr
 
 
+def test_one_shot_migration_role_preserves_fence_at_rest(database: str):
+    assert script(database, INSTALL).returncode == 0
+    sql(database, """
+        SET ROLE marty;
+        ALTER TABLE flow_service.flow_instances ADD COLUMN migration_probe text;
+    """, allowed=False)
+    sql(database, """
+        GRANT marty, marty_passport_fence_owner TO marty_beta_migrator;
+        ALTER ROLE marty_beta_migrator LOGIN INHERIT PASSWORD 'disposable-only';
+    """)
+    active = script(database, VERIFY)
+    assert active.returncode != 0 and "role attributes or memberships changed" in active.stderr
+    migration = docker(
+        "exec", database, "psql", "-U", "marty_beta_migrator", "-d", "marty",
+        "-v", "ON_ERROR_STOP=1", "-c", """
+            CREATE TABLE flow_service.migration_probe (id text PRIMARY KEY);
+            GRANT SELECT, INSERT, UPDATE, DELETE
+                ON flow_service.migration_probe TO marty;
+            ALTER TABLE flow_service.flow_instances ADD COLUMN migration_probe text;
+        """, check=False,
+    )
+    assert migration.returncode == 0, migration.stderr
+    sql(database, """
+        REVOKE marty, marty_passport_fence_owner FROM marty_beta_migrator;
+        ALTER ROLE marty_beta_migrator NOLOGIN NOINHERIT PASSWORD NULL;
+    """)
+    verified = script(database, VERIFY)
+    assert verified.returncode == 0, verified.stderr
+    sql(database, "SET ROLE marty; INSERT INTO flow_service.migration_probe VALUES ('available')")
+    assert sql(database, """
+        SELECT rolcanlogin::text || '|' || rolinherit::text
+        FROM pg_roles WHERE rolname='marty_beta_migrator'
+    """) == "false|false\n"
+
+
 def test_install_waits_for_prior_writer_and_rechecks_drain(database: str):
     writer = subprocess.Popen(
         [
