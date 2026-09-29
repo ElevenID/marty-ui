@@ -16,6 +16,36 @@ from scripts.prepare_passport_beta_aggregate_compose import (
 )
 
 
+def test_maintenance_preflight_reuses_full_credential_validator(monkeypatch):
+    head = "a" * 40
+    docs_id = "b" * 64
+    image_id = "sha256:" + "c" * 64
+    signed = {
+        "services_image": SERVICES_IMAGE + "d" * 64,
+        "issuance_image": ISSUANCE_IMAGE + "e" * 64,
+        "oci_digests": {"ghcr.io/elevenid/marty-ui-oss/ui": "sha256:" + "f" * 64},
+        "build_only_artifacts": {},
+    }
+    docs = {"Id": docs_id, "Image": image_id,
+            "Config": {"Image": image_id,
+                       "Labels": {"com.docker.compose.project": "elevenid-beta",
+                                  "com.docker.compose.service": "docs"}}}
+    observed = []
+    monkeypatch.setattr(compose, "manifest_source", lambda *_: signed)
+    monkeypatch.setattr(compose, "inspect", lambda *_: docs)
+    monkeypatch.setattr(compose, "render_candidate",
+                        lambda handoff: ({"services": {"auth": {}}}, {}, {}))
+    monkeypatch.setattr(compose, "assert_beta_origin",
+                        lambda services: observed.append("origin"))
+    monkeypatch.setattr(compose, "validate_model",
+                        lambda model, **kwargs: observed.append(kwargs))
+    result = compose.preflight_maintenance_compose(Path("stack-manifest.json"),
+                                                   head, docs_id, image_id)
+    assert result["verified"] is True
+    assert observed == ["origin", {"passport_enabled": True,
+                                    "files": compose.COMPOSE_FILES}]
+
+
 def candidate():
     head = "a" * 40
     services_image = SERVICES_IMAGE + "b" * 64

@@ -27,6 +27,10 @@ def test_maintenance_preflights_passport_credentials(
     assert match
     assert source.index("Assert-BetaPassportLaunchCredentials\n") < source.index(
         "Write-DurableJson -Path $intentAbsolute")
+    assert source.index("Assert-BetaPassportLaunchCredentials\n") < source.index(
+        "Start-BetaMutation\n")
+    assert source.index("'--preflight-maintenance-source'") < source.index(
+        "Start-BetaMutation\n")
     ceremony = tmp_path / "elevenid-beta-passport-ceremony"
     ceremony.mkdir()
     (ceremony / "dsc_issue_gateway_key").write_text("d" * 40, encoding="ascii")

@@ -210,6 +210,22 @@ try {
             throw 'Protected beta maintenance plan is invalid'
         }
     }
+    Assert-BetaPassportLaunchCredentials
+    $docs = @($plan.beta_generation | Where-Object { $_.service -ceq 'docs' })
+    if ($docs.Count -ne 1) {
+        throw 'Protected beta docs generation is ambiguous'
+    }
+    $preflight = Invoke-MaintenancePython -Arguments @(
+        (Join-Path $PSScriptRoot 'prepare_passport_beta_aggregate_compose.py'),
+        '--stack-manifest', $StackManifest,
+        '--preflight-maintenance-source', [string]$plan.source_commit,
+        '--preflight-maintenance-docs-container', [string]$docs[0].container_id,
+        '--preflight-maintenance-docs-image', [string]$docs[0].image_id)
+    if ($preflight.schema -cne 'marty.passport-beta-maintenance-compose-preflight/v1' -or
+        $preflight.verified -ne $true -or
+        $preflight.source_commit -cne [string]$plan.source_commit) {
+        throw 'Protected beta passport Compose preflight failed'
+    }
     if ($ResumePending) {
         $state = Invoke-MaintenancePython -Arguments ($baseArgs + @(
             '--verify-plan', $intentAbsolute))
@@ -250,7 +266,6 @@ try {
         $fence.phase -cne 'fully_fenced' -or [string]$fence.epoch -cne $epoch) {
         throw 'Protected beta fence changed before maintenance'
     }
-    Assert-BetaPassportLaunchCredentials
     if (-not $ResumePending) {
         Write-DurableJson -Path $intentAbsolute `
             -Json ($plan | ConvertTo-Json -Depth 20 -Compress)

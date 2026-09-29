@@ -25,6 +25,7 @@ try:
         BETA_PROJECT, beta_psql, ids, inspect, production_attachment_sha256,
         production_snapshot,
     )
+    from .validate_beta_passport_configuration import validate_model
 except ImportError:
     from prepare_passport_beta_aggregate_handoff import (
         prepare as handoff_prepare, verify_fence,
@@ -37,6 +38,7 @@ except ImportError:
         BETA_PROJECT, beta_psql, ids, inspect, production_attachment_sha256,
         production_snapshot,
     )
+    from validate_beta_passport_configuration import validate_model
 
 
 SERVICES_IMAGE = "ghcr.io/elevenid/marty-ui-oss/services@sha256:"
@@ -269,6 +271,43 @@ def render_candidate(handoff: dict[str, Any]) -> tuple[dict[str, Any], dict[str,
                 "service_config_hashes": service_hashes,
                 "ui_config_hash": ui_hash.stdout.split()[1]}
     return beta_config, ui_config, evidence
+
+
+def preflight_maintenance_compose(stack_manifest: Path, source_commit: str,
+                                  docs_container_id: str,
+                                  docs_image_id: str) -> dict[str, Any]:
+    """Validate launch credentials and beta bindings before maintenance mutation."""
+    require(SHA.fullmatch(source_commit) is not None
+            and CONTAINER.fullmatch(docs_container_id) is not None
+            and DIGEST.fullmatch(docs_image_id) is not None,
+            "Beta maintenance preflight identities are invalid")
+    signed = manifest_source(stack_manifest, source_commit)
+    docs = inspect(docs_container_id, run)
+    config = docs.get("Config")
+    labels = config.get("Labels") if isinstance(config, dict) else None
+    docs_image = config.get("Image") if isinstance(config, dict) else None
+    require(docs.get("Id") == docs_container_id
+            and docs.get("Image") == docs_image_id
+            and isinstance(labels, dict)
+            and labels.get("com.docker.compose.project") == BETA_PROJECT
+            and labels.get("com.docker.compose.service") == "docs"
+            and isinstance(docs_image, str)
+            and DIGEST.fullmatch(docs_image) is not None,
+            "Preserved beta docs image changed before maintenance")
+    handoff = {
+        "services_image": signed["services_image"],
+        "issuance_image": signed["issuance_image"],
+        "ui_image": f"{UI_IMAGE}{signed['oci_digests']['ghcr.io/elevenid/marty-ui-oss/ui'].split(':', 1)[1]}",
+        "build_only_artifacts": signed["build_only_artifacts"],
+        "docs_image": docs_image,
+    }
+    rendered, _, _ = render_candidate(handoff)
+    services = rendered.get("services")
+    require(isinstance(services, dict), "Beta maintenance Compose services are absent")
+    assert_beta_origin(services)
+    validate_model(rendered, passport_enabled=True, files=COMPOSE_FILES)
+    return {"schema": "marty.passport-beta-maintenance-compose-preflight/v1",
+            "verified": True, "source_commit": source_commit}
 
 
 def prepare(handoff: dict[str, Any], maintenance_intent: dict[str, Any],
@@ -726,21 +765,42 @@ def verify_resume_plan(
 def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--stack-manifest", required=True, type=Path)
-    parser.add_argument("--fence-receipt", required=True, type=Path)
-    parser.add_argument("--maintenance-receipt", required=True, type=Path)
-    parser.add_argument("--native-receipt", required=True, type=Path)
+    parser.add_argument("--fence-receipt", type=Path)
+    parser.add_argument("--maintenance-receipt", type=Path)
+    parser.add_argument("--native-receipt", type=Path)
+    parser.add_argument("--preflight-maintenance-source")
+    parser.add_argument("--preflight-maintenance-docs-container")
+    parser.add_argument("--preflight-maintenance-docs-image")
     parser.add_argument("--verify-plan", type=Path)
     parser.add_argument("--verify-render-plan", type=Path)
     parser.add_argument("--verify-openbao-token", type=Path)
     parser.add_argument("--verify-resume-plan", type=Path)
     args = parser.parse_args()
     try:
+        preflight = any((args.preflight_maintenance_source,
+                         args.preflight_maintenance_docs_container,
+                         args.preflight_maintenance_docs_image))
         require(sum(bool(item) for item in (args.verify_plan,
                                             args.verify_render_plan,
                                             args.verify_openbao_token,
-                                            args.verify_resume_plan)) <= 1,
+                                            args.verify_resume_plan,
+                                            preflight)) <= 1,
                 "Choose one aggregate Compose verification mode")
-        if args.verify_resume_plan:
+        if preflight:
+            require(all((args.preflight_maintenance_source,
+                         args.preflight_maintenance_docs_container,
+                         args.preflight_maintenance_docs_image))
+                    and not any((args.fence_receipt, args.maintenance_receipt,
+                                 args.native_receipt)),
+                    "Beta maintenance Compose preflight arguments are incomplete")
+            result = preflight_maintenance_compose(
+                args.stack_manifest, args.preflight_maintenance_source,
+                args.preflight_maintenance_docs_container,
+                args.preflight_maintenance_docs_image)
+        elif args.verify_resume_plan:
+            require(all((args.fence_receipt, args.maintenance_receipt,
+                         args.native_receipt)),
+                    "Aggregate Compose receipts are absent")
             recorded = json.loads(args.verify_resume_plan.read_text(encoding="utf-8"))
             intent_path = Path(str(args.maintenance_receipt) + ".intent.json")
             intent = json.loads(intent_path.read_text(encoding="utf-8"))
@@ -750,14 +810,23 @@ def main() -> None:
                                         args.fence_receipt, args.maintenance_receipt,
                                         args.native_receipt)
         elif args.verify_openbao_token:
+            require(all((args.fence_receipt, args.maintenance_receipt,
+                         args.native_receipt)),
+                    "Aggregate Compose receipts are absent")
             recorded = json.loads(args.verify_openbao_token.read_text(encoding="utf-8"))
             require(isinstance(recorded, dict), "Recorded Compose plan is invalid")
             result = verify_preserved_openbao_token(recorded)
         elif args.verify_render_plan:
+            require(all((args.fence_receipt, args.maintenance_receipt,
+                         args.native_receipt)),
+                    "Aggregate Compose receipts are absent")
             recorded = json.loads(args.verify_render_plan.read_text(encoding="utf-8"))
             require(isinstance(recorded, dict), "Recorded Compose plan is invalid")
             result = verify_render_plan(recorded)
         else:
+            require(all((args.fence_receipt, args.maintenance_receipt,
+                         args.native_receipt)),
+                    "Aggregate Compose receipts are absent")
             handoff = handoff_prepare(args.stack_manifest, args.fence_receipt,
                                       args.maintenance_receipt, args.native_receipt)
             intent_path = Path(str(args.maintenance_receipt) + ".intent.json")
