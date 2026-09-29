@@ -27,6 +27,12 @@ HTTP 422 response; a signed foreign-organization callback for the same bureau
 job must return the native job-not-found HTTP 404 without changing that job.
 Both negative requests must bind to the positive synthetic job and selected
 bureau-job commitment; the foreign event must carry a distinct organization.
+`scripts/probe_passport_beta_negative_callbacks.py` performs these two live
+denials after checking the signed aggregate deployment and private selected-job
+handoff. It signs the foreign callback through the isolated beta signer and
+emits only keyed identity and state commitments. Its JSON result is diagnostic
+until the separate uncut videos and privacy scans are captured and verified;
+it cannot qualify the preliminary recording gate on its own.
 
 The D-12 recorder's `externalQualification` runs
 `tests/scripts/audit-beta-physical-passport-flow.js`. Supply
