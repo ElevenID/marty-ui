@@ -1,8 +1,9 @@
 #!/usr/bin/env python3
-"""Prove beta's selected native passport job survives two denied callbacks.
+"""Prove beta's selected native passport job survives denied callbacks.
 
-This probe emits commitments and fixed response projections only. It does not
-qualify D-12 recording: separate uncut videos and privacy scans are required.
+This probe emits commitments and fixed response projections only. Single-case
+runs let the protected recorder capture each denial without a cut. The probe
+does not qualify D-12 recording: privacy-scanned videos are also required.
 """
 
 from __future__ import annotations
@@ -190,7 +191,10 @@ def exercise(
     post: Callable[[bytes, str | None], tuple[int, dict[str, bool]]] = _post_callback,
     sign: Callable[[str, str, bytes], str] = _sign_foreign,
     foreign_organization: str | None = None,
+    case: str = "both",
 ) -> dict[str, Any]:
+    require(case in ("both", "unsigned", "foreign"),
+            "Negative callback case is invalid")
     required = {"schema", "source_commit", "stack_manifest_sha256", "organization_id",
                 "flow_definition_id", "flow_instance_id", "application_id",
                 "source_job_id", "bureau_job_id"}
@@ -209,9 +213,10 @@ def exercise(
     require(str(bureau) == private["bureau_job_id"],
             "Selected bureau job ID is not canonical")
     foreign = foreign_organization or f"marty-beta-foreign-{uuid4()}"
-    require(isinstance(foreign, str) and foreign != private["organization_id"]
-            and 1 <= len(foreign) <= 256 and "\r" not in foreign and "\n" not in foreign,
-            "Foreign callback organization is invalid")
+    if case != "unsigned":
+        require(isinstance(foreign, str) and foreign != private["organization_id"]
+                and 1 <= len(foreign) <= 256 and "\r" not in foreign and "\n" not in foreign,
+                "Foreign callback organization is invalid")
     organization = private["organization_id"]
     source_job = private["source_job_id"]
     bureau_job = private["bureau_job_id"]
@@ -223,48 +228,59 @@ def exercise(
     common = {"provider_profile_id": "passport-beta-bureau",
               "bureau_job_id": bureau_job, "status": "SHIPPED",
               "tracking_number": "BETA-SIM-" + bureau.hex}
-    unsigned_body = json.dumps({**common, "organization_id": organization},
-                               separators=(",", ":")).encode()
-    unsigned_status, unsigned_denial = post(unsigned_body, None)
-    require(unsigned_status == 422
-            and unsigned_denial.get("missing_signature_header") is True,
-            "Selected beta unsigned callback was not denied")
-    after_unsigned = _state(application, organization, source_job, bureau_job,
-                            api_key, request)
-    require(after_unsigned == before, "Unsigned callback changed the selected job")
-    foreign_body = json.dumps({**common, "organization_id": foreign},
-                              separators=(",", ":")).encode()
-    signature = sign(bureau_container_id, foreign, foreign_body)
-    require(isinstance(signature, str) and SIGNATURE.fullmatch(signature) is not None,
-            "Foreign callback signature is invalid")
-    foreign_status, foreign_denial = post(foreign_body, signature)
-    require(foreign_status == 404
-            and foreign_denial.get("webhook_job_not_found") is True,
-            "Signed foreign-organization callback was not denied")
-    after_foreign = _state(application, organization, source_job, bureau_job,
-                           api_key, request)
-    require(after_foreign == before, "Foreign callback changed the selected job")
     selected = {
         "source_job_commitment": _identity_commit(api_key, "source-job", source_job),
         "bureau_job_commitment": _identity_commit(api_key, "bureau-job", bureau_job),
     }
-    return {"schema": "marty.passport-beta-negative-callbacks/v1",
+    evidence: dict[str, dict[str, Any]] = {}
+    if case in ("both", "unsigned"):
+        unsigned_body = json.dumps({**common, "organization_id": organization},
+                                   separators=(",", ":")).encode()
+        unsigned_status, unsigned_denial = post(unsigned_body, None)
+        require(unsigned_status == 422
+                and unsigned_denial.get("missing_signature_header") is True,
+                "Selected beta unsigned callback was not denied")
+        after_unsigned = _state(application, organization, source_job, bureau_job,
+                                api_key, request)
+        require(after_unsigned == before, "Unsigned callback changed the selected job")
+        evidence["unsigned"] = {
+            "http_status": 422, "webhook_owner": "issuance-native",
+            "request_kind": "missing_signature_header",
+            "response_projection": {"missing_signature_header": True},
+            "organization_commitment": _identity_commit(
+                api_key, "organization", organization),
+            **selected, "job_state_before_commitment": state_commitment,
+            "job_state_after_commitment": state_commitment,
+        }
+    if case in ("both", "foreign"):
+        foreign_body = json.dumps({**common, "organization_id": foreign},
+                                  separators=(",", ":")).encode()
+        signature = sign(bureau_container_id, foreign, foreign_body)
+        require(isinstance(signature, str) and SIGNATURE.fullmatch(signature) is not None,
+                "Foreign callback signature is invalid")
+        foreign_status, foreign_denial = post(foreign_body, signature)
+        require(foreign_status == 404
+                and foreign_denial.get("webhook_job_not_found") is True,
+                "Signed foreign-organization callback was not denied")
+        after_foreign = _state(application, organization, source_job, bureau_job,
+                               api_key, request)
+        require(after_foreign == before, "Foreign callback changed the selected job")
+        evidence["foreign"] = {
+            "http_status": 404, "webhook_owner": "issuance-native",
+            "request_kind": "signed_foreign_organization",
+            "signature_valid": True, "foreign_organization": True,
+            "response_projection": {"webhook_job_not_found": True},
+            "organization_commitment": _identity_commit(
+                api_key, "organization", foreign),
+            **selected, "job_state_before_commitment": state_commitment,
+            "job_state_after_commitment": state_commitment,
+        }
+    if case == "both":
+        return {"schema": "marty.passport-beta-negative-callbacks/v1",
+                "verified": True, "physical_claim": "not_claimed", **evidence}
+    return {"schema": "marty.passport-beta-negative-callback-case/v1",
             "verified": True, "physical_claim": "not_claimed",
-            "unsigned": {"http_status": 422, "webhook_owner": "issuance-native",
-                         "request_kind": "missing_signature_header",
-                         "response_projection": {"missing_signature_header": True},
-                         "organization_commitment": _identity_commit(
-                             api_key, "organization", organization),
-                         **selected, "job_state_before_commitment": state_commitment,
-                         "job_state_after_commitment": state_commitment},
-            "foreign": {"http_status": 404, "webhook_owner": "issuance-native",
-                        "request_kind": "signed_foreign_organization",
-                        "signature_valid": True, "foreign_organization": True,
-                        "response_projection": {"webhook_job_not_found": True},
-                        "organization_commitment": _identity_commit(
-                            api_key, "organization", foreign),
-                        **selected, "job_state_before_commitment": state_commitment,
-                        "job_state_after_commitment": state_commitment}}
+            "case": case, "evidence": evidence[case]}
 
 
 def main() -> int:
@@ -272,6 +288,7 @@ def main() -> int:
     parser.add_argument("--private-handoff", type=Path, required=True)
     parser.add_argument("--artifact-dir", type=Path, required=True)
     parser.add_argument("--output", type=Path, required=True)
+    parser.add_argument("--case", choices=("both", "unsigned", "foreign"), default="both")
     args = parser.parse_args()
     try:
         require(not os.environ.get("BETA_LOCAL_PROXY"),
@@ -306,7 +323,10 @@ def main() -> int:
                 "Selected beta callback route is not Rust issuance")
         _check_production(api_key, deployed["deployment"])
         try:
-            result = exercise(private, api_key, bureau["container_id"])
+            if args.case == "both":
+                result = exercise(private, api_key, bureau["container_id"])
+            else:
+                result = exercise(private, api_key, bureau["container_id"], case=args.case)
         finally:
             _check_production(api_key, deployed["deployment"])
             after = collect(artifact_dir, api_key=api_key,
@@ -331,7 +351,8 @@ def main() -> int:
         if not args.output.exists():
             with args.output.open("x", encoding="utf-8") as output:
                 output.write(json.dumps({
-                    "schema": "marty.passport-beta-negative-callbacks/v1",
+                    "schema": ("marty.passport-beta-negative-callbacks/v1" if args.case == "both"
+                               else "marty.passport-beta-negative-callback-case/v1"),
                     "verified": False,
                     "blocker": "Protected negative callback proof failed",
                 }) + "\n")

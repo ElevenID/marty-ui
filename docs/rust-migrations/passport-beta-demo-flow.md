@@ -33,6 +33,13 @@ handoff. It signs the foreign callback through the isolated beta signer and
 emits only keyed identity and state commitments. Its JSON result is diagnostic
 until the separate uncut videos and privacy scans are captured and verified;
 it cannot qualify the preliminary recording gate on its own.
+The protected recording job may invoke the probe once with `--case unsigned`
+and once with `--case foreign`, creating one single-case result per uncut clip.
+Each invocation rechecks the selected job, signed deployment, native route, and
+production continuity. The preliminary producer must verify that the two
+single-case results agree on the selected source and bureau commitments and
+unchanged job-state commitment before it joins them with their exact videos
+and privacy scans. A single-case result is never a two-denial receipt.
 The private handoff must remain outside the deployment artifact directory and
 source checkout. The probe writes a new result file outside that directory,
 rejects the local beta proxy mode, and uses direct beta HTTPS for its job and

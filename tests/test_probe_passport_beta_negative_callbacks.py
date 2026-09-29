@@ -80,6 +80,65 @@ def test_proves_both_denials_without_publishing_private_values() -> None:
     assert "video_sha256" not in wire
 
 
+def test_separate_uncut_cases_keep_one_selected_job_commitment() -> None:
+    calls = []
+
+    def request(*_args):
+        calls.append("state")
+        return 200, {"id": "selected-job", "application_id": "selected-app",
+                     "organization_id": "selected-org", "bureau_job_id": BUREAU_JOB,
+                     "status": "ACTIVE"}
+
+    def post(body, signature):
+        event = json.loads(body)
+        assert event["bureau_job_id"] == BUREAU_JOB
+        if signature is None:
+            assert event["organization_id"] == "selected-org"
+            calls.append("unsigned")
+            return 422, {"missing_signature_header": True}
+        assert event["organization_id"] == "foreign-org"
+        calls.append("foreign")
+        return 404, {"webhook_job_not_found": True}
+
+    def sign(*_args):
+        calls.append("sign")
+        return SIGNATURE
+
+    unsigned = exercise(handoff(), KEY, "c" * 64, request=request, post=post,
+                        sign=sign, case="unsigned")
+    foreign = exercise(handoff(), KEY, "c" * 64, request=request, post=post,
+                       sign=sign, foreign_organization="foreign-org", case="foreign")
+    assert calls == ["state", "unsigned", "state", "state", "sign", "foreign", "state"]
+    assert unsigned["schema"] == foreign["schema"] == (
+        "marty.passport-beta-negative-callback-case/v1")
+    assert unsigned["case"] == "unsigned" and foreign["case"] == "foreign"
+    assert unsigned["verified"] is True and foreign["verified"] is True
+    for field in ("source_job_commitment", "bureau_job_commitment",
+                  "job_state_before_commitment", "job_state_after_commitment"):
+        assert unsigned["evidence"][field] == foreign["evidence"][field]
+    assert unsigned["evidence"]["organization_commitment"] != (
+        foreign["evidence"]["organization_commitment"])
+    assert "selected-job" not in json.dumps((unsigned, foreign))
+    assert "video_sha256" not in json.dumps((unsigned, foreign))
+
+
+def test_separate_case_rejects_wrong_denial_or_state_change() -> None:
+    def request(*_args):
+        return 200, {"id": "selected-job", "application_id": "selected-app",
+                     "organization_id": "selected-org", "bureau_job_id": BUREAU_JOB,
+                     "status": "ACTIVE"}
+
+    with pytest.raises(NegativeCallbackError):
+        exercise(handoff(), KEY, "c" * 64, request=request,
+                 post=lambda *_: (200, {}), case="unsigned")
+    with pytest.raises(NegativeCallbackError):
+        exercise(handoff(), KEY, "c" * 64, request=request,
+                 post=lambda *_: (200, {}), sign=lambda *_: SIGNATURE,
+                 foreign_organization="foreign-org", case="foreign")
+    with pytest.raises(NegativeCallbackError, match="case is invalid"):
+        exercise(handoff(), KEY, "c" * 64, case="untrusted")
+
+
 @pytest.mark.parametrize("failure", ["unsigned", "foreign", "changed"])
 def test_rejects_denial_or_selected_job_drift(failure: str) -> None:
     count = 0
@@ -226,6 +285,54 @@ def test_cli_rechecks_production_and_beta_after_failed_callback(
         negative.main()
     assert observed == ["collect", "production", "callback", "production", "collect"]
     assert json.loads(output.read_text())["verified"] is False
+
+
+def test_cli_single_case_keeps_release_binding_and_checks_runtime(
+    tmp_path, monkeypatch,
+) -> None:
+    private_path = tmp_path / "private.json"
+    private_path.write_text(json.dumps(handoff()), encoding="utf-8")
+    artifact_dir = tmp_path / "artifacts"
+    artifact_dir.mkdir()
+    (artifact_dir / "aggregate-deployment.json").write_text("{}", encoding="utf-8")
+    output = tmp_path / "unsigned.json"
+    observed = []
+    deployed = {
+        "release": {"signed_manifest_verified": True, "source_commit": "a" * 40,
+                    "stack_manifest_sha256": "b" * 64},
+        "deployment": {"provider_mode": "simulator",
+                       "aggregate_deployment_receipt_sha256": "d" * 64,
+                       "aggregate_plan_sha256": "e" * 64},
+        "runtime_images": {"passport-beta-bureau": {"container_id": "c" * 64}},
+    }
+
+    def exercise_case(*_args, **kwargs):
+        observed.append(("callback", kwargs["case"]))
+        return {"schema": "marty.passport-beta-negative-callback-case/v1",
+                "verified": True, "physical_claim": "not_claimed",
+                "case": "unsigned", "evidence": {"http_status": 422}}
+
+    monkeypatch.setenv("PASSPORT_ACCEPTANCE_API_KEY", KEY)
+    monkeypatch.setattr(negative, "collect",
+                        lambda *_args, **_kwargs: (observed.append("collect") or deployed))
+    monkeypatch.setattr(negative, "exercise", exercise_case)
+    monkeypatch.setattr(negative, "_check_production",
+                        lambda *_args: observed.append("production"))
+    monkeypatch.setattr(negative, "beta_native_route_ownership",
+                        lambda *_args: {"verified": True, "evidence": {
+                            "webhook_owner": "issuance-native"}})
+    monkeypatch.setattr(sys, "argv", ["probe", "--private-handoff", str(private_path),
+                                      "--artifact-dir", str(artifact_dir),
+                                      "--output", str(output), "--case", "unsigned"])
+    assert negative.main() == 0
+    assert observed == ["collect", "production", ("callback", "unsigned"),
+                        "production", "collect"]
+    result = json.loads(output.read_text())
+    assert result["schema"] == "marty.passport-beta-negative-callback-case/v1"
+    assert result["release"] == {"source_commit": "a" * 40,
+                                 "stack_manifest_sha256": "b" * 64}
+    assert result["deployment"] == {"aggregate_deployment_receipt_sha256": "d" * 64,
+                                    "aggregate_plan_sha256": "e" * 64}
 
 
 @pytest.mark.parametrize("unsafe", ["private_in_artifacts", "overwrite_private",
