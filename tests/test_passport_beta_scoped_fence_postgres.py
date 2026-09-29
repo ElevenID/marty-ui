@@ -301,35 +301,101 @@ def test_verifier_rejects_noinherit_writer_membership(database: str):
     assert result.returncode != 0 and "role attributes or memberships changed" in result.stderr
 
 
-def test_one_shot_migration_role_preserves_fence_at_rest(database: str):
+def test_one_shot_migration_role_preserves_fence_at_rest(
+    database: str, tmp_path: Path,
+):
     assert script(database, INSTALL).returncode == 0
     sql(database, """
         SET ROLE marty;
         ALTER TABLE flow_service.flow_instances ADD COLUMN migration_probe text;
     """, allowed=False)
-    sql(database, """
-        GRANT marty, marty_passport_fence_owner TO marty_beta_migrator;
-        ALTER ROLE marty_beta_migrator LOGIN INHERIT PASSWORD 'disposable-only';
-    """)
+    container_id = docker("inspect", database, "--format", "{{.Id}}").stdout.strip()
+    system_id = sql(database, "SELECT system_identifier FROM pg_control_system()").strip()
+    database_oid = sql(database, "SELECT oid FROM pg_database WHERE datname='marty'").strip()
+    mutation_marker = tmp_path / "beta-mutation.pending"
+    fence_marker = tmp_path / "passport-fence.pending"
+    mutation_marker.write_text("test", encoding="utf-8")
+    fence_marker.write_text("test", encoding="utf-8")
+    lease_file = ROOT / "scripts/beta-passport-migration-lease.ps1"
+    def lease(verb: str) -> None:
+        code = f"""
+            $ErrorActionPreference = 'Stop'
+            . '{str(lease_file).replace("'", "''")}'
+            function Get-BetaMutationMarkerPath {{ return $env:BETA_TEST_MUTATION_MARKER }}
+            function Get-BetaPassportFenceMarkerPath {{ return $env:BETA_TEST_FENCE_MARKER }}
+            {verb}-BetaPassportMigrationLease `
+                -PostgresContainer $env:BETA_TEST_CONTAINER `
+                -SystemIdentifier $env:BETA_TEST_SYSTEM_ID `
+                -DatabaseOid $env:BETA_TEST_DATABASE_OID `
+                -TemporaryPassword $env:BETA_TEST_PASSWORD
+        """
+        # Stop does not take a password; PowerShell parameter binding must not
+        # quietly accept one the cleanup function did not request.
+        if verb == "Stop":
+            code = code.replace("`\n                -TemporaryPassword $env:BETA_TEST_PASSWORD", "")
+        env = {**os.environ,
+               "BETA_TEST_MUTATION_MARKER": str(mutation_marker),
+               "BETA_TEST_FENCE_MARKER": str(fence_marker),
+               "BETA_TEST_CONTAINER": container_id,
+               "BETA_TEST_SYSTEM_ID": system_id,
+               "BETA_TEST_DATABASE_OID": database_oid,
+               "BETA_TEST_PASSWORD": "a" * 64}
+        result = subprocess.run(
+            ["powershell", "-NoProfile", "-NonInteractive", "-Command", code],
+            capture_output=True, text=True, timeout=30, env=env,
+        )
+        assert result.returncode == 0, result.stderr
+
+    lease("Start")
     active = script(database, VERIFY)
     assert active.returncode != 0 and "role attributes or memberships changed" in active.stderr
     migration = docker(
         "exec", database, "psql", "-U", "marty_beta_migrator", "-d", "marty",
         "-v", "ON_ERROR_STOP=1", "-c", """
-            CREATE TABLE flow_service.migration_probe (id text PRIMARY KEY);
-            GRANT SELECT, INSERT, UPDATE, DELETE
-                ON flow_service.migration_probe TO marty;
-            ALTER TABLE flow_service.flow_instances ADD COLUMN migration_probe text;
+            CREATE SCHEMA IF NOT EXISTS issuance_service;
+            CREATE TABLE public.migration_probe (id text PRIMARY KEY);
+            GRANT SELECT, INSERT, UPDATE, DELETE ON public.migration_probe TO marty;
         """, check=False,
     )
     assert migration.returncode == 0, migration.stderr
-    sql(database, """
-        REVOKE marty, marty_passport_fence_owner FROM marty_beta_migrator;
-        ALTER ROLE marty_beta_migrator NOLOGIN NOINHERIT PASSWORD NULL;
-    """)
+    denied_guarded_ddl = docker(
+        "exec", database, "psql", "-U", "marty_beta_migrator", "-d", "marty",
+        "-v", "ON_ERROR_STOP=1", "-c", """
+            ALTER TABLE flow_service.flow_instances ADD COLUMN migration_probe text;
+        """, check=False,
+    )
+    assert denied_guarded_ddl.returncode != 0
+    denied_guard_role = docker(
+        "exec", database, "psql", "-U", "marty_beta_migrator", "-d", "marty",
+        "-v", "ON_ERROR_STOP=1", "-c", "SET ROLE marty_passport_fence_owner",
+        check=False,
+    )
+    assert denied_guard_role.returncode != 0
+    lingering = subprocess.Popen(
+        ["docker", "exec", database, "psql", "-U", "marty_beta_migrator",
+         "-d", "marty", "-c", "SELECT pg_sleep(30)"],
+        stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
+    )
+    try:
+        for _ in range(80):
+            if sql(database, """
+                SELECT count(*) FROM pg_stat_activity
+                WHERE usename='marty_beta_migrator' AND wait_event='PgSleep'
+            """).strip() == "1":
+                break
+            time.sleep(0.025)
+        else:
+            pytest.fail("migration role session did not become active")
+        lease("Stop")
+        lingering.communicate(timeout=5)
+        assert lingering.returncode != 0
+    finally:
+        if lingering.poll() is None:
+            lingering.terminate()
+            lingering.communicate(timeout=5)
     verified = script(database, VERIFY)
     assert verified.returncode == 0, verified.stderr
-    sql(database, "SET ROLE marty; INSERT INTO flow_service.migration_probe VALUES ('available')")
+    sql(database, "SET ROLE marty; INSERT INTO public.migration_probe VALUES ('available')")
     assert sql(database, """
         SELECT rolcanlogin::text || '|' || rolinherit::text
         FROM pg_roles WHERE rolname='marty_beta_migrator'

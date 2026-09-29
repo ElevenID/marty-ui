@@ -41,6 +41,7 @@ PROTECTED_FILES = (
     "scripts/check_passport_beta_fence_authority.py",
     "scripts/beta-deployment-lock.ps1",
     "scripts/beta-passport-fence-legacy-boundary.ps1",
+    "scripts/beta-passport-migration-lease.ps1",
     "scripts/probe_passport_beta_fence_target.py",
     "scripts/probe_passport_beta_host.py",
     "scripts/collect_passport_beta_acceptance.py",
