@@ -1406,6 +1406,48 @@ async fn passport_jobs_survive_restart_without_cross_tenant_reads() {
         .unwrap();
     migration::validate_passport(&read_only_pool).await.unwrap();
     read_only_pool.close().await;
+    sqlx::raw_sql(
+        "CREATE ROLE passport_batch_acl_test NOLOGIN;
+         GRANT USAGE ON SCHEMA issuance_service TO passport_batch_acl_test;
+         GRANT SELECT ON issuance_service.physical_document_jobs,
+                         issuance_service.passport_beta_batch_intents
+             TO passport_batch_acl_test;",
+    )
+    .execute(&pool)
+    .await
+    .unwrap();
+    let limited_pool = PgPoolOptions::new()
+        .max_connections(1)
+        .after_connect(|connection, _| {
+            Box::pin(async move {
+                sqlx::query("SET ROLE passport_batch_acl_test")
+                    .execute(connection)
+                    .await?;
+                Ok(())
+            })
+        })
+        .connect(&database_url)
+        .await
+        .unwrap();
+    let access_error = migration::validate_passport(&limited_pool)
+        .await
+        .unwrap_err();
+    assert!(access_error
+        .to_string()
+        .contains("lacks application CRUD privileges"));
+    sqlx::query(
+        "GRANT INSERT, UPDATE, DELETE ON issuance_service.passport_beta_batch_intents
+         TO passport_batch_acl_test",
+    )
+    .execute(&pool)
+    .await
+    .unwrap();
+    migration::validate_passport(&limited_pool).await.unwrap();
+    limited_pool.close().await;
+    sqlx::raw_sql("DROP OWNED BY passport_batch_acl_test; DROP ROLE passport_batch_acl_test;")
+        .execute(&pool)
+        .await
+        .unwrap();
     sqlx::query("DROP TABLE issuance_service.passport_beta_batch_intents")
         .execute(&pool)
         .await

@@ -281,6 +281,23 @@ async fn validate_passport_connection(
             )));
         }
     }
+    let batch_access: bool = sqlx::query_scalar(
+        "SELECT has_table_privilege(current_user, \
+                    'issuance_service.passport_beta_batch_intents', 'SELECT')
+                AND has_table_privilege(current_user, \
+                    'issuance_service.passport_beta_batch_intents', 'INSERT')
+                AND has_table_privilege(current_user, \
+                    'issuance_service.passport_beta_batch_intents', 'UPDATE')
+                AND has_table_privilege(current_user, \
+                    'issuance_service.passport_beta_batch_intents', 'DELETE')",
+    )
+    .fetch_one(&mut *connection)
+    .await?;
+    if !batch_access {
+        return Err(sqlx::Error::Protocol(
+            "passport beta batch intents lacks application CRUD privileges".into(),
+        ));
+    }
     let checks = sqlx::query_as::<_, (String, String, String)>(
         "SELECT relation.relname, con.conname,
                 md5(pg_get_constraintdef(con.oid))
