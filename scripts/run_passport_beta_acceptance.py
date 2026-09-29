@@ -66,6 +66,7 @@ if __package__:
         exercise as exercise_selected_flow,
     )
     from .probe_passport_beta_selected_flow import (
+        selected_plan_commitment,
         validate_inputs as validate_selected_flow_inputs,
     )
     from .verify_passport_beta_issuer_profiles import (
@@ -131,6 +132,7 @@ else:
         exercise as exercise_selected_flow,
     )
     from probe_passport_beta_selected_flow import (
+        selected_plan_commitment,
         validate_inputs as validate_selected_flow_inputs,
     )
     from verify_passport_beta_issuer_profiles import (
@@ -214,6 +216,7 @@ def run(
                     for key in ("container_id", "oci_reference")),
             "Inspected beta simulator is missing")
     native_image = report["runtime_images"].get("issuance-native")
+    selected_input_commitment: str | None = None
     if selected_flow_plan is not None:
         require(isinstance(selected_flow_plan, dict)
                 and set(selected_flow_plan) == {"source_commit", "stack_manifest_sha256",
@@ -242,6 +245,7 @@ def run(
             )
         }, report["release"], report["deployment"])
         checkout_checker(selected_flow_plan["source_commit"])
+        selected_input_commitment = selected_plan_commitment(selected_flow_plan, api_key)
     for name in ("application_template_id", "credential_template_id",
                  "delivery_destination_profile_id"):
         require(isinstance(application.get(name), str) and bool(application[name]),
@@ -347,6 +351,9 @@ def run(
                 )
                 return selected_bureau_id
 
+            require(selected_plan_commitment(selected_flow_plan, api_key)
+                    == selected_input_commitment,
+                    "Selected Flow input mutated before protected execution")
             selected_result = selected_flow(
                 selected_flow_plan["flow_definition_id"], application["organization_id"],
                 application["issuer_did"], selected_flow_plan["references"],
@@ -354,6 +361,9 @@ def run(
                 simulator_container_id=bureau["container_id"], on_submission=compare_submission,
                 on_signed_sod=bind_native_batch,
             )
+            require(selected_plan_commitment(selected_flow_plan, api_key)
+                    == selected_input_commitment,
+                    "Selected Flow input mutated during protected execution")
             selected_evidence = selected_result.get("evidence") if isinstance(selected_result, dict) else None
             require(isinstance(selected_result, dict) and selected_result.get("verified") is True
                     and isinstance(selected_evidence, dict)
@@ -581,6 +591,7 @@ def run(
             "callback_receipt_sha256": selected_evidence["callback_receipt_sha256"],
             "terminal_native_status": selected_evidence["terminal_native_status"],
             "physical_claim": selected_evidence["physical_claim"],
+            "selected_flow_plan_commitment": selected_input_commitment,
         }}
     lifecycle_evidence = lifecycle_result.get("evidence")
     require(lifecycle_result.get("verified") is True and isinstance(lifecycle_evidence, dict)

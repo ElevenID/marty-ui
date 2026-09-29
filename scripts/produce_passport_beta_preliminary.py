@@ -21,11 +21,13 @@ from typing import Any
 from uuid import UUID
 
 try:
+    from .collect_passport_beta_acceptance import production_snapshot_commitment
     from .probe_passport_beta_flow import PHYSICAL_STEPS
-    from .probe_passport_beta_selected_flow import PASSPORT_FLOW_ROUTES
+    from .probe_passport_beta_selected_flow import PASSPORT_FLOW_ROUTES, selected_plan_commitment
 except ImportError:
+    from collect_passport_beta_acceptance import production_snapshot_commitment
     from probe_passport_beta_flow import PHYSICAL_STEPS
-    from probe_passport_beta_selected_flow import PASSPORT_FLOW_ROUTES
+    from probe_passport_beta_selected_flow import PASSPORT_FLOW_ROUTES, selected_plan_commitment
 
 
 SHA256 = re.compile(r"[0-9a-f]{64}\Z")
@@ -272,6 +274,8 @@ def verify_positive_job(report: dict[str, Any], private_plan: dict[str, Any],
             and all(flow.get(field) == commitment for field, commitment in selected.items())
             and flow.get("terminal_native_status") == "ACTIVE"
             and flow.get("physical_claim") == "not_claimed"
+            and isinstance(flow.get("selected_flow_plan_commitment"), str)
+            and SHA256.fullmatch(flow["selected_flow_plan_commitment"]) is not None
             and all(gateway_trace.get(field) == commitment
                     for field, commitment in selected.items())
             and gateway_trace.get("routes") == [
@@ -465,6 +469,31 @@ def qualify_preliminary(
             and selected_flow_plan.get("flow_definition_id") == private_plan["flow_definition_id"]
             and selected_flow_plan.get("physical_document") == fixture,
             "Protected selected Flow did not use the fixed synthetic identity fixture")
+    require(report["probes"]["selected_physical_flow"]["evidence"].get(
+                "selected_flow_plan_commitment")
+            == selected_plan_commitment(selected_flow_plan, api_key),
+            "Synthetic fixture is not bound to the executed selected Flow")
+    continuity = _probe(report, "production_continuity_during_probe")
+    legacy = _probe(report, "legacy_drain")
+    baseline = deployment.get("production_snapshot_commitment")
+    attachments = deployment.get("production_attachment_commitment")
+    require(isinstance(continuity.get("before_sha256"), str)
+            and SHA256.fullmatch(continuity["before_sha256"]) is not None
+            and continuity.get("after_sha256") == continuity["before_sha256"]
+            and continuity.get("scope") == "acceptance-run-window-only"
+            and isinstance(continuity.get("container_counts"), dict)
+            and isinstance(baseline, str) and SHA256.fullmatch(baseline) is not None
+            and baseline == production_snapshot_commitment(
+                api_key, continuity["before_sha256"])
+            and isinstance(attachments, str) and SHA256.fullmatch(attachments) is not None
+            and isinstance(legacy.get("before"), dict)
+            and isinstance(legacy.get("after"), dict)
+            and all(legacy[phase] == {
+                "in_flight_jobs": 0, "legacy_or_unknown_artifacts": 0,
+                "active_physical_document_flows": 0,
+                "database": "beta", "source": "live PostgreSQL",
+            } for phase in ("before", "after")),
+            "Production continuity or beta passport drain is unproven")
     negative = verify_negative_media(media_dir, release=release,
                                      deployment=deployment, selected=positive["selected"])
     return {
@@ -505,6 +534,9 @@ def main() -> int:
         require(args.output.parent.is_dir() and not args.output.parent.is_symlink()
                 and not args.output.is_symlink(),
                 "Preliminary output directory is invalid")
+        if args.output.exists():
+            require(args.output.is_file(), "Preliminary output path is invalid")
+            args.output.unlink()
         report = qualify_preliminary(
             _read_json(args.acceptance_report_file, 8 * 1024 * 1024),
             _read_json(args.private_demo_handoff_file, 16 * 1024),

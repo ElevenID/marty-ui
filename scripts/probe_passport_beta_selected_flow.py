@@ -4,6 +4,8 @@
 from __future__ import annotations
 
 import json
+import hashlib
+import hmac
 import re
 import time
 from collections.abc import Callable
@@ -45,6 +47,20 @@ PASSPORT_FLOW_ROUTES = (
 
 class SelectedFlowError(ValueError):
     pass
+
+
+def selected_plan_commitment(plan: dict[str, Any], api_key: str) -> str:
+    """Keyed proof of the exact private plan passed to the selected Flow."""
+    if not isinstance(plan, dict) or not isinstance(api_key, str) or len(api_key) < 32:
+        raise SelectedFlowError("Selected Flow plan commitment input is invalid")
+    try:
+        canonical = json.dumps(plan, sort_keys=True, separators=(",", ":"),
+                               ensure_ascii=True, allow_nan=False).encode("ascii")
+    except (TypeError, ValueError) as exc:
+        raise SelectedFlowError("Selected Flow plan commitment input is invalid") from exc
+    return hmac.new(api_key.encode("utf-8"),
+                    b"marty/passport-selected-flow-plan/v1\0" + canonical,
+                    hashlib.sha256).hexdigest()
 
 
 class NoRedirect(HTTPRedirectHandler):

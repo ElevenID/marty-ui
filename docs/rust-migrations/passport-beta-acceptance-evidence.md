@@ -231,6 +231,13 @@ template/profile `references` (`application_template_id`,
 `credential_template_id`, and `delivery_destination_profile_id`), and
 synthetic `physical_document` input. The
 runner rejects issuer or profile overrides in that input before the ceremony.
+For D-12 preliminary recording, the selected document must equal
+`contracts/passport-beta-synthetic-document.json`. The protected runner
+publishes an API-keyed commitment to the exact selected Flow plan used for
+execution; the preliminary producer recomputes it from the same private plan
+before attesting `synthetic_identities_only=true`. A copied fixture submitted
+after a different live Flow run cannot qualify. The producer also requires
+the runner's production-continuity window and zero beta legacy-drain counts.
 After the direct Gateway job, the native acceptance target executes a
 distinct selected nine-step Flow job using the selected DSC. It pauses after
 `sign_sod`, joins that same job to the two-job native batch, then completes

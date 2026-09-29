@@ -14,6 +14,8 @@ import pytest
 
 from scripts.probe_passport_beta_flow import PHYSICAL_STEPS
 from scripts.probe_passport_beta_selected_flow import PASSPORT_FLOW_ROUTES
+from scripts.probe_passport_beta_selected_flow import selected_plan_commitment
+from scripts.collect_passport_beta_acceptance import production_snapshot_commitment
 from scripts.produce_passport_beta_preliminary import (
     ROUTES, PreliminaryEvidenceError, qualify_preliminary, verify_negative_media,
     verify_positive_job,
@@ -208,7 +210,8 @@ def positive_fixture() -> tuple[dict, dict]:
                       "flow_routes": [{"method": method, "path": path}
                                       for method, path in PASSPORT_FLOW_ROUTES],
                       "terminal_native_status": "ACTIVE", "physical_claim": "not_claimed",
-                      "sod_sha256": "e" * 64, "callback_receipt_sha256": callback}),
+                      "sod_sha256": "e" * 64, "callback_receipt_sha256": callback,
+                      "selected_flow_plan_commitment": "0" * 64}),
                   "nine_route_gateway_flow": probe({
                       **selected,
                       "routes": [{"method": method, "path": path} for method, path in ROUTES],
@@ -330,6 +333,22 @@ def qualification_fixture(tmp_path: Path) -> tuple[dict, dict, dict, Path, Path]
         "references": {"application_template_id": "app-template"},
         "physical_document": json.loads(fixture_path.read_text(encoding="utf-8")),
     }
+    report["probes"]["selected_physical_flow"]["evidence"][
+        "selected_flow_plan_commitment"] = selected_plan_commitment(selected_plan, "k" * 32)
+    report["deployment"]["production_snapshot_commitment"] = (
+        production_snapshot_commitment("k" * 32, "f" * 64))
+    report["deployment"]["production_attachment_commitment"] = "a" * 64
+    report["probes"]["production_continuity_during_probe"] = {
+        "verified": True, "evidence": {
+            "before_sha256": "f" * 64, "after_sha256": "f" * 64,
+            "container_counts": {"marty-selfhost-prod": 24},
+            "scope": "acceptance-run-window-only",
+        }}
+    empty_drain = {"in_flight_jobs": 0, "legacy_or_unknown_artifacts": 0,
+                   "active_physical_document_flows": 0,
+                   "database": "beta", "source": "live PostgreSQL"}
+    report["probes"]["legacy_drain"] = {
+        "verified": True, "evidence": {"before": empty_drain, "after": empty_drain}}
     return report, private, selected_plan, artifacts, media
 
 
@@ -395,7 +414,6 @@ def test_qualified_cli_writes_only_after_complete_join(tmp_path: Path) -> None:
     assert success.returncode == 0, success.stderr
     assert json.loads(output_path.read_text(encoding="utf-8"))["status"] == (
         "qualified_for_recording")
-    output_path.unlink()
     report["probes"]["nine_route_gateway_flow"]["verified"] = False
     write_json(report_path, report)
     blocked = subprocess.run(command, cwd=root, env=environment,
@@ -408,6 +426,10 @@ def test_qualified_cli_writes_only_after_complete_join(tmp_path: Path) -> None:
     lambda args: args[2]["physical_document"]["applicant"].update(given_name="REAL"),
     lambda args: args[3].joinpath("stack-manifest.json").write_text("{}"),
     lambda args: args[0]["probes"]["nine_route_gateway_flow"].update(verified=False),
+    lambda args: args[0]["probes"]["production_continuity_during_probe"].update(verified=False),
+    lambda args: args[0]["probes"]["legacy_drain"].update(verified=False),
+    lambda args: args[0]["probes"]["selected_physical_flow"]["evidence"].update(
+        selected_flow_plan_commitment="f" * 64),
     lambda args: args[4].joinpath("foreign-callback-uncut.webm").write_bytes(b"changed"),
 ])
 def test_qualified_receipt_rejects_missing_contract_part(tmp_path: Path, change) -> None:

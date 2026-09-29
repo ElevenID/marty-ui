@@ -19,7 +19,7 @@ from scripts.probe_passport_beta_chain import ChainProbeError
 from scripts.probe_passport_beta_batch import _identity_commit
 from scripts.probe_passport_beta_flow import PHYSICAL_STEPS
 from scripts.probe_passport_beta_native_batch import NativeBatchProbeError
-from scripts.probe_passport_beta_selected_flow import PASSPORT_FLOW_ROUTES
+from scripts.probe_passport_beta_selected_flow import PASSPORT_FLOW_ROUTES, selected_plan_commitment
 from scripts.run_passport_beta_acceptance import run as protected_run
 from tests.test_probe_passport_beta_chain import plan as certificate_plan
 
@@ -418,6 +418,7 @@ def test_protected_runner_executes_selected_flow_after_chain_and_direct_job(tmp_
         "flow_instance_commitment": _identity_commit("a" * 32, "flow-instance", "selected-instance"),
         "application_commitment": _identity_commit("a" * 32, "application", "selected-app"),
         "callback_receipt_sha256": "5" * 64,
+        "selected_flow_plan_commitment": selected_plan_commitment(selected_plan, "a" * 32),
         "terminal_native_status": "ACTIVE", "physical_claim": "not_claimed"}
     assert result["probes"]["simulator_material_receipt"]["evidence"]["source_job_id_commitment"] == selected_source_commitment
     assert result["probes"]["sod_signature"]["evidence"] == {
