@@ -1,0 +1,16 @@
+{
+  "country_code": "USA",
+  "document_type": "TD3",
+  "applicant": {
+    "given_name": "MARTY",
+    "family_name": "SYNTHETIC"
+  },
+  "mrz": {
+    "line_1": "P<UTOSYNTHETIC<<MARTY<<<<<<<<<<<<<<<<<<<<<",
+    "line_2": "TEST000001UTO9001011M3001019<<<<<<<<<<<<<<00"
+  },
+  "data_groups": {
+    "DG1": "YQ==",
+    "DG2": "Yg=="
+  }
+}

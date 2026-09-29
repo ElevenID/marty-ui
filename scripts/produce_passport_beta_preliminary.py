@@ -8,11 +8,14 @@ producer can qualify a preliminary receipt.
 
 from __future__ import annotations
 
+import argparse
 import hashlib
 import hmac
 import json
 import math
+import os
 import re
+import tempfile
 from pathlib import Path
 from typing import Any
 from uuid import UUID
@@ -409,3 +412,120 @@ def verify_positive_job(report: dict[str, Any], private_plan: dict[str, Any],
             "physical_claim_boundary": {"verified": True, "evidence": boundary},
         },
     }
+
+
+def qualify_preliminary(
+    report: dict[str, Any],
+    private_plan: dict[str, Any],
+    selected_flow_plan: dict[str, Any],
+    artifact_dir: Path,
+    media_dir: Path,
+    api_key: str,
+) -> dict[str, Any]:
+    """Build only the public D-12 receipt from one protected beta execution."""
+    positive = verify_positive_job(report, private_plan, api_key)
+    release, deployment = report["release"], report["deployment"]
+    require(artifact_dir.is_dir() and not artifact_dir.is_symlink(),
+            "Aggregate beta artifact directory is unavailable")
+    stack_path = artifact_dir / "stack-manifest.json"
+    deployed_path = artifact_dir / "aggregate-deployment.json"
+    deployment_plan_path = artifact_dir / "aggregate-deployment.json.plan.json"
+    stack_digest = _digest(stack_path, 8 * 1024 * 1024)
+    deployed_digest = _digest(deployed_path, 8 * 1024 * 1024)
+    plan_digest = _digest(deployment_plan_path, 8 * 1024 * 1024)
+    require(stack_digest == release["stack_manifest_sha256"]
+            and deployed_digest == deployment["aggregate_deployment_receipt_sha256"]
+            and plan_digest == deployment["aggregate_plan_sha256"],
+            "Aggregate beta files differ from protected acceptance report")
+    deployed = _read_json(deployed_path, 8 * 1024 * 1024)
+    plan = _read_json(deployment_plan_path, 8 * 1024 * 1024)
+    require(deployed.get("schema") == "marty.passport-beta-aggregate-deployment/v1"
+            and deployed.get("beta_origin") == report["beta_origin"]
+            and deployed.get("source_commit") == release["source_commit"]
+            and deployed.get("plan_sha256") == plan_digest
+            and deployed.get("acceptance_pending") is True
+            and isinstance(deployed.get("beta_services"), list)
+            and "passport-beta-bureau" in deployed["beta_services"]
+            and "passport-provider-ingress" not in deployed["beta_services"]
+            and plan.get("schema") == "marty.passport-beta-aggregate-compose-plan/v1"
+            and plan.get("source_commit") == release["source_commit"]
+            and plan.get("stack_manifest_sha256") == stack_digest
+            and plan.get("beta_origin") == report["beta_origin"],
+            "Aggregate simulator deployment or plan does not match selected release")
+    fixture = _read_json(Path(__file__).resolve().parents[1] / "contracts"
+                         / "passport-beta-synthetic-document.json", 16 * 1024)
+    require(isinstance(selected_flow_plan, dict)
+            and set(selected_flow_plan) == {"source_commit", "stack_manifest_sha256",
+                                            "organization_id", "issuer_did",
+                                            "flow_definition_id", "references",
+                                            "physical_document"}
+            and selected_flow_plan.get("source_commit") == release["source_commit"]
+            and selected_flow_plan.get("stack_manifest_sha256") == stack_digest
+            and selected_flow_plan.get("organization_id") == private_plan["organization_id"]
+            and selected_flow_plan.get("flow_definition_id") == private_plan["flow_definition_id"]
+            and selected_flow_plan.get("physical_document") == fixture,
+            "Protected selected Flow did not use the fixed synthetic identity fixture")
+    negative = verify_negative_media(media_dir, release=release,
+                                     deployment=deployment, selected=positive["selected"])
+    return {
+        "schema": "marty.passport-beta-preliminary/v1",
+        "status": "qualified_for_recording",
+        "beta_origin": report["beta_origin"],
+        "physical_claim": "not_claimed",
+        "release": {
+            "source_commit": release["source_commit"],
+            "stack_manifest_sha256": stack_digest,
+            "signed_manifest_verified": True,
+        },
+        "deployment": {
+            "provider_mode": "simulator",
+            "aggregate_deployment_receipt_sha256": deployed_digest,
+            "aggregate_plan_sha256": plan_digest,
+        },
+        "probes": positive["probes"] | {
+            "unsigned_or_foreign_callback_denied": negative["probe"]},
+        "negative_runs": negative["negative_runs"],
+        "synthetic_identities_only": True,
+    }
+
+
+def main() -> int:
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--artifact-dir", type=Path, required=True)
+    parser.add_argument("--acceptance-report-file", type=Path, required=True)
+    parser.add_argument("--private-demo-handoff-file", type=Path, required=True)
+    parser.add_argument("--selected-flow-plan-file", type=Path, required=True)
+    parser.add_argument("--negative-media-dir", type=Path, required=True)
+    parser.add_argument("--output", type=Path, required=True)
+    args = parser.parse_args()
+    try:
+        key = os.environ.get("PASSPORT_ACCEPTANCE_API_KEY")
+        require(isinstance(key, str) and len(key) >= 32,
+                "Protected passport API key is unavailable")
+        require(args.output.parent.is_dir() and not args.output.parent.is_symlink()
+                and not args.output.is_symlink(),
+                "Preliminary output directory is invalid")
+        report = qualify_preliminary(
+            _read_json(args.acceptance_report_file, 8 * 1024 * 1024),
+            _read_json(args.private_demo_handoff_file, 16 * 1024),
+            _read_json(args.selected_flow_plan_file, 1024 * 1024),
+            args.artifact_dir, args.negative_media_dir, key,
+        )
+        with tempfile.NamedTemporaryFile(mode="w", encoding="utf-8",
+                                         dir=args.output.parent, prefix=".passport-preliminary-",
+                                         suffix=".tmp", delete=False) as target:
+            temporary = Path(target.name)
+            json.dump(report, target, indent=2, sort_keys=True, allow_nan=False)
+            target.write("\n")
+        try:
+            temporary.replace(args.output)
+        finally:
+            temporary.unlink(missing_ok=True)
+    except (PreliminaryEvidenceError, OSError) as exc:
+        parser.exit(1, f"Passport preliminary qualification blocked: {exc}\n")
+    print(f"Wrote qualified passport preliminary evidence: {args.output}")
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

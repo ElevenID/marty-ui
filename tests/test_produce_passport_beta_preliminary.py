@@ -4,7 +4,10 @@ from __future__ import annotations
 
 import hashlib
 import json
-import copy
+import os
+import shutil
+import subprocess
+import sys
 from pathlib import Path
 
 import pytest
@@ -12,7 +15,8 @@ import pytest
 from scripts.probe_passport_beta_flow import PHYSICAL_STEPS
 from scripts.probe_passport_beta_selected_flow import PASSPORT_FLOW_ROUTES
 from scripts.produce_passport_beta_preliminary import (
-    ROUTES, PreliminaryEvidenceError, verify_negative_media, verify_positive_job,
+    ROUTES, PreliminaryEvidenceError, qualify_preliminary, verify_negative_media,
+    verify_positive_job,
 )
 
 
@@ -32,10 +36,11 @@ def write_json(path: Path, value: dict) -> None:
     path.write_text(json.dumps(value, indent=2) + "\n", encoding="utf-8")
 
 
-def media_fixture(directory: Path) -> dict:
+def media_fixture(directory: Path, *, selected: dict = SELECTED,
+                  release: dict = RELEASE, deployment: dict = DEPLOYMENT) -> dict:
     runs = {}
     for name, status, organization, projection in (
-        ("unsigned", 422, SELECTED["organization_commitment"],
+        ("unsigned", 422, selected["organization_commitment"],
          {"missing_signature_header": True}),
         ("foreign", 404, "4" * 64, {"webhook_job_not_found": True}),
     ):
@@ -52,8 +57,8 @@ def media_fixture(directory: Path) -> dict:
                              else "signed_foreign_organization"),
             "response_projection": projection,
             "organization_commitment": organization,
-            "source_job_commitment": SELECTED["source_job_commitment"],
-            "bureau_job_commitment": SELECTED["bureau_job_commitment"],
+            "source_job_commitment": selected["source_job_commitment"],
+            "bureau_job_commitment": selected["bureau_job_commitment"],
             "job_state_before_commitment": "5" * 64,
             "job_state_after_commitment": "5" * 64,
             "video_sha256": digest(video),
@@ -61,8 +66,11 @@ def media_fixture(directory: Path) -> dict:
         }
     runs["foreign"].update(signature_valid=True, foreign_organization=True)
     report = {"schema": "marty.passport-beta-negative-media/v1", "verified": True,
-              "physical_claim": "not_claimed", "release": copy.deepcopy(RELEASE),
-              "deployment": copy.deepcopy(DEPLOYMENT), "negative_runs": runs}
+              "physical_claim": "not_claimed", "release": {
+                  field: release[field] for field in RELEASE},
+              "deployment": {
+                  field: deployment[field] for field in DEPLOYMENT},
+              "negative_runs": runs}
     write_json(directory / "negative-callback-media.json", report)
     return report
 
@@ -268,3 +276,142 @@ def test_positive_join_rejects_broken_same_job_evidence(probe, field, value) -> 
     report["probes"][probe]["evidence"][field] = value
     with pytest.raises(PreliminaryEvidenceError):
         verify_positive_job(report, private, "k" * 32)
+
+
+def qualification_fixture(tmp_path: Path) -> tuple[dict, dict, dict, Path, Path]:
+    report, private = positive_fixture()
+    artifacts = tmp_path / "artifacts"
+    media = tmp_path / "media"
+    artifacts.mkdir()
+    media.mkdir()
+    stack_path = artifacts / "stack-manifest.json"
+    write_json(stack_path, {"schema": "marty.stack/v1"})
+    stack_sha = digest(stack_path.read_bytes())
+    report["release"]["stack_manifest_sha256"] = stack_sha
+    private["stack_manifest_sha256"] = stack_sha
+    report["probes"]["physical_bureau_batch"]["evidence"]["stack_manifest_sha256"] = stack_sha
+    plan_path = artifacts / "aggregate-deployment.json.plan.json"
+    write_json(plan_path, {
+        "schema": "marty.passport-beta-aggregate-compose-plan/v1",
+        "source_commit": RELEASE["source_commit"],
+        "stack_manifest_sha256": stack_sha,
+        "beta_origin": "https://beta.elevenidllc.com",
+        "target_services": ["gateway", "flow", "issuance-native", "signing-keys",
+                            "passport-callback-signer", "passport-beta-bureau"],
+    })
+    plan_sha = digest(plan_path.read_bytes())
+    deployed_path = artifacts / "aggregate-deployment.json"
+    write_json(deployed_path, {
+        "schema": "marty.passport-beta-aggregate-deployment/v1",
+        "source_commit": RELEASE["source_commit"],
+        "beta_origin": "https://beta.elevenidllc.com",
+        "plan_sha256": plan_sha,
+        "acceptance_pending": True,
+        "beta_services": ["gateway", "flow", "issuance-native", "signing-keys",
+                          "passport-callback-signer", "passport-beta-bureau", "postgres"],
+        "beta_runtime": {name: {} for name in (
+            "gateway", "flow", "issuance-native", "signing-keys",
+            "passport-callback-signer", "passport-beta-bureau", "postgres")},
+    })
+    report["deployment"]["aggregate_deployment_receipt_sha256"] = digest(
+        deployed_path.read_bytes())
+    report["deployment"]["aggregate_plan_sha256"] = plan_sha
+    selected = verify_positive_job(report, private, "k" * 32)["selected"]
+    media_fixture(media, selected=selected, release=report["release"],
+                  deployment=report["deployment"])
+    fixture_path = (Path(__file__).resolve().parents[1] / "contracts"
+                    / "passport-beta-synthetic-document.json")
+    selected_plan = {
+        "source_commit": RELEASE["source_commit"],
+        "stack_manifest_sha256": stack_sha,
+        "organization_id": private["organization_id"],
+        "issuer_did": "did:web:beta.example:issuer",
+        "flow_definition_id": private["flow_definition_id"],
+        "references": {"application_template_id": "app-template"},
+        "physical_document": json.loads(fixture_path.read_text(encoding="utf-8")),
+    }
+    return report, private, selected_plan, artifacts, media
+
+
+def test_qualified_receipt_joins_signed_deployment_synthetic_job_and_media(tmp_path: Path) -> None:
+    arguments = qualification_fixture(tmp_path)
+    result = qualify_preliminary(*arguments, "k" * 32)
+    assert result["status"] == "qualified_for_recording"
+    assert result["synthetic_identities_only"] is True
+    assert all(result["probes"][name]["verified"] is True for name in (
+        "nine_route_gateway_flow", "managed_csca_dsc_chain",
+        "physical_bureau_batch", "signed_bureau_callback",
+        "unsigned_or_foreign_callback_denied"))
+    assert "org-a" not in str(result)
+    assert "76a7baef" not in str(result)
+    assert "SYNTHETIC" not in str(result)
+
+
+@pytest.mark.skipif(shutil.which("node") is None, reason="Node unavailable")
+def test_qualified_receipt_matches_d12_decoder(tmp_path: Path) -> None:
+    arguments = qualification_fixture(tmp_path)
+    result = qualify_preliminary(*arguments, "k" * 32)
+    report_path = tmp_path / "preliminary.json"
+    private_path = tmp_path / "private.json"
+    write_json(report_path, result)
+    write_json(private_path, arguments[1])
+    root = Path(__file__).resolve().parents[1]
+    code = """const fs=require('node:fs');
+const {validatePreliminary}=require('./tests/scripts/audit-beta-physical-passport-flow.js');
+const [report, deployed, artifacts, privatePlan]=process.argv.slice(1);
+validatePreliminary(JSON.parse(fs.readFileSync(report)),
+  JSON.parse(fs.readFileSync(deployed)), artifacts,
+  JSON.parse(fs.readFileSync(privatePlan)), 'k'.repeat(32));"""
+    completed = subprocess.run([
+        "node", "-e", code, str(report_path),
+        str(arguments[3] / "aggregate-deployment.json"), str(arguments[3]),
+        str(private_path),
+    ], cwd=root, capture_output=True, text=True, check=False)
+    assert completed.returncode == 0, completed.stderr
+
+
+def test_qualified_cli_writes_only_after_complete_join(tmp_path: Path) -> None:
+    report, private, selected_plan, artifacts, media = qualification_fixture(tmp_path)
+    report_path = tmp_path / "acceptance.json"
+    private_path = tmp_path / "private.json"
+    selected_path = tmp_path / "selected.json"
+    output_path = tmp_path / "preliminary.json"
+    for path, value in ((report_path, report), (private_path, private),
+                        (selected_path, selected_plan)):
+        write_json(path, value)
+    command = [
+        sys.executable, "scripts/produce_passport_beta_preliminary.py",
+        "--artifact-dir", str(artifacts),
+        "--acceptance-report-file", str(report_path),
+        "--private-demo-handoff-file", str(private_path),
+        "--selected-flow-plan-file", str(selected_path),
+        "--negative-media-dir", str(media),
+        "--output", str(output_path),
+    ]
+    environment = os.environ | {"PASSPORT_ACCEPTANCE_API_KEY": "k" * 32}
+    root = Path(__file__).resolve().parents[1]
+    success = subprocess.run(command, cwd=root, env=environment,
+                             capture_output=True, text=True, check=False)
+    assert success.returncode == 0, success.stderr
+    assert json.loads(output_path.read_text(encoding="utf-8"))["status"] == (
+        "qualified_for_recording")
+    output_path.unlink()
+    report["probes"]["nine_route_gateway_flow"]["verified"] = False
+    write_json(report_path, report)
+    blocked = subprocess.run(command, cwd=root, env=environment,
+                             capture_output=True, text=True, check=False)
+    assert blocked.returncode != 0
+    assert not output_path.exists()
+
+
+@pytest.mark.parametrize("change", [
+    lambda args: args[2]["physical_document"]["applicant"].update(given_name="REAL"),
+    lambda args: args[3].joinpath("stack-manifest.json").write_text("{}"),
+    lambda args: args[0]["probes"]["nine_route_gateway_flow"].update(verified=False),
+    lambda args: args[4].joinpath("foreign-callback-uncut.webm").write_bytes(b"changed"),
+])
+def test_qualified_receipt_rejects_missing_contract_part(tmp_path: Path, change) -> None:
+    arguments = list(qualification_fixture(tmp_path))
+    change(arguments)
+    with pytest.raises(PreliminaryEvidenceError):
+        qualify_preliminary(*arguments, "k" * 32)
