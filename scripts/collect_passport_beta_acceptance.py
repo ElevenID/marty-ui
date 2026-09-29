@@ -39,7 +39,8 @@ REQUIRED_PROBES = (
     "nine_route_gateway_flow",
     "packaged_image", "physical_bureau_submission", "physical_bureau_batch",
     "signed_bureau_callback",
-    "legacy_drain", "rollback", "production_isolation", "physical_claim_boundary",
+    "legacy_drain", "rust_restart_resume", "production_isolation",
+    "physical_claim_boundary",
     "recorded_demo",
 )
 

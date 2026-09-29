@@ -556,8 +556,8 @@ def run(
         "evidence": {"before": before_drain.get("evidence"), "after": after_drain.get("evidence")},
     }
     report["probes"]["production_continuity_during_probe"] = production_window
-    # The required production-isolation gate spans deployment and rollback,
-    # which this workflow does not control. Preserve it as unverified.
+    # Production isolation spans the full beta deployment and acceptance soak;
+    # this bounded probe cannot verify it.
     report["status"] = "blocked"
     if native_batch_result is not None:
         write_private_demo_handoff(private_handoff_path, {

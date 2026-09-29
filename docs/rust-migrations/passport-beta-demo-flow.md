@@ -64,10 +64,11 @@ review files, media/privacy hashes, ElevenID LLC channel and playlist, and
 live YouTube publication result. It must bind those to the same source commit,
 stack manifest, local and source deployment manifest hashes, beta origin, and
 `physical_claim=not_claimed` before setting `recorded_demo.verified=true`.
-The Python retirement gate remains blocked until that final receipt and all
-other beta and supported-consumer probes pass.
+Python passport retirement requires protected Rust parity, the final live
+drain, and the reviewed deletion gate before the aggregate beta deployment.
+The recording and final receipt then qualify the single Rust-only beta soak.
 
-The preliminary workflow, full signed callback/rollback producer, D-12
+The preliminary workflow, full signed callback and Rust restart producer, D-12
 publication inputs, and final demo receipt producer are still outstanding.
 No beta recording or YouTube upload has occurred under this plan.
 The disposable model rehearses the stack and does not replace this live beta

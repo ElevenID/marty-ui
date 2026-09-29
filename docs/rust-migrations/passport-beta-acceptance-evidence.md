@@ -58,7 +58,7 @@ remain unverified until protected acceptance runs execute and publish exact
 artifact lineage: `managed_csca_dsc_chain`, `sod_signature`,
 `simulator_material_receipt`,
 `nine_route_gateway_flow`, `packaged_image`, `physical_bureau_submission`,
-`physical_bureau_batch`, `signed_bureau_callback`, `legacy_drain`, `rollback`,
+`physical_bureau_batch`, `signed_bureau_callback`, `legacy_drain`, `rust_restart_resume`,
 `production_isolation`, and `recorded_demo`. The two `physical_bureau_*` names
 are retained for the frozen simulator route-compatibility receipt; they do not
 assert physical production. `physical_claim_boundary` records
@@ -229,7 +229,7 @@ The report requires the isolated simulator mode and sets `legacy_drain` and the 
 `blocked`, but uploads the sanitized report from an attempted probe. The
 acceptance report remains `blocked` until the live run verifies SOD signature,
 the selected Flow job in the two-job batch, full nine-route Gateway/Flow proof,
-same-job signed simulator callback, simulator batch compatibility, rollback,
+same-job signed simulator callback, simulator batch compatibility, Rust restart/resume,
 deployment-wide production isolation, supported
 consumer acceptance, and recorded demo evidence have executable receipts.
 D-12 recording and publication remain blocked while these gates are open.

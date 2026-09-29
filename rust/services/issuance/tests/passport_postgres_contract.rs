@@ -1365,6 +1365,10 @@ async fn passport_jobs_survive_restart_without_cross_tenant_reads() {
         .execute(&pool)
         .await
         .unwrap();
+    sqlx::query("DROP SCHEMA IF EXISTS flow_service CASCADE")
+        .execute(&pool)
+        .await
+        .unwrap();
     migration::migrate_passport(&pool).await.unwrap();
     migration::migrate_passport(&pool).await.unwrap(); // startup is idempotent
 

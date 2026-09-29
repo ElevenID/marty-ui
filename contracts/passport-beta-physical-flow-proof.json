@@ -10,5 +10,5 @@
   "successful_execution": "Read and advance all nine ordered steps through Gateway. The Flow-created native job has a managed SOD signature and digest, the same durable bureau UUID reaches SHIPPED with a BETA-SIM tracking marker and signed callback receipt in the authenticated private simulator poll, and terminal Flow and native job states are COMPLETED and ACTIVE.",
   "execution_relationship": "The existing direct Gateway lifecycle and this Flow execution create separate jobs. Only the Flow instance's own native application, job, bureau UUID, SOD, callback receipt, and terminal state can qualify its nine-route chain; the direct lifecycle is separate compatibility evidence.",
   "provider_callback": "No external provider or physical booklet is claimed. The private simulator receipt is accepted only for the same Flow-bound bureau UUID after native accepted the KMS-signed callback.",
-  "default": "The Flow probe is opt-in; aggregate beta acceptance remains blocked until deployment, rollback, supported-consumer, and production-isolation gates pass."
+  "default": "The Flow probe is opt-in; aggregate beta acceptance remains blocked until Rust-only deployment, supported-consumer, Rust restart/resume, and production-isolation gates pass."
 }
