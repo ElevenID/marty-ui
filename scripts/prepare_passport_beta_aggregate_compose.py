@@ -600,7 +600,11 @@ def verify_resume_plan(
             continue
         state = containers[0]["State"]
         health = state.get("Health")
+        networks = containers[0].get("NetworkSettings", {}).get("Networks")
         if (state.get("Running") is True and state.get("Status") == "running"
+                and isinstance(networks, dict)
+                and set(networks)
+                    == set(recorded["expected_networks_by_service"][service])
                 and (health is None or (isinstance(health, dict)
                                          and health.get("Status") == "healthy"))):
             ready_services.append(service)

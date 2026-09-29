@@ -303,6 +303,14 @@ def test_resume_accepts_partial_signed_generation_after_login(monkeypatch, tmp_p
                                           tmp_path / "native")
     assert evidence["app_login_enabled"] is True
     assert evidence["ready_services"] == ["flow"]
+    records[new_flow_id]["NetworkSettings"]["Networks"] = {}
+    disconnected = compose.verify_resume_plan(plan, intent, tmp_path / "stack",
+                                              tmp_path / "fence",
+                                              tmp_path / "maintenance",
+                                              tmp_path / "native")
+    assert disconnected["ready_services"] == []
+    records[new_flow_id]["NetworkSettings"]["Networks"] = {
+        "elevenid-beta-network": {}}
     changed = {**plan, "production_attachments_sha256": "9" * 64}
     with pytest.raises(ComposePlanError, match="receipt lineage changed"):
         compose.verify_resume_plan(changed, intent, tmp_path / "stack",
