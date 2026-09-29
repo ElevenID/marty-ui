@@ -114,6 +114,7 @@ def test_chain_rejects_unrelated_trust_anchor() -> None:
 
 def test_live_request_uses_console_session_and_organization_query(monkeypatch) -> None:
     seen = []
+    handlers = []
 
     class Response:
         status = 200
@@ -135,7 +136,11 @@ def test_live_request_uses_console_session_and_organization_query(monkeypatch) -
             seen.append(request)
             return Response()
 
-    monkeypatch.setattr(chain_probe, "build_opener", lambda *args: Opener())
+    def opener(*args):
+        handlers.extend(args)
+        return Opener()
+
+    monkeypatch.setattr(chain_probe, "build_opener", opener)
     status, payload = chain_probe.post_beta(
         "/v1/signing-keys/issuer-identities/dsc-certificate",
         {"organization_id": "org-a", "dsc_issuer_did": "did:web:beta.example:org-a"},
@@ -147,6 +152,8 @@ def test_live_request_uses_console_session_and_organization_query(monkeypatch) -
     assert seen[0].get_header("X-api-key") is None
     assert seen[0].get_header("X-user-id") is None
     assert json.loads(seen[0].data) == {"dsc_issuer_did": "did:web:beta.example:org-a"}
+    assert any(isinstance(handler, chain_probe.ProxyHandler)
+               and handler.proxies == {} for handler in handlers)
 
 
 def test_dsc_response_must_publish_selected_csca() -> None:

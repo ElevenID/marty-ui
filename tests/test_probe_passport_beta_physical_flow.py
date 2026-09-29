@@ -18,6 +18,43 @@ CONTAINER = "a" * 12
 BUREAU = "00000000-0000-0000-0000-000000000001"
 
 
+def test_flow_http_request_uses_direct_beta_origin(monkeypatch) -> None:
+    handlers = []
+    requests = []
+
+    class Response:
+        status = 200
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            return False
+
+        def geturl(self):
+            return requests[0].full_url
+
+        def read(self, amount):
+            return b'{"id":"flow-1"}'
+
+    class Opener:
+        def open(self, request, timeout):
+            requests.append(request)
+            return Response()
+
+    def opener(*args):
+        handlers.extend(args)
+        return Opener()
+
+    monkeypatch.setattr(probe, "build_opener", opener)
+    assert probe.request_beta("GET", "/v1/flows/instances/flow-1", None, "sessionId=operator") == (
+        200, {"id": "flow-1"},
+    )
+    assert requests[0].full_url == "https://beta.elevenidllc.com/v1/flows/instances/flow-1"
+    assert any(isinstance(handler, probe.ProxyHandler)
+               and handler.proxies == {} for handler in handlers)
+
+
 def simulator_request(container: str, method: str, path: str) -> tuple[int, bytes, dict]:
     assert container == CONTAINER and method == "GET"
     assert path == "/v1/personalization/jobs/" + BUREAU
