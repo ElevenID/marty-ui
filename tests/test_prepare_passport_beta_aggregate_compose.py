@@ -67,11 +67,14 @@ def candidate():
     services["issuance"] = {"image": issuance_image}
     services["auth"]["environment"].update({
         "UI_BASE_URL": BETA_ORIGIN,
+        "UI_ADDITIONAL_BASE_URLS": "",
         "OIDC_EXTERNAL_ISSUER_URL": BETA_ORIGIN + "/realms/11id",
         "OIDC_REDIRECT_URI": BETA_ORIGIN + "/v1/auth/callback",
         "OIDC_POST_LOGOUT_REDIRECT_URI": BETA_ORIGIN + "/",
     })
     services["gateway"]["environment"]["ISSUER_BASE_URL"] = BETA_ORIGIN
+    services["gateway"]["environment"]["CORS_ORIGINS"] = (
+        BETA_ORIGIN + ",http://localhost:9080,http://localhost:3000,http://localhost:5173")
     services["flow"]["environment"]["PUBLIC_BASE_URL"] = BETA_ORIGIN
     services["signing-keys"]["environment"]["PUBLIC_DOMAIN"] = "beta.elevenidllc.com"
     services["issuance"]["environment"] = {"ISSUER_BASE_URL": BETA_ORIGIN}
@@ -113,6 +116,8 @@ def test_rendered_compose_assigns_signed_rust_start_groups():
     ("gateway", "ISSUER_BASE_URL", "https://prod.elevenidllc.com"),
     ("flow", "PUBLIC_BASE_URL", "https://prod.elevenidllc.com"),
     ("auth", "OIDC_REDIRECT_URI", "https://prod.elevenidllc.com/v1/auth/callback"),
+    ("auth", "UI_ADDITIONAL_BASE_URLS", "https://prod.elevenidllc.com"),
+    ("gateway", "CORS_ORIGINS", "https://beta.elevenidllc.com,https://prod.elevenidllc.com"),
     ("keycloak", "KC_HOSTNAME", "https://prod.elevenidllc.com"),
     ("nginx-proxy", "GATEWAY_UPSTREAM", "prod-gateway:8000"),
     ("signing-keys", "PUBLIC_DOMAIN", "prod.elevenidllc.com"),
@@ -122,7 +127,7 @@ def test_rendered_compose_assigns_signed_rust_start_groups():
 def test_rendered_beta_origin_rejects_other_destination(service, key, value):
     handoff, intent, rendered, ui = candidate()
     rendered["services"][service].setdefault("environment", {})[key] = value
-    with pytest.raises(ComposePlanError, match="public origin|public domain"):
+    with pytest.raises(ComposePlanError, match="origin|domain"):
         prepare(handoff, intent, rendered, ui)
 
 

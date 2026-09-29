@@ -138,6 +138,7 @@ def assert_beta_origin(services: dict[str, Any]) -> None:
                     f"Rendered beta public domain differs: {name}")
     required = {
         "auth": {"UI_BASE_URL": BETA_ORIGIN,
+                 "UI_ADDITIONAL_BASE_URLS": "",
                  "OIDC_REDIRECT_URI": BETA_ORIGIN + "/v1/auth/callback",
                  "OIDC_POST_LOGOUT_REDIRECT_URI": BETA_ORIGIN + "/"},
         "gateway": {"ISSUER_BASE_URL": BETA_ORIGIN},
@@ -160,6 +161,13 @@ def assert_beta_origin(services: dict[str, Any]) -> None:
     require(re.fullmatch(re.escape(BETA_ORIGIN) + r"/realms/[A-Za-z0-9_-]+", issuer)
             is not None,
             "Rendered beta OIDC issuer origin differs")
+    cors = environment(services["gateway"]).get("CORS_ORIGINS", "")
+    origins = cors.split(",")
+    allowed = {BETA_ORIGIN, "http://localhost:9080", "http://localhost:3000",
+               "http://localhost:5173"}
+    require(BETA_ORIGIN in origins and len(origins) == len(set(origins))
+            and set(origins).issubset(allowed),
+            "Rendered beta Gateway CORS origins differ")
 
 
 def sha256(path: Path) -> str:
