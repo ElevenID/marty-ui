@@ -41,6 +41,10 @@ FLAGS = {
     "flow": "PASSPORT_NATIVE_FLOW_ENABLED",
     "issuance-native": "PASSPORT_NATIVE_HTTP_ENABLED",
 }
+HEALTH_PORTS = {
+    "gateway": 8000, "flow": 8011, "issuance-native": 8005,
+    "passport-callback-signer": 8018, "passport-beta-bureau": 8020,
+}
 OWNER_LABEL = "com.marty.passport.acceptance.owner"
 SOURCE_LABEL = "com.marty.passport.acceptance.source-commit"
 RUN_LABEL = "com.marty.passport.acceptance.run-id"
@@ -65,10 +69,34 @@ def forbidden_routing_env(name: str) -> bool:
             or normalized in {"hostaliases", "res_options", "localdomain"})
 
 
+def approved_health_probe(probe: object, port: int) -> bool:
+    if probe is None:
+        return True
+    if not isinstance(probe, dict) or not set(probe) <= {
+            "httpGet", "initialDelaySeconds", "periodSeconds", "timeoutSeconds",
+            "successThreshold", "failureThreshold", "terminationGracePeriodSeconds"}:
+        return False
+    request = probe.get("httpGet")
+    return (isinstance(request, dict)
+            and request.get("path") == "/health"
+            and request.get("port") == port
+            and request.get("scheme") in (None, "HTTP")
+            and request.get("host") in (None, "")
+            and request.get("httpHeaders") in (None, [])
+            and set(request) <= {"path", "port", "scheme", "host", "httpHeaders"}
+            and all(isinstance(value, int) and not isinstance(value, bool) and value >= 0
+                    for key, value in probe.items() if key != "httpGet"))
+
+
 def approved_entrypoint(container: dict) -> bool:
     """Require the released image entrypoint and protect its Rust binaries."""
     if (container.get("command") not in (None, ["/app/services/entrypoint.sh"])
-            or container.get("args") not in (None, [])):
+            or container.get("args") not in (None, [])
+            or container.get("lifecycle") not in (None, {})
+            or container.get("name") not in HEALTH_PORTS
+            or any(not approved_health_probe(container.get(name),
+                                             HEALTH_PORTS[container["name"]])
+                   for name in ("startupProbe", "readinessProbe", "livenessProbe"))):
         return False
     mounts = container.get("volumeMounts", [])
     if not isinstance(mounts, list):
@@ -120,7 +148,14 @@ def approved_runtime_spec(spec: dict) -> bool:
             or not isinstance(volumes, list)):
         return False
     mounts = containers[0].get("volumeMounts", [])
+    ports = containers[0].get("ports", [])
     if not isinstance(mounts, list):
+        return False
+    if (not isinstance(ports, list)
+            or any(not isinstance(port, dict)
+                   or port.get("hostPort") not in (None, 0)
+                   or port.get("hostIP") not in (None, "")
+                   for port in ports)):
         return False
     mounted_names = [mount.get("name") for mount in mounts
                      if isinstance(mount, dict)]

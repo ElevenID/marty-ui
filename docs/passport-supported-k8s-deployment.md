@@ -54,6 +54,9 @@ node ports. The run-labeled callback signer NetworkPolicy must allow only the
 run's simulator Pods to reach its private port. Runtime specs reject host
 aliases, custom DNS, and proxy environment overrides. Every Service
 EndpointSlice must target its owned Pod UID and IP.
+The runtime check also rejects lifecycle commands, exec probes, and node host
+port bindings on every passport service; permitted probes call only the local
+`/health` endpoint on the service's fixed port.
 Each observed Pod must be owned by a ReplicaSet owned by the
 expected Deployment UID. The collector requires a completed current rollout
 with each Pod created after the

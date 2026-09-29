@@ -198,6 +198,10 @@ def kubernetes_runner(*, mixed_provider: bool = False,
                        pod_proxy_env: bool = False,
                        template_resolver_env: bool = False,
                        pod_resolver_env: bool = False,
+                       template_lifecycle_exec: bool = False,
+                       pod_lifecycle_exec: bool = False,
+                       template_probe_exec: bool = False,
+                       pod_probe_exec: bool = False,
                        proxy_config: bool = False,
                        resolver_config: bool = False,
                        template_host_port: bool = False,
@@ -252,6 +256,10 @@ def kubernetes_runner(*, mixed_provider: bool = False,
         if (pod_resolver_env if is_pod else template_resolver_env) and service == "flow":
             container["env"].append({"name": "HOSTALIASES",
                                      "value": "/run/secrets/aliases"})
+        if (pod_lifecycle_exec if is_pod else template_lifecycle_exec) and service == "flow":
+            container["lifecycle"] = {"postStart": {"exec": {"command": ["/bin/sh"]}}}
+        if (pod_probe_exec if is_pod else template_probe_exec) and service == "flow":
+            container["readinessProbe"] = {"exec": {"command": ["/bin/sh"]}}
         if (wrong_pod_command and is_pod and service == "issuance-native"
                 or wrong_template_command and not is_pod and service == "issuance-native"):
             container["command"] = ["/bin/sh"]
@@ -269,8 +277,10 @@ def kubernetes_runner(*, mixed_provider: bool = False,
                                               "name": "marty-config", "key": name}}})
             if indirect_profile:
                 container["env"][-1]["valueFrom"]["configMapKeyRef"]["name"] = "override-config"
-        if service in ("passport-beta-bureau", "passport-callback-signer"):
-            port = 8020 if service == "passport-beta-bureau" else 8018
+        if service in ("passport-beta-bureau", "passport-callback-signer") or (
+                service == "flow" and (pod_host_port if is_pod else template_host_port)):
+            port = (8020 if service == "passport-beta-bureau" else
+                    8018 if service == "passport-callback-signer" else 8011)
             binding = {"name": "http", "containerPort": port}
             if (pod_host_port if is_pod else template_host_port):
                 binding["hostPort"] = port
@@ -511,8 +521,12 @@ def test_kubernetes_accepts_retained_replicasets_and_dual_stack_routes() -> None
     ("pod_proxy_env", "flow entrypoint is overridden"),
     ("template_resolver_env", "flow entrypoint is overridden"),
     ("pod_resolver_env", "flow entrypoint is overridden"),
-    ("template_host_port", "private port is exposed"),
-    ("pod_host_port", "private port is exposed"),
+    ("template_lifecycle_exec", "flow entrypoint is overridden"),
+    ("pod_lifecycle_exec", "flow entrypoint is overridden"),
+    ("template_probe_exec", "flow entrypoint is overridden"),
+    ("pod_probe_exec", "flow entrypoint is overridden"),
+    ("template_host_port", "Deployment runtime is unsafe"),
+    ("pod_host_port", "Pod runtime is unsafe"),
 ])
 def test_kubernetes_rejects_foreign_pod_or_routing(
     defect: str, pattern: str,

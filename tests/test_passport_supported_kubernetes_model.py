@@ -207,6 +207,17 @@ def test_exact_disposable_identity_stays_blocked_without_live_proof() -> None:
     assert report["resource_uids"] == expected["resources"]
 
 
+def test_health_probes_allow_only_local_service_health() -> None:
+    assert gate.approved_health_probe({"httpGet": {"path": "/health", "port": 8011},
+                                       "periodSeconds": 10}, 8011)
+    assert not gate.approved_health_probe({"httpGet": {"path": "/health",
+                                                         "port": 8011,
+                                                         "host": "foreign.example"}}, 8011)
+    assert not gate.approved_health_probe({"httpGet": {"path": "/internal/secrets",
+                                                         "port": 8011}}, 8011)
+    assert not gate.approved_health_probe({"exec": {"command": ["/bin/sh"]}}, 8011)
+
+
 def test_file_backed_kubeconfig_ca_is_checked_after_flattening() -> None:
     expected = plan()
     report = gate.inspect(expected, COMMIT, REFERENCE, runner(expected, file_backed_ca=True))
@@ -405,6 +416,18 @@ def test_identity_or_legacy_model_drift_fails_closed(mutate, match: str) -> None
         ),
         (
             "deployment/flow",
+            lambda x: x["spec"]["template"]["spec"]["containers"][0].update(
+                ports=[{"containerPort": 8011, "hostPort": 8011}]),
+            "deployment/flow is unsafe",
+        ),
+        (
+            "deployment/gateway",
+            lambda x: x["spec"]["template"]["spec"]["containers"][0].update(
+                ports=[{"containerPort": 8000, "hostIP": "0.0.0.0"}]),
+            "deployment/gateway is unsafe",
+        ),
+        (
+            "deployment/flow",
             lambda x: x["spec"]["template"]["spec"]["containers"][0]
             .setdefault("env", []).append({"name": "HTTP_PROXY", "value": "http://evil"}),
             "deployment/flow is unsafe",
@@ -415,6 +438,18 @@ def test_identity_or_legacy_model_drift_fails_closed(mutate, match: str) -> None
             .setdefault("env", []).append({"name": "HOSTALIASES",
                                            "value": "/run/secrets/aliases"}),
             "deployment/issuance-native is unsafe",
+        ),
+        (
+            "deployment/flow",
+            lambda x: x["spec"]["template"]["spec"]["containers"][0].update(
+                lifecycle={"postStart": {"exec": {"command": ["/bin/sh"]}}}),
+            "deployment/flow is unsafe",
+        ),
+        (
+            "deployment/flow",
+            lambda x: x["spec"]["template"]["spec"]["containers"][0].update(
+                readinessProbe={"exec": {"command": ["/bin/sh"]}}),
+            "deployment/flow is unsafe",
         ),
         (
             "configmap/marty-config",
