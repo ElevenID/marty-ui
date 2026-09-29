@@ -1,0 +1,102 @@
+name: Passport Python Deletion Cutover
+
+on:
+  workflow_dispatch:
+    inputs:
+      supported_acceptance_run_id:
+        description: Successful protected supported-consumer acceptance run.
+        required: true
+      predeletion_acceptance_run_id:
+        description: Later successful protected predeletion acceptance run.
+        required: true
+      deletion_head:
+        description: Exact open marty-credentials #305 deletion head.
+        required: true
+      fence_installation_receipt:
+        description: Absolute WSL path to the protected beta fence installation receipt.
+        required: true
+
+concurrency:
+  group: passport-python-deletion-cutover
+  cancel-in-progress: false
+
+permissions:
+  actions: read
+  attestations: write
+  contents: read
+  id-token: write
+
+jobs:
+  collect:
+    if: github.ref == 'refs/heads/main'
+    runs-on: [self-hosted, linux, x64, canvas-oss-wsl2]
+    environment: beta-lifecycle
+    timeout-minutes: 45
+    env:
+      GH_TOKEN: ${{ github.token }}
+      SUPPORTED_RUN: ${{ inputs.supported_acceptance_run_id }}
+      PREDELETION_RUN: ${{ inputs.predeletion_acceptance_run_id }}
+      DELETION_HEAD: ${{ inputs.deletion_head }}
+      FENCE_RECEIPT: ${{ inputs.fence_installation_receipt }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          ref: main
+      - name: Collect final same-generation beta snapshot and protected report
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$GITHUB_SHA" = "$(git rev-parse HEAD)"
+          test "$(git branch --show-current)" = main
+          test "$SUPPORTED_RUN" -gt 0
+          test "$PREDELETION_RUN" -gt 0
+          test "$DELETION_HEAD" = "$(gh api repos/ElevenID/marty-credentials/pulls/305 --jq .head.sha)"
+          test -f "$FENCE_RECEIPT"
+          work="$RUNNER_TEMP/passport-final-cutover-$GITHUB_RUN_ID"
+          mkdir -p "$work/supported" "$work/predeletion"
+          gh run download "$SUPPORTED_RUN" --repo ElevenID/marty-ui \
+            --name "passport-supported-consumer-acceptance-$SUPPORTED_RUN" \
+            --dir "$work/supported"
+          gh run download "$PREDELETION_RUN" --repo ElevenID/marty-ui \
+            --name "passport-rust-predeletion-acceptance-$PREDELETION_RUN" \
+            --dir "$work/predeletion"
+          supported="$work/supported/passport-supported-consumer-acceptance-$SUPPORTED_RUN.json"
+          predeletion="$work/predeletion/passport-rust-predeletion-acceptance-$PREDELETION_RUN.json"
+          snapshot="$work/passport-beta-cutover-snapshot-$GITHUB_RUN_ID.json"
+          report="$work/passport-python-deletion-cutover-$GITHUB_RUN_ID.json"
+          test -f "$supported" && test -f "$predeletion"
+          python3 scripts/probe_passport_beta_cutover_snapshot.py \
+            --fence-installation-receipt "$FENCE_RECEIPT" --output "$snapshot"
+          python3 scripts/collect_passport_python_deletion_cutover.py \
+            --snapshot "$snapshot" \
+            --installation-receipt "$FENCE_RECEIPT" \
+            --supported-report "$supported" --predeletion-report "$predeletion" \
+            --supported-run-id "$SUPPORTED_RUN" \
+            --predeletion-run-id "$PREDELETION_RUN" \
+            --deletion-head "$DELETION_HEAD" --output "$report"
+          jq -e --argjson run "$GITHUB_RUN_ID" --arg source "$GITHUB_SHA" \
+            '.schema == "marty.passport-python-deletion-cutover/v1" and
+             .status == "accepted" and .run_id == $run and
+             .rust_source_commit == $source' "$report"
+          cp -- "$snapshot" "passport-beta-cutover-snapshot-$GITHUB_RUN_ID.json"
+          cp -- "$report" "passport-python-deletion-cutover-$GITHUB_RUN_ID.json"
+      - name: Attest exact final snapshot bytes
+        uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8
+        with:
+          subject-path: passport-beta-cutover-snapshot-${{ github.run_id }}.json
+      - name: Attest exact final report bytes
+        uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8
+        with:
+          subject-path: passport-python-deletion-cutover-${{ github.run_id }}.json
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: passport-beta-cutover-snapshot-${{ github.run_id }}
+          path: passport-beta-cutover-snapshot-${{ github.run_id }}.json
+          if-no-files-found: error
+          retention-days: 30
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: passport-python-deletion-cutover-${{ github.run_id }}
+          path: passport-python-deletion-cutover-${{ github.run_id }}.json
+          if-no-files-found: error
+          retention-days: 30
