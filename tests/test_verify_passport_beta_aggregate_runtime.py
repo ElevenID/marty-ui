@@ -144,6 +144,15 @@ def test_runtime_requires_replaced_signed_generation(monkeypatch):
     assert evidence["verified"] is True
     assert evidence["beta_origin"] == "https://beta.elevenidllc.com"
     assert evidence["ui_container_id"] == UI
+    assert evidence["beta_runtime"]["flow"] == {
+        "container_id": NEW_FLOW, "image_id": "sha256:" + "a" * 64,
+        "configured_image": SERVICES, "started_at": "2026-09-29T00:00:00Z",
+        "config_hash": "0" * 64, "networks": ["elevenid-beta-network"],
+    }
+    assert set(evidence["beta_runtime"]) == set(evidence["beta_services"])
+    assert evidence["ui_runtime"]["container_id"] == UI
+    assert evidence["ui_runtime"]["configured_image"] == UI_IMAGE
+    assert "test-token" not in json.dumps(evidence)
 
 
 def test_runtime_rejects_preserved_ingress_pointing_elsewhere(monkeypatch):
@@ -167,6 +176,13 @@ def test_runtime_rejects_wrong_signed_image(monkeypatch):
     plan, intent, records, runner = fixture(monkeypatch)
     records[NEW_FLOW]["Config"]["Image"] = "python:latest"
     with pytest.raises(runtime.HostProbeError, match="image differs"):
+        runtime.verify(plan, intent, "f" * 64, runner, lambda _: {"verified": True})
+
+
+def test_runtime_refuses_receipt_without_exact_image_identity(monkeypatch):
+    plan, intent, records, runner = fixture(monkeypatch)
+    records[NEW_FLOW]["Image"] = None
+    with pytest.raises(runtime.HostProbeError, match="runtime identity is incomplete"):
         runtime.verify(plan, intent, "f" * 64, runner, lambda _: {"verified": True})
 
 

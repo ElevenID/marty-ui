@@ -86,6 +86,26 @@ def selected_environment(config: dict[str, Any], name: str) -> None:
                 "Aggregate beta runtime passport selector differs")
 
 
+def runtime_identity(record: dict[str, Any]) -> dict[str, Any]:
+    """Project a checked container without copying its private environment."""
+    config = record["Config"]
+    labels = config["Labels"]
+    state = record["State"]
+    networks = record["NetworkSettings"]["Networks"]
+    image_id = record.get("Image")
+    image = config.get("Image")
+    started_at = state.get("StartedAt")
+    require(isinstance(image_id, str) and re.fullmatch(r"sha256:[0-9a-f]{64}", image_id)
+            and isinstance(image, str) and bool(image)
+            and isinstance(started_at, str) and bool(started_at)
+            and isinstance(networks, dict),
+            "Aggregate beta runtime identity is incomplete")
+    return {"container_id": record["Id"], "image_id": image_id,
+            "configured_image": image, "started_at": started_at,
+            "config_hash": labels.get("com.docker.compose.config-hash"),
+            "networks": sorted(networks)}
+
+
 def verify(plan: dict[str, Any], intent: dict[str, Any],
            expected_production_attachments_sha256: str,
            runner: Callable[[list[str]], str] = run,
@@ -280,7 +300,10 @@ def verify(plan: dict[str, Any], intent: dict[str, Any],
             "beta_origin": plan["beta_origin"],
             "postgres_container_id": container,
             "production_snapshot_sha256": plan["production_snapshot_sha256"],
-            "beta_services": sorted(observed), "ui_container_id": ui["Id"]}
+            "beta_services": sorted(observed), "ui_container_id": ui["Id"],
+            "beta_runtime": {name: runtime_identity(observed[name])
+                             for name in sorted(observed)},
+            "ui_runtime": runtime_identity(ui)}
 
 
 def main() -> None:

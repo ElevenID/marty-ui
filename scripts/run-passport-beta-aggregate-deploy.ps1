@@ -490,7 +490,10 @@ try {
         [string]$script:plan.production_attachments_sha256)
     if ($runtime.schema -cne 'marty.passport-beta-aggregate-runtime/v1' -or
         $runtime.verified -ne $true -or
-        $runtime.source_commit -cne $script:plan.source_commit) {
+        $runtime.source_commit -cne $script:plan.source_commit -or
+        $null -eq $runtime.beta_runtime -or
+        @($runtime.beta_runtime.PSObject.Properties).Count -ne @($runtime.beta_services).Count -or
+        $null -eq $runtime.ui_runtime) {
         throw 'Aggregate beta runtime did not match signed Rust plan'
     }
     $receipt = [ordered]@{
@@ -501,7 +504,9 @@ try {
         native_receipt_sha256 = $script:plan.native_receipt_sha256
         production_snapshot_sha256 = $runtime.production_snapshot_sha256
         beta_services = $runtime.beta_services
+        beta_runtime = $runtime.beta_runtime
         ui_container_id = $runtime.ui_container_id
+        ui_runtime = $runtime.ui_runtime
         acceptance_pending = $true
     }
     Write-DurableJson -Path $output `
