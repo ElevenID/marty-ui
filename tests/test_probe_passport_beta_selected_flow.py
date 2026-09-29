@@ -9,7 +9,7 @@ import pytest
 
 from scripts import probe_passport_beta_selected_flow as selected_flow
 from scripts.probe_passport_beta_flow import PHYSICAL_STEPS
-from scripts.probe_passport_beta_selected_flow import SelectedFlowError, exercise
+from scripts.probe_passport_beta_selected_flow import PASSPORT_FLOW_ROUTES, SelectedFlowError, exercise
 
 ORGANIZATION = "beta-org"
 DEFINITION = "passport-flow"
@@ -34,7 +34,8 @@ def model(*, wrong_definition: bool = False, wrong_issuer: bool = False,
           failed_native_status: bool = False, missing_callback_receipt: bool = False,
           wrong_native_identity: bool = False, wrong_terminal_identity: bool = False,
           wrong_terminal_status: bool = False, wrong_persisted_read: bool = False,
-          wrong_tracking: bool = False, regressed_private_status: bool = False):
+          wrong_tracking: bool = False, regressed_private_status: bool = False,
+          wrong_route_trace: bool = False):
     calls = []
     finished = []
     last_projection = None
@@ -78,13 +79,19 @@ def model(*, wrong_definition: bool = False, wrong_issuer: bool = False,
         if index >= 8:
             job.update(status="ACTIVE", completed_at="2026-09-28T00:00:00Z")
         results = {step: {"result": "success"} for step in finished}
+        route_count = max(1, index - 1)
+        trace = [{"method": method, "path": path.replace("{application_id}", "app-1")}
+                 for method, path in PASSPORT_FLOW_ROUTES[:route_count]]
+        if wrong_route_trace and route_count >= 3:
+            trace[2]["path"] = "/internal/passport/applications/app-1/generate-sod"
         if wrong_final_steps and index == 8:
             results.pop("sign_sod")
         payload = {"id": "instance-1", "flow_id": DEFINITION, "organization_id": ORGANIZATION,
                    "flow_type": "physical_document_issuance",
                    "status": "COMPLETED" if index == 8 else "IN_PROGRESS",
                    "current_step": PHYSICAL_STEPS[index + 1] if index + 1 < len(PHYSICAL_STEPS) else PHYSICAL_STEPS[-1],
-                   "context_data": {"application_id": "app-1", "physical_document_job": job},
+                   "context_data": {"application_id": "app-1", "physical_document_job": job,
+                                    "physical_document_route_trace": trace},
                    "step_results": results}
         if index == 8:
             payload["completed_at"] = "2026-09-28T00:00:00Z"
@@ -149,6 +156,9 @@ def test_selected_flow_completes_nine_steps_on_one_receipt_bound_job() -> None:
     assert evidence["callback_receipt_sha256"] == CALLBACK_RECEIPT
     assert evidence["terminal_native_status"] == "ACTIVE"
     assert evidence["signed_simulator_callback_verified"] is True
+    assert evidence["flow_routes"] == [
+        {"method": method, "path": path} for method, path in PASSPORT_FLOW_ROUTES
+    ]
     assert "flow_owner" not in evidence
     assert [call[0] for call in calls].count("POST") == 10
     assert calls[0][0:2] == ("GET", f"/v1/flows/definitions/{DEFINITION}")
@@ -180,6 +190,19 @@ def test_native_batch_is_inserted_after_durable_signed_sod_before_flow_submit() 
     assert calls[batch_index - 1][:2] == ("GET", "/v1/flows/instances/instance-1")
     assert calls[batch_index + 1][:2] == ("GET", "/v1/flows/instances/instance-1")
     assert all(call[0] != "native-batch" for call in calls[batch_index + 1:])
+
+
+def test_selected_flow_rejects_private_or_forged_route_trace_before_batch() -> None:
+    calls, flow_request, native_request, simulator_request, receipt = model(wrong_route_trace=True)
+    with pytest.raises(SelectedFlowError, match="actual native route sequence"):
+        exercise(
+            DEFINITION, ORGANIZATION, ISSUER, REFERENCES, PHYSICAL, COOKIE, KEY,
+            simulator_container_id=CONTAINER, on_submission=receipt,
+            on_signed_sod=lambda *args: calls.append(("native-batch", args)) or BUREAU,
+            request=flow_request, passport_request=native_request,
+            simulator_request=simulator_request, poll_interval_seconds=0,
+        )
+    assert all(call[0] != "native-batch" for call in calls)
 
 
 def test_native_batch_selected_bureau_mismatch_stops_flow() -> None:

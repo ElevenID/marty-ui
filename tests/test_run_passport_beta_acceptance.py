@@ -19,6 +19,7 @@ from scripts.probe_passport_beta_chain import ChainProbeError
 from scripts.probe_passport_beta_batch import _identity_commit
 from scripts.probe_passport_beta_flow import PHYSICAL_STEPS
 from scripts.probe_passport_beta_native_batch import NativeBatchProbeError
+from scripts.probe_passport_beta_selected_flow import PASSPORT_FLOW_ROUTES
 from scripts.run_passport_beta_acceptance import run as protected_run
 from tests.test_probe_passport_beta_chain import plan as certificate_plan
 
@@ -333,6 +334,9 @@ def test_protected_runner_executes_selected_flow_after_chain_and_direct_job(tmp_
                                                 "job_id": "selected-job", "sod_sha256": "e" * 64,
                                                 "bureau_job_id": selected_bureau,
                                                 "ordered_steps": list(PHYSICAL_STEPS),
+                                                "flow_routes": [
+                                                    {"method": method, "path": path}
+                                                    for method, path in PASSPORT_FLOW_ROUTES],
                                                 "completed_steps": 9, "physical_claim": "not_claimed",
                                                 "source_job_commitment": selected_source_commitment,
                                                 "bureau_job_commitment": selected_bureau_commitment,
@@ -363,7 +367,9 @@ def test_protected_runner_executes_selected_flow_after_chain_and_direct_job(tmp_
                      "selected", "native-batch", ("receipt", "selected-job")]
     assert result["probes"]["selected_physical_flow"]["evidence"] == {
         "sod_sha256": "e" * 64, "ordered_steps": list(PHYSICAL_STEPS),
-        "completed_steps": 9, "source_job_commitment": selected_source_commitment,
+        "completed_steps": 9,
+        "flow_routes": [{"method": method, "path": path} for method, path in PASSPORT_FLOW_ROUTES],
+        "source_job_commitment": selected_source_commitment,
         "bureau_job_commitment": selected_bureau_commitment,
         "organization_commitment": _identity_commit("a" * 32, "organization", plan["organization_id"]),
         "flow_definition_commitment": _identity_commit("a" * 32, "flow-definition", "governed-flow"),

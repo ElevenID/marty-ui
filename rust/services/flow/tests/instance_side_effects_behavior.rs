@@ -8,8 +8,8 @@ use marty_flow::{
     CreateFlowDefinitionRequest, CredentialTemplateProvider, CredentialTemplateReference,
     DefinitionStatus, FlowProviderError, FlowProviderRegistry, IssuanceInitiationRequest,
     IssuanceInitiationResult, IssuanceProvider, PhysicalDocumentOperation,
-    PhysicalDocumentProvider, PhysicalDocumentRequest, PhysicalDocumentResult, StartFlowRequest,
-    WalletConfiguration,
+    PhysicalDocumentProvider, PhysicalDocumentRequest, PhysicalDocumentResult,
+    PhysicalDocumentRoute, StartFlowRequest, WalletConfiguration,
 };
 use marty_verification::flow::TransitionOutcome;
 use serde::Deserialize;
@@ -130,6 +130,31 @@ impl PhysicalDocumentProvider for Physical {
         request: &PhysicalDocumentRequest,
     ) -> Result<PhysicalDocumentResult, FlowProviderError> {
         self.requests.lock().unwrap().push(request.clone());
+        let (method, path) = match request.operation {
+            PhysicalDocumentOperation::Initialize => {
+                ("POST", "/v1/passport/applications".to_owned())
+            }
+            operation => {
+                let suffix = match operation {
+                    PhysicalDocumentOperation::GenerateDataGroups => "generate-data-groups",
+                    PhysicalDocumentOperation::SignSod => "generate-sod",
+                    PhysicalDocumentOperation::SubmitToPersonalization => "submit-personalization",
+                    PhysicalDocumentOperation::TrackProduction => "production-status",
+                    PhysicalDocumentOperation::QualityVerify => "quality-verify",
+                    PhysicalDocumentOperation::ActivateCredential => "activate",
+                    PhysicalDocumentOperation::Initialize => unreachable!(),
+                };
+                let method = if operation == PhysicalDocumentOperation::TrackProduction {
+                    "GET"
+                } else {
+                    "POST"
+                };
+                (
+                    method,
+                    format!("/v1/passport/applications/application-1/{suffix}"),
+                )
+            }
+        };
         Ok(PhysicalDocumentResult {
             operation: request.operation,
             status: "DRAFT".into(),
@@ -140,6 +165,10 @@ impl PhysicalDocumentProvider for Physical {
             ]
             .into_iter()
             .collect(),
+            route: Some(PhysicalDocumentRoute {
+                method: method.into(),
+                path,
+            }),
         })
     }
 }
@@ -403,6 +432,18 @@ async fn physical_inputs_are_consumed_and_every_operation_is_typed() {
     }
     assert!(advanced.context["physical_document_job"].is_object());
     assert_eq!(physical.requests.lock().unwrap().len(), 7);
+    assert_eq!(
+        advanced.context["physical_document_route_trace"],
+        json!([
+            {"method": "POST", "path": "/v1/passport/applications"},
+            {"method": "POST", "path": "/v1/passport/applications/application-1/generate-data-groups"},
+            {"method": "POST", "path": "/v1/passport/applications/application-1/generate-sod"},
+            {"method": "POST", "path": "/v1/passport/applications/application-1/submit-personalization"},
+            {"method": "GET", "path": "/v1/passport/applications/application-1/production-status"},
+            {"method": "POST", "path": "/v1/passport/applications/application-1/quality-verify"},
+            {"method": "POST", "path": "/v1/passport/applications/application-1/activate"},
+        ])
+    );
 }
 
 #[tokio::test]

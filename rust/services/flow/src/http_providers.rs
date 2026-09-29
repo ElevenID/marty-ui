@@ -13,8 +13,8 @@ use url::Url;
 use crate::{
     FlowKeyEnvelope, FlowKeyEnvelopeProvider, FlowKeyEnvelopeRequest, FlowProviderError,
     FlowReference, FlowReferenceKind, FlowReferenceProvider, PhysicalDocumentOperation,
-    PhysicalDocumentProvider, PhysicalDocumentRequest, PhysicalDocumentResult, SigningIdentity,
-    SigningIdentityProvider, SigningRequest, SigningResult,
+    PhysicalDocumentProvider, PhysicalDocumentRequest, PhysicalDocumentResult,
+    PhysicalDocumentRoute, SigningIdentity, SigningIdentityProvider, SigningRequest, SigningResult,
 };
 
 const MAXIMUM_RESPONSE_BYTES: usize = 1024 * 1024;
@@ -557,6 +557,10 @@ impl PhysicalDocumentProvider for HttpPhysicalDocumentProvider {
                 })?;
             http.api_key = Some(key.to_owned());
         }
+        let route = PhysicalDocumentRoute {
+            method: method.as_str().to_owned(),
+            path: format!("/{path}"),
+        };
         let data: BTreeMap<String, Value> = http
             .json_for_organization(method, &path, &[], body, &request.organization_id)
             .await?;
@@ -570,6 +574,7 @@ impl PhysicalDocumentProvider for HttpPhysicalDocumentProvider {
             operation: request.operation,
             status,
             data,
+            route: Some(route),
         })
     }
 }
@@ -1187,10 +1192,17 @@ mod tests {
         assert_eq!(headers.get("x-organization-id").unwrap(), "org-2");
         assert_eq!(body["organization_id"], "org-2");
 
-        provider
+        let signed = provider
             .execute(&request(PhysicalDocumentOperation::SignSod))
             .await
             .unwrap();
+        assert_eq!(
+            signed.route,
+            Some(PhysicalDocumentRoute {
+                method: "POST".into(),
+                path: "/v1/passport/applications/application-1/generate-sod".into(),
+            })
+        );
         let (headers, uri, _) = captured.lock().unwrap().take().unwrap();
         assert_eq!(
             uri.path(),

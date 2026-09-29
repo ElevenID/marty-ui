@@ -59,6 +59,7 @@ if __package__:
         validate_plan as validate_physical_flow_plan,
     )
     from .probe_passport_beta_selected_flow import (
+        PASSPORT_FLOW_ROUTES,
         SelectedFlowError,
     )
     from .probe_passport_beta_selected_flow import (
@@ -116,6 +117,7 @@ else:
         validate_plan as validate_physical_flow_plan,
     )
     from probe_passport_beta_selected_flow import (
+        PASSPORT_FLOW_ROUTES,
         SelectedFlowError,
     )
     from probe_passport_beta_selected_flow import (
@@ -347,6 +349,9 @@ def run(
                     and selected_evidence.get("bureau_job_id") == selected_bureau_id
                     and selected_evidence.get("signed_simulator_callback_verified") is True
                     and selected_evidence.get("terminal_native_status") == "ACTIVE"
+                    and selected_evidence.get("flow_routes") == [
+                        {"method": method, "path": path}
+                        for method, path in PASSPORT_FLOW_ROUTES]
                     and isinstance(selected_evidence.get("callback_receipt_sha256"), str)
                     and SHA256.fullmatch(selected_evidence["callback_receipt_sha256"]) is not None
                     and isinstance(receipt_result, dict) and isinstance(receipt_result.get("evidence"), dict)
@@ -515,6 +520,7 @@ def run(
             "sod_sha256": selected_evidence["sod_sha256"],
             "ordered_steps": selected_evidence["ordered_steps"],
             "completed_steps": selected_evidence["completed_steps"],
+            "flow_routes": selected_evidence["flow_routes"],
             "source_job_commitment": selected_evidence["source_job_commitment"],
             "bureau_job_commitment": selected_evidence["bureau_job_commitment"],
             **selected_commitments,
@@ -576,6 +582,8 @@ def run(
         "application_lifecycle": safe_lifecycle_evidence,
         "flow_and_webhook_denial": flow_result.get("evidence"),
         "native_route_ownership": route_ownership.get("evidence"),
+        **({"selected_flow_routes": selected_result["evidence"]["flow_routes"]}
+           if selected_result is not None else {}),
         "missing": (["same_job_gateway_route_trace"] if native_batch_result is not None
                     else ["executed_simulator_flow", "selected_flow_in_two_job_batch"]),
     }}

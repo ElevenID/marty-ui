@@ -11,7 +11,7 @@ use crate::{
     definition_protocol_step, effective_flow_type, ArtifactStatus, CredentialTemplateReference,
     FlowArtifactRecord, FlowDefinitionRecord, FlowInstanceRecord, FlowProviderError,
     FlowProviderRegistry, FlowType, IssuanceInitiationRequest, PhysicalDocumentOperation,
-    PhysicalDocumentRequest, PhysicalDocumentResult,
+    PhysicalDocumentRequest, PhysicalDocumentResult, PhysicalDocumentRoute,
 };
 
 const MIP_MESSAGE_VERSION: &str = "0.3.1";
@@ -175,7 +175,9 @@ pub async fn apply_physical_advance_side_effect(
         })
         .await?;
     validate_physical_result(operation, &result, None)?;
-    context_mut(&mut instance)?.insert(
+    let context = context_mut(&mut instance)?;
+    record_physical_route(context, result.route.as_ref(), false)?;
+    context.insert(
         "physical_document_job".into(),
         serde_json::to_value(result.data)
             .map_err(|_| FlowInstanceSideEffectError::InvalidResponse("physical document job"))?,
@@ -265,6 +267,7 @@ async fn initialize_physical_document(
         Some(&instance.id),
     )?;
     let context = context_mut(instance)?;
+    record_physical_route(context, result.route.as_ref(), true)?;
     context.insert("physical_document_job".into(), json!(result.data));
     context.insert("application_id".into(), json!(application_id));
     Ok(())
@@ -562,6 +565,33 @@ fn context_mut(
         ))
 }
 
+fn record_physical_route(
+    context: &mut Map<String, Value>,
+    route: Option<&PhysicalDocumentRoute>,
+    initialize: bool,
+) -> Result<(), FlowInstanceSideEffectError> {
+    const KEY: &str = "physical_document_route_trace";
+    if initialize {
+        // Initial context is caller supplied. Only the HTTP provider may seed
+        // a trace after its first successful native response.
+        context.remove(KEY);
+        if let Some(route) = route {
+            context.insert(KEY.into(), json!([route]));
+        }
+        return Ok(());
+    }
+    match (context.get_mut(KEY), route) {
+        (None, None) => Ok(()),
+        (Some(Value::Array(trace)), Some(route)) => {
+            trace.push(json!(route));
+            Ok(())
+        }
+        _ => Err(FlowInstanceSideEffectError::InvalidResponse(
+            "physical document route trace",
+        )),
+    }
+}
+
 fn nonempty_context_string(context: &Map<String, Value>, name: &str) -> Option<String> {
     context
         .get(name)
@@ -575,4 +605,35 @@ fn empty_json_value(value: &Value) -> bool {
         || value.as_str().is_some_and(str::is_empty)
         || value.as_array().is_some_and(Vec::is_empty)
         || value.as_object().is_some_and(Map::is_empty)
+}
+
+#[cfg(test)]
+mod route_trace_tests {
+    use super::*;
+
+    #[test]
+    fn provider_trace_overwrites_caller_context_and_requires_continuity() {
+        let mut context = json!({
+            "physical_document_route_trace": [{"method": "POST", "path": "/forged"}]
+        });
+        let context = context.as_object_mut().unwrap();
+        let created = PhysicalDocumentRoute {
+            method: "POST".into(),
+            path: "/v1/passport/applications".into(),
+        };
+        record_physical_route(context, Some(&created), true).unwrap();
+        assert_eq!(context["physical_document_route_trace"], json!([created]));
+        let signed = PhysicalDocumentRoute {
+            method: "POST".into(),
+            path: "/v1/passport/applications/app-1/generate-sod".into(),
+        };
+        record_physical_route(context, Some(&signed), false).unwrap();
+        assert_eq!(
+            context["physical_document_route_trace"],
+            json!([created, signed])
+        );
+        assert!(record_physical_route(context, None, false).is_err());
+        record_physical_route(context, None, true).unwrap();
+        assert!(context.get("physical_document_route_trace").is_none());
+    }
 }
