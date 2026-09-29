@@ -25,18 +25,17 @@ jobs:
     timeout-minutes: 180
     env:
       BETA_ARTIFACT_DIR: ${{ inputs.beta_artifact_dir }}
+      PASSPORT_DEMO_RECORDER_COMMIT: ba883ad0ddcda480a89c197ea7b7c4cfacc1fbd3
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
 
-      - name: Pin recorder to the deployed beta release
+      - name: Validate exact beta and recorder inputs
         shell: bash
         run: |
           set -euo pipefail
           [[ "$(git rev-parse HEAD)" == "$GITHUB_SHA" ]]
           [[ "$BETA_ARTIFACT_DIR" == /* && -d "$BETA_ARTIFACT_DIR" ]]
-          recorder_commit="$(python3 scripts/pin_passport_beta_recorder.py \
-            --artifact-dir "$BETA_ARTIFACT_DIR" --expected-ui-commit "$GITHUB_SHA")"
-          echo "PASSPORT_DEMO_RECORDER_COMMIT=$recorder_commit" >> "$GITHUB_ENV"
+          [[ "$PASSPORT_DEMO_RECORDER_COMMIT" =~ ^[0-9a-f]{40}$ ]]
 
       - name: Install browser recording dependencies
         uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v4

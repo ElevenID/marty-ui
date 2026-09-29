@@ -50,10 +50,11 @@ frame/OCR/QR privacy scanner, and emits `negative-callback-media.json` only if
 both cases have the same signed release, aggregate beta deployment, selected
 job, and unchanged-state commitment. It requires the private handoff and a new
 mode-0700 output directory outside the checkout and deployment artifacts. The
-scanner checkout must match `PASSPORT_DEMO_RECORDER_COMMIT`, which the protected
-workflow derives from the governed deployment's source, local deployment, and
-deployed demo manifests. The recorder revision is an explicit release input;
-it is not a component of the signed stack manifest. The `beta-lifecycle`
+scanner checkout must match `PASSPORT_DEMO_RECORDER_COMMIT`, pinned as an exact
+reviewed commit in the protected workflow source. Changing it requires a code
+reviewed workflow update. The recorder is a separate
+test harness and its revision is not part of the signed aggregate stack manifest.
+The `beta-lifecycle`
 environment needs `PASSPORT_DEMO_SOURCE_READ_TOKEN`, a fine-grained token with
 Contents read access to the private `ElevenID/marty-demo-recorder` repository.
 The existing `DEMO_RECORDER_DISPATCH_TOKEN` lacks that permission. The workflow
