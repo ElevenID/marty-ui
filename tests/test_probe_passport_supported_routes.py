@@ -87,11 +87,13 @@ def test_frozen_routes_and_same_job_signed_receipt_are_sanitized() -> None:
 
 
 @pytest.mark.parametrize("defect", ["wrong_job", "missing_receipt", "foreign_tracking",
-                                      "unsigned_accepted", "capability"])
+                                      "unsigned_accepted", "unsigned_authenticated",
+                                      "capability"])
 def test_rejects_broken_route_or_callback_evidence(defect: str) -> None:
     calls, request = responses(
         wrong_job=defect == "wrong_job",
-        denied_status=200 if defect == "unsigned_accepted" else 422,
+        denied_status=(200 if defect == "unsigned_accepted" else
+                       401 if defect == "unsigned_authenticated" else 422),
         capability=defect != "capability",
     )
     def private(bureau_id: str):

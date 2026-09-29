@@ -56,14 +56,11 @@ def _frozen_routes() -> set[tuple[str, str]]:
 def exercise(
     application: dict[str, Any], api_key: str, *,
     request: Request, private_poll: PrivatePoll,
-    unsigned_webhook_status: int = 422,
     max_polls: int = 36,
     poll_interval_seconds: float = 5,
     sleep: Callable[[float], None] = time.sleep,
 ) -> dict[str, Any]:
     """Require one managed lifecycle and a signed receipt from its bureau job."""
-    if unsigned_webhook_status not in (401, 422):
-        raise SupportedRouteProbeError("Unsigned webhook policy is invalid")
     expected = _frozen_routes()
     if ("POST", "/v1/passport/webhooks/personalization") not in expected:
         raise SupportedRouteProbeError("Supported webhook route is missing")
@@ -126,7 +123,7 @@ def exercise(
     denial_status, _ = request(
         "POST", "/v1/passport/webhooks/personalization", {}, "",
     )
-    if denial_status != unsigned_webhook_status:
+    if denial_status != 422:
         raise SupportedRouteProbeError("Unsigned webhook was not denied")
     routes = [
         {"method": "GET", "route": "/v1/passport/capabilities",
