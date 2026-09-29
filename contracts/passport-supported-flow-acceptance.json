@@ -2,6 +2,27 @@
   "schema": "marty.passport-supported-flow-acceptance/v1",
   "purpose": "Protected disposable proof that Rust Flow executed the physical passport lifecycle against the Rust issuance owner",
   "flow_type": "physical_document_issuance",
+  "operator_authority": {
+    "issuer": "disposable_organization_application_in_the_owned_project",
+    "credential": "separate_short_lived_test_key_from_the_credentials_issuance_key",
+    "api_key_scopes": ["flows:write", "templates:write", "applications:write"],
+    "principal": "api_key:<issued_operator_key_id>",
+    "organization_role": {
+      "is_system": false,
+      "is_default_for_new_members": false,
+      "permissions": [
+        "flow-definition:view",
+        "flow-definition:create",
+        "flow-definition:edit",
+        "flow-definition:activate",
+        "flow-instance:view",
+        "flow-instance:start",
+        "flow-instance:advance"
+      ]
+    },
+    "lease": "expires_at_or_two_hours_whichever_is_earlier",
+    "teardown": "revoke_both_run_keys_remove_operator_member_delete_operator_role_and_fail_if_owned_cleanup_is_incomplete"
+  },
   "references": {
     "credential_template_id": "created_in_the_owned_project_and_tenant_bound",
     "application_template_id": "created_in_the_owned_project_and_tenant_bound",
