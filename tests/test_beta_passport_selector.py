@@ -69,6 +69,7 @@ def model(tmp_path, enabled=True):
     services["gateway"]["environment"]["SIGNING_KEYS_INTERNAL_API_KEY"] = (
         "synthetic-signing-credential"
     )
+    services["gateway"]["environment"]["PASSPORT_PROVIDER_INGRESS_GATEWAY_ENABLED"] = "false"
     services["signing-keys"] = {
         "environment": {
             "ENVIRONMENT": "beta",
@@ -314,6 +315,7 @@ def test_rendered_compose_environment_list_is_supported(tmp_path):
         "callback_route",
         "callback_direct_native",
         "callback_gateway_disabled",
+        "callback_provider_ingress_selected",
         "image",
         "exposed_port",
         "network",
@@ -488,6 +490,8 @@ def test_partial_or_unsafe_selection_fails_closed(tmp_path, mutation):
         )
     elif mutation == "callback_gateway_disabled":
         bureau["environment"]["PASSPORT_BETA_BUREAU_GATEWAY_CALLBACK_ENABLED"] = "false"
+    elif mutation == "callback_provider_ingress_selected":
+        services["gateway"]["environment"]["PASSPORT_PROVIDER_INGRESS_GATEWAY_ENABLED"] = "true"
     elif mutation == "image":
         bureau["image"] = "services:latest"
     elif mutation == "exposed_port":

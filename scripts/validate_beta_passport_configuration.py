@@ -755,6 +755,10 @@ def validate_model(model, *, passport_enabled, files, physical_provider=False,
         flow = environment(targets["flow"])
         if flow.get("ISSUANCE_NATIVE_SERVICE_URL") != "http://issuance-native:8005":
             raise PassportConfigurationError("Beta passport Flow target is not native")
+        if gateway.get("PASSPORT_PROVIDER_INGRESS_GATEWAY_ENABLED") != "false":
+            raise PassportConfigurationError(
+                "Beta simulator signed callback must target the native Gateway owner"
+            )
         for owner in targets.values():
             env = environment(owner)
             if (
