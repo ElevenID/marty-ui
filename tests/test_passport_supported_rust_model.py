@@ -49,7 +49,8 @@ def safe_model(root: Path) -> dict:
         "GRPC_SERVICE_TOKEN_FILE": "/run/secrets/grpc_service_token",
         "SIGNING_KEYS_INTERNAL_API_KEY_FILE": "/run/secrets/callback_signer_api_key",
         "SIGNING_KEYS_INTERNAL_URL": "http://passport-callback-signer:8018/internal/documents",
-        "PASSPORT_BUREAU_CALLBACK_URL": "http://issuance-native:8005/v1/passport/webhooks/personalization",
+        "PASSPORT_BETA_BUREAU_GATEWAY_CALLBACK_ENABLED": "true",
+        "PASSPORT_BUREAU_CALLBACK_URL": "http://gateway:8000/v1/passport/webhooks/personalization",
     })
     services["passport-beta-bureau"]["environment"].pop("DATABASE_URL")
     services["passport-beta-bureau"]["networks"] = ["private", "callback_signing"]
@@ -412,6 +413,23 @@ def test_isolated_resolved_compose_model_passes_only_static_preflight(
     report = validate_model(safe_model(tmp_path), PROJECT, IMAGE, tmp_path)
     assert report["model_safe"] is True
     assert "issuance" not in report["services"]
+
+
+@pytest.mark.parametrize("changed", [
+    {"PASSPORT_BETA_BUREAU_GATEWAY_CALLBACK_ENABLED": "false"},
+    {"PASSPORT_BUREAU_CALLBACK_URL":
+     "http://issuance-native:8005/v1/passport/webhooks/personalization"},
+    {"PASSPORT_BUREAU_CALLBACK_URL":
+     "https://external.example/v1/passport/webhooks/personalization"},
+])
+def test_disposable_bureau_requires_signed_gateway_callback_route(
+    tmp_path: Path, changed: dict[str, str],
+) -> None:
+    model = safe_model(tmp_path)
+    model["services"]["passport-beta-bureau"]["environment"].update(changed)
+    with pytest.raises(ModelPreflightError,
+                       match="private Marty simulator|endpoint leaves disposable services"):
+        validate_model(model, PROJECT, IMAGE, tmp_path)
 
 
 @pytest.mark.parametrize("service,key,value", [

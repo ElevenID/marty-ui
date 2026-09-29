@@ -82,7 +82,8 @@ def staged():
     (secrets / "workload_identity_ca_cert").write_text("synthetic-ca")
     return root, {"project": project, "disposable_root": str(root),
                   "expires_at": (datetime.now(timezone.utc) + timedelta(hours=2)).isoformat(),
-                  "containers": {"edge": "e" * 64}}
+                  "containers": {"edge": "e" * 64,
+                                 "passport-beta-bureau": "b" * 64}}
 
 
 def cleanup(root: Path) -> None:
@@ -111,10 +112,14 @@ def test_owned_https_probe_uses_same_job_private_receipt(monkeypatch) -> None:
         {"HostIp": "127.0.0.1", "HostPort": "29877"}]}},
         "NetworkSettings": {"Ports": {"8443/tcp": [
             {"HostIp": "127.0.0.1", "HostPort": "29877"}]}}}
+    bureau = {"Config": {"Env": [
+        "PASSPORT_BETA_BUREAU_GATEWAY_CALLBACK_ENABLED=true",
+        "PASSPORT_BUREAU_CALLBACK_URL=" + probe.GATEWAY_CALLBACK,
+    ]}}
     try:
         report = probe.exercise_owned_disposable(
             record, "selfhost", application(), now=NOW,
-            inspector=lambda args: json.dumps([edge]),
+            inspector=lambda args: json.dumps([edge if args[-1] == "e" * 64 else bureau]),
             ownership=lambda *args: {"live_ownership_verified": True},
             private_poll=lambda rec, surface, job, **kwargs: (
                 200, {"status": "QUALITY_CHECK", "tracking_number": None,
@@ -124,6 +129,7 @@ def test_owned_https_probe_uses_same_job_private_receipt(monkeypatch) -> None:
         )
         assert report["verified"] is True
         assert report["flow_execution_verified"] is False
+        assert report["evidence"]["signed_gateway_callback_verified"] is True
         assert len(opener.requests) == 9
     finally:
         cleanup(root)
@@ -149,3 +155,25 @@ def test_wrong_disposable_issuer_fails_before_http(monkeypatch) -> None:
         assert requests == []
     finally:
         cleanup(root)
+
+
+@pytest.mark.parametrize("environment", [
+    ["PASSPORT_BETA_BUREAU_GATEWAY_CALLBACK_ENABLED=false",
+     "PASSPORT_BUREAU_CALLBACK_URL=" + probe.GATEWAY_CALLBACK],
+    ["PASSPORT_BETA_BUREAU_GATEWAY_CALLBACK_ENABLED=true",
+     "PASSPORT_BUREAU_CALLBACK_URL=http://issuance-native:8005/v1/passport/webhooks/personalization"],
+    ["PASSPORT_BETA_BUREAU_GATEWAY_CALLBACK_ENABLED=true",
+     "PASSPORT_BUREAU_CALLBACK_URL=" + probe.GATEWAY_CALLBACK,
+     "PASSPORT_BUREAU_CALLBACK_URL=" + probe.GATEWAY_CALLBACK],
+])
+def test_running_simulator_gateway_callback_must_match_model(
+    environment: list[str],
+) -> None:
+    record = {"containers": {"passport-beta-bureau": "b" * 64}}
+
+    def inspector(args: list[str]) -> str:
+        return json.dumps([{"Config": {"Env": environment}}])
+
+    with pytest.raises(probe.DisposableRouteProbeError,
+                       match="Gateway callback drifted"):
+        probe._gateway_callback_selected(record, inspector)

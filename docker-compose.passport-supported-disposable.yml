@@ -446,7 +446,8 @@ services:
       GRPC_SERVICE_TOKEN_FILE: /run/secrets/grpc_service_token
       SIGNING_KEYS_INTERNAL_API_KEY_FILE: /run/secrets/callback_signer_api_key
       SIGNING_KEYS_INTERNAL_URL: http://passport-callback-signer:8018/internal/documents
-      PASSPORT_BUREAU_CALLBACK_URL: http://issuance-native:8005/v1/passport/webhooks/personalization
+      PASSPORT_BETA_BUREAU_GATEWAY_CALLBACK_ENABLED: "true"
+      PASSPORT_BUREAU_CALLBACK_URL: http://gateway:8000/v1/passport/webhooks/personalization
     secrets: [bureau_database_url, grpc_service_token, callback_signer_api_key]
     depends_on:
       postgres:

@@ -65,19 +65,22 @@ def poll(bureau_id: str):
 def test_frozen_routes_and_same_job_signed_receipt_are_sanitized() -> None:
     calls, request = responses()
     report = exercise(APPLICATION, KEY, request=request, private_poll=poll,
+                      callback_via_gateway=True,
                       poll_interval_seconds=0)
     routes = report["evidence"]["routes"]
     contract = json.loads((Path(__file__).resolve().parents[1]
                            / "contracts/passport-supported-consumer-routing.json").read_text())
     assert {(entry["method"], entry["route"]) for entry in routes} == {
         (entry["method"], entry["path"]) for entry in contract["routes"]}
+    assert contract["software_route_acceptance"]["callback_result"] == (
+        "gateway_routed_native_accepted_signed_receipt_for_same_bureau_job")
     assert len(routes) == 9
     assert report["verified"] is True
     assert report["flow_execution_verified"] is False
     assert report["evidence"]["callback_receipt_sha256"] == "b" * 64
-    assert report["evidence"]["signed_callback_path"] == "simulator-to-native"
-    assert report["evidence"]["signed_gateway_callback_verified"] is False
-    assert routes[-1]["positive_gateway_path_verified"] is False
+    assert report["evidence"]["signed_callback_path"] == "simulator-to-gateway-to-native"
+    assert report["evidence"]["signed_gateway_callback_verified"] is True
+    assert routes[-1]["positive_gateway_path_verified"] is True
     assert report["evidence"]["physical_claim"] == "not_claimed"
     serialized = json.dumps(report)
     assert BUREAU_ID not in serialized and KEY not in serialized
@@ -88,7 +91,7 @@ def test_frozen_routes_and_same_job_signed_receipt_are_sanitized() -> None:
 
 @pytest.mark.parametrize("defect", ["wrong_job", "missing_receipt", "foreign_tracking",
                                       "unsigned_accepted", "unsigned_authenticated",
-                                      "capability"])
+                                      "capability", "gateway_not_selected"])
 def test_rejects_broken_route_or_callback_evidence(defect: str) -> None:
     calls, request = responses(
         wrong_job=defect == "wrong_job",
@@ -108,5 +111,6 @@ def test_rejects_broken_route_or_callback_evidence(defect: str) -> None:
 
     with pytest.raises(SupportedRouteProbeError):
         exercise(APPLICATION, KEY, request=request, private_poll=private,
+                 callback_via_gateway=defect != "gateway_not_selected",
                  poll_interval_seconds=0)
     assert calls

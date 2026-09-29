@@ -918,8 +918,9 @@ def validate_model(
             and bureau.get("SIGNING_KEYS_INTERNAL_API_KEY_FILE") == "/run/secrets/callback_signer_api_key"
             and bureau.get("SIGNING_KEYS_INTERNAL_URL")
             == "http://passport-callback-signer:8018/internal/documents"
+            and bureau.get("PASSPORT_BETA_BUREAU_GATEWAY_CALLBACK_ENABLED") == "true"
             and bureau.get("PASSPORT_BUREAU_CALLBACK_URL")
-            == "http://issuance-native:8005/v1/passport/webhooks/personalization"
+            == "http://gateway:8000/v1/passport/webhooks/personalization"
             and all(key not in bureau for key in (
                 "DATABASE_URL", "GRPC_SERVICE_TOKEN", "SIGNING_KEYS_INTERNAL_API_KEY")),
             "Disposable bureau is not the private Marty simulator")

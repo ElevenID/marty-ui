@@ -2,9 +2,8 @@
 """Check the frozen nine route shapes and the simulator's same-job receipt.
 
 The caller supplies an owned HTTPS Gateway request and an authenticated private
-bureau poll. The signed simulator callback enters native issuance directly;
-the public Gateway webhook receives only an unsigned denial probe here.
-Neither Flow execution nor physical personalization is proven.
+bureau poll. The caller must bind the signed receipt to the inspected private
+Gateway callback route. Flow execution and physical personalization remain unproven.
 """
 
 from __future__ import annotations
@@ -56,6 +55,7 @@ def _frozen_routes() -> set[tuple[str, str]]:
 def exercise(
     application: dict[str, Any], api_key: str, *,
     request: Request, private_poll: PrivatePoll,
+    callback_via_gateway: bool,
     max_polls: int = 36,
     poll_interval_seconds: float = 5,
     sleep: Callable[[float], None] = time.sleep,
@@ -110,7 +110,8 @@ def exercise(
     private_state = private.get("status") if isinstance(private, dict) else None
     tracking = private.get("tracking_number") if isinstance(private, dict) else None
     expected_tracking = "BETA-SIM-" + uuid.UUID(bureau_job_id).hex
-    if (poll_status != 200 or private_state not in ("QUALITY_CHECK", "SHIPPED")
+    if (callback_via_gateway is not True
+        or poll_status != 200 or private_state not in ("QUALITY_CHECK", "SHIPPED")
         or not isinstance(receipt, str) or HEX64.fullmatch(receipt) is None
         or (private_state == "SHIPPED" and tracking != expected_tracking)
         or (private_state == "QUALITY_CHECK" and tracking is not None)
@@ -131,7 +132,7 @@ def exercise(
         *lifecycle["evidence"]["routes"],
         {"method": "POST", "route": "/v1/passport/webhooks/personalization",
          "http_status": denial_status,
-         "positive_gateway_path_verified": False,
+         "positive_gateway_path_verified": True,
          "signed_callback_observed_by": "authenticated-private-bureau-receipt"},
     ]
     observed = {(item["method"], item["route"]) for item in routes}
@@ -144,8 +145,8 @@ def exercise(
         bureau_job_id.encode("ascii")).hexdigest()
     evidence["callback_private_status"] = private_state
     evidence["unsigned_webhook_http_status"] = denial_status
-    evidence["signed_callback_path"] = "simulator-to-native"
-    evidence["signed_gateway_callback_verified"] = False
+    evidence["signed_callback_path"] = "simulator-to-gateway-to-native"
+    evidence["signed_gateway_callback_verified"] = True
     evidence["physical_claim"] = "not_claimed"
     return {"verified": True, "evidence": evidence,
             "flow_execution_verified": False}

@@ -99,7 +99,7 @@ def test_producer_orders_real_gates_and_tears_down(surface: str, tmp_path: Path)
         assert args[2]["issuer_did"] == issuer_did(29877)
         assert set(args[2]["data_groups"]) == {"DG1", "DG2"}
         return {"verified": True, "flow_execution_verified": False,
-                "evidence": {"signed_gateway_callback_verified": False,
+                "evidence": {"signed_gateway_callback_verified": True,
                              "routes": [{"method": "GET", "route": "synthetic"}] * 9}}
 
     def complete(*args):
@@ -130,7 +130,7 @@ def test_producer_orders_real_gates_and_tears_down(surface: str, tmp_path: Path)
         assert commands[-1][-2:] == ["gateway", "signing-keys"]
     assert report["status"] == "blocked"
     assert report["rust_routes_verified"] is True
-    assert report["signed_gateway_callback_verified"] is False
+    assert report["signed_gateway_callback_verified"] is True
     assert report["flow_execution_verified"] is False
     assert report["rust_restart_resume_verified"] is False
     assert report["producer_run_id"] == "987654"
@@ -165,7 +165,7 @@ def test_invalid_route_proof_fails_and_cleans(tmp_path: Path) -> None:
                 / "passport_acceptance_api_key"),
             probe=lambda *args, **kwargs: {"verified": True,
                 "flow_execution_verified": True,
-                "evidence": {"signed_gateway_callback_verified": False}},
+                "evidence": {"signed_gateway_callback_verified": True}},
             teardown_complete=lambda *args: partial.append("complete") or True,
             teardown_partial=lambda *args, **kwargs: partial.append("partial") or True,
         )
@@ -209,7 +209,7 @@ def test_hosted_handoff_binds_partial_receipt_to_plan(tmp_path: Path) -> None:
                "http_status": (422 if path.endswith("/webhooks/personalization")
                                else 201 if path == "/v1/passport/applications" else 200),
                **({"job_status": statuses[path]} if path in statuses else {}),
-               **({"positive_gateway_path_verified": False,
+               **({"positive_gateway_path_verified": True,
                    "signed_callback_observed_by": "authenticated-private-bureau-receipt"}
                   if path.endswith("/webhooks/personalization") else {})}
               for method, path in sorted(_frozen_routes())]
@@ -221,12 +221,12 @@ def test_hosted_handoff_binds_partial_receipt_to_plan(tmp_path: Path) -> None:
         "source_commit": SOURCE, "plan_run_id": "123456", "producer_run_id": "987654",
         "gateway_port": 29877, "physical_claim": "not_claimed",
         "certificate_setup_passed": True, "live_ownership_verified": True,
-        "rust_routes_verified": True, "signed_gateway_callback_verified": False,
+        "rust_routes_verified": True, "signed_gateway_callback_verified": True,
         "flow_execution_verified": False, "rust_restart_resume_verified": False,
         "certificate": certificate(selected, 29877),
         "route": {"verified": True, "flow_execution_verified": False,
-                  "evidence": {"signed_gateway_callback_verified": False,
-                               "signed_callback_path": "simulator-to-native",
+                  "evidence": {"signed_gateway_callback_verified": True,
+                               "signed_callback_path": "simulator-to-gateway-to-native",
                                "physical_claim": "not_claimed",
                                "unsigned_webhook_http_status": 422,
                                "callback_private_status": "QUALITY_CHECK",
@@ -239,7 +239,7 @@ def test_hosted_handoff_binds_partial_receipt_to_plan(tmp_path: Path) -> None:
                                "callback_receipt_sha256": "7" * 64,
                                "sod_signature_verified": True,
                                "routes": routes}},
-        "blocker": "Gateway signed callback, Flow execution, and Rust restart/resume remain unproven",
+        "blocker": "Flow execution and Rust restart/resume remain unproven",
     }
     receipt_path.write_text(json.dumps(receipt))
     assert verify_handoff(plan_path, receipt_path, SOURCE, "987654",
@@ -248,7 +248,7 @@ def test_hosted_handoff_binds_partial_receipt_to_plan(tmp_path: Path) -> None:
                      "rust_routes_verified", "project"):
         changed = dict(receipt)
         changed[mutation] = ({"producer_run_id": "wrong", "project": "wrong",
-                              "signed_gateway_callback_verified": True,
+                              "signed_gateway_callback_verified": False,
                               "rust_routes_verified": False}[mutation])
         receipt_path.write_text(json.dumps(changed))
         with pytest.raises(HandoffError):
@@ -275,7 +275,7 @@ def test_hosted_handoff_binds_partial_receipt_to_plan(tmp_path: Path) -> None:
         ("route physical claim", lambda item: item["route"]["evidence"].update(
             physical_claim="booklet-issued")),
         ("Gateway claim", lambda item: item["route"]["evidence"]["routes"][-1].update(
-            positive_gateway_path_verified=True)),
+            positive_gateway_path_verified=False)),
         ("extra route data", lambda item: item["route"]["evidence"]["routes"][0].update(
             applicant={"name": "private"})),
         ("duplicate create", lambda item: item["route"]["evidence"]["routes"].append(

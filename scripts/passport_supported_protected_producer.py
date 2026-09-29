@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """Exercise a protected, disposable Rust passport stack and destroy it.
 
-The route receipt is deliberately partial: it does not prove a signed callback
-through Gateway, a Flow execution, or durable job restart/resume.
+The route receipt remains partial: Flow execution and durable job restart/resume
+are not yet proven.
 """
 
 from __future__ import annotations
@@ -188,7 +188,7 @@ def produce_disposable_receipt(
         if (not isinstance(route, dict) or route.get("verified") is not True
             or route.get("flow_execution_verified") is not False
             or not isinstance(route.get("evidence"), dict)
-            or route["evidence"].get("signed_gateway_callback_verified") is not False):
+            or route["evidence"].get("signed_gateway_callback_verified") is not True):
             raise ProducerError("Disposable Rust route receipt is invalid")
         return {
             "schema": "marty.passport-supported-rust-producer/v1",
@@ -200,12 +200,12 @@ def produce_disposable_receipt(
             "certificate_setup_passed": True,
             "live_ownership_verified": True,
             "rust_routes_verified": True,
-            "signed_gateway_callback_verified": False,
+            "signed_gateway_callback_verified": True,
             "flow_execution_verified": False,
             "rust_restart_resume_verified": False,
             "certificate": certificate,
             "route": route,
-            "blocker": "Gateway signed callback, Flow execution, and Rust restart/resume remain unproven",
+            "blocker": "Flow execution and Rust restart/resume remain unproven",
         }
     finally:
         try:

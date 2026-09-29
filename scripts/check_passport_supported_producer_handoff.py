@@ -35,7 +35,7 @@ class HandoffError(ValueError):
 
 
 HASH = re.compile(r"[0-9a-f]{64}\Z")
-BLOCKER = "Gateway signed callback, Flow execution, and Rust restart/resume remain unproven"
+BLOCKER = "Flow execution and Rust restart/resume remain unproven"
 RECEIPT_FIELDS = frozenset({
     "schema", "status", "project", "surface", "source_commit", "gateway_port",
     "physical_claim", "plan_run_id", "producer_run_id",
@@ -61,8 +61,8 @@ def _route_evidence(route: object, gateway_port: int) -> None:
         or not isinstance(evidence, dict)
         or set(evidence) != ROUTE_EVIDENCE_FIELDS
         or evidence.get("sod_signature_verified") is not True
-        or evidence.get("signed_gateway_callback_verified") is not False
-        or evidence.get("signed_callback_path") != "simulator-to-native"
+        or evidence.get("signed_gateway_callback_verified") is not True
+        or evidence.get("signed_callback_path") != "simulator-to-gateway-to-native"
         or evidence.get("physical_claim") != "not_claimed"
         or evidence.get("unsigned_webhook_http_status") != 422
         or evidence.get("callback_private_status") not in {"QUALITY_CHECK", "SHIPPED"}
@@ -129,7 +129,7 @@ def _route_evidence(route: object, gateway_port: int) -> None:
                    and item.get("job_status") in {"QUALITY_CHECK", "READY_FOR_ACTIVATION"}
                    for item in routes)
         or not any(item.get("route") == webhook_path
-                   and item.get("positive_gateway_path_verified") is False
+                   and item.get("positive_gateway_path_verified") is True
                    and item.get("signed_callback_observed_by") ==
                    "authenticated-private-bureau-receipt" for item in routes)):
         raise HandoffError("Protected Rust lifecycle or callback boundary is invalid")
@@ -172,7 +172,7 @@ def verify_handoff(
         or receipt.get("certificate_setup_passed") is not True
         or receipt.get("live_ownership_verified") is not True
         or receipt.get("rust_routes_verified") is not True
-        or receipt.get("signed_gateway_callback_verified") is not False
+        or receipt.get("signed_gateway_callback_verified") is not True
         or receipt.get("flow_execution_verified") is not False
         or receipt.get("rust_restart_resume_verified") is not False):
         raise HandoffError("Protected Rust producer receipt differs from plan")

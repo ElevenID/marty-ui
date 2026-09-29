@@ -34,6 +34,7 @@ from services.passport_disposable_identity import ORGANIZATION_ID, issuer_did
 
 
 TEST_KEY = re.compile(r"mk_test_[A-Za-z0-9]{43}\n\Z")
+GATEWAY_CALLBACK = "http://gateway:8000/v1/passport/webhooks/personalization"
 
 
 class DisposableRouteProbeError(ValueError):
@@ -66,6 +67,30 @@ def _private_inputs(record: dict[str, Any]) -> tuple[Path, str]:
     if TEST_KEY.fullmatch(key_contents) is None:
         raise DisposableRouteProbeError("Disposable Organization API key is invalid")
     return ca_file, key_contents.removesuffix("\n")
+
+
+def _gateway_callback_selected(record: dict[str, Any],
+                               inspector: Callable[[list[str]], str]) -> bool:
+    containers = record.get("containers")
+    bureau_id = (containers.get("passport-beta-bureau")
+                 if isinstance(containers, dict) else None)
+    if not isinstance(bureau_id, str):
+        raise DisposableRouteProbeError("Owned simulator container is missing")
+    bureau = _inspect("container", bureau_id, inspector)
+    config = bureau.get("Config")
+    entries = config.get("Env") if isinstance(config, dict) else None
+    if not isinstance(entries, list) or any(not isinstance(entry, str)
+                                            for entry in entries):
+        raise DisposableRouteProbeError("Owned simulator environment is invalid")
+    expected = {
+        "PASSPORT_BETA_BUREAU_GATEWAY_CALLBACK_ENABLED": "true",
+        "PASSPORT_BUREAU_CALLBACK_URL": GATEWAY_CALLBACK,
+    }
+    for name, value in expected.items():
+        if [entry for entry in entries if entry.partition("=")[0] == name] != [
+            f"{name}={value}"]:
+            raise DisposableRouteProbeError("Owned simulator Gateway callback drifted")
+    return True
 
 
 def exercise_owned_disposable(
@@ -101,6 +126,7 @@ def exercise_owned_disposable(
     if (application.get("organization_id") != ORGANIZATION_ID
         or application.get("issuer_did") != issuer_did(port)):
         raise DisposableRouteProbeError("Disposable passport issuer scope is invalid")
+    callback_via_gateway = _gateway_callback_selected(record, inspector)
     ca_file, key = _private_inputs(record)
     context = ssl.create_default_context(cafile=str(ca_file))
     opener = build_opener(ProxyHandler({}), NoRedirect, HTTPSHandler(context=context))
@@ -147,6 +173,7 @@ def exercise_owned_disposable(
     report = exercise(
         application, key, request=request,
         private_poll=poll,
+        callback_via_gateway=callback_via_gateway,
         max_polls=max_polls, poll_interval_seconds=poll_interval_seconds,
     )
     require_time_budget()
