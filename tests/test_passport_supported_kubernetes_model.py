@@ -299,6 +299,26 @@ def test_identity_or_legacy_model_drift_fails_closed(mutate, match: str) -> None
         (
             "deployment/flow",
             lambda x: x["spec"]["template"]["spec"]["containers"][0].update(
+                volumeMounts=[{"mountPath": "/etc/ld.so.preload", "readOnly": True}]),
+            "deployment/flow is unsafe",
+        ),
+        (
+            "deployment/flow",
+            lambda x: x["spec"]["template"]["spec"]["containers"][0].update(
+                volumeMounts=[{"mountPath": "/run/secrets/../../etc/ld.so.preload",
+                               "readOnly": True}]),
+            "deployment/flow is unsafe",
+        ),
+        (
+            "deployment/flow",
+            lambda x: x["spec"]["template"]["spec"]["containers"][0].update(
+                volumeMounts=[{"mountPath": "/run/secrets/flow-token",
+                               "readOnly": False}]),
+            "deployment/flow is unsafe",
+        ),
+        (
+            "deployment/flow",
+            lambda x: x["spec"]["template"]["spec"]["containers"][0].update(
                 env=[{"name": "PATH", "value": "/tmp"}]),
             "deployment/flow is unsafe",
         ),

@@ -77,16 +77,12 @@ def approved_entrypoint(container: dict) -> bool:
                    or source.get("configMapRef") != {"name": "marty-config"}
                    for source in sources)):
         return False
-    protected = ("/app/services", "/usr/local/bin", "/bin", "/usr/bin", "/proc")
     return all(isinstance(mount, dict)
                and isinstance(mount.get("mountPath"), str)
-               and mount["mountPath"].startswith("/")
+               and mount["mountPath"].startswith("/run/secrets/")
                and mount["mountPath"] == "/" + posixpath.normpath(
                    mount["mountPath"]).lstrip("/")
-               and not any(target == mount["mountPath"]
-                           or target.startswith(mount["mountPath"].rstrip("/") + "/")
-                           or mount["mountPath"].startswith(target + "/")
-                           for target in protected)
+               and mount.get("readOnly") is True
                for mount in mounts)
 
 
