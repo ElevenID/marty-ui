@@ -91,6 +91,10 @@ def fixture(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
         if not path.exists():
             path.parent.mkdir(parents=True, exist_ok=True)
             path.write_text(relative, encoding="utf-8")
+    (root / "docker-compose.beta.yml").write_text(
+        'flow:\n  PASSPORT_BETA_SCHEMA_VALIDATE_ONLY: "true"\n'
+        'issuance-native:\n  PASSPORT_BETA_SCHEMA_VALIDATE_ONLY: "true"\n',
+        encoding="utf-8")
     def blob(path: Path) -> str:
         data = path.read_bytes()
         return hashlib.sha1(f"blob {len(data)}\0".encode() + data).hexdigest()
@@ -143,11 +147,11 @@ def fixture(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
                 return values["tag_type"]
             if args == ["rev-parse", "refs/tags/v1.2.3^{commit}"]:
                 return values["tag_commit"]
-            if args[:1] == ["show"] and args[1].startswith("9" * 40 + ":"):
+            if args[:1] == ["show"] and args[1].startswith(HEAD + ":"):
                 if not values["schema_validation_source"]:
                     return "old startup without DDL-free validation"
                 relative = args[1].split(":", 1)[1]
-                return " ".join(authority.BASELINE_SCHEMA_VALIDATION_MARKERS[relative])
+                return " ".join(authority.RELEASE_SCHEMA_VALIDATION_MARKERS[relative])
         if command[:3] == ["gh", "api", "repos/ElevenID/marty-ui/branches/main"]:
             return json.dumps({"protected": values["protected"],
                                "commit": {"sha": values["remote_head"]}})
@@ -204,7 +208,7 @@ def test_authority_plan_binds_all_four_sources(
     assert plan["verify_sql_sha256"] == hashlib.sha256(b"verify").hexdigest()
 
 
-def test_authority_rejects_old_services_image_that_ignores_validation_mode(
+def test_authority_rejects_future_release_without_validation_mode(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     approval, manifest, values, target, runner = fixture(tmp_path, monkeypatch)

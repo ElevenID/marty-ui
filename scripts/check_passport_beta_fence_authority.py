@@ -39,6 +39,7 @@ OCI_ROLES = {
 PROTECTED_FILES = (
     ".gitattributes",
     "deploy-config/passport-beta-fence-approved-target.json",
+    "docker-compose.beta.yml",
     "scripts/check_passport_beta_fence_authority.py",
     "scripts/beta-deployment-lock.ps1",
     "scripts/beta-passport-fence-legacy-boundary.ps1",
@@ -53,7 +54,7 @@ PROTECTED_FILES = (
     "scripts/sql/passport-beta-fence-drain.sql",
     "scripts/sql/passport-beta-fence-verify.sql",
 )
-BASELINE_SCHEMA_VALIDATION_MARKERS = {
+RELEASE_SCHEMA_VALIDATION_MARKERS = {
     "rust/services/flow/src/config.rs": (
         "PASSPORT_BETA_SCHEMA_VALIDATE_ONLY", "beta_schema_validate_only"),
     "rust/services/flow/src/connections.rs": (
@@ -181,18 +182,18 @@ def protected_file(relative: str, runner: Callable[[list[str]], str]) -> None:
             f"Protected file content differs from remote main: {relative}")
 
 
-def require_baseline_schema_validation_capability(
+def require_release_schema_validation_capability(
     source_commit: str, runner: Callable[[list[str]], str],
 ) -> None:
-    """Bind the attested live services image to the DDL-free Rust startup paths."""
-    for relative, markers in BASELINE_SCHEMA_VALIDATION_MARKERS.items():
+    """Bind the signed future Rust release to DDL-free startup paths."""
+    for relative, markers in RELEASE_SCHEMA_VALIDATION_MARKERS.items():
         try:
             contents = runner(["git", "-C", str(ROOT), "show",
                                f"{source_commit}:{relative}"])
         except HostProbeError as exc:
-            raise HostProbeError("Attested beta image lacks schema validation source") from exc
+            raise HostProbeError("Signed Rust release lacks schema validation source") from exc
         require(all(marker in contents for marker in markers),
-                "Attested beta image lacks DDL-free schema validation")
+                "Signed Rust release lacks DDL-free schema validation")
 
 
 def check_authority(
@@ -209,6 +210,9 @@ def check_authority(
     head = protected_source(runner)
     for relative in PROTECTED_FILES:
         protected_file(relative, runner)
+    require((ROOT / "docker-compose.beta.yml").read_text(encoding="utf-8").count(
+        'PASSPORT_BETA_SCHEMA_VALIDATE_ONLY: "true"') == 2,
+        "Signed aggregate beta Compose lacks DDL-free Rust startup mode")
     try:
         approval = json.loads(resolved.read_text(encoding="utf-8"))
     except (OSError, ValueError) as exc:
@@ -227,13 +231,13 @@ def check_authority(
                 is not None,
             "Protected beta target approval fields are invalid")
     source = manifest_source(manifest_path, head, attest, attest_issuance)
+    require_release_schema_validation_capability(source["source_commit"], runner)
     require(file_sha256(beta_baseline_manifest_path)
             == approval["beta_baseline_manifest_sha256"],
             "Deployed beta baseline manifest differs from protected approval")
     baseline = manifest_source(beta_baseline_manifest_path,
                                approval["beta_baseline_source_commit"], attest,
                                attest_issuance)
-    require_baseline_schema_validation_capability(baseline["source_commit"], runner)
     version = source["release"].split("@", 1)[1]
     tag = f"v{version}"
     local_tag_object = runner(["git", "-C", str(ROOT), "rev-parse", f"refs/tags/{tag}"])

@@ -101,11 +101,6 @@ try {
         $systemId -notmatch '^[0-9]+$' -or $databaseOid -notmatch '^[0-9]+$') {
         throw 'Protected beta fence target is invalid'
     }
-    foreach ($service in @('flow', 'issuance-native')) {
-        if ($plan.beta_services.$service.schema_validate_only -cne 'true') {
-            throw "Live beta $service does not use DDL-free schema validation"
-        }
-    }
     $install = Assert-SourceSqlHash 'scripts/sql/passport-beta-fence-install.sql' `
         ([string]$plan.install_sql_sha256)
     $drain = Assert-SourceSqlHash 'scripts/sql/passport-beta-fence-drain.sql' `
@@ -138,7 +133,7 @@ try {
             ($plan.beta_services | ConvertTo-Json -Depth 20 -Compress) -or
         ($before.beta.database_route | ConvertTo-Json -Depth 20 -Compress) -cne
             ($plan.database_route | ConvertTo-Json -Depth 20 -Compress)) {
-        throw 'Approved beta schema-validation generation or database route changed before fence'
+        throw 'Approved beta service generation or database route changed before fence'
     }
 
     # The persistent fence marker precedes any database mutation. A failure
