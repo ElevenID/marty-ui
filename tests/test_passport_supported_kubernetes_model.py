@@ -49,6 +49,7 @@ def test_language_neutral_contract_matches_closed_model() -> None:
         "pod_replicaset_deployment_owner_uid_chain",
         "completed_current_rollout_and_pod_created_after_configmap",
         "all_five_private_service_endpoint_slices_match_owned_pods",
+        "approved_entrypoint_unprivileged_runtime_and_secret_only_mounts",
         "running_rust_binary_and_routing_checked_without_emitting_environment",
         "second_full_identity_preflight_after_runtime_probe",
         "second_simulator_runtime_probe_after_identity_preflight",
@@ -344,6 +345,22 @@ def test_identity_or_legacy_model_drift_fails_closed(mutate, match: str) -> None
             "deployment/flow",
             lambda x: x["spec"]["template"]["spec"]["containers"][0][
                 "securityContext"]["capabilities"].update(add=["SYS_PTRACE"]),
+            "deployment/flow is unsafe",
+        ),
+        (
+            "deployment/flow",
+            lambda x: x["spec"]["template"]["spec"].update(
+                initContainers=[{"name": "unsafe", "image": "busybox"}]),
+            "deployment/flow is unsafe",
+        ),
+        (
+            "deployment/flow",
+            lambda x: x["spec"]["template"]["spec"].update(
+                volumes=[{"name": "host", "hostPath": {"path": "/"}}],
+                containers=[{**x["spec"]["template"]["spec"]["containers"][0],
+                             "volumeMounts": [{"name": "host",
+                                               "mountPath": "/run/secrets/host",
+                                               "readOnly": True}]}]),
             "deployment/flow is unsafe",
         ),
         (

@@ -92,6 +92,7 @@ def approved_runtime_spec(spec: dict) -> bool:
         return False
     pod = spec.get("securityContext")
     containers = spec.get("containers")
+    volumes = spec.get("volumes", [])
     if (not isinstance(pod, dict)
             or pod.get("runAsNonRoot") is not True
             or pod.get("runAsUser") != 10001
@@ -101,8 +102,37 @@ def approved_runtime_spec(spec: dict) -> bool:
             or spec.get("hostPID") not in (None, False)
             or spec.get("hostIPC") not in (None, False)
             or spec.get("shareProcessNamespace") not in (None, False)
+            or spec.get("initContainers") not in (None, [])
+            or spec.get("ephemeralContainers") not in (None, [])
             or not isinstance(containers, list) or len(containers) != 1
-            or not isinstance(containers[0], dict)):
+            or not isinstance(containers[0], dict)
+            or not isinstance(volumes, list)):
+        return False
+    mounts = containers[0].get("volumeMounts", [])
+    if not isinstance(mounts, list):
+        return False
+    mounted_names = [mount.get("name") for mount in mounts
+                     if isinstance(mount, dict)]
+    volume_names = [volume.get("name") for volume in volumes
+                    if isinstance(volume, dict)]
+    if (len(mounted_names) != len(mounts)
+            or len(volume_names) != len(volumes)
+            or any(not isinstance(name, str) for name in mounted_names + volume_names)
+            or len(set(mounted_names)) != len(mounted_names)
+            or len(set(volume_names)) != len(volume_names)
+            or set(mounted_names) != set(volume_names)
+            or any(not isinstance(volume.get("name"), str)
+                   or not re.fullmatch(r"[a-z0-9]([-a-z0-9]*[a-z0-9])?",
+                                       volume["name"])
+                   or set(volume) != {"name", "secret"}
+                   or not isinstance(volume.get("secret"), dict)
+                   or not set(volume["secret"]) <= {
+                       "secretName", "items", "defaultMode", "optional"}
+                   or not isinstance(volume["secret"].get("secretName"), str)
+                   or not re.fullmatch(r"passport-acceptance-[a-z0-9-]+",
+                                       volume["secret"]["secretName"])
+                   or volume["secret"].get("optional") not in (None, False)
+                   for volume in volumes)):
         return False
     runtime = containers[0].get("securityContext")
     return (isinstance(runtime, dict)

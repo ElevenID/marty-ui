@@ -193,7 +193,9 @@ def kubernetes_runner(*, mixed_provider: bool = False,
                 or wrong_template_command and not is_pod and service == "issuance-native"):
             container["command"] = ["/bin/sh"]
         if inspection_utility_mount and is_pod and service == "issuance-native":
-            container["volumeMounts"] = [{"mountPath": "/bin/sh"}]
+            container["volumeMounts"] = [{"name": "proof-override",
+                                          "mountPath": "/bin/sh",
+                                          "readOnly": True}]
         if service == "issuance-native":
             for name in ("PERSONALIZATION_BUREAU_URL",
                          "PERSONALIZATION_BUREAU_PROVIDER_PROFILE_ID"):
@@ -311,6 +313,10 @@ def kubernetes_runner(*, mixed_provider: bool = False,
                          "securityContext": {"runAsNonRoot": True,
                                              "runAsUser": 10001,
                                              "runAsGroup": 10001},
+                         "volumes": ([{"name": "proof-override", "secret": {
+                             "secretName": "passport-acceptance-proof-override"}}]
+                                     if inspection_utility_mount and service ==
+                                     "issuance-native" else []),
                          "containers": [pod_container]},
                 "status": {"phase": "Running", "podIP": "10.1.2.3",
                            "podIPs": ([{"ip": "10.1.2.3"}, {"ip": "fd00::3"}]
