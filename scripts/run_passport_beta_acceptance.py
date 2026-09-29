@@ -307,7 +307,7 @@ def run(
                     "Direct passport job commitment is unavailable")
             def bind_native_batch(
                 instance_id: str, application_id: str, source_job_id: str,
-                sod_sha256: str, issuer_profile_id: str,
+                sod_sha256: str,
             ) -> str:
                 nonlocal native_batch_result, selected_bureau_id
                 require(len(selected_dsc) == 2,
@@ -317,7 +317,7 @@ def run(
                     native_service_token, native_operator_token,
                     native_image["container_id"], bureau["container_id"],
                     instance_id, application_id, source_job_id, sod_sha256,
-                    issuer_profile_id, selected_dsc["der_sha256"],
+                    selected_dsc["der_sha256"],
                     selected_dsc["pem_wire_sha256"], material_receipt,
                     private_state_path,
                 )

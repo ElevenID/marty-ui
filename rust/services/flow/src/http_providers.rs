@@ -503,7 +503,6 @@ impl FlowKeyEnvelopeProvider for HttpSigningProvider {
 pub struct HttpPhysicalDocumentProvider {
     http: BoundedHttpClient,
     tenant_keys: Option<PassportTenantCredentialSource>,
-    private_sign_sod_token: Option<String>,
 }
 
 impl HttpPhysicalDocumentProvider {
@@ -516,7 +515,6 @@ impl HttpPhysicalDocumentProvider {
                 Duration::from_secs(30),
             )?,
             tenant_keys: None,
-            private_sign_sod_token: None,
         })
     }
 
@@ -524,17 +522,6 @@ impl HttpPhysicalDocumentProvider {
         base_url: &str,
         tenant_keys: impl Into<PassportTenantCredentialSource>,
     ) -> Result<Self, FlowProviderError> {
-        Self::new_tenant_bound_with_service_token(base_url, tenant_keys, None)
-    }
-
-    pub fn new_tenant_bound_with_service_token(
-        base_url: &str,
-        tenant_keys: impl Into<PassportTenantCredentialSource>,
-        service_token: Option<&str>,
-    ) -> Result<Self, FlowProviderError> {
-        if service_token.is_some_and(|value| value.trim().len() < 16) {
-            return Err(invalid_config("physical_document"));
-        }
         Ok(Self {
             http: BoundedHttpClient::build(
                 base_url,
@@ -544,7 +531,6 @@ impl HttpPhysicalDocumentProvider {
                 Duration::from_secs(30),
             )?,
             tenant_keys: Some(tenant_keys.into()),
-            private_sign_sod_token: service_token.map(str::to_owned),
         })
     }
 
@@ -560,17 +546,8 @@ impl PhysicalDocumentProvider for HttpPhysicalDocumentProvider {
         &self,
         request: &PhysicalDocumentRequest,
     ) -> Result<PhysicalDocumentResult, FlowProviderError> {
-        let (method, mut path, body) = physical_operation(request)?;
-        if request.operation == PhysicalDocumentOperation::SignSod
-            && self.tenant_keys.is_some()
-            && self.private_sign_sod_token.is_some()
-        {
-            path = path.replacen("v1/passport/", "internal/passport/", 1);
-        }
+        let (method, path, body) = physical_operation(request)?;
         let mut http = self.http.clone();
-        if request.operation == PhysicalDocumentOperation::SignSod {
-            http.service_token = self.private_sign_sod_token.clone();
-        }
         if let Some(tenant_keys) = &self.tenant_keys {
             let key = tenant_keys
                 .key_for(&request.organization_id)
@@ -1231,12 +1208,12 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn native_sign_sod_uses_private_flow_route_with_two_credentials() {
+    async fn native_sign_sod_uses_public_route_with_tenant_credential() {
         let captured: CapturedRequest = Arc::new(Mutex::new(None));
         let router = Router::new()
             .route("/v1/passport/applications", post(physical_capture))
             .route(
-                "/internal/passport/applications/{application_id}/generate-sod",
+                "/v1/passport/applications/{application_id}/generate-sod",
                 post(physical_capture),
             )
             .with_state(captured.clone());
@@ -1244,15 +1221,11 @@ mod tests {
         let address = listener.local_addr().unwrap();
         let server = tokio::spawn(async move { axum::serve(listener, router).await.unwrap() });
         let tenant_key = "a".repeat(32);
-        let service_token = "flow-service-test-token-00000000000001";
         let keys =
             PassportTenantKeyring::from_json(&format!("{{\"org-1\":\"{tenant_key}\"}}")).unwrap();
-        let provider = HttpPhysicalDocumentProvider::new_tenant_bound_with_service_token(
-            &format!("http://{address}"),
-            keys,
-            Some(service_token),
-        )
-        .unwrap();
+        let provider =
+            HttpPhysicalDocumentProvider::new_tenant_bound(&format!("http://{address}"), keys)
+                .unwrap();
         provider
             .execute(&request(PhysicalDocumentOperation::SignSod))
             .await
@@ -1260,10 +1233,10 @@ mod tests {
         let (headers, uri, _) = captured.lock().unwrap().take().unwrap();
         assert_eq!(
             uri.path(),
-            "/internal/passport/applications/application-1/generate-sod"
+            "/v1/passport/applications/application-1/generate-sod"
         );
         assert_eq!(headers.get("x-api-key").unwrap(), tenant_key.as_str());
-        assert_eq!(headers.get("x-service-token").unwrap(), service_token);
+        assert!(headers.get("x-service-token").is_none());
         assert_eq!(headers.get("x-organization-id").unwrap(), "org-1");
         provider
             .execute(&request(PhysicalDocumentOperation::Initialize))

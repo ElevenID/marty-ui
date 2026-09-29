@@ -900,7 +900,6 @@ async fn run_beta_batch_http_recovery(
             "flow_execution_id": jobs[0].flow_execution_id,
             "application_id": jobs[0].application_id,
             "issuer_did": jobs[0].issuer_did,
-            "issuer_profile_id": "issuer-profile-test",
             "sod_sha256": jobs[0].sod_sha256,
             "sod_signature_verified": true,
             "status": "SOD_SIGNED"

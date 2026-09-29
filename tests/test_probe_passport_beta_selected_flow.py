@@ -65,7 +65,7 @@ def model(*, wrong_definition: bool = False, wrong_issuer: bool = False,
             finished.append(PHYSICAL_STEPS[index])
         job = {"id": "job-1", "application_id": "app-1", "organization_id": ORGANIZATION,
                "flow_execution_id": "instance-1", "issuer_did": "did:example:wrong" if wrong_issuer else ISSUER,
-               "issuer_profile_id": "managed-issuer-profile", "status": "DRAFT"}
+               "status": "DRAFT"}
         if index >= 4:
             job.update(status="SOD_SIGNED", sod_sha256=SOD, sod_signature_verified=True)
         if index >= 5:
@@ -162,9 +162,9 @@ def test_selected_flow_completes_nine_steps_on_one_receipt_bound_job() -> None:
 def test_native_batch_is_inserted_after_durable_signed_sod_before_flow_submit() -> None:
     calls, flow_request, native_request, simulator_request, receipt = model()
 
-    def native_batch(instance: str, application: str, source: str, sod: str, profile: str) -> str:
-        assert (instance, application, source, sod, profile) == (
-            "instance-1", "app-1", "job-1", SOD, "managed-issuer-profile")
+    def native_batch(instance: str, application: str, source: str, sod: str) -> str:
+        assert (instance, application, source, sod) == (
+            "instance-1", "app-1", "job-1", SOD)
         calls.append(("native-batch", source))
         return BUREAU
 

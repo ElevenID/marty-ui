@@ -295,8 +295,8 @@ def test_protected_runner_executes_selected_flow_after_chain_and_direct_job(tmp_
     def native_batch(*args):
         calls.append("native-batch")
         assert args[3:7] == ("s" * 32, "z" * 32, "b" * 64, "a" * 64)
-        assert args[7:12] == ("selected-instance", "selected-app", "selected-job",
-                              "e" * 64, "managed-profile")
+        assert args[7:11] == ("selected-instance", "selected-app", "selected-job",
+                              "e" * 64)
         assert args[-1] == private_state_path
         private_state_path.write_text("pending", encoding="utf-8")
         return selected_bureau, {"verified": True, "evidence": {
@@ -324,7 +324,7 @@ def test_protected_runner_executes_selected_flow_after_chain_and_direct_job(tmp_
                         selected_plan["references"], selected_plan["physical_document"],
                         "governed-cookie", "a" * 32)
         assert on_signed_sod("selected-instance", "selected-app", "selected-job",
-                             "e" * 64, "managed-profile") == selected_bureau
+                             "e" * 64) == selected_bureau
         on_submission(plan["organization_id"], "selected-job", selected_bureau, "e" * 64)
         return {"verified": True, "evidence": {"flow_instance_id": "selected-instance",
                                                 "flow_id": "governed-flow",

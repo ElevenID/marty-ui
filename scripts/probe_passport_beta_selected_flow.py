@@ -116,7 +116,7 @@ def exercise(
     *,
     simulator_container_id: str,
     on_submission: Callable[[str, str, str, str], dict[str, Any]],
-    on_signed_sod: Callable[[str, str, str, str, str], str] | None = None,
+    on_signed_sod: Callable[[str, str, str, str], str] | None = None,
     request: Callable[[str, str, dict[str, Any] | None, str], tuple[int, dict[str, Any]]] = request_flow,
     passport_request: Callable[[str, str, dict[str, Any] | None, str], tuple[int, dict[str, Any]]] = request_passport,
     simulator_request: Callable[[str, str, str], tuple[int, bytes, dict[str, Any]]] = request_simulator,
@@ -250,14 +250,12 @@ def exercise(
             if on_signed_sod is not None:
                 paused_status, paused = request("GET", instance_path, None, operator_cookie)
                 paused_job = checked_job(paused, "submit_to_personalization", "IN_PROGRESS")
-                issuer_profile_id = paused_job.get("issuer_profile_id")
                 if (paused_status != 200 or paused_job.get("status") != "SOD_SIGNED"
                         or paused_job.get("sod_sha256") != sod_sha256
-                        or paused_job.get("sod_signature_verified") is not True
-                        or not isinstance(issuer_profile_id, str) or not issuer_profile_id):
+                        or paused_job.get("sod_signature_verified") is not True):
                     raise SelectedFlowError("Selected Flow signed job is not durably paused")
                 expected_batch_bureau_job_id = on_signed_sod(
-                    instance_id, application_id, source_job_id, sod_sha256, issuer_profile_id)
+                    instance_id, application_id, source_job_id, sod_sha256)
                 try:
                     canonical_bureau_id = str(UUID(expected_batch_bureau_job_id))
                 except (TypeError, ValueError, AttributeError) as exc:
