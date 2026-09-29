@@ -20,8 +20,13 @@ BEGIN
                               WHERE singleton=true AND phase='fully_fenced')
         OR (SELECT count(*) FROM passport_cutover.state
             WHERE singleton=true AND phase='fully_fenced' AND epoch>0) <> 1
+        OR EXISTS (SELECT 1 FROM pg_roles
+                   WHERE rolname IN ('marty','marty_beta_migrator') AND rolcanlogin)
+        OR (SELECT count(*) FROM pg_roles
+            WHERE rolname IN ('marty','marty_beta_migrator')) <> 2
         OR EXISTS (SELECT 1 FROM pg_stat_activity
-                   WHERE usename='marty' AND pid<>pg_backend_pid()) THEN
+                   WHERE usename IN ('marty','marty_beta_migrator')
+                     AND pid<>pg_backend_pid()) THEN
         RAISE EXCEPTION 'passport batch ACL finalizer lacks exact fenced beta target';
     END IF;
 END

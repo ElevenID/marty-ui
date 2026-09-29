@@ -156,6 +156,10 @@ def test_batch_acl_finalizer_requires_exact_fence_and_grants_app_access(database
     assert refused.returncode != 0
     assert "lacks exact fenced beta target" in refused.stderr
 
+    active_login = script(database, FINALIZE_BATCH_ACL)
+    assert active_login.returncode != 0
+    assert "lacks exact fenced beta target" in active_login.stderr
+    sql(database, "ALTER ROLE marty NOLOGIN")
     finalized = script(database, FINALIZE_BATCH_ACL)
     assert finalized.returncode == 0, finalized.stderr
     assert sql(database, """
