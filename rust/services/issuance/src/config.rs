@@ -258,7 +258,7 @@ pub struct IssuanceServiceConfig {
     pub issuer_display_name: String,
     pub cors_allowed_origins: Vec<String>,
     pub database_url: String,
-    pub beta_fenced_schema_validation: bool,
+    pub beta_schema_validate_only: bool,
     pub integration_secret_master_key: Option<String>,
     pub token_hmac_key: Option<String>,
     pub issuance_api_key: Option<String>,
@@ -678,8 +678,8 @@ impl IssuanceServiceConfig {
             &settings.authorization.session_ttl_minutes,
         )?;
         let database_url = validate_database_url(&settings.dependencies.database_url)?;
-        let beta_fenced_schema_validation = match values
-            .get("PASSPORT_BETA_FENCED_SCHEMA_VALIDATION")
+        let beta_schema_validate_only = match values
+            .get("PASSPORT_BETA_SCHEMA_VALIDATE_ONLY")
             .map(String::as_str)
         {
             None | Some("false") => false,
@@ -694,7 +694,7 @@ impl IssuanceServiceConfig {
             _ => {
                 return Err(MmfError::new(
                     ErrorCode::Configuration,
-                    "PASSPORT_BETA_FENCED_SCHEMA_VALIDATION requires beta and true or false",
+                    "PASSPORT_BETA_SCHEMA_VALIDATE_ONLY requires beta and true or false",
                 ));
             }
         };
@@ -1008,7 +1008,7 @@ impl IssuanceServiceConfig {
             issuer_display_name: settings.discovery.issuer_display_name,
             cors_allowed_origins: settings.server.cors_allowed_origins,
             database_url,
-            beta_fenced_schema_validation,
+            beta_schema_validate_only,
             integration_secret_master_key,
             token_hmac_key,
             issuance_api_key,
@@ -1657,34 +1657,34 @@ mod tests {
         assert!(
             !IssuanceServiceConfig::from_values(Vec::new())
                 .unwrap()
-                .beta_fenced_schema_validation
+                .beta_schema_validate_only
         );
         assert!(
             IssuanceServiceConfig::from_values(values(&[
                 ("ENVIRONMENT", "beta"),
-                ("PASSPORT_BETA_FENCED_SCHEMA_VALIDATION", "true"),
+                ("PASSPORT_BETA_SCHEMA_VALIDATE_ONLY", "true"),
             ]))
             .unwrap()
-            .beta_fenced_schema_validation
+            .beta_schema_validate_only
         );
         assert!(
             IssuanceServiceConfig::from_values(values(&[
                 ("APP_ENV", "BETA"),
-                ("PASSPORT_BETA_FENCED_SCHEMA_VALIDATION", "true"),
+                ("PASSPORT_BETA_SCHEMA_VALIDATE_ONLY", "true"),
             ]))
             .unwrap()
-            .beta_fenced_schema_validation
+            .beta_schema_validate_only
         );
         for environment in ["production", "development"] {
             assert!(IssuanceServiceConfig::from_values(values(&[
                 ("ENVIRONMENT", environment),
-                ("PASSPORT_BETA_FENCED_SCHEMA_VALIDATION", "true"),
+                ("PASSPORT_BETA_SCHEMA_VALIDATE_ONLY", "true"),
             ]))
             .is_err());
         }
         assert!(IssuanceServiceConfig::from_values(values(&[
             ("ENVIRONMENT", "beta"),
-            ("PASSPORT_BETA_FENCED_SCHEMA_VALIDATION", "invalid"),
+            ("PASSPORT_BETA_SCHEMA_VALIDATE_ONLY", "invalid"),
         ]))
         .is_err());
     }

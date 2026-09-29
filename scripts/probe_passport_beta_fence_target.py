@@ -38,6 +38,7 @@ ROUTE_SELECTORS = {
     "flow": "PASSPORT_NATIVE_FLOW_ENABLED",
     "issuance-native": "PASSPORT_NATIVE_HTTP_ENABLED",
 }
+SCHEMA_VALIDATION_SERVICES = {"flow", "issuance-native"}
 IMAGE_ID = re.compile(r"sha256:[0-9a-f]{64}\Z")
 SYSTEM_ID = re.compile(r"[0-9]+\Z")
 DOCKER_ID = re.compile(r"[0-9a-f]{64}\Z")
@@ -136,6 +137,11 @@ def service_inventory(
             if value not in ("unset", "true", "false", "1", "0"):
                 raise HostProbeError(f"Beta {service} passport route selector is invalid")
             selected[service]["passport_route_selector"] = value
+        if service in SCHEMA_VALIDATION_SERVICES:
+            value = selected_env.get("PASSPORT_BETA_SCHEMA_VALIDATE_ONLY", "unset")
+            if value not in ("unset", "true", "false"):
+                raise HostProbeError(f"Beta {service} schema validation selector is invalid")
+            selected[service]["schema_validate_only"] = value
     if set(selected) != set(REQUIRED_SERVICES):
         raise HostProbeError("Required beta fence services are missing")
     return selected

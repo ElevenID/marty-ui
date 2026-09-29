@@ -135,6 +135,7 @@ services:
     environment:
       <<: *beta-grpc-service-auth
       ENVIRONMENT: beta
+      PASSPORT_BETA_SCHEMA_VALIDATE_ONLY: "true"
       GRPC_INSECURE_ALLOWED: "true"
       # Only the qualified initiation RPC consumer moves; physical-document
       # HTTP operations retain the legacy ISSUANCE_SERVICE_URL from base.
@@ -197,6 +198,8 @@ services:
     extends:
       file: docker-compose.service.issuance-native.yml
       service: issuance-native
+    environment:
+      PASSPORT_BETA_SCHEMA_VALIDATE_ONLY: "true"
 
   canvas-sync-worker:
     environment:

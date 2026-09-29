@@ -1391,12 +1391,51 @@ async fn passport_jobs_survive_restart_without_cross_tenant_reads() {
     read_only_pool.close().await;
     sqlx::query(
         "ALTER TABLE issuance_service.passport_beta_batch_intents \
+         DROP CONSTRAINT passport_beta_batch_intents_pkey",
+    )
+    .execute(&pool)
+    .await
+    .unwrap();
+    assert!(migration::validate_passport(&pool).await.is_err());
+    sqlx::query(
+        "ALTER TABLE issuance_service.passport_beta_batch_intents \
+         ADD PRIMARY KEY (batch_id)",
+    )
+    .execute(&pool)
+    .await
+    .unwrap();
+    migration::validate_passport(&pool).await.unwrap();
+    sqlx::query(
+        "ALTER TABLE issuance_service.passport_beta_batch_intents \
          DROP CONSTRAINT ck_passport_beta_batch_wire_evidence",
     )
     .execute(&pool)
     .await
     .unwrap();
     assert!(migration::validate_passport(&pool).await.is_err());
+    migration::migrate_passport(&pool).await.unwrap();
+    sqlx::query(
+        "ALTER TABLE issuance_service.passport_beta_batch_intents \
+         DROP CONSTRAINT ck_passport_beta_batch_wire_evidence",
+    )
+    .execute(&pool)
+    .await
+    .unwrap();
+    sqlx::query(
+        "ALTER TABLE issuance_service.passport_beta_batch_intents \
+         ADD CONSTRAINT ck_passport_beta_batch_wire_evidence CHECK (true)",
+    )
+    .execute(&pool)
+    .await
+    .unwrap();
+    assert!(migration::validate_passport(&pool).await.is_err());
+    sqlx::query(
+        "ALTER TABLE issuance_service.passport_beta_batch_intents \
+         DROP CONSTRAINT ck_passport_beta_batch_wire_evidence",
+    )
+    .execute(&pool)
+    .await
+    .unwrap();
     migration::migrate_passport(&pool).await.unwrap();
 
     let key_a = "a".repeat(32);

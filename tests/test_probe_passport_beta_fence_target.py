@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from copy import deepcopy
+from pathlib import Path
 
 import pytest
 
@@ -48,7 +49,42 @@ def test_inventory_pins_beta_services_and_redacts_database_password(
     assert set(found) == set(target.REQUIRED_SERVICES)
     assert found["issuance"]["database_target"] == "postgres:5432/marty"
     assert found["gateway"]["passport_route_selector"] == "unset"
+    assert found["flow"]["schema_validate_only"] == "unset"
+    assert found["issuance-native"]["schema_validate_only"] == "unset"
     assert "do-not-print" not in repr(found)
+
+
+def test_inventory_binds_exact_beta_schema_validation_mode(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    items = records()
+    for record in items.values():
+        service = record["Config"]["Labels"]["com.docker.compose.service"]
+        if service in target.SCHEMA_VALIDATION_SERVICES:
+            record["Config"]["Env"].append("PASSPORT_BETA_SCHEMA_VALIDATE_ONLY=true")
+    found = inventory(monkeypatch, items)
+    assert {name: found[name]["schema_validate_only"]
+            for name in target.SCHEMA_VALIDATION_SERVICES} == {
+                "flow": "true", "issuance-native": "true"}
+    flow = next(record for record in items.values()
+                if record["Config"]["Labels"]["com.docker.compose.service"] == "flow")
+    flow["Config"]["Env"][-1] = "PASSPORT_BETA_SCHEMA_VALIDATE_ONLY=1"
+    with pytest.raises(HostProbeError, match="schema validation selector"):
+        inventory(monkeypatch, items)
+
+
+def test_fence_operator_checks_live_mode_and_generation_before_mutation() -> None:
+    root = Path(__file__).resolve().parents[1]
+    compose = (root / "docker-compose.beta.yml").read_text(encoding="utf-8")
+    operator = (root / "scripts/install-passport-beta-fence.ps1").read_text(
+        encoding="utf-8")
+    assert compose.count('PASSPORT_BETA_SCHEMA_VALIDATE_ONLY: "true"') == 2
+    assert "foreach ($service in @('flow', 'issuance-native'))" in operator
+    assert "$plan.beta_services.$service.schema_validate_only -cne 'true'" in operator
+    assert "'probe_passport_beta_fence_target.py'" in operator
+    assert operator.index("$before = Invoke-FencePython") < operator.index(
+        "Start-BetaMutation\n")
+    assert "Approved beta schema-validation generation or database route changed" in operator
 
 
 def test_fenced_observer_uses_postinstall_identity_without_prefence_acl(

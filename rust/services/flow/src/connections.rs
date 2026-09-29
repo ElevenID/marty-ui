@@ -62,7 +62,7 @@ async fn connect_database(
         .acquire_timeout(Duration::from_secs(10))
         .connect(&config.database_url)
         .await?;
-    if config.beta_fenced_schema_validation {
+    if config.beta_schema_validate_only {
         validate_flow_schema(&pool).await?;
     } else {
         migrate_flow_schema(&pool).await?;

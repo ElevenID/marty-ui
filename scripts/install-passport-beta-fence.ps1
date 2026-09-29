@@ -101,6 +101,11 @@ try {
         $systemId -notmatch '^[0-9]+$' -or $databaseOid -notmatch '^[0-9]+$') {
         throw 'Protected beta fence target is invalid'
     }
+    foreach ($service in @('flow', 'issuance-native')) {
+        if ($plan.beta_services.$service.schema_validate_only -cne 'true') {
+            throw "Live beta $service does not use DDL-free schema validation"
+        }
+    }
     $install = Assert-SourceSqlHash 'scripts/sql/passport-beta-fence-install.sql' `
         ([string]$plan.install_sql_sha256)
     $drain = Assert-SourceSqlHash 'scripts/sql/passport-beta-fence-drain.sql' `
@@ -117,6 +122,24 @@ try {
     $session = "SET marty.passport_beta_verified_project = 'elevenid-beta';`n" +
         "SET marty.passport_beta_expected_system_identifier = '$systemId';`n" +
         "SET marty.passport_beta_expected_database_oid = '$databaseOid';`n"
+
+    $before = Invoke-FencePython -Arguments @(
+        (Join-Path $PSScriptRoot 'probe_passport_beta_fence_target.py'))
+    if ($before.schema -cne 'marty.passport-beta-fence-target/v1' -or
+        $before.observation_sha256 -cne $plan.target_observation_sha256 -or
+        $before.beta.postgres_system_identifier -cne $systemId -or
+        $before.beta.database_oid -cne $databaseOid -or
+        $before.beta.services.postgres.container_id -cne $container -or
+        $before.docker.context -cne $plan.docker.context -or
+        $before.docker.daemon_id -cne $plan.docker.daemon_id -or
+        $before.production.sha256 -cne $plan.production_snapshot_sha256 -or
+        $before.production_attachments_sha256 -cne $plan.production_attachments_sha256 -or
+        ($before.beta.services | ConvertTo-Json -Depth 20 -Compress) -cne
+            ($plan.beta_services | ConvertTo-Json -Depth 20 -Compress) -or
+        ($before.beta.database_route | ConvertTo-Json -Depth 20 -Compress) -cne
+            ($plan.database_route | ConvertTo-Json -Depth 20 -Compress)) {
+        throw 'Approved beta schema-validation generation or database route changed before fence'
+    }
 
     # The persistent fence marker precedes any database mutation. A failure
     # leaves both markers for supervised inspection and blocks legacy deploy.

@@ -68,6 +68,11 @@ async fn postgres_finalization_and_callback_leases_are_atomic() -> TestResult {
     validate_flow_schema(&read_only_pool).await?;
     assert!(migrate_flow_schema(&read_only_pool).await.is_err());
     read_only_pool.close().await;
+    sqlx::query("DROP INDEX flow_service.ux_flow_instances_org_application_flow_key")
+        .execute(&pool)
+        .await?;
+    assert!(validate_flow_schema(&pool).await.is_err());
+    migrate_flow_schema(&pool).await?;
     let contract = run_contract(&pool).await;
     let cleanup = sqlx::raw_sql(
         "DROP SCHEMA IF EXISTS flow_service CASCADE;

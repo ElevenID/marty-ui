@@ -288,28 +288,22 @@ fn fenced_schema_validation_is_explicit_and_beta_only() {
     assert!(
         !FlowServiceConfig::from_values(baseline("beta"))
             .unwrap()
-            .beta_fenced_schema_validation
+            .beta_schema_validate_only
     );
     let mut beta = baseline("beta");
-    beta.insert(
-        "PASSPORT_BETA_FENCED_SCHEMA_VALIDATION".into(),
-        "true".into(),
-    );
+    beta.insert("PASSPORT_BETA_SCHEMA_VALIDATE_ONLY".into(), "true".into());
     assert!(
         FlowServiceConfig::from_values(beta)
             .unwrap()
-            .beta_fenced_schema_validation
+            .beta_schema_validate_only
     );
     for environment in ["development", "production"] {
         let mut values = baseline(environment);
-        values.insert(
-            "PASSPORT_BETA_FENCED_SCHEMA_VALIDATION".into(),
-            "true".into(),
-        );
+        values.insert("PASSPORT_BETA_SCHEMA_VALIDATE_ONLY".into(), "true".into());
         assert_eq!(
             FlowServiceConfig::from_values(values).unwrap_err(),
             FlowConfigError::Invalid {
-                name: "PASSPORT_BETA_FENCED_SCHEMA_VALIDATION"
+                name: "PASSPORT_BETA_SCHEMA_VALIDATE_ONLY"
             }
         );
     }

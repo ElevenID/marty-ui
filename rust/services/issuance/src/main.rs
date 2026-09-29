@@ -179,7 +179,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
         .max_connections(5)
         .connect_lazy(&config.database_url)?;
     let passport_http = PassportHttpService::from_config(&config, pool.clone())?;
-    let schema_result = if config.beta_fenced_schema_validation {
+    let schema_result = if config.beta_schema_validate_only {
         migration::validate(&pool).await
     } else {
         migration::migrate(&pool).await
@@ -202,7 +202,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
         error
     })?;
     if config.passport_native.enabled {
-        let passport_schema_result = if config.beta_fenced_schema_validation {
+        let passport_schema_result = if config.beta_schema_validate_only {
             migration::validate_passport(&pool).await
         } else {
             migration::migrate_passport(&pool).await
