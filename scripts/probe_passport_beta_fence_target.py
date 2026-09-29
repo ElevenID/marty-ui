@@ -24,6 +24,7 @@ except ImportError:
 REQUIRED_SERVICES = (
     "postgres", "issuance", "gateway", "flow", "issuance-native", "signing-keys"
 )
+BETA_NETWORK = "elevenid-beta-network"
 DATABASE_SERVICES = {"issuance", "flow", "issuance-native"}
 ROUTE_SELECTORS = {
     "gateway": "PASSPORT_NATIVE_GATEWAY_ENABLED",
@@ -133,6 +134,75 @@ def service_inventory(
     return selected
 
 
+def database_network_binding(
+    selected: dict[str, dict[str, str]],
+    runner: Callable[[list[str]], str] = run,
+) -> dict[str, str]:
+    """Bind the app's postgres DNS name to the exact inspected beta database."""
+    raw = runner(["docker", "ps", "--all", "--filter", f"network={BETA_NETWORK}",
+                  "--format", "{{.ID}}"])
+    container_ids = [item.strip() for item in raw.splitlines() if item.strip()]
+    if len(container_ids) != len(set(container_ids)) or not container_ids:
+        raise HostProbeError("Beta database network inventory is ambiguous")
+    network_id = None
+    postgres_alias_owners = []
+    observed = set()
+    for container_id in container_ids:
+        record = inspect(container_id, runner)
+        full_id = record.get("Id")
+        settings = record.get("NetworkSettings")
+        networks = settings.get("Networks") if isinstance(settings, dict) else None
+        if not isinstance(full_id, str) or not DOCKER_ID.fullmatch(full_id) or full_id in observed:
+            raise HostProbeError("Beta database network container identity is invalid")
+        observed.add(full_id)
+        if not isinstance(networks, dict) or BETA_NETWORK not in networks:
+            raise HostProbeError("Beta database network attachment changed")
+        endpoint = networks[BETA_NETWORK]
+        if not isinstance(endpoint, dict) or not isinstance(endpoint.get("NetworkID"), str):
+            raise HostProbeError("Beta database network endpoint is invalid")
+        if network_id is None:
+            network_id = endpoint["NetworkID"]
+        elif network_id != endpoint["NetworkID"]:
+            raise HostProbeError("Beta database network identity changed")
+        aliases = endpoint.get("Aliases")
+        dns_names = endpoint.get("DNSNames")
+        if not isinstance(aliases, list) or not isinstance(dns_names, list):
+            raise HostProbeError("Beta database DNS aliases are unavailable")
+        if "postgres" in aliases or "postgres" in dns_names:
+            postgres_alias_owners.append(full_id)
+        for service in ("postgres", *sorted(DATABASE_SERVICES)):
+            if full_id == selected[service]["container_id"] and set(networks) != {BETA_NETWORK}:
+                raise HostProbeError(f"Beta {service} has an ambiguous database network route")
+            if full_id == selected[service]["container_id"] and service in DATABASE_SERVICES:
+                config = record.get("Config")
+                host = record.get("HostConfig")
+                mounts = record.get("Mounts")
+                if not isinstance(config, dict) or not isinstance(host, dict) or not isinstance(mounts, list):
+                    raise HostProbeError(f"Beta {service} host routing metadata is unavailable")
+                extra_hosts = host.get("ExtraHosts") or []
+                links = host.get("Links") or []
+                if (host.get("NetworkMode") != BETA_NETWORK
+                        or not isinstance(extra_hosts, list)
+                        or extra_hosts
+                        or not isinstance(links, list) or links
+                        or any(host.get(field) not in (None, [])
+                               for field in ("Dns", "DnsSearch", "DnsOptions"))
+                        or str(config.get("Hostname", "")).split(".", 1)[0].lower() == "postgres"
+                        or any(not isinstance(mount, dict)
+                               or mount.get("Destination") in ("/etc/hosts", "/etc/resolv.conf")
+                               for mount in mounts)):
+                    raise HostProbeError(f"Beta {service} overrides the bound postgres DNS route")
+    if set(selected[service]["container_id"] for service in
+           ("postgres", *DATABASE_SERVICES)) - observed:
+        raise HostProbeError("A beta database client is absent from the bound network")
+    if postgres_alias_owners != [selected["postgres"]["container_id"]]:
+        raise HostProbeError("Beta postgres DNS alias does not uniquely select the fenced database")
+    if not network_id or not DOCKER_ID.fullmatch(network_id):
+        raise HostProbeError("Beta database network ID is invalid")
+    return {"name": BETA_NETWORK, "id": network_id,
+            "postgres_container_id": selected["postgres"]["container_id"]}
+
+
 def observe(runner: Callable[[list[str]], str] = run) -> dict[str, Any]:
     """Require stable beta/production identities across all read-only probes."""
     context = runner(["docker", "context", "show"])
@@ -141,6 +211,7 @@ def observe(runner: Callable[[list[str]], str] = run) -> dict[str, Any]:
         raise HostProbeError("Docker context or daemon identity is unavailable")
     production_before = production_snapshot(runner)
     before = service_inventory(runner)
+    database_route = database_network_binding(before, runner)
     postgres_id = beta_postgres_container(runner)
     if before["postgres"]["container_id"] != inspect(postgres_id, runner).get("Id"):
         raise HostProbeError("Beta PostgreSQL identity changed during inventory")
@@ -200,6 +271,8 @@ def observe(runner: Callable[[list[str]], str] = run) -> dict[str, Any]:
     after = service_inventory(runner)
     if before != after:
         raise HostProbeError("Beta service generation changed during fence inventory")
+    if database_network_binding(after, runner) != database_route:
+        raise HostProbeError("Beta database network route changed during fence inventory")
     production_after = production_snapshot(runner)
     assert_production_unchanged(production_before, production_after)
     if (runner(["docker", "context", "show"]) != context
@@ -216,6 +289,7 @@ def observe(runner: Callable[[list[str]], str] = run) -> dict[str, Any]:
             "database": "marty", "database_oid": identity[1],
             "login_roles": roles, "guarded_owners": owners,
             "login_role_memberships": 0, "drain": drain,
+            "database_route": database_route,
         },
         "production": production_after,
     }

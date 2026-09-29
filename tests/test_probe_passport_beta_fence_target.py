@@ -77,3 +77,106 @@ def test_inventory_rejects_wrong_target_or_ambiguous_configuration(
         flow["State"]["Running"] = False
     with pytest.raises(HostProbeError):
         inventory(monkeypatch, items)
+
+
+def test_database_network_binding_rejects_competing_postgres_alias(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    items = records()
+    network_id = "a" * 64
+    for record in items.values():
+        service = record["Config"]["Labels"]["com.docker.compose.service"]
+        record["Config"]["Hostname"] = service
+        record["HostConfig"] = {"NetworkMode": target.BETA_NETWORK,
+                                "ExtraHosts": [], "Links": None,
+                                "Dns": [], "DnsSearch": [], "DnsOptions": []}
+        record["Mounts"] = []
+        names = [service, "postgres"] if service == "postgres" else [service]
+        record["NetworkSettings"] = {"Networks": {
+            target.BETA_NETWORK: {"NetworkID": network_id,
+                                  "Aliases": names, "DNSNames": names}
+        }}
+    selected = inventory(monkeypatch, items)
+
+    def run_network(command: list[str]) -> str:
+        assert command[:5] == ["docker", "ps", "--all", "--filter",
+                               f"network={target.BETA_NETWORK}"]
+        return "\n".join(items)
+
+    bound = target.database_network_binding(selected, run_network)
+    assert bound["postgres_container_id"] == selected["postgres"]["container_id"]
+    assert bound["id"] == network_id
+
+    rogue_id = "f" * 64
+    rogue = deepcopy(next(iter(items.values())))
+    rogue["Id"] = rogue_id
+    rogue["Config"]["Labels"]["com.docker.compose.project"] = "foreign"
+    rogue["NetworkSettings"]["Networks"][target.BETA_NETWORK]["Aliases"] = ["postgres"]
+    items[rogue_id] = rogue
+    with pytest.raises(HostProbeError, match="does not uniquely select"):
+        target.database_network_binding(selected, run_network)
+
+
+def test_database_network_binding_rejects_secondary_client_network(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    items = records()
+    for record in items.values():
+        service = record["Config"]["Labels"]["com.docker.compose.service"]
+        record["Config"]["Hostname"] = service
+        record["HostConfig"] = {"NetworkMode": target.BETA_NETWORK,
+                                "ExtraHosts": [], "Links": None,
+                                "Dns": [], "DnsSearch": [], "DnsOptions": []}
+        record["Mounts"] = []
+        record["NetworkSettings"] = {"Networks": {target.BETA_NETWORK: {
+            "NetworkID": "a" * 64,
+            "Aliases": ["postgres"] if service == "postgres" else [service],
+            "DNSNames": ["postgres"] if service == "postgres" else [service],
+        }}}
+    selected = inventory(monkeypatch, items)
+    flow = next(record for record in items.values()
+                if record["Config"]["Labels"]["com.docker.compose.service"] == "flow")
+    flow["NetworkSettings"]["Networks"]["other-network"] = {
+        "NetworkID": "b" * 64, "Aliases": ["postgres"], "DNSNames": ["postgres"]}
+    with pytest.raises(HostProbeError, match="ambiguous database network route"):
+        target.database_network_binding(selected, lambda command: "\n".join(items))
+
+
+@pytest.mark.parametrize("override", ("extra_host", "extra_host_equals", "hostname",
+                                      "hostname_fqdn",
+                                      "dns", "hosts_mount", "link"))
+def test_database_network_binding_rejects_client_dns_override(
+    monkeypatch: pytest.MonkeyPatch, override: str,
+) -> None:
+    items = records()
+    for record in items.values():
+        service = record["Config"]["Labels"]["com.docker.compose.service"]
+        record["Config"]["Hostname"] = service
+        record["HostConfig"] = {"NetworkMode": target.BETA_NETWORK,
+                                "ExtraHosts": [], "Links": None,
+                                "Dns": [], "DnsSearch": [], "DnsOptions": []}
+        record["Mounts"] = []
+        record["NetworkSettings"] = {"Networks": {target.BETA_NETWORK: {
+            "NetworkID": "a" * 64,
+            "Aliases": ["postgres"] if service == "postgres" else [service],
+            "DNSNames": ["postgres"] if service == "postgres" else [service],
+        }}}
+    selected = inventory(monkeypatch, items)
+    flow = next(record for record in items.values()
+                if record["Config"]["Labels"]["com.docker.compose.service"] == "flow")
+    if override == "extra_host":
+        flow["HostConfig"]["ExtraHosts"] = ["postgres:192.0.2.5"]
+    elif override == "extra_host_equals":
+        flow["HostConfig"]["ExtraHosts"] = ["postgres=192.0.2.5"]
+    elif override == "hostname":
+        flow["Config"]["Hostname"] = "postgres"
+    elif override == "hostname_fqdn":
+        flow["Config"]["Hostname"] = "postgres.example"
+    elif override == "dns":
+        flow["HostConfig"]["Dns"] = ["192.0.2.5"]
+    elif override == "hosts_mount":
+        flow["Mounts"] = [{"Destination": "/etc/hosts"}]
+    else:
+        flow["HostConfig"]["Links"] = ["foreign:postgres"]
+    with pytest.raises(HostProbeError, match="overrides the bound postgres DNS route"):
+        target.database_network_binding(selected, lambda command: "\n".join(items))
