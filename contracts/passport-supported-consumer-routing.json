@@ -34,6 +34,6 @@
   "activation_gates": [
     "released native image and beta receipt",
     "managed issuer profile and Marty simulator signed callback",
-    "base, self-host and Kubernetes Rust runtime acceptance"
+    "base, self-host and Kubernetes Rust runtime acceptance with restart and job resume"
   ]
 }

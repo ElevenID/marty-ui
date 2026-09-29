@@ -49,16 +49,16 @@ access to the release repository. The following probe keys
 remain unverified until protected acceptance runs execute and publish exact
 artifact lineage: `managed_csca_dsc_chain`, `sod_signature`,
 `nine_route_gateway_flow`, `packaged_image`, `physical_bureau_submission`,
-`physical_bureau_batch`, `signed_bureau_callback`, `legacy_drain`, `rollback`,
+`physical_bureau_batch`, `signed_bureau_callback`, `legacy_drain`,
 `production_isolation`, and `recorded_demo`. The two `physical_bureau_*` names
 are retained for the frozen simulator route-compatibility receipt; they do not
 assert physical production. `physical_claim_boundary` records
 `physical_claim=not_claimed` and `booklet_verified=false` only for the isolated
 Marty simulator. `physical_booklet_verified` remains false and is not a
-prerequisite for retiring Python's software route owner under the v2
-retirement qualification contract. A future physical-booklet claim requires
-independent evidence. Separate supported base Compose, self-host, and
-Kubernetes acceptance remains mandatory before Python retirement.
+prerequisite for the Rust-only beta software acceptance. A future
+physical-booklet claim requires independent evidence. Protected base Compose,
+self-host, and Kubernetes acceptance, Rust restart/resume, and the cutover drain
+precede Python passport deletion; this beta report follows that deletion.
 
 ## Protected beta acceptance run
 
@@ -125,14 +125,14 @@ The report requires the isolated simulator mode and sets `legacy_drain` and the 
 `blocked`, but uploads the sanitized report from an attempted probe. The
 acceptance report remains `blocked` until SOD signature verification, full nine
 route Gateway/Flow and signed simulator callback proof, simulator batch
-compatibility, rollback, deployment-wide production isolation, and recorded
+compatibility, deployment-wide production isolation, and recorded
 demo evidence have executable receipts. A simulator acceptance must set
 `physical_claim=not_claimed`. The current report cannot qualify Python
 retirement on its own.
 
 The protected run uploads a GitHub artifact named
 `passport-beta-acceptance-<run-id>` containing the same name plus `.json`.
-A future retirement receipt uses
+A post-deletion beta acceptance receipt uses
 `evidence_artifact: passport-beta-acceptance-<run-id>.json` and the exact file
 SHA-256, together with that successful run ID and its protected source SHA.
-This receipt must not be marked qualified while the report is `blocked`.
+It cannot be accepted while the report is `blocked`.

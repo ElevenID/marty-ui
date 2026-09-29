@@ -22,8 +22,8 @@ before its passport flags are changed.
 These source bindings do not authorize Python route deletion. The software
 route retirement gate in `ElevenID/marty-credentials#305` uses Marty's
 simulator profile, a managed issuer signer, a native accepted signed callback,
-job and artifact drain, live behavior for all nine routes, and rollback
-acceptance in each supported composition. It records
+job and artifact drain, live behavior for all nine routes, and Rust restart
+and KMS-backed job resume in protected disposable acceptance. It records
 `physical_claim=not_claimed`; an external provider or physical booklet is not
 required to retire the migrated software routes. The simulator does not prove
 physical personalization. Do not activate these flags in production from this

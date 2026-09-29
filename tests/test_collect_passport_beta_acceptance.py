@@ -20,6 +20,15 @@ from scripts.collect_passport_beta_acceptance import (
 )
 
 
+def test_required_beta_probes_freeze_rust_only_set() -> None:
+    assert set(REQUIRED_PROBES) == {
+        "managed_csca_dsc_chain", "sod_signature", "nine_route_gateway_flow",
+        "packaged_image", "physical_bureau_submission", "physical_bureau_batch",
+        "signed_bureau_callback", "legacy_drain", "production_isolation",
+        "physical_claim_boundary", "recorded_demo",
+    }
+
+
 COMMIT = "a" * 40
 OCI = "sha256:" + "b" * 64
 IMAGE_ID = "sha256:" + "c" * 64
@@ -94,6 +103,7 @@ def test_collects_live_beta_prerequisites_without_qualifying_retirement(tmp_path
     report = collect(tmp_path, api_key="in-memory-only", inspect=inspect, probe=probe)
     assert report["schema"] == "marty.passport-beta-acceptance/v1"
     assert report["status"] == "blocked"
+    assert "rollback" not in report["probes"]
     assert report["physical_claim"] == "not_claimed"
     assert report["release"]["source_commit"] == COMMIT
     assert report["release"]["stack_manifest_sha256"] == hashlib.sha256((tmp_path / "stack-manifest.json").read_bytes()).hexdigest()
