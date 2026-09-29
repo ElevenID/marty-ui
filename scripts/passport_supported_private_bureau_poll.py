@@ -114,7 +114,8 @@ def poll_owned_bureau(
               "com.docker.compose.service": "passport-bureau-poll",
               **record["owner_labels"]}
     command = [
-        "docker", "run", "--rm", "--pull", "never", "--interactive",
+        "docker", "run", "--rm", "--name", f"{project}-passport-bureau-poll-1",
+        "--pull", "never", "--interactive",
         "--read-only", "--cap-drop", "ALL", "--security-opt",
         "no-new-privileges", "--network", f"container:{bureau}",
         *(argument for key, value in sorted(labels.items())

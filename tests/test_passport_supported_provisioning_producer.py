@@ -816,36 +816,43 @@ def test_partial_teardown_recognizes_interrupted_openbao_bootstrap(
     ]
 
 
-@pytest.mark.parametrize("ceremony", [False, True])
+@pytest.mark.parametrize("helper_service,ceremony", [
+    ("passport-certificate-bootstrap", False),
+    ("passport-certificate-bootstrap", True),
+    ("passport-bureau-poll", False),
+])
 def test_partial_teardown_recognizes_interrupted_certificate_helper(
-    tmp_path: Path, ceremony: bool,
+    tmp_path: Path, helper_service: str, ceremony: bool,
 ) -> None:
     from scripts.check_passport_supported_compose_ownership import _expected_mounts
 
     arguments, plan, gates = partial_teardown_context(tmp_path)
     workflow_ref = (producer.CERTIFICATE_WORKFLOW_REF if ceremony
                     else producer.WORKFLOW_REF)
-    if ceremony:
+    if ceremony or helper_service == "passport-bureau-poll":
         plan["surface"] = "selfhost"
         plan["project"] = plan["project"].replace("-base-", "-selfhost-")
         arguments[0].write_text(json.dumps(plan), encoding="utf-8")
+    if ceremony:
         arguments = (*arguments[:3], {
             **arguments[3], "GITHUB_WORKFLOW_REF": producer.CERTIFICATE_WORKFLOW_REF,
         })
     project = plan["project"]
-    signer, helper, network = "1" * 64, "2" * 64, "3" * 64
+    parent_service = ("signing-keys" if helper_service ==
+                      "passport-certificate-bootstrap" else "passport-beta-bureau")
+    parent, helper, network = "1" * 64, "2" * 64, "3" * 64
     network_name = project + "_private"
     labels = {**plan["owner_labels"], "com.docker.compose.project": project}
     signer_mounts = [
         {"Type": kind, "Source": source, "Destination": destination, "RW": writable}
         for kind, source, destination, writable in _expected_mounts(
-            "signing-keys", project, Path(tempfile.gettempdir()) / project,
+            parent_service, project, Path(tempfile.gettempdir()) / project,
             plan["surface"], ceremony=ceremony)
     ]
     state = {
         "image": plan["migrations_reference"],
-        "name": f"/{project}-passport-certificate-bootstrap-1",
-        "network_mode": f"container:{signer}",
+        "name": f"/{project}-{helper_service}-1",
+        "network_mode": f"container:{parent}",
         "mounts": [],
     }
     present = {"containers": True, "network": True}
@@ -854,11 +861,11 @@ def test_partial_teardown_recognizes_interrupted_certificate_helper(
     def inspector(args: list[str]) -> str:
         if args[:2] == ["container", "inspect"]:
             identifier = args[2]
-            if identifier == signer:
+            if identifier == parent:
                 return json.dumps([{
-                    "Id": signer, "Name": f"/{project}-signing-keys-1",
+                    "Id": parent, "Name": f"/{project}-{parent_service}-1",
                     "Config": {"Image": plan["services_reference"], "Labels": {
-                        **labels, "com.docker.compose.service": "signing-keys"}},
+                        **labels, "com.docker.compose.service": parent_service}},
                     "NetworkSettings": {"Networks": {
                         network_name: {"NetworkID": network}}},
                     "Mounts": signer_mounts,
@@ -867,17 +874,17 @@ def test_partial_teardown_recognizes_interrupted_certificate_helper(
             return json.dumps([{
                 "Id": helper, "Name": state["name"],
                 "Config": {"Image": state["image"], "Labels": {
-                    **labels, "com.docker.compose.service": "passport-certificate-bootstrap"}},
+                    **labels, "com.docker.compose.service": helper_service}},
                 "HostConfig": {"NetworkMode": state["network_mode"]},
                 "NetworkSettings": {"Networks": {}}, "Mounts": state["mounts"],
             }])
         if args[:2] == ["network", "inspect"]:
             return json.dumps([{
                 "Id": network, "Name": network_name, "Driver": "bridge",
-                "Internal": True, "Containers": {signer: {}}, "Labels": labels,
+                "Internal": True, "Containers": {parent: {}}, "Labels": labels,
             }])
         if args[0] == "ps":
-            return f"{signer}\n{helper}" if present["containers"] else ""
+            return f"{parent}\n{helper}" if present["containers"] else ""
         if args[:2] == ["network", "ls"]:
             return network if present["network"] else ""
         if args[:2] == ["volume", "ls"]:
@@ -894,7 +901,7 @@ def test_partial_teardown_recognizes_interrupted_certificate_helper(
 
     for field, bad in (
         ("image", plan["services_reference"]),
-        ("name", f"/{project}-passport-certificate-bootstrap-random"),
+        ("name", f"/{project}-{helper_service}-random"),
         ("network_mode", "bridge"),
         ("mounts", [{"Type": "bind", "Source": str(tmp_path),
                      "Destination": "/unowned", "RW": True}]),
@@ -922,7 +929,7 @@ def test_partial_teardown_recognizes_interrupted_certificate_helper(
     assert destroy_partial_disposable_project(
         *arguments, inspector, executor, workflow_ref=workflow_ref, **gates)
     assert calls == [
-        ["container", "rm", "-f", signer, helper],
+        ["container", "rm", "-f", parent, helper],
         ["network", "rm", network],
     ]
 

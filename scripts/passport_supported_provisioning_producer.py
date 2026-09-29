@@ -481,13 +481,16 @@ def _destroy_recorded_project(
                 network_settings = item.get("NetworkSettings")
                 require(isinstance(network_settings, dict),
                         "Partial disposable container network state is invalid")
-                if service == "passport-certificate-bootstrap":
+                if service in {"passport-certificate-bootstrap", "passport-bureau-poll"}:
                     host = item.get("HostConfig")
-                    signer_id = containers.get("signing-keys")
-                    require(isinstance(host, dict) and isinstance(signer_id, str)
-                            and host.get("NetworkMode") == f"container:{signer_id}"
+                    parent_service = ("signing-keys" if service ==
+                                      "passport-certificate-bootstrap" else
+                                      "passport-beta-bureau")
+                    parent_id = containers.get(parent_service)
+                    require(isinstance(host, dict) and isinstance(parent_id, str)
+                            and host.get("NetworkMode") == f"container:{parent_id}"
                             and not host.get("PortBindings"),
-                            "Partial certificate helper leaves the recorded signer network")
+                            "Partial helper leaves its recorded service network")
                 attachments = network_settings.get("Networks")
                 require(isinstance(attachments, dict)
                         and set(attachments) <= set(networks)
