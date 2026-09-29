@@ -73,6 +73,7 @@ def fixture(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     approval.write_text(json.dumps({
         "schema": "marty.passport-beta-fence-approved-target/v1",
         "observation_sha256": OBSERVATION,
+        "production_attachments_sha256": "6" * 64,
         "postgres_system_identifier": "12345",
         "database_oid": "87774",
         "credentials_deletion_head": DELETION_HEAD,
@@ -156,6 +157,7 @@ def fixture(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     target = {
         "authority": "discovery_only_requires_protected_baseline",
         "observation_sha256": OBSERVATION,
+        "production_attachments_sha256": "6" * 64,
         "docker": {"context": "test", "daemon_id": "daemon"},
         "beta": {
             "postgres_system_identifier": "12345", "database_oid": "87774",
@@ -240,7 +242,7 @@ def test_authority_rejects_unapproved_source_or_deletion(
 
 
 @pytest.mark.parametrize("drift", [
-    "observation", "cluster", "database", "manifest", "attestation",
+    "observation", "attachments", "cluster", "database", "manifest", "attestation",
     "issuance_attestation", "issuance_image", "services_image",
 ])
 def test_authority_rejects_target_or_release_drift(
@@ -249,6 +251,8 @@ def test_authority_rejects_target_or_release_drift(
     approval, manifest, values, target, runner = fixture(tmp_path, monkeypatch)
     if drift == "observation":
         target["observation_sha256"] = "2" * 64
+    elif drift == "attachments":
+        target["production_attachments_sha256"] = "2" * 64
     elif drift == "cluster":
         target["beta"]["postgres_system_identifier"] = "98765"
     elif drift == "database":

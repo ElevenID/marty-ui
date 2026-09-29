@@ -13,12 +13,14 @@ from urllib.parse import urlsplit
 try:
     from .probe_passport_beta_host import (
         BETA_PROJECT, HostProbeError, assert_production_unchanged, beta_legacy_drain,
-        beta_postgres_container, beta_psql, ids, inspect, production_snapshot, run,
+        beta_postgres_container, beta_psql, ids, inspect,
+        production_attachment_sha256, production_snapshot, run,
     )
 except ImportError:
     from probe_passport_beta_host import (
         BETA_PROJECT, HostProbeError, assert_production_unchanged, beta_legacy_drain,
-        beta_postgres_container, beta_psql, ids, inspect, production_snapshot, run,
+        beta_postgres_container, beta_psql, ids, inspect,
+        production_attachment_sha256, production_snapshot, run,
     )
 
 
@@ -223,6 +225,7 @@ def observe(runner: Callable[[list[str]], str] = run) -> dict[str, Any]:
     if not context or not daemon_id:
         raise HostProbeError("Docker context or daemon identity is unavailable")
     production_before = production_snapshot(runner)
+    production_attachments_before = production_attachment_sha256(runner)
     before = service_inventory(runner)
     database_route = database_network_binding(before, runner)
     postgres_id = beta_postgres_container(runner)
@@ -292,6 +295,8 @@ def observe(runner: Callable[[list[str]], str] = run) -> dict[str, Any]:
         raise HostProbeError("Beta database network route changed during fence inventory")
     production_after = production_snapshot(runner)
     assert_production_unchanged(production_before, production_after)
+    if production_attachment_sha256(runner) != production_attachments_before:
+        raise HostProbeError("Production network or ports changed during fence inventory")
     if (runner(["docker", "context", "show"]) != context
             or runner(["docker", "info", "--format", "{{.ID}}"])
             != daemon_id):
@@ -314,6 +319,7 @@ def observe(runner: Callable[[list[str]], str] = run) -> dict[str, Any]:
     receipt["observation_sha256"] = hashlib.sha256(
         json.dumps(receipt, sort_keys=True, separators=(",", ":")).encode()
     ).hexdigest()
+    receipt["production_attachments_sha256"] = production_attachments_before
     return receipt
 
 
@@ -324,6 +330,7 @@ def observe_fenced(runner: Callable[[list[str]], str] = run) -> dict[str, Any]:
     if not context or not daemon_id:
         raise HostProbeError("Docker context or daemon identity is unavailable")
     production_before = production_snapshot(runner)
+    production_attachments_before = production_attachment_sha256(runner)
     before = service_inventory(runner)
     database_route = database_network_binding(before, runner)
     postgres_id = beta_postgres_container(runner)
@@ -348,6 +355,8 @@ def observe_fenced(runner: Callable[[list[str]], str] = run) -> dict[str, Any]:
         raise HostProbeError("Fenced beta container or database route changed")
     production_after = production_snapshot(runner)
     assert_production_unchanged(production_before, production_after)
+    if production_attachment_sha256(runner) != production_attachments_before:
+        raise HostProbeError("Production network or ports changed during fenced inventory")
     if (runner(["docker", "context", "show"]) != context
             or runner(["docker", "info", "--format", "{{.ID}}"]) != daemon_id):
         raise HostProbeError("Docker daemon changed during fenced inventory")
@@ -367,6 +376,7 @@ def observe_fenced(runner: Callable[[list[str]], str] = run) -> dict[str, Any]:
     receipt["observation_sha256"] = hashlib.sha256(
         json.dumps(receipt, sort_keys=True, separators=(",", ":")).encode()
     ).hexdigest()
+    receipt["production_attachments_sha256"] = production_attachments_before
     return receipt
 
 

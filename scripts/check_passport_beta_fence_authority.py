@@ -192,6 +192,8 @@ def check_authority(
             and approval.get("schema") == "marty.passport-beta-fence-approved-target/v1",
             "Protected beta target approval is invalid")
     require(SHA256.fullmatch(str(approval.get("observation_sha256"))) is not None
+            and SHA256.fullmatch(str(approval.get("production_attachments_sha256")))
+                is not None
             and re.fullmatch(r"[0-9]+", str(approval.get("postgres_system_identifier"))) is not None
             and re.fullmatch(r"[0-9]+", str(approval.get("database_oid"))) is not None
             and SHA.fullmatch(str(approval.get("credentials_deletion_head"))) is not None
@@ -229,7 +231,9 @@ def check_authority(
             "Credentials deletion PR head differs from protected approval")
     target = observer()
     require(target.get("authority") == "discovery_only_requires_protected_baseline"
-            and target.get("observation_sha256") == approval["observation_sha256"],
+            and target.get("observation_sha256") == approval["observation_sha256"]
+            and target.get("production_attachments_sha256")
+                == approval["production_attachments_sha256"],
             "Fresh beta/production target differs from protected approval")
     beta = target.get("beta")
     require(isinstance(beta, dict)
@@ -261,6 +265,7 @@ def check_authority(
         "drain_sql_sha256": file_sha256(DRAIN),
         "verify_sql_sha256": file_sha256(VERIFY),
         "production_snapshot_sha256": target["production"]["sha256"],
+        "production_attachments_sha256": target["production_attachments_sha256"],
     }
 
 

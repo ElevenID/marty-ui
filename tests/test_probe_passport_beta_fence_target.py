@@ -70,6 +70,7 @@ def test_fenced_observer_uses_postinstall_identity_without_prefence_acl(
     monkeypatch.setattr(target, "production_snapshot",
                         lambda runner: {"sha256": "b" * 64,
                                         "container_counts": {"marty-selfhost-prod": 1}})
+    monkeypatch.setattr(target, "production_attachment_sha256", lambda _runner: "c" * 64)
 
     def runner(command: list[str]) -> str:
         return "desktop-linux" if command[:3] == ["docker", "context", "show"] else "daemon"
@@ -80,6 +81,7 @@ def test_fenced_observer_uses_postinstall_identity_without_prefence_acl(
     assert receipt["beta"]["database_oid"] == "789"
     assert receipt["beta"]["services"]["postgres"]["container_id"] == postgres
     assert receipt["production"]["sha256"] == "b" * 64
+    assert receipt["production_attachments_sha256"] == "c" * 64
 
 
 @pytest.mark.parametrize("drift", (

@@ -160,6 +160,7 @@ try {
         $after.docker.context -cne $plan.docker.context -or
         $after.docker.daemon_id -cne $plan.docker.daemon_id -or
         $after.production.sha256 -cne $plan.production_snapshot_sha256 -or
+        $after.production_attachments_sha256 -cne $plan.production_attachments_sha256 -or
         $direct.fence_epoch -ne $fence.epoch -or
         $direct.postgres_container_id -cne $container) {
         throw 'Beta fence target or production changed during installation'
@@ -188,6 +189,7 @@ try {
         direct_database_probe = $direct
         post_install_observation_sha256 = $after.observation_sha256
         production_snapshot_sha256 = $after.production.sha256
+        production_attachments_sha256 = $after.production_attachments_sha256
     }
     $json = $receipt | ConvertTo-Json -Depth 20 -Compress
     $outputStream = [IO.File]::Open($outputAbsolute, [IO.FileMode]::CreateNew,
