@@ -1,19 +1,65 @@
 """Sanitize protected Signing Keys issuer resolution for passport evidence.
 
-The caller obtains responses from the private, authenticated
-``/internal/compat/resolve-issuer-did`` route. This module never transports or
-publishes those responses, which contain KMS key references and DID documents.
+The private resolver is called inside the selected beta Signing Keys container.
+This module never publishes its response, which contains KMS key references and
+DID documents.
 """
 
 from __future__ import annotations
 
+import base64
+import binascii
 import hashlib
 import hmac
+import json
+import re
+import subprocess
 from typing import Any
 
 
 class IssuerProfileEvidenceError(ValueError):
     pass
+
+
+CONTAINER_ID = re.compile(r"[0-9a-f]{64}\Z")
+
+
+def resolve_in_container(container_id: str, organization_id: str,
+                         issuer_did: str, key_purpose: str) -> dict[str, Any]:
+    """Resolve through the private Rust service without exporting its token."""
+    if (not isinstance(container_id, str) or CONTAINER_ID.fullmatch(container_id) is None
+            or not isinstance(organization_id, str) or not organization_id
+            or not isinstance(issuer_did, str) or not issuer_did.startswith("did:")
+            or key_purpose not in ("csca", "x509_doc_signer")):
+        raise IssuerProfileEvidenceError("Private issuer resolution input is invalid")
+    body = json.dumps({
+        "organization_id": organization_id,
+        "issuer_did": issuer_did,
+        "credential_format": "ICAO_EMRTD",
+        "key_purpose": key_purpose,
+        "algorithm": "ES256",
+    }, separators=(",", ":")).encode("utf-8")
+    command = [
+        "docker", "exec", "-i", container_id, "sh", "-eu", "-c",
+        'key="${SIGNING_KEYS_INTERNAL_API_KEY:-}"; '
+        'if [ -z "$key" ] && [ -n "${SIGNING_KEYS_INTERNAL_API_KEY_FILE:-}" ]; '
+        'then key="$(cat "$SIGNING_KEYS_INTERNAL_API_KEY_FILE")"; fi; '
+        '[ -n "$key" ] || exit 4; '
+        'exec curl --fail --silent --show-error --max-time 20 '
+        '-H "Content-Type: application/json" -H "x-api-key: $key" '
+        '--data-binary @- http://127.0.0.1:8017/internal/compat/resolve-issuer-did',
+    ]
+    try:
+        result = subprocess.run(command, input=body, capture_output=True,
+                                timeout=30, check=True)
+        if len(result.stdout) > 256 * 1024:
+            raise IssuerProfileEvidenceError("Private issuer resolution is oversized")
+        response = json.loads(result.stdout)
+    except (OSError, ValueError, subprocess.SubprocessError) as exc:
+        raise IssuerProfileEvidenceError("Private issuer resolution failed") from exc
+    if not isinstance(response, dict):
+        raise IssuerProfileEvidenceError("Private issuer resolution is invalid")
+    return response
 
 
 def _required(value: dict[str, Any], field: str) -> str:
@@ -88,4 +134,43 @@ def verify_profiles(
         "csca_issuer_profile_commitment": _commit(api_key, ids[0]),
         "dsc_issuer_profile_commitment": _commit(api_key, ids[1]),
         "managed_profile_binding_verified": True,
+    }
+
+
+def verify_profile_certificates(
+    organization_id: str,
+    csca_issuer_did: str,
+    dsc_issuer_did: str,
+    csca_resolution: dict[str, Any],
+    dsc_resolution: dict[str, Any],
+    chain_evidence: dict[str, Any],
+    api_key: str,
+) -> dict[str, Any]:
+    """Bind managed profiles to two successful ceremonies and the public chain."""
+    binding = verify_profiles(organization_id, csca_issuer_did, dsc_issuer_did,
+                              csca_resolution, dsc_resolution, api_key)
+    if (not isinstance(chain_evidence, dict)
+            or chain_evidence.get("csca_http_status") != 200
+            or chain_evidence.get("dsc_http_status") != 200
+            or chain_evidence.get("chain_verified_by") != "openssl-x509-strict"):
+        raise IssuerProfileEvidenceError("Governed certificate chain is unverified")
+    for role, resolution in (("csca", csca_resolution), ("dsc", dsc_resolution)):
+        expected = chain_evidence.get(f"{role}_certificate_sha256")
+        x5c = resolution.get("issuer_x5c")
+        if (not isinstance(expected, str) or len(expected) != 64
+                or any(character not in "0123456789abcdef" for character in expected)
+                or not isinstance(x5c, list) or not x5c
+                or not isinstance(x5c[0], str)):
+            raise IssuerProfileEvidenceError(f"{role.upper()} profile certificate is unavailable")
+        try:
+            certificate_der = base64.b64decode(x5c[0], validate=True)
+        except (ValueError, binascii.Error) as exc:
+            raise IssuerProfileEvidenceError(f"{role.upper()} profile certificate is invalid") from exc
+        if hashlib.sha256(certificate_der).hexdigest() != expected:
+            raise IssuerProfileEvidenceError(f"{role.upper()} profile certificate differs from ceremony")
+    return {
+        "csca_issuer_profile_commitment": binding["csca_issuer_profile_commitment"],
+        "dsc_issuer_profile_commitment": binding["dsc_issuer_profile_commitment"],
+        "managed_kms_custody_verified": True,
+        "chain_verified": True,
     }

@@ -3,13 +3,16 @@
 from __future__ import annotations
 
 import copy
+import base64
 import hashlib
 import hmac
 
 import pytest
 
+from scripts import verify_passport_beta_issuer_profiles as profile_evidence
 from scripts.verify_passport_beta_issuer_profiles import (
-    IssuerProfileEvidenceError, verify_profiles,
+    IssuerProfileEvidenceError, resolve_in_container, verify_profile_certificates,
+    verify_profiles,
 )
 
 
@@ -81,3 +84,60 @@ def test_rejects_same_key_despite_distinct_profiles() -> None:
     dsc["signing_service"]["key_aliases"] = copy.copy(csca["signing_service"]["key_aliases"])
     with pytest.raises(IssuerProfileEvidenceError, match="distinct managed"):
         verify(csca, dsc)
+
+
+def test_live_profile_certificates_bind_to_governed_chain() -> None:
+    csca, dsc = resolution("csca"), resolution("dsc")
+    csca_der, dsc_der = b"synthetic-csca-der", b"synthetic-dsc-der"
+    csca["issuer_x5c"] = [base64.b64encode(csca_der).decode("ascii")]
+    dsc["issuer_x5c"] = [base64.b64encode(dsc_der).decode("ascii")]
+    chain = {
+        "csca_http_status": 200, "dsc_http_status": 200,
+        "chain_verified_by": "openssl-x509-strict",
+        "csca_certificate_sha256": hashlib.sha256(csca_der).hexdigest(),
+        "dsc_certificate_sha256": hashlib.sha256(dsc_der).hexdigest(),
+    }
+
+    def check() -> dict:
+        return verify_profile_certificates("org-a", csca["issuer_did"], dsc["issuer_did"],
+                                           csca, dsc, chain, "private-api-key")
+
+    assert check()["managed_kms_custody_verified"] is True
+    assert check()["chain_verified"] is True
+    dsc["issuer_x5c"] = [base64.b64encode(b"rotated-dsc").decode("ascii")]
+    with pytest.raises(IssuerProfileEvidenceError, match="differs from ceremony"):
+        check()
+    dsc["issuer_x5c"] = []
+    with pytest.raises(IssuerProfileEvidenceError, match="unavailable"):
+        check()
+    dsc["issuer_x5c"] = [base64.b64encode(dsc_der).decode("ascii")]
+    chain["dsc_http_status"] = 503
+    with pytest.raises(IssuerProfileEvidenceError, match="unverified"):
+        check()
+
+
+def test_private_resolution_keeps_token_inside_selected_container(monkeypatch) -> None:
+    calls = []
+
+    def run(command, *, input, capture_output, timeout, check):
+        calls.append((command, input, capture_output, timeout, check))
+        return type("Result", (), {"stdout": b'{"ok":true}'})()
+
+    monkeypatch.setattr(profile_evidence.subprocess, "run", run)
+    result = resolve_in_container("a" * 64, "org-a", "did:web:beta.example:org:passport", "csca")
+    assert result == {"ok": True}
+    command, body, captured, timeout, check = calls[0]
+    assert command[:4] == ["docker", "exec", "-i", "a" * 64]
+    assert "127.0.0.1:8017/internal/compat/resolve-issuer-did" in command[-1]
+    assert "SIGNING_KEYS_INTERNAL_API_KEY_FILE" in command[-1]
+    assert b'"key_purpose":"csca"' in body
+    assert captured and check and timeout == 30
+    assert "org-a" not in str(command)
+    assert "did:web" not in str(command)
+
+
+def test_private_resolution_rejects_invalid_container_before_docker(monkeypatch) -> None:
+    monkeypatch.setattr(profile_evidence.subprocess, "run",
+                        lambda *args, **kwargs: pytest.fail("docker must not run"))
+    with pytest.raises(IssuerProfileEvidenceError, match="input is invalid"):
+        resolve_in_container("signing-keys", "org-a", "did:web:beta.example", "csca")
