@@ -163,6 +163,7 @@ def collect(
     probe: Callable[[str | None], tuple[int, dict[str, Any] | None]] = get_capabilities,
     attest: Callable[[Path, dict[str, str], str], bool] | None = None,
     list_ids: Callable[[str], list[str]] | None = None,
+    probe_native: Callable[[dict[str, Any], dict[str, Any]], None] | None = None,
 ) -> dict[str, Any]:
     if (artifact_dir / "aggregate-deployment.json").is_file():
         if __package__:
@@ -170,6 +171,8 @@ def collect(
         else:
             from collect_passport_beta_aggregate_acceptance import collect_aggregate
         kwargs = {"list_ids": list_ids} if list_ids is not None else {}
+        if probe_native is not None:
+            kwargs["probe_native"] = probe_native
         return collect_aggregate(artifact_dir, api_key=api_key, inspect=inspect,
                                  probe=probe, attest=attest, **kwargs)
     deployment_path = artifact_dir / "local-deployment-manifest.json"

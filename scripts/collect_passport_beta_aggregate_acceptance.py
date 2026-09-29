@@ -18,7 +18,8 @@ try:
         read_json, require,
     )
     from .prepare_passport_beta_aggregate_compose import SIGNED_APPLICATIONS, INGRESS
-    from .probe_passport_beta_host import ids
+    from .prepare_passport_beta_aggregate_handoff import verify_fence
+    from .probe_passport_beta_host import beta_psql, ids, run as host_run
 except ImportError:
     from check_passport_beta_fence_authority import (
         manifest_source, verify_issuance_attestation,
@@ -30,7 +31,8 @@ except ImportError:
         read_json, require,
     )
     from prepare_passport_beta_aggregate_compose import SIGNED_APPLICATIONS, INGRESS
-    from probe_passport_beta_host import ids
+    from prepare_passport_beta_aggregate_handoff import verify_fence
+    from probe_passport_beta_host import beta_psql, ids, run as host_run
 
 
 SHA = re.compile(r"[0-9a-f]{40}\Z")
@@ -39,6 +41,92 @@ CONTAINER = re.compile(r"[0-9a-f]{64}\Z")
 IMAGE_ID = re.compile(r"sha256:[0-9a-f]{64}\Z")
 RUNTIME_KEYS = {"container_id", "image_id", "configured_image", "started_at",
                 "config_hash", "networks"}
+
+
+def _probe_native_marker(plan: dict[str, Any], intent: dict[str, Any]) -> None:
+    sql = (
+        "SELECT (SELECT fence_epoch::text || '|' || source_commit || '|' || "
+        "migration_set_sha256 FROM passport_cutover.native_migration_receipt "
+        "WHERE singleton=true) || '|' || "
+        "(SELECT rolcanlogin::text FROM pg_roles WHERE rolname='marty') || '|' || "
+        "(SELECT rolcanlogin::text FROM pg_roles "
+        "WHERE rolname='marty_beta_migrator')"
+    )
+    expected = (f"{plan['fence_epoch']}|{plan['source_commit']}|"
+                f"{plan['migration_set_sha256']}|true|false")
+    require(beta_psql(sql, host_run, plan["postgres_container_id"]) == expected,
+            "Aggregate beta native migration marker or role state differs")
+    verify_fence(intent, host_run)
+
+
+def _verify_native_lineage(
+    artifact_dir: Path, plan: dict[str, Any], receipt: dict[str, Any],
+    probe_native: Callable[[dict[str, Any], dict[str, Any]], None],
+) -> None:
+    prefix = artifact_dir / "aggregate-deployment.json"
+    fence_path = Path(str(prefix) + ".fence-receipt.json")
+    maintenance_path = Path(str(prefix) + ".maintenance-receipt.json")
+    intent_path = Path(str(prefix) + ".maintenance-intent.json")
+    native_path = Path(str(prefix) + ".native-receipt.json")
+    fence = read_json(fence_path)
+    maintenance = read_json(maintenance_path)
+    intent = read_json(intent_path)
+    native = read_json(native_path)
+    require(fence.get("schema") == "marty.passport-beta-fence-installation/v1"
+            and maintenance.get("schema") == "marty.passport-beta-db-maintenance-start/v1"
+            and intent.get("schema") == "marty.passport-beta-db-maintenance-plan/v1"
+            and native.get("schema") == "marty.passport-beta-native-db-gates/v1"
+            and digest_file(fence_path).removeprefix("sha256:")
+                == plan.get("fence_receipt_sha256")
+            and digest_file(maintenance_path).removeprefix("sha256:")
+                == plan.get("maintenance_receipt_sha256")
+                == native.get("maintenance_receipt_sha256")
+            and digest_file(intent_path).removeprefix("sha256:")
+                == maintenance.get("intent_sha256")
+            and digest_file(native_path).removeprefix("sha256:")
+                == plan.get("native_receipt_sha256")
+                == receipt.get("native_receipt_sha256")
+            and all(item.get("source_commit") == plan["source_commit"]
+                    for item in (fence, maintenance, intent, native))
+            and all(str(item.get("fence_epoch")) == str(plan.get("fence_epoch"))
+                    for item in (maintenance, intent, native))
+            and all(item.get("postgres_container_id") == plan.get("postgres_container_id")
+                    for item in (fence, maintenance, intent, native))
+            and fence.get("postgres_system_identifier")
+                == plan.get("postgres_system_identifier")
+            and fence.get("database_oid") == plan.get("database_oid")
+            and fence.get("production_snapshot_sha256")
+                == plan.get("production_snapshot_sha256")
+            and fence.get("production_attachments_sha256")
+                == plan.get("production_attachments_sha256")
+            and intent.get("fence_receipt_sha256")
+                == plan.get("fence_receipt_sha256")
+            and intent.get("production_snapshot_sha256")
+                == plan.get("production_snapshot_sha256")
+            and intent.get("production_attachments_sha256")
+                == plan.get("production_attachments_sha256")
+            and native.get("migration_set_sha256") == plan.get("migration_set_sha256")
+            and native.get("app_login_enabled") is False
+            and native.get("stopped_container_ids") == maintenance.get("stopped_container_ids")
+                == intent.get("stop_container_ids")
+            and maintenance.get("production_snapshot_sha256")
+                == native.get("production_snapshot_sha256")
+                == plan.get("production_snapshot_sha256")
+            and maintenance.get("production_attachments_sha256")
+                == plan.get("production_attachments_sha256")
+            and native.get("postgres_system_identifier")
+                == maintenance.get("postgres_system_identifier")
+                == intent.get("postgres_system_identifier")
+                == plan.get("postgres_system_identifier")
+            and native.get("database_oid") == maintenance.get("database_oid")
+                == intent.get("database_oid") == plan.get("database_oid")
+            and isinstance(plan.get("migration_set_sha256"), str)
+            and SHA256.fullmatch(plan["migration_set_sha256"]) is not None
+            and isinstance(plan.get("postgres_container_id"), str)
+            and CONTAINER.fullmatch(plan["postgres_container_id"]) is not None
+            and str(plan.get("fence_epoch", "")).isdigit(),
+            "Aggregate beta native migration lineage is invalid")
+    probe_native(plan, intent)
 
 
 def _runtime_image(
@@ -95,6 +183,7 @@ def collect_aggregate(
     attest: Callable[[Path, dict[str, str], str], bool] | None = None,
     attest_issuance: Callable[[str, str, str], bool] = verify_issuance_attestation,
     list_ids: Callable[[str], list[str]] = ids,
+    probe_native: Callable[[dict[str, Any], dict[str, Any]], None] = _probe_native_marker,
 ) -> dict[str, Any]:
     receipt_path = artifact_dir / "aggregate-deployment.json"
     plan_path = artifact_dir / "aggregate-deployment.json.plan.json"
@@ -132,6 +221,7 @@ def collect_aggregate(
             and signed["oci_digests"].get("ghcr.io/elevenid/marty-ui-oss/ui")
                 == str(plan.get("ui_image", "")).partition("@")[2],
             "Aggregate beta plan differs from signed stack images")
+    _verify_native_lineage(artifact_dir, plan, receipt, probe_native)
     runtime = receipt.get("beta_runtime")
     names = receipt.get("beta_services")
     targets = plan.get("target_services")
@@ -142,6 +232,9 @@ def collect_aggregate(
             and len(names) == len(runtime)
             and set(expected_networks) == set(runtime)
             and set(SERVICES).issubset(runtime)
+            and isinstance(runtime.get("postgres"), dict)
+            and runtime["postgres"].get("container_id")
+                == plan.get("postgres_container_id")
             and "passport-provider-ingress" not in runtime,
             "Aggregate beta simulator service inventory is invalid")
     expected_ids = {identity.get("container_id") for identity in runtime.values()

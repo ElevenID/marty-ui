@@ -19,8 +19,26 @@ from scripts.probe_passport_beta_chain import ChainProbeError
 from scripts.probe_passport_beta_batch import _identity_commit
 from scripts.probe_passport_beta_flow import PHYSICAL_STEPS
 from scripts.probe_passport_beta_native_batch import NativeBatchProbeError
-from scripts.run_passport_beta_acceptance import run
+from scripts.run_passport_beta_acceptance import run as protected_run
 from tests.test_probe_passport_beta_chain import plan as certificate_plan
+
+
+def run(*args, **kwargs):
+    """Exercise old probe shapes only as unit fixtures, never the protected CLI."""
+    return protected_run(*args, require_aggregate=False, **kwargs)
+
+
+def test_protected_runner_requires_aggregate_receipt_before_collection() -> None:
+    with pytest.raises(EvidenceError, match="requires aggregate beta deployment"):
+        protected_run(Path("legacy-artifacts"), {}, "a" * 32,
+                      collector=lambda *_, **__: pytest.fail("No legacy collection"))
+
+
+def test_protected_runner_rejects_report_without_aggregate_commitments(tmp_path: Path) -> None:
+    (tmp_path / "aggregate-deployment.json").write_text("{}", encoding="utf-8")
+    with pytest.raises(EvidenceError, match="requires aggregate lineage"):
+        protected_run(tmp_path, {}, "a" * 32,
+                      collector=lambda *_, **__: report())
 
 
 def report(*, ready: bool = True) -> dict:

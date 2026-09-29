@@ -155,8 +155,22 @@ def run(
     private_handoff_path: Path | None = None,
     batch: Callable[..., dict[str, Any]] = exercise_batch,
     checkout_checker: Callable[[str], None] = require_source_checkout,
+    require_aggregate: bool = True,
 ) -> dict[str, Any]:
+    if require_aggregate:
+        require((artifact_dir / "aggregate-deployment.json").is_file(),
+                "Protected passport acceptance requires aggregate beta deployment")
     report = collector(artifact_dir, api_key=api_key, attest=attestor)
+    if require_aggregate:
+        deployment = report.get("deployment")
+        require(isinstance(deployment, dict)
+                and all(isinstance(deployment.get(name), str)
+                        and SHA256.fullmatch(deployment[name]) is not None
+                        for name in ("aggregate_deployment_receipt_sha256",
+                                     "aggregate_plan_sha256",
+                                     "production_snapshot_commitment",
+                                     "production_attachment_commitment")),
+                "Protected passport acceptance requires aggregate lineage and production baselines")
     require(report.get("status") == "blocked" and report.get("release", {}).get("signed_manifest_verified") is True, "Official beta release is not authenticated")
     require(report.get("probes", {}).get("capabilities_http", {}).get("verified") is True, "Managed issuer capability is not ready")
     require(report.get("deployment", {}).get("provider_mode") == "simulator"

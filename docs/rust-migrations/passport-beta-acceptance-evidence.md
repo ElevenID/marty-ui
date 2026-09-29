@@ -15,7 +15,12 @@ the beta host with the deployment's artifact directory:
 For the forward Rust aggregate, the directory contains the exact
 `aggregate-deployment.json` written by the protected operator, its adjacent
 `aggregate-deployment.json.plan.json`, and the signed `stack-manifest.json`
-with `SHA256SUMS`. Keep the original bytes. The collector verifies the plan
+with `SHA256SUMS`. The operator also preserves adjacent files ending in
+`.fence-receipt.json`, `.maintenance-intent.json`,
+`.maintenance-receipt.json`, and `.native-receipt.json`. Keep the original
+bytes. The protected acceptance runner requires this aggregate generation.
+The collector verifies the native receipt chain and live migration marker,
+then verifies the plan
 and receipt digests, release and issuance attestations, and each live beta
 container, image, start time, Compose hash, and network against the deployment
 receipt. The production baseline is reported only as an API-key HMAC

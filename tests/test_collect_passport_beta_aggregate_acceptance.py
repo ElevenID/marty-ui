@@ -53,11 +53,46 @@ def fixture(tmp_path: Path, monkeypatch):
         seen.append((path, source, attest("probe", {}, source)))
         return signed
     monkeypatch.setattr(aggregate, "manifest_source", manifest_source)
+    postgres_id = format(len(ALL_APPS) + 1, "x").rjust(64, "0")
+    prefix = tmp_path / "aggregate-deployment.json"
+    fence_path = Path(str(prefix) + ".fence-receipt.json")
+    maintenance_path = Path(str(prefix) + ".maintenance-receipt.json")
+    intent_path = Path(str(prefix) + ".maintenance-intent.json")
+    native_path = Path(str(prefix) + ".native-receipt.json")
+    common = {"source_commit": COMMIT, "fence_epoch": "7",
+              "postgres_container_id": postgres_id,
+              "postgres_system_identifier": "11", "database_oid": "22"}
+    write(fence_path, {"schema": "marty.passport-beta-fence-installation/v1",
+                       **common, "production_snapshot_sha256": "f" * 64,
+                       "production_attachments_sha256": "6" * 64})
+    stopped = ["a" * 64]
+    write(intent_path, {"schema": "marty.passport-beta-db-maintenance-plan/v1",
+                        **common, "stop_container_ids": stopped,
+                        "fence_receipt_sha256": digest(fence_path),
+                        "production_snapshot_sha256": "f" * 64,
+                        "production_attachments_sha256": "6" * 64})
+    write(maintenance_path, {
+        "schema": "marty.passport-beta-db-maintenance-start/v1", **common,
+        "stopped_container_ids": stopped, "intent_sha256": digest(intent_path),
+        "production_snapshot_sha256": "f" * 64,
+        "production_attachments_sha256": "6" * 64,
+    })
+    write(native_path, {
+        "schema": "marty.passport-beta-native-db-gates/v1", **common,
+        "maintenance_receipt_sha256": digest(maintenance_path),
+        "stopped_container_ids": stopped, "migration_set_sha256": "5" * 64,
+        "production_snapshot_sha256": "f" * 64, "app_login_enabled": False,
+    })
     plan = {
         "schema": "marty.passport-beta-aggregate-compose-plan/v1",
         "source_commit": COMMIT, "beta_origin": "https://beta.elevenidllc.com",
         "stack_manifest_sha256": signed["manifest_sha256"],
         "native_receipt_sha256": "e" * 64,
+        "fence_receipt_sha256": digest(fence_path),
+        "maintenance_receipt_sha256": digest(maintenance_path),
+        "postgres_container_id": postgres_id,
+        "postgres_system_identifier": "11", "database_oid": "22",
+        "fence_epoch": "7", "migration_set_sha256": "5" * 64,
         "production_snapshot_sha256": "f" * 64,
         "production_attachments_sha256": "6" * 64,
         "target_services": sorted(ALL_APPS),
@@ -71,6 +106,7 @@ def fixture(tmp_path: Path, monkeypatch):
         "ui_image": UI_IMAGE, "ui_config_hash": "2" * 64,
     }
     plan_path = tmp_path / "aggregate-deployment.json.plan.json"
+    plan["native_receipt_sha256"] = digest(native_path)
     write(plan_path, plan)
     identities = {}
     live = {}
@@ -139,7 +175,8 @@ def test_collects_exact_aggregate_generation_without_old_manifests(tmp_path, mon
     plan, receipt, identities, live, probe, seen = fixture(tmp_path, monkeypatch)
     report = collect(tmp_path, api_key="k" * 32, inspect=live.__getitem__,
                      probe=probe, attest=lambda *_: True,
-                     list_ids=lambda project: listed(live, project))
+                     list_ids=lambda project: listed(live, project),
+                     probe_native=lambda *_: None)
     assert report["release"]["source_commit"] == COMMIT
     assert report["release"]["signed_manifest_verified"] is True
     assert report["deployment"]["aggregate_deployment_receipt_sha256"] == digest(
@@ -163,7 +200,8 @@ def test_rejects_recreated_service_after_aggregate_receipt(tmp_path, monkeypatch
     with pytest.raises(EvidenceError, match="live project inventory differs"):
         collect(tmp_path, api_key="k" * 32, inspect=live.__getitem__,
                 probe=probe, attest=lambda *_: True,
-                list_ids=lambda project: listed(live, project))
+                list_ids=lambda project: listed(live, project),
+                probe_native=lambda *_: None)
 
 
 def test_rejects_receipt_or_plan_digest_drift(tmp_path, monkeypatch):
@@ -173,7 +211,8 @@ def test_rejects_receipt_or_plan_digest_drift(tmp_path, monkeypatch):
     with pytest.raises(EvidenceError, match="receipt, plan or source differs"):
         collect(tmp_path, api_key="k" * 32, inspect=live.__getitem__,
                 probe=probe, attest=lambda *_: True,
-                list_ids=lambda project: listed(live, project))
+                list_ids=lambda project: listed(live, project),
+                probe_native=lambda *_: None)
 
 
 def test_rejects_extra_live_beta_container(tmp_path, monkeypatch):
@@ -186,7 +225,8 @@ def test_rejects_extra_live_beta_container(tmp_path, monkeypatch):
     with pytest.raises(EvidenceError, match="live project inventory differs"):
         collect(tmp_path, api_key="k" * 32, inspect=live.__getitem__,
                 probe=probe, attest=lambda *_: True,
-                list_ids=lambda project: listed(live, project))
+                list_ids=lambda project: listed(live, project),
+                probe_native=lambda *_: None)
 
 
 def test_rejects_plan_that_omits_signed_applications(tmp_path, monkeypatch):
@@ -198,4 +238,25 @@ def test_rejects_plan_that_omits_signed_applications(tmp_path, monkeypatch):
     with pytest.raises(EvidenceError, match="signed application set is incomplete"):
         collect(tmp_path, api_key="k" * 32, inspect=live.__getitem__,
                 probe=probe, attest=lambda *_: True,
-                list_ids=lambda project: listed(live, project))
+                list_ids=lambda project: listed(live, project),
+                probe_native=lambda *_: None)
+
+
+def test_rejects_missing_native_receipt_even_with_matching_plan(tmp_path, monkeypatch):
+    _, _, _, live, probe, _ = fixture(tmp_path, monkeypatch)
+    (tmp_path / "aggregate-deployment.json.native-receipt.json").unlink()
+    with pytest.raises(EvidenceError, match="Invalid evidence file"):
+        collect(tmp_path, api_key="k" * 32, inspect=live.__getitem__,
+                probe=probe, attest=lambda *_: True,
+                list_ids=lambda project: listed(live, project),
+                probe_native=lambda *_: None)
+
+
+def test_rejects_live_native_marker_drift(tmp_path, monkeypatch):
+    _, _, _, live, probe, _ = fixture(tmp_path, monkeypatch)
+    monkeypatch.setattr(aggregate, "beta_psql", lambda *_: "wrong marker")
+    with pytest.raises(EvidenceError, match="native migration marker"):
+        aggregate.collect_aggregate(
+            tmp_path, api_key="k" * 32, inspect=live.__getitem__,
+            probe=probe, attest=lambda *_: True,
+            list_ids=lambda project: listed(live, project))
