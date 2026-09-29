@@ -259,10 +259,12 @@ impl FlowReferenceProvider for HttpFlowReferenceProvider {
         kind: FlowReferenceKind,
         reference_id: &str,
         principal_id: &str,
+        organization_id: &str,
     ) -> Result<FlowReference, FlowProviderError> {
         if reference_id.trim().is_empty()
             || reference_id.len() > 255
             || principal_id.trim().is_empty()
+            || organization_id.trim().is_empty()
         {
             return Err(invalid_config("reference_catalog"));
         }
@@ -271,11 +273,12 @@ impl FlowReferenceProvider for HttpFlowReferenceProvider {
         let response: ReferenceResponse = match kind {
             FlowReferenceKind::ApplicationTemplate => {
                 self.application_templates
-                    .json(
+                    .json_for_organization(
                         Method::GET,
                         &format!("v1/application-templates/{encoded}"),
                         &[],
                         None,
+                        organization_id,
                     )
                     .await?
             }
@@ -944,7 +947,12 @@ mod tests {
         .unwrap();
 
         let reference = provider
-            .resolve(FlowReferenceKind::TrustProfile, "trust-1", "user-1")
+            .resolve(
+                FlowReferenceKind::TrustProfile,
+                "trust-1",
+                "user-1",
+                "org-1",
+            )
             .await
             .unwrap();
         assert_eq!(reference.organization_id.as_deref(), Some("org-1"));
@@ -959,7 +967,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn application_template_lookup_uses_native_owner_with_api_key_only() {
+    async fn application_template_lookup_uses_native_owner_with_tenant_scope() {
         let captured = CapturedRead::default();
         let router = Router::new()
             .route(
@@ -987,6 +995,7 @@ mod tests {
                 FlowReferenceKind::ApplicationTemplate,
                 "application-template-1",
                 "user-1",
+                "org-1",
             )
             .await
             .unwrap();
@@ -997,6 +1006,7 @@ mod tests {
             "/v1/application-templates/application-template-1"
         );
         assert_eq!(headers.get("x-api-key").unwrap(), api_key);
+        assert_eq!(headers.get("x-organization-id").unwrap(), "org-1");
         assert!(headers.get("x-service-token").is_none());
         assert!(headers.get("x-user-id").is_none());
         server.abort();
@@ -1014,11 +1024,15 @@ mod tests {
         )
         .unwrap();
         assert!(references
-            .resolve(FlowReferenceKind::TrustProfile, "", "user-1")
+            .resolve(FlowReferenceKind::TrustProfile, "", "user-1", "org-1")
             .await
             .is_err());
         assert!(references
-            .resolve(FlowReferenceKind::TrustProfile, "trust-1", "")
+            .resolve(FlowReferenceKind::TrustProfile, "trust-1", "", "org-1")
+            .await
+            .is_err());
+        assert!(references
+            .resolve(FlowReferenceKind::TrustProfile, "trust-1", "user-1", "")
             .await
             .is_err());
     }

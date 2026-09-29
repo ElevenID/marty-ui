@@ -145,6 +145,7 @@ impl FlowReferenceProvider for Catalog {
         kind: FlowReferenceKind,
         reference_id: &str,
         _principal_id: &str,
+        _organization_id: &str,
     ) -> Result<FlowReference, FlowProviderError> {
         let system_owned = kind == FlowReferenceKind::DeliveryDestination;
         let organization_id = if system_owned {

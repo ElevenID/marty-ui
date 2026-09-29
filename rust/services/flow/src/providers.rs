@@ -409,6 +409,7 @@ pub trait FlowReferenceProvider: Send + Sync {
         kind: FlowReferenceKind,
         reference_id: &str,
         principal_id: &str,
+        organization_id: &str,
     ) -> Result<FlowReference, FlowProviderError>;
 }
 

@@ -81,7 +81,7 @@ fn contract() -> Contract {
 #[test]
 fn provider_composition_fails_closed_until_every_feature_port_is_present() {
     let contract = contract();
-    assert_eq!(contract.schema_version, 3);
+    assert_eq!(contract.schema_version, 4);
     assert_eq!(contract.required_providers, REQUIRED_FLOW_PROVIDERS);
     let registry = FlowProviderRegistry::default();
     assert_eq!(registry.missing(), REQUIRED_FLOW_PROVIDERS);
@@ -111,7 +111,7 @@ fn reference_catalog_preserves_authoritative_routes_and_authentication() {
         ReferenceOperation {
             method: "GET".into(),
             path: "v1/application-templates/{id}".into(),
-            headers: vec!["x-api-key".into()],
+            headers: vec!["x-api-key".into(), "x-organization-id".into()],
         }
     );
     assert_eq!(

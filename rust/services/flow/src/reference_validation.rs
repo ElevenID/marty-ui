@@ -93,7 +93,9 @@ pub async fn validate_definition_references(
     }
 
     for (kind, reference_id) in catalog_references(references) {
-        let reference = catalog.resolve(kind, reference_id, principal_id).await?;
+        let reference = catalog
+            .resolve(kind, reference_id, principal_id, organization_id)
+            .await?;
         validate_catalog_reference(
             kind,
             reference_id,
