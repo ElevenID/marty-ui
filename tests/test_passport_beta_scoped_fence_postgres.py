@@ -11,6 +11,10 @@ import uuid
 
 import pytest
 
+from scripts.probe_passport_beta_fence_direct_writes import (
+    FenceProbeError, candidate_sql, probe_direct_writes,
+)
+
 
 ROOT = Path(__file__).resolve().parents[1]
 SCHEMA = ROOT / "tests/fixtures/passport-beta-fence-schema.sql"
@@ -400,6 +404,43 @@ def test_one_shot_migration_role_preserves_fence_at_rest(
         SELECT rolcanlogin::text || '|' || rolinherit::text
         FROM pg_roles WHERE rolname='marty_beta_migrator'
     """) == "false|false\n"
+
+
+def test_direct_writer_probe_uses_valid_candidates_and_fence_errors(database: str):
+    container_id = docker("inspect", database, "--format", "{{.Id}}").stdout.strip()
+    system_id = sql(database, "SELECT system_identifier FROM pg_control_system()").strip()
+    database_oid = sql(database, "SELECT oid FROM pg_database WHERE datname='marty'").strip()
+    context = docker("context", "show").stdout.strip()
+    daemon_id = docker("info", "--format", "{{.ID}}").stdout.strip()
+    target = {
+        "expected_docker_context": context,
+        "expected_daemon_id": daemon_id,
+        "expected_system_identifier": system_id,
+        "expected_database_oid": database_oid,
+        "expected_fence_epoch": 1,
+    }
+    for statement in candidate_sql("a" * 32).values():
+        sql(database, f"BEGIN; {statement}; ROLLBACK;")
+    with pytest.raises(FenceProbeError):
+        probe_direct_writes(container_id, **target)
+    assert script(database, INSTALL).returncode == 0
+    target["expected_fence_epoch"] = int(sql(database, "SELECT epoch FROM passport_cutover.state"))
+    first = probe_direct_writes(container_id, **target)
+    second = probe_direct_writes(container_id, **target)
+    assert set(first["rejections"]) == {
+        "physical_document_jobs", "physical_flow_definitions",
+        "physical_flow_instances",
+    }
+    assert first["session_user"] == first["current_user"] == "marty"
+    assert first["database_uid"] == f"postgresql:{system_id}:{database_oid}"
+    assert first["fence_epoch"] == target["expected_fence_epoch"]
+    assert first["observation_watermark"] > target["expected_fence_epoch"]
+    assert second["observation_watermark"] > first["observation_watermark"]
+    assert first["observed_at_utc"].endswith("Z")
+    assert first["receipt_sha256"] != second["receipt_sha256"]
+    with pytest.raises(FenceProbeError):
+        probe_direct_writes(container_id, **{**target, "expected_fence_epoch": 1})
+    assert script(database, VERIFY).returncode == 0
 
 
 def test_install_waits_for_prior_writer_and_rechecks_drain(database: str):
