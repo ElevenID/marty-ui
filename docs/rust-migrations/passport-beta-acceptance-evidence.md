@@ -127,6 +127,10 @@ KMS signature only after native issuance accepts the signed callback and the
 status transition commits. Its authenticated private job poll returns the
 lowercase hex digest as `callback_receipt_sha256`; preexisting jobs can return
 `null`. The simulator never stores or returns the callback body or signature.
+The aggregate beta profile sends this callback through the private Gateway
+route to the native owner. The protected host probe checks the live simulator
+container's exact Gateway callback selection before using the receipt as
+route evidence. A route selection alone does not verify a delivered callback.
 The current batch diagnostic creates two separate native jobs, posts synthetic
 SOD and DSC material directly to the simulator, then binds through two native
 single submissions. This verifies simulator compatibility but cannot set the
