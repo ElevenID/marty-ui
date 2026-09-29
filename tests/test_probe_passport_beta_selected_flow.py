@@ -264,12 +264,20 @@ def test_flow_http_request_keeps_operator_cookie_private_and_rejects_redirect(mo
             seen.append(request)
             return Response()
 
-    monkeypatch.setattr(selected_flow, "build_opener", lambda *args: Opener())
+    handlers = []
+
+    def opener(*args):
+        handlers.extend(args)
+        return Opener()
+
+    monkeypatch.setattr(selected_flow, "build_opener", opener)
     status, payload = selected_flow.request_flow("POST", "/v1/flows/instances", {"organization_id": ORGANIZATION}, COOKIE)
     assert (status, payload) == (200, {"id": "instance-1"})
     assert seen[0].full_url == "https://beta.elevenidllc.com/v1/flows/instances"
     assert seen[0].get_header("Cookie") == COOKIE
     assert seen[0].get_header("X-api-key") is None
     assert json.loads(seen[0].data) == {"organization_id": ORGANIZATION}
+    assert any(isinstance(handler, selected_flow.ProxyHandler)
+               and handler.proxies == {} for handler in handlers)
     with pytest.raises(SelectedFlowError, match="request is invalid"):
         selected_flow.request_flow("POST", "/v1/flows/instances", {}, "bad\rCookie")
