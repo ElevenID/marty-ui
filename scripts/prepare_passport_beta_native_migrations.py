@@ -10,10 +10,12 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import os
 from pathlib import Path
 import re
 import subprocess
 import sys
+import tempfile
 from typing import Callable
 
 try:
@@ -45,6 +47,8 @@ PROTECTED = (
     "services/Dockerfile.migrations",
     "scripts/prepare_passport_beta_native_migrations.py",
     "scripts/sql/passport-beta-batch-acl-finalize.sql",
+    "scripts/sql/passport-beta-db-enable-app-login.sql",
+    "scripts/run-passport-beta-native-db-gates.ps1",
     *MIGRATIONS,
 )
 NUMBER = re.compile(r"[1-9][0-9]*\Z")
@@ -241,8 +245,43 @@ def prepare(manifest: Path, fence_receipt: Path) -> tuple[dict[str, object], byt
             for relative, data in migrations
         ],
         "sql_sha256": hashlib.sha256(payload).hexdigest(),
+        "batch_acl_sql_sha256": hashlib.sha256(
+            (ROOT / "scripts/sql/passport-beta-batch-acl-finalize.sql").read_bytes()
+        ).hexdigest(),
+        "enable_login_sql_sha256": hashlib.sha256(
+            (ROOT / "scripts/sql/passport-beta-db-enable-app-login.sql").read_bytes()
+        ).hexdigest(),
     }
     return plan, payload
+
+
+def stage_sql(path: Path, payload: bytes) -> None:
+    """Create or verify a durable byte-exact payload outside protected source."""
+    require(path.is_absolute() and not path.resolve().is_relative_to(ROOT.resolve()),
+            "Native SQL stage path must be absolute and outside protected source")
+    if path.exists():
+        require(path.is_file() and not path.is_symlink()
+                and path.read_bytes() == payload,
+                "Existing native SQL stage differs from signed source")
+        return
+    with tempfile.NamedTemporaryFile(
+        dir=path.parent, prefix=path.name + ".stage-", delete=False
+    ) as stream:
+        temporary = Path(stream.name)
+        stream.write(payload)
+        stream.flush()
+        os.fsync(stream.fileno())
+    try:
+        try:
+            # A hard link publishes complete bytes without replacing a prior
+            # stage, on the same filesystem as the target path.
+            os.link(temporary, path)
+        except FileExistsError:
+            require(path.is_file() and not path.is_symlink()
+                    and path.read_bytes() == payload,
+                    "Existing native SQL stage differs from signed source")
+    finally:
+        temporary.unlink(missing_ok=True)
 
 
 def main() -> None:
@@ -250,9 +289,14 @@ def main() -> None:
     parser.add_argument("--stack-manifest", type=Path, required=True)
     parser.add_argument("--fence-receipt", type=Path, required=True)
     parser.add_argument("--emit-sql", action="store_true")
+    parser.add_argument("--output-sql", type=Path)
     args = parser.parse_args()
     try:
+        require(not (args.emit_sql and args.output_sql),
+                "Choose one native SQL output mode")
         plan, payload = prepare(args.stack_manifest, args.fence_receipt)
+        if args.output_sql:
+            stage_sql(args.output_sql, payload)
     except (NativeMigrationError, OSError, KeyError, ValueError) as exc:
         raise SystemExit(f"Protected beta native migration is unavailable: {exc}") from exc
     if args.emit_sql:

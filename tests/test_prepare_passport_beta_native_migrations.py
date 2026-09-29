@@ -111,3 +111,15 @@ def test_prepare_binds_protected_main_receipt_and_signed_image(monkeypatch, tmp_
     assert plan["migrations"][0]["path"] == MIGRATIONS[0]
     assert payload.endswith(b"COMMIT;\n")
     assert plan["migration_set_sha256"] in payload.decode("ascii")
+
+
+def test_staged_native_sql_is_byte_exact_and_retry_safe(tmp_path):
+    path = tmp_path / "native.sql"
+    (tmp_path / "native.sql.stage-interrupted").write_bytes(b"truncated")
+    native.stage_sql(path, b"SELECT 1;\n")
+    native.stage_sql(path, b"SELECT 1;\n")
+    assert path.read_bytes() == b"SELECT 1;\n"
+    with pytest.raises(NativeMigrationError, match="differs from signed source"):
+        native.stage_sql(path, b"SELECT 2;\n")
+    with pytest.raises(NativeMigrationError, match="outside protected source"):
+        native.stage_sql(native.ROOT / "native.sql", b"SELECT 1;\n")
