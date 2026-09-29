@@ -54,6 +54,9 @@ if ($PlanOnly) {
     exit 0
 }
 
+. (Join-Path $PSScriptRoot "beta-deployment-lock.ps1")
+$betaDeploymentLock = Enter-BetaDeploymentLock -AllowPending
+try {
 # The switch is only a request for a plan. A caller may omit it while passing
 # a physical snapshot, so identify the snapshot and live beta service labels
 # before any restore action regardless of requested mode.
@@ -74,6 +77,7 @@ foreach ($service in $physicalServices) {
     }
 }
 
+Start-BetaMutation -ResumePending
 $project = "elevenid-beta"
 $uiProject = "elevenid-beta-ui"
 $volumeHelperImage = "alpine@sha256:d9e853e87e55526f6b2917df91a2115c36dd7c696a35be12163d44e6e2a4b6bc"
@@ -533,3 +537,8 @@ if ($uiRecord.Count -eq 1) {
     openbao_process_preserved = $true
 } | ConvertTo-Json -Depth 4 | Set-Content -LiteralPath (Join-Path $resolvedArtifacts "beta-restore-audit.json") -Encoding utf8
 Write-Host "Supervised elevenid-beta restore complete; self-host production was not addressed."
+Complete-BetaMutation
+}
+finally {
+    Exit-BetaDeploymentLock -Lock $betaDeploymentLock
+}

@@ -1019,6 +1019,19 @@ if ($PlanOnly) {
     exit 0
 }
 
+function Assert-MaintenanceContainersRestored([string[]]$ExpectedContainers) {
+    $actual = @(Get-ServiceRecords `
+        ($script:SelectedApplicationServices + $script:InfrastructureWriterServices) `
+        -IncludeUi | Where-Object { $_.running } | ForEach-Object { $_.container_id } | Sort-Object)
+    $expected = @($ExpectedContainers | Sort-Object)
+    if (($actual -join ',') -ne ($expected -join ',')) {
+        throw "Beta maintenance recovery did not restore the exact running container set; expected $($expected -join ', '), found $($actual -join ', ')"
+    }
+}
+
+. (Join-Path $PSScriptRoot "beta-deployment-lock.ps1")
+$betaDeploymentLock = Enter-BetaDeploymentLock
+try {
 New-Item -ItemType Directory -Path $logsDir -Force | Out-Null
 if ($OfficialStackRelease) {
     Write-Utf8Text -Path $sourceManifestPath -Content (($sourceManifest | ConvertTo-Json -Depth 8) + "`n")
@@ -1425,16 +1438,19 @@ Assert-BetaPassportConfiguration -RepoRoot $script:RepoRoot -EnvFiles $script:En
 $canvasLtiIssuerDid = $null
 $maintenanceServices = $script:SelectedApplicationServices + $script:InfrastructureWriterServices + @("ui-prod")
 $maintenanceContainers = @($preDeployContainers | Where-Object { $_.running -and $_.service -in $maintenanceServices } | ForEach-Object { $_.container_id })
-if ($maintenanceContainers.Count -gt 0) {
-    Invoke-Checked -FilePath docker -Arguments (@("stop") + $maintenanceContainers)
-}
 $liveMutationStarted = $false
+$maintenanceStarted = $false
 try {
-    foreach ($container in $maintenanceContainers) {
-        $running = docker inspect $container --format '{{.State.Running}}' 2>$null
-        if ($LASTEXITCODE -ne 0 -or $running -ne "false") {
-            throw "Beta writer did not stop cleanly: $container"
-        }
+    Start-BetaMutation
+    $maintenanceStarted = $true
+    if ($maintenanceContainers.Count -gt 0) {
+        Invoke-Checked -FilePath docker -Arguments (@("stop") + $maintenanceContainers)
+    }
+    $runningWriters = @(Get-ServiceRecords `
+        ($script:SelectedApplicationServices + $script:InfrastructureWriterServices) `
+        -IncludeUi | Where-Object { $_.running })
+    if ($runningWriters.Count -ne 0) {
+        throw "Beta application writers remain after maintenance stop"
     }
 
     if ($EnablePassportNative) {
@@ -1453,6 +1469,7 @@ try {
     "& `"$restoreScript`" -ArtifactDir `"$script:ArtifactDir`" -TunnelEnvFile `"$TunnelEnvFile`" -GeneratedEnvFile `"$GeneratedEnvFile`" -ConfirmBetaRestore" | Set-Content -LiteralPath (Join-Path $script:ArtifactDir "supervised-recovery.txt") -Encoding utf8
 
     Write-Step "Reconcile beta OpenBao state from release configuration"
+    $liveMutationStarted = $true
     Invoke-ComposeLogged `
         -Arguments @("run", "--rm", "--no-deps", "openbao-init") `
         -LogPath (Join-Path $logsDir "openbao-init-live.log") `
@@ -1541,9 +1558,16 @@ try {
     Wait-ForServiceHealth @("ui-prod") -Ui
 }
 catch {
-    if (-not $liveMutationStarted) {
+    if ($maintenanceStarted -and -not $liveMutationStarted) {
         Start-ContainersBestEffort $maintenanceContainers
-        Write-Warning "Deployment failed before live mutation. Previously running beta containers were restarted."
+        try {
+            Assert-MaintenanceContainersRestored $maintenanceContainers
+            Complete-BetaMutation
+            Write-Warning "Deployment failed before live mutation. The exact previously running beta container set was restored."
+        }
+        catch {
+            Write-Warning "Automatic beta recovery could not verify the exact prior container set. The mutation marker remains; inspect beta state and use supervised restore. $($_.Exception.Message)"
+        }
     }
     else {
         Write-Warning "Deployment failed after live mutation began. Run the supervised beta-only command in $script:ArtifactDir\supervised-recovery.txt before resuming service."
@@ -1661,3 +1685,8 @@ Write-Step "Beta deployment complete"
 Write-Host "Release: $releaseVersion"
 Write-Host "Source ID: $sourceId"
 Write-Host "Evidence: $script:ArtifactDir"
+Complete-BetaMutation
+}
+finally {
+    Exit-BetaDeploymentLock -Lock $betaDeploymentLock
+}

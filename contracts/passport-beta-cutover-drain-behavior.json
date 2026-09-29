@@ -3,6 +3,7 @@
   "scope": "First beta cutover to KMS-only passport custody and KMS-verified bureau callbacks after application writers stop",
   "terminal_statuses": ["ACTIVE", "FAILED", "CANCELLED"],
   "missing_job_table": "allow initial deployment before native physical-document migration",
+  "writer_fence": "Hold one exclusive beta deployment/restore mutation lock from before the application inventory and backup through maintenance, drain, migration, and application restart. Persist a host-wide pending marker before stopping writers; an interrupted mutation blocks a new deployment until a supervised restore succeeds. After stopping writers, re-enumerate every beta application and infrastructure writer plus the UI and reject any running replacement before querying the drain or claiming a quiesced backup. Clear the pending marker after successful deployment or restore, or after a pre-mutation failure only when the exact prior running container set has been verified restored.",
   "policy": "Every nonterminal physical-document job blocks callback cutover, including a SOD_SIGNED job whose bureau_job_id is still null during bureau submission. A stored legacy Fernet or unknown artifact blocks even if its job is terminal, because this cutover has no artifact migration or replay path.",
   "artifact_policy": {
     "native_shape": "JSON object with schema marty.passport-artifact-manifest/v1 and one or more bounded vault:v ciphertext chunks",
