@@ -9,15 +9,26 @@ producer can qualify a preliminary receipt.
 from __future__ import annotations
 
 import hashlib
+import hmac
 import json
 import math
 import re
 from pathlib import Path
 from typing import Any
+from uuid import UUID
+
+try:
+    from .probe_passport_beta_flow import PHYSICAL_STEPS
+    from .probe_passport_beta_selected_flow import PASSPORT_FLOW_ROUTES
+except ImportError:
+    from probe_passport_beta_flow import PHYSICAL_STEPS
+    from probe_passport_beta_selected_flow import PASSPORT_FLOW_ROUTES
 
 
 SHA256 = re.compile(r"[0-9a-f]{64}\Z")
 COMMIT = re.compile(r"[0-9a-f]{40}\Z")
+IDENTIFIER = re.compile(r"[A-Za-z0-9._:-]{1,255}\Z")
+SERVICES_IMAGE = re.compile(r"ghcr\.io/elevenid/marty-ui-oss/services@sha256:[0-9a-f]{64}\Z")
 MEDIA_FILES = {
     "unsigned": ("unsigned-callback-uncut.webm", "unsigned-callback-privacy-scan.json"),
     "foreign": ("foreign-callback-uncut.webm", "foreign-callback-privacy-scan.json"),
@@ -28,6 +39,30 @@ CASE_FIELDS = {
     "job_state_before_commitment", "job_state_after_commitment",
     "video_sha256", "privacy_scan_report_sha256",
 }
+ROUTES = (
+    ("GET", "/v1/passport/capabilities"), *PASSPORT_FLOW_ROUTES,
+    ("POST", "/v1/passport/webhooks/personalization"),
+)
+PRIVATE_LABELS = {
+    "organization_commitment": ("organization", "organization_id"),
+    "flow_definition_commitment": ("flow-definition", "flow_definition_id"),
+    "flow_instance_commitment": ("flow-instance", "flow_instance_id"),
+    "application_commitment": ("application", "application_id"),
+    "source_job_commitment": ("source-job", "source_job_id"),
+    "bureau_job_commitment": ("bureau-job", "bureau_job_id"),
+}
+BATCH_PUBLIC_FIELDS = (
+    "provider_kind", "physical_claim", "http_status", "batch_status",
+    "selected_flow_in_two_job_batch", "native_binding_verified",
+    "first_accepted_material_verified", "companion_native_completed",
+    "companion_callback_receipt_sha256", "selected_source_job_commitment",
+    "selected_bureau_job_commitment", "companion_source_job_commitment",
+    "companion_bureau_job_commitment", "submitted_job_commitments",
+    "returned_jobs", "request_commitment", "response_commitment",
+    "source_commit", "stack_manifest_sha256", "services_oci_reference",
+    "native_completed_jobs", "selected_flow_callback_verified",
+    "selected_callback_receipt_sha256",
+)
 
 
 class PreliminaryEvidenceError(ValueError):
@@ -163,4 +198,203 @@ def verify_negative_media(
             "unsigned_uncut_video_sha256": unsigned["video_sha256"],
             "foreign_uncut_video_sha256": foreign["video_sha256"],
         }},
+    }
+
+
+def _probe(report: dict[str, Any], name: str) -> dict[str, Any]:
+    probes = report.get("probes")
+    require(isinstance(probes, dict), "Selected beta passport probes are unavailable")
+    item = probes.get(name)
+    require(isinstance(item, dict) and item.get("verified") is True
+            and isinstance(item.get("evidence"), dict),
+            f"Selected beta passport probe is incomplete: {name}")
+    return item["evidence"]
+
+
+def _commitment(api_key: str, label: str, value: str) -> str:
+    return hmac.new(api_key.encode("utf-8"), f"{label}:{value}".encode("utf-8"),
+                    hashlib.sha256).hexdigest()
+
+
+def verify_positive_job(report: dict[str, Any], private_plan: dict[str, Any],
+                        api_key: str) -> dict[str, Any]:
+    """Correlate selected Rust Flow, KMS chain, native batch, and callback."""
+    require(isinstance(report, dict)
+            and report.get("schema") == "marty.passport-beta-acceptance/v1"
+            and report.get("status") == "blocked"
+            and report.get("beta_origin") == "https://beta.elevenidllc.com"
+            and report.get("physical_claim") == "not_claimed"
+            and isinstance(report.get("release"), dict)
+            and report["release"].get("signed_manifest_verified") is True
+            and isinstance(report.get("deployment"), dict)
+            and report["deployment"].get("provider_mode") == "simulator"
+            and isinstance(api_key, str) and len(api_key) >= 32
+            and not any(character in api_key for character in "\r\n\0"),
+            "Signed simulator acceptance report is unavailable")
+    release, deployment = report["release"], report["deployment"]
+    require(isinstance(release.get("source_commit"), str)
+            and COMMIT.fullmatch(release["source_commit"]) is not None
+            and isinstance(release.get("stack_manifest_sha256"), str)
+            and SHA256.fullmatch(release["stack_manifest_sha256"]) is not None
+            and all(isinstance(deployment.get(key), str)
+                    and SHA256.fullmatch(deployment[key]) is not None
+                    for key in ("aggregate_deployment_receipt_sha256", "aggregate_plan_sha256")),
+            "Aggregate beta release lineage is incomplete")
+    require(isinstance(private_plan, dict)
+            and set(private_plan) == {"schema", "source_commit", "stack_manifest_sha256",
+                                      *[field for _, field in PRIVATE_LABELS.values()]}
+            and private_plan.get("schema") == "marty.passport-beta-demo-private/v1"
+            and private_plan.get("source_commit") == release["source_commit"]
+            and private_plan.get("stack_manifest_sha256") == release["stack_manifest_sha256"]
+            and all(isinstance(private_plan.get(field), str)
+                    and IDENTIFIER.fullmatch(private_plan[field]) is not None
+                    for _, field in PRIVATE_LABELS.values()),
+            "Protected selected-job handoff differs from signed release")
+    try:
+        require(str(UUID(private_plan["bureau_job_id"])) == private_plan["bureau_job_id"],
+                "Selected bureau job ID is not canonical")
+    except ValueError as exc:
+        raise PreliminaryEvidenceError("Selected bureau job ID is not canonical") from exc
+    selected = {field: _commitment(api_key, label, private_plan[private_field])
+                for field, (label, private_field) in PRIVATE_LABELS.items()}
+    flow = _probe(report, "selected_physical_flow")
+    route_owner = _probe(report, "beta_native_route_ownership")
+    capability = _probe(report, "capabilities_http")
+    webhook = _probe(report, "flow_capability_and_webhook_denial")
+    require(flow.get("ordered_steps") == list(PHYSICAL_STEPS)
+            and flow.get("completed_steps") == len(PHYSICAL_STEPS) == 9
+            and flow.get("flow_routes") == [
+                {"method": method, "path": path} for method, path in PASSPORT_FLOW_ROUTES]
+            and all(flow.get(field) == commitment for field, commitment in selected.items())
+            and flow.get("terminal_native_status") == "ACTIVE"
+            and flow.get("physical_claim") == "not_claimed"
+            and route_owner.get("native_selectors") is True
+            and route_owner.get("flow_native_target") is True
+            and route_owner.get("webhook_owner") == "issuance-native"
+            and route_owner.get("simulator_callback_gateway_target") is True
+            and capability == {"http_status": 200, "supported": True,
+                               "signer_mode": "MANAGED_ISSUER_PROFILE"}
+            and webhook.get("unsigned_webhook_owner") == "issuance-native"
+            and webhook.get("signature_denial_verified") is True,
+            "Selected nine-step Rust Flow and Gateway routes are unproven")
+    chain = _probe(report, "managed_csca_dsc_chain")
+    sod = _probe(report, "sod_signature")
+    material = _probe(report, "simulator_material_receipt")
+    batch = _probe(report, "physical_bureau_batch")
+    require(chain.get("managed_kms_custody_verified") is True
+            and chain.get("chain_verified") is True
+            and chain.get("sod_dsc_binding_verified") is True
+            and all(chain.get(field) == selected[field]
+                    for field in ("organization_commitment", "application_commitment",
+                                  "source_job_commitment"))
+            and all(isinstance(chain.get(field), str)
+                    and SHA256.fullmatch(chain[field]) is not None
+                    for field in ("csca_issuer_profile_commitment",
+                                  "dsc_issuer_profile_commitment", "sod_dsc_certificate_sha256"))
+            and chain["csca_issuer_profile_commitment"] != chain["dsc_issuer_profile_commitment"]
+            and sod.get("source_job_commitment") == selected["source_job_commitment"]
+            and sod.get("dsc_certificate_sha256") == chain["sod_dsc_certificate_sha256"]
+            and isinstance(sod.get("sod_sha256"), str)
+            and SHA256.fullmatch(sod["sod_sha256"]) is not None
+            and flow.get("sod_sha256") == sod["sod_sha256"]
+            and material.get("tenant_and_job_binding") is True
+            and material.get("first_accepted_sod_der_matches_native") is True
+            and material.get("first_accepted_dsc_der_matches_selected_chain") is True
+            and material.get("first_accepted_dsc_pem_wire_matches_selected_chain") is True
+            and material.get("source_job_id_commitment") == selected["source_job_commitment"]
+            and material.get("bureau_job_id_commitment") == selected["bureau_job_commitment"],
+            "Managed certificate, selected SOD, or first accepted material differs")
+    selected_jobs = batch.get("returned_jobs")
+    require(batch.get("provider_kind") == "simulator"
+            and batch.get("physical_claim") == "not_claimed"
+            and batch.get("selected_flow_in_two_job_batch") is True
+            and batch.get("native_binding_verified") is True
+            and batch.get("first_accepted_material_verified") is True
+            and batch.get("companion_native_completed") is True
+            and batch.get("selected_flow_callback_verified") is True
+            and batch.get("native_completed_jobs") == 2
+            and batch.get("http_status") == 202 and batch.get("batch_status") == "QUEUED"
+            and batch.get("selected_source_job_commitment") == selected["source_job_commitment"]
+            and batch.get("selected_bureau_job_commitment") == selected["bureau_job_commitment"]
+            and batch.get("selected_callback_receipt_sha256") == flow.get("callback_receipt_sha256")
+            and isinstance(batch.get("selected_callback_receipt_sha256"), str)
+            and SHA256.fullmatch(batch["selected_callback_receipt_sha256"]) is not None
+            and batch.get("source_commit") == release["source_commit"]
+            and batch.get("stack_manifest_sha256") == release["stack_manifest_sha256"]
+            and isinstance(batch.get("services_oci_reference"), str)
+            and SERVICES_IMAGE.fullmatch(batch["services_oci_reference"]) is not None
+            and all(isinstance(batch.get(field), str)
+                    and SHA256.fullmatch(batch[field]) is not None
+                    for field in ("request_commitment", "response_commitment",
+                                  "companion_callback_receipt_sha256",
+                                  "companion_source_job_commitment",
+                                  "companion_bureau_job_commitment"))
+            and isinstance(batch.get("submitted_job_commitments"), list)
+            and len(batch["submitted_job_commitments"]) == 2
+            and all(isinstance(item, str) and SHA256.fullmatch(item) is not None
+                    for item in batch["submitted_job_commitments"])
+            and len(set(batch["submitted_job_commitments"])) == 2
+            and selected["source_job_commitment"] in batch["submitted_job_commitments"]
+            and isinstance(selected_jobs, list) and len(selected_jobs) == 2
+            and all(isinstance(item, dict)
+                    and set(item) == {"source_job_commitment", "bureau_job_commitment"}
+                    and all(isinstance(item.get(field), str)
+                            and SHA256.fullmatch(item[field]) is not None
+                            for field in ("source_job_commitment", "bureau_job_commitment"))
+                    and item["source_job_commitment"] in batch["submitted_job_commitments"]
+                    for item in selected_jobs)
+            and len({item["source_job_commitment"] for item in selected_jobs}) == 2
+            and len({item["bureau_job_commitment"] for item in selected_jobs}) == 2
+            and sum(isinstance(item, dict)
+                    and item.get("source_job_commitment") == selected["source_job_commitment"]
+                    and item.get("bureau_job_commitment") == selected["bureau_job_commitment"]
+                    for item in selected_jobs) == 1,
+            "Selected job is absent from native two-job simulator batch")
+    boundary = _probe(report, "physical_claim_boundary")
+    require(boundary == {"physical_claim": "not_claimed", "booklet_verified": False},
+            "Passport evidence claims a physical booklet")
+    return {
+        "selected": selected,
+        "probes": {
+            "managed_csca_dsc_chain": {"verified": True, "evidence": {
+                field: chain[field] for field in (
+                    "csca_issuer_profile_commitment", "dsc_issuer_profile_commitment",
+                    "managed_kms_custody_verified", "chain_verified", "sod_dsc_binding_verified",
+                    "sod_dsc_certificate_sha256", "organization_commitment",
+                    "application_commitment", "source_job_commitment")}},
+            "sod_signature": {"verified": True, "evidence": {
+                "sod_sha256": sod["sod_sha256"],
+                "dsc_certificate_sha256": sod["dsc_certificate_sha256"],
+                "source_job_commitment": sod["source_job_commitment"]}},
+            "simulator_material_receipt": {"verified": True, "evidence": {
+                field: material[field] for field in (
+                    "tenant_and_job_binding", "first_accepted_sod_der_matches_native",
+                    "first_accepted_dsc_der_matches_selected_chain",
+                    "first_accepted_dsc_pem_wire_matches_selected_chain",
+                    "source_job_id_commitment", "bureau_job_id_commitment")}},
+            "nine_route_gateway_flow": {"verified": True, "evidence": {
+                "routes": [{"method": method, "path": path} for method, path in ROUTES],
+                "gateway_owner": "rust", "flow_owner": "rust",
+                "ordered_steps": flow["ordered_steps"], "completed_steps": flow["completed_steps"],
+                **selected}},
+            "physical_bureau_batch": {"verified": True, "evidence": {
+                field: batch[field] for field in BATCH_PUBLIC_FIELDS if field in batch}},
+            "physical_bureau_submission": {"verified": True, "evidence": {
+                "provider_kind": "simulator", "physical_claim": "not_claimed",
+                "selected_source_job_commitment": selected["source_job_commitment"],
+                "selected_bureau_job_commitment": selected["bureau_job_commitment"],
+                "organization_commitment": selected["organization_commitment"],
+                "application_commitment": selected["application_commitment"],
+                "flow_instance_commitment": selected["flow_instance_commitment"]}},
+            "signed_bureau_callback": {"verified": True, "evidence": {
+                "provider_kind": "simulator", "physical_claim": "not_claimed",
+                "signature_verified": True, "organization_bound": True,
+                "source_job_commitment": selected["source_job_commitment"],
+                "bureau_job_commitment": selected["bureau_job_commitment"],
+                "organization_commitment": selected["organization_commitment"],
+                "application_commitment": selected["application_commitment"],
+                "flow_instance_commitment": selected["flow_instance_commitment"],
+                "callback_receipt_sha256": batch["selected_callback_receipt_sha256"]}},
+            "physical_claim_boundary": {"verified": True, "evidence": boundary},
+        },
     }
