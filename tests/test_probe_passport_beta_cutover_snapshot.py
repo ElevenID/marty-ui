@@ -176,6 +176,7 @@ def test_zero_count_and_watermark_are_read_together_after_direct_probe() -> None
 
 def test_host_record_uses_os_known_folder_not_programdata_env(monkeypatch) -> None:
     monkeypatch.setenv("ProgramData", "C:/forged")
+    monkeypatch.setattr(snapshot, "os", SimpleNamespace(name="nt"))
 
     def known_folder(_hwnd, folder, _token, _flags, buffer):
         assert folder == 35
@@ -186,3 +187,31 @@ def test_host_record_uses_os_known_folder_not_programdata_env(monkeypatch) -> No
         shell32=SimpleNamespace(SHGetFolderPathW=known_folder)), raising=False)
     assert snapshot.host_fence_marker() == snapshot.Path(
         "C:/trusted-program-data/ElevenID-Marty-elevenid-beta-passport-fence.pending")
+
+
+def test_wsl_host_record_resolves_windows_known_folder(monkeypatch) -> None:
+    monkeypatch.setenv("ProgramData", "C:/forged")
+    monkeypatch.setattr(snapshot, "os", SimpleNamespace(
+        name="posix", uname=lambda: SimpleNamespace(release="6.6.0-microsoft-standard-WSL2")))
+    commands: list[list[str]] = []
+
+    def runner(command: list[str]) -> str:
+        commands.append(command)
+        return "D:\\SystemData" if command[0] == "powershell.exe" else "/mnt/d/SystemData"
+
+    assert snapshot.host_fence_marker(runner) == snapshot.Path(
+        "/mnt/d/SystemData/ElevenID-Marty-elevenid-beta-passport-fence.pending")
+    assert commands[1] == ["wslpath", "-u", "D:\\SystemData"]
+
+
+def test_wsl_receipt_path_maps_installer_windows_path(monkeypatch) -> None:
+    monkeypatch.setattr(snapshot, "os", SimpleNamespace(name="posix"))
+    commands: list[list[str]] = []
+
+    def runner(command: list[str]) -> str:
+        commands.append(command)
+        return "/mnt/d/evidence/fence.json"
+
+    assert snapshot.host_receipt_path("D:\\evidence\\fence.json", runner) == snapshot.Path(
+        "/mnt/d/evidence/fence.json")
+    assert commands == [["wslpath", "-u", "D:\\evidence\\fence.json"]]
