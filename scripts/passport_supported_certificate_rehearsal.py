@@ -12,6 +12,7 @@ from datetime import datetime, timedelta, timezone
 import json
 import os
 from pathlib import Path
+import re
 from typing import Callable
 
 if __package__:
@@ -46,6 +47,11 @@ else:
 
 WORKFLOW_NAME = "Passport Supported Disposable Certificate Rehearsal"
 RESERVED_TEARDOWN = timedelta(minutes=10)
+SHA256 = re.compile(r"[0-9a-f]{64}\Z")
+CERTIFICATE_HASHES = (
+    "csca_certificate_sha256", "dsc_certificate_sha256",
+    "csca_issuer_did_sha256", "dsc_issuer_did_sha256",
+)
 
 
 def _certificate_deadline(environment: dict[str, str]) -> datetime:
@@ -126,6 +132,16 @@ def rehearse_certificates(
             or certificate.get("project") != plan["project"]
             or certificate.get("source_commit") != plan["source_commit"]
             or not isinstance(certificate.get("evidence"), dict)):
+            raise ProducerError("Disposable certificate setup evidence is invalid")
+        evidence = certificate["evidence"]
+        if (any(type(evidence.get(field)) is not str
+                or SHA256.fullmatch(evidence[field]) is None
+                for field in CERTIFICATE_HASHES)
+            or evidence.get("chain_verified_by") != "openssl-x509-strict"
+            or type(evidence.get("csca_http_status")) is not int
+            or evidence["csca_http_status"] != 200
+            or type(evidence.get("dsc_http_status")) is not int
+            or evidence["dsc_http_status"] != 200):
             raise ProducerError("Disposable certificate setup evidence is invalid")
         return {
             "schema": "marty.passport-supported-certificate-rehearsal/v1",

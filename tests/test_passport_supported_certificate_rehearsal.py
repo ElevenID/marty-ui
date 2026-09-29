@@ -54,7 +54,11 @@ def setup_report(selected: dict) -> dict:
         "status": "setup_only", "gateway_operator_authorization_verified": False,
         "project": selected["project"], "source_commit": SOURCE,
         "evidence": {"csca_certificate_sha256": "1" * 64,
-                     "dsc_certificate_sha256": "2" * 64},
+                     "dsc_certificate_sha256": "2" * 64,
+                     "csca_issuer_did_sha256": "3" * 64,
+                     "dsc_issuer_did_sha256": "4" * 64,
+                     "csca_http_status": 200, "dsc_http_status": 200,
+                     "chain_verified_by": "openssl-x509-strict"},
     }
 
 
@@ -145,6 +149,49 @@ def test_failed_certificate_setup_forces_teardown(tmp_path: Path) -> None:
         )
     assert cleanup == [True]
     assert not (Path(tempfile.gettempdir()) / selected["project"]).exists()
+
+
+@pytest.mark.parametrize("invalid_evidence", [
+    {},
+    {"csca_certificate_sha256": "not-a-hash"},
+    {"chain_verified_by": "unverified"},
+    {"dsc_http_status": 500},
+])
+def test_invalid_certificate_proof_forces_teardown(
+    tmp_path: Path, invalid_evidence: dict,
+) -> None:
+    selected = plan()
+    cleanup = []
+    report = setup_report(selected)
+    report["evidence"].update(invalid_evidence)
+    if not invalid_evidence:
+        report["evidence"] = {}
+
+    def run(args: list[str], env: dict[str, str], timeout: int) -> bool:
+        if args[:2] == ["docker", "run"]:
+            mount = next(value for value in args
+                         if value.startswith("type=bind,src=")
+                         and value.endswith(",dst=/work/secrets"))
+            output_dir = Path(mount.removeprefix("type=bind,src=").removesuffix(
+                ",dst=/work/secrets"))
+            (output_dir / "bao_token").write_text("hvs.disposable-service-token")
+            (output_dir / "callback_signer_bao_token").write_text(
+                "hvs.disposable-callback-token")
+        return True
+
+    with pytest.raises(ProducerError, match="setup evidence is invalid"):
+        rehearse_certificates(
+            tmp_path / "plan.json", tmp_path / "manifest.json", "123456",
+            {}, 29877, now=NOW,
+            deadline_lookup=lambda env: NOW + timedelta(minutes=60),
+            verify=lambda *args, **kwargs: selected,
+            preflight=lambda *args, **kwargs: selected,
+            inspect=lambda args: "",
+            run=run,
+            setup=lambda *args, **kwargs: report,
+            teardown=lambda *args, **kwargs: cleanup.append(True) or True,
+        )
+    assert cleanup == [True]
 
 
 def test_preflight_or_surface_failure_never_starts_docker(tmp_path: Path) -> None:
