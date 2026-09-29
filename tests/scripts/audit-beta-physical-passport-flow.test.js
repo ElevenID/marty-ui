@@ -194,6 +194,8 @@ test('D-12 preliminary report requires exact simulator lineage and job proof', (
       (value) => { value.status = 'accepted'; },
       (value) => { value.release.source_commit = 'b'.repeat(40); },
       (value) => { value.deployment.provider_mode = 'physical'; },
+      (value) => { value.deployment.aggregate_deployment_receipt_sha256 = sha('9'); },
+      (value) => { value.deployment.aggregate_plan_sha256 = sha('9'); },
       (value) => { value.provider_ingress_runtime_image = {}; },
       (value) => { value.probes.physical_claim_boundary.evidence.booklet_verified = true; },
       (value) => { value.probes.managed_csca_dsc_chain.evidence.dsc_issuer_profile_commitment = value.probes.managed_csca_dsc_chain.evidence.csca_issuer_profile_commitment; },
@@ -234,6 +236,16 @@ test('D-12 preliminary report requires exact simulator lineage and job proof', (
       mutate(changed);
       assert.throws(() => validatePreliminary(changed, deployment, artifactDir, privatePlan, API_KEY));
     }
+    const planPath = path.join(artifactDir, 'aggregate-deployment.json.plan.json');
+    const originalPlan = fs.readFileSync(planPath);
+    fs.appendFileSync(planPath, ' ');
+    assert.throws(() => validatePreliminary(report, deployment, artifactDir, privatePlan, API_KEY));
+    fs.writeFileSync(planPath, originalPlan);
+    const receiptPath = path.join(artifactDir, 'aggregate-deployment.json');
+    const originalReceipt = fs.readFileSync(receiptPath);
+    fs.appendFileSync(receiptPath, ' ');
+    assert.throws(() => validatePreliminary(report, deployment, artifactDir, privatePlan, API_KEY));
+    fs.writeFileSync(receiptPath, originalReceipt);
     assert.throws(() => validatePreliminary(report, deployment, artifactDir,
       { ...privatePlan, source_job_id: 'other-job' }, API_KEY));
     assert.throws(() => validatePreliminary(report, deployment, artifactDir,

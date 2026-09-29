@@ -72,14 +72,25 @@ def digest_file(path: Path) -> str:
     return f"sha256:{checksum}"
 
 
-def production_snapshot_commitment(api_key: str, snapshot_sha256: str) -> str:
+def _production_digest_commitment(api_key: str, label: str, digest: str) -> str:
     require(isinstance(api_key, str) and len(api_key) >= 32
-            and isinstance(snapshot_sha256, str)
-            and re.fullmatch(r"[0-9a-f]{64}", snapshot_sha256) is not None,
-            "Production snapshot commitment input is invalid")
+            and label in {"production-snapshot", "production-attachments"}
+            and isinstance(digest, str)
+            and re.fullmatch(r"[0-9a-f]{64}", digest) is not None,
+            "Production baseline commitment input is invalid")
     return hmac.new(api_key.encode("utf-8"),
-                    f"production-snapshot:{snapshot_sha256}".encode("ascii"),
+                    f"{label}:{digest}".encode("ascii"),
                     hashlib.sha256).hexdigest()
+
+
+def production_snapshot_commitment(api_key: str, snapshot_sha256: str) -> str:
+    return _production_digest_commitment(api_key, "production-snapshot",
+                                         snapshot_sha256)
+
+
+def production_attachment_commitment(api_key: str, attachment_sha256: str) -> str:
+    return _production_digest_commitment(api_key, "production-attachments",
+                                         attachment_sha256)
 
 
 def docker_inspect(container_id: str) -> dict[str, Any]:
@@ -151,14 +162,16 @@ def collect(
     inspect: Callable[[str], dict[str, Any]] = docker_inspect,
     probe: Callable[[str | None], tuple[int, dict[str, Any] | None]] = get_capabilities,
     attest: Callable[[Path, dict[str, str], str], bool] | None = None,
+    list_ids: Callable[[str], list[str]] | None = None,
 ) -> dict[str, Any]:
     if (artifact_dir / "aggregate-deployment.json").is_file():
         if __package__:
             from .collect_passport_beta_aggregate_acceptance import collect_aggregate
         else:
             from collect_passport_beta_aggregate_acceptance import collect_aggregate
+        kwargs = {"list_ids": list_ids} if list_ids is not None else {}
         return collect_aggregate(artifact_dir, api_key=api_key, inspect=inspect,
-                                 probe=probe, attest=attest)
+                                 probe=probe, attest=attest, **kwargs)
     deployment_path = artifact_dir / "local-deployment-manifest.json"
     deployment = read_json(deployment_path)
     require(deployment.get("beta_origin") == BETA_ORIGIN, "Deployment is not the beta origin")

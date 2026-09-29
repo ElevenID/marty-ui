@@ -14,6 +14,7 @@ if __package__:
     from .collect_passport_beta_acceptance import (
         EvidenceError,
         collect,
+        production_attachment_commitment,
         production_snapshot_commitment,
         read_json,
         require,
@@ -39,6 +40,7 @@ if __package__:
         beta_legacy_drain,
         beta_material_receipt,
         beta_native_route_ownership,
+        production_attachment_sha256,
         production_snapshot,
     )
     from .probe_passport_beta_native_batch import (
@@ -69,6 +71,7 @@ else:
     from collect_passport_beta_acceptance import (
         EvidenceError,
         collect,
+        production_attachment_commitment,
         production_snapshot_commitment,
         read_json,
         require,
@@ -94,6 +97,7 @@ else:
         beta_legacy_drain,
         beta_material_receipt,
         beta_native_route_ownership,
+        production_attachment_sha256,
         production_snapshot,
     )
     from probe_passport_beta_native_batch import (
@@ -130,6 +134,7 @@ def run(
     collector: Callable[..., dict[str, Any]] = collect,
     attestor: Callable[..., bool] = verify_attestations,
     snapshot: Callable[[], dict[str, Any]] = production_snapshot,
+    attachment_snapshot: Callable[[], str] = production_attachment_sha256,
     drain: Callable[[], dict[str, Any]] = beta_legacy_drain,
     lifecycle: Callable[..., dict[str, Any]] = exercise,
     certificate_plan: dict[str, Any] | None = None,
@@ -241,6 +246,11 @@ def run(
         require(production_snapshot_commitment(
                     api_key, before_production.get("sha256")) == aggregate_production,
                 "Production changed since aggregate beta deployment")
+    aggregate_attachments = report["deployment"].get("production_attachment_commitment")
+    if aggregate_attachments is not None:
+        require(production_attachment_commitment(
+                    api_key, attachment_snapshot()) == aggregate_attachments,
+                "Production attachments changed since aggregate beta deployment")
     before_drain = drain()
     selected_dsc: dict[str, str] = {}
     receipt_result: dict[str, Any] | None = None
@@ -411,6 +421,10 @@ def run(
     finally:
         after_production = snapshot()
         production_window = assert_production_unchanged(before_production, after_production)
+        if aggregate_attachments is not None:
+            require(production_attachment_commitment(
+                        api_key, attachment_snapshot()) == aggregate_attachments,
+                    "Production attachments changed during beta acceptance")
     after_drain = drain()
     after = collector(artifact_dir, api_key=api_key, attest=attestor)
     require(all(report[key] == after[key] for key in ("release", "deployment", "runtime_images")), "Beta release or runtime drifted during passport acceptance")

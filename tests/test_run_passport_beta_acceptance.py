@@ -12,7 +12,8 @@ import pytest
 import yaml
 
 from scripts.collect_passport_beta_acceptance import (
-    EvidenceError, production_snapshot_commitment,
+    EvidenceError, production_attachment_commitment,
+    production_snapshot_commitment,
 )
 from scripts.probe_passport_beta_chain import ChainProbeError
 from scripts.probe_passport_beta_batch import _identity_commit
@@ -182,6 +183,33 @@ def test_aggregate_production_baseline_blocks_before_passport_mutation() -> None
             snapshot=lambda: {"sha256": "c" * 64},
             drain=lambda: pytest.fail("No drain after baseline drift"),
             lifecycle=lambda *args, **kwargs: pytest.fail("No passport mutation"),
+            routing=lambda *args: {"verified": True, "evidence": {
+                "webhook_owner": "issuance-native"}},
+            certificate_plan=certificate_plan(),
+            csca_session="csca-session", dsc_session="dsc-session")
+
+
+@pytest.mark.parametrize("drift_on_read", [1, 2])
+def test_aggregate_production_attachment_drift_blocks_acceptance(drift_on_read: int) -> None:
+    candidate = report()
+    candidate["deployment"]["production_attachment_commitment"] = (
+        production_attachment_commitment("a" * 32, "f" * 64))
+    reads = 0
+
+    def attachments() -> str:
+        nonlocal reads
+        reads += 1
+        return "c" * 64 if reads >= drift_on_read else "f" * 64
+
+    with pytest.raises(EvidenceError, match="Production attachments changed"):
+        run(Path("beta-artifacts"), managed_application(), "a" * 32,
+            collector=lambda *_, **__: candidate,
+            attestor=lambda *args: True,
+            snapshot=lambda: {"sha256": "c" * 64, "container_counts": {}},
+            attachment_snapshot=attachments,
+            drain=lambda: {"verified": True, "evidence": {}},
+            chain=lambda *_, **__: pytest.fail("Chain must not complete"),
+            lifecycle=lambda *_, **__: pytest.fail("No passport mutation"),
             routing=lambda *args: {"verified": True, "evidence": {
                 "webhook_owner": "issuance-native"}},
             certificate_plan=certificate_plan(),

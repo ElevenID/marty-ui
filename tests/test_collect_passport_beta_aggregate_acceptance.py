@@ -9,9 +9,11 @@ from pathlib import Path
 import pytest
 
 from scripts.collect_passport_beta_acceptance import (
-    EvidenceError, SERVICES, collect, production_snapshot_commitment,
+    EvidenceError, SERVICES, collect, production_attachment_commitment,
+    production_snapshot_commitment,
 )
 from scripts import collect_passport_beta_aggregate_acceptance as aggregate
+from scripts.prepare_passport_beta_aggregate_compose import SIGNED_APPLICATIONS, INGRESS
 
 
 COMMIT = "a" * 40
@@ -20,6 +22,12 @@ UI_DIGEST = "sha256:" + "c" * 64
 SERVICES_IMAGE = "ghcr.io/elevenid/marty-ui-oss/services@" + SERVICES_DIGEST
 UI_IMAGE = "ghcr.io/elevenid/marty-ui-oss/ui@" + UI_DIGEST
 NETWORK = "elevenid-beta-network"
+ALL_APPS = set(SIGNED_APPLICATIONS) | {"issuance"}
+
+
+def listed(live, project):
+    return [key for key, value in live.items() if value["Config"]["Labels"].get(
+        "com.docker.compose.project") == project]
 
 
 def write(path: Path, value: dict) -> None:
@@ -51,12 +59,13 @@ def fixture(tmp_path: Path, monkeypatch):
         "stack_manifest_sha256": signed["manifest_sha256"],
         "native_receipt_sha256": "e" * 64,
         "production_snapshot_sha256": "f" * 64,
-        "target_services": list(SERVICES),
+        "production_attachments_sha256": "6" * 64,
+        "target_services": sorted(ALL_APPS),
         "expected_networks_by_service": {
-            name: [NETWORK] for name in (*SERVICES, "postgres")},
-        "recreate_applications": list(SERVICES),
-        "recreate_ingress_last": [],
-        "service_config_hashes": {name: "1" * 64 for name in SERVICES},
+            name: [NETWORK] for name in (*sorted(ALL_APPS), "postgres")},
+        "recreate_applications": sorted(ALL_APPS - INGRESS),
+        "recreate_ingress_last": sorted(ALL_APPS & INGRESS),
+        "service_config_hashes": {name: "1" * 64 for name in ALL_APPS},
         "services_image": SERVICES_IMAGE,
         "issuance_image": signed["issuance_image"],
         "ui_image": UI_IMAGE, "ui_config_hash": "2" * 64,
@@ -65,9 +74,10 @@ def fixture(tmp_path: Path, monkeypatch):
     write(plan_path, plan)
     identities = {}
     live = {}
-    for index, name in enumerate((*SERVICES, "postgres"), 1):
+    for index, name in enumerate((*sorted(ALL_APPS), "postgres"), 1):
         container_id = format(index, "x").rjust(64, "0")
-        image = SERVICES_IMAGE if name != "postgres" else "postgres:15"
+        image = ("postgres:15" if name == "postgres" else
+                 signed["issuance_image"] if name == "issuance" else SERVICES_IMAGE)
         identity = {"container_id": container_id,
                     "image_id": "sha256:" + "3" * 64,
                     "configured_image": image,
@@ -128,7 +138,8 @@ def fixture(tmp_path: Path, monkeypatch):
 def test_collects_exact_aggregate_generation_without_old_manifests(tmp_path, monkeypatch):
     plan, receipt, identities, live, probe, seen = fixture(tmp_path, monkeypatch)
     report = collect(tmp_path, api_key="k" * 32, inspect=live.__getitem__,
-                     probe=probe, attest=lambda *_: True)
+                     probe=probe, attest=lambda *_: True,
+                     list_ids=lambda project: listed(live, project))
     assert report["release"]["source_commit"] == COMMIT
     assert report["release"]["signed_manifest_verified"] is True
     assert report["deployment"]["aggregate_deployment_receipt_sha256"] == digest(
@@ -137,6 +148,8 @@ def test_collects_exact_aggregate_generation_without_old_manifests(tmp_path, mon
     assert report["deployment"]["provider_mode"] == "simulator"
     assert report["deployment"]["production_snapshot_commitment"] == (
         production_snapshot_commitment("k" * 32, "f" * 64))
+    assert report["deployment"]["production_attachment_commitment"] == (
+        production_attachment_commitment("k" * 32, "6" * 64))
     assert "production_snapshot_sha256" not in json.dumps(report)
     assert report["runtime_images"]["flow"]["container_id"] == identities["flow"]["container_id"]
     assert set(report["runtime_images"]) == set(SERVICES)
@@ -147,9 +160,10 @@ def test_collects_exact_aggregate_generation_without_old_manifests(tmp_path, mon
 def test_rejects_recreated_service_after_aggregate_receipt(tmp_path, monkeypatch):
     _, _, identities, live, probe, _ = fixture(tmp_path, monkeypatch)
     live[identities["flow"]["container_id"]]["Id"] = "8" * 64
-    with pytest.raises(EvidenceError, match="runtime differs"):
+    with pytest.raises(EvidenceError, match="live project inventory differs"):
         collect(tmp_path, api_key="k" * 32, inspect=live.__getitem__,
-                probe=probe, attest=lambda *_: True)
+                probe=probe, attest=lambda *_: True,
+                list_ids=lambda project: listed(live, project))
 
 
 def test_rejects_receipt_or_plan_digest_drift(tmp_path, monkeypatch):
@@ -158,4 +172,30 @@ def test_rejects_receipt_or_plan_digest_drift(tmp_path, monkeypatch):
     write(tmp_path / "aggregate-deployment.json.plan.json", plan)
     with pytest.raises(EvidenceError, match="receipt, plan or source differs"):
         collect(tmp_path, api_key="k" * 32, inspect=live.__getitem__,
-                probe=probe, attest=lambda *_: True)
+                probe=probe, attest=lambda *_: True,
+                list_ids=lambda project: listed(live, project))
+
+
+def test_rejects_extra_live_beta_container(tmp_path, monkeypatch):
+    _, _, _, live, probe, _ = fixture(tmp_path, monkeypatch)
+    extra = next(iter(live.values())).copy()
+    extra["Id"] = "8" * 64
+    extra["Config"] = {"Labels": {"com.docker.compose.project": "elevenid-beta",
+                                  "com.docker.compose.service": "passport-provider-ingress"}}
+    live[extra["Id"]] = extra
+    with pytest.raises(EvidenceError, match="live project inventory differs"):
+        collect(tmp_path, api_key="k" * 32, inspect=live.__getitem__,
+                probe=probe, attest=lambda *_: True,
+                list_ids=lambda project: listed(live, project))
+
+
+def test_rejects_plan_that_omits_signed_applications(tmp_path, monkeypatch):
+    plan, receipt, _, live, probe, _ = fixture(tmp_path, monkeypatch)
+    plan["recreate_applications"].remove("auth")
+    write(tmp_path / "aggregate-deployment.json.plan.json", plan)
+    receipt["plan_sha256"] = digest(tmp_path / "aggregate-deployment.json.plan.json")
+    write(tmp_path / "aggregate-deployment.json", receipt)
+    with pytest.raises(EvidenceError, match="signed application set is incomplete"):
+        collect(tmp_path, api_key="k" * 32, inspect=live.__getitem__,
+                probe=probe, attest=lambda *_: True,
+                list_ids=lambda project: listed(live, project))

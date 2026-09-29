@@ -13,18 +13,24 @@ try:
     )
     from .collect_passport_beta_acceptance import (
         BETA_ORIGIN, REQUIRED_PROBES, SERVICES, EvidenceError, digest_file,
-        docker_inspect, get_capabilities, production_snapshot_commitment,
+        docker_inspect, get_capabilities, production_attachment_commitment,
+        production_snapshot_commitment,
         read_json, require,
     )
+    from .prepare_passport_beta_aggregate_compose import SIGNED_APPLICATIONS, INGRESS
+    from .probe_passport_beta_host import ids
 except ImportError:
     from check_passport_beta_fence_authority import (
         manifest_source, verify_issuance_attestation,
     )
     from collect_passport_beta_acceptance import (
         BETA_ORIGIN, REQUIRED_PROBES, SERVICES, EvidenceError, digest_file,
-        docker_inspect, get_capabilities, production_snapshot_commitment,
+        docker_inspect, get_capabilities, production_attachment_commitment,
+        production_snapshot_commitment,
         read_json, require,
     )
+    from prepare_passport_beta_aggregate_compose import SIGNED_APPLICATIONS, INGRESS
+    from probe_passport_beta_host import ids
 
 
 SHA = re.compile(r"[0-9a-f]{40}\Z")
@@ -88,6 +94,7 @@ def collect_aggregate(
     probe: Callable[[str | None], tuple[int, dict[str, Any] | None]] = get_capabilities,
     attest: Callable[[Path, dict[str, str], str], bool] | None = None,
     attest_issuance: Callable[[str, str, str], bool] = verify_issuance_attestation,
+    list_ids: Callable[[str], list[str]] = ids,
 ) -> dict[str, Any]:
     receipt_path = artifact_dir / "aggregate-deployment.json"
     plan_path = artifact_dir / "aggregate-deployment.json.plan.json"
@@ -107,7 +114,9 @@ def collect_aggregate(
                 == digest_file(manifest_path).removeprefix("sha256:")
             and receipt.get("native_receipt_sha256") == plan.get("native_receipt_sha256")
             and receipt.get("production_snapshot_sha256")
-                == plan.get("production_snapshot_sha256"),
+                == plan.get("production_snapshot_sha256")
+            and isinstance(plan.get("production_attachments_sha256"), str)
+            and SHA256.fullmatch(plan["production_attachments_sha256"]) is not None,
             "Aggregate beta receipt, plan or source differs")
     require(attest is not None,
             "Aggregate beta acceptance requires signed release attestations")
@@ -135,13 +144,43 @@ def collect_aggregate(
             and set(SERVICES).issubset(runtime)
             and "passport-provider-ingress" not in runtime,
             "Aggregate beta simulator service inventory is invalid")
+    expected_ids = {identity.get("container_id") for identity in runtime.values()
+                    if isinstance(identity, dict)}
+    require(len(expected_ids) == len(runtime),
+            "Aggregate beta runtime has duplicate container IDs")
+    for project, expected in (("elevenid-beta", expected_ids),
+                              ("elevenid-beta-ui", {receipt.get("ui_container_id")})):
+        listed = list_ids(project)
+        require(isinstance(listed, list) and len(listed) == len(set(listed)),
+                "Aggregate beta live project inventory is ambiguous")
+        live_ids = set()
+        for short_id in listed:
+            record = inspect(short_id)
+            config = record.get("Config")
+            labels = config.get("Labels") if isinstance(config, dict) else None
+            require(isinstance(labels, dict)
+                    and labels.get("com.docker.compose.project") == project
+                    and isinstance(record.get("Id"), str)
+                    and CONTAINER.fullmatch(record["Id"]) is not None,
+                    "Aggregate beta live project inventory is invalid")
+            live_ids.add(record["Id"])
+        require(len(live_ids) == len(listed) and live_ids == expected,
+                "Aggregate beta live project inventory differs from deployment receipt")
     observed = {}
     for name in sorted(runtime):
         observed[name] = _runtime_image(name, runtime[name], "elevenid-beta", inspect)
         require(runtime[name]["networks"] == expected_networks[name],
                 "Aggregate beta service network differs from signed plan")
-    recreate = set(plan.get("recreate_applications", [])) | set(
-        plan.get("recreate_ingress_last", []))
+    applications = plan.get("recreate_applications")
+    ingress = plan.get("recreate_ingress_last")
+    required = set(SIGNED_APPLICATIONS) | {"issuance"}
+    require(isinstance(applications, list) and isinstance(ingress, list)
+            and len(applications) == len(set(applications))
+            and len(ingress) == len(set(ingress))
+            and set(applications) == required - INGRESS
+            and set(ingress) == required & INGRESS,
+            "Aggregate beta signed application set is incomplete")
+    recreate = required
     hashes = plan.get("service_config_hashes")
     require(isinstance(hashes, dict) and recreate.issubset(runtime),
             "Aggregate beta signed application set is incomplete")
@@ -208,6 +247,9 @@ def collect_aggregate(
                        "provider_mode": "simulator",
                        "production_snapshot_commitment":
                        production_snapshot_commitment(
-                           api_key, receipt["production_snapshot_sha256"])},
+                           api_key, receipt["production_snapshot_sha256"]),
+                       "production_attachment_commitment":
+                       production_attachment_commitment(
+                           api_key, plan["production_attachments_sha256"])},
         "runtime_images": runtime_images, "probes": probes,
     }
