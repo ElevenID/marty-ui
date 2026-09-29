@@ -359,10 +359,20 @@ def safe_model(root: Path) -> dict:
                                 "SIGNING_KEYS_INTERNAL_URL": "http://signing-keys:8017/internal",
                                 "SIGNING_KEYS_INTERNAL_API_KEY_FILE":
                                     "/run/secrets/signing_keys_internal_api_key",
+                                "PHYSICAL_DOCUMENT_ARTIFACT_KEY_FILE":
+                                    "/run/secrets/physical_document_artifact_key",
+                                "PERSONALIZATION_BUREAU_URL":
+                                    "http://passport-beta-bureau:8020",
+                                "PERSONALIZATION_BUREAU_API_KEY_FILE":
+                                    "/run/secrets/grpc_service_token",
+                                "PERSONALIZATION_BUREAU_PROVIDER_PROFILE_ID":
+                                    "passport-beta-bureau",
                             },
                             "secrets": [
                                 {"source": "issuance_api_key"},
                                 {"source": "signing_keys_internal_api_key"},
+                                {"source": "physical_document_artifact_key"},
+                                {"source": "grpc_service_token"},
                             ]}
     for name in ("gateway", "signing-keys"):
         services[name]["secrets"].extend([
@@ -401,6 +411,8 @@ def safe_model(root: Path) -> dict:
                     "file": str(root / "secrets/passport_edge_tls_cert")},
                 "passport_edge_tls_key": {
                     "file": str(root / "secrets/passport_edge_tls_key")},
+                "physical_document_artifact_key": {
+                    "file": str(root / "secrets/physical_document_artifact_key")},
             },
             "configs": {"passport_supported_openbao_start": {
                 "file": str(preflight.ROOT / "scripts/passport_supported_openbao_start.sh")},
@@ -415,6 +427,36 @@ def test_isolated_resolved_compose_model_passes_only_static_preflight(
     report = validate_model(safe_model(tmp_path), PROJECT, IMAGE, tmp_path)
     assert report["model_safe"] is True
     assert report["rollback_accepted"] is False
+
+
+@pytest.mark.parametrize("key", [
+    "PHYSICAL_DOCUMENT_ARTIFACT_KEY_FILE",
+    "PERSONALIZATION_BUREAU_URL",
+    "PERSONALIZATION_BUREAU_API_KEY_FILE",
+    "PERSONALIZATION_BUREAU_PROVIDER_PROFILE_ID",
+])
+def test_python_rollback_requires_artifact_and_bureau_inputs(
+    tmp_path: Path, key: str,
+) -> None:
+    model = safe_model(tmp_path)
+    model["services"]["issuance"]["environment"].pop(key)
+    with pytest.raises(ModelPreflightError, match="Python rollback credentials"):
+        validate_model(model, PROJECT, IMAGE, tmp_path)
+
+
+@pytest.mark.parametrize("secret", [
+    "physical_document_artifact_key", "grpc_service_token",
+])
+def test_python_rollback_requires_secret_mounts(
+    tmp_path: Path, secret: str,
+) -> None:
+    model = safe_model(tmp_path)
+    model["services"]["issuance"]["secrets"] = [
+        item for item in model["services"]["issuance"]["secrets"]
+        if item["source"] != secret
+    ]
+    with pytest.raises(ModelPreflightError, match="Python rollback credentials"):
+        validate_model(model, PROJECT, IMAGE, tmp_path)
 
 
 @pytest.mark.parametrize("service,key,value", [
