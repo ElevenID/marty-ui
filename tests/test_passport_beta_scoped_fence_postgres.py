@@ -1,0 +1,313 @@
+"""Exercise the beta passport fence in an isolated, throwaway PostgreSQL container."""
+
+from __future__ import annotations
+
+import os
+from pathlib import Path
+import subprocess
+import time
+import uuid
+
+import pytest
+
+
+ROOT = Path(__file__).resolve().parents[1]
+SCHEMA = ROOT / "tests/fixtures/passport-beta-fence-schema.sql"
+INSTALL = ROOT / "scripts/sql/passport-beta-fence-install.sql"
+DRAIN = ROOT / "scripts/sql/passport-beta-fence-drain.sql"
+POSTGRES_IMAGE = "postgres:15-alpine@sha256:fceb6f86328c36f2438fae3b851b0cc57c4a7e69a58c866d9ce24281f2cf0c9c"
+
+
+def docker(*args: str, check: bool = True) -> subprocess.CompletedProcess[str]:
+    return subprocess.run(
+        ["docker", *args], capture_output=True, text=True, check=check, timeout=90
+    )
+
+
+def sql(container: str, query: str, *, allowed: bool = True) -> str:
+    result = docker(
+        "exec", container, "psql", "-U", "postgres", "-d", "marty",
+        "-v", "ON_ERROR_STOP=1", "-At", "-c", query, check=False,
+    )
+    if allowed and result.returncode != 0:
+        pytest.fail(f"SQL unexpectedly failed: {result.stderr}")
+    if not allowed and result.returncode == 0:
+        pytest.fail(f"SQL unexpectedly succeeded: {query}")
+    return result.stdout if allowed else result.stderr
+
+
+def script_args(container: str, path: Path, *, attested: bool = True) -> list[str]:
+    docker("cp", str(path), f"{container}:/tmp/{path.name}")
+    if path == INSTALL:
+        docker("cp", str(DRAIN), f"{container}:/tmp/{DRAIN.name}")
+    target = []
+    if attested:
+        system_id = sql(container, "SELECT system_identifier FROM pg_control_system()").strip()
+        database_oid = sql(
+            container, "SELECT oid FROM pg_database WHERE datname='marty'"
+        ).strip()
+        target = [
+            "-c", "SET marty.passport_beta_verified_project = 'elevenid-beta'",
+            "-c", f"SET marty.passport_beta_expected_system_identifier = '{system_id}'",
+            "-c", f"SET marty.passport_beta_expected_database_oid = '{database_oid}'",
+        ]
+    return [
+        "exec", container, "psql", "-U", "postgres", "-d", "marty",
+        "-v", "ON_ERROR_STOP=1", *target,
+        "-f", f"/tmp/{path.name}",
+    ]
+
+
+def script(
+    container: str, path: Path, *, attested: bool = True
+) -> subprocess.CompletedProcess[str]:
+    return docker(*script_args(container, path, attested=attested), check=False)
+
+
+@pytest.fixture
+def database():
+    if os.getenv("BETA_FENCE_DISPOSABLE_DOCKER") != "1":
+        pytest.skip("set BETA_FENCE_DISPOSABLE_DOCKER=1 for isolated PostgreSQL checks")
+    name = f"marty-passport-fence-test-{uuid.uuid4().hex[:12]}"
+    docker(
+        "run", "--rm", "-d", "--name", name, "--network", "none",
+        "-e", "POSTGRES_PASSWORD=disposable-only", POSTGRES_IMAGE,
+    )
+    try:
+        for _ in range(60):
+            if docker(
+                "exec", name, "psql", "-U", "postgres", "-d", "postgres",
+                "-At", "-c", "SELECT 1", check=False,
+            ).returncode == 0:
+                break
+            time.sleep(0.25)
+        else:
+            pytest.fail("disposable PostgreSQL did not become ready")
+        # The image briefly runs a bootstrap postmaster before starting the
+        # durable server. A successful SELECT during bootstrap is not enough.
+        for _ in range(60):
+            created = docker(
+                "exec", name, "psql", "-U", "postgres", "-d", "postgres",
+                "-v", "ON_ERROR_STOP=1", "-c", "CREATE ROLE marty LOGIN;",
+                check=False,
+            )
+            if created.returncode == 0:
+                break
+            if created.returncode != 2:
+                pytest.fail(f"could not create disposable role: {created.stderr}")
+            time.sleep(0.25)
+        else:
+            pytest.fail("disposable PostgreSQL did not finish bootstrap")
+        for _ in range(60):
+            created_db = docker(
+                "exec", name, "createdb", "-U", "postgres", "-O", "marty", "marty",
+                check=False,
+            )
+            if created_db.returncode == 0:
+                break
+            if "could not connect" not in created_db.stderr and "connection" not in created_db.stderr:
+                pytest.fail(f"could not create disposable database: {created_db.stderr}")
+            time.sleep(0.25)
+        else:
+            pytest.fail("disposable PostgreSQL did not finish startup")
+        assert script(name, SCHEMA).returncode == 0
+        yield name
+    finally:
+        docker("stop", name, check=False)
+
+
+def test_scoped_fence_and_drain(database: str):
+    # In-flight passport work must finish before the atomic full fence installs.
+    sql(database, """
+        INSERT INTO issuance_service.physical_document_jobs
+            (id, organization_id, flow_execution_id, application_id,
+             application_template_id, credential_template_id,
+             delivery_destination_profile_id, document_type, country_code,
+             status, secure_artifact_ciphertext, secure_artifact_reference,
+             created_at, updated_at)
+        VALUES ('job', 'org', 'flow', 'application', 'application-template',
+            'credential-template', 'destination', 'P', 'USA', 'SUBMITTED',
+            '{"schema":"marty.passport-artifact-manifest/v1","chunks":["vault:v1:chunk"]}',
+            'physical-artifact://job', clock_timestamp(), clock_timestamp());
+        INSERT INTO flow_service.flow_definitions (id, flow_type)
+        VALUES ('physical', 'physical_document_issuance');
+        INSERT INTO flow_service.flow_instances
+            (id, flow_definition_id, organization_id, context, status)
+        VALUES ('physical-instance', 'physical', 'org', '{}', 'in_progress');
+    """)
+    unverified = script(database, INSTALL, attested=False)
+    assert unverified.returncode != 0 and "exact beta target attestation" in unverified.stderr
+    pending = script(database, INSTALL)
+    assert pending.returncode != 0 and "drain is not empty" in pending.stderr
+    assert sql(database, "SELECT to_regnamespace('passport_cutover') IS NULL") == "t\n"
+
+    sql(database, """
+        UPDATE issuance_service.physical_document_jobs
+        SET status='ACTIVE', sod_sha256=repeat('a',64), bureau_job_id='bureau-1',
+            tracking_number='track-1', quality_result='{"passed":true}',
+            completed_at=clock_timestamp() WHERE id='job';
+        UPDATE flow_service.flow_instances
+        SET status='completed', completed_at=clock_timestamp(),
+            state_history='[{"event":"completed"}]'
+        WHERE id='physical-instance';
+    """)
+    sql(database, "UPDATE issuance_service.physical_document_jobs SET secure_artifact_ciphertext='legacy' WHERE id='job'")
+    legacy = script(database, INSTALL)
+    assert legacy.returncode != 0 and "artifacts 1" in legacy.stderr
+    sql(database, """
+        UPDATE issuance_service.physical_document_jobs
+        SET secure_artifact_ciphertext=
+            '{"schema":"marty.passport-artifact-manifest/v1","chunks":["vault:v1:chunk"]}'
+        WHERE id='job';
+        INSERT INTO flow_service.flow_instances
+            (id, flow_definition_id, organization_id, context, status)
+        VALUES ('orphan', 'missing-definition', 'org', '{}', 'in_progress');
+    """)
+    orphan = script(database, INSTALL)
+    assert orphan.returncode != 0 and "flows 1" in orphan.stderr
+    sql(database, "UPDATE flow_service.flow_instances SET status='cancelled' WHERE id='orphan'")
+    installed = script(database, INSTALL)
+    assert installed.returncode == 0, installed.stderr
+    assert sql(database, "SELECT phase FROM passport_cutover.state") == "fully_fenced\n"
+
+    for statement in (
+        "INSERT INTO issuance_service.physical_document_jobs (id,organization_id,flow_execution_id,application_id,application_template_id,credential_template_id,delivery_destination_profile_id,document_type,country_code,status,secure_artifact_ciphertext,secure_artifact_reference,created_at,updated_at) VALUES ('new','org','flow-new','application-new','app-template','credential-template','destination','P','USA','DRAFT','{}','physical-artifact://new',clock_timestamp(),clock_timestamp())",
+        "INSERT INTO flow_service.flow_definitions (id,flow_type) VALUES ('new-physical','physical_document_issuance')",
+        "INSERT INTO flow_service.flow_instances (id,flow_definition_id,organization_id,context,status) VALUES ('new-physical','physical','org','{}','created')",
+        "UPDATE flow_service.flow_definitions SET flow_type='physical_document_issuance' WHERE id='ordinary'",
+        "TRUNCATE issuance_service.physical_document_jobs CASCADE",
+        "ALTER TABLE issuance_service.physical_document_jobs DISABLE TRIGGER passport_fence_job",
+        "DROP SCHEMA flow_service CASCADE",
+        "UPDATE passport_cutover.state SET phase='fully_fenced'",
+    ):
+        if "WHERE id='ordinary'" in statement:
+            sql(database, "INSERT INTO flow_service.flow_definitions (id,flow_type) VALUES ('ordinary','verification')")
+        sql(database, f"SET ROLE marty; {statement}", allowed=False)
+
+    # Existing evidence is immutable after the full fence.
+    sql(database, "SET ROLE marty; UPDATE issuance_service.physical_document_jobs SET secure_artifact_ciphertext='{}' WHERE id='job'", allowed=False)
+    sql(database, "SET ROLE marty; UPDATE issuance_service.physical_document_jobs SET status='FAILED' WHERE id='job'", allowed=False)
+    sql(database, "SET ROLE marty; UPDATE flow_service.flow_instances SET status='completed', context='{}', step_history='[]', state_history='[]' WHERE id='physical-instance'", allowed=False)
+    second_install = script(database, INSTALL)
+    assert second_install.returncode != 0
+    sql(database, "SET ROLE marty; INSERT INTO issuance_service.other_issuance VALUES ('unrelated','ready')")
+    sql(database, "SET ROLE marty; INSERT INTO flow_service.flow_instances (id,flow_definition_id,organization_id,context,status) VALUES ('unrelated','ordinary','org','{}','in_progress')")
+    assert sql(database, "SELECT count(*) FROM issuance_service.physical_document_jobs") == "1\n"
+    assert sql(database, "SELECT count(*) FROM flow_service.flow_instances") == "3\n"
+
+
+def test_install_waits_for_prior_writer_and_rechecks_drain(database: str):
+    writer = subprocess.Popen(
+        [
+            "docker", "exec", database, "psql", "-U", "postgres", "-d", "marty",
+            "-v", "ON_ERROR_STOP=1", "-c", """
+                BEGIN;
+                SET ROLE marty;
+                INSERT INTO issuance_service.physical_document_jobs
+                    (id, organization_id, flow_execution_id, application_id,
+                     application_template_id, credential_template_id,
+                     delivery_destination_profile_id, document_type, country_code,
+                     status, secure_artifact_ciphertext, secure_artifact_reference,
+                     created_at, updated_at)
+                VALUES ('racing-job', 'org', 'flow', 'application', 'app-template',
+                    'credential-template', 'destination', 'P', 'USA', 'DRAFT',
+                    '{"schema":"marty.passport-artifact-manifest/v1","chunks":["vault:v1:chunk"]}',
+                    'physical-artifact://racing-job', clock_timestamp(), clock_timestamp());
+                SELECT pg_sleep(2);
+                COMMIT;
+            """,
+        ],
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+    try:
+        for _ in range(60):
+            sleeping = sql(database, """
+                SELECT count(*) FROM pg_stat_activity
+                WHERE pid <> pg_backend_pid()
+                  AND wait_event_type='Timeout' AND wait_event='PgSleep'
+            """).strip()
+            if sleeping == "1":
+                break
+            time.sleep(0.025)
+        else:
+            pytest.fail("competing writer did not reach its open transaction")
+        install = script(database, INSTALL)
+        assert install.returncode != 0 and "drain is not empty" in install.stderr
+        stdout, stderr = writer.communicate(timeout=15)
+        assert writer.returncode == 0, (stdout, stderr)
+        assert sql(database, "SELECT count(*) FROM issuance_service.physical_document_jobs") == "1\n"
+        assert sql(database, "SELECT to_regnamespace('passport_cutover') IS NULL") == "t\n"
+        assert sql(database, "SELECT count(*) FROM pg_roles WHERE rolname='marty_passport_fence_owner'") == "0\n"
+    finally:
+        if writer.poll() is None:
+            writer.terminate()
+            writer.communicate(timeout=5)
+
+
+def test_crashed_prior_writer_rolls_back_before_install(database: str):
+    writer = subprocess.Popen(
+        [
+            "docker", "exec", database, "psql", "-U", "postgres", "-d", "marty",
+            "-v", "ON_ERROR_STOP=1", "-c", """
+                BEGIN;
+                INSERT INTO issuance_service.physical_document_jobs
+                    (id, organization_id, flow_execution_id, application_id,
+                     application_template_id, credential_template_id,
+                     delivery_destination_profile_id, document_type, country_code,
+                     status, secure_artifact_ciphertext, secure_artifact_reference,
+                     created_at, updated_at)
+                VALUES ('crashed-job', 'org', 'flow', 'application', 'app-template',
+                    'credential-template', 'destination', 'P', 'USA', 'DRAFT',
+                    '{"schema":"marty.passport-artifact-manifest/v1","chunks":["vault:v1:chunk"]}',
+                    'physical-artifact://crashed-job', clock_timestamp(), clock_timestamp());
+                SELECT pg_sleep(30);
+                COMMIT;
+            """,
+        ], stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
+    )
+    installer = None
+    try:
+        for _ in range(80):
+            if sql(database, """
+                SELECT count(*) FROM pg_stat_activity
+                WHERE pid <> pg_backend_pid()
+                  AND wait_event_type='Timeout' AND wait_event='PgSleep'
+            """).strip() == "1":
+                break
+            time.sleep(0.025)
+        else:
+            pytest.fail("crash fixture did not enter its transaction")
+        installer = subprocess.Popen(
+            ["docker", *script_args(database, INSTALL)],
+            stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
+        )
+        for _ in range(80):
+            if sql(database, """
+                SELECT count(*) FROM pg_stat_activity
+                WHERE pid <> pg_backend_pid() AND wait_event_type='Lock'
+                  AND query LIKE 'LOCK TABLE issuance_service.physical_document_jobs%'
+            """).strip() == "1":
+                break
+            time.sleep(0.025)
+        else:
+            pytest.fail("installer did not wait on the prior writer")
+        writer_pid = sql(database, """
+            SELECT pid FROM pg_stat_activity
+            WHERE pid <> pg_backend_pid()
+              AND wait_event_type='Timeout' AND wait_event='PgSleep'
+        """).strip()
+        assert writer_pid.isdigit()
+        assert sql(database, f"SELECT pg_terminate_backend({writer_pid})") == "t\n"
+        output, error = installer.communicate(timeout=15)
+        assert installer.returncode == 0, (output, error)
+        writer.communicate(timeout=5)
+        assert writer.returncode != 0
+        assert sql(database, "SELECT count(*) FROM issuance_service.physical_document_jobs") == "0\n"
+        assert sql(database, "SELECT phase FROM passport_cutover.state") == "fully_fenced\n"
+    finally:
+        for process in (writer, installer):
+            if process is not None and process.poll() is None:
+                process.terminate()
+                process.communicate(timeout=5)
