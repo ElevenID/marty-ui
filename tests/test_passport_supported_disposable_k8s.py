@@ -18,6 +18,30 @@ OWNER_LABELS = {
 }
 
 
+def test_rendered_numeric_identity_stays_string_in_kubernetes_labels() -> None:
+    rendered = (MODEL.read_text(encoding="utf-8")
+                .replace("${PASSPORT_ACCEPTANCE_PLAN_RUN_ID}", "123456")
+                .replace("${PASSPORT_ACCEPTANCE_SOURCE_COMMIT}", "1" * 40))
+    for item in yaml.safe_load_all(rendered):
+        labels = item["metadata"].get("labels")
+        if labels is not None:
+            assert labels["com.marty.passport.acceptance.run-id"] == "123456"
+            if "com.marty.passport.acceptance.source-commit" in labels:
+                assert labels["com.marty.passport.acceptance.source-commit"] == "1" * 40
+        spec = item["spec"]
+        selector = spec.get("selector", {}).get("matchLabels", spec.get("selector"))
+        if selector:
+            assert selector["com.marty.passport.acceptance.run-id"] == "123456"
+        if item["kind"] == "Deployment":
+            assert spec["template"]["metadata"]["labels"][
+                "com.marty.passport.acceptance.run-id"] == "123456"
+        if item["kind"] == "NetworkPolicy":
+            assert spec["podSelector"]["matchLabels"][
+                "com.marty.passport.acceptance.run-id"] == "123456"
+            assert spec["ingress"][0]["from"][0]["podSelector"]["matchLabels"][
+                "com.marty.passport.acceptance.run-id"] == "123456"
+
+
 def test_disposable_kubernetes_selects_marty_simulator_without_provider() -> None:
     source = MODEL.read_text(encoding="utf-8")
     objects = {(item["kind"], item["metadata"]["name"]): item
@@ -54,9 +78,11 @@ def test_disposable_kubernetes_selects_marty_simulator_without_provider() -> Non
         assert template["metadata"]["annotations"]["com.marty.passport.acceptance.services-image"] == IMAGE
         pod = template["spec"]
         assert pod["automountServiceAccountToken"] is False
+        assert pod["hostNetwork"] is False
         assert pod["securityContext"]["runAsNonRoot"] is True
         container, = pod["containers"]
         assert container["image"] == IMAGE
+        assert all("hostPort" not in port for port in container["ports"])
         env = {item["name"]: item["value"] for item in container["env"]}
         assert env["SERVICE_NAME"] == role
         assert env["ENVIRONMENT"] == "beta"

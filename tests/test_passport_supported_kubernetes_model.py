@@ -14,7 +14,6 @@ from scripts import collect_passport_supported_acceptance as collector
 
 COMMIT = "a" * 40
 REFERENCE = "ghcr.io/elevenid/marty-ui-oss/services@sha256:" + "b" * 64
-LEGACY = "ghcr.io/elevenid/marty-credentials-issuance@" + gate.FROZEN_LEGACY_RELEASE[2]
 NAMESPACE = "marty-passport-acceptance-abcdef"
 CONTEXT = "marty-passport-acceptance-context1"
 CA = b"disposable test CA"
@@ -51,7 +50,8 @@ def test_language_neutral_contract_matches_closed_model() -> None:
         "second_simulator_runtime_probe_after_identity_preflight",
     ]
     assert contract["runtime_accepted"] is False
-    assert contract["rollback_accepted"] is False
+    assert "python_rollback" not in contract
+    assert "rollback_accepted" not in contract
 
 
 def plan() -> dict:
@@ -61,7 +61,6 @@ def plan() -> dict:
         "source_commit": COMMIT,
         "plan_run_id": PLAN_RUN_ID,
         "services_reference": REFERENCE,
-        "legacy_reference": LEGACY,
         "cluster": {
             "context": CONTEXT,
             "name": CONTEXT,
@@ -71,13 +70,6 @@ def plan() -> dict:
         "namespace": {"name": NAMESPACE, "uid": "namespace-uid-1234"},
         "resources": {
             f"{kind}/{name}": f"uid-{kind}-{name}-1234" for kind, name in gate.RESOURCES
-        },
-        "rollback_model": {
-            "gateway_owner": "python",
-            "flow_owner": "python",
-            "issuance_owner": "python",
-            "native_url": "http://issuance:8005",
-            "selectors": {flag: "false" for flag in gate.FLAGS.values()},
         },
     }
 
@@ -122,6 +114,8 @@ def runner(expected: dict, *, file_backed_ca: bool = False):
         kind, name = args[6:8]
         if kind in ("deployment", "service") and name == "passport-provider-ingress":
             return ""
+        if kind in ("deployment", "service") and name == "issuance":
+            return ""
         if kind == "pods" and name == "-l":
             return json.dumps({"items": []})
         item = {
@@ -162,7 +156,7 @@ def runner(expected: dict, *, file_backed_ca: bool = False):
                         "containers": [
                             {
                                 "name": name,
-                                "image": (LEGACY if name == "issuance" else REFERENCE),
+                                "image": REFERENCE,
                                 **({"envFrom": [{"configMapRef": {"name": "marty-config"}}]}
                                    if name in ("gateway", "flow") else {}),
                                 **({"env": [{"name": key, "valueFrom": {"configMapKeyRef": {
@@ -180,12 +174,12 @@ def runner(expected: dict, *, file_backed_ca: bool = False):
     return run
 
 
-def test_exact_disposable_identity_stays_blocked_without_rollout() -> None:
+def test_exact_disposable_identity_stays_blocked_without_live_proof() -> None:
     expected = plan()
     report = gate.inspect(expected, COMMIT, REFERENCE, runner(expected))
     assert report["static_identity_verified"] is True
     assert report["runtime_accepted"] is False
-    assert report["rollback_accepted"] is False
+    assert "rollback_accepted" not in report
     assert report["status"] == "blocked"
     assert report["resource_uids"] == expected["resources"]
 
@@ -219,12 +213,8 @@ def test_file_backed_kubeconfig_ca_is_checked_after_flattening() -> None:
             lambda p: p["resources"].update({"service/gateway": "wrong-service-uid"}),
             "identity changed",
         ),
-        (
-            lambda p: p["rollback_model"]["selectors"].update(
-                PASSPORT_NATIVE_FLOW_ENABLED="true"
-            ),
-            "rollback model",
-        ),
+        (lambda p: p.update(rollback_model={"gateway_owner": "python"}),
+         "source or images"),
         (
             lambda p: p.update(
                 services_reference="ghcr.io/other/services@sha256:" + "b" * 64
@@ -233,7 +223,7 @@ def test_file_backed_kubeconfig_ca_is_checked_after_flattening() -> None:
         ),
     ],
 )
-def test_identity_or_rollback_drift_fails_closed(mutate, match: str) -> None:
+def test_identity_or_legacy_model_drift_fails_closed(mutate, match: str) -> None:
     expected = plan()
     mutate(expected)
     with pytest.raises(gate.KubernetesPreflightError, match=match):
@@ -266,11 +256,11 @@ def test_identity_or_rollback_drift_fails_closed(mutate, match: str) -> None:
             "deployment/gateway is unsafe",
         ),
         (
-            "deployment/issuance",
+            "deployment/flow",
             lambda x: x["spec"]["template"]["spec"]["containers"][0].update(
-                image=REFERENCE
+                image="ghcr.io/elevenid/marty-credentials-issuance@sha256:" + "f" * 64
             ),
-            "deployment/issuance is unsafe",
+            "deployment/flow is unsafe",
         ),
         (
             "service/gateway",
@@ -364,6 +354,23 @@ def test_preflight_rejects_physical_provider_in_disposable_namespace(kind: str) 
         gate.inspect(expected, COMMIT, REFERENCE, mixed)
 
 
+@pytest.mark.parametrize("kind", ["deployment", "service", "pods"])
+def test_preflight_rejects_python_issuance_in_rust_only_namespace(kind: str) -> None:
+    expected = plan()
+    baseline = runner(expected)
+
+    def mixed(args: list[str]) -> str:
+        if args[3:5] == ["-n", NAMESPACE] and args[6] == kind:
+            if kind == "pods" and args[8] == "app=issuance":
+                return json.dumps({"items": [{"metadata": {"name": "issuance-old"}}]})
+            if len(args) > 7 and args[7] == "issuance":
+                return json.dumps({"kind": kind})
+        return baseline(args)
+
+    with pytest.raises(gate.KubernetesPreflightError, match="Python issuance"):
+        gate.inspect(expected, COMMIT, REFERENCE, mixed)
+
+
 def manifest_file(tmp_path: Path) -> Path:
     manifest = tmp_path / "stack-manifest.json"
     manifest.write_text(
@@ -413,7 +420,7 @@ def test_collector_never_probes_kubernetes_without_identity_plan(
     surface = report["surfaces"]["kubernetes"]
     assert surface["runtime_images"] is None
     assert surface["runtime_accepted"] is False
-    assert surface["rollback_accepted"] is False
+    assert "rollback_accepted" not in surface
     assert surface["blocker"] == "disposable Kubernetes identity plan is absent"
 
 
@@ -487,7 +494,38 @@ def test_collector_rejects_service_replacement_during_runtime_probe(
     surface = report["surfaces"]["kubernetes"]
     assert surface["runtime_images"] is None
     assert surface["runtime_accepted"] is False
-    assert surface["blocker"] == "disposable runtime probe failed"
+
+
+def test_collector_records_stable_rust_only_identity_as_blocked(
+    tmp_path: Path,
+) -> None:
+    expected = plan()
+    identity = tmp_path / "identity.json"
+    identity.write_text(json.dumps(expected), encoding="utf-8")
+    model = gate.inspect(expected, COMMIT, REFERENCE, runner(expected))
+    calls = []
+
+    def probe(*args):
+        calls.append(args)
+        return {
+            name: {"deployment_uid": model["resource_uids"][f"deployment/{name}"],
+                   "oci_reference": REFERENCE, "container_id": name + "-container"}
+            for name in collector.KUBERNETES_SERVICES
+        }
+
+    report = collector.collect(
+        manifest_file(tmp_path), COMMIT, namespace=NAMESPACE,
+        kubernetes_context=CONTEXT, kubernetes_identity_plan=identity,
+        kubernetes_preflight=lambda *args: model, kubernetes_probe=probe,
+        attest=lambda *args: True,
+    )
+    assert len(calls) == 2
+    assert all(args[-1] == COMMIT for args in calls)
+    surface = report["surfaces"]["kubernetes"]
+    assert surface["identity_preflight"] == model
+    assert surface["runtime_accepted"] is False
+    assert report["status"] == "blocked"
+    assert surface["blocker"] == "nine-route/Kubernetes simulator/restart acceptance is pending"
 
 
 def test_collector_rechecks_simulator_routing_after_identity_preflight(

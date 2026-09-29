@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
-"""Read-only disposable Kubernetes identity and rollback preflight.
+"""Read-only disposable Kubernetes identity preflight.
 
 An operator-supplied identity plan is only an expected model. It is not a
-protected attestation, rollout authorization, or runtime/rollback acceptance.
+protected attestation, rollout authorization, or runtime acceptance.
 """
 
 from __future__ import annotations
@@ -16,11 +16,6 @@ import subprocess
 from collections.abc import Callable
 from pathlib import Path
 from urllib.parse import urlsplit
-
-if __package__:
-    from .passport_supported_provisioning_plan import FROZEN_LEGACY_RELEASE
-else:
-    from passport_supported_provisioning_plan import FROZEN_LEGACY_RELEASE
 
 COMMIT = re.compile(r"[0-9a-f]{40}\Z")
 DIGEST = re.compile(r"sha256:[0-9a-f]{64}\Z")
@@ -36,8 +31,8 @@ SERVICES = (
 )
 RESOURCES = (
     ("configmap", "marty-config"),
-    *(("deployment", name) for name in (*SERVICES, "issuance")),
-    *(("service", name) for name in (*SERVICES, "issuance")),
+    *(("deployment", name) for name in SERVICES),
+    *(("service", name) for name in SERVICES),
 )
 FLAGS = {
     "gateway": "PASSPORT_NATIVE_GATEWAY_ENABLED",
@@ -76,6 +71,8 @@ def kubernetes_config_value(container: dict, data: dict, name: str) -> object:
     if matches:
         entry = matches[0]
         if "value" in entry:
+            require("valueFrom" not in entry,
+                    "Kubernetes passport configuration source is ambiguous")
             return entry["value"]
         value_from = entry.get("valueFrom")
         source = value_from.get("configMapKeyRef") if isinstance(value_from, dict) else None
@@ -135,11 +132,9 @@ def validate_plan(plan: dict, source_commit: str, services_reference: str) -> No
             "source_commit",
             "plan_run_id",
             "services_reference",
-            "legacy_reference",
             "cluster",
             "namespace",
             "resources",
-            "rollback_model",
         }
         and plan["schema"] == "marty.passport-supported-kubernetes-model/v1"
         and plan["status"] == "blocked"
@@ -152,9 +147,7 @@ def validate_plan(plan: dict, source_commit: str, services_reference: str) -> No
             r"ghcr\.io/elevenid/marty-ui-oss/services@sha256:[0-9a-f]{64}",
             services_reference,
         )
-        is not None
-        and plan["legacy_reference"]
-        == ("ghcr.io/elevenid/marty-credentials-issuance@" + FROZEN_LEGACY_RELEASE[2]),
+        is not None,
         "Disposable Kubernetes plan source or images are invalid",
     )
     cluster = plan["cluster"]
@@ -199,25 +192,6 @@ def validate_plan(plan: dict, source_commit: str, services_reference: str) -> No
         )
         and len(set(resources.values())) == len(resources),
         "Disposable Kubernetes resource identities are invalid",
-    )
-    rollback = plan["rollback_model"]
-    require(
-        isinstance(rollback, dict)
-        and set(rollback)
-        == {
-            "gateway_owner",
-            "flow_owner",
-            "issuance_owner",
-            "native_url",
-            "selectors",
-        }
-        and all(
-            rollback[key] == "python"
-            for key in ("gateway_owner", "flow_owner", "issuance_owner")
-        )
-        and rollback["native_url"] == "http://issuance:8005"
-        and rollback["selectors"] == {flag: "false" for flag in FLAGS.values()},
-        "Disposable Kubernetes Python rollback model is invalid",
     )
 
 
@@ -303,11 +277,20 @@ def inspect(
                            "-o", "json"])
         require(not provider.strip(),
                 "Disposable Kubernetes physical provider ingress remains")
+        python_issuance = runner([*prefix, "-n", namespace["name"], "get", kind,
+                                  "issuance", "--ignore-not-found", "-o", "json"])
+        require(not python_issuance.strip(),
+                "Disposable Kubernetes Python issuance remains")
     provider_pods = object_command(
         [*prefix, "-n", namespace["name"], "get", "pods", "-l",
          "app=passport-provider-ingress", "-o", "json"], runner)
     require(provider_pods.get("items") == [],
             "Disposable Kubernetes physical provider Pod remains")
+    issuance_pods = object_command(
+        [*prefix, "-n", namespace["name"], "get", "pods", "-l",
+         "app=issuance", "-o", "json"], runner)
+    require(issuance_pods.get("items") == [],
+            "Disposable Kubernetes Python issuance Pod remains")
     for kind, name in RESOURCES:
         item = object_command(
             [*prefix, "-n", namespace["name"], "get", kind, name, "-o", "json"], runner
@@ -336,12 +319,7 @@ def inspect(
                 and len(containers) == 1
                 and isinstance(containers[0], dict)
                 and containers[0].get("name") == name
-                and containers[0].get("image")
-                == (
-                    services_reference
-                    if name != "issuance"
-                    else plan["legacy_reference"]
-                )
+                and containers[0].get("image") == services_reference
                 and spec.get("hostNetwork") is not True
                 and spec.get("hostPID") is not True
                 and spec.get("automountServiceAccountToken") is False,
@@ -417,8 +395,7 @@ def inspect(
         "resource_uids": observed,
         "static_identity_verified": True,
         "runtime_accepted": False,
-        "rollback_accepted": False,
-        "blocker": "protected plan attestation, live route proof, and rollback are absent",
+        "blocker": "protected plan attestation and live Rust route proof are absent",
     }
 
 
@@ -438,7 +415,6 @@ def main() -> int:
             "status": "blocked",
             "static_identity_verified": False,
             "runtime_accepted": False,
-            "rollback_accepted": False,
             "blocker": str(exc),
         }
     args.output.write_text(
