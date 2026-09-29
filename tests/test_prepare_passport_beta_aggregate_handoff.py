@@ -14,6 +14,7 @@ HEAD = "a" * 40
 CONTAINER = "b" * 64
 DIGEST = "c" * 64
 SNAPSHOT = "d" * 64
+ATTACHMENTS = "9" * 64
 STOPPED = ["e" * 64]
 
 
@@ -38,6 +39,7 @@ def fixture(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
         "intent_sha256": handoff.file_sha256(intent),
         "source_commit": HEAD, "postgres_container_id": CONTAINER,
         "fence_epoch": "7", "production_snapshot_sha256": SNAPSHOT,
+        "production_attachments_sha256": ATTACHMENTS,
         "stopped_container_ids": STOPPED,
     })
     native = write(tmp_path / "native.json", {
@@ -62,6 +64,7 @@ def fixture(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     monkeypatch.setattr(handoff, "verify_plan", lambda *args, **kwargs: {
         "verified": True, "stopped_container_ids": STOPPED,
         "production_snapshot_sha256": SNAPSHOT,
+        "production_attachments_sha256": ATTACHMENTS,
     })
     monkeypatch.setattr(handoff, "native_prepare", lambda *_: ({
         "source_commit": HEAD,

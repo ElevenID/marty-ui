@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import argparse
 import hashlib
+import hmac
 import json
 import os
 from pathlib import Path
@@ -13,9 +14,29 @@ import subprocess
 from typing import Any
 
 try:
-    from .prepare_passport_beta_aggregate_handoff import prepare as handoff_prepare
+    from .prepare_passport_beta_aggregate_handoff import (
+        prepare as handoff_prepare, verify_fence,
+    )
+    from .check_passport_beta_fence_authority import (
+        PROTECTED_FILES, file_sha256, manifest_source, protected_file, protected_source,
+        run,
+    )
+    from .probe_passport_beta_host import (
+        BETA_PROJECT, beta_psql, ids, inspect, production_attachment_sha256,
+        production_snapshot,
+    )
 except ImportError:
-    from prepare_passport_beta_aggregate_handoff import prepare as handoff_prepare
+    from prepare_passport_beta_aggregate_handoff import (
+        prepare as handoff_prepare, verify_fence,
+    )
+    from check_passport_beta_fence_authority import (
+        PROTECTED_FILES, file_sha256, manifest_source, protected_file, protected_source,
+        run,
+    )
+    from probe_passport_beta_host import (
+        BETA_PROJECT, beta_psql, ids, inspect, production_attachment_sha256,
+        production_snapshot,
+    )
 
 
 SERVICES_IMAGE = "ghcr.io/elevenid/marty-ui-oss/services@sha256:"
@@ -131,15 +152,32 @@ def render_candidate(handoff: dict[str, Any]) -> tuple[dict[str, Any], dict[str,
     common = ["docker", "compose", "--project-name", "elevenid-beta",
               *env_args, *(part for relative in COMPOSE_FILES
                            for part in ("-f", str(ROOT / relative))), "-f", "-"]
-    ui_command = ["docker", "compose", "--project-name", "elevenid-beta-ui",
-                  *env_args, "-f", str(ROOT / UI_COMPOSE_FILE),
-                  "config", "--format", "json"]
+    ui_common = ["docker", "compose", "--project-name", "elevenid-beta-ui",
+                 *env_args, "-f", str(ROOT / UI_COMPOSE_FILE)]
+    ui_command = ui_common + ["config", "--format", "json"]
     try:
         beta = subprocess.run(common + ["config", "--format", "json"],
                               input=override, capture_output=True, text=True,
                               env=environment_values, cwd=ROOT, timeout=120, check=False)
         ui = subprocess.run(ui_command, capture_output=True, text=True,
                             env=environment_values, cwd=ROOT, timeout=120, check=False)
+        service_hashes = {}
+        for name in sorted(SIGNED_APPLICATIONS | {"issuance"}):
+            result = subprocess.run(common + ["config", "--hash", name],
+                                    input=override, capture_output=True, text=True,
+                                    env=environment_values, cwd=ROOT, timeout=120,
+                                    check=False)
+            require(result.returncode == 0 and re.fullmatch(
+                rf"{re.escape(name)} [0-9a-f]{{64}}\s*", result.stdout) is not None,
+                "Protected aggregate Compose service hash is unavailable")
+            service_hashes[name] = result.stdout.split()[1]
+        ui_hash = subprocess.run(ui_common + ["config", "--hash", "ui-prod"],
+                                 capture_output=True, text=True,
+                                 env=environment_values, cwd=ROOT, timeout=120,
+                                 check=False)
+        require(ui_hash.returncode == 0 and re.fullmatch(
+            r"ui-prod [0-9a-f]{64}\s*", ui_hash.stdout) is not None,
+            "Protected aggregate UI Compose hash is unavailable")
     except (OSError, subprocess.SubprocessError) as exc:
         raise ComposePlanError("Protected aggregate Compose rendering failed") from exc
     require(beta.returncode == 0 and ui.returncode == 0,
@@ -159,7 +197,9 @@ def render_candidate(handoff: dict[str, Any]) -> tuple[dict[str, Any], dict[str,
                 "image_override_sha256": hashlib.sha256(override.encode()).hexdigest(),
                 "image_override": override,
                 "beta_render_sha256": hashlib.sha256(beta.stdout.encode()).hexdigest(),
-                "ui_render_sha256": hashlib.sha256(ui.stdout.encode()).hexdigest()}
+                "ui_render_sha256": hashlib.sha256(ui.stdout.encode()).hexdigest(),
+                "service_config_hashes": service_hashes,
+                "ui_config_hash": ui_hash.stdout.split()[1]}
     return beta_config, ui_config, evidence
 
 
@@ -263,21 +303,348 @@ def prepare(handoff: dict[str, Any], maintenance_intent: dict[str, Any],
             and ui_networks["default"].get("name") == "elevenid-beta-network",
             "Rendered beta UI network differs")
     old_services = set(previous) - {"postgres"}
+    require("openbao" in old_services
+            and previous["openbao"] not in maintenance_intent["stop_container_ids"],
+            "Beta OpenBao was not preserved through maintenance")
     replacement = (old_services & (SIGNED_APPLICATIONS | {"issuance"})) | NEW_SERVICES
-    restart = old_services - replacement
+    restart = old_services - replacement - {"openbao"}
+    network_definitions = rendered.get("networks")
+    require(isinstance(network_definitions, dict),
+            "Rendered beta networks are invalid")
+    expected_networks = {}
+    for name in sorted(set(previous) | NEW_SERVICES):
+        service = services[name]
+        configured = service.get("networks", {"marty-network": None})
+        keys = list(configured) if isinstance(configured, dict) else configured
+        require(isinstance(keys, list)
+                and all(isinstance(key, str) for key in keys),
+                "Rendered beta service network configuration is invalid")
+        names = []
+        for key in keys:
+            definition = network_definitions.get(key)
+            require(isinstance(definition, dict)
+                    and isinstance(definition.get("name"), str),
+                    "Rendered beta network name is invalid")
+            names.append(definition["name"])
+        require(bool(names) and len(names) == len(set(names)),
+                "Rendered beta service networks are ambiguous")
+        expected_networks[name] = sorted(names)
     return {
         "schema": "marty.passport-beta-aggregate-compose-plan/v1",
         "source_commit": handoff["source_commit"],
+        "stack_manifest_sha256": handoff["stack_manifest_sha256"],
+        "fence_receipt_sha256": handoff["fence_receipt_sha256"],
+        "maintenance_receipt_sha256": handoff["maintenance_receipt_sha256"],
+        "native_receipt_sha256": handoff["native_receipt_sha256"],
         "postgres_container_id": previous["postgres"],
+        "postgres_system_identifier": maintenance_intent["postgres_system_identifier"],
+        "database_oid": maintenance_intent["database_oid"],
+        "fence_epoch": handoff["fence_epoch"],
+        "migration_set_sha256": handoff["migration_set_sha256"],
+        "enable_login_sql_sha256": handoff["enable_login_sql_sha256"],
+        "production_snapshot_sha256": handoff["production_snapshot_sha256"],
+        "production_attachments_sha256": handoff["production_attachments_sha256"],
+        "services_image": handoff["services_image"],
+        "issuance_image": handoff["issuance_image"],
         "restart_infrastructure": sorted(restart - INGRESS),
+        "preserved_infrastructure": ["openbao"],
         "recreate_applications": sorted(replacement - INGRESS),
         "restart_ingress_last": sorted(restart & INGRESS),
         "recreate_ingress_last": sorted(replacement & INGRESS),
         "target_services": sorted(old_services | NEW_SERVICES),
+        "old_container_ids_by_service": previous,
+        "expected_networks_by_service": expected_networks,
         "schema_startup_mode": "validate",
         "ui_project": "elevenid-beta-ui",
         "ui_image": handoff["ui_image"],
     }
+
+
+RENDER_EVIDENCE = (
+    "compose_files_sha256", "ui_compose_file_sha256", "env_files_sha256",
+    "image_override_sha256", "image_override", "beta_render_sha256",
+    "ui_render_sha256", "service_config_hashes", "ui_config_hash",
+)
+
+
+def verify_render_plan(recorded: dict[str, Any]) -> dict[str, Any]:
+    """Re-render pinned inputs under the operator's host lock before each up."""
+    require(recorded.get("schema") == "marty.passport-beta-aggregate-compose-plan/v1"
+            and protected_source(run) == recorded.get("source_commit"),
+            "Aggregate Compose source changed")
+    for relative in PROTECTED_FILES:
+        protected_file(relative, run)
+    beta, ui, fresh = render_candidate(recorded)
+    require(all(recorded.get(key) == fresh[key] for key in RENDER_EVIDENCE),
+            "Aggregate Compose render or input changed")
+    require(beta.get("name") == "elevenid-beta"
+            and ui.get("name") == "elevenid-beta-ui",
+            "Aggregate Compose projects changed")
+    return {"schema": "marty.passport-beta-aggregate-render-check/v1",
+            "verified": True, "source_commit": recorded["source_commit"],
+            "beta_render_sha256": fresh["beta_render_sha256"],
+            "ui_render_sha256": fresh["ui_render_sha256"]}
+
+
+def verify_preserved_openbao_token(recorded: dict[str, Any]) -> dict[str, Any]:
+    """Match the new signer token to the still-running beta OpenBao without logging it."""
+    verify_render_plan(recorded)
+    rendered, _, _ = render_candidate(recorded)
+    old = recorded.get("old_container_ids_by_service")
+    require(isinstance(old, dict)
+            and CONTAINER.fullmatch(str(old.get("openbao"))) is not None,
+            "Preserved OpenBao identity is invalid")
+    bao = inspect(old["openbao"], run)
+    config = bao.get("Config")
+    raw_env = config.get("Env") if isinstance(config, dict) else None
+    require(bao.get("Id") == old["openbao"]
+            and isinstance(raw_env, list)
+            and all(isinstance(value, str) and "=" in value for value in raw_env),
+            "Preserved OpenBao environment is invalid")
+    token_rows = [value.split("=", 1)[1] for value in raw_env
+                  if value.startswith("BAO_DEV_ROOT_TOKEN_ID=")]
+    services = rendered.get("services")
+    signer = services.get("passport-callback-signer") if isinstance(services, dict) else None
+    signer_token = environment(signer).get("BAO_TOKEN") if isinstance(signer, dict) else None
+    require(len(token_rows) == 1 and bool(token_rows[0])
+            and isinstance(signer_token, str) and bool(signer_token)
+            and hmac.compare_digest(token_rows[0], signer_token),
+            "New callback signer token differs from preserved OpenBao")
+    return {"schema": "marty.passport-beta-openbao-token-check/v1", "verified": True,
+            "source_commit": recorded["source_commit"]}
+
+
+def verify_resume_plan(
+    recorded: dict[str, Any], intent: dict[str, Any], stack_manifest: Path,
+    fence_receipt: Path, maintenance_receipt: Path, native_receipt: Path,
+) -> dict[str, Any]:
+    """Recheck pinned inputs and a partial Rust generation after app login opens."""
+    verify_render_plan(recorded)
+    source = recorded["source_commit"]
+    signed = manifest_source(stack_manifest, source)
+    require(signed["manifest_sha256"] == recorded.get("stack_manifest_sha256")
+            and signed["services_image"] == recorded.get("services_image")
+            and signed["issuance_image"] == recorded.get("issuance_image")
+            and (UI_IMAGE + signed["oci_digests"]["ghcr.io/elevenid/marty-ui-oss/ui"].split(":", 1)[1])
+                == recorded.get("ui_image")
+            and file_sha256(fence_receipt) == recorded.get("fence_receipt_sha256")
+            and file_sha256(maintenance_receipt) == recorded.get("maintenance_receipt_sha256")
+            and file_sha256(native_receipt) == recorded.get("native_receipt_sha256"),
+            "Aggregate resume source or receipt changed")
+    try:
+        maintenance = json.loads(maintenance_receipt.read_text(encoding="utf-8"))
+        native = json.loads(native_receipt.read_text(encoding="utf-8"))
+    except (OSError, ValueError) as exc:
+        raise ComposePlanError("Aggregate resume receipt is unreadable") from exc
+    intent_path = Path(str(maintenance_receipt) + ".intent.json")
+    require(isinstance(maintenance, dict) and isinstance(native, dict)
+            and maintenance.get("schema") == "marty.passport-beta-db-maintenance-start/v1"
+            and native.get("schema") == "marty.passport-beta-native-db-gates/v1"
+            and maintenance.get("source_commit") == source
+            and native.get("source_commit") == source
+            and maintenance.get("intent_sha256") == file_sha256(intent_path)
+            and native.get("maintenance_receipt_sha256")
+                == file_sha256(maintenance_receipt)
+            and maintenance.get("production_snapshot_sha256")
+                == recorded.get("production_snapshot_sha256")
+            and maintenance.get("production_attachments_sha256")
+                == recorded.get("production_attachments_sha256")
+            and native.get("production_snapshot_sha256")
+                == recorded.get("production_snapshot_sha256")
+            and native.get("migration_set_sha256")
+                == recorded.get("migration_set_sha256")
+            and maintenance.get("postgres_container_id")
+                == recorded.get("postgres_container_id")
+            and native.get("postgres_container_id")
+                == recorded.get("postgres_container_id")
+            and str(maintenance.get("fence_epoch"))
+                == str(recorded.get("fence_epoch"))
+            and str(native.get("fence_epoch"))
+                == str(recorded.get("fence_epoch"))
+            and native.get("stopped_container_ids")
+                == maintenance.get("stopped_container_ids")
+            and native.get("app_login_enabled") is False
+            and file_sha256(ROOT / "scripts/sql/passport-beta-db-enable-app-login.sql")
+                == recorded.get("enable_login_sql_sha256"),
+            "Aggregate resume receipt lineage changed")
+    old = recorded.get("old_container_ids_by_service")
+    generation = intent.get("beta_generation")
+    require(isinstance(old, dict) and isinstance(generation, list)
+            and intent.get("source_commit") == source
+            and {item.get("service"): item.get("container_id") for item in generation
+                 if isinstance(item, dict)} == old
+            and intent.get("stop_container_ids")
+                == [item["container_id"] for item in generation
+                    if item["service"] not in {"postgres", "openbao"}]
+            and intent.get("stop_container_ids")
+                == maintenance.get("stopped_container_ids")
+            and intent.get("postgres_container_id")
+                == recorded.get("postgres_container_id")
+            and str(intent.get("fence_epoch"))
+                == str(recorded.get("fence_epoch")),
+            "Aggregate resume maintenance intent changed")
+    handoff = {**recorded, "schema": "marty.passport-beta-aggregate-handoff/v1",
+               "stopped_container_ids": intent["stop_container_ids"]}
+    beta_rendered, ui_rendered, _ = render_candidate(recorded)
+    recomputed = prepare(handoff, intent, beta_rendered, ui_rendered)
+    require(all(recorded.get(key) == value for key, value in recomputed.items()),
+            "Aggregate resume startup groups differ from signed generation")
+    docker = intent.get("docker")
+    require(isinstance(docker, dict)
+            and run(["docker", "context", "show"]) == docker.get("context")
+            and run(["docker", "info", "--format", "{{.ID}}"]) == docker.get("daemon_id")
+            and production_snapshot(run).get("sha256")
+                == recorded.get("production_snapshot_sha256")
+            and production_attachment_sha256(run)
+                == recorded.get("production_attachments_sha256"),
+            "Aggregate resume target or production changed")
+    for service in ("postgres", "openbao"):
+        item = next((entry for entry in generation if entry["service"] == service), None)
+        require(isinstance(item, dict), "Aggregate resume preserved service is absent")
+        container = inspect(item["container_id"], run)
+        state = container.get("State")
+        require(container.get("Id") == item["container_id"]
+                and container.get("Image") == item.get("image_id")
+                and isinstance(state, dict)
+                and state.get("StartedAt") == item.get("started_at")
+                and state.get("Running") is True
+                and state.get("Status") == "running",
+                f"Aggregate resume preserved {service} changed")
+    observed: dict[str, list[dict[str, Any]]] = {}
+    for container_id in ids(BETA_PROJECT, run):
+        container = inspect(container_id, run)
+        config = container.get("Config")
+        labels = config.get("Labels") if isinstance(config, dict) else None
+        service = labels.get("com.docker.compose.service") if isinstance(labels, dict) else None
+        require(isinstance(service, str)
+                and labels.get("com.docker.compose.project") == BETA_PROJECT
+                and service in set(old) | NEW_SERVICES,
+                "Aggregate resume beta service inventory changed")
+        observed.setdefault(service, []).append(container)
+    require(all(len(items) <= 2 for items in observed.values()),
+            "Aggregate resume beta service is duplicated")
+    recreated = set(recorded.get("recreate_applications", [])) | set(
+        recorded.get("recreate_ingress_last", []))
+    rendered_services = beta_rendered.get("services")
+    require(isinstance(rendered_services, dict),
+            "Aggregate resume rendered services are invalid")
+    for service, containers in observed.items():
+        replacements = [item for item in containers
+                        if item.get("Id") != old.get(service)]
+        require(len(replacements) <= 1,
+                "Aggregate resume beta service has duplicate replacements")
+        for container in containers:
+            state = container.get("State")
+            require(isinstance(state, dict), "Aggregate resume beta state is invalid")
+            networks = container.get("NetworkSettings", {}).get("Networks")
+            expected_networks = recorded.get("expected_networks_by_service")
+            require(isinstance(networks, dict)
+                    and isinstance(expected_networks, dict)
+                    and isinstance(expected_networks.get(service), list)
+                    and set(networks).issubset(set(expected_networks[service])),
+                    "Aggregate resume beta service joined an unexpected network")
+            if service in recreated:
+                if container.get("Id") == old.get(service):
+                    require(state.get("Running") is False,
+                            "Stopped old beta application restarted during resume")
+                else:
+                    expected = (recorded["issuance_image"] if service == "issuance"
+                                else recorded["services_image"])
+                    config = container.get("Config")
+                    require(isinstance(config, dict)
+                            and config.get("Image") == expected,
+                            "Aggregate resume application image differs")
+                    labels = config.get("Labels")
+                    expected_hashes = recorded.get("service_config_hashes")
+                    require(isinstance(labels, dict)
+                            and isinstance(expected_hashes, dict)
+                            and re.fullmatch(r"[0-9a-f]{64}",
+                                             str(expected_hashes.get(service))) is not None
+                            and labels.get("com.docker.compose.config-hash")
+                                == expected_hashes.get(service),
+                            "Aggregate resume Compose service config differs")
+                    if service in SIGNED_APPLICATIONS:
+                        raw_env = config.get("Env")
+                        require(isinstance(raw_env, list)
+                                and all(isinstance(value, str) and "=" in value
+                                        for value in raw_env),
+                                "Aggregate resume application environment is invalid")
+                        selected = dict(value.split("=", 1) for value in raw_env)
+                        require(len(selected) == len(raw_env)
+                                and selected.get("SERVICE_NAME")
+                                    == service.replace("-", "_")
+                                and all(selected.get(key) == value
+                                        for key, value in RUNTIME_ENV.get(service, {}).items()),
+                                "Aggregate resume Rust runtime selector differs")
+                    expected_service = rendered_services.get(service)
+                    require(isinstance(expected_service, dict),
+                            "Aggregate resume rendered application is absent")
+                    for field, docker_field in (("entrypoint", "Entrypoint"),
+                                                ("command", "Cmd")):
+                        if field in expected_service:
+                            require(config.get(docker_field) == expected_service[field],
+                                    "Aggregate resume application process differs")
+                    if service == "passport-callback-signer":
+                        networks = container.get("NetworkSettings", {}).get("Networks")
+                        require(isinstance(networks, dict)
+                                and set(networks)
+                                    == {"elevenid-beta-passport-callback-signing"},
+                                "Aggregate resume callback signer network differs")
+            else:
+                require(container.get("Id") == old.get(service),
+                        "Aggregate resume infrastructure identity changed")
+    ready_services = []
+    for service in sorted(recreated):
+        containers = observed.get(service, [])
+        if len(containers) != 1 or containers[0].get("Id") == old.get(service):
+            continue
+        state = containers[0]["State"]
+        health = state.get("Health")
+        if (state.get("Running") is True and state.get("Status") == "running"
+                and (health is None or (isinstance(health, dict)
+                                         and health.get("Status") == "healthy"))):
+            ready_services.append(service)
+    ui_ids = ids("elevenid-beta-ui", run)
+    require(len(ui_ids) <= 1, "Aggregate resume UI generation is ambiguous")
+    ready_ui = False
+    if ui_ids:
+        ui_container = inspect(ui_ids[0], run)
+        ui_config = ui_container.get("Config")
+        ui_labels = ui_config.get("Labels") if isinstance(ui_config, dict) else None
+        ui_state = ui_container.get("State")
+        require(isinstance(ui_labels, dict)
+                and ui_labels.get("com.docker.compose.project") == "elevenid-beta-ui"
+                and ui_labels.get("com.docker.compose.service") == "ui-prod"
+                and isinstance(ui_state, dict),
+                "Aggregate resume UI identity is invalid")
+        ui_health = ui_state.get("Health")
+        ready_ui = (ui_config.get("Image") == recorded.get("ui_image")
+                    and ui_labels.get("com.docker.compose.config-hash")
+                        == recorded.get("ui_config_hash")
+                    and set(ui_container.get("NetworkSettings", {}).get("Networks", {}))
+                        == {"elevenid-beta-network"}
+                    and ui_state.get("Running") is True
+                    and ui_state.get("Status") == "running"
+                    and (ui_health is None or (isinstance(ui_health, dict)
+                                               and ui_health.get("Status") == "healthy")))
+    marker = beta_psql(
+        "SELECT (SELECT fence_epoch::text || '|' || source_commit || '|' || "
+        "migration_set_sha256 FROM passport_cutover.native_migration_receipt "
+        "WHERE singleton=true) || '|' || "
+        "(SELECT rolcanlogin::text FROM pg_roles WHERE rolname='marty') || '|' || "
+        "(SELECT rolcanlogin::text FROM pg_roles "
+        "WHERE rolname='marty_beta_migrator')",
+        run, recorded["postgres_container_id"],
+    )
+    prefix = (f"{recorded['fence_epoch']}|{source}|"
+              f"{recorded['migration_set_sha256']}|")
+    require(marker in {prefix + "true|false", prefix + "false|false"},
+            "Aggregate resume native migration marker or role state changed")
+    verify_fence(intent, run)
+    return {"schema": "marty.passport-beta-aggregate-resume-check/v1",
+            "verified": True, "source_commit": source,
+            "app_login_enabled": marker.endswith("true|false"),
+            "ready_services": ready_services, "ready_ui": ready_ui}
 
 
 def main() -> None:
@@ -286,19 +653,49 @@ def main() -> None:
     parser.add_argument("--fence-receipt", required=True, type=Path)
     parser.add_argument("--maintenance-receipt", required=True, type=Path)
     parser.add_argument("--native-receipt", required=True, type=Path)
+    parser.add_argument("--verify-plan", type=Path)
+    parser.add_argument("--verify-render-plan", type=Path)
+    parser.add_argument("--verify-openbao-token", type=Path)
+    parser.add_argument("--verify-resume-plan", type=Path)
     args = parser.parse_args()
     try:
-        handoff = handoff_prepare(args.stack_manifest, args.fence_receipt,
-                                  args.maintenance_receipt, args.native_receipt)
-        intent_path = Path(str(args.maintenance_receipt) + ".intent.json")
-        intent = json.loads(intent_path.read_text(encoding="utf-8"))
-        require(isinstance(intent, dict),
-                "Aggregate Compose input is invalid")
-        rendered, ui_rendered, evidence = render_candidate(handoff)
-        plan = prepare(handoff, intent, rendered, ui_rendered)
-        plan.update(evidence)
-        print(json.dumps(plan,
-                         sort_keys=True, separators=(",", ":")))
+        require(sum(bool(item) for item in (args.verify_plan,
+                                            args.verify_render_plan,
+                                            args.verify_openbao_token,
+                                            args.verify_resume_plan)) <= 1,
+                "Choose one aggregate Compose verification mode")
+        if args.verify_resume_plan:
+            recorded = json.loads(args.verify_resume_plan.read_text(encoding="utf-8"))
+            intent_path = Path(str(args.maintenance_receipt) + ".intent.json")
+            intent = json.loads(intent_path.read_text(encoding="utf-8"))
+            require(isinstance(recorded, dict) and isinstance(intent, dict),
+                    "Recorded aggregate resume input is invalid")
+            result = verify_resume_plan(recorded, intent, args.stack_manifest,
+                                        args.fence_receipt, args.maintenance_receipt,
+                                        args.native_receipt)
+        elif args.verify_openbao_token:
+            recorded = json.loads(args.verify_openbao_token.read_text(encoding="utf-8"))
+            require(isinstance(recorded, dict), "Recorded Compose plan is invalid")
+            result = verify_preserved_openbao_token(recorded)
+        elif args.verify_render_plan:
+            recorded = json.loads(args.verify_render_plan.read_text(encoding="utf-8"))
+            require(isinstance(recorded, dict), "Recorded Compose plan is invalid")
+            result = verify_render_plan(recorded)
+        else:
+            handoff = handoff_prepare(args.stack_manifest, args.fence_receipt,
+                                      args.maintenance_receipt, args.native_receipt)
+            intent_path = Path(str(args.maintenance_receipt) + ".intent.json")
+            intent = json.loads(intent_path.read_text(encoding="utf-8"))
+            require(isinstance(intent, dict), "Aggregate Compose input is invalid")
+            rendered, ui_rendered, evidence = render_candidate(handoff)
+            result = prepare(handoff, intent, rendered, ui_rendered)
+            result.update(evidence)
+            if args.verify_plan:
+                recorded = json.loads(args.verify_plan.read_text(encoding="utf-8"))
+                require(recorded == result, "Recorded aggregate Compose plan changed")
+                result = {"schema": "marty.passport-beta-aggregate-plan-check/v1",
+                          "verified": True, "source_commit": result["source_commit"]}
+        print(json.dumps(result, sort_keys=True, separators=(",", ":")))
     except (OSError, RuntimeError, ValueError, KeyError) as exc:
         raise SystemExit(f"Protected beta aggregate Compose plan is unavailable: {exc}") from exc
 

@@ -108,7 +108,9 @@ def prepare(
             and str(maintenance.get("fence_epoch")) == str(intent.get("fence_epoch"))
             and maintenance.get("stopped_container_ids") == intent.get("stop_container_ids")
             and maintenance.get("production_snapshot_sha256")
-                == stopped.get("production_snapshot_sha256"),
+                == stopped.get("production_snapshot_sha256")
+            and maintenance.get("production_attachments_sha256")
+                == stopped.get("production_attachments_sha256"),
             "Beta maintenance receipt differs from the stopped target")
     require(native.get("source_commit") == source_commit
             and plan.get("source_commit") == source_commit
@@ -156,6 +158,7 @@ def prepare(
         "migration_set_sha256": digest,
         "enable_login_sql_sha256": plan["enable_login_sql_sha256"],
         "production_snapshot_sha256": stopped["production_snapshot_sha256"],
+        "production_attachments_sha256": stopped["production_attachments_sha256"],
         "stopped_container_ids": stopped["stopped_container_ids"],
         "release": signed["release"],
         "ui_image": f"{UI_REPOSITORY}@{signed['oci_digests'][UI_REPOSITORY]}",

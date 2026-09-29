@@ -21,21 +21,30 @@ def candidate():
     services_image = SERVICES_IMAGE + "b" * 64
     issuance_image = ISSUANCE_IMAGE + "c" * 64
     old_names = sorted((SIGNED_APPLICATIONS - NEW_SERVICES) | {
-        "issuance", "postgres", "redis", "cloudflared", "nginx-proxy", "envoy",
+        "issuance", "postgres", "openbao", "redis", "cloudflared", "nginx-proxy", "envoy",
     })
     generation = [{"service": name, "container_id": f"{index + 1:064x}"}
                   for index, name in enumerate(old_names)]
     stops = [item["container_id"] for item in generation
-             if item["service"] != "postgres"]
+             if item["service"] not in {"postgres", "openbao"}]
     handoff = {
         "schema": "marty.passport-beta-aggregate-handoff/v1",
         "source_commit": head, "services_image": services_image,
         "issuance_image": issuance_image, "stopped_container_ids": stops,
         "ui_image": UI_IMAGE + "d" * 64,
+        "stack_manifest_sha256": "1" * 64,
+        "fence_receipt_sha256": "2" * 64,
+        "maintenance_receipt_sha256": "3" * 64,
+        "native_receipt_sha256": "4" * 64,
+        "fence_epoch": "7", "migration_set_sha256": "5" * 64,
+        "enable_login_sql_sha256": "6" * 64,
+        "production_snapshot_sha256": "7" * 64,
+        "production_attachments_sha256": "8" * 64,
     }
     intent = {
         "schema": "marty.passport-beta-db-maintenance-plan/v1",
         "source_commit": head, "stop_container_ids": stops,
+        "postgres_system_identifier": "100", "database_oid": "200",
         "beta_generation": generation,
     }
     services = {name: {} for name in old_names}
@@ -50,12 +59,17 @@ def candidate():
         "/usr/local/bin/marty-canvas-sync-worker"]
     services["passport-callback-signer"]["networks"] = {
         "passport-callback-signing": None}
+    services["openbao"]["networks"] = {
+        "marty-network": None, "passport-callback-signing": None}
     services["passport-beta-bureau"]["networks"] = {
         "marty-network": None, "passport-callback-signing": None}
     services["issuance"] = {"image": issuance_image}
     rendered = {"name": "elevenid-beta", "services": services,
-                "networks": {"passport-callback-signing": {
-                    "name": "elevenid-beta-passport-callback-signing", "internal": True}}}
+                "networks": {
+                    "marty-network": {"name": "elevenid-beta-network"},
+                    "passport-callback-signing": {
+                        "name": "elevenid-beta-passport-callback-signing",
+                        "internal": True}}}
     ui = {"name": "elevenid-beta-ui", "services": {
         "ui-prod": {"image": handoff["ui_image"]}},
         "networks": {"default": {"external": True,
@@ -71,6 +85,8 @@ def test_rendered_compose_assigns_signed_rust_start_groups():
     assert "cloudflared" in plan["restart_ingress_last"]
     assert "flow" in plan["recreate_applications"]
     assert "postgres" not in plan["target_services"]
+    assert plan["preserved_infrastructure"] == ["openbao"]
+    assert "openbao" not in plan["restart_infrastructure"]
     assert plan["ui_project"] == "elevenid-beta-ui"
 
 
@@ -147,6 +163,9 @@ def test_candidate_render_uses_protected_file_list_and_signed_images(tmp_path: P
     commands = []
     def fake_run(command, **kwargs):
         commands.append((command, kwargs))
+        if "--hash" in command:
+            return SimpleNamespace(returncode=0,
+                                   stdout=f"{command[-1]} {'0' * 64}\n", stderr="")
         payload = ui if "elevenid-beta-ui" in command else beta
         return SimpleNamespace(returncode=0, stdout=json.dumps(payload), stderr="")
     monkeypatch.setattr(compose.subprocess, "run", fake_run)
@@ -157,3 +176,161 @@ def test_candidate_render_uses_protected_file_list_and_signed_images(tmp_path: P
     assert commands[0][1]["env"]["MARTY_SERVICES_IMAGE"] == handoff["services_image"]
     assert commands[1][1]["env"]["MARTY_UI_RELEASE_IMAGE"] == handoff["ui_image"]
     assert set(evidence["compose_files_sha256"]) == {"base.yml", "passport.yml"}
+    assert evidence["service_config_hashes"]["flow"] == "0" * 64
+
+
+def test_render_recheck_rejects_environment_drift(monkeypatch):
+    handoff, intent, beta, ui = candidate()
+    plan = prepare(handoff, intent, beta, ui)
+    plan.update({key: "a" for key in compose.RENDER_EVIDENCE})
+    monkeypatch.setattr(compose, "protected_source", lambda _runner: handoff["source_commit"])
+    monkeypatch.setattr(compose, "PROTECTED_FILES", ())
+    monkeypatch.setattr(compose, "render_candidate", lambda _: (
+        beta, ui, {key: "b" for key in compose.RENDER_EVIDENCE}))
+    with pytest.raises(ComposePlanError, match="render or input changed"):
+        compose.verify_render_plan(plan)
+
+
+def test_render_recheck_requires_protected_source(monkeypatch):
+    handoff, intent, beta, ui = candidate()
+    plan = prepare(handoff, intent, beta, ui)
+    monkeypatch.setattr(compose, "protected_source", lambda _runner: "0" * 40)
+    with pytest.raises(ComposePlanError, match="source changed"):
+        compose.verify_render_plan(plan)
+
+
+def test_preserved_openbao_token_matches_new_signer_without_exposing_it(monkeypatch):
+    handoff, intent, beta, ui = candidate()
+    plan = prepare(handoff, intent, beta, ui)
+    beta["services"]["passport-callback-signer"]["environment"]["BAO_TOKEN"] = "secret"
+    monkeypatch.setattr(compose, "verify_render_plan", lambda _: {"verified": True})
+    monkeypatch.setattr(compose, "render_candidate", lambda _: (beta, ui, {}))
+    monkeypatch.setattr(compose, "inspect", lambda _id, _runner: {
+        "Id": plan["old_container_ids_by_service"]["openbao"],
+        "Config": {"Env": ["BAO_DEV_ROOT_TOKEN_ID=secret"]},
+    })
+    assert compose.verify_preserved_openbao_token(plan)["verified"] is True
+    beta["services"]["passport-callback-signer"]["environment"]["BAO_TOKEN"] = "wrong"
+    with pytest.raises(ComposePlanError, match="differs from preserved OpenBao"):
+        compose.verify_preserved_openbao_token(plan)
+
+
+def test_resume_accepts_partial_signed_generation_after_login(monkeypatch, tmp_path):
+    handoff, intent, rendered, ui = candidate()
+    plan = prepare(handoff, intent, rendered, ui)
+    plan["service_config_hashes"] = {name: "0" * 64 for name in
+                                     compose.SIGNED_APPLICATIONS | {"issuance"}}
+    for item in intent["beta_generation"]:
+        item.update({"image_id": "sha256:" + "e" * 64, "started_at": "start"})
+    records = {}
+    for service in ("postgres", "openbao"):
+        container_id = plan["old_container_ids_by_service"][service]
+        records[container_id] = {
+            "Id": container_id, "Image": "sha256:" + "e" * 64,
+            "Config": {"Labels": {"com.docker.compose.project": "elevenid-beta",
+                                  "com.docker.compose.service": service}},
+            "State": {"StartedAt": "start", "Running": True, "Status": "running"},
+            "NetworkSettings": {"Networks": (
+                {"elevenid-beta-network": {},
+                 "elevenid-beta-passport-callback-signing": {}}
+                if service == "openbao" else {"elevenid-beta-network": {}})},
+        }
+    new_flow_id = "f" * 64
+    records[new_flow_id] = {
+        "Id": new_flow_id,
+        "Config": {"Image": plan["services_image"],
+                   "Env": ["SERVICE_NAME=flow"] + [
+                       f"{key}={value}" for key, value in compose.RUNTIME_ENV["flow"].items()],
+                   "Labels": {"com.docker.compose.project": "elevenid-beta",
+                              "com.docker.compose.service": "flow",
+                              "com.docker.compose.config-hash": "0" * 64}},
+        "State": {"Running": True, "Status": "running"},
+        "NetworkSettings": {"Networks": {"elevenid-beta-network": {}}},
+    }
+    monkeypatch.setattr(compose, "verify_render_plan", lambda _: {"verified": True})
+    monkeypatch.setattr(compose, "render_candidate", lambda _: (rendered, ui, {}))
+    monkeypatch.setattr(compose, "manifest_source", lambda *_: {
+        "manifest_sha256": plan["stack_manifest_sha256"],
+        "services_image": plan["services_image"],
+        "issuance_image": plan["issuance_image"],
+        "oci_digests": {"ghcr.io/elevenid/marty-ui-oss/ui": "sha256:" + "d" * 64},
+    })
+    receipt_hashes = {"fence": plan["fence_receipt_sha256"],
+                      "maintenance": plan["maintenance_receipt_sha256"],
+                      "native": plan["native_receipt_sha256"],
+                      "maintenance.intent.json": "0" * 64,
+                      "passport-beta-db-enable-app-login.sql":
+                          plan["enable_login_sql_sha256"]}
+    monkeypatch.setattr(compose, "file_sha256", lambda path: receipt_hashes[path.name])
+    (tmp_path / "maintenance").write_text(json.dumps({
+        "schema": "marty.passport-beta-db-maintenance-start/v1",
+        "source_commit": plan["source_commit"], "intent_sha256": "0" * 64,
+        "production_snapshot_sha256": plan["production_snapshot_sha256"],
+        "production_attachments_sha256": plan["production_attachments_sha256"],
+        "postgres_container_id": plan["postgres_container_id"],
+        "fence_epoch": plan["fence_epoch"],
+        "stopped_container_ids": intent["stop_container_ids"],
+    }), encoding="utf-8")
+    (tmp_path / "native").write_text(json.dumps({
+        "schema": "marty.passport-beta-native-db-gates/v1",
+        "source_commit": plan["source_commit"],
+        "maintenance_receipt_sha256": plan["maintenance_receipt_sha256"],
+        "production_snapshot_sha256": plan["production_snapshot_sha256"],
+        "postgres_container_id": plan["postgres_container_id"],
+        "fence_epoch": plan["fence_epoch"],
+        "migration_set_sha256": plan["migration_set_sha256"],
+        "stopped_container_ids": intent["stop_container_ids"],
+        "app_login_enabled": False,
+    }), encoding="utf-8")
+    monkeypatch.setattr(compose, "run", lambda command: (
+        "desktop-linux" if command[1] == "context" else "daemon"))
+    intent["docker"] = {"context": "desktop-linux", "daemon_id": "daemon"}
+    intent["postgres_container_id"] = plan["postgres_container_id"]
+    intent["fence_epoch"] = plan["fence_epoch"]
+    monkeypatch.setattr(compose, "production_snapshot", lambda _: {
+        "sha256": plan["production_snapshot_sha256"]})
+    monkeypatch.setattr(compose, "production_attachment_sha256", lambda _: (
+        plan["production_attachments_sha256"]))
+    monkeypatch.setattr(compose, "inspect", lambda container_id, _: records[container_id])
+    monkeypatch.setattr(compose, "ids", lambda project, _: (
+        list(records) if project == "elevenid-beta" else []))
+    monkeypatch.setattr(compose, "beta_psql", lambda *_: (
+        f"{plan['fence_epoch']}|{plan['source_commit']}|"
+        f"{plan['migration_set_sha256']}|true|false"))
+    monkeypatch.setattr(compose, "verify_fence", lambda *_: None)
+    evidence = compose.verify_resume_plan(plan, intent, tmp_path / "stack",
+                                          tmp_path / "fence", tmp_path / "maintenance",
+                                          tmp_path / "native")
+    assert evidence["app_login_enabled"] is True
+    assert evidence["ready_services"] == ["flow"]
+    changed = {**plan, "production_attachments_sha256": "9" * 64}
+    with pytest.raises(ComposePlanError, match="receipt lineage changed"):
+        compose.verify_resume_plan(changed, intent, tmp_path / "stack",
+                                   tmp_path / "fence", tmp_path / "maintenance",
+                                   tmp_path / "native")
+    changed = {**plan, "restart_infrastructure": sorted(
+        set(plan["restart_infrastructure"]) | {"flow"}),
+        "recreate_applications": [name for name in plan["recreate_applications"]
+                                  if name != "flow"]}
+    with pytest.raises(ComposePlanError, match="startup groups differ"):
+        compose.verify_resume_plan(changed, intent, tmp_path / "stack",
+                                   tmp_path / "fence", tmp_path / "maintenance",
+                                   tmp_path / "native")
+    records[new_flow_id]["Config"]["Labels"]["com.docker.compose.config-hash"] = "9" * 64
+    with pytest.raises(ComposePlanError, match="Compose service config differs"):
+        compose.verify_resume_plan(plan, intent, tmp_path / "stack",
+                                   tmp_path / "fence", tmp_path / "maintenance",
+                                   tmp_path / "native")
+    records[new_flow_id]["Config"]["Labels"]["com.docker.compose.config-hash"] = "0" * 64
+    records[plan["old_container_ids_by_service"]["flow"]] = {
+        "Id": plan["old_container_ids_by_service"]["flow"],
+        "Config": {"Image": "old", "Labels": {
+            "com.docker.compose.project": "elevenid-beta",
+            "com.docker.compose.service": "flow"}},
+        "State": {"Running": True, "Status": "running"},
+        "NetworkSettings": {"Networks": {"elevenid-beta-network": {}}},
+    }
+    with pytest.raises(ComposePlanError, match="old beta application restarted"):
+        compose.verify_resume_plan(plan, intent, tmp_path / "stack",
+                                   tmp_path / "fence", tmp_path / "maintenance",
+                                   tmp_path / "native")
