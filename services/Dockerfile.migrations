@@ -62,6 +62,8 @@ RUN test -n "$MARTY_COMMON_URI" \
     fastapi pydantic httpx 'cryptography>=44.0.0'
 
 COPY services /app/services
+COPY rust/services/issuance/migrations /app/passport-native-migrations/issuance
+COPY rust/services/flow/migrations /app/passport-native-migrations/flow
 COPY scripts/load-secrets-env.sh /app/load-secrets-env.sh
 COPY scripts/run-migrations-with-secrets.sh /app/run-migrations-with-secrets.sh
 COPY --from=rust-migration-builder /build/rust/target/release/marty-notification /usr/local/bin/marty-notification

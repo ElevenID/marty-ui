@@ -53,6 +53,18 @@ PROTECTED_FILES = (
     "scripts/sql/passport-beta-fence-drain.sql",
     "scripts/sql/passport-beta-fence-verify.sql",
     "scripts/sql/passport-beta-batch-acl-finalize.sql",
+    "scripts/prepare_passport_beta_native_migrations.py",
+    "services/Dockerfile.migrations",
+    "rust/services/issuance/migrations/0001_oid4vci_public_protocol.sql",
+    "rust/services/issuance/migrations/0002_physical_document_jobs.sql",
+    "rust/services/issuance/migrations/0003_passport_bureau_provider_binding.sql",
+    "rust/services/issuance/migrations/0004_passport_submission_intent.sql",
+    "rust/services/issuance/migrations/0005_passport_submission_provenance.sql",
+    "rust/services/issuance/migrations/0006_passport_beta_batch_identity.sql",
+    "rust/services/issuance/migrations/0007_passport_beta_batch_provenance.sql",
+    "rust/services/issuance/migrations/0008_passport_beta_batch_wire_evidence.sql",
+    "rust/services/flow/migrations/0001_flow_schema.sql",
+    "rust/services/flow/migrations/0002_builtin_flows.sql",
 )
 
 
