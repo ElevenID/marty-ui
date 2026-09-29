@@ -119,6 +119,16 @@ jobs:
           printf '%s' "$PASSPORT_ACCEPTANCE_CERTIFICATE_PLAN_JSON" > "$certificate_file"
           printf '%s' "$PASSPORT_ACCEPTANCE_FLOW_PLAN_JSON" > "$flow_file"
           chmod 600 "$application_file" "$certificate_file" "$flow_file"
+          python3 - "$flow_file" "$GITHUB_SHA" <<'PY'
+          import json, sys
+          from pathlib import Path
+          plan = json.loads(Path(sys.argv[1]).read_text())
+          fixture = json.loads(Path('contracts/passport-beta-synthetic-document.json').read_text())
+          if (not isinstance(plan, dict)
+                  or plan.get('source_commit') != sys.argv[2]
+                  or plan.get('physical_document') != fixture):
+              raise SystemExit('Selected Flow is not the exact synthetic D12 input for this release')
+          PY
           python3 scripts/run_passport_beta_acceptance.py \
             --artifact-dir "$BETA_ARTIFACT_DIR" \
             --application-file "$application_file" \

@@ -66,6 +66,8 @@ The private handoff must remain outside the deployment artifact directory and
 source checkout. The probe writes a new result file outside that directory,
 rejects the local beta proxy mode, and uses direct beta HTTPS for its job and
 callback requests.
+The protected preliminary workflow checks the selected Flow plan's source
+commit and exact fictitious document before invoking the one-shot live Flow.
 
 The D-12 recorder's `externalQualification` runs
 `tests/scripts/audit-beta-physical-passport-flow.js`. Supply
