@@ -64,6 +64,7 @@ STAGED_SECRETS = frozenset({
     "dsc_issue_gateway_key", "csca_issue_gateway_key",
     "issuance_api_key", "callback_signer_api_key", "grpc_service_token",
     "bureau_database_url", "token_hmac_key", "integration_secret_master_key",
+    "physical_document_artifact_key",
 })
 BOOTSTRAPPED_SECRETS = frozenset({"bao_token", "callback_signer_bao_token"})
 EPHEMERAL_SECRETS = BOOTSTRAPPED_SECRETS | frozenset({"passport_acceptance_api_key"})
@@ -261,6 +262,8 @@ def stage_disposable_inputs(
             "bureau_database_url": f"postgresql://marty:{database_password}@postgres:5432/marty",
             "token_hmac_key": secrets.token_hex(32),
             "integration_secret_master_key": base64.b64encode(secrets.token_bytes(32)).decode("ascii"),
+            "physical_document_artifact_key": base64.urlsafe_b64encode(
+                secrets.token_bytes(32)).decode("ascii"),
         }
         require(set(values) == STAGED_SECRETS, "Disposable secret set is incomplete")
         env = {

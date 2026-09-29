@@ -151,6 +151,7 @@ def test_disposable_inputs_are_fresh_private_and_plan_bound() -> None:
             "dsc_issue_gateway_key", "csca_issue_gateway_key",
             "issuance_api_key", "callback_signer_api_key", "grpc_service_token",
             "bureau_database_url", "token_hmac_key", "integration_secret_master_key",
+            "physical_document_artifact_key",
         }
         assert len((secret_dir / "bao_root_token").read_text(encoding="ascii")) == 64
         ceremony_keys = [(secret_dir / name).read_text(encoding="ascii") for name in (
