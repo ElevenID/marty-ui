@@ -1,6 +1,8 @@
 """Protected Rust producer orders its gates and records only partial evidence."""
 
 from datetime import datetime, timedelta, timezone
+from copy import deepcopy
+import hashlib
 import json
 from pathlib import Path
 import subprocess
@@ -14,7 +16,7 @@ from services.passport_disposable_identity import issuer_did
 from scripts.check_passport_supported_producer_handoff import HandoffError, verify_handoff
 from scripts.passport_supported_infra_images import qualified_images
 from scripts.passport_supported_protected_producer import (
-    WORKFLOW_NAME, produce_disposable_receipt,
+    WORKFLOW_NAME, _application, produce_disposable_receipt,
 )
 from scripts.probe_passport_supported_routes import _frozen_routes
 from scripts.passport_supported_provisioning_producer import ProducerError, WORKFLOW_REF
@@ -194,20 +196,50 @@ def test_hosted_handoff_binds_partial_receipt_to_plan(tmp_path: Path) -> None:
     plan_path = tmp_path / "plan.json"
     receipt_path = tmp_path / "receipt.json"
     plan_path.write_text(json.dumps(selected))
+    statuses = {
+        "/v1/passport/applications": "DRAFT",
+        "/v1/passport/applications/{application_id}/generate-data-groups": "DATA_GENERATED",
+        "/v1/passport/applications/{application_id}/generate-sod": "SOD_SIGNED",
+        "/v1/passport/applications/{application_id}/submit-personalization": "SUBMITTED",
+        "/v1/passport/applications/{application_id}/production-status": "QUALITY_CHECK",
+        "/v1/passport/applications/{application_id}/quality-verify": "READY_FOR_ACTIVATION",
+        "/v1/passport/applications/{application_id}/activate": "ACTIVE",
+    }
     routes = [{"method": method, "route": path,
                "http_status": (422 if path.endswith("/webhooks/personalization")
-                               else 201 if path == "/v1/passport/applications" else 200)}
+                               else 201 if path == "/v1/passport/applications" else 200),
+               **({"job_status": statuses[path]} if path in statuses else {}),
+               **({"positive_gateway_path_verified": False,
+                   "signed_callback_observed_by": "authenticated-private-bureau-receipt"}
+                  if path.endswith("/webhooks/personalization") else {})}
               for method, path in sorted(_frozen_routes())]
+    application_hash = hashlib.sha256(json.dumps(
+        _application(29877), sort_keys=True, separators=(",", ":")).encode()).hexdigest()
     receipt = {
         "schema": "marty.passport-supported-rust-producer/v1",
         "status": "blocked", "project": selected["project"], "surface": "base",
         "source_commit": SOURCE, "plan_run_id": "123456", "producer_run_id": "987654",
+        "gateway_port": 29877, "physical_claim": "not_claimed",
         "certificate_setup_passed": True, "live_ownership_verified": True,
         "rust_routes_verified": True, "signed_gateway_callback_verified": False,
         "flow_execution_verified": False, "rust_restart_resume_verified": False,
+        "certificate": certificate(selected, 29877),
         "route": {"verified": True, "flow_execution_verified": False,
                   "evidence": {"signed_gateway_callback_verified": False,
+                               "signed_callback_path": "simulator-to-native",
+                               "physical_claim": "not_claimed",
+                               "unsigned_webhook_http_status": 422,
+                               "callback_private_status": "QUALITY_CHECK",
+                               "application_input_sha256": application_hash,
+                               "job_id_sha256": "3" * 64,
+                               "application_id_sha256": "4" * 64,
+                               "bureau_job_id_sha256": "5" * 64,
+                               "callback_bureau_job_id_sha256": "5" * 64,
+                               "sod_sha256": "6" * 64,
+                               "callback_receipt_sha256": "7" * 64,
+                               "sod_signature_verified": True,
                                "routes": routes}},
+        "blocker": "Gateway signed callback, Flow execution, and Rust restart/resume remain unproven",
     }
     receipt_path.write_text(json.dumps(receipt))
     assert verify_handoff(plan_path, receipt_path, SOURCE, "987654",
@@ -218,6 +250,45 @@ def test_hosted_handoff_binds_partial_receipt_to_plan(tmp_path: Path) -> None:
         changed[mutation] = ({"producer_run_id": "wrong", "project": "wrong",
                               "signed_gateway_callback_verified": True,
                               "rust_routes_verified": False}[mutation])
+        receipt_path.write_text(json.dumps(changed))
+        with pytest.raises(HandoffError):
+            verify_handoff(plan_path, receipt_path, SOURCE, "987654",
+                           attest=lambda *args: True)
+
+    mutations = [
+        ("missing certificate", lambda item: item.pop("certificate")),
+        ("foreign certificate", lambda item: item["certificate"].update(
+            project="foreign")),
+        ("wrong issuer DID", lambda item: item["certificate"]["evidence"].update(
+            csca_issuer_did_sha256="8" * 64)),
+        ("no SOD signature", lambda item: item["route"]["evidence"].update(
+            sod_signature_verified=False)),
+        ("missing SOD digest", lambda item: item["route"]["evidence"].pop(
+            "sod_sha256")),
+        ("wrong application", lambda item: item["route"]["evidence"].update(
+            application_input_sha256="8" * 64)),
+        ("different bureau job", lambda item: item["route"]["evidence"].update(
+            callback_bureau_job_id_sha256="8" * 64)),
+        ("no private receipt", lambda item: item["route"]["evidence"].update(
+            callback_receipt_sha256="invalid")),
+        ("physical claim", lambda item: item.update(physical_claim="booklet-issued")),
+        ("route physical claim", lambda item: item["route"]["evidence"].update(
+            physical_claim="booklet-issued")),
+        ("Gateway claim", lambda item: item["route"]["evidence"]["routes"][-1].update(
+            positive_gateway_path_verified=True)),
+        ("extra route data", lambda item: item["route"]["evidence"]["routes"][0].update(
+            applicant={"name": "private"})),
+        ("duplicate create", lambda item: item["route"]["evidence"]["routes"].append(
+            deepcopy(next(route for route in item["route"]["evidence"]["routes"]
+                          if route["route"] == "/v1/passport/applications")))),
+        ("missing lifecycle status", lambda item: item["route"]["evidence"]["routes"]
+            [next(index for index, route in enumerate(item["route"]["evidence"]["routes"])
+                  if route["route"].endswith("/generate-sod"))].update(
+                      job_status="SUBMITTED")),
+    ]
+    for _, mutate in mutations:
+        changed = deepcopy(receipt)
+        mutate(changed)
         receipt_path.write_text(json.dumps(changed))
         with pytest.raises(HandoffError):
             verify_handoff(plan_path, receipt_path, SOURCE, "987654",

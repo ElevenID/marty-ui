@@ -194,6 +194,7 @@ def produce_disposable_receipt(
             "schema": "marty.passport-supported-rust-producer/v1",
             "status": "blocked", "project": plan["project"],
             "surface": plan["surface"], "source_commit": plan["source_commit"],
+            "gateway_port": gateway_port, "physical_claim": "not_claimed",
             "plan_run_id": plan_run_id,
             "producer_run_id": environment["GITHUB_RUN_ID"],
             "certificate_setup_passed": True,
