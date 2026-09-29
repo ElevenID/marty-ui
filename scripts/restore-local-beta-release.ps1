@@ -168,6 +168,9 @@ function Get-ServiceContainer([string]$Service) {
     return $container
 }
 
+. (Join-Path $PSScriptRoot "beta-passport-fence-legacy-boundary.ps1")
+Assert-LegacyBetaDatabaseUnfenced -PostgresContainer (Get-ServiceContainer "postgres")
+
 function Wait-ForServiceHealth([string[]]$Services, [int]$TimeoutSeconds = 420) {
     $deadline = (Get-Date).AddSeconds($TimeoutSeconds)
     do {
