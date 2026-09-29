@@ -65,6 +65,13 @@ def candidate():
         "ui_image": UI_IMAGE + "d" * 64,
         "stack_manifest_sha256": "1" * 64,
         "fence_receipt_sha256": "2" * 64,
+        "cutover_snapshot_file_sha256": "a" * 64,
+        "cutover_snapshot_sha256": "b" * 64,
+        "legacy_writer_container_id": next(item["container_id"] for item in generation
+                                           if item["service"] == "issuance"),
+        "legacy_writer_image_digest": "sha256:" + "c" * 64,
+        "legacy_writer_started_at": "start",
+        "legacy_writer_generation": 0,
         "maintenance_receipt_sha256": "3" * 64,
         "native_receipt_sha256": "4" * 64,
         "fence_epoch": "7", "migration_set_sha256": "5" * 64,
@@ -84,6 +91,12 @@ def candidate():
         "source_commit": head, "stop_container_ids": stops,
         "postgres_system_identifier": "100", "database_oid": "200",
         "beta_generation": generation,
+        "cutover_snapshot_file_sha256": handoff["cutover_snapshot_file_sha256"],
+        "cutover_snapshot_sha256": handoff["cutover_snapshot_sha256"],
+        "legacy_writer_container_id": handoff["legacy_writer_container_id"],
+        "legacy_writer_image_digest": handoff["legacy_writer_image_digest"],
+        "legacy_writer_started_at": handoff["legacy_writer_started_at"],
+        "legacy_writer_generation": handoff["legacy_writer_generation"],
     }
     services = {name: {} for name in old_names}
     services.update({name: {} for name in NEW_SERVICES})
@@ -360,6 +373,10 @@ def test_resume_accepts_partial_signed_generation_after_login(monkeypatch, tmp_p
                       "maintenance.intent.json": "0" * 64,
                       "passport-beta-db-enable-app-login.sql":
                           plan["enable_login_sql_sha256"]}
+    snapshot_path = tmp_path / "cutover-snapshot.json"
+    snapshot_path.write_text("{}", encoding="utf-8")
+    receipt_hashes[snapshot_path.name] = plan["cutover_snapshot_file_sha256"]
+    intent["cutover_snapshot_path"] = str(snapshot_path)
     monkeypatch.setattr(compose, "file_sha256", lambda path: receipt_hashes[path.name])
     (tmp_path / "maintenance").write_text(json.dumps({
         "schema": "marty.passport-beta-db-maintenance-start/v1",
@@ -369,6 +386,10 @@ def test_resume_accepts_partial_signed_generation_after_login(monkeypatch, tmp_p
         "postgres_container_id": plan["postgres_container_id"],
         "fence_epoch": plan["fence_epoch"],
         "stopped_container_ids": intent["stop_container_ids"],
+        **{field: plan[field] for field in (
+            "cutover_snapshot_file_sha256", "cutover_snapshot_sha256",
+            "legacy_writer_container_id", "legacy_writer_image_digest",
+            "legacy_writer_started_at", "legacy_writer_generation")},
     }), encoding="utf-8")
     (tmp_path / "native").write_text(json.dumps({
         "schema": "marty.passport-beta-native-db-gates/v1",

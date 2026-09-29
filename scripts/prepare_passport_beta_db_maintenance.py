@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 from pathlib import Path
 import re
@@ -42,12 +43,46 @@ START = "scripts/sql/passport-beta-db-maintenance-start.sql"
 VERIFY = "scripts/sql/passport-beta-fence-verify.sql"
 DOCKER_ID = re.compile(r"[0-9a-f]{64}\Z")
 SHA256 = re.compile(r"[0-9a-f]{64}\Z")
+IMAGE_DIGEST = re.compile(r".+@(sha256:[0-9a-f]{64})\Z")
 PRESERVED_SERVICES = frozenset({"postgres", "openbao"})
 
 
 def require(condition: bool, message: str) -> None:
     if not condition:
         raise HostProbeError(message)
+
+
+def checked_snapshot(path: Path, receipt: dict[str, Any]) -> dict[str, Any]:
+    """Bind observed continuity bytes; a protected producer must attest them."""
+    try:
+        raw = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError) as exc:
+        raise HostProbeError("Beta cutover snapshot is unreadable") from exc
+    require(isinstance(raw, dict)
+            and raw.get("schema") == "marty.passport-beta-cutover-snapshot/v1"
+            and raw.get("status") == "observed"
+            and raw.get("installation_provenance") == "local_host_continuity_only"
+            and SHA256.fullmatch(str(raw.get("snapshot_sha256"))) is not None
+            and raw["snapshot_sha256"] == hashlib.sha256(json.dumps(
+                {key: value for key, value in raw.items() if key != "snapshot_sha256"},
+                sort_keys=True, separators=(",", ":"),
+            ).encode()).hexdigest()
+            and raw.get("installation_receipt_sha256") == hashlib.sha256(
+                json.dumps(receipt, sort_keys=True, separators=(",", ":")).encode()
+            ).hexdigest()
+            and raw.get("counts") == {
+                "total_job_count": 0, "nonterminal_job_count": 0,
+                "legacy_or_unknown_artifact_count": 0,
+                "unreadable_artifact_count": 0,
+                "active_passport_flow_count": 0,
+            }
+            and type(raw.get("observation_watermark")) is int
+            and isinstance(raw.get("direct_database_probe"), dict)
+            and type(raw["direct_database_probe"].get("observation_watermark")) is int
+            and raw["observation_watermark"]
+                > raw["direct_database_probe"]["observation_watermark"],
+            "Beta cutover snapshot or fence receipt differs")
+    return raw
 
 
 def running_beta_generation(
@@ -91,7 +126,7 @@ def running_beta_generation(
 
 
 def prepare(
-    manifest_path: Path, receipt_path: Path,
+    manifest_path: Path, receipt_path: Path, snapshot_path: Path,
     runner: Callable[[list[str]], str] = run,
     observer: Callable[[Callable[[list[str]], str]], dict[str, Any]] = observe_fenced,
 ) -> dict[str, Any]:
@@ -144,6 +179,52 @@ def prepare(
             and runner(["docker", "info", "--format", "{{.ID}}"])
                 == docker.get("daemon_id"),
             "Docker context changed during maintenance planning")
+    snapshot = checked_snapshot(snapshot_path, receipt)
+    writer = services.get("issuance")
+    live_writer = inspect(writer["container_id"], runner) if isinstance(writer, dict) else {}
+    live_config = live_writer.get("Config")
+    live_state = live_writer.get("State")
+    live_labels = live_config.get("Labels") if isinstance(live_config, dict) else None
+    live_image = IMAGE_DIGEST.fullmatch(str(live_config.get("Image"))) \
+        if isinstance(live_config, dict) else None
+    require(isinstance(writer, dict)
+            and snapshot.get("database_uid")
+                == f"postgresql:{receipt_target['system_id']}:{receipt_target['database_oid']}"
+            and snapshot.get("fence_epoch") == int(receipt_target["fence_epoch"])
+            and snapshot.get("fence_verification_sha256")
+                == hashlib.sha256(json.dumps(receipt.get("fence"), sort_keys=True,
+                                             separators=(",", ":")).encode()).hexdigest()
+            and snapshot.get("fence_first_probe")
+                == receipt.get("direct_database_probe")
+            and snapshot.get("beta_inventory_attestation_sha256")
+                == observed["observation_sha256"]
+            and snapshot.get("production_snapshot_sha256") == production["sha256"]
+            and snapshot.get("production_attachments_sha256")
+                == receipt["production_attachments_sha256"]
+            and snapshot.get("writer_container_id") == writer.get("container_id")
+            and snapshot.get("writer_started_at") == writer.get("started_at")
+            and snapshot.get("writer_generation") == writer.get("restart_count")
+            and type(snapshot.get("writer_generation")) is int
+            and IMAGE_DIGEST.fullmatch(str(writer.get("configured_image"))) is not None
+            and snapshot.get("writer_image_digest")
+                == IMAGE_DIGEST.fullmatch(writer["configured_image"]).group(1)
+            and live_writer.get("Id") == writer["container_id"]
+            and live_writer.get("Image") == writer.get("image_id")
+            and isinstance(live_labels, dict)
+            and live_labels.get("com.docker.compose.project") == BETA_PROJECT
+            and live_labels.get("com.docker.compose.service") == "issuance"
+            and isinstance(live_state, dict)
+            and live_state.get("Running") is True
+            and live_state.get("Status") == "running"
+            and live_state.get("StartedAt") == writer["started_at"]
+            and live_writer.get("RestartCount") == writer["restart_count"]
+            and live_image is not None
+            and live_image.group(1) == snapshot["writer_image_digest"]
+            and any(item["service"] == "issuance"
+                    and item["container_id"] == writer["container_id"]
+                    and item["started_at"] == writer["started_at"]
+                    for item in generation),
+            "Cutover snapshot differs from the live fenced Python writer")
     return {
         "schema": "marty.passport-beta-db-maintenance-plan/v1",
         "source_commit": head,
@@ -160,6 +241,13 @@ def prepare(
         "production_snapshot_sha256": production["sha256"],
         "production_attachments_sha256": receipt["production_attachments_sha256"],
         "post_install_observation_sha256": observed["observation_sha256"],
+        "cutover_snapshot_path": str(snapshot_path.resolve(strict=True)),
+        "cutover_snapshot_file_sha256": file_sha256(snapshot_path),
+        "cutover_snapshot_sha256": snapshot["snapshot_sha256"],
+        "legacy_writer_container_id": writer["container_id"],
+        "legacy_writer_image_digest": snapshot["writer_image_digest"],
+        "legacy_writer_started_at": writer["started_at"],
+        "legacy_writer_generation": writer["restart_count"],
         "beta_generation": generation,
         "stop_container_ids": [item["container_id"] for item in generation
                                if item["service"] not in PRESERVED_SERVICES],
@@ -168,6 +256,7 @@ def prepare(
 
 def verify_plan(
     plan: dict[str, Any], manifest_path: Path, receipt_path: Path,
+    snapshot_path: Path,
     *, require_stopped: bool,
     runner: Callable[[list[str]], str] = run,
 ) -> dict[str, Any]:
@@ -200,6 +289,33 @@ def verify_plan(
             and plan.get("post_install_observation_sha256")
                 == receipt_raw.get("post_install_observation_sha256"),
             "Maintenance intent differs from fence installation receipt")
+    snapshot = checked_snapshot(snapshot_path, receipt_raw)
+    require(plan.get("cutover_snapshot_path") == str(snapshot_path.resolve(strict=True))
+            and plan.get("cutover_snapshot_file_sha256") == file_sha256(snapshot_path)
+            and plan.get("cutover_snapshot_sha256") == snapshot["snapshot_sha256"]
+            and plan.get("legacy_writer_container_id")
+                == snapshot.get("writer_container_id")
+            and plan.get("legacy_writer_image_digest")
+                == snapshot.get("writer_image_digest")
+            and plan.get("legacy_writer_started_at")
+                == snapshot.get("writer_started_at")
+            and plan.get("legacy_writer_generation")
+                == snapshot.get("writer_generation")
+            and snapshot.get("database_uid")
+                == f"postgresql:{receipt['system_id']}:{receipt['database_oid']}"
+            and snapshot.get("fence_epoch") == int(receipt["fence_epoch"])
+            and snapshot.get("fence_verification_sha256")
+                == hashlib.sha256(json.dumps(receipt_raw.get("fence"), sort_keys=True,
+                                             separators=(",", ":")).encode()).hexdigest()
+            and snapshot.get("fence_first_probe")
+                == receipt_raw.get("direct_database_probe")
+            and snapshot.get("beta_inventory_attestation_sha256")
+                == plan.get("post_install_observation_sha256")
+            and snapshot.get("production_snapshot_sha256")
+                == plan.get("production_snapshot_sha256")
+            and snapshot.get("production_attachments_sha256")
+                == plan.get("production_attachments_sha256"),
+            "Cutover snapshot differs from maintenance intent")
     docker = plan.get("docker")
     require(isinstance(docker, dict)
             and runner(["docker", "context", "show"]) == docker.get("context")
@@ -244,6 +360,16 @@ def verify_plan(
                 and isinstance(state, dict)
                 and state.get("StartedAt") == item.get("started_at"),
                 "Beta container identity changed during maintenance")
+        if item["service"] == "issuance":
+            config_image = config.get("Image") if isinstance(config, dict) else None
+            image = IMAGE_DIGEST.fullmatch(str(config_image))
+            require(container_id == plan["legacy_writer_container_id"]
+                    and state.get("StartedAt") == plan["legacy_writer_started_at"]
+                    and record.get("RestartCount")
+                        == plan["legacy_writer_generation"]
+                    and image is not None
+                    and image.group(1) == plan["legacy_writer_image_digest"],
+                    "Old Python writer generation changed during maintenance")
         if item["service"] in PRESERVED_SERVICES:
             if item["service"] == "postgres":
                 require(container_id == receipt["container_id"],
@@ -279,6 +405,7 @@ def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--stack-manifest", type=Path, required=True)
     parser.add_argument("--fence-receipt", type=Path, required=True)
+    parser.add_argument("--cutover-snapshot", type=Path, required=True)
     parser.add_argument("--verify-plan", type=Path)
     parser.add_argument("--require-stopped", action="store_true")
     args = parser.parse_args()
@@ -286,10 +413,12 @@ def main() -> None:
         if args.verify_plan:
             plan = json.loads(args.verify_plan.read_text(encoding="utf-8"))
             result = verify_plan(plan, args.stack_manifest, args.fence_receipt,
+                                 args.cutover_snapshot,
                                  require_stopped=args.require_stopped)
         else:
             require(not args.require_stopped, "A maintenance plan is required")
-            result = prepare(args.stack_manifest, args.fence_receipt)
+            result = prepare(args.stack_manifest, args.fence_receipt,
+                             args.cutover_snapshot)
         print(json.dumps(result,
                          sort_keys=True, separators=(",", ":")))
     except (HostProbeError, NativeMigrationError, OSError, ValueError, KeyError) as exc:
