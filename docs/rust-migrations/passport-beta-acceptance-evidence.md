@@ -12,6 +12,15 @@ release probes and live beta run have not passed.
 report from an already deployed **official aggregate beta** release. Run it on
 the beta host with the deployment's artifact directory:
 
+For the forward Rust aggregate, the directory contains the exact
+`aggregate-deployment.json` written by the protected operator, its adjacent
+`aggregate-deployment.json.plan.json`, and the signed `stack-manifest.json`
+with `SHA256SUMS`. Keep the original bytes. The collector verifies the plan
+and receipt digests, release and issuance attestations, and each live beta
+container, image, start time, Compose hash, and network against the deployment
+receipt. The production baseline is reported only as an API-key HMAC
+commitment; the raw snapshot digest remains in the protected receipt.
+
 ```powershell
 $env:PASSPORT_ACCEPTANCE_API_KEY = '<organization-scoped key from governed beta secrets>'
 py -3.12 scripts/collect_passport_beta_acceptance.py --artifact-dir C:\path\to\beta-artifacts --output C:\path\to\private-evidence\passport-beta-prerequisite.json --verify-attestation

@@ -32,8 +32,8 @@ const PROHIBITED_PUBLIC_KEYS = new Set([
   'document_data', 'personalization_payload', 'portrait', 'photo',
 ]);
 const ALLOWED_PUBLIC_SHA256_KEYS = new Set([
-  'stack_manifest_sha256', 'local_deployment_manifest_sha256',
-  'source_manifest_sha256', 'official_stack_manifest_sha256',
+  'stack_manifest_sha256', 'aggregate_deployment_receipt_sha256',
+  'aggregate_plan_sha256',
   'csca_certificate_sha256', 'dsc_certificate_sha256',
   'sod_dsc_certificate_sha256', 'sod_sha256',
   'callback_receipt_sha256', 'selected_callback_receipt_sha256',
@@ -227,9 +227,11 @@ function protectedReceipt(runId, expectedSha256, sourceCommit) {
 
 function validatePreliminary(report, deployment, artifactDir, privatePlan, apiKey) {
   const stackDigest = sha256(path.join(artifactDir, 'stack-manifest.json'));
-  const deploymentDigest = sha256(path.join(artifactDir, 'local-deployment-manifest.json'));
-  const sourceDigest = sha256(path.join(artifactDir, 'source-manifest.json'));
-  const sourceCommit = deployment.marty_ui_sha;
+  const deploymentDigest = sha256(path.join(artifactDir, 'aggregate-deployment.json'));
+  const planPath = path.join(artifactDir, 'aggregate-deployment.json.plan.json');
+  const planDigest = sha256(planPath);
+  const plan = readJson(planPath);
+  const sourceCommit = deployment.source_commit;
   requireProof(COMMIT.test(sourceCommit), 'Deployed source commit is invalid');
   requireProof(privatePlan?.schema === PRIVATE_HANDOFF.private_plan_schema
     && privatePlan.source_commit === sourceCommit
@@ -245,17 +247,31 @@ function validatePreliminary(report, deployment, artifactDir, privatePlan, apiKe
     && report.release?.stack_manifest_sha256 === stackDigest
     && report.release?.signed_manifest_verified === true
     && report.deployment?.provider_mode === 'simulator'
-    && report.deployment?.local_deployment_manifest_sha256 === deploymentDigest
-    && report.deployment?.source_manifest_sha256 === sourceDigest
+    && report.deployment?.aggregate_deployment_receipt_sha256 === deploymentDigest
+    && report.deployment?.aggregate_plan_sha256 === planDigest
     && !Object.hasOwn(report, 'provider_ingress_runtime_image'),
     'Preliminary flow receipt does not match the signed simulator deployment',
   );
   requireProof(
     deployment.beta_origin === BETA_ORIGIN
-    && deployment.source_kind === 'official-stack-release'
-    && deployment.passport_provider_mode === 'simulator'
-    && typeof deployment.official_stack_manifest_sha256 === 'string'
-    && deployment.official_stack_manifest_sha256.replace(/^sha256:/, '') === stackDigest,
+    && deployment.schema === 'marty.passport-beta-aggregate-deployment/v1'
+    && deployment.acceptance_pending === true
+    && deployment.plan_sha256 === planDigest
+    && plan.schema === 'marty.passport-beta-aggregate-compose-plan/v1'
+    && plan.source_commit === sourceCommit
+    && plan.beta_origin === BETA_ORIGIN
+    && plan.stack_manifest_sha256 === stackDigest
+    && Array.isArray(deployment.beta_services)
+    && Array.isArray(plan.target_services)
+    && deployment.beta_runtime && typeof deployment.beta_runtime === 'object'
+    && JSON.stringify(Object.keys(deployment.beta_runtime).sort())
+      === JSON.stringify([...deployment.beta_services].sort())
+    && JSON.stringify([...plan.target_services, 'postgres'].sort())
+      === JSON.stringify([...deployment.beta_services].sort())
+    && ['gateway', 'flow', 'issuance-native', 'signing-keys',
+      'passport-callback-signer', 'passport-beta-bureau']
+      .every((name) => Object.hasOwn(deployment.beta_runtime, name))
+    && !Object.hasOwn(deployment.beta_runtime, 'passport-provider-ingress'),
     'Deployment is not the signed beta simulator',
   );
   for (const name of REQUIRED_PROBES) {
@@ -422,7 +438,8 @@ function validatePreliminary(report, deployment, artifactDir, privatePlan, apiKe
   );
   requireProof(report.synthetic_identities_only === true,
     'Preliminary receipt does not attest synthetic identity inputs');
-  return { sourceCommit, stackDigest, flow: privatePlan, publicFlow: route };
+  return { sourceCommit, stackDigest, deploymentDigest, planDigest,
+    flow: privatePlan, publicFlow: route };
 }
 
 function validateLiveInstance(instance, definition, flow, expectedSodSha256) {
@@ -518,10 +535,10 @@ async function main() {
   requireProof(deploymentDir && email && password && privatePlanFile
     && apiKey && process.env.RECORD_VIDEO === '1',
   'Beta deployment, private handoff, operator session, and recorder inputs are required');
-  const deployment = readJson(path.join(deploymentDir, 'local-deployment-manifest.json'));
+  const deployment = readJson(path.join(deploymentDir, 'aggregate-deployment.json'));
   const privatePlan = readPrivatePlan(privatePlanFile, artifactDir);
   const { report: receipt, negativeMedia } = protectedReceipt(
-    runId, expectedSha256, deployment.marty_ui_sha,
+    runId, expectedSha256, deployment.source_commit,
   );
   const proof = validatePreliminary(receipt, deployment, deploymentDir, privatePlan, apiKey);
   for (const [name, filename] of Object.entries(NEGATIVE_MEDIA)) {
@@ -608,6 +625,8 @@ async function main() {
       betaOrigin: BETA_ORIGIN,
       sourceCommit: proof.sourceCommit,
       stackManifestSha256: proof.stackDigest,
+      aggregateDeploymentReceiptSha256: proof.deploymentDigest,
+      aggregatePlanSha256: proof.planDigest,
       preliminaryRunId: runId,
       preliminaryArtifactSha256: expectedSha256,
       negativeCallbackMediaSha256: {

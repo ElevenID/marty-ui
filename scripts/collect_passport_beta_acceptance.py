@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import argparse
 import hashlib
+import hmac
 import json
 import os
 import re
@@ -69,6 +70,16 @@ def digest_file(path: Path) -> str:
     except OSError as exc:
         raise EvidenceError(f"Cannot hash evidence file: {path.name}") from exc
     return f"sha256:{checksum}"
+
+
+def production_snapshot_commitment(api_key: str, snapshot_sha256: str) -> str:
+    require(isinstance(api_key, str) and len(api_key) >= 32
+            and isinstance(snapshot_sha256, str)
+            and re.fullmatch(r"[0-9a-f]{64}", snapshot_sha256) is not None,
+            "Production snapshot commitment input is invalid")
+    return hmac.new(api_key.encode("utf-8"),
+                    f"production-snapshot:{snapshot_sha256}".encode("ascii"),
+                    hashlib.sha256).hexdigest()
 
 
 def docker_inspect(container_id: str) -> dict[str, Any]:
@@ -141,6 +152,13 @@ def collect(
     probe: Callable[[str | None], tuple[int, dict[str, Any] | None]] = get_capabilities,
     attest: Callable[[Path, dict[str, str], str], bool] | None = None,
 ) -> dict[str, Any]:
+    if (artifact_dir / "aggregate-deployment.json").is_file():
+        if __package__:
+            from .collect_passport_beta_aggregate_acceptance import collect_aggregate
+        else:
+            from collect_passport_beta_aggregate_acceptance import collect_aggregate
+        return collect_aggregate(artifact_dir, api_key=api_key, inspect=inspect,
+                                 probe=probe, attest=attest)
     deployment_path = artifact_dir / "local-deployment-manifest.json"
     deployment = read_json(deployment_path)
     require(deployment.get("beta_origin") == BETA_ORIGIN, "Deployment is not the beta origin")

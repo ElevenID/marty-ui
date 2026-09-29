@@ -14,6 +14,7 @@ if __package__:
     from .collect_passport_beta_acceptance import (
         EvidenceError,
         collect,
+        production_snapshot_commitment,
         read_json,
         require,
         verify_attestations,
@@ -68,6 +69,7 @@ else:
     from collect_passport_beta_acceptance import (
         EvidenceError,
         collect,
+        production_snapshot_commitment,
         read_json,
         require,
         verify_attestations,
@@ -234,6 +236,11 @@ def run(
             and webhook_owner == "issuance-native",
             "Beta native route ownership did not verify")
     before_production = snapshot()
+    aggregate_production = report["deployment"].get("production_snapshot_commitment")
+    if aggregate_production is not None:
+        require(production_snapshot_commitment(
+                    api_key, before_production.get("sha256")) == aggregate_production,
+                "Production changed since aggregate beta deployment")
     before_drain = drain()
     selected_dsc: dict[str, str] = {}
     receipt_result: dict[str, Any] | None = None

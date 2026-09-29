@@ -32,6 +32,13 @@ The D-12 recorder's `externalQualification` runs
 `tests/scripts/audit-beta-physical-passport-flow.js`. Supply
 `PASSPORT_BETA_ARTIFACT_DIR`, `PASSPORT_BETA_PRELIMINARY_RUN_ID`, and
 `PASSPORT_BETA_PRELIMINARY_SHA256` plus a governed beta operator login. Supply
+the protected aggregate deployment receipt as `aggregate-deployment.json`,
+its exact `aggregate-deployment.json.plan.json`, the signed
+`stack-manifest.json`, and `SHA256SUMS` in that artifact directory. The
+preliminary producer must compare each live beta container and image ID with
+the receipt, and bind the public report to the receipt, plan, and signed stack
+hashes. The recorder does not use old local/source deployment manifests.
+Supply
 `PASSPORT_BETA_PRIVATE_PLAN_FILE` outside the checkout and artifact directory
 and `PASSPORT_BETA_API_KEY` from protected secrets. The plan has schema
 `marty.passport-beta-demo-private/v1`, the exact selected organization, Flow
@@ -62,7 +69,7 @@ privacy, caption, transcript, review, and YouTube publication gates.
 The final beta acceptance producer must verify the recorder's protected run,
 review files, media/privacy hashes, ElevenID LLC channel and playlist, and
 live YouTube publication result. It must bind those to the same source commit,
-stack manifest, local and source deployment manifest hashes, beta origin, and
+stack manifest, aggregate deployment receipt and plan hashes, beta origin, and
 `physical_claim=not_claimed` before setting `recorded_demo.verified=true`.
 Python passport retirement requires protected Rust parity, the final live
 drain, and the reviewed deletion gate before the aggregate beta deployment.

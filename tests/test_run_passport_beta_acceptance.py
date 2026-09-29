@@ -11,7 +11,9 @@ from pathlib import Path
 import pytest
 import yaml
 
-from scripts.collect_passport_beta_acceptance import EvidenceError
+from scripts.collect_passport_beta_acceptance import (
+    EvidenceError, production_snapshot_commitment,
+)
 from scripts.probe_passport_beta_chain import ChainProbeError
 from scripts.probe_passport_beta_batch import _identity_commit
 from scripts.probe_passport_beta_flow import PHYSICAL_STEPS
@@ -167,6 +169,23 @@ def test_keeps_partial_acceptance_blocked_after_actual_probe_functions() -> None
     ]
     assert result["probes"]["physical_claim_boundary"]["verified"] is True
     assert result["physical_claim"] == "not_claimed"
+
+
+def test_aggregate_production_baseline_blocks_before_passport_mutation() -> None:
+    candidate = report()
+    candidate["deployment"]["production_snapshot_commitment"] = (
+        production_snapshot_commitment("a" * 32, "f" * 64))
+    with pytest.raises(EvidenceError, match="Production changed since aggregate"):
+        run(Path("beta-artifacts"), managed_application(), "a" * 32,
+            collector=lambda *_, **__: candidate,
+            attestor=lambda *args: True,
+            snapshot=lambda: {"sha256": "c" * 64},
+            drain=lambda: pytest.fail("No drain after baseline drift"),
+            lifecycle=lambda *args, **kwargs: pytest.fail("No passport mutation"),
+            routing=lambda *args: {"verified": True, "evidence": {
+                "webhook_owner": "issuance-native"}},
+            certificate_plan=certificate_plan(),
+            csca_session="csca-session", dsc_session="dsc-session")
 
 
 def test_protected_runner_executes_selected_flow_after_chain_and_direct_job(tmp_path: Path) -> None:
