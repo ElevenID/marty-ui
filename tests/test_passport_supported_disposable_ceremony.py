@@ -160,6 +160,8 @@ def test_private_request_uses_only_project_network_and_stdin_authority() -> None
         ) == (200, {"status": "issued"})
         command, kwargs = calls[0]
         assert command[0:3] == ["docker", "run", "--rm"]
+        assert command[command.index("--name") + 1] == (
+            f"{plan['project']}-passport-certificate-bootstrap-1")
         assert command[command.index("--network") + 1] == "container:" + "1" * 64
         assert command[command.index("--entrypoint") + 1] == "python3"
         assert plan["migrations_reference"] in command

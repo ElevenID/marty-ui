@@ -274,7 +274,9 @@ def _private_post(
     labels = {"com.docker.compose.project": project,
               "com.docker.compose.service": "passport-certificate-bootstrap",
               **plan["owner_labels"]}
-    command = ["docker", "run", "--rm", "--pull", "never", "--interactive",
+    command = ["docker", "run", "--rm", "--name",
+               f"{project}-passport-certificate-bootstrap-1",
+               "--pull", "never", "--interactive",
                "--read-only", "--cap-drop", "ALL", "--security-opt",
                "no-new-privileges", "--network", f"container:{signer_id}",
                *(argument for key, value in sorted(labels.items())
