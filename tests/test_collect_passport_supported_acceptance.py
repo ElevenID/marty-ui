@@ -99,11 +99,12 @@ def test_missing_targets_and_runtime_proof_remain_blocked(tmp_path: Path) -> Non
     assert report["status"] == "blocked"
     assert set(report["surfaces"]) == {"base", "selfhost", "kubernetes"}
     assert all(surface["runtime_accepted"] is False
-               and surface["rollback_accepted"] is False
+               and surface["probes"]["rust_restart_resume"]["verified"] is False
+               and "rollback_accepted" not in surface
                for surface in report["surfaces"].values())
 
 
-def test_live_compose_prerequisite_still_does_not_claim_routes_or_rollback(
+def test_live_compose_prerequisite_still_does_not_claim_routes_or_restart(
     tmp_path: Path
 ) -> None:
     report = gate.collect(
@@ -122,7 +123,7 @@ def test_live_compose_prerequisite_still_does_not_claim_routes_or_rollback(
     }
     assert base["probes"]["nine_route_gateway_flow"]["verified"] is False
     assert base["probes"]["signed_bureau_callback"]["verified"] is False
-    assert base["rollback_accepted"] is False
+    assert base["probes"]["rust_restart_resume"]["verified"] is False
     assert report["status"] == "blocked"
     assert report["physical_claim"] == "not_claimed"
 
@@ -413,6 +414,5 @@ def test_protected_workflow_is_read_only_and_artifact_matches_verifier() -> None
     assert upload["with"]["path"] == (
         "passport-supported-consumer-acceptance-${{ github.run_id }}.json"
     )
-    assert "--exercise-kubernetes-rollback" not in source
     assert "docker compose up" not in source
     assert "kubectl set env" not in source

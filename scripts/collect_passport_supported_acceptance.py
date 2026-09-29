@@ -1,8 +1,7 @@
 #!/usr/bin/env python3
-"""Inspect disposable supported passport runtimes; never qualify Python deletion.
+"""Inspect disposable supported passport Rust runtimes.
 
 This collector records running service, image, and selector observations.
-It has no rollback transition command.
 Signed simulator callback and nine-route acceptance require a later protected harness.
 """
 
@@ -55,7 +54,7 @@ COMPOSE_FLAGS = COMMON_FLAGS | {
 KUBERNETES_FLAGS = COMPOSE_FLAGS
 PROBES = (
     "nine_route_gateway_flow", "managed_signer", "signed_bureau_callback",
-    "released_image", "rollback",
+    "released_image", "rust_restart_resume",
 )
 
 
@@ -527,7 +526,7 @@ def report_surface(runtime: dict | None, blocker: str | None, source_commit: str
                          "source_commit": source_commit,
                          "container_id": gateway["container_id"]},
         }
-    return {"runtime_accepted": False, "rollback_accepted": False,
+    return {"runtime_accepted": False,
             "probes": probes, "runtime_images": runtime, "blocker": blocker}
 
 
@@ -594,9 +593,9 @@ def collect(
             surfaces[name] = report_surface(None, "disposable runtime probe failed",
                                             source_commit)
         else:
-            pending = ("nine-route/Kubernetes simulator/rollback acceptance is pending"
+            pending = ("nine-route/Kubernetes simulator/restart acceptance is pending"
                        if name == "kubernetes" else
-                       "nine-route/simulator/rollback acceptance is pending")
+                       "nine-route/simulator/restart acceptance is pending")
             observed = report_surface(runtime, pending, source_commit)
             bound_port = runtime.get("gateway", {}).get("loopback_port")
             parsed_origin = urlsplit(origin) if origin is not None else None
