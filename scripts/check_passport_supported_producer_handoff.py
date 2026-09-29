@@ -41,7 +41,8 @@ RECEIPT_FIELDS = frozenset({
     "physical_claim", "plan_run_id", "producer_run_id",
     "certificate_setup_passed", "live_ownership_verified", "rust_routes_verified",
     "signed_gateway_callback_verified", "flow_execution_verified",
-    "rust_restart_resume_verified", "certificate", "route", "blocker",
+    "flow_start_verified", "rust_restart_resume_verified", "certificate",
+    "route", "flow_start", "blocker",
 })
 ROUTE_EVIDENCE_FIELDS = frozenset({
     "application_input_sha256", "job_id_sha256", "application_id_sha256",
@@ -50,6 +51,26 @@ ROUTE_EVIDENCE_FIELDS = frozenset({
     "callback_private_status", "unsigned_webhook_http_status",
     "signed_callback_path", "signed_gateway_callback_verified", "physical_claim",
 })
+
+
+def _flow_start_evidence(value: object) -> None:
+    if not isinstance(value, dict) or set(value) != {"references", "flow"}:
+        raise HandoffError("Protected Rust Flow start proof is invalid")
+    references = value["references"]
+    flow = value["flow"]
+    if (not isinstance(references, dict)
+        or set(references) != {"credential_template_id_sha256",
+                                   "application_template_id_sha256",
+                                   "delivery_destination_profile_id_sha256"}
+        or not isinstance(flow, dict)
+        or set(flow) != {"flow_definition_id_sha256", "flow_instance_id_sha256",
+                         "native_job_id_sha256", "application_id_sha256"}):
+        raise HandoffError("Protected Rust Flow start proof is invalid")
+    values = list(references.values()) + list(flow.values())
+    if any(type(item) is not str or HASH.fullmatch(item) is None for item in values):
+        raise HandoffError("Protected Rust Flow start proof is invalid")
+    if len(set(values)) != len(values):
+        raise HandoffError("Protected Rust Flow IDs are not distinct")
 
 
 def _route_evidence(route: object, gateway_port: int) -> None:
@@ -173,6 +194,7 @@ def verify_handoff(
         or receipt.get("live_ownership_verified") is not True
         or receipt.get("rust_routes_verified") is not True
         or receipt.get("signed_gateway_callback_verified") is not True
+        or receipt.get("flow_start_verified") is not True
         or receipt.get("flow_execution_verified") is not False
         or receipt.get("rust_restart_resume_verified") is not False):
         raise HandoffError("Protected Rust producer receipt differs from plan")
@@ -191,6 +213,7 @@ def verify_handoff(
     except (ProducerError, KeyError, TypeError, ValueError) as error:
         raise HandoffError("Protected managed certificate evidence is invalid") from error
     _route_evidence(receipt["route"], receipt["gateway_port"])
+    _flow_start_evidence(receipt["flow_start"])
     try:
         verified = attest(str(plan_path), "ElevenID/marty-ui", PLAN_WORKFLOW,
                           source_commit, "refs/heads/main")

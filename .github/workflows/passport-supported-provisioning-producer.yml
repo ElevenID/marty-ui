@@ -76,6 +76,7 @@ jobs:
                  and .status == "blocked" and .rust_routes_verified == true
                  and .certificate_setup_passed == true
                  and .signed_gateway_callback_verified == true
+                 and .flow_start_verified == true
                  and .flow_execution_verified == false
                  and .rust_restart_resume_verified == false
                  and .source_commit == env.GITHUB_SHA

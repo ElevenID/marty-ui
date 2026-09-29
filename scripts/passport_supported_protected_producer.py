@@ -19,6 +19,7 @@ if __package__:
     from .passport_supported_certificate_rehearsal import validate_certificate_setup
     from .passport_supported_disposable_ceremony import bootstrap_certificate_chain
     from .passport_supported_disposable_route_probe import exercise_owned_disposable
+    from .passport_supported_flow_gateway import exercise_owned_flow_start
     from .passport_supported_infra_rehearsal import (
         INFRA, MIN_TEARDOWN_LEASE, ROOT, _accept_bootstrap_files,
         _bootstrap_args, _compose_args, _inspect_local, _local_docker_environment,
@@ -30,12 +31,14 @@ if __package__:
         WORKFLOW_REF, ProducerError, _remove_staged_inputs, _write_private,
         collect_record, destroy_disposable_project,
         destroy_partial_disposable_project, issue_disposable_api_key,
+        issue_disposable_operator_key,
         stage_disposable_inputs, verify_plan_release, verify_pre_mutation,
     )
 else:
     from passport_supported_certificate_rehearsal import validate_certificate_setup
     from passport_supported_disposable_ceremony import bootstrap_certificate_chain
     from passport_supported_disposable_route_probe import exercise_owned_disposable
+    from passport_supported_flow_gateway import exercise_owned_flow_start
     from passport_supported_infra_rehearsal import (
         INFRA, MIN_TEARDOWN_LEASE, ROOT, _accept_bootstrap_files,
         _bootstrap_args, _compose_args, _inspect_local, _local_docker_environment,
@@ -47,6 +50,7 @@ else:
         WORKFLOW_REF, ProducerError, _remove_staged_inputs, _write_private,
         collect_record, destroy_disposable_project,
         destroy_partial_disposable_project, issue_disposable_api_key,
+        issue_disposable_operator_key,
         stage_disposable_inputs, verify_plan_release, verify_pre_mutation,
     )
 
@@ -104,8 +108,10 @@ def produce_disposable_receipt(
     setup: Callable[..., dict] = bootstrap_certificate_chain,
     record_live: Callable[..., dict] = collect_record,
     issue_key: Callable[..., Path] = issue_disposable_api_key,
+    issue_operator_key: Callable[..., Path] = issue_disposable_operator_key,
     execute: Callable[[list[str], object, dict[str, str]], bool] = _execute_local,
     probe: Callable[..., dict] = exercise_owned_disposable,
+    flow_start: Callable[..., dict] = exercise_owned_flow_start,
     teardown_complete: Callable[..., bool] = destroy_disposable_project,
     teardown_partial: Callable[..., bool] = destroy_partial_disposable_project,
 ) -> dict:
@@ -190,6 +196,18 @@ def produce_disposable_receipt(
             or not isinstance(route.get("evidence"), dict)
             or route["evidence"].get("signed_gateway_callback_verified") is not True):
             raise ProducerError("Disposable Rust route receipt is invalid")
+        operator_path = issue_operator_key(
+            record, plan["surface"], before_probe, inspector=inspector,
+            executor=lambda args, output: execute(args, output, staged_env),
+        )
+        if operator_path != root / "secrets" / "passport_acceptance_operator_api_key":
+            raise ProducerError("Disposable Flow operator key escaped the project root")
+        flow = flow_start(record, plan["surface"], gateway_port, plan_run_id,
+                          inspector=inspector)
+        if (not isinstance(flow, dict) or set(flow) != {"references", "flow"}
+            or not isinstance(flow["references"], dict)
+            or not isinstance(flow["flow"], dict)):
+            raise ProducerError("Disposable Rust Flow start proof is invalid")
         return {
             "schema": "marty.passport-supported-rust-producer/v1",
             "status": "blocked", "project": plan["project"],
@@ -201,10 +219,12 @@ def produce_disposable_receipt(
             "live_ownership_verified": True,
             "rust_routes_verified": True,
             "signed_gateway_callback_verified": True,
+            "flow_start_verified": True,
             "flow_execution_verified": False,
             "rust_restart_resume_verified": False,
             "certificate": certificate,
             "route": route,
+            "flow_start": flow,
             "blocker": "Flow execution and Rust restart/resume remain unproven",
         }
     finally:
