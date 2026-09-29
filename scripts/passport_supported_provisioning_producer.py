@@ -470,17 +470,21 @@ def _destroy_recorded_project(
                         "Partial disposable container is outside the plan model")
                 network_settings = item.get("NetworkSettings")
                 host_config = item.get("HostConfig")
-                expected_mode = (project + "_callback_signing"
+                certificate_helper = service == "passport-certificate-bootstrap"
+                signer_id = containers.get("signing-keys") if certificate_helper else None
+                expected_mode = (f"container:{signer_id}" if certificate_helper
+                                 else project + "_callback_signing"
                                  if service == "passport-callback-signer"
                                  else project + "_private")
                 require(isinstance(host_config, dict)
                         and host_config.get("NetworkMode") == expected_mode
-                        and expected_mode in networks,
+                        and (isinstance(signer_id, str) and not host_config.get("PortBindings")
+                             if certificate_helper else expected_mode in networks),
                         "Partial disposable container uses an unowned network mode")
                 require(isinstance(network_settings, dict),
                         "Partial disposable container network state is invalid")
                 attachments = network_settings.get("Networks")
-                expected_networks = {expected_mode}
+                expected_networks = set() if certificate_helper else {expected_mode}
                 if service in {"openbao", "passport-beta-bureau"}:
                     expected_networks.add(project + "_callback_signing")
                 state = item.get("State")
