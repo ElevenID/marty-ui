@@ -48,7 +48,7 @@ def test_language_neutral_contract_matches_closed_model() -> None:
     assert contract["runtime_identity"] == [
         "pod_replicaset_deployment_owner_uid_chain",
         "completed_current_rollout_and_pod_created_after_configmap",
-        "all_five_private_service_endpoint_slices_match_owned_pods",
+        "all_six_private_service_endpoint_slices_match_owned_pods",
         "approved_entrypoint_unprivileged_runtime_and_secret_only_mounts",
         "running_rust_binary_and_routing_checked_without_emitting_environment",
         "second_full_identity_preflight_after_runtime_probe",

@@ -47,16 +47,18 @@ PROJECT = re.compile(r"marty-passport-acceptance-(base|selfhost)-[a-z0-9]{6,32}\
 NAMESPACE = re.compile(r"marty-passport-acceptance-[a-z0-9]{6,32}\Z")
 KUBE_CONTEXT = re.compile(r"marty-passport-acceptance-[a-z0-9]{6,32}\Z")
 COMPOSE_SERVICES = (
-    "gateway", "flow", "issuance-native", "passport-callback-signer",
+    "gateway", "flow", "issuance-native", "signing-keys", "passport-callback-signer",
     "passport-beta-bureau",
 )
 KUBERNETES_SERVICES = COMPOSE_SERVICES
-PRIVATE_KUBERNETES_PORTS = {"passport-beta-bureau": 8020,
+PRIVATE_KUBERNETES_PORTS = {"signing-keys": 8017,
+                            "passport-beta-bureau": 8020,
                             "passport-callback-signer": 8018}
 KUBERNETES_SERVICE_PORTS = {
     "gateway": (("http", 8000),),
     "flow": (("http", 8011), ("grpc", 9011)),
     "issuance-native": (("http", 8005), ("grpc", 9005)),
+    "signing-keys": (("http", 8017),),
     "passport-callback-signer": (("http", 8018),),
     "passport-beta-bureau": (("http", 8020),),
 }
@@ -64,6 +66,7 @@ KUBERNETES_BINARIES = {
     "gateway": "/usr/local/bin/marty-gateway",
     "flow": "/usr/local/bin/marty-flow",
     "issuance-native": "/usr/local/bin/marty-issuance-service",
+    "signing-keys": "/usr/local/bin/marty-signing-keys",
     "passport-callback-signer": "/usr/local/bin/marty-passport-callback-signer",
     "passport-beta-bureau": "/usr/local/bin/marty-passport-beta-bureau",
 }
@@ -77,6 +80,7 @@ COMMON_FLAGS = {
     ),
 }
 COMPOSE_FLAGS = COMMON_FLAGS | {
+    "signing-keys": (),
     "passport-callback-signer": ("PASSPORT_CALLBACK_SIGNER_ENABLED",),
     "passport-beta-bureau": ("PASSPORT_BETA_BUREAU_ENABLED",),
 }

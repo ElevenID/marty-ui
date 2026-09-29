@@ -27,6 +27,7 @@ SERVICES = (
     "gateway",
     "flow",
     "issuance-native",
+    "signing-keys",
     "passport-callback-signer",
     "passport-beta-bureau",
 )
@@ -43,6 +44,7 @@ FLAGS = {
 }
 HEALTH_PORTS = {
     "gateway": 8000, "flow": 8011, "issuance-native": 8005,
+    "signing-keys": 8017,
     "passport-callback-signer": 8018, "passport-beta-bureau": 8020,
 }
 OWNER_LABEL = "com.marty.passport.acceptance.owner"

@@ -94,8 +94,9 @@ def docker_runner(project: str, *, wrong_image: bool = False):
     return run
 
 
-def test_compose_runtime_reads_five_exact_running_service_images() -> None:
+def test_compose_runtime_reads_six_exact_running_service_images() -> None:
     observed = gate.observe_compose("base", BASE, REFERENCE, docker_runner(BASE))
+    assert len(gate.COMPOSE_SERVICES) == 6
     assert set(observed) == set(gate.COMPOSE_SERVICES) | {"edge"}
     assert all(item["oci_reference"] == REFERENCE
                for service, item in observed.items() if service != "edge")
@@ -277,10 +278,10 @@ def kubernetes_runner(*, mixed_provider: bool = False,
                                               "name": "marty-config", "key": name}}})
             if indirect_profile:
                 container["env"][-1]["valueFrom"]["configMapKeyRef"]["name"] = "override-config"
-        if service in ("passport-beta-bureau", "passport-callback-signer") or (
+        if service in ("signing-keys", "passport-beta-bureau", "passport-callback-signer") or (
                 service == "flow" and (pod_host_port if is_pod else template_host_port)):
-            port = (8020 if service == "passport-beta-bureau" else
-                    8018 if service == "passport-callback-signer" else 8011)
+            port = ({"signing-keys": 8017, "passport-beta-bureau": 8020,
+                     "passport-callback-signer": 8018}.get(service, 8011))
             binding = {"name": "http", "containerPort": port}
             if (pod_host_port if is_pod else template_host_port):
                 binding["hostPort"] = port
@@ -326,7 +327,8 @@ def kubernetes_runner(*, mixed_provider: bool = False,
         if args[5] == "exec":
             assert args[6].endswith("-pod")
             assert args[7:9] == ["-c", args[6].removesuffix("-pod")]
-            assert "/proc/1/environ" in args[-1]
+            if gate.KUBERNETES_FLAGS[args[8]]:
+                assert "/proc/1/environ" in args[-1]
             assert "/proc/1/exe" in args[-1]
             assert "/proc/1/cmdline" in args[-1]
             assert gate.KUBERNETES_BINARIES[args[8]] in args[-1]
