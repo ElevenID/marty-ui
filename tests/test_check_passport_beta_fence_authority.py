@@ -92,8 +92,10 @@ def fixture(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
             path.parent.mkdir(parents=True, exist_ok=True)
             path.write_text(relative, encoding="utf-8")
     (root / "docker-compose.beta.yml").write_text(
-        'flow:\n  PASSPORT_BETA_SCHEMA_VALIDATE_ONLY: "true"\n'
-        'issuance-native:\n  PASSPORT_BETA_SCHEMA_VALIDATE_ONLY: "true"\n',
+        'services:\n  flow:\n    environment:\n'
+        '      PASSPORT_BETA_SCHEMA_VALIDATE_ONLY: "true"\n'
+        '  issuance-native:\n    environment:\n'
+        '      PASSPORT_BETA_SCHEMA_VALIDATE_ONLY: "true"\n',
         encoding="utf-8")
     def blob(path: Path) -> str:
         data = path.read_bytes()
@@ -217,6 +219,29 @@ def test_authority_rejects_future_release_without_validation_mode(
         authority.check_authority(approval, manifest, values["baseline"], runner,
                                   lambda: target, lambda path, digests, commit: True,
                                   lambda image, commit, version: True)
+
+
+@pytest.mark.parametrize("compose", [
+    'services:\n  flow:\n    environment: {}\n'
+    '  issuance-native:\n    environment: {}\n'
+    '# PASSPORT_BETA_SCHEMA_VALIDATE_ONLY: "true"\n'
+    '# PASSPORT_BETA_SCHEMA_VALIDATE_ONLY: "true"\n',
+    'services:\n  flow:\n    environment: {}\n'
+    '  issuance-native:\n    environment:\n'
+    '      PASSPORT_BETA_SCHEMA_VALIDATE_ONLY: "true"\n'
+    '  wrong-service:\n    environment:\n'
+    '      PASSPORT_BETA_SCHEMA_VALIDATE_ONLY: "true"\n',
+    'services:\n  flow:\n    environment:\n'
+    '      PASSPORT_BETA_SCHEMA_VALIDATE_ONLY: "true"\n'
+    '      PASSPORT_BETA_SCHEMA_VALIDATE_ONLY: "true"\n'
+    '  issuance-native:\n    environment:\n'
+    '      PASSPORT_BETA_SCHEMA_VALIDATE_ONLY: "true"\n',
+])
+def test_future_compose_mode_requires_exact_named_service_assignments(
+    compose: str,
+) -> None:
+    with pytest.raises(HostProbeError, match="Signed aggregate beta Compose"):
+        authority.require_release_compose_schema_validation(compose)
 
 
 def test_hidden_worktree_change_cannot_replace_protected_approval(

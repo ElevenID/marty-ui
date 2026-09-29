@@ -10,6 +10,8 @@ from pathlib import Path
 import re
 import subprocess
 from typing import Any, Callable
+import yaml
+from yaml.nodes import MappingNode, ScalarNode
 
 try:
     from .collect_passport_beta_acceptance import verify_attestations
@@ -196,6 +198,33 @@ def require_release_schema_validation_capability(
                 "Signed Rust release lacks DDL-free schema validation")
 
 
+def require_release_compose_schema_validation(contents: str) -> None:
+    """Require the future beta mode on the two named Rust services."""
+    try:
+        root = yaml.compose(contents)
+    except yaml.YAMLError as exc:
+        raise HostProbeError("Signed aggregate beta Compose is invalid") from exc
+
+    def one_value(node: MappingNode | None, name: str) -> Any:
+        require(isinstance(node, MappingNode),
+                "Signed aggregate beta Compose has invalid service structure")
+        matches = [value for key, value in node.value
+                   if isinstance(key, ScalarNode) and key.value == name]
+        require(len(matches) == 1,
+                f"Signed aggregate beta Compose has ambiguous {name}")
+        return matches[0]
+
+    services = one_value(root, "services")
+    for service in ("flow", "issuance-native"):
+        entry = one_value(services, service)
+        environment = one_value(entry, "environment")
+        selector = one_value(environment, "PASSPORT_BETA_SCHEMA_VALIDATE_ONLY")
+        require(isinstance(selector, ScalarNode)
+                and selector.tag == "tag:yaml.org,2002:str"
+                and selector.value == "true",
+                f"Signed aggregate beta {service} does not use DDL-free startup")
+
+
 def check_authority(
     approval_path: Path, manifest_path: Path, beta_baseline_manifest_path: Path,
     runner: Callable[[list[str]], str] = run,
@@ -210,9 +239,8 @@ def check_authority(
     head = protected_source(runner)
     for relative in PROTECTED_FILES:
         protected_file(relative, runner)
-    require((ROOT / "docker-compose.beta.yml").read_text(encoding="utf-8").count(
-        'PASSPORT_BETA_SCHEMA_VALIDATE_ONLY: "true"') == 2,
-        "Signed aggregate beta Compose lacks DDL-free Rust startup mode")
+    require_release_compose_schema_validation(
+        (ROOT / "docker-compose.beta.yml").read_text(encoding="utf-8"))
     try:
         approval = json.loads(resolved.read_text(encoding="utf-8"))
     except (OSError, ValueError) as exc:
