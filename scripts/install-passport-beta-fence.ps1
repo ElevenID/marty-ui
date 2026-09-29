@@ -16,7 +16,15 @@ $repoAbsolute = [IO.Path]::GetFullPath($repo).TrimEnd([IO.Path]::DirectorySepara
 if (-not [IO.Path]::IsPathRooted($OutputPath)) {
     throw 'Beta fence receipt path must be absolute'
 }
+# The WSL protected receipt collector can map only local DOS drive paths.
+# Reject UNC, device, and extended-length paths before any fence mutation.
+if ($OutputPath -cnotmatch '^[A-Za-z]:\\[^\\/:*?"<>|\r\n]+(?:\\[^\\/:*?"<>|\r\n]+)*$') {
+    throw 'Beta fence receipt path must be a local Windows drive file'
+}
 $outputAbsolute = [IO.Path]::GetFullPath($OutputPath)
+if ($outputAbsolute -cnotmatch '^[A-Za-z]:\\[^\\/:*?"<>|\r\n]+(?:\\[^\\/:*?"<>|\r\n]+)*$') {
+    throw 'Canonical beta fence receipt path is not a local Windows drive file'
+}
 if ($outputAbsolute.StartsWith(
         $repoAbsolute + [IO.Path]::DirectorySeparatorChar,
         [StringComparison]::OrdinalIgnoreCase)) {
