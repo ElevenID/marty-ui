@@ -50,6 +50,7 @@ pub struct FlowServiceConfig {
     pub verifier_logo_uri: Option<String>,
     pub verifier_expected_origins: Vec<String>,
     pub database_url: String,
+    pub beta_fenced_schema_validation: bool,
     pub database_max_connections: u32,
     pub redis_url: String,
     pub redis_database: u8,
@@ -249,6 +250,12 @@ impl FlowServiceConfig {
     ) -> Result<Self, FlowConfigError> {
         let values = values.into_iter().collect::<BTreeMap<_, _>>();
         let environment = parse_environment(value(&values, "ENVIRONMENT").unwrap_or("production"))?;
+        let beta_fenced_schema_validation =
+            match value(&values, "PASSPORT_BETA_FENCED_SCHEMA_VALIDATION") {
+                None | Some("false") => false,
+                Some("true") if environment == Environment::Beta => true,
+                _ => return Err(invalid("PASSPORT_BETA_FENCED_SCHEMA_VALIDATION")),
+            };
         let http_addr = listener_address(
             &values,
             "FLOW_HTTP_ADDR",
@@ -545,6 +552,7 @@ impl FlowServiceConfig {
             verifier_logo_uri,
             verifier_expected_origins,
             database_url,
+            beta_fenced_schema_validation,
             database_max_connections,
             redis_url,
             redis_database,

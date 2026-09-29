@@ -1369,8 +1369,35 @@ async fn passport_jobs_survive_restart_without_cross_tenant_reads() {
         .execute(&pool)
         .await
         .unwrap();
+    assert!(migration::validate_passport(&pool).await.is_err());
     migration::migrate_passport(&pool).await.unwrap();
     migration::migrate_passport(&pool).await.unwrap(); // startup is idempotent
+    let read_only_pool = PgPoolOptions::new()
+        .max_connections(1)
+        .connect(&database_url)
+        .await
+        .unwrap();
+    sqlx::query("SET default_transaction_read_only = on")
+        .execute(&read_only_pool)
+        .await
+        .unwrap();
+    let read_only: String = sqlx::query_scalar("SHOW default_transaction_read_only")
+        .fetch_one(&read_only_pool)
+        .await
+        .unwrap();
+    assert_eq!(read_only, "on");
+    migration::validate_passport(&read_only_pool).await.unwrap();
+    assert!(migration::migrate_passport(&read_only_pool).await.is_err());
+    read_only_pool.close().await;
+    sqlx::query(
+        "ALTER TABLE issuance_service.passport_beta_batch_intents \
+         DROP CONSTRAINT ck_passport_beta_batch_wire_evidence",
+    )
+    .execute(&pool)
+    .await
+    .unwrap();
+    assert!(migration::validate_passport(&pool).await.is_err());
+    migration::migrate_passport(&pool).await.unwrap();
 
     let key_a = "a".repeat(32);
     let key_b = "b".repeat(32);

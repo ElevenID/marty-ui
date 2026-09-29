@@ -284,6 +284,38 @@ fn deployed_configuration_is_complete_and_normalized() {
 }
 
 #[test]
+fn fenced_schema_validation_is_explicit_and_beta_only() {
+    assert!(
+        !FlowServiceConfig::from_values(baseline("beta"))
+            .unwrap()
+            .beta_fenced_schema_validation
+    );
+    let mut beta = baseline("beta");
+    beta.insert(
+        "PASSPORT_BETA_FENCED_SCHEMA_VALIDATION".into(),
+        "true".into(),
+    );
+    assert!(
+        FlowServiceConfig::from_values(beta)
+            .unwrap()
+            .beta_fenced_schema_validation
+    );
+    for environment in ["development", "production"] {
+        let mut values = baseline(environment);
+        values.insert(
+            "PASSPORT_BETA_FENCED_SCHEMA_VALIDATION".into(),
+            "true".into(),
+        );
+        assert_eq!(
+            FlowServiceConfig::from_values(values).unwrap_err(),
+            FlowConfigError::Invalid {
+                name: "PASSPORT_BETA_FENCED_SCHEMA_VALIDATION"
+            }
+        );
+    }
+}
+
+#[test]
 fn production_preserves_legacy_http_owner_without_weakening_beta() {
     let mut production = baseline("production");
     production.remove("ISSUANCE_NATIVE_SERVICE_URL");

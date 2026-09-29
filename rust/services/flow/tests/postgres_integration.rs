@@ -8,14 +8,18 @@ use std::{
 use axum::{extract::State, http::HeaderMap, routing::post, Json, Router};
 use chrono::{Duration, Utc};
 use marty_flow::{
-    deliver_due_callbacks, migrate_flow_schema, ApplicationEventReceipt, ApprovalStrategy,
-    ArtifactStatus, CallbackDeliveryConfig, CallbackEvent, DefinitionStatus, FlowArtifactRecord,
-    FlowDefinitionRecord, FlowInstanceRecord, PlannedApplicationFlowRecord, PostgresFlowRepository,
+    deliver_due_callbacks, migrate_flow_schema, validate_flow_schema, ApplicationEventReceipt,
+    ApprovalStrategy, ArtifactStatus, CallbackDeliveryConfig, CallbackEvent, DefinitionStatus,
+    FlowArtifactRecord, FlowDefinitionRecord, FlowInstanceRecord, PlannedApplicationFlowRecord,
+    PostgresFlowRepository,
 };
 use marty_verification::flow::FlowInstanceStatus;
 use mmf_push::WebhookDestinationRegistry;
 use serde_json::{json, Value};
-use sqlx::{postgres::PgConnectOptions, PgPool};
+use sqlx::{
+    postgres::{PgConnectOptions, PgPoolOptions},
+    PgPool,
+};
 
 const TEST_DATABASE_NAME: &str = "marty_atomic_test";
 const FIRST_INSTANCE_ID: &str = "90000000-0000-0000-0000-000000000001";
@@ -45,7 +49,25 @@ async fn postgres_finalization_and_callback_leases_are_atomic() -> TestResult {
     );
     let pool = PgPool::connect_with(options).await?;
 
+    sqlx::raw_sql("DROP SCHEMA IF EXISTS flow_service CASCADE")
+        .execute(&pool)
+        .await?;
+    assert!(validate_flow_schema(&pool).await.is_err());
     reset_schema(&pool).await?;
+    let read_only_pool = PgPoolOptions::new()
+        .max_connections(1)
+        .connect(&database_url)
+        .await?;
+    sqlx::query("SET default_transaction_read_only = on")
+        .execute(&read_only_pool)
+        .await?;
+    let read_only: String = sqlx::query_scalar("SHOW default_transaction_read_only")
+        .fetch_one(&read_only_pool)
+        .await?;
+    assert_eq!(read_only, "on");
+    validate_flow_schema(&read_only_pool).await?;
+    assert!(migrate_flow_schema(&read_only_pool).await.is_err());
+    read_only_pool.close().await;
     let contract = run_contract(&pool).await;
     let cleanup = sqlx::raw_sql(
         "DROP SCHEMA IF EXISTS flow_service CASCADE;

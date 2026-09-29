@@ -6,8 +6,8 @@ use thiserror::Error;
 use url::Url;
 
 use crate::{
-    migrate_flow_schema, FlowDependency, FlowGrpcChannelFactories, FlowMigrationError,
-    FlowProviderError, FlowProviderRegistry, FlowRuntime, FlowServiceConfig,
+    migrate_flow_schema, validate_flow_schema, FlowDependency, FlowGrpcChannelFactories,
+    FlowMigrationError, FlowProviderError, FlowProviderRegistry, FlowRuntime, FlowServiceConfig,
     HttpFlowReferenceProvider, HttpPhysicalDocumentProvider, HttpSigningProvider,
     PostgresFlowRepository,
 };
@@ -62,7 +62,11 @@ async fn connect_database(
         .acquire_timeout(Duration::from_secs(10))
         .connect(&config.database_url)
         .await?;
-    migrate_flow_schema(&pool).await?;
+    if config.beta_fenced_schema_validation {
+        validate_flow_schema(&pool).await?;
+    } else {
+        migrate_flow_schema(&pool).await?;
+    }
     sqlx::query_scalar::<_, i32>("SELECT 1")
         .fetch_one(&pool)
         .await?;

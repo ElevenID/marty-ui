@@ -258,6 +258,7 @@ pub struct IssuanceServiceConfig {
     pub issuer_display_name: String,
     pub cors_allowed_origins: Vec<String>,
     pub database_url: String,
+    pub beta_fenced_schema_validation: bool,
     pub integration_secret_master_key: Option<String>,
     pub token_hmac_key: Option<String>,
     pub issuance_api_key: Option<String>,
@@ -677,6 +678,26 @@ impl IssuanceServiceConfig {
             &settings.authorization.session_ttl_minutes,
         )?;
         let database_url = validate_database_url(&settings.dependencies.database_url)?;
+        let beta_fenced_schema_validation = match values
+            .get("PASSPORT_BETA_FENCED_SCHEMA_VALIDATION")
+            .map(String::as_str)
+        {
+            None | Some("false") => false,
+            Some("true")
+                if values
+                    .get("ENVIRONMENT")
+                    .or_else(|| values.get("APP_ENV"))
+                    .is_some_and(|environment| environment.trim().eq_ignore_ascii_case("beta")) =>
+            {
+                true
+            }
+            _ => {
+                return Err(MmfError::new(
+                    ErrorCode::Configuration,
+                    "PASSPORT_BETA_FENCED_SCHEMA_VALIDATION requires beta and true or false",
+                ));
+            }
+        };
         let signing_keys_internal_url =
             validate_internal_url(&settings.dependencies.signing_keys_internal_url)?;
         let revocation_profile_service_url =
@@ -987,6 +1008,7 @@ impl IssuanceServiceConfig {
             issuer_display_name: settings.discovery.issuer_display_name,
             cors_allowed_origins: settings.server.cors_allowed_origins,
             database_url,
+            beta_fenced_schema_validation,
             integration_secret_master_key,
             token_hmac_key,
             issuance_api_key,
@@ -1628,6 +1650,43 @@ mod tests {
             .iter()
             .map(|(key, value)| ((*key).to_owned(), (*value).to_owned()))
             .collect()
+    }
+
+    #[test]
+    fn fenced_schema_validation_is_explicit_and_beta_only() {
+        assert!(
+            !IssuanceServiceConfig::from_values(Vec::new())
+                .unwrap()
+                .beta_fenced_schema_validation
+        );
+        assert!(
+            IssuanceServiceConfig::from_values(values(&[
+                ("ENVIRONMENT", "beta"),
+                ("PASSPORT_BETA_FENCED_SCHEMA_VALIDATION", "true"),
+            ]))
+            .unwrap()
+            .beta_fenced_schema_validation
+        );
+        assert!(
+            IssuanceServiceConfig::from_values(values(&[
+                ("APP_ENV", "BETA"),
+                ("PASSPORT_BETA_FENCED_SCHEMA_VALIDATION", "true"),
+            ]))
+            .unwrap()
+            .beta_fenced_schema_validation
+        );
+        for environment in ["production", "development"] {
+            assert!(IssuanceServiceConfig::from_values(values(&[
+                ("ENVIRONMENT", environment),
+                ("PASSPORT_BETA_FENCED_SCHEMA_VALIDATION", "true"),
+            ]))
+            .is_err());
+        }
+        assert!(IssuanceServiceConfig::from_values(values(&[
+            ("ENVIRONMENT", "beta"),
+            ("PASSPORT_BETA_FENCED_SCHEMA_VALIDATION", "invalid"),
+        ]))
+        .is_err());
     }
 
     #[test]
