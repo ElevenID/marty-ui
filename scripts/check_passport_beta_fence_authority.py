@@ -43,6 +43,7 @@ PROTECTED_FILES = (
     ".gitattributes",
     "deploy-config/passport-beta-fence-approved-target.json",
     "scripts/check_passport_beta_fence_authority.py",
+    "scripts/prepare_passport_beta_fence_approval.py",
     "scripts/beta-deployment-lock.ps1",
     "scripts/beta-passport-fence-legacy-boundary.ps1",
     "scripts/beta-passport-migration-lease.ps1",
