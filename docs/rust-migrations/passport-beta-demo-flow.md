@@ -51,7 +51,14 @@ both cases have the same signed release, aggregate beta deployment, selected
 job, and unchanged-state commitment. It requires the private handoff and a new
 mode-0700 output directory outside the checkout and deployment artifacts. The
 scanner checkout must match `PASSPORT_DEMO_RECORDER_COMMIT`, which the protected
-workflow must derive from the signed official release. These media files remain
+workflow derives from the governed deployment's source, local deployment, and
+deployed demo manifests. The recorder revision is an explicit release input;
+it is not a component of the signed stack manifest. The `beta-lifecycle`
+environment needs `PASSPORT_DEMO_SOURCE_READ_TOKEN`, a fine-grained token with
+Contents read access to the private `ElevenID/marty-demo-recorder` repository.
+The existing `DEMO_RECORDER_DISPATCH_TOKEN` lacks that permission. The workflow
+installs the pinned recorder's locked dependencies and verifies `ffmpeg` and
+`tesseract` before consuming the selected live Flow. These media files remain
 diagnostic until the protected preliminary producer verifies them and qualifies
 the recording receipt.
 The private handoff must remain outside the deployment artifact directory and

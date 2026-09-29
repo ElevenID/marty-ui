@@ -1,0 +1,199 @@
+name: Passport Beta Preliminary Recording Evidence
+
+on:
+  workflow_dispatch:
+    inputs:
+      beta_artifact_dir:
+        description: Absolute protected directory for the exact official aggregate beta deployment.
+        required: true
+
+concurrency:
+  group: passport-beta-preliminary
+  cancel-in-progress: false
+
+permissions:
+  actions: read
+  contents: read
+  attestations: read
+  packages: read
+
+jobs:
+  qualify:
+    if: github.ref == 'refs/heads/main'
+    runs-on: [self-hosted, linux, x64, canvas-oss-wsl2]
+    environment: beta-lifecycle
+    timeout-minutes: 180
+    env:
+      BETA_ARTIFACT_DIR: ${{ inputs.beta_artifact_dir }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+
+      - name: Pin recorder to the deployed beta release
+        shell: bash
+        run: |
+          set -euo pipefail
+          [[ "$(git rev-parse HEAD)" == "$GITHUB_SHA" ]]
+          [[ "$BETA_ARTIFACT_DIR" == /* && -d "$BETA_ARTIFACT_DIR" ]]
+          recorder_commit="$(python3 scripts/pin_passport_beta_recorder.py \
+            --artifact-dir "$BETA_ARTIFACT_DIR" --expected-ui-commit "$GITHUB_SHA")"
+          echo "PASSPORT_DEMO_RECORDER_COMMIT=$recorder_commit" >> "$GITHUB_ENV"
+
+      - name: Install browser recording dependencies
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v4
+        with:
+          node-version: '24'
+          cache: npm
+          cache-dependency-path: tests/package-lock.json
+
+      - name: Install Playwright and Chromium
+        shell: bash
+        working-directory: tests
+        run: |
+          set -euo pipefail
+          npm ci
+          npx playwright install --with-deps chromium
+
+      - name: Check out the pinned privacy scanner
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.PASSPORT_DEMO_SOURCE_READ_TOKEN }}
+        run: |
+          set -euo pipefail
+          [[ -n "$GH_TOKEN" ]] || { echo 'Recorder source-read token is unavailable' >&2; exit 1; }
+          recorder_root="$RUNNER_TEMP/passport-demo-recorder-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT"
+          [[ ! -e "$recorder_root" && ! -L "$recorder_root" ]]
+          gh repo clone ElevenID/marty-demo-recorder "$recorder_root" -- --no-checkout
+          git -C "$recorder_root" checkout --detach "$PASSPORT_DEMO_RECORDER_COMMIT"
+          [[ "$(git -C "$recorder_root" rev-parse HEAD)" == "$PASSPORT_DEMO_RECORDER_COMMIT" ]]
+          echo "PASSPORT_PRELIMINARY_RECORDER_ROOT=$recorder_root" >> "$GITHUB_ENV"
+
+      - name: Install pinned recorder scanner dependencies
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd "$PASSPORT_PRELIMINARY_RECORDER_ROOT"
+          npm ci
+
+      - name: Check media scanner tools before live beta mutation
+        shell: bash
+        run: |
+          set -euo pipefail
+          command -v ffmpeg
+          command -v tesseract
+          node -e "require(process.env.PASSPORT_PRELIMINARY_RECORDER_ROOT + '/src/secretScan.js')"
+
+      - name: Probe managed KMS, selected Flow, native batch, and beta continuity
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PASSPORT_ACCEPTANCE_API_KEY: ${{ secrets.PASSPORT_ACCEPTANCE_API_KEY }}
+          PASSPORT_ACCEPTANCE_APPLICATION_JSON: ${{ secrets.PASSPORT_ACCEPTANCE_APPLICATION_JSON }}
+          PASSPORT_ACCEPTANCE_CERTIFICATE_PLAN_JSON: ${{ secrets.PASSPORT_ACCEPTANCE_CERTIFICATE_PLAN_JSON }}
+          PASSPORT_ACCEPTANCE_CSCA_OPERATOR_COOKIE: ${{ secrets.PASSPORT_ACCEPTANCE_CSCA_OPERATOR_COOKIE }}
+          PASSPORT_ACCEPTANCE_DSC_OPERATOR_COOKIE: ${{ secrets.PASSPORT_ACCEPTANCE_DSC_OPERATOR_COOKIE }}
+          PASSPORT_ACCEPTANCE_FLOW_OPERATOR_COOKIE: ${{ secrets.PASSPORT_ACCEPTANCE_FLOW_OPERATOR_COOKIE }}
+          PASSPORT_ACCEPTANCE_FLOW_PLAN_JSON: ${{ secrets.PASSPORT_ACCEPTANCE_FLOW_PLAN_JSON }}
+          PASSPORT_ACCEPTANCE_INTERNAL_SERVICE_TOKEN: ${{ secrets.PASSPORT_ACCEPTANCE_INTERNAL_SERVICE_TOKEN }}
+          PASSPORT_ACCEPTANCE_RECONCILIATION_OPERATOR_TOKEN: ${{ secrets.PASSPORT_ACCEPTANCE_RECONCILIATION_OPERATOR_TOKEN }}
+        run: |
+          set -euo pipefail
+          for required in PASSPORT_ACCEPTANCE_API_KEY PASSPORT_ACCEPTANCE_APPLICATION_JSON \
+                          PASSPORT_ACCEPTANCE_CERTIFICATE_PLAN_JSON \
+                          PASSPORT_ACCEPTANCE_CSCA_OPERATOR_COOKIE \
+                          PASSPORT_ACCEPTANCE_DSC_OPERATOR_COOKIE \
+                          PASSPORT_ACCEPTANCE_FLOW_OPERATOR_COOKIE \
+                          PASSPORT_ACCEPTANCE_FLOW_PLAN_JSON \
+                          PASSPORT_ACCEPTANCE_INTERNAL_SERVICE_TOKEN \
+                          PASSPORT_ACCEPTANCE_RECONCILIATION_OPERATOR_TOKEN; do
+            [[ -n "${!required}" ]] || { echo "$required is unavailable" >&2; exit 1; }
+          done
+          umask 077
+          application_file="$RUNNER_TEMP/passport-beta-application-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT.json"
+          certificate_file="$RUNNER_TEMP/passport-beta-certificates-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT.json"
+          flow_file="$RUNNER_TEMP/passport-beta-flow-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT.json"
+          handoff_file="$HOME/.local/state/marty/passport-beta-demo-selected-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT.json"
+          report_file="$RUNNER_TEMP/passport-beta-acceptance-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT.json"
+          for path in "$application_file" "$certificate_file" "$flow_file" "$handoff_file" "$report_file"; do
+            [[ ! -e "$path" && ! -L "$path" ]] || { echo "Protected passport evidence path already exists" >&2; exit 1; }
+          done
+          printf '%s' "$PASSPORT_ACCEPTANCE_APPLICATION_JSON" > "$application_file"
+          printf '%s' "$PASSPORT_ACCEPTANCE_CERTIFICATE_PLAN_JSON" > "$certificate_file"
+          printf '%s' "$PASSPORT_ACCEPTANCE_FLOW_PLAN_JSON" > "$flow_file"
+          chmod 600 "$application_file" "$certificate_file" "$flow_file"
+          python3 scripts/run_passport_beta_acceptance.py \
+            --artifact-dir "$BETA_ARTIFACT_DIR" \
+            --application-file "$application_file" \
+            --certificate-plan-file "$certificate_file" \
+            --selected-flow-plan-file "$flow_file" \
+            --private-demo-handoff-file "$handoff_file" \
+            --output "$report_file"
+          python3 - "$report_file" "$GITHUB_SHA" <<'PY'
+          import json, sys
+          from pathlib import Path
+          report = json.loads(Path(sys.argv[1]).read_text())
+          if (report.get('schema') != 'marty.passport-beta-acceptance/v1'
+                  or report.get('status') != 'blocked'
+                  or report.get('release', {}).get('source_commit') != sys.argv[2]
+                  or report.get('release', {}).get('signed_manifest_verified') is not True):
+              raise SystemExit('Selected beta probe did not bind to this protected main revision')
+          PY
+          echo "PASSPORT_PRELIMINARY_FLOW_FILE=$flow_file" >> "$GITHUB_ENV"
+          echo "PASSPORT_PRELIMINARY_HANDOFF_FILE=$handoff_file" >> "$GITHUB_ENV"
+          echo "PASSPORT_PRELIMINARY_REPORT_FILE=$report_file" >> "$GITHUB_ENV"
+
+      - name: Record both live native callback denials
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PASSPORT_ACCEPTANCE_API_KEY: ${{ secrets.PASSPORT_ACCEPTANCE_API_KEY }}
+        run: |
+          set -euo pipefail
+          negative_dir="$RUNNER_TEMP/passport-beta-negative-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT"
+          [[ ! -e "$negative_dir" && ! -L "$negative_dir" ]]
+          node tests/scripts/record-beta-passport-negative-callbacks.js \
+            --artifact-dir "$BETA_ARTIFACT_DIR" \
+            --private-handoff "$PASSPORT_PRELIMINARY_HANDOFF_FILE" \
+            --output-dir "$negative_dir" \
+            --recorder-root "$PASSPORT_PRELIMINARY_RECORDER_ROOT"
+          echo "PASSPORT_PRELIMINARY_NEGATIVE_DIR=$negative_dir" >> "$GITHUB_ENV"
+
+      - name: Qualify the bounded D12 preliminary receipt
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PASSPORT_ACCEPTANCE_API_KEY: ${{ secrets.PASSPORT_ACCEPTANCE_API_KEY }}
+        run: |
+          set -euo pipefail
+          umask 077
+          stage="$RUNNER_TEMP/passport-beta-preliminary-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT"
+          [[ ! -e "$stage" && ! -L "$stage" ]]
+          mkdir -m 700 "$stage"
+          report="$stage/passport-beta-preliminary-$GITHUB_RUN_ID.json"
+          python3 scripts/produce_passport_beta_preliminary.py \
+            --artifact-dir "$BETA_ARTIFACT_DIR" \
+            --acceptance-report-file "$PASSPORT_PRELIMINARY_REPORT_FILE" \
+            --private-demo-handoff-file "$PASSPORT_PRELIMINARY_HANDOFF_FILE" \
+            --selected-flow-plan-file "$PASSPORT_PRELIMINARY_FLOW_FILE" \
+            --negative-media-dir "$PASSPORT_PRELIMINARY_NEGATIVE_DIR" \
+            --output "$report"
+          for name in unsigned foreign; do
+            cp "$PASSPORT_PRELIMINARY_NEGATIVE_DIR/$name-callback-uncut.webm" "$stage/"
+            cp "$PASSPORT_PRELIMINARY_NEGATIVE_DIR/$name-callback-privacy-scan.json" "$stage/"
+          done
+          echo "PASSPORT_PRELIMINARY_STAGE=$stage" >> "$GITHUB_ENV"
+
+      - name: Upload qualified preliminary evidence only
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: passport-beta-preliminary-${{ github.run_id }}
+          path: ${{ env.PASSPORT_PRELIMINARY_STAGE }}/*
+          if-no-files-found: error
+          retention-days: 90
+
+      - name: Remove transient protected input files
+        if: always()
+        shell: bash
+        run: |
+          rm -f "$RUNNER_TEMP/passport-beta-application-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT.json" \
+            "$RUNNER_TEMP/passport-beta-certificates-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT.json" \
+            "$RUNNER_TEMP/passport-beta-flow-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT.json"
