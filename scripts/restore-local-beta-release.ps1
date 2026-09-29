@@ -54,6 +54,9 @@ if ($PlanOnly) {
     exit 0
 }
 
+. (Join-Path $PSScriptRoot "beta-deployment-lock.ps1")
+$betaDeploymentLock = Enter-BetaDeploymentLock -AllowPending
+try {
 # The switch is only a request for a plan. A caller may omit it while passing
 # a physical snapshot, so identify the snapshot and live beta service labels
 # before any restore action regardless of requested mode.
@@ -466,6 +469,7 @@ $redisVolumeName = Assert-BetaVolume "elevenid-beta_redis_data"
 $applicantVolumeName = Assert-BetaVolume "elevenid-beta_applicant_data"
 $yaml -join "`n" | Set-Content -LiteralPath $restoreImages -Encoding utf8
 $composeFiles += $restoreImages
+Start-BetaMutation -ResumePending
 Invoke-Checked docker (Get-ComposeArgs (@("stop") + $applicationServices + @("keycloak")))
 if ($priorBureau.Count -eq 0 -and $currentBureau) {
     Invoke-Checked docker @("stop", $currentBureau)
@@ -533,3 +537,8 @@ if ($uiRecord.Count -eq 1) {
     openbao_process_preserved = $true
 } | ConvertTo-Json -Depth 4 | Set-Content -LiteralPath (Join-Path $resolvedArtifacts "beta-restore-audit.json") -Encoding utf8
 Write-Host "Supervised elevenid-beta restore complete; self-host production was not addressed."
+Complete-BetaMutation
+}
+finally {
+    Exit-BetaDeploymentLock -Lock $betaDeploymentLock
+}

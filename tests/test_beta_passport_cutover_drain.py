@@ -13,6 +13,8 @@ import pytest
 ROOT = Path(__file__).resolve().parents[1]
 SCRIPT = ROOT / "scripts/deploy-local-beta-release.ps1"
 CONTRACT = ROOT / "contracts/passport-beta-cutover-drain-behavior.json"
+LOCK = ROOT / "scripts/beta-deployment-lock.ps1"
+RESTORE = ROOT / "scripts/restore-local-beta-release.ps1"
 
 
 def _function_source() -> str:
@@ -33,6 +35,7 @@ def test_drain_preflight_counts_artifacts_and_flows_before_backup():
     function = _function_source()
     contract = json.loads(CONTRACT.read_text(encoding="utf-8"))
     assert contract["artifact_policy"]["legacy_or_unknown"].startswith("block")
+    assert "exclusive beta deployment/restore mutation lock" in contract["writer_fence"]
     assert "secure_artifact_ciphertext::jsonb" in function
     assert "marty.passport-artifact-manifest/v1" in function
     assert "jsonb_array_elements" in function
@@ -50,6 +53,164 @@ def test_drain_preflight_counts_artifacts_and_flows_before_backup():
     assert source.index("Assert-NoInFlightPassportJobs\n") < source.index(
         'Write-Step "Capture quiesced maintenance snapshot"'
     )
+
+
+def test_beta_mutations_hold_one_lock_and_recheck_live_writers() -> None:
+    deploy = SCRIPT.read_text(encoding="utf-8")
+    restore = RESTORE.read_text(encoding="utf-8")
+    for source in (deploy, restore):
+        assert 'Enter-BetaDeploymentLock' in source
+        assert 'Exit-BetaDeploymentLock -Lock $betaDeploymentLock' in source
+    assert deploy.index('Enter-BetaDeploymentLock') < deploy.index(
+        '$preDeployContainers = Get-ServiceRecords')
+    assert deploy.index('Start-BetaMutation\n') < deploy.index(
+        'docker -Arguments (@("stop")')
+    assert deploy.index('Complete-BetaMutation\n') < deploy.index(
+        'Exit-BetaDeploymentLock -Lock $betaDeploymentLock')
+    assert 'Start-BetaMutation -ResumePending' in restore
+    assert 'Complete-BetaMutation' in restore
+    assert restore.index('Missing beta recovery input:') < restore.index(
+        'Start-BetaMutation -ResumePending')
+    assert restore.index('Beta backup checksum mismatch:') < restore.index(
+        'Start-BetaMutation -ResumePending')
+    assert restore.index('Start-BetaMutation -ResumePending') < restore.index(
+        'Invoke-Checked docker (Get-ComposeArgs (@("stop")')
+    assert deploy.index('$runningWriters = @(Get-ServiceRecords') < deploy.index(
+        'Assert-NoInFlightPassportJobs\n')
+    assert deploy.index('Assert-NoInFlightPassportJobs\n') < deploy.index(
+        'Write-Step "Capture quiesced maintenance snapshot"')
+    assert deploy.index('try {\n    Start-BetaMutation') < deploy.index(
+        'docker -Arguments (@("stop")')
+    assert 'Assert-MaintenanceContainersRestored $maintenanceContainers' in deploy
+    assert deploy.index('Assert-MaintenanceContainersRestored $maintenanceContainers') < deploy.index(
+        'Complete-BetaMutation\n            Write-Warning')
+    assert deploy.index('$liveMutationStarted = $true') < deploy.index(
+        '"openbao-init")')
+
+
+@pytest.mark.parametrize(
+    ("running", "verified"),
+    [("alpha,beta", True), ("alpha", False), ("alpha,beta,gamma", False),
+     ("alpha,gamma", False)],
+)
+def test_maintenance_recovery_requires_exact_container_set(
+    tmp_path: Path, running: str, verified: bool,
+) -> None:
+    powershell = shutil.which("pwsh") or shutil.which("powershell.exe")
+    if powershell is None:
+        pytest.skip("PowerShell is unavailable")
+    source = SCRIPT.read_text(encoding="utf-8")
+    match = re.search(
+        r"(?ms)^function Assert-MaintenanceContainersRestored\(.*?^\}", source
+    )
+    assert match
+    ids = ",".join(f"'{item}'" for item in running.split(","))
+    harness = tmp_path / "recovery.ps1"
+    harness.write_text(
+        match.group() + "\n"
+        "$script:SelectedApplicationServices = @('issuance-native')\n"
+        "$script:InfrastructureWriterServices = @('keycloak')\n"
+        f"function Get-ServiceRecords {{ @({ids}) | ForEach-Object {{ "
+        "[pscustomobject]@{ container_id = $_; running = $true } } }\n"
+        "try { Assert-MaintenanceContainersRestored @('alpha', 'beta') } "
+        "catch { [Console]::Error.WriteLine($_.Exception.Message); exit 1 }\n",
+        encoding="utf-8",
+    )
+    result = subprocess.run(
+        [powershell, "-NoProfile", "-NonInteractive", "-File", str(harness)],
+        capture_output=True, text=True, timeout=8, check=False,
+    )
+    assert (result.returncode == 0) is verified, result.stdout + result.stderr
+    if not verified:
+        assert "did not restore the exact running container set" in result.stderr
+
+
+def test_beta_deployment_lock_excludes_concurrent_processes(tmp_path: Path) -> None:
+    powershell = shutil.which("pwsh") or shutil.which("powershell.exe")
+    if powershell is None:
+        pytest.skip("PowerShell is unavailable")
+    helper = str(LOCK).replace("'", "''")
+    release_signal = tmp_path / "release-signal"
+    signal_path = str(release_signal).replace("'", "''")
+    holder = tmp_path / "holder.ps1"
+    holder.write_text(
+        f". '{helper}'\n$lock = Enter-BetaDeploymentLock\n"
+        "try { Write-Output 'LOCK_HELD'; [Console]::Out.Flush(); "
+        f"while (-not (Test-Path -LiteralPath '{signal_path}')) {{ "
+        "Start-Sleep -Milliseconds 100 } } finally { "
+        "Exit-BetaDeploymentLock -Lock $lock }\n",
+        encoding="utf-8",
+    )
+    contender = tmp_path / "contender.ps1"
+    contender.write_text(
+        f". '{helper}'\n$lock = Enter-BetaDeploymentLock\n"
+        "try { Write-Output 'LOCK_ACQUIRED' } finally { "
+        "Exit-BetaDeploymentLock -Lock $lock }\n",
+        encoding="utf-8",
+    )
+    first = subprocess.Popen(
+        [powershell, "-NoProfile", "-NonInteractive", "-File", str(holder)],
+        stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
+    )
+    try:
+        assert first.stdout is not None
+        assert first.stdout.readline().strip() == "LOCK_HELD"
+        blocked = subprocess.run(
+            [powershell, "-NoProfile", "-NonInteractive", "-File", str(contender)],
+            capture_output=True, text=True, timeout=8, check=False,
+        )
+        assert blocked.returncode != 0
+        assert "Another elevenid-beta deployment or restore is active" in (
+            blocked.stdout + blocked.stderr)
+    finally:
+        release_signal.write_text("release", encoding="utf-8")
+        output, error = first.communicate(timeout=10)
+        assert first.returncode == 0, output + error
+    acquired = subprocess.run(
+        [powershell, "-NoProfile", "-NonInteractive", "-File", str(contender)],
+        capture_output=True, text=True, timeout=8, check=False,
+    )
+    assert acquired.returncode == 0, acquired.stdout + acquired.stderr
+    assert "LOCK_ACQUIRED" in acquired.stdout
+
+
+def test_pending_beta_mutation_blocks_new_deploy_until_restore(tmp_path: Path) -> None:
+    powershell = shutil.which("pwsh") or shutil.which("powershell.exe")
+    if powershell is None:
+        pytest.skip("PowerShell is unavailable")
+    helper = str(LOCK).replace("'", "''")
+    marker = str(tmp_path / "pending").replace("'", "''")
+    common = f". '{helper}'\nfunction Get-BetaMutationMarkerPath {{ '{marker}' }}\n"
+
+    def invoke(body: str) -> subprocess.CompletedProcess[str]:
+        path = tmp_path / "marker-harness.ps1"
+        path.write_text(common + body, encoding="utf-8")
+        return subprocess.run(
+            [powershell, "-NoProfile", "-NonInteractive", "-File", str(path)],
+            capture_output=True, text=True, timeout=8, check=False,
+        )
+
+    started = invoke("$lock = Enter-BetaDeploymentLock\n"
+                     "try { Start-BetaMutation } finally { "
+                     "Exit-BetaDeploymentLock -Lock $lock }\n")
+    assert started.returncode == 0, started.stdout + started.stderr
+    assert (tmp_path / "pending").is_file()
+    blocked = invoke("$lock = Enter-BetaDeploymentLock\n"
+                     "try { throw 'unexpected' } finally { "
+                     "Exit-BetaDeploymentLock -Lock $lock }\n")
+    assert blocked.returncode != 0
+    assert "prior elevenid-beta mutation is pending" in blocked.stderr
+    restored = invoke("$lock = Enter-BetaDeploymentLock -AllowPending\n"
+                      "try { Start-BetaMutation -ResumePending; "
+                      "Complete-BetaMutation } finally { "
+                      "Exit-BetaDeploymentLock -Lock $lock }\n")
+    assert restored.returncode == 0, restored.stdout + restored.stderr
+    assert not (tmp_path / "pending").exists()
+    available = invoke("$lock = Enter-BetaDeploymentLock\n"
+                       "try { Write-Output 'READY' } finally { "
+                       "Exit-BetaDeploymentLock -Lock $lock }\n")
+    assert available.returncode == 0, available.stdout + available.stderr
+    assert "READY" in available.stdout
 
 
 @pytest.mark.parametrize(
