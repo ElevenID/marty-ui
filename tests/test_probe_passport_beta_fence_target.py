@@ -51,6 +51,37 @@ def test_inventory_pins_beta_services_and_redacts_database_password(
     assert "do-not-print" not in repr(found)
 
 
+def test_fenced_observer_uses_postinstall_identity_without_prefence_acl(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    selected = {name: {"container_id": f"{index:064x}",
+                       "image_id": target.QUALIFIED_POSTGRES_IMAGE_ID}
+                for index, name in enumerate(target.REQUIRED_SERVICES, start=1)}
+    postgres = selected["postgres"]["container_id"]
+    monkeypatch.setattr(target, "service_inventory", lambda runner: selected)
+    monkeypatch.setattr(target, "database_network_binding",
+                        lambda inventory, runner: {"id": "a" * 64,
+                                                   "postgres_container_id": postgres})
+    monkeypatch.setattr(target, "beta_postgres_container", lambda runner: postgres)
+    monkeypatch.setattr(target, "inspect", lambda container, runner: {"Id": postgres})
+    monkeypatch.setattr(target, "beta_psql", lambda query, runner, container: (
+        "150017" if query == "SHOW server_version_num" else "123456|789"))
+    monkeypatch.setattr(target, "beta_legacy_drain", lambda runner: {"verified": True})
+    monkeypatch.setattr(target, "production_snapshot",
+                        lambda runner: {"sha256": "b" * 64,
+                                        "container_counts": {"marty-selfhost-prod": 1}})
+
+    def runner(command: list[str]) -> str:
+        return "desktop-linux" if command[:3] == ["docker", "context", "show"] else "daemon"
+
+    receipt = target.observe_fenced(runner)
+    assert receipt["schema"] == "marty.passport-beta-fence-postinstall-target/v1"
+    assert receipt["beta"]["postgres_system_identifier"] == "123456"
+    assert receipt["beta"]["database_oid"] == "789"
+    assert receipt["beta"]["services"]["postgres"]["container_id"] == postgres
+    assert receipt["production"]["sha256"] == "b" * 64
+
+
 @pytest.mark.parametrize("drift", (
     "foreign_project", "prod_db", "query_host_override", "duplicate_env", "stopped",
 ))

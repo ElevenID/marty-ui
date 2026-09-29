@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import hashlib
+import argparse
 import json
 import re
 from typing import Any, Callable
@@ -316,8 +317,65 @@ def observe(runner: Callable[[list[str]], str] = run) -> dict[str, Any]:
     return receipt
 
 
+def observe_fenced(runner: Callable[[list[str]], str] = run) -> dict[str, Any]:
+    """Inventory the same target after guard ownership changes its SQL ACLs."""
+    context = runner(["docker", "context", "show"])
+    daemon_id = runner(["docker", "info", "--format", "{{.ID}}"])
+    if not context or not daemon_id:
+        raise HostProbeError("Docker context or daemon identity is unavailable")
+    production_before = production_snapshot(runner)
+    before = service_inventory(runner)
+    database_route = database_network_binding(before, runner)
+    postgres_id = beta_postgres_container(runner)
+    if before["postgres"]["container_id"] != inspect(postgres_id, runner).get("Id"):
+        raise HostProbeError("Fenced beta PostgreSQL identity changed")
+    postgres_runtime = qualified_postgres_runtime(
+        before["postgres"]["image_id"],
+        beta_psql("SHOW server_version_num", runner, postgres_id),
+    )
+    identity = beta_psql(
+        "SELECT system_identifier::text || '|' || "
+        "(SELECT oid::text FROM pg_database WHERE datname=current_database()) "
+        "FROM pg_control_system()", runner, postgres_id,
+    ).split("|")
+    if len(identity) != 2 or not all(SYSTEM_ID.fullmatch(item) for item in identity):
+        raise HostProbeError("Fenced beta PostgreSQL target identity is invalid")
+    # SQL ownership, function hashes, trigger inventory and fence epoch are
+    # qualified separately by passport-beta-fence-verify.sql in this phase.
+    drain = beta_legacy_drain(runner)
+    after = service_inventory(runner)
+    if before != after or database_network_binding(after, runner) != database_route:
+        raise HostProbeError("Fenced beta container or database route changed")
+    production_after = production_snapshot(runner)
+    assert_production_unchanged(production_before, production_after)
+    if (runner(["docker", "context", "show"]) != context
+            or runner(["docker", "info", "--format", "{{.ID}}"]) != daemon_id):
+        raise HostProbeError("Docker daemon changed during fenced inventory")
+    receipt = {
+        "schema": "marty.passport-beta-fence-postinstall-target/v1",
+        "authority": "fenced_postinstall_requires_protected_plan",
+        "docker": {"context": context, "daemon_id": daemon_id},
+        "beta": {
+            "compose_project": BETA_PROJECT, "services": before,
+            "postgres_system_identifier": identity[0],
+            "database": "marty", "database_oid": identity[1],
+            "drain": drain, "database_route": database_route,
+            "postgres_runtime": postgres_runtime,
+        },
+        "production": production_after,
+    }
+    receipt["observation_sha256"] = hashlib.sha256(
+        json.dumps(receipt, sort_keys=True, separators=(",", ":")).encode()
+    ).hexdigest()
+    return receipt
+
+
 if __name__ == "__main__":
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--fenced", action="store_true")
+    args = parser.parse_args()
     try:
-        print(json.dumps(observe(), sort_keys=True, separators=(",", ":")))
+        report = observe_fenced() if args.fenced else observe()
+        print(json.dumps(report, sort_keys=True, separators=(",", ":")))
     except HostProbeError as exc:
         raise SystemExit(str(exc)) from exc

@@ -2,11 +2,12 @@
 """Rollback-only direct write probes for a protected beta fence receipt.
 
 The caller must supply a protected target plan and attest the returned result.
-This module has no live CLI.
+The protected installer invokes the CLI after the database fence is verified.
 """
 
 from __future__ import annotations
 
+import argparse
 import hashlib
 import json
 import re
@@ -183,3 +184,26 @@ def probe_direct_writes(
         json.dumps(receipt, sort_keys=True, separators=(",", ":")).encode()
     ).hexdigest()
     return receipt
+
+
+if __name__ == "__main__":
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--postgres-container", required=True)
+    parser.add_argument("--docker-context", required=True)
+    parser.add_argument("--daemon-id", required=True)
+    parser.add_argument("--system-identifier", required=True)
+    parser.add_argument("--database-oid", required=True)
+    parser.add_argument("--fence-epoch", required=True, type=int)
+    args = parser.parse_args()
+    try:
+        result = probe_direct_writes(
+            args.postgres_container,
+            expected_docker_context=args.docker_context,
+            expected_daemon_id=args.daemon_id,
+            expected_system_identifier=args.system_identifier,
+            expected_database_oid=args.database_oid,
+            expected_fence_epoch=args.fence_epoch,
+        )
+        print(json.dumps(result, sort_keys=True, separators=(",", ":")))
+    except (FenceProbeError, OSError, subprocess.SubprocessError) as exc:
+        raise SystemExit(f"Beta direct fence probe failed: {exc}") from exc
