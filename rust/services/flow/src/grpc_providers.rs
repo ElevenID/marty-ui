@@ -336,6 +336,7 @@ impl CredentialTemplateProvider for GrpcCredentialTemplateProvider {
                 .collect(),
             issuer_did: response.issuer_did,
             credential_format: response.credential_payload_format,
+            issuance_protocol: response.issuance_protocol,
             wallet_configurations: bounded_json(
                 &response.wallet_configs_json,
                 "credential_template",

@@ -40,6 +40,7 @@ struct Contract {
 #[derive(Clone)]
 struct Templates {
     organization_id: &'static str,
+    physical: bool,
 }
 
 #[async_trait]
@@ -55,10 +56,25 @@ impl CredentialTemplateProvider for Templates {
             credential_type: "UniversityCredential".into(),
             vct: "urn:example:university".into(),
             doctype: String::new(),
-            supported_formats: vec!["vc+sd-jwt".into(), "mso_mdoc".into()],
+            supported_formats: if self.physical {
+                vec!["ICAO_EMRTD".into()]
+            } else {
+                vec!["vc+sd-jwt".into(), "mso_mdoc".into()]
+            },
             claims: Vec::new(),
             issuer_did: "did:web:issuer.example".into(),
-            credential_format: "vc+sd-jwt".into(),
+            credential_format: if self.physical {
+                "ICAO_EMRTD"
+            } else {
+                "vc+sd-jwt"
+            }
+            .into(),
+            issuance_protocol: if self.physical {
+                "PHYSICAL_DOCUMENT"
+            } else {
+                "OID4VCI_PRE_AUTH"
+            }
+            .into(),
             wallet_configurations: vec![
                 WalletConfiguration {
                     wallet_id: "generic".into(),
@@ -223,6 +239,7 @@ async fn language_neutral_contract_drives_oid4vci_and_mip_behavior() {
         &FlowProviderRegistry {
             credential_template: Some(Arc::new(Templates {
                 organization_id: "org-1",
+                physical: false,
             })),
             issuance: Some(Arc::new(issuance.clone())),
             ..Default::default()
@@ -268,6 +285,7 @@ async fn language_neutral_contract_drives_oid4vci_and_mip_behavior() {
         &FlowProviderRegistry {
             credential_template: Some(Arc::new(Templates {
                 organization_id: "org-1",
+                physical: false,
             })),
             issuance: Some(Arc::new(issuance.clone())),
             ..Default::default()
@@ -317,6 +335,7 @@ async fn physical_inputs_are_consumed_and_every_operation_is_typed() {
         &FlowProviderRegistry {
             credential_template: Some(Arc::new(Templates {
                 organization_id: "org-1",
+                physical: true,
             })),
             physical_document: Some(Arc::new(physical.clone())),
             ..Default::default()
@@ -403,6 +422,7 @@ async fn physical_create_rejects_cross_tenant_template_before_native_call() {
         &FlowProviderRegistry {
             credential_template: Some(Arc::new(Templates {
                 organization_id: "org-2",
+                physical: true,
             })),
             physical_document: Some(Arc::new(physical.clone())),
             ..Default::default()
@@ -419,12 +439,46 @@ async fn physical_create_rejects_cross_tenant_template_before_native_call() {
 }
 
 #[tokio::test]
+async fn physical_create_rejects_a_wallet_template_before_native_call() {
+    let physical = Physical::default();
+    let definition = definition("physical_document_issuance");
+    let instance = start(
+        &definition,
+        json!({"physical_document": {
+            "country_code": "USA",
+            "applicant": {"name": "Example"},
+            "mrz": {"line1": "P<USA"},
+            "data_groups": {"DG1": "MQ=="}
+        }}),
+    );
+    let error = prepare_instance_start(
+        &FlowProviderRegistry {
+            credential_template: Some(Arc::new(Templates {
+                organization_id: "org-1",
+                physical: false,
+            })),
+            physical_document: Some(Arc::new(physical.clone())),
+            ..Default::default()
+        },
+        &definition,
+        instance,
+        "https://issuer.example",
+        now(),
+    )
+    .await
+    .unwrap_err();
+    assert!(error.to_string().contains("ICAO_EMRTD"));
+    assert!(physical.requests.lock().unwrap().is_empty());
+}
+
+#[tokio::test]
 async fn cross_tenant_template_response_fails_closed() {
     let definition = definition("oid4vci_pre_authorized");
     let error = prepare_instance_start(
         &FlowProviderRegistry {
             credential_template: Some(Arc::new(Templates {
                 organization_id: "org-2",
+                physical: false,
             })),
             issuance: Some(Arc::new(Issuance::default())),
             ..Default::default()

@@ -27,6 +27,7 @@ struct Contract {
     delivery_destination_tenant_exception: String,
     presentation_policy_behavior: String,
     template_issuer_behavior: String,
+    physical_document_template: PhysicalDocumentTemplateContract,
     template_cache_behavior: String,
     catalog_active_statuses: Vec<String>,
     credential_active_statuses: Vec<String>,
@@ -34,9 +35,18 @@ struct Contract {
     failure_behavior: String,
 }
 
+#[derive(Deserialize)]
+struct PhysicalDocumentTemplateContract {
+    format: String,
+    issuance_protocol: String,
+    key_purpose: String,
+}
+
 #[derive(Clone)]
 struct Templates {
     status: &'static str,
+    format: &'static str,
+    protocol: &'static str,
     calls: Arc<AtomicUsize>,
 }
 
@@ -47,6 +57,7 @@ impl CredentialTemplateProvider for Templates {
         template_id: &str,
     ) -> Result<CredentialTemplateReference, FlowProviderError> {
         self.calls.fetch_add(1, Ordering::SeqCst);
+        let policy_template = template_id == "policy-template";
         Ok(CredentialTemplateReference {
             id: template_id.into(),
             organization_id: "org-1".into(),
@@ -54,10 +65,26 @@ impl CredentialTemplateProvider for Templates {
             credential_type: "ExampleCredential".into(),
             vct: String::new(),
             doctype: String::new(),
-            supported_formats: vec!["vc+sd-jwt".into()],
+            supported_formats: vec![if policy_template {
+                "VC_JWT"
+            } else {
+                self.format
+            }
+            .into()],
             claims: Vec::new(),
             issuer_did: "did:web:issuer.example".into(),
-            credential_format: "jwt_vc".into(),
+            credential_format: if policy_template {
+                "jwt_vc"
+            } else {
+                self.format
+            }
+            .into(),
+            issuance_protocol: if policy_template {
+                "OID4VCI_PRE_AUTH"
+            } else {
+                self.protocol
+            }
+            .into(),
             wallet_configurations: Vec::new(),
             issuer_algorithm: Some("ES256".into()),
         })
@@ -67,6 +94,7 @@ impl CredentialTemplateProvider for Templates {
 #[derive(Clone)]
 struct Policies {
     status: &'static str,
+    requirement_template_id: &'static str,
 }
 
 #[async_trait]
@@ -79,7 +107,9 @@ impl PresentationPolicyProvider for Policies {
             id: policy_id.into(),
             organization_id: "org-1".into(),
             status: self.status.into(),
-            credential_requirements: vec![json!({"credential_template_id": "template-1"})],
+            credential_requirements: vec![
+                json!({"credential_template_id": self.requirement_template_id}),
+            ],
         })
     }
 
@@ -168,6 +198,7 @@ impl FlowReferenceProvider for Catalog {
 fn references() -> FlowDefinitionReferenceSet {
     FlowDefinitionReferenceSet {
         credential_template_id: Some("template-1".into()),
+        physical_document_issuance: false,
         application_template_id: Some("application-1".into()),
         presentation_policy_id: Some("policy-1".into()),
         delivery_destination_profile_id: Some("delivery-1".into()),
@@ -187,10 +218,13 @@ fn registry(
         FlowProviderRegistry {
             credential_template: Some(Arc::new(Templates {
                 status: credential_status,
+                format: "jwt_vc",
+                protocol: "OID4VCI_PRE_AUTH",
                 calls: calls.clone(),
             })),
             presentation_policy: Some(Arc::new(Policies {
                 status: credential_status,
+                requirement_template_id: "template-1",
             })),
             signing_identity: Some(Arc::new(Signing {
                 wrong_tenant: wrong_signing_tenant,
@@ -211,7 +245,16 @@ async fn language_neutral_reference_contract_is_executable() {
         "../../../../contracts/flow-reference-validation-behavior.json"
     ))
     .expect("reference contract");
-    assert_eq!(contract.schema_version, 1);
+    assert_eq!(contract.schema_version, 2);
+    assert_eq!(contract.physical_document_template.format, "ICAO_EMRTD");
+    assert_eq!(
+        contract.physical_document_template.issuance_protocol,
+        "PHYSICAL_DOCUMENT"
+    );
+    assert_eq!(
+        contract.physical_document_template.key_purpose,
+        "x509_doc_signer"
+    );
     assert_eq!(
         contract.draft_status_behavior,
         "existence_and_tenant_binding_required"
@@ -242,6 +285,7 @@ async fn language_neutral_reference_contract_is_executable() {
     assert_eq!(template_key_purpose("mso_mdoc"), "mdoc_dsc");
     assert_eq!(template_key_purpose("vds_nc"), "vdsnc_signing");
     assert_eq!(template_key_purpose("jwt_vc_json"), "vc_jwt_issuer");
+    assert_eq!(template_key_purpose("ICAO_EMRTD"), "x509_doc_signer");
     assert_eq!(contract.failure_behavior, "fail_closed");
 
     let (draft_registry, calls) = registry("draft", "disabled", None, false);
@@ -268,6 +312,53 @@ async fn language_neutral_reference_contract_is_executable() {
     validate_definition_references(&active_registry, "user-1", "org-1", &references(), true)
         .await
         .expect("active tenant-bound references");
+}
+
+#[tokio::test]
+async fn physical_document_requires_the_icao_template_and_profile_tuple() {
+    let (mut providers, _) = registry("active", "active", None, false);
+    let mut physical = references();
+    physical.physical_document_issuance = true;
+    physical.presentation_policy_id = None;
+    let template = |format, protocol| {
+        Arc::new(Templates {
+            status: "active",
+            format,
+            protocol,
+            calls: Arc::new(AtomicUsize::new(0)),
+        }) as Arc<dyn CredentialTemplateProvider>
+    };
+    providers.credential_template = Some(template("ICAO_EMRTD", "PHYSICAL_DOCUMENT"));
+    validate_definition_references(&providers, "user-1", "org-1", &physical, true)
+        .await
+        .expect("active ICAO issuer profile is the physical passport signer");
+    physical.presentation_policy_id = Some("policy-1".into());
+    providers.presentation_policy = Some(Arc::new(Policies {
+        status: "active",
+        requirement_template_id: "policy-template",
+    }));
+    validate_definition_references(&providers, "user-1", "org-1", &physical, true)
+        .await
+        .expect("presentation policy may require an ordinary VC alongside a physical passport");
+    physical.physical_document_issuance = false;
+    assert!(
+        validate_definition_references(&providers, "user-1", "org-1", &physical, true)
+            .await
+            .is_err()
+    );
+    physical.physical_document_issuance = true;
+    providers.credential_template = Some(template("ICAO_EMRTD", "OID4VCI_PRE_AUTH"));
+    assert!(
+        validate_definition_references(&providers, "user-1", "org-1", &physical, true)
+            .await
+            .is_err()
+    );
+    providers.credential_template = Some(template("MDOC", "PHYSICAL_DOCUMENT"));
+    assert!(
+        validate_definition_references(&providers, "user-1", "org-1", &physical, true)
+            .await
+            .is_err()
+    );
 }
 
 #[tokio::test]

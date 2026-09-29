@@ -4,7 +4,8 @@ use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 
 use crate::{
-    CredentialTemplate, IssuanceProtocol, MergeStrategy, WalletConfig, WalletRegistryEntry,
+    CredentialFormat, CredentialTemplate, IssuanceProtocol, MergeStrategy, WalletConfig,
+    WalletRegistryEntry,
 };
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -80,6 +81,12 @@ pub fn normalize_issuance_protocol(value: Option<&str>) -> String {
         .trim()
         .to_ascii_uppercase();
     IssuanceProtocol::parse(Some(&normalized)).map_or(normalized, |protocol| protocol.wire().into())
+}
+
+#[must_use]
+pub fn is_physical_document(format: &str, protocol: &str) -> bool {
+    CredentialFormat::parse(format).ok() == Some(CredentialFormat::IcaoEmrtd)
+        || IssuanceProtocol::parse(Some(protocol)).ok() == Some(IssuanceProtocol::PhysicalDocument)
 }
 
 #[must_use]

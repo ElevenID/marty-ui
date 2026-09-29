@@ -8,6 +8,7 @@ use crate::{
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
 pub struct FlowDefinitionReferenceSet {
     pub credential_template_id: Option<String>,
+    pub physical_document_issuance: bool,
     pub application_template_id: Option<String>,
     pub presentation_policy_id: Option<String>,
     pub delivery_destination_profile_id: Option<String>,
@@ -60,6 +61,7 @@ pub async fn validate_definition_references(
             signing.as_ref(),
             organization_id,
             template_id,
+            references.physical_document_issuance,
             require_active,
             &mut template_cache,
         )
@@ -84,6 +86,7 @@ pub async fn validate_definition_references(
                     signing.as_ref(),
                     organization_id,
                     template_id,
+                    false,
                     require_active,
                     &mut template_cache,
                 )
@@ -112,6 +115,7 @@ async fn validate_template(
     signing: &dyn crate::SigningIdentityProvider,
     organization_id: &str,
     template_id: &str,
+    physical_document_issuance: bool,
     require_active: bool,
     cache: &mut BTreeMap<String, CredentialTemplateReference>,
 ) -> Result<(), FlowProviderError> {
@@ -130,6 +134,13 @@ async fn validate_template(
         return Err(rejected("credential template has no issuer DID"));
     }
     let credential_format = canonical_template_signing_format(&template.credential_format);
+    if physical_document_issuance {
+        validate_physical_document_template(&template)?;
+    } else if credential_format == "ICAO_EMRTD" {
+        return Err(rejected(
+            "ICAO_EMRTD template requires physical document issuance",
+        ));
+    }
     if credential_format.is_empty() {
         return Err(rejected("credential template has no credential format"));
     }
@@ -150,6 +161,21 @@ async fn validate_template(
         credential_format,
         template.issuer_algorithm.as_deref(),
     )
+}
+
+pub fn validate_physical_document_template(
+    template: &CredentialTemplateReference,
+) -> Result<(), FlowProviderError> {
+    if canonical_template_signing_format(&template.credential_format) != "ICAO_EMRTD"
+        || !template
+            .issuance_protocol
+            .eq_ignore_ascii_case("PHYSICAL_DOCUMENT")
+    {
+        return Err(rejected(
+            "physical document template must bind ICAO_EMRTD and PHYSICAL_DOCUMENT",
+        ));
+    }
+    Ok(())
 }
 
 fn catalog_references(references: &FlowDefinitionReferenceSet) -> Vec<(FlowReferenceKind, &str)> {
@@ -224,6 +250,7 @@ pub fn canonical_template_signing_format(value: &str) -> &str {
         "jwt_vc" | "vc_jwt" | "w3c_vcdm_v2_jwt_vc" => "jwt_vc_json",
         "json_ld" | "json-ld" => "ldp_vc",
         "mdoc" => "mso_mdoc",
+        "icao_emrtd" => "ICAO_EMRTD",
         _ => value.trim(),
     }
 }
@@ -233,6 +260,7 @@ pub fn template_key_purpose(credential_format: &str) -> &'static str {
     match credential_format {
         "mso_mdoc" | "zk_mdoc" => "mdoc_dsc",
         "vds_nc" | "vdsnc" => "vdsnc_signing",
+        "ICAO_EMRTD" => "x509_doc_signer",
         _ => "vc_jwt_issuer",
     }
 }

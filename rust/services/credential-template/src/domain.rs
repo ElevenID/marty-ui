@@ -14,6 +14,7 @@ pub enum CredentialFormat {
     JsonLd,
     ZkMdoc,
     VdsNc,
+    IcaoEmrtd,
 }
 
 impl CredentialFormat {
@@ -27,6 +28,7 @@ impl CredentialFormat {
             "jsonld" | "json_ld" | "ldp_vc" => Ok(Self::JsonLd),
             "zk_mdoc" | "zkp_mdoc" => Ok(Self::ZkMdoc),
             "vds_nc" | "vds_nc_barcode" => Ok(Self::VdsNc),
+            "icao_emrtd" => Ok(Self::IcaoEmrtd),
             _ => Err(CredentialTemplateError::InvalidFormat(value.to_owned())),
         }
     }
@@ -40,6 +42,7 @@ impl CredentialFormat {
             Self::JsonLd => "JSON_LD",
             Self::ZkMdoc => "ZK_MDOC",
             Self::VdsNc => "VDS_NC",
+            Self::IcaoEmrtd => "ICAO_EMRTD",
         }
     }
 
@@ -52,6 +55,7 @@ impl CredentialFormat {
             Self::JsonLd => "ldp_vc",
             Self::ZkMdoc => "zk_mdoc",
             Self::VdsNc => "vds_nc",
+            Self::IcaoEmrtd => "icao_emrtd",
         }
     }
 
@@ -64,6 +68,7 @@ impl CredentialFormat {
             Self::JsonLd => "ldp_vc",
             Self::ZkMdoc => "zk_mdoc",
             Self::VdsNc => "vds_nc",
+            Self::IcaoEmrtd => "ICAO_EMRTD",
         }
     }
 }
@@ -98,6 +103,7 @@ pub fn normalize_payload_format(
 pub enum IssuanceProtocol {
     Oid4vciPreAuth,
     Oid4vciAuthCode,
+    PhysicalDocument,
 }
 
 impl IssuanceProtocol {
@@ -120,6 +126,7 @@ impl IssuanceProtocol {
             | "OID4VCI_AUTHORIZATION_CODE"
             | "OPENID4VCI_AUTH_CODE"
             | "OPENID4VCI_AUTHORIZATION_CODE" => Ok(Self::Oid4vciAuthCode),
+            "PHYSICAL_DOCUMENT" => Ok(Self::PhysicalDocument),
             _ => Err(CredentialTemplateError::InvalidIssuanceProtocol(normalized)),
         }
     }
@@ -129,6 +136,7 @@ impl IssuanceProtocol {
         match self {
             Self::Oid4vciPreAuth => "OID4VCI_PRE_AUTH",
             Self::Oid4vciAuthCode => "OID4VCI_AUTH_CODE",
+            Self::PhysicalDocument => "PHYSICAL_DOCUMENT",
         }
     }
 }
@@ -136,9 +144,21 @@ impl IssuanceProtocol {
 pub fn validate_protocol_requirements(
     compliance_profile_id: Option<&str>,
     format: CredentialFormat,
+    protocol: IssuanceProtocol,
+    supported_formats: &[CredentialFormat],
     vct: Option<&str>,
     doctype: Option<&str>,
 ) -> Result<(), CredentialTemplateError> {
+    if (format == CredentialFormat::IcaoEmrtd) != (protocol == IssuanceProtocol::PhysicalDocument) {
+        return Err(CredentialTemplateError::InvalidFormatProtocolPair);
+    }
+    if protocol == IssuanceProtocol::PhysicalDocument {
+        if supported_formats != [CredentialFormat::IcaoEmrtd] {
+            return Err(CredentialTemplateError::InvalidFormatProtocolPair);
+        }
+    } else if supported_formats.contains(&CredentialFormat::IcaoEmrtd) {
+        return Err(CredentialTemplateError::InvalidFormatProtocolPair);
+    }
     if compliance_profile_id.is_none_or(|value| value.trim().is_empty()) {
         return Err(CredentialTemplateError::MissingComplianceProfile);
     }
@@ -412,6 +432,8 @@ pub enum CredentialTemplateError {
     InvalidFormat(String),
     #[error("invalid issuance protocol: {0}")]
     InvalidIssuanceProtocol(String),
+    #[error("credential format and issuance protocol are incompatible")]
+    InvalidFormatProtocolPair,
     #[error("compliance_profile_id is required")]
     MissingComplianceProfile,
     #[error("vct is required for SD-JWT VC")]

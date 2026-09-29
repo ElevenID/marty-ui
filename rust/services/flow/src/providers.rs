@@ -65,6 +65,8 @@ pub struct CredentialTemplateReference {
     pub issuer_did: String,
     pub credential_format: String,
     #[serde(default)]
+    pub issuance_protocol: String,
+    #[serde(default)]
     pub wallet_configurations: Vec<WalletConfiguration>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub issuer_algorithm: Option<String>,

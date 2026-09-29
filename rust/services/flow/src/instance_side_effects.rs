@@ -219,6 +219,7 @@ async fn initialize_physical_document(
             })?;
     let template = template_provider.get_template(&template_id).await?;
     validate_template(&template, &template_id, &instance.organization_id)?;
+    crate::validate_physical_document_template(&template)?;
     let data = BTreeMap::from([
         (
             "application_template_id".into(),

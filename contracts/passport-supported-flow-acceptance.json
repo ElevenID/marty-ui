@@ -7,6 +7,11 @@
     "application_template_id": "created_in_the_owned_project_and_tenant_bound",
     "delivery_destination_profile_id": "created_in_the_owned_project_and_tenant_bound",
     "issuer_did": "resolved_from_the_credential_template_not_caller_context",
+    "credential_format": "ICAO_EMRTD",
+    "supported_formats": ["ICAO_EMRTD"],
+    "issuance_protocol": "PHYSICAL_DOCUMENT",
+    "issuer_profile_purpose": "x509_doc_signer",
+    "issuer_profile_custody": "KMS",
     "definition_status": "ACTIVE"
   },
   "start": {
