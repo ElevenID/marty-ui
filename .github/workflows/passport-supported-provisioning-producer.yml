@@ -77,7 +77,7 @@ jobs:
                  and .certificate_setup_passed == true
                  and .signed_gateway_callback_verified == true
                  and .flow_start_verified == true
-                 and .flow_execution_verified == false
+                 and .flow_execution_verified == true
                  and .rust_restart_resume_verified == false
                  and .source_commit == env.GITHUB_SHA
                  and .plan_run_id == env.PLAN_RUN_ID' \

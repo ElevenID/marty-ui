@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """Exercise a protected, disposable Rust passport stack and destroy it.
 
-The route receipt remains partial: Flow execution and durable job restart/resume
-are not yet proven.
+The producer proves Flow execution before writing a receipt; durable Rust
+restart/resume remains a separate gate.
 """
 
 from __future__ import annotations
@@ -19,7 +19,7 @@ if __package__:
     from .passport_supported_certificate_rehearsal import validate_certificate_setup
     from .passport_supported_disposable_ceremony import bootstrap_certificate_chain
     from .passport_supported_disposable_route_probe import exercise_owned_disposable
-    from .passport_supported_flow_gateway import exercise_owned_flow_start
+    from .passport_supported_flow_gateway import exercise_owned_flow
     from .passport_supported_infra_rehearsal import (
         INFRA, MIN_TEARDOWN_LEASE, ROOT, _accept_bootstrap_files,
         _bootstrap_args, _compose_args, _inspect_local, _local_docker_environment,
@@ -38,7 +38,7 @@ else:
     from passport_supported_certificate_rehearsal import validate_certificate_setup
     from passport_supported_disposable_ceremony import bootstrap_certificate_chain
     from passport_supported_disposable_route_probe import exercise_owned_disposable
-    from passport_supported_flow_gateway import exercise_owned_flow_start
+    from passport_supported_flow_gateway import exercise_owned_flow
     from passport_supported_infra_rehearsal import (
         INFRA, MIN_TEARDOWN_LEASE, ROOT, _accept_bootstrap_files,
         _bootstrap_args, _compose_args, _inspect_local, _local_docker_environment,
@@ -111,7 +111,7 @@ def produce_disposable_receipt(
     issue_operator_key: Callable[..., Path] = issue_disposable_operator_key,
     execute: Callable[[list[str], object, dict[str, str]], bool] = _execute_local,
     probe: Callable[..., dict] = exercise_owned_disposable,
-    flow_start: Callable[..., dict] = exercise_owned_flow_start,
+    flow_proof: Callable[..., dict] = exercise_owned_flow,
     teardown_complete: Callable[..., bool] = destroy_disposable_project,
     teardown_partial: Callable[..., bool] = destroy_partial_disposable_project,
 ) -> dict:
@@ -196,18 +196,25 @@ def produce_disposable_receipt(
             or not isinstance(route.get("evidence"), dict)
             or route["evidence"].get("signed_gateway_callback_verified") is not True):
             raise ProducerError("Disposable Rust route receipt is invalid")
+        before_flow = read_clock() if clock is not None or now is None else now
+        if (before_flow.tzinfo is None
+            or min(expires, deadline) - before_flow < RESERVED_TEARDOWN):
+            raise ProducerError("Disposable Flow teardown budget is exhausted")
         operator_path = issue_operator_key(
-            record, plan["surface"], before_probe, inspector=inspector,
+            record, plan["surface"], before_flow, inspector=inspector,
             executor=lambda args, output: execute(args, output, staged_env),
         )
         if operator_path != root / "secrets" / "passport_acceptance_operator_api_key":
             raise ProducerError("Disposable Flow operator key escaped the project root")
-        flow = flow_start(record, plan["surface"], gateway_port, plan_run_id,
+        flow = flow_proof(record, plan["surface"], gateway_port, plan_run_id,
                           inspector=inspector)
-        if (not isinstance(flow, dict) or set(flow) != {"references", "flow"}
+        if (not isinstance(flow, dict)
+            or set(flow) != {"references", "flow", "execution"}
             or not isinstance(flow["references"], dict)
-            or not isinstance(flow["flow"], dict)):
-            raise ProducerError("Disposable Rust Flow start proof is invalid")
+            or not isinstance(flow["flow"], dict)
+            or not isinstance(flow["execution"], dict)
+            or flow["execution"].get("durable_history_verified") is not True):
+            raise ProducerError("Disposable Rust Flow execution proof is invalid")
         return {
             "schema": "marty.passport-supported-rust-producer/v1",
             "status": "blocked", "project": plan["project"],
@@ -220,12 +227,12 @@ def produce_disposable_receipt(
             "rust_routes_verified": True,
             "signed_gateway_callback_verified": True,
             "flow_start_verified": True,
-            "flow_execution_verified": False,
+            "flow_execution_verified": True,
             "rust_restart_resume_verified": False,
             "certificate": certificate,
             "route": route,
-            "flow_start": flow,
-            "blocker": "Flow execution and Rust restart/resume remain unproven",
+            "flow_execution": flow,
+            "blocker": "Rust restart/resume remains unproven",
         }
     finally:
         try:

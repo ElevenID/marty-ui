@@ -34,7 +34,13 @@ def flow_receipt() -> dict:
         "credential_template_id_sha256", "application_template_id_sha256",
         "delivery_destination_profile_id_sha256"), hashes[:3])),
         "flow": dict(zip(("flow_definition_id_sha256", "flow_instance_id_sha256",
-                          "native_job_id_sha256", "application_id_sha256"), hashes[3:]))}
+                          "native_job_id_sha256", "application_id_sha256"), hashes[3:])),
+        "execution": {"nine_steps_verified": True,
+                      "six_native_effects_verified": True,
+                      "durable_history_verified": True,
+                      "bureau_job_id_sha256": "8" * 64,
+                      "signed_callback_receipt_sha256": "9" * 64,
+                      "sod_sha256": "a" * 64}}
 
 
 def plan(surface: str) -> dict:
@@ -109,8 +115,8 @@ def test_producer_orders_real_gates_and_tears_down(surface: str, tmp_path: Path)
         return (Path(tempfile.gettempdir()) / selected["project"] / "secrets"
                 / "passport_acceptance_operator_api_key")
 
-    def start_flow(*args, **kwargs):
-        calls.append(("flow_start", args))
+    def prove_flow(*args, **kwargs):
+        calls.append(("flow_proof", args))
         assert "inspector" in kwargs
         return flow_receipt()
 
@@ -134,14 +140,14 @@ def test_producer_orders_real_gates_and_tears_down(surface: str, tmp_path: Path)
         preflight=lambda *args, **kwargs: selected,
         inspect=lambda args: "", run=run, setup=setup,
         record_live=live, issue_key=key, issue_operator_key=operator_key,
-        probe=probe, flow_start=start_flow,
+        probe=probe, flow_proof=prove_flow,
         teardown_complete=complete,
         teardown_partial=lambda *args, **kwargs: pytest.fail("unexpected partial teardown"),
     )
     names = [item[0] for item in calls]
     assert (names.index("setup") < names.index("ownership") < names.index("key")
             < names.index("probe") < names.index("operator_key")
-            < names.index("flow_start"))
+            < names.index("flow_proof"))
     assert names[-1] == "complete_teardown"
     commands = [item[1] for item in calls if item[0] == "run"]
     assert commands[0][-9:] == ["up", "-d", "--no-deps", "--wait", "--wait-timeout", "120",
@@ -155,8 +161,8 @@ def test_producer_orders_real_gates_and_tears_down(surface: str, tmp_path: Path)
     assert report["rust_routes_verified"] is True
     assert report["signed_gateway_callback_verified"] is True
     assert report["flow_start_verified"] is True
-    assert report["flow_start"] == flow_receipt()
-    assert report["flow_execution_verified"] is False
+    assert report["flow_execution"] == flow_receipt()
+    assert report["flow_execution_verified"] is True
     assert report["rust_restart_resume_verified"] is False
     assert report["producer_run_id"] == "987654"
     assert not (Path(tempfile.gettempdir()) / selected["project"]).exists()
@@ -248,7 +254,7 @@ def test_hosted_handoff_binds_partial_receipt_to_plan(tmp_path: Path) -> None:
         "certificate_setup_passed": True, "live_ownership_verified": True,
         "rust_routes_verified": True, "signed_gateway_callback_verified": True,
         "flow_start_verified": True,
-        "flow_execution_verified": False, "rust_restart_resume_verified": False,
+        "flow_execution_verified": True, "rust_restart_resume_verified": False,
         "certificate": certificate(selected, 29877),
         "route": {"verified": True, "flow_execution_verified": False,
                   "evidence": {"signed_gateway_callback_verified": True,
@@ -265,8 +271,8 @@ def test_hosted_handoff_binds_partial_receipt_to_plan(tmp_path: Path) -> None:
                                "callback_receipt_sha256": "7" * 64,
                                "sod_signature_verified": True,
                                "routes": routes}},
-        "flow_start": flow_receipt(),
-        "blocker": "Flow execution and Rust restart/resume remain unproven",
+        "flow_execution": flow_receipt(),
+        "blocker": "Rust restart/resume remains unproven",
     }
     receipt_path.write_text(json.dumps(receipt))
     assert verify_handoff(plan_path, receipt_path, SOURCE, "987654",
@@ -312,8 +318,10 @@ def test_hosted_handoff_binds_partial_receipt_to_plan(tmp_path: Path) -> None:
             [next(index for index, route in enumerate(item["route"]["evidence"]["routes"])
                   if route["route"].endswith("/generate-sod"))].update(
                       job_status="SUBMITTED")),
-        ("foreign Flow ID", lambda item: item["flow_start"]["flow"].update(
+        ("foreign Flow ID", lambda item: item["flow_execution"]["flow"].update(
             flow_instance_id_sha256="not-a-hash")),
+        ("missing durable history", lambda item: item["flow_execution"]
+            ["execution"].update(durable_history_verified=False)),
     ]
     for _, mutate in mutations:
         changed = deepcopy(receipt)

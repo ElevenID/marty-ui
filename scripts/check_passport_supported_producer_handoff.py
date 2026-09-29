@@ -35,14 +35,14 @@ class HandoffError(ValueError):
 
 
 HASH = re.compile(r"[0-9a-f]{64}\Z")
-BLOCKER = "Flow execution and Rust restart/resume remain unproven"
+BLOCKER = "Rust restart/resume remains unproven"
 RECEIPT_FIELDS = frozenset({
     "schema", "status", "project", "surface", "source_commit", "gateway_port",
     "physical_claim", "plan_run_id", "producer_run_id",
     "certificate_setup_passed", "live_ownership_verified", "rust_routes_verified",
     "signed_gateway_callback_verified", "flow_execution_verified",
     "flow_start_verified", "rust_restart_resume_verified", "certificate",
-    "route", "flow_start", "blocker",
+    "route", "flow_execution", "blocker",
 })
 ROUTE_EVIDENCE_FIELDS = frozenset({
     "application_input_sha256", "job_id_sha256", "application_id_sha256",
@@ -53,11 +53,12 @@ ROUTE_EVIDENCE_FIELDS = frozenset({
 })
 
 
-def _flow_start_evidence(value: object) -> None:
-    if not isinstance(value, dict) or set(value) != {"references", "flow"}:
-        raise HandoffError("Protected Rust Flow start proof is invalid")
+def _flow_execution_evidence(value: object) -> None:
+    if not isinstance(value, dict) or set(value) != {"references", "flow", "execution"}:
+        raise HandoffError("Protected Rust Flow execution proof is invalid")
     references = value["references"]
     flow = value["flow"]
+    execution = value["execution"]
     if (not isinstance(references, dict)
         or set(references) != {"credential_template_id_sha256",
                                    "application_template_id_sha256",
@@ -65,12 +66,25 @@ def _flow_start_evidence(value: object) -> None:
         or not isinstance(flow, dict)
         or set(flow) != {"flow_definition_id_sha256", "flow_instance_id_sha256",
                          "native_job_id_sha256", "application_id_sha256"}):
-        raise HandoffError("Protected Rust Flow start proof is invalid")
+        raise HandoffError("Protected Rust Flow execution proof is invalid")
     values = list(references.values()) + list(flow.values())
     if any(type(item) is not str or HASH.fullmatch(item) is None for item in values):
-        raise HandoffError("Protected Rust Flow start proof is invalid")
+        raise HandoffError("Protected Rust Flow execution proof is invalid")
     if len(set(values)) != len(values):
         raise HandoffError("Protected Rust Flow IDs are not distinct")
+    if (not isinstance(execution, dict)
+        or set(execution) != {"nine_steps_verified", "six_native_effects_verified",
+                              "durable_history_verified", "bureau_job_id_sha256",
+                              "signed_callback_receipt_sha256", "sod_sha256"}
+        or execution.get("nine_steps_verified") is not True
+        or execution.get("six_native_effects_verified") is not True
+        or execution.get("durable_history_verified") is not True
+        or any(type(execution.get(name)) is not str
+               or HASH.fullmatch(execution[name]) is None for name in (
+                   "bureau_job_id_sha256", "signed_callback_receipt_sha256",
+                   "sod_sha256"))
+        or execution["bureau_job_id_sha256"] == flow["native_job_id_sha256"]):
+        raise HandoffError("Protected Rust Flow execution proof is invalid")
 
 
 def _route_evidence(route: object, gateway_port: int) -> None:
@@ -195,7 +209,7 @@ def verify_handoff(
         or receipt.get("rust_routes_verified") is not True
         or receipt.get("signed_gateway_callback_verified") is not True
         or receipt.get("flow_start_verified") is not True
-        or receipt.get("flow_execution_verified") is not False
+        or receipt.get("flow_execution_verified") is not True
         or receipt.get("rust_restart_resume_verified") is not False):
         raise HandoffError("Protected Rust producer receipt differs from plan")
     certificate = receipt["certificate"]
@@ -213,7 +227,7 @@ def verify_handoff(
     except (ProducerError, KeyError, TypeError, ValueError) as error:
         raise HandoffError("Protected managed certificate evidence is invalid") from error
     _route_evidence(receipt["route"], receipt["gateway_port"])
-    _flow_start_evidence(receipt["flow_start"])
+    _flow_execution_evidence(receipt["flow_execution"])
     try:
         verified = attest(str(plan_path), "ElevenID/marty-ui", PLAN_WORKFLOW,
                           source_commit, "refs/heads/main")

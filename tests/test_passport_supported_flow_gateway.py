@@ -98,19 +98,21 @@ def test_operator_and_native_requests_use_separate_keys_and_scoped_routes(monkey
                         {"idempotency-key": "fixture-1"}) == (200, {"id": IDENTIFIER})
         assert native("GET", f"/v1/passport/applications/{IDENTIFIER}/production-status") \
             == (200, {"id": IDENTIFIER})
+        assert operator("POST", f"/v1/flows/instances/{IDENTIFIER}/advance",
+                        {"step_result": "success", "data": {}}) == (200, {"id": IDENTIFIER})
         assert opener.requests[0].headers["X-api-key"] == OPERATOR_KEY
         assert opener.requests[0].headers["Idempotency-key"] == "fixture-1"
         assert opener.requests[1].headers["X-api-key"] == KEY
         assert all(request.full_url.startswith("https://localhost:29877/")
                    for request in opener.requests)
-        assert len(inspected) == 4
+        assert len(inspected) == 5
         with pytest.raises(gateway.FlowGatewayError):
             operator("GET", f"/v1/passport/applications/{IDENTIFIER}/production-status")
         with pytest.raises(gateway.FlowGatewayError):
             native("POST", "/v1/flows/definitions", {})
         with pytest.raises(gateway.FlowGatewayError):
             operator("GET", "/v1/flows/definitions/../instances")
-        assert len(opener.requests) == 2
+        assert len(opener.requests) == 3
     finally:
         cleanup(root)
 
@@ -171,12 +173,30 @@ def test_flow_start_uses_operator_for_references_and_native_key_for_job(monkeypa
 
     monkeypatch.setattr(gateway, "provision_physical_passport_references", references)
     monkeypatch.setattr(gateway, "start_physical_passport_flow", start)
-    result = gateway.exercise_owned_flow_start(
+    def advance(request, native_request, private_poll, history_read,
+                organization, refs, started, did):
+        assert organization == "00000000-0000-0000-0000-000000000001"
+        assert did == issuer_did(29877)
+        assert started == {"native_job_id": IDENTIFIER}
+        return {"flow_step_count": 9, "native_effect_count": 6,
+                "durable_history_verified": True,
+                "signed_callback_receipt_sha256": "b" * 64,
+                "bureau_job_id": "d0000000-0000-4000-8000-000000000002",
+                "sod_sha256": "a" * 64}
+
+    result = gateway.exercise_owned_flow(
         {"project": "owned"}, "base", 29877, "123456",
-        inspector=local_inspector, request_factory=factory)
+        inspector=local_inspector, request_factory=factory, advance=advance)
     digest = hashlib.sha256(IDENTIFIER.encode()).hexdigest()
     assert result == {"references": {"credential_template_id_sha256": digest},
-                      "flow": {"native_job_id_sha256": digest}}
+                      "flow": {"native_job_id_sha256": digest},
+                      "execution": {"nine_steps_verified": True,
+                                    "six_native_effects_verified": True,
+                                    "durable_history_verified": True,
+                                    "signed_callback_receipt_sha256": "b" * 64,
+                                    "bureau_job_id_sha256": hashlib.sha256(
+                                        b"d0000000-0000-4000-8000-000000000002").hexdigest(),
+                                    "sod_sha256": "a" * 64}}
     assert events == [
         (True, "POST", "/v1/credential-templates"),
         (True, "POST", "/v1/flows/instances"),

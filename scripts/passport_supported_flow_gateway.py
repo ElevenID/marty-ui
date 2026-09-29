@@ -26,18 +26,24 @@ if __package__:
     )
     from .passport_supported_flow_references import provision_physical_passport_references
     from .passport_supported_flow_start import start_physical_passport_flow
+    from .passport_supported_flow_advance import advance_physical_passport_flow
+    from .passport_supported_flow_history import read_owned_flow_history
+    from .passport_supported_private_bureau_poll import poll_owned_bureau
 else:
     from check_passport_supported_compose_ownership import (
         _inspect, _status_origin, docker, verify as verify_ownership,
     )
     from passport_supported_flow_references import provision_physical_passport_references
     from passport_supported_flow_start import start_physical_passport_flow
+    from passport_supported_flow_advance import advance_physical_passport_flow
+    from passport_supported_flow_history import read_owned_flow_history
+    from passport_supported_private_bureau_poll import poll_owned_bureau
 
 
 TEST_KEY = re.compile(r"mk_test_[A-Za-z0-9]{43}\n\Z")
 OPERATOR_ROUTES = re.compile(
     r"\A/v1/(?:credential-templates|application-templates|delivery-destinations|"
-    r"flows/(?:definitions|instances))(?:/[0-9a-f-]{36}(?:/(?:activate|validate))?)?\Z"
+    r"flows/(?:definitions|instances))(?:/[0-9a-f-]{36}(?:/(?:activate|validate|advance))?)?\Z"
 )
 NATIVE_STATUS_ROUTE = re.compile(
     r"\A/v1/passport/applications/[0-9a-f-]{36}/production-status\Z"
@@ -166,12 +172,15 @@ def owned_gateway_request(
     return request
 
 
-def exercise_owned_flow_start(
+def exercise_owned_flow(
     record: dict[str, Any], surface: str, gateway_port: int, run_id: str, *,
     inspector: Callable[[list[str]], str] = docker,
     request_factory: Callable[..., Any] = owned_gateway_request,
+    bureau_poll: Callable[..., tuple[int, dict[str, Any]]] = poll_owned_bureau,
+    history_reader: Callable[..., dict[str, Any]] = read_owned_flow_history,
+    advance: Callable[..., dict[str, Any]] = advance_physical_passport_flow,
 ) -> dict[str, Any]:
-    """Provision owned references and start one same-job native Rust Flow."""
+    """Prove one complete same-job Rust Flow, then return public digests only."""
     _require(isinstance(run_id, str) and run_id.isascii() and run_id.isdigit()
              and 1 <= len(run_id) <= 20,
              "Disposable Flow run ID is invalid")
@@ -187,7 +196,7 @@ def exercise_owned_flow_start(
     physical = {
         "country_code": "USA", "document_type": "TD3",
         "applicant": {"name": "Synthetic Passport Applicant"},
-        "mrz": {"line1": "P<USASYNTHETIC<<APPLICANT"},
+        "mrz": {"line_1": "P<USASYNTHETIC<<APPLICANT", "line_2": "1234567890USA"},
         "data_groups": {"DG1": "YQ==", "DG2": "Yg=="},
     }
     started = start_physical_passport_flow(
@@ -195,9 +204,32 @@ def exercise_owned_flow_start(
         ORGANIZATION_ID, name + " flow", references, physical,
         lambda method, path, body: native(method, path, body, {}),
     )
+    execution = advance(
+        lambda method, path, body: operator(method, path, body, {}),
+        lambda method, path, body: native(method, path, body, {}),
+        lambda bureau_job_id: bureau_poll(
+            record, surface, bureau_job_id, inspector=inspector),
+        lambda instance_id, definition_id: history_reader(
+            record, surface, instance_id, definition_id, inspector=inspector),
+        ORGANIZATION_ID, references, started, issuer_did(gateway_port),
+    )
+    _require(isinstance(execution, dict)
+             and execution.get("flow_step_count") == 9
+             and execution.get("native_effect_count") == 6
+             and execution.get("durable_history_verified") is True,
+             "Disposable Flow execution proof is incomplete")
+    bureau_job_id = execution.pop("bureau_job_id")
     return {
         "references": {f"{name}_sha256": hashlib.sha256(value.encode()).hexdigest()
                        for name, value in references.items()},
         "flow": {f"{name}_sha256": hashlib.sha256(value.encode()).hexdigest()
                  for name, value in started.items()},
+        "execution": {
+            "nine_steps_verified": True,
+            "six_native_effects_verified": True,
+            "durable_history_verified": True,
+            "signed_callback_receipt_sha256": execution["signed_callback_receipt_sha256"],
+            "sod_sha256": execution["sod_sha256"],
+            "bureau_job_id_sha256": hashlib.sha256(bureau_job_id.encode()).hexdigest(),
+        },
     }
