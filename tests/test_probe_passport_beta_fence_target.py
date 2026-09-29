@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from copy import deepcopy
+from pathlib import Path
 
 import pytest
 
@@ -231,3 +232,12 @@ def test_postgres_runtime_matches_frozen_verifier_qualification() -> None:
         target.qualified_postgres_runtime(target.QUALIFIED_POSTGRES_IMAGE_ID, "160000")
     with pytest.raises(HostProbeError, match="differs from fence qualification"):
         target.qualified_postgres_runtime("sha256:" + "a" * 64, "150017")
+def test_fence_operator_rechecks_old_generation_before_mutation() -> None:
+    root = Path(__file__).resolve().parents[1]
+    operator = (root / "scripts/install-passport-beta-fence.ps1").read_text(
+        encoding="utf-8")
+    assert operator.index("$before = Invoke-FencePython") < operator.index(
+        "Start-BetaMutation\n")
+    assert "$before.observation_sha256 -cne $plan.target_observation_sha256" in operator
+    assert "Approved beta service generation or database route changed before fence" in operator
+
