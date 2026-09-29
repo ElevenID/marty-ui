@@ -33,8 +33,8 @@ def test_port_bound_key_references_match_signing_keys_rust_contract() -> None:
 
 
 @contextmanager
-def staged() -> Iterator[tuple[dict, Path]]:
-    project = "marty-passport-acceptance-selfhost-" + uuid.uuid4().hex[:12]
+def staged(surface: str = "selfhost") -> Iterator[tuple[dict, Path]]:
+    project = f"marty-passport-acceptance-{surface}-" + uuid.uuid4().hex[:12]
     root = Path(tempfile.gettempdir()) / project
     root.mkdir(mode=0o700)
     try:
@@ -50,7 +50,7 @@ def staged() -> Iterator[tuple[dict, Path]]:
         services = "ghcr.io/elevenid/marty-ui-oss/services@sha256:" + "e" * 64
         plan = {
             "schema": "marty.passport-supported-provisioning-plan/v1",
-            "status": "blocked", "surface": "selfhost", "project": project,
+            "status": "blocked", "surface": surface, "project": project,
             "run_id": "123456", "source_commit": source,
             "services_reference": services,
             "migrations_reference": (
@@ -108,8 +108,9 @@ def fake_inspector(plan, *, foreign_network: bool = False):
     return inspect
 
 
-def test_fixture_chain_is_port_bound_and_setup_only(monkeypatch) -> None:
-    with staged() as (plan, root):
+@pytest.mark.parametrize("surface", ["base", "selfhost"])
+def test_fixture_chain_is_port_bound_and_setup_only(monkeypatch, surface: str) -> None:
+    with staged(surface) as (plan, root):
         calls = []
 
         def fake_exercise(chain, csca_authority, dsc_authority, *, request):

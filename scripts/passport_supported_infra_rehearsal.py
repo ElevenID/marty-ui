@@ -45,6 +45,7 @@ JOB_TIMEOUT = timedelta(minutes=60)
 JOB_IDENTITIES = frozenset({
     ("infra", "Passport Supported Disposable Infra Rehearsal"),
     ("certificates", "Passport Supported Disposable Certificate Rehearsal"),
+    ("producer", "Passport Supported Disposable Provisioning Producer"),
 })
 
 

@@ -129,8 +129,10 @@ def verified_signer_id(
 ) -> str:
     """Bind the helper to one running, owned signer container and private network."""
     project = plan["project"]
-    _require(PROJECT.fullmatch(project) is not None
-             and plan.get("surface") == "selfhost",
+    match = PROJECT.fullmatch(project)
+    _require(match is not None
+             and match.group(1) == plan.get("surface")
+             and plan.get("surface") in {"base", "selfhost"},
              "Disposable certificate project is invalid")
     ids = inspect(["ps", "-q", "--no-trunc", "--filter",
                    f"label=com.docker.compose.project={project}", "--filter",
@@ -183,8 +185,8 @@ def ceremony_plan(plan: dict[str, Any], root: Path, gateway_port: int,
     """Bind test certificate inputs to the exact selfhost plan and staged root."""
     project = plan.get("project")
     match = PROJECT.fullmatch(project) if isinstance(project, str) else None
-    _require(match is not None and match.group(1) == "selfhost"
-             and plan.get("surface") == "selfhost"
+    _require(match is not None and match.group(1) == plan.get("surface")
+             and plan.get("surface") in {"base", "selfhost"}
              and plan.get("schema") == "marty.passport-supported-provisioning-plan/v1"
              and plan.get("status") == "blocked", "Disposable ceremony plan is invalid")
     run_id = plan.get("run_id")

@@ -960,9 +960,8 @@ def test_partial_teardown_recognizes_interrupted_certificate_helper(
         state[field] = original
 
     if ceremony:
-        assert not destroy_partial_disposable_project(
-            *arguments[:3], ENV, inspector, executor, **gates)
-        assert calls == []
+        # The protected producer can now be interrupted during the ceremony.
+        # It must accept either exact mount set while cleaning the same project.
         original_mounts = signer_mounts[:]
         signer_mounts.pop()
         assert not destroy_partial_disposable_project(
@@ -1012,7 +1011,7 @@ def test_host_key_unlink_failure_still_forces_teardown(
     assert torn_down == [True]
 
 
-def test_producer_workflow_is_protected_and_cannot_mutate_docker() -> None:
+def test_producer_workflow_is_protected_and_scoped() -> None:
     workflow = (Path(__file__).resolve().parents[1] / ".github/workflows"
                 / "passport-supported-provisioning-producer.yml")
     value = yaml.safe_load(workflow.read_text(encoding="utf-8"))
@@ -1022,11 +1021,11 @@ def test_producer_workflow_is_protected_and_cannot_mutate_docker() -> None:
     assert job["if"] == "github.ref == 'refs/heads/main'"
     assert job["runs-on"] == ["self-hosted", "linux", "x64", "canvas-oss-wsl2"]
     assert job["environment"] == "beta-lifecycle"
-    assert value["permissions"] == {"actions": "read", "contents": "read",
-                                    "packages": "read"}
+    assert value["permissions"] == {"actions": "read", "attestations": "read",
+                                    "contents": "read", "packages": "read"}
     assert job["steps"][0]["with"]["persist-credentials"] is False
     run = job["steps"][1]["run"]
-    assert "scripts/passport_supported_provisioning_producer.py" in run
+    assert "scripts/passport_supported_protected_producer.py" in job["steps"][2]["run"]
     assert "passport-supported-provisioning-plan-$PLAN_RUN_ID" in run
     assert '.path == ".github/workflows/passport-supported-provisioning-plan.yml"' in run
     assert 'and .head_sha == $sha' in run
@@ -1043,7 +1042,7 @@ def test_producer_workflow_is_protected_and_cannot_mutate_docker() -> None:
     ("canvas-oss-wsl2", "ubuntu-latest"),
     ('and .head_sha == $sha', 'and .head_sha != $sha'),
     ('passport-supported-provisioning-plan.yml', 'any-plan.yml'),
-    ('scripts/passport_supported_provisioning_producer.py', 'true'),
+    ('scripts/passport_supported_protected_producer.py', 'true'),
 ])
 def test_producer_workflow_contract_rejects_unsafe_mutation(old: str, new: str) -> None:
     workflow = (Path(__file__).resolve().parents[1] / ".github/workflows"
@@ -1059,4 +1058,4 @@ def test_producer_workflow_contract_rejects_unsafe_mutation(old: str, new: str) 
         assert job["runs-on"] == ["self-hosted", "linux", "x64", "canvas-oss-wsl2"]
         assert 'and .head_sha == $sha' in run
         assert '.path == ".github/workflows/passport-supported-provisioning-plan.yml"' in run
-        assert "scripts/passport_supported_provisioning_producer.py" in run
+        assert "scripts/passport_supported_protected_producer.py" in job["steps"][2]["run"]

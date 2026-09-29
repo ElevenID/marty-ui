@@ -425,7 +425,7 @@ def _exec_docker(args: list[str], output: object = None) -> bool:
 def _destroy_recorded_project(
     record: dict, inspector: Callable[[list[str]], str],
     executor: Callable[[list[str], object], bool], *, complete: bool,
-    ceremony: bool = False,
+    ceremony: bool | None = False,
 ) -> bool:
     """Reinspect exact resource IDs before deletion, then prove their absence."""
     project = record.get("project")
@@ -510,7 +510,15 @@ def _destroy_recorded_project(
                 require(isinstance(mounts, list),
                         "Partial disposable container mounts are invalid")
                 expected_mounts = _expected_mounts(
-                    service, project, disposable_root, surface, ceremony=ceremony)
+                    service, project, disposable_root, surface, ceremony=False)
+                allowed_mount_sets = (expected_mounts,)
+                if ceremony is None and service in {"gateway", "signing-keys"}:
+                    allowed_mount_sets += (_expected_mounts(
+                        service, project, disposable_root, surface, ceremony=True),)
+                elif ceremony is True:
+                    expected_mounts = _expected_mounts(
+                        service, project, disposable_root, surface, ceremony=True)
+                    allowed_mount_sets = (expected_mounts,)
                 observed_mounts: set[tuple[str, str, str, bool]] = set()
                 for mount in mounts:
                     require(isinstance(mount, dict)
@@ -525,11 +533,12 @@ def _destroy_recorded_project(
                             "Partial disposable container uses an unowned mount")
                     identity = (kind, str(Path(source)) if kind == "bind" else source,
                                 mount["Destination"], mount["RW"])
-                    require(identity in expected_mounts and identity not in observed_mounts
+                    require(any(identity in allowed for allowed in allowed_mount_sets)
+                            and identity not in observed_mounts
                             and (kind != "volume" or source in volumes),
                             "Partial disposable container uses an unowned mount")
                     observed_mounts.add(identity)
-                require(observed_mounts == expected_mounts,
+                require(observed_mounts in allowed_mount_sets,
                         "Partial disposable container mount set is incomplete")
         for name, identifier in networks.items():
             item = _inspect("network", identifier, inspector)
@@ -694,7 +703,8 @@ def destroy_partial_disposable_project(
               "containers": containers, "networks": networks, "volumes": volumes}
     return _destroy_recorded_project(
         record, inspector, executor, complete=False,
-        ceremony=workflow_ref == CERTIFICATE_WORKFLOW_REF and surface == "selfhost",
+        ceremony=(None if workflow_ref == WORKFLOW_REF and surface == "selfhost"
+                  else workflow_ref == CERTIFICATE_WORKFLOW_REF and surface == "selfhost"),
     )
 
 

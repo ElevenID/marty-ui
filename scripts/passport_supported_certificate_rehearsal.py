@@ -65,6 +65,35 @@ def _certificate_deadline(environment: dict[str, str]) -> datetime:
     )
 
 
+def validate_certificate_setup(certificate: dict, plan: dict,
+                               gateway_port: int) -> None:
+    """Bind public certificate evidence to this plan and localhost issuer."""
+    if (not isinstance(certificate, dict)
+        or certificate.get("schema") !=
+        "marty.passport-supported-disposable-certificate-setup/v1"
+        or certificate.get("status") != "setup_only"
+        or certificate.get("gateway_operator_authorization_verified") is not False
+        or certificate.get("project") != plan["project"]
+        or certificate.get("source_commit") != plan["source_commit"]
+        or not isinstance(certificate.get("evidence"), dict)):
+        raise ProducerError("Disposable certificate setup evidence is invalid")
+    evidence = certificate["evidence"]
+    expected_did_hash = hashlib.sha256(issuer_did(gateway_port).encode()).hexdigest()
+    if (any(type(evidence.get(field)) is not str
+            or SHA256.fullmatch(evidence[field]) is None
+            for field in CERTIFICATE_HASHES)
+        or evidence.get("csca_certificate_id") != f"csca-disposable-{plan['run_id']}"
+        or evidence["csca_certificate_sha256"] == evidence["dsc_certificate_sha256"]
+        or evidence["csca_issuer_did_sha256"] != expected_did_hash
+        or evidence["dsc_issuer_did_sha256"] != expected_did_hash
+        or evidence.get("chain_verified_by") != "openssl-x509-strict"
+        or type(evidence.get("csca_http_status")) is not int
+        or evidence["csca_http_status"] != 200
+        or type(evidence.get("dsc_http_status")) is not int
+        or evidence["dsc_http_status"] != 200):
+        raise ProducerError("Disposable certificate setup evidence is invalid")
+
+
 def rehearse_certificates(
     plan_path: Path, manifest_path: Path, plan_run_id: str,
     environment: dict[str, str], gateway_port: int, *,
@@ -129,30 +158,7 @@ def rehearse_certificates(
             or min(expires, job_deadline) - before_setup < RESERVED_TEARDOWN):
             raise ProducerError("Disposable certificate teardown budget is exhausted")
         certificate = setup(plan, root, gateway_port, now=before_setup)
-        if (not isinstance(certificate, dict)
-            or certificate.get("schema") !=
-            "marty.passport-supported-disposable-certificate-setup/v1"
-            or certificate.get("status") != "setup_only"
-            or certificate.get("gateway_operator_authorization_verified") is not False
-            or certificate.get("project") != plan["project"]
-            or certificate.get("source_commit") != plan["source_commit"]
-            or not isinstance(certificate.get("evidence"), dict)):
-            raise ProducerError("Disposable certificate setup evidence is invalid")
-        evidence = certificate["evidence"]
-        expected_did_hash = hashlib.sha256(issuer_did(gateway_port).encode()).hexdigest()
-        if (any(type(evidence.get(field)) is not str
-                or SHA256.fullmatch(evidence[field]) is None
-                for field in CERTIFICATE_HASHES)
-            or evidence.get("csca_certificate_id") != f"csca-disposable-{plan['run_id']}"
-            or evidence["csca_certificate_sha256"] == evidence["dsc_certificate_sha256"]
-            or evidence["csca_issuer_did_sha256"] != expected_did_hash
-            or evidence["dsc_issuer_did_sha256"] != expected_did_hash
-            or evidence.get("chain_verified_by") != "openssl-x509-strict"
-            or type(evidence.get("csca_http_status")) is not int
-            or evidence["csca_http_status"] != 200
-            or type(evidence.get("dsc_http_status")) is not int
-            or evidence["dsc_http_status"] != 200):
-            raise ProducerError("Disposable certificate setup evidence is invalid")
+        validate_certificate_setup(certificate, plan, gateway_port)
         return {
             "schema": "marty.passport-supported-certificate-rehearsal/v1",
             "status": "setup_only", "certificate_setup_passed": True,

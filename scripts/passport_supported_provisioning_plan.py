@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
 """Bind a disposable Compose plan to protected release and workflow identity.
 
-Plans contain no credentials and authorize no Docker mutation. A later record
-must be separately attested by a protected producer before live ownership can
-be considered; even a verified record cannot qualify passport retirement.
+Plans contain no credentials and authorize no Docker mutation. The protected
+producer can attest only its blocked partial receipt after scoped teardown;
+that receipt cannot qualify passport retirement.
 """
 
 from __future__ import annotations
@@ -35,8 +35,7 @@ RUN_ID = re.compile(r"[1-9][0-9]{0,19}\Z")
 UI_SERVICES = "ghcr.io/elevenid/marty-ui-oss/services"
 UI_MIGRATIONS = "ghcr.io/elevenid/marty-ui-oss/migrations"
 PLAN_WORKFLOW = "ElevenID/marty-ui/.github/workflows/passport-supported-provisioning-plan.yml"
-# This hosted attestor does not exist yet. The current acceptance workflow runs
-# on a self-hosted runner and cannot satisfy --deny-self-hosted-runners.
+# The hosted attestor signs a blocked producer receipt after its plan handoff.
 RECORD_WORKFLOW = "ElevenID/marty-ui/.github/workflows/passport-supported-provisioning-record.yml"
 
 
