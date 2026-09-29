@@ -66,16 +66,60 @@ def approved_entrypoint(container: dict) -> bool:
     mounts = container.get("volumeMounts", [])
     if not isinstance(mounts, list):
         return False
+    entries = container.get("env", [])
+    sources = container.get("envFrom", [])
+    if (not isinstance(entries, list) or not isinstance(sources, list)
+            or any(not isinstance(entry, dict)
+                   or not isinstance(entry.get("name"), str)
+                   or entry["name"] == "PATH" or entry["name"].startswith("LD_")
+                   for entry in entries)
+            or any(not isinstance(source, dict)
+                   or source.get("configMapRef") != {"name": "marty-config"}
+                   for source in sources)):
+        return False
     protected = ("/app/services", "/usr/local/bin", "/bin", "/usr/bin", "/proc")
     return all(isinstance(mount, dict)
                and isinstance(mount.get("mountPath"), str)
                and mount["mountPath"].startswith("/")
-               and mount["mountPath"] == posixpath.normpath(mount["mountPath"])
+               and mount["mountPath"] == "/" + posixpath.normpath(
+                   mount["mountPath"]).lstrip("/")
                and not any(target == mount["mountPath"]
                            or target.startswith(mount["mountPath"].rstrip("/") + "/")
                            or mount["mountPath"].startswith(target + "/")
                            for target in protected)
                for mount in mounts)
+
+
+def approved_runtime_spec(spec: dict) -> bool:
+    """Keep the exec proof tied to the immutable, unprivileged image files."""
+    if not isinstance(spec, dict):
+        return False
+    pod = spec.get("securityContext")
+    containers = spec.get("containers")
+    if (not isinstance(pod, dict)
+            or pod.get("runAsNonRoot") is not True
+            or pod.get("runAsUser") != 10001
+            or pod.get("runAsGroup") != 10001
+            or spec.get("automountServiceAccountToken") is not False
+            or spec.get("hostNetwork") not in (None, False)
+            or spec.get("hostPID") not in (None, False)
+            or spec.get("hostIPC") not in (None, False)
+            or spec.get("shareProcessNamespace") not in (None, False)
+            or not isinstance(containers, list) or len(containers) != 1
+            or not isinstance(containers[0], dict)):
+        return False
+    runtime = containers[0].get("securityContext")
+    return (isinstance(runtime, dict)
+            and runtime.get("readOnlyRootFilesystem") is True
+            and runtime.get("allowPrivilegeEscalation") is False
+            and runtime.get("privileged") in (None, False)
+            and runtime.get("runAsNonRoot") in (None, True)
+            and runtime.get("runAsUser") in (None, 10001)
+            and runtime.get("runAsGroup") in (None, 10001)
+            and runtime.get("procMount") in (None, "Default")
+            and isinstance(runtime.get("capabilities"), dict)
+            and runtime["capabilities"].get("drop") == ["ALL"]
+            and runtime["capabilities"].get("add") in (None, []))
 
 
 def kubernetes_config_value(container: dict, data: dict, name: str) -> object:
@@ -338,9 +382,7 @@ def inspect(
                 and containers[0].get("name") == name
                 and containers[0].get("image") == services_reference
                 and approved_entrypoint(containers[0])
-                and spec.get("hostNetwork") is not True
-                and spec.get("hostPID") is not True
-                and spec.get("automountServiceAccountToken") is False,
+                and approved_runtime_spec(spec),
                 f"Disposable Kubernetes deployment/{name} is unsafe",
             )
             selector = deployment.get("selector")
@@ -391,6 +433,7 @@ def inspect(
             data = item.get("data")
             require(
                 isinstance(data, dict)
+                and all(key != "PATH" and not key.startswith("LD_") for key in data)
                 and all(data.get(flag) == "true" for flag in FLAGS.values())
                 and data.get("ISSUANCE_NATIVE_SERVICE_URL")
                 == "http://issuance-native:8005"

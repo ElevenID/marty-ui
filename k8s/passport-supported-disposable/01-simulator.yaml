@@ -44,6 +44,10 @@ spec:
           image: ${MARTY_SERVICES_IMAGE}
           imagePullPolicy: IfNotPresent
           command: ["/app/services/entrypoint.sh"]
+          securityContext:
+            readOnlyRootFilesystem: true
+            allowPrivilegeEscalation: false
+            capabilities: {drop: ["ALL"]}
           env:
             - {name: SERVICE_NAME, value: passport_callback_signer}
             - {name: ENVIRONMENT, value: beta}
@@ -140,6 +144,10 @@ spec:
           image: ${MARTY_SERVICES_IMAGE}
           imagePullPolicy: IfNotPresent
           command: ["/app/services/entrypoint.sh"]
+          securityContext:
+            readOnlyRootFilesystem: true
+            allowPrivilegeEscalation: false
+            capabilities: {drop: ["ALL"]}
           env:
             - {name: SERVICE_NAME, value: passport_beta_bureau}
             - {name: ENVIRONMENT, value: beta}

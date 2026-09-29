@@ -23,12 +23,12 @@ from urllib.request import HTTPRedirectHandler, Request, build_opener
 
 if __package__:
     from .check_passport_supported_kubernetes_model import (
-        approved_entrypoint, inspect as inspect_kubernetes_model,
+        approved_entrypoint, approved_runtime_spec, inspect as inspect_kubernetes_model,
     )
     from .collect_passport_beta_acceptance import digest_file, verify_attestations
 else:
     from check_passport_supported_kubernetes_model import (
-        approved_entrypoint, inspect as inspect_kubernetes_model,
+        approved_entrypoint, approved_runtime_spec, inspect as inspect_kubernetes_model,
     )
     from collect_passport_beta_acceptance import digest_file, verify_attestations
 
@@ -321,6 +321,9 @@ def observe_kubernetes(
                            "get", "configmap", "marty-config", "-o", "json"], runner)
     data = config.get("data")
     require(isinstance(data, dict), "Kubernetes passport ConfigMap is missing")
+    require(all(isinstance(key, str) and key != "PATH" and not key.startswith("LD_")
+                for key in data),
+            "Kubernetes passport ConfigMap overrides runtime tools")
     require(config.get("immutable") is True,
             "Kubernetes passport ConfigMap must be immutable")
     config_metadata = config.get("metadata")
@@ -388,6 +391,8 @@ def observe_kubernetes(
                             "com.marty.passport.acceptance.source-commit": source_commit}.items()),
                 f"Kubernetes {service} Deployment selector or template is unowned")
         containers = spec.get("template", {}).get("spec", {}).get("containers")
+        require(approved_runtime_spec(template.get("spec")),
+                f"Kubernetes {service} Deployment runtime is unsafe")
         if service in PRIVATE_KUBERNETES_PORTS:
             kubernetes_private_network(
                 template.get("spec"), service, PRIVATE_KUBERNETES_PORTS[service])
@@ -475,6 +480,8 @@ def observe_kubernetes(
                 and statuses[0]["imageID"].endswith(services_reference.split("@", 1)[1]),
                 f"Kubernetes {service} pod is not ready on the released image")
         pod_containers = pod.get("spec", {}).get("containers")
+        require(approved_runtime_spec(pod.get("spec")),
+                f"Kubernetes {service} Pod runtime is unsafe")
         if service in PRIVATE_KUBERNETES_PORTS:
             kubernetes_private_network(
                 pod.get("spec"), service, PRIVATE_KUBERNETES_PORTS[service])
@@ -496,9 +503,9 @@ def observe_kubernetes(
         runtime_values.update(expected)
         checks = ["set -eu"]
         binary = shlex.quote(KUBERNETES_BINARIES[service])
-        checks.append(f'test "$(readlink /proc/1/exe)" = {binary}')
-        checks.append(f'test "$(tr \'\\000\' \'\\n\' < /proc/1/cmdline)" = {binary}')
-        checks.extend("tr '\\000' '\\n' < /proc/1/environ | grep -Fqx -- "
+        checks.append(f'test "$(/usr/bin/readlink /proc/1/exe)" = {binary}')
+        checks.append(f'test "$(/usr/bin/tr \'\\000\' \'\\n\' < /proc/1/cmdline)" = {binary}')
+        checks.extend("/usr/bin/tr '\\000' '\\n' < /proc/1/environ | /usr/bin/grep -Fqx -- "
                       + shlex.quote(f"{name}={value}")
                       for name, value in runtime_values.items())
         checks.append("printf verified")

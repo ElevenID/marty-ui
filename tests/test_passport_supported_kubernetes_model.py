@@ -157,10 +157,17 @@ def runner(expected: dict, *, file_backed_ca: bool = False):
                     "metadata": {"labels": gate.selector_for(name, PLAN_RUN_ID)},
                     "spec": {
                         "automountServiceAccountToken": False,
+                        "securityContext": {"runAsNonRoot": True,
+                                            "runAsUser": 10001,
+                                            "runAsGroup": 10001},
                         "containers": [
                             {
                                 "name": name,
                                 "image": REFERENCE,
+                                "securityContext": {
+                                    "readOnlyRootFilesystem": True,
+                                    "allowPrivilegeEscalation": False,
+                                    "capabilities": {"drop": ["ALL"]}},
                                 **({"envFrom": [{"configMapRef": {"name": "marty-config"}}]}
                                    if name in ("gateway", "flow") else {}),
                                 **({"env": [{"name": key, "valueFrom": {"configMapKeyRef": {
@@ -281,6 +288,42 @@ def test_identity_or_legacy_model_drift_fails_closed(mutate, match: str) -> None
             "deployment/flow",
             lambda x: x["spec"]["template"]["spec"]["containers"][0].update(
                 volumeMounts=[{"mountPath": "/app/services/../services/entrypoint.sh"}]),
+            "deployment/flow is unsafe",
+        ),
+        (
+            "deployment/flow",
+            lambda x: x["spec"]["template"]["spec"]["containers"][0].update(
+                volumeMounts=[{"mountPath": "//app/services"}]),
+            "deployment/flow is unsafe",
+        ),
+        (
+            "deployment/flow",
+            lambda x: x["spec"]["template"]["spec"]["containers"][0].update(
+                env=[{"name": "PATH", "value": "/tmp"}]),
+            "deployment/flow is unsafe",
+        ),
+        (
+            "deployment/flow",
+            lambda x: x["spec"]["template"]["spec"]["containers"][0][
+                "securityContext"].update(readOnlyRootFilesystem=False),
+            "deployment/flow is unsafe",
+        ),
+        (
+            "deployment/flow",
+            lambda x: x["spec"]["template"]["spec"]["containers"][0][
+                "securityContext"].update(privileged=True),
+            "deployment/flow is unsafe",
+        ),
+        (
+            "deployment/flow",
+            lambda x: x["spec"]["template"]["spec"]["containers"][0][
+                "securityContext"].update(runAsUser=0),
+            "deployment/flow is unsafe",
+        ),
+        (
+            "deployment/flow",
+            lambda x: x["spec"]["template"]["spec"]["containers"][0][
+                "securityContext"]["capabilities"].update(add=["SYS_PTRACE"]),
             "deployment/flow is unsafe",
         ),
         (

@@ -182,6 +182,10 @@ def kubernetes_runner(*, mixed_provider: bool = False,
                     "http://issuance-native:8005/v1/passport/webhooks/personalization",
             })
         container = {"name": service, "image": REFERENCE,
+                     "securityContext": {
+                         "readOnlyRootFilesystem": True,
+                         "allowPrivilegeEscalation": False,
+                         "capabilities": {"drop": ["ALL"]}},
                      "env": [{"name": name, "value": value}
                              for name, value in values.items()],
                      "envFrom": container_sources}
@@ -303,6 +307,10 @@ def kubernetes_runner(*, mixed_provider: bool = False,
             return json.dumps({"items": [{
                 "metadata": metadata_for(service, "Pod"),
                 "spec": {"hostNetwork": pod_host_network,
+                         "automountServiceAccountToken": False,
+                         "securityContext": {"runAsNonRoot": True,
+                                             "runAsUser": 10001,
+                                             "runAsGroup": 10001},
                          "containers": [pod_container]},
                 "status": {"phase": "Running", "podIP": "10.1.2.3",
                            "podIPs": ([{"ip": "10.1.2.3"}, {"ip": "fd00::3"}]
@@ -372,6 +380,10 @@ def kubernetes_runner(*, mixed_provider: bool = False,
                      "template": {"metadata": {"labels": metadata_for(
                          service, "Deployment")["labels"]},
                                   "spec": {"hostNetwork": template_host_network,
+                                           "automountServiceAccountToken": False,
+                                           "securityContext": {"runAsNonRoot": True,
+                                                               "runAsUser": 10001,
+                                                               "runAsGroup": 10001},
                                            "containers": [container]}}},
         })
     return run
@@ -403,8 +415,8 @@ def test_kubernetes_accepts_retained_replicasets_and_dual_stack_routes() -> None
     ("manual_core_slice", "EndpointSlice is outside"),
     ("external_ip", "Service route is outside"),
     ("wrong_source", "owner labels are invalid"),
-    ("template_host_network", "private Pod uses the host network"),
-    ("pod_host_network", "private Pod uses the host network"),
+    ("template_host_network", "Deployment runtime is unsafe"),
+    ("pod_host_network", "Pod runtime is unsafe"),
     ("template_host_port", "private port is exposed"),
     ("pod_host_port", "private port is exposed"),
 ])
