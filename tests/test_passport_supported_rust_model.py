@@ -432,6 +432,22 @@ def test_disposable_bureau_requires_signed_gateway_callback_route(
         validate_model(model, PROJECT, IMAGE, tmp_path)
 
 
+@pytest.mark.parametrize("change", [
+    lambda service: service["environment"].update(HTTP_PROXY="http://gateway:8000"),
+    lambda service: service.update(extra_hosts=["gateway:10.0.0.9"]),
+    lambda service: service.update(dns=["10.0.0.9"]),
+    lambda service: service.update(networks={"private": {"aliases": ["gateway"]},
+                                    "callback_signing": None}),
+])
+def test_disposable_bureau_cannot_redirect_private_gateway_callback(
+    tmp_path: Path, change,
+) -> None:
+    model = safe_model(tmp_path)
+    change(model["services"]["passport-beta-bureau"])
+    with pytest.raises(ModelPreflightError):
+        validate_model(model, PROJECT, IMAGE, tmp_path)
+
+
 @pytest.mark.parametrize("service,key,value", [
     ("gateway", "PASSPORT_NATIVE_GATEWAY_ENABLED", "false"),
     ("flow", "PASSPORT_NATIVE_FLOW_ENABLED", "false"),

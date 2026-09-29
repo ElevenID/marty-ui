@@ -83,7 +83,33 @@ def staged():
     return root, {"project": project, "disposable_root": str(root),
                   "expires_at": (datetime.now(timezone.utc) + timedelta(hours=2)).isoformat(),
                   "containers": {"edge": "e" * 64,
-                                 "passport-beta-bureau": "b" * 64}}
+                                 "passport-beta-bureau": "b" * 64,
+                                 "gateway": "g" * 64,
+                                 "issuance-native": "i" * 64}}
+
+
+def callback_containers(project: str) -> dict[str, dict]:
+    private = project + "_private"
+    return {
+        "b" * 64: {"HostConfig": {},
+                   "NetworkSettings": {"Networks": {private: {"Aliases": [
+                       project + "-passport-beta-bureau-1", "passport-beta-bureau"]}}},
+                   "Config": {"Env": [
+            "PASSPORT_BETA_BUREAU_GATEWAY_CALLBACK_ENABLED=true",
+            "PASSPORT_BUREAU_CALLBACK_URL=" + probe.GATEWAY_CALLBACK]}},
+        "g" * 64: {"NetworkSettings": {"Networks": {private: {"Aliases": [
+                       project + "-gateway-1", "gateway"]}}},
+                   "Config": {"Env": [
+            "PASSPORT_NATIVE_GATEWAY_ENABLED=true",
+            "PASSPORT_PROVIDER_INGRESS_GATEWAY_ENABLED=false",
+            "ISSUANCE_SERVICE_URL=http://issuance-native:8005",
+            "ISSUANCE_NATIVE_SERVICE_URL=http://issuance-native:8005"]}},
+        "i" * 64: {"NetworkSettings": {"Networks": {private: {"Aliases": [
+                       project + "-issuance-native-1", "issuance-native"]}}},
+                   "Config": {"Env": [
+            "PASSPORT_NATIVE_HTTP_ENABLED=true",
+            "PASSPORT_KMS_CALLBACKS_ENABLED=true"]}},
+    }
 
 
 def cleanup(root: Path) -> None:
@@ -111,15 +137,14 @@ def test_owned_https_probe_uses_same_job_private_receipt(monkeypatch) -> None:
     edge = {"HostConfig": {"PortBindings": {"8443/tcp": [
         {"HostIp": "127.0.0.1", "HostPort": "29877"}]}},
         "NetworkSettings": {"Ports": {"8443/tcp": [
-            {"HostIp": "127.0.0.1", "HostPort": "29877"}]}}}
-    bureau = {"Config": {"Env": [
-        "PASSPORT_BETA_BUREAU_GATEWAY_CALLBACK_ENABLED=true",
-        "PASSPORT_BUREAU_CALLBACK_URL=" + probe.GATEWAY_CALLBACK,
-    ]}}
+            {"HostIp": "127.0.0.1", "HostPort": "29877"}]},
+            "Networks": {record["project"] + "_private": {"Aliases": ["edge"]}}}}
+    containers = callback_containers(record["project"])
     try:
         report = probe.exercise_owned_disposable(
             record, "selfhost", application(), now=NOW,
-            inspector=lambda args: json.dumps([edge if args[-1] == "e" * 64 else bureau]),
+            inspector=lambda args: json.dumps([
+                edge if args[-1] == "e" * 64 else containers[args[-1]]]),
             ownership=lambda *args: {"live_ownership_verified": True},
             private_poll=lambda rec, surface, job, **kwargs: (
                 200, {"status": "QUALITY_CHECK", "tracking_number": None,
@@ -157,23 +182,57 @@ def test_wrong_disposable_issuer_fails_before_http(monkeypatch) -> None:
         cleanup(root)
 
 
-@pytest.mark.parametrize("environment", [
-    ["PASSPORT_BETA_BUREAU_GATEWAY_CALLBACK_ENABLED=false",
-     "PASSPORT_BUREAU_CALLBACK_URL=" + probe.GATEWAY_CALLBACK],
-    ["PASSPORT_BETA_BUREAU_GATEWAY_CALLBACK_ENABLED=true",
-     "PASSPORT_BUREAU_CALLBACK_URL=http://issuance-native:8005/v1/passport/webhooks/personalization"],
-    ["PASSPORT_BETA_BUREAU_GATEWAY_CALLBACK_ENABLED=true",
-     "PASSPORT_BUREAU_CALLBACK_URL=" + probe.GATEWAY_CALLBACK,
-     "PASSPORT_BUREAU_CALLBACK_URL=" + probe.GATEWAY_CALLBACK],
+@pytest.mark.parametrize("identifier,name,value", [
+    ("b" * 64, "PASSPORT_BETA_BUREAU_GATEWAY_CALLBACK_ENABLED", "false"),
+    ("b" * 64, "PASSPORT_BUREAU_CALLBACK_URL",
+     "http://issuance-native:8005/v1/passport/webhooks/personalization"),
+    ("g" * 64, "PASSPORT_NATIVE_GATEWAY_ENABLED", "false"),
+    ("g" * 64, "PASSPORT_PROVIDER_INGRESS_GATEWAY_ENABLED", "true"),
+    ("g" * 64, "ISSUANCE_NATIVE_SERVICE_URL", "http://issuance:8005"),
+    ("i" * 64, "PASSPORT_NATIVE_HTTP_ENABLED", "false"),
+    ("i" * 64, "PASSPORT_KMS_CALLBACKS_ENABLED", "false"),
 ])
-def test_running_simulator_gateway_callback_must_match_model(
-    environment: list[str],
+def test_running_gateway_callback_selectors_must_match_model(
+    identifier: str, name: str, value: str,
 ) -> None:
-    record = {"containers": {"passport-beta-bureau": "b" * 64}}
+    record = {"project": "marty-passport-acceptance-selfhost-test",
+              "containers": {"passport-beta-bureau": "b" * 64,
+                             "gateway": "g" * 64, "issuance-native": "i" * 64}}
+    containers = callback_containers(record["project"])
+    entries = containers[identifier]["Config"]["Env"]
+    entries[:] = [f"{name}={value}" if entry.startswith(name + "=") else entry
+                  for entry in entries]
 
     def inspector(args: list[str]) -> str:
-        return json.dumps([{"Config": {"Env": environment}}])
+        return json.dumps([containers[args[-1]]])
 
     with pytest.raises(probe.DisposableRouteProbeError,
-                       match="Gateway callback drifted"):
+                       match="callback routing drifted"):
+        probe._gateway_callback_selected(record, inspector)
+
+
+@pytest.mark.parametrize("defect", ["proxy", "extra_host", "gateway_alias_missing",
+                                    "gateway_alias_duplicate"])
+def test_running_gateway_callback_cannot_bypass_private_docker_dns(defect: str) -> None:
+    project = "marty-passport-acceptance-selfhost-test"
+    private = project + "_private"
+    record = {"project": project, "containers": {
+        "passport-beta-bureau": "b" * 64,
+        "gateway": "g" * 64,
+        "issuance-native": "i" * 64}}
+    containers = callback_containers(project)
+    if defect == "proxy":
+        containers["b" * 64]["Config"]["Env"].append("HTTP_PROXY=http://issuance-native:8005")
+    elif defect == "extra_host":
+        containers["b" * 64]["HostConfig"]["ExtraHosts"] = ["gateway:10.0.0.9"]
+    elif defect == "gateway_alias_missing":
+        containers["g" * 64]["NetworkSettings"]["Networks"][private]["Aliases"] = []
+    else:
+        containers["b" * 64]["NetworkSettings"]["Networks"][private]["Aliases"].append(
+            "gateway")
+
+    def inspector(args: list[str]) -> str:
+        return json.dumps([containers[args[-1]]])
+
+    with pytest.raises(probe.DisposableRouteProbeError):
         probe._gateway_callback_selected(record, inspector)

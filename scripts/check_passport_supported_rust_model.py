@@ -330,7 +330,8 @@ def validate_model(
     for name, service in services.items():
         require(isinstance(service, dict), "Compose service is invalid")
         for forbidden in ("container_name", "network_mode", "pid", "ipc",
-                          "privileged", "devices", "extra_hosts", "volumes_from",
+                          "privileged", "devices", "extra_hosts", "dns", "dns_search",
+                          "dns_opt", "links", "hostname", "domainname", "volumes_from",
                           "build", "command"):
             require(not service.get(forbidden),
                     f"Compose {name} has a shared-host or fixed-name setting")
@@ -466,10 +467,15 @@ def validate_model(
     for name in services:
         expected = callback_networks.get(name, {"private"})
         joined = services[name].get("networks")
-        require(isinstance(joined, (list, dict)) and set(joined) == expected,
+        require(isinstance(joined, (list, dict)) and set(joined) == expected
+                and (not isinstance(joined, dict)
+                     or all(value in (None, {}) for value in joined.values())),
                 f"Compose {name} leaves the dedicated callback signing boundary")
     signer = services["passport-callback-signer"]["environment"]
     bureau = services["passport-beta-bureau"]["environment"]
+    require(all(key.lower() not in {"http_proxy", "https_proxy", "all_proxy", "no_proxy"}
+                for key in bureau),
+            "Disposable bureau proxy environment is forbidden")
     native = services["issuance-native"]["environment"]
     gateway = services["gateway"]["environment"]
     flow = services["flow"]["environment"]

@@ -542,6 +542,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .await?;
     sqlx::raw_sql(SCHEMA).execute(&pool).await?;
     let http = Client::builder()
+        .no_proxy()
         .redirect(Policy::none())
         .timeout(Duration::from_secs(5))
         .build()?;

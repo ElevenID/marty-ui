@@ -72,24 +72,72 @@ def _private_inputs(record: dict[str, Any]) -> tuple[Path, str]:
 def _gateway_callback_selected(record: dict[str, Any],
                                inspector: Callable[[list[str]], str]) -> bool:
     containers = record.get("containers")
-    bureau_id = (containers.get("passport-beta-bureau")
-                 if isinstance(containers, dict) else None)
-    if not isinstance(bureau_id, str):
-        raise DisposableRouteProbeError("Owned simulator container is missing")
-    bureau = _inspect("container", bureau_id, inspector)
-    config = bureau.get("Config")
-    entries = config.get("Env") if isinstance(config, dict) else None
-    if not isinstance(entries, list) or any(not isinstance(entry, str)
-                                            for entry in entries):
-        raise DisposableRouteProbeError("Owned simulator environment is invalid")
-    expected = {
-        "PASSPORT_BETA_BUREAU_GATEWAY_CALLBACK_ENABLED": "true",
-        "PASSPORT_BUREAU_CALLBACK_URL": GATEWAY_CALLBACK,
+    expected_by_service = {
+        "passport-beta-bureau": {
+            "PASSPORT_BETA_BUREAU_GATEWAY_CALLBACK_ENABLED": "true",
+            "PASSPORT_BUREAU_CALLBACK_URL": GATEWAY_CALLBACK,
+        },
+        "gateway": {
+            "PASSPORT_NATIVE_GATEWAY_ENABLED": "true",
+            "PASSPORT_PROVIDER_INGRESS_GATEWAY_ENABLED": "false",
+            "ISSUANCE_SERVICE_URL": "http://issuance-native:8005",
+            "ISSUANCE_NATIVE_SERVICE_URL": "http://issuance-native:8005",
+        },
+        "issuance-native": {
+            "PASSPORT_NATIVE_HTTP_ENABLED": "true",
+            "PASSPORT_KMS_CALLBACKS_ENABLED": "true",
+        },
     }
-    for name, value in expected.items():
-        if [entry for entry in entries if entry.partition("=")[0] == name] != [
-            f"{name}={value}"]:
-            raise DisposableRouteProbeError("Owned simulator Gateway callback drifted")
+    inspected: dict[str, dict] = {}
+    for service, expected in expected_by_service.items():
+        identifier = containers.get(service) if isinstance(containers, dict) else None
+        if not isinstance(identifier, str):
+            raise DisposableRouteProbeError("Owned callback service is missing")
+        container = _inspect("container", identifier, inspector)
+        inspected[service] = container
+        config = container.get("Config")
+        entries = config.get("Env") if isinstance(config, dict) else None
+        if not isinstance(entries, list) or any(not isinstance(entry, str)
+                                                for entry in entries):
+            raise DisposableRouteProbeError("Owned callback environment is invalid")
+        if service == "passport-beta-bureau" and any(
+            entry.partition("=")[0].lower() in
+            {"http_proxy", "https_proxy", "all_proxy", "no_proxy"}
+            for entry in entries
+        ):
+            raise DisposableRouteProbeError("Owned callback proxy environment is invalid")
+        for name, value in expected.items():
+            if [entry for entry in entries if entry.partition("=")[0] == name] != [
+                f"{name}={value}"]:
+                raise DisposableRouteProbeError("Owned callback routing drifted")
+    bureau_host = inspected["passport-beta-bureau"].get("HostConfig")
+    if (not isinstance(bureau_host, dict)
+        or any(bureau_host.get(name) not in (None, []) for name in
+               ("ExtraHosts", "Dns", "DnsSearch", "DnsOptions", "Links"))):
+        raise DisposableRouteProbeError("Owned callback DNS configuration drifted")
+    project = record.get("project")
+    if not isinstance(project, str):
+        raise DisposableRouteProbeError("Owned callback project is invalid")
+    private_network = project + "_private"
+    gateway_alias_owners = []
+    for service, identifier in containers.items():
+        container = inspected.get(service) or _inspect("container", identifier, inspector)
+        network_settings = container.get("NetworkSettings")
+        networks = (network_settings.get("Networks")
+                    if isinstance(network_settings, dict) else None)
+        if not isinstance(networks, dict):
+            raise DisposableRouteProbeError("Owned callback network state is invalid")
+        endpoint = networks.get(private_network)
+        if endpoint is None:
+            continue
+        aliases = endpoint.get("Aliases") if isinstance(endpoint, dict) else None
+        if (not isinstance(aliases, list)
+            or any(not isinstance(alias, str) for alias in aliases)):
+            raise DisposableRouteProbeError("Owned callback network aliases are invalid")
+        if "gateway" in aliases:
+            gateway_alias_owners.append(service)
+    if gateway_alias_owners != ["gateway"]:
+        raise DisposableRouteProbeError("Owned callback Gateway DNS alias drifted")
     return True
 
 
