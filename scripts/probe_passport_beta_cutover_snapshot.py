@@ -10,6 +10,7 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import os
 import re
 from pathlib import Path
 from typing import Any, Callable
@@ -18,22 +19,26 @@ try:
     from .probe_passport_beta_fence_target import observe_fenced
     from .probe_passport_beta_fence_direct_writes import probe_direct_writes
     from .probe_passport_beta_host import HostProbeError, beta_psql, run
+    from .probe_passport_beta_fence_direct_writes import ERRORS
 except ImportError:
     from probe_passport_beta_fence_target import observe_fenced
     from probe_passport_beta_fence_direct_writes import probe_direct_writes
     from probe_passport_beta_host import HostProbeError, beta_psql, run
+    from probe_passport_beta_fence_direct_writes import ERRORS
 
 
 ROOT = Path(__file__).resolve().parents[1]
 VERIFY = ROOT / "scripts/sql/passport-beta-fence-verify.sql"
 SHA256 = re.compile(r"[0-9a-f]{64}\Z")
+SHA = re.compile(r"[0-9a-f]{40}\Z")
 DECIMAL = re.compile(r"[0-9]+\Z")
 OCI_DIGEST = re.compile(r".+@(sha256:[0-9a-f]{64})\Z")
 OBSERVED_AT = re.compile(
     r"[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}\.[0-9]{3}Z\Z"
 )
-WATERMARK_SQL = (
-    "SELECT txid_current()::text || '|' || "
+ZERO_COUNT_WATERMARK_SQL = (
+    "SELECT (SELECT count(*) FROM issuance_service.physical_document_jobs)::text "
+    "|| '|' || txid_current()::text || '|' || "
     "to_char(clock_timestamp() AT TIME ZONE 'UTC', "
     "'YYYY-MM-DD\"T\"HH24:MI:SS.MS\"Z\"')"
 )
@@ -48,6 +53,34 @@ def digest(value: dict[str, Any]) -> str:
     return hashlib.sha256(
         json.dumps(value, sort_keys=True, separators=(",", ":")).encode()
     ).hexdigest()
+
+
+def validate_direct_probe(probe: dict[str, Any], *, postgres: str,
+                          database_uid: str, epoch: int,
+                          docker: dict[str, Any]) -> None:
+    require(isinstance(probe, dict)
+            and probe.get("schema") == "marty.passport-beta-fence-direct-probe/v1"
+            and probe.get("method") == "postgresql_transaction_rollback"
+            and probe.get("postgres_container_id") == postgres
+            and probe.get("database_uid") == database_uid
+            and probe.get("fence_epoch") == epoch
+            and probe.get("docker_context") == docker.get("context")
+            and probe.get("docker_daemon_id") == docker.get("daemon_id")
+            and probe.get("session_user") == "marty"
+            and probe.get("current_user") == "marty"
+            and re.fullmatch(r"[0-9a-f]{32}", str(probe.get("probe_nonce"))) is not None
+            and type(probe.get("observation_watermark")) is int
+            and probe["observation_watermark"] > 0
+            and OBSERVED_AT.fullmatch(str(probe.get("observed_at_utc"))) is not None
+            and probe.get("rejections") == {
+                surface: {"valid_without_fence": True, "sqlstate": "55000",
+                          "message": message}
+                for surface, message in ERRORS.items()
+            }
+            and probe.get("receipt_sha256") == digest({
+                key: value for key, value in probe.items()
+                if key != "receipt_sha256"
+            }), "Direct beta fence probe receipt is invalid")
 
 
 def collect(
@@ -75,17 +108,7 @@ def collect(
             and fence.get("schema") == "marty.passport-beta-fence-verification/v1"
             and fence.get("phase") == "fully_fenced"
             and type(fence.get("epoch")) is int and fence["epoch"] > 0
-            and isinstance(first_probe, dict)
-            and first_probe.get("postgres_container_id") == postgres
-            and first_probe.get("database_uid")
-                == f"postgresql:{system_id}:{database_oid}"
-            and first_probe.get("fence_epoch") == fence["epoch"]
-            and type(first_probe.get("observation_watermark")) is int
-            and OBSERVED_AT.fullmatch(str(first_probe.get("observed_at_utc"))) is not None
-            and first_probe.get("receipt_sha256") == digest({
-                key: value for key, value in first_probe.items()
-                if key != "receipt_sha256"
-            }),
+            and isinstance(first_probe, dict),
             "Protected fence identity or first write probe is invalid")
 
     observed = observer()
@@ -108,6 +131,14 @@ def collect(
             and isinstance(docker.get("context"), str) and docker["context"]
             and isinstance(docker.get("daemon_id"), str) and docker["daemon_id"],
             "Beta PostgreSQL or Docker identity changed after fence installation")
+    require(installation.get("beta_services") == beta["services"]
+            and SHA256.fullmatch(str(installation.get("verify_sql_sha256"))) is not None
+            and SHA.fullmatch(str(installation.get("source_commit"))) is not None
+            and SHA256.fullmatch(str(installation.get("approved_target_observation_sha256"))) is not None,
+            "Protected source or old beta service generation differs from installation")
+    validate_direct_probe(first_probe, postgres=postgres,
+                          database_uid=f"postgresql:{system_id}:{database_oid}",
+                          epoch=fence["epoch"], docker=docker)
     writer = beta["services"].get("issuance")
     require(isinstance(writer, dict)
             and isinstance(writer.get("container_id"), str)
@@ -120,7 +151,10 @@ def collect(
     image = OCI_DIGEST.fullmatch(writer["configured_image"])
     require(image is not None, "Old beta Python writer image is not immutable")
 
-    sql = verify_sql if verify_sql is not None else VERIFY.read_text(encoding="utf-8")
+    sql_bytes = (verify_sql.encode() if verify_sql is not None else VERIFY.read_bytes())
+    require(hashlib.sha256(sql_bytes).hexdigest() == installation["verify_sql_sha256"],
+            "Protected beta fence verifier differs from installation")
+    sql = sql_bytes.decode("utf-8")
     session = (
         "SET marty.passport_beta_verified_project = 'elevenid-beta';\n"
         f"SET marty.passport_beta_expected_system_identifier = '{system_id}';\n"
@@ -132,12 +166,6 @@ def collect(
         raise HostProbeError("Scoped beta fence verifier failed") from exc
     require(verified == fence, "Scoped beta fence changed since installation")
 
-    total = psql(
-        "SELECT count(*) FROM issuance_service.physical_document_jobs",
-        runner, postgres,
-    )
-    require(DECIMAL.fullmatch(total) is not None and int(total) == 0,
-            "Existing beta passport jobs require individual artifact readability proof")
     drain = beta.get("drain")
     evidence = drain.get("evidence") if isinstance(drain, dict) else None
     require(drain.get("verified") is True if isinstance(drain, dict) else False,
@@ -156,22 +184,18 @@ def collect(
         expected_database_oid=database_oid,
         expected_fence_epoch=fence["epoch"],
     )
-    require(isinstance(fresh_probe, dict)
-            and fresh_probe.get("schema") == "marty.passport-beta-fence-direct-probe/v1"
-            and fresh_probe.get("database_uid")
-                == f"postgresql:{system_id}:{database_oid}"
-            and fresh_probe.get("fence_epoch") == fence["epoch"]
-            and type(fresh_probe.get("observation_watermark")) is int
-            and fresh_probe["observation_watermark"]
-                > first_probe["observation_watermark"]
-            and fresh_probe.get("receipt_sha256") == digest({
-                key: value for key, value in fresh_probe.items()
-                if key != "receipt_sha256"
-            }), "Fresh direct beta fence probe is invalid")
-    watermark = psql(WATERMARK_SQL, runner, postgres).split("|", 1)
-    require(len(watermark) == 2 and DECIMAL.fullmatch(watermark[0]) is not None
-            and OBSERVED_AT.fullmatch(watermark[1]) is not None
-            and int(watermark[0]) > fresh_probe["observation_watermark"],
+    validate_direct_probe(fresh_probe, postgres=postgres,
+                          database_uid=f"postgresql:{system_id}:{database_oid}",
+                          epoch=fence["epoch"], docker=docker)
+    require(fresh_probe["observation_watermark"] > first_probe["observation_watermark"],
+            "Fresh direct beta fence probe is stale")
+    watermark = psql(ZERO_COUNT_WATERMARK_SQL, runner, postgres).split("|", 2)
+    require(len(watermark) == 3 and DECIMAL.fullmatch(watermark[0]) is not None
+            and int(watermark[0]) == 0,
+            "Existing beta passport jobs require individual artifact readability proof")
+    require(DECIMAL.fullmatch(watermark[1]) is not None
+            and OBSERVED_AT.fullmatch(watermark[2]) is not None
+            and int(watermark[1]) > fresh_probe["observation_watermark"],
             "Beta drain observation watermark is not later than direct write probe")
     final = observer()
     require(final == observed, "Beta or production inventory changed during cutover snapshot")
@@ -200,8 +224,8 @@ def collect(
             "unreadable_artifact_count": 0,
             "active_passport_flow_count": 0,
         },
-        "observation_watermark": int(watermark[0]),
-        "observed_at_utc": watermark[1],
+        "observation_watermark": int(watermark[1]),
+        "observed_at_utc": watermark[2],
         "production_snapshot_sha256": observed["production"]["sha256"],
         "production_attachments_sha256": observed["production_attachments_sha256"],
     }
@@ -210,12 +234,48 @@ def collect(
 
 
 def main() -> int:
+    try:
+        from .check_passport_beta_fence_authority import protected_source, protected_file
+    except ImportError:
+        from check_passport_beta_fence_authority import protected_source, protected_file
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--fence-installation-receipt", type=Path, required=True)
     parser.add_argument("--output", type=Path, required=True)
     args = parser.parse_args()
     try:
-        installation = json.loads(args.fence_installation_receipt.read_text(encoding="utf-8"))
+        head = protected_source(run)
+        protected_file("scripts/sql/passport-beta-fence-verify.sql", run)
+        protected_file("scripts/probe_passport_beta_cutover_snapshot.py", run)
+        protected_file("scripts/probe_passport_beta_fence_target.py", run)
+        protected_file("scripts/probe_passport_beta_fence_direct_writes.py", run)
+        protected_file("scripts/probe_passport_beta_host.py", run)
+        protected_file("deploy-config/passport-beta-fence-approved-target.json", run)
+        program_data = os.environ.get("ProgramData", "")
+        require(bool(program_data), "Windows beta host fence record location is unavailable")
+        marker = Path(program_data) / "ElevenID-Marty-elevenid-beta-passport-fence.pending"
+        record = json.loads(marker.read_text(encoding="utf-8"))
+        require(isinstance(record, dict)
+                and record.get("schema") == "marty.passport-beta-fence-host-record/v1"
+                and isinstance(record.get("receipt_path"), str)
+                and Path(record.get("receipt_path", "")).resolve()
+                    == args.fence_installation_receipt.resolve()
+                and record.get("source_commit") == head,
+                "Completed protected beta host fence record is invalid")
+        receipt_bytes = args.fence_installation_receipt.read_bytes()
+        require(hashlib.sha256(receipt_bytes).hexdigest()
+                == record.get("receipt_file_sha256"),
+                "Fence receipt bytes differ from completed host record")
+        installation = json.loads(receipt_bytes)
+        approval = json.loads((ROOT / "deploy-config/passport-beta-fence-approved-target.json")
+                              .read_text(encoding="utf-8"))
+        require(isinstance(installation, dict) and isinstance(approval, dict)
+                and installation.get("source_commit") == head
+                and installation.get("approved_target_observation_sha256")
+                    == record.get("approved_target_observation_sha256")
+                    == approval.get("observation_sha256")
+                and installation.get("credentials_deletion_head")
+                    == approval.get("credentials_deletion_head"),
+                "Fence receipt differs from protected host approval")
         result = collect(installation)
         args.output.write_text(json.dumps(result, sort_keys=True, indent=2) + "\n",
                                encoding="utf-8")

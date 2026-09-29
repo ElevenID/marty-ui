@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from copy import deepcopy
+import hashlib
 import json
 
 import pytest
@@ -39,27 +40,36 @@ def evidence() -> tuple[dict, dict, dict]:
         },
     }
     first = {"postgres_container_id": POSTGRES,
+             "schema": "marty.passport-beta-fence-direct-probe/v1",
+             "method": "postgresql_transaction_rollback",
+             "docker_context": "desktop-linux", "docker_daemon_id": "synthetic-daemon",
              "database_uid": "postgresql:12345:67890", "fence_epoch": 4,
              "observation_watermark": 10,
-             "observed_at_utc": "2026-09-29T00:00:01.000Z"}
+             "observed_at_utc": "2026-09-29T00:00:01.000Z",
+             "session_user": "marty", "current_user": "marty",
+             "probe_nonce": "a" * 32,
+             "rejections": {surface: {"valid_without_fence": True, "sqlstate": "55000",
+                         "message": message} for surface, message in snapshot.ERRORS.items()}}
     first["receipt_sha256"] = snapshot.digest(first)
     installation = {
         "schema": "marty.passport-beta-fence-installation/v1",
         "postgres_container_id": POSTGRES,
         "postgres_system_identifier": "12345", "database_oid": "67890",
         "fence": FENCE, "direct_database_probe": first,
+        "source_commit": "a" * 40,
+        "approved_target_observation_sha256": "f" * 64,
+        "beta_services": observed["beta"]["services"],
+        "verify_sql_sha256": hashlib.sha256(b"SELECT 1").hexdigest(),
         "post_install_observation_sha256": "c" * 64,
         "production_snapshot_sha256": "e" * 64,
         "production_attachments_sha256": "d" * 64,
     }
-    direct = {
-        "schema": "marty.passport-beta-fence-direct-probe/v1",
-        "database_uid": "postgresql:12345:67890", "fence_epoch": 4,
-        "observation_watermark": 12,
-        "observed_at_utc": "2026-09-29T00:00:02.000Z",
-        "rejections": {"physical_document_jobs": {"sqlstate": "55000"}},
-    }
-    direct["receipt_sha256"] = snapshot.digest(direct)
+    direct = deepcopy(first)
+    direct["observation_watermark"] = 12
+    direct["observed_at_utc"] = "2026-09-29T00:00:02.000Z"
+    direct["receipt_sha256"] = snapshot.digest({
+        key: value for key, value in direct.items() if key != "receipt_sha256"
+    })
     return installation, observed, direct
 
 
@@ -73,10 +83,8 @@ def collect_fixture(
         assert container == POSTGRES
         if "pg_get_functiondef" in sql or sql.endswith("SELECT 1"):
             return json.dumps(FENCE)
-        if "count(*) FROM issuance_service.physical_document_jobs" in sql:
-            return total_jobs
-        if sql == snapshot.WATERMARK_SQL:
-            return "13|2026-09-29T00:00:03.000Z"
+        if sql == snapshot.ZERO_COUNT_WATERMARK_SQL:
+            return total_jobs + "|13|2026-09-29T00:00:03.000Z"
         raise AssertionError(sql)
 
     return snapshot.collect(
@@ -122,3 +130,44 @@ def test_snapshot_rejects_stale_direct_probe() -> None:
     })
     with pytest.raises(HostProbeError, match="Fresh direct beta fence probe"):
         collect_fixture(installation, observed, direct)
+
+
+def test_snapshot_rejects_forged_first_probe_rejection() -> None:
+    installation, observed, direct = evidence()
+    installation["direct_database_probe"]["rejections"]["physical_document_jobs"]["message"] = "wrong"
+    installation["direct_database_probe"]["receipt_sha256"] = snapshot.digest({
+        key: value for key, value in installation["direct_database_probe"].items()
+        if key != "receipt_sha256"
+    })
+    with pytest.raises(HostProbeError, match="Direct beta fence probe receipt"):
+        collect_fixture(installation, observed, direct)
+
+
+def test_snapshot_rejects_changed_verifier_bytes() -> None:
+    installation, observed, direct = evidence()
+    installation["verify_sql_sha256"] = "0" * 64
+    with pytest.raises(HostProbeError, match="verifier differs"):
+        collect_fixture(installation, observed, direct)
+
+
+def test_zero_count_and_watermark_are_read_together_after_direct_probe() -> None:
+    installation, observed, direct = evidence()
+    calls: list[str] = []
+
+    def psql(sql: str, _runner, _container: str) -> str:
+        if "pg_get_functiondef" in sql or sql.endswith("SELECT 1"):
+            calls.append("verify")
+            return json.dumps(FENCE)
+        assert sql == snapshot.ZERO_COUNT_WATERMARK_SQL
+        calls.append("count_with_watermark")
+        return "0|13|2026-09-29T00:00:03.000Z"
+
+    def probe(*_args, **_kwargs):
+        calls.append("direct_probe")
+        return direct
+
+    observations = iter([observed, observed])
+    snapshot.collect(installation, observer=lambda: next(observations), psql=psql,
+                     direct_probe=probe, runner=lambda _args: "unused",
+                     verify_sql="SELECT 1")
+    assert calls == ["verify", "direct_probe", "count_with_watermark"]

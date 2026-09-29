@@ -200,6 +200,8 @@ try {
         source_commit = $plan.source.source_commit
         credentials_deletion_head = $plan.credentials_deletion_head
         approved_target_observation_sha256 = $plan.target_observation_sha256
+        beta_services = $plan.beta_services
+        verify_sql_sha256 = $plan.verify_sql_sha256
         postgres_system_identifier = $systemId
         database_oid = $databaseOid
         postgres_container_id = $container
@@ -218,6 +220,30 @@ try {
         $outputStream.Flush($true)
     }
     finally { $outputStream.Dispose() }
+    # A completed host marker binds later snapshots to these exact receipt
+    # bytes. An interrupted write leaves the original intent marker and fails
+    # closed; only the protected installer can complete this record.
+    $receiptHasher = [Security.Cryptography.SHA256]::Create()
+    try {
+        $receiptHash = $receiptHasher.ComputeHash(
+            [Text.Encoding]::UTF8.GetBytes($json + "`n"))
+    }
+    finally { $receiptHasher.Dispose() }
+    $markerRecord = [ordered]@{
+        schema = 'marty.passport-beta-fence-host-record/v1'
+        receipt_path = $outputAbsolute
+        receipt_file_sha256 = ([BitConverter]::ToString($receiptHash)).Replace('-', '').ToLowerInvariant()
+        source_commit = $plan.source.source_commit
+        approved_target_observation_sha256 = $plan.target_observation_sha256
+    } | ConvertTo-Json -Compress
+    $markerStream = [IO.File]::Open($markerPath, [IO.FileMode]::Truncate,
+        [IO.FileAccess]::Write, [IO.FileShare]::None)
+    try {
+        $markerBytes = [Text.Encoding]::UTF8.GetBytes($markerRecord + "`n")
+        $markerStream.Write($markerBytes, 0, $markerBytes.Length)
+        $markerStream.Flush($true)
+    }
+    finally { $markerStream.Dispose() }
     Complete-BetaMutation
     Write-Output $outputAbsolute
 }
