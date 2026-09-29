@@ -33,11 +33,16 @@
     "body_fields": ["organization_id", "provider_profile_id", "bureau_job_id", "status"],
     "provider_profile_id": "passport-beta-bureau",
     "signature": "KMS-held passport-bureau-callback HMAC via internal signing-keys gateway",
+    "disposable_gateway_transport": {
+      "enabled_by": "PASSPORT_BETA_BUREAU_GATEWAY_CALLBACK_ENABLED=true",
+      "exact_url": "http://gateway:8000/v1/passport/webhooks/personalization",
+      "acceptance": "the same-job authenticated private receipt is recorded only after the signed callback succeeds through Rust Gateway and native issuance"
+    },
     "advance_only_after_accepted_callback": true,
     "retry_after_provider_failure": true,
     "tracking_prefix": "BETA-SIM-",
     "signed_receipt_digest": {
-      "when_recorded": "only after the private native callback accepts the exact signed body and the simulator status transition commits",
+      "when_recorded": "only after the selected private callback route accepts the exact signed body and the simulator status transition commits",
       "preimage": "ASCII marty.passport-callback-receipt/v1 followed by NUL, u32 big-endian body byte length, exact callback body bytes, u32 big-endian signature byte length, exact x-personalization-signature UTF-8 bytes",
       "algorithm": "SHA-256",
       "test_vector": {
