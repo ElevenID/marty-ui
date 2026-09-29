@@ -23,8 +23,10 @@ from urllib.request import HTTPRedirectHandler, Request, build_opener
 
 if __package__:
     from .probe_passport_beta_gateway import ProbeError, exercise
+    from .probe_passport_beta_host import HostProbeError
 else:
     from probe_passport_beta_gateway import ProbeError, exercise
+    from probe_passport_beta_host import HostProbeError
 
 
 BETA_ORIGIN = "https://beta.elevenidllc.com"
@@ -307,7 +309,7 @@ def main() -> int:
             after = collect(args.artifact_dir, api_key=api_key, attest=verify_attestations)
             require(all(report[key] == after[key] for key in ("release", "deployment", "runtime_images")), "Beta release or runtime drifted during passport probes")
         args.output.write_text(json.dumps(report, indent=2, sort_keys=True) + "\n", encoding="utf-8")
-    except (EvidenceError, ProbeError, OSError) as exc:
+    except (EvidenceError, ProbeError, HostProbeError, OSError) as exc:
         args.output.write_text(json.dumps({"schema": "marty.passport-beta-acceptance/v1", "status": "blocked", "blocker": str(exc)}, indent=2) + "\n", encoding="utf-8")
         parser.exit(1, f"Passport beta evidence failed: {exc}\n")
     print(f"Wrote blocked passport beta prerequisite evidence: {args.output}")
