@@ -42,7 +42,6 @@ FLAGS = {
 OWNER_LABEL = "com.marty.passport.acceptance.owner"
 SOURCE_LABEL = "com.marty.passport.acceptance.source-commit"
 RUN_LABEL = "com.marty.passport.acceptance.run-id"
-SIMULATOR_SERVICES = frozenset({"passport-callback-signer", "passport-beta-bureau"})
 
 
 class KubernetesPreflightError(ValueError):
@@ -55,10 +54,28 @@ def require(ok: bool, message: str) -> None:
 
 
 def selector_for(name: str, plan_run_id: str) -> dict[str, str]:
-    selector = {"app": name}
-    if name in SIMULATOR_SERVICES:
-        selector.update({OWNER_LABEL: "supported-consumer", RUN_LABEL: plan_run_id})
-    return selector
+    return {"app": name, OWNER_LABEL: "supported-consumer", RUN_LABEL: plan_run_id}
+
+
+def approved_entrypoint(container: dict) -> bool:
+    """Require the released image entrypoint and protect its Rust binaries."""
+    if (container.get("command") not in (None, ["/app/services/entrypoint.sh"])
+            or container.get("args") not in (None, [])):
+        return False
+    mounts = container.get("volumeMounts", [])
+    if not isinstance(mounts, list):
+        return False
+    protected = ("/app/services/entrypoint.sh", "/usr/local/bin",
+                 "/proc/1/exe", "/proc/1/cmdline", "/proc/1/environ")
+    return all(isinstance(mount, dict)
+               and isinstance(mount.get("mountPath"), str)
+               and mount["mountPath"].startswith("/")
+               and not any(target == mount["mountPath"]
+                           or target.startswith(mount["mountPath"].rstrip("/") + "/")
+                           or (target == "/usr/local/bin"
+                               and mount["mountPath"].startswith(target + "/"))
+                           for target in protected)
+               for mount in mounts)
 
 
 def kubernetes_config_value(container: dict, data: dict, name: str) -> object:
@@ -320,6 +337,7 @@ def inspect(
                 and isinstance(containers[0], dict)
                 and containers[0].get("name") == name
                 and containers[0].get("image") == services_reference
+                and approved_entrypoint(containers[0])
                 and spec.get("hostNetwork") is not True
                 and spec.get("hostPID") is not True
                 and spec.get("automountServiceAccountToken") is False,

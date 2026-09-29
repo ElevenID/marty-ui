@@ -39,13 +39,17 @@ def test_language_neutral_contract_matches_closed_model() -> None:
     assert gate.RUN_LABEL == "com.marty.passport.acceptance.run-id"
     assert contract["rust_selectors"] == list(gate.FLAGS.values())
     assert "clusterip_without_external_ips_load_balancer_or_node_ports" in contract["required_identity"]
-    assert "plan_run_id_and_run_bound_simulator_selectors" in contract["required_identity"]
+    assert "plan_run_id_and_run_bound_service_selectors" in contract["required_identity"]
+    assert all(gate.selector_for(name, PLAN_RUN_ID) == {
+        "app": name, gate.OWNER_LABEL: "supported-consumer", gate.RUN_LABEL: PLAN_RUN_ID,
+    } for name in gate.SERVICES)
     assert "immutable_run_scoped_configmap" in contract["required_identity"]
     assert "simulator_profile_routing_and_no_physical_provider_ingress" in contract["required_identity"]
     assert contract["runtime_identity"] == [
         "pod_replicaset_deployment_owner_uid_chain",
         "completed_current_rollout_and_pod_created_after_configmap",
-        "running_process_routing_checked_without_emitting_environment",
+        "all_five_private_service_endpoint_slices_match_owned_pods",
+        "running_rust_binary_and_routing_checked_without_emitting_environment",
         "second_full_identity_preflight_after_runtime_probe",
         "second_simulator_runtime_probe_after_identity_preflight",
     ]
@@ -254,6 +258,18 @@ def test_identity_or_legacy_model_drift_fails_closed(mutate, match: str) -> None
             "deployment/gateway",
             lambda x: x["spec"]["template"]["spec"].update(hostNetwork=True),
             "deployment/gateway is unsafe",
+        ),
+        (
+            "deployment/flow",
+            lambda x: x["spec"]["template"]["spec"]["containers"][0].update(
+                command=["/bin/sh"]),
+            "deployment/flow is unsafe",
+        ),
+        (
+            "deployment/issuance-native",
+            lambda x: x["spec"]["template"]["spec"]["containers"][0].update(
+                volumeMounts=[{"mountPath": "/usr/local/bin/marty-issuance-service"}]),
+            "deployment/issuance-native is unsafe",
         ),
         (
             "deployment/flow",
@@ -480,6 +496,7 @@ def test_collector_rejects_service_replacement_during_runtime_probe(
         calls.append("probe")
         return {
             name: {"deployment_uid": model["resource_uids"][f"deployment/{name}"],
+                   "service_uid": model["resource_uids"][f"service/{name}"],
                    "oci_reference": REFERENCE}
             for name in collector.KUBERNETES_SERVICES
         }
@@ -509,6 +526,7 @@ def test_collector_records_stable_rust_only_identity_as_blocked(
         calls.append(args)
         return {
             name: {"deployment_uid": model["resource_uids"][f"deployment/{name}"],
+                   "service_uid": model["resource_uids"][f"service/{name}"],
                    "oci_reference": REFERENCE, "container_id": name + "-container"}
             for name in collector.KUBERNETES_SERVICES
         }
@@ -541,6 +559,7 @@ def test_collector_rechecks_simulator_routing_after_identity_preflight(
         calls.append("probe")
         runtime = {
             name: {"deployment_uid": model["resource_uids"][f"deployment/{name}"],
+                   "service_uid": model["resource_uids"][f"service/{name}"],
                    "oci_reference": REFERENCE}
             for name in collector.KUBERNETES_SERVICES
         }

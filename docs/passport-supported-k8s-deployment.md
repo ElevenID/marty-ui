@@ -50,10 +50,11 @@ signed aggregate manifest. The read-only preflight checks those identities,
 the selected Rust values in an immutable, run-scoped ConfigMap, and services
 images pinned by digest. The identity plan contains only Rust passport services.
 Services must be ClusterIP without external IPs, load balancer exposure, or
-node ports. Each observed Pod must be owned by a ReplicaSet owned by the
+node ports. Every Service EndpointSlice must target its owned Pod UID and IP.
+Each observed Pod must be owned by a ReplicaSet owned by the
 expected Deployment UID. The collector requires a completed current rollout
 with each Pod created after the
-ConfigMap. It checks the running service process's routing flags through a
+ConfigMap. It checks the running service process's Rust executable and routing flags through a
 bounded Pod exec that emits only a fixed success marker, never environment
 values. The disposable services image includes the shell and utilities used
 for this check; a missing exec permission or utility blocks acceptance.

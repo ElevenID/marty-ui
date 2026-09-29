@@ -144,6 +144,11 @@ def kubernetes_runner(*, mixed_provider: bool = False,
                        pod_host_network: bool = False,
                        template_host_port: bool = False,
                        pod_host_port: bool = False,
+                       foreign_core_address: bool = False,
+                       manual_core_slice: bool = False,
+                       wrong_binary: bool = False,
+                       wrong_pod_command: bool = False,
+                       wrong_template_command: bool = False,
                        second_configmap: bool = False,
                        mutable_config: bool = False,
                        stale_pod: bool = False,
@@ -179,6 +184,9 @@ def kubernetes_runner(*, mixed_provider: bool = False,
                      "env": [{"name": name, "value": value}
                              for name, value in values.items()],
                      "envFrom": container_sources}
+        if (wrong_pod_command and is_pod and service == "issuance-native"
+                or wrong_template_command and not is_pod and service == "issuance-native"):
+            container["command"] = ["/bin/sh"]
         if service == "issuance-native":
             for name in ("PERSONALIZATION_BUREAU_URL",
                          "PERSONALIZATION_BUREAU_PROVIDER_PROFILE_ID"):
@@ -237,6 +245,11 @@ def kubernetes_runner(*, mixed_provider: bool = False,
             assert args[6].endswith("-pod")
             assert args[7:9] == ["-c", args[6].removesuffix("-pod")]
             assert "/proc/1/environ" in args[-1]
+            assert "/proc/1/exe" in args[-1]
+            assert "/proc/1/cmdline" in args[-1]
+            assert gate.KUBERNETES_BINARIES[args[8]] in args[-1]
+            if wrong_binary and args[8] == "issuance-native":
+                return "stale"
             if args[8] in ("gateway", "flow"):
                 assert "ISSUANCE_NATIVE_SERVICE_URL=http://issuance-native:8005" in args[-1]
                 if stale_native_url:
@@ -299,7 +312,7 @@ def kubernetes_runner(*, mixed_provider: bool = False,
             }]})
         if args[6] == "service":
             service = args[7]
-            port = 8020 if service == "passport-beta-bureau" else 8018
+            ports = gate.KUBERNETES_SERVICE_PORTS[service]
             selector = {"app": service,
                         "com.marty.passport.acceptance.owner": "supported-consumer",
                         "com.marty.passport.acceptance.run-id": RUN_ID}
@@ -310,25 +323,29 @@ def kubernetes_runner(*, mixed_provider: bool = False,
                 "spec": {"type": "ClusterIP", "selector": selector,
                          "externalIPs": (["198.51.100.32"] if external_ip and service ==
                                          "passport-beta-bureau" else []),
-                         "ports": [{"name": "http", "port": port,
-                                    "protocol": "TCP", "targetPort": port}]},
+                         "ports": [{"name": name, "port": port,
+                                    "protocol": "TCP", "targetPort": port}
+                                   for name, port in ports]},
             })
         if args[6] == "endpointslices":
             service = args[8].removeprefix("kubernetes.io/service-name=")
-            port = 8020 if service == "passport-beta-bureau" else 8018
+            ports = gate.KUBERNETES_SERVICE_PORTS[service]
             items = []
             for family, address in ([('IPv4', '10.1.2.3'), ('IPv6', 'fd00::3')]
                                     if dual_stack else [('IPv4', '10.1.2.3')]):
                 metadata = metadata_for(service, "EndpointSlice")
                 metadata["uid"] += "-" + family.lower()
                 metadata["labels"]["endpointslice.kubernetes.io/managed-by"] = (
+                    "manual" if manual_core_slice and service == "issuance-native" else
                     "endpointslice-controller.k8s.io")
                 items.append({
                     "metadata": metadata, "addressType": family,
-                    "ports": [{"name": "http", "port": port, "protocol": "TCP"}],
+                    "ports": [{"name": name, "port": port, "protocol": "TCP"}
+                              for name, port in ports],
                     "endpoints": [{"addresses": [
-                        "10.9.9.9" if foreign_address and service ==
-                        "passport-beta-bureau" else address],
+                        "10.9.9.9" if ((foreign_address and service ==
+                        "passport-beta-bureau") or (foreign_core_address and service ==
+                        "issuance-native")) else address],
                         "conditions": {"ready": True},
                         "targetRef": {"kind": "Pod", "namespace": NAMESPACE,
                                       "uid": ("foreign" if wrong_endpoint
@@ -379,6 +396,8 @@ def test_kubernetes_accepts_retained_replicasets_and_dual_stack_routes() -> None
     ("wrong_route", "Service route is outside"),
     ("wrong_endpoint", "Service targets another Pod"),
     ("foreign_address", "Service routes to another address"),
+    ("foreign_core_address", "Service routes to another address"),
+    ("manual_core_slice", "EndpointSlice is outside"),
     ("external_ip", "Service route is outside"),
     ("wrong_source", "owner labels are invalid"),
     ("template_host_network", "private Pod uses the host network"),
@@ -417,6 +436,13 @@ def test_kubernetes_runtime_rejects_stale_configuration_or_rollout() -> None:
     with pytest.raises(gate.SupportedEvidenceError, match="running process routing"):
         gate.observe_kubernetes(NAMESPACE, CONTEXT, REFERENCE,
                                 COMMIT, kubernetes_runner(stale_native_url=True))
+    with pytest.raises(gate.SupportedEvidenceError, match="running process routing"):
+        gate.observe_kubernetes(NAMESPACE, CONTEXT, REFERENCE,
+                                COMMIT, kubernetes_runner(wrong_binary=True))
+    for defect in ("wrong_pod_command", "wrong_template_command"):
+        with pytest.raises(gate.SupportedEvidenceError, match="entrypoint is overridden"):
+            gate.observe_kubernetes(NAMESPACE, CONTEXT, REFERENCE,
+                                    COMMIT, kubernetes_runner(**{defect: True}))
 
 
 def test_kubernetes_mixed_provider_is_rejected() -> None:
