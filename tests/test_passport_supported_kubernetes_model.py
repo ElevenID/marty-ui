@@ -274,6 +274,18 @@ def test_identity_or_legacy_model_drift_fails_closed(mutate, match: str) -> None
         (
             "deployment/flow",
             lambda x: x["spec"]["template"]["spec"]["containers"][0].update(
+                volumeMounts=[{"mountPath": "/usr/bin/readlink"}]),
+            "deployment/flow is unsafe",
+        ),
+        (
+            "deployment/flow",
+            lambda x: x["spec"]["template"]["spec"]["containers"][0].update(
+                volumeMounts=[{"mountPath": "/app/services/../services/entrypoint.sh"}]),
+            "deployment/flow is unsafe",
+        ),
+        (
+            "deployment/flow",
+            lambda x: x["spec"]["template"]["spec"]["containers"][0].update(
                 image="ghcr.io/elevenid/marty-credentials-issuance@sha256:" + "f" * 64
             ),
             "deployment/flow is unsafe",

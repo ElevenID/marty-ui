@@ -11,6 +11,7 @@ import argparse
 import base64
 import hashlib
 import json
+import posixpath
 import re
 import subprocess
 from collections.abc import Callable
@@ -65,15 +66,14 @@ def approved_entrypoint(container: dict) -> bool:
     mounts = container.get("volumeMounts", [])
     if not isinstance(mounts, list):
         return False
-    protected = ("/app/services/entrypoint.sh", "/usr/local/bin",
-                 "/proc/1/exe", "/proc/1/cmdline", "/proc/1/environ")
+    protected = ("/app/services", "/usr/local/bin", "/bin", "/usr/bin", "/proc")
     return all(isinstance(mount, dict)
                and isinstance(mount.get("mountPath"), str)
                and mount["mountPath"].startswith("/")
+               and mount["mountPath"] == posixpath.normpath(mount["mountPath"])
                and not any(target == mount["mountPath"]
                            or target.startswith(mount["mountPath"].rstrip("/") + "/")
-                           or (target == "/usr/local/bin"
-                               and mount["mountPath"].startswith(target + "/"))
+                           or mount["mountPath"].startswith(target + "/")
                            for target in protected)
                for mount in mounts)
 

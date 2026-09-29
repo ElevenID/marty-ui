@@ -149,6 +149,7 @@ def kubernetes_runner(*, mixed_provider: bool = False,
                        wrong_binary: bool = False,
                        wrong_pod_command: bool = False,
                        wrong_template_command: bool = False,
+                       inspection_utility_mount: bool = False,
                        second_configmap: bool = False,
                        mutable_config: bool = False,
                        stale_pod: bool = False,
@@ -187,6 +188,8 @@ def kubernetes_runner(*, mixed_provider: bool = False,
         if (wrong_pod_command and is_pod and service == "issuance-native"
                 or wrong_template_command and not is_pod and service == "issuance-native"):
             container["command"] = ["/bin/sh"]
+        if inspection_utility_mount and is_pod and service == "issuance-native":
+            container["volumeMounts"] = [{"mountPath": "/bin/sh"}]
         if service == "issuance-native":
             for name in ("PERSONALIZATION_BUREAU_URL",
                          "PERSONALIZATION_BUREAU_PROVIDER_PROFILE_ID"):
@@ -439,7 +442,8 @@ def test_kubernetes_runtime_rejects_stale_configuration_or_rollout() -> None:
     with pytest.raises(gate.SupportedEvidenceError, match="running process routing"):
         gate.observe_kubernetes(NAMESPACE, CONTEXT, REFERENCE,
                                 COMMIT, kubernetes_runner(wrong_binary=True))
-    for defect in ("wrong_pod_command", "wrong_template_command"):
+    for defect in ("wrong_pod_command", "wrong_template_command",
+                   "inspection_utility_mount"):
         with pytest.raises(gate.SupportedEvidenceError, match="entrypoint is overridden"):
             gate.observe_kubernetes(NAMESPACE, CONTEXT, REFERENCE,
                                     COMMIT, kubernetes_runner(**{defect: True}))
