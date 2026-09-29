@@ -6,7 +6,7 @@ deployment. The prior 1.1.217 release predates the reviewed passport aggregate
 and cannot supply the exact Rust images for protected disposable acceptance.
 
 Before changing the lock to `eligible`, merge the aggregate passport correction
-and beta writer fence through protected `main`. Record that exact main SHA and
+and deployment/restore writer fence through protected `main`. Record that exact main SHA and
 confirm every pinned component artifact and revision still matches the source.
 Recheck that the tag, GitHub release, and all three public image coordinates are
 absent. In a separate reviewed change, make the lock eligible and pass protected
@@ -21,8 +21,14 @@ deployment. The required base Compose, selfhost Compose, and independent
 Kubernetes proofs must exercise the Rust nine-route flow, Marty simulator,
 KMS-backed issuer profile and certificate chain, signed same-job callback,
 batch behavior, job restart/resume, and production isolation. Separately,
-attest the real beta writer stop and cutover drain against the exact source;
-a failed drain blocks cutover and must preserve every existing job and artifact. Independent
+attest a durable passport-scoped write fence and the real beta cutover drain
+against the exact source; a failed drain blocks cutover and must preserve every
+existing job and artifact. The current beta Python `issuance` container also
+serves unrelated routes, so stopping the whole container would lose those
+features. Credentials PR #305 currently requires that whole writer to be
+stopped; its gate and the missing protected producer must be revised together
+to verify a passport-scoped fence. The deployment/restore mutex alone does not
+fence live passport writes. Independent
 review must resolve regression findings before Python passport deletion.
 
 Once those gates pass, verify the exact head of the prepared

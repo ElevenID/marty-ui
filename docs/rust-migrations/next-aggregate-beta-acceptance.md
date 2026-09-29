@@ -1,7 +1,7 @@
 # Next aggregate beta: acceptance checklist
 
 Source-readiness audit: Signing Keys #913 and the passport aggregate #919 are
-on protected main. The remaining aggregate correction and beta writer fence
+on protected main. The remaining aggregate correction and deployment writer fence
 must pass protected checks and merge before a release claim. The
 [held 1.1.218 coordinate](passport-predeletion-release-1.1.218.md) is for
 reviewed Rust pre-deletion qualification; it does not authorize a claim or
@@ -50,11 +50,14 @@ The final beta release must come from the source after Python passport deletion.
 3. Pass the reviewed base Compose, selfhost Compose, and independent Kubernetes
    Rust passport proofs, KMS chain and certificate gates, signed callback,
    two-job batch, and job restart/resume in the protected disposable
-   environments. Separately stop and inventory the real beta Python passport
-   writers under the reviewed writer fence, attest the live cutover drain,
-   preserve or resolve every job and artifact. Verify the exact head of the
+   environments. Separately install and attest a durable passport-scoped
+   write fence on real beta, then inventory the shared Python issuance service,
+   attest the live cutover drain, and preserve or resolve every job and artifact.
+   The service also owns unrelated routes and must remain available; its
+   passport write paths must be blocked. Verify the exact head of the
    [Credentials deletion PR](https://github.com/ElevenID/marty-credentials/pull/305)
-   and implement the missing protected final cutover producer. Attest the
+   revise its whole-container-stop gate for the scoped fence, and implement
+   the missing protected final cutover producer. Attest the
    later beta drain watermark against that head, pass its post-cutover CI,
    and resolve review findings before merging the deletion. The producer and
    live receipts are absent today, so this gate is still blocked.
