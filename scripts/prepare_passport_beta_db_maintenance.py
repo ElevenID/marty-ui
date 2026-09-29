@@ -19,6 +19,10 @@ try:
         NativeMigrationError, checked_receipt,
     )
     from .probe_passport_beta_fence_target import REQUIRED_SERVICES, observe_fenced
+    from .probe_passport_beta_cutover_snapshot import (
+        ZERO_COUNT_WATERMARK_SQL, validate_direct_probe,
+    )
+    from .verify_passport_beta_protected_cutover import verify as verify_cutover_report
     from .probe_passport_beta_host import (
         BETA_PROJECT, HostProbeError, beta_psql, ids, inspect,
         production_attachment_sha256, production_snapshot, run,
@@ -32,6 +36,10 @@ except ImportError:
         NativeMigrationError, checked_receipt,
     )
     from probe_passport_beta_fence_target import REQUIRED_SERVICES, observe_fenced
+    from probe_passport_beta_cutover_snapshot import (
+        ZERO_COUNT_WATERMARK_SQL, validate_direct_probe,
+    )
+    from verify_passport_beta_protected_cutover import verify as verify_cutover_report
     from probe_passport_beta_host import (
         BETA_PROJECT, HostProbeError, beta_psql, ids, inspect,
         production_attachment_sha256, production_snapshot, run,
@@ -127,6 +135,7 @@ def running_beta_generation(
 
 def prepare(
     manifest_path: Path, receipt_path: Path, snapshot_path: Path,
+    report_path: Path,
     runner: Callable[[list[str]], str] = run,
     observer: Callable[[Callable[[list[str]], str]], dict[str, Any]] = observe_fenced,
 ) -> dict[str, Any]:
@@ -180,6 +189,21 @@ def prepare(
                 == docker.get("daemon_id"),
             "Docker context changed during maintenance planning")
     snapshot = checked_snapshot(snapshot_path, receipt)
+    report = verify_cutover_report(
+        report_path, source_commit=head,
+        deletion_head=receipt.get("credentials_deletion_head", ""),
+        snapshot=snapshot, snapshot_file_sha256=file_sha256(snapshot_path),
+        receipt=receipt,
+    )
+    database_uid = f"postgresql:{receipt_target['system_id']}:{receipt_target['database_oid']}"
+    validate_direct_probe(snapshot["fence_first_probe"],
+                          postgres=receipt_target["container_id"],
+                          database_uid=database_uid,
+                          epoch=int(receipt_target["fence_epoch"]), docker=docker)
+    validate_direct_probe(snapshot["direct_database_probe"],
+                          postgres=receipt_target["container_id"],
+                          database_uid=database_uid,
+                          epoch=int(receipt_target["fence_epoch"]), docker=docker)
     writer = services.get("issuance")
     live_writer = inspect(writer["container_id"], runner) if isinstance(writer, dict) else {}
     live_config = live_writer.get("Config")
@@ -189,7 +213,8 @@ def prepare(
         if isinstance(live_config, dict) else None
     require(isinstance(writer, dict)
             and snapshot.get("database_uid")
-                == f"postgresql:{receipt_target['system_id']}:{receipt_target['database_oid']}"
+                == database_uid
+            and snapshot.get("beta_cluster_uid") == f"docker:{docker['daemon_id']}"
             and snapshot.get("fence_epoch") == int(receipt_target["fence_epoch"])
             and snapshot.get("fence_verification_sha256")
                 == hashlib.sha256(json.dumps(receipt.get("fence"), sort_keys=True,
@@ -202,6 +227,8 @@ def prepare(
             and snapshot.get("production_attachments_sha256")
                 == receipt["production_attachments_sha256"]
             and snapshot.get("writer_container_id") == writer.get("container_id")
+            and snapshot.get("writer_deployment_uid")
+                == f"elevenid-beta:issuance:{writer.get('container_id')}"
             and snapshot.get("writer_started_at") == writer.get("started_at")
             and snapshot.get("writer_generation") == writer.get("restart_count")
             and type(snapshot.get("writer_generation")) is int
@@ -225,6 +252,13 @@ def prepare(
                     and item["started_at"] == writer["started_at"]
                     for item in generation),
             "Cutover snapshot differs from the live fenced Python writer")
+    count_watermark = beta_psql(
+        ZERO_COUNT_WATERMARK_SQL, runner, receipt_target["container_id"],
+    ).split("|", 2)
+    require(len(count_watermark) == 3 and count_watermark[0] == "0"
+            and count_watermark[1].isdecimal()
+            and int(count_watermark[1]) > snapshot["observation_watermark"],
+            "Passport jobs appeared or the protected cutover snapshot is stale")
     return {
         "schema": "marty.passport-beta-db-maintenance-plan/v1",
         "source_commit": head,
@@ -244,6 +278,9 @@ def prepare(
         "cutover_snapshot_path": str(snapshot_path.resolve(strict=True)),
         "cutover_snapshot_file_sha256": file_sha256(snapshot_path),
         "cutover_snapshot_sha256": snapshot["snapshot_sha256"],
+        "cutover_report_path": str(report_path.resolve(strict=True)),
+        "cutover_report_file_sha256": report["cutover_report_file_sha256"],
+        "cutover_report_run_id": report["cutover_report_run_id"],
         "legacy_writer_container_id": writer["container_id"],
         "legacy_writer_image_digest": snapshot["writer_image_digest"],
         "legacy_writer_started_at": writer["started_at"],
@@ -256,7 +293,7 @@ def prepare(
 
 def verify_plan(
     plan: dict[str, Any], manifest_path: Path, receipt_path: Path,
-    snapshot_path: Path,
+    snapshot_path: Path, report_path: Path,
     *, require_stopped: bool,
     runner: Callable[[list[str]], str] = run,
 ) -> dict[str, Any]:
@@ -290,9 +327,30 @@ def verify_plan(
                 == receipt_raw.get("post_install_observation_sha256"),
             "Maintenance intent differs from fence installation receipt")
     snapshot = checked_snapshot(snapshot_path, receipt_raw)
+    report = verify_cutover_report(
+        report_path, source_commit=head,
+        deletion_head=receipt_raw.get("credentials_deletion_head", ""),
+        snapshot=snapshot, snapshot_file_sha256=file_sha256(snapshot_path),
+        receipt=receipt_raw,
+    )
+    docker = plan.get("docker")
+    require(isinstance(docker, dict), "Maintenance Docker identity is invalid")
+    database_uid = f"postgresql:{receipt['system_id']}:{receipt['database_oid']}"
+    validate_direct_probe(snapshot["fence_first_probe"],
+                          postgres=receipt["container_id"],
+                          database_uid=database_uid,
+                          epoch=int(receipt["fence_epoch"]), docker=docker)
+    validate_direct_probe(snapshot["direct_database_probe"],
+                          postgres=receipt["container_id"],
+                          database_uid=database_uid,
+                          epoch=int(receipt["fence_epoch"]), docker=docker)
     require(plan.get("cutover_snapshot_path") == str(snapshot_path.resolve(strict=True))
             and plan.get("cutover_snapshot_file_sha256") == file_sha256(snapshot_path)
             and plan.get("cutover_snapshot_sha256") == snapshot["snapshot_sha256"]
+            and plan.get("cutover_report_path") == str(report_path.resolve(strict=True))
+            and plan.get("cutover_report_file_sha256")
+                == report["cutover_report_file_sha256"]
+            and plan.get("cutover_report_run_id") == report["cutover_report_run_id"]
             and plan.get("legacy_writer_container_id")
                 == snapshot.get("writer_container_id")
             and plan.get("legacy_writer_image_digest")
@@ -302,7 +360,10 @@ def verify_plan(
             and plan.get("legacy_writer_generation")
                 == snapshot.get("writer_generation")
             and snapshot.get("database_uid")
-                == f"postgresql:{receipt['system_id']}:{receipt['database_oid']}"
+                == database_uid
+            and snapshot.get("beta_cluster_uid") == f"docker:{docker['daemon_id']}"
+            and snapshot.get("writer_deployment_uid")
+                == f"elevenid-beta:issuance:{plan.get('legacy_writer_container_id')}"
             and snapshot.get("fence_epoch") == int(receipt["fence_epoch"])
             and snapshot.get("fence_verification_sha256")
                 == hashlib.sha256(json.dumps(receipt_raw.get("fence"), sort_keys=True,
@@ -406,6 +467,7 @@ def main() -> None:
     parser.add_argument("--stack-manifest", type=Path, required=True)
     parser.add_argument("--fence-receipt", type=Path, required=True)
     parser.add_argument("--cutover-snapshot", type=Path, required=True)
+    parser.add_argument("--cutover-report", type=Path, required=True)
     parser.add_argument("--verify-plan", type=Path)
     parser.add_argument("--require-stopped", action="store_true")
     args = parser.parse_args()
@@ -413,12 +475,12 @@ def main() -> None:
         if args.verify_plan:
             plan = json.loads(args.verify_plan.read_text(encoding="utf-8"))
             result = verify_plan(plan, args.stack_manifest, args.fence_receipt,
-                                 args.cutover_snapshot,
+                                 args.cutover_snapshot, args.cutover_report,
                                  require_stopped=args.require_stopped)
         else:
             require(not args.require_stopped, "A maintenance plan is required")
             result = prepare(args.stack_manifest, args.fence_receipt,
-                             args.cutover_snapshot)
+                             args.cutover_snapshot, args.cutover_report)
         print(json.dumps(result,
                          sort_keys=True, separators=(",", ":")))
     except (HostProbeError, NativeMigrationError, OSError, ValueError, KeyError) as exc:

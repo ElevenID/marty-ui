@@ -67,6 +67,8 @@ def candidate():
         "fence_receipt_sha256": "2" * 64,
         "cutover_snapshot_file_sha256": "a" * 64,
         "cutover_snapshot_sha256": "b" * 64,
+        "cutover_report_file_sha256": "d" * 64,
+        "cutover_report_run_id": 42,
         "legacy_writer_container_id": next(item["container_id"] for item in generation
                                            if item["service"] == "issuance"),
         "legacy_writer_image_digest": "sha256:" + "c" * 64,
@@ -93,6 +95,8 @@ def candidate():
         "beta_generation": generation,
         "cutover_snapshot_file_sha256": handoff["cutover_snapshot_file_sha256"],
         "cutover_snapshot_sha256": handoff["cutover_snapshot_sha256"],
+        "cutover_report_file_sha256": handoff["cutover_report_file_sha256"],
+        "cutover_report_run_id": handoff["cutover_report_run_id"],
         "legacy_writer_container_id": handoff["legacy_writer_container_id"],
         "legacy_writer_image_digest": handoff["legacy_writer_image_digest"],
         "legacy_writer_started_at": handoff["legacy_writer_started_at"],
@@ -375,8 +379,12 @@ def test_resume_accepts_partial_signed_generation_after_login(monkeypatch, tmp_p
                           plan["enable_login_sql_sha256"]}
     snapshot_path = tmp_path / "cutover-snapshot.json"
     snapshot_path.write_text("{}", encoding="utf-8")
+    report_path = tmp_path / "cutover-report.json"
+    report_path.write_text("{}", encoding="utf-8")
     receipt_hashes[snapshot_path.name] = plan["cutover_snapshot_file_sha256"]
+    receipt_hashes[report_path.name] = plan["cutover_report_file_sha256"]
     intent["cutover_snapshot_path"] = str(snapshot_path)
+    intent["cutover_report_path"] = str(report_path)
     monkeypatch.setattr(compose, "file_sha256", lambda path: receipt_hashes[path.name])
     (tmp_path / "maintenance").write_text(json.dumps({
         "schema": "marty.passport-beta-db-maintenance-start/v1",
@@ -388,6 +396,7 @@ def test_resume_accepts_partial_signed_generation_after_login(monkeypatch, tmp_p
         "stopped_container_ids": intent["stop_container_ids"],
         **{field: plan[field] for field in (
             "cutover_snapshot_file_sha256", "cutover_snapshot_sha256",
+            "cutover_report_file_sha256", "cutover_report_run_id",
             "legacy_writer_container_id", "legacy_writer_image_digest",
             "legacy_writer_started_at", "legacy_writer_generation")},
     }), encoding="utf-8")

@@ -67,6 +67,7 @@ PROTECTED_FILES = (
     "scripts/verify_passport_beta_aggregate_runtime.py",
     "scripts/run-passport-beta-aggregate-deploy.ps1",
     "scripts/probe_passport_beta_cutover_snapshot.py",
+    "scripts/verify_passport_beta_protected_cutover.py",
     "docker-compose.base.yml",
     "docker-compose.beta.yml",
     "docker-compose.profile.dev.yml",
