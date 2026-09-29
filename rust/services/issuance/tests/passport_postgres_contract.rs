@@ -1395,6 +1395,20 @@ async fn passport_jobs_survive_restart_without_cross_tenant_reads() {
     .await
     .unwrap();
     migration::migrate_passport(&pool).await.unwrap(); // startup is idempotent
+    let lf_intent_migration =
+        include_str!("../migrations/0004_passport_submission_intent.sql").replace("\r\n", "\n");
+    let crlf_intent_migration = lf_intent_migration.replace('\n', "\r\n");
+    // Both strings are the checked-in migration with line endings changed only.
+    sqlx::raw_sql(sqlx::AssertSqlSafe(crlf_intent_migration.as_str()))
+        .execute(&pool)
+        .await
+        .unwrap();
+    migration::validate_passport(&pool).await.unwrap();
+    sqlx::raw_sql(sqlx::AssertSqlSafe(lf_intent_migration.as_str()))
+        .execute(&pool)
+        .await
+        .unwrap();
+    migration::validate_passport(&pool).await.unwrap();
     let read_only_pool = PgPoolOptions::new()
         .max_connections(1)
         .connect(&database_url)

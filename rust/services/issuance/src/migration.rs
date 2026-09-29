@@ -339,7 +339,7 @@ async fn validate_passport_connection(
     let intent_guard = sqlx::query(
         "SELECT t.tgenabled::text AS tgenabled, t.tgtype::integer AS trigger_type,
                 md5(pg_get_triggerdef(t.oid)) AS trigger_md5,
-                md5(pg_get_functiondef(p.oid)) AS function_md5
+                md5(replace(pg_get_functiondef(p.oid), E'\r\n', E'\n')) AS function_md5
          FROM pg_trigger AS t
          JOIN pg_proc AS p ON p.oid=t.tgfoid
          JOIN pg_namespace AS namespace ON namespace.oid=p.pronamespace
@@ -360,7 +360,7 @@ async fn validate_passport_connection(
     if !["O", "A"].contains(&enabled.as_str())
         || intent_guard.try_get::<i32, _>("trigger_type")? != 19
         || intent_guard.try_get::<String, _>("trigger_md5")? != "2cf46bf0d5d5d2794b8eb6346ef30622"
-        || intent_guard.try_get::<String, _>("function_md5")? != "467fa85f76fc97b3aa55ec62ad6b0e45"
+        || intent_guard.try_get::<String, _>("function_md5")? != "936f63e7df56a3d116b98dadc7645158"
     {
         return Err(sqlx::Error::Protocol(
             "passport submission intent guard trigger is incompatible".into(),
