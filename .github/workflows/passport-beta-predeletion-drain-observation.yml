@@ -13,13 +13,12 @@ concurrency:
   group: passport-beta-predeletion-drain-observation
   cancel-in-progress: false
 
-permissions:
-  contents: read
-  id-token: write
-  attestations: write
-
 jobs:
   observe:
+    permissions:
+      contents: read
+      id-token: write
+      attestations: write
     if: github.ref == 'refs/heads/main'
     runs-on: [self-hosted, linux, x64, canvas-oss-wsl2]
     environment: beta-lifecycle

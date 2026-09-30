@@ -17,14 +17,13 @@ concurrency:
   group: passport-python-deletion-cutover
   cancel-in-progress: false
 
-permissions:
-  actions: read
-  attestations: write
-  contents: read
-  id-token: write
-
 jobs:
   collect:
+    permissions:
+      actions: read
+      attestations: write
+      contents: read
+      id-token: write
     if: github.ref == 'refs/heads/main'
     runs-on: [self-hosted, linux, x64, canvas-oss-wsl2]
     environment: beta-lifecycle

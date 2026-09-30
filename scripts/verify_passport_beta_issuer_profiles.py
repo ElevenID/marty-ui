@@ -16,12 +16,9 @@ import os
 import re
 import secrets
 import subprocess
+import tempfile
+from pathlib import Path
 from typing import Any, Callable
-
-from cryptography import x509
-from cryptography.exceptions import InvalidSignature
-from cryptography.hazmat.primitives import hashes, serialization
-from cryptography.hazmat.primitives.asymmetric import ec
 
 
 class IssuerProfileEvidenceError(ValueError):
@@ -29,6 +26,77 @@ class IssuerProfileEvidenceError(ValueError):
 
 
 CONTAINER_ID = re.compile(r"[0-9a-f]{64}\Z")
+P256_SPKI_PREFIX = bytes.fromhex(
+    "3059301306072a8648ce3d020106082a8648ce3d03010703420004")
+
+
+def _spki(public_pem: bytes) -> bytes:
+    try:
+        lines = public_pem.decode("ascii").strip().splitlines()
+        if (len(lines) < 3 or lines[0] != "-----BEGIN PUBLIC KEY-----"
+            or lines[-1] != "-----END PUBLIC KEY-----"):
+            raise ValueError("public key PEM boundary")
+        spki = base64.b64decode("".join(lines[1:-1]), validate=True)
+    except (UnicodeError, ValueError, binascii.Error) as exc:
+        raise IssuerProfileEvidenceError("Managed issuer public key is invalid") from exc
+    if len(spki) != len(P256_SPKI_PREFIX) + 64 or not spki.startswith(P256_SPKI_PREFIX):
+        raise IssuerProfileEvidenceError("Managed issuer certificate key is not ES256")
+    return spki
+
+
+def _certificate_material(certificate: bytes, inform: str) -> tuple[bytes, bytes]:
+    if inform not in ("PEM", "DER") or not certificate or len(certificate) > 65536:
+        raise IssuerProfileEvidenceError("Managed issuer certificate is invalid")
+    outputs = []
+    with tempfile.TemporaryDirectory(prefix="passport-issuer-cert-") as root:
+        certificate_path = Path(root) / "certificate"
+        certificate_path.write_bytes(certificate)
+        for option in (("-outform", "DER"), ("-pubkey", "-noout")):
+            try:
+                result = subprocess.run(
+                    ["openssl", "x509", "-inform", inform, "-in", str(certificate_path),
+                     *option],
+                    capture_output=True, check=False, timeout=20,
+                )
+            except (OSError, subprocess.SubprocessError) as exc:
+                raise IssuerProfileEvidenceError("Managed issuer certificate is invalid") from exc
+            if result.returncode != 0 or not result.stdout or len(result.stdout) > 65536:
+                raise IssuerProfileEvidenceError("Managed issuer certificate is invalid")
+            outputs.append(result.stdout)
+    if inform == "DER" and outputs[0] != certificate:
+        raise IssuerProfileEvidenceError("Managed issuer certificate has trailing DER data")
+    if inform == "PEM":
+        try:
+            lines = certificate.decode("ascii").strip().splitlines()
+            if (len(lines) < 3 or lines[0] != "-----BEGIN CERTIFICATE-----"
+                or lines[-1] != "-----END CERTIFICATE-----"
+                or base64.b64decode("".join(lines[1:-1]), validate=True) != outputs[0]):
+                raise ValueError("noncanonical certificate PEM")
+        except (UnicodeError, ValueError, binascii.Error) as exc:
+            raise IssuerProfileEvidenceError("Managed issuer certificate PEM is invalid") from exc
+    public_pem = outputs[1]
+    _spki(public_pem)
+    return outputs[0], public_pem
+
+
+def _verify_signature(public_pem: bytes, signature: bytes, challenge: bytes) -> None:
+    with tempfile.TemporaryDirectory(prefix="passport-issuer-verify-") as root:
+        key_path = Path(root) / "public.pem"
+        signature_path = Path(root) / "signature.der"
+        key_path.write_bytes(public_pem)
+        signature_path.write_bytes(signature)
+        try:
+            result = subprocess.run(
+                ["openssl", "dgst", "-sha256", "-verify", str(key_path),
+                 "-signature", str(signature_path)],
+                input=challenge, capture_output=True, check=False, timeout=20,
+            )
+        except (OSError, subprocess.SubprocessError) as exc:
+            raise IssuerProfileEvidenceError(
+                "Current managed key cannot sign for selected certificate") from exc
+        if result.returncode != 0 or result.stdout.strip() != b"Verified OK":
+            raise IssuerProfileEvidenceError(
+                "Current managed key cannot sign for selected certificate")
 
 
 def _post_in_container(container_id: str, route: str, body: dict[str, Any]) -> dict[str, Any]:
@@ -200,21 +268,19 @@ def verify_profile_certificates(
     try:
         if not isinstance(csca_certificate_pem, str):
             raise ValueError("missing CSCA PEM")
-        csca_certificate = x509.load_pem_x509_certificate(csca_certificate_pem.encode("ascii"))
-        csca_der = csca_certificate.public_bytes(serialization.Encoding.DER)
-    except (ValueError, UnicodeError) as exc:
+        csca_der, csca_public_pem = _certificate_material(
+            csca_certificate_pem.encode("ascii"), "PEM")
+    except (ValueError, UnicodeError, IssuerProfileEvidenceError) as exc:
         raise IssuerProfileEvidenceError("CSCA ceremony certificate is invalid") from exc
     if hashlib.sha256(csca_der).hexdigest() != csca_expected:
         raise IssuerProfileEvidenceError("CSCA certificate differs from ceremony")
     jwk = csca_resolution.get("public_jwk")
-    public_key = csca_certificate.public_key()
-    if (not isinstance(jwk, dict) or jwk.get("kty") != "EC" or jwk.get("crv") != "P-256"
-            or not isinstance(public_key, ec.EllipticCurvePublicKey)
-            or not isinstance(public_key.curve, ec.SECP256R1)):
+    if not isinstance(jwk, dict) or jwk.get("kty") != "EC" or jwk.get("crv") != "P-256":
         raise IssuerProfileEvidenceError("CSCA certificate does not use the resolved managed key")
-    coordinates = public_key.public_numbers()
-    if (jwk.get("x") != base64.urlsafe_b64encode(coordinates.x.to_bytes(32, "big")).decode().rstrip("=")
-            or jwk.get("y") != base64.urlsafe_b64encode(coordinates.y.to_bytes(32, "big")).decode().rstrip("=")):
+    spki = _spki(csca_public_pem)
+    x, y = spki[len(P256_SPKI_PREFIX):len(P256_SPKI_PREFIX) + 32], spki[-32:]
+    if (jwk.get("x") != base64.urlsafe_b64encode(x).decode().rstrip("=")
+            or jwk.get("y") != base64.urlsafe_b64encode(y).decode().rstrip("=")):
         raise IssuerProfileEvidenceError("CSCA certificate does not use the resolved managed key")
     x5c = dsc_resolution.get("issuer_x5c")
     if not isinstance(x5c, list) or not x5c or not isinstance(x5c[0], str):
@@ -250,12 +316,12 @@ def verify_live_signatures(
         organization_id, csca_issuer_did, dsc_issuer_did,
         csca_resolution, dsc_resolution, chain_evidence, csca_certificate_pem, api_key,
     )
-    csca_certificate = x509.load_pem_x509_certificate(csca_certificate_pem.encode("ascii"))
+    _, csca_public_pem = _certificate_material(csca_certificate_pem.encode("ascii"), "PEM")
     dsc_der = base64.b64decode(dsc_resolution["issuer_x5c"][0], validate=True)
-    dsc_certificate = x509.load_der_x509_certificate(dsc_der)
-    for role, did, resolution, certificate in (
-        ("csca", csca_issuer_did, csca_resolution, csca_certificate),
-        ("x509_doc_signer", dsc_issuer_did, dsc_resolution, dsc_certificate),
+    _, dsc_public_pem = _certificate_material(dsc_der, "DER")
+    for role, did, resolution, public_pem in (
+        ("csca", csca_issuer_did, csca_resolution, csca_public_pem),
+        ("x509_doc_signer", dsc_issuer_did, dsc_resolution, dsc_public_pem),
     ):
         challenge = secrets.token_bytes(48)
         signed = signer(organization_id, did, role, challenge)
@@ -270,11 +336,8 @@ def verify_live_signatures(
         try:
             signature_text = signed["signature_b64"]
             signature = base64.urlsafe_b64decode(signature_text + "=" * (-len(signature_text) % 4))
-            public_key = certificate.public_key()
-            if not isinstance(public_key, ec.EllipticCurvePublicKey):
-                raise IssuerProfileEvidenceError("Managed issuer certificate key is not ES256")
-            public_key.verify(signature, challenge, ec.ECDSA(hashes.SHA256()))
-        except (ValueError, binascii.Error, InvalidSignature) as exc:
+            _verify_signature(public_pem, signature, challenge)
+        except (ValueError, binascii.Error) as exc:
             raise IssuerProfileEvidenceError("Current managed key cannot sign for selected certificate") from exc
     return {
         "csca_issuer_profile_commitment": binding["csca_issuer_profile_commitment"],

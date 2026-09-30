@@ -139,6 +139,17 @@ def test_live_profile_certificates_bind_to_governed_chain() -> None:
         check()
 
 
+def test_certificate_material_rejects_trailing_der_or_extra_pem() -> None:
+    csca_pem, dsc_pem, _ = certificates()
+    dsc_der = x509.load_pem_x509_certificate(dsc_pem.encode()).public_bytes(
+        serialization.Encoding.DER)
+    with pytest.raises(IssuerProfileEvidenceError, match="trailing DER"):
+        profile_evidence._certificate_material(dsc_der + b"JUNK", "DER")
+    with pytest.raises(IssuerProfileEvidenceError, match="PEM is invalid"):
+        profile_evidence._certificate_material(
+            (csca_pem + "JUNK").encode("ascii"), "PEM")
+
+
 def test_private_resolution_keeps_token_inside_selected_container(monkeypatch) -> None:
     calls = []
 
