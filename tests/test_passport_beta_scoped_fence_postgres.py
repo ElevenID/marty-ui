@@ -5,6 +5,7 @@ from __future__ import annotations
 import os
 import json
 from pathlib import Path
+import shutil
 import subprocess
 import time
 import uuid
@@ -528,8 +529,10 @@ def test_one_shot_migration_role_preserves_fence_at_rest(
                "BETA_TEST_SYSTEM_ID": system_id,
                "BETA_TEST_DATABASE_OID": database_oid,
                "BETA_TEST_PASSWORD": "a" * 64}
+        shell = shutil.which("pwsh") or shutil.which("powershell")
+        assert shell is not None, "PowerShell is required for migration lease proof"
         result = subprocess.run(
-            ["powershell", "-NoProfile", "-NonInteractive", "-Command", code],
+            [shell, "-NoProfile", "-NonInteractive", "-Command", code],
             capture_output=True, text=True, timeout=30, env=env,
         )
         assert result.returncode == 0, result.stderr

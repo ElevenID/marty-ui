@@ -81,12 +81,17 @@ impl CredentialTemplateProvider for Templates {
         &self,
         id: &str,
     ) -> Result<CredentialTemplateReference, FlowProviderError> {
-        assert_eq!(id, "template-1");
+        assert!(matches!(id, "template-1" | "template-physical"));
+        let physical = id == "template-physical";
         Ok(serde_json::from_value(json!({
             "id":id,"organization_id":self.tenant,"status":"ACTIVE",
-            "credential_type":"EmployeeCredential","vct":"https://issuer.example/credentials/EmployeeCredential",
-            "issuer_did":"did:web:issuer.example","credential_format":"dc+sd-jwt",
-            "issuer_algorithm":"EdDSA","wallet_configurations":[]
+            "credential_type":if physical {"Passport"} else {"EmployeeCredential"},
+            "vct":if physical {"https://issuer.example/credentials/Passport"} else {"https://issuer.example/credentials/EmployeeCredential"},
+            "issuer_did":"did:web:issuer.example",
+            "credential_format":if physical {"ICAO_EMRTD"} else {"dc+sd-jwt"},
+            "issuance_protocol":if physical {"PHYSICAL_DOCUMENT"} else {"OPENID4VCI"},
+            "issuer_algorithm":if physical {"ES256"} else {"EdDSA"},
+            "wallet_configurations":[]
         })).unwrap())
     }
 }
@@ -141,6 +146,7 @@ fn definition(kind: &str) -> FlowDefinitionRecord {
     let mut body = json!({"organization_id":"org-1","name":"Native Flow consumer fixture",
         "flow_type":kind,"credential_template_id":"template-1"});
     if kind == "physical_document_issuance" {
+        body["credential_template_id"] = json!("template-physical");
         body["application_template_id"] = json!("application-template-1");
         body["delivery_destination_profile_id"] = json!("destination-1");
     }
