@@ -170,7 +170,9 @@ def test_producer_orders_real_gates_and_tears_down(surface: str, tmp_path: Path)
     assert not (Path(tempfile.gettempdir()) / selected["project"]).exists()
 
 
-def test_invalid_route_proof_fails_and_cleans(tmp_path: Path) -> None:
+@pytest.mark.parametrize("complete_result", [True, False])
+def test_invalid_route_proof_fails_and_cleans(tmp_path: Path,
+                                              complete_result: bool) -> None:
     selected = plan("base")
     partial = []
 
@@ -199,10 +201,56 @@ def test_invalid_route_proof_fails_and_cleans(tmp_path: Path) -> None:
             probe=lambda *args, **kwargs: {"verified": True,
                 "flow_execution_verified": True,
                 "evidence": {"signed_gateway_callback_verified": True}},
-            teardown_complete=lambda *args: partial.append("complete") or True,
+            teardown_complete=lambda *args: partial.append("complete") or complete_result,
             teardown_partial=lambda *args, **kwargs: partial.append("partial") or True,
         )
-    assert partial == ["complete"]
+    assert partial == (["complete"] if complete_result else ["complete", "partial"])
+    assert not (Path(tempfile.gettempdir()) / selected["project"]).exists()
+
+
+def test_failed_recreate_uses_plan_bound_partial_teardown(tmp_path: Path) -> None:
+    selected = plan("base")
+    cleanup = []
+
+    def run(args, env, timeout):
+        if args[:2] == ["docker", "run"]:
+            mount = next(value for value in args if value.endswith(",dst=/work/secrets"))
+            output = Path(mount.removeprefix("type=bind,src=").removesuffix(
+                ",dst=/work/secrets"))
+            (output / "bao_token").write_text("hvs.producer-service-token")
+            (output / "callback_signer_bao_token").write_text("hvs.producer-callback-token")
+        return True
+
+    def fail_recreate(*args, **kwargs):
+        raise ValueError("Disposable Rust service recreation failed")
+
+    def flow_proof(*args, **kwargs):
+        return kwargs["restart"]()
+
+    with pytest.raises(ValueError, match="recreation failed"):
+        produce_disposable_receipt(
+            tmp_path / "plan.json", tmp_path / "manifest.json", "123456",
+            {"GITHUB_RUN_ID": "987654"}, 29877, now=NOW,
+            deadline_lookup=lambda env: NOW + timedelta(minutes=60),
+            verify=lambda *args, **kwargs: selected,
+            preflight=lambda *args, **kwargs: selected,
+            inspect=lambda args: "", run=run,
+            setup=lambda *args, **kwargs: certificate(selected, 29877),
+            record_live=lambda *args: {"project": selected["project"]},
+            issue_key=lambda *args, **kwargs: (
+                Path(tempfile.gettempdir()) / selected["project"] / "secrets"
+                / "passport_acceptance_api_key"),
+            issue_operator_key=lambda *args, **kwargs: (
+                Path(tempfile.gettempdir()) / selected["project"] / "secrets"
+                / "passport_acceptance_operator_api_key"),
+            probe=lambda *args, **kwargs: {
+                "verified": True, "flow_execution_verified": False,
+                "evidence": {"signed_gateway_callback_verified": True}},
+            flow_proof=flow_proof, restart_rust=fail_recreate,
+            teardown_complete=lambda *args: cleanup.append("complete") or False,
+            teardown_partial=lambda *args, **kwargs: cleanup.append("partial") or True,
+        )
+    assert cleanup == ["complete", "partial"]
     assert not (Path(tempfile.gettempdir()) / selected["project"]).exists()
 
 

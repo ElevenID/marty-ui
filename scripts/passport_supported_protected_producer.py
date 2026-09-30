@@ -248,6 +248,14 @@ def produce_disposable_receipt(
                     cleaned = teardown_complete(
                         record, inspector,
                         lambda args, output: execute(args, output, staged_env))
+                    if not cleaned:
+                        # A failed recreate may leave new owned IDs that the
+                        # pre-recreate record cannot authorize for teardown.
+                        cleaned = teardown_partial(
+                            plan_path, manifest_path, plan_run_id, environment,
+                            inspector=inspector,
+                            executor=lambda args, output: execute(args, output, staged_env),
+                            now=now, workflow_ref=WORKFLOW_REF)
                 else:
                     cleaned = teardown_partial(
                         plan_path, manifest_path, plan_run_id, environment,
