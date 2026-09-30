@@ -156,6 +156,7 @@ def _flow_execution_evidence(value: object, receipt: dict) -> None:
         "provider_kind", "physical_claim", "http_status", "batch_status",
         "selected_flow_in_two_job_batch", "native_binding_verified",
         "first_accepted_material_verified", "companion_native_completed",
+        "companion_bureau_status", "companion_simulator_marker_verified",
         "selected_material_receipt",
         "companion_callback_receipt_sha256", "selected_source_job_commitment",
         "selected_bureau_job_commitment", "companion_source_job_commitment",
@@ -181,7 +182,9 @@ def _flow_execution_evidence(value: object, receipt: dict) -> None:
         or evidence["batch_status"] != "QUEUED"
         or any(evidence[name] is not True for name in (
             "selected_flow_in_two_job_batch", "native_binding_verified",
-            "first_accepted_material_verified", "companion_native_completed"))):
+            "first_accepted_material_verified", "companion_native_completed",
+            "companion_simulator_marker_verified"))
+        or evidence["companion_bureau_status"] != "SHIPPED"):
         raise HandoffError("Protected native batch proof is invalid")
     digest_fields = (
         "companion_callback_receipt_sha256", "selected_source_job_commitment",

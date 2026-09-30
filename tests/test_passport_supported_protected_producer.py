@@ -70,6 +70,8 @@ def flow_receipt(final_native_id: str = "issuance-native") -> dict:
                     "source": "private disposable PostgreSQL",
                 },
                 "companion_native_completed": True,
+                "companion_bureau_status": "SHIPPED",
+                "companion_simulator_marker_verified": True,
                 "companion_callback_receipt_sha256": "b" * 64,
                 "selected_source_job_commitment": "c" * 64,
                 "selected_bureau_job_commitment": "d" * 64,
@@ -645,6 +647,9 @@ def test_hosted_handoff_binds_partial_receipt_to_plan(tmp_path: Path) -> None:
             ["execution"].update(callback_bureau_status="UNVERIFIED")),
         ("no native restart progress", lambda item: item["flow_execution"]
             ["execution"].update(restart_after_native_status="SOD_SIGNED")),
+        ("unverified companion marker", lambda item: item["flow_execution"]
+            ["batch"]["batch"]["evidence"].update(
+                companion_simulator_marker_verified=False)),
         ("wrong selected material job", lambda item: item["flow_execution"]
             ["batch"]["batch"]["evidence"]["selected_material_receipt"].update(
                 source_job_id_commitment="0" * 64)),

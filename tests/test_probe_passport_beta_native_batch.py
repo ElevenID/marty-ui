@@ -154,6 +154,8 @@ def test_native_selected_pair_uses_stable_key_and_verifies_both_receipts(tmp_pat
         ("receipt", "selected-job"), ("receipt", "companion-job")]
     assert result["verified"] is True
     assert result["evidence"]["selected_flow_in_two_job_batch"] is True
+    assert result["evidence"]["companion_bureau_status"] == "SHIPPED"
+    assert result["evidence"]["companion_simulator_marker_verified"] is True
     material = result["evidence"]["selected_material_receipt"]
     assert material["source_job_id_commitment"] == _job_commit(
         KEY, "source-job", "selected-job")

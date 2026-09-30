@@ -457,6 +457,8 @@ def exercise(
             "first_accepted_material_verified": True,
             "selected_material_receipt": receipts[selected_source_job_id],
             "companion_native_completed": True,
+            "companion_bureau_status": state,
+            "companion_simulator_marker_verified": True,
             "companion_callback_receipt_sha256": companion_callback,
             "selected_source_job_commitment": receipts[selected_source_job_id]["source_job_id_commitment"],
             "selected_bureau_job_commitment": receipts[selected_source_job_id]["bureau_job_id_commitment"],
