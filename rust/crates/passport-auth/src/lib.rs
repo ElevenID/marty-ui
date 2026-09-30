@@ -4,7 +4,7 @@
 
 use std::{collections::BTreeMap, fmt};
 
-use mmf_security::constant_time_secret_eq;
+use mmf_core::constant_time_secret_eq;
 use serde::de::{MapAccess, Visitor};
 
 #[derive(Clone, Eq, PartialEq)]
