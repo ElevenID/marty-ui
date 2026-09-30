@@ -56,6 +56,9 @@ marty-crypto = { git = "https://example.com/not-marty-core.git", rev = "abc" }
 
 def test_shared_service_image_is_a_rust_only_runtime() -> None:
     dockerfile = (ROOT / "services" / "Dockerfile").read_text(encoding="utf-8")
+    build_script = (ROOT / "scripts" / "build-rust-service-binaries.sh").read_text(
+        encoding="utf-8"
+    )
 
     runtime = dockerfile.split("FROM debian:bookworm-slim", maxsplit=1)[1]
     for marker in (
@@ -69,7 +72,7 @@ def test_shared_service_image_is_a_rust_only_runtime() -> None:
     ):
         assert marker not in runtime
     assert "COPY services/entrypoint.sh /app/services/entrypoint.sh" in runtime
-    assert runtime.count("COPY --from=rust-service-builder") == dockerfile.count(
+    assert runtime.count("COPY --from=rust-service-builder") == build_script.count(
         " --bin marty-"
     )
 

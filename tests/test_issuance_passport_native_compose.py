@@ -161,6 +161,9 @@ def test_gateway_stays_legacy_until_tenant_key_boundary_is_qualified() -> None:
 
 def test_self_signed_test_image_is_explicit_opt_in() -> None:
     dockerfile = (ROOT / "services/Dockerfile").read_text(encoding="utf-8")
+    build_script = (ROOT / "scripts/build-rust-service-binaries.sh").read_text(
+        encoding="utf-8"
+    )
     workflow = (ROOT / ".github/workflows/ci.yml").read_text(encoding="utf-8")
     contract = json.loads(
         (ROOT / "contracts/issuance-physical-passport-native.json").read_text(
@@ -169,8 +172,11 @@ def test_self_signed_test_image_is_explicit_opt_in() -> None:
     )
     assert "ARG PASSPORT_SELF_SIGNED_TEST=false" in dockerfile
     assert (
-        "true) set -- --features marty-issuance-service/passport-self-signed-test"
-        in dockerfile
+        "true) build-rust-service-binaries passport-self-signed-test" in dockerfile
+    )
+    assert (
+        "set -- --features marty-issuance-service/passport-self-signed-test"
+        in build_script
     )
     assert "PASSPORT_SELF_SIGNED_TEST must be true or false" in dockerfile
     assert "Verify opt-in passport test-mode image boundary" in workflow
