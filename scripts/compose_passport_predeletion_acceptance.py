@@ -6,6 +6,7 @@ from __future__ import annotations
 import argparse
 import copy
 from datetime import datetime, timezone
+import hashlib
 import json
 import os
 from pathlib import Path
@@ -17,10 +18,12 @@ try:
     from .project_passport_predeletion_producer import probe
     from .project_passport_predeletion_producer import project
     from .check_passport_beta_fence_authority import manifest_source
+    from .probe_passport_beta_cutover_snapshot import digest
 except ImportError:
     from project_passport_predeletion_producer import probe
     from project_passport_predeletion_producer import project
     from check_passport_beta_fence_authority import manifest_source
+    from probe_passport_beta_cutover_snapshot import digest
 
 
 SHA = re.compile(r"[0-9a-f]{40}\Z")
@@ -77,6 +80,7 @@ def signed_release(source: str, tag: str, released: dict[str, Any]) -> dict[str,
 def compose(
     projection: dict[str, Any], observation: dict[str, Any],
     fresh_snapshot: dict[str, Any], *, run_id: int,
+    installation_file_sha256: str,
     workflow_started_at_utc: str, accepted_at_utc: str,
 ) -> dict[str, Any]:
     """Accept only same-source evidence collected in the required time order.
@@ -119,6 +123,13 @@ def compose(
             and installation.get("source_commit") == source
             and isinstance(observed_snapshot, dict),
             "Predeletion inputs have different protected sources")
+    require(isinstance(installation_file_sha256, str)
+            and SHA256.fullmatch(installation_file_sha256) is not None
+            and observation.get("fence_installation_receipt_sha256")
+                == installation_file_sha256
+            and observed_snapshot.get("installation_receipt_sha256")
+                == digest(installation),
+            "Attested fence installation differs from protected drain")
     started = utc(workflow_started_at_utc)
     accepted = utc(accepted_at_utc)
     checked = utc(drain["evidence"].get("legacy_source", {}).get("drain_checked_at_utc"))
@@ -191,6 +202,7 @@ def compose(
     return {
         "schema": "marty.passport-rust-predeletion-acceptance/v1",
         "status": "accepted", "run_id": run_id,
+        "fence_installation_receipt_sha256": installation_file_sha256,
         "accepted_at_utc": accepted_at_utc,
         "physical_claim": "not_claimed",
         "release": copy.deepcopy(release),
@@ -215,6 +227,8 @@ def main() -> int:
     parser.add_argument("--producer", type=Path, required=True)
     parser.add_argument("--observation", type=Path, required=True)
     parser.add_argument("--fresh-snapshot", type=Path, required=True)
+    parser.add_argument("--fence-installation-receipt", type=Path,
+                        required=True)
     parser.add_argument("--stack-manifest", type=Path, required=True)
     parser.add_argument("--release-tag", required=True)
     parser.add_argument("--output", type=Path, required=True)
@@ -251,9 +265,16 @@ def main() -> int:
         producer = json.loads(args.producer.read_text(encoding="utf-8"))
         observation = json.loads(args.observation.read_text(encoding="utf-8"))
         fresh = json.loads(args.fresh_snapshot.read_text(encoding="utf-8"))
+        installation_bytes = args.fence_installation_receipt.read_bytes()
+        installation = json.loads(installation_bytes)
+        require(isinstance(installation, dict)
+                and installation == observation.get("installation"),
+                "Attested fence installation file differs from protected drain")
         projected = project(producer, release)
         result = compose(
             projected, observation, fresh, run_id=int(run),
+            installation_file_sha256=hashlib.sha256(
+                installation_bytes).hexdigest(),
             workflow_started_at_utc=current["created_at"],
             accepted_at_utc=datetime.now(timezone.utc).isoformat(),
         )

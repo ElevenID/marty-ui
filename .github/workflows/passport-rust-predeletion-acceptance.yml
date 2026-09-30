@@ -103,6 +103,7 @@ jobs:
             --producer "$work/producer.json" \
             --observation "$work/observation.json" \
             --fresh-snapshot "$work/fresh-snapshot.json" \
+            --fence-installation-receipt "$observed" \
             --stack-manifest "$work/release/stack-manifest.json" \
             --release-tag "$RELEASE_TAG" \
             --output "passport-rust-predeletion-acceptance-$GITHUB_RUN_ID.json"

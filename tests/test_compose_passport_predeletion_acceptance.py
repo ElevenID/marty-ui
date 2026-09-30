@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 from copy import deepcopy
+import hashlib
+import json
 
 import pytest
 
@@ -10,10 +12,16 @@ from scripts.compose_passport_predeletion_acceptance import (
     AcceptanceError, compose, signed_release,
 )
 from scripts.project_passport_predeletion_producer import project
+from scripts.probe_passport_beta_cutover_snapshot import digest
 from tests.test_project_passport_predeletion_producer import inputs
 
 
 SOURCE = "a" * 40
+
+
+def installation_file_sha(installation: dict) -> str:
+    contents = json.dumps(installation, sort_keys=True, indent=2) + "\n"
+    return hashlib.sha256(contents.encode()).hexdigest()
 
 
 def test_signed_release_requires_actual_v_tag_and_same_source() -> None:
@@ -80,6 +88,10 @@ def evidence() -> tuple[dict, dict, dict]:
             },
         }},
     }
+    observation["fence_installation_receipt_sha256"] = installation_file_sha(
+        observation["installation"])
+    observed["installation_receipt_sha256"] = digest(
+        observation["installation"])
     fresh = deepcopy(observed)
     fresh["observed_at_utc"] = "2026-09-30T12:05:00Z"
     fresh["snapshot_sha256"] = "b" * 64
@@ -90,6 +102,8 @@ def evidence() -> tuple[dict, dict, dict]:
 def accept(projection: dict, observation: dict, fresh: dict) -> dict:
     return compose(
         projection, observation, fresh, run_id=104,
+        installation_file_sha256=installation_file_sha(
+            observation["installation"]),
         workflow_started_at_utc="2026-09-30T12:04:00Z",
         accepted_at_utc="2026-09-30T12:06:00Z",
     )
@@ -99,6 +113,8 @@ def test_accepts_twelve_bound_probes_after_fresh_beta_isolation() -> None:
     projection, observation, fresh = evidence()
     result = accept(projection, observation, fresh)
     assert result["status"] == "accepted"
+    assert result["fence_installation_receipt_sha256"] == observation[
+        "fence_installation_receipt_sha256"]
     assert len(result["probes"]) == 12
     assert result["producer_provenance"]["record_run_id"] == 102
     assert result["drain_provenance"]["observation_run_id"] == 103
@@ -120,6 +136,10 @@ def test_accepts_twelve_bound_probes_after_fresh_beta_isolation() -> None:
         observation_completed_at_utc="2026-09-30T12:07:00Z"),
     lambda projection, observation, fresh: projection.update(
         source_commit="f" * 40),
+    lambda projection, observation, fresh: observation.update(
+        fence_installation_receipt_sha256="f" * 64),
+    lambda projection, observation, fresh: fresh.update(
+        installation_receipt_sha256="f" * 64),
 ])
 def test_rejects_changed_or_stale_live_evidence(mutation) -> None:
     projection, observation, fresh = evidence()

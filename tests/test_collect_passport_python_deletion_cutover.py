@@ -10,6 +10,7 @@ import json
 import pytest
 
 from scripts import collect_passport_python_deletion_cutover as producer
+from scripts.compose_passport_predeletion_acceptance import RUNTIME_PROBES, compose
 from scripts.probe_passport_beta_fence_direct_writes import UNRELATED_WRITES
 from scripts.probe_passport_beta_cutover_snapshot import digest
 
@@ -124,6 +125,104 @@ def test_final_report_matches_predeletion_writer_and_zero_counts():
     assert report["legacy_source"]["final_watermark"] == 190
     assert report["write_fence"]["direct_database_probe"] == (
         snapshot["direct_database_probe"])
+
+
+def test_composed_predeletion_receipt_reaches_final_cutover() -> None:
+    _, final_snapshot, installation = fixture()
+    installation_file_sha = hashlib.sha256(
+        (json.dumps(installation, sort_keys=True) + "\n").encode()
+    ).hexdigest()
+    prior_probe = {
+        "observation_watermark": 150, "receipt_sha256": "2" * 64,
+        "observed_at_utc": "2026-09-29T02:00:00.000Z",
+        "unrelated_writes": deepcopy(UNRELATED_WRITES),
+    }
+    observed = deepcopy(final_snapshot)
+    observed["observed_at_utc"] = "2026-09-29T02:10:00.000Z"
+    observed["direct_database_probe"] = prior_probe
+    observed["snapshot_sha256"] = digest({
+        key: value for key, value in observed.items()
+        if key != "snapshot_sha256"
+    })
+    fresh = deepcopy(observed)
+    fresh["observed_at_utc"] = "2026-09-29T02:20:00.000Z"
+    fresh["direct_database_probe"]["observation_watermark"] = 160
+    fresh["snapshot_sha256"] = digest({
+        key: value for key, value in fresh.items()
+        if key != "snapshot_sha256"
+    })
+    legacy = {
+        "database_uid": final_snapshot["database_uid"],
+        "beta_cluster_uid": final_snapshot["beta_cluster_uid"],
+        "beta_inventory_attestation_sha256":
+            final_snapshot["beta_inventory_attestation_sha256"],
+        "writer_deployment_uid": final_snapshot["writer_deployment_uid"],
+        "writer_container_id": final_snapshot["writer_container_id"],
+        "writer_image_digest": final_snapshot["writer_image_digest"],
+        "writer_generation_at_drain": final_snapshot["writer_generation"],
+        "writer_database_role": "marty", "fence_watermark": 9,
+        "fence_enabled_at_utc": installation["fence_installed_at_utc"],
+        "drain_watermark": 150,
+        "drain_snapshot_attestation_sha256": "a" * 64,
+        "drain_checked_at_utc": "2026-09-29T02:10:00Z",
+    }
+    fence = {
+        "scope": "physical_document_jobs_and_physical_flows",
+        "enabled": True, "database_uid": final_snapshot["database_uid"],
+        "writer_deployment_uid": final_snapshot["writer_deployment_uid"],
+        "writer_container_id": final_snapshot["writer_container_id"],
+        "writer_generation": final_snapshot["writer_generation"],
+        "fence_epoch": 9,
+        "verification_sha256": final_snapshot["fence_verification_sha256"],
+        "unrelated_issuance_continues": True,
+        "direct_database_probe": prior_probe,
+    }
+    identity = {
+        "kind": "compose", "source_commit": HEAD,
+        "production_resources_excluded": True,
+        "project_id": "passport-disposable", "owner_uid": "test-owner",
+        "owner_labels": {},
+    }
+    projection = {
+        "schema": "marty.passport-rust-predeletion-producer-projection/v1",
+        "status": "blocked", "source_commit": HEAD,
+        "release": {"source_commit": HEAD},
+        "deployment": identity,
+        "probes": {name: {"verified": True} for name in RUNTIME_PROBES},
+        "runtime_images": {}, "pre_restart_native_runtime": {},
+        "producer_run_id": 7, "record_run_id": 8,
+        "producer_receipt_sha256": "b" * 64,
+        "producer_attestation_sha256": "c" * 64,
+        "plan_sha256": "d" * 64,
+        "record_completed_at_utc": "2026-09-29T01:30:00Z",
+    }
+    observation = {
+        "schema": "marty.passport-rust-predeletion-drain/v1",
+        "status": "verified_observation", "source_commit": HEAD,
+        "installation": installation, "snapshot": observed,
+        "fence_installation_receipt_sha256": installation_file_sha,
+        "observation_run_id": 9,
+        "observation_completed_at_utc": "2026-09-29T02:12:00Z",
+        "attestation_sha256": {"installation": "e" * 64},
+        "probe": {"verified": True, "evidence": {
+            "source_commit": HEAD,
+            "python_passport_writes_fenced": True,
+            "count_source_database_uid": final_snapshot["database_uid"],
+            "legacy_source": legacy,
+            "passport_write_fence": fence,
+        }},
+    }
+    accepted = compose(
+        projection, observation, fresh, run_id=11,
+        installation_file_sha256=installation_file_sha,
+        workflow_started_at_utc="2026-09-29T02:15:00Z",
+        accepted_at_utc="2026-09-29T02:25:00Z",
+    )
+    assert run(accepted, final_snapshot, installation)["status"] == "accepted"
+    accepted["fence_installation_receipt_sha256"] = "f" * 64
+    with pytest.raises(producer.HostProbeError,
+                       match="attested predeletion installation"):
+        run(accepted, final_snapshot, installation)
 
 
 def test_final_report_accepts_later_head_only_after_lineage_check():
