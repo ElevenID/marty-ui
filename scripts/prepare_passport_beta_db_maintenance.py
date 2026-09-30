@@ -51,6 +51,7 @@ START = "scripts/sql/passport-beta-db-maintenance-start.sql"
 VERIFY = "scripts/sql/passport-beta-fence-verify.sql"
 DOCKER_ID = re.compile(r"[0-9a-f]{64}\Z")
 SHA256 = re.compile(r"[0-9a-f]{64}\Z")
+SHA = re.compile(r"[0-9a-f]{40}\Z")
 IMAGE_DIGEST = re.compile(r".+@(sha256:[0-9a-f]{64})\Z")
 PRESERVED_SERVICES = frozenset({"postgres", "openbao"})
 
@@ -58,6 +59,18 @@ PRESERVED_SERVICES = frozenset({"postgres", "openbao"})
 def require(condition: bool, message: str) -> None:
     if not condition:
         raise HostProbeError(message)
+
+
+def candidate_deletion_head(path: Path) -> str:
+    """Read the final candidate; verify_cutover_report authenticates its bytes."""
+    try:
+        report = json.loads(path.read_bytes())
+    except (OSError, ValueError) as exc:
+        raise HostProbeError("Protected final cutover report is unreadable") from exc
+    head = report.get("deletion_head") if isinstance(report, dict) else None
+    require(SHA.fullmatch(str(head)) is not None,
+            "Protected final cutover deletion head is invalid")
+    return head
 
 
 def checked_snapshot(path: Path, receipt: dict[str, Any]) -> tuple[dict[str, Any], str]:
@@ -192,7 +205,7 @@ def prepare(
     snapshot, snapshot_file_sha256 = checked_snapshot(snapshot_path, receipt)
     report = verify_cutover_report(
         report_path, source_commit=head,
-        deletion_head=receipt.get("credentials_deletion_head", ""),
+        deletion_head=candidate_deletion_head(report_path),
         snapshot=snapshot, snapshot_file_sha256=snapshot_file_sha256,
         receipt=receipt,
     )
@@ -330,7 +343,7 @@ def verify_plan(
     snapshot, snapshot_file_sha256 = checked_snapshot(snapshot_path, receipt_raw)
     report = verify_cutover_report(
         report_path, source_commit=head,
-        deletion_head=receipt_raw.get("credentials_deletion_head", ""),
+        deletion_head=candidate_deletion_head(report_path),
         snapshot=snapshot, snapshot_file_sha256=snapshot_file_sha256,
         receipt=receipt_raw,
     )

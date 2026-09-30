@@ -108,6 +108,8 @@ def fixture(tmp_path):
 def execute_for(path, runs, calls):
     def execute(args):
         calls.append(args)
+        if args[:3] == ["gh", "api", "--paginate"]:
+            return "\n".join(["a" * 40, DELETION])
         if args[:2] == ["gh", "api"]:
             if args[2].endswith("/pulls/305"):
                 return json.dumps({
@@ -117,6 +119,14 @@ def execute_for(path, runs, calls):
                     "head": {"ref": "feat/retire-python-passport-v1",
                              "sha": DELETION, "repo": {
                                  "full_name": "ElevenID/marty-credentials"}},
+                })
+            if "/compare/" in args[2]:
+                approved = args[2].rsplit("/", 1)[-1].split("...")[0]
+                return json.dumps({
+                    "status": "identical" if approved == DELETION else "ahead",
+                    "behind_by": 0,
+                    "base_commit": {"sha": approved},
+                    "merge_base_commit": {"sha": approved},
                 })
             return json.dumps(runs[int(args[2].rsplit("/", 1)[-1])])
         if args[:3] == ["gh", "run", "download"]:
@@ -141,12 +151,23 @@ def test_exact_protected_report_binds_snapshot_and_source(tmp_path):
     assert result["cutover_report_run_id"] == 42
     assert result["cutover_report_file_sha256"] == hashlib.sha256(
         path.read_bytes()).hexdigest()
-    assert calls[-1][:3] == ["gh", "attestation", "verify"]
-    assert calls[-1][4:] == [
+    attestation = next(call for call in calls if call[:3] == ["gh", "attestation", "verify"])
+    assert attestation[4:] == [
         "--repo", cutover.REPOSITORY,
         "--signer-workflow", f"{cutover.REPOSITORY}/{cutover.WORKFLOW}",
         "--source-digest", HEAD, "--source-ref", "refs/heads/main",
     ]
+
+
+def test_approved_ancestor_can_precede_final_attested_head(tmp_path):
+    path, snapshot, _report, runs = fixture(tmp_path)
+    result = cutover.verify(
+        path, source_commit=HEAD, deletion_head=DELETION,
+        snapshot=snapshot, snapshot_file_sha256=FILE_HASH,
+        receipt={"credentials_deletion_head": "a" * 40},
+        execute=execute_for(path, runs, []),
+    )
+    assert result["cutover_report_run_id"] == 42
 
 
 def test_wrong_workflow_or_writer_fails_closed(tmp_path):

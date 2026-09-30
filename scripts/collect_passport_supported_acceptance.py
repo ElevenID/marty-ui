@@ -47,16 +47,18 @@ PROJECT = re.compile(r"marty-passport-acceptance-(base|selfhost)-[a-z0-9]{6,32}\
 NAMESPACE = re.compile(r"marty-passport-acceptance-[a-z0-9]{6,32}\Z")
 KUBE_CONTEXT = re.compile(r"marty-passport-acceptance-[a-z0-9]{6,32}\Z")
 COMPOSE_SERVICES = (
-    "gateway", "flow", "issuance-native", "passport-callback-signer",
+    "gateway", "flow", "issuance-native", "signing-keys", "passport-callback-signer",
     "passport-beta-bureau",
 )
 KUBERNETES_SERVICES = COMPOSE_SERVICES
-PRIVATE_KUBERNETES_PORTS = {"passport-beta-bureau": 8020,
+PRIVATE_KUBERNETES_PORTS = {"signing-keys": 8017,
+                            "passport-beta-bureau": 8020,
                             "passport-callback-signer": 8018}
 KUBERNETES_SERVICE_PORTS = {
     "gateway": (("http", 8000),),
     "flow": (("http", 8011), ("grpc", 9011)),
     "issuance-native": (("http", 8005), ("grpc", 9005)),
+    "signing-keys": (("http", 8017),),
     "passport-callback-signer": (("http", 8018),),
     "passport-beta-bureau": (("http", 8020),),
 }
@@ -64,6 +66,7 @@ KUBERNETES_BINARIES = {
     "gateway": "/usr/local/bin/marty-gateway",
     "flow": "/usr/local/bin/marty-flow",
     "issuance-native": "/usr/local/bin/marty-issuance-service",
+    "signing-keys": "/usr/local/bin/marty-signing-keys",
     "passport-callback-signer": "/usr/local/bin/marty-passport-callback-signer",
     "passport-beta-bureau": "/usr/local/bin/marty-passport-beta-bureau",
 }
@@ -77,6 +80,7 @@ COMMON_FLAGS = {
     ),
 }
 COMPOSE_FLAGS = COMMON_FLAGS | {
+    "signing-keys": (),
     "passport-callback-signer": ("PASSPORT_CALLBACK_SIGNER_ENABLED",),
     "passport-beta-bureau": ("PASSPORT_BETA_BUREAU_ENABLED",),
 }
@@ -291,6 +295,25 @@ def observe_compose(
                 f"{surface} {service} is not running the released services image")
         flags = environment_flags(config.get("Env"), service, COMPOSE_FLAGS)
         require(all(flags.values()), f"{surface} {service} did not select Rust passport")
+        if service == "signing-keys":
+            values = config["Env"]
+            require(values.count("SERVICE_NAME=signing_keys") == 1
+                    and not any(isinstance(value, str)
+                                and value.startswith("SERVICE_NAME=")
+                                and value != "SERVICE_NAME=signing_keys"
+                                for value in values),
+                    f"{surface} Signing Keys selector is invalid")
+            process = runner([
+                "docker", "exec", ids[0], "/bin/sh", "-c",
+                "set -eu; "
+                "test \"$(/usr/bin/readlink /proc/1/exe)\" = "
+                "/usr/local/bin/marty-signing-keys; "
+                "test \"$(/usr/bin/tr '\\000' '\\n' < /proc/1/cmdline)\" = "
+                "/usr/local/bin/marty-signing-keys; "
+                "printf verified",
+            ])
+            require(process == "verified",
+                    f"{surface} Signing Keys process is unverified")
         observed[service] = {"container_id": ids[0], "image_id": record["Image"],
                              "oci_reference": services_reference, "selectors": flags}
         if service == "gateway":
@@ -454,8 +477,9 @@ def observe_kubernetes(
         } if service == "issuance-native" else {
             "SIGNING_KEYS_INTERNAL_URL":
                 "http://passport-callback-signer:8018/internal/documents",
+            "PASSPORT_BETA_BUREAU_GATEWAY_CALLBACK_ENABLED": "true",
             "PASSPORT_BUREAU_CALLBACK_URL":
-                "http://issuance-native:8005/v1/passport/webhooks/personalization",
+                "http://gateway:8000/v1/passport/webhooks/personalization",
         } if service == "passport-beta-bureau" else {})
         require(all(kubernetes_config_value(containers[0], data, name) == value
                     for name, value in expected.items()),

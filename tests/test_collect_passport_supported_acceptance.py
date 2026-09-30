@@ -64,13 +64,18 @@ def test_production_origin_is_rejected_before_runtime_probe(tmp_path: Path) -> N
                      base_origin="https://elevenidllc.com", attest=lambda *args: True)
 
 
-def docker_runner(project: str, *, wrong_image: bool = False):
+def docker_runner(project: str, *, wrong_image: bool = False,
+                  signer_selector: bool = True, signer_process: bool = True):
     def run(args: list[str]) -> str:
         if args[:2] == ["docker", "ps"]:
             service = args[-1].split("=")[-1]
             return service + "-container\n"
+        if args[:2] == ["docker", "exec"]:
+            return "verified" if signer_process else "unverified"
         service = args[-1].removesuffix("-container")
         flags = [f"{name}=true" for name in gate.COMPOSE_FLAGS.get(service, ())]
+        if service == "signing-keys" and signer_selector:
+            flags.append("SERVICE_NAME=signing_keys")
         image = (qualified_images(verify_registry=False)["edge"]
                  if service == "edge" else REFERENCE)
         edge_binding = [{"HostIp": "127.0.0.1", "HostPort": "28000"}]
@@ -94,8 +99,9 @@ def docker_runner(project: str, *, wrong_image: bool = False):
     return run
 
 
-def test_compose_runtime_reads_five_exact_running_service_images() -> None:
+def test_compose_runtime_reads_six_exact_running_service_images() -> None:
     observed = gate.observe_compose("base", BASE, REFERENCE, docker_runner(BASE))
+    assert len(gate.COMPOSE_SERVICES) == 6
     assert set(observed) == set(gate.COMPOSE_SERVICES) | {"edge"}
     assert all(item["oci_reference"] == REFERENCE
                for service, item in observed.items() if service != "edge")
@@ -103,6 +109,12 @@ def test_compose_runtime_reads_five_exact_running_service_images() -> None:
         verify_registry=False)["edge"]
     with pytest.raises(gate.SupportedEvidenceError, match="released services image"):
         gate.observe_compose("base", BASE, REFERENCE, docker_runner(BASE, wrong_image=True))
+    with pytest.raises(gate.SupportedEvidenceError, match="Signing Keys selector"):
+        gate.observe_compose("base", BASE, REFERENCE,
+                             docker_runner(BASE, signer_selector=False))
+    with pytest.raises(gate.SupportedEvidenceError, match="Signing Keys process"):
+        gate.observe_compose("base", BASE, REFERENCE,
+                             docker_runner(BASE, signer_process=False))
 
 
 def test_disposable_https_capability_probe_uses_scoped_ca(tmp_path: Path) -> None:
@@ -177,6 +189,8 @@ def test_live_compose_prerequisite_still_does_not_claim_routes_or_restart(
 
 def kubernetes_runner(*, mixed_provider: bool = False,
                        wrong_profile: bool = False,
+                       wrong_callback: bool = False,
+                       stale_pod_callback: bool = False,
                        provider_enabled: bool = False,
                        stale_pod_profile: bool = False,
                        indirect_profile: bool = False,
@@ -240,8 +254,11 @@ def kubernetes_runner(*, mixed_provider: bool = False,
             values.update({
                 "SIGNING_KEYS_INTERNAL_URL":
                     "http://passport-callback-signer:8018/internal/documents",
+                "PASSPORT_BETA_BUREAU_GATEWAY_CALLBACK_ENABLED": "true",
                 "PASSPORT_BUREAU_CALLBACK_URL":
-                    "http://issuance-native:8005/v1/passport/webhooks/personalization",
+                    ("http://issuance-native:8005/v1/passport/webhooks/personalization"
+                     if wrong_callback or (is_pod and stale_pod_callback) else
+                     "http://gateway:8000/v1/passport/webhooks/personalization"),
             })
         container = {"name": service, "image": REFERENCE,
                      "securityContext": {
@@ -277,10 +294,10 @@ def kubernetes_runner(*, mixed_provider: bool = False,
                                               "name": "marty-config", "key": name}}})
             if indirect_profile:
                 container["env"][-1]["valueFrom"]["configMapKeyRef"]["name"] = "override-config"
-        if service in ("passport-beta-bureau", "passport-callback-signer") or (
+        if service in ("signing-keys", "passport-beta-bureau", "passport-callback-signer") or (
                 service == "flow" and (pod_host_port if is_pod else template_host_port)):
-            port = (8020 if service == "passport-beta-bureau" else
-                    8018 if service == "passport-callback-signer" else 8011)
+            port = ({"signing-keys": 8017, "passport-beta-bureau": 8020,
+                     "passport-callback-signer": 8018}.get(service, 8011))
             binding = {"name": "http", "containerPort": port}
             if (pod_host_port if is_pod else template_host_port):
                 binding["hostPort"] = port
@@ -326,7 +343,8 @@ def kubernetes_runner(*, mixed_provider: bool = False,
         if args[5] == "exec":
             assert args[6].endswith("-pod")
             assert args[7:9] == ["-c", args[6].removesuffix("-pod")]
-            assert "/proc/1/environ" in args[-1]
+            if gate.KUBERNETES_FLAGS[args[8]]:
+                assert "/proc/1/environ" in args[-1]
             assert "/proc/1/exe" in args[-1]
             assert "/proc/1/cmdline" in args[-1]
             assert gate.KUBERNETES_BINARIES[args[8]] in args[-1]
@@ -589,6 +607,12 @@ def test_kubernetes_mixed_provider_is_rejected() -> None:
     with pytest.raises(gate.SupportedEvidenceError, match="configuration source is invalid"):
         gate.observe_kubernetes(NAMESPACE, CONTEXT, REFERENCE, COMMIT,
                                 kubernetes_runner(indirect_profile=True))
+    with pytest.raises(gate.SupportedEvidenceError, match="bound to the Marty simulator"):
+        gate.observe_kubernetes(NAMESPACE, CONTEXT, REFERENCE, COMMIT,
+                                kubernetes_runner(wrong_callback=True))
+    with pytest.raises(gate.SupportedEvidenceError, match="Pod is not bound"):
+        gate.observe_kubernetes(NAMESPACE, CONTEXT, REFERENCE, COMMIT,
+                                kubernetes_runner(stale_pod_callback=True))
 
 
 def test_kubernetes_rejects_pod_with_stale_provider_profile() -> None:

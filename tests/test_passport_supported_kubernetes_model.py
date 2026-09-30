@@ -48,7 +48,7 @@ def test_language_neutral_contract_matches_closed_model() -> None:
     assert contract["runtime_identity"] == [
         "pod_replicaset_deployment_owner_uid_chain",
         "completed_current_rollout_and_pod_created_after_configmap",
-        "all_five_private_service_endpoint_slices_match_owned_pods",
+        "all_six_private_service_endpoint_slices_match_owned_pods",
         "approved_entrypoint_unprivileged_runtime_and_secret_only_mounts",
         "running_rust_binary_and_routing_checked_without_emitting_environment",
         "second_full_identity_preflight_after_runtime_probe",
@@ -187,6 +187,12 @@ def runner(expected: dict, *, file_backed_ca: bool = False):
                                     for key in ("PERSONALIZATION_BUREAU_URL",
                                                 "PERSONALIZATION_BUREAU_PROVIDER_PROFILE_ID")]}
                                    if name == "issuance-native" else {}),
+                                **({"env": [
+                                    {"name": "PASSPORT_BETA_BUREAU_GATEWAY_CALLBACK_ENABLED",
+                                     "value": "true"},
+                                    {"name": "PASSPORT_BUREAU_CALLBACK_URL",
+                                     "value": "http://gateway:8000/v1/passport/webhooks/personalization"},
+                                ]} if name == "passport-beta-bureau" else {}),
                             }
                         ],
                     }
@@ -483,6 +489,18 @@ def test_identity_or_legacy_model_drift_fails_closed(mutate, match: str) -> None
             .setdefault("env", []).append({"name": "ISSUANCE_NATIVE_SERVICE_URL",
                                          "value": "http://issuance:8005"}),
             "deployment/flow is not simulator-bound",
+        ),
+        (
+            "deployment/passport-beta-bureau",
+            lambda x: x["spec"]["template"]["spec"]["containers"][0]["env"][0]
+            .update(value="false"),
+            "bureau callback bypasses Gateway",
+        ),
+        (
+            "deployment/passport-beta-bureau",
+            lambda x: x["spec"]["template"]["spec"]["containers"][0]["env"][1]
+            .update(value="http://issuance-native:8005/v1/passport/webhooks/personalization"),
+            "bureau callback bypasses Gateway",
         ),
         (
             "configmap/marty-config",

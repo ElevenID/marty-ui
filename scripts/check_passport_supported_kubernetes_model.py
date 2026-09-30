@@ -27,6 +27,7 @@ SERVICES = (
     "gateway",
     "flow",
     "issuance-native",
+    "signing-keys",
     "passport-callback-signer",
     "passport-beta-bureau",
 )
@@ -43,6 +44,7 @@ FLAGS = {
 }
 HEALTH_PORTS = {
     "gateway": 8000, "flow": 8011, "issuance-native": 8005,
+    "signing-keys": 8017,
     "passport-callback-signer": 8018, "passport-beta-bureau": 8020,
 }
 OWNER_LABEL = "com.marty.passport.acceptance.owner"
@@ -481,6 +483,15 @@ def inspect(
                 require(all(kubernetes_config_value(containers[0], config_data, key) == value
                             for key, value in expected_config.items()),
                         f"Disposable Kubernetes deployment/{name} is not simulator-bound")
+            if name == "passport-beta-bureau":
+                require(isinstance(config_data, dict)
+                        and kubernetes_config_value(
+                            containers[0], config_data,
+                            "PASSPORT_BETA_BUREAU_GATEWAY_CALLBACK_ENABLED") == "true"
+                        and kubernetes_config_value(
+                            containers[0], config_data, "PASSPORT_BUREAU_CALLBACK_URL")
+                        == "http://gateway:8000/v1/passport/webhooks/personalization",
+                        "Disposable Kubernetes bureau callback bypasses Gateway")
         elif kind == "service":
             spec = item.get("spec")
             require(

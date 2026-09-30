@@ -111,7 +111,7 @@ def fixture():
     return supported, predeletion, snapshot, installation
 
 
-def run(supported, predeletion, snapshot, installation):
+def run(supported, predeletion, snapshot, installation, lineage=lambda *_: None):
     return producer.collect(
         source_commit=HEAD, run_id=42, deletion_head=DELETION,
         supported_run_id=10, predeletion_run_id=11,
@@ -121,6 +121,7 @@ def run(supported, predeletion, snapshot, installation):
         installation_file_sha256=hashlib.sha256(
             (json.dumps(installation, sort_keys=True) + "\n").encode()).hexdigest(),
         checked_at=datetime(2026, 9, 29, 3, 30, tzinfo=timezone.utc),
+        lineage=lineage,
     )
 
 
@@ -132,6 +133,22 @@ def test_final_report_matches_predeletion_writer_and_zero_counts():
     assert report["legacy_source"]["final_watermark"] == 190
     assert report["write_fence"]["direct_database_probe"] == (
         snapshot["direct_database_probe"])
+
+
+def test_final_report_accepts_later_head_only_after_lineage_check():
+    supported, predeletion, snapshot, installation = fixture()
+    installation["credentials_deletion_head"] = "a" * 40
+    predeletion["fence_installation_receipt_sha256"] = hashlib.sha256(
+        (json.dumps(installation, sort_keys=True) + "\n").encode()).hexdigest()
+    snapshot["installation_receipt_sha256"] = digest(installation)
+    snapshot["snapshot_sha256"] = digest({
+        key: value for key, value in snapshot.items() if key != "snapshot_sha256"
+    })
+    seen = []
+    report = run(supported, predeletion, snapshot, installation,
+                 lambda anchor, current: seen.append((anchor, current)))
+    assert seen == [("a" * 40, DELETION)]
+    assert report["deletion_head"] == DELETION
 
 
 def test_changed_writer_or_stale_probe_is_rejected():
