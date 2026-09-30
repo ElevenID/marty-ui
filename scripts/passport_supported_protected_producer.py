@@ -13,6 +13,7 @@ import hashlib
 import json
 import os
 from pathlib import Path
+import re
 import subprocess
 from typing import Callable
 
@@ -27,6 +28,7 @@ if __package__:
     )
     from .passport_supported_disposable_route_probe import exercise_owned_disposable
     from .passport_supported_flow_gateway import exercise_owned_flow
+    from .passport_supported_native_batch_preflight import preflight_owned_native
     from .passport_supported_flow_restart import restart_owned_rust
     from .passport_supported_infra_rehearsal import (
         INFRA, MIN_TEARDOWN_LEASE, ROOT, _accept_bootstrap_files,
@@ -53,6 +55,7 @@ else:
     )
     from passport_supported_disposable_route_probe import exercise_owned_disposable
     from passport_supported_flow_gateway import exercise_owned_flow
+    from passport_supported_native_batch_preflight import preflight_owned_native
     from passport_supported_flow_restart import restart_owned_rust
     from passport_supported_infra_rehearsal import (
         INFRA, MIN_TEARDOWN_LEASE, ROOT, _accept_bootstrap_files,
@@ -154,6 +157,7 @@ def produce_disposable_receipt(
     run: Callable[[list[str], dict[str, str], int], bool] = _run,
     setup: Callable[..., dict] = bootstrap_certificate_chain,
     recheck_signer: Callable[..., dict] = recheck_current_managed_signer,
+    preflight_native: Callable[..., dict] = preflight_owned_native,
     record_live: Callable[..., dict] = collect_record,
     issue_key: Callable[..., Path] = issue_disposable_api_key,
     issue_operator_key: Callable[..., Path] = issue_disposable_operator_key,
@@ -217,12 +221,19 @@ def produce_disposable_receipt(
             or min(expires, deadline) - before_setup < RESERVED_TEARDOWN):
             raise ProducerError("Disposable certificate teardown budget is exhausted")
         csca_material: list[str] = []
+        dsc_material: list[tuple[str, str]] = []
         certificate = setup(plan, root, gateway_port, now=before_setup,
-                            on_csca_material=csca_material.append)
+                            on_csca_material=csca_material.append,
+                            on_dsc_material=lambda der, wire: dsc_material.append((der, wire)))
         validate_certificate_setup(certificate, plan, gateway_port)
         if (len(csca_material) != 1
             or "BEGIN CERTIFICATE" not in csca_material[0]):
             raise ProducerError("Disposable CSCA ceremony material is unavailable")
+        if (len(dsc_material) != 1
+            or dsc_material[0][0] != certificate["evidence"]["dsc_certificate_sha256"]
+            or not isinstance(dsc_material[0][1], str)
+            or re.fullmatch(r"[0-9a-f]{64}", dsc_material[0][1]) is None):
+            raise ProducerError("Disposable DSC ceremony material is unavailable")
         if not run([*compose, "up", "-d", "--wait", "--wait-timeout", "360"],
                    staged_env, 600):
             raise ProducerError("Disposable Rust stack startup failed")
@@ -257,6 +268,14 @@ def produce_disposable_receipt(
                    for field in ("csca_issuer_profile_commitment",
                                  "dsc_issuer_profile_commitment"))):
             raise ProducerError("Current disposable managed signer differs from ceremony")
+        native_preflight = preflight_native(
+            record, plan["surface"], inspector=inspector)
+        if (not isinstance(native_preflight, dict)
+            or native_preflight != {
+                "native_container_id": containers.get("issuance-native"),
+                "native_batch_preflight_verified": True,
+            }):
+            raise ProducerError("Disposable native batch preflight is invalid")
         key_path = issue_key(record, plan["surface"], before_probe,
                              inspector=inspector,
                              executor=lambda args, output: execute(args, output, staged_env))
@@ -350,6 +369,7 @@ def produce_disposable_receipt(
             "rust_restart_resume_verified": True,
             "certificate": certificate,
             "current_managed_signer": current_signer,
+            "native_batch_preflight": native_preflight,
             "route": route,
             "flow_execution": flow,
             "runtime_images": {service: runtime[service]

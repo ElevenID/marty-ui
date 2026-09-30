@@ -97,6 +97,7 @@ def setup_certificate(selected: dict):
     def setup(*args, **kwargs):
         kwargs["on_csca_material"](
             "-----BEGIN CERTIFICATE-----\npublic\n-----END CERTIFICATE-----")
+        kwargs["on_dsc_material"]("2" * 64, "5" * 64)
         return certificate(selected, 29877)
     return setup
 
@@ -126,6 +127,7 @@ def test_producer_orders_real_gates_and_tears_down(surface: str, tmp_path: Path)
         calls.append(("setup", args))
         kwargs["on_csca_material"](
             "-----BEGIN CERTIFICATE-----\npublic\n-----END CERTIFICATE-----")
+        kwargs["on_dsc_material"]("2" * 64, "5" * 64)
         return certificate(selected, 29877)
 
     def live(*args):
@@ -192,6 +194,9 @@ def test_producer_orders_real_gates_and_tears_down(surface: str, tmp_path: Path)
         inspect=inspect, run=run, setup=setup,
         record_live=live, issue_key=key, issue_operator_key=operator_key,
         recheck_signer=lambda *args: current_signer(),
+        preflight_native=lambda *args, **kwargs: {
+            "native_container_id": prior_native_id,
+            "native_batch_preflight_verified": True},
         probe=probe, flow_proof=prove_flow, restart_rust=restart,
         observe_runtime=observe,
         teardown_complete=complete,
@@ -219,6 +224,9 @@ def test_producer_orders_real_gates_and_tears_down(surface: str, tmp_path: Path)
     assert report["flow_execution_verified"] is True
     assert report["rust_restart_resume_verified"] is True
     assert report["current_managed_signer"] == current_signer()
+    assert report["native_batch_preflight"] == {
+        "native_container_id": prior_native_id,
+        "native_batch_preflight_verified": True}
     assert report["producer_run_id"] == "987654"
     assert set(report["runtime_images"]) == set(COMPOSE_SERVICES)
     assert report["pre_restart_native_runtime"]["container_id"] == prior_native_id
@@ -298,8 +306,11 @@ def test_invalid_route_proof_fails_and_cleans(tmp_path: Path,
             inspect=lambda args: "", run=run,
             setup=setup_certificate(selected),
             record_live=lambda *args: {"project": selected["project"],
-                                       "containers": {"signing-keys": "signing-keys"}},
+                                       "containers": {"signing-keys": "signing-keys",
+                                                      "issuance-native": "native"}},
             recheck_signer=lambda *args: current_signer(),
+            preflight_native=lambda *args, **kwargs: {
+                "native_container_id": "native", "native_batch_preflight_verified": True},
             issue_key=lambda *args, **kwargs: (
                 Path(tempfile.gettempdir()) / selected["project"] / "secrets"
                 / "passport_acceptance_api_key"),
@@ -353,6 +364,9 @@ def test_failed_recreate_uses_plan_bound_partial_teardown(tmp_path: Path) -> Non
                                        "containers": {"issuance-native": prior_native_id,
                                                       "signing-keys": "signing-keys"}},
             recheck_signer=lambda *args: current_signer(),
+            preflight_native=lambda *args, **kwargs: {
+                "native_container_id": prior_native_id,
+                "native_batch_preflight_verified": True},
             issue_key=lambda *args, **kwargs: (
                 Path(tempfile.gettempdir()) / selected["project"] / "secrets"
                 / "passport_acceptance_api_key"),
@@ -435,6 +449,9 @@ def test_hosted_handoff_binds_partial_receipt_to_plan(tmp_path: Path) -> None:
         "certificate": certificate(selected, 29877),
         "current_managed_signer": current_signer(
             f"{4:064x}"),
+        "native_batch_preflight": {
+            "native_container_id": f"{8:064x}",
+            "native_batch_preflight_verified": True},
         "route": {"verified": True, "flow_execution_verified": False,
                   "evidence": {"signed_gateway_callback_verified": True,
                                "signed_callback_path": "simulator-to-gateway-to-native",
@@ -483,6 +500,8 @@ def test_hosted_handoff_binds_partial_receipt_to_plan(tmp_path: Path) -> None:
             csca_issuer_did_sha256="8" * 64)),
         ("wrong current signer", lambda item: item["current_managed_signer"].update(
             signing_keys_container_id="other")),
+        ("wrong native preflight", lambda item: item["native_batch_preflight"].update(
+            native_container_id="other")),
         ("no managed custody", lambda item: item["certificate"]["evidence"].update(
             managed_kms_custody_verified=False)),
         ("same managed profile", lambda item: item["certificate"]["evidence"].update(

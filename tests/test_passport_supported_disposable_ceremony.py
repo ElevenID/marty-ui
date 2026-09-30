@@ -114,7 +114,7 @@ def test_fixture_chain_is_port_bound_and_setup_only(monkeypatch, surface: str) -
         calls = []
 
         def fake_exercise(chain, csca_authority, dsc_authority, *, request,
-                          on_csca_material):
+                          on_csca_material, on_dsc_material):
             calls.append((chain, csca_authority, dsc_authority, request))
             on_csca_material("-----BEGIN CERTIFICATE-----\npublic\n-----END CERTIFICATE-----")
             return {"evidence": {"chain_verified_by": "openssl-x509-strict"}}

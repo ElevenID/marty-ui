@@ -217,3 +217,36 @@ def test_restart_checkpoint_drift_stops_before_bureau_submission():
             ORG, REFERENCES, STARTED, ISSUER, poll_interval_seconds=0,
             restart=restart)
     assert fixture.completed == 5
+
+
+def test_native_batch_runs_after_restart_and_binds_flow_submission():
+    fixture = Fixture()
+    calls = []
+
+    def restart():
+        calls.append("restart")
+        assert fixture.completed == 5
+        return True
+
+    def before_submit(started, sod_sha256):
+        calls.append("batch")
+        assert fixture.completed == 5
+        assert started == STARTED and sod_sha256 == "a" * 64
+        return BUREAU
+
+    proof = advance_physical_passport_flow(
+        fixture.request, fixture.native, fixture.private, fixture.history,
+        ORG, REFERENCES, STARTED, ISSUER, poll_interval_seconds=0,
+        restart=restart, before_submit=before_submit)
+    assert calls == ["restart", "batch"]
+    assert proof["bureau_job_id"] == BUREAU
+
+
+def test_native_batch_bureau_identity_must_match_flow_submission():
+    fixture = Fixture()
+    with pytest.raises(FlowAdvanceError, match="submission changed job"):
+        advance_physical_passport_flow(
+            fixture.request, fixture.native, fixture.private, fixture.history,
+            ORG, REFERENCES, STARTED, ISSUER, poll_interval_seconds=0,
+            before_submit=lambda started, sod: IDS[8])
+    assert fixture.completed == 6

@@ -72,6 +72,7 @@ TEXT_SECRETS = frozenset({
     "bao_root_token", "marty_db_password", "signing_keys_internal_api_key",
     "dsc_issue_gateway_key", "csca_issue_gateway_key",
     "issuance_api_key", "callback_signer_api_key", "grpc_service_token",
+    "passport_beta_reconciliation_operator_token",
     "bureau_database_url", "token_hmac_key", "integration_secret_master_key",
     "flow_webhook_secret", "flow_application_event_hmac_key",
 })
@@ -274,6 +275,7 @@ def stage_disposable_inputs(
             "issuance_api_key": secrets.token_hex(32),
             "callback_signer_api_key": secrets.token_hex(32),
             "grpc_service_token": secrets.token_hex(32),
+            "passport_beta_reconciliation_operator_token": secrets.token_hex(32),
             "bureau_database_url": f"postgresql://marty:{database_password}@postgres:5432/marty",
             "token_hmac_key": secrets.token_hex(32),
             "integration_secret_master_key": base64.b64encode(secrets.token_bytes(32)).decode("ascii"),
@@ -281,6 +283,9 @@ def stage_disposable_inputs(
             "flow_application_event_hmac_key": secrets.token_hex(32),
         }
         require(set(values) == TEXT_SECRETS, "Disposable secret set is incomplete")
+        require(values["passport_beta_reconciliation_operator_token"]
+                not in {values["grpc_service_token"], values["issuance_api_key"]},
+                "Disposable native batch operator token is not distinct")
         env = {
             **references,
             "PASSPORT_ACCEPTANCE_PROJECT": project,

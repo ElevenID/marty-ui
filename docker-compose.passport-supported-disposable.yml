@@ -283,6 +283,8 @@ services:
       PASSPORT_MANAGED_ISSUER_SIGNING_ENABLED: "true"
       PASSPORT_KMS_ARTIFACTS_ENABLED: "true"
       PASSPORT_KMS_CALLBACKS_ENABLED: "true"
+      PASSPORT_BETA_RECONCILIATION_ENABLED: "true"
+      PASSPORT_BETA_RECONCILIATION_OPERATOR_TOKEN_FILE: /run/secrets/passport_beta_reconciliation_operator_token
       GRPC_SERVICE_TOKEN_FILE: /run/secrets/grpc_service_token
       ISSUANCE_API_KEY_FILE: /run/secrets/issuance_api_key
       TOKEN_HMAC_KEY_FILE: /run/secrets/token_hmac_key
@@ -302,7 +304,7 @@ services:
       RP_GRPC_TARGET: revocation-profile:9013
       CT_GRPC_TARGET: credential-template:9003
       CREDENTIAL_TEMPLATE_SERVICE_URL: http://credential-template:8003
-    secrets: [marty_db_password, bao_token, signing_keys_internal_api_key, issuance_api_key, grpc_service_token, token_hmac_key, integration_secret_master_key]
+    secrets: [marty_db_password, bao_token, signing_keys_internal_api_key, issuance_api_key, grpc_service_token, token_hmac_key, integration_secret_master_key, passport_beta_reconciliation_operator_token]
     depends_on:
       signing-keys:
         condition: service_started
@@ -531,6 +533,8 @@ secrets:
     file: ${PASSPORT_ACCEPTANCE_SECRET_DIR:?use disposable secret root}/callback_signer_bao_token
   grpc_service_token:
     file: ${PASSPORT_ACCEPTANCE_SECRET_DIR:?use disposable secret root}/grpc_service_token
+  passport_beta_reconciliation_operator_token:
+    file: ${PASSPORT_ACCEPTANCE_SECRET_DIR:?use disposable secret root}/passport_beta_reconciliation_operator_token
   bureau_database_url:
     file: ${PASSPORT_ACCEPTANCE_SECRET_DIR:?use disposable secret root}/bureau_database_url
   token_hmac_key:

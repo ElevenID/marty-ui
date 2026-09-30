@@ -58,7 +58,8 @@ SECRETS = {
     "deployment-profile": ("marty_db_password", "grpc_service_token"),
     "issuance-native": ("marty_db_password", "bao_token", "signing_keys_internal_api_key",
                         "issuance_api_key", "grpc_service_token", "token_hmac_key",
-                        "integration_secret_master_key"),
+                        "integration_secret_master_key",
+                        "passport_beta_reconciliation_operator_token"),
     "flow": ("marty_db_password", "signing_keys_internal_api_key", "issuance_api_key",
              "grpc_service_token"),
     "passport-callback-signer": ("callback_signer_bao_token", "callback_signer_api_key"),
@@ -178,7 +179,11 @@ def fixture() -> tuple[dict, dict[tuple[str, ...], str]]:
         gateway_env = {**ceremony_env, "GRPC_INSECURE_ALLOWED": "true",
                        "PUBLIC_DOMAIN": "localhost:29876",
                        "ISSUER_BASE_URL": "https://localhost:29876"}
-        native_env = {"ISSUER_BASE_URL": "https://localhost:29876"}
+        native_env = {"ISSUER_BASE_URL": "https://localhost:29876",
+                      "ENVIRONMENT": "beta",
+                      "PASSPORT_BETA_RECONCILIATION_ENABLED": "true",
+                      "PASSPORT_BETA_RECONCILIATION_OPERATOR_TOKEN_FILE":
+                          "/run/secrets/passport_beta_reconciliation_operator_token"}
         signing_env = {**ceremony_env,
                        "SIGNING_KEYS_BETA_CSCA_ISSUANCE_ENABLED": "true"}
         support_common = {

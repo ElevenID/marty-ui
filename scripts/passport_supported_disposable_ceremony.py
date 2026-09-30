@@ -320,6 +320,7 @@ def bootstrap_certificate_chain(
     profile_signer: Callable[[str, str, str, str, bytes], dict[str, Any]] = sign_in_container,
     profile_verifier: Callable[..., dict[str, Any]] = verify_live_signatures,
     on_csca_material: Callable[[str], None] | None = None,
+    on_dsc_material: Callable[[str, str], None] | None = None,
 ) -> dict[str, Any]:
     """Issue the chain and prove both selected managed keys without exporting refs."""
     chain, csca_key, dsc_key = ceremony_plan(plan, root, gateway_port, now=now)
@@ -348,6 +349,7 @@ def bootstrap_certificate_chain(
         request=lambda path, body, authority: request(
             plan, path, body, authority, signer_id),
         on_csca_material=capture_csca,
+        on_dsc_material=on_dsc_material,
     )
     _require(len(csca_material) == 1 and "BEGIN CERTIFICATE" in csca_material[0],
              "Disposable managed CSCA material is unavailable")

@@ -55,11 +55,14 @@ def safe_model(root: Path) -> dict:
     services["passport-beta-bureau"]["environment"].pop("DATABASE_URL")
     services["passport-beta-bureau"]["networks"] = ["private", "callback_signing"]
     services["issuance-native"]["environment"].update({
-        "ENVIRONMENT": "development",
+        "ENVIRONMENT": "beta",
         "PASSPORT_NATIVE_HTTP_ENABLED": "true",
         "PASSPORT_MANAGED_ISSUER_SIGNING_ENABLED": "true",
         "PASSPORT_KMS_ARTIFACTS_ENABLED": "true",
         "PASSPORT_KMS_CALLBACKS_ENABLED": "true",
+        "PASSPORT_BETA_RECONCILIATION_ENABLED": "true",
+        "PASSPORT_BETA_RECONCILIATION_OPERATOR_TOKEN_FILE":
+            "/run/secrets/passport_beta_reconciliation_operator_token",
         "ISSUER_BASE_URL": "https://localhost:29876",
         "ISSUANCE_GRPC_ENABLED": "true", "ISSUANCE_GRPC_PORT": "9005",
         "CT_GRPC_TARGET": "credential-template:9003",
@@ -136,6 +139,7 @@ def safe_model(root: Path) -> dict:
     services["issuance-native"]["secrets"].extend([
         {"source": "token_hmac_key"},
         {"source": "integration_secret_master_key"},
+        {"source": "passport_beta_reconciliation_operator_token"},
     ])
     services["issuance-native"]["environment"]["SIGNING_KEYS_INTERNAL_URL"] = (
         "http://gateway:8000/internal/signing-keys"
@@ -383,6 +387,8 @@ def safe_model(root: Path) -> dict:
                 "db": {"file": str(root / "secrets/db")},
                 "marty_db_password": {"file": str(root / "secrets/marty_db_password")},
                 "grpc_service_token": {"file": str(root / "secrets/grpc_service_token")},
+                "passport_beta_reconciliation_operator_token": {
+                    "file": str(root / "secrets/passport_beta_reconciliation_operator_token")},
                 "bao_root_token": {"file": str(root / "secrets/bao_root_token")},
                 "bao_token": {"file": str(root / "secrets/bao_token")},
                 "issuance_api_key": {"file": str(root / "secrets/issuance_api_key")},
@@ -454,6 +460,9 @@ def test_disposable_bureau_cannot_redirect_private_gateway_callback(
     ("issuance-native", "PASSPORT_MANAGED_ISSUER_SIGNING_ENABLED", "false"),
     ("issuance-native", "PASSPORT_KMS_ARTIFACTS_ENABLED", "false"),
     ("issuance-native", "PASSPORT_KMS_CALLBACKS_ENABLED", "false"),
+    ("issuance-native", "PASSPORT_BETA_RECONCILIATION_ENABLED", "false"),
+    ("issuance-native", "PASSPORT_BETA_RECONCILIATION_OPERATOR_TOKEN_FILE",
+     "/run/secrets/grpc_service_token"),
     ("gateway", "ISSUANCE_SERVICE_URL", "http://flow:8011"),
     ("gateway", "ISSUANCE_NATIVE_SERVICE_URL", "http://flow:8011"),
     ("flow", "ISSUANCE_SERVICE_URL", "http://gateway:8000"),
@@ -465,6 +474,20 @@ def test_disposable_model_requires_one_rust_passport_owner(
     model = safe_model(tmp_path)
     model["services"][service]["environment"][key] = value
     with pytest.raises(ModelPreflightError, match="one Rust owner"):
+        validate_model(model, PROJECT, IMAGE, tmp_path)
+
+
+def test_native_batch_operator_token_is_file_backed_and_native_only(tmp_path: Path) -> None:
+    model = safe_model(tmp_path)
+    native = model["services"]["issuance-native"]
+    native["environment"]["PASSPORT_BETA_RECONCILIATION_OPERATOR_TOKEN"] = "raw-token"
+    with pytest.raises(ModelPreflightError):
+        validate_model(model, PROJECT, IMAGE, tmp_path)
+
+    model = safe_model(tmp_path)
+    model["services"]["gateway"]["secrets"].append(
+        {"source": "passport_beta_reconciliation_operator_token"})
+    with pytest.raises(ModelPreflightError, match="escaped its owner"):
         validate_model(model, PROJECT, IMAGE, tmp_path)
 
 

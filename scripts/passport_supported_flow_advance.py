@@ -132,6 +132,7 @@ def advance_physical_passport_flow(
     max_polls: int = 36, poll_interval_seconds: float = 5,
     sleep: Callable[[float], None] = time.sleep,
     restart: Callable[[], bool] | None = None,
+    before_submit: Callable[[dict[str, str], str], str] | None = None,
 ) -> dict[str, Any]:
     """Require nine transitions, six native effects, one callback, and DB history."""
     _require(1 <= max_polls <= 90 and 0 <= poll_interval_seconds <= 30,
@@ -148,7 +149,13 @@ def advance_physical_passport_flow(
     callback_receipt = None
     sod_sha256 = None
     restart_verified = False
+    batch_bureau_job_id = None
     for index, step in enumerate(STEPS):
+        if step == "submit_to_personalization" and before_submit is not None:
+            _require(sod_sha256 is not None
+                     and (restart is None or restart_verified),
+                     "Flow batch ran before signed material or restart proof")
+            batch_bureau_job_id = _uuid(before_submit(started, sod_sha256))
         if step == "track_production":
             _require(bureau_job_id is not None,
                      "Flow bureau job is missing before tracking")
@@ -212,6 +219,8 @@ def advance_physical_passport_flow(
         if step == "submit_to_personalization":
             bureau_job_id = _uuid(job.get("bureau_job_id"))
             _require(native.get("bureau_job_id") == bureau_job_id
+                     and (batch_bureau_job_id is None
+                          or batch_bureau_job_id == bureau_job_id)
                      and job.get("status") in ("SUBMITTED", "IN_PRODUCTION",
                                                "QUALITY_CHECK", "READY_FOR_ACTIVATION"),
                      "Flow bureau submission changed job")
