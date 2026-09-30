@@ -22,7 +22,9 @@ if __package__:
     )
     from .collect_passport_supported_acceptance import COMPOSE_SERVICES, observe_compose
     from .passport_supported_certificate_rehearsal import validate_certificate_setup
-    from .passport_supported_disposable_ceremony import bootstrap_certificate_chain
+    from .passport_supported_disposable_ceremony import (
+        bootstrap_certificate_chain, recheck_current_managed_signer,
+    )
     from .passport_supported_disposable_route_probe import exercise_owned_disposable
     from .passport_supported_flow_gateway import exercise_owned_flow
     from .passport_supported_flow_restart import restart_owned_rust
@@ -46,7 +48,9 @@ else:
     )
     from collect_passport_supported_acceptance import COMPOSE_SERVICES, observe_compose
     from passport_supported_certificate_rehearsal import validate_certificate_setup
-    from passport_supported_disposable_ceremony import bootstrap_certificate_chain
+    from passport_supported_disposable_ceremony import (
+        bootstrap_certificate_chain, recheck_current_managed_signer,
+    )
     from passport_supported_disposable_route_probe import exercise_owned_disposable
     from passport_supported_flow_gateway import exercise_owned_flow
     from passport_supported_flow_restart import restart_owned_rust
@@ -149,6 +153,7 @@ def produce_disposable_receipt(
     inspect: Callable[[list[str]], str] | None = None,
     run: Callable[[list[str], dict[str, str], int], bool] = _run,
     setup: Callable[..., dict] = bootstrap_certificate_chain,
+    recheck_signer: Callable[..., dict] = recheck_current_managed_signer,
     record_live: Callable[..., dict] = collect_record,
     issue_key: Callable[..., Path] = issue_disposable_api_key,
     issue_operator_key: Callable[..., Path] = issue_disposable_operator_key,
@@ -211,8 +216,13 @@ def produce_disposable_receipt(
         if (before_setup.tzinfo is None
             or min(expires, deadline) - before_setup < RESERVED_TEARDOWN):
             raise ProducerError("Disposable certificate teardown budget is exhausted")
-        certificate = setup(plan, root, gateway_port, now=before_setup)
+        csca_material: list[str] = []
+        certificate = setup(plan, root, gateway_port, now=before_setup,
+                            on_csca_material=csca_material.append)
         validate_certificate_setup(certificate, plan, gateway_port)
+        if (len(csca_material) != 1
+            or "BEGIN CERTIFICATE" not in csca_material[0]):
+            raise ProducerError("Disposable CSCA ceremony material is unavailable")
         if not run([*compose, "up", "-d", "--wait", "--wait-timeout", "360"],
                    staged_env, 600):
             raise ProducerError("Disposable Rust stack startup failed")
@@ -229,6 +239,24 @@ def produce_disposable_receipt(
             raise ProducerError("Disposable route teardown budget is exhausted")
         record = record_live(plan_path, plan, environment["GITHUB_RUN_ID"],
                              root, before_probe, inspector)
+        containers = record.get("containers") if isinstance(record, dict) else None
+        signer_id = containers.get("signing-keys") if isinstance(containers, dict) else None
+        if not isinstance(signer_id, str):
+            raise ProducerError("Current disposable Signing Keys container is unavailable")
+        current_signer = recheck_signer(
+            signer_id, root, gateway_port, certificate, csca_material.pop())
+        if (not isinstance(current_signer, dict)
+            or set(current_signer) != {
+                "signing_keys_container_id", "managed_kms_custody_verified",
+                "chain_verified", "csca_issuer_profile_commitment",
+                "dsc_issuer_profile_commitment"}
+            or current_signer.get("signing_keys_container_id") != signer_id
+            or current_signer.get("managed_kms_custody_verified") is not True
+            or current_signer.get("chain_verified") is not True
+            or any(current_signer.get(field) != certificate["evidence"][field]
+                   for field in ("csca_issuer_profile_commitment",
+                                 "dsc_issuer_profile_commitment"))):
+            raise ProducerError("Current disposable managed signer differs from ceremony")
         key_path = issue_key(record, plan["surface"], before_probe,
                              inspector=inspector,
                              executor=lambda args, output: execute(args, output, staged_env))
@@ -302,8 +330,10 @@ def produce_disposable_receipt(
         if (pre_restart_native_runtime["container_id"]
             == runtime["issuance-native"]["container_id"]
             or pre_restart_native_runtime["image_id"]
-            != runtime["issuance-native"]["image_id"]):
-            raise ProducerError("Disposable native restart image or container drifted")
+            != runtime["issuance-native"]["image_id"]
+            or current_signer["signing_keys_container_id"]
+            != runtime["signing-keys"]["container_id"]):
+            raise ProducerError("Disposable Rust runtime image or container drifted")
         return {
             "schema": "marty.passport-supported-rust-producer/v1",
             "status": "blocked", "project": plan["project"],
@@ -319,6 +349,7 @@ def produce_disposable_receipt(
             "flow_execution_verified": True,
             "rust_restart_resume_verified": True,
             "certificate": certificate,
+            "current_managed_signer": current_signer,
             "route": route,
             "flow_execution": flow,
             "runtime_images": {service: runtime[service]

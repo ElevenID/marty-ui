@@ -218,6 +218,44 @@ def test_certificate_setup_rejects_unbound_managed_profile(monkeypatch) -> None:
             )
 
 
+def test_recreated_signer_must_match_ceremony_profiles_and_chain() -> None:
+    with staged() as (_, root):
+        certificate = {"evidence": {
+            "csca_certificate_sha256": "1" * 64,
+            "dsc_certificate_sha256": "2" * 64,
+            "csca_issuer_profile_commitment": "3" * 64,
+            "dsc_issuer_profile_commitment": "4" * 64,
+        }}
+        observed = []
+
+        def verify(org, csca_did, dsc_did, csca, dsc, evidence, pem, key, *, signer):
+            observed.append((org, csca_did, dsc_did, evidence, pem, key))
+            assert csca["purpose"] == "csca" and dsc["purpose"] == "x509_doc_signer"
+            assert pem == "-----BEGIN CERTIFICATE-----\npublic\n-----END CERTIFICATE-----"
+            return {"managed_kms_custody_verified": True, "chain_verified": True,
+                    "csca_issuer_profile_commitment": "3" * 64,
+                    "dsc_issuer_profile_commitment": "4" * 64}
+
+        args = dict(
+            profile_resolver=lambda container_id, org, did, purpose:
+                {"purpose": purpose},
+            profile_verifier=verify,
+        )
+        result = ceremony.recheck_current_managed_signer(
+            "1" * 64, root, 29876, certificate,
+            "-----BEGIN CERTIFICATE-----\npublic\n-----END CERTIFICATE-----", **args)
+        assert result["signing_keys_container_id"] == "1" * 64
+        assert result["managed_kms_custody_verified"] is True
+        assert observed[0][-1] == "c" * 64
+        changed = {"evidence": {**certificate["evidence"],
+                                "dsc_issuer_profile_commitment": "5" * 64}}
+        with pytest.raises(ceremony.DisposableCeremonyError,
+                           match="differs from the issued certificate chain"):
+            ceremony.recheck_current_managed_signer(
+                "1" * 64, root, 29876, changed,
+                "-----BEGIN CERTIFICATE-----\npublic\n-----END CERTIFICATE-----", **args)
+
+
 @pytest.mark.parametrize("mutation", [
     lambda plan, root: plan.update(surface="base"),
     lambda plan, root: plan.update(expires_at=(NOW - timedelta(seconds=1)).isoformat()),

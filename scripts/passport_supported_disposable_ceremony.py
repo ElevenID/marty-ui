@@ -319,6 +319,7 @@ def bootstrap_certificate_chain(
     profile_resolver: Callable[[str, str, str, str], dict[str, Any]] = resolve_in_container,
     profile_signer: Callable[[str, str, str, str, bytes], dict[str, Any]] = sign_in_container,
     profile_verifier: Callable[..., dict[str, Any]] = verify_live_signatures,
+    on_csca_material: Callable[[str], None] | None = None,
 ) -> dict[str, Any]:
     """Issue the chain and prove both selected managed keys without exporting refs."""
     chain, csca_key, dsc_key = ceremony_plan(plan, root, gateway_port, now=now)
@@ -337,11 +338,16 @@ def bootstrap_certificate_chain(
                  and projected.get("status") == "active",
                  "Disposable managed passport profile was not provisioned")
     csca_material: list[str] = []
+    def capture_csca(pem: str) -> None:
+        csca_material.append(pem)
+        if on_csca_material is not None:
+            on_csca_material(pem)
+
     result = exercise_with_authorities(
         chain, csca_key, dsc_key,
         request=lambda path, body, authority: request(
             plan, path, body, authority, signer_id),
-        on_csca_material=csca_material.append,
+        on_csca_material=capture_csca,
     )
     _require(len(csca_material) == 1 and "BEGIN CERTIFICATE" in csca_material[0],
              "Disposable managed CSCA material is unavailable")
@@ -368,3 +374,38 @@ def bootstrap_certificate_chain(
             "status": "setup_only", "gateway_operator_authorization_verified": False,
             "project": plan["project"], "source_commit": plan["source_commit"],
             "evidence": result["evidence"] | profile_proof}
+
+
+def recheck_current_managed_signer(
+    container_id: str, root: Path, gateway_port: int, certificate: dict[str, Any],
+    csca_pem: str, *,
+    profile_resolver: Callable[[str, str, str, str], dict[str, Any]] = resolve_in_container,
+    profile_signer: Callable[[str, str, str, str, bytes], dict[str, Any]] = sign_in_container,
+    profile_verifier: Callable[..., dict[str, Any]] = verify_live_signatures,
+) -> dict[str, Any]:
+    """Bind ceremony proof to the final Signing Keys container after recreation."""
+    evidence = certificate.get("evidence") if isinstance(certificate, dict) else None
+    _require(isinstance(container_id, str) and IDENTIFIER.fullmatch(container_id) is not None
+             and isinstance(evidence, dict)
+             and isinstance(csca_pem, str) and "BEGIN CERTIFICATE" in csca_pem,
+             "Current disposable managed signer input is invalid")
+    did = issuer_did(gateway_port)
+    csca_resolution = profile_resolver(container_id, ORGANIZATION_ID, did, "csca")
+    dsc_resolution = profile_resolver(container_id, ORGANIZATION_ID, did, "x509_doc_signer")
+    key = _operator_key(root / "secrets", "signing_keys_internal_api_key")
+    proof = profile_verifier(
+        ORGANIZATION_ID, did, did, csca_resolution, dsc_resolution,
+        evidence, csca_pem, key,
+        signer=lambda org, issuer, purpose, challenge: profile_signer(
+            container_id, org, issuer, purpose, challenge),
+    )
+    _require(isinstance(proof, dict)
+             and proof.get("managed_kms_custody_verified") is True
+             and proof.get("chain_verified") is True
+             and all(proof.get(field) == evidence.get(field)
+                     and isinstance(proof.get(field), str)
+                     and KEY.fullmatch(proof[field]) is not None
+                     for field in ("csca_issuer_profile_commitment",
+                                   "dsc_issuer_profile_commitment")),
+             "Current managed signer differs from the issued certificate chain")
+    return {"signing_keys_container_id": container_id, **proof}

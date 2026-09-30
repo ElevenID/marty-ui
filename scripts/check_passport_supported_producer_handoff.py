@@ -44,6 +44,7 @@ RECEIPT_FIELDS = frozenset({
     "certificate_setup_passed", "live_ownership_verified", "rust_routes_verified",
     "signed_gateway_callback_verified", "flow_execution_verified",
     "flow_start_verified", "rust_restart_resume_verified", "certificate",
+    "current_managed_signer",
     "route", "flow_execution", "runtime_images", "pre_restart_native_runtime",
     "runtime_edge", "blocker",
 })
@@ -287,6 +288,20 @@ def verify_handoff(
     _route_evidence(receipt["route"], receipt["gateway_port"])
     _flow_execution_evidence(receipt["flow_execution"])
     _runtime_evidence(receipt, plan)
+    current_signer = receipt["current_managed_signer"]
+    if (not isinstance(current_signer, dict)
+        or set(current_signer) != {
+            "signing_keys_container_id", "managed_kms_custody_verified",
+            "chain_verified", "csca_issuer_profile_commitment",
+            "dsc_issuer_profile_commitment"}
+        or current_signer.get("signing_keys_container_id")
+        != receipt["runtime_images"]["signing-keys"]["container_id"]
+        or current_signer.get("managed_kms_custody_verified") is not True
+        or current_signer.get("chain_verified") is not True
+        or any(current_signer.get(field) != certificate["evidence"][field]
+               for field in ("csca_issuer_profile_commitment",
+                             "dsc_issuer_profile_commitment"))):
+        raise HandoffError("Current managed signer does not match the released runtime")
     try:
         verified = attest(str(plan_path), "ElevenID/marty-ui", PLAN_WORKFLOW,
                           source_commit, "refs/heads/main")

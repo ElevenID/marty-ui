@@ -86,13 +86,29 @@ def certificate(selected: dict, port: int) -> dict:
     }
 
 
+def current_signer(container_id: str = "signing-keys") -> dict:
+    return {"signing_keys_container_id": container_id,
+            "managed_kms_custody_verified": True, "chain_verified": True,
+            "csca_issuer_profile_commitment": "3" * 64,
+            "dsc_issuer_profile_commitment": "4" * 64}
+
+
+def setup_certificate(selected: dict):
+    def setup(*args, **kwargs):
+        kwargs["on_csca_material"](
+            "-----BEGIN CERTIFICATE-----\npublic\n-----END CERTIFICATE-----")
+        return certificate(selected, 29877)
+    return setup
+
+
 @pytest.mark.parametrize("surface", ["base", "selfhost"])
 def test_producer_orders_real_gates_and_tears_down(surface: str, tmp_path: Path) -> None:
     selected = plan(surface)
     calls = []
     prior_native_id = "f" * 64
     record = {"project": selected["project"],
-              "containers": {"issuance-native": prior_native_id}}
+              "containers": {"issuance-native": prior_native_id,
+                             "signing-keys": "signing-keys"}}
 
     def run(args, env, timeout):
         calls.append(("run", args))
@@ -108,6 +124,8 @@ def test_producer_orders_real_gates_and_tears_down(surface: str, tmp_path: Path)
 
     def setup(*args, **kwargs):
         calls.append(("setup", args))
+        kwargs["on_csca_material"](
+            "-----BEGIN CERTIFICATE-----\npublic\n-----END CERTIFICATE-----")
         return certificate(selected, 29877)
 
     def live(*args):
@@ -173,6 +191,7 @@ def test_producer_orders_real_gates_and_tears_down(surface: str, tmp_path: Path)
         preflight=lambda *args, **kwargs: selected,
         inspect=inspect, run=run, setup=setup,
         record_live=live, issue_key=key, issue_operator_key=operator_key,
+        recheck_signer=lambda *args: current_signer(),
         probe=probe, flow_proof=prove_flow, restart_rust=restart,
         observe_runtime=observe,
         teardown_complete=complete,
@@ -199,6 +218,7 @@ def test_producer_orders_real_gates_and_tears_down(surface: str, tmp_path: Path)
     assert report["flow_execution"] == flow_receipt()
     assert report["flow_execution_verified"] is True
     assert report["rust_restart_resume_verified"] is True
+    assert report["current_managed_signer"] == current_signer()
     assert report["producer_run_id"] == "987654"
     assert set(report["runtime_images"]) == set(COMPOSE_SERVICES)
     assert report["pre_restart_native_runtime"]["container_id"] == prior_native_id
@@ -276,8 +296,10 @@ def test_invalid_route_proof_fails_and_cleans(tmp_path: Path,
             verify=lambda *args, **kwargs: selected,
             preflight=lambda *args, **kwargs: selected,
             inspect=lambda args: "", run=run,
-            setup=lambda *args, **kwargs: certificate(selected, 29877),
-            record_live=lambda *args: {"project": selected["project"]},
+            setup=setup_certificate(selected),
+            record_live=lambda *args: {"project": selected["project"],
+                                       "containers": {"signing-keys": "signing-keys"}},
+            recheck_signer=lambda *args: current_signer(),
             issue_key=lambda *args, **kwargs: (
                 Path(tempfile.gettempdir()) / selected["project"] / "secrets"
                 / "passport_acceptance_api_key"),
@@ -326,9 +348,11 @@ def test_failed_recreate_uses_plan_bound_partial_teardown(tmp_path: Path) -> Non
             verify=lambda *args, **kwargs: selected,
             preflight=lambda *args, **kwargs: selected,
             inspect=inspect, run=run,
-            setup=lambda *args, **kwargs: certificate(selected, 29877),
+            setup=setup_certificate(selected),
             record_live=lambda *args: {"project": selected["project"],
-                                       "containers": {"issuance-native": prior_native_id}},
+                                       "containers": {"issuance-native": prior_native_id,
+                                                      "signing-keys": "signing-keys"}},
+            recheck_signer=lambda *args: current_signer(),
             issue_key=lambda *args, **kwargs: (
                 Path(tempfile.gettempdir()) / selected["project"] / "secrets"
                 / "passport_acceptance_api_key"),
@@ -409,6 +433,8 @@ def test_hosted_handoff_binds_partial_receipt_to_plan(tmp_path: Path) -> None:
         "flow_start_verified": True,
         "flow_execution_verified": True, "rust_restart_resume_verified": True,
         "certificate": certificate(selected, 29877),
+        "current_managed_signer": current_signer(
+            f"{4:064x}"),
         "route": {"verified": True, "flow_execution_verified": False,
                   "evidence": {"signed_gateway_callback_verified": True,
                                "signed_callback_path": "simulator-to-gateway-to-native",
@@ -455,6 +481,8 @@ def test_hosted_handoff_binds_partial_receipt_to_plan(tmp_path: Path) -> None:
             project="foreign")),
         ("wrong issuer DID", lambda item: item["certificate"]["evidence"].update(
             csca_issuer_did_sha256="8" * 64)),
+        ("wrong current signer", lambda item: item["current_managed_signer"].update(
+            signing_keys_container_id="other")),
         ("no managed custody", lambda item: item["certificate"]["evidence"].update(
             managed_kms_custody_verified=False)),
         ("same managed profile", lambda item: item["certificate"]["evidence"].update(
