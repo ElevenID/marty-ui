@@ -134,6 +134,8 @@ def test_nine_advances_require_same_job_callback_and_durable_history():
     assert proof == {"flow_step_count": 9, "native_effect_count": 6,
                      "durable_history_verified": True,
                      "restart_resume_verified": False,
+                     "restart_before_native_status": None,
+                     "restart_after_native_status": None,
                      "signed_callback_receipt_sha256": "b" * 64,
                      "callback_bureau_status": "QUALITY_CHECK",
                      "bureau_job_id": BUREAU, "sod_sha256": "a" * 64}
@@ -195,6 +197,8 @@ def test_restart_resumes_same_persisted_flow_and_native_job():
     assert restarts == [5]
     assert fixture.completed == 9
     assert proof["restart_resume_verified"] is True
+    assert proof["restart_before_native_status"] == "SOD_SIGNED"
+    assert proof["restart_after_native_status"] == "SUBMITTED"
 
 
 def test_shipped_callback_requires_exact_simulator_tracking_marker():

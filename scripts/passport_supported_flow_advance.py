@@ -150,6 +150,8 @@ def advance_physical_passport_flow(
     callback_bureau_status = None
     sod_sha256 = None
     restart_verified = False
+    restart_before_native_status = None
+    restart_after_native_status = None
     batch_bureau_job_id = None
     for index, step in enumerate(STEPS):
         if step == "submit_to_personalization" and before_submit is not None:
@@ -208,6 +210,7 @@ def advance_physical_passport_flow(
                      and job.get("sod_signature_verified") is True,
                      "Flow SOD signature evidence is missing")
             if restart is not None:
+                restart_before_native_status = native["status"]
                 _require(restart() is True, "Owned Rust service restart failed")
                 resumed = _read(request, instance_path)
                 resumed_job = _instance(resumed, organization_id, started,
@@ -234,6 +237,8 @@ def advance_physical_passport_flow(
                      and job.get("status") in ("SUBMITTED", "IN_PRODUCTION",
                                                "QUALITY_CHECK", "READY_FOR_ACTIVATION"),
                      "Flow bureau submission changed job")
+            if restart_verified:
+                restart_after_native_status = native["status"]
         if bureau_job_id is not None:
             _require(job.get("bureau_job_id") == bureau_job_id
                      and native.get("bureau_job_id") == bureau_job_id,
@@ -254,11 +259,18 @@ def advance_physical_passport_flow(
              and callback_bureau_status in ("QUALITY_CHECK", "SHIPPED")
              and sod_sha256 is not None,
              "Flow native proof is incomplete")
+    _require(not restart_verified or (
+        restart_before_native_status == "SOD_SIGNED"
+        and restart_after_native_status in (
+            "SUBMITTED", "IN_PRODUCTION", "QUALITY_CHECK", "READY_FOR_ACTIVATION")
+    ), "Flow native restart status continuity is incomplete")
     _history(history_read(started["flow_instance_id"], started["flow_definition_id"]),
              organization_id, started)
     return {"flow_step_count": len(STEPS), "native_effect_count": 6,
             "durable_history_verified": True,
             "restart_resume_verified": restart_verified,
+            "restart_before_native_status": restart_before_native_status,
+            "restart_after_native_status": restart_after_native_status,
             "signed_callback_receipt_sha256": callback_receipt,
             "callback_bureau_status": callback_bureau_status,
             "bureau_job_id": bureau_job_id, "sod_sha256": sod_sha256}

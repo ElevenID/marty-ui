@@ -41,6 +41,8 @@ def flow_receipt(final_native_id: str = "issuance-native") -> dict:
                       "six_native_effects_verified": True,
                       "durable_history_verified": True,
                       "restart_resume_verified": True,
+                      "restart_before_native_status": "SOD_SIGNED",
+                      "restart_after_native_status": "SUBMITTED",
                       "bureau_job_id_sha256": "8" * 64,
                       "signed_callback_receipt_sha256": "9" * 64,
                       "callback_bureau_status": "QUALITY_CHECK",
@@ -641,6 +643,8 @@ def test_hosted_handoff_binds_partial_receipt_to_plan(tmp_path: Path) -> None:
             ["execution"].update(durable_history_verified=False)),
         ("invalid selected callback status", lambda item: item["flow_execution"]
             ["execution"].update(callback_bureau_status="UNVERIFIED")),
+        ("no native restart progress", lambda item: item["flow_execution"]
+            ["execution"].update(restart_after_native_status="SOD_SIGNED")),
         ("wrong selected material job", lambda item: item["flow_execution"]
             ["batch"]["batch"]["evidence"]["selected_material_receipt"].update(
                 source_job_id_commitment="0" * 64)),

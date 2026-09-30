@@ -287,6 +287,9 @@ def exercise_owned_flow(
              and execution.get("native_effect_count") == 6
              and execution.get("durable_history_verified") is True
              and execution.get("restart_resume_verified") is True
+             and execution.get("restart_before_native_status") == "SOD_SIGNED"
+             and execution.get("restart_after_native_status") in (
+                 "SUBMITTED", "IN_PRODUCTION", "QUALITY_CHECK", "READY_FOR_ACTIVATION")
              and execution.get("callback_bureau_status") in ("QUALITY_CHECK", "SHIPPED")
              and isinstance(execution.get("bureau_job_id"), str)
              and isinstance(batch_receipt, dict)
@@ -305,6 +308,8 @@ def exercise_owned_flow(
             "six_native_effects_verified": True,
             "durable_history_verified": True,
             "restart_resume_verified": True,
+            "restart_before_native_status": execution["restart_before_native_status"],
+            "restart_after_native_status": execution["restart_after_native_status"],
             "signed_callback_receipt_sha256": execution["signed_callback_receipt_sha256"],
             "callback_bureau_status": execution["callback_bureau_status"],
             "sod_sha256": execution["sod_sha256"],
