@@ -483,6 +483,15 @@ def inspect(
                 require(all(kubernetes_config_value(containers[0], config_data, key) == value
                             for key, value in expected_config.items()),
                         f"Disposable Kubernetes deployment/{name} is not simulator-bound")
+            if name == "passport-beta-bureau":
+                require(isinstance(config_data, dict)
+                        and kubernetes_config_value(
+                            containers[0], config_data,
+                            "PASSPORT_BETA_BUREAU_GATEWAY_CALLBACK_ENABLED") == "true"
+                        and kubernetes_config_value(
+                            containers[0], config_data, "PASSPORT_BUREAU_CALLBACK_URL")
+                        == "http://gateway:8000/v1/passport/webhooks/personalization",
+                        "Disposable Kubernetes bureau callback bypasses Gateway")
         elif kind == "service":
             spec = item.get("spec")
             require(

@@ -48,7 +48,7 @@ def test_disposable_kubernetes_selects_marty_simulator_without_provider() -> Non
                for item in yaml.safe_load_all(source)}
     assert len(objects) == 5
     assert set(KUBERNETES_SERVICES) == {
-        "gateway", "flow", "issuance-native", "passport-callback-signer",
+        "gateway", "flow", "issuance-native", "signing-keys", "passport-callback-signer",
         "passport-beta-bureau",
     }
     assert set(objects) == {
@@ -104,7 +104,8 @@ def test_disposable_kubernetes_selects_marty_simulator_without_provider() -> Non
     bureau_env = {item["name"]: item["value"] for item in objects[
         ("Deployment", "passport-beta-bureau")]["spec"]["template"]["spec"]["containers"][0]["env"]}
     assert bureau_env["PASSPORT_BUREAU_CALLBACK_URL"] == (
-        "http://issuance-native:8005/v1/passport/webhooks/personalization")
+        "http://gateway:8000/v1/passport/webhooks/personalization")
+    assert bureau_env["PASSPORT_BETA_BUREAU_GATEWAY_CALLBACK_ENABLED"] == "true"
     assert bureau_env["SIGNING_KEYS_INTERNAL_URL"] == (
         "http://passport-callback-signer:8018/internal/documents")
     policy = objects[("NetworkPolicy", "passport-acceptance-callback-signer-ingress")]
