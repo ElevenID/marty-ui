@@ -278,6 +278,35 @@ def beta_native_route_ownership(
                 or state.get("Status") != "running" or record.get("Image") != image.get("image_id")
                 or config.get("Image") != image.get("oci_reference")):
             raise HostProbeError("Selected beta provider ingress identity changed")
+    bureau_image = runtime_images.get("passport-beta-bureau")
+    if not isinstance(bureau_image, dict) or not isinstance(bureau_image.get("container_id"), str):
+        raise HostProbeError("Beta simulator container is missing")
+    bureau_record = inspector(bureau_image["container_id"])
+    bureau_config = bureau_record.get("Config")
+    bureau_state = bureau_record.get("State")
+    bureau_labels = bureau_config.get("Labels") if isinstance(bureau_config, dict) else None
+    if (not isinstance(bureau_labels, dict)
+            or bureau_labels.get("com.docker.compose.project") != BETA_PROJECT
+            or bureau_labels.get("com.docker.compose.service") != "passport-beta-bureau"
+            or not isinstance(bureau_state, dict) or bureau_state.get("Running") is not True
+            or bureau_state.get("Status") != "running"
+            or bureau_record.get("Image") != bureau_image.get("image_id")
+            or bureau_config.get("Image") != bureau_image.get("oci_reference")):
+        raise HostProbeError("Beta simulator identity changed")
+    bureau_env = bureau_config.get("Env")
+    if not isinstance(bureau_env, list) or not all(isinstance(item, str) and "=" in item for item in bureau_env):
+        raise HostProbeError("Beta simulator route configuration is incomplete")
+    callback = {}
+    for item in bureau_env:
+        name, value = item.split("=", 1)
+        if name in ("PASSPORT_BETA_BUREAU_GATEWAY_CALLBACK_ENABLED", "PASSPORT_BUREAU_CALLBACK_URL"):
+            if name in callback:
+                raise HostProbeError("Beta simulator callback route is ambiguous")
+            callback[name] = value
+    if (callback.get("PASSPORT_BETA_BUREAU_GATEWAY_CALLBACK_ENABLED") != "true"
+            or callback.get("PASSPORT_BUREAU_CALLBACK_URL")
+            != "http://gateway:8000/v1/passport/webhooks/personalization"):
+        raise HostProbeError("Beta simulator signed callback bypasses Gateway")
     return {"verified": True, "evidence": {
         "compose_project": BETA_PROJECT,
         "services": sorted(NATIVE_ROUTE_FLAGS),
@@ -285,6 +314,7 @@ def beta_native_route_ownership(
         "internal_service_auth": True,
         "flow_native_target": True,
         "webhook_owner": webhook_owner,
+        "simulator_callback_gateway_target": True,
     }}
 
 

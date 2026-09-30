@@ -69,6 +69,7 @@ def model(tmp_path, enabled=True):
     services["gateway"]["environment"]["SIGNING_KEYS_INTERNAL_API_KEY"] = (
         "synthetic-signing-credential"
     )
+    services["gateway"]["environment"]["PASSPORT_PROVIDER_INGRESS_GATEWAY_ENABLED"] = "false"
     services["signing-keys"] = {
         "environment": {
             "ENVIRONMENT": "beta",
@@ -104,7 +105,8 @@ def model(tmp_path, enabled=True):
             "GRPC_SERVICE_TOKEN": TOKEN,
             "SIGNING_KEYS_INTERNAL_API_KEY": "synthetic-signing-credential",
             "SIGNING_KEYS_INTERNAL_URL": VALIDATOR["PRIVATE_SIGNING_URL"],
-            "PASSPORT_BUREAU_CALLBACK_URL": VALIDATOR["PRIVATE_CALLBACK_URL"],
+            "PASSPORT_BETA_BUREAU_GATEWAY_CALLBACK_ENABLED": "true",
+            "PASSPORT_BUREAU_CALLBACK_URL": VALIDATOR["PRIVATE_GATEWAY_CALLBACK_URL"],
         },
         "networks": {"marty-network": None, "passport-callback-signing": None},
     }
@@ -311,6 +313,9 @@ def test_rendered_compose_environment_list_is_supported(tmp_path):
         "native_database_target",
         "signing_route",
         "callback_route",
+        "callback_direct_native",
+        "callback_gateway_disabled",
+        "callback_provider_ingress_selected",
         "image",
         "exposed_port",
         "network",
@@ -479,6 +484,14 @@ def test_partial_or_unsafe_selection_fails_closed(tmp_path, mutation):
         bureau["environment"]["PASSPORT_BUREAU_CALLBACK_URL"] = (
             "https://public.example.test"
         )
+    elif mutation == "callback_direct_native":
+        bureau["environment"]["PASSPORT_BUREAU_CALLBACK_URL"] = (
+            VALIDATOR["PRIVATE_CALLBACK_URL"]
+        )
+    elif mutation == "callback_gateway_disabled":
+        bureau["environment"]["PASSPORT_BETA_BUREAU_GATEWAY_CALLBACK_ENABLED"] = "false"
+    elif mutation == "callback_provider_ingress_selected":
+        services["gateway"]["environment"]["PASSPORT_PROVIDER_INGRESS_GATEWAY_ENABLED"] = "true"
     elif mutation == "image":
         bureau["image"] = "services:latest"
     elif mutation == "exposed_port":

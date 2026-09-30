@@ -299,11 +299,19 @@ pub struct PhysicalDocumentRequest {
 }
 
 #[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
+pub struct PhysicalDocumentRoute {
+    pub method: String,
+    pub path: String,
+}
+
+#[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
 pub struct PhysicalDocumentResult {
     pub operation: PhysicalDocumentOperation,
     pub status: String,
     #[serde(default)]
     pub data: BTreeMap<String, Value>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub route: Option<PhysicalDocumentRoute>,
 }
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]

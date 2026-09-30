@@ -11,13 +11,35 @@ from pathlib import Path
 import pytest
 import yaml
 
-from scripts.collect_passport_beta_acceptance import EvidenceError
+from scripts.collect_passport_beta_acceptance import (
+    EvidenceError, production_attachment_commitment,
+    production_snapshot_commitment,
+)
 from scripts.probe_passport_beta_chain import ChainProbeError
 from scripts.probe_passport_beta_batch import _identity_commit
 from scripts.probe_passport_beta_flow import PHYSICAL_STEPS
 from scripts.probe_passport_beta_native_batch import NativeBatchProbeError
-from scripts.run_passport_beta_acceptance import run
+from scripts.probe_passport_beta_selected_flow import PASSPORT_FLOW_ROUTES, selected_plan_commitment
+from scripts.run_passport_beta_acceptance import run as protected_run
 from tests.test_probe_passport_beta_chain import plan as certificate_plan
+
+
+def run(*args, **kwargs):
+    """Exercise old probe shapes only as unit fixtures, never the protected CLI."""
+    return protected_run(*args, require_aggregate=False, **kwargs)
+
+
+def test_protected_runner_requires_aggregate_receipt_before_collection() -> None:
+    with pytest.raises(EvidenceError, match="requires aggregate beta deployment"):
+        protected_run(Path("legacy-artifacts"), {}, "a" * 32,
+                      collector=lambda *_, **__: pytest.fail("No legacy collection"))
+
+
+def test_protected_runner_rejects_report_without_aggregate_commitments(tmp_path: Path) -> None:
+    (tmp_path / "aggregate-deployment.json").write_text("{}", encoding="utf-8")
+    with pytest.raises(EvidenceError, match="requires aggregate lineage"):
+        protected_run(tmp_path, {}, "a" * 32,
+                      collector=lambda *_, **__: report())
 
 
 def report(*, ready: bool = True) -> dict:
@@ -29,9 +51,12 @@ def report(*, ready: bool = True) -> dict:
         "physical_claim": "not_claimed",
         "runtime_images": {"gateway": {"image_id": "sha256:" + "b" * 64},
                            "issuance-native": {"container_id": "b" * 64},
+                           "signing-keys": {"container_id": "c" * 64},
                            "passport-beta-bureau": {"container_id": "a" * 64,
                                "oci_reference": "ghcr.io/elevenid/marty-ui-oss/services@sha256:" + "e" * 64}},
-        "probes": {"capabilities_http": {"verified": ready},
+        "probes": {"capabilities_http": {"verified": ready, "evidence": {
+                       "http_status": 200, "supported": True,
+                       "signer_mode": "MANAGED_ISSUER_PROFILE"}},
                    "sod_signature": {"verified": False, "evidence": None},
                    "nine_route_gateway_flow": {"verified": False, "evidence": None},
                    "physical_claim_boundary": {"verified": True, "evidence": {
@@ -169,6 +194,50 @@ def test_keeps_partial_acceptance_blocked_after_actual_probe_functions() -> None
     assert result["physical_claim"] == "not_claimed"
 
 
+def test_aggregate_production_baseline_blocks_before_passport_mutation() -> None:
+    candidate = report()
+    candidate["deployment"]["production_snapshot_commitment"] = (
+        production_snapshot_commitment("a" * 32, "f" * 64))
+    with pytest.raises(EvidenceError, match="Production changed since aggregate"):
+        run(Path("beta-artifacts"), managed_application(), "a" * 32,
+            collector=lambda *_, **__: candidate,
+            attestor=lambda *args: True,
+            snapshot=lambda: {"sha256": "c" * 64},
+            drain=lambda: pytest.fail("No drain after baseline drift"),
+            lifecycle=lambda *args, **kwargs: pytest.fail("No passport mutation"),
+            routing=lambda *args: {"verified": True, "evidence": {
+                "webhook_owner": "issuance-native"}},
+            certificate_plan=certificate_plan(),
+            csca_session="csca-session", dsc_session="dsc-session")
+
+
+@pytest.mark.parametrize("drift_on_read", [1, 2])
+def test_aggregate_production_attachment_drift_blocks_acceptance(drift_on_read: int) -> None:
+    candidate = report()
+    candidate["deployment"]["production_attachment_commitment"] = (
+        production_attachment_commitment("a" * 32, "f" * 64))
+    reads = 0
+
+    def attachments() -> str:
+        nonlocal reads
+        reads += 1
+        return "c" * 64 if reads >= drift_on_read else "f" * 64
+
+    with pytest.raises(EvidenceError, match="Production attachments changed"):
+        run(Path("beta-artifacts"), managed_application(), "a" * 32,
+            collector=lambda *_, **__: candidate,
+            attestor=lambda *args: True,
+            snapshot=lambda: {"sha256": "c" * 64, "container_counts": {}},
+            attachment_snapshot=attachments,
+            drain=lambda: {"verified": True, "evidence": {}},
+            chain=lambda *_, **__: pytest.fail("Chain must not complete"),
+            lifecycle=lambda *_, **__: pytest.fail("No passport mutation"),
+            routing=lambda *args: {"verified": True, "evidence": {
+                "webhook_owner": "issuance-native"}},
+            certificate_plan=certificate_plan(),
+            csca_session="csca-session", dsc_session="dsc-session")
+
+
 def test_protected_runner_executes_selected_flow_after_chain_and_direct_job(tmp_path: Path) -> None:
     calls = []
     private_state_path = tmp_path / "private" / "pending.json"
@@ -190,10 +259,39 @@ def test_protected_runner_executes_selected_flow_after_chain_and_direct_job(tmp_
                                            "mrz": {"line_1": "synthetic"},
                                            "data_groups": {"DG1": "YQ==", "DG2": "Yg=="}}}
 
-    def chain(*args, on_dsc_material):
+    def chain(*args, on_dsc_material, on_csca_material):
         calls.append("chain")
+        on_csca_material("private-csca-pem")
         on_dsc_material("b" * 64, "c" * 64)
         return {"verified": True, "evidence": {"dsc_certificate_sha256": "b" * 64}}
+
+    def resolver(container, org, did, purpose):
+        calls.append(("resolve", purpose))
+        assert (container, org) == ("c" * 64, plan["organization_id"])
+        assert did == plan["csca"]["issuer_did"]
+        return {"selected_purpose": purpose}
+
+    def signer(container, org, did, purpose, challenge):
+        calls.append(("sign", purpose))
+        assert (container, org, did, challenge) == (
+            "c" * 64, plan["organization_id"], plan["csca"]["issuer_did"], b"q" * 48)
+        return {"signed": purpose}
+
+    def verifier(org, csca_did, dsc_did, csca, dsc, chain_evidence,
+                 csca_pem, key, *, signer):
+        calls.append("verify-profiles")
+        assert (org, csca_did, dsc_did, csca_pem, key) == (
+            plan["organization_id"], plan["csca"]["issuer_did"],
+            plan["dsc"]["dsc_issuer_did"], "private-csca-pem", "a" * 32)
+        assert (csca, dsc) == ({"selected_purpose": "csca"},
+                               {"selected_purpose": "x509_doc_signer"})
+        assert chain_evidence["dsc_certificate_sha256"] == "b" * 64
+        assert signer(org, csca_did, "csca", b"q" * 48) == {"signed": "csca"}
+        assert signer(org, dsc_did, "x509_doc_signer", b"q" * 48) == {
+            "signed": "x509_doc_signer"}
+        return {"managed_kms_custody_verified": True, "chain_verified": True,
+                "csca_issuer_profile_commitment": "1" * 64,
+                "dsc_issuer_profile_commitment": "2" * 64}
 
     def lifecycle(*args, on_submission):
         calls.append("lifecycle")
@@ -230,8 +328,8 @@ def test_protected_runner_executes_selected_flow_after_chain_and_direct_job(tmp_
     def native_batch(*args):
         calls.append("native-batch")
         assert args[3:7] == ("s" * 32, "z" * 32, "b" * 64, "a" * 64)
-        assert args[7:12] == ("selected-instance", "selected-app", "selected-job",
-                              "e" * 64, "managed-profile")
+        assert args[7:11] == ("selected-instance", "selected-app", "selected-job",
+                              "e" * 64)
         assert args[-1] == private_state_path
         private_state_path.write_text("pending", encoding="utf-8")
         return selected_bureau, {"verified": True, "evidence": {
@@ -259,7 +357,7 @@ def test_protected_runner_executes_selected_flow_after_chain_and_direct_job(tmp_
                         selected_plan["references"], selected_plan["physical_document"],
                         "governed-cookie", "a" * 32)
         assert on_signed_sod("selected-instance", "selected-app", "selected-job",
-                             "e" * 64, "managed-profile") == selected_bureau
+                             "e" * 64) == selected_bureau
         on_submission(plan["organization_id"], "selected-job", selected_bureau, "e" * 64)
         return {"verified": True, "evidence": {"flow_instance_id": "selected-instance",
                                                 "flow_id": "governed-flow",
@@ -268,6 +366,9 @@ def test_protected_runner_executes_selected_flow_after_chain_and_direct_job(tmp_
                                                 "job_id": "selected-job", "sod_sha256": "e" * 64,
                                                 "bureau_job_id": selected_bureau,
                                                 "ordered_steps": list(PHYSICAL_STEPS),
+                                                "flow_routes": [
+                                                    {"method": method, "path": path}
+                                                    for method, path in PASSPORT_FLOW_ROUTES],
                                                 "completed_steps": 9, "physical_claim": "not_claimed",
                                                 "source_job_commitment": selected_source_commitment,
                                                 "bureau_job_commitment": selected_bureau_commitment,
@@ -280,10 +381,18 @@ def test_protected_runner_executes_selected_flow_after_chain_and_direct_job(tmp_
         collector=lambda *args, **kwargs: report(),
         snapshot=lambda: {"sha256": "c" * 64, "container_counts": {}},
         drain=lambda: {"verified": True, "evidence": {"in_flight_jobs": 0}},
-        routing=lambda *args: {"verified": True, "evidence": {"webhook_owner": "issuance-native"}},
+        routing=lambda *args: {"verified": True, "evidence": {
+            "native_selectors": True, "flow_native_target": True,
+            "simulator_callback_gateway_target": True,
+            "webhook_owner": "issuance-native"}},
         flow=lambda owner: {"verified": True, "evidence": {
+            "flow_capability_route": "/v1/flows/capabilities",
+            "flow_http_status": 200, "physical_step_count": 9,
+            "unsigned_webhook_route": "/v1/passport/webhooks/personalization",
+            "unsigned_webhook_http_status": 422,
             "unsigned_webhook_owner": owner, "signature_denial_verified": True}},
         chain=chain, lifecycle=lifecycle, material_receipt=receipt,
+        profile_resolver=resolver, profile_signer=signer, profile_verifier=verifier,
         certificate_plan=plan, csca_session="csca-session", dsc_session="dsc-session",
         selected_flow_plan=selected_plan, flow_operator_cookie="governed-cookie",
         selected_flow=selected, native_batch=native_batch,
@@ -295,21 +404,28 @@ def test_protected_runner_executes_selected_flow_after_chain_and_direct_job(tmp_
         checkout_checker=lambda source: calls.append("checkout"),
     )
     assert calls == ["checkout", "preflight", "chain", "lifecycle", ("receipt", "direct-job"),
-                     "selected", "native-batch", ("receipt", "selected-job")]
+                     "selected", "native-batch", ("receipt", "selected-job"),
+                     ("resolve", "csca"), ("resolve", "x509_doc_signer"), "verify-profiles",
+                     ("sign", "csca"), ("sign", "x509_doc_signer")]
     assert result["probes"]["selected_physical_flow"]["evidence"] == {
         "sod_sha256": "e" * 64, "ordered_steps": list(PHYSICAL_STEPS),
-        "completed_steps": 9, "source_job_commitment": selected_source_commitment,
+        "completed_steps": 9,
+        "flow_routes": [{"method": method, "path": path} for method, path in PASSPORT_FLOW_ROUTES],
+        "source_job_commitment": selected_source_commitment,
         "bureau_job_commitment": selected_bureau_commitment,
         "organization_commitment": _identity_commit("a" * 32, "organization", plan["organization_id"]),
         "flow_definition_commitment": _identity_commit("a" * 32, "flow-definition", "governed-flow"),
         "flow_instance_commitment": _identity_commit("a" * 32, "flow-instance", "selected-instance"),
         "application_commitment": _identity_commit("a" * 32, "application", "selected-app"),
         "callback_receipt_sha256": "5" * 64,
+        "selected_flow_plan_commitment": selected_plan_commitment(selected_plan, "a" * 32),
         "terminal_native_status": "ACTIVE", "physical_claim": "not_claimed"}
     assert result["probes"]["simulator_material_receipt"]["evidence"]["source_job_id_commitment"] == selected_source_commitment
     assert result["probes"]["sod_signature"]["evidence"] == {
         "sod_sha256": "e" * 64, "native_generate_sod_verified": True,
         "dsc_certificate_sha256": "b" * 64, "source_job_commitment": selected_source_commitment}
+    assert result["probes"]["managed_csca_dsc_chain"]["evidence"]["managed_kms_custody_verified"] is True
+    assert result["probes"]["managed_csca_dsc_chain"]["evidence"]["sod_dsc_binding_verified"] is True
     assert result["probes"]["gateway_application_lifecycle"]["evidence"]["source_job_commitment"] == direct_source_commitment
     assert len(result["probes"]["gateway_application_lifecycle"]["evidence"]["routes"]) == 7
     assert "selected-job" not in str(result) and "selected-instance" not in str(result)
@@ -318,7 +434,9 @@ def test_protected_runner_executes_selected_flow_after_chain_and_direct_job(tmp_
     for key in ("application_input_sha256", "job_id_sha256", "application_id_sha256",
                 "bureau_job_id_sha256", "dsc_issuer_did_sha256"):
         assert key not in serialized
-    assert result["probes"]["nine_route_gateway_flow"]["verified"] is False
+    assert result["probes"]["nine_route_gateway_flow"]["verified"] is True
+    assert result["probes"]["nine_route_gateway_flow"]["evidence"]["route_provenance"][
+        "job_operations"] == "selected_flow_server_trace_to_native_issuance"
     assert result["probes"]["simulator_batch_diagnostic"]["verified"] is False
     assert result["probes"]["physical_bureau_batch"]["verified"] is True
     assert result["probes"]["physical_bureau_batch"]["evidence"]["selected_flow_in_two_job_batch"] is True
@@ -335,8 +453,6 @@ def test_protected_runner_executes_selected_flow_after_chain_and_direct_job(tmp_
     }
     assert "selected-app" not in serialized and selected_bureau not in serialized
     assert result["probes"]["signed_bureau_callback"]["verified"] is False
-    assert result["probes"]["nine_route_gateway_flow"]["evidence"]["missing"] == [
-        "same_job_gateway_route_trace"]
     assert result["status"] == "blocked"
 
 

@@ -15,7 +15,7 @@ import time
 from typing import Any, Callable
 from urllib.error import HTTPError, URLError
 from urllib.parse import quote
-from urllib.request import HTTPRedirectHandler, Request, build_opener
+from urllib.request import HTTPRedirectHandler, ProxyHandler, Request, build_opener
 
 
 ORIGIN = "https://beta.elevenidllc.com"
@@ -42,7 +42,9 @@ def request_beta(method: str, path: str, body: dict[str, Any] | None, api_key: s
         headers["Content-Type"] = "application/json"
         encoded = json.dumps(body, separators=(",", ":")).encode("utf-8")
     try:
-        with build_opener(NoRedirect).open(Request(url, data=encoded, headers=headers, method=method), timeout=60) as response:
+        with build_opener(ProxyHandler({}), NoRedirect).open(
+            Request(url, data=encoded, headers=headers, method=method), timeout=60,
+        ) as response:
             if response.geturl() != url:
                 raise ProbeError("Passport route redirected")
             raw = response.read(64 * 1024 + 1)

@@ -29,20 +29,29 @@ const privacyScan = (video) => `${JSON.stringify({
 function fixture() {
   const artifactDir = fs.mkdtempSync(path.join(os.tmpdir(), 'passport-demo-audit-test-'));
   const stack = '{}\n';
-  const source = '{}\n';
   fs.writeFileSync(path.join(artifactDir, 'stack-manifest.json'), stack);
-  fs.writeFileSync(path.join(artifactDir, 'source-manifest.json'), source);
-  const deployment = {
+  const services = ['gateway', 'flow', 'issuance-native', 'signing-keys',
+    'passport-callback-signer', 'passport-beta-bureau', 'postgres'];
+  const plan = {
+    schema: 'marty.passport-beta-aggregate-compose-plan/v1',
     beta_origin: 'https://beta.elevenidllc.com',
-    source_kind: 'official-stack-release',
-    passport_provider_mode: 'simulator',
-    marty_ui_sha: 'a'.repeat(40),
-    official_stack_manifest_sha256: digest(stack),
+    source_commit: 'a'.repeat(40), stack_manifest_sha256: digest(stack),
+    target_services: services.filter((name) => name !== 'postgres'),
   };
-  fs.writeFileSync(path.join(artifactDir, 'local-deployment-manifest.json'), `${JSON.stringify(deployment)}\n`);
+  const planWire = `${JSON.stringify(plan)}\n`;
+  fs.writeFileSync(path.join(artifactDir, 'aggregate-deployment.json.plan.json'), planWire);
+  const deployment = {
+    schema: 'marty.passport-beta-aggregate-deployment/v1',
+    beta_origin: 'https://beta.elevenidllc.com',
+    source_commit: plan.source_commit, plan_sha256: digest(planWire),
+    beta_services: services,
+    beta_runtime: Object.fromEntries(services.map((name) => [name, {}])),
+    acceptance_pending: true,
+  };
+  fs.writeFileSync(path.join(artifactDir, 'aggregate-deployment.json'), `${JSON.stringify(deployment)}\n`);
   const privatePlan = {
     schema: 'marty.passport-beta-demo-private/v1',
-    source_commit: deployment.marty_ui_sha,
+    source_commit: deployment.source_commit,
     stack_manifest_sha256: digest(stack),
     organization_id: 'synthetic-org', flow_definition_id: 'synthetic-definition',
     flow_instance_id: 'synthetic-flow', application_id: 'synthetic-app',
@@ -93,14 +102,14 @@ function fixture() {
       },
     },
     release: {
-      source_commit: deployment.marty_ui_sha,
+      source_commit: deployment.source_commit,
       stack_manifest_sha256: digest(stack),
       signed_manifest_verified: true,
     },
     deployment: {
       provider_mode: 'simulator',
-      local_deployment_manifest_sha256: digest(fs.readFileSync(path.join(artifactDir, 'local-deployment-manifest.json'))),
-      source_manifest_sha256: digest(source),
+      aggregate_deployment_receipt_sha256: digest(fs.readFileSync(path.join(artifactDir, 'aggregate-deployment.json'))),
+      aggregate_plan_sha256: digest(planWire),
     },
     probes: {
       managed_csca_dsc_chain: probe({
@@ -185,6 +194,8 @@ test('D-12 preliminary report requires exact simulator lineage and job proof', (
       (value) => { value.status = 'accepted'; },
       (value) => { value.release.source_commit = 'b'.repeat(40); },
       (value) => { value.deployment.provider_mode = 'physical'; },
+      (value) => { value.deployment.aggregate_deployment_receipt_sha256 = sha('9'); },
+      (value) => { value.deployment.aggregate_plan_sha256 = sha('9'); },
       (value) => { value.provider_ingress_runtime_image = {}; },
       (value) => { value.probes.physical_claim_boundary.evidence.booklet_verified = true; },
       (value) => { value.probes.managed_csca_dsc_chain.evidence.dsc_issuer_profile_commitment = value.probes.managed_csca_dsc_chain.evidence.csca_issuer_profile_commitment; },
@@ -225,6 +236,16 @@ test('D-12 preliminary report requires exact simulator lineage and job proof', (
       mutate(changed);
       assert.throws(() => validatePreliminary(changed, deployment, artifactDir, privatePlan, API_KEY));
     }
+    const planPath = path.join(artifactDir, 'aggregate-deployment.json.plan.json');
+    const originalPlan = fs.readFileSync(planPath);
+    fs.appendFileSync(planPath, ' ');
+    assert.throws(() => validatePreliminary(report, deployment, artifactDir, privatePlan, API_KEY));
+    fs.writeFileSync(planPath, originalPlan);
+    const receiptPath = path.join(artifactDir, 'aggregate-deployment.json');
+    const originalReceipt = fs.readFileSync(receiptPath);
+    fs.appendFileSync(receiptPath, ' ');
+    assert.throws(() => validatePreliminary(report, deployment, artifactDir, privatePlan, API_KEY));
+    fs.writeFileSync(receiptPath, originalReceipt);
     assert.throws(() => validatePreliminary(report, deployment, artifactDir,
       { ...privatePlan, source_job_id: 'other-job' }, API_KEY));
     assert.throws(() => validatePreliminary(report, deployment, artifactDir,

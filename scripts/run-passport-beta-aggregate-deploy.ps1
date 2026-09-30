@@ -966,6 +966,15 @@ try {
         $null -eq $runtime.ui_runtime) {
         throw 'Aggregate beta runtime did not match signed Rust plan'
     }
+    # Preserve the exact protected lineage beside the final receipt. The
+    # acceptance runner rechecks these bytes and the live native SQL marker.
+    [IO.File]::Copy([IO.Path]::GetFullPath($FenceReceipt),
+        $output + '.fence-receipt.json', $true)
+    [IO.File]::Copy([IO.Path]::GetFullPath($MaintenanceReceipt),
+        $output + '.maintenance-receipt.json', $true)
+    [IO.File]::Copy($intentPath, $output + '.maintenance-intent.json', $true)
+    [IO.File]::Copy([IO.Path]::GetFullPath($NativeReceipt),
+        $output + '.native-receipt.json', $true)
     $receipt = [ordered]@{
         schema = 'marty.passport-beta-aggregate-deployment/v1'
         beta_origin = $script:plan.beta_origin

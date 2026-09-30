@@ -511,6 +511,9 @@ fn merge_context(
     let data = data
         .as_object()
         .ok_or(FlowInstanceExecutionError::InvalidContext)?;
+    if data.contains_key("physical_document_route_trace") {
+        return Err(FlowInstanceExecutionError::InvalidContext);
+    }
     context.extend(data.clone());
     Ok(())
 }

@@ -149,12 +149,8 @@ fn physical_document_provider(
                 "PASSPORT_TENANT_API_KEYS is required for native passport Flow".into(),
             )
         })?;
-        HttpPhysicalDocumentProvider::new_tenant_bound_with_service_token(
-            &config.issuance_native_url,
-            keys,
-            config.service_token.as_deref(),
-        )
-        .map_err(Into::into)
+        HttpPhysicalDocumentProvider::new_tenant_bound(&config.issuance_native_url, keys)
+            .map_err(Into::into)
     } else {
         HttpPhysicalDocumentProvider::new(
             &config.issuance_url,

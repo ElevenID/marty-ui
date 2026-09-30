@@ -468,6 +468,13 @@ impl ValidateRequest for AdvanceFlowRequest {
     fn validate(&self) -> Result<(), FlowApiError> {
         max_length(&self.step_result, 50, "step_result")?;
         require_object(&self.data, "data")?;
+        if self.data.get("physical_document_route_trace").is_some() {
+            return Err(api_error(
+                "FLOW.INVALID_REQUEST",
+                "data",
+                "physical document route trace is provider owned",
+            ));
+        }
         reject_private_context(&self.data)
             .map_err(|error| api_error("FLOW.PRIVATE_CONTEXT", "data", error.to_string()))
     }

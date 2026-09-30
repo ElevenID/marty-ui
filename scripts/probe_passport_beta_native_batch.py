@@ -238,7 +238,6 @@ def exercise(
     selected_application_id: str,
     selected_source_job_id: str,
     selected_sod_sha256: str,
-    selected_issuer_profile_id: str,
     dsc_der_sha256: str,
     dsc_pem_wire_sha256: str,
     material_receipt: Callable[..., dict[str, Any]],
@@ -264,7 +263,7 @@ def exercise(
              and CONTAINER_ID.fullmatch(simulator_container_id) is not None
              and all(isinstance(value, str) and IDENTIFIER.fullmatch(value)
                      for value in (selected_flow_instance_id, selected_application_id,
-                                   selected_source_job_id, selected_issuer_profile_id))
+                                   selected_source_job_id))
              and isinstance(selected_sod_sha256, str) and SHA256.fullmatch(selected_sod_sha256)
              and isinstance(dsc_der_sha256, str) and SHA256.fullmatch(dsc_der_sha256)
              and isinstance(dsc_pem_wire_sha256, str) and SHA256.fullmatch(dsc_pem_wire_sha256)

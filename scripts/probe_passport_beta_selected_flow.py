@@ -4,13 +4,15 @@
 from __future__ import annotations
 
 import json
+import hashlib
+import hmac
 import re
 import time
 from collections.abc import Callable
 from typing import Any
 from urllib.error import HTTPError, URLError
 from urllib.parse import quote
-from urllib.request import HTTPRedirectHandler, Request, build_opener
+from urllib.request import HTTPRedirectHandler, ProxyHandler, Request, build_opener
 from uuid import UUID
 
 if __package__:
@@ -32,10 +34,33 @@ IDENTIFIER = re.compile(r"[A-Za-z0-9._:-]{1,255}\Z")
 SHA256 = re.compile(r"[0-9a-f]{64}\Z")
 REFERENCES = ("application_template_id", "credential_template_id",
               "delivery_destination_profile_id")
+PASSPORT_FLOW_ROUTES = (
+    ("POST", "/v1/passport/applications"),
+    ("POST", "/v1/passport/applications/{application_id}/generate-data-groups"),
+    ("POST", "/v1/passport/applications/{application_id}/generate-sod"),
+    ("POST", "/v1/passport/applications/{application_id}/submit-personalization"),
+    ("GET", "/v1/passport/applications/{application_id}/production-status"),
+    ("POST", "/v1/passport/applications/{application_id}/quality-verify"),
+    ("POST", "/v1/passport/applications/{application_id}/activate"),
+)
 
 
 class SelectedFlowError(ValueError):
     pass
+
+
+def selected_plan_commitment(plan: dict[str, Any], api_key: str) -> str:
+    """Keyed proof of the exact private plan passed to the selected Flow."""
+    if not isinstance(plan, dict) or not isinstance(api_key, str) or len(api_key) < 32:
+        raise SelectedFlowError("Selected Flow plan commitment input is invalid")
+    try:
+        canonical = json.dumps(plan, sort_keys=True, separators=(",", ":"),
+                               ensure_ascii=True, allow_nan=False).encode("ascii")
+    except (TypeError, ValueError) as exc:
+        raise SelectedFlowError("Selected Flow plan commitment input is invalid") from exc
+    return hmac.new(api_key.encode("utf-8"),
+                    b"marty/passport-selected-flow-plan/v1\0" + canonical,
+                    hashlib.sha256).hexdigest()
 
 
 class NoRedirect(HTTPRedirectHandler):
@@ -56,8 +81,9 @@ def request_flow(method: str, path: str, body: dict[str, Any] | None,
         headers["Content-Type"] = "application/json"
         encoded = json.dumps(body, separators=(",", ":")).encode("utf-8")
     try:
-        with build_opener(NoRedirect).open(Request(url, data=encoded, headers=headers, method=method),
-                                             timeout=60) as response:
+        with build_opener(ProxyHandler({}), NoRedirect).open(
+            Request(url, data=encoded, headers=headers, method=method), timeout=60,
+        ) as response:
             if response.geturl() != url:
                 raise SelectedFlowError("Selected Flow route redirected")
             raw = response.read(128 * 1024 + 1)
@@ -115,7 +141,7 @@ def exercise(
     *,
     simulator_container_id: str,
     on_submission: Callable[[str, str, str, str], dict[str, Any]],
-    on_signed_sod: Callable[[str, str, str, str, str], str] | None = None,
+    on_signed_sod: Callable[[str, str, str, str], str] | None = None,
     request: Callable[[str, str, dict[str, Any] | None, str], tuple[int, dict[str, Any]]] = request_flow,
     passport_request: Callable[[str, str, dict[str, Any] | None, str], tuple[int, dict[str, Any]]] = request_passport,
     simulator_request: Callable[[str, str, str], tuple[int, bytes, dict[str, Any]]] = request_simulator,
@@ -150,6 +176,21 @@ def exercise(
     receipt = None
     callback_receipt_sha256 = None
     expected_batch_bureau_job_id = None
+
+    def checked_routes(response: dict[str, Any], count: int) -> list[dict[str, str]]:
+        context = response.get("context_data")
+        trace = context.get("physical_document_route_trace") if isinstance(context, dict) else None
+        actual_application = quote(application_id, safe="") if isinstance(application_id, str) else ""
+        expected = [
+            {"method": method, "path": path.replace("{application_id}", actual_application)}
+            for method, path in PASSPORT_FLOW_ROUTES[:count]
+        ]
+        if trace != expected:
+            raise SelectedFlowError("Selected Flow did not retain its actual native route sequence")
+        return [
+            {"method": method, "path": path}
+            for method, path in PASSPORT_FLOW_ROUTES[:count]
+        ]
 
     def checked_job(response: dict[str, Any], expected_step: str | None,
                     expected_state: str) -> dict[str, Any]:
@@ -249,14 +290,13 @@ def exercise(
             if on_signed_sod is not None:
                 paused_status, paused = request("GET", instance_path, None, operator_cookie)
                 paused_job = checked_job(paused, "submit_to_personalization", "IN_PROGRESS")
-                issuer_profile_id = paused_job.get("issuer_profile_id")
                 if (paused_status != 200 or paused_job.get("status") != "SOD_SIGNED"
                         or paused_job.get("sod_sha256") != sod_sha256
-                        or paused_job.get("sod_signature_verified") is not True
-                        or not isinstance(issuer_profile_id, str) or not issuer_profile_id):
+                        or paused_job.get("sod_signature_verified") is not True):
                     raise SelectedFlowError("Selected Flow signed job is not durably paused")
+                checked_routes(paused, 3)
                 expected_batch_bureau_job_id = on_signed_sod(
-                    instance_id, application_id, source_job_id, sod_sha256, issuer_profile_id)
+                    instance_id, application_id, source_job_id, sod_sha256)
                 try:
                     canonical_bureau_id = str(UUID(expected_batch_bureau_job_id))
                 except (TypeError, ValueError, AttributeError) as exc:
@@ -286,6 +326,7 @@ def exercise(
     if read_status != 200:
         raise SelectedFlowError("Selected Flow final durable instance read failed")
     checked_job(current, PHYSICAL_STEPS[-1], "COMPLETED")
+    flow_routes = checked_routes(current, len(PASSPORT_FLOW_ROUTES))
     results = current.get("step_results")
     job = current["context_data"]["physical_document_job"]
     if (str(current.get("status")).upper() != "COMPLETED"
@@ -313,6 +354,7 @@ def exercise(
         "job_id": source_job_id, "bureau_job_id": bureau_job_id,
         "sod_sha256": sod_sha256, "ordered_steps": list(PHYSICAL_STEPS),
         "completed_steps": len(PHYSICAL_STEPS),
+        "flow_routes": flow_routes,
         "source_job_commitment": receipt["evidence"]["source_job_id_commitment"],
         "bureau_job_commitment": receipt["evidence"]["bureau_job_id_commitment"],
         "callback_receipt_sha256": callback_receipt_sha256,

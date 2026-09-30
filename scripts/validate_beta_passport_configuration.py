@@ -33,6 +33,9 @@ PRIVATE_SIGNING_NETWORK = "passport-callback-signing"
 PRIVATE_CALLBACK_URL = (
     "http://issuance-native:8005/v1/passport/webhooks/personalization"
 )
+PRIVATE_GATEWAY_CALLBACK_URL = (
+    "http://gateway:8000/v1/passport/webhooks/personalization"
+)
 PHYSICAL_INGRESS_URL = "http://passport-provider-ingress:8021"
 PHYSICAL_SIGNER_URL = "http://passport-callback-signer-supported:8018/internal/documents"
 PHYSICAL_ALLOWLIST = Path(__file__).resolve().parents[1] / "deploy-config/passport-beta-physical-provider-allowlist.json"
@@ -752,6 +755,10 @@ def validate_model(model, *, passport_enabled, files, physical_provider=False,
         flow = environment(targets["flow"])
         if flow.get("ISSUANCE_NATIVE_SERVICE_URL") != "http://issuance-native:8005":
             raise PassportConfigurationError("Beta passport Flow target is not native")
+        if gateway.get("PASSPORT_PROVIDER_INGRESS_GATEWAY_ENABLED") != "false":
+            raise PassportConfigurationError(
+                "Beta simulator signed callback must target the native Gateway owner"
+            )
         for owner in targets.values():
             env = environment(owner)
             if (
@@ -869,7 +876,8 @@ def validate_model(model, *, passport_enabled, files, physical_provider=False,
                 for owner in (native, gateway, signing)
             )
             and bureau_env.get("SIGNING_KEYS_INTERNAL_URL") == PRIVATE_SIGNING_URL
-            and bureau_env.get("PASSPORT_BUREAU_CALLBACK_URL") == PRIVATE_CALLBACK_URL
+            and bureau_env.get("PASSPORT_BETA_BUREAU_GATEWAY_CALLBACK_ENABLED") == "true"
+            and bureau_env.get("PASSPORT_BUREAU_CALLBACK_URL") == PRIVATE_GATEWAY_CALLBACK_URL
         ):
             raise PassportConfigurationError(
                 "Beta passport bureau identity or route is invalid"

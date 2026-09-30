@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import argparse
 import hashlib
+import hmac
 import json
 import os
 import re
@@ -18,12 +19,14 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable
 from urllib.error import HTTPError, URLError
-from urllib.request import HTTPRedirectHandler, Request, build_opener
+from urllib.request import HTTPRedirectHandler, ProxyHandler, Request, build_opener
 
 if __package__:
     from .probe_passport_beta_gateway import ProbeError, exercise
+    from .probe_passport_beta_host import HostProbeError
 else:
     from probe_passport_beta_gateway import ProbeError, exercise
+    from probe_passport_beta_host import HostProbeError
 
 
 BETA_ORIGIN = "https://beta.elevenidllc.com"
@@ -69,6 +72,27 @@ def digest_file(path: Path) -> str:
     except OSError as exc:
         raise EvidenceError(f"Cannot hash evidence file: {path.name}") from exc
     return f"sha256:{checksum}"
+
+
+def _production_digest_commitment(api_key: str, label: str, digest: str) -> str:
+    require(isinstance(api_key, str) and len(api_key) >= 32
+            and label in {"production-snapshot", "production-attachments"}
+            and isinstance(digest, str)
+            and re.fullmatch(r"[0-9a-f]{64}", digest) is not None,
+            "Production baseline commitment input is invalid")
+    return hmac.new(api_key.encode("utf-8"),
+                    f"{label}:{digest}".encode("ascii"),
+                    hashlib.sha256).hexdigest()
+
+
+def production_snapshot_commitment(api_key: str, snapshot_sha256: str) -> str:
+    return _production_digest_commitment(api_key, "production-snapshot",
+                                         snapshot_sha256)
+
+
+def production_attachment_commitment(api_key: str, attachment_sha256: str) -> str:
+    return _production_digest_commitment(api_key, "production-attachments",
+                                         attachment_sha256)
 
 
 def docker_inspect(container_id: str) -> dict[str, Any]:
@@ -121,7 +145,7 @@ def get_capabilities(api_key: str | None) -> tuple[int, dict[str, Any] | None]:
         headers["x-api-key"] = api_key
     request = Request(url, headers=headers, method="GET")
     try:
-        with build_opener(NoRedirect).open(request, timeout=20) as response:
+        with build_opener(ProxyHandler({}), NoRedirect).open(request, timeout=20) as response:
             require(response.geturl() == url, "Passport capability probe redirected")
             raw = response.read(64 * 1024 + 1)
             require(len(raw) <= 64 * 1024, "Passport capability response is oversized")
@@ -140,7 +164,19 @@ def collect(
     inspect: Callable[[str], dict[str, Any]] = docker_inspect,
     probe: Callable[[str | None], tuple[int, dict[str, Any] | None]] = get_capabilities,
     attest: Callable[[Path, dict[str, str], str], bool] | None = None,
+    list_ids: Callable[[str], list[str]] | None = None,
+    probe_native: Callable[[dict[str, Any], dict[str, Any]], None] | None = None,
 ) -> dict[str, Any]:
+    if (artifact_dir / "aggregate-deployment.json").is_file():
+        if __package__:
+            from .collect_passport_beta_aggregate_acceptance import collect_aggregate
+        else:
+            from collect_passport_beta_aggregate_acceptance import collect_aggregate
+        kwargs = {"list_ids": list_ids} if list_ids is not None else {}
+        if probe_native is not None:
+            kwargs["probe_native"] = probe_native
+        return collect_aggregate(artifact_dir, api_key=api_key, inspect=inspect,
+                                 probe=probe, attest=attest, **kwargs)
     deployment_path = artifact_dir / "local-deployment-manifest.json"
     deployment = read_json(deployment_path)
     require(deployment.get("beta_origin") == BETA_ORIGIN, "Deployment is not the beta origin")
@@ -273,7 +309,7 @@ def main() -> int:
             after = collect(args.artifact_dir, api_key=api_key, attest=verify_attestations)
             require(all(report[key] == after[key] for key in ("release", "deployment", "runtime_images")), "Beta release or runtime drifted during passport probes")
         args.output.write_text(json.dumps(report, indent=2, sort_keys=True) + "\n", encoding="utf-8")
-    except (EvidenceError, ProbeError, OSError) as exc:
+    except (EvidenceError, ProbeError, HostProbeError, OSError) as exc:
         args.output.write_text(json.dumps({"schema": "marty.passport-beta-acceptance/v1", "status": "blocked", "blocker": str(exc)}, indent=2) + "\n", encoding="utf-8")
         parser.exit(1, f"Passport beta evidence failed: {exc}\n")
     print(f"Wrote blocked passport beta prerequisite evidence: {args.output}")

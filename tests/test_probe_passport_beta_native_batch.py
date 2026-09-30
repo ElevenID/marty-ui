@@ -127,7 +127,7 @@ def model(private_state_path: Path, *, proof_status: str = "verified", wrong_rec
         return exercise(
             APPLICATION, DOCUMENT, KEY, SERVICE, TOKEN, NATIVE, SIMULATOR,
             "selected-flow", "selected-app", "selected-job", "f" * 64,
-            "managed-profile", "d" * 64, "e" * 64, receipt, private_state_path,
+            "d" * 64, "e" * 64, receipt, private_state_path,
             gateway_request=gateway, private_request=private,
             simulator_get=simulator, new_uuid=lambda: next(uuids),
             new_key=lambda count: b"K" * count,

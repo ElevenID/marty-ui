@@ -85,12 +85,15 @@ def test_real_certificate_chain_and_governed_route_sequence() -> None:
                      "chain_pem": csca}
 
     captured = []
+    csca_material = []
     result = exercise(plan(), "sessionId=csca-secret", "sessionId=dsc-secret", request=request,
-                      on_dsc_material=lambda *digests: captured.append(digests))
+                      on_dsc_material=lambda *digests: captured.append(digests),
+                      on_csca_material=csca_material.append)
     assert result["verified"] is True
     assert result["evidence"]["csca_certificate_sha256"] == hashlib.sha256(ssl.PEM_cert_to_DER_cert(csca)).hexdigest()
     assert result["evidence"]["dsc_certificate_sha256"] == hashlib.sha256(ssl.PEM_cert_to_DER_cert(dsc)).hexdigest()
     assert captured == [(result["evidence"]["dsc_certificate_sha256"], hashlib.sha256(dsc.encode()).hexdigest())]
+    assert csca_material == [csca]
     assert len(calls) == 2
     assert calls[0][0].endswith("csca-self-signed-certificate")
     assert calls[1][0].endswith("dsc-certificate")
@@ -114,6 +117,7 @@ def test_chain_rejects_unrelated_trust_anchor() -> None:
 
 def test_live_request_uses_console_session_and_organization_query(monkeypatch) -> None:
     seen = []
+    handlers = []
 
     class Response:
         status = 200
@@ -135,7 +139,11 @@ def test_live_request_uses_console_session_and_organization_query(monkeypatch) -
             seen.append(request)
             return Response()
 
-    monkeypatch.setattr(chain_probe, "build_opener", lambda *args: Opener())
+    def opener(*args):
+        handlers.extend(args)
+        return Opener()
+
+    monkeypatch.setattr(chain_probe, "build_opener", opener)
     status, payload = chain_probe.post_beta(
         "/v1/signing-keys/issuer-identities/dsc-certificate",
         {"organization_id": "org-a", "dsc_issuer_did": "did:web:beta.example:org-a"},
@@ -147,6 +155,8 @@ def test_live_request_uses_console_session_and_organization_query(monkeypatch) -
     assert seen[0].get_header("X-api-key") is None
     assert seen[0].get_header("X-user-id") is None
     assert json.loads(seen[0].data) == {"dsc_issuer_did": "did:web:beta.example:org-a"}
+    assert any(isinstance(handler, chain_probe.ProxyHandler)
+               and handler.proxies == {} for handler in handlers)
 
 
 def test_dsc_response_must_publish_selected_csca() -> None:

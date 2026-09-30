@@ -11,6 +11,7 @@ services:
       SIGNING_KEYS_DSC_ISSUE_GATEWAY_KEY_FILE: /run/secrets/dsc_issue_gateway_key
       SIGNING_KEYS_CSCA_ISSUE_GATEWAY_KEY_FILE: /run/secrets/csca_issue_gateway_key
       PASSPORT_NATIVE_GATEWAY_ENABLED: "true"
+      PASSPORT_PROVIDER_INGRESS_GATEWAY_ENABLED: "false"
       PASSPORT_INTERNAL_SERVICE_AUTH_ENABLED: "true"
       PASSPORT_TENANT_API_KEYS: ""
       PASSPORT_TENANT_API_KEYS_FILE: ""
@@ -91,7 +92,8 @@ services:
       GRPC_SERVICE_TOKEN: ${GRPC_SERVICE_TOKEN:?GRPC_SERVICE_TOKEN must be set for beta Rust services}
       SIGNING_KEYS_INTERNAL_API_KEY: ${SIGNING_KEYS_INTERNAL_API_KEY:?SIGNING_KEYS_INTERNAL_API_KEY must be set for beta}
       SIGNING_KEYS_INTERNAL_URL: http://passport-callback-signer:8018/internal/documents
-      PASSPORT_BUREAU_CALLBACK_URL: http://issuance-native:8005/v1/passport/webhooks/personalization
+      PASSPORT_BETA_BUREAU_GATEWAY_CALLBACK_ENABLED: "true"
+      PASSPORT_BUREAU_CALLBACK_URL: http://gateway:8000/v1/passport/webhooks/personalization
     depends_on:
       postgres:
         condition: service_healthy

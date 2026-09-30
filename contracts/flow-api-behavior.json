@@ -125,6 +125,12 @@
       "field": "data"
     },
     {
+      "kind": "advance_flow",
+      "payload": {"data": {"physical_document_route_trace": [{"method": "POST", "path": "/forged"}]}},
+      "code": "FLOW.INVALID_REQUEST",
+      "field": "data"
+    },
+    {
       "kind": "start_verification",
       "payload": {"organization_id": "org-1", "issuer_did": "did:web:verifier.example"},
       "code": "FLOW.INVALID_REQUEST",

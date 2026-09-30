@@ -2517,7 +2517,6 @@ async fn passport_jobs_survive_restart_without_cross_tenant_reads() {
             "flow_execution_id": pair[0].flow_execution_id,
             "application_id": pair[0].application_id,
             "issuer_did": pair[0].issuer_did,
-            "issuer_profile_id": "synthetic-passport-issuer-profile",
             "sod_sha256": pair[0].sod_sha256,
             "sod_signature_verified": true,
             "status": "SOD_SIGNED",
