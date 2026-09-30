@@ -189,6 +189,8 @@ def test_live_compose_prerequisite_still_does_not_claim_routes_or_restart(
 
 def kubernetes_runner(*, mixed_provider: bool = False,
                        wrong_profile: bool = False,
+                       wrong_callback: bool = False,
+                       stale_pod_callback: bool = False,
                        provider_enabled: bool = False,
                        stale_pod_profile: bool = False,
                        indirect_profile: bool = False,
@@ -252,8 +254,11 @@ def kubernetes_runner(*, mixed_provider: bool = False,
             values.update({
                 "SIGNING_KEYS_INTERNAL_URL":
                     "http://passport-callback-signer:8018/internal/documents",
+                "PASSPORT_BETA_BUREAU_GATEWAY_CALLBACK_ENABLED": "true",
                 "PASSPORT_BUREAU_CALLBACK_URL":
-                    "http://issuance-native:8005/v1/passport/webhooks/personalization",
+                    ("http://issuance-native:8005/v1/passport/webhooks/personalization"
+                     if wrong_callback or (is_pod and stale_pod_callback) else
+                     "http://gateway:8000/v1/passport/webhooks/personalization"),
             })
         container = {"name": service, "image": REFERENCE,
                      "securityContext": {
@@ -602,6 +607,12 @@ def test_kubernetes_mixed_provider_is_rejected() -> None:
     with pytest.raises(gate.SupportedEvidenceError, match="configuration source is invalid"):
         gate.observe_kubernetes(NAMESPACE, CONTEXT, REFERENCE, COMMIT,
                                 kubernetes_runner(indirect_profile=True))
+    with pytest.raises(gate.SupportedEvidenceError, match="bound to the Marty simulator"):
+        gate.observe_kubernetes(NAMESPACE, CONTEXT, REFERENCE, COMMIT,
+                                kubernetes_runner(wrong_callback=True))
+    with pytest.raises(gate.SupportedEvidenceError, match="Pod is not bound"):
+        gate.observe_kubernetes(NAMESPACE, CONTEXT, REFERENCE, COMMIT,
+                                kubernetes_runner(stale_pod_callback=True))
 
 
 def test_kubernetes_rejects_pod_with_stale_provider_profile() -> None:

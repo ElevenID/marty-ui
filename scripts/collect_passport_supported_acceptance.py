@@ -477,8 +477,9 @@ def observe_kubernetes(
         } if service == "issuance-native" else {
             "SIGNING_KEYS_INTERNAL_URL":
                 "http://passport-callback-signer:8018/internal/documents",
+            "PASSPORT_BETA_BUREAU_GATEWAY_CALLBACK_ENABLED": "true",
             "PASSPORT_BUREAU_CALLBACK_URL":
-                "http://issuance-native:8005/v1/passport/webhooks/personalization",
+                "http://gateway:8000/v1/passport/webhooks/personalization",
         } if service == "passport-beta-bureau" else {})
         require(all(kubernetes_config_value(containers[0], data, name) == value
                     for name, value in expected.items()),
