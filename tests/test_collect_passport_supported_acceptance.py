@@ -64,13 +64,18 @@ def test_production_origin_is_rejected_before_runtime_probe(tmp_path: Path) -> N
                      base_origin="https://elevenidllc.com", attest=lambda *args: True)
 
 
-def docker_runner(project: str, *, wrong_image: bool = False):
+def docker_runner(project: str, *, wrong_image: bool = False,
+                  signer_selector: bool = True, signer_process: bool = True):
     def run(args: list[str]) -> str:
         if args[:2] == ["docker", "ps"]:
             service = args[-1].split("=")[-1]
             return service + "-container\n"
+        if args[:2] == ["docker", "exec"]:
+            return "verified" if signer_process else "unverified"
         service = args[-1].removesuffix("-container")
         flags = [f"{name}=true" for name in gate.COMPOSE_FLAGS.get(service, ())]
+        if service == "signing-keys" and signer_selector:
+            flags.append("SERVICE_NAME=signing_keys")
         image = (qualified_images(verify_registry=False)["edge"]
                  if service == "edge" else REFERENCE)
         edge_binding = [{"HostIp": "127.0.0.1", "HostPort": "28000"}]
@@ -104,6 +109,12 @@ def test_compose_runtime_reads_six_exact_running_service_images() -> None:
         verify_registry=False)["edge"]
     with pytest.raises(gate.SupportedEvidenceError, match="released services image"):
         gate.observe_compose("base", BASE, REFERENCE, docker_runner(BASE, wrong_image=True))
+    with pytest.raises(gate.SupportedEvidenceError, match="Signing Keys selector"):
+        gate.observe_compose("base", BASE, REFERENCE,
+                             docker_runner(BASE, signer_selector=False))
+    with pytest.raises(gate.SupportedEvidenceError, match="Signing Keys process"):
+        gate.observe_compose("base", BASE, REFERENCE,
+                             docker_runner(BASE, signer_process=False))
 
 
 def test_disposable_https_capability_probe_uses_scoped_ca(tmp_path: Path) -> None:

@@ -18,9 +18,6 @@ on:
       kubernetes_context:
         description: Dedicated test cluster context. No production context is allowed.
         required: false
-      kubernetes_origin:
-        description: HTTPS localhost origin published by the inspected Kubernetes edge.
-        required: false
       kubernetes_identity_plan:
         description: Read-only disposable cluster, namespace and resource identity model on the runner.
         required: false
@@ -54,7 +51,6 @@ jobs:
       SELFHOST_PROJECT: ${{ inputs.selfhost_project }}
       KUBERNETES_NAMESPACE: ${{ inputs.kubernetes_namespace }}
       KUBERNETES_CONTEXT: ${{ inputs.kubernetes_context }}
-      KUBERNETES_ORIGIN: ${{ inputs.kubernetes_origin }}
       KUBERNETES_IDENTITY_PLAN: ${{ inputs.kubernetes_identity_plan }}
       BASE_ORIGIN: ${{ inputs.base_origin }}
       SELFHOST_ORIGIN: ${{ inputs.selfhost_origin }}
@@ -84,9 +80,6 @@ jobs:
           fi
           if [[ -n "$KUBERNETES_CONTEXT" ]]; then
             args+=(--kubernetes-context "$KUBERNETES_CONTEXT")
-          fi
-          if [[ -n "$KUBERNETES_ORIGIN" ]]; then
-            args+=(--kubernetes-origin "$KUBERNETES_ORIGIN")
           fi
           if [[ -n "$KUBERNETES_IDENTITY_PLAN" ]]; then
             args+=(--kubernetes-identity-plan "$KUBERNETES_IDENTITY_PLAN")

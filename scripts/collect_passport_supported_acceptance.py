@@ -295,6 +295,25 @@ def observe_compose(
                 f"{surface} {service} is not running the released services image")
         flags = environment_flags(config.get("Env"), service, COMPOSE_FLAGS)
         require(all(flags.values()), f"{surface} {service} did not select Rust passport")
+        if service == "signing-keys":
+            values = config["Env"]
+            require(values.count("SERVICE_NAME=signing_keys") == 1
+                    and not any(isinstance(value, str)
+                                and value.startswith("SERVICE_NAME=")
+                                and value != "SERVICE_NAME=signing_keys"
+                                for value in values),
+                    f"{surface} Signing Keys selector is invalid")
+            process = runner([
+                "docker", "exec", ids[0], "/bin/sh", "-c",
+                "set -eu; "
+                "test \"$(/usr/bin/readlink /proc/1/exe)\" = "
+                "/usr/local/bin/marty-signing-keys; "
+                "test \"$(/usr/bin/tr '\\000' '\\n' < /proc/1/cmdline)\" = "
+                "/usr/local/bin/marty-signing-keys; "
+                "printf verified",
+            ])
+            require(process == "verified",
+                    f"{surface} Signing Keys process is unverified")
         observed[service] = {"container_id": ids[0], "image_id": record["Image"],
                              "oci_reference": services_reference, "selectors": flags}
         if service == "gateway":
