@@ -158,13 +158,17 @@ def verify_receipt(plan: Path, receipt: Path, producer_run_id: int,
     value = parsed(receipt.read_text(encoding="utf-8"),
                    "Protected producer receipt is invalid")
     require(isinstance(value, dict), "Protected producer receipt is invalid")
+    selected_plan = parsed(plan.read_text(encoding="utf-8"),
+                           "Protected producer plan is invalid")
+    require(isinstance(selected_plan, dict), "Protected producer plan is invalid")
     return {"status": "verified_blocked_receipt",
             "source_commit": source_commit,
             "producer_run_id": producer_run_id,
             "plan_run_id": value["plan_run_id"],
             "receipt_file_sha256": hashlib.sha256(receipt.read_bytes()).hexdigest(),
             "receipt_attestation_sha256": attestation_sha,
-            "receipt": value}
+            "plan_file_sha256": hashlib.sha256(plan.read_bytes()).hexdigest(),
+            "plan": selected_plan, "receipt": value}
 
 
 def main() -> int:

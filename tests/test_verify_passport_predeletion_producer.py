@@ -79,6 +79,9 @@ def test_receipt_requires_attestation_and_handoff(tmp_path: Path) -> None:
     )
     assert result["status"] == "verified_blocked_receipt"
     assert result["receipt"]["plan_run_id"] == "20"
+    assert result["plan"] == {}
+    assert result["plan_file_sha256"] == producer.hashlib.sha256(
+        plan.read_bytes()).hexdigest()
     assert calls == [(plan, receipt, COMMIT, "21")]
     with pytest.raises(producer.ProducerRecordError, match="attestation digest"):
         producer.verify_receipt(
