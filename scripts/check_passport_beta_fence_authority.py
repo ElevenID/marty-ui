@@ -43,6 +43,7 @@ PROTECTED_FILES = (
     ".gitattributes",
     "deploy-config/passport-beta-fence-approved-target.json",
     "scripts/check_passport_beta_fence_authority.py",
+    "scripts/prepare_passport_beta_fence_approval.py",
     "scripts/beta-deployment-lock.ps1",
     "scripts/beta-passport-fence-legacy-boundary.ps1",
     "scripts/beta-passport-migration-lease.ps1",
@@ -234,6 +235,7 @@ def manifest_source(
         "release": release, "source_commit": expected_commit,
         "manifest_sha256": file_sha256(path), "oci_digests": digests,
         "issuance_image": images["issuance"]["reference"],
+        "ui_image": images["ui"]["reference"],
         "services_image": images["services"]["reference"],
         "build_only_artifacts": build_only,
         "issuance_source_commit": credentials["commit"],
@@ -405,6 +407,8 @@ def check_authority(
     require(isinstance(services, dict)
             and isinstance(services.get("issuance"), dict)
             and services["issuance"].get("configured_image") == baseline["issuance_image"]
+            and isinstance(beta.get("ui_service"), dict)
+            and beta["ui_service"].get("configured_image") == baseline["ui_image"]
             and all(isinstance(services.get(name), dict)
                     and services[name].get("configured_image") == baseline["services_image"]
                     for name in ("gateway", "flow", "issuance-native", "signing-keys")),

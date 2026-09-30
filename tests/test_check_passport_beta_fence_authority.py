@@ -222,6 +222,8 @@ def fixture(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
         "docker": {"context": "test", "daemon_id": "daemon"},
         "beta": {
             "postgres_system_identifier": "12345", "database_oid": "87774",
+            "ui_service": {"configured_image":
+                           "ghcr.io/elevenid/marty-ui-oss/ui@sha256:" + "3" * 64},
             "database_route": {"name": "elevenid-beta-network", "id": "a" * 64,
                                "postgres_container_id": "f" * 64},
             "postgres_runtime": {"image_id": "sha256:" + "f" * 64,
@@ -334,7 +336,7 @@ def test_authority_rejects_unapproved_source_or_deletion(
 
 @pytest.mark.parametrize("drift", [
     "observation", "attachments", "cluster", "database", "manifest", "attestation",
-    "issuance_attestation", "issuance_image", "services_image",
+    "issuance_attestation", "issuance_image", "services_image", "ui_image",
 ])
 def test_authority_rejects_target_or_release_drift(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, drift: str,
@@ -356,6 +358,8 @@ def test_authority_rejects_target_or_release_drift(
         target["beta"]["services"]["issuance"]["configured_image"] = "wrong"
     elif drift == "services_image":
         target["beta"]["services"]["flow"]["configured_image"] = "wrong"
+    elif drift == "ui_image":
+        target["beta"]["ui_service"]["configured_image"] = "wrong"
     def attest(path: Path, digests: dict[str, str], commit: str) -> bool:
         return drift != "attestation"
     with pytest.raises(HostProbeError):
