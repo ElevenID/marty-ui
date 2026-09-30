@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import os
 from pathlib import Path
+import shutil
 import subprocess
 
 import pytest
@@ -44,8 +45,10 @@ def test_legacy_beta_path_requires_proven_absence_of_fence(
     """
     env = {**os.environ, "FENCE_TEST_MARKER": str(marker),
            "FENCE_TEST_RESULT": schema_count, "FENCE_TEST_EXIT": exit_code}
+    shell = shutil.which("pwsh") or shutil.which("powershell")
+    assert shell is not None, "PowerShell is required for the beta fence boundary proof"
     result = subprocess.run(
-        ["powershell", "-NoProfile", "-NonInteractive", "-Command", script],
+        [shell, "-NoProfile", "-NonInteractive", "-Command", script],
         capture_output=True, text=True, timeout=20, env=env,
     )
     assert result.returncode == 0, result.stderr

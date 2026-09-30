@@ -258,6 +258,7 @@ def test_pull_request_classifier_is_conservative_and_merge_queue_is_complete() -
         "test-ui-crawler-artifacts",
         "test-ui-crawler-nginx",
         "test-services",
+        "test-passport-fence-postgres",
         "test-rust-services",
         "rust-lint-policy",
         "test-rust-service-images",
