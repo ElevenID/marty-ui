@@ -10,15 +10,15 @@ publish = false
 [dependencies]
 base64.workspace = true
 chrono.workspace = true
-flate2 = "1.1.9"
+flate2.workspace = true
 serde.workspace = true
 serde_json.workspace = true
-serde_yaml = "0.9.34"
+serde_yaml.workspace = true
 sha2.workspace = true
 
 [dev-dependencies]
 prost.workspace = true
-tempfile = "3"
+tempfile.workspace = true
 
 [[bin]]
 name = "beta-evidence-bundle"

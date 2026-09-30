@@ -44,6 +44,8 @@ chrono.workspace = true
 fancy-regex.workspace = true
 fernet.workspace = true
 futures-core.workspace = true
+# Keep the zlib-rs-only feature policy; the shared flate2 declaration retains
+# defaults for release evidence and self-host packaging.
 flate2 = { version = "1.1.9", default-features = false, features = ["zlib-rs"] }
 futures-util.workspace = true
 hex.workspace = true
@@ -103,17 +105,17 @@ marty-signing-keys = { path = "../signing-keys" }
 spki.workspace = true
 x509-cert.workspace = true
 marty-selfhost-bundle = { path = "../../crates/selfhost-bundle" }
-tempfile = "3"
+tempfile.workspace = true
 zip.workspace = true
 marty-release-evidence = { path = "../../crates/release-evidence" }
-serde_yaml = "0.9.34"
+serde_yaml.workspace = true
 ed25519-dalek.workspace = true
 jsonwebtoken.workspace = true
 marty-flow = { path = "../flow" }
 marty-gateway = { path = "../gateway" }
 mmf-platform.workspace = true
 rand08.workspace = true
-rsa = "0.9"
+rsa.workspace = true
 rcgen = { version = "0.14", default-features = false, features = ["aws_lc_rs"] }
 tower.workspace = true
 
