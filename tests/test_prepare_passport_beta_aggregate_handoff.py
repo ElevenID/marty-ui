@@ -27,8 +27,25 @@ def fixture(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     manifest = write(tmp_path / "stack-manifest.json", {"schema": "marty.stack/v1"})
     fence = write(tmp_path / "fence.json", {"schema": "fence"})
     maintenance = tmp_path / "maintenance.json"
+    snapshot_path = tmp_path / "cutover-snapshot.json"
+    snapshot_path.write_text("{}", encoding="utf-8")
+    report_path = tmp_path / "cutover-report.json"
+    report_path.write_text("{}", encoding="utf-8")
+    lineage = {
+        "cutover_snapshot_file_sha256": handoff.file_sha256(snapshot_path),
+        "cutover_snapshot_sha256": "1" * 64,
+        "cutover_report_file_sha256": handoff.file_sha256(report_path),
+        "cutover_report_run_id": 42,
+        "legacy_writer_container_id": "2" * 64,
+        "legacy_writer_image_digest": "sha256:" + "3" * 64,
+        "legacy_writer_started_at": "2026-09-29T00:00:00Z",
+        "legacy_writer_generation": 0,
+    }
     intent = write(tmp_path / "maintenance.json.intent.json", {
         "schema": "marty.passport-beta-db-maintenance-plan/v1",
+        "cutover_snapshot_path": str(snapshot_path),
+        "cutover_report_path": str(report_path),
+        **lineage,
         "postgres_container_id": CONTAINER, "fence_epoch": "7",
         "postgres_system_identifier": "100", "database_oid": "200",
         "verify_sql_sha256": handoff.file_sha256(handoff.VERIFY),
@@ -43,6 +60,7 @@ def fixture(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
         "fence_epoch": "7", "production_snapshot_sha256": SNAPSHOT,
         "production_attachments_sha256": ATTACHMENTS,
         "stopped_container_ids": STOPPED,
+        **lineage,
     })
     native = write(tmp_path / "native.json", {
         "schema": "marty.passport-beta-native-db-gates/v1",

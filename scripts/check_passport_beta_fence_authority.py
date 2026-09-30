@@ -69,6 +69,9 @@ PROTECTED_FILES = (
     "scripts/verify_passport_beta_aggregate_runtime.py",
     "scripts/run-passport-beta-aggregate-deploy.ps1",
     "scripts/probe_passport_beta_cutover_snapshot.py",
+    "scripts/verify_passport_beta_protected_cutover.py",
+    "scripts/collect_passport_python_deletion_cutover.py",
+    ".github/workflows/passport-python-deletion-cutover.yml",
     "docker-compose.base.yml",
     "docker-compose.beta.yml",
     "docker-compose.profile.dev.yml",
@@ -130,17 +133,41 @@ def file_sha256(path: Path) -> str:
     return hashlib.sha256(path.read_bytes()).hexdigest()
 
 
-def verify_issuance_attestation(reference: str, source_commit: str, version: str) -> bool:
+def verify_issuance_attestation(
+    reference: str, source_commit: str, version: str,
+    runner: Callable[[list[str]], str] = run,
+) -> bool:
     require(re.fullmatch(r"(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)",
                          version) is not None,
             "Credentials issuance version is invalid")
+    require(SHA.fullmatch(source_commit) is not None,
+            "Credentials issuance source commit is invalid")
+    try:
+        tag_ref = json.loads(runner([
+            "gh", "api", f"repos/ElevenID/marty-credentials/git/ref/tags/v{version}",
+        ]))
+        tag_object = tag_ref.get("object") if isinstance(tag_ref, dict) else None
+        require(isinstance(tag_object, dict) and tag_object.get("type") == "tag"
+                and SHA.fullmatch(str(tag_object.get("sha"))) is not None,
+                "Credentials issuance release tag is not annotated")
+        tag = json.loads(runner([
+            "gh", "api", "repos/ElevenID/marty-credentials/git/tags/"
+            + tag_object["sha"],
+        ]))
+    except (ValueError, OSError) as exc:
+        raise HostProbeError("Credentials issuance release tag is unavailable") from exc
+    target = tag.get("object") if isinstance(tag, dict) else None
+    require(isinstance(tag, dict) and tag.get("tag") == f"v{version}"
+            and isinstance(target, dict) and target.get("type") == "commit"
+            and target.get("sha") == source_commit,
+            "Credentials issuance release tag differs from signed source")
     try:
         subprocess.run([
             "gh", "attestation", "verify", f"oci://{reference}",
             "--repo", "ElevenID/marty-credentials",
             "--signer-workflow",
             "ElevenID/marty-credentials/.github/workflows/release-images.yml",
-            "--source-digest", source_commit, "--source-ref", f"refs/tags/v{version}",
+            "--source-digest", source_commit, "--source-ref", "refs/heads/main",
             "--deny-self-hosted-runners",
         ], check=True, capture_output=True, text=True, timeout=120)
     except (OSError, subprocess.SubprocessError) as exc:

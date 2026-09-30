@@ -33,6 +33,12 @@ def records() -> dict[str, dict]:
                 "Env": environment,
             },
             "State": {"Running": True, "Status": "running", "StartedAt": "now"},
+            "Mounts": [],
+            "NetworkSettings": {"Networks": {
+                "elevenid-beta-network": {"NetworkID": "b" * 64,
+                                           "Aliases": [], "IPAddress": "172.0.0.2"},
+            }},
+            "HostConfig": {"PortBindings": {}},
         }
     return result
 
@@ -54,6 +60,38 @@ def test_inventory_pins_beta_services_and_redacts_database_password(
     assert "do-not-print" not in repr(found)
 
 
+def test_inventory_includes_other_beta_compose_services(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    items = records()
+    extra = deepcopy(next(iter(items.values())))
+    extra["Id"] = "f" * 64
+    extra["Config"]["Labels"]["com.docker.compose.service"] = "docs"
+    items[extra["Id"]] = extra
+    found = inventory(monkeypatch, items)
+    assert set(found) == {*target.REQUIRED_SERVICES, "docs"}
+    assert found["docs"]["container_id"] == "f" * 64
+
+
+def test_inventory_binds_beta_attachments_and_separate_ui(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    items = records()
+    first = inventory(monkeypatch, items)
+    items[next(iter(items))]["HostConfig"]["PortBindings"] = {"443/tcp": [
+        {"HostIp": "127.0.0.1", "HostPort": "443"},
+    ]}
+    second = inventory(monkeypatch, items)
+    assert first["postgres"]["attachments_sha256"] != second["postgres"][
+        "attachments_sha256"]
+    ui = deepcopy(next(iter(items.values())))
+    ui["Config"]["Labels"]["com.docker.compose.project"] = target.UI_PROJECT
+    ui["Config"]["Labels"]["com.docker.compose.service"] = "ui-prod"
+    monkeypatch.setattr(target, "ids", lambda project, runner: [ui["Id"]])
+    monkeypatch.setattr(target, "inspect", lambda container_id, runner: ui)
+    assert target.ui_inventory(lambda command: "unused")["container_id"] == ui["Id"]
+
+
 def test_fenced_observer_uses_postinstall_identity_without_prefence_acl(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -62,6 +100,9 @@ def test_fenced_observer_uses_postinstall_identity_without_prefence_acl(
                 for index, name in enumerate(target.REQUIRED_SERVICES, start=1)}
     postgres = selected["postgres"]["container_id"]
     monkeypatch.setattr(target, "service_inventory", lambda runner: selected)
+    monkeypatch.setattr(target, "ui_inventory", lambda runner: {
+        "container_id": "f" * 64, "attachments_sha256": "a" * 64,
+    })
     monkeypatch.setattr(target, "database_network_binding",
                         lambda inventory, runner: {"id": "a" * 64,
                                                    "postgres_container_id": postgres})
@@ -240,4 +281,6 @@ def test_fence_operator_rechecks_old_generation_before_mutation() -> None:
         "Start-BetaMutation\n")
     assert "$before.observation_sha256 -cne $plan.target_observation_sha256" in operator
     assert "Approved beta service generation or database route changed before fence" in operator
+    assert "$after.beta.ui_project -cne $before.beta.ui_project" in operator
+    assert "($before.beta.ui_service | ConvertTo-Json -Depth 20 -Compress)" in operator
 

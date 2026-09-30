@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import hashlib
 from pathlib import Path
+import subprocess
 
 import pytest
 
@@ -17,6 +18,53 @@ TAG_OBJECT = "b" * 40
 DELETION_HEAD = "c" * 40
 OBSERVATION = "d" * 64
 DIGEST = "sha256:" + "e" * 64
+
+
+def test_credentials_release_tag_and_main_attestation_share_commit(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    observed: list[list[str]] = []
+
+    def runner(command: list[str]) -> str:
+        observed.append(command)
+        if command[-1] == "repos/ElevenID/marty-credentials/git/ref/tags/v0.1.72":
+            return json.dumps({"object": {"type": "tag", "sha": TAG_OBJECT}})
+        return json.dumps({"tag": "v0.1.72", "object": {
+            "type": "commit", "sha": HEAD,
+        }})
+
+    def attest(command: list[str], **kwargs: object) -> subprocess.CompletedProcess[str]:
+        observed.append(command)
+        return subprocess.CompletedProcess(command, 0)
+
+    monkeypatch.setattr(authority.subprocess, "run", attest)
+    assert authority.verify_issuance_attestation(
+        "ghcr.io/elevenid/marty-credentials-issuance@sha256:" + "f" * 64,
+        HEAD, "0.1.72", runner,
+    )
+    assert ["--source-ref", "refs/heads/main"] == observed[-1][
+        observed[-1].index("--source-ref"):
+        observed[-1].index("--source-ref") + 2]
+    assert ["--source-digest", HEAD] == observed[-1][
+        observed[-1].index("--source-digest"):
+        observed[-1].index("--source-digest") + 2]
+
+
+def test_credentials_release_tag_must_point_to_attested_commit(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(authority.subprocess, "run", lambda *args, **kwargs:
+                        pytest.fail("Attestation must not run for a mismatched tag"))
+
+    def runner(command: list[str]) -> str:
+        if "/git/ref/tags/" in command[-1]:
+            return json.dumps({"object": {"type": "tag", "sha": TAG_OBJECT}})
+        return json.dumps({"tag": "v0.1.72", "object": {
+            "type": "commit", "sha": "0" * 40,
+        }})
+
+    with pytest.raises(HostProbeError, match="differs from signed source"):
+        authority.verify_issuance_attestation("oci", HEAD, "0.1.72", runner)
 
 
 def fixture(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):

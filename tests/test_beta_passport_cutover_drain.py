@@ -112,7 +112,8 @@ def test_maintenance_recovery_requires_exact_container_set(
         "$script:InfrastructureWriterServices = @('keycloak')\n"
         f"function Get-ServiceRecords {{ @({ids}) | ForEach-Object {{ "
         "[pscustomobject]@{ container_id = $_; running = $true } } }\n"
-        "Assert-MaintenanceContainersRestored @('alpha', 'beta')\n",
+        "try { Assert-MaintenanceContainersRestored @('alpha', 'beta') } "
+        "catch { [Console]::Error.WriteLine($_.Exception.Message); exit 1 }\n",
         encoding="utf-8",
     )
     result = subprocess.run(

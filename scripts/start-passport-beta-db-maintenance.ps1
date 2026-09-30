@@ -1,6 +1,8 @@
 param(
     [Parameter(Mandatory = $true)][string]$StackManifest,
     [Parameter(Mandatory = $true)][string]$FenceReceipt,
+    [Parameter(Mandatory = $true)][string]$CutoverSnapshot,
+    [Parameter(Mandatory = $true)][string]$CutoverReport,
     [Parameter(Mandatory = $true)][string]$OutputPath,
     [switch]$ResumePending
 )
@@ -193,7 +195,9 @@ try {
     }
     $planner = Join-Path $PSScriptRoot 'prepare_passport_beta_db_maintenance.py'
     $baseArgs = @($planner, '--stack-manifest', $StackManifest,
-        '--fence-receipt', $FenceReceipt)
+        '--fence-receipt', $FenceReceipt,
+        '--cutover-snapshot', $CutoverSnapshot,
+        '--cutover-report', $CutoverReport)
     if ($ResumePending) {
         if (-not (Test-Path -LiteralPath $intentAbsolute)) {
             throw 'Beta maintenance has no durable pending intent to resume'
@@ -302,6 +306,14 @@ try {
         postgres_system_identifier = $systemId
         database_oid = $databaseOid
         fence_epoch = $epoch
+        cutover_snapshot_file_sha256 = $plan.cutover_snapshot_file_sha256
+        cutover_snapshot_sha256 = $plan.cutover_snapshot_sha256
+        cutover_report_file_sha256 = $plan.cutover_report_file_sha256
+        cutover_report_run_id = $plan.cutover_report_run_id
+        legacy_writer_container_id = $plan.legacy_writer_container_id
+        legacy_writer_image_digest = $plan.legacy_writer_image_digest
+        legacy_writer_started_at = $plan.legacy_writer_started_at
+        legacy_writer_generation = $plan.legacy_writer_generation
         stopped_container_ids = $plan.stop_container_ids
         production_snapshot_sha256 = $final.production_snapshot_sha256
         production_attachments_sha256 = $final.production_attachments_sha256

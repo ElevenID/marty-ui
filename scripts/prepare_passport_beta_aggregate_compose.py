@@ -88,6 +88,7 @@ RUNTIME_ENV = {
     "passport-beta-bureau": {"PASSPORT_BETA_BUREAU_ENABLED": "true"},
 }
 SHA = re.compile(r"[0-9a-f]{40}\Z")
+SHA256 = re.compile(r"[0-9a-f]{64}\Z")
 DIGEST = re.compile(r"sha256:[0-9a-f]{64}\Z")
 CONTAINER = re.compile(r"[0-9a-f]{64}\Z")
 ROOT = Path(__file__).resolve().parents[1]
@@ -327,7 +328,24 @@ def prepare(handoff: dict[str, Any], maintenance_intent: dict[str, Any],
     require(maintenance_intent.get("schema") == "marty.passport-beta-db-maintenance-plan/v1"
             and maintenance_intent.get("source_commit") == handoff["source_commit"]
             and maintenance_intent.get("stop_container_ids")
-                == handoff.get("stopped_container_ids"),
+                == handoff.get("stopped_container_ids")
+            and all(maintenance_intent.get(field) == handoff.get(field)
+                    for field in ("cutover_snapshot_file_sha256",
+                                  "cutover_snapshot_sha256",
+                                  "cutover_report_file_sha256",
+                                  "cutover_report_run_id",
+                                  "legacy_writer_container_id",
+                                  "legacy_writer_image_digest",
+                                  "legacy_writer_started_at",
+                                  "legacy_writer_generation"))
+            and SHA256.fullmatch(str(handoff.get("cutover_snapshot_file_sha256")))
+                is not None
+            and SHA256.fullmatch(str(handoff.get("cutover_snapshot_sha256")))
+                is not None
+            and SHA256.fullmatch(str(handoff.get("cutover_report_file_sha256")))
+                is not None
+            and type(handoff.get("cutover_report_run_id")) is int
+            and handoff["cutover_report_run_id"] > 0,
             "Beta maintenance intent differs from signed handoff")
     generation = maintenance_intent.get("beta_generation")
     require(isinstance(generation, list) and generation,
@@ -443,6 +461,14 @@ def prepare(handoff: dict[str, Any], maintenance_intent: dict[str, Any],
         "source_commit": handoff["source_commit"],
         "stack_manifest_sha256": handoff["stack_manifest_sha256"],
         "fence_receipt_sha256": handoff["fence_receipt_sha256"],
+        "cutover_snapshot_file_sha256": handoff["cutover_snapshot_file_sha256"],
+        "cutover_snapshot_sha256": handoff["cutover_snapshot_sha256"],
+        "cutover_report_file_sha256": handoff["cutover_report_file_sha256"],
+        "cutover_report_run_id": handoff["cutover_report_run_id"],
+        "legacy_writer_container_id": handoff["legacy_writer_container_id"],
+        "legacy_writer_image_digest": handoff["legacy_writer_image_digest"],
+        "legacy_writer_started_at": handoff["legacy_writer_started_at"],
+        "legacy_writer_generation": handoff["legacy_writer_generation"],
         "maintenance_receipt_sha256": handoff["maintenance_receipt_sha256"],
         "native_receipt_sha256": handoff["native_receipt_sha256"],
         "postgres_container_id": previous["postgres"],
@@ -561,6 +587,12 @@ def verify_resume_plan(
                 == recorded.get("production_snapshot_sha256")
             and maintenance.get("production_attachments_sha256")
                 == recorded.get("production_attachments_sha256")
+            and all(maintenance.get(field) == recorded.get(field) for field in (
+                "cutover_snapshot_file_sha256", "cutover_snapshot_sha256",
+                "cutover_report_file_sha256", "cutover_report_run_id",
+                "legacy_writer_container_id", "legacy_writer_image_digest",
+                "legacy_writer_started_at", "legacy_writer_generation",
+            ))
             and native.get("production_snapshot_sha256")
                 == recorded.get("production_snapshot_sha256")
             and native.get("migration_set_sha256")
@@ -593,7 +625,19 @@ def verify_resume_plan(
             and intent.get("postgres_container_id")
                 == recorded.get("postgres_container_id")
             and str(intent.get("fence_epoch"))
-                == str(recorded.get("fence_epoch")),
+                == str(recorded.get("fence_epoch"))
+            and all(intent.get(field) == recorded.get(field) for field in (
+                "cutover_snapshot_file_sha256", "cutover_snapshot_sha256",
+                "cutover_report_file_sha256", "cutover_report_run_id",
+                "legacy_writer_container_id", "legacy_writer_image_digest",
+                "legacy_writer_started_at", "legacy_writer_generation",
+            ))
+            and isinstance(intent.get("cutover_snapshot_path"), str)
+            and file_sha256(Path(intent["cutover_snapshot_path"]))
+                == recorded.get("cutover_snapshot_file_sha256")
+            and isinstance(intent.get("cutover_report_path"), str)
+            and file_sha256(Path(intent["cutover_report_path"]))
+                == recorded.get("cutover_report_file_sha256"),
             "Aggregate resume maintenance intent changed")
     handoff = {**recorded, "schema": "marty.passport-beta-aggregate-handoff/v1",
                "stopped_container_ids": intent["stop_container_ids"]}

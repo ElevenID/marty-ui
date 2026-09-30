@@ -109,7 +109,14 @@ def prepare(
             and docs_labels.get("com.docker.compose.service") == "docs"
             and re.fullmatch(r"sha256:[0-9a-f]{64}", str(docs_image)) is not None,
             "Preserved beta docs image is not immutable")
+    snapshot_path = intent.get("cutover_snapshot_path")
+    report_path = intent.get("cutover_report_path")
+    require(isinstance(snapshot_path, str) and Path(snapshot_path).is_absolute(),
+            "Beta cutover snapshot path is absent from maintenance intent")
+    require(isinstance(report_path, str) and Path(report_path).is_absolute(),
+            "Protected cutover report path is absent from maintenance intent")
     stopped = verify_plan(intent, stack_manifest, fence_receipt,
+                          Path(snapshot_path), Path(report_path),
                           require_stopped=True, runner=runner)
     require(stopped.get("verified") is True
             and stopped.get("stopped_container_ids") == intent.get("stop_container_ids"),
@@ -123,6 +130,12 @@ def prepare(
             and maintenance.get("postgres_container_id") == intent.get("postgres_container_id")
             and str(maintenance.get("fence_epoch")) == str(intent.get("fence_epoch"))
             and maintenance.get("stopped_container_ids") == intent.get("stop_container_ids")
+            and all(maintenance.get(field) == intent.get(field) for field in (
+                "cutover_snapshot_file_sha256", "cutover_snapshot_sha256",
+                "cutover_report_file_sha256", "cutover_report_run_id",
+                "legacy_writer_container_id", "legacy_writer_image_digest",
+                "legacy_writer_started_at", "legacy_writer_generation",
+            ))
             and maintenance.get("production_snapshot_sha256")
                 == stopped.get("production_snapshot_sha256")
             and maintenance.get("production_attachments_sha256")
@@ -167,6 +180,14 @@ def prepare(
         "source_commit": source_commit,
         "stack_manifest_sha256": file_sha256(stack_manifest),
         "fence_receipt_sha256": file_sha256(fence_receipt),
+        "cutover_snapshot_file_sha256": intent["cutover_snapshot_file_sha256"],
+        "cutover_snapshot_sha256": intent["cutover_snapshot_sha256"],
+        "cutover_report_file_sha256": intent["cutover_report_file_sha256"],
+        "cutover_report_run_id": intent["cutover_report_run_id"],
+        "legacy_writer_container_id": intent["legacy_writer_container_id"],
+        "legacy_writer_image_digest": intent["legacy_writer_image_digest"],
+        "legacy_writer_started_at": intent["legacy_writer_started_at"],
+        "legacy_writer_generation": intent["legacy_writer_generation"],
         "maintenance_receipt_sha256": file_sha256(maintenance_receipt),
         "native_receipt_sha256": file_sha256(native_receipt),
         "postgres_container_id": container,

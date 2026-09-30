@@ -28,6 +28,7 @@ REQUIRED_SERVICES = (
     "postgres", "issuance", "gateway", "flow", "issuance-native", "signing-keys"
 )
 BETA_NETWORK = "elevenid-beta-network"
+UI_PROJECT = "elevenid-beta-ui"
 QUALIFIED_POSTGRES_IMAGE_ID = (
     "sha256:fceb6f86328c36f2438fae3b851b0cc57c4a7e69a58c866d9ce24281f2cf0c9c"
 )
@@ -87,8 +88,8 @@ def service_inventory(
         if labels.get("com.docker.compose.project") != BETA_PROJECT:
             raise HostProbeError("Beta container has foreign Compose identity")
         service = labels.get("com.docker.compose.service")
-        if service not in REQUIRED_SERVICES:
-            continue
+        if not isinstance(service, str) or not service:
+            raise HostProbeError("Beta container has no Compose service identity")
         if service in selected:
             raise HostProbeError(f"Beta {service} has ambiguous container generations")
         if state.get("Running") is not True or state.get("Status") != "running":
@@ -108,6 +109,7 @@ def service_inventory(
             "container_id": full_id, "image_id": image_id,
             "configured_image": image_ref, "started_at": started_at,
             "restart_count": restart_count,
+            "attachments_sha256": container_attachments_sha256(record),
         }
         environment = config.get("Env")
         if not isinstance(environment, list) or any(
@@ -139,9 +141,69 @@ def service_inventory(
             if value not in ("unset", "true", "false", "1", "0"):
                 raise HostProbeError(f"Beta {service} passport route selector is invalid")
             selected[service]["passport_route_selector"] = value
-    if set(selected) != set(REQUIRED_SERVICES):
+    if not set(REQUIRED_SERVICES).issubset(selected):
         raise HostProbeError("Required beta fence services are missing")
     return selected
+
+
+def container_attachments_sha256(record: dict[str, Any]) -> str:
+    """Bind mounts, networks and published ports without publishing their details."""
+    mounts = record.get("Mounts")
+    settings = record.get("NetworkSettings")
+    networks = settings.get("Networks") if isinstance(settings, dict) else None
+    host = record.get("HostConfig")
+    ports = host.get("PortBindings") if isinstance(host, dict) else None
+    if (not isinstance(mounts, list) or not isinstance(networks, dict)
+            or not networks or not isinstance(ports, (dict, type(None)))):
+        raise HostProbeError("Beta container attachments are unavailable")
+    projected = {
+        "mounts": sorted(({
+            "type": mount.get("Type"), "name": mount.get("Name"),
+            "source": mount.get("Source"), "destination": mount.get("Destination"),
+            "read_write": mount.get("RW"),
+        } for mount in mounts if isinstance(mount, dict)),
+            key=lambda item: json.dumps(item, sort_keys=True)),
+        "networks": sorted(({
+            "name": name, "id": value.get("NetworkID"),
+            "aliases": value.get("Aliases"), "ip_address": value.get("IPAddress"),
+        } for name, value in networks.items() if isinstance(value, dict)),
+            key=lambda item: item["name"]),
+        "ports": ports,
+    }
+    if (len(projected["mounts"]) != len(mounts)
+            or len(projected["networks"]) != len(networks)
+            or any(not isinstance(item["id"], str) or not item["id"]
+                   for item in projected["networks"])):
+        raise HostProbeError("Beta container attachments are invalid")
+    return hashlib.sha256(json.dumps(projected, sort_keys=True,
+                                     separators=(",", ":")).encode()).hexdigest()
+
+
+def ui_inventory(runner: Callable[[list[str]], str] = run) -> dict[str, str]:
+    """Include the separate beta UI Compose project in the frozen inventory."""
+    containers = ids(UI_PROJECT, runner)
+    if len(containers) != 1:
+        raise HostProbeError("Beta UI project is missing or ambiguous")
+    record = inspect(containers[0], runner)
+    config = record.get("Config")
+    state = record.get("State")
+    labels = config.get("Labels") if isinstance(config, dict) else None
+    if (not isinstance(labels, dict)
+            or labels.get("com.docker.compose.project") != UI_PROJECT
+            or labels.get("com.docker.compose.service") != "ui-prod"
+            or not isinstance(state, dict) or state.get("Running") is not True
+            or state.get("Status") != "running"
+            or not isinstance(record.get("Id"), str)
+            or DOCKER_ID.fullmatch(record["Id"]) is None
+            or not isinstance(record.get("Image"), str)
+            or IMAGE_ID.fullmatch(record["Image"]) is None
+            or not isinstance(config.get("Image"), str)
+            or not config["Image"]):
+        raise HostProbeError("Beta UI runtime identity is invalid")
+    return {"container_id": record["Id"], "image_id": record["Image"],
+            "configured_image": config["Image"],
+            "started_at": state.get("StartedAt"),
+            "attachments_sha256": container_attachments_sha256(record)}
 
 
 def database_network_binding(
@@ -230,6 +292,7 @@ def observe(runner: Callable[[list[str]], str] = run) -> dict[str, Any]:
     production_before = production_snapshot(runner)
     production_attachments_before = production_attachment_sha256(runner)
     before = service_inventory(runner)
+    ui_before = ui_inventory(runner)
     database_route = database_network_binding(before, runner)
     postgres_id = beta_postgres_container(runner)
     if before["postgres"]["container_id"] != inspect(postgres_id, runner).get("Id"):
@@ -292,8 +355,11 @@ def observe(runner: Callable[[list[str]], str] = run) -> dict[str, Any]:
         raise HostProbeError("Beta login role memberships differ from reviewed inventory")
     drain = beta_legacy_drain(runner)
     after = service_inventory(runner)
+    ui_after = ui_inventory(runner)
     if before != after:
         raise HostProbeError("Beta service generation changed during fence inventory")
+    if ui_before != ui_after:
+        raise HostProbeError("Beta UI generation changed during fence inventory")
     if database_network_binding(after, runner) != database_route:
         raise HostProbeError("Beta database network route changed during fence inventory")
     production_after = production_snapshot(runner)
@@ -310,6 +376,7 @@ def observe(runner: Callable[[list[str]], str] = run) -> dict[str, Any]:
         "docker": {"context": context, "daemon_id": daemon_id},
         "beta": {
             "compose_project": BETA_PROJECT, "services": before,
+            "ui_project": UI_PROJECT, "ui_service": ui_before,
             "postgres_system_identifier": identity[0],
             "database": "marty", "database_oid": identity[1],
             "login_roles": roles, "guarded_owners": owners,
@@ -335,6 +402,7 @@ def observe_fenced(runner: Callable[[list[str]], str] = run) -> dict[str, Any]:
     production_before = production_snapshot(runner)
     production_attachments_before = production_attachment_sha256(runner)
     before = service_inventory(runner)
+    ui_before = ui_inventory(runner)
     database_route = database_network_binding(before, runner)
     postgres_id = beta_postgres_container(runner)
     if before["postgres"]["container_id"] != inspect(postgres_id, runner).get("Id"):
@@ -354,7 +422,9 @@ def observe_fenced(runner: Callable[[list[str]], str] = run) -> dict[str, Any]:
     # qualified separately by passport-beta-fence-verify.sql in this phase.
     drain = beta_legacy_drain(runner)
     after = service_inventory(runner)
-    if before != after or database_network_binding(after, runner) != database_route:
+    ui_after = ui_inventory(runner)
+    if (before != after or ui_before != ui_after
+            or database_network_binding(after, runner) != database_route):
         raise HostProbeError("Fenced beta container or database route changed")
     production_after = production_snapshot(runner)
     assert_production_unchanged(production_before, production_after)
@@ -369,6 +439,7 @@ def observe_fenced(runner: Callable[[list[str]], str] = run) -> dict[str, Any]:
         "docker": {"context": context, "daemon_id": daemon_id},
         "beta": {
             "compose_project": BETA_PROJECT, "services": before,
+            "ui_project": UI_PROJECT, "ui_service": ui_before,
             "postgres_system_identifier": identity[0],
             "database": "marty", "database_oid": identity[1],
             "drain": drain, "database_route": database_route,

@@ -502,6 +502,14 @@ try {
         source_commit = $script:plan.source_commit
         plan_sha256 = (Get-FileHash -LiteralPath $planPath -Algorithm SHA256).Hash.ToLowerInvariant()
         native_receipt_sha256 = $script:plan.native_receipt_sha256
+        cutover_snapshot_file_sha256 = $script:plan.cutover_snapshot_file_sha256
+        cutover_snapshot_sha256 = $script:plan.cutover_snapshot_sha256
+        cutover_report_file_sha256 = $script:plan.cutover_report_file_sha256
+        cutover_report_run_id = $script:plan.cutover_report_run_id
+        legacy_writer_container_id = $script:plan.legacy_writer_container_id
+        legacy_writer_image_digest = $script:plan.legacy_writer_image_digest
+        legacy_writer_started_at = $script:plan.legacy_writer_started_at
+        legacy_writer_generation = $script:plan.legacy_writer_generation
         production_snapshot_sha256 = $runtime.production_snapshot_sha256
         beta_services = $runtime.beta_services
         beta_runtime = $runtime.beta_runtime
