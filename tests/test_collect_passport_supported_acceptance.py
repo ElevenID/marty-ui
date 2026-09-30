@@ -68,6 +68,7 @@ def docker_runner(project: str, *, wrong_image: bool = False,
                   signer_selector: bool = True, signer_process: bool = True):
     def run(args: list[str]) -> str:
         if args[:2] == ["docker", "ps"]:
+            assert "--no-trunc" in args
             service = args[-1].split("=")[-1]
             return service + "-container\n"
         if args[:2] == ["docker", "exec"]:

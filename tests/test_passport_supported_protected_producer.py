@@ -16,8 +16,9 @@ from services.passport_disposable_identity import issuer_did
 from scripts.check_passport_supported_producer_handoff import HandoffError, verify_handoff
 from scripts.passport_supported_infra_images import qualified_images
 from scripts.passport_supported_protected_producer import (
-    WORKFLOW_NAME, _application, produce_disposable_receipt,
+    WORKFLOW_NAME, _application, _observe_bound_runtime, produce_disposable_receipt,
 )
+from scripts.collect_passport_supported_acceptance import COMPOSE_FLAGS, COMPOSE_SERVICES
 from scripts.probe_passport_supported_routes import _frozen_routes
 from scripts.passport_supported_provisioning_producer import ProducerError, WORKFLOW_REF
 
@@ -134,6 +135,16 @@ def test_producer_orders_real_gates_and_tears_down(surface: str, tmp_path: Path)
         calls.append(("complete_teardown", args))
         return True
 
+    runtime = {service: {"container_id": service, "image_id": "sha256:" + "d" * 64,
+                         "oci_reference": SERVICES, "selectors": {}}
+               for service in COMPOSE_SERVICES}
+    runtime["edge"] = {"container_id": "edge", "loopback_port": 29877}
+
+    def observe(*args):
+        calls.append(("runtime_inventory", args))
+        assert args[0] is record
+        return runtime
+
     report = produce_disposable_receipt(
         tmp_path / "plan.json", tmp_path / "manifest.json", "123456",
         {"GITHUB_RUN_ID": "987654"}, 29877, now=NOW,
@@ -143,6 +154,7 @@ def test_producer_orders_real_gates_and_tears_down(surface: str, tmp_path: Path)
         inspect=lambda args: "", run=run, setup=setup,
         record_live=live, issue_key=key, issue_operator_key=operator_key,
         probe=probe, flow_proof=prove_flow,
+        observe_runtime=observe,
         teardown_complete=complete,
         teardown_partial=lambda *args, **kwargs: pytest.fail("unexpected partial teardown"),
     )
@@ -150,6 +162,7 @@ def test_producer_orders_real_gates_and_tears_down(surface: str, tmp_path: Path)
     assert (names.index("setup") < names.index("ownership") < names.index("key")
             < names.index("probe") < names.index("operator_key")
             < names.index("flow_proof"))
+    assert names.index("flow_proof") < names.index("runtime_inventory") < names.index("complete_teardown")
     assert names[-1] == "complete_teardown"
     commands = [item[1] for item in calls if item[0] == "run"]
     assert commands[0][-9:] == ["up", "-d", "--no-deps", "--wait", "--wait-timeout", "120",
@@ -167,7 +180,53 @@ def test_producer_orders_real_gates_and_tears_down(surface: str, tmp_path: Path)
     assert report["flow_execution_verified"] is True
     assert report["rust_restart_resume_verified"] is True
     assert report["producer_run_id"] == "987654"
+    assert set(report["runtime_images"]) == set(COMPOSE_SERVICES)
+    assert report["runtime_edge"] == runtime["edge"]
     assert not (Path(tempfile.gettempdir()) / selected["project"]).exists()
+
+
+def test_runtime_inventory_binds_current_owned_container_ids() -> None:
+    containers = {service: service for service in (*COMPOSE_SERVICES, "edge")}
+    record = {"project": plan("base")["project"], "services_reference": SERVICES,
+              "containers": containers}
+    runtime = {service: {"container_id": service} for service in COMPOSE_SERVICES}
+    runtime["edge"] = {"container_id": "edge", "loopback_port": 29877}
+    commands = []
+
+    def inspect(args):
+        commands.append(args)
+        return ""
+
+    def observe(surface, project, reference, *, runner):
+        assert (surface, project, reference) == ("base", record["project"], SERVICES)
+        runner(["docker", "ps", "-aq"])
+        return runtime
+
+    def proof(*args):
+        return {"live_ownership_verified": True}
+    assert _observe_bound_runtime(record, "base", 29877, NOW, inspect,
+                                  observe=observe, ownership=proof) == runtime
+    assert commands == [["ps", "-aq"]]
+    for service in ("flow", "edge"):
+        invalid = deepcopy(runtime)
+        invalid[service] = {**runtime[service], "container_id": "stale"}
+        with pytest.raises(ProducerError, match="runtime identity changed"):
+            _observe_bound_runtime(record, "base", 29877, NOW, inspect,
+                                   observe=lambda *args, **kwargs: invalid,
+                                   ownership=proof)
+    with pytest.raises(ProducerError, match="edge port changed"):
+        _observe_bound_runtime(record, "base", 29878, NOW, inspect,
+                               observe=observe, ownership=proof)
+    with pytest.raises(ProducerError, match="ownership is unverified"):
+        _observe_bound_runtime(record, "base", 29877, NOW, inspect,
+                               observe=observe,
+                               ownership=lambda *args: {"live_ownership_verified": False})
+    with pytest.raises(ProducerError, match="escaped Docker"):
+        _observe_bound_runtime(
+            record, "base", 29877, NOW, inspect,
+            observe=lambda *args, **kwargs: kwargs["runner"](["kubectl", "get", "pods"]),
+            ownership=proof,
+        )
 
 
 @pytest.mark.parametrize("complete_result", [True, False])
@@ -296,6 +355,12 @@ def test_hosted_handoff_binds_partial_receipt_to_plan(tmp_path: Path) -> None:
               for method, path in sorted(_frozen_routes())]
     application_hash = hashlib.sha256(json.dumps(
         _application(29877), sort_keys=True, separators=(",", ":")).encode()).hexdigest()
+    runtime = {
+        service: {"container_id": f"{index:064x}", "image_id": "sha256:" + "d" * 64,
+                  "oci_reference": SERVICES,
+                  "selectors": {flag: True for flag in COMPOSE_FLAGS[service]}}
+        for index, service in enumerate(COMPOSE_SERVICES, 1)
+    }
     receipt = {
         "schema": "marty.passport-supported-rust-producer/v1",
         "status": "blocked", "project": selected["project"], "surface": "base",
@@ -322,6 +387,10 @@ def test_hosted_handoff_binds_partial_receipt_to_plan(tmp_path: Path) -> None:
                                "sod_signature_verified": True,
                                "routes": routes}},
         "flow_execution": flow_receipt(),
+        "runtime_images": runtime,
+        "runtime_edge": {"container_id": f"{7:064x}",
+                         "oci_reference": selected["infra_images"]["edge"],
+                         "loopback_port": 29877},
         "blocker": "Live protected beta acceptance remains unproven",
     }
     receipt_path.write_text(json.dumps(receipt))
@@ -372,6 +441,14 @@ def test_hosted_handoff_binds_partial_receipt_to_plan(tmp_path: Path) -> None:
             flow_instance_id_sha256="not-a-hash")),
         ("missing durable history", lambda item: item["flow_execution"]
             ["execution"].update(durable_history_verified=False)),
+        ("wrong runtime image", lambda item: item["runtime_images"]["flow"].update(
+            oci_reference="foreign")),
+        ("disabled Rust selector", lambda item: item["runtime_images"]["gateway"]
+            ["selectors"].update(PASSPORT_NATIVE_GATEWAY_ENABLED=False)),
+        ("duplicate runtime", lambda item: item["runtime_images"]["flow"].update(
+            container_id=item["runtime_images"]["gateway"]["container_id"])),
+        ("wrong edge port", lambda item: item["runtime_edge"].update(
+            loopback_port=29878)),
     ]
     for _, mutate in mutations:
         changed = deepcopy(receipt)

@@ -12,6 +12,7 @@ from typing import Callable
 
 if __package__:
     from .check_passport_supported_rust_model import PROJECT
+    from .collect_passport_supported_acceptance import COMPOSE_FLAGS, COMPOSE_SERVICES, DIGEST
     from .passport_supported_certificate_rehearsal import validate_certificate_setup
     from .passport_supported_protected_producer import _application
     from .passport_supported_provisioning_producer import ProducerError
@@ -21,6 +22,7 @@ if __package__:
     )
 else:
     from check_passport_supported_rust_model import PROJECT
+    from collect_passport_supported_acceptance import COMPOSE_FLAGS, COMPOSE_SERVICES, DIGEST
     from passport_supported_certificate_rehearsal import validate_certificate_setup
     from passport_supported_protected_producer import _application
     from passport_supported_provisioning_producer import ProducerError
@@ -42,7 +44,7 @@ RECEIPT_FIELDS = frozenset({
     "certificate_setup_passed", "live_ownership_verified", "rust_routes_verified",
     "signed_gateway_callback_verified", "flow_execution_verified",
     "flow_start_verified", "rust_restart_resume_verified", "certificate",
-    "route", "flow_execution", "blocker",
+    "route", "flow_execution", "runtime_images", "runtime_edge", "blocker",
 })
 ROUTE_EVIDENCE_FIELDS = frozenset({
     "application_input_sha256", "job_id_sha256", "application_id_sha256",
@@ -51,6 +53,43 @@ ROUTE_EVIDENCE_FIELDS = frozenset({
     "callback_private_status", "unsigned_webhook_http_status",
     "signed_callback_path", "signed_gateway_callback_verified", "physical_claim",
 })
+CONTAINER_ID = re.compile(r"[0-9a-f]{64}\Z")
+
+
+def _runtime_evidence(receipt: dict, plan: dict) -> None:
+    runtime = receipt["runtime_images"]
+    edge = receipt["runtime_edge"]
+    reference = plan.get("services_reference")
+    infra_images = plan.get("infra_images")
+    if (not isinstance(runtime, dict) or set(runtime) != set(COMPOSE_SERVICES)
+        or not isinstance(reference, str)
+        or not isinstance(infra_images, dict)
+        or not isinstance(edge, dict)
+        or set(edge) != {"container_id", "oci_reference", "loopback_port"}
+        or type(edge["loopback_port"]) is not int
+        or edge["loopback_port"] != receipt["gateway_port"]
+        or edge["oci_reference"] != infra_images.get("edge")
+        or not isinstance(edge["container_id"], str)
+        or CONTAINER_ID.fullmatch(edge["container_id"]) is None):
+        raise HandoffError("Protected Rust runtime inventory is invalid")
+    ids = {edge["container_id"]}
+    for service in COMPOSE_SERVICES:
+        item = runtime[service]
+        flags = item.get("selectors") if isinstance(item, dict) else None
+        if (not isinstance(item, dict)
+            or set(item) != {"container_id", "image_id", "oci_reference", "selectors"}
+            or not isinstance(item["container_id"], str)
+            or CONTAINER_ID.fullmatch(item["container_id"]) is None
+            or not isinstance(item["image_id"], str)
+            or DIGEST.fullmatch(item["image_id"]) is None
+            or item["oci_reference"] != reference
+            or not isinstance(flags, dict)
+            or set(flags) != set(COMPOSE_FLAGS[service])
+            or any(value is not True for value in flags.values())):
+            raise HandoffError("Protected Rust runtime inventory is invalid")
+        ids.add(item["container_id"])
+    if len(ids) != len(COMPOSE_SERVICES) + 1:
+        raise HandoffError("Protected Rust runtime identities are not distinct")
 
 
 def _flow_execution_evidence(value: object) -> None:
@@ -230,6 +269,7 @@ def verify_handoff(
         raise HandoffError("Protected managed certificate evidence is invalid") from error
     _route_evidence(receipt["route"], receipt["gateway_port"])
     _flow_execution_evidence(receipt["flow_execution"])
+    _runtime_evidence(receipt, plan)
     try:
         verified = attest(str(plan_path), "ElevenID/marty-ui", PLAN_WORKFLOW,
                           source_commit, "refs/heads/main")

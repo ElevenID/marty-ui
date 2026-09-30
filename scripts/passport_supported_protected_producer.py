@@ -16,6 +16,8 @@ import subprocess
 from typing import Callable
 
 if __package__:
+    from .check_passport_supported_compose_ownership import verify as verify_ownership
+    from .collect_passport_supported_acceptance import COMPOSE_SERVICES, observe_compose
     from .passport_supported_certificate_rehearsal import validate_certificate_setup
     from .passport_supported_disposable_ceremony import bootstrap_certificate_chain
     from .passport_supported_disposable_route_probe import exercise_owned_disposable
@@ -36,6 +38,8 @@ if __package__:
         stage_disposable_inputs, verify_plan_release, verify_pre_mutation,
     )
 else:
+    from check_passport_supported_compose_ownership import verify as verify_ownership
+    from collect_passport_supported_acceptance import COMPOSE_SERVICES, observe_compose
     from passport_supported_certificate_rehearsal import validate_certificate_setup
     from passport_supported_disposable_ceremony import bootstrap_certificate_chain
     from passport_supported_disposable_route_probe import exercise_owned_disposable
@@ -97,6 +101,38 @@ def _application(gateway_port: int) -> dict:
     }
 
 
+def _observe_bound_runtime(
+    record: dict, surface: str, gateway_port: int, now: datetime,
+    inspector: Callable[[list[str]], str], *,
+    observe: Callable[..., dict] = observe_compose,
+    ownership: Callable[..., dict] = verify_ownership,
+) -> dict:
+    """Bind the released Rust image inventory to the owned, post-restart stack."""
+    if ownership(record, surface, now, inspector).get("live_ownership_verified") is not True:
+        raise ProducerError("Disposable Rust runtime ownership is unverified")
+
+    def docker_inspector(args: list[str]) -> str:
+        if not args or args[0] != "docker":
+            raise ProducerError("Runtime inspection escaped Docker")
+        return inspector(args[1:])
+
+    runtime = observe(
+        surface, record["project"], record["services_reference"],
+        runner=docker_inspector,
+    )
+    if (not isinstance(runtime, dict)
+        or set(runtime) != set(COMPOSE_SERVICES) | {"edge"}
+        or not isinstance(record.get("containers"), dict)):
+        raise ProducerError("Disposable Rust runtime inventory is incomplete")
+    for service in (*COMPOSE_SERVICES, "edge"):
+        if (not isinstance(runtime[service], dict)
+            or runtime[service].get("container_id") != record["containers"].get(service)):
+            raise ProducerError(f"Disposable {service} runtime identity changed")
+    if runtime["edge"].get("loopback_port") != gateway_port:
+        raise ProducerError("Disposable HTTPS edge port changed")
+    return runtime
+
+
 def produce_disposable_receipt(
     plan_path: Path, manifest_path: Path, plan_run_id: str,
     environment: dict[str, str], gateway_port: int, *,
@@ -115,6 +151,7 @@ def produce_disposable_receipt(
     probe: Callable[..., dict] = exercise_owned_disposable,
     flow_proof: Callable[..., dict] = exercise_owned_flow,
     restart_rust: Callable[..., bool] = restart_owned_rust,
+    observe_runtime: Callable[..., dict] = _observe_bound_runtime,
     teardown_complete: Callable[..., bool] = destroy_disposable_project,
     teardown_partial: Callable[..., bool] = destroy_partial_disposable_project,
 ) -> dict:
@@ -222,6 +259,12 @@ def produce_disposable_receipt(
             or flow["execution"].get("durable_history_verified") is not True
             or flow["execution"].get("restart_resume_verified") is not True):
             raise ProducerError("Disposable Rust Flow execution proof is invalid")
+        before_inventory = read_clock() if clock is not None or now is None else now
+        if (before_inventory.tzinfo is None
+            or min(expires, deadline) - before_inventory < RESERVED_TEARDOWN):
+            raise ProducerError("Disposable runtime teardown budget is exhausted")
+        runtime = observe_runtime(record, plan["surface"], gateway_port,
+                                  before_inventory, inspector)
         return {
             "schema": "marty.passport-supported-rust-producer/v1",
             "status": "blocked", "project": plan["project"],
@@ -239,6 +282,9 @@ def produce_disposable_receipt(
             "certificate": certificate,
             "route": route,
             "flow_execution": flow,
+            "runtime_images": {service: runtime[service]
+                               for service in COMPOSE_SERVICES},
+            "runtime_edge": runtime["edge"],
             "blocker": "Live protected beta acceptance remains unproven",
         }
     finally:
