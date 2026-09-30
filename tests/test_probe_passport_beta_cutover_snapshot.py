@@ -10,6 +10,7 @@ from types import SimpleNamespace
 import pytest
 
 from scripts import probe_passport_beta_cutover_snapshot as snapshot
+from scripts import collect_passport_predeletion_drain as drain
 from scripts.probe_passport_beta_host import HostProbeError
 
 
@@ -114,6 +115,50 @@ def test_snapshot_binds_zero_job_beta_to_fresh_write_probe() -> None:
     assert result["snapshot_sha256"] == snapshot.digest({
         key: value for key, value in result.items() if key != "snapshot_sha256"
     })
+
+
+def test_predeletion_drain_projects_same_writer_and_probe() -> None:
+    installation, observed, direct = evidence()
+    result = collect_fixture(installation, observed, direct)
+    report = drain.collect(
+        installation, result, installation_file_sha256="1" * 64,
+        snapshot_file_sha256="2" * 64, source_commit="a" * 40,
+    )
+    assert report["status"] == "observed_unattested"
+    proof = report["probe"]["evidence"]
+    assert proof["legacy_source"]["drain_watermark"] == direct[
+        "observation_watermark"]
+    assert proof["legacy_source"]["writer_container_id"] == WRITER
+    assert proof["passport_write_fence"]["direct_database_probe"] == direct
+
+
+def test_predeletion_drain_rejects_changed_writer_and_counts() -> None:
+    installation, observed, direct = evidence()
+    result = collect_fixture(installation, observed, direct)
+    result["writer_generation"] = 1
+    result["snapshot_sha256"] = snapshot.digest({
+        key: value for key, value in result.items() if key != "snapshot_sha256"
+    })
+    with pytest.raises(HostProbeError, match="writer generation"):
+        drain.collect(installation, result, installation_file_sha256="1" * 64,
+                      snapshot_file_sha256="2" * 64, source_commit="a" * 40)
+    result["writer_generation"] = 0
+    result["counts"]["total_job_count"] = 1
+    result["snapshot_sha256"] = snapshot.digest({
+        key: value for key, value in result.items() if key != "snapshot_sha256"
+    })
+    with pytest.raises(HostProbeError, match="counts"):
+        drain.collect(installation, result, installation_file_sha256="1" * 64,
+                      snapshot_file_sha256="2" * 64, source_commit="a" * 40)
+
+
+def test_predeletion_drain_rejects_changed_installation_binding() -> None:
+    installation, observed, direct = evidence()
+    result = collect_fixture(installation, observed, direct)
+    installation["source_commit"] = "b" * 40
+    with pytest.raises(HostProbeError, match="protected fence receipt"):
+        drain.collect(installation, result, installation_file_sha256="1" * 64,
+                      snapshot_file_sha256="2" * 64, source_commit="a" * 40)
 
 
 def test_snapshot_rejects_existing_jobs_without_readability_proof() -> None:
