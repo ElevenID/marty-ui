@@ -2295,7 +2295,7 @@
           {
             "start_seconds": 0,
             "speaker": "Narrator",
-            "text": "This demonstration uses synthetic data and locally generated AI narration. One synthetic passport job uses distinct KMS-backed CSCA and DSC issuer profiles."
+            "text": "This demonstration uses synthetic test data and AI-generated narration rendered locally. One synthetic passport job uses distinct KMS-backed CSCA and DSC issuer profiles."
           },
           {
             "start_seconds": 12,

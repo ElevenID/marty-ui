@@ -313,7 +313,7 @@ def draft_scenario(contract: dict[str, object]) -> dict[str, object]:
                 "transcript": {
                     "language": "en",
                     "segments": [
-                        {"start_seconds": 0, "speaker": "Narrator", "text": "This demonstration uses synthetic data and locally generated AI narration. One synthetic passport job uses distinct KMS-backed CSCA and DSC issuer profiles."},
+                        {"start_seconds": 0, "speaker": "Narrator", "text": "This demonstration uses synthetic test data and AI-generated narration rendered locally. One synthetic passport job uses distinct KMS-backed CSCA and DSC issuer profiles."},
                         {"start_seconds": 12, "speaker": "Narrator", "text": "The live Rust Flow completes nine ordered passport issuance steps for that job."},
                         {"start_seconds": 24, "speaker": "Narrator", "text": "Marty's bureau simulator returns a correlated job and signs the native callback."},
                         {"start_seconds": 36, "speaker": "Narrator", "text": "Unsigned and foreign-organization callbacks are denied without changing the job."},
