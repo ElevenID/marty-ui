@@ -223,6 +223,7 @@ def test_flow_start_uses_operator_for_references_and_native_key_for_job(monkeypa
                 "durable_history_verified": True,
                 "restart_resume_verified": True,
                 "signed_callback_receipt_sha256": "b" * 64,
+                "callback_bureau_status": "QUALITY_CHECK",
                 "bureau_job_id": BUREAU,
                 "sod_sha256": "a" * 64}
 
@@ -272,6 +273,7 @@ def test_flow_start_uses_operator_for_references_and_native_key_for_job(monkeypa
                                     "durable_history_verified": True,
                                     "restart_resume_verified": True,
                                     "signed_callback_receipt_sha256": "b" * 64,
+                                    "callback_bureau_status": "QUALITY_CHECK",
                                     "bureau_job_id_sha256": hashlib.sha256(BUREAU.encode()).hexdigest(),
                                     "sod_sha256": "a" * 64}}
     assert events == [

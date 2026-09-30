@@ -132,12 +132,13 @@ def _flow_execution_evidence(value: object, receipt: dict) -> None:
     if (not isinstance(execution, dict)
         or set(execution) != {"nine_steps_verified", "six_native_effects_verified",
                               "durable_history_verified", "restart_resume_verified",
-                              "bureau_job_id_sha256",
+                              "bureau_job_id_sha256", "callback_bureau_status",
                               "signed_callback_receipt_sha256", "sod_sha256"}
         or execution.get("nine_steps_verified") is not True
         or execution.get("six_native_effects_verified") is not True
         or execution.get("durable_history_verified") is not True
         or execution.get("restart_resume_verified") is not True
+        or execution.get("callback_bureau_status") not in ("QUALITY_CHECK", "SHIPPED")
         or any(type(execution.get(name)) is not str
                or HASH.fullmatch(execution[name]) is None for name in (
                    "bureau_job_id_sha256", "signed_callback_receipt_sha256",

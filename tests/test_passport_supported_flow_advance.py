@@ -1,6 +1,7 @@
 """Nine Flow transitions must bind one native job and durable ordered history."""
 
 from copy import deepcopy
+from uuid import UUID
 
 import pytest
 
@@ -134,6 +135,7 @@ def test_nine_advances_require_same_job_callback_and_durable_history():
                      "durable_history_verified": True,
                      "restart_resume_verified": False,
                      "signed_callback_receipt_sha256": "b" * 64,
+                     "callback_bureau_status": "QUALITY_CHECK",
                      "bureau_job_id": BUREAU, "sod_sha256": "a" * 64}
     assert [item[0] for item in fixture.requests].count("POST") == 9
     assert fixture.callback is True
@@ -193,6 +195,34 @@ def test_restart_resumes_same_persisted_flow_and_native_job():
     assert restarts == [5]
     assert fixture.completed == 9
     assert proof["restart_resume_verified"] is True
+
+
+def test_shipped_callback_requires_exact_simulator_tracking_marker():
+    fixture = Fixture()
+
+    def shipped(bureau_job_id):
+        status, payload = fixture.private(bureau_job_id)
+        payload["status"] = "SHIPPED"
+        payload["tracking_number"] = "BETA-SIM-" + UUID(BUREAU).hex
+        return status, payload
+
+    proof = advance_physical_passport_flow(
+        fixture.request, fixture.native, shipped, fixture.history,
+        ORG, REFERENCES, STARTED, ISSUER, poll_interval_seconds=0)
+    assert proof["callback_bureau_status"] == "SHIPPED"
+
+    rejected = Fixture()
+
+    def unmarked(bureau_job_id):
+        status, payload = rejected.private(bureau_job_id)
+        payload["status"] = "SHIPPED"
+        return status, payload
+
+    with pytest.raises(FlowAdvanceError, match="signed callback"):
+        advance_physical_passport_flow(
+            rejected.request, rejected.native, unmarked, rejected.history,
+            ORG, REFERENCES, STARTED, ISSUER,
+            max_polls=1, poll_interval_seconds=0)
 
 
 def test_restart_checkpoint_drift_stops_before_bureau_submission():

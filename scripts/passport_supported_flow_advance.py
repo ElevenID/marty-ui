@@ -147,6 +147,7 @@ def advance_physical_passport_flow(
                started, references, issuer_did)
     bureau_job_id = None
     callback_receipt = None
+    callback_bureau_status = None
     sod_sha256 = None
     restart_verified = False
     batch_bureau_job_id = None
@@ -167,9 +168,14 @@ def advance_physical_passport_flow(
                 if (status == 200 and isinstance(private, dict)
                     and private.get("status") in ("QUALITY_CHECK", "SHIPPED")
                     and isinstance(receipt, str) and HEX64.fullmatch(receipt)
+                    and (private.get("tracking_number")
+                         == "BETA-SIM-" + UUID(bureau_job_id).hex
+                         if private.get("status") == "SHIPPED"
+                         else private.get("tracking_number") is None)
                     and public.get("bureau_job_id") == bureau_job_id
                     and public.get("status") in ("QUALITY_CHECK", "READY_FOR_ACTIVATION")):
                     callback_receipt = receipt
+                    callback_bureau_status = private["status"]
                     break
                 _require(public.get("status") not in ("FAILED", "CANCELLED", "ACTIVE"),
                          "Flow native job failed before signed callback")
@@ -245,6 +251,7 @@ def advance_physical_passport_flow(
                      and bool(job["completed_at"]),
                      "Flow native activation did not persist")
     _require(bureau_job_id is not None and callback_receipt is not None
+             and callback_bureau_status in ("QUALITY_CHECK", "SHIPPED")
              and sod_sha256 is not None,
              "Flow native proof is incomplete")
     _history(history_read(started["flow_instance_id"], started["flow_definition_id"]),
@@ -253,4 +260,5 @@ def advance_physical_passport_flow(
             "durable_history_verified": True,
             "restart_resume_verified": restart_verified,
             "signed_callback_receipt_sha256": callback_receipt,
+            "callback_bureau_status": callback_bureau_status,
             "bureau_job_id": bureau_job_id, "sod_sha256": sod_sha256}

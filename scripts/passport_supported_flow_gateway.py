@@ -287,6 +287,7 @@ def exercise_owned_flow(
              and execution.get("native_effect_count") == 6
              and execution.get("durable_history_verified") is True
              and execution.get("restart_resume_verified") is True
+             and execution.get("callback_bureau_status") in ("QUALITY_CHECK", "SHIPPED")
              and isinstance(execution.get("bureau_job_id"), str)
              and isinstance(batch_receipt, dict)
              and batch_receipt["selected_bureau_job_sha256"]
@@ -305,6 +306,7 @@ def exercise_owned_flow(
             "durable_history_verified": True,
             "restart_resume_verified": True,
             "signed_callback_receipt_sha256": execution["signed_callback_receipt_sha256"],
+            "callback_bureau_status": execution["callback_bureau_status"],
             "sod_sha256": execution["sod_sha256"],
             "bureau_job_id_sha256": hashlib.sha256(bureau_job_id.encode()).hexdigest(),
         },
