@@ -13,8 +13,10 @@ import tempfile
 from typing import Any, Callable
 
 try:
+    from .check_passport_beta_fence_authority import require_deletion_lineage
     from .probe_passport_beta_host import HostProbeError
 except ImportError:
+    from check_passport_beta_fence_authority import require_deletion_lineage
     from probe_passport_beta_host import HostProbeError
 
 
@@ -235,8 +237,10 @@ def verify(
                 == snapshot.get("writer_deployment_uid")
             and report.get("authorized_fence_epoch")
                 == snapshot.get("fence_epoch")
-            and receipt.get("credentials_deletion_head") == deletion_head,
+            and SHA.fullmatch(str(receipt.get("credentials_deletion_head"))) is not None,
             "Protected final report differs from the live cutover snapshot")
+    require_deletion_lineage(receipt["credentials_deletion_head"],
+                             deletion_head, execute)
     digest = hashlib.sha256(local_bytes).hexdigest()
     require(SHA256.fullmatch(digest) is not None,
             "Protected final cutover report digest is invalid")

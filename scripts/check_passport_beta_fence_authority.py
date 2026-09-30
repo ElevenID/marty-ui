@@ -31,6 +31,7 @@ INSTALL = ROOT / "scripts/sql/passport-beta-fence-install.sql"
 DRAIN = ROOT / "scripts/sql/passport-beta-fence-drain.sql"
 VERIFY = ROOT / "scripts/sql/passport-beta-fence-verify.sql"
 PREMIGRATED = ROOT / "docker-compose.profile.passport-premigrated-beta.yml"
+DELETION_REPOSITORY = "ElevenID/marty-credentials"
 SHA = re.compile(r"[0-9a-f]{40}\Z")
 SHA256 = re.compile(r"[0-9a-f]{64}\Z")
 DIGEST = re.compile(r"sha256:[0-9a-f]{64}\Z")
@@ -330,6 +331,38 @@ def require_premigrated_compose_validation(contents: str) -> None:
                 f"Signed premigrated beta {service} does not use DDL-free startup")
 
 
+def require_deletion_lineage(
+    approved_head: str, current_head: str,
+    runner: Callable[[list[str]], str] = run,
+) -> None:
+    """Bind the approved PR commit to a later head without allowing a rebase."""
+    require(SHA.fullmatch(approved_head) is not None
+            and SHA.fullmatch(current_head) is not None,
+            "Credentials deletion head is invalid")
+    commits = runner([
+        "gh", "api", "--paginate",
+        f"repos/{DELETION_REPOSITORY}/pulls/305/commits?per_page=100",
+        "--jq", ".[].sha",
+    ]).splitlines()
+    require(bool(commits) and all(SHA.fullmatch(commit) for commit in commits)
+            and approved_head in commits and current_head in commits,
+            "Approved credentials deletion head is not in PR #305")
+    comparison = json.loads(runner([
+        "gh", "api", f"repos/{DELETION_REPOSITORY}/compare/"
+        f"{approved_head}...{current_head}",
+    ]))
+    base = comparison.get("base_commit") if isinstance(comparison, dict) else None
+    merge_base = comparison.get("merge_base_commit") if isinstance(comparison, dict) else None
+    require(isinstance(comparison, dict)
+            and comparison.get("status") in ("identical", "ahead")
+            and type(comparison.get("behind_by")) is int
+            and comparison["behind_by"] == 0
+            and isinstance(base, dict) and base.get("sha") == approved_head
+            and isinstance(merge_base, dict)
+            and merge_base.get("sha") == approved_head,
+            "Credentials deletion PR no longer descends from approved head")
+
+
 def check_authority(
     approval_path: Path, manifest_path: Path, beta_baseline_manifest_path: Path,
     runner: Callable[[list[str]], str] = run,
@@ -385,12 +418,21 @@ def check_authority(
         f"{head}\trefs/tags/{tag}^{{}}",
     }, "Published annotated release tag differs from protected source")
     deletion = json.loads(runner([
-        "gh", "pr", "view", "305", "--repo", "ElevenID/marty-credentials",
-        "--json", "state,isDraft,headRefOid",
+        "gh", "api", f"repos/{DELETION_REPOSITORY}/pulls/305",
     ]))
-    require(deletion.get("state") == "OPEN" and deletion.get("isDraft") is True
-            and deletion.get("headRefOid") == approval["credentials_deletion_head"],
-            "Credentials deletion PR head differs from protected approval")
+    base = deletion.get("base") if isinstance(deletion, dict) else None
+    deletion_head = deletion.get("head") if isinstance(deletion, dict) else None
+    require(isinstance(deletion, dict) and deletion.get("number") == 305
+            and deletion.get("state") == "open" and deletion.get("draft") is True
+            and isinstance(base, dict) and base.get("ref") == "main"
+            and isinstance(base.get("repo"), dict)
+            and base["repo"].get("full_name") == DELETION_REPOSITORY
+            and isinstance(deletion_head, dict)
+            and isinstance(deletion_head.get("repo"), dict)
+            and deletion_head["repo"].get("full_name") == DELETION_REPOSITORY,
+            "Credentials deletion PR is not the approved same-repository draft")
+    require_deletion_lineage(approval["credentials_deletion_head"],
+                             deletion_head.get("sha"), runner)
     target = observer()
     require(target.get("authority") == "discovery_only_requires_protected_baseline"
             and target.get("observation_sha256") == approval["observation_sha256"]
@@ -416,7 +458,8 @@ def check_authority(
     return {
         "schema": "marty.passport-beta-fence-authority-plan/v1",
         "verified": True, "source": source, "deployed_beta_baseline": baseline,
-        "credentials_deletion_head": deletion["headRefOid"],
+        # The v1 field is the approved historical PR head, not its final head.
+        "credentials_deletion_head": approval["credentials_deletion_head"],
         "target_observation_sha256": target["observation_sha256"],
         "beta_services": services,
         "postgres_container_id": beta["services"]["postgres"]["container_id"],

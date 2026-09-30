@@ -10,15 +10,19 @@ import json
 import os
 from pathlib import Path
 import re
-from typing import Any
+from typing import Any, Callable
 
 try:
-    from .check_passport_beta_fence_authority import protected_file, protected_source
+    from .check_passport_beta_fence_authority import (
+        protected_file, protected_source, require_deletion_lineage,
+    )
     from .probe_passport_beta_cutover_snapshot import digest
     from .probe_passport_beta_host import HostProbeError, run
     from .verify_passport_beta_protected_cutover import checked_run, command, utc
 except ImportError:
-    from check_passport_beta_fence_authority import protected_file, protected_source
+    from check_passport_beta_fence_authority import (
+        protected_file, protected_source, require_deletion_lineage,
+    )
     from probe_passport_beta_cutover_snapshot import digest
     from probe_passport_beta_host import HostProbeError, run
     from verify_passport_beta_protected_cutover import checked_run, command, utc
@@ -70,6 +74,7 @@ def collect(
     snapshot: dict[str, Any], snapshot_file_sha256: str,
     installation: dict[str, Any], installation_file_sha256: str,
     checked_at: datetime,
+    lineage: Callable[[str, str], None] = require_deletion_lineage,
 ) -> dict[str, Any]:
     require(SHA.fullmatch(source_commit) is not None
             and SHA.fullmatch(deletion_head) is not None
@@ -154,6 +159,10 @@ def collect(
                 "unreadable_artifact_count": 0,
                 "active_passport_flow_count": 0,
             }, "Final beta drain is stale or passport jobs remain")
+    approved_head = installation.get("credentials_deletion_head")
+    require(SHA.fullmatch(str(approved_head)) is not None,
+            "Protected fence approval head is invalid")
+    lineage(approved_head, deletion_head)
     require(snapshot.get("schema") == "marty.passport-beta-cutover-snapshot/v1"
             and snapshot.get("status") == "observed"
             and snapshot.get("installation_provenance") == "local_host_continuity_only"
@@ -164,7 +173,6 @@ def collect(
             and installation.get("schema")
                 == "marty.passport-beta-fence-installation/v1"
             and installation.get("source_commit") == source_commit
-            and installation.get("credentials_deletion_head") == deletion_head
             and snapshot.get("installation_receipt_sha256")
                 == digest(installation)
             and snapshot.get("fence_first_probe")
