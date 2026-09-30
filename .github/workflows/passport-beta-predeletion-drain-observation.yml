@@ -1,0 +1,96 @@
+name: Passport Beta Predeletion Drain Observation
+
+# Attest the live beta drain inputs. This does not qualify Rust acceptance or
+# authorize Python deletion; the later predeletion workflow consumes them.
+on:
+  workflow_dispatch:
+    inputs:
+      fence_installation_receipt:
+        description: Absolute WSL path to the completed beta fence receipt.
+        required: true
+
+concurrency:
+  group: passport-beta-predeletion-drain-observation
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+  id-token: write
+  attestations: write
+
+jobs:
+  observe:
+    if: github.ref == 'refs/heads/main'
+    runs-on: [self-hosted, linux, x64, canvas-oss-wsl2]
+    environment: beta-lifecycle
+    timeout-minutes: 45
+    env:
+      FENCE_RECEIPT: ${{ inputs.fence_installation_receipt }}
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          ref: main
+          persist-credentials: false
+      - name: Observe the installed beta fence and old writer generation
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$GITHUB_SHA" = "$(git rev-parse HEAD)"
+          test "$(git branch --show-current)" = main
+          python3 - <<'PY'
+          from scripts.check_passport_beta_fence_authority import (
+              protected_file, protected_source, run,
+          )
+          protected_source(run)
+          for relative in (
+              "scripts/collect_passport_predeletion_drain.py",
+              ".github/workflows/passport-beta-predeletion-drain-observation.yml",
+          ):
+              protected_file(relative, run)
+          PY
+          [[ "$FENCE_RECEIPT" == /* ]]
+          test -f "$FENCE_RECEIPT" && test ! -L "$FENCE_RECEIPT"
+          work="$RUNNER_TEMP/passport-predeletion-drain-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT"
+          mkdir -m 700 "$work"
+          installation="passport-beta-fence-installation-$GITHUB_RUN_ID.json"
+          snapshot="passport-beta-cutover-snapshot-$GITHUB_RUN_ID.json"
+          drain="passport-beta-predeletion-drain-$GITHUB_RUN_ID.json"
+          cp -- "$FENCE_RECEIPT" "$work/$installation"
+          python3 scripts/probe_passport_beta_cutover_snapshot.py \
+            --fence-installation-receipt "$FENCE_RECEIPT" \
+            --output "$work/$snapshot"
+          python3 scripts/collect_passport_predeletion_drain.py \
+            --installation-receipt "$work/$installation" \
+            --snapshot "$work/$snapshot" --source-commit "$GITHUB_SHA" \
+            --output "$work/$drain"
+          cmp -- "$FENCE_RECEIPT" "$work/$installation"
+          jq -e --arg source "$GITHUB_SHA" \
+            '.schema == "marty.passport-rust-predeletion-drain/v1" and
+             .status == "observed_unattested" and
+             .source_commit == $source and
+             .probe.verified == true' "$work/$drain"
+          cp -- "$work/$installation" "$installation"
+          cp -- "$work/$snapshot" "$snapshot"
+          cp -- "$work/$drain" "$drain"
+      - name: Attest exact installation receipt bytes
+        uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8
+        with:
+          subject-path: passport-beta-fence-installation-${{ github.run_id }}.json
+      - name: Attest exact live beta snapshot bytes
+        uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8
+        with:
+          subject-path: passport-beta-cutover-snapshot-${{ github.run_id }}.json
+      - name: Attest exact drain projection bytes
+        uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8
+        with:
+          subject-path: passport-beta-predeletion-drain-${{ github.run_id }}.json
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: passport-beta-predeletion-drain-${{ github.run_id }}
+          path: |
+            passport-beta-fence-installation-${{ github.run_id }}.json
+            passport-beta-cutover-snapshot-${{ github.run_id }}.json
+            passport-beta-predeletion-drain-${{ github.run_id }}.json
+          if-no-files-found: error
+          retention-days: 30
