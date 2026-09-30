@@ -50,7 +50,12 @@ def evidence() -> tuple[dict, dict, dict]:
              "session_user": "marty", "current_user": "marty",
              "probe_nonce": "a" * 32,
              "rejections": {surface: {"valid_without_fence": True, "sqlstate": "55000",
-                         "message": message} for surface, message in snapshot.ERRORS.items()}}
+                         "message": message} for surface, message in snapshot.ERRORS.items()},
+             "unrelated_writes": {
+                 "issuance_transactions": {"verified": True, "rolled_back": True},
+                 "non_passport_flow_definitions": {"verified": True,
+                                                   "rolled_back": True},
+             }}
     first["receipt_sha256"] = snapshot.digest(first)
     installation = {
         "schema": "marty.passport-beta-fence-installation/v1",
@@ -139,6 +144,26 @@ def test_snapshot_rejects_forged_first_probe_rejection() -> None:
     installation["direct_database_probe"]["receipt_sha256"] = snapshot.digest({
         key: value for key, value in installation["direct_database_probe"].items()
         if key != "receipt_sha256"
+    })
+    with pytest.raises(HostProbeError, match="Direct beta fence probe receipt"):
+        collect_fixture(installation, observed, direct)
+
+
+def test_snapshot_requires_unrelated_writes_in_both_probes() -> None:
+    installation, observed, direct = evidence()
+    installation["direct_database_probe"]["unrelated_writes"].pop(
+        "issuance_transactions")
+    installation["direct_database_probe"]["receipt_sha256"] = snapshot.digest({
+        key: value for key, value in installation["direct_database_probe"].items()
+        if key != "receipt_sha256"
+    })
+    with pytest.raises(HostProbeError, match="Direct beta fence probe receipt"):
+        collect_fixture(installation, observed, direct)
+
+    installation, observed, direct = evidence()
+    direct["unrelated_writes"]["non_passport_flow_definitions"]["verified"] = False
+    direct["receipt_sha256"] = snapshot.digest({
+        key: value for key, value in direct.items() if key != "receipt_sha256"
     })
     with pytest.raises(HostProbeError, match="Direct beta fence probe receipt"):
         collect_fixture(installation, observed, direct)

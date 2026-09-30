@@ -128,6 +128,11 @@ def validate_direct_probe(probe: dict[str, Any], *, postgres: str,
                           "message": message}
                 for surface, message in ERRORS.items()
             }
+            and probe.get("unrelated_writes") == {
+                "issuance_transactions": {"verified": True, "rolled_back": True},
+                "non_passport_flow_definitions": {"verified": True,
+                                                  "rolled_back": True},
+            }
             and probe.get("receipt_sha256") == digest({
                 key: value for key, value in probe.items()
                 if key != "receipt_sha256"
