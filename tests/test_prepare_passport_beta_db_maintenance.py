@@ -84,6 +84,7 @@ def test_plan_binds_current_fence_source_and_production(monkeypatch, tmp_path):
     openbao_id = "1" * 64
     receipt = {
         "post_install_observation_sha256": "e" * 64,
+        "credentials_deletion_head": "c" * 40,
         "production_snapshot_sha256": "f" * 64,
         "production_attachments_sha256": "0" * 64,
         "fence": {"epoch": 789}, "direct_database_probe": {"watermark": 1},
@@ -131,12 +132,13 @@ def test_plan_binds_current_fence_source_and_production(monkeypatch, tmp_path):
     snapshot_path = tmp_path / "snapshot.json"
     snapshot(snapshot_path, receipt, observed["beta"]["services"]["issuance"])
     report_path = tmp_path / "report.json"
-    report_path.write_text("{}", encoding="utf-8")
-    monkeypatch.setattr(maintenance, "verify_cutover_report",
-                        lambda *_args, **_kwargs: {
-                            "cutover_report_file_sha256": "8" * 64,
-                            "cutover_report_run_id": 42,
-                        })
+    report_path.write_text(json.dumps({"deletion_head": "a" * 40}), encoding="utf-8")
+    verified_heads = []
+    def verify_report(*_args, **kwargs):
+        verified_heads.append(kwargs["deletion_head"])
+        return {"cutover_report_file_sha256": "8" * 64,
+                "cutover_report_run_id": 42}
+    monkeypatch.setattr(maintenance, "verify_cutover_report", verify_report)
     checked_probes = []
     monkeypatch.setattr(maintenance, "validate_direct_probe",
                         lambda probe, **kwargs: checked_probes.append((probe, kwargs)))
@@ -160,6 +162,7 @@ def test_plan_binds_current_fence_source_and_production(monkeypatch, tmp_path):
     assert plan["production_snapshot_sha256"] == "f" * 64
     assert plan["production_attachments_sha256"] == "0" * 64
     assert plan["legacy_writer_container_id"] == "2" * 64
+    assert verified_heads == ["a" * 40]
     assert len(checked_probes) == 2
     observed["beta"]["services"]["issuance"]["restart_count"] = 1
     with pytest.raises(HostProbeError, match="live fenced Python writer"):
@@ -184,6 +187,7 @@ def test_resume_verifies_full_ids_and_requires_every_service_stopped(monkeypatch
     receipt_path = tmp_path / "fence.json"
     receipt_raw = {
         "production_snapshot_sha256": "f" * 64,
+        "credentials_deletion_head": "c" * 40,
         "production_attachments_sha256": "0" * 64,
         "post_install_observation_sha256": "e" * 64,
         "fence": {"epoch": 789}, "direct_database_probe": {"watermark": 1},
@@ -195,12 +199,13 @@ def test_resume_verifies_full_ids_and_requires_every_service_stopped(monkeypatch
         "started_at": issuance["State"]["StartedAt"],
     })
     report_path = tmp_path / "report.json"
-    report_path.write_text("{}", encoding="utf-8")
-    monkeypatch.setattr(maintenance, "verify_cutover_report",
-                        lambda *_args, **_kwargs: {
-                            "cutover_report_file_sha256": "8" * 64,
-                            "cutover_report_run_id": 42,
-                        })
+    report_path.write_text(json.dumps({"deletion_head": "a" * 40}), encoding="utf-8")
+    verified_heads = []
+    def verify_report(*_args, **kwargs):
+        verified_heads.append(kwargs["deletion_head"])
+        return {"cutover_report_file_sha256": "8" * 64,
+                "cutover_report_run_id": 42}
+    monkeypatch.setattr(maintenance, "verify_cutover_report", verify_report)
     monkeypatch.setattr(maintenance, "validate_direct_probe",
                         lambda *_args, **_kwargs: None)
     head = "b" * 40
@@ -267,6 +272,7 @@ def test_resume_verifies_full_ids_and_requires_every_service_stopped(monkeypatch
     assert maintenance.verify_plan(plan, tmp_path / "stack.json", receipt_path,
                                    snapshot_path, report_path,
                                    require_stopped=False, runner=runner)["verified"]
+    assert verified_heads == ["a" * 40]
     with pytest.raises(HostProbeError, match="allowed maintenance state"):
         maintenance.verify_plan(plan, tmp_path / "stack.json", receipt_path,
                                 snapshot_path, report_path,
