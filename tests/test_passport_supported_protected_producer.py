@@ -57,6 +57,15 @@ def flow_receipt(final_native_id: str = "issuance-native") -> dict:
                 "selected_flow_in_two_job_batch": True,
                 "native_binding_verified": True,
                 "first_accepted_material_verified": True,
+                "selected_material_receipt": {
+                    "source_job_id_commitment": "c" * 64,
+                    "bureau_job_id_commitment": "d" * 64,
+                    "tenant_and_job_binding": True,
+                    "first_accepted_sod_der_matches_native": True,
+                    "first_accepted_dsc_der_matches_selected_chain": True,
+                    "first_accepted_dsc_pem_wire_matches_selected_chain": True,
+                    "source": "private disposable PostgreSQL",
+                },
                 "companion_native_completed": True,
                 "companion_callback_receipt_sha256": "b" * 64,
                 "selected_source_job_commitment": "c" * 64,
@@ -629,6 +638,9 @@ def test_hosted_handoff_binds_partial_receipt_to_plan(tmp_path: Path) -> None:
             flow_instance_id_sha256="not-a-hash")),
         ("missing durable history", lambda item: item["flow_execution"]
             ["execution"].update(durable_history_verified=False)),
+        ("wrong selected material job", lambda item: item["flow_execution"]
+            ["batch"]["batch"]["evidence"]["selected_material_receipt"].update(
+                source_job_id_commitment="0" * 64)),
         ("wrong runtime image", lambda item: item["runtime_images"]["flow"].update(
             oci_reference="foreign")),
         ("disabled Rust selector", lambda item: item["runtime_images"]["gateway"]

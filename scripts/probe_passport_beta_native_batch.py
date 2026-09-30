@@ -455,6 +455,7 @@ def exercise(
             "selected_flow_in_two_job_batch": True,
             "native_binding_verified": True,
             "first_accepted_material_verified": True,
+            "selected_material_receipt": receipts[selected_source_job_id],
             "companion_native_completed": True,
             "companion_callback_receipt_sha256": companion_callback,
             "selected_source_job_commitment": receipts[selected_source_job_id]["source_job_id_commitment"],

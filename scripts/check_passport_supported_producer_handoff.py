@@ -151,6 +151,7 @@ def _flow_execution_evidence(value: object, receipt: dict) -> None:
         "provider_kind", "physical_claim", "http_status", "batch_status",
         "selected_flow_in_two_job_batch", "native_binding_verified",
         "first_accepted_material_verified", "companion_native_completed",
+        "selected_material_receipt",
         "companion_callback_receipt_sha256", "selected_source_job_commitment",
         "selected_bureau_job_commitment", "companion_source_job_commitment",
         "companion_bureau_job_commitment", "submitted_job_commitments",
@@ -194,6 +195,23 @@ def _flow_execution_evidence(value: object, receipt: dict) -> None:
             {"source_job_commitment": evidence["companion_source_job_commitment"],
              "bureau_job_commitment": evidence["companion_bureau_job_commitment"]}]):
         raise HandoffError("Protected native batch commitments are invalid")
+    material = evidence["selected_material_receipt"]
+    if (not isinstance(material, dict)
+        or set(material) != {
+            "source_job_id_commitment", "bureau_job_id_commitment",
+            "tenant_and_job_binding", "first_accepted_sod_der_matches_native",
+            "first_accepted_dsc_der_matches_selected_chain",
+            "first_accepted_dsc_pem_wire_matches_selected_chain", "source"}
+        or material["source_job_id_commitment"]
+            != evidence["selected_source_job_commitment"]
+        or material["bureau_job_id_commitment"]
+            != evidence["selected_bureau_job_commitment"]
+        or material["source"] != "private disposable PostgreSQL"
+        or any(material[name] is not True for name in (
+            "tenant_and_job_binding", "first_accepted_sod_der_matches_native",
+            "first_accepted_dsc_der_matches_selected_chain",
+            "first_accepted_dsc_pem_wire_matches_selected_chain"))):
+        raise HandoffError("Protected selected material receipt is invalid")
 
 
 def _route_evidence(route: object, gateway_port: int) -> None:
