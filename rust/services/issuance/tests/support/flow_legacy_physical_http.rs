@@ -154,6 +154,10 @@ pub(super) async fn run(legacy: &Legacy) {
     assert!(expected_context.remove("physical_document").is_some());
     expected_context.insert("application_id".into(), json!("physical-app"));
     expected_context.insert("physical_document_job".into(), response);
+    expected_context.insert(
+        "physical_document_route_trace".into(),
+        json!([{"method":"POST","path":"/v1/passport/applications"}]),
+    );
     assert_eq!(
         prepared.instance, expected,
         "physical input is consumed; unrelated state preserved"
@@ -197,7 +201,11 @@ pub(super) async fn run(legacy: &Legacy) {
                 .unwrap()
                 .to_owned(),
         );
-        let before = current.clone();
+        let mut expected = current.clone();
+        expected.context["physical_document_route_trace"]
+            .as_array_mut()
+            .unwrap()
+            .push(json!({"method": method, "path": format!("/v1/passport/applications/physical-app/{suffix}")}));
         current = apply_physical_advance_side_effect(
             &providers,
             &definition,
@@ -208,8 +216,8 @@ pub(super) async fn run(legacy: &Legacy) {
         .await
         .unwrap();
         assert_eq!(
-            current, before,
-            "controlled physical responses must preserve complete instance"
+            current, expected,
+            "controlled physical responses append the actual route and preserve all other state"
         );
         let body = if step == "quality_verify" {
             json!({"passed":true,"failure_codes":[]})
