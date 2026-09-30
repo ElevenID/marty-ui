@@ -44,7 +44,6 @@ def fixture(tmp_path):
         "rust_source_commit": HEAD, "deletion_head": DELETION,
         "cutover_snapshot_file_sha256": FILE_HASH,
         "cutover_snapshot_sha256": snapshot["snapshot_sha256"],
-        "supported_acceptance_run_id": 10,
         "predeletion_acceptance_run_id": 11,
         "checked_at_utc": "2026-09-29T03:30:00Z",
         "legacy_source": {
@@ -94,15 +93,11 @@ def fixture(tmp_path):
         "repository": {"full_name": cutover.REPOSITORY},
         "head_repository": {"full_name": cutover.REPOSITORY},
     }
-    supported = {**run, "id": 10,
-                 "path": ".github/workflows/passport-supported-consumer-acceptance.yml",
-                 "created_at": "2026-09-29T00:00:00Z",
-                 "updated_at": "2026-09-29T01:00:00Z"}
     predeletion = {**run, "id": 11,
                    "path": ".github/workflows/passport-rust-predeletion-acceptance.yml",
                    "created_at": "2026-09-29T01:30:00Z",
                    "updated_at": "2026-09-29T02:30:00Z"}
-    return path, snapshot, report, {42: run, 10: supported, 11: predeletion}
+    return path, snapshot, report, {42: run, 11: predeletion}
 
 
 def execute_for(path, runs, calls):
@@ -177,6 +172,14 @@ def test_wrong_workflow_or_writer_fails_closed(tmp_path):
         verify(path, snapshot, execute_for(path, runs, []))
     runs[42]["path"] = cutover.WORKFLOW
     report["legacy_source"]["writer_generation"] = 1
+    path.write_text(json.dumps(report), encoding="utf-8")
+    with pytest.raises(cutover.HostProbeError, match="live cutover snapshot"):
+        verify(path, snapshot, execute_for(path, runs, []))
+
+
+def test_old_supported_suite_receipt_cannot_replace_protected_kms_run(tmp_path):
+    path, snapshot, report, runs = fixture(tmp_path)
+    report["supported_acceptance_run_id"] = 10
     path.write_text(json.dumps(report), encoding="utf-8")
     with pytest.raises(cutover.HostProbeError, match="live cutover snapshot"):
         verify(path, snapshot, execute_for(path, runs, []))

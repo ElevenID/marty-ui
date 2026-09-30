@@ -71,8 +71,7 @@ def pull_head(deletion_head: str) -> None:
 
 def collect(
     *, source_commit: str, run_id: int, deletion_head: str,
-    supported_run_id: int, predeletion_run_id: int,
-    supported: dict[str, Any], predeletion: dict[str, Any],
+    predeletion_run_id: int, predeletion: dict[str, Any],
     snapshot: dict[str, Any], snapshot_file_sha256: str,
     installation: dict[str, Any], installation_file_sha256: str,
     checked_at: datetime,
@@ -87,13 +86,6 @@ def collect(
             and predeletion.get("fence_installation_receipt_sha256")
                 == installation_file_sha256,
             "Protected fence receipt differs from attested predeletion installation")
-    require(supported.get("schema") == "marty.passport-supported-consumer-acceptance/v1"
-            and supported.get("status") == "accepted"
-            and supported.get("source_commit") == source_commit
-            and supported.get("legacy_source_binding") == {
-                "database_uid": snapshot.get("database_uid"),
-                "writer_deployment_uid": snapshot.get("writer_deployment_uid"),
-            }, "Supported consumer does not bind the old beta passport writer")
     probes = predeletion.get("probes")
     drain = probes.get("legacy_drain") if isinstance(probes, dict) else None
     evidence = drain.get("evidence") if isinstance(drain, dict) else None
@@ -209,7 +201,6 @@ def collect(
         "status": "accepted", "run_id": run_id,
         "rust_source_commit": source_commit,
         "deletion_head": deletion_head,
-        "supported_acceptance_run_id": supported_run_id,
         "predeletion_acceptance_run_id": predeletion_run_id,
         "cutover_snapshot_file_sha256": snapshot_file_sha256,
         "cutover_snapshot_sha256": snapshot["snapshot_sha256"],
@@ -260,9 +251,7 @@ def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--snapshot", type=Path, required=True)
     parser.add_argument("--installation-receipt", type=Path, required=True)
-    parser.add_argument("--supported-report", type=Path, required=True)
     parser.add_argument("--predeletion-report", type=Path, required=True)
-    parser.add_argument("--supported-run-id", type=int, required=True)
     parser.add_argument("--predeletion-run-id", type=int, required=True)
     parser.add_argument("--deletion-head", required=True)
     parser.add_argument("--output", type=Path, required=True)
@@ -281,10 +270,6 @@ def main() -> int:
         require(args.output.name == f"passport-python-deletion-cutover-{run_id}.json",
                 "Final cutover report name differs from protected run")
         pull_head(args.deletion_head)
-        supported_started, supported_completed = checked_run(
-            args.supported_run_id,
-            ".github/workflows/passport-supported-consumer-acceptance.yml",
-            source, command)
         predeletion_started, predeletion_completed = checked_run(
             args.predeletion_run_id,
             ".github/workflows/passport-rust-predeletion-acceptance.yml",
@@ -303,19 +288,17 @@ def main() -> int:
                 and current_run["repository"].get("full_name") == "ElevenID/marty-ui",
                 "Final cutover workflow identity is invalid")
         final_started = utc(current_run.get("created_at"))
-        require(supported_started < supported_completed < predeletion_started
-                < predeletion_completed < final_started < datetime.now(timezone.utc),
+        require(predeletion_started < predeletion_completed < final_started
+                < datetime.now(timezone.utc),
                 "Protected acceptance did not precede final cutover")
-        supported, _ = read(args.supported_report)
         predeletion, _ = read(args.predeletion_report)
         snapshot, snapshot_file_sha256 = read(args.snapshot)
         installation, installation_file_sha256 = read(args.installation_receipt)
         result = collect(
             source_commit=source, run_id=run_id,
             deletion_head=args.deletion_head,
-            supported_run_id=args.supported_run_id,
             predeletion_run_id=args.predeletion_run_id,
-            supported=supported, predeletion=predeletion,
+            predeletion=predeletion,
             snapshot=snapshot, snapshot_file_sha256=snapshot_file_sha256,
             installation=installation,
             installation_file_sha256=installation_file_sha256,

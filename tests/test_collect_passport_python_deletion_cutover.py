@@ -100,22 +100,13 @@ def fixture():
             "legacy_source": legacy, "passport_write_fence": fence,
         }}},
     }
-    supported = {
-        "schema": "marty.passport-supported-consumer-acceptance/v1",
-        "status": "accepted", "source_commit": HEAD,
-        "legacy_source_binding": {
-            "database_uid": snapshot["database_uid"],
-            "writer_deployment_uid": snapshot["writer_deployment_uid"],
-        },
-    }
-    return supported, predeletion, snapshot, installation
+    return predeletion, snapshot, installation
 
 
-def run(supported, predeletion, snapshot, installation, lineage=lambda *_: None):
+def run(predeletion, snapshot, installation, lineage=lambda *_: None):
     return producer.collect(
         source_commit=HEAD, run_id=42, deletion_head=DELETION,
-        supported_run_id=10, predeletion_run_id=11,
-        supported=supported, predeletion=predeletion,
+        predeletion_run_id=11, predeletion=predeletion,
         snapshot=snapshot, snapshot_file_sha256="9" * 64,
         installation=installation,
         installation_file_sha256=hashlib.sha256(
@@ -126,8 +117,8 @@ def run(supported, predeletion, snapshot, installation, lineage=lambda *_: None)
 
 
 def test_final_report_matches_predeletion_writer_and_zero_counts():
-    supported, predeletion, snapshot, installation = fixture()
-    report = run(supported, predeletion, snapshot, installation)
+    predeletion, snapshot, installation = fixture()
+    report = run(predeletion, snapshot, installation)
     assert report["status"] == "accepted"
     assert report["legacy_source"]["writer_container_id"] == WRITER
     assert report["legacy_source"]["final_watermark"] == 190
@@ -136,7 +127,7 @@ def test_final_report_matches_predeletion_writer_and_zero_counts():
 
 
 def test_final_report_accepts_later_head_only_after_lineage_check():
-    supported, predeletion, snapshot, installation = fixture()
+    predeletion, snapshot, installation = fixture()
     installation["credentials_deletion_head"] = "a" * 40
     predeletion["fence_installation_receipt_sha256"] = hashlib.sha256(
         (json.dumps(installation, sort_keys=True) + "\n").encode()).hexdigest()
@@ -145,91 +136,91 @@ def test_final_report_accepts_later_head_only_after_lineage_check():
         key: value for key, value in snapshot.items() if key != "snapshot_sha256"
     })
     seen = []
-    report = run(supported, predeletion, snapshot, installation,
+    report = run(predeletion, snapshot, installation,
                  lambda anchor, current: seen.append((anchor, current)))
     assert seen == [("a" * 40, DELETION)]
     assert report["deletion_head"] == DELETION
 
 
 def test_changed_writer_or_stale_probe_is_rejected():
-    supported, predeletion, snapshot, installation = fixture()
+    predeletion, snapshot, installation = fixture()
     snapshot["writer_generation"] = 1
     snapshot["snapshot_sha256"] = digest({
         key: value for key, value in snapshot.items() if key != "snapshot_sha256"
     })
     with pytest.raises(producer.HostProbeError, match="predeletion acceptance"):
-        run(supported, predeletion, snapshot, installation)
+        run(predeletion, snapshot, installation)
     snapshot["writer_generation"] = 0
     snapshot["direct_database_probe"] = (
         predeletion["probes"]["legacy_drain"]["evidence"]
         ["passport_write_fence"]["direct_database_probe"])
     with pytest.raises(producer.HostProbeError, match="stale"):
-        run(supported, predeletion, snapshot, installation)
+        run(predeletion, snapshot, installation)
 
 
 def test_changed_snapshot_or_fence_is_rejected():
-    supported, predeletion, snapshot, installation = fixture()
+    predeletion, snapshot, installation = fixture()
     snapshot["counts"]["total_job_count"] = 1
     with pytest.raises(producer.HostProbeError, match="stale"):
-        run(supported, predeletion, snapshot, installation)
-    supported, predeletion, snapshot, installation = fixture()
+        run(predeletion, snapshot, installation)
+    predeletion, snapshot, installation = fixture()
     predeletion["probes"]["legacy_drain"]["evidence"]["passport_write_fence"][
         "fence_epoch"] += 1
     with pytest.raises(producer.HostProbeError, match="predeletion acceptance"):
-        run(supported, predeletion, snapshot, installation)
+        run(predeletion, snapshot, installation)
 
 
 def test_same_drain_snapshot_attestation_is_rejected():
-    supported, predeletion, snapshot, installation = fixture()
+    predeletion, snapshot, installation = fixture()
     predeletion["probes"]["legacy_drain"]["evidence"]["legacy_source"][
         "drain_snapshot_attestation_sha256"] = "9" * 64
     with pytest.raises(producer.HostProbeError, match="predeletion acceptance"):
-        run(supported, predeletion, snapshot, installation)
+        run(predeletion, snapshot, installation)
 
 
 def test_unbound_fence_installation_is_rejected():
-    supported, predeletion, snapshot, installation = fixture()
+    predeletion, snapshot, installation = fixture()
     predeletion["fence_installation_receipt_sha256"] = "f" * 64
     with pytest.raises(producer.HostProbeError, match="attested predeletion installation"):
-        run(supported, predeletion, snapshot, installation)
+        run(predeletion, snapshot, installation)
 
 
 def test_predeletion_drain_watermark_must_be_the_direct_probe_watermark():
-    supported, predeletion, snapshot, installation = fixture()
+    predeletion, snapshot, installation = fixture()
     predeletion["probes"]["legacy_drain"]["evidence"]["legacy_source"][
         "drain_watermark"] += 1
     with pytest.raises(producer.HostProbeError, match="stale"):
-        run(supported, predeletion, snapshot, installation)
+        run(predeletion, snapshot, installation)
 
 
 def test_predeletion_fence_time_must_be_database_installed_time():
-    supported, predeletion, snapshot, installation = fixture()
+    predeletion, snapshot, installation = fixture()
     predeletion["probes"]["legacy_drain"]["evidence"]["legacy_source"][
         "fence_enabled_at_utc"] = "2026-09-29T00:58:00.000Z"
     with pytest.raises(producer.HostProbeError, match="stale"):
-        run(supported, predeletion, snapshot, installation)
+        run(predeletion, snapshot, installation)
 
 
 def test_predeletion_drain_must_follow_its_write_probe():
-    supported, predeletion, snapshot, installation = fixture()
+    predeletion, snapshot, installation = fixture()
     predeletion["probes"]["legacy_drain"]["evidence"]["legacy_source"][
         "drain_checked_at_utc"] = "2026-09-29T01:59:00Z"
     with pytest.raises(producer.HostProbeError, match="stale"):
-        run(supported, predeletion, snapshot, installation)
+        run(predeletion, snapshot, installation)
 
 
 def test_predeletion_unrelated_write_proof_is_required():
-    supported, predeletion, snapshot, installation = fixture()
+    predeletion, snapshot, installation = fixture()
     predeletion["probes"]["legacy_drain"]["evidence"]["passport_write_fence"][
         "direct_database_probe"]["unrelated_writes"] = {}
     with pytest.raises(producer.HostProbeError, match="stale"):
-        run(supported, predeletion, snapshot, installation)
+        run(predeletion, snapshot, installation)
 
 
 def test_predeletion_numeric_unrelated_write_proof_is_rejected():
-    supported, predeletion, snapshot, installation = fixture()
+    predeletion, snapshot, installation = fixture()
     predeletion["probes"]["legacy_drain"]["evidence"]["passport_write_fence"][
         "direct_database_probe"]["unrelated_writes"]["issuance_transactions"][
             "rolled_back"] = 1
     with pytest.raises(producer.HostProbeError, match="stale"):
-        run(supported, predeletion, snapshot, installation)
+        run(predeletion, snapshot, installation)

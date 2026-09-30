@@ -100,18 +100,12 @@ def verify(
             "Protected final cutover report has no exact workflow identity")
     final_started, final_completed = checked_run(run_id, WORKFLOW,
                                                  source_commit, execute)
-    supported_id = report.get("supported_acceptance_run_id")
     predeletion_id = report.get("predeletion_acceptance_run_id")
-    supported_started, supported_completed = checked_run(
-        supported_id, ".github/workflows/passport-supported-consumer-acceptance.yml",
-        source_commit, execute,
-    )
     predeletion_started, predeletion_completed = checked_run(
         predeletion_id, ".github/workflows/passport-rust-predeletion-acceptance.yml",
         source_commit, execute,
     )
-    require(supported_started < supported_completed < predeletion_started
-            < predeletion_completed < final_started < final_completed,
+    require(predeletion_started < predeletion_completed < final_started < final_completed,
             "Protected acceptance did not precede final cutover")
     try:
         pull = json.loads(execute([
@@ -186,8 +180,7 @@ def verify(
             and SHA256.fullmatch(str(legacy.get("final_snapshot_attestation_sha256")))
                 is not None
             and final_started <= utc(report.get("checked_at_utc")) <= final_completed
-            and type(report.get("supported_acceptance_run_id")) is int
-            and report["supported_acceptance_run_id"] > 0
+            and "supported_acceptance_run_id" not in report
             and type(report.get("predeletion_acceptance_run_id")) is int
             and report["predeletion_acceptance_run_id"] > 0
             and legacy.get("environment") == "beta"
