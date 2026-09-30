@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from copy import deepcopy
 from datetime import datetime, timezone
 import hashlib
 import json
@@ -26,7 +27,7 @@ def fixture():
     final = {"observation_watermark": 190, "receipt_sha256": "3" * 64,
              "observed_at_utc": "2026-09-29T03:00:00.000Z"}
     for probe in (first, prior, final):
-        probe["unrelated_writes"] = UNRELATED_WRITES
+        probe["unrelated_writes"] = deepcopy(UNRELATED_WRITES)
     installation = {
         "schema": "marty.passport-beta-fence-installation/v1",
         "source_commit": HEAD, "credentials_deletion_head": DELETION,
@@ -204,5 +205,14 @@ def test_predeletion_unrelated_write_proof_is_required():
     supported, predeletion, snapshot, installation = fixture()
     predeletion["probes"]["legacy_drain"]["evidence"]["passport_write_fence"][
         "direct_database_probe"]["unrelated_writes"] = {}
+    with pytest.raises(producer.HostProbeError, match="stale"):
+        run(supported, predeletion, snapshot, installation)
+
+
+def test_predeletion_numeric_unrelated_write_proof_is_rejected():
+    supported, predeletion, snapshot, installation = fixture()
+    predeletion["probes"]["legacy_drain"]["evidence"]["passport_write_fence"][
+        "direct_database_probe"]["unrelated_writes"]["issuance_transactions"][
+            "rolled_back"] = 1
     with pytest.raises(producer.HostProbeError, match="stale"):
         run(supported, predeletion, snapshot, installation)

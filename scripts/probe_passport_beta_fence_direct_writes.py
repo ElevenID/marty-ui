@@ -35,6 +35,17 @@ class FenceProbeError(ValueError):
     pass
 
 
+def verified_unrelated_writes(value: object) -> bool:
+    """Accept only the two observed rollback proofs with literal booleans."""
+    return (isinstance(value, dict)
+            and value.keys() == UNRELATED_WRITES.keys()
+            and all(isinstance(proof, dict)
+                    and proof.keys() == {"verified", "rolled_back"}
+                    and proof["verified"] is True
+                    and proof["rolled_back"] is True
+                    for proof in value.values()))
+
+
 def candidate_sql(token: str) -> dict[str, str]:
     """Use rows that satisfy the reviewed pre-fence beta table constraints."""
     if re.fullmatch(r"[0-9a-f]{32}", token) is None:
@@ -202,7 +213,7 @@ def probe_direct_writes(
         if result.returncode != 0 or result.stdout.strip() != "1":
             raise FenceProbeError(f"Unrelated beta write is blocked: {surface}")
         unrelated_writes[surface] = {"verified": True, "rolled_back": True}
-    if unrelated_writes != UNRELATED_WRITES:
+    if not verified_unrelated_writes(unrelated_writes):
         raise FenceProbeError("Unrelated beta write proof is incomplete")
     assert_target()
     observation = _stdout([
