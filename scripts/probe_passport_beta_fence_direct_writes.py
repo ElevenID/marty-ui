@@ -74,6 +74,38 @@ def candidate_sql(token: str) -> dict[str, str]:
     }
 
 
+def unrelated_sql(token: str) -> dict[str, str]:
+    """Exercise real, non-passport tables inside rollback-only transactions."""
+    if re.fullmatch(r"[0-9a-f]{32}", token) is None:
+        raise FenceProbeError("Unrelated write probe token is invalid")
+    identifier = f"fence-probe-{token}"
+    flow_identifier = f"probe-{token[:30]}"
+    return {
+        "issuance_transactions": f"""
+            WITH inserted AS (
+                INSERT INTO issuance_service.issuance_transactions
+                    (id, organization_id, credential_template_id, status,
+                     pre_auth_code, claims, issuer_mode, created_at, expires_at)
+                VALUES ('{identifier}', 'fence-probe', 'fence-probe',
+                    'pending', '{identifier}', '{{}}', 'org_managed',
+                    clock_timestamp(), clock_timestamp() + interval '5 minutes')
+                RETURNING id
+            ) SELECT count(*) FROM inserted
+        """,
+        "non_passport_flow_definitions": f"""
+            WITH inserted AS (
+                INSERT INTO flow_service.flow_definitions
+                    (id, organization_id, name, status, flow_type,
+                     steps, transitions, created_at, updated_at)
+                VALUES ('{flow_identifier}', 'fence-probe', 'Fence probe',
+                    'active', 'verification', '[]', '[]',
+                    clock_timestamp(), clock_timestamp())
+                RETURNING id
+            ) SELECT count(*) FROM inserted
+        """,
+    }
+
+
 def _run(args: list[str]) -> subprocess.CompletedProcess[str]:
     return subprocess.run(args, capture_output=True, text=True, timeout=30,
                           check=False)
@@ -155,6 +187,17 @@ def probe_direct_writes(
         rejections[surface] = {
             "valid_without_fence": True, "sqlstate": "55000", "message": expected,
         }
+    unrelated_writes: dict[str, dict[str, Any]] = {}
+    for surface, statement in unrelated_sql(nonce).items():
+        query = "BEGIN; SET LOCAL statement_timeout='5s'; " + statement + "; ROLLBACK;"
+        result = runner([
+            "docker", "exec", postgres_container_id, "psql", "-X", "-qAt",
+            "-U", "marty", "-d", "marty", "-v", "ON_ERROR_STOP=1",
+            "-c", query,
+        ])
+        if result.returncode != 0 or result.stdout.strip() != "1":
+            raise FenceProbeError(f"Unrelated beta write is blocked: {surface}")
+        unrelated_writes[surface] = {"verified": True, "rolled_back": True}
     assert_target()
     observation = _stdout([
         "docker", "exec", postgres_container_id, "psql", "-X", "-qAt",
@@ -179,6 +222,7 @@ def probe_direct_writes(
         "session_user": "marty", "current_user": "marty",
         "probe_nonce": nonce,
         "rejections": rejections,
+        "unrelated_writes": unrelated_writes,
     }
     receipt["receipt_sha256"] = hashlib.sha256(
         json.dumps(receipt, sort_keys=True, separators=(",", ":")).encode()

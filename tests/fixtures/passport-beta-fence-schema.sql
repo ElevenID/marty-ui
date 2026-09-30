@@ -17,6 +17,13 @@ CREATE TABLE issuance_service.physical_document_jobs (
 CREATE TABLE issuance_service.other_issuance (
     id text PRIMARY KEY, status text NOT NULL
 );
+CREATE TABLE issuance_service.issuance_transactions (
+    id text PRIMARY KEY, organization_id text NOT NULL,
+    credential_template_id text NOT NULL, status text NOT NULL,
+    pre_auth_code text NOT NULL UNIQUE, claims json NOT NULL,
+    issuer_mode text NOT NULL, created_at timestamptz NOT NULL,
+    expires_at timestamptz NOT NULL
+);
 CREATE TABLE flow_service.flow_definitions (
     id text PRIMARY KEY, organization_id text, name text, status text,
     flow_type text NOT NULL, steps json, transitions json,
@@ -38,6 +45,7 @@ CREATE TABLE flow_service.flow_instances (
 );
 ALTER TABLE issuance_service.physical_document_jobs OWNER TO marty;
 ALTER TABLE issuance_service.other_issuance OWNER TO marty;
+ALTER TABLE issuance_service.issuance_transactions OWNER TO marty;
 ALTER TABLE flow_service.flow_definitions OWNER TO marty;
 ALTER TABLE flow_service.flow_instances OWNER TO marty;
 GRANT USAGE ON SCHEMA issuance_service, flow_service TO marty;
