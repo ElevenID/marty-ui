@@ -58,6 +58,8 @@ PROTECTED_FILES = (
     "scripts/sql/passport-beta-batch-acl-finalize.sql",
     "scripts/sql/passport-beta-db-maintenance-start.sql",
     "scripts/sql/passport-beta-db-enable-app-login.sql",
+    "scripts/sql/passport-beta-rust-owner-transition.sql",
+    "scripts/sql/passport-beta-rust-owner-verify.sql",
     "scripts/prepare_passport_beta_native_migrations.py",
     "scripts/prepare_passport_beta_db_maintenance.py",
     "scripts/start-passport-beta-db-maintenance.ps1",
