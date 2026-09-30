@@ -130,7 +130,7 @@ def test_quarantine_runs_before_registration_token() -> None:
     root = Path(__file__).resolve().parents[1]
     script = (root / "scripts/register-canvas-oss-runner.ps1").read_text(
         encoding="utf-8")
-    gate = "check_canvas_oss_runner.py' --host-setup"
+    gate = "Invoke-WslBash $preflight"
     assert script.count(gate) == 3
     assert script[:script.index('actions/runners/registration-token')].count(gate) == 2
     assert script[script.index('exec ./run.sh'):].count(gate) == 1

@@ -20,7 +20,7 @@ permissions:
 jobs:
   qualify:
     if: github.ref == 'refs/heads/main'
-    runs-on: [self-hosted, linux, x64, canvas-oss-wsl2]
+    runs-on: [self-hosted, linux, x64, passport-beta-wsl2]
     environment: beta-lifecycle
     timeout-minutes: 180
     env:
@@ -33,6 +33,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
+          python scripts/check_passport_beta_runner.py --output "$RUNNER_TEMP/passport-beta-runner-preflight.json"
           [[ "$(git rev-parse HEAD)" == "$GITHUB_SHA" ]]
           [[ "$BETA_ARTIFACT_DIR" == /* && -d "$BETA_ARTIFACT_DIR" ]]
           [[ "$PASSPORT_DEMO_RECORDER_COMMIT" =~ ^[0-9a-f]{40}$ ]]

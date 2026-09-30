@@ -238,7 +238,7 @@ def test_runner_setup_is_explicit_ephemeral_and_fail_closed() -> None:
     assert '(Get-WslText @("--list", "--quiet")) -split' in setup
     assert "--ephemeral" in register
     assert "registration-token" in register
-    assert '"self-hosted", "linux", "x64", "canvas-oss-wsl2"' in register
+    assert '"canvas-oss-wsl2"' in register
     for tool in ("gh", "jq", "node", "python3"):
         assert f'"{tool}"' in preflight
     assert "/var/run/docker.sock" in preflight

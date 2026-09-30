@@ -2,7 +2,9 @@
 param(
     [string]$Repository = "ElevenID/marty-ui",
     [string]$WslDistribution = "Ubuntu-24.04",
-    [string]$RunnerDirectory = "~/actions-runner-canvas-oss"
+    [string]$RunnerDirectory = "~/actions-runner-canvas-oss",
+    [ValidateSet("Canvas", "Passport")]
+    [string]$Purpose = "Canvas"
 )
 
 Set-StrictMode -Version Latest
@@ -36,7 +38,7 @@ if ($RunnerDirectory -notmatch '^~?/[A-Za-z0-9_./-]+$') {
     throw "RunnerDirectory must be a simple path inside the dedicated WSL distribution"
 }
 if (-not (Get-Command wsl.exe -ErrorAction SilentlyContinue)) {
-    throw "WSL is not installed. The Canvas OSS runner is not provisioned."
+    throw "WSL is not installed. The one-job runner is not provisioned."
 }
 if (-not (Get-Command gh -ErrorAction SilentlyContinue)) {
     throw "Windows GitHub CLI is required and must have repository runner-administration permission."
@@ -77,7 +79,7 @@ $installedDistributions = @(
 )
 if ($installedDistributions -notcontains $WslDistribution) {
     $inventory = if ($installedDistributions.Count -gt 0) { $installedDistributions -join ", " } else { "none" }
-    throw "Dedicated $WslDistribution runner distro is absent (installed: $inventory). The host currently has no Canvas OSS runner; run setup-canvas-oss-runner.ps1 first."
+    throw "Dedicated $WslDistribution runner distro is absent (installed: $inventory); run setup-canvas-oss-runner.ps1 first."
 }
 $verboseInventory = Get-WslText @("--list", "--verbose")
 $escapedDistribution = [regex]::Escape($WslDistribution)
@@ -97,14 +99,18 @@ $wslRunnerDirectory = if ($RunnerDirectory.StartsWith("~/")) {
     $RunnerDirectory
 }
 
-# This verifies Ubuntu 24.04, gh/jq/node/python3/docker, the Docker Desktop
-# socket, disk/memory capacity, marty-infra-network, and the existing tunnel before
-# any short-lived GitHub registration is created.
+$runnerLabel = if ($Purpose -eq "Passport") { "passport-beta-wsl2" } else { "canvas-oss-wsl2" }
+$runnerCheck = if ($Purpose -eq "Passport") { "check_passport_beta_runner.py" } else { "check_canvas_oss_runner.py" }
+$preflightOutput = if ($Purpose -eq "Passport") { "passport-beta-runner-host-preflight.json" } else { "canvas-oss-runner-host-preflight.json" }
+$verificationVariable = if ($Purpose -eq "Passport") { "PASSPORT_BETA_RUNNER_LABELS_VERIFIED" } else { "CANVAS_OSS_RUNNER_LABELS_VERIFIED" }
+$preflight = "python3 '$wslRepoRoot/scripts/$runnerCheck' --host-setup --output '/tmp/$preflightOutput' && rm -f '/tmp/$preflightOutput'"
+
+# Validate the purpose-specific host before any short-lived registration.
 Invoke-WslBash "test -x '$wslRunnerDirectory/config.sh' && test -x '$wslRunnerDirectory/run.sh'"
-Invoke-WslBash "python3 '$wslRepoRoot/scripts/check_canvas_oss_runner.py' --host-setup --output /tmp/canvas-oss-runner-host-preflight.json && rm -f /tmp/canvas-oss-runner-host-preflight.json"
+Invoke-WslBash $preflight
 
 $repoUrl = "https://github.com/$Repository"
-$runnerName = "canvas-oss-wsl2-$($env:COMPUTERNAME)-$((Get-Date).ToUniversalTime().ToString('yyyyMMddHHmmss'))"
+$runnerName = "${runnerLabel}-$($env:COMPUTERNAME)-$((Get-Date).ToUniversalTime().ToString('yyyyMMddHHmmss'))"
 
 # Ephemeral runners normally remove their local registration after one job. If
 # a reboot left a local registration behind, use GitHub's short-lived removal
@@ -119,7 +125,7 @@ if ($LASTEXITCODE -eq 0) {
 
 # A prior cancelled or crashed passport rehearsal can outlive this one-job
 # runner on Docker Desktop. Refuse new registration until the host is clean.
-Invoke-WslBash "python3 '$wslRepoRoot/scripts/check_canvas_oss_runner.py' --host-setup --output /tmp/canvas-oss-runner-host-preflight.json && rm -f /tmp/canvas-oss-runner-host-preflight.json"
+Invoke-WslBash $preflight
 if (Test-Path -LiteralPath $markerPath) {
     throw "A prior one-job runner ended without verified host cleanup; host is quarantined"
 }
@@ -127,14 +133,14 @@ if (Test-Path -LiteralPath $markerPath) {
 $registrationToken = (& gh api --method POST "repos/$Repository/actions/runners/registration-token" --jq .token).Trim()
 if (-not $registrationToken) { throw "Could not obtain short-lived runner registration token" }
 
-Write-Host "Registering one-job Canvas OSS runner: $runnerName"
-Invoke-WslBash "cd '$wslRunnerDirectory' && ./config.sh --url '$repoUrl' --token '$registrationToken' --name '$runnerName' --labels 'canvas-oss-wsl2' --unattended --ephemeral"
+Write-Host "Registering one-job $Purpose runner: $runnerName"
+Invoke-WslBash "cd '$wslRunnerDirectory' && ./config.sh --url '$repoUrl' --token '$registrationToken' --name '$runnerName' --labels '$runnerLabel' --unattended --ephemeral"
 $registrationToken = $null
 
 # Confirm the server-side registration contains every routing label before the
 # runner accepts a job. The Windows gh identity, not the workflow token, owns
 # this repository-administration check.
-$expectedLabels = @("self-hosted", "linux", "x64", "canvas-oss-wsl2")
+$expectedLabels = @("self-hosted", "linux", "x64", $runnerLabel)
 $registered = $null
 foreach ($attempt in 1..10) {
     $response = & gh api "repos/$Repository/actions/runners?per_page=100" | ConvertFrom-Json
@@ -161,12 +167,12 @@ $markerStream = [System.IO.File]::Open(
     [System.IO.FileAccess]::Write, [System.IO.FileShare]::None)
 $markerStream.Dispose()
 $markerCreated = $true
-Invoke-WslBash "export CANVAS_OSS_RUNNER_LABELS_VERIFIED='$runnerName'; cd '$wslRunnerDirectory' && exec ./run.sh"
+Invoke-WslBash "export $verificationVariable='$runnerName'; cd '$wslRunnerDirectory' && exec ./run.sh"
 } finally {
     $postRunError = $null
     if ($markerCreated) {
         try {
-            Invoke-WslBash "python3 '$wslRepoRoot/scripts/check_canvas_oss_runner.py' --host-setup --output /tmp/canvas-oss-runner-host-preflight.json && rm -f /tmp/canvas-oss-runner-host-preflight.json"
+            Invoke-WslBash $preflight
             Remove-Item -LiteralPath $markerPath
         } catch {
             $postRunError = $_
