@@ -178,6 +178,16 @@ def test_snapshot_requires_unrelated_writes_in_both_probes() -> None:
         collect_fixture(installation, observed, direct)
 
 
+def test_snapshot_rejects_numeric_unrelated_write_proof() -> None:
+    installation, observed, direct = evidence()
+    direct["unrelated_writes"]["issuance_transactions"]["verified"] = 1
+    direct["receipt_sha256"] = snapshot.digest({
+        key: value for key, value in direct.items() if key != "receipt_sha256"
+    })
+    with pytest.raises(HostProbeError, match="Direct beta fence probe receipt"):
+        collect_fixture(installation, observed, direct)
+
+
 def test_snapshot_rejects_changed_verifier_bytes() -> None:
     installation, observed, direct = evidence()
     installation["verify_sql_sha256"] = "0" * 64

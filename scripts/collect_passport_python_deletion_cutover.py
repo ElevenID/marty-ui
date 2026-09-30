@@ -15,13 +15,13 @@ from typing import Any
 try:
     from .check_passport_beta_fence_authority import protected_file, protected_source
     from .probe_passport_beta_cutover_snapshot import digest
-    from .probe_passport_beta_fence_direct_writes import UNRELATED_WRITES
+    from .probe_passport_beta_fence_direct_writes import verified_unrelated_writes
     from .probe_passport_beta_host import HostProbeError, run
     from .verify_passport_beta_protected_cutover import checked_run, command, utc
 except ImportError:
     from check_passport_beta_fence_authority import protected_file, protected_source
     from probe_passport_beta_cutover_snapshot import digest
-    from probe_passport_beta_fence_direct_writes import UNRELATED_WRITES
+    from probe_passport_beta_fence_direct_writes import verified_unrelated_writes
     from probe_passport_beta_host import HostProbeError, run
     from verify_passport_beta_protected_cutover import checked_run, command, utc
 
@@ -137,9 +137,9 @@ def collect(
     counts = snapshot.get("counts")
     require(isinstance(first_probe, dict)
             and isinstance(prior_probe, dict) and isinstance(final_probe, dict)
-            and first_probe.get("unrelated_writes") == UNRELATED_WRITES
-            and prior_probe.get("unrelated_writes") == UNRELATED_WRITES
-            and final_probe.get("unrelated_writes") == UNRELATED_WRITES
+            and verified_unrelated_writes(first_probe.get("unrelated_writes"))
+            and verified_unrelated_writes(prior_probe.get("unrelated_writes"))
+            and verified_unrelated_writes(final_probe.get("unrelated_writes"))
             and isinstance(counts, dict)
             and type(legacy.get("drain_watermark")) is int
             and type(prior_probe.get("observation_watermark")) is int
