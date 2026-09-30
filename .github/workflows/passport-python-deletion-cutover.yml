@@ -54,13 +54,13 @@ jobs:
           test -f "$FENCE_RECEIPT"
           work="$RUNNER_TEMP/passport-final-cutover-$GITHUB_RUN_ID"
           mkdir -p "$work/supported" "$work/predeletion" "$work/installation"
-          gh run download "$SUPPORTED_RUN" --repo ElevenID/marty-ui \
+          gh run download "$SUPPORTED_RUN" --repo "$GITHUB_REPOSITORY" \
             --name "passport-supported-consumer-acceptance-$SUPPORTED_RUN" \
             --dir "$work/supported"
-          gh run download "$PREDELETION_RUN" --repo ElevenID/marty-ui \
+          gh run download "$PREDELETION_RUN" --repo "$GITHUB_REPOSITORY" \
             --name "passport-rust-predeletion-acceptance-$PREDELETION_RUN" \
             --dir "$work/predeletion"
-          gh run download "$PREDELETION_RUN" --repo ElevenID/marty-ui \
+          gh run download "$PREDELETION_RUN" --repo "$GITHUB_REPOSITORY" \
             --name "passport-beta-fence-installation-$PREDELETION_RUN" \
             --dir "$work/installation"
           supported="$work/supported/passport-supported-consumer-acceptance-$SUPPORTED_RUN.json"
