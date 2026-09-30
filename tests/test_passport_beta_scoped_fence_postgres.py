@@ -614,6 +614,12 @@ def test_direct_writer_probe_uses_valid_candidates_and_fence_errors(database: st
     target["expected_fence_epoch"] = int(sql(database, "SELECT epoch FROM passport_cutover.state"))
     first = probe_direct_writes(container_id, **target)
     second = probe_direct_writes(container_id, **target)
+    installed_at = sql(database, """
+        SELECT to_char(installed_at AT TIME ZONE 'UTC', 'YYYY-MM-DD') || 'T' ||
+               to_char(installed_at AT TIME ZONE 'UTC', 'HH24:MI:SS.MS') || 'Z'
+        FROM passport_cutover.state WHERE singleton
+    """).strip()
+    assert installed_at < first["observed_at_utc"]
     assert set(first["rejections"]) == {
         "physical_document_jobs", "physical_flow_definitions",
         "physical_flow_instances",

@@ -161,6 +161,13 @@ def collect(
             and type(fence.get("epoch")) is int and fence["epoch"] > 0
             and isinstance(first_probe, dict),
             "Protected fence identity or first write probe is invalid")
+    installed_at = installation.get("fence_installed_at_utc")
+    require(isinstance(installed_at, str)
+            and OBSERVED_AT.fullmatch(installed_at) is not None
+            and isinstance(first_probe.get("observed_at_utc"), str)
+            and OBSERVED_AT.fullmatch(first_probe["observed_at_utc"]) is not None
+            and installed_at < first_probe["observed_at_utc"],
+            "Installed fence did not precede the first direct write probe")
 
     observed = observer()
     require(observed.get("schema") == "marty.passport-beta-fence-postinstall-target/v1"
@@ -266,6 +273,7 @@ def collect(
         "writer_started_at": writer["started_at"],
         "writer_generation": writer["restart_count"],
         "fence_epoch": fence["epoch"],
+        "fence_installed_at_utc": installed_at,
         "fence_verification_sha256": digest(fence),
         "fence_first_probe": first_probe,
         "direct_database_probe": fresh_probe,

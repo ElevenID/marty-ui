@@ -57,6 +57,7 @@ def evidence() -> tuple[dict, dict, dict]:
         "postgres_container_id": POSTGRES,
         "postgres_system_identifier": "12345", "database_oid": "67890",
         "fence": FENCE, "direct_database_probe": first,
+        "fence_installed_at_utc": "2026-09-29T00:00:00.000Z",
         "source_commit": "a" * 40,
         "approved_target_observation_sha256": "f" * 64,
         "beta_services": observed["beta"]["services"],
@@ -102,6 +103,7 @@ def test_snapshot_binds_zero_job_beta_to_fresh_write_probe() -> None:
     assert result["writer_container_id"] == WRITER
     assert result["writer_generation"] == 0
     assert result["installation_receipt_sha256"] == snapshot.digest(installation)
+    assert result["fence_installed_at_utc"] == installation["fence_installed_at_utc"]
     assert result["counts"]["unreadable_artifact_count"] == 0
     assert result["observation_watermark"] > direct["observation_watermark"]
     assert result["snapshot_sha256"] == snapshot.digest({
@@ -130,6 +132,13 @@ def test_snapshot_rejects_stale_direct_probe() -> None:
         key: value for key, value in direct.items() if key != "receipt_sha256"
     })
     with pytest.raises(HostProbeError, match="Fresh direct beta fence probe"):
+        collect_fixture(installation, observed, direct)
+
+
+def test_snapshot_rejects_fence_timestamp_after_first_probe() -> None:
+    installation, observed, direct = evidence()
+    installation["fence_installed_at_utc"] = "2026-09-29T00:00:01.000Z"
+    with pytest.raises(HostProbeError, match="Installed fence did not precede"):
         collect_fixture(installation, observed, direct)
 
 

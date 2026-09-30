@@ -168,6 +168,21 @@ try {
         $fence.phase -cne 'fully_fenced' -or $fence.epoch -le 0) {
         throw 'Beta fence verifier did not confirm the full fence'
     }
+    $epoch = [string]$fence.epoch
+    if ($epoch -cnotmatch '^[1-9][0-9]*$') {
+        throw 'Beta fence epoch is invalid'
+    }
+    $installedSql = "SELECT epoch::text || '|' || " +
+        "to_char(installed_at AT TIME ZONE 'UTC', 'YYYY-MM-DD') || 'T' || " +
+        "to_char(installed_at AT TIME ZONE 'UTC', 'HH24:MI:SS.MS') || 'Z' " +
+        "FROM passport_cutover.state WHERE singleton AND epoch = $epoch;"
+    $installed = @(Invoke-FencePsql -Container $container -Sql $installedSql)
+    if ($installed.Count -ne 1 -or
+        $installed[0] -cnotmatch '^([1-9][0-9]*)\|([0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}\.[0-9]{3}Z)$' -or
+        $Matches[1] -cne $epoch) {
+        throw 'Installed beta fence timestamp differs from verified epoch'
+    }
+    $fenceInstalledAtUtc = $Matches[2]
     $direct = Invoke-FencePython -Arguments @(
         (Join-Path $PSScriptRoot 'probe_passport_beta_fence_direct_writes.py'),
         '--postgres-container', $container,
@@ -177,6 +192,12 @@ try {
         '--database-oid', $databaseOid,
         '--fence-epoch', ([string]$fence.epoch)
     )
+    if ([string]$direct.observed_at_utc -cnotmatch
+            '^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}\.[0-9]{3}Z$' -or
+        [DateTimeOffset]::Parse($fenceInstalledAtUtc) -ge
+            [DateTimeOffset]::Parse([string]$direct.observed_at_utc)) {
+        throw 'Direct beta fence write probe did not follow installation'
+    }
     $after = Invoke-FencePython -Arguments @(
         (Join-Path $PSScriptRoot 'probe_passport_beta_fence_target.py'),
         '--fenced'
@@ -219,6 +240,7 @@ try {
         database_oid = $databaseOid
         postgres_container_id = $container
         fence = $fence
+        fence_installed_at_utc = $fenceInstalledAtUtc
         direct_database_probe = $direct
         post_install_observation_sha256 = $after.observation_sha256
         production_snapshot_sha256 = $after.production.sha256
