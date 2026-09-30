@@ -286,13 +286,27 @@ def produce_disposable_receipt(
             or set(current_signer) != {
                 "signing_keys_container_id", "managed_kms_custody_verified",
                 "chain_verified", "csca_issuer_profile_commitment",
-                "dsc_issuer_profile_commitment"}
+                "dsc_issuer_profile_commitment", "mode", "issuer_profile_type",
+                "organization_id", "private_key_exported", "csca", "dsc"}
             or current_signer.get("signing_keys_container_id") != signer_id
+            or current_signer.get("mode") != "managed_kms"
+            or current_signer.get("issuer_profile_type") != "ICAO_EMRTD"
+            or current_signer.get("organization_id") != ORGANIZATION_ID
+            or current_signer.get("private_key_exported") is not False
             or current_signer.get("managed_kms_custody_verified") is not True
             or current_signer.get("chain_verified") is not True
             or any(current_signer.get(field) != certificate["evidence"][field]
                    for field in ("csca_issuer_profile_commitment",
-                                 "dsc_issuer_profile_commitment"))):
+                                 "dsc_issuer_profile_commitment"))
+            or any(not isinstance(current_signer.get(role), dict)
+                   or current_signer[role] != {
+                       "status": "active", "organization_id": ORGANIZATION_ID,
+                       "issuer_profile_commitment": current_signer[
+                           f"{role}_issuer_profile_commitment"],
+                       "certificate_sha256": certificate["evidence"][
+                           f"{role}_certificate_sha256"],
+                   }
+                   for role in ("csca", "dsc"))):
             raise ProducerError("Current disposable managed signer differs from ceremony")
         native_preflight = preflight_native(
             record, plan["surface"], inspector=inspector)
@@ -403,6 +417,7 @@ def produce_disposable_receipt(
             or current_signer["signing_keys_container_id"]
             != runtime["signing-keys"]["container_id"]):
             raise ProducerError("Disposable Rust runtime image or container drifted")
+        current_signer["services_oci_reference"] = runtime["signing-keys"]["oci_reference"]
         return {
             "schema": "marty.passport-supported-rust-producer/v1",
             "status": "blocked", "project": plan["project"],

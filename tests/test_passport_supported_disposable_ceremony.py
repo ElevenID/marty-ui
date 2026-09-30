@@ -238,7 +238,12 @@ def test_recreated_signer_must_match_ceremony_profiles_and_chain() -> None:
 
         args = dict(
             profile_resolver=lambda container_id, org, did, purpose:
-                {"purpose": purpose},
+                {"purpose": purpose, "organization_id": org,
+                 "issuer_profile": {"organization_id": org,
+                                    "status": "active",
+                                    "issuer_mode": "org_managed",
+                                    "credential_format": "ICAO_EMRTD",
+                                    "key_purpose": purpose}},
             profile_verifier=verify,
         )
         result = ceremony.recheck_current_managed_signer(
@@ -246,6 +251,10 @@ def test_recreated_signer_must_match_ceremony_profiles_and_chain() -> None:
             "-----BEGIN CERTIFICATE-----\npublic\n-----END CERTIFICATE-----", **args)
         assert result["signing_keys_container_id"] == "1" * 64
         assert result["managed_kms_custody_verified"] is True
+        assert result["mode"] == "managed_kms"
+        assert result["private_key_exported"] is False
+        assert result["csca"]["certificate_sha256"] == "1" * 64
+        assert result["dsc"]["certificate_sha256"] == "2" * 64
         assert observed[0][-1] == "c" * 64
         changed = {"evidence": {**certificate["evidence"],
                                 "dsc_issuer_profile_commitment": "5" * 64}}
@@ -254,6 +263,18 @@ def test_recreated_signer_must_match_ceremony_profiles_and_chain() -> None:
             ceremony.recheck_current_managed_signer(
                 "1" * 64, root, 29876, changed,
                 "-----BEGIN CERTIFICATE-----\npublic\n-----END CERTIFICATE-----", **args)
+        def inactive_profile(container_id, org, did, purpose):
+            resolution = args["profile_resolver"](container_id, org, did, purpose)
+            if purpose == "x509_doc_signer":
+                resolution["issuer_profile"]["status"] = "inactive"
+            return resolution
+
+        with pytest.raises(ceremony.DisposableCeremonyError,
+                           match="profile state is invalid"):
+            ceremony.recheck_current_managed_signer(
+                "1" * 64, root, 29876, certificate,
+                "-----BEGIN CERTIFICATE-----\npublic\n-----END CERTIFICATE-----",
+                **{**args, "profile_resolver": inactive_profile})
 
 
 @pytest.mark.parametrize("mutation", [

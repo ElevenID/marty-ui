@@ -118,6 +118,17 @@ def certificate(selected: dict, port: int) -> dict:
 
 def current_signer(container_id: str = "signing-keys") -> dict:
     return {"signing_keys_container_id": container_id,
+            "mode": "managed_kms", "issuer_profile_type": "ICAO_EMRTD",
+            "organization_id": _application(29877)["organization_id"],
+            "private_key_exported": False,
+            "csca": {"status": "active",
+                     "organization_id": _application(29877)["organization_id"],
+                     "issuer_profile_commitment": "3" * 64,
+                     "certificate_sha256": "1" * 64},
+            "dsc": {"status": "active",
+                    "organization_id": _application(29877)["organization_id"],
+                    "issuer_profile_commitment": "4" * 64,
+                    "certificate_sha256": "2" * 64},
             "managed_kms_custody_verified": True, "chain_verified": True,
             "csca_issuer_profile_commitment": "3" * 64,
             "dsc_issuer_profile_commitment": "4" * 64}
@@ -269,7 +280,8 @@ def test_producer_orders_real_gates_and_tears_down(
     assert report["flow_execution"] == flow_receipt()
     assert report["flow_execution_verified"] is True
     assert report["rust_restart_resume_verified"] is True
-    assert report["current_managed_signer"] == current_signer()
+    assert report["current_managed_signer"] == {
+        **current_signer(), "services_oci_reference": SERVICES}
     assert report["native_batch_preflight"] == {
         "native_container_id": prior_native_id,
         "native_batch_preflight_verified": True}
@@ -493,8 +505,8 @@ def test_hosted_handoff_binds_partial_receipt_to_plan(tmp_path: Path) -> None:
         "flow_start_verified": True,
         "flow_execution_verified": True, "rust_restart_resume_verified": True,
         "certificate": certificate(selected, 29877),
-        "current_managed_signer": current_signer(
-            f"{4:064x}"),
+        "current_managed_signer": {
+            **current_signer(f"{4:064x}"), "services_oci_reference": SERVICES},
         "native_batch_preflight": {
             "native_container_id": f"{8:064x}",
             "native_batch_preflight_verified": True},
@@ -546,6 +558,10 @@ def test_hosted_handoff_binds_partial_receipt_to_plan(tmp_path: Path) -> None:
             csca_issuer_did_sha256="8" * 64)),
         ("wrong current signer", lambda item: item["current_managed_signer"].update(
             signing_keys_container_id="other")),
+        ("inactive current profile", lambda item: item["current_managed_signer"]
+            ["dsc"].update(status="inactive")),
+        ("exported current key", lambda item: item["current_managed_signer"].update(
+            private_key_exported=True)),
         ("wrong native preflight", lambda item: item["native_batch_preflight"].update(
             native_container_id="other")),
         ("no managed custody", lambda item: item["certificate"]["evidence"].update(

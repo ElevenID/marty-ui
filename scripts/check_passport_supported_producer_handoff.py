@@ -350,14 +350,33 @@ def verify_handoff(
         or set(current_signer) != {
             "signing_keys_container_id", "managed_kms_custody_verified",
             "chain_verified", "csca_issuer_profile_commitment",
-            "dsc_issuer_profile_commitment"}
+            "dsc_issuer_profile_commitment", "mode", "issuer_profile_type",
+            "organization_id", "private_key_exported", "services_oci_reference",
+            "csca", "dsc"}
         or current_signer.get("signing_keys_container_id")
         != receipt["runtime_images"]["signing-keys"]["container_id"]
+        or current_signer.get("services_oci_reference")
+        != receipt["runtime_images"]["signing-keys"]["oci_reference"]
+        or current_signer.get("mode") != "managed_kms"
+        or current_signer.get("issuer_profile_type") != "ICAO_EMRTD"
+        or current_signer.get("organization_id")
+        != _application(receipt["gateway_port"])["organization_id"]
+        or current_signer.get("private_key_exported") is not False
         or current_signer.get("managed_kms_custody_verified") is not True
         or current_signer.get("chain_verified") is not True
         or any(current_signer.get(field) != certificate["evidence"][field]
                for field in ("csca_issuer_profile_commitment",
-                             "dsc_issuer_profile_commitment"))):
+                             "dsc_issuer_profile_commitment"))
+        or any(not isinstance(current_signer.get(role), dict)
+               or current_signer[role] != {
+                   "status": "active",
+                   "organization_id": current_signer["organization_id"],
+                   "issuer_profile_commitment": current_signer[
+                       f"{role}_issuer_profile_commitment"],
+                   "certificate_sha256": certificate["evidence"][
+                       f"{role}_certificate_sha256"],
+               }
+               for role in ("csca", "dsc"))):
         raise HandoffError("Current managed signer does not match the released runtime")
     try:
         verified = attest(str(plan_path), "ElevenID/marty-ui", PLAN_WORKFLOW,

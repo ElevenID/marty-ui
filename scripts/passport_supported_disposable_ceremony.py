@@ -410,4 +410,29 @@ def recheck_current_managed_signer(
                      for field in ("csca_issuer_profile_commitment",
                                    "dsc_issuer_profile_commitment")),
              "Current managed signer differs from the issued certificate chain")
-    return {"signing_keys_container_id": container_id, **proof}
+    profiles = {}
+    for role, resolution, purpose, digest in (
+        ("csca", csca_resolution, "csca", evidence["csca_certificate_sha256"]),
+        ("dsc", dsc_resolution, "x509_doc_signer", evidence["dsc_certificate_sha256"]),
+    ):
+        profile = resolution.get("issuer_profile") if isinstance(resolution, dict) else None
+        _require(isinstance(profile, dict)
+                 and resolution.get("organization_id") == ORGANIZATION_ID
+                 and profile.get("organization_id") == ORGANIZATION_ID
+                 and profile.get("status") == "active"
+                 and profile.get("issuer_mode") == "org_managed"
+                 and profile.get("credential_format") == "ICAO_EMRTD"
+                 and profile.get("key_purpose") == purpose,
+                 "Current managed signer profile state is invalid")
+        profiles[role] = {
+            "status": "active", "organization_id": ORGANIZATION_ID,
+            "issuer_profile_commitment": proof[f"{role}_issuer_profile_commitment"],
+            "certificate_sha256": digest,
+        }
+    return {
+        "signing_keys_container_id": container_id,
+        "mode": "managed_kms", "issuer_profile_type": "ICAO_EMRTD",
+        "organization_id": ORGANIZATION_ID,
+        "private_key_exported": False,
+        **profiles, **proof,
+    }
