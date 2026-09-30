@@ -44,7 +44,8 @@ RECEIPT_FIELDS = frozenset({
     "certificate_setup_passed", "live_ownership_verified", "rust_routes_verified",
     "signed_gateway_callback_verified", "flow_execution_verified",
     "flow_start_verified", "rust_restart_resume_verified", "certificate",
-    "route", "flow_execution", "runtime_images", "runtime_edge", "blocker",
+    "route", "flow_execution", "runtime_images", "pre_restart_native_runtime",
+    "runtime_edge", "blocker",
 })
 ROUTE_EVIDENCE_FIELDS = frozenset({
     "application_input_sha256", "job_id_sha256", "application_id_sha256",
@@ -90,6 +91,20 @@ def _runtime_evidence(receipt: dict, plan: dict) -> None:
         ids.add(item["container_id"])
     if len(ids) != len(COMPOSE_SERVICES) + 1:
         raise HandoffError("Protected Rust runtime identities are not distinct")
+    prior = receipt["pre_restart_native_runtime"]
+    native = runtime["issuance-native"]
+    if (not isinstance(prior, dict)
+        or set(prior) != {"container_id", "image_id", "oci_reference",
+                          "selectors", "inspection_receipt_sha256"}
+        or not isinstance(prior["container_id"], str)
+        or CONTAINER_ID.fullmatch(prior["container_id"]) is None
+        or prior["container_id"] in ids
+        or prior["image_id"] != native["image_id"]
+        or prior["oci_reference"] != reference
+        or prior["selectors"] != native["selectors"]
+        or not isinstance(prior["inspection_receipt_sha256"], str)
+        or HASH.fullmatch(prior["inspection_receipt_sha256"]) is None):
+        raise HandoffError("Protected native restart baseline is invalid")
 
 
 def _flow_execution_evidence(value: object) -> None:

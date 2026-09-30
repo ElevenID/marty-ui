@@ -86,7 +86,9 @@ def certificate(selected: dict, port: int) -> dict:
 def test_producer_orders_real_gates_and_tears_down(surface: str, tmp_path: Path) -> None:
     selected = plan(surface)
     calls = []
-    record = {"project": selected["project"]}
+    prior_native_id = "f" * 64
+    record = {"project": selected["project"],
+              "containers": {"issuance-native": prior_native_id}}
 
     def run(args, env, timeout):
         calls.append(("run", args))
@@ -121,6 +123,7 @@ def test_producer_orders_real_gates_and_tears_down(surface: str, tmp_path: Path)
         calls.append(("flow_proof", args))
         assert "inspector" in kwargs
         assert "restart" in kwargs
+        assert kwargs["restart"]() is True
         return flow_receipt()
 
     def probe(*args, **kwargs):
@@ -140,10 +143,23 @@ def test_producer_orders_real_gates_and_tears_down(surface: str, tmp_path: Path)
                for service in COMPOSE_SERVICES}
     runtime["edge"] = {"container_id": "edge", "loopback_port": 29877}
 
+    def restart(*args, **kwargs):
+        calls.append(("restart", args))
+        record["containers"]["issuance-native"] = "issuance-native"
+        return True
+
+    def inspect(args):
+        if args == ["container", "inspect", prior_native_id]:
+            return json.dumps([{"Id": prior_native_id,
+                                "Image": "sha256:" + "d" * 64}])
+        return ""
+
     def observe(*args):
         calls.append(("runtime_inventory", args))
         assert args[0] is record
-        return runtime
+        observed = deepcopy(runtime)
+        observed["issuance-native"]["container_id"] = record["containers"]["issuance-native"]
+        return observed
 
     report = produce_disposable_receipt(
         tmp_path / "plan.json", tmp_path / "manifest.json", "123456",
@@ -151,9 +167,9 @@ def test_producer_orders_real_gates_and_tears_down(surface: str, tmp_path: Path)
         deadline_lookup=lambda env: NOW + timedelta(minutes=60),
         verify=lambda *args, **kwargs: selected,
         preflight=lambda *args, **kwargs: selected,
-        inspect=lambda args: "", run=run, setup=setup,
+        inspect=inspect, run=run, setup=setup,
         record_live=live, issue_key=key, issue_operator_key=operator_key,
-        probe=probe, flow_proof=prove_flow,
+        probe=probe, flow_proof=prove_flow, restart_rust=restart,
         observe_runtime=observe,
         teardown_complete=complete,
         teardown_partial=lambda *args, **kwargs: pytest.fail("unexpected partial teardown"),
@@ -181,6 +197,10 @@ def test_producer_orders_real_gates_and_tears_down(surface: str, tmp_path: Path)
     assert report["rust_restart_resume_verified"] is True
     assert report["producer_run_id"] == "987654"
     assert set(report["runtime_images"]) == set(COMPOSE_SERVICES)
+    assert report["pre_restart_native_runtime"]["container_id"] == prior_native_id
+    assert report["pre_restart_native_runtime"]["inspection_receipt_sha256"] == hashlib.sha256(
+        json.dumps({"Id": prior_native_id, "Image": "sha256:" + "d" * 64},
+                   sort_keys=True, separators=(",", ":")).encode()).hexdigest()
     assert report["runtime_edge"] == runtime["edge"]
     assert not (Path(tempfile.gettempdir()) / selected["project"]).exists()
 
@@ -286,6 +306,14 @@ def test_failed_recreate_uses_plan_bound_partial_teardown(tmp_path: Path) -> Non
     def flow_proof(*args, **kwargs):
         return kwargs["restart"]()
 
+    prior_native_id = "e" * 64
+    native_image = "sha256:" + "d" * 64
+
+    def inspect(args):
+        if args == ["container", "inspect", prior_native_id]:
+            return json.dumps([{"Id": prior_native_id, "Image": native_image}])
+        return ""
+
     with pytest.raises(ValueError, match="recreation failed"):
         produce_disposable_receipt(
             tmp_path / "plan.json", tmp_path / "manifest.json", "123456",
@@ -293,9 +321,10 @@ def test_failed_recreate_uses_plan_bound_partial_teardown(tmp_path: Path) -> Non
             deadline_lookup=lambda env: NOW + timedelta(minutes=60),
             verify=lambda *args, **kwargs: selected,
             preflight=lambda *args, **kwargs: selected,
-            inspect=lambda args: "", run=run,
+            inspect=inspect, run=run,
             setup=lambda *args, **kwargs: certificate(selected, 29877),
-            record_live=lambda *args: {"project": selected["project"]},
+            record_live=lambda *args: {"project": selected["project"],
+                                       "containers": {"issuance-native": prior_native_id}},
             issue_key=lambda *args, **kwargs: (
                 Path(tempfile.gettempdir()) / selected["project"] / "secrets"
                 / "passport_acceptance_api_key"),
@@ -306,6 +335,11 @@ def test_failed_recreate_uses_plan_bound_partial_teardown(tmp_path: Path) -> Non
                 "verified": True, "flow_execution_verified": False,
                 "evidence": {"signed_gateway_callback_verified": True}},
             flow_proof=flow_proof, restart_rust=fail_recreate,
+            observe_runtime=lambda *args: {
+                "issuance-native": {"container_id": prior_native_id,
+                                    "image_id": native_image,
+                                    "oci_reference": SERVICES, "selectors": {}},
+            },
             teardown_complete=lambda *args: cleanup.append("complete") or False,
             teardown_partial=lambda *args, **kwargs: cleanup.append("partial") or True,
         )
@@ -388,6 +422,10 @@ def test_hosted_handoff_binds_partial_receipt_to_plan(tmp_path: Path) -> None:
                                "routes": routes}},
         "flow_execution": flow_receipt(),
         "runtime_images": runtime,
+        "pre_restart_native_runtime": {
+            **runtime["issuance-native"], "container_id": f"{8:064x}",
+            "inspection_receipt_sha256": "f" * 64,
+        },
         "runtime_edge": {"container_id": f"{7:064x}",
                          "oci_reference": selected["infra_images"]["edge"],
                          "loopback_port": 29877},
@@ -447,6 +485,10 @@ def test_hosted_handoff_binds_partial_receipt_to_plan(tmp_path: Path) -> None:
             ["selectors"].update(PASSPORT_NATIVE_GATEWAY_ENABLED=False)),
         ("duplicate runtime", lambda item: item["runtime_images"]["flow"].update(
             container_id=item["runtime_images"]["gateway"]["container_id"])),
+        ("same native container", lambda item: item["pre_restart_native_runtime"].update(
+            container_id=item["runtime_images"]["issuance-native"]["container_id"])),
+        ("wrong prior image", lambda item: item["pre_restart_native_runtime"].update(
+            image_id="sha256:" + "0" * 64)),
         ("wrong edge port", lambda item: item["runtime_edge"].update(
             loopback_port=29878)),
     ]

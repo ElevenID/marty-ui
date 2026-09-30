@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import argparse
 from datetime import datetime, timedelta, timezone
+import hashlib
 import json
 import os
 from pathlib import Path
@@ -16,7 +17,9 @@ import subprocess
 from typing import Callable
 
 if __package__:
-    from .check_passport_supported_compose_ownership import verify as verify_ownership
+    from .check_passport_supported_compose_ownership import (
+        _inspect as inspect_owned, verify as verify_ownership,
+    )
     from .collect_passport_supported_acceptance import COMPOSE_SERVICES, observe_compose
     from .passport_supported_certificate_rehearsal import validate_certificate_setup
     from .passport_supported_disposable_ceremony import bootstrap_certificate_chain
@@ -38,7 +41,9 @@ if __package__:
         stage_disposable_inputs, verify_plan_release, verify_pre_mutation,
     )
 else:
-    from check_passport_supported_compose_ownership import verify as verify_ownership
+    from check_passport_supported_compose_ownership import (
+        _inspect as inspect_owned, verify as verify_ownership,
+    )
     from collect_passport_supported_acceptance import COMPOSE_SERVICES, observe_compose
     from passport_supported_certificate_rehearsal import validate_certificate_setup
     from passport_supported_disposable_ceremony import bootstrap_certificate_chain
@@ -246,18 +251,47 @@ def produce_disposable_receipt(
         )
         if operator_path != root / "secrets" / "passport_acceptance_operator_api_key":
             raise ProducerError("Disposable Flow operator key escaped the project root")
+        pre_restart_native_runtime = None
+
+        def restart_with_inspected_baseline() -> bool:
+            nonlocal pre_restart_native_runtime
+            if pre_restart_native_runtime is not None:
+                raise ProducerError("Disposable Rust restart was repeated")
+            before_restart = read_clock() if clock is not None or now is None else now
+            baseline = observe_runtime(record, plan["surface"], gateway_port,
+                                       before_restart, inspector)
+            native = baseline.get("issuance-native") if isinstance(baseline, dict) else None
+            native_id = record.get("containers", {}).get("issuance-native")
+            if (not isinstance(native, dict)
+                or native.get("container_id") != native_id
+                or not isinstance(native_id, str)):
+                raise ProducerError("Disposable native restart baseline is unowned")
+            inspection = inspect_owned("container", native_id, inspector)
+            if (inspection.get("Id") != native_id
+                or inspection.get("Image") != native.get("image_id")):
+                raise ProducerError("Disposable native restart inspection drifted")
+            inspection_digest = hashlib.sha256(json.dumps(
+                inspection, sort_keys=True, separators=(",", ":"),
+            ).encode("utf-8")).hexdigest()
+            if restart_rust(record, plan["surface"], compose, staged_env,
+                            inspector=inspector, run=run) is not True:
+                raise ProducerError("Disposable Rust restart was not verified")
+            pre_restart_native_runtime = {
+                **native, "inspection_receipt_sha256": inspection_digest,
+            }
+            return True
+
         flow = flow_proof(record, plan["surface"], gateway_port, plan_run_id,
                           inspector=inspector,
-                          restart=lambda: restart_rust(
-                              record, plan["surface"], compose, staged_env,
-                              inspector=inspector, run=run))
+                          restart=restart_with_inspected_baseline)
         if (not isinstance(flow, dict)
             or set(flow) != {"references", "flow", "execution"}
             or not isinstance(flow["references"], dict)
             or not isinstance(flow["flow"], dict)
             or not isinstance(flow["execution"], dict)
             or flow["execution"].get("durable_history_verified") is not True
-            or flow["execution"].get("restart_resume_verified") is not True):
+            or flow["execution"].get("restart_resume_verified") is not True
+            or pre_restart_native_runtime is None):
             raise ProducerError("Disposable Rust Flow execution proof is invalid")
         before_inventory = read_clock() if clock is not None or now is None else now
         if (before_inventory.tzinfo is None
@@ -265,6 +299,11 @@ def produce_disposable_receipt(
             raise ProducerError("Disposable runtime teardown budget is exhausted")
         runtime = observe_runtime(record, plan["surface"], gateway_port,
                                   before_inventory, inspector)
+        if (pre_restart_native_runtime["container_id"]
+            == runtime["issuance-native"]["container_id"]
+            or pre_restart_native_runtime["image_id"]
+            != runtime["issuance-native"]["image_id"]):
+            raise ProducerError("Disposable native restart image or container drifted")
         return {
             "schema": "marty.passport-supported-rust-producer/v1",
             "status": "blocked", "project": plan["project"],
@@ -284,6 +323,7 @@ def produce_disposable_receipt(
             "flow_execution": flow,
             "runtime_images": {service: runtime[service]
                                for service in COMPOSE_SERVICES},
+            "pre_restart_native_runtime": pre_restart_native_runtime,
             "runtime_edge": runtime["edge"],
             "blocker": "Live protected beta acceptance remains unproven",
         }
