@@ -15,9 +15,11 @@ import os
 from pathlib import Path
 import re
 import subprocess
+import tempfile
 from typing import Callable
 
 if __package__:
+    from .check_passport_supported_rust_model import PROJECT
     from .check_passport_supported_compose_ownership import (
         _inspect as inspect_owned, verify as verify_ownership,
     )
@@ -28,6 +30,7 @@ if __package__:
     )
     from .passport_supported_disposable_route_probe import exercise_owned_disposable
     from .passport_supported_flow_gateway import exercise_owned_flow
+    from .probe_passport_beta_native_batch import clear_private_state
     from .passport_supported_native_batch_preflight import preflight_owned_native
     from .passport_supported_flow_restart import restart_owned_rust
     from .passport_supported_infra_rehearsal import (
@@ -45,6 +48,7 @@ if __package__:
         stage_disposable_inputs, verify_plan_release, verify_pre_mutation,
     )
 else:
+    from check_passport_supported_rust_model import PROJECT
     from check_passport_supported_compose_ownership import (
         _inspect as inspect_owned, verify as verify_ownership,
     )
@@ -55,6 +59,7 @@ else:
     )
     from passport_supported_disposable_route_probe import exercise_owned_disposable
     from passport_supported_flow_gateway import exercise_owned_flow
+    from probe_passport_beta_native_batch import clear_private_state
     from passport_supported_native_batch_preflight import preflight_owned_native
     from passport_supported_flow_restart import restart_owned_rust
     from passport_supported_infra_rehearsal import (
@@ -78,6 +83,23 @@ from services.passport_disposable_identity import ORGANIZATION_ID, issuer_did
 WORKFLOW_NAME = "Passport Supported Disposable Provisioning Producer"
 RESERVED_TEARDOWN = timedelta(minutes=10)
 MIN_JOB_BUDGET = timedelta(minutes=45)
+
+
+def _remove_batch_state(project: str) -> None:
+    """Clear only this project's private pending marker after verified teardown."""
+    if not isinstance(project, str) or PROJECT.fullmatch(project) is None:
+        raise ProducerError("Disposable native batch state project is invalid")
+    state_dir = Path(tempfile.gettempdir()) / f"{project}-native-batch-state"
+    if not state_dir.exists() and not state_dir.is_symlink():
+        return
+    if state_dir.is_symlink() or not state_dir.is_dir():
+        raise ProducerError("Disposable native batch state changed identity")
+    state_path = state_dir / "pending.json"
+    if state_path.exists() or state_path.is_symlink():
+        if state_path.is_symlink() or not state_path.is_file():
+            raise ProducerError("Disposable native batch state changed identity")
+        clear_private_state(state_path)
+    state_dir.rmdir()
 
 
 def _producer_deadline(environment: dict[str, str]) -> datetime:
@@ -182,8 +204,12 @@ def produce_disposable_receipt(
         raise ProducerError("Disposable plan has insufficient teardown lease")
     root, env_file = stage_disposable_inputs(plan, gateway_port, now=current)
     output_dir = root / "bootstrap-output"
+    batch_state_dir = root.parent / f"{plan['project']}-native-batch-state"
+    batch_state_path = batch_state_dir / "pending.json"
+    batch_state_created = False
     mutation_started = False
     record = None
+    cleaned = False
     try:
         checked = preflight(plan_path, manifest_path, plan_run_id, environment,
                             env_file, root, now=current, workflow_ref=WORKFLOW_REF)
@@ -328,16 +354,40 @@ def produce_disposable_receipt(
             }
             return True
 
-        flow = flow_proof(record, plan["surface"], gateway_port, plan_run_id,
-                          inspector=inspector,
-                          restart=restart_with_inspected_baseline)
+        if batch_state_dir.exists():
+            raise ProducerError("Disposable native batch pending state requires reconciliation")
+        batch_state_dir.mkdir(mode=0o700)
+        batch_state_created = True
+        flow = flow_proof(
+            record, plan["surface"], gateway_port, plan_run_id,
+            dsc_der_sha256=dsc_material[0][0],
+            dsc_pem_wire_sha256=dsc_material[0][1],
+            batch_state_path=batch_state_path,
+            batch_deadline=min(expires, deadline),
+            inspector=inspector, restart=restart_with_inspected_baseline)
+        batch = flow.get("batch") if isinstance(flow, dict) else None
+        batch_evidence = batch.get("batch", {}).get("evidence") if isinstance(batch, dict) else None
         if (not isinstance(flow, dict)
-            or set(flow) != {"references", "flow", "execution"}
+            or set(flow) != {"references", "flow", "execution", "batch"}
             or not isinstance(flow["references"], dict)
             or not isinstance(flow["flow"], dict)
             or not isinstance(flow["execution"], dict)
             or flow["execution"].get("durable_history_verified") is not True
             or flow["execution"].get("restart_resume_verified") is not True
+            or not isinstance(batch, dict)
+            or batch.get("final_native_preflight") != {
+                "native_container_id": record["containers"]["issuance-native"],
+                "native_batch_preflight_verified": True}
+            or not isinstance(batch_evidence, dict)
+            or batch.get("batch", {}).get("verified") is not True
+            or batch_evidence.get("selected_flow_in_two_job_batch") is not True
+            or batch_evidence.get("first_accepted_material_verified") is not True
+            or batch.get("selected_source_job_sha256")
+            != flow["flow"].get("native_job_id_sha256")
+            or batch.get("selected_bureau_job_sha256")
+            != flow["execution"].get("bureau_job_id_sha256")
+            or batch.get("dsc_der_sha256")
+            != certificate["evidence"]["dsc_certificate_sha256"]
             or pre_restart_native_runtime is None):
             raise ProducerError("Disposable Rust Flow execution proof is invalid")
         before_inventory = read_clock() if clock is not None or now is None else now
@@ -405,7 +455,11 @@ def produce_disposable_receipt(
             try:
                 _remove_bootstrap_output(output_dir)
             finally:
-                _remove_staged_inputs(root)
+                try:
+                    _remove_staged_inputs(root)
+                finally:
+                    if batch_state_created and cleaned:
+                        _remove_batch_state(plan["project"])
 
 
 def main() -> int:
@@ -421,6 +475,8 @@ def main() -> int:
         if args.recover_only:
             recover_infrastructure(args.plan, args.manifest, args.plan_run_id,
                                    os.environ, workflow_ref=WORKFLOW_REF)
+            recovered_plan = json.loads(args.plan.read_text(encoding="utf-8"))
+            _remove_batch_state(recovered_plan["project"])
             return 0
         if args.output.resolve().is_relative_to(ROOT.resolve()) or not args.output.parent.is_dir():
             raise ProducerError("Protected producer output path is invalid")

@@ -340,7 +340,7 @@ def beta_psql(sql: str, runner: Callable[[list[str]], str], container_id: str) -
                    "-At", "-v", "ON_ERROR_STOP=1", "-c", sql])
 
 
-def beta_material_receipt(
+def material_receipt(
     organization_id: str,
     source_job_id: str,
     bureau_job_id: str,
@@ -348,13 +348,14 @@ def beta_material_receipt(
     dsc_der_sha256: str,
     dsc_pem_wire_sha256: str,
     commitment_key: bytes,
-    runner: Callable[[list[str]], str] = run,
+    *, query: Callable[[str], str], source: str,
 ) -> dict[str, Any]:
-    """Compare the first accepted material in private beta PostgreSQL."""
+    """Compare first accepted material in an explicitly selected private database."""
     if (not all(isinstance(value, str) and 0 < len(value) <= 256 for value in (organization_id, source_job_id))
             or not all(isinstance(value, str) and SHA256.fullmatch(value) for value in
                        (sod_der_sha256, dsc_der_sha256, dsc_pem_wire_sha256))
-            or not isinstance(commitment_key, bytes) or len(commitment_key) < 32):
+            or not isinstance(commitment_key, bytes) or len(commitment_key) < 32
+            or source not in {"private beta PostgreSQL", "private disposable PostgreSQL"}):
         raise HostProbeError("Beta material receipt inputs are invalid")
     try:
         bureau_uuid = uuid.UUID(bureau_job_id)
@@ -373,7 +374,7 @@ def beta_material_receipt(
         f"AND source_job_id = convert_from(decode('{source_hex}', 'hex'), 'UTF8') "
         f"AND bureau_job_id = '{bureau_uuid}'::uuid"
     )
-    parts = beta_psql(sql, runner, beta_postgres_container(runner)).split("|")
+    parts = query(sql).split("|")
     if parts != ["1", "t", "t", "t"]:
         raise HostProbeError("Beta first accepted SOD and DSC material did not match the selected job and chain")
     def commitment(label: str, value: str) -> str:
@@ -385,8 +386,28 @@ def beta_material_receipt(
         "first_accepted_sod_der_matches_native": True,
         "first_accepted_dsc_der_matches_selected_chain": True,
         "first_accepted_dsc_pem_wire_matches_selected_chain": True,
-        "source": "private beta PostgreSQL",
+        "source": source,
     }}
+
+
+def beta_material_receipt(
+    organization_id: str,
+    source_job_id: str,
+    bureau_job_id: str,
+    sod_der_sha256: str,
+    dsc_der_sha256: str,
+    dsc_pem_wire_sha256: str,
+    commitment_key: bytes,
+    runner: Callable[[list[str]], str] = run,
+) -> dict[str, Any]:
+    """Select the live beta database, then use the shared material comparison."""
+    return material_receipt(
+        organization_id, source_job_id, bureau_job_id,
+        sod_der_sha256, dsc_der_sha256, dsc_pem_wire_sha256,
+        commitment_key,
+        query=lambda sql: beta_psql(sql, runner, beta_postgres_container(runner)),
+        source="private beta PostgreSQL",
+    )
 
 
 def beta_legacy_drain(runner: Callable[[list[str]], str] = run) -> dict[str, Any]:

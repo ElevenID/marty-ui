@@ -250,3 +250,24 @@ def test_native_batch_bureau_identity_must_match_flow_submission():
             ORG, REFERENCES, STARTED, ISSUER, poll_interval_seconds=0,
             before_submit=lambda started, sod: IDS[8])
     assert fixture.completed == 6
+
+
+@pytest.mark.parametrize("field,value", [
+    ("sod_sha256", "c" * 64),
+    ("sod_signature_verified", False),
+])
+def test_native_batch_submission_keeps_signed_sod_material(field, value):
+    fixture = Fixture()
+
+    def native(method, path, body):
+        status, job = fixture.native(method, path, body)
+        if fixture.completed == 6:
+            job[field] = value
+        return status, job
+
+    with pytest.raises(FlowAdvanceError, match="submission changed job"):
+        advance_physical_passport_flow(
+            fixture.request, native, fixture.private, fixture.history,
+            ORG, REFERENCES, STARTED, ISSUER, poll_interval_seconds=0,
+            before_submit=lambda started, sod: BUREAU)
+    assert fixture.completed == 6

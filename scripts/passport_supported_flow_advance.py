@@ -221,6 +221,10 @@ def advance_physical_passport_flow(
             _require(native.get("bureau_job_id") == bureau_job_id
                      and (batch_bureau_job_id is None
                           or batch_bureau_job_id == bureau_job_id)
+                     and job.get("sod_sha256") == sod_sha256
+                     and native.get("sod_sha256") == sod_sha256
+                     and job.get("sod_signature_verified") is True
+                     and native.get("sod_signature_verified") is True
                      and job.get("status") in ("SUBMITTED", "IN_PRODUCTION",
                                                "QUALITY_CHECK", "READY_FOR_ACTIVATION"),
                      "Flow bureau submission changed job")

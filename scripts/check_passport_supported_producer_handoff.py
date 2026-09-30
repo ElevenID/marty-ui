@@ -108,8 +108,8 @@ def _runtime_evidence(receipt: dict, plan: dict) -> None:
         raise HandoffError("Protected native restart baseline is invalid")
 
 
-def _flow_execution_evidence(value: object) -> None:
-    if not isinstance(value, dict) or set(value) != {"references", "flow", "execution"}:
+def _flow_execution_evidence(value: object, receipt: dict) -> None:
+    if not isinstance(value, dict) or set(value) != {"references", "flow", "execution", "batch"}:
         raise HandoffError("Protected Rust Flow execution proof is invalid")
     references = value["references"]
     flow = value["flow"]
@@ -142,6 +142,56 @@ def _flow_execution_evidence(value: object) -> None:
                    "sod_sha256"))
         or execution["bureau_job_id_sha256"] == flow["native_job_id_sha256"]):
         raise HandoffError("Protected Rust Flow execution proof is invalid")
+    batch = value["batch"]
+    proof = batch.get("batch") if isinstance(batch, dict) else None
+    evidence = proof.get("evidence") if isinstance(proof, dict) else None
+    fields = {
+        "provider_kind", "physical_claim", "http_status", "batch_status",
+        "selected_flow_in_two_job_batch", "native_binding_verified",
+        "first_accepted_material_verified", "companion_native_completed",
+        "companion_callback_receipt_sha256", "selected_source_job_commitment",
+        "selected_bureau_job_commitment", "companion_source_job_commitment",
+        "companion_bureau_job_commitment", "submitted_job_commitments",
+        "returned_jobs", "request_commitment", "response_commitment",
+    }
+    if (not isinstance(batch, dict)
+        or set(batch) != {"final_native_preflight", "batch",
+                          "selected_source_job_sha256", "selected_bureau_job_sha256",
+                          "dsc_der_sha256"}
+        or batch["final_native_preflight"] != {
+            "native_container_id": receipt["runtime_images"]["issuance-native"]["container_id"],
+            "native_batch_preflight_verified": True}
+        or batch["selected_source_job_sha256"] != flow["native_job_id_sha256"]
+        or batch["selected_bureau_job_sha256"] != execution["bureau_job_id_sha256"]
+        or batch["dsc_der_sha256"] != receipt["certificate"]["evidence"]["dsc_certificate_sha256"]
+        or not isinstance(proof, dict) or set(proof) != {"verified", "evidence"}
+        or proof["verified"] is not True
+        or not isinstance(evidence, dict) or set(evidence) != fields
+        or evidence["provider_kind"] != "simulator"
+        or evidence["physical_claim"] != "not_claimed"
+        or type(evidence["http_status"]) is not int or evidence["http_status"] != 202
+        or evidence["batch_status"] != "QUEUED"
+        or any(evidence[name] is not True for name in (
+            "selected_flow_in_two_job_batch", "native_binding_verified",
+            "first_accepted_material_verified", "companion_native_completed"))):
+        raise HandoffError("Protected native batch proof is invalid")
+    digest_fields = (
+        "companion_callback_receipt_sha256", "selected_source_job_commitment",
+        "selected_bureau_job_commitment", "companion_source_job_commitment",
+        "companion_bureau_job_commitment", "request_commitment", "response_commitment",
+    )
+    if (any(type(evidence[name]) is not str or HASH.fullmatch(evidence[name]) is None
+            for name in digest_fields)
+        or len({evidence[name] for name in digest_fields}) != len(digest_fields)
+        or evidence["submitted_job_commitments"] != [
+            evidence["selected_source_job_commitment"],
+            evidence["companion_source_job_commitment"]]
+        or evidence["returned_jobs"] != [
+            {"source_job_commitment": evidence["selected_source_job_commitment"],
+             "bureau_job_commitment": evidence["selected_bureau_job_commitment"]},
+            {"source_job_commitment": evidence["companion_source_job_commitment"],
+             "bureau_job_commitment": evidence["companion_bureau_job_commitment"]}]):
+        raise HandoffError("Protected native batch commitments are invalid")
 
 
 def _route_evidence(route: object, gateway_port: int) -> None:
@@ -286,8 +336,8 @@ def verify_handoff(
     except (ProducerError, KeyError, TypeError, ValueError) as error:
         raise HandoffError("Protected managed certificate evidence is invalid") from error
     _route_evidence(receipt["route"], receipt["gateway_port"])
-    _flow_execution_evidence(receipt["flow_execution"])
     _runtime_evidence(receipt, plan)
+    _flow_execution_evidence(receipt["flow_execution"], receipt)
     native_preflight = receipt["native_batch_preflight"]
     if (not isinstance(native_preflight, dict)
         or native_preflight != {

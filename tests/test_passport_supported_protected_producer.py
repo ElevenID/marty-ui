@@ -16,7 +16,8 @@ from services.passport_disposable_identity import issuer_did
 from scripts.check_passport_supported_producer_handoff import HandoffError, verify_handoff
 from scripts.passport_supported_infra_images import qualified_images
 from scripts.passport_supported_protected_producer import (
-    WORKFLOW_NAME, _application, _observe_bound_runtime, produce_disposable_receipt,
+    WORKFLOW_NAME, _application, _observe_bound_runtime, _remove_batch_state,
+    produce_disposable_receipt,
 )
 from scripts.collect_passport_supported_acceptance import COMPOSE_FLAGS, COMPOSE_SERVICES
 from scripts.probe_passport_supported_routes import _frozen_routes
@@ -28,7 +29,7 @@ SOURCE = "a" * 40
 SERVICES = "ghcr.io/elevenid/marty-ui-oss/services@sha256:" + "b" * 64
 
 
-def flow_receipt() -> dict:
+def flow_receipt(final_native_id: str = "issuance-native") -> dict:
     values = [f"d0000000-0000-4000-8000-{number:012x}" for number in range(1, 8)]
     hashes = [hashlib.sha256(value.encode()).hexdigest() for value in values]
     return {"references": dict(zip((
@@ -42,7 +43,36 @@ def flow_receipt() -> dict:
                       "restart_resume_verified": True,
                       "bureau_job_id_sha256": "8" * 64,
                       "signed_callback_receipt_sha256": "9" * 64,
-                      "sod_sha256": "a" * 64}}
+                      "sod_sha256": "a" * 64},
+        "batch": {
+            "final_native_preflight": {
+                "native_container_id": final_native_id,
+                "native_batch_preflight_verified": True},
+            "selected_source_job_sha256": hashes[5],
+            "selected_bureau_job_sha256": "8" * 64,
+            "dsc_der_sha256": "2" * 64,
+            "batch": {"verified": True, "evidence": {
+                "provider_kind": "simulator", "physical_claim": "not_claimed",
+                "http_status": 202, "batch_status": "QUEUED",
+                "selected_flow_in_two_job_batch": True,
+                "native_binding_verified": True,
+                "first_accepted_material_verified": True,
+                "companion_native_completed": True,
+                "companion_callback_receipt_sha256": "b" * 64,
+                "selected_source_job_commitment": "c" * 64,
+                "selected_bureau_job_commitment": "d" * 64,
+                "companion_source_job_commitment": "e" * 64,
+                "companion_bureau_job_commitment": "f" * 64,
+                "submitted_job_commitments": ["c" * 64, "e" * 64],
+                "returned_jobs": [
+                    {"source_job_commitment": "c" * 64,
+                     "bureau_job_commitment": "d" * 64},
+                    {"source_job_commitment": "e" * 64,
+                     "bureau_job_commitment": "f" * 64}],
+                "request_commitment": "1" * 64,
+                "response_commitment": "2" * 64,
+            }},
+        }}
 
 
 def plan(surface: str) -> dict:
@@ -103,7 +133,10 @@ def setup_certificate(selected: dict):
 
 
 @pytest.mark.parametrize("surface", ["base", "selfhost"])
-def test_producer_orders_real_gates_and_tears_down(surface: str, tmp_path: Path) -> None:
+@pytest.mark.parametrize("teardown_verified", [True, False])
+def test_producer_orders_real_gates_and_tears_down(
+    surface: str, teardown_verified: bool, tmp_path: Path,
+) -> None:
     selected = plan(surface)
     calls = []
     prior_native_id = "f" * 64
@@ -148,6 +181,7 @@ def test_producer_orders_real_gates_and_tears_down(surface: str, tmp_path: Path)
         assert "inspector" in kwargs
         assert "restart" in kwargs
         assert kwargs["restart"]() is True
+        kwargs["batch_state_path"].write_text("private pending state", encoding="utf-8")
         return flow_receipt()
 
     def probe(*args, **kwargs):
@@ -160,7 +194,7 @@ def test_producer_orders_real_gates_and_tears_down(surface: str, tmp_path: Path)
 
     def complete(*args):
         calls.append(("complete_teardown", args))
-        return True
+        return teardown_verified
 
     runtime = {service: {"container_id": service, "image_id": "sha256:" + "d" * 64,
                          "oci_reference": SERVICES, "selectors": {}}
@@ -185,7 +219,8 @@ def test_producer_orders_real_gates_and_tears_down(surface: str, tmp_path: Path)
         observed["issuance-native"]["container_id"] = record["containers"]["issuance-native"]
         return observed
 
-    report = produce_disposable_receipt(
+    def produce():
+        return produce_disposable_receipt(
         tmp_path / "plan.json", tmp_path / "manifest.json", "123456",
         {"GITHUB_RUN_ID": "987654"}, 29877, now=NOW,
         deadline_lookup=lambda env: NOW + timedelta(minutes=60),
@@ -200,8 +235,19 @@ def test_producer_orders_real_gates_and_tears_down(surface: str, tmp_path: Path)
         probe=probe, flow_proof=prove_flow, restart_rust=restart,
         observe_runtime=observe,
         teardown_complete=complete,
-        teardown_partial=lambda *args, **kwargs: pytest.fail("unexpected partial teardown"),
-    )
+        teardown_partial=lambda *args, **kwargs: False,
+        )
+    pending_dir = Path(tempfile.gettempdir()) / f"{selected['project']}-native-batch-state"
+    if teardown_verified:
+        report = produce()
+        assert not pending_dir.exists()
+    else:
+        with pytest.raises(ProducerError, match="teardown is unverified"):
+            produce()
+        assert (pending_dir / "pending.json").read_text(encoding="utf-8") == (
+            "private pending state")
+        _remove_batch_state(selected["project"])
+        return
     names = [item[0] for item in calls]
     assert (names.index("setup") < names.index("ownership") < names.index("key")
             < names.index("probe") < names.index("operator_key")
@@ -467,7 +513,7 @@ def test_hosted_handoff_binds_partial_receipt_to_plan(tmp_path: Path) -> None:
                                "callback_receipt_sha256": "7" * 64,
                                "sod_signature_verified": True,
                                "routes": routes}},
-        "flow_execution": flow_receipt(),
+        "flow_execution": flow_receipt(runtime["issuance-native"]["container_id"]),
         "runtime_images": runtime,
         "pre_restart_native_runtime": {
             **runtime["issuance-native"], "container_id": f"{8:064x}",
