@@ -12,10 +12,8 @@ directory exist, Docker Desktop exposes a Unix socket inside that WSL
 distribution, the beta network and tunnels are running, and production
 containers are healthy. The registration wrapper checks these conditions
 and refuses any leftover passport disposable resource. On the current host,
-the WSL Docker socket is absent and a
-`marty-passport-fence-disposable-20260929` container remains. Inspect its
-owner and evidence before any scoped cleanup. Do not register a passport
-runner until the host preflight passes.
+the WSL Docker socket is absent. Do not register a passport runner until the
+host preflight passes.
 
 From PowerShell, start the foreground one-job runner:
 
