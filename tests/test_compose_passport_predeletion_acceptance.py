@@ -6,12 +6,29 @@ from copy import deepcopy
 
 import pytest
 
-from scripts.compose_passport_predeletion_acceptance import AcceptanceError, compose
+from scripts.compose_passport_predeletion_acceptance import (
+    AcceptanceError, compose, signed_release,
+)
 from scripts.project_passport_predeletion_producer import project
 from tests.test_project_passport_predeletion_producer import inputs
 
 
 SOURCE = "a" * 40
+
+
+def test_signed_release_requires_actual_v_tag_and_same_source() -> None:
+    released = {
+        "release": "marty-ui@1.1.218", "source_commit": SOURCE,
+        "manifest_sha256": "b" * 64, "signed_manifest_verified": True,
+        "oci_digests": {"ghcr.io/elevenid/marty-ui-oss/services":
+                        "sha256:" + "c" * 64},
+    }
+    assert signed_release(SOURCE, "v1.1.218", released)[
+        "stack_manifest_sha256"] == "b" * 64
+    with pytest.raises(AcceptanceError):
+        signed_release(SOURCE, "1.1.218", released)
+    with pytest.raises(AcceptanceError):
+        signed_release("f" * 40, "v1.1.218", released)
 
 
 def evidence() -> tuple[dict, dict, dict]:

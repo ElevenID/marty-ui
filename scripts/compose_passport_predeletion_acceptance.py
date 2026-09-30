@@ -53,6 +53,27 @@ def utc(value: object) -> datetime:
     return parsed
 
 
+def signed_release(source: str, tag: str, released: dict[str, Any]) -> dict[str, Any]:
+    """Bind the attested stack manifest to the v-prefixed release coordinate."""
+    require(isinstance(source, str) and SHA.fullmatch(source) is not None
+            and isinstance(tag, str)
+            and re.fullmatch(r"v[0-9]+\.[0-9]+\.[0-9]+", tag) is not None
+            and isinstance(released, dict)
+            and released.get("source_commit") == source
+            and released.get("release") == f"marty-ui@{tag[1:]}"
+            and isinstance(released.get("manifest_sha256"), str)
+            and SHA256.fullmatch(released["manifest_sha256"]) is not None
+            and released.get("signed_manifest_verified") is True
+            and isinstance(released.get("oci_digests"), dict),
+            "Official release tag and signed manifest differ")
+    return {
+        "source_commit": source,
+        "stack_manifest_sha256": released["manifest_sha256"],
+        "oci_digests": copy.deepcopy(released["oci_digests"]),
+        "signed_manifest_verified": True,
+    }
+
+
 def compose(
     projection: dict[str, Any], observation: dict[str, Any],
     fresh_snapshot: dict[str, Any], *, run_id: int,
@@ -213,11 +234,8 @@ def main() -> int:
                 and isinstance(source, str) and SHA.fullmatch(source) is not None
                 and isinstance(run, str) and run.isdecimal() and int(run) > 0,
                 "Protected predeletion acceptance context is invalid")
-        release = manifest_source(args.stack_manifest, source)
-        require(re.fullmatch(r"v[0-9]+\.[0-9]+\.[0-9]+", args.release_tag)
-                is not None
-                and release["release"] == f"marty-ui@{args.release_tag[1:]}",
-                "Official release tag and signed manifest differ")
+        release = signed_release(
+            source, args.release_tag, manifest_source(args.stack_manifest, source))
         metadata = subprocess.run(
             ["gh", "api", f"repos/ElevenID/marty-ui/actions/runs/{run}"],
             capture_output=True, text=True, check=True, timeout=120,
@@ -233,13 +251,7 @@ def main() -> int:
         producer = json.loads(args.producer.read_text(encoding="utf-8"))
         observation = json.loads(args.observation.read_text(encoding="utf-8"))
         fresh = json.loads(args.fresh_snapshot.read_text(encoding="utf-8"))
-        signed_release = {
-            "source_commit": source,
-            "stack_manifest_sha256": release["manifest_sha256"],
-            "oci_digests": release["oci_digests"],
-            "signed_manifest_verified": True,
-        }
-        projected = project(producer, signed_release)
+        projected = project(producer, release)
         result = compose(
             projected, observation, fresh, run_id=int(run),
             workflow_started_at_utc=current["created_at"],
