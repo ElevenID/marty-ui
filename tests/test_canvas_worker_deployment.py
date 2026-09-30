@@ -130,9 +130,13 @@ def test_native_worker_consumers_select_the_packaged_binary_without_changing_api
     )
     assert "NativeCanvasSyncProcessor::new" in worker
     assert "canvas_sync_processor_unavailable" not in worker
-    for dockerfile in (service_image, ci_image):
-        assert "--bin marty-canvas-sync-worker" in dockerfile
-        assert "target/release/marty-canvas-sync-worker" in dockerfile
+    service_build = (ROOT / "scripts/build-rust-service-binaries.sh").read_text(
+        encoding="utf-8"
+    )
+    assert "--bin marty-canvas-sync-worker" in service_build
+    assert "target/release/marty-canvas-sync-worker" in service_image
+    assert "--bin marty-canvas-sync-worker" in ci_image
+    assert "target/release/marty-canvas-sync-worker" in ci_image
 
     # Explicit staged consumer selection; immutable Python evidence and the
     # independently released issuance API/migrations remain untouched.

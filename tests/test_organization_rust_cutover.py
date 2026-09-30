@@ -27,7 +27,7 @@ def test_shared_service_image_builds_and_runs_native_organization() -> None:
     workflow = text(".github/workflows/ci.yml")
     assert (
         f"-p marty-organization --bin {binary}"
-        in dockerfile
+        in text("scripts/build-rust-service-binaries.sh")
     )
     assert f"/build/rust/target/release/{binary} /usr/local/bin/{binary}" in dockerfile
     assert 'if [ "$MODULE_NAME" = "organization" ]; then' in entrypoint

@@ -12,7 +12,9 @@ def text(path: str) -> str:
 
 def test_shared_service_image_contains_native_flow_binary() -> None:
     dockerfile = text("services/Dockerfile")
-    assert "-p marty-flow --bin marty-flow" in dockerfile
+    assert "-p marty-flow --bin marty-flow" in text(
+        "scripts/build-rust-service-binaries.sh"
+    )
     assert (
         "COPY --from=rust-service-builder "
         "/build/rust/target/release/marty-flow /usr/local/bin/marty-flow"

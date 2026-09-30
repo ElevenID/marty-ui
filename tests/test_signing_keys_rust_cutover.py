@@ -12,7 +12,9 @@ def test_shared_service_image_dispatches_signing_keys_to_rust() -> None:
     dockerfile = read("services/Dockerfile")
     entrypoint = read("services/entrypoint.sh")
 
-    assert "-p marty-signing-keys --bin marty-signing-keys" in dockerfile
+    assert "-p marty-signing-keys --bin marty-signing-keys" in read(
+        "scripts/build-rust-service-binaries.sh"
+    )
     assert "target/release/marty-signing-keys" in dockerfile
     assert 'if [ "$MODULE_NAME" = "signing_keys" ]' in entrypoint
     assert "exec /usr/local/bin/marty-signing-keys" in entrypoint
