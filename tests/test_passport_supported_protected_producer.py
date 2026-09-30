@@ -187,6 +187,11 @@ def test_producer_orders_real_gates_and_tears_down(
         return (Path(tempfile.gettempdir()) / selected["project"] / "secrets"
                 / "passport_acceptance_operator_api_key")
 
+    def tenant_probe_key(*args, **kwargs):
+        calls.append(("tenant_probe_key", args))
+        return (Path(tempfile.gettempdir()) / selected["project"] / "secrets"
+                / "passport_acceptance_tenant_probe_api_key")
+
     def prove_flow(*args, **kwargs):
         calls.append(("flow_proof", args))
         assert "inspector" in kwargs
@@ -201,6 +206,11 @@ def test_producer_orders_real_gates_and_tears_down(
         assert set(args[2]["data_groups"]) == {"DG1", "DG2"}
         return {"verified": True, "flow_execution_verified": False,
                 "evidence": {"signed_gateway_callback_verified": True,
+                             "organization_id": _application(29877)["organization_id"],
+                             "unauthenticated_status": 403,
+                             "cross_tenant_status": 404,
+                             "tenant_capability_unauthenticated_status": 403,
+                             "tenant_capability_status": 200,
                              "routes": [{"method": "GET", "route": "synthetic"}] * 9}}
 
     def complete(*args):
@@ -238,7 +248,9 @@ def test_producer_orders_real_gates_and_tears_down(
         verify=lambda *args, **kwargs: selected,
         preflight=lambda *args, **kwargs: selected,
         inspect=inspect, run=run, setup=setup,
-        record_live=live, issue_key=key, issue_operator_key=operator_key,
+        record_live=live, issue_key=key,
+        issue_tenant_probe_key=tenant_probe_key,
+        issue_operator_key=operator_key,
         recheck_signer=lambda *args: current_signer(),
         preflight_native=lambda *args, **kwargs: {
             "native_container_id": prior_native_id,
@@ -261,7 +273,8 @@ def test_producer_orders_real_gates_and_tears_down(
         return
     names = [item[0] for item in calls]
     assert (names.index("setup") < names.index("ownership") < names.index("key")
-            < names.index("probe") < names.index("operator_key")
+            < names.index("tenant_probe_key") < names.index("probe")
+            < names.index("operator_key")
             < names.index("flow_proof"))
     assert names.index("flow_proof") < names.index("runtime_inventory") < names.index("complete_teardown")
     assert names[-1] == "complete_teardown"
@@ -372,6 +385,9 @@ def test_invalid_route_proof_fails_and_cleans(tmp_path: Path,
             issue_key=lambda *args, **kwargs: (
                 Path(tempfile.gettempdir()) / selected["project"] / "secrets"
                 / "passport_acceptance_api_key"),
+            issue_tenant_probe_key=lambda *args, **kwargs: (
+                Path(tempfile.gettempdir()) / selected["project"] / "secrets"
+                / "passport_acceptance_tenant_probe_api_key"),
             probe=lambda *args, **kwargs: {"verified": True,
                 "flow_execution_verified": True,
                 "evidence": {"signed_gateway_callback_verified": True}},
@@ -428,12 +444,20 @@ def test_failed_recreate_uses_plan_bound_partial_teardown(tmp_path: Path) -> Non
             issue_key=lambda *args, **kwargs: (
                 Path(tempfile.gettempdir()) / selected["project"] / "secrets"
                 / "passport_acceptance_api_key"),
+            issue_tenant_probe_key=lambda *args, **kwargs: (
+                Path(tempfile.gettempdir()) / selected["project"] / "secrets"
+                / "passport_acceptance_tenant_probe_api_key"),
             issue_operator_key=lambda *args, **kwargs: (
                 Path(tempfile.gettempdir()) / selected["project"] / "secrets"
                 / "passport_acceptance_operator_api_key"),
             probe=lambda *args, **kwargs: {
                 "verified": True, "flow_execution_verified": False,
-                "evidence": {"signed_gateway_callback_verified": True}},
+                "evidence": {"signed_gateway_callback_verified": True,
+                             "organization_id": _application(29877)["organization_id"],
+                             "unauthenticated_status": 403,
+                             "cross_tenant_status": 404,
+                             "tenant_capability_unauthenticated_status": 403,
+                             "tenant_capability_status": 200}},
             flow_proof=flow_proof, restart_rust=fail_recreate,
             observe_runtime=lambda *args: {
                 "issuance-native": {"container_id": prior_native_id,
@@ -514,6 +538,11 @@ def test_hosted_handoff_binds_partial_receipt_to_plan(tmp_path: Path) -> None:
                   "evidence": {"signed_gateway_callback_verified": True,
                                "signed_callback_path": "simulator-to-gateway-to-native",
                                "physical_claim": "not_claimed",
+                               "organization_id": _application(29877)["organization_id"],
+                               "unauthenticated_status": 403,
+                               "cross_tenant_status": 404,
+                               "tenant_capability_unauthenticated_status": 403,
+                               "tenant_capability_status": 200,
                                "unsigned_webhook_http_status": 422,
                                "callback_private_status": "QUALITY_CHECK",
                                "application_input_sha256": application_hash,
@@ -570,6 +599,10 @@ def test_hosted_handoff_binds_partial_receipt_to_plan(tmp_path: Path) -> None:
             dsc_issuer_profile_commitment="3" * 64)),
         ("no SOD signature", lambda item: item["route"]["evidence"].update(
             sod_signature_verified=False)),
+        ("cross tenant visible", lambda item: item["route"]["evidence"].update(
+            cross_tenant_status=200)),
+        ("second key unverified", lambda item: item["route"]["evidence"].update(
+            tenant_capability_status=403)),
         ("missing SOD digest", lambda item: item["route"]["evidence"].pop(
             "sod_sha256")),
         ("wrong application", lambda item: item["route"]["evidence"].update(

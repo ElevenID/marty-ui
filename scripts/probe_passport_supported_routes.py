@@ -14,6 +14,7 @@ from pathlib import Path
 import re
 import time
 from typing import Any, Callable
+from urllib.parse import quote
 import uuid
 
 if __package__:
@@ -56,6 +57,8 @@ def exercise(
     application: dict[str, Any], api_key: str, *,
     request: Request, private_poll: PrivatePoll,
     callback_via_gateway: bool,
+    tenant_probe_organization_id: str,
+    tenant_probe_key: str,
     max_polls: int = 36,
     poll_interval_seconds: float = 5,
     sleep: Callable[[float], None] = time.sleep,
@@ -75,12 +78,19 @@ def exercise(
         or signer.get("mode") != "MANAGED_ISSUER_PROFILE"):
         raise SupportedRouteProbeError("Managed passport capability is unavailable")
 
+    if (not isinstance(tenant_probe_organization_id, str)
+        or not tenant_probe_organization_id
+        or tenant_probe_organization_id == application.get("organization_id")
+        or not isinstance(tenant_probe_key, str) or len(tenant_probe_key) < 32
+        or tenant_probe_key == api_key):
+        raise SupportedRouteProbeError("Second disposable tenant authority is invalid")
     bureau_job_id = None
+    selected_application_id = None
     observed_public = None
 
     def watched(method: str, path: str, body: dict[str, Any] | None,
                 authority: str) -> tuple[int, dict[str, Any]]:
-        nonlocal bureau_job_id, observed_public
+        nonlocal bureau_job_id, observed_public, selected_application_id
         observed_status, payload = request(method, path, body, authority)
         if not isinstance(payload, dict):
             raise SupportedRouteProbeError("Passport route response is invalid")
@@ -93,6 +103,8 @@ def exercise(
             if parsed is None or str(parsed) != candidate:
                 raise SupportedRouteProbeError("Simulator bureau job ID is invalid")
             bureau_job_id = candidate
+        if path == "/v1/passport/applications" and observed_status == 201:
+            selected_application_id = payload.get("application_id")
         elif bureau_job_id is not None and payload.get("bureau_job_id") != bureau_job_id:
             raise SupportedRouteProbeError("Passport response changed bureau job")
         if path.endswith("/production-status") and observed_status == 200:
@@ -103,7 +115,9 @@ def exercise(
         application, api_key, request=watched, max_polls=max_polls,
         poll_interval_seconds=poll_interval_seconds, sleep=sleep,
     )
-    if bureau_job_id is None or not isinstance(observed_public, dict):
+    if (bureau_job_id is None or not isinstance(observed_public, dict)
+        or not isinstance(selected_application_id, str)
+        or not selected_application_id):
         raise SupportedRouteProbeError("Passport lifecycle has no same-job status")
     poll_status, private = private_poll(bureau_job_id)
     receipt = private.get("callback_receipt_sha256") if isinstance(private, dict) else None
@@ -120,6 +134,29 @@ def exercise(
         or observed_public.get("status") not in
         ("QUALITY_CHECK", "READY_FOR_ACTIVATION")):
         raise SupportedRouteProbeError("Simulator signed callback receipt is unproven")
+
+    tenant_capability_unauthenticated_status, _ = request(
+        "GET", "/v1/passport/capabilities", None, "")
+    tenant_capability_status, tenant_capability = request(
+        "GET", "/v1/passport/capabilities", None, tenant_probe_key)
+    tenant_signer = (tenant_capability.get("signer")
+                     if isinstance(tenant_capability, dict) else None)
+    if (tenant_capability_unauthenticated_status not in (401, 403)
+        or tenant_capability_status != 200
+        or not isinstance(tenant_capability, dict)
+        or tenant_capability.get("supported") is not True
+        or not isinstance(tenant_signer, dict)
+        or tenant_signer.get("mode") != "MANAGED_ISSUER_PROFILE"):
+        raise SupportedRouteProbeError("Second tenant Gateway authentication is unproven")
+
+    selected_status_path = ("/v1/passport/applications/"
+                            + quote(selected_application_id, safe="")
+                            + "/production-status")
+    unauthenticated_status, _ = request("GET", selected_status_path, None, "")
+    cross_tenant_status, _ = request(
+        "GET", selected_status_path, None, tenant_probe_key)
+    if unauthenticated_status not in (401, 403) or cross_tenant_status != 404:
+        raise SupportedRouteProbeError("Gateway authorization or tenant isolation is unproven")
 
     denial_status, _ = request(
         "POST", "/v1/passport/webhooks/personalization", {}, "",
@@ -148,5 +185,11 @@ def exercise(
     evidence["signed_callback_path"] = "simulator-to-gateway-to-native"
     evidence["signed_gateway_callback_verified"] = True
     evidence["physical_claim"] = "not_claimed"
+    evidence["organization_id"] = application["organization_id"]
+    evidence["unauthenticated_status"] = unauthenticated_status
+    evidence["cross_tenant_status"] = cross_tenant_status
+    evidence["tenant_capability_unauthenticated_status"] = (
+        tenant_capability_unauthenticated_status)
+    evidence["tenant_capability_status"] = tenant_capability_status
     return {"verified": True, "evidence": evidence,
             "flow_execution_verified": False}

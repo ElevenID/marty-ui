@@ -20,11 +20,13 @@ APPLICATION = {
     "data_groups": {"DG1": "YQ==", "DG2": "Yg=="},
 }
 KEY = "a" * 64
+OTHER_KEY = "t" * 64
+OTHER_ORG = "other-disposable-org"
 BUREAU_ID = "be6bccf4-51eb-4985-a079-6424bf5c5685"
 
 
 def responses(*, wrong_job: bool = False, denied_status: int = 422,
-              capability: bool = True):
+              capability: bool = True, cross_tenant_status: int = 404):
     calls = []
     states = iter(("DRAFT", "DATA_GENERATED", "SOD_SIGNED", "SUBMITTED",
                    "QUALITY_CHECK", "READY_FOR_ACTIVATION", "ACTIVE"))
@@ -32,11 +34,17 @@ def responses(*, wrong_job: bool = False, denied_status: int = 422,
     def request(method: str, path: str, body: dict | None, key: str):
         calls.append((method, path, body, key))
         if path == "/v1/passport/capabilities":
+            if key == "":
+                return 403, {}
             return 200, {"supported": capability, "blockers": [],
                          "bureau_configured": True, "encrypted_artifact_store": True,
                          "signer": {"mode": "MANAGED_ISSUER_PROFILE"}}
         if path == "/v1/passport/webhooks/personalization":
             return denied_status, {}
+        if path.endswith("/production-status") and key == "":
+            return 403, {}
+        if path.endswith("/production-status") and key == OTHER_KEY:
+            return cross_tenant_status, {}
         state = next(states)
         job = BUREAU_ID if state in ("SUBMITTED", "QUALITY_CHECK",
                                       "READY_FOR_ACTIVATION", "ACTIVE") else None
@@ -68,6 +76,8 @@ def test_frozen_routes_and_same_job_signed_receipt_are_sanitized() -> None:
     calls, request = responses()
     report = exercise(APPLICATION, KEY, request=request, private_poll=poll,
                       callback_via_gateway=True,
+                      tenant_probe_organization_id=OTHER_ORG,
+                      tenant_probe_key=OTHER_KEY,
                       poll_interval_seconds=0)
     routes = report["evidence"]["routes"]
     contract = json.loads((Path(__file__).resolve().parents[1]
@@ -84,8 +94,13 @@ def test_frozen_routes_and_same_job_signed_receipt_are_sanitized() -> None:
     assert report["evidence"]["signed_gateway_callback_verified"] is True
     assert routes[-1]["positive_gateway_path_verified"] is True
     assert report["evidence"]["physical_claim"] == "not_claimed"
+    assert report["evidence"]["unauthenticated_status"] == 403
+    assert report["evidence"]["cross_tenant_status"] == 404
+    assert report["evidence"]["tenant_capability_status"] == 200
+    assert report["evidence"]["tenant_capability_unauthenticated_status"] == 403
     serialized = json.dumps(report)
     assert BUREAU_ID not in serialized and KEY not in serialized
+    assert OTHER_KEY not in serialized and OTHER_ORG not in serialized
     assert "data_groups" not in serialized and "mrz" not in serialized
     assert calls[-1][:2] == ("POST", "/v1/passport/webhooks/personalization")
     assert calls[-1][3] == ""
@@ -114,5 +129,16 @@ def test_rejects_broken_route_or_callback_evidence(defect: str) -> None:
     with pytest.raises(SupportedRouteProbeError):
         exercise(APPLICATION, KEY, request=request, private_poll=private,
                  callback_via_gateway=defect != "gateway_not_selected",
+                 tenant_probe_organization_id=OTHER_ORG,
+                 tenant_probe_key=OTHER_KEY,
                  poll_interval_seconds=0)
     assert calls
+
+
+def test_rejects_cross_tenant_read_of_the_selected_job() -> None:
+    _, request = responses(cross_tenant_status=200)
+    with pytest.raises(SupportedRouteProbeError, match="tenant isolation"):
+        exercise(APPLICATION, KEY, request=request, private_poll=poll,
+                 callback_via_gateway=True,
+                 tenant_probe_organization_id=OTHER_ORG,
+                 tenant_probe_key=OTHER_KEY, poll_interval_seconds=0)

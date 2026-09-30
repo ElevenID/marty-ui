@@ -44,7 +44,7 @@ if __package__:
         WORKFLOW_REF, ProducerError, _remove_staged_inputs, _write_private,
         collect_record, destroy_disposable_project,
         destroy_partial_disposable_project, issue_disposable_api_key,
-        issue_disposable_operator_key,
+        issue_disposable_operator_key, issue_disposable_tenant_probe_key,
         stage_disposable_inputs, verify_plan_release, verify_pre_mutation,
     )
 else:
@@ -73,7 +73,7 @@ else:
         WORKFLOW_REF, ProducerError, _remove_staged_inputs, _write_private,
         collect_record, destroy_disposable_project,
         destroy_partial_disposable_project, issue_disposable_api_key,
-        issue_disposable_operator_key,
+        issue_disposable_operator_key, issue_disposable_tenant_probe_key,
         stage_disposable_inputs, verify_plan_release, verify_pre_mutation,
     )
 
@@ -182,6 +182,7 @@ def produce_disposable_receipt(
     preflight_native: Callable[..., dict] = preflight_owned_native,
     record_live: Callable[..., dict] = collect_record,
     issue_key: Callable[..., Path] = issue_disposable_api_key,
+    issue_tenant_probe_key: Callable[..., Path] = issue_disposable_tenant_probe_key,
     issue_operator_key: Callable[..., Path] = issue_disposable_operator_key,
     execute: Callable[[list[str], object, dict[str, str]], bool] = _execute_local,
     probe: Callable[..., dict] = exercise_owned_disposable,
@@ -321,12 +322,23 @@ def produce_disposable_receipt(
                              executor=lambda args, output: execute(args, output, staged_env))
         if key_path != root / "secrets" / "passport_acceptance_api_key":
             raise ProducerError("Disposable API key escaped the project root")
+        tenant_probe_path = issue_tenant_probe_key(
+            record, plan["surface"], before_probe, inspector=inspector,
+            executor=lambda args, output: execute(args, output, staged_env))
+        if tenant_probe_path != root / "secrets" / "passport_acceptance_tenant_probe_api_key":
+            raise ProducerError("Disposable second tenant key escaped the project root")
         route = probe(record, plan["surface"], _application(gateway_port),
                       now=before_probe, inspector=inspector)
         if (not isinstance(route, dict) or route.get("verified") is not True
             or route.get("flow_execution_verified") is not False
             or not isinstance(route.get("evidence"), dict)
-            or route["evidence"].get("signed_gateway_callback_verified") is not True):
+            or route["evidence"].get("signed_gateway_callback_verified") is not True
+            or route["evidence"].get("organization_id") != ORGANIZATION_ID
+            or route["evidence"].get("unauthenticated_status") not in (401, 403)
+            or route["evidence"].get("cross_tenant_status") != 404
+            or route["evidence"].get("tenant_capability_unauthenticated_status")
+                not in (401, 403)
+            or route["evidence"].get("tenant_capability_status") != 200):
             raise ProducerError("Disposable Rust route receipt is invalid")
         before_flow = read_clock() if clock is not None or now is None else now
         if (before_flow.tzinfo is None

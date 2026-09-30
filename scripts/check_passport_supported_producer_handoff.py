@@ -54,6 +54,8 @@ ROUTE_EVIDENCE_FIELDS = frozenset({
     "callback_receipt_sha256", "callback_bureau_job_id_sha256",
     "callback_private_status", "unsigned_webhook_http_status",
     "signed_callback_path", "signed_gateway_callback_verified", "physical_claim",
+    "organization_id", "unauthenticated_status", "cross_tenant_status",
+    "tenant_capability_unauthenticated_status", "tenant_capability_status",
 })
 CONTAINER_ID = re.compile(r"[0-9a-f]{64}\Z")
 
@@ -206,6 +208,11 @@ def _route_evidence(route: object, gateway_port: int) -> None:
         or evidence.get("signed_gateway_callback_verified") is not True
         or evidence.get("signed_callback_path") != "simulator-to-gateway-to-native"
         or evidence.get("physical_claim") != "not_claimed"
+        or evidence.get("organization_id") != _application(gateway_port)["organization_id"]
+        or evidence.get("unauthenticated_status") not in (401, 403)
+        or evidence.get("cross_tenant_status") != 404
+        or evidence.get("tenant_capability_unauthenticated_status") not in (401, 403)
+        or evidence.get("tenant_capability_status") != 200
         or evidence.get("unsigned_webhook_http_status") != 422
         or evidence.get("callback_private_status") not in {"QUALITY_CHECK", "SHIPPED"}
         or not isinstance(evidence.get("routes"), list)
