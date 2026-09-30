@@ -33,6 +33,9 @@ SHA256 = re.compile(r"[0-9a-f]{64}\Z")
 UI_REPOSITORY = "ghcr.io/elevenid/marty-ui-oss/ui"
 ROOT = Path(__file__).resolve().parents[1]
 VERIFY = ROOT / "scripts/sql/passport-beta-fence-verify.sql"
+TRANSITION_SQL = ROOT / "scripts/sql/passport-beta-rust-owner-transition.sql"
+RUST_OWNER_VERIFY_SQL = ROOT / "scripts/sql/passport-beta-rust-owner-verify.sql"
+DRAIN_SQL = ROOT / "scripts/sql/passport-beta-fence-drain.sql"
 
 
 def require(condition: bool, message: str) -> None:
@@ -194,6 +197,10 @@ def prepare(
         "fence_epoch": epoch,
         "migration_set_sha256": digest,
         "enable_login_sql_sha256": plan["enable_login_sql_sha256"],
+        "transition_sql_sha256": file_sha256(TRANSITION_SQL),
+        "rust_owner_verify_sql_sha256": file_sha256(RUST_OWNER_VERIFY_SQL),
+        "fence_verify_sql_sha256": file_sha256(VERIFY),
+        "drain_sql_sha256": file_sha256(DRAIN_SQL),
         "production_snapshot_sha256": stopped["production_snapshot_sha256"],
         "production_attachments_sha256": stopped["production_attachments_sha256"],
         "stopped_container_ids": stopped["stopped_container_ids"],

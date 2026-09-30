@@ -51,8 +51,17 @@ SIGNED_APPLICATIONS = frozenset({
     "device-registration", "event-stream", "issuance-native", "canvas-sync-worker",
     "gateway", "passport-callback-signer", "passport-beta-bureau",
 })
-INGRESS = frozenset({"cloudflared", "nginx-proxy", "envoy", "gateway", "waltid-nginx"})
+# Gateway binds only the beta host loopback port in this render. Start it with
+# Rust applications so private Flow routes can be proved while the public edge
+# remains stopped.
+INGRESS = frozenset({"cloudflared", "nginx-proxy", "envoy", "waltid-nginx"})
 NEW_SERVICES = frozenset({"passport-callback-signer", "passport-beta-bureau"})
+TRANSITION_SQL_FILES = {
+    "transition_sql_sha256": "passport-beta-rust-owner-transition.sql",
+    "rust_owner_verify_sql_sha256": "passport-beta-rust-owner-verify.sql",
+    "fence_verify_sql_sha256": "passport-beta-fence-verify.sql",
+    "drain_sql_sha256": "passport-beta-fence-drain.sql",
+}
 RUNTIME_ENV = {
     "gateway": {"PASSPORT_NATIVE_GATEWAY_ENABLED": "true",
                 "PASSPORT_PROVIDER_INGRESS_GATEWAY_ENABLED": "false",
@@ -176,6 +185,17 @@ def assert_beta_origin(services: dict[str, Any]) -> None:
     require(BETA_ORIGIN in origins and len(origins) == len(set(origins))
             and set(origins).issubset(allowed),
             "Rendered beta Gateway CORS origins differ")
+
+
+def assert_private_gateway_port(services: dict[str, Any]) -> None:
+    gateway = services.get("gateway")
+    gateway_ports = gateway.get("ports") if isinstance(gateway, dict) else None
+    require(isinstance(gateway_ports, list) and len(gateway_ports) == 1
+            and isinstance(gateway_ports[0], dict)
+            and gateway_ports[0].get("host_ip") == "127.0.0.1"
+            and str(gateway_ports[0].get("target")) == "8000"
+            and gateway_ports[0].get("protocol", "tcp") == "tcp",
+            "Private beta Gateway must bind only the host loopback")
 
 
 def sha256(path: Path) -> str:
@@ -306,6 +326,7 @@ def preflight_maintenance_compose(stack_manifest: Path, source_commit: str,
     services = rendered.get("services")
     require(isinstance(services, dict), "Beta maintenance Compose services are absent")
     assert_beta_origin(services)
+    assert_private_gateway_port(services)
     validate_model(rendered, passport_enabled=True, files=COMPOSE_FILES)
     return {"schema": "marty.passport-beta-maintenance-compose-preflight/v1",
             "verified": True, "source_commit": source_commit}
@@ -313,6 +334,10 @@ def preflight_maintenance_compose(stack_manifest: Path, source_commit: str,
 
 def prepare(handoff: dict[str, Any], maintenance_intent: dict[str, Any],
             rendered: dict[str, Any], ui_rendered: dict[str, Any]) -> dict[str, Any]:
+    for field, filename in TRANSITION_SQL_FILES.items():
+        require(SHA256.fullmatch(str(handoff.get(field))) is not None
+                and handoff[field] == file_sha256(ROOT / "scripts/sql" / filename),
+                f"Protected beta Rust owner SQL changed: {filename}")
     require(handoff.get("schema") == "marty.passport-beta-aggregate-handoff/v1"
             and SHA.fullmatch(str(handoff.get("source_commit"))) is not None
             and DIGEST.fullmatch(str(handoff.get("services_image", "")).split("@")[-1])
@@ -368,6 +393,7 @@ def prepare(handoff: dict[str, Any], maintenance_intent: dict[str, Any],
             and SIGNED_APPLICATIONS.issubset(services),
             "Rendered beta Compose omits required services")
     assert_beta_origin(services)
+    assert_private_gateway_port(services)
     for name in SIGNED_APPLICATIONS:
         service = services[name]
         require(isinstance(service, dict), f"Rendered beta service is invalid: {name}")
@@ -477,6 +503,10 @@ def prepare(handoff: dict[str, Any], maintenance_intent: dict[str, Any],
         "fence_epoch": handoff["fence_epoch"],
         "migration_set_sha256": handoff["migration_set_sha256"],
         "enable_login_sql_sha256": handoff["enable_login_sql_sha256"],
+        "transition_sql_sha256": handoff["transition_sql_sha256"],
+        "rust_owner_verify_sql_sha256": handoff["rust_owner_verify_sql_sha256"],
+        "fence_verify_sql_sha256": handoff["fence_verify_sql_sha256"],
+        "drain_sql_sha256": handoff["drain_sql_sha256"],
         "production_snapshot_sha256": handoff["production_snapshot_sha256"],
         "production_attachments_sha256": handoff["production_attachments_sha256"],
         "services_image": handoff["services_image"],
@@ -558,6 +588,10 @@ def verify_resume_plan(
 ) -> dict[str, Any]:
     """Recheck pinned inputs and a partial Rust generation after app login opens."""
     verify_render_plan(recorded)
+    for field, filename in TRANSITION_SQL_FILES.items():
+        require(SHA256.fullmatch(str(recorded.get(field))) is not None
+                and recorded[field] == file_sha256(ROOT / "scripts/sql" / filename),
+                f"Aggregate resume Rust owner SQL changed: {filename}")
     source = recorded["source_commit"]
     signed = manifest_source(stack_manifest, source)
     require(signed["manifest_sha256"] == recorded.get("stack_manifest_sha256")
@@ -800,10 +834,28 @@ def verify_resume_plan(
               f"{recorded['migration_set_sha256']}|")
     require(marker in {prefix + "true|false", prefix + "false|false"},
             "Aggregate resume native migration marker or role state changed")
-    verify_fence(intent, run)
+    phase = beta_psql("SELECT phase FROM passport_cutover.state WHERE singleton=true",
+                      run, recorded["postgres_container_id"])
+    rust_owner = None
+    if phase == "fully_fenced":
+        verify_fence(intent, run)
+    elif phase == "rust_owner":
+        try:
+            from .verify_passport_beta_rust_owner import verify as verify_rust_owner
+        except ImportError:
+            from verify_passport_beta_rust_owner import verify as verify_rust_owner
+        rust_owner = verify_rust_owner(
+            recorded, runner=run,
+            render_verifier=lambda _: {"verified": True},
+        )
+        require(marker.endswith("true|false") and rust_owner.get("verified") is True,
+                "Aggregate resume Rust owner has no open app role")
+    else:
+        raise ComposePlanError("Aggregate resume passport phase is invalid")
     return {"schema": "marty.passport-beta-aggregate-resume-check/v1",
             "verified": True, "source_commit": source,
             "app_login_enabled": marker.endswith("true|false"),
+            "passport_phase": phase, "rust_owner": rust_owner,
             "ready_services": ready_services, "ready_ui": ready_ui}
 
 

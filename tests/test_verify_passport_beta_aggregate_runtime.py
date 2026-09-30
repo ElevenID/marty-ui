@@ -121,8 +121,11 @@ def fixture(monkeypatch):
     monkeypatch.setattr(runtime, "production_snapshot", lambda _runner: {
         "sha256": "e" * 64})
     monkeypatch.setattr(runtime, "production_attachment_sha256", lambda _runner: "f" * 64)
-    monkeypatch.setattr(runtime, "beta_psql", lambda *_: f"7|{HEAD}|{DIGEST}|true|false")
-    monkeypatch.setattr(runtime, "verify_fence", lambda *_: None)
+    monkeypatch.setattr(runtime, "verify_rust_owner", lambda *_args, **_kwargs: {
+        "verified": True, "source_commit": HEAD,
+        "postgres_container_id": plan["postgres_container_id"],
+        "fence_epoch": "7", "transition_txid": "9",
+    })
     def runner(command):
         if command[:3] == ["docker", "context", "show"]:
             return "desktop-linux"

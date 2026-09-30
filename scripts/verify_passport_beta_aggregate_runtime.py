@@ -14,18 +14,18 @@ try:
     from .prepare_passport_beta_aggregate_compose import (
         RUNTIME_ENV, SIGNED_APPLICATIONS, verify_render_plan,
     )
-    from .prepare_passport_beta_aggregate_handoff import verify_fence
+    from .verify_passport_beta_rust_owner import verify as verify_rust_owner
     from .probe_passport_beta_host import (
-        BETA_PROJECT, HostProbeError, beta_psql, ids, inspect,
+        BETA_PROJECT, HostProbeError, ids, inspect,
         production_attachment_sha256, production_snapshot, run,
     )
 except ImportError:
     from prepare_passport_beta_aggregate_compose import (
         RUNTIME_ENV, SIGNED_APPLICATIONS, verify_render_plan,
     )
-    from prepare_passport_beta_aggregate_handoff import verify_fence
+    from verify_passport_beta_rust_owner import verify as verify_rust_owner
     from probe_passport_beta_host import (
-        BETA_PROJECT, HostProbeError, beta_psql, ids, inspect,
+        BETA_PROJECT, HostProbeError, ids, inspect,
         production_attachment_sha256, production_snapshot, run,
     )
 
@@ -278,17 +278,15 @@ def verify(plan: dict[str, Any], intent: dict[str, Any],
             and re.fullmatch(r"[0-9]+", epoch) is not None
             and SHA256.fullmatch(digest) is not None,
             "Aggregate beta native receipt identity is invalid")
-    sql = (
-        "SELECT (SELECT fence_epoch::text || '|' || source_commit || '|' || "
-        "migration_set_sha256 FROM passport_cutover.native_migration_receipt "
-        "WHERE singleton=true) || '|' || "
-        "(SELECT rolcanlogin::text FROM pg_roles WHERE rolname='marty') || '|' || "
-        "(SELECT rolcanlogin::text FROM pg_roles "
-        "WHERE rolname='marty_beta_migrator')"
-    )
-    require(beta_psql(sql, runner, container) == f"{epoch}|{source}|{digest}|true|false",
-            "Aggregate beta native SQL marker or app login differs")
-    verify_fence(intent, runner)
+    rust_owner = verify_rust_owner(plan, runner=runner,
+                                   render_verifier=lambda _: render)
+    require(rust_owner.get("verified") is True
+            and rust_owner.get("source_commit") == source
+            and rust_owner.get("postgres_container_id") == container
+            and str(rust_owner.get("fence_epoch")) == epoch
+            and re.fullmatch(r"[0-9]+", str(rust_owner.get("transition_txid")))
+                is not None,
+            "Aggregate beta Rust owner proof differs from signed plan")
     require(production_snapshot(runner).get("sha256")
             == plan.get("production_snapshot_sha256"),
             "Production changed during aggregate beta verification")
@@ -300,6 +298,7 @@ def verify(plan: dict[str, Any], intent: dict[str, Any],
             "beta_origin": plan["beta_origin"],
             "postgres_container_id": container,
             "production_snapshot_sha256": plan["production_snapshot_sha256"],
+            "rust_owner": rust_owner,
             "beta_services": sorted(observed), "ui_container_id": ui["Id"],
             "beta_runtime": {name: runtime_identity(observed[name])
                              for name in sorted(observed)},

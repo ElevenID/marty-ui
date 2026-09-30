@@ -54,6 +54,7 @@
     {"method":"POST","path":"/v1/flows/verify","permission":"verification:execute","resource":"verification"},
     {"method":"PATCH","path":"/v1/flows/verify","permission":null,"resource":null},
     {"method":"POST","path":"/v1/flows/definitions/f1/activate","permission":"flow-definition:activate","resource":"flow-definition"},
+    {"method":"POST","path":"/v1/flows/definitions/f1/validate","permission":"flow-definition:view","resource":"flow-definition"},
     {"method":"POST","path":"/v1/flows/instances/i1/advance","permission":"flow-instance:start","resource":"flow-instance"},
     {"method":"DELETE","path":"/v1/flows/definitions/f1","permission":"flow-definition:delete","resource":"flow-definition"},
     {"method":"POST","path":"/v1/organizations/11111111-1111-1111-1111-111111111111/transfer-ownership","permission":"organization:transfer-ownership","resource":"organization"},

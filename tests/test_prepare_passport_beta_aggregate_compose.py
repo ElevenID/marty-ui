@@ -10,6 +10,7 @@ from types import SimpleNamespace
 import pytest
 
 from scripts import prepare_passport_beta_aggregate_compose as compose
+from scripts import verify_passport_beta_rust_owner as rust_owner
 from scripts.prepare_passport_beta_aggregate_compose import (
     BETA_ORIGIN, ComposePlanError, ISSUANCE_IMAGE, RUNTIME_ENV, SERVICES_IMAGE, UI_IMAGE,
     SIGNED_APPLICATIONS, NEW_SERVICES, prepare,
@@ -34,7 +35,9 @@ def test_maintenance_preflight_reuses_full_credential_validator(monkeypatch):
     monkeypatch.setattr(compose, "manifest_source", lambda *_: signed)
     monkeypatch.setattr(compose, "inspect", lambda *_: docs)
     monkeypatch.setattr(compose, "render_candidate",
-                        lambda handoff: ({"services": {"auth": {}}}, {}, {}))
+                        lambda handoff: ({"services": {"auth": {}, "gateway": {
+                            "ports": [{"host_ip": "127.0.0.1", "target": 8000}]}}},
+                                         {}, {}))
     monkeypatch.setattr(compose, "assert_beta_origin",
                         lambda services: observed.append("origin"))
     monkeypatch.setattr(compose, "validate_model",
@@ -78,6 +81,8 @@ def candidate():
         "native_receipt_sha256": "4" * 64,
         "fence_epoch": "7", "migration_set_sha256": "5" * 64,
         "enable_login_sql_sha256": "6" * 64,
+        **{field: compose.file_sha256(compose.ROOT / "scripts/sql" / filename)
+           for field, filename in compose.TRANSITION_SQL_FILES.items()},
         "production_snapshot_sha256": "7" * 64,
         "production_attachments_sha256": "8" * 64,
         "build_only_artifacts": {
@@ -127,6 +132,8 @@ def candidate():
         "OIDC_POST_LOGOUT_REDIRECT_URI": BETA_ORIGIN + "/",
     })
     services["gateway"]["environment"]["ISSUER_BASE_URL"] = BETA_ORIGIN
+    services["gateway"]["ports"] = [{"host_ip": "127.0.0.1", "target": 8000,
+                                      "published": "8000", "protocol": "tcp"}]
     services["gateway"]["environment"]["CORS_ORIGINS"] = (
         BETA_ORIGIN + ",http://localhost:9080,http://localhost:3000,http://localhost:5173")
     services["flow"]["environment"]["PUBLIC_BASE_URL"] = BETA_ORIGIN
@@ -157,13 +164,21 @@ def test_rendered_compose_assigns_signed_rust_start_groups():
     assert plan["schema"] == "marty.passport-beta-aggregate-compose-plan/v1"
     assert plan["beta_origin"] == BETA_ORIGIN
     assert plan["schema_startup_mode"] == "validate"
-    assert "gateway" in plan["recreate_ingress_last"]
+    assert "gateway" in plan["recreate_applications"]
     assert "cloudflared" in plan["restart_ingress_last"]
     assert "flow" in plan["recreate_applications"]
     assert "postgres" not in plan["target_services"]
     assert plan["preserved_infrastructure"] == ["openbao"]
     assert "openbao" not in plan["restart_infrastructure"]
     assert plan["ui_project"] == "elevenid-beta-ui"
+
+
+@pytest.mark.parametrize("field", compose.TRANSITION_SQL_FILES)
+def test_rust_owner_plan_rejects_changed_protected_sql(field):
+    handoff, intent, rendered, ui = candidate()
+    handoff[field] = "0" * 64
+    with pytest.raises(ComposePlanError, match="Rust owner SQL changed"):
+        prepare(handoff, intent, rendered, ui)
 
 
 @pytest.mark.parametrize("service,key,value", [
@@ -205,6 +220,13 @@ def test_rendered_compose_rejects_wrong_image_and_public_simulator_port():
     rendered["services"]["signing-keys"]["image"] = handoff["services_image"]
     rendered["services"]["passport-beta-bureau"]["ports"] = [{"published": "8020"}]
     with pytest.raises(ComposePlanError, match="publishes a port"):
+        prepare(handoff, intent, rendered, ui)
+
+
+def test_private_gateway_cannot_start_with_public_host_port():
+    handoff, intent, rendered, ui = candidate()
+    rendered["services"]["gateway"]["ports"][0]["host_ip"] = "0.0.0.0"
+    with pytest.raises(ComposePlanError, match="Gateway must bind only"):
         prepare(handoff, intent, rendered, ui)
 
 
@@ -377,6 +399,8 @@ def test_resume_accepts_partial_signed_generation_after_login(monkeypatch, tmp_p
                       "maintenance.intent.json": "0" * 64,
                       "passport-beta-db-enable-app-login.sql":
                           plan["enable_login_sql_sha256"]}
+    receipt_hashes.update({filename: plan[field]
+                           for field, filename in compose.TRANSITION_SQL_FILES.items()})
     snapshot_path = tmp_path / "cutover-snapshot.json"
     snapshot_path.write_text("{}", encoding="utf-8")
     report_path = tmp_path / "cutover-report.json"
@@ -423,7 +447,8 @@ def test_resume_accepts_partial_signed_generation_after_login(monkeypatch, tmp_p
     monkeypatch.setattr(compose, "inspect", lambda container_id, _: records[container_id])
     monkeypatch.setattr(compose, "ids", lambda project, _: (
         list(records) if project == "elevenid-beta" else []))
-    monkeypatch.setattr(compose, "beta_psql", lambda *_: (
+    monkeypatch.setattr(compose, "beta_psql", lambda query, *_: (
+        "fully_fenced" if query.startswith("SELECT phase") else
         f"{plan['fence_epoch']}|{plan['source_commit']}|"
         f"{plan['migration_set_sha256']}|true|false"))
     monkeypatch.setattr(compose, "verify_fence", lambda *_: None)
@@ -432,6 +457,18 @@ def test_resume_accepts_partial_signed_generation_after_login(monkeypatch, tmp_p
                                           tmp_path / "native")
     assert evidence["app_login_enabled"] is True
     assert evidence["ready_services"] == ["flow"]
+    monkeypatch.setattr(compose, "beta_psql", lambda query, *_: (
+        "rust_owner" if query.startswith("SELECT phase") else
+        f"{plan['fence_epoch']}|{plan['source_commit']}|"
+        f"{plan['migration_set_sha256']}|true|false"))
+    monkeypatch.setattr(rust_owner, "verify", lambda *_args, **_kwargs: {
+        "verified": True, "transition_txid": "9"})
+    resumed_owner = compose.verify_resume_plan(plan, intent, tmp_path / "stack",
+                                               tmp_path / "fence",
+                                               tmp_path / "maintenance",
+                                               tmp_path / "native")
+    assert resumed_owner["passport_phase"] == "rust_owner"
+    assert resumed_owner["rust_owner"]["transition_txid"] == "9"
     records[new_flow_id]["NetworkSettings"]["Networks"] = {}
     disconnected = compose.verify_resume_plan(plan, intent, tmp_path / "stack",
                                               tmp_path / "fence",
