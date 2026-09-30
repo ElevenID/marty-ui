@@ -9,7 +9,7 @@ const { spawnSync } = require('node:child_process');
 const test = require('node:test');
 
 const { verifyNegativeMedia, readPrivatePlan, validatePreliminary, validateLiveInstance,
-  hideRecordedPage, revealRedactedPage } = require('./audit-beta-physical-passport-flow');
+  hideRecordedPage, revealRedactedPage, requireDirectBetaTransport } = require('./audit-beta-physical-passport-flow');
 const routes = require('../../contracts/issuance-physical-passport-native.json').routes;
 const steps = [
   'accept_application', 'validate_evidence', 'approval_decision',
@@ -170,6 +170,12 @@ function fixture() {
   };
   return { artifactDir, deployment, report, flow, privatePlan };
 }
+
+test('D-12 rejects the localhost beta proxy before recording', () => {
+  assert.throws(() => requireDirectBetaTransport({ BETA_LOCAL_PROXY: '1' }),
+    /direct beta TLS and DNS/);
+  requireDirectBetaTransport({});
+});
 
 test('D-12 preliminary report requires exact simulator lineage and job proof', () => {
   const { artifactDir, deployment, report, flow, privatePlan } = fixture();
