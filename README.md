@@ -336,6 +336,10 @@ npm install
 npm run dev
 ```
 
+Rust dev and test builds use line-table debug information. For full local-variable
+inspection in a debugger, run `cargo build --profile debugging` or
+`cargo test --profile debugging` from `rust/`.
+
 Useful helper targets:
 
 ```bash
