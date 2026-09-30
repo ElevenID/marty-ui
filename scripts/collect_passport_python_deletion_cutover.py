@@ -15,11 +15,13 @@ from typing import Any
 try:
     from .check_passport_beta_fence_authority import protected_file, protected_source
     from .probe_passport_beta_cutover_snapshot import digest
+    from .probe_passport_beta_fence_direct_writes import UNRELATED_WRITES
     from .probe_passport_beta_host import HostProbeError, run
     from .verify_passport_beta_protected_cutover import checked_run, command, utc
 except ImportError:
     from check_passport_beta_fence_authority import protected_file, protected_source
     from probe_passport_beta_cutover_snapshot import digest
+    from probe_passport_beta_fence_direct_writes import UNRELATED_WRITES
     from probe_passport_beta_host import HostProbeError, run
     from verify_passport_beta_protected_cutover import checked_run, command, utc
 
@@ -131,10 +133,23 @@ def collect(
             "Final beta cutover differs from protected predeletion acceptance")
     prior_probe = fence.get("direct_database_probe")
     final_probe = snapshot.get("direct_database_probe")
+    first_probe = installation.get("direct_database_probe")
     counts = snapshot.get("counts")
-    require(isinstance(prior_probe, dict) and isinstance(final_probe, dict)
+    require(isinstance(first_probe, dict)
+            and isinstance(prior_probe, dict) and isinstance(final_probe, dict)
+            and first_probe.get("unrelated_writes") == UNRELATED_WRITES
+            and prior_probe.get("unrelated_writes") == UNRELATED_WRITES
+            and final_probe.get("unrelated_writes") == UNRELATED_WRITES
             and isinstance(counts, dict)
             and type(legacy.get("drain_watermark")) is int
+            and type(prior_probe.get("observation_watermark")) is int
+            and legacy["drain_watermark"]
+                == prior_probe.get("observation_watermark")
+            and type(legacy.get("fence_watermark")) is int
+            and legacy["fence_watermark"] == snapshot.get("fence_epoch")
+            and legacy.get("fence_enabled_at_utc")
+                == installation.get("fence_installed_at_utc")
+                == snapshot.get("fence_installed_at_utc")
             and type(final_probe.get("observation_watermark")) is int
             and final_probe["observation_watermark"] > legacy["drain_watermark"]
             and type(snapshot.get("observation_watermark")) is int
@@ -143,8 +158,14 @@ def collect(
             and SHA256.fullmatch(str(prior_probe.get("receipt_sha256"))) is not None
             and SHA256.fullmatch(str(final_probe.get("receipt_sha256"))) is not None
             and final_probe["receipt_sha256"] != prior_probe["receipt_sha256"]
+            and utc(installation.get("fence_installed_at_utc"))
+                < utc(first_probe.get("observed_at_utc"))
+            and utc(first_probe.get("observed_at_utc"))
+                < utc(prior_probe.get("observed_at_utc"))
             and utc(prior_probe.get("observed_at_utc"))
+                <= utc(legacy.get("drain_checked_at_utc"))
                 < utc(final_probe.get("observed_at_utc"))
+            and utc(final_probe.get("observed_at_utc"))
                 <= utc(snapshot.get("observed_at_utc"))
                 <= checked_at
             and utc(legacy.get("drain_checked_at_utc")) < checked_at

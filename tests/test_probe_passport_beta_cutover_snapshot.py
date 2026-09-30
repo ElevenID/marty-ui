@@ -50,13 +50,19 @@ def evidence() -> tuple[dict, dict, dict]:
              "session_user": "marty", "current_user": "marty",
              "probe_nonce": "a" * 32,
              "rejections": {surface: {"valid_without_fence": True, "sqlstate": "55000",
-                         "message": message} for surface, message in snapshot.ERRORS.items()}}
+                         "message": message} for surface, message in snapshot.ERRORS.items()},
+             "unrelated_writes": {
+                 "issuance_transactions": {"verified": True, "rolled_back": True},
+                 "non_passport_flow_definitions": {"verified": True,
+                                                   "rolled_back": True},
+             }}
     first["receipt_sha256"] = snapshot.digest(first)
     installation = {
         "schema": "marty.passport-beta-fence-installation/v1",
         "postgres_container_id": POSTGRES,
         "postgres_system_identifier": "12345", "database_oid": "67890",
         "fence": FENCE, "direct_database_probe": first,
+        "fence_installed_at_utc": "2026-09-29T00:00:00.000Z",
         "source_commit": "a" * 40,
         "approved_target_observation_sha256": "f" * 64,
         "beta_services": observed["beta"]["services"],
@@ -102,6 +108,7 @@ def test_snapshot_binds_zero_job_beta_to_fresh_write_probe() -> None:
     assert result["writer_container_id"] == WRITER
     assert result["writer_generation"] == 0
     assert result["installation_receipt_sha256"] == snapshot.digest(installation)
+    assert result["fence_installed_at_utc"] == installation["fence_installed_at_utc"]
     assert result["counts"]["unreadable_artifact_count"] == 0
     assert result["observation_watermark"] > direct["observation_watermark"]
     assert result["snapshot_sha256"] == snapshot.digest({
@@ -133,12 +140,39 @@ def test_snapshot_rejects_stale_direct_probe() -> None:
         collect_fixture(installation, observed, direct)
 
 
+def test_snapshot_rejects_fence_timestamp_after_first_probe() -> None:
+    installation, observed, direct = evidence()
+    installation["fence_installed_at_utc"] = "2026-09-29T00:00:01.000Z"
+    with pytest.raises(HostProbeError, match="Installed fence did not precede"):
+        collect_fixture(installation, observed, direct)
+
+
 def test_snapshot_rejects_forged_first_probe_rejection() -> None:
     installation, observed, direct = evidence()
     installation["direct_database_probe"]["rejections"]["physical_document_jobs"]["message"] = "wrong"
     installation["direct_database_probe"]["receipt_sha256"] = snapshot.digest({
         key: value for key, value in installation["direct_database_probe"].items()
         if key != "receipt_sha256"
+    })
+    with pytest.raises(HostProbeError, match="Direct beta fence probe receipt"):
+        collect_fixture(installation, observed, direct)
+
+
+def test_snapshot_requires_unrelated_writes_in_both_probes() -> None:
+    installation, observed, direct = evidence()
+    installation["direct_database_probe"]["unrelated_writes"].pop(
+        "issuance_transactions")
+    installation["direct_database_probe"]["receipt_sha256"] = snapshot.digest({
+        key: value for key, value in installation["direct_database_probe"].items()
+        if key != "receipt_sha256"
+    })
+    with pytest.raises(HostProbeError, match="Direct beta fence probe receipt"):
+        collect_fixture(installation, observed, direct)
+
+    installation, observed, direct = evidence()
+    direct["unrelated_writes"]["non_passport_flow_definitions"]["verified"] = False
+    direct["receipt_sha256"] = snapshot.digest({
+        key: value for key, value in direct.items() if key != "receipt_sha256"
     })
     with pytest.raises(HostProbeError, match="Direct beta fence probe receipt"):
         collect_fixture(installation, observed, direct)

@@ -8,7 +8,7 @@ import json
 import pytest
 
 from scripts.probe_passport_beta_fence_direct_writes import (
-    ERRORS, FenceProbeError, verify_receipt,
+    ERRORS, UNRELATED_WRITES, FenceProbeError, verify_receipt,
 )
 
 
@@ -42,6 +42,7 @@ def receipt_bytes(**changes: object) -> bytes:
                       "message": message}
             for surface, message in ERRORS.items()
         },
+        "unrelated_writes": UNRELATED_WRITES,
     }
     receipt.update(changes)
     receipt["receipt_sha256"] = hashlib.sha256(
@@ -69,6 +70,11 @@ def test_verifies_exact_rejections_and_canonical_digest() -> None:
     {"fence_epoch": True},
     {"probe_nonce": "invalid"},
     {"docker_context": "another-context"},
+    {"unrelated_writes": {}},
+    {"unrelated_writes": {
+        surface: {"verified": 1, "rolled_back": True}
+        for surface in UNRELATED_WRITES
+    }},
 ])
 def test_rejects_altered_observation_even_with_recomputed_hash(
     changes: dict[str, object],

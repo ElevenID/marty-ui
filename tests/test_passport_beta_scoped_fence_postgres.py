@@ -13,7 +13,7 @@ import uuid
 import pytest
 
 from scripts.probe_passport_beta_fence_direct_writes import (
-    FenceProbeError, candidate_sql, probe_direct_writes,
+    FenceProbeError, candidate_sql, probe_direct_writes, unrelated_sql,
 )
 from scripts.prepare_passport_beta_native_migrations import (
     build_sql, migration_set_sha256,
@@ -710,16 +710,32 @@ def test_direct_writer_probe_uses_valid_candidates_and_fence_errors(database: st
     }
     for statement in candidate_sql("a" * 32).values():
         sql(database, f"BEGIN; {statement}; ROLLBACK;")
+    for statement in unrelated_sql("a" * 32).values():
+        assert sql(database, f"BEGIN; {statement}; ROLLBACK;").splitlines() == [
+            "BEGIN", "1", "ROLLBACK",
+        ]
     with pytest.raises(FenceProbeError):
         probe_direct_writes(container_id, **target)
     assert script(database, INSTALL).returncode == 0
     target["expected_fence_epoch"] = int(sql(database, "SELECT epoch FROM passport_cutover.state"))
     first = probe_direct_writes(container_id, **target)
     second = probe_direct_writes(container_id, **target)
+    installed_at = sql(database, """
+        SELECT to_char(installed_at AT TIME ZONE 'UTC', 'YYYY-MM-DD') || 'T' ||
+               to_char(installed_at AT TIME ZONE 'UTC', 'HH24:MI:SS.MS') || 'Z'
+        FROM passport_cutover.state WHERE singleton
+    """).strip()
+    assert installed_at < first["observed_at_utc"]
     assert set(first["rejections"]) == {
         "physical_document_jobs", "physical_flow_definitions",
         "physical_flow_instances",
     }
+    assert first["unrelated_writes"] == {
+        "issuance_transactions": {"verified": True, "rolled_back": True},
+        "non_passport_flow_definitions": {"verified": True, "rolled_back": True},
+    }
+    assert sql(database, "SELECT count(*) FROM issuance_service.issuance_transactions").strip() == "0"
+    assert sql(database, "SELECT count(*) FROM flow_service.flow_definitions").strip() == "0"
     assert first["session_user"] == first["current_user"] == "marty"
     assert first["database_uid"] == f"postgresql:{system_id}:{database_oid}"
     assert first["fence_epoch"] == target["expected_fence_epoch"]

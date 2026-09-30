@@ -30,8 +30,13 @@ RECEIPT_FIELDS = frozenset({
     "schema", "method", "docker_context", "docker_daemon_id",
     "postgres_container_id", "database_uid", "fence_epoch",
     "observation_watermark", "observed_at_utc", "session_user",
-    "current_user", "probe_nonce", "rejections", "receipt_sha256",
+    "current_user", "probe_nonce", "rejections", "unrelated_writes",
+    "receipt_sha256",
 })
+UNRELATED_WRITES = {
+    "issuance_transactions": {"verified": True, "rolled_back": True},
+    "non_passport_flow_definitions": {"verified": True, "rolled_back": True},
+}
 
 
 class FenceProbeError(ValueError):
@@ -77,6 +82,38 @@ def candidate_sql(token: str) -> dict[str, str]:
             VALUES ('{flow}', 'fence-probe-definition', 'fence-probe',
                 'in_progress', '{{"physical_document_job":"{job}"}}',
                 '[]', 'applicant', clock_timestamp(), clock_timestamp(), '[]')
+        """,
+    }
+
+
+def unrelated_sql(token: str) -> dict[str, str]:
+    """Exercise real, non-passport tables inside rollback-only transactions."""
+    if re.fullmatch(r"[0-9a-f]{32}", token) is None:
+        raise FenceProbeError("Unrelated write probe token is invalid")
+    identifier = f"fence-probe-{token}"
+    flow_identifier = f"probe-{token[:30]}"
+    return {
+        "issuance_transactions": f"""
+            WITH inserted AS (
+                INSERT INTO issuance_service.issuance_transactions
+                    (id, organization_id, credential_template_id, status,
+                     pre_auth_code, claims, issuer_mode, created_at, expires_at)
+                VALUES ('{identifier}', 'fence-probe', 'fence-probe',
+                    'pending', '{identifier}', '{{}}', 'org_managed',
+                    clock_timestamp(), clock_timestamp() + interval '5 minutes')
+                RETURNING id
+            ) SELECT count(*) FROM inserted
+        """,
+        "non_passport_flow_definitions": f"""
+            WITH inserted AS (
+                INSERT INTO flow_service.flow_definitions
+                    (id, organization_id, name, status, flow_type,
+                     steps, transitions, created_at, updated_at)
+                VALUES ('{flow_identifier}', 'fence-probe', 'Fence probe',
+                    'active', 'verification', '[]', '[]',
+                    clock_timestamp(), clock_timestamp())
+                RETURNING id
+            ) SELECT count(*) FROM inserted
         """,
     }
 
@@ -162,6 +199,19 @@ def probe_direct_writes(
         rejections[surface] = {
             "valid_without_fence": True, "sqlstate": "55000", "message": expected,
         }
+    unrelated_writes: dict[str, dict[str, Any]] = {}
+    for surface, statement in unrelated_sql(nonce).items():
+        query = "BEGIN; SET LOCAL statement_timeout='5s'; " + statement + "; ROLLBACK;"
+        result = runner([
+            "docker", "exec", postgres_container_id, "psql", "-X", "-qAt",
+            "-U", "marty", "-d", "marty", "-v", "ON_ERROR_STOP=1",
+            "-c", query,
+        ])
+        if result.returncode != 0 or result.stdout.strip() != "1":
+            raise FenceProbeError(f"Unrelated beta write is blocked: {surface}")
+        unrelated_writes[surface] = {"verified": True, "rolled_back": True}
+    if unrelated_writes != UNRELATED_WRITES:
+        raise FenceProbeError("Unrelated beta write proof is incomplete")
     assert_target()
     observation = _stdout([
         "docker", "exec", postgres_container_id, "psql", "-X", "-qAt",
@@ -186,6 +236,7 @@ def probe_direct_writes(
         "session_user": "marty", "current_user": "marty",
         "probe_nonce": nonce,
         "rejections": rejections,
+        "unrelated_writes": unrelated_writes,
     }
     receipt["receipt_sha256"] = hashlib.sha256(
         json.dumps(receipt, sort_keys=True, separators=(",", ":")).encode()
@@ -235,6 +286,7 @@ def verify_receipt(
                       "message": message}
             for surface, message in ERRORS.items()
         },
+        "unrelated_writes": UNRELATED_WRITES,
     }
     if any(receipt.get(key) != value for key, value in expected.items()):
         raise FenceProbeError("Direct write probe receipt differs from target or rejection")
@@ -247,6 +299,16 @@ def verify_receipt(
                 for rejection in receipt["rejections"].values()
             )):
         raise FenceProbeError("Direct write probe receipt rejections are invalid")
+    if (not isinstance(receipt["unrelated_writes"], dict)
+            or receipt["unrelated_writes"].keys() != UNRELATED_WRITES.keys()
+            or any(
+                not isinstance(proof, dict)
+                or proof.keys() != {"verified", "rolled_back"}
+                or proof["verified"] is not True
+                or proof["rolled_back"] is not True
+                for proof in receipt["unrelated_writes"].values()
+            )):
+        raise FenceProbeError("Direct write probe unrelated writes are invalid")
     if (DOCKER_ID.fullmatch(postgres_container_id) is None
             or DECIMAL.fullmatch(expected_system_identifier) is None
             or DECIMAL.fullmatch(expected_database_oid) is None

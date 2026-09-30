@@ -9,6 +9,7 @@ import json
 import pytest
 
 from scripts import collect_passport_python_deletion_cutover as producer
+from scripts.probe_passport_beta_fence_direct_writes import UNRELATED_WRITES
 from scripts.probe_passport_beta_cutover_snapshot import digest
 
 
@@ -24,10 +25,13 @@ def fixture():
              "observed_at_utc": "2026-09-29T02:00:00.000Z"}
     final = {"observation_watermark": 190, "receipt_sha256": "3" * 64,
              "observed_at_utc": "2026-09-29T03:00:00.000Z"}
+    for probe in (first, prior, final):
+        probe["unrelated_writes"] = UNRELATED_WRITES
     installation = {
         "schema": "marty.passport-beta-fence-installation/v1",
         "source_commit": HEAD, "credentials_deletion_head": DELETION,
         "direct_database_probe": first,
+        "fence_installed_at_utc": "2026-09-29T00:59:00.000Z",
         "production_snapshot_sha256": "4" * 64,
         "production_attachments_sha256": "5" * 64,
     }
@@ -45,6 +49,7 @@ def fixture():
         "writer_started_at": "2026-09-29T00:00:00Z",
         "writer_generation": 0,
         "fence_epoch": 9,
+        "fence_installed_at_utc": installation["fence_installed_at_utc"],
         "fence_verification_sha256": "8" * 64,
         "observation_watermark": 200,
         "observed_at_utc": "2026-09-29T03:05:00.000Z",
@@ -68,7 +73,9 @@ def fixture():
         "writer_image_digest": snapshot["writer_image_digest"],
         "writer_generation_at_drain": 0,
         "writer_database_role": "marty",
-        "drain_watermark": 175,
+        "fence_watermark": 9,
+        "fence_enabled_at_utc": installation["fence_installed_at_utc"],
+        "drain_watermark": 150,
         "drain_snapshot_attestation_sha256": "a" * 64,
         "drain_checked_at_utc": "2026-09-29T02:10:00Z",
     }
@@ -166,4 +173,36 @@ def test_unbound_fence_installation_is_rejected():
     supported, predeletion, snapshot, installation = fixture()
     predeletion["fence_installation_receipt_sha256"] = "f" * 64
     with pytest.raises(producer.HostProbeError, match="attested predeletion installation"):
+        run(supported, predeletion, snapshot, installation)
+
+
+def test_predeletion_drain_watermark_must_be_the_direct_probe_watermark():
+    supported, predeletion, snapshot, installation = fixture()
+    predeletion["probes"]["legacy_drain"]["evidence"]["legacy_source"][
+        "drain_watermark"] += 1
+    with pytest.raises(producer.HostProbeError, match="stale"):
+        run(supported, predeletion, snapshot, installation)
+
+
+def test_predeletion_fence_time_must_be_database_installed_time():
+    supported, predeletion, snapshot, installation = fixture()
+    predeletion["probes"]["legacy_drain"]["evidence"]["legacy_source"][
+        "fence_enabled_at_utc"] = "2026-09-29T00:58:00.000Z"
+    with pytest.raises(producer.HostProbeError, match="stale"):
+        run(supported, predeletion, snapshot, installation)
+
+
+def test_predeletion_drain_must_follow_its_write_probe():
+    supported, predeletion, snapshot, installation = fixture()
+    predeletion["probes"]["legacy_drain"]["evidence"]["legacy_source"][
+        "drain_checked_at_utc"] = "2026-09-29T01:59:00Z"
+    with pytest.raises(producer.HostProbeError, match="stale"):
+        run(supported, predeletion, snapshot, installation)
+
+
+def test_predeletion_unrelated_write_proof_is_required():
+    supported, predeletion, snapshot, installation = fixture()
+    predeletion["probes"]["legacy_drain"]["evidence"]["passport_write_fence"][
+        "direct_database_probe"]["unrelated_writes"] = {}
+    with pytest.raises(producer.HostProbeError, match="stale"):
         run(supported, predeletion, snapshot, installation)
