@@ -268,7 +268,7 @@ def observe_compose(
     disposable_project(project, surface)
     observed: dict[str, Any] = {}
     for service in COMPOSE_SERVICES:
-        ids = runner(["docker", "ps", "-aq", "--filter",
+        ids = runner(["docker", "ps", "-aq", "--no-trunc", "--filter",
                       f"label=com.docker.compose.project={project}", "--filter",
                       f"label=com.docker.compose.service={service}"]).split()
         require(len(ids) == 1, f"{surface} {service} container is missing or ambiguous")
@@ -321,7 +321,7 @@ def observe_compose(
                     and not any(value for value in record.get("NetworkSettings", {})
                                 .get("Ports", {}).values()),
                     f"{surface} Gateway bypasses disposable HTTPS edge")
-    ids = runner(["docker", "ps", "-aq", "--filter",
+    ids = runner(["docker", "ps", "-aq", "--no-trunc", "--filter",
                   f"label=com.docker.compose.project={project}", "--filter",
                   "label=com.docker.compose.service=edge"]).split()
     require(len(ids) == 1, f"{surface} HTTPS edge is missing or ambiguous")
