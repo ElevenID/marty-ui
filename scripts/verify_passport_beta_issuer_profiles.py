@@ -12,6 +12,7 @@ import binascii
 import hashlib
 import hmac
 import json
+import os
 import re
 import secrets
 import subprocess
@@ -47,8 +48,12 @@ def _post_in_container(container_id: str, route: str, body: dict[str, Any]) -> d
         f'--data-binary @- http://127.0.0.1:8017{route}',
     ]
     try:
-        result = subprocess.run(command, input=payload, capture_output=True,
-                                timeout=30, check=True)
+        environment = os.environ.copy()
+        environment["DOCKER_HOST"] = "unix:///var/run/docker.sock"
+        for name in ("DOCKER_CONTEXT", "DOCKER_TLS_VERIFY", "DOCKER_CERT_PATH"):
+            environment.pop(name, None)
+        result = subprocess.run(command, input=payload, env=environment,
+                                capture_output=True, timeout=30, check=True)
         if len(result.stdout) > 256 * 1024:
             raise IssuerProfileEvidenceError("Private issuer response is oversized")
         response = json.loads(result.stdout)

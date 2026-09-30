@@ -60,7 +60,11 @@ def setup_report(selected: dict) -> dict:
                      "csca_issuer_did_sha256": did_hash,
                      "dsc_issuer_did_sha256": did_hash,
                      "csca_http_status": 200, "dsc_http_status": 200,
-                     "chain_verified_by": "openssl-x509-strict"},
+                     "chain_verified_by": "openssl-x509-strict",
+                     "managed_kms_custody_verified": True,
+                     "chain_verified": True,
+                     "csca_issuer_profile_commitment": "3" * 64,
+                     "dsc_issuer_profile_commitment": "4" * 64},
     }
 
 
@@ -161,6 +165,8 @@ def test_failed_certificate_setup_forces_teardown(tmp_path: Path) -> None:
     {"csca_issuer_did_sha256": "3" * 64},
     {"dsc_issuer_did_sha256": "4" * 64},
     {"dsc_certificate_sha256": "1" * 64},
+    {"managed_kms_custody_verified": False},
+    {"csca_issuer_profile_commitment": "4" * 64},
 ])
 def test_invalid_certificate_proof_forces_teardown(
     tmp_path: Path, invalid_evidence: dict,

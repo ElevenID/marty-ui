@@ -142,14 +142,22 @@ def test_live_profile_certificates_bind_to_governed_chain() -> None:
 def test_private_resolution_keeps_token_inside_selected_container(monkeypatch) -> None:
     calls = []
 
-    def run(command, *, input, capture_output, timeout, check):
-        calls.append((command, input, capture_output, timeout, check))
+    monkeypatch.setenv("DOCKER_HOST", "tcp://foreign.example:2376")
+    monkeypatch.setenv("DOCKER_CONTEXT", "foreign")
+    monkeypatch.setenv("DOCKER_TLS_VERIFY", "1")
+    monkeypatch.setenv("DOCKER_CERT_PATH", "/foreign/certs")
+
+    def run(command, *, input, env, capture_output, timeout, check):
+        calls.append((command, input, env, capture_output, timeout, check))
         return type("Result", (), {"stdout": b'{"ok":true}'})()
 
     monkeypatch.setattr(profile_evidence.subprocess, "run", run)
     result = resolve_in_container("a" * 64, "org-a", "did:web:beta.example:org:passport", "csca")
     assert result == {"ok": True}
-    command, body, captured, timeout, check = calls[0]
+    command, body, environment, captured, timeout, check = calls[0]
+    assert environment["DOCKER_HOST"] == "unix:///var/run/docker.sock"
+    assert all(name not in environment for name in (
+        "DOCKER_CONTEXT", "DOCKER_TLS_VERIFY", "DOCKER_CERT_PATH"))
     assert command[:4] == ["docker", "exec", "-i", "a" * 64]
     assert "127.0.0.1:8017/internal/compat/resolve-issuer-did" in command[-1]
     assert "SIGNING_KEYS_INTERNAL_API_KEY_FILE" in command[-1]
@@ -169,7 +177,7 @@ def test_private_resolution_rejects_invalid_container_before_docker(monkeypatch)
 def test_sign_transport_sends_challenge_in_body_only(monkeypatch) -> None:
     captured = []
 
-    def run(command, *, input, capture_output, timeout, check):
+    def run(command, *, input, env, capture_output, timeout, check):
         captured.append((command, input))
         return type("Result", (), {"stdout": b'{"ok":true}'})()
 

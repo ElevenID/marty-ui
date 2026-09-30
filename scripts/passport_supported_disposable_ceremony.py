@@ -27,10 +27,16 @@ if __package__:
     from .check_passport_supported_compose_ownership import _inspect, _labels
     from .check_passport_supported_rust_model import PROJECT
     from .probe_passport_beta_chain import exercise_with_authorities
+    from .verify_passport_beta_issuer_profiles import (
+        resolve_in_container, sign_in_container, verify_live_signatures,
+    )
 else:
     from check_passport_supported_compose_ownership import _inspect, _labels
     from check_passport_supported_rust_model import PROJECT
     from probe_passport_beta_chain import exercise_with_authorities
+    from verify_passport_beta_issuer_profiles import (
+        resolve_in_container, sign_in_container, verify_live_signatures,
+    )
 
 
 IDENTITY_ROUTE = "/v1/signing-keys/issuer-identities"
@@ -310,8 +316,11 @@ def bootstrap_certificate_chain(
     inspect: Callable[[list[str]], str] = _local_inspect,
     request: Callable[[dict[str, Any], str, dict[str, Any], str, str],
                       tuple[int, dict[str, Any]]] = _private_post,
+    profile_resolver: Callable[[str, str, str, str], dict[str, Any]] = resolve_in_container,
+    profile_signer: Callable[[str, str, str, str, bytes], dict[str, Any]] = sign_in_container,
+    profile_verifier: Callable[..., dict[str, Any]] = verify_live_signatures,
 ) -> dict[str, Any]:
-    """Issue and validate fixture certificates, returning public hashes only."""
+    """Issue the chain and prove both selected managed keys without exporting refs."""
     chain, csca_key, dsc_key = ceremony_plan(plan, root, gateway_port, now=now)
     signer_id = verified_signer_id(plan, inspect)
     did = chain["csca"]["issuer_did"]
@@ -327,12 +336,35 @@ def bootstrap_certificate_chain(
                                        "credential_format", "algorithm"))
                  and projected.get("status") == "active",
                  "Disposable managed passport profile was not provisioned")
+    csca_material: list[str] = []
     result = exercise_with_authorities(
         chain, csca_key, dsc_key,
         request=lambda path, body, authority: request(
             plan, path, body, authority, signer_id),
+        on_csca_material=csca_material.append,
     )
+    _require(len(csca_material) == 1 and "BEGIN CERTIFICATE" in csca_material[0],
+             "Disposable managed CSCA material is unavailable")
+    csca_resolution = profile_resolver(signer_id, ORGANIZATION_ID, did, "csca")
+    dsc_resolution = profile_resolver(signer_id, ORGANIZATION_ID, did, "x509_doc_signer")
+    internal_key = _operator_key(root / "secrets", "signing_keys_internal_api_key")
+    profile_proof = profile_verifier(
+        ORGANIZATION_ID, did, did, csca_resolution, dsc_resolution,
+        result["evidence"], csca_material[0], internal_key,
+        signer=lambda org, issuer, purpose, challenge: profile_signer(
+            signer_id, org, issuer, purpose, challenge),
+    )
+    _require(isinstance(profile_proof, dict)
+             and profile_proof.get("managed_kms_custody_verified") is True
+             and profile_proof.get("chain_verified") is True
+             and all(isinstance(profile_proof.get(field), str)
+                     and KEY.fullmatch(profile_proof[field]) is not None
+                     for field in ("csca_issuer_profile_commitment",
+                                   "dsc_issuer_profile_commitment"))
+             and profile_proof["csca_issuer_profile_commitment"]
+             != profile_proof["dsc_issuer_profile_commitment"],
+             "Disposable managed issuer proof is incomplete")
     return {"schema": "marty.passport-supported-disposable-certificate-setup/v1",
             "status": "setup_only", "gateway_operator_authorization_verified": False,
             "project": plan["project"], "source_commit": plan["source_commit"],
-            "evidence": result["evidence"]}
+            "evidence": result["evidence"] | profile_proof}

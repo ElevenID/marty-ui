@@ -276,7 +276,9 @@ def verify_handoff(
         or set(certificate["evidence"]) != {
             "csca_certificate_id", "csca_certificate_sha256", "dsc_certificate_sha256",
             "csca_issuer_did_sha256", "dsc_issuer_did_sha256",
-            "csca_http_status", "dsc_http_status", "chain_verified_by"}):
+            "csca_http_status", "dsc_http_status", "chain_verified_by",
+            "managed_kms_custody_verified", "chain_verified",
+            "csca_issuer_profile_commitment", "dsc_issuer_profile_commitment"}):
         raise HandoffError("Protected managed certificate evidence is invalid")
     try:
         validate_certificate_setup(certificate, plan, receipt["gateway_port"])

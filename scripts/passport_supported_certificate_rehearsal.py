@@ -92,6 +92,15 @@ def validate_certificate_setup(certificate: dict, plan: dict,
         or type(evidence.get("dsc_http_status")) is not int
         or evidence["dsc_http_status"] != 200):
         raise ProducerError("Disposable certificate setup evidence is invalid")
+    if (evidence.get("managed_kms_custody_verified") is not True
+        or evidence.get("chain_verified") is not True
+        or any(type(evidence.get(field)) is not str
+               or SHA256.fullmatch(evidence[field]) is None
+               for field in ("csca_issuer_profile_commitment",
+                             "dsc_issuer_profile_commitment"))
+        or evidence["csca_issuer_profile_commitment"]
+        == evidence["dsc_issuer_profile_commitment"]):
+        raise ProducerError("Disposable certificate setup evidence is invalid")
 
 
 def rehearse_certificates(

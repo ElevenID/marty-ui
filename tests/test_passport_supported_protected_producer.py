@@ -78,7 +78,11 @@ def certificate(selected: dict, port: int) -> dict:
                      "csca_issuer_did_sha256": digest,
                      "dsc_issuer_did_sha256": digest,
                      "csca_http_status": 200, "dsc_http_status": 200,
-                     "chain_verified_by": "openssl-x509-strict"},
+                     "chain_verified_by": "openssl-x509-strict",
+                     "managed_kms_custody_verified": True,
+                     "chain_verified": True,
+                     "csca_issuer_profile_commitment": "3" * 64,
+                     "dsc_issuer_profile_commitment": "4" * 64},
     }
 
 
@@ -451,6 +455,10 @@ def test_hosted_handoff_binds_partial_receipt_to_plan(tmp_path: Path) -> None:
             project="foreign")),
         ("wrong issuer DID", lambda item: item["certificate"]["evidence"].update(
             csca_issuer_did_sha256="8" * 64)),
+        ("no managed custody", lambda item: item["certificate"]["evidence"].update(
+            managed_kms_custody_verified=False)),
+        ("same managed profile", lambda item: item["certificate"]["evidence"].update(
+            dsc_issuer_profile_commitment="3" * 64)),
         ("no SOD signature", lambda item: item["route"]["evidence"].update(
             sod_signature_verified=False)),
         ("missing SOD digest", lambda item: item["route"]["evidence"].pop(
