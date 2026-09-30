@@ -20,14 +20,16 @@ from typing import Any, Callable
 
 try:
     from .probe_passport_beta_fence_target import observe_fenced
-    from .probe_passport_beta_fence_direct_writes import probe_direct_writes
+    from .probe_passport_beta_fence_direct_writes import (
+        ERRORS, UNRELATED_WRITES, probe_direct_writes,
+    )
     from .probe_passport_beta_host import HostProbeError, beta_psql, run
-    from .probe_passport_beta_fence_direct_writes import ERRORS
 except ImportError:
     from probe_passport_beta_fence_target import observe_fenced
-    from probe_passport_beta_fence_direct_writes import probe_direct_writes
+    from probe_passport_beta_fence_direct_writes import (
+        ERRORS, UNRELATED_WRITES, probe_direct_writes,
+    )
     from probe_passport_beta_host import HostProbeError, beta_psql, run
-    from probe_passport_beta_fence_direct_writes import ERRORS
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -128,11 +130,7 @@ def validate_direct_probe(probe: dict[str, Any], *, postgres: str,
                           "message": message}
                 for surface, message in ERRORS.items()
             }
-            and probe.get("unrelated_writes") == {
-                "issuance_transactions": {"verified": True, "rolled_back": True},
-                "non_passport_flow_definitions": {"verified": True,
-                                                  "rolled_back": True},
-            }
+            and probe.get("unrelated_writes") == UNRELATED_WRITES
             and probe.get("receipt_sha256") == digest({
                 key: value for key, value in probe.items()
                 if key != "receipt_sha256"

@@ -25,6 +25,10 @@ ERRORS = {
         "beta physical-document Flow definition writes are fenced",
     "physical_flow_instances": "beta physical-document Flow writes are fenced",
 }
+UNRELATED_WRITES = {
+    "issuance_transactions": {"verified": True, "rolled_back": True},
+    "non_passport_flow_definitions": {"verified": True, "rolled_back": True},
+}
 
 
 class FenceProbeError(ValueError):
@@ -198,6 +202,8 @@ def probe_direct_writes(
         if result.returncode != 0 or result.stdout.strip() != "1":
             raise FenceProbeError(f"Unrelated beta write is blocked: {surface}")
         unrelated_writes[surface] = {"verified": True, "rolled_back": True}
+    if unrelated_writes != UNRELATED_WRITES:
+        raise FenceProbeError("Unrelated beta write proof is incomplete")
     assert_target()
     observation = _stdout([
         "docker", "exec", postgres_container_id, "psql", "-X", "-qAt",

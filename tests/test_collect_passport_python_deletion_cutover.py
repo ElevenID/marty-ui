@@ -9,6 +9,7 @@ import json
 import pytest
 
 from scripts import collect_passport_python_deletion_cutover as producer
+from scripts.probe_passport_beta_fence_direct_writes import UNRELATED_WRITES
 from scripts.probe_passport_beta_cutover_snapshot import digest
 
 
@@ -24,6 +25,8 @@ def fixture():
              "observed_at_utc": "2026-09-29T02:00:00.000Z"}
     final = {"observation_watermark": 190, "receipt_sha256": "3" * 64,
              "observed_at_utc": "2026-09-29T03:00:00.000Z"}
+    for probe in (first, prior, final):
+        probe["unrelated_writes"] = UNRELATED_WRITES
     installation = {
         "schema": "marty.passport-beta-fence-installation/v1",
         "source_commit": HEAD, "credentials_deletion_head": DELETION,
@@ -193,5 +196,13 @@ def test_predeletion_drain_must_follow_its_write_probe():
     supported, predeletion, snapshot, installation = fixture()
     predeletion["probes"]["legacy_drain"]["evidence"]["legacy_source"][
         "drain_checked_at_utc"] = "2026-09-29T01:59:00Z"
+    with pytest.raises(producer.HostProbeError, match="stale"):
+        run(supported, predeletion, snapshot, installation)
+
+
+def test_predeletion_unrelated_write_proof_is_required():
+    supported, predeletion, snapshot, installation = fixture()
+    predeletion["probes"]["legacy_drain"]["evidence"]["passport_write_fence"][
+        "direct_database_probe"]["unrelated_writes"] = {}
     with pytest.raises(producer.HostProbeError, match="stale"):
         run(supported, predeletion, snapshot, installation)
