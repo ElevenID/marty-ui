@@ -6,29 +6,19 @@ COPY rust /build/rust
 COPY proto /build/proto
 COPY contracts /build/contracts
 COPY services/auth/assets /build/services/auth/assets
+COPY --chmod=755 scripts/build-rust-service-binaries.sh /usr/local/bin/build-rust-service-binaries
+
+# Build the ordinary release once. The opt-in test image inherits its Cargo
+# target directory from this layer instead of compiling from the source layer
+# a second time on the same runner.
+RUN build-rust-service-binaries default
+
 ARG PASSPORT_SELF_SIGNED_TEST=false
 RUN case "$PASSPORT_SELF_SIGNED_TEST" in \
-      false) set -- ;; \
-      true) set -- --features marty-issuance-service/passport-self-signed-test ;; \
+      false) : ;; \
+      true) build-rust-service-binaries passport-self-signed-test ;; \
       *) echo "PASSPORT_SELF_SIGNED_TEST must be true or false" >&2; exit 2 ;; \
-    esac && cargo build --locked --release "$@" \
-    -p marty-event-stream --bin marty-event-stream \
-    -p marty-gateway --bin marty-gateway \
-    -p marty-revocation-profile --bin marty-revocation-profile \
-    -p marty-signing-keys --bin marty-signing-keys --bin marty-passport-callback-signer --bin marty-passport-callback-signer-supported \
-    -p marty-notification --bin marty-notification \
-    -p marty-flow --bin marty-flow \
-    -p marty-organization --bin marty-organization --bin marty-passport-acceptance-api-key \
-    -p marty-auth --bin marty-auth \
-    -p marty-credential-template --bin marty-credential-template \
-    -p marty-presentation-policy --bin marty-presentation-policy --bin marty-verifier-positive-gate \
-    -p marty-trust-profile --bin marty-trust-profile \
-    -p marty-applicant --bin marty-applicant \
-    -p marty-device-registration --bin marty-device-registration \
-    -p marty-verification-service --bin marty-verification-service \
-    -p marty-issuance-service --bin marty-issuance-service --bin marty-canvas-sync-worker --bin marty-passport-beta-bureau --bin marty-passport-provider-ingress \
-    -p marty-deployment-profile --bin marty-deployment-profile \
-    -p marty-compliance-profile --bin marty-compliance-profile
+    esac
 
 FROM debian:bookworm-slim@sha256:abd67ffcfa541b485a3dff59865ab629aa048a6c613e639d36e7456b0b229241
 

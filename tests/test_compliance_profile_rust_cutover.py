@@ -33,7 +33,7 @@ def test_shared_release_image_dispatches_to_the_native_binary() -> None:
         "/usr/local/bin/marty-compliance-profile"
     )
 
-    assert build in dockerfile
+    assert build in text("scripts/build-rust-service-binaries.sh")
     assert copy in dockerfile
     assert 'if [ "$MODULE_NAME" = "compliance_profile" ]; then' in entrypoint
     assert "exec /usr/local/bin/marty-compliance-profile" in entrypoint

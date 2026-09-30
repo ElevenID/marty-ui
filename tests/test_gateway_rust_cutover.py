@@ -54,7 +54,9 @@ def test_native_gateway_has_shared_and_dedicated_image_paths() -> None:
     native = text("rust/services/Dockerfile.ci")
     workflow = text(".github/workflows/ci.yml")
 
-    assert f"-p marty-gateway --bin {binary}" in shared
+    assert f"-p marty-gateway --bin {binary}" in text(
+        "scripts/build-rust-service-binaries.sh"
+    )
     assert f"/build/rust/target/release/{binary} /usr/local/bin/{binary}" in shared
     assert f"FROM runtime AS {target}" in native
     assert f"target: {target}" in workflow

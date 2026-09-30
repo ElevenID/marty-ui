@@ -22,7 +22,7 @@ def test_shared_service_image_dispatches_credential_template_to_rust() -> None:
     entrypoint = text("services/entrypoint.sh")
     assert (
         f"-p marty-credential-template --bin {binary}"
-        in dockerfile
+        in text("scripts/build-rust-service-binaries.sh")
     )
     assert f"/build/rust/target/release/{binary} /usr/local/bin/{binary}" in dockerfile
     assert 'if [ "$MODULE_NAME" = "credential_template" ]' in entrypoint

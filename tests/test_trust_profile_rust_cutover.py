@@ -48,7 +48,7 @@ def test_native_service_has_shared_and_dedicated_image_paths() -> None:
 
     assert (
         "-p marty-trust-profile --bin marty-trust-profile"
-    ) in shared
+    ) in text("scripts/build-rust-service-binaries.sh")
     assert (
         "/build/rust/target/release/marty-trust-profile "
         "/usr/local/bin/marty-trust-profile"

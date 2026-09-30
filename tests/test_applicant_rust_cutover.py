@@ -14,7 +14,9 @@ def text(path: str) -> str:
 def test_public_service_image_executes_only_the_native_applicant_binary() -> None:
     dockerfile = text("services/Dockerfile")
     entrypoint = text("services/entrypoint.sh")
-    assert "-p marty-applicant --bin marty-applicant" in dockerfile
+    assert "-p marty-applicant --bin marty-applicant" in text(
+        "scripts/build-rust-service-binaries.sh"
+    )
     assert "/build/rust/target/release/marty-applicant /usr/local/bin/marty-applicant" in dockerfile
     assert 'if [ "$MODULE_NAME" = "applicant" ]; then' in entrypoint
     assert "exec /usr/local/bin/marty-applicant" in entrypoint

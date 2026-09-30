@@ -40,9 +40,17 @@ ALL_RUST_BINARIES = set(RUST_SERVICES.values()) | UNROUTED_RUST_BINARIES
 
 def test_shared_service_image_builds_all_rust_binaries_once() -> None:
     dockerfile = (ROOT / "services" / "Dockerfile").read_text(encoding="utf-8")
+    build_script = (ROOT / "scripts" / "build-rust-service-binaries.sh").read_text(
+        encoding="utf-8"
+    )
 
-    assert dockerfile.count('&& cargo build --locked --release "$@"') == 1
-    assert dockerfile.count(" --bin marty-") == len(ALL_RUST_BINARIES)
+    assert build_script.count('exec cargo build --locked --release "$@"') == 1
+    assert build_script.count(" --bin marty-") == len(ALL_RUST_BINARIES)
+    assert dockerfile.count("RUN build-rust-service-binaries default") == 1
+    assert dockerfile.index("RUN build-rust-service-binaries default") < dockerfile.index(
+        "ARG PASSPORT_SELF_SIGNED_TEST=false"
+    )
+    assert "true) build-rust-service-binaries passport-self-signed-test" in dockerfile
     assert dockerfile.count("COPY --from=rust-service-builder") == len(
         ALL_RUST_BINARIES
     )
@@ -94,9 +102,12 @@ def test_closed_allowlist_rejects_swapped_dispatch_bodies() -> None:
 
 def test_every_allowlisted_binary_is_built_and_copied() -> None:
     dockerfile = (ROOT / "services" / "Dockerfile").read_text(encoding="utf-8")
+    build_script = (ROOT / "scripts" / "build-rust-service-binaries.sh").read_text(
+        encoding="utf-8"
+    )
 
     for binary in ALL_RUST_BINARIES:
-        assert f"--bin {binary}" in dockerfile
+        assert f"--bin {binary}" in build_script
         assert (
             f"/build/rust/target/release/{binary} /usr/local/bin/{binary}" in dockerfile
         )
