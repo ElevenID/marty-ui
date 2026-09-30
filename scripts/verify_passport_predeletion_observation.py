@@ -143,6 +143,8 @@ def verify_observation(directory: Path, run_id: int, source_commit: str,
             "Protected drain attestation digest is invalid")
     result = json.loads(json.dumps(expected))
     result["status"] = "verified_observation"
+    result["installation"] = json.loads(json.dumps(installation))
+    result["snapshot"] = json.loads(json.dumps(snapshot))
     result["observation_run_id"] = run_id
     result["observation_completed_at_utc"] = completed_at_utc
     result["attestation_sha256"] = attestations

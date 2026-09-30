@@ -119,6 +119,8 @@ def test_verified_observation_binds_signed_snapshot_and_projection(tmp_path,
         "drain_snapshot_attestation_sha256"] == "f" * 64
     assert {path for path, commit in seen if commit == COMMIT} == set(paths.values())
     assert result["observation_run_id"] == RUN_ID
+    assert result["installation"]["source_commit"] == COMMIT
+    assert result["snapshot"]["observed_at_utc"] == "2026-09-29T00:00:03Z"
 
     projection = json.loads(paths["drain"].read_text())
     projection["probe"]["evidence"]["nonterminal_job_count"] = 1
