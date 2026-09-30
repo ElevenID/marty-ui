@@ -54,6 +54,8 @@ mmf-workflow = { git = "https://github.com/ElevenID/marty-microservices-framewor
 prost = "0.14"
 protoc-bin-vendored = "3"
 rand = "0.9"
+# Keep the compatibility generation explicit for packages whose test APIs use rand 0.8.
+rand08 = { package = "rand", version = "0.8" }
 redis = { version = "1.5", default-features = false, features = ["connection-manager", "script", "tokio-comp"] }
 regex = "1"
 percent-encoding = "2"
@@ -83,6 +85,7 @@ uuid = { version = "1", features = ["serde", "v4", "v5"] }
 x509-cert = { version = "0.2.5", features = ["pem"] }
 url = "2"
 zeroize = "1.9"
+zip = { version = "=8.6.0", default-features = false, features = ["deflate-flate2"] }
 
 [profile.dev]
 debug = "line-tables-only"

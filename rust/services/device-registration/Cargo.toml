@@ -39,7 +39,7 @@ protoc-bin-vendored.workspace = true
 tonic-prost-build.workspace = true
 
 [dev-dependencies]
-rand08 = { package = "rand", version = "0.8" }
+rand08.workspace = true
 rsa = "0.9"
 sha2.workspace = true
 tower.workspace = true
