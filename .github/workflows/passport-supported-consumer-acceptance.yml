@@ -62,7 +62,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          python scripts/check_passport_beta_runner.py --output "$RUNNER_TEMP/passport-beta-runner-preflight.json"
+          python3 scripts/check_passport_beta_runner.py --output "$RUNNER_TEMP/passport-beta-runner-preflight.json"
           release_dir="$RUNNER_TEMP/passport-supported-release-$GITHUB_RUN_ID"
           mkdir -p "$release_dir"
           report="passport-supported-consumer-acceptance-$GITHUB_RUN_ID.json"

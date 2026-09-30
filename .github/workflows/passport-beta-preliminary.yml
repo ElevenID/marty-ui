@@ -33,7 +33,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          python scripts/check_passport_beta_runner.py --output "$RUNNER_TEMP/passport-beta-runner-preflight.json"
+          python3 scripts/check_passport_beta_runner.py --output "$RUNNER_TEMP/passport-beta-runner-preflight.json"
           [[ "$(git rev-parse HEAD)" == "$GITHUB_SHA" ]]
           [[ "$BETA_ARTIFACT_DIR" == /* && -d "$BETA_ARTIFACT_DIR" ]]
           [[ "$PASSPORT_DEMO_RECORDER_COMMIT" =~ ^[0-9a-f]{40}$ ]]

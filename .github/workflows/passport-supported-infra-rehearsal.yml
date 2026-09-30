@@ -39,7 +39,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          python scripts/check_passport_beta_runner.py --output "$RUNNER_TEMP/passport-beta-runner-preflight.json"
+          python3 scripts/check_passport_beta_runner.py --output "$RUNNER_TEMP/passport-beta-runner-preflight.json"
           [[ "$PLAN_RUN_ID" =~ ^[1-9][0-9]{0,19}$ ]]
           plan_run="$(gh api "repos/ElevenID/marty-ui/actions/runs/$PLAN_RUN_ID")"
           jq -e --arg sha "$GITHUB_SHA" \

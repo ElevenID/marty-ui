@@ -72,5 +72,5 @@ def test_passport_jobs_have_dedicated_label_and_in_job_preflight():
             passport_jobs += 1
             assert labels == ["self-hosted", "linux", "x64", "passport-beta-wsl2"]
             first_script = next(step["run"] for step in job["steps"] if "run" in step)
-            assert "python scripts/check_passport_beta_runner.py" in first_script
+            assert "python3 scripts/check_passport_beta_runner.py" in first_script
     assert passport_jobs == 10
