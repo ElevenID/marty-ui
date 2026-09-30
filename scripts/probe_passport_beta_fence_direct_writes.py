@@ -310,15 +310,7 @@ def verify_receipt(
                 for rejection in receipt["rejections"].values()
             )):
         raise FenceProbeError("Direct write probe receipt rejections are invalid")
-    if (not isinstance(receipt["unrelated_writes"], dict)
-            or receipt["unrelated_writes"].keys() != UNRELATED_WRITES.keys()
-            or any(
-                not isinstance(proof, dict)
-                or proof.keys() != {"verified", "rolled_back"}
-                or proof["verified"] is not True
-                or proof["rolled_back"] is not True
-                for proof in receipt["unrelated_writes"].values()
-            )):
+    if not verified_unrelated_writes(receipt["unrelated_writes"]):
         raise FenceProbeError("Direct write probe unrelated writes are invalid")
     if (DOCKER_ID.fullmatch(postgres_container_id) is None
             or DECIMAL.fullmatch(expected_system_identifier) is None
