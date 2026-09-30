@@ -858,6 +858,10 @@ $dataValidations=@($commands | Where-Object {
     $_.GetCommandName() -cin @('Get-ServiceContainer', 'Assert-BetaVolume')
 })
 if ($dataTargets.Count -ne 3 -or $dataValidations.Count -ne 3) { throw 'Data targets must have unique preflight resolutions' }
+$fenceGuards=@($commands | Where-Object {
+    $_.GetCommandName() -eq 'Assert-LegacyBetaDatabaseUnfenced'
+})
+if ($fenceGuards.Count -ne 1) { throw 'Restore must have one passport fence guard' }
 $targetReport=@($dataTargets | ForEach-Object {
     $validation=@($_.Right.FindAll({ param($node)
         $node -is [Management.Automation.Language.CommandAst]
@@ -890,6 +894,7 @@ $condition=$conditions[0]
 @{
     resolve=$resolve[0].Extent.EndOffset; render=$render[0].Extent.EndOffset
     write=$write[0].Extent.EndOffset; attach=$attach[0].Extent.EndOffset
+    fence_guard=$fenceGuards[0].Extent.StartOffset
     first_mutation=$mutations[0].Extent.StartOffset
     data_targets=$targetReport
     first_mutation_arguments=@($mutations[0].FindAll({ param($node)
@@ -925,6 +930,7 @@ $condition=$conditions[0]
         < report["attach"]
         < report["first_mutation"]
     )
+    assert max(target["end"] for target in report["data_targets"]) < report["fence_guard"] < report["write"]
     assert "stop" in report["first_mutation_arguments"]
     targets = {target["variable"]: target for target in report["data_targets"]}
     assert len(targets) == 3
