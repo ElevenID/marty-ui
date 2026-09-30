@@ -115,6 +115,45 @@ def inspect(container_id: str, runner: Callable[[list[str]], str] = run) -> dict
     return value[0]
 
 
+def production_attachment_sha256(
+    runner: Callable[[list[str]], str] = run,
+) -> str:
+    """Bind production networks and host ports without exposing their details."""
+    projected = []
+    for project in PRODUCTION_PROJECTS:
+        for short_id in ids(project, runner):
+            record = inspect(short_id, runner)
+            config = record.get("Config")
+            labels = config.get("Labels") if isinstance(config, dict) else None
+            network_settings = record.get("NetworkSettings")
+            networks = network_settings.get("Networks") if isinstance(
+                network_settings, dict) else None
+            host = record.get("HostConfig")
+            bindings = host.get("PortBindings") if isinstance(host, dict) else None
+            if not (isinstance(record.get("Id"), str)
+                    and re.fullmatch(r"[0-9a-f]{64}", record["Id"]) is not None
+                    and isinstance(labels, dict)
+                    and labels.get("com.docker.compose.project") == project
+                    and isinstance(networks, dict) and networks
+                    and isinstance(bindings, (dict, type(None)))):
+                raise HostProbeError("Production network or port baseline is incomplete")
+            attachments = []
+            for name, value in sorted(networks.items()):
+                if not (isinstance(name, str) and isinstance(value, dict)
+                        and isinstance(value.get("NetworkID"), str)):
+                    raise HostProbeError("Production network attachment is invalid")
+                attachments.append({"name": name, "network_id": value["NetworkID"],
+                                    "aliases": value.get("Aliases"),
+                                    "ip_address": value.get("IPAddress")})
+            projected.append({"id": record["Id"], "project": project,
+                              "networks": attachments, "port_bindings": bindings})
+    if not projected:
+        raise HostProbeError("Production network baseline is empty")
+    projected.sort(key=lambda item: (item["project"], item["id"]))
+    return hashlib.sha256(json.dumps(projected, sort_keys=True,
+                                   separators=(",", ":")).encode()).hexdigest()
+
+
 def production_snapshot(runner: Callable[[list[str]], str] = run) -> dict[str, Any]:
     projected = []
     counts = {}

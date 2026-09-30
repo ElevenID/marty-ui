@@ -11,8 +11,9 @@ import pytest
 from scripts.probe_passport_beta_host import (
     ACTIVE_PHYSICAL_FLOWS_SQL, HostProbeError, assert_production_unchanged, beta_legacy_drain,
     beta_material_receipt, beta_native_route_ownership,
-    production_snapshot,
+    production_attachment_sha256, production_snapshot,
 )
+from scripts import probe_passport_beta_host as probe
 
 
 def runner(*, pending: str = "0", legacy: str = "0", active_flow: str = "0",
@@ -72,6 +73,27 @@ def test_reads_production_identity_without_mutating_it() -> None:
         _, invalid_execute = runner(**variant)
         with pytest.raises(HostProbeError):
             production_snapshot(invalid_execute)
+
+
+def test_production_attachment_digest_detects_network_or_port_drift(monkeypatch):
+    records = {}
+    for index, project in enumerate(probe.PRODUCTION_PROJECTS, 1):
+        container_id = f"{index:064x}"
+        records[project] = {
+            "Id": container_id,
+            "Config": {"Labels": {"com.docker.compose.project": project}},
+            "NetworkSettings": {"Networks": {"production": {
+                "NetworkID": "a" * 64, "Aliases": ["service"],
+                "IPAddress": "172.20.0.2"}}},
+            "HostConfig": {"PortBindings": {"443/tcp": [{"HostPort": "443"}]}},
+        }
+    monkeypatch.setattr(probe, "ids", lambda project, _runner: [records[project]["Id"]])
+    monkeypatch.setattr(probe, "inspect", lambda container_id, _runner: next(
+        record for record in records.values() if record["Id"] == container_id))
+    baseline = production_attachment_sha256(lambda _command: "")
+    records[probe.PRODUCTION_PROJECTS[0]]["HostConfig"]["PortBindings"]["443/tcp"][0][
+        "HostPort"] = "8443"
+    assert production_attachment_sha256(lambda _command: "") != baseline
 
 
 def test_beta_drain_queries_live_table_and_rejects_nonzero_counts() -> None:

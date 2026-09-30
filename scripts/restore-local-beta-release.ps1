@@ -168,6 +168,8 @@ function Get-ServiceContainer([string]$Service) {
     return $container
 }
 
+. (Join-Path $PSScriptRoot "beta-passport-fence-legacy-boundary.ps1")
+
 function Wait-ForServiceHealth([string[]]$Services, [int]$TimeoutSeconds = 420) {
     $deadline = (Get-Date).AddSeconds($TimeoutSeconds)
     do {
@@ -467,6 +469,7 @@ if ($uiRecord.Count -eq 1 -and $uiRecord[0].image_id -notmatch '^sha256:[0-9a-f]
 $postgres = Get-ServiceContainer "postgres"
 $redisVolumeName = Assert-BetaVolume "elevenid-beta_redis_data"
 $applicantVolumeName = Assert-BetaVolume "elevenid-beta_applicant_data"
+Assert-LegacyBetaDatabaseUnfenced -PostgresContainer $postgres
 $yaml -join "`n" | Set-Content -LiteralPath $restoreImages -Encoding utf8
 $composeFiles += $restoreImages
 Start-BetaMutation -ResumePending

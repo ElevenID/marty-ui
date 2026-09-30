@@ -1032,6 +1032,10 @@ function Assert-MaintenanceContainersRestored([string[]]$ExpectedContainers) {
 . (Join-Path $PSScriptRoot "beta-deployment-lock.ps1")
 $betaDeploymentLock = Enter-BetaDeploymentLock
 try {
+. (Join-Path $PSScriptRoot "beta-passport-fence-legacy-boundary.ps1")
+$legacyPostgres = Get-ComposeContainerId -Service "postgres"
+if (-not $legacyPostgres) { throw "Beta PostgreSQL container is unavailable" }
+Assert-LegacyBetaDatabaseUnfenced -PostgresContainer $legacyPostgres
 New-Item -ItemType Directory -Path $logsDir -Force | Out-Null
 if ($OfficialStackRelease) {
     Write-Utf8Text -Path $sourceManifestPath -Content (($sourceManifest | ConvertTo-Json -Depth 8) + "`n")

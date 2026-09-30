@@ -4,3 +4,4 @@
 release/stack-lock*.json text eol=lf
 contracts/canvas-worker-body-timeout-oracle.json text eol=lf
 contracts/canvas-worker-lease-expiry-oracle.json text eol=lf
+scripts/sql/passport-beta-fence-*.sql text eol=lf
