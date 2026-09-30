@@ -34,7 +34,8 @@ fn container_entrypoint_dispatches_auth_only_to_the_native_binary() {
 #[test]
 fn service_image_builds_and_installs_the_native_auth_executable() {
     let dockerfile = include_str!("../../../../services/Dockerfile");
-    assert!(dockerfile.contains("-p marty-auth --bin marty-auth"));
+    let build_script = include_str!("../../../../scripts/build-rust-service-binaries.sh");
+    assert!(build_script.contains("-p marty-auth --bin marty-auth"));
     assert!(dockerfile.contains(
         "COPY --from=rust-service-builder /build/rust/target/release/marty-auth /usr/local/bin/marty-auth"
     ));
