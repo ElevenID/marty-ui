@@ -17,19 +17,50 @@ function Get-ProductionSnapshot {
     if ($LASTEXITCODE -ne 0 -or $containers.Count -ne $ids.Count) {
         throw 'Production container inspection is incomplete'
     }
-    return @($containers | ForEach-Object {
+    return @($containers | Sort-Object Id | ForEach-Object {
+        $container = $_
+        $networks = @($container.NetworkSettings.Networks.PSObject.Properties |
+            Sort-Object Name | ForEach-Object {
+                [ordered]@{
+                    name = $_.Name
+                    network_id = $_.Value.NetworkID
+                    endpoint_id = $_.Value.EndpointID
+                    ip_address = $_.Value.IPAddress
+                    aliases = @($_.Value.Aliases | Sort-Object)
+                }
+            })
+        $ports = @($container.HostConfig.PortBindings.PSObject.Properties |
+            Sort-Object Name | ForEach-Object {
+                [ordered]@{
+                    container_port = $_.Name
+                    host_bindings = @($_.Value | Sort-Object HostIp, HostPort | ForEach-Object {
+                        [ordered]@{ host_ip = $_.HostIp; host_port = $_.HostPort }
+                    })
+                }
+            })
+        $mounts = @($container.Mounts | Sort-Object Destination, Name | ForEach-Object {
+            [ordered]@{
+                type = $_.Type
+                name = if ($null -ne $_.PSObject.Properties['Name']) { $_.Name } else { $null }
+                destination = $_.Destination
+                read_write = $_.RW
+            }
+        })
         [ordered]@{
-            name = $_.Name
-            id = $_.Id
-            image = $_.Image
-            started_at = $_.State.StartedAt
-            running = [bool]$_.State.Running
-            exit_code = [int]$_.State.ExitCode
-            health = if ($null -ne $_.State.PSObject.Properties['Health']) {
-                $_.State.Health.Status
+            name = $container.Name
+            id = $container.Id
+            image = $container.Image
+            started_at = $container.State.StartedAt
+            running = [bool]$container.State.Running
+            exit_code = [int]$container.State.ExitCode
+            health = if ($null -ne $container.State.PSObject.Properties['Health']) {
+                $container.State.Health.Status
             } else { $null }
+            networks = $networks
+            ports = $ports
+            mounts = $mounts
         }
-    } | Sort-Object id)
+    })
 }
 
 function Get-BetaUi {
@@ -84,8 +115,8 @@ catch {
 }
 finally {
     $after = @(Get-ProductionSnapshot)
-    if ((ConvertTo-Json -InputObject $before -Depth 4 -Compress) -cne
-        (ConvertTo-Json -InputObject $after -Depth 4 -Compress)) {
+    if ((ConvertTo-Json -InputObject $before -Depth 8 -Compress) -cne
+        (ConvertTo-Json -InputObject $after -Depth 8 -Compress)) {
         throw 'Production containers changed during beta demo publication'
     }
 }
