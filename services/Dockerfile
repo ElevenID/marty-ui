@@ -1,22 +1,71 @@
+# syntax=docker/dockerfile:1.7
 # Public Marty service image. Build context: marty-ui repository root.
-FROM rust:1.95-bookworm@sha256:6258907abe69656e41cd992e0b705cdcfabcbbe3db374f92ed2d47121282d4a1 AS rust-service-builder
+FROM rust:1.95-bookworm@sha256:6258907abe69656e41cd992e0b705cdcfabcbbe3db374f92ed2d47121282d4a1 AS rust-service-base
+
+RUN --mount=type=cache,id=marty-public-cargo-registry,target=/usr/local/cargo/registry,sharing=locked \
+    --mount=type=cache,id=marty-public-cargo-git,target=/usr/local/cargo/git,sharing=locked \
+    cargo install cargo-chef --locked --version 0.1.78
 
 WORKDIR /build/rust
+
+FROM rust-service-base AS rust-service-planner
+
+COPY rust /build/rust
+COPY proto /build/proto
+RUN cargo chef prepare --recipe-path recipe.json
+
+FROM rust-service-base AS rust-service-cache
+
+ADD --checksum=sha256:aec995a83ad3dff3d14b6314e08858b7b73d35ca85a5bcf3d3a9ec07dee35588 https://github.com/mozilla/sccache/releases/download/v0.16.0/sccache-v0.16.0-x86_64-unknown-linux-musl.tar.gz /tmp/sccache.tar.gz
+ADD --checksum=sha256:f73a5c39f96bb6ebb89cc7915cf182260d4cbf30765322c5e793d0fe8bd80784 https://github.com/mozilla/sccache/releases/download/v0.16.0/sccache-v0.16.0-aarch64-unknown-linux-musl.tar.gz /tmp/sccache-aarch64.tar.gz
+ARG TARGETARCH
+RUN case "$TARGETARCH" in \
+      amd64) archive=/tmp/sccache.tar.gz; target=x86_64 ;; \
+      arm64) archive=/tmp/sccache-aarch64.tar.gz; target=aarch64 ;; \
+      *) echo "Unsupported public builder architecture: $TARGETARCH" >&2; exit 2 ;; \
+    esac \
+    && tar -xzf "$archive" -C /tmp \
+    && install "/tmp/sccache-v0.16.0-${target}-unknown-linux-musl/sccache" /usr/local/bin/sccache \
+    && rm /tmp/sccache.tar.gz /tmp/sccache-aarch64.tar.gz
+
+COPY --chmod=755 scripts/ci/run-public-rust-build.sh /usr/local/bin/run-public-rust-build
+
+FROM rust-service-cache AS rust-service-builder
+
+COPY --from=rust-service-planner /build/rust/recipe.json recipe.json
+COPY --from=rust-service-planner /build/rust/third_party /build/rust/third_party
+COPY proto /build/proto
+RUN --mount=type=cache,id=marty-public-cargo-registry,target=/usr/local/cargo/registry,sharing=locked \
+    --mount=type=cache,id=marty-public-cargo-git,target=/usr/local/cargo/git,sharing=locked \
+    --mount=type=secret,id=sccache_token \
+    --mount=type=secret,id=sccache_url \
+    --mount=type=secret,id=sccache_mode \
+    run-public-rust-build cargo chef cook --locked --release --workspace --recipe-path recipe.json
+
 COPY rust /build/rust
 COPY proto /build/proto
 COPY contracts /build/contracts
 COPY services/auth/assets /build/services/auth/assets
 COPY --chmod=755 scripts/build-rust-service-binaries.sh /usr/local/bin/build-rust-service-binaries
 
-# Build the ordinary release once. The opt-in test image inherits its Cargo
-# target directory from this layer instead of compiling from the source layer
-# a second time on the same runner.
-RUN build-rust-service-binaries default
+# Preserve the exact public release binary list and profile. Source-only edits
+# reuse the cooked dependency layer; the opt-in variant inherits this build.
+RUN --mount=type=cache,id=marty-public-cargo-registry,target=/usr/local/cargo/registry,sharing=locked \
+    --mount=type=cache,id=marty-public-cargo-git,target=/usr/local/cargo/git,sharing=locked \
+    --mount=type=secret,id=sccache_token \
+    --mount=type=secret,id=sccache_url \
+    --mount=type=secret,id=sccache_mode \
+    run-public-rust-build build-rust-service-binaries default
 
 ARG PASSPORT_SELF_SIGNED_TEST=false
-RUN case "$PASSPORT_SELF_SIGNED_TEST" in \
+RUN --mount=type=cache,id=marty-public-cargo-registry,target=/usr/local/cargo/registry,sharing=locked \
+    --mount=type=cache,id=marty-public-cargo-git,target=/usr/local/cargo/git,sharing=locked \
+    --mount=type=secret,id=sccache_token \
+    --mount=type=secret,id=sccache_url \
+    --mount=type=secret,id=sccache_mode \
+    case "$PASSPORT_SELF_SIGNED_TEST" in \
       false) : ;; \
-      true) build-rust-service-binaries passport-self-signed-test ;; \
+      true) run-public-rust-build build-rust-service-binaries passport-self-signed-test ;; \
       *) echo "PASSPORT_SELF_SIGNED_TEST must be true or false" >&2; exit 2 ;; \
     esac
 

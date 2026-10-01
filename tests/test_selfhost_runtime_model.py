@@ -72,7 +72,9 @@ def test_actual_extracted_runtime_model_is_mandatory():
 
 def assert_public_image_loader_connected(reader):
     source = reader("rust/services/issuance/tests/canvas_published_schema_contract.rs")
-    runtime = reader("rust/services/issuance/tests/support/selfhost_packaged_runtime.rs")
+    runtime = reader(
+        "rust/services/issuance/tests/support/selfhost_packaged_runtime.rs"
+    )
     sidecar = reader("rust/services/issuance/tests/support/selfhost_runtime_sidecar.rs")
     main = reader("rust/services/issuance/src/main.rs")
     runner = reader("scripts/ci/run-published-canvas-contracts.sh")
@@ -82,7 +84,7 @@ def assert_public_image_loader_connected(reader):
         "selfhost_public_image_loader_child",
     ]:
         assert source.count(f"fn {name}()") == 1
-        line = f'"${{executables[0]}}" --list | grep -Fx \'{name}: test\''
+        line = f"\"${{executables[0]}}\" --list | grep -Fx '{name}: test'"
         assert runner.splitlines().count(line) == 1
     for required in [
         "selfhost_packaged_runtime::run_isolated_child()",
@@ -150,13 +152,16 @@ def assert_public_image_loader_connected(reader):
     assert set(step) == {"name", "shell", "run"}
     assert step["shell"] == "bash"
     body = step["run"]
+    build = steps[index - 1]
+    assert build["name"] == "Build public selfhost image"
+    assert build["with"]["file"] == "services/Dockerfile"
+    assert build["with"]["tags"] == "marty-selfhost-public:contract"
+    assert "SERVICE_NAME=issuance_native" in build["with"]["build-args"]
+    assert build["with"]["load"] is True
     for required in [
         "set -euo pipefail",
         "cargo build --locked --manifest-path rust/Cargo.toml",
         "-p marty-selfhost-bundle --bin package-selfhost-bundle",
-        "--file services/Dockerfile",
-        "--tag marty-selfhost-public:contract",
-        "--build-arg SERVICE_NAME=issuance_native",
         "docker image inspect --format '{{.Id}}' marty-selfhost-public:contract",
         "MARTY_SELFHOST_TEST_PACKAGER_BINARY",
         "MARTY_SELFHOST_TEST_IMAGE",
@@ -203,13 +208,13 @@ def test_public_image_loader_refuses_disconnected_or_weakened_gates(fault):
             ),
             "runner": (
                 "scripts/ci/run-published-canvas-contracts.sh",
-                '"${executables[0]}" --list | grep -Fx \'selfhost_public_image_loader_isolated: test\'',
+                "\"${executables[0]}\" --list | grep -Fx 'selfhost_public_image_loader_isolated: test'",
             ),
             "workflow": (
                 ".github/workflows/ci.yml",
                 "Prepare public selfhost image loader acceptance",
             ),
-            "dockerfile": (".github/workflows/ci.yml", "--file services/Dockerfile"),
+            "dockerfile": (".github/workflows/ci.yml", "file: services/Dockerfile"),
             "image": (".github/workflows/ci.yml", "MARTY_SELFHOST_TEST_IMAGE"),
             "revision": (".github/workflows/ci.yml", "MARTY_SELFHOST_TEST_REVISION"),
             "pending": (
@@ -254,6 +259,8 @@ def test_public_image_loader_refuses_disconnected_or_weakened_gates(fault):
             ),
         }
         target, value = replacements[fault]
+        if fault == "dockerfile" and name == target:
+            return source.replace(value, "file: ABSENT", 1)
         if fault == "wrong-password-marker" and name == target:
             return source.replace(value, "ABSENT")
         return source.replace(value, "ABSENT", 1) if name == target else source

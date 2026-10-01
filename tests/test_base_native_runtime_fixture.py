@@ -156,7 +156,10 @@ def test_actual_base_compose_render_keeps_provider_ingress_out_of_peer_overlay(s
     assert gateway["PASSPORT_PROVIDER_INGRESS_GATEWAY_ENABLED"] == "false"
     assert "PASSPORT_PROVIDER_INGRESS_SERVICE_URL" not in gateway
     overlay = FIXTURE["fixture_overlay"](spec, selected)
-    assert "PASSPORT_PROVIDER_INGRESS_SERVICE_URL" not in overlay["services"]["gateway"]["environment"]
+    assert (
+        "PASSPORT_PROVIDER_INGRESS_SERVICE_URL"
+        not in overlay["services"]["gateway"]["environment"]
+    )
 
 
 def test_native_launch_has_no_post_render_smoke_overrides():
@@ -264,7 +267,7 @@ def runtime_ci(workflow):
         "# Resolve the actual source Dockerfile build to a local immutable ID.",
         "# This is runtime identity evidence, not release provenance.",
         "docker build --tag marty-envoy:native-contract config/envoy",
-        'envoy_image_id="$(docker image inspect --format \'{{.Id}}\' marty-envoy:native-contract)"',
+        "envoy_image_id=\"$(docker image inspect --format '{{.Id}}' marty-envoy:native-contract)\"",
         'printf \'MARTY_ENVOY_TEST_IMAGE=%s\\n\' "$envoy_image_id" >> "$GITHUB_ENV"',
         'printf \'MARTY_BASE_COMPOSE_BINARY=%s\\n\' "$RUNNER_TEMP/compose-render-v5.4.0" >> "$GITHUB_ENV"',
         'printf \'MARTY_SELFHOST_BUNDLE_TEST_COMPOSE=%s\\n\' "$RUNNER_TEMP/compose-render-v5.4.0" >> "$GITHUB_ENV"',
@@ -290,9 +293,9 @@ def compatibility_ci(workflow):
     script = step["run"]
     required = (
         "set -euo pipefail",
-        'awk \'$1 == "FROM" && $3 == "AS" && $4 == "rust-service-builder" { print $2 }\' services/Dockerfile',
-        '[[ ${#builder_images[@]} == 1 ]]',
-        '^rust:1\\.95-bookworm@sha256:[a-f0-9]{64}$',
+        'awk \'$1 == "FROM" && $3 == "AS" && $4 == "rust-service-base" { print $2 }\' services/Dockerfile',
+        "[[ ${#builder_images[@]} == 1 ]]",
+        "^rust:1\\.95-bookworm@sha256:[a-f0-9]{64}$",
         'docker pull "$bookworm_builder"',
         'compat_target="$RUNNER_TEMP/marty-bookworm-target"',
         'compat_artifacts="$RUNNER_TEMP/marty-bookworm-artifacts.json"',
@@ -306,7 +309,7 @@ def compatibility_ci(workflow):
         "--test canvas_published_schema_contract --no-run --message-format=json",
         'select(.target.name == "canvas_published_schema_contract")',
         '[[ "$(dirname "$compat_executable")" == "$compat_target/debug/deps" ]]',
-        '^canvas_published_schema_contract-[a-f0-9]{16}$',
+        "^canvas_published_schema_contract-[a-f0-9]{16}$",
         'test -x "$compat_target/debug/marty-issuance-service"',
         'test -x "$compat_target/debug/marty-gateway"',
         "MARTY_BASE_RUNTIME_COMPAT_TEST_EXECUTABLE=%s",
@@ -323,9 +326,8 @@ def compatibility_ci(workflow):
         ROOT / "rust/services/issuance/tests/support/base_runtime_container.rs"
     ).read_text()
     assert (
-        'const COMPAT_TEST_EXECUTABLE: &str = '
-        '"MARTY_BASE_RUNTIME_COMPAT_TEST_EXECUTABLE";'
-        in source
+        "const COMPAT_TEST_EXECUTABLE: &str = "
+        '"MARTY_BASE_RUNTIME_COMPAT_TEST_EXECUTABLE";' in source
     )
     assert "compatible_executable_paths(Path::new(&test))?" in source
     assert 'strip_prefix("canvas_published_schema_contract-")' in source
@@ -492,7 +494,15 @@ def test_renewal_fixtures_compare_post_migration_state_and_unique_notifications(
         snapshot = "let source_before = stored(&pool, &source_tx_id).await;"
         not_after = "let startup_migration_not_after: chrono::DateTime<chrono::Utc> ="
         gateway = "let gateway_fixture = if gateway {"
-        for marker in [pre_start, not_before, spawn, ready, not_after, snapshot, gateway]:
+        for marker in [
+            pre_start,
+            not_before,
+            spawn,
+            ready,
+            not_after,
+            snapshot,
+            gateway,
+        ]:
             assert marker in source
         assert (
             source.index(pre_start)
@@ -513,11 +523,11 @@ def test_renewal_fixtures_compare_post_migration_state_and_unique_notifications(
             "hmac.update(token.as_bytes());",
             "hex::encode(hmac.finalize().into_bytes())",
             "let legacy_access_token_digest = access_token_digest(LEGACY_ACCESS_TOKEN);",
-            'SET access_token=$1\n             WHERE id=$2 AND organization_id=$3',
+            "SET access_token=$1\n             WHERE id=$2 AND organization_id=$3",
             ".bind(&legacy_access_token_digest)\n"
             "        .bind(&source_tx_id)\n"
             "        .bind(ORGANIZATION)",
-            'assert_eq!(\n            seeded.rows_affected(),\n            1,',
+            "assert_eq!(\n            seeded.rows_affected(),\n            1,",
             'assert_eq!(\n            source_before_startup["transaction"]["access_token"], legacy_access_token_digest,',
             'assert_ne!(\n            source_before_startup["transaction"]["access_token"], LEGACY_ACCESS_TOKEN,',
             "legacy access token must remain one-way hashed at rest",
@@ -544,16 +554,14 @@ def test_renewal_fixtures_compare_post_migration_state_and_unique_notifications(
         renewal.replace(
             ".bind(&legacy_access_token_digest)", ".bind(LEGACY_ACCESS_TOKEN)"
         ),
-        renewal.replace(
-            "WHERE id=$2 AND organization_id=$3", "WHERE id=$2"
-        ),
+        renewal.replace("WHERE id=$2 AND organization_id=$3", "WHERE id=$2"),
         renewal.replace(
             ".bind(&source_tx_id)\n        .bind(ORGANIZATION)",
             ".bind(&source_id)\n        .bind(ORGANIZATION)",
         ),
         renewal.replace(
             ".bind(&source_tx_id)\n        .bind(ORGANIZATION)",
-            ".bind(&source_tx_id)\n        .bind(\"foreign-org\")",
+            '.bind(&source_tx_id)\n        .bind("foreign-org")',
         ),
         renewal.replace(
             "seeded.rows_affected(),\n            1,",
@@ -634,9 +642,7 @@ def test_ordinary_token_snapshot_proves_bounded_expiry_without_ignoring_state():
 
     check(ordinary)
     for weakened in [
-        ordinary.replace(
-            "Duration::seconds(1800)", "Duration::seconds(3600)", 1
-        ),
+        ordinary.replace("Duration::seconds(1800)", "Duration::seconds(3600)", 1),
         ordinary.replace(
             "            && token_expiry <=", "            || token_expiry <=", 1
         ),
