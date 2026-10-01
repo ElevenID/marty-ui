@@ -133,6 +133,14 @@ def match_preliminary_soak(
     bureau = selected.get("bureau_job_commitment")
     require(isinstance(source, str) and SHA256.fullmatch(source) is not None
             and isinstance(bureau, str) and SHA256.fullmatch(bureau) is not None
+            and evidence["managed_csca_dsc_chain"].get(
+                "source_job_commitment") == source
+            and evidence["sod_signature"].get(
+                "source_job_commitment") == source
+            and evidence["simulator_material_receipt"].get(
+                "source_job_id_commitment") == source
+            and evidence["simulator_material_receipt"].get(
+                "bureau_job_id_commitment") == bureau
             and evidence["physical_bureau_submission"].get(
                 "selected_source_job_commitment") == source
             and evidence["physical_bureau_submission"].get(

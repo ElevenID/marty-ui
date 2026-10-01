@@ -59,9 +59,12 @@ def preliminary():
                            "aggregate_deployment_receipt_sha256": RECEIPT,
                            "aggregate_plan_sha256": PLAN},
             "probes": {
-                "managed_csca_dsc_chain": verified({}),
-                "sod_signature": verified({}),
-                "simulator_material_receipt": verified({}),
+                "managed_csca_dsc_chain": verified({
+                    "source_job_commitment": JOB}),
+                "sod_signature": verified({"source_job_commitment": JOB}),
+                "simulator_material_receipt": verified({
+                    "source_job_id_commitment": JOB,
+                    "bureau_job_id_commitment": BUREAU}),
                 "nine_route_gateway_flow": verified(selected),
                 "physical_bureau_submission": verified({
                     "selected_source_job_commitment": JOB,
@@ -121,6 +124,11 @@ def test_rejects_another_deployment_or_job():
     altered = copy.deepcopy(preliminary())
     altered["value"]["probes"]["signed_bureau_callback"]["evidence"][
         "bureau_job_commitment"] = "4" * 64
+    with pytest.raises(LineageError, match="one selected job"):
+        match_preliminary_soak(live(), altered, soak())
+    altered = copy.deepcopy(preliminary())
+    altered["value"]["probes"]["simulator_material_receipt"]["evidence"][
+        "source_job_id_commitment"] = "4" * 64
     with pytest.raises(LineageError, match="one selected job"):
         match_preliminary_soak(live(), altered, soak())
 
