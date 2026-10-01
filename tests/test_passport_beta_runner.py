@@ -130,7 +130,10 @@ def test_production_baseline_rejects_replacement_and_health_change(tmp_path):
 
 
 def test_passport_jobs_have_dedicated_label_and_in_job_preflight():
-    workflows = Path(__file__).resolve().parents[1] / ".github/workflows"
+    github = Path(__file__).resolve().parents[1] / ".github"
+    actionlint = yaml.safe_load((github / "actionlint.yaml").read_text(encoding="utf-8"))
+    assert "passport-beta-wsl2" in actionlint["self-hosted-runner"]["labels"]
+    workflows = github / "workflows"
     passport_jobs = 0
     for path in workflows.glob("passport-*.yml"):
         value = yaml.safe_load(path.read_text(encoding="utf-8"))
