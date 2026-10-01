@@ -1,0 +1,126 @@
+name: Passport Beta Final Aggregate Acceptance
+
+on:
+  workflow_dispatch:
+    inputs:
+      beta_artifact_dir:
+        description: Absolute protected path of the exact signed aggregate beta deployment.
+        required: true
+      preliminary_run_id:
+        description: Successful protected D-12 preliminary recording run ID.
+        required: true
+      publication_run_id:
+        description: Successful protected public D-12 publication run ID.
+        required: true
+      soak_run_ids:
+        description: Space-separated protected 24-hour soak sample run IDs, in time order.
+        required: true
+      private_selected_handoff:
+        description: Absolute mode-0600 protected selected-job handoff outside the checkout.
+        required: true
+      youtube_oauth_client_file:
+        description: Absolute path to the protected ElevenID LLC OAuth client on the runner.
+        required: true
+      youtube_oauth_token_file:
+        description: Absolute path to the protected ElevenID LLC OAuth token on the runner.
+        required: true
+
+concurrency:
+  group: passport-beta-final-acceptance
+  cancel-in-progress: false
+
+permissions:
+  actions: read
+  attestations: write
+  contents: read
+  id-token: write
+  packages: read
+
+jobs:
+  aggregate:
+    if: github.ref == 'refs/heads/main'
+    runs-on: [self-hosted, linux, x64, passport-beta-wsl2]
+    environment: beta-lifecycle
+    timeout-minutes: 90
+    env:
+      PASSPORT_DEMO_RECORDER_COMMIT: c31263bf6f4db9bb517393deb4f53f7853b3c1c6
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v4
+        with:
+          node-version: '24'
+
+      - name: Check out exact reviewed YouTube verifier
+        shell: bash
+        env:
+          RECORDER_READ_TOKEN: ${{ secrets.PASSPORT_DEMO_SOURCE_READ_TOKEN }}
+        run: |
+          set -euo pipefail
+          [[ -n "$RECORDER_READ_TOKEN" ]]
+          recorder_root="$RUNNER_TEMP/passport-demo-recorder-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT"
+          [[ ! -e "$recorder_root" && ! -L "$recorder_root" ]]
+          GH_TOKEN="$RECORDER_READ_TOKEN" gh repo clone ElevenID/marty-demo-recorder "$recorder_root" -- --no-checkout
+          git -C "$recorder_root" checkout --detach "$PASSPORT_DEMO_RECORDER_COMMIT"
+          test "$(git -C "$recorder_root" rev-parse HEAD)" = "$PASSPORT_DEMO_RECORDER_COMMIT"
+          cd "$recorder_root"
+          npm ci
+          npx playwright install chromium
+          test -z "$(git status --porcelain)"
+          echo "PASSPORT_DEMO_RECORDER_ROOT=$recorder_root" >> "$GITHUB_ENV"
+
+      - name: Authenticate protected lineage and current beta/production state
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PASSPORT_ACCEPTANCE_API_KEY: ${{ secrets.PASSPORT_ACCEPTANCE_API_KEY }}
+          BETA_ARTIFACT_DIR: ${{ inputs.beta_artifact_dir }}
+          PRELIMINARY_RUN_ID: ${{ inputs.preliminary_run_id }}
+          PUBLICATION_RUN_ID: ${{ inputs.publication_run_id }}
+          SOAK_RUNS: ${{ inputs.soak_run_ids }}
+          PRIVATE_SELECTED_HANDOFF: ${{ inputs.private_selected_handoff }}
+          YOUTUBE_OAUTH_CLIENT_FILE: ${{ inputs.youtube_oauth_client_file }}
+          YOUTUBE_OAUTH_TOKEN_FILE: ${{ inputs.youtube_oauth_token_file }}
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
+          [[ "$BETA_ARTIFACT_DIR" == /* && -d "$BETA_ARTIFACT_DIR" ]]
+          [[ "$PRELIMINARY_RUN_ID" =~ ^[1-9][0-9]*$ ]]
+          [[ "$PUBLICATION_RUN_ID" =~ ^[1-9][0-9]*$ ]]
+          [[ "$PRIVATE_SELECTED_HANDOFF" == /* && -f "$PRIVATE_SELECTED_HANDOFF" ]]
+          [[ "$YOUTUBE_OAUTH_CLIENT_FILE" == /* && -f "$YOUTUBE_OAUTH_CLIENT_FILE" ]]
+          [[ "$YOUTUBE_OAUTH_TOKEN_FILE" == /* && -f "$YOUTUBE_OAUTH_TOKEN_FILE" ]]
+          test "$(stat -c %a "$YOUTUBE_OAUTH_TOKEN_FILE")" = 600
+          read -r -a soak_ids <<< "$SOAK_RUNS"
+          test "${#soak_ids[@]}" -ge 3
+          for id in "${soak_ids[@]}"; do [[ "$id" =~ ^[1-9][0-9]*$ ]]; done
+          umask 077
+          output="passport-beta-final-acceptance-$GITHUB_RUN_ID.json"
+          python3 scripts/compose_passport_beta_final_acceptance.py \
+            --artifact-dir "$BETA_ARTIFACT_DIR" \
+            --preliminary-run-id "$PRELIMINARY_RUN_ID" \
+            --publication-run-id "$PUBLICATION_RUN_ID" \
+            --soak-run-ids "${soak_ids[@]}" \
+            --private-selected-handoff "$PRIVATE_SELECTED_HANDOFF" \
+            --recorder-root "$PASSPORT_DEMO_RECORDER_ROOT" \
+            --recorder-commit "$PASSPORT_DEMO_RECORDER_COMMIT" \
+            --output "$output"
+          jq -e --arg run "$GITHUB_RUN_ID" --arg source "$GITHUB_SHA" \
+            '.schema == "marty.passport-beta-acceptance/v1" and
+             .status == "accepted" and
+             .protected_run == {run_id: $run, workflow_commit: $source} and
+             .physical_claim == "not_claimed" and .booklet_verified == false and
+             .probes.recorded_demo.verified == true and
+             .probes.production_isolation.verified == true' "$output"
+
+      - name: Attest final aggregate acceptance bytes
+        uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8
+        with:
+          subject-path: passport-beta-final-acceptance-${{ github.run_id }}.json
+
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: passport-beta-final-acceptance-${{ github.run_id }}
+          path: passport-beta-final-acceptance-${{ github.run_id }}.json
+          if-no-files-found: error
+          retention-days: 90

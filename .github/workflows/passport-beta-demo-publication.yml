@@ -18,6 +18,12 @@ on:
       campaign_review:
         description: Absolute path to the reviewed MTDP campaign manifest.
         required: true
+      youtube_oauth_client_file:
+        description: Absolute path to the protected ElevenID LLC OAuth client on the runner.
+        required: true
+      youtube_oauth_token_file:
+        description: Absolute path to the protected ElevenID LLC OAuth token on the runner.
+        required: true
 
 concurrency:
   group: passport-beta-demo-publication
@@ -49,17 +55,22 @@ jobs:
           PUBLICATION_CONFIG: ${{ inputs.publication_config }}
           REVIEWED_MASTER: ${{ inputs.reviewed_master }}
           CAMPAIGN_REVIEW: ${{ inputs.campaign_review }}
+          YOUTUBE_OAUTH_CLIENT_FILE: ${{ inputs.youtube_oauth_client_file }}
+          YOUTUBE_OAUTH_TOKEN_FILE: ${{ inputs.youtube_oauth_token_file }}
         run: |
           set -euo pipefail
           test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
           [[ "$PRELIMINARY_RUN_ID" =~ ^[1-9][0-9]*$ ]]
-          for input in BETA_ARTIFACT_DIR PUBLICATION_CONFIG REVIEWED_MASTER CAMPAIGN_REVIEW; do
+          for input in BETA_ARTIFACT_DIR PUBLICATION_CONFIG REVIEWED_MASTER CAMPAIGN_REVIEW YOUTUBE_OAUTH_CLIENT_FILE YOUTUBE_OAUTH_TOKEN_FILE; do
             [[ "${!input}" == /* ]]
           done
           test -d "$BETA_ARTIFACT_DIR"
           test -f "$PUBLICATION_CONFIG"
           test -f "$REVIEWED_MASTER"
           test -f "$CAMPAIGN_REVIEW"
+          test -f "$YOUTUBE_OAUTH_CLIENT_FILE"
+          test -f "$YOUTUBE_OAUTH_TOKEN_FILE"
+          test "$(stat -c %a "$YOUTUBE_OAUTH_TOKEN_FILE")" = 600
 
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v4
         with:
@@ -99,6 +110,8 @@ jobs:
           PUBLICATION_CONFIG: ${{ inputs.publication_config }}
           REVIEWED_MASTER: ${{ inputs.reviewed_master }}
           CAMPAIGN_REVIEW: ${{ inputs.campaign_review }}
+          YOUTUBE_OAUTH_CLIENT_FILE: ${{ inputs.youtube_oauth_client_file }}
+          YOUTUBE_OAUTH_TOKEN_FILE: ${{ inputs.youtube_oauth_token_file }}
         run: |
           set -euo pipefail
           umask 077
