@@ -4,12 +4,14 @@ from __future__ import annotations
 
 from contextlib import nullcontext
 import hashlib
+import json
 import os
 from pathlib import Path
 import re
 import runpy
 import shutil
 import subprocess
+import tempfile
 from types import SimpleNamespace
 
 import pytest
@@ -528,6 +530,7 @@ def test_workflow_runs_all_preflights_immediately_after_preparation_and_keeps_fu
 
 def test_database_group_owner_still_invokes_default_full_mode(tmp_path, monkeypatch):
     module = runpy.run_path(str(ROOT / "scripts/ci/run-db-contract-groups.py"))
+    monkeypatch.delenv("RUNNER_TEMP", raising=False)
     observed = {}
 
     def groups(commands, directory):
@@ -552,6 +555,24 @@ def test_database_group_owner_still_invokes_default_full_mode(tmp_path, monkeypa
 
 def test_preflight_group_owner_runs_all_four_exact_modes(tmp_path, monkeypatch):
     module = runpy.run_path(str(ROOT / "scripts/ci/run-db-contract-groups.py"))
+    executable = tmp_path / "canvas-contract"
+    executable.write_bytes(b"synthetic compiled Canvas contract")
+    (tmp_path / "rust-test-artifacts.json").write_text(
+        json.dumps(
+            {
+                "reason": "compiler-artifact",
+                "package_id": "marty-issuance-service 0.0.0",
+                "target": {"name": "canvas_published_schema_contract"},
+                "executable": str(executable),
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("RUNNER_TEMP", str(tmp_path))
+    monkeypatch.setenv("GITHUB_RUN_ID", "synthetic-run")
+    monkeypatch.setenv("GITHUB_RUN_ATTEMPT", "1")
+    monkeypatch.setenv("GITHUB_JOB", "test-rust-services")
     observed = {}
 
     def groups(commands, directory):
@@ -567,9 +588,18 @@ def test_preflight_group_owner_runs_all_four_exact_modes(tmp_path, monkeypatch):
     monkeypatch.setitem(
         namespace,
         "tempfile",
-        SimpleNamespace(TemporaryDirectory=lambda **kwargs: nullcontext(str(tmp_path))),
+        SimpleNamespace(
+            TemporaryDirectory=lambda **kwargs: nullcontext(str(tmp_path)),
+            NamedTemporaryFile=tempfile.NamedTemporaryFile,
+        ),
     )
     assert module["main"]("preflights") == 0
+    assert (tmp_path / "canvas-published-preflights.sha256").read_text(
+        encoding="ascii"
+    ) == (
+        hashlib.sha256(executable.read_bytes()).hexdigest()
+        + "\nsynthetic-run\n1\ntest-rust-services\n"
+    )
     assert list(observed) == [
         "mixed-roster-preflight",
         "body-timeout-preflight",
