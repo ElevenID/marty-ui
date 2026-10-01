@@ -160,8 +160,10 @@ Python passport retirement requires protected Rust parity, the final live
 drain, and the reviewed deletion gate before the aggregate beta deployment.
 The recording and final receipt then qualify the single Rust-only beta soak.
 
-The preliminary workflow and reviewed recorder pin are present in protected
-source. Live beta receipts, recording, and YouTube upload remain pending.
+The preliminary workflow and reviewed recorder pin are on protected main.
+This branch adds the D-12 publication, soak, and final demo receipt producers.
+Protected live preliminary, signed callback, Rust restart, publication, soak,
+and final acceptance receipts remain pending.
 No beta recording or YouTube upload has occurred under this plan.
 The disposable model rehearses the stack and does not replace this live beta
 recording or its protected preliminary receipt.
