@@ -29,6 +29,7 @@ def inputs(root: Path) -> Path:
         "issuance_api_key", "dsc_issue_gateway_key", "csca_issue_gateway_key",
         "callback_signer_api_key",
         "callback_signer_bao_token", "grpc_service_token", "bureau_database_url",
+        "passport_beta_reconciliation_operator_token",
         "passport_edge_tls_cert", "passport_edge_tls_key",
         "flow_webhook_secret", "flow_application_event_hmac_key",
         "workload_identity_ca_cert", "flow_workload_client_cert",
@@ -91,7 +92,7 @@ def test_real_compose_render_is_safe_but_not_accepted(
         assert env["ENVIRONMENT"] == (
             "beta" if name in {"passport-callback-signer", "passport-beta-bureau"}
             or (surface == "base" and name == "gateway")
-            or (surface == "selfhost" and name == "issuance-native")
+            or name == "issuance-native"
             else "development" if surface == "base" else "production"
         )
     for name in ("gateway", "flow", "issuance-native"):

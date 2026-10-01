@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from copy import deepcopy
+from pathlib import Path
 
 import pytest
 
@@ -22,6 +23,7 @@ def records() -> dict[str, dict]:
         result[container_id] = {
             "Id": container_id,
             "Image": "sha256:" + "a" * 64,
+            "RestartCount": 0,
             "Config": {
                 "Image": "ghcr.io/elevenid/test@sha256:" + "a" * 64,
                 "Labels": {
@@ -31,6 +33,12 @@ def records() -> dict[str, dict]:
                 "Env": environment,
             },
             "State": {"Running": True, "Status": "running", "StartedAt": "now"},
+            "Mounts": [],
+            "NetworkSettings": {"Networks": {
+                "elevenid-beta-network": {"NetworkID": "b" * 64,
+                                           "Aliases": [], "IPAddress": "172.0.0.2"},
+            }},
+            "HostConfig": {"PortBindings": {}},
         }
     return result
 
@@ -48,7 +56,40 @@ def test_inventory_pins_beta_services_and_redacts_database_password(
     assert set(found) == set(target.REQUIRED_SERVICES)
     assert found["issuance"]["database_target"] == "postgres:5432/marty"
     assert found["gateway"]["passport_route_selector"] == "unset"
+    assert found["issuance"]["restart_count"] == 0
     assert "do-not-print" not in repr(found)
+
+
+def test_inventory_includes_other_beta_compose_services(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    items = records()
+    extra = deepcopy(next(iter(items.values())))
+    extra["Id"] = "f" * 64
+    extra["Config"]["Labels"]["com.docker.compose.service"] = "docs"
+    items[extra["Id"]] = extra
+    found = inventory(monkeypatch, items)
+    assert set(found) == {*target.REQUIRED_SERVICES, "docs"}
+    assert found["docs"]["container_id"] == "f" * 64
+
+
+def test_inventory_binds_beta_attachments_and_separate_ui(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    items = records()
+    first = inventory(monkeypatch, items)
+    items[next(iter(items))]["HostConfig"]["PortBindings"] = {"443/tcp": [
+        {"HostIp": "127.0.0.1", "HostPort": "443"},
+    ]}
+    second = inventory(monkeypatch, items)
+    assert first["postgres"]["attachments_sha256"] != second["postgres"][
+        "attachments_sha256"]
+    ui = deepcopy(next(iter(items.values())))
+    ui["Config"]["Labels"]["com.docker.compose.project"] = target.UI_PROJECT
+    ui["Config"]["Labels"]["com.docker.compose.service"] = "ui-prod"
+    monkeypatch.setattr(target, "ids", lambda project, runner: [ui["Id"]])
+    monkeypatch.setattr(target, "inspect", lambda container_id, runner: ui)
+    assert target.ui_inventory(lambda command: "unused")["container_id"] == ui["Id"]
 
 
 def test_fenced_observer_uses_postinstall_identity_without_prefence_acl(
@@ -59,6 +100,9 @@ def test_fenced_observer_uses_postinstall_identity_without_prefence_acl(
                 for index, name in enumerate(target.REQUIRED_SERVICES, start=1)}
     postgres = selected["postgres"]["container_id"]
     monkeypatch.setattr(target, "service_inventory", lambda runner: selected)
+    monkeypatch.setattr(target, "ui_inventory", lambda runner: {
+        "container_id": "f" * 64, "attachments_sha256": "a" * 64,
+    })
     monkeypatch.setattr(target, "database_network_binding",
                         lambda inventory, runner: {"id": "a" * 64,
                                                    "postgres_container_id": postgres})
@@ -86,6 +130,7 @@ def test_fenced_observer_uses_postinstall_identity_without_prefence_acl(
 
 @pytest.mark.parametrize("drift", (
     "foreign_project", "prod_db", "query_host_override", "duplicate_env", "stopped",
+    "missing_restart_count", "negative_restart_count",
 ))
 def test_inventory_rejects_wrong_target_or_ambiguous_configuration(
     monkeypatch: pytest.MonkeyPatch, drift: str,
@@ -106,6 +151,10 @@ def test_inventory_rejects_wrong_target_or_ambiguous_configuration(
         flow["Config"]["Env"][1] += "?host=production"
     elif drift == "duplicate_env":
         flow["Config"]["Env"].append(flow["Config"]["Env"][1])
+    elif drift == "missing_restart_count":
+        flow.pop("RestartCount")
+    elif drift == "negative_restart_count":
+        flow["RestartCount"] = -1
     else:
         flow["State"]["Running"] = False
     with pytest.raises(HostProbeError):
@@ -224,3 +273,14 @@ def test_postgres_runtime_matches_frozen_verifier_qualification() -> None:
         target.qualified_postgres_runtime(target.QUALIFIED_POSTGRES_IMAGE_ID, "160000")
     with pytest.raises(HostProbeError, match="differs from fence qualification"):
         target.qualified_postgres_runtime("sha256:" + "a" * 64, "150017")
+def test_fence_operator_rechecks_old_generation_before_mutation() -> None:
+    root = Path(__file__).resolve().parents[1]
+    operator = (root / "scripts/install-passport-beta-fence.ps1").read_text(
+        encoding="utf-8")
+    assert operator.index("$before = Invoke-FencePython") < operator.index(
+        "Start-BetaMutation\n")
+    assert "$before.observation_sha256 -cne $plan.target_observation_sha256" in operator
+    assert "Approved beta service generation or database route changed before fence" in operator
+    assert "$after.beta.ui_project -cne $before.beta.ui_project" in operator
+    assert "($before.beta.ui_service | ConvertTo-Json -Depth 20 -Compress)" in operator
+

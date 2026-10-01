@@ -17,6 +17,12 @@ from services.passport_disposable_identity import issuer_did
 KEY = "mk_test_" + "a" * 43
 OPERATOR_KEY = "mk_test_" + "b" * 43
 IDENTIFIER = "d0000000-0000-4000-8000-000000000001"
+TEMPLATE = "d0000000-0000-4000-8000-000000000003"
+DESTINATION = "d0000000-0000-4000-8000-000000000004"
+DEFINITION = "d0000000-0000-4000-8000-000000000005"
+INSTANCE = "d0000000-0000-4000-8000-000000000006"
+APPLICATION = "d0000000-0000-4000-8000-000000000007"
+BUREAU = "d0000000-0000-4000-8000-000000000002"
 
 
 class Response:
@@ -141,6 +147,36 @@ def test_operator_request_requires_owned_live_project(monkeypatch):
         cleanup(root)
 
 
+def test_native_batch_companion_uses_public_owned_passport_routes(monkeypatch):
+    root, record = fixture()
+    opener = Opener()
+    monkeypatch.setattr(gateway.ssl, "create_default_context", lambda **kwargs: object())
+    edge = {"HostConfig": {"PortBindings": {"8443/tcp": [
+        {"HostIp": "127.0.0.1", "HostPort": "29877"}]}},
+        "NetworkSettings": {"Ports": {"8443/tcp": [
+            {"HostIp": "127.0.0.1", "HostPort": "29877"}]}}}
+    try:
+        request = gateway.owned_gateway_request(
+            record, "selfhost", operator=False, passport_write=True,
+            expected_port=29877, inspector=lambda args: json.dumps([edge]),
+            ownership=lambda *args: {"live_ownership_verified": True},
+            opener_factory=lambda *args: opener)
+        assert request("POST", "/v1/passport/applications", {"synthetic": True}) \
+            == (200, {"id": IDENTIFIER})
+        assert request("POST", f"/v1/passport/applications/{IDENTIFIER}/generate-sod") \
+            == (200, {"id": IDENTIFIER})
+        assert request("GET", f"/v1/passport/applications/{IDENTIFIER}/production-status") \
+            == (200, {"id": IDENTIFIER})
+        assert all(item.headers["X-api-key"] == KEY for item in opener.requests)
+        with pytest.raises(gateway.FlowGatewayError, match="escaped scope"):
+            request("POST", "/internal/passport/beta-batches/preflight")
+        with pytest.raises(gateway.FlowGatewayError, match="escaped scope"):
+            request("POST", f"/v1/passport/applications/{IDENTIFIER}/production-status")
+        assert len(opener.requests) == 3
+    finally:
+        cleanup(root)
+
+
 def test_flow_start_uses_operator_for_references_and_native_key_for_job(monkeypatch):
     events = []
 
@@ -148,7 +184,7 @@ def test_flow_start_uses_operator_for_references_and_native_key_for_job(monkeypa
         return "local-docker-only"
 
     def factory(record, surface, *, operator, expected_port, inspector: object):
-        assert (record, surface, expected_port) == ({"project": "owned"}, "base", 29877)
+        assert (record["project"], surface, expected_port) == ("owned", "base", 29877)
         assert inspector is local_inspector
 
         def request(method, path, body=None, headers=None):
@@ -161,45 +197,88 @@ def test_flow_start_uses_operator_for_references_and_native_key_for_job(monkeypa
         assert organization == "00000000-0000-0000-0000-000000000001"
         assert did == issuer_did(29877)
         request("POST", "/v1/credential-templates", {}, {})
-        return {"credential_template_id": IDENTIFIER}
+        return {"credential_template_id": IDENTIFIER,
+                "application_template_id": TEMPLATE,
+                "delivery_destination_profile_id": DESTINATION}
 
     def start(request, organization, name, refs, physical, native_request):
-        assert refs == {"credential_template_id": IDENTIFIER}
+        assert refs["credential_template_id"] == IDENTIFIER
         assert physical["data_groups"] == {"DG1": "YQ==", "DG2": "Yg=="}
         assert physical["applicant"] and physical["mrz"]
         request("POST", "/v1/flows/instances", {})
         native_request("GET", f"/v1/passport/applications/{IDENTIFIER}/production-status", None)
-        return {"native_job_id": IDENTIFIER}
+        return {"native_job_id": IDENTIFIER, "flow_definition_id": DEFINITION,
+                "flow_instance_id": INSTANCE, "application_id": APPLICATION}
 
     monkeypatch.setattr(gateway, "provision_physical_passport_references", references)
     monkeypatch.setattr(gateway, "start_physical_passport_flow", start)
     def advance(request, native_request, private_poll, history_read,
-                organization, refs, started, did, *, restart):
+                organization, refs, started, did, *, restart, before_submit):
         assert restart() is True
+        assert before_submit(started, "a" * 64) == BUREAU
         assert organization == "00000000-0000-0000-0000-000000000001"
         assert did == issuer_did(29877)
-        assert started == {"native_job_id": IDENTIFIER}
+        assert started["native_job_id"] == IDENTIFIER
         return {"flow_step_count": 9, "native_effect_count": 6,
                 "durable_history_verified": True,
                 "restart_resume_verified": True,
+                "restart_before_native_status": "SOD_SIGNED",
+                "restart_after_native_status": "SUBMITTED",
                 "signed_callback_receipt_sha256": "b" * 64,
-                "bureau_job_id": "d0000000-0000-4000-8000-000000000002",
+                "callback_bureau_status": "QUALITY_CHECK",
+                "bureau_job_id": BUREAU,
                 "sod_sha256": "a" * 64}
 
+    def batch_probe(record, surface, port, application, physical, *args, **kwargs):
+        assert record["containers"]["issuance-native"] == "a" * 64
+        assert application["application_template_id"] == TEMPLATE
+        assert application["delivery_destination_profile_id"] == DESTINATION
+        assert physical["data_groups"] == {"DG1": "YQ==", "DG2": "Yg=="}
+        assert args[:4] == (INSTANCE, APPLICATION, IDENTIFIER, "a" * 64)
+        return BUREAU, {"final_native_preflight": {
+            "native_container_id": "a" * 64,
+            "native_batch_preflight_verified": True},
+            "batch": {"verified": True, "evidence": {
+                "selected_flow_in_two_job_batch": True,
+                "first_accepted_material_verified": True,
+                "companion_native_completed": True}}}
+
     result = gateway.exercise_owned_flow(
-        {"project": "owned"}, "base", 29877, "123456",
+        {"project": "owned", "containers": {"issuance-native": "a" * 64}},
+        "base", 29877, "123456",
+        dsc_der_sha256="2" * 64, dsc_pem_wire_sha256="3" * 64,
+        batch_state_path=Path(tempfile.gettempdir()) / "pending.json",
+        batch_deadline=datetime.now(timezone.utc) + timedelta(hours=1),
         inspector=local_inspector, request_factory=factory, advance=advance,
-        restart=lambda: True)
+        restart=lambda: True, batch_probe=batch_probe)
     digest = hashlib.sha256(IDENTIFIER.encode()).hexdigest()
-    assert result == {"references": {"credential_template_id_sha256": digest},
-                      "flow": {"native_job_id_sha256": digest},
+    assert result == {"references": {
+                          "credential_template_id_sha256": digest,
+                          "application_template_id_sha256": hashlib.sha256(TEMPLATE.encode()).hexdigest(),
+                          "delivery_destination_profile_id_sha256": hashlib.sha256(DESTINATION.encode()).hexdigest()},
+                      "flow": {"native_job_id_sha256": digest,
+                               "flow_definition_id_sha256": hashlib.sha256(DEFINITION.encode()).hexdigest(),
+                               "flow_instance_id_sha256": hashlib.sha256(INSTANCE.encode()).hexdigest(),
+                               "application_id_sha256": hashlib.sha256(APPLICATION.encode()).hexdigest()},
+                      "batch": {"final_native_preflight": {
+                          "native_container_id": "a" * 64,
+                          "native_batch_preflight_verified": True},
+                          "batch": {"verified": True, "evidence": {
+                              "selected_flow_in_two_job_batch": True,
+                              "first_accepted_material_verified": True,
+                              "companion_native_completed": True}},
+                          "selected_source_job_sha256": digest,
+                          "selected_bureau_job_sha256": hashlib.sha256(BUREAU.encode()).hexdigest(),
+                          "dsc_der_sha256": "2" * 64},
                       "execution": {"nine_steps_verified": True,
                                     "six_native_effects_verified": True,
                                     "durable_history_verified": True,
                                     "restart_resume_verified": True,
+                                    "restart_before_native_status": "SOD_SIGNED",
+                                    "restart_after_native_status": "SUBMITTED",
                                     "signed_callback_receipt_sha256": "b" * 64,
-                                    "bureau_job_id_sha256": hashlib.sha256(
-                                        b"d0000000-0000-4000-8000-000000000002").hexdigest(),
+                                    "callback_bureau_status": "QUALITY_CHECK",
+                                    "bureau_job_id_sha256": hashlib.sha256(BUREAU.encode()).hexdigest(),
                                     "sod_sha256": "a" * 64}}
     assert events == [
         (True, "POST", "/v1/credential-templates"),

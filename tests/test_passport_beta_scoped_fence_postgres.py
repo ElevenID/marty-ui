@@ -13,7 +13,10 @@ import uuid
 import pytest
 
 from scripts.probe_passport_beta_fence_direct_writes import (
-    FenceProbeError, candidate_sql, probe_direct_writes,
+    FenceProbeError, candidate_sql, probe_direct_writes, unrelated_sql,
+)
+from scripts.prepare_passport_beta_native_migrations import (
+    build_sql, migration_set_sha256,
 )
 
 
@@ -22,6 +25,12 @@ SCHEMA = ROOT / "tests/fixtures/passport-beta-fence-schema.sql"
 INSTALL = ROOT / "scripts/sql/passport-beta-fence-install.sql"
 DRAIN = ROOT / "scripts/sql/passport-beta-fence-drain.sql"
 VERIFY = ROOT / "scripts/sql/passport-beta-fence-verify.sql"
+FINALIZE_BATCH_ACL = ROOT / "scripts/sql/passport-beta-batch-acl-finalize.sql"
+START_MAINTENANCE = ROOT / "scripts/sql/passport-beta-db-maintenance-start.sql"
+ENABLE_APP_LOGIN = ROOT / "scripts/sql/passport-beta-db-enable-app-login.sql"
+RUST_OWNER_TRANSITION = ROOT / "scripts/sql/passport-beta-rust-owner-transition.sql"
+RUST_OWNER_VERIFY = ROOT / "scripts/sql/passport-beta-rust-owner-verify.sql"
+SUBMISSION_INTENT_MIGRATION = ROOT / "rust/services/issuance/migrations/0004_passport_submission_intent.sql"
 POSTGRES_IMAGE = "postgres:15-alpine@sha256:fceb6f86328c36f2438fae3b851b0cc57c4a7e69a58c866d9ce24281f2cf0c9c"
 
 
@@ -43,10 +52,17 @@ def sql(container: str, query: str, *, allowed: bool = True) -> str:
     return result.stdout if allowed else result.stderr
 
 
-def script_args(container: str, path: Path, *, attested: bool = True) -> list[str]:
+def script_args(
+    container: str, path: Path, *, attested: bool = True,
+    migration_digest: str | None = None,
+) -> list[str]:
     docker("cp", str(path), f"{container}:/tmp/{path.name}")
     if path == INSTALL:
         docker("cp", str(DRAIN), f"{container}:/tmp/{DRAIN.name}")
+    if path == RUST_OWNER_TRANSITION:
+        docker("cp", str(DRAIN), f"{container}:/tmp/{DRAIN.name}")
+        docker("cp", str(VERIFY), f"{container}:/tmp/{VERIFY.name}")
+        docker("cp", str(RUST_OWNER_VERIFY), f"{container}:/tmp/{RUST_OWNER_VERIFY.name}")
     target = []
     if attested:
         system_id = sql(container, "SELECT system_identifier FROM pg_control_system()").strip()
@@ -58,6 +74,23 @@ def script_args(container: str, path: Path, *, attested: bool = True) -> list[st
             "-c", f"SET marty.passport_beta_expected_system_identifier = '{system_id}'",
             "-c", f"SET marty.passport_beta_expected_database_oid = '{database_oid}'",
         ]
+        if path in (FINALIZE_BATCH_ACL, START_MAINTENANCE, ENABLE_APP_LOGIN,
+                    RUST_OWNER_TRANSITION, RUST_OWNER_VERIFY):
+            epoch = sql(container, "SELECT epoch FROM passport_cutover.state").strip()
+            target += [
+                "-c", f"SET marty.passport_beta_expected_fence_epoch = '{epoch}'",
+            ]
+        if path in (ENABLE_APP_LOGIN, RUST_OWNER_TRANSITION):
+            target += [
+                "-c", "SET marty.passport_beta_expected_source_commit = '" + "b" * 40 + "'",
+                "-c", "SET marty.passport_beta_expected_native_migration_sha256 = '"
+                      + (migration_digest or migration_set_sha256((("disposable.sql", b"SELECT 1;\n"),))) + "'",
+            ]
+        if path == RUST_OWNER_VERIFY:
+            marker = sql(container, "SELECT transition_txid FROM passport_cutover.state").strip()
+            target += [
+                "-c", f"SET marty.passport_beta_expected_transition_txid = '{marker}'",
+            ]
     return [
         "exec", container, "psql", "-U", "postgres", "-d", "marty",
         "-qAt", "-v", "ON_ERROR_STOP=1", *target,
@@ -66,9 +99,11 @@ def script_args(container: str, path: Path, *, attested: bool = True) -> list[st
 
 
 def script(
-    container: str, path: Path, *, attested: bool = True
+    container: str, path: Path, *, attested: bool = True,
+    migration_digest: str | None = None,
 ) -> subprocess.CompletedProcess[str]:
-    return docker(*script_args(container, path, attested=attested), check=False)
+    return docker(*script_args(container, path, attested=attested,
+                               migration_digest=migration_digest), check=False)
 
 
 @pytest.fixture
@@ -121,6 +156,256 @@ def database():
         yield name
     finally:
         docker("stop", name, check=False)
+
+
+def test_batch_acl_finalizer_requires_exact_fence_and_grants_app_access(database: str):
+    installed = script(database, INSTALL)
+    assert installed.returncode == 0, installed.stderr
+    sql(database, """
+        CREATE TABLE issuance_service.passport_beta_batch_intents (
+            batch_id uuid PRIMARY KEY
+        )
+    """)
+    missing_target = script(database, FINALIZE_BATCH_ACL, attested=False)
+    assert missing_target.returncode != 0
+    assert "lacks exact fenced beta target" in missing_target.stderr
+    assert sql(database, """
+        SELECT pg_get_userbyid(relowner)
+        FROM pg_class
+        WHERE oid='issuance_service.passport_beta_batch_intents'::regclass
+    """).strip() == "postgres"
+
+    wrong_epoch = script_args(database, FINALIZE_BATCH_ACL)
+    wrong_epoch = [
+        arg.replace("SET marty.passport_beta_expected_fence_epoch = '",
+                    "SET marty.passport_beta_expected_fence_epoch = '0")
+        if arg.startswith("SET marty.passport_beta_expected_fence_epoch = '") else arg
+        for arg in wrong_epoch
+    ]
+    refused = docker(*wrong_epoch, check=False)
+    assert refused.returncode != 0
+    assert "lacks exact fenced beta target" in refused.stderr
+
+    active_login = script(database, FINALIZE_BATCH_ACL)
+    assert active_login.returncode != 0
+    assert "lacks exact fenced beta target" in active_login.stderr
+    sql(database, "ALTER ROLE marty NOLOGIN")
+    finalized = script(database, FINALIZE_BATCH_ACL)
+    assert finalized.returncode == 0, finalized.stderr
+    assert sql(database, """
+        SELECT pg_get_userbyid(relowner) || ':' ||
+               has_table_privilege('marty',oid,'SELECT') || ':' ||
+               has_table_privilege('marty',oid,'INSERT') || ':' ||
+               has_table_privilege('marty',oid,'UPDATE') || ':' ||
+               has_table_privilege('marty',oid,'DELETE') || ':' ||
+               has_table_privilege('marty',oid,'TRUNCATE,TRIGGER')
+        FROM pg_class
+        WHERE oid='issuance_service.passport_beta_batch_intents'::regclass
+    """).strip() == "marty_passport_fence_owner:true:true:true:true:false"
+    assert script(database, VERIFY).returncode == 0
+
+
+def test_maintenance_start_requires_fence_and_drains_existing_login(database: str):
+    unfenced = script(database, START_MAINTENANCE, attested=False)
+    assert unfenced.returncode != 0
+    assert sql(database, "SELECT rolcanlogin FROM pg_roles WHERE rolname='marty'").strip() == "t"
+
+    installed = script(database, INSTALL)
+    assert installed.returncode == 0, installed.stderr
+    missing_target = script(database, START_MAINTENANCE, attested=False)
+    assert missing_target.returncode != 0
+    assert "lacks exact fenced beta target" in missing_target.stderr
+    assert sql(database, "SELECT rolcanlogin FROM pg_roles WHERE rolname='marty'").strip() == "t"
+
+    idle_client = subprocess.Popen(
+        ["docker", "exec", "-i", database, "psql", "-U", "marty", "-d", "marty",
+         "-v", "ON_ERROR_STOP=1", "-At"],
+        stdin=subprocess.PIPE, stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE, text=True,
+    )
+    try:
+        for _ in range(40):
+            if sql(database, "SELECT count(*) FROM pg_stat_activity "
+                             "WHERE usename='marty' AND state='idle'").strip() == "1":
+                break
+            time.sleep(0.1)
+        else:
+            pytest.fail("disposable marty session did not open")
+        started = script(database, START_MAINTENANCE)
+        assert started.returncode == 0, started.stderr
+        assert sql(database, "SELECT rolcanlogin FROM pg_roles WHERE rolname='marty'").strip() == "f"
+        assert sql(database, "SELECT count(*) FROM pg_stat_activity "
+                             "WHERE usename='marty'").strip() == "0"
+        assert script(database, VERIFY).returncode == 0
+        _out, err = idle_client.communicate("SELECT 1;\n", timeout=10)
+        assert idle_client.returncode != 0
+        assert "server closed the connection" in err
+        retried = script(database, START_MAINTENANCE)
+        assert retried.returncode == 0, retried.stderr
+    finally:
+        if idle_client.poll() is None:
+            idle_client.terminate()
+        idle_client.communicate(timeout=10)
+
+
+def test_maintenance_start_refuses_active_session_without_disabling_login(database: str):
+    installed = script(database, INSTALL)
+    assert installed.returncode == 0, installed.stderr
+    sleeper = subprocess.Popen(
+        ["docker", "exec", database, "psql", "-U", "marty", "-d", "marty",
+         "-v", "ON_ERROR_STOP=1", "-c", "SELECT pg_sleep(30)"],
+        stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
+    )
+    try:
+        for _ in range(40):
+            if sql(database, "SELECT count(*) FROM pg_stat_activity "
+                             "WHERE usename='marty' AND state='active'").strip() == "1":
+                break
+            time.sleep(0.1)
+        else:
+            pytest.fail("disposable active marty session did not open")
+        refused = script(database, START_MAINTENANCE)
+        assert refused.returncode != 0
+        assert "lacks exact fenced beta target" in refused.stderr
+        assert sql(database, "SELECT rolcanlogin FROM pg_roles WHERE rolname='marty'").strip() == "t"
+    finally:
+        if sleeper.poll() is None:
+            sleeper.terminate()
+        sleeper.communicate(timeout=10)
+
+
+def test_maintenance_start_rejects_role_membership_without_disabling_login(database: str):
+    installed = script(database, INSTALL)
+    assert installed.returncode == 0, installed.stderr
+    sql(database, "CREATE ROLE disposable_member LOGIN")
+    sql(database, "GRANT marty TO disposable_member")
+    refused = script(database, START_MAINTENANCE)
+    assert refused.returncode != 0
+    assert "lacks exact fenced beta target" in refused.stderr
+    assert sql(database, "SELECT rolcanlogin FROM pg_roles WHERE rolname='marty'").strip() == "t"
+
+
+def test_app_login_requires_finalized_batch_access_and_drained_sessions(
+    database: str, tmp_path: Path,
+):
+    assert script(database, INSTALL).returncode == 0
+    assert script(database, START_MAINTENANCE).returncode == 0
+    sql(database, """
+        CREATE TABLE issuance_service.passport_beta_batch_intents (
+            batch_id uuid PRIMARY KEY
+        )
+    """)
+    premature = script(database, ENABLE_APP_LOGIN)
+    assert premature.returncode != 0
+    assert "lacks committed native migrations" in premature.stderr
+    assert sql(database, "SELECT rolcanlogin FROM pg_roles WHERE rolname='marty'").strip() == "f"
+    assert script(database, FINALIZE_BATCH_ACL).returncode == 0
+    missing_native = script(database, ENABLE_APP_LOGIN)
+    assert missing_native.returncode != 0
+    assert "lacks committed native migrations" in missing_native.stderr
+    target = {
+        "system_id": sql(database, "SELECT system_identifier FROM pg_control_system()").strip(),
+        "database_oid": sql(database, "SELECT oid FROM pg_database WHERE datname='marty'").strip(),
+        "fence_epoch": sql(database, "SELECT epoch FROM passport_cutover.state").strip(),
+    }
+    disposable_bundle = build_sql(target, (("disposable.sql", b"SELECT 1;\n"),), "b" * 40)
+    payload = tmp_path / "passport-beta-disposable-native-marker.sql"
+    payload.write_bytes(disposable_bundle)
+    native = script(database, payload)
+    assert native.returncode == 0, native.stderr
+    missing_target = script(database, ENABLE_APP_LOGIN, attested=False)
+    assert missing_target.returncode != 0
+    assert "lacks exact drained beta target" in missing_target.stderr
+    opened = script(database, ENABLE_APP_LOGIN)
+    assert opened.returncode == 0, opened.stderr
+    assert sql(database, "SELECT rolcanlogin FROM pg_roles WHERE rolname='marty'").strip() == "t"
+    assert script(database, VERIFY).returncode == 0
+    repeated = script(database, ENABLE_APP_LOGIN)
+    assert repeated.returncode == 0, repeated.stderr
+
+
+def test_rust_owner_transition_preserves_fence_epoch_and_guarded_ddl(
+    database: str, tmp_path: Path,
+):
+    sql(database, """
+        SET ROLE marty;
+        CREATE FUNCTION issuance_service.guard_physical_document_submission_intent()
+        RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN RETURN NEW; END $$
+    """)
+    assert script(database, INSTALL).returncode == 0
+    assert script(database, START_MAINTENANCE).returncode == 0
+    sql(database, "CREATE TABLE issuance_service.passport_beta_batch_intents (batch_id uuid PRIMARY KEY)")
+    assert script(database, FINALIZE_BATCH_ACL).returncode == 0
+    target = {
+        "system_id": sql(database, "SELECT system_identifier FROM pg_control_system()").strip(),
+        "database_oid": sql(database, "SELECT oid FROM pg_database WHERE datname='marty'").strip(),
+        "fence_epoch": sql(database, "SELECT epoch FROM passport_cutover.state").strip(),
+    }
+    migrations = (("0004_passport_submission_intent.sql", SUBMISSION_INTENT_MIGRATION.read_bytes()),)
+    digest = migration_set_sha256(migrations)
+    marker = tmp_path / "rust-owner-native-marker.sql"
+    marker.write_bytes(build_sql(target, migrations, "b" * 40))
+    assert script(database, marker).returncode == 0
+    assert sql(database, """
+        SELECT pg_get_userbyid(proowner) FROM pg_proc
+        WHERE oid='issuance_service.guard_physical_document_submission_intent()'::regprocedure
+    """) == "marty\n"
+    assert script(database, ENABLE_APP_LOGIN, migration_digest=digest).returncode == 0
+    sql(database, """
+        CREATE OR REPLACE FUNCTION issuance_service.guard_physical_document_submission_intent()
+        RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN RETURN NEW; END $$
+    """)
+    weak_guard = script(database, RUST_OWNER_TRANSITION, migration_digest=digest)
+    assert weak_guard.returncode != 0
+    assert "trigger inventory changed" in weak_guard.stderr
+    assert sql(database, "SELECT phase FROM passport_cutover.state") == "fully_fenced\n"
+    assert sql(database, """
+        SELECT pg_get_userbyid(proowner) FROM pg_proc
+        WHERE oid='issuance_service.guard_physical_document_submission_intent()'::regprocedure
+    """) == "marty\n"
+    assert script(database, SUBMISSION_INTENT_MIGRATION).returncode == 0
+    candidate = candidate_sql("d" * 32)
+    for statement in candidate.values():
+        sql(database, f"SET ROLE marty; BEGIN; {statement}; ROLLBACK;", allowed=False)
+    missing_target = script(database, RUST_OWNER_TRANSITION, attested=False,
+                            migration_digest=digest)
+    assert missing_target.returncode != 0
+    assert "lacks exact beta target" in missing_target.stderr
+    assert sql(database, "SELECT phase FROM passport_cutover.state") == "fully_fenced\n"
+    transitioned = script(database, RUST_OWNER_TRANSITION, migration_digest=digest)
+    assert transitioned.returncode == 0, transitioned.stderr
+    receipt = json.loads(transitioned.stdout.splitlines()[-1])
+    assert receipt["schema"] == "marty.passport-beta-rust-owner-transition/v1"
+    assert receipt["phase"] == "rust_owner"
+    assert receipt["fence_epoch"] == int(target["fence_epoch"])
+    assert receipt["transition_txid"] > receipt["fence_epoch"]
+    assert sql(database, """
+        SELECT pg_get_userbyid(proowner) FROM pg_proc
+        WHERE oid='issuance_service.guard_physical_document_submission_intent()'::regprocedure
+    """) == "marty_passport_fence_owner\n"
+    assert sql(database, "SELECT epoch FROM passport_cutover.state").strip() == target["fence_epoch"]
+    assert script(database, RUST_OWNER_VERIFY).returncode == 0
+    assert script(database, RUST_OWNER_VERIFY, attested=False).returncode != 0
+    sql(database, "DROP TRIGGER trg_physical_document_submission_intent ON issuance_service.physical_document_jobs")
+    missing_intent = script(database, RUST_OWNER_VERIFY)
+    assert missing_intent.returncode != 0
+    assert "trigger inventory changed" in missing_intent.stderr
+    sql(database, """
+        CREATE TRIGGER trg_physical_document_submission_intent
+        BEFORE UPDATE ON issuance_service.physical_document_jobs
+        FOR EACH ROW EXECUTE FUNCTION issuance_service.guard_physical_document_submission_intent()
+    """)
+    assert script(database, RUST_OWNER_VERIFY).returncode == 0
+    for statement in candidate.values():
+        sql(database, f"SET ROLE marty; BEGIN; {statement}; ROLLBACK;")
+    sql(database, "SET ROLE marty; TRUNCATE issuance_service.physical_document_jobs CASCADE", allowed=False)
+    sql(database, "SET ROLE marty; ALTER TABLE issuance_service.physical_document_jobs DISABLE TRIGGER passport_fence_job", allowed=False)
+    assert script(database, RUST_OWNER_TRANSITION, migration_digest=digest).returncode != 0
+    assert sql(database, "SELECT phase FROM passport_cutover.state") == "rust_owner\n"
+    sql(database, "ALTER TABLE passport_cutover.state DROP CONSTRAINT state_transition_shape_check")
+    drifted = script(database, RUST_OWNER_VERIFY)
+    assert drifted.returncode != 0
+    assert "state constraint changed" in drifted.stderr
 
 
 def test_scoped_fence_and_drain(database: str):
@@ -322,10 +607,11 @@ def test_one_shot_migration_role_preserves_fence_at_rest(
     mutation_marker.write_text("test", encoding="utf-8")
     fence_marker.write_text("test", encoding="utf-8")
     lease_file = ROOT / "scripts/beta-passport-migration-lease.ps1"
+    escaped_lease_file = str(lease_file).replace("'", "''")
     def lease(verb: str) -> None:
         code = f"""
             $ErrorActionPreference = 'Stop'
-            . '{str(lease_file).replace("'", "''")}'
+            . '{escaped_lease_file}'
             function Get-BetaMutationMarkerPath {{ return $env:BETA_TEST_MUTATION_MARKER }}
             function Get-BetaPassportFenceMarkerPath {{ return $env:BETA_TEST_FENCE_MARKER }}
             {verb}-BetaPassportMigrationLease `
@@ -424,16 +710,32 @@ def test_direct_writer_probe_uses_valid_candidates_and_fence_errors(database: st
     }
     for statement in candidate_sql("a" * 32).values():
         sql(database, f"BEGIN; {statement}; ROLLBACK;")
+    for statement in unrelated_sql("a" * 32).values():
+        assert sql(database, f"BEGIN; {statement}; ROLLBACK;").splitlines() == [
+            "BEGIN", "1", "ROLLBACK",
+        ]
     with pytest.raises(FenceProbeError):
         probe_direct_writes(container_id, **target)
     assert script(database, INSTALL).returncode == 0
     target["expected_fence_epoch"] = int(sql(database, "SELECT epoch FROM passport_cutover.state"))
     first = probe_direct_writes(container_id, **target)
     second = probe_direct_writes(container_id, **target)
+    installed_at = sql(database, """
+        SELECT to_char(installed_at AT TIME ZONE 'UTC', 'YYYY-MM-DD') || 'T' ||
+               to_char(installed_at AT TIME ZONE 'UTC', 'HH24:MI:SS.MS') || 'Z'
+        FROM passport_cutover.state WHERE singleton
+    """).strip()
+    assert installed_at < first["observed_at_utc"]
     assert set(first["rejections"]) == {
         "physical_document_jobs", "physical_flow_definitions",
         "physical_flow_instances",
     }
+    assert first["unrelated_writes"] == {
+        "issuance_transactions": {"verified": True, "rolled_back": True},
+        "non_passport_flow_definitions": {"verified": True, "rolled_back": True},
+    }
+    assert sql(database, "SELECT count(*) FROM issuance_service.issuance_transactions").strip() == "0"
+    assert sql(database, "SELECT count(*) FROM flow_service.flow_definitions").strip() == "0"
     assert first["session_user"] == first["current_user"] == "marty"
     assert first["database_uid"] == f"postgresql:{system_id}:{database_oid}"
     assert first["fence_epoch"] == target["expected_fence_epoch"]

@@ -6,6 +6,7 @@ import copy
 
 import pytest
 
+from scripts import probe_passport_beta_gateway as gateway_probe
 from scripts.probe_passport_beta_gateway import ProbeError, exercise
 
 
@@ -15,6 +16,44 @@ APPLICATION = {"organization_id": "beta-org", "issuer_did": "did:example:issuer"
                "country_code": "USA", "applicant": {}, "mrz": {},
                "data_groups": {"DG1": "YQ==", "DG2": "Yg=="}}
 KEY = "a" * 32
+
+
+def test_request_beta_uses_direct_origin_without_host_proxy(monkeypatch) -> None:
+    handlers = []
+    requests = []
+
+    class Response:
+        status = 200
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            return False
+
+        def geturl(self):
+            return requests[0].full_url
+
+        def read(self, amount):
+            return b'{"id":"job-1"}'
+
+    class Opener:
+        def open(self, request, timeout):
+            requests.append(request)
+            return Response()
+
+    def opener(*args):
+        handlers.extend(args)
+        return Opener()
+
+    monkeypatch.setattr(gateway_probe, "build_opener", opener)
+    status, payload = gateway_probe.request_beta(
+        "GET", "/v1/passport/applications/app-1/production-status", None, KEY,
+    )
+    assert (status, payload) == (200, {"id": "job-1"})
+    assert requests[0].full_url.startswith("https://beta.elevenidllc.com/")
+    assert any(isinstance(handler, gateway_probe.ProxyHandler)
+               and handler.proxies == {} for handler in handlers)
 
 
 def gateway(*, wrong_tenant: bool = False, no_quality: bool = False,

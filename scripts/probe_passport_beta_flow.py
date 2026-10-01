@@ -6,7 +6,7 @@ from __future__ import annotations
 import json
 from typing import Any, Callable
 from urllib.error import HTTPError, URLError
-from urllib.request import HTTPRedirectHandler, Request, build_opener
+from urllib.request import HTTPRedirectHandler, ProxyHandler, Request, build_opener
 
 
 ORIGIN = "https://beta.elevenidllc.com"
@@ -39,7 +39,7 @@ def request_beta(method: str, path: str) -> tuple[int, dict[str, Any] | None]:
         headers["Content-Type"] = "application/json"
     request = Request(url, data=body, headers=headers, method=method)
     try:
-        with build_opener(NoRedirect).open(request, timeout=20) as response:
+        with build_opener(ProxyHandler({}), NoRedirect).open(request, timeout=20) as response:
             if response.geturl() != url:
                 raise FlowProbeError("Beta Flow or webhook route redirected")
             raw = response.read(64 * 1024 + 1)

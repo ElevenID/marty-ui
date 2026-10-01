@@ -48,6 +48,11 @@ OPERATOR_ROUTES = re.compile(
 NATIVE_STATUS_ROUTE = re.compile(
     r"\A/v1/passport/applications/[0-9a-f-]{36}/production-status\Z"
 )
+NATIVE_BATCH_ROUTE = re.compile(
+    r"\A/v1/passport/applications(?:/[0-9a-f-]{36}/"
+    r"(?:generate-data-groups|generate-sod|submit-personalization|"
+    r"production-status|quality-verify|activate))?\Z"
+)
 
 
 class FlowGatewayError(ValueError):
@@ -101,6 +106,7 @@ def _private_key(record: dict[str, Any], operator: bool) -> tuple[Path, str]:
 def owned_gateway_request(
     record: dict[str, Any], surface: str, *, operator: bool,
     expected_port: int,
+    passport_write: bool = False,
     inspector: Callable[[list[str]], str] = docker,
     ownership: Callable[..., dict] = verify_ownership,
     opener_factory: Callable[..., Any] = build_opener,
@@ -108,6 +114,8 @@ def owned_gateway_request(
               tuple[int, dict[str, Any]]]:
     """Create one scoped client; recheck project ownership before every request."""
     proof = ownership(record, surface, datetime.now(timezone.utc), inspector)
+    _require(not (operator and passport_write),
+             "Disposable Gateway client mixed operator and passport authority")
     _require(proof.get("live_ownership_verified") is True,
              "Disposable Gateway ownership is unverified")
     try:
@@ -128,12 +136,20 @@ def owned_gateway_request(
 
     def request(method: str, path: str, body: dict[str, Any] | None = None,
                 headers: dict[str, str] | None = None) -> tuple[int, dict[str, Any]]:
-        allowed = OPERATOR_ROUTES if operator else NATIVE_STATUS_ROUTE
+        allowed = (OPERATOR_ROUTES if operator else
+                   NATIVE_BATCH_ROUTE if passport_write else NATIVE_STATUS_ROUTE)
+        batch_method = (
+            (method == "POST" and path == "/v1/passport/applications")
+            or (method == "GET" and path.endswith("/production-status"))
+            or (method == "POST" and path.endswith((
+                "/generate-data-groups", "/generate-sod", "/submit-personalization",
+                "/quality-verify", "/activate")))
+        )
         _require(method in ("GET", "POST") and allowed.fullmatch(path) is not None
                  and (not operator or method == "GET" or path.startswith((
                      "/v1/credential-templates", "/v1/application-templates",
                      "/v1/delivery-destinations", "/v1/flows/")))
-                 and (operator or method == "GET"),
+                 and (batch_method if passport_write else operator or method == "GET"),
                  "Disposable Gateway route escaped scope")
         now = datetime.now(timezone.utc)
         _require(now < expires - timedelta(minutes=10),
@@ -175,11 +191,14 @@ def owned_gateway_request(
 def exercise_owned_flow(
     record: dict[str, Any], surface: str, gateway_port: int, run_id: str, *,
     restart: Callable[[], bool],
+    dsc_der_sha256: str, dsc_pem_wire_sha256: str,
+    batch_state_path: Path, batch_deadline: datetime,
     inspector: Callable[[list[str]], str] = docker,
     request_factory: Callable[..., Any] = owned_gateway_request,
     bureau_poll: Callable[..., tuple[int, dict[str, Any]]] = poll_owned_bureau,
     history_reader: Callable[..., dict[str, Any]] = read_owned_flow_history,
     advance: Callable[..., dict[str, Any]] = advance_physical_passport_flow,
+    batch_probe: Callable[..., tuple[str, dict[str, Any]]] | None = None,
 ) -> dict[str, Any]:
     """Prove one complete same-job Rust Flow, then return public digests only."""
     _require(isinstance(run_id, str) and run_id.isascii() and run_id.isdigit()
@@ -205,6 +224,54 @@ def exercise_owned_flow(
         ORGANIZATION_ID, name + " flow", references, physical,
         lambda method, path, body: native(method, path, body, {}),
     )
+    if batch_probe is None:
+        if __package__:
+            from .passport_supported_native_batch import exercise_owned_native_batch
+        else:
+            from passport_supported_native_batch import exercise_owned_native_batch
+        batch_probe = exercise_owned_native_batch
+    batch_receipt: dict[str, Any] | None = None
+
+    def before_submit(selected: dict[str, str], sod_sha256: str) -> str:
+        nonlocal batch_receipt
+        _require(selected == started and batch_receipt is None,
+                 "Disposable selected Flow job changed before native batch")
+        application = {
+            "organization_id": ORGANIZATION_ID,
+            "issuer_did": issuer_did(gateway_port),
+            "application_template_id": references["application_template_id"],
+            "credential_template_id": references["credential_template_id"],
+            "delivery_destination_profile_id": references["delivery_destination_profile_id"],
+        }
+        selected_bureau, proof = batch_probe(
+            record, surface, gateway_port, application, physical,
+            started["flow_instance_id"], started["application_id"],
+            started["native_job_id"], sod_sha256,
+            dsc_der_sha256, dsc_pem_wire_sha256,
+            batch_state_path, batch_deadline, inspector=inspector)
+        _require(isinstance(selected_bureau, str),
+                 "Disposable selected Flow batch job is invalid")
+        batch_proof = proof.get("batch") if isinstance(proof, dict) else None
+        evidence = batch_proof.get("evidence") if isinstance(batch_proof, dict) else None
+        final_preflight = proof.get("final_native_preflight") if isinstance(proof, dict) else None
+        _require(isinstance(evidence, dict)
+                 and batch_proof.get("verified") is True
+                 and evidence.get("selected_flow_in_two_job_batch") is True
+                 and evidence.get("first_accepted_material_verified") is True
+                 and evidence.get("companion_native_completed") is True
+                 and final_preflight == {
+                     "native_container_id": record["containers"]["issuance-native"],
+                     "native_batch_preflight_verified": True,
+                 }, "Disposable selected Flow batch proof is incomplete")
+        batch_receipt = {
+            **proof,
+            "selected_source_job_sha256": hashlib.sha256(
+                started["native_job_id"].encode()).hexdigest(),
+            "selected_bureau_job_sha256": hashlib.sha256(
+                selected_bureau.encode()).hexdigest(),
+            "dsc_der_sha256": dsc_der_sha256,
+        }
+        return selected_bureau
     execution = advance(
         lambda method, path, body: operator(method, path, body, {}),
         lambda method, path, body: native(method, path, body, {}),
@@ -213,13 +280,21 @@ def exercise_owned_flow(
         lambda instance_id, definition_id: history_reader(
             record, surface, instance_id, definition_id, inspector=inspector),
         ORGANIZATION_ID, references, started, issuer_did(gateway_port),
-        restart=restart,
+        restart=restart, before_submit=before_submit,
     )
     _require(isinstance(execution, dict)
              and execution.get("flow_step_count") == 9
              and execution.get("native_effect_count") == 6
              and execution.get("durable_history_verified") is True
-             and execution.get("restart_resume_verified") is True,
+             and execution.get("restart_resume_verified") is True
+             and execution.get("restart_before_native_status") == "SOD_SIGNED"
+             and execution.get("restart_after_native_status") in (
+                 "SUBMITTED", "IN_PRODUCTION", "QUALITY_CHECK", "READY_FOR_ACTIVATION")
+             and execution.get("callback_bureau_status") in ("QUALITY_CHECK", "SHIPPED")
+             and isinstance(execution.get("bureau_job_id"), str)
+             and isinstance(batch_receipt, dict)
+             and batch_receipt["selected_bureau_job_sha256"]
+             == hashlib.sha256(execution["bureau_job_id"].encode()).hexdigest(),
              "Disposable Flow execution proof is incomplete")
     bureau_job_id = execution.pop("bureau_job_id")
     return {
@@ -227,12 +302,16 @@ def exercise_owned_flow(
                        for name, value in references.items()},
         "flow": {f"{name}_sha256": hashlib.sha256(value.encode()).hexdigest()
                  for name, value in started.items()},
+        "batch": batch_receipt,
         "execution": {
             "nine_steps_verified": True,
             "six_native_effects_verified": True,
             "durable_history_verified": True,
             "restart_resume_verified": True,
+            "restart_before_native_status": execution["restart_before_native_status"],
+            "restart_after_native_status": execution["restart_after_native_status"],
             "signed_callback_receipt_sha256": execution["signed_callback_receipt_sha256"],
+            "callback_bureau_status": execution["callback_bureau_status"],
             "sod_sha256": execution["sod_sha256"],
             "bureau_job_id_sha256": hashlib.sha256(bureau_job_id.encode()).hexdigest(),
         },

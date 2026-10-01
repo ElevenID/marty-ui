@@ -132,6 +132,7 @@ def advance_physical_passport_flow(
     max_polls: int = 36, poll_interval_seconds: float = 5,
     sleep: Callable[[float], None] = time.sleep,
     restart: Callable[[], bool] | None = None,
+    before_submit: Callable[[dict[str, str], str], str] | None = None,
 ) -> dict[str, Any]:
     """Require nine transitions, six native effects, one callback, and DB history."""
     _require(1 <= max_polls <= 90 and 0 <= poll_interval_seconds <= 30,
@@ -146,9 +147,18 @@ def advance_physical_passport_flow(
                started, references, issuer_did)
     bureau_job_id = None
     callback_receipt = None
+    callback_bureau_status = None
     sod_sha256 = None
     restart_verified = False
+    restart_before_native_status = None
+    restart_after_native_status = None
+    batch_bureau_job_id = None
     for index, step in enumerate(STEPS):
+        if step == "submit_to_personalization" and before_submit is not None:
+            _require(sod_sha256 is not None
+                     and (restart is None or restart_verified),
+                     "Flow batch ran before signed material or restart proof")
+            batch_bureau_job_id = _uuid(before_submit(started, sod_sha256))
         if step == "track_production":
             _require(bureau_job_id is not None,
                      "Flow bureau job is missing before tracking")
@@ -160,9 +170,14 @@ def advance_physical_passport_flow(
                 if (status == 200 and isinstance(private, dict)
                     and private.get("status") in ("QUALITY_CHECK", "SHIPPED")
                     and isinstance(receipt, str) and HEX64.fullmatch(receipt)
+                    and (private.get("tracking_number")
+                         == "BETA-SIM-" + UUID(bureau_job_id).hex
+                         if private.get("status") == "SHIPPED"
+                         else private.get("tracking_number") is None)
                     and public.get("bureau_job_id") == bureau_job_id
                     and public.get("status") in ("QUALITY_CHECK", "READY_FOR_ACTIVATION")):
                     callback_receipt = receipt
+                    callback_bureau_status = private["status"]
                     break
                 _require(public.get("status") not in ("FAILED", "CANCELLED", "ACTIVE"),
                          "Flow native job failed before signed callback")
@@ -195,6 +210,7 @@ def advance_physical_passport_flow(
                      and job.get("sod_signature_verified") is True,
                      "Flow SOD signature evidence is missing")
             if restart is not None:
+                restart_before_native_status = native["status"]
                 _require(restart() is True, "Owned Rust service restart failed")
                 resumed = _read(request, instance_path)
                 resumed_job = _instance(resumed, organization_id, started,
@@ -212,9 +228,17 @@ def advance_physical_passport_flow(
         if step == "submit_to_personalization":
             bureau_job_id = _uuid(job.get("bureau_job_id"))
             _require(native.get("bureau_job_id") == bureau_job_id
+                     and (batch_bureau_job_id is None
+                          or batch_bureau_job_id == bureau_job_id)
+                     and job.get("sod_sha256") == sod_sha256
+                     and native.get("sod_sha256") == sod_sha256
+                     and job.get("sod_signature_verified") is True
+                     and native.get("sod_signature_verified") is True
                      and job.get("status") in ("SUBMITTED", "IN_PRODUCTION",
                                                "QUALITY_CHECK", "READY_FOR_ACTIVATION"),
                      "Flow bureau submission changed job")
+            if restart_verified:
+                restart_after_native_status = native["status"]
         if bureau_job_id is not None:
             _require(job.get("bureau_job_id") == bureau_job_id
                      and native.get("bureau_job_id") == bureau_job_id,
@@ -232,12 +256,21 @@ def advance_physical_passport_flow(
                      and bool(job["completed_at"]),
                      "Flow native activation did not persist")
     _require(bureau_job_id is not None and callback_receipt is not None
+             and callback_bureau_status in ("QUALITY_CHECK", "SHIPPED")
              and sod_sha256 is not None,
              "Flow native proof is incomplete")
+    _require(not restart_verified or (
+        restart_before_native_status == "SOD_SIGNED"
+        and restart_after_native_status in (
+            "SUBMITTED", "IN_PRODUCTION", "QUALITY_CHECK", "READY_FOR_ACTIVATION")
+    ), "Flow native restart status continuity is incomplete")
     _history(history_read(started["flow_instance_id"], started["flow_definition_id"]),
              organization_id, started)
     return {"flow_step_count": len(STEPS), "native_effect_count": 6,
             "durable_history_verified": True,
             "restart_resume_verified": restart_verified,
+            "restart_before_native_status": restart_before_native_status,
+            "restart_after_native_status": restart_after_native_status,
             "signed_callback_receipt_sha256": callback_receipt,
+            "callback_bureau_status": callback_bureau_status,
             "bureau_job_id": bureau_job_id, "sod_sha256": sod_sha256}

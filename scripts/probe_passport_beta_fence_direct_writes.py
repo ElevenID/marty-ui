@@ -10,6 +10,7 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+from pathlib import Path
 import re
 import subprocess
 import uuid
@@ -25,10 +26,32 @@ ERRORS = {
         "beta physical-document Flow definition writes are fenced",
     "physical_flow_instances": "beta physical-document Flow writes are fenced",
 }
+RECEIPT_FIELDS = frozenset({
+    "schema", "method", "docker_context", "docker_daemon_id",
+    "postgres_container_id", "database_uid", "fence_epoch",
+    "observation_watermark", "observed_at_utc", "session_user",
+    "current_user", "probe_nonce", "rejections", "unrelated_writes",
+    "receipt_sha256",
+})
+UNRELATED_WRITES = {
+    "issuance_transactions": {"verified": True, "rolled_back": True},
+    "non_passport_flow_definitions": {"verified": True, "rolled_back": True},
+}
 
 
 class FenceProbeError(ValueError):
     pass
+
+
+def verified_unrelated_writes(value: object) -> bool:
+    """Accept only the two observed rollback proofs with literal booleans."""
+    return (isinstance(value, dict)
+            and value.keys() == UNRELATED_WRITES.keys()
+            and all(isinstance(proof, dict)
+                    and proof.keys() == {"verified", "rolled_back"}
+                    and proof["verified"] is True
+                    and proof["rolled_back"] is True
+                    for proof in value.values()))
 
 
 def candidate_sql(token: str) -> dict[str, str]:
@@ -70,6 +93,38 @@ def candidate_sql(token: str) -> dict[str, str]:
             VALUES ('{flow}', 'fence-probe-definition', 'fence-probe',
                 'in_progress', '{{"physical_document_job":"{job}"}}',
                 '[]', 'applicant', clock_timestamp(), clock_timestamp(), '[]')
+        """,
+    }
+
+
+def unrelated_sql(token: str) -> dict[str, str]:
+    """Exercise real, non-passport tables inside rollback-only transactions."""
+    if re.fullmatch(r"[0-9a-f]{32}", token) is None:
+        raise FenceProbeError("Unrelated write probe token is invalid")
+    identifier = f"fence-probe-{token}"
+    flow_identifier = f"probe-{token[:30]}"
+    return {
+        "issuance_transactions": f"""
+            WITH inserted AS (
+                INSERT INTO issuance_service.issuance_transactions
+                    (id, organization_id, credential_template_id, status,
+                     pre_auth_code, claims, issuer_mode, created_at, expires_at)
+                VALUES ('{identifier}', 'fence-probe', 'fence-probe',
+                    'pending', '{identifier}', '{{}}', 'org_managed',
+                    clock_timestamp(), clock_timestamp() + interval '5 minutes')
+                RETURNING id
+            ) SELECT count(*) FROM inserted
+        """,
+        "non_passport_flow_definitions": f"""
+            WITH inserted AS (
+                INSERT INTO flow_service.flow_definitions
+                    (id, organization_id, name, status, flow_type,
+                     steps, transitions, created_at, updated_at)
+                VALUES ('{flow_identifier}', 'fence-probe', 'Fence probe',
+                    'active', 'verification', '[]', '[]',
+                    clock_timestamp(), clock_timestamp())
+                RETURNING id
+            ) SELECT count(*) FROM inserted
         """,
     }
 
@@ -155,6 +210,19 @@ def probe_direct_writes(
         rejections[surface] = {
             "valid_without_fence": True, "sqlstate": "55000", "message": expected,
         }
+    unrelated_writes: dict[str, dict[str, Any]] = {}
+    for surface, statement in unrelated_sql(nonce).items():
+        query = "BEGIN; SET LOCAL statement_timeout='5s'; " + statement + "; ROLLBACK;"
+        result = runner([
+            "docker", "exec", postgres_container_id, "psql", "-X", "-qAt",
+            "-U", "marty", "-d", "marty", "-v", "ON_ERROR_STOP=1",
+            "-c", query,
+        ])
+        if result.returncode != 0 or result.stdout.strip() != "1":
+            raise FenceProbeError(f"Unrelated beta write is blocked: {surface}")
+        unrelated_writes[surface] = {"verified": True, "rolled_back": True}
+    if not verified_unrelated_writes(unrelated_writes):
+        raise FenceProbeError("Unrelated beta write proof is incomplete")
     assert_target()
     observation = _stdout([
         "docker", "exec", postgres_container_id, "psql", "-X", "-qAt",
@@ -179,11 +247,100 @@ def probe_direct_writes(
         "session_user": "marty", "current_user": "marty",
         "probe_nonce": nonce,
         "rejections": rejections,
+        "unrelated_writes": unrelated_writes,
     }
     receipt["receipt_sha256"] = hashlib.sha256(
         json.dumps(receipt, sort_keys=True, separators=(",", ":")).encode()
     ).hexdigest()
     return receipt
+
+
+def verify_receipt(
+    receipt_bytes: bytes, *, postgres_container_id: str,
+    expected_docker_context: str, expected_daemon_id: str,
+    expected_system_identifier: str, expected_database_oid: str,
+    expected_fence_epoch: int,
+) -> dict[str, Any]:
+    """Validate a durable pretransition observation without repeating writes."""
+    if not receipt_bytes or len(receipt_bytes) > 128 * 1024:
+        raise FenceProbeError("Direct write probe receipt size is invalid")
+
+    def unique_object(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
+        value = dict(pairs)
+        if len(value) != len(pairs):
+            raise FenceProbeError("Direct write probe receipt has duplicate fields")
+        return value
+
+    try:
+        receipt = json.loads(
+            receipt_bytes, object_pairs_hook=unique_object,
+            parse_constant=lambda _value: (_ for _ in ()).throw(ValueError()),
+        )
+    except FenceProbeError:
+        raise
+    except (UnicodeError, ValueError) as exc:
+        raise FenceProbeError("Direct write probe receipt is invalid JSON") from exc
+    if not isinstance(receipt, dict) or receipt.keys() != RECEIPT_FIELDS:
+        raise FenceProbeError("Direct write probe receipt fields differ")
+    expected = {
+        "schema": "marty.passport-beta-fence-direct-probe/v1",
+        "method": "postgresql_transaction_rollback",
+        "docker_context": expected_docker_context,
+        "docker_daemon_id": expected_daemon_id,
+        "postgres_container_id": postgres_container_id,
+        "database_uid": f"postgresql:{expected_system_identifier}:{expected_database_oid}",
+        "fence_epoch": expected_fence_epoch,
+        "session_user": "marty",
+        "current_user": "marty",
+        "rejections": {
+            surface: {"valid_without_fence": True, "sqlstate": "55000",
+                      "message": message}
+            for surface, message in ERRORS.items()
+        },
+        "unrelated_writes": UNRELATED_WRITES,
+    }
+    if any(receipt.get(key) != value for key, value in expected.items()):
+        raise FenceProbeError("Direct write probe receipt differs from target or rejection")
+    if (not isinstance(receipt["rejections"], dict)
+            or receipt["rejections"].keys() != ERRORS.keys()
+            or any(
+                not isinstance(rejection, dict)
+                or rejection.keys() != {"valid_without_fence", "sqlstate", "message"}
+                or rejection["valid_without_fence"] is not True
+                for rejection in receipt["rejections"].values()
+            )):
+        raise FenceProbeError("Direct write probe receipt rejections are invalid")
+    if not verified_unrelated_writes(receipt["unrelated_writes"]):
+        raise FenceProbeError("Direct write probe unrelated writes are invalid")
+    if (DOCKER_ID.fullmatch(postgres_container_id) is None
+            or DECIMAL.fullmatch(expected_system_identifier) is None
+            or DECIMAL.fullmatch(expected_database_oid) is None
+            or type(expected_fence_epoch) is not int or expected_fence_epoch <= 0
+            or type(receipt["fence_epoch"]) is not int
+            or type(receipt["observation_watermark"]) is not int
+            or receipt["observation_watermark"] <= 0
+            or not isinstance(receipt["observed_at_utc"], str)
+            or OBSERVED_AT.fullmatch(receipt["observed_at_utc"]) is None
+            or not isinstance(receipt["probe_nonce"], str)
+            or re.fullmatch(r"[0-9a-f]{32}", receipt["probe_nonce"]) is None
+            or not isinstance(receipt["receipt_sha256"], str)
+            or DOCKER_ID.fullmatch(receipt["receipt_sha256"]) is None):
+        raise FenceProbeError("Direct write probe receipt observation is invalid")
+    payload = {key: value for key, value in receipt.items()
+               if key != "receipt_sha256"}
+    digest = hashlib.sha256(
+        json.dumps(payload, sort_keys=True, separators=(",", ":")).encode()
+    ).hexdigest()
+    if receipt["receipt_sha256"] != digest:
+        raise FenceProbeError("Direct write probe receipt canonical hash differs")
+    return {
+        "schema": "marty.passport-beta-fence-direct-probe-check/v1",
+        "verified": True,
+        "postgres_container_id": postgres_container_id,
+        "fence_epoch": expected_fence_epoch,
+        "receipt_file_sha256": hashlib.sha256(receipt_bytes).hexdigest(),
+        "receipt_sha256": digest,
+    }
 
 
 if __name__ == "__main__":
@@ -194,16 +351,25 @@ if __name__ == "__main__":
     parser.add_argument("--system-identifier", required=True)
     parser.add_argument("--database-oid", required=True)
     parser.add_argument("--fence-epoch", required=True, type=int)
+    parser.add_argument("--verify-receipt", type=Path)
     args = parser.parse_args()
     try:
-        result = probe_direct_writes(
-            args.postgres_container,
+        kwargs = dict(
+            postgres_container_id=args.postgres_container,
             expected_docker_context=args.docker_context,
             expected_daemon_id=args.daemon_id,
             expected_system_identifier=args.system_identifier,
             expected_database_oid=args.database_oid,
             expected_fence_epoch=args.fence_epoch,
         )
+        if args.verify_receipt is not None:
+            if not args.verify_receipt.is_absolute():
+                raise FenceProbeError("Direct write probe receipt path is not absolute")
+            result = verify_receipt(args.verify_receipt.read_bytes(), **kwargs)
+        else:
+            result = probe_direct_writes(args.postgres_container,
+                                         **{key: value for key, value in kwargs.items()
+                                            if key != "postgres_container_id"})
         print(json.dumps(result, sort_keys=True, separators=(",", ":")))
     except (FenceProbeError, OSError, subprocess.SubprocessError) as exc:
         raise SystemExit(f"Beta direct fence probe failed: {exc}") from exc

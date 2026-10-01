@@ -1370,7 +1370,149 @@ async fn passport_jobs_survive_restart_without_cross_tenant_reads() {
         .await
         .unwrap();
     migration::migrate_passport(&pool).await.unwrap();
+    sqlx::query(
+        "ALTER TABLE issuance_service.physical_document_jobs
+         DROP CONSTRAINT physical_document_jobs_pkey",
+    )
+    .execute(&pool)
+    .await
+    .unwrap();
+    assert!(migration::validate_passport(&pool).await.is_err());
+    sqlx::query("ALTER TABLE issuance_service.physical_document_jobs ADD PRIMARY KEY (id)")
+        .execute(&pool)
+        .await
+        .unwrap();
+    sqlx::query(
+        "ALTER TABLE issuance_service.physical_document_jobs
+         DROP CONSTRAINT physical_document_jobs_application_id_key",
+    )
+    .execute(&pool)
+    .await
+    .unwrap();
+    assert!(migration::validate_passport(&pool).await.is_err());
+    sqlx::query(
+        "ALTER TABLE issuance_service.physical_document_jobs
+         ADD UNIQUE (application_id)",
+    )
+    .execute(&pool)
+    .await
+    .unwrap();
+    sqlx::query(
+        "DROP TRIGGER trg_physical_document_submission_intent
+         ON issuance_service.physical_document_jobs",
+    )
+    .execute(&pool)
+    .await
+    .unwrap();
+    assert!(migration::validate_passport(&pool).await.is_err());
+    migration::migrate_passport(&pool).await.unwrap();
+    sqlx::query(
+        "ALTER TABLE issuance_service.passport_beta_batch_intents
+         DROP CONSTRAINT passport_beta_batch_intents_pkey",
+    )
+    .execute(&pool)
+    .await
+    .unwrap();
+    assert!(migration::validate_passport(&pool).await.is_err());
+    sqlx::query(
+        "ALTER TABLE issuance_service.passport_beta_batch_intents
+         ADD PRIMARY KEY (batch_id)",
+    )
+    .execute(&pool)
+    .await
+    .unwrap();
     migration::migrate_passport(&pool).await.unwrap(); // startup is idempotent
+    let lf_intent_migration =
+        include_str!("../migrations/0004_passport_submission_intent.sql").replace("\r\n", "\n");
+    let crlf_intent_migration = lf_intent_migration.replace('\n', "\r\n");
+    // Both strings are the checked-in migration with line endings changed only.
+    sqlx::raw_sql(sqlx::AssertSqlSafe(crlf_intent_migration.as_str()))
+        .execute(&pool)
+        .await
+        .unwrap();
+    migration::validate_passport(&pool).await.unwrap();
+    sqlx::raw_sql(sqlx::AssertSqlSafe(lf_intent_migration.as_str()))
+        .execute(&pool)
+        .await
+        .unwrap();
+    migration::validate_passport(&pool).await.unwrap();
+    let read_only_pool = PgPoolOptions::new()
+        .max_connections(1)
+        .connect(&database_url)
+        .await
+        .unwrap();
+    sqlx::query("SET default_transaction_read_only = on")
+        .execute(&read_only_pool)
+        .await
+        .unwrap();
+    migration::validate_passport(&read_only_pool).await.unwrap();
+    read_only_pool.close().await;
+    sqlx::raw_sql(
+        "CREATE ROLE passport_batch_acl_test NOLOGIN;
+         GRANT USAGE ON SCHEMA issuance_service TO passport_batch_acl_test;
+         GRANT SELECT ON issuance_service.physical_document_jobs,
+                         issuance_service.passport_beta_batch_intents
+             TO passport_batch_acl_test;",
+    )
+    .execute(&pool)
+    .await
+    .unwrap();
+    let limited_pool = PgPoolOptions::new()
+        .max_connections(1)
+        .after_connect(|connection, _| {
+            Box::pin(async move {
+                sqlx::query("SET ROLE passport_batch_acl_test")
+                    .execute(connection)
+                    .await?;
+                Ok(())
+            })
+        })
+        .connect(&database_url)
+        .await
+        .unwrap();
+    let access_error = migration::validate_passport(&limited_pool)
+        .await
+        .unwrap_err();
+    assert!(access_error
+        .to_string()
+        .contains("lacks application CRUD privileges"));
+    sqlx::query(
+        "GRANT INSERT, UPDATE, DELETE ON issuance_service.passport_beta_batch_intents
+         TO passport_batch_acl_test",
+    )
+    .execute(&pool)
+    .await
+    .unwrap();
+    migration::validate_passport(&limited_pool).await.unwrap();
+    limited_pool.close().await;
+    sqlx::raw_sql("DROP OWNED BY passport_batch_acl_test; DROP ROLE passport_batch_acl_test;")
+        .execute(&pool)
+        .await
+        .unwrap();
+    sqlx::query("DROP TABLE issuance_service.passport_beta_batch_intents")
+        .execute(&pool)
+        .await
+        .unwrap();
+    assert!(migration::validate_passport(&pool).await.is_err());
+    migration::migrate_passport(&pool).await.unwrap();
+    sqlx::raw_sql(
+        "ALTER TABLE issuance_service.passport_beta_batch_intents
+           DROP CONSTRAINT ck_passport_beta_batch_send_attempts;
+         ALTER TABLE issuance_service.passport_beta_batch_intents
+           ADD CONSTRAINT ck_passport_beta_batch_send_attempts CHECK (true);",
+    )
+    .execute(&pool)
+    .await
+    .unwrap();
+    assert!(migration::validate_passport(&pool).await.is_err());
+    sqlx::query(
+        "ALTER TABLE issuance_service.passport_beta_batch_intents
+         DROP CONSTRAINT ck_passport_beta_batch_send_attempts",
+    )
+    .execute(&pool)
+    .await
+    .unwrap();
+    migration::migrate_passport(&pool).await.unwrap();
 
     let key_a = "a".repeat(32);
     let key_b = "b".repeat(32);
@@ -2375,7 +2517,6 @@ async fn passport_jobs_survive_restart_without_cross_tenant_reads() {
             "flow_execution_id": pair[0].flow_execution_id,
             "application_id": pair[0].application_id,
             "issuer_did": pair[0].issuer_did,
-            "issuer_profile_id": "synthetic-passport-issuer-profile",
             "sod_sha256": pair[0].sod_sha256,
             "sod_signature_verified": true,
             "status": "SOD_SIGNED",

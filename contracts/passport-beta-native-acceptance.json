@@ -19,7 +19,7 @@
     "source": "prove the deployed source commit, signed stack manifest, services image digest, native Gateway/Flow/issuance ownership, simulator container, and private beta destination before the first mutation"
   },
   "ordered_flow": [
-    "Create the selected physical_document_issuance Flow and execute through sign_sod; read its durable tenant, instance, application, source job, issuer DID, selected issuer profile, and SOD digest. Pause before submit_to_personalization.",
+    "Create the selected physical_document_issuance Flow and execute through sign_sod using the public managed-signing route; read its durable tenant, instance, application, source job, issuer DID, and SOD digest. The public Flow projection redacts issuer profile ID. Pause before submit_to_personalization.",
     "Create one distinct companion native application in the same tenant and generate its data groups and managed signed SOD through native routes. Its issuer profile must match the selected managed ceremony; neither job uses synthetic SOD or DSC bytes.",
     "Choose one canonical batch UUID and retain it with the exact selected and companion application identities for every private retry. Call issuance-native POST /internal/passport/beta-batches/{batch_id}/submit with only selected_flow_instance_id, selected_application_id, and companion_application_id.",
     "The native service verifies durable selected Flow state, both encrypted signed artifacts and issuer/KMS provenance, atomically reserves both jobs, then dispatches the selected-first pair to the pinned simulator. The protected acceptance operator never constructs or sends the simulator batch body.",

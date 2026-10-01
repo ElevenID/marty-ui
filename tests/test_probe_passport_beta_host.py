@@ -181,13 +181,17 @@ def test_active_flow_drain_stays_equal_to_beta_cutover_preflight() -> None:
 def test_beta_native_route_ownership_projects_only_expected_selectors() -> None:
     images = {service: {"container_id": service, "image_id": "sha256:" + "a" * 64,
                         "oci_reference": "ghcr.io/elevenid/marty-ui-oss/services@sha256:" + "b" * 64}
-              for service in ("gateway", "flow", "issuance-native")}
+              for service in ("gateway", "flow", "issuance-native", "passport-beta-bureau")}
     configs = {
         "gateway": ["PASSPORT_NATIVE_GATEWAY_ENABLED=true", "PASSPORT_INTERNAL_SERVICE_AUTH_ENABLED=true",
                     "PASSPORT_PROVIDER_INGRESS_GATEWAY_ENABLED=false", "PASSPORT_PROVIDER_INGRESS_SERVICE_URL="],
         "flow": ["PASSPORT_NATIVE_FLOW_ENABLED=true", "PASSPORT_INTERNAL_SERVICE_AUTH_ENABLED=true",
                  "ISSUANCE_NATIVE_SERVICE_URL=http://issuance-native:8005"],
         "issuance-native": ["PASSPORT_NATIVE_HTTP_ENABLED=true", "PASSPORT_INTERNAL_SERVICE_AUTH_ENABLED=true"],
+        "passport-beta-bureau": [
+            "PASSPORT_BETA_BUREAU_GATEWAY_CALLBACK_ENABLED=true",
+            "PASSPORT_BUREAU_CALLBACK_URL=http://gateway:8000/v1/passport/webhooks/personalization",
+        ],
     }
 
     def inspector(container_id: str) -> dict:
@@ -201,6 +205,7 @@ def test_beta_native_route_ownership_projects_only_expected_selectors() -> None:
     result = beta_native_route_ownership(images, inspector=inspector)
     assert result["verified"] is True
     assert result["evidence"]["webhook_owner"] == "issuance-native"
+    assert result["evidence"]["simulator_callback_gateway_target"] is True
     assert "SECRET_KEY" not in str(result) and "must-never-appear" not in str(result)
     for service, changed in (("gateway", "PASSPORT_NATIVE_GATEWAY_ENABLED=false"),
                              ("flow", "ISSUANCE_NATIVE_SERVICE_URL=http://issuance:8005"),
@@ -210,6 +215,20 @@ def test_beta_native_route_ownership_projects_only_expected_selectors() -> None:
         with pytest.raises(HostProbeError):
             beta_native_route_ownership(images, inspector=inspector)
         configs[service] = original
+    for changed in (
+        "PASSPORT_BETA_BUREAU_GATEWAY_CALLBACK_ENABLED=false",
+        "PASSPORT_BUREAU_CALLBACK_URL=http://issuance-native:8005/v1/passport/webhooks/personalization",
+    ):
+        service = "passport-beta-bureau"
+        original = configs[service]
+        configs[service] = [item for item in original if item.split("=", 1)[0] != changed.split("=", 1)[0]] + [changed]
+        with pytest.raises(HostProbeError, match="bypasses Gateway"):
+            beta_native_route_ownership(images, inspector=inspector)
+        configs[service] = original
+    configs["passport-beta-bureau"].append("PASSPORT_BETA_BUREAU_GATEWAY_CALLBACK_ENABLED=true")
+    with pytest.raises(HostProbeError, match="ambiguous"):
+        beta_native_route_ownership(images, inspector=inspector)
+    configs["passport-beta-bureau"].pop()
     configs["flow"].append("PASSPORT_NATIVE_FLOW_ENABLED=true")
     with pytest.raises(HostProbeError, match="ambiguous"):
         beta_native_route_ownership(images, inspector=inspector)

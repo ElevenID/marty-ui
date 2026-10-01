@@ -5,6 +5,112 @@ const REQUIRED_COLUMNS: &[(&str, &str)] = &[
     ("authorization_sessions", "access_token_expires_at"),
 ];
 
+const PASSPORT_REQUIRED_COLUMNS: &[&str] = &[
+    "id",
+    "organization_id",
+    "flow_execution_id",
+    "application_id",
+    "application_template_id",
+    "credential_template_id",
+    "revocation_profile_id",
+    "delivery_destination_profile_id",
+    "document_type",
+    "country_code",
+    "issuer_did",
+    "secure_artifact_ciphertext",
+    "secure_artifact_reference",
+    "sod_sha256",
+    "bureau_job_id",
+    "bureau_provider_profile_id",
+    "submission_intent_id",
+    "submission_intent_started_at",
+    "submission_intent_provider_profile_id",
+    "submission_intent_bureau_endpoint_sha256",
+    "submission_intent_signing_provenance",
+    "submission_batch_id",
+    "submission_batch_selected_flow_instance_id",
+    "submission_batch_selected_job_id",
+    "submission_batch_companion_job_id",
+    "submission_batch_signing_provenance",
+    "submission_batch_bureau_endpoint_sha256",
+    "submission_batch_material_digests",
+    "tracking_number",
+    "status",
+    "quality_result",
+    "error_code",
+    "error_message",
+    "submitted_at",
+    "completed_at",
+    "created_at",
+    "updated_at",
+];
+
+const BATCH_REQUIRED_COLUMNS: &[(&str, &str)] = &[
+    ("batch_id", "uuid"),
+    ("organization_id", "text"),
+    ("selected_flow_instance_id", "varchar"),
+    ("selected_job_id", "text"),
+    ("companion_job_id", "text"),
+    ("created_at", "timestamptz"),
+    ("last_send_started_at", "timestamptz"),
+    ("send_attempts", "int2"),
+    ("last_receipt_completion_started_at", "timestamptz"),
+    ("receipt_completion_attempts", "int8"),
+    ("first_dispatch_response_seen_at", "timestamptz"),
+    ("first_dispatch_wire_ciphertext", "text"),
+    ("first_dispatch_request_commitment", "text"),
+    ("first_dispatch_response_commitment", "text"),
+    ("first_dispatch_wire_key_sha256", "text"),
+];
+
+// PostgreSQL 15 canonical definitions. The two batch-identity hashes cover
+// the released Python varchar ID and a fresh Rust text ID respectively.
+const PASSPORT_REQUIRED_CHECKS: &[(&str, &str, &[&str])] = &[
+    (
+        "physical_document_jobs",
+        "ck_physical_document_jobs_bureau_provider_binding",
+        &["e60c22bee2eb6afeb00c8c004d8fc81d"],
+    ),
+    (
+        "physical_document_jobs",
+        "ck_physical_document_jobs_submission_intent_pair",
+        &["a74f1c20745f053beef95dd60e8b8789"],
+    ),
+    (
+        "physical_document_jobs",
+        "ck_physical_document_jobs_submission_provenance_intent",
+        &["25ed6ef0a104d3e10c31f4ac531a03ec"],
+    ),
+    (
+        "physical_document_jobs",
+        "ck_physical_document_jobs_submission_batch_identity",
+        &[
+            "bfbe9a0308c2d9593af5ee10393f83cc",
+            "6948f18c79146c671a0589c8e53fda78",
+        ],
+    ),
+    (
+        "physical_document_jobs",
+        "ck_physical_document_jobs_batch_provenance_identity",
+        &["dccf75fd58810c8444258b069e1e9102"],
+    ),
+    (
+        "passport_beta_batch_intents",
+        "ck_passport_beta_batch_distinct_jobs",
+        &["1b7ce4fd845d4154e28f4c21abc628e0"],
+    ),
+    (
+        "passport_beta_batch_intents",
+        "ck_passport_beta_batch_send_attempts",
+        &["aff09f544ce7945092a277ae62760407"],
+    ),
+    (
+        "passport_beta_batch_intents",
+        "ck_passport_beta_batch_wire_evidence",
+        &["85bc12edf6f5c6ec031b5ea444fcd78d"],
+    ),
+];
+
 pub async fn migrate(pool: &PgPool) -> Result<(), sqlx::Error> {
     let mut transaction = pool.begin().await?;
     sqlx::query("SELECT pg_advisory_xact_lock(hashtextextended('issuance_oid4vci_public_v1', 0))")
@@ -15,14 +121,28 @@ pub async fn migrate(pool: &PgPool) -> Result<(), sqlx::Error> {
     ))
     .execute(&mut *transaction)
     .await?;
+    validate_oid4vci(&mut transaction).await?;
+    transaction.commit().await
+}
 
+/// Validate a pre-migrated schema without acquiring a write transaction.
+pub async fn validate(pool: &PgPool) -> Result<(), sqlx::Error> {
+    let mut transaction = pool.begin().await?;
+    sqlx::query("SET TRANSACTION READ ONLY")
+        .execute(&mut *transaction)
+        .await?;
+    validate_oid4vci(&mut transaction).await?;
+    transaction.commit().await
+}
+
+async fn validate_oid4vci(connection: &mut sqlx::PgConnection) -> Result<(), sqlx::Error> {
     let rows = sqlx::query(
         "SELECT table_name, column_name, udt_name
          FROM information_schema.columns
          WHERE table_schema = 'issuance_service'
            AND column_name = 'access_token_expires_at'",
     )
-    .fetch_all(&mut *transaction)
+    .fetch_all(&mut *connection)
     .await?;
     for &(table, column) in REQUIRED_COLUMNS {
         if !rows.iter().any(|row| {
@@ -48,7 +168,7 @@ pub async fn migrate(pool: &PgPool) -> Result<(), sqlx::Error> {
            AND relation.relname = 'ux_issuance_events_oid4vci_notification_id'
            AND index.indrelid = 'issuance_service.issuance_events'::regclass",
     )
-    .fetch_optional(&mut *transaction)
+    .fetch_optional(&mut *connection)
     .await?;
     let Some(binding_index) = binding_index else {
         return Err(sqlx::Error::Protocol(
@@ -70,51 +190,12 @@ pub async fn migrate(pool: &PgPool) -> Result<(), sqlx::Error> {
             "OID4VCI notification binding index is incompatible".into(),
         ));
     }
-    transaction.commit().await
+    Ok(())
 }
 
 /// Upgrade the physical-document table only when native passport HTTP is
 /// enabled. The released Python table remains in place during the cutover.
 pub async fn migrate_passport(pool: &PgPool) -> Result<(), sqlx::Error> {
-    const REQUIRED_COLUMNS: &[&str] = &[
-        "id",
-        "organization_id",
-        "flow_execution_id",
-        "application_id",
-        "application_template_id",
-        "credential_template_id",
-        "revocation_profile_id",
-        "delivery_destination_profile_id",
-        "document_type",
-        "country_code",
-        "issuer_did",
-        "secure_artifact_ciphertext",
-        "secure_artifact_reference",
-        "sod_sha256",
-        "bureau_job_id",
-        "bureau_provider_profile_id",
-        "submission_intent_id",
-        "submission_intent_started_at",
-        "submission_intent_provider_profile_id",
-        "submission_intent_bureau_endpoint_sha256",
-        "submission_intent_signing_provenance",
-        "submission_batch_id",
-        "submission_batch_selected_flow_instance_id",
-        "submission_batch_selected_job_id",
-        "submission_batch_companion_job_id",
-        "submission_batch_signing_provenance",
-        "submission_batch_bureau_endpoint_sha256",
-        "submission_batch_material_digests",
-        "tracking_number",
-        "status",
-        "quality_result",
-        "error_code",
-        "error_message",
-        "submitted_at",
-        "completed_at",
-        "created_at",
-        "updated_at",
-    ];
     let mut transaction = pool.begin().await?;
     sqlx::query("SELECT pg_advisory_xact_lock(hashtextextended('issuance_passport_native_v1', 0))")
         .execute(&mut *transaction)
@@ -154,18 +235,177 @@ pub async fn migrate_passport(pool: &PgPool) -> Result<(), sqlx::Error> {
     ))
     .execute(&mut *transaction)
     .await?;
+    validate_passport_connection(&mut transaction).await?;
+    transaction.commit().await
+}
+
+/// Validate the passport schema after the official migration image has run.
+pub async fn validate_passport(pool: &PgPool) -> Result<(), sqlx::Error> {
+    let mut transaction = pool.begin().await?;
+    sqlx::query("SET TRANSACTION READ ONLY")
+        .execute(&mut *transaction)
+        .await?;
+    validate_passport_connection(&mut transaction).await?;
+    transaction.commit().await
+}
+
+async fn validate_passport_connection(
+    connection: &mut sqlx::PgConnection,
+) -> Result<(), sqlx::Error> {
     let columns = sqlx::query_scalar::<_, String>(
         "SELECT column_name FROM information_schema.columns \
          WHERE table_schema='issuance_service' AND table_name='physical_document_jobs'",
     )
-    .fetch_all(&mut *transaction)
+    .fetch_all(&mut *connection)
     .await?;
-    for column in REQUIRED_COLUMNS {
+    for column in PASSPORT_REQUIRED_COLUMNS {
         if !columns.iter().any(|existing| existing.as_str() == *column) {
             return Err(sqlx::Error::Protocol(format!(
                 "physical_document_jobs is missing required column {column}"
             )));
         }
+    }
+    let batch_columns = sqlx::query(
+        "SELECT column_name, udt_name FROM information_schema.columns
+         WHERE table_schema='issuance_service' AND table_name='passport_beta_batch_intents'",
+    )
+    .fetch_all(&mut *connection)
+    .await?;
+    for &(column, udt) in BATCH_REQUIRED_COLUMNS {
+        if !batch_columns.iter().any(|row| {
+            matches!(row.try_get::<String, _>("column_name"), Ok(value) if value == column)
+                && matches!(row.try_get::<String, _>("udt_name"), Ok(value) if value == udt)
+        }) {
+            return Err(sqlx::Error::Protocol(format!(
+                "passport beta batch intents is missing compatible {column}"
+            )));
+        }
+    }
+    let batch_access: bool = sqlx::query_scalar(
+        "SELECT has_table_privilege(current_user, \
+                    'issuance_service.passport_beta_batch_intents', 'SELECT')
+                AND has_table_privilege(current_user, \
+                    'issuance_service.passport_beta_batch_intents', 'INSERT')
+                AND has_table_privilege(current_user, \
+                    'issuance_service.passport_beta_batch_intents', 'UPDATE')
+                AND has_table_privilege(current_user, \
+                    'issuance_service.passport_beta_batch_intents', 'DELETE')",
+    )
+    .fetch_one(&mut *connection)
+    .await?;
+    if !batch_access {
+        return Err(sqlx::Error::Protocol(
+            "passport beta batch intents lacks application CRUD privileges".into(),
+        ));
+    }
+    let checks = sqlx::query_as::<_, (String, String, String)>(
+        "SELECT relation.relname, con.conname,
+                md5(pg_get_constraintdef(con.oid))
+         FROM pg_constraint AS con
+         JOIN pg_class AS relation ON relation.oid=con.conrelid
+         JOIN pg_namespace AS namespace ON namespace.oid=relation.relnamespace
+         WHERE namespace.nspname='issuance_service'
+           AND relation.relname IN ('physical_document_jobs', 'passport_beta_batch_intents')
+           AND con.convalidated AND con.contype='c'",
+    )
+    .fetch_all(&mut *connection)
+    .await?;
+    for &(table, name, expected_definitions) in PASSPORT_REQUIRED_CHECKS {
+        if !checks
+            .iter()
+            .any(|(actual_table, actual_name, definition)| {
+                actual_table == table
+                    && actual_name == name
+                    && expected_definitions.contains(&definition.as_str())
+            })
+        {
+            return Err(sqlx::Error::Protocol(format!(
+                "passport migration check {name} is missing or incompatible"
+            )));
+        }
+    }
+    const REQUIRED_KEYS: &[(&str, &str, &str)] = &[
+        ("physical_document_jobs", "id", "p"),
+        ("physical_document_jobs", "application_id", "u"),
+        ("passport_beta_batch_intents", "batch_id", "p"),
+    ];
+    let keys = sqlx::query(
+        "SELECT relation.relname AS table_name, rule.contype::text AS key_type,
+                index.indisunique, index.indisprimary, index.indisvalid,
+                index.indisready, index.indnkeyatts, index.indnatts,
+                index.indpred IS NULL AS unfiltered,
+                index.indexprs IS NULL AS plain_columns,
+                pg_get_indexdef(index.indexrelid, 1, false) AS first_key
+         FROM pg_constraint AS rule
+         JOIN pg_class AS relation ON relation.oid = rule.conrelid
+         JOIN pg_namespace AS namespace ON namespace.oid = relation.relnamespace
+         JOIN pg_index AS index ON index.indexrelid = rule.conindid
+         WHERE namespace.nspname = 'issuance_service'
+           AND relation.relname IN ('physical_document_jobs', 'passport_beta_batch_intents')
+           AND rule.contype IN ('p', 'u')",
+    )
+    .fetch_all(&mut *connection)
+    .await?;
+    for &(table, column, kind) in REQUIRED_KEYS {
+        if !keys.iter().any(|key| {
+            matches!(key.try_get::<String, _>("table_name"), Ok(value) if value == table)
+                && matches!(key.try_get::<String, _>("key_type"), Ok(value) if value == kind)
+                && matches!(key.try_get::<String, _>("first_key"), Ok(value) if normalize_catalog_expression(&value) == column)
+                && matches!(key.try_get::<bool, _>("indisunique"), Ok(true))
+                && matches!(key.try_get::<bool, _>("indisprimary"), Ok(value) if value == (kind == "p"))
+                && matches!(key.try_get::<bool, _>("indisvalid"), Ok(true))
+                && matches!(key.try_get::<bool, _>("indisready"), Ok(true))
+                && matches!(key.try_get::<bool, _>("unfiltered"), Ok(true))
+                && matches!(key.try_get::<bool, _>("plain_columns"), Ok(true))
+                && matches!(key.try_get::<i16, _>("indnkeyatts"), Ok(1))
+                && matches!(key.try_get::<i16, _>("indnatts"), Ok(1))
+        }) {
+            return Err(sqlx::Error::Protocol(format!(
+                "passport schema is missing compatible {table}.{column} key"
+            )));
+        }
+    }
+    let intent_guard = sqlx::query(
+        "SELECT t.tgenabled::text AS tgenabled, t.tgtype::integer AS trigger_type,
+                md5(pg_get_triggerdef(t.oid)) AS trigger_md5,
+                md5(replace(pg_get_functiondef(p.oid), E'\r\n', E'\n')) AS function_md5
+         FROM pg_trigger AS t
+         JOIN pg_proc AS p ON p.oid=t.tgfoid
+         JOIN pg_namespace AS namespace ON namespace.oid=p.pronamespace
+         WHERE t.tgrelid=to_regclass('issuance_service.physical_document_jobs')
+           AND t.tgname='trg_physical_document_submission_intent'
+           AND NOT t.tgisinternal
+           AND namespace.nspname='issuance_service'
+           AND p.proname='guard_physical_document_submission_intent'",
+    )
+    .fetch_optional(&mut *connection)
+    .await?;
+    let Some(intent_guard) = intent_guard else {
+        return Err(sqlx::Error::Protocol(
+            "passport submission intent guard trigger is missing".into(),
+        ));
+    };
+    let enabled = intent_guard.try_get::<String, _>("tgenabled")?;
+    if !["O", "A"].contains(&enabled.as_str())
+        || intent_guard.try_get::<i32, _>("trigger_type")? != 19
+        || intent_guard.try_get::<String, _>("trigger_md5")? != "2cf46bf0d5d5d2794b8eb6346ef30622"
+        || intent_guard.try_get::<String, _>("function_md5")? != "936f63e7df56a3d116b98dadc7645158"
+    {
+        return Err(sqlx::Error::Protocol(
+            "passport submission intent guard trigger is incompatible".into(),
+        ));
+    }
+    let batch_index: Option<bool> = sqlx::query_scalar(
+        "SELECT indisvalid AND indisready FROM pg_index
+         WHERE indexrelid=to_regclass('issuance_service.ix_physical_document_jobs_submission_batch')
+           AND indrelid=to_regclass('issuance_service.physical_document_jobs')",
+    )
+    .fetch_optional(&mut *connection)
+    .await?;
+    if batch_index != Some(true) {
+        return Err(sqlx::Error::Protocol(
+            "passport submission batch index is missing or invalid".into(),
+        ));
     }
     let binding_index = sqlx::query(
         "SELECT index.indisunique, index.indisvalid, index.indisready,
@@ -179,7 +419,7 @@ pub async fn migrate_passport(pool: &PgPool) -> Result<(), sqlx::Error> {
                'issuance_service.ux_physical_document_jobs_bureau_provider_job'
            )",
     )
-    .fetch_optional(&mut *transaction)
+    .fetch_optional(&mut *connection)
     .await?;
     let Some(binding_index) = binding_index else {
         return Err(sqlx::Error::Protocol(
@@ -208,7 +448,7 @@ pub async fn migrate_passport(pool: &PgPool) -> Result<(), sqlx::Error> {
             "passport bureau provider/job index is incompatible".into(),
         ));
     }
-    transaction.commit().await
+    Ok(())
 }
 
 fn normalize_catalog_expression(value: &str) -> String {

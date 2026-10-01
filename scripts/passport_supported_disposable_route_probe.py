@@ -15,6 +15,7 @@ import tempfile
 from typing import Any, Callable
 from urllib.error import HTTPError, URLError
 from urllib.request import HTTPRedirectHandler, HTTPSHandler, ProxyHandler, Request, build_opener
+from uuid import UUID
 
 if __package__:
     from .check_passport_supported_compose_ownership import (
@@ -46,11 +47,12 @@ class NoRedirect(HTTPRedirectHandler):
         return None
 
 
-def _private_inputs(record: dict[str, Any]) -> tuple[Path, str]:
+def _private_inputs(record: dict[str, Any]) -> tuple[Path, str, str, str]:
     project = record.get("project")
     root = Path(tempfile.gettempdir()) / str(project)
     secret_dir = root / "secrets"
     key_file = secret_dir / "passport_acceptance_api_key"
+    tenant_probe_file = secret_dir / "passport_acceptance_tenant_probe_api_key"
     ca_file = secret_dir / "workload_identity_ca_cert"
     if record.get("disposable_root") != str(root) or root.resolve() != root:
         raise DisposableRouteProbeError("Disposable HTTPS project root is invalid")
@@ -59,14 +61,24 @@ def _private_inputs(record: dict[str, Any]) -> tuple[Path, str]:
         or (os.name == "posix" and (info.st_uid != os.getuid()
             or stat.S_IMODE(info.st_mode) != 0o700))):
         raise DisposableRouteProbeError("Disposable HTTPS secret root is invalid")
-    for path in (key_file, ca_file):
+    for path in (key_file, tenant_probe_file, ca_file):
         item = path.lstat()
         if not stat.S_ISREG(item.st_mode) or path.is_symlink():
             raise DisposableRouteProbeError("Disposable HTTPS credential file is invalid")
     key_contents = key_file.read_text(encoding="ascii")
     if TEST_KEY.fullmatch(key_contents) is None:
         raise DisposableRouteProbeError("Disposable Organization API key is invalid")
-    return ca_file, key_contents.removesuffix("\n")
+    try:
+        tenant_lines = tenant_probe_file.read_text(encoding="ascii").splitlines()
+        tenant_id = str(UUID(tenant_lines[0]))
+    except (IndexError, OSError, UnicodeError, ValueError) as exc:
+        raise DisposableRouteProbeError("Disposable second tenant authority is invalid") from exc
+    if (len(tenant_lines) != 2 or tenant_lines[0] != tenant_id
+        or tenant_id == ORGANIZATION_ID
+        or TEST_KEY.fullmatch(tenant_lines[1] + "\n") is None
+        or tenant_lines[1] == key_contents.removesuffix("\n")):
+        raise DisposableRouteProbeError("Disposable second tenant authority is invalid")
+    return ca_file, key_contents.removesuffix("\n"), tenant_id, tenant_lines[1]
 
 
 def _gateway_callback_selected(record: dict[str, Any],
@@ -175,7 +187,7 @@ def exercise_owned_disposable(
         or application.get("issuer_did") != issuer_did(port)):
         raise DisposableRouteProbeError("Disposable passport issuer scope is invalid")
     callback_via_gateway = _gateway_callback_selected(record, inspector)
-    ca_file, key = _private_inputs(record)
+    ca_file, key, tenant_id, tenant_key = _private_inputs(record)
     context = ssl.create_default_context(cafile=str(ca_file))
     opener = build_opener(ProxyHandler({}), NoRedirect, HTTPSHandler(context=context))
 
@@ -184,7 +196,7 @@ def exercise_owned_disposable(
         require_time_budget()
         if (method not in ("GET", "POST") or not path.startswith("/v1/passport/")
             or ".." in path or any(mark in path for mark in ("?", "#", "\\"))
-            or authority not in (key, "")):
+            or authority not in (key, tenant_key, "")):
             raise DisposableRouteProbeError("Disposable passport route escaped scope")
         headers = {"Accept": "application/json", "Cache-Control": "no-cache"}
         if authority:
@@ -222,6 +234,8 @@ def exercise_owned_disposable(
         application, key, request=request,
         private_poll=poll,
         callback_via_gateway=callback_via_gateway,
+        tenant_probe_organization_id=tenant_id,
+        tenant_probe_key=tenant_key,
         max_polls=max_polls, poll_interval_seconds=poll_interval_seconds,
     )
     require_time_budget()

@@ -3491,6 +3491,7 @@ dependencies = [
  "marty-oid4vci",
  "marty-passport-auth",
  "marty-platform-clock",
+ "marty-schema-startup",
  "marty-verification",
  "mmf-config",
  "mmf-core",
@@ -3577,6 +3578,10 @@ dependencies = [
  "rustix",
  "windows-sys 0.61.2",
 ]
+
+[[package]]
+name = "marty-schema-startup"
+version = "0.1.0"
 
 [[package]]
 name = "marty-verification"

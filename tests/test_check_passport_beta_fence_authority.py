@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import hashlib
 from pathlib import Path
+import subprocess
 
 import pytest
 
@@ -17,6 +18,101 @@ TAG_OBJECT = "b" * 40
 DELETION_HEAD = "c" * 40
 OBSERVATION = "d" * 64
 DIGEST = "sha256:" + "e" * 64
+
+
+def test_deletion_lineage_requires_approved_commit_in_pr_history():
+    def runner(command):
+        if command[:3] == ["gh", "api", "--paginate"]:
+            return "\n".join(["b" * 40, "c" * 40])
+        return json.dumps({
+            "status": "ahead", "behind_by": 0,
+            "base_commit": {"sha": "a" * 40},
+            "merge_base_commit": {"sha": "a" * 40},
+        })
+    with pytest.raises(HostProbeError, match="not in PR"):
+        authority.require_deletion_lineage("a" * 40, "c" * 40, runner)
+
+
+def test_deletion_lineage_rejects_rebase_that_drops_approval():
+    def runner(command):
+        if command[:3] == ["gh", "api", "--paginate"]:
+            return "\n".join(["a" * 40, "c" * 40])
+        return json.dumps({
+            "status": "diverged", "behind_by": 1,
+            "base_commit": {"sha": "a" * 40},
+            "merge_base_commit": {"sha": "b" * 40},
+        })
+    with pytest.raises(HostProbeError, match="no longer descends"):
+        authority.require_deletion_lineage("a" * 40, "c" * 40, runner)
+
+
+def test_deletion_lineage_requires_final_head_in_pr_history():
+    def runner(command):
+        if command[:3] == ["gh", "api", "--paginate"]:
+            return "\n".join(["a" * 40, "b" * 40])
+        raise AssertionError("Comparison must not run for a foreign head")
+    with pytest.raises(HostProbeError, match="not in PR"):
+        authority.require_deletion_lineage("a" * 40, "c" * 40, runner)
+
+
+def test_deletion_lineage_rejects_behind_comparison():
+    def runner(command):
+        if command[:3] == ["gh", "api", "--paginate"]:
+            return "\n".join(["a" * 40, "c" * 40])
+        return json.dumps({
+            "status": "behind", "behind_by": 1,
+            "base_commit": {"sha": "a" * 40},
+            "merge_base_commit": {"sha": "a" * 40},
+        })
+    with pytest.raises(HostProbeError, match="no longer descends"):
+        authority.require_deletion_lineage("a" * 40, "c" * 40, runner)
+
+
+def test_credentials_release_tag_and_main_attestation_share_commit(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    observed: list[list[str]] = []
+
+    def runner(command: list[str]) -> str:
+        observed.append(command)
+        if command[-1] == "repos/ElevenID/marty-credentials/git/ref/tags/v0.1.72":
+            return json.dumps({"object": {"type": "tag", "sha": TAG_OBJECT}})
+        return json.dumps({"tag": "v0.1.72", "object": {
+            "type": "commit", "sha": HEAD,
+        }})
+
+    def attest(command: list[str], **kwargs: object) -> subprocess.CompletedProcess[str]:
+        observed.append(command)
+        return subprocess.CompletedProcess(command, 0)
+
+    monkeypatch.setattr(authority.subprocess, "run", attest)
+    assert authority.verify_issuance_attestation(
+        "ghcr.io/elevenid/marty-credentials-issuance@sha256:" + "f" * 64,
+        HEAD, "0.1.72", runner,
+    )
+    assert ["--source-ref", "refs/heads/main"] == observed[-1][
+        observed[-1].index("--source-ref"):
+        observed[-1].index("--source-ref") + 2]
+    assert ["--source-digest", HEAD] == observed[-1][
+        observed[-1].index("--source-digest"):
+        observed[-1].index("--source-digest") + 2]
+
+
+def test_credentials_release_tag_must_point_to_attested_commit(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(authority.subprocess, "run", lambda *args, **kwargs:
+                        pytest.fail("Attestation must not run for a mismatched tag"))
+
+    def runner(command: list[str]) -> str:
+        if "/git/ref/tags/" in command[-1]:
+            return json.dumps({"object": {"type": "tag", "sha": TAG_OBJECT}})
+        return json.dumps({"tag": "v0.1.72", "object": {
+            "type": "commit", "sha": "0" * 40,
+        }})
+
+    with pytest.raises(HostProbeError, match="differs from signed source"):
+        authority.verify_issuance_attestation("oci", HEAD, "0.1.72", runner)
 
 
 def fixture(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
@@ -86,6 +182,12 @@ def fixture(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     install.write_text("install", encoding="utf-8")
     drain.write_text("drain", encoding="utf-8")
     verify.write_text("verify", encoding="utf-8")
+    premigrated = root / "docker-compose.profile.passport-premigrated-beta.yml"
+    premigrated.write_text(
+        'services:\n  flow:\n    environment:\n      MARTY_SCHEMA_STARTUP_MODE: validate\n'
+        '  issuance-native:\n    environment:\n      MARTY_SCHEMA_STARTUP_MODE: validate\n',
+        encoding="utf-8",
+    )
     for relative in authority.PROTECTED_FILES:
         path = root / relative
         if not path.exists():
@@ -102,6 +204,7 @@ def fixture(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     monkeypatch.setattr(authority, "INSTALL", install)
     monkeypatch.setattr(authority, "DRAIN", drain)
     monkeypatch.setattr(authority, "VERIFY", verify)
+    monkeypatch.setattr(authority, "PREMIGRATED", premigrated)
     values = {
         "branch": "main", "status": "", "protected": True, "remote_head": HEAD,
         "tracked": True, "custom_filter": False,
@@ -109,7 +212,14 @@ def fixture(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
         "published_tag_object": TAG_OBJECT, "published_tag_commit": HEAD,
         "deletion_state": "OPEN", "deletion_draft": True,
         "deletion_head": DELETION_HEAD,
+        "deletion_history": [DELETION_HEAD], "deletion_base": "main",
+        "deletion_repo": authority.DELETION_REPOSITORY,
+        "deletion_merge_base": DELETION_HEAD,
         "baseline": baseline,
+        "release_files": {
+            relative: "\n".join(markers)
+            for relative, markers in authority.RELEASE_SCHEMA_VALIDATION_MARKERS.items()
+        },
     }
 
     def runner(command: list[str]) -> str:
@@ -142,16 +252,33 @@ def fixture(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
                 return values["tag_type"]
             if args == ["rev-parse", "refs/tags/v1.2.3^{commit}"]:
                 return values["tag_commit"]
+            if args[:1] == ["show"] and args[1].startswith(HEAD + ":"):
+                return values["release_files"][args[1].split(":", 1)[1]]
         if command[:3] == ["gh", "api", "repos/ElevenID/marty-ui/branches/main"]:
             return json.dumps({"protected": values["protected"],
                                "commit": {"sha": values["remote_head"]}})
         if command[:2] == ["git", "ls-remote"]:
             return (f"{values['published_tag_object']}\trefs/tags/v1.2.3\n"
                     f"{values['published_tag_commit']}\trefs/tags/v1.2.3^{{}}")
-        if command[:3] == ["gh", "pr", "view"]:
-            return json.dumps({"state": values["deletion_state"],
-                               "isDraft": values["deletion_draft"],
-                               "headRefOid": values["deletion_head"]})
+        if command[:3] == ["gh", "api", "repos/ElevenID/marty-credentials/pulls/305"]:
+            return json.dumps({
+                "number": 305, "state": values["deletion_state"].lower(),
+                "draft": values["deletion_draft"],
+                "base": {"ref": values["deletion_base"], "repo": {
+                    "full_name": values["deletion_repo"]}},
+                "head": {"sha": values["deletion_head"], "repo": {
+                    "full_name": values["deletion_repo"]}},
+            })
+        if command[:3] == ["gh", "api", "--paginate"]:
+            return "\n".join(values["deletion_history"])
+        if command[:2] == ["gh", "api"] and "/compare/" in command[2]:
+            approved, current = command[2].rsplit("/", 1)[-1].split("...")
+            return json.dumps({
+                "status": "identical" if approved == current else "ahead",
+                "behind_by": 0,
+                "base_commit": {"sha": approved},
+                "merge_base_commit": {"sha": values["deletion_merge_base"]},
+            })
         raise AssertionError(command)
 
     target = {
@@ -161,6 +288,8 @@ def fixture(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
         "docker": {"context": "test", "daemon_id": "daemon"},
         "beta": {
             "postgres_system_identifier": "12345", "database_oid": "87774",
+            "ui_service": {"configured_image":
+                           "ghcr.io/elevenid/marty-ui-oss/ui@sha256:" + "3" * 64},
             "database_route": {"name": "elevenid-beta-network", "id": "a" * 64,
                                "postgres_container_id": "f" * 64},
             "postgres_runtime": {"image_id": "sha256:" + "f" * 64,
@@ -188,6 +317,9 @@ def test_authority_plan_binds_all_four_sources(
     assert plan["deployed_beta_baseline"]["source_commit"] == "9" * 40
     assert plan["source"]["services_image"] != plan["deployed_beta_baseline"]["services_image"]
     assert plan["source"]["signed_manifest_verified"] is True
+    assert plan["source"]["build_only_artifacts"]["MARTY_COMMON_URI"] == (
+        "https://example.test/artifact.whl")
+    assert plan["source"]["build_only_artifacts"]["MARTY_RS_DIGEST"] == DIGEST
     assert plan["credentials_deletion_head"] == DELETION_HEAD
     assert plan["target_observation_sha256"] == OBSERVATION
     assert plan["postgres_container_id"] == "f" * 64
@@ -196,6 +328,61 @@ def test_authority_plan_binds_all_four_sources(
     assert plan["postgres_runtime"]["server_version_num"] == "150017"
     assert plan["production_snapshot_sha256"] == "1" * 64
     assert plan["verify_sql_sha256"] == hashlib.sha256(b"verify").hexdigest()
+
+
+def test_authority_keeps_approved_head_after_qualification_commit(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    approval, manifest, values, target, runner = fixture(tmp_path, monkeypatch)
+    values["deletion_head"] = "2" * 40
+    values["deletion_history"].append(values["deletion_head"])
+    plan = authority.check_authority(
+        approval, manifest, values["baseline"], runner, lambda: target,
+        lambda *_: True, lambda *_: True,
+    )
+    assert plan["credentials_deletion_head"] == DELETION_HEAD
+
+
+@pytest.mark.parametrize("field,value", [
+    ("deletion_merge_base", "2" * 40),
+    ("deletion_base", "other"),
+    ("deletion_repo", "someone/marty-credentials"),
+])
+def test_authority_rejects_diverged_or_wrong_pull(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, field: str, value: str,
+) -> None:
+    approval, manifest, values, target, runner = fixture(tmp_path, monkeypatch)
+    values[field] = value
+    with pytest.raises(HostProbeError):
+        authority.check_authority(approval, manifest, values["baseline"], runner,
+                                  lambda: target, lambda *_: True, lambda *_: True)
+
+
+def test_authority_requires_signed_shared_validation_source(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    approval, manifest, values, target, runner = fixture(tmp_path, monkeypatch)
+    values["release_files"]["rust/services/issuance/src/main.rs"] = "migration::migrate(&pool).await"
+    with pytest.raises(HostProbeError, match="DDL-free schema validation"):
+        authority.check_authority(approval, manifest, values["baseline"], runner,
+                                  lambda: target, lambda *_: True, lambda *_: True)
+
+
+def test_authority_requires_exact_two_service_premigrated_overlay(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    approval, manifest, values, target, runner = fixture(tmp_path, monkeypatch)
+    authority.PREMIGRATED.write_text(
+        'services:\n  flow:\n    environment:\n      MARTY_SCHEMA_STARTUP_MODE: validate\n'
+        '  issuance-native:\n    environment:\n      MARTY_SCHEMA_STARTUP_MODE: migrate\n',
+        encoding="utf-8",
+    )
+    with pytest.raises(HostProbeError, match="content differs"):
+        authority.check_authority(approval, manifest, values["baseline"], runner,
+                                  lambda: target, lambda *_: True, lambda *_: True)
+    with pytest.raises(HostProbeError, match="does not use DDL-free startup"):
+        authority.require_premigrated_compose_validation(
+            authority.PREMIGRATED.read_text(encoding="utf-8"))
 
 
 def test_hidden_worktree_change_cannot_replace_protected_approval(
@@ -243,7 +430,7 @@ def test_authority_rejects_unapproved_source_or_deletion(
 
 @pytest.mark.parametrize("drift", [
     "observation", "attachments", "cluster", "database", "manifest", "attestation",
-    "issuance_attestation", "issuance_image", "services_image",
+    "issuance_attestation", "issuance_image", "services_image", "ui_image",
 ])
 def test_authority_rejects_target_or_release_drift(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, drift: str,
@@ -265,6 +452,8 @@ def test_authority_rejects_target_or_release_drift(
         target["beta"]["services"]["issuance"]["configured_image"] = "wrong"
     elif drift == "services_image":
         target["beta"]["services"]["flow"]["configured_image"] = "wrong"
+    elif drift == "ui_image":
+        target["beta"]["ui_service"]["configured_image"] = "wrong"
     def attest(path: Path, digests: dict[str, str], commit: str) -> bool:
         return drift != "attestation"
     with pytest.raises(HostProbeError):

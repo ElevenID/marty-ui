@@ -64,7 +64,8 @@ SECRET_MOUNTS = {
     "deployment-profile": ("marty_db_password", "grpc_service_token"),
     "issuance-native": ("marty_db_password", "bao_token", "signing_keys_internal_api_key",
                         "issuance_api_key", "grpc_service_token", "token_hmac_key",
-                        "integration_secret_master_key"),
+                        "integration_secret_master_key",
+                        "passport_beta_reconciliation_operator_token"),
     "flow": ("marty_db_password", "signing_keys_internal_api_key",
              "issuance_api_key", "grpc_service_token"),
     "passport-callback-signer": ("callback_signer_bao_token", "callback_signer_api_key"),
@@ -525,6 +526,13 @@ def verify(record: dict, surface: str, now: datetime,
                 _issuer_origin_environment(config.get("Env"), service, status_origin)
         elif service == "issuance-native":
             _issuer_origin_environment(config.get("Env"), service, status_origin)
+            native_environment = _runtime_environment(config.get("Env"), service)
+            require(native_environment.get("ENVIRONMENT") == "beta"
+                    and native_environment.get("PASSPORT_BETA_RECONCILIATION_ENABLED") == "true"
+                    and native_environment.get("PASSPORT_BETA_RECONCILIATION_OPERATOR_TOKEN_FILE")
+                    == "/run/secrets/passport_beta_reconciliation_operator_token"
+                    and "PASSPORT_BETA_RECONCILIATION_OPERATOR_TOKEN" not in native_environment,
+                    "Disposable native batch authorization is invalid")
         elif service == "flow":
             _flow_surface_environment(config.get("Env"), surface)
         elif service == "revocation-profile":

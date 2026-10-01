@@ -14,6 +14,8 @@ if __package__:
     from .collect_passport_beta_acceptance import (
         EvidenceError,
         collect,
+        production_attachment_commitment,
+        production_snapshot_commitment,
         read_json,
         require,
         verify_attestations,
@@ -38,6 +40,7 @@ if __package__:
         beta_legacy_drain,
         beta_material_receipt,
         beta_native_route_ownership,
+        production_attachment_sha256,
         production_snapshot,
     )
     from .probe_passport_beta_native_batch import (
@@ -56,18 +59,29 @@ if __package__:
         validate_plan as validate_physical_flow_plan,
     )
     from .probe_passport_beta_selected_flow import (
+        PASSPORT_FLOW_ROUTES,
         SelectedFlowError,
     )
     from .probe_passport_beta_selected_flow import (
         exercise as exercise_selected_flow,
     )
     from .probe_passport_beta_selected_flow import (
+        selected_plan_commitment,
         validate_inputs as validate_selected_flow_inputs,
+    )
+    from .verify_passport_beta_issuer_profiles import (
+        IssuerProfileEvidenceError, resolve_in_container, sign_in_container,
+        verify_live_signatures,
+    )
+    from .prove_passport_beta_composite_routes import (
+        CompositeRouteError, prove_composite_routes,
     )
 else:
     from collect_passport_beta_acceptance import (
         EvidenceError,
         collect,
+        production_attachment_commitment,
+        production_snapshot_commitment,
         read_json,
         require,
         verify_attestations,
@@ -92,6 +106,7 @@ else:
         beta_legacy_drain,
         beta_material_receipt,
         beta_native_route_ownership,
+        production_attachment_sha256,
         production_snapshot,
     )
     from probe_passport_beta_native_batch import (
@@ -110,13 +125,22 @@ else:
         validate_plan as validate_physical_flow_plan,
     )
     from probe_passport_beta_selected_flow import (
+        PASSPORT_FLOW_ROUTES,
         SelectedFlowError,
     )
     from probe_passport_beta_selected_flow import (
         exercise as exercise_selected_flow,
     )
     from probe_passport_beta_selected_flow import (
+        selected_plan_commitment,
         validate_inputs as validate_selected_flow_inputs,
+    )
+    from verify_passport_beta_issuer_profiles import (
+        IssuerProfileEvidenceError, resolve_in_container, sign_in_container,
+        verify_live_signatures,
+    )
+    from prove_passport_beta_composite_routes import (
+        CompositeRouteError, prove_composite_routes,
     )
 
 
@@ -128,12 +152,16 @@ def run(
     collector: Callable[..., dict[str, Any]] = collect,
     attestor: Callable[..., bool] = verify_attestations,
     snapshot: Callable[[], dict[str, Any]] = production_snapshot,
+    attachment_snapshot: Callable[[], str] = production_attachment_sha256,
     drain: Callable[[], dict[str, Any]] = beta_legacy_drain,
     lifecycle: Callable[..., dict[str, Any]] = exercise,
     certificate_plan: dict[str, Any] | None = None,
     csca_session: str | None = None,
     dsc_session: str | None = None,
     chain: Callable[..., dict[str, Any]] = exercise_chain,
+    profile_resolver: Callable[..., dict[str, Any]] = resolve_in_container,
+    profile_signer: Callable[..., dict[str, Any]] = sign_in_container,
+    profile_verifier: Callable[..., dict[str, Any]] = verify_live_signatures,
     routing: Callable[[dict[str, dict[str, Any]], dict[str, Any] | None], dict[str, Any]] = beta_native_route_ownership,
     flow: Callable[[str], dict[str, Any]] = exercise_flow,
     material_receipt: Callable[..., dict[str, Any]] = beta_material_receipt,
@@ -148,8 +176,22 @@ def run(
     private_handoff_path: Path | None = None,
     batch: Callable[..., dict[str, Any]] = exercise_batch,
     checkout_checker: Callable[[str], None] = require_source_checkout,
+    require_aggregate: bool = True,
 ) -> dict[str, Any]:
+    if require_aggregate:
+        require((artifact_dir / "aggregate-deployment.json").is_file(),
+                "Protected passport acceptance requires aggregate beta deployment")
     report = collector(artifact_dir, api_key=api_key, attest=attestor)
+    if require_aggregate:
+        deployment = report.get("deployment")
+        require(isinstance(deployment, dict)
+                and all(isinstance(deployment.get(name), str)
+                        and SHA256.fullmatch(deployment[name]) is not None
+                        for name in ("aggregate_deployment_receipt_sha256",
+                                     "aggregate_plan_sha256",
+                                     "production_snapshot_commitment",
+                                     "production_attachment_commitment")),
+                "Protected passport acceptance requires aggregate lineage and production baselines")
     require(report.get("status") == "blocked" and report.get("release", {}).get("signed_manifest_verified") is True, "Official beta release is not authenticated")
     require(report.get("probes", {}).get("capabilities_http", {}).get("verified") is True, "Managed issuer capability is not ready")
     require(report.get("deployment", {}).get("provider_mode") == "simulator"
@@ -174,6 +216,7 @@ def run(
                     for key in ("container_id", "oci_reference")),
             "Inspected beta simulator is missing")
     native_image = report["runtime_images"].get("issuance-native")
+    selected_input_commitment: str | None = None
     if selected_flow_plan is not None:
         require(isinstance(selected_flow_plan, dict)
                 and set(selected_flow_plan) == {"source_commit", "stack_manifest_sha256",
@@ -202,6 +245,7 @@ def run(
             )
         }, report["release"], report["deployment"])
         checkout_checker(selected_flow_plan["source_commit"])
+        selected_input_commitment = selected_plan_commitment(selected_flow_plan, api_key)
     for name in ("application_template_id", "credential_template_id",
                  "delivery_destination_profile_id"):
         require(isinstance(application.get(name), str) and bool(application[name]),
@@ -234,8 +278,20 @@ def run(
             and webhook_owner == "issuance-native",
             "Beta native route ownership did not verify")
     before_production = snapshot()
+    aggregate_production = report["deployment"].get("production_snapshot_commitment")
+    if aggregate_production is not None:
+        require(production_snapshot_commitment(
+                    api_key, before_production.get("sha256")) == aggregate_production,
+                "Production changed since aggregate beta deployment")
+    aggregate_attachments = report["deployment"].get("production_attachment_commitment")
+    if aggregate_attachments is not None:
+        require(production_attachment_commitment(
+                    api_key, attachment_snapshot()) == aggregate_attachments,
+                "Production attachments changed since aggregate beta deployment")
     before_drain = drain()
     selected_dsc: dict[str, str] = {}
+    selected_csca: list[str] = []
+    profile_proof: dict[str, Any] | None = None
     receipt_result: dict[str, Any] | None = None
     selected_result: dict[str, Any] | None = None
     batch_result: dict[str, Any] | None = None
@@ -256,7 +312,10 @@ def run(
         return receipt_result
 
     try:
-        chain_result = chain(certificate_plan, csca_session, dsc_session, on_dsc_material=capture_dsc)
+        chain_kwargs = {"on_dsc_material": capture_dsc}
+        if selected_flow_plan is not None:
+            chain_kwargs["on_csca_material"] = selected_csca.append
+        chain_result = chain(certificate_plan, csca_session, dsc_session, **chain_kwargs)
         require(chain_result.get("verified") is True and isinstance(chain_result.get("evidence"), dict),
                 "Managed CSCA and DSC chain did not verify")
         require(selected_dsc.get("der_sha256") == chain_result["evidence"].get("dsc_certificate_sha256"),
@@ -276,7 +335,7 @@ def run(
                     "Direct passport job commitment is unavailable")
             def bind_native_batch(
                 instance_id: str, application_id: str, source_job_id: str,
-                sod_sha256: str, issuer_profile_id: str,
+                sod_sha256: str,
             ) -> str:
                 nonlocal native_batch_result, selected_bureau_id
                 require(len(selected_dsc) == 2,
@@ -286,12 +345,15 @@ def run(
                     native_service_token, native_operator_token,
                     native_image["container_id"], bureau["container_id"],
                     instance_id, application_id, source_job_id, sod_sha256,
-                    issuer_profile_id, selected_dsc["der_sha256"],
+                    selected_dsc["der_sha256"],
                     selected_dsc["pem_wire_sha256"], material_receipt,
                     private_state_path,
                 )
                 return selected_bureau_id
 
+            require(selected_plan_commitment(selected_flow_plan, api_key)
+                    == selected_input_commitment,
+                    "Selected Flow input mutated before protected execution")
             selected_result = selected_flow(
                 selected_flow_plan["flow_definition_id"], application["organization_id"],
                 application["issuer_did"], selected_flow_plan["references"],
@@ -299,6 +361,9 @@ def run(
                 simulator_container_id=bureau["container_id"], on_submission=compare_submission,
                 on_signed_sod=bind_native_batch,
             )
+            require(selected_plan_commitment(selected_flow_plan, api_key)
+                    == selected_input_commitment,
+                    "Selected Flow input mutated during protected execution")
             selected_evidence = selected_result.get("evidence") if isinstance(selected_result, dict) else None
             require(isinstance(selected_result, dict) and selected_result.get("verified") is True
                     and isinstance(selected_evidence, dict)
@@ -316,6 +381,9 @@ def run(
                     and selected_evidence.get("bureau_job_id") == selected_bureau_id
                     and selected_evidence.get("signed_simulator_callback_verified") is True
                     and selected_evidence.get("terminal_native_status") == "ACTIVE"
+                    and selected_evidence.get("flow_routes") == [
+                        {"method": method, "path": path}
+                        for method, path in PASSPORT_FLOW_ROUTES]
                     and isinstance(selected_evidence.get("callback_receipt_sha256"), str)
                     and SHA256.fullmatch(selected_evidence["callback_receipt_sha256"]) is not None
                     and isinstance(receipt_result, dict) and isinstance(receipt_result.get("evidence"), dict)
@@ -356,6 +424,38 @@ def run(
                             for field in ("request_commitment", "response_commitment",
                                           "companion_callback_receipt_sha256")),
                     "Selected Flow native batch proof did not verify")
+            signing_image = report["runtime_images"].get("signing-keys")
+            require(isinstance(signing_image, dict)
+                    and isinstance(signing_image.get("container_id"), str)
+                    and len(selected_csca) == 1,
+                    "Selected Signing Keys container or CSCA material is unavailable")
+            signing_container = signing_image["container_id"]
+            csca_did = certificate_plan["csca"]["issuer_did"]
+            dsc_did = certificate_plan["dsc"]["dsc_issuer_did"]
+            csca_resolution = profile_resolver(
+                signing_container, application["organization_id"], csca_did, "csca")
+            dsc_resolution = profile_resolver(
+                signing_container, application["organization_id"], dsc_did, "x509_doc_signer")
+            profile_proof = profile_verifier(
+                application["organization_id"], csca_did, dsc_did,
+                csca_resolution, dsc_resolution, chain_result["evidence"],
+                selected_csca[0], api_key,
+                signer=lambda org, did, purpose, challenge: profile_signer(
+                    signing_container, org, did, purpose, challenge),
+            )
+            require(isinstance(profile_proof, dict)
+                    and set(profile_proof) == {
+                        "managed_kms_custody_verified", "chain_verified",
+                        "csca_issuer_profile_commitment", "dsc_issuer_profile_commitment"}
+                    and profile_proof.get("managed_kms_custody_verified") is True
+                    and profile_proof.get("chain_verified") is True
+                    and all(isinstance(profile_proof.get(field), str)
+                            and SHA256.fullmatch(profile_proof[field]) is not None
+                            for field in ("csca_issuer_profile_commitment",
+                                          "dsc_issuer_profile_commitment"))
+                    and profile_proof["csca_issuer_profile_commitment"]
+                    != profile_proof["dsc_issuer_profile_commitment"],
+                    "Selected managed issuer profile and live KMS proof did not verify")
         else:
             batch_result = batch(
                 application, api_key, bureau["container_id"],
@@ -404,6 +504,10 @@ def run(
     finally:
         after_production = snapshot()
         production_window = assert_production_unchanged(before_production, after_production)
+        if aggregate_attachments is not None:
+            require(production_attachment_commitment(
+                        api_key, attachment_snapshot()) == aggregate_attachments,
+                    "Production attachments changed during beta acceptance")
     after_drain = drain()
     after = collector(artifact_dir, api_key=api_key, attest=attestor)
     require(all(report[key] == after[key] for key in ("release", "deployment", "runtime_images")), "Beta release or runtime drifted during passport acceptance")
@@ -480,12 +584,14 @@ def run(
             "sod_sha256": selected_evidence["sod_sha256"],
             "ordered_steps": selected_evidence["ordered_steps"],
             "completed_steps": selected_evidence["completed_steps"],
+            "flow_routes": selected_evidence["flow_routes"],
             "source_job_commitment": selected_evidence["source_job_commitment"],
             "bureau_job_commitment": selected_evidence["bureau_job_commitment"],
             **selected_commitments,
             "callback_receipt_sha256": selected_evidence["callback_receipt_sha256"],
             "terminal_native_status": selected_evidence["terminal_native_status"],
             "physical_claim": selected_evidence["physical_claim"],
+            "selected_flow_plan_commitment": selected_input_commitment,
         }}
     lifecycle_evidence = lifecycle_result.get("evidence")
     require(lifecycle_result.get("verified") is True and isinstance(lifecycle_evidence, dict)
@@ -535,22 +641,30 @@ def run(
     }}
     report["probes"]["beta_native_route_ownership"] = route_ownership
     report["probes"]["flow_capability_and_webhook_denial"] = flow_result
-    report["probes"]["nine_route_gateway_flow"] = {"verified": False, "evidence": {
-        **selected_commitments,
-        "capabilities_http": report["probes"]["capabilities_http"].get("evidence"),
-        "application_lifecycle": safe_lifecycle_evidence,
-        "flow_and_webhook_denial": flow_result.get("evidence"),
-        "native_route_ownership": route_ownership.get("evidence"),
-        "missing": (["same_job_gateway_route_trace"] if native_batch_result is not None
-                    else ["executed_simulator_flow", "selected_flow_in_two_job_batch"]),
-    }}
+    report["probes"]["nine_route_gateway_flow"] = (
+        prove_composite_routes(
+            selected_result, selected_commitments | {
+                "source_job_commitment": selected_result["evidence"]["source_job_commitment"],
+                "bureau_job_commitment": selected_result["evidence"]["bureau_job_commitment"],
+            }, native_batch_result,
+            route_ownership, flow_result, report["probes"]["capabilities_http"],
+        ) if selected_result is not None and native_batch_result is not None
+        else {"verified": False, "evidence": {
+            "missing": ["executed_simulator_flow", "selected_flow_in_two_job_batch"]}}
+    )
     chain_evidence = chain_result["evidence"]
     report["probes"]["managed_csca_dsc_chain"] = {"verified": True, "evidence": {
         key: chain_evidence[key] for key in (
             "csca_certificate_sha256", "dsc_certificate_sha256",
             "csca_http_status", "dsc_http_status", "chain_verified_by")
         if key in chain_evidence
-    }}
+    } | (profile_proof or {}) | ({
+        "organization_commitment": selected_commitments["organization_commitment"],
+        "application_commitment": selected_commitments["application_commitment"],
+        "source_job_commitment": selected_evidence["source_job_commitment"],
+        "sod_dsc_binding_verified": True,
+        "sod_dsc_certificate_sha256": chain_evidence["dsc_certificate_sha256"],
+    } if selected_evidence is not None and profile_proof is not None else {})}
     report["probes"]["legacy_drain"] = {
         "verified": before_drain.get("verified") is True and after_drain.get("verified") is True,
         "evidence": {"before": before_drain.get("evidence"), "after": after_drain.get("evidence")},
@@ -610,7 +724,8 @@ def main() -> int:
             private_handoff_path=args.private_demo_handoff_file,
         )
         args.output.write_text(json.dumps(report, indent=2, sort_keys=True) + "\n", encoding="utf-8")
-    except (EvidenceError, ProbeError, ChainProbeError, FlowProbeError, SelectedFlowError,
+    except (EvidenceError, ProbeError, ChainProbeError, IssuerProfileEvidenceError,
+            FlowProbeError, SelectedFlowError, CompositeRouteError,
             BatchProbeError, NativeBatchProbeError, PhysicalFlowProbeError,
             HostProbeError, OSError) as exc:
         args.output.write_text(json.dumps({"schema": "marty.passport-beta-acceptance/v1", "status": "blocked", "blocker": str(exc)}, indent=2) + "\n", encoding="utf-8")

@@ -833,6 +833,9 @@ def validate_model(
         and native.get("PASSPORT_MANAGED_ISSUER_SIGNING_ENABLED") == "true"
         and native.get("PASSPORT_KMS_ARTIFACTS_ENABLED") == "true"
         and native.get("PASSPORT_KMS_CALLBACKS_ENABLED") == "true"
+        and native.get("PASSPORT_BETA_RECONCILIATION_ENABLED") == "true"
+        and native.get("PASSPORT_BETA_RECONCILIATION_OPERATOR_TOKEN_FILE")
+        == "/run/secrets/passport_beta_reconciliation_operator_token"
         and all(settings.get("ISSUANCE_SERVICE_URL")
                 == settings.get("ISSUANCE_NATIVE_SERVICE_URL")
                 == "http://issuance-native:8005"
@@ -868,15 +871,24 @@ def validate_model(
         native.get("TOKEN_HMAC_KEY_FILE") == "/run/secrets/token_hmac_key"
         and native.get("INTEGRATION_SECRET_MASTER_KEY_FILE")
         == "/run/secrets/integration_secret_master_key"
+        and "PASSPORT_BETA_RECONCILIATION_OPERATOR_TOKEN" not in native
         and "TOKEN_HMAC_KEY" not in native
         and "INTEGRATION_SECRET_MASTER_KEY" not in native
-        and {"token_hmac_key", "integration_secret_master_key"}
+        and {"token_hmac_key", "integration_secret_master_key",
+             "passport_beta_reconciliation_operator_token"}
         <= {secret.get("source") for secret in services["issuance-native"].get("secrets", [])
             if isinstance(secret, dict)},
         "Disposable native issuance startup secrets are missing",
     )
+    operator_token_holders = {
+        name for name, service in services.items()
+        if any(item.get("source") == "passport_beta_reconciliation_operator_token"
+               for item in service.get("secrets", []) if isinstance(item, dict))
+    }
+    require(operator_token_holders == {"issuance-native"},
+            "Disposable native batch operator token escaped its owner")
     require(gateway.get("GRPC_INSECURE_ALLOWED") == "true"
-            and native.get("ENVIRONMENT") == ("beta" if surface == "selfhost" else "development")
+            and native.get("ENVIRONMENT") == "beta"
             and gateway.get("ENVIRONMENT") == ("production" if surface == "selfhost" else "beta")
             and flow.get("ENVIRONMENT") == ("production" if surface == "selfhost" else "development"),
             "Disposable surface environment selectors are incompatible with the beta simulator")

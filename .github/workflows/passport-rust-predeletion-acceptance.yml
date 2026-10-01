@@ -1,0 +1,138 @@
+name: Passport Rust Predeletion Acceptance
+
+# Join the attested disposable Rust producer to the live beta drain, then
+# attest the exact report and fence bytes consumed by the Python deletion gate.
+on:
+  workflow_dispatch:
+    inputs:
+      release_tag:
+        description: Official signed stack release at this protected main commit.
+        required: true
+      producer_run_id:
+        description: Successful protected disposable Rust producer run.
+        required: true
+      record_run_id:
+        description: Successful producer receipt attestor run.
+        required: true
+      observation_run_id:
+        description: Successful beta predeletion drain observation run.
+        required: true
+      fence_installation_receipt:
+        description: Absolute WSL path to the completed beta fence receipt.
+        required: true
+
+concurrency:
+  group: passport-rust-predeletion-acceptance
+  cancel-in-progress: false
+
+jobs:
+  accept:
+    permissions:
+      actions: read
+      attestations: write
+      contents: read
+      id-token: write
+      packages: read
+    if: github.ref == 'refs/heads/main' && github.run_attempt == 1
+    runs-on: [self-hosted, linux, x64, canvas-oss-wsl2]
+    environment: beta-lifecycle
+    timeout-minutes: 60
+    env:
+      GH_TOKEN: ${{ github.token }}
+      RELEASE_TAG: ${{ inputs.release_tag }}
+      PRODUCER_RUN: ${{ inputs.producer_run_id }}
+      RECORD_RUN: ${{ inputs.record_run_id }}
+      OBSERVATION_RUN: ${{ inputs.observation_run_id }}
+      FENCE_RECEIPT: ${{ inputs.fence_installation_receipt }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          ref: main
+          persist-credentials: false
+      - name: Verify protected source and compose exact predeletion evidence
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$GITHUB_SHA" = "$(git rev-parse HEAD)"
+          test "$(git branch --show-current)" = main
+          [[ "$PRODUCER_RUN" =~ ^[1-9][0-9]{0,19}$ ]]
+          [[ "$RECORD_RUN" =~ ^[1-9][0-9]{0,19}$ ]]
+          [[ "$OBSERVATION_RUN" =~ ^[1-9][0-9]{0,19}$ ]]
+          [[ "$FENCE_RECEIPT" == /* ]]
+          test -f "$FENCE_RECEIPT" && test ! -L "$FENCE_RECEIPT"
+          python3 - <<'PY'
+          from scripts.check_passport_beta_fence_authority import (
+              protected_file, protected_source, run,
+          )
+          protected_source(run)
+          for relative in (
+              ".github/workflows/passport-rust-predeletion-acceptance.yml",
+              "scripts/compose_passport_predeletion_acceptance.py",
+              "scripts/project_passport_predeletion_producer.py",
+              "scripts/verify_passport_predeletion_producer.py",
+              "scripts/verify_passport_predeletion_observation.py",
+              "scripts/probe_passport_beta_cutover_snapshot.py",
+          ):
+              protected_file(relative, run)
+          PY
+          work="$RUNNER_TEMP/passport-predeletion-acceptance-$GITHUB_RUN_ID"
+          mkdir -m 700 "$work"
+          mkdir -m 700 "$work/observed-fence" "$work/release"
+          python3 scripts/verify_passport_predeletion_producer.py \
+            --record-run-id "$RECORD_RUN" --producer-run-id "$PRODUCER_RUN" \
+            --source-commit "$GITHUB_SHA" --output "$work/producer.json"
+          python3 scripts/verify_passport_predeletion_observation.py \
+            --run-id "$OBSERVATION_RUN" --source-commit "$GITHUB_SHA" \
+            --output "$work/observation.json"
+          gh run download "$OBSERVATION_RUN" --repo "$GITHUB_REPOSITORY" \
+            --name "passport-beta-predeletion-drain-$OBSERVATION_RUN" \
+            --dir "$work/observed-fence"
+          observed="$work/observed-fence/passport-beta-fence-installation-$OBSERVATION_RUN.json"
+          test -f "$observed" && test ! -L "$observed"
+          cmp -- "$observed" "$FENCE_RECEIPT"
+          gh attestation verify "$observed" --repo "$GITHUB_REPOSITORY" \
+            --signer-workflow "$GITHUB_REPOSITORY/.github/workflows/passport-beta-predeletion-drain-observation.yml" \
+            --source-digest "$GITHUB_SHA" --source-ref refs/heads/main
+          python3 scripts/probe_passport_beta_cutover_snapshot.py \
+            --fence-installation-receipt "$FENCE_RECEIPT" \
+            --output "$work/fresh-snapshot.json"
+          gh release download "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" \
+            --pattern stack-manifest.json --pattern SHA256SUMS \
+            --dir "$work/release"
+          python3 scripts/compose_passport_predeletion_acceptance.py \
+            --producer "$work/producer.json" \
+            --observation "$work/observation.json" \
+            --fresh-snapshot "$work/fresh-snapshot.json" \
+            --fence-installation-receipt "$observed" \
+            --stack-manifest "$work/release/stack-manifest.json" \
+            --release-tag "$RELEASE_TAG" \
+            --output "passport-rust-predeletion-acceptance-$GITHUB_RUN_ID.json"
+          jq -e --arg source "$GITHUB_SHA" --argjson run "$GITHUB_RUN_ID" \
+            '.schema == "marty.passport-rust-predeletion-acceptance/v1" and
+             .status == "accepted" and .run_id == $run and
+             .release.source_commit == $source and
+             (.probes | length) == 12' \
+            "passport-rust-predeletion-acceptance-$GITHUB_RUN_ID.json"
+          cp -- "$observed" "passport-beta-fence-installation-$GITHUB_RUN_ID.json"
+          cmp -- "$FENCE_RECEIPT" \
+            "passport-beta-fence-installation-$GITHUB_RUN_ID.json"
+      - name: Attest exact predeletion acceptance report bytes
+        uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8
+        with:
+          subject-path: passport-rust-predeletion-acceptance-${{ github.run_id }}.json
+      - name: Attest exact installed beta fence receipt bytes
+        uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8
+        with:
+          subject-path: passport-beta-fence-installation-${{ github.run_id }}.json
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: passport-rust-predeletion-acceptance-${{ github.run_id }}
+          path: passport-rust-predeletion-acceptance-${{ github.run_id }}.json
+          if-no-files-found: error
+          retention-days: 30
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: passport-beta-fence-installation-${{ github.run_id }}
+          path: passport-beta-fence-installation-${{ github.run_id }}.json
+          if-no-files-found: error
+          retention-days: 30

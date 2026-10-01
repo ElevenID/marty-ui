@@ -113,8 +113,10 @@ def test_fixture_chain_is_port_bound_and_setup_only(monkeypatch, surface: str) -
     with staged(surface) as (plan, root):
         calls = []
 
-        def fake_exercise(chain, csca_authority, dsc_authority, *, request):
+        def fake_exercise(chain, csca_authority, dsc_authority, *, request,
+                          on_csca_material, on_dsc_material):
             calls.append((chain, csca_authority, dsc_authority, request))
+            on_csca_material("-----BEGIN CERTIFICATE-----\npublic\n-----END CERTIFICATE-----")
             return {"evidence": {"chain_verified_by": "openssl-x509-strict"}}
 
         monkeypatch.setattr(ceremony, "exercise_with_authorities", fake_exercise)
@@ -124,8 +126,28 @@ def test_fixture_chain_is_port_bound_and_setup_only(monkeypatch, surface: str) -
             profiles.append((path, body, authority, signer_id))
             return 200, {"identity": {**body, "status": "active"}}
 
+        resolved = []
+
+        def profile_resolver(signer_id, org, issuer, purpose):
+            resolved.append((signer_id, org, issuer, purpose))
+            return {"purpose": purpose}
+
+        def profile_verifier(org, csca_did, dsc_did, csca, dsc, chain_evidence,
+                             csca_pem, internal_key, *, signer):
+            assert internal_key == "c" * 64
+            assert csca_pem.startswith("-----BEGIN CERTIFICATE-----")
+            assert csca["purpose"] == "csca" and dsc["purpose"] == "x509_doc_signer"
+            assert signer(org, csca_did, "csca", b"challenge") == {"signed": True}
+            return {"managed_kms_custody_verified": True, "chain_verified": True,
+                    "csca_issuer_profile_commitment": "3" * 64,
+                    "dsc_issuer_profile_commitment": "4" * 64}
+
         result = ceremony.bootstrap_certificate_chain(
             plan, root, 29876, now=NOW, inspect=fake_inspector(plan), request=request,
+            profile_resolver=profile_resolver,
+            profile_signer=lambda signer_id, org, issuer, purpose, challenge:
+                {"signed": signer_id == "1" * 64 and challenge == b"challenge"},
+            profile_verifier=profile_verifier,
         )
         chain, csca_authority, dsc_authority, _ = calls[0]
         did = "did:web:localhost%3A29876:orgs:marty"
@@ -140,7 +162,9 @@ def test_fixture_chain_is_port_bound_and_setup_only(monkeypatch, surface: str) -
                    and item[3] == "1" * 64 for item in profiles)
         assert result["status"] == "setup_only"
         assert result["gateway_operator_authorization_verified"] is False
-        assert "a" * 64 not in str(result) and "b" * 64 not in str(result)
+        assert [item[3] for item in resolved] == ["csca", "x509_doc_signer"]
+        assert result["evidence"]["managed_kms_custody_verified"] is True
+        assert all(secret not in str(result) for secret in ("a" * 64, "b" * 64, "c" * 64))
 
 
 def test_private_request_uses_only_project_network_and_stdin_authority() -> None:
@@ -170,6 +194,87 @@ def test_private_request_uses_only_project_network_and_stdin_authority() -> None
         assert json.loads(kwargs["input"])["authority"] == "a" * 64
         assert kwargs["capture_output"] is True and kwargs["timeout"] == 45
         assert "passport-certificate-bootstrap" in PARTIAL_ONLY_SERVICES
+
+
+def test_certificate_setup_rejects_unbound_managed_profile(monkeypatch) -> None:
+    with staged() as (plan, root):
+        def fake_exercise(*args, on_csca_material, **kwargs):
+            on_csca_material("-----BEGIN CERTIFICATE-----\npublic\n-----END CERTIFICATE-----")
+            return {"evidence": {"chain_verified_by": "openssl-x509-strict"}}
+
+        monkeypatch.setattr(ceremony, "exercise_with_authorities", fake_exercise)
+        with pytest.raises(ceremony.DisposableCeremonyError,
+                           match="managed issuer proof is incomplete"):
+            ceremony.bootstrap_certificate_chain(
+                plan, root, 29876, now=NOW, inspect=fake_inspector(plan),
+                request=lambda selected, path, body, authority, signer_id:
+                    (200, {"identity": {**body, "status": "active"}}),
+                profile_resolver=lambda signer_id, org, issuer, purpose: {},
+                profile_verifier=lambda *args, **kwargs: {
+                    "managed_kms_custody_verified": True, "chain_verified": True,
+                    "csca_issuer_profile_commitment": "3" * 64,
+                    "dsc_issuer_profile_commitment": "3" * 64,
+                },
+            )
+
+
+def test_recreated_signer_must_match_ceremony_profiles_and_chain() -> None:
+    with staged() as (_, root):
+        certificate = {"evidence": {
+            "csca_certificate_sha256": "1" * 64,
+            "dsc_certificate_sha256": "2" * 64,
+            "csca_issuer_profile_commitment": "3" * 64,
+            "dsc_issuer_profile_commitment": "4" * 64,
+        }}
+        observed = []
+
+        def verify(org, csca_did, dsc_did, csca, dsc, evidence, pem, key, *, signer):
+            observed.append((org, csca_did, dsc_did, evidence, pem, key))
+            assert csca["purpose"] == "csca" and dsc["purpose"] == "x509_doc_signer"
+            assert pem == "-----BEGIN CERTIFICATE-----\npublic\n-----END CERTIFICATE-----"
+            return {"managed_kms_custody_verified": True, "chain_verified": True,
+                    "csca_issuer_profile_commitment": "3" * 64,
+                    "dsc_issuer_profile_commitment": "4" * 64}
+
+        args = dict(
+            profile_resolver=lambda container_id, org, did, purpose:
+                {"purpose": purpose, "organization_id": org,
+                 "issuer_profile": {"organization_id": org,
+                                    "status": "active",
+                                    "issuer_mode": "org_managed",
+                                    "credential_format": "ICAO_EMRTD",
+                                    "key_purpose": purpose}},
+            profile_verifier=verify,
+        )
+        result = ceremony.recheck_current_managed_signer(
+            "1" * 64, root, 29876, certificate,
+            "-----BEGIN CERTIFICATE-----\npublic\n-----END CERTIFICATE-----", **args)
+        assert result["signing_keys_container_id"] == "1" * 64
+        assert result["managed_kms_custody_verified"] is True
+        assert result["mode"] == "managed_kms"
+        assert result["private_key_exported"] is False
+        assert result["csca"]["certificate_sha256"] == "1" * 64
+        assert result["dsc"]["certificate_sha256"] == "2" * 64
+        assert observed[0][-1] == "c" * 64
+        changed = {"evidence": {**certificate["evidence"],
+                                "dsc_issuer_profile_commitment": "5" * 64}}
+        with pytest.raises(ceremony.DisposableCeremonyError,
+                           match="differs from the issued certificate chain"):
+            ceremony.recheck_current_managed_signer(
+                "1" * 64, root, 29876, changed,
+                "-----BEGIN CERTIFICATE-----\npublic\n-----END CERTIFICATE-----", **args)
+        def inactive_profile(container_id, org, did, purpose):
+            resolution = args["profile_resolver"](container_id, org, did, purpose)
+            if purpose == "x509_doc_signer":
+                resolution["issuer_profile"]["status"] = "inactive"
+            return resolution
+
+        with pytest.raises(ceremony.DisposableCeremonyError,
+                           match="profile state is invalid"):
+            ceremony.recheck_current_managed_signer(
+                "1" * 64, root, 29876, certificate,
+                "-----BEGIN CERTIFICATE-----\npublic\n-----END CERTIFICATE-----",
+                **{**args, "profile_resolver": inactive_profile})
 
 
 @pytest.mark.parametrize("mutation", [

@@ -8,9 +8,10 @@ use std::{
 use axum::{extract::State, http::HeaderMap, routing::post, Json, Router};
 use chrono::{Duration, Utc};
 use marty_flow::{
-    deliver_due_callbacks, migrate_flow_schema, ApplicationEventReceipt, ApprovalStrategy,
-    ArtifactStatus, CallbackDeliveryConfig, CallbackEvent, DefinitionStatus, FlowArtifactRecord,
-    FlowDefinitionRecord, FlowInstanceRecord, PlannedApplicationFlowRecord, PostgresFlowRepository,
+    deliver_due_callbacks, migrate_flow_schema, validate_flow_schema, ApplicationEventReceipt,
+    ApprovalStrategy, ArtifactStatus, CallbackDeliveryConfig, CallbackEvent, DefinitionStatus,
+    FlowArtifactRecord, FlowDefinitionRecord, FlowInstanceRecord, PlannedApplicationFlowRecord,
+    PostgresFlowRepository,
 };
 use marty_verification::flow::FlowInstanceStatus;
 use mmf_push::WebhookDestinationRegistry;
@@ -59,6 +60,41 @@ async fn postgres_finalization_and_callback_leases_are_atomic() -> TestResult {
 }
 
 async fn run_contract(pool: &PgPool) -> TestResult {
+    validate_flow_schema(pool).await?;
+    sqlx::query(
+        "DELETE FROM flow_service.flow_definitions
+         WHERE id='71000000-0000-0000-0000-000000000001'",
+    )
+    .execute(pool)
+    .await?;
+    assert!(validate_flow_schema(pool).await.is_err());
+    migrate_flow_schema(pool).await?;
+    validate_flow_schema(pool).await?;
+    sqlx::raw_sql(
+        "DROP INDEX flow_service.ux_flow_instances_org_application_flow_key;
+         CREATE UNIQUE INDEX ux_flow_instances_org_application_flow_key
+         ON flow_service.flow_instances (id);",
+    )
+    .execute(pool)
+    .await?;
+    assert!(validate_flow_schema(pool).await.is_err());
+    sqlx::query("DROP INDEX flow_service.ux_flow_instances_org_application_flow_key")
+        .execute(pool)
+        .await?;
+    migrate_flow_schema(pool).await?;
+    sqlx::query(
+        "ALTER TABLE flow_service.flow_nonce_consumptions
+         DROP CONSTRAINT flow_nonce_consumptions_pkey",
+    )
+    .execute(pool)
+    .await?;
+    assert!(validate_flow_schema(pool).await.is_err());
+    sqlx::query(
+        "ALTER TABLE flow_service.flow_nonce_consumptions
+         ADD PRIMARY KEY (nonce_digest)",
+    )
+    .execute(pool)
+    .await?;
     assert_builtin_flow_link_is_idempotent(pool).await?;
     let repository = PostgresFlowRepository::new(pool.clone());
     let now = chrono::DateTime::from_timestamp_micros(Utc::now().timestamp_micros())

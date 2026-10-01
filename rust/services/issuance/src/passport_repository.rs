@@ -685,9 +685,10 @@ impl PostgresPassportRepository {
             && projection["flow_execution_id"].as_str() == Some(identity.selected_flow_instance_id)
             && projection["application_id"].as_str() == Some(job.application_id.as_str())
             && projection["issuer_did"].as_str() == job.issuer_did.as_deref()
-            && projection["issuer_profile_id"].as_str()
-                == signing_provenance
-                    .and_then(|provenance| provenance["issuer_profile_id"].as_str())
+            && projection.get("issuer_profile_id").is_none()
+            && signing_provenance
+                .and_then(|provenance| provenance["issuer_profile_id"].as_str())
+                .is_some_and(|profile_id| !profile_id.trim().is_empty())
             && projection["sod_sha256"].as_str() == Some(sod_sha256)
             && projection["sod_signature_verified"].as_bool() == Some(true)
             && projection["status"].as_str() == Some("SOD_SIGNED")

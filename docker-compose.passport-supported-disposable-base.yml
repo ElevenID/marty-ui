@@ -21,7 +21,7 @@ services:
       PASSPORT_ACCEPTANCE_SURFACE: base
   issuance-native:
     environment:
-      ENVIRONMENT: development
+      ENVIRONMENT: beta
       PASSPORT_ACCEPTANCE_SURFACE: base
   passport-callback-signer:
     environment:

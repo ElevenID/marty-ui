@@ -115,6 +115,23 @@ async fn migration_bounds_legacy_tokens_and_backfills_notification_audit_identit
 
     migration::migrate(&pool).await.unwrap();
     migration::migrate(&pool).await.unwrap();
+    let read_only_pool = PgPoolOptions::new()
+        .max_connections(1)
+        .connect(&database_url)
+        .await
+        .unwrap();
+    sqlx::query("SET default_transaction_read_only = on")
+        .execute(&read_only_pool)
+        .await
+        .unwrap();
+    let read_only: String = sqlx::query_scalar("SHOW default_transaction_read_only")
+        .fetch_one(&read_only_pool)
+        .await
+        .unwrap();
+    assert_eq!(read_only, "on");
+    migration::validate(&read_only_pool).await.unwrap();
+    assert!(migration::migrate(&read_only_pool).await.is_err());
+    read_only_pool.close().await;
     let transaction_remaining: f64 = sqlx::query_scalar(
         "SELECT extract(epoch FROM access_token_expires_at - clock_timestamp())::double precision
          FROM issuance_service.issuance_transactions

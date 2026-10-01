@@ -414,6 +414,11 @@ static SPECIAL_RULES: LazyLock<Vec<RouteRule>> = LazyLock::new(|| {
             "flow-definition",
         ),
         rule(
+            r"^/v1/flows/definitions/[^/]+/validate$",
+            &[("POST", "flow-definition:view")],
+            "flow-definition",
+        ),
+        rule(
             r"^/v1/flows/instances(?:/[^/]+)?(?:/advance)?$",
             &[
                 ("GET", "flow-instance:view"),

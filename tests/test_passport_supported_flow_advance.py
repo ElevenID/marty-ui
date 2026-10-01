@@ -1,6 +1,7 @@
 """Nine Flow transitions must bind one native job and durable ordered history."""
 
 from copy import deepcopy
+from uuid import UUID
 
 import pytest
 
@@ -133,7 +134,10 @@ def test_nine_advances_require_same_job_callback_and_durable_history():
     assert proof == {"flow_step_count": 9, "native_effect_count": 6,
                      "durable_history_verified": True,
                      "restart_resume_verified": False,
+                     "restart_before_native_status": None,
+                     "restart_after_native_status": None,
                      "signed_callback_receipt_sha256": "b" * 64,
+                     "callback_bureau_status": "QUALITY_CHECK",
                      "bureau_job_id": BUREAU, "sod_sha256": "a" * 64}
     assert [item[0] for item in fixture.requests].count("POST") == 9
     assert fixture.callback is True
@@ -193,6 +197,36 @@ def test_restart_resumes_same_persisted_flow_and_native_job():
     assert restarts == [5]
     assert fixture.completed == 9
     assert proof["restart_resume_verified"] is True
+    assert proof["restart_before_native_status"] == "SOD_SIGNED"
+    assert proof["restart_after_native_status"] == "SUBMITTED"
+
+
+def test_shipped_callback_requires_exact_simulator_tracking_marker():
+    fixture = Fixture()
+
+    def shipped(bureau_job_id):
+        status, payload = fixture.private(bureau_job_id)
+        payload["status"] = "SHIPPED"
+        payload["tracking_number"] = "BETA-SIM-" + UUID(BUREAU).hex
+        return status, payload
+
+    proof = advance_physical_passport_flow(
+        fixture.request, fixture.native, shipped, fixture.history,
+        ORG, REFERENCES, STARTED, ISSUER, poll_interval_seconds=0)
+    assert proof["callback_bureau_status"] == "SHIPPED"
+
+    rejected = Fixture()
+
+    def unmarked(bureau_job_id):
+        status, payload = rejected.private(bureau_job_id)
+        payload["status"] = "SHIPPED"
+        return status, payload
+
+    with pytest.raises(FlowAdvanceError, match="signed callback"):
+        advance_physical_passport_flow(
+            rejected.request, rejected.native, unmarked, rejected.history,
+            ORG, REFERENCES, STARTED, ISSUER,
+            max_polls=1, poll_interval_seconds=0)
 
 
 def test_restart_checkpoint_drift_stops_before_bureau_submission():
@@ -217,3 +251,57 @@ def test_restart_checkpoint_drift_stops_before_bureau_submission():
             ORG, REFERENCES, STARTED, ISSUER, poll_interval_seconds=0,
             restart=restart)
     assert fixture.completed == 5
+
+
+def test_native_batch_runs_after_restart_and_binds_flow_submission():
+    fixture = Fixture()
+    calls = []
+
+    def restart():
+        calls.append("restart")
+        assert fixture.completed == 5
+        return True
+
+    def before_submit(started, sod_sha256):
+        calls.append("batch")
+        assert fixture.completed == 5
+        assert started == STARTED and sod_sha256 == "a" * 64
+        return BUREAU
+
+    proof = advance_physical_passport_flow(
+        fixture.request, fixture.native, fixture.private, fixture.history,
+        ORG, REFERENCES, STARTED, ISSUER, poll_interval_seconds=0,
+        restart=restart, before_submit=before_submit)
+    assert calls == ["restart", "batch"]
+    assert proof["bureau_job_id"] == BUREAU
+
+
+def test_native_batch_bureau_identity_must_match_flow_submission():
+    fixture = Fixture()
+    with pytest.raises(FlowAdvanceError, match="submission changed job"):
+        advance_physical_passport_flow(
+            fixture.request, fixture.native, fixture.private, fixture.history,
+            ORG, REFERENCES, STARTED, ISSUER, poll_interval_seconds=0,
+            before_submit=lambda started, sod: IDS[8])
+    assert fixture.completed == 6
+
+
+@pytest.mark.parametrize("field,value", [
+    ("sod_sha256", "c" * 64),
+    ("sod_signature_verified", False),
+])
+def test_native_batch_submission_keeps_signed_sod_material(field, value):
+    fixture = Fixture()
+
+    def native(method, path, body):
+        status, job = fixture.native(method, path, body)
+        if fixture.completed == 6:
+            job[field] = value
+        return status, job
+
+    with pytest.raises(FlowAdvanceError, match="submission changed job"):
+        advance_physical_passport_flow(
+            fixture.request, native, fixture.private, fixture.history,
+            ORG, REFERENCES, STARTED, ISSUER, poll_interval_seconds=0,
+            before_submit=lambda started, sod: BUREAU)
+    assert fixture.completed == 6

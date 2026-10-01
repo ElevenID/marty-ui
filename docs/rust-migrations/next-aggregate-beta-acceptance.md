@@ -69,10 +69,35 @@ The final beta release must come from the source after Python passport deletion.
    post-deletion release is available, perform the one beta cutover with
    `scripts/run-passport-beta-aggregate-deploy.ps1` from a clean released
    worktree. Supply the signed stack manifest and the attested fence,
-   maintenance, and native migration receipts; write a fresh aggregate receipt
-   outside protected source. Verify its exact Compose render, signed images,
+   maintenance, and native migration receipts. Supply an absolute
+   `-ApplicationFile` outside protected source with the pilot organization's
+   `organization_id`, managed `issuer_did`, `application_template_id`,
+   `credential_template_id`, and `delivery_destination_profile_id`. The
+   operator also needs an absolute `-FlowFile` with the pilot organization's
+   active physical `flow_definition_id` and matching issuer DID, and an
+   absolute `-SessionFile` containing a governed beta operator Cookie value
+   with `flow-definition:view`, `credential-template:view`,
+   `flow-instance:start`, and `flow-instance:view` permissions. Keep
+   all three inputs outside protected source. Start signed Gateway on its
+   verified loopback listener while the public edge is stopped, and validate
+   the live Flow definition, references and issuer before the transition.
+   After the transition, create a synthetic DRAFT job through signed Rust
+   issuance and a physical Flow through private Gateway, then match both
+   responses to durable Flow and encrypted job rows. Durable attempt and
+   dispatch markers prevent an uncertain response from repeating a POST. If
+   the Flow creation response is lost, keep ingress closed until its Gateway
+   write-route trace is independently resolved; a later GET cannot stand in
+   for that trace.
+   Keep the transition, private write, Flow, and aggregate receipts outside protected
+   source. Verify the exact Compose render, signed images,
    preserved beta state, KMS custody, and production isolation before accepting
-   the runtime. The older `deploy-local-beta-release.ps1 -OfficialStackRelease`
+   the runtime. These loopback calls are pre-ingress ownership gates, not
+   end-to-end acceptance. After the public edge opens, run the selected
+   physical Flow and nine-route passport lifecycle through
+   `https://beta.elevenidllc.com`, including the demo recording, and bind
+   those public responses to the same release and aggregate receipt. The
+   aggregate receipt remains `acceptance_pending` until those checks pass.
+   The older `deploy-local-beta-release.ps1 -OfficialStackRelease`
    still invokes Python migrations and is not the Rust-only cutover operator.
    Native passport remains off until the protected passport PR chain and this
    KMS-only selector have merged, the exact beta image digest is available,

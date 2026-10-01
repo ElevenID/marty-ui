@@ -4,7 +4,7 @@ on:
   workflow_dispatch:
     inputs:
       beta_artifact_dir:
-        description: Absolute path on the beta runner to one official aggregate deployment's artifacts.
+        description: Absolute beta runner directory with aggregate-deployment.json, its plan and protected fence, maintenance, and native receipts, stack-manifest.json, and SHA256SUMS.
         required: true
 
 concurrency:

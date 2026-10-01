@@ -13,7 +13,7 @@ from pathlib import Path
 from typing import Any, Callable
 from urllib.error import HTTPError, URLError
 from urllib.parse import quote
-from urllib.request import HTTPRedirectHandler, Request, build_opener
+from urllib.request import HTTPRedirectHandler, ProxyHandler, Request, build_opener
 
 
 ORIGIN = "https://beta.elevenidllc.com"
@@ -54,7 +54,7 @@ def post_beta(path: str, body: dict[str, Any], session_cookie: str) -> tuple[int
         method="POST",
     )
     try:
-        with build_opener(NoRedirect).open(request, timeout=120) as response:
+        with build_opener(ProxyHandler({}), NoRedirect).open(request, timeout=120) as response:
             if response.geturl() != url:
                 raise ChainProbeError("Certificate ceremony redirected")
             raw = response.read(128 * 1024 + 1)
@@ -152,11 +152,12 @@ def exercise(
     request: Callable[[str, dict[str, Any], str], tuple[int, dict[str, Any]]] = post_beta,
     verify: Callable[[str, str], tuple[str, str]] = openssl_verify,
     on_dsc_material: Callable[[str, str], None] | None = None,
+    on_csca_material: Callable[[str], None] | None = None,
 ) -> dict[str, Any]:
     validate_sessions(csca_session, dsc_session)
     return exercise_with_authorities(
         plan, csca_session, dsc_session, request=request, verify=verify,
-        on_dsc_material=on_dsc_material,
+        on_dsc_material=on_dsc_material, on_csca_material=on_csca_material,
     )
 
 
@@ -168,6 +169,7 @@ def exercise_with_authorities(
     request: Callable[[str, dict[str, Any], str], tuple[int, dict[str, Any]]],
     verify: Callable[[str, str], tuple[str, str]] = openssl_verify,
     on_dsc_material: Callable[[str, str], None] | None = None,
+    on_csca_material: Callable[[str], None] | None = None,
 ) -> dict[str, Any]:
     """Check a chain from two distinct authorities; transport sets their policy.
 
@@ -209,6 +211,8 @@ def exercise_with_authorities(
         raise ChainProbeError("DSC chain is not PEM X.509") from exc
     if chain_pem.count("-----BEGIN CERTIFICATE-----") != 1 or ssl.PEM_cert_to_DER_cert(csca_pem) != chain_der:
         raise ChainProbeError("DSC chain does not publish the selected CSCA")
+    if on_csca_material is not None:
+        on_csca_material(csca_pem)
     if on_dsc_material is not None:
         on_dsc_material(dsc_hash, hashlib.sha256(dsc_pem.encode("utf-8")).hexdigest())
     return {"verified": True, "evidence": {

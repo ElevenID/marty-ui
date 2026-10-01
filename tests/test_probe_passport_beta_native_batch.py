@@ -127,7 +127,7 @@ def model(private_state_path: Path, *, proof_status: str = "verified", wrong_rec
         return exercise(
             APPLICATION, DOCUMENT, KEY, SERVICE, TOKEN, NATIVE, SIMULATOR,
             "selected-flow", "selected-app", "selected-job", "f" * 64,
-            "managed-profile", "d" * 64, "e" * 64, receipt, private_state_path,
+            "d" * 64, "e" * 64, receipt, private_state_path,
             gateway_request=gateway, private_request=private,
             simulator_get=simulator, new_uuid=lambda: next(uuids),
             new_key=lambda count: b"K" * count,
@@ -154,6 +154,14 @@ def test_native_selected_pair_uses_stable_key_and_verifies_both_receipts(tmp_pat
         ("receipt", "selected-job"), ("receipt", "companion-job")]
     assert result["verified"] is True
     assert result["evidence"]["selected_flow_in_two_job_batch"] is True
+    assert result["evidence"]["companion_bureau_status"] == "SHIPPED"
+    assert result["evidence"]["companion_simulator_marker_verified"] is True
+    material = result["evidence"]["selected_material_receipt"]
+    assert material["source_job_id_commitment"] == _job_commit(
+        KEY, "source-job", "selected-job")
+    assert material["bureau_job_id_commitment"] == _job_commit(
+        KEY, "bureau-job", SELECTED_BUREAU)
+    assert material["first_accepted_sod_der_matches_native"] is True
     pending = json.loads(private_state_path.read_text(encoding="utf-8"))
     assert pending["state"] == "dispatching"
     assert pending["batch_id"] == str(BATCH_UUID)

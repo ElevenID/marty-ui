@@ -166,6 +166,23 @@ fn inactive_cross_tenant_private_and_failure_paths_are_closed() {
 }
 
 #[test]
+fn advance_cannot_replace_provider_route_evidence() {
+    let definition = active_oid4vp();
+    let mut request = start_request();
+    request.flow_definition_id.clone_from(&definition.id);
+    let instance = start_instance_record(&definition, request, "user-1", now()).unwrap();
+    let forged = AdvanceFlowRequest {
+        step_result: "success".into(),
+        data: json!({"physical_document_route_trace": [{"method": "POST", "path": "/forged"}]}),
+    };
+    assert!(advance_instance_record(&definition, &instance, forged, "user-1", now()).is_err());
+    assert!(instance
+        .context
+        .get("physical_document_route_trace")
+        .is_none());
+}
+
+#[test]
 fn application_approval_requires_trusted_evidence() {
     let request: CreateFlowDefinitionRequest = parse_request(json!({
         "organization_id": "org-1",

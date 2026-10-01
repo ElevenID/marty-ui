@@ -16,6 +16,8 @@ from services.passport_disposable_identity import ORGANIZATION_ID, issuer_did
 NOW = datetime(2026, 9, 28, 17, tzinfo=timezone.utc)
 BUREAU_ID = "be6bccf4-51eb-4985-a079-6424bf5c5685"
 KEY = "mk_test_" + "a" * 43
+OTHER_KEY = "mk_test_" + "b" * 43
+OTHER_ORG = "00000000-0000-0000-0000-000000000002"
 
 
 class Response:
@@ -48,6 +50,8 @@ class Opener:
         assert request.full_url.startswith("https://localhost:29877/v1/passport/")
         path = request.full_url.removeprefix("https://localhost:29877")
         if path == "/v1/passport/capabilities":
+            if "X-api-key" not in request.headers:
+                raise HTTPError(request.full_url, 403, "Unauthenticated", None, None)
             return Response(request.full_url, 200, {
                 "supported": True, "blockers": [], "bureau_configured": True,
                 "encrypted_artifact_store": True,
@@ -56,6 +60,11 @@ class Opener:
         if path == "/v1/passport/webhooks/personalization":
             assert "X-api-key" not in request.headers
             raise HTTPError(request.full_url, 422, "Unsigned", None, None)
+        if path.endswith("/production-status") and "X-api-key" not in request.headers:
+            raise HTTPError(request.full_url, 403, "Unauthenticated", None, None)
+        if (path.endswith("/production-status")
+            and request.headers.get("X-api-key") == OTHER_KEY):
+            raise HTTPError(request.full_url, 404, "Cross-tenant", None, None)
         assert request.headers["X-api-key"] == KEY
         state = next(self.states)
         body = {"id": "job-1", "application_id": "application-1",
@@ -81,6 +90,8 @@ def staged():
     secrets = root / "secrets"
     secrets.mkdir(mode=0o700)
     (secrets / "passport_acceptance_api_key").write_text(KEY + "\n")
+    (secrets / "passport_acceptance_tenant_probe_api_key").write_text(
+        OTHER_ORG + "\n" + OTHER_KEY + "\n")
     (secrets / "workload_identity_ca_cert").write_text("synthetic-ca")
     return root, {"project": project, "disposable_root": str(root),
                   "expires_at": (datetime.now(timezone.utc) + timedelta(hours=2)).isoformat(),
@@ -117,7 +128,9 @@ def callback_containers(project: str) -> dict[str, dict]:
 def cleanup(root: Path) -> None:
     assert root.parent == Path(tempfile.gettempdir())
     assert root.name.startswith("marty-passport-acceptance-selfhost-")
-    for name in ("passport_acceptance_api_key", "workload_identity_ca_cert"):
+    for name in ("passport_acceptance_api_key",
+                 "passport_acceptance_tenant_probe_api_key",
+                 "workload_identity_ca_cert"):
         (root / "secrets" / name).unlink()
     (root / "secrets").rmdir()
     root.rmdir()
@@ -157,7 +170,10 @@ def test_owned_https_probe_uses_same_job_private_receipt(monkeypatch) -> None:
         assert report["verified"] is True
         assert report["flow_execution_verified"] is False
         assert report["evidence"]["signed_gateway_callback_verified"] is True
-        assert len(opener.requests) == 9
+        assert report["evidence"]["unauthenticated_status"] == 403
+        assert report["evidence"]["cross_tenant_status"] == 404
+        assert report["evidence"]["tenant_capability_status"] == 200
+        assert len(opener.requests) == 13
     finally:
         cleanup(root)
 

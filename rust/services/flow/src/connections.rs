@@ -1,5 +1,6 @@
 use std::{sync::Arc, time::Duration};
 
+use marty_schema_startup::SchemaStartupMode;
 use redis::aio::ConnectionManager;
 use sqlx::{postgres::PgPoolOptions, PgPool};
 use thiserror::Error;
@@ -62,7 +63,12 @@ async fn connect_database(
         .acquire_timeout(Duration::from_secs(10))
         .connect(&config.database_url)
         .await?;
-    migrate_flow_schema(&pool).await?;
+    match SchemaStartupMode::from_env()
+        .map_err(|error| FlowConnectionError::Configuration(error.to_string()))?
+    {
+        SchemaStartupMode::Migrate => migrate_flow_schema(&pool).await?,
+        SchemaStartupMode::Validate => crate::validate_flow_schema(&pool).await?,
+    }
     sqlx::query_scalar::<_, i32>("SELECT 1")
         .fetch_one(&pool)
         .await?;
@@ -143,12 +149,8 @@ fn physical_document_provider(
                 "PASSPORT_TENANT_API_KEYS is required for native passport Flow".into(),
             )
         })?;
-        HttpPhysicalDocumentProvider::new_tenant_bound_with_service_token(
-            &config.issuance_native_url,
-            keys,
-            config.service_token.as_deref(),
-        )
-        .map_err(Into::into)
+        HttpPhysicalDocumentProvider::new_tenant_bound(&config.issuance_native_url, keys)
+            .map_err(Into::into)
     } else {
         HttpPhysicalDocumentProvider::new(
             &config.issuance_url,

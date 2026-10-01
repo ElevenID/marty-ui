@@ -1,4 +1,4 @@
-//! Issue one disposable passport acceptance key through Organization's normal application path.
+//! Issue disposable passport keys through Organization's normal application path.
 
 use std::{
     collections::BTreeMap,
@@ -16,9 +16,9 @@ use std::os::unix::fs::OpenOptionsExt;
 use chrono::{DateTime, Duration, Utc};
 use marty_organization::{
     postgres::PostgresOrganizationStore, AddMemberDirectCommand, ApiKey, ApiKeyScopeType,
-    ApiKeyStatus, CreateApiKeyCommand, CreateRoleCommand, DeleteRoleCommand, MemberStatus,
-    OrganizationApplication, OrganizationCache, Permission, RemoveMemberCommand,
-    RevokeApiKeyCommand, Role,
+    ApiKeyStatus, CreateApiKeyCommand, CreateOrganizationCommand, CreateRoleCommand,
+    DeleteRoleCommand, JoinMechanism, MemberStatus, OrganizationApplication, OrganizationCache,
+    OrganizationType, Permission, RemoveMemberCommand, RevokeApiKeyCommand, Role,
 };
 use mmf_data::MemoryCache;
 use sha2::{Digest, Sha256};
@@ -30,6 +30,7 @@ use uuid::Uuid;
 const OUTPUT_DIR: &str = "/app/data";
 const OUTPUT_FILE: &str = "/app/data/passport-acceptance-api-key";
 const OPERATOR_OUTPUT_FILE: &str = "/app/data/passport-acceptance-operator-api-key";
+const TENANT_PROBE_OUTPUT_FILE: &str = "/app/data/passport-acceptance-tenant-probe-api-key";
 const ORGANIZATION_ID: &str = "00000000-0000-0000-0000-000000000001";
 const KEY_LIFETIME_HOURS: i64 = 2;
 const OPERATOR_SCOPES: &[&str] = &["flows:write", "templates:write", "applications:write"];
@@ -47,6 +48,7 @@ const OPERATOR_PERMISSIONS: &[&str] = &[
 enum Command {
     IssueCredential,
     IssueOperator,
+    IssueTenantProbe,
     RevokeRun,
 }
 
@@ -164,6 +166,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
     let command = match env::args().skip(1).collect::<Vec<_>>().as_slice() {
         [] => Command::IssueCredential,
         [argument] if argument == "--operator" => Command::IssueOperator,
+        [argument] if argument == "--tenant-probe" => Command::IssueTenantProbe,
         [argument] if argument == "--revoke-run" => Command::RevokeRun,
         _ => return Err(Box::<dyn Error>::from(invalid("command"))),
     };
@@ -171,16 +174,18 @@ async fn main() -> Result<(), Box<dyn Error>> {
     if command == Command::RevokeRun {
         return revoke_run(&context, &database_url).await;
     }
-    let path = if command == Command::IssueOperator {
-        OPERATOR_OUTPUT_FILE
-    } else {
-        OUTPUT_FILE
+    let path = match command {
+        Command::IssueCredential => OUTPUT_FILE,
+        Command::IssueOperator => OPERATOR_OUTPUT_FILE,
+        Command::IssueTenantProbe => TENANT_PROBE_OUTPUT_FILE,
+        Command::RevokeRun => unreachable!("handled above"),
     };
     let mut output = output_file(path)?;
-    let result = if command == Command::IssueOperator {
-        issue_operator(&context, &database_url, &mut output).await
-    } else {
-        issue(&context, &database_url, &mut output).await
+    let result = match command {
+        Command::IssueCredential => issue(&context, &database_url, &mut output).await,
+        Command::IssueOperator => issue_operator(&context, &database_url, &mut output).await,
+        Command::IssueTenantProbe => issue_tenant_probe(&context, &database_url, &mut output).await,
+        Command::RevokeRun => unreachable!("handled above"),
     };
     if result.is_err() {
         drop(output);
@@ -216,6 +221,78 @@ async fn issue(
                 organization_id: context.organization_id,
                 api_key_id: creation.value.api_key.id,
                 revoked_by: created_by,
+                now: Utc::now(),
+            })
+            .await?;
+        return Err(Box::new(error));
+    }
+    Ok(())
+}
+
+fn tenant_probe_key_command(
+    context: &AcceptanceContext,
+    organization_id: Uuid,
+    now: DateTime<Utc>,
+) -> io::Result<CreateApiKeyCommand> {
+    if organization_id == context.organization_id {
+        return Err(invalid("tenant probe organization"));
+    }
+    let mut command = key_command(context, now)?;
+    command.organization_id = organization_id;
+    command.name = tenant_probe_name(context);
+    Ok(command)
+}
+
+fn tenant_probe_name(context: &AcceptanceContext) -> String {
+    format!("passport-tenant-probe-{}", context.run_id)
+}
+
+async fn issue_tenant_probe(
+    context: &AcceptanceContext,
+    database_url: &str,
+    output: &mut File,
+) -> Result<(), Box<dyn Error>> {
+    let (application, _run_lock) = locked_application(context, database_url).await?;
+    let now = Utc::now();
+    if context.expires_at <= now {
+        return Err(Box::new(invalid("PASSPORT_ACCEPTANCE_EXPIRES_AT")));
+    }
+    if application
+        .store()
+        .organization_by_name_case_insensitive(&tenant_probe_name(context))
+        .await?
+        .is_some()
+    {
+        return Err(Box::new(invalid("tenant probe already issued")));
+    }
+    let organization = application
+        .create_organization(CreateOrganizationCommand {
+            name: tenant_probe_name(context),
+            owner_id: run_actor(context),
+            org_type: OrganizationType::Education,
+            display_name: Some("Disposable passport tenant isolation probe".into()),
+            description: Some(operator_description(context)),
+            contact_email: Some("disposable-tenant-probe@acceptance.invalid".into()),
+            visibility: "PRIVATE".into(),
+            join_mechanism: JoinMechanism::Invite,
+            requires_approval: false,
+            now,
+        })
+        .await?
+        .value;
+    let command = tenant_probe_key_command(context, organization.id, now)?;
+    let created = application.create_api_key(command).await?.value;
+    let result = (|| -> io::Result<()> {
+        writeln!(output, "{}", organization.id)?;
+        writeln!(output, "{}", created.raw_key)?;
+        output.sync_all()
+    })();
+    if let Err(error) = result {
+        application
+            .revoke_api_key(RevokeApiKeyCommand {
+                organization_id: organization.id,
+                api_key_id: created.api_key.id,
+                revoked_by: run_actor(context),
                 now: Utc::now(),
             })
             .await?;
@@ -520,6 +597,9 @@ async fn revoke_run(context: &AcceptanceContext, database_url: &str) -> Result<(
     if let Err(error) = cleanup_operator(&application, context).await {
         errors.push(format!("operator cleanup failed: {error}"));
     }
+    if let Err(error) = cleanup_tenant_probe(&application, context).await {
+        errors.push(format!("tenant probe cleanup failed: {error}"));
+    }
     let matching = keys
         .iter()
         .filter(|key| claims_run_name(key, context) || credential_key_identity(key, context))
@@ -529,6 +609,52 @@ async fn revoke_run(context: &AcceptanceContext, database_url: &str) -> Result<(
     }
     if !errors.is_empty() {
         return Err(Box::new(io::Error::other(errors.join("; "))));
+    }
+    Ok(())
+}
+
+async fn cleanup_tenant_probe(
+    application: &OrganizationApplication,
+    context: &AcceptanceContext,
+) -> Result<(), Box<dyn Error>> {
+    let Some(organization) = application
+        .store()
+        .organization_by_name_case_insensitive(&tenant_probe_name(context))
+        .await?
+    else {
+        return Ok(());
+    };
+    if organization.name != tenant_probe_name(context)
+        || organization.owner_id != run_actor(context)
+        || organization.description.as_deref() != Some(operator_description(context).as_str())
+        || organization.id == context.organization_id
+    {
+        return Err(Box::new(invalid("tenant probe organization ownership")));
+    }
+    let keys = application.list_api_keys(organization.id).await?;
+    if keys.len() > 1
+        || keys.iter().any(|key| {
+            key.name != tenant_probe_name(context)
+                || key.organization_id != organization.id
+                || key.created_by != run_actor(context)
+                || key.key_prefix != "mk_test_"
+                || key.scopes != ["credentials:read", "credentials:issue"]
+                || key
+                    .expires_at
+                    .is_none_or(|expires| expires > context.expires_at)
+        })
+    {
+        return Err(Box::new(invalid("tenant probe key ownership")));
+    }
+    for key in keys.iter().filter(|key| key.status == ApiKeyStatus::Active) {
+        application
+            .revoke_api_key(RevokeApiKeyCommand {
+                organization_id: organization.id,
+                api_key_id: key.id,
+                revoked_by: run_actor(context),
+                now: Utc::now(),
+            })
+            .await?;
     }
     Ok(())
 }
@@ -646,6 +772,22 @@ mod tests {
             command.created_by,
             "passport-acceptance:marty-passport-acceptance-base-123456abcdef:123456"
         );
+    }
+
+    #[test]
+    fn tenant_probe_key_requires_a_distinct_organization() {
+        let context = AcceptanceContext::from_environment(&values()).unwrap();
+        let other = Uuid::parse_str("00000000-0000-0000-0000-000000000002").unwrap();
+        let command = tenant_probe_key_command(&context, other, Utc::now()).unwrap();
+        assert_eq!(command.organization_id, other);
+        assert_eq!(command.name, "passport-tenant-probe-123456");
+        assert_eq!(
+            command.scopes.unwrap(),
+            ["credentials:read", "credentials:issue"]
+        );
+        assert!(command.is_test);
+        assert!(command.expires_at.unwrap() <= context.expires_at);
+        assert!(tenant_probe_key_command(&context, context.organization_id, Utc::now()).is_err());
     }
 
     #[test]

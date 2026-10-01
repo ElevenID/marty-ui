@@ -10,6 +10,8 @@ from pathlib import Path
 import re
 import subprocess
 from typing import Any, Callable
+import yaml
+from yaml.nodes import MappingNode, ScalarNode
 
 try:
     from .collect_passport_beta_acceptance import verify_attestations
@@ -28,6 +30,8 @@ APPROVAL = ROOT / "deploy-config/passport-beta-fence-approved-target.json"
 INSTALL = ROOT / "scripts/sql/passport-beta-fence-install.sql"
 DRAIN = ROOT / "scripts/sql/passport-beta-fence-drain.sql"
 VERIFY = ROOT / "scripts/sql/passport-beta-fence-verify.sql"
+PREMIGRATED = ROOT / "docker-compose.profile.passport-premigrated-beta.yml"
+DELETION_REPOSITORY = "ElevenID/marty-credentials"
 SHA = re.compile(r"[0-9a-f]{40}\Z")
 SHA256 = re.compile(r"[0-9a-f]{64}\Z")
 DIGEST = re.compile(r"sha256:[0-9a-f]{64}\Z")
@@ -40,6 +44,7 @@ PROTECTED_FILES = (
     ".gitattributes",
     "deploy-config/passport-beta-fence-approved-target.json",
     "scripts/check_passport_beta_fence_authority.py",
+    "scripts/prepare_passport_beta_fence_approval.py",
     "scripts/beta-deployment-lock.ps1",
     "scripts/beta-passport-fence-legacy-boundary.ps1",
     "scripts/beta-passport-migration-lease.ps1",
@@ -52,7 +57,77 @@ PROTECTED_FILES = (
     "scripts/sql/passport-beta-fence-install.sql",
     "scripts/sql/passport-beta-fence-drain.sql",
     "scripts/sql/passport-beta-fence-verify.sql",
+    "scripts/sql/passport-beta-batch-acl-finalize.sql",
+    "scripts/sql/passport-beta-db-maintenance-start.sql",
+    "scripts/sql/passport-beta-db-enable-app-login.sql",
+    "scripts/sql/passport-beta-rust-owner-transition.sql",
+    "scripts/sql/passport-beta-rust-owner-verify.sql",
+    "scripts/prepare_passport_beta_native_migrations.py",
+    "scripts/prepare_passport_beta_db_maintenance.py",
+    "scripts/start-passport-beta-db-maintenance.ps1",
+    "scripts/run-passport-beta-native-db-gates.ps1",
+    "scripts/prepare_passport_beta_aggregate_handoff.py",
+    "scripts/prepare_passport_beta_aggregate_compose.py",
+    "scripts/verify_passport_beta_aggregate_runtime.py",
+    "scripts/verify_passport_beta_rust_owner.py",
+    "scripts/probe_passport_beta_rust_owner_write.py",
+    "scripts/probe_passport_beta_rust_owner_flow.py",
+    "scripts/probe_passport_beta_credentials_continuity.py",
+    "scripts/run-passport-beta-aggregate-deploy.ps1",
+    "scripts/probe_passport_beta_cutover_snapshot.py",
+    "scripts/verify_passport_beta_protected_cutover.py",
+    "scripts/collect_passport_python_deletion_cutover.py",
+    ".github/workflows/passport-python-deletion-cutover.yml",
+    "docker-compose.base.yml",
+    "docker-compose.beta.yml",
+    "docker-compose.profile.dev.yml",
+    "docker-compose.profile.tunnel.yml",
+    "docker-compose.profile.waltid.yml",
+    "docker-compose.profile.canvas-real.yml",
+    "docker-compose.profile.canvas-sandbox.yml",
+    "docker-compose.profile.passport-native-beta.yml",
+    "docker-compose.profile.passport-premigrated-beta.yml",
+    "docker-compose.ui-release.yml",
+    "services/Dockerfile.migrations",
+    "rust/services/issuance/migrations/0001_oid4vci_public_protocol.sql",
+    "rust/services/issuance/migrations/0002_physical_document_jobs.sql",
+    "rust/services/issuance/migrations/0003_passport_bureau_provider_binding.sql",
+    "rust/services/issuance/migrations/0004_passport_submission_intent.sql",
+    "rust/services/issuance/migrations/0005_passport_submission_provenance.sql",
+    "rust/services/issuance/migrations/0006_passport_beta_batch_identity.sql",
+    "rust/services/issuance/migrations/0007_passport_beta_batch_provenance.sql",
+    "rust/services/issuance/migrations/0008_passport_beta_batch_wire_evidence.sql",
+    "rust/services/flow/migrations/0001_flow_schema.sql",
+    "rust/services/flow/migrations/0002_builtin_flows.sql",
 )
+RELEASE_SCHEMA_VALIDATION_MARKERS = {
+    "rust/crates/schema-startup/src/lib.rs": (
+        'std::env::var("MARTY_SCHEMA_STARTUP_MODE")',
+        'Some("validate") => Ok(Self::Validate)',
+    ),
+    "rust/services/flow/src/connections.rs": (
+        "SchemaStartupMode::from_env()",
+        "SchemaStartupMode::Validate => crate::validate_flow_schema(&pool).await?",
+    ),
+    "rust/services/flow/src/migration.rs": (
+        "SET TRANSACTION READ ONLY", "pub async fn validate_flow_schema",
+    ),
+    "rust/services/issuance/src/main.rs": (
+        "SchemaStartupMode::from_env()",
+        "SchemaStartupMode::Validate => migration::validate(&pool).await",
+        "SchemaStartupMode::Validate => migration::validate_passport(&pool).await",
+    ),
+    "rust/services/issuance/src/migration.rs": (
+        "SET TRANSACTION READ ONLY", "pub async fn validate_passport",
+    ),
+    "scripts/prepare_passport_beta_aggregate_compose.py": (
+        '"docker-compose.profile.passport-premigrated-beta.yml"',
+        '"MARTY_SCHEMA_STARTUP_MODE": "validate"',
+    ),
+    "scripts/run-passport-beta-aggregate-deploy.ps1": (
+        "docker-compose.profile.passport-premigrated-beta.yml",
+    ),
+}
 
 
 def require(condition: bool, message: str) -> None:
@@ -64,17 +139,41 @@ def file_sha256(path: Path) -> str:
     return hashlib.sha256(path.read_bytes()).hexdigest()
 
 
-def verify_issuance_attestation(reference: str, source_commit: str, version: str) -> bool:
+def verify_issuance_attestation(
+    reference: str, source_commit: str, version: str,
+    runner: Callable[[list[str]], str] = run,
+) -> bool:
     require(re.fullmatch(r"(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)",
                          version) is not None,
             "Credentials issuance version is invalid")
+    require(SHA.fullmatch(source_commit) is not None,
+            "Credentials issuance source commit is invalid")
+    try:
+        tag_ref = json.loads(runner([
+            "gh", "api", f"repos/ElevenID/marty-credentials/git/ref/tags/v{version}",
+        ]))
+        tag_object = tag_ref.get("object") if isinstance(tag_ref, dict) else None
+        require(isinstance(tag_object, dict) and tag_object.get("type") == "tag"
+                and SHA.fullmatch(str(tag_object.get("sha"))) is not None,
+                "Credentials issuance release tag is not annotated")
+        tag = json.loads(runner([
+            "gh", "api", "repos/ElevenID/marty-credentials/git/tags/"
+            + tag_object["sha"],
+        ]))
+    except (ValueError, OSError) as exc:
+        raise HostProbeError("Credentials issuance release tag is unavailable") from exc
+    target = tag.get("object") if isinstance(tag, dict) else None
+    require(isinstance(tag, dict) and tag.get("tag") == f"v{version}"
+            and isinstance(target, dict) and target.get("type") == "commit"
+            and target.get("sha") == source_commit,
+            "Credentials issuance release tag differs from signed source")
     try:
         subprocess.run([
             "gh", "attestation", "verify", f"oci://{reference}",
             "--repo", "ElevenID/marty-credentials",
             "--signer-workflow",
             "ElevenID/marty-credentials/.github/workflows/release-images.yml",
-            "--source-digest", source_commit, "--source-ref", f"refs/tags/v{version}",
+            "--source-digest", source_commit, "--source-ref", "refs/heads/main",
             "--deny-self-hosted-runners",
         ], check=True, capture_output=True, text=True, timeout=120)
     except (OSError, subprocess.SubprocessError) as exc:
@@ -118,11 +217,34 @@ def manifest_source(
     require(attest_issuance(images["issuance"]["reference"], credentials["commit"],
                             credentials["version"]) is True,
             "Credentials issuance image attestation is invalid")
+    build_only = {}
+    for variable, component_name in (
+        ("MARTY_COMMON", "marty-common"),
+        ("MARTY_RS", "marty-core-python"),
+        ("MARTY_VERIFICATION", "marty-verification-python"),
+        ("MARTY_ISO18013", "marty-iso18013-python"),
+    ):
+        matches = [item for item in manifest["components"]
+                   if item.get("name") == component_name]
+        require(len(matches) == 1,
+                "Signed beta build-only component is ambiguous")
+        artifacts = [item for item in matches[0].get("artifacts", [])
+                     if isinstance(item, dict) and item.get("type") == "python"]
+        require(len(artifacts) == 1
+                and isinstance(artifacts[0].get("uri"), str)
+                and artifacts[0]["uri"].startswith("https://")
+                and re.fullmatch(r"sha256:[0-9a-f]{64}",
+                                 str(artifacts[0].get("digest"))) is not None,
+                "Signed beta build-only wheel is invalid")
+        build_only[variable + "_URI"] = artifacts[0]["uri"]
+        build_only[variable + "_DIGEST"] = artifacts[0]["digest"]
     return {
         "release": release, "source_commit": expected_commit,
         "manifest_sha256": file_sha256(path), "oci_digests": digests,
         "issuance_image": images["issuance"]["reference"],
+        "ui_image": images["ui"]["reference"],
         "services_image": images["services"]["reference"],
+        "build_only_artifacts": build_only,
         "issuance_source_commit": credentials["commit"],
         "signed_manifest_verified": True,
     }
@@ -170,6 +292,83 @@ def protected_file(relative: str, runner: Callable[[list[str]], str]) -> None:
             f"Protected file content differs from remote main: {relative}")
 
 
+def require_release_schema_validation_capability(
+    source_commit: str, runner: Callable[[list[str]], str],
+) -> None:
+    """Bind the signed Rust image source to shared DDL-free startup paths."""
+    for relative, markers in RELEASE_SCHEMA_VALIDATION_MARKERS.items():
+        try:
+            contents = runner(["git", "-C", str(ROOT), "show",
+                               f"{source_commit}:{relative}"])
+        except HostProbeError as exc:
+            raise HostProbeError("Signed Rust release lacks schema validation source") from exc
+        require(all(marker in contents for marker in markers),
+                "Signed Rust release lacks DDL-free schema validation")
+
+
+def require_premigrated_compose_validation(contents: str) -> None:
+    """Require the protected post-migration overlay to select both Rust services."""
+    try:
+        root = yaml.compose(contents)
+    except yaml.YAMLError as exc:
+        raise HostProbeError("Signed premigrated beta Compose is invalid") from exc
+
+    def one_value(node: MappingNode | None, name: str) -> Any:
+        require(isinstance(node, MappingNode),
+                "Signed premigrated beta Compose has invalid service structure")
+        matches = [value for key, value in node.value
+                   if isinstance(key, ScalarNode) and key.value == name]
+        require(len(matches) == 1,
+                f"Signed premigrated beta Compose has ambiguous {name}")
+        return matches[0]
+
+    services = one_value(root, "services")
+    require(isinstance(services, MappingNode)
+            and {key.value for key, _ in services.value
+                 if isinstance(key, ScalarNode)} == {"flow", "issuance-native"},
+            "Signed premigrated beta Compose selects unexpected services")
+    for service in ("flow", "issuance-native"):
+        entry = one_value(services, service)
+        environment = one_value(entry, "environment")
+        selector = one_value(environment, "MARTY_SCHEMA_STARTUP_MODE")
+        require(isinstance(selector, ScalarNode)
+                and selector.tag == "tag:yaml.org,2002:str"
+                and selector.value == "validate",
+                f"Signed premigrated beta {service} does not use DDL-free startup")
+
+
+def require_deletion_lineage(
+    approved_head: str, current_head: str,
+    runner: Callable[[list[str]], str] = run,
+) -> None:
+    """Bind the approved PR commit to a later head without allowing a rebase."""
+    require(SHA.fullmatch(approved_head) is not None
+            and SHA.fullmatch(current_head) is not None,
+            "Credentials deletion head is invalid")
+    commits = runner([
+        "gh", "api", "--paginate",
+        f"repos/{DELETION_REPOSITORY}/pulls/305/commits?per_page=100",
+        "--jq", ".[].sha",
+    ]).splitlines()
+    require(bool(commits) and all(SHA.fullmatch(commit) for commit in commits)
+            and approved_head in commits and current_head in commits,
+            "Approved credentials deletion head is not in PR #305")
+    comparison = json.loads(runner([
+        "gh", "api", f"repos/{DELETION_REPOSITORY}/compare/"
+        f"{approved_head}...{current_head}",
+    ]))
+    base = comparison.get("base_commit") if isinstance(comparison, dict) else None
+    merge_base = comparison.get("merge_base_commit") if isinstance(comparison, dict) else None
+    require(isinstance(comparison, dict)
+            and comparison.get("status") in ("identical", "ahead")
+            and type(comparison.get("behind_by")) is int
+            and comparison["behind_by"] == 0
+            and isinstance(base, dict) and base.get("sha") == approved_head
+            and isinstance(merge_base, dict)
+            and merge_base.get("sha") == approved_head,
+            "Credentials deletion PR no longer descends from approved head")
+
+
 def check_authority(
     approval_path: Path, manifest_path: Path, beta_baseline_manifest_path: Path,
     runner: Callable[[list[str]], str] = run,
@@ -202,6 +401,8 @@ def check_authority(
                 is not None,
             "Protected beta target approval fields are invalid")
     source = manifest_source(manifest_path, head, attest, attest_issuance)
+    require_release_schema_validation_capability(source["source_commit"], runner)
+    require_premigrated_compose_validation(PREMIGRATED.read_text(encoding="utf-8"))
     require(file_sha256(beta_baseline_manifest_path)
             == approval["beta_baseline_manifest_sha256"],
             "Deployed beta baseline manifest differs from protected approval")
@@ -223,12 +424,21 @@ def check_authority(
         f"{head}\trefs/tags/{tag}^{{}}",
     }, "Published annotated release tag differs from protected source")
     deletion = json.loads(runner([
-        "gh", "pr", "view", "305", "--repo", "ElevenID/marty-credentials",
-        "--json", "state,isDraft,headRefOid",
+        "gh", "api", f"repos/{DELETION_REPOSITORY}/pulls/305",
     ]))
-    require(deletion.get("state") == "OPEN" and deletion.get("isDraft") is True
-            and deletion.get("headRefOid") == approval["credentials_deletion_head"],
-            "Credentials deletion PR head differs from protected approval")
+    base = deletion.get("base") if isinstance(deletion, dict) else None
+    deletion_head = deletion.get("head") if isinstance(deletion, dict) else None
+    require(isinstance(deletion, dict) and deletion.get("number") == 305
+            and deletion.get("state") == "open" and deletion.get("draft") is True
+            and isinstance(base, dict) and base.get("ref") == "main"
+            and isinstance(base.get("repo"), dict)
+            and base["repo"].get("full_name") == DELETION_REPOSITORY
+            and isinstance(deletion_head, dict)
+            and isinstance(deletion_head.get("repo"), dict)
+            and deletion_head["repo"].get("full_name") == DELETION_REPOSITORY,
+            "Credentials deletion PR is not the approved same-repository draft")
+    require_deletion_lineage(approval["credentials_deletion_head"],
+                             deletion_head.get("sha"), runner)
     target = observer()
     require(target.get("authority") == "discovery_only_requires_protected_baseline"
             and target.get("observation_sha256") == approval["observation_sha256"]
@@ -245,6 +455,8 @@ def check_authority(
     require(isinstance(services, dict)
             and isinstance(services.get("issuance"), dict)
             and services["issuance"].get("configured_image") == baseline["issuance_image"]
+            and isinstance(beta.get("ui_service"), dict)
+            and beta["ui_service"].get("configured_image") == baseline["ui_image"]
             and all(isinstance(services.get(name), dict)
                     and services[name].get("configured_image") == baseline["services_image"]
                     for name in ("gateway", "flow", "issuance-native", "signing-keys")),
@@ -252,7 +464,8 @@ def check_authority(
     return {
         "schema": "marty.passport-beta-fence-authority-plan/v1",
         "verified": True, "source": source, "deployed_beta_baseline": baseline,
-        "credentials_deletion_head": deletion["headRefOid"],
+        # The v1 field is the approved historical PR head, not its final head.
+        "credentials_deletion_head": approval["credentials_deletion_head"],
         "target_observation_sha256": target["observation_sha256"],
         "beta_services": services,
         "postgres_container_id": beta["services"]["postgres"]["container_id"],

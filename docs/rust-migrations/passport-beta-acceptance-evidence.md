@@ -12,6 +12,20 @@ release probes and live beta run have not passed.
 report from an already deployed **official aggregate beta** release. Run it on
 the beta host with the deployment's artifact directory:
 
+For the forward Rust aggregate, the directory contains the exact
+`aggregate-deployment.json` written by the protected operator, its adjacent
+`aggregate-deployment.json.plan.json`, and the signed `stack-manifest.json`
+with `SHA256SUMS`. The operator also preserves adjacent files ending in
+`.fence-receipt.json`, `.maintenance-intent.json`,
+`.maintenance-receipt.json`, and `.native-receipt.json`. Keep the original
+bytes. The protected acceptance runner requires this aggregate generation.
+The collector verifies the native receipt chain and live migration marker,
+then verifies the plan
+and receipt digests, release and issuance attestations, and each live beta
+container, image, start time, Compose hash, and network against the deployment
+receipt. The production baseline is reported only as an API-key HMAC
+commitment; the raw snapshot digest remains in the protected receipt.
+
 ```powershell
 $env:PASSPORT_ACCEPTANCE_API_KEY = '<organization-scoped key from governed beta secrets>'
 py -3.12 scripts/collect_passport_beta_acceptance.py --artifact-dir C:\path\to\beta-artifacts --output C:\path\to\private-evidence\passport-beta-prerequisite.json --verify-attestation
@@ -103,16 +117,28 @@ probe must separately execute all nine steps for one native job and bind its
 managed SOD, first accepted simulator material, private signed callback receipt,
 and terminal `ACTIVE` state to the same organization, issuer DID, application,
 source job, and bureau job. It requires the Flow issuer-DID fix in PR #929 in
-the deployed aggregate image. The `nine_route_gateway_flow` probe stays false
-until the selected Flow job is one of the two batch jobs and its Gateway route trace is verified. Only
-fixed route names, counts, statuses, selector booleans, and sanitized receipt
-evidence enter the report.
+the deployed aggregate image. The `nine_route_gateway_flow` probe is a composite
+proof for the nine public passport route names. Seven selected-job operations
+run from Flow directly to native issuance. Flow records their route sequence
+only after native responses, and the probe checks it against the same
+application and source job. A live authenticated Gateway capability response
+proves the capability route. The signed simulator callback receipt, its
+inspected Gateway target, and a live unsigned denial prove the webhook route
+and owner. The seven Flow calls do not traverse Gateway. The composite probe
+becomes verified only when the selected Flow job is in the two-job native
+batch and all these observations agree. Only fixed route names, counts,
+statuses, selector booleans, commitments, and sanitized receipt evidence
+enter the report.
 
 The beta simulator now stores a 32-byte digest of the exact callback body and
 KMS signature only after native issuance accepts the signed callback and the
 status transition commits. Its authenticated private job poll returns the
 lowercase hex digest as `callback_receipt_sha256`; preexisting jobs can return
 `null`. The simulator never stores or returns the callback body or signature.
+The aggregate beta profile sends this callback through the private Gateway
+route to the native owner. The protected host probe checks the live simulator
+container's exact Gateway callback selection before using the receipt as
+route evidence. A route selection alone does not verify a delivered callback.
 The current batch diagnostic creates two separate native jobs, posts synthetic
 SOD and DSC material directly to the simulator, then binds through two native
 single submissions. This verifies simulator compatibility but cannot set the
@@ -205,6 +231,13 @@ template/profile `references` (`application_template_id`,
 `credential_template_id`, and `delivery_destination_profile_id`), and
 synthetic `physical_document` input. The
 runner rejects issuer or profile overrides in that input before the ceremony.
+For D-12 preliminary recording, the selected document must equal
+`contracts/passport-beta-synthetic-document.json`. The protected runner
+publishes an API-keyed commitment to the exact selected Flow plan used for
+execution; the preliminary producer recomputes it from the same private plan
+before attesting `synthetic_identities_only=true`. A copied fixture submitted
+after a different live Flow run cannot qualify. The producer also requires
+the runner's production-continuity window and zero beta legacy-drain counts.
 After the direct Gateway job, the native acceptance target executes a
 distinct selected nine-step Flow job using the selected DSC. It pauses after
 `sign_sod`, joins that same job to the two-job native batch, then completes
@@ -217,6 +250,10 @@ the Flow. The synthetic batch remains a separate diagnostic.
 The uploaded report omits raw Flow, application, source-job, bureau-job,
 applicant, MRZ, and operator-session values. A selected SOD/material match
 alone does not establish `nine_route_gateway_flow` or recording qualification.
+The composite route probe requires the server-recorded selected Flow sequence,
+live Gateway capability and webhook checks, and the selected signed callback
+receipt. Its `route_provenance` fields distinguish the Gateway observations
+from the Flow-to-native calls.
 The public `physical_bureau_submission` probe remains unverified until the
 D-12 recorder can correlate selected identities through protected commitments
 without publishing raw identifiers.
@@ -228,7 +265,7 @@ The report requires the isolated simulator mode and sets `legacy_drain` and the 
 `production_isolation` remains false. The workflow fails while the report is
 `blocked`, but uploads the sanitized report from an attempted probe. The
 acceptance report remains `blocked` until the live run verifies SOD signature,
-the selected Flow job in the two-job batch, full nine-route Gateway/Flow proof,
+the selected Flow job in the two-job batch, full nine-route composite Gateway/Flow proof,
 same-job signed simulator callback, simulator batch compatibility,
 deployment-wide production isolation, and recorded demo evidence have
 executable receipts. Supported consumer acceptance and Rust restart/resume

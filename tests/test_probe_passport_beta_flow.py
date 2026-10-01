@@ -72,6 +72,7 @@ def test_selected_provider_ingress_requires_its_distinct_denial() -> None:
 
 def test_real_request_shape_never_sends_provider_signature_or_tenant_key(monkeypatch) -> None:
     seen = []
+    handlers = []
 
     class Response:
         status = 200
@@ -97,13 +98,19 @@ def test_real_request_shape_never_sends_provider_signature_or_tenant_key(monkeyp
                 raise HTTPError(request.full_url, 422, "Unprocessable", {}, BytesIO(body))
             return Response()
 
-    monkeypatch.setattr(flow_probe, "build_opener", lambda *args: Opener())
+    def opener(*args):
+        handlers.extend(args)
+        return Opener()
+
+    monkeypatch.setattr(flow_probe, "build_opener", opener)
     assert flow_probe.request_beta("GET", FLOW_PATH)[0] == 200
     request = seen[0]
     assert request.full_url == "https://beta.elevenidllc.com/v1/flows/capabilities"
     assert request.get_header("X-api-key") is None
     assert request.get_header("X-personalization-signature") is None
     assert request.get_header("Cookie") is None
+    assert any(isinstance(handler, flow_probe.ProxyHandler)
+               and handler.proxies == {} for handler in handlers)
     seen.clear()
     assert flow_probe.request_beta("POST", WEBHOOK_PATH) == (422, {"missing_signature_header": True})
     request = seen[0]

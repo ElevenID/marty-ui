@@ -16,7 +16,15 @@ $repoAbsolute = [IO.Path]::GetFullPath($repo).TrimEnd([IO.Path]::DirectorySepara
 if (-not [IO.Path]::IsPathRooted($OutputPath)) {
     throw 'Beta fence receipt path must be absolute'
 }
+# The WSL protected receipt collector can map only local DOS drive paths.
+# Reject UNC, device, and extended-length paths before any fence mutation.
+if ($OutputPath -cnotmatch '^[A-Za-z]:\\[^\\/:*?"<>|\r\n]+(?:\\[^\\/:*?"<>|\r\n]+)*$') {
+    throw 'Beta fence receipt path must be a local Windows drive file'
+}
 $outputAbsolute = [IO.Path]::GetFullPath($OutputPath)
+if ($outputAbsolute -cnotmatch '^[A-Za-z]:\\[^\\/:*?"<>|\r\n]+(?:\\[^\\/:*?"<>|\r\n]+)*$') {
+    throw 'Canonical beta fence receipt path is not a local Windows drive file'
+}
 if ($outputAbsolute.StartsWith(
         $repoAbsolute + [IO.Path]::DirectorySeparatorChar,
         [StringComparison]::OrdinalIgnoreCase)) {
@@ -118,6 +126,26 @@ try {
         "SET marty.passport_beta_expected_system_identifier = '$systemId';`n" +
         "SET marty.passport_beta_expected_database_oid = '$databaseOid';`n"
 
+    $before = Invoke-FencePython -Arguments @(
+        (Join-Path $PSScriptRoot 'probe_passport_beta_fence_target.py'))
+    if ($before.schema -cne 'marty.passport-beta-fence-target/v1' -or
+        $before.observation_sha256 -cne $plan.target_observation_sha256 -or
+        $before.beta.postgres_system_identifier -cne $systemId -or
+        $before.beta.database_oid -cne $databaseOid -or
+        $before.beta.services.postgres.container_id -cne $container -or
+        $before.docker.context -cne $plan.docker.context -or
+        $before.docker.daemon_id -cne $plan.docker.daemon_id -or
+        $before.production.sha256 -cne $plan.production_snapshot_sha256 -or
+        $before.production_attachments_sha256 -cne $plan.production_attachments_sha256 -or
+        ($before.beta.services | ConvertTo-Json -Depth 20 -Compress) -cne
+            ($plan.beta_services | ConvertTo-Json -Depth 20 -Compress) -or
+        ($before.beta.database_route | ConvertTo-Json -Depth 20 -Compress) -cne
+            ($plan.database_route | ConvertTo-Json -Depth 20 -Compress) -or
+        ($before.beta.postgres_runtime | ConvertTo-Json -Depth 20 -Compress) -cne
+            ($plan.postgres_runtime | ConvertTo-Json -Depth 20 -Compress)) {
+        throw 'Approved beta service generation or database route changed before fence'
+    }
+
     # The persistent fence marker precedes any database mutation. A failure
     # leaves both markers for supervised inspection and blocks legacy deploy.
     Start-BetaMutation
@@ -140,6 +168,21 @@ try {
         $fence.phase -cne 'fully_fenced' -or $fence.epoch -le 0) {
         throw 'Beta fence verifier did not confirm the full fence'
     }
+    $epoch = [string]$fence.epoch
+    if ($epoch -cnotmatch '^[1-9][0-9]*$') {
+        throw 'Beta fence epoch is invalid'
+    }
+    $installedSql = "SELECT epoch::text || '|' || " +
+        "to_char(installed_at AT TIME ZONE 'UTC', 'YYYY-MM-DD') || 'T' || " +
+        "to_char(installed_at AT TIME ZONE 'UTC', 'HH24:MI:SS.MS') || 'Z' " +
+        "FROM passport_cutover.state WHERE singleton AND epoch = $epoch;"
+    $installed = @(Invoke-FencePsql -Container $container -Sql $installedSql)
+    if ($installed.Count -ne 1 -or
+        $installed[0] -cnotmatch '^([1-9][0-9]*)\|([0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}\.[0-9]{3}Z)$' -or
+        $Matches[1] -cne $epoch) {
+        throw 'Installed beta fence timestamp differs from verified epoch'
+    }
+    $fenceInstalledAtUtc = $Matches[2]
     $direct = Invoke-FencePython -Arguments @(
         (Join-Path $PSScriptRoot 'probe_passport_beta_fence_direct_writes.py'),
         '--postgres-container', $container,
@@ -149,6 +192,12 @@ try {
         '--database-oid', $databaseOid,
         '--fence-epoch', ([string]$fence.epoch)
     )
+    if ([string]$direct.observed_at_utc -cnotmatch
+            '^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}\.[0-9]{3}Z$' -or
+        [DateTimeOffset]::Parse($fenceInstalledAtUtc) -ge
+            [DateTimeOffset]::Parse([string]$direct.observed_at_utc)) {
+        throw 'Direct beta fence write probe did not follow installation'
+    }
     $after = Invoke-FencePython -Arguments @(
         (Join-Path $PSScriptRoot 'probe_passport_beta_fence_target.py'),
         '--fenced'
@@ -167,6 +216,9 @@ try {
     }
     if (($after.beta.services | ConvertTo-Json -Depth 20 -Compress) -cne
             ($plan.beta_services | ConvertTo-Json -Depth 20 -Compress) -or
+        $after.beta.ui_project -cne $before.beta.ui_project -or
+        ($after.beta.ui_service | ConvertTo-Json -Depth 20 -Compress) -cne
+            ($before.beta.ui_service | ConvertTo-Json -Depth 20 -Compress) -or
         ($after.beta.database_route | ConvertTo-Json -Depth 20 -Compress) -cne
             ($plan.database_route | ConvertTo-Json -Depth 20 -Compress) -or
         ($after.beta.postgres_runtime | ConvertTo-Json -Depth 20 -Compress) -cne
@@ -182,10 +234,13 @@ try {
         source_commit = $plan.source.source_commit
         credentials_deletion_head = $plan.credentials_deletion_head
         approved_target_observation_sha256 = $plan.target_observation_sha256
+        beta_services = $plan.beta_services
+        verify_sql_sha256 = $plan.verify_sql_sha256
         postgres_system_identifier = $systemId
         database_oid = $databaseOid
         postgres_container_id = $container
         fence = $fence
+        fence_installed_at_utc = $fenceInstalledAtUtc
         direct_database_probe = $direct
         post_install_observation_sha256 = $after.observation_sha256
         production_snapshot_sha256 = $after.production.sha256
@@ -200,6 +255,31 @@ try {
         $outputStream.Flush($true)
     }
     finally { $outputStream.Dispose() }
+    # A completed host marker binds later snapshots to these exact receipt
+    # bytes. An interrupted write leaves the original intent marker and fails
+    # closed. This mutable host record is continuity evidence; the later
+    # protected producer must attest installer provenance before acceptance.
+    $receiptHasher = [Security.Cryptography.SHA256]::Create()
+    try {
+        $receiptHash = $receiptHasher.ComputeHash(
+            [Text.Encoding]::UTF8.GetBytes($json + "`n"))
+    }
+    finally { $receiptHasher.Dispose() }
+    $markerRecord = [ordered]@{
+        schema = 'marty.passport-beta-fence-host-record/v1'
+        receipt_path = $outputAbsolute
+        receipt_file_sha256 = ([BitConverter]::ToString($receiptHash)).Replace('-', '').ToLowerInvariant()
+        source_commit = $plan.source.source_commit
+        approved_target_observation_sha256 = $plan.target_observation_sha256
+    } | ConvertTo-Json -Compress
+    $markerStream = [IO.File]::Open($markerPath, [IO.FileMode]::Truncate,
+        [IO.FileAccess]::Write, [IO.FileShare]::None)
+    try {
+        $markerBytes = [Text.Encoding]::UTF8.GetBytes($markerRecord + "`n")
+        $markerStream.Write($markerBytes, 0, $markerBytes.Length)
+        $markerStream.Flush($true)
+    }
+    finally { $markerStream.Dispose() }
     Complete-BetaMutation
     Write-Output $outputAbsolute
 }

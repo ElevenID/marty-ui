@@ -28,6 +28,7 @@ from scripts.passport_supported_provisioning_producer import (
     INFRA_WORKFLOW_REF, ProducerError, WORKFLOW_REF, collect_record, destroy_disposable_project,
     destroy_partial_disposable_project,
     issue_disposable_api_key, issue_disposable_operator_key,
+    issue_disposable_tenant_probe_key,
     stage_disposable_inputs,
     verify_plan_release,
 )
@@ -176,6 +177,7 @@ def test_disposable_inputs_are_fresh_private_and_plan_bound() -> None:
             "bao_root_token", "marty_db_password", "signing_keys_internal_api_key",
             "dsc_issue_gateway_key", "csca_issue_gateway_key",
             "issuance_api_key", "callback_signer_api_key", "grpc_service_token",
+            "passport_beta_reconciliation_operator_token",
             "bureau_database_url", "token_hmac_key", "integration_secret_master_key",
             "flow_webhook_secret", "flow_application_event_hmac_key",
         } | TLS_FILES
@@ -185,6 +187,13 @@ def test_disposable_inputs_are_fresh_private_and_plan_bound() -> None:
         assert all(len(key) == 64 for key in ceremony_keys)
         assert len(set(ceremony_keys + [
             (secret_dir / "signing_keys_internal_api_key").read_text(encoding="ascii")])) == 3
+        operator_token = (secret_dir / "passport_beta_reconciliation_operator_token").read_text(
+            encoding="ascii")
+        assert len(operator_token) == 64
+        assert operator_token not in {
+            (secret_dir / "grpc_service_token").read_text(encoding="ascii"),
+            (secret_dir / "issuance_api_key").read_text(encoding="ascii"),
+        }
         password = (secret_dir / "marty_db_password").read_text(encoding="ascii")
         assert (secret_dir / "bureau_database_url").read_text(encoding="ascii") == (
             f"postgresql://marty:{password}@postgres:5432/marty"
@@ -484,6 +493,48 @@ def test_disposable_operator_key_has_separate_private_output_and_revoke_on_failu
         )
     assert calls[-2][-1] == "--revoke-run"
     assert calls[-1][-3:] == ["rm", "-f", producer.CONTAINER_OPERATOR_KEY]
+    assert not key.exists()
+
+
+def test_second_tenant_probe_key_is_private_distinct_and_rejected_if_same_org(
+    tmp_path: Path,
+) -> None:
+    secrets = tmp_path / "secrets"
+    secrets.mkdir(mode=0o700)
+    record = {"disposable_root": str(tmp_path),
+              "containers": {"organization": "e" * 64}}
+    calls = []
+    other = "00000000-0000-0000-0000-000000000002"
+
+    def executor(args: list[str], output: object) -> bool:
+        calls.append(args)
+        if args[-2:] == ["cat", producer.CONTAINER_TENANT_PROBE_KEY]:
+            output.write(other.encode() + b"\nmk_test_" + b"c" * 43 + b"\n")
+        return True
+
+    key = issue_disposable_tenant_probe_key(
+        record, "base", NOW, executor=executor,
+        ownership=lambda *args: {"live_ownership_verified": True},
+    )
+    assert key == secrets / "passport_acceptance_tenant_probe_api_key"
+    assert key.read_bytes().startswith(other.encode() + b"\n")
+    assert calls[0][-2:] == [producer.KEY_COMMAND, "--tenant-probe"]
+    assert calls[1][-2:] == ["cat", producer.CONTAINER_TENANT_PROBE_KEY]
+    assert calls[2][-3:] == ["rm", "-f", producer.CONTAINER_TENANT_PROBE_KEY]
+    key.unlink()
+
+    def same_tenant(args: list[str], output: object) -> bool:
+        if args[-2:] == ["cat", producer.CONTAINER_TENANT_PROBE_KEY]:
+            output.write(producer.ORGANIZATION_ID.encode()
+                         + b"\nmk_test_" + b"c" * 43 + b"\n")
+        return True
+
+    with pytest.raises(ProducerError, match="tenant probe key output"):
+        issue_disposable_tenant_probe_key(
+            record, "base", NOW, executor=same_tenant,
+            ownership=lambda *args: {"live_ownership_verified": True},
+            teardown=lambda *args: True,
+        )
     assert not key.exists()
 
 
