@@ -25,7 +25,7 @@ jobs:
     timeout-minutes: 180
     env:
       BETA_ARTIFACT_DIR: ${{ inputs.beta_artifact_dir }}
-      PASSPORT_DEMO_RECORDER_COMMIT: ba883ad0ddcda480a89c197ea7b7c4cfacc1fbd3
+      PASSPORT_DEMO_RECORDER_COMMIT: 3ff56936f31899840e190eba066b57be2d1f2d1d
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
 
