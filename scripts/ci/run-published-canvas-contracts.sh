@@ -1,11 +1,12 @@
 #!/usr/bin/env bash
 export MARTY_CANVAS_PUBLISHED_SCHEMA_TEST="1"
 set -euo pipefail
-# A narrow early diagnostic gate supplements, never replaces, the full suite.
+# A narrow early diagnostic gate precedes the full suite. Its four exact tests
+# are omitted later only with same-run evidence for this compiled executable.
 # Validate before any image/network work; arbitrary test filters are forbidden.
 mode="${1-full}"
-if (( $# > 1 )) || [[ "$mode" != full && "$mode" != mixed-roster-preflight && "$mode" != timeout-preflight && "$mode" != body-timeout-preflight && "$mode" != lease-expiry-preflight ]]; then
-  echo "Usage: run-published-canvas-contracts.sh [full|timeout-preflight|lease-expiry-preflight|body-timeout-preflight|mixed-roster-preflight]" >&2
+if (( $# > 1 )) || [[ "$mode" != full && "$mode" != full-after-preflights && "$mode" != mixed-roster-preflight && "$mode" != timeout-preflight && "$mode" != body-timeout-preflight && "$mode" != lease-expiry-preflight ]]; then
+  echo "Usage: run-published-canvas-contracts.sh [full|full-after-preflights|timeout-preflight|lease-expiry-preflight|body-timeout-preflight|mixed-roster-preflight]" >&2
   exit 2
 fi
 preflight_target=""
@@ -21,7 +22,6 @@ mapfile -t images < <(jq -er '.observed_postgres_image, .observed_image' ../cont
 [[ ${#images[@]} == 2 ]]
 for image in "${images[@]}"; do
   [[ "$image" =~ ^[a-z0-9./_-]+@sha256:[a-f0-9]{64}$ ]]
-  docker pull "$image"
 done
 mapfile -t executables < <(jq -r '
   select(.reason == "compiler-artifact")
@@ -30,6 +30,29 @@ mapfile -t executables < <(jq -r '
   | select(.executable != null) | .executable
 ' "$RUNNER_TEMP/rust-test-artifacts.json" | sort -u)
 [[ ${#executables[@]} == 1 && -x "${executables[0]}" ]]
+preflight_skips=()
+if [[ "$mode" == full-after-preflights ]]; then
+  evidence="${RUNNER_TEMP:?}/canvas-published-preflights.sha256"
+  [[ -f "$evidence" ]] || { echo "Missing Canvas preflight evidence" >&2; exit 1; }
+  mapfile -t proof < "$evidence"
+  [[ ${#proof[@]} == 4 && "${proof[0]}" =~ ^[a-f0-9]{64}$ &&
+    "${proof[0]}" == "$(sha256sum "${executables[0]}" | cut -d' ' -f1)" &&
+    "${proof[1]}" == "${GITHUB_RUN_ID:?}" &&
+    "${proof[2]}" == "${GITHUB_RUN_ATTEMPT:?}" &&
+    "${proof[3]}" == "${GITHUB_JOB:?}" ]] || {
+    echo "Canvas preflight evidence does not match this CI run and executable" >&2
+    exit 1
+  }
+  preflight_skips=(
+    --skip worker_mixed_roster_matches_frozen_published_process
+    --skip worker_body_timeout_matches_frozen_published_process
+    --skip worker_timeout_matches_frozen_published_process
+    --skip worker_lease_expiry_matches_frozen_published_process
+  )
+fi
+for image in "${images[@]}"; do
+  docker pull "$image"
+done
 if [[ -n "$preflight_target" ]]; then
   "${executables[0]}" --list | grep -Fx "$preflight_target: test"
   "${executables[0]}" "$preflight_target" --exact --nocapture --test-threads=1
@@ -204,7 +227,7 @@ fi
 # its own so unrelated test threads cannot affect the positive control.
 serial_test=worker_sql_logging_preserves_debug_diagnostics_and_operational_warnings
 all_tests=$("${executables[0]}" --list | grep -c ': test$')
-parallel_tests=$("${executables[0]}" --list --skip "$serial_test" | grep -c ': test$')
-[[ $((all_tests - parallel_tests)) == 1 ]]
+parallel_tests=$("${executables[0]}" --list --skip "$serial_test" "${preflight_skips[@]}" | grep -c ': test$')
+[[ $((all_tests - parallel_tests)) == $((1 + ${#preflight_skips[@]} / 2)) ]]
 "${executables[0]}" "$serial_test" --exact --nocapture --test-threads=1
-"${executables[0]}" --skip "$serial_test" --nocapture --test-threads=2
+"${executables[0]}" --skip "$serial_test" "${preflight_skips[@]}" --nocapture --test-threads=2

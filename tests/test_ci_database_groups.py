@@ -6,6 +6,7 @@ from pathlib import Path
 import sys
 from types import SimpleNamespace
 from contextlib import nullcontext
+import json
 
 import pytest
 
@@ -70,6 +71,65 @@ def test_four_preflights_all_finish_when_one_fails(tmp_path: Path) -> None:
     }
     for name in commands:
         assert name in (tmp_path / f"{name}.log").read_text(encoding="utf-8")
+
+
+def test_preflight_evidence_requires_all_four_successes_and_same_executable(
+    tmp_path: Path, monkeypatch
+) -> None:
+    monkeypatch.setenv("RUNNER_TEMP", str(tmp_path))
+    monkeypatch.setenv("GITHUB_RUN_ID", "12345")
+    monkeypatch.setenv("GITHUB_RUN_ATTEMPT", "1")
+    monkeypatch.setenv("GITHUB_JOB", "test-rust-services")
+    executable = tmp_path / "canvas-contract"
+    executable.write_bytes(b"compiled contract v1")
+    (tmp_path / "rust-test-artifacts.json").write_text(
+        json.dumps(
+            {
+                "reason": "compiler-artifact",
+                "package_id": "marty-issuance-service 0.1.0",
+                "target": {"name": "canvas_published_schema_contract"},
+                "executable": str(executable),
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    evidence = tmp_path / GROUPS.EVIDENCE_NAME
+    assert not GROUPS._has_preflight_evidence()
+
+    def fake_groups(commands, directory):
+        observed.update(commands)
+        for name in commands:
+            (directory / f"{name}.log").write_text("finished\n", encoding="utf-8")
+        return {
+            name: (7 if failed and name == "body-timeout-preflight" else 0)
+            for name in commands
+        }
+
+    observed = {}
+    monkeypatch.setattr(GROUPS, "run_groups", fake_groups)
+    failed = True
+    assert GROUPS.main("preflights") == 1
+    assert not evidence.exists()
+    failed = False
+    assert GROUPS.main("preflights") == 0
+    assert GROUPS._has_preflight_evidence()
+    assert GROUPS.main("database") == 0
+    assert observed["published-canvas"][-1] == "full-after-preflights"
+    monkeypatch.setenv("GITHUB_RUN_ATTEMPT", "2")
+    assert not GROUPS._has_preflight_evidence()
+    assert GROUPS.main("database") == 0
+    assert observed["published-canvas"][-1] != "full-after-preflights"
+    monkeypatch.setenv("GITHUB_RUN_ATTEMPT", "1")
+    executable.write_bytes(b"compiled contract v2")
+    assert not GROUPS._has_preflight_evidence()
+    assert GROUPS.main("database") == 0
+    assert observed["published-canvas"][-1] != "full-after-preflights"
+    assert GROUPS.main("preflights") == 0
+    assert GROUPS._has_preflight_evidence()
+    failed = True
+    assert GROUPS.main("preflights") == 1
+    assert not evidence.exists()
 
 
 @pytest.mark.parametrize("first_status,second_status", [(0, 7), (7, 0), (-9, 0)])

@@ -14,7 +14,9 @@ def test_public_flow_main_gate_is_registered_and_required():
     assert "run_flow_public_startup(&owned.url, redis.url())" in body
     script = (ROOT / "scripts/ci/run-published-canvas-contracts.sh").read_text()
     assert f"grep -Fx '{NAME}: test'" in script
-    assert '"${executables[0]}" --skip "$serial_test" --nocapture --test-threads=2' in script
+    assert 'preflight_skips=()' in script
+    assert 'if [[ "$mode" == full-after-preflights ]]; then' in script
+    assert '"${executables[0]}" --skip "$serial_test" "${preflight_skips[@]}" --nocapture --test-threads=2' in script
     workflow = (ROOT / ".github/workflows/ci.yml").read_text()
     assert "test -x rust/target/debug/marty-flow" in workflow
 

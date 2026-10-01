@@ -4,12 +4,14 @@ from __future__ import annotations
 
 from contextlib import nullcontext
 import hashlib
+import json
 import os
 from pathlib import Path
 import re
 import runpy
 import shutil
 import subprocess
+import tempfile
 from types import SimpleNamespace
 
 import pytest
@@ -59,14 +61,16 @@ def test_mandatory_full_mode_registration_roster_is_unchanged() -> None:
 def test_full_mode_is_exactly_two_way_while_every_preflight_stays_serial() -> None:
     script = SCRIPT.read_text(encoding="utf-8")
     preflight = (
-        '"${executables[0]}" "$preflight_target" --exact --nocapture '
-        "--test-threads=1"
+        '"${executables[0]}" "$preflight_target" --exact --nocapture --test-threads=1'
     )
     serial = '"${executables[0]}" "$serial_test" --exact --nocapture --test-threads=1'
-    full = '"${executables[0]}" --skip "$serial_test" --nocapture --test-threads=2'
+    full = '"${executables[0]}" --skip "$serial_test" "${preflight_skips[@]}" --nocapture --test-threads=2'
     assert sum(line.strip() == preflight for line in script.splitlines()) == 1
     assert sum(line.strip() == serial for line in script.splitlines()) == 1
-    assert '[[ $((all_tests - parallel_tests)) == 1 ]]' in script
+    assert (
+        "[[ $((all_tests - parallel_tests)) == $((1 + ${#preflight_skips[@]} / 2)) ]]"
+        in script
+    )
     assert script.rstrip().endswith(full)
     assert sorted(set(re.findall(r"--test-threads=(\d+)", script))) == ["1", "2"]
 
@@ -213,9 +217,14 @@ printf '%s\n' "$record" >> "$TEST_LOG"
 if [[ "$#" == 1 && "$1" == --list ]]; then
   [[ "$TEST_FAILURE" != list ]] || exit 19
   while IFS= read -r registration; do printf '%s\n' "$registration"; done < registrations
-elif [[ "$#" == 3 && "$1" == --list && "$2" == --skip ]]; then
+elif [[ "$#" -ge 3 && "$1" == --list && "$2" == --skip ]]; then
   while IFS= read -r registration; do
-    [[ "$registration" == *"$3"* ]] || printf '%s\n' "$registration"
+    keep=1
+    for (( index=3; index<=$#; index+=2 )); do
+      argument="${!index}"
+      [[ "$registration" == *"$argument"* ]] && keep=0
+    done
+    (( keep == 0 )) || printf '%s\n' "$registration"
   done < registrations
 else
   [[ "$TEST_FAILURE" != execute ]] || exit 23
@@ -226,7 +235,7 @@ fi
     )
     contract.chmod(0o755)
 
-    def run(arguments=(), *, failure="", registrations=None, pins=PINS):
+    def run(arguments=(), *, failure="", registrations=None, pins=PINS, run_id="12345"):
         lines = (
             registrations
             if registrations is not None
@@ -244,6 +253,9 @@ fi
                 "TEST_POSTGRES_IMAGE": pins[0],
                 "TEST_PYTHON_IMAGE": pins[1],
                 "CONTRACT_SOURCE": SCRIPT.as_posix(),
+                "GITHUB_RUN_ID": run_id,
+                "GITHUB_RUN_ATTEMPT": "1",
+                "GITHUB_JOB": "test-rust-services",
                 SCHEMA_ENV: "0",
             }
         )
@@ -288,6 +300,61 @@ def test_default_and_explicit_full_keep_all_registrations_and_run_every_test(
     assert [call for call in calls if call[0] == "docker"] == [
         ["docker", "pull", pin] for pin in PINS
     ]
+
+
+def test_proven_preflights_are_skipped_only_in_explicit_reuse_mode(
+    shell_case, tmp_path
+):
+    evidence = tmp_path / "canvas-published-preflights.sha256"
+    evidence.write_text(
+        hashlib.sha256((tmp_path / "contract").read_bytes()).hexdigest()
+        + "\n12345\n1\ntest-rust-services\n",
+        newline="\n",
+    )
+    result, calls = shell_case(["full-after-preflights"])
+    assert result.returncode == 0, result.stderr
+    children = [call for call in calls if call[0] == "child"]
+    skipped = [target for _, target in PREFLIGHTS]
+    assert children[-1] == [
+        "child",
+        "1",
+        "--skip",
+        "worker_sql_logging_preserves_debug_diagnostics_and_operational_warnings",
+        *[
+            item
+            for target in (skipped[0], skipped[2], skipped[1], skipped[3])
+            for item in ("--skip", target)
+        ],
+        "--nocapture",
+        "--test-threads=2",
+    ]
+    assert not any(
+        call[2:4] == [target, "--exact"] for call in children for target in skipped
+    )
+
+    result, calls = shell_case([])
+    assert result.returncode == 0, result.stderr
+    assert calls[-1][0] == "child" and calls[-1].count("--skip") == 1
+
+    result, calls = shell_case(["full-after-preflights"], run_id="other-run")
+    assert result.returncode != 0
+    assert not any("--test-threads=2" in call for call in calls)
+    assert not any(call[0] == "docker" for call in calls)
+
+
+@pytest.mark.parametrize("evidence", ["missing", "wrong", "malformed"])
+def test_reuse_mode_fails_closed_without_matching_evidence(
+    shell_case, tmp_path, evidence
+):
+    path = tmp_path / "canvas-published-preflights.sha256"
+    if evidence == "wrong":
+        path.write_text("0" * 64 + "\n12345\n1\ntest-rust-services\n")
+    elif evidence == "malformed":
+        path.write_text("not-a-digest\n")
+    result, calls = shell_case(["full-after-preflights"])
+    assert result.returncode != 0
+    assert not any("--test-threads=2" in call for call in calls)
+    assert not any(call[0] == "docker" for call in calls)
 
 
 def test_full_mode_rejects_a_skip_that_would_drop_another_test(shell_case):
@@ -436,7 +503,10 @@ def test_workflow_runs_all_preflights_immediately_after_preparation_and_keeps_fu
     assert prepare + 1 == preflight < databases < full
     assert steps[preflight]["working-directory"] == "rust"
     assert steps[preflight]["shell"] == "bash"
-    assert steps[preflight]["run"] == "python3 ../scripts/ci/run-db-contract-groups.py preflights"
+    assert (
+        steps[preflight]["run"]
+        == "python3 ../scripts/ci/run-db-contract-groups.py preflights"
+    )
     assert steps[full]["run"] == "python3 ../scripts/ci/run-db-contract-groups.py"
     for index in (preflight, full):
         assert "if" not in steps[index]
@@ -460,6 +530,7 @@ def test_workflow_runs_all_preflights_immediately_after_preparation_and_keeps_fu
 
 def test_database_group_owner_still_invokes_default_full_mode(tmp_path, monkeypatch):
     module = runpy.run_path(str(ROOT / "scripts/ci/run-db-contract-groups.py"))
+    monkeypatch.delenv("RUNNER_TEMP", raising=False)
     observed = {}
 
     def groups(commands, directory):
@@ -484,12 +555,32 @@ def test_database_group_owner_still_invokes_default_full_mode(tmp_path, monkeypa
 
 def test_preflight_group_owner_runs_all_four_exact_modes(tmp_path, monkeypatch):
     module = runpy.run_path(str(ROOT / "scripts/ci/run-db-contract-groups.py"))
+    executable = tmp_path / "canvas-contract"
+    executable.write_bytes(b"synthetic compiled Canvas contract")
+    (tmp_path / "rust-test-artifacts.json").write_text(
+        json.dumps(
+            {
+                "reason": "compiler-artifact",
+                "package_id": "marty-issuance-service 0.0.0",
+                "target": {"name": "canvas_published_schema_contract"},
+                "executable": str(executable),
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("RUNNER_TEMP", str(tmp_path))
+    monkeypatch.setenv("GITHUB_RUN_ID", "synthetic-run")
+    monkeypatch.setenv("GITHUB_RUN_ATTEMPT", "1")
+    monkeypatch.setenv("GITHUB_JOB", "test-rust-services")
     observed = {}
 
     def groups(commands, directory):
         observed.update(commands)
         for name in commands:
-            (directory / f"{name}.log").write_text("synthetic result\n", encoding="utf-8")
+            (directory / f"{name}.log").write_text(
+                "synthetic result\n", encoding="utf-8"
+            )
         return dict.fromkeys(commands, 0)
 
     namespace = module["main"].__globals__
@@ -497,9 +588,18 @@ def test_preflight_group_owner_runs_all_four_exact_modes(tmp_path, monkeypatch):
     monkeypatch.setitem(
         namespace,
         "tempfile",
-        SimpleNamespace(TemporaryDirectory=lambda **kwargs: nullcontext(str(tmp_path))),
+        SimpleNamespace(
+            TemporaryDirectory=lambda **kwargs: nullcontext(str(tmp_path)),
+            NamedTemporaryFile=tempfile.NamedTemporaryFile,
+        ),
     )
     assert module["main"]("preflights") == 0
+    assert (tmp_path / "canvas-published-preflights.sha256").read_text(
+        encoding="ascii"
+    ) == (
+        hashlib.sha256(executable.read_bytes()).hexdigest()
+        + "\nsynthetic-run\n1\ntest-rust-services\n"
+    )
     assert list(observed) == [
         "mixed-roster-preflight",
         "body-timeout-preflight",
@@ -507,6 +607,5 @@ def test_preflight_group_owner_runs_all_four_exact_modes(tmp_path, monkeypatch):
         "lease-expiry-preflight",
     ]
     assert all(
-        command == ["bash", str(SCRIPT), name]
-        for name, command in observed.items()
+        command == ["bash", str(SCRIPT), name] for name, command in observed.items()
     )
