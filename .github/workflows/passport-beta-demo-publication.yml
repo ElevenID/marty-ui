@@ -1,0 +1,130 @@
+name: Passport Beta D-12 Public Demo Evidence
+
+on:
+  workflow_dispatch:
+    inputs:
+      beta_artifact_dir:
+        description: Absolute protected directory of the exact signed aggregate beta deployment.
+        required: true
+      preliminary_run_id:
+        description: Successful protected preliminary recording run ID.
+        required: true
+      publication_config:
+        description: Absolute path to the reviewed D-12 YouTube publication config.
+        required: true
+      reviewed_master:
+        description: Absolute path to the reviewed D-12 master MP4.
+        required: true
+      campaign_review:
+        description: Absolute path to the reviewed MTDP campaign manifest.
+        required: true
+
+concurrency:
+  group: passport-beta-demo-publication
+  cancel-in-progress: false
+
+permissions:
+  actions: read
+  attestations: write
+  contents: read
+  id-token: write
+  packages: read
+
+jobs:
+  publish-evidence:
+    if: github.ref == 'refs/heads/main'
+    runs-on: [self-hosted, linux, x64, passport-beta-wsl2]
+    environment: beta-lifecycle
+    timeout-minutes: 90
+    env:
+      PASSPORT_DEMO_RECORDER_COMMIT: c31263bf6f4db9bb517393deb4f53f7853b3c1c6
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+
+      - name: Require protected main and absolute reviewed paths
+        shell: bash
+        env:
+          BETA_ARTIFACT_DIR: ${{ inputs.beta_artifact_dir }}
+          PRELIMINARY_RUN_ID: ${{ inputs.preliminary_run_id }}
+          PUBLICATION_CONFIG: ${{ inputs.publication_config }}
+          REVIEWED_MASTER: ${{ inputs.reviewed_master }}
+          CAMPAIGN_REVIEW: ${{ inputs.campaign_review }}
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
+          [[ "$PRELIMINARY_RUN_ID" =~ ^[1-9][0-9]*$ ]]
+          for input in BETA_ARTIFACT_DIR PUBLICATION_CONFIG REVIEWED_MASTER CAMPAIGN_REVIEW; do
+            [[ "${!input}" == /* ]]
+          done
+          test -d "$BETA_ARTIFACT_DIR"
+          test -f "$PUBLICATION_CONFIG"
+          test -f "$REVIEWED_MASTER"
+          test -f "$CAMPAIGN_REVIEW"
+
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v4
+        with:
+          node-version: '24'
+
+      - name: Check out exact reviewed recorder revision
+        shell: bash
+        env:
+          RECORDER_READ_TOKEN: ${{ secrets.PASSPORT_DEMO_SOURCE_READ_TOKEN }}
+        run: |
+          set -euo pipefail
+          [[ -n "$RECORDER_READ_TOKEN" ]]
+          recorder_root="$RUNNER_TEMP/passport-demo-recorder-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT"
+          [[ ! -e "$recorder_root" && ! -L "$recorder_root" ]]
+          GH_TOKEN="$RECORDER_READ_TOKEN" gh repo clone ElevenID/marty-demo-recorder "$recorder_root" -- --no-checkout
+          git -C "$recorder_root" checkout --detach "$PASSPORT_DEMO_RECORDER_COMMIT"
+          test "$(git -C "$recorder_root" rev-parse HEAD)" = "$PASSPORT_DEMO_RECORDER_COMMIT"
+          test -z "$(git -C "$recorder_root" status --porcelain)"
+          echo "PASSPORT_DEMO_RECORDER_ROOT=$recorder_root" >> "$GITHUB_ENV"
+
+      - name: Install pinned publication verifier dependencies
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd "$PASSPORT_DEMO_RECORDER_ROOT"
+          npm ci
+          node --test test/passportPublicationEvidence.test.js
+          test -z "$(git status --porcelain)"
+
+      - name: Authenticate preliminary and release, then verify live publication
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PASSPORT_ACCEPTANCE_API_KEY: ${{ secrets.PASSPORT_ACCEPTANCE_API_KEY }}
+          BETA_ARTIFACT_DIR: ${{ inputs.beta_artifact_dir }}
+          PRELIMINARY_RUN_ID: ${{ inputs.preliminary_run_id }}
+          PUBLICATION_CONFIG: ${{ inputs.publication_config }}
+          REVIEWED_MASTER: ${{ inputs.reviewed_master }}
+          CAMPAIGN_REVIEW: ${{ inputs.campaign_review }}
+        run: |
+          set -euo pipefail
+          umask 077
+          output="passport-beta-demo-publication-$GITHUB_RUN_ID.json"
+          python3 scripts/produce_passport_beta_demo_publication.py \
+            --artifact-dir "$BETA_ARTIFACT_DIR" \
+            --preliminary-run-id "$PRELIMINARY_RUN_ID" \
+            --config "$PUBLICATION_CONFIG" \
+            --video "$REVIEWED_MASTER" \
+            --campaign "$CAMPAIGN_REVIEW" \
+            --recorder-root "$PASSPORT_DEMO_RECORDER_ROOT" \
+            --recorder-commit "$PASSPORT_DEMO_RECORDER_COMMIT" \
+            --output "$output"
+          jq -e --arg run "$GITHUB_RUN_ID" --arg source "$GITHUB_SHA" \
+            '.schema == "marty.passport-beta-demo-publication/v1" and
+             .status == "public_verified" and
+             .protected_run == {run_id: $run, workflow_commit: $source}' "$output"
+
+      - name: Attest exact D-12 publication receipt
+        uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8
+        with:
+          subject-path: passport-beta-demo-publication-${{ github.run_id }}.json
+
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: passport-beta-demo-publication-${{ github.run_id }}
+          path: passport-beta-demo-publication-${{ github.run_id }}.json
+          if-no-files-found: error
+          retention-days: 90

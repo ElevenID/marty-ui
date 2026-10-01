@@ -8,7 +8,7 @@
     "file": "passport-beta-demo-publication-<run_id>.json",
     "schema": "marty.passport-beta-demo-publication/v1",
     "status": "public_verified",
-    "identity": ["protected_run.run_id", "protected_run.workflow_commit", "beta_origin", "physical_claim", "booklet_verified", "release.source_commit", "release.stack_manifest_sha256", "deployment.aggregate_deployment_receipt_sha256", "deployment.aggregate_plan_sha256", "preliminary.run_id", "preliminary.artifact_sha256", "selected_source_job_commitment", "selected_bureau_job_commitment"],
+    "identity": ["protected_run.run_id", "protected_run.workflow_commit", "beta_origin", "physical_claim", "booklet_verified", "release.source_commit", "release.stack_manifest_sha256", "deployment.aggregate_deployment_receipt_sha256", "deployment.aggregate_plan_sha256", "deployment.production_snapshot_commitment", "deployment.production_attachment_commitment", "preliminary.run_id", "preliminary.artifact_sha256", "selected_source_job_commitment", "selected_bureau_job_commitment"],
     "media": ["positive_uncut_video_sha256", "unsigned_uncut_video_sha256", "foreign_uncut_video_sha256", "unsigned_privacy_scan_sha256", "foreign_privacy_scan_sha256", "master_video_sha256", "master_privacy_scan_sha256", "captions_sha256", "composition_report_sha256", "run_report_sha256", "review_report_sha256", "publication_config_sha256", "public_manifest_sha256"],
     "youtube": ["video_id", "channel_id", "channel_title", "playlist_id", "privacy_status", "upload_status", "embeddable", "captions_verified", "playlist_membership_verified", "live_checked_at_utc", "publication_result_sha256", "automated_verification_report_sha256", "public_page_smoke_report_sha256", "publication_attestation_sha256"]
   },
