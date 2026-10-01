@@ -58,8 +58,14 @@ RUN test -n "$MARTY_COMMON_URI" \
     && echo "${MARTY_ISO18013_DIGEST#sha256:}  $MARTY_ISO18013_WHEEL" | sha256sum --check --strict \
     && pip install --no-cache-dir \
     "$MARTY_COMMON_WHEEL" "$MARTY_RS_WHEEL" "$MARTY_VERIFICATION_WHEEL" "$MARTY_ISO18013_WHEEL" \
-    sqlalchemy alembic psycopg2-binary asyncpg 'redis[hiredis]' \
+    sqlalchemy alembic psycopg2-binary 'psycopg[binary]' asyncpg 'redis[hiredis]' \
     fastapi pydantic httpx 'cryptography>=44.0.0'
+
+# SQLAlchemy 2.1 selects psycopg 3 for a plain postgresql:// URL. Check
+# every supported sync dialect before publishing this migration image.
+COPY scripts/check_migration_db_drivers.py /tmp/check_migration_db_drivers.py
+RUN python /tmp/check_migration_db_drivers.py \
+    && rm /tmp/check_migration_db_drivers.py
 
 COPY services /app/services
 COPY rust/services/issuance/migrations /app/passport-native-migrations/issuance
