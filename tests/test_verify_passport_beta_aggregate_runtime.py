@@ -2,8 +2,10 @@
 
 from __future__ import annotations
 
-from copy import deepcopy
 import json
+import hashlib
+from pathlib import Path
+import sys
 
 import pytest
 
@@ -77,6 +79,8 @@ def fixture(monkeypatch):
     }
     intent = {"schema": "marty.passport-beta-db-maintenance-plan/v1",
               "source_commit": HEAD,
+              "production_snapshot_sha256": "e" * 64,
+              "production_attachments_sha256": "f" * 64,
               "beta_generation": [{"service": "openbao", "container_id": OPENBAO,
                                    "image_id": "sha256:" + "a" * 64,
                                    "started_at": "2026-09-29T00:00:00Z"}],
@@ -121,6 +125,8 @@ def fixture(monkeypatch):
     monkeypatch.setattr(runtime, "production_snapshot", lambda _runner: {
         "sha256": "e" * 64})
     monkeypatch.setattr(runtime, "production_attachment_sha256", lambda _runner: "f" * 64)
+    monkeypatch.setattr(runtime, "production_public_route", lambda: {
+        "origin": "https://elevenidllc.com/", "status": 200})
     monkeypatch.setattr(runtime, "verify_rust_owner", lambda *_args, **_kwargs: {
         "verified": True, "source_commit": HEAD,
         "postgres_container_id": plan["postgres_container_id"],
@@ -155,7 +161,111 @@ def test_runtime_requires_replaced_signed_generation(monkeypatch):
     assert set(evidence["beta_runtime"]) == set(evidence["beta_services"])
     assert evidence["ui_runtime"]["container_id"] == UI
     assert evidence["ui_runtime"]["configured_image"] == UI_IMAGE
+    assert evidence["production_public_route"]["status"] == 200
     assert "test-token" not in json.dumps(evidence)
+
+
+def test_production_only_checks_public_route(monkeypatch):
+    plan, intent, _, runner = fixture(monkeypatch)
+    report = runtime.verify_production(plan, intent, "f" * 64, runner)
+    assert report["verified"] is True
+    assert report["public_route"]["origin"] == "https://elevenidllc.com/"
+    monkeypatch.setattr(runtime, "production_public_route", lambda: (_ for _ in ()).throw(
+        runtime.HostProbeError("Production public route is unavailable")))
+    with pytest.raises(runtime.HostProbeError, match="public route is unavailable"):
+        runtime.verify_production(plan, intent, "f" * 64, runner)
+
+
+def test_production_only_rejects_unbound_source(monkeypatch):
+    plan, intent, _, runner = fixture(monkeypatch)
+    intent["source_commit"] = "b" * 40
+    with pytest.raises(runtime.HostProbeError, match="continuity inputs are invalid"):
+        runtime.verify_production(plan, intent, "f" * 64, runner)
+
+
+def test_failed_deploy_postflight_uses_signed_fenced_chain(monkeypatch, tmp_path: Path):
+    plan, intent, _, runner = fixture(monkeypatch)
+
+    def write(name: str, value: dict) -> tuple[Path, str]:
+        path = tmp_path / name
+        payload = json.dumps(value, sort_keys=True).encode()
+        path.write_bytes(payload)
+        return path, hashlib.sha256(payload).hexdigest()
+
+    manifest_path, manifest_sha = write("stack-manifest.json", {"signed": True})
+    fence = {"schema": "marty.passport-beta-fence-installation/v1",
+             "source_commit": HEAD,
+             "production_snapshot_sha256": plan["production_snapshot_sha256"],
+             "production_attachments_sha256": plan["production_attachments_sha256"]}
+    fence_path, fence_sha = write("fence.json", fence)
+    intent.update({"stack_manifest_sha256": manifest_sha,
+                   "fence_receipt_sha256": fence_sha})
+    intent_path, intent_sha = write("intent.json", intent)
+    maintenance = {"schema": "marty.passport-beta-db-maintenance-start/v1",
+                   "source_commit": HEAD,
+                   "production_snapshot_sha256": plan["production_snapshot_sha256"],
+                   "production_attachments_sha256": plan["production_attachments_sha256"],
+                   "intent_sha256": intent_sha}
+    maintenance_path, maintenance_sha = write("maintenance.json", maintenance)
+    native = {"schema": "marty.passport-beta-native-db-gates/v1",
+              "source_commit": HEAD,
+              "production_snapshot_sha256": plan["production_snapshot_sha256"],
+              "maintenance_receipt_sha256": maintenance_sha}
+    native_path, _ = write("native.json", native)
+
+    def postflight():
+        return runtime.verify_production_maintenance(
+            manifest_path, intent_path, maintenance_path, fence_path, native_path,
+            runner, lambda: HEAD, lambda _path, source: {
+                "source_commit": source, "manifest_sha256": manifest_sha,
+                "signed_manifest_verified": True})
+
+    report = postflight()
+    assert report["verified"] is True
+    assert report["source_commit"] == intent["source_commit"]
+    fence_path.write_bytes(fence_path.read_bytes() + b" ")
+    with pytest.raises(runtime.HostProbeError, match="baseline is invalid"):
+        postflight()
+    fence_path, _ = write("fence.json", fence)
+    intent["source_commit"] = "b" * 40
+    write("intent.json", intent)
+    with pytest.raises(runtime.HostProbeError, match="baseline is invalid"):
+        postflight()
+
+
+def test_postflight_cli_does_not_need_aggregate_plan(
+    monkeypatch, tmp_path: Path, capsys,
+):
+    manifest = tmp_path / "stack-manifest.json"
+    manifest.write_text("{}", encoding="utf-8")
+    intent = tmp_path / "intent.json"
+    intent.write_text("{}", encoding="utf-8")
+    maintenance = tmp_path / "maintenance.json"
+    fence = tmp_path / "fence.json"
+    maintenance.write_text('{"schema":"maintenance"}', encoding="utf-8")
+    fence.write_text('{"schema":"fence"}', encoding="utf-8")
+    native = tmp_path / "native.json"
+    native.write_text("{}", encoding="utf-8")
+    monkeypatch.setattr(runtime, "verify_production_maintenance",
+                        lambda manifest_path, intent_path, maintenance_path,
+                        fence_path, native_path: {
+                            "verified": True,
+                            "manifest": manifest_path.name,
+                            "intent": intent_path.name,
+                            "maintenance": maintenance_path.name,
+                            "fence": fence_path.name,
+                            "native": native_path.name})
+    monkeypatch.setattr(sys, "argv", ["postflight", "--production-maintenance-only",
+                                     "--stack-manifest", str(manifest),
+                                     "--maintenance-intent", str(intent),
+                                     "--maintenance-receipt", str(maintenance),
+                                     "--fence-receipt", str(fence),
+                                     "--native-receipt", str(native)])
+    runtime.main()
+    assert json.loads(capsys.readouterr().out) == {
+        "verified": True, "manifest": "stack-manifest.json",
+        "intent": "intent.json", "maintenance": "maintenance.json",
+        "fence": "fence.json", "native": "native.json"}
 
 
 def test_runtime_rejects_preserved_ingress_pointing_elsewhere(monkeypatch):
@@ -191,10 +301,10 @@ def test_runtime_refuses_receipt_without_exact_image_identity(monkeypatch):
 
 def test_runtime_rejects_changed_production(monkeypatch):
     plan, intent, _, runner = fixture(monkeypatch)
-    changed = deepcopy(plan)
-    changed["production_snapshot_sha256"] = "f" * 64
+    monkeypatch.setattr(runtime, "production_snapshot", lambda _runner: {
+        "sha256": "f" * 64})
     with pytest.raises(runtime.HostProbeError, match="Production changed"):
-        runtime.verify(changed, intent, "f" * 64, runner, lambda _: {"verified": True})
+        runtime.verify(plan, intent, "f" * 64, runner, lambda _: {"verified": True})
 
 
 def test_runtime_rejects_duplicate_selector(monkeypatch):

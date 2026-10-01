@@ -6,14 +6,14 @@ envsubst executable renders only checked-in manifests with synthetic variables.
 
 from __future__ import annotations
 
-from copy import deepcopy
 import json
 import os
-from pathlib import Path
 import re
 import shutil
 import subprocess
 import sys
+from copy import deepcopy
+from pathlib import Path
 
 import pytest
 import yaml
@@ -52,10 +52,16 @@ def mirror(repository="registry.example:5443/renamed/nested/external-api"):
     return repository + "@" + canonical().split("@", 1)[1]
 
 
-def test_checked_in_hold_lock_rejects_deployment():
-    assert lock()["release_state"] == "hold"
+def test_checked_in_eligible_lock_uses_the_pinned_issuance_digest():
+    assert lock()["release_state"] == "eligible"
+    assert binding.validate_issuance_binding(canonical(), lock()) == canonical()
+
+
+def test_hold_lock_rejects_deployment():
+    held = lock()
+    held["release_state"] = "hold"
     with pytest.raises(ValueError, match=binding.REFUSAL):
-        binding.validate_issuance_binding(canonical(), lock())
+        binding.validate_issuance_binding(canonical(), held)
 
 
 @pytest.mark.parametrize(
@@ -219,7 +225,9 @@ def test_cli_fixed_lock_bounded_strict_json_and_private_errors(
     target.parent.mkdir()
     raw = json.dumps(eligible_lock()).encode()
     if mode == "hold":
-        raw = json.dumps(lock()).encode()
+        held = lock()
+        held["release_state"] = "hold"
+        raw = json.dumps(held).encode()
     elif mode == "malformed":
         raw = (PRIVATE + "{").encode()
     elif mode == "duplicate":
@@ -263,7 +271,8 @@ def test_cli_fixed_lock_bounded_strict_json_and_private_errors(
 def extracted(name):
     source = (ROOT / "scripts/deploy-kubernetes.sh").read_text(encoding="utf-8")
     matches = re.findall(
-        r"^" + re.escape(name) + r"\(\) \{\n.*?^\}", source, re.M | re.S
+        r"^" + re.escape(name) + r"\(\) \{\n.*?^\}", source,
+        re.MULTILINE | re.DOTALL,
     )
     assert len(matches) == 1
     return matches[0]

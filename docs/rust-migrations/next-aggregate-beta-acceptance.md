@@ -1,10 +1,10 @@
 # Next aggregate beta: acceptance checklist
 
 Source-readiness audit: Signing Keys #913 and the passport aggregate #919 are
-on protected main. The remaining aggregate correction and deployment writer fence
-must pass protected checks and merge before a release claim. The
-[held 1.1.218 coordinate](passport-predeletion-release-1.1.218.md) is for
-reviewed Rust pre-deletion qualification; it does not authorize a claim or
+on protected main. The reviewed aggregate correction and deployment writer fence
+must also be on protected main before a release claim. The
+[1.1.218 coordinate](passport-predeletion-release-1.1.218.md) is for
+reviewed Rust pre-deletion qualification; eligibility alone is not a claim or
 deployment. Historical beta 1.1.217 evidence cannot qualify the new source.
 The final beta release must come from the source after Python passport deletion.
 
@@ -38,8 +38,8 @@ The final beta release must come from the source after Python passport deletion.
    changes. Resolve remaining source-qualification and consumer-acceptance gates
    before claiming whole-goal completion. Keep DIDComm KMS redesign separately
    deferred.
-2. Keep 1.1.218 on hold until the remaining Rust source and component pins are
-   reviewed on protected main. Then separately make it eligible and use
+2. Review the 1.1.218 eligibility change only after the Rust source and
+   component pins are on protected main. Then use
    `.github/workflows/prepare-stack-tag.yml` and `cd.yml` to claim and publish
    the immutable **pre-deletion qualification** release. Retain the source,
    claim/transaction and run identities. Verify annotated tag/source, complete
@@ -56,11 +56,11 @@ The final beta release must come from the source after Python passport deletion.
    The service also owns unrelated routes and must remain available; its
    passport write paths must be blocked. Verify the exact head of the
    [Credentials deletion PR](https://github.com/ElevenID/marty-credentials/pull/305),
-   whose gate now calls for the scoped fence, and implement its missing
-   protected final cutover producer. Attest the
+   whose gate now calls for the scoped fence, and run its protected final
+   cutover producer. Attest the
    later beta drain watermark against that head, pass its post-cutover CI,
-   and resolve review findings before merging the deletion. The producer and
-   live receipts are absent today, so this gate is still blocked.
+   and resolve review findings before merging the deletion. Live receipts are
+   absent today, so this gate is still pending.
 4. Select a fresh unused coordinate for the **post-deletion** source, refresh
    all component pins, and repeat the protected claim and release sequence.
    Verify that the final signed images contain the reviewed Rust owner and no
@@ -91,7 +91,13 @@ The final beta release must come from the source after Python passport deletion.
    Keep the transition, private write, Flow, and aggregate receipts outside protected
    source. Verify the exact Compose render, signed images,
    preserved beta state, KMS custody, and production isolation before accepting
-   the runtime. These loopback calls are pre-ingress ownership gates, not
+   the runtime. The operator also checks the public production root before
+   beta mutation and in the final runtime receipt. If the cutover fails, read
+   the separate `.production-postflight.json` receipt: it compares the
+   production generation and public route against the fenced maintenance
+   receipts even when no aggregate plan was created. Resolve any failed
+   production postflight before resuming the beta cutover. These loopback
+   calls are pre-ingress ownership gates, not
    end-to-end acceptance. After the public edge opens, run the selected
    physical Flow and nine-route passport lifecycle through
    `https://beta.elevenidllc.com`, including the demo recording, and bind

@@ -8,11 +8,14 @@ import hmac
 import json
 import re
 import subprocess
+import urllib.error
+import urllib.request
 import uuid
 from typing import Any, Callable
 
 
 PRODUCTION_PROJECTS = ("marty-selfhost-prod", "marty-selfhost-openbao")
+PRODUCTION_PUBLIC_ORIGIN = "https://elevenidllc.com/"
 REQUIRED_PRODUCTION_SERVICES = {
     "marty-selfhost-prod": {"gateway", "postgres", "ui"},
     "marty-selfhost-openbao": {"openbao"},
@@ -86,6 +89,25 @@ WHERE ((definition.id IS NULL AND NOT COALESCE((
 
 class HostProbeError(ValueError):
     pass
+
+
+def production_public_route(
+    opener: Callable[..., Any] = urllib.request.urlopen,
+) -> dict[str, Any]:
+    """Check the public production route without reading private response data."""
+    request = urllib.request.Request(
+        PRODUCTION_PUBLIC_ORIGIN,
+        headers={"User-Agent": "Mozilla/5.0 (Marty production continuity)"},
+    )
+    try:
+        with opener(request, timeout=10) as response:
+            status = response.status
+            final_url = response.url
+    except (OSError, urllib.error.URLError, TimeoutError) as exc:
+        raise HostProbeError("Production public route is unavailable") from exc
+    if status != 200 or final_url != PRODUCTION_PUBLIC_ORIGIN:
+        raise HostProbeError("Production public route changed or is unavailable")
+    return {"origin": PRODUCTION_PUBLIC_ORIGIN, "status": status}
 
 
 def run(command: list[str]) -> str:
