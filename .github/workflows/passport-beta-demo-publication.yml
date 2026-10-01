@@ -43,7 +43,7 @@ jobs:
     environment: beta-lifecycle
     timeout-minutes: 90
     env:
-      PASSPORT_DEMO_RECORDER_COMMIT: c31263bf6f4db9bb517393deb4f53f7853b3c1c6
+      PASSPORT_DEMO_RECORDER_COMMIT: 022c8238c64972cf48873a8f4efcf73ae7329577
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
 
