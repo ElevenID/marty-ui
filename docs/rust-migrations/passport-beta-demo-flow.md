@@ -121,10 +121,20 @@ Python passport retirement requires protected Rust parity, the final live
 drain, and the reviewed deletion gate before the aggregate beta deployment.
 The recording and final receipt then qualify the single Rust-only beta soak.
 
-The preliminary workflow exists, but this branch's reviewed recorder pin
-awaits protected main and a live beta receipt. The full signed callback and
-Rust restart producer, D-12 publication inputs, and final demo receipt
-producer remain outstanding.
+The preliminary workflow and reviewed recorder pin are present in protected
+source. Live beta receipts, recording, and YouTube upload remain pending.
 No beta recording or YouTube upload has occurred under this plan.
 The disposable model rehearses the stack and does not replace this live beta
 recording or its protected preliminary receipt.
+
+After the exact post-deletion aggregate deployment and selected D-12 Flow run,
+the protected `passport-beta-soak-sample.yml` workflow takes read-only samples
+from the signed deployment artifact directory and the private mode-0600 selected
+job handoff. Each sample rechecks the live signed Rust service inventory,
+managed issuer capability, native route ownership, the same active source and
+bureau job, zero beta passport drain, and production container and network/port
+baselines. Run at least three separate protected samples across 24 hours with
+no gap over 13 hours. `verify_passport_beta_soak_window.py` checks that window
+and emits `window_observed` with `provenance_pending=true`. The final compositor
+must authenticate every GitHub run and artifact hash before treating the
+window as acceptance evidence; a local copy of the sample JSON is insufficient.
