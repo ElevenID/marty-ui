@@ -1,0 +1,25 @@
+# Only public service build and runtime inputs. Integration tests remain in
+# normal CI; they do not need to invalidate the release image's source layer.
+**
+!rust/
+!rust/**
+!proto/
+!proto/**
+!contracts/
+!contracts/**
+!services/
+!services/entrypoint.sh
+!services/auth/
+!services/auth/assets/
+!services/auth/assets/**
+!scripts/
+!scripts/build-rust-service-binaries.sh
+!scripts/load-secrets-env.sh
+!scripts/ci/
+!scripts/ci/run-public-rust-build.sh
+rust/services/*/tests
+rust/crates/*/tests
+rust/**/target
+rust/**/.git
+rust/**/*.log
+rust/**/.env*

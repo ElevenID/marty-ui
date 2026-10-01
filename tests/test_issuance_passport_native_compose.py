@@ -80,8 +80,14 @@ def test_compose_exposes_both_passport_selectors_without_enabling_them() -> None
             native["PASSPORT_MANAGED_ISSUER_SIGNING_ENABLED"]
             == "${PASSPORT_MANAGED_ISSUER_SIGNING_ENABLED:-false}"
         )
-        assert native["PASSPORT_KMS_ARTIFACTS_ENABLED"] == "${PASSPORT_KMS_ARTIFACTS_ENABLED:-false}"
-        assert native["PASSPORT_KMS_CALLBACKS_ENABLED"] == "${PASSPORT_KMS_CALLBACKS_ENABLED:-false}"
+        assert (
+            native["PASSPORT_KMS_ARTIFACTS_ENABLED"]
+            == "${PASSPORT_KMS_ARTIFACTS_ENABLED:-false}"
+        )
+        assert (
+            native["PASSPORT_KMS_CALLBACKS_ENABLED"]
+            == "${PASSPORT_KMS_CALLBACKS_ENABLED:-false}"
+        )
         for key in (
             "PASSPORT_TENANT_API_KEYS",
             "PASSPORT_TENANT_API_KEYS_FILE",
@@ -172,7 +178,8 @@ def test_self_signed_test_image_is_explicit_opt_in() -> None:
     )
     assert "ARG PASSPORT_SELF_SIGNED_TEST=false" in dockerfile
     assert (
-        "true) build-rust-service-binaries passport-self-signed-test" in dockerfile
+        "true) run-public-rust-build build-rust-service-binaries passport-self-signed-test"
+        in dockerfile
     )
     assert (
         "set -- --features marty-issuance-service/passport-self-signed-test"
@@ -180,7 +187,7 @@ def test_self_signed_test_image_is_explicit_opt_in() -> None:
     )
     assert "PASSPORT_SELF_SIGNED_TEST must be true or false" in dockerfile
     assert "Verify opt-in passport test-mode image boundary" in workflow
-    assert "--build-arg PASSPORT_SELF_SIGNED_TEST=true" in workflow
+    assert "PASSPORT_SELF_SIGNED_TEST=true" in workflow
     assert (
         "PASSPORT_SELF_SIGNED_TEST=true"
         in contract["self_signed_test_signer"]["packaged_image_build_arg"]

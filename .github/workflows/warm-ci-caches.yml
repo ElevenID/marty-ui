@@ -12,6 +12,11 @@ on:
       - contracts/**
       - scripts/load-secrets-env.sh
       - scripts/ci/verify-release-cache.sh
+      - services/Dockerfile
+      - services/Dockerfile.dockerignore
+      - scripts/build-rust-service-binaries.sh
+      - scripts/ci/run-public-rust-build.sh
+      - services/auth/assets/**
   workflow_dispatch:
 
 permissions:
@@ -111,6 +116,45 @@ jobs:
           provenance: false
           cache-from: type=gha,scope=marty-ui-rust-service-images
           cache-to: type=gha,mode=max,scope=marty-ui-rust-service-images
+          secret-envs: |
+            sccache_token=SCCACHE_GHA_RUNTIME_TOKEN
+            sccache_url=SCCACHE_GHA_CACHE_URL
+            sccache_mode=SCCACHE_GHA_RW_MODE
+
+  public-services:
+    name: Warm public service builder cache
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+    permissions:
+      actions: write
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+      - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069
+      - name: Expose compiler cache credentials to BuildKit secrets
+        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3
+        with:
+          script: |
+            const token = process.env.ACTIONS_RUNTIME_TOKEN;
+            const url = process.env.ACTIONS_RESULTS_URL;
+            if (!token || !url) throw new Error('GitHub compiler cache credentials are unavailable');
+            core.setSecret(token);
+            core.exportVariable('SCCACHE_GHA_RUNTIME_TOKEN', token);
+            core.exportVariable('SCCACHE_GHA_CACHE_URL', url);
+            core.exportVariable('SCCACHE_GHA_RW_MODE', 'READ_WRITE');
+      - name: Warm public service dependency layers
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc
+        with:
+          context: .
+          file: services/Dockerfile
+          target: rust-service-dependencies
+          push: false
+          provenance: false
+          cache-from: type=gha,scope=marty-ui-public-services
+          cache-to: type=gha,mode=max,scope=marty-ui-public-services,ignore-error=true
           secret-envs: |
             sccache_token=SCCACHE_GHA_RUNTIME_TOKEN
             sccache_url=SCCACHE_GHA_CACHE_URL

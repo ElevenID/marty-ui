@@ -4,6 +4,7 @@ from pathlib import Path
 import re
 
 import pytest
+import yaml
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -46,13 +47,158 @@ def test_shared_service_image_builds_all_rust_binaries_once() -> None:
 
     assert build_script.count('exec cargo build --locked --release "$@"') == 1
     assert build_script.count(" --bin marty-") == len(ALL_RUST_BINARIES)
-    assert dockerfile.count("RUN build-rust-service-binaries default") == 1
-    assert dockerfile.index("RUN build-rust-service-binaries default") < dockerfile.index(
-        "ARG PASSPORT_SELF_SIGNED_TEST=false"
+    assert (
+        dockerfile.count("run-public-rust-build build-rust-service-binaries default")
+        == 1
     )
-    assert "true) build-rust-service-binaries passport-self-signed-test" in dockerfile
+    assert dockerfile.index(
+        "run-public-rust-build build-rust-service-binaries default"
+    ) < dockerfile.index("ARG PASSPORT_SELF_SIGNED_TEST=false")
+    assert (
+        "true) run-public-rust-build build-rust-service-binaries passport-self-signed-test"
+        in dockerfile
+    )
     assert dockerfile.count("COPY --from=rust-service-builder") == len(
         ALL_RUST_BINARIES
+    )
+
+
+def test_public_builder_cooks_dependencies_before_copying_all_source() -> None:
+    dockerfile = (ROOT / "services/Dockerfile").read_text(encoding="utf-8")
+    dependencies = dockerfile.split(
+        "FROM rust-service-cache AS rust-service-dependencies", 1
+    )[1]
+    builder = dockerfile.split(
+        "FROM rust-service-dependencies AS rust-service-builder", 1
+    )[1]
+    assert "FROM rust:1.95-bookworm@sha256:" in dockerfile
+    assert "cargo install cargo-chef --locked --version 0.1.78" in dockerfile
+    assert (
+        "ADD --checksum=sha256:aec995a83ad3dff3d14b6314e08858b7b73d35ca85a5bcf3d3a9ec07dee35588"
+        in dockerfile
+    )
+    assert (
+        "COPY --from=rust-service-planner /build/rust/recipe.json recipe.json"
+        in dependencies
+    )
+    assert "COPY --from=rust-service-planner /build/rust/third_party" in dependencies
+    assert dependencies.index(
+        "cargo chef cook --locked --release --workspace"
+    ) < dependencies.index("FROM rust-service-dependencies AS rust-service-builder")
+    assert builder.index("COPY rust /build/rust") < builder.index(
+        "run-public-rust-build build-rust-service-binaries default"
+    )
+    assert (
+        builder.count("run-public-rust-build build-rust-service-binaries default") == 1
+    )
+    assert dependencies.count("--mount=type=secret,id=sccache_token") == 3
+    assert "RUSTFLAGS" not in dockerfile
+    assert "ENV SCCACHE" not in dockerfile
+    wrapper = (ROOT / "scripts/ci/run-public-rust-build.sh").read_text(encoding="utf-8")
+    assert "export RUSTC_WRAPPER=sccache" in wrapper
+    assert "READ_ONLY|READ_WRITE" in wrapper
+    assert '"$@"' in wrapper
+
+
+def test_public_builder_context_keeps_embedded_runtime_inputs_but_not_tests() -> None:
+    ignore = (
+        (ROOT / "services/Dockerfile.dockerignore")
+        .read_text(encoding="utf-8")
+        .splitlines()
+    )
+    for entry in (
+        "!rust/**",
+        "!proto/**",
+        "!contracts/**",
+        "!services/auth/assets/**",
+        "!services/entrypoint.sh",
+        "!scripts/build-rust-service-binaries.sh",
+        "!scripts/ci/run-public-rust-build.sh",
+        "!scripts/load-secrets-env.sh",
+        "rust/services/*/tests",
+        "rust/crates/*/tests",
+    ):
+        assert entry in ignore
+    assert "rust/third_party" not in ignore
+    assert "contracts/*-oracle.json" not in ignore
+
+
+def test_public_builder_preserves_supported_amd64_and_arm64_registry_builds() -> None:
+    dockerfile = (ROOT / "services/Dockerfile").read_text(encoding="utf-8")
+    registry = (ROOT / "scripts/build-push-registry.sh").read_text(encoding="utf-8")
+    assert "ARG TARGETARCH" in dockerfile
+    assert "amd64) archive=/tmp/sccache.tar.gz; target=x86_64" in dockerfile
+    assert "arm64) archive=/tmp/sccache-aarch64.tar.gz; target=aarch64" in dockerfile
+    assert (
+        "ADD --checksum=sha256:aec995a83ad3dff3d14b6314e08858b7b73d35ca85a5bcf3d3a9ec07dee35588"
+        in dockerfile
+    )
+    assert (
+        "ADD --checksum=sha256:f73a5c39f96bb6ebb89cc7915cf182260d4cbf30765322c5e793d0fe8bd80784"
+        in dockerfile
+    )
+    assert "linux/arm64" in registry
+    assert '"services/Dockerfile"' in registry
+
+
+def test_public_build_cache_is_read_only_in_ci_and_written_only_by_main_release() -> (
+    None
+):
+    ci = yaml.safe_load((ROOT / ".github/workflows/ci.yml").read_text(encoding="utf-8"))
+    cd = yaml.safe_load((ROOT / ".github/workflows/cd.yml").read_text(encoding="utf-8"))
+    warm = yaml.safe_load(
+        (ROOT / ".github/workflows/warm-ci-caches.yml").read_text(encoding="utf-8")
+    )
+    ci_steps = ci["jobs"]["test-rust-services"]["steps"]
+    public = [
+        step
+        for step in ci_steps
+        if step.get("name")
+        in ("Build public selfhost image", "Build opt-in passport test-mode image")
+    ]
+    assert len(public) == 2
+    for step in public:
+        config = step["with"]
+        assert config["file"] == "services/Dockerfile"
+        assert config["cache-from"] == "type=gha,scope=marty-ui-public-services"
+        assert "cache-to" not in config
+        assert config["secret-envs"] == (
+            "sccache_token=SCCACHE_GHA_RUNTIME_TOKEN\n"
+            "sccache_url=SCCACHE_GHA_CACHE_URL\n"
+            "sccache_mode=SCCACHE_GHA_RW_MODE\n"
+        )
+    ci_credential = next(
+        step
+        for step in ci_steps
+        if step.get("name") == "Expose public image compiler cache credentials"
+    )
+    assert "'SCCACHE_GHA_RW_MODE', 'READ_ONLY'" in ci_credential["with"]["script"]
+    release = cd["jobs"]["build-services"]
+    release_steps = release["steps"]
+    release_credential = next(
+        step
+        for step in release_steps
+        if step.get("name") == "Expose public image compiler cache credentials"
+    )
+    assert "'SCCACHE_GHA_RW_MODE', 'READ_ONLY'" in release_credential["with"]["script"]
+    release_build = next(step for step in release_steps if step.get("id") == "services")
+    config = release_build["with"]
+    assert config["cache-from"] == "type=gha,scope=marty-ui-public-services"
+    assert "cache-to" not in config
+    assert config["sbom"] is True
+    assert config["provenance"] == "mode=max"
+    warmer = warm["jobs"]["public-services"]
+    assert warmer["if"] == "github.ref == 'refs/heads/main'"
+    assert warmer["permissions"] == {"actions": "write", "contents": "read"}
+    warm_build = next(
+        step
+        for step in warmer["steps"]
+        if step.get("name") == "Warm public service dependency layers"
+    )
+    assert warm_build["with"]["target"] == "rust-service-dependencies"
+    assert (
+        warm_build["with"]["cache-to"]
+        == "type=gha,mode=max,scope=marty-ui-public-services,ignore-error=true"
     )
 
 
