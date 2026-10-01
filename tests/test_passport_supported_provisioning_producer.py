@@ -1114,7 +1114,7 @@ def test_producer_workflow_is_protected_and_scoped() -> None:
     assert set(trigger) == {"workflow_dispatch"}
     job = value["jobs"]["producer"]
     assert job["if"] == "github.ref == 'refs/heads/main'"
-    assert job["runs-on"] == ["self-hosted", "linux", "x64", "canvas-oss-wsl2"]
+    assert job["runs-on"] == ["self-hosted", "linux", "x64", "passport-beta-wsl2"]
     assert job["environment"] == "beta-lifecycle"
     assert value["permissions"] == {"actions": "read", "attestations": "read",
                                     "contents": "read", "packages": "read"}
@@ -1134,7 +1134,7 @@ def test_producer_workflow_is_protected_and_scoped() -> None:
 @pytest.mark.parametrize("old,new", [
     ("github.ref == 'refs/heads/main'", "github.ref != 'refs/heads/main'"),
     ("beta-lifecycle", "production"),
-    ("canvas-oss-wsl2", "ubuntu-latest"),
+    ("passport-beta-wsl2", "ubuntu-latest"),
     ('and .head_sha == $sha', 'and .head_sha != $sha'),
     ('passport-supported-provisioning-plan.yml', 'any-plan.yml'),
     ('scripts/passport_supported_protected_producer.py', 'true'),
@@ -1150,7 +1150,7 @@ def test_producer_workflow_contract_rejects_unsafe_mutation(old: str, new: str) 
     with pytest.raises(AssertionError):
         assert job["if"] == "github.ref == 'refs/heads/main'"
         assert job["environment"] == "beta-lifecycle"
-        assert job["runs-on"] == ["self-hosted", "linux", "x64", "canvas-oss-wsl2"]
+        assert job["runs-on"] == ["self-hosted", "linux", "x64", "passport-beta-wsl2"]
         assert 'and .head_sha == $sha' in run
         assert '.path == ".github/workflows/passport-supported-provisioning-plan.yml"' in run
         assert "scripts/passport_supported_protected_producer.py" in job["steps"][2]["run"]

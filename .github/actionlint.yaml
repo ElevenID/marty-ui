@@ -1,3 +1,4 @@
 self-hosted-runner:
   labels:
     - canvas-oss-wsl2
+    - passport-beta-wsl2

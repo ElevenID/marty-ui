@@ -41,7 +41,7 @@ permissions:
 jobs:
   collect:
     if: github.ref == 'refs/heads/main'
-    runs-on: [self-hosted, linux, x64, canvas-oss-wsl2]
+    runs-on: [self-hosted, linux, x64, passport-beta-wsl2]
     environment: beta-lifecycle
     timeout-minutes: 30
     env:
@@ -62,6 +62,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
+          python3 scripts/check_passport_beta_runner.py --output "$RUNNER_TEMP/passport-beta-runner-preflight.json"
           release_dir="$RUNNER_TEMP/passport-supported-release-$GITHUB_RUN_ID"
           mkdir -p "$release_dir"
           report="passport-supported-consumer-acceptance-$GITHUB_RUN_ID.json"

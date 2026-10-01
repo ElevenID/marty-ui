@@ -337,7 +337,7 @@ def test_infra_workflow_cannot_trigger_provisioning_record_attestor() -> None:
                                        "packages": "read"}
     job = workflow["jobs"]["infra"]
     assert job["if"] == "github.ref == 'refs/heads/main'"
-    assert job["runs-on"] == ["self-hosted", "linux", "x64", "canvas-oss-wsl2"]
+    assert job["runs-on"] == ["self-hosted", "linux", "x64", "passport-beta-wsl2"]
     assert job["environment"] == "beta-lifecycle"
     assert job["steps"][0]["with"]["persist-credentials"] is False
     prepare, rehearse, recover, upload = job["steps"][1:]

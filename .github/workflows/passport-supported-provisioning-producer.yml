@@ -24,7 +24,7 @@ permissions:
 jobs:
   producer:
     if: github.ref == 'refs/heads/main'
-    runs-on: [self-hosted, linux, x64, canvas-oss-wsl2]
+    runs-on: [self-hosted, linux, x64, passport-beta-wsl2]
     environment: beta-lifecycle
     timeout-minutes: 60
     env:
@@ -40,6 +40,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
+          python3 scripts/check_passport_beta_runner.py --output "$RUNNER_TEMP/passport-beta-runner-preflight.json"
           [[ "$PLAN_RUN_ID" =~ ^[1-9][0-9]{0,19}$ ]]
           plan_run="$(gh api "repos/ElevenID/marty-ui/actions/runs/$PLAN_RUN_ID")"
           jq -e --arg sha "$GITHUB_SHA" \
