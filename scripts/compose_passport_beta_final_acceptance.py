@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import os
 import re
@@ -69,8 +70,8 @@ else:
 
 SHA = re.compile(r"[0-9a-f]{40}\Z")
 SLUG = "physical-passport-issuance-evidence"
-DEMO_MANIFEST = "https://elevenidllc.com/demos/manifests/2026.08.0.json"
-DEMO_PAGE = f"https://elevenidllc.com/demos/2026.08.0/{SLUG}"
+DEMO_MANIFEST = "https://beta.elevenidllc.com/demos/manifests/2026.08.0.json"
+DEMO_PAGE = f"https://beta.elevenidllc.com/demos/2026.08.0/{SLUG}"
 EXPECTED_DRAIN = {
     "verified": True,
     "evidence": {
@@ -117,6 +118,11 @@ def public_get(url: str, limit: int) -> bytes:
 def recheck_public_demo(publication: dict[str, Any]) -> str:
     youtube = publication["value"]["youtube"]
     raw = public_get(DEMO_MANIFEST, 8 * 1024 * 1024)
+    require(
+        hashlib.sha256(raw).hexdigest()
+        == publication["value"]["media"]["public_manifest_sha256"],
+        "Public beta D-12 manifest differs from reviewed publication bytes",
+    )
     try:
         manifest = json.loads(raw)
     except ValueError as exc:

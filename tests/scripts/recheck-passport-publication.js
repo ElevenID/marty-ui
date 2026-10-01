@@ -30,7 +30,7 @@ async function main() {
   const browser = await chromium.launch({ headless: true });
   try {
     const page = await browser.newPage();
-    const url = 'https://elevenidllc.com/demos/2026.08.0/physical-passport-issuance-evidence';
+    const url = 'https://beta.elevenidllc.com/demos/2026.08.0/physical-passport-issuance-evidence';
     await page.route('https://www.youtube-nocookie.com/**', (route) => route.fulfill({
       status: 200, contentType: 'text/html', body: '<title>Privacy-enhanced player</title>',
     }));

@@ -1,4 +1,6 @@
 import copy
+import hashlib
+import json
 
 import pytest
 
@@ -199,7 +201,6 @@ def test_final_live_selected_job_must_remain_active_and_commitment_bound(monkeyp
 
 
 def test_final_public_demo_requires_current_manifest_video_and_page(monkeypatch):
-    publication = {"value": {"youtube": {"video_id": "abcdefghijk"}}}
     manifest = {
         "scenarios": [
             {
@@ -210,12 +211,21 @@ def test_final_public_demo_requires_current_manifest_video_and_page(monkeypatch)
             }
         ]
     }
+    raw_manifest = json.dumps(manifest).encode()
+    publication = {
+        "value": {
+            "youtube": {"video_id": "abcdefghijk"},
+            "media": {
+                "public_manifest_sha256": hashlib.sha256(raw_manifest).hexdigest()
+            },
+        }
+    }
     calls = []
 
     def fetch(url, _):
         calls.append(url)
         return (
-            __import__("json").dumps(manifest).encode()
+            raw_manifest
             if url == final.DEMO_MANIFEST
             else b"<html>demo</html>"
         )
@@ -223,6 +233,18 @@ def test_final_public_demo_requires_current_manifest_video_and_page(monkeypatch)
     monkeypatch.setattr(final, "public_get", fetch)
     final.recheck_public_demo(publication)
     assert calls == [final.DEMO_MANIFEST, final.DEMO_PAGE]
+    assert final.DEMO_MANIFEST.startswith("https://beta.elevenidllc.com/")
+    assert final.DEMO_PAGE.startswith("https://beta.elevenidllc.com/")
+    publication["value"]["media"]["public_manifest_sha256"] = "0" * 64
+    with pytest.raises(final.FinalAcceptanceError, match="reviewed publication bytes"):
+        final.recheck_public_demo(publication)
+    publication["value"]["media"]["public_manifest_sha256"] = hashlib.sha256(
+        raw_manifest
+    ).hexdigest()
     manifest["scenarios"][0]["state"] = "DRAFT"
+    raw_manifest = json.dumps(manifest).encode()
+    publication["value"]["media"]["public_manifest_sha256"] = hashlib.sha256(
+        raw_manifest
+    ).hexdigest()
     with pytest.raises(final.FinalAcceptanceError, match="no longer names"):
         final.recheck_public_demo(publication)
