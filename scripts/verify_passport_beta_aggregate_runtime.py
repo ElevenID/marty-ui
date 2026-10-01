@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import hmac
 import json
 from pathlib import Path
@@ -15,18 +16,22 @@ try:
         RUNTIME_ENV, SIGNED_APPLICATIONS, verify_render_plan,
     )
     from .verify_passport_beta_rust_owner import verify as verify_rust_owner
+    from .check_passport_beta_fence_authority import manifest_source, protected_source
     from .probe_passport_beta_host import (
         BETA_PROJECT, HostProbeError, ids, inspect,
-        production_attachment_sha256, production_snapshot, run,
+        production_attachment_sha256, production_public_route,
+        production_snapshot, run,
     )
 except ImportError:
     from prepare_passport_beta_aggregate_compose import (
         RUNTIME_ENV, SIGNED_APPLICATIONS, verify_render_plan,
     )
     from verify_passport_beta_rust_owner import verify as verify_rust_owner
+    from check_passport_beta_fence_authority import manifest_source, protected_source
     from probe_passport_beta_host import (
         BETA_PROJECT, HostProbeError, ids, inspect,
-        production_attachment_sha256, production_snapshot, run,
+        production_attachment_sha256, production_public_route,
+        production_snapshot, run,
     )
 
 
@@ -106,6 +111,103 @@ def runtime_identity(record: dict[str, Any]) -> dict[str, Any]:
             "networks": sorted(networks)}
 
 
+def verify_production_baseline(source: str, snapshot_sha256: str,
+                               attachments_sha256: str,
+                               runner: Callable[[list[str]], str],
+                               docker: dict[str, Any] | None = None) -> dict[str, Any]:
+    require(isinstance(source, str) and SHA.fullmatch(source) is not None
+            and isinstance(snapshot_sha256, str)
+            and SHA256.fullmatch(snapshot_sha256) is not None
+            and isinstance(attachments_sha256, str)
+            and SHA256.fullmatch(attachments_sha256) is not None,
+            "Production continuity baseline is invalid")
+    if docker is not None:
+        require(runner(["docker", "context", "show"]) == docker.get("context")
+                and runner(["docker", "info", "--format", "{{.ID}}"])
+                    == docker.get("daemon_id"),
+                "Aggregate beta Docker context changed")
+    snapshot = production_snapshot(runner)
+    require(snapshot.get("sha256") == snapshot_sha256,
+            "Production changed during aggregate beta deployment")
+    require(production_attachment_sha256(runner) == attachments_sha256,
+            "Production network or host ports changed during aggregate beta deployment")
+    route = production_public_route()
+    return {"schema": "marty.passport-beta-production-continuity/v1",
+            "verified": True, "source_commit": source,
+            "production_snapshot_sha256": snapshot["sha256"],
+            "production_attachments_sha256": attachments_sha256,
+            "public_route": route}
+
+
+def verify_production(plan: dict[str, Any], intent: dict[str, Any],
+                      expected_attachments_sha256: str,
+                      runner: Callable[[list[str]], str] = run) -> dict[str, Any]:
+    """Verify the preserved production generation against the aggregate plan."""
+    require(plan.get("schema") == "marty.passport-beta-aggregate-compose-plan/v1"
+            and intent.get("schema") == "marty.passport-beta-db-maintenance-plan/v1"
+            and plan.get("source_commit") == intent.get("source_commit")
+            and plan.get("production_snapshot_sha256")
+                == intent.get("production_snapshot_sha256")
+            and plan.get("production_attachments_sha256")
+                == intent.get("production_attachments_sha256")
+                == expected_attachments_sha256
+            and isinstance(intent.get("docker"), dict),
+            "Aggregate production continuity inputs are invalid")
+    return verify_production_baseline(
+        plan["source_commit"], plan["production_snapshot_sha256"],
+        expected_attachments_sha256, runner, intent["docker"])
+
+
+def verify_production_maintenance(
+    manifest_path: Path, intent_path: Path, maintenance_path: Path,
+    fence_path: Path, native_path: Path,
+    runner: Callable[[list[str]], str] = run,
+    source_verifier: Callable[[], str] = protected_source,
+    manifest_verifier: Callable[[Path, str], dict[str, Any]] = manifest_source,
+) -> dict[str, Any]:
+    """Use the signed fenced-maintenance chain when a plan is unavailable."""
+    def read(path: Path) -> tuple[dict[str, Any], str]:
+        payload = path.read_bytes()
+        value = json.loads(payload)
+        require(isinstance(value, dict), "Fenced maintenance receipt is invalid")
+        return value, hashlib.sha256(payload).hexdigest()
+
+    head = source_verifier()
+    signed = manifest_verifier(manifest_path, head)
+    manifest_sha256 = hashlib.sha256(manifest_path.read_bytes()).hexdigest()
+    intent, intent_sha256 = read(intent_path)
+    maintenance, maintenance_sha256 = read(maintenance_path)
+    fence, fence_sha256 = read(fence_path)
+    native, _ = read(native_path)
+    require(maintenance.get("schema") == "marty.passport-beta-db-maintenance-start/v1"
+            and fence.get("schema") == "marty.passport-beta-fence-installation/v1"
+            and intent.get("schema") == "marty.passport-beta-db-maintenance-plan/v1"
+            and native.get("schema") == "marty.passport-beta-native-db-gates/v1"
+            and signed.get("signed_manifest_verified") is True
+            and signed.get("source_commit") == head
+            and signed.get("manifest_sha256") == manifest_sha256
+            and maintenance.get("source_commit") == fence.get("source_commit")
+                == intent.get("source_commit") == native.get("source_commit") == head
+            and intent.get("stack_manifest_sha256") == manifest_sha256
+            and isinstance(intent.get("docker"), dict)
+            and intent.get("fence_receipt_sha256") == fence_sha256
+            and maintenance.get("intent_sha256") == intent_sha256
+            and native.get("maintenance_receipt_sha256") == maintenance_sha256
+            and maintenance.get("production_snapshot_sha256")
+                == fence.get("production_snapshot_sha256")
+                == intent.get("production_snapshot_sha256")
+                == native.get("production_snapshot_sha256")
+            and maintenance.get("production_attachments_sha256")
+                == fence.get("production_attachments_sha256")
+                == intent.get("production_attachments_sha256"),
+            "Fenced maintenance production baseline is invalid")
+    return verify_production_baseline(
+        head,
+        maintenance["production_snapshot_sha256"],
+        maintenance["production_attachments_sha256"], runner,
+        intent.get("docker"))
+
+
 def verify(plan: dict[str, Any], intent: dict[str, Any],
            expected_production_attachments_sha256: str,
            runner: Callable[[list[str]], str] = run,
@@ -120,20 +222,7 @@ def verify(plan: dict[str, Any], intent: dict[str, Any],
     render = render_verifier(plan)
     require(render.get("verified") is True,
             "Aggregate beta Compose render changed")
-    docker = intent.get("docker")
-    require(isinstance(docker, dict)
-            and runner(["docker", "context", "show"]) == docker.get("context")
-            and runner(["docker", "info", "--format", "{{.ID}}"]) == docker.get("daemon_id"),
-            "Aggregate beta Docker context changed")
-    require(production_snapshot(runner).get("sha256")
-            == plan.get("production_snapshot_sha256"),
-            "Production changed during aggregate beta deployment")
-    require(SHA256.fullmatch(expected_production_attachments_sha256) is not None
-            and expected_production_attachments_sha256
-                == plan.get("production_attachments_sha256")
-            and production_attachment_sha256(runner)
-                == expected_production_attachments_sha256,
-            "Production network or host ports changed during aggregate beta deployment")
+    verify_production(plan, intent, expected_production_attachments_sha256, runner)
     old = plan.get("old_container_ids_by_service")
     targets = plan.get("target_services")
     require(isinstance(old, dict) and isinstance(targets, list)
@@ -287,17 +376,14 @@ def verify(plan: dict[str, Any], intent: dict[str, Any],
             and re.fullmatch(r"[0-9]+", str(rust_owner.get("transition_txid")))
                 is not None,
             "Aggregate beta Rust owner proof differs from signed plan")
-    require(production_snapshot(runner).get("sha256")
-            == plan.get("production_snapshot_sha256"),
-            "Production changed during aggregate beta verification")
-    require(production_attachment_sha256(runner)
-            == expected_production_attachments_sha256,
-            "Production network or host ports changed during aggregate beta verification")
+    production = verify_production(
+        plan, intent, expected_production_attachments_sha256, runner)
     return {"schema": "marty.passport-beta-aggregate-runtime/v1",
             "verified": True, "source_commit": source,
             "beta_origin": plan["beta_origin"],
             "postgres_container_id": container,
             "production_snapshot_sha256": plan["production_snapshot_sha256"],
+            "production_public_route": production["public_route"],
             "rust_owner": rust_owner,
             "beta_services": sorted(observed), "ui_container_id": ui["Id"],
             "beta_runtime": {name: runtime_identity(observed[name])
@@ -307,22 +393,45 @@ def verify(plan: dict[str, Any], intent: dict[str, Any],
 
 def main() -> None:
     parser = argparse.ArgumentParser()
-    parser.add_argument("--plan", required=True, type=Path)
-    parser.add_argument("--maintenance-intent", required=True, type=Path)
+    parser.add_argument("--plan", type=Path)
+    parser.add_argument("--maintenance-intent", type=Path)
+    parser.add_argument("--maintenance-receipt", type=Path)
+    parser.add_argument("--fence-receipt", type=Path)
+    parser.add_argument("--native-receipt", type=Path)
+    parser.add_argument("--stack-manifest", type=Path)
     parser.add_argument("--production-attachments-sha256")
     parser.add_argument("--capture-production-attachments", action="store_true")
+    parser.add_argument("--production-only", action="store_true")
+    parser.add_argument("--production-maintenance-only", action="store_true")
     args = parser.parse_args()
     try:
         if args.capture_production_attachments:
             print(production_attachment_sha256())
             return
-        require(isinstance(args.production_attachments_sha256, str),
-                "Production attachment baseline is required")
-        plan = json.loads(args.plan.read_text(encoding="utf-8"))
-        intent = json.loads(args.maintenance_intent.read_text(encoding="utf-8"))
-        require(isinstance(plan, dict) and isinstance(intent, dict),
-                "Aggregate beta runtime input is invalid")
-        result = verify(plan, intent, args.production_attachments_sha256)
+        if args.production_maintenance_only:
+            require(args.maintenance_receipt is not None
+                    and args.fence_receipt is not None
+                    and args.native_receipt is not None
+                    and args.stack_manifest is not None
+                    and args.maintenance_intent is not None,
+                    "Signed fenced maintenance chain is required")
+            result = verify_production_maintenance(
+                args.stack_manifest, args.maintenance_intent,
+                args.maintenance_receipt, args.fence_receipt,
+                args.native_receipt)
+        else:
+            require(args.plan is not None and args.maintenance_intent is not None
+                    and isinstance(args.production_attachments_sha256, str),
+                    "Aggregate production baseline is required")
+            plan = json.loads(args.plan.read_text(encoding="utf-8"))
+            intent = json.loads(args.maintenance_intent.read_text(encoding="utf-8"))
+            require(isinstance(plan, dict) and isinstance(intent, dict),
+                    "Aggregate beta runtime input is invalid")
+            if args.production_only:
+                result = verify_production(
+                    plan, intent, args.production_attachments_sha256)
+            else:
+                result = verify(plan, intent, args.production_attachments_sha256)
     except (OSError, RuntimeError, ValueError, KeyError, TypeError) as exc:
         raise SystemExit(f"Protected aggregate beta runtime is unavailable: {exc}") from exc
     print(json.dumps(result, sort_keys=True, separators=(",", ":")))

@@ -91,7 +91,13 @@ The final beta release must come from the source after Python passport deletion.
    Keep the transition, private write, Flow, and aggregate receipts outside protected
    source. Verify the exact Compose render, signed images,
    preserved beta state, KMS custody, and production isolation before accepting
-   the runtime. These loopback calls are pre-ingress ownership gates, not
+   the runtime. The operator also checks the public production root before
+   beta mutation and in the final runtime receipt. If the cutover fails, read
+   the separate `.production-postflight.json` receipt: it compares the
+   production generation and public route against the fenced maintenance
+   receipts even when no aggregate plan was created. Resolve any failed
+   production postflight before resuming the beta cutover. These loopback
+   calls are pre-ingress ownership gates, not
    end-to-end acceptance. After the public edge opens, run the selected
    physical Flow and nine-route passport lifecycle through
    `https://beta.elevenidllc.com`, including the demo recording, and bind

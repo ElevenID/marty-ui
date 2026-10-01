@@ -27,6 +27,7 @@ if ($output.StartsWith($root + [IO.Path]::DirectorySeparatorChar,
     throw 'Aggregate beta receipt must be outside protected source'
 }
 $planPath = $output + '.plan.json'
+$productionPostflightPath = $output + '.production-postflight.json'
 $fenceRecheckPath = $output + '.pretransition-fence.json'
 $credentialsPretransitionPath = $output + '.credentials-pretransition.json'
 $transitionPath = $output + '.transition.json'
@@ -73,6 +74,41 @@ function Invoke-Plan {
         return ($rows[0] | ConvertFrom-Json -ErrorAction Stop)
     }
     finally { $ErrorActionPreference = $previous }
+}
+
+function Assert-ProductionContinuity {
+    param([switch]$MaintenanceOnly)
+    $arguments = @((Join-Path $PSScriptRoot 'verify_passport_beta_aggregate_runtime.py'))
+    if ($MaintenanceOnly) {
+        $arguments += @('--stack-manifest', $StackManifest,
+            '--maintenance-intent', $intentPath,
+            '--maintenance-receipt', $MaintenanceReceipt,
+            '--fence-receipt', $FenceReceipt,
+            '--native-receipt', $NativeReceipt,
+            '--production-maintenance-only')
+    }
+    else {
+        $arguments += @('--plan', $planPath, '--maintenance-intent', $intentPath,
+            '--production-attachments-sha256',
+            [string]$script:plan.production_attachments_sha256,
+            '--production-only')
+    }
+    $proof = Invoke-Plan -Arguments $arguments
+    if ($proof.schema -cne 'marty.passport-beta-production-continuity/v1' -or
+        $proof.verified -ne $true -or
+        $proof.public_route.origin -cne 'https://elevenidllc.com/' -or
+        $proof.public_route.status -ne 200) {
+        throw 'Production continuity or public route is unavailable'
+    }
+    if (-not $MaintenanceOnly -and
+        ($proof.source_commit -cne [string]$script:plan.source_commit -or
+         $proof.production_snapshot_sha256 -cne
+            [string]$script:plan.production_snapshot_sha256 -or
+         $proof.production_attachments_sha256 -cne
+            [string]$script:plan.production_attachments_sha256)) {
+        throw 'Production continuity differs from signed aggregate plan'
+    }
+    return $proof
 }
 
 function Write-DurableJson {
@@ -570,6 +606,7 @@ function Start-OldBetaContainer {
     }
 }
 
+$script:plan = $null
 $lock = Enter-BetaDeploymentLock -AllowPending
 try {
     if (-not (Test-Path -LiteralPath (Get-BetaPassportFenceMarkerPath)) -or
@@ -638,6 +675,7 @@ try {
     if ([string]$script:plan.beta_origin -cne 'https://beta.elevenidllc.com') {
         throw 'Aggregate deployment plan has the wrong public beta origin'
     }
+    $null = Assert-ProductionContinuity
     $applicationProof = Invoke-Plan -Arguments @(
         (Join-Path $PSScriptRoot 'probe_passport_beta_rust_owner_write.py'),
         '--plan', $planPath, '--application-file', $applicationPath,
@@ -1007,6 +1045,7 @@ try {
         legacy_writer_started_at = $script:plan.legacy_writer_started_at
         legacy_writer_generation = $script:plan.legacy_writer_generation
         production_snapshot_sha256 = $runtime.production_snapshot_sha256
+        production_public_route = $runtime.production_public_route
         beta_services = $runtime.beta_services
         beta_runtime = $runtime.beta_runtime
         ui_container_id = $runtime.ui_container_id
@@ -1016,5 +1055,30 @@ try {
     Write-DurableJson -Path $output `
         -Json ($receipt | ConvertTo-Json -Depth 20 -Compress)
     Write-Output $output
+}
+catch {
+    $deploymentFailure = $_
+    $postflight = [ordered]@{
+        schema = 'marty.passport-beta-production-postflight/v1'
+        deployment_failed = $true
+        verified = $false
+        checked_at_utc = [DateTime]::UtcNow.ToString('o')
+    }
+    $postflightFailure = $null
+    try {
+        $proof = Assert-ProductionContinuity -MaintenanceOnly
+        $postflight.verified = $true
+        $postflight.proof = $proof
+    }
+    catch { $postflightFailure = $_ }
+    try {
+        Replace-DurableJson -Path $productionPostflightPath `
+            -Json ($postflight | ConvertTo-Json -Depth 10 -Compress)
+    }
+    catch { if ($null -eq $postflightFailure) { $postflightFailure = $_ } }
+    if ($null -ne $postflightFailure) {
+        Write-Warning "Production postflight failed: $($postflightFailure.Exception.Message)"
+    }
+    throw $deploymentFailure
 }
 finally { Exit-BetaDeploymentLock -Lock $lock }
