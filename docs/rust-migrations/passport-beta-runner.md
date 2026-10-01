@@ -15,8 +15,9 @@ and refuses any leftover passport disposable resource. Docker Desktop WSL
 integration is enabled on the current host, and the host preflight passed
 after production recovered from the Docker Desktop restart.
 
-The wrapper records the IDs, running states, health states, and historical
-exit codes of all 29 production containers before registering. It requires
+The wrapper records the IDs, start times, restart counts, running states,
+health states, and historical exit codes of all 29 production containers
+before registering. It requires
 the same inventory before and after the job. The job repeats that comparison
 before evidence collection. All 24 production runtime containers must be
 present and healthy. The five historical stopped containers are checked by

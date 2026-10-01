@@ -122,7 +122,20 @@ def production_inventory(runner=docker) -> dict[str, dict[str, str]]:
         raise RuntimeError("Required production runtime inventory changed")
     if set(inventory) != REQUIRED_PRODUCTION | HISTORICAL_STOPPED_PRODUCTION:
         raise RuntimeError("Production container inventory changed")
+    ids = {item["ID"] for item in inventory.values()}
+    if len(ids) != len(inventory) or not all(ids):
+        raise RuntimeError("Production container IDs are incomplete")
+    inspect_format = "{{.Id}}|{{.State.StartedAt}}|{{.RestartCount}}"
+    inspected = {}
+    for line in runner("inspect", "--format", inspect_format, *sorted(ids)).splitlines():
+        parts = line.split("|")
+        if len(parts) != 3 or parts[0] in inspected or not parts[1] or not parts[2].isdigit():
+            raise RuntimeError("Production restart inventory is incomplete")
+        inspected[parts[0]] = (parts[1], parts[2])
+    if set(inspected) != ids:
+        raise RuntimeError("Production restart inventory is incomplete")
     for name, item in inventory.items():
+        item["StartedAt"], item["RestartCount"] = inspected[item["ID"]]
         if name in running_names:
             expected_health = ({"", "none"} if name in NO_HEALTHCHECK_PRODUCTION
                                else {"healthy"})

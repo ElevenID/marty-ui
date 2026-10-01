@@ -19,7 +19,8 @@ from check_passport_beta_runner import (  # noqa: E402
 )
 
 
-def fake_docker(all_containers=(), running_containers=(), networks=(), volumes=()):
+def fake_docker(all_containers=(), running_containers=(), networks=(), volumes=(),
+                inspect_states=None):
     inventories = {
         ("ps", "-a"): all_containers,
         ("ps", "-a", "--no-trunc"): all_containers,
@@ -29,6 +30,14 @@ def fake_docker(all_containers=(), running_containers=(), networks=(), volumes=(
     }
 
     def run(*args):
+        if args[0] == "inspect":
+            assert args[1:3] == (
+                "--format", "{{.Id}}|{{.State.StartedAt}}|{{.RestartCount}}")
+            states = inspect_states or {}
+            return "\n".join(
+                f"{container_id}|{states.get(container_id, ('2026-09-01T00:00:00Z', '0'))[0]}"
+                f"|{states.get(container_id, ('2026-09-01T00:00:00Z', '0'))[1]}"
+                for container_id in args[3:])
         assert args[-2:] == ("--format", "{{json .}}")
         return "\n".join(json.dumps(item) for item in inventories[args[:-2]])
 
@@ -112,6 +121,12 @@ def test_production_baseline_rejects_replacement_and_health_change(tmp_path):
     changed["marty-selfhost-prod-auth-1"]["ID"] = "replacement-id"
     with pytest.raises(RuntimeError, match="identity or state changed"):
         check_production_baseline(changed, baseline)
+    restarted = production_inventory(fake_docker(
+        production_containers(), inspect_states={
+            "marty-selfhost-prod-auth-1-id": ("2026-10-01T00:00:00Z", "1"),
+        }))
+    with pytest.raises(RuntimeError, match="identity or state changed"):
+        check_production_baseline(restarted, baseline)
 
 
 def test_passport_jobs_have_dedicated_label_and_in_job_preflight():
