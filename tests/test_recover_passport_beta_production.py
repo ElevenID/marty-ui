@@ -3,6 +3,11 @@
 from __future__ import annotations
 
 import json
+import hashlib
+from pathlib import Path
+import sys
+
+import pytest
 
 from scripts import recover_passport_beta_production as recovery
 from scripts.probe_passport_beta_host import HostProbeError
@@ -170,3 +175,72 @@ def test_lost_docker_start_reply_is_still_a_continuity_breach() -> None:
     assert result["continuity_breached"] is True
     assert result["restart_attempted_container_ids"] == ["a" * 64]
     assert docker.started == ["a" * 64]
+
+
+def test_restore_rejects_mutated_baseline_before_docker_access(tmp_path: Path) -> None:
+    docker, baseline = captured()
+    path = tmp_path / "private-baseline.json"
+    expected_sha256 = recovery.write_private(path, baseline)
+    assert expected_sha256 == hashlib.sha256(path.read_bytes()).hexdigest()
+    altered = json.loads(path.read_text(encoding="utf-8"))
+    next(item for item in altered["containers"] if item["id"] == "e" * 64)[
+        "was_running"] = True
+    path.write_text(json.dumps(altered), encoding="utf-8")
+
+    def no_docker(_command: list[str]) -> str:
+        raise AssertionError("Docker was called before baseline hash verification")
+
+    result = recovery.restore_from_path(path, expected_sha256, no_docker, public_ok)
+    assert result["verified"] is False
+    assert result["reason_code"] == "baseline_sha256_mismatch"
+    assert docker.started == []
+
+
+@pytest.mark.parametrize("drift", ["added", "changed"])
+def test_prestart_full_inventory_recheck_blocks_other_container_drift(drift: str) -> None:
+    docker, baseline = captured()
+    docker.records["a" * 64]["State"].update(Running=False, Status="exited")
+    prod_lists = 0
+    postgres_inspects = 0
+
+    def concurrent_change(command: list[str]) -> str:
+        nonlocal prod_lists, postgres_inspects
+        if command[:2] == ["docker", "ps"] and any(
+            "com.docker.compose.project=marty-selfhost-prod" in part
+            for part in command
+        ):
+            prod_lists += 1
+            if drift == "added" and prod_lists == 2:
+                added = container("f", "marty-selfhost-prod", "unexpected", running=False)
+                docker.records[added["Id"]] = added
+        if command[:2] == ["docker", "inspect"] and command[2] == "b" * 12:
+            postgres_inspects += 1
+            if drift == "changed" and postgres_inspects == 2:
+                docker.records["b" * 64]["Image"] = "sha256:" + "9" * 64
+        return docker(command)
+
+    result = recovery.recover(baseline, concurrent_change, public_ok, timeout_seconds=0)
+    assert result["verified"] is False
+    assert result["reason_code"] == "production_identity_changed_before_start"
+    assert docker.started == []
+
+
+def test_capture_cli_prints_only_small_hash_envelope(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str],
+) -> None:
+    _docker, baseline = captured()
+    path = tmp_path / "private-baseline.json"
+    monkeypatch.setattr(recovery, "capture", lambda: baseline)
+    monkeypatch.setattr(sys, "argv", ["capture", "--capture", "--output", str(path)])
+    recovery.main()
+    envelope = json.loads(capsys.readouterr().out)
+    assert envelope == {
+        "schema": recovery.CAPTURE_SCHEMA,
+        "baseline_sha256": hashlib.sha256(path.read_bytes()).hexdigest(),
+        "snapshot_sha256": baseline["snapshot_sha256"],
+        "attachments_sha256": baseline["attachments_sha256"],
+        "docker": baseline["docker"],
+        "captured_at_utc": baseline["captured_at_utc"],
+    }
+    assert "containers" not in envelope
+    assert len(json.loads(path.read_text(encoding="utf-8"))["containers"]) == 5

@@ -32,6 +32,7 @@ except ImportError:
 
 
 SCHEMA = "marty.passport-beta-production-recovery-baseline/v1"
+CAPTURE_SCHEMA = "marty.passport-beta-production-recovery-capture/v1"
 RESULT_SCHEMA = "marty.passport-beta-production-recovery/v1"
 CONTAINER = re.compile(r"[0-9a-f]{64}\Z")
 IMAGE = re.compile(r"sha256:[0-9a-f]{64}\Z")
@@ -208,8 +209,20 @@ def recover(
                         "historical_production_container_started")
         for before, current in zip(expected, observed):
             if before["was_running"] and not current["was_running"]:
-                # Recheck immediately before mutation; a concurrent change fails closed.
-                fresh = container_identity(inspect(before["id"], runner), before["project"])
+                # Recheck every production member immediately before mutation.
+                # A change to another container must not be hidden by a valid
+                # candidate container identity.
+                fresh_inventory = production_inventory_unchecked(runner)
+                require([item["id"] for item in fresh_inventory]
+                        == [item["id"] for item in expected]
+                        and all(same_container(prior, fresh)
+                                for prior, fresh in zip(expected, fresh_inventory))
+                        and all(not fresh["was_running"]
+                                for prior, fresh in zip(expected, fresh_inventory)
+                                if not prior["was_running"]),
+                        "production_identity_changed_before_start")
+                fresh = next(item for item in fresh_inventory
+                             if item["id"] == before["id"])
                 require(fresh == current and docker_identity(runner) == baseline["docker"],
                         "production_identity_changed_before_start")
                 # A lost docker response can hide a successful start. Record the
@@ -274,21 +287,33 @@ def production_inventory_unchecked(
     return inventory
 
 
-def write_private(path: Path, value: dict[str, Any]) -> None:
+def write_private(path: Path, value: dict[str, Any]) -> str:
+    payload = (json.dumps(value, sort_keys=True, indent=2) + "\n").encode()
     flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL
     descriptor = os.open(path, flags, 0o600)
-    with os.fdopen(descriptor, "w", encoding="utf-8") as output:
-        json.dump(value, output, sort_keys=True, indent=2)
-        output.write("\n")
+    with os.fdopen(descriptor, "wb") as output:
+        output.write(payload)
         output.flush()
         os.fsync(output.fileno())
+    return hashlib.sha256(payload).hexdigest()
 
 
-def restore_from_path(path: Path) -> dict[str, Any]:
+def restore_from_path(
+    path: Path,
+    expected_sha256: str,
+    runner: Callable[[list[str]], str] = run,
+    public_probe: Callable[[], dict[str, Any]] = production_public_route,
+) -> dict[str, Any]:
     try:
+        if not isinstance(expected_sha256, str) or re.fullmatch(
+                r"[0-9a-f]{64}", expected_sha256) is None:
+            raise RecoveryError("baseline_sha256_invalid")
         if not path.is_absolute() or not path.is_file():
             raise RecoveryError("baseline_path_invalid")
-        value = json.loads(path.read_text(encoding="utf-8"))
+        payload = path.read_bytes()
+        if hashlib.sha256(payload).hexdigest() != expected_sha256:
+            raise RecoveryError("baseline_sha256_mismatch")
+        value = json.loads(payload)
         if not isinstance(value, dict):
             raise RecoveryError("baseline_invalid")
     except (OSError, ValueError) as exc:
@@ -297,7 +322,7 @@ def restore_from_path(path: Path) -> dict[str, Any]:
                 "continuity_breached": False, "restarted_container_ids": [],
                 "status": "blocked", "reason_code": reason,
                 "checked_at_utc": datetime.now(timezone.utc).isoformat()}
-    return recover(value)
+    return recover(value, runner, public_probe)
 
 
 def main() -> None:
@@ -306,18 +331,25 @@ def main() -> None:
     group.add_argument("--capture", action="store_true")
     group.add_argument("--restore", action="store_true")
     parser.add_argument("--baseline", type=Path)
+    parser.add_argument("--expected-sha256")
     parser.add_argument("--output", type=Path)
     args = parser.parse_args()
     if args.capture:
         require(args.output is not None and args.output.is_absolute()
-                and args.output.parent.is_dir() and args.baseline is None,
+                and args.output.parent.is_dir() and args.baseline is None
+                and args.expected_sha256 is None,
                 "output_path_invalid")
-        value = capture()
-        write_private(args.output, value)
+        baseline = capture()
+        sha256 = write_private(args.output, baseline)
+        value = {"schema": CAPTURE_SCHEMA, "baseline_sha256": sha256,
+                 "snapshot_sha256": baseline["snapshot_sha256"],
+                 "attachments_sha256": baseline["attachments_sha256"],
+                 "docker": baseline["docker"],
+                 "captured_at_utc": baseline["captured_at_utc"]}
     else:
         require(args.output is None and args.baseline is not None,
                 "baseline_path_invalid")
-        value = restore_from_path(args.baseline)
+        value = restore_from_path(args.baseline, args.expected_sha256)
     print(json.dumps(value, sort_keys=True))
     if args.restore and not value["verified"]:
         raise SystemExit(1)
