@@ -97,6 +97,25 @@ def require_node24() -> None:
             "Node.js 24 or later is required by the pinned recorder")
 
 
+def require_browser(recorder_root: Path, repo_root: Path) -> None:
+    probe = (
+        "const {chromium}=require('@playwright/test');"
+        "chromium.launch({headless:true})"
+        ".then(browser=>browser.close())"
+        ".catch(error=>{console.error(error.message);process.exitCode=1});"
+    )
+    try:
+        subprocess.run(
+            ["node", "-e", probe], cwd=repo_root,
+            env=publication_environment(recorder_root),
+            check=True, capture_output=True, text=True, timeout=30,
+        )
+    except (OSError, subprocess.SubprocessError) as exc:
+        raise PublicationEvidenceError(
+            "Pinned Chromium or its WSL dependencies are unavailable"
+        ) from exc
+
+
 def require_signed_ui_source(artifact_dir: Path, repo_root: Path) -> None:
     api_key = os.environ.get("PASSPORT_ACCEPTANCE_API_KEY", "")
     require(artifact_dir.is_absolute() and artifact_dir.is_dir()
@@ -140,6 +159,7 @@ def publish(artifact_dir: Path, config: Path, video: Path, recorder_root: Path,
             and (recorder_root / "node_modules" / "@playwright" / "test").is_dir(),
             "WSL publication tools or locked browser are unavailable")
     require_node24()
+    require_browser(recorder_root, repo_root)
     require_oauth_files()
     try:
         head = subprocess.run(

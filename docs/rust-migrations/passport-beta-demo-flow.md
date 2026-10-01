@@ -144,6 +144,12 @@ The recorder requires Node.js 24 or later. The current WSL runner has a
 checksum-verified Node.js 24.21.0 under
 `$HOME/.local/opt/node-v24.21.0`; before invoking the launcher, select it with
 `export PATH="$HOME/.local/opt/node-v24.21.0/bin:$PATH"` and check `node --version`.
+The pinned recorder checkout must have `npm ci` and its matching Playwright
+Chromium installed, including browser system dependencies. The current WSL
+runner has the reviewed recorder commit `022c8238c64972cf48873a8f4efcf73ae7329577`
+at `$HOME/passport-demo-recorder-022c8238`; its seven publication evidence
+tests and a headless Chromium launch pass. The launcher repeats the browser
+launch preflight before publication.
 It sets `WSLENV` for the manifest path and video ID, `NODE_PATH` to the recorder's locked
 Playwright package, and `BETA_ORIGIN=https://beta.elevenidllc.com` before
 calling the publisher. It allows 75 minutes for YouTube publication and the

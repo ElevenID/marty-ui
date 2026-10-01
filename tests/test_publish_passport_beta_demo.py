@@ -25,6 +25,7 @@ def test_reviewed_publisher_uses_beta_environment_and_checks_production(
     monkeypatch.setattr(publisher, "require_beta_deploy_config", lambda _: None)
     monkeypatch.setattr(publisher, "require_signed_ui_source", lambda *_: None)
     monkeypatch.setattr(publisher, "require_node24", lambda: None)
+    monkeypatch.setattr(publisher, "require_browser", lambda *_: None)
     monkeypatch.setattr(publisher, "require_oauth_files", lambda: None)
     monkeypatch.setattr(publisher.shutil, "which", lambda _: "/usr/bin/tool")
     monkeypatch.setenv("WSLENV", "OTHER/u")
@@ -123,3 +124,29 @@ def test_publisher_requires_node_24(monkeypatch):
         lambda command, **_: subprocess.CompletedProcess(command, 0, "v24.21.0\n", ""),
     )
     publisher.require_node24()
+
+
+def test_publisher_probes_browser_before_publication(tmp_path, monkeypatch):
+    recorder = tmp_path / "recorder"
+    (recorder / "node_modules" / "@playwright" / "test").mkdir(parents=True)
+    observed = []
+
+    def run(command, **options):
+        observed.append((command, options))
+        return subprocess.CompletedProcess(command, 0, "", "")
+
+    monkeypatch.setattr(publisher.subprocess, "run", run)
+    publisher.require_browser(recorder, tmp_path)
+    command, options = observed[0]
+    assert command[:2] == ["node", "-e"]
+    assert "chromium.launch" in command[2]
+    assert options["cwd"] == tmp_path
+    assert options["env"]["NODE_PATH"] == str(recorder / "node_modules")
+    assert options["timeout"] == 30
+
+    def missing(command, **options):
+        raise subprocess.CalledProcessError(1, command)
+
+    monkeypatch.setattr(publisher.subprocess, "run", missing)
+    with pytest.raises(publisher.PublicationEvidenceError, match="Chromium"):
+        publisher.require_browser(recorder, tmp_path)
