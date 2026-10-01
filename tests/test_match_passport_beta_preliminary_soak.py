@@ -4,7 +4,7 @@ from datetime import datetime, timedelta, timezone
 import pytest
 
 from scripts.match_passport_beta_preliminary_soak import (
-    LineageError, match_preliminary_soak,
+    LineageError, authenticate_preliminary_soak_lineage, match_preliminary_soak,
 )
 
 
@@ -141,3 +141,29 @@ def test_rejects_preliminary_from_a_different_protected_source():
     altered["workflow_commit"] = "9" * 40
     with pytest.raises(LineageError, match="artifact identity"):
         match_preliminary_soak(live(), altered, soak())
+
+
+def test_authenticates_live_aggregate_and_protected_runs_before_join(tmp_path):
+    (tmp_path / "aggregate-deployment.json").write_text("{}")
+    calls = []
+
+    def collect_live(path, *, api_key, attest):
+        calls.append(("live", path, api_key, callable(attest)))
+        return live()
+
+    def read(kind, run_id):
+        calls.append((kind, run_id))
+        return preliminary()
+
+    def verify_soak(run_ids, *, as_of, reader):
+        calls.append(("soak", run_ids, as_of, reader is read))
+        return soak()
+
+    result = authenticate_preliminary_soak_lineage(
+        tmp_path, "k" * 40, 111, [222, 223, 224],
+        as_of=START + timedelta(hours=26),
+        collector=collect_live, reader=read, soak_verifier=verify_soak,
+    )
+    assert result["preliminary_run_id"] == 111
+    assert [item[0] for item in calls] == ["live", "preliminary", "soak"]
+    assert calls[2][-1] is True

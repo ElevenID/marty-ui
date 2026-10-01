@@ -10,7 +10,19 @@ from __future__ import annotations
 
 import re
 from datetime import datetime, timedelta
-from typing import Any
+from pathlib import Path
+from typing import Any, Callable
+
+if __package__:
+    from .collect_passport_beta_acceptance import verify_attestations
+    from .collect_passport_beta_aggregate_acceptance import collect_aggregate
+    from .read_protected_passport_artifact import read_artifact
+    from .verify_protected_passport_soak import verify_protected
+else:
+    from collect_passport_beta_acceptance import verify_attestations
+    from collect_passport_beta_aggregate_acceptance import collect_aggregate
+    from read_protected_passport_artifact import read_artifact
+    from verify_protected_passport_soak import verify_protected
 
 
 SHA256 = re.compile(r"[0-9a-f]{64}\Z")
@@ -172,3 +184,32 @@ def match_preliminary_soak(
         "soak_first_observed_at_utc": first.isoformat(),
         "soak_last_observed_at_utc": last.isoformat(),
     }
+
+
+def authenticate_preliminary_soak_lineage(
+    artifact_dir: Path,
+    api_key: str,
+    preliminary_run_id: int,
+    soak_run_ids: list[int],
+    *,
+    as_of: datetime,
+    collector: Callable[..., dict[str, Any]] = collect_aggregate,
+    reader: Callable[[str, int], dict[str, Any]] = read_artifact,
+    soak_verifier: Callable[..., dict[str, Any]] = verify_protected,
+) -> dict[str, Any]:
+    """Read the live aggregate and protected GitHub evidence before joining."""
+    require(isinstance(artifact_dir, Path)
+            and (artifact_dir / "aggregate-deployment.json").is_file(),
+            "Exact aggregate beta deployment is unavailable")
+    require(isinstance(api_key, str) and len(api_key) >= 32,
+            "Passport beta API key is unavailable")
+    require(type(preliminary_run_id) is int and preliminary_run_id > 0,
+            "Protected preliminary run ID is invalid")
+    require(isinstance(soak_run_ids, list)
+            and len(soak_run_ids) >= 3 and all(type(run) is int and run > 0
+            for run in soak_run_ids) and len(set(soak_run_ids)) == len(soak_run_ids),
+            "Protected soak run IDs are incomplete or repeated")
+    live = collector(artifact_dir, api_key=api_key, attest=verify_attestations)
+    preliminary = reader("preliminary", preliminary_run_id)
+    soak = soak_verifier(soak_run_ids, as_of=as_of, reader=reader)
+    return match_preliminary_soak(live, preliminary, soak)
