@@ -36,6 +36,7 @@ def reader(kind, run_id, *, late=False):
             "beta_passport_drain": True,
             "production_containers_unchanged": True,
             "production_attachments_unchanged": True,
+            "production_public_site_reachable": True,
             "simulator_container_id": "1" * 64,
             "simulator_oci_digest": "sha256:" + "2" * 64,
             "selected_source_job_commitment": "3" * 64,

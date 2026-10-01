@@ -41,7 +41,8 @@ def report():
 
 
 def collect(tmp_path, *, source=None, attachment=ATTACHMENTS, routes=True,
-            drained=True, job_status="ACTIVE", bureau_job="test-bureau"):
+            drained=True, job_status="ACTIVE", bureau_job="test-bureau",
+            public_site=True):
     (tmp_path / "aggregate-deployment.json").write_text("{}")
     selected = {"schema": "marty.passport-beta-demo-private/v1",
                 "source_commit": "c" * 40,
@@ -54,6 +55,7 @@ def collect(tmp_path, *, source=None, attachment=ATTACHMENTS, routes=True,
         collector=lambda *_args, **_kwargs: source or report(),
         snapshot=lambda: {"sha256": SNAPSHOT},
         attachments=lambda: attachment,
+        public_site=lambda: public_site,
         native_routes=lambda *_args: {"verified": routes},
         status_request=lambda *_args: (200, {
             "id": "test-job", "application_id": "test-app",
@@ -72,6 +74,7 @@ def test_sample_binds_live_runtime_drain_and_production_baseline(tmp_path):
     assert result["status"] == "observed"
     assert result["release"]["source_commit"] == "c" * 40
     assert result["checks"]["production_attachments_unchanged"] is True
+    assert result["checks"]["production_public_site_reachable"] is True
     assert result["checks"]["native_gateway_flow_and_callback_route"] is True
     assert result["checks"]["selected_passport_job_active"] is True
     assert result["physical_claim"] == "not_claimed"
@@ -80,6 +83,11 @@ def test_sample_binds_live_runtime_drain_and_production_baseline(tmp_path):
 def test_sample_fails_on_changed_production_attachment(tmp_path):
     with pytest.raises(EvidenceError, match="Production differs"):
         collect(tmp_path, attachment="9" * 64)
+
+
+def test_sample_fails_if_production_public_site_is_unavailable(tmp_path):
+    with pytest.raises(EvidenceError, match="Production public site"):
+        collect(tmp_path, public_site=False)
 
 
 def test_sample_fails_on_missing_native_route_or_nonzero_drain(tmp_path):

@@ -26,7 +26,7 @@ REQUIRED_CHECKS = (
     "signed_live_runtime", "managed_issuer_capability",
     "native_gateway_flow_and_callback_route", "selected_passport_job_active",
     "beta_passport_drain", "production_containers_unchanged",
-    "production_attachments_unchanged",
+    "production_attachments_unchanged", "production_public_site_reachable",
 )
 
 

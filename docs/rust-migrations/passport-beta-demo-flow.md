@@ -132,8 +132,8 @@ the protected `passport-beta-soak-sample.yml` workflow takes read-only samples
 from the signed deployment artifact directory and the private mode-0600 selected
 job handoff. Each sample rechecks the live signed Rust service inventory,
 managed issuer capability, native route ownership, the same active source and
-bureau job, zero beta passport drain, and production container and network/port
-baselines. Run at least three separate protected samples across 24 hours with
+bureau job, zero beta passport drain, production container and network/port
+baselines, and an HTTP 200 from the public production site. Run at least three separate protected samples across 24 hours with
 no gap over 13 hours. `verify_passport_beta_soak_window.py` checks that window
 and emits `window_observed` with `provenance_pending=true`. The final compositor
 must call `verify_protected_passport_soak.py`, which downloads each artifact

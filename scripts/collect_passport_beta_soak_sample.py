@@ -16,6 +16,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable
 from urllib.parse import quote
+from urllib.request import Request, urlopen
 
 if __package__:
     from .collect_passport_beta_acceptance import (
@@ -39,6 +40,22 @@ else:
     )
     from probe_passport_beta_gateway import request_beta
     from probe_passport_beta_batch import _identity_commit
+
+
+PRODUCTION_ORIGIN = "https://elevenidllc.com/"
+
+
+def production_public_site() -> bool:
+    """Require the production entry point to remain publicly available."""
+    try:
+        request = Request(PRODUCTION_ORIGIN, headers={
+            "Accept": "text/html", "Cache-Control": "no-cache",
+            "User-Agent": "Mozilla/5.0",
+        })
+        with urlopen(request, timeout=15) as response:
+            return response.status == 200 and response.geturl() == PRODUCTION_ORIGIN
+    except OSError:
+        return False
 
 
 def read_private_handoff(path: Path, artifact_dir: Path) -> dict[str, str]:
@@ -91,6 +108,7 @@ def sample(
     attestor: Callable[..., bool] = verify_attestations,
     snapshot: Callable[[], dict[str, Any]] = production_snapshot,
     attachments: Callable[[], str] = production_attachment_sha256,
+    public_site: Callable[[], bool] = production_public_site,
     drain: Callable[[], dict[str, Any]] = beta_legacy_drain,
     native_routes: Callable[..., dict[str, Any]] = beta_native_route_ownership,
     status_request: Callable[..., tuple[int, dict[str, Any]]] = request_beta,
@@ -138,6 +156,8 @@ def sample(
                 observed_attachments)
                 == deployment.get("production_attachment_commitment"),
             "Production differs from the aggregate deployment baseline")
+    require(public_site() is True,
+            "Production public site is unavailable during passport beta soak")
     route_result = native_routes(runtime)
     drain_result = drain()
     require(route_result.get("verified") is True
@@ -208,6 +228,7 @@ def sample(
             "beta_passport_drain": True,
             "production_containers_unchanged": True,
             "production_attachments_unchanged": True,
+            "production_public_site_reachable": True,
             "simulator_container_id": bureau["container_id"],
             "simulator_oci_digest": bureau["oci_digest"],
         },
