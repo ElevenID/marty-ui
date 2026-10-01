@@ -94,7 +94,7 @@ jobs:
         uses: anchore/sbom-action@3ad7283483fc7af8ff2b4ea19663c2d5ca935e26
         with:
           image: oci-archive:${{ runner.temp }}/verification-candidate/marty-ui-services.oci.tar
-          format: cyclonedx-json
+          format: cyclonedx-json@1.6
           output-file: ${{ runner.temp }}/verification-candidate/raw-sbom.cdx.json
           upload-artifact: false
           upload-release-assets: false

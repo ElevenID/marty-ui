@@ -616,6 +616,23 @@ def test_stack_release_is_claim_only_digest_first_and_publishes_last() -> None:
     )
 
 
+def test_verifier_scans_request_the_frozen_cyclonedx_schema() -> None:
+    release = yaml.safe_load(_text(".github/workflows/cd.yml"))
+    candidate = yaml.safe_load(_text(".github/workflows/verification-candidate-build.yml"))
+
+    for job in (release["jobs"]["verifier-differential"], candidate["jobs"]["build"]):
+        scans = [step for step in job["steps"] if str(step.get("uses", "")).startswith("anchore/sbom-action@")]
+        assert len(scans) == 1
+        assert scans[0]["with"]["format"] == "cyclonedx-json@1.6"
+
+    verifier = next(
+        step for step in release["jobs"]["verifier-differential"]["steps"]
+        if step.get("name") == "Verify and exercise the exact services digest against the immutable oracle"
+    )
+    assert "create-transaction-pin" in verifier["run"]
+    assert "validate-sbom" in verifier["run"]
+
+
 def test_stack_release_actions_are_pinned_by_full_commit_sha() -> None:
     workflow = _text(".github/workflows/cd.yml")
     uses_lines = [line for line in workflow.splitlines() if "uses:" in line]
