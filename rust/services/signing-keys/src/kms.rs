@@ -148,16 +148,7 @@ pub async fn sign(request: SignRequest) -> Result<SignResponse, KmsError> {
     let payload = decode_urlsafe(&request.payload_b64, "payload_b64")?;
     let algorithm = string(&request.service_config, "algorithm").unwrap_or("ES256");
     let signature = match provider {
-        Provider::OpenBao => match sign_openbao(&request.service_config, &payload).await {
-            Err(KmsError::ProviderStatus { status, .. })
-                if status == StatusCode::NOT_FOUND
-                    && string(&request.service_config, "id") == Some("managed-openbao-transit") =>
-            {
-                create_managed_openbao_key(&request.service_config).await?;
-                sign_openbao(&request.service_config, &payload).await?
-            }
-            result => result?,
-        },
+        Provider::OpenBao => sign_openbao(&request.service_config, &payload).await?,
         Provider::Aws => sign_aws(&request.service_config, &payload).await?,
         Provider::Azure => sign_azure(&request.service_config, &payload).await?,
         Provider::Gcp => sign_gcp(&request.service_config, &payload).await?,
@@ -179,21 +170,9 @@ pub async fn sign(request: SignRequest) -> Result<SignResponse, KmsError> {
 }
 
 pub async fn public_key(request: ProviderRequest) -> Result<Value, KmsError> {
-    let managed_openbao = Provider::from_config(&request.service_config)? == Provider::OpenBao
-        && string(&request.service_config, "id") == Some("managed-openbao-transit");
-    match public_key_existing(ProviderRequest {
-        service_config: request.service_config.clone(),
-    })
-    .await
-    {
-        Err(KmsError::ProviderStatus { status, .. })
-            if managed_openbao && status == StatusCode::NOT_FOUND =>
-        {
-            create_managed_openbao_key(&request.service_config).await?;
-            public_key_existing(request).await
-        }
-        result => result,
-    }
+    // Runtime reads must never replace a missing managed key under an old
+    // reference. Provisioning is an explicit issuer-profile operation.
+    public_key_existing(request).await
 }
 
 /// Read existing public key material without provisioning a missing managed key.

@@ -1293,17 +1293,63 @@ async fn create_public_signing_key(
     };
     service["key_reference"] = json!(key_reference);
     service["algorithm"] = json!(algorithm);
-    let created = match kms::create_managed_openbao(ProviderRequest {
-        service_config: service,
+    let created = match kms::read_managed_openbao(ProviderRequest {
+        service_config: service.clone(),
     })
     .await
     {
-        Ok(created) => created,
-        Err(_) => {
-            return public_error(
-                StatusCode::SERVICE_UNAVAILABLE,
-                "Managed KMS key creation failed.",
-            )
+        Ok(existing) => existing,
+        Err(error) => {
+            let missing = match kms::missing_managed_openbao_key(&service, &error).await {
+                Ok(missing) => missing,
+                Err(_) => {
+                    return public_error(
+                        StatusCode::SERVICE_UNAVAILABLE,
+                        "Managed KMS key inventory is unavailable.",
+                    )
+                }
+            };
+            if !missing {
+                return public_error(
+                    StatusCode::SERVICE_UNAVAILABLE,
+                    "Managed KMS key inventory is unavailable.",
+                );
+            }
+            let Some(profile_store) = state.profile_store.as_ref() else {
+                return public_error(
+                    StatusCode::SERVICE_UNAVAILABLE,
+                    "Issuer profile storage is unavailable.",
+                );
+            };
+            let profile_document = match profile_store.list(&scope.organization_id).await {
+                Ok(document) => document,
+                Err(_) => {
+                    return public_error(
+                        StatusCode::SERVICE_UNAVAILABLE,
+                        "Issuer profile storage is unavailable.",
+                    )
+                }
+            };
+            if profiles::managed_reference_has_history(&registry, &profile_document, &key_reference)
+            {
+                return public_error(
+                    StatusCode::CONFLICT,
+                    "Previously bound managed KMS key is unavailable; restore its original material or use a distinct key name.",
+                );
+            }
+            match kms::create_managed_openbao(ProviderRequest {
+                service_config: service,
+            })
+            .await
+            {
+                Ok(created) => created,
+                Err(_) => {
+                    return public_error(
+                        StatusCode::SERVICE_UNAVAILABLE,
+                        "Managed KMS key creation failed.",
+                    )
+                }
+            }
         }
     };
     let Some(public_jwk) = created.get("public_jwk") else {
