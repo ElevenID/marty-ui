@@ -3,8 +3,9 @@
 Source-readiness audit: Signing Keys #913 and the passport aggregate #919 are
 on protected main. The reviewed aggregate correction and deployment writer fence
 must also be on protected main before a release claim. The
-[1.1.218 coordinate](passport-predeletion-release-1.1.218.md) is for
-reviewed Rust pre-deletion qualification; eligibility alone is not a claim or
+[1.1.218 coordinate](passport-predeletion-release-1.1.218.md) was tombstoned
+after qualification failed. The [1.1.219 coordinate](passport-predeletion-release-1.1.219.md)
+is for reviewed Rust pre-deletion qualification; eligibility alone is not a claim or
 deployment. Historical beta 1.1.217 evidence cannot qualify the new source.
 The final beta release must come from the source after Python passport deletion.
 
@@ -38,8 +39,8 @@ The final beta release must come from the source after Python passport deletion.
    changes. Resolve remaining source-qualification and consumer-acceptance gates
    before claiming whole-goal completion. Keep DIDComm KMS redesign separately
    deferred.
-2. Review the 1.1.218 eligibility change only after the Rust source and
-   component pins are on protected main. Then use
+2. Review the 1.1.219 eligibility change only after the Rust source, release-gate
+   repairs, Rust build audit, and component pins are on protected main. Then use
    `.github/workflows/prepare-stack-tag.yml` and `cd.yml` to claim and publish
    the immutable **pre-deletion qualification** release. Retain the source,
    claim/transaction and run identities. Verify annotated tag/source, complete
@@ -47,10 +48,12 @@ The final beta release must come from the source after Python passport deletion.
    listed in the signed aggregate manifest, including credentials issuance,
    UI, services and migrations. This release is for protected disposable
    runtime proof; do not deploy it to beta or reuse earlier acceptance evidence.
-3. Pass the reviewed base Compose, selfhost Compose, and independent Kubernetes
-   Rust passport proofs, KMS chain and certificate gates, signed callback,
-   two-job batch, and job restart/resume in the protected disposable
-   environments. Separately install and attest a durable passport-scoped
+3. Pass the source-bound protected disposable Rust passport acceptance with
+   six owned service images, all nine routes, tenant isolation, the managed
+   KMS CSCA/DSC chain and SOD signing, a two-job Marty simulator batch,
+   signed callbacks, and Rust job restart/resume. The separate base Compose,
+   selfhost Compose, and Kubernetes live consumer fixture is optional later
+   work in #944. Separately install and attest a durable passport-scoped
    write fence on real beta, then inventory the shared Python issuance service,
    attest the live cutover drain, and preserve or resolve every job and artifact.
    The service also owns unrelated routes and must remain available; its
