@@ -1,8 +1,9 @@
 # Passport Rust qualification coordinate: 1.1.219
 
 The stack lock selects `marty-ui@1.1.219` with `release_state=eligible` only
-after the reviewed aggregate, the pre-promotion guard, and the two release-gate
-repairs reach protected main. The [1.1.218 claim](passport-predeletion-release-1.1.218.md)
+after the reviewed aggregate, the pre-promotion guard, the two release-gate
+repairs, and Rust build audit #1022 reach protected main.
+The [1.1.218 claim](passport-predeletion-release-1.1.218.md)
 was tombstoned after qualification failed and cannot be reused. This
 eligibility is not a release claim or beta deployment. The prior 1.1.217 release
 predates the reviewed passport aggregate and cannot supply the exact Rust images

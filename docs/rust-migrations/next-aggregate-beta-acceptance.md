@@ -40,7 +40,7 @@ The final beta release must come from the source after Python passport deletion.
    before claiming whole-goal completion. Keep DIDComm KMS redesign separately
    deferred.
 2. Review the 1.1.219 eligibility change only after the Rust source, release-gate
-   repairs, and component pins are on protected main. Then use
+   repairs, Rust build audit, and component pins are on protected main. Then use
    `.github/workflows/prepare-stack-tag.yml` and `cd.yml` to claim and publish
    the immutable **pre-deletion qualification** release. Retain the source,
    claim/transaction and run identities. Verify annotated tag/source, complete
