@@ -73,7 +73,16 @@ aggregate release completes the same gates.
 
 ## Official release deployment on the beta host
 
-Use the official-stack mode for a release produced by `.github/workflows/cd.yml`.
+For the post-deletion Rust passport aggregate, follow the
+[passport aggregate acceptance checklist](rust-migrations/next-aggregate-beta-acceptance.md)
+and use `scripts/run-passport-beta-aggregate-deploy.ps1` with the final signed
+manifest and protected fence, maintenance, and native migration receipts. Its
+public acceptance soak completes the cutover. The `deploy-canvas-oss-beta.ps1`
+path below calls `deploy-local-beta-release.ps1`, which still invokes Python
+migrations; reserve that path for earlier non-passport beta deployments.
+
+The procedure below uses the official-stack mode for an earlier non-passport
+release produced by `.github/workflows/cd.yml`.
 It is intentionally separate from the non-promotable local-worktree snapshot
 mode. The official mode accepts only the downloaded `stack-manifest.json` and
 its exact `SHA256SUMS` entry, an annotated release tag at the executing commit,
