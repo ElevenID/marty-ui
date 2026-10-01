@@ -54,11 +54,13 @@ scanner checkout must match `PASSPORT_DEMO_RECORDER_COMMIT`, pinned as an exact
 reviewed commit in the protected workflow source. Changing it requires a code
 reviewed workflow update. The recorder is a separate
 test harness and its revision is not part of the signed aggregate stack manifest.
-The `beta-lifecycle`
-environment needs `PASSPORT_DEMO_SOURCE_READ_TOKEN`, a fine-grained token with
-Contents read access to the private `ElevenID/marty-demo-recorder` repository.
-The existing `DEMO_RECORDER_DISPATCH_TOKEN` lacks that permission. The workflow
-installs the pinned recorder's locked dependencies and verifies `ffmpeg` and
+The `beta-lifecycle` environment needs the nonsecret
+`PASSPORT_DEMO_RECORDER_SOURCE_DIR` variable set to the absolute path of the
+local `marty-demo-recorder` checkout on the dedicated WSL beta runner. The
+workflow verifies its origin URL, `main` and `origin/main` tip against the
+reviewed commit, then makes a fresh local clone at the pinned scanner revision.
+No cross-repository source-read token is needed. The workflow installs the
+pinned recorder's locked dependencies and verifies `ffmpeg` and
 `tesseract` before consuming the selected live Flow. These media files remain
 diagnostic until the protected preliminary producer verifies them and qualifies
 the recording receipt.

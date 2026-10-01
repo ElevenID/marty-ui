@@ -43,6 +43,7 @@ jobs:
     timeout-minutes: 90
     env:
       PASSPORT_DEMO_RECORDER_COMMIT: 022c8238c64972cf48873a8f4efcf73ae7329577
+      PASSPORT_DEMO_RECORDER_SOURCE_TIP: 022c8238c64972cf48873a8f4efcf73ae7329577
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
 
@@ -81,19 +82,18 @@ jobs:
         with:
           node-version: '24'
 
-      - name: Check out exact reviewed recorder revision
+      - name: Check out exact reviewed recorder revision from the runner
         shell: bash
         env:
-          RECORDER_READ_TOKEN: ${{ secrets.PASSPORT_DEMO_SOURCE_READ_TOKEN }}
+          RECORDER_SOURCE_DIR: ${{ vars.PASSPORT_DEMO_RECORDER_SOURCE_DIR }}
         run: |
           set -euo pipefail
-          [[ -n "$RECORDER_READ_TOKEN" ]]
           recorder_root="$RUNNER_TEMP/passport-demo-recorder-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT"
-          [[ ! -e "$recorder_root" && ! -L "$recorder_root" ]]
-          GH_TOKEN="$RECORDER_READ_TOKEN" gh repo clone ElevenID/marty-demo-recorder "$recorder_root" -- --no-checkout
-          git -C "$recorder_root" checkout --detach "$PASSPORT_DEMO_RECORDER_COMMIT"
-          test "$(git -C "$recorder_root" rev-parse HEAD)" = "$PASSPORT_DEMO_RECORDER_COMMIT"
-          test -z "$(git -C "$recorder_root" status --porcelain)"
+          python3 scripts/checkout_local_passport_demo_recorder.py \
+            --source "$RECORDER_SOURCE_DIR" \
+            --source-tip "$PASSPORT_DEMO_RECORDER_SOURCE_TIP" \
+            --revision "$PASSPORT_DEMO_RECORDER_COMMIT" \
+            --destination "$recorder_root"
           echo "PASSPORT_DEMO_RECORDER_ROOT=$recorder_root" >> "$GITHUB_ENV"
 
       - name: Install pinned publication verifier dependencies
