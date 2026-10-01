@@ -990,6 +990,26 @@ jobs:
         with:
           name: stack-release-qualified-${{ github.run_id }}
           path: transaction
+      - name: Recheck exact main and unused public coordinates before first promotion
+        env:
+          CLAIM_RUN_ID: ${{ needs.resolve-transaction.outputs.claim_run_id }}
+          GH_TOKEN: ${{ github.token }}
+          SOURCE_SHA: ${{ needs.resolve-transaction.outputs.source_sha }}
+          TAG: ${{ needs.resolve-transaction.outputs.tag }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$GITHUB_REF" = refs/heads/main
+          test "$GITHUB_SHA" = "$SOURCE_SHA"
+          python scripts/check_stack_pre_promotion.py \
+            --transaction transaction/release-transaction.json \
+            --source-sha "$SOURCE_SHA" \
+            --claim-run-id "$CLAIM_RUN_ID" \
+            --tag "$TAG" \
+            --repository "$GITHUB_REPOSITORY" \
+            --image "$IMAGE" \
+            --image "$SERVICES_IMAGE" \
+            --image "$MIGRATIONS_IMAGE"
       - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069
       - uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f
         with:
