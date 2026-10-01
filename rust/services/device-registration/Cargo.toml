@@ -40,7 +40,7 @@ tonic-prost-build.workspace = true
 
 [dev-dependencies]
 rand08.workspace = true
-rsa = "0.9"
+rsa.workspace = true
 sha2.workspace = true
 tower.workspace = true
 
