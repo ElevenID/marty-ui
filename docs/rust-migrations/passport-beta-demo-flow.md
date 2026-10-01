@@ -112,6 +112,11 @@ review files, media/privacy hashes, ElevenID LLC channel and playlist, and
 live YouTube publication result. It must bind those to the same source commit,
 stack manifest, aggregate deployment receipt and plan hashes, beta origin, and
 `physical_claim=not_claimed` before setting `recorded_demo.verified=true`.
+The D-12 publisher uses `scripts/deploy-passport-demo-content-beta.ps1` for
+its manifest deployment and rollback commands. That wrapper selects only the
+healthy `elevenid-beta-ui` Compose service and requires the production
+container snapshot to remain identical. Its publication config must never call
+the generic demo-content script without this beta guard.
 Python passport retirement requires protected Rust parity, the final live
 drain, and the reviewed deletion gate before the aggregate beta deployment.
 The recording and final receipt then qualify the single Rust-only beta soak.
