@@ -29,7 +29,7 @@ INFRA = {
 def manifest() -> dict:
     return {"schema": "marty.stack/v1", "components": [
         {"name": "marty-ui", "repository": "ElevenID/marty-ui",
-         "version": "1.1.218", "commit": SOURCE,
+         "version": "1.1.219", "commit": SOURCE,
          "artifacts": [
              {"type": "oci", "uri": "ghcr.io/elevenid/marty-ui-oss/services",
               "digest": "sha256:" + "c" * 64},

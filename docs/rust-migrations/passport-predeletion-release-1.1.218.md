@@ -1,48 +1,19 @@
-# Passport Rust qualification coordinate: 1.1.218
+# Tombstoned passport Rust qualification coordinate: 1.1.218
 
-The stack lock selects `marty-ui@1.1.218` with `release_state=eligible` only
-after the reviewed aggregate and its dependencies reach protected main. This
-eligibility is not a release claim or beta deployment. The prior 1.1.217 release
-predates the reviewed passport aggregate and cannot supply the exact Rust images
-for protected disposable acceptance.
+The protected [claim](https://github.com/ElevenID/marty-ui/actions/runs/36865105951)
+for `v1.1.218` selected source `737a52e1e0198f3953304f4bf446e90b8f98b7f1`.
+Its [stack release](https://github.com/ElevenID/marty-ui/actions/runs/36865248181)
+failed the verifier differential and public stack smoke gates before publication.
+The [tombstone](https://github.com/ElevenID/marty-ui/actions/runs/36868613826)
+sealed that claim. No Git tag, GitHub release, versioned UI, services or migrations
+image, or beta deployment was produced. This coordinate must not be reused.
 
-Record the exact protected-main SHA and confirm every pinned component artifact
-and revision still matches the source. Recheck that the tag, GitHub release,
-and all three public image coordinates are absent. Once this separate eligibility
-change passes protected checks, use `prepare-stack-tag.yml` and `cd.yml` on
-the same exact main commit as described in [Beta releases](../BETA_RELEASES.md).
-Do not create a tag or release by hand.
+The verifier failure was a transaction SBOM format mismatch: current Syft emitted
+CycloneDX 1.7 while the pinned harness requires 1.6. The failure happened before
+the pinned SPDX oracle was read. The public stack smoke also found that the
+migrations image lacked `psycopg` 3, which SQLAlchemy 2.1 selected for the
+PostgreSQL URL. The retained tombstone evidence has a separate correction record
+for the initially misidentified verifier input.
 
-The resulting immutable Rust images can qualify the **pre-deletion** packaged
-and protected disposable gates in
-`contracts/passport-rust-only-retirement-behavior.json`. A release is not a
-deployment. The required base Compose, selfhost Compose, and independent
-Kubernetes proofs must exercise the Rust nine-route flow, Marty simulator,
-KMS-backed issuer profile and certificate chain, signed same-job callback,
-batch behavior, job restart/resume, and production isolation. Separately,
-attest a durable passport-scoped write fence and the real beta cutover drain
-against the exact source; a failed drain blocks cutover and must preserve every
-existing job and artifact. The current beta Python `issuance` container also
-serves unrelated routes, so stopping the whole container would lose those
-features. Credentials PR #305 now calls for a passport-scoped fence; its
-protected producer is implemented, while exact-head runtime receipts remain missing. The
-deployment/restore mutex alone does not fence live passport writes.
-Independent review must resolve regression findings before Python passport
-deletion.
-
-Once those gates pass, verify the exact head of the prepared
-[Credentials deletion PR](https://github.com/ElevenID/marty-credentials/pull/305),
-run its protected final cutover producer, and pass its later beta drain
-attestation and post-cutover CI on that head. Resolve review findings before
-merging the deletion. The runtime receipts are currently absent, so this gate
-is not yet achieved. Claim a
-final immutable aggregate release from
-the post-deletion source, then perform **one beta-only deployment** and
-acceptance soak. A different unused coordinate will be needed if 1.1.218 was
-already claimed for pre-deletion qualification. A failed post-deployment probe
-halts new beta passport writes and calls for a reviewed Rust fix and retest;
-it does not select a Python passport owner. Production remains unchanged.
-
-The lock's current Credentials issuance component is a pinned aggregate
-dependency. Its Python image is not a passport rollback requirement. Review
-and update every final release pin when Python passport code is deleted.
+Use the [replacement 1.1.219 qualification coordinate](passport-predeletion-release-1.1.219.md)
+only after its source repairs and protected checks pass.

@@ -3,8 +3,9 @@
 Source-readiness audit: Signing Keys #913 and the passport aggregate #919 are
 on protected main. The reviewed aggregate correction and deployment writer fence
 must also be on protected main before a release claim. The
-[1.1.218 coordinate](passport-predeletion-release-1.1.218.md) is for
-reviewed Rust pre-deletion qualification; eligibility alone is not a claim or
+[1.1.218 coordinate](passport-predeletion-release-1.1.218.md) was tombstoned
+after qualification failed. The [1.1.219 coordinate](passport-predeletion-release-1.1.219.md)
+is for reviewed Rust pre-deletion qualification; eligibility alone is not a claim or
 deployment. Historical beta 1.1.217 evidence cannot qualify the new source.
 The final beta release must come from the source after Python passport deletion.
 
@@ -38,8 +39,8 @@ The final beta release must come from the source after Python passport deletion.
    changes. Resolve remaining source-qualification and consumer-acceptance gates
    before claiming whole-goal completion. Keep DIDComm KMS redesign separately
    deferred.
-2. Review the 1.1.218 eligibility change only after the Rust source and
-   component pins are on protected main. Then use
+2. Review the 1.1.219 eligibility change only after the Rust source, release-gate
+   repairs, and component pins are on protected main. Then use
    `.github/workflows/prepare-stack-tag.yml` and `cd.yml` to claim and publish
    the immutable **pre-deletion qualification** release. Retain the source,
    claim/transaction and run identities. Verify annotated tag/source, complete
