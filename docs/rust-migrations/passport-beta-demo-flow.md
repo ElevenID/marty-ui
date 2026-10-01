@@ -140,6 +140,10 @@ WSL. This launcher verifies the live signed aggregate release, binds the UI
 checkout and its publisher, deployment, and smoke scripts to that source,
 validates the complete command allowlist, recorder revision,
 OAuth file permissions, production baseline, and public production availability.
+The recorder requires Node.js 24 or later. The current WSL runner has a
+checksum-verified Node.js 24.21.0 under
+`$HOME/.local/opt/node-v24.21.0`; before invoking the launcher, select it with
+`export PATH="$HOME/.local/opt/node-v24.21.0/bin:$PATH"` and check `node --version`.
 It sets `WSLENV` for the manifest path and video ID, `NODE_PATH` to the recorder's locked
 Playwright package, and `BETA_ORIGIN=https://beta.elevenidllc.com` before
 calling the publisher. It allows 75 minutes for YouTube publication and the

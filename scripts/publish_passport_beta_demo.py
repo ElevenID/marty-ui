@@ -44,6 +44,7 @@ else:
 
 SHA = re.compile(r"[0-9a-f]{40}\Z")
 BETA_ORIGIN = "https://beta.elevenidllc.com"
+NODE_VERSION = re.compile(r"v([0-9]+)\.[0-9]+\.[0-9]+\Z")
 REVIEWED_UI_FILES = (
     "scripts/publish_passport_beta_demo.py",
     "scripts/produce_passport_beta_demo_publication.py",
@@ -81,6 +82,19 @@ def require_oauth_files() -> None:
         if name.endswith("TOKEN_FILE"):
             require(candidate.stat().st_mode & 0o777 == 0o600,
                     "Protected YouTube token permissions changed")
+
+
+def require_node24() -> None:
+    try:
+        version = subprocess.run(
+            ["node", "--version"], check=True, capture_output=True,
+            text=True, timeout=10,
+        ).stdout.strip()
+    except (OSError, subprocess.SubprocessError) as exc:
+        raise PublicationEvidenceError("Node.js 24 or later is unavailable") from exc
+    match = NODE_VERSION.fullmatch(version)
+    require(match is not None and int(match.group(1)) >= 24,
+            "Node.js 24 or later is required by the pinned recorder")
 
 
 def require_signed_ui_source(artifact_dir: Path, repo_root: Path) -> None:
@@ -125,6 +139,7 @@ def publish(artifact_dir: Path, config: Path, video: Path, recorder_root: Path,
             and shutil.which("node") is not None
             and (recorder_root / "node_modules" / "@playwright" / "test").is_dir(),
             "WSL publication tools or locked browser are unavailable")
+    require_node24()
     require_oauth_files()
     try:
         head = subprocess.run(

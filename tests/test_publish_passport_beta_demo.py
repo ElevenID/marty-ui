@@ -24,6 +24,7 @@ def test_reviewed_publisher_uses_beta_environment_and_checks_production(
     video.write_bytes(b"reviewed")
     monkeypatch.setattr(publisher, "require_beta_deploy_config", lambda _: None)
     monkeypatch.setattr(publisher, "require_signed_ui_source", lambda *_: None)
+    monkeypatch.setattr(publisher, "require_node24", lambda: None)
     monkeypatch.setattr(publisher, "require_oauth_files", lambda: None)
     monkeypatch.setattr(publisher.shutil, "which", lambda _: "/usr/bin/tool")
     monkeypatch.setenv("WSLENV", "OTHER/u")
@@ -108,3 +109,17 @@ def test_publication_environment_rejects_conflicting_video_id_rule(
     monkeypatch.setenv("WSLENV", "ELEVENID_DEMO_VIDEO_ID/u")
     with pytest.raises(publisher.PublicationEvidenceError, match="translation is invalid"):
         publisher.publication_environment(tmp_path)
+
+
+def test_publisher_requires_node_24(monkeypatch):
+    monkeypatch.setattr(
+        publisher.subprocess, "run",
+        lambda command, **_: subprocess.CompletedProcess(command, 0, "v18.19.1\n", ""),
+    )
+    with pytest.raises(publisher.PublicationEvidenceError, match="Node.js 24"):
+        publisher.require_node24()
+    monkeypatch.setattr(
+        publisher.subprocess, "run",
+        lambda command, **_: subprocess.CompletedProcess(command, 0, "v24.21.0\n", ""),
+    )
+    publisher.require_node24()
