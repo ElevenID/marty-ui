@@ -11,9 +11,18 @@ registration, confirm the Ubuntu 24.04 WSL2 distribution and runner
 directory exist, Docker Desktop exposes a Unix socket inside that WSL
 distribution, the beta network and tunnels are running, and production
 containers are healthy. The registration wrapper checks these conditions
-and refuses any leftover passport disposable resource. On the current host,
-the WSL Docker socket is absent. Do not register a passport runner until the
-host preflight passes.
+and refuses any leftover passport disposable resource. Docker Desktop WSL
+integration is enabled on the current host, and the host preflight passed
+after production recovered from the Docker Desktop restart.
+
+The wrapper records the IDs, running states, health states, and historical
+exit codes of all 29 production containers before registering. It requires
+the same inventory before and after the job. The job repeats that comparison
+before evidence collection. All 24 production runtime containers must be
+present and healthy. The five historical stopped containers are checked by
+name and exit code; the issuance migration had already exited with code 1
+before this runner setup, and retired billing had exited with code 255.
+Neither is restarted as part of passport runner admission.
 
 From PowerShell, start the foreground one-job runner:
 

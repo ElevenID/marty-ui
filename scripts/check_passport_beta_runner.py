@@ -6,6 +6,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import re
 import shutil
 import stat
 import sys
@@ -26,10 +27,37 @@ BETA_NETWORK = "elevenid-beta-network"
 BETA_TUNNELS = ("elevenid-beta-nginx-proxy-1", "elevenid-beta-cloudflared-1")
 PRODUCTION_PREFIX = "marty-selfhost-prod-"
 REQUIRED_PRODUCTION = {
-    "marty-selfhost-prod-edge-1",
-    "marty-selfhost-prod-gateway-1",
-    "marty-selfhost-prod-postgres-1",
+    PRODUCTION_PREFIX + service + "-1" for service in (
+        "applicant", "auth", "canvas-sync-worker", "cloudflared",
+        "compliance-profile", "credential-template", "deployment-profile",
+        "device-registration", "edge", "event-stream", "flow", "gateway",
+        "issuance", "keycloak", "notification", "organization", "postgres",
+        "presentation-policy", "redis", "revocation-profile", "signing-keys",
+        "trust-profile", "ui", "verification",
+    )
+}
+HISTORICAL_STOPPED_PRODUCTION = {
+    # Completed or retired containers observed before passport runner setup.
+    # Any newly stopped production service must still block admission.
+    "marty-selfhost-prod-keycloak-configurator-1",
+    "marty-selfhost-prod-issuance-migrations-1",
+    "marty-selfhost-prod-db-migrate-1",
+    "marty-selfhost-prod-revocation-profile-migrate-1",
+    "marty-selfhost-prod-billing-1",
+}
+HISTORICAL_EXIT_CODES = {
+    "marty-selfhost-prod-keycloak-configurator-1": "0",
+    # This migration failed before runner setup; its container and exit state
+    # are pinned in the registration baseline and cannot change during a job.
+    "marty-selfhost-prod-issuance-migrations-1": "1",
+    "marty-selfhost-prod-db-migrate-1": "0",
+    "marty-selfhost-prod-revocation-profile-migrate-1": "0",
+    # Retired from the current production Compose model.
+    "marty-selfhost-prod-billing-1": "255",
+}
+NO_HEALTHCHECK_PRODUCTION = {
     "marty-selfhost-prod-cloudflared-1",
+    "marty-selfhost-prod-canvas-sync-worker-1",
 }
 PASSPORT_DISPOSABLE_PREFIX = "marty-passport-"
 
@@ -75,30 +103,51 @@ def check_disposable_quarantine(runner=docker, temp_root: Path | None = None) ->
         )
 
 
-def production_inventory(runner=docker) -> list[str]:
-    all_names = {
-        item.get("Names")
-        for item in _docker_objects(runner, "ps", "-a")
-        if isinstance(item.get("Names"), str)
-        and item["Names"].startswith(PRODUCTION_PREFIX)
-    }
-    running_names = {
-        item.get("Names")
-        for item in _docker_objects(runner, "ps")
-        if isinstance(item.get("Names"), str)
-        and item["Names"].startswith(PRODUCTION_PREFIX)
-    }
-    if not REQUIRED_PRODUCTION.issubset(running_names):
-        raise RuntimeError("Required production containers are not running")
-    if all_names != running_names:
-        raise RuntimeError("A production container is stopped on the shared Docker host")
-    return sorted(running_names)
+def production_inventory(runner=docker) -> dict[str, dict[str, str]]:
+    inventory = {}
+    for item in _docker_objects(runner, "ps", "-a", "--no-trunc"):
+        name = item.get("Names")
+        if not isinstance(name, str) or not name.startswith(PRODUCTION_PREFIX):
+            continue
+        if name in inventory or any(not isinstance(item.get(key), str) for key in
+                                    ("ID", "State", "Status", "HealthStatus")):
+            raise RuntimeError("Production container inventory is incomplete")
+        status = item["Status"]
+        exit_match = re.match(r"^Exited \((\d+)\) ", status)
+        inventory[name] = {key: item[key] for key in ("ID", "State", "HealthStatus")}
+        inventory[name]["ExitCode"] = exit_match.group(1) if exit_match else ""
+    running_names = {name for name, item in inventory.items()
+                     if item["State"] == "running"}
+    if running_names != REQUIRED_PRODUCTION:
+        raise RuntimeError("Required production runtime inventory changed")
+    if set(inventory) != REQUIRED_PRODUCTION | HISTORICAL_STOPPED_PRODUCTION:
+        raise RuntimeError("Production container inventory changed")
+    for name, item in inventory.items():
+        if name in running_names:
+            expected_health = ({"", "none"} if name in NO_HEALTHCHECK_PRODUCTION
+                               else {"healthy"})
+            if item["HealthStatus"] not in expected_health:
+                raise RuntimeError("A production container is unhealthy")
+        elif name not in HISTORICAL_STOPPED_PRODUCTION or item["State"] != "exited":
+            raise RuntimeError("A production container is stopped on the shared Docker host")
+        elif item["ExitCode"] != HISTORICAL_EXIT_CODES[name]:
+            raise RuntimeError("A historical production container exit state changed")
+    return dict(sorted(inventory.items()))
+
+
+def check_production_baseline(inventory: dict[str, dict[str, str]], path: Path) -> None:
+    baseline = json.loads(path.read_text(encoding="utf-8"))
+    if baseline.get("schema") != "marty.passport-beta-runner-host/v1":
+        raise RuntimeError("Production runner baseline schema is invalid")
+    if baseline.get("production_identity") != inventory:
+        raise RuntimeError("Production container identity or state changed since runner registration")
 
 
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--host-setup", action="store_true")
+    parser.add_argument("--baseline", type=Path)
     args = parser.parse_args()
     try:
         if sys.platform != "linux" or not os.environ.get("WSL_INTEROP"):
@@ -139,6 +188,11 @@ def main() -> int:
             if docker("inspect", name, "--format", "{{.State.Running}}") != "true":
                 raise RuntimeError("existing beta tunnel is not running: " + name)
         production = production_inventory()
+        baseline_path = args.baseline
+        if not args.host_setup:
+            baseline_path = Path(os.environ["PASSPORT_BETA_PRODUCTION_BASELINE"])
+        if baseline_path is not None:
+            check_production_baseline(production, baseline_path)
         check_disposable_quarantine()
         report = {
             "schema": "marty.passport-beta-runner-host/v1",
@@ -148,7 +202,8 @@ def main() -> int:
             "docker_socket_available": True,
             "beta_network": BETA_NETWORK,
             "beta_tunnels": list(BETA_TUNNELS),
-            "production_containers": production,
+            "production_containers": sorted(REQUIRED_PRODUCTION),
+            "production_identity": production,
             "production_mutation_allowed": False,
         }
         args.output.parent.mkdir(parents=True, exist_ok=True)

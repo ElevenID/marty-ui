@@ -10,7 +10,11 @@ import yaml
 SCRIPTS = Path(__file__).resolve().parents[1] / "scripts"
 sys.path.insert(0, str(SCRIPTS))
 from check_passport_beta_runner import (  # noqa: E402
+    HISTORICAL_EXIT_CODES,
+    NO_HEALTHCHECK_PRODUCTION,
+    REQUIRED_PRODUCTION,
     check_disposable_quarantine,
+    check_production_baseline,
     production_inventory,
 )
 
@@ -18,6 +22,7 @@ from check_passport_beta_runner import (  # noqa: E402
 def fake_docker(all_containers=(), running_containers=(), networks=(), volumes=()):
     inventories = {
         ("ps", "-a"): all_containers,
+        ("ps", "-a", "--no-trunc"): all_containers,
         ("ps",): running_containers,
         ("network", "ls"): networks,
         ("volume", "ls"): volumes,
@@ -47,17 +52,66 @@ def test_quarantine_rejects_a_labeled_network_without_matching_name(tmp_path):
         check_disposable_quarantine(runner, tmp_path)
 
 
+def production_containers():
+    running = tuple({
+        "Names": name, "ID": name + "-id", "State": "running",
+        "Status": "Up 1 minute", "HealthStatus": (
+            "none" if name in NO_HEALTHCHECK_PRODUCTION else "healthy"),
+    } for name in sorted(REQUIRED_PRODUCTION))
+    stopped = tuple({
+        "Names": name, "ID": name + "-id", "State": "exited",
+        "Status": f"Exited ({code}) 3 weeks ago", "HealthStatus": "none",
+    } for name, code in sorted(HISTORICAL_EXIT_CODES.items()))
+    return running + stopped
+
+
 def test_production_inventory_rejects_a_stopped_container():
-    names = (
-        "marty-selfhost-prod-edge-1",
-        "marty-selfhost-prod-gateway-1",
-        "marty-selfhost-prod-postgres-1",
-        "marty-selfhost-prod-cloudflared-1",
-    )
-    running = tuple({"Names": name} for name in names)
-    all_containers = (*running, {"Names": "marty-selfhost-prod-worker-1"})
-    with pytest.raises(RuntimeError, match="production container is stopped"):
-        production_inventory(fake_docker(all_containers, running))
+    all_containers = (*production_containers(), {
+        "Names": "marty-selfhost-prod-worker-1", "ID": "worker-id",
+        "State": "exited", "Status": "Exited (0) 1 minute ago",
+        "HealthStatus": "none",
+    })
+    with pytest.raises(RuntimeError, match="Production container inventory changed"):
+        production_inventory(fake_docker(all_containers))
+
+
+def test_production_inventory_allows_existing_completed_and_retired_containers():
+    inventory = production_inventory(fake_docker(production_containers()))
+    assert set(inventory) == REQUIRED_PRODUCTION | set(HISTORICAL_EXIT_CODES)
+    assert inventory["marty-selfhost-prod-issuance-migrations-1"]["ExitCode"] == "1"
+    containers = list(production_containers())
+    for item in containers:
+        if item["Names"] in NO_HEALTHCHECK_PRODUCTION:
+            item["HealthStatus"] = ""
+    assert production_inventory(fake_docker(containers))
+
+
+def test_production_inventory_rejects_missing_runtime_and_new_failure():
+    containers = list(production_containers())
+    containers = [item for item in containers if item["Names"] != "marty-selfhost-prod-auth-1"]
+    with pytest.raises(RuntimeError, match="runtime inventory changed"):
+        production_inventory(fake_docker(containers))
+    containers = [item for item in production_containers()
+                  if item["Names"] != "marty-selfhost-prod-billing-1"]
+    with pytest.raises(RuntimeError, match="Production container inventory changed"):
+        production_inventory(fake_docker(containers))
+    containers = list(production_containers())
+    stopped = next(item for item in containers if item["Names"].endswith("db-migrate-1"))
+    stopped["Status"] = "Exited (1) 1 minute ago"
+    with pytest.raises(RuntimeError, match="exit state changed"):
+        production_inventory(fake_docker(containers))
+
+
+def test_production_baseline_rejects_replacement_and_health_change(tmp_path):
+    inventory = production_inventory(fake_docker(production_containers()))
+    baseline = tmp_path / "baseline.json"
+    baseline.write_text(json.dumps({"schema": "marty.passport-beta-runner-host/v1",
+                                    "production_identity": inventory}), encoding="utf-8")
+    check_production_baseline(inventory, baseline)
+    changed = {name: dict(item) for name, item in inventory.items()}
+    changed["marty-selfhost-prod-auth-1"]["ID"] = "replacement-id"
+    with pytest.raises(RuntimeError, match="identity or state changed"):
+        check_production_baseline(changed, baseline)
 
 
 def test_passport_jobs_have_dedicated_label_and_in_job_preflight():

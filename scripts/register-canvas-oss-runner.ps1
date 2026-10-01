@@ -15,6 +15,7 @@ $ErrorActionPreference = "Stop"
 $hostMutex = [System.Threading.Mutex]::new($false, "Global\ElevenIDMartyDockerRunner")
 $mutexHeld = $false
 $markerCreated = $false
+$productionBaseline = ""
 $markerPath = Join-Path $env:ProgramData 'ElevenID\Marty\canvas-oss-runner-active'
 try {
     try {
@@ -103,11 +104,22 @@ $runnerLabel = if ($Purpose -eq "Passport") { "passport-beta-wsl2" } else { "can
 $runnerCheck = if ($Purpose -eq "Passport") { "check_passport_beta_runner.py" } else { "check_canvas_oss_runner.py" }
 $preflightOutput = if ($Purpose -eq "Passport") { "passport-beta-runner-host-preflight.json" } else { "canvas-oss-runner-host-preflight.json" }
 $verificationVariable = if ($Purpose -eq "Passport") { "PASSPORT_BETA_RUNNER_LABELS_VERIFIED" } else { "CANVAS_OSS_RUNNER_LABELS_VERIFIED" }
-$preflight = "python3 '$wslRepoRoot/scripts/$runnerCheck' --host-setup --output '/tmp/$preflightOutput' && rm -f '/tmp/$preflightOutput'"
+$productionBaseline = if ($Purpose -eq "Passport") {
+    "/tmp/passport-beta-production-baseline-$([guid]::NewGuid().ToString('N')).json"
+} else { "" }
+$initialPreflight = if ($Purpose -eq "Passport") {
+    "python3 '$wslRepoRoot/scripts/$runnerCheck' --host-setup --output '$productionBaseline'"
+} else {
+    "python3 '$wslRepoRoot/scripts/$runnerCheck' --host-setup --output '/tmp/$preflightOutput' && rm -f '/tmp/$preflightOutput'"
+}
+$preflight = $initialPreflight
 
 # Validate the purpose-specific host before any short-lived registration.
 Invoke-WslBash "test -x '$wslRunnerDirectory/config.sh' && test -x '$wslRunnerDirectory/run.sh'"
 Invoke-WslBash $preflight
+if ($Purpose -eq "Passport") {
+    $preflight = "python3 '$wslRepoRoot/scripts/$runnerCheck' --host-setup --baseline '$productionBaseline' --output '/tmp/$preflightOutput' && rm -f '/tmp/$preflightOutput'"
+}
 
 $repoUrl = "https://github.com/$Repository"
 $runnerName = "${runnerLabel}-$($env:COMPUTERNAME)-$((Get-Date).ToUniversalTime().ToString('yyyyMMddHHmmss'))"
@@ -167,13 +179,23 @@ $markerStream = [System.IO.File]::Open(
     [System.IO.FileAccess]::Write, [System.IO.FileShare]::None)
 $markerStream.Dispose()
 $markerCreated = $true
-Invoke-WslBash "export $verificationVariable='$runnerName'; cd '$wslRunnerDirectory' && exec ./run.sh"
+$baselineExport = if ($Purpose -eq "Passport") {
+    "export PASSPORT_BETA_PRODUCTION_BASELINE='$productionBaseline'; "
+} else { "" }
+Invoke-WslBash "export $verificationVariable='$runnerName'; $baselineExport cd '$wslRunnerDirectory' && exec ./run.sh"
 } finally {
     $postRunError = $null
     if ($markerCreated) {
         try {
             Invoke-WslBash $preflight
             Remove-Item -LiteralPath $markerPath
+        } catch {
+            $postRunError = $_
+        }
+    }
+    if ($Purpose -eq "Passport" -and $productionBaseline -and $null -eq $postRunError) {
+        try {
+            Invoke-WslBash "rm -f '$productionBaseline'"
         } catch {
             $postRunError = $_
         }
