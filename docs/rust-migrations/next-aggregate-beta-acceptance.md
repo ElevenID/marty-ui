@@ -93,10 +93,17 @@ The final beta release must come from the source after Python passport deletion.
    preserved beta state, KMS custody, and production isolation before accepting
    the runtime. The operator also checks the public production root before
    beta mutation and in the final runtime receipt. If the cutover fails, read
-   the separate `.production-postflight.json` receipt: it compares the
-   production generation and public route against the fenced maintenance
-   receipts even when no aggregate plan was created. Resolve any failed
-   production postflight before resuming the beta cutover. These loopback
+   the separate `.production-postflight.json` receipt. After a verified
+   pre-mutation capture, the operator first tries to restart only the exact
+   previously running production containers if any stopped, then checks their
+   health and public route. A restart is recorded as a continuity breach even
+   when availability returns. The receipt also compares the production
+   generation against the fenced maintenance receipts; resolve any failed
+   postflight before resuming the beta cutover. Reserve the bounded cutover
+   window exclusively on the shared host: do not run production maintenance,
+   deployment, or manual container stops between the pre-mutation capture and
+   postflight. If production maintenance is needed, finish it before starting
+   a new cutover attempt. These loopback
    calls are pre-ingress ownership gates, not
    end-to-end acceptance. After the public edge opens, run the selected
    physical Flow and nine-route passport lifecycle through
