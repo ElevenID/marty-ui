@@ -136,5 +136,7 @@ bureau job, zero beta passport drain, and production container and network/port
 baselines. Run at least three separate protected samples across 24 hours with
 no gap over 13 hours. `verify_passport_beta_soak_window.py` checks that window
 and emits `window_observed` with `provenance_pending=true`. The final compositor
-must authenticate every GitHub run and artifact hash before treating the
-window as acceptance evidence; a local copy of the sample JSON is insufficient.
+must call `verify_protected_passport_soak.py`, which downloads each artifact
+from its successful protected main run, checks the run time and exact JSON
+hash, and emits `protected_window_verified`. A local copy of sample JSON or
+an unauthenticated `window_observed` report is insufficient.

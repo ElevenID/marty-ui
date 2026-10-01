@@ -19,6 +19,8 @@ def metadata(workflow):
         "path": f".github/workflows/{workflow}",
         "head_branch": "main", "head_sha": SOURCE,
         "run_attempt": 1, "status": "completed", "conclusion": "success",
+        "run_started_at": "2026-10-01T12:00:00Z",
+        "updated_at": "2026-10-01T12:10:00Z",
         "head_repository": {"full_name": "ElevenID/marty-ui"},
     }
 

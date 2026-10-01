@@ -58,6 +58,14 @@ def _load(path: Path) -> tuple[dict[str, Any], str, datetime]:
         value = json.loads(raw)
     except ValueError as exc:
         raise WindowError("Passport soak sample JSON is invalid") from exc
+    return validate_observation(value, hashlib.sha256(raw).hexdigest())
+
+
+def validate_observation(
+    value: Any, digest: str,
+) -> tuple[dict[str, Any], str, datetime]:
+    require(isinstance(digest, str) and SHA256.fullmatch(digest) is not None,
+            "Passport soak sample digest is invalid")
     require(isinstance(value, dict)
             and value.get("schema") == "marty.passport-beta-soak-sample/v1"
             and value.get("status") == "observed"
@@ -95,15 +103,23 @@ def _load(path: Path) -> tuple[dict[str, Any], str, datetime]:
             and isinstance(run.get("workflow_commit"), str)
             and SHA.fullmatch(run["workflow_commit"]) is not None,
             "Passport soak sample lacks signed runtime, job or run lineage")
-    return value, hashlib.sha256(raw).hexdigest(), _timestamp(value.get("observed_at_utc"))
+    return value, digest, _timestamp(value.get("observed_at_utc"))
 
 
 def verify(paths: list[Path], *, as_of: datetime) -> dict[str, Any]:
-    require(len(paths) >= MINIMUM_SAMPLES,
+    return verify_rows([(*_load(path), path.name) for path in paths], as_of=as_of)
+
+
+def verify_rows(
+    loaded: list[tuple[dict[str, Any], str, datetime, str]],
+    *, as_of: datetime,
+) -> dict[str, Any]:
+    require(len(loaded) >= MINIMUM_SAMPLES,
             "Passport soak requires at least three protected samples")
     require(as_of.tzinfo is not None and as_of.utcoffset() == timedelta(0),
             "Passport soak as-of time must be UTC")
-    loaded = [(*_load(path), path.name) for path in paths]
+    loaded = [(*validate_observation(value, digest), name)
+              for value, digest, _, name in loaded]
     loaded.sort(key=lambda row: row[2])
     first = loaded[0][0]
     first_checks = first["checks"]

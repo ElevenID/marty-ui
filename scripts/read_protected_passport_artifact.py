@@ -13,6 +13,7 @@ import math
 import re
 import subprocess
 import tempfile
+from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any, Callable
 
@@ -39,6 +40,16 @@ class ProtectedArtifactError(ValueError):
 def require(condition: bool, message: str) -> None:
     if not condition:
         raise ProtectedArtifactError(message)
+
+
+def _utc(value: Any) -> datetime:
+    try:
+        parsed = datetime.fromisoformat(value)
+    except (TypeError, ValueError) as exc:
+        raise ProtectedArtifactError("Protected GitHub run time is invalid") from exc
+    require(parsed.tzinfo is not None and parsed.utcoffset() == timedelta(0),
+            "Protected GitHub run time is not UTC")
+    return parsed
 
 
 def command(args: list[str]) -> str:
@@ -119,6 +130,9 @@ def read_artifact(
             and isinstance(metadata.get("head_repository"), dict)
             and metadata["head_repository"].get("full_name") == REPOSITORY,
             "Passport artifact did not come from a successful protected main run")
+    started = _utc(metadata.get("run_started_at"))
+    completed = _utc(metadata.get("updated_at"))
+    require(started <= completed, "Protected GitHub run times are inverted")
     artifact_name = f"{prefix}-{run_id}"
     expected_file = f"{artifact_name}.json"
     with tempfile.TemporaryDirectory(prefix="marty-passport-protected-") as directory:
@@ -162,6 +176,8 @@ def read_artifact(
         "kind": kind,
         "run_id": run_id,
         "workflow_commit": metadata["head_sha"],
+        "run_started_at_utc": started.isoformat(),
+        "run_completed_at_utc": completed.isoformat(),
         "artifact_name": artifact_name,
         "artifact_sha256": hashlib.sha256(raw).hexdigest(),
         "media_sha256": media_hashes,
