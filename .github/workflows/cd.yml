@@ -972,6 +972,10 @@ jobs:
     needs: [resolve-transaction, validate-stack, build-ui, build-services, qualify-release]
     runs-on: ubuntu-latest
     environment: stack-release
+    env:
+      CLAIM_RUN_ID: ${{ needs.resolve-transaction.outputs.claim_run_id }}
+      SOURCE_SHA: ${{ needs.resolve-transaction.outputs.source_sha }}
+      TAG: ${{ needs.resolve-transaction.outputs.tag }}
     permissions:
       actions: read
       contents: write
@@ -990,26 +994,6 @@ jobs:
         with:
           name: stack-release-qualified-${{ github.run_id }}
           path: transaction
-      - name: Recheck exact main and unused public coordinates before first promotion
-        env:
-          CLAIM_RUN_ID: ${{ needs.resolve-transaction.outputs.claim_run_id }}
-          GH_TOKEN: ${{ github.token }}
-          SOURCE_SHA: ${{ needs.resolve-transaction.outputs.source_sha }}
-          TAG: ${{ needs.resolve-transaction.outputs.tag }}
-        shell: bash
-        run: |
-          set -euo pipefail
-          test "$GITHUB_REF" = refs/heads/main
-          test "$GITHUB_SHA" = "$SOURCE_SHA"
-          python scripts/check_stack_pre_promotion.py \
-            --transaction transaction/release-transaction.json \
-            --source-sha "$SOURCE_SHA" \
-            --claim-run-id "$CLAIM_RUN_ID" \
-            --tag "$TAG" \
-            --repository "$GITHUB_REPOSITORY" \
-            --image "$IMAGE" \
-            --image "$SERVICES_IMAGE" \
-            --image "$MIGRATIONS_IMAGE"
       - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069
       - uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f
         with:
@@ -1019,12 +1003,21 @@ jobs:
       - name: Promote the UI version tag from its exact qualified digest
         env:
           DIGEST: ${{ needs.build-ui.outputs.digest }}
+          GH_TOKEN: ${{ github.token }}
           VERSION: ${{ needs.validate-stack.outputs.version }}
         shell: bash
         run: |
           set -euo pipefail
+          test "$GITHUB_REF" = refs/heads/main
+          test "$GITHUB_SHA" = "$SOURCE_SHA"
+          tag_state="$(python scripts/check_stack_pre_promotion.py --transaction transaction/release-transaction.json --role ui)"
+          test "$DIGEST" = "$(jq -er '.images.ui.digest' transaction/release-transaction.json)"
           if ! jq -e '.promoted_roles | index("ui") != null' transaction/release-transaction.json >/dev/null; then
-            docker buildx imagetools create --tag "$IMAGE:$VERSION" "$IMAGE@$DIGEST"
+            if [ "$tag_state" = absent ]; then
+              docker buildx imagetools create --tag "$IMAGE:$VERSION" "$IMAGE@$DIGEST"
+            else
+              test "$tag_state" = present
+            fi
             resolved="sha256:$(docker buildx imagetools inspect --raw "$IMAGE:$VERSION" | sha256sum | cut -d' ' -f1)"
             test "$resolved" = "$DIGEST"
           fi
@@ -1040,12 +1033,21 @@ jobs:
       - name: Promote the services version tag from its exact qualified digest
         env:
           DIGEST: ${{ needs.build-services.outputs.services_digest }}
+          GH_TOKEN: ${{ github.token }}
           VERSION: ${{ needs.validate-stack.outputs.version }}
         shell: bash
         run: |
           set -euo pipefail
+          test "$GITHUB_REF" = refs/heads/main
+          test "$GITHUB_SHA" = "$SOURCE_SHA"
+          tag_state="$(python scripts/check_stack_pre_promotion.py --transaction transaction/release-transaction.json --role services)"
+          test "$DIGEST" = "$(jq -er '.images.services.digest' transaction/release-transaction.json)"
           if ! jq -e '.promoted_roles | index("services") != null' transaction/release-transaction.json >/dev/null; then
-            docker buildx imagetools create --tag "$SERVICES_IMAGE:$VERSION" "$SERVICES_IMAGE@$DIGEST"
+            if [ "$tag_state" = absent ]; then
+              docker buildx imagetools create --tag "$SERVICES_IMAGE:$VERSION" "$SERVICES_IMAGE@$DIGEST"
+            else
+              test "$tag_state" = present
+            fi
             resolved="sha256:$(docker buildx imagetools inspect --raw "$SERVICES_IMAGE:$VERSION" | sha256sum | cut -d' ' -f1)"
             test "$resolved" = "$DIGEST"
           fi
@@ -1061,12 +1063,21 @@ jobs:
       - name: Promote the migrations version tag from its exact qualified digest
         env:
           DIGEST: ${{ needs.build-services.outputs.migrations_digest }}
+          GH_TOKEN: ${{ github.token }}
           VERSION: ${{ needs.validate-stack.outputs.version }}
         shell: bash
         run: |
           set -euo pipefail
+          test "$GITHUB_REF" = refs/heads/main
+          test "$GITHUB_SHA" = "$SOURCE_SHA"
+          tag_state="$(python scripts/check_stack_pre_promotion.py --transaction transaction/release-transaction.json --role migrations)"
+          test "$DIGEST" = "$(jq -er '.images.migrations.digest' transaction/release-transaction.json)"
           if ! jq -e '.promoted_roles | index("migrations") != null' transaction/release-transaction.json >/dev/null; then
-            docker buildx imagetools create --tag "$MIGRATIONS_IMAGE:$VERSION" "$MIGRATIONS_IMAGE@$DIGEST"
+            if [ "$tag_state" = absent ]; then
+              docker buildx imagetools create --tag "$MIGRATIONS_IMAGE:$VERSION" "$MIGRATIONS_IMAGE@$DIGEST"
+            else
+              test "$tag_state" = present
+            fi
             resolved="sha256:$(docker buildx imagetools inspect --raw "$MIGRATIONS_IMAGE:$VERSION" | sha256sum | cut -d' ' -f1)"
             test "$resolved" = "$DIGEST"
           fi
@@ -1170,6 +1181,9 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
+          test "$GITHUB_REF" = refs/heads/main
+          test "$GITHUB_SHA" = "$SOURCE_SHA"
+          python scripts/check_stack_pre_promotion.py --transaction transaction/release-transaction.json
           git config user.name github-actions[bot]
           git config user.email 41898282+github-actions[bot]@users.noreply.github.com
           existing="$(git ls-remote --tags origin "refs/tags/$TAG" "refs/tags/$TAG^{}")"
@@ -1236,6 +1250,9 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
+          test "$GITHUB_REF" = refs/heads/main
+          test "$GITHUB_SHA" = "$SOURCE_SHA"
+          python scripts/check_stack_pre_promotion.py --transaction transaction/release-transaction.json
           assets=(stack-manifest.json release-transaction.json ./*.cdx.json ./*.sigstore.json SHA256SUMS)
           for asset in "${assets[@]}"; do
             test -f "$asset"
