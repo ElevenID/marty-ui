@@ -869,7 +869,7 @@ jobs:
       - uses: anchore/sbom-action@3ad7283483fc7af8ff2b4ea19663c2d5ca935e26
         with:
           image: ${{ env.SERVICES_IMAGE }}@${{ needs.build-services.outputs.services_digest }}
-          format: cyclonedx-json
+          format: cyclonedx-json@1.6
           output-file: integration-tests/work/transaction-services-sbom.cdx.json
       - name: Verify and exercise the exact services digest against the immutable oracle
         env:
