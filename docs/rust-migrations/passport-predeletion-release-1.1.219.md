@@ -19,10 +19,12 @@ Do not create a tag or release by hand.
 The resulting immutable Rust images can qualify the **pre-deletion** packaged
 and protected disposable gates in
 `contracts/passport-rust-only-retirement-behavior.json`. A release is not a
-deployment. The required base Compose, selfhost Compose, and independent
-Kubernetes proofs must exercise the Rust nine-route flow, Marty simulator,
-KMS-backed issuer profile and certificate chain, signed same-job callback,
-batch behavior, job restart/resume, and production isolation. Separately,
+deployment. The required source-bound protected disposable run must prove six
+owned Rust service images, all nine routes, tenant isolation, the managed KMS
+CSCA/DSC chain and SOD signing, the two-job Marty simulator batch, signed
+same-job callbacks, job restart/resume, and production isolation. The separate
+base Compose, selfhost Compose, and Kubernetes live consumer fixture remains
+optional later work in #944. Separately,
 attest a durable passport-scoped write fence and the real beta cutover drain
 against the exact source; a failed drain blocks cutover and must preserve every
 existing job and artifact. The current beta Python `issuance` container also
