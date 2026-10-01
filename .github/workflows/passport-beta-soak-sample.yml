@@ -31,6 +31,11 @@ jobs:
       PASSPORT_ACCEPTANCE_API_KEY: ${{ secrets.PASSPORT_ACCEPTANCE_API_KEY }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - name: Verify dedicated beta runner and production baseline
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 scripts/check_passport_beta_runner.py --output "$RUNNER_TEMP/passport-beta-runner-preflight.json"
       - name: Collect signed live passport and unchanged production observation
         shell: bash
         env:
