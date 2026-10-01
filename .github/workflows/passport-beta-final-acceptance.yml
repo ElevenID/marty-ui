@@ -29,15 +29,14 @@ concurrency:
   group: passport-beta-final-acceptance
   cancel-in-progress: false
 
-permissions:
-  actions: read
-  attestations: write
-  contents: read
-  id-token: write
-  packages: read
-
 jobs:
   aggregate:
+    permissions:
+      actions: read
+      attestations: write
+      contents: read
+      id-token: write
+      packages: read
     if: github.ref == 'refs/heads/main'
     runs-on: [self-hosted, linux, x64, passport-beta-wsl2]
     environment: beta-lifecycle
