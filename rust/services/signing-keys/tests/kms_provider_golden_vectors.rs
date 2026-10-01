@@ -225,7 +225,7 @@ async fn managed_transit_stub(
 }
 
 #[tokio::test]
-async fn managed_openbao_missing_key_and_mount_are_created_before_one_retry() {
+async fn managed_openbao_runtime_operations_do_not_recreate_a_missing_key_or_mount() {
     let listener = TcpListener::bind("127.0.0.1:0")
         .await
         .expect("bind managed transit stub");
@@ -246,38 +246,41 @@ async fn managed_openbao_missing_key_and_mount_are_created_before_one_retry() {
             .expect("managed transit stub server");
     });
 
-    let response = kms::sign(SignRequest {
-        service_config: serde_json::json!({
-            "id": "managed-openbao-transit",
-            "service_type": "custom-transit-compatible",
-            "endpoint": format!("http://{address}"),
-            "mount": "transit",
-            "auth_mode": "token",
-            "auth_reference": "service-token",
-            "key_reference": "issuer-key",
-            "algorithm": "EdDSA"
-        }),
+    let service_config = serde_json::json!({
+        "id": "managed-openbao-transit",
+        "service_type": "custom-transit-compatible",
+        "endpoint": format!("http://{address}"),
+        "mount": "transit",
+        "auth_mode": "token",
+        "auth_reference": "service-token",
+        "key_reference": "issuer-key",
+        "algorithm": "EdDSA"
+    });
+    let signed = kms::sign(SignRequest {
+        service_config: service_config.clone(),
         payload_b64: "cGF5bG9hZA".into(),
     })
-    .await
-    .expect("managed sign retries");
+    .await;
+    let public_key = kms::public_key(ProviderRequest { service_config }).await;
     let _ = shutdown_tx.send(());
-    assert_eq!(response.signature_b64, "c2lnbmF0dXJl");
-    assert_eq!(response.signature_encoding, "raw");
+    assert!(
+        matches!(signed, Err(kms::KmsError::ProviderStatus { status, .. }) if status.as_u16() == 404)
+    );
+    assert!(
+        matches!(public_key, Err(kms::KmsError::ProviderStatus { status, .. }) if status.as_u16() == 404)
+    );
     let requests = requests.lock().await;
     assert_eq!(
         requests
             .iter()
             .map(|request| request.path_query.as_str())
             .collect::<Vec<_>>(),
-        [
-            "/v1/transit/sign/issuer-key",
-            "/v1/transit/keys/issuer-key",
-            "/v1/sys/mounts/transit",
-            "/v1/transit/keys/issuer-key",
-            "/v1/transit/sign/issuer-key"
-        ]
+        ["/v1/transit/sign/issuer-key", "/v1/transit/keys/issuer-key"]
     );
+    assert!(requests
+        .iter()
+        .all(|request| request.method != "POST"
+            || request.path_query == "/v1/transit/sign/issuer-key"));
     assert!(requests.iter().all(|request| {
         request.headers.get("x-vault-token").map(String::as_str) == Some("service-token")
     }));

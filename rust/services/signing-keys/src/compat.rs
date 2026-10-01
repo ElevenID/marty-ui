@@ -551,6 +551,16 @@ impl SigningCompatibilityService {
             Some(profile) if duplicate.found => (profile, false),
             _ => (profile, true),
         };
+        // Reserve a managed reference before publishing its DID method. If
+        // publication or profile storage later fails, the durable binding
+        // prevents a lost key from being recreated under that published name.
+        let managed = service_id == "managed-openbao-transit";
+        if managed {
+            self.registry
+                .bind_profile(&request.organization_id, &profile)
+                .await
+                .map_err(map_registry_binding_error)?;
+        }
         let before_publication = profile.clone();
         self.ensure_did_web_verification_method(
             &request.organization_id,
@@ -562,10 +572,12 @@ impl SigningCompatibilityService {
         if !created && profile != before_publication {
             profile["updated_at"] = Value::String(chrono::Utc::now().to_rfc3339());
         }
-        self.registry
-            .bind_profile(&request.organization_id, &profile)
-            .await
-            .map_err(map_registry_binding_error)?;
+        if !managed {
+            self.registry
+                .bind_profile(&request.organization_id, &profile)
+                .await
+                .map_err(map_registry_binding_error)?;
+        }
         let profile_id = required(&profile, "id")?.to_owned();
         let profile = self
             .profiles
@@ -638,6 +650,21 @@ impl SigningCompatibilityService {
                         .map_err(map_kms_error)?
                     {
                         return Err(map_kms_error(error));
+                    }
+                    let profile_document = self
+                        .profiles
+                        .list(&request.organization_id)
+                        .await
+                        .map_err(map_profile_error)?;
+                    if profiles::managed_reference_has_history(
+                        &registry,
+                        &profile_document,
+                        reference,
+                    ) {
+                        return Err(CompatibilityError::Conflict(
+                            "Previously bound managed KMS key is unavailable; restore its original material or enroll a distinct identity."
+                                .into(),
+                        ));
                     }
                     kms::create_managed_openbao(ProviderRequest {
                         service_config: configuration,

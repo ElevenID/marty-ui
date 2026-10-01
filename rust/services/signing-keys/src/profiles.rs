@@ -269,6 +269,88 @@ impl ProfileStore {
     }
 }
 
+/// A recorded managed reference must not be provisioned again after KMS loss.
+/// Include inactive profiles: their published keys may still verify old data.
+pub(crate) fn managed_reference_has_history(
+    registry: &Value,
+    profile_document: &Value,
+    reference: &str,
+) -> bool {
+    let bound = registry
+        .get("key_reference_purposes")
+        .and_then(|bindings| bindings.get("managed-openbao-transit"))
+        .and_then(Value::as_object)
+        .is_some_and(|bindings| bindings.contains_key(reference));
+    let service = registry
+        .get("services")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter(|service| {
+            service.get("id").and_then(Value::as_str) == Some("managed-openbao-transit")
+        })
+        .any(|service| {
+            service.get("key_reference").and_then(Value::as_str) == Some(reference)
+                || service
+                    .get("key_aliases")
+                    .and_then(Value::as_array)
+                    .is_some_and(|aliases| {
+                        aliases
+                            .iter()
+                            .any(|alias| alias.as_str() == Some(reference))
+                    })
+        });
+    let profile = profile_document
+        .get("profiles")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .any(|profile| {
+            profile.get("signing_service_id").and_then(Value::as_str)
+                == Some("managed-openbao-transit")
+                && profile.get("signing_key_reference").and_then(Value::as_str) == Some(reference)
+        });
+    bound || service || profile
+}
+
+#[cfg(test)]
+mod managed_reference_tests {
+    use super::*;
+
+    #[test]
+    fn historical_managed_references_cannot_be_reprovisioned() {
+        let fresh = json!({"profiles": []});
+        let registry = json!({
+            "key_reference_purposes": {"managed-openbao-transit": {}},
+            "services": [{"id": "managed-openbao-transit", "key_aliases": []}]
+        });
+        assert!(!managed_reference_has_history(
+            &registry,
+            &fresh,
+            "fresh-key"
+        ));
+
+        let bound = json!({
+            "key_reference_purposes": {"managed-openbao-transit": {"old-key": ["vc_jwt_issuer"]}},
+            "services": []
+        });
+        assert!(managed_reference_has_history(&bound, &fresh, "old-key"));
+
+        let aliased = json!({
+            "services": [{"id": "managed-openbao-transit", "key_aliases": ["old-key"]}]
+        });
+        assert!(managed_reference_has_history(&aliased, &fresh, "old-key"));
+
+        let revoked = json!({"profiles": [{
+            "status": "revoked", "signing_service_id": "managed-openbao-transit",
+            "signing_key_reference": "old-key"
+        }]});
+        assert!(managed_reference_has_history(
+            &registry, &revoked, "old-key"
+        ));
+    }
+}
+
 #[derive(Debug, Clone, Deserialize)]
 pub struct NormalizeProfileRequest {
     pub body: Value,

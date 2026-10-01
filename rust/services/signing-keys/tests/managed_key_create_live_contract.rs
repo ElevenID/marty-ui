@@ -331,6 +331,23 @@ async fn issuer_profile_creates_managed_key_then_resolves_and_signs_without_a_lo
             );
         }
     }
+    keys.lock().unwrap().remove(reference);
+    let (status, missing) = json_route(
+        &app,
+        "POST",
+        "/internal/compat/issuer-dids/sign",
+        json!({
+            "organization_id": organization_id,
+            "issuer_did": did,
+            "key_purpose": "vc_jwt_issuer",
+            "credential_format": "SD_JWT_VC",
+            "algorithm": "EdDSA",
+            "payload_b64": "cGF5bG9hZA"
+        }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE, "{missing}");
+    assert!(!keys.lock().unwrap().contains_key(reference));
     let passport_did = format!("did:web:issuer.example:orgs:{}", Uuid::new_v4().simple());
     let passport_tuple = json!({
         "organization_id": organization_id,
@@ -683,6 +700,7 @@ async fn managed_key_creation_stays_in_kms_and_binds_only_after_verified_success
     let redis_url = disposable_redis_url().await;
     let keys: Keys = Arc::new(Mutex::new(BTreeMap::new()));
     let kms = Router::new()
+        .route("/v1/transit/keys", get(list_keys))
         .route(
             "/v1/transit/keys/{reference}",
             get(read_key).post(create_key),
@@ -964,6 +982,13 @@ async fn managed_key_creation_stays_in_kms_and_binds_only_after_verified_success
         assert_eq!(status, StatusCode::OK, "{purpose}: {signed}");
         assert_eq!(signed["ok"], true);
     }
+
+    // Losing a bound key must not allow an explicit enrollment request to
+    // create different material under its published reference.
+    keys.lock().unwrap().remove(reference);
+    let (status, missing) = request(&app, &organization_id, json!({"name": "Shared Name"})).await;
+    assert_eq!(status, StatusCode::CONFLICT, "{missing}");
+    assert!(!keys.lock().unwrap().contains_key(reference));
 
     let mut redis = registry.connection();
     for tenant in [&organization_id, &other_organization_id] {
