@@ -8,7 +8,6 @@ import shutil
 import subprocess
 from pathlib import Path
 
-import pytest
 import yaml
 
 from scripts import stack_tag_gate
@@ -291,7 +290,8 @@ def test_release_checksums_cover_every_published_asset_once(tmp_path: Path) -> N
     def verify() -> subprocess.CompletedProcess[str]:
         return subprocess.run(
             [bash, "--noprofile", "--norc", "-c", "sha256sum --check --strict SHA256SUMS"],
-            cwd=tmp_path, capture_output=True, text=True, timeout=30,
+            cwd=tmp_path, check=False, capture_output=True, text=True,
+            timeout=30,
         )
 
     assert verify().returncode == 0

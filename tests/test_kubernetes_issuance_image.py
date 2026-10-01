@@ -6,14 +6,14 @@ envsubst executable renders only checked-in manifests with synthetic variables.
 
 from __future__ import annotations
 
-from copy import deepcopy
 import json
 import os
-from pathlib import Path
 import re
 import shutil
 import subprocess
 import sys
+from copy import deepcopy
+from pathlib import Path
 
 import pytest
 import yaml
@@ -271,7 +271,8 @@ def test_cli_fixed_lock_bounded_strict_json_and_private_errors(
 def extracted(name):
     source = (ROOT / "scripts/deploy-kubernetes.sh").read_text(encoding="utf-8")
     matches = re.findall(
-        r"^" + re.escape(name) + r"\(\) \{\n.*?^\}", source, re.M | re.S
+        r"^" + re.escape(name) + r"\(\) \{\n.*?^\}", source,
+        re.MULTILINE | re.DOTALL,
     )
     assert len(matches) == 1
     return matches[0]
