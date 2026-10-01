@@ -117,6 +117,35 @@ its manifest deployment and rollback commands. That wrapper selects only the
 healthy `elevenid-beta-ui` Compose service and requires the production
 container snapshot to remain identical. Its publication config must never call
 the generic demo-content script without this beta guard.
+For this protected WSL runner, both commands use `powershell.exe` from the
+reviewed UI checkout with `-NoProfile -ExecutionPolicy Bypass -File
+scripts/deploy-passport-demo-content-beta.ps1 -Mode Deploy` (or `Rollback`).
+The config also has the reviewed `smoke` command
+(`node tests/scripts/smoke-beta-demo-publication.js`). The recorder schema
+requires `record` and `prePublicBuild`: set `record` to
+`node -e 'process.exit(1)'` so a missing reviewed master fails, and
+`prePublicBuild` to `node -e 'process.exit(0)'` because the beta UI is already
+reviewed. Set `cwd` to `.` for every command. The protected producer checks
+these exact commands and
+the recorder binds its hash to the public result.
+
+After human review and with `PASSPORT_ACCEPTANCE_API_KEY`,
+`YOUTUBE_OAUTH_CLIENT_FILE`, and mode-0600
+`YOUTUBE_OAUTH_TOKEN_FILE` set, run `python3 scripts/publish_passport_beta_demo.py
+--artifact-dir <signed-aggregate-artifacts> --recorder-root <pinned-recorder>
+--recorder-commit <reviewed-sha> --config
+<reviewed-config> --video <reviewed-master>` with absolute paths from the
+reviewed UI checkout in
+WSL. This launcher verifies the live signed aggregate release, binds the UI
+checkout and its publisher, deployment, and smoke scripts to that source,
+validates the complete command allowlist, recorder revision,
+OAuth file permissions, production baseline, and public production availability.
+It sets `WSLENV` for the manifest path and video ID, `NODE_PATH` to the recorder's locked
+Playwright package, and `BETA_ORIGIN=https://beta.elevenidllc.com` before
+calling the publisher. It allows 75 minutes for YouTube publication and the
+beta browser smoke. Then dispatch the protected evidence workflow with the
+same reviewed files; the evidence producer authenticates their hashes and the
+live signed beta release.
 Python passport retirement requires protected Rust parity, the final live
 drain, and the reviewed deletion gate before the aggregate beta deployment.
 The recording and final receipt then qualify the single Rust-only beta soak.

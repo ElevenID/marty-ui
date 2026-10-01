@@ -69,6 +69,7 @@ PRODUCER_FIELDS = (
     "media",
     "youtube",
 )
+DEPLOY_SCRIPT = "scripts/deploy-passport-demo-content-beta.ps1"
 
 
 class PublicationEvidenceError(ValueError):
@@ -85,10 +86,57 @@ def digest(path: Path) -> str:
         return hashlib.file_digest(source, "sha256").hexdigest()
 
 
-def run(*args: str) -> str:
+def require_beta_deploy_config(path: Path) -> None:
+    """Accept only reviewed commands with no production mutation hook."""
+    try:
+        config = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError) as exc:
+        raise PublicationEvidenceError("Reviewed D-12 publication config is invalid") from exc
+    automation = config.get("automation") if isinstance(config, dict) else None
+    require(isinstance(automation, dict)
+            and set(automation) == {
+                "record", "prePublicBuild", "deploy", "rollbackDeploy", "smoke",
+            },
+            "D-12 beta deployment commands are missing or unrestricted")
+    require(
+        automation["record"] == {
+            "command": "node", "args": ["-e", "process.exit(1)"], "cwd": ".",
+        },
+        "D-12 record hook must reject missing reviewed video",
+    )
+    require(
+        automation["prePublicBuild"] == {
+            "command": "node", "args": ["-e", "process.exit(0)"], "cwd": ".",
+        },
+        "D-12 pre-public build hook must be inert",
+    )
+    for name, mode in (("deploy", "Deploy"), ("rollbackDeploy", "Rollback")):
+        spec = automation.get(name)
+        require(
+            isinstance(spec, dict)
+            and spec.get("command") == "powershell.exe"
+            and spec.get("args")
+            == [
+                "-NoProfile", "-ExecutionPolicy", "Bypass", "-File",
+                DEPLOY_SCRIPT, "-Mode", mode,
+            ]
+            and spec.get("cwd", ".") == ".",
+            f"D-12 {name} must use the reviewed beta-only deployment wrapper",
+        )
+    require(
+        automation["smoke"] == {
+            "command": "node",
+            "args": ["tests/scripts/smoke-beta-demo-publication.js"],
+            "cwd": ".",
+        },
+        "D-12 smoke must use the reviewed beta-only browser check",
+    )
+
+
+def run(*args: str, timeout: int = 180) -> str:
     try:
         return subprocess.run(
-            args, check=True, capture_output=True, text=True, timeout=180
+            args, check=True, capture_output=True, text=True, timeout=timeout
         ).stdout.strip()
     except (OSError, subprocess.SubprocessError) as exc:
         raise PublicationEvidenceError("Protected publication command failed") from exc
@@ -248,6 +296,9 @@ def produce(args: argparse.Namespace) -> None:
         and args.campaign.is_file(),
         "Signed beta or reviewed recording inputs are unavailable",
     )
+    require(Path.cwd().resolve() == Path(__file__).resolve().parents[1],
+            "D-12 beta deployment requires the reviewed UI checkout")
+    require_beta_deploy_config(args.config)
     require(
         args.recorder_root.is_dir()
         and SHA.fullmatch(args.recorder_commit) is not None
@@ -332,6 +383,7 @@ def produce(args: argparse.Namespace) -> None:
                     str(expectation),
                     "--output",
                     str(provisional),
+                    timeout=15 * 60,
                 )
                 producer = json.loads(provisional.read_text())
                 require(

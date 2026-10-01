@@ -1,5 +1,6 @@
 import copy
 import hashlib
+import json
 
 import pytest
 
@@ -7,6 +8,7 @@ from scripts.produce_passport_beta_demo_publication import (
     NEGATIVE,
     PublicationEvidenceError,
     expected_from_live_preliminary,
+    require_beta_deploy_config,
     stage_negative_media,
 )
 
@@ -27,6 +29,65 @@ MEDIA = {
     "foreign-callback-uncut.webm": "6" * 64,
     "foreign-callback-privacy-scan.json": "7" * 64,
 }
+
+
+def test_protected_publisher_requires_beta_only_deploy_and_rollback(tmp_path):
+    script = "scripts/deploy-passport-demo-content-beta.ps1"
+    config = {
+        "automation": {
+            name: {
+                "command": "powershell.exe",
+                "args": ["-NoProfile", "-ExecutionPolicy", "Bypass", "-File",
+                         script, "-Mode", mode],
+                "cwd": ".",
+            }
+            for name, mode in (("deploy", "Deploy"), ("rollbackDeploy", "Rollback"))
+        }
+    }
+    config["automation"]["record"] = {
+        "command": "node", "args": ["-e", "process.exit(1)"], "cwd": ".",
+    }
+    config["automation"]["prePublicBuild"] = {
+        "command": "node", "args": ["-e", "process.exit(0)"], "cwd": ".",
+    }
+    config["automation"]["smoke"] = {
+        "command": "node",
+        "args": ["tests/scripts/smoke-beta-demo-publication.js"],
+        "cwd": ".",
+    }
+    path = tmp_path / "reviewed.json"
+    path.write_text(json.dumps(config), encoding="utf-8")
+    require_beta_deploy_config(path)
+    for name, field, value in (
+        ("deploy", "args", ["-File", "scripts/deploy-demo-content.ps1"]),
+        ("rollbackDeploy", "args", ["-File", "scripts/deploy-demo-content.ps1"]),
+        ("deploy", "cwd", "../unreviewed-checkout"),
+        ("deploy", "command", "bash"),
+    ):
+        changed = copy.deepcopy(config)
+        changed["automation"][name][field] = value
+        path.write_text(json.dumps(changed), encoding="utf-8")
+        with pytest.raises(PublicationEvidenceError, match="beta-only"):
+            require_beta_deploy_config(path)
+    changed = copy.deepcopy(config)
+    del changed["automation"]["rollbackDeploy"]
+    path.write_text(json.dumps(changed), encoding="utf-8")
+    with pytest.raises(PublicationEvidenceError, match="missing or unrestricted"):
+        require_beta_deploy_config(path)
+    for name in ("record", "prePublicBuild"):
+        changed = copy.deepcopy(config)
+        changed["automation"][name] = {
+            "command": "powershell.exe",
+            "args": ["-File", "scripts/deploy-demo-content.ps1"],
+        }
+        path.write_text(json.dumps(changed), encoding="utf-8")
+        with pytest.raises(PublicationEvidenceError, match="hook"):
+            require_beta_deploy_config(path)
+    changed = copy.deepcopy(config)
+    changed["automation"]["smoke"]["args"] = ["unreviewed.js"]
+    path.write_text(json.dumps(changed), encoding="utf-8")
+    with pytest.raises(PublicationEvidenceError, match="beta-only browser"):
+        require_beta_deploy_config(path)
 
 
 def fixtures():
