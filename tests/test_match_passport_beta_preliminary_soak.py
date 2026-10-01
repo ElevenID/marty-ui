@@ -44,6 +44,12 @@ def preliminary():
         "kind": "preliminary", "run_id": 111,
         "artifact_name": "passport-beta-preliminary-111",
         "artifact_sha256": "3" * 64,
+        "media_sha256": {
+            "unsigned-callback-uncut.webm": "4" * 64,
+            "foreign-callback-uncut.webm": "5" * 64,
+            "unsigned-callback-privacy-scan.json": "6" * 64,
+            "foreign-callback-privacy-scan.json": "7" * 64,
+        },
         "workflow_commit": SOURCE,
         "run_completed_at_utc": START.isoformat(),
         "value": {
@@ -112,6 +118,9 @@ def test_matches_one_selected_job_after_preliminary_recording():
     assert result["selected_source_job_commitment"] == JOB
     assert result["selected_bureau_job_commitment"] == BUREAU
     assert result["preliminary_run_id"] == 111
+    assert result["preliminary_completed_at_utc"] == START.isoformat()
+    assert result["preliminary_negative_media_sha256"][
+        "unsigned-callback-uncut.webm"] == "4" * 64
     assert len(result["soak_samples"]) == 3
 
 
@@ -148,6 +157,13 @@ def test_rejects_preliminary_from_a_different_protected_source():
     altered = copy.deepcopy(preliminary())
     altered["workflow_commit"] = "9" * 40
     with pytest.raises(LineageError, match="artifact identity"):
+        match_preliminary_soak(live(), altered, soak())
+
+
+def test_rejects_incomplete_protected_negative_media():
+    altered = copy.deepcopy(preliminary())
+    altered["media_sha256"].pop("foreign-callback-uncut.webm")
+    with pytest.raises(LineageError, match="callback media"):
         match_preliminary_soak(live(), altered, soak())
 
 

@@ -22,6 +22,8 @@ REPOSITORY = "ElevenID/marty-ui"
 WORKFLOWS = {
     "preliminary": ("passport-beta-preliminary.yml", "passport-beta-preliminary"),
     "soak": ("passport-beta-soak-sample.yml", "passport-beta-soak"),
+    "publication": ("passport-beta-demo-publication.yml",
+                    "passport-beta-demo-publication"),
 }
 SHA = re.compile(r"[0-9a-f]{40}\Z")
 SHA256 = re.compile(r"[0-9a-f]{64}\Z")
@@ -163,7 +165,7 @@ def read_artifact(
                     and value.get("status") == "qualified_for_recording",
                     "Protected preliminary artifact did not qualify recording")
             media_hashes = _read_preliminary_media(destination, value)
-        else:
+        elif kind == "soak":
             require(value.get("schema") == "marty.passport-beta-soak-sample/v1"
                     and value.get("status") == "observed"
                     and value.get("protected_run") == {
@@ -171,6 +173,15 @@ def read_artifact(
                         "workflow_commit": metadata["head_sha"],
                     },
                     "Protected soak artifact does not bind its workflow run")
+            media_hashes = {}
+        else:
+            require(value.get("schema") == "marty.passport-beta-demo-publication/v1"
+                    and value.get("status") == "public_verified"
+                    and value.get("protected_run") == {
+                        "run_id": str(run_id),
+                        "workflow_commit": metadata["head_sha"],
+                    },
+                    "Protected D-12 publication artifact does not bind its workflow run")
             media_hashes = {}
     return {
         "kind": kind,

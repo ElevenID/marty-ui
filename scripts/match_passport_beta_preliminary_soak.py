@@ -32,6 +32,11 @@ SELECTED_PROBES = (
     "physical_bureau_batch", "signed_bureau_callback",
     "physical_claim_boundary", "unsigned_or_foreign_callback_denied",
 )
+NEGATIVE_MEDIA = (
+    "unsigned-callback-uncut.webm", "foreign-callback-uncut.webm",
+    "unsigned-callback-privacy-scan.json",
+    "foreign-callback-privacy-scan.json",
+)
 
 
 class LineageError(ValueError):
@@ -108,6 +113,15 @@ def match_preliminary_soak(
             and isinstance(preliminary.get("value"), dict),
             "Protected preliminary artifact identity is incomplete")
     value = preliminary["value"]
+    media_hashes = preliminary.get("media_sha256")
+    require(isinstance(media_hashes, dict)
+            and set(media_hashes) == set(NEGATIVE_MEDIA)
+            and all(isinstance(media_hashes[name], str)
+                    and SHA256.fullmatch(media_hashes[name]) is not None
+                    for name in NEGATIVE_MEDIA)
+            and media_hashes["unsigned-callback-uncut.webm"]
+                != media_hashes["foreign-callback-uncut.webm"],
+            "Protected preliminary callback media is incomplete")
     require(value.get("schema") == "marty.passport-beta-preliminary/v1"
             and value.get("status") == "qualified_for_recording"
             and value.get("beta_origin") == live["beta_origin"]
@@ -188,6 +202,9 @@ def match_preliminary_soak(
         "selected_bureau_job_commitment": bureau,
         "preliminary_run_id": preliminary["run_id"],
         "preliminary_artifact_sha256": preliminary["artifact_sha256"],
+        "preliminary_completed_at_utc": preliminary_completed.isoformat(),
+        "preliminary_negative_media_sha256": {
+            name: media_hashes[name] for name in NEGATIVE_MEDIA},
         "soak_samples": soak["samples"],
         "soak_first_observed_at_utc": first.isoformat(),
         "soak_last_observed_at_utc": last.isoformat(),

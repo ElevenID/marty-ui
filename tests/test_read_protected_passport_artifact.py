@@ -26,10 +26,13 @@ def metadata(workflow):
 
 
 def downloader(kind, *, run=None, artifact=None, extra=None):
-    workflow = ("passport-beta-preliminary.yml" if kind == "preliminary"
-                else "passport-beta-soak-sample.yml")
-    prefix = ("passport-beta-preliminary" if kind == "preliminary"
-              else "passport-beta-soak")
+    workflows = {
+        "preliminary": ("passport-beta-preliminary.yml", "passport-beta-preliminary"),
+        "soak": ("passport-beta-soak-sample.yml", "passport-beta-soak"),
+        "publication": ("passport-beta-demo-publication.yml",
+                        "passport-beta-demo-publication"),
+    }
+    workflow, prefix = workflows[kind]
     source = run or metadata(workflow)
     media = {}
     negative_runs = {}
@@ -55,6 +58,10 @@ def downloader(kind, *, run=None, artifact=None, extra=None):
     } if kind == "preliminary" else {
         "schema": "marty.passport-beta-soak-sample/v1", "status": "observed",
         "protected_run": {"run_id": str(RUN), "workflow_commit": SOURCE},
+    } if kind == "soak" else {
+        "schema": "marty.passport-beta-demo-publication/v1",
+        "status": "public_verified",
+        "protected_run": {"run_id": str(RUN), "workflow_commit": SOURCE},
     })
 
     def execute(args):
@@ -72,7 +79,7 @@ def downloader(kind, *, run=None, artifact=None, extra=None):
     return execute
 
 
-def test_reads_exact_protected_preliminary_and_soak():
+def test_reads_exact_protected_preliminary_soak_and_publication():
     preliminary = read_artifact("preliminary", RUN,
                                 execute=downloader("preliminary"))
     assert preliminary["kind"] == "preliminary"
@@ -81,6 +88,10 @@ def test_reads_exact_protected_preliminary_and_soak():
     soak = read_artifact("soak", RUN, execute=downloader("soak"))
     assert soak["workflow_commit"] == SOURCE
     assert soak["value"]["protected_run"]["run_id"] == str(RUN)
+    publication = read_artifact("publication", RUN,
+                                execute=downloader("publication"))
+    assert publication["kind"] == "publication"
+    assert publication["artifact_name"] == f"passport-beta-demo-publication-{RUN}"
 
 
 def test_rejects_unprotected_run_or_bad_workflow():
@@ -102,6 +113,15 @@ def test_rejects_soak_artifact_with_wrong_run_binding():
     with pytest.raises(ProtectedArtifactError, match="does not bind"):
         read_artifact("soak", RUN,
                       execute=downloader("soak", artifact=forged))
+
+
+def test_rejects_publication_artifact_with_wrong_run_binding():
+    forged = {"schema": "marty.passport-beta-demo-publication/v1",
+              "status": "public_verified", "protected_run": {
+                  "run_id": str(RUN + 1), "workflow_commit": SOURCE}}
+    with pytest.raises(ProtectedArtifactError, match="D-12 publication artifact"):
+        read_artifact("publication", RUN,
+                      execute=downloader("publication", artifact=forged))
 
 
 def test_rejects_preliminary_with_unexpected_file_or_bad_media():
