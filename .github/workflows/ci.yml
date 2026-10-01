@@ -1172,6 +1172,12 @@ jobs:
       - name: Check formatting
         working-directory: rust
         run: cargo fmt --all -- --check
+      - name: Keep MMF security on its focused UI feature set
+        working-directory: rust
+        shell: bash
+        run: |
+          set -euo pipefail
+          cargo metadata --locked --format-version 1 | python3 ../scripts/ci/check_mmf_security_features.py
       - name: Lint Rust services
         working-directory: rust
         run: cargo clippy --locked --workspace --all-targets -- -D warnings
