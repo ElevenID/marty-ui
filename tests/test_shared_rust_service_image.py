@@ -65,7 +65,12 @@ def test_shared_service_image_builds_all_rust_binaries_once() -> None:
 
 def test_public_builder_cooks_dependencies_before_copying_all_source() -> None:
     dockerfile = (ROOT / "services/Dockerfile").read_text(encoding="utf-8")
-    builder = dockerfile.split("FROM rust-service-cache AS rust-service-builder", 1)[1]
+    dependencies = dockerfile.split(
+        "FROM rust-service-cache AS rust-service-dependencies", 1
+    )[1]
+    builder = dockerfile.split(
+        "FROM rust-service-dependencies AS rust-service-builder", 1
+    )[1]
     assert "FROM rust:1.95-bookworm@sha256:" in dockerfile
     assert "cargo install cargo-chef --locked --version 0.1.78" in dockerfile
     assert (
@@ -74,16 +79,19 @@ def test_public_builder_cooks_dependencies_before_copying_all_source() -> None:
     )
     assert (
         "COPY --from=rust-service-planner /build/rust/recipe.json recipe.json"
-        in builder
+        in dependencies
     )
-    assert "COPY --from=rust-service-planner /build/rust/third_party" in builder
-    assert builder.index(
+    assert "COPY --from=rust-service-planner /build/rust/third_party" in dependencies
+    assert dependencies.index(
         "cargo chef cook --locked --release --workspace"
-    ) < builder.index("COPY rust /build/rust")
+    ) < dependencies.index("FROM rust-service-dependencies AS rust-service-builder")
+    assert builder.index("COPY rust /build/rust") < builder.index(
+        "run-public-rust-build build-rust-service-binaries default"
+    )
     assert (
         builder.count("run-public-rust-build build-rust-service-binaries default") == 1
     )
-    assert builder.count("--mount=type=secret,id=sccache_token") == 3
+    assert dependencies.count("--mount=type=secret,id=sccache_token") == 3
     assert "RUSTFLAGS" not in dockerfile
     assert "ENV SCCACHE" not in dockerfile
     wrapper = (ROOT / "scripts/ci/run-public-rust-build.sh").read_text(encoding="utf-8")
@@ -185,9 +193,9 @@ def test_public_build_cache_is_read_only_in_ci_and_written_only_by_main_release(
     warm_build = next(
         step
         for step in warmer["steps"]
-        if step.get("name") == "Warm public service dependency and binary layers"
+        if step.get("name") == "Warm public service dependency layers"
     )
-    assert warm_build["with"]["target"] == "rust-service-builder"
+    assert warm_build["with"]["target"] == "rust-service-dependencies"
     assert (
         warm_build["with"]["cache-to"]
         == "type=gha,mode=max,scope=marty-ui-public-services,ignore-error=true"

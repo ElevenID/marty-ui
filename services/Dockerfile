@@ -30,7 +30,7 @@ RUN case "$TARGETARCH" in \
 
 COPY --chmod=755 scripts/ci/run-public-rust-build.sh /usr/local/bin/run-public-rust-build
 
-FROM rust-service-cache AS rust-service-builder
+FROM rust-service-cache AS rust-service-dependencies
 
 COPY --from=rust-service-planner /build/rust/recipe.json recipe.json
 COPY --from=rust-service-planner /build/rust/third_party /build/rust/third_party
@@ -41,6 +41,8 @@ RUN --mount=type=cache,id=marty-public-cargo-registry,target=/usr/local/cargo/re
     --mount=type=secret,id=sccache_url \
     --mount=type=secret,id=sccache_mode \
     run-public-rust-build cargo chef cook --locked --release --workspace --recipe-path recipe.json
+
+FROM rust-service-dependencies AS rust-service-builder
 
 COPY rust /build/rust
 COPY proto /build/proto

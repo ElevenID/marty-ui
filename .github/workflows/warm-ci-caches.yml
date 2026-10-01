@@ -145,12 +145,12 @@ jobs:
             core.exportVariable('SCCACHE_GHA_RUNTIME_TOKEN', token);
             core.exportVariable('SCCACHE_GHA_CACHE_URL', url);
             core.exportVariable('SCCACHE_GHA_RW_MODE', 'READ_WRITE');
-      - name: Warm public service dependency and binary layers
+      - name: Warm public service dependency layers
         uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc
         with:
           context: .
           file: services/Dockerfile
-          target: rust-service-builder
+          target: rust-service-dependencies
           push: false
           provenance: false
           cache-from: type=gha,scope=marty-ui-public-services
