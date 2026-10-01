@@ -518,7 +518,7 @@ jobs:
         working-directory: rust
         shell: bash
         run: >-
-          cargo test --locked --workspace --no-run --message-format=json
+          cargo test --locked --workspace --no-run --timings --message-format=json
           > "$RUNNER_TEMP/rust-test-artifacts.json"
       - name: Verify feature-regression observer isolation
         shell: bash
@@ -1140,7 +1140,23 @@ jobs:
           "$RUNNER_TEMP/canvas-operation-tls/bin/python" ../scripts/run_canvas_timeout_consumer_oracle.py --native-executable "${executables[0]}"
       - name: Report compiler cache effectiveness
         if: always()
-        run: sccache --show-stats
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/rust-build-evidence"
+          sccache --show-stats |
+            python3 scripts/ci/sanitize_sccache_stats.py > "$RUNNER_TEMP/rust-build-evidence/sccache-stats.json"
+          if test -f rust/target/cargo-timings/cargo-timing.html; then
+            cp rust/target/cargo-timings/cargo-timing.html "$RUNNER_TEMP/rust-build-evidence/cargo-timing.html"
+          fi
+      - name: Upload Rust build evidence
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: rust-build-evidence-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/rust-build-evidence/
+          if-no-files-found: warn
+          retention-days: 2
   rust-lint-policy:
     name: Rust Lint and Packaging
     needs: changes

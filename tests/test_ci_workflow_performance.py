@@ -861,22 +861,29 @@ def test_canvas_lti_https_gate_requires_real_linux_parent_test() -> None:
 
 
 def _assert_no_rust_executable_transfer(steps) -> None:
-    # Failure logs are diagnostic evidence, not transfers of compiled tests.
-    # The dedicated diagnostic contract separately validates the full step.
-    uploads = []
+    # These two allowlisted uploads contain diagnostics and build timings,
+    # never compiled tests. Other artifact transfers remain forbidden.
+    expected_uploads = {
+        "Preserve synthetic runtime failure diagnostics": (
+            "${{ runner.temp }}/marty-owned-runtime-diagnostics/*.*"
+        ),
+        "Upload Rust build evidence": "${{ runner.temp }}/rust-build-evidence/",
+    }
+    uploads = {}
     for step in steps:
         action = step.get("uses", "")
         assert not action.startswith("actions/download-artifact@")
         if action.startswith("actions/upload-artifact@"):
-            uploads.append(step)
-            assert step.get("name") == "Preserve synthetic runtime failure diagnostics"
-            assert step.get("with", {}).get("path") == (
-                "${{ runner.temp }}/marty-owned-runtime-diagnostics/*.*"
-            )
-    assert len(uploads) == 1
+            name = step.get("name")
+            assert name in expected_uploads and name not in uploads
+            assert step.get("with", {}).get("path") == expected_uploads[name]
+            uploads[name] = step
+    assert set(uploads) == set(expected_uploads)
 
 
-@pytest.mark.parametrize("fault", ["binary", "broad", "extra", "download"])
+@pytest.mark.parametrize(
+    "fault", ["binary", "broad", "build-binary", "build-broad", "extra", "download"]
+)
 def test_rust_executable_transfer_guard_rejects_non_diagnostic_artifacts(fault):
     _, document = _workflow(CI_PATH)
     steps = document["jobs"]["test-rust-services"]["steps"]
@@ -889,6 +896,15 @@ def test_rust_executable_transfer_guard_rejects_non_diagnostic_artifacts(fault):
         upload["with"]["path"] = "rust/target/debug/*"
     elif fault == "broad":
         upload["with"]["path"] = "${{ runner.temp }}/**"
+    elif fault in {"build-binary", "build-broad"}:
+        build_upload = next(
+            step for step in steps if step.get("name") == "Upload Rust build evidence"
+        )
+        build_upload["with"]["path"] = (
+            "rust/target/debug/*"
+            if fault == "build-binary"
+            else "${{ runner.temp }}/**"
+        )
     elif fault == "extra":
         steps.append(dict(upload))
     else:
