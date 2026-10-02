@@ -695,6 +695,32 @@ def test_stack_release_uses_read_only_default_permissions() -> None:
         assert permissions.get("security-events") != "write"
 
 
+def test_release_approval_notice_cannot_replace_the_protected_gate() -> None:
+    jobs = yaml.safe_load(_text(".github/workflows/cd.yml"))["jobs"]
+    notice = jobs["notify-release-approval"]
+    publication = jobs["publish-manifest"]
+    script = notice["steps"][0]["run"]
+
+    assert notice["needs"] == publication["needs"]
+    assert "notify-release-approval" not in publication["needs"]
+    assert notice["if"] == "github.ref == 'refs/heads/main'"
+    assert notice["continue-on-error"] is True
+    assert notice["permissions"] == {"actions": "read", "issues": "write"}
+    assert "environment" not in notice
+    assert publication["environment"] == "stack-release"
+    assert "pending_deployments" in script
+    assert '.environment.name == "stack-release"' in script
+    assert '.reviewers[]?' in script
+    assert '.type == "User"' in script
+    assert '.type == "Team"' in script
+    assert '"@" + $owner + "/" + .reviewer.slug' in script
+    assert "stack-release-approval:$GITHUB_RUN_ID:$GITHUB_RUN_ATTEMPT" in script
+    assert '.user.login == "github-actions[bot]"' in script
+    assert "publish_status" in script
+    assert 'gh issue comment "$issue" --repo "$GITHUB_REPOSITORY"' in script
+    assert "gh api --method POST" not in script
+
+
 def test_public_builds_do_not_checkout_sibling_sources() -> None:
     workflow = _text(".github/workflows/cd.yml")
     dockerfiles = "\n".join(
