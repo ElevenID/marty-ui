@@ -16,7 +16,7 @@ def test_public_flow_main_gate_is_registered_and_required():
     assert f"grep -Fx '{NAME}: test'" in script
     assert 'preflight_skips=()' in script
     assert 'if [[ "$mode" == full-after-preflights ]]; then' in script
-    assert '"${executables[0]}" --skip "$serial_test" "${preflight_skips[@]}" --nocapture --test-threads=4' in script
+    assert '"${executables[0]}" --skip "$serial_test" "${preflight_skips[@]}" --nocapture --test-threads=6' in script
     workflow = (ROOT / ".github/workflows/ci.yml").read_text()
     assert "test -x rust/target/debug/marty-flow" in workflow
 

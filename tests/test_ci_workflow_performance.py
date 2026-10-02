@@ -761,7 +761,7 @@ def test_published_canvas_schema_gate_is_explicit_and_mandatory() -> None:
         in published
     )
     assert published.rstrip().endswith(
-        '"${executables[0]}" --skip "$serial_test" "${preflight_skips[@]}" --nocapture --test-threads=4'
+        '"${executables[0]}" --skip "$serial_test" "${preflight_skips[@]}" --nocapture --test-threads=6'
     )
     assert (
         '"${executables[0]}" "$serial_test" --exact --nocapture --test-threads=1'
@@ -816,7 +816,7 @@ def _assert_gateway_operations_registration(
     assert published.splitlines().count(inventory) == 1
     assert 'export MARTY_CANVAS_PUBLISHED_SCHEMA_TEST="1"' in published
     assert published.rstrip().endswith(
-        '"${executables[0]}" --skip "$serial_test" "${preflight_skips[@]}" --nocapture --test-threads=4'
+        '"${executables[0]}" --skip "$serial_test" "${preflight_skips[@]}" --nocapture --test-threads=6'
     )
     assert (f'#[path = "support/{module}.rs"]\nmod {module};') in source
     matches = re.findall(
@@ -909,8 +909,8 @@ def test_gateway_operations_registration_rejects_disabled_or_incomplete_gate(
         )
     elif mutation == "filtered-full-run":
         published = published.replace(
-            '"${executables[0]}" --skip "$serial_test" "${preflight_skips[@]}" --nocapture --test-threads=4',
-            '"${executables[0]}" unrelated_filter --skip "$serial_test" "${preflight_skips[@]}" --nocapture --test-threads=4',
+            '"${executables[0]}" --skip "$serial_test" "${preflight_skips[@]}" --nocapture --test-threads=6',
+            '"${executables[0]}" unrelated_filter --skip "$serial_test" "${preflight_skips[@]}" --nocapture --test-threads=6',
         )
     else:
         start = source.index(f"async fn {name}")
