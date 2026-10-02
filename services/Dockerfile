@@ -50,15 +50,9 @@ COPY contracts /build/contracts
 COPY services/auth/assets /build/services/auth/assets
 COPY --chmod=755 scripts/build-rust-service-binaries.sh /usr/local/bin/build-rust-service-binaries
 
-# Preserve the exact public release binary list and profile. Source-only edits
-# reuse the cooked dependency layer; the opt-in variant inherits this build.
-RUN --mount=type=cache,id=marty-public-cargo-registry,target=/usr/local/cargo/registry,sharing=locked \
-    --mount=type=cache,id=marty-public-cargo-git,target=/usr/local/cargo/git,sharing=locked \
-    --mount=type=secret,id=sccache_token \
-    --mount=type=secret,id=sccache_url \
-    --mount=type=secret,id=sccache_mode \
-    run-public-rust-build build-rust-service-binaries default
-
+# Preserve the exact public release binary list and profile. The opt-in image
+# builds the same list with its feature once, without first compiling the
+# default binaries. Both modes reuse the cooked dependency layer.
 ARG PASSPORT_SELF_SIGNED_TEST=false
 RUN --mount=type=cache,id=marty-public-cargo-registry,target=/usr/local/cargo/registry,sharing=locked \
     --mount=type=cache,id=marty-public-cargo-git,target=/usr/local/cargo/git,sharing=locked \
@@ -66,7 +60,7 @@ RUN --mount=type=cache,id=marty-public-cargo-registry,target=/usr/local/cargo/re
     --mount=type=secret,id=sccache_url \
     --mount=type=secret,id=sccache_mode \
     case "$PASSPORT_SELF_SIGNED_TEST" in \
-      false) : ;; \
+      false) run-public-rust-build build-rust-service-binaries default ;; \
       true) run-public-rust-build build-rust-service-binaries passport-self-signed-test ;; \
       *) echo "PASSPORT_SELF_SIGNED_TEST must be true or false" >&2; exit 2 ;; \
     esac

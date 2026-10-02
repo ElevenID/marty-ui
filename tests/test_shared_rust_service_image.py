@@ -51,9 +51,13 @@ def test_shared_service_image_builds_all_rust_binaries_once() -> None:
         dockerfile.count("run-public-rust-build build-rust-service-binaries default")
         == 1
     )
-    assert dockerfile.index(
+    assert dockerfile.index("ARG PASSPORT_SELF_SIGNED_TEST=false") < dockerfile.index(
         "run-public-rust-build build-rust-service-binaries default"
-    ) < dockerfile.index("ARG PASSPORT_SELF_SIGNED_TEST=false")
+    )
+    assert (
+        "false) run-public-rust-build build-rust-service-binaries default ;;"
+        in dockerfile
+    )
     assert (
         "true) run-public-rust-build build-rust-service-binaries passport-self-signed-test"
         in dockerfile
@@ -86,12 +90,13 @@ def test_public_builder_cooks_dependencies_before_copying_all_source() -> None:
         "cargo chef cook --locked --release --workspace"
     ) < dependencies.index("FROM rust-service-dependencies AS rust-service-builder")
     assert builder.index("COPY rust /build/rust") < builder.index(
-        "run-public-rust-build build-rust-service-binaries default"
+        "ARG PASSPORT_SELF_SIGNED_TEST=false"
     )
     assert (
         builder.count("run-public-rust-build build-rust-service-binaries default") == 1
     )
-    assert dependencies.count("--mount=type=secret,id=sccache_token") == 3
+    assert builder.count("RUN --mount=type=cache,id=marty-public-cargo-registry") == 1
+    assert dependencies.count("--mount=type=secret,id=sccache_token") == 2
     assert "RUSTFLAGS" not in dockerfile
     assert "ENV SCCACHE" not in dockerfile
     wrapper = (ROOT / "scripts/ci/run-public-rust-build.sh").read_text(encoding="utf-8")
