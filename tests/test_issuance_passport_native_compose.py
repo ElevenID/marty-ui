@@ -178,6 +178,10 @@ def test_self_signed_test_image_is_explicit_opt_in() -> None:
     )
     assert "ARG PASSPORT_SELF_SIGNED_TEST=false" in dockerfile
     assert (
+        "false) run-public-rust-build build-rust-service-binaries default ;;"
+        in dockerfile
+    )
+    assert (
         "true) run-public-rust-build build-rust-service-binaries passport-self-signed-test"
         in dockerfile
     )
