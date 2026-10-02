@@ -86,7 +86,7 @@ tower-http = { version = "0.6", features = ["trace"] }
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter", "json"] }
 uuid = { version = "1", features = ["serde", "v4", "v5"] }
-x509-cert = { version = "0.2.5", features = ["pem"] }
+x509-cert = { version = "0.2.5", features = ["builder", "pem"] }
 url = "2"
 zeroize = "1.9"
 zip = { version = "=8.6.0", default-features = false, features = ["deflate-flate2"] }
