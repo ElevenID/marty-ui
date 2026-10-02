@@ -259,6 +259,8 @@ def test_pull_request_classifier_is_conservative_and_merge_queue_is_complete() -
         "test-ui-crawler-nginx",
         "test-services",
         "test-passport-fence-postgres",
+        "test-rust-feature-probe",
+        "test-rust-passport-image",
         "test-rust-services",
         "rust-lint-policy",
         "test-rust-service-images",
@@ -276,6 +278,35 @@ def test_pull_request_classifier_is_conservative_and_merge_queue_is_complete() -
     assert gate_needs == conditional_jobs | {"changes", "lint"}
     assert '[[ "$result" == success || "$result" == skipped ]]' in source
     assert 'test "$result" = success' in source
+
+
+def test_independent_rust_lanes_remain_required_without_transferring_builds() -> None:
+    _, document = _workflow(CI_PATH)
+    jobs = document["jobs"]
+    service_names = {step.get("name") for step in jobs["test-rust-services"]["steps"]}
+    probe = jobs["test-rust-feature-probe"]
+    passport = jobs["test-rust-passport-image"]
+    assert probe["needs"] == passport["needs"] == "changes"
+    assert probe["if"] == passport["if"] == jobs["test-rust-services"]["if"]
+    assert {"test-rust-feature-probe", "test-rust-passport-image"} <= set(
+        jobs["ci-gate"]["needs"]
+    )
+    assert "Verify frozen Rust feature-regression probe" not in service_names
+    assert "Build opt-in passport test-mode image" not in service_names
+    assert "Verify opt-in passport test-mode image boundary" not in service_names
+    assert {step.get("name") for step in probe["steps"]} >= {
+        "Verify frozen Rust feature-regression probe"
+    }
+    passport_names = [step.get("name") for step in passport["steps"]]
+    assert passport_names.index("Build opt-in passport test-mode image") < passport_names.index(
+        "Verify opt-in passport test-mode image boundary"
+    )
+    assert "Build public selfhost image" in service_names
+    for job in (probe, passport):
+        assert not any(
+            step.get("uses", "").startswith("actions/download-artifact@")
+            for step in job["steps"]
+        )
 
 
 @pytest.mark.parametrize(

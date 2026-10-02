@@ -150,9 +150,10 @@ def test_public_build_cache_is_read_only_in_ci_and_written_only_by_main_release(
         (ROOT / ".github/workflows/warm-ci-caches.yml").read_text(encoding="utf-8")
     )
     ci_steps = ci["jobs"]["test-rust-services"]["steps"]
+    passport_steps = ci["jobs"]["test-rust-passport-image"]["steps"]
     public = [
         step
-        for step in ci_steps
+        for step in ci_steps + passport_steps
         if step.get("name")
         in ("Build public selfhost image", "Build opt-in passport test-mode image")
     ]
@@ -173,6 +174,12 @@ def test_public_build_cache_is_read_only_in_ci_and_written_only_by_main_release(
         if step.get("name") == "Expose public image compiler cache credentials"
     )
     assert "'SCCACHE_GHA_RW_MODE', 'READ_ONLY'" in ci_credential["with"]["script"]
+    passport_credential = next(
+        step
+        for step in passport_steps
+        if step.get("name") == "Expose public image compiler cache credentials"
+    )
+    assert "'SCCACHE_GHA_RW_MODE', 'READ_ONLY'" in passport_credential["with"]["script"]
     release = cd["jobs"]["build-services"]
     release_steps = release["steps"]
     release_credential = next(
