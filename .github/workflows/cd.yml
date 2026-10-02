@@ -985,6 +985,65 @@ jobs:
           if-no-files-found: error
           retention-days: 90
 
+  notify-release-approval:
+    # This is a parallel handoff, never a prerequisite for publication.
+    needs: [resolve-transaction, validate-stack, build-ui, build-services, qualify-release]
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    continue-on-error: true
+    permissions:
+      actions: read
+      issues: write
+    steps:
+      - name: Mention reviewers when the qualified release awaits approval
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          issue=1037
+          marker="<!-- stack-release-approval:$GITHUB_RUN_ID:$GITHUB_RUN_ATTEMPT -->"
+          endpoint="repos/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID/pending_deployments"
+          jobs_endpoint="repos/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID/jobs?per_page=100"
+          # The publish job may wait for scheduling before entering its environment.
+          for attempt in {1..60}; do
+            pending="$(gh api "$endpoint")"
+            mentions="$(jq -r --arg owner "$GITHUB_REPOSITORY_OWNER" '
+              [.[] | select(.environment.name == "stack-release")
+                | .reviewers[]?
+                | if .type == "User" then "@" + .reviewer.login
+                  elif .type == "Team" and .reviewer.slug != null then "@" + $owner + "/" + .reviewer.slug
+                  else empty end]
+              | unique | join(" ")
+            ' <<<"$pending")"
+            if [ -n "$mentions" ]; then break; fi
+            publish_status="$(gh api "$jobs_endpoint" --jq '[.jobs[] | select(.name == "publish-manifest") | .status] | .[0] // empty')"
+            if [[ "$publish_status" == in_progress || "$publish_status" == completed ]]; then
+              echo "Approval already cleared; publication is $publish_status"
+              exit 0
+            fi
+            sleep 10
+          done
+          if [ -z "$mentions" ]; then
+            echo "::warning::No protected approval was observed within ten minutes; check the release run"
+            exit 0
+          fi
+          comments="$(gh api --paginate "repos/$GITHUB_REPOSITORY/issues/$issue/comments?per_page=100" --jq '.[] | select(.user.login == "github-actions[bot]") | .body')"
+          if grep -Fq "$marker" <<<"$comments"; then
+            echo "Approval handoff already posted for this run"
+            exit 0
+          fi
+          # Recheck after the duplicate guard in case approval happened meanwhile.
+          pending="$(gh api "$endpoint")"
+          if ! jq -e 'any(.[]; .environment.name == "stack-release")' <<<"$pending" >/dev/null; then
+            echo "Approval no longer pending"
+            exit 0
+          fi
+          gh issue comment "$issue" --repo "$GITHUB_REPOSITORY" --body "$marker
+          $mentions A qualified Stack release is waiting for protected environment approval: [Review deployments]($GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID).
+
+          This issue comment is only a notification. Approval must happen in the GitHub Actions deployment review."
+
   publish-manifest:
     needs: [resolve-transaction, validate-stack, build-ui, build-services, qualify-release]
     runs-on: ubuntu-latest
