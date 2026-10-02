@@ -13,12 +13,14 @@ use der::{
 };
 use marty_crypto::{certificate::verify_certificate_signature, jwk::public_key_der_to_jwk};
 use serde_json::Value;
-use spki::{AlgorithmIdentifierOwned, SubjectPublicKeyInfoOwned};
+use spki::{AlgorithmIdentifierOwned, SubjectPublicKeyInfoOwned, SubjectPublicKeyInfoRef};
 use thiserror::Error;
 use x509_cert::{
     certificate::{Certificate, TbsCertificate, Version},
     ext::{
-        pkix::{BasicConstraints, KeyUsage, KeyUsages},
+        pkix::{
+            AuthorityKeyIdentifier, BasicConstraints, KeyUsage, KeyUsages, SubjectKeyIdentifier,
+        },
         AsExtension,
     },
     name::Name,
@@ -162,6 +164,13 @@ fn der_ecdsa_signature(signature: &[u8]) -> bool {
     der::asn1::Any::from_der(signature).is_ok_and(|value| value.tag() == Tag::Sequence)
 }
 
+fn subject_key_identifier(
+    spki: &SubjectPublicKeyInfoOwned,
+) -> Result<SubjectKeyIdentifier, der::Error> {
+    let spki_der = spki.to_der()?;
+    SubjectKeyIdentifier::try_from(SubjectPublicKeyInfoRef::from_der(&spki_der)?)
+}
+
 /// Prepared DER TBS certificate. No signing credential or key locator is held.
 pub struct PreparedDscCertificate {
     tbs: TbsCertificate,
@@ -232,14 +241,36 @@ pub fn prepare_csca(
         not_before: Time::try_from(now).map_err(|_| CscaCertificateError::InvalidValidity)?,
         not_after: Time::try_from(end).map_err(|_| CscaCertificateError::InvalidValidity)?,
     };
+    let subject_identifier =
+        subject_key_identifier(&subject.public_key).map_err(|_| CscaCertificateError::Encoding)?;
+    let key_identifier = subject_identifier
+        .clone()
+        .to_extension(&subject.subject, &[])
+        .map_err(|_| CscaCertificateError::Encoding)?;
+    let authority_identifier = AuthorityKeyIdentifier {
+        key_identifier: Some(subject_identifier.0),
+        ..Default::default()
+    }
+    .to_extension(&subject.subject, std::slice::from_ref(&key_identifier))
+    .map_err(|_| CscaCertificateError::Encoding)?;
     let constraints = BasicConstraints {
         ca: true,
         path_len_constraint: Some(0),
     }
-    .to_extension(&subject.subject, &[])
+    .to_extension(
+        &subject.subject,
+        &[key_identifier.clone(), authority_identifier.clone()],
+    )
     .map_err(|_| CscaCertificateError::Encoding)?;
     let usage = KeyUsage(KeyUsages::KeyCertSign.into())
-        .to_extension(&subject.subject, std::slice::from_ref(&constraints))
+        .to_extension(
+            &subject.subject,
+            &[
+                key_identifier.clone(),
+                authority_identifier.clone(),
+                constraints.clone(),
+            ],
+        )
         .map_err(|_| CscaCertificateError::Encoding)?;
     let tbs = TbsCertificate {
         version: Version::V3,
@@ -254,7 +285,12 @@ pub fn prepare_csca(
         subject_public_key_info: subject.public_key.clone(),
         issuer_unique_id: None,
         subject_unique_id: None,
-        extensions: Some(vec![constraints, usage]),
+        extensions: Some(vec![
+            key_identifier,
+            authority_identifier,
+            constraints,
+            usage,
+        ]),
     };
     let tbs_der = tbs.to_der().map_err(|_| CscaCertificateError::Encoding)?;
     Ok(PreparedCscaCertificate { tbs, tbs_der })
@@ -372,6 +408,11 @@ pub fn prepare_dsc(
     if subject.public_key == issuer_tbs.subject_public_key_info {
         return Err(DscCertificateError::InvalidIssuer);
     }
+    let issuer_key_identifier = issuer_tbs
+        .get::<SubjectKeyIdentifier>()
+        .map_err(|_| DscCertificateError::InvalidIssuer)?
+        .map(|(_, identifier)| identifier.0)
+        .ok_or(DscCertificateError::InvalidIssuer)?;
     verify_issuer_chain(
         &issuer,
         &issuer_der,
@@ -413,16 +454,47 @@ pub fn prepare_dsc(
         not_before: Time::try_from(not_before).map_err(|_| DscCertificateError::InvalidValidity)?,
         not_after: Time::try_from(not_after).map_err(|_| DscCertificateError::InvalidValidity)?,
     };
+    let subject_key_identifier = subject_key_identifier(&subject.public_key)
+        .map_err(|_| DscCertificateError::Encoding)?
+        .to_extension(&subject.subject, &[])
+        .map_err(|_| DscCertificateError::Encoding)?;
+    let authority_key_identifier = AuthorityKeyIdentifier {
+        key_identifier: Some(issuer_key_identifier),
+        ..Default::default()
+    }
+    .to_extension(
+        &subject.subject,
+        std::slice::from_ref(&subject_key_identifier),
+    )
+    .map_err(|_| DscCertificateError::Encoding)?;
     let constraints = BasicConstraints {
         ca: false,
         path_len_constraint: None,
     }
-    .to_extension(&subject.subject, &[])
+    .to_extension(
+        &subject.subject,
+        &[
+            subject_key_identifier.clone(),
+            authority_key_identifier.clone(),
+        ],
+    )
     .map_err(|_| DscCertificateError::Encoding)?;
     let usage = KeyUsage(KeyUsages::DigitalSignature.into())
-        .to_extension(&subject.subject, std::slice::from_ref(&constraints))
+        .to_extension(
+            &subject.subject,
+            &[
+                subject_key_identifier.clone(),
+                authority_key_identifier.clone(),
+                constraints.clone(),
+            ],
+        )
         .map_err(|_| DscCertificateError::Encoding)?;
-    let extensions = vec![constraints, usage];
+    let extensions = vec![
+        subject_key_identifier,
+        authority_key_identifier,
+        constraints,
+        usage,
+    ];
     let tbs = TbsCertificate {
         version: Version::V3,
         serial_number: serial,
@@ -599,6 +671,26 @@ mod tests {
         assert_eq!(certificate_country(&csca_pem).as_deref(), Some("US"));
         let now = SystemTime::now();
         let prepared = prepare_dsc(&subject, &csca_pem, "", &csca_jwk, &[1], 29, now).unwrap();
+        let issuer = Certificate::from_pem(&csca_pem).unwrap();
+        let (_, issuer_identifier) = issuer
+            .tbs_certificate
+            .get::<SubjectKeyIdentifier>()
+            .unwrap()
+            .unwrap();
+        let (_, authority_identifier) = prepared
+            .tbs
+            .get::<AuthorityKeyIdentifier>()
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            authority_identifier.key_identifier,
+            Some(issuer_identifier.0)
+        );
+        let (_, leaf_identifier) = prepared.tbs.get::<SubjectKeyIdentifier>().unwrap().unwrap();
+        assert_eq!(
+            leaf_identifier,
+            subject_key_identifier(&subject.public_key).unwrap()
+        );
         assert!(!prepared.signing_bytes().is_empty());
         let metadata = prepared.metadata().unwrap();
         assert_eq!(metadata.serial_hex, "01");
@@ -643,6 +735,20 @@ mod tests {
         let (subject, _, _) = fixture();
         let now = SystemTime::now();
         let prepared = prepare_csca(&subject, &[1; 16], 365, now).unwrap();
+        let (_, subject_identifier) = prepared.tbs.get::<SubjectKeyIdentifier>().unwrap().unwrap();
+        let (_, authority_identifier) = prepared
+            .tbs
+            .get::<AuthorityKeyIdentifier>()
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            subject_identifier,
+            subject_key_identifier(&subject.public_key).unwrap()
+        );
+        assert_eq!(
+            authority_identifier.key_identifier,
+            Some(subject_identifier.0)
+        );
         assert!(!prepared.signing_bytes().is_empty());
         assert_eq!(prepared.tbs.version, Version::V3);
         assert_eq!(prepared.tbs.subject, prepared.tbs.issuer);

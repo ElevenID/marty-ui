@@ -1,11 +1,8 @@
 //! Opt-in disposable acceptance for the managed passport CSCA -> DSC -> SOD path.
-//! Certificate bodies are assembled here, but every certificate and SOD
+//! Certificate bodies use the shared builders, and every certificate and SOD
 //! signature is made by a Transit-held key. No private key enters this test.
 
-use std::{
-    collections::BTreeMap,
-    time::{Duration, SystemTime},
-};
+use std::{collections::BTreeMap, fs, process::Command, time::SystemTime};
 
 use axum::{
     body::{to_bytes, Body},
@@ -19,12 +16,10 @@ use base64::{
     engine::general_purpose::{STANDARD, URL_SAFE_NO_PAD},
     Engine,
 };
-use const_oid::ObjectIdentifier;
-use der::{asn1::BitString, DecodePem, Encode, EncodePem};
 use marty_crypto::certificate::{load_certificate_pem, verify_certificate_signature};
 use marty_issuance_service::passport_signer::{ManagedProfileSigner, SignerError};
 use marty_signing_keys::{
-    certificate_issuance::{prepare_dsc, VerifiedDscSubject},
+    certificate_issuance::{prepare_csca, prepare_dsc, VerifiedDscSubject},
     csca_lifecycle::CscaLifecycleStore,
     documents::DocumentStore,
     http::router_with_dependencies_and_dsc_key,
@@ -34,21 +29,8 @@ use marty_signing_keys::{
 };
 use num_bigint::BigUint;
 use serde_json::{json, Value};
-use spki::AlgorithmIdentifierOwned;
 use tokio::net::TcpListener;
 use tower::ServiceExt;
-use x509_cert::{
-    certificate::{Certificate, TbsCertificate, Version},
-    ext::{
-        pkix::{BasicConstraints, KeyUsage, KeyUsages},
-        AsExtension,
-    },
-    request::CertReq,
-    serial_number::SerialNumber,
-    time::Validity,
-};
-
-const ECDSA_SHA256: ObjectIdentifier = ObjectIdentifier::new_unwrap("1.2.840.10045.4.3.2");
 const INTERNAL_KEY: &str = "disposable-passport-chain-internal-key";
 const DSC_GATEWAY_KEY: &str = "disposable-passport-dsc-gateway-key-32-characters";
 
@@ -107,66 +89,26 @@ fn signing_config(service: &Value, profile: &Value) -> Value {
     config
 }
 
-// Test-only X.509 assembly. The TBS bytes are sent to the real KMS adapter;
-// this function never creates or loads a local signing key.
-async fn issue_certificate(
-    csr_pem: &str,
-    issuer: x509_cert::name::Name,
-    signer_config: Value,
-    serial: u8,
-    ca: bool,
-) -> String {
-    let csr = CertReq::from_pem(csr_pem).unwrap();
-    let subject = csr.info.subject;
-    let mut extensions = Vec::new();
-    extensions.push(
-        BasicConstraints {
-            ca,
-            path_len_constraint: ca.then_some(0),
-        }
-        .to_extension(&subject, &extensions)
-        .unwrap(),
-    );
-    let usage = if ca {
-        KeyUsage(KeyUsages::KeyCertSign | KeyUsages::CRLSign)
-    } else {
-        KeyUsage(KeyUsages::DigitalSignature.into())
-    };
-    extensions.push(usage.to_extension(&subject, &extensions).unwrap());
-    let algorithm = AlgorithmIdentifierOwned {
-        oid: ECDSA_SHA256,
-        parameters: None,
-    };
-    let tbs = TbsCertificate {
-        version: Version::V3,
-        serial_number: SerialNumber::new(&[serial]).unwrap(),
-        signature: algorithm.clone(),
-        issuer,
-        validity: Validity::from_now(Duration::from_secs(
-            if ca { 365 } else { 30 } * 24 * 60 * 60,
-        ))
-        .unwrap(),
-        subject,
-        subject_public_key_info: csr.info.public_key,
-        issuer_unique_id: None,
-        subject_unique_id: None,
-        extensions: Some(extensions),
-    };
+// The test uses the same certificate builder as the managed runtime; only
+// the signature operation is delegated to its disposable Transit key.
+async fn issue_csca_with_shared_builder(csr_pem: &str, signer_config: Value) -> String {
+    let public = kms::public_key_existing(ProviderRequest {
+        service_config: signer_config.clone(),
+    })
+    .await
+    .unwrap();
+    let subject = VerifiedDscSubject::from_csr_pem(csr_pem, &public).unwrap();
+    let prepared = prepare_csca(&subject, &[1], 365, SystemTime::now()).unwrap();
     let signed = kms::sign(SignRequest {
         service_config: signer_config,
-        payload_b64: URL_SAFE_NO_PAD.encode(tbs.to_der().unwrap()),
+        payload_b64: URL_SAFE_NO_PAD.encode(prepared.signing_bytes()),
     })
     .await
     .unwrap_or_else(|_| panic!("disposable OpenBao certificate signing failed"));
     assert_eq!(signed.signature_encoding, "der");
-    let signature = URL_SAFE_NO_PAD.decode(signed.signature_b64).unwrap();
-    Certificate {
-        tbs_certificate: tbs,
-        signature_algorithm: algorithm,
-        signature: BitString::from_bytes(&signature).unwrap(),
-    }
-    .to_pem(der::pem::LineEnding::LF)
-    .unwrap()
+    prepared
+        .finish(&URL_SAFE_NO_PAD.decode(signed.signature_b64).unwrap())
+        .unwrap()
 }
 
 async fn issue_dsc_with_shared_builder(
@@ -198,6 +140,34 @@ async fn issue_dsc_with_shared_builder(
     prepared
         .finish(&URL_SAFE_NO_PAD.decode(signed.signature_b64).unwrap())
         .unwrap()
+}
+
+fn verify_strict_chain(csca_pem: &str, dsc_pem: &str) {
+    let directory = tempfile::tempdir().unwrap();
+    let csca_path = directory.path().join("csca.pem");
+    let dsc_path = directory.path().join("dsc.pem");
+    fs::write(&csca_path, csca_pem).unwrap();
+    fs::write(&dsc_path, dsc_pem).unwrap();
+    for (role, path) in [("CSCA", &csca_path), ("DSC", &dsc_path)] {
+        let result = Command::new("openssl")
+            .arg("verify")
+            .args([
+                "-x509_strict",
+                "-check_ss_sig",
+                "-purpose",
+                "any",
+                "-CAfile",
+            ])
+            .arg(&csca_path)
+            .arg(path)
+            .output()
+            .expect("OpenSSL is required for the disposable managed-chain test");
+        assert!(
+            result.status.success(),
+            "{role} strict chain verification failed: {}",
+            String::from_utf8_lossy(&result.stderr)
+        );
+    }
 }
 
 // The native signer uses the Gateway's internal path. This adapter performs
@@ -277,7 +247,7 @@ async fn forward(app: &Router, method: Method, path: &str, body: Value) -> Respo
 }
 
 #[tokio::test]
-#[ignore = "requires independently marked disposable Redis and OpenBao instances"]
+#[ignore = "requires independently marked disposable Redis and OpenBao instances, plus OpenSSL"]
 async fn managed_passport_chain_issues_and_verifies_sod_without_exporting_private_keys() {
     let redis_url = std::env::var("MARTY_TEST_REDIS_URL").expect("disposable Redis URL");
     let parsed_redis = url::Url::parse(&redis_url).expect("disposable Redis URL syntax");
@@ -465,16 +435,9 @@ async fn managed_passport_chain_issues_and_verifies_sod_without_exporting_privat
         csca_profile["signing_key_reference"] != dsc_profile["signing_key_reference"],
         "CSCA and DSC must use distinct KMS keys"
     );
-    let csca_name = CertReq::from_pem(csca_csr["csr_pem"].as_str().unwrap())
-        .unwrap()
-        .info
-        .subject;
-    let csca_pem = issue_certificate(
+    let csca_pem = issue_csca_with_shared_builder(
         csca_csr["csr_pem"].as_str().unwrap(),
-        csca_name.clone(),
         signing_config(&service, &csca_profile),
-        1,
-        true,
     )
     .await;
     let fixture_dsc_pem = issue_dsc_with_shared_builder(
@@ -488,6 +451,7 @@ async fn managed_passport_chain_issues_and_verifies_sod_without_exporting_privat
     let dsc_der = load_certificate_pem(&fixture_dsc_pem).unwrap();
     assert!(verify_certificate_signature(&csca_der, &csca_der).unwrap());
     assert!(verify_certificate_signature(&dsc_der, &csca_der).unwrap());
+    verify_strict_chain(&csca_pem, &fixture_dsc_pem);
     let enrolled = route(
         &signing,
         Method::PUT,
@@ -519,6 +483,7 @@ async fn managed_passport_chain_issues_and_verifies_sod_without_exporting_privat
     let dsc_pem = issued["certificate_pem"].as_str().unwrap();
     let issued_der = load_certificate_pem(dsc_pem).unwrap();
     assert!(verify_certificate_signature(&issued_der, &csca_der).unwrap());
+    verify_strict_chain(&csca_pem, dsc_pem);
     let gateway = internal_gateway_adapter(signing.clone());
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let address = listener.local_addr().unwrap();
