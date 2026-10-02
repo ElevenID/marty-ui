@@ -416,6 +416,98 @@ jobs:
           BETA_FENCE_DISPOSABLE_DOCKER: "1"
         run: python -m pytest -q tests/test_passport_beta_scoped_fence_postgres.py tests/test_probe_passport_beta_fence_target.py tests/test_check_passport_beta_fence_authority.py
 
+  test-rust-feature-probe:
+    name: Rust Feature Regression Probe
+    needs: changes
+    if: needs.changes.outputs.rust == 'true'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@02cb101ec7c40f2c49e1d9714d64511d8e1b74de
+        with:
+          toolchain: 1.95.0
+      - name: Verify frozen Rust feature-regression probe
+        shell: bash
+        run: |
+          set -euo pipefail
+          manifest=.github/feature-regression/rust-probe/Cargo.toml
+          target="$RUNNER_TEMP/feature-regression-rust-probe-target"
+          first_output="$RUNNER_TEMP/feature-regression-rust-probe-first.json"
+          second_output="$RUNNER_TEMP/feature-regression-rust-probe-second.json"
+          cargo fetch --locked --manifest-path "$manifest"
+          CARGO_TARGET_DIR="$target" cargo run --frozen --offline --quiet \
+            --manifest-path "$manifest" \
+            --bin elevenid-feature-regression-probe > "$first_output"
+          CARGO_TARGET_DIR="$target" cargo run --frozen --offline --quiet \
+            --manifest-path "$manifest" \
+            --bin elevenid-feature-regression-probe > "$second_output"
+          cmp --silent "$first_output" "$second_output"
+          python3 tests/test_feature_regression_rust_probe.py "$first_output"
+          target_bytes=$(du -sb "$target" | cut -f1)
+          target_budget_bytes=$(python3 -c 'import sys,tomllib; print(tomllib.load(open(sys.argv[1], "rb"))["package"]["metadata"]["elevenid-feature-regression"]["target-budget-bytes"])' "$manifest")
+          test "$target_bytes" -le "$target_budget_bytes"
+
+  test-rust-passport-image:
+    name: Rust Passport Test-mode Image
+    needs: changes
+    if: needs.changes.outputs.rust == 'true'
+    runs-on: ubuntu-latest
+    permissions:
+      actions: read
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+      - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069
+      - name: Expose public image compiler cache credentials
+        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3
+        with:
+          script: |
+            const token = process.env.ACTIONS_RUNTIME_TOKEN;
+            const url = process.env.ACTIONS_RESULTS_URL;
+            if (!token || !url) throw new Error('GitHub compiler cache credentials are unavailable');
+            core.setSecret(token);
+            core.exportVariable('SCCACHE_GHA_RUNTIME_TOKEN', token);
+            core.exportVariable('SCCACHE_GHA_CACHE_URL', url);
+            core.exportVariable('SCCACHE_GHA_RW_MODE', 'READ_ONLY');
+      - name: Build opt-in passport test-mode image
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc
+        with:
+          context: .
+          file: services/Dockerfile
+          load: true
+          push: false
+          tags: marty-passport-self-signed:contract
+          provenance: false
+          build-args: |
+            PASSPORT_SELF_SIGNED_TEST=true
+            MARTY_RELEASE_VERSION=ci
+            MARTY_UI_SHA=${{ github.event.pull_request.head.sha || github.sha }}
+            SERVICE_NAME=issuance_native
+          cache-from: type=gha,scope=marty-ui-public-services
+          secret-envs: |
+            sccache_token=SCCACHE_GHA_RUNTIME_TOKEN
+            sccache_url=SCCACHE_GHA_CACHE_URL
+            sccache_mode=SCCACHE_GHA_RW_MODE
+      - name: Verify opt-in passport test-mode image boundary
+        shell: bash
+        run: |
+          set -euo pipefail
+          if test_output="$(docker run --rm --network none \
+            --env PASSPORT_NATIVE_HTTP_ENABLED=true \
+            --env PHYSICAL_DOCUMENT_ALLOW_SELF_SIGNED=true \
+            --entrypoint /usr/local/bin/marty-issuance-service \
+            marty-passport-self-signed:contract 2>&1)"; then
+            echo "Test-mode image unexpectedly started without tenant keys" >&2
+            exit 1
+          fi
+          grep -Fq 'PASSPORT_TENANT_API_KEYS is required when PASSPORT_NATIVE_HTTP_ENABLED is true' <<<"$test_output"
+
   test-rust-services:
     name: Rust Service Tests
     needs: changes
@@ -535,26 +627,6 @@ jobs:
           --features feature-regression-observer
           internal_application_diagnostics::tests::feature_observer_is_task_scoped_non_nested_and_cleans_up
           -- --exact
-      - name: Verify frozen Rust feature-regression probe
-        shell: bash
-        run: |
-          set -euo pipefail
-          manifest=.github/feature-regression/rust-probe/Cargo.toml
-          target="$RUNNER_TEMP/feature-regression-rust-probe-target"
-          first_output="$RUNNER_TEMP/feature-regression-rust-probe-first.json"
-          second_output="$RUNNER_TEMP/feature-regression-rust-probe-second.json"
-          cargo fetch --locked --manifest-path "$manifest"
-          CARGO_TARGET_DIR="$target" cargo run --frozen --offline --quiet \
-            --manifest-path "$manifest" \
-            --bin elevenid-feature-regression-probe > "$first_output"
-          CARGO_TARGET_DIR="$target" cargo run --frozen --offline --quiet \
-            --manifest-path "$manifest" \
-            --bin elevenid-feature-regression-probe > "$second_output"
-          cmp --silent "$first_output" "$second_output"
-          python3 tests/test_feature_regression_rust_probe.py "$first_output"
-          target_bytes=$(du -sb "$target" | cut -f1)
-          target_budget_bytes=$(python3 -c 'import sys,tomllib; print(tomllib.load(open(sys.argv[1], "rb"))["package"]["metadata"]["elevenid-feature-regression"]["target-budget-bytes"])' "$manifest")
-          test "$target_bytes" -le "$target_budget_bytes"
       - name: Compile Bookworm-compatible base runtime acceptance
         shell: bash
         run: |
@@ -709,38 +781,6 @@ jobs:
             exit 1
           fi
           grep -Fq 'self-signed passport test mode requires the passport-self-signed-test build feature' <<<"$default_output"
-      - name: Build opt-in passport test-mode image
-        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc
-        with:
-          context: .
-          file: services/Dockerfile
-          load: true
-          push: false
-          tags: marty-passport-self-signed:contract
-          provenance: false
-          build-args: |
-            PASSPORT_SELF_SIGNED_TEST=true
-            MARTY_RELEASE_VERSION=ci
-            MARTY_UI_SHA=${{ github.event.pull_request.head.sha || github.sha }}
-            SERVICE_NAME=issuance_native
-          cache-from: type=gha,scope=marty-ui-public-services
-          secret-envs: |
-            sccache_token=SCCACHE_GHA_RUNTIME_TOKEN
-            sccache_url=SCCACHE_GHA_CACHE_URL
-            sccache_mode=SCCACHE_GHA_RW_MODE
-      - name: Verify opt-in passport test-mode image boundary
-        shell: bash
-        run: |
-          set -euo pipefail
-          if test_output="$(docker run --rm --network none \
-            --env PASSPORT_NATIVE_HTTP_ENABLED=true \
-            --env PHYSICAL_DOCUMENT_ALLOW_SELF_SIGNED=true \
-            --entrypoint /usr/local/bin/marty-issuance-service \
-            marty-passport-self-signed:contract 2>&1)"; then
-            echo "Test-mode image unexpectedly started without tenant keys" >&2
-            exit 1
-          fi
-          grep -Fq 'PASSPORT_TENANT_API_KEYS is required when PASSPORT_NATIVE_HTTP_ENABLED is true' <<<"$test_output"
       - name: Prepare database contract executables
         working-directory: rust
         shell: bash
@@ -2141,7 +2181,7 @@ jobs:
   ci-gate:
     name: CI Gate
     if: always()
-    needs: [changes, lint, fast-feedback, test-ui-crawler-artifacts, test-ui-crawler-nginx, test-ui, test-services, test-passport-fence-postgres, test-rust-services, rust-lint-policy, test-rust-service-images, public-protocol-contract, test-release-contracts, test-credential-lifecycle-browser, security, rust-supply-chain]
+    needs: [changes, lint, fast-feedback, test-ui-crawler-artifacts, test-ui-crawler-nginx, test-ui, test-services, test-passport-fence-postgres, test-rust-feature-probe, test-rust-passport-image, test-rust-services, rust-lint-policy, test-rust-service-images, public-protocol-contract, test-release-contracts, test-credential-lifecycle-browser, security, rust-supply-chain]
     runs-on: ubuntu-latest
     permissions:
       actions: read
