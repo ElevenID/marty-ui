@@ -58,3 +58,32 @@ In release run `36865248181`, the public service Docker action lasted 18.5 min, 
 - The service-test job's available sccache block reported 14 requests, 6 cacheable misses, 0 hits, 6 write errors, 8 non-cacheable calls (`crate-type`), and 0 read errors/timeouts. The cache was configured read-only for the PR. This small snapshot is not an entire-workflow hit rate or evidence that write errors caused the long test step.
 - The warmer's much larger sccache report had 2,247 hits and no misses/read/write errors. It includes Rust, C/C++, and assembler requests, and is not a Cargo timing report. The public Dockerfile did not use that sccache setup.
 - No `cargo-timing*.html` was found in the inspected local UI/Core/MMF target timing directories, and the referenced CI runs exposed Docker/Vitest/security artifacts but no Cargo timing artifact. Hence the expensive Rust compilation units and dependency-unblocking chain remain unknown. The additive CI patch next to this report collects those data from an ordinary run; it intentionally does not trigger a run for this audit.
+
+## Local parallel-worker pilot (2026-10-01)
+
+The `canvas_published_schema_contract` test executable was compiled from this audit worktree with Rust 1.95 in `rust/`. The default local toolchain was 1.93, so the first attempted compile stopped at the toolchain-version check; the 1.95 compile succeeded in 2m 15s. The test host was Windows with Docker Desktop's Linux engine (24 CPUs, 15.15 GiB allocated to Docker), not the Ubuntu CI runner. The executable was reused for every timed run; compilation is excluded from the timings below. The PowerShell commands below reproduce the compile and the four filtered harness runs from the repository root:
+
+```powershell
+Push-Location rust
+$artifacts = cargo +1.95.0 test --locked -p marty-issuance-service --test canvas_published_schema_contract --no-run --message-format=json
+if ($LASTEXITCODE -ne 0) { throw 'Canvas contract compile failed' }
+$executables = @($artifacts | ConvertFrom-Json | Where-Object { $_.reason -eq 'compiler-artifact' -and $_.target.name -eq 'canvas_published_schema_contract' } | Select-Object -ExpandProperty executable -Unique)
+if ($executables.Count -ne 1) { throw 'Expected one Canvas contract executable' }
+$env:MARTY_CANVAS_PUBLISHED_SCHEMA_TEST = '1'
+& $executables[0] operations_ --test-threads=2
+& $executables[0] operations_ --test-threads=4
+& $executables[0] operations_ --test-threads=4
+& $executables[0] operations_ --test-threads=2
+Pop-Location
+```
+
+With `MARTY_CANVAS_PUBLISHED_SCHEMA_TEST=1`, the exact same `operations_` filter selected 20 tests (255 filtered out). The existing published-schema fixture created and cleaned up its own disposable Docker databases. Timed harness wall seconds were:
+
+| Order | `--test-threads` | Result | Harness wall time |
+| --- | ---: | --- | ---: |
+| First pair | 2 | 20 passed | 31.9 s |
+| First pair | 4 | 20 passed | 22.0 s |
+| Reverse-order repeat | 4 | 20 passed | 22.3 s |
+| Reverse-order repeat | 2 | 20 passed | 29.8 s |
+
+The two-run means are 30.85 s at two workers and 22.15 s at four, a 28% reduction for this selected slice. There were no failed tests and no remaining containers bearing the published-schema test label after the runs. This is evidence that four threads can help some independently owned database cases; it does **not** establish safety or a 28% gain for the full 274-test Linux suite, its image-loader/timeout cases, or CI under simultaneous Rust database work. Retain the serial SQL-logging diagnostic and the two-thread CI setting until a Linux full-suite pilot checks exact test coverage, resource peaks, failures, and total critical-path duration.
