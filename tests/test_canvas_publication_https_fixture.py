@@ -207,7 +207,8 @@ def require_registered(workflow):
     ]
     assert len(matches) == 1
     step = matches[0]
-    assert "if" not in step and "continue-on-error" not in step
+    assert step.get("if") == "matrix.lane == 'canvas'"
+    assert "continue-on-error" not in step
     assert step["working-directory"] == "rust" and step["shell"] == "bash"
     script = step["run"]
     for required in [
