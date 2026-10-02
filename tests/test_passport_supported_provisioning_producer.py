@@ -825,6 +825,86 @@ def test_partial_teardown_removes_only_plan_owned_startup_resources(
     assert len(calls) == 9
 
 
+@pytest.mark.parametrize("primary_suffix", ["_private", "_callback_signing"])
+def test_partial_teardown_accepts_either_owned_openbao_primary_network(
+    tmp_path: Path, primary_suffix: str,
+) -> None:
+    arguments, plan, gates = partial_teardown_context(tmp_path)
+    project = plan["project"]
+    container = "1" * 64
+    private = "2" * 64
+    callback = "3" * 64
+    networks = {project + "_private": private,
+                project + "_callback_signing": callback}
+    volumes = [project + "_openbao_data", project + "_openbao_file",
+               project + "_openbao_logs"]
+    labels = {**plan["owner_labels"], "com.docker.compose.project": project}
+    mounts = [
+        {"Type": kind, "Source": source, "Name": source if kind == "volume" else None,
+         "Destination": destination, "RW": writable}
+        for kind, source, destination, writable in producer._expected_mounts(
+            "openbao", project, Path(tempfile.gettempdir()) / project,
+            plan["surface"])
+    ]
+    present = {"containers": True, "networks": True, "volumes": True}
+    state = {"mode": project + primary_suffix, "attachments": set(networks)}
+    calls: list[list[str]] = []
+
+    def inspector(args: list[str]) -> str:
+        if args[:2] == ["container", "inspect"]:
+            return json.dumps([{
+                "Id": container, "Name": f"/{project}-openbao-1",
+                "Config": {"Image": plan["infra_images"]["openbao"],
+                           "Labels": {**labels, "com.docker.compose.service": "openbao"}},
+                "HostConfig": {"NetworkMode": state["mode"]},
+                "NetworkSettings": {"Networks": {
+                    name: {"NetworkID": identifier}
+                    for name, identifier in networks.items()
+                    if name in state["attachments"]}},
+                "State": {"Status": "running"}, "Mounts": mounts,
+            }])
+        if args[:2] == ["network", "inspect"]:
+            name = next(name for name, identifier in networks.items()
+                        if identifier == args[2])
+            return json.dumps([{"Id": args[2], "Name": name,
+                                "Driver": "bridge", "Internal": True,
+                                "Containers": {container: {}}, "Labels": labels}])
+        if args[:2] == ["volume", "inspect"]:
+            return json.dumps([{"Name": args[2], "Driver": "local",
+                                "Options": {}, "Labels": labels}])
+        if args[0] == "ps":
+            return container if present["containers"] else ""
+        if args[:2] == ["network", "ls"]:
+            return "\n".join(networks.values()) if present["networks"] else ""
+        if args[:2] == ["volume", "ls"]:
+            return "\n".join(volumes) if present["volumes"] else ""
+        raise AssertionError(args)
+
+    def executor(args: list[str], output: object) -> bool:
+        calls.append(args)
+        present[{"container": "containers", "network": "networks",
+                 "volume": "volumes"}[args[0]]] = False
+        return True
+
+    assert destroy_partial_disposable_project(
+        *arguments, inspector, executor, **gates)
+    assert [call[:2] for call in calls] == [
+        ["container", "rm"], ["network", "rm"], ["volume", "rm"]]
+
+    present.update(containers=True, networks=True, volumes=True)
+    calls.clear()
+    state["mode"] = "host"
+    assert not destroy_partial_disposable_project(
+        *arguments, inspector, executor, **gates)
+    assert calls == []
+
+    state["mode"] = project + primary_suffix
+    state["attachments"] = {project + "_private"}
+    assert not destroy_partial_disposable_project(
+        *arguments, inspector, executor, **gates)
+    assert calls == []
+
+
 def test_partial_teardown_fails_closed_before_mutating_unknown_resource(
     tmp_path: Path,
 ) -> None:
