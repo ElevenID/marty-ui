@@ -493,10 +493,15 @@ def _destroy_recorded_project(
                                  else project + "_callback_signing"
                                  if service == "passport-callback-signer"
                                  else project + "_private")
+                expected_modes = {expected_mode}
+                if service == "openbao":
+                    # Compose may choose either owned attachment as the
+                    # primary network mode when OpenBao joins both networks.
+                    expected_modes.add(project + "_callback_signing")
                 require(isinstance(host_config, dict)
-                        and host_config.get("NetworkMode") == expected_mode
+                        and host_config.get("NetworkMode") in expected_modes
                         and (isinstance(parent_id, str) and not host_config.get("PortBindings")
-                             if helper_parent else expected_mode in networks),
+                             if helper_parent else host_config.get("NetworkMode") in networks),
                         "Partial disposable container uses an unowned network mode")
                 require(isinstance(network_settings, dict),
                         "Partial disposable container network state is invalid")
