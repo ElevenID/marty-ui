@@ -15,7 +15,7 @@ import { createDefaultTrustProfile, createDefaultHealthStatus } from './ports/ty
  * Trust context value type.
  * @typedef {Object} TrustContextValue
  * @property {import('./adapters/api/TrustApiAdapter').default|import('./adapters/mock/MockTrustAdapter').default} trustService
- * @property {import('./adapters/parsing/NodeForgeCertParser').default} certParser
+ * @property {import('./adapters/parsing/PkijsCertParser').default} certParser
  * @property {import('./ports/types').TrustProfile|null} trustProfile - Current org trust profile
  * @property {import('./ports/types').TrustHealthStatus|null} healthStatus - Current health status
  * @property {boolean} loading - Loading state

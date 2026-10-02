@@ -12,7 +12,7 @@ export * from './ports';
 export {
   TrustApiAdapter,
   MockTrustAdapter,
-  NodeForgeCertParser,
+  PkijsCertParser,
   createTrustService,
   createCertParser,
 } from './adapters';
