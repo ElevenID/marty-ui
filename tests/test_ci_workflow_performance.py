@@ -172,6 +172,13 @@ def _assert_python_service_job_preserves_full_suite(document) -> None:
         "managed_passport_chain_issues_and_verifies_sod_without_exporting_private_keys"
     )
     assert chain_test_name in managed_chain
+    assert (
+        "test_name='runtime::tests::"
+        "authenticated_gateway_issues_dsc_with_operator_grant_and_dedicated_key'"
+        in managed_chain
+    )
+    assert '-- --list | grep -Fx "$test_name: test"' in managed_chain
+    assert '"$test_name" -- --ignored --exact' in managed_chain
     assert "-- --ignored --exact" in managed_chain
     assert rust["env"]["FLOW_POSTGRES_TEST_URL"].endswith(
         "localhost:5432/marty_atomic_test"
