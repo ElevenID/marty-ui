@@ -453,7 +453,8 @@ def ci_prerequisites(workflow):
     assert len(found) == 1
     selected = steps[found[0]]
     assert selected.get("shell") == "bash"
-    assert "if" not in selected and "continue-on-error" not in selected
+    assert selected.get("if") == "matrix.lane == 'canvas'"
+    assert "continue-on-error" not in selected
     assert selected["run"].strip().splitlines() == [
         "set -euo pipefail",
         "command -v bash",

@@ -46,7 +46,8 @@ def required(source, runner, workflow):
     ]
     assert len(prerequisites) == 1
     step = prerequisites[0]
-    assert "if" not in step and not step.get("continue-on-error")
+    assert step["if"] == "matrix.lane == 'canvas'"
+    assert not step.get("continue-on-error")
     assert step["run"].strip().splitlines() == [
         "set -euo pipefail",
         "command -v bash",
@@ -59,7 +60,7 @@ def required(source, runner, workflow):
     ]
     assert (
         len(builds) == 1
-        and "if" not in builds[0]
+        and builds[0].get("if") == "matrix.lane == 'canvas'"
         and not builds[0].get("continue-on-error")
     )
     assert "test -x rust/target/debug/marty-gateway" in builds[0]["run"]

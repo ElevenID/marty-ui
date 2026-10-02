@@ -41,7 +41,8 @@ def assert_dependency_setup(steps):
     names = [step.get("name") for step in steps]
     assert names.count(STEP) == 1
     setup = names.index(STEP)
-    assert "if" not in steps[setup] and "continue-on-error" not in steps[setup]
+    assert steps[setup]["if"] == "matrix.lane == 'canvas'"
+    assert "continue-on-error" not in steps[setup]
     assert setup < names.index("Compile reusable Rust test executables")
     rendered = names.index("Prepare required rendered base executable acceptance")
     assert (
@@ -81,7 +82,7 @@ def assert_dependency_setup(steps):
     )
     assert steps[preflight]["working-directory"] == "rust"
     assert steps[preflight]["shell"] == "bash"
-    assert "if" not in steps[preflight]
+    assert steps[preflight]["if"] == "matrix.lane == 'canvas'"
     assert not steps[preflight].get("continue-on-error", False)
     interpreter = [
         step

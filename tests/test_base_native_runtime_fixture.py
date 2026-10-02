@@ -254,7 +254,8 @@ def runtime_ci(workflow):
     ]
     assert len(matches) == 1
     index, step = matches[0]
-    assert set(step) == {"name", "shell", "run"}
+    assert set(step) == {"name", "if", "shell", "run"}
+    assert step["if"] == "matrix.lane == 'canvas'"
     assert step["shell"] == "bash"
     lines = step["run"].splitlines()
     assert lines == [
@@ -288,7 +289,8 @@ def compatibility_ci(workflow):
     ]
     assert len(matches) == 1
     index, step = matches[0]
-    assert set(step) == {"name", "shell", "run"}
+    assert set(step) == {"name", "if", "shell", "run"}
+    assert step["if"] == "matrix.lane == 'canvas'"
     assert step["shell"] == "bash"
     script = step["run"]
     required = (

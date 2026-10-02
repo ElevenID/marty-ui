@@ -507,9 +507,13 @@ def test_workflow_runs_all_preflights_immediately_after_preparation_and_keeps_fu
         steps[preflight]["run"]
         == "python3 ../scripts/ci/run-db-contract-groups.py preflights"
     )
-    assert steps[full]["run"] == "python3 ../scripts/ci/run-db-contract-groups.py"
+    assert steps[preflight]["if"] == "matrix.lane == 'canvas'"
+    assert steps[full]["run"] == (
+        "python3 ../scripts/ci/run-db-contract-groups.py "
+        "${{ matrix.lane == 'canvas' && 'canvas' || 'rust-db' }}"
+    )
+    assert "if" not in steps[full]
     for index in (preflight, full):
-        assert "if" not in steps[index]
         assert not steps[index].get("continue-on-error", False)
     images = workflow["jobs"]["test-rust-service-images"]["steps"]
     gate_index = next(
