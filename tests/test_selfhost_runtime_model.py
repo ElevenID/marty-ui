@@ -260,7 +260,15 @@ def test_public_image_loader_refuses_disconnected_or_weakened_gates(fault):
         }
         target, value = replacements[fault]
         if fault == "dockerfile" and name == target:
-            return source.replace(value, "file: ABSENT", 1)
+            public_build = (
+                "file: services/Dockerfile\n"
+                "          load: true\n"
+                "          push: false\n"
+                "          tags: marty-selfhost-public:contract"
+            )
+            assert source.count(public_build) == 1
+            weakened = public_build.replace(value, "file: ABSENT")
+            return source.replace(public_build, weakened, 1)
         if fault == "wrong-password-marker" and name == target:
             return source.replace(value, "ABSENT")
         return source.replace(value, "ABSENT", 1) if name == target else source
