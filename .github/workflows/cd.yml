@@ -613,8 +613,8 @@ jobs:
     runs-on: ubuntu-latest
     env:
       # This deletion candidate must exercise the canonical Rust revocation
-      # migrator/runtime. The released integration adapter keeps this overlay
-      # opt-in so pre-cutover releases retain their existing topology.
+      # and native issuance owners. The released integration adapter keeps this
+      # overlay opt-in while Python retains its unmigrated routes.
       COMPOSE_FILE: docker-compose.yml:docker-compose.rust-revocation.yml
     permissions:
       contents: read

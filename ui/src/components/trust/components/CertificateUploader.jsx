@@ -2,7 +2,7 @@
  * Certificate Uploader Component
  * 
  * Drag-and-drop certificate upload with:
- * - Client-side parsing via node-forge (lazy loaded)
+ * - Client-side parsing via PKI.js (lazy loaded)
  * - Support for PEM, DER, CER, CRT, P7B formats
  * - Parsed certificate details display
  * - Advanced view showing full chain

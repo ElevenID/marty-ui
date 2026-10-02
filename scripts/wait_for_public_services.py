@@ -12,7 +12,7 @@ from urllib.request import urlopen
 REQUIRED_SERVICES = frozenset({
     "auth", "organizations", "credential-templates", "trust-profiles",
     "compliance-profiles", "presentation-policies", "deployment-profiles",
-    "flows", "issuance", "revocation-profiles",
+    "flows", "issuance", "issuance-native", "revocation-profiles",
 })
 
 

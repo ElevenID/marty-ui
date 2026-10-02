@@ -1,5 +1,14 @@
 # Passport Rust qualification coordinate: 1.1.219
 
+This coordinate was claimed in run `36942611050` and stopped before promotion
+in stack-release run `36942661031`. The public-stack smoke used the pinned
+integration harness `v1.2.79`, which started retained Python issuance without
+the native DIDComm owner and exited when the retired encryption callables were
+absent. The tag, release, and versioned images were not published. Do not reuse
+this claim or coordinate. The reviewed harness correction was released as
+`marty-integration-tests@v1.2.81`; continue with the
+[1.1.220 qualification coordinate](passport-predeletion-release-1.1.220.md).
+
 The stack lock selects `marty-ui@1.1.219` with `release_state=eligible` only
 after the reviewed aggregate, the pre-promotion guard, the two release-gate
 repairs, and Rust build audit #1022 reach protected main.
