@@ -625,6 +625,14 @@ jobs:
         run: >-
           cargo test --locked --workspace --no-run --timings --message-format=json
           > "$RUNNER_TEMP/rust-test-artifacts.json"
+      - name: Prepare pinned standalone Compose renderer for Rust contracts
+        if: matrix.lane == 'contracts'
+        shell: bash
+        run: |
+          set -euo pipefail
+          bash scripts/ci/install-compose-renderer.sh
+          printf 'MARTY_BASE_COMPOSE_BINARY=%s\n' "$RUNNER_TEMP/compose-render-v5.4.0" >> "$GITHUB_ENV"
+          printf 'MARTY_SELFHOST_BUNDLE_TEST_COMPOSE=%s\n' "$RUNNER_TEMP/compose-render-v5.4.0" >> "$GITHUB_ENV"
       - name: Verify feature-regression observer isolation
         if: matrix.lane == 'contracts'
         shell: bash
