@@ -309,6 +309,59 @@ def test_independent_rust_lanes_remain_required_without_transferring_builds() ->
         )
 
 
+def test_rust_matrix_keeps_canvas_state_local_and_contracts_parallel() -> None:
+    _, document = _workflow(CI_PATH)
+    job = document["jobs"]["test-rust-services"]
+    assert job["strategy"] == {
+        "fail-fast": False,
+        "matrix": {"lane": ["canvas", "contracts"]},
+    }
+    steps = {step.get("name"): step for step in job["steps"] if step.get("name")}
+    canvas = {
+        "Prepare isolated Canvas worker harness dependencies",
+        "Require Kubernetes deployment contract executables",
+        "Compile Bookworm-compatible base runtime acceptance",
+        "Test native Canvas AGS/NRPS over real HTTPS",
+        "Test Canvas publication adapter over real HTTPS",
+        "Prepare required rendered base executable acceptance",
+        "Expose public image compiler cache credentials",
+        "Build public selfhost image",
+        "Prepare public selfhost image loader acceptance",
+        "Verify default passport test-mode boundary",
+        "Preflight published worker parity in two isolated groups",
+        "Prepare owned runtime failure diagnostics",
+        "Test native Canvas operation timeout TLS parity",
+    }
+    contracts = {
+        "Verify feature-regression observer isolation",
+        "Create isolated Rust contract databases",
+        "Run safe Rust contract groups concurrently",
+        "Exercise authenticated Signing Keys Gateway to Rust routes",
+        "Exercise live Signing Keys public contracts on disposable Redis",
+        "Exercise Gateway CSR and managed passport chain with disposable OpenBao",
+        "Run Flow database contract after workspace suite",
+        "Test packaged passport self-signed mode",
+        "Test beta passport reconciliation and native batch on PostgreSQL",
+        "Test native passport Gateway signed webhook on PostgreSQL",
+    }
+    for name in canvas:
+        assert steps[name]["if"] == "matrix.lane == 'canvas'"
+        assert not steps[name].get("continue-on-error", False)
+    for name in contracts:
+        assert steps[name]["if"] == "matrix.lane == 'contracts'"
+        assert not steps[name].get("continue-on-error", False)
+    for name in (
+        "Compile reusable Rust test executables",
+        "Prepare database contract executables",
+        "Run isolated database contract suites concurrently",
+    ):
+        assert "if" not in steps[name]
+    assert steps["Preserve synthetic runtime failure diagnostics"]["if"] == (
+        "always() && matrix.lane == 'canvas'"
+    )
+    assert "${{ matrix.lane }}" in steps["Upload Rust build evidence"]["with"]["name"]
+
+
 @pytest.mark.parametrize(
     "changed_path,rust_selected,all_selected",
     [
@@ -399,7 +452,10 @@ def test_published_canvas_schema_gate_is_explicit_and_mandatory() -> None:
     )
     assert "if" not in gate
     assert not gate.get("continue-on-error", False)
-    assert gate["run"] == "python3 ../scripts/ci/run-db-contract-groups.py"
+    assert gate["run"] == (
+        "python3 ../scripts/ci/run-db-contract-groups.py "
+        "${{ matrix.lane == 'canvas' && 'canvas' || 'rust-db' }}"
+    )
     published = (ROOT / "scripts/ci/run-published-canvas-contracts.sh").read_text(
         encoding="utf-8"
     )
@@ -714,7 +770,7 @@ def test_native_canvas_socket_timeout_gate_is_explicit_and_mandatory() -> None:
         for step in steps
         if step.get("name") == "Test native Canvas operation timeout TLS parity"
     )
-    assert "if" not in gate
+    assert gate["if"] == "matrix.lane == 'canvas'"
     assert not gate.get("continue-on-error", False)
     assert (
         "grep -Fx 'canvas_operation_http::tests::native_socket_case: test'"
@@ -881,7 +937,7 @@ def test_canvas_lti_https_gate_requires_real_linux_parent_test() -> None:
         for step in document["jobs"]["test-rust-services"]["steps"]
         if step.get("name") == "Test native Canvas AGS/NRPS over real HTTPS"
     )
-    assert "if" not in gate
+    assert gate["if"] == "matrix.lane == 'canvas'"
     assert not gate.get("continue-on-error", False)
     assert "python3 --version" in gate["run"] and "openssl version" in gate["run"]
     assert "canvas_oauth_behavior" in gate["run"]

@@ -141,7 +141,8 @@ def assert_registration(source, runner, workflow):
         in step.get("run", "")
     ]
     assert len(builds) == 1
-    assert not builds[0].get("continue-on-error") and "if" not in builds[0]
+    assert not builds[0].get("continue-on-error")
+    assert builds[0]["if"] == "matrix.lane == 'canvas'"
     assert "MARTY_ENVOY_TEST_IMAGE=%s" in builds[0]["run"]
     compose = [
         step

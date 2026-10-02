@@ -141,16 +141,19 @@ def run_groups(commands: dict[str, list[str]], directory: Path) -> dict[str, int
 
 def main(mode: str = "database") -> int:
     scripts = Path(__file__).resolve().parent
-    if mode == "database":
+    if mode in ("database", "canvas"):
         published_mode = ["full-after-preflights"] if _has_preflight_evidence() else []
-        commands = {
+        commands: dict[str, list[str]] = {
             "published-canvas": [
                 "bash",
                 str(scripts / "run-published-canvas-contracts.sh"),
                 *published_mode,
             ],
-            "rust-db": ["bash", str(scripts / "run-rust-db-contracts.sh")],
         }
+        if mode == "database":
+            commands["rust-db"] = ["bash", str(scripts / "run-rust-db-contracts.sh")]
+    elif mode == "rust-db":
+        commands = {"rust-db": ["bash", str(scripts / "run-rust-db-contracts.sh")]}
     elif mode == "preflights":
         evidence = _preflight_evidence()
         if evidence is not None:
@@ -186,6 +189,6 @@ def main(mode: str = "database") -> int:
 
 
 if __name__ == "__main__":
-    if sys.argv[1:] not in ([], ["preflights"]):
-        raise SystemExit("Usage: run-db-contract-groups.py [preflights]")
-    raise SystemExit(main("preflights" if sys.argv[1:] else "database"))
+    if sys.argv[1:] not in ([], ["preflights"], ["canvas"], ["rust-db"]):
+        raise SystemExit("Usage: run-db-contract-groups.py [preflights|canvas|rust-db]")
+    raise SystemExit(main(sys.argv[1] if sys.argv[1:] else "database"))

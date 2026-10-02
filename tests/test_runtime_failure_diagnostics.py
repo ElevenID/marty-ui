@@ -32,7 +32,8 @@ def validate(items):
     )
     assert before < suite < after
     prepare, upload = items[before], items[after]
-    assert set(prepare) == {"name", "shell", "run"}
+    assert set(prepare) == {"name", "if", "shell", "run"}
+    assert prepare["if"] == "matrix.lane == 'canvas'"
     assert prepare["shell"] == "bash"
     assert (
         'diagnostics="$RUNNER_TEMP/marty-owned-runtime-diagnostics"' in prepare["run"]
@@ -41,7 +42,7 @@ def validate(items):
     assert "set -o noclobber" in prepare["run"]
     assert "MARTY_RUNTIME_DIAGNOSTICS_OWNER" in prepare["run"]
     assert set(upload) == {"name", "if", "uses", "with"}
-    assert upload["if"] == "always()"
+    assert upload["if"] == "always() && matrix.lane == 'canvas'"
     assert (
         upload["uses"]
         == "actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a"

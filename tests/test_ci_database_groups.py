@@ -73,6 +73,34 @@ def test_four_preflights_all_finish_when_one_fails(tmp_path: Path) -> None:
         assert name in (tmp_path / f"{name}.log").read_text(encoding="utf-8")
 
 
+@pytest.mark.parametrize(
+    "mode,expected",
+    [
+        ("canvas", "published-canvas"),
+        ("rust-db", "rust-db"),
+    ],
+)
+def test_split_lanes_run_exactly_their_owned_database_group(
+    tmp_path: Path, monkeypatch, mode: str, expected: str
+) -> None:
+    monkeypatch.setattr(GROUPS, "_has_preflight_evidence", lambda: True)
+    observed = {}
+
+    def fake_groups(commands, directory):
+        observed.update(commands)
+        for name in commands:
+            (directory / f"{name}.log").write_text("passed\n", encoding="utf-8")
+        return {name: 0 for name in commands}
+
+    monkeypatch.setattr(GROUPS, "run_groups", fake_groups)
+    assert GROUPS.main(mode) == 0
+    assert set(observed) == {expected}
+    if mode == "canvas":
+        assert observed[expected][-1] == "full-after-preflights"
+    else:
+        assert "run-rust-db-contracts.sh" in observed[expected][-1]
+
+
 def test_preflight_evidence_requires_all_four_successes_and_same_executable(
     tmp_path: Path, monkeypatch
 ) -> None:
