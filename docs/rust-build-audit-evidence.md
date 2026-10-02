@@ -90,4 +90,7 @@ The two-run means are 30.85 s at two workers and 22.15 s at four, a 28% reductio
 
 ## Six-worker bounded follow-up (2026-10-02)
 
+The earlier two-worker measurements and recommendation above record their
+historical snapshot; they are not the setting proposed by this follow-up.
+
 The local Windows/Docker Desktop executable at UI `a69d958b30ad3e4a86931fed4af1e7853477ed92` was reused for four alternating `operations_` runs with `MARTY_CANVAS_PUBLISHED_SCHEMA_TEST=1`. Every run selected the same 20 tests (255 filtered), passed, and left no containers with the `com.elevenid.test.canvas-published-schema` label. Stopwatch wall times, including harness startup, were 24.50 s (four workers), 17.03 s (six), 18.36 s (six), and 21.42 s (four). The two-run means were 22.96 s and 17.70 s respectively. This is a bounded local signal, not a full-suite or Linux CI speed claim. Keep the SQL-logging diagnostic serial, and require unchanged full-suite counts, cleanup, and protected CI success before retaining six workers.

@@ -62,25 +62,26 @@ its PostgreSQL role must have `CREATEDB`. Each group closes connections and drop
 only the database it created, including when an assertion fails. Other database
 and process-signal contracts remain serialized and unchanged.
 
-After the workspace and Flow checks, the published-schema suite and remaining
-database/runtime suite run concurrently. Published-schema tests own UUID-scoped
-Docker databases; the runtime suite uses the dedicated `marty_db_contracts_test`
-service database. The published-schema runner executes the SQL logging diagnostic
-on its own, then runs every other published-schema test with exactly two test
-threads. It checks that the skip removes exactly one registered test. Its four
-early diagnostic preflights and the remaining database/runtime suite stay serial.
-All executable inventory checks and original assertions remain mandatory. The
-runner waits for both suites even on failure and emits separate logs before
-returning a failing status. Two-way execution is the
-reviewed ceiling until a complete exact-head run proves a higher setting safe:
-each database-owning test creates a UUID-scoped database and retains RAII cleanup,
-but process- and image-owning tests still share the CI host.
+The Rust Service Tests matrix has separate Canvas and contracts lanes, with
+fail-fast disabled so both report their result. Each lane compiles and inventories
+its Rust test executables. The Canvas lane owns the published-schema suite and
+public selfhost-image acceptance; the contracts lane owns the remaining
+database/runtime checks. Published-schema tests own UUID-scoped Docker databases;
+the runtime suite uses the dedicated `marty_db_contracts_test` service database.
+The published-schema runner executes the SQL logging diagnostic alone, then the
+remaining tests with six test threads. It checks the exact registered-test count
+before applying any skip. Executable inventory checks and original assertions
+remain mandatory. The six-worker setting is a bounded candidate until exact-head
+Linux CI proves the full suite and cleanup safe: database-owning cases retain
+RAII cleanup, but process- and image-owning tests still share their lane's host.
 
-The four published worker parity preflights run through the same bounded
-two-worker runner before the full database suites. Every preflight still invokes
-its exact test with one Rust test thread. Each case owns a separate disposable
-Docker database and dynamically allocated HTTPS ports; a failure in one group
-does not prevent the other groups from finishing and reporting their result.
+The four published worker parity preflights run in two bounded groups before the
+full Canvas suite. Every preflight invokes its exact test with one Rust test
+thread. Each case owns a separate disposable Docker database and dynamically
+allocated HTTPS ports; a failure in one group does not prevent the other groups
+from finishing and reporting their result. The full suite omits these four cases
+only when runner-local evidence matches this run, attempt, job, and executable
+hash; otherwise it runs them again.
 
 Queue validation exposed a Canvas worker cancellation race: SQLx could start
 return-to-pool validation of a cancelled, lock-blocked query before asynchronous
