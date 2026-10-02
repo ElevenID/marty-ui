@@ -38,6 +38,8 @@ def plan(surface: str = "selfhost") -> dict:
         "services_reference": SERVICES,
         "migrations_reference": (
             "ghcr.io/elevenid/marty-ui-oss/migrations@sha256:" + "c" * 64),
+        "issuance_reference": (
+            "ghcr.io/elevenid/marty-credentials-issuance@sha256:" + "d" * 64),
         "infra_images": qualified_images(verify_registry=False),
         "owner_labels": {
             "com.marty.passport.acceptance.owner": "supported-consumer",

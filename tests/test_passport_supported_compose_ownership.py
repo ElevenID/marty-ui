@@ -22,6 +22,7 @@ from scripts.check_passport_supported_rust_model import (
 PROJECT = "marty-passport-acceptance-base-abcdef"
 IMAGE = "ghcr.io/elevenid/marty-ui-oss/services@sha256:" + "a" * 64
 MIGRATIONS = "ghcr.io/elevenid/marty-ui-oss/migrations@sha256:" + "b" * 64
+ISSUANCE = "ghcr.io/elevenid/marty-credentials-issuance@sha256:" + "c" * 64
 INFRA = {
     "edge": "docker.io/library/nginx@sha256:" + "4" * 64,
     "postgres": "docker.io/library/postgres@sha256:" + "1" * 64,
@@ -43,6 +44,7 @@ SECRETS = {
     "redis": (),
     "openbao": ("bao_root_token",),
     "db-migrate": ("marty_db_password", "bao_token"),
+    "issuance-migrations": ("marty_db_password",),
     "signing-keys": ("marty_db_password", "bao_token", "signing_keys_internal_api_key",
                      "dsc_issue_gateway_key", "csca_issue_gateway_key"),
     "revocation-profile-migrate": ("marty_db_password",),
@@ -97,6 +99,14 @@ def mounts_for(service: str) -> list[dict]:
             "Destination": "/etc/nginx/conf.d/default.conf",
             "RW": False,
         })
+    if service == "issuance-migrations":
+        mounts.append({
+            "Type": "bind",
+            "Source": str(Path(__file__).resolve().parents[1]
+                          / "scripts/passport_supported_issuance_migrate.sh"),
+            "Destination": "/usr/local/bin/passport-supported-issuance-migrate",
+            "RW": False,
+        })
     for key in ((service,) if service != "openbao" else
                 ("openbao", "openbao-file", "openbao-logs")):
         if key in DATA:
@@ -119,6 +129,7 @@ def fixture() -> tuple[dict, dict[tuple[str, ...], str]]:
         "project": PROJECT, "run_id": "123456", "source_commit": "b" * 40,
         "services_reference": IMAGE,
         "migrations_reference": MIGRATIONS,
+        "issuance_reference": ISSUANCE,
         "infra_images": INFRA,
         "created_at": (NOW - timedelta(minutes=5)).isoformat(),
         "expires_at": (NOW + timedelta(minutes=55)).isoformat(),
@@ -259,11 +270,16 @@ def fixture() -> tuple[dict, dict[tuple[str, ...], str]]:
             "HostConfig": {"NetworkMode": primary_network,
                            **({"PortBindings": {"8443/tcp": edge_binding}}
                               if service == "edge" else {})},
-            "State": {"Running": True, "Status": "running",
-                      "Health": {"Status": "healthy"}},
+            "State": ({"Running": False, "Status": "exited", "ExitCode": 0}
+                      if service == "issuance-migrations" else
+                      {"Running": True, "Status": "running",
+                       "Health": {"Status": "healthy"}}),
             "Config": {"Labels": {**LABELS, "com.docker.compose.service": service},
                        "Env": [f"{key}={value}" for key, value in runtime_env.items()],
+                       **({"Cmd": ["/bin/sh", "/usr/local/bin/passport-supported-issuance-migrate"]}
+                          if service == "issuance-migrations" else {}),
                        "Image": (MIGRATIONS if service == "db-migrate" else
+                                 ISSUANCE if service == "issuance-migrations" else
                                  IMAGE if service in SELECTED | RUST_DEPENDENCIES | {"signing-keys"} else
                                  INFRA[service])},
             "NetworkSettings": {"Networks": attached_networks,
@@ -290,6 +306,29 @@ def fixture() -> tuple[dict, dict[tuple[str, ...], str]]:
             "Labels": LABELS,
         }])
     return record, calls
+
+
+def test_credentials_schema_container_is_exact_signed_one_shot() -> None:
+    record, calls = fixture()
+    assert verify(record, "base", NOW, lambda args: calls[tuple(args)])["live_ownership_verified"]
+    key = ("container", "inspect", record["containers"]["issuance-migrations"])
+    item = json.loads(calls[key])
+    item[0]["Config"]["Cmd"][-1] = "true"
+    calls[key] = json.dumps(item)
+    with pytest.raises(OwnershipError, match="Credentials schema command"):
+        verify(record, "base", NOW, lambda args: calls[tuple(args)])
+    record, calls = fixture()
+    item = json.loads(calls[key])
+    item[0]["Config"]["Image"] = IMAGE
+    calls[key] = json.dumps(item)
+    with pytest.raises(OwnershipError, match="signed release"):
+        verify(record, "base", NOW, lambda args: calls[tuple(args)])
+    record, calls = fixture()
+    item = json.loads(calls[key])
+    item[0]["Mounts"][-1]["Source"] = str(ROOT / "unreviewed-script.sh")
+    calls[key] = json.dumps(item)
+    with pytest.raises(OwnershipError, match="unowned mount"):
+        verify(record, "base", NOW, lambda args: calls[tuple(args)])
 
 
 @pytest.mark.parametrize("service,key,value", [

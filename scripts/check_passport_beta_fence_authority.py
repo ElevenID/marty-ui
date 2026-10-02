@@ -173,7 +173,7 @@ def verify_issuance_attestation(
             "--repo", "ElevenID/marty-credentials",
             "--signer-workflow",
             "ElevenID/marty-credentials/.github/workflows/release-images.yml",
-            "--source-digest", source_commit, "--source-ref", "refs/heads/main",
+            "--source-digest", source_commit, "--source-ref", f"refs/tags/v{version}",
             "--deny-self-hosted-runners",
         ], check=True, capture_output=True, text=True, timeout=120)
     except (OSError, subprocess.SubprocessError) as exc:

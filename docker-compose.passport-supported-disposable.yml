@@ -111,6 +111,25 @@ services:
     networks: [private]
     restart: "no"
 
+  # The released Credentials issuance image owns its Alembic schema. This
+  # one-shot step uses the same signed digest selected by the stack manifest;
+  # no Python issuance runtime is started in this disposable Rust model.
+  issuance-migrations:
+    labels: *acceptance-labels
+    image: ${PASSPORT_ACCEPTANCE_ISSUANCE_IMAGE:?pin signed Credentials issuance image by digest}
+    command: [/bin/sh, /usr/local/bin/passport-supported-issuance-migrate]
+    configs:
+      - source: passport_supported_issuance_migrate
+        target: /usr/local/bin/passport-supported-issuance-migrate
+    secrets: [marty_db_password]
+    depends_on:
+      db-migrate:
+        condition: service_completed_successfully
+    healthcheck:
+      disable: true
+    networks: [private]
+    restart: "no"
+
   signing-keys:
     labels: *acceptance-labels
     image: ${MARTY_SERVICES_IMAGE:?pin signed services image by digest}
@@ -309,6 +328,8 @@ services:
       signing-keys:
         condition: service_started
       db-migrate:
+        condition: service_completed_successfully
+      issuance-migrations:
         condition: service_completed_successfully
       revocation-profile:
         condition: service_healthy
@@ -577,6 +598,8 @@ volumes:
     labels: *acceptance-labels
 
 configs:
+  passport_supported_issuance_migrate:
+    file: ./scripts/passport_supported_issuance_migrate.sh
   passport_supported_openbao_start:
     file: ./scripts/passport_supported_openbao_start.sh
   passport_supported_edge:

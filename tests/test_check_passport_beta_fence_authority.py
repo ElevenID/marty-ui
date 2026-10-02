@@ -68,7 +68,7 @@ def test_deletion_lineage_rejects_behind_comparison():
         authority.require_deletion_lineage("a" * 40, "c" * 40, runner)
 
 
-def test_credentials_release_tag_and_main_attestation_share_commit(
+def test_credentials_release_tag_and_attestation_share_commit_and_tag_ref(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     observed: list[list[str]] = []
@@ -90,7 +90,7 @@ def test_credentials_release_tag_and_main_attestation_share_commit(
         "ghcr.io/elevenid/marty-credentials-issuance@sha256:" + "f" * 64,
         HEAD, "0.1.72", runner,
     )
-    assert ["--source-ref", "refs/heads/main"] == observed[-1][
+    assert ["--source-ref", "refs/tags/v0.1.72"] == observed[-1][
         observed[-1].index("--source-ref"):
         observed[-1].index("--source-ref") + 2]
     assert ["--source-digest", HEAD] == observed[-1][

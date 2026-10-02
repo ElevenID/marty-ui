@@ -12,13 +12,14 @@ import pytest
 
 from scripts.check_passport_supported_rust_model import (
     ModelPreflightError, preflight_attested_plan, render_model, validate_model,
-    validate_selfhost_ceremony_model,
+    validate_planned_model, validate_selfhost_ceremony_model,
 )
 from scripts.passport_supported_infra_images import qualified_images
 
 
 SERVICES = "ghcr.io/elevenid/marty-ui-oss/services@sha256:" + "a" * 64
 MIGRATIONS = "ghcr.io/elevenid/marty-ui-oss/migrations@sha256:" + "b" * 64
+ISSUANCE = "ghcr.io/elevenid/marty-credentials-issuance@sha256:" + "c" * 64
 
 
 def inputs(root: Path) -> Path:
@@ -45,6 +46,7 @@ def inputs(root: Path) -> Path:
         "PASSPORT_ACCEPTANCE_OPENBAO_IMAGE=quay.io/openbao/openbao@sha256:" + "f" * 64,
         "PASSPORT_ACCEPTANCE_EDGE_IMAGE=docker.io/library/nginx@sha256:" + "1" * 64,
         "PASSPORT_ACCEPTANCE_MIGRATIONS_IMAGE=" + MIGRATIONS,
+        "PASSPORT_ACCEPTANCE_ISSUANCE_IMAGE=" + ISSUANCE,
         "PASSPORT_ACCEPTANCE_PLAN_RUN_ID=123456789",
         "PASSPORT_ACCEPTANCE_SOURCE_COMMIT=" + "a" * 40,
         "PASSPORT_ACCEPTANCE_ADMIN_EMAIL=disposable@acceptance.invalid",
@@ -66,7 +68,7 @@ def test_real_compose_render_is_safe_but_not_accepted(
     assert set(model["services"]) >= {
         "gateway", "flow", "issuance-native",
         "passport-callback-signer", "passport-beta-bureau",
-        "signing-keys", "db-migrate", "postgres", "redis", "openbao",
+        "signing-keys", "db-migrate", "issuance-migrations", "postgres", "redis", "openbao",
         "organization", "event-stream",
         "revocation-profile", "revocation-profile-migrate",
         "credential-template", "trust-profile", "presentation-policy",
@@ -166,6 +168,20 @@ def test_real_compose_render_is_safe_but_not_accepted(
     assert {secret["source"] for secret in openbao["secrets"]} == {"bao_root_token"}
     assert "BAO_DEV_ROOT_TOKEN_ID" not in openbao.get("environment", {})
     migration = model["services"]["db-migrate"]
+    issuance_migration = model["services"]["issuance-migrations"]
+    assert issuance_migration["image"] == ISSUANCE
+    assert issuance_migration["depends_on"]["db-migrate"]["condition"] == (
+        "service_completed_successfully")
+    assert model["services"]["issuance-native"]["depends_on"]["issuance-migrations"][
+        "condition"] == "service_completed_successfully"
+    assert issuance_migration["command"] == [
+        "/bin/sh", "/usr/local/bin/passport-supported-issuance-migrate"]
+    assert {secret["source"] for secret in issuance_migration["secrets"]} == {
+        "marty_db_password"}
+    assert "DATABASE_URL" not in issuance_migration.get("environment", {})
+    assert issuance_migration["configs"] == [{
+        "source": "passport_supported_issuance_migrate",
+        "target": "/usr/local/bin/passport-supported-issuance-migrate"}]
     assert migration["depends_on"]["revocation-profile-migrate"]["condition"] == (
         "service_completed_successfully")
     assert model["services"]["revocation-profile-migrate"]["environment"][
@@ -244,6 +260,7 @@ def test_attested_selfhost_preflight_includes_ceremony_model(tmp_path: Path) -> 
         "source_commit": "a" * 40, "run_id": "123456789",
         "services_reference": SERVICES,
         "migrations_reference": MIGRATIONS,
+        "issuance_reference": ISSUANCE,
         "infra_images": qualified_images(verify_registry=False),
         "owner_labels": {
             "com.marty.passport.acceptance.owner": "supported-consumer",
@@ -264,6 +281,11 @@ def test_attested_selfhost_preflight_includes_ceremony_model(tmp_path: Path) -> 
     assert report["status"] == "blocked"
     assert report["model"]["model_safe"] is True
     assert report["ceremony_model"]["ceremony_only"] is True
+    changed = render_model("selfhost", project, env_file, tmp_path, SERVICES)
+    changed["services"]["issuance-migrations"]["image"] = (
+        "ghcr.io/elevenid/marty-credentials-issuance@sha256:" + "e" * 64)
+    with pytest.raises(ModelPreflightError, match="protected image reference"):
+        validate_planned_model(changed, plan, tmp_path)
 
 
 @pytest.mark.skipif(shutil.which("docker") is None, reason="Docker Compose CLI unavailable")
@@ -283,6 +305,19 @@ def test_rendered_model_rejects_escape_and_mutated_rust_image(tmp_path: Path) ->
     bad = deepcopy(model)
     bad["services"]["issuance-native"]["image"] = "marty-credentials:latest"
     with pytest.raises(ModelPreflightError, match="immutable"):
+        validate_model(bad, project, SERVICES, tmp_path)
+    bad = deepcopy(model)
+    bad["services"]["issuance-migrations"]["command"][-1] = "python other.py upgrade"
+    with pytest.raises(ModelPreflightError, match="Credentials issuance schema"):
+        validate_model(bad, project, SERVICES, tmp_path)
+    bad = deepcopy(model)
+    bad["configs"]["passport_supported_issuance_migrate"]["file"] = (
+        tmp_path / "unreviewed-issuance-migrate.sh").as_posix()
+    with pytest.raises(ModelPreflightError, match="Credentials migration script"):
+        validate_model(bad, project, SERVICES, tmp_path)
+    bad = deepcopy(model)
+    bad["services"]["issuance-native"]["depends_on"].pop("issuance-migrations")
+    with pytest.raises(ModelPreflightError, match="Credentials issuance schema"):
         validate_model(bad, project, SERVICES, tmp_path)
     bad = deepcopy(model)
     bad["services"]["openbao"]["entrypoint"] = ["/bin/sh", "/tmp/start.sh"]
