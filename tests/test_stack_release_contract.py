@@ -493,10 +493,10 @@ def test_deletion_release_uses_the_reviewed_integration_suite_and_rust_candidate
         for component in lock["components"]
         if component["name"] == "marty-integration-tests"
     )
-    assert integration["version"] == "1.2.79"
-    assert integration["commit"] == "7d24c73c1ef7e7dfb7e5cf119c6552321e58fa71"
+    assert integration["version"] == "1.2.81"
+    assert integration["commit"] == "01f2d4f6425c0dd6d11ca1a92f5e46f4cea70a04"
     assert integration["artifacts"][0]["digest"] == (
-        "sha256:622e878e47a9c8239160bc2e38fe2423d6fe9843de18e6c953433ccd32a905b7"
+        "sha256:76ea94e645fbbc7c821e85f64b2e28fa3199186e1f1c5f14829034fd75e2e178"
     )
 
     issuance = next(
@@ -516,14 +516,14 @@ def test_verifier_release_lineage_is_eligible_and_evidence_bounded() -> None:
     lock = json.loads(_text("release/stack-lock.json"))
     components = {component["name"]: component for component in lock["components"]}
 
-    assert lock["release"] == "marty-ui@1.1.219"
+    assert lock["release"] == "marty-ui@1.1.220"
     assert lock["release_state"] == "eligible"
-    stack_tag_gate.require_release_eligible(ROOT, "v1.1.219")
+    stack_tag_gate.require_release_eligible(ROOT, "v1.1.220")
     qualified = json.loads(_text("contracts/didcomm-native-consumer-ownership.json"))[
         "release_gate"
     ]["qualified_release"]
     assert components["marty-credentials-issuance"]["version"] == qualified["version"]
-    assert components["marty-integration-tests"]["version"] == "1.2.79"
+    assert components["marty-integration-tests"]["version"] == "1.2.81"
 
     documents = (
         _text("docs/CONSOLIDATED_RUST_MIGRATION_ROADMAP.md"),

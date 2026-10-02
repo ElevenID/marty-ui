@@ -22,7 +22,7 @@ export const useTrustService = () => {
 
 /**
  * Hook to access certificate parser.
- * @returns {import('./adapters/parsing/NodeForgeCertParser').default}
+ * @returns {import('./adapters/parsing/PkijsCertParser').default}
  */
 export const useCertParser = () => {
   const context = useContext(TrustContext);

@@ -14,6 +14,9 @@ def test_unhealthy_services_requires_the_full_public_contract() -> None:
     assert waiter.unhealthy_services(payload) == set()
     payload["services"]["issuance"] = {"status": "unreachable"}
     assert waiter.unhealthy_services(payload) == {"issuance"}
+    payload["services"]["issuance"] = {"status": "healthy"}
+    payload["services"].pop("issuance-native")
+    assert waiter.unhealthy_services(payload) == {"issuance-native"}
 
 
 def test_unhealthy_services_rejects_malformed_gateway_responses() -> None:

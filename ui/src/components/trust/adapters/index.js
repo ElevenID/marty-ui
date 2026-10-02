@@ -6,9 +6,9 @@
 
 import TrustApiAdapter from './api/TrustApiAdapter';
 import MockTrustAdapter from './mock/MockTrustAdapter';
-import NodeForgeCertParser from './parsing/NodeForgeCertParser';
+import PkijsCertParser from './parsing/PkijsCertParser';
 
-export { TrustApiAdapter, MockTrustAdapter, NodeForgeCertParser };
+export { TrustApiAdapter, MockTrustAdapter, PkijsCertParser };
 
 /**
  * Create a trust service adapter based on configuration.
@@ -45,13 +45,12 @@ export function createTrustService(config = {}) {
 /**
  * Create a certificate parser instance.
  * 
- * Currently only NodeForgeCertParser is available.
- * Future: could support WebCrypto-based parser.
+ * Uses PKI.js for X.509 and PKCS#7 parsing.
  * 
- * @returns {NodeForgeCertParser}
+ * @returns {PkijsCertParser}
  */
 export function createCertParser() {
-  return new NodeForgeCertParser();
+  return new PkijsCertParser();
 }
 
 /**

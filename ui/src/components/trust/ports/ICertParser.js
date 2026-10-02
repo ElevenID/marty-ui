@@ -2,7 +2,7 @@
  * Certificate Parser Port (Interface)
  * 
  * Defines the contract for client-side certificate parsing.
- * Implementation: NodeForgeCertParser
+ * Implementation: PkijsCertParser
  */
 
 /**
