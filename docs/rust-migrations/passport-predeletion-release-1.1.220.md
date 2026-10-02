@@ -19,3 +19,14 @@ attestations, checksums, source, and every OCI digest before the protected
 disposable passport proof. This release is not a beta deployment. Continue
 with the [aggregate beta acceptance sequence](next-aggregate-beta-acceptance.md)
 and preserve production.
+
+The protected release claim and publication succeeded on 2026-10-02 at commit
+`86f059ff26a4a289b865a73ea4bdca50f58d2e28`. The subsequent disposable
+producer did not pass: OpenBao's primary Docker network mode was the owned
+`callback_signing` network, while the partial teardown guard expected only the
+owned `private` network. The job failed closed and quarantined its disposable
+project. After independent review of the narrow guard correction, the project
+was removed using its attested plan, exact resource inventory, and ownership
+checks. Production container identity and state matched the pre-run baseline.
+No beta deployment or passport acceptance is claimed from this release. Continue
+with the [1.1.221 qualification coordinate](passport-predeletion-release-1.1.221.md).

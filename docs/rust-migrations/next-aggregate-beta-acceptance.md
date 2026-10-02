@@ -6,10 +6,11 @@ must also be on protected main before a release claim. The
 [1.1.218 coordinate](passport-predeletion-release-1.1.218.md) was tombstoned
 after qualification failed. The [1.1.219 coordinate](passport-predeletion-release-1.1.219.md)
 also stopped before promotion when its pinned public-stack harness selected a
-retired Python DIDComm owner. The [1.1.220 coordinate](passport-predeletion-release-1.1.220.md)
-uses the corrected released harness for Rust pre-deletion qualification;
-eligibility alone is not a claim or deployment. Historical beta 1.1.217 evidence
-cannot qualify the new source.
+retired Python DIDComm owner. The [1.1.220 release](passport-predeletion-release-1.1.220.md)
+passed release qualification, but its protected disposable producer failed and
+did not create acceptance evidence. The [1.1.221 coordinate](passport-predeletion-release-1.1.221.md)
+selects the reviewed teardown correction for another Rust qualification run.
+Historical beta 1.1.217 evidence cannot qualify the new source.
 The final beta release must come from the source after Python passport deletion.
 
 ## Protected configuration audit — 2026-09-20
@@ -42,8 +43,8 @@ The final beta release must come from the source after Python passport deletion.
    changes. Resolve remaining source-qualification and consumer-acceptance gates
    before claiming whole-goal completion. Keep DIDComm KMS redesign separately
    deferred.
-2. Review the 1.1.220 eligibility change with the corrected public-stack harness
-   pin after the Rust source, release-gate repairs, and Rust build audit are on protected main. Then use
+2. Review the 1.1.221 eligibility change with the corrected public-stack harness
+   pin and disposable teardown guard on protected main. Then use
    `.github/workflows/prepare-stack-tag.yml` and `cd.yml` to claim and publish
    the immutable **pre-deletion qualification** release. Retain the source,
    claim/transaction and run identities. Verify annotated tag/source, complete
