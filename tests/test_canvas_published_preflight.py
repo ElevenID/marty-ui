@@ -58,13 +58,13 @@ def test_mandatory_full_mode_registration_roster_is_unchanged() -> None:
     )
 
 
-def test_full_mode_is_exactly_two_way_while_every_preflight_stays_serial() -> None:
+def test_full_mode_is_exactly_four_way_while_every_preflight_stays_serial() -> None:
     script = SCRIPT.read_text(encoding="utf-8")
     preflight = (
         '"${executables[0]}" "$preflight_target" --exact --nocapture --test-threads=1'
     )
     serial = '"${executables[0]}" "$serial_test" --exact --nocapture --test-threads=1'
-    full = '"${executables[0]}" --skip "$serial_test" "${preflight_skips[@]}" --nocapture --test-threads=2'
+    full = '"${executables[0]}" --skip "$serial_test" "${preflight_skips[@]}" --nocapture --test-threads=4'
     assert sum(line.strip() == preflight for line in script.splitlines()) == 1
     assert sum(line.strip() == serial for line in script.splitlines()) == 1
     assert (
@@ -72,7 +72,7 @@ def test_full_mode_is_exactly_two_way_while_every_preflight_stays_serial() -> No
         in script
     )
     assert script.rstrip().endswith(full)
-    assert sorted(set(re.findall(r"--test-threads=(\d+)", script))) == ["1", "2"]
+    assert sorted(set(re.findall(r"--test-threads=(\d+)", script))) == ["1", "4"]
 
 
 RENEWAL_GATES = [
@@ -294,7 +294,7 @@ def test_default_and_explicit_full_keep_all_registrations_and_run_every_test(
         ["child", "1", "--list"],
         ["child", "1", "--list", "--skip", serial],
         ["child", "1", serial, "--exact", "--nocapture", "--test-threads=1"],
-        ["child", "1", "--skip", serial, "--nocapture", "--test-threads=2"],
+        ["child", "1", "--skip", serial, "--nocapture", "--test-threads=4"],
     ]
     assert children[:-4] == [["child", "1", "--list"]] * len(checks)
     assert [call for call in calls if call[0] == "docker"] == [
@@ -326,7 +326,7 @@ def test_proven_preflights_are_skipped_only_in_explicit_reuse_mode(
             for item in ("--skip", target)
         ],
         "--nocapture",
-        "--test-threads=2",
+        "--test-threads=4",
     ]
     assert not any(
         call[2:4] == [target, "--exact"] for call in children for target in skipped
@@ -338,7 +338,7 @@ def test_proven_preflights_are_skipped_only_in_explicit_reuse_mode(
 
     result, calls = shell_case(["full-after-preflights"], run_id="other-run")
     assert result.returncode != 0
-    assert not any("--test-threads=2" in call for call in calls)
+    assert not any("--test-threads=4" in call for call in calls)
     assert not any(call[0] == "docker" for call in calls)
 
 
@@ -353,7 +353,7 @@ def test_reuse_mode_fails_closed_without_matching_evidence(
         path.write_text("not-a-digest\n")
     result, calls = shell_case(["full-after-preflights"])
     assert result.returncode != 0
-    assert not any("--test-threads=2" in call for call in calls)
+    assert not any("--test-threads=4" in call for call in calls)
     assert not any(call[0] == "docker" for call in calls)
 
 
@@ -364,7 +364,7 @@ def test_full_mode_rejects_a_skip_that_would_drop_another_test(shell_case):
     )
     result, calls = shell_case(registrations=registrations)
     assert result.returncode != 0
-    assert not any("--test-threads=2" in call for call in calls)
+    assert not any("--test-threads=4" in call for call in calls)
 
 
 @pytest.mark.parametrize("mode,target", PREFLIGHTS)

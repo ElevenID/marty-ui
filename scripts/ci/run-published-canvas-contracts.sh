@@ -230,4 +230,4 @@ all_tests=$("${executables[0]}" --list | grep -c ': test$')
 parallel_tests=$("${executables[0]}" --list --skip "$serial_test" "${preflight_skips[@]}" | grep -c ': test$')
 [[ $((all_tests - parallel_tests)) == $((1 + ${#preflight_skips[@]} / 2)) ]]
 "${executables[0]}" "$serial_test" --exact --nocapture --test-threads=1
-"${executables[0]}" --skip "$serial_test" "${preflight_skips[@]}" --nocapture --test-threads=2
+"${executables[0]}" --skip "$serial_test" "${preflight_skips[@]}" --nocapture --test-threads=4
