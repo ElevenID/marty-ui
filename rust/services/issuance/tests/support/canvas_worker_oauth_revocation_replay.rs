@@ -7,6 +7,7 @@ use super::{
     },
     canvas_worker_rest_replay,
 };
+use chrono::{DateTime, TimeDelta, Utc};
 use marty_issuance_service::{
     canvas_oauth::CanvasOAuthSecretVault, integration_secret::NewIntegrationSecret,
 };
@@ -81,6 +82,13 @@ pub async fn replay(pool: &PgPool, database_url: &str, origin: &str, name: &str,
         }
     }
     let mut patch_attempt_observed = false;
+    // The worker computes retry_at before the repository writes updated_at.
+    // Bracket the decision with database clocks so a slow write cannot make
+    // a valid retry appear shorter than the frozen delay bounds.
+    let retry_window_start: DateTime<Utc> = sqlx::query_scalar("SELECT clock_timestamp()")
+        .fetch_one(pool)
+        .await
+        .unwrap();
     let cycle = if kind == "oauth-revocation-counters" {
         Some(start_counter_cycle(pool, &fixture, origin, &environment))
     } else {
@@ -198,6 +206,10 @@ pub async fn replay(pool: &PgPool, database_url: &str, origin: &str, name: &str,
     })
     .await
     .expect("actual native revocation must reach the expected durable phase");
+    let retry_window_end: DateTime<Utc> = sqlx::query_scalar("SELECT clock_timestamp()")
+        .fetch_one(pool)
+        .await
+        .unwrap();
     // SIGINT behavior has a separate qualified process gate. Here stop only
     // this owned child after the observed cycle, before reading durable state.
     if let Some(worker) = worker.as_mut() {
@@ -283,7 +295,6 @@ pub async fn replay(pool: &PgPool, database_url: &str, origin: &str, name: &str,
         .fetch_one(pool)
         .await
         .unwrap();
-    let delay = read_retry_delay(pool, matrix["retry_delay_sql"].as_str().unwrap()).await;
     let jobs: i64 =
         sqlx::query_scalar("SELECT count(*) FROM issuance_service.canvas_evidence_sync_jobs")
             .fetch_one(pool)
@@ -312,14 +323,21 @@ pub async fn replay(pool: &PgPool, database_url: &str, origin: &str, name: &str,
         assert_eq!(secrets, before);
         json!({"kind": "preserved", "matches": true})
     } else if let Some(bounds) = case.get("delay_bounds") {
-        let delay = delay.expect("retry has an actual stored deadline");
+        let retry_at: DateTime<Utc> = sqlx::query_scalar(
+            "SELECT revoke_retry_at FROM issuance_service.canvas_oauth_connections WHERE id='worker-rest-connection'",
+        )
+        .fetch_one(pool)
+        .await
+        .expect("retry has an actual stored deadline");
+        let lower = TimeDelta::seconds(bounds[0].as_i64().unwrap());
+        let upper = TimeDelta::seconds(bounds[1].as_i64().unwrap());
         assert!(
-            delay >= bounds[0].as_f64().unwrap() - 0.1
-                && delay <= bounds[1].as_f64().unwrap() + 0.1,
-            "actual retry timing differs: {delay}"
+            retry_at >= retry_window_start + lower && retry_at <= retry_window_end + upper,
+            "actual retry deadline {retry_at} falls outside the worker decision window"
         );
         json!({"kind": "bounds", "matches": true})
     } else {
+        let delay = read_retry_delay(pool, matrix["retry_delay_sql"].as_str().unwrap()).await;
         assert!(delay.is_none());
         Value::Null
     };
