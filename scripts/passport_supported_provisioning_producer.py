@@ -243,6 +243,7 @@ def stage_disposable_inputs(
     references = {
         "MARTY_SERVICES_IMAGE": plan.get("services_reference"),
         "PASSPORT_ACCEPTANCE_MIGRATIONS_IMAGE": plan.get("migrations_reference"),
+        "PASSPORT_ACCEPTANCE_ISSUANCE_IMAGE": plan.get("issuance_reference"),
         **{f"PASSPORT_ACCEPTANCE_{name.upper()}_IMAGE": image
            for name, image in images.items()},
     }
@@ -416,6 +417,7 @@ def collect_record(
         **{key: plan[key] for key in (
             "run_id", "project", "source_commit", "services_reference",
             "migrations_reference", "infra_images",
+            "issuance_reference",
             "created_at", "expires_at", "owner_labels",
         )},
     }
@@ -494,9 +496,9 @@ def _destroy_recorded_project(
                                  if service == "passport-callback-signer"
                                  else project + "_private")
                 expected_modes = {expected_mode}
-                if service == "openbao":
+                if service in {"openbao", "passport-beta-bureau"}:
                     # Compose may choose either owned attachment as the
-                    # primary network mode when OpenBao joins both networks.
+                    # primary mode for these dual-network services.
                     expected_modes.add(project + "_callback_signing")
                 require(isinstance(host_config, dict)
                         and host_config.get("NetworkMode") in expected_modes
@@ -508,6 +510,7 @@ def _destroy_recorded_project(
                 attachments = network_settings.get("Networks")
                 expected_networks = set() if helper_parent else {expected_mode}
                 if service in {"openbao", "passport-beta-bureau"}:
+                    expected_networks.add(project + "_private")
                     expected_networks.add(project + "_callback_signing")
                 state = item.get("State")
                 created = isinstance(state, dict) and state.get("Status") == "created"
@@ -515,6 +518,7 @@ def _destroy_recorded_project(
                                     and (created
                                          or (state.get("Status") == "exited"
                                              and service in {"db-migrate",
+                                                             "issuance-migrations",
                                                              "revocation-profile-migrate"})))
                 require(isinstance(attachments, dict)
                         and (set(attachments) == expected_networks
@@ -717,6 +721,7 @@ def destroy_partial_disposable_project(
               "source_commit": plan["source_commit"],
               "services_reference": plan["services_reference"],
               "migrations_reference": plan["migrations_reference"],
+              "issuance_reference": plan["issuance_reference"],
               "infra_images": plan["infra_images"],
               "containers": containers, "networks": networks, "volumes": volumes}
     return _destroy_recorded_project(

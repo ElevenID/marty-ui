@@ -20,10 +20,12 @@ import subprocess
 from typing import Callable
 
 if __package__:
+    from .check_passport_beta_fence_authority import verify_issuance_attestation
     from .check_passport_supported_compose_ownership import verify as verify_ownership
     from .collect_passport_beta_acceptance import verify_attestations
     from .passport_supported_infra_images import qualified_images
 else:
+    from check_passport_beta_fence_authority import verify_issuance_attestation
     from check_passport_supported_compose_ownership import verify as verify_ownership
     from collect_passport_beta_acceptance import verify_attestations
     from passport_supported_infra_images import qualified_images
@@ -34,6 +36,7 @@ DIGEST = re.compile(r"sha256:[0-9a-f]{64}\Z")
 RUN_ID = re.compile(r"[1-9][0-9]{0,19}\Z")
 UI_SERVICES = "ghcr.io/elevenid/marty-ui-oss/services"
 UI_MIGRATIONS = "ghcr.io/elevenid/marty-ui-oss/migrations"
+ISSUANCE_IMAGE = "ghcr.io/elevenid/marty-credentials-issuance"
 PLAN_WORKFLOW = "ElevenID/marty-ui/.github/workflows/passport-supported-provisioning-plan.yml"
 # The hosted attestor signs a blocked producer receipt after its plan handoff.
 RECORD_WORKFLOW = "ElevenID/marty-ui/.github/workflows/passport-supported-provisioning-record.yml"
@@ -87,6 +90,7 @@ def _component(manifest: dict, name: str, repository: str,
 
 def release_inputs(manifest_path: Path, source_commit: str, *,
                    verify_ui: Callable[[Path, dict[str, str], str], bool] = verify_attestations,
+                   verify_issuance: Callable[[str, str, str], bool] = verify_issuance_attestation,
                    infra: Callable[[], dict[str, str]] = qualified_images) -> dict:
     require(COMMIT.fullmatch(source_commit) is not None,
             "Protected UI source commit is invalid")
@@ -114,12 +118,20 @@ def release_inputs(manifest_path: Path, source_commit: str, *,
             "Official stack UI image roles are incomplete")
     require(verify_ui(manifest_path, ui_images, source_commit) is True,
             "Official stack UI attestations are unverified")
+    issuance_commit, issuance_version, issuance_digest = _component(
+        manifest, "marty-credentials-issuance", "ElevenID/marty-credentials",
+        ISSUANCE_IMAGE)
+    issuance_reference = f"{ISSUANCE_IMAGE}@{issuance_digest}"
+    require(verify_issuance(issuance_reference, issuance_commit,
+                            issuance_version) is True,
+            "Official Credentials issuance image attestation is unverified")
     infra_images = infra()
     return {
         "source_commit": source_commit,
         "stack_manifest_sha256": hashlib.sha256(manifest_path.read_bytes()).hexdigest(),
         "services_reference": f"{UI_SERVICES}@{services_digest}",
         "migrations_reference": f"{UI_MIGRATIONS}@{migrations_digest}",
+        "issuance_reference": issuance_reference,
         "infra_images": infra_images,
     }
 
@@ -208,6 +220,7 @@ def _require_record_binding(plan_path: Path, plan: dict, record: dict) -> None:
             and record.get("source_commit") == plan.get("source_commit")
             and record.get("services_reference") == plan.get("services_reference")
             and record.get("migrations_reference") == plan.get("migrations_reference")
+            and record.get("issuance_reference") == plan.get("issuance_reference")
             and record.get("infra_images") == plan.get("infra_images")
             and record.get("created_at") == plan.get("created_at")
             and record.get("expires_at") == plan.get("expires_at")

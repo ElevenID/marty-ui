@@ -38,6 +38,7 @@ NOW = datetime(2026, 9, 27, 12, tzinfo=timezone.utc)
 PROJECT = "marty-passport-acceptance-base-123456abcdef"
 SOURCE = "a" * 40
 SERVICES = "ghcr.io/elevenid/marty-ui-oss/services@sha256:" + "b" * 64
+ISSUANCE = "ghcr.io/elevenid/marty-credentials-issuance@sha256:" + "d" * 64
 LABELS = {
     "com.marty.passport.acceptance.owner": "supported-consumer",
     "com.marty.passport.acceptance.run-id": "123456",
@@ -86,6 +87,7 @@ def source_plan(tmp_path: Path) -> tuple[Path, Path, dict]:
         "stack_manifest_sha256": hashlib.sha256(manifest.read_bytes()).hexdigest(),
         "services_reference": SERVICES,
         "migrations_reference": "migrations@sha256:" + "c" * 64,
+        "issuance_reference": ISSUANCE,
         "infra_images": {"postgres": "postgres@sha256:" + "e" * 64,
                          "openbao": "openbao@sha256:" + "f" * 64},
     }
@@ -105,7 +107,7 @@ def source_plan(tmp_path: Path) -> tuple[Path, Path, dict]:
 def verify(path: Path, manifest: Path, plan: dict, **kwargs) -> dict:
     inputs = {key: plan[key] for key in (
         "source_commit", "stack_manifest_sha256", "services_reference",
-        "migrations_reference", "infra_images",
+        "migrations_reference", "issuance_reference", "infra_images",
     )}
     return verify_plan_release(
         path, manifest, "123456", ENV,
@@ -120,7 +122,7 @@ def test_infra_rehearsal_requires_its_exact_protected_workflow(tmp_path: Path) -
     path, manifest, plan = source_plan(tmp_path)
     official = {key: plan[key] for key in (
         "source_commit", "stack_manifest_sha256", "services_reference",
-        "migrations_reference", "infra_images",
+        "migrations_reference", "issuance_reference", "infra_images",
     )}
     gates = {"attest": lambda *args: True,
              "release": lambda *args: official,
@@ -140,7 +142,7 @@ def partial_teardown_context(tmp_path: Path) -> tuple[tuple, dict, dict]:
     path, manifest, plan = source_plan(tmp_path)
     official = {key: plan[key] for key in (
         "source_commit", "stack_manifest_sha256", "services_reference",
-        "migrations_reference", "infra_images",
+        "migrations_reference", "issuance_reference", "infra_images",
     )}
     gates = {"now": NOW, "attest": lambda *args: True,
              "release": lambda *args: official,
@@ -158,6 +160,7 @@ def input_plan() -> dict:
         "expires_at": (NOW + timedelta(minutes=55)).isoformat(),
         "services_reference": SERVICES,
         "migrations_reference": "ghcr.io/elevenid/marty-ui-oss/migrations@sha256:" + "c" * 64,
+        "issuance_reference": ISSUANCE,
         "infra_images": qualified_images(verify_registry=False),
         "owner_labels": LABELS,
     }
@@ -826,8 +829,9 @@ def test_partial_teardown_removes_only_plan_owned_startup_resources(
 
 
 @pytest.mark.parametrize("primary_suffix", ["_private", "_callback_signing"])
-def test_partial_teardown_accepts_either_owned_openbao_primary_network(
-    tmp_path: Path, primary_suffix: str,
+@pytest.mark.parametrize("service", ["openbao", "passport-beta-bureau"])
+def test_partial_teardown_accepts_either_owned_dual_network_primary(
+    tmp_path: Path, primary_suffix: str, service: str,
 ) -> None:
     arguments, plan, gates = partial_teardown_context(tmp_path)
     project = plan["project"]
@@ -836,14 +840,14 @@ def test_partial_teardown_accepts_either_owned_openbao_primary_network(
     callback = "3" * 64
     networks = {project + "_private": private,
                 project + "_callback_signing": callback}
-    volumes = [project + "_openbao_data", project + "_openbao_file",
-               project + "_openbao_logs"]
+    volumes = ([project + "_openbao_data", project + "_openbao_file",
+                project + "_openbao_logs"] if service == "openbao" else [])
     labels = {**plan["owner_labels"], "com.docker.compose.project": project}
     mounts = [
         {"Type": kind, "Source": source, "Name": source if kind == "volume" else None,
          "Destination": destination, "RW": writable}
         for kind, source, destination, writable in producer._expected_mounts(
-            "openbao", project, Path(tempfile.gettempdir()) / project,
+            service, project, Path(tempfile.gettempdir()) / project,
             plan["surface"])
     ]
     present = {"containers": True, "networks": True, "volumes": True}
@@ -853,9 +857,10 @@ def test_partial_teardown_accepts_either_owned_openbao_primary_network(
     def inspector(args: list[str]) -> str:
         if args[:2] == ["container", "inspect"]:
             return json.dumps([{
-                "Id": container, "Name": f"/{project}-openbao-1",
-                "Config": {"Image": plan["infra_images"]["openbao"],
-                           "Labels": {**labels, "com.docker.compose.service": "openbao"}},
+                "Id": container, "Name": f"/{project}-{service}-1",
+                "Config": {"Image": (plan["infra_images"]["openbao"]
+                                     if service == "openbao" else plan["services_reference"]),
+                           "Labels": {**labels, "com.docker.compose.service": service}},
                 "HostConfig": {"NetworkMode": state["mode"]},
                 "NetworkSettings": {"Networks": {
                     name: {"NetworkID": identifier}
@@ -888,8 +893,9 @@ def test_partial_teardown_accepts_either_owned_openbao_primary_network(
 
     assert destroy_partial_disposable_project(
         *arguments, inspector, executor, **gates)
-    assert [call[:2] for call in calls] == [
+    assert [call[:2] for call in calls] == ([
         ["container", "rm"], ["network", "rm"], ["volume", "rm"]]
+        if service == "openbao" else [["container", "rm"], ["network", "rm"]])
 
     present.update(containers=True, networks=True, volumes=True)
     calls.clear()

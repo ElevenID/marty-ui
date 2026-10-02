@@ -77,6 +77,7 @@ def safe_model(root: Path) -> dict:
         "RP_GRPC_TARGET": "revocation-profile:9013",
     })
     services["issuance-native"]["depends_on"] = {
+        "issuance-migrations": {"condition": "service_completed_successfully"},
         "revocation-profile": {"condition": "service_healthy"},
         "credential-template": {"condition": "service_healthy"},
     }
@@ -366,6 +367,17 @@ def safe_model(root: Path) -> dict:
                            "condition": "service_completed_successfully"}},
         "secrets": [{"source": "bao_token"}],
     }
+    services["issuance-migrations"] = {
+        "image": "ghcr.io/elevenid/marty-credentials-issuance@sha256:" + "c" * 64,
+        "networks": ["private"],
+        "command": ["/bin/sh", "/usr/local/bin/passport-supported-issuance-migrate"],
+        "configs": [{"source": "passport_supported_issuance_migrate",
+                     "target": "/usr/local/bin/passport-supported-issuance-migrate"}],
+        "secrets": [{"source": "marty_db_password"}],
+        "depends_on": {"db-migrate": {"condition": "service_completed_successfully"}},
+        "healthcheck": {"disable": True},
+        "restart": "no",
+    }
     for name in ("gateway", "signing-keys"):
         services[name]["secrets"].extend([
             {"source": "dsc_issue_gateway_key"},
@@ -408,6 +420,8 @@ def safe_model(root: Path) -> dict:
             },
             "configs": {"passport_supported_openbao_start": {
                 "file": str(preflight.ROOT / "scripts/passport_supported_openbao_start.sh")},
+                "passport_supported_issuance_migrate": {
+                    "file": str(preflight.ROOT / "scripts/passport_supported_issuance_migrate.sh")},
                 "passport_supported_edge": {
                     "file": str(preflight.ROOT / "scripts/passport_supported_edge.conf")}},
             }
@@ -532,6 +546,7 @@ def test_attested_plan_binds_all_disposable_images(tmp_path: Path) -> None:
         "status": "blocked", "surface": "base", "project": PROJECT,
         "services_reference": IMAGE,
         "migrations_reference": model["services"]["db-migrate"]["image"],
+        "issuance_reference": model["services"]["issuance-migrations"]["image"],
         "infra_images": qualified_images(verify_registry=False),
         "run_id": "123456", "source_commit": "a" * 40,
         "expires_at": "2026-09-27T12:55:00+00:00",
@@ -542,7 +557,7 @@ def test_attested_plan_binds_all_disposable_images(tmp_path: Path) -> None:
     changed_lease["expires_at"] = "2026-09-27T12:56:00+00:00"
     with pytest.raises(ModelPreflightError, match="API key lease"):
         validate_planned_model(model, changed_lease, tmp_path)
-    for role in ("postgres", "redis", "openbao", "db-migrate",
+    for role in ("postgres", "redis", "openbao", "db-migrate", "issuance-migrations",
                  "signing-keys", "organization", "event-stream",
                  "revocation-profile", "revocation-profile-migrate"):
         bad = deepcopy(model)
@@ -798,6 +813,7 @@ def test_executable_planned_preflight_rejects_unsigned_and_mutated_images(
         "source_commit": "a" * 40,
         "services_reference": IMAGE,
         "migrations_reference": model["services"]["db-migrate"]["image"],
+        "issuance_reference": model["services"]["issuance-migrations"]["image"],
         "infra_images": qualified_images(verify_registry=False),
         "run_id": "123456", "owner_labels": LABELS,
         "created_at": (now - timedelta(minutes=5)).isoformat(),
