@@ -98,6 +98,16 @@ def plan(paths: list[str], metadata: dict, root: Path = ROOT) -> dict:
             if consumer not in affected:
                 affected.add(consumer)
                 queue.append(consumer)
+    # Services consume one another over HTTP/gRPC and deployment wiring, not
+    # only Cargo dependencies. For example, Applicant/Gateway consume
+    # Notification and Presentation Policy consumes Trust Profile. Until that
+    # runtime graph is proven, no affected service package is narrow evidence.
+    services = {
+        name for name, owner in roots.items()
+        if owner.is_relative_to(PurePosixPath("rust/services"))
+    }
+    if affected & services:
+        return full("unmapped non-Cargo runtime consumers of service packages")
     return {
         "all": False,
         "packages": sorted(affected),
