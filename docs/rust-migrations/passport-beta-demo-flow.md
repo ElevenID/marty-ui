@@ -54,11 +54,13 @@ scanner checkout must match `PASSPORT_DEMO_RECORDER_COMMIT`, pinned as an exact
 reviewed commit in the protected workflow source. Changing it requires a code
 reviewed workflow update. The recorder is a separate
 test harness and its revision is not part of the signed aggregate stack manifest.
-The `beta-lifecycle`
-environment needs `PASSPORT_DEMO_SOURCE_READ_TOKEN`, a fine-grained token with
-Contents read access to the private `ElevenID/marty-demo-recorder` repository.
-The existing `DEMO_RECORDER_DISPATCH_TOKEN` lacks that permission. The workflow
-installs the pinned recorder's locked dependencies and verifies `ffmpeg` and
+The `beta-lifecycle` environment needs the nonsecret
+`PASSPORT_DEMO_RECORDER_SOURCE_DIR` variable set to the absolute path of the
+local `marty-demo-recorder` checkout on the dedicated WSL beta runner. The
+workflow verifies its origin URL, `main` and `origin/main` tip against the
+reviewed commit, then makes a fresh local clone at the pinned scanner revision.
+No cross-repository source-read token is needed. The workflow installs the
+pinned recorder's locked dependencies and verifies `ffmpeg` and
 `tesseract` before consuming the selected live Flow. These media files remain
 diagnostic until the protected preliminary producer verifies them and qualifies
 the recording receipt.
@@ -112,14 +114,72 @@ review files, media/privacy hashes, ElevenID LLC channel and playlist, and
 live YouTube publication result. It must bind those to the same source commit,
 stack manifest, aggregate deployment receipt and plan hashes, beta origin, and
 `physical_claim=not_claimed` before setting `recorded_demo.verified=true`.
+The D-12 publisher uses `scripts/deploy-passport-demo-content-beta.ps1` for
+its manifest deployment and rollback commands. That wrapper selects only the
+healthy `elevenid-beta-ui` Compose service and requires the production
+container snapshot to remain identical. Its publication config must never call
+the generic demo-content script without this beta guard.
+For this protected WSL runner, both commands use `powershell.exe` from the
+reviewed UI checkout with `-NoProfile -ExecutionPolicy Bypass -File
+scripts/deploy-passport-demo-content-beta.ps1 -Mode Deploy` (or `Rollback`).
+The config also has the reviewed `smoke` command
+(`node tests/scripts/smoke-beta-demo-publication.js`). The recorder schema
+requires `record` and `prePublicBuild`: set `record` to
+`node -e 'process.exit(1)'` so a missing reviewed master fails, and
+`prePublicBuild` to `node -e 'process.exit(0)'` because the beta UI is already
+reviewed. Set `cwd` to `.` for every command. The protected producer checks
+these exact commands and
+the recorder binds its hash to the public result.
+
+After human review and with `PASSPORT_ACCEPTANCE_API_KEY`,
+`YOUTUBE_OAUTH_CLIENT_FILE`, and mode-0600
+`YOUTUBE_OAUTH_TOKEN_FILE` set, run `python3 scripts/publish_passport_beta_demo.py
+--artifact-dir <signed-aggregate-artifacts> --recorder-root <pinned-recorder>
+--recorder-commit <reviewed-sha> --config
+<reviewed-config> --video <reviewed-master>` with absolute paths from the
+reviewed UI checkout in
+WSL. This launcher verifies the live signed aggregate release, binds the UI
+checkout and its publisher, deployment, and smoke scripts to that source,
+validates the complete command allowlist, recorder revision,
+OAuth file permissions, production baseline, and public production availability.
+The recorder requires Node.js 24 or later. The current WSL runner has a
+checksum-verified Node.js 24.21.0 under
+`$HOME/.local/opt/node-v24.21.0`; before invoking the launcher, select it with
+`export PATH="$HOME/.local/opt/node-v24.21.0/bin:$PATH"` and check `node --version`.
+The pinned recorder checkout must have `npm ci` and its matching Playwright
+Chromium installed, including browser system dependencies. The current WSL
+runner has the reviewed recorder commit `022c8238c64972cf48873a8f4efcf73ae7329577`
+at `$HOME/passport-demo-recorder-022c8238`; its seven publication evidence
+tests and a headless Chromium launch pass. The launcher repeats the browser
+launch preflight before publication.
+It sets `WSLENV` for the manifest path and video ID, `NODE_PATH` to the recorder's locked
+Playwright package, and `BETA_ORIGIN=https://beta.elevenidllc.com` before
+calling the publisher. It allows 75 minutes for YouTube publication and the
+beta browser smoke. Then dispatch the protected evidence workflow with the
+same reviewed files; the evidence producer authenticates their hashes and the
+live signed beta release.
 Python passport retirement requires protected Rust parity, the final live
 drain, and the reviewed deletion gate before the aggregate beta deployment.
 The recording and final receipt then qualify the single Rust-only beta soak.
 
-The preliminary workflow exists, but this branch's reviewed recorder pin
-awaits protected main and a live beta receipt. The full signed callback and
-Rust restart producer, D-12 publication inputs, and final demo receipt
-producer remain outstanding.
+The preliminary workflow and reviewed recorder pin are on protected main.
+This branch adds the D-12 publication, soak, and final demo receipt producers.
+Protected live preliminary, signed callback, Rust restart, publication, soak,
+and final acceptance receipts remain pending.
 No beta recording or YouTube upload has occurred under this plan.
 The disposable model rehearses the stack and does not replace this live beta
 recording or its protected preliminary receipt.
+
+After the exact post-deletion aggregate deployment and selected D-12 Flow run,
+the protected `passport-beta-soak-sample.yml` workflow takes read-only samples
+from the signed deployment artifact directory and the private mode-0600 selected
+job handoff. Each sample rechecks the live signed Rust service inventory,
+managed issuer capability, native route ownership, the same active source and
+bureau job, zero beta passport drain, production container and network/port
+baselines, and an HTTP 200 from the public production site. Run at least three separate protected samples across 24 hours with
+no gap over 13 hours. `verify_passport_beta_soak_window.py` checks that window
+and emits `window_observed` with `provenance_pending=true`. The final compositor
+must call `verify_protected_passport_soak.py`, which downloads each artifact
+from its successful protected main run, checks the run time and exact JSON
+hash, and emits `protected_window_verified`. A local copy of sample JSON or
+an unauthenticated `window_observed` report is insufficient.

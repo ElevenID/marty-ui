@@ -1,0 +1,59 @@
+name: Passport Beta Soak Sample
+
+on:
+  workflow_dispatch:
+    inputs:
+      beta_artifact_dir:
+        description: Absolute path to the exact signed aggregate beta deployment artifacts.
+        required: true
+      private_selected_handoff:
+        description: Absolute path to the mode-0600 private selected-job handoff outside the checkout.
+        required: true
+
+concurrency:
+  group: passport-beta-soak-sample
+  cancel-in-progress: false
+
+permissions:
+  actions: read
+  attestations: read
+  contents: read
+  packages: read
+
+jobs:
+  observe:
+    if: github.ref == 'refs/heads/main'
+    runs-on: [self-hosted, linux, x64, passport-beta-wsl2]
+    environment: beta-lifecycle
+    timeout-minutes: 30
+    env:
+      GH_TOKEN: ${{ github.token }}
+      PASSPORT_ACCEPTANCE_API_KEY: ${{ secrets.PASSPORT_ACCEPTANCE_API_KEY }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - name: Verify dedicated beta runner and production baseline
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 scripts/check_passport_beta_runner.py --output "$RUNNER_TEMP/passport-beta-runner-preflight.json"
+      - name: Collect signed live passport and unchanged production observation
+        shell: bash
+        env:
+          BETA_ARTIFACT_DIR: ${{ inputs.beta_artifact_dir }}
+          PRIVATE_SELECTED_HANDOFF: ${{ inputs.private_selected_handoff }}
+        run: |
+          set -euo pipefail
+          test -n "$PASSPORT_ACCEPTANCE_API_KEY"
+          output="tests/artifacts/passport-beta-soak/passport-beta-soak-$GITHUB_RUN_ID.json"
+          mkdir -p "$(dirname "$output")"
+          python3 scripts/collect_passport_beta_soak_sample.py \
+            --artifact-dir "$BETA_ARTIFACT_DIR" \
+            --private-selected-handoff "$PRIVATE_SELECTED_HANDOFF" \
+            --output "$output"
+      - name: Upload sanitized sample
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: passport-beta-soak-${{ github.run_id }}
+          path: tests/artifacts/passport-beta-soak/passport-beta-soak-${{ github.run_id }}.json
+          if-no-files-found: error
+          retention-days: 90
