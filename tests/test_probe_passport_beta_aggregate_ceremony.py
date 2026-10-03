@@ -180,6 +180,13 @@ def test_staged_domain_and_local_dids_are_checked_before_intent(
     plan["beta_origin"] = "https://other.example"
     with pytest.raises(HostProbeError, match="public domain differs"):
         ceremony_gate.staged_public_domain(plan, lambda *_: "")
+    plan["beta_origin"] = "https://beta.elevenidllc.com"
+    monkeypatch.setattr(ceremony_gate, "inspect",
+                        lambda container, runner: {"Config": {"Env": [
+                            "PUBLIC_DOMAIN=beta.elevenidllc.com",
+                            "PUBLIC_DOMAIN=other.example"]}})
+    with pytest.raises(HostProbeError, match="public domain differs"):
+        ceremony_gate.staged_public_domain(plan, lambda *_: "")
 
 
 def test_ceremony_precedes_read_only_kms_and_owner_switch() -> None:

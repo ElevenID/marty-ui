@@ -85,8 +85,10 @@ def staged_public_domain(plan: dict[str, Any], runner: Callable[[list[str]], str
     record = inspect(signing_keys, runner)
     config = record.get("Config")
     environment = config.get("Env") if isinstance(config, dict) else None
-    require(isinstance(environment, list)
-            and environment.count("PUBLIC_DOMAIN=" + EXPECTED_DOMAIN) == 1
+    domains = ([item for item in environment
+                if isinstance(item, str) and item.startswith("PUBLIC_DOMAIN=")]
+               if isinstance(environment, list) else [])
+    require(domains == ["PUBLIC_DOMAIN=" + EXPECTED_DOMAIN]
             and plan.get("beta_origin") == "https://" + EXPECTED_DOMAIN,
             "Staged Signing Keys public domain differs from beta origin")
     return EXPECTED_DOMAIN
