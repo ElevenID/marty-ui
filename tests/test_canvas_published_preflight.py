@@ -191,6 +191,20 @@ if [[ "$1" == -er ]]; then
   [[ "$#" == 3 && "$3" == ../contracts/canvas-worker-consumer-range-oracle.json ]] || exit 90
   [[ "$TEST_FAILURE" != images ]] || exit 17
   printf '%s\n' "$TEST_POSTGRES_IMAGE" "$TEST_PYTHON_IMAGE"
+elif [[ "$#" == 3 && "$1" == -r ]]; then
+  [[ "$3" == "$RUNNER_TEMP/rust-test-artifacts.json" ]] || exit 90
+  [[ "$2" == *marty-canvas-sync-worker* && "$2" == *'.profile.test == false'* && "$2" == *'#marty-issuance-service@'* ]] || exit 90
+  if [[ "${TEST_REAL_WORKER_JQ:-0}" == 1 ]]; then
+    exec /usr/bin/jq "$@"
+  fi
+  [[ "$TEST_FAILURE" != artifacts ]] || exit 18
+  if [[ "$TEST_FAILURE" == missing-worker-binary ]]; then
+    printf '%s\n' "$RUNNER_TEMP/does-not-exist"
+  elif [[ "$TEST_FAILURE" == duplicate-worker-binaries ]]; then
+    printf '%s\n%s\n' "$TEST_WORKER_BINARY" "$RUNNER_TEMP/other-worker-binary"
+  else
+    printf '%s\n' "$TEST_WORKER_BINARY"
+  fi
 else
   [[ "$#" == 6 && "$1" == -r && "$2" == --arg && "$3" == target && "$6" == "$RUNNER_TEMP/rust-test-artifacts.json" ]] || exit 90
   [[ "$5" == *marty-issuance-service* ]] || exit 90
@@ -224,6 +238,7 @@ exec /usr/bin/grep "$@"
         r"""#!/usr/bin/env bash
 set -euo pipefail
 name="${0##*/}"
+[[ "$MARTY_CANVAS_WORKER_TEST_BINARY" == "$TEST_WORKER_BINARY" ]] || exit 91
 record="child|$name|${MARTY_CANVAS_PUBLISHED_SCHEMA_TEST:-absent}"
 for argument in "$@"; do record+="|$argument"; done
 printf '%s\n' "$record" >> "$TEST_LOG"
@@ -270,6 +285,12 @@ fi
         contract.read_bytes() + b"\n# distinct worker executable\n"
     )
     worker_contract.chmod(0o755)
+    worker_binary = tmp_path / "worker-binary"
+    worker_binary.write_bytes(worker_contract.read_bytes())
+    worker_binary.chmod(0o755)
+    other_worker_binary = tmp_path / "other-worker-binary"
+    other_worker_binary.write_bytes(worker_contract.read_bytes())
+    other_worker_binary.chmod(0o755)
 
     def run(
         arguments=(),
@@ -277,6 +298,7 @@ fi
         failure="",
         registrations=None,
         duplicate_across_targets=False,
+        worker_artifacts=None,
         pins=PINS,
         run_id="12345",
     ):
@@ -297,12 +319,33 @@ fi
             )
         log = tmp_path / "calls"
         log.write_text("", encoding="utf-8")
+        if worker_artifacts is not None:
+            bash_root = subprocess.run(
+                [bash, "--noprofile", "--norc", "-c", "pwd"],
+                cwd=tmp_path,
+                check=True,
+                capture_output=True,
+                text=True,
+            ).stdout.strip()
+            (tmp_path / "rust-test-artifacts.json").write_text(
+                "\n".join(
+                    json.dumps(artifact)
+                    .replace("__WORKER_BINARY__", f"{bash_root}/worker-binary")
+                    .replace(
+                        "__OTHER_WORKER_BINARY__", f"{bash_root}/other-worker-binary"
+                    )
+                    for artifact in worker_artifacts
+                )
+                + "\n",
+                encoding="utf-8",
+            )
         environment = dict(os.environ)
         environment.update(
             {
                 "TEST_FAILURE": failure,
                 "TEST_POSTGRES_IMAGE": pins[0],
                 "TEST_PYTHON_IMAGE": pins[1],
+                "TEST_REAL_WORKER_JQ": "1" if worker_artifacts is not None else "0",
                 "CONTRACT_SOURCE": SCRIPT.as_posix(),
                 "GITHUB_RUN_ID": run_id,
                 "GITHUB_RUN_ATTEMPT": "1",
@@ -314,6 +357,7 @@ fi
         wrapper = """export PATH="$PWD/fake-bin:/usr/bin:/bin"
 export TEST_LOG="$PWD/calls" RUNNER_TEMP="$PWD"
 export TEST_PARENT_PID="$BASHPID"
+export TEST_WORKER_BINARY="$PWD/worker-binary"
 source "$CONTRACT_SOURCE" "$@"
 """
         result = subprocess.run(
@@ -497,6 +541,45 @@ def test_duplicate_name_across_targets_fails_before_docker(shell_case):
     assert not any("--test-threads=4" in call for call in calls)
 
 
+def test_real_jq_selects_only_the_owned_non_test_worker_binary(shell_case):
+    if os.name == "nt":
+        pytest.skip("real jq is exercised in Linux CI; Windows Git Bash has no jq")
+
+    def artifact(package, kind, test, executable):
+        return {
+            "reason": "compiler-artifact",
+            "package_id": f"path+file:///checkout/rust/services/issuance#{package}@0.1.0",
+            "target": {"name": "marty-canvas-sync-worker", "kind": kind},
+            "profile": {"test": test},
+            "executable": executable,
+        }
+
+    real = artifact("marty-issuance-service", ["bin"], False, "__WORKER_BINARY__")
+    decoys = [
+        artifact("marty-issuance-service", ["bin"], True, "__OTHER_WORKER_BINARY__"),
+        artifact("marty-issuance-service-copy", ["bin"], False, "__OTHER_WORKER_BINARY__"),
+        artifact("marty-issuance-service", ["test"], False, "__OTHER_WORKER_BINARY__"),
+    ]
+    result, calls = shell_case(["timeout-preflight"], worker_artifacts=[*decoys, real])
+    assert result.returncode == 0, result.stderr
+    assert any(call[:2] == ["child", "worker-contract"] for call in calls)
+
+    result, calls = shell_case(["timeout-preflight"], worker_artifacts=decoys)
+    assert result.returncode != 0
+    assert "Expected one real marty-canvas-sync-worker binary artifact" in result.stderr
+    assert not any(call[0] == "docker" for call in calls)
+
+    duplicate = artifact(
+        "marty-issuance-service", ["bin"], False, "__OTHER_WORKER_BINARY__"
+    )
+    result, calls = shell_case(
+        ["timeout-preflight"], worker_artifacts=[*decoys, real, duplicate]
+    )
+    assert result.returncode != 0
+    assert "Expected one real marty-canvas-sync-worker binary artifact" in result.stderr
+    assert not any(call[0] == "docker" for call in calls)
+
+
 def test_full_mode_rejects_a_skip_that_would_drop_another_test(shell_case):
     registrations = [f"{name}: test" for name in required_registrations()]
     registrations.append(
@@ -594,6 +677,8 @@ def test_preflight_rejects_missing_or_inexact_registration_without_running_it(
         "artifacts",
         "missing-executable",
         "duplicate-executables",
+        "missing-worker-binary",
+        "duplicate-worker-binaries",
         "list",
         "execute",
     ],
