@@ -138,6 +138,17 @@ def test_quarantine_runs_before_registration_token() -> None:
     assert script.index('$hostMutex.WaitOne(0)') < script.index('actions/runners/remove-token')
     assert script.index('if (Test-Path -LiteralPath $markerPath)') < script.index(
         'actions/runners/registration-token')
+    assert script.index('$existingRunners = @(Get-RepositoryRunners)') < script.index(
+        'actions/runners/registration-token')
+    assert 'Assert-ExistingRunnerRouting $existingRunners $runnerLabel' in script
+    assert 'Assert-NewRunnerRouting $registered $runnerLabel' in script
+    assert 'runner-routing-label-policy.ps1' in script
     assert script.index('[System.IO.FileMode]::CreateNew') < script.index('exec ./run.sh')
     assert script.index('exec ./run.sh') < script.index('$hostMutex.ReleaseMutex()')
     assert script.index('exec ./run.sh') < script.index('Remove-Item -LiteralPath $markerPath')
+    assert script.index('Assert-NewRunnerRouting $registered $runnerLabel') < script.index('exec ./run.sh')
+    assert script.index('$registrationAttempted = $true') < script.index(
+        "./config.sh --url '$repoUrl'")
+    assert 'if ($registrationAttempted -and -not $markerCreated)' in script
+    assert "if test -f '$wslRunnerDirectory/.runner'" in script
+    assert 'Could not obtain rejected runner removal token' in script

@@ -31,12 +31,26 @@ From PowerShell, start the foreground one-job runner:
 .\scripts\register-canvas-oss-runner.ps1 -Purpose Passport
 ```
 
-The wrapper registers an ephemeral GitHub runner with the dedicated label,
-verifies the server-side labels, and exports the verified runner name to
+The wrapper first rejects an incomplete repository runner inventory, any
+already-registered runner that advertises both protected purpose labels, or
+another runner with the requested purpose label. It then registers an ephemeral
+GitHub runner with the dedicated label,
+verifies that its server-side labels contain exactly the standard runner labels
+and the dedicated purpose label, and exports the verified runner name to
 its one job. Every protected passport job checks the host again before
 its evidence step. The wrapper repeats the host check after the job and
-leaves a quarantine marker if cleanup is unverified. Keep the PowerShell
+removes a rejected new registration before starting the job. It leaves a
+quarantine marker if post-job host cleanup is unverified. Keep the PowerShell
 process alive until the job exits and GitHub removes the runner.
+
+A [protected producer run](https://github.com/ElevenID/marty-ui/actions/runs/37139093870)
+on 2026-10-03 was routed to a Canvas-named runner;
+the in-job passport identity check rejected it before reading plan or release
+artifacts. The wrapper now detects stale or dual-purpose registrations before
+starting `run.sh`, but cannot unregister an independently running runner or
+prevent a queued job from reaching it before the wrapper starts. Investigate
+and remove the stale registration/labels on the host rather than weakening the
+job preflight or treating that run as passport qualification evidence.
 
 This runner only produces protected evidence. It does not authorize a
 release claim, beta deployment, or changes to production.
