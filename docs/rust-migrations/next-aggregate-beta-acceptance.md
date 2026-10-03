@@ -1,5 +1,28 @@
 # Next aggregate beta: acceptance checklist
 
+The final aggregate beta operator requires two external issuer input files.
+`IssuerChainFile` contains exactly `organization_id`, `csca_issuer_did`,
+`csca_certificate_id`, and `dsc_issuer_did`. Its organization and DSC DID must
+match the private application file. `IssuerCeremonyFile` uses the existing
+`probe_passport_beta_chain.py` request shape: `organization_id`, a `csca`
+object with the CSCA DID, certificate ID, ICAO format, country, organization,
+common name and validity days, and a `dsc` object with both DIDs, the same
+CSCA certificate ID, ICAO format, country, organization, common name,
+validity days and stable idempotency key. These fields must match the selection.
+
+Provide distinct `CscaSessionFile` and `DscSessionFile` cookies with
+`signing-key:create` plus, respectively, `passport-certificate:issue-csca`
+and `passport-certificate:issue`. With the signed new Gateway and Signing Keys
+staged and public ingress closed, the operator seals a durable request intent,
+creates the two managed issuer profiles through the normal Gateway route,
+then performs the governed CSCA and DSC ceremonies through those same Gateway
+routes and sessions. Certificate IDs and the DSC idempotency key make exact
+retries safe. The subsequent read-only gate checks the selected valid CSCA
+record and active DSC certificate, strict X.509 chain, fresh signatures from
+both profiles, and nonexportable Transit keys in preserved beta OpenBao.
+Keep the ceremony intent, ceremony receipt and KMS proof with the aggregate
+receipt. Public ingress remains closed until the Rust owner checks pass.
+
 Source-readiness audit: Signing Keys #913 and the passport aggregate #919 are
 on protected main. The reviewed aggregate correction and deployment writer fence
 must also be on protected main before a release claim. The
@@ -80,12 +103,20 @@ The final beta release must come from the source after Python passport deletion.
    `-ApplicationFile` outside protected source with the pilot organization's
    `organization_id`, managed `issuer_did`, `application_template_id`,
    `credential_template_id`, and `delivery_destination_profile_id`. The
-   operator also needs an absolute `-FlowFile` with the pilot organization's
+   operator also needs `-IssuerChainFile` and `-IssuerCeremonyFile` with the
+   selected managed CSCA/DSC identities and exact certificate request, plus
+   distinct `-CscaSessionFile` and `-DscSessionFile` cookies with the grants
+   described above. The selected DIDs must be local path-scoped
+   `did:web:beta.elevenidllc.com:orgs:...` identities. The operator checks
+   the staged Signing Keys `PUBLIC_DOMAIN` before sealing the ceremony intent.
+   The operator creates the profiles and certificates through normal Gateway
+   authorization while the public edge remains closed.
+   The operator also needs an absolute `-FlowFile` with the pilot organization's
    active physical `flow_definition_id` and matching issuer DID, and an
    absolute `-SessionFile` containing a governed beta operator Cookie value
    with `flow-definition:view`, `credential-template:view`,
    `flow-instance:start`, and `flow-instance:view` permissions. Keep
-   all three inputs outside protected source. Start signed Gateway on its
+   all private inputs outside protected source. Start signed Gateway on its
    verified loopback listener while the public edge is stopped, and validate
    the live Flow definition, references and issuer before the transition.
    After the transition, create a synthetic DRAFT job through signed Rust

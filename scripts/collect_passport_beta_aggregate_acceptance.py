@@ -211,6 +211,65 @@ def collect_aggregate(
             "Aggregate beta acceptance requires signed release attestations")
     require(isinstance(api_key, str) and len(api_key) >= 32,
             "Aggregate beta acceptance requires a governed organization key")
+    ceremony_path = artifact_dir / "aggregate-deployment.json.issuer-ceremony.json"
+    ceremony = read_json(ceremony_path)
+    ceremony_intent_path = artifact_dir / "aggregate-deployment.json.issuer-ceremony-intent.json"
+    ceremony_intent = read_json(ceremony_intent_path)
+    runtime = receipt.get("beta_runtime")
+    gateway = runtime.get("gateway") if isinstance(runtime, dict) else None
+    require(receipt.get("issuer_ceremony_receipt_sha256")
+                == digest_file(ceremony_path).removeprefix("sha256:")
+            and receipt.get("issuer_ceremony") == ceremony
+            and ceremony.get("schema") == "marty.passport-beta-aggregate-ceremony/v1"
+            and ceremony.get("verified") is True
+            and ceremony.get("source_commit") == source
+            and ceremony.get("gateway_container_id")
+                == (gateway.get("container_id") if isinstance(gateway, dict) else None)
+            and ceremony.get("intent_file_sha256")
+                == digest_file(ceremony_intent_path).removeprefix("sha256:")
+            and ceremony_intent.get("schema")
+                == "marty.passport-beta-aggregate-ceremony-intent/v1"
+            and all(ceremony_intent.get(key) == ceremony.get(key)
+                    for key in ("source_commit", "gateway_container_id",
+                                "application_file_sha256", "issuer_chain_file_sha256",
+                                "ceremony_file_sha256"))
+            and ceremony.get("gateway_request_traces_verified") is True
+            and ceremony.get("profile_creation_verified") is True
+            and ceremony.get("certificate_chain_verified") is True
+            and all(isinstance(ceremony.get(name), str)
+                    and SHA256.fullmatch(ceremony[name]) is not None
+                    for name in ("application_file_sha256", "issuer_chain_file_sha256",
+                                 "ceremony_file_sha256", "csca_certificate_sha256",
+                                 "dsc_certificate_sha256")),
+            "Aggregate beta governed issuer ceremony differs from deployment")
+    kms_path = artifact_dir / "aggregate-deployment.json.kms-pretransition.json"
+    kms = read_json(kms_path)
+    key_versions = kms.get("key_versions")
+    signing_keys = runtime.get("signing-keys") if isinstance(runtime, dict) else None
+    require(receipt.get("kms_pretransition_receipt_sha256")
+                == digest_file(kms_path).removeprefix("sha256:")
+            and receipt.get("kms_pretransition") == kms
+            and kms.get("schema") == "marty.passport-beta-aggregate-kms-pretransition/v1"
+            and kms.get("verified") is True
+            and kms.get("source_commit") == source
+            and kms.get("signing_keys_container_id")
+                == (signing_keys.get("container_id") if isinstance(signing_keys, dict) else None)
+            and kms.get("openbao_container_id")
+                == plan.get("old_container_ids_by_service", {}).get("openbao")
+            and kms.get("managed_kms_custody_verified") is True
+            and kms.get("chain_verified") is True
+            and kms.get("private_key_exported") is False
+            and all(kms.get(name) == ceremony.get(name)
+                    for name in ("application_file_sha256", "issuer_chain_file_sha256",
+                                 "csca_certificate_sha256", "dsc_certificate_sha256"))
+            and all(isinstance(kms.get(name), str)
+                    and SHA256.fullmatch(kms[name]) is not None
+                    for name in ("application_file_sha256", "issuer_chain_file_sha256",
+                                 "csca_certificate_sha256", "dsc_certificate_sha256"))
+            and isinstance(key_versions, dict) and set(key_versions) == {"csca", "dsc"}
+            and all(type(version) is int and version > 0
+                    for version in key_versions.values()),
+            "Aggregate beta managed issuer proof differs from deployment")
     try:
         signed = manifest_source(manifest_path, source, attest, attest_issuance)
     except (OSError, ValueError) as exc:
