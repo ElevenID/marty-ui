@@ -195,6 +195,83 @@ def test_python_service_job_retires_only_unused_fixture_provisioning() -> None:
     _assert_python_service_job_preserves_full_suite(_workflow(CI_PATH)[1])
 
 
+def _classify_changed_paths(
+    changed_paths: list[str], tmp_path: Path
+) -> list[dict[str, str]]:
+    """Exercise the real Bash classifier against independent synthetic diffs."""
+    _, document = _workflow(CI_PATH)
+    [classifier] = [
+        step
+        for step in document["jobs"]["changes"]["steps"]
+        if step.get("id") == "classify"
+    ]
+    script = classifier["run"].replace("${{ github.event_name }}", "pull_request")
+    assert "${{" not in script
+    # Run the actual Bash classifier, not a Python copy of its path patterns.
+    # Git is a shell-local synthetic owner, so neither fetch nor diff touches a
+    # repository or network. Results go to an owned synthetic output file, not
+    # the real Actions output file (/dev/stdout is unavailable in Git Bash).
+    prelude = """
+git() {
+  case "$1" in
+    fetch) return 0 ;;
+    diff)
+      [[ " $* " == *" -z "* && " $* " == *" --no-renames "* ]] || return 98
+      printf '%s\\0' "$SYNTHETIC_CHANGED_PATH" ;;
+    *) return 99 ;;
+  esac
+}
+export BASE_SHA=synthetic-base
+index=0
+while IFS= read -r -d '' SYNTHETIC_CHANGED_PATH; do
+  export SYNTHETIC_CHANGED_PATH
+  export GITHUB_OUTPUT="$RUNNER_TEMP/synthetic-actions-output-$index"
+  : > "$GITHUB_OUTPUT"
+"""
+    epilogue = """
+  index=$((index + 1))
+done < "$SYNTHETIC_PATHS_FILE"
+"""
+    # Windows' system bash launcher may point at an unconfigured WSL distro;
+    # use the Git Bash already required for this checkout's shell workflows.
+    git_bash = Path("C:/Program Files/Git/bin/bash.exe")
+    bash = (
+        str(git_bash)
+        if os.name == "nt" and git_bash.is_file()
+        else shutil.which("bash")
+    )
+    assert bash, "Bash is required to execute the workflow classifier regression"
+    environment = dict(os.environ)
+    environment.pop("BASH_ENV", None)
+    environment.pop("ENV", None)
+    environment["RUNNER_TEMP"] = tmp_path.as_posix()
+    path_file = tmp_path / "synthetic-changed-paths"
+    path_file.write_bytes(b"\0".join(path.encode("utf-8") for path in changed_paths) + b"\0")
+    environment["SYNTHETIC_PATHS_FILE"] = path_file.as_posix()
+    result = subprocess.run(
+        [bash, "--noprofile", "--norc", "-s"],
+        input=prelude + script + epilogue,
+        text=True,
+        capture_output=True,
+        check=False,
+        timeout=10,
+        env=environment,
+    )
+    assert result.returncode == 0, result.stderr
+    assert result.stdout == ""
+    return [
+        dict(line.split("=", 1) for line in output.read_text().splitlines())
+        for output in (
+            tmp_path / f"synthetic-actions-output-{index}"
+            for index in range(len(changed_paths))
+        )
+    ]
+
+
+def _classify_changed_path(changed_path: str, tmp_path: Path) -> dict[str, str]:
+    return _classify_changed_paths([changed_path], tmp_path)[0]
+
+
 @pytest.mark.parametrize(
     "mutation",
     [
@@ -432,58 +509,7 @@ def test_actual_classifier_selects_gates_for_compiler_and_runtime_inputs(
     all_selected: bool,
     tmp_path: Path,
 ) -> None:
-    _, document = _workflow(CI_PATH)
-    [classifier] = [
-        step
-        for step in document["jobs"]["changes"]["steps"]
-        if step.get("id") == "classify"
-    ]
-    script = classifier["run"].replace("${{ github.event_name }}", "pull_request")
-    assert "${{" not in script
-    # Run the actual Bash classifier, not a Python copy of its path patterns.
-    # Git is a shell-local synthetic owner, so neither fetch nor diff touches a
-    # repository or network. Results go to an owned synthetic output file, not
-    # the real Actions output file (/dev/stdout is unavailable in Git Bash).
-    prelude = """
-git() {
-  case "$1" in
-    fetch) return 0 ;;
-    diff)
-      [[ " $* " == *" -z "* && " $* " == *" --no-renames "* ]] || return 98
-      printf '%s\\0' "$SYNTHETIC_CHANGED_PATH" ;;
-    *) return 99 ;;
-  esac
-}
-export BASE_SHA=synthetic-base
-"""
-    # Windows' system bash launcher may point at an unconfigured WSL distro;
-    # use the Git Bash already required for this checkout's shell workflows.
-    git_bash = Path("C:/Program Files/Git/bin/bash.exe")
-    bash = (
-        str(git_bash)
-        if os.name == "nt" and git_bash.is_file()
-        else shutil.which("bash")
-    )
-    assert bash, "Bash is required to execute the workflow classifier regression"
-    environment = dict(os.environ)
-    environment.pop("BASH_ENV", None)
-    environment.pop("ENV", None)
-    environment["SYNTHETIC_CHANGED_PATH"] = changed_path
-    environment["RUNNER_TEMP"] = tmp_path.as_posix()
-    output = tmp_path / "synthetic-actions-output"
-    environment["GITHUB_OUTPUT"] = output.as_posix()
-    result = subprocess.run(
-        [bash, "--noprofile", "--norc", "-s"],
-        input=prelude + script,
-        text=True,
-        capture_output=True,
-        check=False,
-        timeout=10,
-        env=environment,
-    )
-    assert result.returncode == 0, result.stderr
-    assert result.stdout == ""
-    actual = dict(line.split("=", 1) for line in output.read_text().splitlines())
+    actual = _classify_changed_path(changed_path, tmp_path)
     expected = {
         key: str(all_selected).lower()
         for key in (
@@ -500,6 +526,55 @@ export BASE_SHA=synthetic-base
     expected["python"] = str(python_selected).lower()
     expected["security"] = str(security_selected).lower()
     assert actual == expected
+
+
+def test_external_rust_include_inputs_select_rust_validation(tmp_path: Path) -> None:
+    """Every direct embedded input outside rust/ must select its Rust consumer."""
+    macro_start = re.compile(r"\binclude(?:_(?:str|bytes))?!\s*[({\[]")
+    resolved_macro = re.compile(
+        r'\binclude(?:_(?:str|bytes))?!\s*\(\s*(?:"(?P<literal>[^"]+)"\s*|'
+        r'concat!\s*\(\s*env!\s*\(\s*"CARGO_MANIFEST_DIR"\s*\)\s*,\s*'
+        r'"(?P<manifest>[^"]+)"\s*\)\s*)\)',
+        re.DOTALL,
+    )
+    external_inputs: set[str] = set()
+    macro_count = 0
+    matched_count = 0
+    tracked = subprocess.run(
+        ["git", "ls-files", "-z", "--", "rust"],
+        cwd=ROOT,
+        check=True,
+        capture_output=True,
+    ).stdout
+    sources = (
+        ROOT / path.decode("utf-8")
+        for path in tracked.split(b"\0")
+        if path.endswith(b".rs")
+    )
+    for source in sources:
+        text = source.read_text(encoding="utf-8")
+        macro_count += len(macro_start.findall(text))
+        for match in resolved_macro.finditer(text):
+            matched_count += 1
+            if literal := match.group("literal"):
+                target = (source.parent / literal).resolve()
+            else:
+                manifest_path = match.group("manifest")
+                assert manifest_path and manifest_path.startswith("/")
+                package = next(
+                    parent for parent in source.parents if (parent / "Cargo.toml").is_file()
+                )
+                target = (package / manifest_path.removeprefix("/")).resolve()
+            assert target.is_relative_to(ROOT), f"Embedded input leaves repo: {source}"
+            assert target.is_file(), f"Missing embedded input: {source} -> {target}"
+            relative = target.relative_to(ROOT).as_posix()
+            if not relative.startswith("rust/"):
+                external_inputs.add(relative)
+    assert macro_count == matched_count, "Review new include macro forms before classifying inputs"
+    assert external_inputs, "Expected external Rust compiler inputs"
+    paths = sorted(external_inputs)
+    for path, actual in zip(paths, _classify_changed_paths(paths, tmp_path), strict=True):
+        assert actual["rust"] == "true", f"Rust consumer skipped for {path}"
 
 
 def test_classifier_diff_failure_fails_closed(tmp_path: Path) -> None:
