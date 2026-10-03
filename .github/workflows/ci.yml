@@ -1316,6 +1316,14 @@ jobs:
         run: |
           set -euo pipefail
           cargo metadata --locked --format-version 1 | python3 ../scripts/ci/check_mmf_security_features.py
+      - name: Report affected Rust packages in shadow mode
+        if: github.event_name == 'pull_request'
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.sha }}
+        run: |
+          python3 -m unittest tests.test_plan_affected_rust
+          python3 scripts/ci/plan_affected_rust.py
       - name: Lint Rust services
         working-directory: rust
         run: cargo clippy --locked --workspace --all-targets -- -D warnings
