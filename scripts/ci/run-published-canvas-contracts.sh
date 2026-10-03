@@ -28,7 +28,7 @@ find_executable() {
   local -a matches=()
   mapfile -t matches < <(jq -r --arg target "$target" '
     select(.reason == "compiler-artifact")
-    | select(.package_id | contains("marty-issuance-service"))
+    | select(.package_id | contains("#marty-issuance-service@"))
     | select(.target.name == $target)
     | select(.executable != null) | .executable
   ' "$RUNNER_TEMP/rust-test-artifacts.json" | sort -u)
@@ -38,8 +38,30 @@ find_executable() {
   }
   printf '%s\n' "${matches[0]}"
 }
+find_worker_binary() {
+  local -a matches=()
+  local output
+  output=$(jq -r '
+    select(.reason == "compiler-artifact")
+    | select(.package_id | contains("#marty-issuance-service@"))
+    | select(.target.name == "marty-canvas-sync-worker")
+    | select(.target.kind | index("bin"))
+    | select(.profile.test == false)
+    | select(.executable != null) | .executable
+  ' "$RUNNER_TEMP/rust-test-artifacts.json" | sort -u) || return 1
+  if [[ -n "$output" ]]; then
+    mapfile -t matches <<< "$output"
+  fi
+  [[ ${#matches[@]} == 1 && "${matches[0]}" == /* && -x "${matches[0]}" ]] || {
+    echo "Expected one real marty-canvas-sync-worker binary artifact (found ${#matches[@]})" >&2
+    return 1
+  }
+  printf '%s\n' "${matches[0]}"
+}
 composition_executable=$(find_executable canvas_published_schema_contract)
 worker_executable=$(find_executable canvas_published_worker_contract)
+worker_binary=$(find_worker_binary)
+export MARTY_CANVAS_WORKER_TEST_BINARY="$worker_binary"
 composition_tests=$("$composition_executable" --list)
 worker_tests=$("$worker_executable" --list)
 all_test_names=$(printf '%s\n%s\n' "$composition_tests" "$worker_tests" | grep ': test$')
