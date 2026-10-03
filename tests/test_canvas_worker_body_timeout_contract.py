@@ -1,10 +1,10 @@
 """Integrity of independently captured Python reports, not native body parity."""
 
 import ast
-from copy import deepcopy
 import hashlib
 import importlib
 import json
+from copy import deepcopy
 from pathlib import Path
 
 import pytest
@@ -123,9 +123,19 @@ def test_capture_inputs_bind_actual_unchanged_sources_without_json_rewriting(cor
 
 def unpinned_local_imports(source: Path, pins: set[str], scripts: Path) -> set[str]:
     missing = set()
-    for node in ast.walk(ast.parse(source.read_text(encoding="utf-8"))):
+    tree = ast.parse(source.read_text(encoding="utf-8"))
+    dynamic_import_names = {"__import__", "import_module"}
+    for node in ast.walk(tree):
+        if isinstance(node, ast.ImportFrom) and node.module == "importlib":
+            dynamic_import_names.update(
+                alias.asname or alias.name
+                for alias in node.names
+                if alias.name == "import_module"
+            )
+    for node in ast.walk(tree):
         if isinstance(node, ast.Call) and (
-            isinstance(node.func, ast.Name) and node.func.id == "__import__"
+            isinstance(node.func, ast.Name)
+            and node.func.id in dynamic_import_names
             or isinstance(node.func, ast.Attribute) and node.func.attr == "import_module"
         ):
             missing.add(f"{source.name}: dynamic import")
@@ -198,6 +208,20 @@ def test_local_import_closure_guard_detects_an_unpinned_helper(tmp_path):
         "capture.py: local package package"
     }
     source.write_text("importlib.import_module('helper')\n", encoding="utf-8")
+    assert unpinned_local_imports(source, {"capture.py"}, tmp_path) == {
+        "capture.py: dynamic import"
+    }
+    source.write_text(
+        "from importlib import import_module\nimport_module('helper')\n",
+        encoding="utf-8",
+    )
+    assert unpinned_local_imports(source, {"capture.py"}, tmp_path) == {
+        "capture.py: dynamic import"
+    }
+    source.write_text(
+        "from importlib import import_module as load\nload('helper')\n",
+        encoding="utf-8",
+    )
     assert unpinned_local_imports(source, {"capture.py"}, tmp_path) == {
         "capture.py: dynamic import"
     }
