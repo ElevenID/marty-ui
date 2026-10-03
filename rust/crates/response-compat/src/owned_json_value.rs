@@ -38,12 +38,12 @@ impl OwnedJsonValue {
         let old = std::mem::replace(&mut self.0[key], value.take());
         drop(Self(old));
     }
-    pub(crate) fn insert_map(map: &mut Map<String, Value>, key: String, value: Value) {
+    pub fn insert_map(map: &mut Map<String, Value>, key: String, value: Value) {
         if let Some(old) = map.insert(key, value) {
             drop_value(old);
         }
     }
-    pub(crate) fn extend_map(map: &mut Map<String, Value>, values: Map<String, Value>) {
+    pub fn extend_map(map: &mut Map<String, Value>, values: Map<String, Value>) {
         for (key, value) in values {
             Self::insert_map(map, key, value);
         }
@@ -127,6 +127,7 @@ impl serde::Serialize for OwnedJsonValue {
         crate::lossless_json_write::scalar(&self.0).serialize(serializer)
     }
 }
+#[cfg(feature = "postgres")]
 impl sqlx::Type<sqlx::Postgres> for OwnedJsonValue {
     fn type_info() -> sqlx::postgres::PgTypeInfo {
         <sqlx::types::Json<Box<serde_json::value::RawValue>> as sqlx::Type<sqlx::Postgres>>::type_info()
@@ -135,6 +136,7 @@ impl sqlx::Type<sqlx::Postgres> for OwnedJsonValue {
         <sqlx::types::Json<Box<serde_json::value::RawValue>> as sqlx::Type<sqlx::Postgres>>::compatible(ty)
     }
 }
+#[cfg(feature = "postgres")]
 impl<'r> sqlx::Decode<'r, sqlx::Postgres> for OwnedJsonValue {
     fn decode(value: sqlx::postgres::PgValueRef<'r>) -> Result<Self, sqlx::error::BoxDynError> {
         let raw = <sqlx::types::Json<Box<serde_json::value::RawValue>> as sqlx::Decode<
