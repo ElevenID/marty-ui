@@ -11,6 +11,7 @@ Request = Callable[[str, str, dict[str, Any] | None, dict[str, str]],
                    tuple[int, dict[str, Any]]]
 DISPOSABLE_ORGANIZATION_ID = "00000000-0000-0000-0000-000000000001"
 DISPOSABLE_REVOCATION_PROFILE_ID = "70000000-0000-0000-0000-000000000001"
+PASSPORT_COMPLIANCE_PROFILE_ID = "10000000-0000-0000-0000-000000000005"
 
 
 class FlowReferenceError(ValueError):
@@ -36,11 +37,14 @@ def _response(
     request: Request, method: str, path: str,
     body: dict[str, Any] | None = None,
     headers: dict[str, str] | None = None,
-    *, status: int = 200,
+    *, operation: str, status: int = 200,
 ) -> dict[str, Any]:
     actual, result = request(method, path, body, headers or {})
-    _require(actual == status and isinstance(result, dict),
-             "Disposable reference request failed")
+    safe_status = actual if type(actual) is int and 100 <= actual <= 599 else "invalid"
+    _require(actual == status,
+             f"Disposable reference request failed: {operation} HTTP {safe_status} expected {status}")
+    _require(isinstance(result, dict),
+             f"Disposable reference request failed: {operation} invalid response")
     return result
 
 
@@ -125,21 +129,24 @@ def provision_physical_passport_references(
         "supported_formats": ["ICAO_EMRTD"],
         "credential_payload_format": "ICAO_EMRTD",
         "issuance_protocol": "PHYSICAL_DOCUMENT",
-        "compliance_profile_id": "DISPOSABLE_ICAO_EMRTD",
+        "compliance_profile_id": PASSPORT_COMPLIANCE_PROFILE_ID,
         "revocation_profile_id": DISPOSABLE_REVOCATION_PROFILE_ID,
         "issuer_did": issuer_did,
-    })
+    }, operation="POST /v1/credential-templates")
     credential_id = _credential_template(
         credential, organization_id, credential_name, issuer_did, "DRAFT",
     )
     credential_path = f"/v1/credential-templates/{credential_id}"
-    _credential_template(_response(request, "GET", credential_path),
+    _credential_template(_response(request, "GET", credential_path,
+                                   operation="GET /v1/credential-templates/{id}"),
                          organization_id, credential_name, issuer_did, "DRAFT",
                          credential_id)
-    _credential_template(_response(request, "POST", f"{credential_path}/activate"),
+    _credential_template(_response(request, "POST", f"{credential_path}/activate",
+                                   operation="POST /v1/credential-templates/{id}/activate"),
                          organization_id, credential_name, issuer_did, "ACTIVE",
                          credential_id)
-    _credential_template(_response(request, "GET", credential_path),
+    _credential_template(_response(request, "GET", credential_path,
+                                   operation="GET /v1/credential-templates/{id}"),
                          organization_id, credential_name, issuer_did, "ACTIVE",
                          credential_id)
 
@@ -154,21 +161,26 @@ def provision_physical_passport_references(
                              "required": True,
                              "claim_mapping": "document_number"}],
         }, {"idempotency-key": idempotency_key},
+        operation="POST /v1/application-templates",
     )
     application_id = _application_template(
         application, organization_id, application_name, credential_id, "DRAFT",
     )
     application_path = f"/v1/application-templates/{application_id}"
-    _application_template(_response(request, "GET", application_path),
+    _application_template(_response(request, "GET", application_path,
+                                    operation="GET /v1/application-templates/{id}"),
                           organization_id, application_name, credential_id, "DRAFT",
                           application_id)
-    validation = _response(request, "POST", f"{application_path}/validate")
+    validation = _response(request, "POST", f"{application_path}/validate",
+                           operation="POST /v1/application-templates/{id}/validate")
     _require(validation.get("valid") is True and validation.get("errors") == [],
              "Application template validation failed")
-    _application_template(_response(request, "POST", f"{application_path}/activate"),
+    _application_template(_response(request, "POST", f"{application_path}/activate",
+                                    operation="POST /v1/application-templates/{id}/activate"),
                           organization_id, application_name, credential_id, "ACTIVE",
                           application_id)
-    _application_template(_response(request, "GET", application_path),
+    _application_template(_response(request, "GET", application_path,
+                                    operation="GET /v1/application-templates/{id}"),
                           organization_id, application_name, credential_id, "ACTIVE",
                           application_id)
 
@@ -182,11 +194,12 @@ def provision_physical_passport_references(
         "credential_format": "ICAO_EMRTD",
         "issuance_protocol": "PHYSICAL_DOCUMENT",
         "is_enabled": True,
-    }, status=201)
+    }, operation="POST /v1/delivery-destinations", status=201)
     destination_id = _destination(
         destination, organization_id, destination_name,
     )
-    _destination(_response(request, "GET", f"/v1/delivery-destinations/{destination_id}"),
+    _destination(_response(request, "GET", f"/v1/delivery-destinations/{destination_id}",
+                           operation="GET /v1/delivery-destinations/{id}"),
                  organization_id, destination_name, destination_id)
     return {
         "credential_template_id": credential_id,

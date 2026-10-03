@@ -2361,16 +2361,7 @@ async fn credential_template_create_handler(
         .expect("validated DID")
         .to_owned();
     let credential_format = credential_template_issuer_format(&body);
-    let key_purpose = if credential_format.as_deref().is_some_and(|format| {
-        matches!(
-            format.to_ascii_lowercase().replace('-', "_").as_str(),
-            "mdoc" | "mso_mdoc" | "zk_mdoc"
-        )
-    }) {
-        "mdoc_dsc"
-    } else {
-        "vc_jwt_issuer"
-    };
+    let key_purpose = issuer_key_purpose(credential_format.as_deref());
     let resolved = match signing_service_request(
         &state,
         HttpMethod::Post,
@@ -2447,6 +2438,21 @@ fn credential_template_issuer_format(body: &Value) -> Option<String> {
                 .and_then(|values| (values.len() == 1).then(|| values[0].as_str()).flatten())
         })
         .and_then(crate::issuance_create::public_format)
+}
+
+fn issuer_key_purpose(credential_format: Option<&str>) -> &'static str {
+    match credential_format
+        .unwrap_or_default()
+        .trim()
+        .to_ascii_lowercase()
+        .replace('-', "_")
+        .as_str()
+    {
+        "mdoc" | "mso_mdoc" | "zk_mdoc" => "mdoc_dsc",
+        "vds_nc" | "vdsnc" => "vdsnc_signing",
+        "icao_emrtd" => "x509_doc_signer",
+        _ => "vc_jwt_issuer",
+    }
 }
 
 async fn flow_definition_write_handler(
@@ -2873,11 +2879,7 @@ async fn issuance_create_handler(state: Arc<GatewayRuntimeState>, request: Reque
         Err(error) => return detail_response(422, error.0),
     };
     let credential_format = input.credential_format(&template);
-    let key_purpose = match credential_format.as_deref() {
-        Some("mso_mdoc") => "mdoc_dsc",
-        Some("vds_nc" | "vdsnc") => "vdsnc_signing",
-        _ => "vc_jwt_issuer",
-    };
+    let key_purpose = issuer_key_purpose(credential_format.as_deref());
     let resolution = match signing_service_request(
         &state,
         HttpMethod::Post,
@@ -10606,6 +10608,19 @@ mod tests {
                 case["expected"].as_str(),
                 "{case}"
             );
+        }
+    }
+
+    #[test]
+    fn issuer_key_purpose_covers_physical_passport_and_existing_formats() {
+        for (format, expected) in [
+            ("ICAO_EMRTD", "x509_doc_signer"),
+            ("icao-emrtd", "x509_doc_signer"),
+            ("mso_mdoc", "mdoc_dsc"),
+            ("VDS_NC", "vdsnc_signing"),
+            ("jwt_vc_json", "vc_jwt_issuer"),
+        ] {
+            assert_eq!(issuer_key_purpose(Some(format)), expected);
         }
     }
 

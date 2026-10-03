@@ -23,6 +23,7 @@ pub enum IssuanceProtocol {
     Direct,
     CredentialManager,
     AppleWallet,
+    PhysicalDocument,
 }
 
 #[derive(Clone, Copy, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]

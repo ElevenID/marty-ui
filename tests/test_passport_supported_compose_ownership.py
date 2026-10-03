@@ -53,6 +53,7 @@ SECRETS = {
     "organization": ("marty_db_password", "grpc_service_token"),
     "credential-template": ("marty_db_password", "grpc_service_token",
                             "signing_keys_internal_api_key"),
+    "compliance-profile": ("marty_db_password", "grpc_service_token"),
     "trust-profile": ("marty_db_password", "grpc_service_token",
                       "signing_keys_internal_api_key"),
     "presentation-policy": ("marty_db_password", "grpc_service_token",
@@ -209,6 +210,10 @@ def fixture() -> tuple[dict, dict[tuple[str, ...], str]]:
             "ORG_GRPC_TARGET": "organization:9002",
         }
         support_env = {
+            "compliance-profile": {
+                **support_common, "SERVICE_NAME": "compliance_profile",
+                "COMPLIANCE_PROFILE_SERVICE_PORT": "8008",
+            },
             "trust-profile": {
                 **support_common, "SERVICE_NAME": "trust_profile",
                 "TRUST_PROFILE_SERVICE_PORT": "8004",
@@ -346,6 +351,7 @@ def test_credentials_schema_container_is_exact_signed_one_shot() -> None:
 
 
 @pytest.mark.parametrize("service,key,value", [
+    ("compliance-profile", "COMPLIANCE_PROFILE_SERVICE_PORT", "8009"),
     ("credential-template", "PUBLIC_API_URL", "http://localhost:8000"),
     ("credential-template", "MARTY_MIGRATION_PROFILE", "other"),
     ("trust-profile", "MARTY_ISSUER_BASE_URL", "http://production.example"),

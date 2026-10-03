@@ -62,6 +62,7 @@ SECRET_MOUNTS = {
     "organization": ("marty_db_password", "grpc_service_token"),
     "credential-template": ("marty_db_password", "grpc_service_token",
                             "signing_keys_internal_api_key"),
+    "compliance-profile": ("marty_db_password", "grpc_service_token"),
     "trust-profile": ("marty_db_password", "grpc_service_token",
                       "signing_keys_internal_api_key"),
     "presentation-policy": ("marty_db_password", "grpc_service_token",
@@ -214,6 +215,10 @@ def _support_environment(actual: object, service: str, status_origin: str,
     }
     public_origin = status_origin
     expected = {
+        "compliance-profile": {
+            **common, "SERVICE_NAME": "compliance_profile",
+            "COMPLIANCE_PROFILE_SERVICE_PORT": "8008",
+        },
         "trust-profile": {
             **common, "SERVICE_NAME": "trust_profile", "TRUST_PROFILE_SERVICE_PORT": "8004",
             "SIGNING_KEYS_INTERNAL_API_KEY_FILE":
@@ -558,7 +563,7 @@ def verify(record: dict, surface: str, now: datetime,
             _flow_surface_environment(config.get("Env"), surface)
         elif service == "revocation-profile":
             _revocation_environment(config.get("Env"), status_origin)
-        elif service in {"credential-template", "trust-profile",
+        elif service in {"credential-template", "compliance-profile", "trust-profile",
                          "presentation-policy", "deployment-profile"}:
             _support_environment(config.get("Env"), service, status_origin, surface)
         elif service == "revocation-profile-migrate":

@@ -257,6 +257,27 @@ services:
       test: [CMD, curl, --fail, http://localhost:8004/health]
     networks: [private]
 
+  compliance-profile:
+    labels: *acceptance-labels
+    image: ${MARTY_SERVICES_IMAGE:?pin signed services image by digest}
+    environment:
+      SERVICE_NAME: compliance_profile
+      ENVIRONMENT: development
+      COMPLIANCE_PROFILE_SERVICE_PORT: "8008"
+      DATABASE_URL_TEMPLATE: postgresql+asyncpg://marty:$${MARTY_DB_PASSWORD}@postgres:5432/marty
+      MARTY_DB_PASSWORD_FILE: /run/secrets/marty_db_password
+      GRPC_SERVICE_TOKEN_FILE: /run/secrets/grpc_service_token
+      ORG_GRPC_TARGET: organization:9002
+    secrets: [marty_db_password, grpc_service_token]
+    depends_on:
+      db-migrate:
+        condition: service_completed_successfully
+      organization:
+        condition: service_healthy
+    healthcheck:
+      test: [CMD, curl, --fail, http://localhost:8008/health]
+    networks: [private]
+
   credential-template:
     labels: *acceptance-labels
     image: ${MARTY_SERVICES_IMAGE:?pin signed services image by digest}
@@ -502,6 +523,7 @@ services:
       ISSUANCE_API_KEY_FILE: /run/secrets/issuance_api_key
       ORGANIZATION_SERVICE_URL: http://organization:8002
       CREDENTIAL_TEMPLATE_SERVICE_URL: http://credential-template:8003
+      COMPLIANCE_PROFILE_SERVICE_URL: http://compliance-profile:8008
       TRUST_PROFILE_SERVICE_URL: http://trust-profile:8004
       PRESENTATION_POLICY_SERVICE_URL: http://presentation-policy:8009
       DEPLOYMENT_PROFILE_SERVICE_URL: http://deployment-profile:8010
@@ -524,6 +546,8 @@ services:
       revocation-profile:
         condition: service_healthy
       credential-template:
+        condition: service_healthy
+      compliance-profile:
         condition: service_healthy
       trust-profile:
         condition: service_healthy

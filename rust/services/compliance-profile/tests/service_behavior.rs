@@ -69,7 +69,7 @@ async fn language_neutral_contract_freezes_all_routes_and_policy_sections() {
     .unwrap();
     assert_eq!(c["routes"].as_array().unwrap().len(), 8);
     assert_eq!(c["policy_sections"].as_array().unwrap().len(), 7);
-    assert_eq!(c["system_profile_codes"].as_array().unwrap().len(), 4);
+    assert_eq!(c["system_profile_codes"].as_array().unwrap().len(), 5);
 }
 #[tokio::test]
 async fn all_intended_policy_fields_round_trip_but_public_projection_stays_protocol_scoped() {
@@ -133,7 +133,23 @@ async fn canonical_system_catalog_is_public_discoverable_and_immutable() {
             .iter()
             .filter_map(|p| p.compliance_code.as_deref())
             .collect::<Vec<_>>(),
-        ["OID4VC", "ISO_18013_5", "OPEN_BADGES_3", "ICAO_VDS_NC"]
+        [
+            "OID4VC",
+            "ISO_18013_5",
+            "OPEN_BADGES_3",
+            "ICAO_VDS_NC",
+            "ICAO_EMRTD"
+        ]
+    );
+    let passport = s
+        .get("10000000-0000-0000-0000-000000000005", "user-1")
+        .await
+        .unwrap();
+    assert_eq!(passport.compliance_code.as_deref(), Some("ICAO_EMRTD"));
+    assert_eq!(passport.credential_format, "ICAO_EMRTD");
+    assert_eq!(
+        passport.issuance_protocol,
+        Some(marty_compliance_profile::IssuanceProtocol::PhysicalDocument)
     );
     let id = &values[0].id;
     assert!(matches!(
