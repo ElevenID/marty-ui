@@ -32,7 +32,8 @@ SELECTED = frozenset({
 ISOLATED_DEPENDENCIES = frozenset({"postgres", "openbao", "redis"})
 RUST_DEPENDENCIES = frozenset({
     "organization", "event-stream", "revocation-profile", "revocation-profile-migrate",
-    "credential-template", "trust-profile", "presentation-policy", "deployment-profile",
+    "credential-template", "compliance-profile", "trust-profile",
+    "presentation-policy", "deployment-profile",
 })
 DISPOSABLE_SERVICES = SELECTED | ISOLATED_DEPENDENCIES | RUST_DEPENDENCIES | frozenset({
     "db-migrate", "issuance-migrations", "signing-keys", "edge",
@@ -579,6 +580,12 @@ def validate_model(
         "ORG_GRPC_TARGET": "organization:9002",
     }
     rust_requirements = {
+        "compliance-profile": ({
+            **shared_rust, "SERVICE_NAME": "compliance_profile",
+            "COMPLIANCE_PROFILE_SERVICE_PORT": "8008",
+        }, {"marty_db_password", "grpc_service_token"},
+         {"db-migrate": "service_completed_successfully", "organization": "service_healthy"},
+         8008),
         "trust-profile": ({
             **shared_rust, "SERVICE_NAME": "trust_profile",
             "TRUST_PROFILE_SERVICE_PORT": "8004",
@@ -714,6 +721,7 @@ def validate_model(
                         name, {}).get("condition") == "service_healthy"
                     for key, name, port in (
                         ("CREDENTIAL_TEMPLATE_SERVICE_URL", "credential-template", 8003),
+                        ("COMPLIANCE_PROFILE_SERVICE_URL", "compliance-profile", 8008),
                         ("TRUST_PROFILE_SERVICE_URL", "trust-profile", 8004),
                         ("PRESENTATION_POLICY_SERVICE_URL", "presentation-policy", 8009),
                         ("DEPLOYMENT_PROFILE_SERVICE_URL", "deployment-profile", 8010))),

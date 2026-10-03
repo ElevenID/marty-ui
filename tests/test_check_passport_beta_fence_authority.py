@@ -18,6 +18,9 @@ TAG_OBJECT = "b" * 40
 DELETION_HEAD = "c" * 40
 OBSERVATION = "d" * 64
 DIGEST = "sha256:" + "e" * 64
+LEGACY_COMMIT = "85b128a85426b3f5aeaf6f948ba5dfa2836e95d8"
+LEGACY_IMAGE = ("ghcr.io/elevenid/marty-credentials-issuance@sha256:"
+                "9f15b64bc0ec7a693339cada3142b2952a575d2b50ee89230aabe078d0026176")
 
 
 def test_deletion_lineage_requires_approved_commit_in_pr_history():
@@ -113,6 +116,78 @@ def test_credentials_release_tag_must_point_to_attested_commit(
 
     with pytest.raises(HostProbeError, match="differs from signed source"):
         authority.verify_issuance_attestation("oci", HEAD, "0.1.72", runner)
+
+
+def test_credentials_attestation_accepts_historical_main_build_at_tagged_commit(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    attempts: list[list[str]] = []
+
+    def runner(command: list[str]) -> str:
+        if "/git/ref/tags/" in command[-1]:
+            return json.dumps({"object": {"type": "tag", "sha": TAG_OBJECT}})
+        return json.dumps({"tag": "v0.1.72", "object": {
+            "type": "commit", "sha": LEGACY_COMMIT,
+        }})
+
+    def attest(command: list[str], **kwargs: object) -> subprocess.CompletedProcess[str]:
+        attempts.append(command)
+        if command[command.index("--source-ref") + 1] != "refs/heads/main":
+            raise subprocess.CalledProcessError(1, command)
+        return subprocess.CompletedProcess(command, 0)
+
+    monkeypatch.setattr(authority.subprocess, "run", attest)
+    assert authority.verify_issuance_attestation(
+        LEGACY_IMAGE, LEGACY_COMMIT, "0.1.72", runner)
+    assert [attempt[attempt.index("--source-ref") + 1] for attempt in attempts] == [
+        "refs/tags/v0.1.72", "refs/heads/main",
+    ]
+    assert all(attempt[attempt.index("--source-digest") + 1] == LEGACY_COMMIT
+               and "--deny-self-hosted-runners" in attempt for attempt in attempts)
+
+
+def test_credentials_attestation_rejects_when_neither_ref_matches(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def runner(command: list[str]) -> str:
+        if "/git/ref/tags/" in command[-1]:
+            return json.dumps({"object": {"type": "tag", "sha": TAG_OBJECT}})
+        return json.dumps({"tag": "v0.1.72", "object": {
+            "type": "commit", "sha": LEGACY_COMMIT,
+        }})
+
+    def reject(command: list[str], **kwargs: object) -> None:
+        raise subprocess.CalledProcessError(1, command)
+
+    monkeypatch.setattr(authority.subprocess, "run", reject)
+    with pytest.raises(HostProbeError, match="attestation is invalid"):
+        authority.verify_issuance_attestation(
+            LEGACY_IMAGE, LEGACY_COMMIT, "0.1.72", runner)
+
+
+def test_credentials_attestation_does_not_fallback_for_other_images(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    attempts: list[list[str]] = []
+
+    def runner(command: list[str]) -> str:
+        if "/git/ref/tags/" in command[-1]:
+            return json.dumps({"object": {"type": "tag", "sha": TAG_OBJECT}})
+        return json.dumps({"tag": "v0.1.72", "object": {
+            "type": "commit", "sha": LEGACY_COMMIT,
+        }})
+
+    def reject(command: list[str], **kwargs: object) -> None:
+        attempts.append(command)
+        raise subprocess.CalledProcessError(1, command)
+
+    monkeypatch.setattr(authority.subprocess, "run", reject)
+    with pytest.raises(HostProbeError, match="attestation is invalid"):
+        authority.verify_issuance_attestation(
+            "ghcr.io/elevenid/marty-credentials-issuance@sha256:" + "f" * 64,
+            LEGACY_COMMIT, "0.1.72", runner)
+    assert len(attempts) == 1
+    assert attempts[0][attempts[0].index("--source-ref") + 1] == "refs/tags/v0.1.72"
 
 
 def fixture(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):

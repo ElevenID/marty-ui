@@ -98,6 +98,7 @@ def safe_model(root: Path) -> dict:
         "GRPC_SERVICE_TOKEN_FILE": "/run/secrets/grpc_service_token",
         "REVOCATION_PROFILE_SERVICE_URL": "http://revocation-profile:8013",
         "CREDENTIAL_TEMPLATE_SERVICE_URL": "http://credential-template:8003",
+        "COMPLIANCE_PROFILE_SERVICE_URL": "http://compliance-profile:8008",
         "TRUST_PROFILE_SERVICE_URL": "http://trust-profile:8004",
         "PRESENTATION_POLICY_SERVICE_URL": "http://presentation-policy:8009",
         "DEPLOYMENT_PROFILE_SERVICE_URL": "http://deployment-profile:8010",
@@ -116,7 +117,7 @@ def safe_model(root: Path) -> dict:
         "organization": {"condition": "service_healthy"},
         "revocation-profile": {"condition": "service_healthy"},
         **{name: {"condition": "service_healthy"} for name in (
-            "credential-template", "trust-profile", "presentation-policy",
+            "credential-template", "compliance-profile", "trust-profile", "presentation-policy",
             "deployment-profile")},
     }
     services["flow"]["environment"].update({
@@ -261,7 +262,8 @@ def safe_model(root: Path) -> dict:
         "GRPC_SERVICE_TOKEN_FILE": "/run/secrets/grpc_service_token",
         "ORG_GRPC_TARGET": "organization:9002",
     }
-    for service, port in (("credential-template", 8003), ("trust-profile", 8004),
+    for service, port in (("credential-template", 8003), ("compliance-profile", 8008),
+                          ("trust-profile", 8004),
                           ("presentation-policy", 8009), ("deployment-profile", 8010)):
         services[service] = {
             "image": IMAGE, "networks": ["private"],
@@ -299,6 +301,7 @@ def safe_model(root: Path) -> dict:
     })
     services["presentation-policy"]["secrets"].append({"source": "issuance_api_key"})
     for service, port, dependencies in (
+        ("compliance-profile", 8008, ("db-migrate", "organization")),
         ("trust-profile", 8004, ("db-migrate", "organization")),
         ("credential-template", 8003, ("db-migrate", "organization",
                                        "revocation-profile", "trust-profile",
@@ -544,6 +547,24 @@ def test_rust_support_runtime_binding_is_required(
 ) -> None:
     model = safe_model(tmp_path)
     model["services"][service]["environment"][key] = value
+    with pytest.raises(ModelPreflightError):
+        validate_model(model, PROJECT, IMAGE, tmp_path)
+
+
+@pytest.mark.parametrize("change", [
+    lambda model: model["services"].pop("compliance-profile"),
+    lambda model: model["services"]["gateway"]["environment"].pop(
+        "COMPLIANCE_PROFILE_SERVICE_URL"),
+    lambda model: model["services"]["gateway"]["environment"].update(
+        COMPLIANCE_PROFILE_SERVICE_URL="http://gateway:8008"),
+    lambda model: model["services"]["gateway"]["depends_on"].pop(
+        "compliance-profile"),
+])
+def test_passport_reference_requires_owned_compliance_service(
+    tmp_path: Path, change,
+) -> None:
+    model = safe_model(tmp_path)
+    change(model)
     with pytest.raises(ModelPreflightError):
         validate_model(model, PROJECT, IMAGE, tmp_path)
 

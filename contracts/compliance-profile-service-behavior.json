@@ -12,13 +12,14 @@
     {"method":"DELETE","path":"/v1/compliance-profiles/{profile_id}","permission":"compliance-profile:delete"}
   ],
   "statuses": ["DRAFT","ACTIVE","SUSPENDED","DEPRECATED"],
-  "credential_formats": ["MDOC","SD_JWT_VC","VC_JWT","JSON_LD","ZK_MDOC","VDS_NC"],
-  "issuance_protocols": ["OID4VCI_PRE_AUTH","OID4VCI_AUTH_CODE","DIRECT","CREDENTIAL_MANAGER","APPLE_WALLET"],
+  "credential_formats": ["MDOC","SD_JWT_VC","VC_JWT","JSON_LD","ZK_MDOC","VDS_NC","ICAO_EMRTD"],
+  "issuance_protocols": ["OID4VCI_PRE_AUTH","OID4VCI_AUTH_CODE","DIRECT","CREDENTIAL_MANAGER","APPLE_WALLET","PHYSICAL_DOCUMENT"],
   "retention_periods": ["none","session","1_day","1_week","1_month","1_year","3_years","7_years","indefinite"],
   "consent_types": ["explicit","implicit","opt_out","none"],
   "audit_levels": ["none","minimal","standard","detailed","forensic"],
   "policy_sections": ["frameworks","data_retention","consent_requirement","audit_configuration","data_minimization_rules","jurisdictional_constraints","age_verification"],
-  "system_profile_codes": ["OID4VC","ISO_18013_5","OPEN_BADGES_3","ICAO_VDS_NC"],
+  "system_profile_codes": ["OID4VC","ISO_18013_5","OPEN_BADGES_3","ICAO_VDS_NC","ICAO_EMRTD"],
+  "physical_document_profile": {"id":"10000000-0000-0000-0000-000000000005","compliance_code":"ICAO_EMRTD","credential_format":"ICAO_EMRTD","issuance_protocol":"PHYSICAL_DOCUMENT","requires_x509_cert":true,"requires_did":true},
   "invariants": [
     "organization profiles require exact active tenant permissions",
     "system profiles have no organization and are migration-owned immutable catalog entries",
