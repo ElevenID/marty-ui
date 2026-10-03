@@ -10,10 +10,14 @@ import pytest
 
 ROOT = Path(__file__).resolve().parents[1]
 ORACLE = ROOT / "contracts/canvas-worker-body-timeout-oracle.json"
-CAPTURE_SHA256 = "bd5a3e7312960fd005cef7c7e21fa0e7a9662c1a5bfda9a45afe54b8c1640373"
+CAPTURE_SHA256 = "7bdf8673cd5dd7a85cec93f9634918fb2cb3c56b768a628935ccc36bf78030f8"
+PREVIOUS_CAPTURE_SHA256 = "bd5a3e7312960fd005cef7c7e21fa0e7a9662c1a5bfda9a45afe54b8c1640373"
 ORIGINAL_CAPTURE_SHA256 = "e97d7fee361a11d4245876b725c8ac417045254d766693f772da53409c9b50eb"
 ORIGINAL_HTTPS_FIXTURE_SHA256 = "262e9bac321a5e7d4cb40e5bc48dfc51a12c10476c79bfc8ce024e343efad8c4"
 CURRENT_HTTPS_FIXTURE_SHA256 = "edf207e02a2e3a976f3a1b4cf15b7618038e60100fa51f0847797bcf92b65992"
+OLD_CAPTURE_SCRIPT_SHA256 = "fca12bc82af56d1cf6f852d9166854f92e41cbe00062ef603c6ae65b0863484a"
+NEW_CAPTURE_SCRIPT_SHA256 = "515b9f7c59180bd2613316dade8d894dfd92c06ddae650acebe9b51bc17b762f"
+TLS_HELPER_SHA256 = "27db81b0baf4c5a53ce574ff59bff2754e5f294c7d23adff339fe5e8d36c828d"
 CASE_NAMES = [
     "application_body_prompt",
     "roster_body_prompt",
@@ -30,13 +34,20 @@ def corpus():
     return json.loads(ORACLE.read_bytes())
 
 
-def test_current_corpus_differs_from_independent_capture_only_by_fixture_provenance():
+def test_current_corpus_differs_from_independent_capture_only_by_pinned_provenance():
     raw = ORACLE.read_bytes()
+    helper = b', "test_canvas_lti_https.py": "' + TLS_HELPER_SHA256.encode() + b'"'
+    assert raw.count(helper) == 6
+    assert raw.count(NEW_CAPTURE_SCRIPT_SHA256.encode()) == 6
+    previous = raw.replace(helper, b'').replace(
+        NEW_CAPTURE_SCRIPT_SHA256.encode(), OLD_CAPTURE_SCRIPT_SHA256.encode()
+    )
+    assert hashlib.sha256(previous).hexdigest() == PREVIOUS_CAPTURE_SHA256
     current = CURRENT_HTTPS_FIXTURE_SHA256.encode()
     original = ORIGINAL_HTTPS_FIXTURE_SHA256.encode()
-    assert raw.count(current) == 6
-    assert original not in raw
-    assert hashlib.sha256(raw.replace(current, original)).hexdigest() == (
+    assert previous.count(current) == 6
+    assert original not in previous
+    assert hashlib.sha256(previous.replace(current, original)).hexdigest() == (
         ORIGINAL_CAPTURE_SHA256
     )
 
@@ -54,7 +65,7 @@ def observations(corpus):
 
 def test_exact_raw_capture_and_checkout_preserve_numeric_tokens():
     raw = ORACLE.read_bytes()
-    assert len(raw) == 46_042
+    assert len(raw) == 46_618
     assert hashlib.sha256(raw).hexdigest() == CAPTURE_SHA256
     assert b"\r" not in raw and raw.endswith(b"]\n")
     assert (
@@ -98,7 +109,7 @@ def test_full_reports_close_six_cases_and_retain_published_identity(corpus, matr
 
 def test_capture_inputs_bind_actual_unchanged_sources_without_json_rewriting(corpus):
     pins = observations(corpus)[0]["capture_source_sha256"]
-    assert len(pins) == 16
+    assert len(pins) == 17
     for observed in observations(corpus):
         assert observed["capture_source_sha256"] == pins
     for name, digest in pins.items():

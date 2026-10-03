@@ -29,13 +29,20 @@ read-inactivity mismatch, not another dependency-import failure.
 Native BODY and full-worker live-provider expiry behavior remain unqualified.
 
 Integration update, 2026-09-19: the selected publication adapter added a
-default-identity request-handler hook to the shared HTTPS fixture. The current
+default-identity request-handler hook to the shared HTTPS fixture. The then-current
 19,575-byte expiry corpus has SHA-256
 `e7127f4a28bd0828abcf9f36431e16972670c38457ea4125173626b27db15853`.
 An exact contract proves both changes from the independent A/B capture are only
 the fixture-provenance digest; every behavioral observation remains byte
 identical. PR #814 must still pass exact published-process regeneration before
 this provenance refresh is qualified.
+
+Provenance update, 2026-10-03: the imported loopback TLS helper is now pinned
+alongside the capture scripts. The current 19,767-byte expiry corpus SHA-256 is
+`340ed804d206a1bd057cee0369a91de7027b10c8c3da238af26c7def8b102181`.
+An exact contract reverses only the helper pin and capture-script hash to the
+2026-09-19 corpus, then reverses its fixture pin to the independent A/B capture.
+No behavioral observation changed; hosted regeneration must still match exactly.
 
 The first actual Linux native expiry preflight ran at
 `3967412b7fbe4627a12f313e9d4a4b8156f14f93` in

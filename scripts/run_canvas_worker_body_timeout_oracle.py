@@ -244,6 +244,7 @@ def verify_sources(matrix, contracts):
             Path(__file__).name,
             "canvas_worker_body_timeout_https_fixture.py",
             "canvas_worker_https_fixture.py",
+            "test_canvas_lti_https.py",
             "canvas_worker_output_capture.py",
             "canvas_worker_shutdown_output.py",
             "run_canvas_worker_rest_oracle.py",
