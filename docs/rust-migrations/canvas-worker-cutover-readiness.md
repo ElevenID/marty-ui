@@ -359,11 +359,20 @@ restore occurred.
 PR #814 now also carries a provenance-only refresh for the shared HTTPS
 fixture's default-identity publication hook. Exact controls reconstruct the
 historical A/B captures by changing only six body and two expiry provenance
-digests. Current corpus SHA256 values are
+digests. The 2026-09-19 corpus SHA256 values were
 `bd5a3e7312960fd005cef7c7e21fa0e7a9662c1a5bfda9a45afe54b8c1640373`
 (body) and
 `e7127f4a28bd0828abcf9f36431e16972670c38457ea4125173626b27db15853`
 (expiry). Hosted exact regeneration remains pending; no parity claim is made.
+
+The 2026-10-03 provenance update additionally pins the imported loopback TLS
+helper in both corpora. Current hashes are
+`7bdf8673cd5dd7a85cec93f9634918fb2cb3c56b768a628935ccc36bf78030f8`
+(46,618-byte body) and
+`340ed804d206a1bd057cee0369a91de7027b10c8c3da238af26c7def8b102181`
+(19,767-byte expiry). Exact reverse-migration checks preserve the earlier
+corpus hashes and all behavioral observations; hosted regeneration is still
+required.
 
 ## Historical 121-entry checkpoint
 
