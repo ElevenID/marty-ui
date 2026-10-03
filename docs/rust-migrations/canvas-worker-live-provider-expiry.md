@@ -38,11 +38,19 @@ identical. PR #814 must still pass exact published-process regeneration before
 this provenance refresh is qualified.
 
 Provenance update, 2026-10-03: the imported loopback TLS helper is now pinned
-alongside the capture scripts. The current 19,767-byte expiry corpus SHA-256 is
+alongside the capture scripts. The then-current 19,767-byte expiry corpus SHA-256 was
 `340ed804d206a1bd057cee0369a91de7027b10c8c3da238af26c7def8b102181`.
 An exact contract reverses only the helper pin and capture-script hash to the
 2026-09-19 corpus, then reverses its fixture pin to the independent A/B capture.
 No behavioral observation changed; hosted regeneration must still match exactly.
+
+Diagnostic-only follow-up, 2026-10-03: the post-join assertion now reports
+body-schedule drift separately from durable-observation drift, preserving both
+checks and their order. Only the lease capture-script source hash changed in
+the frozen corpus. Its current 19,767-byte SHA-256 is
+`335edce94ac67dc760d29cfa96092378393a42bc03466dce059e6f107f435fb7`;
+an exact contract reverses that one pin to the previous corpus hash. Hosted
+published-process regeneration remains required.
 
 The first actual Linux native expiry preflight ran at
 `3967412b7fbe4627a12f313e9d4a4b8156f14f93` in
