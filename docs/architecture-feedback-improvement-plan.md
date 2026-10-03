@@ -233,7 +233,7 @@ For each subsequent PR append: item ID, owner, PR link, reviewed SHA, findings/f
 
 UI #1055's exact reviewed import-closure and lease-diagnostic head passed its PR checks and protected combined-head queue CI, including the live Canvas qualification lane, then merged as `1a3578bc2790537abd8832a9bdccbd0f760c472b`. UI #1058's exact reviewed worker/composition split passed all required PR checks, including its live Canvas lane, and entered the protected merge queue. Neither result is permission to reduce qualification frequency: #1055 proves only the two guarded capture-source maps, and #1058 still runs both targets in the same lane.
 
-Queue reconciliation (2026-10-03 13:02 UTC): the #1058 timeline records addition at 12:34:44 UTC and a manual removal at 12:37:54 UTC by the authenticated account. Its already-started combined-head CI run `37123397984` remains in progress but cannot merge the PR while its queue entry is absent. No review comment or failed PR check explains the removal in the inspected PR state. Confirm intent before re-enqueueing; the local acceptance-owner follow-up remains unpublished to avoid launching overlapping full runs.
+Queue reconciliation (2026-10-03): the #1058 timeline records addition at 12:34:44 UTC and a manual removal at 12:37:54 UTC by the authenticated account. Its already-started [combined-head CI run 37123397984](https://github.com/ElevenID/marty-ui/actions/runs/37123397984) later passed, but the PR remains open because its queue entry is absent. No review comment or failed PR check explains the removal in the inspected PR state. Confirm intent before re-enqueueing; the local acceptance-owner follow-up remains unpublished to avoid launching overlapping full runs.
 
 ### Core OB2 lifecycle unblock
 
