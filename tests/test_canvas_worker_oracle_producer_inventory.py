@@ -4,6 +4,8 @@ import ast
 import json
 from pathlib import Path
 
+import pytest
+
 
 ROOT = Path(__file__).resolve().parents[1]
 CONTRACTS = ROOT / "contracts"
@@ -121,6 +123,16 @@ def _check_json_pointer(data, fragment, reference):
             data = data[int(token)]
         else:
             raise AssertionError(f"Non-container JSON pointer target: {reference}")
+
+
+def test_json_pointer_references_are_not_silently_ignored():
+    reference = "canvas-worker-provider-final-scenarios.json#/initial_job_seed"
+    assert list(_json_references({"initial_history": reference})) == [reference]
+    _check_json_pointer(
+        {"initial_job_seed": ["seed"]}, "/initial_job_seed/0", reference
+    )
+    with pytest.raises(AssertionError, match="Missing JSON pointer target"):
+        _check_json_pointer({"different_seed": []}, "/initial_job_seed", reference)
 
 
 def test_canvas_scenario_references_are_complete_and_acyclic():
