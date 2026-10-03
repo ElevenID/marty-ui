@@ -516,9 +516,9 @@ def test_verifier_release_lineage_is_eligible_and_evidence_bounded() -> None:
     lock = json.loads(_text("release/stack-lock.json"))
     components = {component["name"]: component for component in lock["components"]}
 
-    assert lock["release"] == "marty-ui@1.1.225"
+    assert lock["release"] == "marty-ui@1.1.226"
     assert lock["release_state"] == "eligible"
-    stack_tag_gate.require_release_eligible(ROOT, "v1.1.225")
+    stack_tag_gate.require_release_eligible(ROOT, "v1.1.226")
     qualified = json.loads(_text("contracts/didcomm-native-consumer-ownership.json"))[
         "release_gate"
     ]["qualified_release"]
