@@ -156,8 +156,12 @@ def test_real_compose_render_is_safe_but_not_accepted(
         "PASSPORT_ACCEPTANCE_PROJECT"] == project
     assert model["services"]["gateway"]["environment"][
         "ISSUANCE_SERVICE_URL"] == "http://issuance-native:8005"
+    assert "ISSUANCE_SERVICE_URL" not in model["services"]["flow"]["environment"]
     assert model["services"]["flow"]["environment"][
-        "ISSUANCE_SERVICE_URL"] == "http://issuance-native:8005"
+        "FLOW_APPLICATION_EVENT_HMAC_KEY_FILE"] == (
+        "/run/secrets/flow_application_event_hmac_key")
+    assert "flow_application_event_hmac_key" in {
+        secret["source"] for secret in model["services"]["flow"]["secrets"]}
     signing = model["services"]["signing-keys"]
     assert signing["environment"]["SIGNING_KEYS_REDIS_URL"] == "redis://redis:6379/2"
     assert signing["environment"]["PUBLIC_DOMAIN"] == "localhost:29876"
@@ -172,6 +176,8 @@ def test_real_compose_render_is_safe_but_not_accepted(
     assert issuance_migration["image"] == ISSUANCE
     assert issuance_migration["depends_on"]["db-migrate"]["condition"] == (
         "service_completed_successfully")
+    assert issuance_migration["depends_on"]["organization"]["condition"] == (
+        "service_healthy")
     assert model["services"]["issuance-native"]["depends_on"]["issuance-migrations"][
         "condition"] == "service_completed_successfully"
     assert issuance_migration["command"] == [
@@ -318,6 +324,19 @@ def test_rendered_model_rejects_escape_and_mutated_rust_image(tmp_path: Path) ->
     bad = deepcopy(model)
     bad["services"]["issuance-native"]["depends_on"].pop("issuance-migrations")
     with pytest.raises(ModelPreflightError, match="Credentials issuance schema"):
+        validate_model(bad, project, SERVICES, tmp_path)
+    bad = deepcopy(model)
+    bad["services"]["issuance-migrations"]["depends_on"].pop("organization")
+    with pytest.raises(ModelPreflightError, match="Credentials issuance schema"):
+        validate_model(bad, project, SERVICES, tmp_path)
+    bad = deepcopy(model)
+    bad["services"]["flow"]["environment"]["ISSUANCE_SERVICE_URL"] = (
+        "http://issuance-native:8005")
+    with pytest.raises(ModelPreflightError, match="one Rust owner"):
+        validate_model(bad, project, SERVICES, tmp_path)
+    bad = deepcopy(model)
+    bad["services"]["flow"]["environment"].pop("FLOW_APPLICATION_EVENT_HMAC_KEY_FILE")
+    with pytest.raises(ModelPreflightError, match="application event authentication"):
         validate_model(bad, project, SERVICES, tmp_path)
     bad = deepcopy(model)
     bad["services"]["openbao"]["entrypoint"] = ["/bin/sh", "/tmp/start.sh"]

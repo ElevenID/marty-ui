@@ -63,7 +63,7 @@ SECRETS = {
                         "integration_secret_master_key",
                         "passport_beta_reconciliation_operator_token"),
     "flow": ("marty_db_password", "signing_keys_internal_api_key", "issuance_api_key",
-             "grpc_service_token"),
+             "grpc_service_token", "flow_application_event_hmac_key"),
     "passport-callback-signer": ("callback_signer_bao_token", "callback_signer_api_key"),
     "passport-beta-bureau": ("bureau_database_url", "grpc_service_token",
                              "callback_signer_api_key"),
@@ -253,7 +253,10 @@ def fixture() -> tuple[dict, dict[tuple[str, ...], str]]:
                        revocation_env if service == "revocation-profile" else
                        migration_env if service == "revocation-profile-migrate" else
                        gateway_env if service == "gateway" else
-                       {"ENVIRONMENT": "development"} if service == "flow" else
+                       {"ENVIRONMENT": "development",
+                        "FLOW_APPLICATION_EVENT_HMAC_KEY_FILE":
+                            "/run/secrets/flow_application_event_hmac_key"}
+                       if service == "flow" else
                        native_env if service == "issuance-native" else
                        {**signing_env, "PUBLIC_DOMAIN": "localhost:29876"}
                        if service == "signing-keys" else

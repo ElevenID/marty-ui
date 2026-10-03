@@ -70,7 +70,8 @@ SECRET_MOUNTS = {
                         "integration_secret_master_key",
                         "passport_beta_reconciliation_operator_token"),
     "flow": ("marty_db_password", "signing_keys_internal_api_key",
-             "issuance_api_key", "grpc_service_token"),
+             "issuance_api_key", "grpc_service_token",
+             "flow_application_event_hmac_key"),
     "passport-callback-signer": ("callback_signer_bao_token", "callback_signer_api_key"),
     "passport-beta-bureau": ("bureau_database_url", "grpc_service_token",
                              "callback_signer_api_key"),
@@ -277,13 +278,14 @@ def _issuer_origin_environment(actual: object, service: str,
 
 def _flow_surface_environment(actual: object, surface: str) -> None:
     environment = _runtime_environment(actual, "Flow")
+    require(environment.get("FLOW_APPLICATION_EVENT_HMAC_KEY_FILE")
+            == "/run/secrets/flow_application_event_hmac_key",
+            "Disposable Flow application event authentication differs from model")
     expected = {
         "FLOW_CALLBACK_DESTINATIONS": (
             "00000000-0000-0000-0000-000000000001|"
             "https://edge:8443/__disposable/flow-callback?nonce=__MARTY_TOKEN__"),
         "FLOW_WEBHOOK_SECRET_FILE": "/run/secrets/flow_webhook_secret",
-        "FLOW_APPLICATION_EVENT_HMAC_KEY_FILE":
-            "/run/secrets/flow_application_event_hmac_key",
         "FLOW_CALLBACK_CA_CERT_FILE": "/run/secrets/workload_identity_ca_cert",
         "GRPC_WORKLOAD_TLS_CLIENT_CERT": "/run/secrets/flow_workload_client_cert",
         "GRPC_WORKLOAD_TLS_CLIENT_KEY": "/run/secrets/flow_workload_client_key",
@@ -372,7 +374,7 @@ def _expected_mounts(service: str, project: str, disposable_root: Path,
     }
     if surface == "selfhost":
         extra = {
-            "flow": ("flow_webhook_secret", "flow_application_event_hmac_key",
+            "flow": ("flow_webhook_secret",
                      "flow_workload_client_cert", "flow_workload_client_key",
                      "flow_workload_server_cert", "flow_workload_server_key",
                      "workload_identity_ca_cert"),

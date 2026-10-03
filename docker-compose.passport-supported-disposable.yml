@@ -125,6 +125,8 @@ services:
     depends_on:
       db-migrate:
         condition: service_completed_successfully
+      organization:
+        condition: service_healthy
     healthcheck:
       disable: true
     networks: [private]
@@ -403,6 +405,7 @@ services:
       FLOW_SERVICE_PORT: "8011"
       PASSPORT_NATIVE_FLOW_ENABLED: "true"
       PASSPORT_INTERNAL_SERVICE_AUTH_ENABLED: "true"
+      FLOW_APPLICATION_EVENT_HMAC_KEY_FILE: /run/secrets/flow_application_event_hmac_key
       MARTY_ISSUER_DID: did:web:localhost%3A${PASSPORT_ACCEPTANCE_GATEWAY_PORT:?reserve disposable loopback port}:orgs:marty
       PUBLIC_BASE_URL: https://localhost:${PASSPORT_ACCEPTANCE_GATEWAY_PORT:?reserve disposable loopback port}
       GRPC_SERVICE_TOKEN_FILE: /run/secrets/grpc_service_token
@@ -418,10 +421,9 @@ services:
       TRUST_PROFILE_SERVICE_URL: http://trust-profile:8004
       DEPLOYMENT_PROFILE_SERVICE_URL: http://deployment-profile:8010
       ISSUANCE_NATIVE_SERVICE_URL: http://issuance-native:8005
-      ISSUANCE_SERVICE_URL: http://issuance-native:8005
       SIGNING_KEYS_INTERNAL_URL: http://signing-keys:8017/internal
       SIGNING_KEYS_INTERNAL_API_KEY_FILE: /run/secrets/signing_keys_internal_api_key
-    secrets: [marty_db_password, signing_keys_internal_api_key, issuance_api_key, grpc_service_token]
+    secrets: [marty_db_password, signing_keys_internal_api_key, issuance_api_key, grpc_service_token, flow_application_event_hmac_key]
     depends_on:
       issuance-native:
         condition: service_healthy

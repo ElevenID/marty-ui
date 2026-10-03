@@ -122,8 +122,9 @@ def safe_model(root: Path) -> dict:
     services["flow"]["environment"].update({
         "ENVIRONMENT": "development",
         "PASSPORT_NATIVE_FLOW_ENABLED": "true",
-        "ISSUANCE_SERVICE_URL": "http://issuance-native:8005",
         "ISSUANCE_NATIVE_SERVICE_URL": "http://issuance-native:8005",
+        "FLOW_APPLICATION_EVENT_HMAC_KEY_FILE":
+            "/run/secrets/flow_application_event_hmac_key",
         "MARTY_ISSUER_DID": "did:web:localhost%3A29876:orgs:marty",
         "ORG_GRPC_TARGET": "organization:9002",
     })
@@ -137,6 +138,8 @@ def safe_model(root: Path) -> dict:
             {"source": "issuance_api_key"},
             {"source": "signing_keys_internal_api_key"},
         ]
+    services["flow"]["secrets"].append(
+        {"source": "flow_application_event_hmac_key"})
     services["issuance-native"]["secrets"].extend([
         {"source": "token_hmac_key"},
         {"source": "integration_secret_master_key"},
@@ -374,7 +377,10 @@ def safe_model(root: Path) -> dict:
         "configs": [{"source": "passport_supported_issuance_migrate",
                      "target": "/usr/local/bin/passport-supported-issuance-migrate"}],
         "secrets": [{"source": "marty_db_password"}],
-        "depends_on": {"db-migrate": {"condition": "service_completed_successfully"}},
+        "depends_on": {
+            "db-migrate": {"condition": "service_completed_successfully"},
+            "organization": {"condition": "service_healthy"},
+        },
         "healthcheck": {"disable": True},
         "restart": "no",
     }
@@ -413,6 +419,8 @@ def safe_model(root: Path) -> dict:
                 "token_hmac_key": {"file": str(root / "secrets/token_hmac_key")},
                 "integration_secret_master_key": {
                     "file": str(root / "secrets/integration_secret_master_key")},
+                "flow_application_event_hmac_key": {
+                    "file": str(root / "secrets/flow_application_event_hmac_key")},
                 "passport_edge_tls_cert": {
                     "file": str(root / "secrets/passport_edge_tls_cert")},
                 "passport_edge_tls_key": {
@@ -692,7 +700,8 @@ def test_attested_plan_binds_all_disposable_images(tmp_path: Path) -> None:
      "internal passport authentication"),
     (lambda model, root: model["services"]["gateway"]["environment"].pop(
         "SIGNING_KEYS_INTERNAL_API_KEY_FILE"), "share project credentials"),
-    (lambda model, root: model["services"]["flow"]["secrets"].pop(),
+    (lambda model, root: model["services"]["flow"]["secrets"].remove(
+        {"source": "signing_keys_internal_api_key"}),
      "share project credentials"),
     (lambda model, root: model["services"]["signing-keys"]["environment"].update(
         SIGNING_KEYS_INTERNAL_API_KEY_FILE="/run/secrets/other"),
