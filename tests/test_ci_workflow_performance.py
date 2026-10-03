@@ -1579,7 +1579,7 @@ def test_compiler_cache_writes_are_reserved_for_trusted_main() -> None:
     )
 
 
-def test_rust_lint_uses_uncached_compiler_only_when_optional_cache_fails(
+def test_required_rust_lanes_use_uncached_compiler_only_when_optional_cache_fails(
     tmp_path: Path,
 ) -> None:
     git_bash = Path("C:/Program Files/Git/bin/bash.exe")
@@ -1599,11 +1599,33 @@ def test_rust_lint_uses_uncached_compiler_only_when_optional_cache_fails(
     assert cache < fallback < names.index("Check formatting") < lint
     assert not steps[fallback].get("continue-on-error", False)
     assert not steps[fallback].get("if")
+    services = ci["jobs"]["test-rust-services"]
+    service_steps = services["steps"]
+    service_names = [step.get("name") for step in service_steps]
+    service_cache = service_names.index("Enable compiler cache")
+    service_fallback = service_names.index(
+        "Keep Rust service tests independent of optional compiler cache"
+    )
+    assert service_cache < service_fallback < service_names.index(
+        "Compile reusable Rust test executables"
+    )
+    assert not service_steps[service_fallback].get("continue-on-error", False)
+    assert not service_steps[service_fallback].get("if")
+    assert services["env"]["RUSTC_WRAPPER"] == "sccache"
+    assert ci["jobs"]["rust-lint-policy"]["env"]["RUSTC_WRAPPER"] == "sccache"
+    fallback_command = "bash scripts/ci/optional-sccache-fallback.sh"
+    assert steps[fallback]["run"] == service_steps[service_fallback]["run"] == fallback_command
     assert (
         steps[lint]["run"]
         == "cargo clippy --locked --workspace --all-targets -- -D warnings"
     )
     assert not steps[lint].get("continue-on-error", False)
+    assert "cargo test --locked --workspace --no-run" in service_steps[
+        service_names.index("Compile reusable Rust test executables")
+    ]["run"]
+
+    script = ROOT / "scripts/ci/optional-sccache-fallback.sh"
+    assert script.read_text(encoding="utf-8").startswith("#!/usr/bin/env bash\n")
 
     fake_bin = tmp_path / "fake-bin"
     fake_bin.mkdir()
@@ -1623,7 +1645,11 @@ def test_rust_lint_uses_uncached_compiler_only_when_optional_cache_fails(
     rustup.chmod(0o755)
     for exit_code, expected_env in (("0", ""), ("17", "RUSTC_WRAPPER=\n")):
         (tmp_path / "github-env").write_text("", encoding="utf-8")
-        environment = dict(os.environ, TEST_SCCACHE_EXIT=exit_code)
+        environment = dict(
+            os.environ,
+            TEST_SCCACHE_EXIT=exit_code,
+            CACHE_FALLBACK_SCRIPT=str(script),
+        )
         environment.pop("BASH_ENV", None)
         environment.pop("ENV", None)
         result = subprocess.run(
@@ -1635,7 +1661,8 @@ def test_rust_lint_uses_uncached_compiler_only_when_optional_cache_fails(
             ],
             input=(
                 'export PATH="$PWD/fake-bin:/usr/bin:/bin"\n'
-                'export GITHUB_ENV="$PWD/github-env"\n' + steps[fallback]["run"]
+                'export GITHUB_ENV="$PWD/github-env"\n'
+                'bash "$CACHE_FALLBACK_SCRIPT"\n'
             ),
             cwd=tmp_path,
             env=environment,
@@ -1650,6 +1677,74 @@ def test_rust_lint_uses_uncached_compiler_only_when_optional_cache_fails(
             "rustc-synthetic -vV"
         )
         assert (tmp_path / "github-env").read_text(encoding="utf-8") == expected_env
+
+
+def test_optional_cache_stats_failure_cannot_fail_required_rust_lanes(
+    tmp_path: Path,
+) -> None:
+    git_bash = Path("C:/Program Files/Git/bin/bash.exe")
+    bash = (
+        str(git_bash)
+        if os.name == "nt" and git_bash.is_file()
+        else shutil.which("bash")
+    )
+    if bash is None:
+        pytest.skip("Bash workflow behavior requires Bash")
+    _, ci = _workflow(CI_PATH)
+    jobs = ci["jobs"]
+    scripts = {}
+    for job_name in ("test-rust-services", "rust-lint-policy"):
+        step = next(
+            step for step in jobs[job_name]["steps"]
+            if step.get("name") == "Report compiler cache effectiveness"
+        )
+        assert step["if"] == "always()"
+        assert not step.get("continue-on-error", False)
+        scripts[job_name] = step["run"]
+
+    fake_bin = tmp_path / "fake-bin"
+    fake_bin.mkdir()
+    sccache = fake_bin / "sccache"
+    sccache.write_text(
+        '#!/usr/bin/env bash\nprintf "stats\\n"\nexit "$TEST_SCCACHE_EXIT"\n',
+        encoding="utf-8",
+        newline="\n",
+    )
+    sccache.chmod(0o755)
+    python = fake_bin / "python3"
+    python.write_text(
+        '#!/usr/bin/env bash\ncat >/dev/null\nprintf "{\\"cache\\":true}\\n"\n',
+        encoding="utf-8",
+        newline="\n",
+    )
+    python.chmod(0o755)
+    runner_temp = tmp_path / "runner-temp"
+    runner_temp.mkdir()
+    stats_file = runner_temp / "rust-build-evidence" / "sccache-stats.json"
+    for exit_code in ("0", "17"):
+        for job_name, script in scripts.items():
+            stats_file.unlink(missing_ok=True)
+            environment = dict(os.environ, TEST_SCCACHE_EXIT=exit_code)
+            environment.pop("BASH_ENV", None)
+            environment.pop("ENV", None)
+            result = subprocess.run(
+                [bash, "--noprofile", "--norc", "-s"],
+                input=(
+                    'export PATH="$PWD/fake-bin:/usr/bin:/bin"\n'
+                    'export RUNNER_TEMP="$PWD/runner-temp"\n'
+                    + script
+                ),
+                cwd=tmp_path,
+                env=environment,
+                capture_output=True,
+                text=True,
+            )
+            assert result.returncode == 0, (job_name, exit_code, result.stderr)
+            assert stats_file.exists() == (
+                job_name == "test-rust-services" and exit_code == "0"
+            )
+            if exit_code == "17":
+                assert "Optional compiler cache stats unavailable" in result.stdout
 
 
 def test_release_cache_probe_is_main_only_and_cannot_invalidate_builder() -> None:
