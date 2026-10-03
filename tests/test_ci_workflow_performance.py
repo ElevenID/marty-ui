@@ -168,6 +168,9 @@ def _assert_python_service_job_preserves_full_suite(document) -> None:
         step for step in rust["steps"] if step.get("name") == chain_step_name
     )["run"]
     assert "--test passport_managed_kms_chain" in managed_chain
+    assert "-p marty-service-acceptance --test passport_managed_kms_chain" in managed_chain
+    assert '-- --list | grep -Fx "$chain_test: test"' in managed_chain
+    assert '"$chain_test" -- --ignored --exact' in managed_chain
     chain_test_name = (
         "managed_passport_chain_issues_and_verifies_sod_without_exporting_private_keys"
     )
@@ -1515,16 +1518,18 @@ def test_image_context_excludes_integration_tests_but_keeps_build_inputs() -> No
     assert "contracts/*-oracle.json" not in ignore
 
 
-def test_every_issuance_integration_test_remains_registered() -> None:
-    directory = ROOT / "rust/services/issuance"
+@pytest.mark.parametrize("package", ["services/issuance", "crates/service-acceptance"])
+def test_every_issuance_and_acceptance_integration_test_remains_registered(package) -> None:
+    directory = ROOT / "rust" / package
     manifest = tomllib.loads((directory / "Cargo.toml").read_text(encoding="utf-8"))
     assert manifest["package"]["autotests"] is False
     targets = manifest["test"]
     assert len({target["name"] for target in targets}) == len(targets)
     registered = [target["path"] for target in targets]
-    harness = (directory / "tests/behavior_suite.rs").read_text(encoding="utf-8")
+    harness_path = directory / "tests/behavior_suite.rs"
+    harness = harness_path.read_text(encoding="utf-8") if harness_path.exists() else ""
     grouped = re.findall(r'#\[path = "([^"]+)"\]', harness)
-    assert set(grouped) == {
+    assert set(grouped) == ({
         "canvas_lti_tool_signing_behavior.rs",
         "canvas_management_contract.rs",
         "canvas_mirror_native_behavior.rs",
@@ -1534,7 +1539,7 @@ def test_every_issuance_integration_test_remains_registered() -> None:
         "canvas_worker_result_oracle.rs",
         "issued_credential_adapter_behavior.rs",
         "proof_nonce_behavior.rs",
-    }
+    } if package == "services/issuance" else set())
     registered.extend(f"tests/{name}" for name in grouped)
     actual = {
         path.relative_to(directory).as_posix()
@@ -1547,6 +1552,24 @@ def test_every_issuance_integration_test_remains_registered() -> None:
     assert all(
         "postgres" not in path and "executable_smoke" not in path for path in grouped
     )
+
+
+def test_service_acceptance_keeps_composition_dependencies_out_of_service_builds() -> None:
+    directory = ROOT / "rust/crates/service-acceptance"
+    acceptance = tomllib.loads((directory / "Cargo.toml").read_text(encoding="utf-8"))
+    issuance = tomllib.loads(
+        (ROOT / "rust/services/issuance/Cargo.toml").read_text(encoding="utf-8")
+    )
+    workspace = tomllib.loads((ROOT / "rust/Cargo.toml").read_text(encoding="utf-8"))
+    assert "crates/service-acceptance" in workspace["workspace"]["members"]
+    assert not acceptance.get("dependencies")
+    assert not acceptance.get("build-dependencies")
+    assert (directory / "src/lib.rs").is_file()  # Survives Docker test exclusions.
+    assert acceptance["package"]["publish"] is False
+    assert {"marty-issuance-service", "marty-signing-keys"} <= set(
+        acceptance["dev-dependencies"]
+    )
+    assert "marty-signing-keys" not in issuance.get("dev-dependencies", {})
 
 
 @pytest.mark.parametrize("event", ["pull_request", "workflow_dispatch"])
