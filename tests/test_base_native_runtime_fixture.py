@@ -187,7 +187,7 @@ RUNTIME_GATES = {
 
 
 def runtime_registration(script, source, name):
-    line = f"\"${{executables[0]}}\" --list | grep -Fx '{name}: test'"
+    line = f"printf '%s\\n' \"$all_test_names\" | grep -Fx '{name}: test'"
     assert script.splitlines().count(line) == 1
     match = re.search(
         rf"#\[tokio::test\]\s*async fn {name}\(\) \{{(.*?)^\}}",
@@ -230,7 +230,7 @@ def test_runtime_names_require_exact_owned_composition(name, fault):
         ROOT / "rust/services/issuance/tests/canvas_published_schema_contract.rs"
     ).read_text()
     runtime_registration(script, source, name)
-    line = f"\"${{executables[0]}}\" --list | grep -Fx '{name}: test'"
+    line = f"printf '%s\\n' \"$all_test_names\" | grep -Fx '{name}: test'"
     if fault == "missing":
         script = script.replace(line, "")
     elif fault == "duplicate":
