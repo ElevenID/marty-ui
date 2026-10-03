@@ -34,6 +34,13 @@ struct HttpResponse {
 
 const MAX_BIND_ATTEMPTS: usize = 3;
 
+#[derive(Debug, PartialEq, Eq)]
+enum BindRetryDisposition {
+    Retry,
+    Fatal,
+    Exhausted,
+}
+
 #[tokio::test]
 #[ignore = "requires MARTY_TEST_POSTGRES_URL and MARTY_TEST_REDIS_URL"]
 async fn executable_serves_http_grpc_and_operational_contracts() {
@@ -85,19 +92,20 @@ async fn executable_serves_http_grpc_and_operational_contracts() {
                     stderr.seek(SeekFrom::Start(0)).unwrap();
                     let mut diagnostic = String::new();
                     stderr.read_to_string(&mut diagnostic).unwrap();
-                    let bind_collision = diagnostic.contains("AddrInUse")
-                        || diagnostic.contains("Address already in use");
-                    if !bind_collision {
-                        eprintln!("{diagnostic}");
+                    match bind_retry_disposition(&diagnostic, attempt) {
+                        BindRetryDisposition::Retry => {}
+                        BindRetryDisposition::Fatal => {
+                            eprintln!("{diagnostic}");
+                            panic!(
+                                "revocation-profile exited before both listeners became healthy: {status}"
+                            );
+                        }
+                        BindRetryDisposition::Exhausted => {
+                            panic!(
+                                "revocation-profile could not bind after {MAX_BIND_ATTEMPTS} attempts"
+                            );
+                        }
                     }
-                    assert!(
-                        bind_collision,
-                        "revocation-profile exited before both listeners became healthy: {status}"
-                    );
-                    assert!(
-                        attempt < MAX_BIND_ATTEMPTS,
-                        "revocation-profile could not bind after {MAX_BIND_ATTEMPTS} attempts"
-                    );
                 }
             }
         }
@@ -196,6 +204,42 @@ fn available_ports() -> (u16, u16) {
         http.local_addr().unwrap().port(),
         grpc.local_addr().unwrap().port(),
     )
+}
+
+fn bind_retry_disposition(diagnostic: &str, attempt: usize) -> BindRetryDisposition {
+    if !diagnostic.contains("AddrInUse") && !diagnostic.contains("Address already in use") {
+        BindRetryDisposition::Fatal
+    } else if attempt >= MAX_BIND_ATTEMPTS {
+        BindRetryDisposition::Exhausted
+    } else {
+        BindRetryDisposition::Retry
+    }
+}
+
+#[test]
+fn runtime_listener_ports_are_distinct() {
+    let (http_port, grpc_port) = available_ports();
+    assert_ne!(http_port, grpc_port);
+}
+
+#[test]
+fn bind_collision_retry_is_specific_and_bounded() {
+    assert_eq!(
+        bind_retry_disposition("Os { code: 98, kind: AddrInUse }", 1),
+        BindRetryDisposition::Retry
+    );
+    assert_eq!(
+        bind_retry_disposition("Address already in use (os error 98)", 2),
+        BindRetryDisposition::Retry
+    );
+    assert_eq!(
+        bind_retry_disposition("Address already in use (os error 98)", 3),
+        BindRetryDisposition::Exhausted
+    );
+    assert_eq!(
+        bind_retry_disposition("database migration failed", 1),
+        BindRetryDisposition::Fatal
+    );
 }
 
 async fn wait_for_listeners(
