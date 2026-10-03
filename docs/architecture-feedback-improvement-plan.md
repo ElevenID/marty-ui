@@ -1,7 +1,7 @@
 # Architecture and development-feedback improvement tracker
 
 Created: 2026-10-02 (America/Denver; baseline CI completed 2026-10-03 UTC).
-Status: active implementation. The first A1 acceptance-package slice, A2, cache-reuse maintenance, the first Core/UI A3 slices, and the A5 provenance-closure fix are merged. A5 import-closure/lease diagnostics is in full PR CI. A0 inventory and the remaining A1/A3–A6 work continue. The reviewed tracker follow-up is UI #1054.
+Status: active implementation. The first A1 acceptance-package slice, A2, cache-reuse maintenance, the first Core/UI A3 slices, and two A5 provenance fixes are merged. A1 worker-target and A4 compatibility follow-ups are in PR validation; A0 inventory and the remaining A1/A3–A6 work continue. The reviewed tracker follow-up was UI #1054.
 
 ## Objective and scope
 
