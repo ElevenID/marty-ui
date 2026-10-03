@@ -1322,6 +1322,85 @@ def test_warm_cache_uses_the_same_rust_test_profile() -> None:
     assert document["jobs"]["rust"]["env"]["CARGO_PROFILE_TEST_DEBUG"] == 0
 
 
+def test_ephemeral_ci_reads_only_shared_python_and_browser_caches() -> None:
+    _, ci = _workflow(CI_PATH)
+    _, warm = _workflow(ROOT / ".github/workflows/warm-dependency-caches.yml")
+    python_jobs = (
+        "test-services",
+        "public-protocol-contract",
+        "test-release-contracts",
+    )
+    setup_uv = "astral-sh/setup-uv@c18668ad3cf93ea998bef934396af7bb5c839dc7"
+    expected_inputs = {
+        "version": "0.11.3",
+        "enable-cache": True,
+        "cache-dependency-glob": "requirements-services.txt\nrelease/stack-lock.json\n",
+        "cache-suffix": "python-services",
+    }
+    for job_name in python_jobs:
+        steps = ci["jobs"][job_name]["steps"]
+        setup = next(step for step in steps if step.get("uses") == setup_uv)
+        assert setup["with"]["save-cache"] is False
+        assert {key: setup["with"][key] for key in expected_inputs} == expected_inputs
+
+    python_warmer = warm["jobs"]["python"]
+    assert python_warmer["if"] == "github.ref == 'refs/heads/main'"
+    python_versions = python_warmer["strategy"]["matrix"]["python-version"]
+    assert python_versions == ["3.12", "3.12.10"]
+    for job_name in python_jobs:
+        setup_python = next(
+            step
+            for step in ci["jobs"][job_name]["steps"]
+            if step.get("uses", "").startswith("actions/setup-python@")
+        )
+        assert setup_python["with"]["python-version"] in python_versions
+    warm_setup = next(
+        step for step in python_warmer["steps"] if step.get("uses") == setup_uv
+    )
+    assert warm_setup["id"] == "uv-cache"
+    assert {key: warm_setup["with"][key] for key in expected_inputs} == expected_inputs
+    warm_install = next(
+        step
+        for step in python_warmer["steps"]
+        if step.get("name") == "Warm shared Python dependencies"
+    )
+    assert warm_install["if"] == "steps.uv-cache.outputs.cache-hit != 'true'"
+    assert (
+        warm_install["run"]
+        == "uv pip install --system -r requirements-services.txt jsonschema"
+    )
+
+    browser_steps = ci["jobs"]["test-credential-lifecycle-browser"]["steps"]
+    # Browser coverage remains in the mandatory credential-lifecycle gate.
+    browser_cache = next(
+        step for step in browser_steps if step.get("id") == "playwright-cache"
+    )
+    warm_browser = warm["jobs"]["browser"]
+    assert warm_browser["if"] == "github.ref == 'refs/heads/main'"
+    warm_cache = next(
+        step for step in warm_browser["steps"] if step.get("id") == "playwright-cache"
+    )
+    assert browser_cache["uses"] == warm_cache["uses"].replace(
+        "actions/cache@", "actions/cache/restore@"
+    )
+    assert browser_cache["with"] == warm_cache["with"]
+    warm_browser_install = next(
+        step
+        for step in warm_browser["steps"]
+        if step.get("name") == "Install pinned Playwright CLI"
+    )
+    assert (
+        warm_browser_install["if"]
+        == "steps.playwright-cache.outputs.cache-hit != 'true'"
+    )
+    assert "requirements-services.txt" in warm[True]["push"]["paths"]
+    assert ".python-version" in warm[True]["push"]["paths"]
+    assert "release/stack-lock.json" in warm[True]["push"]["paths"]
+    assert "tests/package-lock.json" in warm[True]["push"]["paths"]
+    assert ".github/workflows/ci.yml" in warm[True]["push"]["paths"]
+    assert "rust/**" not in warm[True]["push"]["paths"]
+
+
 def test_closed_pull_request_cache_cleanup_is_rate_limit_safe() -> None:
     source, document = _workflow(
         ROOT / ".github" / "workflows" / "cleanup-ci-caches.yml"
