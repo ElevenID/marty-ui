@@ -54,9 +54,9 @@ The acceptance package has an empty library and only development dependencies. `
 - [x] Compare Git-normalized source hashes before and after the move: both `de3275257d6cf102d3a5d5a636b5022fa1601b13`.
 - [x] Confirm lockfile changes are limited to the acceptance package and removed development edge.
 - [x] Check explicit target registration and workspace membership; require all top-level test files to be registered.
-- [ ] Compile and list the acceptance test; verify the expected ignored test is present.
+- [x] Compile and list the acceptance test; the contracts job lists the expected ignored test before its explicit invocation.
 - [x] Run workflow and packaging checks: 100 targeted policy tests passed. The actual public Docker `rust-service-planner` stage completed successfully with the filtered context and cargo-chef 0.1.78.
-- [ ] Require the real disposable Redis/OpenBao/OpenSSL acceptance test in protected CI.
-- [ ] Complete self-review and reviewer-worker review; fix findings before merge.
+- [x] Require the real disposable Redis/OpenBao/OpenSSL acceptance test in protected CI. The [#1044 protected queue contracts job](https://github.com/ElevenID/marty-ui/actions/runs/37112907655/job/111174201305) lists and then runs the exact test successfully.
+- [x] Complete self-review and reviewer-worker review; fix findings before merge. The reviewed head `ca9dbb909` passed full PR and merge-queue CI and merged as `48c77c9fc`.
 
 No measured CI speedup is claimed for this first extraction. It establishes acceptance ownership and removes a real service test dependency; the larger Canvas split and selective execution remain separate work.
