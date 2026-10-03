@@ -1,0 +1,77 @@
+name: Warm dependency caches
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - .github/workflows/ci.yml
+      - .github/workflows/warm-dependency-caches.yml
+      - .python-version
+      - requirements-services.txt
+      - release/stack-lock.json
+      - tests/package.json
+      - tests/package-lock.json
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: warm-dependency-caches-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  python:
+    name: Warm shared Python dependency cache
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    strategy:
+      matrix:
+        python-version: ['3.12', '3.12.10']
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97
+        with:
+          python-version: ${{ matrix.python-version }}
+      - uses: astral-sh/setup-uv@c18668ad3cf93ea998bef934396af7bb5c839dc7
+        id: uv-cache
+        with:
+          version: "0.11.3"
+          enable-cache: true
+          cache-dependency-glob: |
+            requirements-services.txt
+            release/stack-lock.json
+          cache-suffix: python-services
+      - name: Warm shared Python dependencies
+        if: steps.uv-cache.outputs.cache-hit != 'true'
+        run: uv pip install --system -r requirements-services.txt jsonschema
+
+  browser:
+    name: Warm pinned Chromium headless shell
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
+        with:
+          node-version: '24'
+      - name: Publish main-branch Chromium cache
+        id: playwright-cache
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9
+        with:
+          path: ~/.cache/ms-playwright
+          key: playwright-${{ runner.os }}-headless-${{ hashFiles('tests/package-lock.json') }}
+      - name: Install pinned Playwright CLI
+        if: steps.playwright-cache.outputs.cache-hit != 'true'
+        working-directory: tests
+        run: npm ci
+      - name: Install pinned Chromium headless shell
+        if: steps.playwright-cache.outputs.cache-hit != 'true'
+        working-directory: tests
+        run: npx playwright install --only-shell chromium

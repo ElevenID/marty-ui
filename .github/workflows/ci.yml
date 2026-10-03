@@ -352,10 +352,13 @@ jobs:
         with:
           version: "0.11.3"
           enable-cache: true
+          # PR/merge-queue runs may read the trusted main cache but never publish
+          # one cache per ephemeral PR ref.
+          save-cache: false
           cache-dependency-glob: |
             requirements-services.txt
             release/stack-lock.json
-          cache-suffix: service-tests
+          cache-suffix: python-services
       - name: Install dependencies
         shell: bash
         run: |
@@ -1895,8 +1898,11 @@ jobs:
         with:
           version: "0.11.3"
           enable-cache: true
-          cache-dependency-glob: requirements-services.txt
-          cache-suffix: public-contract
+          save-cache: false
+          cache-dependency-glob: |
+            requirements-services.txt
+            release/stack-lock.json
+          cache-suffix: python-services
       - name: Install contract-check dependencies
         run: uv pip install --system -r requirements-services.txt jsonschema
       - name: Enforce public response contract
@@ -1930,10 +1936,11 @@ jobs:
         with:
           version: "0.11.3"
           enable-cache: true
+          save-cache: false
           cache-dependency-glob: |
             requirements-services.txt
             release/stack-lock.json
-          cache-suffix: release-contracts
+          cache-suffix: python-services
       - name: Install released test dependencies
         shell: bash
         run: |
@@ -2088,7 +2095,7 @@ jobs:
         run: npm ci
       - name: Restore pinned Chromium headless shell
         id: playwright-cache
-        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9
         with:
           path: ~/.cache/ms-playwright
           key: playwright-${{ runner.os }}-headless-${{ hashFiles('tests/package-lock.json') }}
