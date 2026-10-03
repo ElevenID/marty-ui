@@ -2275,14 +2275,29 @@ jobs:
             fi
           done
       - name: Summarize CI performance
+        # Telemetry must not fail a green required-lane gate during a GitHub API outage.
+        continue-on-error: true
         uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3
         with:
           script: |
             const {owner, repo} = context.repo;
-            const {data: run} = await github.rest.actions.getWorkflowRun({owner, repo, run_id: context.runId});
-            const {data} = await github.rest.actions.listJobsForWorkflowRun({
-              owner, repo, run_id: context.runId, filter: 'latest', per_page: 100,
-            });
+            const retryTransient = async (operation, request) => {
+              for (let attempt = 1; attempt <= 3; attempt++) {
+                try {
+                  return await request();
+                } catch (error) {
+                  if (![502, 503, 504].includes(error.status) || attempt === 3) throw error;
+                  core.warning(`${operation} returned HTTP ${error.status}; retrying (${attempt}/3).`);
+                  await new Promise(resolve => setTimeout(resolve, 2000 * attempt));
+                }
+              }
+            };
+            const {data: run} = await retryTransient('getWorkflowRun', () =>
+              github.rest.actions.getWorkflowRun({owner, repo, run_id: context.runId}));
+            const {data} = await retryTransient('listJobsForWorkflowRun', () =>
+              github.rest.actions.listJobsForWorkflowRun({
+                owner, repo, run_id: context.runId, filter: 'latest', per_page: 100,
+              }));
             const created = new Date(run.created_at);
             const rows = data.jobs.filter(job => job.started_at && job.completed_at).map(job => ({
               name: job.name,
