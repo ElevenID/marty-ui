@@ -375,6 +375,28 @@ def test_beta_browser_contracts_run_after_chromium_and_system_dependencies() -> 
     assert dependencies["if"] == "steps.playwright-cache.outputs.cache-hit == 'true'"
 
 
+def test_passport_publication_installs_pinned_chromium_before_verification() -> None:
+    workflow = yaml.safe_load(
+        _text(".github/workflows/passport-beta-demo-publication.yml")
+    )
+    steps = workflow["jobs"]["publish-evidence"]["steps"]
+    install_index = next(
+        index for index, step in enumerate(steps)
+        if step.get("name") == "Install pinned publication verifier dependencies"
+    )
+    verification_index = next(
+        index for index, step in enumerate(steps)
+        if step.get("name")
+        == "Authenticate preliminary and release, then verify live publication"
+    )
+    install = steps[install_index]
+    commands = [line.strip() for line in install["run"].splitlines()]
+    assert install_index < verification_index
+    assert commands.index("npm ci") < commands.index(
+        "npx playwright install --with-deps chromium"
+    ) < commands.index("node --test test/passportPublicationEvidence.test.js")
+
+
 def test_every_rust_toolchain_action_pins_the_workspace_toolchain() -> None:
     action = "dtolnay/rust-toolchain@02cb101ec7c40f2c49e1d9714d64511d8e1b74de"
     matched_steps: list[tuple[str, dict[str, object]]] = []
