@@ -45,8 +45,7 @@ async fn executable_serves_http_grpc_and_operational_contracts() {
         .collect();
     let (organization_target, organization_shutdown) =
         start_organization_server(true, permissions).await;
-    let http_port = available_port();
-    let grpc_port = available_port();
+    let (http_port, grpc_port) = available_ports();
     let mut child = ChildGuard(
         Command::new(env!("CARGO_BIN_EXE_marty-revocation-profile"))
             .env("ENVIRONMENT", "beta")
@@ -67,7 +66,7 @@ async fn executable_serves_http_grpc_and_operational_contracts() {
             .expect("start revocation-profile executable"),
     );
 
-    wait_for_http(http_port, &mut child.0).await;
+    wait_for_http(http_port, grpc_port, &mut child.0).await;
 
     let health = http_request(http_port, "GET", "/health", &[], None).await;
     assert_eq!(health.status, 200);
@@ -151,25 +150,41 @@ async fn executable_serves_http_grpc_and_operational_contracts() {
     let _ = organization_shutdown.send(());
 }
 
-fn available_port() -> u16 {
-    StdTcpListener::bind("127.0.0.1:0")
-        .unwrap()
-        .local_addr()
-        .unwrap()
-        .port()
+fn available_ports() -> (u16, u16) {
+    // Keep the first reservation open while the OS chooses the second port.
+    // Two separate bind-and-drop calls can return the same port and make the
+    // service fail when it starts its HTTP and gRPC listeners.
+    let http = StdTcpListener::bind("127.0.0.1:0").unwrap();
+    let grpc = StdTcpListener::bind("127.0.0.1:0").unwrap();
+    (
+        http.local_addr().unwrap().port(),
+        grpc.local_addr().unwrap().port(),
+    )
 }
 
-async fn wait_for_http(port: u16, child: &mut Child) {
+#[test]
+fn runtime_listener_ports_are_distinct() {
+    for _ in 0..32 {
+        let (http_port, grpc_port) = available_ports();
+        assert_ne!(http_port, grpc_port);
+    }
+}
+
+async fn wait_for_http(http_port: u16, grpc_port: u16, child: &mut Child) {
     for _ in 0..100 {
         if let Some(status) = child.try_wait().unwrap() {
-            panic!("revocation-profile exited before becoming healthy: {status}");
+            panic!(
+                "revocation-profile exited before becoming healthy on HTTP port {http_port} and gRPC port {grpc_port}: {status}"
+            );
         }
-        if TcpStream::connect(("127.0.0.1", port)).await.is_ok() {
+        if TcpStream::connect(("127.0.0.1", http_port)).await.is_ok() {
             return;
         }
         sleep(Duration::from_millis(100)).await;
     }
-    panic!("revocation-profile did not become healthy");
+    panic!(
+        "revocation-profile did not become healthy on HTTP port {http_port} and gRPC port {grpc_port}"
+    );
 }
 
 async fn connect_grpc(target: &str) -> RevocationProfileServiceClient<tonic::transport::Channel> {
