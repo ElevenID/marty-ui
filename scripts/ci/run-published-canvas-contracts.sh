@@ -25,10 +25,16 @@ for image in "${images[@]}"; do
 done
 find_executable() {
   local target="$1"
+  local package
+  case "$target" in
+    canvas_published_schema_contract) package=marty-issuance-service ;;
+    canvas_published_worker_contract) package=marty-service-acceptance ;;
+    *) echo "Unknown Canvas contract target: $target" >&2; return 1 ;;
+  esac
   local -a matches=()
-  mapfile -t matches < <(jq -r --arg target "$target" '
+  mapfile -t matches < <(jq -r --arg target "$target" --arg package "$package" '
     select(.reason == "compiler-artifact")
-    | select(.package_id | contains("#marty-issuance-service@"))
+    | select(.package_id | contains("#" + $package + "@"))
     | select(.target.name == $target)
     | select(.executable != null) | .executable
   ' "$RUNNER_TEMP/rust-test-artifacts.json" | sort -u)

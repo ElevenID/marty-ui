@@ -206,9 +206,14 @@ elif [[ "$#" == 3 && "$1" == -r ]]; then
     printf '%s\n' "$TEST_WORKER_BINARY"
   fi
 else
-  [[ "$#" == 6 && "$1" == -r && "$2" == --arg && "$3" == target && "$6" == "$RUNNER_TEMP/rust-test-artifacts.json" ]] || exit 90
-  [[ "$5" == *marty-issuance-service* ]] || exit 90
+  [[ "$#" == 9 && "$1" == -r && "$2" == --arg && "$3" == target && "$5" == --arg && "$6" == package && "$9" == "$RUNNER_TEMP/rust-test-artifacts.json" ]] || exit 90
+  [[ "$8" == *'"#" + $package + "@"'* ]] || exit 90
   [[ "$4" == canvas_published_schema_contract || "$4" == canvas_published_worker_contract ]] || exit 90
+  if [[ "$4" == canvas_published_worker_contract ]]; then
+    [[ "$7" == marty-service-acceptance ]] || exit 90
+  else
+    [[ "$7" == marty-issuance-service ]] || exit 90
+  fi
   [[ "$TEST_FAILURE" != artifacts ]] || exit 18
   if [[ "$TEST_FAILURE" == missing-executable ]]; then
     printf './does-not-exist\n'
@@ -557,7 +562,9 @@ def test_real_jq_selects_only_the_owned_non_test_worker_binary(shell_case):
     real = artifact("marty-issuance-service", ["bin"], False, "__WORKER_BINARY__")
     decoys = [
         artifact("marty-issuance-service", ["bin"], True, "__OTHER_WORKER_BINARY__"),
-        artifact("marty-issuance-service-copy", ["bin"], False, "__OTHER_WORKER_BINARY__"),
+        artifact(
+            "marty-issuance-service-copy", ["bin"], False, "__OTHER_WORKER_BINARY__"
+        ),
         artifact("marty-issuance-service", ["test"], False, "__OTHER_WORKER_BINARY__"),
     ]
     result, calls = shell_case(["timeout-preflight"], worker_artifacts=[*decoys, real])
@@ -812,7 +819,7 @@ def test_preflight_group_owner_runs_all_four_exact_modes(tmp_path, monkeypatch):
         json.dumps(
             {
                 "reason": "compiler-artifact",
-                "package_id": "marty-issuance-service 0.0.0",
+                "package_id": "path+file:///checkout/rust/crates/service-acceptance#marty-service-acceptance@0.1.0",
                 "target": {"name": "canvas_published_worker_contract"},
                 "executable": str(executable),
             }
@@ -860,3 +867,42 @@ def test_preflight_group_owner_runs_all_four_exact_modes(tmp_path, monkeypatch):
     assert all(
         command == ["bash", str(SCRIPT), name] for name, command in observed.items()
     )
+
+
+def test_preflight_digest_selects_acceptance_owner_not_stale_issuance(
+    tmp_path, monkeypatch
+):
+    module = runpy.run_path(str(ROOT / "scripts/ci/run-db-contract-groups.py"))
+    acceptance = tmp_path / "acceptance-worker-contract"
+    acceptance.write_bytes(b"current acceptance worker contract")
+    stale = tmp_path / "issuance-worker-contract"
+    stale.write_bytes(b"stale issuance worker contract")
+
+    def artifact(owner, executable):
+        return {
+            "reason": "compiler-artifact",
+            "package_id": f"path+file:///checkout/rust/#{owner}@0.1.0",
+            "target": {"name": "canvas_published_worker_contract"},
+            "executable": str(executable),
+        }
+
+    artifacts = tmp_path / "rust-test-artifacts.json"
+    artifacts.write_text(
+        "\n".join(
+            json.dumps(entry)
+            for entry in (
+                artifact("marty-issuance-service", stale),
+                artifact("marty-service-acceptance", acceptance),
+            )
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("RUNNER_TEMP", str(tmp_path))
+    assert module["_canvas_executable"]() == acceptance
+    artifacts.write_text(
+        json.dumps(artifact("marty-issuance-service", stale)) + "\n",
+        encoding="utf-8",
+    )
+    with pytest.raises(ValueError, match="exactly one Canvas worker contract"):
+        module["_canvas_executable"]()

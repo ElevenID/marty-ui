@@ -5,28 +5,28 @@ use std::collections::BTreeSet;
     dead_code,
     reason = "shared command fixture has composition-only diagnostics"
 )]
-#[path = "support/bounded_fixture_command.rs"]
+#[path = "../../../services/issuance/tests/support/bounded_fixture_command.rs"]
 mod bounded_fixture_command;
 #[expect(
     dead_code,
     reason = "shared database fixture has composition-only constructors"
 )]
-#[path = "support/canvas_published_database.rs"]
+#[path = "../../../services/issuance/tests/support/canvas_published_database.rs"]
 mod canvas_published_database;
 
-#[path = "support/canvas_worker_deadline_replay.rs"]
+#[path = "../../../services/issuance/tests/support/canvas_worker_deadline_replay.rs"]
 mod canvas_worker_deadline_replay;
 
-#[path = "support/canvas_worker_output.rs"]
+#[path = "../../../services/issuance/tests/support/canvas_worker_output.rs"]
 mod canvas_worker_output;
 
-#[path = "support/canvas_worker_timeout_replay.rs"]
+#[path = "../../../services/issuance/tests/support/canvas_worker_timeout_replay.rs"]
 mod canvas_worker_timeout_replay;
 
-#[path = "support/canvas_worker_lease_expiry_replay.rs"]
+#[path = "../../../services/issuance/tests/support/canvas_worker_lease_expiry_replay.rs"]
 mod canvas_worker_lease_expiry_replay;
 
-#[path = "support/canvas_published_borrowed_database.rs"]
+#[path = "../../../services/issuance/tests/support/canvas_published_borrowed_database.rs"]
 mod canvas_published_borrowed_database;
 
 #[test]
@@ -505,10 +505,10 @@ async fn worker_dispatch_reference_matches_published_process() {
     );
 }
 
-#[path = "support/canvas_worker_effect_expiry.rs"]
+#[path = "../../../services/issuance/tests/support/canvas_worker_effect_expiry.rs"]
 mod canvas_worker_effect_expiry;
 
-#[path = "support/canvas_worker_roster_metadata.rs"]
+#[path = "../../../services/issuance/tests/support/canvas_worker_roster_metadata.rs"]
 mod canvas_worker_roster_metadata;
 
 #[tokio::test]
@@ -542,7 +542,7 @@ async fn worker_roster_metadata_reconciliation_preserves_current_fields_and_fenc
     }
 }
 
-#[path = "support/canvas_worker_mixed_roster_replay.rs"]
+#[path = "../../../services/issuance/tests/support/canvas_worker_mixed_roster_replay.rs"]
 mod canvas_worker_mixed_roster_replay;
 
 #[test]
@@ -641,7 +641,7 @@ async fn worker_provider_recovery_first_reference_matches_published_process() {
     owned.close().unwrap();
 }
 
-#[path = "support/canvas_worker_provider_completion_replay.rs"]
+#[path = "../../../services/issuance/tests/support/canvas_worker_provider_completion_replay.rs"]
 mod canvas_worker_provider_completion_replay;
 
 #[test]
@@ -671,7 +671,7 @@ async fn worker_provider_completion_reference_matches_published_process() {
     owned.close().unwrap();
 }
 
-#[path = "support/canvas_worker_final_completion_race.rs"]
+#[path = "../../../services/issuance/tests/support/canvas_worker_final_completion_race.rs"]
 mod canvas_worker_final_completion_race;
 
 #[tokio::test]
@@ -747,7 +747,7 @@ fn worker_oauth_revocation_counters_matches_frozen_published_cycle() {
     assert_native_oauth_revocation_matrix("oauth-revocation-counters");
 }
 
-#[path = "support/canvas_worker_oauth_revocation_replay.rs"]
+#[path = "../../../services/issuance/tests/support/canvas_worker_oauth_revocation_replay.rs"]
 mod canvas_worker_oauth_revocation_replay;
 
 #[tokio::test]
@@ -908,13 +908,13 @@ async fn worker_oauth_revocation_native_child() {
     owned.close().unwrap();
 }
 
-#[path = "support/canvas_worker_concurrent_replay.rs"]
+#[path = "../../../services/issuance/tests/support/canvas_worker_concurrent_replay.rs"]
 mod canvas_worker_concurrent_replay;
-#[path = "support/canvas_worker_provider_recovery_replay.rs"]
+#[path = "../../../services/issuance/tests/support/canvas_worker_provider_recovery_replay.rs"]
 mod canvas_worker_provider_recovery_replay;
-#[path = "support/canvas_worker_provider_signals_replay.rs"]
+#[path = "../../../services/issuance/tests/support/canvas_worker_provider_signals_replay.rs"]
 mod canvas_worker_provider_signals_replay;
-#[path = "support/canvas_worker_rest_replay.rs"]
+#[path = "../../../services/issuance/tests/support/canvas_worker_rest_replay.rs"]
 mod canvas_worker_rest_replay;
 
 #[test]
@@ -952,7 +952,7 @@ fn worker_provider_resource_race_matches_frozen_published_process() {
     assert_worker_provider_https("resource_race");
 }
 
-#[path = "support/canvas_worker_resource_race_replay.rs"]
+#[path = "../../../services/issuance/tests/support/canvas_worker_resource_race_replay.rs"]
 mod canvas_worker_resource_race_replay;
 
 #[tokio::test]
@@ -1133,7 +1133,7 @@ fn worker_roster_failure_matches_frozen_published_process() {
     assert_worker_https("roster-failure");
 }
 
-#[path = "support/canvas_worker_resources_unavailable_replay.rs"]
+#[path = "../../../services/issuance/tests/support/canvas_worker_resources_unavailable_replay.rs"]
 mod canvas_worker_resources_unavailable_replay;
 
 #[test]
@@ -1684,7 +1684,7 @@ async fn worker_retry_reference_matches_published_process() {
 }
 
 #[allow(dead_code)]
-#[path = "support/canvas_worker_process_signals.rs"]
+#[path = "../../../services/issuance/tests/support/canvas_worker_process_signals.rs"]
 mod canvas_worker_process_signals;
 
 #[test]
@@ -1711,7 +1711,7 @@ fn worker_binary_handoff_requires_an_absolute_path_and_keeps_cargo_default() {
     })
     .is_err());
 }
-#[path = "support/canvas_worker_startup_replay.rs"]
+#[path = "../../../services/issuance/tests/support/canvas_worker_startup_replay.rs"]
 mod canvas_worker_startup_replay;
 
 #[tokio::test]
@@ -1741,7 +1741,7 @@ async fn worker_startup_matches_published_process_and_idle_heartbeat() {
     owned.close().unwrap();
 }
 
-#[path = "support/canvas_worker_sql_logging.rs"]
+#[path = "../../../services/issuance/tests/support/canvas_worker_sql_logging.rs"]
 mod canvas_worker_sql_logging;
 
 #[tokio::test]
