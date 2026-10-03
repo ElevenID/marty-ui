@@ -72,8 +72,15 @@ def test_full_mode_is_exactly_four_way_while_every_preflight_stays_serial() -> N
         "[[ $((all_tests - parallel_tests)) == $((1 + ${#preflight_skips[@]} / 2)) ]]"
         in script
     )
-    assert script.splitlines().count(composition_full) == 1
-    assert script.rstrip().endswith(worker_full)
+    assert script.splitlines().count(
+        composition_full + ' >"$composition_log" 2>&1 &'
+    ) == 1
+    assert script.splitlines().count(worker_full + ' >"$worker_log" 2>&1 &') == 1
+    assert script.index(composition_full) < script.index(worker_full)
+    assert script.index(worker_full) < script.index('wait "$composition_pid"')
+    assert script.rstrip().endswith(
+        "(( composition_status == 0 && worker_status == 0 ))"
+    )
     assert sorted(set(re.findall(r"--test-threads=(\d+)", script))) == ["1", "4"]
 
 
@@ -234,6 +241,20 @@ elif [[ "$#" -ge 3 && "$1" == --list && "$2" == --skip ]]; then
   done < "registrations-$name"
 else
   [[ "$TEST_FAILURE" != execute ]] || exit 23
+  if [[ "$*" == *--test-threads=4* ]]; then
+    printf 'full target %s\n' "$name"
+    [[ "$TEST_FAILURE" != "$name-full" ]] || exit 24
+    if [[ "$TEST_FAILURE" == barrier ]]; then
+      touch "started-$name"
+      other=contract
+      [[ "$name" == contract ]] && other=worker-contract
+      for (( attempt=0; attempt<200; attempt++ )); do
+        [[ -f "started-$other" ]] && break
+        sleep 0.05
+      done
+      [[ -f "started-$other" ]] || exit 25
+    fi
+  fi
 fi
 """,
         encoding="utf-8",
@@ -318,7 +339,7 @@ def test_default_and_explicit_full_keep_all_registrations_and_run_every_test(
         f"{serial}: test"
     ]
     children = [call for call in calls if call[0] == "child"]
-    assert children == [
+    assert children[:5] == [
         ["child", "contract", "1", "--list"],
         ["child", "worker-contract", "1", "--list"],
         ["child", "contract", "1", "--list"],
@@ -332,17 +353,21 @@ def test_default_and_explicit_full_keep_all_registrations_and_run_every_test(
             "--nocapture",
             "--test-threads=1",
         ],
-        ["child", "contract", "1", "--nocapture", "--test-threads=4"],
-        [
-            "child",
-            "worker-contract",
-            "1",
-            "--skip",
-            serial,
-            "--nocapture",
-            "--test-threads=4",
-        ],
     ]
+    assert sorted(children[5:]) == sorted(
+        [
+            ["child", "contract", "1", "--nocapture", "--test-threads=4"],
+            [
+                "child",
+                "worker-contract",
+                "1",
+                "--skip",
+                serial,
+                "--nocapture",
+                "--test-threads=4",
+            ],
+        ]
+    )
     assert [call for call in calls if call[0] == "docker"] == [
         ["docker", "pull", pin] for pin in PINS
     ]
@@ -361,7 +386,7 @@ def test_proven_preflights_are_skipped_only_in_explicit_reuse_mode(
     assert result.returncode == 0, result.stderr
     children = [call for call in calls if call[0] == "child"]
     skipped = [target for _, target in PREFLIGHTS]
-    assert children[-1] == [
+    assert [
         "child",
         "worker-contract",
         "1",
@@ -374,21 +399,49 @@ def test_proven_preflights_are_skipped_only_in_explicit_reuse_mode(
         ],
         "--nocapture",
         "--test-threads=4",
-    ]
+    ] in children
     assert not any(
         call[3:5] == [target, "--exact"] for call in children for target in skipped
     )
 
     result, calls = shell_case([])
     assert result.returncode == 0, result.stderr
-    assert (
-        calls[-1][:2] == ["child", "worker-contract"] and calls[-1].count("--skip") == 1
+    assert any(
+        call[:2] == ["child", "worker-contract"]
+        and "--test-threads=4" in call
+        and call.count("--skip") == 1
+        for call in calls
     )
 
     result, calls = shell_case(["full-after-preflights"], run_id="other-run")
     assert result.returncode != 0
     assert not any("--test-threads=4" in call for call in calls)
     assert not any(call[0] == "docker" for call in calls)
+
+
+def test_full_targets_reach_the_barrier_concurrently(shell_case, tmp_path):
+    result, calls = shell_case(failure="barrier")
+    assert result.returncode == 0, result.stderr
+    full = [call for call in calls if "--test-threads=4" in call]
+    assert {call[1] for call in full} == {"contract", "worker-contract"}
+    assert "Canvas composition target exit: 0" in result.stdout
+    assert "Canvas worker target exit: 0" in result.stdout
+    assert "full target contract" in result.stdout
+    assert "full target worker-contract" in result.stdout
+    assert not list(tmp_path.glob("canvas-targets.*"))
+
+
+@pytest.mark.parametrize("failed", ["contract", "worker-contract"])
+def test_full_target_failure_is_not_masked_by_other_target(shell_case, tmp_path, failed):
+    result, calls = shell_case(failure=f"{failed}-full")
+    assert result.returncode != 0
+    full = [call for call in calls if "--test-threads=4" in call]
+    assert {call[1] for call in full} == {"contract", "worker-contract"}
+    assert "Canvas composition target exit:" in result.stdout
+    assert "Canvas worker target exit:" in result.stdout
+    assert "full target contract" in result.stdout
+    assert "full target worker-contract" in result.stdout
+    assert not list(tmp_path.glob("canvas-targets.*"))
 
 
 @pytest.mark.parametrize("evidence", ["missing", "wrong", "malformed"])
