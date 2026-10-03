@@ -237,6 +237,10 @@ Core #348's first preflight failed because the existing temporary OB2 policy exp
 
 At `188b368`, all applicable PR checks passed, including affected Rust tests, preflight, security, CodeQL, and the final CI gate. The PR entered the required merge queue at position 1 on 2026-10-03 05:19:34 UTC. Merge-queue run [37099476951](https://github.com/ElevenID/marty-core/actions/runs/37099476951) passed and #348 merged as `466278aa01ae6e5c2b13b573265fa77c58758455`. Its Windows platform job ran 19m10s (05:22:11–05:41:21 UTC), longer than the 14m29s preflight; avoid assuming a preflight split is the next critical-path fix.
 
+### Optional Rust lint cache incident
+
+UI #1060's Rust Lint and Packaging job failed before compilation because the GitHub-backed `sccache` backend could not resolve its storage host; the unchanged mandatory lint command did not run. This is an infrastructure/cache dependency, not a source failure or evidence that lint should be optional. UI [#1061](https://github.com/ElevenID/marty-ui/pull/1061) adds a pinned-toolchain compiler probe and clears `RUSTC_WRAPPER` only if that probe fails, then retains formatting, metadata, full-workspace Clippy, and packaging checks. All 97 workflow-policy tests and Ruff pass locally; an independent reviewer found no blocker. Full PR CI is pending, so there is not yet evidence that it fixes this failure in GitHub. A backend failure after a successful probe is a known limitation.
+
 ## Goal completion criteria
 
 - Accepted changes are reviewed, validated, and merged; each queue item has a documented final disposition.
