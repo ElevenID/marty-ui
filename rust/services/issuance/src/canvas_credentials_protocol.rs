@@ -1,8 +1,7 @@
 //! Shared protocol primitives, without conflating validation and delivery policy.
 use crate::canvas_response_text::{response_text, CanvasResponseTextError};
 use crate::lossless_json::{LosslessJson, LosslessObject};
-#[path = "canvas_response_json.rs"]
-pub(crate) mod response_json;
+pub(crate) use marty_response_compat::canvas_response_json as response_json;
 use url::Url;
 
 pub(crate) const DEFAULT_API_BASE_URL: &str = "https://api.badgr.io";

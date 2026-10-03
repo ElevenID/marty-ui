@@ -38,7 +38,7 @@ impl From<String> for PythonText {
 }
 
 impl PythonText {
-    pub(crate) fn push(&mut self, value: u32) -> Result<(), InvalidCodepoint> {
+    pub fn push(&mut self, value: u32) -> Result<(), InvalidCodepoint> {
         if value > 0x10ffff {
             return Err(InvalidCodepoint(value));
         }
@@ -57,7 +57,7 @@ impl PythonText {
         Ok(())
     }
 
-    pub(crate) fn from_codepoints(
+    pub fn from_codepoints(
         values: impl IntoIterator<Item = u32>,
     ) -> Result<Self, InvalidCodepoint> {
         let mut result = Self::default();
@@ -71,7 +71,7 @@ impl PythonText {
     /// finish decoding and observe decoder errors before truncating this text.
     /// Ordinary scalar input keeps the String
     /// fast path; allocating a codepoint vector is necessary only for surrogates.
-    pub(crate) fn excerpt(
+    pub fn excerpt(
         values: impl IntoIterator<Item = u32>,
         limit: usize,
     ) -> Result<Self, InvalidCodepoint> {
@@ -85,7 +85,7 @@ impl PythonText {
 
     /// Conversion is explicit and returns the original lossless value on
     /// failure. Callers cannot accidentally persist replacement characters.
-    pub(crate) fn into_scalar(self) -> Result<String, Self> {
+    pub fn into_scalar(self) -> Result<String, Self> {
         match self {
             Self(Repr::Scalar(text)) => Ok(text),
             other => Err(other),
