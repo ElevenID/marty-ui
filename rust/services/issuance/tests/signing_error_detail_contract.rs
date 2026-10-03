@@ -4,9 +4,7 @@
 //! remain separate integration gates. The shared borrowed view uses the real
 //! library JsonTree type; these 45 scalar vectors still invoke the same pure API,
 //! not HTTP/signing adapters or a replacement parser.
-use marty_issuance_service::lossless_json_tree;
-#[path = "../src/python_value.rs"]
-mod python_value;
+use marty_response_compat::python_value;
 #[path = "../src/signing_error_detail.rs"]
 mod signing_error_detail;
 
