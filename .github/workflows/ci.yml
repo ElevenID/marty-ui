@@ -2261,19 +2261,90 @@ jobs:
       actions: read
       contents: read
     env:
-      RESULTS: ${{ join(needs.*.result, ' ') }}
+      CI_LANE_RESULTS: ${{ join(needs.*.result, ' ') }}
+      UI_SELECTED: ${{ needs.changes.outputs.ui }}
+      PYTHON_SELECTED: ${{ needs.changes.outputs.python }}
+      RUST_SELECTED: ${{ needs.changes.outputs.rust }}
+      RELEASE_SELECTED: ${{ needs.changes.outputs.release }}
+      VERIFICATION_SELECTED: ${{ needs.changes.outputs.verification }}
+      SECURITY_SELECTED: ${{ needs.changes.outputs.security }}
+      CHANGES_RESULT: ${{ needs.changes.result }}
+      LINT_RESULT: ${{ needs.lint.result }}
+      FAST_FEEDBACK_RESULT: ${{ needs.fast-feedback.result }}
+      CRAWLER_ARTIFACTS_RESULT: ${{ needs.test-ui-crawler-artifacts.result }}
+      CRAWLER_NGINX_RESULT: ${{ needs.test-ui-crawler-nginx.result }}
+      UI_RESULT: ${{ needs.test-ui.result }}
+      SERVICES_RESULT: ${{ needs.test-services.result }}
+      PASSPORT_FENCE_RESULT: ${{ needs.test-passport-fence-postgres.result }}
+      RUST_FEATURE_RESULT: ${{ needs.test-rust-feature-probe.result }}
+      RUST_PASSPORT_RESULT: ${{ needs.test-rust-passport-image.result }}
+      RUST_SERVICES_RESULT: ${{ needs.test-rust-services.result }}
+      RUST_LINT_RESULT: ${{ needs.rust-lint-policy.result }}
+      RUST_IMAGES_RESULT: ${{ needs.test-rust-service-images.result }}
+      PUBLIC_PROTOCOL_RESULT: ${{ needs.public-protocol-contract.result }}
+      RELEASE_CONTRACTS_RESULT: ${{ needs.test-release-contracts.result }}
+      LIFECYCLE_BROWSER_RESULT: ${{ needs.test-credential-lifecycle-browser.result }}
+      SECURITY_RESULT: ${{ needs.security.result }}
+      RUST_SUPPLY_RESULT: ${{ needs.rust-supply-chain.result }}
     steps:
       - name: Require every CI lane
         shell: bash
         run: |
           set -euo pipefail
-          for result in $RESULTS; do
-            if [[ "${{ github.event_name }}" == merge_group ]]; then
-              test "$result" = success
-            else
-              [[ "$result" == success || "$result" == skipped ]]
+          # Keep the explicit map in sync with ci-gate.needs. An added or
+          # removed dependency must update the planned-result policy too.
+          read -r -a results <<< "$CI_LANE_RESULTS"
+          [[ "${#results[@]}" -eq 18 ]]
+          require_result() {
+            local name="$1" actual="$2" expected="$3"
+            if [[ "$actual" != "$expected" ]]; then
+              echo "Unexpected $name result: $actual (expected $expected)" >&2
+              return 1
             fi
+          }
+          require_selected() {
+            local name="$1" actual="$2" selected="$3"
+            case "$selected" in
+              true) require_result "$name" "$actual" success ;;
+              false) require_result "$name" "$actual" skipped ;;
+              *) echo "Missing or invalid selection for $name" >&2; return 1 ;;
+            esac
+          }
+          for selected in "$UI_SELECTED" "$PYTHON_SELECTED" "$RUST_SELECTED" "$RELEASE_SELECTED" "$VERIFICATION_SELECTED" "$SECURITY_SELECTED"; do
+            [[ "$selected" == true || "$selected" == false ]]
           done
+          if [[ "${{ github.event_name }}" == merge_group ]]; then
+            for result in "${results[@]}"; do
+              [[ "$result" == success ]]
+            done
+          else
+            require_result changes "$CHANGES_RESULT" success
+            require_result lint "$LINT_RESULT" success
+            require_selected fast-feedback "$FAST_FEEDBACK_RESULT" "$UI_SELECTED"
+            require_selected test-ui-crawler-artifacts "$CRAWLER_ARTIFACTS_RESULT" "$UI_SELECTED"
+            require_selected test-ui-crawler-nginx "$CRAWLER_NGINX_RESULT" "$UI_SELECTED"
+            require_selected test-ui "$UI_RESULT" "$UI_SELECTED"
+            require_selected test-credential-lifecycle-browser "$LIFECYCLE_BROWSER_RESULT" "$UI_SELECTED"
+            require_selected test-services "$SERVICES_RESULT" "$PYTHON_SELECTED"
+            require_selected test-passport-fence-postgres "$PASSPORT_FENCE_RESULT" "$RUST_SELECTED"
+            require_selected test-rust-feature-probe "$RUST_FEATURE_RESULT" "$RUST_SELECTED"
+            require_selected test-rust-passport-image "$RUST_PASSPORT_RESULT" "$RUST_SELECTED"
+            require_selected test-rust-services "$RUST_SERVICES_RESULT" "$RUST_SELECTED"
+            require_selected rust-lint-policy "$RUST_LINT_RESULT" "$RUST_SELECTED"
+            require_selected test-rust-service-images "$RUST_IMAGES_RESULT" "$RUST_SELECTED"
+            require_selected rust-supply-chain "$RUST_SUPPLY_RESULT" "$RUST_SELECTED"
+            public_selected=false
+            if [[ "$UI_SELECTED" == true || "$PYTHON_SELECTED" == true || "$RUST_SELECTED" == true || "$RELEASE_SELECTED" == true ]]; then
+              public_selected=true
+            fi
+            require_selected public-protocol-contract "$PUBLIC_PROTOCOL_RESULT" "$public_selected"
+            release_selected=false
+            if [[ "$RELEASE_SELECTED" == true || "$VERIFICATION_SELECTED" == true || "$RUST_SELECTED" == true ]]; then
+              release_selected=true
+            fi
+            require_selected test-release-contracts "$RELEASE_CONTRACTS_RESULT" "$release_selected"
+            require_selected security "$SECURITY_RESULT" "$SECURITY_SELECTED"
+          fi
       - name: Summarize CI performance
         uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3
         with:
