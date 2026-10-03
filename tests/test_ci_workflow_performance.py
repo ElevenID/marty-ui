@@ -168,7 +168,9 @@ def _assert_python_service_job_preserves_full_suite(document) -> None:
         step for step in rust["steps"] if step.get("name") == chain_step_name
     )["run"]
     assert "--test passport_managed_kms_chain" in managed_chain
-    assert "-p marty-service-acceptance --test passport_managed_kms_chain" in managed_chain
+    assert (
+        "-p marty-service-acceptance --test passport_managed_kms_chain" in managed_chain
+    )
     assert '-- --list | grep -Fx "$chain_test: test"' in managed_chain
     assert '"$chain_test" -- --ignored --exact' in managed_chain
     chain_test_name = (
@@ -308,9 +310,9 @@ def test_independent_rust_lanes_remain_required_without_transferring_builds() ->
         "Verify frozen Rust feature-regression probe"
     }
     passport_names = [step.get("name") for step in passport["steps"]]
-    assert passport_names.index("Build opt-in passport test-mode image") < passport_names.index(
-        "Verify opt-in passport test-mode image boundary"
-    )
+    assert passport_names.index(
+        "Build opt-in passport test-mode image"
+    ) < passport_names.index("Verify opt-in passport test-mode image boundary")
     assert "Build public selfhost image" in service_names
     for job in (probe, passport):
         assert not any(
@@ -366,9 +368,11 @@ def test_rust_matrix_keeps_canvas_state_local_and_contracts_parallel() -> None:
     assert "MARTY_BASE_COMPOSE_BINARY=%s" in renderer["run"]
     assert "MARTY_SELFHOST_BUNDLE_TEST_COMPOSE=%s" in renderer["run"]
     names = [step.get("name") for step in job["steps"]]
-    assert names.index("Compile reusable Rust test executables") < names.index(
-        "Prepare pinned standalone Compose renderer for Rust contracts"
-    ) < names.index("Run safe Rust contract groups concurrently")
+    assert (
+        names.index("Compile reusable Rust test executables")
+        < names.index("Prepare pinned standalone Compose renderer for Rust contracts")
+        < names.index("Run safe Rust contract groups concurrently")
+    )
     for name in (
         "Compile reusable Rust test executables",
         "Prepare database contract executables",
@@ -569,7 +573,8 @@ def test_published_canvas_schema_gate_is_explicit_and_mandatory() -> None:
     assert 'export MARTY_CANVAS_PUBLISHED_SCHEMA_TEST="1"' in published
     assert "canvas-worker-consumer-range-oracle.json" in published
     assert "canvas_published_schema_contract" in published
-    assert '"${executables[0]}" --list' in published
+    assert 'composition_tests=$("$composition_executable" --list)' in published
+    assert 'worker_tests=$("$worker_executable" --list)' in published
     assert "grep -Fx 'heartbeat_readiness_matches_published_python: test'" in published
     assert "grep -Fx 'operations_match_frozen_published_python: test'" in published
     assert (
@@ -859,14 +864,21 @@ def test_published_canvas_schema_gate_is_explicit_and_mandatory() -> None:
         in published
     )
     assert published.rstrip().endswith(
-        '"${executables[0]}" --skip "$serial_test" "${preflight_skips[@]}" --nocapture --test-threads=4'
+        '"$worker_executable" --skip "$serial_test" "${preflight_skips[@]}" --nocapture --test-threads=4'
     )
     assert (
-        '"${executables[0]}" "$serial_test" --exact --nocapture --test-threads=1'
+        published.splitlines().count(
+            '"$composition_executable" --nocapture --test-threads=4'
+        )
+        == 1
+    )
+    assert (
+        '"$worker_executable" "$serial_test" --exact --nocapture --test-threads=1'
         in published
     )
-    assert '"${executables[0]}" --nocapture --test-threads=1' not in published
-    assert "[[ ${#executables[@]} == 1" in published
+    assert '"$composition_executable" --nocapture --test-threads=1' not in published
+    assert '"$composition_executable" --nocapture --test-threads=4' in published
+    assert '[[ ${#matches[@]} == 1 && -x "${matches[0]}" ]]' in published
 
 
 def test_native_canvas_socket_timeout_gate_is_explicit_and_mandatory() -> None:
@@ -910,11 +922,17 @@ def _assert_gateway_operations_registration(
     published: str, source: str, registration
 ) -> None:
     name, module, database, connections, message = registration
-    inventory = f"\"${{executables[0]}}\" --list | grep -Fx '{name}: test'"
+    inventory = f"printf '%s\\n' \"$all_test_names\" | grep -Fx '{name}: test'"
     assert published.splitlines().count(inventory) == 1
     assert 'export MARTY_CANVAS_PUBLISHED_SCHEMA_TEST="1"' in published
     assert published.rstrip().endswith(
-        '"${executables[0]}" --skip "$serial_test" "${preflight_skips[@]}" --nocapture --test-threads=4'
+        '"$worker_executable" --skip "$serial_test" "${preflight_skips[@]}" --nocapture --test-threads=4'
+    )
+    assert (
+        published.splitlines().count(
+            '"$composition_executable" --nocapture --test-threads=4'
+        )
+        == 1
     )
     assert (f'#[path = "support/{module}.rs"]\nmod {module};') in source
     matches = re.findall(
@@ -976,6 +994,7 @@ def test_gateway_operations_candidate_is_required_and_not_dormant(registration) 
         "timeout",
         "disabled-schema",
         "filtered-full-run",
+        "filtered-composition-run",
     ],
 )
 @pytest.mark.parametrize("registration", GATEWAY_REGISTRATIONS)
@@ -1007,8 +1026,13 @@ def test_gateway_operations_registration_rejects_disabled_or_incomplete_gate(
         )
     elif mutation == "filtered-full-run":
         published = published.replace(
-            '"${executables[0]}" --skip "$serial_test" "${preflight_skips[@]}" --nocapture --test-threads=4',
-            '"${executables[0]}" unrelated_filter --skip "$serial_test" "${preflight_skips[@]}" --nocapture --test-threads=4',
+            '"$worker_executable" --skip "$serial_test" "${preflight_skips[@]}" --nocapture --test-threads=4',
+            '"$worker_executable" unrelated_filter --skip "$serial_test" "${preflight_skips[@]}" --nocapture --test-threads=4',
+        )
+    elif mutation == "filtered-composition-run":
+        published = published.replace(
+            '"$composition_executable" --nocapture --test-threads=4',
+            '"$composition_executable" unrelated_filter --nocapture --test-threads=4',
         )
     else:
         start = source.index(f"async fn {name}")
@@ -1534,7 +1558,9 @@ def test_image_context_excludes_integration_tests_but_keeps_build_inputs() -> No
 
 
 @pytest.mark.parametrize("package", ["services/issuance", "crates/service-acceptance"])
-def test_every_issuance_and_acceptance_integration_test_remains_registered(package) -> None:
+def test_every_issuance_and_acceptance_integration_test_remains_registered(
+    package,
+) -> None:
     directory = ROOT / "rust" / package
     manifest = tomllib.loads((directory / "Cargo.toml").read_text(encoding="utf-8"))
     assert manifest["package"]["autotests"] is False
@@ -1544,17 +1570,21 @@ def test_every_issuance_and_acceptance_integration_test_remains_registered(packa
     harness_path = directory / "tests/behavior_suite.rs"
     harness = harness_path.read_text(encoding="utf-8") if harness_path.exists() else ""
     grouped = re.findall(r'#\[path = "([^"]+)"\]', harness)
-    assert set(grouped) == ({
-        "canvas_lti_tool_signing_behavior.rs",
-        "canvas_management_contract.rs",
-        "canvas_mirror_native_behavior.rs",
-        "canvas_publication_behavior.rs",
-        "canvas_sync_worker_behavior.rs",
-        "canvas_sync_worker_configuration_oracle.rs",
-        "canvas_worker_result_oracle.rs",
-        "issued_credential_adapter_behavior.rs",
-        "proof_nonce_behavior.rs",
-    } if package == "services/issuance" else set())
+    assert set(grouped) == (
+        {
+            "canvas_lti_tool_signing_behavior.rs",
+            "canvas_management_contract.rs",
+            "canvas_mirror_native_behavior.rs",
+            "canvas_publication_behavior.rs",
+            "canvas_sync_worker_behavior.rs",
+            "canvas_sync_worker_configuration_oracle.rs",
+            "canvas_worker_result_oracle.rs",
+            "issued_credential_adapter_behavior.rs",
+            "proof_nonce_behavior.rs",
+        }
+        if package == "services/issuance"
+        else set()
+    )
     registered.extend(f"tests/{name}" for name in grouped)
     actual = {
         path.relative_to(directory).as_posix()
@@ -1569,7 +1599,9 @@ def test_every_issuance_and_acceptance_integration_test_remains_registered(packa
     )
 
 
-def test_service_acceptance_keeps_composition_dependencies_out_of_service_builds() -> None:
+def test_service_acceptance_keeps_composition_dependencies_out_of_service_builds() -> (
+    None
+):
     directory = ROOT / "rust/crates/service-acceptance"
     acceptance = tomllib.loads((directory / "Cargo.toml").read_text(encoding="utf-8"))
     issuance = tomllib.loads(

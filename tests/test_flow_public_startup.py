@@ -1,4 +1,5 @@
 """Mandatory actual-main registration; no executable/runtime dependencies here."""
+
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -6,7 +7,9 @@ NAME = "flow_actual_main_boots_rendered_base_and_preserves_public_admission"
 
 
 def test_public_flow_main_gate_is_registered_and_required():
-    target = (ROOT / "rust/services/issuance/tests/canvas_published_schema_contract.rs").read_text()
+    target = (
+        ROOT / "rust/services/issuance/tests/canvas_published_schema_contract.rs"
+    ).read_text()
     assert f"async fn {NAME}()" in target
     body = target.split(f"async fn {NAME}()", 1)[1].split("\n}", 1)[0]
     assert "PublishedDatabase::start()" in body
@@ -14,15 +17,17 @@ def test_public_flow_main_gate_is_registered_and_required():
     assert "run_flow_public_startup(&owned.url, redis.url())" in body
     script = (ROOT / "scripts/ci/run-published-canvas-contracts.sh").read_text()
     assert f"grep -Fx '{NAME}: test'" in script
-    assert 'preflight_skips=()' in script
+    assert "preflight_skips=()" in script
     assert 'if [[ "$mode" == full-after-preflights ]]; then' in script
-    assert '"${executables[0]}" --skip "$serial_test" "${preflight_skips[@]}" --nocapture --test-threads=4' in script
+    assert '"$composition_executable" --nocapture --test-threads=4' in script
     workflow = (ROOT / ".github/workflows/ci.yml").read_text()
     assert "test -x rust/target/debug/marty-flow" in workflow
 
 
 def test_public_flow_gate_uses_real_main_and_retains_historical_gates():
-    helper = (ROOT / "rust/services/issuance/tests/support/flow_public_startup.rs").read_text()
+    helper = (
+        ROOT / "rust/services/issuance/tests/support/flow_public_startup.rs"
+    ).read_text()
     assert '"marty-flow.exe"' in helper and '"marty-flow"' in helper
     assert ".env_clear()" in helper
     assert "migrate_flow_schema" not in helper
