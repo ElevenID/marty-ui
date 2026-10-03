@@ -29,6 +29,17 @@ mod canvas_worker_lease_expiry_replay;
 #[path = "support/canvas_published_borrowed_database.rs"]
 mod canvas_published_borrowed_database;
 
+#[test]
+fn worker_repository_root_is_independent_of_cargo_package_depth() {
+    let root = canvas_published_database::repository_root();
+    for package in ["rust/services/issuance", "rust/crates/service-acceptance"] {
+        assert_eq!(
+            canvas_published_database::repository_root_from(&root.join(package)),
+            Some(root.as_path()),
+        );
+    }
+}
+
 #[tokio::test]
 async fn worker_deadline_matches_frozen_published_process() {
     assert_borrowed_worker_cases(
@@ -854,10 +865,7 @@ fn assert_native_oauth_revocation_matrix(kind: &str) {
         eprintln!("Mandatory hosted Linux gate runs native OAuth revocation replay");
         return;
     }
-    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-        .ancestors()
-        .nth(3)
-        .unwrap();
+    let root = canvas_published_database::repository_root();
     let output = std::process::Command::new("python3")
         .arg(root.join("scripts/test_canvas_worker_oauth_revocation_https.py"))
         .arg(std::env::current_exe().unwrap())
@@ -1014,10 +1022,7 @@ fn assert_worker_https_script_with_environment(
         eprintln!("Actual active-provider signal qualification requires the mandatory Linux gate");
         return;
     }
-    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-        .ancestors()
-        .nth(3)
-        .unwrap();
+    let root = canvas_published_database::repository_root();
     let output = std::process::Command::new("python3")
         .arg(root.join("scripts").join(script))
         .arg(std::env::current_exe().unwrap())
@@ -1154,10 +1159,7 @@ fn assert_worker_https(scenario: &str) {
         eprintln!("Actual native HTTPS worker qualification requires the mandatory Linux gate");
         return;
     }
-    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-        .ancestors()
-        .nth(3)
-        .unwrap();
+    let root = canvas_published_database::repository_root();
     let output = std::process::Command::new("python3")
         .arg(root.join("scripts/test_canvas_worker_rest_https.py"))
         .arg(std::env::current_exe().unwrap())
@@ -1684,6 +1686,31 @@ async fn worker_retry_reference_matches_published_process() {
 #[allow(dead_code)]
 #[path = "support/canvas_worker_process_signals.rs"]
 mod canvas_worker_process_signals;
+
+#[test]
+fn worker_binary_handoff_requires_an_absolute_path_and_keeps_cargo_default() {
+    let explicit = std::env::temp_dir().join("canvas-worker-test-binary");
+    let fallback = std::env::temp_dir().join("cargo-worker-binary");
+    let fallback_text = fallback.to_str().unwrap();
+    assert_eq!(
+        canvas_worker_process_signals::worker_executable_from(
+            Some(explicit.clone().into_os_string()),
+            Some(fallback_text),
+        ),
+        explicit,
+    );
+    assert_eq!(
+        canvas_worker_process_signals::worker_executable_from(None, Some(fallback_text)),
+        fallback,
+    );
+    assert!(std::panic::catch_unwind(|| {
+        canvas_worker_process_signals::worker_executable_from(
+            Some("relative-worker".into()),
+            Some(fallback_text),
+        )
+    })
+    .is_err());
+}
 #[path = "support/canvas_worker_startup_replay.rs"]
 mod canvas_worker_startup_replay;
 
