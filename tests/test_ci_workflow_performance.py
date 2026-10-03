@@ -290,6 +290,27 @@ def test_pull_request_classifier_is_conservative_and_merge_queue_is_complete() -
     assert 'test "$result" = success' in source
 
 
+def test_ci_gate_keeps_required_lanes_strict_when_optional_telemetry_fails() -> None:
+    _, document = _workflow(CI_PATH)
+    gate = document["jobs"]["ci-gate"]
+    assert not gate.get("continue-on-error", False)
+    assert [step["name"] for step in gate["steps"]] == [
+        "Require every CI lane",
+        "Summarize CI performance",
+    ]
+    required, telemetry = gate["steps"]
+    assert not required.get("continue-on-error", False)
+    assert 'test "$result" = success' in required["run"]
+    assert '[[ "$result" == success || "$result" == skipped ]]' in required["run"]
+    assert telemetry["continue-on-error"] is True
+    script = telemetry["with"]["script"]
+    assert "[502, 503, 504]" in script
+    assert "attempt <= 3" in script
+    assert "attempt === 3" in script
+    assert "retryTransient('getWorkflowRun'" in script
+    assert "retryTransient('listJobsForWorkflowRun'" in script
+
+
 def test_independent_rust_lanes_remain_required_without_transferring_builds() -> None:
     _, document = _workflow(CI_PATH)
     jobs = document["jobs"]
