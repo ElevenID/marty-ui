@@ -198,51 +198,53 @@ def recover(
         expected = validate_baseline(baseline)
         require(docker_identity(runner) == baseline["docker"],
                 "docker_identity_changed")
-        observed = production_inventory_unchecked(runner)
-        require([item["id"] for item in observed] == [item["id"] for item in expected],
-                "production_container_set_changed")
-        for before, current in zip(expected, observed):
-            require(same_container(before, current),
-                "production_container_identity_changed")
-            if not before["was_running"]:
-                require(not current["was_running"],
-                        "historical_production_container_started")
-        for before, current in zip(expected, observed):
-            if before["was_running"] and not current["was_running"]:
-                # Recheck every production member immediately before mutation.
-                # A change to another container must not be hidden by a valid
-                # candidate container identity.
-                fresh_inventory = production_inventory_unchecked(runner)
-                require([item["id"] for item in fresh_inventory]
-                        == [item["id"] for item in expected]
-                        and all(same_container(prior, fresh)
-                                for prior, fresh in zip(expected, fresh_inventory))
-                        and all(not fresh["was_running"]
-                                for prior, fresh in zip(expected, fresh_inventory)
-                                if not prior["was_running"]),
-                        "production_identity_changed_before_start")
-                fresh = next(item for item in fresh_inventory
-                             if item["id"] == before["id"])
-                require(fresh == current and docker_identity(runner) == baseline["docker"],
-                        "production_identity_changed_before_start")
-                # A lost docker response can hide a successful start. Record the
-                # attempted mutation before invoking it and never claim continuity.
-                result["continuity_breached"] = True
-                result.setdefault("restart_attempted_container_ids", []).append(before["id"])
-                runner(["docker", "start", before["id"]])
-                restarted.append(before["id"])
         deadline = now() + timeout_seconds
-        while True:
+        attempted: set[str] = set()
+
+        def checked_inventory(*, prestart: bool = False) -> list[dict[str, Any]]:
             require(docker_identity(runner) == baseline["docker"],
                     "docker_identity_changed")
-            final = production_inventory_unchecked(runner)
-            require([item["id"] for item in final] == [item["id"] for item in expected]
-                    and all(same_container(before, current)
-                        for before, current in zip(expected, final)),
-                    "production_container_identity_changed")
-            require(all(not current["was_running"] for before, current in zip(expected, final)
-                        if not before["was_running"]),
-                    "historical_production_container_started")
+            current_inventory = production_inventory_unchecked(runner)
+            require([item["id"] for item in current_inventory]
+                    == [item["id"] for item in expected],
+                    "production_identity_changed_before_start" if prestart
+                    else "production_container_set_changed")
+            for before, current in zip(expected, current_inventory):
+                require(same_container(before, current),
+                        "production_identity_changed_before_start" if prestart
+                        else "production_container_identity_changed")
+                if not before["was_running"]:
+                    require(not current["was_running"],
+                            "production_identity_changed_before_start" if prestart
+                            else "historical_production_container_started")
+            return current_inventory
+
+        while True:
+            final = checked_inventory()
+            candidate = next((before for before, current in zip(expected, final)
+                              if before["was_running"] and not current["was_running"]
+                              and before["id"] not in attempted), None)
+            if candidate is not None:
+                # Recheck every production member immediately before mutation.
+                # A newly stopped member gets its own bounded start attempt on
+                # the next pass; a changed identity or daemon always blocks.
+                fresh_inventory = checked_inventory(prestart=True)
+                require(docker_identity(runner) == baseline["docker"],
+                        "docker_identity_changed")
+                if fresh_inventory != final:
+                    if now() >= deadline:
+                        raise RecoveryError("production_state_changed_before_start")
+                    sleep(2)
+                    continue
+                # A lost Docker reply can hide a successful start. Mark the
+                # attempt before invoking it and never claim continuity.
+                attempted.add(candidate["id"])
+                result["continuity_breached"] = True
+                result.setdefault("restart_attempted_container_ids", []).append(
+                    candidate["id"])
+                runner(["docker", "start", candidate["id"]])
+                restarted.append(candidate["id"])
+                continue
             try:
                 require(all(current["was_running"] for before, current in zip(expected, final)
                             if before["was_running"]), "production_container_not_running")

@@ -111,6 +111,48 @@ def test_restores_only_previously_running_stopped_identity() -> None:
     assert docker.records["e" * 64]["State"]["Running"] is False
 
 
+def test_restores_captured_production_member_stopped_during_recovery() -> None:
+    docker, baseline = captured()
+    gateway = "a" * 64
+    postgres = "b" * 64
+    docker.records[gateway]["State"].update(Running=False, Status="exited")
+
+    def cascading_stop(command: list[str]) -> str:
+        output = docker(command)
+        if command == ["docker", "start", gateway]:
+            docker.records[postgres]["State"].update(Running=False, Status="exited")
+        return output
+
+    result = recovery.recover(baseline, cascading_stop, public_ok, timeout_seconds=0)
+    assert result["verified"] is True
+    assert result["continuity_breached"] is True
+    assert result["restarted_container_ids"] == [gateway, postgres]
+    assert docker.started == [gateway, postgres]
+    assert docker.records[postgres]["State"]["Running"] is True
+    assert docker.records["e" * 64]["State"]["Running"] is False
+
+
+def test_recovery_attempts_each_captured_container_at_most_once() -> None:
+    docker, baseline = captured()
+    gateway = "a" * 64
+    postgres = "b" * 64
+    docker.records[gateway]["State"].update(Running=False, Status="exited")
+
+    def repeated_stop(command: list[str]) -> str:
+        output = docker(command)
+        if command == ["docker", "start", gateway]:
+            docker.records[postgres]["State"].update(Running=False, Status="exited")
+        elif command == ["docker", "start", postgres]:
+            docker.records[gateway]["State"].update(Running=False, Status="exited")
+        return output
+
+    result = recovery.recover(baseline, repeated_stop, public_ok, timeout_seconds=0)
+    assert result["verified"] is False
+    assert result["continuity_breached"] is True
+    assert docker.started == [gateway, postgres]
+    assert docker.records[gateway]["State"]["Running"] is False
+
+
 def test_changed_daemon_blocks_without_any_start() -> None:
     docker, baseline = captured()
     docker.records["a" * 64]["State"].update(Running=False, Status="exited")
