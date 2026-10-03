@@ -366,13 +366,20 @@ digests. The 2026-09-19 corpus SHA256 values were
 (expiry). Hosted exact regeneration remains pending; no parity claim is made.
 
 The 2026-10-03 provenance update additionally pins the imported loopback TLS
-helper in both corpora. Current hashes are
+helper in both corpora. Hashes immediately after that update were
 `7bdf8673cd5dd7a85cec93f9634918fb2cb3c56b768a628935ccc36bf78030f8`
 (46,618-byte body) and
 `340ed804d206a1bd057cee0369a91de7027b10c8c3da238af26c7def8b102181`
 (19,767-byte expiry). Exact reverse-migration checks preserve the earlier
 corpus hashes and all behavioral observations; hosted regeneration is still
 required.
+
+A diagnostic-only lease follow-up splits the post-join body-schedule and
+durable-observation assertions without changing either condition. The current
+19,767-byte expiry corpus hash is
+`335edce94ac67dc760d29cfa96092378393a42bc03466dce059e6f107f435fb7`;
+the sole change from the prior expiry corpus is its capture-script provenance
+hash. Exact published-process regeneration remains required.
 
 ## Historical 121-entry checkpoint
 

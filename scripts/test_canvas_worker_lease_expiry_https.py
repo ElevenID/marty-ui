@@ -27,9 +27,9 @@ import test_canvas_worker_timeout_https as header
 ROOT = Path(__file__).resolve().parents[1]
 CASE_NAMES = tuple(name for name, _ in reference.CASE_LAYOUT)
 # Publication added a default-identity handler hook to the shared HTTPS fixture.
-# Contract tests account exactly for the fixture and TLS-helper provenance
-# updates; hosted regeneration must still match the frozen bytes.
-CORPUS_SHA256 = "340ed804d206a1bd057cee0369a91de7027b10c8c3da238af26c7def8b102181"
+# Contract tests account exactly for fixture, TLS-helper, and diagnostic-only
+# script provenance updates; hosted regeneration must still match frozen bytes.
+CORPUS_SHA256 = "335edce94ac67dc760d29cfa96092378393a42bc03466dce059e6f107f435fb7"
 SCHEMA = "marty.canvas-worker-lease-expiry-native-observation/v1"
 STATUSES = frozenset(("leased", "succeeded", "retry", "dead_letter"))
 FIELDS = frozenset(

@@ -628,9 +628,12 @@ def run(case_name):
             fixture.close()
             stable()
             require(
-                assert_schedule(fixture, crosses_expiry=crosses_expiry) == chunks
-                and observe() == outcome,
-                "Joined lease-expiry handlers changed observation",
+                assert_schedule(fixture, crosses_expiry=crosses_expiry) == chunks,
+                "Joined lease-expiry handlers changed body schedule",
+            )
+            require(
+                observe() == outcome,
+                "Joined lease-expiry handlers changed durable observation",
             )
             require(
                 observed_log_profile(stdout, stderr, spec["token"]) == logs,
