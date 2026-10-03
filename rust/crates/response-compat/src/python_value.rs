@@ -22,7 +22,7 @@ fn semantics() -> &'static TextSemantics {
     })
 }
 
-pub(crate) fn strip(value: &str) -> &str {
+pub fn strip(value: &str) -> &str {
     value.trim_matches(|character: char| whitespace(character as u32))
 }
 
@@ -30,7 +30,7 @@ fn whitespace(point: u32) -> bool {
     semantics().whitespace.binary_search(&point).is_ok()
 }
 
-pub(crate) fn strip_points(points: &[u32]) -> &[u32] {
+pub fn strip_points(points: &[u32]) -> &[u32] {
     let start = points
         .iter()
         .position(|point| !whitespace(*point))
@@ -48,11 +48,11 @@ fn printable(point: u32) -> bool {
     ranges.get(index).is_some_and(|range| range[0] <= point)
 }
 
-pub(crate) fn python_truthy(value: &Value) -> bool {
+pub fn python_truthy(value: &Value) -> bool {
     value_truthy(value)
 }
 
-pub(crate) fn python_string(value: &Value) -> Option<String> {
+pub fn python_string(value: &Value) -> Option<String> {
     Some(match value {
         Value::String(value) => value.clone(),
         _ => representation_points(value)
@@ -64,12 +64,12 @@ pub(crate) fn python_string(value: &Value) -> Option<String> {
 
 /// Borrowed views keep the single formatter independent of a JSON storage
 /// model. Neither lossless callers nor scalar callers serialize/reparse JSON.
-pub(crate) trait PythonValueView: Copy {
+pub trait PythonValueView: Copy {
     fn view(self) -> PythonValueNode<Self>;
     fn truthy(self) -> bool;
 }
 
-pub(crate) enum PythonValueNode<V> {
+pub enum PythonValueNode<V> {
     Null,
     Bool(bool),
     Number { representation: String, zero: bool },
@@ -134,7 +134,7 @@ impl PythonValueView for &Value {
 }
 
 #[derive(Clone, Copy)]
-pub(crate) enum PythonJsonValue<'a> {
+pub enum PythonJsonValue<'a> {
     Scalar(&'a Value),
     Tree(&'a JsonTree, usize),
 }
@@ -180,7 +180,7 @@ impl PythonValueView for PythonJsonValue<'_> {
 }
 
 impl<'a> PythonJsonValue<'a> {
-    pub(crate) fn field(self, name: &str) -> Option<Self> {
+    pub fn field(self, name: &str) -> Option<Self> {
         match self {
             Self::Scalar(value) => value.as_object()?.get(name).map(Self::Scalar),
             Self::Tree(tree, id) => {
@@ -194,7 +194,7 @@ impl<'a> PythonJsonValue<'a> {
             }
         }
     }
-    pub(crate) fn first(self) -> Option<Self> {
+    pub fn first(self) -> Option<Self> {
         match self {
             Self::Scalar(value) => value.as_array()?.first().map(Self::Scalar),
             Self::Tree(tree, id) => {
@@ -205,13 +205,13 @@ impl<'a> PythonJsonValue<'a> {
             }
         }
     }
-    pub(crate) fn is_object(self) -> bool {
+    pub fn is_object(self) -> bool {
         match self {
             Self::Scalar(value) => value.is_object(),
             Self::Tree(tree, id) => matches!(tree.node(id), JsonNode::Object(_)),
         }
     }
-    pub(crate) fn string_points(self) -> Vec<u32> {
+    pub fn string_points(self) -> Vec<u32> {
         match self.view() {
             PythonValueNode::Text(value) => value,
             _ => representation_points(self),
@@ -219,11 +219,11 @@ impl<'a> PythonJsonValue<'a> {
     }
 }
 
-pub(crate) fn value_truthy(value: impl PythonValueView) -> bool {
+pub fn value_truthy(value: impl PythonValueView) -> bool {
     value.truthy()
 }
 
-pub(crate) fn representation_points<V: PythonValueView>(value: V) -> Vec<u32> {
+pub fn representation_points<V: PythonValueView>(value: V) -> Vec<u32> {
     enum Task<V> {
         Value(V),
         Text(Vec<u32>),
@@ -314,7 +314,7 @@ fn quoted_points(value: &[u32]) -> Vec<u32> {
 }
 
 // Also used by the canonical JSON owner, keeping exponent formatting DRY.
-pub(crate) fn number(value: &serde_json::Number) -> String {
+pub fn number(value: &serde_json::Number) -> String {
     let lexical = value.to_string();
     if !lexical.contains(['.', 'e', 'E']) {
         // Arbitrary-precision JSON integers must never pass through f64.
