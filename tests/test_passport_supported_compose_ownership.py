@@ -123,6 +123,8 @@ def fixture() -> tuple[dict, dict[tuple[str, ...], str]]:
     network_id = "e" * 64
     callback_network_name = PROJECT + "_callback_signing"
     callback_network_id = "f" * 64
+    ingress_network_name = PROJECT + "_ingress"
+    ingress_network_id = "a" * 64
     volume_names = [f"{PROJECT}_{name}" for name, _ in DATA.values()]
     record = {
         "schema": "marty.passport-supported-compose-ownership/v1",
@@ -135,7 +137,8 @@ def fixture() -> tuple[dict, dict[tuple[str, ...], str]]:
         "expires_at": (NOW + timedelta(minutes=55)).isoformat(),
         "disposable_root": str(ROOT),
         "containers": containers, "networks": {
-            network_name: network_id, callback_network_name: callback_network_id},
+            network_name: network_id, callback_network_name: callback_network_id,
+            ingress_network_name: ingress_network_id},
         "volumes": volume_names,
     }
     calls: dict[tuple[str, ...], str] = {
@@ -143,7 +146,7 @@ def fixture() -> tuple[dict, dict[tuple[str, ...], str]]:
             "\n".join(containers.values()),
         ("network", "ls", "-q", "--no-trunc", "--filter",
          f"label=com.docker.compose.project={PROJECT}"):
-            "\n".join((network_id, callback_network_id)),
+            "\n".join((network_id, callback_network_id, ingress_network_id)),
         ("volume", "ls", "-q", "--filter",
          f"label=com.docker.compose.project={PROJECT}"): "\n".join(volume_names),
     }
@@ -263,11 +266,14 @@ def fixture() -> tuple[dict, dict[tuple[str, ...], str]]:
                        support_env.get(service, {}))
         edge_binding = [{"HostIp": "127.0.0.1", "HostPort": "29876"}]
         primary_network = (callback_network_name if service == "passport-callback-signer"
-                           else network_name)
+                           else ingress_network_name if service == "edge" else network_name)
         attached_networks = {primary_network: {"NetworkID": (
-            callback_network_id if primary_network == callback_network_name else network_id)}}
+            callback_network_id if primary_network == callback_network_name else
+            ingress_network_id if primary_network == ingress_network_name else network_id)}}
         if service in {"openbao", "passport-beta-bureau"}:
             attached_networks[callback_network_name] = {"NetworkID": callback_network_id}
+        if service == "edge":
+            attached_networks[network_name] = {"NetworkID": network_id}
         calls[("container", "inspect", identifier)] = json.dumps([{
             "Id": identifier, "Name": f"/{PROJECT}-{service}-1",
             "HostConfig": {"NetworkMode": primary_network,
@@ -302,6 +308,11 @@ def fixture() -> tuple[dict, dict[tuple[str, ...], str]]:
         "Containers": {identifier: {} for service, identifier in containers.items()
                        if service in {"passport-callback-signer", "openbao",
                                       "passport-beta-bureau"}},
+    }])
+    calls[("network", "inspect", ingress_network_id)] = json.dumps([{
+        "Id": ingress_network_id, "Name": ingress_network_name,
+        "Driver": "bridge", "Internal": False, "Labels": LABELS,
+        "Containers": {containers["edge"]: {}},
     }])
     for volume_name in volume_names:
         calls[("volume", "inspect", volume_name)] = json.dumps([{
@@ -518,6 +529,20 @@ def test_exact_live_project_ownership_is_read_only_and_still_blocked() -> None:
             f"label=com.docker.compose.project={PROJECT}"] in observed
 
 
+@pytest.mark.parametrize("mutation", [
+    lambda item: item.update(Internal=True),
+    lambda item: item["Containers"].update({"f" * 64: {}}),
+])
+def test_ingress_is_external_bridge_with_edge_as_sole_member(mutation) -> None:
+    record, calls = fixture()
+    key = ("network", "inspect", "a" * 64)
+    item = json.loads(calls[key])
+    mutation(item[0])
+    calls[key] = json.dumps(item)
+    with pytest.raises(OwnershipError, match="isolation|unowned member"):
+        run(record, calls)
+
+
 @pytest.mark.parametrize("service,mutation,match", [
     ("passport-callback-signer",
      lambda item: item["NetworkSettings"]["Networks"].update({
@@ -532,6 +557,10 @@ def test_exact_live_project_ownership_is_read_only_and_still_blocked() -> None:
     ("passport-callback-signer",
      lambda item: item["HostConfig"].update(
          NetworkMode=PROJECT + "_private"), "network mode"),
+    ("edge", lambda item: item["NetworkSettings"]["Networks"].pop(
+        PROJECT + "_ingress"), "network attachments"),
+    ("gateway", lambda item: item["NetworkSettings"]["Networks"].update({
+        PROJECT + "_ingress": {"NetworkID": "a" * 64}}), "network attachments"),
 ])
 def test_runtime_network_membership_matches_rust_model(
     service: str, mutation, match: str,

@@ -24,13 +24,15 @@ from services.passport_disposable_identity import managed_key_reference
 
 if __package__:
     from .passport_supported_provisioning_producer import (
-        INFRA_WORKFLOW_REF, PROJECT, ProducerError, _remove_staged_inputs, _write_private,
+        DISPOSABLE_NETWORKS, INFRA_WORKFLOW_REF, PROJECT, ProducerError,
+        _remove_staged_inputs, _write_private,
         destroy_partial_disposable_project, stage_disposable_inputs,
         verify_plan_release, verify_pre_mutation,
     )
 else:
     from passport_supported_provisioning_producer import (
-        INFRA_WORKFLOW_REF, PROJECT, ProducerError, _remove_staged_inputs, _write_private,
+        DISPOSABLE_NETWORKS, INFRA_WORKFLOW_REF, PROJECT, ProducerError,
+        _remove_staged_inputs, _write_private,
         destroy_partial_disposable_project, stage_disposable_inputs,
         verify_plan_release, verify_pre_mutation,
     )
@@ -167,7 +169,7 @@ def _require_empty_project(project: str, inspector: Callable[[list[str]], str]) 
     ):
         if inspector(args).split():
             raise ProducerError("Disposable project already has live resources")
-    for suffix in ("private", "callback_signing"):
+    for suffix in DISPOSABLE_NETWORKS:
         if inspector(["network", "ls", "-q", "--filter",
                       f"name=^{project}_{suffix}$"]).split():
             raise ProducerError("Disposable network name is already occupied")

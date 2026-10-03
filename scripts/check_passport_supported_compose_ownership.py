@@ -18,12 +18,14 @@ from typing import Callable
 
 if __package__:
     from .check_passport_supported_rust_model import (
-        DISPOSABLE_SERVICES, PROJECT, RUST_DEPENDENCIES, SELECTED,
+        DISPOSABLE_NETWORKS, DISPOSABLE_SERVICES, INGRESS_NETWORK, PROJECT,
+        RUST_DEPENDENCIES, SELECTED,
     )
     from .passport_supported_infra_images import ROLES
 else:
     from check_passport_supported_rust_model import (
-        DISPOSABLE_SERVICES, PROJECT, RUST_DEPENDENCIES, SELECTED,
+        DISPOSABLE_NETWORKS, DISPOSABLE_SERVICES, INGRESS_NETWORK, PROJECT,
+        RUST_DEPENDENCIES, SELECTED,
     )
     from passport_supported_infra_images import ROLES
 
@@ -467,7 +469,7 @@ def verify(record: dict, surface: str, now: datetime,
     require(set(containers) == DISPOSABLE_SERVICES
             and all(re.fullmatch(r"[a-z][a-z0-9-]+", name) for name in containers),
             "Disposable service ownership is incomplete")
-    require(set(networks) == {project + "_private", project + "_callback_signing"},
+    require(set(networks) == {f"{project}_{name}" for name in DISPOSABLE_NETWORKS},
             "Disposable network identity escapes the project")
     disposable_root = Path(record.get("disposable_root", ""))
     require(disposable_root.is_absolute()
@@ -588,9 +590,14 @@ def verify(record: dict, surface: str, now: datetime,
         expected_attached = {expected_mode}
         if service in {"openbao", "passport-beta-bureau"}:
             expected_attached.add(project + "_callback_signing")
+        if service == "edge":
+            expected_attached.add(project + "_ingress")
         host_config = item.get("HostConfig")
+        expected_modes = (expected_attached if service in {
+            "edge", "openbao", "passport-beta-bureau"
+        } else {expected_mode})
         require(isinstance(host_config, dict)
-                and host_config.get("NetworkMode") == expected_mode,
+                and host_config.get("NetworkMode") in expected_modes,
                 "Disposable container network mode differs from Rust model")
         require(set(attached) == expected_attached
                 or (completed_init and not attached),
@@ -632,13 +639,16 @@ def verify(record: dict, surface: str, now: datetime,
         item = _inspect("network", identifier, runner)
         require(item.get("Id") == identifier and item.get("Name") == name
                 and item.get("Driver") == "bridge"
-                and item.get("Internal") is True,
+                and item.get("Internal") is (name != f"{project}_{INGRESS_NETWORK}"),
                 "Disposable network identity or isolation changed")
         _labels(item.get("Labels"), record, project)
         members = item.get("Containers", {})
+        allowed_members = (expected_network_members[name] if name ==
+                           f"{project}_{INGRESS_NETWORK}" else
+                           expected_network_members[name] | completed_init_ids)
         require(isinstance(members, dict)
                 and expected_network_members[name] <= set(members)
-                and set(members) <= expected_network_members[name] | completed_init_ids,
+                and set(members) <= allowed_members,
                 "Disposable network has an unowned member")
     for name in volumes:
         item = _inspect("volume", name, runner)

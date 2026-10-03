@@ -104,7 +104,7 @@ def safe_model(root: Path) -> dict:
     })
     services["edge"] = {
         "image": qualified_images(verify_registry=False)["edge"],
-        "networks": ["private"],
+        "networks": ["private", "ingress"],
         "ports": [{"host_ip": "127.0.0.1", "published": "29876", "target": 8443}],
         "depends_on": {"gateway": {"condition": "service_started"}},
         "configs": [{"source": "passport_supported_edge",
@@ -397,6 +397,8 @@ def safe_model(root: Path) -> dict:
                             "internal": True, "labels": LABELS},
                 "callback_signing": {"name": PROJECT + "_callback_signing",
                                      "internal": True, "labels": LABELS},
+                "ingress": {"name": PROJECT + "_ingress",
+                            "internal": False, "labels": LABELS},
             },
             "volumes": {name: {"name": PROJECT + "_" + name, "labels": LABELS}
                         for name in ("postgres_data", "redis_data", "openbao_data",
@@ -441,6 +443,23 @@ def test_isolated_resolved_compose_model_passes_only_static_preflight(
     report = validate_model(safe_model(tmp_path), PROJECT, IMAGE, tmp_path)
     assert report["model_safe"] is True
     assert "issuance" not in report["services"]
+
+
+@pytest.mark.parametrize("change,match", [
+    (lambda model: model["networks"]["ingress"].update(internal=True),
+     "network is external or shared"),
+    (lambda model: model["services"]["gateway"].update(
+        networks=["private", "ingress"]), "callback signing boundary"),
+    (lambda model: model["services"]["edge"].update(
+        networks=["private"]), "callback signing boundary"),
+])
+def test_only_edge_joins_host_facing_ingress(
+    tmp_path: Path, change, match: str,
+) -> None:
+    model = safe_model(tmp_path)
+    change(model)
+    with pytest.raises(ModelPreflightError, match=match):
+        validate_model(model, PROJECT, IMAGE, tmp_path)
 
 
 @pytest.mark.parametrize("changed", [
