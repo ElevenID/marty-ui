@@ -5,8 +5,9 @@ use marty_revocation_profile::proto::{
 use serde_json::{json, Value};
 use sqlx::PgPool;
 use std::{
+    io::{Read, Seek, SeekFrom},
     net::TcpListener as StdTcpListener,
-    process::{Child, Command, Stdio},
+    process::{Child, Command, ExitStatus, Stdio},
     time::Duration,
 };
 use tokio::{
@@ -31,6 +32,8 @@ struct HttpResponse {
     body: Value,
 }
 
+const MAX_BIND_ATTEMPTS: usize = 3;
+
 #[tokio::test]
 #[ignore = "requires MARTY_TEST_POSTGRES_URL and MARTY_TEST_REDIS_URL"]
 async fn executable_serves_http_grpc_and_operational_contracts() {
@@ -45,29 +48,61 @@ async fn executable_serves_http_grpc_and_operational_contracts() {
         .collect();
     let (organization_target, organization_shutdown) =
         start_organization_server(true, permissions).await;
-    let http_port = available_port();
-    let grpc_port = available_port();
-    let mut child = ChildGuard(
-        Command::new(env!("CARGO_BIN_EXE_marty-revocation-profile"))
-            .env("ENVIRONMENT", "beta")
-            .env("DATABASE_URL", &database_url)
-            .env("REDIS_URL", &redis_url)
-            .env("ORG_GRPC_TARGET", &organization_target)
-            .env("GRPC_SERVICE_TOKEN", TOKEN)
-            .env_remove("GRPC_SERVICE_TOKEN_FILE")
-            .env("REVOCATION_PROFILE_SERVICE_PORT", http_port.to_string())
-            .env("RP_GRPC_PORT", grpc_port.to_string())
-            .env("RP_GRPC_ENABLED", "true")
-            .env("STATUS_LIST_BASE_URL", "https://status.contract.test")
-            .env("MARTY_RELEASE_VERSION", "runtime-contract")
-            .env("MARTY_UI_SHA", "runtime-contract-sha")
-            .stdout(Stdio::null())
-            .stderr(Stdio::inherit())
-            .spawn()
-            .expect("start revocation-profile executable"),
-    );
-
-    wait_for_http(http_port, &mut child.0).await;
+    let (http_port, grpc_port, child) = {
+        let mut started = None;
+        for attempt in 1..=MAX_BIND_ATTEMPTS {
+            let (http_port, grpc_port) = available_ports();
+            let mut stderr = tempfile::tempfile().expect("create private startup diagnostic");
+            let mut child = ChildGuard(
+                Command::new(env!("CARGO_BIN_EXE_marty-revocation-profile"))
+                    .env("ENVIRONMENT", "beta")
+                    .env("DATABASE_URL", &database_url)
+                    .env("REDIS_URL", &redis_url)
+                    .env("ORG_GRPC_TARGET", &organization_target)
+                    .env("GRPC_SERVICE_TOKEN", TOKEN)
+                    .env_remove("GRPC_SERVICE_TOKEN_FILE")
+                    .env("REVOCATION_PROFILE_SERVICE_PORT", http_port.to_string())
+                    .env("RP_GRPC_PORT", grpc_port.to_string())
+                    .env("RP_GRPC_ENABLED", "true")
+                    .env("STATUS_LIST_BASE_URL", "https://status.contract.test")
+                    .env("MARTY_RELEASE_VERSION", "runtime-contract")
+                    .env("MARTY_UI_SHA", "runtime-contract-sha")
+                    .stdout(Stdio::null())
+                    .stderr(
+                        stderr
+                            .try_clone()
+                            .expect("clone private startup diagnostic"),
+                    )
+                    .spawn()
+                    .expect("start revocation-profile executable"),
+            );
+            match wait_for_listeners(http_port, grpc_port, &mut child.0).await {
+                Ok(()) => {
+                    started = Some((http_port, grpc_port, child));
+                    break;
+                }
+                Err(status) => {
+                    stderr.seek(SeekFrom::Start(0)).unwrap();
+                    let mut diagnostic = String::new();
+                    stderr.read_to_string(&mut diagnostic).unwrap();
+                    let bind_collision = diagnostic.contains("AddrInUse")
+                        || diagnostic.contains("Address already in use");
+                    if !bind_collision {
+                        eprintln!("{diagnostic}");
+                    }
+                    assert!(
+                        bind_collision,
+                        "revocation-profile exited before both listeners became healthy: {status}"
+                    );
+                    assert!(
+                        attempt < MAX_BIND_ATTEMPTS,
+                        "revocation-profile could not bind after {MAX_BIND_ATTEMPTS} attempts"
+                    );
+                }
+            }
+        }
+        started.expect("revocation-profile did not start")
+    };
 
     let health = http_request(http_port, "GET", "/health", &[], None).await;
     assert_eq!(health.status, 200);
@@ -151,25 +186,35 @@ async fn executable_serves_http_grpc_and_operational_contracts() {
     let _ = organization_shutdown.send(());
 }
 
-fn available_port() -> u16 {
-    StdTcpListener::bind("127.0.0.1:0")
-        .unwrap()
-        .local_addr()
-        .unwrap()
-        .port()
+fn available_ports() -> (u16, u16) {
+    // Hold both reservations at once so the OS cannot select the same port.
+    // The child must bind them itself, so an external contender can still win
+    // after these listeners close; startup retries that specific bind error.
+    let http = StdTcpListener::bind("127.0.0.1:0").unwrap();
+    let grpc = StdTcpListener::bind("127.0.0.1:0").unwrap();
+    (
+        http.local_addr().unwrap().port(),
+        grpc.local_addr().unwrap().port(),
+    )
 }
 
-async fn wait_for_http(port: u16, child: &mut Child) {
+async fn wait_for_listeners(
+    http_port: u16,
+    grpc_port: u16,
+    child: &mut Child,
+) -> Result<(), ExitStatus> {
     for _ in 0..100 {
         if let Some(status) = child.try_wait().unwrap() {
-            panic!("revocation-profile exited before becoming healthy: {status}");
+            return Err(status);
         }
-        if TcpStream::connect(("127.0.0.1", port)).await.is_ok() {
-            return;
+        if TcpStream::connect(("127.0.0.1", http_port)).await.is_ok()
+            && TcpStream::connect(("127.0.0.1", grpc_port)).await.is_ok()
+        {
+            return Ok(());
         }
         sleep(Duration::from_millis(100)).await;
     }
-    panic!("revocation-profile did not become healthy");
+    panic!("revocation-profile listeners did not become healthy");
 }
 
 async fn connect_grpc(target: &str) -> RevocationProfileServiceClient<tonic::transport::Channel> {
