@@ -1184,9 +1184,11 @@ jobs:
           test_name='runtime::tests::authenticated_gateway_issues_dsc_with_operator_grant_and_dedicated_key'
           cargo test --locked -p marty-gateway --lib -- --list | grep -Fx "$test_name: test"
           cargo test --locked -p marty-gateway --lib "$test_name" -- --ignored --exact
-          cargo test --locked -p marty-issuance-service --test passport_managed_kms_chain \
-            managed_passport_chain_issues_and_verifies_sod_without_exporting_private_keys \
-            -- --ignored --exact
+          chain_test='managed_passport_chain_issues_and_verifies_sod_without_exporting_private_keys'
+          cargo test --locked -p marty-service-acceptance --test passport_managed_kms_chain \
+            -- --list | grep -Fx "$chain_test: test"
+          cargo test --locked -p marty-service-acceptance --test passport_managed_kms_chain \
+            "$chain_test" -- --ignored --exact
       # The Flow contract deliberately requires the marty_atomic_test database.
       # Serialize it after the workspace suite so both retain their isolation.
       - name: Run Flow database contract after workspace suite

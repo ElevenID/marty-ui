@@ -102,7 +102,6 @@ zeroize.workspace = true
 const-oid.workspace = true
 der.workspace = true
 redis.workspace = true
-marty-signing-keys = { path = "../signing-keys" }
 spki.workspace = true
 x509-cert.workspace = true
 marty-selfhost-bundle = { path = "../../crates/selfhost-bundle" }
@@ -324,7 +323,3 @@ path = "tests/retention_postgres_contract.rs"
 [[test]]
 name = "passport_postgres_contract"
 path = "tests/passport_postgres_contract.rs"
-
-[[test]]
-name = "passport_managed_kms_chain"
-path = "tests/passport_managed_kms_chain.rs"

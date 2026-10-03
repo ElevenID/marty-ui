@@ -1,5 +1,7 @@
 # Rust build and feedback audit (2026-10-01)
 
+Follow-on architecture work is coordinated in the [architecture and development-feedback improvement tracker](architecture-feedback-improvement-plan.md). This audit retains its original evidence snapshot; the tracker records the newer baseline, implementation sequence, review requirements, and regression safeguards.
+
 This is an audit of the post-maintenance code, not a proposal for another blanket dependency cleanup. The short answer: **the slowest required CI path is published Canvas contract execution, not a known slow crate**. The most expensive measured Rust build is the public service Dockerfile's all-binary release layer. Start by removing a proven duplicate test execution, then make that public builder reuse dependency compilation. Do not choose a crate split or version migration until Cargo unit timings show it is on the critical path.
 
 The snapshot is UI `737a52e1e0198f3953304f4bf446e90b8f98b7f1`, Core `73f6d5898b2147d0ab4f7cca318c76006a2fa3d6`, and MMF `c55d323e6aa64cad4f49308792f1d21eaab0ebc8`. Commands, run IDs, and log-derived figures are in [the evidence appendix](rust-build-audit-evidence.md). No clean/full build, test suite, cache clearing, or compilation probe was run for this audit (0 of 2 allowed probes); the existing runs already distinguish the first priorities. No per-crate Cargo timing report was available, so this report does **not** rank compilation units by guessed duration.
