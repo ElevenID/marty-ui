@@ -386,6 +386,8 @@ def test_rust_matrix_keeps_canvas_state_local_and_contracts_parallel() -> None:
         ("docs/rust-migrations/canvas-worker-dispatch-reconciliation.md", False, False),
         ("README.md", False, False),
         ("rust/services/issuance/README.md", False, False),
+        ("docs/line\nbreak.md", False, False),
+        ("rust/services/issuance/src/line\nbreak.rs", True, False),
         ("scripts/test_canvas_worker_compose_render.py", True, True),
         ("unclassified-synthetic-input", True, True),
     ],
@@ -409,7 +411,9 @@ def test_actual_classifier_runs_compiler_consumed_markdown_through_rust_gates(
 git() {
   case "$1" in
     fetch) return 0 ;;
-    diff) printf '%s\\n' "$SYNTHETIC_CHANGED_PATH" ;;
+    diff)
+      [[ " $* " == *" -z "* && " $* " == *" --no-renames "* ]] || return 98
+      printf '%s\\0' "$SYNTHETIC_CHANGED_PATH" ;;
     *) return 99 ;;
   esac
 }
@@ -428,6 +432,7 @@ export BASE_SHA=synthetic-base
     environment.pop("BASH_ENV", None)
     environment.pop("ENV", None)
     environment["SYNTHETIC_CHANGED_PATH"] = changed_path
+    environment["RUNNER_TEMP"] = tmp_path.as_posix()
     output = tmp_path / "synthetic-actions-output"
     environment["GITHUB_OUTPUT"] = output.as_posix()
     result = subprocess.run(
@@ -456,6 +461,74 @@ export BASE_SHA=synthetic-base
     }
     expected["rust"] = str(rust_selected).lower()
     assert actual == expected
+
+
+def test_classifier_diff_failure_fails_closed(tmp_path: Path) -> None:
+    _, document = _workflow(CI_PATH)
+    [classifier] = [
+        step
+        for step in document["jobs"]["changes"]["steps"]
+        if step.get("id") == "classify"
+    ]
+    script = classifier["run"].replace("${{ github.event_name }}", "pull_request")
+    git_bash = Path("C:/Program Files/Git/bin/bash.exe")
+    bash = (
+        str(git_bash)
+        if os.name == "nt" and git_bash.is_file()
+        else shutil.which("bash")
+    )
+    assert bash
+    environment = dict(os.environ)
+    environment.pop("BASH_ENV", None)
+    environment.pop("ENV", None)
+    environment["BASE_SHA"] = "synthetic-base"
+    environment["RUNNER_TEMP"] = tmp_path.as_posix()
+    output = tmp_path / "synthetic-actions-output"
+    environment["GITHUB_OUTPUT"] = output.as_posix()
+    prelude = 'git() { if [[ "$1" == fetch ]]; then return 0; fi; return 42; }\n'
+    result = subprocess.run(
+        [bash, "--noprofile", "--norc", "-s"],
+        input=prelude + script,
+        text=True,
+        capture_output=True,
+        check=False,
+        timeout=10,
+        env=environment,
+    )
+    assert result.returncode != 0
+    assert not output.exists()
+
+
+def test_classifier_diff_reports_both_rename_endpoints(tmp_path: Path) -> None:
+    repository = tmp_path / "repository"
+    repository.mkdir()
+
+    def git(*arguments: str) -> bytes:
+        return subprocess.run(
+            ["git", *arguments],
+            cwd=repository,
+            check=True,
+            capture_output=True,
+        ).stdout
+
+    git("init", "-q")
+    git("config", "user.name", "CI classifier test")
+    git("config", "user.email", "ci-classifier@example.invalid")
+    old_path = repository / "rust" / "source.rs"
+    old_path.parent.mkdir()
+    old_path.write_text("fn main() {}\n", encoding="utf-8")
+    git("add", ".")
+    git("commit", "-qm", "original input")
+    (repository / "docs").mkdir()
+    git("mv", "rust/source.rs", "docs/source.md")
+    git("commit", "-qm", "move input")
+
+    changed = git("diff", "--name-only", "-z", "--no-renames", "HEAD~", "HEAD")
+    assert set(changed.split(b"\0")) == {
+        b"rust/source.rs",
+        b"docs/source.md",
+        b"",
+    }
 
 
 def test_published_canvas_schema_gate_is_explicit_and_mandatory() -> None:

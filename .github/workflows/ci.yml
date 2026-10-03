@@ -62,7 +62,12 @@ jobs:
             all=true
           else
             git fetch --no-tags --depth=1 origin "$BASE_SHA"
-            mapfile -t changed_files < <(git diff --name-only "$BASE_SHA" HEAD)
+            # Preserve both endpoints of moves and paths containing newlines.
+            # A direct command also makes a diff failure fail this gate closed;
+            # process substitution would hide its exit status from mapfile.
+            changed_paths_file="$RUNNER_TEMP/ci-changed-paths"
+            git diff --name-only -z --no-renames "$BASE_SHA" HEAD > "$changed_paths_file"
+            mapfile -d '' -t changed_files < "$changed_paths_file"
             for path in "${changed_files[@]}"; do
               case "$path" in
                 rust/services/issuance/src/canvas_sync_processor_contract.md)
