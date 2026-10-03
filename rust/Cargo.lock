@@ -4649,6 +4649,7 @@ dependencies = [
  "marty-passport-auth",
  "marty-platform-clock",
  "marty-release-evidence",
+ "marty-response-compat",
  "marty-schema-startup",
  "marty-selfhost-bundle",
  "marty-signing-keys",
@@ -4888,6 +4889,16 @@ dependencies = [
  "serde_yaml",
  "sha2 0.10.9",
  "tempfile",
+]
+
+[[package]]
+name = "marty-response-compat"
+version = "0.1.0"
+dependencies = [
+ "serde",
+ "serde_json",
+ "sqlx",
+ "thiserror 2.0.20",
 ]
 
 [[package]]

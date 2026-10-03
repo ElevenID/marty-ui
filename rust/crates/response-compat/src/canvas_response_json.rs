@@ -5,7 +5,7 @@ use crate::{lossless_json::LosslessJson, python_text::PythonText};
 use serde_json::Value;
 use std::collections::HashMap;
 
-pub(super) fn parse(bytes: &[u8]) -> Option<LosslessJson> {
+pub fn parse(bytes: &[u8]) -> Option<LosslessJson> {
     parse_tree(bytes).map(|tree| LosslessJson::Parsed(std::sync::Arc::new(tree)))
 }
 

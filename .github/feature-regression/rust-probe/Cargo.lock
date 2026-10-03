@@ -3491,6 +3491,7 @@ dependencies = [
  "marty-oid4vci",
  "marty-passport-auth",
  "marty-platform-clock",
+ "marty-response-compat",
  "marty-schema-startup",
  "marty-verification",
  "mmf-config",
@@ -3577,6 +3578,16 @@ dependencies = [
  "libc",
  "rustix",
  "windows-sys 0.61.2",
+]
+
+[[package]]
+name = "marty-response-compat"
+version = "0.1.0"
+dependencies = [
+ "serde",
+ "serde_json",
+ "sqlx",
+ "thiserror 2.0.20",
 ]
 
 [[package]]

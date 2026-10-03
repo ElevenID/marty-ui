@@ -40,12 +40,12 @@ impl Drop for ScalarSlots {
 
 impl JsonTree {
     pub fn from_response_bytes(bytes: &[u8]) -> Option<Self> {
-        crate::canvas_credentials_protocol::response_json::parse_tree(bytes)
+        crate::canvas_response_json::parse_tree(bytes)
     }
     /// Database JSON keeps literal arbitrary-precision numbers. The response
     /// parser's Python float coercion and integer digit limit do not apply here.
     pub fn from_json_bytes(bytes: &[u8]) -> Option<Self> {
-        crate::canvas_credentials_protocol::response_json::parse_json_tree(bytes)
+        crate::canvas_response_json::parse_json_tree(bytes)
     }
     pub(crate) fn new(nodes: Vec<JsonNode>, root: usize) -> Self {
         Self { nodes, root }
