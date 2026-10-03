@@ -33,7 +33,7 @@ class AffectedRustPlannerTests(unittest.TestCase):
             package("nested", "rust/crates/core/nested", []),
             package(
                 "service",
-                "rust/services/service",
+                "rust/crates/service",
                 [{"name": "core", "rename": "local_core", "kind": "dev"}],
             ),
             package(
@@ -63,6 +63,37 @@ class AffectedRustPlannerTests(unittest.TestCase):
                 ["rust/crates/core/nested/src/lib.rs"], self.metadata(root), root
             )
             self.assertEqual(result["packages"], ["nested"])
+
+    def test_service_runtime_consumers_fail_closed_beyond_cargo(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            metadata = self.metadata(root)
+            notification = {
+                "id": "marty-notification",
+                "name": "marty-notification",
+                "manifest_path": str(root / "rust/services/notification/Cargo.toml"),
+                "dependencies": [{"name": "core", "kind": None}],
+            }
+            metadata["packages"].append(notification)
+            metadata["workspace_members"].append(notification["id"])
+            trust_profile = {
+                "id": "marty-trust-profile",
+                "name": "marty-trust-profile",
+                "manifest_path": str(root / "rust/services/trust-profile/Cargo.toml"),
+                "dependencies": [],
+            }
+            metadata["packages"].append(trust_profile)
+            metadata["workspace_members"].append(trust_profile["id"])
+            for path in (
+                "rust/services/notification/src/main.rs",
+                "rust/services/trust-profile/src/lib.rs",
+                "rust/crates/core/src/lib.rs",
+            ):
+                with self.subTest(path=path):
+                    result = planner.plan([path], metadata, root)
+                    self.assertTrue(result["all"])
+                    self.assertEqual(len(result["packages"]), 6)
+                    self.assertIn("non-Cargo runtime consumers", result["reason"])
 
     def test_shared_and_unowned_inputs_request_full_workspace(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
