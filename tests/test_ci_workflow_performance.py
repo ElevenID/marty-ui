@@ -286,8 +286,146 @@ def test_pull_request_classifier_is_conservative_and_merge_queue_is_complete() -
 
     gate_needs = set(jobs["ci-gate"]["needs"])
     assert gate_needs == conditional_jobs | {"changes", "lint"}
-    assert '[[ "$result" == success || "$result" == skipped ]]' in source
-    assert 'test "$result" = success' in source
+    gate_script = jobs["ci-gate"]["steps"][0]["run"]
+    assert (
+        'require_selected test-rust-services "$RUST_SERVICES_RESULT" "$RUST_SELECTED"'
+        in gate_script
+    )
+    assert '[[ "$result" == success ]]' in gate_script
+
+
+def test_ci_gate_accepts_only_planned_pr_skips_and_all_successful_merge_groups() -> (
+    None
+):
+    _, document = _workflow(CI_PATH)
+    jobs = document["jobs"]
+    gate = jobs["ci-gate"]
+    result_env = {}
+    for key, value in gate["env"].items():
+        match = re.fullmatch(r"\$\{\{ needs\.([a-z0-9-]+)\.result \}\}", value)
+        if match:
+            result_env[match.group(1)] = key
+    assert set(result_env) == set(gate["needs"])
+    assert gate["env"]["CI_LANE_RESULTS"] == "${{ join(needs.*.result, ' ') }}"
+
+    groups = {
+        "ui": {
+            "fast-feedback",
+            "test-ui-crawler-artifacts",
+            "test-ui-crawler-nginx",
+            "test-ui",
+            "test-credential-lifecycle-browser",
+        },
+        "python": {"test-services"},
+        "rust": {
+            "test-passport-fence-postgres",
+            "test-rust-feature-probe",
+            "test-rust-passport-image",
+            "test-rust-services",
+            "rust-lint-policy",
+            "test-rust-service-images",
+            "rust-supply-chain",
+        },
+        "security": {"security"},
+    }
+    for flag, names in groups.items():
+        for name in names:
+            assert jobs[name]["if"] == f"needs.changes.outputs.{flag} == 'true'"
+    assert set(gate["needs"]) == {
+        "changes",
+        "lint",
+        "public-protocol-contract",
+        "test-release-contracts",
+    } | set().union(*groups.values())
+    assert (
+        "needs.changes.outputs.ui == 'true'" in jobs["public-protocol-contract"]["if"]
+    )
+    assert (
+        "needs.changes.outputs.release == 'true'"
+        in jobs["public-protocol-contract"]["if"]
+    )
+    assert (
+        "needs.changes.outputs.verification == 'true'"
+        in jobs["test-release-contracts"]["if"]
+    )
+
+    selections = {
+        "UI_SELECTED": "ui",
+        "PYTHON_SELECTED": "python",
+        "RUST_SELECTED": "rust",
+        "RELEASE_SELECTED": "release",
+        "VERIFICATION_SELECTED": "verification",
+        "SECURITY_SELECTED": "security",
+    }
+    for key, flag in selections.items():
+        assert gate["env"][key] == f"${{{{ needs.changes.outputs.{flag} }}}}"
+    bash = "bash"
+    if os.name == "nt":
+        git = shutil.which("git")
+        assert git is not None
+        bash = str(Path(git).parent.parent / "bin" / "bash.exe")
+
+    def exercise(
+        flags=(), overrides=None, event="pull_request", result_count=None,
+        selection_overrides=None,
+    ):
+        selected = set(flags)
+        active = {"changes", "lint"}
+        for flag, names in groups.items():
+            if flag in selected:
+                active.update(names)
+        if selected & {"ui", "python", "rust", "release"}:
+            active.add("public-protocol-contract")
+        if selected & {"release", "verification", "rust"}:
+            active.add("test-release-contracts")
+        results = {
+            name: "success" if name in active else "skipped" for name in gate["needs"]
+        }
+        results.update(overrides or {})
+        environment = os.environ.copy()
+        environment.update(
+            {
+                key: "true" if flag in selected else "false"
+                for key, flag in selections.items()
+            }
+        )
+        environment.update(selection_overrides or {})
+        environment.update({key: results[name] for name, key in result_env.items()})
+        values = [results[name] for name in gate["needs"]]
+        environment["CI_LANE_RESULTS"] = " ".join(values[:result_count])
+        assert len(environment["CI_LANE_RESULTS"].split()) == (result_count or 18)
+        script = gate["steps"][0]["run"].replace("${{ github.event_name }}", event)
+        return subprocess.run(
+            [bash, "-c", script],
+            env=environment,
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+
+    for flags in (
+        (),
+        ("ui",),
+        ("rust",),
+        ("python", "security"),
+        ("release", "verification"),
+        tuple(selections.values()),
+    ):
+        result = exercise(flags)
+        assert result.returncode == 0, (flags, result.stdout, result.stderr)
+    assert exercise(("rust",), {"test-rust-services": "skipped"}).returncode != 0
+    assert exercise((), {"test-rust-services": "success"}).returncode != 0
+    assert exercise(("ui",), {"fast-feedback": "failure"}).returncode != 0
+    assert exercise((), {"changes": "failure"}).returncode != 0
+    assert exercise((), selection_overrides={"RUST_SELECTED": ""}).returncode != 0
+    assert exercise((), result_count=17).returncode != 0
+    assert exercise(tuple(selections.values()), event="merge_group").returncode == 0
+    assert (
+        exercise(
+            tuple(selections.values()), {"security": "skipped"}, event="merge_group"
+        ).returncode
+        != 0
+    )
 
 
 def test_independent_rust_lanes_remain_required_without_transferring_builds() -> None:
