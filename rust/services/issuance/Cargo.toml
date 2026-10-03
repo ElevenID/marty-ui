@@ -134,6 +134,10 @@ name = "canvas_published_schema_contract"
 path = "tests/canvas_published_schema_contract.rs"
 
 [[test]]
+name = "canvas_published_worker_contract"
+path = "tests/canvas_published_worker_contract.rs"
+
+[[test]]
 name = "issuance-behavior"
 path = "tests/behavior_suite.rs"
 

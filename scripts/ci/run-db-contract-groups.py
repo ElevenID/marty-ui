@@ -44,11 +44,11 @@ def _canvas_executable() -> Path:
             if (artifact := json.loads(line)).get("reason") == "compiler-artifact"
             and "marty-issuance-service" in artifact.get("package_id", "")
             and artifact.get("target", {}).get("name")
-            == "canvas_published_schema_contract"
+            == "canvas_published_worker_contract"
             and artifact.get("executable") is not None
         }
     if len(executables) != 1:
-        raise ValueError("Expected exactly one Canvas contract executable")
+        raise ValueError("Expected exactly one Canvas worker contract executable")
     executable = Path(executables.pop())
     if not executable.is_file():
         raise ValueError("Canvas contract executable is missing")
