@@ -1483,6 +1483,79 @@ def test_compiler_cache_writes_are_reserved_for_trusted_main() -> None:
     )
 
 
+def test_rust_lint_uses_uncached_compiler_only_when_optional_cache_fails(
+    tmp_path: Path,
+) -> None:
+    git_bash = Path("C:/Program Files/Git/bin/bash.exe")
+    bash = (
+        str(git_bash)
+        if os.name == "nt" and git_bash.is_file()
+        else shutil.which("bash")
+    )
+    if bash is None:
+        pytest.skip("Bash workflow behavior requires Bash")
+    _, ci = _workflow(CI_PATH)
+    steps = ci["jobs"]["rust-lint-policy"]["steps"]
+    names = [step.get("name") for step in steps]
+    cache = names.index("Enable compiler cache")
+    fallback = names.index("Keep Rust lint independent of optional compiler cache")
+    lint = names.index("Lint Rust services")
+    assert cache < fallback < names.index("Check formatting") < lint
+    assert not steps[fallback].get("continue-on-error", False)
+    assert not steps[fallback].get("if")
+    assert (
+        steps[lint]["run"]
+        == "cargo clippy --locked --workspace --all-targets -- -D warnings"
+    )
+    assert not steps[lint].get("continue-on-error", False)
+
+    fake_bin = tmp_path / "fake-bin"
+    fake_bin.mkdir()
+    fake = fake_bin / "sccache"
+    fake.write_text(
+        '#!/usr/bin/env bash\nprintf "%s\\n" "$*" > "$PWD/sccache-call"\nexit "$TEST_SCCACHE_EXIT"\n',
+        encoding="utf-8",
+        newline="\n",
+    )
+    fake.chmod(0o755)
+    rustup = fake_bin / "rustup"
+    rustup.write_text(
+        '#!/usr/bin/env bash\nprintf "%s\\n" "$*" > "$PWD/rustup-call"\nprintf "%s\\n" rustc-synthetic\n',
+        encoding="utf-8",
+        newline="\n",
+    )
+    rustup.chmod(0o755)
+    for exit_code, expected_env in (("0", ""), ("17", "RUSTC_WRAPPER=\n")):
+        (tmp_path / "github-env").write_text("", encoding="utf-8")
+        environment = dict(os.environ, TEST_SCCACHE_EXIT=exit_code)
+        environment.pop("BASH_ENV", None)
+        environment.pop("ENV", None)
+        result = subprocess.run(
+            [
+                bash,
+                "--noprofile",
+                "--norc",
+                "-s",
+            ],
+            input=(
+                'export PATH="$PWD/fake-bin:/usr/bin:/bin"\n'
+                'export GITHUB_ENV="$PWD/github-env"\n' + steps[fallback]["run"]
+            ),
+            cwd=tmp_path,
+            env=environment,
+            capture_output=True,
+            text=True,
+        )
+        assert result.returncode == 0, result.stderr
+        assert (tmp_path / "rustup-call").read_text(encoding="utf-8").strip() == (
+            "which rustc --toolchain 1.95.0"
+        )
+        assert (tmp_path / "sccache-call").read_text(encoding="utf-8").strip() == (
+            "rustc-synthetic -vV"
+        )
+        assert (tmp_path / "github-env").read_text(encoding="utf-8") == expected_env
+
+
 def test_release_cache_probe_is_main_only_and_cannot_invalidate_builder() -> None:
     _, warm = _workflow(ROOT / ".github/workflows/warm-ci-caches.yml")
     job = warm["jobs"]["images"]
