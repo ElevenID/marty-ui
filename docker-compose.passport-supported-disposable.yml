@@ -20,7 +20,9 @@ services:
         condition: service_started
     ports:
       - "127.0.0.1:${PASSPORT_ACCEPTANCE_GATEWAY_PORT:?reserve disposable loopback port}:8443"
-    networks: [private]
+    # Docker does not publish loopback ports from an internal-only bridge.
+    # Only the edge joins the host-facing ingress bridge; Gateway stays private.
+    networks: [private, ingress]
 
   postgres:
     labels: *acceptance-labels
@@ -613,4 +615,7 @@ networks:
     labels: *acceptance-labels
   callback_signing:
     internal: true
+    labels: *acceptance-labels
+  ingress:
+    internal: false
     labels: *acceptance-labels

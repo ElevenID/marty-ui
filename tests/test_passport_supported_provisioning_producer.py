@@ -89,7 +89,8 @@ def source_plan(tmp_path: Path) -> tuple[Path, Path, dict]:
         "migrations_reference": "migrations@sha256:" + "c" * 64,
         "issuance_reference": ISSUANCE,
         "infra_images": {"postgres": "postgres@sha256:" + "e" * 64,
-                         "openbao": "openbao@sha256:" + "f" * 64},
+                         "openbao": "openbao@sha256:" + "f" * 64,
+                         "edge": "nginx@sha256:" + "1" * 64},
     }
     plan = {
         "schema": "marty.passport-supported-provisioning-plan/v1",
@@ -828,8 +829,8 @@ def test_partial_teardown_removes_only_plan_owned_startup_resources(
     assert len(calls) == 9
 
 
-@pytest.mark.parametrize("primary_suffix", ["_private", "_callback_signing"])
-@pytest.mark.parametrize("service", ["openbao", "passport-beta-bureau"])
+@pytest.mark.parametrize("primary_suffix", ["_private", "_secondary"])
+@pytest.mark.parametrize("service", ["openbao", "passport-beta-bureau", "edge"])
 def test_partial_teardown_accepts_either_owned_dual_network_primary(
     tmp_path: Path, primary_suffix: str, service: str,
 ) -> None:
@@ -837,9 +838,10 @@ def test_partial_teardown_accepts_either_owned_dual_network_primary(
     project = plan["project"]
     container = "1" * 64
     private = "2" * 64
-    callback = "3" * 64
+    secondary = "3" * 64
+    secondary_suffix = "_ingress" if service == "edge" else "_callback_signing"
     networks = {project + "_private": private,
-                project + "_callback_signing": callback}
+                project + secondary_suffix: secondary}
     volumes = ([project + "_openbao_data", project + "_openbao_file",
                 project + "_openbao_logs"] if service == "openbao" else [])
     labels = {**plan["owner_labels"], "com.docker.compose.project": project}
@@ -851,15 +853,18 @@ def test_partial_teardown_accepts_either_owned_dual_network_primary(
             plan["surface"])
     ]
     present = {"containers": True, "networks": True, "volumes": True}
-    state = {"mode": project + primary_suffix, "attachments": set(networks)}
+    mode = project + (secondary_suffix if primary_suffix == "_secondary"
+                      else primary_suffix)
+    state = {"mode": mode, "attachments": set(networks), "ingress_member": container}
     calls: list[list[str]] = []
 
     def inspector(args: list[str]) -> str:
         if args[:2] == ["container", "inspect"]:
             return json.dumps([{
                 "Id": container, "Name": f"/{project}-{service}-1",
-                "Config": {"Image": (plan["infra_images"]["openbao"]
-                                     if service == "openbao" else plan["services_reference"]),
+                "Config": {"Image": (plan["infra_images"][service]
+                                     if service in {"openbao", "edge"}
+                                     else plan["services_reference"]),
                            "Labels": {**labels, "com.docker.compose.service": service}},
                 "HostConfig": {"NetworkMode": state["mode"]},
                 "NetworkSettings": {"Networks": {
@@ -872,8 +877,10 @@ def test_partial_teardown_accepts_either_owned_dual_network_primary(
             name = next(name for name, identifier in networks.items()
                         if identifier == args[2])
             return json.dumps([{"Id": args[2], "Name": name,
-                                "Driver": "bridge", "Internal": True,
-                                "Containers": {container: {}}, "Labels": labels}])
+                                "Driver": "bridge", "Internal": name != project + "_ingress",
+                                "Containers": {state["ingress_member"]: {}}
+                                if name == project + "_ingress" else {container: {}},
+                                "Labels": labels}])
         if args[:2] == ["volume", "inspect"]:
             return json.dumps([{"Name": args[2], "Driver": "local",
                                 "Options": {}, "Labels": labels}])
@@ -904,11 +911,17 @@ def test_partial_teardown_accepts_either_owned_dual_network_primary(
         *arguments, inspector, executor, **gates)
     assert calls == []
 
-    state["mode"] = project + primary_suffix
+    state["mode"] = mode
     state["attachments"] = {project + "_private"}
     assert not destroy_partial_disposable_project(
         *arguments, inspector, executor, **gates)
     assert calls == []
+    if service == "edge":
+        state["attachments"] = set(networks)
+        state["ingress_member"] = "f" * 64
+        assert not destroy_partial_disposable_project(
+            *arguments, inspector, executor, **gates)
+        assert calls == []
 
 
 def test_partial_teardown_fails_closed_before_mutating_unknown_resource(

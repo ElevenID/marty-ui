@@ -37,6 +37,8 @@ RUST_DEPENDENCIES = frozenset({
 DISPOSABLE_SERVICES = SELECTED | ISOLATED_DEPENDENCIES | RUST_DEPENDENCIES | frozenset({
     "db-migrate", "issuance-migrations", "signing-keys", "edge",
 })
+DISPOSABLE_NETWORKS = frozenset({"private", "callback_signing", "ingress"})
+INGRESS_NETWORK = "ingress"
 ALLOWED_SERVICES = frozenset({
     "applicant", "auth", "canvas-sync-worker", "compliance-profile",
     "credential-template", "db-migrate", "deployment-profile",
@@ -263,16 +265,15 @@ def validate_model(
             "Resolved Compose model has an unexpected or missing service")
     infra_images = qualified_images(verify_registry=False)
     networks = model.get("networks")
-    require(isinstance(networks, dict) and bool(networks),
+    require(isinstance(networks, dict) and set(networks) == DISPOSABLE_NETWORKS,
             "Disposable Compose networks are missing")
-    for network in networks.values():
+    for name, network in networks.items():
         require(isinstance(network, dict)
                 and network.get("external") not in (True, "true")
                 and network.get("driver", "bridge") == "bridge"
                 and not network.get("driver_opts")
-                and network.get("internal") is True
-                and isinstance(network.get("name"), str)
-                and network["name"].startswith(project + "_"),
+                and network.get("internal", False) is (name != INGRESS_NETWORK)
+                and network.get("name") == f"{project}_{name}",
                 "Compose network is external or shared")
     volumes = model.get("volumes", {})
     require(isinstance(volumes, dict), "Compose volumes are invalid")
@@ -479,6 +480,7 @@ def validate_model(
         "passport-callback-signer": {"callback_signing"},
         "passport-beta-bureau": {"private", "callback_signing"},
         "openbao": {"private", "callback_signing"},
+        "edge": {"private", INGRESS_NETWORK},
     }
     for name in services:
         expected = callback_networks.get(name, {"private"})
