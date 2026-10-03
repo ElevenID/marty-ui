@@ -1,0 +1,51 @@
+{
+  "schema": "marty.canvas-worker-oracle-producers/v1",
+  "purpose": "Inventory only. This is not a complete input closure or permission to reuse historical qualification.",
+  "direct_runner_corpora": [
+    "canvas-worker-body-timeout-oracle.json",
+    "canvas-worker-concurrent-oracle.json",
+    "canvas-worker-deadline-oracle.json",
+    "canvas-worker-dispatch-oracle.json",
+    "canvas-worker-facts-oracle.json",
+    "canvas-worker-lease-expiry-oracle.json",
+    "canvas-worker-logging-oracle.json",
+    "canvas-worker-mixed-roster-oracle.json",
+    "canvas-worker-oauth-revocation-oracle.json",
+    "canvas-worker-provider-completion-oracle.json",
+    "canvas-worker-provider-final-oracle.json",
+    "canvas-worker-provider-generation-oracle.json",
+    "canvas-worker-provider-recovery-first-oracle.json",
+    "canvas-worker-provider-recovery-oracle.json",
+    "canvas-worker-provider-signals-oracle.json",
+    "canvas-worker-reclaimers-oracle.json",
+    "canvas-worker-reclaimers-retry-oracle.json",
+    "canvas-worker-resource-race-oracle.json",
+    "canvas-worker-resources-unavailable-oracle.json",
+    "canvas-worker-rest-oracle.json",
+    "canvas-worker-retry-after-oracle.json",
+    "canvas-worker-retry-oracle.json",
+    "canvas-worker-roster-failure-oracle.json",
+    "canvas-worker-startup-oracle.json",
+    "canvas-worker-timeout-oracle.json",
+    "canvas-worker-validation-oracle.json"
+  ],
+  "shared_runner_corpora": {
+    "run_canvas_worker_oauth_revocation_oracle.py": [
+      "canvas-worker-oauth-revocation-backoff-oracle.json",
+      "canvas-worker-oauth-revocation-counters-oracle.json",
+      "canvas-worker-oauth-revocation-fence-oracle.json",
+      "canvas-worker-oauth-revocation-lease-oracle.json",
+      "canvas-worker-oauth-revocation-patch-oracle.json",
+      "canvas-worker-oauth-revocation-queue-oracle.json",
+      "canvas-worker-oauth-revocation-retry-after-oracle.json",
+      "canvas-worker-oauth-revocation-secrets-oracle.json",
+      "canvas-worker-oauth-revocation-selection-oracle.json"
+    ]
+  },
+  "external_fixture_corpora": {
+    "canvas-worker-configuration-oracle.json": "docs/canvas-worker-lossless-configuration.md",
+    "canvas-worker-consumer-range-oracle.json": "docs/canvas-worker-lossless-configuration.md",
+    "canvas-worker-numeric-lexical-oracle.json": "docs/canvas-worker-lossless-configuration.md",
+    "canvas-worker-result-oracle.json": "docs/rust-migrations/canvas-worker-result-parity.md"
+  }
+}
