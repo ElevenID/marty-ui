@@ -80,7 +80,7 @@ jobs:
                   ui=true
                   security=true
                   ;;
-                services/Dockerfile|services/Dockerfile.dockerignore|services/auth/assets/*)
+                services/Dockerfile|services/Dockerfile.dockerignore|services/entrypoint.sh|services/auth/assets/*)
                   rust=true
                   python=true
                   security=true

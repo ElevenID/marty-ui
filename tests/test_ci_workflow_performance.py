@@ -382,21 +382,34 @@ def test_rust_matrix_keeps_canvas_state_local_and_contracts_parallel() -> None:
 
 
 @pytest.mark.parametrize(
-    "changed_path,rust_selected,all_selected",
+    "changed_path,rust_selected,python_selected,security_selected,all_selected",
     [
-        ("rust/services/issuance/src/canvas_sync_processor_contract.md", True, False),
-        ("rust/services/issuance/src/canvas_sync_worker.rs", True, False),
-        ("docs/rust-migrations/canvas-worker-dispatch-reconciliation.md", False, False),
-        ("README.md", False, False),
-        ("rust/services/issuance/README.md", False, False),
-        ("docs/line\nbreak.md", False, False),
-        ("rust/services/issuance/src/line\nbreak.rs", True, False),
-        ("scripts/test_canvas_worker_compose_render.py", True, True),
-        ("unclassified-synthetic-input", True, True),
+        (
+            "rust/services/issuance/src/canvas_sync_processor_contract.md",
+            True, False, False, False,
+        ),
+        ("rust/services/issuance/src/canvas_sync_worker.rs", True, False, False, False),
+        (
+            "docs/rust-migrations/canvas-worker-dispatch-reconciliation.md",
+            False, False, False, False,
+        ),
+        ("README.md", False, False, False, False),
+        ("rust/services/issuance/README.md", False, False, False, False),
+        ("docs/line\nbreak.md", False, False, False, False),
+        ("rust/services/issuance/src/line\nbreak.rs", True, False, False, False),
+        # Auth's Rust executable smoke test embeds this shell script with include_str!.
+        ("services/entrypoint.sh", True, True, True, False),
+        ("scripts/test_canvas_worker_compose_render.py", True, True, True, True),
+        ("unclassified-synthetic-input", True, True, True, True),
     ],
 )
-def test_actual_classifier_runs_compiler_consumed_markdown_through_rust_gates(
-    changed_path: str, rust_selected: bool, all_selected: bool, tmp_path: Path
+def test_actual_classifier_selects_gates_for_compiler_and_runtime_inputs(
+    changed_path: str,
+    rust_selected: bool,
+    python_selected: bool,
+    security_selected: bool,
+    all_selected: bool,
+    tmp_path: Path,
 ) -> None:
     _, document = _workflow(CI_PATH)
     [classifier] = [
@@ -463,6 +476,8 @@ export BASE_SHA=synthetic-base
         )
     }
     expected["rust"] = str(rust_selected).lower()
+    expected["python"] = str(python_selected).lower()
+    expected["security"] = str(security_selected).lower()
     assert actual == expected
 
 
