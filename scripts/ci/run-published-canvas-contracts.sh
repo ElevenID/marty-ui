@@ -290,9 +290,11 @@ cleanup_target_logs() {
   rmdir -- "$target_logs"
 }
 trap cleanup_target_logs EXIT
-"$composition_executable" --nocapture --test-threads=4 >"$composition_log" 2>&1 &
+# Keep the two full targets concurrent without doubling the prior four-thread
+# process budget; published Docker/Python probes have bounded wall-clock waits.
+"$composition_executable" --nocapture --test-threads=2 >"$composition_log" 2>&1 &
 composition_pid=$!
-"$worker_executable" --skip "$serial_test" "${preflight_skips[@]}" --nocapture --test-threads=4 >"$worker_log" 2>&1 &
+"$worker_executable" --skip "$serial_test" "${preflight_skips[@]}" --nocapture --test-threads=2 >"$worker_log" 2>&1 &
 worker_pid=$!
 report_target_logs() {
   printf 'Canvas composition target exit: %s\n' "$1"
