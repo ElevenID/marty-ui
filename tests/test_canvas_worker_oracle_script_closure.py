@@ -1,11 +1,13 @@
-"""Inventory local Python script edges of the historical Canvas capture runners.
+"""Inventory capture-script edges and bounded published-process path syntax.
 
-This is a review guard for one input layer, not a qualification-reuse key.
+These are review guards for bounded input layers, not a complete mount closure
+or a qualification-reuse key.
 """
 
 import ast
 import json
 from pathlib import Path
+import re
 
 import pytest
 
@@ -14,6 +16,7 @@ ROOT = Path(__file__).resolve().parents[1]
 SCRIPTS = ROOT / "scripts"
 PRODUCERS = ROOT / "contracts/canvas-worker-oracle-producers.json"
 IMPORTS = ROOT / "contracts/canvas-worker-oracle-script-imports.json"
+HARNESS = ROOT / "rust/services/issuance/tests/support/canvas_published_database.rs"
 
 
 def local_imports(source: Path, scripts: Path) -> list[str]:
@@ -143,7 +146,33 @@ def scenario_inputs(source: Path) -> tuple[list[str], list[str]]:
     return sorted(literals), sorted(templates)
 
 
-def test_historical_capture_script_import_graph_is_reviewed():
+def harness_mount_inputs(source: str) -> dict[str, list[str]]:
+    # This inventories syntax in one builder, not values passed by its callers,
+    # mounts built elsewhere, or qualification evidence for reuse.
+    start = "    async fn start_probe_with_scope("
+    end = "    fn cleanup("
+    assert source.count(start) == source.count(end) == 1
+    body = source.split(start, 1)[1].split(end, 1)[0]
+    paths = set(re.findall(r'"((?:scripts|contracts)/[^"\n]+\.(?:py|json))"', body))
+    literals = sorted(path for path in paths if "{" not in path)
+    templates = sorted(paths - set(literals))
+    joins = re.findall(r"root\.join\([^()\n]*\)(?:\.join\([^()\n]*\))?", body)
+    assert len(joins) == body.count("root.join("), "Review new harness mount expression"
+    dynamic_joins = set()
+    for join in joins:
+        literal = re.fullmatch(r'root\.join\("([^"]+)"\)', join)
+        if literal:
+            assert literal.group(1) in literals, f"Review mount source: {join}"
+        else:
+            dynamic_joins.add(join)
+    return {
+        "literal_paths": literals,
+        "template_paths": templates,
+        "dynamic_joins": sorted(dynamic_joins),
+    }
+
+
+def test_historical_capture_input_graph_is_reviewed():
     producers = json.loads(PRODUCERS.read_text(encoding="utf-8"))
     runners = {
         "run_" + name.removesuffix(".json").replace("-", "_") + ".py"
@@ -152,9 +181,9 @@ def test_historical_capture_script_import_graph_is_reviewed():
     inventory = json.loads(IMPORTS.read_text(encoding="utf-8"))
     assert set(inventory) == {
         "schema", "purpose", "direct_imports", "launched_scripts",
-        "scenario_literals", "scenario_templates",
+        "scenario_literals", "scenario_templates", "harness_path_syntax",
     }
-    assert inventory["schema"] == "marty.canvas-worker-oracle-script-imports/v2"
+    assert inventory["schema"] == "marty.canvas-worker-oracle-script-imports/v3"
     assert inventory["purpose"] == (
         "Inventory only. This is not complete capture-input closure or permission "
         "to reuse historical qualification."
@@ -194,6 +223,19 @@ def test_historical_capture_script_import_graph_is_reviewed():
             "canvas-worker-{kind}-scenarios.json"
         ]
     }, "Review dynamic scenario dispatch before reusing historical qualification"
+    harness = harness_mount_inputs(HARNESS.read_text(encoding="utf-8"))
+    assert inventory["harness_path_syntax"] == {
+        "scope": (
+            "Static path literals and root.join syntax inside start_probe_with_scope "
+            "only; caller-supplied values and mounts built elsewhere are not "
+            "inventoried. This is not complete host-mount closure."
+        ),
+        **harness,
+    }, (
+        "Published-process harness path syntax changed; review the bounded inventory"
+    )
+    for path in harness["literal_paths"]:
+        assert (ROOT / path).is_file(), f"Missing listed harness path: {path}"
 
 
 def test_import_graph_detects_transitive_and_dynamic_inputs(tmp_path):
@@ -250,3 +292,26 @@ def test_scenario_inputs_detect_literals_and_templates(tmp_path):
     )
     with pytest.raises(AssertionError, match="Review scenario template path"):
         scenario_inputs(source)
+
+
+def test_harness_mount_inventory_detects_new_paths_and_expressions():
+    source = (
+        "    async fn start_probe_with_scope(\n"
+        '        let mount = root.join("scripts/fixture.py");\n'
+        "    fn cleanup(\n"
+    )
+    assert harness_mount_inputs(source) == {
+        "literal_paths": ["scripts/fixture.py"],
+        "template_paths": [],
+        "dynamic_joins": [],
+    }
+    changed = source.replace("scripts/fixture.py", "scripts/new_fixture.py")
+    assert harness_mount_inputs(changed)["literal_paths"] == [
+        "scripts/new_fixture.py"
+    ]
+    changed = source.replace('root.join("scripts/fixture.py")', 'root.join(input())')
+    with pytest.raises(AssertionError, match="Review new harness mount expression"):
+        harness_mount_inputs(changed)
+    changed = source.replace("scripts/fixture.py", "untracked/path")
+    with pytest.raises(AssertionError, match="Review mount source"):
+        harness_mount_inputs(changed)
