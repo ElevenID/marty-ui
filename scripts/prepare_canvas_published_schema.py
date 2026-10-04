@@ -21,6 +21,12 @@ from sqlalchemy import create_engine, text
 DATABASE = "postgresql://oracle:synthetic-local-only@127.0.0.1:5432/canvas_published_schema_test"
 
 
+def source_sha256():
+    """Pin this mounted entrypoint with platform-independent line endings."""
+    source = Path(__file__).read_bytes().replace(b"\r\n", b"\n").replace(b"\r", b"\n")
+    return hashlib.sha256(source).hexdigest()
+
+
 def safe_timing_diagnostics(failure):
     # Do not import a new oracle while handling unrelated failures. The deadline
     # branch already loaded this exact class through its normal named import.
@@ -71,6 +77,8 @@ def prepare():
             "/verification/contracts/canvas-worker-consumer-range-oracle.json"
         ).read_text()
     )
+    if source_sha256() != fixture["schema_preparer_source_sha256"]:
+        raise RuntimeError("Published schema preparer provenance mismatch")
     worker = Path(importlib.util.find_spec("issuance.canvas_worker").origin)
     worker_hash = hashlib.sha256(
         worker.read_text(encoding="utf-8").encode()

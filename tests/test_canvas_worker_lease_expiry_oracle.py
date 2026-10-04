@@ -728,6 +728,7 @@ def test_prepare_dispatches_only_new_family_and_preserves_quiet_owned_cleanup(
     source_hash = hashlib.sha256(source.encode()).hexdigest()
     fixture = {
         "observed_source_sha256": source_hash,
+        "schema_preparer_source_sha256": probe.source_sha256(),
         "migration_revisions": ["synthetic-revision"],
     }
 
