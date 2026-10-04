@@ -87,6 +87,7 @@
       "canvas_worker_https_fixture.py", "run_canvas_worker_rest_oracle.py",
       "run_canvas_worker_startup_oracle.py"
     ],
+    "run_canvas_worker_single_cycle.py": [],
     "run_canvas_worker_startup_oracle.py": [],
     "run_canvas_worker_timeout_oracle.py": [
       "canvas_worker_output_capture.py", "canvas_worker_timeout_https_fixture.py",
@@ -98,5 +99,8 @@
       "run_canvas_worker_startup_oracle.py"
     ],
     "test_canvas_lti_https.py": []
+  },
+  "launched_scripts": {
+    "run_canvas_worker_startup_oracle.py": ["run_canvas_worker_single_cycle.py"]
   }
 }

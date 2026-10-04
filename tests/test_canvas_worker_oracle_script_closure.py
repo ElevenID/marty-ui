@@ -1,4 +1,4 @@
-"""Inventory local Python imports of the historical Canvas capture runners.
+"""Inventory local Python script edges of the historical Canvas capture runners.
 
 This is a review guard for one input layer, not a qualification-reuse key.
 """
@@ -54,20 +54,42 @@ def local_imports(source: Path, scripts: Path) -> list[str]:
     return sorted(dependencies)
 
 
-def import_graph(runners: set[str], scripts: Path) -> dict[str, list[str]]:
-    graph = {}
+def launched_scripts(source: Path, scripts: Path) -> list[str]:
+    tree = ast.parse(source.read_text(encoding="utf-8"), filename=str(source))
+    prefix = "/verification/scripts/"
+    launched = set()
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Constant) or not isinstance(node.value, str):
+            continue
+        if not node.value.startswith(prefix) or not node.value.endswith(".py"):
+            continue
+        name = node.value.removeprefix(prefix)
+        assert Path(name).name == name, f"Review process script path in {source.name}"
+        assert (scripts / name).is_file(), f"Missing process script: {name}"
+        launched.add(name)
+    return sorted(launched)
+
+
+def capture_script_graph(
+    runners: set[str], scripts: Path
+) -> tuple[dict[str, list[str]], dict[str, list[str]]]:
+    imports = {}
+    launches = {}
     pending = list(runners)
     while pending:
         name = pending.pop()
-        if name in graph:
+        if name in imports:
             continue
         assert Path(name).name == name and name.endswith(".py")
         source = scripts / name
         assert source.is_file(), f"Missing capture script: {name}"
         dependencies = local_imports(source, scripts)
-        graph[name] = dependencies
-        pending.extend(dependencies)
-    return dict(sorted(graph.items()))
+        children = launched_scripts(source, scripts)
+        imports[name] = dependencies
+        if children:
+            launches[name] = children
+        pending.extend(dependencies + children)
+    return dict(sorted(imports.items())), dict(sorted(launches.items()))
 
 
 def test_historical_capture_script_import_graph_is_reviewed():
@@ -77,14 +99,20 @@ def test_historical_capture_script_import_graph_is_reviewed():
         for name in producers["direct_runner_corpora"]
     } | set(producers["shared_runner_corpora"])
     inventory = json.loads(IMPORTS.read_text(encoding="utf-8"))
-    assert set(inventory) == {"schema", "purpose", "direct_imports"}
+    assert set(inventory) == {
+        "schema", "purpose", "direct_imports", "launched_scripts"
+    }
     assert inventory["schema"] == "marty.canvas-worker-oracle-script-imports/v1"
     assert inventory["purpose"] == (
         "Inventory only. This is not complete capture-input closure or permission "
         "to reuse historical qualification."
     )
-    assert inventory["direct_imports"] == import_graph(runners, SCRIPTS), (
+    actual_imports, actual_launches = capture_script_graph(runners, SCRIPTS)
+    assert inventory["direct_imports"] == actual_imports, (
         "A capture runner or helper changed local imports; review its closure"
+    )
+    assert inventory["launched_scripts"] == actual_launches, (
+        "A capture runner or helper changed process scripts; review its closure"
     )
 
 
@@ -92,14 +120,23 @@ def test_import_graph_detects_transitive_and_dynamic_inputs(tmp_path):
     (tmp_path / "runner.py").write_text("from helper import VALUE\n", encoding="utf-8")
     (tmp_path / "helper.py").write_text("from deep import VALUE\n", encoding="utf-8")
     (tmp_path / "deep.py").write_text("VALUE = 1\n", encoding="utf-8")
-    assert import_graph({"runner.py"}, tmp_path) == {
+    imports, launches = capture_script_graph({"runner.py"}, tmp_path)
+    assert imports == {
         "deep.py": [],
         "helper.py": ["deep.py"],
         "runner.py": ["helper.py"],
     }
+    assert launches == {}
+    (tmp_path / "helper.py").write_text(
+        'CHILD = "/verification/scripts/child.py"\n', encoding="utf-8"
+    )
+    (tmp_path / "child.py").write_text("VALUE = 2\n", encoding="utf-8")
+    imports, launches = capture_script_graph({"runner.py"}, tmp_path)
+    assert imports["child.py"] == []
+    assert launches == {"helper.py": ["child.py"]}
     (tmp_path / "helper.py").write_text(
         "from importlib import import_module as load\nload('deep')\n",
         encoding="utf-8",
     )
     with pytest.raises(AssertionError, match="Review dynamic import"):
-        import_graph({"runner.py"}, tmp_path)
+        capture_script_graph({"runner.py"}, tmp_path)
