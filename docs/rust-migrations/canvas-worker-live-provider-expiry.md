@@ -52,6 +52,21 @@ the frozen corpus. Its current 19,767-byte SHA-256 is
 an exact contract reverses that one pin to the previous corpus hash. Hosted
 published-process regeneration remains required.
 
+Diagnostic-only follow-up, 2026-10-04: a protected merge-group run of UI #1086
+passed the native expiry preflight but failed the exact post-join durable
+observation check in the published-process lease test. The body-schedule
+check immediately before it passed. The observed and expected rows were not
+present in the sanitized report, so the changed section is unknown. The
+same exact equality requirement remains; a failure now reports only fixed
+boolean differences for `jobs`, `facts`, `oauth`, `snapshot`, `heartbeat`,
+`target`, and top-level shape. No row values, tokens, or timestamps are
+reported. Only the lease script provenance pin changes in the frozen corpus;
+its 19,767-byte SHA-256 is
+`24e778e35a64cc5c322230a3264c84798b792e56588df15c722db2d15289dd50`.
+The reverse-provenance test proves the prior corpus bytes exactly. Hosted
+published-process regeneration is still required before drawing any conclusion
+about the cause or qualification.
+
 The first actual Linux native expiry preflight ran at
 `3967412b7fbe4627a12f313e9d4a4b8156f14f93` in
 [CI34212739731](https://github.com/ElevenID/marty-ui/actions/runs/34212739731),

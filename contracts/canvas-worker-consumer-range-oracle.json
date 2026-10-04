@@ -4,7 +4,7 @@
   "observed_source": "85b128a85426b3f5aeaf6f948ba5dfa2836e95d8",
   "observed_image": "ghcr.io/elevenid/marty-credentials-issuance@sha256:9f15b64bc0ec7a693339cada3142b2952a575d2b50ee89230aabe078d0026176",
   "observed_source_sha256": "c5a7a692af7a808486b0a42d379699222bdf01f3995181c16da9d3466666e90a",
-  "schema_preparer_source_sha256": "acf2fd7e42d221ec5ed1b7cfa7bc790463ebcd72fe79d00e420ac52e15c14173",
+  "schema_preparer_source_sha256": "01c4c2e944d641578b58a8fe4d33cf260cac7a8f48a2df4f5ebff975e89b75dc",
   "observed_repository_sha256": "34ba42bd10227e0040c99378254c3652c388bab3131aadfdba2e0fe92cf89ccb",
   "observed_postgres_image": "postgres@sha256:fceb6f86328c36f2438fae3b851b0cc57c4a7e69a58c866d9ce24281f2cf0c9c",
   "observed_postgres_version": "15.17",
