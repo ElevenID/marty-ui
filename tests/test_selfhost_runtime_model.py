@@ -84,7 +84,7 @@ def assert_public_image_loader_connected(reader):
         "selfhost_public_image_loader_child",
     ]:
         assert source.count(f"fn {name}()") == 1
-        line = f"\"${{executables[0]}}\" --list | grep -Fx '{name}: test'"
+        line = f"printf '%s\\n' \"$all_test_names\" | grep -Fx '{name}: test'"
         assert runner.splitlines().count(line) == 1
     for required in [
         "selfhost_packaged_runtime::run_isolated_child()",
@@ -209,7 +209,7 @@ def test_public_image_loader_refuses_disconnected_or_weakened_gates(fault):
             ),
             "runner": (
                 "scripts/ci/run-published-canvas-contracts.sh",
-                "\"${executables[0]}\" --list | grep -Fx 'selfhost_public_image_loader_isolated: test'",
+                "printf '%s\\n' \"$all_test_names\" | grep -Fx 'selfhost_public_image_loader_isolated: test'",
             ),
             "workflow": (
                 ".github/workflows/ci.yml",

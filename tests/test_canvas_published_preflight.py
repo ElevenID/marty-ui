@@ -61,17 +61,19 @@ def test_mandatory_full_mode_registration_roster_is_unchanged() -> None:
 def test_full_mode_is_exactly_four_way_while_every_preflight_stays_serial() -> None:
     script = SCRIPT.read_text(encoding="utf-8")
     preflight = (
-        '"${executables[0]}" "$preflight_target" --exact --nocapture --test-threads=1'
+        '"$worker_executable" "$preflight_target" --exact --nocapture --test-threads=1'
     )
-    serial = '"${executables[0]}" "$serial_test" --exact --nocapture --test-threads=1'
-    full = '"${executables[0]}" --skip "$serial_test" "${preflight_skips[@]}" --nocapture --test-threads=4'
+    serial = '"$worker_executable" "$serial_test" --exact --nocapture --test-threads=1'
+    worker_full = '"$worker_executable" --skip "$serial_test" "${preflight_skips[@]}" --nocapture --test-threads=4'
+    composition_full = '"$composition_executable" --nocapture --test-threads=4'
     assert sum(line.strip() == preflight for line in script.splitlines()) == 1
     assert sum(line.strip() == serial for line in script.splitlines()) == 1
     assert (
         "[[ $((all_tests - parallel_tests)) == $((1 + ${#preflight_skips[@]} / 2)) ]]"
         in script
     )
-    assert script.rstrip().endswith(full)
+    assert script.splitlines().count(composition_full) == 1
+    assert script.rstrip().endswith(worker_full)
     assert sorted(set(re.findall(r"--test-threads=(\d+)", script))) == ["1", "4"]
 
 
@@ -104,7 +106,7 @@ RENEWAL_GATES = [
 
 
 def assert_renewal_registration(script, source, name, owner):
-    check = f"\"${{executables[0]}}\" --list | grep -Fx '{name}: test'"
+    check = f"printf '%s\\n' \"$all_test_names\" | grep -Fx '{name}: test'"
     assert script.splitlines().count(check) == 1
     function = re.search(
         rf"#\[tokio::test\]\s*async fn {name}\(\) \{{(.*?)^\}}",
@@ -183,13 +185,16 @@ if [[ "$1" == -er ]]; then
   [[ "$TEST_FAILURE" != images ]] || exit 17
   printf '%s\n' "$TEST_POSTGRES_IMAGE" "$TEST_PYTHON_IMAGE"
 else
-  [[ "$#" == 3 && "$1" == -r && "$3" == "$RUNNER_TEMP/rust-test-artifacts.json" ]] || exit 90
-  [[ "$2" == *canvas_published_schema_contract* && "$2" == *marty-issuance-service* ]] || exit 90
+  [[ "$#" == 6 && "$1" == -r && "$2" == --arg && "$3" == target && "$6" == "$RUNNER_TEMP/rust-test-artifacts.json" ]] || exit 90
+  [[ "$5" == *marty-issuance-service* ]] || exit 90
+  [[ "$4" == canvas_published_schema_contract || "$4" == canvas_published_worker_contract ]] || exit 90
   [[ "$TEST_FAILURE" != artifacts ]] || exit 18
   if [[ "$TEST_FAILURE" == missing-executable ]]; then
     printf './does-not-exist\n'
   elif [[ "$TEST_FAILURE" == duplicate-executables ]]; then
     printf './contract\n./different-contract\n'
+  elif [[ "$4" == canvas_published_worker_contract ]]; then
+    printf './worker-contract\n'
   else
     printf './contract\n'
   fi
@@ -211,12 +216,13 @@ exec /usr/bin/grep "$@"
     contract.write_text(
         r"""#!/usr/bin/env bash
 set -euo pipefail
-record="child|${MARTY_CANVAS_PUBLISHED_SCHEMA_TEST:-absent}"
+name="${0##*/}"
+record="child|$name|${MARTY_CANVAS_PUBLISHED_SCHEMA_TEST:-absent}"
 for argument in "$@"; do record+="|$argument"; done
 printf '%s\n' "$record" >> "$TEST_LOG"
 if [[ "$#" == 1 && "$1" == --list ]]; then
   [[ "$TEST_FAILURE" != list ]] || exit 19
-  while IFS= read -r registration; do printf '%s\n' "$registration"; done < registrations
+  while IFS= read -r registration; do printf '%s\n' "$registration"; done < "registrations-$name"
 elif [[ "$#" -ge 3 && "$1" == --list && "$2" == --skip ]]; then
   while IFS= read -r registration; do
     keep=1
@@ -225,7 +231,7 @@ elif [[ "$#" -ge 3 && "$1" == --list && "$2" == --skip ]]; then
       [[ "$registration" == *"$argument"* ]] && keep=0
     done
     (( keep == 0 )) || printf '%s\n' "$registration"
-  done < registrations
+  done < "registrations-$name"
 else
   [[ "$TEST_FAILURE" != execute ]] || exit 23
 fi
@@ -234,16 +240,36 @@ fi
         newline="\n",
     )
     contract.chmod(0o755)
+    worker_contract = tmp_path / "worker-contract"
+    worker_contract.write_bytes(
+        contract.read_bytes() + b"\n# distinct worker executable\n"
+    )
+    worker_contract.chmod(0o755)
 
-    def run(arguments=(), *, failure="", registrations=None, pins=PINS, run_id="12345"):
+    def run(
+        arguments=(),
+        *,
+        failure="",
+        registrations=None,
+        duplicate_across_targets=False,
+        pins=PINS,
+        run_id="12345",
+    ):
         lines = (
             registrations
             if registrations is not None
             else [f"{name}: test" for name in required_registrations()]
         )
-        (tmp_path / "registrations").write_text(
-            "\n".join(lines) + "\n", encoding="utf-8"
-        )
+        composition = [
+            line for line in lines if line.startswith("heartbeat_readiness_")
+        ]
+        worker = [line for line in lines if line not in composition]
+        if duplicate_across_targets:
+            composition.append(f"{TARGET}: test")
+        for name, subset in (("contract", composition), ("worker-contract", worker)):
+            (tmp_path / f"registrations-{name}").write_text(
+                "\n".join(subset) + "\n", encoding="utf-8"
+            )
         log = tmp_path / "calls"
         log.write_text("", encoding="utf-8")
         environment = dict(os.environ)
@@ -287,16 +313,36 @@ def test_default_and_explicit_full_keep_all_registrations_and_run_every_test(
     result, calls = shell_case(arguments)
     assert result.returncode == 0, result.stderr
     checks = [call[2] for call in calls if call[:2] == ["grep", "-Fx"]]
-    assert checks == [f"{name}: test" for name in required_registrations()]
-    children = [call for call in calls if call[0] == "child"]
     serial = "worker_sql_logging_preserves_debug_diagnostics_and_operational_warnings"
-    assert children[-4:] == [
-        ["child", "1", "--list"],
-        ["child", "1", "--list", "--skip", serial],
-        ["child", "1", serial, "--exact", "--nocapture", "--test-threads=1"],
-        ["child", "1", "--skip", serial, "--nocapture", "--test-threads=4"],
+    assert checks == [f"{name}: test" for name in required_registrations()] + [
+        f"{serial}: test"
     ]
-    assert children[:-4] == [["child", "1", "--list"]] * len(checks)
+    children = [call for call in calls if call[0] == "child"]
+    assert children == [
+        ["child", "contract", "1", "--list"],
+        ["child", "worker-contract", "1", "--list"],
+        ["child", "contract", "1", "--list"],
+        ["child", "worker-contract", "1", "--list", "--skip", serial],
+        [
+            "child",
+            "worker-contract",
+            "1",
+            serial,
+            "--exact",
+            "--nocapture",
+            "--test-threads=1",
+        ],
+        ["child", "contract", "1", "--nocapture", "--test-threads=4"],
+        [
+            "child",
+            "worker-contract",
+            "1",
+            "--skip",
+            serial,
+            "--nocapture",
+            "--test-threads=4",
+        ],
+    ]
     assert [call for call in calls if call[0] == "docker"] == [
         ["docker", "pull", pin] for pin in PINS
     ]
@@ -307,7 +353,7 @@ def test_proven_preflights_are_skipped_only_in_explicit_reuse_mode(
 ):
     evidence = tmp_path / "canvas-published-preflights.sha256"
     evidence.write_text(
-        hashlib.sha256((tmp_path / "contract").read_bytes()).hexdigest()
+        hashlib.sha256((tmp_path / "worker-contract").read_bytes()).hexdigest()
         + "\n12345\n1\ntest-rust-services\n",
         newline="\n",
     )
@@ -317,6 +363,7 @@ def test_proven_preflights_are_skipped_only_in_explicit_reuse_mode(
     skipped = [target for _, target in PREFLIGHTS]
     assert children[-1] == [
         "child",
+        "worker-contract",
         "1",
         "--skip",
         "worker_sql_logging_preserves_debug_diagnostics_and_operational_warnings",
@@ -329,12 +376,14 @@ def test_proven_preflights_are_skipped_only_in_explicit_reuse_mode(
         "--test-threads=4",
     ]
     assert not any(
-        call[2:4] == [target, "--exact"] for call in children for target in skipped
+        call[3:5] == [target, "--exact"] for call in children for target in skipped
     )
 
     result, calls = shell_case([])
     assert result.returncode == 0, result.stderr
-    assert calls[-1][0] == "child" and calls[-1].count("--skip") == 1
+    assert (
+        calls[-1][:2] == ["child", "worker-contract"] and calls[-1].count("--skip") == 1
+    )
 
     result, calls = shell_case(["full-after-preflights"], run_id="other-run")
     assert result.returncode != 0
@@ -357,6 +406,25 @@ def test_reuse_mode_fails_closed_without_matching_evidence(
     assert not any(call[0] == "docker" for call in calls)
 
 
+def test_reuse_mode_rejects_composition_executable_digest(shell_case, tmp_path):
+    (tmp_path / "canvas-published-preflights.sha256").write_text(
+        hashlib.sha256((tmp_path / "contract").read_bytes()).hexdigest()
+        + "\n12345\n1\ntest-rust-services\n",
+        newline="\n",
+    )
+    result, calls = shell_case(["full-after-preflights"])
+    assert result.returncode != 0
+    assert not any(call[0] == "docker" for call in calls)
+
+
+def test_duplicate_name_across_targets_fails_before_docker(shell_case):
+    result, calls = shell_case(duplicate_across_targets=True)
+    assert result.returncode != 0
+    assert "Duplicate Canvas test names" in result.stderr
+    assert not any(call[0] == "docker" for call in calls)
+    assert not any("--test-threads=4" in call for call in calls)
+
+
 def test_full_mode_rejects_a_skip_that_would_drop_another_test(shell_case):
     registrations = [f"{name}: test" for name in required_registrations()]
     registrations.append(
@@ -373,12 +441,21 @@ def test_preflight_requires_only_exact_target_and_forces_configured_serial_execu
 ):
     result, calls = shell_case([mode], registrations=[f"{target}: test"])
     assert result.returncode == 0, result.stderr
-    assert [call for call in calls if call[0] == "grep"] == [
+    assert [call for call in calls if call[:2] == ["grep", "-Fx"]] == [
         ["grep", "-Fx", f"{target}: test"]
     ]
     assert [call for call in calls if call[0] == "child"] == [
-        ["child", "1", "--list"],
-        ["child", "1", target, "--exact", "--nocapture", "--test-threads=1"],
+        ["child", "contract", "1", "--list"],
+        ["child", "worker-contract", "1", "--list"],
+        [
+            "child",
+            "worker-contract",
+            "1",
+            target,
+            "--exact",
+            "--nocapture",
+            "--test-threads=1",
+        ],
     ]
 
 
@@ -431,7 +508,10 @@ def test_preflight_rejects_missing_or_inexact_registration_without_running_it(
     }[shape]
     result, calls = shell_case([mode], registrations=[registration])
     assert result.returncode != 0
-    assert [call for call in calls if call[0] == "child"] == [["child", "1", "--list"]]
+    assert [call for call in calls if call[0] == "child"] == [
+        ["child", "contract", "1", "--list"],
+        ["child", "worker-contract", "1", "--list"],
+    ]
 
 
 @pytest.mark.parametrize(
@@ -454,11 +534,21 @@ def test_preflight_propagates_preparation_listing_and_test_failures(
     assert result.returncode != 0
     children = [call for call in calls if call[0] == "child"]
     expected = []
-    if failure in ("list", "execute"):
-        expected.append(["child", "1", "--list"])
+    if failure in ("list", "execute", "docker"):
+        expected.append(["child", "contract", "1", "--list"])
+        if failure != "list":
+            expected.append(["child", "worker-contract", "1", "--list"])
     if failure == "execute":
         expected.append(
-            ["child", "1", target, "--exact", "--nocapture", "--test-threads=1"]
+            [
+                "child",
+                "worker-contract",
+                "1",
+                target,
+                "--exact",
+                "--nocapture",
+                "--test-threads=1",
+            ]
         )
         assert result.returncode == 23
     assert children == expected
@@ -487,7 +577,7 @@ def test_full_mode_still_fails_on_missing_mandatory_registration(shell_case, mis
         registrations=[f"{name}: test" for name in names if name != missing]
     )
     assert result.returncode != 0
-    assert all(call[2:] == ["--list"] for call in calls if call[0] == "child")
+    assert all(call[3:] == ["--list"] for call in calls if call[0] == "child")
 
 
 def test_workflow_runs_all_preflights_immediately_after_preparation_and_keeps_full_gate():
@@ -566,7 +656,7 @@ def test_preflight_group_owner_runs_all_four_exact_modes(tmp_path, monkeypatch):
             {
                 "reason": "compiler-artifact",
                 "package_id": "marty-issuance-service 0.0.0",
-                "target": {"name": "canvas_published_schema_contract"},
+                "target": {"name": "canvas_published_worker_contract"},
                 "executable": str(executable),
             }
         )

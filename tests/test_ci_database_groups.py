@@ -115,7 +115,7 @@ def test_preflight_evidence_requires_all_four_successes_and_same_executable(
             {
                 "reason": "compiler-artifact",
                 "package_id": "marty-issuance-service 0.1.0",
-                "target": {"name": "canvas_published_schema_contract"},
+                "target": {"name": "canvas_published_worker_contract"},
                 "executable": str(executable),
             }
         )
