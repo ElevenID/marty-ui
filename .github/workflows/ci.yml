@@ -74,6 +74,10 @@ jobs:
                   # include_str! makes this documentation a compiler input.
                   rust=true
                   ;;
+                SELFHOST_BUNDLE.md)
+                  # The self-host bundle ships this file as a package asset.
+                  rust=true
+                  ;;
                 *.md|docs/*|.github/ISSUE_TEMPLATE/*)
                   ;;
                 ui/*|demo-apps/*)

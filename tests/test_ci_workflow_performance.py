@@ -20,6 +20,16 @@ ROOT = Path(__file__).parents[1]
 CI_PATH = ROOT / ".github" / "workflows" / "ci.yml"
 
 
+def test_selfhost_operator_guide_is_a_packaged_input() -> None:
+    manifest = json.loads(
+        (ROOT / "deploy-config" / "bundles" / "selfhost.json").read_text(
+            encoding="utf-8"
+        )
+    )
+    assert "SELFHOST_BUNDLE.md" in manifest["assets"]
+    assert (ROOT / "SELFHOST_BUNDLE.md").is_file()
+
+
 def test_worker_fixture_integrity_and_process_containment_have_linux_ci_dependencies():
     job = yaml.safe_load(CI_PATH.read_text(encoding="utf-8"))["jobs"][
         "test-release-contracts"
@@ -631,6 +641,8 @@ def test_rust_matrix_keeps_canvas_state_local_and_contracts_parallel() -> None:
             False, False, False, False,
         ),
         ("README.md", False, False, False, False),
+        # The bundle manifest packages this otherwise documentation-shaped file.
+        ("SELFHOST_BUNDLE.md", True, False, False, False),
         ("rust/services/issuance/README.md", False, False, False, False),
         ("docs/line\nbreak.md", False, False, False, False),
         ("rust/services/issuance/src/line\nbreak.rs", True, False, False, False),
