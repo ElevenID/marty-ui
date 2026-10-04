@@ -4,11 +4,11 @@ use tracing::instrument::WithSubscriber;
 
 #[path = "../../selfhost-bundle/tests/support/extracted_bundle.rs"]
 mod selfhost_extracted;
-#[path = "../../../services/issuance/tests/support/selfhost_packaged_runtime.rs"]
+#[path = "support/selfhost_packaged_runtime.rs"]
 mod selfhost_packaged_runtime;
 #[path = "../../selfhost-bundle/tests/support/resolved_selfhost_runtime.rs"]
 mod selfhost_prepared;
-#[path = "../../../services/issuance/tests/support/selfhost_runtime_sidecar.rs"]
+#[path = "support/selfhost_runtime_sidecar.rs"]
 mod selfhost_runtime_sidecar;
 
 #[test]
